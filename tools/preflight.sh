@@ -509,16 +509,19 @@ fi
 # platforms/macos-only diff ran *every* gate as SKIP and pushed green having
 # checked nothing.
 #
-# This is the one gate that is deliberately STRONGER than the CI workflow it
-# corresponds to, which is the opposite of the parity rule elsewhere in this
-# file — so it is worth stating why rather than leaving it to look like drift.
-# macos-swift.yml builds and does not test, because the suite does not yet pass
-# on a GitHub runner (#1530: 227 tests do, but 35 image-snapshot comparisons are
-# host-dependent, one of them hangs, plus #1523 and one home-dependent
-# assertion). It DOES pass on a developer Mac, which is exactly where this hook
-# runs. So the tests are gated here and nowhere else until #1530 lands; a
-# reader who "fixes" this to match the workflow removes the only gate the macOS
-# test suite has.
+# Since #1530 macos-swift.yml runs the same suite through the same harness, so
+# this gate is no longer the ONLY place the macOS tests run. It is still the
+# stronger of the two and the difference is worth naming: a runner has a
+# virtual display, a stock font set and no usable audio stack, so a green there
+# is a green against a machine the app never ships to. The parity rule
+# elsewhere in this file is "mirror CI exactly"; here CI is a floor and this is
+# the real gate.
+#
+# What #1530 removed was the four host dependencies that made a runner
+# structurally unable to run it: image snapshots rasterising at the main
+# SCREEN's backing scale, a modal Sparkle alert that hung whichever test next
+# spun the run loop, #1523's helper deadlock, and a path scorer keyed on the
+# process's own $HOME.
 #
 # `--skip LauncherHarnessTests` matches the workflow exactly and is
 # load-bearing beyond speed: that target drives real terminal applications

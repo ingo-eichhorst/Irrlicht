@@ -1,39 +1,47 @@
 name: macOS (Swift)
 
-# Compile gate for the macOS Swift app. Until #1509 nothing in CI ran `swift
-# build` or `swift test` at all: a Swift compile error could land on `main`
-# and no check would notice, because test.yml's macOS job builds Go. That is
-# the hole this closes.
+# Build + test gate for the macOS Swift app. Until #1509 nothing in CI ran
+# `swift build` or `swift test` at all: a Swift compile error could land on
+# `main` and no check would notice, because test.yml's macOS job builds Go.
+# That is the hole this closes.
 #
-# It builds and does NOT test, which is a smaller claim than this workflow's
-# name suggests, so it is worth being explicit: the test suite does not
-# currently pass on a GitHub runner, and #1530 is the issue for making it. 227
-# of its tests do pass there; the blockers are 35 host-dependent image-snapshot
-# comparisons, a hang in one of them, and one assertion that depends on the
-# home directory's basename. #1523 was a fourth and is fixed — it turned out to
-# be a main-thread deadlock in a test helper rather than the audio stack that
-# comment originally suspected, so the cause cannot recur on a runner either.
-# That last clause is reasoning from the cause, not a green runner result:
-# nothing in CI runs `swift test` yet, which is what #1530 is for.
+# #1509 shipped the build half only, because the suite did not pass on a runner
+# — 227 of its tests did, and four blockers accounted for the rest (#1530). All
+# four are now fixed, so the suite runs here as well:
 #
-# Gating tests today would mean a check that is red on every PR for reasons
-# unrelated to the PR, which teaches people to ignore it — strictly worse than
-# the gap it would fill.
-#
-# The tests are NOT ungated in the meantime. `tools/preflight.sh --only swift`
-# runs the whole suite, and the pre-push hook runs it on any diff touching
-# platforms/macos/, which is where it demonstrably works. That is a local gate
-# rather than a CI one; #1530 is what moves it here.
+#   1. 35 host-dependent image snapshots. They were rasterising at the MAIN
+#      SCREEN's backing scale, so a 2× developer Mac and a 1× runner produced
+#      different pixel counts for the same view. `Tests/PinnedScaleSnapshot.swift`
+#      pins the scale; no reference was regenerated, which is the evidence the
+#      fix is a fix — the committed references still match byte for byte.
+#   2. A hang, reported against a different test on every run. Sparkle's
+#      `startUpdater` fails outside an app bundle and answers by running a
+#      modal `NSAlert` on the main queue a second later; whichever test next
+#      spun the run loop blocked on it forever. `UpdateManager` no longer
+#      starts Sparkle under XCTest.
+#   3. #1523 — a main-thread deadlock in a test helper, fixed there.
+#   4. A scorer that filtered path segments by the running process's own
+#      `$HOME`, so it answered differently for `runner` than for `ingo`. Now
+#      derived from the cwd under test.
 #
 # Deliberately its own workflow rather than a job in test.yml: that file is the
-# Go gate (its header says so), it installs a Go toolchain this job does not
+# Go gate (its header says so), it installs a Go toolchain these jobs do not
 # need, and a Swift compile break should not be reported under `go-test`.
+#
+# Two jobs rather than two steps, because a compile break and a failing
+# assertion are different diagnoses and should be different checks — #1526's
+# own history is the argument, where `swift build` succeeded in 45s while the
+# test step hung and was killed at the job timeout three times in a row.
 #
 # No `paths:` filter, on purpose. A path-filtered workflow does not run for an
 # unrelated PR, and its check is then *absent* rather than green — which reads
 # as "still queued" at a glance and is the failure mode this repo keeps
-# removing elsewhere. The cost is one macOS job per PR, and this one is ~1
-# minute.
+# removing elsewhere.
+#
+# This is still WEAKER than the local gate, and the asymmetry is deliberate
+# rather than an oversight: `tools/preflight.sh --only swift` runs the same
+# suite on a developer Mac, where the display, the fonts and the audio stack
+# are the ones the app actually ships against.
 
 on:
   pull_request:
@@ -79,3 +87,64 @@ jobs:
       # file that no longer compiles is invisible to every other check.
       - name: Build (app + tests)
         run: swift build --build-tests
+
+  swift-test:
+    runs-on: macos-latest
+    # The outer net only. `SWIFT_SUITE_TIMEOUT` (240s) fires first and prints a
+    # diagnosis naming the test the run stopped in; this cap is what catches a
+    # hang somewhere that bound cannot see.
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Report toolchain
+        run: |
+          swift --version
+          xcodebuild -version
+
+      # The suite runs through tools/lib/swift-suite.sh — the same harness
+      # tools/preflight.sh uses, so CI and the pre-push hook judge a run by the
+      # same rules rather than by two implementations that can disagree.
+      #
+      # Three things it buys that a bare `swift test` does not:
+      #
+      #   a pty        XCTest block-buffers when stdout is not a TTY, so a hung
+      #                run uploads an EMPTY log — the condition under which
+      #                #1530's blocker 2 was unattributable for two rounds.
+      #   a bound      a hang becomes a named failure at 240s instead of a job
+      #                cancelled at the 20-minute cap with no attribution.
+      #   completeness XCTest's stall detector aborts the process mid-run, and
+      #                every suite that already reported says "0 failures". The
+      #                verdict keys on the bundle's own summary line, so a
+      #                truncated run is a failure and not a pass (#1523).
+      #
+      # `--skip LauncherTestHarness --skip LauncherHarnessTests` is the
+      # documented invocation (AGENTS.md): that target drives real applications
+      # through NSRunningApplication. Both names are passed because a test ID is
+      # `<target>.<class>`, so either alone stops covering the harness the
+      # moment a class is added or the target is renamed.
+      - name: Test (bounded, streamed under a pty)
+        shell: bash
+        run: |
+          set -uo pipefail
+          . tools/lib/swift-suite.sh
+          log="$RUNNER_TEMP/swift-test.log"
+          ( cd platforms/macos && swift_suite_run "$log" \
+              swift test --skip LauncherTestHarness --skip LauncherHarnessTests )
+          rc=$?
+          swift_suite_verdict "$rc" "$log"
+
+      # The log carries `host backing scale: N×` from PinnedScaleSnapshotTests,
+      # which is the measured premise of the snapshot fix rather than an
+      # inference about what a virtual display "need not" be. Uploaded so it
+      # survives the run's retention rather than only being greppable in the
+      # step output.
+      - name: Upload the run log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: swift-test-log
+          path: ${{ runner.temp }}/swift-test.log
+          if-no-files-found: error
+          retention-days: 7
