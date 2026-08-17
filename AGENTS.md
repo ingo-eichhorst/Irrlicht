@@ -1478,10 +1478,58 @@ Before marking a ticket done, run the full suite — every layer must pass:
   along with the defect. What that rule cannot see is a production call site a
   test drives — measured, two sound keys still reach that domain across a full
   gate run and no test source names the write (#1672).
-  Still open in this family, with its evidence in the issue rather than
-  asserted here: `SessionListView.formatResetTime` (#1663 — a timezone pin
-  reaches two of its three machine reads and leaves the `Date()` that picks the
-  format string, so it was left whole rather than half-covered). And no, a test
+  **The fourth member is the WALL CLOCK, and it is the one where pinning the
+  other three would have looked like coverage** (#1663).
+  `SessionListView.formatResetTime` stacked four machine reads —
+  `Calendar.current`, `Date()`, and a `DateFormatter` with neither `locale` nor
+  `timeZone` — and #1659 left it whole rather than half-covering it, because
+  `Date()` there does not shift a rendered time, it **selects the format
+  string**: the same input renders `"09:00"` before midnight and `"Fr. 9:00"`
+  after. The seam is `\.formatNow` (`Irrlicht/Views/FormatNowEnvironment.swift`),
+  the formatting moved to `QuotaResetFormat` where all four values are REQUIRED
+  arguments (#1659's shape), and `PinnedSnapshotHost` gained a `now:` whose
+  default is a fixed instant, on #1662's polarity. Five things are worth
+  carrying.
+  **The distinction between the two halves is measured, not argued**: putting
+  `Date()` back at the call site leaves EVERY string assertion in
+  `PinnedNowSnapshotTests` green and reddens exactly one arm, the two-clock byte
+  comparison — the same "only the rendered assertion catches it" shape #1630's
+  mutation B and #1659's had, one family on.
+  **The key carries a closure, not a `Date`**, which is not the obvious mirror
+  of `\.formatTimeZone`'s computed `NSTimeZone.default` default: a computed
+  `Date()` default is a value never equal to itself, where that one is stable
+  between assignments, and a fixture wants ONE instant per subtree rather than a
+  fresh one per read (the microsecond-disagreement hazard `quotaWindowRow`
+  already documents for `quotaPacePercent`). `FormatNow.wallClock` is a single
+  stored value and `FormatNow(fixed:)` is the stopped form.
+  **`Calendar.current` was closed by taking `\.calendar`, not by forcing
+  `.gregorian`** — that key already existed, already defaults to
+  `Calendar.current`, and has been pinned by the host since #1659 — so a user on
+  a Japanese or Buddhist calendar keeps theirs. What IS forced is the calendar's
+  ZONE, to the zone the formatter renders in, so the day the branch is decided
+  in and the day the string is rendered in cannot disagree; that line is
+  load-bearing (removing it reddens four arms) while the identity provably is
+  not (measured across all 16 Foundation identifiers at a fixed zone, zero
+  disagreements, asserted rather than assumed — which is what justifies there
+  being no both-sides pixel arm for the calendar).
+  **A pin alone would have been untested by construction**, since #1663 verified
+  the site is reached by no committed reference. The row's `Text` is therefore
+  extracted into `QuotaResetLabel`, a view a test can host: an `@Environment`
+  read off a `SessionListView` value a test constructed itself, outside a view
+  update, answers the DEFAULT — a pin reaching nothing wearing the shape of a
+  passing test. `PinnedNowSnapshot.referenceNow` is the one constant in this
+  family NOT read off the committed set, because no reference contains a
+  wall-clock-dependent render; #1663 regenerated no PNG and the untouched 53 are
+  the evidence.
+  **The blast radius is ONE call site, deliberately** — `QuotaResetLabel`, not
+  the app-wide clock injection #1663 defers. (The other function that issue names,
+  `formatClockTime`, never read a clock: its two machine reads were the
+  formatter's unset locale and zone, closed by the existing two seams.) Three
+  further wall-clock reads on the same chip stay unconverted (`quotaPacePercent`,
+  `mergeIntoBuckets`' staleness test, `formatTimeUntil`), and the first two are
+  pixel-visible, so the `rate_limit` fixture #1663 anticipates is still not safe
+  to seed: that is #1675, filed rather than folded in.
+  And no, a test
   run does not modify the user's real app preferences:
   `UserDefaults.standard` under `swift test` resolves to
   `com.apple.dt.xctest.tool`, measured again across two full gate runs against a

@@ -127,6 +127,24 @@ extension View {
             .environment(\.calendar, calendar)
             .environment(\.timeZone, timeZone)
     }
+
+    /// Stop the clock this subtree renders dates against, for a snapshot host
+    /// (#1663).
+    ///
+    /// The fourth value in this family that a reference was reading off the
+    /// machine, and the one whose failure is loudest: `Date()` inside
+    /// `SessionListView.formatResetTime` did not shift a rendered time, it
+    /// chose between `"9:00"` and `"Fri 9:00"`, so a reference recorded on one
+    /// side of midnight fails on the other — on the recording machine too.
+    ///
+    /// One environment, not three: unlike the time zone, nothing else in
+    /// SwiftUI carries a "now" a view could read instead. `\.formatNow` is the
+    /// only key `QuotaResetFormat`'s callers consult, and
+    /// `PinnedNowSnapshotTests.testTheHostStopsTheClockItIsGiven` grades that
+    /// on this object rather than on a hierarchy it assembled itself.
+    fileprivate func pinnedNow(_ instant: Date) -> some View {
+        environment(\.formatNow, FormatNow(fixed: instant))
+    }
 }
 
 /// The rasterisable host a `.pinnedImage` snapshot is taken of — and the only
@@ -212,18 +230,26 @@ struct PinnedSnapshotHost {
     ///     forgets to pass its store gets ISOLATION and a visible failure
     ///     ("my pinned value did not reach the view"), never a reference that
     ///     silently encodes someone's Settings.
+    ///   - now: the instant `\.formatNow` answers with (#1663). Its default is
+    ///     a fixed one rather than the wall clock, for #1662's polarity
+    ///     reason: a suite that names none gets DETERMINISM, never a reference
+    ///     that photographs the day it was recorded. Unconstrained by the
+    ///     committed set — no reference renders a wall-clock-dependent site
+    ///     today — so adopting it regenerated none of them.
     init(_ content: some View,
          width: CGFloat,
          height: CGFloat,
          appearance: NSAppearance.Name = .darkAqua,
          locale: Locale = PinnedLocaleSnapshot.referenceLocale,
          timeZone: TimeZone = PinnedTimeZoneSnapshot.referenceTimeZone,
-         defaults: InMemoryDefaults = InMemoryDefaults()) {
+         defaults: InMemoryDefaults = InMemoryDefaults(),
+         now: Date = PinnedNowSnapshot.referenceNow) {
         let hosting = NSHostingView(
             rootView: content
                 .pinnedLocale(locale)
                 .pinnedTimeZone(timeZone, locale: locale)
-                .defaultAppStorage(defaults))
+                .defaultAppStorage(defaults)
+                .pinnedNow(now))
         hosting.appearance = NSAppearance(named: appearance)
         hosting.frame = CGRect(x: 0, y: 0, width: width, height: height)
         hosting.layoutSubtreeIfNeeded()

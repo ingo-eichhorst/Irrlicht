@@ -212,6 +212,12 @@ struct SessionListView: View {
     // re-tints it as a template — but the variant is the view's to pick,
     // never the process's (#1509).
     @Environment(\.colorScheme) private var colorScheme
+    /// The zone and locale the quota tooltip's clock renders in (#1663).
+    /// Defaults are `NSTimeZone.default` / `Locale.autoupdatingCurrent`, which
+    /// is exactly what the unset `DateFormatter` this replaced resolved
+    /// through — see `QuotaResetFormat`.
+    @Environment(\.formatTimeZone) private var formatTimeZone
+    @Environment(\.formatLocale) private var formatLocale
     @EnvironmentObject var gasTownProvider: GasTownProvider
     @EnvironmentObject var updateManager: UpdateManager
     @State private var isQuitButtonHovered = false
@@ -899,11 +905,10 @@ struct SessionListView: View {
                 .frame(width: 28, alignment: .trailing)
 
             if !compact {
-                Text("resets \(formatResetTime(w.resetsAt))")
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                // A view of its own since #1663 — see `QuotaResetLabel`, which
+                // reads the four values this rendering used to take off the
+                // machine (now, calendar, zone, locale) from the environment.
+                QuotaResetLabel(resetsAt: w.resetsAt)
             }
         }
     }
@@ -1117,41 +1122,22 @@ struct SessionListView: View {
         }
     }
 
-    // #1663 — these two are the timezone family's third site, and #1659
-    // deliberately left them alone rather than half-covering them. Threading
-    // `\.formatTimeZone` / `\.formatLocale` in (as `HistoryFormat` now does)
-    // would reach two of `formatResetTime`'s three machine reads and leave the
-    // one that matters most: `Date()` below selects a different FORMAT STRING
-    // either side of midnight, so a snapshot pinned on zone and locale alone is
-    // still a snapshot of the day it was recorded. That needs an injectable
-    // "now", which is a wider seam than this issue.
-    //
-    // Unreached by any committed reference today — the whole chain is behind
-    // `guard let snap = session.metrics?.rateLimit` (:705) and no fixture under
-    // Tests/Fixtures carries a rate-limit window (verified by grep, both files).
-    // The first fixture that seeds one bakes locale, timezone and the recording
-    // day into a reference at once; read #1663 before adding it.
+    /// Short clock time for the quota tooltip's "Projected cap" line.
+    ///
+    /// #1663 moved the formatting itself into `QuotaResetFormat`, where the
+    /// zone and locale it renders in are required arguments rather than two
+    /// more reads of the machine. This wrapper is what supplies them, from the
+    /// environment; it stays a method on the view because reading
+    /// `@Environment` is only meaningful on a value SwiftUI is updating, and
+    /// `quotaTooltip` is called from `body`.
+    ///
+    /// The tooltip is graded at the formatter and not in pixels, for the reason
+    /// #1659 recorded for `HistoryActivityContentView.tooltipText`: `.tooltip(…)`
+    /// is an `onHover`-only AppKit bridge that draws into a separate `NSPanel`
+    /// and adds nothing to the view tree, so there is nothing for a render test
+    /// to read back.
     private func formatClockTime(_ date: Date) -> String {
-        let f = DateFormatter()
-        f.dateStyle = .none
-        f.timeStyle = .short
-        return f.string(from: date)
-    }
-
-    /// Compact reset label for the chip row. Same-day resets render as
-    /// "HH:MM"; resets later in the week render as "EEE HH:MM" (e.g.
-    /// "Fri 9:00"). Mirrors mockup 1's "resets 11:14" / "resets Fri 9:00".
-    private func formatResetTime(_ date: Date) -> String {
-        let cal = Calendar.current
-        let now = Date()
-        let f = DateFormatter()
-        if cal.isDate(date, inSameDayAs: now) {
-            f.dateStyle = .none
-            f.timeStyle = .short
-        } else {
-            f.dateFormat = "EEE H:mm"
-        }
-        return f.string(from: date)
+        QuotaResetFormat.clock(date, timeZone: formatTimeZone, locale: formatLocale)
     }
 
     private func formatTimeUntil(_ date: Date) -> String {
