@@ -106,7 +106,10 @@ for d in "$ROOT"/replaydata/agents/*/driver-interactive.sh; do
     fail "$agent: turn-count.sh exists but the driver never sources it" "the driver would call an undefined turn_count"
     continue
   fi
-  if ! grep -q "\"$agent\"\|[[:space:]]$agent[[:space:]]" "$TEST_FILE"; then
+  # `${agent}` braced, not `$agent` (#1684): `$agent[` is read as an array
+  # expansion, so the literal `[[:space:]]` that follows it needs the brace to
+  # end the name.
+  if ! grep -q "\"$agent\"\|[[:space:]]${agent}[[:space:]]" "$TEST_FILE"; then
     fail "$agent: extracted counter is not exercised by turn-count_test.sh" \
          "add it to the adapter list so a regression in its counter is caught"
     continue

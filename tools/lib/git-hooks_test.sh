@@ -135,7 +135,7 @@ echo "== the installer writes a shim, not a symlink, and not the hook itself =="
 RIG="$(new_rig)"
 (cd "$RIG/checkout" && bash tools/install-git-hooks.sh) >/dev/null 2>&1
 TARGET="$RIG/checkout/.git/hooks/pre-push"
-if [[ -L "$TARGET" ]]; then kind=symlink; elif [[ -f "$TARGET" ]]; then kind=file; else kind=absent; fi
+if [[ -L "$TARGET" ]]; then kind=symlink; elif [[ -f "$TARGET" ]]; then kind="file"; else kind=absent; fi
 assert_eq "installed pre-push is a regular file" "file" "$kind"
 if cmp -s "$REPO_ROOT/tools/git-hooks/shim" "$TARGET"; then same=yes; else same=no; fi
 assert_eq "installed pre-push is byte-for-byte tools/git-hooks/shim" "yes" "$same"
@@ -232,7 +232,7 @@ TARGET="$RIG/checkout/.git/hooks/pre-push"
 ln -sf "$RIG/checkout/tools/git-hooks/pre-push" "$TARGET"
 first=$(cd "$RIG/checkout" && bash tools/install-git-hooks.sh 2>&1)
 assert_contains "an older symlink install is replaced, not left in place" "installed   pre-push" "$first"
-if [[ -L "$TARGET" ]]; then kind=symlink; elif [[ -f "$TARGET" ]]; then kind=file; else kind=absent; fi
+if [[ -L "$TARGET" ]]; then kind=symlink; elif [[ -f "$TARGET" ]]; then kind="file"; else kind=absent; fi
 assert_eq "…by a regular file" "file" "$kind"
 # The `rm -f` before `cp` is what makes this safe: `cp` onto a symlink writes
 # THROUGH it, so without the rm this run would have overwritten the tracked

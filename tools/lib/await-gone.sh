@@ -273,6 +273,10 @@ await_gone() {
       return 2
     fi
 
+    # shellcheck disable=SC2034  # this IS the library's output: every caller
+    # prints it on failure (await-gone_test.sh 142/204, gate-budget_test.sh
+    # 358/412/452, swift-suite_test.sh 270), and line 20 of this file documents
+    # it as the contract. Unused within this file by design.
     AWAIT_GONE_LAST="$AWAIT_GONE_ALIVE"
     if [ -z "$AWAIT_GONE_ALIVE" ]; then
       return 0

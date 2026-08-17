@@ -21,6 +21,7 @@
 #                                      (composite/category score vs origin/main)
 #   .github/workflows/macos-swift.yml — swift build + swift test for the
 #                                      macOS app (#1509)
+#                                      plus its bash-lint step (#1684)
 #   .github/workflows/linux.yml     — its replay-fixtures step natively (see
 #                                      below); the rest — build + full test
 #                                      suite (-race) under Linux, via the
@@ -67,6 +68,7 @@
 #   tools/preflight.sh --only skills   # just the .claude/skills/**/*.md linter
 #   tools/preflight.sh --only swift    # just the macOS Swift build + test suite
 #   tools/preflight.sh --only posix    # just the #!/bin/sh POSIX/bashism lint
+#   tools/preflight.sh --only bash     # just the shellcheck lint over bash scripts
 #   tools/preflight.sh --only linux    # just the Linux Docker gate
 #   tools/preflight.sh --changed       # scope every gate to the packages/trees
 #                                        this branch changes vs origin/main —
@@ -104,7 +106,11 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-cd "$ROOT_DIR"
+# `|| exit 2` and not a bare cd (#1684): every gate below is scoped by a
+# repo-root-relative regex and several shell out to `git`, so a failed cd would
+# run the whole suite against the caller's tree and report the result as CI
+# parity.
+cd "$ROOT_DIR" || exit 2
 
 RUN_LINUX=0
 ONLY=""
@@ -130,7 +136,7 @@ done
 # Not `GROUPS` — that is a bash built-in holding the caller's supplementary
 # group IDs, and assigning to it silently does nothing, so the check would
 # compare against a list of numeric gids and reject every real group name.
-VALID_GROUPS=(go web arch tools skills posix security swift linux)
+VALID_GROUPS=(go web arch tools skills posix bash security swift linux)
 if [[ -n "$ONLY" ]]; then
   known=0
   for g in "${VALID_GROUPS[@]}"; do [[ "$ONLY" == "$g" ]] && known=1; done
@@ -403,6 +409,30 @@ if want posix; then
   CURRENT_GROUP=posix
   run_gate_scoped '\.sh$|^(tools|site)/[^/]*$|^tools/git-hooks/|^tools/lib/testdata/posix-lint/' \
                   "POSIX sh lint (#!/bin/sh bashisms)" tools/posix-lint.sh
+fi
+
+# ---- bash group (mirrors linux.yml's "Lint bash scripts" step) --------------
+# The sibling of the posix gate, over the OTHER shell family: 83 bash files /
+# ~19k lines that no static linter read at all until #1684, including the
+# bounded gate runner, the pre-push hook's own scoping rules and every
+# extract-and-execute workflow lock — the machinery that decides whether the
+# gates above pass.
+#
+# Same loose trigger as the posix gate, and for the same reason: the whole
+# corpus is re-linted whenever it fires (a couple of seconds), because a NEW
+# bash script is exactly the file the gate most needs to see on the push that
+# adds it, and the trigger cannot enumerate one that does not exist yet. The
+# `^tools/git-hooks/` alternative is not decoration — `pre-push` is a tracked
+# bash script with no suffix.
+#
+# Like the posix gate, this can legitimately be unrunnable on a machine that has
+# no shellcheck installed. It still FAILS rather than skipping — a gate whose
+# absence looks like a pass is the defect #1423 was filed about, and preflight
+# is not the place to reintroduce it.
+if want bash; then
+  CURRENT_GROUP=bash
+  run_gate_scoped '\.sh$|^(tools|site)/[^/]*$|^tools/git-hooks/|^tools/lib/testdata/bash-lint/' \
+                  "bash lint (shellcheck)" tools/bash-lint.sh
 fi
 
 # ---- skills group (mirrors test.yml's "Lint skill files" step) ------------

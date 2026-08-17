@@ -912,6 +912,83 @@ Before marking a ticket done, run the full suite — every layer must pass:
   `install-uninstall_test.sh` now *executes* the installer under `dash` rather
   than `sh` (macOS ships `/bin/dash`), which is the runtime half — it reaches
   only the lines a case runs, where the linter reads every line.
+- Bash scripts: `tools/bash-lint.sh` runs `shellcheck --shell=bash
+  --severity=warning` over every file git knows about — tracked, plus untracked
+  and not gitignored — whose **first line** is a bash shebang. 83 files /
+  ~19k lines, and until #1684 **no static linter read one of them**: the bullet
+  above selects on `#!/bin/sh` line 1, deliberately (#1611), so every bash file
+  fell through — including the bounded gate runner (`gate-budget.sh`), the
+  pre-push hook's own scoping rules (`changed-files.sh`), the shared suite
+  runner and every extract-and-execute workflow lock, i.e. the machinery
+  deciding whether the other gates pass. Same file-selection blindness class as
+  #1423 and #1611. It found 26 findings, all fixed or annotated.
+  Four decisions are load-bearing and each was measured rather than preferred.
+  - **DEFAULT-IN, opt-out with a reason.** The scope is not a prefix list — it
+    is everything, minus three declared `EXCLUDE` globs each carrying its
+    justification, and an exclusion that matches NOTHING is a hard refusal
+    (exit 2) rather than a no-op, the same both-directions existence check
+    `TW_EXEMPT_KEYS` and `nilTolerant` get. So a bash file added anywhere is
+    covered by existing, and the two families that are out — the
+    deliberately-corrupt `testdata/` corpora, and the recording rig's per-agent
+    drivers plus their `.tmpl` (#1687: 79 findings, and one file whose analysis
+    shellcheck silently ABANDONS) — are out visibly.
+  - **A severity FLOOR, not posix-lint's named code set**, and the reason the
+    precedent was not followed is that SC3xxx is a closed family by definition
+    while "bugs in bash" is not: an opt-in code list is not enforced on a code
+    shellcheck adds later. The floor is `warning` because that is where the
+    VERSION SPLIT vanishes. Measured per-file over the whole corpus with 0.9.0,
+    0.10.0 and 0.11.0 binaries side by side: at `warning` all three are
+    **byte-identical** (26 findings, same line:col); at `style` they are not,
+    and the asymmetry runs in BOTH directions with the damage on the CI side —
+    138 findings CI's 0.9.0 reports which a local 0.11.0 cannot produce
+    (137 × SC2317) against 25 the other way (SC2329). A `style` floor would
+    make `preflight --only bash` pass a diff linux.yml rejects, the exact
+    round-trip posix-lint's monotonicity argument exists to prevent. `-x`
+    (external sources) is off, also measured: these libraries source through
+    variable paths, so it changed the count by zero.
+  - **ONE FILE PER INVOCATION.** Measured: shellcheck given several files at
+    once suppresses SC2034 for a name used in ANY of them — one file alone
+    reports 2 findings, the same file beside `await-gone.sh` reports 0. A
+    multi-file gate's verdict would depend on which other files shared the
+    command line, which `--changed` scoping makes differ between a push and
+    CI's full run. It is also why the count is 26 where a single multi-file run
+    over the same tree says 15.
+  - **A comment line whose FIRST word is the linter's name is a DIRECTIVE**, and
+    an unparseable one makes shellcheck ABANDON the file — every later finding
+    silently disappears. That is inside the floor (SC1072/SC1073 are `error`)
+    for the same reason `posix-lint.sh` refuses to filter its parse-abort codes
+    into silence, and it is the gate's most valuable rule: it caught the
+    construct **four times in this PR's own new prose**, and
+    `replaydata/_lib/drive/contracts.sh` has been carrying it unnoticed (#1687 —
+    rewording that one line surfaces an SC2005 the file currently hides). The
+    sibling SC1125 is the `# shellcheck disable=SCxxxx — <prose>` spelling; the
+    disable IS still honoured (measured on both versions), but the reason must
+    go behind a second `#`.
+  The sanctioned escape hatch is a per-SITE `# shellcheck disable=SCxxxx  #
+  <reason>` naming its consumer's `file:line` — all 17 SC2034s are that, each
+  verified to have a real reader — and never a code removed from the gate.
+  A directive covers only the NEXT command, so four adjacent knob assignments
+  need four.
+  It lives in **`linux.yml`** beside `posix-lint.sh`, but for a DIFFERENT
+  reason, and the difference is the decision: posix-lint needs ubuntu because
+  `/bin/sh` must genuinely BE dash there — a property of the runtime — whereas
+  shellcheck is a static analyser that reads no interpreter, so neither the OS
+  nor the arch enters the verdict (the 0.9.0 measurement above was taken from an
+  x86_64 binary under Rosetta on arm64 macOS and agrees byte-for-byte with a
+  native arm64 0.11.0). What picks the host is only that the ubuntu image ships
+  shellcheck and macos-latest ships none. Mirrored locally by
+  `tools/preflight.sh --only bash`. Its tests are `tools/lib/bash-lint_test.sh`
+  over the committed corpus under `tools/lib/testdata/bash-lint/` — one
+  deliberately-broken fixture per rule class, `good-clean.sh` as the vacuity
+  guard, `style-noisy-but-warning-clean.sh` pinning the floor in the one
+  direction the `bad-*` files cannot reach, and the abandonment fixture proved
+  by REWORDING its directive line and asserting the hidden SC2115 appears.
+  That suite runs in `linux.yml`, not in test.yml's `tools/lib/*_test.sh` loop —
+  it needs a linter the macOS image lacks, and it is the loop's SECOND skip
+  argument. `shell-lib-suite_test.sh` now derives that list from the workflow
+  step and existence-checks every name, because the one-file check it had would
+  have gone on passing while saying nothing about the new entry.
+
 - Sourced shell libraries: not a contract family — a tripwire,
   `tools/lib/shell-lib-errexit_test.sh`, over every `tools/lib/*.sh` that is
   not a `*_test.sh`. Each function it can drive must, under a caller's
@@ -1748,8 +1825,8 @@ it once instead of round-tripping through GitHub Actions per fix. Gates run
 **cheapest first**, in two phases, not in "CI's order": there is no single CI
 order to mirror, since those are separate workflows GitHub runs concurrently,
 and the order is load-bearing under `--budget` (below) because it decides which
-gates survive a squeeze. `skill-file lint` and `POSIX sh lint` are the only
-coverage their file families have and cost a fraction of a second each, so they
+gates survive a squeeze. `skill-file lint`, `POSIX sh lint` and `bash lint` are the
+only coverage their file families have and cost a second or two each, so they
 run before four minutes of `go test` — which is the argument test.yml already
 makes in-file for running the skill lint before `setup-go`.
 
@@ -1759,6 +1836,7 @@ tools/preflight.sh --linux        # + full Linux parity (slow: needs Docker)
 tools/preflight.sh --only go      # just the test.yml-equivalent gates
 tools/preflight.sh --only arch    # just the ARS architecture gate
 tools/preflight.sh --only skills  # just the .claude/skills/**/*.md linter
+tools/preflight.sh --only bash    # just the shellcheck lint over bash scripts
 tools/preflight.sh --only swift   # just the macOS Swift build + test suite
 tools/preflight.sh --budget 540   # bound the whole run; see "The budget" below
 ```
@@ -1768,7 +1846,7 @@ debugging convenience — the unscoped run does not reliably fit a foreground
 `Bash` call's 600s budget** (it reliably exceeds it on this machine; the long
 pole is the `go` group's core suite + replay fixtures). Run each group as its
 own **foreground** invocation instead of the single unscoped command:
-`tools/preflight.sh --only go|web|arch|tools|skills|posix|security|swift` (see
+`tools/preflight.sh --only go|web|arch|tools|skills|posix|bash|security|swift` (see
 `tools/preflight.sh --help` for the current group list; `linux` stays opt-in
 and needs Docker). Every gate still runs — chunking only changes how many
 invocations it takes. **Do not background the unscoped run to make it fit**:

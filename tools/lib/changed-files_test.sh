@@ -230,7 +230,13 @@ for script in security-scan.sh preflight.sh; do
   # now (#1570 added gate-budget.sh to preflight.sh and gosec-report.sh to
   # security-scan.sh), so whichever they reach first is the one they name —
   # this case pins the REFUSAL, not which file it happens to be about.
-  rm -rf "$NOLIB/lib"
+  #
+  # `${NOLIB:?}`, not `$NOLIB` (#1684): `set -u` catches an UNSET variable but
+  # not an EMPTY one, and `$(mktemp -d)` yields the empty string when mktemp
+  # fails, at which point this line is `rm -rf /lib`. The `:?` makes an empty
+  # value abort the expansion instead. Same shape as the unguarded interpolation
+  # that removed ~1,895 files from a real ~/Library/Preferences during #1661.
+  rm -rf "${NOLIB:?}/lib"
   out=$( cd "$REPO_ROOT_FOR_TEST" && bash "$NOLIB/$script" "${args[@]}" 2>&1 )
   rc=$?
   assert_eq "$script --changed with no lib/ at all → exit 2, not a silent pass" "2" "$rc"
@@ -248,7 +254,7 @@ for script in security-scan.sh preflight.sh; do
   rc=$?
   assert_eq "$script --changed with only changed-files.sh missing → exit 2" "2" "$rc"
   assert_contains "$script names changed-files.sh in its error" "changed-files.sh" "$out"
-  rm -rf "$NOLIB/lib"
+  rm -rf "${NOLIB:?}/lib"
 done
 
 echo ""

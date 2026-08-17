@@ -54,6 +54,48 @@ jobs:
       - name: Test the POSIX-sh gate
         run: bash tools/lib/posix-lint_test.sh
 
+      # BASH gate (#1684) — the sibling of the two steps above, over the OTHER
+      # shell family. 83 bash files / ~19k lines that no static linter read at
+      # all: the bounded gate runner (tools/lib/gate-budget.sh), the pre-push
+      # hook's own scoping rules (changed-files.sh), the shared suite runner and
+      # every extract-and-execute workflow lock. posix-lint.sh selects on a
+      # `#!/bin/sh` FIRST LINE, deliberately (#1611), so every bash file fell
+      # outside it — the same file-selection blindness class as #1423 and #1611.
+      #
+      # THIS JOB IS THE HOST FOR A DIFFERENT REASON THAN posix-lint.sh's, and
+      # the difference matters. That gate needs ubuntu because `/bin/sh` must
+      # genuinely BE dash here — the property under test is a property of the
+      # runtime. shellcheck is a static analyser over the bash language and
+      # reads no interpreter at all: measured, a 0.9.0 x86_64 binary under
+      # Rosetta on arm64 macOS and a native arm64 0.11.0 return byte-identical
+      # findings at this gate's severity floor, so neither the OS nor the arch
+      # enters the verdict. What picks this job is only that the ubuntu image
+      # ships shellcheck (0.9.0) and macos-latest ships none, so hosting it in
+      # test.yml would `brew install` one on every PR.
+      #
+      # The version split is why the floor is `warning` and not `style`: at
+      # `warning` all of 0.9.0 / 0.10.0 / 0.11.0 agree byte-for-byte over the
+      # whole corpus, while at `style` this runner's 0.9.0 reports 138 findings
+      # a developer's 0.11.0 cannot produce (137 × SC2317) against 25 the other
+      # way (SC2329) — a preflight that passes a diff this job rejects, which is
+      # the round-trip posix-lint.sh's monotonicity argument exists to prevent.
+      # tools/bash-lint.sh's header carries the full measurement.
+      #
+      # Runs before setup-go for the same reason as the two above: no toolchain,
+      # a couple of seconds, and behind the Go steps a compile error would abort
+      # the job and leave a tooling-only PR with no tooling feedback.
+      - name: Lint bash scripts
+        run: tools/bash-lint.sh
+
+      # The gate's own unit tests, over the deliberately-broken corpus under
+      # tools/lib/testdata/bash-lint/. Here rather than in test.yml's
+      # `tools/lib/*_test.sh` loop for the same reason posix-lint_test.sh is:
+      # they need shellcheck, and the macos image ships none. A gate that passes
+      # by construction is what #1684 is about, so the mutation corpus has to
+      # run somewhere — this is where it can.
+      - name: Test the bash-lint gate
+        run: bash tools/lib/bash-lint_test.sh
+
       - name: Set up Go
         uses: actions/setup-go@v7
         with:

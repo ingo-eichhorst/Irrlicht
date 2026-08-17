@@ -399,13 +399,35 @@ else
   fi
 fi
 
-# The skip CI passes has to name a file that is really there. The library
-# refuses at runtime if it does not — this is the same assertion one push
+# EVERY skip CI passes has to name a file that is really there. The library
+# refuses at runtime if one does not — this is the same assertion one push
 # earlier, on the machine that can act on it.
-if [[ -e tools/lib/posix-lint_test.sh ]]; then
-  pass "the skip test.yml passes names a file that exists (tools/lib/posix-lint_test.sh)"
+#
+# The list is DERIVED from the step body read above, not hand-written here
+# (#1684 added a second skip, `bash-lint_test.sh`, and a one-file check would
+# have gone on passing while saying nothing about it). Deriving also means the
+# vacuity guard is load-bearing: a scan that stopped finding the invocation
+# would name no skips at all, which is indistinguishable from a step that
+# skips nothing.
+if [[ -z "$step" ]]; then
+  fail "the skip list could be read" "a '$STEP' step body" "empty — covered by the failure above"
 else
-  fail "the skip test.yml passes names a real file" "tools/lib/posix-lint_test.sh" "missing — CI's step will refuse with status 2 until the skip is updated"
+  skips=$(printf '%s\n' "$step" \
+          | sed -n 's/.*shell_lib_suite_run[[:space:]]\{1,\}tools\/lib[[:space:]]\{1,\}\([^|]*\).*/\1/p' \
+          | tr -s ' ' '\n' | sed '/^$/d')
+  if [[ -z "$skips" ]]; then
+    fail "the derived skip list is non-empty" "at least one skip name" "none — either the invocation moved or the sed stopped matching; a skip list that reads as empty proves nothing"
+  else
+    pass "read $(printf '%s\n' "$skips" | wc -l | tr -d ' ') skip name(s) out of $WF's step"
+    while IFS= read -r skip; do
+      [[ -z "$skip" ]] && continue
+      if [[ -e "tools/lib/$skip" ]]; then
+        pass "the skip test.yml passes names a file that exists (tools/lib/$skip)"
+      else
+        fail "the skip test.yml passes names a real file" "tools/lib/$skip" "missing — CI's step will refuse with status 2 until the skip is updated"
+      fi
+    done <<< "$skips"
+  fi
 fi
 
 echo ""
