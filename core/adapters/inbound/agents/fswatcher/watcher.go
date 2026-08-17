@@ -84,9 +84,13 @@ type Watcher struct {
 	// WithReconcileInterval). Zero means defaultReconcileInterval; negative
 	// disables the sweep.
 	reconcileInterval time.Duration
-	// emitted records the size last broadcast for each transcript path, so the
+	// emitted records the size last DELIVERED to a subscriber for each
+	// transcript path, so the
 	// reconcile sweep can distinguish state fsnotify already reported from
-	// state it missed. Entries are removed when a file is deleted, so a
+	// state it missed. Delivered rather than merely broadcast: broadcast drops
+	// on a full subscriber buffer, and an entry written for a dropped event
+	// tells the sweep the state was reported when nothing downstream ever saw
+	// it (#1679 — see emit). Entries are removed when a file is deleted, so a
 	// recreated path is reported as a new session again. It is otherwise
 	// bounded by the number of transcript files this run has reported on —
 	// the same order as the tree the watcher already walks — so it is not
@@ -452,13 +456,26 @@ func (w *Watcher) dispatchEvent(watcher *fsnotify.Watcher, ev fsnotify.Event, ok
 	return true
 }
 
+// subscriberBuffer is the capacity of the channel Subscribe returns. Named
+// rather than inline so a test can quote the bound it is actually up against
+// instead of carrying a second copy of the number that can drift from it.
+//
+// It is not large enough for a startup backlog and is not meant to be: measured
+// against a real ~/.claude/projects with 128 transcripts inside the default
+// 5-day maxAge, the scan emits all 128 in ~90ms and a consumer costing 1ms per
+// event already receives only 75 (issue #1679). What makes that survivable is
+// that a drop stays recoverable by the reconcile sweep — see emit — not that
+// the buffer is big. Raising it, or making the send block, is a separate
+// decision about the drop policy and is deliberately not made here.
+const subscriberBuffer = 64
+
 // Subscribe returns a channel that receives transcript events. The channel is
 // buffered so a slow consumer doesn't block the watcher. The capacity must be
 // large enough to absorb bursts from concurrent sessions and subagent
 // transcripts — all files in the watched tree share this single channel, and
 // broadcast silently drops events when the channel is full.
 func (w *Watcher) Subscribe() <-chan agent.Event {
-	ch := make(chan agent.Event, 64)
+	ch := make(chan agent.Event, subscriberBuffer)
 	w.subMu.Lock()
 	w.subs = append(w.subs, ch)
 	w.subMu.Unlock()
@@ -587,7 +604,8 @@ func (w *Watcher) isStale(mtime time.Time) bool {
 	return w.maxAge > 0 && !mtime.IsZero() && time.Since(mtime) > w.maxAge
 }
 
-// emit records the size being reported for path and broadcasts the event.
+// emit broadcasts the event for path and records the size, in that order and
+// only if the broadcast reached a subscriber.
 // Every new-session and activity emission goes through here so the reconcile
 // sweep can tell the state fsnotify already reported from the state it missed,
 // and therefore never re-reports a file the normal event path handled.
@@ -603,24 +621,51 @@ func (w *Watcher) emit(typ agent.EventType, sessionID, projectDir, path string, 
 	if prev, ok := w.emitted[path]; ok && prev == size && typ == agent.EventNewSession {
 		return
 	}
+	// Record only what a subscriber actually received. broadcast drops when a
+	// subscriber's buffer is full, and recording first made a dropped event
+	// indistinguishable — to reconcileFile's `known && prev == size` early
+	// return — from a delivered one, so the sweep that exists to recover a
+	// notification fsnotify never delivered (#1248) was disarmed by the very
+	// act that lost the event (#1679). Leaving the entry unwritten is what
+	// keeps the sweep armed to re-report it on the next interval.
+	//
+	// "Delivered" is deliberately *any* subscriber rather than *every* one.
+	// Requiring all of them would tie this map to the slowest consumer: one
+	// wedged subscriber would make every sweep re-report the whole tree and
+	// hand every healthy subscriber a duplicate. The cost of the weaker
+	// predicate is that with more than one subscriber, a drop that hits only
+	// some of them is recorded as reported and stays unrecoverable for those.
+	// Production has exactly one subscriber per watcher — SessionDetector's
+	// drainWatcher, one per registered Watcher — so the two predicates coincide
+	// there today; the multi-subscriber case is tests and measurement rigs.
+	if !w.broadcast(w.eventFor(typ, sessionID, projectDir, path, size)) {
+		return
+	}
 	if w.emitted == nil {
 		w.emitted = make(map[string]int64)
 	}
 	w.emitted[path] = size
-	w.broadcast(w.eventFor(typ, sessionID, projectDir, path, size))
 }
 
-// broadcast sends an event to all subscribers. Non-blocking: drops if consumer
-// hasn't drained.
-func (w *Watcher) broadcast(ev agent.Event) {
+// broadcast sends an event to all subscribers and reports whether at least one
+// of them received it. Non-blocking: a subscriber whose buffer is full is
+// skipped rather than waited on, so an unresponsive consumer can never wedge
+// the watcher — see emit for what the return value is for, and Subscribe for
+// why the drop policy itself is left alone. A watcher with no subscribers at
+// all reports false for the same reason a full buffer does: nothing downstream
+// learned anything.
+func (w *Watcher) broadcast(ev agent.Event) bool {
 	w.subMu.Lock()
 	defer w.subMu.Unlock()
+	deliveredToAny := false
 	for _, ch := range w.subs {
 		select {
 		case ch <- ev:
+			deliveredToAny = true
 		default:
 		}
 	}
+	return deliveredToAny
 }
 
 // waitForRoot polls until the root directory exists or ctx is cancelled.
