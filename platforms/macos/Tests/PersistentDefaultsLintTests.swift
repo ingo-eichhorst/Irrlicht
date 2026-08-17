@@ -51,17 +51,48 @@ import XCTest
 /// #1672's fix: the construct appears **zero** times in the app target, so the
 /// rule needs no exemption and gets none.
 ///
-/// READS are deliberately left alone, in both targets. `UserDefaults.standard.`
-/// `object(forKey:)` is how a test says "and the process domain was not
-/// touched", which is the assertion that would have caught this class in the
-/// first place; banning it would ban the evidence along with the defect. In the
-/// app a read is how `reconcileNotificationsMasterDefault()` distinguishes an
-/// absent key from a `false` one, which `@AppStorage` cannot express.
+/// READS are deliberately left legal by the three rules above, in both targets.
+/// `UserDefaults.standard.object(forKey:)` is how a test says "and the process
+/// domain was not touched", which is the assertion that would have caught this
+/// class in the first place; banning it would ban the evidence along with the
+/// defect. And app-target-wide a read ban is not tractable: measured, the app
+/// contains **16** `UserDefaults.standard` references outside comments, of which
+/// after #1689 **14** are ordinary reads in managers, models and the menu-bar
+/// controller — none of them a view, none reachable by any pin — so the rule
+/// would arrive with 14 exemptions, which is a list rather than a rule.
 ///
-/// There is deliberately **no exemption list** for any of the three rules, for
+/// **A fourth rule, narrowed to where a read IS a defect: `Irrlicht/Views/`.**
+/// #1689 is the read half of #1672 — `reconcileNotificationsMasterDefault()`
+/// DECIDED from `UserDefaults.standard.object(forKey:)` and wrote through
+/// `@AppStorage`, so under a pinned render the guard consulted the machine while
+/// the write landed in the store the host supplied. No mutation rule can see
+/// that, because the offending statement is a read. What makes the narrowing
+/// work rather than arbitrary is the measurement: `Irrlicht/Views/` is exactly
+/// the set of files declaring a SwiftUI `View` (14 files; `grep` for a `: View`
+/// conformance finds none anywhere else in the app target), it is the code
+/// `PinnedSnapshotHost` pins, and it held exactly **two** references to the
+/// process domain — `SettingsView.swift:697` and `:710`, both reads, both
+/// removed by #1689 — so this rule carries no exemption list either.
+///
+/// The rule bans the RECEIVER, not a set of accessors, so a read, a mutation and
+/// a bare `UserDefaults.standard` handed to a function that takes a store are
+/// one rule. In a view every one of them is the same defect: a value taken from
+/// the machine where the equivalent value was available from the INPUT.
+/// `@AppStorage` — including the optional form, which is how #1689 expresses
+/// "absent" — honours `.defaultAppStorage(_:)`, and a view that needs a whole
+/// store takes one (`SessionManager.init(defaults:)`).
+///
+/// Its declared limit is the same one a directory scan always has: a view
+/// calling a helper that reads the process domain for it is invisible here
+/// (`MenuBarStyle` and `ContextPressureThreshold` both contain such reads).
+/// That is a false NEGATIVE, so it cannot make the rule wrong — only incomplete
+/// — and closing it would need a call-graph, which is what the behavioural half
+/// (`PinnedAppStorageSnapshotTests`) covers for the sites that matter.
+///
+/// There is deliberately **no exemption list** for any of the four rules, for
 /// the reason `core/architecture_hookbody_test.go` gives: a test that genuinely
-/// needs a raw suite, or a genuine write to the process domain, amends this rule
-/// in a reviewable diff.
+/// needs a raw suite, or a genuine write to the process domain, or a view that
+/// genuinely cannot take its store, amends this rule in a reviewable diff.
 final class PersistentDefaultsLintTests: XCTestCase {
 
     // MARK: - The rule, as a pure function
@@ -88,11 +119,20 @@ final class PersistentDefaultsLintTests: XCTestCase {
         "UserDefaults" + #"\s*\.\s*standard\s*\.\s*(?:"#
         + mutators.joined(separator: "|") + #")\s*\("#
 
+    /// Any reference to the process preference domain at all — read, mutation or
+    /// the bare receiver passed along. Applied only to the view sources (#1689).
+    private static let processDomainPattern = "UserDefaults" + #"\s*\.\s*standard"#
+
     private static let testTargetDirectories = ["Tests", "TestsHarness"]
 
     /// The app target. One directory, and the walk below fails loudly if it is
     /// not there — a renamed target must not read as a clean tree.
     private static let appTargetDirectories = ["Irrlicht"]
+
+    /// The view sources — measured to be exactly the files declaring a SwiftUI
+    /// `View`, which is what makes the fourth rule's narrowing a property rather
+    /// than a preference. See the type's doc comment.
+    private static let viewTargetDirectories = ["Irrlicht/Views"]
 
     /// 1-based line numbers of every offending construction in `source`.
     ///
@@ -110,6 +150,13 @@ final class PersistentDefaultsLintTests: XCTestCase {
     /// `source`. Same comment handling, same declared limits.
     static func mutatingLines(in source: String) -> [Int] {
         lines(matching: mutationPattern, in: source)
+    }
+
+    /// 1-based line numbers of every reference to `UserDefaults.standard` in
+    /// `source`, whatever is done with it (#1689). Same comment handling, same
+    /// declared limits.
+    static func processDomainLines(in source: String) -> [Int] {
+        lines(matching: processDomainPattern, in: source)
     }
 
     private static func lines(matching pattern: String, in source: String) -> [Int] {
@@ -343,6 +390,127 @@ final class PersistentDefaultsLintTests: XCTestCase {
         XCTAssertFalse(Self.mutationCorpus.filter { !$0.want.isEmpty }.isEmpty, "no must-flag rows")
     }
 
+    // MARK: - Committed mutation evidence for the view rule (#1689)
+
+    /// One row per spelling, pinned to the verdict `processDomainLines` must
+    /// return.
+    ///
+    /// The first three rows are where this rule differs from the mutation rule
+    /// above and are the whole reason it exists: in a view a READ is a defect,
+    /// so it is flagged here and must stay legal there — asserted in both
+    /// directions below, because a "narrower rule" that turned out to be the
+    /// same rule would be indistinguishable from coverage. The `want: []` rows
+    /// carry the rest of the value: the `@AppStorage` declaration and the
+    /// injected store are the seams that REPLACE the construct, so a rule that
+    /// flagged either would ban its own fix.
+    private static let viewCorpus: [(name: String, source: String, want: [Int])] = [
+        (
+            "a READ is the whole point of THIS rule — #1689's guard was one",
+            "guard \(processDomain).object(forKey: k) == nil else { return }",
+            [1]
+        ),
+        (
+            "so is the coercing read the same view used for anyEventEnabled",
+            "let any = allCases.contains { \(processDomain).bool(forKey: $0.enabledKey) }",
+            [1]
+        ),
+        (
+            "handing the bare receiver to something that takes a store counts too — "
+                + "that is the shape a half-done store-threading refactor produces",
+            "notificationsEnabled = NotificationSettings.masterEnabled(defaults: \(processDomain))",
+            [1]
+        ),
+        (
+            "a mutation is flagged here as well: the two rules overlap in a view on purpose",
+            "\(processDomain).set(true, forKey: \"k\")",
+            [1]
+        ),
+        (
+            "whitespace around the dot does not evade it",
+            "UserDefaults" + " . standard .object(forKey: \"k\")",
+            [1]
+        ),
+        (
+            "every occurrence is reported, not only the first",
+            "let a = \(processDomain).bool(forKey: \"a\")\nlet unrelated = 1\nlet b = \(processDomain).bool(forKey: \"b\")",
+            [1, 3]
+        ),
+        (
+            "the seam that replaces it — an @AppStorage declaration names no store",
+            "@AppStorage(NotificationSettings.masterEnabledKey) private var master: Bool?",
+            []
+        ),
+        (
+            "nor does the optional form #1689 uses to express ABSENT",
+            "guard storedNotificationsMaster == nil else { return }",
+            []
+        ),
+        (
+            "a view that takes a whole store is reading its INPUT, not the machine",
+            "SessionManager(defaults: defaults).summaryDisplayMode",
+            []
+        ),
+        (
+            "a similarly named receiver is not UserDefaults.standard",
+            "standardDefaults.object(forKey: \"k\")",
+            []
+        ),
+        (
+            "a line comment naming the construct is documentation, not a call",
+            "// #1689: this used to read \(processDomain).object(forKey:)",
+            []
+        ),
+        (
+            "a doc comment naming it is documentation too",
+            "/// The read this replaced was \(processDomain).object(forKey:).",
+            []
+        ),
+        (
+            "LIMIT: a string literal holding the construct is flagged, because a line scan cannot tell it from a call",
+            "let needle = \"\(processDomain)\"",
+            [1]
+        ),
+        (
+            "LIMIT: a block comment holding the construct is flagged, for the same reason",
+            "/* \(processDomain).object(forKey: \"k\") */",
+            [1]
+        )
+    ]
+
+    func testViewScanReturnsThePinnedVerdictForEverySpelling() {
+        for row in Self.viewCorpus {
+            XCTAssertEqual(
+                Self.processDomainLines(in: row.source), row.want,
+                "\(row.name)\n---\n\(row.source)\n---"
+            )
+        }
+    }
+
+    /// The vacuity guard for the live view scan: after #1689 the construct
+    /// appears nowhere under `Irrlicht/Views/`, so "no offenders" and "the rule
+    /// stopped matching anything" are otherwise the same output.
+    func testTheViewCorpusContainsBothVerdicts() {
+        XCTAssertFalse(Self.viewCorpus.filter { $0.want.isEmpty }.isEmpty, "no must-not-flag rows")
+        XCTAssertFalse(Self.viewCorpus.filter { !$0.want.isEmpty }.isEmpty, "no must-flag rows")
+    }
+
+    /// The two rules are DIFFERENT rules, asserted rather than assumed.
+    ///
+    /// Without this, a view rule that had silently been written as the mutation
+    /// rule — or a `mutators` list that grew `object` — would pass every row
+    /// above and every live scan, while the reads #1689 is about went unflagged
+    /// in views and the reads #1662 deliberately protects went flagged
+    /// everywhere. Both directions are named because each is one edit away.
+    func testTheViewRuleAndTheMutationRuleDisagreeAboutReads() {
+        let read = "let before = \(Self.processDomain).object(forKey: \"summaryDisplayMode\")"
+        XCTAssertEqual(Self.processDomainLines(in: read), [1],
+                       "the view rule stopped flagging a read — it has collapsed into the "
+                       + "mutation rule and #1689's defect is invisible to it")
+        XCTAssertEqual(Self.mutatingLines(in: read), [],
+                       "the mutation rule started flagging a read — that bans the assertion "
+                       + "a test uses to prove the process domain was untouched (#1662)")
+    }
+
     // MARK: - The live scan
 
     /// Walks every Swift source in the test targets, applying `rule` to each,
@@ -447,6 +615,35 @@ final class PersistentDefaultsLintTests: XCTestCase {
             instead: `@AppStorage`, which honours `.defaultAppStorage(_:)`, or \
             an injected `UserDefaults` (`SessionManager.init(defaults:)`). \
             Reads are fine.
+
+            \(offenders.joined(separator: "\n"))
+            """
+        )
+    }
+
+    /// #1689: no VIEW touches the process preference domain at all — the half
+    /// the three rules above are blind to, because the offending statement is a
+    /// read and reads are legal everywhere else.
+    func testNoViewSourceResolvesTheProcessPreferenceDomain() throws {
+        let (offenders, filesScanned) = try scan(Self.viewTargetDirectories, Self.processDomainLines(in:))
+
+        XCTAssertGreaterThan(filesScanned, 0, "the scan read no Swift files — it checked nothing")
+        XCTAssertEqual(
+            offenders, [],
+            """
+            A view resolves UserDefaults.standard. In a view that is a value read \
+            from the MACHINE where the same value is available from the INPUT: \
+            `PinnedSnapshotHost` pins `.defaultAppStorage(_:)`, so a rendered view \
+            reads the preferences it is GIVEN — but only through a seam that \
+            honours it. A READ is enough to break that, which is why this rule is \
+            not the mutation rule above: #1689's \
+            `reconcileNotificationsMasterDefault()` DECIDED from this domain and \
+            wrote through `@AppStorage`, so under a pinned render the guard \
+            consulted the developer's com.apple.dt.xctest.tool while the write \
+            landed in the store the host supplied. Use `@AppStorage` — the \
+            optional form (`Bool?`) expresses an ABSENT key, which is what that \
+            guard needed — or take a `UserDefaults` the way \
+            `SessionManager.init(defaults:)` does.
 
             \(offenders.joined(separator: "\n"))
             """
