@@ -894,7 +894,87 @@ private struct NotificationEventRow: View {
     let sampleText: String
     let onImportError: (String) -> Void
 
-    @State private var selection: SoundChoice = .default
+    /// The row's ONE copy of the sound choice, and the reason there is no
+    /// `@State` mirror of it (#1672).
+    ///
+    /// This used to be `@State private var selection: SoundChoice = .default`,
+    /// loaded from `UserDefaults.standard` in `.onAppear` and persisted back
+    /// from `.onChange(of: selection)`. Those three pieces form a loop: the
+    /// load is itself a change, so merely RENDERING the row wrote the value it
+    /// had just read straight back into the process's preference domain — a
+    /// preference the user never picked, persisted into their real
+    /// `io.irrlicht.app` domain in the app, and into
+    /// `com.apple.dt.xctest.tool` under `swift test`, which is where #1672
+    /// found it.
+    ///
+    /// Two properties of that write are worth keeping written down, because
+    /// they are what made it survive #1662's audit:
+    ///
+    /// - **It wrote the value it had just read**, so nothing observable
+    ///   changed. The plist's mtime does not move, and a merged
+    ///   `dictionaryRepresentation()` reads the same whether a value came from
+    ///   the registration domain or from the application domain. On a machine
+    ///   that has already run the suite once, the write is undetectable by any
+    ///   value comparison — only the first run on a fresh domain shows up, and
+    ///   only in the KEY SET.
+    /// - **It fired for exactly the events whose `defaultSound` differs from
+    ///   `SoundChoice.default`** (`.ping`): `.ready` (funk) and
+    ///   `.contextPressure` (sosumi). For `.waiting` the loaded value equalled
+    ///   the `@State` initial one, so `.onChange` never fired and
+    ///   `soundOnWaiting` was never written. Two of three keys appearing is
+    ///   what made "every rendered row writes its default back" look
+    ///   falsified, when the real rule was one step narrower.
+    ///
+    /// `@AppStorage` answers it by removing the second copy rather than by
+    /// guarding the loop: there is nothing to load, so a render has nothing to
+    /// write back, and a write happens only when the `Picker` hands
+    /// `soundBinding` a value the user chose. It also inherits #1662's seam for
+    /// free — `@AppStorage` honours `.defaultAppStorage(_:)`, so
+    /// `PinnedSnapshotHost` already resolves this through an
+    /// `InMemoryDefaults`.
+    @AppStorage private var storedSound: String
+
+    /// The key is per-event, so the wrapper is built here rather than declared
+    /// with a literal. `wrappedValue:` is what an UNSET key reads as; it is not
+    /// written, which is the whole point. It matches `SessionManager`'s
+    /// `register(defaults:)` seed, so an unset key and a seeded one agree.
+    init(event: NotificationEvent,
+         enabled: Binding<Bool>,
+         sampleText: String,
+         onImportError: @escaping (String) -> Void) {
+        self.event = event
+        self._enabled = enabled
+        self.sampleText = sampleText
+        self.onImportError = onImportError
+        self._storedSound = AppStorage(wrappedValue: event.defaultSound.rawValue,
+                                       event.soundKey)
+    }
+
+    /// Derived on every render, never stored.
+    private var selection: SoundChoice {
+        SoundChoice(rawValue: storedSound) ?? event.defaultSound
+    }
+
+    /// The picker's binding. `get` derives from the store; `set` runs only for
+    /// a pick that came from the control.
+    ///
+    /// The sentinel is deliberately NOT persisted, and `get` still answers the
+    /// previous choice while the open panel runs — so the control reverts on
+    /// its own, which is what the old code needed an explicit
+    /// `selection = previous` assignment for.
+    private var soundBinding: Binding<SoundChoice> {
+        let stored = $storedSound
+        let fallback = event.defaultSound
+        return Binding(
+            get: { SoundChoice(rawValue: stored.wrappedValue) ?? fallback },
+            set: { newValue in
+                guard newValue != .customPickerSentinel else {
+                    self.pickCustomFile(into: stored)
+                    return
+                }
+                stored.wrappedValue = newValue.rawValue
+            })
+    }
 
     var body: some View {
         // One row (issue #940): toggle + label + sound picker + preview all
@@ -905,7 +985,7 @@ private struct NotificationEventRow: View {
             HStack(spacing: IrrSpacing.sp2) {
                 LeadingToggle(isOn: $enabled, label: event.displayName)
 
-                Picker("", selection: $selection) {
+                Picker("", selection: soundBinding) {
                     ForEach(SoundChoice.builtIns, id: \.self) { choice in
                         Text(choice.displayName).tag(choice)
                     }
@@ -924,9 +1004,6 @@ private struct NotificationEventRow: View {
                 .disabled(!enabled)
                 .frame(width: 112)
                 .tooltip(selection.displayName)
-                .onChange(of: selection) { newValue in
-                    handle(newValue)
-                }
 
                 Button {
                     SoundPlayer.preview(selection, sampleText: sampleText)
@@ -959,7 +1036,6 @@ private struct NotificationEventRow: View {
                 .tooltip("Open System Settings → Accessibility → Spoken Content")
             }
         }
-        .onAppear { loadFromDefaults() }
     }
 
     private static func openSpokenContentSettings() {
@@ -972,22 +1048,7 @@ private struct NotificationEventRow: View {
         }
     }
 
-    private func loadFromDefaults() {
-        let raw = UserDefaults.standard.string(forKey: event.soundKey) ?? event.defaultSound.rawValue
-        selection = SoundChoice(rawValue: raw) ?? event.defaultSound
-    }
-
-    private func handle(_ newValue: SoundChoice) {
-        if newValue == .customPickerSentinel {
-            let previous = SoundChoice(rawValue: UserDefaults.standard.string(forKey: event.soundKey) ?? "") ?? .default
-            selection = previous
-            pickCustomFile()
-            return
-        }
-        UserDefaults.standard.set(newValue.rawValue, forKey: event.soundKey)
-    }
-
-    private func pickCustomFile() {
+    private func pickCustomFile(into stored: Binding<String>) {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
@@ -1001,8 +1062,7 @@ private struct NotificationEventRow: View {
             switch result {
             case .success(let installed):
                 let choice = SoundChoice.custom(installedFilename: installed, displayPath: url.path)
-                UserDefaults.standard.set(choice.rawValue, forKey: event.soundKey)
-                selection = choice
+                stored.wrappedValue = choice.rawValue
                 onImportError("")
             case .failure(let error):
                 onImportError("Could not import audio file: \(error.localizedDescription)")

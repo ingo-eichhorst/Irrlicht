@@ -68,10 +68,45 @@ final class InMemoryDefaults: UserDefaults {
     /// read against a real suite.
     private var registered: [String: Any] = [:]
 
+    /// Every key this store has been ASKED for. See `readKeys`.
+    private var reads: Set<String> = []
+
     /// XCTest drives one test at a time here, but `SessionManager` and friends
     /// read defaults from other queues, and a double that flaked under that
     /// would be debugged as a product bug. `UserDefaults` itself is thread-safe.
     private let lock = NSLock()
+
+    /// The keys WRITTEN through this store, with the registration domain
+    /// excluded — and that exclusion is the entire reason this exists (#1672).
+    ///
+    /// `object(forKey:)` and `dictionaryRepresentation()` both merge `registered`
+    /// under `store`, so neither can answer "did this render PERSIST anything".
+    /// The write #1672 is about put back the exact value `register(defaults:)`
+    /// had just seeded, so every merged view of the store — and, on a real
+    /// domain, every value comparison and the plist's own mtime — reads
+    /// identically whether it happened or not. Only the key set of the
+    /// application domain tells them apart.
+    /// `testBuildingASessionManagerWritesNoPreference` can assert through
+    /// `object(forKey:)` only because the two keys it names are not in that
+    /// seed. The three sound keys are.
+    var writtenKeys: Set<String> {
+        lock.lock()
+        defer { lock.unlock() }
+        return Set(store.keys)
+    }
+
+    /// The keys this store was READ for. The vacuity guard for any
+    /// "wrote nothing" assertion over a rendered view: without it, a view that
+    /// never rendered and a view that rendered and wrote nothing produce the
+    /// same verdict — AGENTS.md's "absence of a finding and inability to look
+    /// must never produce the same output". A view whose `@AppStorage` resolved
+    /// `UserDefaults.standard` instead of this store also reads as "wrote
+    /// nothing", and this is what separates that case out too.
+    var readKeys: Set<String> {
+        lock.lock()
+        defer { lock.unlock() }
+        return reads
+    }
 
     /// - Note: `super.init(suiteName: nil)` binds the process's *own*
     ///   application domain, which already exists — it mints no new domain and
@@ -99,6 +134,10 @@ final class InMemoryDefaults: UserDefaults {
     override func object(forKey defaultName: String) -> Any? {
         lock.lock()
         defer { lock.unlock() }
+        // Recorded here rather than in each derived accessor: Foundation funnels
+        // every read through this primitive, which is the same argument the
+        // overrides below rest on.
+        reads.insert(defaultName)
         return store[defaultName] ?? registered[defaultName]
     }
 

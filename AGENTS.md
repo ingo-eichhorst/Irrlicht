@@ -1507,8 +1507,52 @@ Before marking a ticket done, run the full suite — every layer must pass:
   are deliberately left legal, because `object(forKey:)` is how a test says "and
   the process domain was not touched", and banning it would ban the evidence
   along with the defect. What that rule cannot see is a production call site a
-  test drives — measured, two sound keys still reach that domain across a full
-  gate run and no test source names the write (#1672).
+  test merely DRIVES, and **#1672 is that gap, closed**. The write was
+  `NotificationEventRow`: it mirrored its sound key into `@State`, loaded it in
+  `.onAppear` and persisted it back from `.onChange(of:)`, so merely RENDERING
+  the row wrote the value it had just read — and `SettingsViewTests` renders
+  `SettingsView`. Four things there are worth carrying.
+  **The loop is #1673's `didSet` trap in SwiftUI clothing**, and the fix is the
+  same move: remove the second copy rather than guard the write-back more
+  carefully. The row is `@AppStorage` over its own key now, derived on every
+  render, with a `Binding` whose `set` runs only for a pick — so it needed no new
+  product seam and inherits `.defaultAppStorage` the way every other
+  `@AppStorage` does.
+  **It was invisible for two compounding reasons, and both of them qualify any
+  "the domain did not change" measurement in this area.** It wrote back the value
+  `register(defaults:)` had just seeded, so no value changed, the plist's mtime
+  never moved, and `object(forKey:)`/`dictionaryRepresentation()` — which merge
+  the registration domain under the application one — read identically either
+  way. Only the application domain's KEY SET distinguishes a persisted default
+  from a registered one, which is what `InMemoryDefaults.writtenKeys` is for, and
+  even that saturates: once the key is there, the write is undetectable. And it
+  fired only for the events whose `defaultSound` differs from
+  `SoundChoice.default` (`.ping`) — `.ready` (funk) and `.contextPressure`
+  (sosumi) wrote, `.waiting` did not, because for it the loaded value equalled the
+  `@State` initial one and `.onChange` never fired.
+  **Two of three keys is what made the right hypothesis look falsified.** #1672's
+  own body rules out "every rendered row writes its default back" on the grounds
+  that `soundOnWaiting` was absent and that a SettingsView-only run left the
+  plist mtime unchanged — both measurements correct, the conclusion wrong,
+  because the real rule was one step narrower and the write was idempotent. A
+  dismissal can be right about what it ran and wrong about what that excludes;
+  the way out was an instrumented run naming the call site (a `print` in
+  `handle`, reverted), not a better inference.
+  **The structural half is a THIRD rule in `PersistentDefaultsLintTests`: the
+  same mutation scan over the APP target**, which is where a test-source scan is
+  blind by construction. Measured, it reports exactly `SettingsView.swift:987`
+  and `:1004` against the pre-fix tree and zero after, so it carries no
+  exemption list. Its behavioural counterpart is
+  `testRenderingTheNotificationRowsPersistsNoSoundChoice`, whose vacuity guard is
+  `InMemoryDefaults.readKeys`: a row that never rendered (the master gate is
+  collapsed by default) and a row still resolving `UserDefaults.standard` both
+  write nothing too, so "wrote nothing" is worthless without "and it asked THIS
+  store". The **runtime** witness #1672 also proposed — `tools/lib/swift-suite.sh`
+  comparing named domains' key SETS rather than directory entries — is #1688,
+  deferred with its measurement rather than dropped: the key set is quiet enough
+  to adopt (0 additions across two suite-length windows, against ~1 plist/218s
+  for the directory witness) but a growth-only check is green on any domain that
+  already has the key, i.e. on the machine that found this.
   **The fourth member is the WALL CLOCK, and it is the one where pinning the
   other three would have looked like coverage** (#1663).
   `SessionListView.formatResetTime` stacked four machine reads —

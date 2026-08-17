@@ -322,4 +322,94 @@ final class PinnedAppStorageSnapshotTests: XCTestCase {
                        "the write reached UserDefaults.standard — the seam leaks into the "
                        + "developer's com.apple.dt.xctest.tool domain")
     }
+
+    // MARK: - A render must PERSIST nothing (#1672)
+
+    /// The keys #1672 is about.
+    private static let soundKeys = Set(NotificationEvent.allCases.map(\.soundKey))
+
+    /// `SettingsView`, hosted the way a snapshot suite hosts a view, over
+    /// `store`.
+    ///
+    /// `notificationsEnabled` is seeded true because the three
+    /// `NotificationEventRow`s live behind the master gate (#940) and a
+    /// collapsed section renders none of them — which is precisely the shape a
+    /// "wrote nothing" assertion passes vacuously under.
+    private func renderSettingsPanel(_ store: InMemoryDefaults) -> PinnedSnapshotHost {
+        store.set(true, forKey: NotificationSettings.masterEnabledKey)
+        let view = SettingsView(isPresented: .constant(true),
+                                showPermissionsReview: .constant(false),
+                                sessionManager: SessionManager(defaults: store))
+            .environmentObject(UpdateManager(startingUpdater: false))
+            .environmentObject(DaemonManager())
+        return PinnedSnapshotHost(view,
+                                  width: SessionListView.panelWidth,
+                                  height: 520,
+                                  defaults: store)
+    }
+
+    /// #1672, as a property of a render: showing the notification rows writes
+    /// no sound choice into the store they resolved through.
+    ///
+    /// ## Why this asserts over `writtenKeys` and not `object(forKey:)`
+    ///
+    /// `SessionManager.init` puts all three sound keys into the store's
+    /// REGISTRATION domain, so `object(forKey:)` answers non-nil for every one
+    /// of them whether anything persisted or not — that is why
+    /// `testBuildingASessionManagerWritesNoPreference` above can use it (its two
+    /// keys are not in that seed) and why this one cannot. It is also why the
+    /// defect survived #1662's audit against a real domain: the row wrote back
+    /// the value `register(defaults:)` had just handed it, so no value changed,
+    /// the plist's mtime never moved, and every merged view of the domain read
+    /// identically. Only the application domain's KEY SET tells a persisted
+    /// default from a registered one.
+    ///
+    /// ## The vacuity guard
+    ///
+    /// A row that never rendered — the master gate is collapsed by default, so
+    /// that is the likely accident — and a row whose `@AppStorage` resolved
+    /// `UserDefaults.standard` instead of the pinned store both also write
+    /// nothing here. `readKeys` separates them: the rows must have ASKED this
+    /// store for all three keys.
+    ///
+    /// ## Why the sound keys and not the whole written set
+    ///
+    /// Scoped deliberately. Measured on this machine, a clean render writes
+    /// exactly `["notificationsEnabled"]` — the key this test seeds itself — so
+    /// a full-set equality would pass today. It is not asserted anyway:
+    /// `SettingsView`'s `.onAppear` reconciles `taskEtaActivation` and
+    /// `backchannelActivation` against the daemon (SettingsView.swift:413-452)
+    /// inside a `Task`, and those write `@AppStorage` keys whenever the daemon
+    /// answers before the assertion runs. Pinning the whole set would make this
+    /// a timing assertion dressed as a preference one, and its failures would
+    /// name a race rather than #1672. The general "no app code writes the
+    /// process domain directly" claim is `PersistentDefaultsLintTests`' third
+    /// rule; this arm is #1672's own. The failure message prints the whole set
+    /// regardless, so a surprise there is still legible.
+    func testRenderingTheNotificationRowsPersistsNoSoundChoice() {
+        let store = InMemoryDefaults()
+        let host = renderSettingsPanel(store)
+        XCTAssertFalse(host.view.subviews.isEmpty,
+                       "the panel hosted nothing — this check cannot have run")
+
+        for key in Self.soundKeys.sorted() {
+            XCTAssertTrue(
+                store.readKeys.contains(key),
+                "the rows never read \(key) from the pinned store, so 'nothing was written' "
+                + "proves nothing — either the section stayed collapsed or the row is "
+                + "resolving UserDefaults.standard")
+        }
+
+        XCTAssertEqual(
+            store.writtenKeys.intersection(Self.soundKeys), [],
+            """
+            Rendering the notification rows PERSISTED a sound choice — a value \
+            the user never picked. In the app that lands in their real \
+            io.irrlicht.app domain; under `swift test` it lands in the \
+            developer's com.apple.dt.xctest.tool, which is where #1672 found \
+            soundOnReady = funk and soundOnContextPressure = sosumi. Everything \
+            this render wrote: \(store.writtenKeys.sorted()).
+            """
+        )
+    }
 }

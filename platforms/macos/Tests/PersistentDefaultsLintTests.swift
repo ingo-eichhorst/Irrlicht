@@ -30,15 +30,38 @@ import XCTest
 /// a store and `SessionManager` takes one, no test needs to write that domain,
 /// so the rule can be stated rather than deferred.
 ///
-/// READS are deliberately left alone. `UserDefaults.standard.object(forKey:)`
-/// is how a test says "and the process domain was not touched", which is the
-/// assertion that would have caught this class in the first place; banning it
-/// would ban the evidence along with the defect.
+/// **A third rule, because two source rules over the TEST targets could not see
+/// #1672 at all.** #1662 removed every `UserDefaults.standard` mutation from the
+/// test targets and two keys still appeared in the developer's real
+/// `com.apple.dt.xctest.tool` domain across a suite run: `soundOnReady = funk`
+/// and `soundOnContextPressure = sosumi`. The write was in the APP —
+/// `NotificationEventRow` mirrored its sound key into `@State`, loaded it in
+/// `.onAppear` and persisted it back from `.onChange`, so merely RENDERING the
+/// row wrote the value it had just read — and `SettingsViewTests` renders
+/// `SettingsView`. A rule that scans only test sources is structurally blind to
+/// that: the offending line is in a file it does not read.
 ///
-/// There is deliberately **no exemption list** for either rule, for the reason
-/// `core/architecture_hookbody_test.go` gives: a test that genuinely needs a raw
-/// suite, or a genuine write to the process domain, amends this rule in a
-/// reviewable diff.
+/// So the mutation rule is applied to the app target too. It is not a weaker
+/// claim there, it is a stronger one: in the app that domain is the user's real
+/// `io.irrlicht.app`, so a write there persists a preference the user never set
+/// — the same defect #1673's `Published(initialValue:)` trap was, one layer up.
+/// Every persist in this app has a seam that does not need it: `@AppStorage`,
+/// which honours `.defaultAppStorage(_:)` and is therefore pinnable, or an
+/// injected `UserDefaults` (`SessionManager.init(defaults:)`). Measured after
+/// #1672's fix: the construct appears **zero** times in the app target, so the
+/// rule needs no exemption and gets none.
+///
+/// READS are deliberately left alone, in both targets. `UserDefaults.standard.`
+/// `object(forKey:)` is how a test says "and the process domain was not
+/// touched", which is the assertion that would have caught this class in the
+/// first place; banning it would ban the evidence along with the defect. In the
+/// app a read is how `reconcileNotificationsMasterDefault()` distinguishes an
+/// absent key from a `false` one, which `@AppStorage` cannot express.
+///
+/// There is deliberately **no exemption list** for any of the three rules, for
+/// the reason `core/architecture_hookbody_test.go` gives: a test that genuinely
+/// needs a raw suite, or a genuine write to the process domain, amends this rule
+/// in a reviewable diff.
 final class PersistentDefaultsLintTests: XCTestCase {
 
     // MARK: - The rule, as a pure function
@@ -66,6 +89,10 @@ final class PersistentDefaultsLintTests: XCTestCase {
         + mutators.joined(separator: "|") + #")\s*\("#
 
     private static let testTargetDirectories = ["Tests", "TestsHarness"]
+
+    /// The app target. One directory, and the walk below fails loudly if it is
+    /// not there — a renamed target must not read as a clean tree.
+    private static let appTargetDirectories = ["Irrlicht"]
 
     /// 1-based line numbers of every offending construction in `source`.
     ///
@@ -321,6 +348,16 @@ final class PersistentDefaultsLintTests: XCTestCase {
     /// Walks every Swift source in the test targets, applying `rule` to each,
     /// and returns `file:line` for every hit plus how many files were read.
     private func scanTestTargets(_ rule: (String) -> [Int]) throws -> (offenders: [String], filesScanned: Int) {
+        try scan(Self.testTargetDirectories, rule)
+    }
+
+    /// Walks every Swift source under `directories`, applying `rule` to each,
+    /// and returns `file:line` for every hit plus how many files were read.
+    ///
+    /// Parameterised by directory rather than duplicated per target, so the app
+    /// scan #1672 adds cannot drift from the test scan it shares a rule with.
+    private func scan(_ directories: [String],
+                      _ rule: (String) -> [Int]) throws -> (offenders: [String], filesScanned: Int) {
         var offenders: [String] = []
         var filesScanned = 0
 
@@ -328,15 +365,15 @@ final class PersistentDefaultsLintTests: XCTestCase {
             .deletingLastPathComponent()        // Tests/
             .deletingLastPathComponent()        // platforms/macos/
 
-        for directory in Self.testTargetDirectories {
+        for directory in directories {
             let root = macosRoot.appendingPathComponent(directory)
             var isDirectory: ObjCBool = false
             guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isDirectory),
                   isDirectory.boolValue else {
-                // A renamed or removed test target must be loud, not silent: a
-                // walk over a directory that is not there finds nothing and is
+                // A renamed or removed target must be loud, not silent: a walk
+                // over a directory that is not there finds nothing and is
                 // indistinguishable from a clean tree.
-                XCTFail("test target directory \(directory) is missing at \(root.path)")
+                XCTFail("target directory \(directory) is missing at \(root.path)")
                 continue
             }
             guard let walk = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) else {
@@ -385,6 +422,31 @@ final class PersistentDefaultsLintTests: XCTestCase {
             preferences it owns — so there is nothing to restore in a `tearDown` \
             that an aborted run (#1523), a 240s tree kill or an exhausted \
             `--budget` never reaches (#1662). Reads are fine.
+
+            \(offenders.joined(separator: "\n"))
+            """
+        )
+    }
+
+    /// #1672: the same rule over the APP target — the half a test-source scan
+    /// is structurally blind to, because the write it missed was a production
+    /// line a test merely *drove*.
+    func testNoAppSourceMutatesTheProcessPreferenceDomain() throws {
+        let (offenders, filesScanned) = try scan(Self.appTargetDirectories, Self.mutatingLines(in:))
+
+        XCTAssertGreaterThan(filesScanned, 0, "the scan read no Swift files — it checked nothing")
+        XCTAssertEqual(
+            offenders, [],
+            """
+            App code mutates UserDefaults.standard. In the app that is the \
+            user's real io.irrlicht.app domain, so a write reachable from a \
+            render persists a preference they never set; under `swift test` the \
+            same line writes the developer's com.apple.dt.xctest.tool domain, \
+            which is where #1672 was found and which no scan of the TEST \
+            sources can see. Persist through a seam that a test can pin \
+            instead: `@AppStorage`, which honours `.defaultAppStorage(_:)`, or \
+            an injected `UserDefaults` (`SessionManager.init(defaults:)`). \
+            Reads are fine.
 
             \(offenders.joined(separator: "\n"))
             """
