@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// The quota chip's two date renderings, as pure functions of their inputs
-/// (#1663).
+/// The quota chip's date renderings, as pure functions of their inputs (#1663,
+/// #1675).
 ///
 /// These were `SessionListView.formatResetTime` and `.formatClockTime`, two
 /// `private func`s that between them stacked four machine reads:
@@ -36,6 +36,35 @@ enum QuotaResetFormat {
         f.dateStyle = .none
         f.timeStyle = .short
         return f.string(from: date)
+    }
+
+    /// Coarse "time remaining" for the quota tooltip's "resets in …" — `"4h 12m"`,
+    /// `"3d 7h"`, `"12m"`. Never negative: a reset already past reads `"0m"`,
+    /// which is the state the chip's stale dimming is simultaneously reporting.
+    ///
+    /// Was `SessionListView.formatTimeUntil`, whose `date.timeIntervalSinceNow`
+    /// was #1675's third wall-clock read. Unlike the other two it is **not**
+    /// pixel-visible — its only call site is the `.tooltip(…)` bridge, an
+    /// `onHover`-only `NSPanel` that adds nothing to the view tree (measured by
+    /// #1659 and again by #1663) — so converting it buys consistency rather
+    /// than determinism, and it was converted anyway for three reasons stated
+    /// rather than assumed. It is the only remaining way for one tooltip to
+    /// describe two instants (`resetLabel`'s pace verdict and this line are
+    /// built one after the other from the same `now` now). It is a pure
+    /// function that was untestable and is now graded on strings. And leaving
+    /// it would have left the quota chip with exactly one machine read, which
+    /// is the state a future reader has to re-audit to discover is deliberate.
+    static func timeUntil(_ date: Date, now: Date) -> String {
+        let seconds = max(0, Int(date.timeIntervalSince(now)))
+        let h = seconds / 3600
+        let m = (seconds % 3600) / 60
+        if h >= 24 {
+            let d = h / 24
+            let rh = h % 24
+            return rh == 0 ? "\(d)d" : "\(d)d \(rh)h"
+        }
+        if h > 0 { return "\(h)h \(m)m" }
+        return "\(m)m"
     }
 
     /// Compact reset label for the chip row. A reset on the same day as `now`
