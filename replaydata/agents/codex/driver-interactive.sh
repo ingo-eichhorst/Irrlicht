@@ -342,11 +342,19 @@ boot_session() {
       stable=0
       echo "[driver] declined codex self-update offer (2 = Skip)" >&2
       sleep 1
-    elif [[ $hooks_done -eq 0 ]] && codex_pane_has_hook_panel "$pane"; then
+    elif [[ $hooks_done -eq 0 ]] && [[ "$(codex_hook_trust_answer "$pane")" == panel ]]; then
       # The hook REVIEW PANEL — the screen behind the menu's "1. Review hooks",
       # and where #1388's own run ended up when a stray Enter selected it. It is
       # answered with a bare `t` (trust all) and closed with Escape; it does NOT
       # accept the menu's "2", and it does not close itself.
+      #
+      # It sits AHEAD of the menu branch, and that order is load-bearing rather
+      # than alphabetical. $pane is a 40-line SCROLLBACK read, so once a run has
+      # reached the panel the menu's own text is still in it — the panel is only
+      # ever reachable THROUGH the menu, never the reverse. Checking the menu
+      # first would therefore send "2" at a screen where 2 is not a choice,
+      # i.e. type a literal 2 into the panel. The live screen is what has focus,
+      # and the panel is the later of the two.
       #
       # Confirmed off the LIVE SCREEN (no -S), not scrollback: the panel redraws
       # in place and `-S -N` keeps returning the pre-trust frame, so a scrollback
@@ -373,7 +381,7 @@ boot_session() {
       else
         echo "[driver] WARNING: hook-trust panel never reported every entry trusted" >&2
       fi
-    elif [[ $hooks_done -eq 0 ]] && codex_pane_has_hook_menu "$pane"; then
+    elif [[ $hooks_done -eq 0 ]] && [[ "$(codex_hook_trust_answer "$pane")" == menu ]]; then
       # Confirm the menu actually CLOSED before believing it. codex swallows
       # keystrokes during the boot/MCP phase (see step_send's render delay),
       # so a send that silently dropped would otherwise set hooks_done=1, hide

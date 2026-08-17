@@ -77,6 +77,30 @@ codex_pane_has_hook_panel() {
   grep -q 'Press t to trust all' <<<"${1:-}"
 }
 
+# codex_hook_trust_answer <pane-text> prints which hook gate a pane needs
+# answered — `panel`, `menu`, or `none` — resolving the one case where both
+# predicates fire at once.
+#
+# That case is normal, not exotic. The driver polls a 40-line SCROLLBACK read,
+# and the panel is only ever reachable THROUGH the menu, so a pane that has
+# reached the panel still carries the menu's text above it. The reverse cannot
+# happen. So the later screen wins: `panel` outranks `menu`, always.
+#
+# The precedence lives here rather than in the order of the driver's if/elif
+# chain because getting it backwards is silent — it would send the menu's "2"
+# at a screen where 2 is not a choice, typing a literal 2 into the panel while
+# the gate stays open and the run goes on to record zero hooks.
+codex_hook_trust_answer() {
+  local pane="${1:-}"
+  if codex_pane_has_hook_panel "$pane"; then
+    printf 'panel\n'
+  elif codex_pane_has_hook_menu "$pane"; then
+    printf 'menu\n'
+  else
+    printf 'none\n'
+  fi
+}
+
 # codex_pane_hook_panel_is_trusted <pane-text>
 # The panel is up and every entry is trusted: the footer has dropped its
 # trust-all affordance and offers only review/close. Used to confirm that a `t`

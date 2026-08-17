@@ -116,6 +116,46 @@ assert_pred codex_pane_hook_panel_is_trusted hook-panel-scrollback-both.txt no
 assert_pred codex_pane_has_hook_panel hook-panel-scrollback-both.txt yes
 
 echo ""
+echo "== when BOTH hook predicates fire, the later screen wins =="
+# hook-menu-then-panel-scrollback.txt is the menu capture with the panel capture
+# below it, which is what a 40-line `capture-pane -S -N` returns once a run has
+# reached the panel: the panel is only reachable THROUGH the menu, so the menu's
+# text is still above it and the reverse cannot happen.
+#
+# Both predicates fire on it — asserted, because a precedence rule over a case
+# that never arises is decoration — and codex_hook_trust_answer is what resolves
+# it. Backwards, the driver sends the menu's "2" at a screen where 2 is not a
+# choice: a literal 2 typed into the panel, the gate still open, and a run that
+# goes on to record zero hooks while looking healthy.
+assert_pred codex_pane_has_hook_menu  hook-menu-then-panel-scrollback.txt yes
+assert_pred codex_pane_has_hook_panel hook-menu-then-panel-scrollback.txt yes
+
+# assert_answer <fixture> <want>
+assert_answer() {
+  local fixture="$1" want="$2" got
+  if [[ ! -f "$DATA/$fixture" ]]; then
+    fail "$fixture: fixture missing"
+    return 0
+  fi
+  got="$(codex_hook_trust_answer "$(cat "$DATA/$fixture")")"
+  if [[ "$got" == "$want" ]]; then
+    pass "codex_hook_trust_answer($fixture) = $want"
+  else
+    fail "codex_hook_trust_answer($fixture) = $got, want $want"
+  fi
+  return 0
+}
+
+assert_answer hook-menu-then-panel-scrollback.txt panel
+assert_answer hook-menu.txt                       menu
+assert_answer hook-panel-untrusted.txt            panel
+# The three panes that need no hook answer. Without these the precedence rule
+# would be satisfied by a resolver that always says "panel".
+assert_answer hook-panel-trusted.txt              none
+assert_answer dir-trust.txt                       none
+assert_answer banner-no-gate.txt                  none
+
+echo ""
 echo "== the untrusted panel's own evidence is in the fixture (anti-rot) =="
 # A fixture that quietly stopped containing the thing it was captured for would
 # make every row above pass for the wrong reason.
