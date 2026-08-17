@@ -73,6 +73,10 @@
 # run. `SWIFT_SUITE_MIN_HEADROOM` is what `swift-suite_test.sh` asserts against
 # — the relation is checked on every run rather than being true the day it was
 # typed.
+# shellcheck disable=SC2034  # both are read by swift-suite_test.sh (142-145),
+# which asserts `default_timeout + COLD_BUILD < MIN_HEADROOM` on every run
+# rather than leaving the relation true only on the day it was typed. They are
+# deliberately declared here, beside the budget arithmetic they document.
 SWIFT_SUITE_COLD_BUILD_SECONDS=105
 SWIFT_SUITE_MIN_HEADROOM=540
 SWIFT_SUITE_TIMEOUT="${SWIFT_SUITE_TIMEOUT:-240}"

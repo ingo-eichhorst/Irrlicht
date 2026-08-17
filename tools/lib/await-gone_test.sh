@@ -46,6 +46,10 @@ need sleep
 
 # Keep the suite in milliseconds rather than seconds. The interval is how long
 # the poll waits between looks and changes nothing about what is asserted.
+#
+# shellcheck disable=SC2034  # read by the SOURCED library, not by this file:
+# await-gone.sh defaults it at line 131 and sleeps on it at 283. shellcheck does
+# not follow a source through a variable path, so it cannot see the consumer.
 AWAIT_GONE_POLL_SECONDS=0.02
 
 fails=0
@@ -214,6 +218,11 @@ echo "== the predicate runs in the CALLER's shell, not a subshell =="
 # predicate no fork at all. A subshell would lose every increment below, so
 # this assertion is the seam rather than a description of it.
 counted=0
+# shellcheck disable=SC2034  # AWAIT_GONE_LOOKED / AWAIT_GONE_ALIVE are this
+# predicate's whole OUTPUT — await-gone.sh reads both after every call (the
+# `case` at 260-269 and the comparison at 271). Reporting through variables
+# rather than stdout is the seam the comment above describes, so an "unused"
+# verdict here is shellcheck failing to follow the source, not dead code.
 counting_predicate() {
   counted=$(( counted + 1 ))
   AWAIT_GONE_LOOKED=1

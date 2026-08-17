@@ -27,7 +27,7 @@ turns() {
 # Truncates the log so banner-detection doesn't match an old run.
 boot_codex() {
   tmux kill-session -t "$SESSION" 2>/dev/null || true
-  > "$LOG"   # fresh log so 'OpenAI Codex' detection doesn't hit the old banner
+  : > "$LOG" # fresh log so 'OpenAI Codex' detection doesn't hit the old banner
 
   # --no-alt-screen keeps codex inline so tmux pipe-pane can capture it (alt-screen
   # would clear the pane and hide the banner/trust prompt).

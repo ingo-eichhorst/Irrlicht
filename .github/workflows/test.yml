@@ -115,6 +115,13 @@ jobs:
       # ARGUMENT rather than as a `case` pattern in a copied loop is what makes
       # it fail loudly if it ever stops matching a real file.
       #
+      # bash-lint_test.sh (#1684) is skipped for exactly the same reason — it
+      # drives tools/bash-lint.sh, which refuses without shellcheck — and
+      # linux.yml runs both it and its gate. It is a SECOND argument rather than
+      # a second loop, and shell_lib_suite_run validates every name in the list
+      # against the corpus before running anything, so a skip that stopped
+      # matching a real file is a refusal rather than a quiet no-op.
+      #
       # `|| rc=$?` rather than a bare call: it is the spelling that keeps the
       # status under the `-e` above (`|| true` would not — it hands back
       # `true`'s status, silently reporting every failing run as 0).
@@ -122,5 +129,5 @@ jobs:
         run: |
           rc=0
           . tools/lib/shell-lib-suite.sh
-          shell_lib_suite_run tools/lib posix-lint_test.sh || rc=$?
+          shell_lib_suite_run tools/lib posix-lint_test.sh bash-lint_test.sh || rc=$?
           exit "$rc"

@@ -291,6 +291,9 @@ await_gone_bound "$reap_deadline" "$leaf_sleep" "the leaf's own sleep" \
 # about.
 tw_probe_fixture=""
 tw_probe_leaf=""
+# shellcheck disable=SC2034  # AWAIT_GONE_LOOKED / AWAIT_GONE_ALIVE are this
+# predicate's output, read by await-gone.sh after every call — see
+# tools/lib/await-gone.sh's header for the contract.
 budget_tree_gone() {
   local shells rc
   shells=$(pgrep -f "$tw_probe_fixture" 2>/dev/null); rc=$?

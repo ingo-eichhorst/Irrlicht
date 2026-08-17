@@ -421,7 +421,12 @@ if [[ -f "$STAGING/session.uuids" ]]; then
     export IRRLICHT_EXTRA_SESSION_IDS="$EXTRA_IDS"
     # Concatenate all transcript paths (newline-separated) so curate
     # can build a single transcript.jsonl in chronological order.
-    export IRRLICHT_EXTRA_TRANSCRIPTS="$(cat "$STAGING/transcript.paths")"
+    #
+    # Assigned then exported, not `export X="$(cat …)"` (#1684): `export`
+    # always succeeds, so the combined form discards `cat`'s status and an
+    # unreadable paths file would export an empty list rather than fail here.
+    IRRLICHT_EXTRA_TRANSCRIPTS="$(cat "$STAGING/transcript.paths")"
+    export IRRLICHT_EXTRA_TRANSCRIPTS
     echo "multi-session: primary=$ACTUAL_UUID, extras=$EXTRA_IDS"
   fi
 fi

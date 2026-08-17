@@ -53,12 +53,26 @@ assert_eq() {
 
 # Spend no real time in the grace periods; the tick COUNTS stay >1 so the
 # escalation still has to poll its way through each rung.
+#
+# All four are read by the SOURCED library, not by this file:
+# spawn-record-daemon.sh sleeps on POLL_TICK_S (139, 152) and bounds each rung
+# with SOCK_TICKS (137), INT_TICKS (165) and TERM_TICKS (167). The linter does
+# not follow a source through a variable path, so it cannot see the consumer —
+# hence one scoped disable per knob (a directive covers only the next command).
+# shellcheck disable=SC2034
 RECORD_DAEMON_POLL_TICK_S=0
+# shellcheck disable=SC2034
 RECORD_DAEMON_INT_TICKS=3
+# shellcheck disable=SC2034
 RECORD_DAEMON_TERM_TICKS=3
+# shellcheck disable=SC2034
 RECORD_DAEMON_SOCK_TICKS=3
 
 # fresh_staging gives a case its own staging dir and clears the lib's state.
+#
+# shellcheck disable=SC2034  # RECORD_DAEMON_PID / _STAGING are the LIBRARY's
+# state (declared at spawn-record-daemon.sh 36/38, read at 149/162/174) —
+# seeding them is how a case puts the lib into the state it wants to grade.
 fresh_staging() {
   local name="$1"
   STAGING="$TMP/$name"
@@ -74,6 +88,9 @@ fresh_staging() {
 # the liveness probe, and a delivered signal kills the fake unless it is in the
 # ignore list (SIGKILL can never be ignored, as in the kernel). SIGNALS_SENT
 # records the escalation order.
+# shellcheck disable=SC2034  # RECORD_DAEMON_PID is the library's state, read
+# by its `kill -"$sig" "$RECORD_DAEMON_PID"` at spawn-record-daemon.sh:149 —
+# which is exactly the call the shadowed `kill` below intercepts.
 fake_daemon() {
   FAKE_IGNORES=" $* "
   FAKE_ALIVE=1
@@ -128,6 +145,10 @@ while IFS= read -r _; do entries=$((entries + 1)); done \
 assert_eq "five entries, not six" "5" "$entries"
 
 echo "== a caller-set ready-session TTL is forwarded, absent otherwise =="
+# shellcheck disable=SC2034  # not read by this file: it is set so
+# record_daemon_env picks it out of the ENVIRONMENT and forwards it, which is
+# the assertion two lines down. The daemon is the eventual consumer
+# (core/domain/config/config.go:168).
 IRRLICHT_READY_SESSION_TTL=45s
 assert_eq "TTL forwarded" "IRRLICHT_READY_SESSION_TTL=45s" \
   "$(record_daemon_env /s/recordings 127.0.0.1:7837 "" | grep READY_SESSION_TTL)"
@@ -192,6 +213,9 @@ echo "== an unwritable backup dir refuses to start the daemon =="
 # A snapshot that cannot save the user's config must stop the run before the
 # grant-all daemon has rewritten anything — there would be nothing to hand back.
 fresh_staging unwritable
+# shellcheck disable=SC2034  # managed-file-snapshot.sh's own state (declared
+# at its line 44); clearing it here is what makes this case a FRESH snapshot
+# rather than a second one over a spent handle.
 MANAGED_FILE_BACKUP_DIR=""   # the case above left a spent snapshot behind
 : > "$TMP/unwritable/managed-file-backup"   # a FILE where the dir must go
 err="$(spawn_record_daemon /nonexistent/irrlichd "$TMP/unwritable" 127.0.0.1:7838 "" 2>&1)"

@@ -243,6 +243,11 @@ else
     # and reaped before the first look (0 polls). A zombie needs a LIVE parent
     # that never waits, and this fixture has none. If one ever appeared anyway,
     # the failure line below carries `Z <defunct>` and says so itself.
+    # shellcheck disable=SC2034  # AWAIT_GONE_LOOKED / AWAIT_GONE_ALIVE are this
+    # predicate's whole OUTPUT, read by await-gone.sh after every call (its
+    # `case` at 260-269 and its comparison at 271) — reporting through variables
+    # rather than stdout is that library's documented seam, so an "unused"
+    # verdict here is shellcheck not following the source.
     grandchild_gone() {
       AWAIT_GONE_LOOKED=1
       AWAIT_GONE_ALIVE=""

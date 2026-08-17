@@ -86,16 +86,21 @@ echo "== unit tests (replaydata/_lib/drive/turn-count_test.sh) =="
 bash "$SCRIPT_DIR/../../../replaydata/_lib/drive/turn-count_test.sh" || rc=1
 
 echo ""
-echo "== shellcheck (advisory) =="
-if command -v shellcheck >/dev/null 2>&1; then
-  # -x follows `source`d libs; advisory only — does not change rc.
-  find "$SCRIPT_DIR" -maxdepth 3 -name '*.sh' -type f | sort | while IFS= read -r f; do
-    shellcheck -S warning -x "$f" || true
-  done
-  echo "  (advisory — see findings above, if any)"
-else
-  echo "  (shellcheck not installed — skipped)"
-fi
+# The advisory shellcheck pass that used to live here is gone (#1684). It was
+# the shape AGENTS.md rules out: `|| true` per file so findings never moved rc,
+# a trailing `echo` so the block always exited 0, and a silent
+# `(shellcheck not installed — skipped)` on a runner that ships none — so
+# "nothing was found" and "nothing looked" printed the same verdict, and the
+# nine real findings in this tree (SC1087, SC2155, and seven SC2034) sat in a
+# 100-line log for as long as it existed.
+#
+# `tools/bash-lint.sh` now covers this whole tree as a REAL gate: it refuses
+# rather than skipping when shellcheck is absent, lints one file at a time (a
+# multi-file invocation cross-suppresses SC2034), and runs in linux.yml and
+# `tools/preflight.sh --only bash`. Two mechanisms where one of them could not
+# fail is worse than one that can.
+echo "== shellcheck =="
+echo "  (covered by tools/bash-lint.sh — linux.yml, or tools/preflight.sh --only bash)"
 
 echo ""
 if [[ $rc -eq 0 ]]; then

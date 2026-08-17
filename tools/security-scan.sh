@@ -60,7 +60,10 @@ set -uo pipefail
 # lib/ source below still works from any caller's working directory.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT=$(git rev-parse --show-toplevel)
-cd "$REPO_ROOT"
+# `|| exit 2` and not a bare cd (#1684): every scanner below is invoked on
+# repo-relative module paths, so a failed cd would scan whatever tree the caller
+# happened to be in and report its verdict as this repo's.
+cd "$REPO_ROOT" || exit 2
 
 # Sourced unconditionally and fatally, the same shape as the --changed lib
 # below: without it gosec_report_check is undefined, `case $?` would take the
