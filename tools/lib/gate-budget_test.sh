@@ -55,6 +55,11 @@ assert_le() {
   [[ "$3" -le "$2" ]] && pass "$1 ($3 <= $2)" || fail "$1" "<= $2" "$3"
   return 0
 }
+# assert_ge <label> <floor> <actual>
+assert_ge() {
+  [[ "$3" -ge "$2" ]] && pass "$1 ($3 >= $2)" || fail "$1" ">= $2" "$3"
+  return 0
+}
 
 echo "== budget_open refuses anything that is not a whole number of seconds =="
 # A bound that quietly is not one is worse than no bound: the caller stops
@@ -157,9 +162,9 @@ echo "== the whole process tree dies, not just the direct child =="
 # `exec`, because the first version of this case asked whether a surviving
 # great-grandchild had written a marker file — and that great-grandchild was a
 # SHELL running `sleep 30; echo … >marker`, so "the sleep was interrupted" and
-# "the process survived" produced the same evidence. _budget_kill_tree signals
-# depth-first, so the `sleep` is signalled BEFORE the shell waiting on it; if
-# the walking shell is descheduled between those two kills, that shell reaps
+# "the process survived" produced the same evidence. budget_run signals
+# deepest-first, so the `sleep` is signalled BEFORE the shell waiting on it; if
+# the signalling shell is descheduled between those two kills, that shell reaps
 # its dead child and runs the next command in the list. The marker appeared
 # while `pgrep` found nothing — the writer was gone by the time the test
 # looked — so the two assertions contradicted each other, on a required check,
@@ -180,11 +185,13 @@ echo "== the whole process tree dies, not just the direct child =="
 # time for a reason that has nothing to do with the kill.
 fixture=$(mktemp -t irrlicht-gate-budget-fixture)
 leafpid=$(mktemp -t irrlicht-gate-budget-leafpid)
-trap 'rm -f "$fixture" "$leafpid"' EXIT
+leafpid_ign=$(mktemp -t irrlicht-gate-budget-leafpid-ign)
+trap 'rm -f "$fixture" "$leafpid" "$leafpid_ign"' EXIT
 cat >"$fixture" <<'FIXTURE'
 #!/usr/bin/env bash
 # $1 = file the leaf records its pid in; $2 = levels still to descend;
-# $3 = the leaf's own lifetime in seconds.
+# $3 = the leaf's own lifetime in seconds; $4 = the leaf's SIGTERM disposition,
+# `term-dying` or `term-ignoring`.
 # Each level backgrounds the next and waits, so budget_run has a TREE to walk
 # and not just a child: the leaf sits as deep below the pid it kills as a real
 # gate's test binary sits below `go test`.
@@ -197,14 +204,51 @@ cat >"$fixture" <<'FIXTURE'
 # born makes the reap assertion pass having observed nothing. Refusing BEFORE
 # the pid is recorded routes that to the loud "the tree was never built" branch.
 leaf_sleep="${3:?the leaf lifetime must be passed as \$3}"
+# The disposition is REQUIRED and its value is checked against a closed set,
+# for the same reason and with the same routing (#1681). An absent or
+# misspelled one defaulting to `term-dying` would silently turn the
+# TERM-ignoring case below into a second copy of the TERM-dying one — a case
+# that no longer reaches the defect it was written for, passing.
+#
+# No apostrophe in that message, deliberately: bash 3.2 treats a `'` inside a
+# parameter expansion's word as a QUOTE even when the whole expansion is
+# double-quoted, so "the leaf's disposition" here is a parse error for the
+# WHOLE fixture. Measured — it is the same trap await-gone.sh records at
+# AWAIT_GONE_DEFAULT_WHAT, and the assertion below is what names it.
+leaf_term="${4:?the SIGTERM disposition of the leaf must be passed as \$4}"
+case "$leaf_term" in
+  term-dying | term-ignoring) ;;
+  *) echo "fixture: unknown SIGTERM disposition '$leaf_term'" >&2; exit 64 ;;
+esac
 if [[ "${2:-0}" -gt 0 ]]; then
-  bash "$0" "$1" "$(($2 - 1))" "$leaf_sleep" &
+  bash "$0" "$1" "$(($2 - 1))" "$leaf_sleep" "$leaf_term" &
   wait
   exit
 fi
+# `trap ''` sets the disposition to IGNORE, and an ignored disposition is
+# INHERITED ACROSS EXEC where a caught one is reset to the default — so the
+# leaf keeps #1616's `exec` (no next command, no mid-transition state to catch
+# it in) and is still the descendant SIGTERM does not reach. Measured on bash
+# 3.2.57 / macOS 25.5: the exec'd `sleep` answers `kill -0` after a SIGTERM
+# that would have ended it. Doing it with a HANDLER instead would reintroduce
+# exactly the ambiguity #1616 removed.
+[[ "$leaf_term" == "term-ignoring" ]] && trap '' TERM
 echo $$ >"$1"
 exec sleep "$leaf_sleep"
 FIXTURE
+# A fixture that will not PARSE fails every case below through the "the tree
+# was never built" branch — loud, but pointing at the bound rather than at the
+# heredoc, and the shell's own diagnostic lands on stderr several assertions
+# away from the failure it caused. Asserted here so the cause is named where it
+# happens. Not hypothetical: writing that `${4:?}` message with an apostrophe
+# in it broke this file exactly once, and the run reported five failures none
+# of which said "syntax error".
+if bash -n "$fixture" 2>/dev/null; then
+  pass "the process-tree fixture parses"
+else
+  fail "the process-tree fixture must parse before anything can be graded with it" \
+       "a fixture bash accepts" "$(bash -n "$fixture" 2>&1 | tr '\n' ' ')"
+fi
 # The leaf's own lifetime and the deadline its reap is polled to below are
 # declared as a PAIR, and await_gone_bound checks the relation between them
 # rather than leaving it to arithmetic nobody runs (#1627). The pair used to be
@@ -228,6 +272,38 @@ await_gone_bound "$reap_deadline" "$leaf_sleep" "the leaf's own sleep" \
   || fail "the reap deadline and the leaf's lifetime must stay an order of magnitude apart" \
           "await_gone_bound to accept ${reap_deadline}s against ${leaf_sleep}s" \
           "$AWAIT_GONE_REASON"
+
+# ONE predicate for both tree-kill cases below, reading the two variables each
+# case sets rather than taking arguments (await_gone calls its predicate with
+# none). One rather than two because that is the whole finding behind #1627:
+# two fixtures polling for the same thing, written two PRs apart, had drifted
+# in four ways that were not stylistic.
+#
+# This is the half of await-gone's seam a single `kill -0` cannot cover: the
+# intermediate shells are a SET, reachable only by the fixture's (unique) path,
+# and `pgrep` is an external binary that can be missing or broken while `kill`
+# is a builtin that cannot. So its status is read three ways rather than two —
+# 0 matched, 1 matched nothing, anything else (2, 3, or 127 for a pgrep that is
+# not there at all) means the enumeration did not happen, which is reported as
+# "could not look" instead of joining the empty output that spells "gone". The
+# leaf itself is matched by the pid it recorded, with the builtin: after `exec`
+# its command line is just `sleep <n>`, and it is the process the cases are
+# about.
+tw_probe_fixture=""
+tw_probe_leaf=""
+budget_tree_gone() {
+  local shells rc
+  shells=$(pgrep -f "$tw_probe_fixture" 2>/dev/null); rc=$?
+  if [[ "$rc" -gt 1 ]]; then
+    AWAIT_GONE_LOOKED=0
+    AWAIT_GONE_ALIVE="pgrep -f exited $rc, so the fixture's shells were never enumerated"
+    return 0
+  fi
+  AWAIT_GONE_LOOKED=1
+  AWAIT_GONE_ALIVE="${shells//$'\n'/ }"
+  kill -0 "$tw_probe_leaf" 2>/dev/null && AWAIT_GONE_ALIVE="$AWAIT_GONE_ALIVE$tw_probe_leaf(the exec'd leaf)"
+  return 0
+}
 # The bound is 2, not 1, and that is setup rather than slack for a race — the
 # race is gone by construction above. $SECONDS counts whole seconds, so
 # budget_run's first deadline check can fire almost immediately: `budget_run 1`
@@ -236,8 +312,31 @@ await_gone_bound "$reap_deadline" "$leaf_sleep" "the leaf's own sleep" \
 # its leaf. At 2 the floor is ~1.2s, so the guard below reports "the tree was
 # never built" only when something is really wrong. The old fixture had the
 # same exposure and answered it by passing vacuously.
-budget_run 2 bash "$fixture" "$leafpid" 2 "$leaf_sleep"
+#
+# The grace period is raised from the suite-wide 1s for the two tree cases,
+# and the number is what makes the two elapsed assertions below separable
+# rather than a preference (#1681). budget_run's own deadline check is on
+# `$SECONDS`, so a `budget_run 2` detects its bound anywhere in (1.0s, 2.05s],
+# and the grace loop spends (grace-1, grace] on top: at grace=4 a run that
+# spends the grace lands in (4.0s, 6.1s] and one that does not lands in
+# (1.0s, 2.1s], which a whole-second clock can tell apart with a margin on
+# each side. At the suite-wide 1s the two populations are adjacent and the
+# assertions would be measuring scheduler noise.
+tree_grace=4
+# shellcheck disable=SC2034  # read by gate-budget.sh, sourced above
+BUDGET_TERM_GRACE_SECONDS="$tree_grace"
+
+start=$SECONDS
+budget_run 2 bash "$fixture" "$leafpid" 2 "$leaf_sleep" term-dying
+dying_elapsed=$((SECONDS - start))
 assert_eq "the wrapper still reports a timeout" "1" "$BUDGET_LAST_TIMED_OUT"
+# The other direction of the grace loop's condition, and the vacuity guard for
+# the assertion in the TERM-ignoring case below: a loop that had simply dropped
+# its condition — spinning out the full grace on every timeout — would satisfy
+# that one just as well, and would make every gate's TIMEOUT cost the grace it
+# does not need. Here the whole tree is gone milliseconds after the SIGTERM, so
+# the grace must not be spent at all.
+assert_le "a tree that dies on SIGTERM does not spend the grace period" "3" "$dying_elapsed"
 
 leaf=$(cat "$leafpid" 2>/dev/null)
 if [[ -z "$leaf" ]]; then
@@ -249,30 +348,8 @@ else
   # Polled to a deadline rather than slept, through the shared poll in
   # tools/lib/await-gone.sh (#1627) — which is also where the deadline/lifetime
   # wall above and the rule this predicate follows are written down once.
-  #
-  # This is the half of that seam a single `kill -0` cannot cover: the
-  # intermediate shells are a SET, reachable only by the fixture's (unique)
-  # path, and `pgrep` is an external binary that can be missing or broken while
-  # `kill` is a builtin that cannot. So its status is read three ways rather
-  # than two — 0 matched, 1 matched nothing, anything else (2, 3, or 127 for a
-  # pgrep that is not there at all) means the enumeration did not happen, which
-  # is reported as "could not look" instead of joining the empty output that
-  # spells "gone". The leaf itself is matched by the pid it recorded, with the
-  # builtin: after `exec` its command line is just `sleep <n>`, and it is the
-  # process the whole case is about.
-  budget_tree_gone() {
-    local shells rc
-    shells=$(pgrep -f "$fixture" 2>/dev/null); rc=$?
-    if [[ "$rc" -gt 1 ]]; then
-      AWAIT_GONE_LOOKED=0
-      AWAIT_GONE_ALIVE="pgrep -f exited $rc, so the fixture's shells were never enumerated"
-      return 0
-    fi
-    AWAIT_GONE_LOOKED=1
-    AWAIT_GONE_ALIVE="${shells//$'\n'/ }"
-    kill -0 "$leaf" 2>/dev/null && AWAIT_GONE_ALIVE="$AWAIT_GONE_ALIVE$leaf(the exec'd leaf)"
-    return 0
-  }
+  tw_probe_fixture="$fixture"
+  tw_probe_leaf="$leaf"
   await_gone "$reap_deadline" "$leaf_sleep" budget_tree_gone "the leaf's own sleep"
   case $? in
     0) pass "no descendant of the killed command outlived the bound (gone on look $AWAIT_GONE_LOOKS, after ${AWAIT_GONE_ELAPSED}s)" ;;
@@ -285,7 +362,105 @@ else
   kill -0 "$leaf" 2>/dev/null && kill -9 "$leaf" 2>/dev/null  # never leak the leaf's sleep
 fi
 pkill -f "$fixture" 2>/dev/null
-rm -f "$fixture" "$leafpid"
+rm -f "$leafpid"
+
+echo ""
+echo "== the SIGKILL pass reaches a descendant that SURVIVED the SIGTERM (#1681) =="
+# The case above cannot see this one: its leaf is a plain `exec sleep`, which
+# dies on SIGTERM, so budget_run's second pass only ever signals corpses and
+# nothing depends on it reaching anybody. A descendant that IGNORES SIGTERM is
+# what makes the SIGKILL pass load-bearing — and it is not a contrived shape,
+# it is the handler-carrying processes (the ones that clean up on TERM, i.e.
+# exactly the slow ones) that a bound has to reach.
+#
+# What #1681 measured on the unfixed library: budget_run reported a correct
+# TIMEOUT and returned, and the leaf was still there with 40+ seconds of its
+# sleep to go. The SIGKILL pass re-walked `pgrep -P` from a pid that SIGTERM
+# had already killed, so it enumerated nobody — the descendants had been
+# reparented to launchd — and signalled a corpse.
+
+# The vacuity guard, and it is not optional: if the leaf turned out to die on
+# SIGTERM after all — a fixture edit dropping the trap, an `exec` that reset
+# the disposition, a future macOS that does not inherit it — the case below
+# would pass while asserting nothing beyond what the case above already
+# asserts, which is this repo's most-repeated failure shape. So the property
+# the case rests on is OBSERVED here, on every run, rather than cited from a
+# measurement in a merged PR body.
+#
+# Depth 0, so the leaf is a direct child of this shell and its own SIGTERM is
+# the only one in play. `await_gone` is expected to return 1 — the subject
+# survived to the deadline — which is the loudest available spelling of "it is
+# still there": a positive observation bounded from both ends, not a sleep.
+: >"$leafpid_ign"
+bash "$fixture" "$leafpid_ign" 0 "$leaf_sleep" term-ignoring &
+ign_child=$!
+ign_wait=$((SECONDS + 5))
+while [[ ! -s "$leafpid_ign" && "$SECONDS" -lt "$ign_wait" ]]; do sleep 0.05; done
+ign_leaf=$(cat "$leafpid_ign" 2>/dev/null)
+if [[ -z "$ign_leaf" ]]; then
+  fail "the TERM-ignoring leaf had to record its pid before it could be graded" \
+       "a recorded pid within 5s" "an empty pidfile — the vacuity guard never ran"
+else
+  kill -TERM "$ign_leaf" 2>/dev/null
+  tw_probe_fixture="$fixture"
+  tw_probe_leaf="$ign_leaf"
+  # 1s against a 30s leaf: signal delivery is measured in microseconds, so this
+  # is six orders of magnitude of slack, and the pair still clears
+  # await_gone_bound's 10:1 wall.
+  await_gone 1 "$leaf_sleep" budget_tree_gone "the leaf's own sleep"
+  case $? in
+    1) pass "the fixture's TERM-ignoring leaf really does survive a SIGTERM (${AWAIT_GONE_ELAPSED}s / $AWAIT_GONE_LOOKS looks: $AWAIT_GONE_LAST)" ;;
+    0) fail "the case below is vacuous unless its leaf survives SIGTERM" \
+            "a leaf still alive 1s after SIGTERM" \
+            "it was gone on look $AWAIT_GONE_LOOKS — the trap did not take, so the SIGKILL pass is not what is being graded" ;;
+    *) fail "the leaf's SIGTERM disposition had to be observable at all" \
+            "a poll that could look" "$AWAIT_GONE_REASON" ;;
+  esac
+fi
+kill -9 "$ign_leaf" 2>/dev/null
+wait "$ign_child" 2>/dev/null
+: >"$leafpid_ign"
+
+# And now the case itself: the same tree, under the same bound, with the leaf
+# SIGTERM cannot reach.
+start=$SECONDS
+budget_run 2 bash "$fixture" "$leafpid_ign" 2 "$leaf_sleep" term-ignoring
+ign_elapsed=$((SECONDS - start))
+assert_eq "the wrapper still reports a timeout (TERM-ignoring leaf)" "1" "$BUDGET_LAST_TIMED_OUT"
+# The grace loop's SUBJECT, which the reap assertion below cannot see: with the
+# victims collected before the SIGTERM, a loop still gated on the wrapper alone
+# posts the SIGKILL immediately and the leaf is just as dead — sooner. What is
+# lost is the grace itself, for every gate whose children clean up on SIGTERM
+# rather than ignoring it, which is the only reason the grace period exists.
+# The wrapper is the wrong subject because it is an ordinary `bash` that dies
+# on SIGTERM in milliseconds whatever it is waiting for (#1616's corollary:
+# observe the SUBJECT, not a side effect it produces on its way out).
+assert_ge "a descendant still alive holds the grace period open" "$tree_grace" "$ign_elapsed"
+
+leaf_ign=$(cat "$leafpid_ign" 2>/dev/null)
+if [[ -z "$leaf_ign" ]]; then
+  fail "the fixture reached its TERM-ignoring leaf before the bound expired" \
+       "a recorded pid" "an empty pidfile — the SIGKILL assertion never ran"
+else
+  tw_probe_fixture="$fixture"
+  tw_probe_leaf="$leaf_ign"
+  await_gone "$reap_deadline" "$leaf_sleep" budget_tree_gone "the leaf's own sleep"
+  case $? in
+    0) pass "a descendant that ignored SIGTERM is still gone when the bound returns (gone on look $AWAIT_GONE_LOOKS, after ${AWAIT_GONE_ELAPSED}s)" ;;
+    1) fail "the SIGKILL pass must reach a descendant that survived the SIGTERM" \
+            "every descendant gone within ${reap_deadline}s" \
+            "still alive after ${AWAIT_GONE_ELAPSED}s / $AWAIT_GONE_LOOKS looks: $AWAIT_GONE_LAST" ;;
+    *) fail "the reap had to be observable at all" \
+            "a poll that could look" "$AWAIT_GONE_REASON" ;;
+  esac
+  kill -0 "$leaf_ign" 2>/dev/null && kill -9 "$leaf_ign" 2>/dev/null  # never leak the leaf's sleep
+fi
+pkill -f "$fixture" 2>/dev/null
+rm -f "$fixture" "$leafpid_ign"
+# Back to the suite-wide grace: everything after this point is about statuses
+# and shell options, not about how long a kill takes.
+# shellcheck disable=SC2034  # read by gate-budget.sh, sourced above
+BUDGET_TERM_GRACE_SECONDS=1
 
 echo ""
 echo "== budget_run under the CALLER's \`-e\` (#1635) =="
@@ -420,7 +595,7 @@ echo "== end to end: tools/preflight.sh names the gate that ran out of time =="
 probe="$ROOT/tools/.preflight-budget-probe-$$.sh"
 # Replaces the tree-kill block's trap, so it re-names that block's files: both
 # are already gone by here, but a reordering must not silently lose them.
-trap 'rm -f "$probe" "$fixture" "$leafpid"' EXIT
+trap 'rm -f "$probe" "$fixture" "$leafpid" "$leafpid_ign"' EXIT
 python3 - "$ROOT/tools/preflight.sh" "$probe" <<'PY'
 import sys
 src, dst = sys.argv[1], sys.argv[2]
