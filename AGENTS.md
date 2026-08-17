@@ -1630,6 +1630,65 @@ Before marking a ticket done, run the full suite — every layer must pass:
   to adopt (0 additions across two suite-length windows, against ~1 plist/218s
   for the directory witness) but a growth-only check is green on any domain that
   already has the key, i.e. on the machine that found this.
+  **#1689 is the READ half of the same member, and its premise turned out to be
+  false in the useful direction.** `SettingsView.reconcileNotificationsMasterDefault()`
+  DECIDED from `UserDefaults.standard.object(forKey:)` and wrote through
+  `@AppStorage`, so under a pinned render the guard consulted the machine while
+  the write landed in the store the host supplied — and
+  `NotificationSettings.masterEnabled()` defaulted to `.standard` too, so the
+  VALUE came off the machine as well. Four things are worth carrying.
+  **`@AppStorage` CAN express "absent"**, which is what the issue (and the
+  #940 comment) assumed it could not, and it is why this needed no product seam
+  either: SwiftUI declares `AppStorage.init(_:store:)` for `Bool?` — and `Int?`,
+  `Double?`, `String?`, `URL?`, `Data?` — and an optional wrapper answers `nil`
+  for a key that is not in the store. So the fix is a second `@AppStorage` over
+  the same key, and the decision and the write are ONE store by construction
+  rather than two that a host keeps in sync; the alternative the issue proposed
+  (`SettingsView(defaults: UserDefaults = .standard)`, threaded to three call
+  sites) is a convention with a default argument, where this is a property of
+  SwiftUI's own resolution. Two wrappers over one key is not #1672's `@State`
+  mirror: neither caches, so they cannot disagree and there is no write-back
+  loop. The `anyEventEnabled` half comes from the view's three per-event
+  toggles — verbatim the expression it already used for its
+  blocked-notifications hint — with the RULE still
+  `NotificationSettings.masterEnabled(master:anyEventEnabled:)`.
+  **No real user was affected, and the proof is one grep**: nothing in the app
+  target applies `.defaultAppStorage(_:)`, so there `@AppStorage` and
+  `UserDefaults.standard` are the same domain and the guard cannot take the
+  wrong branch. It is a test-isolation defect wearing a user-facing shape, which
+  is the reverse of #1672 — and the equivalence is measured rather than argued,
+  over eight value shapes at one key (absent, `Bool`, `Int`, three `String`s):
+  the optional `@AppStorage` agrees with a bare `object(forKey:) == nil` and the
+  `Bool` one with `bool(forKey:)`'s coercion on all eight, including the five
+  only a hand-run `defaults write` can produce. The plausible alternative
+  (`object(forKey:) as? Bool == nil`) disagrees on five of them, which is what
+  makes that arm discriminating.
+  **The structural half is a FOURTH rule in `PersistentDefaultsLintTests`,
+  scoped to `Irrlicht/Views/` and banning the RECEIVER rather than a set of
+  accessors** — so a read, a mutation and a bare `UserDefaults.standard` handed
+  to something that takes a store are one rule. Reads stay legal everywhere else
+  for #1662's reason, and an app-wide read ban is not tractable: measured, 16
+  non-comment references exist in the app target and 14 are ordinary reads in
+  managers, models and the menu-bar controller, so the rule would arrive with 14
+  exemptions. The narrowing is a property, not a preference — `Irrlicht/Views/`
+  is exactly the set of files declaring a SwiftUI `View` (14 files; a `: View`
+  conformance appears nowhere else in the target) and it is the code
+  `PinnedSnapshotHost` pins. It held exactly two references, both reads, both
+  removed, so it carries no exemption list. Its declared limit is a false
+  NEGATIVE, not a false positive: a view calling a helper that reads the domain
+  for it is invisible (`MenuBarStyle` and `ContextPressureThreshold` both hold
+  such reads).
+  **And the mutation nobody asked for is again where the coverage was.** The
+  first lock written for the guard — "an explicit `notificationsEnabled = false`
+  is not overridden" — stays GREEN when the guard is deleted, because the fix
+  passes `master:` into the pure rule and `false ?? anyEventEnabled` is still
+  `false`. The value is held by the RULE; what the guard buys is that a render
+  whose key is already present persists NOTHING, i.e. #1672's write-back loop in
+  a second place, idempotent and therefore invisible to every value comparison.
+  Asserting it needs the key seeded through `register(defaults:)` rather than
+  `set`, so it is PRESENT for the read (`object(forKey:)` merges the domains)
+  while `writtenKeys` stays a clean observation of what the render itself
+  persisted.
   **The fourth member is the WALL CLOCK, and it is the one where pinning the
   other three would have looked like coverage** (#1663).
   `SessionListView.formatResetTime` stacked four machine reads —

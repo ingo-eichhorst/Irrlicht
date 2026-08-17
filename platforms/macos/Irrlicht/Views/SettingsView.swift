@@ -52,6 +52,26 @@ struct SettingsView: View {
     // existing notification setups don't silently vanish. Since #1183 this
     // also gates the firing path itself (`NotificationSettings.masterEnabled`).
     @AppStorage(NotificationSettings.masterEnabledKey) private var notificationsEnabled: Bool = false
+    /// The same key read as an OPTIONAL, so this view can tell an ABSENT master
+    /// key from a `false` one — the distinction
+    /// `reconcileNotificationsMasterDefault()` exists for (#1689).
+    ///
+    /// SwiftUI declares `AppStorage.init(_:store:)` for `Bool?` (and `Int?`,
+    /// `Double?`, `String?`, `URL?`, `Data?`), and an optional wrapper answers
+    /// `nil` for a key that is not in the store. So "absent" IS expressible
+    /// through `@AppStorage`, and expressing it that way is what makes the
+    /// reconcile's DECISION and its WRITE resolve one store: both are
+    /// `@AppStorage` over this key in this view, so `.defaultAppStorage(_:)`
+    /// moves them together and nothing can move one without the other. The read
+    /// this replaced was `UserDefaults.standard.object(forKey:)`, which under a
+    /// pinned render consulted the machine while the write landed in the pinned
+    /// store.
+    ///
+    /// Not a second COPY of the state, which is what #1672 was: neither wrapper
+    /// caches, both read the same store on every access, so they cannot disagree
+    /// and there is no write-back loop to guard. Nothing writes through this
+    /// one.
+    @AppStorage(NotificationSettings.masterEnabledKey) private var storedNotificationsMaster: Bool?
     @AppStorage(NotificationEvent.ready.enabledKey) private var notifyOnReady: Bool = false
     @AppStorage(NotificationEvent.waiting.enabledKey) private var notifyOnWaiting: Bool = false
     @AppStorage(NotificationEvent.contextPressure.enabledKey) private var notifyOnContextPressure: Bool = false
@@ -690,12 +710,29 @@ struct SettingsView: View {
     /// still absent from `UserDefaults` — once set (by this reconcile or by
     /// the user), it's never overridden again.
     ///
-    /// Materializes exactly what `NotificationSettings.masterEnabled()` already
+    /// Materializes exactly what `NotificationSettings.masterEnabled` already
     /// computes for the absent-key case, so the firing path (#1183) and this
     /// toggle share one definition of the fallback instead of two copies.
+    ///
+    /// Every value here comes from this view's own `@AppStorage` — the store the
+    /// write goes to — rather than from `UserDefaults.standard` (#1689):
+    ///
+    /// - **absent-ness** from `storedNotificationsMaster`, whose doc comment
+    ///   carries why an optional `@AppStorage` is the seam.
+    /// - **`anyEventEnabled`** from the three per-event toggles, which is the
+    ///   spelling this view already uses for its blocked-notifications hint
+    ///   above. The reconcile therefore agrees with what the user is looking at,
+    ///   where `allCases.contains { UserDefaults.standard.bool(forKey:) }` was a
+    ///   second reading of a second store.
+    /// - **the rule** still from `NotificationSettings`, whose pure form takes
+    ///   both inputs, so the fallback keeps one definition. `master:` is passed
+    ///   rather than assumed `nil`: the guard above already established that,
+    ///   and passing it means the guard and the decision read one value.
     private func reconcileNotificationsMasterDefault() {
-        guard UserDefaults.standard.object(forKey: NotificationSettings.masterEnabledKey) == nil else { return }
-        notificationsEnabled = NotificationSettings.masterEnabled()
+        guard storedNotificationsMaster == nil else { return }
+        notificationsEnabled = NotificationSettings.masterEnabled(
+            master: storedNotificationsMaster,
+            anyEventEnabled: notifyOnReady || notifyOnWaiting || notifyOnContextPressure)
     }
 
     private func checkNotificationAuth() {
@@ -706,9 +743,14 @@ struct SettingsView: View {
             DispatchQueue.main.async {
                 notificationsDenied = settings.authorizationStatus == .denied
             }
-            let anyEnabled = NotificationEvent.allCases.contains {
-                UserDefaults.standard.bool(forKey: $0.enabledKey)
-            }
+            // The view's own toggles, not a second read of
+            // `UserDefaults.standard` (#1689). Same values in the app — these
+            // `@AppStorage` wrappers resolve `.standard` there — and the same
+            // expression the hint above uses, so this view now holds no
+            // reference to the process domain at all, which is what
+            // `PersistentDefaultsLintTests`' fourth rule enforces over
+            // `Irrlicht/Views/`.
+            let anyEnabled = notifyOnReady || notifyOnWaiting || notifyOnContextPressure
             if settings.authorizationStatus == .notDetermined, anyEnabled {
                 DispatchQueue.main.async {
                     center.requestAuthorization(options: [.alert, .sound]) { granted, _ in

@@ -337,6 +337,15 @@ final class PinnedAppStorageSnapshotTests: XCTestCase {
     /// "wrote nothing" assertion passes vacuously under.
     private func renderSettingsPanel(_ store: InMemoryDefaults) -> PinnedSnapshotHost {
         store.set(true, forKey: NotificationSettings.masterEnabledKey)
+        return hostSettingsPanel(store)
+    }
+
+    /// The same render with NOTHING seeded — the state #1689's arms need, since
+    /// an absent `notificationsEnabled` is the only state
+    /// `reconcileNotificationsMasterDefault()` acts on. Split out of
+    /// `renderSettingsPanel` rather than parameterised so #1672's helper keeps
+    /// meaning exactly what its doc comment says.
+    private func hostSettingsPanel(_ store: InMemoryDefaults) -> PinnedSnapshotHost {
         let view = SettingsView(isPresented: .constant(true),
                                 showPermissionsReview: .constant(false),
                                 sessionManager: SessionManager(defaults: store))
@@ -412,4 +421,283 @@ final class PinnedAppStorageSnapshotTests: XCTestCase {
             """
         )
     }
+
+    // MARK: - A render DECIDES from the store it writes into (#1689)
+
+    /// #1689: `reconcileNotificationsMasterDefault()` read
+    /// `UserDefaults.standard.object(forKey:)` to decide whether the master key
+    /// was absent, and wrote the answer through `@AppStorage`. Under a pinned
+    /// render those are two different stores — the guard consulted the machine
+    /// while the write landed here — and `NotificationSettings.masterEnabled()`
+    /// defaulted to `.standard` too, so the VALUE came off the machine as well.
+    ///
+    /// ## What the expected value is, and why it is not written down
+    ///
+    /// Each arm computes it by calling the app's own
+    /// `NotificationSettings.masterEnabled(defaults:)` over a SECOND store
+    /// arranged identically — the untouched reference implementation, in the
+    /// condition the render leaves the driven store in (a `SessionManager` over
+    /// each, so both carry the `register(defaults:)` seed). A hand-written
+    /// `true`/`false` per row would be a second copy of the rule that could
+    /// drift from it, and the whole obligation here is that the seam did not
+    /// change what the reconcile decides — AGENTS.md's #1664 warning, where
+    /// `TimeZone.autoupdatingCurrent` read like the obvious mirror and was
+    /// measurably wrong.
+    ///
+    /// ## Why the arms are derived from `allCases`
+    ///
+    /// The fix reads "any event enabled" from this view's own three
+    /// `@AppStorage` toggles — the expression `SettingsView` already uses for
+    /// its blocked-notifications hint — instead of
+    /// `allCases.contains { defaults.bool(forKey:) }`. Those are two spellings
+    /// of one fact, so a fourth `NotificationEvent` that someone forgets to OR
+    /// in gets an arm here by existing rather than by being remembered.
+    ///
+    /// ## The two guards
+    ///
+    /// `readKeys` is the weak one and is here for fail-loud only: the master
+    /// key is read by the toggle's own `@AppStorage` whether the reconcile
+    /// consults this store or not, so it proves the panel rendered and asked,
+    /// not which store decided. `writtenKeys` is the discriminating one — the
+    /// pre-fix guard consulted a machine domain that HAS `notificationsEnabled`
+    /// (measured: `com.apple.dt.xctest.tool` holds `= 1`), returned early, and
+    /// persisted nothing at all.
+    func testTheMasterReconcileDecidesFromThePinnedStoreAndNotTheMachine() {
+        var arrangements: [(name: String, enabled: [NotificationEvent])] = [
+            ("no event enabled", [])
+        ]
+        for event in NotificationEvent.allCases {
+            arrangements.append(("only \(event.rawValue) enabled", [event]))
+        }
+        arrangements.append(("every event enabled", NotificationEvent.allCases))
+
+        for arrangement in arrangements {
+            let expected = NotificationSettings.masterEnabled(
+                defaults: arrangedStore(enabling: arrangement.enabled))
+
+            let store = arrangedStore(enabling: arrangement.enabled)
+            let host = hostSettingsPanel(store)
+            XCTAssertFalse(host.view.subviews.isEmpty,
+                           "\(arrangement.name): the panel hosted nothing — "
+                           + "this check cannot have run")
+            XCTAssertTrue(
+                store.readKeys.contains(NotificationSettings.masterEnabledKey),
+                "\(arrangement.name): nothing asked the pinned store for "
+                + "\(NotificationSettings.masterEnabledKey), so this arm proves nothing — "
+                + "the notifications section did not render")
+            XCTAssertTrue(
+                store.writtenKeys.contains(NotificationSettings.masterEnabledKey),
+                """
+                \(arrangement.name): the reconcile persisted no master default into the \
+                pinned store. Its guard is deciding from another store — \
+                UserDefaults.standard, which under `swift test` is the developer's \
+                com.apple.dt.xctest.tool and already holds \
+                \(NotificationSettings.masterEnabledKey) = \
+                \(String(describing: UserDefaults.standard.object(forKey: NotificationSettings.masterEnabledKey))), \
+                so it returns early. Everything this render wrote: \
+                \(store.writtenKeys.sorted()).
+                """
+            )
+            XCTAssertEqual(
+                store.object(forKey: NotificationSettings.masterEnabledKey) as? Bool, expected,
+                """
+                \(arrangement.name): the reconcile wrote \
+                \(String(describing: store.object(forKey: NotificationSettings.masterEnabledKey))) \
+                where the app's own NotificationSettings.masterEnabled(defaults:) computes \
+                \(expected) over the same store. The decision is reading preferences this \
+                render was not given.
+                """
+            )
+        }
+    }
+
+    /// A store carrying nothing but the named events' enable keys, plus the
+    /// `register(defaults:)` seed a `SessionManager` puts there — so the
+    /// reference implementation and the driven render read stores in the same
+    /// condition.
+    private func arrangedStore(enabling events: [NotificationEvent]) -> InMemoryDefaults {
+        let defaults = InMemoryDefaults()
+        for event in events { defaults.set(true, forKey: event.enabledKey) }
+        _ = SessionManager(defaults: defaults)
+        return defaults
+    }
+
+    /// The #940 semantic the reconcile exists inside, as a LOCK: a master key
+    /// that is present and `false` is the user's answer, and an enabled event
+    /// does not overrule it.
+    ///
+    /// It discriminates on a FRESH domain, where the pre-fix guard finds no
+    /// `notificationsEnabled` in `UserDefaults.standard`, gets past itself, and
+    /// writes the machine's per-event OR — `true` on this machine, whose three
+    /// `notifyOn*` keys are all `1` — over the `false` this store holds. On THIS
+    /// machine it passes both before and after the fix, and one mutation says why
+    /// that is not an oversight: **deleting the guard leaves this arm green**,
+    /// because the fix passes `master:` into `NotificationSettings.masterEnabled`
+    /// and `false ?? anyEventEnabled` is still `false`. The value is held by the
+    /// rule, so what the guard actually buys is the arm below, and the two are
+    /// separate tests for exactly that reason.
+    func testAnExplicitlyDisabledMasterSurvivesARenderWithEveryEventEnabled() {
+        let store = arrangedStore(enabling: NotificationEvent.allCases)
+        store.set(false, forKey: NotificationSettings.masterEnabledKey)
+
+        let host = hostSettingsPanel(store)
+        XCTAssertFalse(host.view.subviews.isEmpty,
+                       "the panel hosted nothing — this check cannot have run")
+        XCTAssertEqual(
+            store.object(forKey: NotificationSettings.masterEnabledKey) as? Bool, false,
+            "rendering Settings overrode an explicit `notificationsEnabled = false` — "
+            + "the one-time #940 migration is meant to run only while the key is ABSENT")
+    }
+
+    /// What the guard buys that the rule does not: a render whose master key is
+    /// already there PERSISTS NOTHING. #940 says the migration "runs only while
+    /// the key is still absent", and without the guard every render writes the
+    /// key back — #1672's write-back loop in a second place, idempotent and
+    /// therefore invisible to any value comparison (see
+    /// `InMemoryDefaults.writtenKeys`).
+    ///
+    /// The key is seeded through `register(defaults:)` rather than `set`, which
+    /// is the measurement device: registration makes it PRESENT for the read
+    /// (`object(forKey:)` merges the two domains, so the optional `@AppStorage`
+    /// answers non-nil exactly as the pre-fix `object(forKey:)` did) while
+    /// leaving the application domain — the only thing `writtenKeys` reports —
+    /// empty, so "the render persisted it" and "the test put it there" cannot be
+    /// confused. `true` is seeded rather than `false` so the whole notifications
+    /// section renders instead of staying collapsed.
+    ///
+    /// Note this arrangement is deliberately not one the app produces:
+    /// `NotificationSettings.masterEnabledKey` is kept out of `SessionManager`'s
+    /// `register(defaults:)` seed on purpose, because a registered value would
+    /// disable the upgrade fallback forever.
+    func testARenderWhoseMasterKeyIsAlreadyPresentPersistsNothing() {
+        let store = arrangedStore(enabling: NotificationEvent.allCases)
+        store.register(defaults: [NotificationSettings.masterEnabledKey: true])
+
+        let host = hostSettingsPanel(store)
+        XCTAssertFalse(host.view.subviews.isEmpty,
+                       "the panel hosted nothing — this check cannot have run")
+        XCTAssertTrue(
+            store.readKeys.contains(NotificationSettings.masterEnabledKey),
+            "nothing asked the pinned store for \(NotificationSettings.masterEnabledKey), "
+            + "so 'it persisted nothing' proves nothing")
+        XCTAssertFalse(
+            store.writtenKeys.contains(NotificationSettings.masterEnabledKey),
+            """
+            Rendering Settings re-persisted \(NotificationSettings.masterEnabledKey) \
+            although the key was already present. The one-time #940 migration is \
+            meant to run only while it is ABSENT; writing it on every render is \
+            #1672's write-back loop again, and an idempotent write is invisible to \
+            every value comparison and to the plist's mtime. Everything this \
+            render wrote: \(store.writtenKeys.sorted()).
+            """
+        )
+    }
+
+    // MARK: - The seam reads what the removed code read (#1689)
+
+    /// Reads one key through both `@AppStorage` spellings the fix relies on.
+    private struct BoolStorageProbe: View {
+        let key: String
+        let report: BoolStorageReport
+
+        @AppStorage private var flag: Bool
+        @AppStorage private var optional: Bool?
+
+        init(key: String, report: BoolStorageReport) {
+            self.key = key
+            self.report = report
+            self._flag = AppStorage(wrappedValue: false, key)
+            self._optional = AppStorage(key)
+        }
+
+        var body: some View {
+            report.flag = flag
+            report.optionalIsNil = optional == nil
+            report.rendered = true
+            return Color.clear
+        }
+    }
+
+    private final class BoolStorageReport {
+        var flag = false
+        var optionalIsNil = true
+        var rendered = false
+    }
+
+    /// The equivalence the fix rests on, measured rather than argued.
+    ///
+    /// #1689 replaces two reads with two `@AppStorage` reads of the same keys:
+    /// `UserDefaults.standard.object(forKey:) == nil` becomes an optional
+    /// `@AppStorage` answering `nil`, and
+    /// `allCases.contains { UserDefaults.standard.bool(forKey:) }` becomes the OR
+    /// of three `Bool` `@AppStorage`s. Requirement: in the app — where
+    /// `@AppStorage` resolves `.standard` — the new reads answer what the old
+    /// ones answered. AGENTS.md's #1664 note is why this is a test and not a
+    /// sentence: `TimeZone.autoupdatingCurrent` read like the obvious mirror of
+    /// `Locale.autoupdatingCurrent` and was measurably wrong.
+    ///
+    /// The shapes go beyond what the app can produce on purpose. Only the first
+    /// three are reachable — these keys are written exclusively through
+    /// `@AppStorage(…) var …: Bool` in `SettingsView` (the toggles and this
+    /// reconcile) and seeded as a Swift `Bool` by `SessionManager`'s
+    /// `register(defaults:)`; `git grep` over the app target finds no other
+    /// writer, and the web dashboard's same-named keys live in `localStorage`,
+    /// not in this domain. The other five are what a hand-run
+    /// `defaults write … -string` can leave there, and they are driven because
+    /// they are where the two spellings COULD differ:
+    ///
+    /// - the optional `@AppStorage` could plausibly have been
+    ///   `object(forKey:) as? Bool`, which answers `nil` for a `String` where
+    ///   the removed guard's bare `object(forKey:) == nil` answers `false`;
+    /// - the `Bool` `@AppStorage` could plausibly not apply
+    ///   `bool(forKey:)`'s string/number coercion.
+    ///
+    /// Measured on macOS 26 / Swift 6.2, neither is the case: all eight shapes
+    /// agree on both spellings, so the equivalence is complete rather than
+    /// merely covering the reachable set. Every row is therefore asserted, and
+    /// the table is printed (`IRR1689 …`) so the measurement is produced by the
+    /// run instead of living in this comment.
+    func testBothAppStorageSpellingsAnswerWhatTheRemovedReadsAnswered() {
+        for shape in Self.coercionShapes {
+            let store = InMemoryDefaults()
+            if let value = shape.value { store.set(value, forKey: "irrProbeKey") }
+
+            // What the removed code would have answered over this same store.
+            let objectWasNil = store.object(forKey: "irrProbeKey") == nil
+            let boolRead = store.bool(forKey: "irrProbeKey")
+
+            let report = BoolStorageReport()
+            _ = PinnedSnapshotHost(BoolStorageProbe(key: "irrProbeKey", report: report),
+                                   width: 40, height: 40, defaults: store)
+            XCTAssertTrue(report.rendered,
+                          "\(shape.name): the probe never rendered — this check cannot have run")
+
+            print("IRR1689 shape=\(shape.name) objectWasNil=\(objectWasNil) "
+                  + "optionalIsNil=\(report.optionalIsNil) "
+                  + "bool(forKey:)=\(boolRead) appStorageBool=\(report.flag)")
+
+            XCTAssertEqual(
+                report.optionalIsNil, objectWasNil,
+                "\(shape.name): the optional @AppStorage disagrees with "
+                + "object(forKey:) == nil, which is the guard #1689 replaced")
+            XCTAssertEqual(
+                report.flag, boolRead,
+                "\(shape.name): the Bool @AppStorage disagrees with bool(forKey:), "
+                + "which is what NotificationSettings.masterEnabled reads the "
+                + "per-event keys through")
+        }
+    }
+
+    /// Every shape the probe is driven with — the three the app can store at
+    /// these keys and five it cannot. See the arm above.
+    private static let coercionShapes: [(name: String, value: Any?)] = [
+        ("absent", nil),
+        ("Bool true", true),
+        ("Bool false", false),
+        ("Int 1", 1),
+        ("Int 0", 0),
+        ("String \"1\"", "1"),
+        ("String \"YES\"", "YES"),
+        ("String \"nonsense\"", "nonsense")
+    ]
 }
