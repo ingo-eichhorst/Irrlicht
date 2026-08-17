@@ -316,6 +316,28 @@ mkdir -p "$TW_REPO"
   git update-ref refs/remotes/origin/main HEAD
 ) >/dev/null 2>&1 || { echo "FAIL: shell-lib-errexit_test — could not build the scratch git repo" >&2; exit 1; }
 
+# await_gone's third documented status, 1 (the subject survived to the
+# deadline), is deliberately NOT driven here: a documented 1 is
+# indistinguishable from an errexit abort, which is this file's own rule about
+# distinctive statuses. That path is graded by tools/lib/await-gone_test.sh,
+# which is not under `-e`; what is asserted here is the option property on the
+# two statuses a caller can tell apart.
+row 'await-gone.sh::await_gone_bound' 'await_gone_bound (an order of magnitude apart)' 0 \
+    '. tools/lib/await-gone.sh' \
+    'await_gone_bound 3 30'
+row 'await-gone.sh::await_gone_bound' 'await_gone_bound (refuses a deadline near the lifetime)' 2 \
+    '. tools/lib/await-gone.sh' \
+    'await_gone_bound 15 30 2>/dev/null'
+row 'await-gone.sh::await_gone' 'await_gone (a subject already gone)' 0 \
+    '. tools/lib/await-gone.sh; tw_gone() { AWAIT_GONE_LOOKED=1; AWAIT_GONE_ALIVE=""; }' \
+    'await_gone 3 30 tw_gone'
+row 'await-gone.sh::await_gone' 'await_gone (refuses a predicate that could not look)' 2 \
+    '. tools/lib/await-gone.sh; tw_blind() { AWAIT_GONE_LOOKED=0; AWAIT_GONE_ALIVE="pgrep is not on PATH"; }' \
+    'await_gone 3 30 tw_blind 2>/dev/null'
+row 'await-gone.sh::_await_gone_refuse' '_await_gone_refuse' 2 \
+    '. tools/lib/await-gone.sh' \
+    '_await_gone_refuse "driven by the tripwire" 2>/dev/null'
+
 row 'changed-files.sh::changed_files_vs_origin_main' 'changed_files_vs_origin_main' 0 \
     '. tools/lib/changed-files.sh; cd "$TW_REPO"' \
     'changed_files_vs_origin_main >/dev/null'

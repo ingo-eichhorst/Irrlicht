@@ -25,6 +25,8 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$DIR/../.." && pwd)"
 # shellcheck source=gate-budget.sh
 source "$DIR/gate-budget.sh"
+# shellcheck source=await-gone.sh
+source "$DIR/await-gone.sh"
 
 # Keep the suite in seconds rather than tens of seconds. The grace period is
 # how long budget_run waits between SIGTERM and SIGKILL; 1s is plenty for the
@@ -181,18 +183,51 @@ leafpid=$(mktemp -t irrlicht-gate-budget-leafpid)
 trap 'rm -f "$fixture" "$leafpid"' EXIT
 cat >"$fixture" <<'FIXTURE'
 #!/usr/bin/env bash
-# $1 = file the leaf records its pid in; $2 = levels still to descend.
+# $1 = file the leaf records its pid in; $2 = levels still to descend;
+# $3 = the leaf's own lifetime in seconds.
 # Each level backgrounds the next and waits, so budget_run has a TREE to walk
 # and not just a child: the leaf sits as deep below the pid it kills as a real
 # gate's test binary sits below `go test`.
+#
+# The lifetime is an ARGUMENT rather than a literal because the poll below is
+# bounded against it (#1627), and a number the guard reads from one place and
+# the fixture from another is a pair that can drift apart silently. `${3:?}`
+# and not `$3`: without `set -u` an unset one expands to the empty string,
+# `sleep ""` fails instantly, and a leaf that exits by itself the moment it is
+# born makes the reap assertion pass having observed nothing. Refusing BEFORE
+# the pid is recorded routes that to the loud "the tree was never built" branch.
+leaf_sleep="${3:?the leaf lifetime must be passed as \$3}"
 if [[ "${2:-0}" -gt 0 ]]; then
-  bash "$0" "$1" "$(($2 - 1))" &
+  bash "$0" "$1" "$(($2 - 1))" "$leaf_sleep" &
   wait
   exit
 fi
 echo $$ >"$1"
-exec sleep 30
+exec sleep "$leaf_sleep"
 FIXTURE
+# The leaf's own lifetime and the deadline its reap is polled to below are
+# declared as a PAIR, and await_gone_bound checks the relation between them
+# rather than leaving it to arithmetic nobody runs (#1627). The pair used to be
+# 30 and 15 — a 2:1 ratio, which still held the property with 15s to spare but
+# held it by accident: trimming the leaf's sleep (it is there to be long, and a
+# future author cutting test runtime would read 30s as waste) or raising the
+# deadline (which is exactly what #1619 proposed doing to the sibling fixture)
+# removes it with nothing objecting.
+#
+# 3s is the LARGEST value the wall admits against a 30s leaf, and it is chosen
+# from that direction because the measurement gives nothing to choose from
+# below: 50/50 runs — 25 idle at load ~4, 25 at load 27→53 on 10 cores — found
+# this tree already gone on look 1 at 0s, budget_run having posted SIGKILL and
+# `wait`ed before it returned. So the deadline is pure slack for a busy
+# machine, and the leaf stays at 30 rather than growing to buy a longer one:
+# the only cost a longer leaf carries is a bigger `sleep` to leak if this
+# fixture is ever killed before its own cleanup runs.
+leaf_sleep=30
+reap_deadline=3
+await_gone_bound "$reap_deadline" "$leaf_sleep" "the leaf's own sleep" \
+  || fail "the reap deadline and the leaf's lifetime must stay an order of magnitude apart" \
+          "await_gone_bound to accept ${reap_deadline}s against ${leaf_sleep}s" \
+          "$AWAIT_GONE_REASON"
 # The bound is 2, not 1, and that is setup rather than slack for a race — the
 # race is gone by construction above. $SECONDS counts whole seconds, so
 # budget_run's first deadline check can fire almost immediately: `budget_run 1`
@@ -201,7 +236,7 @@ FIXTURE
 # its leaf. At 2 the floor is ~1.2s, so the guard below reports "the tree was
 # never built" only when something is really wrong. The old fixture had the
 # same exposure and answered it by passing vacuously.
-budget_run 2 bash "$fixture" "$leafpid" 2
+budget_run 2 bash "$fixture" "$leafpid" 2 "$leaf_sleep"
 assert_eq "the wrapper still reports a timeout" "1" "$BUDGET_LAST_TIMED_OUT"
 
 leaf=$(cat "$leafpid" 2>/dev/null)
@@ -211,29 +246,43 @@ if [[ -z "$leaf" ]]; then
   fail "the fixture reached its leaf before the bound expired" \
        "a recorded pid" "an empty pidfile — the tree-kill assertion never ran"
 else
-  # Poll to a generous deadline instead of sleeping a fixed 2s and looking
-  # once. A fixed wait only has to be shorter than the machine is slow to turn
-  # a correct kill into a red, and it makes the pass slower than it needs to be;
-  # this returns the moment the tree is gone and says how long it waited when it
-  # does not. The shells are matched by the fixture's (unique) path, the leaf by
-  # the pid it recorded — after `exec` its command line is just `sleep 30`.
-  start=$SECONDS
-  alive=""
-  while :; do
-    alive="$(pgrep -f "$fixture" 2>/dev/null | tr '\n' ' ')"
-    kill -0 "$leaf" 2>/dev/null && alive="$alive$leaf(the exec'd leaf)"
-    [[ -z "$alive" ]] && break
-    [[ $((SECONDS - start)) -ge 15 ]] && break
-    sleep 0.1
-  done
-  elapsed=$((SECONDS - start))
-  if [[ -z "$alive" ]]; then
-    pass "no descendant of the killed command outlived the bound (gone after ${elapsed}s)"
-  else
-    fail "no descendant of the killed command may outlive the bound" \
-         "every descendant gone within 15s" "still alive after ${elapsed}s: $alive"
-  fi
-  kill -0 "$leaf" 2>/dev/null && kill -9 "$leaf" 2>/dev/null  # never leak a 30s sleep
+  # Polled to a deadline rather than slept, through the shared poll in
+  # tools/lib/await-gone.sh (#1627) — which is also where the deadline/lifetime
+  # wall above and the rule this predicate follows are written down once.
+  #
+  # This is the half of that seam a single `kill -0` cannot cover: the
+  # intermediate shells are a SET, reachable only by the fixture's (unique)
+  # path, and `pgrep` is an external binary that can be missing or broken while
+  # `kill` is a builtin that cannot. So its status is read three ways rather
+  # than two — 0 matched, 1 matched nothing, anything else (2, 3, or 127 for a
+  # pgrep that is not there at all) means the enumeration did not happen, which
+  # is reported as "could not look" instead of joining the empty output that
+  # spells "gone". The leaf itself is matched by the pid it recorded, with the
+  # builtin: after `exec` its command line is just `sleep <n>`, and it is the
+  # process the whole case is about.
+  budget_tree_gone() {
+    local shells rc
+    shells=$(pgrep -f "$fixture" 2>/dev/null); rc=$?
+    if [[ "$rc" -gt 1 ]]; then
+      AWAIT_GONE_LOOKED=0
+      AWAIT_GONE_ALIVE="pgrep -f exited $rc, so the fixture's shells were never enumerated"
+      return 0
+    fi
+    AWAIT_GONE_LOOKED=1
+    AWAIT_GONE_ALIVE="${shells//$'\n'/ }"
+    kill -0 "$leaf" 2>/dev/null && AWAIT_GONE_ALIVE="$AWAIT_GONE_ALIVE$leaf(the exec'd leaf)"
+    return 0
+  }
+  await_gone "$reap_deadline" "$leaf_sleep" budget_tree_gone "the leaf's own sleep"
+  case $? in
+    0) pass "no descendant of the killed command outlived the bound (gone on look $AWAIT_GONE_LOOKS, after ${AWAIT_GONE_ELAPSED}s)" ;;
+    1) fail "no descendant of the killed command may outlive the bound" \
+            "every descendant gone within ${reap_deadline}s" \
+            "still alive after ${AWAIT_GONE_ELAPSED}s / $AWAIT_GONE_LOOKS looks: $AWAIT_GONE_LAST" ;;
+    *) fail "the reap had to be observable at all" \
+            "a poll that could look" "$AWAIT_GONE_REASON" ;;
+  esac
+  kill -0 "$leaf" 2>/dev/null && kill -9 "$leaf" 2>/dev/null  # never leak the leaf's sleep
 fi
 pkill -f "$fixture" 2>/dev/null
 rm -f "$fixture" "$leafpid"
