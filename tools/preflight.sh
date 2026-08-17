@@ -439,7 +439,12 @@ if want tools; then
   # (#1629): swift-suite_test.sh asserts that every step there reading `$?`
   # disarms GitHub's `-e` first, and a commit editing only that workflow is
   # exactly the commit that breaks the invariant — so leaving it out would skip
-  # the check precisely when it matters.
+  # the check precisely when it matters. Since #1646 it earns its place twice
+  # over: swift-snapshot-evidence_test.sh EXTRACTS that workflow's "Collect the
+  # skipped suites' pixels" step and executes it, so the assertion that a
+  # failed reference copy fails the step — rather than shipping an artifact
+  # with nothing to compare against — also lives entirely inside this gate. No
+  # widening was needed for it; the entry was already here.
   # .github/workflows/test.yml joins them for the third time (#1639):
   # shell-lib-suite_test.sh asserts that its "Test the shared shell libs" step
   # goes through the shared runner rather than growing its own loop back, and a
