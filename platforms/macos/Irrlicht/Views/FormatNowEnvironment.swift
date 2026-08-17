@@ -54,9 +54,12 @@ import SwiftUI
 /// ## Blast radius — deliberately two call sites, not an app-wide clock
 ///
 /// #1663 says an injectable clock across every wall-clock read in the app is a
-/// separate, wider change, and this is not it. Exactly two call sites read this
-/// key: `QuotaResetLabel` (the `"resets …"` text) and `SessionListView`'s quota
-/// tooltip, i.e. the two functions #1663 names. Everything else in
+/// separate, wider change, and this is not it. **Exactly one call site reads
+/// this key**: `QuotaResetLabel`, the `"resets …"` text. The other function
+/// #1663 names, `formatClockTime` behind the quota tooltip, never read a clock
+/// at all — it had two machine reads, its formatter's unset `locale` and
+/// `timeZone`, so `\.formatTimeZone` and `\.formatLocale` close it entirely and
+/// `QuotaResetFormat.clock` takes no `now`. Everything else in
 /// `SessionListView` that touches the wall clock still touches it directly —
 /// `quotaPacePercent`, `formatTimeUntil`, and `mergeIntoBuckets`' staleness
 /// test — because none of those SELECTS A FORMAT, which is the property that

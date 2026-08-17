@@ -1521,9 +1521,11 @@ Before marking a ticket done, run the full suite — every layer must pass:
   family NOT read off the committed set, because no reference contains a
   wall-clock-dependent render; #1663 regenerated no PNG and the untouched 53 are
   the evidence.
-  **The blast radius is two call sites, deliberately** — the two functions #1663
-  names, not the app-wide clock injection it defers. Three further wall-clock
-  reads on the same chip stay unconverted (`quotaPacePercent`,
+  **The blast radius is ONE call site, deliberately** — `QuotaResetLabel`, not
+  the app-wide clock injection #1663 defers. (The other function that issue names,
+  `formatClockTime`, never read a clock: its two machine reads were the
+  formatter's unset locale and zone, closed by the existing two seams.) Three
+  further wall-clock reads on the same chip stay unconverted (`quotaPacePercent`,
   `mergeIntoBuckets`' staleness test, `formatTimeUntil`), and the first two are
   pixel-visible, so the `rate_limit` fixture #1663 anticipates is still not safe
   to seed: that is #1675, filed rather than folded in.
