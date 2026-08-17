@@ -519,7 +519,7 @@ const pushKindTest = notify.PushKind("test")
 // daemon topic ("daemon:"+id) nor the summary topic, so a test notification
 // replaces only an earlier test notification — never a real one, and never
 // the other way round.
-const testPushTopic = "beacon-test"
+const testPushTopic = "elfdans-test"
 
 // testPushTTL bounds how long a push service may hold an undelivered test
 // notification. It matches §8.4's `ready` TTL: long enough for a phone that

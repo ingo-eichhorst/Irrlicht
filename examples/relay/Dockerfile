@@ -62,7 +62,7 @@ COPY --from=build /out/irrlichtrelay /usr/local/bin/irrlichtrelay
 # irrlicht.css and irrlicht.js, while irrlicht.js statically imports ten
 # siblings, so the served dashboard 404'd its own module graph and could not
 # boot (measured: `GET /collapsedGroups.js` → 404 in the running container).
-# It also dropped every Beacon PWA file, leaving the relay serving a push API
+# It also dropped every Elfdans PWA file, leaving the relay serving a push API
 # with no client able to consume it (docs/mobile-notifications-arc42.md §8.7,
 # risk 6). A directory copy cannot fall behind the way an enumeration does.
 # The tests, node_modules and vitest config are kept out of the image by

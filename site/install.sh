@@ -398,7 +398,7 @@ if [ "$DAEMON_ONLY" -eq 1 ]; then
     install -m 755 "$TMPDIR/extract/irrlichd" "$DEST"
     # Install the whole extracted web/ rather than naming files. The three
     # names this replaced were already short by fourteen: irrlicht.js
-    # statically imports ten siblings and the Beacon PWA adds four more, so the
+    # statically imports ten siblings and the Elfdans PWA adds four more, so the
     # installed dashboard 404'd its own module graph. The tarball's payload
     # (tools/build-release.sh WEB_FILES) is the source of truth for what ships;
     # repeating a subset of it here is a second list nobody watches

@@ -24,7 +24,7 @@ const (
 	// deadline a driver pointed at a dead port, or holding a token the relay
 	// rejects, would sit there looking busy — and a driver that cannot
 	// connect must fail loudly rather than skip, exactly like the checks in
-	// tools/beacon-rig.sh.
+	// tools/elfdans-rig.sh.
 	connectTimeout = 15 * time.Second
 
 	// broadcastTimeout bounds handing one frame to the forwarder. Reaching
@@ -39,9 +39,9 @@ const (
 	// syntheticAdapter is the adapter name every session this driver invents
 	// carries. It is what core/domain/notify uses as the human label in a
 	// burst summary, so a summary produced here reads "4 agents need
-	// attention · beacon-drive ×4" — the same shape four real sessions of
+	// attention · elfdans-drive ×4" — the same shape four real sessions of
 	// one agent kind produce.
-	syntheticAdapter = "beacon-drive"
+	syntheticAdapter = "elfdans-drive"
 )
 
 // bus is the daemon-side PushBroadcaster the forwarder subscribes to. A real
@@ -167,14 +167,14 @@ func (d *daemon) add(id, state, parent string) {
 		State:           state,
 		Adapter:         syntheticAdapter,
 		Model:           "synthetic",
-		CWD:             "/tmp/beacon-drive",
+		CWD:             "/tmp/elfdans-drive",
 		ProjectName:     syntheticAdapter,
 		ParentSessionID: parent,
 		FirstSeen:       now,
 		UpdatedAt:       now,
 		Confidence:      "high",
 		EventCount:      1,
-		LastEvent:       "beacon-drive",
+		LastEvent:       "elfdans-drive",
 	}
 }
 
@@ -189,7 +189,7 @@ func (d *daemon) snapshot() ([]*session.SessionState, []relay.AgentInfo) {
 		cp := *d.sessions[id]
 		out = append(out, &cp)
 	}
-	return out, []relay.AgentInfo{{Name: syntheticAdapter, DisplayName: "beacon-drive (synthetic)"}}
+	return out, []relay.AgentInfo{{Name: syntheticAdapter, DisplayName: "elfdans-drive (synthetic)"}}
 }
 
 // connect dials the relay and waits until it has accepted the daemon hello.

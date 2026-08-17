@@ -279,7 +279,7 @@ region and "Out of host capacity" is common, so decide the region before signing
 relay with a handful of connections the micro shape's 1 GB and ~50 Mbps of public bandwidth is
 genuinely sufficient — the capacity fight is usually not worth having.
 
-## Phone notifications (Irrlicht Beacon)
+## Phone notifications (Irrlicht Elfdans)
 
 The relay can push `waiting` / `ready` transitions to a paired phone as Web Push notifications
 (architecture: [`docs/mobile-notifications-arc42.md`](../../docs/mobile-notifications-arc42.md)). It is
@@ -298,7 +298,7 @@ phone, so pick the name once.
 
 ### Pairing, from the operator's side
 
-Nothing to configure. In the dashboard the relay serves, **Settings → Irrlicht Beacon** mints a one-time code; the
+Nothing to configure. In the dashboard the relay serves, **Settings → Irrlicht Elfdans** mints a one-time code; the
 phone opens the same URL, adds it to the home screen, and types the code inside the installed app (iOS
 keeps browser-tab storage and installed-app storage separate, which is why the last step happens there).
 The code is single-use, expires in 10 minutes, and repeated wrong guesses are rate-limited.

@@ -121,7 +121,7 @@ export function walkImportGraph(entryModules) {
 // its icon the page cannot be installed to a Home Screen, which is where iOS
 // delivers push at all (arc42 ADR-2/ADR-3). A release that forgets any of
 // them ships a silently push-less PWA (arc42 §8.7).
-export const REQUIRED_SHIPPED_MEMBERS = ['index.html', 'sw.js', 'beacon.webmanifest', 'beacon-icon.svg'];
+export const REQUIRED_SHIPPED_MEMBERS = ['index.html', 'sw.js', 'elfdans.webmanifest', 'elfdans-icon.svg'];
 
 // The full set of files a served copy of platforms/web needs at runtime: the
 // members above, index.html's script/stylesheet/manifest/icon entries, the

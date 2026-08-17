@@ -422,7 +422,7 @@ from `gh api`, the token is missing the `security_events` scope:
 The daemon reads `platforms/web/index.html` from disk at runtime; no embed.
 The standalone curl `--daemon-only` install ships a tarball containing the
 binary and the whole `web/` tree — index.html alone boots nothing, since the
-entry module statically imports ten siblings and the Beacon PWA four more.
+entry module statically imports ten siblings and the Elfdans PWA four more.
 `WEB_FILES` in `tools/build-release.sh` is the single list; the loop below
 reads it instead of naming files.
 
@@ -450,7 +450,7 @@ the asset.
 
 Each tarball carries the whole runtime web tree, not a named subset. The
 recipe below used to name three files; the dashboard's entry module statically
-imports ten siblings and the Beacon PWA adds four more, so a three-file tarball
+imports ten siblings and the Elfdans PWA adds four more, so a three-file tarball
 serves a dashboard that 404s its own module graph. `WEB_FILES` in
 `tools/build-release.sh` is the one list, and `platforms/web/release-files.test.js`
 fails when it falls behind — which is why the loop below reads it rather than

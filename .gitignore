@@ -140,6 +140,6 @@ opencode.json
 # it lives inside replaydata/ and `record` commits that tree with a directory add.
 .promote-tmp*
 
-# Stray dev binary: `go build ./tools/beacon-drive/...` from the repo root
-# drops it here. The rig builds it into .build/beacon-rig instead.
-/beacon-drive
+# Stray dev binary: `go build ./tools/elfdans-drive/...` from the repo root
+# drops it here. The rig builds it into .build/elfdans-rig instead.
+/elfdans-drive

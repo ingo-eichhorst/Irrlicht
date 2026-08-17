@@ -4,16 +4,16 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Phone Notifications — Irrlicht Docs</title>
-<meta name="description" content="Get a banner on your phone when an agent needs input or finishes. Set up a relay, pair a phone with Irrlicht Beacon, and see exactly what buzzes, what Apple and Google can see, and what to do when it stops.">
-<link rel="canonical" href="https://irrlicht.io/docs/beacon.html">
+<meta name="description" content="Get a banner on your phone when an agent needs input or finishes. Set up a relay, pair a phone with Irrlicht Elfdans, and see exactly what buzzes, what Apple and Google can see, and what to do when it stops.">
+<link rel="canonical" href="https://irrlicht.io/docs/elfdans.html">
 <meta property="og:type" content="article">
 <meta property="og:title" content="Phone Notifications — Irrlicht Docs">
-<meta property="og:description" content="Get a banner on your phone when an agent needs input or finishes. Set up a relay, pair a phone with Irrlicht Beacon, and see exactly what buzzes, what Apple and Google can see, and what to do when it stops.">
-<meta property="og:url" content="https://irrlicht.io/docs/beacon.html">
+<meta property="og:description" content="Get a banner on your phone when an agent needs input or finishes. Set up a relay, pair a phone with Irrlicht Elfdans, and see exactly what buzzes, what Apple and Google can see, and what to do when it stops.">
+<meta property="og:url" content="https://irrlicht.io/docs/elfdans.html">
 <meta property="og:site_name" content="Irrlicht">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="Phone Notifications — Irrlicht Docs">
-<meta name="twitter:description" content="Get a banner on your phone when an agent needs input or finishes. Set up a relay, pair a phone with Irrlicht Beacon, and see exactly what buzzes, what Apple and Google can see, and what to do when it stops.">
+<meta name="twitter:description" content="Get a banner on your phone when an agent needs input or finishes. Set up a relay, pair a phone with Irrlicht Elfdans, and see exactly what buzzes, what Apple and Google can see, and what to do when it stops.">
 
 <link rel="icon" type="image/svg+xml" href="../assets/favicon.svg">
 <link rel="icon" type="image/png" sizes="32x32" href="../assets/favicon-32x32.png">
@@ -59,7 +59,7 @@
       <h4>Usage</h4>
       <a href="configuration.html">Configuration</a>
       <a href="macos-setup.html">macOS Setup</a>
-      <a href="beacon.html" class="active">Phone Notifications</a>
+      <a href="elfdans.html" class="active">Phone Notifications</a>
       <a href="tips-and-tricks.html">Tips &amp; Tricks</a>
       <a href="cli-tools.html">CLI Tools</a>
       <a href="api-reference.html">API Reference</a>
@@ -91,13 +91,15 @@
       <h1>Phone Notifications</h1>
       <p class="page-subtitle">A banner on your phone when an agent needs input or finishes &mdash; the menu-bar flame, for the hours you are not at the desk.</p>
 
-      <p>At the Mac, the flame answers the question for you: something is <span class="badge badge-waiting">waiting</span>, something went <span class="badge badge-ready">ready</span>, everything else is still <span class="badge badge-working">working</span>. Away from it, that signal is in another room. <strong>Irrlicht Beacon</strong> is the phone half of it &mdash; a lock-screen banner on the two transitions that want a human, and nothing else.</p>
+      <p>At the Mac, the flame answers the question for you: something is <span class="badge badge-waiting">waiting</span>, something went <span class="badge badge-ready">ready</span>, everything else is still <span class="badge badge-working">working</span>. Away from it, that signal is in another room. <strong>Irrlicht Elfdans</strong> is the phone half of it &mdash; a lock-screen banner on the two transitions that want a human, and nothing else.</p>
 
-      <p>Beacon is not a second dashboard. It is a web app your own relay serves, which you add to your home screen: no App Store listing, no account, no Irrlicht-operated server anywhere in the path. And it is off until you deliberately pair a phone &mdash; a Mac with no relay configured behaves exactly as it did before, with no subscription, no service worker installed, and no relay traffic at all.</p>
+      <p>Elfdans is not a second dashboard. It is a web app your own relay serves, which you add to your home screen: no App Store listing, no account, no Irrlicht-operated server anywhere in the path. And it is off until you deliberately pair a phone &mdash; a Mac with no relay configured behaves exactly as it did before, with no subscription, no service worker installed, and no relay traffic at all.</p>
+
+      <p>Tapping a banner takes you to the session it was about &mdash; focusing Elfdans if it is already open, or launching it on that session if it is not.</p>
 
       <div class="callout">
-        <strong>What it does not do yet</strong>
-        Tapping a banner opens Beacon (or focuses it, if it is already open) at its start page &mdash; it does <em>not</em> jump to the session the notification was about. And the &ldquo;send a test notification&rdquo; button proves half the path, not all of it: it sends a real, signed, encrypted push to this phone and reports what the push service answered, but it does not run through the rules that decide when a session change becomes a banner. A real transition is still what proves that half.
+        <strong>What the test button does not prove</strong>
+        The &ldquo;send a test notification&rdquo; button proves half the path, not all of it: it sends a real, signed, encrypted push to this phone and reports what the push service answered, but it does not run through the rules that decide when a session change becomes a banner. A real transition is still what proves that half.
       </div>
 
       <!-- ── Prerequisites ── -->
@@ -165,7 +167,7 @@ irrlichtrelay token issue --label "my-browser"</code></pre>
         </li>
         <li>
           <strong>Open the dashboard the relay serves</strong>
-          <p>Browse to the relay&rsquo;s own HTTPS address and enter the browser token under <strong>Settings &rarr; Sources</strong> there. This matters: the pairing endpoints are same-origin, so the Beacon section appears on the page <em>the relay served</em> &mdash; not on the daemon&rsquo;s local dashboard at <code>127.0.0.1:7837</code>, which has no push endpoints to offer.</p>
+          <p>Browse to the relay&rsquo;s own HTTPS address and enter the browser token under <strong>Settings &rarr; Sources</strong> there. This matters: the pairing endpoints are same-origin, so the Elfdans section appears on the page <em>the relay served</em> &mdash; not on the daemon&rsquo;s local dashboard at <code>127.0.0.1:7837</code>, which has no push endpoints to offer.</p>
         </li>
       </ol>
 
@@ -179,7 +181,7 @@ irrlichtrelay token issue --label "my-browser"</code></pre>
       <ol class="steps">
         <li>
           <strong>On the Mac: mint a code</strong>
-          <p>In the dashboard the relay serves, open <strong>Settings</strong> and find <strong>Irrlicht Beacon</strong>, then press <strong>Pair a phone&hellip;</strong>. You get an eight-character code shown as <code>XXXX-XXXX</code>, with a countdown beside it. Its alphabet leaves out the characters that misread when they are typed from a screen &mdash; no <code>I</code>, <code>L</code>, <code>O</code>, <code>U</code>, <code>0</code> or <code>1</code> &mdash; so there is nothing to guess at.</p>
+          <p>In the dashboard the relay serves, open <strong>Settings</strong> and find <strong>Irrlicht Elfdans</strong>, then press <strong>Pair a phone&hellip;</strong>. You get an eight-character code shown as <code>XXXX-XXXX</code>, with a countdown beside it. Its alphabet leaves out the characters that misread when they are typed from a screen &mdash; no <code>I</code>, <code>L</code>, <code>O</code>, <code>U</code>, <code>0</code> or <code>1</code> &mdash; so there is nothing to guess at.</p>
           <p>If the section offers a code box but no button to mint one, the relay token is not entered under <strong>Settings &rarr; Sources</strong> on that page &mdash; minting needs an authenticated client, because the code inherits its workspace from that token.</p>
         </li>
         <li>
@@ -188,11 +190,11 @@ irrlichtrelay token issue --label "my-browser"</code></pre>
         </li>
         <li>
           <strong>Add to Home Screen, then open it from there</strong>
-          <p>Use the browser&rsquo;s share menu to add the page to the home screen, close the tab, and launch Beacon from the new icon.</p>
+          <p>Use the browser&rsquo;s share menu to add the page to the home screen, close the tab, and launch Elfdans from the new icon.</p>
         </li>
         <li>
           <strong>Inside the installed app: type the code</strong>
-          <p>Open <strong>Settings &rarr; Irrlicht Beacon</strong> again &mdash; this time it offers a code field &mdash; enter the code, press <strong>Pair this phone</strong>, and allow notifications when the phone asks.</p>
+          <p>Open <strong>Settings &rarr; Irrlicht Elfdans</strong> again &mdash; this time it offers a code field &mdash; enter the code, press <strong>Pair this phone</strong>, and allow notifications when the phone asks.</p>
         </li>
       </ol>
 
@@ -202,14 +204,14 @@ irrlichtrelay token issue --label "my-browser"</code></pre>
         <strong>One code, one attempt.</strong> It expires after ten minutes and works exactly once. Wrong, expired and already-used codes all get the same answer on purpose, so a mistyped code is not distinguishable from a stale one &mdash; mint a fresh one either way. Ten failed attempts inside a minute refuse every further attempt, correct ones included, until that minute drains.
       </div>
 
-      <p>Declining the notification prompt does not spend the code: Beacon asks the phone before it asks the relay, so you can turn notifications on in the phone&rsquo;s settings and press <strong>Pair this phone</strong> again with the same code.</p>
+      <p>Declining the notification prompt does not spend the code: Elfdans asks the phone before it asks the relay, so you can turn notifications on in the phone&rsquo;s settings and press <strong>Pair this phone</strong> again with the same code.</p>
 
-      <p>Redeeming a code issues an ordinary bearer token for that phone, which is why un-pairing needs no separate machinery &mdash; the phone shows up in <code>irrlichtrelay token list</code> like any other client. Once paired, the Beacon section on the phone turns into a delivery-health line and an <strong>Unpair</strong> button.</p>
+      <p>Redeeming a code issues an ordinary bearer token for that phone, which is why un-pairing needs no separate machinery &mdash; the phone shows up in <code>irrlichtrelay token list</code> like any other client. Once paired, the Elfdans section on the phone turns into a delivery-health line and an <strong>Unpair</strong> button.</p>
 
       <!-- ── Policy ── -->
       <h2 id="what-buzzes">What actually buzzes</h2>
 
-      <p>Beacon is deliberately quiet: ten agents flapping for a minute must not mean ten buzzes. The relay decides what to send, with these defaults.</p>
+      <p>Elfdans is deliberately quiet: ten agents flapping for a minute must not mean ten buzzes. The relay decides what to send, with these defaults.</p>
 
       <table>
         <thead>
@@ -256,7 +258,7 @@ irrlichtrelay token issue --label "my-browser"</code></pre>
       <!-- ── Troubleshooting ── -->
       <h2 id="when-it-breaks">When it breaks</h2>
 
-      <p><strong>Start with the health line.</strong> Open Beacon on the phone: the Irrlicht Beacon section reads something like <em>&ldquo;Push registered via web.push.apple.com &mdash; last delivery at 14:32 succeeded&rdquo;</em>, or names the failure instead. Delivery health lives only in the relay&rsquo;s memory, so shortly after a relay restart it says <em>&ldquo;no delivery attempted since the relay started&rdquo;</em> &mdash; that is honesty about not knowing, not a report that something failed.</p>
+      <p><strong>Start with the health line.</strong> Open Elfdans on the phone: the Irrlicht Elfdans section reads something like <em>&ldquo;Push registered via web.push.apple.com &mdash; last delivery at 14:32 succeeded&rdquo;</em>, or names the failure instead. Delivery health lives only in the relay&rsquo;s memory, so shortly after a relay restart it says <em>&ldquo;no delivery attempted since the relay started&rdquo;</em> &mdash; that is honesty about not knowing, not a report that something failed.</p>
 
       <p><strong>It repairs itself where it can.</strong> Opening the app re-subscribes when the phone&rsquo;s subscription has died (iOS invalidates them silently after long idle periods) and re-registers when the relay lost its record of this phone. The token issued at pairing is the durable identity; the subscription is only a delivery address, which is why re-registering is enough.</p>
 

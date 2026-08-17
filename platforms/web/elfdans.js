@@ -1,8 +1,8 @@
-// Irrlicht Beacon — pairing flow + push settings UI for the phone-facing PWA
+// Irrlicht Elfdans — pairing flow + push settings UI for the phone-facing PWA
 // (docs/mobile-notifications-arc42.md §6.1, §8.1, §8.3, ADR-3).
 //
 // Everything here is feature-detected (arc42 §5.2 additivity contract): the
-// Beacon section renders only when this page's own origin answers
+// Elfdans section renders only when this page's own origin answers
 // /api/v1/push/info with {enabled:true}. A daemon-served dashboard and an old
 // relay both 404 that endpoint and show nothing new; an --auth off relay
 // answers {enabled:false} and ALSO renders nothing in P1 — the operator-facing
@@ -16,18 +16,18 @@
 
 import { relayWsUrl } from './connectionProtocol.js';
 
-const DEVICE_TOKEN_KEY = 'beaconDeviceToken';
+const DEVICE_TOKEN_KEY = 'elfdansDeviceToken';
 
 // The vocabulary this module and sw.js exchange. sw.js is a classic script
 // with nothing to import from (its own header says why), so it spells the same
 // four values as literals and sw-contract.test.js pins the two copies
 // together — a rename on one side would otherwise leave the other silently
 // unheard, which is the failure mode arc42 §8.3 exists to forbid.
-export const BEACON_MESSAGES = Object.freeze({
-  liveSessions: 'beacon-live-sessions',
-  ledgerGet: 'beacon-ledger-get',
-  openSession: 'beacon-open-session',
-  sessionHashKey: 'beacon-session',
+export const ELFDANS_MESSAGES = Object.freeze({
+  liveSessions: 'elfdans-live-sessions',
+  ledgerGet: 'elfdans-ledger-get',
+  openSession: 'elfdans-open-session',
+  sessionHashKey: 'elfdans-session',
 });
 
 // A worker that is asleep, or older than this page, may answer a ledger read
@@ -70,7 +70,7 @@ export function countdownText(seconds) {
 
 let relayTokenAccessor = () => '';
 let countdownTimer = null;
-// The Settings → Sources seam (see initBeacon): { read, write } over the same
+// The Settings → Sources seam (see initElfdans): { read, write } over the same
 // `settings` object and the same persist + reconnect path the Settings panel
 // uses, never localStorage keys of this module's own.
 let liveView = null;
@@ -87,7 +87,7 @@ let notificationTargetsWired = false;
 //     writing localStorage by hand is what keeps a later change to how
 //     settings are stored from orphaning it.
 //   · `opts.openSession` — where a notification tap lands (R6).
-export async function initBeacon(opts = {}) {
+export async function initElfdans(opts = {}) {
   relayTokenAccessor = opts.relayToken || (() => '');
   liveView = opts.liveView || null;
   openSessionHandler = opts.openSession || null;
@@ -98,7 +98,7 @@ export async function initBeacon(opts = {}) {
   // phone can have been sent here by a notification, so an unpaired dashboard
   // wires nothing (arc42 §5.2).
   wireNotificationTargets();
-  const section = document.getElementById('beacon-section');
+  const section = document.getElementById('elfdans-section');
   if (!section) return;
   const info = await fetchPushInfo();
   if (!info) return; // stays hidden: daemon-served, old relay, or push disabled
@@ -130,11 +130,11 @@ async function renderSection(section, info) {
   section.innerHTML = '';
   section.hidden = false;
   const h = document.createElement('h2');
-  h.textContent = 'Irrlicht Beacon';
+  h.textContent = 'Irrlicht Elfdans';
   section.appendChild(h);
   renderMacSide(section, info);
-  const phone = el('div', 'beacon-phone');
-  phone.id = 'beacon-phone';
+  const phone = el('div', 'elfdans-phone');
+  phone.id = 'elfdans-phone';
   section.appendChild(phone);
   const deviceToken = localStorage.getItem(DEVICE_TOKEN_KEY);
   // Awaited: the health panel runs the §8.3 self-heal, and a caller that
@@ -160,12 +160,12 @@ function renderMacSide(section, info) {
   text.appendChild(hint);
   const btn = el('button', 'settings-action-btn');
   btn.type = 'button';
-  btn.id = 'beacon-mint';
+  btn.id = 'elfdans-mint';
   btn.textContent = 'Pair a phone…';
   row.appendChild(text);
   row.appendChild(btn);
-  const out = el('div', 'beacon-mint-out');
-  out.id = 'beacon-mint-out';
+  const out = el('div', 'elfdans-mint-out');
+  out.id = 'elfdans-mint-out';
   btn.addEventListener('click', () => mintPairingCode(out, clientToken));
   section.appendChild(row);
   section.appendChild(out);
@@ -199,12 +199,12 @@ async function mintPairingCode(out, clientToken) {
     return;
   }
   out.innerHTML = '';
-  const codeEl = el('div', 'beacon-code');
-  codeEl.id = 'beacon-code';
+  const codeEl = el('div', 'elfdans-code');
+  codeEl.id = 'elfdans-code';
   codeEl.textContent = formatPairingCode(minted.code);
-  const expiry = el('div', 'beacon-code-expiry');
-  expiry.id = 'beacon-code-expiry';
-  const url = el('div', 'beacon-code-url');
+  const expiry = el('div', 'elfdans-code-expiry');
+  expiry.id = 'elfdans-code-expiry';
+  const url = el('div', 'elfdans-code-url');
   // P1 is paste/type only — no QR, no vendored encoder (arc42 risk 7: an
   // 8-char ambiguity-free code beats auditing vendored encoder code; QR is a
   // follow-up). So the thing to carry to the phone is spelled out here.
@@ -240,27 +240,27 @@ function renderPairEntry(phone, info) {
   // pairing done in the browser tab vanishes from the installed app, so steer
   // touch-device users to install first.
   if (isTouchDevice() && !isStandalone()) {
-    const note = el('div', 'beacon-hint');
-    note.id = 'beacon-standalone-hint';
+    const note = el('div', 'elfdans-hint');
+    note.id = 'elfdans-standalone-hint';
     note.textContent = 'Add this page to your Home Screen first, then pair inside the installed app — iOS delivers push only there.';
     phone.appendChild(note);
   }
-  const row = el('div', 'beacon-pair-row');
+  const row = el('div', 'elfdans-pair-row');
   const input = document.createElement('input');
   input.type = 'text';
-  input.id = 'beacon-code-input';
-  input.className = 'settings-text-input beacon-code-input';
+  input.id = 'elfdans-code-input';
+  input.className = 'settings-text-input elfdans-code-input';
   input.placeholder = 'XXXX-XXXX';
   input.autocomplete = 'off';
   input.spellcheck = false;
   const btn = el('button', 'settings-action-btn');
   btn.type = 'button';
-  btn.id = 'beacon-pair-submit';
+  btn.id = 'elfdans-pair-submit';
   btn.textContent = 'Pair this phone';
   row.appendChild(input);
   row.appendChild(btn);
-  const status = el('div', 'beacon-status');
-  status.id = 'beacon-pair-status';
+  const status = el('div', 'elfdans-status');
+  status.id = 'elfdans-pair-status';
   btn.addEventListener('click', () => pairThisPhone(phone, info, input.value, status));
   phone.appendChild(row);
   phone.appendChild(status);
@@ -588,7 +588,7 @@ export async function publishLedgerSnapshot(sessions) {
   const worker = await activeWorker();
   if (!worker) return false;
   try {
-    worker.postMessage({ type: BEACON_MESSAGES.liveSessions, sessions: sessions || [] });
+    worker.postMessage({ type: ELFDANS_MESSAGES.liveSessions, sessions: sessions || [] });
   } catch (e) {
     return false;
   }
@@ -615,7 +615,7 @@ export async function ledgerEntry(sessionId) {
     channel.port1.onmessage = (event) => finish((event.data && event.data.entry) || null);
     try {
       worker.postMessage(
-        { type: BEACON_MESSAGES.ledgerGet, session_id: sessionId },
+        { type: ELFDANS_MESSAGES.ledgerGet, session_id: sessionId },
         [channel.port2],
       );
     } catch (e) {
@@ -632,7 +632,7 @@ export function sessionFromHash(hash) {
   const raw = String(hash || '').replace(/^#/, '');
   for (const part of raw.split('&')) {
     const eq = part.indexOf('=');
-    if (eq === -1 || part.slice(0, eq) !== BEACON_MESSAGES.sessionHashKey) continue;
+    if (eq === -1 || part.slice(0, eq) !== ELFDANS_MESSAGES.sessionHashKey) continue;
     const value = part.slice(eq + 1);
     try {
       return decodeURIComponent(value);
@@ -650,7 +650,7 @@ function wireNotificationTargets() {
       && typeof navigator.serviceWorker.addEventListener === 'function') {
     navigator.serviceWorker.addEventListener('message', (event) => {
       const msg = event.data || {};
-      if (msg.type === BEACON_MESSAGES.openSession && msg.session_id) {
+      if (msg.type === ELFDANS_MESSAGES.openSession && msg.session_id) {
         openSessionHandler(msg.session_id);
       }
     });
@@ -813,14 +813,14 @@ async function sendTestNotification(btn, out, deviceToken, panel = {}) {
 
 async function renderHealthPanel(phone, info, deviceToken) {
   phone.innerHTML = '';
-  const line = el('div', 'beacon-health');
-  line.id = 'beacon-health-line';
+  const line = el('div', 'elfdans-health');
+  line.id = 'elfdans-health-line';
   line.textContent = 'Paired — checking delivery status…';
   // The live view is half of what pairing configured (§6.2), so the panel that
   // answers doubt answers for it too — silence here would leave a badge that
   // only counts up looking like a badge that is broken.
-  const liveLine = el('div', 'beacon-health');
-  liveLine.id = 'beacon-live-view-line';
+  const liveLine = el('div', 'elfdans-health');
+  liveLine.id = 'elfdans-live-view-line';
   const note = liveView ? liveViewNoteText(liveView.read(), deviceToken, location.origin) : '';
   liveLine.textContent = note;
   liveLine.hidden = !note;
@@ -829,10 +829,10 @@ async function renderHealthPanel(phone, info, deviceToken) {
   // service that refused without reading the relay's log.
   const testBtn = el('button', 'settings-action-btn');
   testBtn.type = 'button';
-  testBtn.id = 'beacon-test-push';
+  testBtn.id = 'elfdans-test-push';
   testBtn.textContent = 'Send a test notification';
-  const testOut = el('div', 'beacon-health');
-  testOut.id = 'beacon-test-out';
+  const testOut = el('div', 'elfdans-health');
+  testOut.id = 'elfdans-test-out';
   testOut.hidden = true;
   testBtn.addEventListener('click', () => sendTestNotification(testBtn, testOut, deviceToken, {
     healthLine: line,
@@ -840,7 +840,7 @@ async function renderHealthPanel(phone, info, deviceToken) {
   }));
   const btn = el('button', 'settings-action-btn');
   btn.type = 'button';
-  btn.id = 'beacon-unpair';
+  btn.id = 'elfdans-unpair';
   btn.textContent = 'Unpair';
   btn.addEventListener('click', () => unpair(phone, info, deviceToken));
   phone.appendChild(line);
@@ -871,12 +871,12 @@ async function renderHealthPanel(phone, info, deviceToken) {
 // the token (§8.1), so the only route back is a fresh pairing code.
 function renderRevoked(phone, info, deviceToken) {
   phone.innerHTML = '';
-  const line = el('div', 'beacon-health');
-  line.id = 'beacon-health-line';
+  const line = el('div', 'elfdans-health');
+  line.id = 'elfdans-health-line';
   line.textContent = revokedText();
   const btn = el('button', 'settings-action-btn');
   btn.type = 'button';
-  btn.id = 'beacon-repair';
+  btn.id = 'elfdans-repair';
   btn.textContent = 'Pair again';
   btn.addEventListener('click', () => {
     // The revoked token is dead on every route, live view included (§8.1) —

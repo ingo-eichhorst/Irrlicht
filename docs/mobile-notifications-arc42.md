@@ -1,7 +1,7 @@
 # Mobile Notifications — Architecture (arc42)
 
-**Status:** **built, unproven.** Slices 1–8 are implemented on `feat/1346-beacon` (~15.8k lines across 100 files); every gate is green. **Nothing has yet delivered a notification to a real phone** — that is slice D ([`beacon-device-test.md`](./beacon-device-test.md)), and until it runs, the quality requirements in §10 are designed-for rather than demonstrated. One known gap is tracked in §11 rather than hidden: the test-notification button (§8.3). R6 was the other until slice 8 (§8.5, ADR-9).
-**Scope:** feature-level arc42 for phone notifications (discussion [#1346](https://github.com/ingo-eichhorst/Irrlicht/discussions/1346)); system-wide architecture lives in `site/docs/architecture.html` and `docs/relay-protocol.md`. Operator runbook: [`examples/relay/DEPLOY.md`](../examples/relay/DEPLOY.md). User guide: [`site/docs/beacon.html`](../site/docs/beacon.html).
+**Status:** **built, unproven.** Slices 1–9 are implemented on `feat/1346-elfdans`; every gate is green. **Nothing has yet delivered a notification to a real phone** — that is slice D ([`elfdans-device-test.md`](./elfdans-device-test.md)), and until it runs, the quality requirements in §10 are designed-for rather than demonstrated. Both gaps this line used to name are now closed and say so where they live: the test-notification button in §11 row 11 (slice 9), R6 in §8.5/ADR-9 (slice 8). No size figure is quoted here on purpose — the one that stood here was hand-typed and had already drifted, claiming 100 files against a branch of 115.
+**Scope:** feature-level arc42 for phone notifications (discussion [#1346](https://github.com/ingo-eichhorst/Irrlicht/discussions/1346)); system-wide architecture lives in `site/docs/architecture.html` and `docs/relay-protocol.md`. Operator runbook: [`examples/relay/DEPLOY.md`](../examples/relay/DEPLOY.md). User guide: [`site/docs/elfdans.html`](../site/docs/elfdans.html).
 **Format note:** minimal arc42 profile — every section present, none padded
 
 > **This document describes code that exists.** It began as a proposal, and while it was being implemented three of its confident-sounding sentences turned out to be false — a self-heal that did not cover the case it claimed, a UI button nobody built, a release artifact no release carried. Each was found by writing something *else* against the code and noticing the disagreement, never by re-reading this file. Treat an unsourced assertion here as a claim awaiting its next contradiction, and prefer the `file:line` citations where they appear.
@@ -12,7 +12,9 @@
 
 A phone notification when an agent finishes or needs input — the same signal the menu bar gives, when the user is not at the desk. Not a second cockpit: a lock-screen banner plus a last-known-state list. Off unless a phone is explicitly paired.
 
-The phone-facing app is named **Irrlicht Beacon** (the name the user sees: manifest, home-screen icon, docs). "Beacon" is scoped to that app only — the Go packages keep mechanism names (`notify`, `webpush`), because `core/pkg/hookbeacon` already uses the word for an unrelated mechanism (the `irrlichd hook-post` delivery beacon) and two internal "beacon" packages would collide in every conversation about either.
+The phone-facing app is named **Irrlicht Elfdans** (the name the user sees: manifest, home-screen icon, docs). "Elfdans" is scoped to that app only — the Go packages keep mechanism names (`notify`, `webpush`) rather than the product's, and that separation is what made renaming the app cheap rather than a migration. It shipped its first nine slices as **Irrlicht Beacon**; moving to Elfdans changed no Go package, no HTTP path, no relay frame and no payload field. The six strings it *did* move are listed in §8.6, because every one of them crosses a disk or wire boundary.
+
+The old name also shared the word with `core/pkg/hookbeacon`, an unrelated mechanism (the `irrlichd hook-post` delivery beacon) that already owned "beacon" in this repo — so the two were separable only by context, and a repo-wide search for either returned both. They are now separable by spelling, which is what let this rename be done by path-scoped substitution at all.
 
 ### 1.1 Requirements overview
 
@@ -139,11 +141,11 @@ flowchart TB
 | Relay: observer | Detect per-session state edges off the cache updates it already performs; seed silently on first sight/snapshot | Feeds `notify` engine; also feeds `daemon_status` disconnects (watchdog) |
 | Relay: dispatcher | Fan decided notifications out to every subscription in the same **workspace**; prune on `410`; record last-delivery status | Workspace scoping mirrors existing isolation |
 | Relay: pairing/REST | `GET /api/v1/push/info` (unauthenticated — §5.2's feature detection depends on it) · `POST /api/v1/push/pairings` (authed; mints one-time code) · `POST /api/v1/push/pair` (code → device token + VAPID pub) · `POST/DELETE/GET /api/v1/push/subscriptions` (device-token-authed; the GET is §8.3's health panel) · `POST /api/v1/push/test` (device-token-authed; §8.3's diagnostic — one push down the production path, answered synchronously) | Device tokens are ordinary `TokenRecord`s — `token list`/`revoke` and 4401 semantics apply unchanged |
-| `platforms/web` PWA | Manifest, service worker (push → ledger fold → `showNotification` → badge; `notificationclick` → deep link; `message` → live fold + ledger reads), pairing flow (which also configures the live view, ADR-9), health panel, unpair, and the §8.3 test-notification button (slice 9), whose outcome it renders in place. **No** notification-settings UI: policy is server-side (§8.4) | No build step; plain files. Ships via `build-release.sh`'s single `WEB_FILES` list, kept complete by a tripwire that derives the required set (§8.7). The worker is a classic script and imports nothing, so the four message names it exchanges with `beacon.js` are two copies — pinned together by `sw-contract.test.js` |
+| `platforms/web` PWA | Manifest, service worker (push → ledger fold → `showNotification` → badge; `notificationclick` → deep link; `message` → live fold + ledger reads), pairing flow (which also configures the live view, ADR-9), health panel, unpair, and the §8.3 test-notification button (slice 9), whose outcome it renders in place. **No** notification-settings UI: policy is server-side (§8.4) | No build step; plain files. Ships via `build-release.sh`'s single `WEB_FILES` list, kept complete by a tripwire that derives the required set (§8.7). The worker is a classic script and imports nothing, so the four message names it exchanges with `elfdans.js` are two copies — pinned together by `sw-contract.test.js` |
 
 **Source location.** All Go code stays in the existing `core` module — no new module. `notify` (under `domain/`) and `webpush` (under `pkg/`) fall under `core/architecture_test.go`'s layering rules automatically. The relay's push **state** lands in a `core/cmd/irrlichtrelay/push` subpackage (VAPID identity, pairing codes, subscription registry, roster, health); the observer, dispatcher and HTTP surface stayed in `package main` beside the hub they wire into. Both are composition-root code, free to import anything, and kept deliberately outside the daemon's hexagon: `core/adapters/outbound/relay` is the *daemon-side* forwarder and stays untouched. PWA assets join `platforms/web` — no third web tree (the #1225 dependency-drift lesson), and no build step to introduce.
 
-**Separate-repo option (kept open, not taken).** Beacon might one day live in its own repo. Development starts here because the repo's gates (architecture test, preflight, replay) are what hold the new code to the house rules — but every boundary is drawn so extraction stays a move, not a rewrite: `notify` and `webpush` import **stdlib only** (no `irrlicht/core` types cross into them), the Beacon PWA files are additive to `platforms/web` behind feature detection, and the relay already serves its UI from disk (`IRRLICHT_UI_DIR` / `resolveUIDir`), so a standalone repo could ship relay + Beacon assets without touching this one. The one thing extraction would cost is the shared web tree's dashboard — which is exactly why the §5.2 contract keeps Beacon's files separable rather than woven in.
+**Separate-repo option (kept open, not taken).** Elfdans might one day live in its own repo. Development starts here because the repo's gates (architecture test, preflight, replay) are what hold the new code to the house rules — but every boundary is drawn so extraction stays a move, not a rewrite: `notify` and `webpush` import **stdlib only** (no `irrlicht/core` types cross into them), the Elfdans PWA files are additive to `platforms/web` behind feature detection, and the relay already serves its UI from disk (`IRRLICHT_UI_DIR` / `resolveUIDir`), so a standalone repo could ship relay + Elfdans assets without touching this one. The one thing extraction would cost is the shared web tree's dashboard — which is exactly why the §5.2 contract keeps Elfdans's files separable rather than woven in.
 
 ### 5.2 The additivity contract — what explicitly does not change
 
@@ -155,7 +157,7 @@ The one shared surface is `platforms/web` (served by the localhost daemon *and* 
 |---|---|
 | The service worker has **no `fetch` handler** (push + notification-click only) | It can never interpose on asset loading or cache the dashboard stale; local serving stays byte-identical |
 | The service worker is registered **lazily**, from the pairing flow and the §8.3 self-heal — never at page load | Plain dashboard usage never installs it. The self-heal is a second call site, but it runs only for an already-paired phone (it is gated on the stored device token), so the guarantee holds |
-| The pairing/push UI is **feature-detected** (renders only where the origin answers the push-info endpoint) | The daemon-served dashboard shows no Beacon UI and installs no service worker; an old relay hides it too. **One exception, stated rather than glossed:** `index.html` links the manifest and two `theme-color` metas unconditionally, so the plain dashboard is installable under the Beacon name. Inert — an install without pairing subscribes to nothing — but it is not literally "nothing new" |
+| The pairing/push UI is **feature-detected** (renders only where the origin answers the push-info endpoint) | The daemon-served dashboard shows no Elfdans UI and installs no service worker; an old relay hides it too. **One exception, stated rather than glossed:** `index.html` links the manifest and two `theme-color` metas unconditionally, so the plain dashboard is installable under the Elfdans name. Inert — an install without pairing subscribes to nothing — but it is not literally "nothing new" |
 | No lockstep (ADR-4) | Old daemon ↔ push-capable relay and unchanged daemon ↔ old relay both work |
 
 ---
@@ -288,7 +290,7 @@ flowchart TB
 | Survives Mac asleep | Relay yes (only watchdog push remains meaningful) | No — but with the daemon down there are no events anyway |
 | Push egress | Relay → Apple/Google outbound HTTPS | Same, from the Mac |
 
-Dev loop: **the daemon is not a substitute for the relay here.** It serves the same web tree, but registers no `/api/v1/push/*` route, so feature detection finds nothing and the Beacon section never renders — by design (§5.2), and worth knowing before trying to test pairing against `127.0.0.1:7837`. Use `tools/beacon-rig.sh up`, which stands up a real relay on loopback; loopback is a secure context, so the worker and subscription flow work without TLS.
+Dev loop: **the daemon is not a substitute for the relay here.** It serves the same web tree, but registers no `/api/v1/push/*` route, so feature detection finds nothing and the Elfdans section never renders — by design (§5.2), and worth knowing before trying to test pairing against `127.0.0.1:7837`. Use `tools/elfdans-rig.sh up`, which stands up a real relay on loopback; loopback is a secure context, so the worker and subscription flow work without TLS.
 
 **Renaming the relay origin re-pairs every phone** (C4). Pick the name once.
 
@@ -372,11 +374,11 @@ House rule: absence of a finding and inability to look must never produce the sa
 
 | Failure | Surfaced by |
 |---|---|
-| Push service returns `410/404` | Subscription pruned; the PWA health panel then reads "Paired, but push is not registered — reopen this app to re-subscribe" on next open (`beacon.js`), and the self-heal re-registers it |
+| Push service returns `410/404` | Subscription pruned; the PWA health panel then reads "Paired, but push is not registered — reopen this app to re-subscribe" on next open (`elfdans.js`), and the self-heal re-registers it |
 | Subscription silently invalidated by iOS | Self-heals: PWA re-subscribes on next open with its stored device token |
 | Doubt | A "send test notification" button in the PWA health panel (slice 9). `POST /api/v1/push/test` sends one diagnostic push through the **production** sender — same VAPID signing, same RFC 8291 encryption, same headers and padding — and answers with the outcome **synchronously**, so a 4xx from Apple lands in front of the person holding the phone instead of in the relay log. It separates "the relay never sent" from "the push service refused" from "this phone's subscription is dead", which nothing else did without driving a real agent into `waiting`. What it deliberately does **not** prove: it bypasses `core/domain/notify`, so it says nothing about whether a real transition would be *observed* — a §8.4 rule that never fires still looks healthy here |
 | A tap that resolves to no session | The app opens and *says so*, naming the session's last-known state from the ledger and the time it was last known (§8.5, R6) — never a tap that appears to do nothing |
-| The live view pairing configured is off, or aimed at another relay | A second line in the health panel, because the badge then only counts up and that would otherwise read as a broken badge rather than a configuration (`liveViewNoteText` in `beacon.js`) |
+| The live view pairing configured is off, or aimed at another relay | A second line in the health panel, because the badge then only counts up and that would otherwise read as a broken badge rather than a configuration (`liveViewNoteText` in `elfdans.js`) |
 | Daemon link down | Watchdog push (§6.4) |
 | Delivery attempt outcome | Last-status per subscription, visible in the PWA and relay logs |
 
@@ -398,7 +400,7 @@ House rule: absence of a finding and inability to look must never produce the sa
 
 ### 8.5 State on the phone
 
-The PWA holds a last-known-state ledger (IndexedDB `beacon-ledger`, one object store, keyed by the
+The PWA holds a last-known-state ledger (IndexedDB `elfdans-ledger`, one object store, keyed by the
 relay's **bare** session id): folded from push payloads while backgrounded and from the dashboard's
 own live view while open, read back on a notification tap, and reduced to a home-screen badge. It is
 never authoritative — the daemon is. Disconnected, it shows "as of 14:32".
@@ -429,7 +431,7 @@ render and published nothing, leaving the badge exactly where the push fold left
 on the **connect edge** as well, and forgets its last-published signature on **disconnect** — because
 the worker's ledger does not stand still while the page is away (the push fold keeps writing it), so
 "unchanged since I last published" says nothing about what the ledger now holds.
-`irrlicht.beaconedges.test.js` drives both edges with the sessions fetch deliberately never resolving,
+`irrlicht.elfdansedges.test.js` drives both edges with the sessions fetch deliberately never resolving,
 which is what removes `render()` from the picture.
 
 **What a tap resolves to (R6).** The payload carries the relay's bare session id, while the dashboard
@@ -460,7 +462,7 @@ The relay is stateless-by-design in v0 (sessions in RAM, rebuilt from `daemon_sn
 | Data | Where | Survives restart | Notes |
 |---|---|---|---|
 | Token records (existing) | `tokens.json` | yes | SHA-256 hashes only; hot-reloaded on change |
-| VAPID keypair | `vapid-keys.json` | yes | Subscriptions are bound to it, so **losing it means re-pairing every phone** — the §8.3 self-heal does *not* cover this. `selfHeal` re-subscribes only when the browser has no subscription or the relay has no record of the phone (`beacon.js:418`); after a key loss both still exist, so the phone keeps a subscription bound to a key that is gone and nothing detects it. Back this file up |
+| VAPID keypair | `vapid-keys.json` | yes | Subscriptions are bound to it, so **losing it means re-pairing every phone** — the §8.3 self-heal does *not* cover this. `selfHeal` re-subscribes only when the browser has no subscription or the relay has no record of the phone (`elfdans.js:464`); after a key loss both still exist, so the phone keeps a subscription bound to a key that is gone and nothing detects it. Back this file up |
 | Subscription registry | `push-subscriptions.json` | yes | Endpoint + device keys per phone, linked to its TokenRecord; rewritten only on pair/revoke/`410`-prune, never per push |
 | Daemon roster | `daemon-roster.json` | yes | workspace + id + label + last-seen (the workspace is part of the identity: daemon ids are unique per tenant, not globally) — so the watchdog does not forget an offline daemon across a relay restart (§6.4). Bounded: entries unseen for 30 days are swept, so "cannot forget" is really "does not forget for a month" |
 | Session cache | RAM | no | Repopulated by daemon reconnects within seconds |
@@ -471,6 +473,21 @@ The relay is stateless-by-design in v0 (sessions in RAM, rebuilt from `daemon_sn
 
 **Backup / host migration:** copy four small files (`tokens.json`, `vapid-keys.json`, `push-subscriptions.json`, `daemon-roster.json`) and keep the hostname — every phone survives the move untouched. The origin-rename caveat (§7) is unchanged and orthogonal.
 
+**The Beacon → Elfdans rename (§1) moved six strings across a disk or wire boundary** — a boundary meaning: it survives a reload on the phone, or it travels to a push service. Everything else was internal: no Go package, HTTP path, relay frame or payload field changed. Listed because "it was only a rename" is exactly the claim that hides a migration — and the first draft of this very table proved the point by listing five and missing the sixth, which the doc already named ten lines above it in §8.5:
+
+| String | Was → is | Boundary | Effect on an already-paired phone |
+|---|---|---|---|
+| Device-token key | `beaconDeviceToken` → `elfdansDeviceToken` | phone `localStorage` (`elfdans.js:19`) | reads as **unpaired**; the old key is orphaned, not migrated |
+| Manifest file + identity | `beacon.webmanifest` / "Irrlicht Beacon" → `elfdans.webmanifest` / "Irrlicht Elfdans" | PWA install identity | a **different installed app**; the old home-screen icon keeps pointing at a manifest that 404s |
+| App icon | `beacon-icon.svg` → `elfdans-icon.svg` | shipped asset, named in the manifest and in `WEB_FILES` | none beyond the above |
+| Diagnostic push Topic | `beacon-test` → `elfdans-test` | RFC 8030 `Topic` header (`push_observer.go:522`) **and** the worker's `showNotification` tag (`sw.js:107`) | none, but the two must move together or the test push stops collapsing — see §8.7 |
+| Default device label | `beacon` → `elfdans` | `tokens.json` at rest (`push_handlers.go:39`) | cosmetic; existing records keep the old label in `token list` |
+| Ledger database | `beacon-ledger` → `elfdans-ledger` | IndexedDB on the phone (`sw.js:258`) | opens a **fresh empty** database at version 1; the old one is orphaned, so the home-screen badge resets to 0 and §8.5's R6 fallback has no last-known state left to name |
+
+What is deliberately *not* in the table, so the count is checkable rather than merely asserted: the four page↔worker message names and the `elfdans-session` URL-fragment key moved too, but they cross no boundary above — both copies ship in the same release and `sw-contract.test.js` pins them to each other, so the only exposure is the moments-long skew while a new worker activates.
+
+Three of the six are breaking for a paired device — the device-token key, the manifest identity, and the ledger — and they cost nothing **only because nothing is paired**: slice D has never run (see the Status line), so the sole pairings that have ever existed live in the rig's scratch dir under `.build/`, which `elfdans-rig.sh down --wipe` discards. Were this rename to happen after a real rollout, rows 1 and 2 would each need a migration step, and neither is self-healing — §8.3's `selfHeal` re-subscribes only when the browser has no subscription *or* the relay has no record, and a renamed `localStorage` key produces neither condition.
+
 **Disk-compromise threat note:** an attacker with the relay's data dir gets no session content and no usable bearer tokens (hashes) — what they do get is `vapid-keys.json` + `push-subscriptions.json`, which together allow **sending arbitrary, readable notifications to paired phones** until the user re-pairs (which rotates everything). Named so it is weighed, not discovered.
 
 ### 8.7 Testing
@@ -480,11 +497,34 @@ storms, an eight-invariant oracle, and an env-gated 24k sweep); `webpush` is pin
 Appendix A known-answer test, a round-trip property test through a test-side decryptor, and a fake
 push service grading headers and JWT; the relay carries the tripwires §5.2 needs — `sw.js` registers
 no `fetch` handler, exactly one shipped module registers the worker, and the release copy list is
-*derived* from `index.html` plus the import graph rather than hand-kept. `tools/beacon-rig.sh check`
+*derived* from `index.html` plus the import graph rather than hand-kept. `tools/elfdans-rig.sh check`
 runs ten assertions against a live relay. Every guard landed with a deliberate mutation seen red.
 
+The rename to Elfdans (§1) added the cross-language tripwire that was missing. `sw-contract.test.js`
+already pinned the four message names `sw.js` and `elfdans.js` each spell separately; the diagnostic
+push's collapse key is the same shape of coupling — `testPushTopic` in `push_observer.go` against the
+`tag` in `sw.js`'s `test` branch — except that it crosses languages, and each file carried a comment
+naming the other while nothing checked them. Moving one side alone leaves the test push landing under
+a tag that collapses against nothing, which is close to invisible: the banner still arrives, and
+whoever is watching is by definition busy establishing that push works at all. It is now pinned in
+both directions, with a third arm deriving the engine's own topic space (`summaryTopic`,
+`daemonTopic`) so "no real push can collide with it" is checked rather than asserted. Eight mutations,
+each seen red and each attributable to a named arm: rename either side alone; blind the extractor on
+either Go file; and four against the Topic itself — collide it with `summary`, empty it on both
+sides, push it past RFC 8030's 32-character bound, and give it a character outside the URL-safe set.
+The two blinding mutations are the ones least likely to be thought of: two failed extractions both
+return `null`, so without an explicit found-check a parse failure reports as agreement.
+
+That collide arm was wrong on its first pass, and the correction belongs here rather than in a
+silent edit. It excluded the session slice of the topic space with a UUID regex, under the comment
+"a session Topic is the session id, which is a UUID" — false in this codebase, where a session id is
+whatever the adapter reports (`ses_*` for opencode). So the arm appeared to cover the largest slice
+of the space and covered none of it. A session id that happens to equal this literal is excludable by
+no pattern at all, so the arm now says that outright and asserts instead the constraint that *is*
+checkable and was checked nowhere: RFC 8030 §5.4's short URL-safe token.
+
 Slice 8 added 76 jsdom test cases across six files, and none of them is a green that was never red:
-every one was run against the *previous* `sw.js`, `beacon.js` and `irrlicht.js` first — 28 red on the
+every one was run against the *previous* `sw.js`, `elfdans.js` and `irrlicht.js` first — 28 red on the
 worker side, 32 on the page side — which is the honest form of red-first for a slice that adds
 behaviour rather than fixing a defect. It found two real ones on the way. `liveViewNoteText` took an
 `origin` parameter that half its own verdict ignored in favour of `location.origin`, invisible in
@@ -617,11 +657,11 @@ green test can pin nothing. *Designed-for* means the code intends it and nobody 
 | 3 | Relay origin rename re-pairs every phone | Documented loudly (§7); no P1 mitigation |
 | 4 | Policy lives only in the relay; desktop/web keep their own client-side copies | Accepted for P1; convergence path = both clients eventually consuming server-decided notifications is *not* planned |
 | 5 | Relay was stateless-by-design (v0); push adds persisted files | Full inventory + restart matrix in §8.6; sessions stay in-memory, payloads are never stored |
-| 6 | New static files must reach installed relays | **Was worse than predicted, now guarded.** All three copy sites shipped 3 files while `irrlicht.js` imports ten siblings — so a tarball-served *and* a curl-installed dashboard both 404'd their own module graph, before Beacon existed. One `WEB_FILES` list now feeds every site, the tripwire derives what belongs in it, and it covers the Dockerfile and installer too (slice 6) |
+| 6 | New static files must reach installed relays | **Was worse than predicted, now guarded.** All three copy sites shipped 3 files while `irrlicht.js` imports ten siblings — so a tarball-served *and* a curl-installed dashboard both 404'd their own module graph, before Elfdans existed. One `WEB_FILES` list now feeds every site, the tripwire derives what belongs in it, and it covers the Dockerfile and installer too (slice 6) |
 | 7 | `platforms/web` gains a vendored QR encoder (no-build tree) | **Closed: no QR.** Paste-only shipped — typing eight ambiguity-free characters beat auditing vendored code for a one-time act |
 | 8 | Timing metadata to Apple/Google | Named and accepted, as in #1346 |
-| 9 | **Nothing has run on a device.** Every defect so far was found by reading, and two of them — a VAPID JWT with no `sub`, `subscribe()` before the worker activates — fail only on contact with a real push service and passed every mock | Slice D, ordered ahead of release. `tools/beacon-rig.sh check` automates the phone-free half; the rest needs a phone. **Until it runs, §10 is designed-for, not demonstrated** |
-| 10 | **Losing `vapid-keys.json` costs a full re-pair of every phone**, and nothing detects it — `selfHeal` fires only when the browser has no subscription or the relay has no record (`beacon.js:418`); after a key loss both still exist | Named in §8.6 and the runbook's backup list. No code mitigation; a relay whose data dir is not backed up is one file loss from silent, permanent non-delivery |
+| 9 | **Nothing has run on a device.** Every defect so far was found by reading, and two of them — a VAPID JWT with no `sub`, `subscribe()` before the worker activates — fail only on contact with a real push service and passed every mock | Slice D, ordered ahead of release. `tools/elfdans-rig.sh check` automates the phone-free half; the rest needs a phone. **Until it runs, §10 is designed-for, not demonstrated** |
+| 10 | **Losing `vapid-keys.json` costs a full re-pair of every phone**, and nothing detects it — `selfHeal` fires only when the browser has no subscription or the relay has no record (`elfdans.js:464`); after a key loss both still exist | Named in §8.6 and the runbook's backup list. No code mitigation; a relay whose data dir is not backed up is one file loss from silent, permanent non-delivery |
 | 11 | §8.3's test-notification button did not exist, so proving delivery meant driving a real agent into `waiting` and reading the relay log when nothing arrived | **Closed** (slice 9): `POST /api/v1/push/test` plus the health-panel button, travelling the production sender and reporting the outcome synchronously. The residue is stated where it lives (§8.3) rather than left implied: the diagnostic bypasses `core/domain/notify`, so it proves delivery and never observation — a green test push says nothing about whether a `working → ready` edge would fire. R6 shared this row until slice 8 (§8.5, ADR-9) |
 | 12 | **Same-`Topic` push ordering is unserialized** — two pushes sharing a Topic race through the dispatch semaphore, so a daemon that flaps inside a slow POST can leave the *stale* banner winning the collapse permanently | Documented at the call site (`push_observer.go`); the exposed pair is the daemon up/down Topic, where the wrong survivor says "disconnected" about a live daemon. No fix in P1 |
 | 13 | **A relay restart is amnesia for policy state** (§8.6): every session becomes an unknown id, and a first sighting is silent — so a `ready` that landed during the restart is never delivered | Accepted: the alternative is persisting per-session policy state, which trades a missed edge for a stale one |
@@ -634,7 +674,7 @@ green test can pin nothing. *Designed-for* means the code intends it and nobody 
 
 | Term | Meaning |
 |---|---|
-| **Irrlicht Beacon** | Product name of the phone-facing PWA (§1). Distinct from `core/pkg/hookbeacon`, the unrelated `irrlichd hook-post` delivery mechanism |
+| **Irrlicht Elfdans** | Product name of the phone-facing PWA (§1). Named "Irrlicht Beacon" through slices 1–9; renamed in full, with the six boundary-crossing strings listed in §8.6. Distinct from `core/pkg/hookbeacon`, the unrelated `irrlichd hook-post` delivery mechanism — under the old name the two were separable only by context |
 | **Relay** | `irrlichtrelay` — user-hosted fan-out server; daemons dial out to it (`docs/relay-protocol.md`) |
 | **Web Push / VAPID** | Browser push standard; per-server ES256 keypair replaces vendor accounts (RFC 8030/8292) |
 | **RFC 8291** | Mandatory end-to-end payload encryption to the device's subscription keys |
@@ -660,7 +700,7 @@ green test can pin nothing. *Designed-for* means the code intends it and nobody 
 | — | *Remediation*: device-breaking defects and the coverage vacuity that hid them (§8.7) | **done** `d2643b36` |
 | 6 | Distribution: `irrlichtrelay` tarballs for `linux/arm64` + `linux/amd64`; two broken copy sites fixed | **done** `25281eb8` |
 | 7 | Docs: relay-protocol REST reference, operator runbook, site setup guide | **done** `1a2361f9`, `0dd395fa` |
-| **D** | **Device test — pair a real phone and observe a notification** ([`beacon-device-test.md`](./beacon-device-test.md)). Its phone-free half is automated (`tools/beacon-rig.sh check`, 10 live assertions, passing); the half that needs a device has not run | **outstanding — the gate on calling this done** |
+| **D** | **Device test — pair a real phone and observe a notification** ([`elfdans-device-test.md`](./elfdans-device-test.md)). Its phone-free half is automated (`tools/elfdans-rig.sh check`, 10 live assertions, passing); the half that needs a device has not run | **outstanding — the gate on calling this done** |
 | 8 | Ledger read path: live-view fold, `setAppBadge`, notification deep link — what makes **R6** true (§8.5), plus the pairing change ADR-9 records | **done** |
 | 9 | "Send test notification" button (§8.3), and a deterministic session-state driver for the device test's burst case | button **done**; driver tracked with it |
 

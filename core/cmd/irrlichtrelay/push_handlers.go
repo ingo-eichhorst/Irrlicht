@@ -36,7 +36,7 @@ const pushBodyLimit = 64 << 10
 
 // pairDefaultLabel names a device token whose pairing request carried no
 // label, so `token list` still reads sensibly.
-const pairDefaultLabel = "beacon"
+const pairDefaultLabel = "elfdans"
 
 // pairCodeInvalidMsg is the single uniform pairing failure the wire ever
 // sees: unknown, expired and already-used codes answer identically, so the

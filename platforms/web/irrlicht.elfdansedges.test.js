@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeAll, vi } from 'vitest'
 
 // The two socket EDGES the live fold hangs off (arc42 §8.5, ADR-9). Its
-// sibling irrlicht.beaconfold.test.js grades what a publish carries; this file
+// sibling irrlicht.elfdansfold.test.js grades what a publish carries; this file
 // grades whether one happens at all, which is a different question and was the
 // one that failed: the worker can lower the badge, but only if the page tells
 // it to.
@@ -15,11 +15,11 @@ import { describe, test, expect, beforeAll, vi } from 'vitest'
 // that could publish.
 
 const mocks = vi.hoisted(() => ({
-  initBeacon: vi.fn(async () => {}),
+  initElfdans: vi.fn(async () => {}),
   publishLedgerSnapshot: vi.fn(async () => true),
   ledgerEntry: vi.fn(async () => null),
 }))
-vi.mock('./beacon.js', async (importOriginal) => ({ ...(await importOriginal()), ...mocks }))
+vi.mock('./elfdans.js', async (importOriginal) => ({ ...(await importOriginal()), ...mocks }))
 
 const DAEMON = 'daemon-a'
 const DEBOUNCE_MS = 700 // the 500ms publish debounce plus slack
@@ -93,7 +93,7 @@ describe('the disconnect edge (arc42 §8.5)', () => {
 
 describe('a publish that did not happen is not remembered as one', () => {
   test('a failed publish leaves the next identical set publishable', async () => {
-    // `beaconPublishedSignature = published ? signature : null` — recording the
+    // `elfdansPublishedSignature = published ? signature : null` — recording the
     // signature unconditionally would mark an unpaired-or-failed attempt as
     // delivered, and the retry that a pairing a minute later should produce
     // would be suppressed as "unchanged".

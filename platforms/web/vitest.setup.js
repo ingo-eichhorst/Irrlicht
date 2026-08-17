@@ -20,7 +20,7 @@ export const SETUP_BODY = `
   <div id="gt-container" style="display:none"></div>
   <div id="connection-banner"></div>
   <div id="settings-perm-note"></div>
-  <div id="beacon-section" hidden></div>
+  <div id="elfdans-section" hidden></div>
   <button id="settings-review-permissions"></button>
   <dialog id="permissions-backdrop">
     <h2 id="permissions-title"></h2>

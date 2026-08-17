@@ -21,7 +21,7 @@ import (
 
 // driverState is the on-disk shape. The device token is a bearer credential,
 // so the file is 0600 in a 0700 directory — the same posture the relay's own
-// state files hold (docs/beacon-device-test.md Phase 1).
+// state files hold (docs/elfdans-device-test.md Phase 1).
 type driverState struct {
 	DaemonID      string `json:"daemon_id"`
 	DaemonLabel   string `json:"daemon_label"`
@@ -51,7 +51,7 @@ func loadState(path string) (*driverState, error) {
 		st.DaemonID = syntheticDaemonID()
 	}
 	if st.DaemonLabel == "" {
-		st.DaemonLabel = "beacon-drive (synthetic)"
+		st.DaemonLabel = "elfdans-drive (synthetic)"
 	}
 	return st, nil
 }
@@ -89,7 +89,7 @@ func syntheticDaemonID() string {
 	if _, err := rand.Read(b[:]); err != nil {
 		// Unique enough for a driver, and never silently indistinguishable
 		// from a real id, which is the property that matters here.
-		return "beacon-drive-00000000"
+		return "elfdans-drive-00000000"
 	}
-	return "beacon-drive-" + hex.EncodeToString(b[:])
+	return "elfdans-drive-" + hex.EncodeToString(b[:])
 }

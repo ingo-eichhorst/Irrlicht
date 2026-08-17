@@ -1,8 +1,8 @@
-# Irrlicht Beacon — device test plan
+# Irrlicht Elfdans — device test plan
 
 **Status:** not yet run. Everything it grades is built (slices 1–9), so this is the gate on
 calling the feature done — and it should run again before any release that touches the push path.
-**Why it exists:** every defect found in Beacon so far was found by *reading* code. Two of them —
+**Why it exists:** every defect found in Elfdans so far was found by *reading* code. Two of them —
 a VAPID JWT with no `sub` claim, which Apple rejects, and `pushManager.subscribe()` called before
 the service worker activates, which the Push API rejects — fail **only on contact with a real
 push service or a real device**, and passed every mock in the suite. There is no reason to think
@@ -13,17 +13,17 @@ fault is in what that phase introduced, not in the four before it.
 
 ---
 
-## Automated: `tools/beacon-rig.sh`
+## Automated: `tools/elfdans-rig.sh`
 
 Setup friction is what makes this plan expensive to repeat, so most of it is scripted:
 
 ```sh
-tools/beacon-rig.sh up [--serve]   # build + start an isolated relay, auth on, own state dir
-tools/beacon-rig.sh check          # every assertion below that needs no phone
-tools/beacon-rig.sh down [--wipe]
+tools/elfdans-rig.sh up [--serve]   # build + start an isolated relay, auth on, own state dir
+tools/elfdans-rig.sh check          # every assertion below that needs no phone
+tools/elfdans-rig.sh down [--wipe]
 ```
 
-State lives in `.build/beacon-rig` — never your real `~/.local/share/irrlicht` — so nothing here
+State lives in `.build/elfdans-rig` — never your real `~/.local/share/irrlicht` — so nothing here
 can touch a production relay's tokens or a paired phone. `up` refuses rather than starting a
 second relay on a busy port, because `7839` is the production default and the thing already
 there is probably yours.
@@ -50,10 +50,10 @@ reason this document exists.
 - An iPhone on the same tailnet (Tailscale app), or `tailscale funnel` if you'd rather not.
 - **Safari Web Inspector** — this is the debugging tool for the whole plan. On the phone:
   Settings → Safari → Advanced → Web Inspector. On the Mac: Safari → Develop → *\<your phone\>* →
-  the Beacon app. Without it, a phone-side failure is a blank screen with no diagnosis.
+  the Elfdans app. Without it, a phone-side failure is a blank screen with no diagnosis.
 
 **The "send a test notification" button exists** (arc42 §8.3, slice 9): once a phone is paired, the
-Beacon health panel offers it, and it answers on the spot — `Sent via web.push.apple.com…`, or the
+Elfdans health panel offers it, and it answers on the spot — `Sent via web.push.apple.com…`, or the
 push service's own refusal. Use it wherever a phase below needs "a push, any push". It is not a
 substitute for the phases that drive real transitions: it bypasses the policy engine, so it proves
 the *delivery* half (VAPID, encryption, subscription, the phone's notification settings) and nothing
@@ -99,13 +99,13 @@ Only move on once a desktop banner has actually appeared.
 Point the dev daemon at the relay (`IRRLICHT_RELAY_URL=…` plus its token) and confirm real
 sessions appear in the **relay-served** dashboard. This proves the hub path end to end before push
 is in the picture — if sessions never arrive, no notification ever could, and that is a relay-link
-problem, not a Beacon one.
+problem, not a Elfdans one.
 
 ## Phase 3 — install and pair on the phone
 
 The highest-risk phase, and the one the mocks cover worst.
 
-1. Open the origin in Safari on the phone. **The Beacon section must appear** — that is feature
+1. Open the origin in Safari on the phone. **The Elfdans section must appear** — that is feature
    detection working against a real origin (§5.2).
 2. Share → **Add to Home Screen**. Open it **from the home screen**, not from Safari.
 3. Mint a code in the dashboard on the Mac. Type it into the installed app.
@@ -174,7 +174,7 @@ observable from the couch with a locked phone.
 Easy to forget and the whole point of §5.2. Run the daemon-served dashboard on `127.0.0.1` with
 **no relay configured** and confirm:
 
-- No Beacon section anywhere in Settings.
+- No Elfdans section anywhere in Settings.
 - **No service worker installed** — DevTools → Application → Service Workers is empty.
 - Zero connection attempts to any relay.
 

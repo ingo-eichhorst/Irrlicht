@@ -276,8 +276,8 @@ func TestPairingEndToEnd(t *testing.T) {
 	if device.Workspace != "acme" {
 		t.Fatalf("device token workspace = %q, want %q (inherited from the minter)", device.Workspace, "acme")
 	}
-	if device.Label != "beacon" {
-		t.Fatalf("device token label = %q, want the default %q", device.Label, "beacon")
+	if device.Label != "elfdans" {
+		t.Fatalf("device token label = %q, want the default %q", device.Label, "elfdans")
 	}
 }
 

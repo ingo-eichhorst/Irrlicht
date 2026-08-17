@@ -1,4 +1,4 @@
-module irrlicht/tools/beacon-drive
+module irrlicht/tools/elfdans-drive
 
 go 1.25.12
 

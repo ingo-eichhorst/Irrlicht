@@ -25,7 +25,7 @@ irrlichd ──(daemon role)──▶ irrlichtrelay ◀──(client role)──
   [Auth, TLS, and origins](#auth-tls-and-origins)). Relay state is in-memory
   and rebuilt from each daemon's reconnect `daemon_snapshot`. The relay does
   write a few small files — hashed tokens, and the push identity/registry once
-  a phone is paired ([Push endpoints](#push-endpoints-beacon)) — but **no
+  a phone is paired ([Push endpoints](#push-endpoints-elfdans)) — but **no
   session content is ever at rest on the relay host.**
 
 ## Versioning
@@ -168,7 +168,7 @@ different port is cross-origin). `serve --origin-allowlist host1,host2`
 restricts which browser `Origin`s may open the socket; non-browser peers send
 no `Origin` and are always admitted, with auth still gating them.
 
-### Push endpoints (Beacon)
+### Push endpoints (Elfdans)
 
 Phone notifications add **no frames to the protocol above** — the daemon is
 unchanged and needs no upgrade. Everything is relay-local REST plus outbound

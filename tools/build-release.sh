@@ -24,11 +24,11 @@ echo "Building Irrlicht v$VERSION"
 echo "============================================="
 
 # ── Web payload (single source of truth for all three copy sites) ─────
-# Every file the dashboard + Beacon PWA need at runtime, copied into the
+# Every file the dashboard + Elfdans PWA need at runtime, copied into the
 # darwin tarball, the linux tarballs, and the app bundle Resources alike.
 # irrlicht.js statically imports its sibling modules, so a list holding only
 # the entry files serves a dashboard that 404s its own module graph and
-# cannot boot; sw.js and beacon-icon.svg are referenced by nothing statically
+# cannot boot; sw.js and elfdans-icon.svg are referenced by nothing statically
 # (runtime registration / manifest JSON), so forgetting them ships a silently
 # push-less PWA (docs/mobile-notifications-arc42.md §8.7, risk 6). Kept
 # complete by platforms/web/release-files.test.js, which derives the required
@@ -38,9 +38,9 @@ WEB_FILES=(
     index.html
     irrlicht.css
     irrlicht.js
-    beacon-icon.svg
-    beacon.js
-    beacon.webmanifest
+    elfdans-icon.svg
+    elfdans.js
+    elfdans.webmanifest
     collapsedGroups.js
     collapsedSet.js
     collapsedSummaries.js

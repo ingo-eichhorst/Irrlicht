@@ -15,16 +15,16 @@ import { toggleGroupCollapsed } from './collapsedGroups.js'
 // spelled out here.
 
 const mocks = vi.hoisted(() => ({
-  initBeacon: vi.fn(async () => {}),
+  initElfdans: vi.fn(async () => {}),
   publishLedgerSnapshot: vi.fn(async () => true),
   ledgerEntry: vi.fn(async () => null),
 }))
 
-// beacon.js's own wiring is exercised in beacon.test.js and
-// beacon.deeplink.test.js; here it is replaced so the two seams the dashboard
-// uses are observable and initBeacon's feature-detection fetch stays out of
+// elfdans.js's own wiring is exercised in elfdans.test.js and
+// elfdans.deeplink.test.js; here it is replaced so the two seams the dashboard
+// uses are observable and initElfdans's feature-detection fetch stays out of
 // the way.
-vi.mock('./beacon.js', async (importOriginal) => ({ ...(await importOriginal()), ...mocks }))
+vi.mock('./elfdans.js', async (importOriginal) => ({ ...(await importOriginal()), ...mocks }))
 
 const DAEMON = 'daemon-a'
 const BARE = 'proc-1'
@@ -86,15 +86,15 @@ describe('a bare relay session id resolves to the row the dashboard actually key
   test('the tap selects that row, visibly', () => {
     irrlicht.focusSessionFromNotification(BARE)
     const row = rowFor(COMPOUND)
-    expect(row.classList.contains('beacon-focus')).toBe(true)
-    expect(document.getElementById('beacon-notice'), 'a resolved tap has nothing to report').toBeNull()
+    expect(row.classList.contains('elfdans-focus')).toBe(true)
+    expect(document.getElementById('elfdans-notice'), 'a resolved tap has nothing to report').toBeNull()
   })
 
   test('the selection survives the next render, which rewrites every className', () => {
     // reconcile repaints a row's class list on every update, so the selection
     // is re-applied from state rather than set once on the element.
     ws.simulateMessage(sessionFrame({ session_id: BARE, state: 'ready', project_name: 'irrlicht' }))
-    expect(rowFor(COMPOUND).classList.contains('beacon-focus')).toBe(true)
+    expect(rowFor(COMPOUND).classList.contains('elfdans-focus')).toBe(true)
   })
 })
 
@@ -103,24 +103,24 @@ describe('a tap whose session is not in the list says so (R6)', () => {
     mocks.ledgerEntry.mockResolvedValueOnce(null)
     irrlicht.focusSessionFromNotification('proc-gone')
     await settle()
-    const notice = document.getElementById('beacon-notice')
+    const notice = document.getElementById('elfdans-notice')
     expect(notice, 'a tap that resolved to nothing left no trace at all').toBeTruthy()
     expect(notice.textContent).toMatch(/not in the list/i)
     expect(mocks.ledgerEntry).toHaveBeenCalledWith('proc-gone')
     // And the previous selection is dropped — leaving it would point at the
     // wrong session while the notice talks about another.
-    expect(rowFor(COMPOUND).classList.contains('beacon-focus')).toBe(false)
+    expect(rowFor(COMPOUND).classList.contains('elfdans-focus')).toBe(false)
   })
 
   test('the notice is dismissible, and the next resolved tap clears it', async () => {
-    document.getElementById('beacon-notice').click()
-    expect(document.getElementById('beacon-notice')).toBeNull()
+    document.getElementById('elfdans-notice').click()
+    expect(document.getElementById('elfdans-notice')).toBeNull()
 
     irrlicht.focusSessionFromNotification('proc-gone-2')
     await settle()
-    expect(document.getElementById('beacon-notice')).toBeTruthy()
+    expect(document.getElementById('elfdans-notice')).toBeTruthy()
     irrlicht.focusSessionFromNotification(BARE)
-    expect(document.getElementById('beacon-notice')).toBeNull()
+    expect(document.getElementById('elfdans-notice')).toBeNull()
   })
 
   test('with a ledger row, the last-known state IS the answer — stated "as of", never as now', async () => {
@@ -129,7 +129,7 @@ describe('a tap whose session is not in the list says so (R6)', () => {
     })
     irrlicht.focusSessionFromNotification('proc-elsewhere')
     await settle()
-    const text = document.getElementById('beacon-notice').textContent
+    const text = document.getElementById('elfdans-notice').textContent
     expect(text).toContain('codex')
     expect(text).toContain('webapp')
     expect(text).toMatch(/last known waiting/)
@@ -175,8 +175,8 @@ describe('a session the dashboard holds but is not painting', () => {
 
     irrlicht.focusSessionFromNotification(BARE)
     expect(rowFor(COMPOUND)).toBeTruthy()
-    expect(rowFor(COMPOUND).classList.contains('beacon-focus')).toBe(true)
-    expect(document.getElementById('beacon-notice')).toBeNull()
+    expect(rowFor(COMPOUND).classList.contains('elfdans-focus')).toBe(true)
+    expect(document.getElementById('elfdans-notice')).toBeNull()
   })
 })
 
@@ -193,11 +193,11 @@ describe('a bare id two daemons both use', () => {
     expect(rowFor(compoundSessionId('daemon-b', BARE)), 'the second daemon produced no row').toBeTruthy()
 
     irrlicht.focusSessionFromNotification(BARE)
-    const notice = document.getElementById('beacon-notice')
+    const notice = document.getElementById('elfdans-notice')
     expect(notice, 'two rows matched and the app said nothing about it').toBeTruthy()
     expect(notice.textContent).toMatch(/share that id/i)
     // One of them IS selected — a tap that reports ambiguity and then shows
     // nothing is the silent failure wearing a longer sentence.
-    expect(document.querySelectorAll('#session-list .session-row.beacon-focus')).toHaveLength(1)
+    expect(document.querySelectorAll('#session-list .session-row.elfdans-focus')).toHaveLength(1)
   })
 })

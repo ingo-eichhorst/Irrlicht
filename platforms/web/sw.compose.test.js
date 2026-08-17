@@ -200,7 +200,7 @@ describe('composeNotification (arc42 §8.2/§8.4)', () => {
     // notification uses, or proving delivery would replace the banner the
     // user actually needed.
     const n = sw.composeNotification({ v: 1, kind: 'test', at: 1755000000, renotify: true })
-    expect(n.tag).toBe('beacon-test')
+    expect(n.tag).toBe('elfdans-test')
     expect(n.tag).not.toBe('summary')
     expect(n.tag.startsWith('daemon:')).toBe(false)
     expect(n.renotify).toBe(true)
@@ -590,7 +590,7 @@ describe('messages from the app (arc42 §8.5)', () => {
   test('a live-sessions message folds, refreshes the badge, and answers', async () => {
     const { sw, backend } = workerWithLedger({ seed: { 's-gone': { state: 'waiting' } } })
     const ev = messageEvent({
-      type: 'beacon-live-sessions',
+      type: 'elfdans-live-sessions',
       sessions: [{ session_id: 's-1', state: 'waiting', at: 1755000100 }],
     })
     sw.listeners.message[0](ev)
@@ -602,12 +602,12 @@ describe('messages from the app (arc42 §8.5)', () => {
 
   test('a ledger-get message answers the entry, and null for a session it never saw', async () => {
     const { sw } = workerWithLedger({ seed: { 's-1': { state: 'waiting', at: 1755000000 } } })
-    const hit = messageEvent({ type: 'beacon-ledger-get', session_id: 's-1' })
+    const hit = messageEvent({ type: 'elfdans-ledger-get', session_id: 's-1' })
     sw.listeners.message[0](hit)
     await hit.chain
     expect(hit.replies).toEqual([{ entry: { state: 'waiting', at: 1755000000 } }])
 
-    const miss = messageEvent({ type: 'beacon-ledger-get', session_id: 's-nobody' })
+    const miss = messageEvent({ type: 'elfdans-ledger-get', session_id: 's-nobody' })
     sw.listeners.message[0](miss)
     await miss.chain
     expect(miss.replies).toEqual([{ entry: null }])
@@ -618,7 +618,7 @@ describe('messages from the app (arc42 §8.5)', () => {
     // reply that never arrives would hang — the silent failure arc42 §8.3
     // forbids, and the one this whole slice is about.
     const { sw } = workerWithLedger()
-    const ev = messageEvent({ type: 'beacon-from-the-future' })
+    const ev = messageEvent({ type: 'elfdans-from-the-future' })
     sw.listeners.message[0](ev)
     await ev.chain
     expect(ev.replies).toEqual([null])
@@ -627,7 +627,7 @@ describe('messages from the app (arc42 §8.5)', () => {
   test('a ledger failure is reported to the caller rather than swallowed', async () => {
     const { sw, backend } = workerWithLedger()
     backend.all = () => Promise.reject(new Error('QuotaExceededError'))
-    const ev = messageEvent({ type: 'beacon-live-sessions', sessions: [] })
+    const ev = messageEvent({ type: 'elfdans-live-sessions', sessions: [] })
     sw.listeners.message[0](ev)
     await ev.chain
     expect(ev.replies).toEqual([{ error: 'QuotaExceededError' }])
@@ -635,7 +635,7 @@ describe('messages from the app (arc42 §8.5)', () => {
 
   test('a message with no reply port does not throw', async () => {
     const { sw } = workerWithLedger()
-    const ev = { data: { type: 'beacon-live-sessions', sessions: [] }, chain: null, waitUntil(p) { this.chain = p } }
+    const ev = { data: { type: 'elfdans-live-sessions', sessions: [] }, chain: null, waitUntil(p) { this.chain = p } }
     sw.listeners.message[0](ev)
     await expect(ev.chain).resolves.toBeUndefined()
   })
@@ -770,19 +770,19 @@ describe('the deep link a tap carries (R6)', () => {
     const ev = clickEvent({ session_id: 's-7' })
     sw.listeners.notificationclick[0](ev)
     await ev.chain
-    expect(win.postMessage).toHaveBeenCalledWith({ type: 'beacon-open-session', session_id: 's-7' })
+    expect(win.postMessage).toHaveBeenCalledWith({ type: 'elfdans-open-session', session_id: 's-7' })
     expect(win.focus).toHaveBeenCalled()
     expect(sw.clients.openWindow).not.toHaveBeenCalled()
   })
 
   test('a cold open carries the session in the URL fragment, encoded', async () => {
     // postMessage would race a page that has not run its modules yet, so the
-    // cold route is the fragment; beacon.js reads it during initBeacon.
+    // cold route is the fragment; elfdans.js reads it during initElfdans.
     const sw = loadWorker()
     const ev = clickEvent({ session_id: 'proc 12/34' })
     sw.listeners.notificationclick[0](ev)
     await ev.chain
-    expect(sw.clients.openWindow).toHaveBeenCalledWith('./#beacon-session=proc%2012%2F34')
+    expect(sw.clients.openWindow).toHaveBeenCalledWith('./#elfdans-session=proc%2012%2F34')
   })
 
   test('a window that refuses the message is still focused', async () => {

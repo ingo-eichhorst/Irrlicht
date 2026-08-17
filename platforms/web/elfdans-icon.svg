@@ -1,6 +1,6 @@
-<!-- Irrlicht Beacon icon — a hand-drawn lantern on a rounded square, using the
+<!-- Irrlicht Elfdans icon — a hand-drawn lantern on a rounded square, using the
      dashboard palette from irrlicht.css (surface #0f1628, muted #8e96b3,
-     waiting-orange #FF9500). Referenced by beacon.webmanifest; note that iOS
+     waiting-orange #FF9500). Referenced by elfdans.webmanifest; note that iOS
      ignores manifest SVG icons, so an apple-touch-icon PNG is a known
      follow-up (docs/mobile-notifications-arc42.md ADR-2 install friction). -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">

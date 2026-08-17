@@ -11,12 +11,12 @@ package main
 // pushes a scenario provokes land on a phone that may be in another room, and
 // on a relay with nothing paired they land nowhere at all — and "the policy
 // engine decided nothing" is indistinguishable from "everything worked" when
-// no one is looking. That is the failure mode tools/beacon-rig.sh's ground
+// no one is looking. That is the failure mode tools/elfdans-rig.sh's ground
 // rule names: a check that cannot run must fail loudly rather than skip.
 //
 // A real phone paired to the same relay still gets every one of these pushes.
 // The observer is an additional subscription, not a replacement for the
-// device half of docs/beacon-device-test.md.
+// device half of docs/elfdans-device-test.md.
 
 import (
 	"bytes"
@@ -43,7 +43,7 @@ const (
 	// observerLabel names the device token in `irrlichtrelay token list`, so
 	// an operator reading that list can tell this driver's pairing from a
 	// phone's at a glance.
-	observerLabel = "beacon-drive observer"
+	observerLabel = "elfdans-drive observer"
 
 	// pushBodyLimit bounds a push body we accept. The relay pads every
 	// record to webpush.DefaultPadTo (2 KiB) plus a 86-byte header and a GCM

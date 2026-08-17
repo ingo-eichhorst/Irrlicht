@@ -1,6 +1,6 @@
 package main
 
-// The six scenarios, one per row of docs/beacon-device-test.md Phase 5 that
+// The six scenarios, one per row of docs/elfdans-device-test.md Phase 5 that
 // needs an agent to be driven into a state. Each one invents the sessions it
 // needs, drives the edges, and then states what
 // docs/mobile-notifications-arc42.md §8.4 says must come back.

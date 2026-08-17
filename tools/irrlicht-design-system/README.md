@@ -64,6 +64,7 @@ preview/                    ← Design-system cards — open any file directly i
 ui_kits/
   landing/                  ← Marketing-site UI kit (hero, three lights, install)
   dashboard/                ← Web dashboard UI kit (sessions, Gas Town, alerts)
+  elfdans/                  ← Irrlicht Elfdans UI kit (pairing, phone ledger, notifications)
 ```
 
 ---

@@ -1,4 +1,4 @@
-// Irrlicht Beacon service worker (docs/mobile-notifications-arc42.md §6.2,
+// Irrlicht Elfdans service worker (docs/mobile-notifications-arc42.md §6.2,
 // §8.2, §8.4, §8.5).
 //
 // Additivity contract (arc42 §5.2): this worker handles `push`,
@@ -7,7 +7,7 @@
 // dashboard stale, breaking the guarantee that local daemon serving stays
 // byte-identical. sw-contract.test.js pins this statically. The `message`
 // handler is reachable only from a page that already holds this registration
-// (the dashboard, via beacon.js), and touches nothing but the ledger below, so
+// (the dashboard, via elfdans.js), and touches nothing but the ledger below, so
 // it cannot come between the page and its assets.
 //
 // Classic script, not a module — broadest WebKit compatibility, and it keeps
@@ -102,9 +102,9 @@ self.composeNotification = function (payload) {
       // carries no session, so the ledger fold below ignores it and the
       // badge is untouched.
       return {
-        title: 'Beacon test notification',
+        title: 'Elfdans test notification',
         body: 'Push delivery from your relay is working.',
-        tag: 'beacon-test',
+        tag: 'elfdans-test',
         renotify: !!payload.renotify,
       };
     default:
@@ -115,14 +115,14 @@ self.composeNotification = function (payload) {
 
 // The three message types the dashboard and this worker exchange, plus the
 // URL-fragment key a cold open carries. Spelled as literals because this file
-// is a classic script with nothing to import from (see the header); beacon.js
+// is a classic script with nothing to import from (see the header); elfdans.js
 // exports the same four values and sw-contract.test.js pins the two copies
 // together, so a rename on one side cannot quietly stop the other from being
 // heard.
-const MSG_LIVE_SESSIONS = 'beacon-live-sessions';
-const MSG_LEDGER_GET = 'beacon-ledger-get';
-const MSG_OPEN_SESSION = 'beacon-open-session';
-const SESSION_HASH_KEY = 'beacon-session';
+const MSG_LIVE_SESSIONS = 'elfdans-live-sessions';
+const MSG_LEDGER_GET = 'elfdans-ledger-get';
+const MSG_OPEN_SESSION = 'elfdans-open-session';
+const SESSION_HASH_KEY = 'elfdans-session';
 
 // Last-known-state ledger (arc42 §8.5): folded from push payloads while
 // backgrounded and from the dashboard's own live view while open, never
@@ -178,7 +178,7 @@ self.ledgerStore = function (backend) {
     // while it is connected it is the closer thing to truth — a session that
     // left `waiting`, and a session that ended entirely, both have to stop
     // counting. A row the live set does not name is dropped for the same
-    // reason. beacon.js publishes only while the live view watches the relay
+    // reason. elfdans.js publishes only while the live view watches the relay
     // that pairs this phone, so "the live set does not name it" means the
     // session is gone rather than merely out of view.
     foldLiveSessions: function (sessions) {
@@ -255,7 +255,7 @@ self.refreshBadge = function (store) {
 // rather than an empty result, so the caller can tell it apart from an empty
 // ledger (arc42 §8.3).
 self.idbLedgerBackend = function () {
-  const DB = 'beacon-ledger';
+  const DB = 'elfdans-ledger';
   const STORE = 'sessions';
   const VERSION = 1;
 
@@ -352,7 +352,7 @@ self.handlePush = function (event) {
       body: n.body,
       tag: n.tag,
       renotify: n.renotify,
-      icon: 'beacon-icon.svg',
+      icon: 'elfdans-icon.svg',
       data: n.data || null,
     }),
     store.update(payload).then(function () { return self.refreshBadge(store); }),
@@ -387,7 +387,7 @@ self.focusOrOpenClient = function (sessionId) {
     });
 };
 
-// Messages from the app (beacon.js). Anything with a reply port is ANSWERED,
+// Messages from the app (elfdans.js). Anything with a reply port is ANSWERED,
 // including a message this worker does not understand: a caller awaiting a
 // reply that never arrives is the silent failure arc42 §8.3 forbids, and an
 // older worker meeting a newer app is exactly when it would happen.

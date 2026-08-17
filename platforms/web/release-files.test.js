@@ -85,7 +85,7 @@ describe('release copy list (build-release.sh WEB_FILES)', () => {
     ).toEqual([])
   })
 
-  test('every file the dashboard + Beacon PWA need is in WEB_FILES', () => {
+  test('every file the dashboard + Elfdans PWA need is in WEB_FILES', () => {
     const { files } = deriveShippedSet()
     const [list] = parseWebFilesLists(readFileSync(RELEASE_SCRIPT, 'utf8'))
     const missing = [...files].filter((f) => !list.includes(f)).sort()
@@ -100,19 +100,19 @@ describe('release copy list (build-release.sh WEB_FILES)', () => {
 
   test('the PWA members are required whatever index.html happens to reference', () => {
     // Deriving the requirement purely from index.html means deleting a link
-    // SHRINKS it — and a release without beacon.webmanifest cannot be
+    // SHRINKS it — and a release without elfdans.webmanifest cannot be
     // installed on iOS at all, which is where push is mandatory (arc42 ADR-2).
     const html = readFileSync(join(WEB_DIR, 'index.html'), 'utf8')
     const stripped = html.replace(/<link\b[^>]*\brel="manifest"[^>]*>/, '')
     expect(stripped, 'index.html no longer carries the manifest link this case removes').not.toBe(html)
     const { files } = deriveShippedSet({ html: stripped })
-    expect(REQUIRED_SHIPPED_MEMBERS).toContain('beacon.webmanifest')
-    expect([...files]).toEqual(expect.arrayContaining([...REQUIRED_SHIPPED_MEMBERS, 'beacon-icon.svg']))
+    expect(REQUIRED_SHIPPED_MEMBERS).toContain('elfdans.webmanifest')
+    expect([...files]).toEqual(expect.arrayContaining([...REQUIRED_SHIPPED_MEMBERS, 'elfdans-icon.svg']))
   })
 
   test('index.html does link the manifest (the arm above must not become the only reason it ships)', () => {
     const entries = parseHtmlEntries(readFileSync(join(WEB_DIR, 'index.html'), 'utf8'))
-    expect(entries).toContain('beacon.webmanifest')
+    expect(entries).toContain('elfdans.webmanifest')
   })
 })
 
@@ -122,7 +122,7 @@ describe('release copy list (build-release.sh WEB_FILES)', () => {
 // the three entry files while irrlicht.js imported ten siblings. The
 // Dockerfile's failure was measured live — `GET /collapsedGroups.js` answered
 // 404 inside the running container, so the dashboard could not boot and the
-// Beacon PWA files were absent entirely, leaving the relay serving a push API
+// Elfdans PWA files were absent entirely, leaving the relay serving a push API
 // with no client able to consume it (docs/mobile-notifications-arc42.md §8.7,
 // risk 6).
 describe('relay image web payload (examples/relay/Dockerfile)', () => {
@@ -135,7 +135,7 @@ describe('relay image web payload (examples/relay/Dockerfile)', () => {
     expect(['directory', 'enumerated']).toContain(relayImageWebFiles().payload.strategy)
   })
 
-  test('every file the dashboard + Beacon PWA need reaches the image', () => {
+  test('every file the dashboard + Elfdans PWA need reaches the image', () => {
     const { files } = deriveShippedSet()
     const shipped = relayImageWebFiles().files
     const missing = [...files].filter((f) => !shipped.includes(f)).sort()
@@ -171,7 +171,7 @@ describe('curl installer web payload (site/install.sh)', () => {
     expect(payload.wholesale.length + payload.enumerated.length).toBeGreaterThan(0)
   })
 
-  test('every file the dashboard + Beacon PWA need is installed', () => {
+  test('every file the dashboard + Elfdans PWA need is installed', () => {
     const payload = parseInstallShWebPayload(readFileSync(INSTALL_SH, 'utf8'))
     if (payload.strategy === 'directory') {
       // Copying the extracted directory wholesale carries whatever the tarball
@@ -211,7 +211,7 @@ describe('installed-app chrome colours', () => {
     // keeps the gap a stated single choice rather than a third colour nobody
     // notices drifting — index.html's comment names it as the surface those
     // metas do not reach.
-    const manifest = JSON.parse(readFileSync(join(WEB_DIR, 'beacon.webmanifest'), 'utf8'))
+    const manifest = JSON.parse(readFileSync(join(WEB_DIR, 'elfdans.webmanifest'), 'utf8'))
     const dark = themeColorMeta(html(), 'dark')
     expect(dark, 'index.html no longer carries a dark-scheme theme-color meta').toBeTruthy()
     expect(manifest.theme_color).toBe(dark)
@@ -281,7 +281,7 @@ describe('relay/installer guards, driven against deliberately-wrong sources', ()
     expect(payload.copies).toHaveLength(1)
     const rules = parseDockerignore(IGNORE_GOOD)
     expect(dockerignoreExcludes(rules, 'platforms/web/irrlicht.js')).toBe(false)
-    expect(dockerignoreExcludes(rules, 'platforms/web/beacon.webmanifest')).toBe(false)
+    expect(dockerignoreExcludes(rules, 'platforms/web/elfdans.webmanifest')).toBe(false)
   })
 
   test('a Dockerfile that drifted back to naming files is read as an enumeration, not a directory', () => {
@@ -365,7 +365,7 @@ describe('relay/installer guards, driven against deliberately-wrong sources', ()
 describe('dockerignore matcher', () => {
   const cases = [
     ['exact path', ['platforms/web/package.json'], 'platforms/web/package.json', true],
-    ['glob within a segment', ['platforms/web/*.test.js'], 'platforms/web/beacon.test.js', true],
+    ['glob within a segment', ['platforms/web/*.test.js'], 'platforms/web/elfdans.test.js', true],
     ['double-star prefix', ['**/node_modules'], 'platforms/web/node_modules', true],
     ['a matched directory takes its contents with it', ['**/node_modules'], 'platforms/web/node_modules/vitest/index.js', true],
     ['leading slash is stripped', ['/.build'], '.build', true],
@@ -424,13 +424,13 @@ describe('shipped-set parsers', () => {
   const htmlCases = [
     ['double-quoted script', '<script type="module" src="irrlicht.js"></script>', ['irrlicht.js']],
     ['stylesheet link', '<link rel="stylesheet" href="irrlicht.css">', ['irrlicht.css']],
-    ['manifest link', '<link rel="manifest" href="beacon.webmanifest">', ['beacon.webmanifest']],
-    ['href before rel', '<link href="beacon.webmanifest" rel="manifest">', ['beacon.webmanifest']],
+    ['manifest link', '<link rel="manifest" href="elfdans.webmanifest">', ['elfdans.webmanifest']],
+    ['href before rel', '<link href="elfdans.webmanifest" rel="manifest">', ['elfdans.webmanifest']],
     // The shapes the first version of this parser silently dropped.
     ['single-quoted attributes', "<script src='irrlicht.js'></script>", ['irrlicht.js']],
     ['unquoted attributes', '<script src=irrlicht.js></script>', ['irrlicht.js']],
     ['multi-token rel', '<link rel="stylesheet alternate" href="alt.css">', ['alt.css']],
-    ['icon rel', '<link rel="apple-touch-icon" href="beacon-icon.svg">', ['beacon-icon.svg']],
+    ['icon rel', '<link rel="apple-touch-icon" href="elfdans-icon.svg">', ['elfdans-icon.svg']],
     // Must NOT be read as an entry.
     ['inline script', '<script>const x = 1;</script>', []],
     ['unrelated rel', '<link rel="dns-prefetch" href="https://example.test">', []],

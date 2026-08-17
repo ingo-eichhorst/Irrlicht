@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Irrlicht</title>
   <link rel="stylesheet" href="irrlicht.css">
-  <!-- Irrlicht Beacon PWA manifest (docs/mobile-notifications-arc42.md ADR-2/
+  <!-- Irrlicht Elfdans PWA manifest (docs/mobile-notifications-arc42.md ADR-2/
        ADR-3). Inert on the daemon-served dashboard — installability without
        pairing is harmless; push only ever follows the explicit pairing flow. -->
-  <link rel="manifest" href="beacon.webmanifest">
+  <link rel="manifest" href="elfdans.webmanifest">
   <!-- The manifest's theme_color is a single value, so the installed app would
        wear the dark chrome on a light phone. These two override it per scheme,
        for the surface the CSS tokens cannot reach: the OS paints the browser
@@ -105,11 +105,11 @@
         </span>
       </label>
 
-      <!-- Irrlicht Beacon (phone notifications) — populated by beacon.js only
+      <!-- Irrlicht Elfdans (phone notifications) — populated by elfdans.js only
            when this origin answers /api/v1/push/info with enabled:true
            (docs/mobile-notifications-arc42.md §5.2 additivity contract: the
            daemon-served dashboard and old relays show nothing here). -->
-      <div id="beacon-section" hidden></div>
+      <div id="elfdans-section" hidden></div>
 
       <details class="settings-advanced" id="settings-advanced">
         <summary>

@@ -14,15 +14,15 @@ import { describe, test, expect, beforeAll, vi } from 'vitest'
 // which is the ordering a relay on a warm connection actually produces.
 
 const mocks = vi.hoisted(() => ({
-  initBeacon: vi.fn(async () => {}),
+  initElfdans: vi.fn(async () => {}),
   publishLedgerSnapshot: vi.fn(async () => true),
   ledgerEntry: vi.fn(async () => null),
 }))
-vi.mock('./beacon.js', async (importOriginal) => ({ ...(await importOriginal()), ...mocks }))
+vi.mock('./elfdans.js', async (importOriginal) => ({ ...(await importOriginal()), ...mocks }))
 
 const DAEMON = 'daemon-a'
 const BARE = 'proc-1'
-const DEBOUNCE_MS = 700 // beacon publish debounce (500ms) plus slack
+const DEBOUNCE_MS = 700 // elfdans publish debounce (500ms) plus slack
 
 let ws = null
 

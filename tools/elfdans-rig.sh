@@ -1,35 +1,35 @@
 #!/usr/bin/env bash
-# beacon-rig.sh — stand up an isolated relay for the Beacon device test, and
-# run every assertion from docs/beacon-device-test.md that does not need a
+# elfdans-rig.sh — stand up an isolated relay for the Elfdans device test, and
+# run every assertion from docs/elfdans-device-test.md that does not need a
 # phone in your hand.
 #
-#   tools/beacon-rig.sh up [--serve]   build + start a relay on 127.0.0.1:7839
+#   tools/elfdans-rig.sh up [--serve]   build + start a relay on 127.0.0.1:7839
 #                                      with auth on, in its own state dir;
 #                                      --serve also publishes it over Tailscale
-#   tools/beacon-rig.sh check          run the phone-free assertions (exit 1 on
+#   tools/elfdans-rig.sh check          run the phone-free assertions (exit 1 on
 #                                      the first failure, with the reason)
-#   tools/beacon-rig.sh drive <name>   drive one Phase 5 policy scenario through
+#   tools/elfdans-rig.sh drive <name>   drive one Phase 5 policy scenario through
 #                                      the relay as a synthetic daemon: waiting,
 #                                      ready, flap, burst, subagent, disconnect
-#   tools/beacon-rig.sh status         what is running, and where its state is
-#   tools/beacon-rig.sh down [--wipe]  stop it; --wipe also deletes the state
+#   tools/elfdans-rig.sh status         what is running, and where its state is
+#   tools/elfdans-rig.sh down [--wipe]  stop it; --wipe also deletes the state
 #
-# The state dir is .build/beacon-rig — never $IRRLICHT_HOME, never your real
+# The state dir is .build/elfdans-rig — never $IRRLICHT_HOME, never your real
 # ~/.local/share/irrlicht — so nothing here can touch a production relay's
 # tokens or a paired phone's subscription.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-RIG_DIR="$REPO_ROOT/.build/beacon-rig"
+RIG_DIR="$REPO_ROOT/.build/elfdans-rig"
 STATE_DIR="$RIG_DIR/state"
 BIN="$RIG_DIR/irrlichtrelay"
-DRIVE_BIN="$RIG_DIR/beacon-drive"
+DRIVE_BIN="$RIG_DIR/elfdans-drive"
 DRIVE_STATE="$RIG_DIR/drive-state.json"
 PID_FILE="$RIG_DIR/relay.pid"
 LOG_FILE="$RIG_DIR/relay.log"
 TOKEN_FILE="$RIG_DIR/client-token"
-PORT="${BEACON_RIG_PORT:-7839}"
+PORT="${ELFDANS_RIG_PORT:-7839}"
 BASE="http://127.0.0.1:$PORT"
 
 die() { printf '\033[31mFAIL\033[0m %s\n' "$*" >&2; exit 1; }
@@ -71,14 +71,14 @@ start_relay() {
     # just launched is already dead of a bind error — and the rig reports
     # "up" over somebody else's state.
     kill -0 "$pid" 2>/dev/null \
-        || die "something else is serving $BASE — our relay exited (see $LOG_FILE). Free the port, or set BEACON_RIG_PORT."
+        || die "something else is serving $BASE — our relay exited (see $LOG_FILE). Free the port, or set ELFDANS_RIG_PORT."
 }
 
 # 7839 is the relay's production default, so a busy port is more likely to be
 # something the user cares about than a stray of ours. Refuse; never kill it.
 port_free_or_die() {
     if curl -fsS "$BASE/api/v1/version" >/dev/null 2>&1; then
-        die "$BASE is already serving — refusing to start a second relay on it. Stop it, or run with BEACON_RIG_PORT=7859."
+        die "$BASE is already serving — refusing to start a second relay on it. Stop it, or run with ELFDANS_RIG_PORT=7859."
     fi
 }
 
@@ -97,7 +97,7 @@ cmd_up() {
 
     if [ ! -s "$TOKEN_FILE" ]; then
         info "issuing a client token"
-        relay_env "$BIN" token issue --label "beacon-rig-client" --workspace rig \
+        relay_env "$BIN" token issue --label "elfdans-rig-client" --workspace rig \
             | awk '/^  /{print $1}' | tail -1 > "$TOKEN_FILE"
         [ -s "$TOKEN_FILE" ] || die "token issue produced no plaintext token"
         chmod 600 "$TOKEN_FILE"
@@ -122,8 +122,8 @@ Client token (Settings → Sources, and what mints pairing codes):
 Point a daemon at it:
   IRRLICHT_RELAY_TOKEN=$(cat "$TOKEN_FILE") IRRLICHT_RELAY_URL=ws://127.0.0.1:$PORT core/bin/irrlichd
 
-Then: tools/beacon-rig.sh check    # the phone-free assertions
-      docs/beacon-device-test.md   # the phases that need the phone
+Then: tools/elfdans-rig.sh check    # the phone-free assertions
+      docs/elfdans-device-test.md   # the phases that need the phone
 EOF
 }
 
@@ -249,7 +249,7 @@ cmd_check() {
 
     relay_running || die "the checks passed but the relay is not running — 'up' before the device phases"
     printf '\n\033[32mAll phone-free checks passed.\033[0m Phases 3, 4 and the visual half of 5\n'
-    printf 'in docs/beacon-device-test.md still need a real device. The relay is still up.\n'
+    printf 'in docs/elfdans-device-test.md still need a real device. The relay is still up.\n'
     return $failures
 }
 
@@ -258,12 +258,21 @@ cmd_check_guard() {
     require_tools curl
     local gport=$((PORT + 10)) gdir="$RIG_DIR/guard-state" gbase
     gbase="http://127.0.0.1:$gport"
+    [ -x "$BIN" ] || die "no relay binary at $BIN — 'up' first (it builds one)"
     rm -rf "$gdir"; mkdir -p "$gdir"
     info "starting a second relay with --auth off on $gbase"
     env IRRLICHT_HOME="$gdir" "$BIN" serve --addr "127.0.0.1:$gport" --auth off >"$RIG_DIR/guard.log" 2>&1 &
     local gpid=$!
     trap 'kill '"$gpid"' 2>/dev/null || true' RETURN
-    for _ in $(seq 1 50); do curl -fsS "$gbase/api/v1/version" >/dev/null 2>&1 && break; sleep 0.1; done
+    local ready=""
+    for _ in $(seq 1 50); do curl -fsS "$gbase/api/v1/version" >/dev/null 2>&1 && { ready=1; break; }; sleep 0.1; done
+    # A guard relay that never answered has to say so. Without this the checks
+    # below curl a dead port, read an empty body, and report the ASSERTION as
+    # failed — "an anonymous relay advertises push as enabled" about a relay
+    # that never started. That is the one diagnosis that sends the reader into
+    # the wrong file, and it is what this ran into: `check` before `up` left no
+    # binary to exec, and the rig blamed the §8.1 guard for it.
+    [ -n "$ready" ] || die "the --auth off guard relay never answered on $gbase — $(tail -n 1 "$RIG_DIR/guard.log" 2>/dev/null || echo 'no guard.log')"
 
     curl -sS "$gbase/api/v1/push/info" | grep -q '"enabled":false' \
         || die "an anonymous relay advertises push as enabled"
@@ -277,8 +286,8 @@ cmd_check_guard() {
 }
 
 # ── drive ────────────────────────────────────────────────────────────
-# tools/beacon-drive dials this rig's relay as a daemon and produces one
-# docs/beacon-device-test.md Phase 5 row on demand — the rows that otherwise
+# tools/elfdans-drive dials this rig's relay as a daemon and produces one
+# docs/elfdans-device-test.md Phase 5 row on demand — the rows that otherwise
 # need a real agent driven into a state, and, for the burst, four of them
 # inside twenty seconds. It reuses the rig's relay URL, client token and state
 # dir, so the tester runs one tool rather than two.
@@ -293,10 +302,10 @@ cmd_drive() {
     require_tools go curl
     relay_running || die "no rig relay running — 'up' first"
     [ -s "$TOKEN_FILE" ] || die "no client token at $TOKEN_FILE — 'up' first"
-    [ "$#" -ge 1 ] || die "usage: tools/beacon-rig.sh drive <scenario> [flags]  ('drive -h' lists them)"
+    [ "$#" -ge 1 ] || die "usage: tools/elfdans-rig.sh drive <scenario> [flags]  ('drive -h' lists them)"
 
-    info "building beacon-drive"
-    ( cd "$REPO_ROOT/tools/beacon-drive" && go build -o "$DRIVE_BIN" . ) || die "build failed"
+    info "building elfdans-drive"
+    ( cd "$REPO_ROOT/tools/elfdans-drive" && go build -o "$DRIVE_BIN" . ) || die "build failed"
 
     "$DRIVE_BIN" -relay "ws://127.0.0.1:$PORT" -token "$(cat "$TOKEN_FILE")" \
         -state "$DRIVE_STATE" "$@"

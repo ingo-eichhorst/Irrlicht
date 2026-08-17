@@ -1,5 +1,5 @@
-// Command beacon-drive produces the session transitions
-// docs/beacon-device-test.md Phase 5 asks a tester to produce on demand: a
+// Command elfdans-drive produces the session transitions
+// docs/elfdans-device-test.md Phase 5 asks a tester to produce on demand: a
 // waiting edge, a ready one that survives the hold-down, a flap that cancels
 // it, four sessions entering waiting inside twenty seconds, a subagent that
 // must stay silent, and a daemon that goes away. Driving those with real
@@ -23,7 +23,7 @@
 // phantom rows in the dashboard the tester is reading.
 //
 // Two things a run leaves behind on purpose. Dropping the link at the end is
-// a real disconnect, so the §6.4 watchdog fires one "beacon-drive
+// a real disconnect, so the §6.4 watchdog fires one "elfdans-drive
 // (synthetic)" disconnected banner a minute later — the same event Phase 5's
 // watchdog row is about, and the next run's connect replaces it silently.
 // And the relay's persisted daemon roster (§8.6) holds one entry per daemon
@@ -38,10 +38,10 @@
 // exactly like "everything worked". The observed pushes are checked against
 // what §8.4 says the scenario must produce, and a mismatch exits non-zero.
 //
-//	beacon-drive -relay ws://127.0.0.1:7839 -token <client-token> waiting
+//	elfdans-drive -relay ws://127.0.0.1:7839 -token <client-token> waiting
 //
 // docs/mobile-notifications-arc42.md §8.4 is the policy table every
-// expectation below is read off; tools/beacon-rig.sh drive <scenario> is the
+// expectation below is read off; tools/elfdans-rig.sh drive <scenario> is the
 // wrapper that supplies the rig's own relay URL, token and state file.
 package main
 
@@ -75,7 +75,7 @@ var (
 func main() {
 	flag.Usage = usage
 	flag.Parse()
-	// flag stops at the first non-flag argument, so `beacon-drive burst -n 6`
+	// flag stops at the first non-flag argument, so `elfdans-drive burst -n 6`
 	// would otherwise leave "-n 6" sitting in Args as junk — and the rig
 	// passes its own flags first, which makes that the natural spelling for
 	// everything a tester adds. Take the scenario, then parse the rest.
@@ -205,7 +205,7 @@ func (e *env) verdict() error {
 	return nil
 }
 
-// --- process-level output, matching tools/beacon-rig.sh's vocabulary ---
+// --- process-level output, matching tools/elfdans-rig.sh's vocabulary ---
 
 func info(format string, a ...any) {
 	fmt.Printf("\033[36m==>\033[0m %s\n", fmt.Sprintf(format, a...))
@@ -238,9 +238,9 @@ func scenarioNames() []string {
 
 func usage() {
 	out := flag.CommandLine.Output()
-	fmt.Fprintf(out, "beacon-drive — drive synthetic session transitions through a live relay,\n")
-	fmt.Fprintf(out, "as a daemon, for docs/beacon-device-test.md Phase 5.\n\n")
-	fmt.Fprintf(out, "usage: beacon-drive [flags] <scenario>\n\nscenarios:\n")
+	fmt.Fprintf(out, "elfdans-drive — drive synthetic session transitions through a live relay,\n")
+	fmt.Fprintf(out, "as a daemon, for docs/elfdans-device-test.md Phase 5.\n\n")
+	fmt.Fprintf(out, "usage: elfdans-drive [flags] <scenario>\n\nscenarios:\n")
 	for _, name := range scenarioNames() {
 		sc := scenarios[name]
 		fmt.Fprintf(out, "  %-11s %s\n", name, sc.doc)

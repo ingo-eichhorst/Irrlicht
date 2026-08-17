@@ -15,7 +15,7 @@ import {
   cacheBloatBadgeText,
 } from './formatters.js';
 import { reconcile, paintRowNum } from './domReconcile.js';
-import { initBeacon, publishLedgerSnapshot, ledgerEntry } from './beacon.js';
+import { initElfdans, publishLedgerSnapshot, ledgerEntry } from './elfdans.js';
 
     // --- State ---
     let dashboardGroups = [];
@@ -142,11 +142,11 @@ import { initBeacon, publishLedgerSnapshot, ledgerEntry } from './beacon.js';
     // Settings keys that change the live source connections (vs. display-only
     // toggles), so the change handler knows to reconnect.
     const SOURCE_SETTING_KEYS = new Set(['enableLocalSource', 'enableRelaySource', 'relayUrl', 'relayToken']);
-    // The seam Beacon pairing configures the phone's own live view through
+    // The seam Elfdans pairing configures the phone's own live view through
     // (docs/mobile-notifications-arc42.md §6.2, ADR-9). It is deliberately the
     // dashboard's own mechanism — this `settings` object, persistSettings(),
     // and the same rebuildSources() the Settings → Sources change handler
-    // runs — rather than localStorage keys written by hand from beacon.js,
+    // runs — rather than localStorage keys written by hand from elfdans.js,
     // which a later change to how settings are stored would silently orphan.
     // The Settings form re-reads on open (syncSettingsForm), so nothing there
     // goes stale.
@@ -1291,12 +1291,12 @@ import { initBeacon, publishLedgerSnapshot, ledgerEntry } from './beacon.js';
       updateSummary(all, topLevel);
       renderHeaderTitle();
       refreshSummaryCollapseAllBtn();
-      // Beacon (arc42 §8.5, R6): reconcile has just rewritten every row's
+      // Elfdans (arc42 §8.5, R6): reconcile has just rewritten every row's
       // className, so the notification selection is repainted from state; a tap
       // still waiting on its session gets another look at the fresh list; and
       // the phone's ledger is told what the dashboard can now see.
-      paintBeaconFocus();
-      attemptBeaconFocus();
+      paintElfdansFocus();
+      attemptElfdansFocus();
       scheduleLedgerPublish();
     }
 
@@ -1830,7 +1830,7 @@ import { initBeacon, publishLedgerSnapshot, ledgerEntry } from './beacon.js';
 
     function ingestInitialSessions(resp) {
       if (!resp) return;
-      beaconLiveDataArrived = true;
+      elfdansLiveDataArrived = true;
       dashboardGroups = Array.isArray(resp) ? resp : (resp.groups || []);
       normalizeGroupAgents(dashboardGroups);
       dashboardProviderCosts = (resp && !Array.isArray(resp) && resp.provider_costs) || {};
@@ -2105,7 +2105,7 @@ import { initBeacon, publishLedgerSnapshot, ledgerEntry } from './beacon.js';
         // reconnect an unchanged live set would otherwise be suppressed as
         // "already published", leaving the push fold's `waiting` row and its
         // badge in place with nothing left to correct them.
-        beaconPublishedSignature = null;
+        elfdansPublishedSignature = null;
         updateWsStatus();
         scheduleReconnect(src);
       };
@@ -2242,7 +2242,7 @@ import { initBeacon, publishLedgerSnapshot, ledgerEntry } from './beacon.js';
       if (!msg.session) return;
       // A session frame landed, from any source — so "the session is not in
       // the list" has stopped being a race and can be reported (arc42 R6).
-      beaconLiveDataArrived = true;
+      elfdansLiveDataArrived = true;
       const s = msg.session;
       if (msg.type === 'session_deleted') {
         applySessionDelete(s.session_id);
@@ -2256,7 +2256,7 @@ import { initBeacon, publishLedgerSnapshot, ledgerEntry } from './beacon.js';
       render();
     }
 
-    // --- Beacon: notification deep link + live ledger fold (arc42 §8.5, R6) ---
+    // --- Elfdans: notification deep link + live ledger fold (arc42 §8.5, R6) ---
     //
     // A push payload names the relay's BARE session id — Payload in
     // core/domain/notify/notify.go carries no daemon id for the session kind —
@@ -2271,21 +2271,21 @@ import { initBeacon, publishLedgerSnapshot, ledgerEntry } from './beacon.js';
     // How long a tap waits for the session list before "not here" is a verdict
     // rather than a race: the app may have been opened COLD by the tap and be
     // waiting on its first frame.
-    const BEACON_TARGET_GRACE_MS = 2500;
+    const ELFDANS_TARGET_GRACE_MS = 2500;
     // The live fold is published on a debounce: a metrics tick is not news to
     // the ledger, and a phone should not post one message per row update.
-    const BEACON_PUBLISH_DEBOUNCE_MS = 500;
+    const ELFDANS_PUBLISH_DEBOUNCE_MS = 500;
 
-    let beaconTarget = null;          // { bareId, deadline } — a tap not yet resolved
-    let beaconGraceTimer = null;
-    let beaconLiveDataArrived = false;
-    let beaconFocusedSessionId = '';
+    let elfdansTarget = null;          // { bareId, deadline } — a tap not yet resolved
+    let elfdansGraceTimer = null;
+    let elfdansLiveDataArrived = false;
+    let elfdansFocusedSessionId = '';
 
     // Every row a bare id can mean. Plural on purpose: two daemons may deliver
     // the same bare session_id (`proc-<pid>` collides readily) — the ambiguity
     // the compound key exists to keep apart, and the one a notification cannot
     // resolve, since it names no daemon.
-    function beaconRowIdsFor(bareId) {
+    function elfdansRowIdsFor(bareId) {
       const out = [];
       for (const id of sessionIndex.keys()) {
         if (displaySessionId(id) === bareId) out.push(id);
@@ -2293,37 +2293,37 @@ import { initBeacon, publishLedgerSnapshot, ledgerEntry } from './beacon.js';
       return out;
     }
 
-    // Entry point for a notification tap, handed to beacon.js at wiring time.
+    // Entry point for a notification tap, handed to elfdans.js at wiring time.
     export function focusSessionFromNotification(bareId) {
       if (!bareId) return;
-      beaconTarget = { bareId: String(bareId), deadline: Date.now() + BEACON_TARGET_GRACE_MS };
-      clearBeaconGraceTimer();
+      elfdansTarget = { bareId: String(bareId), deadline: Date.now() + ELFDANS_TARGET_GRACE_MS };
+      clearElfdansGraceTimer();
       // A retry rides every render, but a phone that receives no frame at all
       // renders nothing — so the verdict carries its own clock too.
-      beaconGraceTimer = setTimeout(() => { beaconGraceTimer = null; attemptBeaconFocus(); }, BEACON_TARGET_GRACE_MS);
-      attemptBeaconFocus();
+      elfdansGraceTimer = setTimeout(() => { elfdansGraceTimer = null; attemptElfdansFocus(); }, ELFDANS_TARGET_GRACE_MS);
+      attemptElfdansFocus();
     }
 
-    function clearBeaconGraceTimer() {
-      if (beaconGraceTimer === null) return;
-      clearTimeout(beaconGraceTimer);
-      beaconGraceTimer = null;
+    function clearElfdansGraceTimer() {
+      if (elfdansGraceTimer === null) return;
+      clearTimeout(elfdansGraceTimer);
+      elfdansGraceTimer = null;
     }
 
-    function attemptBeaconFocus() {
-      if (!beaconTarget) return;
-      const bareId = beaconTarget.bareId;
-      const ids = beaconRowIdsFor(bareId);
-      if (ids.length === 0 && !beaconLiveDataArrived && Date.now() < beaconTarget.deadline) return;
-      beaconTarget = null;
-      clearBeaconGraceTimer();
-      if (ids.length > 0) { selectBeaconRow(ids, bareId); return; }
+    function attemptElfdansFocus() {
+      if (!elfdansTarget) return;
+      const bareId = elfdansTarget.bareId;
+      const ids = elfdansRowIdsFor(bareId);
+      if (ids.length === 0 && !elfdansLiveDataArrived && Date.now() < elfdansTarget.deadline) return;
+      elfdansTarget = null;
+      clearElfdansGraceTimer();
+      if (ids.length > 0) { selectElfdansRow(ids, bareId); return; }
       // Never a tap that appears to have done nothing (R6): if the session is
       // not in the list, the app opens and says so.
-      reportBeaconSessionMissing(bareId);
+      reportElfdansSessionMissing(bareId);
     }
 
-    function beaconRowElement(sessionId) {
+    function elfdansRowElement(sessionId) {
       // Attribute-selector lookup would have to escape a compound id, which
       // carries a NUL delimiter; the existing repaintHistory walk is the idiom.
       for (const el of document.querySelectorAll('#session-list .session-row')) {
@@ -2332,21 +2332,21 @@ import { initBeacon, publishLedgerSnapshot, ledgerEntry } from './beacon.js';
       return null;
     }
 
-    function selectBeaconRow(ids, bareId) {
-      beaconFocusedSessionId = ids[0];
-      let row = beaconRowElement(ids[0]);
+    function selectElfdansRow(ids, bareId) {
+      elfdansFocusedSessionId = ids[0];
+      let row = elfdansRowElement(ids[0]);
       if (!row) {
         // The dashboard holds the session but is not painting it: its group is
         // collapsed. Expanding is the honest move — reporting "not in the list"
         // about a row a chevron would reveal is a lie.
         expandGroupsForSession(ids[0]);
         render();
-        row = beaconRowElement(ids[0]);
+        row = elfdansRowElement(ids[0]);
       }
-      if (!row) { reportBeaconSessionMissing(bareId); return; }
-      paintBeaconFocus();
+      if (!row) { reportElfdansSessionMissing(bareId); return; }
+      paintElfdansFocus();
       if (typeof row.scrollIntoView === 'function') row.scrollIntoView({ block: 'center' });
-      showBeaconNotice(ids.length > 1
+      showElfdansNotice(ids.length > 1
         ? 'Two sessions share that id — showing the first. The notification named no daemon, so this app cannot tell them apart.'
         : '');
     }
@@ -2354,15 +2354,15 @@ import { initBeacon, publishLedgerSnapshot, ledgerEntry } from './beacon.js';
     // reconcile rewrites a session row's className on every update, so the
     // selection is re-applied from state after each render rather than set once
     // on the element.
-    function paintBeaconFocus() {
+    function paintElfdansFocus() {
       for (const el of document.querySelectorAll('#session-list .session-row')) {
-        el.classList.toggle('beacon-focus', !!beaconFocusedSessionId && el.dataset.sessionId === beaconFocusedSessionId);
+        el.classList.toggle('elfdans-focus', !!elfdansFocusedSessionId && el.dataset.sessionId === elfdansFocusedSessionId);
       }
     }
 
     // The collapse key is path-qualified (see emitGroup), so the chain is
     // rebuilt the same way rather than guessed from the group's own name.
-    function beaconGroupKeyChain(group) {
+    function elfdansGroupKeyChain(group) {
       let chain = [];
       (function walk(groups, parentKey, ancestors) {
         for (const g of (groups || [])) {
@@ -2379,21 +2379,21 @@ import { initBeacon, publishLedgerSnapshot, ledgerEntry } from './beacon.js';
     function expandGroupsForSession(sessionId) {
       const entry = sessionIndex.get(sessionId);
       if (!entry) return;
-      for (const key of beaconGroupKeyChain(entry.group)) {
+      for (const key of elfdansGroupKeyChain(entry.group)) {
         if (isGroupCollapsed(key)) toggleGroupCollapsed(key);
       }
     }
 
-    async function reportBeaconSessionMissing(bareId) {
-      beaconFocusedSessionId = '';
-      paintBeaconFocus();
+    async function reportElfdansSessionMissing(bareId) {
+      elfdansFocusedSessionId = '';
+      paintElfdansFocus();
       let entry = null;
       try {
         entry = await ledgerEntry(bareId);
       } catch (e) {
-        console.debug('irrlicht: failed to read the beacon ledger', e);
+        console.debug('irrlicht: failed to read the elfdans ledger', e);
       }
-      showBeaconNotice(missingSessionText(bareId, entry));
+      showElfdansNotice(missingSessionText(bareId, entry));
     }
 
     // What the app says when a tap resolves to no row. The ledger is the only
@@ -2404,27 +2404,27 @@ import { initBeacon, publishLedgerSnapshot, ledgerEntry } from './beacon.js';
       const who = [entry?.label, entry?.project].filter(Boolean).join(' · ')
         || ('Session ' + String(bareId || '').slice(0, 8));
       if (entry?.state) {
-        return who + ' — last known ' + entry.state + ' ' + beaconAsOfText(entry.at)
+        return who + ' — last known ' + entry.state + ' ' + elfdansAsOfText(entry.at)
           + ', and not in the list this device is watching.';
       }
       return who + ' is not in the list this device is watching, and this phone kept no last-known state for it.';
     }
 
-    function beaconAsOfText(atSeconds) {
+    function elfdansAsOfText(atSeconds) {
       const n = Number(atSeconds);
       if (!Number.isFinite(n) || n <= 0) return 'at an unknown time';
       return 'as of ' + new Date(n * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     }
 
     // Created on demand and removed when it has nothing to say: this notice is
-    // Beacon's only mark on the dashboard chrome, and a dashboard nobody taps a
+    // Elfdans's only mark on the dashboard chrome, and a dashboard nobody taps a
     // notification into never grows it (arc42 §5.2).
-    function showBeaconNotice(text) {
-      let el = document.getElementById('beacon-notice');
+    function showElfdansNotice(text) {
+      let el = document.getElementById('elfdans-notice');
       if (!text) { if (el) el.remove(); return; }
       if (!el) {
         el = document.createElement('div');
-        el.id = 'beacon-notice';
+        el.id = 'elfdans-notice';
         el.setAttribute('role', 'status');
         el.title = 'Dismiss';
         el.addEventListener('click', () => el.remove());
@@ -2436,7 +2436,7 @@ import { initBeacon, publishLedgerSnapshot, ledgerEntry } from './beacon.js';
     }
 
     // --- The live fold (arc42 §8.5) ---
-    let beaconPublishTimer = null;
+    let elfdansPublishTimer = null;
     // null, not '': "nothing has been published yet" and "the empty set has
     // been published" are different states, and an empty set is the single
     // most important snapshot this fold sends. A phone opened after every
@@ -2444,13 +2444,13 @@ import { initBeacon, publishLedgerSnapshot, ledgerEntry } from './beacon.js';
     // the news — it is what takes the last `waiting` row the push fold wrote
     // out of the ledger. Held as '' they compare equal, the first publish is
     // skipped, and the badge never returns to zero.
-    let beaconPublishedSignature = null;
+    let elfdansPublishedSignature = null;
 
     // What the ledger gets from the live view. Top-level sessions only: §8.4
     // never notifies about a subagent (the parent covers it), so counting one
     // in the badge would claim attention nobody was asked for. Keyed by the
     // BARE id — the key space the push fold already writes.
-    function beaconLedgerSessions() {
+    function elfdansLedgerSessions() {
       const at = Math.floor(Date.now() / 1000);
       const out = [];
       (function walk(groups) {
@@ -2479,19 +2479,19 @@ import { initBeacon, publishLedgerSnapshot, ledgerEntry } from './beacon.js';
       // at all — publishing it would delete the ledger §8.5 keeps for exactly
       // that moment ("as of 14:32").
       if (![...sources.values()].some(s => s.state === 'connected')) return;
-      if (beaconPublishTimer !== null) return;
-      beaconPublishTimer = setTimeout(() => {
-        beaconPublishTimer = null;
-        const rows = beaconLedgerSessions();
+      if (elfdansPublishTimer !== null) return;
+      elfdansPublishTimer = setTimeout(() => {
+        elfdansPublishTimer = null;
+        const rows = elfdansLedgerSessions();
         const signature = rows.map(r => r.session_id + ':' + r.state).join('|');
-        if (signature === beaconPublishedSignature) return;
+        if (signature === elfdansPublishedSignature) return;
         // Recorded only once it actually published: an unpaired dashboard
         // answers false, and a phone paired a minute later must not then be
         // skipped because the set has not changed since.
         publishLedgerSnapshot(rows).then((published) => {
-          beaconPublishedSignature = published ? signature : null;
+          elfdansPublishedSignature = published ? signature : null;
         });
-      }, BEACON_PUBLISH_DEBOUNCE_MS);
+      }, ELFDANS_PUBLISH_DEBOUNCE_MS);
     }
 
     // --- Connection status (header dot + banner + tooltip) ---
@@ -2711,14 +2711,14 @@ import { initBeacon, publishLedgerSnapshot, ledgerEntry } from './beacon.js';
     // the inline code used to run.
     initHistoryTab();
 
-    // Irrlicht Beacon (docs/mobile-notifications-arc42.md) — safe to call
+    // Irrlicht Elfdans (docs/mobile-notifications-arc42.md) — safe to call
     // unconditionally: everything it does is feature-detected against this
     // origin's /api/v1/push/info (§5.2), so daemon-served dashboards and old
     // relays render nothing new and install no service worker. The two seams
     // below are equally inert there: `liveView` is only written by a successful
     // pairing (§6.2, ADR-9), and `openSession` only fires for a phone a
     // notification tap sent here (R6).
-    initBeacon({
+    initElfdans({
       relayToken: () => settings.relayToken,
       liveView: { read: readSourceSettings, write: writeSourceSettings },
       openSession: focusSessionFromNotification,
