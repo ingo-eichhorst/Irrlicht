@@ -1,0 +1,22 @@
+╭────────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.147.0)                     │
+│                                                │
+│ model:     gpt-5.6-sol high   /model to change │
+│ directory: /private/tmp/irr1388-probe-cwd      │
+╰────────────────────────────────────────────────╯
+  Tip: New Use /fast to enable our fastest inference with increased plan usage.
+  Hooks
+  Lifecycle hooks from config and enabled plugins.
+  Event                 Installed   Active      Description
+  PreToolUse            0           0           Before a tool executes
+  PermissionRequest     1           1           When permission is requested
+  PostToolUse           1           1           After a tool executes
+  PreCompact            0           0           Before context compaction
+  PostCompact           0           0           After context compaction
+  SessionStart          0           0           When a new session starts
+  SessionEnd            0           0           Right before a session ends
+  UserPromptSubmit      0           0           When the user submits a prompt
+  SubagentStart         0           0           When a subagent is created
+  SubagentStop          0           0           Right before a subagent ends its turn
+  Stop                  1           1           Right before Codex ends its turn
+  Press enter to view hooks; esc to close
