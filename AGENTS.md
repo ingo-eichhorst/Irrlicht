@@ -1113,6 +1113,37 @@ Before marking a ticket done, run the full suite — every layer must pass:
   step makes rather than claiming the step implements renaming.
   `preflight.sh`'s `tools` trigger gains this workflow, its fifth widening for
   this reason (#1591, #1629, #1639, #1641).
+- The snapshot-evidence copy:
+  `tools/lib/swift-snapshot-evidence_test.sh` is the same treatment for
+  `macos-swift.yml`'s "Collect the skipped suites' pixels" step (#1646), and
+  it is the family's cheapest member — a `cp -R` of the reference snapshots
+  into the artifact whose status was read by NOTHING. That step opens with
+  `set +e` for a good reason (its whole purpose is to run assertions that
+  fail), so the failed copy neither aborted nor reached `bad`: green job,
+  uploaded artifact missing the `__References__` tree, and therefore failure
+  images with nothing to compare against. Three outcomes now — copied /
+  nothing to copy / could not copy — plus a fourth no exit status can see, an
+  empty tree, which `cp -R` copies with a cheerful 0. **#1646 is where
+  extract-and-execute stopped being blocked by a real `swift test`**: the
+  fixture checkout's `tools/lib/swift-suite.sh` SOURCES the repo's own library
+  by absolute path and overrides only `swift_suite_run`, so the two predicates
+  the body consults are production code reading a committed log fixture, and
+  every outcome of a 20-minute macOS job is reachable in a second. That is the
+  shape to copy for any step whose blocker is one expensive command rather than
+  the body. Two arms carry more than they look: the references must be copied
+  even when the RUN is judged bad (this job exists to publish a failed run, so
+  a copy on the happy path only would ship nothing on exactly the runs the
+  artifact is for), and they must not be counted as failure images — 53
+  references would otherwise satisfy the "not one of the suites produced a
+  failure image" guard forever. The re-audit is in that file's header rather
+  than here: `exit "$bad"` decides, six guards write `bad`, and of the four
+  statements it cannot see, two degrade LOUDLY (a library that will not load
+  reports TRUNCATED — wrong headline, right verdict; a failed `mkdir -p`
+  reaches two guards, not the one the issue claimed) and one is silent and
+  cosmetic (`>> "$GITHUB_STEP_SUMMARY"`, whose text is already on stdout).
+  This workflow was in `preflight.sh`'s `tools` trigger since #1629, so the
+  trigger needed no sixth widening — the assertion simply joins the gate that
+  already covers it.
 - Which bash a workflow step gets: **there are two invocations and this repo
   conflated them** for the whole of the two bullets above (#1650). A step
   DECLARING `shell: bash` runs as `bash --noprofile --norc -e -o pipefail {0}`;

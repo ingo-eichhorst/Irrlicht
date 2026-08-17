@@ -341,7 +341,40 @@ jobs:
             bad=1
           fi
 
-          cp -R platforms/macos/Tests/__Snapshots__ "$SNAPSHOT_ARTIFACTS/__References__"
+          # The references, and the three outcomes that must not print the same
+          # thing (#1646). This copy's status used to be read by NOTHING: the
+          # `set +e` above is on for the whole block, so a failed `cp` neither
+          # aborted the step nor reached `bad`. The job stayed green and the
+          # uploaded artifact simply arrived without its `__References__` tree
+          # — the half a reader needs in order to compare a failure image
+          # against what it should have looked like. Measured, not inferred:
+          # with the source absent the block exits 0 and the artifact
+          # directory is empty.
+          #
+          # "There was nothing to copy", "the copy failed" and "it copied"
+          # point at three different places (the references moved or this
+          # checkout is incomplete / the destination is unwritable / fine), and
+          # a fourth outcome is the one no exit status can see: `cp -R` of an
+          # EMPTY tree SUCCEEDS, so the count is what tells a copy that landed
+          # from one that reported success and shipped nothing.
+          refsrc=platforms/macos/Tests/__Snapshots__
+          refdst="$SNAPSHOT_ARTIFACTS/__References__"
+          if [ ! -d "$refsrc" ]; then
+            echo "::error::there is no $refsrc to copy, so the artifact would carry failure images with nothing to compare them against. The references moved, or this checkout is incomplete."
+            bad=1
+          elif ! cp -R "$refsrc" "$refdst"; then
+            echo "::error::could not copy $refsrc into the artifact at $refdst — the failure images will have nothing to compare against."
+            bad=1
+          else
+            refs=$(find "$refdst" -name '*.png' 2>/dev/null | wc -l | tr -d ' ')
+            refs="${refs:-0}"
+            if [ "$refs" -lt 1 ]; then
+              echo "::error::the reference copy reported success but $refdst holds no images. An empty tree copies fine, so this reads exactly like a healthy artifact and is not one."
+              bad=1
+            else
+              echo "copied $refs reference image(s) into the artifact"
+            fi
+          fi
 
           primitives=$(find "$SNAPSHOT_ARTIFACTS/RasterPrimitiveEvidence" -name '*.png' 2>/dev/null | wc -l | tr -d ' ')
           # How many to expect is DERIVED — RasterPrimitiveEvidenceTests writes
