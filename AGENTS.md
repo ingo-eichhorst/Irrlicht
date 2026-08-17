@@ -1556,10 +1556,67 @@ Before marking a ticket done, run the full suite — every layer must pass:
   the app-wide clock injection #1663 defers. (The other function that issue names,
   `formatClockTime`, never read a clock: its two machine reads were the
   formatter's unset locale and zone, closed by the existing two seams.) Three
-  further wall-clock reads on the same chip stay unconverted (`quotaPacePercent`,
-  `mergeIntoBuckets`' staleness test, `formatTimeUntil`), and the first two are
-  pixel-visible, so the `rate_limit` fixture #1663 anticipates is still not safe
-  to seed: that is #1675, filed rather than folded in.
+  further wall-clock reads on the same chip were left unconverted
+  (`quotaPacePercent`, `mergeIntoBuckets`' staleness test, `formatTimeUntil`),
+  two of them pixel-visible, so the `rate_limit` fixture #1663 anticipates was
+  still not safe to seed: that became #1675, the member below.
+  **Those three are #1675, and they are where the family's assertion shape
+  needed a twin.** Same axis as the fourth member rather than a fifth one — the
+  clock again, three further reads of it. All three now take `now` as an input —
+  `quotaPacePercent(_:now:)` and `snapshotIsStale(_:now:)` as required
+  arguments, `QuotaResetFormat.timeUntil(_:now:)` likewise, and
+  `mergeIntoBuckets` / `quotaChipData` are `static` and pure so the fold cannot
+  read a clock at all. Six things are worth carrying.
+  **An extraction was again unavoidable, and the second one is not a leaf
+  view.** #1663's `QuotaResetLabel` works because the pixels and the decision
+  are the same `Text`; the staleness flip decides an `.opacity` applied to the
+  WHOLE chip while the decision was made in the data fold, two hundred lines
+  away, and `SessionListView.quotaChipView` cannot be hosted without dragging in
+  `SessionManager`. So the vehicle is a generic wrapper — `QuotaStaleDimmed<Content>`
+  (`Irrlicht/Views/QuotaChipParts.swift`) — which moves the decision to where the
+  pixels are and is hostable over any content. `QuotaWindowRow` beside it is the
+  ordinary leaf case, for the pace marker.
+  **The stored verdict was REMOVED rather than kept beside the derived one.**
+  `QuotaWidgetData.isStale` and `snapshotIsStale(snapshot, now:)` would have been
+  two spellings of one fact that could only drift, and the equivalence that makes
+  the removal safe is locked
+  (`QuotaChipClockTests.testTheMergeNeverKeepsASnapshotWhoseStalenessDisagreesWithIt`,
+  over every branch of the fold) rather than argued in a comment. `ChipBucket`
+  keeps its own copy because the merge genuinely branches on it. The residual
+  cost is stated where it lives: under the running default clock the fold's read
+  and the wrapper's read are microseconds apart, so at a `resetsAt` boundary a
+  chip can dim one frame before its tooltip says "stale".
+  **A both-sides pixel arm needs a must-not-differ twin.** "Two clocks, two
+  rasterisations" is satisfied by a view that varies with the clock for ANY
+  reason, including one unrelated to the property under test — so each arm is
+  paired with a fixture whose verdict is identical under both clocks (a window
+  the clock cannot pace; a snapshot stale under both). Both twins earned their
+  place: one mutation reddens only the dimming twin and another only the row's,
+  while the arms they guard stay green.
+  **A mutation whose two pinned instants are congruent is INERT and reads as a
+  passing test.** The row's twin was first mutated with a marker at
+  `epoch % 100` — and `referenceNow` and `contrastingNow` are both ≡ 0 (mod
+  100), being exactly 48h apart — so a genuinely clock-varying marker rendered
+  identically and the arm came back green. That is #1390's "assert the mutation
+  actually changed the thing" arriving in a Swift suite, and the check is one
+  line of arithmetic before trusting a green mutation run.
+  **This is the one member of the family CI grades.** `QuotaMenuBarRendererTests`
+  takes no `as: .pinnedImage`, so `ImageSnapshotCIScopeTests` does not skip it —
+  and every fixture in it was built from `Date()` while the renderer read
+  `Date()` again a moment later, two reads of the machine that merely agreed. So
+  nothing in it could tell a renderer honouring its `now:` from one discarding
+  it, and its own comment recorded that it could not pin an exact ramp boundary
+  for the same reason. Both are now closed, and `now` threads from one visible
+  read in `MenuBarImageBuilder.combinedImage` — the icon is rasterised into an
+  `NSStatusItem`, so no environment can reach it and #1659's required-argument
+  form is the only option.
+  **And the `rate_limit` fixture #1663 anticipated is seeded, but NOT as a
+  committed PNG.** The clock obstacle is gone; what remains is unrelated to it
+  and is why the PNG form is still the wrong one — per #1615 every
+  committed-reference image suite currently fails on a runner over
+  rasterisation, so a new one would have to be classified as skipped in
+  `ImageSnapshotCIScopeTests` and would buy a check that runs on one Mac. The
+  two-render-in-memory form runs everywhere, so that is what the fixture is.
   And no, a test
   run does not modify the user's real app preferences:
   `UserDefaults.standard` under `swift test` resolves to

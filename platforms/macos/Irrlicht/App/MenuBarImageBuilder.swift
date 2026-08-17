@@ -82,10 +82,18 @@ enum MenuBarImageBuilder {
         // Combined style shares its width budget with the dots, so the
         // quota bars render in a narrower, label-less layout there — see
         // QuotaMenuBarRenderer.buildSVG's `compact` handling.
+        //
+        // `now:` is the menu-bar icon's one wall-clock read (#1675). The icon is
+        // rasterised into an `NSStatusItem`, not rendered by SwiftUI, so
+        // `\.formatNow` cannot reach it — the clock has to be read somewhere and
+        // this is that place, once, visibly, rather than twice inside
+        // `rowSVG` where the 5h and 7d rows could be paced against two
+        // different instants.
         let quotaImage = style == .lights ? nil : QuotaMenuBarRenderer.imageForSelectedProvider(
             sessions: nonGtSessions,
             providerKey: MenuBarQuotaProvider.current,
-            compact: style == .combined
+            compact: style == .combined,
+            now: Date()
         )
         // .usage style with sessions active but no renderable quota yet
         // (fresh daemon start, or the selected provider hasn't ticked a

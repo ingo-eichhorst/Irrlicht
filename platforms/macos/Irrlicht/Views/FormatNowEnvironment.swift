@@ -51,22 +51,35 @@ import SwiftUI
 /// many times the subtree asks, which is what makes the same-day branch
 /// decidable from a fixture at all.
 ///
-/// ## Blast radius — deliberately two call sites, not an app-wide clock
+/// ## Blast radius — the quota chip, not an app-wide clock
 ///
 /// #1663 says an injectable clock across every wall-clock read in the app is a
-/// separate, wider change, and this is not it. **Exactly one call site reads
-/// this key**: `QuotaResetLabel`, the `"resets …"` text. The other function
-/// #1663 names, `formatClockTime` behind the quota tooltip, never read a clock
-/// at all — it had two machine reads, its formatter's unset `locale` and
-/// `timeZone`, so `\.formatTimeZone` and `\.formatLocale` close it entirely and
-/// `QuotaResetFormat.clock` takes no `now`. Everything else in
-/// `SessionListView` that touches the wall clock still touches it directly —
-/// `quotaPacePercent`, `formatTimeUntil`, and `mergeIntoBuckets`' staleness
-/// test — because none of those SELECTS A FORMAT, which is the property that
-/// made this one impossible to close from the test side. Two of the three are
-/// pixel-visible — the pace marker's position and the stale chip's opacity — so
-/// they are a real obstacle to the rate-limit snapshot fixture #1663
-/// anticipates, and they are filed as #1675 rather than folded in here.
+/// separate, wider change, and this is still not it. What this key reaches is
+/// the quota chip, and since #1675 that is **four call sites**, all in
+/// `SessionListView` and `QuotaChipParts`:
+///
+/// - `QuotaResetLabel` — the `"resets …"` text (#1663, the original).
+/// - `QuotaWindowRow` — the pace marker's x position (#1675).
+/// - `QuotaStaleDimmed` — the chip's stale opacity (#1675). A *discrete*
+///   function of the clock, so the sharper snapshot hazard of the two.
+/// - `SessionListView`'s own `@Environment(\.formatNow)`, read once per body
+///   evaluation and passed as an argument into `quotaChipData` and
+///   `quotaTooltip`, so the fold's staleness test, the tooltip's pace verdict
+///   and its "resets in 4h 12m" all describe one instant.
+///
+/// The other function #1663 names, `formatClockTime` behind the quota tooltip,
+/// never read a clock at all — it had two machine reads, its formatter's unset
+/// `locale` and `timeZone`, so `\.formatTimeZone` and `\.formatLocale` close it
+/// entirely and `QuotaResetFormat.clock` takes no `now`.
+///
+/// One quota clock read is deliberately NOT this key:
+/// `QuotaMenuBarRenderer` is rasterised into an `NSStatusItem` outside any
+/// SwiftUI environment, so it takes `now` as a required argument and
+/// `MenuBarImageBuilder.combinedImage` reads the wall clock once, visibly, for
+/// it — #1659's shape for exactly that case. Everything outside the quota chip
+/// (`HistoryView`'s pickers, `SessionRowView.taskEtaPresentation`,
+/// `SettingsView`'s relative dates) still reads the clock directly; those are
+/// the app-wide change, still deferred.
 struct FormatNow {
     private let read: () -> Date
 

@@ -19,12 +19,21 @@ import Foundation
 /// the committed references were recorded under", because adopting a different
 /// value would have re-recorded a PNG — the move `AGENTS.md` names as the one
 /// #1034 and #1044 both got wrong. Nothing constrains this one, because **no
-/// committed reference contains a wall-clock-dependent rendering**: the only
-/// two sites that read one are behind `guard let snap = session.metrics?.rateLimit`
-/// (`SessionListView.swift`) and no fixture under `Tests/Fixtures` or
-/// `Tests/MockInstanceFiles` carries a rate-limit window (#1663 verified that
-/// by grep; re-measured while writing this, still zero matches). So this pin
-/// changed none of the 53 references, and that untouched set is the evidence.
+/// committed reference contains a wall-clock-dependent rendering**: every site
+/// that reads one is behind `guard let snap = session.metrics?.rateLimit`
+/// (`SessionListView.swift`, and since #1675 `QuotaChipParts.swift`) and no
+/// fixture under `Tests/Fixtures` or `Tests/MockInstanceFiles` carries a
+/// rate-limit window (#1663 verified that by grep; re-measured by #1675, still
+/// zero matches). So this pin changed none of the 53 references, and that
+/// untouched set is the evidence.
+///
+/// #1675 asked whether to seed one — a committed PNG of the chip — now that the
+/// clock is an input. The answer was no, for a reason that has nothing to do
+/// with the clock: per #1615 every committed-reference image suite currently
+/// fails on a CI runner over rasterisation and would have to be classified as
+/// skipped in `ImageSnapshotCIScopeTests`, so the fixture is seeded as
+/// two-render-in-memory arms (`QuotaChipClockTests`) that run everywhere
+/// instead.
 ///
 /// The polarity is #1662's: a suite that names no instant gets a FIXED one, not
 /// the machine's, so the first fixture to seed a rate-limit window cannot
