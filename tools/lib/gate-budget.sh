@@ -118,31 +118,58 @@ budget_exhausted() {
   budget_is_bounded && [[ "$(budget_remaining)" -le 0 ]]
 }
 
-# _budget_kill_tree <signal> <pid> — signal a process and every descendant.
+# _budget_tree_pids <pid> — <pid> and every descendant, deepest first.
 #
-# Killing only the direct child is not enough: `go test` forks a compiler and
-# a test binary per package, `npm` forks node, and gosec forks nothing but
-# holds the terminal — leaving those alive after the hook returns is how a
-# "bounded" run keeps burning the machine. Descendants are signalled first so
-# a shell that would exit on its own does not orphan them mid-walk.
+# COLLECTED BEFORE ANYTHING IS SIGNALLED, which is the whole trick and is what
+# #1681 was: the walk from a pid is a walk down `pgrep -P`, and once a process
+# dies its children are reparented to launchd (init on Linux), so the ppid
+# chain that finds them is gone. A second walk from the same pid AFTER the
+# SIGTERM therefore enumerates nobody, and the SIGKILL pass signals a corpse
+# while every descendant that ignored or slow-handled the SIGTERM outlives the
+# whole bounded run — the exact failure the tree kill exists to prevent.
+# Measured on the unfixed library: a leaf doing `trap '' TERM; exec sleep 45`
+# was still there with 40+ seconds to go after budget_run had reported a
+# correct TIMEOUT and returned.
 #
-# pgrep is on both macOS and Linux. If it is somehow absent the walk degrades
+# Deepest-first so a parent cannot spawn a replacement between two kills. The
+# order is the argument order `kill` receives, which it signals in sequence.
+#
+# pgrep is on both macOS and Linux. If it is somehow absent the list degrades
 # to the direct child, which still ends the wait and still reports TIMEOUT —
 # the verdict stays correct, only the cleanup is weaker.
 #
 # lib/swift-suite.sh has the same recursion (`_swift_suite_descendants`) and
-# they stay separate deliberately. That one exists to kill a tree that
-# `script -q` has moved into another SESSION and other process groups, so it
-# collects the pids first and signals them as a flat list with its own grace
-# period, inside a `{ … } 2>/dev/null` that hides the shell's job notice at the
-# one moment the gate is explaining itself. This one signals depth-first as it
-# walks and lets that notice through, because here it lands beside a named
-# TIMEOUT block rather than in place of one. Folding them together would mean
-# one of the two gets the wrong half. They are, however, verified to compose:
-# the swift gate under `--budget 45` kills the whole pty-wrapped tree and
-# leaves no xctest process behind (measured, #1570).
+# they stay separate deliberately — but note that the difference is no longer
+# in the WALK, which #1681 made identical because only one of the two spellings
+# is correct. What differs is the signalling around it: that one runs inside a
+# `{ … } 2>/dev/null` that hides the shell's job notice at the one moment the
+# gate is explaining itself, where this one lets that notice through because
+# here it lands beside a named TIMEOUT block rather than in place of one.
+# Folding them together would mean one of the two gets the wrong half. They
+# are, however, verified to compose: the swift gate under `--budget 45` kills
+# the whole pty-wrapped tree and leaves no xctest process behind (measured,
+# #1570).
+_budget_tree_pids() {
+  local kid
+  for kid in $(pgrep -P "$1" 2>/dev/null); do
+    _budget_tree_pids "$kid"
+  done
+  echo "$1"
+}
+
+# _budget_kill_tree <signal> <pid...> — signal every pid in a list collected by
+# _budget_tree_pids.
 #
-# The `|| :` guards the whole walk rather than the `kill`, and it is not about
+# Killing only the direct child is not enough: `go test` forks a compiler and
+# a test binary per package, `npm` forks node, and gosec forks nothing but
+# holds the terminal — leaving those alive after the hook returns is how a
+# "bounded" run keeps burning the machine.
+#
+# It takes a RECORDED list rather than walking one itself, so that the two
+# passes budget_run makes signal the same set: see _budget_tree_pids above for
+# why a second walk finds nothing.
+#
+# The `|| :` guards the whole call rather than the `kill`, and it is not about
 # the group's status — `return 0` discards that anyway. Signalling a pid that
 # is already gone is the NORMAL case here (a command that exited on its own,
 # and the second pass after SIGKILL), so `kill` exits non-zero as a matter of
@@ -155,14 +182,36 @@ budget_exhausted() {
 # alone moved the abort one line down onto `wait` and returned 143 — as
 # plausible a wrong answer as the 1 it replaced.
 _budget_kill_tree() {
-  local sig="$1" pid="$2" child
+  local sig="$1"
+  shift || true
   {
-    for child in $(pgrep -P "$pid" 2>/dev/null); do
-      _budget_kill_tree "$sig" "$child"
-    done
-    kill "-$sig" "$pid" 2>/dev/null
+    kill "-$sig" "$@" 2>/dev/null
   } || :
   return 0
+}
+
+# _budget_any_alive <pid...> — 0 while any of them is still there, 1 once all
+# are gone. The grace loop's subject (#1681, and #1616's corollary: observe the
+# SUBJECT, never a side effect it produces on its way out).
+#
+# What it replaces is `kill -0 "$pid"` on the WRAPPER alone, which is the wrong
+# subject twice over: the wrapper is an ordinary `bash` that dies on SIGTERM in
+# milliseconds whatever its descendants do, so the loop it gated ended
+# immediately and the grace period was never spent on the processes it exists
+# for. The wrapper is polled here too, and costs nothing to include — measured
+# on bash 3.2.57, a TERMed background child answers `kill -0` for 7-14 busy
+# iterations before this shell reaps it, i.e. microseconds, so it never holds
+# the loop open as a zombie.
+#
+# `kill -0` and not `ps`: a builtin cannot be missing or broken, where an
+# external binary that fails to run prints nothing and nothing reads exactly
+# like "everything is gone" (await-gone.sh's rule 3, same reasoning).
+_budget_any_alive() {
+  local p
+  for p in "$@"; do
+    kill -0 "$p" 2>/dev/null && return 0
+  done
+  return 1
 }
 
 # budget_run <seconds> <cmd...> — run <cmd...> bounded to <seconds> of wall
@@ -210,7 +259,7 @@ budget_run() {
   # caller's `-e` (#1635). `{ …; } &` runs in a SUBSHELL, so the change cannot
   # reach the caller — that is the whole reason this one region is spelled with
   # a `set` where the two in-process ones (the timeout region below, and
-  # _budget_kill_tree's walk above) use `{ … } || :`, which is the same guard
+  # _budget_kill_tree's signal above) use `{ … } || :`, which is the same guard
   # by the only means available there. Without it the child
   # inherits errexit and dies on a command that exits non-zero BEFORE the write
   # below, so the "it finished" signal never appears, budget_run polls to the
@@ -270,12 +319,27 @@ budget_run() {
       # never reached — the two things preflight.sh reads from this library,
       # both wrong, and neither with anything to look at.
       {
-        _budget_kill_tree TERM "$pid"
+        # Collected ONCE, before the first signal, and both passes signal that
+        # same recorded list (#1681). Re-walking after the SIGTERM enumerates
+        # nobody — the descendants have been reparented — so the SIGKILL pass
+        # would signal a corpse and anything that ignored the SIGTERM would
+        # outlive the bound. _budget_tree_pids carries the full reasoning.
+        local victims
+        victims=$(_budget_tree_pids "$pid")
+        # Unquoted on purpose here and below: a whitespace-separated pid list.
+        # shellcheck disable=SC2086
+        _budget_kill_tree TERM $victims
         local hard=$SECONDS
-        while [[ $((SECONDS - hard)) -lt "$BUDGET_TERM_GRACE_SECONDS" ]] && kill -0 "$pid" 2>/dev/null; do
+        # The loop waits on the TREE, not on the wrapper. The wrapper is a
+        # `bash` that dies on SIGTERM in milliseconds regardless of what it is
+        # waiting for, so gating the grace period on it spent no grace at all
+        # on the processes the grace period is for.
+        # shellcheck disable=SC2086
+        while [[ $((SECONDS - hard)) -lt "$BUDGET_TERM_GRACE_SECONDS" ]] && _budget_any_alive $victims; do
           sleep "$BUDGET_POLL_SECONDS"
         done
-        _budget_kill_tree KILL "$pid"
+        # shellcheck disable=SC2086
+        _budget_kill_tree KILL $victims
         wait "$pid" 2>/dev/null
         rm -f "$statusfile" "$statusfile.part"
       } || :

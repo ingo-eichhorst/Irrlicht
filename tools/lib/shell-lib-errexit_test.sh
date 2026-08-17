@@ -102,7 +102,7 @@ need grep
 need mktemp
 need jq      # gosec_report_check refuses (2) without it, which would fail that
              # row for an unrelated reason and read as this one.
-need pgrep   # _budget_kill_tree / _swift_suite_descendants walk with it.
+need pgrep   # _budget_tree_pids / _swift_suite_descendants walk with it.
 need diff    # obligation (b) IS a diff; without it every call reads as a leak.
 
 LIBDIR="$REPO_ROOT/tools/lib"
@@ -366,6 +366,21 @@ row 'gate-budget.sh::budget_exhausted' 'budget_exhausted' 0 \
 row 'gate-budget.sh::_budget_kill_tree' '_budget_kill_tree (already-dead pid)' 0 \
     '. tools/lib/gate-budget.sh; sh -c "exit 0" & tw_dead=$!; wait "$tw_dead" || :' \
     '_budget_kill_tree TERM "$tw_dead"'
+# Driven on a pid whose `pgrep -P` finds NOTHING, which is the errexit-exposed
+# half: pgrep exits 1 when a process has no children, and that is the ordinary
+# case for the deepest pid of every walk. A pid WITH children is exercised by
+# the timeout row below, which now reaches this function with a real tree under
+# it (#1681).
+row 'gate-budget.sh::_budget_tree_pids' '_budget_tree_pids (a pid with no children)' 0 \
+    '. tools/lib/gate-budget.sh; sh -c "exit 0" & tw_leaf=$!; wait "$tw_leaf" || :' \
+    '_budget_tree_pids "$tw_leaf" >/dev/null'
+# Its other documented status, 1 (they are all gone), is deliberately NOT
+# driven, for the reason this file states about await_gone's 1: a documented 1
+# is indistinguishable from an errexit abort. The 0 arm is the one a caller can
+# tell apart, and it is also the one the grace loop spins on.
+row 'gate-budget.sh::_budget_any_alive' '_budget_any_alive (a pid that is alive)' 0 \
+    '. tools/lib/gate-budget.sh' \
+    '_budget_any_alive "$$"'
 row 'gate-budget.sh::budget_run' 'budget_run (ordinary path)' 3 \
     '. tools/lib/gate-budget.sh; BUDGET_POLL_SECONDS=0.05' \
     'budget_run 20 bash -c "exit 3"'
