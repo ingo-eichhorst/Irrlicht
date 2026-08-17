@@ -73,6 +73,54 @@ func expectNoEvent(t *testing.T, ch <-chan agent.Event, d time.Duration) {
 	}
 }
 
+// drainAvailableNewSessions records the transcript path of every new-session
+// event already queued on ch, without blocking. Used where the caller has
+// ordered itself against the producer and "everything currently buffered" is
+// therefore a complete answer rather than a snapshot.
+func drainAvailableNewSessions(ch <-chan agent.Event, into map[string]bool) {
+	for {
+		select {
+		case ev := <-ch:
+			if ev.Type == agent.EventNewSession {
+				into[ev.TranscriptPath] = true
+			}
+		default:
+			return
+		}
+	}
+}
+
+// collectNewSessionsUntil keeps recording new-session paths off ch until into
+// holds want of them or the deadline passes. It polls rather than sleeping the
+// whole window so a fast machine finishes fast and a slow one still passes.
+func collectNewSessionsUntil(ch <-chan agent.Event, into map[string]bool, want int, deadline time.Time) {
+	for len(into) < want && time.Now().Before(deadline) {
+		select {
+		case ev := <-ch:
+			if ev.Type == agent.EventNewSession {
+				into[ev.TranscriptPath] = true
+			}
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+}
+
+// seedTranscriptBacklog writes n transcript files into one project directory
+// under a fresh root and returns the root plus their paths, so a test can drive
+// a startup backlog of a chosen size.
+func seedTranscriptBacklog(t *testing.T, n int) (root string, paths []string) {
+	t.Helper()
+	root = setupFakeProjects(t)
+	dir := filepath.Join(root, "-Users-test-myproject")
+	paths = make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		p := filepath.Join(dir, fmt.Sprintf("session-%03d.jsonl", i))
+		writeTranscript(t, p, `{"type":"init"}`+"\n")
+		paths = append(paths, p)
+	}
+	return root, paths
+}
+
 func TestEffectiveReconcileInterval(t *testing.T) {
 	tests := []struct {
 		name string
@@ -492,14 +540,7 @@ func TestWatch_ReconcileRecoversNewSessionEventBroadcastDropped(t *testing.T) {
 
 	run := func(t *testing.T, interval, settle time.Duration) (burst int, delivered map[string]bool, want []string) {
 		t.Helper()
-		root := setupFakeProjects(t)
-		dir := filepath.Join(root, "-Users-test-myproject")
-		want = make([]string, 0, files)
-		for i := 0; i < files; i++ {
-			p := filepath.Join(dir, fmt.Sprintf("session-%03d.jsonl", i))
-			writeTranscript(t, p, `{"type":"init"}`+"\n")
-			want = append(want, p)
-		}
+		root, want := seedTranscriptBacklog(t, files)
 
 		w := NewWithRoot(root, testAdapter, 0).WithReconcileInterval(interval)
 		// The production shape (subscriberBuffer slots), deliberately not read
@@ -523,29 +564,11 @@ func TestWatch_ReconcileRecoversNewSessionEventBroadcastDropped(t *testing.T) {
 		// Frozen on Watch's goroutine with the sweep's ticker not yet created,
 		// so this drain is exactly what the burst's broadcasts delivered.
 		delivered = make(map[string]bool, files)
-		for draining := true; draining; {
-			select {
-			case ev := <-ch:
-				if ev.Type == agent.EventNewSession {
-					delivered[ev.TranscriptPath] = true
-				}
-			default:
-				draining = false
-			}
-		}
+		drainAvailableNewSessions(ch, delivered)
 		burst = len(delivered)
 		close(release)
 
-		deadline := time.Now().Add(settle)
-		for len(delivered) < files && time.Now().Before(deadline) {
-			select {
-			case ev := <-ch:
-				if ev.Type == agent.EventNewSession {
-					delivered[ev.TranscriptPath] = true
-				}
-			case <-time.After(20 * time.Millisecond):
-			}
-		}
+		collectNewSessionsUntil(ch, delivered, files, time.Now().Add(settle))
 		return burst, delivered, want
 	}
 
