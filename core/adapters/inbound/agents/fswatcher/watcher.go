@@ -118,6 +118,28 @@ type Watcher struct {
 	readyMu   sync.Mutex
 	readyOnce sync.Once
 	ready     chan struct{} // closed once the root watch is attached
+
+	// onBacklogScanComplete, when non-nil, is invoked on Watch's OWN goroutine
+	// at the instant the historical backlog scan has finished — after
+	// addExistingDirs returns, before signalReady, and before the main select
+	// loop has dispatched anything. It is a test seam; nothing in the daemon
+	// sets it, so the zero value is the production watcher.
+	//
+	// It exists because issue #998's property is an ORDERING — a brand-new
+	// top-level directory is discovered BEFORE the backlog scan completes, not
+	// within some number of milliseconds — and no exported API can express
+	// that. Ready() closes at this same instant, but observing a channel close
+	// from another goroutine is not ordered against this goroutine's
+	// broadcasts, and the regression #998 fixed delivers its event
+	// MICROSECONDS after the scan ends: a test comparing the two through
+	// Ready() would report the regression as a pass roughly as often as not.
+	// Every broadcast Watch makes happens on this goroutine in program order,
+	// so a hook here can be ordered against them exactly.
+	//
+	// See TestWatch_NewTopLevelDir_DiscoveredDuringBacklogScan, and
+	// TestWatch_ScanBoundaryReportsALateDiscoveryAsLate for the evidence that
+	// the boundary it exposes actually discriminates.
+	onBacklogScanComplete func()
 }
 
 // Ready returns a channel that is closed once Watch has attached the
@@ -334,6 +356,13 @@ func (w *Watcher) Watch(ctx context.Context) error {
 	// backlog size (issue #998).
 	if err := w.addExistingDirs(ctx, watcher); err != nil {
 		return err
+	}
+
+	// The historical scan is over. Report the boundary before signalReady and
+	// before the select loop below can dispatch anything, so a test can order
+	// it exactly against the broadcasts above (see onBacklogScanComplete).
+	if w.onBacklogScanComplete != nil {
+		w.onBacklogScanComplete()
 	}
 
 	// The watch is now live for the root and every pre-existing subdir, and

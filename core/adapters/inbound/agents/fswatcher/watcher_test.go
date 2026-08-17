@@ -689,21 +689,6 @@ func TestAddExistingDirs_NewestFirst(t *testing.T) {
 	}
 }
 
-// TestWatch_NewTopLevelDir_DiscoveredDuringBacklogScan is a regression test
-// for issue #998's core defect: a brand-new top-level directory created
-// while the historical backlog scan is still in progress must be discovered
-// promptly, not only once the entire backlog finishes. It builds a backlog
-// large enough (15,000 pre-existing transcript files, calibrated against
-// this package's real addExistingDirs — see the issue for the derivation)
-// that a full sequential scan measurably takes several hundred milliseconds
-// on typical hardware, to make a regression to the old "scan everything,
-// then arm the root watch and start draining events" order fail: under that
-// order the new directory's event cannot be delivered until the whole
-// backlog scan completes and Watch's main select loop starts running. The
-// deadline below is deliberately generous relative to that measured scan
-// cost (favoring determinism over a tight bound, to avoid CI flakiness)
-// while still being short enough that only prompt, backlog-size-independent
-// delivery can satisfy it.
 // seedAgedBacklog creates dirs × filesPerDir transcript files under root, all
 // backdated 48h, so a full sequential backlog scan takes measurably long.
 func seedAgedBacklog(t *testing.T, root string, dirs, filesPerDir int) {
@@ -743,6 +728,185 @@ func awaitNewSessionFor(t *testing.T, ch <-chan agent.Event, projectDir string, 
 	}
 }
 
+// --- the #998 backlog-scan boundary (#1674) ---------------------------------
+
+// backlogDirPrefix is the name seedAgedBacklog gives every directory it seeds,
+// and newDirName the brand-new top-level directory the #998 tests create.
+const (
+	backlogDirPrefix = "backlog-"
+	newDirName       = "brand-new-session"
+)
+
+// watcherLiveness is how long the two tests below wait for the watcher to do
+// anything at all. It is deliberately enormous and deliberately NOT a
+// discriminator: every assertion in this section is about the ORDER of two
+// things the watcher does, so no amount of machine slowness can change an
+// answer. What this bound separates is "the watcher is running" from "the
+// watcher is dead", and that is not a question a loaded CI runner should get a
+// different answer to. Nothing here compares elapsed time to a constant.
+const watcherLiveness = 60 * time.Second
+
+// subscribeLossless registers a subscriber channel with a buffer big enough
+// that broadcast's non-blocking send can never drop, which Subscribe's
+// production 64 emphatically is not against a backlog scan: measured on the
+// 15,000-file fixture below, 14,821 of the 15,001 events the watcher emitted
+// never reached a Subscribe() channel.
+//
+// That matters here because a dropped event and an event that was never
+// produced are the same silence at the subscriber — so a fixture reading the
+// production channel answers "was the directory discovered during the scan?"
+// and "did the transport happen to keep the evidence?" with one verdict, and
+// blames the first for a failure of the second. It is #1674's actual cause:
+// the old form of the test asserted arrival on a Subscribe() channel within
+// 400ms, and injecting a 20ms deschedule of its consumer (what a loaded runner
+// supplies for free) made it fail 3/3 with the watcher having emitted the
+// event correctly every time. The failure message accused discovery of waiting
+// on the backlog scan, which was false.
+//
+// Dropping under load is real production behaviour and is not what these tests
+// grade; see #1679 for the separate defect that the reconcile sweep does not
+// recover such a drop, because emit records the path as reported before
+// broadcast gets a chance to discard it.
+func subscribeLossless(w *Watcher, capacity int) <-chan agent.Event {
+	ch := make(chan agent.Event, capacity)
+	w.subMu.Lock()
+	w.subs = append(w.subs, ch)
+	w.subMu.Unlock()
+	return ch
+}
+
+// scanBoundary drives w.Watch and observes the one boundary issue #998 is
+// about: the instant the historical backlog scan finishes.
+//
+// Two properties make the observation exact rather than approximate, and both
+// are load-bearing.
+//
+// Every broadcast the watcher makes and the onBacklogScanComplete callback
+// happen on Watch's own goroutine, in program order, and the subscriber
+// channel is FIFO — so an event sitting in that channel when the boundary
+// fires provably came from inside the scan. Reading Ready() from a third
+// goroutine cannot express this: its close and the watcher's sends are
+// different channels, so the order they are observed in says nothing about the
+// order they happened in, and the regression being graded delivers its event
+// microseconds after the scan ends.
+//
+// And the boundary FREEZES the watcher until release is called, so "everything
+// currently buffered" is exactly "everything the scan broadcast" — with no
+// settle time, and with no race against the events Watch's main select loop
+// would otherwise begin dispatching the moment the scan ended. Without the
+// freeze, the very regression this grades would win that race.
+type scanBoundary struct {
+	events   <-chan agent.Event
+	complete <-chan struct{}
+	release  func()
+	seen     []agent.Event
+}
+
+// startWatchAtScanBoundary starts w.Watch in the background with the boundary
+// seam wired, and registers the teardown that unfreezes and stops it.
+func startWatchAtScanBoundary(t *testing.T, w *Watcher, capacity int) *scanBoundary {
+	t.Helper()
+
+	events := subscribeLossless(w, capacity)
+	complete := make(chan struct{})
+	released := make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(released) }) }
+
+	w.onBacklogScanComplete = func() {
+		close(complete)
+		<-released
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	watchErr := make(chan error, 1)
+	go func() { watchErr <- w.Watch(ctx) }()
+	t.Cleanup(func() {
+		release() // never leave Watch parked inside the seam
+		cancel()
+		if err := <-watchErr; err != nil && err != context.Canceled {
+			t.Errorf("Watch returned unexpected error: %v", err)
+		}
+	})
+
+	return &scanBoundary{events: events, complete: complete, release: release}
+}
+
+// next returns the watcher's next broadcast, recording it as observed before
+// the boundary. what names the thing being waited for, so a dead watcher is
+// reported as itself rather than as whatever the caller asserts next.
+func (b *scanBoundary) next(t *testing.T, what string) agent.Event {
+	t.Helper()
+	select {
+	case ev := <-b.events:
+		b.seen = append(b.seen, ev)
+		return ev
+	case <-time.After(watcherLiveness):
+		t.Fatalf("the watcher broadcast nothing within %v while waiting for %s — it is not running, which is a different failure from anything this test asserts", watcherLiveness, what)
+		return agent.Event{}
+	}
+}
+
+// awaitComplete blocks until the backlog scan finishes. The watcher is frozen
+// inside the seam from the moment this returns until release is called.
+func (b *scanBoundary) awaitComplete(t *testing.T) {
+	t.Helper()
+	select {
+	case <-b.complete:
+	case <-time.After(watcherLiveness):
+		t.Fatalf("the backlog scan did not finish within %v — the watcher is stuck, which is a different failure from anything this test asserts", watcherLiveness)
+	}
+}
+
+// duringScan returns every event the watcher broadcast strictly before the
+// backlog scan completed. Safe because the watcher is frozen: nothing new can
+// arrive, so draining to empty is a complete answer rather than a snapshot.
+func (b *scanBoundary) duringScan(t *testing.T) []agent.Event {
+	t.Helper()
+	b.awaitComplete(t)
+	for {
+		select {
+		case ev := <-b.events:
+			b.seen = append(b.seen, ev)
+		default:
+			return b.seen
+		}
+	}
+}
+
+// containsNewSession reports whether events holds a new-session event for
+// projectDir.
+func containsNewSession(events []agent.Event, projectDir string) bool {
+	for _, ev := range events {
+		if ev.Type == agent.EventNewSession && ev.ProjectDir == projectDir {
+			return true
+		}
+	}
+	return false
+}
+
+// TestWatch_NewTopLevelDir_DiscoveredDuringBacklogScan is the regression test
+// for issue #998's core defect: a brand-new top-level directory created while
+// the historical backlog scan is still in progress must be discovered while
+// that scan is still running, not only once the entire backlog finishes. Under
+// the old "scan everything, then arm the root watch and start draining events"
+// order the new directory's event cannot be delivered until the whole scan
+// completes and Watch's main select loop starts, so it fails here.
+//
+// The assertion states that ordering directly — the event is observed before
+// the scan completes — rather than the wall-clock proxy it used to use (#1674).
+// The proxy could not be made both safe and meaningful: the discriminator has
+// to be shorter than a full backlog scan or the regression passes under it,
+// which on a loaded runner is the same budget an honest pass needs. Comparing
+// against the scan itself is stricter on a fast machine and self-scaling on a
+// slow one, since a machine that takes longer to scan grants exactly that much
+// more time for delivery.
+//
+// The backlog is calibrated (15,000 pre-existing transcript files, against this
+// package's real addExistingDirs) so the scan measurably outlasts the fixture's
+// own setup — 593ms against 11ms when this was written. That headroom is now a
+// fixture requirement rather than a deadline, and it is asserted below instead
+// of assumed.
 func TestWatch_NewTopLevelDir_DiscoveredDuringBacklogScan(t *testing.T) {
 	root := setupFakeProjects(t)
 
@@ -751,26 +915,30 @@ func TestWatch_NewTopLevelDir_DiscoveredDuringBacklogScan(t *testing.T) {
 	seedAgedBacklog(t, root, backlogDirs, filesPerDir)
 
 	w := NewWithRoot(root, testAdapter, 0)
-	ch := w.Subscribe()
+	b := startWatchAtScanBoundary(t, w, backlogDirs*filesPerDir+1024)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	// Wait for the scan to actually be under way, rather than sleeping a guess
+	// at it. The first event the watcher broadcasts comes from addExistingDirs,
+	// and establishes the two preconditions this test rests on — neither of
+	// which a sleep establishes, and neither of which was checked before #1674:
+	//
+	//   - the root watch is armed, since Watch arms it before calling
+	//     addExistingDirs, so the kernel is already queuing Create events; and
+	//   - addExistingDirs' os.ReadDir(root) has already returned, so the
+	//     directory created below is NOT in the listing the scan walks and can
+	//     only be discovered through a live event.
+	//
+	// The second is what the old 50ms sleep was really standing in for, and it
+	// is not slack: measured, with no wait at all the new directory sorts FIRST
+	// in newestFirst's newest-mtime order and the SCAN emits it — which the
+	// pre-#998 order would have done too, so the test would have passed under
+	// the defect it exists to catch.
+	first := b.next(t, "the backlog scan's first event")
+	if !strings.HasPrefix(first.ProjectDir, backlogDirPrefix) {
+		t.Fatalf("first event came from %q, want one of the seeded %q* directories — this test needs proof that addExistingDirs' os.ReadDir(root) has already returned before it creates the new directory, and only an event from the scan itself is that proof", first.ProjectDir, backlogDirPrefix)
+	}
 
-	watchErr := make(chan error, 1)
-	go func() { watchErr <- w.Watch(ctx) }()
-
-	// Deliberately NOT synchronized on Ready(): this test's whole point is
-	// to catch a regression to Ready() (or the reactive-catch mechanism
-	// behind it) firing only after the backlog scan completes, so waiting
-	// on Ready() here would make such a regression invisible — by the time
-	// a late Ready() fires, the slow part would already be over. A short
-	// fixed sleep instead lets the watcher's goroutine start without
-	// assuming anything about when (or whether) it signals readiness.
-	time.Sleep(50 * time.Millisecond)
-
-	// Create a brand-new top-level directory right away, while the backlog
-	// scan above is very likely still in progress.
-	newDir := filepath.Join(root, "brand-new-session")
+	newDir := filepath.Join(root, newDirName)
 	if err := os.MkdirAll(newDir, 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -779,12 +947,63 @@ func TestWatch_NewTopLevelDir_DiscoveredDuringBacklogScan(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	awaitNewSessionFor(t, ch, "brand-new-session", 400*time.Millisecond)
-
-	cancel()
-	if err := <-watchErr; err != nil && err != context.Canceled {
-		t.Errorf("Watch returned unexpected error: %v", err)
+	// Vacuity guard: the directory has to be created while the scan is still
+	// running or there is no #998 window to observe, and a fixture that missed
+	// the window would otherwise report the regression it never exercised.
+	select {
+	case <-b.complete:
+		t.Fatalf("the backlog scan finished before the fixture could create %q, so nothing was observed inside the #998 window — the seeded backlog (%d dirs × %d files) is no longer large enough on this machine; raise it", newDirName, backlogDirs, filesPerDir)
+	default:
 	}
+
+	during := b.duringScan(t)
+	if !containsNewSession(during, newDirName) {
+		t.Fatalf("the brand-new top-level directory %q was not discovered before the backlog scan completed (%d events were broadcast during the scan, none of them a new-session event for it) — discovery is waiting on the full backlog scan, which is issue #998's defect", newDirName, len(during))
+	}
+}
+
+// TestWatch_ScanBoundaryReportsALateDiscoveryAsLate is the committed mutation
+// evidence for the test above, and the reason it is committed rather than
+// described in a PR body is that an ordering assertion which silently stops
+// discriminating looks exactly like health.
+//
+// It forces the late-discovery path — the directory is created while the
+// watcher is frozen at the boundary, so its event provably cannot be delivered
+// until after the scan completed, which is what the #998 regression produces —
+// and asserts that the observation reports the absence. Without this, an
+// observation that reported "discovered during the scan" unconditionally would
+// satisfy the test above forever.
+//
+// The second half is this test's own vacuity guard: once released, the watcher
+// does find the directory. Without it, a fixture that simply never created
+// anything would pass the first half just as well, and the absence would be
+// about a directory nobody made rather than about ORDER.
+func TestWatch_ScanBoundaryReportsALateDiscoveryAsLate(t *testing.T) {
+	root := setupFakeProjects(t)
+
+	w := NewWithRoot(root, testAdapter, 0)
+	b := startWatchAtScanBoundary(t, w, 1024)
+
+	// No backlog: let the scan finish, then create the directory. The watcher
+	// is frozen from here until release.
+	b.awaitComplete(t)
+
+	newDir := filepath.Join(root, newDirName)
+	if err := os.MkdirAll(newDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(newDir, "fresh.jsonl"), []byte(`{"type":"start"}`+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if during := b.duringScan(t); containsNewSession(during, newDirName) {
+		t.Fatalf("a directory created AFTER the backlog scan completed was reported as discovered during it — the ordering assertion in TestWatch_NewTopLevelDir_DiscoveredDuringBacklogScan cannot fail, so issue #998 would go uncaught (%d events observed during the scan)", len(during))
+	}
+
+	// ...and the watcher really does discover it once unfrozen, so the absence
+	// above is about ordering rather than about a directory it never saw.
+	b.release()
+	awaitNewSessionFor(t, b.events, newDirName, watcherLiveness)
 }
 
 // --- watch-registration failures (#1255) ------------------------------------
