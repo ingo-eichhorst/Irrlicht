@@ -187,16 +187,6 @@ func (w *Watcher) signalReady() {
 	w.readyOnce.Do(func() { close(w.readyChan()) })
 }
 
-// reportBacklogScanComplete runs the backlog-scan boundary seam if one is set.
-// It is its own method for the same reason signalReady is: Watch's body states
-// what happens at that point in the sequence, not how each step decides
-// whether it applies.
-func (w *Watcher) reportBacklogScanComplete() {
-	if w.onBacklogScanComplete != nil {
-		w.onBacklogScanComplete()
-	}
-}
-
 // WithIdentity sets the full agent.Identity for this watcher so it
 // satisfies inbound.Watcher. Returns the watcher for chaining. Callers
 // in cmd/irrlichd/wiring.go invoke this immediately after New(); test
@@ -371,7 +361,9 @@ func (w *Watcher) Watch(ctx context.Context) error {
 	// The historical scan is over. Report the boundary before signalReady and
 	// before the select loop below can dispatch anything, so a test can order
 	// it exactly against the broadcasts above (see onBacklogScanComplete).
-	w.reportBacklogScanComplete()
+	if w.onBacklogScanComplete != nil {
+		w.onBacklogScanComplete()
+	}
 
 	// The watch is now live for the root and every pre-existing subdir, and
 	// every pre-existing transcript file has been emitted; unblock anyone
