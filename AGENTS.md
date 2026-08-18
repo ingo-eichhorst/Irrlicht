@@ -1290,13 +1290,42 @@ Before marking a ticket done, run the full suite — every layer must pass:
   references would otherwise satisfy the "not one of the suites produced a
   failure image" guard forever. The re-audit is in that file's header rather
   than here: `exit "$bad"` decides, six guards write `bad`, and of the four
-  statements it cannot see, two degrade LOUDLY (a library that will not load
-  reports TRUNCATED — wrong headline, right verdict; a failed `mkdir -p`
-  reaches two guards, not the one the issue claimed) and one is silent and
-  cosmetic (`>> "$GITHUB_STEP_SUMMARY"`, whose text is already on stdout).
+  statements it cannot see, one degrades loudly (a failed `mkdir -p` reaches
+  two guards, not the one the issue claimed) and one is silent and cosmetic
+  (`>> "$GITHUB_STEP_SUMMARY"`, whose text is already on stdout).
   This workflow was in `preflight.sh`'s `tools` trigger since #1629, so the
   trigger needed no sixth widening — the assertion simply joins the gate that
   already covers it.
+  **The fourth is the one worth carrying, because #1677 pinned it WRONG on
+  purpose and #1678 had to correct it.** `. tools/lib/swift-suite.sh` was also
+  read by nothing, and that failure was never silent — every `swift_suite_*`
+  call becomes "command not found", so the step exits 1. What it got wrong was
+  the DIAGNOSIS, and by more than #1646 recorded: measured, **four** headlines
+  fire at once, opening with `TRUNCATED` (which sends a reader to XCTest's
+  stall detector, #1523) and closing with "not one of the five suites produced
+  a failure image … #1615 has moved" (which accuses this workflow's own suite
+  classification). #1677 recorded that as an audit finding and committed an arm
+  asserting the wrong headline — loud, and honest about being wrong, but a test
+  pinning incorrect behaviour reads as coverage, which is why it was filed
+  rather than left as a note. Three outcomes now, on #1645's discipline and on
+  the same shape as the copy: **loaded** / **could not load** (the source's
+  status, now read) / **loaded and defines nothing** (`command -v`, because
+  `. an-empty-file` exits 0 — the outcome no status check can see, exactly as
+  an empty `cp -R` is). Both refuse before the run rather than adding to
+  `bad`, since `swift_suite_run` produces everything the six guards judge.
+  Two things the mutation runs settle. The wording arms are what
+  discriminate and the status arms are not: dropping the source status check
+  leaves the step still exiting 1 via the OTHER refusal, so only "naming the
+  harness it could not load" and the mutual-absence arm go red — #1644's
+  measurement, reproduced one family on, and the reason each refusal asserts
+  every other refusal's wording is absent. And keeping both refusals but
+  replacing `exit 1` with a continue leaves both NAMING arms green while the
+  four headline-absent arms go red, so those arms hold the exit placement
+  rather than the message. The sibling `swift-test` step does **not** have this
+  defect and needed no change: measured the same way, `swift_suite_verdict` is
+  itself among the missing functions, so no headline prints at all and the step
+  exits 127 with three `command not found` lines — loud, undiagnosed, but never
+  wrong. Weaker, not broken; #1702 covers it.
 - Which bash a workflow step gets: **there are two invocations and this repo
   conflated them** for the whole of the two bullets above (#1650). A step
   DECLARING `shell: bash` runs as `bash --noprofile --norc -e -o pipefail {0}`;

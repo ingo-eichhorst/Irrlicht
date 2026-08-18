@@ -82,27 +82,44 @@
 #      `-not -path '*/__References__/*'` exclusion the count depends on — 53
 #      reference images would otherwise satisfy the "not one of the suites
 #      produced a failure image" guard forever.
-#   8. the audit's remaining blind statements are shown to be LOUD: a
-#      `. tools/lib/swift-suite.sh` that fails is read by nothing either, but
-#      it degrades to a failing step rather than a silent pass. Its diagnosis
-#      is wrong (it reports TRUNCATED), which is recorded here rather than
-#      claimed away.
+#   8. a harness that will not LOAD is refused by name, not misdiagnosed
+#      (#1678). Until then this arm pinned the opposite: the step reported the
+#      run as TRUNCATED, plus three more headlines, none of which happened.
+#   9. a harness that loads and defines NOTHING is refused too, and told apart
+#      from 8. `. an-empty-file` exits 0, so no status check anywhere can see
+#      this one — it is to the source what obligation 5 is to the copy.
+#  10. 8 and 9 are told APART, and neither borrows a verdict from the four
+#      guards below them: each asserts the other's wording is absent, and both
+#      assert all four run-shape headlines are absent. A shared exit 1 is
+#      satisfied by refusals that all fire together — measured that way in
+#      #1644, and measured again in #1678, where all four fired at once.
 #
 # ---------------------------------------------------------------------------
 # The re-audit: which statement decides the status, and what it cannot see
 #
-# `exit "$bad"` decides, and `bad` is written by exactly six guards — the 124
-# hang, the truncation, the zero-test run, the copy (three outcomes, above),
-# the manifest count, and the failure-image count. Everything else in the block
-# is invisible to it unless it feeds one of those. #1646 traced this and found
-# one exception; measured rather than inherited, there are four, and three of
-# them are covered by something:
+# `exit "$bad"` decides for everything after the harness has loaded, and `bad`
+# is written by exactly six guards — the 124 hang, the truncation, the zero-test
+# run, the copy (three outcomes, above), the manifest count, and the
+# failure-image count. The two load refusals (#1678) are the exception and exit
+# directly, because they fire before `bad` exists and before anything those
+# guards judge has been produced. Everything else in the block is invisible to
+# the status unless it feeds one of the six. #1646 traced this and found one
+# blind statement; measured rather than inherited, there were four. TWO are now
+# read (the source, #1678; the copy, #1646), one is still unread but degrades
+# loudly through two other guards, and the fourth is silent and stated rather
+# than dismissed:
 #
-#   `. tools/lib/swift-suite.sh`  read by nothing. A library that does not load
-#                                 makes both predicate calls "command not
-#                                 found", so two guards fire and the step exits
-#                                 1 — LOUD, with the wrong headline. Obligation
-#                                 8 below drives it.
+#   `. tools/lib/swift-suite.sh`  WAS read by nothing, and the result was LOUD
+#                                 with the wrong headline: every `swift_suite_*`
+#                                 call became "command not found", so FOUR
+#                                 guards fired — TRUNCATED, `executed 0 tests`,
+#                                 the missing manifest, and "not one of the five
+#                                 suites produced a failure image … #1615 has
+#                                 moved". #1646 said two; measured, it is four,
+#                                 and the last of them accuses this workflow's
+#                                 own suite classification. Read now, in two
+#                                 checks, and refused before the run: #1678,
+#                                 obligations 8-10 below.
 #   `mkdir -p "$SNAPSHOT_ARTIFACTS"`
 #                                 read by nothing, and covered more strongly
 #                                 than #1646 claimed: with the directory
@@ -326,6 +343,16 @@ CANNOT='could not copy platforms/macos/Tests/__Snapshots__'
 LANDED_NOTHING='reference copy reported success but'
 COPIED='reference image(s) into the artifact'
 
+# The two load refusals (#1678), and the four run-shape headlines they must not
+# borrow a verdict from. Before #1678 a harness that would not load printed all
+# four of these and none of its own — the whole of obligations 8-10.
+NOLOAD='could not load the test harness tools/lib/swift-suite.sh'
+UNUSABLE='was read but defines no'
+TRUNCATED='TRUNCATED'
+ZERO_TESTS='executed 0 tests'
+NO_MANIFEST='wrote no manifest'
+NO_FAILURES='not one of the five suites produced a failure image'
+
 # ---------------------------------------------------------------------------
 # Obligation 1 — the pre-#1646 hazard, re-measured on every run.
 #
@@ -390,7 +417,7 @@ want_absent "...and not the 'could not copy' diagnosis (obligation 6)" "$CANNOT"
 want_absent "...and not the 'landed nothing' diagnosis (obligation 6)" "$LANDED_NOTHING" "$OUT"
 # The other guards must stay quiet, or this arm's non-zero would be someone
 # else's: a shared exit status is satisfied by every refusal firing at once.
-want_absent "...with the run itself still judged healthy" "TRUNCATED" "$OUT"
+want_absent "...with the run itself still judged healthy" "$TRUNCATED" "$OUT"
 
 # ---------------------------------------------------------------------------
 # Obligation 4 — the copy fails.
@@ -446,7 +473,12 @@ build_checkout full
 mk_artifacts "$TMP/art-nofailures.sh" 0
 run_step "$TMP/step.sh" full hung 1 "$TMP/art-nofailures.sh"
 want_status "a truncated run fails the step" 1 "$ST" "$OUT"
-want_contains "...diagnosed as truncated" "TRUNCATED" "$OUT"
+want_contains "...diagnosed as truncated" "$TRUNCATED" "$OUT"
+# The other direction of obligation 10, and the vacuity guard for the whole of
+# #1678: a load refusal that fired unconditionally would swallow this arm, and a
+# real truncation must still be reported as one.
+want_absent "...and NOT as a harness that could not be loaded (#1678)" "$NOLOAD" "$OUT"
+want_absent "...nor as a harness that loaded and is unusable (#1678)" "$UNUSABLE" "$OUT"
 want_contains "...with the references copied anyway" "$COPIED" "$OUT"
 want_absent "...and no copy refusal" "$CANNOT" "$OUT"
 want_contains "...and the copied references NOT counted as failure images" \
@@ -454,24 +486,60 @@ want_contains "...and the copied references NOT counted as failure images" \
 want_contains "...which the count line says out loud" "collected 0 failure image(s)" "$OUT"
 
 # ---------------------------------------------------------------------------
-# Obligation 8 — the audit's remaining blind statement, measured rather than
-# dismissed.
+# Obligations 8 and 10 — the harness cannot be loaded at all.
 #
-# `. tools/lib/swift-suite.sh` is the other statement in the block whose status
-# reaches nothing. It is NOT silent: with the library gone, the two predicate
-# calls become "command not found", both guards fire and the step exits 1. What
-# it gets wrong is the DIAGNOSIS — it reports the run as TRUNCATED, pointing a
-# reader at XCTest when the step never loaded its harness. Recorded here rather
-# than claimed away; it is a loud failure with a misleading headline, not a
-# green.
+# `. tools/lib/swift-suite.sh` was the other statement in the block whose status
+# reached nothing. It was never silent: with the library gone, every
+# `swift_suite_*` call becomes "command not found" and the step exits 1. What it
+# got WRONG was the diagnosis, and by more than #1646 recorded — measured, FOUR
+# headlines fire, the first pointing a reader at XCTest's stall detector
+# (#1523) and the last accusing this workflow's own suite classification of
+# being stale. This arm asserted the first of those until #1678, which is a test
+# pinning incorrect behaviour: the four `want_absent`s below are the correction,
+# and each of them is the arm that would have gone red then.
 echo ""
-echo "== a library that does not load is LOUD (audit, #1646) =="
+echo "== a harness that does not load is refused BY NAME (#1678) =="
 build_checkout full
 rm -f "$CHECKOUT/tools/lib/swift-suite.sh"
 mk_artifacts "$TMP/art-nolib.sh" 1
 run_step "$TMP/step.sh" full clean 0 "$TMP/art-nolib.sh"
 want_status "a missing swift-suite.sh fails the step rather than passing quietly" 1 "$ST" "$OUT"
-want_contains "...though it is diagnosed as a truncated run, which is not what happened" "TRUNCATED" "$OUT"
+want_contains "...naming the harness it could not load" "$NOLOAD" "$OUT"
+want_absent "...and NOT diagnosed as a truncated test bundle (#1678)" "$TRUNCATED" "$OUT"
+want_absent "...nor as a run that executed 0 tests" "$ZERO_TESTS" "$OUT"
+want_absent "...nor as a fixture that wrote no manifest" "$NO_MANIFEST" "$OUT"
+want_absent "...nor as five suites that have started passing on a runner" "$NO_FAILURES" "$OUT"
+want_absent "...and not the other load refusal's wording (obligation 10)" "$UNUSABLE" "$OUT"
+
+# ---------------------------------------------------------------------------
+# Obligations 9 and 10 — the harness loads and is unusable.
+#
+# The outcome no status check can see, and the reason the fix is two checks
+# rather than one: `. an-empty-file` exits 0. A truncated, emptied or
+# half-written library therefore satisfies the source's own status while
+# defining none of the predicates, and every headline above comes back. This is
+# to the source exactly what obligation 5 is to the copy.
+echo ""
+echo "== a harness that loads and defines nothing is refused too (#1678) =="
+build_checkout full
+: >"$CHECKOUT/tools/lib/swift-suite.sh"
+mk_artifacts "$TMP/art-emptylib.sh" 1
+run_step "$TMP/step.sh" full clean 0 "$TMP/art-emptylib.sh"
+want_status "a swift-suite.sh that defines nothing fails the step" 1 "$ST" "$OUT"
+want_contains "...naming the predicate it does not define" "$UNUSABLE" "$OUT"
+want_absent "...and not the 'could not load' diagnosis (obligation 10)" "$NOLOAD" "$OUT"
+want_absent "...and NOT diagnosed as a truncated test bundle" "$TRUNCATED" "$OUT"
+want_absent "...nor as a run that executed 0 tests" "$ZERO_TESTS" "$OUT"
+want_absent "...nor as a fixture that wrote no manifest" "$NO_MANIFEST" "$OUT"
+want_absent "...nor as five suites that have started passing on a runner" "$NO_FAILURES" "$OUT"
+# ...and the premise of the arm: sourcing an empty file really does succeed, so
+# the status check alone could not have caught this one.
+if bash -c '. "$1"' _ "$CHECKOUT/tools/lib/swift-suite.sh"; then
+  pass "...with sourcing the empty library having demonstrably SUCCEEDED (exit 0), which is why the second check exists"
+else
+  fail "the unusable-library arm's premise" "sourcing an empty file to exit 0" \
+       "it exited non-zero — this arm graded obligation 8"
+fi
 
 echo ""
 if [[ "$rc" -eq 0 ]]; then
