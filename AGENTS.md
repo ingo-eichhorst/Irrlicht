@@ -829,6 +829,53 @@ Before marking a ticket done, run the full suite — every layer must pass:
   every one of them an addition to coverage, none a lock on the predecessor's.
   A rewritten guard replays its predecessor's cases or it is not known to be a
   superset.
+- Probe costs in doc comments: `core/internal/costreport` is "Replay's measured
+  figures" one layer down, for the numbers that justify a CONSTANT rather than
+  describe a catalog — `shelloutTimeout`, `ancestryReads`, `clientHostBudget`,
+  `bundleIDMemo`, `gitTimeout`, `gitHistoryTimeout`, `gitMaxOutput` (#1572). Two
+  doc comments in one file described the same `plutil` exec at 2.2ms (#1524) and
+  9.7ms (#1544); the mechanism is what settled it, and the answer is that the
+  4x is LOAD — the same generator on one machine reports 5.4ms idle and 10.2ms
+  under twelve busy loops, and #1544's `ps` figure moves the same way, so one
+  cause explains both of its numbers. **Read `min`, never median, when carrying
+  any of these to another machine.** Three things are load-bearing and none is
+  the obvious one.
+  **No equality gate, deliberately.** Replay's census can compare a committed
+  literal against a fresh measurement because its subject is a fixed catalog on
+  disk; these are a property of a machine under a load, so a threshold would
+  fail for reasons unrelated to the code and be widened until it protected
+  nothing. What IS enforced is that every anchored figure names the command
+  that regenerates it (`AssertFiguresNameTheirGenerator`, checked in both
+  directions; `git grep "regenerate:" core/` is the reverse), and that the
+  generator REFUSES rather than printing zeros. Discovering figures was tried
+  and rejected on the measurement — "median" appears 4x in the git adapter's
+  doc comments and only 3 are figures, so a heuristic arrives with an exemption
+  list nobody re-reads. That is #1518's subject, in the tree that has more of
+  them; #1578's magnitude floor does NOT transfer here, because these values
+  are 2-300 and collide with everything.
+  **A DERIVED figure needs the same refusal as a measured one, and that is the
+  hole this closes.** `Row.WithRate` renders bytes-per-population and refuses
+  BY NAME instead of rounding to zero — because #1572's own first generator
+  printed `0 bytes out = 0/commit` for a grep walk and `41 bytes out =
+  0/commit` for `rev-parse`, in a block that PASSED. A guard keyed on
+  `bytes == 0` catches the first and not the second: 41 is a real measurement
+  and `41/3209` is 0 in Go. The pre-fix rendering is committed as
+  `rateAsShipped` and re-measured every run, and the sweep beside it prints
+  "24 of 42 pairs" so an axis that stopped containing the defect fails loudly.
+  **The cannot-run case execs a path that does not exist** rather than stubbing
+  the answer, because "the loop collected nothing" and "the loop collected the
+  duration of the FAILURE" are different defects and only a real
+  never-answering child reaches the second.
+  Two costs are stated where they live rather than left to be discovered.
+  Sample counts are PER PLAN — the whole-process-table `lsof` scans cost ~0.3s
+  a call, so #1544's n=300 would be two minutes for one row — and `n` is
+  printed in every row so a smaller one is disclosed. And the git generator
+  deliberately does NOT build the `git fast-import` synthetic behind
+  `gitHistoryTimeout`'s 100k/1M curve points (~200 lines, minutes per point,
+  for a constant chosen against an order of magnitude): those two rows are
+  present and REFUSED by name, because a block that quietly stops at what is
+  easy reads as a complete measurement of a shorter curve. `tmux.list_clients`
+  refuses for a different reason — asking a socket with no server STARTS one.
 - Skill files: `tools/skill-lint.sh` reads every `.md` under
   `.claude/skills/` plus any other tracked `SKILL.md` (there is one under
   `tools/irrlicht-design-system/`) — the files that tell agents how to triage,

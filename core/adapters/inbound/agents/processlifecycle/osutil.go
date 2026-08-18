@@ -70,6 +70,18 @@ import (
 // together the two ARE the decision about which host reads get an aggregate and
 // which deliberately do not, and splitting that across a build tag hides half
 // of it.
+//
+// The order-of-magnitude gap the one-constant decision is argued against, since
+// #1572 re-measurable rather than remembered: the herdr `lsof` scan is 289.5ms
+// median / 339.7ms p99 / 257.4ms min (n=20, darwin/arm64, idle, warm), which is
+// the "roughly 0.3s" above. The `tmux list-clients` side is NOT reproduced by
+// that generator and stays as #1501 measured it (14ms/call) — asking a socket
+// with no server STARTS one, so the generator refuses by default rather than
+// having a side effect on a machine that may be running someone's session
+// (IRRLICHT_MEASURE_TMUX_SOCKET opts in against a socket the operator names).
+//
+// regenerate: IRRLICHT_MEASURE_PROBE_COSTS=1 go test
+// ./core/adapters/inbound/agents/processlifecycle/ -run TestMeasureProbeCosts -v
 const clientHostBudget = 2 * time.Second
 
 // noAggregateBudget is the context every host read that deliberately has NO
@@ -669,10 +681,19 @@ type procInfoAnswer struct {
 //
 // What it buys, measured on the committed code rather than argued: both call
 // sites run walk 1 to a full verdict and then walk 2 over the SAME chain, so
-// every PID in the chain was read exactly twice — 2 x depth `ps` execs, at a
-// measured 6.6ms median per exec on the machine #1544 was implemented on
-// (n=300; p99 10.2ms). At the maxAncestry ceiling that is ten wasted execs on
-// the synchronous discovery path.
+// every PID in the chain was read exactly twice — 2 x depth `ps` execs. At the
+// maxAncestry ceiling that is ten wasted execs on the synchronous discovery
+// path.
+//
+// The per-exec figure, re-measured under #1572 (darwin/arm64, 10 CPU, warm,
+// n=300): median 3.4ms, p99 4.1ms, min 2.7ms IDLE. #1544 recorded 6.6ms median
+// / 10.2ms p99 for the same exec, and that gap is LOAD, not a difference in the
+// work: the same generator under twelve busy loops on this machine reports
+// 7.1ms median / 11.4ms p99, which is #1544's figure. Both are true of the
+// machine they were taken on; min is the one that travels.
+//
+// regenerate: IRRLICHT_MEASURE_PROBE_COSTS=1 go test
+// ./core/adapters/inbound/agents/processlifecycle/ -run TestMeasureProbeCosts -v
 //
 // The admission rule is the same sentence as the bundle-id memo's, at a
 // different lifetime: **memoize answers, never a non-answer.** A failed read is
