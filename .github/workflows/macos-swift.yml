@@ -53,9 +53,11 @@ name: macOS (Swift)
 # skipped suites failed on no machine anybody could look at, so every statement
 # about WHAT differs was inferred from which suites pass. It is not a gate on
 # the pixels — those failing is its expected outcome and it does not judge them
-# — but it IS a gate on itself: a run that hung, was truncated, executed
-# nothing, or produced no images fails it, because "collected no evidence" and
-# "found no difference" must never print the same thing.
+# — but it IS a gate on itself: a run whose harness never loaded, or that hung,
+# was truncated, executed nothing, or produced no images fails it, because
+# "collected no evidence" and "found no difference" must never print the same
+# thing. Since #1678 those five are told apart from each other as well, not
+# only from health: the first used to be reported as the second.
 #
 # It costs a third macOS job per PR (macOS minutes bill at 10×). That is
 # deliberate for as long as the suites are skipped and #1615's step 3 is open;
@@ -308,7 +310,50 @@ jobs:
           # indistinguishable from an assertion failure.)
           set +e
           set -uo pipefail
-          . tools/lib/swift-suite.sh
+
+          # The harness, and the refusal that tells "the predicates could not
+          # be LOADED" from "the predicates RAN and reported truncation"
+          # (#1678). This source's status used to be read by nothing, and the
+          # result was not silent but MISDIAGNOSED. Measured with the library
+          # removed, under this step's own derived shell — four `::error::`
+          # lines, in this order:
+          #
+          #   the evidence run was TRUNCATED: the bundle never reported …
+          #   the evidence run executed 0 tests.
+          #   RasterPrimitiveEvidenceTests wrote no manifest …
+          #   not one of the five suites produced a failure image … #1615 has moved
+          #
+          # Every `swift_suite_*` call below becomes "command not found", so
+          # four guards fire at once. The first sends a reader to XCTest's
+          # stall detector (#1523) and the last says this workflow's own suite
+          # classification is stale. None of it happened: nothing ran.
+          #
+          # TWO checks rather than one, because a source that RETURNS 0 having
+          # defined nothing reads exactly like one that worked — an emptied or
+          # truncated file, or one whose last statement succeeded after an
+          # earlier error. `command -v` is the only thing that tells those
+          # apart, and it is what makes this three outcomes instead of two.
+          # The names are listed rather than derived because the guard asks
+          # "did this file's contents take effect", which any one of them
+          # answers; a fourth predicate call added below and not listed here
+          # is still covered by the three.
+          #
+          # Both refuse HERE rather than adding to `bad`: `swift_suite_run` is
+          # what PRODUCES everything the guards below judge, so continuing
+          # would grade an evidence run that was never started. The two
+          # wordings are deliberately disjoint, because a shared exit 1 is
+          # satisfied by refusals that all fire together (#1644).
+          if ! . tools/lib/swift-suite.sh; then
+            echo "::error::could not load the test harness tools/lib/swift-suite.sh, so the evidence run was never started and nothing below can judge it. This is NOT a truncated test bundle — look at the checkout, not at XCTest."
+            exit 1
+          fi
+          for fn in swift_suite_run swift_suite_completed swift_suite_ran_tests; do
+            if ! command -v "$fn" >/dev/null 2>&1; then
+              echo "::error::tools/lib/swift-suite.sh was read but defines no $fn, so the evidence run was never started and nothing below can judge it. This is NOT a truncated test bundle — the harness loaded and is unusable."
+              exit 1
+            fi
+          done
+
           log="$RUNNER_TEMP/swift-snapshot-evidence.log"
           export SNAPSHOT_ARTIFACTS="$RUNNER_TEMP/snapshot-artifacts"
           mkdir -p "$SNAPSHOT_ARTIFACTS"
