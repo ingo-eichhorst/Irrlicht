@@ -12,11 +12,11 @@
     "consumed_events": 19,
     "total_transitions": 3,
     "first_event_time": "2026-08-18T00:40:35.743301+02:00",
-    "last_event_time": "2026-08-18T00:40:48.977475+02:00",
-    "wall_clock_session_duration": 13234174000,
+    "last_event_time": "2026-08-18T00:40:47.019525+02:00",
+    "wall_clock_session_duration": 11276224000,
     "state_durations": {
       "ready": 2376333000,
-      "working": 10857841000
+      "working": 8899891000
     },
     "flicker_count": 0,
     "flickers_by_category": {},
@@ -56,21 +56,18 @@
     },
     {
       "index": 2,
-      "event_index": 18,
-      "virtual_time": "2026-08-18T00:40:48.977475+02:00",
-      "cause": "debounce_coalesce",
+      "event_index": -1,
+      "virtual_time": "2026-08-18T00:40:47.019525+02:00",
+      "cause": "hook",
       "prev_state": "working",
       "new_state": "waiting",
       "reason": "permission prompt open → waiting",
-      "last_event_type": "function_call",
-      "has_open_tool": true,
-      "open_tool_names": [
-        "exec"
-      ],
+      "last_event_type": "function_call_output",
+      "has_open_tool": false,
       "is_agent_done": false,
       "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "The explicit escalation route isn’t accepted by this workspace’s permission …"
+      "waiting_for_user_input": true,
+      "last_assistant_text_head": "I’ll create `hello.txt` with the exact two-byte content `hi` using the shell, …"
     }
   ],
   "sessions": [

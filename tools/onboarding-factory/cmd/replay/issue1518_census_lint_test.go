@@ -121,20 +121,19 @@ var coincidentalCensusFigures = []censusFigureExemption{
 	},
 	{
 		File:   "replay_sidecar.go",
-		Marker: "+ 2ms cluster window",
+		Marker: "+ 28ms cluster (rejected)",
 		Reason: "the divergent column of a REJECTED cluster-window configuration " +
 			"in #1478's calibration table. The block above it says the columns " +
 			"'no longer equal the live gate's figures' and to read the table as a " +
-			"comparison between rows. It coincides with Divergent.",
+			"comparison between rows. It coincides with DivergentByCountsAndKinds.",
 	},
 	{
 		File:   "replay_sidecar.go",
 		Marker: "+ 69ms cluster (rejected)",
 		Reason: "the divergent column of another rejected row of the same #1478 " +
-			"table, coinciding with DivergentByCountsAndKinds. That two rejected " +
-			"rows collide with two different census fields is coincidence twice " +
-			"over, which is the strongest argument available that neither is a " +
-			"restatement.",
+			"table, coinciding with Divergent. That two rejected rows collide " +
+			"with two different census fields is coincidence twice over, which is " +
+			"the strongest argument available that neither is a restatement.",
 	},
 }
 
@@ -147,6 +146,14 @@ var coincidentalCensusFigures = []censusFigureExemption{
 // restated a live figure could not behave that way — it would have tracked the
 // figure rather than being overtaken by it. The existence check on both sides is
 // what surfaced all three moves in one run instead of leaving two of them to rot.
+//
+// #1695 is the same movement in the opposite direction and is worth recording
+// for that reason: both fields fell by one (one recording stopped diverging when
+// replay began honouring the Stop hook), and every collision walked back up the
+// same table — the 2ms entry stopped suppressing anything and was deleted, the
+// 28ms row started colliding and regained an entry, and the 69ms row swapped
+// fields again. Two runs, opposite signs, the same table, collisions tracking
+// the figures both times. A restatement cannot do that in either direction.
 //
 // No figure is quoted in this paragraph, deliberately: the first draft of it did
 // quote them and this very check reported five sites, in its own exemption file.

@@ -1438,6 +1438,52 @@ Before marking a ticket done, run the full suite — every layer must pass:
   nothing objecting. One recording remains in `knownZeroTransition` because
   reaching it needs 69ms, i.e. it can only be bought by making two goldens
   assert something false — the trade this whole line of work exists to refuse.
+- Replay's hook channel: replay grades a recorded hook through exactly two
+  shared things — `session.hookSignalEffects`, which decides whether a hook
+  NAME does anything at all, and `applyHookEvent`, which decides whether the
+  effect reaches the classifier. Both had to be right before any hook was
+  gradeable, and #1695 is the run where only the first was looked at.
+  **A hook absent from the table is silently dropped**, which is #1320's
+  lesson; `HookStop` was absent on the stated grounds that its effect "carries
+  a payload a name-keyed lookup cannot supply". True about the payload, false
+  about the consequence: `signalPolicies`' turn-done `apply` guards BOTH
+  payload fields, so a payload-free hold still asserts `HookTurnDone` and the
+  degradation is one-directional — it can add to the cue verdict and can never
+  clear one the transcript found. That row is now present, and
+  `TestPayloadFreeTurnDoneNeverClearsATranscriptCue` is the property rather
+  than the paragraph. What the row does NOT replace is
+  `SessionDetector.HandleStopHook`, which has the payload and must keep it:
+  dropping the payload while keeping the hold reddens exactly one arm of
+  `TestSessionDetector_StopHook_DrivesTheTurnDoneTransition`, the turn that
+  ended on a question, and that arm is the whole argument for the two
+  entry points coexisting.
+  **The second half is the one that reads as health.** With the row added and
+  nothing else, every golden stayed byte-identical — `applyHookEvent` copied
+  `r.lastMetrics`, whose `NoSubstantiveActivity` belongs to the last TRANSCRIPT
+  batch, and `runClassifier`'s mirror of #329's short-circuit then discarded a
+  classification that had already answered `ready`. The flag is PER PASS and a
+  hook pass is a different pass; the daemon never had the problem because its
+  synthetic activity event goes through `RefreshOnActivity`, which recomputes
+  it. So a hook table row is worth checking end-to-end against a recording, not
+  just against the table's own test.
+  The payoff is that `cause` in a golden finally means something: a
+  hook-produced `ready` (`cause: "hook"`, at the hook's own timestamp) and a
+  transcript-produced one (`cause: "debounce_coalesce"`) are different bytes,
+  so the provenance question needed no new field. codex's
+  `2-13_turn-end-terminal-text` went from 2 of 4 recorded transitions
+  reproduced to 4 of 4 with zero mismatches, and #1388's two ">1s drift"
+  entries left that population — those were the short-circuit, not the
+  "structural" debounce lag they were recorded as.
+  Only ONE recording in the catalog can grade a Stop, and the register that
+  says so is machine-generated (`stopHookCensus`,
+  `TestStopHookIsGradedByTheCommittedCatalog`) because a hand-written one is
+  what #1695 had to correct: `replaydata/agents/claudecode/` carries no
+  Stop-bearing sidecar at all, and the catalog's other two Stops belong to
+  co-resident claude-code sessions inside another adapter's multi-agent
+  recording — one naming a session the replay does not drive, one on a sidecar
+  that cannot drive a replay. A catalog with no Stop at all is a REFUSAL there,
+  not a pass.
+
 - Replay goldens (when a recording or replay-output change is in play):
   regenerate with `UPDATE_REPLAY_GOLDENS=1 go test
   ./tools/onboarding-factory/cmd/replay/... -count=1` (the `-count=1`

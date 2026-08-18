@@ -940,10 +940,35 @@ func (r *sidecarReplayer) clusterBoundary(eventIdx int) int64 {
 // auto-detects only a sibling named <transcript>.events.jsonl while every
 // sidecar in replaydata/ is named plain events.jsonl. See issue #1326.
 //
-// Hooks absent from the table are still ignored here. Stop could not be a table
-// row (its effect needs a payload lifecycle.Event does not carry); Notification
-// and PreCompact could be, but no recording in replaydata/ fires one — add each
-// as a table row together with the first recording that does.
+// Hooks absent from the table are still ignored here: Notification and
+// PreCompact could be rows, but no recording in replaydata/ fires one — add
+// each as a table row together with the first recording that does. Stop WAS
+// in that sentence until #1695; see hookSignalEffects for why a payload-free
+// row is a floor rather than a wrong answer, and TestStopHookIsGradedByTheCommittedCatalog
+// for the recording that now grades it.
+//
+// NoSubstantiveActivity is cleared before the overlay, and that one line is
+// what made the Stop channel reachable at all (#1695). The flag is PER PASS —
+// tailer.go sets it as `scan.linesParsed > 0 && !scan.substantive`, and
+// session_detector_activity.go's own comment says so in as many words — but
+// r.lastMetrics is the last TRANSCRIPT batch's metrics, and a hook pass is a
+// different pass that parses no transcript lines. Carrying the flag across was
+// therefore asserting something the harness never observed, and runClassifier's
+// mirror of #329's short-circuit then swallowed the hook: measured on codex's
+// 2-13_turn-end-terminal-text, the Stop overlaid HookTurnDone and the
+// classifier answered `ready / "agent finished turn → ready"` — and the
+// short-circuit above discarded it, one instruction before it would have been
+// emitted. The daemon does not have this problem because a hook's synthetic
+// activity event goes through processActivity, whose RefreshOnActivity re-tails
+// and RECOMPUTES the flag for that pass; false is what a zero-line pass yields.
+//
+// The declared limit: false is an approximation of that recomputation, not the
+// recomputation. A daemon pass that read new-but-non-substantive bytes between
+// the last fs event and the hook would compute true and skip, where this
+// computes false and classifies. That case cannot be reconstructed from the
+// sidecar (it records no stat for the hook's own moment), and the approximation
+// errs toward reproducing the daemon's recorded transition rather than toward
+// dropping it — which is the direction the whole extended check is scored in.
 func (r *sidecarReplayer) applyHookEvent(hookEv lifecycle.Event) {
 	effect, ok := session.HookSignal(hookEv.HookName)
 	if !ok {
@@ -954,6 +979,7 @@ func (r *sidecarReplayer) applyHookEvent(hookEv lifecycle.Event) {
 		return
 	}
 	domainMetrics := replayengine.TailerToDomain(r.lastMetrics)
+	domainMetrics.NoSubstantiveActivity = false
 	r.signals.Overlay(replaySessionKey, domainMetrics, hookEv.Timestamp)
 	r.runClassifier(domainMetrics, transitionCtx{eventIdx: -1, virtTime: hookEv.Timestamp, cause: causeHook}, true)
 }
