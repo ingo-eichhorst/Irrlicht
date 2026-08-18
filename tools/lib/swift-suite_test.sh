@@ -769,6 +769,20 @@ _domain_case "a reader that answers nothing is not a clean domain" 1 _domain_rea
 _domain_case "a silent reader over an already-empty domain is not clean either" 1 _domain_reader_silent "could not be read" _domain_baseline_fresh
 _domain_case "a dead control probe fails loudly" 1 _domain_control_dead "control read of"
 
+# A flattener that cannot RUN answers exactly like a domain holding no keys —
+# empty output, status discarded by the pipeline it sits in — so "the parser is
+# broken" and "the domain is empty" would otherwise be the same report on every
+# domain at once. This is the second thing the control probe buys, and it is
+# asserted rather than argued: the control is flattened by the same code, so a
+# broken flattener drives it to ABSENT and the refusal fires. `awk` is shadowed
+# by a shell function, which the verdict's command substitution inherits; it is
+# unset immediately after so nothing else in this file runs under it.
+awk() { return 1; }
+_domain_case "a flattener that cannot run is a refusal, not an empty domain" 1 _domain_noop "control read of"
+unset -f awk
+command -v awk >/dev/null && pass "awk is the real one again after the shadow" \
+  || fail "the awk shadow outlived its case — every assertion after it is suspect"
+
 # A verdict with no before-snapshot must not report the domains as clean either.
 _dom_no_before=$(mktemp -d -t swift-suite-witness-state)
 _dom_stub=$(mktemp -d -t swift-suite-witness-stub)
@@ -845,10 +859,24 @@ _witness_scrub "$_flat_dir"
 # Read-only, and deliberately against the control domain rather than
 # com.apple.dt.xctest.tool, which is legitimately absent on a machine that has
 # never run this suite.
-_real_present=$(_swift_suite_domain_state "$SWIFT_SUITE_WITNESS_CONTROL_DOMAIN" | head -1)
+_real_snapshot=$(_swift_suite_domain_state "$SWIFT_SUITE_WITNESS_CONTROL_DOMAIN")
+_real_present=$(printf '%s\n' "$_real_snapshot" | head -1)
 [[ "$_real_present" == "PRESENT" ]] \
   && pass "the real defaults(1) answers a plist for a live domain ($SWIFT_SUITE_WITNESS_CONTROL_DOMAIN → PRESENT)" \
   || fail "the real defaults(1) answered '$_real_present' for $SWIFT_SUITE_WITNESS_CONTROL_DOMAIN — the domain half is reading nothing"
+# The real header, on real bytes. This is where the `<!DOCTYPE …>` line the
+# committed fixtures deliberately do NOT carry is covered: the seeder would only
+# ever hold a hand-copy of it, which drifts silently, while these two lines
+# assert that the real tool emits one AND that the production reader parses keys
+# out of an answer containing it.
+_real_raw=$(defaults export "$SWIFT_SUITE_WITNESS_CONTROL_DOMAIN" - 2>/dev/null)
+case "$_real_raw" in
+  *"<!DOCTYPE plist"*) pass "the real defaults(1) output carries a DOCTYPE line — the shape the fixtures omit" ;;
+  *) fail "the real defaults(1) output carries no DOCTYPE; the assumption the fixtures are pruned against no longer holds" ;;
+esac
+[[ "$(printf '%s\n' "$_real_snapshot" | tail -n +2 | grep -c .)" -gt 0 ]] \
+  && pass "...and the reader still flattens keys out of it" \
+  || fail "the reader produced no keys from the real DOCTYPE-carrying output"
 _real_absent=$(_swift_suite_domain_state io.irrlicht.no.such.domain.1688 | head -1)
 [[ "$_real_absent" == "ABSENT" ]] \
   && pass "the real defaults(1) answers an empty dict for a domain that does not exist (→ ABSENT)" \

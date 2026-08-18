@@ -26,9 +26,22 @@
 
 set -uo pipefail
 
+# _head — the two header lines the reader downstream actually keys on:
+# `_swift_suite_domain_state` classifies an answer as readable on the `<plist`
+# substring, and the flattener starts at the first tab-indented `<key>`.
+#
+# It deliberately carries NO `<!DOCTYPE …>` line, though the real
+# `defaults export` emits one. Two reasons, and the second is why this is not a
+# gap. A hand-copied constant that documents another program's output but is not
+# produced by it drifts silently and is then trusted — the rule AGENTS.md states
+# for replay's measured figures — and this one would drift into a fixture that
+# no longer represents the tool it stands in for while every test stayed green.
+# And nothing here is the DOCTYPE's coverage anyway: swift-suite_test.sh reads
+# the REAL `defaults export` and asserts, on those bytes, that its output does
+# carry a DOCTYPE and that the production reader still answers PRESENT with keys
+# over it. Real bytes are a strictly better witness of that than a copy of them.
 _head() {
   printf '<?xml version="1.0" encoding="UTF-8"?>\n'
-  printf '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
   printf '<plist version="1.0">\n'
 }
 
@@ -47,7 +60,8 @@ seed_one() {
 }
 
 seed_empty() {
-  { _head; printf '<dict/>\n</plist>\n'; } > "$1"
+  local path="$1"
+  { _head; printf '<dict/>\n</plist>\n'; } > "$path"
 }
 
 case "${1:-}" in
