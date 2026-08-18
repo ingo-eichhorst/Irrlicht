@@ -121,21 +121,35 @@ var coincidentalCensusFigures = []censusFigureExemption{
 	},
 	{
 		File:   "replay_sidecar.go",
-		Marker: "+ 28ms cluster (rejected)",
+		Marker: "+ 2ms cluster window",
 		Reason: "the divergent column of a REJECTED cluster-window configuration " +
 			"in #1478's calibration table. The block above it says the columns " +
 			"'no longer equal the live gate's figures' and to read the table as a " +
-			"comparison between rows. It coincides with DivergentByCountsAndKinds.",
+			"comparison between rows. It coincides with Divergent.",
 	},
 	{
 		File:   "replay_sidecar.go",
 		Marker: "+ 69ms cluster (rejected)",
-		Reason: "the divergent column of the other rejected row of the same #1478 " +
-			"table, coinciding with Divergent. That the two rejected rows collide " +
-			"with two different census fields is coincidence twice over, which is " +
-			"the strongest argument available that neither is a restatement.",
+		Reason: "the divergent column of another rejected row of the same #1478 " +
+			"table, coinciding with DivergentByCountsAndKinds. That two rejected " +
+			"rows collide with two different census fields is coincidence twice " +
+			"over, which is the strongest argument available that neither is a " +
+			"restatement.",
 	},
 }
+
+// WHICH rows collide is itself evidence, and #1388 is the run that showed it.
+// Adding two codex recordings moved Divergent and DivergentByCountsAndKinds each
+// up by one, and every collision moved WITH them, one row along a table that has
+// not changed: the 28ms row stopped colliding with anything and its entry was
+// deleted per this check's own advice, the 69ms row changed which field it
+// shadows, and the 2ms row started colliding and needed a new entry. A table that
+// restated a live figure could not behave that way — it would have tracked the
+// figure rather than being overtaken by it. The existence check on both sides is
+// what surfaced all three moves in one run instead of leaving two of them to rot.
+//
+// No figure is quoted in this paragraph, deliberately: the first draft of it did
+// quote them and this very check reported five sites, in its own exemption file.
 
 // censusFigureSite is one bare integer found in one comment line.
 type censusFigureSite struct {

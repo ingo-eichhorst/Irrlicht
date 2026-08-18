@@ -85,6 +85,15 @@ echo ""
 echo "== unit tests (replaydata/_lib/drive/turn-count_test.sh) =="
 bash "$SCRIPT_DIR/../../../replaydata/_lib/drive/turn-count_test.sh" || rc=1
 
+# Adapter-local driver libs. codex's boot gates are the only ones with a corpus
+# today (#1388) — the strings its interactive driver must recognize before codex
+# will accept a prompt. They earn a suite because the failure mode of a string
+# that stops matching is silent: the gate stays on screen, the prompt is typed
+# into it, and the run records a healthy-looking fixture that fires zero hooks.
+echo ""
+echo "== unit tests (replaydata/agents/codex/boot-gates_test.sh) =="
+bash "$SCRIPT_DIR/../../../replaydata/agents/codex/boot-gates_test.sh" || rc=1
+
 echo ""
 # The advisory shellcheck pass that used to live here is gone (#1684). It was
 # the shape AGENTS.md rules out: `|| true` per file so findings never moved rc,

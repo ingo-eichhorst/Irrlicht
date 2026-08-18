@@ -253,8 +253,21 @@ var knownFirstTransitionDrift = map[string]string{
 // entirely, so the two scalars below hold the whole population — every
 // kind-matched pair in every recording — without a second list of names to
 // maintain.
+// #1388 moved the first of these from 105 to 107. It added codex's two
+// hook-bearing recordings (2-13, 2-19), and BOTH drift >1s on a later pair
+// while neither drifts on its first — which is why they are absent from the
+// machine-generated list above and visible only here, i.e. exactly the case
+// these two scalars exist for.
+//
+// The cause is structural rather than a defect the recordings carry. In both,
+// the drifting pair is the one a HOOK asserts (PermissionRequest → waiting,
+// Stop → ready): the daemon flips on the POST, replay flips at the next
+// debounce boundary, and the settings those goldens record put that boundary
+// at 2s. Measured on 2-19: hook_received at 00:40:47.019, golden
+// virtual_time 00:40:48.977 — 1.96s, one debounce window. It is the same
+// bimodal population `driftThreshold` was cut from, not a new mode.
 const (
-	maxRecordingsDriftingOverThreshold = 105
+	maxRecordingsDriftingOverThreshold = 107
 	maxRecordingsDriftingOver5s        = 50
 )
 
@@ -279,9 +292,13 @@ const (
 // straight back. A floor whose stated job is catching a pairing shift that
 // drains the population has to be re-tightened onto the new measurement, or
 // the very next drain is free.
+// Re-tightened onto the new measurement by #1388, per the paragraph above:
+// its two codex recordings took the population from 828/275 to 832/277.
+// Leaving the old values would have let the growth sit as slack, which is
+// precisely the #1517 mistake that paragraph records.
 const (
-	minKindMatchedPairs   = 828
-	minMeasuredRecordings = 275
+	minKindMatchedPairs   = 832
+	minMeasuredRecordings = 277
 )
 
 // reportDriftEnumeration prints the drifted set — the deliverable of #1480,
