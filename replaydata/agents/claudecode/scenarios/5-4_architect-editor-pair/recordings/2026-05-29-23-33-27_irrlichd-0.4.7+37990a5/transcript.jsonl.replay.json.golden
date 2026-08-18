@@ -16,8 +16,8 @@
     "wall_clock_session_duration": 55086476000,
     "state_durations": {
       "ready": 20602189000,
-      "waiting": 10443012000,
-      "working": 24041275000
+      "waiting": 10548103000,
+      "working": 23936184000
     },
     "flicker_count": 1,
     "flickers_by_category": {
@@ -63,9 +63,9 @@
     },
     {
       "index": 2,
-      "event_index": 5,
-      "virtual_time": "2026-05-29T23:34:37.398345+02:00",
-      "cause": "debounce_coalesce",
+      "event_index": -1,
+      "virtual_time": "2026-05-29T23:34:37.293254+02:00",
+      "cause": "hook",
       "prev_state": "working",
       "new_state": "waiting",
       "reason": "permission prompt open → waiting",

@@ -266,8 +266,20 @@ var knownFirstTransitionDrift = map[string]string{
 // at 2s. Measured on 2-19: hook_received at 00:40:47.019, golden
 // virtual_time 00:40:48.977 — 1.96s, one debounce window. It is the same
 // bimodal population `driftThreshold` was cut from, not a new mode.
+//
+// #1695 moved it back, 107 -> 105, and the reason is the same sentence read in
+// reverse. That "structural" cause was a defect after all: replay flipped at
+// the next debounce boundary because applyHookEvent carried a stale per-pass
+// NoSubstantiveActivity into the hook's own pass, so #329's short-circuit ate
+// the hook-time classification and the transition fell through to the next
+// debounce flush. With that fixed, both codex recordings flip at the hook's own
+// timestamp — 2-19's pair is now 00:40:47.019 against a golden virtual_time of
+// 00:40:47.019 — and both leave this population, taking it back below where
+// #1388 found it. Re-tightened rather than left at 107, per the #1517 note
+// below: a bound that absorbs an improvement as slack makes the next
+// regression free.
 const (
-	maxRecordingsDriftingOverThreshold = 107
+	maxRecordingsDriftingOverThreshold = 105
 	maxRecordingsDriftingOver5s        = 50
 )
 
@@ -296,8 +308,13 @@ const (
 // its two codex recordings took the population from 828/275 to 832/277.
 // Leaving the old values would have let the growth sit as slack, which is
 // precisely the #1517 mistake that paragraph records.
+// #1695 re-tightened the pair floor again, 832 -> 834: replay now reproduces
+// codex 2-13's hook-driven transition and the two it had been hiding, so that
+// recording contributes two more kind-matched pairs. The recording floor does
+// not move — 2-13 was already measuring — which is the shape to expect here,
+// since a recording joins this population once and then only adds pairs.
 const (
-	minKindMatchedPairs   = 832
+	minKindMatchedPairs   = 834
 	minMeasuredRecordings = 277
 )
 

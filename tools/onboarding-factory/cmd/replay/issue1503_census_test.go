@@ -112,8 +112,8 @@ var censusOfTheCommittedCatalog = catalogCensus{
 	Recordings:                313,
 	Zero:                      1,
 	Fabricated:                1,
-	Divergent:                 143,
-	DivergentByCountsAndKinds: 142,
+	Divergent:                 142,
+	DivergentByCountsAndKinds: 141,
 	UnpairedSidecars:          0,
 	PairedButUngraded:         85,
 }
