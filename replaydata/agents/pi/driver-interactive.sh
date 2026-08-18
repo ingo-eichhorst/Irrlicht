@@ -129,7 +129,9 @@ MARKER=""
 SES_SESSION=()
 SES_TRANSCRIPT=()
 SES_UUID=()
+# shellcheck disable=SC2034  # driver-owned slot array; the sourced replaydata/_lib/drive/slots.sh reads it (save_active/load_slot/alloc_slot)
 SES_EXPECTED=()
+# shellcheck disable=SC2034  # driver-owned slot array; the sourced replaydata/_lib/drive/slots.sh reads it (save_active/load_slot/alloc_slot)
 SES_MARKER=()
 SES_CWD=()
 SES_ALIVE=()
@@ -140,6 +142,7 @@ ACTIVE=0
 # shared model in lib/drive/slots.sh — byte-identical to codex's except the
 # marker filename, set via DRIVE_MARKER_PREFIX (#508 #3).
 _DRIVE_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../_lib/drive" && pwd)"
+# shellcheck disable=SC2034  # read by the sourced replaydata/_lib/drive/slots.sh:56 (alloc_slot)
 DRIVE_MARKER_PREFIX="$STAGING/.pi-start-marker"
 # shellcheck source=lib/drive/slots.sh
 source "$_DRIVE_LIB/slots.sh"
@@ -160,7 +163,9 @@ source "$_DRIVE_LIB/teardown.sh"
 # picker UIs (e.g. /tree). start_session launches a second concurrent REPL
 # without tearing down the active one. Any step may carry {"session":N} to route
 # to slot N first.
+# shellcheck disable=SC2034  # scraped from this file's SOURCE by tools/onboarding-factory/scripts/lib/recipe-lint.sh:97 (sed), never expanded in shell
 DRIVE_ELICITS="send slash wait_turn interrupt keys sleep exit_clean resume reset_session start_session session"
+# shellcheck disable=SC2034  # scraped from this file's SOURCE by tools/onboarding-factory/scripts/lib/recipe-lint.sh:113 (sed), never expanded in shell
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 
 # boot_session brings up a pi REPL in the active slot's tmux session
@@ -454,7 +459,7 @@ while read -r step; do
       # arm touches NEITHER EXPECTED_TURNS nor the multi-session contract
       # files (session.uuids / transcript.paths).
       ks=$(jq -r '.keys' <<<"$step")
-      # shellcheck disable=SC2086 — intentional word-splitting of the key list
+      # shellcheck disable=SC2086  # intentional word-splitting of the key list
       tmux send-keys -t "$SESSION" $ks
       echo "[driver] keys[s$ACTIVE]: $ks" >&2
       sleep 0.5

@@ -150,9 +150,11 @@ assert_contains "floor: the run names the severity it applied" "--severity=warni
 #    skill-lint.sh's rule that a validator which cannot parse its input checks
 #    MORE, never less.
 #
-#    `replaydata/_lib/drive/contracts.sh` carries this construct today (outside
-#    this gate's scope; filed as #1687), and tools/bash-lint.sh's own header
-#    tripped it on the gate's first run.
+#    `replaydata/_lib/drive/contracts.sh` carried this construct from #508 until
+#    #1687, the whole time outside this gate's scope, and tools/bash-lint.sh's own
+#    header tripped it on the gate's first run. Cases 6f/6g below are the same
+#    construct graded at a real `replaydata/` path, now that the family is in
+#    scope.
 # ===========================================================================
 prose_tmp="$(mktemp -d)"
 hidden="$prose_tmp/reworded.sh"
@@ -197,11 +199,23 @@ assert_not_contains "discovery: the fixture corpus is excluded" "ok  tools/lib/t
 # than a count that would need editing on every new script.
 assert_contains "discovery: the census names both halves" "bash-lint: " "$out"
 assert_contains "discovery: ...including the testdata exclusion's own tally" "*/testdata/*=" "$out"
-assert_contains "discovery: ...and the recording-rig exclusion's" "replaydata/*=" "$out"
 
-# The excluded families must be genuinely absent from the linted list, not
-# merely uncounted.
-assert_not_contains "discovery: replaydata drivers are excluded" "ok  replaydata/" "$out"
+# The excluded family must be genuinely absent from the linted list, not merely
+# uncounted.
+assert_not_contains "discovery: the fixture corpus is not linted" "ok  tools/lib/testdata/bash-lint/" "$out"
+
+# ...and the family that came IN with #1687 must be genuinely present. Named
+# files rather than a count: re-excluding all 34 recording-rig scripts would
+# drop the corpus from 117 to 83, which every threshold below still accepts.
+# `contracts.sh` specifically, because it is the file whose analysis shellcheck
+# ABANDONED for the whole of its life before #1687 — a gate reporting `ok` for
+# it is the one line that says the abandonment is gone AND the file is read.
+assert_contains "scope (#1687): the recording rig's drivers are linted" \
+  "ok  replaydata/agents/codex/driver-interactive.sh" "$out"
+assert_contains "scope (#1687): ...including the shared driver libs" \
+  "ok  replaydata/_lib/drive/contracts.sh" "$out"
+assert_contains "scope (#1687): ...and the template they are generated from" \
+  "ok  tools/onboarding-factory/scripts/templates/drive-interactive.sh.tmpl" "$out"
 
 # ...and the exclusions must not have swallowed the corpus. `--list` is the
 # machine-readable form of the census; a scope that collapsed to a handful of
@@ -241,12 +255,16 @@ scratch_repo() {
     cd "$d" || exit 1
     git init -q . || exit 1
     printf '#!/usr/bin/env bash\nset -eu\necho clean\n' > tracked-clean.sh || exit 1
-    # One inhabitant per exclusion rule. Without these the gate refuses (case
-    # 7), which would make every assertion here grade the wrong path.
-    mkdir -p tools/lib/testdata/bash-lint replaydata/_lib tools/templates || exit 1
+    # One inhabitant for the single remaining exclusion rule. Without it the
+    # gate refuses (case 7), which would make every assertion here grade the
+    # wrong path. It carries an SC2034 deliberately: a CLEAN fixture would pass
+    # whether it was excluded or linted, so only a broken one can tell those
+    # apart, and cases 6c/7 rely on that.
+    mkdir -p tools/lib/testdata/bash-lint replaydata/_lib || exit 1
     printf '#!/usr/bin/env bash\nfoo=1\n' > tools/lib/testdata/bash-lint/fixture.sh || exit 1
-    printf '#!/usr/bin/env bash\nbar=1\n' > replaydata/_lib/driver.sh || exit 1
-    printf '#!/usr/bin/env bash\nbaz=1\n' > tools/templates/drive.sh.tmpl || exit 1
+    # Since #1687 `replaydata/` is IN scope, so this one has to be clean — it is
+    # here as a stand-in for the recording rig, not as an exemption.
+    printf '#!/usr/bin/env bash\nset -eu\necho driver\n' > replaydata/_lib/driver.sh || exit 1
     git add -A . || exit 1
     # The fixture IS the test here. A scratch repo that did not come up would
     # make every assertion below grade a tree git cannot read, and a gate that
@@ -286,16 +304,17 @@ if scratch_repo "$scratch"; then
   assert_eq "untracked: a clean UNTRACKED script passes (exit 0)" "0" "$rc"
   assert_contains "untracked: the clean untracked file is reported ok" \
     "ok  untracked-clean.sh" "$out"
-  # 2 linted (tracked-clean.sh + untracked-clean.sh) of 5 discovered; the gate's
-  # own copy is untracked bash under tools/ and IS linted, making 3 of 6.
+  # 3 linted (tracked-clean.sh + replaydata/_lib/driver.sh + untracked-clean.sh)
+  # of 4 discovered; the gate's own copy is bash under tools/ and IS linted,
+  # making 4 of 5. Only the testdata fixture is excluded.
   assert_contains "untracked: the census counts it exactly once" \
-    "bash-lint: 3 of 6 bash file(s)" "$out"
+    "bash-lint: 4 of 5 bash file(s)" "$out"
 else
   echo "  FAIL: untracked: scratch repo could not be built" >&2
   fails=$((fails + 1))
 fi
 
-# 6c. The exclusions apply to untracked files too — a plausible
+# 6c. The exclusion applies to untracked files too — a plausible
 #     mis-implementation is a SECOND walk that skips the filters the first one
 #     applies, which is the mistake posix-lint_test.sh's cases 10c/10d were
 #     written against. Pinning the census rather than only the exit status is
@@ -303,15 +322,62 @@ fi
 if scratch_repo "$scratch"; then
   printf '#!/usr/bin/env bash\nset -u\nd=""\nrm -rf "$d/lib"\n' \
     > "$scratch/tools/lib/testdata/bash-lint/untracked-bad.sh"
-  printf '#!/usr/bin/env bash\nset -u\nd=""\nrm -rf "$d/lib"\n' \
-    > "$scratch/replaydata/untracked-bad.sh"
   out=$( cd "$scratch" && ./tools/bash-lint.sh 2>&1 )
   rc=$?
   assert_eq "untracked: an excluded-family untracked file is still excluded (exit 0)" "0" "$rc"
   assert_contains "untracked: the exclusion census counts them" "*/testdata/*=2" "$out"
-  assert_contains "untracked: ...and the replaydata rule counts both of its own" "replaydata/*=2" "$out"
 else
   echo "  FAIL: untracked: scratch repo could not be built" >&2
+  fails=$((fails + 1))
+fi
+
+# ===========================================================================
+# 6f. THE #1687 SCOPE MUTATION, and the reason it is here rather than in the
+#     committed corpus: a deliberately-broken fixture cannot live under
+#     `replaydata/` — the gate would fail on it forever, and that catalog is
+#     CI-deletion-guarded (#268), so the evidence could not be retired either.
+#     A scratch repo is the only place the planted file can carry the real
+#     path.
+#
+#     Both directions, because each alone is satisfied by the wrong gate:
+#     a finding under `replaydata/` must FAIL (the exclusion #1684 declared
+#     made this pass), and the same tree without it must PASS (a gate that
+#     rejected everything would satisfy the first).
+if scratch_repo "$scratch"; then
+  mkdir -p "$scratch/replaydata/agents/codex"
+  printf '#!/usr/bin/env bash\nset -u\nd=""\nrm -rf "$d/lib"\n' \
+    > "$scratch/replaydata/agents/codex/driver-interactive.sh"
+  out=$( cd "$scratch" && ./tools/bash-lint.sh 2>&1 )
+  rc=$?
+  assert_eq "scope (#1687): a finding under replaydata/ FAILS the gate" "1" "$rc"
+  assert_contains "scope (#1687): the driver is named on a FAIL line" \
+    "FAIL replaydata/agents/codex/driver-interactive.sh" "$out"
+
+  # 6g. The construct #1687 was filed for, at a real recording-rig path: a
+  #     comment whose first word is the linter's own name. It is NOT reported
+  #     as a style nit — it ABANDONS the file, so the SC2115 two lines down
+  #     disappears. The gate must still go red, via SC1073, because those parse
+  #     errors are inside its severity floor. This asserts scope and floor
+  #     together: either one missing and the file reads as clean.
+  printf '#!/usr/bin/env bash\n# shellcheck this comment is prose, not a directive\nset -u\nd=""\nrm -rf "$d/lib"\n' \
+    > "$scratch/replaydata/agents/codex/driver-interactive.sh"
+  out=$( cd "$scratch" && ./tools/bash-lint.sh 2>&1 )
+  rc=$?
+  assert_eq "scope (#1687): an ABANDONED replaydata file fails rather than reading clean" "1" "$rc"
+  assert_contains "scope (#1687): ...reported as the unparseable directive it is" "SC1073" "$out"
+  # The abandonment is what makes this worth its own case: shellcheck's only
+  # output for the file is the parse error, and the rm below it is invisible.
+  assert_not_contains "scope (#1687): ...and the SC2115 below it is indeed swallowed" "SC2115" "$out"
+
+  printf '#!/usr/bin/env bash\nset -eu\necho clean driver\n' \
+    > "$scratch/replaydata/agents/codex/driver-interactive.sh"
+  out=$( cd "$scratch" && ./tools/bash-lint.sh 2>&1 )
+  rc=$?
+  assert_eq "scope (#1687, vacuity): a clean driver at the same path passes" "0" "$rc"
+  assert_contains "scope (#1687, vacuity): ...and was actually read" \
+    "ok  replaydata/agents/codex/driver-interactive.sh" "$out"
+else
+  echo "  FAIL: scope: scratch repo could not be built" >&2
   fails=$((fails + 1))
 fi
 
@@ -357,15 +423,20 @@ fi
 #    for exemption maps — `TW_EXEMPT_KEYS` in shell-lib-errexit_test.sh,
 #    `nilTolerant` in construction_test.go, `shell_lib_suite_run`'s skip list —
 #    keys are existence-checked, because an entry that stopped naming anything
-#    real reads from the log exactly like coverage. A repo with no replaydata/
-#    is that state.
+#    real reads from the log exactly like coverage. A repo with no fixture
+#    corpus is that state.
+#
+#    Since #1687 there is exactly ONE exclusion left, which makes this case
+#    carry more weight than it did: it is the only remaining proof that the
+#    existence check works at all, so if a future exclusion is added it should
+#    get its own arm here rather than rely on this one.
 # ===========================================================================
 if scratch_repo "$scratch"; then
-  rm -rf "$scratch/replaydata"
+  rm -rf "$scratch/tools/lib/testdata"
   out=$( cd "$scratch" && ./tools/bash-lint.sh 2>&1 )
   rc=$?
   assert_eq "refusal: an exclusion matching nothing exits 2 (not a silent pass)" "2" "$rc"
-  assert_contains "refusal: it names the dead rule" "replaydata/*" "$out"
+  assert_contains "refusal: it names the dead rule" "*/testdata/*" "$out"
   assert_contains "refusal: ...and repeats the reason that rule was written for" \
     "Its stated reason was" "$out"
 else
@@ -397,6 +468,9 @@ fi
 # ===========================================================================
 if scratch_repo "$scratch"; then
   rm -f "$scratch/tracked-clean.sh"
+  # ...and the recording-rig stand-in, which since #1687 is in scope and would
+  # otherwise keep the in-scope set non-empty.
+  rm -f "$scratch/replaydata/_lib/driver.sh"
   printf '/tools/bash-lint.sh\n' > "$scratch/.gitignore"
   # `git rm --cached` as well as the .gitignore: scratch_repo already TRACKED
   # the gate copy, and .gitignore only governs untracked paths.

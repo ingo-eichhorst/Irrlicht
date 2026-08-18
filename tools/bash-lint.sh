@@ -44,6 +44,37 @@
 #     SC2155 ×1  declare-and-assign masking a return value.
 #     SC2188 ×1  `> "$LOG"` — a redirection with no command.
 #
+# WHAT THE SECOND WAVE FOUND (#1687), when the two remaining exclusions — the
+# recording rig's per-agent drivers under `replaydata/` and the `.tmpl` they are
+# generated from — came in. 89 findings over 34 files (79 under `replaydata/`,
+# 10 in the template), and the census is IDENTICAL on 0.9.0 and 0.11.0, which
+# extends the version-agreement measurement above to this corpus rather than
+# assuming it:
+#
+#     SC2034 ×78 the driver protocol's declared-variable seam, and every one
+#                verified to have a real consumer before it was annotated:
+#                `DRIVE_ELICITS` / `DRIVE_SLASH_REQUIRES_STEP_TYPE` (24) are
+#                scraped out of the driver's SOURCE TEXT by
+#                scripts/lib/recipe-lint.sh and never expanded in a shell at
+#                all; the `SES_*` slot arrays and the view vars (48) are
+#                read/written by the sourced `replaydata/_lib/drive/*.sh`;
+#                `SETTINGS_PATH`/`UUID` (5) name positional slots of the
+#                driver protocol run-cell.sh:379 invokes. One — `SKILL_DIR` in
+#                the gastown driver — had NO consumer anywhere in the repo and
+#                was deleted rather than annotated.
+#     SC1125 ×8  `# shellcheck disable=SC2086 — <prose>`. The disable IS
+#                honoured (re-measured on both versions), so the fix is a
+#                respelling, not a behaviour change.
+#     SC1072/3×2 `replaydata/_lib/drive/contracts.sh`, whose whole analysis was
+#                abandoned — see the note on comments below.
+#     SC2155 ×1  `local session="ocdrv-$$-$(date +%s)"` in opencode's driver.
+#
+# Why the drivers were worth bringing in, beyond the count: #1388/#1694 found
+# that codex's driver had ROTTED against codex-cli 0.147.0 and produced a
+# healthy-looking fixture — `driver.exit-reason: ok`, zero rollouts — from a run
+# that did nothing. Ten adapter drivers steer live TUIs by grepping literal
+# strings, and until #1687 no static analyser read one of them.
+#
 # ONE FILE AT A TIME, and that is not an implementation detail. Measured: given
 # several files in ONE invocation, shellcheck suppresses SC2034 for a name used
 # in ANY of them — `shellcheck tools/lib/swift-suite_test.sh` reports 2
@@ -122,11 +153,22 @@
 # FIRST word after `#` is the linter's name is parsed as a DIRECTIVE, and an
 # unparseable one (SC1072/SC1073) makes it ABANDON the file — every later
 # finding silently disappears. This header tripped exactly that on its first
-# run, and `replaydata/_lib/drive/contracts.sh` has been carrying it unnoticed
-# (measured: rewording that one line surfaces an SC2005 the file currently
-# hides). So never open a comment line with that word — and note that the gate
+# run, and `replaydata/_lib/drive/contracts.sh` carried it from #508 until
+# #1687. So never open a comment line with that word — and note that the gate
 # below catches it, because an abandoned analysis reports SC1072/SC1073 at
 # ERROR severity and therefore fails rather than reading as clean.
+#
+# The floor was checked against that file rather than assumed, and the check
+# was worth running because it corrects the issue's own framing. #1687 quoted
+# "rewording that one line surfaces an SC2005 the file currently hides", which
+# is true at shellcheck's DEFAULT severity and false at this gate's: SC2005 is
+# `style`, so at `--severity=warning` the reworded file reports nothing at all.
+# What the floor catches is therefore not the hidden finding but the
+# ABANDONMENT itself — the file goes from "2 errors and no analysis" to
+# "analysed, clean", and any finding a future edit introduces is now visible
+# instead of swallowed. That is the whole reason SC1072/SC1073 sit inside the
+# floor, and the reason no extra guard was added for the construct: the gate
+# already refuses it, measured on 0.9.0 and 0.11.0 alike.
 #
 # NEVER SILENTLY PASSES. Four ways out are hard refusals (exit 2), not skips:
 # no shellcheck, an empty in-scope file set, an exclusion rule that matches
@@ -171,12 +213,6 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 EXCLUDE=(
   '*/testdata/*'
   'a deliberately-corrupt fixture corpus, driven by its own unit test rather than by this gate — the split tools/skill-lint.sh and tools/posix-lint.sh already draw for theirs'
-
-  'replaydata/*'
-  'the recording rigs per-agent drivers. Measured per-file: 79 findings, 68 of them SC2034 over the driver protocols declared-variable seam, 8 SC1125, plus replaydata/_lib/drive/contracts.sh, whose whole analysis is ABANDONED because a prose comment opens with the linters name. Bringing them in is a separate piece of work, filed as issue #1687'
-
-  '*/templates/*.tmpl'
-  'a template expanded into the driver family above, and carrying the same 10 SC2034 seam variables — excluded with replaydata/ rather than separately from it'
 )
 
 # ─── Discovery ──────────────────────────────────────────────────────────────

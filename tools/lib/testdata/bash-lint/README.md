@@ -22,15 +22,20 @@ by nothing.
 | `bad-declare-assign.sh` | SC2155 | `local x=$(cmd)` masks `cmd`'s status. |
 | `bad-redirect-no-command.sh` | SC2188 | a redirection with no command. |
 | `bad-directive-prose.sh` | SC1072/SC1073 | a prose comment opening with the linter's name is parsed as a directive, and an unparseable one makes it **abandon the file**. |
-| `bad-directive-keyvalue.sh` | SC1125 | a directive whose reason is appended without a second `#`. |
+| `bad-directive-keyvalue.sh` | SC1125 | a directive whose reason is appended without a second `#`. Eight sites in `replaydata/` were written this way; #1687 respelled them. |
 | `good-clean.sh` | — | the **vacuity guard**. A linter that failed everything would satisfy all nine above. |
 | `style-noisy-but-warning-clean.sh` | — | the severity floor, in the one direction the `bad-*` files cannot reach: shellcheck exits 1 carrying only SC2086/SC2012, below the floor, and the gate must pass it. |
 
 `bad-directive-prose.sh` is the one to read first, because its failure mode is
 silence rather than noise: the SC2115 on its last line is **invisible** while
 line 12 is present, and `bash-lint_test.sh` proves that by rewording that one
-line and asserting the finding appears. `replaydata/_lib/drive/contracts.sh` has
-been carrying the same construct unnoticed (#1687), and `tools/bash-lint.sh`'s own
-header tripped it on the gate's first run.
+line and asserting the finding appears. `replaydata/_lib/drive/contracts.sh`
+carried the same construct from #508 until #1687 — outside the gate's scope for
+all of it — and `tools/bash-lint.sh`'s own header tripped it on the gate's first
+run. Since #1687 that file is in scope and clean, and
+`bash-lint_test.sh`'s scope cases plant the construct at a `replaydata/` path in
+a scratch repo, because a broken fixture cannot live in that catalog: the gate
+would fail on it forever and #268's deletion guard would not let it be
+retired.
 
 Do not "fix" the findings in `bad-*.sh`. They are the assertions.

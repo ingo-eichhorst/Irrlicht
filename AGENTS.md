@@ -961,8 +961,9 @@ Before marking a ticket done, run the full suite — every layer must pass:
   only the lines a case runs, where the linter reads every line.
 - Bash scripts: `tools/bash-lint.sh` runs `shellcheck --shell=bash
   --severity=warning` over every file git knows about — tracked, plus untracked
-  and not gitignored — whose **first line** is a bash shebang. 83 files /
-  ~19k lines, and until #1684 **no static linter read one of them**: the bullet
+  and not gitignored — whose **first line** is a bash shebang. 117 files
+  (83 at #1684, plus the 34 #1687 brought in), and until #1684 **no static
+  linter read one of them**: the bullet
   above selects on `#!/bin/sh` line 1, deliberately (#1611), so every bash file
   fell through — including the bounded gate runner (`gate-budget.sh`), the
   pre-push hook's own scoping rules (`changed-files.sh`), the shared suite
@@ -971,14 +972,27 @@ Before marking a ticket done, run the full suite — every layer must pass:
   #1423 and #1611. It found 26 findings, all fixed or annotated.
   Four decisions are load-bearing and each was measured rather than preferred.
   - **DEFAULT-IN, opt-out with a reason.** The scope is not a prefix list — it
-    is everything, minus three declared `EXCLUDE` globs each carrying its
+    is everything, minus the declared `EXCLUDE` globs each carrying its
     justification, and an exclusion that matches NOTHING is a hard refusal
     (exit 2) rather than a no-op, the same both-directions existence check
     `TW_EXEMPT_KEYS` and `nilTolerant` get. So a bash file added anywhere is
-    covered by existing, and the two families that are out — the
-    deliberately-corrupt `testdata/` corpora, and the recording rig's per-agent
-    drivers plus their `.tmpl` (#1687: 79 findings, and one file whose analysis
-    shellcheck silently ABANDONS) — are out visibly.
+    covered by existing. Since #1687 **exactly one** family is out — the
+    deliberately-corrupt `testdata/` corpora — which puts more weight on that
+    refusal than it carried before: it is now the only proof the existence
+    check works, so a second exclusion owes its own arm in the suite.
+    #1687 brought in the other two, the recording rig's per-agent drivers
+    (`replaydata/**`, 33 files) and the `.tmpl` they are generated from: 89
+    findings, all fixed or annotated, and **byte-identical on 0.9.0 and
+    0.11.0**, which extends the version-agreement measurement below to that
+    corpus rather than assuming it carries. Why they were worth it beyond the
+    count: #1388/#1694 found codex's driver had ROTTED against codex-cli
+    0.147.0 and produced a healthy-looking fixture — `driver.exit-reason: ok`,
+    zero rollouts — from a run that did nothing. Ten drivers steer live TUIs by
+    grepping literal strings, and no static analyser had read one of them.
+    Of the 78 SC2034s, 77 were verified cross-file seams and annotated per
+    site; the one with no consumer anywhere (`SKILL_DIR` in the gastown driver)
+    was deleted rather than annotated, which is the distinction the rule turns
+    on.
   - **A severity FLOOR, not posix-lint's named code set**, and the reason the
     precedent was not followed is that SC3xxx is a closed family by definition
     while "bugs in bash" is not: an opt-in code list is not enforced on a code
@@ -1006,16 +1020,31 @@ Before marking a ticket done, run the full suite — every layer must pass:
     for the same reason `posix-lint.sh` refuses to filter its parse-abort codes
     into silence, and it is the gate's most valuable rule: it caught the
     construct **four times in this PR's own new prose**, and
-    `replaydata/_lib/drive/contracts.sh` has been carrying it unnoticed (#1687 —
-    rewording that one line surfaces an SC2005 the file currently hides). The
+    `replaydata/_lib/drive/contracts.sh` carried it from #508 until #1687 —
+    for that whole time shellcheck's ONLY output for that file was the two
+    parse errors. **No extra guard was added for it in #1687, because the floor
+    already refuses it**: with the file in scope the gate goes red on
+    SC1073/SC1072, measured on 0.9.0 and 0.11.0 alike. Note the correction to
+    #1687's own framing while quoting it — "rewording that one line surfaces an
+    SC2005" is true at shellcheck's DEFAULT severity and false at this gate's,
+    since SC2005 is `style`; at `--severity=warning` the reworded file reports
+    nothing. What the floor buys is not the hidden finding but the end of the
+    abandonment, i.e. that any finding a future edit introduces is visible at
+    all. The
     sibling SC1125 is the `# shellcheck disable=SCxxxx — <prose>` spelling; the
     disable IS still honoured (measured on both versions), but the reason must
     go behind a second `#`.
   The sanctioned escape hatch is a per-SITE `# shellcheck disable=SCxxxx  #
-  <reason>` naming its consumer's `file:line` — all 17 SC2034s are that, each
-  verified to have a real reader — and never a code removed from the gate.
+  <reason>` naming its consumer's `file:line` — all 94 SC2034s are that (17 at
+  #1684, 77 at #1687), each verified to have a real reader — and never a code
+  removed from the gate.
   A directive covers only the NEXT command, so four adjacent knob assignments
-  need four.
+  need four. Two consequences #1687 measured and had to work around: a `;`-
+  joined declaration line (`A=(); B=(); C=()`) takes a directive only on its
+  FIRST assignment, so such lines are split one per line rather than left with
+  a directive that appears to cover three and covers one; and a directive
+  placed before the file's first COMMAND applies file-wide, which is a blanket
+  disable wearing a per-site shape and is not used.
   It lives in **`linux.yml`** beside `posix-lint.sh`, but for a DIFFERENT
   reason, and the difference is the decision: posix-lint needs ubuntu because
   `/bin/sh` must genuinely BE dash there — a property of the runtime — whereas

@@ -35,8 +35,17 @@ emit_session_contract() {
 
 # drive_exit maps EXIT_REASON to the process exit code and exits. Every case
 # (including the catch-all) calls exit, so this function never returns
-# normally — no trailing `return` (it would be unreachable dead code;
-# shellcheck SC2317 flags exactly that).
+# normally — no trailing `return`, which would be unreachable dead code and is
+# what SC2317 flags.
+#
+# Note how that code is named: NOT by opening a comment line with the linter's
+# own name. A comment whose FIRST word after `#` is that name is parsed as a
+# DIRECTIVE, and an unparseable one (SC1073/SC1072) makes the analysis of the
+# WHOLE file be abandoned — every later finding silently disappears. This file
+# carried exactly that from #508 until #1687, during which shellcheck's only
+# output for it was the two parse errors. tools/bash-lint.sh keeps SC1072/SC1073
+# inside its severity floor so the construct fails the gate rather than reading
+# as a clean file.
 drive_exit() {
   case "$EXIT_REASON" in
     ok)            exit 0 ;;

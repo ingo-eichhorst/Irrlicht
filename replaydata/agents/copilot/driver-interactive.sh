@@ -78,6 +78,7 @@ fi
 STAGING="$1"
 UUID="$2"            # preferred session id; some agents mint their own (ignore then)
 TIMEOUT_S="$3"
+# shellcheck disable=SC2034  # positional arg $4 of the driver protocol (tools/onboarding-factory/scripts/run-cell.sh:379); named so the slot is not silently reused, though this adapter's launch does not read it
 SETTINGS_PATH="$4"   # scenario settings blob; wire into the launch if the agent reads one
 SCRIPT_JSON="$5"
 
@@ -90,6 +91,7 @@ DRIVER_LOG="$STAGING/driver.log"
 # column starts ON the slot model: porting a multi-session step is "wire the seam
 # + call alloc_slot/load_slot", not rebuilding the slot bookkeeping (#666).
 _DRIVE_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../_lib/drive" && pwd)"
+# shellcheck disable=SC2034  # read by the sourced replaydata/_lib/drive/slots.sh:56 (alloc_slot)
 DRIVE_MARKER_PREFIX="$STAGING/.copilot-marker"
 # shellcheck source=/dev/null
 source "$_DRIVE_LIB/slots.sh"
@@ -119,7 +121,10 @@ SES_SESSION=(); SES_TRANSCRIPT=(); SES_UUID=(); SES_EXPECTED=()
 # Transcripts of sessions retired by an in-place rotation (reset_session).
 # They are dead, so they get no slot, but the fixture must still span them.
 RETIRED_TRANSCRIPTS=()
-SES_MARKER=(); SES_CWD=(); SES_ALIVE=()
+# shellcheck disable=SC2034  # driver-owned slot array; the sourced replaydata/_lib/drive/slots.sh reads it (save_active/load_slot/alloc_slot)
+SES_MARKER=()
+SES_CWD=()
+SES_ALIVE=()
 
 # recipe-lint contract (#508 #4): the step types this driver genuinely ELICITS,
 # read directly by recipe-lint (no separate manifest). Start with ONLY the seams
@@ -128,7 +133,9 @@ SES_MARKER=(); SES_CWD=(); SES_ALIVE=()
 # recipe-lint flags a recipe needing it as a semantic_gap before recording. Set
 # DRIVE_SLASH_REQUIRES_STEP_TYPE=true if copilot is headless-first (a bare
 # send "/cmd" stores literal text instead of reaching the REPL).
+# shellcheck disable=SC2034  # scraped from this file's SOURCE by tools/onboarding-factory/scripts/lib/recipe-lint.sh:97 (sed), never expanded in shell
 DRIVE_ELICITS="send slash sleep wait_turn exit_clean sigkill interrupt keys restart start_session session reset_session resume"
+# shellcheck disable=SC2034  # scraped from this file's SOURCE by tools/onboarding-factory/scripts/lib/recipe-lint.sh:113 (sed), never expanded in shell
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 RUN_CWD="${IRRLICHT_ONBOARD_CWD:-$STAGING/cwd}"
 mkdir -p "$RUN_CWD"
@@ -482,6 +489,7 @@ while IFS= read -r step; do
     # Copilot exits on /exit; Ctrl-D is not a documented quit path here.
     exit_clean)      slash_cmd "/exit"
                      wait_tmux_session_gone "$SESSION" 15 || true
+                     # shellcheck disable=SC2034  # part of the shared slot model replaydata/_lib/drive/slots.sh:64 (alloc_slot) initialises; this driver keeps it current but has no branch that reads it, while sibling drivers do (e.g. antigravity's exit summary)
                      SES_ALIVE[$ACTIVE]=0 ;;
     start_session)   save_active
                      launch_repl ;;

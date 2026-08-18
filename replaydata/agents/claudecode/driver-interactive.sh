@@ -77,7 +77,9 @@ DRIVER_LOG="$STAGING/driver.log"
 # owner here, not a parallel manifest. Full tmux-TUI driver; every dispatched
 # step type is genuinely produced — `send|slash` is one arm, so a slash typed
 # via send reaches the REPL.
+# shellcheck disable=SC2034  # scraped from this file's SOURCE by tools/onboarding-factory/scripts/lib/recipe-lint.sh:97 (sed), never expanded in shell
 DRIVE_ELICITS="send slash wait_turn interrupt keys sleep restart resume reset_session sigkill exit_clean start_session session"
+# shellcheck disable=SC2034  # scraped from this file's SOURCE by tools/onboarding-factory/scripts/lib/recipe-lint.sh:113 (sed), never expanded in shell
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 
 # Per-run CWD so claude writes its transcript under a unique
@@ -371,7 +373,7 @@ step_interrupt() {
 #   {"type": "keys", "keys": "Up Up Enter"}
 step_keys() {
   local keys="$1"
-  # shellcheck disable=SC2086 — intentional word-splitting of the key list
+  # shellcheck disable=SC2086  # intentional word-splitting of the key list
   tmux send-keys -t "$CURRENT_TMUX" $keys
   echo "[driver] keys[s$ACTIVE]: $keys" >&2
   sleep 0.3
