@@ -54,7 +54,9 @@ DRIVER_LOG="$STAGING/driver.log"
 # (a subset of its case arms — accepting ≠ producing), read directly by
 # recipe-lint so the grammar has ONE owner here, not a parallel manifest.
 # tmux-TUI driver.
+# shellcheck disable=SC2034  # scraped from this file's SOURCE by tools/onboarding-factory/scripts/lib/recipe-lint.sh:97 (sed), never expanded in shell
 DRIVE_ELICITS="send slash wait_turn interrupt sleep"
+# shellcheck disable=SC2034  # scraped from this file's SOURCE by tools/onboarding-factory/scripts/lib/recipe-lint.sh:113 (sed), never expanded in shell
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 
 # Per-run git-init'd CWD — same trick as drive-aider.sh; aider walks up

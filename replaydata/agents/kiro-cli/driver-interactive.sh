@@ -164,6 +164,7 @@ ACTIVE=0
 # .jsonl), so it sources the same lib (#508 #3). The per-slot marker filename is
 # set via DRIVE_MARKER_PREFIX.
 _DRIVE_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../_lib/drive" && pwd)"
+# shellcheck disable=SC2034  # read by the sourced replaydata/_lib/drive/slots.sh:56 (alloc_slot)
 DRIVE_MARKER_PREFIX="$STAGING/.kiro-launch-marker"
 # shellcheck source=../../_lib/drive/slots.sh
 source "$_DRIVE_LIB/slots.sh"
@@ -181,7 +182,9 @@ source "$_DRIVE_LIB/teardown.sh"
 # it is invisible to the daemon and MUST NOT be used for recording (FINDINGS.md
 # §7). slash commands reach the live TUI directly (a bare send "/cmd" is NOT
 # stored as literal text), so DRIVE_SLASH_REQUIRES_STEP_TYPE stays false.
+# shellcheck disable=SC2034  # scraped from this file's SOURCE by tools/onboarding-factory/scripts/lib/recipe-lint.sh:97 (sed), never expanded in shell
 DRIVE_ELICITS="send slash wait_turn sleep keys rewind_fork interrupt restart resume reset_session sigkill exit_clean start_session session"
+# shellcheck disable=SC2034  # scraped from this file's SOURCE by tools/onboarding-factory/scripts/lib/recipe-lint.sh:113 (sed), never expanded in shell
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 
 remaining_seconds() { local now; now=$(date +%s); (( now >= DEADLINE )) && echo 0 || echo $((DEADLINE - now)); }
@@ -384,7 +387,7 @@ send_slash() { # <text>
 # step_keys in drive-claudecode-interactive.sh.
 send_keys() { # <key-token-list>
   local keys="$1"
-  # shellcheck disable=SC2086 — intentional word-splitting of the key list
+  # shellcheck disable=SC2086  # intentional word-splitting of the key list
   tmux send-keys -t "$SESSION" $keys
   echo "[driver] keys[s$ACTIVE]: $keys (no turn expected)" >&2
   sleep 0.3
@@ -415,7 +418,9 @@ step_rewind_fork() {
       SES_SESSION[$N_SLOTS]="$SESSION"
       SES_TRANSCRIPT[$N_SLOTS]="$KIRO_SESSIONS_DIR/$child_uuid.jsonl"
       SES_UUID[$N_SLOTS]="$child_uuid"
+      # shellcheck disable=SC2034  # driver-owned slot array; the sourced replaydata/_lib/drive/slots.sh reads it (save_active/load_slot/alloc_slot)
       SES_EXPECTED[$N_SLOTS]=0
+      # shellcheck disable=SC2034  # driver-owned slot array; the sourced replaydata/_lib/drive/slots.sh reads it (save_active/load_slot/alloc_slot)
       SES_MARKER[$N_SLOTS]="$MARKER"
       SES_CWD[$N_SLOTS]="${SES_CWD[$ACTIVE]}"
       SES_ALIVE[$N_SLOTS]=1

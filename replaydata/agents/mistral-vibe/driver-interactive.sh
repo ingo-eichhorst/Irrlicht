@@ -98,6 +98,7 @@ VIBE_SESSION_GLOB='session_*'
 EXIT_DRIVER_FAULT="nonzero(2)"
 
 _DRIVE_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../_lib/drive" && pwd)"
+# shellcheck disable=SC2034  # read by the sourced replaydata/_lib/drive/slots.sh:56 (alloc_slot)
 DRIVE_MARKER_PREFIX="$STAGING/.mistral-vibe-marker"
 # shellcheck source=/dev/null
 source "$_DRIVE_LIB/slots.sh"
@@ -111,8 +112,15 @@ source "$_DRIVE_LIB/teardown.sh"
 # with zero slots; launch_repl allocs slot 1, and restart/start_session alloc
 # more. ACTIVE indexes the live slot; SESSION/TRANSCRIPT/UUID mirror it.
 N_SLOTS=0; ACTIVE=0
-SES_SESSION=(); SES_TRANSCRIPT=(); SES_UUID=(); SES_EXPECTED=()
-SES_MARKER=(); SES_CWD=(); SES_ALIVE=()
+SES_SESSION=()
+SES_TRANSCRIPT=()
+SES_UUID=()
+# shellcheck disable=SC2034  # driver-owned slot array; the sourced replaydata/_lib/drive/slots.sh reads it (save_active/load_slot/alloc_slot)
+SES_EXPECTED=()
+# shellcheck disable=SC2034  # driver-owned slot array; the sourced replaydata/_lib/drive/slots.sh reads it (save_active/load_slot/alloc_slot)
+SES_MARKER=()
+SES_CWD=()
+SES_ALIVE=()
 
 # recipe-lint contract (#508 #4): the step types this driver genuinely ELICITS,
 # read directly by recipe-lint (no separate manifest). Start with ONLY the seams
@@ -124,7 +132,9 @@ SES_MARKER=(); SES_CWD=(); SES_ALIVE=()
 # Tool-executing recipes: set the recipe's settings.bypass_tool_permissions=true
 # and launch_repl adds `vibe --auto-approve` so tool calls run unattended (not a
 # step type — a launch-mode toggle, so it stays out of DRIVE_ELICITS).
+# shellcheck disable=SC2034  # scraped from this file's SOURCE by tools/onboarding-factory/scripts/lib/recipe-lint.sh:97 (sed), never expanded in shell
 DRIVE_ELICITS="send slash sleep wait_turn exit_clean restart sigkill resume keys start_session session interrupt"
+# shellcheck disable=SC2034  # scraped from this file's SOURCE by tools/onboarding-factory/scripts/lib/recipe-lint.sh:113 (sed), never expanded in shell
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 RUN_CWD="${IRRLICHT_ONBOARD_CWD:-$STAGING/cwd}"
 mkdir -p "$RUN_CWD"
@@ -455,7 +465,9 @@ slash_cmd() { # <text>
     PRE_LAUNCH_DIRS="$(find "$HOME/.vibe/logs/session" -maxdepth 1 -type d -name "$VIBE_SESSION_GLOB" 2>/dev/null | sort)"
     type_enter "$text"
     TRANSCRIPT=""; UUID=""
-    SES_TRANSCRIPT[$ACTIVE]=""; SES_UUID[$ACTIVE]=""
+    SES_TRANSCRIPT[$ACTIVE]=""
+    # shellcheck disable=SC2034  # driver-owned slot array; the sourced replaydata/_lib/drive/slots.sh reads it (save_active/load_slot/alloc_slot)
+    SES_UUID[$ACTIVE]=""
     EXPECTED_TURNS=0
     echo "[driver] slash[s$ACTIVE]: $text → session rotation; re-resolving transcript on next wait_turn" >&2
     return 0
@@ -558,6 +570,7 @@ step_resume() {
   sleep 1
   SESSION="mistral-vibedrv-$$-$(date +%s)-resume${ACTIVE}"
   SES_SESSION[$ACTIVE]="$SESSION"
+  # shellcheck disable=SC2034  # part of the shared slot model replaydata/_lib/drive/slots.sh:64 (alloc_slot) initialises; this driver keeps it current but has no branch that reads it, while sibling drivers do (e.g. antigravity's exit summary)
   SES_ALIVE[$ACTIVE]=1
   echo "[driver] resume[s$ACTIVE]: relaunch vibe --resume $resume_id (same dir=$(daemon_sid "$TRANSCRIPT"))" >&2
   boot_vibe_active "" "$resume_id"
@@ -619,7 +632,7 @@ while IFS= read -r step; do
                      # /model ModelPickerApp, C-c to clear a pre-filled input, etc.
                      # e.g. {"type":"keys","keys":"Down Enter"}.
                      ks="$(jq -r '.keys' <<<"$step")"
-                     # shellcheck disable=SC2086 — intentional word-split of the key list
+                     # shellcheck disable=SC2086  # intentional word-split of the key list
                      tmux send-keys -t "$SESSION" $ks
                      echo "[driver] keys[s$ACTIVE]: $ks" >&2
                      sleep 0.5 ;;

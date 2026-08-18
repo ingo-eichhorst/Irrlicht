@@ -108,6 +108,14 @@ echo ""
 # multi-file invocation cross-suppresses SC2034), and runs in linux.yml and
 # `tools/preflight.sh --only bash`. Two mechanisms where one of them could not
 # fail is worse than one that can.
+#
+# Note the scope that sentence did NOT cover until #1687, because it is the
+# tree this file's own suites live in: `replaydata/**` was a declared exclusion
+# of that gate, so the three driver-lib suites run above — and every per-agent
+# driver they exercise — were read by no static analyser at all, while the
+# `bash -n` pass at the top of this file walks only `scripts/`. #1687 removed
+# the exclusion, so the deferral above is now true of the recording rig as
+# well as of the factory scripts.
 echo "== shellcheck =="
 echo "  (covered by tools/bash-lint.sh — linux.yml, or tools/preflight.sh --only bash)"
 
