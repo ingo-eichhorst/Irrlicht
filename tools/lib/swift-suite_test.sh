@@ -28,6 +28,12 @@ cd "$REPO_ROOT" || { echo "FAIL: cannot cd to repo root $REPO_ROOT" >&2; exit 1;
 need() { command -v "$1" >/dev/null 2>&1 || { echo "FAIL: swift-suite_test — $1 not found" >&2; exit 1; }; }
 need grep
 need git
+# The domain half of the witness (#1688) reads through defaults(1). Required
+# rather than skipped-around: swift-suite.sh is macOS-only by construction (the
+# `script -q "$log"` pty spelling, `swift test`), so a host without `defaults`
+# cannot grade that half at all — and a gate that reports PASS having asserted
+# nothing is the failure mode this whole file exists to remove.
+need defaults
 
 . tools/lib/swift-suite.sh
 # The reap poll below is the shared one (#1627); tools/lib/await-gone_test.sh
@@ -541,16 +547,38 @@ _witness_scrub() {
   esac
 }
 
+DOMAIN_STUB_CMD="$REPO_ROOT/tools/lib/testdata/swift-suite/defaults-stub.sh"
+DOMAIN_SEED="$REPO_ROOT/tools/lib/testdata/swift-suite/seed-domains.sh"
+[[ -x "$DOMAIN_STUB_CMD" ]] || fail "the committed defaults stub is missing or not executable: $DOMAIN_STUB_CMD"
+[[ -x "$DOMAIN_SEED" ]] || fail "the committed domain seeder is missing or not executable: $DOMAIN_SEED"
+
+# Every body below comes from the ONE committed generator, baseline and
+# mutations alike — a second copy of the export shape would make a formatting
+# difference read as "every key changed", i.e. it would report the fixture
+# rather than the defect.
+_domain_stub() { "$DOMAIN_SEED" "$1"; }
+
 # _witness_case <name> <want-rc> <mutation-fn> [expected-substring]
+#
+# The domain half is pointed at the committed stub with a baseline that does not
+# move, so these rows grade the DIRECTORY half alone. Left on the real reader
+# they would ride on whatever the developer's live `io.irrlicht.app` did during
+# the window, and a row asserting rc 0 would be a coin flip.
 _witness_case() {
-  local name="$1" want="$2" mutate="$3" needle="${4:-}" home state out got
+  local name="$1" want="$2" mutate="$3" needle="${4:-}" home state stub out got
   home=$(_witness_home) || { fail "$name: could not build the fixture home"; return; }
   state=$(mktemp -d -t swift-suite-witness-state) || { fail "$name: no state dir"; return; }
+  stub=$(mktemp -d -t swift-suite-witness-stub) || { fail "$name: no stub dir"; return; }
+  _domain_stub "$stub"
+  export SWIFT_SUITE_STUB_DIR="$stub"
+  SWIFT_SUITE_WITNESS_DEFAULTS="$DOMAIN_STUB_CMD"
 
   SWIFT_SUITE_WITNESS_HOME="$home" swift_suite_witness_before "$state"
   "$mutate" "$home"
   out=$(SWIFT_SUITE_WITNESS_HOME="$home" swift_suite_witness_verdict "$state" 2>&1)
   got=$?
+  unset SWIFT_SUITE_WITNESS_DEFAULTS SWIFT_SUITE_STUB_DIR
+  _witness_scrub "$stub"
 
   if [[ "$got" == "$want" ]]; then
     pass "$name → rc $got"
@@ -622,6 +650,209 @@ _moved_home=$(HOME=/tmp/definitely-not-the-home swift_suite_witness_home)
 [[ "${#SWIFT_SUITE_WITNESSED_DIRS[@]}" -ge 2 ]] \
   && pass "watching ${#SWIFT_SUITE_WITNESSED_DIRS[@]} directories: ${SWIFT_SUITE_WITNESSED_DIRS[*]}" \
   || fail "the watched set has shrunk to ${#SWIFT_SUITE_WITNESSED_DIRS[@]} — the guard covers almost nothing"
+[[ "${#SWIFT_SUITE_WITNESSED_DOMAINS[@]}" -ge 2 ]] \
+  && pass "watching ${#SWIFT_SUITE_WITNESSED_DOMAINS[@]} domains: ${SWIFT_SUITE_WITNESSED_DOMAINS[*]}" \
+  || fail "the watched domain set has shrunk to ${#SWIFT_SUITE_WITNESSED_DOMAINS[@]} — the guard covers almost nothing"
+
+echo "== domain witness (#1688) =="
+# Every case here answers through the COMMITTED stub reader, never through the
+# real defaults(1), and the reason is the same one that keeps the directory
+# arms on a fixture home: the only way to drive an added key, a removed key or a
+# changed value against a real domain is to `defaults write` the developer's
+# machine, which is #1661's incident rather than a test of it. Nothing below has
+# a write path over any real domain.
+#
+# What the stub cannot pin — that a real `defaults export` answers a plist for a
+# live domain and an empty dict for one that does not exist — is pinned at the
+# end of this section, read-only, against the real binary.
+
+# _domain_case <name> <want-rc> <mutation-fn> [expected-substring] [baseline-fn]
+#
+# <mutation-fn> runs BETWEEN the two snapshots — it is what the run did.
+# <baseline-fn> runs BEFORE the first one and is how a case states the machine
+# it is on: a domain that already holds the key, or one that holds nothing at
+# all. Both are needed, because "the run emptied a domain" and "the domain was
+# empty on both sides" are the same after-state and opposite verdicts.
+#
+# The fixture home is held constant, so a failure here can only come from the
+# domain half. That is the counterpart to _witness_case holding the domains
+# constant, and it is what makes the two halves' evidence separable.
+_domain_case() {
+  local name="$1" want="$2" mutate="$3" needle="${4:-}" baseline="${5:-}" home state stub out got
+  home=$(_witness_home) || { fail "$name: could not build the fixture home"; return; }
+  state=$(mktemp -d -t swift-suite-witness-state) || { fail "$name: no state dir"; return; }
+  stub=$(mktemp -d -t swift-suite-witness-stub) || { fail "$name: no stub dir"; return; }
+  _domain_stub "$stub"
+  [[ -z "$baseline" ]] || "$baseline" "$stub"
+  export SWIFT_SUITE_STUB_DIR="$stub"
+  SWIFT_SUITE_WITNESS_DEFAULTS="$DOMAIN_STUB_CMD"
+
+  SWIFT_SUITE_WITNESS_HOME="$home" swift_suite_witness_before "$state"
+  "$mutate" "$stub"
+  out=$(SWIFT_SUITE_WITNESS_HOME="$home" swift_suite_witness_verdict "$state" 2>&1)
+  got=$?
+  unset SWIFT_SUITE_WITNESS_DEFAULTS SWIFT_SUITE_STUB_DIR
+
+  if [[ "$got" == "$want" ]]; then
+    pass "$name → rc $got"
+  else
+    fail "$name: expected rc $want, got $got; output: $out"
+  fi
+  if [[ -n "$needle" ]]; then
+    case "$out" in
+      *"$needle"*) pass "$name: names '$needle'" ;;
+      *) fail "$name: output does not name '$needle'; got: $out" ;;
+    esac
+  fi
+  # Every row must leave the DIRECTORY half's clean line intact. Without this a
+  # domain mutation that somehow reddened the directory half would satisfy the
+  # rc assertion above for the wrong reason.
+  case "$out" in
+    *"no new entries"*) : ;;
+    *) fail "$name: the directory half should have been clean; got: $out" ;;
+  esac
+  _witness_scrub "$stub"
+  _witness_scrub "$home"
+  _witness_scrub "$state"
+}
+
+_domain_noop() { :; }
+# #1672's shape, and the whole reason this half exists: a value written at a key
+# that was already there. No file appears, no directory entry moves, no key set
+# grows — so the directory witness and a growth-only key-set witness are both
+# green on it.
+_domain_change_value() { "$DOMAIN_SEED" --one "$1/com.apple.dt.xctest.tool" soundOnReady=glass soundOnContextPressure=sosumi; }
+_domain_add_key()      { "$DOMAIN_SEED" --one "$1/com.apple.dt.xctest.tool" soundOnReady=funk soundOnContextPressure=sosumi soundOnWaiting=ping; }
+_domain_remove_key()   { "$DOMAIN_SEED" --one "$1/com.apple.dt.xctest.tool" soundOnReady=funk; }
+_domain_create()       { "$DOMAIN_SEED" --one "$1/io.irrlicht.app" notifyOnReady=1; }
+_domain_empty()        { "$DOMAIN_SEED" --empty "$1/io.irrlicht.app"; }
+_domain_reader_fails() { printf '1\n' > "$1/com.apple.dt.xctest.tool.rc"; }
+_domain_reader_silent(){ : > "$1/com.apple.dt.xctest.tool"; }
+_domain_control_dead() { : > "$1/$SWIFT_SUITE_WITNESS_CONTROL_DOMAIN"; }
+# Baselines. A machine on which neither watched domain holds anything is a fresh
+# CI runner or a new developer machine — legitimate, and it must NOT read as a
+# failure. The control probe is what keeps that honest; a guard keyed on the
+# watched domains' contents would refuse there forever.
+_domain_baseline_fresh() {
+  "$DOMAIN_SEED" --empty "$1/com.apple.dt.xctest.tool"
+  "$DOMAIN_SEED" --empty "$1/io.irrlicht.app"
+}
+_domain_baseline_no_app() { "$DOMAIN_SEED" --empty "$1/io.irrlicht.app"; }
+
+# The vacuity guard. Without it every row below is satisfied by a witness that
+# always fails — and this one carries a second obligation, since a saturated
+# domain and a clean one read identically and the output has to say so.
+_domain_case "a run that touched no domain passes" 0 _domain_noop "key sets and values unchanged"
+_domain_case "and says what that does NOT prove" 0 _domain_noop "NOT proof the run wrote nothing"
+_domain_case "a fresh machine's empty domains pass" 0 _domain_noop "no keys" _domain_baseline_fresh
+
+# The three deltas.
+_domain_case "a value changed at an existing key is caught (#1672's shape)" 1 _domain_change_value "CHANGED 1 existing key"
+_domain_case "  and it names the key and both values" 1 _domain_change_value "before: <string>funk</string>"
+_domain_case "an added key is caught" 1 _domain_add_key "ADDED 1 key(s) to com.apple.dt.xctest.tool"
+_domain_case "a removed key is caught" 1 _domain_remove_key "REMOVED 1 key(s)"
+
+# The domain as a whole appearing or emptying.
+_domain_case "a domain the run created is caught" 1 _domain_create "CREATED io.irrlicht.app" _domain_baseline_no_app
+_domain_case "a domain the run emptied is caught" 1 _domain_empty "holds none now"
+
+# "Could not look" must never print what "found nothing" prints. All three of
+# these are a clean domain report from a witness that returned early.
+_domain_case "a reader that fails fails loudly" 1 _domain_reader_fails "could not be read"
+_domain_case "a reader that answers nothing is not a clean domain" 1 _domain_reader_silent "could not be read"
+# The row above is not enough on its own, and the difference is the #1479
+# lesson: with the domain PRESENT beforehand, a silent reader still returns 1 —
+# as "the domain was emptied", which is the right status for the wrong reason.
+# Over a domain that was already empty there is no second reason left, so this
+# is the one row where treating an empty answer as a clean empty domain is a
+# silent PASS rather than a mislabelled failure.
+_domain_case "a silent reader over an already-empty domain is not clean either" 1 _domain_reader_silent "could not be read" _domain_baseline_fresh
+_domain_case "a dead control probe fails loudly" 1 _domain_control_dead "control read of"
+
+# A verdict with no before-snapshot must not report the domains as clean either.
+_dom_no_before=$(mktemp -d -t swift-suite-witness-state)
+_dom_stub=$(mktemp -d -t swift-suite-witness-stub)
+_domain_stub "$_dom_stub"
+export SWIFT_SUITE_STUB_DIR="$_dom_stub"
+_out=$(SWIFT_SUITE_WITNESS_DEFAULTS="$DOMAIN_STUB_CMD" swift_suite_witness_verdict "$_dom_no_before" 2>&1)
+case "$_out" in
+  *"key sets and values unchanged"*) fail "an unwitnessed run reported the domains clean: $_out" ;;
+  *) pass "an unwitnessed run does not report the domains clean" ;;
+esac
+unset SWIFT_SUITE_STUB_DIR
+_witness_scrub "$_dom_no_before"
+_witness_scrub "$_dom_stub"
+
+# THE DISCRIMINATING ARM. The point of this whole half is that the predecessor
+# was structurally blind to #1672's shape, so it is asserted directly rather
+# than argued: the same run, the same fixture home, one preference value moved —
+# the directory half prints its clean line and the domain half is what fails.
+_disc_home=$(_witness_home)
+_disc_state=$(mktemp -d -t swift-suite-witness-state)
+_disc_stub=$(mktemp -d -t swift-suite-witness-stub)
+_domain_stub "$_disc_stub"
+export SWIFT_SUITE_STUB_DIR="$_disc_stub"
+# shellcheck disable=SC2034  # read by the sourced library, not by this file:
+# tools/lib/swift-suite.sh's _swift_suite_domain_state resolves it as the reader
+# command (see the `${SWIFT_SUITE_WITNESS_DEFAULTS:-defaults}` there, whose
+# fallback is also what makes the `unset` below safe under `set -u`).
+SWIFT_SUITE_WITNESS_DEFAULTS="$DOMAIN_STUB_CMD"
+SWIFT_SUITE_WITNESS_HOME="$_disc_home" swift_suite_witness_before "$_disc_state"
+_domain_change_value "$_disc_stub"
+_disc_out=$(SWIFT_SUITE_WITNESS_HOME="$_disc_home" swift_suite_witness_verdict "$_disc_state" 2>&1)
+_disc_rc=$?
+unset SWIFT_SUITE_WITNESS_DEFAULTS SWIFT_SUITE_STUB_DIR
+case "$_disc_out" in
+  *"no new entries"*"CHANGED 1 existing key"*)
+    [[ "$_disc_rc" -eq 1 ]] \
+      && pass "the old witness is green on #1672's shape while the new half fails it" \
+      || fail "the discriminating case returned rc $_disc_rc, not 1: $_disc_out" ;;
+  *) fail "expected a clean directory line AND a domain CHANGED line; got: $_disc_out" ;;
+esac
+_witness_scrub "$_disc_home"
+_witness_scrub "$_disc_state"
+_witness_scrub "$_disc_stub"
+
+# The flattener's declared property: TOP-LEVEL keys only. A nested dictionary's
+# keys belong to their parent's value, and a rule that reported them would name
+# a key nobody can address and would miss the parent changing.
+_flat_dir=$(mktemp -d -t swift-suite-witness-stub)
+"$DOMAIN_SEED" --one "$_flat_dir/body" a=1
+"$DOMAIN_SEED" --empty "$_flat_dir/empty"
+_flat=$(_swift_suite_domain_flatten < "$_flat_dir/body")
+# The KEY column, not the line: `notTopLevel` legitimately appears inside the
+# `nested` key's flattened VALUE, and a substring test over the whole line would
+# report that as a failure — a false alarm that would then be "fixed" by
+# weakening the assertion.
+_flat_keys=$(printf '%s\n' "$_flat" | cut -f1)
+case "$_flat_keys" in
+  *notTopLevel*) fail "the flattener reported a nested key as top-level: $_flat_keys" ;;
+  *) pass "the flattener reports top-level keys only (keys: $(printf '%s' "$_flat_keys" | tr '\n' ' '))" ;;
+esac
+case "$_flat" in
+  *"notTopLevel"*) pass "a nested key's content rides in its parent's value, so a change inside it is a change of that key" ;;
+  *) fail "the nested dictionary's content was dropped from its parent's value: $_flat" ;;
+esac
+[[ "$(printf '%s\n' "$_flat" | wc -l | tr -d ' ')" == "2" ]] \
+  && pass "the flattener reports one line per top-level key (a, nested)" \
+  || fail "the flattener produced $(printf '%s\n' "$_flat" | wc -l | tr -d ' ') lines, expected 2: $_flat"
+[[ -z "$(_swift_suite_domain_flatten < "$_flat_dir/empty")" ]] \
+  && pass "an empty dict flattens to nothing" \
+  || fail "an empty dict must flatten to nothing"
+_witness_scrub "$_flat_dir"
+
+# The two facts about the REAL defaults(1) that the stub above cannot establish.
+# Read-only, and deliberately against the control domain rather than
+# com.apple.dt.xctest.tool, which is legitimately absent on a machine that has
+# never run this suite.
+_real_present=$(_swift_suite_domain_state "$SWIFT_SUITE_WITNESS_CONTROL_DOMAIN" | head -1)
+[[ "$_real_present" == "PRESENT" ]] \
+  && pass "the real defaults(1) answers a plist for a live domain ($SWIFT_SUITE_WITNESS_CONTROL_DOMAIN → PRESENT)" \
+  || fail "the real defaults(1) answered '$_real_present' for $SWIFT_SUITE_WITNESS_CONTROL_DOMAIN — the domain half is reading nothing"
+_real_absent=$(_swift_suite_domain_state io.irrlicht.no.such.domain.1688 | head -1)
+[[ "$_real_absent" == "ABSENT" ]] \
+  && pass "the real defaults(1) answers an empty dict for a domain that does not exist (→ ABSENT)" \
+  || fail "a nonexistent domain read as '$_real_absent', not ABSENT"
 
 if [[ "$rc" -eq 0 ]]; then echo "swift-suite_test: ALL PASS"; else echo "swift-suite_test: FAILURES" >&2; fi
 exit "$rc"

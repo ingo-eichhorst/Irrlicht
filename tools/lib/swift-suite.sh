@@ -155,6 +155,101 @@ SWIFT_SUITE_GREP_OPTS="-a"
 # unrelated third-party churn (Google, WhatsApp, Claude, VS Code).
 SWIFT_SUITE_WITNESSED_DIRS=("Library/Preferences" "Library/Sounds")
 
+# ---------------------------------------------------------------------------
+# The domain half of the witness (#1688; the gap #1672 left open)
+# ---------------------------------------------------------------------------
+#
+# The directory witness above watches for new FILES. #1672 was a write into an
+# ALREADY-EXISTING key of an ALREADY-EXISTING domain — `NotificationEventRow`
+# persisted two sound choices merely by being rendered — so no file appeared, no
+# directory entry changed, and the witness was green on every run that did it.
+# A new-entry check cannot see that defect in principle, not by oversight.
+#
+# So this half compares two named domains' KEY SETS *and* their VALUES:
+#
+#   com.apple.dt.xctest.tool   what UserDefaults.standard resolves to under
+#                              `swift test` (18 keys on this machine, all of
+#                              them the app's own — the same 18 #1690 measured).
+#   io.irrlicht.app            the app's own domain, which a test constructing
+#                              an app type must never reach at all.
+#
+# WHAT IT SEES, and this is the whole list:
+#
+#   a key APPEARING      the first persist of a key on a domain that lacked it
+#                        — a CI runner, a new developer machine, a newly added
+#                        preference key.
+#   a key DISAPPEARING   a `removeObject` against a real domain. Strictly worse
+#                        than an addition, and reported separately for that
+#                        reason.
+#   a value CHANGING     at a key that was already there. This is the case the
+#                        directory witness and a growth-only key-set witness are
+#                        both structurally blind to, and it is why this half
+#                        exists.
+#   the domain APPEARING or EMPTYING wholesale.
+#
+# WHAT IT CANNOT SEE, stated here because a saturated domain otherwise reads
+# EXACTLY like a clean one, and the verdict prints this every time it passes:
+#
+#   an IDEMPOTENT write — the same value stored back at a key that already
+#   holds it. That is #1672 as it actually happened. Both keys were already
+#   present at the values being written, so the domain stayed byte-identical
+#   and the plist's mtime never moved (`1786919878`, measured across an
+#   instrumented pre-fix run that PRINTED the two writes). No comparison of a
+#   domain against itself can distinguish that from no write at all. The checks
+#   that do see it are in-process and live in platforms/macos:
+#   `PersistentDefaultsLintTests`' app-target mutation scan and
+#   `InMemoryDefaults.writtenKeys`.
+#
+# So this half's value is the FIRST occurrence and the CHANGED occurrence, and
+# the honest framing is that it is a second, independent net rather than a
+# tighter one. It runs here rather than in the suite for the reason the whole
+# witness does: it is what still runs when the suite abort()s (#1523), when the
+# tree is killed at SWIFT_SUITE_TIMEOUT, or when `--budget` kills the gate.
+#
+# IT COMPARES. It never repairs. `defaults export <domain> -` is the entire
+# mechanism — there is no `defaults write`, no `defaults delete` and no removal
+# path anywhere in this file, because a "clean up what the tests left" sweep is
+# what removed ~1895 files from a real ~/Library/Preferences during #1661.
+#
+# NOISE, measured on the author's machine and stated as measured:
+#
+#   0 changes   across a full `swift build` + suite gate run, both domains
+#   0 changes   across a second gate run
+#
+# Quieter than the directory half by construction: ~/Library/Preferences is
+# written by every background daemon on the machine, where a preference domain
+# is written only by processes that own it. The residual is `io.irrlicht.app`
+# on a machine where the app is RUNNING — Sparkle rewrites `SULastCheckTime` on
+# its default 86400s interval (no `SUScheduledCheckInterval` is declared in the
+# bundle; checked), i.e. ~0.07% of a 60s window, and the app rewrites
+# `projectGroupOrder` when the user reorders groups. Both are named in the
+# failure message with the same "re-run; ours reappears" advice the directory
+# half gives, and neither is filtered by name, for #1661's reason.
+SWIFT_SUITE_WITNESSED_DOMAINS=("com.apple.dt.xctest.tool" "io.irrlicht.app")
+
+# The control probe. NEVER compared before-to-after — it is a machine domain and
+# churns on its own (`ACDMonthlyAnalyticsLastPosted` moves without anyone asking
+# it to). It answers exactly one question: did the reader actually read
+# anything? Without it, "both watched domains hold no keys" — the state of a
+# fresh CI runner or a new developer machine — is indistinguishable from a
+# reader that is broken, misdirected or stubbed out, and the second of those
+# would report a clean domain delta on every run forever. The directory half's
+# vacuity guard cannot be copied here, because "no keys in either domain" is a
+# legitimate state there where "no watched directory present" is not.
+SWIFT_SUITE_WITNESS_CONTROL_DOMAIN="${SWIFT_SUITE_WITNESS_CONTROL_DOMAIN:-NSGlobalDomain}"
+
+# The reader, injectable for ONE caller: tools/lib/swift-suite_test.sh, which
+# has to drive an added key, a removed key and a changed value to prove this
+# half can fail. The only way to do that against the real `defaults` is to
+# `defaults write` a domain on the developer's machine — which is the incident,
+# not a test of it. So the test points this at a committed stub
+# (tools/lib/testdata/swift-suite/defaults-stub.sh) and everything downstream of
+# the external command is production code. The two things a stub cannot pin —
+# that a real `defaults export` answers a plist for a live domain and an empty
+# dict for one that does not exist — are pinned by read-only arms in that same
+# file against the real binary.
+SWIFT_SUITE_WITNESS_DEFAULTS="${SWIFT_SUITE_WITNESS_DEFAULTS:-defaults}"
+
 # swift_suite_witness_home — the home to watch.
 #
 # From the PASSWORD DATABASE, not `$HOME`. bash's `~user` expansion consults
@@ -222,6 +317,228 @@ _swift_suite_witness_snapshot() {
   return 0
 }
 
+# _swift_suite_domain_flatten — read a `defaults export` plist on stdin, write
+# one `<key>\t<flattened value>` line per TOP-LEVEL key.
+#
+# Top-level keys are the `<key>` elements at exactly ONE tab of indentation, and
+# that is a property of the format rather than a heuristic: `plutil`/`defaults`
+# indent by depth, and XML escapes `<` inside text, so no value can produce a
+# line beginning with a tab followed by `<key>`. Nested dictionaries' keys are
+# at two tabs or more and are folded into their parent's value, which is what we
+# want — a change anywhere inside a top-level key's value is a change of that
+# key. Output is one line per key so the comparison is line-based like the
+# directory half, and so `cut -f1` recovers the key even for a value that itself
+# contains a tab.
+_swift_suite_domain_flatten() {
+  awk '
+    /^\t<key>/ {
+      if (k != "") print k "\t" v
+      s = $0
+      sub(/^\t<key>/, "", s); sub(/<\/key>[ \t]*$/, "", s)
+      k = s; v = ""; next
+    }
+    /^<\/dict>/ { if (k != "") { print k "\t" v; k = "" } next }
+    {
+      if (k != "") {
+        s = $0
+        sub(/^[ \t]+/, "", s)
+        v = (v == "" ? s : v " " s)
+      }
+    }
+    END { if (k != "") print k "\t" v }
+  '
+}
+
+# _swift_suite_domain_state <domain> — the three-state snapshot of ONE domain,
+# printed as a STATE marker line followed by the flattened key/value body.
+#
+# The three states are kept apart for the same reason the directory half keeps
+# its three apart, and the mapping is measured rather than assumed:
+#
+#   PRESENT     the reader answered a plist holding at least one key.
+#   ABSENT      the reader answered a plist holding NO keys. `defaults export`
+#               answers `<dict/>` at status 0 for a domain that does not exist
+#               (measured), so "no such domain" and "exists and is empty" are
+#               one state here. Nothing downstream branches on the difference,
+#               and merging them costs one read where distinguishing them would
+#               cost two — i.e. a second, later view of the same domain.
+#   UNREADABLE  the reader failed, produced nothing, or produced something that
+#               is not a plist. An EMPTY answer is deliberately NOT a clean
+#               empty domain: a reader that could not run at all answers empty
+#               too, and that is the one failure this whole file exists to keep
+#               distinguishable from a finding.
+#
+# Always returns 0 — the diagnosis is the verdict's job, so that one place
+# decides what an unreadable domain means instead of two that can disagree.
+_swift_suite_domain_state() {
+  local domain="${1:-}" out body rc=0
+  if [[ -z "$domain" ]]; then
+    printf 'UNREADABLE\n'
+    return 0
+  fi
+  # `|| rc=$?` rather than a bare assignment: under a CALLER's `-e` an
+  # assignment from a failing command substitution aborts the caller on that
+  # line, which is #1633's defect in this same file.
+  # `:-defaults` as well as the declaration above: a caller that UNSETS the knob
+  # (the shape a test's teardown takes) would otherwise make this line an
+  # unbound-variable error under `set -u`, which is a witness that cannot look
+  # failing for a reason nothing here would report.
+  out=$("${SWIFT_SUITE_WITNESS_DEFAULTS:-defaults}" export "$domain" - 2>/dev/null) || rc=$?
+  if (( rc != 0 )) || [[ -z "$out" || "$out" != *"<plist"* ]]; then
+    printf 'UNREADABLE\n'
+    return 0
+  fi
+  body=$(printf '%s\n' "$out" | _swift_suite_domain_flatten | sort) || body=""
+  if [[ -z "$body" ]]; then
+    printf 'ABSENT\n'
+  else
+    printf 'PRESENT\n%s\n' "$body"
+  fi
+  return 0
+}
+
+# _swift_suite_witness_domain_snapshot <statedir> <phase> — every watched
+# domain, plus the control probe, into <statedir>/domain_<slug>.<phase>.
+_swift_suite_witness_domain_snapshot() {
+  local statedir="$1" phase="$2" domain slug
+  _swift_suite_domain_state "$SWIFT_SUITE_WITNESS_CONTROL_DOMAIN" > "$statedir/CONTROL.$phase"
+  for domain in "${SWIFT_SUITE_WITNESSED_DOMAINS[@]}"; do
+    slug=$(_swift_suite_witness_slug "$domain")
+    _swift_suite_domain_state "$domain" > "$statedir/domain_$slug.$phase"
+  done
+  return 0
+}
+
+# _swift_suite_witness_domain_report <marker> <keyfile> <bodyfile> — print each
+# named key with the value it carries in <bodyfile>. Shared by the created,
+# added and removed arms so the three cannot drift into printing different
+# shapes. Both arguments are real FILES, never process substitutions: the body
+# is re-read once per key, and a `<(…)` FIFO can only be read once — which would
+# print the first key's value and empty strings after it.
+_swift_suite_witness_domain_report() {
+  local marker="$1" keyfile="$2" bodyfile="$3" key value
+  while IFS= read -r key; do
+    [[ -n "$key" ]] || continue
+    value=$(awk -F'\t' -v k="$key" '$1 == k { print $2; exit }' "$bodyfile")
+    printf '    %s %s = %s\n' "$marker" "$key" "$value"
+  done < "$keyfile"
+  return 0
+}
+
+# _swift_suite_witness_domain_verdict <statedir> — 0 only if every watched
+# domain's key set AND values are demonstrably what they were before the run.
+# Non-zero if a key appeared, a key vanished, an existing key's value moved, the
+# domain appeared or emptied, or the witness could not look.
+_swift_suite_witness_domain_verdict() {
+  local statedir="${1:-}" ok=0 domain slug before after bstate astate cstate
+  local b a bk ak chg added removed changed n ckey summary=""
+  [[ -n "$statedir" && -d "$statedir" ]] || { echo "_swift_suite_witness_domain_verdict: needs an existing <statedir>" >&2; return 1; }
+
+  cstate=$(head -1 "$statedir/CONTROL.after" 2>/dev/null) || cstate=""
+  if [[ "$cstate" != "PRESENT" ]]; then
+    echo "domain witness: the control read of $SWIFT_SUITE_WITNESS_CONTROL_DOMAIN answered '${cstate:-nothing at all}'." >&2
+    echo "  That domain is never compared — it exists so a reader that cannot read is not" >&2
+    echo "  mistaken for two domains that did not change. This run is unwitnessed there." >&2
+    ok=1
+  fi
+
+  for domain in "${SWIFT_SUITE_WITNESSED_DOMAINS[@]}"; do
+    slug=$(_swift_suite_witness_slug "$domain")
+    before="$statedir/domain_$slug.before"
+    after="$statedir/domain_$slug.after"
+    if [[ ! -f "$before" || ! -f "$after" ]]; then
+      echo "domain witness: $domain was never snapshotted — it is unwitnessed, not clean." >&2
+      ok=1
+      continue
+    fi
+    bstate=$(head -1 "$before" 2>/dev/null); astate=$(head -1 "$after" 2>/dev/null)
+    if [[ "$bstate" == "UNREADABLE" || "$astate" == "UNREADABLE" ]]; then
+      echo "domain witness: $domain could not be read — this run is unwitnessed there." >&2
+      echo "  Inability to look must not print the same thing as finding nothing." >&2
+      ok=1
+      continue
+    fi
+    if [[ "$bstate" == "PRESENT" && "$astate" == "ABSENT" ]]; then
+      echo "domain witness: $domain held keys before the run and holds none now." >&2
+      echo "  Nothing in this repository is allowed to remove a real preference domain (#1661)." >&2
+      ok=1
+      continue
+    fi
+    if [[ "$bstate" == "ABSENT" && "$astate" == "PRESENT" ]]; then
+      echo "domain witness: the run CREATED $domain, which held no keys before it:" >&2
+      tail -n +2 "$after" > "$statedir/.cmp-a"
+      cut -f1 "$statedir/.cmp-a" > "$statedir/.cmp-keys"
+      _swift_suite_witness_domain_report + "$statedir/.cmp-keys" "$statedir/.cmp-a" >&2
+      echo "  A test must not persist into a real preference domain (#1661, #1672)." >&2
+      ok=1
+      continue
+    fi
+    if [[ "$bstate" == "ABSENT" && "$astate" == "ABSENT" ]]; then
+      summary+="${summary:+, }$domain (no keys)"
+      continue
+    fi
+
+    b="$statedir/.cmp-b"; a="$statedir/.cmp-a"; bk="$statedir/.cmp-bk"; ak="$statedir/.cmp-ak"; chg="$statedir/.cmp-chg"
+    tail -n +2 "$before" | sort > "$b"
+    tail -n +2 "$after"  | sort > "$a"
+    cut -f1 "$b" | sort > "$bk"
+    cut -f1 "$a" | sort > "$ak"
+    comm -13 "$b" "$a" | cut -f1 | sort -u > "$chg"
+
+    added=$(comm -13 "$bk" "$ak")
+    removed=$(comm -23 "$bk" "$ak")
+    # A key is CHANGED when its whole line moved and the key itself is on both
+    # sides — subtracting the added set is what stops a new key being counted
+    # twice, once as an addition and once as a change.
+    changed=$(comm -12 "$chg" "$bk")
+
+    if [[ -n "$added" ]]; then
+      n=$(printf '%s\n' "$added" | wc -l | tr -d ' ')
+      echo "domain witness: the run ADDED $n key(s) to $domain:" >&2
+      printf '%s\n' "$added" > "$statedir/.cmp-keys"
+      _swift_suite_witness_domain_report + "$statedir/.cmp-keys" "$a" >&2
+      echo "  A test must not persist into a real preference domain (#1661, #1672)." >&2
+      ok=1
+    fi
+    if [[ -n "$removed" ]]; then
+      n=$(printf '%s\n' "$removed" | wc -l | tr -d ' ')
+      echo "domain witness: the run REMOVED $n key(s) from $domain:" >&2
+      printf '%s\n' "$removed" > "$statedir/.cmp-keys"
+      _swift_suite_witness_domain_report - "$statedir/.cmp-keys" "$b" >&2
+      echo "  Nothing in this repository is allowed to delete a real preference (#1661)." >&2
+      ok=1
+    fi
+    if [[ -n "$changed" ]]; then
+      n=$(printf '%s\n' "$changed" | wc -l | tr -d ' ')
+      echo "domain witness: the run CHANGED $n existing key(s) in $domain:" >&2
+      printf '%s\n' "$changed" > "$statedir/.cmp-keys"
+      while IFS= read -r ckey; do
+        [[ -n "$ckey" ]] || continue
+        printf '    ~ %s\n      before: %s\n      after:  %s\n' \
+          "$ckey" \
+          "$(awk -F'\t' -v k="$ckey" '$1 == k { print $2; exit }' "$b")" \
+          "$(awk -F'\t' -v k="$ckey" '$1 == k { print $2; exit }' "$a")" >&2
+      done < "$statedir/.cmp-keys"
+      echo "  This is the shape the directory witness cannot see: a write into an existing" >&2
+      echo "  key of an existing domain (#1672). If it is io.irrlicht.app, the running app" >&2
+      echo "  also writes SULastCheckTime and projectGroupOrder — re-run to tell that apart;" >&2
+      echo "  ours reappears every time. Nothing here rewrites anything either way." >&2
+      ok=1
+    fi
+    if [[ -z "$added$removed$changed" ]]; then
+      summary+="${summary:+, }$domain ($(wc -l < "$bk" | tr -d ' ') keys)"
+    fi
+  done
+
+  if (( ok == 0 )); then
+    echo "domain witness: ${summary:-no domains watched} — key sets and values unchanged."
+    echo "  That is NOT proof the run wrote nothing. A write of the value a key ALREADY"
+    echo "  holds changes no key and no value, which is exactly how #1672 happened; only"
+    echo "  PersistentDefaultsLintTests and InMemoryDefaults.writtenKeys see that one."
+  fi
+  return "$ok"
+}
+
 # swift_suite_witness_before <statedir> — snapshot ahead of the run.
 #
 # Always returns 0. A snapshot that could not be taken is recorded rather than
@@ -232,12 +549,17 @@ swift_suite_witness_before() {
   local statedir="${1:-}"
   [[ -n "$statedir" && -d "$statedir" ]] || { echo "swift_suite_witness_before: needs an existing <statedir>" >&2; return 1; }
   _swift_suite_witness_snapshot "$statedir" before || :
+  # The domain half does not depend on the home resolving, so it is taken even
+  # when the directory half could not be: two independent nets, and a failure of
+  # one must not silently take the other with it.
+  _swift_suite_witness_domain_snapshot "$statedir" before || :
   return 0
 }
 
 # swift_suite_witness_verdict <statedir> — 0 only if the run demonstrably added
-# nothing to any watched directory. Non-zero if it added something, if
-# something vanished, or if the witness could not look.
+# nothing to any watched directory AND left every watched domain's key set and
+# values as it found them. Non-zero if it added something, if something
+# vanished, if a preference value moved, or if either half could not look.
 swift_suite_witness_verdict() {
   local statedir="${1:-}" ok=0 looked=0 dir slug before after added removed bstate astate
   [[ -n "$statedir" && -d "$statedir" ]] || { echo "swift_suite_witness_verdict: needs an existing <statedir>" >&2; return 1; }
@@ -248,6 +570,7 @@ swift_suite_witness_verdict() {
     return 1
   fi
   _swift_suite_witness_snapshot "$statedir" after || :
+  _swift_suite_witness_domain_snapshot "$statedir" after || :
 
   for dir in "${SWIFT_SUITE_WITNESSED_DIRS[@]}"; do
     slug=$(_swift_suite_witness_slug "$dir")
@@ -316,6 +639,16 @@ swift_suite_witness_verdict() {
   if (( ok == 0 )); then
     echo "real-home witness: no new entries in ${SWIFT_SUITE_WITNESSED_DIRS[*]} under $(cat "$statedir/HOME.before")"
   fi
+
+  # ALWAYS run, and never short-circuited by the directory half's verdict: the
+  # two nets see different things (#1672 moves no directory entry, #1661 moved
+  # no preference value), so a run that trips one still has to be told about the
+  # other. `|| drc=$?` for #1633's reason — a bare call under a caller's `-e`
+  # would abort here and the combined status would never be returned.
+  local drc=0
+  _swift_suite_witness_domain_verdict "$statedir" || drc=$?
+  (( drc == 0 )) || ok=1
+
   return "$ok"
 }
 
