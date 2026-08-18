@@ -34,6 +34,30 @@ import (
 // noAggregateBudget names the reads that deliberately have none). Nothing about
 // the per-child value changed — what changed is that a caller can now cap the
 // SUM, which this constant never could.
+//
+// What the probes actually COST is what makes 2s a compromise rather than a
+// guess (darwin/arm64, 10 CPU, idle, warm; n as shown):
+//
+//	ps.proc_info         median 3.4ms   p99  4.1ms  min  2.7ms  n=300
+//	ps.tty               median 3.2ms   p99  4.1ms  min  2.7ms  n=300
+//	plutil.bundle_id     median 5.4ms   p99  7.2ms  min  4.4ms  n=300
+//	pgrep.discover       median 21.6ms  p99 27.2ms  min 20.6ms  n=20
+//	lsof.cwd             median 45.1ms  p99 46.8ms  min 44.3ms  n=20
+//	lsof.writer          median 295.9ms p99 349.2ms min 251.9ms n=20
+//	lsof.herdr_clients   median 289.5ms p99 339.7ms min 257.4ms n=20
+//
+// So 2s is roughly 6x the heaviest probe's p99, and the two whole-process-table
+// `lsof` scans are what make it a ceiling rather than a formality — they are two
+// orders of magnitude above the `ps` reads sharing it.
+//
+// READ min, NOT median, when carrying any of these to another machine. median
+// and p99 are statements about the LOAD as much as about the exec: measured on
+// this machine minutes apart, `ps.proc_info` moved 3.4ms -> 7.1ms and
+// `plutil.bundle_id` 5.4ms -> 10.2ms simply by running twelve busy loops beside
+// them. That is the whole of #1572's 4x discrepancy (see bundleIDMemo).
+//
+// regenerate: IRRLICHT_MEASURE_PROBE_COSTS=1 go test
+// ./core/adapters/inbound/agents/processlifecycle/ -run TestMeasureProbeCosts -v
 const shelloutTimeout = 2 * time.Second
 
 // shelloutCmd builds one bounded child process. Every injected shellout in this

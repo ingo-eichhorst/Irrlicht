@@ -77,6 +77,15 @@ const gitRevParseCmd = "rev-parse"
 // two is shorter. What is NOT delegated is this ceiling — a caller with no
 // aggregate at all (services.noGitBudget) still gets it per call, which is the
 // property #1543 established and #1563 deliberately did not weaken.
+//
+// The three fixed-cost figures above are reproducible on demand since #1572, and
+// re-running them is how the "~130x" claim stays honest as this repository grows
+// — they are a property of a MACHINE UNDER A LOAD as much as of git, so read min
+// rather than median when comparing across machines, and expect the medians to
+// differ from the ones recorded here.
+//
+// regenerate: IRRLICHT_MEASURE_GIT_COSTS=1 go test ./core/adapters/outbound/git/
+// -run TestMeasureGitCosts -v
 const gitTimeout = 5 * time.Second
 
 // gitHistoryTimeout is the ceiling for the shellouts whose cost grows with the
@@ -147,6 +156,19 @@ const gitTimeout = 5 * time.Second
 // #1553's other half: ComputeDoraMetrics no longer asks for the commits of tags
 // outside its window, because nothing reads them — the domain filters both
 // LeadTime and DetectReverts through filterRange.
+//
+// Only the FIRST row of that curve is machine-producible, and #1572's generator
+// says so rather than quietly reporting a shorter curve: it re-measures this
+// repository's own point and prints the 100,000- and 1,000,000-commit rows as
+// UNMEASURED, naming why. Building those needs ~200 lines of `git fast-import`
+// stream generation and minutes per point, which is not a price worth paying on
+// every run for a constant chosen against an ORDER OF MAGNITUDE. If the SHAPE of
+// the curve is ever in doubt, re-measure it by hand as #1553 did — the two
+// missing rows are the ones that would move the decision, and they are the ones
+// nothing re-derives.
+//
+// regenerate: IRRLICHT_MEASURE_GIT_COSTS=1 go test ./core/adapters/outbound/git/
+// -run TestMeasureGitCosts -v   (the 3,209-commit row only; the other two refuse by name)
 const gitHistoryTimeout = 30 * time.Second
 
 // HistoryCeiling is gitHistoryTimeout under an exported name, and it exists for
@@ -231,6 +253,19 @@ const (
 // releases and reverts, and DORA would then publish a smaller sample as though
 // it were the whole one. "I could not read it all" is a fact; a biased median
 // presented as Available:true is not.
+//
+// The bytes-per-commit rate is what every extrapolation above rests on, and it
+// is the figure #1553 got ~2.3x low by dividing one byte count by the wrong
+// population — so #1572's generator prints the population it used IN FULL
+// ("commits from HEAD" / "commits across all refs") rather than a bare count,
+// and refuses the rate BY NAME rather than printing a zero when it cannot be
+// expressed. That refusal is not hypothetical: this generator's own first draft
+// rendered `0 bytes out = 0/commit` for the grep walk and `41 bytes out =
+// 0/commit` for `rev-parse`, both from an integer quotient, in a block that
+// passed. core/internal/costreport carries the committed corpus.
+//
+// regenerate: IRRLICHT_MEASURE_GIT_COSTS=1 go test ./core/adapters/outbound/git/
+// -run TestMeasureGitCosts -v   (the `log --pretty=%H %at %B` row is this rate)
 const gitMaxOutput = 64 << 20
 
 // gitCmd builds one bounded git child process. Injected so a test can arrange

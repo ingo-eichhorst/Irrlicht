@@ -232,13 +232,34 @@ func bundleIDUncached(ctx context.Context, appPath string) (string, error) {
 //
 // UNVERIFIED, and marked as such because #1544 carried the claim forward from
 // #1538 without a profile: that the daemon seed makes N identical plutil calls
-// with N persisted sessions under one host. What #1544 DID measure is the
-// per-call cost — 9.7ms median, p99 13.8ms, n=300, warm, on one machine — and
-// the call shape: one plutil per ancestry resolve that reaches a top-level
-// `.app`, so N such resolves under one host collapse to one. Note that is a
-// long way from #1524's "2.2ms median" for the same exec on the same class of
-// machine; neither figure is produced by anything that would keep it honest, so
-// treat both as snapshots rather than constants.
+// with N persisted sessions under one host. What #1544 DID measure is the call
+// SHAPE — one plutil per ancestry resolve that reaches a top-level `.app`, so N
+// such resolves under one host collapse to one.
+//
+// The per-call COST is what #1572 was filed about, because two figures for this
+// one exec disagreed 4x: #1524's "2.2ms median, n=150" and #1544's "9.7ms
+// median, p99 13.8ms, n=300". Re-measured (darwin/arm64, 10 CPU, warm, n=300):
+//
+//	idle              median 5.4ms / 5.3ms   p99 7.2ms / 7.5ms   min 4.4ms / 4.5ms
+//	12 busy loops     median 10.2ms          p99 15.9ms          min 7.5ms
+//
+// Which reconciles it. **The 4x is LOAD, not a difference in the exec.** #1544's
+// 9.7ms/13.8ms is reproduced almost exactly by loading the machine, and the same
+// run reports `ps.proc_info` at 7.1ms against 3.4ms idle — so #1544's whole
+// session was taken under load, which explains its `ps` figure (ancestryReads,
+// osutil.go) by the same one cause. #1524's 2.2ms is NOT reproduced here at all:
+// it is below this machine's measured floor for the exec (min 4.4ms) and below
+// even `ps`'s floor (2.7ms). Why is undetermined — a faster machine is the
+// obvious candidate and nothing here can confirm it. What IS ruled out by
+// measurement is the subject: plutil costs 4.9-5.4ms across a 4x range of
+// Info.plist sizes (Calculator 3.0 KB, kitty 9.0 KB, Finder 12.8 KB), so which
+// `.app` was measured does not explain a 4x.
+//
+// So read min, not median, when carrying any of these to another machine: the
+// median is a statement about the load as much as about the exec.
+//
+// regenerate: IRRLICHT_MEASURE_PROBE_COSTS=1 go test
+// ./core/adapters/inbound/agents/processlifecycle/ -run TestMeasureProbeCosts -v
 type bundleIDMemo struct {
 	mu  sync.RWMutex
 	ids map[string]string
