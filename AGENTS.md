@@ -1736,6 +1736,54 @@ Before marking a ticket done, run the full suite — every layer must pass:
   `set`, so it is PRESENT for the read (`object(forKey:)` merges the domains)
   while `writtenKeys` stays a clean observation of what the render itself
   persisted.
+  **#1693 is that same read one call site on, and it is where this member's fix
+  stopped being a seam and became a REMOVAL.** `SessionManager.sendNotification`
+  guarded on `NotificationSettings.masterEnabled()` — default argument
+  `UserDefaults.standard` — while the next line read the sound choice from
+  `self.defaults`, so one method decided WHETHER to notify from the machine and
+  WHICH sound from its input, two frames below a
+  `checkStateTransitionNotification` that had just read `notifyOnReady` off that
+  same injected store. Four things are worth carrying.
+  **The DEFAULT ARGUMENT was the defect rather than the call, so it went.** Four
+  `UserDefaults = .standard` parameter defaults existed in the app target and
+  three had no caller relying on them (`masterEnabled`, `choice`,
+  `resolveNotificationSound`), so removing all three cost no call site anything —
+  the compile is that measurement — and the pre-fix spelling is now `error:
+  missing argument for parameter 'defaults' in call`. Where removal is possible
+  the compiler is a strictly stronger guard than a lint rule (#1659's shape),
+  which is the whole reason no fifth `PersistentDefaultsLintTests` rule was
+  added.
+  **That fifth rule was measured and rejected on its own terms, not by
+  inheriting #1689's count.** Re-measured here: the app target holds **14**
+  non-comment `UserDefaults.standard` receivers and `Irrlicht/Views/` holds
+  **0**, so widening the fourth rule app-wide is still intractable. The narrower
+  candidate — ban a default argument that resolves `.standard` — would today
+  flag exactly **one** declaration, `SessionManager.init(defaults:)`, which is
+  the seam all four existing rules' failure messages RECOMMEND; and removing
+  that default would push a `.standard` into `Irrlicht/Views/` (the
+  `SessionListView` preview), which rule 4 exists to keep out and which would
+  slip past it only because the leading-dot spelling evades its receiver regex.
+  A line scan also cannot tell an `init` default from a `func` default across a
+  multi-line signature without a parser, and per this section's parse rule it
+  would then have to flag both. One exemption or a parser: the count is recorded
+  instead.
+  **Under `swift test` the READ is the only observable, and that is not a
+  weakness of the test — it is why nothing graded this call site for its whole
+  life.** `canUseUserNotifications` is false outside an app bundle, so
+  `sendNotification` returns before scheduling a `UNNotificationRequest` or
+  reaching `SoundPlayer.speak` and the gate's DECISION has no downstream value
+  to assert on. `InMemoryDefaults.readKeys` is what remains, and "which store
+  was asked" IS the defect rather than a proxy for it. The discriminating arm
+  asserts the read SET equals what `NotificationSettings.masterEnabled(defaults:)`
+  performs over an identically arranged second store — obtained by calling the
+  rule, never written down — because a decorative `_ = defaults.object(forKey:)`
+  above a guard still resolving `.standard` satisfies "the store was asked" and
+  is invisible to every other assertion in the suite (measured: exactly that one
+  arm reddens).
+  **And the mutation that reddens NOTHING is recorded rather than omitted**:
+  re-adding the removed default alone, call site untouched, leaves all 414 tests
+  green. Nothing locks the removal — the guarantee is the compiler's, and only
+  for call sites that already exist.
   **The fourth member is the WALL CLOCK, and it is the one where pinning the
   other three would have looked like coverage** (#1663).
   `SessionListView.formatResetTime` stacked four machine reads —

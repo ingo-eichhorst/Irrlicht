@@ -60,11 +60,26 @@ enum NotificationSettings {
         master ?? anyEventEnabled
     }
 
-    /// `UserDefaults`-reading wrapper, used by the firing path and by
-    /// `SettingsView`'s one-time reconcile. Reads through `object(forKey:)`
-    /// rather than `bool(forKey:)` — the latter flattens "absent" to `false`
-    /// and would silence exactly the installs the fallback exists for.
-    static func masterEnabled(defaults: UserDefaults = .standard) -> Bool {
+    /// `UserDefaults`-reading wrapper, used by the firing path. Reads through
+    /// `object(forKey:)` rather than `bool(forKey:)` — the latter flattens
+    /// "absent" to `false` and would silence exactly the installs the fallback
+    /// exists for.
+    ///
+    /// `defaults` is REQUIRED (#1693, #1659's shape). It defaulted to
+    /// `UserDefaults.standard`, and that default is what made #1693 possible
+    /// AND invisible: `SessionManager.sendNotification` called `masterEnabled()`
+    /// while the very next line read the sound choice from the store the object
+    /// was GIVEN, and nothing about the call site said which store it was
+    /// consulting. With the default gone, a call site that cannot name a store
+    /// is `error: missing argument for parameter 'defaults' in call` rather
+    /// than a silent read of the process domain — which under `swift test` is
+    /// the developer's own `com.apple.dt.xctest.tool`.
+    ///
+    /// Removing it cost no call site anything: the one production caller has a
+    /// store, `SettingsView`'s reconcile calls the pure
+    /// `masterEnabled(master:anyEventEnabled:)` since #1689, and every test
+    /// caller already passed one.
+    static func masterEnabled(defaults: UserDefaults) -> Bool {
         masterEnabled(
             master: defaults.object(forKey: masterEnabledKey) as? Bool,
             anyEventEnabled: NotificationEvent.allCases.contains { defaults.bool(forKey: $0.enabledKey) }

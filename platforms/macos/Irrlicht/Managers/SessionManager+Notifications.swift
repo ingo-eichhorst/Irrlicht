@@ -145,7 +145,14 @@ extension SessionManager {
         // future caller can route around it. Gating here rather than at the two
         // call sites is also why the spoken voice, which bypasses
         // UNNotificationContent entirely, is covered.
-        guard NotificationSettings.masterEnabled() else { return }
+        //
+        // `defaults` is passed, and `masterEnabled` no longer takes a default
+        // for it (#1693): this line used to call `masterEnabled()`, whose
+        // default argument was `UserDefaults.standard`, so one method decided
+        // WHETHER to notify from the machine and read WHICH sound from its
+        // input — the store `checkStateTransitionNotification` had just read
+        // `notifyOnReady`/`notifyOnWaiting` from two frames up.
+        guard NotificationSettings.masterEnabled(defaults: defaults) else { return }
         guard canUseUserNotifications else { return }
         let choice = Self.choice(for: event, defaults: defaults)
         let content = UNMutableNotificationContent()
@@ -209,7 +216,7 @@ extension SessionManager {
     /// directly to avoid double-reading UserDefaults.
     nonisolated static func resolveNotificationSound(
         for event: NotificationEvent,
-        defaults: UserDefaults = .standard
+        defaults: UserDefaults
     ) -> UNNotificationSound? {
         notificationSound(for: choice(for: event, defaults: defaults))
     }
@@ -218,9 +225,18 @@ extension SessionManager {
     /// a test driving this must not have to write the developer's real
     /// `com.apple.dt.xctest.tool` domain and put it back in a `tearDown` the
     /// aborting runs skip.
+    ///
+    /// It carries no DEFAULT for #1693's reason, which is the sibling of that
+    /// one: a store that can be omitted is a store nobody has to think about,
+    /// and the omission reads as "the caller decided" where it means "the
+    /// caller did not". `masterEnabled(defaults:)` above lost its default in
+    /// the same change — these two were the notification path's remaining
+    /// `UserDefaults = .standard` parameter defaults, both with zero callers
+    /// relying on them, so removal was free and the compiler now holds what a
+    /// lint rule would have had to.
     nonisolated static func choice(
         for event: NotificationEvent,
-        defaults: UserDefaults = .standard
+        defaults: UserDefaults
     ) -> SoundChoice {
         let raw = defaults.string(forKey: event.soundKey) ?? SoundChoice.default.rawValue
         return SoundChoice(rawValue: raw) ?? .default
