@@ -483,12 +483,38 @@ row 'swift-suite.sh::_swift_suite_witness_slug' '_swift_suite_witness_slug' 0 \
 row 'swift-suite.sh::_swift_suite_witness_snapshot' '_swift_suite_witness_snapshot' 0 \
     '. tools/lib/swift-suite.sh; mkdir -p "$TW_TMP/wh-snap/Library/Preferences" "$TW_TMP/ws-snap"; : >"$TW_TMP/wh-snap/Library/Preferences/a.plist"; SWIFT_SUITE_WITNESS_HOME="$TW_TMP/wh-snap"' \
     '_swift_suite_witness_snapshot "$TW_TMP/ws-snap" before'
+# The domain half (#1688) reaches an external reader, so the two entry points
+# below and the five rows after them all answer through the COMMITTED stub —
+# never the real defaults(1). Two reasons, and the second is the binding one: a
+# row asserting 0 while riding on the developer's live io.irrlicht.app would be
+# a coin flip (the running app rewrites SULastCheckTime on Sparkle's schedule),
+# and the only way to make a REAL domain deterministic is to write it, which is
+# the incident this half exists to report rather than to reproduce.
+SS_DATA=tools/lib/testdata/swift-suite
+DOM_SETUP=". tools/lib/swift-suite.sh; export SWIFT_SUITE_STUB_DIR=\"\$TW_TMP/dom\"; bash $SS_DATA/seed-domains.sh \"\$TW_TMP/dom\"; SWIFT_SUITE_WITNESS_DEFAULTS=$SS_DATA/defaults-stub.sh"
+
 row 'swift-suite.sh::swift_suite_witness_before' 'swift_suite_witness_before' 0 \
-    '. tools/lib/swift-suite.sh; mkdir -p "$TW_TMP/wh-before/Library/Preferences" "$TW_TMP/ws-before"; : >"$TW_TMP/wh-before/Library/Preferences/a.plist"; SWIFT_SUITE_WITNESS_HOME="$TW_TMP/wh-before"' \
+    "$DOM_SETUP"'; mkdir -p "$TW_TMP/wh-before/Library/Preferences" "$TW_TMP/ws-before"; : >"$TW_TMP/wh-before/Library/Preferences/a.plist"; SWIFT_SUITE_WITNESS_HOME="$TW_TMP/wh-before"' \
     'swift_suite_witness_before "$TW_TMP/ws-before"'
 row 'swift-suite.sh::swift_suite_witness_verdict' 'swift_suite_witness_verdict (nothing changed)' 0 \
-    '. tools/lib/swift-suite.sh; mkdir -p "$TW_TMP/wh-verdict/Library/Preferences" "$TW_TMP/ws-verdict"; : >"$TW_TMP/wh-verdict/Library/Preferences/a.plist"; SWIFT_SUITE_WITNESS_HOME="$TW_TMP/wh-verdict"; swift_suite_witness_before "$TW_TMP/ws-verdict"' \
+    "$DOM_SETUP"'; mkdir -p "$TW_TMP/wh-verdict/Library/Preferences" "$TW_TMP/ws-verdict"; : >"$TW_TMP/wh-verdict/Library/Preferences/a.plist"; SWIFT_SUITE_WITNESS_HOME="$TW_TMP/wh-verdict"; swift_suite_witness_before "$TW_TMP/ws-verdict"' \
     'swift_suite_witness_verdict "$TW_TMP/ws-verdict" >/dev/null'
+
+row 'swift-suite.sh::_swift_suite_domain_flatten' '_swift_suite_domain_flatten' 0 \
+    "$DOM_SETUP" \
+    '_swift_suite_domain_flatten < "$TW_TMP/dom/com.apple.dt.xctest.tool" >/dev/null'
+row 'swift-suite.sh::_swift_suite_domain_state' '_swift_suite_domain_state' 0 \
+    "$DOM_SETUP" \
+    '_swift_suite_domain_state com.apple.dt.xctest.tool >/dev/null'
+row 'swift-suite.sh::_swift_suite_witness_domain_snapshot' '_swift_suite_witness_domain_snapshot' 0 \
+    "$DOM_SETUP"'; mkdir -p "$TW_TMP/dom-snap"' \
+    '_swift_suite_witness_domain_snapshot "$TW_TMP/dom-snap" before'
+row 'swift-suite.sh::_swift_suite_witness_domain_report' '_swift_suite_witness_domain_report' 0 \
+    "$DOM_SETUP"'; printf "a\tv\n" > "$TW_TMP/dom-body"; printf "a\n" > "$TW_TMP/dom-keys"' \
+    '_swift_suite_witness_domain_report + "$TW_TMP/dom-keys" "$TW_TMP/dom-body" >/dev/null'
+row 'swift-suite.sh::_swift_suite_witness_domain_verdict' '_swift_suite_witness_domain_verdict (nothing changed)' 0 \
+    "$DOM_SETUP"'; mkdir -p "$TW_TMP/dom-state"; _swift_suite_witness_domain_snapshot "$TW_TMP/dom-state" before; _swift_suite_witness_domain_snapshot "$TW_TMP/dom-state" after' \
+    '_swift_suite_witness_domain_verdict "$TW_TMP/dom-state" >/dev/null'
 
 # ---------------------------------------------------------------------------
 # The exemption map

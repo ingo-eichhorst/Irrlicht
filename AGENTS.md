@@ -1776,11 +1776,17 @@ Before marking a ticket done, run the full suite — every layer must pass:
   collapsed by default) and a row still resolving `UserDefaults.standard` both
   write nothing too, so "wrote nothing" is worthless without "and it asked THIS
   store". The **runtime** witness #1672 also proposed — `tools/lib/swift-suite.sh`
-  comparing named domains' key SETS rather than directory entries — is #1688,
-  deferred with its measurement rather than dropped: the key set is quiet enough
-  to adopt (0 additions across two suite-length windows, against ~1 plist/218s
-  for the directory witness) but a growth-only check is green on any domain that
-  already has the key, i.e. on the machine that found this.
+  comparing named domains rather than directory entries — landed as #1688, and
+  what #1690 measured about it is why it compares VALUES and not only key sets:
+  the domain is quiet enough to adopt (0 changes across two suite-length
+  windows, against ~1 plist/218s for the directory witness) but a GROWTH-only
+  check is green on any domain that already holds the key, i.e. on the machine
+  that found this. Measured again in #1688, as the mutation that reddens the
+  #1672-shaped case and leaves the added/removed cases green. What no
+  before-to-after comparison of a domain can reach is the last step of the same
+  argument — an IDEMPOTENT write, which is #1672 exactly as it happened — so the
+  domain witness prints that limit on every clean run rather than a bare clean
+  line, and the checks that DO see it are the two in this paragraph.
   **#1689 is the READ half of the same member, and its premise turned out to be
   false in the useful direction.** `SettingsView.reconcileNotificationsMasterDefault()`
   DECIDED from `UserDefaults.standard.object(forKey:)` and wrote through
@@ -2033,7 +2039,28 @@ Before marking a ticket done, run the full suite — every layer must pass:
   suite-length windows, 4 unrelated background plists across one 870s window of
   interactive use. It is not filtered by name — #1661's leaked files were
   `<uuid>.plist`, so any name filter that quietened the churn would have
-  quietened the incident. `Tests/RealHomePathLintTests.swift` is the structural
+  quietened the incident.
+  **That witness has a SECOND half since #1688, and the split between the two is
+  the point rather than the sum**: the directory half watches for new FILES,
+  while `SWIFT_SUITE_WITNESSED_DOMAINS` compares
+  `com.apple.dt.xctest.tool` and `io.irrlicht.app` key set AND values through
+  `defaults export`, because #1672 was a write into an existing key of an
+  existing domain and moved no directory entry at all. Neither half is a
+  superset. It COMPARES — `defaults write`/`delete` on a real domain is as
+  forbidden as `rm`, so nothing there has a write path and the test corpus
+  answers through a committed stub reader
+  (`tools/lib/testdata/swift-suite/defaults-stub.sh`) rather than writing a
+  domain to make itself deterministic. Three things are load-bearing. The
+  vacuity guard is a **control probe** (`NSGlobalDomain`, read and never
+  compared) rather than the watched domains' contents, because "both domains
+  hold no keys" is a legitimate fresh-machine state where "no watched directory
+  present" is not — a contents-based guard would refuse on a new machine
+  forever. An EMPTY answer is `UNREADABLE`, not a clean empty domain, and the
+  one row where that distinction is a silent pass rather than a mislabelled
+  failure is a silent reader over an already-empty domain. And the limit is
+  printed on every clean run: an idempotent write is invisible to any
+  before/after comparison, so a saturated domain and a clean one would otherwise
+  read identically. `Tests/RealHomePathLintTests.swift` is the structural
   half, over the app AND test targets, with an existence-checked exemption list
   (two entries) because the safe construct is built out of the banned one.
   The suite also aborts intermittently (#1523) in a way that **truncates the
