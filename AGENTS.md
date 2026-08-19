@@ -1211,6 +1211,41 @@ Before marking a ticket done, run the full suite — every layer must pass:
   ARS CLI" step already fails the job for the likeliest transient cause (a
   `go install` outage) — a scan that could not run was the one failure here
   that was silent.
+  **#1655 is the same loop again, and the defect there is STATE rather than
+  status** — which is why it needed a second kind of fixture. A `git pull
+  --rebase` that fails INSIDE the rebase leaves the tree mid-rebase, and every
+  later `git pull` then refuses outright (`Pulling is not possible because you
+  have unmerged files`), so four of the five attempts could not run while the
+  closing message attributed all five to the push. The stub above cannot
+  produce that and cannot undo it, so obligations 12-17 run the extracted body
+  against **real git in a throwaway repo** whose "origin" is a local path —
+  one fixture that conflicts add/add, one whose `pre-receive` declines the
+  first N pushes (the ordinary race, which leaves no rebase). The property
+  asserted is not a message git may reword: it is how many attempts reached
+  `git pull` with a clean tree, read off git's own rebase state.
+  Three things are load-bearing. The step **asks** whether a rebase is in
+  progress (`git rev-parse --git-path rebase-merge`/`rebase-apply`) before
+  aborting, because "no rebase in progress" is the NORMAL case and
+  `git rebase --abort` exits 128 there — so a spelling that merely reads that
+  status turns every healthy retry red, and the `|| true` spelling discards the
+  one status that matters (already refused by name by this file's existing
+  arm). That rejected spelling is **committed** beside the shipped one and
+  re-measured: it is indistinguishable from the fix on the CONFLICTING fixture
+  and only the ordinary-rejection fixture tells them apart, which is why that
+  fixture exists. And the closing message states a **derived** count
+  (`$attempts of 5`) rather than a literal 5 — the issue's own point, that
+  "all 5 failed" is only true if all 5 were attempted. Today that number is
+  always 5 there; deriving it is what stops the sentence outrunning the facts
+  if the loop ever grows another way to skip one. The one branch the fix ADDS —
+  an abort that itself fails, where the tree is still dirty and stopping is the
+  only honest move — has no "before the fix" to be red against, so it carries
+  an injected mutation (the fixture makes `git rebase --abort` answer non-zero)
+  rather than a reproduction: a rebase that genuinely cannot be aborted has no
+  portable fixture. Reachability is carried from the issue **unchanged**: the
+  mechanism is measured (run 31963062408, a `workflow_dispatch` whose ref
+  differed from main), that a push-to-main run reaches it is ASSUMED. The
+  `actions/checkout@v7` here still carries no `fetch-depth:` — the depth-1
+  clone is why that run saw add/add — and #1655 deliberately did not change it.
   Audited while there, per "dismissals carry evidence": the only statement left
   in this job whose status is read more narrowly than it is produced is
   `git diff --staged --quiet`, whose three-valued status (0 / 1 / error) an
