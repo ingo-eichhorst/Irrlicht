@@ -1774,7 +1774,7 @@ Before marking a ticket done, run the full suite — every layer must pass:
   decision creates: a suite that runs on one machine and holds nothing runs
   nowhere, and reads exactly like one that passes everywhere. The gated
   remainder is printed and deliberately NOT pinned, because it moves with every
-  test anyone adds anywhere in the target — 388 of 436 measured on 2026-08-19 on
+  test anyone adds anywhere in the target — 392 of 440 measured on 2026-08-19 on
   the reference Mac. That split is "Replay's measured figures" applied one
   platform over, and this is the file that earned it: `macos-swift.yml`'s header
   claimed "270 of 318", was corrected to "272 of 320" by the PR that measured
@@ -2290,6 +2290,26 @@ Before marking a ticket done, run the full suite — every layer must pass:
   interactive use. It is not filtered by name — #1661's leaked files were
   `<uuid>.plist`, so any name filter that quietened the churn would have
   quietened the incident.
+  **The IN-PROCESS half of that guard made the opposite trade in #1714, and the
+  two are not in conflict — the difference is what each can say when it fires.**
+  `InMemoryDefaultsTests`' arm 2 ran the same wide net inside the suite and, on
+  a runner, reported `com.apple.siri.ODDI.MetricsWorker.plist` as *"The defaults
+  double reached disk. #1661 is back"*: a false ACCUSATION rather than a false
+  alarm, which is a different cost from the shell witness's, whose wording
+  already says "background daemons also write here … re-run to tell that apart"
+  and which CAN be re-run. A single in-process window cannot re-run itself, so
+  that assertion is now scoped to what the run OWNS — a UUID token woven through
+  every domain name and key the double is handed, plus this process's own
+  application domain, both derived at run time and neither a list of names the
+  run did not choose. What it gives up is exactly one shape, and it is committed
+  as a corpus row rather than described: a NEW file bearing a UUID this run did
+  not mint is no longer reported there. That population is still watched by the
+  two halves above, which is why the narrowing is affordable — the shell's
+  directory half brackets the whole run with the unattributed net, and its domain
+  half sees the write into `com.apple.dt.xctest.tool` that an added-entry witness
+  never could. Measured reachability before the fix: **1 failure in the 27
+  `macos-swift` runs on `main`** between the suite being gated there
+  (`a86ae50a`, 2026-08-16) and 2026-08-19.
   **That witness has a SECOND half since #1688, and the split between the two is
   the point rather than the sum**: the directory half watches for new FILES,
   while `SWIFT_SUITE_WITNESSED_DOMAINS` compares
