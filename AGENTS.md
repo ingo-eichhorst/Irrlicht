@@ -961,8 +961,9 @@ Before marking a ticket done, run the full suite — every layer must pass:
   only the lines a case runs, where the linter reads every line.
 - Bash scripts: `tools/bash-lint.sh` runs `shellcheck --shell=bash
   --severity=warning` over every file git knows about — tracked, plus untracked
-  and not gitignored — whose **first line** is a bash shebang. 117 files
-  (83 at #1684, plus the 34 #1687 brought in), and until #1684 **no static
+  and not gitignored — whose **first line** is a bash shebang. 118 files
+  (83 at #1684, plus the 34 #1687 brought in, plus one since — the count is
+  hand-kept and moves with any added script), and until #1684 **no static
   linter read one of them**: the bullet
   above selects on `#!/bin/sh` line 1, deliberately (#1611), so every bash file
   fell through — including the bounded gate runner (`gate-budget.sh`), the
@@ -1322,10 +1323,43 @@ Before marking a ticket done, run the full suite — every layer must pass:
   replacing `exit 1` with a continue leaves both NAMING arms green while the
   four headline-absent arms go red, so those arms hold the exit placement
   rather than the message. The sibling `swift-test` step does **not** have this
-  defect and needed no change: measured the same way, `swift_suite_verdict` is
-  itself among the missing functions, so no headline prints at all and the step
-  exits 127 with three `command not found` lines — loud, undiagnosed, but never
-  wrong. Weaker, not broken; #1702 covers it.
+  defect and needed no change under that ticket: measured the same way,
+  `swift_suite_verdict` is itself among the missing functions, so no headline
+  prints at all and the step exits 127 with three `command not found` lines —
+  loud, undiagnosed, but never wrong. Weaker, not broken; closed by the bullet
+  below (#1702).
+- The swift-test harness source: `tools/lib/swift-test-step_test.sh` is the
+  same treatment for the OTHER `shell: bash` step of `macos-swift.yml`, "Test
+  (bounded, streamed under a pty)" (#1702) — the same unread
+  `. tools/lib/swift-suite.sh`, refused with the same two checks, for the same
+  reason (`. an-empty-file` exits 0, so a source that RETURNS 0 having defined
+  nothing reads exactly like one that worked). Four things differ from the
+  sibling and each is the reason this was a separate ticket rather than a
+  copy.
+  **The names are not the sibling's.** That step consults its predicates
+  individually (`swift_suite_completed`, `swift_suite_ran_tests`); this one
+  consults only `swift_suite_verdict`, which is precisely the name whose
+  absence causes the whole defect and is on neither of the sibling's lists. A
+  list copied across is green against a library missing exactly the verdict —
+  measured, and the reason the lock drives the required set BOTH ways, one
+  library per name with the REAL library minus one function.
+  **The status is a decision, stated in the step.** `swift_suite_verdict` is
+  the step's last command and returns 0 or 1 and nothing else, so 1 is what
+  this step already means by "failed"; 127 was the shell reporting the last
+  "command not found", not the workflow reporting anything. Replacing both
+  `exit 1`s with `exit 127` reddens only the status arms and leaves every
+  wording arm green, which is #1644's measurement run backwards.
+  **What the pre-fix step did is committed and re-measured**, not quoted: the
+  old two-line spelling runs on every pass with the library absent and must
+  still exit 127 having printed no `::error::` at all. That is the vacuity
+  guard for the whole fix.
+  **And one arm is honestly non-discriminating**, said in the file rather than
+  glossed: with `swift_suite_run` gone the production verdict still runs, finds
+  no log and fails at 1 — the same 1 a correct refusal produces — so only the
+  wording tells them apart. Dropping the source check is the sharper case: the
+  `command -v` refusal then fires and reports an ABSENT file as "read but
+  defines no swift_suite_run", so the step exits 1 with a wrong diagnosis and
+  every status arm stays green.
 - Which bash a workflow step gets: **there are two invocations and this repo
   conflated them** for the whole of the two bullets above (#1650). A step
   DECLARING `shell: bash` runs as `bash --noprofile --norc -e -o pipefail {0}`;

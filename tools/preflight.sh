@@ -475,6 +475,12 @@ if want tools; then
   # failed reference copy fails the step — rather than shipping an artifact
   # with nothing to compare against — also lives entirely inside this gate. No
   # widening was needed for it; the entry was already here.
+  # Since #1702 it earns its place a third time: swift-test-step_test.sh
+  # EXTRACTS that workflow's "Test (bounded, streamed under a pty)" step and
+  # executes it, so the assertion that a harness which will not load is refused
+  # by name — rather than exiting 127 with three `command not found` lines and
+  # no diagnosis — lives in this gate too. Again no widening: same file, same
+  # entry.
   # .github/workflows/test.yml joins them for the third time (#1639):
   # shell-lib-suite_test.sh asserts that its "Test the shared shell libs" step
   # goes through the shared runner rather than growing its own loop back, and a
