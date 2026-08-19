@@ -27,8 +27,25 @@ type TagInfo struct {
 	Epoch int64
 }
 
-// CommitInfo is a single commit's hash, author-time unix epoch, and full
-// message body (subject + body, as git's %B gives it).
+// CommitInfo is a single commit's hash, author-time unix epoch, and message.
+//
+// Body is guaranteed to begin with the commit's subject and to be the complete
+// message (git's %B) for every commit HasRevertSubject reports true for. Note
+// what "the subject" means precisely: a git adapter may supply %s, which folds
+// a multi-line first paragraph onto one line and so is not byte-identical to
+// %B's first line. HasRevertSubject reaches the same verdict on both, which is
+// the property that matters and the one the adapter pins. Body is NOT
+// guaranteed to be complete for the others, and
+// that asymmetry is the whole of #1564: a range walk that streams every
+// commit's full message reaches gitMaxOutput at ~36k commits, where the only
+// consumer that reads past the subject line is DetectReverts and it reads past
+// it only for the commits HasRevertSubject selects. So the git adapter fetches
+// subjects for the range and full bodies for that subset alone.
+//
+// A new consumer that needs more than the subject of an arbitrary commit must
+// therefore widen what the adapter fetches rather than assume this field is
+// %B; the guarantee above is what it can rely on, and it is pinned by
+// TestCommitsInRangeBodyContract in the git adapter.
 type CommitInfo struct {
 	Hash        string
 	AuthorEpoch int64
@@ -73,11 +90,45 @@ var (
 	revertTrailerPattern = regexp.MustCompile(`(?m)^This reverts commit ([0-9a-f]{7,40})`)
 )
 
+// InWindow reports whether an epoch falls inside the [from, to] window every
+// metric below is computed over.
+//
+// It is exported for ONE caller and for one reason: since #1553 the
+// application service decides, before walking git, which tags the metrics
+// below will actually read, and skips the commit-range call for the rest. That
+// decision has to use this comparison rather than a copy of it — a second
+// spelling that drifted would not produce a slower answer, it would produce a
+// metric computed over commits the service never fetched, which is a silently
+// wrong number rather than a visible failure.
+func InWindow(epoch, from, to int64) bool { return epoch >= from && epoch <= to }
+
+// HasRevertSubject reports whether body's SUBJECT — everything up to its first
+// newline — has git's standard revert shape. It is the first of DetectReverts'
+// two conditions, and the only one that can be decided from the subject alone;
+// the second (the "This reverts commit <hash>." trailer) needs the body.
+//
+// It is exported for the same reason InWindow is, and against the same
+// failure. Since #1564 the git adapter decides, from the subject, which
+// commits it will fetch a full body for — so the adapter and DetectReverts
+// have to be asking ONE question. A second spelling that drifted would not
+// produce a slower answer: a commit whose subject the adapter no longer
+// recognised would arrive here carrying only its subject, DetectReverts would
+// find no trailer in it, and the revert would silently become an `unresolved`
+// count instead of a Change Failure Rate sample. That reads BETTER than
+// reality, which is the one direction #1543 singles out as worse than a blank.
+func HasRevertSubject(body string) bool {
+	subject := body
+	if i := strings.IndexByte(subject, '\n'); i >= 0 {
+		subject = subject[:i]
+	}
+	return revertSubjectPattern.MatchString(subject)
+}
+
 // filterRange returns the tags whose Epoch falls within [from, to].
 func filterRange(tags []TagInfo, from, to int64) []TagInfo {
 	var out []TagInfo
 	for _, t := range tags {
-		if t.Epoch >= from && t.Epoch <= to {
+		if InWindow(t.Epoch, from, to) {
 			out = append(out, t)
 		}
 	}
@@ -174,11 +225,13 @@ func DetectHotfixes(tags []TagInfo, windowHours int, from, to int64) []ResolvedF
 func DetectReverts(tags []TagInfo, commitsByTag map[string][]CommitInfo, from, to int64) (candidates []RevertCandidate, unresolved int) {
 	for _, tag := range filterRange(tags, from, to) {
 		for _, c := range commitsByTag[tag.Name] {
-			subject := c.Body
-			if i := strings.IndexByte(subject, '\n'); i >= 0 {
-				subject = subject[:i]
-			}
-			if !revertSubjectPattern.MatchString(subject) {
+			// The same predicate the git adapter filters on, not a copy of
+			// it — see HasRevertSubject. Note the ORDER this establishes and
+			// which CommitInfo.Body's guarantee depends on: nothing below
+			// reads past the subject line until this has passed, so a commit
+			// carrying only its subject is skipped here rather than
+			// misclassified.
+			if !HasRevertSubject(c.Body) {
 				continue
 			}
 			m := revertTrailerPattern.FindStringSubmatch(c.Body)

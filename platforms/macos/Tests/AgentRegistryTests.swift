@@ -41,7 +41,9 @@ final class AgentRegistryTests: XCTestCase {
 
     func testAdapterIconEmptyRegistryReturnsGenericIcon() throws {
         let session = try makeSession(adapter: "fake-agent")
-        XCTAssertNotNil(session.adapterIcon,
+        XCTAssertNotNil(session.adapterIcon(isDark: false),
+                        "registry miss should still render the neutral generic icon, not nil")
+        XCTAssertNotNil(session.adapterIcon(isDark: true),
                         "registry miss should still render the neutral generic icon, not nil")
     }
 
@@ -61,7 +63,8 @@ final class AgentRegistryTests: XCTestCase {
             """
         )
         let session = try makeSession(adapter: "claude-code")
-        XCTAssertNotNil(session.adapterIcon)
+        XCTAssertNotNil(session.adapterIcon(isDark: false))
+        XCTAssertNotNil(session.adapterIcon(isDark: true))
     }
 
     // MARK: - Helpers

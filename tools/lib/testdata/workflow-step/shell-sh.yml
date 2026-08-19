@@ -1,0 +1,10 @@
+name: Step declares sh
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Posix step
+        shell: sh
+        run: |
+          echo one

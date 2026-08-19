@@ -1,0 +1,12 @@
+name: Two steps carrying the same name
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+      - name: Checkout code
+        shell: bash
+        run: |
+          echo one

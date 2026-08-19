@@ -1,0 +1,5 @@
+package fixture
+
+// Two figures on one line: 4242 recordings of which 7373 diverge. Reporting
+// only the first would leave the second free to rot.
+func Two() {}

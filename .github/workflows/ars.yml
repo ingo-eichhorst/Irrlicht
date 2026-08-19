@@ -5,17 +5,40 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# The badge is published by PATCHing a gist with a separate GIST_SECRET PAT,
+# not the workflow token — so the default token needs checkout and nothing
+# more. This is the shape codescene-badge.yml already had; ars.yml is the one
+# that did not.
+#
+# It used to be `contents: write`, held for exactly one reason: a "Commit badge
+# update" step that committed the rewritten README.md and pushed it straight to
+# `main`. The "Protect Main" ruleset requires a pull request, so that push was
+# refused on EVERY run —
+#
+#     remote: error: GH013: Repository rule violations found for refs/heads/main.
+#     remote: - Changes must be made through a pull request.
+#
+# — and had been since 2026-04-26, the date of the last badge commit that
+# landed. A rule violation is not a transient condition, so all five retries
+# failed for the same reason: the job computed a fresh score, rewrote README.md
+# on the runner and threw it away, for roughly four months (#1654). Before
+# #1647 made the failure loud it did that behind a green check.
+#
+# The badge now goes to the same gist coverage.yml and codescene-badge.yml
+# already write to, README stops being rewritten at all, and nothing in this
+# job writes to the repository — which also means the workflow token sitting
+# next to a third-party CLI (pinned by commit, but still) can no longer push
+# anything.
+permissions:
+  contents: read
+
 jobs:
   update-ars-badge:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Go
         uses: actions/setup-go@v7
@@ -24,43 +47,183 @@ jobs:
           cache: false
 
       - name: Install ARS CLI
-        # Pinned to the commit v0.0.9 points at, not the tag: a tag can be moved
-        # to different code after the fact, and this job holds contents: write.
-        # Go resolves the hash back to v0.0.9 and still verifies it against the
-        # checksum database.
+        # Pinned to the commit v0.0.9 points at, not the tag: a tag can be
+        # moved to different code after the fact. Go resolves the hash back to
+        # v0.0.9 and still verifies it against the checksum database.
         run: go install github.com/ingo-eichhorst/agent-readyness/cmd/ars@e0ce48b9644df71b8f41b11c8c5655e3efa59660
 
       - name: Run ARS scan
+        # `|| true` used to sit on the scan, and the step's last statement was
+        # `cat` — which succeeds. So ANY failure of `ars scan` (a missing CLI, a
+        # renamed flag, a panic) ended this step at status 0 with an error
+        # message where the badge should be, the next step's grep matched
+        # nothing, its `if` was skipped in silence, and the badge stayed frozen
+        # at its previous score behind three green steps (#1644).
+        #
+        # The `|| true` was NOT protecting a legitimate non-zero. `ars scan`
+        # exits non-zero for a low score only when a threshold is set — pinned
+        # v0.0.9's internal/pipeline/pipeline.go guards it with
+        # `if p.threshold > 0 && … Composite < p.threshold { ExitError{Code: 2} }`,
+        # the flag is documented as "minimum composite score (exit code 2 if
+        # below)", this invocation passes no `--threshold`, and the repo carries
+        # no `.arsrc.yml` for `projectCfg.Scoring.Threshold` to supply one.
+        # Measured: the pinned binary scoring ./core at 7.9/10 — below the 8.1
+        # the README showed at the time — exits 0. So every non-zero here is a
+        # real failure and the job should say so.
+        #
+        # `|| scan_status=$?` rather than a bare `ars …; scan_status=$?`: the
+        # runner gives this step `bash -e {0}`, under which the bare form aborts
+        # at the failing command and never reaches the capture (#1629 is that
+        # exact trap). An `||` list suppresses errexit, so the status is ours to
+        # read. `cat` runs before the verdict, so the scan's own output is in
+        # the log on both paths.
         run: |
-          ars scan ./core --no-llm --badge > ars-output.txt 2>&1 || true
+          scan_status=0
+          ars scan ./core --no-llm --badge > ars-output.txt 2>&1 || scan_status=$?
           cat ars-output.txt
+          if [ "$scan_status" -ne 0 ]; then
+            echo "::error::ARS scan FAILED (exit $scan_status). No score was produced, so the badge gist was NOT updated and README's ARS badge still renders the previous score. The scan's own output is above."
+            exit 1
+          fi
 
-      - name: Extract and update ARS badge
+      - name: Extract ARS badge
+        # Three outcomes, never two — the same discipline #1645 put on the
+        # deletion guard. The badge was extracted and a payload written (pass);
+        # the scan produced output with no badge in it (fail, naming that the
+        # output format changed); the badge URL could not be turned into an
+        # endpoint payload (fail, naming which part of it could not). Each
+        # `if [ -n … ]` here used to be a silent skip whose only trace was a
+        # `No badge changes to commit` in a step that no longer exists.
+        #
+        # What #1654 changed: this step used to `sed -i` the score into
+        # README.md for the next step to commit and push. It now builds the
+        # shields.io ENDPOINT payload that README's badge reads out of a gist,
+        # so there is nothing to commit and nothing for a branch ruleset to
+        # refuse.
+        #
+        # The decode is the guard that is easy to leave out, and it is the same
+        # class of defect one level down. shields.io's STATIC-badge path is
+        # escaped — `--` is a literal dash, `_` and `%20` are spaces, `__` is a
+        # literal underscore, `%2F` is a slash — while the ENDPOINT schema takes
+        # plain text. Publishing the path's bytes unchanged renders a badge
+        # reading `Agent--Assisted%207.9%2F10`: wrong, permanently, and green
+        # about it, which is the failure mode this whole issue is made of. So
+        # the escaping is undone, and an escape this step does not model is a
+        # refusal rather than a guess — a validator that cannot parse its input
+        # checks MORE, never less.
         run: |
           ARS_BADGE=$(grep "img.shields.io/badge/ARS" ars-output.txt | head -1 || echo "")
           echo "ARS Badge line: $ARS_BADGE"
-
-          if [ -n "$ARS_BADGE" ]; then
-            ARS_URL=$(echo "$ARS_BADGE" | grep -o 'https://img\.shields\.io/badge/ARS[^)]*' | head -1 || echo "")
-            echo "ARS URL: $ARS_URL"
-            if [ -n "$ARS_URL" ]; then
-              sed -i "s|https://img.shields.io/badge/ARS-[^)]*|${ARS_URL}|g" README.md
-              echo "README updated with ARS badge URL"
-            fi
+          if [ -z "$ARS_BADGE" ]; then
+            echo "::error::the ARS scan succeeded but its output carries no img.shields.io/badge/ARS line, so there is no score to publish. The badge gist was NOT updated and README's ARS badge still renders the previous score — most likely \`--badge\` stopped emitting one, or the output format changed. Full scan output:"
+            cat ars-output.txt
+            exit 1
           fi
 
-      - name: Commit badge update
+          ARS_URL=$(echo "$ARS_BADGE" | grep -o 'https://img\.shields\.io/badge/ARS[^)]*' | head -1 || echo "")
+          echo "ARS URL: $ARS_URL"
+          if [ -z "$ARS_URL" ]; then
+            echo "::error::a badge line was found but no https://img.shields.io/badge/ARS… URL could be read out of it, so the badge gist was NOT updated. The line was: $ARS_BADGE"
+            exit 1
+          fi
+
+          # `--` is shields.io's escape for a literal dash, so the field
+          # separator is a SINGLE dash: park the escaped pairs on two bytes a
+          # URL cannot carry, split, then put them back inside `unescape`.
+          ARS_PATH=${ARS_URL#https://img.shields.io/badge/}
+          ARS_PATH=${ARS_PATH%%\?*}
+          esc=${ARS_PATH//--/$'\x1f'}
+          esc=${esc//__/$'\x1e'}
+          IFS=- read -r LABEL MESSAGE COLOR EXTRA <<<"$esc"
+          if [ -z "$LABEL" ] || [ -z "$MESSAGE" ] || [ -z "$COLOR" ] || [ -n "$EXTRA" ]; then
+            echo "::error::the ARS badge URL does not split into a label, a message and a color, so no endpoint payload could be built and the badge gist was NOT updated. shields.io's static-badge path is <label>-<message>-<color>; this one was: $ARS_PATH"
+            exit 1
+          fi
+
+          unescape() {
+            local s="$1"
+            s=${s//"%20"/" "}
+            s=${s//"%2F"/"/"}
+            s=${s//"%2f"/"/"}
+            s=${s//"_"/" "}
+            s=${s//$'\x1e'/"_"}
+            s=${s//$'\x1f'/"-"}
+            printf '%s' "$s"
+          }
+          LABEL=$(unescape "$LABEL")
+          MESSAGE=$(unescape "$MESSAGE")
+          COLOR=$(unescape "$COLOR")
+          case "$LABEL$MESSAGE$COLOR" in
+            *%*)
+              echo "::error::the ARS badge URL carries a percent-escape this step does not decode, so the gist was NOT updated rather than publishing bytes the badge would render literally. Decoded as far as it got: label=[$LABEL] message=[$MESSAGE] color=[$COLOR]"
+              exit 1
+              ;;
+          esac
+
+          jq -n -c --arg label "$LABEL" --arg message "$MESSAGE" --arg color "$COLOR" \
+            '{schemaVersion: 1, label: $label, message: $message, color: $color}' >ars-badge.json
+          echo "ARS badge endpoint payload:"
+          cat ars-badge.json
+
+      - name: Update Gist with ARS score
+        env:
+          GIST_SECRET: ${{ secrets.GIST_SECRET }}
+          # The same badges gist coverage.yml and codescene-badge.yml write to
+          # — this adds a third file to it, so #1654 needed no new secret.
+          COVERAGE_GIST_ID: ${{ secrets.COVERAGE_GIST_ID }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add README.md
-          if git diff --staged --quiet; then
-            echo "No badge changes to commit"
-          else
-            git commit -m "chore: update ARS badge [skip ci]"
-            for i in 1 2 3 4 5; do
-              git pull --rebase origin main && git push && break
-              echo "Push attempt $i failed, retrying..."
-              sleep $((i * 3))
-            done
+          if [ -z "$GIST_SECRET" ]; then
+            echo "::error::GIST_SECRET is not set in repository secrets, so the ARS badge could not be published at all. The gist still holds its previous ars.json and README's ARS badge renders the previous score."
+            exit 1
           fi
+          if [ -z "$COVERAGE_GIST_ID" ]; then
+            echo "::error::COVERAGE_GIST_ID is not set in repository secrets, so there is no gist for the ARS badge to be published to. README's ARS badge renders the previous score."
+            exit 1
+          fi
+
+          # The emptiness guard the pipeline-free read still needs: a missing,
+          # unreadable or blank-message payload and a published badge must not
+          # come out of this step looking the same.
+          MESSAGE=$(jq -r '.message // empty' ars-badge.json 2>/dev/null || echo "")
+          if [ -z "$MESSAGE" ]; then
+            echo "::error::there is no ARS badge payload to publish — ars-badge.json is missing, unreadable, or carries an empty message. The gist was NOT updated and README's ARS badge renders the previous score."
+            exit 1
+          fi
+
+          BADGE_JSON=$(cat ars-badge.json)
+          jq -n --arg content "$BADGE_JSON" '{"files":{"ars.json":{"content":$content}}}' >gist-payload.json
+
+          # curl writes "000" to %{http_code} when no response was received
+          # (DNS/TLS/connect failure) AND exits non-zero — under this step's
+          # implicit `-e` a bare `$(curl …)` would abort the step right there,
+          # with no annotation and no diagnosis. So the status is captured and
+          # reported next to the code: "the API said no" and "the API was never
+          # reached" are different failures, and both are named by one refusal
+          # rather than one of them being silent.
+          curl_status=0
+          http_code=$(curl -sS -o gist-response.json -w '%{http_code}' \
+            --connect-timeout 10 --max-time 30 \
+            --retry 3 --retry-delay 2 --retry-all-errors \
+            -X PATCH \
+            -H "Authorization: token $GIST_SECRET" \
+            -H "Content-Type: application/json" \
+            -d @gist-payload.json \
+            "https://api.github.com/gists/$COVERAGE_GIST_ID") || curl_status=$?
+          echo "HTTP $http_code (curl exit $curl_status)"
+          # A non-numeric `$http_code` would make the arithmetic tests below
+          # print `integer expression expected` and evaluate FALSE, i.e. fall
+          # through to the success line — so its shape is decided first.
+          case "$http_code" in
+            ''|*[!0-9]*) http_code_usable=0 ;;
+            *)           http_code_usable=1 ;;
+          esac
+          if [ "$curl_status" -ne 0 ] || [ "$http_code_usable" -ne 1 ] || [ "$http_code" -lt 200 ] || [ "$http_code" -ge 300 ]; then
+            echo "::error::the ARS badge gist update FAILED (HTTP $http_code, curl exit $curl_status), so the gist still holds its previous ars.json and README's ARS badge renders the previous score."
+            if [ -s gist-response.json ]; then
+              cat gist-response.json
+            else
+              echo "(no response body — likely a transport failure)"
+            fi
+            exit 1
+          fi
+          echo "Published ARS badge to gist: $MESSAGE"

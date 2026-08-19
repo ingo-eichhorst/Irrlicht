@@ -113,6 +113,43 @@ were added before they could catch anything and carry the weaker evidence that t
 it plants (below), and the harness built on #1390's lesson from the start, carrying a
 deliberate no-match row that must report `STALE` (#1450).
 
+**A fixture that waits by SLEEPING has not observed what it waits for, and the
+assertion after the sleep is not evidence that it has.** Poll the condition to a
+generous deadline and fail with the elapsed time: that turns "the machine was busy"
+into a slower pass while a thing that genuinely never happens still fails loudly —
+the property a longer sleep weakens. #1586's tmux fixture is the shape, and the
+reason to MEASURE rather than reason about which condition is pending: it slept a
+fixed 120ms and then hard-failed unless the helper had been reparented to init, and
+those were **not the same condition**. Measured over 40 runs, the reparenting was
+already complete on the first `ps` every time, while the env the test actually reads
+was readable on the first sysctl *none* of the time (~1.2ms p50) — it only lands with
+the exec, since until then the pid is still the Apple-signed, env-stripped `/bin/sh`.
+So the sleep was covering a condition nothing checked, the hard-fail was checking one
+that never failed for its stated reason, and polling only the checked one would have
+replaced a 120ms margin with the duration of one `ps`. The poll is
+`awaitFixtureCondition` (`processlifecycle/osutil_darwin_test.go`); each caller carries
+a vacuity guard, because a fixture handed nothing to wait for reports ready having read
+nothing. This is a rule about the shape, not a known-flake register: after the fix that
+test is not expected to flake, and recording it as one would be a dismissal that stops
+the next agent looking.
+
+**And a fixture must observe the SUBJECT, never a side effect the subject produces on
+its way out.** Polling is the second half of the rule above and not the whole of it:
+#1616 fell through the gap. `gate-budget_test.sh` asked whether a killed process tree
+had survived by looking for a *marker file* its innermost `sleep 30; echo … >marker`
+would write — so "it was interrupted" and "it survived" could write the same evidence,
+and an ordinary preemption between the two `kill`s of a depth-first walk let the shell
+reap its dead `sleep` and run the `echo`. Someone following the paragraph above would
+have polled the marker and kept an ambiguous fixture. Two measurements make the point
+sharper than the flake did. The marker assertion could only fire at t+30 while the case
+ended at t+3, so it never carried the property at all — the survivor count did. And
+sparing the deepest process left the old case passing all three of its assertions while
+a `sleep 30` genuinely outlived its bound. The fix is structural rather than a longer
+wait: the fixture's leaf `exec`s its sleep, so there is no next command and no
+mid-transition state, and survival is read as "does this pid exist" and polled to a
+deadline that fails with the surviving pids. Reproduced 1-in-600 naturally under load,
+and deterministically at 100% by injecting ~400µs at the identified point.
+
 **A validator that cannot parse its input checks MORE, never less.** An input it
 cannot read with confidence is neither a quiet pass nor a skip: it is the case where
 the validator has the least idea what it is looking at, so it is the last place to
@@ -186,12 +223,37 @@ Before marking a ticket done, run the full suite — every layer must pass:
   whether the regression is worth addressing before merging. Deterministic
   and workflow-agnostic: it fires on any push, not tied to a specific agent
   skill.
+  **What IS required is stated here positively**, because "not required by
+  branch protection" appears twice in this section and nothing said what is —
+  the sentence #1432 filed as the one creating the false impression. Measured
+  with `gh api repos/ingo-eichhorst/Irrlicht/rulesets/15993081`: the "Protect
+  Main" ruleset is active on `main` with **zero** bypass actors and carries
+  `pull_request`, `required_linear_history`, `deletion`, `non_fast_forward`
+  and `required_status_checks`, whose required contexts are exactly **`go-test`
+  and `build-test`**. Classic branch protection on `main` is empty
+  (`.required_status_checks.contexts` is `[]`), so the ruleset is the whole of
+  it. When #1432 was filed (2026-08-09) that ruleset carried no
+  `required_status_checks` rule at all, so this is a behaviour CHANGE, not a
+  restatement. Its consequence is #1432's own scope item 3: a **CONFLICTING**
+  PR dispatches no `pull_request` workflows, so those two checks come back
+  ABSENT rather than red — and an absent required check reads as "waiting for
+  status to be reported", i.e. indistinguishable from still-queued. That is
+  correct behaviour with a confusing symptom; rebase the PR and the checks
+  appear.
+  The ARS score is also what the README's ARS badge shows, and since #1654 it
+  is published the way the CodeScene one is: `.github/workflows/ars.yml`
+  PATCHes a shields.io endpoint payload into the badges gist on every push to
+  `main` and writes nothing to the repository. It used to commit a rewritten
+  README.md and push it to `main` — which the `pull_request` rule above refused
+  on every run from 2026-04-26 onward, silently until #1647.
 - Code health: CodeScene posts a "CodeScene Code Health Review" check on every
   PR automatically (via the CodeScene GitHub App, configured on codescene.io
   project 82148 — not a workflow in this repo). Like the ARS score, it's
   advisory, not a merge gate: neither branch protection nor the "Protect
-  Main" ruleset requires it to pass. A red result is a prompt to look
-  closer, not something to chase to green before merging or releasing. The
+  Main" ruleset requires it to pass — that ruleset's required contexts are
+  `go-test` and `build-test` and nothing else (bullet above). A red result is
+  a prompt to look closer, not something to chase to green before merging or
+  releasing. The
   README's CodeScene badge shows the live score, auto-refreshed on every
   push to `main` by `.github/workflows/codescene-badge.yml`. For concrete,
   file:line-level findings (rule, message, fix effort) rather than a
@@ -703,6 +765,51 @@ Before marking a ticket done, run the full suite — every layer must pass:
   corpus's own worst defect shipped and was caught in review: `testing.TB` sat
   in the must-NOT-flag block, so the rule's biggest hole came with an approved
   spelling.
+  Beside the seam walk sits `fixture_drift_test.go` (#1520), which closes the
+  direction the vacuity guards cannot see. Each obligation of a receiver-shaped
+  family states its fixture TWICE — once in the entry point's `t.Run` body,
+  which is what an adapter runs, and once in the self-test's `armBuilder`
+  table — and only the SELF-TEST side's drift was caught: a self-test that stops
+  posting the input its obligation grades goes silent against a
+  deliberately-wrong fixture and fails, while an ENTRY POINT that changes an
+  input leaves every self-test green, still certifying an input production no
+  longer posts. Measured, not argued: renaming the entry point's `in-tree`
+  subdirectory left the whole package green. Folding the two statements into one
+  source was rejected in #1512 and again in #1520 — those `t.Run` bodies are
+  what an adapter author reads to learn what their adapter owes — so the
+  duplication stays and an assertion removes the silence. Two rules over one
+  parse, both in the seam walk's shape. The **first** compares, per obligation,
+  the multiset of BASIC LITERALS the two bodies contain, which is where "a
+  different path spelling" actually lives and which an identifier-only rule
+  cannot see (`32` becoming `2` shortens the traversal below the point where it
+  bottoms out at `/`); the set of package-level identifiers declared in
+  NON-test files that each side references — the arm, the `what` constant its
+  failure prints, the fixture helper — where a self-test's own
+  `fakePathReceiver` and `receiverBreak` are test-declared and drop out by
+  construction rather than by an exemption list; and the obligation NAMES in
+  ORDER, which catches the one drift no input comparison can, a seventh
+  obligation reusing an existing arm, invisible to the seam walk's rule 2
+  because it introduces no new arm. The family list is derived from the
+  package-level `receiverFamily` vars, so a fourth receiver-shaped family is
+  graded by existing. Names the body BINDS are subtracted before the comparison
+  (the two sides legitimately call one path `inTree` and `spelled`), and the
+  declared limit is EXPRESSION STRUCTURE — two bodies holding the same pieces in
+  a different arrangement agree — pinned by a `want:false` corpus row. AST
+  equality was tried first and abandoned: the two sides already differ in ways
+  nobody should have to mirror, so it would have been red on arrival. The
+  **second** rule is #1520's smaller sibling: every `receiverBreak` knob must
+  still be SPENT by a negative self-test and HONOURED by the fixture, over a
+  knob set derived from the struct's fields plus the constants of every enum a
+  field is declared with — `confine` and `receipt` are single fields carrying
+  three and four distinct mutations, so a field-level rule would report
+  `confine` as spent while `confineAcceptUnresolvable` rotted. All 22 knobs were
+  spent when it was written; one, `receiptNever`, is honoured by matching NO
+  placement guard and is named in `knobsHonouredByAbsence` rather than left to
+  be inferred from the absence of a branch. Both rules' mutation evidence is
+  committed in `fixture_drift_corpus_test.go`, and it does NOT reach the four
+  non-receiver families: their entry points construct no per-obligation input
+  (`assertFloorParses(t, gate.Min)` grades a value the WIRING carries), so there
+  is no second statement to drift from.
   One further cost is worth knowing before writing a fifth family:
   `hookjson`'s distinct-name table retains `MaxUnknownEventNames` `(adapter,
   name)` pairs for the life of the process and never resets, so an obligation
@@ -747,6 +854,53 @@ Before marking a ticket done, run the full suite — every layer must pass:
   every one of them an addition to coverage, none a lock on the predecessor's.
   A rewritten guard replays its predecessor's cases or it is not known to be a
   superset.
+- Probe costs in doc comments: `core/internal/costreport` is "Replay's measured
+  figures" one layer down, for the numbers that justify a CONSTANT rather than
+  describe a catalog — `shelloutTimeout`, `ancestryReads`, `clientHostBudget`,
+  `bundleIDMemo`, `gitTimeout`, `gitHistoryTimeout`, `gitMaxOutput` (#1572). Two
+  doc comments in one file described the same `plutil` exec at 2.2ms (#1524) and
+  9.7ms (#1544); the mechanism is what settled it, and the answer is that the
+  4x is LOAD — the same generator on one machine reports 5.4ms idle and 10.2ms
+  under twelve busy loops, and #1544's `ps` figure moves the same way, so one
+  cause explains both of its numbers. **Read `min`, never median, when carrying
+  any of these to another machine.** Three things are load-bearing and none is
+  the obvious one.
+  **No equality gate, deliberately.** Replay's census can compare a committed
+  literal against a fresh measurement because its subject is a fixed catalog on
+  disk; these are a property of a machine under a load, so a threshold would
+  fail for reasons unrelated to the code and be widened until it protected
+  nothing. What IS enforced is that every anchored figure names the command
+  that regenerates it (`AssertFiguresNameTheirGenerator`, checked in both
+  directions; `git grep "regenerate:" core/` is the reverse), and that the
+  generator REFUSES rather than printing zeros. Discovering figures was tried
+  and rejected on the measurement — "median" appears 4x in the git adapter's
+  doc comments and only 3 are figures, so a heuristic arrives with an exemption
+  list nobody re-reads. That is #1518's subject, in the tree that has more of
+  them; #1578's magnitude floor does NOT transfer here, because these values
+  are 2-300 and collide with everything.
+  **A DERIVED figure needs the same refusal as a measured one, and that is the
+  hole this closes.** `Row.WithRate` renders bytes-per-population and refuses
+  BY NAME instead of rounding to zero — because #1572's own first generator
+  printed `0 bytes out = 0/commit` for a grep walk and `41 bytes out =
+  0/commit` for `rev-parse`, in a block that PASSED. A guard keyed on
+  `bytes == 0` catches the first and not the second: 41 is a real measurement
+  and `41/3209` is 0 in Go. The pre-fix rendering is committed as
+  `rateAsShipped` and re-measured every run, and the sweep beside it prints
+  "24 of 42 pairs" so an axis that stopped containing the defect fails loudly.
+  **The cannot-run case execs a path that does not exist** rather than stubbing
+  the answer, because "the loop collected nothing" and "the loop collected the
+  duration of the FAILURE" are different defects and only a real
+  never-answering child reaches the second.
+  Two costs are stated where they live rather than left to be discovered.
+  Sample counts are PER PLAN — the whole-process-table `lsof` scans cost ~0.3s
+  a call, so #1544's n=300 would be two minutes for one row — and `n` is
+  printed in every row so a smaller one is disclosed. And the git generator
+  deliberately does NOT build the `git fast-import` synthetic behind
+  `gitHistoryTimeout`'s 100k/1M curve points (~200 lines, minutes per point,
+  for a constant chosen against an order of magnitude): those two rows are
+  present and REFUSED by name, because a block that quietly stops at what is
+  easy reads as a complete measurement of a shorter curve. `tmux.list_clients`
+  refuses for a different reason — asking a socket with no server STARTS one.
 - Skill files: `tools/skill-lint.sh` reads every `.md` under
   `.claude/skills/` plus any other tracked `SKILL.md` (there is one under
   `tools/irrlicht-design-system/`) — the files that tell agents how to triage,
@@ -769,11 +923,24 @@ Before marking a ticket done, run the full suite — every layer must pass:
   `tools/lib/testdata/skill-lint/` — so the assertions never move when a real
   skill file is edited, and `testdata/` is excluded from the gate's own walk
   because those fixtures are deliberately corrupt.
-- POSIX shell scripts: `tools/posix-lint.sh` checks every tracked file whose
-  **first line** is a `#!/bin/sh` shebang — today `site/install.sh` and
-  `tools/linux-replay-entrypoint.sh`. Line 1 only, because
+- POSIX shell scripts: `tools/posix-lint.sh` checks every file git knows
+  about — tracked, plus **untracked and not gitignored** (#1611) — whose
+  **first line** is a `#!/bin/sh` shebang; today `site/install.sh`,
+  `tools/linux-replay-entrypoint.sh` and `tools/git-hooks/shim` (#1591 brought
+  the third into scope, which is the whole reason that file was written in
+  POSIX sh rather than bash). Line 1 only, because
   `tools/lib/install-uninstall_test.sh` is a bash file that writes `#!/bin/sh`
   stubs inside a heredoc, and a content grep would try to lint it as POSIX sh.
+  The untracked half is #1611 and it is #1591's own consequence one layer
+  down: once `changed_files_vs_origin_main` counted untracked files, a brand
+  new `#!/bin/sh` script DID put this gate in scope, and a gate walking
+  `git ls-files` then could not see the file that summoned it — `ALL PASS`
+  over a file it never read, this gate's founding incident arriving through
+  file selection. Untracked paths join the SAME stream and the SAME loop as
+  tracked ones rather than getting a second walk, so the `testdata/` exclusion
+  and the line-1 rule cannot apply to only half the set; the mis-implementation
+  is not hypothetical — measured, a second walk lints the deliberately-corrupt
+  fixture corpus and the linter's own bash source.
   It runs two different kinds of check on each file: a real POSIX shell's
   parser (`dash -n`) and **every** static bashism linter installed —
   `shellcheck --shell=sh` filtered to its POSIX-compatibility codes
@@ -817,6 +984,485 @@ Before marking a ticket done, run the full suite — every layer must pass:
   `install-uninstall_test.sh` now *executes* the installer under `dash` rather
   than `sh` (macOS ships `/bin/dash`), which is the runtime half — it reaches
   only the lines a case runs, where the linter reads every line.
+- Bash scripts: `tools/bash-lint.sh` runs `shellcheck --shell=bash
+  --severity=warning` over every file git knows about — tracked, plus untracked
+  and not gitignored — whose **first line** is a bash shebang. 118 files
+  (83 at #1684, plus the 34 #1687 brought in, plus one since — the count is
+  hand-kept and moves with any added script), and until #1684 **no static
+  linter read one of them**: the bullet
+  above selects on `#!/bin/sh` line 1, deliberately (#1611), so every bash file
+  fell through — including the bounded gate runner (`gate-budget.sh`), the
+  pre-push hook's own scoping rules (`changed-files.sh`), the shared suite
+  runner and every extract-and-execute workflow lock, i.e. the machinery
+  deciding whether the other gates pass. Same file-selection blindness class as
+  #1423 and #1611. It found 26 findings, all fixed or annotated.
+  Four decisions are load-bearing and each was measured rather than preferred.
+  - **DEFAULT-IN, opt-out with a reason.** The scope is not a prefix list — it
+    is everything, minus the declared `EXCLUDE` globs each carrying its
+    justification, and an exclusion that matches NOTHING is a hard refusal
+    (exit 2) rather than a no-op, the same both-directions existence check
+    `TW_EXEMPT_KEYS` and `nilTolerant` get. So a bash file added anywhere is
+    covered by existing. Since #1687 **exactly one** family is out — the
+    deliberately-corrupt `testdata/` corpora — which puts more weight on that
+    refusal than it carried before: it is now the only proof the existence
+    check works, so a second exclusion owes its own arm in the suite.
+    #1687 brought in the other two, the recording rig's per-agent drivers
+    (`replaydata/**`, 33 files) and the `.tmpl` they are generated from: 89
+    findings, all fixed or annotated, and **byte-identical on 0.9.0 and
+    0.11.0**, which extends the version-agreement measurement below to that
+    corpus rather than assuming it carries. Why they were worth it beyond the
+    count: #1388/#1694 found codex's driver had ROTTED against codex-cli
+    0.147.0 and produced a healthy-looking fixture — `driver.exit-reason: ok`,
+    zero rollouts — from a run that did nothing. Ten drivers steer live TUIs by
+    grepping literal strings, and no static analyser had read one of them.
+    Of the 78 SC2034s, 77 were verified cross-file seams and annotated per
+    site; the one with no consumer anywhere (`SKILL_DIR` in the gastown driver)
+    was deleted rather than annotated, which is the distinction the rule turns
+    on.
+  - **A severity FLOOR, not posix-lint's named code set**, and the reason the
+    precedent was not followed is that SC3xxx is a closed family by definition
+    while "bugs in bash" is not: an opt-in code list is not enforced on a code
+    shellcheck adds later. The floor is `warning` because that is where the
+    VERSION SPLIT vanishes. Measured per-file over the whole corpus with 0.9.0,
+    0.10.0 and 0.11.0 binaries side by side: at `warning` all three are
+    **byte-identical** (26 findings, same line:col); at `style` they are not,
+    and the asymmetry runs in BOTH directions with the damage on the CI side —
+    138 findings CI's 0.9.0 reports which a local 0.11.0 cannot produce
+    (137 × SC2317) against 25 the other way (SC2329). A `style` floor would
+    make `preflight --only bash` pass a diff linux.yml rejects, the exact
+    round-trip posix-lint's monotonicity argument exists to prevent. `-x`
+    (external sources) is off, also measured: these libraries source through
+    variable paths, so it changed the count by zero.
+  - **ONE FILE PER INVOCATION.** Measured: shellcheck given several files at
+    once suppresses SC2034 for a name used in ANY of them — one file alone
+    reports 2 findings, the same file beside `await-gone.sh` reports 0. A
+    multi-file gate's verdict would depend on which other files shared the
+    command line, which `--changed` scoping makes differ between a push and
+    CI's full run. It is also why the count is 26 where a single multi-file run
+    over the same tree says 15.
+  - **A comment line whose FIRST word is the linter's name is a DIRECTIVE**, and
+    an unparseable one makes shellcheck ABANDON the file — every later finding
+    silently disappears. That is inside the floor (SC1072/SC1073 are `error`)
+    for the same reason `posix-lint.sh` refuses to filter its parse-abort codes
+    into silence, and it is the gate's most valuable rule: it caught the
+    construct **four times in this PR's own new prose**, and
+    `replaydata/_lib/drive/contracts.sh` carried it from #508 until #1687 —
+    for that whole time shellcheck's ONLY output for that file was the two
+    parse errors. **No extra guard was added for it in #1687, because the floor
+    already refuses it**: with the file in scope the gate goes red on
+    SC1073/SC1072, measured on 0.9.0 and 0.11.0 alike. Note the correction to
+    #1687's own framing while quoting it — "rewording that one line surfaces an
+    SC2005" is true at shellcheck's DEFAULT severity and false at this gate's,
+    since SC2005 is `style`; at `--severity=warning` the reworded file reports
+    nothing. What the floor buys is not the hidden finding but the end of the
+    abandonment, i.e. that any finding a future edit introduces is visible at
+    all. The
+    sibling SC1125 is the `# shellcheck disable=SCxxxx — <prose>` spelling; the
+    disable IS still honoured (measured on both versions), but the reason must
+    go behind a second `#`.
+  The sanctioned escape hatch is a per-SITE `# shellcheck disable=SCxxxx  #
+  <reason>` naming its consumer's `file:line` — all 94 SC2034s are that (17 at
+  #1684, 77 at #1687), each verified to have a real reader — and never a code
+  removed from the gate.
+  A directive covers only the NEXT command, so four adjacent knob assignments
+  need four. Two consequences #1687 measured and had to work around: a `;`-
+  joined declaration line (`A=(); B=(); C=()`) takes a directive only on its
+  FIRST assignment, so such lines are split one per line rather than left with
+  a directive that appears to cover three and covers one; and a directive
+  placed before the file's first COMMAND applies file-wide, which is a blanket
+  disable wearing a per-site shape and is not used.
+  It lives in **`linux.yml`** beside `posix-lint.sh`, but for a DIFFERENT
+  reason, and the difference is the decision: posix-lint needs ubuntu because
+  `/bin/sh` must genuinely BE dash there — a property of the runtime — whereas
+  shellcheck is a static analyser that reads no interpreter, so neither the OS
+  nor the arch enters the verdict (the 0.9.0 measurement above was taken from an
+  x86_64 binary under Rosetta on arm64 macOS and agrees byte-for-byte with a
+  native arm64 0.11.0). What picks the host is only that the ubuntu image ships
+  shellcheck and macos-latest ships none. Mirrored locally by
+  `tools/preflight.sh --only bash`. Its tests are `tools/lib/bash-lint_test.sh`
+  over the committed corpus under `tools/lib/testdata/bash-lint/` — one
+  deliberately-broken fixture per rule class, `good-clean.sh` as the vacuity
+  guard, `style-noisy-but-warning-clean.sh` pinning the floor in the one
+  direction the `bad-*` files cannot reach, and the abandonment fixture proved
+  by REWORDING its directive line and asserting the hidden SC2115 appears.
+  That suite runs in `linux.yml`, not in test.yml's `tools/lib/*_test.sh` loop —
+  it needs a linter the macOS image lacks, and it is the loop's SECOND skip
+  argument. `shell-lib-suite_test.sh` now derives that list from the workflow
+  step and existence-checks every name, because the one-file check it had would
+  have gone on passing while saying nothing about the new entry.
+
+- Sourced shell libraries: not a contract family — a tripwire,
+  `tools/lib/shell-lib-errexit_test.sh`, over every `tools/lib/*.sh` that is
+  not a `*_test.sh`. Each function it can drive must, under a caller's
+  `set -e`, return what its library DOCUMENTS rather than aborting the caller,
+  and must leave the caller's shell options byte-identical. It exists because
+  three issues in a row were the same defect in a different file — #1629 (a
+  workflow step reading `$?` on a line GitHub's implicit `-e` never reached),
+  #1633 (`swift_suite_run`'s post-timeout kill sequence aborting before
+  `return 124`), #1635 (`budget_run`'s backgrounded child inheriting errexit
+  and dying before writing the status file that is its "it finished" signal,
+  so a gate that failed instantly was reported as a TIMEOUT that burned the
+  whole budget) — and each sibling was found only because someone happened to
+  look. These files are SOURCED, so they run with whatever options their caller
+  has, and none of them said anything about that. Four things are load-bearing:
+  - **Bare statement position is the whole point.** Every other calling shape —
+    `if f`, `f || x`, `x=$(f)` — makes bash ignore errexit for the whole
+    function body, and (measured on 3.2.57) for a subshell that body
+    backgrounds as well. The very call that came back 1 instead of 3 against
+    the unfixed `gate-budget.sh` returns 3 written as `budget_run … || rc=$?`,
+    so a lock written that way is green against a broken library.
+  - **`$(set +o)` cannot capture the options.** bash 3.2 reports errexit and
+    nounset as OFF inside a command substitution regardless of the parent —
+    measured, same shell, same instant: `$( )` gives `set +o errexit` where a
+    redirect to a file gives `set -o errexit`. A probe built the obvious way is
+    byte-identical before and after any leak and can never fail. The redirect
+    spelling is used, and `tw_fixture_leaks` is its committed guard.
+  - **No function is blind-called.** Each has a named setup+call recipe;
+    expected statuses are chosen DISTINCTIVE (0, 2, 3, 124) because a documented
+    1 is indistinguishable from an errexit abort, which also exits 1. Anything
+    undrivable is named in `TW_EXEMPT_KEYS` with its reason — today one entry,
+    `swift_suite_run` on a non-Darwin host, and it is inactive on macOS where
+    the suite actually runs. Recipe keys and exemption keys are existence-
+    checked against the walk in BOTH directions, so a library that stopped
+    being walked surfaces as its recipes naming nothing rather than as silence.
+  - Its own mutation evidence is committed (`tw_fixture_correct` /
+    `tw_fixture_aborts` / `tw_fixture_leaks`, four synthetic bijection cases,
+    and a real walk over a directory holding three of the libraries,
+    swift-suite.sh deliberately not among them — phrased that way rather than
+    as "three of the four" because #1639 added a fifth and made that count
+    stale). The
+    fixtures matter in both directions: a leaked `set +e` is a *working* fix for
+    the return value, so obligation (a) passes it and only (b) objects.
+  What it buys over a hand-written lock was measured on this repo: deleting
+  `_budget_kill_tree`'s own guard reddens the tripwire and leaves
+  `gate-budget_test.sh`'s whole `-e` block green, because that helper is only
+  ever reached through a region `budget_run` guards separately.
+- The shell-lib suite runner: `tools/lib/shell-lib-suite.sh` is the ONE
+  implementation behind test.yml's "Test the shared shell libs" step and
+  `tools/preflight.sh`'s `tools` gate. Before #1639 those were two copies of
+  the same loop that disagreed about the only thing that matters: preflight's
+  collected every file's status, CI's had no `|| rc=1` and — test.yml declaring
+  no `shell:` and no `defaults:`, so GitHub's `bash -e {0}` applies (errexit
+  only; see "Which bash a workflow step gets" below) — aborted on the FIRST
+  failing file with every later file
+  in glob order never run and nothing in the log saying so. One round trip per
+  red file, on suites that take seconds each. The sharing follows
+  `macos-swift.yml`'s own reason for sharing `swift-suite.sh`: CI and the
+  pre-push hook judge a run by the same rules rather than by two
+  implementations that can disagree. Three things about it are load-bearing.
+  It prints a **census** — found / skipped / ran / failed — because "they all
+  passed" and "the loop stopped early" had no distinguishing line in either
+  predecessor. An **empty corpus is a named refusal** (status 2, distinct from
+  1) rather than either predecessor's answer, both measured: CI's loop iterated
+  once with the literal unexpanded pattern (nullglob is off by default and
+  neither invocation changes it) and died with `No such file or directory`,
+  while preflight's `[[ -e "$t" ]] || continue` filtered that out and returned
+  0, passing silently. And the two callers' one remaining scope difference —
+  CI skips `posix-lint_test.sh`, which needs a linter the macos image lacks —
+  is an **argument** that is validated against the corpus before anything runs,
+  so a skip that stops matching a real file is a refusal instead of a `case`
+  pattern quietly matching nothing. Its tests are
+  `tools/lib/shell-lib-suite_test.sh`, which grades the runner in BARE
+  STATEMENT position as well as under `|| rc=$?`: bash suppresses errexit for a
+  function's whole body when the call sits in a `||` position, so a runner that
+  ran its files as bare `bash "$f"` statements is invisible from the `||` shape
+  and from the CI step itself. Both predecessors are emitted verbatim there and
+  re-measured on every run, which doubles as the vacuity guard — if bash ever
+  stopped aborting, the fix would be protecting nothing and would pass for the
+  wrong reason.
+- The ARS badge job: `tools/lib/ars-badge-push_test.sh` EXTRACTS each of
+  `.github/workflows/ars.yml`'s three `run:` steps out of the workflow
+  file and EXECUTES it against a stub, under the invocation that step
+  actually gets — DERIVED from the workflow, today `bash -e` (see "Which bash a
+  workflow step gets" below; this bullet claimed
+  `bash --noprofile --norc -e -o pipefail` until #1650). Behavioural rather
+  than a text scan, because a scan pins one spelling of a guard where running
+  the block pins the property. The FILENAME now describes nothing in the file
+  and is kept deliberately: it was written for a "Commit badge update" step
+  (#1641), and #1654 deleted that step, so there is no push left anywhere in
+  this workflow. Its header is the description instead.
+  **The job could never do what it was built to do, and was green about it for
+  four months** (#1654). It pushed the badge commit straight to `main`, which
+  the "Protect Main" ruleset refuses — `GH013: Repository rule violations
+  found` — and a rule violation is not a transient condition, so none of the
+  five retries could ever clear it. Every run since 2026-04-26 computed a
+  score, rewrote README.md on the runner and threw it away: README read
+  `8.1/10` while the scan returned `7.9/10`. Before #1647 made the failure
+  loud, it did that behind a green check. The fix is codescene-badge.yml's
+  shape — the extract step builds a shields.io ENDPOINT payload, a new "Update
+  Gist with ARS score" step PATCHes it into the same badges gist coverage.yml
+  and codescene-badge.yml already write to (no new secret: `GIST_SECRET` and
+  `COVERAGE_GIST_ID` were already configured), and README's badge became an
+  `img.shields.io/endpoint?url=…` pointing at `ars.json` in that gist. Nothing
+  is committed, so nothing can be refused, and the job dropped from
+  `contents: write` to `contents: read` — a real reduction, since that grant
+  existed only for the push and this job runs a third-party CLI (pinned by
+  commit, but still) next to the workflow token.
+  **What that deleted is a real loss and is named rather than glossed**:
+  #1641's four obligations (the pre-fix retry loop replayed verbatim, five
+  failed pushes exiting 0; the exhausted case failing loudly; the
+  third-attempt arm proving the retry is still a retry; the clean paths) and
+  #1655's six (the same loop against REAL git in a throwaway repo — the
+  mid-rebase wreckage, the ordinary rejected push, the committed rejected
+  `git rebase --abort` spelling, the unabortable-rebase refusal). "A rewritten
+  guard replays its predecessor's cases" is about a guard being REWRITTEN;
+  here the mechanism was REMOVED, and contorting those obligations into
+  passing against a step that does not exist is the vacuous green this whole
+  family is about. The retry-loop defect they fixed is now covered nowhere,
+  because no retry loop remains in this repo's workflows — if one is written
+  again, they are in git history at `ae85182f`. `workflow-step_test.sh` moved
+  its real-workflow row and its `shell:` mutation target from
+  'Commit badge update' to 'Run ARS scan' for the same reason.
+  **The two steps that PRODUCE the badge are #1644's and they survived the
+  deletion**: `ars scan … || true` followed by a `cat` that succeeds, then an
+  extract step whose `if [ -n "$ARS_BADGE" ]` skipped in silence — three green
+  steps and a frozen badge. The `|| true` was **not** protecting a legitimate
+  low-score exit, and that had to be checked rather than assumed because the
+  issue proposed leaving it in place: pinned v0.0.9 returns `ExitError{Code: 2}`
+  only under `if p.threshold > 0`, this invocation passes no `--threshold`, and
+  there is no `.arsrc.yml` to supply one — measured, the pinned binary scoring
+  `./core` at 7.9/10 exits 0. So the scan's status is read (`|| scan_status=$?`,
+  never a bare `; rc=$?`, the line #1629's implicit `-e` never reaches) and
+  three outcomes are distinguished where there were two. A failed scan **fails
+  the job**, because this workflow gates nothing: it runs post-merge on `main`,
+  no PR and no merge depends on it, and its own "Install ARS CLI" step already
+  fails the job for the likeliest transient cause (a `go install` outage) — a
+  scan that could not run was the one failure here that was silent.
+  Each refusal asserts EVERY other refusal's WORDING is ABSENT — nine of them
+  now, across three steps, driven from one table rather than pairwise by hand —
+  because a shared non-zero is satisfied by refusals that all fire together.
+  Re-measured against the new extract step: deleting the missing-badge refusal
+  leaves it exiting 1 via the URL refusal, so every status arm stays green and
+  only the wording arms go red, exactly as #1644 measured on its predecessor.
+  **The gist step is entirely new, so every one of its obligations passes the
+  moment it is written**, and the two mutations worth carrying are the ones
+  that do NOT simply flip a status. Dropping `|| curl_status=$?` makes a
+  transport failure abort the step under the implicit `-e` with an EMPTY log —
+  no annotation, no diagnosis, "could not be attempted" going silent — while
+  the status arm stays green. And replacing the numeric-shape check on
+  `%{http_code}` with a bare `[ -z … ]` lets a non-numeric code print
+  `integer expression expected` twice, evaluate FALSE, and reach the SUCCESS
+  line: a failed publish reported as a publish. Both spellings are
+  codescene-badge.yml's, noted here rather than changed there.
+  **The decode is the guard that is easy to leave out**, and it is the same
+  class of defect one level down. shields.io's STATIC-badge path is escaped
+  (`--` is a literal dash, `_` and `%20` are spaces, `__` is a literal
+  underscore, `%2F` is a slash) while the ENDPOINT schema takes plain text, so
+  publishing the path's bytes renders a badge reading
+  `Agent--Assisted%207.9%2F10` — wrong, permanently, and green about it. An
+  escape the step does not model is a refusal rather than a guess. It needs TWO
+  mutations, not one: skipping the decode entirely is caught by the
+  percent-escape refusal acting as a second line of defence, so the arm that
+  pins the decode itself is only discriminating against a decode wrong in one
+  way the `%` guard cannot see — dropping just the `--` → `-` restore, which
+  reddens exactly the payload-equality arms and nothing else.
+  The **`contents: read`** claim is a lock, so it is driven against two
+  deliberately mutated copies as well as the real file, and the real file is
+  mutated too: a predicate that had stopped matching would read identically to
+  a clean workflow.
+  **No linter was built, and the measurement is the reason.** Over the
+  multi-line `run:` blocks in `.github/workflows/`, a rule keyed on "the
+  block's last statement is `echo`/`sleep`/`cat`/`printf`" flagged 6 and
+  **missed the #1641 defect** — that loop was nested inside an `if`/`else`, so
+  the block's last line was `fi` — while 4 of the 6 it did flag were correct
+  code; a rule keyed on `|| true` flagged 2 and also missed it; "the block
+  contains a loop" flagged 3, of which 1 was the defect. That subject is gone
+  with the push step, but the conclusion is not: no candidate rule both catches
+  its subject and stays quiet on the correct blocks, so a green would claim
+  coverage it does not have — the same conclusion #1629 reached by the same
+  measurement about a `$?`-keyed rule, and #1639 about the sibling family.
+  `preflight.sh`'s `tools` trigger already carries `ars.yml` (#1641's widening,
+  the fourth for this reason — #1591, #1629, #1639), so #1654 needed no sixth:
+  the new assertions simply join the gate that already covers the file.
+- The replaydata deletion guard:
+  `tools/lib/replaydata-deletion-guard_test.sh` does to
+  `.github/workflows/replaydata-deletion-guard.yml`'s "Detect deletions of
+  load-bearing replaydata" step what the bullet above does to ars.yml —
+  extracts it and EXECUTES it against a git stub, under the same derived
+  invocation (`bash -e` for that step, which is why the step supplies its own
+  `set -euo pipefail` on line 1). It is the same family's most
+  expensive member, because that workflow is a **merge gate**: before #1645 its
+  diff was captured as `deletions=$(git diff … || true)`, and an empty
+  `$deletions` is the gate's SUCCESS condition — so a git exiting 128 produced
+  no violations, printed `OK: no disallowed deletions` and exited 0, permitting
+  exactly the #268 deletion the gate exists to refuse. **Where** the defect sat
+  is the part worth carrying: this block was spot-checked and cleared TWICE
+  during #1639 and #1641, both times on the strength of the classification
+  LOOP, which is genuinely fine. The statement that decides the step's status
+  is the loop's INPUT, one line above it — a `case` walk over `$deletions` can
+  only ever be as good as `$deletions`, and nothing in the loop can see that it
+  was handed an empty string by a failure rather than by a clean PR.
+  Three outcomes now, never two: deletions found and disallowed (fail), no
+  deletions (pass), and **could not determine** (fail, naming why). Three
+  refusals implement the third, and the second of them is a SECOND measured
+  hazard rather than defensive padding — `on: workflow_dispatch` carries no
+  `github.event.pull_request`, so both `${{ }}` expressions expand to the empty
+  string and `git diff "..."` is `HEAD...HEAD`: exit 0, no output, PASS. That is
+  measured against real git in the lock, not stubbed, since a claim about how
+  git parses `...` has to be made by git. Note honestly what each refusal
+  independently buys: deleting the empty-context one still leaves the run
+  failing, because an empty sha does not rev-parse either — what it uniquely
+  buys is the DIAGNOSIS ("no pull_request context" rather than "the base commit
+  is not present in this checkout", which points at the checkout instead of the
+  trigger). The commit-presence refusal is the one that is defensive: with
+  `fetch-depth: 0` no ordinary condition was found that makes `base.sha`
+  unreachable, so unlike the other two it is not backed by a reproduction, only
+  by the observation that it is one edit to the checkout step away.
+  Two more things about the lock. `cell_is_live` reads the WORKING TREE, so
+  "live cell" and "orphan cell" are properties of the directory a body runs
+  in — every arm executes against a throwaway tree under `$TMP`, and the real
+  deletion-guarded catalog is never touched. And what the stub CANNOT grade is
+  said out loud: `git mv` is permitted because git's own rename detection
+  reports an R that `--diff-filter=D` drops, not because of anything the step
+  does, and detection is ON by default in modern git — so `--find-renames=50%`
+  pins the threshold, not the behaviour, and that arm grades the invocation the
+  step makes rather than claiming the step implements renaming.
+  `preflight.sh`'s `tools` trigger gains this workflow, its fifth widening for
+  this reason (#1591, #1629, #1639, #1641).
+- The snapshot-evidence copy:
+  `tools/lib/swift-snapshot-evidence_test.sh` is the same treatment for
+  `macos-swift.yml`'s "Collect the skipped suites' pixels" step (#1646), and
+  it is the family's cheapest member — a `cp -R` of the reference snapshots
+  into the artifact whose status was read by NOTHING. That step opens with
+  `set +e` for a good reason (its whole purpose is to run assertions that
+  fail), so the failed copy neither aborted nor reached `bad`: green job,
+  uploaded artifact missing the `__References__` tree, and therefore failure
+  images with nothing to compare against. Three outcomes now — copied /
+  nothing to copy / could not copy — plus a fourth no exit status can see, an
+  empty tree, which `cp -R` copies with a cheerful 0. **#1646 is where
+  extract-and-execute stopped being blocked by a real `swift test`**: the
+  fixture checkout's `tools/lib/swift-suite.sh` SOURCES the repo's own library
+  by absolute path and overrides only `swift_suite_run`, so the two predicates
+  the body consults are production code reading a committed log fixture, and
+  every outcome of a 20-minute macOS job is reachable in a second. That is the
+  shape to copy for any step whose blocker is one expensive command rather than
+  the body. Two arms carry more than they look: the references must be copied
+  even when the RUN is judged bad (this job exists to publish a failed run, so
+  a copy on the happy path only would ship nothing on exactly the runs the
+  artifact is for), and they must not be counted as failure images — 53
+  references would otherwise satisfy the "not one of the suites produced a
+  failure image" guard forever. The re-audit is in that file's header rather
+  than here: `exit "$bad"` decides, six guards write `bad`, and of the four
+  statements it cannot see, one degrades loudly (a failed `mkdir -p` reaches
+  two guards, not the one the issue claimed) and one is silent and cosmetic
+  (`>> "$GITHUB_STEP_SUMMARY"`, whose text is already on stdout).
+  This workflow was in `preflight.sh`'s `tools` trigger since #1629, so the
+  trigger needed no sixth widening — the assertion simply joins the gate that
+  already covers it.
+  **The fourth is the one worth carrying, because #1677 pinned it WRONG on
+  purpose and #1678 had to correct it.** `. tools/lib/swift-suite.sh` was also
+  read by nothing, and that failure was never silent — every `swift_suite_*`
+  call becomes "command not found", so the step exits 1. What it got wrong was
+  the DIAGNOSIS, and by more than #1646 recorded: measured, **four** headlines
+  fire at once, opening with `TRUNCATED` (which sends a reader to XCTest's
+  stall detector, #1523) and closing with "not one of the five suites produced
+  a failure image … #1615 has moved" (which accuses this workflow's own suite
+  classification). #1677 recorded that as an audit finding and committed an arm
+  asserting the wrong headline — loud, and honest about being wrong, but a test
+  pinning incorrect behaviour reads as coverage, which is why it was filed
+  rather than left as a note. Three outcomes now, on #1645's discipline and on
+  the same shape as the copy: **loaded** / **could not load** (the source's
+  status, now read) / **loaded and defines nothing** (`command -v`, because
+  `. an-empty-file` exits 0 — the outcome no status check can see, exactly as
+  an empty `cp -R` is). Both refuse before the run rather than adding to
+  `bad`, since `swift_suite_run` produces everything the six guards judge.
+  Two things the mutation runs settle. The wording arms are what
+  discriminate and the status arms are not: dropping the source status check
+  leaves the step still exiting 1 via the OTHER refusal, so only "naming the
+  harness it could not load" and the mutual-absence arm go red — #1644's
+  measurement, reproduced one family on, and the reason each refusal asserts
+  every other refusal's wording is absent. And keeping both refusals but
+  replacing `exit 1` with a continue leaves both NAMING arms green while the
+  four headline-absent arms go red, so those arms hold the exit placement
+  rather than the message. The sibling `swift-test` step does **not** have this
+  defect and needed no change under that ticket: measured the same way,
+  `swift_suite_verdict` is itself among the missing functions, so no headline
+  prints at all and the step exits 127 with three `command not found` lines —
+  loud, undiagnosed, but never wrong. Weaker, not broken; closed by the bullet
+  below (#1702).
+- The swift-test harness source: `tools/lib/swift-test-step_test.sh` is the
+  same treatment for the OTHER `shell: bash` step of `macos-swift.yml`, "Test
+  (bounded, streamed under a pty)" (#1702) — the same unread
+  `. tools/lib/swift-suite.sh`, refused with the same two checks, for the same
+  reason (`. an-empty-file` exits 0, so a source that RETURNS 0 having defined
+  nothing reads exactly like one that worked). Four things differ from the
+  sibling and each is the reason this was a separate ticket rather than a
+  copy.
+  **The names are not the sibling's.** That step consults its predicates
+  individually (`swift_suite_completed`, `swift_suite_ran_tests`); this one
+  consults only `swift_suite_verdict`, which is precisely the name whose
+  absence causes the whole defect and is on neither of the sibling's lists. A
+  list copied across is green against a library missing exactly the verdict —
+  measured, and the reason the lock drives the required set BOTH ways, one
+  library per name with the REAL library minus one function.
+  **The status is a decision, stated in the step.** `swift_suite_verdict` is
+  the step's last command and returns 0 or 1 and nothing else, so 1 is what
+  this step already means by "failed"; 127 was the shell reporting the last
+  "command not found", not the workflow reporting anything. Replacing both
+  `exit 1`s with `exit 127` reddens only the status arms and leaves every
+  wording arm green, which is #1644's measurement run backwards.
+  **What the pre-fix step did is committed and re-measured**, not quoted: the
+  old two-line spelling runs on every pass with the library absent and must
+  still exit 127 having printed no `::error::` at all. That is the vacuity
+  guard for the whole fix.
+  **And one arm is honestly non-discriminating**, said in the file rather than
+  glossed: with `swift_suite_run` gone the production verdict still runs, finds
+  no log and fails at 1 — the same 1 a correct refusal produces — so only the
+  wording tells them apart. Dropping the source check is the sharper case: the
+  `command -v` refusal then fires and reports an ABSENT file as "read but
+  defines no swift_suite_run", so the step exits 1 with a wrong diagnosis and
+  every status arm stays green.
+- Which bash a workflow step gets: **there are two invocations and this repo
+  conflated them** for the whole of the two bullets above (#1650). A step
+  DECLARING `shell: bash` runs as `bash --noprofile --norc -e -o pipefail {0}`;
+  a step declaring no `shell:` and no `defaults:` runs as **`bash -e {0}`** —
+  errexit only, no `--noprofile`, no `--norc` and **no pipefail**. That is
+  measured off a runner rather than read off the docs: run 31960152598's own
+  group header for `replaydata-deletion-guard.yml`'s step reads
+  `shell: /usr/bin/bash -e {0}`. Of this repo's workflows only
+  `macos-swift.yml` declares `shell: bash` (on two steps; its job-level
+  `defaults:` sets `working-directory` and no shell), so every other step is on
+  the `bash -e` side.
+  **The direction of the error is what made it worth a library rather than a
+  comment fix.** Four harnesses extracted a step body and ran it under the
+  pipefail spelling, each saying in its own header that running it under
+  anything else "would grade a different program" — which was true, and was
+  what they were doing. A body whose correctness depends on pipefail
+  (`x=$(thing | grep -v skip)`) is graded SAFE by a harness that supplies it and
+  swallows the failure in production: a false green, the same "absence of a
+  finding and inability to look produce the same output" shape as the rest of
+  this section. (Under `shell: bash` the error reverses and is loud.)
+  So the invocation is **derived, not typed**: `tools/lib/workflow-step.sh`
+  answers `workflow_step_shell <workflow> <step>` and `workflow_step_body`
+  off the same one-pass scan, so a harness cannot grade one step's body under
+  another step's shell, and a step that later gains `shell: bash` — or whose
+  job or workflow gains a `defaults: { run: { shell: … } }` — moves its harness
+  with it. It REFUSES (status 2, naming what it could not do) for an unreadable
+  file, an absent step, a DUPLICATE step name, an unmodelled `shell:` value and
+  a step with no `run: |` block, and never falls back to a default: a harness
+  handed a plausible `bash -e` for a step that no longer exists would grade an
+  empty body, which exits 0 and reads as a clean run. Its tests are
+  `tools/lib/workflow-step_test.sh` over the committed corpus
+  `tools/lib/testdata/workflow-step/` (one fixture per declaration shape, plus
+  the refusals), and three of its obligations are the ones to keep: the two
+  invocations are shown to grade the SAME body differently (without that,
+  deriving is ceremony and a derivation stuck on one answer looks correct); a
+  copy of a real workflow is mutated BOTH ways, since a derivation hard-wired
+  to either answer passes one direction; and the five real harnessed steps are
+  resolved through the same code, which is what stops
+  `swift-suite_test.sh`'s hand-written `shell: bash` spelling — correct, and
+  left alone — from silently stopping to match.
+  Verified while fixing it, per "dismissals carry evidence": **no live pipefail
+  dependency existed** anywhere in `.github/workflows/`. All 16 pipeline-
+  carrying lines were read — ars.yml's two are `$(… | head -1 || echo "")` and
+  its `sed "s|…|…|"` was a delimiter not a pipe (that `sed` went with the
+  README rewrite in #1654, which added no pipeline: its `jq` calls read and
+  write files rather than piping, and its `curl` status is captured with
+  `|| curl_status=$?`); the deletion guard sets its own
+  `set -euo pipefail`; macos-swift.yml is on the `shell: bash` side already;
+  test.yml's is inside an `echo` message; and codescene-badge.yml's
+  `SCORE=$(… | jq -r …)` and coverage.yml's `pct=$(…)` are each followed
+  immediately by an explicit emptiness guard that does the work pipefail would.
 - Factory: `go test ./tools/onboarding-factory/... -race -count=1`.
 - Replay: `tools/replay-fixtures.sh` — gated in CI by linux.yml, and run
   natively as `tools/preflight.sh`'s `replay fixtures` gate, so golden drift
@@ -827,7 +1473,7 @@ Before marking a ticket done, run the full suite — every layer must pass:
   transition, and until #1480 **nothing compared it to anything** — the
   goldens pin it only against their own previous value, `compareOrdered` walks
   `prev_state`/`new_state` index-by-index and never reads the time, and the
-  "N of 309 recordings diverge" headline every replay PR quotes is counts and
+  "N of M recordings diverge" headline every replay PR quotes is counts and
   kinds only (that headline is `extendedCheck.Diverges` counted over the
   catalog — see the next bullet for why it has exactly one definition). So a transition reproduced at the right position in the ORDER but
   31 seconds from when the daemon made it was a full pass, and the golden then
@@ -844,10 +1490,10 @@ Before marking a ticket done, run the full suite — every layer must pass:
   twice. The reporting side (`timing_drift.go`) buckets and ranks those deltas;
   it reuses `core/domain/stats.Percentile` rather than carrying its own.
   It is a **ratchet, not a tolerance gate**, and that is the deliberate
-  shape: 24.3% of the catalog's 826 kind-matched pairs are still more than 1s
-  from their daemon, so a gate failing on all of them would protect nothing.
-  `TestSidecarReplayTransitionTimesMatchTheDaemonsOwnLog` walks all 309
-  sidecar-driven recordings, prints the distribution, and fails when a
+  shape: roughly a quarter of the catalog's kind-matched pairs are still more
+  than 1s from their daemon, so a gate failing on all of them would protect
+  nothing. `TestSidecarReplayTransitionTimesMatchTheDaemonsOwnLog` walks every
+  sidecar-driven recording, prints the distribution, and fails when a
   recording NEWLY drifts, when a pinned entry stops drifting and is left to rot,
   or when the aggregate counts grow — the same idiom `knownZeroTransition`
   uses. The 1s threshold is read off the measured distribution rather than
@@ -880,7 +1526,7 @@ Before marking a ticket done, run the full suite — every layer must pass:
   `.Fabricates` — and every counter derives from it, including `main.go`'s exit
   code, which had its own wider spelling (`ordered || missing kinds || extra
   kinds`); those disjuncts are structurally unreachable and the census asserts
-  the two spellings agree on all 309 recordings rather than trusting that
+  the two spellings agree on every recording it walks rather than trusting that
   argument. `Diverges` is `len(OrderedMismatches) > 0`, and the near-misses are
   the point: "the counts or the kind sets differ" reads as a restatement and is
   one low, because one committed recording replays the same two kinds and the
@@ -899,29 +1545,25 @@ Before marking a ticket done, run the full suite — every layer must pass:
   stops a diff which reports everything from looking correct.
   Three of the census's figures are not defect counts, and each exists because
   a prose sentence was carrying the number. `DivergentByCountsAndKinds` is the
-  near-miss spelling itself (139 against `Divergent`'s 140), so "they differ by
+  near-miss spelling itself, carried beside `Divergent` so that "they differ by
   exactly one recording" is re-derived every run instead of being true once.
   `UnpairedSidecars` and `PairedButUngraded` are the denominator's honesty:
-  `forEachSidecarRecording` pairs a sidecar with a sibling `transcript.jsonl`,
-  while `tools/replay-fixtures.sh` walks `transcript.md` too — so the sweep
-  replays 31 aider recordings the Go gates never see, and reported **142**
-  divergent against the census's **140** (measured; the two extra were both
-  `aider/4-2_multiple-agents-same-workspace`). A further 56 recordings are
-  paired but produce no extended check at all, chiefly the
-  process-owned-store adapters. Together the three account for every sidecar on
-  disk.
-  There is a standing coverage note in that: `knownZeroTransition`,
-  `knownFabricated` and #1480's ratchets are catalog-wide over the catalog
-  *that walk can see*, and have never been evaluated against any aider
-  recording. Widening the pairing is deferred as a **scope** call, and the
-  reason is stated that way because the tempting blast-radius reason is
-  measurably false — pairing `transcript.md` when no `transcript.jsonl` exists
-  adds exactly **2** gradeable recordings, both merely divergent, and moves
-  `knownZeroTransition`, `knownFabricated` and `knownFirstTransitionDrift` by
-  **nothing**. It would make the census agree with the sweep exactly. A
-  dismissal in this repo carries the same evidentiary bar as the claim it
-  supports, and this one was measured rather than assumed — the first draft of
-  this bullet asserted the opposite and a review caught it.
+  every sidecar on disk is either graded, unpairable, or paired-but-ungradeable,
+  and the three figures sum to the catalog. Nothing is unpairable today — the
+  Go walk and `tools/replay-fixtures.sh` select recordings by the same two
+  transcript names, from the one declaration `replay.TranscriptNames`, with
+  `TestSweepAndGatesWalkTheSameTranscriptNames` pinning the shell's own `find`
+  list to it. They do not walk one identical *set* — the sweep enumerates
+  transcripts, the gates enumerate sidecars — and the NAMES are what had
+  drifted. The figure stays in the census at zero because it
+  is what would report the blindness returning: before #1517 it counted every
+  aider recording — graded by the sweep, by no Go gate, so
+  `knownZeroTransition`, `knownFabricated` and #1480's ratchets described the
+  catalog *that walk could see* rather than the catalog, and #1342's stated
+  goal of catalog-wide coverage was silently false for a whole adapter. The
+  remaining `PairedButUngraded` recordings produce no extended check at all —
+  the process-owned-store adapters, plus the aider recordings whose sidecar
+  names no real session and is not drivable.
 - Replay read boundary: the sidecar records `file_size` from the fswatcher's
   stat at fire time but stamps `ts` at the daemon's **dequeue** time, and the
   watcher's stat time is not a field of `lifecycle.Event` at all — so "where
@@ -943,6 +1585,69 @@ Before marking a ticket done, run the full suite — every layer must pass:
   nothing objecting. One recording remains in `knownZeroTransition` because
   reaching it needs 69ms, i.e. it can only be bought by making two goldens
   assert something false — the trade this whole line of work exists to refuse.
+- Replay's hook channel: replay grades a recorded hook through exactly two
+  shared things — `session.hookSignalEffects`, which decides whether a hook
+  NAME does anything at all, and `applyHookEvent`, which decides whether the
+  effect reaches the classifier. Both had to be right before any hook was
+  gradeable, and #1695 is the run where only the first was looked at.
+  **A hook absent from the table is silently dropped**, which is #1320's
+  lesson; `HookStop` was absent on the stated grounds that its effect "carries
+  a payload a name-keyed lookup cannot supply". True about the payload, false
+  about the consequence: `signalPolicies`' turn-done `apply` guards BOTH
+  payload fields, so a payload-free hold still asserts `HookTurnDone` and the
+  degradation is one-directional — it can add to the cue verdict and can never
+  clear one the transcript found. That row is now present, and
+  `TestPayloadFreeTurnDoneNeverClearsATranscriptCue` is the property rather
+  than the paragraph. What the row does NOT replace is
+  `SessionDetector.HandleStopHook`, which has the payload and must keep it:
+  dropping the payload while keeping the hold reddens exactly one arm of
+  `TestSessionDetector_StopHook_DrivesTheTurnDoneTransition`, the turn that
+  ended on a question, and that arm is the whole argument for the two
+  entry points coexisting.
+  **The second half is the one that reads as health.** With the row added and
+  nothing else, every golden stayed byte-identical — `applyHookEvent` copied
+  `r.lastMetrics`, whose `NoSubstantiveActivity` belongs to the last TRANSCRIPT
+  batch, and `runClassifier`'s mirror of #329's short-circuit then discarded a
+  classification that had already answered `ready`. The flag is PER PASS and a
+  hook pass is a different pass; the daemon never had the problem because its
+  synthetic activity event goes through `RefreshOnActivity`, which recomputes
+  it. So a hook table row is worth checking end-to-end against a recording, not
+  just against the table's own test.
+  The payoff is that `cause` in a golden finally means something: a
+  hook-produced `ready` (`cause: "hook"`, at the hook's own timestamp) and a
+  transcript-produced one (`cause: "debounce_coalesce"`) are different bytes,
+  so the provenance question needed no new field. codex's
+  `2-13_turn-end-terminal-text` went from 2 of 4 recorded transitions
+  reproduced to 4 of 4 with zero mismatches, and #1388's two ">1s drift"
+  entries left that population — those were the short-circuit, not the
+  "structural" debounce lag they were recorded as.
+  Which recordings can grade a Stop is a register that is machine-generated
+  (`stopHookCensus`, `TestStopHookIsGradedByTheCommittedCatalog`) because a
+  hand-written one is what #1695 had to correct: at #1695 exactly ONE could,
+  codex's, and `replaydata/agents/claudecode/` carried no Stop-bearing sidecar
+  at all — the catalog's other two Stops belong to co-resident claude-code
+  sessions inside another adapter's multi-agent recording, one naming a session
+  the replay does not drive, one on a sidecar that cannot drive a replay. A
+  catalog with no Stop at all is a REFUSAL there, not a pass.
+  **#1699 is the second, and the point is that it is not a duplicate of the
+  first.** Claude Code is the adapter the Stop channel was built for
+  (`session.HookStop`'s doc comment names it), so a claudecode-specific Stop
+  regression had no golden that would notice; the only fix was to RECORD one,
+  since those two zero rows carry a real, correctly-handled claudecode Stop and
+  are ungradeable for reasons no harness change can reach. What the recording
+  then showed is the sentence above with the sides swapped. In codex's
+  recording the daemon flipped 0.8ms after the POST; in claudecode's it flipped
+  **2.1s** later, at the next debounce boundary — still the hook's decision
+  (`decided_by_tier: "hook"`, `hook_turn_done: true` in the sidecar), because
+  `dispatchHookActivity` pushes its synthetic event onto the DEBOUNCED channel
+  and a transcript write 97ms after the POST re-opened the 2s window. So which
+  side of the debounce a Stop lands on is a property of what the CLI wrote in
+  the 2s after its own Stop, not of the adapter, and replay — which applies the
+  hook at its own timestamp — is now the EARLY side. That is a real replay/daemon
+  fidelity gap and it is carried as a `knownFirstTransitionDrift`-style ratchet
+  entry rather than tuned away; #1388's paragraph in `issue1480_timing_test.go`
+  is where the three readings of it live side by side.
+
 - Replay goldens (when a recording or replay-output change is in play):
   regenerate with `UPDATE_REPLAY_GOLDENS=1 go test
   ./tools/onboarding-factory/cmd/replay/... -count=1` (the `-count=1`
@@ -980,6 +1685,501 @@ Before marking a ticket done, run the full suite — every layer must pass:
     failure; declaring less never is (the 30-day / adoption criteria live in
     `site/docs/adapters.html` and no gate can see them). `of status --summary`
     shows claimed vs earned side by side.
+- macOS app (only when touching `platforms/macos/`): `cd platforms/macos &&
+  swift build && swift test --skip LauncherTestHarness --skip LauncherHarnessTests`,
+  run locally by `tools/preflight.sh --only swift` and by the pre-push hook.
+  Since #1530 CI's `.github/workflows/macos-swift.yml` runs it too, as a second
+  job beside the build and through the same `tools/lib/swift-suite.sh` harness,
+  so a hang there is a named failure at 240s rather than a job cancelled at the
+  cap with an empty log. `swift` is still the one gate deliberately **stronger**
+  locally than in CI — a runner has a virtual display, a stock font set and no
+  usable audio stack — but it is no longer the only place the suite runs.
+  Four host dependencies had to go first, and the general lesson is worth more
+  than the four fixes: each was a value read from the MACHINE where the
+  equivalent value was available from the INPUT. Image snapshots rasterised at
+  `NSScreen.main`'s backing scale rather than at a pinned one
+  (`Tests/PinnedScaleSnapshot.swift`); `UpdateManager` started Sparkle in a test
+  host, where `startUpdater` fails outside an app bundle and answers by running
+  a modal `NSAlert` on the main queue a second later, hanging whichever
+  unrelated test next spun the run loop — which is why #1530 and #1523 each
+  attributed the hang to a different test; and `AXTitleMatchActivator` filtered
+  path segments by the running process's own `$HOME` instead of by the cwd it
+  was scoring, in two places. A test that reads the host and a test that reads
+  its fixture look identical on the machine where they agree. **Never run the
+  suite unskipped**: the
+  `LauncherTestHarness` target drives real terminal applications through
+  `NSRunningApplication`, so on a developer machine it manipulates live
+  windows. Both names are passed because a test ID is `<target>.<class>`, and
+  either alone stops covering the harness the moment a class is added to that
+  target or the target is renamed.
+  Nothing built or tested Swift in CI until #1509, which is why two snapshot
+  tests sat red on `main` for weeks with no failing check anywhere — the macOS
+  platform had no automated floor at all, and `preflight.sh --changed` reported
+  every gate as SKIP on a `platforms/macos/`-only diff. That issue is also the
+  cautionary tale for reading a snapshot diff: a failure confined to a small
+  region was twice diagnosed as toolchain antialiasing and treated by
+  regenerating the reference (#1034, #1044), when it was an appearance-mode bug
+  that made the suite green by day and red by night. `AdapterIconAppearanceTests`
+  is the lock, and it sets both appearances itself so it cannot pass by daylight.
+  `PinnedScaleSnapshotTests` is #1530's version of the same shape, and the shape
+  is what to copy: asserting "renders at 2×" would have been green on every Mac
+  anyone runs it on whether the scale was pinned or inherited, so it drives 1×,
+  2× and 3× through one view instead — whatever the host's scale is, at most one
+  arm can agree with it. A host-independence lock that can only be checked on
+  one host is not a lock.
+  **Scale was not the only such value: the LOCALE was one too** (#1630).
+  `BackchannelRulesView`'s threshold field renders through `format: .number`, so
+  its reference PNG read `150.000` — a picture of the recording contributor's
+  `de_DE` regional settings, where a runner renders `150,000`. Three things
+  there are worth carrying and none is the obvious one. **The fix the issue
+  proposed does not work**: `TextField(_:value:format:)` ignores `\.locale`, so
+  `.environment(\.locale, …)` on the hosted view leaves the field reading
+  `150.000` while `@Environment(\.locale)` inside that same subtree reports
+  `en_US` — a pin that is set and reaches nothing, which is the vacuous green
+  this section is about, arriving inside its own fix. A product seam was
+  therefore unavoidable; it is `\.formatLocale`
+  (`Irrlicht/Views/FormatLocaleEnvironment.swift`), defaulting to
+  `Locale.autoupdatingCurrent`, which is *by construction* the locale a bare
+  `.number` already resolved through — deliberately NOT `\.locale`, which SwiftUI
+  derives from bundle localizations and which would have been a user-visible
+  change of unknown sign. **The pinned locale is `de_DE`** for the same reason
+  `referenceScale` is 2: it is what the committed references were recorded
+  under, so #1630 regenerated NO reference and the untouched 53-PNG set is
+  itself the evidence that neither the seam nor the pin changed any rendering.
+  Any other choice buys a cosmetic preference with a re-record — the move
+  #1034/#1044 got wrong. And the pin is a **type, not a modifier plus a
+  guard**: `Snapshotting.pinnedImage` is declared over `PinnedSnapshotHost`,
+  whose only initializer applies the pin, so a suite that forgets is a compile
+  error. The first draft applied the modifier by hand in seven host helpers and
+  added a source scan to police it — a guard over an API the same change
+  invented (#1390's lesson), and it flagged `ImageSnapshotCIScopeTests` and
+  `RasterPrimitiveEvidenceTests` on its first run for merely saying the words.
+  What the type cannot close is a suite that stops using `.pinnedImage`
+  altogether; that string is also what `ImageSnapshotCIScopeTests` derives its
+  CI classification from, so such a suite loses both pins and its CI
+  classification together, as one visible failure there.
+  Measured while doing it: **exactly one** committed reference is
+  locale-dependent — pinning `en_US` instead reddens
+  `testBackchannelRuleContextTokens` and nothing else in the other 52, and
+  `format: .number` at `BackchannelRulesView.swift:149` is the only
+  `FormatStyle` in the app (every other numeric render is `String(format:)`,
+  which takes no locale, or an `Int` interpolation, which carries no grouping).
+  **The sibling family is TIMEZONE, and closing it found a second machine read
+  nobody had named** (#1659). `HistoryFormat`'s formatters pinned `en_US_POSIX`
+  and never set `timeZone`, so 8 of the 14 `HistoryViewSnapshotTests` references
+  were held only by that suite's own `setUp` assigning `NSTimeZone.default`.
+  The seam is `\.formatTimeZone` (`Irrlicht/Views/FormatTimeZoneEnvironment.swift`),
+  and unlike `\.formatLocale` it could not be read by the formatters as they
+  stood — a file-scope `private static let DateFormatter` is reachable from no
+  view — so `HistoryFormat.axisLabel`/`clock`/`fullDateTime` take a `TimeZone`
+  as a REQUIRED argument and the views pass what they read. A zone-less call
+  site is `error: missing argument for parameter 'timeZone' in call`. The
+  default is `NSTimeZone.default` and **not** `TimeZone.autoupdatingCurrent`,
+  which reads like the obvious mirror of `\.formatLocale`'s
+  `Locale.autoupdatingCurrent` and is wrong: measured, after
+  `NSTimeZone.default = UTC` an unset `DateFormatter` renders UTC while
+  `TimeZone.autoupdatingCurrent` **and** `TimeZone.current` both still report
+  the host zone, so either would have been a real change for exactly the
+  processes that assign it. The pinned zone is `UTC` because that is what the
+  references were recorded under, so nothing was regenerated.
+  Two things there are worth carrying beyond the fix. **The pin is three
+  environments, not one**: pinning only `\.formatTimeZone` still reddened 6 of
+  the 14, because **Swift Charts resolves `AxisMarks(values: .automatic(…))`
+  through `\.calendar`** — whose default `Calendar.current` *does* follow
+  `NSTimeZone.default` — so the deleted `setUp` had been holding tick and
+  gridline POSITIONS as well as label text, which is why the `compact` quota
+  chart moved despite drawing no axis labels at all. `PinnedSnapshotHost` now
+  pins `\.formatTimeZone`, `\.calendar` (rebuilt `.gregorian` + the pinned
+  locale, so the host's week rules go too) and `\.timeZone`. And **the two
+  halves are separately invisible**: reverting the product seam while keeping
+  the pins reddens 4 references, dropping the `\.calendar` pin reddens the other
+  6, and the union is the 8 — reverting the seam leaves every `M/d` label green
+  on a `Europe/Berlin` host, because a one-hour shift does not change a date.
+  That is #1630's mutation B one family later: only the rendered-string
+  assertions in `PinnedTimeZoneSnapshotTests` catch it. That suite deletes
+  `HistoryViewSnapshotTests`' `setUp` rather than keeping it, deliberately —
+  with no process-wide assignment left, those 8 references are themselves the
+  live evidence that the seam reaches every date the panel draws.
+  **The third member is `@AppStorage`, and it is the one where the seam already
+  existed** (#1662). `GroupViewSnapshotTests` and `SessionRowSnapshotTests` each
+  held eight real preference keys open in `setUp` and put them back in
+  `tearDown`, `AdapterIconAppearanceTests` six — and unlike the locale and the
+  zone, **no product seam was needed for the views**: SwiftUI's own
+  `.defaultAppStorage(_:)` is honoured by `@AppStorage`, where `format: .number`
+  ignores `\.locale` and a file-scope `DateFormatter` is reachable from no view
+  at all. So the whole view half is one modifier on `PinnedSnapshotHost`. Three
+  things there are worth carrying. The parameter is typed **`InMemoryDefaults`,
+  not `UserDefaults`**, so `.standard` is not expressible at a snapshot host —
+  the type guarantee #1390 prefers over a guard, one family further on — and its
+  default is an EMPTY store, which is what made adoption free: an unset key
+  renders at the `@AppStorage` declaration's own default, which is exactly what
+  the deleted `setUp`s were assigning, so all 53 references still match and none
+  was regenerated. **A suite that forgets to pass its store gets isolation and a
+  visible failure** ("my pinned value did not reach the view"), never a
+  reference that silently photographs someone's Settings — the polarity is what
+  makes the default safe. And the abort path (#1523, the 240s tree kill,
+  `--budget`) is answered by **removing the state, not unwinding it more
+  carefully**: with nothing written there is nothing a skipped `tearDown` can
+  fail to restore.
+  Two keys did need a product seam, because they are not `@AppStorage` and no
+  environment reaches them: `SessionManager` reads `summaryDisplayMode` and
+  `projectGroupOrder` itself, so it takes the store it reads them from
+  (`.standard` by default). One measured trap there, found by the change's own
+  new test rather than in review: **`didSet` DOES fire for a write in the second
+  phase of a base class's own `init`**, so seeding a value read from the store
+  wrote it straight back — in the app, a preference persisted into the user's
+  real `io.irrlicht.app` domain that they never set. The seed goes through the
+  `@Published` STORAGE (`self._summaryDisplayMode = Published(initialValue:)`),
+  which the property observer does not see.
+  Measured while doing it, and it settles the "is this hypothetical" question the
+  issue left open: with the pin deleted, the probe in
+  `PinnedAppStorageSnapshotTests` reads `menuBarStyle = combined`,
+  `notificationsEnabled = true` and `advancedSettingsExpanded = true` off this
+  machine — the nine keys nothing pinned were live inputs, not a worry. The
+  structural half is `PersistentDefaultsLintTests`' second rule, which fails the
+  build on any `UserDefaults.standard` **mutation** in the test targets; READS
+  are deliberately left legal, because `object(forKey:)` is how a test says "and
+  the process domain was not touched", and banning it would ban the evidence
+  along with the defect. What that rule cannot see is a production call site a
+  test merely DRIVES, and **#1672 is that gap, closed**. The write was
+  `NotificationEventRow`: it mirrored its sound key into `@State`, loaded it in
+  `.onAppear` and persisted it back from `.onChange(of:)`, so merely RENDERING
+  the row wrote the value it had just read — and `SettingsViewTests` renders
+  `SettingsView`. Four things there are worth carrying.
+  **The loop is #1673's `didSet` trap in SwiftUI clothing**, and the fix is the
+  same move: remove the second copy rather than guard the write-back more
+  carefully. The row is `@AppStorage` over its own key now, derived on every
+  render, with a `Binding` whose `set` runs only for a pick — so it needed no new
+  product seam and inherits `.defaultAppStorage` the way every other
+  `@AppStorage` does.
+  **It was invisible for two compounding reasons, and both of them qualify any
+  "the domain did not change" measurement in this area.** It wrote back the value
+  `register(defaults:)` had just seeded, so no value changed, the plist's mtime
+  never moved, and `object(forKey:)`/`dictionaryRepresentation()` — which merge
+  the registration domain under the application one — read identically either
+  way. Only the application domain's KEY SET distinguishes a persisted default
+  from a registered one, which is what `InMemoryDefaults.writtenKeys` is for, and
+  even that saturates: once the key is there, the write is undetectable. And it
+  fired only for the events whose `defaultSound` differs from
+  `SoundChoice.default` (`.ping`) — `.ready` (funk) and `.contextPressure`
+  (sosumi) wrote, `.waiting` did not, because for it the loaded value equalled the
+  `@State` initial one and `.onChange` never fired.
+  **Two of three keys is what made the right hypothesis look falsified.** #1672's
+  own body rules out "every rendered row writes its default back" on the grounds
+  that `soundOnWaiting` was absent and that a SettingsView-only run left the
+  plist mtime unchanged — both measurements correct, the conclusion wrong,
+  because the real rule was one step narrower and the write was idempotent. A
+  dismissal can be right about what it ran and wrong about what that excludes;
+  the way out was an instrumented run naming the call site (a `print` in
+  `handle`, reverted), not a better inference.
+  **The structural half is a THIRD rule in `PersistentDefaultsLintTests`: the
+  same mutation scan over the APP target**, which is where a test-source scan is
+  blind by construction. Measured, it reports exactly `SettingsView.swift:987`
+  and `:1004` against the pre-fix tree and zero after, so it carries no
+  exemption list. Its behavioural counterpart is
+  `testRenderingTheNotificationRowsPersistsNoSoundChoice`, whose vacuity guard is
+  `InMemoryDefaults.readKeys`: a row that never rendered (the master gate is
+  collapsed by default) and a row still resolving `UserDefaults.standard` both
+  write nothing too, so "wrote nothing" is worthless without "and it asked THIS
+  store". The **runtime** witness #1672 also proposed — `tools/lib/swift-suite.sh`
+  comparing named domains rather than directory entries — landed as #1688, and
+  what #1690 measured about it is why it compares VALUES and not only key sets:
+  the domain is quiet enough to adopt (0 changes across two suite-length
+  windows, against ~1 plist/218s for the directory witness) but a GROWTH-only
+  check is green on any domain that already holds the key, i.e. on the machine
+  that found this. Measured again in #1688, as the mutation that reddens the
+  #1672-shaped case and leaves the added/removed cases green. What no
+  before-to-after comparison of a domain can reach is the last step of the same
+  argument — an IDEMPOTENT write, which is #1672 exactly as it happened — so the
+  domain witness prints that limit on every clean run rather than a bare clean
+  line, and the checks that DO see it are the two in this paragraph.
+  **#1689 is the READ half of the same member, and its premise turned out to be
+  false in the useful direction.** `SettingsView.reconcileNotificationsMasterDefault()`
+  DECIDED from `UserDefaults.standard.object(forKey:)` and wrote through
+  `@AppStorage`, so under a pinned render the guard consulted the machine while
+  the write landed in the store the host supplied — and
+  `NotificationSettings.masterEnabled()` defaulted to `.standard` too, so the
+  VALUE came off the machine as well. Four things are worth carrying.
+  **`@AppStorage` CAN express "absent"**, which is what the issue (and the
+  #940 comment) assumed it could not, and it is why this needed no product seam
+  either: SwiftUI declares `AppStorage.init(_:store:)` for `Bool?` — and `Int?`,
+  `Double?`, `String?`, `URL?`, `Data?` — and an optional wrapper answers `nil`
+  for a key that is not in the store. So the fix is a second `@AppStorage` over
+  the same key, and the decision and the write are ONE store by construction
+  rather than two that a host keeps in sync; the alternative the issue proposed
+  (`SettingsView(defaults: UserDefaults = .standard)`, threaded to three call
+  sites) is a convention with a default argument, where this is a property of
+  SwiftUI's own resolution. Two wrappers over one key is not #1672's `@State`
+  mirror: neither caches, so they cannot disagree and there is no write-back
+  loop. The `anyEventEnabled` half comes from the view's three per-event
+  toggles — verbatim the expression it already used for its
+  blocked-notifications hint — with the RULE still
+  `NotificationSettings.masterEnabled(master:anyEventEnabled:)`.
+  **No real user was affected, and the proof is one grep**: nothing in the app
+  target applies `.defaultAppStorage(_:)`, so there `@AppStorage` and
+  `UserDefaults.standard` are the same domain and the guard cannot take the
+  wrong branch. It is a test-isolation defect wearing a user-facing shape, which
+  is the reverse of #1672 — and the equivalence is measured rather than argued,
+  over eight value shapes at one key (absent, `Bool`, `Int`, three `String`s):
+  the optional `@AppStorage` agrees with a bare `object(forKey:) == nil` and the
+  `Bool` one with `bool(forKey:)`'s coercion on all eight, including the five
+  only a hand-run `defaults write` can produce. The plausible alternative
+  (`object(forKey:) as? Bool == nil`) disagrees on five of them, which is what
+  makes that arm discriminating.
+  **The structural half is a FOURTH rule in `PersistentDefaultsLintTests`,
+  scoped to `Irrlicht/Views/` and banning the RECEIVER rather than a set of
+  accessors** — so a read, a mutation and a bare `UserDefaults.standard` handed
+  to something that takes a store are one rule. Reads stay legal everywhere else
+  for #1662's reason, and an app-wide read ban is not tractable: measured, 16
+  non-comment references exist in the app target and 14 are ordinary reads in
+  managers, models and the menu-bar controller, so the rule would arrive with 14
+  exemptions. The narrowing is a property, not a preference — `Irrlicht/Views/`
+  is exactly the set of files declaring a SwiftUI `View` (14 files; a `: View`
+  conformance appears nowhere else in the target) and it is the code
+  `PinnedSnapshotHost` pins. It held exactly two references, both reads, both
+  removed, so it carries no exemption list. Its declared limit is a false
+  NEGATIVE, not a false positive: a view calling a helper that reads the domain
+  for it is invisible (`MenuBarStyle` and `ContextPressureThreshold` both hold
+  such reads).
+  **And the mutation nobody asked for is again where the coverage was.** The
+  first lock written for the guard — "an explicit `notificationsEnabled = false`
+  is not overridden" — stays GREEN when the guard is deleted, because the fix
+  passes `master:` into the pure rule and `false ?? anyEventEnabled` is still
+  `false`. The value is held by the RULE; what the guard buys is that a render
+  whose key is already present persists NOTHING, i.e. #1672's write-back loop in
+  a second place, idempotent and therefore invisible to every value comparison.
+  Asserting it needs the key seeded through `register(defaults:)` rather than
+  `set`, so it is PRESENT for the read (`object(forKey:)` merges the domains)
+  while `writtenKeys` stays a clean observation of what the render itself
+  persisted.
+  **#1693 is that same read one call site on, and it is where this member's fix
+  stopped being a seam and became a REMOVAL.** `SessionManager.sendNotification`
+  guarded on `NotificationSettings.masterEnabled()` — default argument
+  `UserDefaults.standard` — while the next line read the sound choice from
+  `self.defaults`, so one method decided WHETHER to notify from the machine and
+  WHICH sound from its input, two frames below a
+  `checkStateTransitionNotification` that had just read `notifyOnReady` off that
+  same injected store. Four things are worth carrying.
+  **The DEFAULT ARGUMENT was the defect rather than the call, so it went.** Four
+  `UserDefaults = .standard` parameter defaults existed in the app target and
+  three had no caller relying on them (`masterEnabled`, `choice`,
+  `resolveNotificationSound`), so removing all three cost no call site anything —
+  the compile is that measurement — and the pre-fix spelling is now `error:
+  missing argument for parameter 'defaults' in call`. Where removal is possible
+  the compiler is a strictly stronger guard than a lint rule (#1659's shape),
+  which is the whole reason no fifth `PersistentDefaultsLintTests` rule was
+  added.
+  **That fifth rule was measured and rejected on its own terms, not by
+  inheriting #1689's count.** Re-measured here: the app target holds **14**
+  non-comment `UserDefaults.standard` receivers and `Irrlicht/Views/` holds
+  **0**, so widening the fourth rule app-wide is still intractable. The narrower
+  candidate — ban a default argument that resolves `.standard` — would today
+  flag exactly **one** declaration, `SessionManager.init(defaults:)`, which is
+  the seam all four existing rules' failure messages RECOMMEND; and removing
+  that default would push a `.standard` into `Irrlicht/Views/` (the
+  `SessionListView` preview), which rule 4 exists to keep out and which would
+  slip past it only because the leading-dot spelling evades its receiver regex.
+  A line scan also cannot tell an `init` default from a `func` default across a
+  multi-line signature without a parser, and per this section's parse rule it
+  would then have to flag both. One exemption or a parser: the count is recorded
+  instead.
+  **Under `swift test` the READ is the only observable, and that is not a
+  weakness of the test — it is why nothing graded this call site for its whole
+  life.** `canUseUserNotifications` is false outside an app bundle, so
+  `sendNotification` returns before scheduling a `UNNotificationRequest` or
+  reaching `SoundPlayer.speak` and the gate's DECISION has no downstream value
+  to assert on. `InMemoryDefaults.readKeys` is what remains, and "which store
+  was asked" IS the defect rather than a proxy for it. The discriminating arm
+  asserts the read SET equals what `NotificationSettings.masterEnabled(defaults:)`
+  performs over an identically arranged second store — obtained by calling the
+  rule, never written down — because a decorative `_ = defaults.object(forKey:)`
+  above a guard still resolving `.standard` satisfies "the store was asked" and
+  is invisible to every other assertion in the suite (measured: exactly that one
+  arm reddens).
+  **And the mutation that reddens NOTHING is recorded rather than omitted**:
+  re-adding the removed default alone, call site untouched, leaves all 414 tests
+  green. Nothing locks the removal — the guarantee is the compiler's, and only
+  for call sites that already exist.
+  **The fourth member is the WALL CLOCK, and it is the one where pinning the
+  other three would have looked like coverage** (#1663).
+  `SessionListView.formatResetTime` stacked four machine reads —
+  `Calendar.current`, `Date()`, and a `DateFormatter` with neither `locale` nor
+  `timeZone` — and #1659 left it whole rather than half-covering it, because
+  `Date()` there does not shift a rendered time, it **selects the format
+  string**: the same input renders `"09:00"` before midnight and `"Fr. 9:00"`
+  after. The seam is `\.formatNow` (`Irrlicht/Views/FormatNowEnvironment.swift`),
+  the formatting moved to `QuotaResetFormat` where all four values are REQUIRED
+  arguments (#1659's shape), and `PinnedSnapshotHost` gained a `now:` whose
+  default is a fixed instant, on #1662's polarity. Five things are worth
+  carrying.
+  **The distinction between the two halves is measured, not argued**: putting
+  `Date()` back at the call site leaves EVERY string assertion in
+  `PinnedNowSnapshotTests` green and reddens exactly one arm, the two-clock byte
+  comparison — the same "only the rendered assertion catches it" shape #1630's
+  mutation B and #1659's had, one family on.
+  **The key carries a closure, not a `Date`**, which is not the obvious mirror
+  of `\.formatTimeZone`'s computed `NSTimeZone.default` default: a computed
+  `Date()` default is a value never equal to itself, where that one is stable
+  between assignments, and a fixture wants ONE instant per subtree rather than a
+  fresh one per read (the microsecond-disagreement hazard `quotaWindowRow`
+  already documents for `quotaPacePercent`). `FormatNow.wallClock` is a single
+  stored value and `FormatNow(fixed:)` is the stopped form.
+  **`Calendar.current` was closed by taking `\.calendar`, not by forcing
+  `.gregorian`** — that key already existed, already defaults to
+  `Calendar.current`, and has been pinned by the host since #1659 — so a user on
+  a Japanese or Buddhist calendar keeps theirs. What IS forced is the calendar's
+  ZONE, to the zone the formatter renders in, so the day the branch is decided
+  in and the day the string is rendered in cannot disagree; that line is
+  load-bearing (removing it reddens four arms) while the identity provably is
+  not (measured across all 16 Foundation identifiers at a fixed zone, zero
+  disagreements, asserted rather than assumed — which is what justifies there
+  being no both-sides pixel arm for the calendar).
+  **A pin alone would have been untested by construction**, since #1663 verified
+  the site is reached by no committed reference. The row's `Text` is therefore
+  extracted into `QuotaResetLabel`, a view a test can host: an `@Environment`
+  read off a `SessionListView` value a test constructed itself, outside a view
+  update, answers the DEFAULT — a pin reaching nothing wearing the shape of a
+  passing test. `PinnedNowSnapshot.referenceNow` is the one constant in this
+  family NOT read off the committed set, because no reference contains a
+  wall-clock-dependent render; #1663 regenerated no PNG and the untouched 53 are
+  the evidence.
+  **The blast radius is ONE call site, deliberately** — `QuotaResetLabel`, not
+  the app-wide clock injection #1663 defers. (The other function that issue names,
+  `formatClockTime`, never read a clock: its two machine reads were the
+  formatter's unset locale and zone, closed by the existing two seams.) Three
+  further wall-clock reads on the same chip were left unconverted
+  (`quotaPacePercent`, `mergeIntoBuckets`' staleness test, `formatTimeUntil`),
+  two of them pixel-visible, so the `rate_limit` fixture #1663 anticipates was
+  still not safe to seed: that became #1675, the member below.
+  **Those three are #1675, and they are where the family's assertion shape
+  needed a twin.** Same axis as the fourth member rather than a fifth one — the
+  clock again, three further reads of it. All three now take `now` as an input —
+  `quotaPacePercent(_:now:)` and `snapshotIsStale(_:now:)` as required
+  arguments, `QuotaResetFormat.timeUntil(_:now:)` likewise, and
+  `mergeIntoBuckets` / `quotaChipData` are `static` and pure so the fold cannot
+  read a clock at all. Six things are worth carrying.
+  **An extraction was again unavoidable, and the second one is not a leaf
+  view.** #1663's `QuotaResetLabel` works because the pixels and the decision
+  are the same `Text`; the staleness flip decides an `.opacity` applied to the
+  WHOLE chip while the decision was made in the data fold, two hundred lines
+  away, and `SessionListView.quotaChipView` cannot be hosted without dragging in
+  `SessionManager`. So the vehicle is a generic wrapper — `QuotaStaleDimmed<Content>`
+  (`Irrlicht/Views/QuotaChipParts.swift`) — which moves the decision to where the
+  pixels are and is hostable over any content. `QuotaWindowRow` beside it is the
+  ordinary leaf case, for the pace marker.
+  **The stored verdict was REMOVED rather than kept beside the derived one.**
+  `QuotaWidgetData.isStale` and `snapshotIsStale(snapshot, now:)` would have been
+  two spellings of one fact that could only drift, and the equivalence that makes
+  the removal safe is locked
+  (`QuotaChipClockTests.testTheMergeNeverKeepsASnapshotWhoseStalenessDisagreesWithIt`,
+  over every branch of the fold) rather than argued in a comment. `ChipBucket`
+  keeps its own copy because the merge genuinely branches on it. The residual
+  cost is stated where it lives: under the running default clock the fold's read
+  and the wrapper's read are microseconds apart, so at a `resetsAt` boundary a
+  chip can dim one frame before its tooltip says "stale".
+  **A both-sides pixel arm needs a must-not-differ twin.** "Two clocks, two
+  rasterisations" is satisfied by a view that varies with the clock for ANY
+  reason, including one unrelated to the property under test — so each arm is
+  paired with a fixture whose verdict is identical under both clocks (a window
+  the clock cannot pace; a snapshot stale under both). Both twins earned their
+  place: one mutation reddens only the dimming twin and another only the row's,
+  while the arms they guard stay green.
+  **A mutation whose two pinned instants are congruent is INERT and reads as a
+  passing test.** The row's twin was first mutated with a marker at
+  `epoch % 100` — and `referenceNow` and `contrastingNow` are both ≡ 0 (mod
+  100), being exactly 48h apart — so a genuinely clock-varying marker rendered
+  identically and the arm came back green. That is #1390's "assert the mutation
+  actually changed the thing" arriving in a Swift suite, and the check is one
+  line of arithmetic before trusting a green mutation run.
+  **This is the one member of the family CI grades.** `QuotaMenuBarRendererTests`
+  takes no `as: .pinnedImage`, so `ImageSnapshotCIScopeTests` does not skip it —
+  and every fixture in it was built from `Date()` while the renderer read
+  `Date()` again a moment later, two reads of the machine that merely agreed. So
+  nothing in it could tell a renderer honouring its `now:` from one discarding
+  it, and its own comment recorded that it could not pin an exact ramp boundary
+  for the same reason. Both are now closed, and `now` threads from one visible
+  read in `MenuBarImageBuilder.combinedImage` — the icon is rasterised into an
+  `NSStatusItem`, so no environment can reach it and #1659's required-argument
+  form is the only option.
+  **And the `rate_limit` fixture #1663 anticipated is seeded, but NOT as a
+  committed PNG.** The clock obstacle is gone; what remains is unrelated to it
+  and is why the PNG form is still the wrong one — per #1615 every
+  committed-reference image suite currently fails on a runner over
+  rasterisation, so a new one would have to be classified as skipped in
+  `ImageSnapshotCIScopeTests` and would buy a check that runs on one Mac. The
+  two-render-in-memory form runs everywhere, so that is what the fixture is.
+  And no, a test
+  run does not modify the user's real app preferences:
+  `UserDefaults.standard` under `swift test` resolves to
+  `com.apple.dt.xctest.tool`, measured again across two full gate runs against a
+  byte- and mtime-identical `io.irrlicht.app.plist`.
+  **A sibling family reads the machine for its WRITES rather than its
+  formatting**, and is closed the same way: `AppHome`
+  (`Irrlicht/Managers/AppHome.swift`) is now the one place the app resolves the
+  user's home, and under XCTest it answers a per-process directory beneath
+  `NSTemporaryDirectory()`. Five call sites resolved it directly and three of
+  them wrote — a fixture into the live daemon's
+  `~/Library/Application Support/Irrlicht/instances/`, the developer's own
+  `session-order.json` **overwritten** with test data (`{"order":["b","a"]}`,
+  measured), and `~/Library/Sounds/IrrlichtCustom-<event>.<ext>` behind a
+  `defer` (#1669, #1670; #1661 was the same class in `~/Library/Preferences`).
+  Four things there are worth carrying. **`HOME` is inert** — measured,
+  `HOME=<tmp>` alone leaves `NSHomeDirectory()` at the real home and only
+  `CFFIXED_USER_HOME` moves it — so a redirect built on `HOME` looks like a fix
+  and changes nothing; the redirect is therefore in-process and keyed on
+  `NSClassFromString("XCTestCase")`, the signal #832 already uses to keep tests
+  off the live daemon socket, so it holds under a bare `swift test` and under
+  Xcode rather than only under a script that sets an env var. **Nothing sweeps**:
+  a function deleting files from a directory it did not create is what removed
+  ~1895 files from a real `~/Library/Preferences` during #1661, and no code in
+  this family has a removal path. **The standing guard is split by what each
+  half can see** — `tools/lib/swift-suite.sh`'s witness brackets the `swift
+  test` invocation and fails on any new entry in `~/Library/Preferences` or
+  `~/Library/Sounds`, which is the only check that still runs when the suite
+  ABORTS (#1523) and a `defer` does not, while
+  `Tests/RealHomeIsolationTests.swift` locks the resolved PATHS, because the
+  worst of #1669 is an overwrite that adds no directory entry and the level that
+  would see the rest is written continuously by the live daemon. And the
+  witness's noise is a function of its WINDOW, stated honestly because the
+  flattering version is what erodes a guard: 0 additions across each of two
+  suite-length windows, 4 unrelated background plists across one 870s window of
+  interactive use. It is not filtered by name — #1661's leaked files were
+  `<uuid>.plist`, so any name filter that quietened the churn would have
+  quietened the incident.
+  **That witness has a SECOND half since #1688, and the split between the two is
+  the point rather than the sum**: the directory half watches for new FILES,
+  while `SWIFT_SUITE_WITNESSED_DOMAINS` compares
+  `com.apple.dt.xctest.tool` and `io.irrlicht.app` key set AND values through
+  `defaults export`, because #1672 was a write into an existing key of an
+  existing domain and moved no directory entry at all. Neither half is a
+  superset. It COMPARES — `defaults write`/`delete` on a real domain is as
+  forbidden as `rm`, so nothing there has a write path and the test corpus
+  answers through a committed stub reader
+  (`tools/lib/testdata/swift-suite/defaults-stub.sh`) rather than writing a
+  domain to make itself deterministic. Three things are load-bearing. The
+  vacuity guard is a **control probe** (`NSGlobalDomain`, read and never
+  compared) rather than the watched domains' contents, because "both domains
+  hold no keys" is a legitimate fresh-machine state where "no watched directory
+  present" is not — a contents-based guard would refuse on a new machine
+  forever. An EMPTY answer is `UNREADABLE`, not a clean empty domain, and the
+  one row where that distinction is a silent pass rather than a mislabelled
+  failure is a silent reader over an already-empty domain. And the limit is
+  printed on every clean run: an idempotent write is invisible to any
+  before/after comparison, so a saturated domain and a clean one would otherwise
+  read identically. `Tests/RealHomePathLintTests.swift` is the structural
+  half, over the app AND test targets, with an existence-checked exemption list
+  (two entries) because the safe construct is built out of the banned one.
+  The suite also aborts intermittently (#1523) in a way that **truncates the
+  run** while every suite that did report says "0 failures" — so the exit code
+  is the only reliable signal, never the last totals line you can see. That is
+  what `tools/lib/swift-suite.sh` judges a run by, and its `SWIFT_SUITE_TIMEOUT`
+  default is 240s rather than 600s for a reason worth generalizing: at 600 it
+  equalled an automated caller's entire command budget, so the caller killed the
+  gate at the instant the gate would have started explaining itself and the
+  `HUNG` diagnosis could never print for the caller that most needed it. A bound
+  nobody can outlive reports nothing. The relation
+  (`timeout + cold build < pre-push budget`) is asserted in
+  `tools/lib/swift-suite_test.sh` rather than left true the day it was typed.
 - Web (only when touching a `web/` tree): `npm test` in that tree. There are
   two independent suites, each with its own `node_modules`:
   - `platforms/web/` — the dashboard.
@@ -1010,10 +2210,16 @@ Before marking a ticket done, run the full suite — every layer must pass:
 
 `tools/preflight.sh` runs every PR-gating check (test.yml + web-test.yml +
 ars-gate.yml + linux.yml's replay-fixtures step natively, plus the full Linux
-build+test gate via Docker under `--linux`) locally, in CI's order, and prints
-a pass/fail summary
-instead of stopping at the first failure — so before opening a PR, run it
-once instead of round-tripping through GitHub Actions per fix:
+build+test gate via Docker under `--linux`) locally and prints a pass/fail
+summary instead of stopping at the first failure — so before opening a PR, run
+it once instead of round-tripping through GitHub Actions per fix. Gates run
+**cheapest first**, in two phases, not in "CI's order": there is no single CI
+order to mirror, since those are separate workflows GitHub runs concurrently,
+and the order is load-bearing under `--budget` (below) because it decides which
+gates survive a squeeze. `skill-file lint`, `POSIX sh lint` and `bash lint` are the
+only coverage their file families have and cost a second or two each, so they
+run before four minutes of `go test` — which is the argument test.yml already
+makes in-file for running the skill lint before `setup-go`.
 
 ```
 tools/preflight.sh                # everything except the Linux Docker gate
@@ -1021,6 +2227,9 @@ tools/preflight.sh --linux        # + full Linux parity (slow: needs Docker)
 tools/preflight.sh --only go      # just the test.yml-equivalent gates
 tools/preflight.sh --only arch    # just the ARS architecture gate
 tools/preflight.sh --only skills  # just the .claude/skills/**/*.md linter
+tools/preflight.sh --only bash    # just the shellcheck lint over bash scripts
+tools/preflight.sh --only swift   # just the macOS Swift build + test suite
+tools/preflight.sh --budget 540   # bound the whole run; see "The budget" below
 ```
 
 **For an automated caller (an agent), `--only` chunking is the recipe, not a
@@ -1028,27 +2237,119 @@ debugging convenience — the unscoped run does not reliably fit a foreground
 `Bash` call's 600s budget** (it reliably exceeds it on this machine; the long
 pole is the `go` group's core suite + replay fixtures). Run each group as its
 own **foreground** invocation instead of the single unscoped command:
-`tools/preflight.sh --only go|web|arch|tools|skills|posix|security` (see
+`tools/preflight.sh --only go|web|arch|tools|skills|posix|bash|security|swift` (see
 `tools/preflight.sh --help` for the current group list; `linux` stays opt-in
 and needs Docker). Every gate still runs — chunking only changes how many
 invocations it takes. **Do not background the unscoped run to make it fit**:
 a subagent is not woken by its own background job, so the run stalls silently
 with the work committed but never pushed
 (`.claude/skills/ir:exec/SKILL.md` Phase 4 step 11 has the incident and the
-same recipe).
+same recipe). Chunking is still the recipe for a *manual* unscoped run;
+`--budget` is what covers the `--changed` run the hook performs, and the two
+compose — `--only <group> --budget <n>` bounds one group.
+
+Also read a push's exit status directly, never through a pipe: `git push … |
+tail` reports `tail`'s status, so a push the hook refused looks like a success
+to the caller. Assert afterwards that `git status -sb` shows a tracking branch —
+this is a plausible cause of the "committed but never pushed" incident recorded
+in `ir:exec` Phase 4 (#1570).
+
+**Not `PIPESTATUS`**, which is what this paragraph advised until #1559's agent
+tried it: this repo's shell is zsh, where the array is spelled `$pipestatus` and
+indexed from **1**, so the bash spelling `${PIPESTATUS[0]}` expands to the empty
+string and the check reports nothing at all. Advice for reading a status that
+silently yields no status is this section's own subject arriving in its own
+prose, which is why the fix is to name the portable check rather than to correct
+the spelling — `git status -sb` works in either shell and asserts the thing
+actually wanted (the branch is tracking), where a pipe status only asserts that
+one command in a pipeline exited zero.
 
 `tools/install-git-hooks.sh` (run once per clone; worktrees share the parent
 repo's hooks automatically) wires `tools/preflight.sh`'s fast gates as a
-pre-push hook, so a push that would fail CI is rejected locally instead. The
-hook runs `tools/preflight.sh --changed`, which scopes every gate to the
-packages and web trees the push's diff actually touches (vs `origin/main`), so
-a typical push finishes in seconds rather than re-running the whole suite —
-important for automated callers, whose bounded command timeout the full run
-routinely blew past, killing the push after the commit had already landed. A
-large or cross-cutting diff (or a `go.mod`/`go.sum` change, which falls back to
-the full core suite) can still take a few minutes. Skip once with `git push
---no-verify`; run `tools/preflight.sh` manually (no `--changed`) for the
-unscoped full gate.
+pre-push hook, so a push that would fail CI is rejected locally instead. What
+it installs into the shared `.git/hooks/<name>` is neither the hook script nor
+a symlink to it, but a copy of `tools/git-hooks/shim`, which resolves the
+**pushing** working tree at run time and execs *that* tree's
+`tools/git-hooks/<name>` (#1591). Before that, the installed hook was a symlink
+into the MAIN checkout, so every worktree's push ran the main checkout's
+script — meaning a hook change in a worktree did not govern that worktree's own
+push, and anything under `tools/git-hooks/` was untestable from the branch that
+changed it. PR #1590 rewrote the hook to bound its own runtime and its own push
+ran the old unbounded one, hitting the exact defect it was fixing. Three
+consequences worth knowing:
+
+- **The shim is now the one link a `git pull` cannot update.** Changing
+  `tools/git-hooks/shim` means re-running the installer; changing
+  `tools/git-hooks/pre-push` does not. That is the right way round — the shim
+  resolves a path and execs, and has no reason to change. The installer
+  overwrites whatever it finds (an older symlink install, a hand-edited copy,
+  a stale shim), so re-running it is always safe and a second run in a row
+  installs nothing.
+- **A revision that genuinely carries no hook passes, loudly**, on stderr —
+  a bisect, or a branch predating the file, has no gate there to skip, and
+  refusing would only make `git bisect` hostile.
+- **A hook missing from the tree while `HEAD` still carries it refuses**, as
+  does one present but not executable. That is a broken working tree, not a
+  revision without the hook, and a gate skipped because a file was invisible is
+  this repo's most-repeated failure shape.
+
+`tools/lib/git-hooks_test.sh` covers both halves in throwaway repos (bare
+origin + main checkout + linked worktree, pushing over a filesystem path), and
+carries the mutation beside the assertion: one case installs the pre-#1591
+symlink and pins the OPPOSITE outcome from the identical rig, so an assertion
+that the worktree's refusing hook ran cannot be satisfied by a rig where
+nothing ran at all.
+
+The hook runs `tools/preflight.sh --changed --budget 540`, which scopes every gate
+to the packages and web trees the push's diff actually touches (vs
+`origin/main`), so a typical push finishes in seconds rather than re-running
+the whole suite. A large or cross-cutting diff (or a `go.mod`/`go.sum` change,
+which falls back to the full core suite) can still take a few minutes. Skip
+once with `git push --no-verify`; run `tools/preflight.sh` manually (no
+`--changed`) for the unscoped full gate.
+
+**The budget is the part not to remove** (#1570). Scoping alone did not make
+the hook fit: on a one-file diff under `core/adapters/inbound/agents/` the run
+measured **621s** — go 250s, arch 16s, security 355s — against an automated
+caller's 600s command budget, so the *caller* killed the tool call. That is the
+worst available failure: no summary, no gate name, no exit code, the commit
+already made and the push not sent, and the documented recovery (`--no-verify`)
+then skips the sub-second gates nobody ran. Six of thirteen PRs in one day went
+out that way. `--budget <seconds>` makes the run bound itself: each gate is
+given whatever is left, a gate that outlives it is **killed and reported
+`TIMEOUT` by name**, every gate behind it is reported **`NOT RUN`**, and both
+exit non-zero. Neither is a `SKIP` — `SKIP` means "this diff cannot break it",
+which is a finished answer; these two are the absence of one, and the closing
+block lists them again after the summary. `PREPUSH_BUDGET` overrides the hook's
+540s (`0` = unbounded, exactly the old behaviour); an unflagged
+`tools/preflight.sh` is unbounded and unchanged. The bounded runner is
+`tools/lib/gate-budget.sh` — pure bash 3.2, because `timeout(1)` is not on a
+stock macOS and a gate that stops being bounded on the machines missing an
+optional dependency is the same defect wearing a different hat. Its unit tests
+plus the end-to-end mutation (a copy of `preflight.sh` with one gate replaced
+by a `sleep`) are `tools/lib/gate-budget_test.sh`, in the `tools` gate.
+
+Two things the budget makes visible that were previously invisible, both
+measured while #1570 was being fixed:
+- **`gosec` was running twice per module.** `-severity`/`-confidence` filter
+  the *report*, not the analysis, so `security-scan.sh`'s informational pass
+  and its gate pass were the same 172s scan of the same 263 files, twice. One
+  `-fmt=json` run now answers both (`tools/lib/gosec-report.sh`), which took
+  the security gate from **355s to 186s** with identical coverage and verdict.
+  Nothing was narrowed — deduplicating a scan is not scanning less, which is
+  why gosec was *not* scoped to changed packages instead. A report that will
+  not parse, or whose own `.Stats.files` is 0, is refused rather than read as
+  clean: a scan that read nothing produces "no High/High findings" too.
+- **The `swift` gate can consume the whole budget on its own.** Its trigger
+  includes `tools/preflight.sh` itself, and `SWIFT_SUITE_TIMEOUT` defaults to
+  600s — equal to an automated caller's entire command budget, so the gate's
+  own careful HUNG diagnosis could never print before the caller killed
+  everything. Measured on this machine at `origin/main`, the suite reaches
+  `SessionRowSnapshotTests.testRelayCloudOnline` and stops there (twice, at the
+  identical point; that test passes in 0.157s in isolation) — #1523/#1530
+  territory. Under `--budget` the outer bound fires first and names the gate,
+  and the tree kill reaches through `script -q`'s separate session, leaving no
+  orphaned `xctest` (measured at `--budget 45`).
 
 The security gate is scoped twice over: its trigger regex decides whether the
 scan runs at all, and `tools/security-scan.sh --changed` then picks which Go
@@ -1057,7 +2358,13 @@ actually reads. Without that second layer a pure-Go push paid for an `npm
 audit` of both web trees and was rejected by a pre-existing advisory it could
 not have caused (#1213) — forcing `--no-verify`, which disables every other
 gate too. Both layers read the same changed set, from
-`tools/lib/changed-files.sh`; its unit tests run in the `tools` gate.
+`tools/lib/changed-files.sh`; its unit tests run in the `tools` gate. That set
+counts **untracked, non-ignored** files as well as committed, staged and
+unstaged ones (#1591). It did not until then: `git diff` cannot see a file
+that was never added and `--cached` only catches it once staged, so a
+newly written script selected no gates at all while the function's own doc
+said uncommitted work counted. Invisible to the pre-push hook — a file has to
+be committed to be pushed — and wrong for every manual `--changed` run.
 
 Two of the failure modes it won't catch: environment-specific timing flakes
 that only manifest on loaded Linux CI runners (not this machine), and true

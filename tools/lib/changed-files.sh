@@ -21,10 +21,19 @@
 # can exercise the scoping rules without running a scanner.
 
 # changed_files_vs_origin_main — everything this branch touches relative to
-# origin/main: committed since the merge base, unstaged, and staged. Emits
-# newline-separated repo-relative paths, sorted and de-duplicated. Uncommitted
-# work counts because a pre-push run should reflect the tree in front of you,
-# not only what is already committed.
+# origin/main: committed since the merge base, unstaged, staged, and untracked
+# (excluding anything gitignored). Emits newline-separated repo-relative paths,
+# sorted and de-duplicated. Uncommitted work counts because a pre-push run
+# should reflect the tree in front of you, not only what is already committed.
+#
+# The untracked line is #1591's half. `git diff` cannot see a file that was
+# never added, and `--cached` only catches it once it is staged — so a brand
+# new file selected NO gates while this function's doc said uncommitted work
+# counted. That is harmless for the pre-push hook (a file has to be committed
+# to be pushed) and wrong for a manual `tools/preflight.sh --changed`, where
+# the gates covering a newly written script were silently skipped. A gate
+# skipped because a file was invisible is this repo's most-repeated failure
+# shape, so this is fixed rather than documented away.
 #
 # Returns non-zero when no baseline can be established — origin/main never
 # fetched, a shallow clone, unrelated histories. That case has to be an error
@@ -50,6 +59,15 @@ changed_files_vs_origin_main() {
     git diff --name-only "$base" HEAD
     git diff --name-only HEAD
     git diff --name-only --cached
+    # --full-name and the `:/` pathspec are both load-bearing, and the naive
+    # spelling would look right forever: a bare `git ls-files --others` lists
+    # only what is under the CALLER'S cwd and prints it cwd-relative, while the
+    # three `git diff` lines above are repo-root-relative over the whole repo
+    # regardless of cwd. Called from the repo root — which is where preflight
+    # and the pre-push hook call it — the two spellings agree exactly. Measured
+    # from tools/ with an untracked core/new.go and tools/new.sh: the bare form
+    # emits `new.sh` alone, this one emits both, root-relative.
+    git ls-files --others --exclude-standard --full-name -- :/
   } 2>/dev/null | LC_ALL=C sort -u
 }
 

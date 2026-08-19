@@ -2,6 +2,7 @@ package fswatcher
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -70,6 +71,54 @@ func expectNoEvent(t *testing.T, ch <-chan agent.Event, d time.Duration) {
 		t.Fatalf("unexpected %q event for %q", ev.Type, ev.TranscriptPath)
 	case <-time.After(d):
 	}
+}
+
+// drainAvailableNewSessions records the transcript path of every new-session
+// event already queued on ch, without blocking. Used where the caller has
+// ordered itself against the producer and "everything currently buffered" is
+// therefore a complete answer rather than a snapshot.
+func drainAvailableNewSessions(ch <-chan agent.Event, into map[string]bool) {
+	for {
+		select {
+		case ev := <-ch:
+			if ev.Type == agent.EventNewSession {
+				into[ev.TranscriptPath] = true
+			}
+		default:
+			return
+		}
+	}
+}
+
+// collectNewSessionsUntil keeps recording new-session paths off ch until into
+// holds want of them or the deadline passes. It polls rather than sleeping the
+// whole window so a fast machine finishes fast and a slow one still passes.
+func collectNewSessionsUntil(ch <-chan agent.Event, into map[string]bool, want int, deadline time.Time) {
+	for len(into) < want && time.Now().Before(deadline) {
+		select {
+		case ev := <-ch:
+			if ev.Type == agent.EventNewSession {
+				into[ev.TranscriptPath] = true
+			}
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+}
+
+// seedTranscriptBacklog writes n transcript files into one project directory
+// under a fresh root and returns the root plus their paths, so a test can drive
+// a startup backlog of a chosen size.
+func seedTranscriptBacklog(t *testing.T, n int) (root string, paths []string) {
+	t.Helper()
+	root = setupFakeProjects(t)
+	dir := filepath.Join(root, "-Users-test-myproject")
+	paths = make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		p := filepath.Join(dir, fmt.Sprintf("session-%03d.jsonl", i))
+		writeTranscript(t, p, `{"type":"init"}`+"\n")
+		paths = append(paths, p)
+	}
+	return root, paths
 }
 
 func TestEffectiveReconcileInterval(t *testing.T) {
@@ -461,5 +510,106 @@ func TestWatch_ReconcileRecoversFileUnderAnUnwatchableDir(t *testing.T) {
 	t.Run("sweep disabled leaves it invisible", func(t *testing.T) {
 		ch := run(t, -1)
 		expectNoEvent(t, ch, 500*time.Millisecond)
+	})
+}
+
+// The reconcile sweep must recover a new-session event that broadcast DROPPED.
+//
+// Issue #1679: emit recorded emitted[path] = size BEFORE broadcasting, and
+// broadcast is a non-blocking send that discards the event when a subscriber's
+// buffer is full. reconcileFile then returns early on `known && prev == size`,
+// so a dropped event was indistinguishable, to the sweep, from a delivered
+// one — the recovery mechanism that exists for the notification fsnotify never
+// delivered (#1248) was disarmed by the very act that lost the event.
+//
+// The overflow here is a property of the fixture rather than injected timing: a
+// Subscribe() channel holds subscriberBuffer events and the backlog scan emits
+// every pre-existing transcript in one uninterrupted burst on Watch's own
+// goroutine, so with the consumer not yet reading, exactly the first
+// subscriberBuffer fit and the rest have nowhere to go. #1680's
+// onBacklogScanComplete seam freezes the watcher at the end of that burst,
+// which is what makes "how many did the burst deliver" an exact count instead
+// of one racing the first sweep.
+//
+// The disabled-sweep subtest is the control: the dropped events stay lost, so
+// the recovered case is evidence about the sweep rather than about the buffer
+// draining on its own. Both subtests refuse to pass if the burst delivered
+// everything, since a fixture that never overflows grades nothing.
+func TestWatch_ReconcileRecoversNewSessionEventBroadcastDropped(t *testing.T) {
+	const files = subscriberBuffer + 16
+
+	run := func(t *testing.T, interval, settle time.Duration) (burst int, delivered map[string]bool, want []string) {
+		t.Helper()
+		root, want := seedTranscriptBacklog(t, files)
+
+		w := NewWithRoot(root, testAdapter, 0).WithReconcileInterval(interval)
+		// The production shape (subscriberBuffer slots), deliberately not read
+		// until the burst is over.
+		ch := w.Subscribe()
+
+		atBoundary := make(chan struct{})
+		release := make(chan struct{})
+		w.onBacklogScanComplete = func() { close(atBoundary); <-release }
+
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+		go func() { _ = w.Watch(ctx) }()
+
+		select {
+		case <-atBoundary:
+		case <-time.After(10 * time.Second):
+			t.Fatal("the backlog scan never completed")
+		}
+
+		// Frozen on Watch's goroutine with the sweep's ticker not yet created,
+		// so this drain is exactly what the burst's broadcasts delivered.
+		delivered = make(map[string]bool, files)
+		drainAvailableNewSessions(ch, delivered)
+		burst = len(delivered)
+		close(release)
+
+		collectNewSessionsUntil(ch, delivered, files, time.Now().Add(settle))
+		return burst, delivered, want
+	}
+
+	// mustHaveOverflowed is the vacuity guard both subtests need: everything
+	// below is about events broadcast had to discard, so a burst that delivered
+	// all of them means the fixture no longer reaches the defect.
+	mustHaveOverflowed := func(t *testing.T, burst int) {
+		t.Helper()
+		if burst >= files {
+			t.Fatalf("the backlog burst delivered all %d new-session events, so nothing was dropped and this "+
+				"test grades nothing — Subscribe's buffer is %d, so the fixture needs more files than that",
+				files, subscriberBuffer)
+		}
+	}
+
+	t.Run("sweep enabled recovers the dropped events", func(t *testing.T) {
+		burst, delivered, want := run(t, 100*time.Millisecond, 8*time.Second)
+		mustHaveOverflowed(t, burst)
+
+		var missing []string
+		for _, p := range want {
+			if !delivered[p] {
+				missing = append(missing, filepath.Base(p))
+			}
+		}
+		if len(missing) > 0 {
+			t.Errorf("%d of %d new-session events (the burst delivered %d) were dropped by broadcast and never "+
+				"recovered by the reconcile sweep: %v — the sweep skipped them because emit recorded them as "+
+				"reported before broadcast had a chance to discard them (#1679)",
+				len(missing), files, burst, missing)
+		}
+	})
+
+	t.Run("sweep disabled leaves them lost", func(t *testing.T) {
+		burst, delivered, _ := run(t, -1, 500*time.Millisecond)
+		mustHaveOverflowed(t, burst)
+
+		if len(delivered) != burst {
+			t.Errorf("with the sweep disabled, %d events arrived after the burst's %d — something other than the "+
+				"sweep is delivering them, so the recovered case above is not evidence about the sweep",
+				len(delivered)-burst, burst)
+		}
 	})
 }

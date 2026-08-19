@@ -1,0 +1,7 @@
+package fixture
+
+// Fabricated is 7 in the corpus census and UnpairedSidecars is 49, both under
+// censusFigureFloor, so neither 7 nor 49 may be reported. These are the three
+// structurally-small fields the floor exists for: defect counters driven toward
+// zero by design, which can never be distinctive fingerprints.
+func BelowFloor() {}

@@ -102,8 +102,14 @@ type PIDManager struct {
 	// interactive terminal or IDE (e.g. CodexBar keeping an Antigravity `agy`
 	// process running for quota polling — issue #784). Both nil disables the
 	// check; installed once at startup via SetHostGate.
+	//
+	// isKnownHost takes the session id it is deciding about purely so it can
+	// SAY so: the gate is the only place that knows the pid and why it decided,
+	// and this layer is the only place that knows the id the session is about
+	// to get, so a line that can name a phantom admission needs the id passed
+	// inward (#1525). Nothing here reads a verdict out of it beyond the bool.
 	requireKnownHost map[string]bool
-	isKnownHost      func(pid int) bool
+	isKnownHost      func(sessionID string, pid int) bool
 
 	// onSessionDeleted is called when a session is deleted so the caller can
 	// clean up its own tracking structures (e.g. projectSessions map).
@@ -238,7 +244,7 @@ func (pm *PIDManager) SetInfraReaper(excluders map[string]func([]string) bool, r
 // requireKnownHost maps adapter name → Process.RequireKnownHost; isKnownHost
 // resolves a PID's process ancestry. Both nil (the default, and what
 // tests/demo mode leave) disables the check. Called once at startup.
-func (pm *PIDManager) SetHostGate(requireKnownHost map[string]bool, isKnownHost func(pid int) bool) {
+func (pm *PIDManager) SetHostGate(requireKnownHost map[string]bool, isKnownHost func(sessionID string, pid int) bool) {
 	pm.requireKnownHost = requireKnownHost
 	pm.isKnownHost = isKnownHost
 }
@@ -267,6 +273,14 @@ func (pm *PIDManager) RequiresKnownHost(adapter string) bool {
 // PID they're looking at — a mismatch would let the gate ancestry-check a
 // stale/unrelated PID sharing the same cwd instead of the one that's actually
 // about to be bound.
+//
+// Note what a `true` from here does and does not mean, because #1525 turned on
+// it: only the LAST return is a gate outcome. The four before it — the adapter
+// did not opt in, no discoverer is installed, no PID was found, no gate is
+// wired — are admissions the gate was never asked about, and they are
+// indistinguishable from a resolved interactive host at this layer and at every
+// layer above it. That is why the gate's own outcomes are counted where they
+// are decided rather than here.
 func (pm *PIDManager) AllowsSession(sessionID, adapter, cwd, transcriptPath string) bool {
 	if !pm.requireKnownHost[adapter] {
 		return true
@@ -282,7 +296,7 @@ func (pm *PIDManager) AllowsSession(sessionID, adapter, cwd, transcriptPath stri
 	if pm.isKnownHost == nil {
 		return true
 	}
-	return pm.isKnownHost(pid)
+	return pm.isKnownHost(sessionID, pid)
 }
 
 // captureLauncher invokes the launcher-env reader if one is installed and
@@ -304,9 +318,14 @@ func (pm *PIDManager) captureLauncher(state *session.SessionState, pid int) {
 
 // captureBackground flags state as a background agent when the reader recognizes
 // its PID, stamping Detached from the captured Launcher TTY. Must run AFTER
-// captureLauncher so the controlling TTY is known. Set-once: a no-op once
-// Background is already set, when no reader is installed, or for an unrecognized
-// PID. Returns true when it set Background so callers can persist (#744).
+// captureLauncher so the controlling TTY is known. Returns true when it set
+// Background so callers can persist (#744).
+//
+// Set-once, but only the IDENTIFICATION half: this is a no-op once Background
+// is already set, when no reader is installed, or for an unrecognized PID.
+// Detached is not an identification, it is derived from a field that is
+// explicitly repairable, so it is re-derived by refreshBackgroundDetached on
+// the paths that repair it (#1546).
 func (pm *PIDManager) captureBackground(state *session.SessionState, pid int) bool {
 	if pm.background == nil || state == nil || state.Background != nil || pid <= 0 {
 		return false
@@ -315,9 +334,60 @@ func (pm *PIDManager) captureBackground(state *session.SessionState, pid int) bo
 	if bg == nil {
 		return false
 	}
-	// No controlling terminal ⇒ no window/tab owns it — the "detached" signature.
-	bg.Detached = state.Launcher == nil || state.Launcher.TTY == ""
+	bg.Detached = detachedFromLauncher(state.Launcher)
 	state.Background = bg
+	return true
+}
+
+// detachedFromLauncher derives BackgroundAgent.Detached from the launcher a
+// session currently holds: no controlling terminal ⇒ no window/tab owns it,
+// which is the "detached" signature (#744). One function so the first stamp
+// and every later re-derivation cannot drift apart on what the badge means.
+func detachedFromLauncher(l *session.Launcher) bool {
+	return l == nil || l.TTY == ""
+}
+
+// refreshBackgroundDetached re-derives Detached for a session that already
+// carries a background badge, and reports whether the value moved so the
+// caller can persist and push only on a real change. It is #1546.
+//
+// Launcher.TTY has two ways of being empty and they are not the same fact: the
+// process genuinely has no controlling terminal, or the `ps` behind
+// processTTY was killed by its 2s ceiling and never answered. Nothing that
+// reaches this layer distinguishes them — ReadLauncherEnv discards
+// hostIdentity's completeness verdict for the agent's own read — so
+// captureBackground's first stamp can be a claim made on no evidence. Read
+// that discard carefully before building on it: its stated reasons (see
+// ReadLauncherEnv's doc comment) are about the ANCESTRY walk and predate
+// #1533 folding the tty probe into the same bit, so the verdict being dropped
+// now carries tty information its rationale does not cover.
+//
+// The rest of the codebase already handles that correctly by treating an empty
+// TTY as MISSING rather than absent: launcherBackfillNeedsFor returns
+// `tty: l.TTY == ""`, and both refresh paths re-read it until one answers. What
+// was missing is the second half — the badge derived from that field never
+// followed it, because captureBackground is set-once and a record carrying a
+// wrong badge is by definition one that already has a Background. So the
+// repair ran and its result was discarded, and since SessionState is persisted
+// whole the badge outlived the daemon that wrote it: a permanent amber "no open
+// window; runs in the daemon pool" on a session with a perfectly good terminal.
+//
+// This can only ever move the badge true → false, which is why it is a repair
+// and not a new way to be wrong: applyLauncherBackfill copies a fresh TTY only
+// when it is non-empty, AdoptHostIdentity refuses to move a client's tty onto a
+// pane that has none, and no path ever nils a stored Launcher — so the field
+// this reads is monotone once set. Correcting a stale FALSE (an agent whose
+// window closed after capture) would need the stored TTY to be invalidated,
+// which nothing does today; that is a separate gap, not one this closes.
+func refreshBackgroundDetached(state *session.SessionState) bool {
+	if state == nil || state.Background == nil {
+		return false
+	}
+	want := detachedFromLauncher(state.Launcher)
+	if state.Background.Detached == want {
+		return false
+	}
+	state.Background.Detached = want
 	return true
 }
 
@@ -812,6 +882,14 @@ func (pm *PIDManager) DiscoverPIDWithRetry(sessionID, cwd, transcriptPath, adapt
 // cancelled. The sweep interval backs off from 5s to 15s when no dead PIDs
 // are found for several consecutive sweeps.
 func (pm *PIDManager) SweepDeadPIDs(ctx context.Context) {
+	// baseInterval is read out of this source, by name and in this spelling, by
+	// processlifecycle's TestClientHostReadFitsTheLivenessSweepTick: this handler
+	// calls refreshMultiplexerHosts synchronously, so the herdr launcher read has to
+	// fit inside one tick, and an adapter can neither import this package nor a
+	// function-local const. Renaming or moving it fails that test loudly rather
+	// than silently unpinning the bound — which is the intended behaviour, not a
+	// nuisance: it means re-pointing the test, or noticing that the coupling has
+	// changed.
 	const baseInterval = 5 * time.Second
 	const backoffInterval = 15 * time.Second
 	const cleanThreshold = 3
@@ -863,10 +941,40 @@ type livenessSnapshot struct {
 	parentSessionID string
 	transcriptPath  string
 	adapter         string
-	// herdrPane marks a session hosted in a herdr pane — the one Launcher
-	// whose host identity is not static for the process's lifetime, and so
-	// the only one the sweep re-resolves (#1405, refreshHerdrHosts).
-	herdrPane bool
+	// multiplexerPane marks a session hosted in a herdr or tmux pane — the
+	// Launchers whose host identity is not static for the process's lifetime,
+	// and so the only ones the sweep re-resolves (#1405 for herdr, #1501 for
+	// tmux; refreshMultiplexerHosts).
+	multiplexerPane bool
+}
+
+// hostedInAMultiplexerPane reports whether l's host belongs to an attached
+// client rather than to l's own process — the gate that decides which sessions
+// the periodic refresh pays a read for.
+//
+// It is deliberately CHEAPER than the test the reader itself applies
+// (processlifecycle.tmuxPaneAwaitsItsClient): this runs under assignMu for
+// every session on every sweep, so it may only look at fields.
+//
+// It used to be WIDER as well, because the stored launcher could not
+// distinguish a genuine tmux pane whose host was ADOPTED from one whose
+// $TMUX_PANE was merely inherited by a GUI terminal launched from a pane — both
+// ended up with a pane address and a host, and nothing recorded which process
+// the host came from. #1582 removed the shape rather than the ambiguity: the
+// capture no longer stores an inherited address at all
+// (processlifecycle.dropInheritedTmuxPane), so a TmuxPane reaching this gate is
+// the pane its process is in.
+//
+// One case survives that, and it is why the cost argument stays here rather
+// than being deleted with the shape: a session whose Launcher was captured by a
+// daemon older than #1582 keeps its inherited address in the persisted state,
+// and this gate pays a read per sweep for it. What that does NOT cost is
+// correctness — the reader re-derives the narrow test from the live env every
+// time, so such a session resolves to its OWN identity, which is what it
+// already stored, and the merge reports no change and writes nothing. The wide
+// gate spends work on it; it cannot corrupt it.
+func hostedInAMultiplexerPane(l *session.Launcher) bool {
+	return l != nil && (l.HerdrPaneID != "" || l.TmuxPane != "")
 }
 
 // snapshotLivenessStates reads every session's liveness-relevant fields under
@@ -890,7 +998,7 @@ func (pm *PIDManager) snapshotLivenessStates() []livenessSnapshot {
 			parentSessionID: state.ParentSessionID,
 			transcriptPath:  state.TranscriptPath,
 			adapter:         state.Adapter,
-			herdrPane:       state.Launcher != nil && state.Launcher.HerdrPaneID != "",
+			multiplexerPane: hostedInAMultiplexerPane(state.Launcher),
 		})
 	}
 	return snaps
@@ -932,7 +1040,7 @@ func (pm *PIDManager) CheckPIDLiveness() bool {
 	// Last, so a session reaped above is already gone by the time its refresh
 	// tries to load it — and gets nothing back — rather than being written
 	// out again.
-	pm.refreshHerdrHosts(snaps)
+	pm.refreshMultiplexerHosts(snaps)
 	return foundDead
 }
 
@@ -1232,7 +1340,15 @@ func (pm *PIDManager) handleAlivePIDState(state *session.SessionState) bool {
 	// Re-attach the background-agent badge to sessions persisted before the
 	// field existed, or restored after a daemon restart (#744). Runs after
 	// backfillLauncher so Detached reflects the refreshed TTY.
-	if pm.captureBackground(state, state.PID) {
+	stamped := pm.captureBackground(state, state.PID)
+	// ...and for a session restored WITH a badge, captureBackground is a
+	// set-once no-op, so the refreshed TTY reaches Detached only through this
+	// second call. That is the whole of #1546: a record already carrying the
+	// wrong badge is precisely the one the line above cannot correct. Both
+	// calls are evaluated — no short-circuit — because a just-stamped badge is
+	// already consistent and the refresh then reports no change anyway.
+	refreshed := refreshBackgroundDetached(state)
+	if stamped || refreshed {
 		state.UpdatedAt = time.Now().Unix()
 		_ = pm.repo.Save(state)
 	}
@@ -1255,7 +1371,7 @@ func (pm *PIDManager) handleAlivePIDState(state *session.SessionState) bool {
 //     is the path by which one attached since then is picked up at startup.
 //     It is no longer the *only* such path: because a herdr pane's host is the
 //     one Launcher field that is not static for the process's lifetime, it is
-//     also re-resolved on every periodic liveness sweep (refreshHerdrHosts,
+//     also re-resolved on every periodic liveness sweep (refreshMultiplexerHosts,
 //     #1405). Both share launcherBackfillNeedsFor/applyLauncherBackfill, so
 //     the seed and the sweep cannot drift apart on what a refresh means.
 func (pm *PIDManager) backfillLauncher(state *session.SessionState) {
@@ -1289,7 +1405,7 @@ func (pm *PIDManager) touchAndSave(state *session.SessionState) {
 	_ = pm.repo.Save(state)
 }
 
-// refreshHerdrHosts re-resolves the host window of every herdr-hosted session,
+// refreshMultiplexerHosts re-resolves the host window of every herdr-hosted session,
 // on the periodic liveness sweep. Called from CheckPIDLiveness.
 //
 // Why the sweep and not capture time: every other Launcher field describes
@@ -1319,19 +1435,45 @@ func (pm *PIDManager) touchAndSave(state *session.SessionState) {
 //     memoizes precisely because it is the expensive part. It still pays one
 //     `ps` for its controlling tty (~2ms measured), which is why the read is
 //     memoized per PID across the pass.
-//   - The one genuinely costly step, the lsof scan that finds the attached
-//     client, is memoized per socket path, so N panes of one herdr server cost
-//     one scan per sweep rather than N.
+//   - The one genuinely costly step — the lsof scan that finds the
+//     attached client, and the per-candidate identity probes behind it —
+//     is memoized per socket path, so N panes of one herdr server cost one
+//     probe per socket per TTL rather than N — "per sweep" while a pass runs
+//     inside one TTL, which is the normal case and is now also the case under
+//     the load that produces a non-answer, because #1529 capped what one such
+//     probe can cost (clientHostBudget) rather than only how often it is
+//     paid. That now holds for every outcome,
+//     including the ones that determine nothing, and it did not always:
+//     #1492 routed an unreadable candidate to the same "could not look"
+//     answer as a failed scan, and #1485's rule was that such an answer is
+//     never memoized — so from #1492 until #1514 this bullet was false in
+//     exactly the case that costs the most: N panes each re-paid a scan
+//     plus up to four candidates, every candidate two ancestry walks on a
+//     2s ceiling, under precisely the load that made the candidate
+//     unreadable. herdrClientLauncher carries the reversal and its
+//     argument.
 //   - applyLauncherBackfill reports no change when the client has not moved,
 //     so the steady state writes nothing: no Save, no UpdatedAt bump, no push.
 //     The UpdatedAt bump is churn only, not a lifetime hazard: this runs solely
 //     for pid > 0 sessions, and sweepStaleSnapshot exempts any session with a
 //     live PID from the readyTTL reap before UpdatedAt is ever consulted.
 //
-// The read runs outside assignMu deliberately: ReadLauncherEnv is allowed to
-// block for up to two seconds, and assignMu serializes PID discovery for every
-// session. Only the merge is taken under the lock.
-func (pm *PIDManager) refreshHerdrHosts(snaps []livenessSnapshot) {
+// The read runs outside assignMu deliberately: ReadLauncherEnv may block, and
+// assignMu serializes PID discovery for every session. Only the merge is taken
+// under the lock. What it may block FOR, on this path, is
+// processlifecycle.shelloutTimeout + clientHostBudget: the pane's own
+// controlling-tty `ps` plus one aggregate deadline over the whole herdr client
+// indirection. That sum is asserted to fit inside baseInterval below, by
+// processlifecycle's TestClientHostReadFitsTheLivenessSweepTick, which reads this
+// function's own cadence out of this file rather than restating it.
+//
+// This said "for up to two seconds", and it was wrong in the same way the
+// bullet above was: each shellout was bounded at 2s and the herdr candidate
+// loop was bounded by a COUNT rather than by time, so one resolve could outlast
+// this ticker — which drops ticks it overruns. #1529 gave that loop the
+// aggregate deadline; the memo above makes the cost rarer, and this is what
+// makes it short.
+func (pm *PIDManager) refreshMultiplexerHosts(snaps []livenessSnapshot) {
 	if pm.launcherEnv == nil {
 		return
 	}
@@ -1341,19 +1483,24 @@ func (pm *PIDManager) refreshHerdrHosts(snaps []livenessSnapshot) {
 	// every one of them a `ps` shellout for the controlling tty.
 	read := memoizedLauncherEnv(pm.launcherEnv)
 	for _, snap := range snaps {
-		if !snap.herdrPane || snap.pid <= 0 {
+		if !snap.multiplexerPane || snap.pid <= 0 {
 			continue
 		}
 		fresh, hostKnown := read(snap.pid)
 		if fresh == nil {
 			continue
 		}
-		state := pm.applyHerdrHostRefresh(snap.state.SessionID, fresh, hostKnown)
+		state := pm.applyMultiplexerHostRefresh(snap.state.SessionID, fresh, hostKnown)
 		if state == nil {
 			continue
 		}
+		// Not "host re-resolved": since #1546 this pass reports a change when
+		// the host moved, when the background badge was re-derived from a
+		// repaired tty, or both — and in the badge-only case all three values
+		// printed here are identical to the ones printed last time, so the
+		// older wording named the one thing that provably had NOT happened.
 		pm.log.LogInfo(logComponentSessionDetector, state.SessionID,
-			fmt.Sprintf("herdr host re-resolved: term_program=%q host_bundle_id=%q tty=%q",
+			fmt.Sprintf("herdr session refreshed: term_program=%q host_bundle_id=%q tty=%q",
 				state.Launcher.TermProgram, state.Launcher.HostBundleID, state.Launcher.TTY))
 		pm.broadcast(outbound.PushTypeUpdated, state)
 	}
@@ -1379,7 +1526,7 @@ func memoizedLauncherEnv(read LauncherEnvReader) LauncherEnvReader {
 	}
 }
 
-// applyHerdrHostRefresh merges fresh into sessionID's stored launcher and
+// applyMultiplexerHostRefresh merges fresh into sessionID's stored launcher and
 // persists it, returning the updated state when something actually changed and
 // nil otherwise — so the caller pushes only on a real move.
 //
@@ -1389,7 +1536,7 @@ func memoizedLauncherEnv(read LauncherEnvReader) LauncherEnvReader {
 // the one assignPIDLocked takes around its own load-modify-save of the same
 // session, which is what keeps a concurrent PID discovery from being clobbered
 // by this one.
-func (pm *PIDManager) applyHerdrHostRefresh(sessionID string, fresh *session.Launcher, hostKnown bool) *session.SessionState {
+func (pm *PIDManager) applyMultiplexerHostRefresh(sessionID string, fresh *session.Launcher, hostKnown bool) *session.SessionState {
 	var updated *session.SessionState
 	pm.WithSessionStateLock(func() {
 		// Gone: reaped between the snapshot and here — possibly earlier in this
@@ -1405,7 +1552,7 @@ func (pm *PIDManager) applyHerdrHostRefresh(sessionID string, fresh *session.Lau
 			return
 		}
 		needs := launcherBackfillNeedsFor(state.Launcher)
-		if !needs.herdrHost {
+		if !needs.multiplexerHost {
 			return
 		}
 		// The fresh read has to still be the same pane. It may not be: a PID
@@ -1418,10 +1565,29 @@ func (pm *PIDManager) applyHerdrHostRefresh(sessionID string, fresh *session.Lau
 		// wholesale — re-introducing the #1348 misroute on a timer, which is
 		// the opposite of what this refresh exists to do. A genuinely detached
 		// pane still carries its own address, so the honest clear survives.
-		if fresh.HerdrPaneID != state.Launcher.HerdrPaneID {
+		//
+		// SamePaneAs rather than a field comparison, because the question is
+		// about the session's OWN pane and which multiplexer that is now has
+		// two answers (#1501). Comparing both addresses would be wrong in the
+		// direction that matters: a herdr client running inside tmux
+		// contributes a TmuxPane of its own, and requiring THAT to be stable
+		// would freeze the refresh for exactly the sessions whose client moved.
+		if !state.Launcher.SamePaneAs(fresh) {
 			return
 		}
-		if applyLauncherBackfill(state.Launcher, needs, fresh, hostKnown) {
+		changed := applyLauncherBackfill(state.Launcher, needs, fresh, hostKnown)
+		// The tty this sweep may just have acquired is what
+		// BackgroundAgent.Detached is derived from — launcherBackfillNeedsFor's
+		// doc gives that derivation as the whole reason the tty need survives
+		// the client adoption for a herdr pane. For such a session this is the
+		// only repair that runs inside a daemon's lifetime; everything else
+		// waits for a restart (#1546). It does not disturb the affordability
+		// argument above: once badge and tty agree this reports no change, so
+		// the steady state still writes nothing.
+		if refreshBackgroundDetached(state) {
+			changed = true
+		}
+		if changed {
 			pm.touchAndSave(state)
 			updated = state
 		}
@@ -1432,7 +1598,7 @@ func (pm *PIDManager) applyHerdrHostRefresh(sessionID string, fresh *session.Lau
 // launcherBackfillNeeds tracks which Launcher fields are missing and should
 // be refreshed from a fresh env read.
 type launcherBackfillNeeds struct {
-	tty, kittyPID, kittyListen, kittyWindow, herdrHost bool
+	tty, kittyPID, kittyListen, kittyWindow, multiplexerHost bool
 }
 
 // any reports whether anything needs refreshing. Compares against the zero
@@ -1446,8 +1612,8 @@ func (n launcherBackfillNeeds) any() bool {
 // eligible for backfill. The three Kitty-specific fields only ever need
 // backfilling for a kitty launcher.
 //
-// A herdr pane returns exactly one need, and it is unconditional. Both halves
-// of that matter:
+// A pane — herdr since #1350, tmux since #1501 — returns exactly one need, and
+// it is unconditional. Both halves of that matter:
 //
 //   - None of the kitty ones, because a pane owns no kitty field — they are
 //     adopted wholesale from the attached client (AdoptHostIdentity). Under
@@ -1461,7 +1627,7 @@ func (n launcherBackfillNeeds) any() bool {
 //   - The tty need stays, and it is the one host-ish field that is NOT covered
 //     by the adoption: AdoptHostIdentity deliberately refuses to move the
 //     client's tty onto a pane that has none, because BackgroundAgent.Detached
-//     is derived from it (#744). So a herdr launcher stored without a tty —
+//     is derived from it (#744). So a pane launcher stored without a tty —
 //     processTTY's `ps` timed out at capture, say — has no other route to
 //     acquiring one, and dropping this need would stall Terminal.app's
 //     tab-level targeting for that session permanently.
@@ -1471,9 +1637,23 @@ func (n launcherBackfillNeeds) any() bool {
 //     whole point of a persistent multiplexer, and gating on *no* host ever
 //     being recorded meant a session that moved terminals kept naming the one
 //     the user left (#1405).
+//
+// A TMUX pane ADDS the host need to the ordinary set instead of replacing it,
+// which is the one place the two multiplexers are not symmetric. The herdr
+// branch can replace, because $HERDR_PANE_ID is injected per pane and so always
+// describes THIS pane; $TMUX_PANE is inherited by every descendant, so this
+// branch was also reached by sessions whose host is their own and whose pane
+// address is stale. Suppressing their kitty needs would take a working
+// per-field backfill away from them in exchange for an adoption that
+// ReadLauncherEnv correctly refuses to make, leaving them with neither.
+//
+// Since #1582 the capture no longer stores such an address, so the only
+// launchers still carrying one were captured by an older daemon — see
+// hostedInAMultiplexerPane. The asymmetry is kept because it is conservative
+// for exactly those, not because it is load-bearing for a fresh capture.
 func launcherBackfillNeedsFor(l *session.Launcher) launcherBackfillNeeds {
 	if l.HerdrPaneID != "" {
-		return launcherBackfillNeeds{tty: l.TTY == "", herdrHost: true}
+		return launcherBackfillNeeds{tty: l.TTY == "", multiplexerHost: true}
 	}
 	isKitty := l.TermProgram == "kitty"
 	return launcherBackfillNeeds{
@@ -1481,6 +1661,10 @@ func launcherBackfillNeedsFor(l *session.Launcher) launcherBackfillNeeds {
 		kittyPID:    isKitty && l.KittyPID == 0,
 		kittyListen: isKitty && l.KittyListenOn == "",
 		kittyWindow: isKitty && l.KittyWindowID == "",
+		// Equivalent to hostedInAMultiplexerPane here — the herdr disjunct is
+		// already spent by the early return above — and spelled as the field so
+		// the two gates stay one set.
+		multiplexerHost: l.TmuxPane != "",
 	}
 }
 
@@ -1500,21 +1684,26 @@ func applyLauncherBackfill(l *session.Launcher, needs launcherBackfillNeeds, fre
 	if applyKittyLauncherBackfill(l, needs, fresh) {
 		updated = true
 	}
-	if applyHerdrHostBackfill(l, needs, fresh, hostKnown) {
+	if applyMultiplexerHostBackfill(l, needs, fresh, hostKnown) {
 		updated = true
 	}
 	return updated
 }
 
-// applyHerdrHostBackfill adopts the host identity a fresh read resolved from
-// the attached herdr client. Split out for the same reason
+// applyMultiplexerHostBackfill adopts the host identity a fresh read resolved
+// from the attached client. Split out for the same reason
 // applyKittyLauncherBackfill is — applyLauncherBackfill stays one branch per
 // *kind* of backfill — and because the two conditions it ANDs are unrelated
 // facts about different things, which is worth a line each rather than a
 // three-term conditional.
 //
-// needs.herdrHost comes from the STORED launcher: is this a herdr pane at all.
-// hostKnown comes from the FRESH read: did it determine a host. fresh was
+// needs.multiplexerHost comes from the STORED launcher: does this address a
+// pane at all.
+// hostKnown comes from the FRESH read: did it determine that pane's host — and
+// since #1501 those are genuinely two questions rather than one asked twice,
+// because a stored $TMUX_PANE can be inherited. Such a session satisfies the
+// need and fails hostKnown, and the AND below is what leaves its own identity
+// alone. fresh was
 // produced by the same reader, so its host fields are already the attached
 // client's, and a still-detached session yields none — AdoptHostIdentity then
 // reports no change rather than writing empties over empties.
@@ -1524,8 +1713,8 @@ func applyLauncherBackfill(l *session.Launcher, needs launcherBackfillNeeds, fre
 // resolved host on a probe that never ran (#1485). The stored host stays until
 // a probe actually answers; a genuine detach still clears it on the first
 // sweep whose probe runs.
-func applyHerdrHostBackfill(l *session.Launcher, needs launcherBackfillNeeds, fresh *session.Launcher, hostKnown bool) bool {
-	if !needs.herdrHost || !hostKnown {
+func applyMultiplexerHostBackfill(l *session.Launcher, needs launcherBackfillNeeds, fresh *session.Launcher, hostKnown bool) bool {
+	if !needs.multiplexerHost || !hostKnown {
 		return false
 	}
 	return l.AdoptHostIdentity(fresh)

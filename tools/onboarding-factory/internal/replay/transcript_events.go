@@ -33,14 +33,26 @@ import (
 // the transcript parser. The aider markdown path keeps a coarse mtime
 // approximation because aider transcripts carry no per-line timestamps.
 //
+// TranscriptNames are the transcript filenames a recording may carry, in
+// PREFERENCE order: a recording carrying both is read as the jsonl one, because
+// internal/validate/expected.go treats that shape as ambiguous and the choice
+// must not fall to directory iteration order.
+//
+// Exported because it is the catalog's rule rather than this function's: the
+// replay gates' catalog walk pairs a sidecar with a transcript by exactly this
+// list (cmd/replay/issue1517_pairing_test.go), and tools/replay-fixtures.sh
+// walks it too, in a `find -name` its own test pins to this variable. Three
+// hand-kept copies of the list is what #1517 was: the Go gates' copy said
+// transcript.jsonl alone, so every aider recording was graded by the sweep and
+// by no gate.
+var TranscriptNames = []string{"transcript.jsonl", "transcript.md"}
+
 // Returns nil if no transcript is present at any expected name.
 func SynthesizeEventsFromTranscript(scenarioDir, adapter string) []lifecycle.Event {
 	if hasParentTraversal(scenarioDir) {
 		return nil
 	}
-	// Try common transcript filenames in order.
-	candidates := []string{"transcript.jsonl", "transcript.md"}
-	for _, name := range candidates {
+	for _, name := range TranscriptNames {
 		path := filepath.Join(scenarioDir, name)
 		if _, err := os.Stat(path); err != nil {
 			continue

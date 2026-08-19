@@ -53,6 +53,7 @@ count() {
   ( set +u
     # shellcheck disable=SC1090
     source "$ROOT/replaydata/agents/$agent/turn-count.sh"
+    # shellcheck disable=SC2034  # read by the sourced replaydata/agents/<agent>/turn-count.sh's turn_count
     TRANSCRIPT="$transcript"
     turn_count )
 }

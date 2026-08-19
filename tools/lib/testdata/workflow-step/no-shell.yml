@@ -1,0 +1,10 @@
+name: No shell anywhere
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Plain step
+        run: |
+          echo one
+          echo two

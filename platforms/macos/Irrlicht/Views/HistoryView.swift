@@ -1053,6 +1053,12 @@ struct HistoryActivityContentView: View {
     let onExportCSV: () -> Void
     let onExportJSON: () -> Void
 
+    /// #1659 — the column headers and the tooltip render dates, so this view
+    /// takes the zone (and the tooltip's locale) as an INPUT rather than
+    /// letting `DateFormatter` read `NSTimeZone.default`.
+    @Environment(\.formatTimeZone) private var formatTimeZone
+    @Environment(\.formatLocale) private var formatLocale
+
     private static let cellWidth: CGFloat = 28
     private static let rowHeight: CGFloat = 34
     private static let rowLabelWidth: CGFloat = 130
@@ -1121,6 +1127,11 @@ struct HistoryActivityContentView: View {
     // backstop in case a very wide grid still reports past its frame.
     private var grid: some View {
         let maxTotal = computeMaxTotal()
+        // Hoisted out of the `ForEach` builders below: reading an
+        // `@Environment` property from a captured `self` inside an escaping
+        // builder closure is the pattern SwiftUI warns about, and a local costs
+        // nothing.
+        let zone = formatTimeZone
         return HStack(alignment: .top, spacing: 0) {
             // Sticky row-label column: not inside the horizontal ScrollView
             // below, so it never scrolls away as the grid scrolls sideways.
@@ -1140,7 +1151,7 @@ struct HistoryActivityContentView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(spacing: 0) {
                         ForEach(Array(data.bucketStarts.enumerated()), id: \.offset) { _, ts in
-                            Text(HistoryFormat.axisLabel(Date(timeIntervalSince1970: TimeInterval(ts)), bucketSeconds: data.bucketSeconds))
+                            Text(HistoryFormat.axisLabel(Date(timeIntervalSince1970: TimeInterval(ts)), bucketSeconds: data.bucketSeconds, timeZone: zone))
                                 .font(.system(size: 8))
                                 .foregroundColor(.secondary)
                                 .frame(width: Self.cellWidth, height: Self.rowHeight)
@@ -1178,8 +1189,10 @@ struct HistoryActivityContentView: View {
             }
         }
         .frame(width: Self.cellWidth, height: Self.rowHeight)
-        .tooltip(Self.tooltipText(project: project, ts: ts, counts: counts))
-        .accessibilityLabel(Self.tooltipText(project: project, ts: ts, counts: counts))
+        .tooltip(Self.tooltipText(project: project, ts: ts, counts: counts,
+                                  timeZone: formatTimeZone, locale: formatLocale))
+        .accessibilityLabel(Self.tooltipText(project: project, ts: ts, counts: counts,
+                                             timeZone: formatTimeZone, locale: formatLocale))
     }
 
     private func segHeight(_ count: Double, _ total: Double, _ barHeight: CGFloat) -> CGFloat {
@@ -1187,24 +1200,24 @@ struct HistoryActivityContentView: View {
         return max(0, CGFloat(count / total) * barHeight)
     }
 
-    /// Full date+time for the tooltip — the column header uses the existing
-    /// shared `HistoryFormat.axisLabel` (same HH:mm-vs-date split every other
-    /// chart's x-axis already uses), but nothing there covers a full
-    /// timestamp, so this one's genuinely new.
-    private static let fullDateTimeFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateStyle = .medium
-        f.timeStyle = .short
-        return f
-    }()
-
     /// Matches the web tooltip's field order (project, full timestamp, then
     /// working/waiting/ready). Ready is explicitly labeled as a per-bucket
     /// transition count, not a concurrency count — it has no duration to be
     /// "concurrent" in, unlike working/waiting.
-    private static func tooltipText(project: String, ts: Int64, counts: HistoryStateResponse.Counts) -> String {
+    ///
+    /// The full timestamp lives in `HistoryFormat.fullDateTime` (#1659) rather
+    /// than in a `private static let DateFormatter` here: it was the third
+    /// formatter in this file reading the machine, on both the zone and the
+    /// locale axis. Nothing asserts this particular pass-through, and that is
+    /// stated rather than implied — see `PinnedTimeZoneSnapshotTests`'
+    /// "what this suite does not reach" note for the measurement (a
+    /// window-less `NSHostingView` publishes no accessibility children, and
+    /// `.tooltip` draws into a separate `NSPanel`), so neither call site
+    /// contributes anything a test can read back.
+    private static func tooltipText(project: String, ts: Int64, counts: HistoryStateResponse.Counts,
+                                    timeZone: TimeZone, locale: Locale) -> String {
         let date = Date(timeIntervalSince1970: TimeInterval(ts))
-        let when = fullDateTimeFormatter.string(from: date)
+        let when = HistoryFormat.fullDateTime(date, timeZone: timeZone, locale: locale)
         return "\(project), \(when): \(Int(counts.working)) working, \(Int(counts.waiting)) waiting, \(Int(counts.ready)) transitioned to ready"
     }
 }
@@ -1215,6 +1228,9 @@ private struct HistoryCostChart: View {
     let data: HistoryResponse
     let orderedProjects: [String]
     var chart: HistoryChart = .cost
+
+    /// #1659 — the x-axis tick labels are dates.
+    @Environment(\.formatTimeZone) private var formatTimeZone
 
     private struct Datum: Identifiable {
         let id: String
@@ -1278,7 +1294,12 @@ private struct HistoryCostChart: View {
     }
 
     var body: some View {
-        Chart {
+        // Hoisted out of the escaping `AxisValueLabel` builder below (#1659):
+        // Swift Charts evaluates that closure outside `body`, where reading an
+        // `@Environment` property off a captured `self` is what SwiftUI warns
+        // about.
+        let zone = formatTimeZone
+        return Chart {
             ForEach(costData) { d in
                 AreaMark(
                     x: .value("Time", d.date),
@@ -1323,7 +1344,7 @@ private struct HistoryCostChart: View {
                 AxisGridLine()
                 AxisValueLabel {
                     if let d = value.as(Date.self) {
-                        Text(HistoryFormat.axisLabel(d, bucketSeconds: data.bucketSeconds))
+                        Text(HistoryFormat.axisLabel(d, bucketSeconds: data.bucketSeconds, timeZone: zone))
                     }
                 }
             }
@@ -1419,6 +1440,9 @@ struct QuotaProviderVM: Identifiable {
 struct HistoryQuotaForecastView: View {
     let providers: [QuotaProviderVM]
 
+    /// #1659 — the "▲ cap …" label is a wall-clock time.
+    @Environment(\.formatTimeZone) private var formatTimeZone
+
     var body: some View {
         VStack(alignment: .leading, spacing: IrrSpacing.sp3) {
             Text("Rate limits")
@@ -1465,7 +1489,7 @@ struct HistoryQuotaForecastView: View {
             HistoryQuotaChart(window: w, compact: true)
                 .frame(height: 84)
             if let cap = w.projectedCap {
-                Text("▲ cap \(HistoryFormat.clock(cap))")
+                Text("▲ cap \(HistoryFormat.clock(cap, timeZone: formatTimeZone))")
                     .font(.caption2)
                     .foregroundColor(IrrColors.waiting)
                     .lineLimit(1)
@@ -1486,6 +1510,12 @@ private struct HistoryQuotaChart: View {
     /// Strips the x-axis labels and the "cap" annotation for the small
     /// per-provider cards in the forecast strip.
     var compact: Bool = false
+
+    /// #1659 — the non-compact x-axis tick labels are dates. Note that the
+    /// only call site in the app today passes `compact: true`, so that branch
+    /// currently renders in no committed reference; the seam is wired anyway
+    /// so the first non-compact caller does not reintroduce the machine read.
+    @Environment(\.formatTimeZone) private var formatTimeZone
 
     private struct Pt: Identifiable {
         let id: String
@@ -1518,7 +1548,9 @@ private struct HistoryQuotaChart: View {
     private var showTime: Bool { window.end.timeIntervalSince(window.start) <= 86_400 }
 
     var body: some View {
-        Chart {
+        // Hoisted for the escaping `AxisValueLabel` builder below (#1659).
+        let zone = formatTimeZone
+        return Chart {
             RuleMark(y: .value("Cap", 100))
                 .foregroundStyle(IrrColors.pressureHigh.opacity(0.8))
                 .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
@@ -1561,7 +1593,7 @@ private struct HistoryQuotaChart: View {
                 if !compact {
                     AxisValueLabel {
                         if let d = v.as(Date.self) {
-                            Text(HistoryFormat.axisLabel(d, bucketSeconds: showTime ? 3_600 : 86_400))
+                            Text(HistoryFormat.axisLabel(d, bucketSeconds: showTime ? 3_600 : 86_400, timeZone: zone))
                         }
                     }
                 }
@@ -1636,29 +1668,77 @@ enum HistoryFormat {
         return tokens(v)
     }
 
-    // Cached formatters — DateFormatter init is expensive and these fire per
-    // axis tick. POSIX-pinned so snapshot tests stay stable; timezone tracks the
-    // process default (daemon + app share one Mac).
-    private static let hourMinute = posix("HH:mm")
-    private static let monthDay = posix("M/d")
-    private static let weekdayClock = posix("EEE h:mm a")
+    private static let hourMinuteFormat = "HH:mm"
+    private static let monthDayFormat = "M/d"
+    private static let weekdayClockFormat = "EEE h:mm a"
 
-    private static func posix(_ format: String) -> DateFormatter {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = format
-        return f
+    // Formatters are cached — `DateFormatter` init is expensive and these fire
+    // per axis tick and per activity-grid cell — but keyed by the time zone
+    // (and, for the full timestamp, the locale) they were built for, rather
+    // than being three process-global `static let`s.
+    //
+    // The old shape pinned the locale to `en_US_POSIX` and left `timeZone`
+    // unset, which meant every date string in the History panel came out of
+    // `NSTimeZone.default`: the machine (#1659). A caller now has to say which
+    // zone it wants, so a new call site is a compile error rather than another
+    // silent machine read; the views get theirs from `\.formatTimeZone`, whose
+    // default is `NSTimeZone.default` — by construction what the unset
+    // formatters already resolved through, so no user sees a different time.
+    private static let cacheLock = NSLock()
+    private static var cache: [String: DateFormatter] = [:]
+
+    private static func cached(_ key: String, _ make: () -> DateFormatter) -> DateFormatter {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        if let hit = cache[key] { return hit }
+        let made = make()
+        cache[key] = made
+        return made
+    }
+
+    /// POSIX-locale formatter for `format`, rendering in `zone`.
+    ///
+    /// `locale` is assigned before `dateFormat` on purpose: `dateFormat` is
+    /// interpreted against the formatter's current locale, so the reverse order
+    /// silently re-interprets the pattern.
+    private static func posix(_ format: String, _ zone: TimeZone) -> DateFormatter {
+        cached("posix\u{1}\(zone.identifier)\u{1}\(format)") {
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.timeZone = zone
+            f.dateFormat = format
+            return f
+        }
     }
 
     /// X-axis tick label: `HH:mm` for sub-day buckets, `M/d` otherwise —
     /// matching the web `histAxisLabel`.
-    static func axisLabel(_ date: Date, bucketSeconds: Int64) -> String {
-        (bucketSeconds < 86_400 ? hourMinute : monthDay).string(from: date)
+    static func axisLabel(_ date: Date, bucketSeconds: Int64, timeZone: TimeZone) -> String {
+        posix(bucketSeconds < 86_400 ? hourMinuteFormat : monthDayFormat, timeZone).string(from: date)
     }
 
     /// Weekday + 12-hour clock, e.g. "Sat 3:15 PM" — for projected-cap and reset.
-    static func clock(_ date: Date) -> String {
-        weekdayClock.string(from: date)
+    static func clock(_ date: Date, timeZone: TimeZone) -> String {
+        posix(weekdayClockFormat, timeZone).string(from: date)
+    }
+
+    /// Full date + time for the activity grid's tooltip / accessibility label.
+    ///
+    /// Unlike the axis formatters this one is deliberately **localised** —
+    /// `.medium` + `.short` in the reader's own conventions is the right thing
+    /// for a tooltip, and `\.formatLocale`'s default (`Locale.autoupdatingCurrent`)
+    /// is what an unset `DateFormatter.locale` already resolved through. Both
+    /// axes come from the caller for the same reason: so the value is an INPUT
+    /// and not a property of whichever Mac happens to be rendering.
+    static func fullDateTime(_ date: Date, timeZone: TimeZone, locale: Locale) -> String {
+        cached("full\u{1}\(timeZone.identifier)\u{1}\(locale.identifier)") {
+            let f = DateFormatter()
+            f.locale = locale
+            f.timeZone = timeZone
+            f.dateStyle = .medium
+            f.timeStyle = .short
+            return f
+        }.string(from: date)
     }
 }
 

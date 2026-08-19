@@ -103,8 +103,10 @@ func resolveSessionRepo() (*filesystem.SessionRepository, error) {
 // the (uncached) session list and the instances dir; ledger and log dirs honor
 // IRRLICHT_HOME via the same accessors the daemon writes through.
 // hookHealth is nil-meaningful: the daemon passes liveHookHealth, --diagnose
-// passes nil, and hooks.json reports which it got. See hooksView.
-func buildDiagnostics(fsRepo *filesystem.SessionRepository, allAgents []agent.Agent, cfg config.Config, hookHealth func() services.HookHealthSnapshot) *services.DiagnosticsService {
+// passes nil, and hooks.json reports which it got. See hooksView. probeHealth
+// (#1534) is nil-meaningful the same way and for a sharper reason — probesView
+// carries it.
+func buildDiagnostics(fsRepo *filesystem.SessionRepository, allAgents []agent.Agent, cfg config.Config, hookHealth func() services.HookHealthSnapshot, probeHealth func() services.ProbeHealthSnapshot) *services.DiagnosticsService {
 	home, _ := os.UserHomeDir()
 	ledgerDir, _ := metrics.LedgerDir()
 	logsDir, _ := logging.LogDir()
@@ -117,6 +119,7 @@ func buildDiagnostics(fsRepo *filesystem.SessionRepository, allAgents []agent.Ag
 		Cfg:            cfg,
 		Version:        Version,
 		HookHealth:     hookHealth,
+		ProbeHealth:    probeHealth,
 		Paths: services.DiagnosticsPaths{
 			Home:            home,
 			InstancesDir:    fsRepo.InstancesDir(),
@@ -149,6 +152,61 @@ func liveHookHealth(watchdog *services.HookLivenessWatchdog, verifier *services.
 			snap.UnknownEvents = append(snap.UnknownEvents, services.UnknownHookEvent{
 				Adapter: row.Adapter,
 				Event:   row.Event,
+				Count:   row.Count,
+			})
+		}
+		return snap
+	}
+}
+
+// liveProbeHealth snapshots the in-process probe counters for the diagnostics
+// bundle (issue #1534). Only the daemon wires it, and the reason differs from
+// liveHookHealth's in the one way that matters: the --diagnose CLI is not a
+// process that served no hooks, it is a process that DOES run these probes —
+// building processes.json shells out to pgrep and lsof through the same
+// observer — so its counts are small, real, and about nothing but its own
+// bundle collection. probesView omits them rather than publishing numbers that
+// would look like the daemon's.
+func liveProbeHealth() func() services.ProbeHealthSnapshot {
+	return func() services.ProbeHealthSnapshot {
+		rows := processlifecycle.ProbeCounts()
+		loops := processlifecycle.ClientLoopCounts()
+		gate := processlifecycle.HostGateCounts()
+		snap := services.ProbeHealthSnapshot{
+			Probes:                    make([]services.ProbeCount, 0, len(rows)),
+			OutcomeRule:               processlifecycle.ProbeOutcomeRule(),
+			UndeclaredKinds:           processlifecycle.UndeclaredProbeKinds(),
+			ClientLoops:               make([]services.ClientLoopCount, 0, len(loops)),
+			ClientLoopStarvationRule:  processlifecycle.ClientLoopStarvationRule(),
+			UndeclaredClientLoopKinds: processlifecycle.UndeclaredClientLoopKinds(),
+			// #1525's outcomes ride this snapshot rather than one of their own:
+			// an aborted walk is the downstream view of a probe that did not
+			// answer, so the two figures are only useful side by side, and one
+			// nil-meaningful seam is one thing to get wrong in --diagnose
+			// instead of two.
+			HostGate:                   make([]services.HostGateOutcomeCount, 0, len(gate)),
+			HostGateOutcomeRule:        processlifecycle.HostGateOutcomeRule(),
+			UndeclaredHostGateOutcomes: processlifecycle.UndeclaredHostGateOutcomes(),
+		}
+		for _, row := range rows {
+			snap.Probes = append(snap.Probes, services.ProbeCount{
+				Probe:      row.Probe,
+				Answered:   row.Answered,
+				Unanswered: row.Unanswered,
+				MemoHits:   row.MemoHits,
+			})
+		}
+		for _, row := range loops {
+			snap.ClientLoops = append(snap.ClientLoops, services.ClientLoopCount{
+				Multiplexer:       row.Multiplexer,
+				CandidatesProbed:  row.CandidatesProbed,
+				AbandonedOnBudget: row.AbandonedOnBudget,
+				StarvedByScan:     row.StarvedByScan,
+			})
+		}
+		for _, row := range gate {
+			snap.HostGate = append(snap.HostGate, services.HostGateOutcomeCount{
+				Outcome: row.Outcome,
 				Count:   row.Count,
 			})
 		}
@@ -206,7 +264,14 @@ func runDiagnose() {
 	// nil hook health on purpose: this process has served no hooks, so its
 	// counters are structurally zero and publishing them would read as an
 	// all-clear. hooks.json says so and points at GET /debug/bundle.
-	if err := buildDiagnostics(fsRepo, agents.All(), cfg, nil).WriteBundle(f); err != nil {
+	//
+	// nil probe health on purpose too, and NOT for the same reason (#1534):
+	// this process does run probes — WriteBundle's own processes.json walk
+	// shells out through the observer — so its counters are non-zero and
+	// describe only that walk. Publishing them under the daemon's field names
+	// would be a plausible-looking number nobody would check. probes.json says
+	// so and points at GET /debug/bundle.
+	if err := buildDiagnostics(fsRepo, agents.All(), cfg, nil, nil).WriteBundle(f); err != nil {
 		log.Fatalf("diagnose: write bundle: %v", err)
 	}
 	abs, _ := filepath.Abs(out)

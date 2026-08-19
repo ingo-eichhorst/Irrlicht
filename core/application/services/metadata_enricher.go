@@ -19,6 +19,38 @@ type metadataEnricher struct {
 	metrics outbound.MetricsCollector
 }
 
+// baseNameOf is the non-git project-name fallback: the directory's own name,
+// or "" for the degenerate roots that are not a name. It mirrors the tail of
+// the git adapter's GetProjectName, which is the only other place this
+// fallback is spelled.
+func baseNameOf(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	name := filepath.Base(dir)
+	if name == "." || name == "/" {
+		return ""
+	}
+	return name
+}
+
+// adoptIfAnswered writes v into *dst only when the git probe that produced it
+// actually RAN, and reports whether it did.
+//
+// Every git read on this enricher's paths returns ("", false) when git could
+// not be run at all (outbound.GitResolver, #1543), and that empty string is
+// not evidence: assigning it clears a branch or project name the session
+// already resolved, which is #1485's shape one adapter over. Declining also
+// leaves backfillOne's retry open — see the note there, which is the half of
+// this that made a transient failure PERMANENT.
+func adoptIfAnswered(dst *string, v string, answered bool) bool {
+	if !answered {
+		return false
+	}
+	*dst = v
+	return true
+}
+
 // newMetadataEnricher creates a metadataEnricher with the given dependencies.
 func newMetadataEnricher(git outbound.GitResolver, metrics outbound.MetricsCollector) *metadataEnricher {
 	return &metadataEnricher{git: git, metrics: metrics}
@@ -34,7 +66,31 @@ func (e *metadataEnricher) CaptureYieldOnReady(state *session.SessionState) {
 	if state == nil || state.YieldState == session.YieldReverted {
 		return
 	}
-	head := e.git.GetHeadCommit(state.CWD)
+	head, answered := e.git.GetHeadCommit(noGitBudget(), state.CWD)
+	if !answered {
+		// A git that could not be run must not overwrite a verdict already
+		// reached — that is #1543's polarity, and it is why an existing
+		// productive/reverted state is left alone here.
+		//
+		// But leaving state.YieldState EMPTY is not neutral, and #1551's QA
+		// (B2) is where that surfaced: aggregateYieldBySession skips every
+		// session with YieldState == "" outright, so the session's spend
+		// vanishes from the yield chart rather than landing in the unknown
+		// bucket — where main put it, since main read "" from a failed
+		// GetHeadCommit and wrote YieldUnknown. Unknown is not a false claim
+		// here; it is the honest bucket for "we cannot attribute this", which
+		// is exactly what a non-answer means.
+		//
+		// This is reachable and not hypothetical: a cleaned-up worktree is a
+		// PERMANENT non-answer for GetHeadCommit (cmd.Dir fails at chdir before
+		// exec, so there is no exit status at all), so "the next ready
+		// transition re-asks" — which the first draft of this comment relied on
+		// — is true only for transient failures.
+		if state.YieldState == "" {
+			state.YieldState = session.YieldUnknown
+		}
+		return
+	}
 	if head == "" {
 		state.YieldState = session.YieldUnknown
 		return
@@ -58,13 +114,11 @@ func (e *metadataEnricher) EnrichNewSession(state *session.SessionState, ev agen
 	// Resolve git metadata.
 	if ev.CWD != "" {
 		state.CWD = ev.CWD
-		state.GitBranch = e.git.GetBranch(ev.CWD)
-		state.ProjectName = e.git.GetProjectName(ev.CWD)
+		e.adoptGitMetadata(state, ev.CWD)
 	} else if ev.TranscriptPath != "" {
 		if cwd := e.git.GetCWDFromTranscript(ev.TranscriptPath); cwd != "" {
 			state.CWD = cwd
-			state.GitBranch = e.git.GetBranch(cwd)
-			state.ProjectName = e.git.GetProjectName(cwd)
+			e.adoptGitMetadata(state, cwd)
 		} else if b := e.git.GetBranchFromTranscript(ev.TranscriptPath); b != "" {
 			state.GitBranch = b
 		}
@@ -84,16 +138,31 @@ func (e *metadataEnricher) EnrichNewSession(state *session.SessionState, ev agen
 		// an already-resolved cwd above wins.
 		if state.CWD == "" && m.LastCWD != "" {
 			state.CWD = m.LastCWD
-			state.GitBranch = e.git.GetBranch(m.LastCWD)
-			state.ProjectName = e.git.GetProjectName(m.LastCWD)
+			e.adoptGitMetadata(state, m.LastCWD)
 		}
 	}
+}
+
+// adoptGitMetadata fills branch and project name from cwd, leaving either
+// untouched when git could not be run for it. Leaving them empty is what keeps
+// backfillOne willing to try again later.
+//
+// Two git calls, and deliberately no aggregate deadline over the pair — see
+// noGitBudget, which carries the argument for every enricher path.
+func (e *metadataEnricher) adoptGitMetadata(state *session.SessionState, cwd string) {
+	branch, branchAnswered := e.git.GetBranch(noGitBudget(), cwd)
+	adoptIfAnswered(&state.GitBranch, branch, branchAnswered)
+	name, nameAnswered := e.git.GetProjectName(noGitBudget(), cwd)
+	adoptIfAnswered(&state.ProjectName, name, nameAnswered)
 }
 
 // RefreshOnActivity refreshes CWD/branch/project from the latest transcript
 // content and recomputes metrics. A single transcript read serves both metrics
 // and CWD extraction, eliminating the redundant 32KB read that
 // GetCWDFromTranscript would perform.
+//
+// Up to three git calls, and deliberately no aggregate deadline over them —
+// see noGitBudget.
 func (e *metadataEnricher) RefreshOnActivity(state *session.SessionState, transcriptPath string) {
 	// Refresh metrics first — the tailer now extracts LastCWD during parsing,
 	// so we get CWD for free without a separate file read.
@@ -110,16 +179,61 @@ func (e *metadataEnricher) RefreshOnActivity(state *session.SessionState, transc
 	}
 	if cwd != "" && cwd != state.CWD {
 		state.CWD = cwd
-		state.GitBranch = e.git.GetBranch(cwd)
+		branch, branchAnswered := e.git.GetBranch(noGitBudget(), cwd)
+		// The session has MOVED, so what is held describes the OLD directory
+		// and #1485's "never overwrite what you already hold" does not protect
+		// it. Reporting another repo's branch is a false claim where an empty
+		// one is only a missing one, so the branch is dropped — which is also
+		// exactly what main did here (`state.GitBranch = e.git.GetBranch(cwd)`
+		// stored "" on failure), so this is not a behaviour change.
+		//
+		// state.CWD still advances: it comes from the transcript, not from
+		// git, so it is not the thing that went unread, and PID discovery
+		// needs it.
+		if !branchAnswered {
+			state.GitBranch = ""
+		} else {
+			state.GitBranch = branch
+		}
 		// Only update ProjectName when the new CWD is inside a git repo.
 		// For non-git directories, keep the original project name set at
 		// session creation to avoid subdirectory names overriding it.
 		// However, if ProjectName was never set (initial enrichment failed
 		// because the transcript was too new), use the full fallback chain.
-		if gitRoot := e.git.GetGitRoot(cwd); gitRoot != "" {
+		// ProjectName is deliberately NOT dropped on a non-answer, and it is
+		// the one field where that asymmetry with GitBranch above is correct
+		// rather than an oversight (#1551 QA, B1).
+		//
+		// Blanking it is destructive in a way blanking a branch is not: an
+		// empty ProjectName is bucketed as literally "unknown" by
+		// aggregateYieldBySession and is invisible to DORA, whose
+		// resolveDoraProjectRoot filters on `st.ProjectName != project`. So a
+		// git that merely failed to run costs the session its yield spend and
+		// its DORA membership.
+		//
+		// It is also what main did — `else if state.ProjectName == ""` is
+		// false for an already-named session, so main kept it — and it is what
+		// #1543's own polarity requires: a non-answer leaves what we already
+		// hold alone. The repair path is real but BOUNDED and idle-only
+		// (retryIdleProjectResolution, capped by
+		// maxIdleProjectResolveAttempts), so it cannot be relied on to undo a
+		// blanking; that is why nothing here claims a sweep will fix it.
+		gitRoot, rootAnswered := e.git.GetGitRoot(noGitBudget(), cwd)
+		switch {
+		case !rootAnswered:
+			// Leave ProjectName exactly as it is.
+		case gitRoot != "":
 			state.ProjectName = filepath.Base(gitRoot)
-		} else if state.ProjectName == "" {
-			state.ProjectName = e.git.GetProjectName(cwd)
+		case state.ProjectName == "":
+			// The basename is inlined rather than asked of GetProjectName,
+			// which would spend a SECOND bounded shellout to learn what this
+			// arm already knows: it is reachable only when the root probe
+			// answered and reported no repo, and GetProjectName's first act is
+			// to re-run exactly that probe. On main the empty root was
+			// ambiguous (error or not-a-repo) so re-asking was at least
+			// arguable; #1543 removed the ambiguity, which is what makes the
+			// second call provably dead rather than merely redundant.
+			state.ProjectName = baseNameOf(cwd)
 		}
 	}
 }
@@ -166,13 +280,27 @@ func (e *metadataEnricher) backfillOne(state *session.SessionState) bool {
 	if state.CWD == "" {
 		return updated
 	}
+	// updated is set only when git ANSWERED, and that is load-bearing rather
+	// than tidy. This function returns early above when ProjectName is already
+	// set, so a run that stored a value from a git which never ran would not be
+	// revisited here: one transient failure at first enrichment left a session
+	// with no project and no branch (#1543).
+	//
+	// What re-asks is NOT a sweep — there is no periodic backfill, and saying
+	// so precisely matters because the first draft of this comment claimed one
+	// (#1551 QA, B1). BackfillMetadata runs once, from seedBackfillMetadata at
+	// daemon start. The only other caller is retryIdleProjectResolution, which
+	// fires for an IDLE session whose ProjectName is still empty and is capped
+	// at maxIdleProjectResolveAttempts. So declining to store keeps that
+	// bounded retry open; it does not promise the value will eventually
+	// arrive.
 	if state.ProjectName == "" {
-		state.ProjectName = e.git.GetProjectName(state.CWD)
-		updated = true
+		name, answered := e.git.GetProjectName(noGitBudget(), state.CWD)
+		updated = adoptIfAnswered(&state.ProjectName, name, answered) || updated
 	}
 	if state.GitBranch == "" {
-		state.GitBranch = e.git.GetBranch(state.CWD)
-		updated = true
+		branch, answered := e.git.GetBranch(noGitBudget(), state.CWD)
+		updated = adoptIfAnswered(&state.GitBranch, branch, answered) || updated
 	}
 	return updated
 }

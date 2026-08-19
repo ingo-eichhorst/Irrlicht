@@ -94,8 +94,11 @@ SHELL_MODE=0
 # Per-slot state (1-based; index 0 unused). Each slot is one session lifetime.
 SES_SESSION=()
 SES_TRANSCRIPT=()
+# shellcheck disable=SC2034  # driver-owned slot array; the sourced replaydata/_lib/drive/slots.sh reads it (save_active/load_slot/alloc_slot)
 SES_UUID=()
+# shellcheck disable=SC2034  # driver-owned slot array; the sourced replaydata/_lib/drive/slots.sh reads it (save_active/load_slot/alloc_slot)
 SES_EXPECTED=()
+# shellcheck disable=SC2034  # driver-owned slot array; the sourced replaydata/_lib/drive/slots.sh reads it (save_active/load_slot/alloc_slot)
 SES_MARKER=()
 SES_CWD=()
 SES_ALIVE=()
@@ -112,6 +115,7 @@ TRUSTED_CWDS=()
 # EXACTLY the gemini fswatcher session_id (extractSessionID), so the shared
 # epilogue lists the right ids with no gemini-specific override.
 _DRIVE_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../_lib/drive" && pwd)"
+# shellcheck disable=SC2034  # read by the sourced replaydata/_lib/drive/slots.sh:56 (alloc_slot)
 DRIVE_MARKER_PREFIX="$STAGING/.gemini-marker"
 # shellcheck source=../../_lib/drive/slots.sh
 source "$_DRIVE_LIB/slots.sh"
@@ -125,7 +129,9 @@ source "$_DRIVE_LIB/teardown.sh"
 # has a working seam below; a primitive whose arm is still a `not_implemented`
 # stub must NOT appear here, so recipe-lint flags a recipe needing it as a
 # semantic_gap (exit 4) before recording.
+# shellcheck disable=SC2034  # scraped from this file's SOURCE by tools/onboarding-factory/scripts/lib/recipe-lint.sh:97 (sed), never expanded in shell
 DRIVE_ELICITS="send slash wait_turn keys sleep restart resume reset_session sigkill exit_clean start_session session"
+# shellcheck disable=SC2034  # scraped from this file's SOURCE by tools/onboarding-factory/scripts/lib/recipe-lint.sh:113 (sed), never expanded in shell
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 
 # --- API-key auth (shared by every launch) -----------------------------------
@@ -334,7 +340,7 @@ step_wait_turn() {
 #   {"type":"keys","keys":"Down"}   {"type":"keys","keys":"Down Down Enter"}
 step_keys() { # <keys>
   local keys="$1"
-  # shellcheck disable=SC2086 — intentional word-splitting of the key list
+  # shellcheck disable=SC2086  # intentional word-splitting of the key list
   tmux send-keys -t "$SESSION" $keys
   echo "[driver] keys[s$ACTIVE]: $keys" >&2
   # Gemini's `!` toggles shell mode ("esc to disable"). Track it so a following

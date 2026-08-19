@@ -6,13 +6,25 @@ import SnapshotTesting
 @MainActor
 final class SessionRowSnapshotTests: XCTestCase {
     private var sessionManager: SessionManager!
-    private var originalDisplayMode: Any?
-    private var originalDebugMode: Any?
-    private var originalShowCost: Any?
-    private var originalThresholdValue: Any?
-    private var originalThresholdUnit: Any?
-    private var originalSummaryDisplayMode: Any?
     private var savedAgentRegistry: [String: AgentBranding] = [:]
+
+    /// This suite's own preference store (#1662). It replaces a `setUp` that
+    /// overwrote six keys in the REAL `com.apple.dt.xctest.tool` domain —
+    /// `displayMode`, `debugMode`, `showCostDisplay`, both
+    /// `ContextPressureThreshold` keys and `summaryDisplayMode` — and a
+    /// `tearDown` that put them back, which the runs that abort (#1523), get
+    /// their tree killed at 240s or run out of `--budget` never reached.
+    ///
+    /// Empty on purpose: every one of those keys resolves to the value the
+    /// deleted `setUp` was assigning. `debugMode` and `showCostDisplay` default
+    /// to `false`; `ContextPressureThreshold` defaults to 80 percent (#689);
+    /// `displayMode` defaults to `DisplayMode.context`, which is what the old
+    /// pin's lowercase `"context"` decoded to as well (it is not a valid raw
+    /// value — `DisplayMode.context.rawValue` is `"Context"` — so it fell back
+    /// to the same case); and `SessionManager` reads `summaryDisplayMode` from
+    /// this store, where absent means `.waiting`, the pre-#985 default the old
+    /// `setUp` pinned. So no reference moved.
+    private let defaults = InMemoryDefaults()
 
     override func setUp() async throws {
         try await super.setUp()
@@ -23,28 +35,7 @@ final class SessionRowSnapshotTests: XCTestCase {
         // network call. Mirrors the SVGs in
         // core/adapters/inbound/agents/{antigravity,claudecode}/agent.go.
         savedAgentRegistry = AgentRegistry.byName
-        AgentRegistry.byName["antigravity"] = AgentBranding(
-            name: "antigravity",
-            displayName: "Antigravity",
-            iconSVGLight: """
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 100 100">
-              <g fill="none" stroke-width="15" stroke-linecap="round">
-                <path d="M16 82 Q27.3 39.3 38.7 25.1" stroke="#4285F4"/>
-                <path d="M38.7 25.1 Q50 10.9 61.3 25.1" stroke="#EA4335"/>
-                <path d="M61.3 25.1 Q72.7 39.3 84 82" stroke="#34A853"/>
-              </g>
-            </svg>
-            """,
-            iconSVGDark: """
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 100 100">
-              <g fill="none" stroke-width="15" stroke-linecap="round">
-                <path d="M16 82 Q27.3 39.3 38.7 25.1" stroke="#8AB4F8"/>
-                <path d="M38.7 25.1 Q50 10.9 61.3 25.1" stroke="#F28B82"/>
-                <path d="M61.3 25.1 Q72.7 39.3 84 82" stroke="#81C995"/>
-              </g>
-            </svg>
-            """
-        )
+        AgentRegistry.byName["antigravity"] = TestAgentBranding.antigravity
         AgentRegistry.byName["claude-code"] = AgentBranding(
             name: "claude-code",
             displayName: "Claude Code",
@@ -75,46 +66,12 @@ final class SessionRowSnapshotTests: XCTestCase {
             </svg>
             """
         )
-        // SessionRowView reads several keys via @AppStorage (UserDefaults.standard).
-        // Snapshot + restore so the developer's defaults survive the test run.
-        let defaults = UserDefaults.standard
-        originalDisplayMode = defaults.object(forKey: "displayMode")
-        originalDebugMode = defaults.object(forKey: "debugMode")
-        originalShowCost = defaults.object(forKey: "showCostDisplay")
-        originalThresholdValue = defaults.object(forKey: ContextPressureThreshold.valueKey)
-        originalThresholdUnit = defaults.object(forKey: ContextPressureThreshold.unitKey)
-        originalSummaryDisplayMode = defaults.object(forKey: "summaryDisplayMode")
-        defaults.set("context", forKey: "displayMode")
-        defaults.set(false, forKey: "debugMode")
-        defaults.set(false, forKey: "showCostDisplay")
-        // Pin the context-pressure threshold so the alert snapshot is independent
-        // of the developer's Settings (issue #689 made it configurable).
-        defaults.set(80, forKey: ContextPressureThreshold.valueKey)
-        defaults.set(ContextPressureThreshold.Unit.percent.rawValue, forKey: ContextPressureThreshold.unitKey)
-        // summaryDisplayMode persists (#799, mode added #985) — pin it so
-        // SessionManager's init value doesn't depend on the developer's real
-        // toggle state. "waiting" matches the pre-#985 default (not collapsed).
-        defaults.set(SummaryDisplayMode.waiting.rawValue, forKey: "summaryDisplayMode")
-        sessionManager = SessionManager()
+        sessionManager = SessionManager(defaults: defaults)
     }
 
     override func tearDown() async throws {
-        restore(key: "displayMode", value: originalDisplayMode)
-        restore(key: "debugMode", value: originalDebugMode)
-        restore(key: "showCostDisplay", value: originalShowCost)
-        restore(key: ContextPressureThreshold.valueKey, value: originalThresholdValue)
-        restore(key: ContextPressureThreshold.unitKey, value: originalThresholdUnit)
-        restore(key: "summaryDisplayMode", value: originalSummaryDisplayMode)
         AgentRegistry.byName = savedAgentRegistry
         try await super.tearDown()
-    }
-
-    private func restore(key: String, value: Any?) {
-        if let value {
-            UserDefaults.standard.set(value, forKey: key)
-        } else {
-            UserDefaults.standard.removeObject(forKey: key)
-        }
     }
 
     // A fixed, far-past instant: anything timestamped here reads as "stale" to
@@ -199,32 +156,31 @@ final class SessionRowSnapshotTests: XCTestCase {
         return session
     }
 
-    private func host(_ session: SessionState, height: CGFloat = 48) -> NSView {
+    private func host(_ session: SessionState, height: CGFloat = 48) -> PinnedSnapshotHost {
         host(SessionRowView(session: session, agentNumber: 1), height: height)
     }
 
-    private func host(_ view: some View, height: CGFloat = 48) -> NSView {
+    private func host(_ view: some View, height: CGFloat = 48) -> PinnedSnapshotHost {
         host(view, height: height, appearance: .darkAqua)
     }
 
-    private func hostLight(_ session: SessionState, height: CGFloat = 48) -> NSView {
+    private func hostLight(_ session: SessionState, height: CGFloat = 48) -> PinnedSnapshotHost {
         host(SessionRowView(session: session, agentNumber: 1), height: height, appearance: .aqua)
     }
 
-    private func host(_ view: some View, height: CGFloat = 48, appearance: NSAppearance.Name) -> NSView {
-        let wrapped = view
-            .environmentObject(sessionManager)
-            .frame(width: 350, height: height)
-            .background(Color(NSColor.windowBackgroundColor))
-        let hosting = NSHostingView(rootView: wrapped)
-        // Pin appearance explicitly so snapshots don't depend on the current
-        // system appearance (Color(NSColor.windowBackgroundColor) adapts
-        // otherwise) — most tests pin dark aqua; the light-mode pill
-        // contrast tests below (issue #984) pin aqua instead.
-        hosting.appearance = NSAppearance(named: appearance)
-        hosting.frame = CGRect(x: 0, y: 0, width: 350, height: height)
-        hosting.layoutSubtreeIfNeeded()
-        return hosting
+    private func host(_ view: some View, height: CGFloat = 48, appearance: NSAppearance.Name) -> PinnedSnapshotHost {
+        // Appearance is passed explicitly so snapshots don't depend on the
+        // current system appearance (Color(NSColor.windowBackgroundColor)
+        // adapts otherwise) — most tests pin dark aqua; the light-mode pill
+        // contrast tests below (issue #984) pin aqua instead. The host also
+        // pins the locale (#1630) and the preference store every `@AppStorage`
+        // in the subtree resolves through (#1662).
+        PinnedSnapshotHost(
+            view
+                .environmentObject(sessionManager)
+                .frame(width: 350, height: height)
+                .background(Color(NSColor.windowBackgroundColor)),
+            width: 350, height: height, appearance: appearance, defaults: defaults)
     }
 
     /// Decodes a daemon-shaped session fixture (issue #757). Accepts either a
@@ -263,7 +219,7 @@ final class SessionRowSnapshotTests: XCTestCase {
             SessionRowView(session: makeSession(state: .ready, metrics: makeMetrics()), agentNumber: 3)
         }
         let view = host(rows, height: 144)
-        assertSnapshot(of: view, as: .image)
+        assertSnapshot(of: view, as: .pinnedImage)
     }
 
     func testWaitingStateShowsQuestionBlock() {
@@ -272,7 +228,7 @@ final class SessionRowSnapshotTests: XCTestCase {
             metrics: makeMetrics(lastText: "Should I run the migration?")
         )
         let view = host(session, height: 72)
-        assertSnapshot(of: view, as: .image)
+        assertSnapshot(of: view, as: .pinnedImage)
     }
 
     /// Issue #979 — the question pill used to be pinned to a single line
@@ -288,7 +244,7 @@ final class SessionRowSnapshotTests: XCTestCase {
             )
         )
         let view = host(session, height: 96)
-        assertSnapshot(of: view, as: .image)
+        assertSnapshot(of: view, as: .pinnedImage)
     }
 
     /// Issue #984 — the question pill's text color used to be a fixed hex
@@ -302,7 +258,7 @@ final class SessionRowSnapshotTests: XCTestCase {
             metrics: makeMetrics(lastText: "Should I run the migration?")
         )
         let view = hostLight(session, height: 72)
-        assertSnapshot(of: view, as: .image)
+        assertSnapshot(of: view, as: .pinnedImage)
     }
 
     func testCollapsedHidesSummaryBlocks() {
@@ -315,7 +271,7 @@ final class SessionRowSnapshotTests: XCTestCase {
             metrics: makeMetrics(lastText: "Should I run the migration?")
         )
         let view = host(session, height: 48)
-        assertSnapshot(of: view, as: .image)
+        assertSnapshot(of: view, as: .pinnedImage)
     }
 
     /// Issue #985 — waiting mode gates the question pill by session state: a
@@ -328,13 +284,13 @@ final class SessionRowSnapshotTests: XCTestCase {
             metrics: makeMetrics(lastText: "Should I run the migration?")
         )
         let view = host(session, height: 48)
-        assertSnapshot(of: view, as: .image)
+        assertSnapshot(of: view, as: .pinnedImage)
     }
 
     func testContextBarShowsTokenLabel() {
         let session = makeSession(state: .working, metrics: makeMetrics())
         let view = host(session)
-        assertSnapshot(of: view, as: .image)
+        assertSnapshot(of: view, as: .pinnedImage)
     }
 
     private func sampleHistory() -> [String] {
@@ -345,11 +301,11 @@ final class SessionRowSnapshotTests: XCTestCase {
     }
 
     private func snapshotHistoryMode(_ mode: String, testName: String = #function) {
-        UserDefaults.standard.set(mode, forKey: "displayMode")
+        defaults.set(mode, forKey: "displayMode")
         let session = makeSession(state: .working, metrics: makeMetrics())
         sessionManager.stateHistory[session.id] = sampleHistory()
         let view = host(session)
-        assertSnapshot(of: view, as: .image, testName: testName)
+        assertSnapshot(of: view, as: .pinnedImage, testName: testName)
     }
 
     func testHistoryBar1MinPreservesModelLabel() {
@@ -372,16 +328,27 @@ final class SessionRowSnapshotTests: XCTestCase {
     /// fixture, whose metrics object carries zero tokens / zero utilization, so a
     /// separate zero-token unit case would render an identical row.)
     ///
-    /// Issue #1034: this and testFixtureAntigravityGhost both render the 14×14
-    /// antigravity SVG icon, whose rasterized anti-aliasing shifts slightly
-    /// across Xcode/toolchain versions. A failure confined to a few dozen
-    /// pixels around the icon (not the whole row) is that drift, not a real
-    /// regression — regenerate with `SNAPSHOT_TESTING_RECORD=failed swift
-    /// test --filter SessionRowSnapshotTests/<testName>` rather than chasing
-    /// a pixel-perfect match across toolchains.
+    /// Issue #1509: this and testFixtureAntigravityGhost both render the 14×14
+    /// antigravity SVG icon, and both used to fail with a diff confined to it.
+    /// That was diagnosed twice as toolchain antialiasing drift (#1034,
+    /// #1044) and treated by regenerating the references. It was not drift:
+    /// `adapterIcon` resolved its light/dark brand variant from
+    /// `NSApp.effectiveAppearance` — the process's appearance — while `host()`
+    /// below pins the *view* to `.darkAqua`, so on a Mac with macOS
+    /// auto-appearance the icon changed colour with the time of day and these
+    /// two tests were red at night and green by day. The reference PNG's own
+    /// history shows it oscillating rather than drifting: LIGHT (ade90bdc) →
+    /// DARK (b7e33c06) → LIGHT (e77e3a83). Each "regeneration" simply re-pinned
+    /// whichever variant the machine happened to be in.
+    ///
+    /// The icon now follows the appearance of the view it is drawn into, so
+    /// this render is appearance-independent; `AdapterIconAppearanceTests`
+    /// locks that directly and does not depend on the machine's own setting.
+    /// A diff confined to the icon is therefore a real regression now — do not
+    /// reach for `SNAPSHOT_TESTING_RECORD` before reading it.
     func testGhostRowPID0NilMetrics() {
         let session = makeSession(state: .ready, metrics: nil, pid: 0, adapter: "antigravity")
-        assertSnapshot(of: host(session), as: .image)
+        assertSnapshot(of: host(session), as: .pinnedImage)
     }
 
     // MARK: - Badges and markers
@@ -392,7 +359,7 @@ final class SessionRowSnapshotTests: XCTestCase {
             agentNumber: 1,
             activeSubagentCount: 3
         )
-        assertSnapshot(of: host(row), as: .image)
+        assertSnapshot(of: host(row), as: .pinnedImage)
     }
 
     func testBackgroundMoonDetached() {
@@ -401,7 +368,7 @@ final class SessionRowSnapshotTests: XCTestCase {
             metrics: makeMetrics(),
             background: BackgroundAgent(name: "nightly refactor", detached: true)
         )
-        assertSnapshot(of: host(session), as: .image)
+        assertSnapshot(of: host(session), as: .pinnedImage)
     }
 
     func testBackgroundMoonNonDetached() {
@@ -410,7 +377,7 @@ final class SessionRowSnapshotTests: XCTestCase {
             metrics: makeMetrics(),
             background: BackgroundAgent(name: "nightly refactor", detached: false)
         )
-        assertSnapshot(of: host(session), as: .image)
+        assertSnapshot(of: host(session), as: .pinnedImage)
     }
 
     func testCacheBloatBadgeAttributed() {
@@ -422,7 +389,7 @@ final class SessionRowSnapshotTests: XCTestCase {
                 cacheBloatExplanation: "This session is creating prompt-cache tokens well above normal for this project — it's getting less benefit from caching and costing more per turn. Likely tied to claude-code 2.1.143 +14K cache tokens vs 2.1.98. Common causes: an agent update that changed context construction, large or varying pasted content each turn, or frequent context resets (e.g. /clear)."
             )
         )
-        assertSnapshot(of: host(session, height: 72), as: .image)
+        assertSnapshot(of: host(session, height: 72), as: .pinnedImage)
     }
 
     // #813: no version attribution → the badge falls back to a compact label
@@ -436,7 +403,7 @@ final class SessionRowSnapshotTests: XCTestCase {
                 cacheBloatExplanation: "This session is creating prompt-cache tokens well above normal for this project — it's getting less benefit from caching and costing more per turn. Common causes: an agent update that changed context construction, large or varying pasted content each turn, or frequent context resets (e.g. /clear)."
             )
         )
-        assertSnapshot(of: host(session, height: 72), as: .image)
+        assertSnapshot(of: host(session, height: 72), as: .pinnedImage)
     }
 
     func testContextPressureAlert() {
@@ -445,7 +412,7 @@ final class SessionRowSnapshotTests: XCTestCase {
             state: .working,
             metrics: makeMetrics(tokens: 920_000, pressure: "critical", utilization: 92)
         )
-        assertSnapshot(of: host(session, height: 72), as: .image)
+        assertSnapshot(of: host(session, height: 72), as: .pinnedImage)
     }
 
     func testRoleOrchestratorRow() {
@@ -457,19 +424,19 @@ final class SessionRowSnapshotTests: XCTestCase {
             workerName: "witness-1",
             workerID: "bead-12345678ab"
         )
-        assertSnapshot(of: host(session), as: .image)
+        assertSnapshot(of: host(session), as: .pinnedImage)
     }
 
     func testRelayCloudOnline() {
         sessionManager.relayDaemons = ["mac-studio": "Mac Studio"]
         let session = makeSession(state: .working, metrics: makeMetrics(), daemonID: "mac-studio")
-        assertSnapshot(of: host(session), as: .image)
+        assertSnapshot(of: host(session), as: .pinnedImage)
     }
 
     func testRelayCloudOfflineFade() {
         sessionManager.offlineDaemons = ["mac-studio": "Mac Studio"]
         let session = makeSession(state: .ready, metrics: makeMetrics(), daemonID: "mac-studio")
-        assertSnapshot(of: host(session), as: .image)
+        assertSnapshot(of: host(session), as: .pinnedImage)
     }
 
     /// Progress chip without a projection (taskCompletionEta nil): renders the
@@ -487,7 +454,7 @@ final class SessionRowSnapshotTests: XCTestCase {
                 )
             )
         )
-        assertSnapshot(of: host(session, height: 72), as: .image)
+        assertSnapshot(of: host(session, height: 72), as: .pinnedImage)
     }
 
     /// All rounds reported done while the session is still working: the chip
@@ -508,24 +475,25 @@ final class SessionRowSnapshotTests: XCTestCase {
                 )
             )
         )
-        assertSnapshot(of: host(session, height: 72), as: .image)
+        assertSnapshot(of: host(session, height: 72), as: .pinnedImage)
     }
 
     // MARK: - Fixture-driven rendering (issue #757)
 
     /// Drives a render straight from a captured `{type, session}` websocket
     /// envelope — the antigravity PID=0 ghost that Phase 1's trace explains.
-    /// See testGhostRowPID0NilMetrics for a note on toolchain-drift pixel
-    /// diffs isolated to this fixture's icon (issue #1034).
+    /// See testGhostRowPID0NilMetrics for why a diff isolated to this
+    /// fixture's icon used to be dismissed as toolchain drift, and why it is
+    /// no longer (issue #1509).
     func testFixtureAntigravityGhost() throws {
         let session = try loadSession("antigravity-ghost.json")
-        assertSnapshot(of: host(session), as: .image)
+        assertSnapshot(of: host(session), as: .pinnedImage)
     }
 
     /// Drives a render from a bare daemon `SessionState` object (no envelope) —
     /// a substantive working Claude Code session with high context fill.
     func testFixtureWorkingClaude() throws {
         let session = try loadSession("working-claude.json")
-        assertSnapshot(of: host(session, height: 72), as: .image)
+        assertSnapshot(of: host(session, height: 72), as: .pinnedImage)
     }
 }

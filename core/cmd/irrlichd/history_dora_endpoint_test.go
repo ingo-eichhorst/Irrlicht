@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -19,17 +20,19 @@ type fakeDoraGit struct {
 	commitsByTag map[string][]dora.CommitInfo
 }
 
-func (f fakeDoraGit) GetGitRoot(dir string) string { return dir }
-func (f fakeDoraGit) ListReleaseTags(dir string) []dora.TagInfo {
+func (f fakeDoraGit) GetGitRoot(_ context.Context, dir string) (string, bool) { return dir, true }
+func (f fakeDoraGit) ListReleaseTags(_ context.Context, dir string) ([]dora.TagInfo, bool) {
 	if dir == "" {
-		return nil
+		return nil, true
 	}
-	return f.tags
+	return f.tags, true
 }
-func (f fakeDoraGit) CommitsInRange(dir, fromRef, toRef string) []dora.CommitInfo {
-	return f.commitsByTag[toRef]
+func (f fakeDoraGit) CommitsInRange(_ context.Context, dir, fromRef, toRef string) ([]dora.CommitInfo, bool) {
+	return f.commitsByTag[toRef], true
 }
-func (f fakeDoraGit) TagContaining(dir, hash string) string { return "" }
+func (f fakeDoraGit) TagContaining(_ context.Context, dir, hash string) (string, bool) {
+	return "", true
+}
 
 func doraSession(id, project, cwd string) *session.SessionState {
 	return &session.SessionState{SessionID: id, State: session.StateReady, ProjectName: project, CWD: cwd}

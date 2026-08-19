@@ -26,10 +26,15 @@ import (
 //
 // The sentinel is keyed on those symptoms, NOT on the adapter, and the
 // distinction is worth stating because the obvious reading is wrong. For most
-// of the 56 fallbacks the cause really is an adapter property: opencode (30)
-// and hermes (24) are agent.ProcessOwnedStore, with no transcript file for the
-// daemon to watch and so no fswatcher fire to record, and aider is
-// agent.FilesUnderCWD, with no session identifier of its own.
+// of these fallbacks the cause really is an adapter property: opencode and
+// hermes are agent.ProcessOwnedStore, with no transcript file for the daemon to
+// watch and so no fswatcher fire to record, and aider is agent.FilesUnderCWD,
+// with no session identifier of its own — which is why nearly every aider
+// recording lands here. The size of the population is
+// censusOfTheCommittedCatalog.PairedButUngraded, machine-generated, and is not
+// restated here: the count this sentence used to carry described the catalog
+// before #1517 widened the walk to pair transcript.md, and so silently stopped
+// including the aider recordings the very next clause names.
 //
 // The remaining two are recording-level, and they are the reason this comment
 // does not claim otherwise: mistral-vibe is agent.FilesUnderRoot
@@ -139,9 +144,11 @@ func replayWithSidecar(transcriptPath, sidecarPath string, cfg reportSettings) (
 // Two candidates were checked and one was ruled out: relaxing
 // flushPendingDebounce's `!d.coalesced` early-return changes nothing (measured
 // on codex/2-1_basic-turn — still 1 transition), so a skipped trailing flush is
-// NOT it. Incomplete fs-event coverage is real but explains only 30 of 311
-// sidecar-drivable recordings, and only 1 of the 22 worst-degraded (the other
-// 21 have 100% coverage). What is established is that the sidecar timeline's
+// NOT it. Incomplete fs-event coverage is real but explains only 30 of the
+// sidecar-drivable population — censusOfTheCommittedCatalog.Recordings, which
+// is machine-generated precisely so a denominator is not carried by hand here
+// (#1518) — and only 1 of the 22 worst-degraded (the other 21 have 100%
+// coverage). What is established is that the sidecar timeline's
 // last observed metrics are frequently not the transcript's final metrics.
 //
 // The split this function implements is sound regardless of that cause:
@@ -752,6 +759,13 @@ func (r *sidecarReplayer) classifyAt(fileSize int64, ctx transitionCtx) error {
 // low. Diverges' doc comment names the two near-misses and the single committed
 // recording that separates them.
 //
+// The table is #1478's calibration, measured over the catalog as it stood then
+// and kept as the evidence for the window that shipped. Its columns are counts
+// over that population, so they no longer equal the live gate's figures — #1517
+// widened the walk and the shipped row's divergent/pairs columns moved with it.
+// Read it as a comparison BETWEEN the rows, which is what it was built for, not
+// as a current measurement:
+//
 //	                          zero  fabricated  divergent  drift>1s  pairs
 //	#1476 as shipped             4           1        145       119    818
 //	+ 2ms cluster window         4           1        143       118    821
@@ -872,8 +886,10 @@ var readBoundaryClusterWindow = 10 * time.Millisecond
 // pass's own timestamp, and `at` is never reassigned — so the rule can never go
 // transitive across an idle period no matter how many events follow. The
 // `break` is therefore a pure early exit, valid because the fswatch stream is
-// Seq-sorted and its dequeue timestamps are monotonic (verified: 0 of 309
-// committed recordings have a non-monotonic fswatch timestamp in Seq order).
+// Seq-sorted and its dequeue timestamps are monotonic (re-verified for #1517's
+// widened walk: of the catalog's 396 committed sidecars, 393 carry a
+// transcript_activity stream and NONE has a non-monotonic timestamp in Seq
+// order — including the two recordings the widening newly reaches).
 // Do NOT "restore" a chained form by comparing j to j-1: that would silently
 // turn a bounded 10ms rule into an unbounded walk and invalidate the
 // calibration.
@@ -924,10 +940,35 @@ func (r *sidecarReplayer) clusterBoundary(eventIdx int) int64 {
 // auto-detects only a sibling named <transcript>.events.jsonl while every
 // sidecar in replaydata/ is named plain events.jsonl. See issue #1326.
 //
-// Hooks absent from the table are still ignored here. Stop could not be a table
-// row (its effect needs a payload lifecycle.Event does not carry); Notification
-// and PreCompact could be, but no recording in replaydata/ fires one — add each
-// as a table row together with the first recording that does.
+// Hooks absent from the table are still ignored here: Notification and
+// PreCompact could be rows, but no recording in replaydata/ fires one — add
+// each as a table row together with the first recording that does. Stop WAS
+// in that sentence until #1695; see hookSignalEffects for why a payload-free
+// row is a floor rather than a wrong answer, and TestStopHookIsGradedByTheCommittedCatalog
+// for the recording that now grades it.
+//
+// NoSubstantiveActivity is cleared before the overlay, and that one line is
+// what made the Stop channel reachable at all (#1695). The flag is PER PASS —
+// tailer.go sets it as `scan.linesParsed > 0 && !scan.substantive`, and
+// session_detector_activity.go's own comment says so in as many words — but
+// r.lastMetrics is the last TRANSCRIPT batch's metrics, and a hook pass is a
+// different pass that parses no transcript lines. Carrying the flag across was
+// therefore asserting something the harness never observed, and runClassifier's
+// mirror of #329's short-circuit then swallowed the hook: measured on codex's
+// 2-13_turn-end-terminal-text, the Stop overlaid HookTurnDone and the
+// classifier answered `ready / "agent finished turn → ready"` — and the
+// short-circuit above discarded it, one instruction before it would have been
+// emitted. The daemon does not have this problem because a hook's synthetic
+// activity event goes through processActivity, whose RefreshOnActivity re-tails
+// and RECOMPUTES the flag for that pass; false is what a zero-line pass yields.
+//
+// The declared limit: false is an approximation of that recomputation, not the
+// recomputation. A daemon pass that read new-but-non-substantive bytes between
+// the last fs event and the hook would compute true and skip, where this
+// computes false and classifies. That case cannot be reconstructed from the
+// sidecar (it records no stat for the hook's own moment), and the approximation
+// errs toward reproducing the daemon's recorded transition rather than toward
+// dropping it — which is the direction the whole extended check is scored in.
 func (r *sidecarReplayer) applyHookEvent(hookEv lifecycle.Event) {
 	effect, ok := session.HookSignal(hookEv.HookName)
 	if !ok {
@@ -938,6 +979,7 @@ func (r *sidecarReplayer) applyHookEvent(hookEv lifecycle.Event) {
 		return
 	}
 	domainMetrics := replayengine.TailerToDomain(r.lastMetrics)
+	domainMetrics.NoSubstantiveActivity = false
 	r.signals.Overlay(replaySessionKey, domainMetrics, hookEv.Timestamp)
 	r.runClassifier(domainMetrics, transitionCtx{eventIdx: -1, virtTime: hookEv.Timestamp, cause: causeHook}, true)
 }

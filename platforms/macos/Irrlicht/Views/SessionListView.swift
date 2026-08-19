@@ -208,6 +208,24 @@ struct SessionListView: View {
     static let panelWidth: CGFloat = 380
 
     @EnvironmentObject var sessionManager: SessionManager
+    // Only reaches the adapter-icon fallback in the quota chip, which
+    // re-tints it as a template — but the variant is the view's to pick,
+    // never the process's (#1509).
+    @Environment(\.colorScheme) private var colorScheme
+    /// The zone and locale the quota tooltip's clock renders in (#1663).
+    /// Defaults are `NSTimeZone.default` / `Locale.autoupdatingCurrent`, which
+    /// is exactly what the unset `DateFormatter` this replaced resolved
+    /// through — see `QuotaResetFormat`.
+    @Environment(\.formatTimeZone) private var formatTimeZone
+    @Environment(\.formatLocale) private var formatLocale
+    /// The clock every quota rendering in this panel resolves "now" from
+    /// (#1675). Read ONCE per body evaluation and passed down as an argument,
+    /// so the chip's three time-dependent answers — which snapshot counts as
+    /// stale, where the pace marker sits, and "resets in 4h 12m" — cannot be
+    /// computed against three different instants. Its default is
+    /// `FormatNow.wallClock`, which is by construction the `Date()` each of
+    /// those sites read for itself before.
+    @Environment(\.formatNow) private var formatNow
     @EnvironmentObject var gasTownProvider: GasTownProvider
     @EnvironmentObject var updateManager: UpdateManager
     @State private var isQuitButtonHovered = false
@@ -471,7 +489,11 @@ struct SessionListView: View {
                 // Em-dash + glyphs are visually redundant once any quota
                 // chip is filling the slot — the chip already implies
                 // session activity. Hide them while a chip is present.
-                if quotaChipData.isEmpty || !showQuotaForecast {
+                // The clock is an argument here only because the derivation
+                // takes one; emptiness is decided by whether any session
+                // carries a snapshot at all, which no instant can change.
+                if Self.quotaChipData(sessions: sessionManager.sessions, now: formatNow()).isEmpty
+                    || !showQuotaForecast {
                     Text("—")
                         .foregroundColor(.secondary)
 
@@ -549,7 +571,7 @@ struct SessionListView: View {
     @ViewBuilder
     private var headerTitleView: some View {
         if showQuotaForecast {
-            let chips = quotaChipData
+            let chips = Self.quotaChipData(sessions: sessionManager.sessions, now: formatNow())
             if !chips.isEmpty {
                 let visible = Array(chips.prefix(Self.maxVisibleQuotaChips))
                 let hidden = Array(chips.dropFirst(Self.maxVisibleQuotaChips))
@@ -616,7 +638,7 @@ struct SessionListView: View {
     /// Render mode for a provider chip. Subscription chips show the
     /// provider-emitted quota bars; usage chips show cumulative spend across all
     /// sessions on that provider.
-    private enum QuotaMode {
+    enum QuotaMode {
         case subscription
         case usage
     }
@@ -626,31 +648,62 @@ struct SessionListView: View {
     /// most-imminent window (subscription only), and the summed spend
     /// (usage only). `id` is the providerKey so SwiftUI ForEach has a
     /// stable identity.
-    private struct QuotaWidgetData: Identifiable {
+    ///
+    /// Deliberately carries **no** `isStale` since #1675. It used to, and that
+    /// made staleness a second spelling of a fact already implied by
+    /// `snapshot` — `snapshotIsStale(snapshot, now:)` returns the merge's own
+    /// verdict for every path through `mergeIntoBuckets` (locked by
+    /// `QuotaChipClockTests.testTheMergeNeverKeepsASnapshotWhoseStalenessDisagreesWithIt`),
+    /// so the two could only ever differ by drifting. Dropping it is also what
+    /// lets the flip be graded where it is *visible*: the chip re-derives it
+    /// inside `QuotaStaleDimmed`, from that subtree's `\.formatNow`, which a
+    /// snapshot host can pin and a test can rasterise twice.
+    struct QuotaWidgetData: Identifiable {
         let id: String
         let mode: QuotaMode
         let snapshot: RateLimitInfo
         let session: SessionState
         let imminent: RateLimitWindowInfo?
         let totalCostUSD: Double
-        let isStale: Bool
     }
 
     /// All chips to render, one per subscription/usage provider. See
-    /// `bucketForChips` for the bucketing rules.
-    private var quotaChipData: [QuotaWidgetData] {
+    /// `mergeIntoBuckets` for the bucketing rules.
+    ///
+    /// `static` and pure since #1675: `now` is a required argument, so the
+    /// staleness branch below is decided by an input rather than by the
+    /// machine, and `headerTitleView` passes the one `\.formatNow()` read it
+    /// makes per body evaluation. A call site with nothing to pass is
+    /// `error: missing argument for parameter 'now' in call` — #1659's shape,
+    /// which is what #1663 adopted for `QuotaResetFormat` and what this
+    /// extends.
+    static func quotaChipData(sessions: [SessionState], now: Date) -> [QuotaWidgetData] {
         var byProvider: [String: ChipBucket] = [:]
-        for session in sessionManager.sessions {
-            mergeIntoBuckets(session: session, into: &byProvider)
+        for session in sessions {
+            mergeIntoBuckets(session: session, into: &byProvider, now: now)
         }
         return byProvider
             .map { id, b in b.toWidgetData(id: id) }
             .sorted { $0.id < $1.id }
     }
 
+    /// True when any of `snap`'s windows has already reset at `now` — the
+    /// snapshot describes a window the provider has rolled over without us
+    /// seeing a fresh tick.
+    ///
+    /// The one implementation of the chip's staleness test (#1675). It is a
+    /// **discrete** function of the clock, which is what makes it a sharper
+    /// snapshot hazard than the pace marker: a reference recorded a minute
+    /// before a fixture's `resetsAt` is correct, and permanently wrong a minute
+    /// later. Callers pass the clock they render against; nothing here reads
+    /// one.
+    static func snapshotIsStale(_ snap: RateLimitInfo, now: Date) -> Bool {
+        snap.windows.contains(where: { $0.resetsAt <= now })
+    }
+
     /// Mutable accumulator for one provider bucket while folding
     /// sessions into chips.
-    private struct ChipBucket {
+    struct ChipBucket {
         var snapshot: RateLimitInfo
         var session: SessionState
         var imminent: RateLimitWindowInfo?
@@ -670,8 +723,7 @@ struct SessionListView: View {
                 snapshot: snapshot,
                 session: session,
                 imminent: imminent,
-                totalCostUSD: totalCostUSD,
-                isStale: isStale
+                totalCostUSD: totalCostUSD
             )
         }
     }
@@ -698,10 +750,17 @@ struct SessionListView: View {
     /// label ("cumulative spend across active sessions"). The usage chip
     /// itself renders the daemon's windowed per-provider rollup
     /// (`SessionManager.providerCosts`), not this cumulative figure.
-    private func mergeIntoBuckets(session: SessionState, into buckets: inout [String: ChipBucket]) {
+    ///
+    /// `now` is a required argument since #1675 — it used to be a `Date()` read
+    /// two lines down, which decided `isStale` and therefore the chip's
+    /// opacity. It is also read ONCE for the whole fold now rather than once
+    /// per session, so two sessions in the same evaluation cannot be judged
+    /// stale against two different instants.
+    static func mergeIntoBuckets(session: SessionState,
+                                 into buckets: inout [String: ChipBucket],
+                                 now: Date) {
         guard let snap = session.metrics?.rateLimit else { return }
-        let now = Date()
-        let snapIsStale = snap.windows.contains(where: { $0.resetsAt <= now })
+        let snapIsStale = snapshotIsStale(snap, now: now)
         let key = snap.providerKey(adapter: session.adapter)
             ?? "unknown:\(session.adapter ?? "")"
         let mode = resolveChipMode(snap: snap, providerKey: key)
@@ -753,7 +812,7 @@ struct SessionListView: View {
     /// Resolve which chip variant to render for a snapshot, honouring
     /// the user's per-provider preference (Settings → Providers) and
     /// falling back to auto-detection from snapshot shape.
-    private func resolveChipMode(snap: RateLimitInfo, providerKey: String) -> QuotaMode {
+    static func resolveChipMode(snap: RateLimitInfo, providerKey: String) -> QuotaMode {
         let preference = ProviderModePreference.current(for: providerKey)
         switch preference {
         case .subscription: return .subscription
@@ -770,54 +829,60 @@ struct SessionListView: View {
     ///   - usage        → provider icon + windowed spend, click-to-cycle (mockup 2)
     @ViewBuilder
     private func quotaChipView(_ d: QuotaWidgetData, compact: Bool) -> some View {
-        HStack(spacing: 6) {
-            // Provider icon (Anthropic / OpenAI) when we can infer one;
-            // otherwise fall back to the adapter icon so the chip never
-            // appears iconless. The quota bucket is provider-scoped, so
-            // the provider mark is the more meaningful brand.
-            //
-            // `.resizable().frame(...)` is load-bearing: `NSImage(data:)`
-            // on an SVG decodes inconsistently depending on the path's
-            // complexity — the Anthropic single-path mark lands at the
-            // SVG's declared 14×14 size, but the OpenAI multi-path knot
-            // decoded at viewBox-native 24×24, dominating the chip and
-            // pushing the body out of view. Forcing the SwiftUI frame
-            // normalises both regardless of underlying decode quirks.
-            if let icon = ProviderIconRegistry.image(forKey: d.snapshot.providerKey(adapter: d.session.adapter))
-                ?? d.session.adapterIcon {
-                Image(nsImage: icon)
-                    .resizable()
-                    .renderingMode(.template)
-                    .frame(width: 14, height: 14)
-                    .foregroundColor(.primary)
-            }
-            switch d.mode {
-            case .subscription:
-                if d.snapshot.windows.isEmpty {
-                    // Subscription forced (or auto-detected) but the snapshot
-                    // carries no rate-limit windows. Symmetric with the usage
-                    // zero-state: a short phrase rather than an empty chip.
-                    Text("no subscription data")
-                        .font(.system(size: 9, design: .monospaced))
-                        .foregroundColor(.secondary)
-                        .frame(minWidth: 88, alignment: .leading)
-                } else {
-                    VStack(alignment: .leading, spacing: 1) {
-                        ForEach(d.snapshot.windows, id: \.windowMinutes) { window in
-                            quotaWindowRow(window, compact: compact)
+        // Stale snapshots render at half opacity so the user can tell the data
+        // pre-dates the current window — the values are still visible (better
+        // than an empty header) but visibly muted, and the tooltip names the
+        // staleness explicitly. Since #1675 the dimming lives in
+        // `QuotaStaleDimmed`, which decides it from ITS OWN subtree's
+        // `\.formatNow`: this is the one pixel-visible consequence of the
+        // chip's clock, and a wrapper is what lets a test rasterise it under
+        // two pinned clocks. The modifier order is unchanged — the tooltip
+        // still applies outside the opacity.
+        QuotaStaleDimmed(snapshot: d.snapshot) {
+            HStack(spacing: 6) {
+                // Provider icon (Anthropic / OpenAI) when we can infer one;
+                // otherwise fall back to the adapter icon so the chip never
+                // appears iconless. The quota bucket is provider-scoped, so
+                // the provider mark is the more meaningful brand.
+                //
+                // `.resizable().frame(...)` is load-bearing: `NSImage(data:)`
+                // on an SVG decodes inconsistently depending on the path's
+                // complexity — the Anthropic single-path mark lands at the
+                // SVG's declared 14×14 size, but the OpenAI multi-path knot
+                // decoded at viewBox-native 24×24, dominating the chip and
+                // pushing the body out of view. Forcing the SwiftUI frame
+                // normalises both regardless of underlying decode quirks.
+                if let icon = ProviderIconRegistry.image(forKey: d.snapshot.providerKey(adapter: d.session.adapter))
+                    ?? d.session.adapterIcon(isDark: colorScheme == .dark) {
+                    Image(nsImage: icon)
+                        .resizable()
+                        .renderingMode(.template)
+                        .frame(width: 14, height: 14)
+                        .foregroundColor(.primary)
+                }
+                switch d.mode {
+                case .subscription:
+                    if d.snapshot.windows.isEmpty {
+                        // Subscription forced (or auto-detected) but the snapshot
+                        // carries no rate-limit windows. Symmetric with the usage
+                        // zero-state: a short phrase rather than an empty chip.
+                        Text("no subscription data")
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundColor(.secondary)
+                            .frame(minWidth: 88, alignment: .leading)
+                    } else {
+                        VStack(alignment: .leading, spacing: 1) {
+                            ForEach(d.snapshot.windows, id: \.windowMinutes) { window in
+                                QuotaWindowRow(window: window, compact: compact)
+                            }
                         }
                     }
+                case .usage:
+                    quotaUsageBody(d, compact: compact)
                 }
-            case .usage:
-                quotaUsageBody(d, compact: compact)
             }
         }
-        // Stale snapshots render at half opacity so the user can tell
-        // the data pre-dates the current window — the values are still
-        // visible (better than an empty header) but visibly muted, and
-        // the tooltip names the staleness explicitly.
-        .opacity(d.isStale ? 0.5 : 1.0)
-        .tooltip(quotaTooltip(d))
+        .tooltip(quotaTooltip(d, now: formatNow()))
     }
 
     /// Usage-mode chip body — windowed spend on this provider for the
@@ -869,46 +934,19 @@ struct SessionListView: View {
         return String(format: "$%.2f", cost)
     }
 
-    /// One row inside a chip. In compact mode (multiple chips visible)
-    /// the inline reset time is dropped — it lives in the tooltip — and
-    /// the bar shrinks so two or three chips fit in the 380pt header.
-    @ViewBuilder
-    private func quotaWindowRow(_ w: RateLimitWindowInfo, compact: Bool) -> some View {
-        // Compute once per row — SwiftUI re-invokes view bodies on every
-        // SessionManager publish, and calling quotaPacePercent twice
-        // would also let two Date() captures disagree by microseconds.
-        let pace = Self.quotaPacePercent(w)
-        HStack(spacing: 6) {
-            Text(quotaWindowLabel(w.windowMinutes))
-                .font(.system(size: 9, weight: .medium, design: .monospaced))
-                .foregroundColor(.secondary)
-                .frame(width: 14, alignment: .leading)
-
-            quotaBar(percent: w.usedPercent,
-                     color: Self.barColor(used: w.usedPercent, pace: pace),
-                     pacePercent: pace)
-                .frame(width: compact ? 60 : 70, height: 5)
-
-            Text("\(Int(w.usedPercent.rounded()))%")
-                .font(.system(size: 9, weight: .medium, design: .monospaced))
-                .foregroundColor(.primary)
-                .frame(width: 28, alignment: .trailing)
-
-            if !compact {
-                Text("resets \(formatResetTime(w.resetsAt))")
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
-        }
-    }
-
     /// "Expected percent used if you've been pacing evenly through the
-    /// window so far." Anchored to current wall-clock time, not the
-    /// snapshot's `sampledAt` — the marker should always reflect where
-    /// the user *should be* right now, independent of when the
-    /// snapshot was last refreshed.
+    /// window so far." Anchored to `now` — the caller's clock, not the
+    /// snapshot's `sampledAt` — so the marker reflects where the user
+    /// *should be* at that instant, independent of when the snapshot was
+    /// last refreshed.
+    ///
+    /// `now` is a required argument since #1675; it was a `Date()` read in the
+    /// body, which made the marker's x position a continuous function of the
+    /// wall clock and therefore unrenderable twice with the same result. The
+    /// two callers that can read an environment (`QuotaWindowRow`, and
+    /// `SessionListView`'s tooltip) pass `\.formatNow()`; `QuotaMenuBarRenderer`
+    /// is rasterised outside SwiftUI and threads the instant
+    /// `MenuBarImageBuilder` read down to here.
     ///
     /// Returns nil when the window can't be paced: zero-duration or
     /// missing `resetsAt`. A `resetsAt` already in the past produces a
@@ -923,48 +961,26 @@ struct SessionListView: View {
     /// `static` + non-private (like `barColor`) so `QuotaMenuBarRenderer`'s
     /// menu-bar icon can share this exact implementation instead of
     /// re-deriving the same math in a second place.
-    static func quotaPacePercent(_ w: RateLimitWindowInfo) -> Double? {
+    static func quotaPacePercent(_ w: RateLimitWindowInfo, now: Date) -> Double? {
         guard w.windowMinutes > 0 else { return nil }
         guard w.resetsAt.timeIntervalSince1970 > 0 else { return nil }
         let windowSeconds = Double(w.windowMinutes) * 60
         let windowStart = w.resetsAt.addingTimeInterval(-windowSeconds)
-        let elapsed = Date().timeIntervalSince(windowStart)
+        let elapsed = now.timeIntervalSince(windowStart)
         let pct = (elapsed / windowSeconds) * 100.0
         return min(100, max(0, pct))
     }
 
-    /// A rounded-rect progress bar with an optional vertical pace
-    /// marker (thin red line at `pacePercent`). The marker reads
-    /// "where you should be if you've been pacing evenly" — fill past
-    /// the marker means burning quota faster than the window's linear
-    /// rate; fill behind it means headroom. ZStack so the fill, track,
-    /// and marker render with the same corner radius without clipping
-    /// artifacts at small sizes.
-    @ViewBuilder
-    private func quotaBar(percent: Double, color: Color, pacePercent: Double?) -> some View {
-        GeometryReader { geo in
-            ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 2.5)
-                    .fill(Color.secondary.opacity(0.2))
-                RoundedRectangle(cornerRadius: 2.5)
-                    .fill(color)
-                    .frame(width: geo.size.width * min(1.0, max(0.0, percent / 100.0)))
-                if let pace = pacePercent, (0...100).contains(pace) {
-                    Rectangle()
-                        .fill(Color.red)
-                        .frame(width: 1)
-                        .offset(x: geo.size.width * (pace / 100.0) - 0.5)
-                }
-            }
-        }
-    }
-
-    private func quotaTooltip(_ d: QuotaWidgetData) -> String {
+    /// `now` is a required argument here too — every time-dependent line in one
+    /// tooltip is built from the single `\.formatNow()` read `quotaChipView`
+    /// makes, so "resets in 4h 12m", "26pt over pace" and the staleness note
+    /// cannot describe three different instants.
+    private func quotaTooltip(_ d: QuotaWidgetData, now: Date) -> String {
         var lines: [String] = []
         if let plan = d.snapshot.planTypeLabel {
             lines.append(plan)
         }
-        if d.isStale {
+        if Self.snapshotIsStale(d.snapshot, now: now) {
             lines.append("⚠️ snapshot pre-dates current window — waiting for next statusline tick")
         }
         switch d.mode {
@@ -986,10 +1002,10 @@ struct SessionListView: View {
                 // load-bearing signal — so we drop it and put the
                 // verdict inline, no parentheses.
                 let used = Int(w.usedPercent.rounded())
-                let label = quotaWindowLabel(w.windowMinutes)
-                let resets = formatTimeUntil(w.resetsAt)
+                let label = Self.quotaWindowLabel(w.windowMinutes)
+                let resets = QuotaResetFormat.timeUntil(w.resetsAt, now: now)
                 var line = "\(label): \(used)% used · resets in \(resets)"
-                if let pace = Self.quotaPacePercent(w) {
+                if let pace = Self.quotaPacePercent(w, now: now) {
                     let delta = used - Int(pace.rounded())
                     let verdict: String
                     if delta > 0 { verdict = "\(delta)pt over pace" }
@@ -1022,7 +1038,21 @@ struct SessionListView: View {
         return lines.joined(separator: "\n")
     }
 
-    private func quotaWindowLabel(_ minutes: Int) -> String {
+    /// `static` + non-private since #1675 so the extracted `QuotaWindowRow`
+    /// can label its row with the same implementation rather than a second
+    /// copy.
+    ///
+    /// (`HistoryFormat.quotaWindowLabel` is a THIRD spelling of the same idea
+    /// and deliberately not reused, because the two are NOT interchangeable in
+    /// general: it does not tolerate Codex v1's 299/10079 off-by-one and rounds
+    /// with `%` rather than `>=`, so on a raw `windowMinutes` of 299 it answers
+    /// `"299m"` where this answers `"5h"`. Measured before saying so: no
+    /// rendering diverges today, because its one caller
+    /// (`HistoryView.swift:638`) passes `canonicalWindowMinutes`, which maps
+    /// 299 → 300, and filters to exactly 300/10080 first. So this is a note
+    /// about why they are not merged here, not a defect — merging them is a
+    /// behaviour decision, not a clock fix.)
+    static func quotaWindowLabel(_ minutes: Int) -> String {
         // Tolerate Codex v1's 299 / 10079 off-by-one quirk. Codex may report
         // a single weekly window, so label every supplied duration directly.
         switch minutes {
@@ -1113,40 +1143,22 @@ struct SessionListView: View {
         }
     }
 
+    /// Short clock time for the quota tooltip's "Projected cap" line.
+    ///
+    /// #1663 moved the formatting itself into `QuotaResetFormat`, where the
+    /// zone and locale it renders in are required arguments rather than two
+    /// more reads of the machine. This wrapper is what supplies them, from the
+    /// environment; it stays a method on the view because reading
+    /// `@Environment` is only meaningful on a value SwiftUI is updating, and
+    /// `quotaTooltip` is called from `body`.
+    ///
+    /// The tooltip is graded at the formatter and not in pixels, for the reason
+    /// #1659 recorded for `HistoryActivityContentView.tooltipText`: `.tooltip(…)`
+    /// is an `onHover`-only AppKit bridge that draws into a separate `NSPanel`
+    /// and adds nothing to the view tree, so there is nothing for a render test
+    /// to read back.
     private func formatClockTime(_ date: Date) -> String {
-        let f = DateFormatter()
-        f.dateStyle = .none
-        f.timeStyle = .short
-        return f.string(from: date)
-    }
-
-    /// Compact reset label for the chip row. Same-day resets render as
-    /// "HH:MM"; resets later in the week render as "EEE HH:MM" (e.g.
-    /// "Fri 9:00"). Mirrors mockup 1's "resets 11:14" / "resets Fri 9:00".
-    private func formatResetTime(_ date: Date) -> String {
-        let cal = Calendar.current
-        let now = Date()
-        let f = DateFormatter()
-        if cal.isDate(date, inSameDayAs: now) {
-            f.dateStyle = .none
-            f.timeStyle = .short
-        } else {
-            f.dateFormat = "EEE H:mm"
-        }
-        return f.string(from: date)
-    }
-
-    private func formatTimeUntil(_ date: Date) -> String {
-        let seconds = max(0, Int(date.timeIntervalSinceNow))
-        let h = seconds / 3600
-        let m = (seconds % 3600) / 60
-        if h >= 24 {
-            let d = h / 24
-            let rh = h % 24
-            return rh == 0 ? "\(d)d" : "\(d)d \(rh)h"
-        }
-        if h > 0 { return "\(h)h \(m)m" }
-        return "\(m)m"
+        QuotaResetFormat.clock(date, timeZone: formatTimeZone, locale: formatLocale)
     }
 
     private var sessionIconsView: some View {

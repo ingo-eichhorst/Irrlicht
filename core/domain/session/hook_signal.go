@@ -64,13 +64,34 @@ type HookSignalEffect struct {
 // hookSignalEffects is the single source of truth for hook-name → SignalKind
 // for the hooks a caller may act on knowing only the name.
 //
-// Three hooks are absent, for two different reasons — worth keeping apart,
-// because they imply different things about whether a future row belongs here:
+// Two hooks are absent. A third, HookStop, was — and the reason it was is
+// worth stating, because it was measured to be wrong in exactly one step
+// (#1695):
 //
-//   - HookStop genuinely cannot be a row. Its effect carries a payload (the
-//     turn's final assistant text and the waiting-cue verdict computed from it)
-//     into SignalPayload, and a name-keyed lookup has no way to supply that.
-//     HandleStopHook stays a dedicated entry point.
+//   - HookStop carries a payload (the turn's final assistant text and the
+//     waiting-cue verdict computed over the *full* message rather than the
+//     200-rune transcript tail, #1150) which a name-keyed lookup cannot
+//     supply. That much is true, and it is why HandleStopHook stays a
+//     dedicated entry point — the daemon has the payload and must not lose it.
+//     What does NOT follow, and is what kept this row out until #1695, is that
+//     a name-only caller therefore cannot act. Read signalPolicies' turn-done
+//     row: its apply sets HookTurnDone unconditionally and guards BOTH payload
+//     fields (`if c.Payload.LastAssistantText != ""`, `if c.Payload.WaitingCue`),
+//     so a payload-free hold delivers the signal's whole assertion — the turn
+//     ended, authoritatively — and the degradation is ONE-DIRECTIONAL: it can
+//     add nothing to the cue verdict, and can never clear or mask a cue the
+//     transcript already found on its own. It also cannot pin, because that
+//     row is consumeOnce. TestPayloadFreeTurnDoneNeverClearsATranscriptCue is
+//     that property as a test rather than as this paragraph.
+//     So the row is an honest floor, not a lie: a name-only caller gets a
+//     correct-but-weaker verdict, and the one thing it gives up is a cue that
+//     sits outside the transcript tail.
+//     The cost of leaving it out was concrete. The replay harness reads this
+//     table, so with no row it dropped every recorded Stop, and the
+//     hook-produced `ready` in codex's 2-13_turn-end-terminal-text golden was
+//     reproduced from the transcript's own turn_done two seconds later — the
+//     same bytes as a transcript-produced ready, so a Stop-handling regression
+//     was invisible to every golden in the catalog (#1695, filed off #1388).
 //   - HookNotification and HookPreCompact are excluded only because their
 //     *gate* is adapter-side: the claudecode HTTP handler forwards Notification
 //     solely for notification_type "idle_prompt" and PreCompact solely for
@@ -102,6 +123,13 @@ var hookSignalEffects = map[string]HookSignalEffect{
 	// The tool ran, so whatever was blocking on it no longer is.
 	HookPostToolUse:        {Signal: SignalPermissionPrompt, Release: true},
 	HookPostToolUseFailure: {Signal: SignalPermissionPrompt, Release: true},
+	// The turn ended, authoritatively, at true turn end (#1161). Name-only
+	// here: a caller with the hook's payload — SessionDetector.HandleStopHook,
+	// which every adapter routes Stop through — holds SignalTurnDone itself
+	// and supplies it, so this row is what a caller WITHOUT the payload gets
+	// (the replay harness). See the paragraph above for why that is a floor
+	// rather than a wrong answer.
+	HookStop: {Signal: SignalTurnDone},
 }
 
 // HookSignal reports the signal effect of a hook event name. ok is false for a

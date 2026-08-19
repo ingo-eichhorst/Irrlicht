@@ -269,3 +269,108 @@ func TestMTTR(t *testing.T) {
 		}
 	})
 }
+
+// TestNoMetricReadsAnOutOfWindowTagsCommits is the lock #1553's work bound
+// stands on. ComputeDoraMetrics now skips the git call for tags outside
+// [from, to], which is safe only because nothing here reads their entry in
+// commitsByTag — LeadTime and DetectReverts are its only two consumers and
+// both index it through filterRange.
+//
+// If either grew a read of an out-of-window tag, the service would not get a
+// slower answer: it would get a metric computed over commits it never
+// fetched, which is a wrong number reported as Available. So this asserts the
+// property directly, by computing each metric with the out-of-window entries
+// present and absent and requiring the two to agree.
+//
+// MUTATION EVIDENCE: replacing `filterRange(tags, from, to)` with `tags` in
+// DetectReverts's loop makes the DetectReverts arm fail on the unresolved
+// count; the same replacement in LeadTime's loop makes the LeadTime arm fail
+// on the sample size.
+//
+// The LeadTime half is why the fixture below looks the way it does, and the
+// first draft of it did NOT redden: LeadTime filters COMMITS by author epoch
+// as well as TAGS by window, so an out-of-window tag carrying out-of-window
+// commits is excluded twice over and the mutation changes nothing. A fixture
+// that cannot express the distinguishing state grades a filter that is not the
+// one under test — the shape #1475 records. What distinguishes them is a
+// release made AFTER the window that ships commits authored DURING it, which
+// is an ordinary thing for a repository to contain.
+func TestNoMetricReadsAnOutOfWindowTagsCommits(t *testing.T) {
+	const day = int64(86400)
+	tags := []TagInfo{
+		{Name: "v1.0", Epoch: 10 * day}, // before the window
+		{Name: "v2.0", Epoch: 40 * day}, // inside it
+		{Name: "v3.0", Epoch: 90 * day}, // after it
+	}
+	from, to := 30*day, 50*day
+
+	// Each out-of-window release carries the shape one consumer looks for:
+	// v1.0 a revert (DetectReverts), v3.0 a commit authored inside the window
+	// (LeadTime — see the note above about why an out-of-window author epoch
+	// there would prove nothing).
+	full := map[string][]CommitInfo{
+		"v1.0": {
+			{Hash: "aaa", AuthorEpoch: 9 * day, Body: "old work\n"},
+			{Hash: "bbb", AuthorEpoch: 9 * day, Body: "Revert \"old work\"\n\nThis reverts commit aaa.\n"},
+		},
+		"v2.0": {
+			{Hash: "ccc", AuthorEpoch: 39 * day, Body: "new work\n"},
+		},
+		"v3.0": {
+			{Hash: "ddd", AuthorEpoch: 45 * day, Body: "work shipped after the window\n"},
+		},
+	}
+	pruned := map[string][]CommitInfo{"v2.0": full["v2.0"]}
+
+	// Vacuity guard: without an in-window commit both sides would agree at
+	// "nothing", and a filterRange that dropped everything would pass.
+	if got := LeadTime(tags, pruned, from, to); !got.Available || got.SampleSize != 1 {
+		t.Fatalf("LeadTime over the pruned map = %+v, want one in-window commit; this test is "+
+			"not exercising anything", got)
+	}
+
+	if withAll, withPruned := LeadTime(tags, full, from, to), LeadTime(tags, pruned, from, to); withAll != withPruned {
+		t.Errorf("LeadTime read an out-of-window tag's commits: %+v with them, %+v without. "+
+			"ComputeDoraMetrics no longer fetches those (#1553), so this metric would be "+
+			"computed over commits that were never read", withAll, withPruned)
+	}
+
+	allCand, allUnres := DetectReverts(tags, full, from, to)
+	prunedCand, prunedUnres := DetectReverts(tags, pruned, from, to)
+	if len(allCand) != len(prunedCand) || allUnres != prunedUnres {
+		t.Errorf("DetectReverts read an out-of-window tag's commits: %d candidate(s)/%d unresolved "+
+			"with them, %d/%d without", len(allCand), allUnres, len(prunedCand), prunedUnres)
+	}
+}
+
+// TestInWindowIsTheOneDefinitionFilterRangeUses pins the export #1553 added.
+// The service's skip and filterRange must agree on every boundary, and the
+// boundary cases are where a second spelling would drift: both ends are
+// INCLUSIVE.
+func TestInWindowIsTheOneDefinitionFilterRangeUses(t *testing.T) {
+	tags := []TagInfo{
+		{Name: "before", Epoch: 99},
+		{Name: "lower-edge", Epoch: 100},
+		{Name: "middle", Epoch: 150},
+		{Name: "upper-edge", Epoch: 200},
+		{Name: "after", Epoch: 201},
+	}
+	kept := filterRange(tags, 100, 200)
+	if len(kept) != 3 {
+		t.Fatalf("filterRange kept %d tags, want 3 (both ends inclusive)", len(kept))
+	}
+	for _, tag := range tags {
+		want := false
+		for _, k := range kept {
+			if k.Name == tag.Name {
+				want = true
+			}
+		}
+		if got := InWindow(tag.Epoch, 100, 200); got != want {
+			t.Errorf("InWindow(%d) = %v but filterRange %s it; the service skips git calls on "+
+				"InWindow and the metrics read filterRange, so a disagreement is a metric "+
+				"computed over commits nobody fetched",
+				tag.Epoch, got, map[bool]string{true: "keeps", false: "drops"}[want])
+		}
+	}
+}

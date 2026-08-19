@@ -53,6 +53,12 @@ go test ./core/... -race -count=1   # run the Go suite (see AGENTS.md for the fu
 tools/install-git-hooks.sh     # one-time: wire the pre-push preflight check
 ```
 
+The hook it installs is a shim that runs the *pushing* working tree's own
+`tools/git-hooks/pre-push`, so worktrees need no separate install and a change
+to the hook is exercised by the push that makes it. Re-run the installer only
+when `tools/git-hooks/shim` itself changes — it overwrites, and running it
+twice installs nothing.
+
 The full suite — Go unit + e2e, the onboarding-factory, replay fixtures, and the
 web suites — is listed in [AGENTS.md](AGENTS.md#testing). **A change is only done
 when every layer passes.** No exceptions.

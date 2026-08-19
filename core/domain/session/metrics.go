@@ -262,7 +262,11 @@ type SessionMetrics struct {
 	// true turn end (issue #1161). Transient and live-only: the detector's
 	// SignalTurnDone policy applies it for the single classify pass the Stop
 	// hook triggered and then releases the hold (consume-once), so it never
-	// bleeds into the next turn and is never set under replay. IsAgentDone()
+	// bleeds into the next turn. It IS set under replay since #1695 — the
+	// harness holds the same signal off a recorded hook_received{Stop}, with
+	// an empty SignalPayload (see hookSignalEffects) — which is what makes a
+	// hook-produced ready distinguishable from a transcript-produced one in a
+	// committed golden. IsAgentDone()
 	// treats it as authoritative, taking precedence over the transcript-tail
 	// heuristic (and its codex carve-out) below.
 	HookTurnDone bool `json:"-"`
@@ -538,7 +542,8 @@ func (m *SessionMetrics) IsAgentDone() bool {
 	// overlaid by the detector for claudecode. It takes precedence over the
 	// transcript-tail signals below — a clean, per-adapter turn-done push that
 	// doesn't depend on the "assistant"/"assistant_output" heuristic (and its
-	// codex carve-out). Only ever set live, never under replay. Checked after
+	// codex carve-out). Set live, and — since #1695 — under replay too, from a
+	// recorded hook_received{Stop} via hookSignalEffects. Checked after
 	// the open-tool / live-background guards so a Stop that fires while a
 	// sub-agent tool or Bash run_in_background is still outstanding does not
 	// prematurely flip the session to ready.

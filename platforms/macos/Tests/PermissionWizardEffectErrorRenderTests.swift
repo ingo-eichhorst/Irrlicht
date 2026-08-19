@@ -35,16 +35,12 @@ final class PermissionWizardEffectErrorRenderTests: XCTestCase {
         return try JSONDecoder().decode(PermissionsSnapshot.self, from: Data(json.utf8))
     }
 
-    private func host(_ snap: PermissionsSnapshot, mode: PermissionWizardView.Mode) -> NSView {
+    private func host(_ snap: PermissionsSnapshot, mode: PermissionWizardView.Mode) -> PinnedSnapshotHost {
         let manager = SessionManager()
         manager.permissionsSnapshot = snap
         let view = PermissionWizardView(mode: mode, lockedAgents: ["claude-code"], onClose: {})
             .environmentObject(manager)
-        let hosting = NSHostingView(rootView: view)
-        hosting.appearance = NSAppearance(named: .darkAqua)
-        hosting.frame = CGRect(x: 0, y: 0, width: SessionListView.panelWidth, height: 420)
-        hosting.layoutSubtreeIfNeeded()
-        return hosting
+        return PinnedSnapshotHost(view, width: SessionListView.panelWidth, height: 420)
     }
 
     /// The defect case: a grant whose Apply failed. The reference shows the
@@ -52,7 +48,7 @@ final class PermissionWizardEffectErrorRenderTests: XCTestCase {
     /// "Granted, but not applied" strip and its Retry button beneath it.
     func testFailedApplyRendersWarningAndRetry() throws {
         let view = host(try snapshotModel(state: "granted", effectError: reason), mode: .review)
-        assertSnapshot(of: view, as: .image, named: "granted-apply-failed")
+        assertSnapshot(of: view, as: .pinnedImage, named: "granted-apply-failed")
     }
 
     /// Control: the same wizard with a healthy grant draws no warning at
@@ -60,13 +56,13 @@ final class PermissionWizardEffectErrorRenderTests: XCTestCase {
     /// effect_error and nothing else.
     func testHealthyGrantRendersNoWarning() throws {
         let view = host(try snapshotModel(state: "granted", effectError: nil), mode: .review)
-        assertSnapshot(of: view, as: .image, named: "granted-healthy")
+        assertSnapshot(of: view, as: .pinnedImage, named: "granted-healthy")
     }
 
     /// Auto mode asks about pending items only; a failed grant must still
     /// appear there, or the surface the user is looking at hides it.
     func testFailedApplyVisibleInAutoMode() throws {
         let view = host(try snapshotModel(state: "granted", effectError: reason), mode: .auto)
-        assertSnapshot(of: view, as: .image, named: "auto-apply-failed")
+        assertSnapshot(of: view, as: .pinnedImage, named: "auto-apply-failed")
     }
 }

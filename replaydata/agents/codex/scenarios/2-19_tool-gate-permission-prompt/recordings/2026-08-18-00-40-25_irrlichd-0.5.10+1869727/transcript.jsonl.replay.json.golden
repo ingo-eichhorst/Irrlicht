@@ -1,0 +1,123 @@
+{
+  "schema_version": 1,
+  "source_transcript": "",
+  "generated_at": "0001-01-01T00:00:00Z",
+  "settings": {
+    "adapter": "codex",
+    "debounce_window": 2000000000,
+    "flicker_max_duration": 10000000000
+  },
+  "summary": {
+    "total_events": 19,
+    "consumed_events": 19,
+    "total_transitions": 3,
+    "first_event_time": "2026-08-18T00:40:35.743301+02:00",
+    "last_event_time": "2026-08-18T00:40:47.019525+02:00",
+    "wall_clock_session_duration": 11276224000,
+    "state_durations": {
+      "ready": 2376333000,
+      "working": 8899891000
+    },
+    "flicker_count": 0,
+    "flickers_by_category": {},
+    "flickers_by_reason": {},
+    "cum_input_tokens": 22724,
+    "cum_output_tokens": 177,
+    "model_name": "gpt-5.6-sol"
+  },
+  "transitions": [
+    {
+      "index": 0,
+      "event_index": -1,
+      "virtual_time": "2026-08-18T00:40:35.743301+02:00",
+      "cause": "init",
+      "prev_state": "",
+      "new_state": "ready",
+      "reason": "initial state",
+      "last_event_type": "",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 1,
+      "event_index": 8,
+      "virtual_time": "2026-08-18T00:40:38.119634+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "user_message",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 2,
+      "event_index": -1,
+      "virtual_time": "2026-08-18T00:40:47.019525+02:00",
+      "cause": "hook",
+      "prev_state": "working",
+      "new_state": "waiting",
+      "reason": "permission prompt open → waiting",
+      "last_event_type": "function_call_output",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": true,
+      "last_assistant_text_head": "I’ll create `hello.txt` with the exact two-byte content `hi` using the shell, …"
+    }
+  ],
+  "sessions": [
+    {
+      "session_id": "proc-13036",
+      "adapter": "codex",
+      "first_seen": "2026-08-18T00:40:25.668731+02:00",
+      "last_seen": "2026-08-18T00:40:40.864988+02:00",
+      "duration_ms": 15196,
+      "event_count": 6,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 13036,
+      "pid_discovery_lag_ms": 26,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 15171
+      }
+    },
+    {
+      "session_id": "01a011e2-21e4-71f2-a354-0495db06869c",
+      "adapter": "codex",
+      "first_seen": "2026-08-18T00:40:35.697053+02:00",
+      "last_seen": "2026-08-18T00:41:51.265354+02:00",
+      "duration_ms": 75568,
+      "event_count": 43,
+      "state_changes": 3,
+      "final_state": "waiting",
+      "pid": 13036,
+      "pid_discovery_lag_ms": 321,
+      "debounce_coalesced_events": 15,
+      "state_durations_ms": {
+        "ready": 2423,
+        "waiting": 64245,
+        "working": 8898
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 2,
+    "replayed_transition_count": 2,
+    "ordered_matches": 2,
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→waiting"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→waiting"
+    ]
+  }
+}

@@ -253,8 +253,50 @@ var knownFirstTransitionDrift = map[string]string{
 // entirely, so the two scalars below hold the whole population — every
 // kind-matched pair in every recording — without a second list of names to
 // maintain.
+// #1388 moved the first of these from 105 to 107. It added codex's two
+// hook-bearing recordings (2-13, 2-19), and BOTH drift >1s on a later pair
+// while neither drifts on its first — which is why they are absent from the
+// machine-generated list above and visible only here, i.e. exactly the case
+// these two scalars exist for.
+//
+// The cause is structural rather than a defect the recordings carry. In both,
+// the drifting pair is the one a HOOK asserts (PermissionRequest → waiting,
+// Stop → ready): the daemon flips on the POST, replay flips at the next
+// debounce boundary, and the settings those goldens record put that boundary
+// at 2s. Measured on 2-19: hook_received at 00:40:47.019, golden
+// virtual_time 00:40:48.977 — 1.96s, one debounce window. It is the same
+// bimodal population `driftThreshold` was cut from, not a new mode.
+//
+// #1695 moved it back, 107 -> 105, and the reason is the same sentence read in
+// reverse. That "structural" cause was a defect after all: replay flipped at
+// the next debounce boundary because applyHookEvent carried a stale per-pass
+// NoSubstantiveActivity into the hook's own pass, so #329's short-circuit ate
+// the hook-time classification and the transition fell through to the next
+// debounce flush. With that fixed, both codex recordings flip at the hook's own
+// timestamp — 2-19's pair is now 00:40:47.019 against a golden virtual_time of
+// 00:40:47.019 — and both leave this population, taking it back below where
+// #1388 found it. Re-tightened rather than left at 107, per the #1517 note
+// below: a bound that absorbs an improvement as slack makes the next
+// regression free.
+//
+// #1699 moved it 105 -> 106, and the entry is the SAME sentence read a third
+// time, now from the daemon's side. It records claudecode's
+// 2-13_turn-end-terminal-text, the catalog's first claudecode Stop, whose pair 1
+// (working→ready) is +2.100s: replay flips at the hook's own timestamp
+// (20:00:18.932775, byte-identical to the sidecar's hook_received{Stop} ts)
+// while the DAEMON flipped at 20:00:21.033255. The daemon's flip is still the
+// hook's — sidecar seq 187 carries decided_by_tier "hook" and hook_turn_done
+// true — it simply landed at the next debounce boundary, because
+// dispatchHookActivity pushes its synthetic event onto the DEBOUNCED channel and
+// a transcript write 97ms after the POST (seq 184) re-opened the 2s window. So
+// the pre-#1695 sentence ("the daemon flips on the POST, replay flips at the
+// next debounce boundary") is now true with the sides swapped, and which side a
+// recording lands on is a property of what the agent CLI wrote in the 2s after
+// its own Stop. Not re-tightened away and not a defect the recording carries:
+// it is one of the two facts #1699 was recorded to make visible, and a bound
+// that absorbed it would hide the next one.
 const (
-	maxRecordingsDriftingOverThreshold = 105
+	maxRecordingsDriftingOverThreshold = 106
 	maxRecordingsDriftingOver5s        = 50
 )
 
@@ -266,13 +308,36 @@ const (
 // drains. Regenerating goldens then erases the only other trace, since
 // ordered_matches is the serialized field that would have moved.
 //
-// 36 of the 309 recordings already produce zero kind-matched pairs, so
-// "this recording measures nothing" is the current state of an eighth of the
-// catalog rather than a hypothetical — which is exactly why the floor is a
-// number and not merely a non-zero check.
+// 36 recordings already produce zero kind-matched pairs, so "this recording
+// measures nothing" is the current state of over a tenth of the catalog rather
+// than a hypothetical — which is exactly why the floor is a number and not
+// merely a non-zero check.
+//
+// Both floors are re-ratcheted whenever the population grows, and #1517 is why
+// that is spelled out rather than left to judgement. It widened the walk to
+// pair transcript.md, adding two recordings and two pairs; the floors were
+// sitting at exactly the old measured values, so they absorbed the growth as
+// slack and this gate stayed green under a mutation that narrowed the pairing
+// straight back. A floor whose stated job is catching a pairing shift that
+// drains the population has to be re-tightened onto the new measurement, or
+// the very next drain is free.
+// Re-tightened onto the new measurement by #1388, per the paragraph above:
+// its two codex recordings took the population from 828/275 to 832/277.
+// Leaving the old values would have let the growth sit as slack, which is
+// precisely the #1517 mistake that paragraph records.
+// #1695 re-tightened the pair floor again, 832 -> 834: replay now reproduces
+// codex 2-13's hook-driven transition and the two it had been hiding, so that
+// recording contributes two more kind-matched pairs. The recording floor does
+// not move — 2-13 was already measuring — which is the shape to expect here,
+// since a recording joins this population once and then only adds pairs.
+// #1699 re-tightens both, 834 -> 836 and 277 -> 278: the new claudecode
+// 2-13 recording is a recording that was not in this population at all, and it
+// contributes two kind-matched pairs. Both halves move because this is the
+// other case the sentence above names — a NEW recording joining, rather than an
+// existing one gaining pairs.
 const (
-	minKindMatchedPairs   = 826
-	minMeasuredRecordings = 273
+	minKindMatchedPairs   = 836
+	minMeasuredRecordings = 278
 )
 
 // reportDriftEnumeration prints the drifted set — the deliverable of #1480,

@@ -220,8 +220,17 @@ func (d *SessionDetector) admitHost(id agent.Identity, ev agent.Event) bool {
 	d.mu.Lock()
 	d.hostGateRejected[ev.SessionID] = struct{}{}
 	d.mu.Unlock()
+	// Names the other host-gate diagnosis, the way hooks.json's three notes name
+	// each other: this line is a walk that RAN and found no allow-listed
+	// terminal or IDE, which is #784 working. The gate's own "admitted on a walk
+	// it could not complete" line (#1525, component host-gate) is the opposite
+	// case — no evidence either way, admitted anyway — and the two were
+	// indistinguishable in events.log until that issue, because only this one
+	// existed.
 	d.log.LogInfo(logComponentSessionDetector, ev.SessionID,
-		"skipping session bound to a non-interactive host")
+		"skipping session bound to a non-interactive host: the ancestry walk RAN and found no allow-listed "+
+			"terminal or IDE (#784). Not to be confused with the host-gate line about a walk that could not be "+
+			"COMPLETED, which admits rather than rejects (#1513) and is logged by the gate itself.")
 	return false
 }
 

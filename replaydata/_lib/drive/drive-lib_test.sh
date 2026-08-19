@@ -25,11 +25,25 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 # Driver-owned globals the helpers read/write.
+# shellcheck disable=SC2034  # read by the sourced replaydata/_lib/drive/slots.sh (alloc_slot) and contracts.sh (emit_session_contract)
 STAGING="$TMP"
 DRIVER_LOG="$TMP/driver.log"
+# shellcheck disable=SC2034  # read by the sourced replaydata/_lib/drive/slots.sh:56 (alloc_slot)
 DRIVE_MARKER_PREFIX="$TMP/.fake-start-marker"
-SES_SESSION=(); SES_TRANSCRIPT=(); SES_UUID=(); SES_EXPECTED=()
-SES_MARKER=(); SES_CWD=(); SES_ALIVE=()
+# shellcheck disable=SC2034  # driver-owned slot array; the sourced replaydata/_lib/drive/slots.sh reads it (save_active/load_slot/alloc_slot)
+SES_SESSION=()
+# shellcheck disable=SC2034  # driver-owned slot array; read by the sourced replaydata/_lib/drive/slots.sh (save_active/load_slot) and contracts.sh (emit_session_contract)
+SES_TRANSCRIPT=()
+# shellcheck disable=SC2034  # driver-owned slot array; the sourced replaydata/_lib/drive/slots.sh reads it (save_active/load_slot/alloc_slot)
+SES_UUID=()
+# shellcheck disable=SC2034  # driver-owned slot array; the sourced replaydata/_lib/drive/slots.sh reads it (save_active/load_slot/alloc_slot)
+SES_EXPECTED=()
+# shellcheck disable=SC2034  # driver-owned slot array; the sourced replaydata/_lib/drive/slots.sh reads it (save_active/load_slot/alloc_slot)
+SES_MARKER=()
+# shellcheck disable=SC2034  # driver-owned slot array written by the sourced replaydata/_lib/drive/slots.sh:63 (alloc_slot); kept current here for the shared slot model
+SES_CWD=()
+# shellcheck disable=SC2034  # driver-owned slot array written by the sourced replaydata/_lib/drive/slots.sh:64 (alloc_slot); kept current here for the shared slot model
+SES_ALIVE=()
 N_SLOTS=0; ACTIVE=0
 SESSION=""; TRANSCRIPT=""; UUID=""; EXPECTED_TURNS=0; MARKER=""
 
@@ -77,9 +91,19 @@ assert_eq "session.uuids = daemon_sid per slot" "$(printf 'ses1\nses2')" "$(cat 
 assert_eq "transcript.paths per slot"  "$(printf '/t/ses1.jsonl\n/t/ses2.jsonl')" "$(cat "$TMP/transcript.paths")"
 
 echo "== drive_exit: EXIT_REASON → exit code =="
+# EXIT_REASON is the INPUT to drive_exit, read by the sourced
+# replaydata/_lib/drive/contracts.sh — each subshell below sets it and the
+# function under test consumes it. One directive per assignment because a
+# directive covers only the next command, and shellcheck picks a single site
+# per variable to report: pinning only the one it happens to name today would
+# leave the other three to fail the gate the moment that choice moved.
+# shellcheck disable=SC2034  # read by the sourced replaydata/_lib/drive/contracts.sh (drive_exit)
 ( EXIT_REASON="ok";            drive_exit ); assert_eq "ok → 0"            0   "$?"
+# shellcheck disable=SC2034  # read by the sourced replaydata/_lib/drive/contracts.sh (drive_exit)
 ( EXIT_REASON="timeout";       drive_exit ); assert_eq "timeout → 124"    124 "$?"
+# shellcheck disable=SC2034  # read by the sourced replaydata/_lib/drive/contracts.sh (drive_exit)
 ( EXIT_REASON="nonzero(2)";    drive_exit ); assert_eq "nonzero(2) → 2"   2   "$?"
+# shellcheck disable=SC2034  # read by the sourced replaydata/_lib/drive/contracts.sh (drive_exit)
 ( EXIT_REASON="weird";         drive_exit ); assert_eq "unknown → 1"      1   "$?"
 
 echo "== dismiss_dialog_if_visible: poll+dismiss mechanics only (tmux faked) =="

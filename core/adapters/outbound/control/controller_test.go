@@ -50,8 +50,24 @@ func TestResolveBackend(t *testing.T) {
 		// the tmux identity would be the herdr server's, pointing at a
 		// different window entirely.
 		{"herdr wins over inherited tmux", &session.Launcher{HerdrPaneID: "w1:p1", HerdrSocketPath: "/tmp/h.sock", TmuxPane: "%0", TmuxSocket: "/tmp/other"}, backendHerdr},
-		{"tmux pane", &session.Launcher{TmuxPane: "%3"}, backendTmux},
-		{"tmux wins over kitty", &session.Launcher{TmuxPane: "%3", KittyListenOn: "unix:/x", KittyWindowID: "12"}, backendTmux},
+		{"tmux pane", &session.Launcher{TmuxPane: "%3", TmuxSocket: "/tmp/tmux-501/default"}, backendTmux},
+		// Both fields, for the reason the herdr rows above give: a pane id is
+		// per-server and exists on every server, so a missing socket would be
+		// resolved against the daemon's own default rather than the session's
+		// (#1593). TestResolveBackend_TmuxPaneWithoutSocketIsNotAddressable
+		// carries the argument and the fall-through half.
+		{"tmux missing socket", &session.Launcher{TmuxPane: "%3"}, backendNone},
+		{"tmux missing pane", &session.Launcher{TmuxSocket: "/tmp/tmux-501/default"}, backendNone},
+		// A LOCK, green before #1582 and after, and the reason that fix is a
+		// capture-side one: a genuine pane that adopted its client's window
+		// (#1501) is field-for-field the shape an inherited $TMUX_PANE used to
+		// produce, so there is nothing here to discriminate on. This must keep
+		// resolving to tmux — the agent is in the pane; the iTerm identity only
+		// says which window displays it.
+		{"tmux pane whose host was adopted from its client",
+			&session.Launcher{TmuxPane: "%3", TmuxSocket: "/tmp/tmux-501/default", TermProgram: "iTerm.app", ITermSessionID: "w0t0p0:UUID"}, backendTmux},
+		{"tmux wins over kitty",
+			&session.Launcher{TmuxPane: "%3", TmuxSocket: "/tmp/tmux-501/default", KittyListenOn: "unix:/x", KittyWindowID: "12"}, backendTmux},
 		{"kitty both fields", &session.Launcher{KittyListenOn: "unix:/x", KittyWindowID: "12"}, backendKitty},
 		{"kitty missing window", &session.Launcher{KittyListenOn: "unix:/x"}, backendNone},
 		{"iterm session", &session.Launcher{TermProgram: "iTerm.app", ITermSessionID: "w0t0p0:UUID"}, backendAppleScript},
@@ -97,9 +113,63 @@ func TestResolveBackend_HerdrWinsOverClientTmux(t *testing.T) {
 	}
 }
 
+// TestResolveBackend_TmuxPaneWithoutSocketIsNotAddressable is #1593's defect
+// test. A pane id is per-server and exists on every server, so routing on it
+// alone addresses it against whatever server the daemon's own environment
+// points at — under launchd, the default socket. `send-keys -t %17` then lands
+// in an unrelated pane on a server the session is not in. That is the argument
+// resolveBackend already made for herdr, and the reason kitty requires both of
+// its fields too.
+//
+// The shape is producible after #1582/#1594, which is why this is a defect test
+// and not a lock: that fix clears TmuxPane and TmuxSocket *together*, but only
+// for a pane address the process INHERITED. A pane whose $TMUX was cleared
+// while $TMUX_PANE survived (`unset TMUX`, the documented way to nest tmux) is
+// judged genuine and kept — with no socket.
+// TestLauncherFromEnv_TmuxPaneSurvivesAClearedTmux pins that end.
+//
+// The second half is the blast radius in the other direction: refusing here is
+// a fall-through, exactly as herdr's and kitty's refusals are, not a dead end.
+// A launcher that also carries a usable address further down the chain is still
+// controllable through it.
+func TestResolveBackend_TmuxPaneWithoutSocketIsNotAddressable(t *testing.T) {
+	paneOnly := &session.Launcher{TmuxPane: "%17"}
+	if got := resolveBackend(paneOnly); got != backendNone {
+		t.Errorf("pane with no socket: resolveBackend = %v, want backendNone", got)
+	}
+
+	alsoKitty := &session.Launcher{TmuxPane: "%17", KittyListenOn: "unix:/x", KittyWindowID: "12"}
+	if got := resolveBackend(alsoKitty); got != backendKitty {
+		t.Errorf("pane with no socket, kitty available: resolveBackend = %v, want backendKitty", got)
+	}
+}
+
+// TestTmuxCommandsAlwaysNameTheServer covers the other half of #1593: with the
+// routing guard above in place, tmuxBase's `-S`-less form is unreachable from
+// production, and a builder that can silently address the default server is a
+// loaded gun whether or not a caller reaches it today. Every tmux argv names a
+// server, so a socket that somehow arrived empty produces a command tmux itself
+// refuses ("error connecting to ...") — surfaced through captureRunnerExec's
+// stderr — rather than one that succeeds against a stranger.
+func TestTmuxCommandsAlwaysNameTheServer(t *testing.T) {
+	noSock := &session.Launcher{TmuxPane: "%17"}
+	cases := []struct {
+		name string
+		got  command
+	}{
+		{"input", tmuxInput(noSock, []byte("hi"))},
+		{"interrupt", tmuxInterrupt(noSock)},
+		{"capture", tmuxCapture(noSock)},
+	}
+	for _, c := range cases {
+		if len(c.got.args) < 2 || c.got.args[0] != "-S" {
+			t.Errorf("tmux %s: argv %q does not name a server", c.name, c.got.args)
+		}
+	}
+}
+
 func TestCommandBuilders(t *testing.T) {
 	tmuxL := &session.Launcher{TmuxPane: "%3", TmuxSocket: "/tmp/tmux-501/default"}
-	tmuxNoSock := &session.Launcher{TmuxPane: "%7"}
 	kittyL := &session.Launcher{KittyListenOn: "unix:/tmp/mykitty", KittyWindowID: "12"}
 	herdrL := &session.Launcher{HerdrPaneID: "w1:p1", HerdrSocketPath: "/tmp/herdr/h.sock"}
 	// wantHerdr keeps the repeated {name, env} boilerplate out of the table.
@@ -116,11 +186,6 @@ func TestCommandBuilders(t *testing.T) {
 			"tmux input with socket",
 			tmuxInput(tmuxL, []byte("hello\r")),
 			command{name: "tmux", args: []string{"-S", "/tmp/tmux-501/default", "send-keys", "-t", "%3", "-l", "--", "hello\r"}},
-		},
-		{
-			"tmux input no socket",
-			tmuxInput(tmuxNoSock, []byte("hi")),
-			command{name: "tmux", args: []string{"send-keys", "-t", "%7", "-l", "--", "hi"}},
 		},
 		{
 			"tmux interrupt",
@@ -179,7 +244,7 @@ func TestCommandBuilders(t *testing.T) {
 func TestControllerDelegatesToBackend(t *testing.T) {
 	repo := &fakeRepo{state: &session.SessionState{
 		SessionID: "abc",
-		Launcher:  &session.Launcher{TmuxPane: "%3"},
+		Launcher:  &session.Launcher{TmuxPane: "%3", TmuxSocket: "/tmp/tmux-501/default"},
 	}}
 	c := NewController(repo, &fakePush{}, nopLog{})
 	var ran command
@@ -282,7 +347,7 @@ func TestControllerSendCommandSubmits(t *testing.T) {
 
 func verifySendCommandTmuxAppendsCR(t *testing.T) {
 	repo := &fakeRepo{state: &session.SessionState{
-		SessionID: "abc", Launcher: &session.Launcher{TmuxPane: "%3"},
+		SessionID: "abc", Launcher: &session.Launcher{TmuxPane: "%3", TmuxSocket: "/tmp/tmux-501/default"},
 	}}
 	c := NewController(repo, &fakePush{}, nopLog{})
 	var ran command

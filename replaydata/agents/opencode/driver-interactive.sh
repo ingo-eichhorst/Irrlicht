@@ -94,7 +94,9 @@ DRIVER_LOG="$STAGING/driver.log"
 # sigkill/mid_turn_send, but ONLY via those STEP TYPES (a bare send "/cmd" never
 # reaches the REPL). The `live` no-op marker forces a plain send/wait_turn
 # recipe onto the long-lived run_live path.
+# shellcheck disable=SC2034  # scraped from this file's SOURCE by tools/onboarding-factory/scripts/lib/recipe-lint.sh:97 (sed), never expanded in shell
 DRIVE_ELICITS="send wait_turn sleep slash reset_session interrupt keys restart sigkill mid_turn_send start_session session live"
+# shellcheck disable=SC2034  # scraped from this file's SOURCE by tools/onboarding-factory/scripts/lib/recipe-lint.sh:113 (sed), never expanded in shell
 DRIVE_SLASH_REQUIRES_STEP_TYPE=true
 
 # Per-run cwd so each scenario launches a fresh opencode project context.
@@ -195,7 +197,7 @@ run_live() {
     exit 1
   }
 
-  local session="ocdrv-$$-$(date +%s)"
+  local session; session="ocdrv-$$-$(date +%s)"
   # Per-turn baseline: the terminal-step-finish high-water mark captured at the
   # moment a send fires. oc_wait_turn waits for the terminal count to strictly
   # exceed it — exactly one NEW `stop` per turn. (A raw all-step count compared
@@ -466,7 +468,7 @@ run_live() {
       EXIT_REASON="$NONZERO_2"
       return 1
     fi
-    # shellcheck disable=SC2086 — intentional word-splitting of the key list
+    # shellcheck disable=SC2086  # intentional word-splitting of the key list
     tmux send-keys -t "$session" $keys
     echo "[driver] live keys: $keys" >&2
     sleep 0.5

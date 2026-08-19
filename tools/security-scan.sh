@@ -36,7 +36,10 @@
 #     `stdlib` is a Go-toolchain patch-level issue, not a code change here —
 #     logged prominently as an upgrade recommendation, not blocking.
 #   - gosec: High-severity + High-confidence findings fail the gate.
-#     Everything else is logged for visibility, not blocking.
+#     Everything else is logged for visibility, not blocking. Both answers
+#     come out of ONE `-fmt=json` run per module (#1570) — see the gosec
+#     block below and lib/gosec-report.sh for why there used to be two, and
+#     what "the scan covered 0 files" is refused for.
 #   - npm audit: gate on the High+Critical count in the JSON report's
 #     `.metadata.vulnerabilities` block. A non-zero exit alone is ambiguous —
 #     npm exits non-zero both when it finds advisories and when the audit
@@ -57,7 +60,20 @@ set -uo pipefail
 # lib/ source below still works from any caller's working directory.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT=$(git rev-parse --show-toplevel)
-cd "$REPO_ROOT"
+# `|| exit 2` and not a bare cd (#1684): every scanner below is invoked on
+# repo-relative module paths, so a failed cd would scan whatever tree the caller
+# happened to be in and report its verdict as this repo's.
+cd "$REPO_ROOT" || exit 2
+
+# Sourced unconditionally and fatally, the same shape as the --changed lib
+# below: without it gosec_report_check is undefined, `case $?` would take the
+# catch-all arm, and every module would be reported as a failed scan. Loud
+# either way — but "cannot load the classifier" is the accurate sentence.
+# shellcheck source=lib/gosec-report.sh
+. "$SCRIPT_DIR/lib/gosec-report.sh" || {
+  echo "FAIL: cannot load $SCRIPT_DIR/lib/gosec-report.sh — refusing to classify a gosec report blind" >&2
+  exit 2
+}
 
 LOCAL_ONLY=0
 CHANGED=0
@@ -74,12 +90,11 @@ done
 
 # Every module in go.work — govulncheck/gosec run per module, matching how
 # go.work itself scopes builds (see tools/preflight.sh's `go` group for the
-# narrower go-test set: only core, onboarding-factory, and starhistory have
-# test suites today, but a vuln/SAST scan doesn't need tests to pass, so all
-# six run).
+# narrower go-test set: only core and onboarding-factory have test suites
+# today, but a vuln/SAST scan doesn't need tests to pass, so all five run).
 #
 # Read from go.work rather than restated here (#1291). A hand-maintained copy
-# drifts silently in the one direction that matters: add a seventh module and
+# drifts silently in the one direction that matters: add a sixth module and
 # forget this line, and that module is never scanned — it builds, it tests, and
 # nothing says otherwise. `go work edit -json` is Go's own parse of the file,
 # so this cannot disagree with what the toolchain builds.
@@ -240,18 +255,33 @@ done
 # Same placement, and for a sharper reason: "gosec not found" is a hard
 # failure, so hoisting it out of the loop would reject a push that had no Go
 # module to scan — again #1213's shape.
+#
+# ONE run per module, not two (#1570). This used to be an unfiltered
+# informational pass followed by a `-severity high -confidence high` gate
+# pass — but those flags filter the REPORT, not the analysis, so the second
+# run re-derived a strict subset of the first at full price: 172s + 172s on
+# the core module, 344s of the security gate's measured 355s. The single JSON
+# report carries both answers and lib/gosec-report.sh reads them out. Nothing
+# is scanned less: still `./...`, still unfiltered.
 
 for mod in "${GO_MODULES[@]+"${GO_MODULES[@]}"}"; do
   command -v gosec >/dev/null 2>&1 || { fail "gosec not found — install: go install github.com/securego/gosec/v2/cmd/gosec@latest"; continue; }
-  echo "-- gosec: $mod (informational, all severities) --"
-  ( cd "$mod" && gosec -no-fail -quiet ./... ) || true
-
-  echo "-- gosec: $mod (gate: High severity + High confidence) --"
-  if ( cd "$mod" && gosec -quiet -severity high -confidence high ./... ); then
-    ok "gosec: $mod — no High/High findings"
-  else
-    fail "gosec: $mod — High-severity/High-confidence finding(s) — see output above"
-  fi
+  echo "-- gosec: $mod (one pass; informational listing + High/High gate) --"
+  gs_json=$(mktemp)
+  gs_err=$(mktemp)
+  # -no-fail so the exit status carries no verdict: the verdict is the report,
+  # and a gosec that exits non-zero merely because it found a LOW issue must
+  # not be confused with one that could not run. "Could not run" is caught by
+  # gosec_report_check, which refuses an unparseable or zero-file report
+  # rather than reading it as clean.
+  ( cd "$mod" && gosec -no-fail -quiet -fmt=json -out="$gs_json" ./... ) >/dev/null 2>"$gs_err"
+  gosec_report_check "$gs_json" "$mod"
+  case $? in
+    0) ok "gosec: $mod — no High/High findings" ;;
+    1) fail "gosec: $mod — High-severity/High-confidence finding(s) — listed above" ;;
+    *) fail "gosec: $mod — the scan did not produce a readable report; this is NOT a clean result: $(tr '\n' ' ' <"$gs_err" | sed 's/  */ /g' | cut -c1-400)" ;;
+  esac
+  rm -f "$gs_json" "$gs_err"
 done
 
 # ---- npm audit (all modes) -------------------------------------------------

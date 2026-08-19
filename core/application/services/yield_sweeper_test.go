@@ -1,6 +1,7 @@
 package services_test
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -84,7 +85,7 @@ func TestYieldSweeper_RevertCorrelates(t *testing.T) {
 	yieldRunGit(t, dir, "revert", "--no-edit", shaA)
 
 	sw := services.NewYieldSweeper(store, git.New(), &mockLogger{}, 0)
-	if n := sw.Sweep(); n != 1 {
+	if n := sw.Sweep(context.Background()); n != 1 {
 		t.Fatalf("want 1 flip, got %d", n)
 	}
 	if got := store.get("sess-a").YieldState; got != session.YieldReverted {
@@ -108,7 +109,7 @@ func TestYieldSweeper_RevertOnUnmergedBranch(t *testing.T) {
 	}}
 
 	sw := services.NewYieldSweeper(store, git.New(), &mockLogger{}, 0)
-	if n := sw.Sweep(); n != 1 {
+	if n := sw.Sweep(context.Background()); n != 1 {
 		t.Fatalf("want 1 flip (--all counts unmerged reverts), got %d", n)
 	}
 	if got := store.get("sess-a").YieldState; got != session.YieldReverted {
@@ -123,7 +124,7 @@ func TestYieldSweeper_NonGitCWD(t *testing.T) {
 		{SessionID: "sess-x", State: session.StateReady, CWD: t.TempDir(), HeadCommit: "", YieldState: session.YieldUnknown},
 	}}
 	sw := services.NewYieldSweeper(store, git.New(), &mockLogger{}, 0)
-	if n := sw.Sweep(); n != 0 {
+	if n := sw.Sweep(context.Background()); n != 0 {
 		t.Fatalf("want 0 flips, got %d", n)
 	}
 	if got := store.get("sess-x").YieldState; got != session.YieldUnknown {
@@ -140,10 +141,10 @@ func TestYieldSweeper_Idempotent(t *testing.T) {
 		{SessionID: "sess-a", State: session.StateReady, CWD: dir, HeadCommit: shaA, YieldState: session.YieldProductive},
 	}}
 	sw := services.NewYieldSweeper(store, git.New(), &mockLogger{}, 0)
-	if n := sw.Sweep(); n != 1 {
+	if n := sw.Sweep(context.Background()); n != 1 {
 		t.Fatalf("first sweep: want 1, got %d", n)
 	}
-	if n := sw.Sweep(); n != 0 {
+	if n := sw.Sweep(context.Background()); n != 0 {
 		t.Fatalf("second sweep: want 0 (idempotent), got %d", n)
 	}
 }
@@ -155,8 +156,13 @@ type fakeYieldGit struct {
 	reverted []string
 }
 
-func (f *fakeYieldGit) GetGitRoot(string) string        { return f.root }
-func (f *fakeYieldGit) RevertedCommits(string) []string { return f.reverted }
+// Always answers. The non-answer cases live in git_nonanswer_test.go, which is
+// in the INTERNAL services package because they need collectRevertedSHAs and
+// indexByCommit; a knob here would be scaffolding no test in this file sets.
+func (f *fakeYieldGit) GetGitRoot(context.Context, string) (string, bool) { return f.root, true }
+func (f *fakeYieldGit) RevertedCommits(context.Context, string) ([]string, bool) {
+	return f.reverted, true
+}
 
 // 1K sessions correlated against 10K reverted SHAs must complete well under the
 // 2s DoD bar. This measures the daemon's matching cost; the `git log` scan over
@@ -181,7 +187,7 @@ func TestYieldSweeper_Performance(t *testing.T) {
 	sw := services.NewYieldSweeper(store, &fakeYieldGit{root: "/repo", reverted: reverted}, &mockLogger{}, 0)
 
 	start := time.Now()
-	flipped := sw.Sweep()
+	flipped := sw.Sweep(context.Background())
 	elapsed := time.Since(start)
 
 	if elapsed > 2*time.Second {

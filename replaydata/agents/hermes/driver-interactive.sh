@@ -76,6 +76,7 @@ if [[ $# -ne 5 ]]; then
 fi
 
 STAGING="$1"
+# shellcheck disable=SC2034  # positional arg $2 of the driver protocol (tools/onboarding-factory/scripts/run-cell.sh:379); read by the sourced replaydata/_lib/drive/slots.sh (save_active/load_slot)
 UUID="$2"            # preferred session id; some agents mint their own (ignore then)
 TIMEOUT_S="$3"
 SETTINGS_PATH="$4"   # scenario settings blob; wire into the launch if the agent reads one
@@ -90,6 +91,7 @@ DRIVER_LOG="$STAGING/driver.log"
 # column starts ON the slot model: porting a multi-session step is "wire the seam
 # + call alloc_slot/load_slot", not rebuilding the slot bookkeeping (#666).
 _DRIVE_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../_lib/drive" && pwd)"
+# shellcheck disable=SC2034  # read by the sourced replaydata/_lib/drive/slots.sh:56 (alloc_slot)
 DRIVE_MARKER_PREFIX="$STAGING/.hermes-marker"
 # shellcheck source=/dev/null
 source "$_DRIVE_LIB/slots.sh"
@@ -100,8 +102,17 @@ source "$_DRIVE_LIB/contracts.sh"
 # with zero slots; launch_repl allocs slot 1, and restart/start_session alloc
 # more. ACTIVE indexes the live slot; SESSION/TRANSCRIPT/UUID mirror it.
 N_SLOTS=0; ACTIVE=0
-SES_SESSION=(); SES_TRANSCRIPT=(); SES_UUID=(); SES_EXPECTED=()
-SES_MARKER=(); SES_CWD=(); SES_ALIVE=(); SES_LAUNCH_TS=()
+SES_SESSION=()
+SES_TRANSCRIPT=()
+SES_UUID=()
+# shellcheck disable=SC2034  # driver-owned slot array; the sourced replaydata/_lib/drive/slots.sh reads it (save_active/load_slot/alloc_slot)
+SES_EXPECTED=()
+# shellcheck disable=SC2034  # driver-owned slot array; the sourced replaydata/_lib/drive/slots.sh reads it (save_active/load_slot/alloc_slot)
+SES_MARKER=()
+SES_CWD=()
+# shellcheck disable=SC2034  # driver-owned slot array written by the sourced replaydata/_lib/drive/slots.sh:64 (alloc_slot); kept current here for the shared slot model
+SES_ALIVE=()
+SES_LAUNCH_TS=()
 
 # recipe-lint contract (#508 #4): the step types this driver genuinely ELICITS,
 # read directly by recipe-lint (no separate manifest). Start with ONLY the seams
@@ -110,7 +121,9 @@ SES_MARKER=(); SES_CWD=(); SES_ALIVE=(); SES_LAUNCH_TS=()
 # recipe-lint flags a recipe needing it as a semantic_gap before recording. Set
 # DRIVE_SLASH_REQUIRES_STEP_TYPE=true if hermes is headless-first (a bare
 # send "/cmd" stores literal text instead of reaching the REPL).
+# shellcheck disable=SC2034  # scraped from this file's SOURCE by tools/onboarding-factory/scripts/lib/recipe-lint.sh:97 (sed), never expanded in shell
 DRIVE_ELICITS="send slash sleep wait_turn"
+# shellcheck disable=SC2034  # scraped from this file's SOURCE by tools/onboarding-factory/scripts/lib/recipe-lint.sh:113 (sed), never expanded in shell
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 RUN_CWD="${IRRLICHT_ONBOARD_CWD:-$STAGING/cwd}"
 mkdir -p "$RUN_CWD"

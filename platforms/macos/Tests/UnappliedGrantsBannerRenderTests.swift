@@ -23,7 +23,7 @@ final class UnappliedGrantsBannerRenderTests: XCTestCase {
                        key: "hooks", title: "Install hooks", reason: reason)
     }
 
-    private func host(_ items: [UnappliedGrant]) throws -> NSView {
+    private func host(_ items: [UnappliedGrant]) throws -> PinnedSnapshotHost {
         let summary = try XCTUnwrap(UnappliedGrantSummary(items: items))
         // Composited over the panel's own background, because the banner's
         // fill is a 12%-alpha wash: hosted on transparency it lands on white
@@ -32,18 +32,14 @@ final class UnappliedGrantsBannerRenderTests: XCTestCase {
         // that and made the reason text unreadable.
         let root = UnappliedGrantsBanner(summary: summary, onReview: {})
             .background(Color(NSColor.windowBackgroundColor))
-        let hosting = NSHostingView(rootView: root)
-        hosting.appearance = NSAppearance(named: .darkAqua)
-        hosting.frame = CGRect(x: 0, y: 0, width: SessionListView.panelWidth, height: 120)
-        hosting.layoutSubtreeIfNeeded()
-        return hosting
+        return PinnedSnapshotHost(root, width: SessionListView.panelWidth, height: 120)
     }
 
     /// One unapplied grant: singular headline, the cause spelled out, and a
     /// Review button — with no dismiss control anywhere on it.
     func testSingleUnappliedGrantRenders() throws {
         assertSnapshot(of: try host([grant("claude-code", "Claude Code", installFailed)]),
-                       as: .image, named: "one-unapplied")
+                       as: .pinnedImage, named: "one-unapplied")
     }
 
     /// Two grants failing for DIFFERENT reasons — an install failure
@@ -55,7 +51,7 @@ final class UnappliedGrantsBannerRenderTests: XCTestCase {
         assertSnapshot(of: try host([
             grant("claude-code", "Claude Code", installFailed),
             grant("codex", "Codex", versionFloor),
-        ]), as: .image, named: "two-diagnoses")
+        ]), as: .pinnedImage, named: "two-diagnoses")
     }
 }
 
@@ -82,18 +78,18 @@ final class UnappliedGrantsBannerAbsenceTests: XCTestCase {
 @MainActor
 final class SessionListUnappliedGrantsWiringTests: XCTestCase {
 
-    private func host(_ snap: PermissionsSnapshot?) -> NSView {
+    private func host(_ snap: PermissionsSnapshot?) -> PinnedSnapshotHost {
         let manager = SessionManager()
         manager.permissionsSnapshot = snap
         let view = SessionListView()
             .environmentObject(manager)
             .environmentObject(GasTownProvider())
-            .environmentObject(UpdateManager())
-        let hosting = NSHostingView(rootView: view)
-        hosting.appearance = NSAppearance(named: .darkAqua)
-        hosting.frame = CGRect(x: 0, y: 0, width: SessionListView.panelWidth, height: 420)
-        hosting.layoutSubtreeIfNeeded()
-        return hosting
+            // Explicit, though `UpdateManager` now refuses to start Sparkle
+            // under XCTest regardless (#1530): this is the call site whose
+            // `true` default armed a modal NSAlert one second later and hung
+            // whichever unrelated test next spun the main run loop.
+            .environmentObject(UpdateManager(startingUpdater: false))
+        return PinnedSnapshotHost(view, width: SessionListView.panelWidth, height: 420)
     }
 
     private var unapplied: PermissionsSnapshot {
@@ -105,7 +101,7 @@ final class SessionListUnappliedGrantsWiringTests: XCTestCase {
     }
 
     func testPanelShowsTheBannerWhenAGrantIsUnapplied() {
-        assertSnapshot(of: host(unapplied), as: .image, named: "panel-with-banner")
+        assertSnapshot(of: host(unapplied), as: .pinnedImage, named: "panel-with-banner")
     }
 
     /// Control: the same panel with a healthy snapshot draws no strip at
@@ -113,6 +109,6 @@ final class SessionListUnappliedGrantsWiringTests: XCTestCase {
     /// aggregate and nothing else.
     func testPanelShowsNoBannerWhenHealthy() {
         assertSnapshot(of: host(PermissionsSnapshot(mode: "ask", agents: [])),
-                       as: .image, named: "panel-healthy")
+                       as: .pinnedImage, named: "panel-healthy")
     }
 }

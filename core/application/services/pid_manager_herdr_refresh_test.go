@@ -161,7 +161,14 @@ func TestCheckPIDLiveness_HerdrSteadyStateDoesNotChurn(t *testing.T) {
 		TermProgram:     "ghostty",
 		TTY:             "/dev/ttys077",
 	}
-	repo.states["s"] = herdrSession(stored)
+	steady := herdrSession(stored)
+	// Carrying a background badge that already AGREES with the stored tty. A
+	// session without one returns at refreshBackgroundDetached's nil guard
+	// before reaching the change-detection, so it cannot see a refresh that
+	// started reporting a change on every call — which is exactly the shape
+	// that would rewrite every badged herdr session every 5 seconds forever.
+	steady.Background = &session.BackgroundAgent{Name: "nightly refactor", Detached: false}
+	repo.states["s"] = steady
 
 	calls := 0
 	pm := newPIDManagerForTest(repo)
@@ -341,5 +348,98 @@ func TestCheckPIDLiveness_HerdrHostSurvivesAnUnrunnableProbe(t *testing.T) {
 	}
 	if repo.saves != before {
 		t.Errorf("a non-answer churned the repo and pushed: %d saves", repo.saves-before)
+	}
+}
+
+// TestCheckPIDLiveness_HerdrBackgroundDetachedFollowsAnAcquiredTTY is the
+// sweep half of #1546.
+//
+// TestCheckPIDLiveness_HerdrAcquiresAMissingTTY above pins that a herdr pane
+// stored without a tty acquires one here, and launcherBackfillNeedsFor's doc
+// gives BackgroundAgent.Detached as the reason that need survives the client
+// adoption at all. This is the assertion that reason was never backed by: the
+// tty arrives, and the badge derived from it does not move. For a herdr
+// session this sweep is the only repair that runs inside a daemon's lifetime —
+// everything else waits for a restart.
+func TestCheckPIDLiveness_HerdrBackgroundDetachedFollowsAnAcquiredTTY(t *testing.T) {
+	repo := newMockRepo()
+	s := herdrSession(&session.Launcher{
+		HerdrPaneID:     "w1:p1",
+		HerdrSocketPath: "/cfg/herdr/herdr.sock",
+		TermProgram:     "iTerm.app",
+	})
+	s.Background = &session.BackgroundAgent{Name: "nightly refactor", Detached: true}
+	repo.states["s"] = s
+
+	pm := newPIDManagerForTest(repo)
+	pm.SetLauncherEnvReader(func(int) (*session.Launcher, bool) {
+		return &session.Launcher{
+			HerdrPaneID:     "w1:p1",
+			HerdrSocketPath: "/cfg/herdr/herdr.sock",
+			TermProgram:     "iTerm.app",
+			ITermSessionID:  "w0t0p0",
+			TTY:             "/dev/ttys077",
+		}, true
+	})
+
+	pm.CheckPIDLiveness()
+
+	got := repo.states["s"]
+	// Vacuity guard, as in the seed-path twin: no tty acquired means the sweep
+	// never got as far as the thing under test.
+	if got.Launcher.TTY != "/dev/ttys077" {
+		t.Fatalf("the sweep never backfilled the tty (TTY = %q), so its verdict "+
+			"on Detached says nothing about #1546", got.Launcher.TTY)
+	}
+	if got.Background == nil {
+		t.Fatal("the sweep dropped Background entirely")
+	}
+	if got.Background.Detached {
+		t.Error("Detached: got true, want false — the pane acquired /dev/ttys077, " +
+			"but the badge did not follow it")
+	}
+}
+
+// TestCheckPIDLiveness_HerdrBadgeOnlyRepairIsPersisted pins the half of the
+// sweep wiring its sibling above cannot reach.
+//
+// In that test the reader also moves ITermSessionID and the tty, so
+// applyLauncherBackfill reports a change on its own and the save happens
+// whether or not the badge repair is folded into the change-detection. The two
+// are only distinguishable when the badge is the SOLE thing that moved: the
+// reader hands back the stored launcher unchanged, so a repair computed in
+// memory and not folded in is discarded when WithSessionStateLock returns —
+// the fix silently not fixing, with every test still green (#1546).
+//
+// This is the shape a record left over from before the fix has: an already
+// repaired tty, and a badge still stamped from the read that never answered.
+func TestCheckPIDLiveness_HerdrBadgeOnlyRepairIsPersisted(t *testing.T) {
+	repo := newMockRepo()
+	stored := &session.Launcher{
+		HerdrPaneID:     "w1:p1",
+		HerdrSocketPath: "/cfg/herdr/herdr.sock",
+		TermProgram:     "ghostty",
+		TTY:             "/dev/ttys077",
+	}
+	s := herdrSession(stored)
+	s.Background = &session.BackgroundAgent{Name: "nightly refactor", Detached: true}
+	repo.states["s"] = s
+
+	pm := newPIDManagerForTest(repo)
+	// Byte-identical to the stored launcher: nothing for applyLauncherBackfill
+	// to report, so the badge repair is the only reason to write.
+	pm.SetLauncherEnvReader(func(int) (*session.Launcher, bool) {
+		cp := *stored
+		return &cp, true
+	})
+
+	before := repo.saves
+	pm.CheckPIDLiveness()
+
+	if repo.saves == before {
+		t.Errorf("a badge-only repair was never persisted: %d saves", repo.saves-before)
+	}
+	if bg := repo.states["s"].Background; bg == nil || bg.Detached {
+		t.Errorf("Detached: got %+v, want false — the pane holds /dev/ttys077", bg)
 	}
 }

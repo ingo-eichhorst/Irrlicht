@@ -22,6 +22,12 @@
 # eight `bad-*` assertions and be worthless, and only the clean fixture can
 # tell those two apart.
 #
+# Cases 10a-10e cover #1611, the same shape arriving through file SELECTION:
+# the gate walked `git ls-files` and so could not see an untracked script,
+# which since #1609 is exactly the file that puts it in scope. They build
+# their own throwaway git repos, because the fixtures here are tracked and
+# tracked-ness is the property under test.
+#
 # The last two cases assert the gate's REFUSALS rather than its findings —
 # that a missing POSIX shell and a missing bashism linter each exit 2 instead
 # of passing. Those are the paths by which this gate could itself become the
@@ -195,6 +201,150 @@ rc=$?
 assert_eq "discovery: the repo's real #!/bin/sh scripts pass (exit 0)" "0" "$rc"
 assert_contains "discovery: site/install.sh is in scope" "site/install.sh" "$out"
 assert_not_contains "discovery: testdata fixtures are excluded" "testdata/posix-lint" "$out"
+
+# ===========================================================================
+# 10a-10e. UNTRACKED FILES (#1611).
+#
+#     `git ls-files` lists index entries only. That was harmless until #1609
+#     taught `changed_files_vs_origin_main` to include untracked files: a new,
+#     untracked `#!/bin/sh` script now DOES put this gate in scope via
+#     `tools/preflight.sh --changed`, and the gate then walked the index and
+#     could not see the file that summoned it — `ALL PASS` over a file it
+#     never read. That is #1423 arriving through file selection instead of
+#     through the pipeline, so it gets the same treatment: a committed
+#     mutation rather than one that disappears with the PR.
+#
+#     These cases cannot use the fixtures above — those are TRACKED, which is
+#     the one property under test — so each builds a throwaway git repo and
+#     plants its own untracked file there.
+#
+#     Measured on the pre-fix gate, the same scratch repo: `posix-lint: 1
+#     file(s)` / `ALL PASS` / exit 0 with `untracked-bad.sh` sitting in the
+#     tree carrying a deliberate `[[ ]]`.
+# ===========================================================================
+
+# scratch_repo <dir> — a throwaway git repo holding a copy of the gate at the
+# path it derives its root from (<root>/tools/posix-lint.sh, via $0) plus ONE
+# tracked, clean `#!/bin/sh` script. Callers plant the untracked file whose
+# treatment is under test, so the file-count line below is a full census.
+#
+# The gate copy is itself untracked and carries a `#!/usr/bin/env bash`
+# shebang, so it doubles as "an untracked file that is NOT POSIX sh must not
+# be dragged into the walk" — if it were, every count below would be one high.
+scratch_repo() {
+  local d="$1"
+  rm -rf "$d" && mkdir -p "$d/tools" && cp "$LINT" "$d/tools/posix-lint.sh" || return 1
+  (
+    cd "$d" || exit 1
+    git init -q . || exit 1
+    printf '#!/bin/sh\necho clean\n' > tracked-clean.sh || exit 1
+    git add tracked-clean.sh || exit 1
+    # The fixture IS the test here. A scratch repo that did not come up would
+    # make every assertion below grade a tree git cannot read, and a gate that
+    # found nothing to lint is indistinguishable from a gate that found
+    # nothing wrong — the shape this whole file exists to refuse.
+    [[ -n "$(git ls-files)" ]] || exit 1
+  ) || return 1
+}
+
+untracked_tmp="$(mktemp -d)"
+scratch="$untracked_tmp/repo"
+
+# 10a. THE MUTATION. An untracked #!/bin/sh file carrying a bashism must make
+#      the gate FAIL and must be NAMED. Without this case the fix is
+#      unfalsifiable: the gate passes on a clean tree either way, and passing
+#      is exactly what it did before for the wrong reason.
+if scratch_repo "$scratch"; then
+  printf '#!/bin/sh\nif [[ "$1" == x ]]; then echo hi; fi\n' > "$scratch/untracked-bad.sh"
+  out=$( cd "$scratch" && ./tools/posix-lint.sh 2>&1 )
+  rc=$?
+  assert_eq "untracked: a bashism in an UNTRACKED script fails the gate" "1" "$rc"
+  assert_contains "untracked: the untracked file is named on a FAIL line" \
+    "FAIL [bashisms] untracked-bad.sh" "$out"
+else
+  echo "  FAIL: untracked: scratch repo could not be built" >&2
+  fails=$((fails + 1))
+fi
+
+# 10b. The direction that fails SILENTLY, and therefore the one that needs the
+#      stronger assertion: a clean untracked script must pass AND must have
+#      been SEEN. Exit 0 alone is satisfied by never looking at it, which is
+#      the defect. So pin the census — 2 files, the tracked one and the
+#      untracked one, which also rules out the file being counted twice — and
+#      pin the per-file `ok` line that says the gate actually read it.
+if scratch_repo "$scratch"; then
+  printf '#!/bin/sh\necho untracked and clean\n' > "$scratch/untracked-clean.sh"
+  out=$( cd "$scratch" && ./tools/posix-lint.sh 2>&1 )
+  rc=$?
+  assert_eq "untracked: a clean UNTRACKED script passes (exit 0)" "0" "$rc"
+  assert_contains "untracked: the file count moved — it was actually walked" \
+    "posix-lint: 2 file(s)" "$out"
+  assert_contains "untracked: the clean untracked file is reported ok" \
+    "ok  untracked-clean.sh" "$out"
+else
+  echo "  FAIL: untracked: scratch repo could not be built" >&2
+  fails=$((fails + 1))
+fi
+
+# 10c. The testdata/ exclusion applies to untracked files too — a plausible
+#      mis-implementation is a SECOND walk that skips the filters the first
+#      one applies. Pinning the count at 1 rather than only the exit status is
+#      what tells "excluded" from "walked and happened to be clean".
+if scratch_repo "$scratch"; then
+  mkdir -p "$scratch/tools/lib/testdata/posix-lint"
+  printf '#!/bin/sh\nif [[ "$1" == x ]]; then echo hi; fi\n' \
+    > "$scratch/tools/lib/testdata/posix-lint/bad-untracked.sh"
+  out=$( cd "$scratch" && ./tools/posix-lint.sh 2>&1 )
+  rc=$?
+  assert_eq "untracked: a fixture under testdata/ is still excluded (exit 0)" "0" "$rc"
+  assert_contains "untracked: testdata/ exclusion leaves the census at 1" \
+    "posix-lint: 1 file(s)" "$out"
+else
+  echo "  FAIL: untracked: scratch repo could not be built" >&2
+  fails=$((fails + 1))
+fi
+
+# 10d. The FIRST-LINE rule applies to untracked files too. This file is bash
+#      and writes a `#!/bin/sh` stub inside a heredoc — exactly the shape of
+#      tools/lib/install-uninstall_test.sh, which is why the selector reads
+#      line 1 and not the file's content.
+if scratch_repo "$scratch"; then
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'cat > stub <<EOF\n#!/bin/sh\nif [[ "$1" == x ]]; then echo hi; fi\nEOF\n'
+  } > "$scratch/untracked-bash.sh"
+  out=$( cd "$scratch" && ./tools/posix-lint.sh 2>&1 )
+  rc=$?
+  assert_eq "untracked: a bash file quoting a #!/bin/sh stub is not linted (exit 0)" "0" "$rc"
+  assert_contains "untracked: first-line rule leaves the census at 1" \
+    "posix-lint: 1 file(s)" "$out"
+else
+  echo "  FAIL: untracked: scratch repo could not be built" >&2
+  fails=$((fails + 1))
+fi
+
+# 10e. A LOCK, not a mutation — say so rather than let it read as evidence.
+#      #1609 measured that a bare `git ls-files --others` lists only what is
+#      under the CALLER'S cwd, and prints it cwd-relative, so the naive
+#      spelling looks correct forever from the repo root. The gate cds to its
+#      own root before discovering, so `--full-name -- :/` cannot be
+#      discriminated from the bare form here today and this case passes either
+#      way. It is kept because the `cd` is the only thing making that true,
+#      and a future refactor that moves it would otherwise silently reinstate
+#      the cwd-scoped walk.
+if scratch_repo "$scratch"; then
+  printf '#!/bin/sh\nif [[ "$1" == x ]]; then echo hi; fi\n' > "$scratch/untracked-bad.sh"
+  out=$( cd "$scratch/tools" && ./posix-lint.sh 2>&1 )
+  rc=$?
+  assert_eq "untracked (lock): invoked from a subdirectory, still fails" "1" "$rc"
+  assert_contains "untracked (lock): the root-relative path is named" \
+    "FAIL [bashisms] untracked-bad.sh" "$out"
+else
+  echo "  FAIL: untracked: scratch repo could not be built" >&2
+  fails=$((fails + 1))
+fi
+
+rm -rf "$untracked_tmp"
 
 # ===========================================================================
 # 11. Refusal: no POSIX shell. A PATH without dash/ash must exit 2, not 0.

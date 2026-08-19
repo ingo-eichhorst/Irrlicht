@@ -60,7 +60,9 @@ alloc_slot() {
   SES_UUID[$N_SLOTS]=""
   SES_EXPECTED[$N_SLOTS]=0
   SES_MARKER[$N_SLOTS]="$marker"
+  # shellcheck disable=SC2034  # written here for the DRIVERS that read it — the slot's cwd is used to launch and to locate the agent process (e.g. replaydata/agents/antigravity/driver-interactive.sh's tmux -c and claudecode's per-cwd slot lookup)
   SES_CWD[$N_SLOTS]="$cwd"
+  # shellcheck disable=SC2034  # written here for the DRIVERS that read it — the teardown/summary arms branch on it (e.g. replaydata/agents/antigravity, claudecode, codex, gemini-cli, kiro-cli driver-interactive.sh)
   SES_ALIVE[$N_SLOTS]=1
   ACTIVE=$N_SLOTS
   SESSION="$sess"

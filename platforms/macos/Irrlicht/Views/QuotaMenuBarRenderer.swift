@@ -25,15 +25,26 @@ enum QuotaMenuBarRenderer {
     /// `compact` requests the narrower, label-less bars layout used in
     /// Combined style (ignored by the Circle visual style, which has no
     /// label to drop and is already compact).
+    ///
+    /// `now` is a required argument since #1675 — the pace marker's position is
+    /// a continuous function of it. This renderer is rasterised into an
+    /// `NSStatusItem` outside any SwiftUI environment, so `\.formatNow` cannot
+    /// reach it and the argument form is the one #1659 prescribes for exactly
+    /// that case (`HistoryFormat`'s `timeZone`). The clock is read ONCE, at the
+    /// one visible place — `MenuBarImageBuilder.combinedImage` — and is an input
+    /// everywhere below here, so the 5h and 7d rows of one icon can no longer be
+    /// paced against two different instants the way two `Date()` reads inside
+    /// `rowSVG` were.
     static func imageForSelectedProvider(
         sessions: [SessionState],
         providerKey: String?,
-        compact: Bool = false
+        compact: Bool = false,
+        now: Date
     ) -> NSImage? {
         guard let info = selectedSnapshot(sessions: sessions, providerKey: providerKey) else {
             return nil
         }
-        return buildImage(for: info, compact: compact)
+        return buildImage(for: info, compact: compact, now: now)
     }
 
     /// Freshest-`sampledAt`-wins across `sessions`, matching
@@ -61,11 +72,11 @@ enum QuotaMenuBarRenderer {
         return filtered.max { $0.info.sampledAt < $1.info.sampledAt }?.info
     }
 
-    static func buildImage(for info: RateLimitInfo, compact: Bool = false) -> NSImage? {
+    static func buildImage(for info: RateLimitInfo, compact: Bool = false, now: Date) -> NSImage? {
         let built: (svg: String, width: CGFloat)?
         switch QuotaVisualStyle.current {
-        case .bars: built = buildSVG(for: info, compact: compact)
-        case .circle: built = buildCircleSVG(for: info)
+        case .bars: built = buildSVG(for: info, compact: compact, now: now)
+        case .circle: built = buildCircleSVG(for: info, now: now)
         }
         guard let (svg, width) = built else { return nil }
         guard let data = svg.data(using: .utf8), let image = NSImage(data: data) else { return nil }
@@ -77,7 +88,7 @@ enum QuotaMenuBarRenderer {
     /// `compact` drops the "5h"/"7d" text label and narrows the bars —
     /// used in Combined style, where the icon's width is shared with the
     /// session-state dots. Defaults to `false` (today's Usage-style layout).
-    static func buildSVG(for info: RateLimitInfo, compact: Bool = false) -> (svg: String, width: CGFloat)? {
+    static func buildSVG(for info: RateLimitInfo, compact: Bool = false, now: Date) -> (svg: String, width: CGFloat)? {
         let fiveHour = info.windows.first { $0.canonicalWindowMinutes == 300 }
         let sevenDay = info.windows.first { $0.canonicalWindowMinutes == 10080 }
         guard fiveHour != nil || sevenDay != nil else { return nil }
@@ -88,10 +99,10 @@ enum QuotaMenuBarRenderer {
         <svg xmlns="http://www.w3.org/2000/svg" width="\(Int(width))" height="\(Int(height))">
         """
         if let fiveHour {
-            svg += rowSVG(label: "5h", window: fiveHour, rowY: 0, compact: compact)
+            svg += rowSVG(label: "5h", window: fiveHour, rowY: 0, compact: compact, now: now)
         }
         if let sevenDay {
-            svg += rowSVG(label: "7d", window: sevenDay, rowY: rowHeight, compact: compact)
+            svg += rowSVG(label: "7d", window: sevenDay, rowY: rowHeight, compact: compact, now: now)
         }
         svg += "</svg>"
         return (svg, width)
@@ -103,7 +114,7 @@ enum QuotaMenuBarRenderer {
     /// stay pinned to one fixed window rather than silently swap which
     /// number it's showing. Falls back to 7d only when 5h is absent (e.g.
     /// a fresh snapshot that hasn't carried both windows yet).
-    static func buildCircleSVG(for info: RateLimitInfo) -> (svg: String, width: CGFloat)? {
+    static func buildCircleSVG(for info: RateLimitInfo, now: Date) -> (svg: String, width: CGFloat)? {
         let fiveHour = info.windows.first { $0.canonicalWindowMinutes == 300 }
         let sevenDay = info.windows.first { $0.canonicalWindowMinutes == 10080 }
         guard let window = fiveHour ?? sevenDay else { return nil }
@@ -113,7 +124,7 @@ enum QuotaMenuBarRenderer {
         let cy = size / 2
         let radius = size / 2 - 2.25
         let strokeWidth: CGFloat = 2.5
-        let pace = pacePercent(for: window)
+        let pace = pacePercent(for: window, now: now)
         let hex = colorHex(usedPercent: window.usedPercent, pacePercent: pace)
 
         let circumference = 2 * Double.pi * Double(radius)
@@ -146,14 +157,14 @@ enum QuotaMenuBarRenderer {
 
     /// `compact` omits the leading "5h"/"7d" label and narrows the bar by
     /// `compactBarWidthFactor` — see `buildSVG`'s doc.
-    private static func rowSVG(label: String, window: RateLimitWindowInfo, rowY: CGFloat, compact: Bool = false) -> String {
+    private static func rowSVG(label: String, window: RateLimitWindowInfo, rowY: CGFloat, compact: Bool = false, now: Date) -> String {
         let effectiveBarWidth = compact ? barWidth * compactBarWidthFactor : barWidth
         let pct = min(max(window.usedPercent, 0), 100) / 100
         let filledWidth = effectiveBarWidth * pct
         let barX: CGFloat = compact ? 0 : labelWidth + gap
         let barY = rowY + (rowHeight - barHeight) / 2
         let textY = rowY + rowHeight * 0.78
-        let pace = pacePercent(for: window)
+        let pace = pacePercent(for: window, now: now)
         let hex = colorHex(usedPercent: window.usedPercent, pacePercent: pace)
 
         var svg = ""
@@ -183,8 +194,8 @@ enum QuotaMenuBarRenderer {
     /// usage had grown linearly since the window opened" can't drift between
     /// the two. Reachable here because `selectedSnapshot` no longer drops
     /// stale snapshots.
-    private static func pacePercent(for window: RateLimitWindowInfo) -> Double? {
-        SessionListView.quotaPacePercent(window)
+    private static func pacePercent(for window: RateLimitWindowInfo, now: Date) -> Double? {
+        SessionListView.quotaPacePercent(window, now: now)
     }
 
     /// Delegates to SessionListView.quotaColorTier — the same pace-aware
@@ -210,13 +221,27 @@ enum QuotaMenuBarRenderer {
     private static let systemOrangeHex = "FF9500"
     private static let systemYellowHex = "FFCC00"
 
-    /// True when the app's effective appearance is dark — same signal
-    /// SessionState.adapterIcon already uses to pick a light/dark SVG
-    /// variant, kept consistent here rather than introducing a second way
-    /// to ask the same question — including its nil-fallback: NSApp is nil
-    /// in unit tests, and adapterIcon defaults to the light variant there
-    /// (the more common ambient appearance), so this matches rather than
-    /// disagreeing with it.
+    /// True when the app's effective appearance is dark.
+    ///
+    /// Asking the *process* is defensible here in a way it is not for
+    /// `SessionState.adapterIcon(isDark:)`, which used to do the same and
+    /// drifted with the system appearance as a result (#1509): that one is
+    /// read by SwiftUI views, which have their own
+    /// `@Environment(\.colorScheme)`, whereas this image is rasterised before
+    /// being handed to a status item. The narrower signal does exist —
+    /// `MenuBarController` installs the result on an `NSStatusBarButton`,
+    /// which has an `effectiveAppearance` — so this is a defensible default
+    /// rather than the only option, and it is untested against a menu bar
+    /// whose appearance differs from the app's.
+    ///
+    /// On the `NSApp == nil` fallback: `NSApp` is nil until something
+    /// instantiates `NSApplication`, so it is nil early in launch and in a
+    /// unit test that has not yet built a view. It is NOT reliably nil under
+    /// XCTest, which is what an earlier version of this comment assumed —
+    /// any test that renders an AppKit view creates the shared application on
+    /// the way, after which this follows the machine's *current* system
+    /// appearance. That is the half that was wrong, and it is how the
+    /// appearance leaked into snapshot renders unnoticed.
     private static var isDarkAppearance: Bool {
         guard let app = NSApp else { return false }
         return app.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua

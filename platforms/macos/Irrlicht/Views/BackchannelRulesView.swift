@@ -42,6 +42,12 @@ struct BackchannelRulesView: View {
     @StateObject private var model = BackchannelRulesModel()
     @State private var saveTask: Task<Void, Never>? = nil
 
+    /// The locale the threshold field's `.number` style resolves through.
+    /// Defaults to `Locale.autoupdatingCurrent`, i.e. exactly what a bare
+    /// `format: .number` already used — see `FormatLocaleEnvironment.swift`
+    /// for why this seam has to exist and why it is not `\.locale` (#1630).
+    @Environment(\.formatLocale) private var formatLocale
+
     private let events: [EventOption] = [
         EventOption(id: BackchannelRule.eventWaiting, label: "Waiting"),
         EventOption(id: BackchannelRule.eventReady, label: "Ready"),
@@ -146,7 +152,7 @@ struct BackchannelRulesView: View {
                     TextField(isTokens ? "150000" : "85", value: Binding(
                         get: { rule.wrappedValue.trigger.threshold ?? fallback },
                         set: { rule.wrappedValue.trigger.threshold = $0 }
-                    ), format: .number)
+                    ), format: .number.locale(formatLocale))
                     .frame(width: isTokens ? 72 : 48)
                     .textFieldStyle(.roundedBorder)
                     Text(isTokens ? "tokens" : "%").font(.caption).foregroundColor(.secondary)

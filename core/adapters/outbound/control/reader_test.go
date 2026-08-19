@@ -12,7 +12,6 @@ import (
 
 func TestCaptureCommandBuilders(t *testing.T) {
 	tmuxL := &session.Launcher{TmuxPane: "%3", TmuxSocket: "/tmp/tmux-501/default"}
-	tmuxNoSock := &session.Launcher{TmuxPane: "%7"}
 	kittyL := &session.Launcher{KittyListenOn: "unix:/tmp/mykitty", KittyWindowID: "12"}
 
 	cases := []struct {
@@ -24,11 +23,6 @@ func TestCaptureCommandBuilders(t *testing.T) {
 			"tmux capture with socket",
 			tmuxCapture(tmuxL),
 			command{name: "tmux", args: []string{"-S", "/tmp/tmux-501/default", "capture-pane", "-t", "%3", "-p"}},
-		},
-		{
-			"tmux capture without socket",
-			tmuxCapture(tmuxNoSock),
-			command{name: "tmux", args: []string{"capture-pane", "-t", "%7", "-p"}},
 		},
 		{
 			"kitty capture",
@@ -60,7 +54,7 @@ func TestCaptureScreenDispatch(t *testing.T) {
 		wantErrIs error
 	}{
 		{"herdr", &session.Launcher{HerdrPaneID: "w1:p1", HerdrSocketPath: "/tmp/h.sock"}, "herdr", nil},
-		{"tmux", &session.Launcher{TmuxPane: "%1"}, "tmux", nil},
+		{"tmux", &session.Launcher{TmuxPane: "%1", TmuxSocket: "/tmp/tmux-501/default"}, "tmux", nil},
 		{"kitty", &session.Launcher{KittyListenOn: "unix:/x", KittyWindowID: "9"}, "kitten", nil},
 		{"applescript not readable", &session.Launcher{TermProgram: "iTerm.app", ITermSessionID: "w0t0p0:U"}, "", outbound.ErrNotReadable},
 		{"no backend not readable", &session.Launcher{TermProgram: "vscode"}, "", outbound.ErrNotReadable},

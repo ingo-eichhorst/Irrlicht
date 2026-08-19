@@ -1,0 +1,11 @@
+Test Suite 'All tests' started at 2026-08-14 14:25:12.000
+Test Suite 'IrrlichtPackageTests.xctest' started at 2026-08-14 14:25:12.001
+Test Suite 'SoundPlayerTests' started at 2026-08-14 14:25:13.012
+Test Case '-[IrrlichtTests.SoundPlayerTests testInstallCustomPassthroughCopiesAiff]' started.
+Test Case '-[IrrlichtTests.SoundPlayerTests testInstallCustomPassthroughCopiesAiff]' passed (0.002 seconds).
+Test Suite 'SoundPlayerTests' passed at 2026-08-14 14:25:13.165.
+	 Executed 12 tests, with 0 failures (0 unexpected) in 0.152 (0.153) seconds
+Test Suite 'IrrlichtPackageTests.xctest' passed at 2026-08-14 14:25:13.165.
+	 Executed 311 tests, with 0 failures (0 unexpected) in 1.718 (1.735) seconds
+Test Suite 'All tests' passed at 2026-08-14 14:25:13.165.
+	 Executed 311 tests, with 0 failures (0 unexpected) in 1.718 (1.736) seconds

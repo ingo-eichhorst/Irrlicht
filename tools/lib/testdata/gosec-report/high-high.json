@@ -1,0 +1,9 @@
+{
+  "Golang errors": {},
+  "Issues": [
+    {"severity":"HIGH","confidence":"MEDIUM","cwe":{"id":"190","url":"https://cwe.mitre.org/data/definitions/190.html"},"rule_id":"G115","details":"integer overflow conversion uint64 -> int64","file":"/repo/core/adapters/inbound/agents/antigravity/dbmetrics.go","code":"165: out = int64(num)\n","line":"165","column":"15","nosec":false,"suppressions":null},
+    {"severity":"HIGH","confidence":"HIGH","cwe":{"id":"295","url":"https://cwe.mitre.org/data/definitions/295.html"},"rule_id":"G402","details":"TLS InsecureSkipVerify set true.","file":"/repo/core/adapters/outbound/relay/client.go","code":"27: tls.Config{InsecureSkipVerify: true}\n","line":"27","column":"10","nosec":false,"suppressions":null}
+  ],
+  "Stats": {"files":263,"lines":66534,"nosec":0,"found":2},
+  "GosecVersion":"dev"
+}

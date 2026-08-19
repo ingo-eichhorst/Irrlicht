@@ -1,0 +1,157 @@
+{
+  "schema_version": 1,
+  "source_transcript": "",
+  "generated_at": "0001-01-01T00:00:00Z",
+  "settings": {
+    "adapter": "codex",
+    "debounce_window": 2000000000,
+    "flicker_max_duration": 10000000000
+  },
+  "summary": {
+    "total_events": 12,
+    "consumed_events": 12,
+    "total_transitions": 5,
+    "first_event_time": "2026-08-18T00:42:33.531567+02:00",
+    "last_event_time": "2026-08-18T00:42:38.225446+02:00",
+    "wall_clock_session_duration": 4693879000,
+    "state_durations": {
+      "ready": 2017806000,
+      "working": 2676073000
+    },
+    "flicker_count": 2,
+    "flickers_by_category": {
+      "ready_between_working": 1,
+      "working_between_ready": 1
+    },
+    "flickers_by_reason": {
+      "agent finished turn → ready": 1,
+      "force ready→working on first activity": 1
+    },
+    "cum_input_tokens": 23773,
+    "cum_output_tokens": 11,
+    "model_name": "gpt-5.6-sol"
+  },
+  "transitions": [
+    {
+      "index": 0,
+      "event_index": -1,
+      "virtual_time": "2026-08-18T00:42:33.531567+02:00",
+      "cause": "init",
+      "prev_state": "",
+      "new_state": "ready",
+      "reason": "initial state",
+      "last_event_type": "",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 1,
+      "event_index": 0,
+      "virtual_time": "2026-08-18T00:42:33.531567+02:00",
+      "cause": "event",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "user_message",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 2,
+      "event_index": -1,
+      "virtual_time": "2026-08-18T00:42:36.20764+02:00",
+      "cause": "hook",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "user_message",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 3,
+      "event_index": 11,
+      "virtual_time": "2026-08-18T00:42:38.225446+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "The capital of France is Paris."
+    },
+    {
+      "index": 4,
+      "event_index": 11,
+      "virtual_time": "2026-08-18T00:42:38.225446+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "The capital of France is Paris."
+    }
+  ],
+  "sessions": [
+    {
+      "session_id": "proc-18368",
+      "adapter": "codex",
+      "first_seen": "2026-08-18T00:42:27.882345+02:00",
+      "last_seen": "2026-08-18T00:42:38.014265+02:00",
+      "duration_ms": 10131,
+      "event_count": 6,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 18368,
+      "pid_discovery_lag_ms": 38,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 10093
+      }
+    },
+    {
+      "session_id": "01a011e3-f45b-7e10-8298-7609f4d621fd",
+      "adapter": "codex",
+      "first_seen": "2026-08-18T00:42:33.503412+02:00",
+      "last_seen": "2026-08-18T00:42:41.584303+02:00",
+      "duration_ms": 8080,
+      "event_count": 33,
+      "state_changes": 5,
+      "final_state": "ready",
+      "pid": 18368,
+      "pid_discovery_lag_ms": 308,
+      "debounce_coalesced_events": 10,
+      "state_durations_ms": {
+        "ready": 5375,
+        "working": 2677
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 4,
+    "replayed_transition_count": 4,
+    "ordered_matches": 4,
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ]
+  }
+}

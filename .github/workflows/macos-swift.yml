@@ -1,0 +1,528 @@
+name: macOS (Swift)
+
+# Build + test gate for the macOS Swift app. Until #1509 nothing in CI ran
+# `swift build` or `swift test` at all: a Swift compile error could land on
+# `main` and no check would notice, because test.yml's macOS job builds Go.
+# That is the hole this closes.
+#
+# #1509 shipped the build half only, because the suite did not pass on a runner
+# — 227 of its tests did, and four blockers accounted for the rest (#1530).
+# Three are fixed and the fourth is halved, which is enough to run the suite
+# here:
+#
+#   1. 35 host-dependent image snapshots — TWO problems, the first masking the
+#      second. They rasterised at the MAIN SCREEN's backing scale, so a 2×
+#      developer Mac and a 1× runner produced different PIXEL COUNTS for the
+#      same view, and SnapshotTesting returns from that guard before comparing
+#      a byte. `Tests/PinnedScaleSnapshot.swift` pins the scale, regenerating
+#      no reference — the committed references still match byte for byte, which
+#      is the evidence the fix is a fix. That made the second visible: a
+#      genuine rasterisation difference, tracked as #1615, which is why five
+#      suites are skipped in the test step below.
+#   2. A hang, reported against a different test on every run. Sparkle's
+#      `startUpdater` fails outside an app bundle and answers by running a
+#      modal `NSAlert` on the main queue a second later; whichever test next
+#      spun the run loop blocked on it forever. `UpdateManager` no longer
+#      starts Sparkle under XCTest.
+#   3. #1523 — a main-thread deadlock in a test helper, fixed there.
+#   4. A scorer that filtered path segments by the running process's own
+#      `$HOME`, so it answered differently for `runner` than for `ingo`. Now
+#      derived from the cwd under test.
+#
+# Deliberately its own workflow rather than a job in test.yml: that file is the
+# Go gate (its header says so), it installs a Go toolchain these jobs do not
+# need, and a Swift compile break should not be reported under `go-test`.
+#
+# Two jobs rather than two steps, because a compile break and a failing
+# assertion are different diagnoses and should be different checks — #1526's
+# own history is the argument, where `swift build` succeeded in 45s while the
+# test step hung and was killed at the job timeout three times in a row.
+#
+# No `paths:` filter, on purpose. A path-filtered workflow does not run for an
+# unrelated PR, and its check is then *absent* rather than green — which reads
+# as "still queued" at a glance and is the failure mode this repo keeps
+# removing elsewhere.
+#
+# This is still WEAKER than the local gate, and the asymmetry is deliberate
+# rather than an oversight: `tools/preflight.sh --only swift` runs the same
+# suite on a developer Mac, where the display, the fonts and the audio stack
+# are the ones the app actually ships against.
+#
+# A THIRD job, `swift-snapshot-evidence`, runs the five skipped suites on
+# purpose and uploads what they render (#1615, step 1). Until it existed, the
+# skipped suites failed on no machine anybody could look at, so every statement
+# about WHAT differs was inferred from which suites pass. It is not a gate on
+# the pixels — those failing is its expected outcome and it does not judge them
+# — but it IS a gate on itself: a run whose harness never loaded, or that hung,
+# was truncated, executed nothing, or produced no images fails it, because
+# "collected no evidence" and "found no difference" must never print the same
+# thing. Since #1678 those five are told apart from each other as well, not
+# only from health: the first used to be reported as the second.
+#
+# It costs a third macOS job per PR (macOS minutes bill at 10×). That is
+# deliberate for as long as the suites are skipped and #1615's step 3 is open;
+# once the policy question is answered, narrowing this job to
+# `workflow_dispatch` — or deleting it — is the cheap part.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  # So the pixels can be re-collected on demand — for a toolchain bump on the
+  # runner, say — without pushing a commit to ask.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A superseded push should not leave a macOS job running. Mirrors linux.yml.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  swift-build:
+    runs-on: macos-latest
+    # The build is ~45s measured. The cap exists so that a hang is a fast,
+    # legible red rather than a job sitting `in_progress` against GitHub's
+    # 6-hour default — a check stuck pending reads as "still queued", which is
+    # the same ambiguity the no-`paths:` decision above exists to avoid. The
+    # first three attempts at this gate hung for exactly that reason (#1530).
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: platforms/macos
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      # Recorded in the log on purpose: when a snapshot reference legitimately
+      # has to be regenerated, the toolchain that produced it is the first
+      # thing the next reader needs — and #1509 is a case where two people in
+      # a row could not tell a toolchain difference from a real bug.
+      - name: Report toolchain
+        run: |
+          swift --version
+          xcodebuild -version
+          sw_vers
+
+      # Builds the app target AND the test targets, so a compile error in test
+      # code fails the gate too — without running anything. That is deliberate:
+      # test code is where most of this repo's macOS churn lands, and a test
+      # file that no longer compiles is invisible to every other check.
+      - name: Build (app + tests)
+        run: swift build --build-tests
+
+  swift-test:
+    runs-on: macos-latest
+    # The outer net only. `SWIFT_SUITE_TIMEOUT` (240s) fires first and prints a
+    # diagnosis naming the test the run stopped in; this cap is what catches a
+    # hang somewhere that bound cannot see.
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Report toolchain
+        run: |
+          swift --version
+          xcodebuild -version
+          sw_vers
+
+      # The suite runs through tools/lib/swift-suite.sh — the same harness
+      # tools/preflight.sh uses, so CI and the pre-push hook judge a run by the
+      # same rules rather than by two implementations that can disagree.
+      #
+      # Three things it buys that a bare `swift test` does not:
+      #
+      #   a pty        XCTest block-buffers when stdout is not a TTY, so a hung
+      #                run uploads an EMPTY log — the condition under which
+      #                #1530's blocker 2 was unattributable for two rounds.
+      #   a bound      a hang becomes a named failure at 240s instead of a job
+      #                cancelled at the 20-minute cap with no attribution.
+      #   completeness XCTest's stall detector aborts the process mid-run, and
+      #                every suite that already reported says "0 failures". The
+      #                verdict keys on the bundle's own summary line, so a
+      #                truncated run is a failure and not a pass (#1523).
+      #
+      # `--skip LauncherTestHarness --skip LauncherHarnessTests` is the
+      # documented invocation (AGENTS.md): that target drives real applications
+      # through NSRunningApplication. Both names are passed because a test ID is
+      # `<target>.<class>`, so either alone stops covering the harness the
+      # moment a class is added or the target is renamed.
+      #
+      # The five suites after them are image snapshots that still differ from
+      # their references on a runner AFTER the scale fix, and the reason they
+      # are skipped rather than re-recorded is the substance of #1530's blocker
+      # 1. Measured on this workflow's own first run: the failure message
+      # changed from the pixel-count form (`…@(350.0, 48.0) does not match
+      # reference@(350.0, 48.0).`, 35×) to the byte form (`Newly-taken snapshot
+      # does not match reference.`, 36×), which is the branch in
+      # SnapshotTesting's `compare` that is only reachable once the pixel
+      # dimensions agree. So the scale half is fixed and a rasterisation half
+      # is now visible underneath it.
+      #
+      # It is NOT the Xcode difference this comment used to name. Measured by
+      # #1615's evidence job and its throwaway probe: all 15 Xcodes installed
+      # on `macos-latest` — 26.0 through 26.6, including 26.3.0 build 17C529,
+      # bit-for-bit the reference Mac's own — produce the same 36 failures,
+      # while that Mac on that build produces none. The toolchain is not the
+      # variable; the OS is (runner macOS 26.5.2 / 25F84, reference 26.5 /
+      # 25F71). Re-recording to make it green is the move #1034
+      # and #1044 both made and both got wrong, and #1509 measured a perceptual
+      # tolerance wide enough to absorb this drift as also wide enough to pass
+      # a missing architecture segment. The residual is #1615.
+      #
+      # What they render is not lost by being skipped: `swift-snapshot-evidence`
+      # below runs these same five and uploads the images, which is how #1615
+      # gets looked at rather than reasoned about.
+      #
+      # This list cannot silently drift: `Tests/ImageSnapshotCIScopeTests.swift`
+      # derives the set of image-snapshot suites from the test sources and
+      # cross-checks it against these very arguments — and, since the evidence
+      # job exists, against ITS arguments too, so the two invocations cannot
+      # come to disagree about which suites are the skipped ones.
+      #
+      # This still gates 272 of 320 tests, against 0 before — measured, on this
+      # workflow's own run, not derived from the list above by hand (the first
+      # draft of this comment said "270 of 318" and was stale by exactly the
+      # two tests the tripwire itself adds). Two image-snapshot suites are
+      # deliberately NOT skipped — they pass on a runner, and their passing is
+      # itself evidence that the residual is content-dependent rather than a
+      # blanket toolchain difference.
+      - name: Test (bounded, streamed under a pty)
+        shell: bash
+        run: |
+          # `set +e` is load-bearing, not tidiness, and it has to come FIRST.
+          # GitHub runs `shell: bash` as
+          # `bash --noprofile --norc -e -o pipefail {0}`, so `-e` is ALREADY on
+          # and the `set -uo pipefail` below does not clear it. Without this
+          # line the failing subshell aborts the step *there*: `rc=$?` never
+          # runs and `swift_suite_verdict` is never called — which is the
+          # entire reason this step goes through the harness at all rather than
+          # invoking the suite directly. Every diagnosis the block above
+          # promises (the 240s hang headline, `last test to start`, TRUNCATED,
+          # `Executed 0 tests`, signal 6) was therefore unreachable in CI for
+          # the whole of this workflow's life, so a hang and an ordinary
+          # assertion failure printed the same thing: `Process completed with
+          # exit code 1`, and nothing else (#1629).
+          #
+          # Measured on a probe run carrying a deliberately hanging test, not
+          # reasoned about: the step log ended at that test's `started.` line
+          # and went straight to `##[error]Process completed with exit code 1`,
+          # with not one line of the verdict in between.
+          #
+          # `|| true` on the subshell looks like an alternative and is not. It
+          # does let `rc=$?` run, but `$?` is then `true`'s status, so the real
+          # code is lost and the verdict would judge every failing run as 0 —
+          # silently downgrading a hang to a pass. `set +e` and
+          # `( … ) || rc=$?` are the only two spellings that keep the code;
+          # measured, all three ways.
+          set +e
+          set -uo pipefail
+
+          # The harness, and the refusal that tells "the library could not be
+          # LOADED" from anything it would have said (#1702). This source's
+          # status used to be read by nothing, and the result was neither
+          # silent nor wrong — it was UNDIAGNOSED. Measured with the library
+          # removed, under this step's own derived shell:
+          #
+          #   step.sh: line 28: tools/lib/swift-suite.sh: No such file or directory
+          #   step.sh: line 30: swift_suite_run: command not found
+          #   step.sh: line 38: swift_suite_verdict: command not found
+          #   ### ---- exit: 127 ----
+          #
+          # Loud (127 is not 0) and legible only to someone who opens the log.
+          # The missing function IS `swift_suite_verdict`, so the one thing
+          # that would have printed a named `::error::` line — the 240s hang
+          # headline, `last test to start`, TRUNCATED, `Executed 0 tests`,
+          # signal 6 — is precisely what is gone. That is why this is smaller
+          # than the sibling below, where the same statement made four guards
+          # fire and MISdiagnose the run (#1678), and it is still the
+          # "could not determine" outcome with no refusal (#1645).
+          #
+          # TWO checks rather than one, because a source that RETURNS 0 having
+          # defined nothing reads exactly like one that worked — an emptied or
+          # truncated file, or one whose last statement succeeded after an
+          # earlier error. `command -v` is the only thing that tells those
+          # apart, and it is what makes this three outcomes instead of two.
+          #
+          # The names are THIS step's, not the sibling's: it consults its
+          # predicates individually and checks `swift_suite_completed` /
+          # `swift_suite_ran_tests`, neither of which is called here, while
+          # `swift_suite_verdict` — the only predicate this step has, and the
+          # one whose absence causes the whole defect — is not on its list.
+          # A list copied from it would pass a library missing exactly the
+          # verdict and land straight back in 127.
+          #
+          # `exit 1`, and the status is a choice rather than a leftover.
+          # `swift_suite_verdict` is this step's LAST command, so its status is
+          # the step's status, and it returns 0 or 1 and nothing else — there
+          # is no `bad` here and nothing after it to reach. 1 is therefore what
+          # this step already means by "failed"; 127 was the shell reporting
+          # the last "command not found", not the workflow reporting anything.
+          # Both refuse HERE rather than continuing, because `swift_suite_run`
+          # is what PRODUCES the log the verdict judges: going on would judge a
+          # run that was never started. The two wordings are deliberately
+          # disjoint, because a shared exit 1 is satisfied by refusals that all
+          # fire together (#1644).
+          if ! . tools/lib/swift-suite.sh; then
+            echo "::error::could not load the test harness tools/lib/swift-suite.sh, so the suite was never started and there is no verdict to judge it. This is NOT a hung or truncated run — look at the checkout, not at the toolchain."
+            exit 1
+          fi
+          for fn in swift_suite_run swift_suite_verdict; do
+            if ! command -v "$fn" >/dev/null 2>&1; then
+              echo "::error::tools/lib/swift-suite.sh was read but defines no $fn, so the suite was never started and there is no verdict to judge it. This is NOT a hung or truncated run — the harness loaded and is unusable."
+              exit 1
+            fi
+          done
+
+          log="$RUNNER_TEMP/swift-test.log"
+          ( cd platforms/macos && swift_suite_run "$log" \
+              swift test --skip LauncherTestHarness --skip LauncherHarnessTests \
+                         --skip BackchannelRulesViewSnapshotTests \
+                         --skip GroupViewSnapshotTests \
+                         --skip HistoryViewSnapshotTests \
+                         --skip SessionListUnappliedGrantsWiringTests \
+                         --skip SessionRowSnapshotTests )
+          rc=$?
+          swift_suite_verdict "$rc" "$log"
+
+      # The log carries `host backing scale: N×` from PinnedScaleSnapshotTests,
+      # which is the measured premise of the snapshot fix rather than an
+      # inference about what a virtual display "need not" be. Uploaded so it
+      # survives the run's retention rather than only being greppable in the
+      # step output.
+      - name: Upload the run log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: swift-test-log
+          path: ${{ runner.temp }}/swift-test.log
+          if-no-files-found: error
+          retention-days: 7
+
+  # The pixel evidence for #1615. Runs exactly the suites `swift-test` skips,
+  # expects them to fail, and publishes what they drew.
+  #
+  # Its own job rather than a step in `swift-test`, for the same reason that
+  # file's header gives for splitting build from test: a failing assertion and
+  # a broken harness are different diagnoses. Here it is load-bearing twice
+  # over — `swift-test` is a reported check on every PR, and the whole point of
+  # this job is to run the assertions that fail, so sharing a conclusion with
+  # it would either turn that check red for the expected outcome or force this
+  # one to swallow its own failures.
+  swift-snapshot-evidence:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      # Which toolchain drew these pixels is the first question anyone asks of
+      # them, so it is in the same log. `ls /Applications` because #1615's
+      # cheapest untested lever is pinning the runner's Xcode, and whether
+      # another version is even installed is the precondition for trying it.
+      - name: Report toolchain
+        run: |
+          swift --version
+          xcodebuild -version
+          sw_vers
+          ls -d /Applications/Xcode*.app 2>/dev/null || echo "no /Applications/Xcode*.app"
+
+      # SnapshotTesting 1.19.2 writes the NEWLY-TAKEN image of a failed
+      # comparison to `$SNAPSHOT_ARTIFACTS/<TestFile>/<test>.<n>.png`
+      # (`Sources/SnapshotTesting/AssertSnapshot.swift:469` — read in the
+      # pinned checkout, not assumed). Two things it does NOT write, which is
+      # why the rest of this step exists:
+      #
+      #   the reference   already on disk, in `Tests/__Snapshots__`. Copied in
+      #                   below so the downloaded artifact is diffable on its
+      #                   own, without checking the repo out at the right SHA.
+      #   the difference  produced only as an attachment, and that whole branch
+      #                   is behind `__XCODE_BUILT_PRODUCTS_DIR_PATHS`, which
+      #                   SwiftPM does not set. So there is no diff image under
+      #                   `swift test` at all, by construction — it is computed
+      #                   off the pair after download.
+      #
+      # `RasterPrimitiveEvidenceTests` rides along because it is the other half
+      # of #1615: four one-thing-each rasters (flat fill, stroked bezier, text,
+      # SF Symbol) whose hashes say WHICH content differs, where a SessionRow
+      # only says that something did.
+      - name: Collect the skipped suites' pixels
+        shell: bash
+        run: |
+          # `+e` is load-bearing here, not tidiness. GitHub runs `shell: bash`
+          # as `bash --noprofile --norc -e -o pipefail {0}`, so `-e` is ALREADY
+          # on and `set -uo pipefail` does not clear it. Measured on this job's
+          # first run: the failing subshell below killed the step instantly —
+          # no check ran, no `::error::` line printed, and the images survived
+          # only because the upload steps are `if: always()`. A step whose
+          # entire purpose is to run assertions that fail cannot inherit
+          # abort-on-first-failure. (The `swift-test` step above has the
+          # same shape and now carries the same line for the same reason: for
+          # the whole of this workflow's life before #1629 it swallowed
+          # `swift_suite_verdict`'s diagnosis entirely, so a hang there was
+          # indistinguishable from an assertion failure.)
+          set +e
+          set -uo pipefail
+
+          # The harness, and the refusal that tells "the predicates could not
+          # be LOADED" from "the predicates RAN and reported truncation"
+          # (#1678). This source's status used to be read by nothing, and the
+          # result was not silent but MISDIAGNOSED. Measured with the library
+          # removed, under this step's own derived shell — four `::error::`
+          # lines, in this order:
+          #
+          #   the evidence run was TRUNCATED: the bundle never reported …
+          #   the evidence run executed 0 tests.
+          #   RasterPrimitiveEvidenceTests wrote no manifest …
+          #   not one of the five suites produced a failure image … #1615 has moved
+          #
+          # Every `swift_suite_*` call below becomes "command not found", so
+          # four guards fire at once. The first sends a reader to XCTest's
+          # stall detector (#1523) and the last says this workflow's own suite
+          # classification is stale. None of it happened: nothing ran.
+          #
+          # TWO checks rather than one, because a source that RETURNS 0 having
+          # defined nothing reads exactly like one that worked — an emptied or
+          # truncated file, or one whose last statement succeeded after an
+          # earlier error. `command -v` is the only thing that tells those
+          # apart, and it is what makes this three outcomes instead of two.
+          # The names are listed rather than derived because the guard asks
+          # "did this file's contents take effect", which any one of them
+          # answers; a fourth predicate call added below and not listed here
+          # is still covered by the three.
+          #
+          # Both refuse HERE rather than adding to `bad`: `swift_suite_run` is
+          # what PRODUCES everything the guards below judge, so continuing
+          # would grade an evidence run that was never started. The two
+          # wordings are deliberately disjoint, because a shared exit 1 is
+          # satisfied by refusals that all fire together (#1644).
+          if ! . tools/lib/swift-suite.sh; then
+            echo "::error::could not load the test harness tools/lib/swift-suite.sh, so the evidence run was never started and nothing below can judge it. This is NOT a truncated test bundle — look at the checkout, not at XCTest."
+            exit 1
+          fi
+          for fn in swift_suite_run swift_suite_completed swift_suite_ran_tests; do
+            if ! command -v "$fn" >/dev/null 2>&1; then
+              echo "::error::tools/lib/swift-suite.sh was read but defines no $fn, so the evidence run was never started and nothing below can judge it. This is NOT a truncated test bundle — the harness loaded and is unusable."
+              exit 1
+            fi
+          done
+
+          log="$RUNNER_TEMP/swift-snapshot-evidence.log"
+          export SNAPSHOT_ARTIFACTS="$RUNNER_TEMP/snapshot-artifacts"
+          mkdir -p "$SNAPSHOT_ARTIFACTS"
+          ( cd platforms/macos && swift_suite_run "$log" \
+              swift test --skip LauncherTestHarness --skip LauncherHarnessTests \
+                         --filter BackchannelRulesViewSnapshotTests \
+                         --filter GroupViewSnapshotTests \
+                         --filter HistoryViewSnapshotTests \
+                         --filter RasterPrimitiveEvidenceTests \
+                         --filter SessionListUnappliedGrantsWiringTests \
+                         --filter SessionRowSnapshotTests )
+          rc=$?
+
+          # `swift_suite_verdict` is deliberately NOT called: it folds "the
+          # bundle reported FAILED" in with the shape checks, and here that one
+          # is the expected outcome. Its predicates are consulted individually
+          # instead, so this job still fails for every reason that means the
+          # evidence was not actually collected.
+          bad=0
+          if [ "$rc" -eq 124 ]; then
+            echo "::error::the evidence run HUNG at ${SWIFT_SUITE_TIMEOUT}s — no pixels were collected."
+            bad=1
+          fi
+          if ! swift_suite_completed "$log"; then
+            echo "::error::the evidence run was TRUNCATED: the bundle never reported its own result, so the suites after the last one shown never ran."
+            bad=1
+          fi
+          if ! swift_suite_ran_tests "$log"; then
+            echo "::error::the evidence run executed 0 tests."
+            bad=1
+          fi
+
+          # The references, and the three outcomes that must not print the same
+          # thing (#1646). This copy's status used to be read by NOTHING: the
+          # `set +e` above is on for the whole block, so a failed `cp` neither
+          # aborted the step nor reached `bad`. The job stayed green and the
+          # uploaded artifact simply arrived without its `__References__` tree
+          # — the half a reader needs in order to compare a failure image
+          # against what it should have looked like. Measured, not inferred:
+          # with the source absent the block exits 0 and the artifact
+          # directory is empty.
+          #
+          # "There was nothing to copy", "the copy failed" and "it copied"
+          # point at three different places (the references moved or this
+          # checkout is incomplete / the destination is unwritable / fine), and
+          # a fourth outcome is the one no exit status can see: `cp -R` of an
+          # EMPTY tree SUCCEEDS, so the count is what tells a copy that landed
+          # from one that reported success and shipped nothing.
+          refsrc=platforms/macos/Tests/__Snapshots__
+          refdst="$SNAPSHOT_ARTIFACTS/__References__"
+          if [ ! -d "$refsrc" ]; then
+            echo "::error::there is no $refsrc to copy, so the artifact would carry failure images with nothing to compare them against. The references moved, or this checkout is incomplete."
+            bad=1
+          elif ! cp -R "$refsrc" "$refdst"; then
+            echo "::error::could not copy $refsrc into the artifact at $refdst — the failure images will have nothing to compare against."
+            bad=1
+          else
+            refs=$(find "$refdst" -name '*.png' 2>/dev/null | wc -l | tr -d ' ')
+            refs="${refs:-0}"
+            if [ "$refs" -lt 1 ]; then
+              echo "::error::the reference copy reported success but $refdst holds no images. An empty tree copies fine, so this reads exactly like a healthy artifact and is not one."
+              bad=1
+            else
+              echo "copied $refs reference image(s) into the artifact"
+            fi
+          fi
+
+          primitives=$(find "$SNAPSHOT_ARTIFACTS/RasterPrimitiveEvidence" -name '*.png' 2>/dev/null | wc -l | tr -d ' ')
+          # How many to expect is DERIVED — RasterPrimitiveEvidenceTests writes
+          # one manifest line per primitive it publishes. A literal here would
+          # be a number describing that fixture without being produced by it,
+          # and would read as coverage the day someone adds a seventh.
+          expected=$(wc -l < "$SNAPSHOT_ARTIFACTS/RasterPrimitiveEvidence/manifest.txt" 2>/dev/null | tr -d ' ')
+          expected="${expected:-0}"
+          failed=$(find "$SNAPSHOT_ARTIFACTS" -name '*.png' \
+                     -not -path '*/RasterPrimitiveEvidence/*' \
+                     -not -path '*/__References__/*' 2>/dev/null | wc -l | tr -d ' ')
+          echo "collected $failed failure image(s) and $primitives of $expected primitive image(s)"
+          echo "collected $failed failure image(s) and $primitives of $expected primitive image(s)" >> "$GITHUB_STEP_SUMMARY"
+
+          # An empty result and a clean result must not print the same thing.
+          if [ "$expected" -lt 1 ]; then
+            echo "::error::RasterPrimitiveEvidenceTests wrote no manifest — the fixture did not run at all, so the count below cannot be judged."
+            bad=1
+          elif [ "$primitives" -ne "$expected" ]; then
+            echo "::error::RasterPrimitiveEvidenceTests published $primitives image(s) against $expected declared in its manifest."
+            bad=1
+          fi
+          if [ "$failed" -lt 1 ]; then
+            # NOTE: no literal `--skip ` or `--filter ` in the text below.
+            # ImageSnapshotCIScopeTests parses this file for those tokens, and
+            # a message that spells one is an argument as far as a text scan is
+            # concerned — measured: an earlier wording of this line injected a
+            # suite named "list" into the parse.
+            echo "::error::not one of the five suites produced a failure image. Either SNAPSHOT_ARTIFACTS stopped being honoured, or those suites now PASS on a runner — in which case ImageSnapshotCIScopeTests' classification, and the skip list in swift-test derived from it, is stale and #1615 has moved."
+            bad=1
+          fi
+          exit "$bad"
+
+      - name: Upload the pixels
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: swift-snapshot-evidence
+          path: ${{ runner.temp }}/snapshot-artifacts
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload the run log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: swift-snapshot-evidence-log
+          path: ${{ runner.temp }}/swift-snapshot-evidence.log
+          if-no-files-found: error
+          retention-days: 14

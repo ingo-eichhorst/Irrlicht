@@ -1,0 +1,6 @@
+package fixture
+
+// 4242 is both Recordings and PairedButUngraded in the corpus census, and the
+// report must name both fields. Naming only one would send a reader to check
+// the wrong figure, and the two move independently.
+func Shared() {}

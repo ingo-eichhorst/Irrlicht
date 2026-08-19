@@ -4,16 +4,21 @@ package processlifecycle
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"irrlicht/core/domain/session"
 )
 
 func TestKittyAncestryPID_Self(t *testing.T) {
@@ -21,7 +26,7 @@ func TestKittyAncestryPID_Self(t *testing.T) {
 	// app launched `go test`, so we only assert the helper returns cleanly.
 	// When it returns non-zero, the result must point at a real kitty.app
 	// process (or one that's since exited — the lookup is best-effort).
-	got := kittyAncestryPID(os.Getpid())
+	got := kittyAncestryPID(noAggregateBudget(), os.Getpid())
 	if got == 0 {
 		return // legitimate when no kitty in ancestry
 	}
@@ -296,7 +301,7 @@ func TestTopLevelAppPath(t *testing.T) {
 // contains a dot) or "" — never errors or panics. The deterministic path
 // logic is covered by TestTopLevelAppPath.
 func TestResolveHostBundleIDFromAncestry_Self(t *testing.T) {
-	bid, hostPID, complete := resolveHostBundleIDFromAncestry(os.Getpid())
+	bid, hostPID, complete := resolveHostBundleIDFromAncestry(noAggregateBudget(), os.Getpid(), newAncestryReads())
 	// The running test binary is alive, so every readProcInfo in its chain has
 	// something to answer with — barring a `ps` slow enough to blow its own 2s
 	// ceiling, which is the condition #1492 is about and which this assertion
@@ -305,7 +310,24 @@ func TestResolveHostBundleIDFromAncestry_Self(t *testing.T) {
 		t.Error("the walk over a live process aborted — either a ps timed out, or the verdict is wrong")
 	}
 	if bid == "" {
-		return // no top-level .app ancestor (e.g. CI/tmux/ssh) — valid.
+		// "" is the right answer only when this chain HAS no top-level .app
+		// ancestor (CI, tmux, ssh). Returning here unconditionally is what let a
+		// rewiring of the production probe pair read as that same valid case —
+		// and "" is exactly what a probe that never consults plutil produces, so
+		// the escape hatch was the failure mode (found in review of #1524).
+		//
+		// Re-walk the identical chain with the identical readProcInfo, changing
+		// only the bundle probe to one that always answers. A non-empty sentinel
+		// means the walk DID reach a top-level app, so the production pair had
+		// something to name and came back empty.
+		sentinel, _, _ := resolveHostBundleIDVia(noAggregateBudget(), os.Getpid(), readProcInfo,
+			func(context.Context, string) (string, error) { return "sentinel.app", nil })
+		if sentinel != "" {
+			t.Error("the walk reached a top-level .app ancestor but resolveHostBundleIDFromAncestry " +
+				"named nothing — either its production probe pair no longer reaches plutil, or every " +
+				".app in this chain really has no CFBundleIdentifier (which LaunchServices would not launch)")
+		}
+		return
 	}
 	if !strings.Contains(bid, ".") || hostPID <= 1 {
 		t.Errorf("resolveHostBundleIDFromAncestry = (%q, %d); want a dotted bundle id and a real host PID", bid, hostPID)
@@ -317,7 +339,7 @@ func TestResolveHostBundleIDFromAncestry_Self(t *testing.T) {
 // invocation, so we only assert that the helper either finds a supported host
 // (non-empty) or returns "" cleanly — never errors or panics.
 func TestResolveTermProgramFromAncestry_Self(t *testing.T) {
-	got := resolveTermProgramFromAncestry(os.Getpid())
+	got := resolveTermProgramFromAncestry(noAggregateBudget(), os.Getpid())
 	if got != "" {
 		if _, known := termProgramByAppName[reverseLookup(got)]; !known {
 			t.Errorf("resolveTermProgramFromAncestry returned unknown TermProgram %q", got)
@@ -329,23 +351,32 @@ func TestResolveTermProgramFromAncestry_Self(t *testing.T) {
 // synthetic ancestry results — no live process chain needed — so the CodexBar
 // exclusion (#784) and the Obsidian carve-out (#728) are both deterministic,
 // not dependent on whatever happens to have launched `go test`.
+//
+// The last three rows are the same facts as the live-process tests further
+// down, restated at the pure layer: the empty ancestry means "read, and nothing
+// there" when the walk completed and "not read" when it did not, and only the
+// second and third admit (#1513, #1574). Every other row carries walkCompleted,
+// which is what keeps the fail-open arm from swallowing the allow-list.
 func TestIsKnownInteractiveHostFrom(t *testing.T) {
 	tests := []struct {
 		name                 string
 		termProgram          string
 		bundleID             string
+		end                  walkEnd
 		wantKnownInteractive bool
 	}{
-		{"curated terminal", "iTerm.app", "", true},
-		{"curated IDE", "vscode", "", true},
-		{"obsidian via generic top-level-app fallback", "", "md.obsidian", true},
-		{"codexbar is a real .app but not allow-listed", "", "com.steipete.codexbar", false},
-		{"no ancestry resolved at all", "", "", false},
+		{"curated terminal", "iTerm.app", "", walkCompleted, true},
+		{"curated IDE", "vscode", "", walkCompleted, true},
+		{"obsidian via generic top-level-app fallback", "", "md.obsidian", walkCompleted, true},
+		{"codexbar is a real .app but not allow-listed", "", "com.steipete.codexbar", walkCompleted, false},
+		{"no ancestry resolved at all", "", "", walkCompleted, false},
+		{"unanswered walk resolved nothing and proves nothing", "", "", walkUnanswered, true},
+		{"gone process resolved nothing and proves nothing either", "", "", walkProcessGone, true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := isKnownInteractiveHostFrom(tc.termProgram, tc.bundleID); got != tc.wantKnownInteractive {
-				t.Errorf("isKnownInteractiveHostFrom(%q, %q) = %v, want %v", tc.termProgram, tc.bundleID, got, tc.wantKnownInteractive)
+			if got := isKnownInteractiveHostFrom(tc.termProgram, tc.bundleID, tc.end); got != tc.wantKnownInteractive {
+				t.Errorf("isKnownInteractiveHostFrom(%q, %q, end=%v) = %v, want %v", tc.termProgram, tc.bundleID, tc.end, got, tc.wantKnownInteractive)
 			}
 		})
 	}
@@ -384,7 +415,7 @@ func spawnHerdrClient(t *testing.T, socketPath string, env ...string) int {
 	}, env...))
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		pids, _ := herdrClientPIDs(socketPath)
+		pids, _ := herdrClientPIDs(noAggregateBudget(), socketPath)
 		for _, got := range pids {
 			if got == pid {
 				return pid
@@ -453,7 +484,7 @@ func TestHerdrClientPIDs_MultipleClientsAreOrderedNewestFirst(t *testing.T) {
 	first := spawnHerdrClient(t, socketPath)
 	second := spawnHerdrClient(t, socketPath)
 
-	pids, _ := herdrClientPIDs(socketPath)
+	pids, _ := herdrClientPIDs(noAggregateBudget(), socketPath)
 	if len(pids) < 2 {
 		t.Fatalf("want both attached clients, got %v (first=%d second=%d)", pids, first, second)
 	}
@@ -579,7 +610,7 @@ func TestHerdrClientPIDs_ProbeTriState(t *testing.T) {
 	t.Run("attached", func(t *testing.T) {
 		socketPath := newHerdrSessionDir(t)
 		client := spawnHerdrClient(t, socketPath)
-		pids, probed := herdrClientPIDs(socketPath)
+		pids, probed := herdrClientPIDs(noAggregateBudget(), socketPath)
 		if !probed {
 			t.Fatal("a successful lsof must report a probe that ran")
 		}
@@ -594,7 +625,7 @@ func TestHerdrClientPIDs_ProbeTriState(t *testing.T) {
 		if err := os.WriteFile(herdrClientLogPath(socketPath), []byte("detached\n"), 0o600); err != nil {
 			t.Fatalf("seed client log: %v", err)
 		}
-		pids, probed := herdrClientPIDs(socketPath)
+		pids, probed := herdrClientPIDs(noAggregateBudget(), socketPath)
 		if !probed {
 			t.Fatal("a detach is an answer, not a failure — reporting it as unknown would freeze the last host forever")
 		}
@@ -610,50 +641,126 @@ func TestHerdrClientPIDs_ProbeTriState(t *testing.T) {
 		// self-consistent "nobody is attached". A socket path addressing
 		// another *real* session is NOT covered — that log exists, so the
 		// stat passes; see herdrClientPIDs.
-		if _, probed := herdrClientPIDs(newHerdrSessionDir(t)); probed {
+		if _, probed := herdrClientPIDs(noAggregateBudget(), newHerdrSessionDir(t)); probed {
 			t.Error("a client log that does not exist is not evidence of a detach")
 		}
 	})
 
 	t.Run("no socket path", func(t *testing.T) {
-		if _, probed := herdrClientPIDs(""); probed {
+		if _, probed := herdrClientPIDs(noAggregateBudget(), ""); probed {
 			t.Error("no address means nothing was probed")
 		}
 	})
 }
 
-// TestHerdrClientLauncher_DoesNotCacheANonAnswer covers step 2 of #1485's
-// suggested shape. The memo exists to collapse one startup seed's worth of
-// identical scans; caching a probe that did not run would instead spread a
-// single failure across every session sharing that socket for the next 5
-// seconds — turning the one thing the tri-state buys back into a wider window.
-func TestHerdrClientLauncher_DoesNotCacheANonAnswer(t *testing.T) {
-	socketPath := newHerdrSessionDir(t) // no client log: the probe cannot run
-	// Defensive, and it is the regression this test exists to catch that would
-	// make it necessary: nothing should ever be inserted under this key.
-	t.Cleanup(func() {
-		herdrClientCacheMu.Lock()
-		delete(herdrClientCache, socketPath)
-		herdrClientCacheMu.Unlock()
+// TestHerdrClientLauncher_MemoizedNonAnswerIsStillANonAnswer REPLACES
+// TestHerdrClientLauncher_DoesNotCacheANonAnswer, which locked #1485's rule
+// that a non-answer must never be memoized. #1514 reversed that rule; this is
+// the lock on what replaced it, and it is a strictly stronger claim than the
+// one it retires.
+//
+// The retired lock said "do not cache". This one says "cache, and the cached
+// thing must not be mistaken for an answer" — which is what actually protects
+// #1485's invariant. #1485's defect was never the caching; it was a probe that
+// did not run being read as a detach and clearing a resolved host. A cached
+// nil with no probed bit beside it would re-enter that defect through the
+// memo, and would do it silently, since every consumer reads the bool and not
+// the nil.
+//
+// The third case is the vacuity guard: a cache that reported probed=false for
+// everything would satisfy the first two and destroy the tri-state.
+func TestHerdrClientLauncher_MemoizedNonAnswerIsStillANonAnswer(t *testing.T) {
+	memoized := func(t *testing.T, socketPath string) clientHostEntry {
+		t.Helper()
+		herdrClientHosts.mu.Lock()
+		defer herdrClientHosts.mu.Unlock()
+		entry, ok := herdrClientHosts.entries[socketPath]
+		if !ok {
+			t.Fatal("nothing was memoized: every pane sharing this socket re-pays the probe (#1514)")
+		}
+		return entry
+	}
+
+	t.Run("probe could not run", func(t *testing.T) {
+		socketPath := newHerdrSessionDir(t) // no client log: the probe cannot run
+		t.Cleanup(func() { forgetHerdrClientMemo(socketPath) })
+
+		if _, probed := herdrClientLauncher(socketPath); probed {
+			t.Fatal("want a non-answer for a socket whose client log is absent")
+		}
+		if entry := memoized(t, socketPath); entry.probed {
+			t.Error("the memo calls a probe that never ran an answer — #1485 re-entered through the cache")
+		}
+		if _, probed := herdrClientLauncher(socketPath); probed {
+			t.Error("the second reader was handed a detach built from a probe that did not run")
+		}
 	})
 
-	if _, probed := herdrClientLauncher(socketPath); probed {
-		t.Fatal("want a non-answer for a socket whose client log is absent")
-	}
-	herdrClientCacheMu.Lock()
-	_, cached := herdrClientCache[socketPath]
-	herdrClientCacheMu.Unlock()
-	if cached {
-		t.Error("a non-answer was memoized: the next 5s of reads inherit one failed probe")
-	}
+	t.Run("candidate could not be read", func(t *testing.T) {
+		// The branch #1492 widened, and the one that made the re-probe
+		// expensive rather than merely repeated.
+		socketPath, _ := unreadableClientSocket(t)
+
+		if _, probed := herdrClientLauncher(socketPath); probed {
+			t.Fatal("want a non-answer for a socket whose only candidate is unreadable")
+		}
+		if entry := memoized(t, socketPath); entry.probed {
+			t.Error("an unreadable candidate was memoized as an answer: AdoptHostIdentity would clear a live host")
+		}
+		if _, probed := herdrClientLauncher(socketPath); probed {
+			t.Error("the second pane was told its attached client is gone")
+		}
+	})
+
+	t.Run("a hit returns what was memoized", func(t *testing.T) {
+		// Without this the whole family is satisfiable by a cache that returns
+		// the right tri-state and drops the launcher — measured: making
+		// clientHostMemo.get return a nil launcher leaves every other test in
+		// the package green, while panes 2..N of a herdr server silently lose
+		// their host. The socket has no client log, so a read that reached the
+		// prober instead of the memo would answer probed=false and fail here.
+		socketPath := newHerdrSessionDir(t)
+		want := &session.Launcher{TermProgram: "iTerm.app", HostBundleID: "com.googlecode.iterm2"}
+		herdrClientHosts.put(socketPath, want, true)
+		t.Cleanup(func() { forgetHerdrClientMemo(socketPath) })
+
+		got, probed := herdrClientLauncher(socketPath)
+		if !probed {
+			t.Fatal("a memoized answer must read back as an answer")
+		}
+		if got != want {
+			t.Errorf("got %+v, want the memoized launcher %+v", got, want)
+		}
+	})
+
+	t.Run("detach is still an answer", func(t *testing.T) {
+		socketPath := newHerdrSessionDir(t)
+		if err := os.WriteFile(herdrClientLogPath(socketPath), []byte("detached\n"), 0o600); err != nil {
+			t.Fatalf("seed client log: %v", err)
+		}
+		t.Cleanup(func() { forgetHerdrClientMemo(socketPath) })
+
+		if _, probed := herdrClientLauncher(socketPath); !probed {
+			t.Fatal("a detach is an answer")
+		}
+		if entry := memoized(t, socketPath); !entry.probed {
+			t.Error("a real detach was memoized as a non-answer: the stored host can now never be cleared")
+		}
+	})
 }
 
 // TestReadLauncherEnv_Herdr_UnprobableClientReportsHostUnknown is #1485 at the
 // port boundary: the reader has to carry the distinction all the way out, or
-// the sweep that consumes it (refreshHerdrHosts) cannot act on it. The pane's
+// the sweep that consumes it (refreshMultiplexerHosts) cannot act on it. The pane's
 // own identity is unaffected either way — only the second return value moves.
 func TestReadLauncherEnv_Herdr_UnprobableClientReportsHostUnknown(t *testing.T) {
 	socketPath := newHerdrSessionDir(t) // no client log
+	// This test reads the socket three times and the last read re-memoizes, so
+	// it is the one place in the family that would otherwise leave residue in
+	// the package-global memo.
+	t.Cleanup(func() {
+		forgetHerdrClientMemo(socketPath)
+	})
 	agentPID := spawnSleeperWithEnv(t, []string{
 		"PATH=/usr/bin:/bin",
 		"HERDR_PANE_ID=w1:p1",
@@ -668,11 +775,26 @@ func TestReadLauncherEnv_Herdr_UnprobableClientReportsHostUnknown(t *testing.T) 
 		t.Fatalf("the pane's own address must survive an unresolved host: %+v", l)
 	}
 
-	// The same pane once the log exists and nobody holds it open: now the
-	// emptiness is an answer, and the sweep is allowed to act on it.
+	// The same pane once the log exists and nobody holds it open: the
+	// emptiness is now an answer — but not yet a visible one. Since #1514 the
+	// non-answer above is memoized, so the recovery is deferred until that
+	// entry expires. This assertion is the price of that reversal, pinned
+	// rather than left to be rediscovered: a cached unknown clears nothing and
+	// is inert at every consumer, and deferring a recovery is the ONLY
+	// behaviour it changes. The deferral is bounded by a SWEEP rather than by
+	// the TTL — nothing reads the memo between sweeps — which herdrClientLauncher's
+	// doc works out against SweepDeadPIDs' 5s/15s cadence.
 	if err := os.WriteFile(herdrClientLogPath(socketPath), []byte("detached\n"), 0o600); err != nil {
 		t.Fatalf("seed client log: %v", err)
 	}
+	if _, hostKnown := ReadLauncherEnv(agentPID); hostKnown {
+		t.Error("the memoized non-answer was bypassed: every pane on this socket is re-paying the probe (#1514)")
+	}
+
+	// Dropping the entry stands in for the TTL elapsing — waiting out five real
+	// seconds would buy nothing but a slower suite. Once it is gone the detach
+	// is visible, which is what bounds the deferral at one TTL.
+	forgetHerdrClientMemo(socketPath)
 	if _, hostKnown := ReadLauncherEnv(agentPID); !hostKnown {
 		t.Error("a detached session's host is known to be absent")
 	}
@@ -688,6 +810,13 @@ func TestReadLauncherEnv_Herdr_UnprobableClientReportsHostUnknown(t *testing.T) 
 // resolveHostBundleIDFromAncestry that a `ps` which blows its 2s ceiling on a
 // loaded machine takes. The timeout is the cause the issue is about; a reaped
 // PID is the one cause of that class a test can arrange deterministically.
+//
+// Since #1574 the two are still the same branch inside the WALKS and no longer
+// the same fact underneath them: a reaped pid's `ps` ANSWERS "no such process"
+// (errProcessGone) where a ceiling kill answers nothing. Any test here that
+// turns on WHICH of the two happened — the gate's outcome row, the log line's
+// reason — must say so; the ones that turn only on the walk being incomplete
+// are unaffected, which is why the two #1492 tests below still read this way.
 //
 // The policy difference is the reason this wrapper exists rather than a second
 // spawn-and-reap: its caller skips on a recycled PID, which for these tests
@@ -710,10 +839,10 @@ func exitedPID(t *testing.T) int {
 // readProcInfo fails, which is the same branch a `ps` that blows its 2s ceiling
 // takes.
 func TestResolveHostFromAncestry_UnreadableProcessIsNotAMiss(t *testing.T) {
-	if term, hostPID, complete := resolveHostFromAncestry(1); term != "" || hostPID != 0 || !complete {
+	if term, hostPID, complete := resolveHostFromAncestry(noAggregateBudget(), 1, newAncestryReads()); term != "" || hostPID != 0 || !complete {
 		t.Errorf("launchd: got (%q, %d, %v); want a completed walk that found nothing", term, hostPID, complete)
 	}
-	if term, hostPID, complete := resolveHostFromAncestry(exitedPID(t)); term != "" || hostPID != 0 || complete {
+	if term, hostPID, complete := resolveHostFromAncestry(noAggregateBudget(), exitedPID(t), newAncestryReads()); term != "" || hostPID != 0 || complete {
 		t.Errorf("reaped pid: got (%q, %d, %v); want an ABORTED walk — an unreadable process is not a miss", term, hostPID, complete)
 	}
 }
@@ -724,11 +853,208 @@ func TestResolveHostFromAncestry_UnreadableProcessIsNotAMiss(t *testing.T) {
 // verdict (launchd, row 1); "pid could not be read" is not (row 2). Merging
 // them is #1492 in miniature.
 func TestResolveHostBundleIDFromAncestry_UnreadableProcessIsNotAMiss(t *testing.T) {
-	if bid, hostPID, complete := resolveHostBundleIDFromAncestry(1); bid != "" || hostPID != 0 || !complete {
+	if bid, hostPID, complete := resolveHostBundleIDFromAncestry(noAggregateBudget(), 1, newAncestryReads()); bid != "" || hostPID != 0 || !complete {
 		t.Errorf("launchd: got (%q, %d, %v); want a completed walk that found nothing", bid, hostPID, complete)
 	}
-	if bid, hostPID, complete := resolveHostBundleIDFromAncestry(exitedPID(t)); bid != "" || hostPID != 0 || complete {
+	if bid, hostPID, complete := resolveHostBundleIDFromAncestry(noAggregateBudget(), exitedPID(t), newAncestryReads()); bid != "" || hostPID != 0 || complete {
 		t.Errorf("reaped pid: got (%q, %d, %v); want an ABORTED walk", bid, hostPID, complete)
+	}
+}
+
+// TestIsKnownInteractiveHost_AbortedWalkAdmits is #1513's defect test, and it
+// is the two tests above carried up to the caller that acts on their verdict.
+// Both rows resolve no host at all; whether the walk reached a verdict is the
+// only thing separating them.
+//
+// A reaped PID's first readProcInfo fails. Before #1513 that returned false, and
+// because this function gates session ADMISSION (#784) the result was that a
+// legitimate agent session was silently declined — not, as in #1492, that a
+// click target degraded. A walk that reached no verdict is no evidence either
+// way, so it fails OPEN: the direction core/pkg/cliversion already takes for a
+// CLI version it cannot read, and the direction this very function's
+// linux/other stubs already take by returning true unconditionally.
+//
+// #1574 split the CAUSE and deliberately not the VERDICT. A reaped pid now
+// reaches admitted.process_gone rather than admitted.walk_aborted, and this
+// assertion is unchanged, because "this process is gone" is no more evidence of
+// a non-interactive host than "this probe was killed" is — and rejecting it
+// would cost the session permanently, SessionDetector caching the rejection per
+// session id and never evicting. Terminating the walk as if at PID 1, which is
+// what reparenting produces and what #1574 named as the obvious candidate, is
+// exactly the change that would redden this line.
+func TestIsKnownInteractiveHost_AbortedWalkAdmits(t *testing.T) {
+	if !IsKnownInteractiveHost(exitedPID(t)) {
+		t.Error("a walk that reached no verdict is not evidence of a non-interactive host — it must not reject the session")
+	}
+}
+
+// TestReadProcInfoTellsAnAnsweredNoSuchProcessFromAProbeThatDidNotRun is
+// #1574's defect test at the function the issue is about.
+//
+// processTTYVia, eleven lines up in the same file, classifies its `ps` with
+// probeAnswered and its doc says why: an exit 1 for a pid it cannot find is "a
+// real 'no such process', not a probe that did not run — so the allowlist form
+// would turn every reaped pid into a non-answer". readProcInfo returned a bare
+// error for that exit, which is what that sentence warns against, and #1534's
+// counter then made the two visibly disagree (PR #1576).
+//
+// Two rows, and the live one is the point: a REAL `ps`, a real exit 1, and the
+// real classification, because a fabricated error cannot show that this helper
+// agrees with shellout.Answered about what an exit 1 is.
+func TestReadProcInfoTellsAnAnsweredNoSuchProcessFromAProbeThatDidNotRun(t *testing.T) {
+	_, _, err := readProcInfo(noAggregateBudget(), exitedPID(t))
+	if err == nil {
+		t.Fatal("a reaped pid has no ancestor to report, so the read must still fail — the walk has nothing to continue with")
+	}
+	if !errors.Is(err, errProcessGone) {
+		t.Errorf("readProcInfo of a reaped pid returned %v, which no caller can tell from a `ps` that never ran — that is #1574, and it is what makes the #784 gate report an unanswerable probe on a machine whose probes are healthy", err)
+	}
+
+	// The vacuity guard, and the row that would fail if errProcessGone were
+	// returned for every failure: a live pid answers, and an answer is neither.
+	ppid, cmd, err := readProcInfo(noAggregateBudget(), os.Getpid())
+	if err != nil || ppid <= 0 || cmd == "" {
+		t.Errorf("readProcInfo of the running test binary = (%d, %q, %v); want a real ancestor — this row is what stops the one above from passing on a helper that fails for everything", ppid, cmd, err)
+	}
+}
+
+// TestWalkEndOfNamesWhyAnIncompleteWalkStopped pins the join between the two
+// halves of #1574: the walks report a bare completeness bit, the per-resolve
+// read memo carries the reason, and this is where they are put back together for
+// the one caller that publishes the difference.
+//
+// The completed row is not a formality. walkEndOf is asked its question AFTER
+// both walks have run over one shared memo, so a resolve whose first walk read a
+// gone ancestor and whose second completed must still report completed —
+// otherwise a session that resolved its host perfectly well would be filed as an
+// admission on no evidence.
+func TestWalkEndOfNamesWhyAnIncompleteWalkStopped(t *testing.T) {
+	ctx := context.Background()
+	answering := func(int, string) *ancestryReads {
+		table := newScriptedProcTable()
+		table.rows[4242] = procInfoAnswer{ppid: 1, cmd: "/sbin/launchd"}
+		return newAncestryReadsVia(table.read)
+	}
+
+	live := answering(4242, "/sbin/launchd")
+	if _, _, err := live.probe(ctx, 4242); err != nil {
+		t.Fatalf("probe of a live pid: %v", err)
+	}
+	if got := walkEndOf(true, live); got != walkCompleted {
+		t.Errorf("walkEndOf(complete) = %v, want walkCompleted", got)
+	}
+
+	goneReads := newAncestryReadsVia(newScriptedProcTable().read)
+	if _, _, err := goneReads.probe(ctx, 4242); !errors.Is(err, errProcessGone) {
+		t.Fatalf("probe of a pid the table does not carry: %v", err)
+	}
+	if got := walkEndOf(false, goneReads); got != walkProcessGone {
+		t.Errorf("walkEndOf(incomplete, after an answered \"no such process\") = %v, want walkProcessGone — this is the whole of #1574 at the gate", got)
+	}
+	// The same memo, still holding the gone flag, must not turn a COMPLETED walk
+	// into an admission on no evidence.
+	if got := walkEndOf(true, goneReads); got != walkCompleted {
+		t.Errorf("walkEndOf(complete, after an answered \"no such process\") = %v, want walkCompleted — walk 2 completing after walk 1 read a gone ancestor is a resolve with a verdict", got)
+	}
+
+	killed := newScriptedProcTable()
+	killed.rows[4242] = procInfoAnswer{ppid: 1, cmd: "/sbin/launchd"}
+	killed.fails[4242] = 1
+	killedReads := newAncestryReadsVia(killed.read)
+	if _, _, err := killedReads.probe(ctx, 4242); err == nil {
+		t.Fatal("a killed `ps` must stay a non-answer")
+	}
+	if got := walkEndOf(false, killedReads); got != walkUnanswered {
+		t.Errorf("walkEndOf(incomplete, after a killed `ps`) = %v, want walkUnanswered — reporting this as a gone process tells a reader there is a race where there is a probe that is dying", got)
+	}
+}
+
+// walk builds a fixed-verdict ancestryWalk, and aborted/gone/finished name its
+// third value at the call site — every test of this seam turns on which of them
+// a walk returned, and a bare value there reads as "found a host".
+func walk(host string, end walkEnd) ancestryWalk {
+	return func(context.Context, int) (string, int, walkEnd) { return host, 0, end }
+}
+
+// These were `false` and `true` until #1574 made how a walk ended a three-valued
+// fact. The two existing names keep their spellings at every call site on
+// purpose: `walk("", aborted)` still means the same thing, and the rows that
+// were written before there was a third value are still asserting what they
+// asserted, rather than being silently re-pointed at the new one.
+const (
+	aborted  = walkUnanswered
+	gone     = walkProcessGone
+	finished = walkCompleted
+)
+
+// TestIsKnownInteractiveHostVia_AbortedFirstWalkDoesNotDeferToTheSecond pins
+// the ORDER between the two walks, which neither the pure decision nor any
+// arrangement of live processes can reach: driving the two walks to DIFFERENT
+// verdicts on purpose needs them injected, because in a live chain a `ps` that
+// fails for one walk fails for the other.
+//
+// It exists because the `&& complete` clause looks like an optimization and is
+// not. The two allow-lists are asymmetric — walk 1 knows 26 curated terminals
+// and IDEs by app name, walk 2 knows whatever is in knownEmbeddedHostBundleIDs
+// (today: md.obsidian alone) — so walk 2 can confirm an embedded host and can
+// never rule out a curated one. Row 1 is the case that costs: walk 1 aborted
+// and walk 2 completed on an iTerm ancestor, and iTerm's BUNDLE id is not in
+// walk 2's list because walk 1 is what recognizes iTerm. Deferring to walk 2
+// there rejects a legitimate iTerm session — #1513 arriving through the
+// second walk.
+func TestIsKnownInteractiveHostVia_AbortedFirstWalkDoesNotDeferToTheSecond(t *testing.T) {
+	tests := []struct {
+		name            string
+		term, bundle    ancestryWalk
+		wantInteractive bool
+	}{
+		{
+			"walk 1 aborted, walk 2 saw iTerm — whose bundle only walk 1 can vouch for",
+			walk("", aborted), walk("com.googlecode.iterm2", finished), true,
+		},
+		{
+			"walk 1 aborted, walk 2 saw CodexBar — a re-probe could only reject, and that is evidence we declined to trust",
+			walk("", aborted), walk("com.steipete.codexbar", finished), true,
+		},
+		{
+			"walk 1 finished and missed, walk 2 saw CodexBar — #784, and the vacuity guard",
+			walk("", finished), walk("com.steipete.codexbar", finished), false,
+		},
+		{
+			"walk 1 finished and missed, walk 2 saw Obsidian — the one host walk 2 does vouch for",
+			walk("", finished), walk("md.obsidian", finished), true,
+		},
+		{
+			"walk 1 matched, so walk 2 is never consulted",
+			walk("iTerm.app", finished), walk("com.steipete.codexbar", finished), true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isKnownInteractiveHostVia(noAggregateBudget(), 4242, tc.term, tc.bundle); got != tc.wantInteractive {
+				t.Errorf("isKnownInteractiveHostVia = %v, want %v", got, tc.wantInteractive)
+			}
+		})
+	}
+}
+
+// TestIsKnownInteractiveHost_ReadVerdictStillExcludes is the #784 LOCK, and it
+// is what stops the fix above from being spelled `return true`. A walk that RAN
+// and found no curated terminal and no allow-listed embedded host — the shape
+// CodexBar's background `agy` process presents — is a real answer, and must
+// still exclude.
+//
+// The two rows leave the walk by different exits, so neither can stand in for
+// the other: launchd never enters the loop at all (`cur > 1` is false
+// immediately), while a reparented orphan enters it and leaves through the
+// `ppid <= 1` verdict — the arm every reparented and every tmux-hosted
+// candidate takes.
+func TestIsKnownInteractiveHost_ReadVerdictStillExcludes(t *testing.T) {
+	if IsKnownInteractiveHost(1) {
+		t.Error("launchd is readable and is not an interactive host — a completed walk that found nothing must still exclude (#784)")
+	}
+	if orphan := orphanPID(t); IsKnownInteractiveHost(orphan) {
+		t.Errorf("orphan %d was read and has no host ancestor — a completed in-loop walk must still exclude (#784)", orphan)
 	}
 }
 
@@ -760,16 +1086,215 @@ func TestHostIdentity_KittyBackfillWalkCountsTowardCompleteness(t *testing.T) {
 
 	// Vacuity guard: with a LIVE pid the same block runs and completes, so a
 	// hostIdentity hard-wired to "incomplete" would not satisfy this test.
-	if l, complete := hostIdentity(os.Getpid()); !complete || l.TermProgram != "kitty" {
+	if l, complete := hostIdentity(noAggregateBudget(), os.Getpid()); !complete || l.TermProgram != "kitty" {
 		t.Errorf("live pid: got (%+v, %v); want the back-fill to run and complete", l, complete)
 	}
 
-	l, complete := hostIdentity(exitedPID(t))
+	l, complete := hostIdentity(noAggregateBudget(), exitedPID(t))
 	if l.TermProgram != "kitty" {
 		t.Fatalf("the env still names the host, so it must survive: %+v", l)
 	}
 	if complete {
 		t.Error("the back-fill's walk aborted and it was the only walk in this run — that is not a complete read")
+	}
+}
+
+// fixturePollInterval and fixturePollDeadline bound every awaitFixtureCondition
+// caller below. The deadline is generous on purpose (#1586): every millisecond
+// of it is only spent when the condition is not yet true, so a loaded machine
+// pays a slower pass where a fixed sleep paid a failure.
+const (
+	fixturePollInterval = 5 * time.Millisecond
+	fixturePollDeadline = 2 * time.Second
+)
+
+// fixtureWait is what one awaitFixtureCondition run observed. Attempts and
+// Elapsed are reported rather than derived from each other: a check may be a
+// bounded `ps` shell-out, which on a loaded machine costs anything from
+// microseconds to its own 2s ceiling, and the failure message is only useful if
+// it says which of those happened. Saw carries the check's own description of
+// the last state it read, so the failure names how far the fixture got rather
+// than only that it did not get there.
+type fixtureWait struct {
+	OK       bool
+	Saw      string
+	Attempts int
+	Elapsed  time.Duration
+}
+
+// awaitFixtureCondition polls check until it reports true, or until deadline
+// expires. A check that cannot READ its condition reports false with a
+// description and is retried rather than being fatal: for readProcInfo that is
+// `ps` killed by its own ceiling or never forked, which is exactly the load the
+// poll exists to ride out, and treating it as a verdict would be the #1586
+// flake with a longer fuse.
+//
+// The check is injected rather than the pid, so the polling itself is testable
+// against a condition that becomes true on a known attempt — a poll only ever
+// seen to succeed on its first call is untested machinery.
+func awaitFixtureCondition(check func() (bool, string), interval, deadline time.Duration) fixtureWait {
+	start := time.Now()
+	var w fixtureWait
+	for {
+		w.Attempts++
+		w.OK, w.Saw = check()
+		w.Elapsed = time.Since(start)
+		if w.OK || w.Elapsed >= deadline {
+			return w
+		}
+		time.Sleep(interval)
+	}
+}
+
+// awaitOrFail runs check to its deadline and fails the test if it never held,
+// naming what was last seen, how many attempts it took and how long it ran.
+//
+// Polling rather than sleeping a fixed interval is #1586. The fixtures below
+// spawn helpers whose readiness depends on the kernel and on bounded shell-outs
+// that a loaded machine can starve, and a fixed sleep turns that into a hard
+// failure indistinguishable from a regression in the code under test — the real
+// cost, because this is the hot path of a family that changes constantly. What
+// the hard failure is kept for is the case it was written for: a helper that
+// never becomes what the fixture claims it is fails loudly here, rather than
+// hanging or being silently tested as something else.
+func awaitOrFail(t *testing.T, check func() (bool, string), interval, deadline time.Duration, why string) {
+	t.Helper()
+	w := awaitFixtureCondition(check, interval, deadline)
+	if !w.OK {
+		t.Fatalf("fixture never became ready after %d attempts over %v: %s — %s",
+			w.Attempts, w.Elapsed, w.Saw, why)
+	}
+	if w.Attempts > 1 {
+		// Not a failure: it is the poll doing its job, and worth a line so a
+		// future flake investigation can see how close to the deadline it ran.
+		t.Logf("fixture ready after %d attempts over %v: %s", w.Attempts, w.Elapsed, w.Saw)
+	}
+}
+
+// waitForReparentToInit blocks until pid's parent is init.
+func waitForReparentToInit(t *testing.T, pid int) {
+	t.Helper()
+	awaitOrFail(t, func() (bool, string) {
+		ppid, _, err := readProcInfo(noAggregateBudget(), pid)
+		return err == nil && ppid <= 1, fmt.Sprintf("pid %d has ppid %d (err %v)", pid, ppid, err)
+	}, fixturePollInterval, fixturePollDeadline,
+		"this fixture only stands in for a reparented process — a tmux pane, a daemonized server — "+
+			"while its ancestry terminates at init")
+}
+
+// waitForLauncherEnv blocks until sysctl reports every whitelisted variable in
+// env for pid.
+//
+// This is the condition the #1586 fixture actually needed, and the one its
+// fixed sleep was covering while its hard-fail checked the other. Measured over
+// 40 runs on an idle machine: a helper backgrounded from a shell is reparented
+// to init on the FIRST `ps` every time, while its env is readable on the first
+// sysctl NONE of the time and becomes readable after ~1.2ms (p50, 2.5ms max).
+// The lag is the exec: until it lands the pid is still /bin/sh, and macOS
+// strips env from sysctl for Apple-signed binaries — the same fact
+// spawnSleeperWithEnv's doc comment leans on in the other direction. So a wait
+// on the reparenting alone would have replaced a 120ms margin with the duration
+// of one `ps`, which is narrower, not wider.
+//
+// Vacuity guard: env carrying no whitelisted variable would make this a poll
+// that succeeds without observing anything, so it refuses instead.
+func waitForLauncherEnv(t *testing.T, pid int, env []string) {
+	t.Helper()
+	want := whitelistedEnvPairs(env)
+	if len(want) == 0 {
+		t.Fatalf("waitForLauncherEnv(%d) was given no whitelisted variable to wait for, so it would "+
+			"pass without reading anything: %v", pid, env)
+	}
+	awaitOrFail(t, func() (bool, string) {
+		got, _ := osProc.EnvOf(pid)
+		for k, v := range want {
+			if got[k] != v {
+				return false, fmt.Sprintf("pid %d: %s is %q, want %q (read %v)", pid, k, got[k], v, got)
+			}
+		}
+		return true, fmt.Sprintf("pid %d publishes %v", pid, want)
+	}, fixturePollInterval, fixturePollDeadline,
+		"the fixture's whole point is a process whose env sysctl can read; until the exec lands it is "+
+			"still the (Apple-signed, env-stripped) shell that spawned it")
+}
+
+// whitelistedEnvPairs picks the launcherEnvKeys entries out of a KEY=VALUE
+// slice. Keyed on the production whitelist rather than a second list, so a
+// fixture cannot end up waiting for a variable ReadLauncherEnv never reads.
+func whitelistedEnvPairs(env []string) map[string]string {
+	pairs := map[string]string{}
+	for _, kv := range env {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok {
+			continue
+		}
+		if _, whitelisted := launcherEnvKeys[k]; whitelisted {
+			pairs[k] = v
+		}
+	}
+	return pairs
+}
+
+// TestAwaitFixtureCondition covers the poll #1586 replaced a fixed sleep with.
+// Every arm drives a condition that is NOT true on the first read, because a
+// poll observed only succeeding immediately proves nothing about the retrying.
+func TestAwaitFixtureCondition(t *testing.T) {
+	t.Run("polls until the condition holds", func(t *testing.T) {
+		calls := 0
+		w := awaitFixtureCondition(func() (bool, string) {
+			calls++
+			return calls >= 4, fmt.Sprintf("call %d", calls)
+		}, time.Millisecond, time.Second)
+		if !w.OK || w.Attempts != 4 {
+			t.Errorf("got %+v, want OK after exactly 4 attempts", w)
+		}
+	})
+
+	t.Run("a check that could not read is retried, not taken as a verdict", func(t *testing.T) {
+		calls := 0
+		w := awaitFixtureCondition(func() (bool, string) {
+			calls++
+			if calls < 3 {
+				return false, "ps pid 4242: probe did not run"
+			}
+			return true, "ppid 1"
+		}, time.Millisecond, time.Second)
+		if !w.OK || w.Attempts != 3 {
+			t.Errorf("got %+v, want the ps failures ridden out and OK on attempt 3", w)
+		}
+	})
+
+	t.Run("a condition that never holds fails, with the elapsed time", func(t *testing.T) {
+		w := awaitFixtureCondition(func() (bool, string) { return false, "ppid 4242" }, time.Millisecond, 20*time.Millisecond)
+		if w.OK {
+			t.Fatal("the condition never held; reporting otherwise would trade the hard-fail away")
+		}
+		if w.Attempts < 2 {
+			t.Errorf("gave up after %d attempt(s): a deadline that admits one read is a sleep", w.Attempts)
+		}
+		if w.Elapsed < 20*time.Millisecond {
+			t.Errorf("returned after %v, before the %v deadline", w.Elapsed, 20*time.Millisecond)
+		}
+		if w.Saw != "ppid 4242" {
+			t.Errorf("Saw %q: the failure must carry what was last read", w.Saw)
+		}
+	})
+}
+
+// TestWhitelistedEnvPairs pins the extraction waitForLauncherEnv's vacuity
+// guard reads. The empty case is the one that matters: it is what makes the
+// guard fire rather than letting a fixture wait for nothing.
+func TestWhitelistedEnvPairs(t *testing.T) {
+	got := whitelistedEnvPairs([]string{
+		"PATH=/usr/bin:/bin", "GO_WANT_LAUNCHER_HELPER=1",
+		"TERM_PROGRAM=tmux", "TMUX_PANE=%17", "malformed",
+	})
+	want := map[string]string{"TERM_PROGRAM": "tmux", "TMUX_PANE": "%17"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+	if got := whitelistedEnvPairs([]string{"PATH=/usr/bin:/bin"}); len(got) != 0 {
+		t.Errorf("got %v, want nothing — PATH is not launcher identity", got)
 	}
 }
 
@@ -795,14 +1320,8 @@ func orphanPID(t *testing.T) int {
 	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
 	// The `sh` has exited (Output waits for it); wait for launchd to actually
 	// re-parent before asserting on the chain.
-	for i := 0; i < 100; i++ {
-		if ppid, _, err := readProcInfo(pid); err == nil && ppid <= 1 {
-			return pid
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("orphan %d was never reparented to launchd", pid)
-	return 0
+	waitForReparentToInit(t, pid)
+	return pid
 }
 
 // TestResolveHostFromAncestry_ChainEndingAtInitIsAVerdict covers the arm PID 1
@@ -815,10 +1334,10 @@ func orphanPID(t *testing.T) int {
 func TestResolveHostFromAncestry_ChainEndingAtInitIsAVerdict(t *testing.T) {
 	orphan := orphanPID(t)
 
-	if term, hostPID, complete := resolveHostFromAncestry(orphan); term != "" || hostPID != 0 || !complete {
+	if term, hostPID, complete := resolveHostFromAncestry(noAggregateBudget(), orphan, newAncestryReads()); term != "" || hostPID != 0 || !complete {
 		t.Errorf("orphan: got (%q, %d, %v); want a completed in-loop walk that found nothing", term, hostPID, complete)
 	}
-	if _, hostKnown := resolveClientHostIdentity([]int{orphan}); !hostKnown {
+	if _, hostKnown := resolveClientHostIdentity(noAggregateBudget(), clientLoopHerdr, []int{orphan}); !hostKnown {
 		t.Error("a reparented candidate WAS read and has no window — that is an answer")
 	}
 }
@@ -833,10 +1352,10 @@ func TestResolveClientHostIdentity_TruncatedCandidatesArePoisonToo(t *testing.T)
 	for i := range full {
 		full[i] = 1
 	}
-	if _, hostKnown := resolveClientHostIdentity(full); !hostKnown {
+	if _, hostKnown := resolveClientHostIdentity(noAggregateBudget(), clientLoopHerdr, full); !hostKnown {
 		t.Fatalf("exactly maxClientCandidates readable candidates is a complete look: %d", len(full))
 	}
-	if _, hostKnown := resolveClientHostIdentity(append(full, 1)); hostKnown {
+	if _, hostKnown := resolveClientHostIdentity(noAggregateBudget(), clientLoopHerdr, append(full, 1)); hostKnown {
 		t.Error("one candidate past the cap was never probed, so 'no client has a window' is unsupported")
 	}
 }
@@ -845,10 +1364,10 @@ func TestResolveClientHostIdentity_TruncatedCandidatesArePoisonToo(t *testing.T)
 // primitives above and the loop below: hostIdentity is where a caller reads
 // them, and #1501's tmux client path is queued to read it the same way.
 func TestHostIdentity_CarriesTheAncestryVerdict(t *testing.T) {
-	if l, complete := hostIdentity(1); !complete || l == nil {
+	if l, complete := hostIdentity(noAggregateBudget(), 1); !complete || l == nil {
 		t.Errorf("launchd is readable and hostless: got (%+v, %v)", l, complete)
 	}
-	if l, complete := hostIdentity(exitedPID(t)); complete {
+	if l, complete := hostIdentity(noAggregateBudget(), exitedPID(t)); complete {
 		t.Errorf("a reaped pid cannot be read, so its empty identity is not evidence: got (%+v, %v)", l, complete)
 	}
 }
@@ -868,7 +1387,7 @@ func TestHostIdentity_CarriesTheAncestryVerdict(t *testing.T) {
 func TestResolveClientHostIdentity_UnreadableCandidateIsNotDetached(t *testing.T) {
 	dead := exitedPID(t)
 
-	host, hostKnown := resolveClientHostIdentity([]int{dead})
+	host, hostKnown := resolveClientHostIdentity(noAggregateBudget(), clientLoopHerdr, []int{dead})
 
 	if host != nil {
 		t.Errorf("an unreadable candidate must not produce a host: %+v", host)
@@ -885,7 +1404,7 @@ func TestResolveClientHostIdentity_UnreadableCandidateIsNotDetached(t *testing.T
 // ancestry walk terminates immediately and honestly (PID 1 has no parent), so
 // "no local window" here is evidence, and the answer stays an answer.
 func TestResolveClientHostIdentity_HostlessCandidateStaysDetached(t *testing.T) {
-	host, hostKnown := resolveClientHostIdentity([]int{1})
+	host, hostKnown := resolveClientHostIdentity(noAggregateBudget(), clientLoopHerdr, []int{1})
 
 	if host != nil {
 		t.Errorf("launchd has no window; reporting one is the #1348 misroute: %+v", host)
@@ -904,13 +1423,13 @@ func TestResolveClientHostIdentity_OneUnreadableCandidatePoisonsTheAnswer(t *tes
 
 	// launchd first, so a loop that only remembered the FIRST candidate's
 	// verdict would answer "detached" here.
-	if _, hostKnown := resolveClientHostIdentity([]int{1, dead}); hostKnown {
+	if _, hostKnown := resolveClientHostIdentity(noAggregateBudget(), clientLoopHerdr, []int{1, dead}); hostKnown {
 		t.Error("one unreadable candidate makes 'no client has a window' unsupported (#1492)")
 	}
 	// launchd last, so a loop that only remembered the LAST verdict would
 	// answer "detached" here. Between them the two arms pin both spellings of
 	// "the accumulator was dropped".
-	if _, hostKnown := resolveClientHostIdentity([]int{dead, 1}); hostKnown {
+	if _, hostKnown := resolveClientHostIdentity(noAggregateBudget(), clientLoopHerdr, []int{dead, 1}); hostKnown {
 		t.Error("order must not change the verdict")
 	}
 }
@@ -925,7 +1444,7 @@ func TestResolveClientHostIdentity_ResolvableCandidateStillWins(t *testing.T) {
 		"ITERM_SESSION_ID=w0t0p0-CLIENT",
 	})
 
-	host, hostKnown := resolveClientHostIdentity([]int{client})
+	host, hostKnown := resolveClientHostIdentity(noAggregateBudget(), clientLoopHerdr, []int{client})
 
 	if !hostKnown {
 		t.Fatal("a candidate whose own env names its host is readable by definition")
@@ -937,8 +1456,597 @@ func TestResolveClientHostIdentity_ResolvableCandidateStillWins(t *testing.T) {
 	// The asymmetry the doc claims: a found host is evidence regardless of what
 	// the rest of the list did, so an unreadable candidate ahead of it must not
 	// poison a POSITIVE answer — only a negative one.
-	host, hostKnown = resolveClientHostIdentity([]int{exitedPID(t), client})
+	host, hostKnown = resolveClientHostIdentity(noAggregateBudget(), clientLoopHerdr, []int{exitedPID(t), client})
 	if !hostKnown || host == nil || host.TermProgram != "iTerm.app" {
 		t.Errorf("a resolving candidate wins outright past an unreadable one: got (%+v, %v)", host, hostKnown)
 	}
+}
+
+// --- non-answer memoization (#1514) -----------------------------------------
+
+// forgetHerdrClientMemo drops socketPath's entry from the process-global memo.
+// Since #1514 every socket a test touches leaves one behind — non-answers are
+// memoized too — so this is the single spelling of the locking protocol rather
+// than a copy per test. One caller uses it mid-test, standing in for the TTL
+// elapsing; the rest wire it through t.Cleanup.
+func forgetHerdrClientMemo(socketPath string) {
+	herdrClientHosts.mu.Lock()
+	defer herdrClientHosts.mu.Unlock()
+	delete(herdrClientHosts.entries, socketPath)
+}
+
+// countingLsof makes the herdr client log at logPath answer as an lsof table,
+// records one line per invocation, and returns a func reporting how many times
+// the probe ran. It is how the cost claims below are asserted as a COUNT of
+// probes rather than as a wall-clock time: the whole regression is "N panes pay
+// N scans instead of 1", and a timing assertion for that is a flake generator
+// on a loaded machine — which is, awkwardly, the exact machine state the defect
+// needs.
+//
+// The shape is odd and the reason is macOS, not taste. The obvious stub — write
+// a #!/bin/sh script somewhere, point lsofPath at it — spawns in ~6ms idle and
+// **2.1s under load**, because the first exec of a newly written file is
+// evaluated for code signing; a copied /bin/cat was outright `signal: killed`
+// on every one of 12 attempts. herdrClientPIDs gives lsof a 2s ceiling, so that
+// stub does not merely run slowly, it times out and the probe reports "could
+// not run" — the exact state these tests are trying to tell apart from the one
+// under test. Measured worst-of-N under a concurrent `go test ./core/... -race`:
+// /usr/bin/true 3.6ms, written script 2.14s, script-as-data below 6.1ms.
+//
+// So nothing new is ever EXEC'd: lsofPath becomes /bin/sh — a warm, signed
+// system binary — and the script it runs is DATA. herdrClientPIDs passes the
+// client-log path as lsof's only argument, so the client log is necessarily
+// where that script has to live. Production never reads the log's bytes (it
+// stats the path and hands it to lsofPath), so the substitution is invisible to
+// the code under test.
+//
+// lsofPath is a package var (process_darwin.go) rather than a seam invented for
+// this test. Swapping it under t.Cleanup is safe because this test is serial and
+// Go defers every t.Parallel test until the serial ones have finished, so the
+// swap can never overlap one. (Some tests in this package DO call t.Parallel
+// now — none touch lsofPath, and one that did would need this fixture reworked
+// rather than the comment amended again.)
+func countingLsof(t *testing.T, logPath, table string) func() int {
+	t.Helper()
+	counter := filepath.Join(t.TempDir(), "calls")
+	script := "echo x >> '" + counter + "'\ncat <<'TABLE'\n" + table + "\nTABLE\n"
+	if err := os.WriteFile(logPath, []byte(script), 0o600); err != nil {
+		t.Fatalf("write client log: %v", err)
+	}
+	saved := lsofPath
+	lsofPath = "/bin/sh"
+	t.Cleanup(func() { lsofPath = saved })
+	return func() int {
+		b, err := os.ReadFile(counter)
+		if os.IsNotExist(err) {
+			return 0
+		}
+		if err != nil {
+			t.Fatalf("read lsof counter: %v", err)
+		}
+		return strings.Count(string(b), "\n")
+	}
+}
+
+// unreadableClientSocket builds a herdr session whose client log exists and
+// whose only attached "client" is a reaped PID — so the lsof probe answers,
+// every candidate is unreadable, and resolveClientHostIdentity returns the
+// (nil, false) non-answer #1492 introduced. Returns the socket path and the
+// scan counter.
+func unreadableClientSocket(t *testing.T) (string, func() int) {
+	t.Helper()
+	socketPath := newHerdrSessionDir(t)
+	logPath := herdrClientLogPath(socketPath)
+	table := "COMMAND     PID USER   FD   TYPE DEVICE SIZE/OFF   NODE NAME\n" +
+		"herdr     " + strconv.Itoa(exitedPID(t)) + " ingo    3w   REG   1,18      372 136170 " + logPath
+	scans := countingLsof(t, logPath, table)
+	t.Cleanup(func() {
+		forgetHerdrClientMemo(socketPath)
+	})
+	return socketPath, scans
+}
+
+// TestHerdrClientLauncher_UnreadableCandidateIsProbedOncePerSocket is #1514.
+// Every pane of one herdr server shares a socket, and the sweep resolves them
+// one after another, so the memo is the only thing standing between "one probe
+// per socket" and "one probe per pane". Before #1492 an unreadable candidate
+// answered (nil, true) and was memoized; after it, it answers (nil, false) and
+// — under #1485's rule — was not, so all eight panes re-paid the scan plus four
+// candidate probes, each of which is two ancestry walks on a 2s ceiling.
+//
+// Eight is the count herdrClientLauncher's own doc uses.
+func TestHerdrClientLauncher_UnreadableCandidateIsProbedOncePerSocket(t *testing.T) {
+	socketPath, scans := unreadableClientSocket(t)
+
+	const panes = 8
+	for i := 0; i < panes; i++ {
+		if _, probed := herdrClientLauncher(socketPath); probed {
+			t.Fatalf("pane %d: an unreadable candidate is not an answer", i)
+		}
+	}
+	if got := scans(); got != 1 {
+		t.Errorf("%d panes of one herdr server cost %d lsof scans, want 1 — each also drags %d candidate probes behind it",
+			panes, got, maxClientCandidates)
+	}
+}
+
+// TestSortedDistinctPIDs pins both halves of what herdrClientPIDs hands to
+// resolveClientHostIdentity. The ordering half is #1350's open question 3; the
+// distinctness half is what makes maxClientCandidates count clients rather than
+// file descriptors, since parseLsofFDs emits one entry per FD row by design.
+//
+// The dedup is latent rather than a live fix — herdr 0.8.0 gives one write
+// handle per client — so the rows below are constructed, and the "two handles"
+// case is the shape that would otherwise consume two of the four candidate
+// slots for one client.
+func TestSortedDistinctPIDs(t *testing.T) {
+	cases := map[string]struct{ in, want []int }{
+		"newest first":            {[]int{26932, 26941, 26940}, []int{26941, 26940, 26932}},
+		"two handles, one client": {[]int{26932, 26932}, []int{26932}},
+		"repeats collapse":        {[]int{7, 9, 7, 9, 9}, []int{9, 7}},
+		"empty":                   {nil, nil},
+	}
+	for name, tc := range cases {
+		if got := sortedDistinctPIDs(slices.Clone(tc.in)); !slices.Equal(got, tc.want) {
+			t.Errorf("%s: got %v, want %v", name, got, tc.want)
+		}
+	}
+}
+
+// TestSortedDistinctPIDs_DuplicateDoesNotConsumeACandidateSlot is the reason
+// the dedup is in this PR rather than filed for later: a duplicated PID is a
+// way to reach maxClientCandidates' truncation that has nothing to do with how
+// many clients are attached, and that truncation is one of the two triggers of
+// #1514's permanent non-answer.
+func TestSortedDistinctPIDs_DuplicateDoesNotConsumeACandidateSlot(t *testing.T) {
+	// Three clients, one of them holding two write handles: five FD rows.
+	rows := []int{100, 100, 200, 300, 300}
+	got := sortedDistinctPIDs(slices.Clone(rows))
+	if len(got) > maxClientCandidates {
+		t.Fatalf("%d FD rows for 3 clients still exceed the %d-candidate cap: %v",
+			len(rows), maxClientCandidates, got)
+	}
+	if len(got) != 3 {
+		t.Errorf("got %v, want one entry per client", got)
+	}
+}
+
+// TestHerdrClientPIDs_DedupesFDRowsOfOneClient is the end-to-end half of the
+// dedup, and it is the one that matters: TestSortedDistinctPIDs calls the
+// helper directly, so nothing there pins that herdrClientPIDs — the helper's
+// only production caller — actually routes through it. Measured: unwiring the
+// call while keeping the sort leaves the whole package green.
+//
+// TestHerdrClientPIDs_MultipleClientsAreOrderedNewestFirst cannot cover this,
+// because real herdr clients hold one write handle each — which is exactly the
+// case the dedup is not about.
+func TestHerdrClientPIDs_DedupesFDRowsOfOneClient(t *testing.T) {
+	socketPath := newHerdrSessionDir(t)
+	logPath := herdrClientLogPath(socketPath)
+	// One client on two write handles, plus a second client. lsof emits a row
+	// per FD, so this is three rows for two clients.
+	table := "COMMAND     PID USER   FD   TYPE DEVICE SIZE/OFF   NODE NAME\n" +
+		"herdr     26932 ingo    3w   REG   1,18      372 136170 " + logPath + "\n" +
+		"herdr     26932 ingo    4w   REG   1,18      372 136170 " + logPath + "\n" +
+		"herdr     26940 ingo    5u   REG   1,18      372 136170 " + logPath
+	countingLsof(t, logPath, table)
+
+	pids, probed := herdrClientPIDs(noAggregateBudget(), socketPath)
+	if !probed {
+		t.Fatal("the stub exits 0, so the probe ran")
+	}
+	if want := []int{26940, 26932}; !slices.Equal(pids, want) {
+		t.Fatalf("got %v, want one entry per client, newest attach first %v — the cap counts candidates, so a duplicate consumes a slot", pids, want)
+	}
+}
+
+// TestHerdrClientCachePut_NonAnswerDoesNotDisplaceALiveAnswer locks the one
+// hazard memoizing non-answers introduces. Before #1514 a non-answer was never
+// written, so it could not overwrite anything; now two goroutines can miss the
+// memo for one socket and probe concurrently (refreshMultiplexerHosts reads outside
+// assignMu on the sweep goroutine, PID discovery reaches captureLauncher on its
+// own), and the non-answer is systematically the slower of the two to produce.
+// Last-writer-wins would let the one carrying no information erase a resolved
+// host AND restamp the entry fresh.
+//
+// The second case is the vacuity guard: a put that simply refused every
+// overwrite would satisfy the first and freeze the memo forever.
+func TestHerdrClientCachePut_NonAnswerDoesNotDisplaceALiveAnswer(t *testing.T) {
+
+	t.Run("non-answer loses to a live answer", func(t *testing.T) {
+		socketPath := newHerdrSessionDir(t)
+		want := &session.Launcher{TermProgram: "iTerm.app"}
+		t.Cleanup(func() { forgetHerdrClientMemo(socketPath) })
+
+		herdrClientHosts.put(socketPath, want, true)
+		herdrClientHosts.put(socketPath, nil, false) // the slow loser lands second
+
+		got, probed := herdrClientLauncher(socketPath)
+		if !probed || got != want {
+			t.Errorf("got (%+v, %v), want the resolved host to survive — a probe that determined nothing erased one that did", got, probed)
+		}
+	})
+
+	t.Run("answer still wins over a non-answer", func(t *testing.T) {
+		socketPath := newHerdrSessionDir(t)
+		want := &session.Launcher{TermProgram: "iTerm.app"}
+		t.Cleanup(func() { forgetHerdrClientMemo(socketPath) })
+
+		herdrClientHosts.put(socketPath, nil, false)
+		herdrClientHosts.put(socketPath, want, true)
+
+		got, probed := herdrClientLauncher(socketPath)
+		if !probed || got != want {
+			t.Errorf("got (%+v, %v), want the answer to replace the non-answer — re-probing is pointless otherwise", got, probed)
+		}
+	})
+}
+
+// TestHerdrClientCache_ExpiresANonAnswer is the load-bearing half of #1514's
+// argument, and it was missing: deleting clientHostMemo.live's expiry check
+// entirely left every other test in the package green (measured).
+//
+// The case for reversing #1485 is that a memoized non-answer costs only a
+// DEFERRED recovery. That sentence is true only because the entry expires. An
+// unknown that never expired would pin every pane of a herdr server to "host
+// unknown" for the life of the daemon — strictly worse than the per-pane
+// re-probe #1514 removes, and arrived at through the fix for it.
+//
+// Backdating the stamp stands in for five real seconds; asserting the SCAN
+// COUNT rather than the return value is what makes it discriminating, since a
+// non-answer reads identically whether it was re-probed or served stale.
+func TestHerdrClientCache_ExpiresANonAnswer(t *testing.T) {
+	socketPath, scans := unreadableClientSocket(t)
+
+	if _, probed := herdrClientLauncher(socketPath); probed {
+		t.Fatal("want a non-answer for a socket whose only candidate is unreadable")
+	}
+	if got := scans(); got != 1 {
+		t.Fatalf("first read cost %d scans, want 1", got)
+	}
+
+	herdrClientHosts.mu.Lock()
+	entry := herdrClientHosts.entries[socketPath]
+	entry.at = time.Now().Add(-clientHostCacheTTL - time.Second)
+	herdrClientHosts.entries[socketPath] = entry
+	herdrClientHosts.mu.Unlock()
+
+	if _, probed := herdrClientLauncher(socketPath); probed {
+		t.Fatal("the re-probe finds the same unreadable candidate")
+	}
+	if got := scans(); got != 2 {
+		t.Errorf("an expired non-answer was served from the memo (%d scans, want 2): a cached unknown that never lapses pins every pane on this socket forever", got)
+	}
+}
+
+// --- plutil non-answers in the bundle-id walk (#1524) ------------------------
+
+// stalledChild is a shelloutCmd whose child never answers: `sleep` runs until
+// the caller's own ceiling SIGKILLs it. It is the closest a test can get to the
+// condition #1524 describes — a probe that blows its 2s ceiling on a loaded
+// machine — and it reaches it through the REAL exec, the REAL ceiling and the
+// REAL error classification rather than a fabricated error value.
+//
+// /bin/sleep deliberately, not a script this test writes: the first exec of a
+// newly written file is evaluated for code signing (measured at 2.14s worst-of
+// -12 under load), which is itself past the ceiling — a test that planted its
+// own binary could pass while proving nothing about the tool under test.
+//
+// Shared by every ceiling test in the package (#1538). It used to be
+// plutil-specific, and the measurement above — which every one of them depends
+// on to be non-vacuous — was documented only there.
+func stalledChild(ctx context.Context) *exec.Cmd {
+	return exec.CommandContext(ctx, "/bin/sleep", "30")
+}
+
+// anyPlist adapts a plist-independent fixture (a stall, a missing binary) to
+// the factory shape bundleIDVia takes — the one site whose command depends on a
+// value the callee derives.
+func anyPlist(c shelloutCmd) bundleIDCmd { return func(string) shelloutCmd { return c } }
+
+// stalledPlistCmd is stalledChild in that factory shape.
+func stalledPlistCmd(string) shelloutCmd { return stalledChild }
+
+// shellCmd is a shelloutCmd running one /bin/sh script, for fixtures that need
+// a specific exit status or signal rather than a stall.
+func shellCmd(script string) shelloutCmd {
+	return func(ctx context.Context) *exec.Cmd {
+		return exec.CommandContext(ctx, "/bin/sh", "-c", script)
+	}
+}
+
+// missingCmd is a shelloutCmd whose binary does not exist, i.e. a fork/exec
+// failure: a probe that never reached the question.
+func missingCmd(name string) shelloutCmd {
+	return func(ctx context.Context) *exec.Cmd {
+		return exec.CommandContext(ctx, "/nonexistent/"+name)
+	}
+}
+
+// plistWithoutBundleID writes a real, well-formed Info.plist that simply has no
+// CFBundleIdentifier key, and returns the ".app" path wrapping it. plutil exits
+// NON-ZERO on it — the same exit status as for a file that does not exist
+// (measured) — which is why bundleIDVia cannot key on the exit status alone.
+func plistWithoutBundleID(t *testing.T) string {
+	t.Helper()
+	appPath := filepath.Join(t.TempDir(), "NoID.app")
+	if err := os.MkdirAll(filepath.Join(appPath, "Contents"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>CFBundleName</key><string>NoID</string></dict></plist>
+`
+	if err := os.WriteFile(filepath.Join(appPath, "Contents", "Info.plist"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return appPath
+}
+
+// TestBundleIDVia_AnsweredMissIsNotAnUnanswerableProbe is the primitive #1524
+// turns on, and it is the whole reason bundleIDForAppPath grew an error return:
+// before it, every one of these rows collapsed to "".
+//
+// Rows 1-3 are LOCKS on the pre-#1524 behaviour — an answer, however
+// unhelpful, must keep reporting a nil error so the walk carries on past it.
+// Row 3 is the one that stops the fix being spelled "any error aborts": a real
+// app bundle whose plist genuinely carries no CFBundleIdentifier exits 1
+// exactly like a missing file, and aborting the walk there would fail the #784
+// admission gate OPEN for any unusual bundle in the chain.
+//
+// Rows 4-5 are the new behaviour: a child that never ran to a normal exit
+// answered nothing, and says so.
+func TestBundleIDVia_AnsweredMissIsNotAnUnanswerableProbe(t *testing.T) {
+	t.Parallel() // one row spends the real 2s ceiling; overlap it with the siblings that do too
+	missingBinary := anyPlist(missingCmd("no-such-plutil-1524"))
+	// via adapts a shelloutCmd into the bundleIDProbe shape bundleIDForAppPath
+	// already has, so every row names the function it exercises instead of
+	// encoding it as an absent value.
+	via := func(c bundleIDCmd) bundleIDProbe {
+		return func(ctx context.Context, appPath string) (string, error) { return bundleIDVia(ctx, appPath, c) }
+	}
+	tests := []struct {
+		name    string
+		appPath string
+		probe   bundleIDProbe
+		wantID  string
+		wantErr bool
+		wantWhy string
+	}{
+		{
+			// bundleIDForAppPath, not via(plutilBundleIDCmd): this row runs the
+			// PRODUCTION entry point, so the wiring from it down to plutil is
+			// pinned rather than bypassed — reaching plutil through bundleIDVia
+			// here would leave a rewiring of bundleIDForAppPath itself green
+			// (found in review of #1524).
+			"a real bundle answers with its id — the vacuity guard, through the production entry point",
+			"/System/Library/CoreServices/Finder.app", bundleIDForAppPath,
+			"com.apple.finder", false,
+			"if this row ever fails the others prove nothing: they would all be passing on a probe that never works",
+		},
+		{
+			"LOCK: a bundle that is not there is an ANSWER",
+			filepath.Join(t.TempDir(), "Gone.app"), via(plutilBundleIDCmd),
+			"", false,
+			"plutil ran and said the file does not exist — a verdict, and the walk must carry on past it",
+		},
+		{
+			"LOCK: a real plist with no CFBundleIdentifier is an ANSWER",
+			plistWithoutBundleID(t), via(plutilBundleIDCmd),
+			"", false,
+			"same exit status as row 2; keying on the exit status would abort here and widen #784",
+		},
+		{
+			"a child killed by the ceiling answered NOTHING",
+			"/System/Library/CoreServices/Finder.app", via(anyPlist(stalledChild)),
+			"", true,
+			"this is #1524: indistinguishable from row 2/3 before the error return existed",
+		},
+		{
+			"a child that never started answered NOTHING",
+			"/System/Library/CoreServices/Finder.app", via(missingBinary),
+			"", true,
+			"a fork that fails under the same load the ceiling fires under is equally no evidence",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			id, err := tc.probe(noAggregateBudget(), tc.appPath)
+			if id != tc.wantID {
+				t.Errorf("id = %q, want %q — %s", id, tc.wantID, tc.wantWhy)
+			}
+			if gotErr := err != nil; gotErr != tc.wantErr {
+				t.Errorf("err = %v, want error:%v — %s", err, tc.wantErr, tc.wantWhy)
+			}
+		})
+	}
+}
+
+// TestBundleIDVia_CeilingActuallyFires is the vacuity guard on the row above
+// that costs the most to get wrong. A ceiling that fired BEFORE the child was
+// started would classify identically (the error is a context error, not an
+// ExitError, so it is still "no answer") while exercising a different branch —
+// and the branch it would skip is the one #1524 is actually about, where the
+// error IS an *exec.ExitError and errors.Is(err, context.DeadlineExceeded) is
+// FALSE.
+func TestBundleIDVia_CeilingActuallyFires(t *testing.T) {
+	t.Parallel() // spends the real 2s ceiling and shares no state
+	start := time.Now()
+	if _, err := bundleIDVia(noAggregateBudget(), "/System/Library/CoreServices/Finder.app", stalledPlistCmd); err == nil {
+		t.Fatal("a child that never answers must report an error")
+	}
+	if elapsed := time.Since(start); elapsed < time.Second {
+		t.Errorf("bundleIDVia returned after %v — too fast to have started the child and killed it; "+
+			"the row above is passing on the pre-start branch, not on the mid-run kill #1524 is about", elapsed)
+	}
+}
+
+// obsidianChain is the #1524 scenario as a synthetic ancestry: an antigravity
+// CLI inside an Obsidian community terminal plugin. The two intermediate links
+// are what make it the real shape rather than a one-hop fixture — the shell and
+// the Electron renderer helper both have to be walked PAST (topLevelAppPath
+// rejects the helper for being nested in Contents/Frameworks) before the walk
+// reaches Obsidian.app and makes its one plutil call.
+func obsidianChain() procInfoProbe {
+	links := map[int]struct {
+		ppid int
+		cmd  string
+	}{
+		100: {200, "/opt/homebrew/bin/agy"},
+		200: {300, "/bin/zsh"},
+		300: {400, "/Applications/Obsidian.app/Contents/Frameworks/Obsidian Helper (Renderer).app/Contents/MacOS/Obsidian Helper (Renderer)"},
+		400: {1, "/Applications/Obsidian.app/Contents/MacOS/Obsidian"},
+	}
+	return func(_ context.Context, pid int) (int, string, error) {
+		l, ok := links[pid]
+		if !ok {
+			return 0, "", fmt.Errorf("no process info for pid %d", pid)
+		}
+		return l.ppid, l.cmd, nil
+	}
+}
+
+// answering returns a bundleIDProbe that answers id for every app path, and
+// unanswerable returns one that never answers. The pair is the whole #1524
+// distinction in two lines.
+func answering(id string) bundleIDProbe {
+	return func(context.Context, string) (string, error) { return id, nil }
+}
+
+func unanswerable() bundleIDProbe {
+	return func(context.Context, string) (string, error) { return "", fmt.Errorf("plutil: signal: killed") }
+}
+
+// TestResolveHostBundleIDVia_UnanswerableBundleProbeIsNotAMiss is #1524's
+// defect test at the walk. Every row walks the SAME four-link Obsidian chain to
+// the same ancestor and differs only in what the bundle-id probe does there, so
+// the probe's answer is the only variable.
+//
+// Row 3 is the load-bearing one and row 2 is what stops it being spelled
+// "return false": an app the probe ANSWERED about but could not name is a
+// completed miss (#784 keeps rejecting it), while an app it never answered
+// about at all is no evidence and must abort the walk.
+func TestResolveHostBundleIDVia_UnanswerableBundleProbeIsNotAMiss(t *testing.T) {
+	// verdict is the walk's whole return, compared as one value: the three
+	// fields are a single answer, and reading them apart invites a test that
+	// checks two of the three.
+	type verdict struct {
+		bundleID string
+		hostPID  int
+		complete bool
+	}
+	tests := []struct {
+		name  string
+		probe bundleIDProbe
+		want  verdict
+	}{
+		{
+			"the probe answers with Obsidian's id — the vacuity guard",
+			answering("md.obsidian"), verdict{"md.obsidian", 400, true},
+		},
+		{
+			"LOCK: the probe answers that this app has no id it can name — a completed miss",
+			answering(""), verdict{"", 0, true},
+		},
+		{
+			"the probe never answered — no evidence, so the walk did NOT complete",
+			unanswerable(), verdict{"", 0, false},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			id, hostPID, complete := resolveHostBundleIDVia(noAggregateBudget(), 100, obsidianChain(), tc.probe)
+			if got := (verdict{id, hostPID, complete}); got != tc.want {
+				t.Errorf("resolveHostBundleIDVia = %+v; want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestIsKnownInteractiveHost_PlutilNonAnswerAdmits carries the walk's verdict up
+// to the gate that acts on it — the admission decision itself, which is where
+// #1524 costs a user a session.
+//
+// Walk 1 completes and finds nothing, which is the true answer for this chain:
+// Obsidian is not in termProgramByAppName (that is exactly why
+// knownEmbeddedHostBundleIDs exists). So walk 2 runs, and its verdict decides.
+//
+// Row 3 is the #784 LOCK in the same shape as the defect: an app walk 2
+// answered about and which is not allow-listed must still be declined. Without
+// it "fail open on a non-answer" and "fail open always" look identical here.
+func TestIsKnownInteractiveHost_PlutilNonAnswerAdmits(t *testing.T) {
+	walk1Finished := walk("", finished)
+	walk2 := func(probe bundleIDProbe) ancestryWalk {
+		return func(ctx context.Context, pid int) (string, int, walkEnd) {
+			id, hostPID, complete := resolveHostBundleIDVia(ctx, pid, obsidianChain(), probe)
+			return id, hostPID, unansweredOr(complete)
+		}
+	}
+	tests := []struct {
+		name  string
+		probe bundleIDProbe
+		want  bool
+		why   string
+	}{
+		{
+			"the probe never answered about Obsidian.app",
+			unanswerable(), true,
+			"#1524: a probe that could not be asked is not evidence of a non-interactive host, and the rejection is cached in hostGateRejected forever",
+		},
+		{
+			"the probe answered md.obsidian — the vacuity guard",
+			answering("md.obsidian"), true,
+			"the allow-listed embedded host must be admitted on a real answer too, or row 1 proves only that everything is admitted",
+		},
+		{
+			"LOCK: the probe answered com.steipete.codexbar",
+			answering("com.steipete.codexbar"), false,
+			"#784: a walk that RAN and found a non-allow-listed app is a real verdict and must still exclude",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isKnownInteractiveHostVia(noAggregateBudget(), 100, walk1Finished, walk2(tc.probe)); got != tc.want {
+				t.Errorf("isKnownInteractiveHostVia = %v, want %v — %s", got, tc.want, tc.why)
+			}
+		})
+	}
+}
+
+// TestIsKnownInteractiveHost_PlutilCeilingAdmitsEndToEnd is the same admission
+// decision with nothing faked below the process table: the real bundleIDVia,
+// the real 2s ceiling, the real exec and the real error classification, driven
+// only by a child that does not answer. It is the row that proves the four
+// layers agree — a fabricated probe error cannot show that bundleIDVia
+// classifies a REAL kill the way resolveHostBundleIDVia expects.
+func TestIsKnownInteractiveHost_PlutilCeilingAdmitsEndToEnd(t *testing.T) {
+	t.Parallel() // spends the real 2s ceiling and shares no state
+	stalled := func(ctx context.Context, appPath string) (string, error) {
+		return bundleIDVia(ctx, appPath, stalledPlistCmd)
+	}
+	walk1Finished := walk("", finished)
+	walk2 := func(ctx context.Context, pid int) (string, int, walkEnd) {
+		id, hostPID, complete := resolveHostBundleIDVia(ctx, pid, obsidianChain(), stalled)
+		return id, hostPID, unansweredOr(complete)
+	}
+	if !isKnownInteractiveHostVia(noAggregateBudget(), 100, walk1Finished, walk2) {
+		t.Error("a plutil that blew its own ceiling declined a legitimate Obsidian-hosted session (#1524)")
+	}
+}
+
+// unansweredOr adapts a walk that still returns the plain completeness bit onto
+// walkEnd, for the two tests above whose only failure mode is a `plutil` that
+// did not answer.
+//
+// It is deliberately NOT walkEndOf (osutil_darwin.go): that one reads the reason
+// off the per-resolve read memo, and these walks are driven by obsidianChain(),
+// a procInfo probe that answers for every pid — so a false bit here can only be
+// the plutil non-answer the rows are about, and naming walkUnanswered says which
+// end is under test rather than deriving it from a memo that saw nothing.
+func unansweredOr(complete bool) walkEnd {
+	if complete {
+		return walkCompleted
+	}
+	return walkUnanswered
 }

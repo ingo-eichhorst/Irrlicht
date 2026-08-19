@@ -88,29 +88,45 @@ enum SoundPlayer {
     /// Copies (or transcodes) `srcURL` into `~/Library/Sounds/` under the
     /// canonical filename for `event`, returning the installed basename.
     ///
-    /// The completion fires on the main thread.
+    /// The completion is delivered asynchronously on `completionQueue`, which
+    /// defaults to the main queue. That default is load-bearing, not a
+    /// convenience: the only production caller is a SwiftUI view that assigns
+    /// to view state and shows an error string, so it must keep arriving on
+    /// main.
+    ///
+    /// It is a *parameter* because "always hop to main" deadlocks any caller
+    /// that is itself blocking the main thread while it waits for the result.
+    /// XCTest runs test methods on the main thread, so a test that called this
+    /// and then blocked could only be woken by a main-queue block that could
+    /// not run until the test returned. Under load that is what happened:
+    /// XCTest's stall detector diagnosed a deadlock and `abort()`ed the whole
+    /// process, truncating the run to 33 of 40 suites — while every suite that
+    /// had already reported said "0 failures", so the run still looked healthy
+    /// (#1523). Handing the caller a queue it is not blocking removes the
+    /// cycle, rather than widening a timeout and hoping.
     static func installCustom(
         srcURL: URL,
         event: NotificationEvent,
+        completionQueue: DispatchQueue = .main,
         completion: @escaping (Result<String, Error>) -> Void
     ) {
-        let main: (Result<String, Error>) -> Void = { result in
-            DispatchQueue.main.async { completion(result) }
+        let deliver: (Result<String, Error>) -> Void = { result in
+            completionQueue.async { completion(result) }
         }
 
         let ext = srcURL.pathExtension.lowercased()
         guard supportedExtensions.contains(ext) else {
-            main(.failure(InstallError.unsupportedFormat))
+            deliver(.failure(InstallError.unsupportedFormat))
             return
         }
 
         let attrs = try? FileManager.default.attributesOfItem(atPath: srcURL.path)
         if let size = attrs?[.size] as? NSNumber, size.int64Value > maxBytes {
-            main(.failure(InstallError.tooLarge))
+            deliver(.failure(InstallError.tooLarge))
             return
         }
         guard FileManager.default.isReadableFile(atPath: srcURL.path) else {
-            main(.failure(InstallError.unreadable))
+            deliver(.failure(InstallError.unreadable))
             return
         }
 
@@ -118,7 +134,7 @@ enum SoundPlayer {
         do {
             destDir = try soundsDirectory()
         } catch {
-            main(.failure(error))
+            deliver(.failure(error))
             return
         }
 
@@ -129,9 +145,9 @@ enum SoundPlayer {
                 try removeStaleVariants(for: event, in: destDir, keeping: destName)
                 try? FileManager.default.removeItem(at: destURL)
                 try FileManager.default.copyItem(at: srcURL, to: destURL)
-                main(.success(destName))
+                deliver(.success(destName))
             } catch {
-                main(.failure(InstallError.writeFailed(error.localizedDescription)))
+                deliver(.failure(InstallError.writeFailed(error.localizedDescription)))
             }
             return
         }
@@ -145,16 +161,16 @@ enum SoundPlayer {
             try removeStaleVariants(for: event, in: destDir, keeping: destName)
             try? FileManager.default.removeItem(at: destURL)
         } catch {
-            main(.failure(InstallError.writeFailed(error.localizedDescription)))
+            deliver(.failure(InstallError.writeFailed(error.localizedDescription)))
             return
         }
 
         DispatchQueue.global(qos: .userInitiated).async {
             do {
                 try transcodeToLPCMCAF(src: srcURL, dest: destURL)
-                main(.success(destName))
+                deliver(.success(destName))
             } catch {
-                main(.failure(InstallError.exportFailed(error.localizedDescription)))
+                deliver(.failure(InstallError.exportFailed(error.localizedDescription)))
             }
         }
     }
@@ -203,14 +219,13 @@ enum SoundPlayer {
     }
 
     /// Resolves `~/Library/Sounds/`, creating it if necessary.
+    ///
+    /// Through `AppHome` rather than `FileManager.url(for: .libraryDirectory,
+    /// in: .userDomainMask, …)`, which resolves the same `<home>/Library` and
+    /// is not redirected under test — this method both writes into that
+    /// directory and creates it when absent, which is #1670.
     static func soundsDirectory() throws -> URL {
-        let library = try FileManager.default.url(
-            for: .libraryDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: false
-        )
-        let sounds = library.appendingPathComponent("Sounds", isDirectory: true)
+        let sounds = AppHome.library.appendingPathComponent("Sounds", isDirectory: true)
         if !FileManager.default.fileExists(atPath: sounds.path) {
             try FileManager.default.createDirectory(at: sounds, withIntermediateDirectories: true)
         }

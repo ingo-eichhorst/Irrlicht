@@ -15,23 +15,21 @@ final class SessionManagerApiGroupsTests: XCTestCase {
     typealias AgentGroup = SessionManager.AgentGroup
 
     private var sut: SessionManager!
-    private var originalProjectGroupOrder: Any?
+
+    /// This suite's own preference store (#1662). `seedLocalApiGroups` →
+    /// `orderedGroups` PERSISTS `projectGroupOrder`, which under `swift test`
+    /// meant writing the developer's real `com.apple.dt.xctest.tool` domain and
+    /// putting it back in a `tearDown` the aborting runs skip — measured, that
+    /// domain was left holding this developer's actual project names. An
+    /// injected store has nothing to restore.
+    private let defaults = InMemoryDefaults()
 
     override func setUp() async throws {
         try await super.setUp()
-        // seedLocalApiGroups → orderedGroups persists projectGroupOrder to
-        // UserDefaults.standard. Snapshot + restore so the developer's real
-        // group order survives the test run (same pattern as the snapshot tests).
-        originalProjectGroupOrder = UserDefaults.standard.object(forKey: "projectGroupOrder")
-        sut = SessionManager()
+        sut = SessionManager(defaults: defaults)
     }
 
     override func tearDown() async throws {
-        if let originalProjectGroupOrder {
-            UserDefaults.standard.set(originalProjectGroupOrder, forKey: "projectGroupOrder")
-        } else {
-            UserDefaults.standard.removeObject(forKey: "projectGroupOrder")
-        }
         sut = nil
         try await super.tearDown()
     }
@@ -288,7 +286,7 @@ final class SessionManagerApiGroupsTests: XCTestCase {
             updatedAt: Date(timeIntervalSince1970: 0),
             role: "test-role", children: [child]
         )
-        let dir = instancesURL()
+        let dir = sut.instancesPath
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let fixturePath = dir.appendingPathComponent("\(id).json")
         try Data("{\"state\":\"working\",\"updated_at\":0}".utf8).write(to: fixturePath)
@@ -310,10 +308,12 @@ final class SessionManagerApiGroupsTests: XCTestCase {
                        "withState must preserve children across reset")
     }
 
-    private func instancesURL() -> URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/Irrlicht/instances")
-    }
+    // The instances directory is deliberately NOT re-derived here. It used to
+    // be, from `homeDirectoryForCurrentUser`, and that is #1669: the fixture
+    // landed in the live daemon's own directory, and the test could disagree
+    // with the code under test about where that directory is. `sut.instancesPath`
+    // is the one the subject reads, which under test is `AppHome`'s per-process
+    // temporary home.
 
     // MARK: - SessionState.withChildren
 

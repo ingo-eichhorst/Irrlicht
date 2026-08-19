@@ -96,10 +96,12 @@ class SessionManager: ObservableObject {
     /// summary shown at once), which was mostly noise. There is no per-row
     /// toggle on macOS (see SessionRowView.summaryBlock). Persisted in
     /// UserDefaults (#799) so the choice survives app restarts.
-    @Published var summaryDisplayMode: SummaryDisplayMode = SummaryDisplayMode(
-        rawValue: UserDefaults.standard.string(forKey: "summaryDisplayMode") ?? ""
-    ) ?? .waiting {
-        didSet { UserDefaults.standard.set(summaryDisplayMode.rawValue, forKey: "summaryDisplayMode") }
+    /// Seeded from `defaults` in `init` rather than in the declaration, because
+    /// a property initializer cannot see `self.defaults` — and because Swift
+    /// does not run `didSet` for a write performed inside `init`, so the seed
+    /// reads the store without writing back to it (#1662).
+    @Published var summaryDisplayMode: SummaryDisplayMode = .waiting {
+        didSet { defaults.set(summaryDisplayMode.rawValue, forKey: "summaryDisplayMode") }
     }
 
     /// Set of session IDs present in apiGroups (for fast membership check).
@@ -270,11 +272,38 @@ class SessionManager: ObservableObject {
     /// be reachable on the machine (issue #832).
     let isRunningUnitTests = NSClassFromString("XCTestCase") != nil
 
-    init(focusMonitor: FocusStateProviding = FocusMonitor()) {
-        self.focusMonitor = focusMonitor
+    /// Where this manager's user preferences live. `.standard` in the app —
+    /// the only store there is — and injectable so a test does not have to
+    /// hand-pin keys in a REAL persistent domain and hand them back in
+    /// `tearDown` (#1662).
+    ///
+    /// `UserDefaults.standard` under `swift test` is
+    /// `com.apple.dt.xctest.tool`, a plist in the developer's own
+    /// `~/Library/Preferences` that every previous run wrote into, so the
+    /// save/restore dance both (a) rendered whatever a killed run happened to
+    /// leave behind and (b) depended on a `tearDown` that #1523's aborts, the
+    /// 240s tree kill and `--budget` all skip. An injected `InMemoryDefaults`
+    /// has nothing to restore because it wrote nothing.
+    ///
+    /// Scope: this covers the preferences **SessionManager itself** reads —
+    /// `summaryDisplayMode`, `projectGroupOrder`, the Sources flags, the
+    /// notification toggles and the `register(defaults:)` seed. Preferences
+    /// read elsewhere (`MenuBarController`, `LoginItemManager`,
+    /// `ContextPressureThreshold.current`, `MenuBarStyle.current`) still
+    /// resolve `.standard`; the views' own `@AppStorage` reads are covered by
+    /// `PinnedSnapshotHost`'s `defaultAppStorage` pin instead.
+    let defaults: UserDefaults
 
-        let homeURL = FileManager.default.homeDirectoryForCurrentUser
-        let supportPath = homeURL
+    init(focusMonitor: FocusStateProviding = FocusMonitor(),
+         defaults: UserDefaults = .standard) {
+        self.focusMonitor = focusMonitor
+        self.defaults = defaults
+
+        // `AppHome`, not the real home: both paths below are WRITTEN — a
+        // fixture into `instances/`, and `session-order.json` overwritten with
+        // whatever a test left in `sessionOrder` — and under `swift test` those
+        // are the live daemon's own files (#1669).
+        let supportPath = AppHome.url
             .appendingPathComponent("Library")
             .appendingPathComponent("Application Support")
             .appendingPathComponent("Irrlicht")
@@ -309,7 +338,22 @@ class SessionManager: ObservableObject {
             defaultsSeed[event.enabledKey] = false
             defaultsSeed[event.soundKey] = event.defaultSound.rawValue
         }
-        UserDefaults.standard.register(defaults: defaultsSeed)
+        defaults.register(defaults: defaultsSeed)
+
+        // Seeded after `register(defaults:)` so an unset key falls back to the
+        // registration domain exactly as it does in the app.
+        //
+        // Assigned through the `@Published` STORAGE rather than through the
+        // property, because a base class DOES run `didSet` for a write in the
+        // second phase of its own `init` (measured — the first draft of this
+        // seam persisted "waiting" into the store on every construction, which
+        // in the app means writing a preference into the user's real
+        // `io.irrlicht.app` domain that they never set). Seeding a value read
+        // from the store must not write it back.
+        self._summaryDisplayMode = Published(
+            initialValue: SummaryDisplayMode(
+                rawValue: defaults.string(forKey: "summaryDisplayMode") ?? ""
+            ) ?? .waiting)
 
         // Reconnect sources live when a Sources setting changes (no relaunch).
         // didChangeNotification fires for any default; sourcesSettingsChanged

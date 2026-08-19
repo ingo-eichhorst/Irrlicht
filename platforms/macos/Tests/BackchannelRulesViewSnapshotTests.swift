@@ -40,16 +40,18 @@ final class BackchannelRulesViewSnapshotTests: XCTestCase {
 
     /// Host at the rule card's real budget inside Settings: panel 360 −
     /// 20×2 horizontal padding − 16 leading inset = 304pt.
-    private func host(_ view: some View, height: CGFloat) -> NSView {
+    private func host(_ view: some View, height: CGFloat) -> PinnedSnapshotHost {
         let width: CGFloat = 304
-        let wrapped = view
-            .frame(width: width, height: height)
-            .background(Color(NSColor.windowBackgroundColor))
-        let hosting = NSHostingView(rootView: wrapped)
-        hosting.appearance = NSAppearance(named: .darkAqua)
-        hosting.frame = CGRect(x: 0, y: 0, width: width, height: height)
-        hosting.layoutSubtreeIfNeeded()
-        return hosting
+        // `PinnedSnapshotHost` pins the appearance AND the locale. The latter
+        // is load-bearing here and nowhere else in the suite set: the threshold
+        // field groups thousands through `format: .number`, so without it the
+        // reference is a picture of the recording machine's regional settings —
+        // `150.000` on the Mac that recorded it, `150,000` on a runner (#1630).
+        return PinnedSnapshotHost(
+            view
+                .frame(width: width, height: height)
+                .background(Color(NSColor.windowBackgroundColor)),
+            width: width, height: height)
     }
 
     /// A model with one rule using the given context event + threshold, plus a
@@ -71,13 +73,13 @@ final class BackchannelRulesViewSnapshotTests: XCTestCase {
 
     func testBackchannelRuleContextPressure() {
         let view = BackchannelRulesView(model: model(event: BackchannelRule.eventContextPressure, threshold: 85))
-        assertSnapshot(of: host(view, height: 220), as: .image)
+        assertSnapshot(of: host(view, height: 220), as: .pinnedImage)
     }
 
     /// The tokens variant — wider threshold field + "tokens" suffix must still
     /// fit the 304pt card without clipping.
     func testBackchannelRuleContextTokens() {
         let view = BackchannelRulesView(model: model(event: BackchannelRule.eventContextTokens, threshold: 150_000))
-        assertSnapshot(of: host(view, height: 220), as: .image)
+        assertSnapshot(of: host(view, height: 220), as: .pinnedImage)
     }
 }

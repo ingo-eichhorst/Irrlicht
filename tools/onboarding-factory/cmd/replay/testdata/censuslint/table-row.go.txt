@@ -1,0 +1,11 @@
+package fixture
+
+// A historical comparison table is not exempt by any RULE, only by a named
+// entry in coincidentalCensusFigures. The alternative — skipping any comment
+// line that looks like a table row — was measured and rejected: it would blind
+// the check to a real figure quoted in a table, and the two live coincidences
+// it would have covered are better carried as two reasons a reader can check.
+//
+//	config              zero  divergent
+//	as shipped             3       7373
+func TableRow() {}

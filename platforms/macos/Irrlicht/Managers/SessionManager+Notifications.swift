@@ -65,7 +65,7 @@ extension SessionManager {
     }
 
     func sendContextPressureNotification(session: SessionState, threshold: ContextPressureThreshold, metrics: SessionMetrics) {
-        guard UserDefaults.standard.bool(forKey: NotificationEvent.contextPressure.enabledKey) else { return }
+        guard defaults.bool(forKey: NotificationEvent.contextPressure.enabledKey) else { return }
         let label = session.projectName ?? session.shortId
 
         let title: String
@@ -105,8 +105,8 @@ extension SessionManager {
         // Skip subagent sessions to avoid notification noise
         if session.parentSessionId != nil { return }
 
-        let notifyReady = UserDefaults.standard.bool(forKey: "notifyOnReady")
-        let notifyWaiting = UserDefaults.standard.bool(forKey: "notifyOnWaiting")
+        let notifyReady = defaults.bool(forKey: "notifyOnReady")
+        let notifyWaiting = defaults.bool(forKey: "notifyOnWaiting")
 
         let title: String
         let event: NotificationEvent
@@ -145,9 +145,16 @@ extension SessionManager {
         // future caller can route around it. Gating here rather than at the two
         // call sites is also why the spoken voice, which bypasses
         // UNNotificationContent entirely, is covered.
-        guard NotificationSettings.masterEnabled() else { return }
+        //
+        // `defaults` is passed, and `masterEnabled` no longer takes a default
+        // for it (#1693): this line used to call `masterEnabled()`, whose
+        // default argument was `UserDefaults.standard`, so one method decided
+        // WHETHER to notify from the machine and read WHICH sound from its
+        // input — the store `checkStateTransitionNotification` had just read
+        // `notifyOnReady`/`notifyOnWaiting` from two frames up.
+        guard NotificationSettings.masterEnabled(defaults: defaults) else { return }
         guard canUseUserNotifications else { return }
-        let choice = Self.choice(for: event)
+        let choice = Self.choice(for: event, defaults: defaults)
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
@@ -191,11 +198,10 @@ extension SessionManager {
         case .none, .speak:
             return nil
         case .custom(let installedFilename, _):
-            let library = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first
-            let path = library?
+            let path = AppHome.library
                 .appendingPathComponent("Sounds")
                 .appendingPathComponent(installedFilename).path
-            if let path, FileManager.default.fileExists(atPath: path) {
+            if FileManager.default.fileExists(atPath: path) {
                 return UNNotificationSound(named: UNNotificationSoundName(installedFilename))
             }
             return UNNotificationSound(named: UNNotificationSoundName("Ping.aiff"))
@@ -208,12 +214,31 @@ extension SessionManager {
     /// Convenience for tests + callers that want the event → sound lookup in
     /// a single hop. Production path uses `choice(for:)` + `notificationSound(for:)`
     /// directly to avoid double-reading UserDefaults.
-    nonisolated static func resolveNotificationSound(for event: NotificationEvent) -> UNNotificationSound? {
-        notificationSound(for: choice(for: event))
+    nonisolated static func resolveNotificationSound(
+        for event: NotificationEvent,
+        defaults: UserDefaults
+    ) -> UNNotificationSound? {
+        notificationSound(for: choice(for: event, defaults: defaults))
     }
 
-    nonisolated static func choice(for event: NotificationEvent) -> SoundChoice {
-        let raw = UserDefaults.standard.string(forKey: event.soundKey) ?? SoundChoice.default.rawValue
+    /// `defaults` is a parameter rather than `.standard` for #1662's reason:
+    /// a test driving this must not have to write the developer's real
+    /// `com.apple.dt.xctest.tool` domain and put it back in a `tearDown` the
+    /// aborting runs skip.
+    ///
+    /// It carries no DEFAULT for #1693's reason, which is the sibling of that
+    /// one: a store that can be omitted is a store nobody has to think about,
+    /// and the omission reads as "the caller decided" where it means "the
+    /// caller did not". `masterEnabled(defaults:)` above lost its default in
+    /// the same change — these two were the notification path's remaining
+    /// `UserDefaults = .standard` parameter defaults, both with zero callers
+    /// relying on them, so removal was free and the compiler now holds what a
+    /// lint rule would have had to.
+    nonisolated static func choice(
+        for event: NotificationEvent,
+        defaults: UserDefaults
+    ) -> SoundChoice {
+        let raw = defaults.string(forKey: event.soundKey) ?? SoundChoice.default.rawValue
         return SoundChoice(rawValue: raw) ?? .default
     }
 

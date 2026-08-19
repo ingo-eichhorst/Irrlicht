@@ -1,0 +1,10 @@
+# The repo-root .gitignore has a blanket `*.log` rule, which silently swallows
+# every fixture in this directory — they are captured `swift test` output and
+# `.log` is what they are. Re-include them here rather than renaming: an
+# ignored fixture is not a missing file you notice, it is a corpus that quietly
+# stops containing its own test cases, which reads as a pass.
+#
+# swift-suite_test.sh additionally asserts each fixture is tracked, so a new
+# one added under a pattern this does not cover fails loudly instead of
+# disappearing.
+!*.log

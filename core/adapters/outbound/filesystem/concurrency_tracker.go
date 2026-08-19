@@ -2,6 +2,7 @@ package filesystem
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"io"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"irrlicht/core/domain/lifecycle"
 	"irrlicht/core/domain/session"
@@ -23,8 +25,26 @@ import (
 // to a bare basename, i.e. pre-#1046 behavior) so every recordings-dir-only
 // test fixture can omit it.
 type concurrencyProjectResolver interface {
-	GetProjectName(dir string) string
+	GetProjectName(ctx context.Context, dir string) (name string, answered bool)
 }
+
+// noGitBudget is the context this tracker's one git read runs under: a
+// deliberately absent aggregate deadline, named so the absence is reviewable
+// rather than inferred (#1563, the shape #1529's noAggregateBudget established).
+//
+// It is the services twin's argument in its weakest and therefore easiest form:
+// there is nothing here to aggregate. resolveProject makes exactly ONE git call
+// per distinct CWD, memoised for the daemon's lifetime on success and behind a
+// TTL on a non-answer, so no sequence of calls exists for a budget to span. The
+// per-call ceiling the adapter derives from this (gitTimeout, 5s) is the whole
+// bound and is unchanged.
+//
+// It is spelled here rather than imported from application/services because
+// core/architecture_test.go forbids an adapter from importing that layer — and
+// because a package-local helper is what core/architecture_shellout_test.go can
+// resolve: a shared one in pkg/ would be invisible to that rule, so handing it
+// straight to exec.CommandContext would stop being caught.
+func noGitBudget() context.Context { return context.Background() }
 
 // ConcurrencyTracker reconstructs concurrent-agent counts over time from the
 // lifecycle recordings irrlichd writes under <dataDir>/recordings when started
@@ -43,7 +63,37 @@ type ConcurrencyTracker struct {
 	// instance is shared across every request.
 	resolveMu    sync.Mutex
 	resolveCache map[string]string // raw CWD -> resolved project name
+
+	// unresolvedUntil is the NEGATIVE cache: raw CWD -> when its non-answer
+	// stops being reused. It is separate from resolveCache because the two
+	// have opposite lifetimes, and that asymmetry is the whole point.
+	//
+	// A resolved project is effectively permanent (#1049) — a historical
+	// session's working directory does not change repos after the fact — so
+	// resolveCache never expires. A NON-answer is the opposite: it says
+	// nothing about the directory, only that one probe did not run, so
+	// caching it forever would make a transient git failure permanent.
+	//
+	// Caching it for NOTHING is just as wrong, and that is the version #1543
+	// shipped first. resolveProject is called once per recording EVENT, not
+	// once per distinct cwd, and loadTimelines re-scans every recording file
+	// on every request — so skipping the cache entirely costs one `git
+	// rev-parse` per event, each up to the git adapter's 5s ceiling, while
+	// holding resolveMu, on an endpoint the dashboard polls. #1049's comment
+	// measured the uncached pathology at "~20s+ … for every distinct
+	// historical CWD"; per event it is that multiplied again.
+	unresolvedUntil map[string]time.Time
+
+	// clock is nil in production; a test replaces it to drive unresolvedTTL
+	// without sleeping.
+	clock func() time.Time
 }
+
+// unresolvedTTL bounds how long a non-answer is reused before the probe is
+// retried. Short enough that a git outage self-heals within one dashboard poll
+// cycle, long enough that one unreadable repo costs one probe per request
+// rather than one per event.
+const unresolvedTTL = 30 * time.Second
 
 // NewConcurrencyTrackerWithDir returns a reader rooted at the given recordings
 // directory. The daemon passes the same dir the recorder writes to (see
@@ -52,9 +102,10 @@ type ConcurrencyTracker struct {
 // fall back to a bare filepath.Base(cwd).
 func NewConcurrencyTrackerWithDir(dir string, git concurrencyProjectResolver) *ConcurrencyTracker {
 	return &ConcurrencyTracker{
-		dir:          dir,
-		git:          git,
-		resolveCache: make(map[string]string),
+		dir:             dir,
+		git:             git,
+		resolveCache:    make(map[string]string),
+		unresolvedUntil: make(map[string]time.Time),
 	}
 }
 
@@ -112,17 +163,45 @@ func (t *ConcurrencyTracker) resolveProject(cwd string) string {
 	}
 	t.resolveMu.Lock()
 	defer t.resolveMu.Unlock()
-	if p, ok := t.resolveCache[cwd]; ok {
-		return p
+	if cached, ok := t.resolveCache[cwd]; ok {
+		return cached
 	}
 	p := filepath.Base(cwd)
 	if t.git != nil {
-		if resolved := t.git.GetProjectName(cwd); resolved != "" {
+		// A recent non-answer is reused rather than re-probed — see
+		// unresolvedUntil for why this is neither permanent nor absent.
+		if until, ok := t.unresolvedUntil[cwd]; ok {
+			if t.now().Before(until) {
+				return p
+			}
+			delete(t.unresolvedUntil, cwd)
+		}
+		resolved, answered := t.git.GetProjectName(noGitBudget(), cwd)
+		if !answered {
+			// #1543: resolveCache is for the daemon's LIFETIME, on the
+			// reasoning that a historical cwd's repo does not change after the
+			// fact. That holds for a resolution; it does not hold for a git
+			// that never ran, whose basename fallback is a guess — and for a
+			// worktree cwd it is the guess #1046 exists to prevent. So it goes
+			// in the negative cache, not this one.
+			t.unresolvedUntil[cwd] = t.now().Add(unresolvedTTL)
+			return p
+		}
+		if resolved != "" {
 			p = resolved
 		}
 	}
 	t.resolveCache[cwd] = p
 	return p
+}
+
+// now is time.Now unless a test replaced it, so the TTL above can be driven
+// without sleeping.
+func (t *ConcurrencyTracker) now() time.Time {
+	if t.clock != nil {
+		return t.clock()
+	}
+	return time.Now()
 }
 
 // AgentsSeries reconstructs a per-project concurrent-agents time series over

@@ -46,7 +46,8 @@
 # not skips: no POSIX shell available, no static linter available, and an
 # empty file set. Each exits 2 with a message saying what to install.
 #
-# Scope: every tracked file whose FIRST LINE is a POSIX-sh shebang
+# Scope: every file git knows about — tracked, plus untracked and not
+# gitignored (#1611) — whose FIRST LINE is a POSIX-sh shebang
 # (`#!/bin/sh`, `#!/usr/bin/env sh`, with or without flags). Matching line 1
 # only is deliberate — `tools/lib/install-uninstall_test.sh` is a bash file
 # that writes `#!/bin/sh` stubs inside a heredoc, and a content grep would try
@@ -100,17 +101,50 @@ if [[ ${#FILES[@]} -eq 0 ]]; then
   # `ALL PASS`. The empty-set guard below cannot catch that, because it only
   # fires when EVERY file is missed. NUL delimiting also survives newlines and
   # spaces in paths (this repo tracks one with a space).
+  #
+  # UNTRACKED FILES ARE WALKED TOO (#1611), and the second `ls-files` is that.
+  # `git ls-files` alone lists index entries only, which was harmless until
+  # #1609 taught `changed_files_vs_origin_main` (tools/lib/changed-files.sh)
+  # to include untracked files: a brand-new `#!/bin/sh` script now DOES put
+  # this gate in scope via `tools/preflight.sh --changed`, and the gate then
+  # walked the index and could not see the file that summoned it — `ALL PASS`
+  # over a file it never read. That is this script's own founding incident
+  # (see lint_bashisms below) arriving through file selection instead of the
+  # pipeline. `--exclude-standard` keeps .gitignore honoured, which is what
+  # keeps `.claude/worktrees/` — entire checkouts of this repo — out of the
+  # walk, the same reason `find` was rejected above.
+  #
+  # `--full-name -- :/` is the spelling changed-files.sh uses and measured:
+  # a bare `--others` lists only what is under the CALLER'S cwd and prints it
+  # cwd-relative, while `git ls-files` is repo-root-relative over the whole
+  # repo. Here the `cd "$ROOT_DIR"` above already pins cwd to the repo root,
+  # so the two spellings agree TODAY — it is kept in lockstep with its sibling
+  # rather than re-derived, because the naive spelling looks correct forever
+  # from the root and would start dropping files the moment that `cd` moved.
+  #
+  # Both lists feed ONE stream and ONE loop, so every path — tracked or not —
+  # is subject to the same two rules: the `testdata/` exclusion and the
+  # first-line shebang test. A second loop for the untracked half is the
+  # obvious alternative and is the mis-implementation cases 10c/10d of
+  # tools/lib/posix-lint_test.sh were written against: measured, it lints the
+  # deliberately-corrupt fixture corpus AND this file's own bash copy. The two
+  # sets are disjoint by construction (index vs `--others`), so `-u` is not
+  # what prevents double-counting; it is the shared `sort` the existing walk
+  # already needed.
   while IFS= read -r -d '' f; do
     [[ "$f" == */testdata/* ]] && continue
     if [[ ! -f "$f" ]]; then
-      # Loud, not silent: a tracked path the walk cannot open is exactly the
-      # blind spot above, and the whole point of this gate is that "not
-      # looked at" must never render as "clean".
-      echo "posix-lint: skipping $f (tracked but not a regular file)" >&2
+      # Loud, not silent: a path git listed but the walk cannot open is
+      # exactly the blind spot above, and the whole point of this gate is
+      # that "not looked at" must never render as "clean".
+      echo "posix-lint: skipping $f (listed by git but not a regular file)" >&2
       continue
     fi
     is_posix_shebang "$f" && FILES+=("$f")
-  done < <(git -c core.quotePath=off ls-files -z | LC_ALL=C sort -z -u)
+  done < <({
+    git -c core.quotePath=off ls-files -z
+    git -c core.quotePath=off ls-files --others --exclude-standard --full-name -z -- :/
+  } | LC_ALL=C sort -z -u)
 fi
 
 if [[ ${#FILES[@]} -eq 0 ]]; then

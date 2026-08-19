@@ -84,9 +84,13 @@ type Watcher struct {
 	// WithReconcileInterval). Zero means defaultReconcileInterval; negative
 	// disables the sweep.
 	reconcileInterval time.Duration
-	// emitted records the size last broadcast for each transcript path, so the
+	// emitted records the size last DELIVERED to a subscriber for each
+	// transcript path, so the
 	// reconcile sweep can distinguish state fsnotify already reported from
-	// state it missed. Entries are removed when a file is deleted, so a
+	// state it missed. Delivered rather than merely broadcast: broadcast drops
+	// on a full subscriber buffer, and an entry written for a dropped event
+	// tells the sweep the state was reported when nothing downstream ever saw
+	// it (#1679 — see emit). Entries are removed when a file is deleted, so a
 	// recreated path is reported as a new session again. It is otherwise
 	// bounded by the number of transcript files this run has reported on —
 	// the same order as the tree the watcher already walks — so it is not
@@ -118,6 +122,28 @@ type Watcher struct {
 	readyMu   sync.Mutex
 	readyOnce sync.Once
 	ready     chan struct{} // closed once the root watch is attached
+
+	// onBacklogScanComplete, when non-nil, is invoked on Watch's OWN goroutine
+	// at the instant the historical backlog scan has finished — after
+	// addExistingDirs returns, before signalReady, and before the main select
+	// loop has dispatched anything. It is a test seam; nothing in the daemon
+	// sets it, so the zero value is the production watcher.
+	//
+	// It exists because issue #998's property is an ORDERING — a brand-new
+	// top-level directory is discovered BEFORE the backlog scan completes, not
+	// within some number of milliseconds — and no exported API can express
+	// that. Ready() closes at this same instant, but observing a channel close
+	// from another goroutine is not ordered against this goroutine's
+	// broadcasts, and the regression #998 fixed delivers its event
+	// MICROSECONDS after the scan ends: a test comparing the two through
+	// Ready() would report the regression as a pass roughly as often as not.
+	// Every broadcast Watch makes happens on this goroutine in program order,
+	// so a hook here can be ordered against them exactly.
+	//
+	// See TestWatch_NewTopLevelDir_DiscoveredDuringBacklogScan, and
+	// TestWatch_ScanBoundaryReportsALateDiscoveryAsLate for the evidence that
+	// the boundary it exposes actually discriminates.
+	onBacklogScanComplete func()
 }
 
 // Ready returns a channel that is closed once Watch has attached the
@@ -336,6 +362,13 @@ func (w *Watcher) Watch(ctx context.Context) error {
 		return err
 	}
 
+	// The historical scan is over. Report the boundary before signalReady and
+	// before the select loop below can dispatch anything, so a test can order
+	// it exactly against the broadcasts above (see onBacklogScanComplete).
+	if w.onBacklogScanComplete != nil {
+		w.onBacklogScanComplete()
+	}
+
 	// The watch is now live for the root and every pre-existing subdir, and
 	// every pre-existing transcript file has been emitted; unblock anyone
 	// waiting on Ready() before mutating files.
@@ -423,13 +456,26 @@ func (w *Watcher) dispatchEvent(watcher *fsnotify.Watcher, ev fsnotify.Event, ok
 	return true
 }
 
+// subscriberBuffer is the capacity of the channel Subscribe returns. Named
+// rather than inline so a test can quote the bound it is actually up against
+// instead of carrying a second copy of the number that can drift from it.
+//
+// It is not large enough for a startup backlog and is not meant to be: measured
+// against a real ~/.claude/projects with 128 transcripts inside the default
+// 5-day maxAge, the scan emits all 128 in ~90ms and a consumer costing 1ms per
+// event already receives only 75 (issue #1679). What makes that survivable is
+// that a drop stays recoverable by the reconcile sweep — see emit — not that
+// the buffer is big. Raising it, or making the send block, is a separate
+// decision about the drop policy and is deliberately not made here.
+const subscriberBuffer = 64
+
 // Subscribe returns a channel that receives transcript events. The channel is
 // buffered so a slow consumer doesn't block the watcher. The capacity must be
 // large enough to absorb bursts from concurrent sessions and subagent
 // transcripts — all files in the watched tree share this single channel, and
 // broadcast silently drops events when the channel is full.
 func (w *Watcher) Subscribe() <-chan agent.Event {
-	ch := make(chan agent.Event, 64)
+	ch := make(chan agent.Event, subscriberBuffer)
 	w.subMu.Lock()
 	w.subs = append(w.subs, ch)
 	w.subMu.Unlock()
@@ -558,7 +604,8 @@ func (w *Watcher) isStale(mtime time.Time) bool {
 	return w.maxAge > 0 && !mtime.IsZero() && time.Since(mtime) > w.maxAge
 }
 
-// emit records the size being reported for path and broadcasts the event.
+// emit broadcasts the event for path and records the size, in that order and
+// only if the broadcast reached a subscriber.
 // Every new-session and activity emission goes through here so the reconcile
 // sweep can tell the state fsnotify already reported from the state it missed,
 // and therefore never re-reports a file the normal event path handled.
@@ -574,24 +621,51 @@ func (w *Watcher) emit(typ agent.EventType, sessionID, projectDir, path string, 
 	if prev, ok := w.emitted[path]; ok && prev == size && typ == agent.EventNewSession {
 		return
 	}
+	// Record only what a subscriber actually received. broadcast drops when a
+	// subscriber's buffer is full, and recording first made a dropped event
+	// indistinguishable — to reconcileFile's `known && prev == size` early
+	// return — from a delivered one, so the sweep that exists to recover a
+	// notification fsnotify never delivered (#1248) was disarmed by the very
+	// act that lost the event (#1679). Leaving the entry unwritten is what
+	// keeps the sweep armed to re-report it on the next interval.
+	//
+	// "Delivered" is deliberately *any* subscriber rather than *every* one.
+	// Requiring all of them would tie this map to the slowest consumer: one
+	// wedged subscriber would make every sweep re-report the whole tree and
+	// hand every healthy subscriber a duplicate. The cost of the weaker
+	// predicate is that with more than one subscriber, a drop that hits only
+	// some of them is recorded as reported and stays unrecoverable for those.
+	// Production has exactly one subscriber per watcher — SessionDetector's
+	// drainWatcher, one per registered Watcher — so the two predicates coincide
+	// there today; the multi-subscriber case is tests and measurement rigs.
+	if !w.broadcast(w.eventFor(typ, sessionID, projectDir, path, size)) {
+		return
+	}
 	if w.emitted == nil {
 		w.emitted = make(map[string]int64)
 	}
 	w.emitted[path] = size
-	w.broadcast(w.eventFor(typ, sessionID, projectDir, path, size))
 }
 
-// broadcast sends an event to all subscribers. Non-blocking: drops if consumer
-// hasn't drained.
-func (w *Watcher) broadcast(ev agent.Event) {
+// broadcast sends an event to all subscribers and reports whether at least one
+// of them received it. Non-blocking: a subscriber whose buffer is full is
+// skipped rather than waited on, so an unresponsive consumer can never wedge
+// the watcher — see emit for what the return value is for, and Subscribe for
+// why the drop policy itself is left alone. A watcher with no subscribers at
+// all reports false for the same reason a full buffer does: nothing downstream
+// learned anything.
+func (w *Watcher) broadcast(ev agent.Event) bool {
 	w.subMu.Lock()
 	defer w.subMu.Unlock()
+	deliveredToAny := false
 	for _, ch := range w.subs {
 		select {
 		case ch <- ev:
+			deliveredToAny = true
 		default:
 		}
 	}
+	return deliveredToAny
 }
 
 // waitForRoot polls until the root directory exists or ctx is cancelled.

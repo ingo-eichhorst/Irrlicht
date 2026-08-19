@@ -181,8 +181,11 @@ MARKER=""
 # lifetime. SES_ALIVE[i]=1 while its tmux session is still running.
 SES_SESSION=()
 SES_TRANSCRIPT=()
+# shellcheck disable=SC2034  # driver-owned slot array; the sourced replaydata/_lib/drive/slots.sh reads it (save_active/load_slot/alloc_slot)
 SES_UUID=()
+# shellcheck disable=SC2034  # driver-owned slot array; the sourced replaydata/_lib/drive/slots.sh reads it (save_active/load_slot/alloc_slot)
 SES_EXPECTED=()
+# shellcheck disable=SC2034  # driver-owned slot array; the sourced replaydata/_lib/drive/slots.sh reads it (save_active/load_slot/alloc_slot)
 SES_MARKER=()
 SES_CWD=()
 SES_ALIVE=()
@@ -200,6 +203,7 @@ TRUSTED_CWDS=()
 # shared model in lib/drive/slots.sh — byte-identical to pi's except the marker
 # filename, set via DRIVE_MARKER_PREFIX (#508 #3).
 _DRIVE_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../_lib/drive" && pwd)"
+# shellcheck disable=SC2034  # read by the sourced replaydata/_lib/drive/slots.sh:56 (alloc_slot)
 DRIVE_MARKER_PREFIX="$STAGING/.codex-start-marker"
 # shellcheck source=lib/drive/slots.sh
 source "$_DRIVE_LIB/slots.sh"
@@ -207,13 +211,22 @@ source "$_DRIVE_LIB/slots.sh"
 source "$_DRIVE_LIB/contracts.sh"
 # shellcheck source=lib/drive/teardown.sh
 source "$_DRIVE_LIB/teardown.sh"
+# The four boot gates codex can put on screen, as named predicates over a
+# captured pane, with a committed corpus of real 0.147.0 captures behind them
+# (#1388). Inline greps here could stop matching without failing anything —
+# the gate then stays up, the prompt is typed into it, and the run records a
+# healthy-looking fixture that fires zero hooks.
+# shellcheck source=boot-gates.sh
+source "$(dirname "${BASH_SOURCE[0]}")/boot-gates.sh"
 
 # recipe-lint contract (#508 #4): the step types this driver genuinely ELICITS
 # (a subset of its case arms — accepting a step type ≠ producing its effect),
 # and whether slash commands need a dedicated step type. recipe-lint reads these
 # constants directly, so the grammar has ONE owner — this driver — not a
 # parallel manifest. Full tmux-TUI driver (claudecode set + fork).
+# shellcheck disable=SC2034  # scraped from this file's SOURCE by tools/onboarding-factory/scripts/lib/recipe-lint.sh:97 (sed), never expanded in shell
 DRIVE_ELICITS="send slash wait_turn interrupt keys sleep restart resume reset_session fork sigkill exit_clean start_session session"
+# shellcheck disable=SC2034  # scraped from this file's SOURCE by tools/onboarding-factory/scripts/lib/recipe-lint.sh:113 (sed), never expanded in shell
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 
 # Has the active slot's cwd already had its trust dialog accepted this
@@ -271,25 +284,30 @@ boot_session() {
   tmux pipe-pane -t "$sess" -o "cat >> '$slot_stdout'"
   echo "[driver] tmux started: $sess (slot=$ACTIVE, cwd=$cwd, argv: $*)" >&2
 
-  # Codex has TWO independent startup gates. They look alike, they need
+  # Codex has FOUR independent startup gates. They look alike, they need
   # DIFFERENT answers, and conflating them is why codex had zero
-  # hook-bearing recordings (#1388):
+  # hook-bearing recordings (#1388). The strings, the answers, the order they
+  # render in and the measurements behind each are in boot-gates.sh, beside the
+  # predicates the branches below call and the corpus that keeps them honest —
+  # deliberately in ONE place, because a second copy of "what codex asks and
+  # what to press" is what silently stops matching.
   #
-  #   1. DIRECTORY trust — "Do you trust the contents of this directory?".
-  #      Cached per-cwd in config.toml as [projects."<cwd>"].trust_level.
-  #      The answer is "1" (yes).
-  #   2. HOOK trust — a menu over the entries irrlicht installed into
-  #      hooks.json. Cached per ENTRY in config.toml as
-  #      [hooks.state."<abs hooks.json>:<event>:<group>:<index>"].trusted_hash.
-  #      The answer is "2" — "Trust all and continue".
+  # The three properties that matter for reading this loop:
   #
-  # Answering the hook menu with the directory dialog's "1" selects
-  # "1. Review hooks", a submenu, and the boot stalls there. Leaving it
-  # unanswered is worse than stalling: the menu's third option is
-  # "3. Continue without trusting (hooks won't run)", so a timed-out boot
-  # yields a completely normal-looking session that simply never fires a
-  # hook — a recording with zero hook_received and nothing to say why.
-  # That silent branch is the exact hole this cell is meant to close.
+  #   - DIRECTORY trust is answered "1", and the digit ALONE dismisses it.
+  #     Cached per-cwd in config.toml as [projects."<cwd>"].trust_level.
+  #   - HOOK trust comes in two shapes — a numbered MENU answered "2", and the
+  #     review PANEL behind that menu's option 1, answered "t" then Escape.
+  #     Cached per ENTRY as
+  #     [hooks.state."<abs hooks.json>:<event>:<group>:<index>"].trusted_hash.
+  #   - Every unanswered hook gate fails OPEN into "hooks won't run": the menu's
+  #     third option is literally "3. Continue without trusting", and a panel
+  #     that is never answered simply leaves every entry inactive. So a timed-out
+  #     boot yields a completely normal-looking session that never fires a hook —
+  #     a recording with zero hook_received and nothing to say why. That silent
+  #     branch is the exact hole this cell is meant to close, and it is why the
+  #     post-loop report below states hook-trust standing with evidence rather
+  #     than inferring it from "no menu appeared".
   #
   # The hook gate keys on the hooks.json PATH + CONTENT, not on the cwd, so
   # cwd_already_trusted must not skip it: the recorder installs its own
@@ -322,7 +340,7 @@ boot_session() {
     # Answer "2" (Skip): a recording must never mutate the toolchain it is
     # measuring. Match on "Update now", the MENU's own line, rather than the
     # "Update available!" notice, which codex also prints non-interactively.
-    if [[ $upd_done -eq 0 ]] && grep -q 'Update now' <<<"$pane"; then
+    if [[ $upd_done -eq 0 ]] && codex_pane_has_update_menu "$pane"; then
       tmux send-keys -t "$sess" "2"
       sleep 0.3
       tmux send-keys -t "$sess" Enter
@@ -330,7 +348,46 @@ boot_session() {
       stable=0
       echo "[driver] declined codex self-update offer (2 = Skip)" >&2
       sleep 1
-    elif [[ $hooks_done -eq 0 ]] && grep -q 'Trust all and continue' <<<"$pane"; then
+    elif [[ $hooks_done -eq 0 ]] && [[ "$(codex_hook_trust_answer "$pane")" == panel ]]; then
+      # The hook REVIEW PANEL — the screen behind the menu's "1. Review hooks",
+      # and where #1388's own run ended up when a stray Enter selected it. It is
+      # answered with a bare `t` (trust all) and closed with Escape; it does NOT
+      # accept the menu's "2", and it does not close itself.
+      #
+      # It sits AHEAD of the menu branch, and that order is load-bearing rather
+      # than alphabetical. $pane is a 40-line SCROLLBACK read, so once a run has
+      # reached the panel the menu's own text is still in it — the panel is only
+      # ever reachable THROUGH the menu, never the reverse. Checking the menu
+      # first would therefore send "2" at a screen where 2 is not a choice,
+      # i.e. type a literal 2 into the panel. The live screen is what has focus,
+      # and the panel is the later of the two.
+      #
+      # Confirmed off the LIVE SCREEN (no -S), not scrollback: the panel redraws
+      # in place and `-S -N` keeps returning the pre-trust frame, so a scrollback
+      # read cannot distinguish "still asking" from "already answered". The
+      # config.toml trusted_hash is not usable here either — measured, codex had
+      # written no [hooks] section at all 5s after the panel reported every entry
+      # Active.
+      local try=0
+      while [[ $try -lt 5 ]]; do
+        tmux send-keys -t "$sess" "t"
+        sleep 1.2
+        if codex_pane_hook_panel_is_trusted \
+             "$(tmux capture-pane -t "$sess" -p 2>/dev/null || true)"; then
+          hooks_done=1
+          break
+        fi
+        try=$((try + 1))
+      done
+      tmux send-keys -t "$sess" Escape
+      sleep 0.5
+      stable=0
+      if [[ $hooks_done -eq 1 ]]; then
+        echo "[driver] accepted hook-trust panel (t = trust all)" >&2
+      else
+        echo "[driver] WARNING: hook-trust panel never reported every entry trusted" >&2
+      fi
+    elif [[ $hooks_done -eq 0 ]] && [[ "$(codex_hook_trust_answer "$pane")" == menu ]]; then
       # Confirm the menu actually CLOSED before believing it. codex swallows
       # keystrokes during the boot/MCP phase (see step_send's render delay),
       # so a send that silently dropped would otherwise set hooks_done=1, hide
@@ -342,7 +399,8 @@ boot_session() {
         sleep 0.3
         tmux send-keys -t "$sess" Enter
         sleep 1.2
-        if ! tmux capture-pane -t "$sess" -p -S -5 2>/dev/null | grep -q 'Trust all and continue'; then
+        if ! codex_pane_has_hook_menu \
+               "$(tmux capture-pane -t "$sess" -p 2>/dev/null || true)"; then
           hooks_done=1
           break
         fi
@@ -354,13 +412,29 @@ boot_session() {
       else
         echo "[driver] WARNING: hook-trust menu still on screen after 5 attempts" >&2
       fi
-    elif [[ $dir_done -eq 0 ]] && grep -q 'Do you trust' <<<"$pane"; then
+    elif [[ $dir_done -eq 0 ]] && codex_pane_has_dir_trust "$pane"; then
+      # The digit ALONE dismisses this dialog on 0.147.0 — measured by a probe
+      # that sent only "1" and watched the hook menu replace it with no further
+      # keystroke for 3.6s. An unconditional Enter after it therefore lands on
+      # whatever renders NEXT, and what renders next is the hook-trust menu whose
+      # preselected row is "1. Review hooks": that is precisely how #1388's own
+      # recording run walked past the hook gate into the review panel and
+      # recorded zero hook_received while reporting exit-reason "ok".
+      #
+      # So the Enter is sent only if the dialog is still up, off the LIVE screen.
+      # An older codex that needs the confirm keeps working; a codex that does
+      # not never gets a keystroke it did not ask for.
       tmux send-keys -t "$sess" "1"
-      sleep 0.3
-      tmux send-keys -t "$sess" Enter
+      sleep 0.6
+      if codex_pane_has_dir_trust \
+           "$(tmux capture-pane -t "$sess" -p 2>/dev/null || true)"; then
+        tmux send-keys -t "$sess" Enter
+        echo "[driver] accepted directory trust dialog (1, then Enter to confirm)" >&2
+      else
+        echo "[driver] accepted directory trust dialog (1 = yes; no Enter needed)" >&2
+      fi
       dir_done=1
       stable=0
-      echo "[driver] accepted directory trust dialog (1 = yes)" >&2
       sleep 1
     elif grep -aq 'OpenAI Codex' "$slot_stdout" 2>/dev/null; then
       # Banner is up and no gate is on screen. Require a few consecutive
@@ -748,7 +822,7 @@ while read -r step; do
       # such as codex's /model two-step selector. Example:
       #   {"type":"keys","keys":"Down Down Enter"}
       ks=$(jq -r '.keys' <<<"$step")
-      # shellcheck disable=SC2086 — intentional word-splitting of the key list
+      # shellcheck disable=SC2086  # intentional word-splitting of the key list
       tmux send-keys -t "$SESSION" $ks
       echo "[driver] keys[s$ACTIVE]: $ks" >&2
       sleep 0.5

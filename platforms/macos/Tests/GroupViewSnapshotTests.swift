@@ -6,33 +6,23 @@ import SnapshotTesting
 @MainActor
 final class GroupViewSnapshotTests: XCTestCase {
     private var sessionManager: SessionManager!
-    private var originalShowCostDisplay: Any?
-    private var originalProjectCostTimeframe: Any?
+
+    /// This suite's own preference store, written by nothing and read by
+    /// nothing else (#1662). It replaces a `setUp` that overwrote
+    /// `showCostDisplay` and `projectCostTimeframe` in the REAL
+    /// `com.apple.dt.xctest.tool` domain and a `tearDown` that put them back —
+    /// which the runs that abort (#1523), get their tree killed at 240s or run
+    /// out of `--budget` never reached, so those values were left behind for
+    /// the next run to render under.
+    ///
+    /// Empty on purpose: every key `GroupView` reads then resolves at its own
+    /// `@AppStorage` default, which is exactly what the deleted `setUp` was
+    /// assigning (`false` and `CostTimeframe.day`), so no reference moved.
+    private let defaults = InMemoryDefaults()
 
     override func setUp() async throws {
         try await super.setUp()
-        // GroupView uses @AppStorage (UserDefaults.standard), so we can't isolate
-        // via suiteName. Snapshot the real keys and restore them in tearDown so
-        // the developer's defaults aren't mutated by test runs.
-        originalShowCostDisplay = UserDefaults.standard.object(forKey: "showCostDisplay")
-        originalProjectCostTimeframe = UserDefaults.standard.object(forKey: "projectCostTimeframe")
-        UserDefaults.standard.set(false, forKey: "showCostDisplay")
-        UserDefaults.standard.set("day", forKey: "projectCostTimeframe")
-        sessionManager = SessionManager()
-    }
-
-    override func tearDown() async throws {
-        if let value = originalShowCostDisplay {
-            UserDefaults.standard.set(value, forKey: "showCostDisplay")
-        } else {
-            UserDefaults.standard.removeObject(forKey: "showCostDisplay")
-        }
-        if let value = originalProjectCostTimeframe {
-            UserDefaults.standard.set(value, forKey: "projectCostTimeframe")
-        } else {
-            UserDefaults.standard.removeObject(forKey: "projectCostTimeframe")
-        }
-        try await super.tearDown()
+        sessionManager = SessionManager(defaults: defaults)
     }
 
     private func makeSession(id: String) -> SessionState {
@@ -58,18 +48,17 @@ final class GroupViewSnapshotTests: XCTestCase {
         )
     }
 
-    private func host(_ view: some View, height: CGFloat = 48) -> NSView {
-        let wrapped = view
-            .environmentObject(sessionManager)
-            .frame(width: 350, height: height)
-            .background(Color(NSColor.windowBackgroundColor))
-        let hosting = NSHostingView(rootView: wrapped)
-        // Pin to dark aqua so snapshots don't depend on the current system
-        // appearance (Color(NSColor.windowBackgroundColor) adapts otherwise).
-        hosting.appearance = NSAppearance(named: .darkAqua)
-        hosting.frame = CGRect(x: 0, y: 0, width: 350, height: height)
-        hosting.layoutSubtreeIfNeeded()
-        return hosting
+    private func host(_ view: some View, height: CGFloat = 48) -> PinnedSnapshotHost {
+        // `PinnedSnapshotHost` pins the appearance — so snapshots don't depend
+        // on the current system appearance, which `Color(NSColor.windowBackgroundColor)`
+        // otherwise adapts to — the locale (#1630) and the preference store
+        // every `@AppStorage` in the subtree resolves through (#1662).
+        PinnedSnapshotHost(
+            view
+                .environmentObject(sessionManager)
+                .frame(width: 350, height: height)
+                .background(Color(NSColor.windowBackgroundColor)),
+            width: 350, height: height, defaults: defaults)
     }
 
     private func seedThreeGroups() -> [SessionManager.AgentGroup] {
@@ -81,32 +70,32 @@ final class GroupViewSnapshotTests: XCTestCase {
     func testFirstOfThreeUpChevronDisabled() {
         let groups = seedThreeGroups()
         let view = host(GroupView(group: groups[0]))
-        assertSnapshot(of: view, as: .image)
+        assertSnapshot(of: view, as: .pinnedImage)
     }
 
     func testMiddleOfThreeBothChevronsEnabled() {
         let groups = seedThreeGroups()
         let view = host(GroupView(group: groups[1]))
-        assertSnapshot(of: view, as: .image)
+        assertSnapshot(of: view, as: .pinnedImage)
     }
 
     func testLastOfThreeDownChevronDisabled() {
         let groups = seedThreeGroups()
         let view = host(GroupView(group: groups[2]))
-        assertSnapshot(of: view, as: .image)
+        assertSnapshot(of: view, as: .pinnedImage)
     }
 
     func testSingleGroupNoChevrons() {
         let solo = makeGroup(name: "solo")
         sessionManager.apiGroups = [solo]
         let view = host(GroupView(group: solo))
-        assertSnapshot(of: view, as: .image)
+        assertSnapshot(of: view, as: .pinnedImage)
     }
 
     func testSubGroupNoChevrons() {
         _ = seedThreeGroups()
         let view = host(GroupView(group: makeGroup(name: "nested"), depth: 1))
-        assertSnapshot(of: view, as: .image)
+        assertSnapshot(of: view, as: .pinnedImage)
     }
 
     /// A transient PID=0 antigravity ghost (ready, no metrics) sitting alongside
@@ -134,6 +123,6 @@ final class GroupViewSnapshotTests: XCTestCase {
         let group = SessionManager.AgentGroup(name: "app", agents: [real, ghost])
         sessionManager.apiGroups = [group]
         let view = host(GroupView(group: group), height: 160)
-        assertSnapshot(of: view, as: .image)
+        assertSnapshot(of: view, as: .pinnedImage)
     }
 }
