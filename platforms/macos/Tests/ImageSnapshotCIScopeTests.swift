@@ -331,17 +331,22 @@ final class ImageSnapshotCIScopeTests: XCTestCase {
         for index in 0..<Int(count) {
             let candidate: AnyClass = buffer[index]
             let mangled = NSStringFromClass(candidate).split(separator: ".", maxSplits: 1)
-            guard mangled.count == 2, mangled[0] == module else { continue }
-            var parent: AnyClass? = class_getSuperclass(candidate)
-            while let step = parent {
-                if step == XCTestCase.self {
-                    found[String(mangled[1])] = candidate
-                    break
-                }
-                parent = class_getSuperclass(step)
-            }
+            guard mangled.count == 2, mangled[0] == module, descendsFromXCTestCase(candidate) else { continue }
+            found[String(mangled[1])] = candidate
         }
         return found
+    }
+
+    /// Walks the superclass chain rather than asking `is XCTestCase.Type`,
+    /// because a subclass of a subclass is still a suite XCTest runs and the
+    /// count has to match what a run reports.
+    private static func descendsFromXCTestCase(_ candidate: AnyClass) -> Bool {
+        var parent: AnyClass? = class_getSuperclass(candidate)
+        while let step = parent {
+            if step == XCTestCase.self { return true }
+            parent = class_getSuperclass(step)
+        }
+        return false
     }
 
     /// How many tests XCTest would run for one class — asked of XCTest itself,
