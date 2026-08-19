@@ -307,7 +307,7 @@ jobs:
       # step output.
       - name: Upload the run log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: swift-test-log
           path: ${{ runner.temp }}/swift-test.log
@@ -532,7 +532,7 @@ jobs:
 
       - name: Upload the pixels
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: swift-snapshot-evidence
           path: ${{ runner.temp }}/snapshot-artifacts
@@ -541,7 +541,7 @@ jobs:
 
       - name: Upload the run log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: swift-snapshot-evidence-log
           path: ${{ runner.temp }}/swift-snapshot-evidence.log
