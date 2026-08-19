@@ -48,6 +48,11 @@
 #      attempt succeeds must exit 0 AND show that the first two were retried.
 #   4. the clean paths still pass: nothing staged, and a first-attempt push.
 #
+# Obligations 12-17 are #1655's, on the same loop and against REAL git in a
+# throwaway repo, because the defect there is STATE rather than status — a
+# rebase that conflicts leaves the tree mid-rebase and the stub above can no
+# more produce that than it can undo it. Their header sits with them.
+#
 # ---------------------------------------------------------------------------
 # #1644 — the two steps ABOVE it, same job, same symptom
 #
@@ -203,6 +208,14 @@ echo "   '$EXTRACT_STEP' -> \`$EXTRACT_SHELL\`"
 # An unexpected git subcommand returns a loud, distinctive 99 instead of a
 # quiet 0: a stub that silently answered "fine" to a call it did not model
 # would make every arm below pass for a reason unrelated to its obligation.
+#
+# `rev-parse` answers a path that does not exist, which is this stub world's
+# only honest answer: its `pull` always succeeds, so no rebase is ever left in
+# progress here. `rebase` is deliberately left UNMODELLED — with rev-parse
+# answering "no rebase directory" the step must never reach `git rebase
+# --abort`, so a future edit that aborts unconditionally is reported by the
+# loud 99 rather than passing quietly. The case that genuinely needs a rebase
+# to exist is #1655's, and it runs against real git in a throwaway repo below.
 stub_prelude() { # $1 = attempt the push first succeeds on (99 = never)
                  # $2 = status of `git diff --staged --quiet` (1 = changes staged)
   cat <<STUB
@@ -214,6 +227,7 @@ git() {
     config|add|commit) return 0 ;;
     diff)  return "\$STUB_STAGED" ;;
     pull)  return 0 ;;
+    rev-parse) echo "./.stub-says-no-rebase-in-progress"; return 0 ;;
     push)
       STUB_PUSHES=\$((STUB_PUSHES + 1))
       if [ "\$STUB_PUSHES" -ge "\$STUB_SUCCEED_ON" ]; then return 0; fi
@@ -331,6 +345,392 @@ else
     # ...and the strip must not have eaten the code, or the arm above is
     # vacuous: an empty haystack contains no needle.
     want_contains "...checked against the step's real code, not an empty strip" "git push" "$code"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# #1655 — the retry that could not retry. Obligations 12-17.
+#
+# The stub above cannot reach this one, and that is the point rather than a
+# limitation to work around: its `git pull` returns a status and leaves no
+# state, where the whole defect is STATE. A `git pull --rebase` that fails
+# INSIDE the rebase — a conflict, not a rejected push — leaves the tree
+# mid-rebase, and every later `git pull` then refuses outright:
+#
+#     error: Pulling is not possible because you have unmerged files.
+#
+# So four of the five attempts could not run at all, while the step's closing
+# message attributed all five to the push. Measured on run 31963062408, whose
+# attempt 1 conflicted `add/add` on .github/workflows/ars.yml and whose
+# attempts 2-5 are verbatim identical refusals.
+#
+# Reachability is stated as the issue states it, and the distinction is kept:
+# the MECHANISM is measured (any failed rebase leaves the same wreckage — the
+# arms below reproduce it against real git), while "a push-to-main run can
+# reach it" is ASSUMED. That run was a `workflow_dispatch` on a branch, so its
+# ref differed from main; a badge run whose rebase conflicts on main (two runs
+# racing on the same README line, a README edit landing between checkout and
+# push) would burn attempts 2-5 the same way, but that has not been observed.
+# `actions/checkout@v7` here carries no `fetch-depth:`, i.e. a depth-1 clone,
+# which is why the rebase saw add/add rather than ordinary history — noted
+# because the fixture reproduces that shape, NOT changed: the depth is a
+# separate decision with its own cost.
+#
+# The obligations:
+#
+#  12. the defect is re-MEASURED against real git, not described: the pre-#1655
+#      loop, run in a throwaway repo rigged to conflict, reaches a clean tree
+#      on exactly ONE of its five attempts. The permanent vacuity guard for
+#      13-16 — if a future git stopped leaving the tree mid-rebase, they would
+#      all pass for the wrong reason.
+#  13. the real step, same fixture: all five attempts start from a clean tree,
+#      the loop really runs five times, and it still fails loudly — and its
+#      closing message names how many attempts were MADE rather than a fixed 5.
+#  14. the ordinary rejected push this loop exists for still works: rejected
+#      twice, retried, accepted on the third attempt, with the commit actually
+#      landing on origin. No rebase is involved anywhere in that path.
+#  15. the rejected SPELLING is committed beside the shipped one and
+#      re-measured: a `git rebase --abort` whose status is read but which never
+#      asks whether there is a rebase to abort turns 14 red, because "no rebase
+#      in progress" exits 128. It handles 12's fixture perfectly, so the
+#      ordinary-rejection fixture is the only one that tells the two apart.
+#  16. a first-attempt push in a real repo still lands, with no retry noise.
+#  17. the refusal the fix ADDS is reached and says the right thing: an abort
+#      that FAILS leaves the tree mid-rebase, so the remaining attempts are as
+#      doomed as they were before the fix — the step stops, names the abort as
+#      what could not be done, and reports how many attempts were made. This is
+#      the one arm with no "before the fix" to be red against, so it carries an
+#      injected mutation instead (see attempt_prelude).
+#
+# What is NOT re-measured here is the `|| true` spelling the issue names
+# first. It is refused one level up, by name, by the arm above
+# (`the step does not reach for \`|| true\``) — the same refusal #1629 and
+# #1644 earned — so a body that discards the abort's status does not compile
+# past this file, and a variant demonstrating it would need a rebase that
+# cannot be aborted, which no portable fixture produces.
+
+echo ""
+echo "== $WF: $STEP — the retry that could not retry (#1655) =="
+
+# The fixture's git runs with the developer's own configuration out of the way.
+# A global `pull.rebase`, `commit.gpgsign`, `core.hooksPath` or
+# `init.defaultBranch` would otherwise decide what these repos do, and these
+# arms assert on the CONFLICT rather than on whoever's ~/.gitconfig ran them.
+# HOME is redirected as well, for a git predating GIT_CONFIG_GLOBAL — and
+# because nothing here may read or write the real one.
+FIXTURE_HOME="$TMP/fixture-home"
+NO_GITCONFIG="$TMP/fixture-gitconfig-that-does-not-exist"
+mkdir -p "$FIXTURE_HOME" || { echo "FAIL: ars-badge-push_test — cannot create $FIXTURE_HOME" >&2; exit 1; }
+fgit() {
+  env HOME="$FIXTURE_HOME" GIT_CONFIG_NOSYSTEM=1 \
+      GIT_CONFIG_GLOBAL="$NO_GITCONFIG" GIT_CONFIG_SYSTEM="$NO_GITCONFIG" \
+      GIT_TERMINAL_PROMPT=0 git "$@"
+}
+
+# fixture_build <dir> <kind> [reject-n]
+#
+# A bare `origin.git` reachable only by filesystem path — nothing here fetches
+# from, pushes to or otherwise contacts the real origin — plus a `work/` clone
+# holding an uncommitted README.md, which is what the step's `git add README.md`
+# stages.
+#
+#   conflict : origin/main and the badge commit each ADD README.md, so
+#              `git pull --rebase origin main` conflicts add/add — the shape
+#              run 31963062408 hit, reproduced here without its depth-1 clone.
+#   reject   : no divergence at all. origin's pre-receive hook declines the
+#              first <reject-n> pushes, which is the ordinary race the retry
+#              loop exists for: the branch is not behind, `git pull --rebase`
+#              is a no-op, and NOTHING is left mid-rebase.
+fixture_build() {
+  local dir="$1" kind="$2" rejects="${3:-0}" origin="$1/origin.git"
+  rm -rf "$dir" || return 1
+  mkdir -p "$dir" || return 1
+  fgit init -q --bare "$origin" >/dev/null 2>&1 || return 1
+  # `git init -b main` is git >= 2.28; the symbolic-ref spelling is not, and a
+  # harness that refused on an older git would be reporting its own age as the
+  # step's defect.
+  fgit -C "$origin" symbolic-ref HEAD refs/heads/main >/dev/null 2>&1 || return 1
+  fgit clone -q "$origin" "$dir/seed" >/dev/null 2>&1 || return 1
+  (
+    cd "$dir/seed" || exit 1
+    fgit config user.name fixture || exit 1
+    fgit config user.email fixture@example.invalid || exit 1
+    printf 'seed\n' >seed.txt || exit 1
+    fgit add seed.txt && fgit commit -qm "seed" && fgit push -q origin main
+  ) >/dev/null 2>&1 || return 1
+
+  if [[ "$kind" == conflict ]]; then
+    # work/ is cloned BEFORE origin gains its README.md, so the two adds are
+    # genuinely concurrent.
+    fgit clone -q "$origin" "$dir/work" >/dev/null 2>&1 || return 1
+    (
+      cd "$dir/seed" || exit 1
+      fgit pull -q --rebase origin main || exit 1
+      printf 'ARS badge, as origin already has it\n' >README.md || exit 1
+      fgit add README.md && fgit commit -qm "someone else's README" && fgit push -q origin main
+    ) >/dev/null 2>&1 || return 1
+  else
+    if [[ "$rejects" -gt 0 ]]; then
+      cat >"$origin/hooks/pre-receive" <<HOOK || return 1
+#!/bin/sh
+n=0
+[ -f "\$GIT_DIR/reject-count" ] && n=\$(cat "\$GIT_DIR/reject-count")
+n=\$((n + 1))
+printf '%s\n' "\$n" >"\$GIT_DIR/reject-count"
+if [ "\$n" -le $rejects ]; then
+  echo "fixture: simulated concurrent update to main, try again" >&2
+  exit 1
+fi
+exit 0
+HOOK
+      chmod +x "$origin/hooks/pre-receive" || return 1
+    fi
+    fgit clone -q "$origin" "$dir/work" >/dev/null 2>&1 || return 1
+  fi
+
+  (
+    cd "$dir/work" || exit 1
+    fgit config user.name fixture && fgit config user.email fixture@example.invalid
+  ) >/dev/null 2>&1 || return 1
+  printf 'ARS badge, as this run computed it\n' >"$dir/work/README.md" || return 1
+  return 0
+}
+
+# The instrumentation. `git` cannot be stubbed here — the whole subject is what
+# real git leaves on disk — so exactly one thing is observed: at the moment
+# each attempt reaches `git pull`, was the tree mid-rebase? That is the
+# property the issue is about (attempt N+1 starting from the state attempt N
+# did) and it is read off git's OWN rebase state rather than off the
+# "Pulling is not possible…" message, which git is free to reword.
+#
+# The optional second argument is the one deliberate mutation this section
+# injects rather than builds: `git rebase --abort` answering non-zero. The
+# refusal it drives (obligation 17) is something the fix ADDS, so it has no
+# "before the fix" to be seen red against, and a rebase that genuinely cannot
+# be aborted has no portable fixture — a read-only `.git` behaves differently
+# per filesystem and is root-dependent. Everything else still runs against real
+# git; only the abort's answer is replaced.
+attempt_prelude() { # <log-file> [break-abort]
+  local log="$1" brk=""
+  if [[ "${2:-}" == break-abort ]]; then
+    brk='  if [ "$1" = rebase ]; then echo "fixture: abort refused" >&2; return 1; fi'
+  fi
+  cat <<PRELUDE
+git() {
+  if [ "\$1" = pull ]; then
+    if [ -d "\$(command git rev-parse --git-path rebase-merge 2>/dev/null)" ] ||
+       [ -d "\$(command git rev-parse --git-path rebase-apply 2>/dev/null)" ]; then
+      echo mid-rebase >>"$log"
+    else
+      echo clean >>"$log"
+    fi
+  fi
+$brk
+  command git "\$@"
+}
+sleep() { :; }
+PRELUDE
+}
+
+# run_in_repo <fixture-dir> <body-file> [break-abort]
+#   -> sets OUT / ST / PULLS / CLEAN_STARTS
+run_in_repo() {
+  local dir="$1" body="$2" log="$1/.attempts" script="$1/.step.sh"
+  : >"$log"
+  { attempt_prelude "$log" "${3:-}"; cat "$body"; } >"$script"
+  use_shell "$STEP_SHELL"
+  # Same reasoning as run_body: no `set +e` toggle, a non-zero inner status is
+  # data. The counts are read with awk rather than `grep -c`, which exits 1 on
+  # no match and would need an `|| …` that can append a second line to the
+  # capture.
+  OUT=$(cd "$dir/work" && env HOME="$FIXTURE_HOME" GIT_CONFIG_NOSYSTEM=1 \
+        GIT_CONFIG_GLOBAL="$NO_GITCONFIG" GIT_CONFIG_SYSTEM="$NO_GITCONFIG" \
+        GIT_TERMINAL_PROMPT=0 "${STEP_ARGV[@]}" "$script" 2>&1)
+  ST=$?
+  PULLS=$(awk 'END{print NR+0}' "$log")
+  CLEAN_STARTS=$(awk '$0=="clean"{n++} END{print n+0}' "$log")
+  return 0
+}
+
+want_starts() { # label want-clean want-pulls
+  if [[ "$CLEAN_STARTS" == "$2" && "$PULLS" == "$3" ]]; then
+    pass "$1 ($CLEAN_STARTS of $PULLS attempts started from a clean tree)"
+  else
+    fail "$1" "$2 clean start(s) out of $3 pulls" \
+         "$CLEAN_STARTS of $PULLS :: $(flat "$OUT")"
+  fi
+  return 0
+}
+
+# The committed predecessor: today's loop, verbatim, with no abort anywhere.
+cat >"$TMP/pre1655.sh" <<'OLD'
+git config user.name "github-actions[bot]"
+git config user.email "github-actions[bot]@users.noreply.github.com"
+git add README.md
+git commit -m "chore: update ARS badge [skip ci]"
+pushed=0
+for i in 1 2 3 4 5; do
+  if git pull --rebase origin main && git push; then pushed=1; break; fi
+  echo "Push attempt $i failed, retrying..."
+  sleep $((i * 3))
+done
+if [ "$pushed" -ne 1 ]; then
+  echo "::error::ARS badge was NOT pushed: all 5 attempts failed."
+  exit 1
+fi
+OLD
+
+# The rejected SPELLING, committed beside the one that shipped rather than
+# described in a PR body: a `git rebase --abort` whose status IS read, placed
+# after each failed attempt, which never asks whether there is a rebase to
+# abort. It is the reading of the issue's second suggestion a careful person
+# actually writes, and `git rebase --abort` with no rebase in progress exits
+# 128 — so every healthy retry becomes a reported failure.
+cat >"$TMP/naive1655.sh" <<'NAIVE'
+git config user.name "github-actions[bot]"
+git config user.email "github-actions[bot]@users.noreply.github.com"
+git add README.md
+git commit -m "chore: update ARS badge [skip ci]"
+pushed=0
+for i in 1 2 3 4 5; do
+  if git pull --rebase origin main && git push; then pushed=1; break; fi
+  echo "Push attempt $i failed, retrying..."
+  if ! git rebase --abort; then
+    echo "::error::naive spelling: attempt $i's rebase could not be aborted."
+    exit 1
+  fi
+  sleep $((i * 3))
+done
+if [ "$pushed" -ne 1 ]; then
+  echo "::error::ARS badge was NOT pushed: all 5 attempts failed."
+  exit 1
+fi
+NAIVE
+
+# The refusal. If the fixture does not actually conflict, every arm below
+# grades a program that never met the defect — a run that "found nothing" and
+# a run that could not look must not print the same thing. Probed on its OWN
+# fixture instance, because probing consumes the tree it leaves mid-rebase.
+fixture_conflicts() { # <dir>
+  (
+    cd "$1/work" || exit 1
+    fgit add README.md >/dev/null 2>&1 || exit 1
+    fgit commit -qm "chore: update ARS badge [skip ci]" >/dev/null 2>&1 || exit 1
+    fgit pull --rebase origin main >/dev/null 2>&1 && exit 1
+    [ -d "$(fgit rev-parse --git-path rebase-merge)" ] ||
+      [ -d "$(fgit rev-parse --git-path rebase-apply)" ]
+  )
+}
+
+if [[ ! -s "$TMP/step-body.sh" ]]; then
+  fail "the '$STEP' step body is available for the #1655 arms" \
+       "the extracted body" "empty or missing — the extraction above refused, so these arms would grade nothing"
+elif ! fixture_build "$TMP/fix-probe" conflict; then
+  fail "the #1655 conflict fixture could be built" \
+       "a throwaway origin.git + work clone under $TMP" \
+       "fixture_build failed — these arms cannot run, and a skip here would read as a pass"
+elif ! fixture_conflicts "$TMP/fix-probe"; then
+  fail "the #1655 conflict fixture produces a rebase that really conflicts" \
+       "\`git pull --rebase origin main\` failing and leaving a rebase in progress" \
+       "it did not — this git no longer reproduces the defect's precondition, so nothing below would be graded"
+else
+  pass "the #1655 conflict fixture leaves a real rebase in progress ($(fgit --version))"
+
+  # Obligation 12 — the defect, re-measured against real git.
+  if ! fixture_build "$TMP/fix-old" conflict; then
+    fail "a fresh conflict fixture for the pre-#1655 loop" "a built fixture" "fixture_build failed"
+  else
+    run_in_repo "$TMP/fix-old" "$TMP/pre1655.sh"
+    want_starts "the pre-#1655 loop reaches a clean tree on exactly 1 of its 5 attempts — the hazard is real" 1 5
+    want_status "...and still fails, for a cause four attempts never tested" 1 "$ST" "$OUT"
+  fi
+
+  # Obligation 13 — the real step, same fixture.
+  if ! fixture_build "$TMP/fix-new" conflict; then
+    fail "a fresh conflict fixture for the real step" "a built fixture" "fixture_build failed"
+  else
+    run_in_repo "$TMP/fix-new" "$TMP/step-body.sh"
+    want_starts "every one of the 5 attempts starts from a clean tree" 5 5
+    want_status "...and a rebase that keeps conflicting still fails the step" 1 "$ST" "$OUT"
+    want_contains "...as a workflow error annotation" "::error::" "$OUT"
+    want_contains "...saying the badge was NOT pushed" "NOT pushed" "$OUT"
+    want_contains "...having really reached the fifth attempt" "Push attempt 5 failed" "$OUT"
+    want_contains "...and reporting that it undid each conflicted rebase" "unfinished rebase was in progress" "$OUT"
+    # The issue's closing line: "all 5 attempts failed" is only true if all 5
+    # were attempted. The count is DERIVED from the loop rather than typed, so
+    # the sentence cannot outrun the facts; the needle here is the measurement
+    # this run just took, not a literal.
+    want_contains "...naming the number of attempts actually made, not a fixed 5" "$PULLS of 5" "$OUT"
+    origin_head=$(fgit -C "$TMP/fix-new/origin.git" log --oneline -1 2>&1)
+    want_absent "...and origin/main really did not get the badge commit" "update ARS badge" "$origin_head"
+  fi
+
+  # Obligation 14 — the ordinary rejected push the loop exists for. THE arm a
+  # status-reading abort with no in-progress check turns red (obligation 15).
+  if ! fixture_build "$TMP/fix-race" reject 2; then
+    fail "a rejected-push fixture for the real step" "a built fixture" "fixture_build failed"
+  else
+    run_in_repo "$TMP/fix-race" "$TMP/step-body.sh"
+    want_status "a push rejected twice, no rebase anywhere, succeeds on the third attempt" 0 "$ST" "$OUT"
+    want_starts "...all three attempts having started from a clean tree" 3 3
+    want_contains "...retried after the first rejection" "Push attempt 1 failed" "$OUT"
+    want_contains "...and after the second" "Push attempt 2 failed" "$OUT"
+    want_absent "...with no error annotation" "::error::" "$OUT"
+    want_absent "...and no claim that the badge went unpushed" "NOT pushed" "$OUT"
+    origin_head=$(fgit -C "$TMP/fix-race/origin.git" log --oneline -1 2>&1)
+    want_contains "...the badge commit having really landed on origin/main" "update ARS badge" "$origin_head"
+  fi
+
+  # Obligation 15 — the rejected spelling, committed and re-measured.
+  if ! fixture_build "$TMP/fix-naive-race" reject 2; then
+    fail "a rejected-push fixture for the naive spelling" "a built fixture" "fixture_build failed"
+  else
+    run_in_repo "$TMP/fix-naive-race" "$TMP/naive1655.sh"
+    if [[ "$ST" -ne 0 ]]; then
+      pass "an unguarded \`git rebase --abort\` breaks the ordinary rejected push (exit $ST) — why the step asks first"
+    else
+      fail "an unguarded \`git rebase --abort\` breaks the ordinary rejected push (the reason the shipped spelling asks whether a rebase is in progress)" \
+           "a non-zero exit" "exit 0 — that spelling is no longer distinguishable from the shipped one, so re-derive the choice :: $(flat "$OUT")"
+    fi
+    want_contains "...giving up on the very first retry, on an abort that had nothing to abort" \
+                  "naive spelling: attempt 1's rebase could not be aborted" "$OUT"
+  fi
+  if ! fixture_build "$TMP/fix-naive-conflict" conflict; then
+    fail "a conflict fixture for the naive spelling" "a built fixture" "fixture_build failed"
+  else
+    # ...and it handles the CONFLICT fixture perfectly. Without this, the
+    # obligation above reads as "that spelling is broken", when what is true is
+    # narrower and is the whole reason 14 exists: the two spellings are
+    # indistinguishable on the fixture the issue was reported from.
+    run_in_repo "$TMP/fix-naive-conflict" "$TMP/naive1655.sh"
+    want_starts "the naive spelling is indistinguishable from the shipped one on a CONFLICTING fixture" 5 5
+  fi
+
+  # Obligation 17 — the refusal the fix ADDS, and its only coverage. An abort
+  # that fails is the one case where asking first is not enough: the tree is
+  # still mid-rebase, so the remaining attempts are exactly as doomed as they
+  # were before the fix. The step must stop and say so rather than burn them.
+  if ! fixture_build "$TMP/fix-stuck" conflict; then
+    fail "a conflict fixture for the unabortable rebase" "a built fixture" "fixture_build failed"
+  else
+    run_in_repo "$TMP/fix-stuck" "$TMP/step-body.sh" break-abort
+    want_status "a rebase that cannot be aborted fails the step" 1 "$ST" "$OUT"
+    want_contains "...as a workflow error annotation" "::error::" "$OUT"
+    want_contains "...naming the abort as what could not be done" "could not undo it" "$OUT"
+    want_contains "...and saying how many attempts were made, not claiming 5" "Only 1 of 5" "$OUT"
+    want_starts "...having stopped instead of burning the remaining attempts" 1 1
+  fi
+
+  # Obligation 16 — the clean path, in a real repo.
+  if ! fixture_build "$TMP/fix-clean" reject 0; then
+    fail "a clean fixture for the real step" "a built fixture" "fixture_build failed"
+  else
+    run_in_repo "$TMP/fix-clean" "$TMP/step-body.sh"
+    want_status "a first-attempt push in a real repo" 0 "$ST" "$OUT"
+    want_starts "...having pulled exactly once" 1 1
+    want_absent "...with no retry noise" "Push attempt" "$OUT"
+    origin_head=$(fgit -C "$TMP/fix-clean/origin.git" log --oneline -1 2>&1)
+    want_contains "...and the badge commit on origin/main" "update ARS badge" "$origin_head"
   fi
 fi
 

@@ -133,14 +133,62 @@ jobs:
             # `|| true` on the push is the false fix and is deliberately not
             # used: it makes the loop's own status 0 for the same reason, one
             # level down (#1629 measured the same trap on a `$?` capture).
+            #
+            # `attempts` counts the attempts that were actually MADE, and the
+            # message below states that number rather than a literal 5 (#1655).
+            # Until then, a rebase that failed INSIDE the rebase — a conflict,
+            # not a rejected push — left the tree mid-rebase, and every later
+            # `git pull` refused outright with "Pulling is not possible because
+            # you have unmerged files": four of the five attempts could not
+            # run, while the message still attributed all five to the push.
+            # Measured on run 31963062408, whose attempt 1 conflicted add/add
+            # and whose attempts 2-5 are verbatim identical refusals. That run
+            # was a `workflow_dispatch` on a branch, so its ref differed from
+            # main — the MECHANISM is measured, that a push-to-main run reaches
+            # it is ASSUMED (two badge runs racing on the same README line, or
+            # a README edit landing between checkout and push).
+            #
+            # Today `attempts` is always 5 here, because the only other way out
+            # of the loop is the refusal below. It is derived anyway: the claim
+            # "all 5 failed" is only true if all 5 were attempted, and a
+            # measured number cannot outrun the facts if the loop ever grows
+            # another way to skip one.
             pushed=0
+            attempts=0
             for i in 1 2 3 4 5; do
+              # Attempt N+1 has to start from the state attempt N did.
+              #
+              # The rebase is ASKED about rather than aborted unconditionally,
+              # because "no rebase in progress" is the NORMAL case here — an
+              # ordinary rejected push, which is what this retry exists for,
+              # leaves none — and `git rebase --abort` exits 128 there. So a
+              # spelling that merely reads that status turns every healthy
+              # retry into a reported failure, while `git rebase --abort ||
+              # true` throws away the one status that matters. Asking first is
+              # what tells "there was nothing to abort" (fine) from "there was,
+              # and it could not be undone" — in which case the tree is still
+              # mid-rebase, no further attempt can run, and burning them would
+              # blame a cause nothing tested. Both spellings are committed and
+              # re-measured in tools/lib/ars-badge-push_test.sh.
+              if [ -d "$(git rev-parse --git-path rebase-merge)" ] || [ -d "$(git rev-parse --git-path rebase-apply)" ]; then
+                # Neither message says "attempt $((i - 1))'s rebase": on the
+                # first pass that reads "attempt 0", and while nothing before
+                # this loop rebases, a diagnosis that is wrong in the one state
+                # nobody expected is the worst place to be wrong.
+                if git rebase --abort; then
+                  echo "An unfinished rebase was in progress; aborted it so attempt $i starts from a clean tree"
+                else
+                  echo "::error::ARS badge was NOT pushed: a \`git pull --rebase\` left this runner mid-rebase and \`git rebase --abort\` could not undo it, so the tree is still dirty and attempts $i-5 cannot run. Only $attempts of 5 attempts were made. README.md on main still shows the previous score."
+                  exit 1
+                fi
+              fi
+              attempts=$((attempts + 1))
               if git pull --rebase origin main && git push; then pushed=1; break; fi
               echo "Push attempt $i failed, retrying..."
               sleep $((i * 3))
             done
             if [ "$pushed" -ne 1 ]; then
-              echo "::error::ARS badge was NOT pushed: all 5 \`git pull --rebase origin main && git push\` attempts to origin/main failed. The badge commit exists only on this runner; README.md on main still shows the previous score."
+              echo "::error::ARS badge was NOT pushed: $attempts of 5 \`git pull --rebase origin main && git push\` attempts to origin/main were made, and every one of them failed. The badge commit exists only on this runner; README.md on main still shows the previous score."
               exit 1
             fi
           fi
