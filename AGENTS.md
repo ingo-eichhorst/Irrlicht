@@ -1752,6 +1752,91 @@ Before marking a ticket done, run the full suite — every layer must pass:
   cap with an empty log. `swift` is still the one gate deliberately **stronger**
   locally than in CI — a runner has a virtual display, a stock font set and no
   usable audio stack — but it is no longer the only place the suite runs.
+  **Image snapshots are graded on the reference host only, permanently and by
+  choice. This paragraph is the decision record for #1615; `macos-swift.yml`'s
+  header, `ImageSnapshotCIScopeTests` and the issue threads point here rather
+  than restating it.** Five suites — `BackchannelRulesViewSnapshotTests`,
+  `GroupViewSnapshotTests`, `HistoryViewSnapshotTests`,
+  `SessionListUnappliedGrantsWiringTests`, `SessionRowSnapshotTests` — are
+  `--skip`ped in CI and run under `tools/preflight.sh --only swift` and the
+  pre-push hook and nowhere else. Two further image-snapshot suites
+  (`PermissionWizardEffectErrorRenderTests`, `UnappliedGrantsBannerRenderTests`)
+  reproduce byte-identically on a runner, stay gated there, and their passing is
+  itself the evidence that the residual is content-dependent rather than a
+  blanket host difference.
+  **How big the exclusion is, is DERIVED and asserted rather than typed.**
+  `ImageSnapshotCIScopeTests.testTheUngatedPopulationIsExactlyTheSkippedSuites`
+  counts those five suites' tests off the live bundle through XCTest's own
+  `XCTestSuite(forTestCaseClass:)` — so it agrees with a run's `Executed N
+  tests` by construction rather than by a source scan agreeing with a test
+  runner by luck — pins the total at **48**, and prints the whole census on
+  every run. It also fails if a skipped suite goes EMPTY, which is the rot this
+  decision creates: a suite that runs on one machine and holds nothing runs
+  nowhere, and reads exactly like one that passes everywhere. The gated
+  remainder is printed and deliberately NOT pinned, because it moves with every
+  test anyone adds anywhere in the target — 388 of 436 measured on 2026-08-19 on
+  the reference Mac. That split is "Replay's measured figures" applied one
+  platform over, and this is the file that earned it: `macos-swift.yml`'s header
+  claimed "270 of 318", was corrected to "272 of 320" by the PR that measured
+  it, and was 115 tests stale (320 → 435) by the time #1615 was closed.
+  **Re-recording the references is not the fix, and is the one move to refuse.**
+  It is what #1034 and #1044 both did, both wrongly, to what turned out to be an
+  appearance-mode bug (the cautionary tale below). Here it is worse: the runner
+  is on a *newer* OS than the reference Mac (runner macOS 26.5.2 / 25F84,
+  reference 26.5 / 25F71), so re-recording chases a moving image AND inverts
+  which host is authoritative — the app ships to the developer Mac's OS, not to
+  a runner image. `git status --porcelain platforms/macos/Tests/__Snapshots__`
+  is the check; every PR in this line of work (#1614, #1630/#1658, #1659, #1662,
+  #1628, #1615) regenerated **zero** PNGs, and the untouched 53-reference set is
+  what makes each of their claims checkable.
+  **A perceptual tolerance is not the fix either**: #1509 measured one wide
+  enough to absorb this class of drift as also wide enough to pass a **missing
+  architecture segment**. A tolerance that admits the defect it was sized
+  against is a deleted assertion with a number on it.
+  **What is measured, and what is still unknown.** The pixels HAVE been looked
+  at (#1628, from the evidence job's artifacts) and the hypothesis #1615 opened
+  with — "the failing renders are the ones drawing glyph/vector content" — is
+  **dead as stated**: a fixture rendering one thing each (flat fill, stroked
+  bezier, system-font text, an SF Symbol, and each of those again in a
+  translucent dynamic `Color.secondary`) came back byte-identical between runner
+  and reference host on all six. The 36 failures are two populations: 34 whose
+  differing pixels sit inside the 28 × 28 px box `SessionState.adapterIcon`
+  draws, at maxΔ 1-5/255 over 0.01-0.9% of the image — brand icons rasterised
+  from an inline SVG string through `NSImage(data:)`, a path no SwiftUI
+  primitive reaches — and 2 `BackchannelRulesView` control labels at maxΔ
+  142/197, the same glyphs sitting ~1 device pixel lower, i.e. a sub-point
+  baseline landing on a different pixel phase. The toolchain is measured NOT to
+  be the variable: all 15 Xcodes on `macos-latest`, including 26.3.0 build
+  17C529 which is bit-for-bit the reference Mac's, produce the same 36 failures,
+  while that Mac on that build produces none. **What nobody has established is
+  WHY** — "the OS differs" is where the evidence stops, not a root cause, and
+  accepting the containment does not make anything about `NSImage(data:)`'s SVG
+  rasteriser known. One residual is predicted rather than measured: #1658 pinned
+  the locale, so `testBackchannelRuleContextTokens`'s remaining difference
+  *should* now be rasterisation only, and no post-#1658 runner render has been
+  diffed against the reference to confirm it.
+  **What the decision costs, stated here rather than discovered later: a
+  contributor without a Mac cannot run these 48 tests at all, and CI will not
+  run them either.** An outside contributor's image-snapshot change is ungraded
+  until the maintainer next runs `tools/preflight.sh --only swift` or pushes
+  through the pre-push hook — and CI is not merely silent about it, it is
+  confidently green, because the suites are skipped by name. That contribution
+  shape is not hypothetical: PR #1470 was merged from a fork on 2026-08-19
+  touching five files in `platforms/macos/`. It touched no image-snapshot suite,
+  so it is the shape rather than an instance, and no cheap mitigation is built
+  here — the honest statement is that the local gate and the pre-push hook are
+  the whole of the coverage for those 48, and that a fork PR's green `swift-test`
+  check says nothing about them.
+  **The pixels can still be collected, on demand.** `swift-snapshot-evidence`
+  ran on every PR while the policy question was open and now runs on
+  `workflow_dispatch` only — narrowed rather than deleted, because it is the
+  only way anyone can look at these renders again (a runner OS bump, a
+  contributor asking whether the residual moved, #1615 reopened), and a third
+  macOS job per PR at 10× billing buys nothing while the answer stands. `gh
+  workflow run "macOS (Swift)" --ref <branch>` publishes the failure images, the
+  committed references beside them and the six primitive rasters; the job still
+  fails loudly when it cannot COLLECT, which is the property that made its
+  output trustworthy in the first place.
   Four host dependencies had to go first, and the general lesson is worth more
   than the four fixes: each was a value read from the MACHINE where the
   equivalent value was available from the INPUT. Image snapshots rasterised at
@@ -2161,11 +2246,12 @@ Before marking a ticket done, run the full suite — every layer must pass:
   form is the only option.
   **And the `rate_limit` fixture #1663 anticipated is seeded, but NOT as a
   committed PNG.** The clock obstacle is gone; what remains is unrelated to it
-  and is why the PNG form is still the wrong one — per #1615 every
-  committed-reference image suite currently fails on a runner over
-  rasterisation, so a new one would have to be classified as skipped in
-  `ImageSnapshotCIScopeTests` and would buy a check that runs on one Mac. The
-  two-render-in-memory form runs everywhere, so that is what the fixture is.
+  and is why the PNG form is still the wrong one — a new committed-reference
+  image suite is a coin flip on whether it is gradeable in CI at all (5 of the 7
+  existing ones are not; see the reference-host-only decision record in the
+  macOS bullet above), and one that lands on the wrong side buys a check that
+  runs on one Mac. The two-render-in-memory form runs everywhere, so that is
+  what the fixture is.
   And no, a test
   run does not modify the user's real app preferences:
   `UserDefaults.standard` under `swift test` resolves to
