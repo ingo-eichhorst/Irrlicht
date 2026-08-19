@@ -1,0 +1,41 @@
+{
+  "description": "the committed catalog's actual shape (copilot 1-4): the same cross-mechanism pair sitting one index behind a state_differs, so the recording already diverges and the pair is reported by an existing mechanism",
+  "recorded": [
+    {
+      "seq": 1,
+      "ts": "2026-08-05T19:02:10.139000+02:00",
+      "kind": "state_transition",
+      "session_id": "s",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready"
+    },
+    {
+      "seq": 2,
+      "ts": "2026-08-05T19:02:28.760000+02:00",
+      "kind": "state_transition",
+      "session_id": "s",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "turn already complete at first discovery → synthetic catch-up"
+    }
+  ],
+  "replayed": [
+    {
+      "virtual_time": "2026-08-05T19:02:07.787000+02:00",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "transcript activity (ready → working)"
+    },
+    {
+      "virtual_time": "2026-08-05T19:02:10.139000+02:00",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready"
+    }
+  ],
+  "want_cross_mechanism": [
+    1
+  ],
+  "want_unreported": false
+}

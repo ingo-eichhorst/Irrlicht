@@ -37,6 +37,18 @@ type timeDelta struct {
 	Index int
 	Kind  string
 	Delta time.Duration
+
+	// RecordedReason/ReplayedReason are the two sides' reason strings, carried
+	// out of the same traversal that paired them (#1707). They are what
+	// CrossMechanism reads; see compareOrdered for why a difference between
+	// them is NOT a demotion, and extended_check.go's CrossMechanism for the
+	// one shape of difference that is worth reporting.
+	//
+	// No json tag is needed — timeDelta is reached only through
+	// extendedCheck.TimeDeltas, which is `json:"-"`, so nothing here can move a
+	// golden byte.
+	RecordedReason string
+	ReplayedReason string
 }
 
 // Abs is |Delta|, the quantity every bucket and percentile below is taken over.

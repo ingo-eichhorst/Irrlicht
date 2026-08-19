@@ -1,0 +1,26 @@
+{
+  "description": "both sides synthesized, by DIFFERENT synthesizers — a queued-turn re-open against a catch-up turn start, two recoveries of two different collapsed episodes. A cross-mechanism pair even though neither side is a classifier verdict",
+  "recorded": [
+    {
+      "seq": 1,
+      "ts": "2026-04-26T11:56:30.500000+02:00",
+      "kind": "state_transition",
+      "session_id": "s",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "new session created (turn already in progress at first discovery)"
+    }
+  ],
+  "replayed": [
+    {
+      "virtual_time": "2026-04-26T11:56:30.500000+02:00",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "queued follow-up turn began → synthetic re-open"
+    }
+  ],
+  "want_cross_mechanism": [
+    0
+  ],
+  "want_unreported": true
+}

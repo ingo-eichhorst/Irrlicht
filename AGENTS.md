@@ -1487,7 +1487,18 @@ Before marking a ticket done, run the full suite — every layer must pass:
   Only KIND-MATCHED pairs carry a delta — where `compareOrdered` reports
   `state_differs` the two sides are not the same transition, so their timestamp
   difference means nothing and counting it would report one sequence divergence
-  twice. The reporting side (`timing_drift.go`) buckets and ranks those deltas;
+  twice. The neighbouring question — whether a differing `reason` should
+  demote a pair the same way — was measured in #1707 and answered NO: a reason
+  names the MECHANISM, both mechanisms exist on both sides, and the catalog's
+  dominant shape is a session's first `ready→working` reached through the
+  classifier default on one side and the force bounce on the other, with those
+  pairs sitting CLOSER in time than the ones that agree. What does survive the
+  argument is narrower and cannot be produced by renaming a string — exactly one
+  side SYNTHESIZED, the other classified — and it is `timeDelta.CrossMechanism`
+  plus `TestCrossMechanismPairsAreAlreadyReported`, which is a report rather than
+  a demotion: it asserts that every such pair in the catalog is already visible
+  to an existing mechanism, and fails the day one is not. The figures are in
+  `compareOrdered`'s doc comment as of that measurement, not restated here. The reporting side (`timing_drift.go`) buckets and ranks those deltas;
   it reuses `core/domain/stats.Percentile` rather than carrying its own.
   It is a **ratchet, not a tolerance gate**, and that is the deliberate
   shape: roughly a quarter of the catalog's kind-matched pairs are still more

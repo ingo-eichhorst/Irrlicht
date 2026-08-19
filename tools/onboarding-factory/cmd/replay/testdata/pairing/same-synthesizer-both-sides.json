@@ -1,0 +1,24 @@
+{
+  "description": "a synthesized transition the replay reproduced as the SAME synthesizer — agreement, not a cross-mechanism pair. Pins that the predicate keys on the asymmetry and not on the word synthetic",
+  "recorded": [
+    {
+      "seq": 1,
+      "ts": "2026-04-26T11:56:30.500000+02:00",
+      "kind": "state_transition",
+      "session_id": "s",
+      "prev_state": "working",
+      "new_state": "waiting",
+      "reason": "user-blocking tool opened and closed in one pass → synthetic waiting"
+    }
+  ],
+  "replayed": [
+    {
+      "virtual_time": "2026-04-26T11:56:30.500000+02:00",
+      "prev_state": "working",
+      "new_state": "waiting",
+      "reason": "user-blocking tool opened and closed in one pass → synthetic waiting"
+    }
+  ],
+  "want_cross_mechanism": [],
+  "want_unreported": false
+}
