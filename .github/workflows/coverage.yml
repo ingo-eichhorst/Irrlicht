@@ -62,32 +62,61 @@ jobs:
           COVERAGE_GIST_ID: ${{ secrets.COVERAGE_GIST_ID }}
         run: |
           if [ -z "$GIST_SECRET" ]; then
-            echo "::error::GIST_SECRET is not set in repository secrets"
+            echo "::error::GIST_SECRET is not set in repository secrets, so the coverage badge could not be published at all. The gist still holds its previous coverage.json and README's Coverage badge renders the previous percentage."
             exit 1
           fi
           if [ -z "$COVERAGE_GIST_ID" ]; then
-            echo "::error::COVERAGE_GIST_ID is not set in repository secrets"
+            echo "::error::COVERAGE_GIST_ID is not set in repository secrets, so there is no gist for the coverage badge to be published to. README's Coverage badge renders the previous percentage."
             exit 1
           fi
           BADGE_JSON="{\"schemaVersion\":1,\"label\":\"coverage\",\"message\":\"${COVERAGE}%\",\"color\":\"${COLOR}\"}"
-          jq -n --arg content "$BADGE_JSON" '{"files":{"coverage.json":{"content":$content}}}' > /tmp/gist-payload.json
-          # curl writes "000" to %{http_code} when no response was received (DNS/TLS/connect failure).
-          http_code=$(curl -sS -o /tmp/gist-response.json -w '%{http_code}' \
+          jq -n --arg content "$BADGE_JSON" '{"files":{"coverage.json":{"content":$content}}}' > gist-payload.json
+
+          # `|| curl_status=$?`, not a bare `$(curl …)` (#1710). curl exits
+          # non-zero when no response was received (DNS/TLS/connect failure),
+          # and this step declares no `shell:`, so the runner gives it
+          # `bash -e {0}` — under which an assignment from a failing command
+          # substitution ABORTS the step at this line. Neither the `echo` nor
+          # the refusal below was ever reached, so a transport failure came
+          # out as a red X over a log with no `HTTP …` line and no annotation
+          # in it. Measured in this step's own derived shell: exit 6, silent.
+          # The comment that used to sit here documented curl's `000` code as
+          # if the refusal read it; errexit made that branch unreachable for
+          # the whole of this step's life, and a comment describing a branch
+          # that cannot execute is why nobody re-checked it. It is reachable
+          # now — `curl_status` carries the failure and `000` is what
+          # `$http_code` holds when it fires.
+          curl_status=0
+          http_code=$(curl -sS -o gist-response.json -w '%{http_code}' \
             --connect-timeout 10 --max-time 30 \
             --retry 3 --retry-delay 2 --retry-all-errors \
             -X PATCH \
             -H "Authorization: token $GIST_SECRET" \
             -H "Content-Type: application/json" \
-            -d @/tmp/gist-payload.json \
-            "https://api.github.com/gists/$COVERAGE_GIST_ID")
-          echo "HTTP $http_code"
-          if [ "$http_code" -lt 200 ] || [ "$http_code" -ge 300 ]; then
-            echo "::error::Gist update failed (HTTP $http_code)"
-            if [ -s /tmp/gist-response.json ]; then
-              cat /tmp/gist-response.json
+            -d @gist-payload.json \
+            "https://api.github.com/gists/$COVERAGE_GIST_ID") || curl_status=$?
+          echo "HTTP $http_code (curl exit $curl_status)"
+          # ...and the SHAPE of `$http_code` is decided before it is compared.
+          # `[ "" -lt 200 ]` errors and evaluates FALSE, and so does the other
+          # disjunct, so execution fell through to the success path — errexit
+          # does not save it, a failing command in an `if` condition being
+          # exempt. Measured: two `integer expression expected` lines and
+          # exit 0, i.e. the job reporting the badge published on a run where
+          # the gist was never written. Same shape as ars.yml's step, so the
+          # three gist-writing workflows converge on one guard rather than
+          # three.
+          case "$http_code" in
+            ''|*[!0-9]*) http_code_usable=0 ;;
+            *)           http_code_usable=1 ;;
+          esac
+          if [ "$curl_status" -ne 0 ] || [ "$http_code_usable" -ne 1 ] || [ "$http_code" -lt 200 ] || [ "$http_code" -ge 300 ]; then
+            echo "::error::the coverage badge gist update FAILED (HTTP $http_code, curl exit $curl_status), so the gist still holds its previous coverage.json and README's Coverage badge renders the previous percentage."
+            if [ -s gist-response.json ]; then
+              cat gist-response.json
             else
-              echo "(no response body — likely transport failure)"
+              echo "(no response body — likely a transport failure)"
             fi
             exit 1
           fi
+          echo "Published coverage badge to gist: ${COVERAGE}%"
 

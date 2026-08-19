@@ -1242,8 +1242,55 @@ Before marking a ticket done, run the full suite — every layer must pass:
   the status arm stays green. And replacing the numeric-shape check on
   `%{http_code}` with a bare `[ -z … ]` lets a non-numeric code print
   `integer expression expected` twice, evaluate FALSE, and reach the SUCCESS
-  line: a failed publish reported as a publish. Both spellings are
-  codescene-badge.yml's, noted here rather than changed there.
+  line: a failed publish reported as a publish. Both spellings were
+  codescene-badge.yml's and coverage.yml's, noted here rather than changed
+  there — which is what #1710 was filed about and has since fixed; the bullet
+  below is where those two now live.
+- The other two gist badge jobs: `tools/lib/gist-badge-guards_test.sh` is the
+  same extract-and-execute treatment for `coverage.yml`'s "Update Gist with
+  coverage" and `codescene-badge.yml`'s "Update Gist with code health score"
+  (#1710) — the two steps the bullet above found the defects in and left
+  alone. **Both were LIVE, on the two badges that were working.** A transport
+  failure never reached its own refusal (errexit aborts at an assignment from
+  a failing command substitution, so `http_code=$(curl …)` ended the step
+  before the `echo` — measured, exit 6 with no `HTTP …` line and no
+  annotation), and a non-numeric `%{http_code}` reported SUCCESS (`[ "" -lt
+  200 ]` errors and evaluates FALSE, both disjuncts do, and errexit exempts a
+  failing command in an `if` condition — measured, exit 0 with the badge
+  reported published on a run where the gist was never written). The second is
+  #1654's own failure class, a silently frozen badge behind a green job, one
+  workflow over. ars.yml's guards were ported rather than redesigned, so the
+  three gist-writing workflows carry ONE shape.
+  Four things are worth knowing. **It is one file for TWO workflows**, which
+  looks like a violation of ars-badge-push_test.sh's "one harness per
+  workflow" and is the same rule applied: what these two share is not a
+  workflow file but the gist-write SHAPE — one step each, identical apart from
+  the badge name, the gist filename and the rendered variable — plus the curl
+  stub, the refusal vocabulary and one preflight trigger, and two files would
+  duplicate all four and let the copies disagree. **The refusal table spans
+  both workflows**, six needles rather than three, so a step that grew the
+  other badge's sentence is caught — that copy-paste is where this whole class
+  came from. **The `000` comment was DELETED, not reworded**: it documented a
+  branch errexit made unreachable, and a comment describing a branch that
+  cannot execute is the reason nobody re-checks it. And both steps moved from
+  `/tmp/gist-*.json` to workspace-relative paths, matching ars.yml — a shared
+  absolute path is not isolable per case, so two arms would read each other's
+  response file.
+  Mutation evidence is seven deliberate mutations, each seen red and each
+  reverted: the capture guard and the shape check removed from EACH workflow
+  (four), coverage's refusal given codescene's sentence, its success line
+  deleted, and the preflight trigger narrowed back. The first pair is the one
+  to remember — dropping `|| curl_status=$?` leaves every STATUS arm green,
+  because the step still exits non-zero (7, from the abort); only the wording
+  arms and the "reaching the line the abort used to skip" arm go red. That is
+  #1644's measurement, reproduced two families on.
+  The two pre-fix bodies are committed verbatim and re-measured on every run
+  rather than quoted in the PR, which is the permanent vacuity guard: if
+  errexit ever stopped aborting on a failed capture, or `[` stopped evaluating
+  a bad integer as false, the guards would be protecting nothing and would
+  pass for the wrong reason. `preflight.sh`'s `tools` trigger gains both
+  workflows, its sixth widening for this reason (#1591, #1629, #1639, #1641,
+  #1645).
   **The decode is the guard that is easy to leave out**, and it is the same
   class of defect one level down. shields.io's STATIC-badge path is escaped
   (`--` is a literal dash, `_` and `%20` are spaces, `__` is a literal
