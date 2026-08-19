@@ -278,8 +278,25 @@ var knownFirstTransitionDrift = map[string]string{
 // #1388 found it. Re-tightened rather than left at 107, per the #1517 note
 // below: a bound that absorbs an improvement as slack makes the next
 // regression free.
+//
+// #1699 moved it 105 -> 106, and the entry is the SAME sentence read a third
+// time, now from the daemon's side. It records claudecode's
+// 2-13_turn-end-terminal-text, the catalog's first claudecode Stop, whose pair 1
+// (working→ready) is +2.100s: replay flips at the hook's own timestamp
+// (20:00:18.932775, byte-identical to the sidecar's hook_received{Stop} ts)
+// while the DAEMON flipped at 20:00:21.033255. The daemon's flip is still the
+// hook's — sidecar seq 187 carries decided_by_tier "hook" and hook_turn_done
+// true — it simply landed at the next debounce boundary, because
+// dispatchHookActivity pushes its synthetic event onto the DEBOUNCED channel and
+// a transcript write 97ms after the POST (seq 184) re-opened the 2s window. So
+// the pre-#1695 sentence ("the daemon flips on the POST, replay flips at the
+// next debounce boundary") is now true with the sides swapped, and which side a
+// recording lands on is a property of what the agent CLI wrote in the 2s after
+// its own Stop. Not re-tightened away and not a defect the recording carries:
+// it is one of the two facts #1699 was recorded to make visible, and a bound
+// that absorbed it would hide the next one.
 const (
-	maxRecordingsDriftingOverThreshold = 105
+	maxRecordingsDriftingOverThreshold = 106
 	maxRecordingsDriftingOver5s        = 50
 )
 
@@ -313,9 +330,14 @@ const (
 // recording contributes two more kind-matched pairs. The recording floor does
 // not move — 2-13 was already measuring — which is the shape to expect here,
 // since a recording joins this population once and then only adds pairs.
+// #1699 re-tightens both, 834 -> 836 and 277 -> 278: the new claudecode
+// 2-13 recording is a recording that was not in this population at all, and it
+// contributes two kind-matched pairs. Both halves move because this is the
+// other case the sentence above names — a NEW recording joining, rather than an
+// existing one gaining pairs.
 const (
-	minKindMatchedPairs   = 834
-	minMeasuredRecordings = 277
+	minKindMatchedPairs   = 836
+	minMeasuredRecordings = 278
 )
 
 // reportDriftEnumeration prints the drifted set — the deliverable of #1480,
