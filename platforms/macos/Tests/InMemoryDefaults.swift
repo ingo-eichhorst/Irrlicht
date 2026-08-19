@@ -114,7 +114,10 @@ final class InMemoryDefaults: UserDefaults {
     ///   keys through the overrides below and calling `synchronize()`, left the
     ///   real preferences directory byte-for-byte unchanged; that measurement is
     ///   re-run on every suite run by
-    ///   `InMemoryDefaultsTests.testTheDoubleAddsNothingToTheRealPreferencesDirectory`).
+    ///   `InMemoryDefaultsTests.testTheDoubleLeavesNothingAttributableToItInTheRealPreferencesDirectory`,
+    ///   which since #1714 grades what the run OWNS rather than what the
+    ///   directory did — see `PreferencesDirectoryWitness` for what that gives
+    ///   up and what covers it instead).
     ///   The force-unwrap is deliberate and is the fail-loud: `init(suiteName:)`
     ///   answers nil only for the main bundle identifier, and if it ever did
     ///   answer nil here the correct outcome is a trap, not a silent fallback to
@@ -248,12 +251,61 @@ final class InMemoryDefaults: UserDefaults {
 }
 
 /// A read-only witness over a preferences directory: what files were there
-/// before, what files are there now, and what appeared in between.
+/// before, what files are there now, what appeared in between — and which of
+/// those appearances can be ATTRIBUTED to the run that asked.
 ///
 /// It reads and never writes, and it has no delete path at all — the whole
 /// point of #1661's rework is that no code here is allowed to remove a file
 /// from a directory it did not create, and the simplest way to hold that is to
 /// own no `removeItem` call anywhere in this file.
+///
+/// # Why attribution exists, and why the raw delta was not enough (#1714)
+///
+/// The raw delta answers *"did this directory change"*. The question the suite
+/// asks is *"did the SUBJECT change it"*, and on a GitHub runner those two
+/// produced different answers: `com.apple.siri.ODDI.MetricsWorker.plist` landed
+/// inside the measured window and the assertion reported it as **"The defaults
+/// double reached disk. #1661 is back"** — the most alarming sentence this
+/// suite can say, about a file the double had nothing to do with. That is not
+/// an ordinary flake: a false ACCUSATION is read, and acted on, as a finding.
+///
+/// A NAME FILTER is not the fix, and that is worth saying loudly because it is
+/// the obvious one. #1661's leaked files were named `<uuid>.plist`, so an
+/// allowlist wide enough to hide a `com.apple.*` metrics plist is wide enough
+/// to hide the incident — #1509's `perceptualPrecision` mistake in a different
+/// costume. The guard is therefore scoped to what the run OWNS, by two clauses,
+/// neither of which is a list of names the run did not choose:
+///
+///   the run's own token   an identifier minted per run and woven into every
+///                         domain name and key the subject is handed, so an
+///                         entry carrying it can only have come from the
+///                         subject. This is exactly #1661's own artifact shape
+///                         — a plist named for a suite the test minted.
+///   this process's own    what `super.init(suiteName: nil)` binds, derived
+///   application domain    from `Bundle`/`ProcessInfo` at run time rather than
+///                         written down. An entry named for it appearing is a
+///                         write that reached `super`.
+///
+/// # What that gives up, stated rather than left to be discovered
+///
+/// A NEW file whose name carries neither — a leak into a domain named nowhere
+/// in this process — is no longer reported here. `InMemoryDefaultsTests`
+/// commits that limit as a case (a `<uuid>.plist` bearing a UUID this run did
+/// not mint stays silent) so it is learned from a test rather than from an
+/// incident. Two things already cover it, and neither is inside this process:
+/// `tools/lib/swift-suite.sh`'s directory witness brackets the whole run with
+/// the wide, unattributed net — its wording says "background daemons also write
+/// here … re-run to tell that apart", which is the honest form of the same
+/// finding and the one this test could not use, since a single in-process
+/// window cannot re-run itself — and that file's domain half compares
+/// `com.apple.dt.xctest.tool`'s keys and VALUES across the run, which sees a
+/// write into an already-existing domain that no added-entry witness can.
+///
+/// The clauses are deterministic rather than statistical, which is why they are
+/// preferred to the other shape #1714 named (a difference taken over a control
+/// window with the subject not exercised): the
+/// measured failure was a metrics worker writing ONCE, and a one-shot write is
+/// exactly what a two-window subtraction cannot cancel.
 struct PreferencesDirectoryWitness {
 
     /// Failing to *look* and finding nothing must not produce the same answer.
@@ -263,14 +315,36 @@ struct PreferencesDirectoryWitness {
     /// it is also the difference between a real guarantee and a comfortable one.
     enum Failure: Error, CustomStringConvertible {
         case unreadable(path: String, underlying: Error)
+        /// The attribution could not be performed with the inputs it was given.
+        /// Same rule as `unreadable`, one layer up: a needle that matches
+        /// everything and a needle that matches nothing are both a guard that
+        /// has stopped asking the question, and both read as a pass.
+        case cannotAttribute(reason: String)
 
         var description: String {
             switch self {
             case let .unreadable(path, underlying):
                 return "could not read \(path): \(underlying) — " +
                        "the witness cannot report a delta it was unable to measure"
+            case let .cannotAttribute(reason):
+                return "could not attribute what appeared: \(reason) — " +
+                       "the witness cannot name a subject it was unable to identify"
             }
         }
+    }
+
+    /// One run's claim on the entries that appeared during its window.
+    struct Attribution {
+        /// Appeared, and carries the identifier this run minted.
+        let namedForThisRun: [String]
+        /// Appeared, and names the application domain THIS PROCESS binds.
+        let namedForThisProcess: [String]
+        /// Appeared, and is attributable to neither. Reported for context and
+        /// never asserted on — this is the population #1714 is about.
+        let unattributed: [String]
+
+        /// Everything this run is answerable for, sorted for a stable message.
+        var names: [String] { Set(namedForThisRun + namedForThisProcess).sorted() }
     }
 
     let directory: URL
@@ -311,5 +385,85 @@ struct PreferencesDirectoryWitness {
     /// Names present in `after` and not in `before`, sorted for a stable message.
     static func added(from before: Set<String>, to after: Set<String>) -> [String] {
         after.subtracting(before).sorted()
+    }
+
+    /// The application domain(s) this process's own `UserDefaults` binds.
+    ///
+    /// Derived at run time rather than written down, for the reason the whole
+    /// file exists: a committed literal is a name the run does not own, and a
+    /// name the run does not own is a filter. Measured under `swift test` on
+    /// 2026-08-19 this answers `["com.apple.dt.xctest.tool", "xctest"]` — the
+    /// first being the domain `PersistentDefaultsLintTests` and
+    /// `tools/lib/swift-suite.sh` each name independently, and the one
+    /// `super.init(suiteName: nil)` binds.
+    ///
+    /// Both spellings are collected because Foundation falls back to the
+    /// process name when a bundle identifier is absent, and which of the two is
+    /// live is a property of how the suite was launched (`swift test`, Xcode, a
+    /// bare `xctest`) rather than of anything here.
+    /// `InMemoryDefaultsTests.testThisProcessesOwnApplicationDomainIsDerivableAndAttributes`
+    /// is the vacuity guard, and it also refuses an answer short enough that
+    /// containment would stop being an attribution.
+    static var processApplicationDomains: Set<String> {
+        var domains: Set<String> = []
+        if let identifier = Bundle.main.bundleIdentifier, !identifier.isEmpty {
+            domains.insert(identifier)
+        }
+        let process = ProcessInfo.processInfo.processName
+        if !process.isEmpty {
+            domains.insert(process)
+        }
+        return domains
+    }
+
+    /// Split what appeared into what this run is answerable for and what it is
+    /// not.
+    ///
+    /// Matching is CONTAINMENT rather than equality on purpose: `cfprefsd`
+    /// names a file for a domain but is not obliged to name it *exactly* that
+    /// (a suffix, a temporary spelling during an atomic replace), and a guard
+    /// that only recognised the exact form would be a guard a different
+    /// spelling walks past. It cannot make the guard wider than the run owns —
+    /// both needles are values this process minted or derived from itself.
+    ///
+    /// Refuses rather than answering for an empty needle, and that refusal is
+    /// the load-bearing line: `"anything".contains("")` is **true** in Swift, so
+    /// an empty token does not narrow the guard, it silently restores the
+    /// unattributed net #1714 is about — with every OS write reported as the
+    /// subject's, and reading as a pass until the day it fires.
+    static func attribute(_ appeared: [String],
+                          toRun runToken: String,
+                          orProcessDomains domains: Set<String> = processApplicationDomains) throws -> Attribution {
+        guard !runToken.isEmpty else {
+            throw Failure.cannotAttribute(
+                reason: "the run token is empty, and every entry contains the empty string")
+        }
+        guard !domains.isEmpty else {
+            throw Failure.cannotAttribute(
+                reason: "this process's application domain could not be derived, so a write that "
+                      + "reached `super` would be attributable to nothing")
+        }
+        guard !domains.contains(where: \.isEmpty) else {
+            throw Failure.cannotAttribute(
+                reason: "an application domain is the empty string, and every entry contains it")
+        }
+
+        var run: [String] = []
+        var process: [String] = []
+        var other: [String] = []
+        for name in appeared {
+            if name.contains(runToken) {
+                // Checked first, so an entry matching both is reported once and
+                // under the more specific of the two.
+                run.append(name)
+            } else if domains.contains(where: { name.contains($0) }) {
+                process.append(name)
+            } else {
+                other.append(name)
+            }
+        }
+        return Attribution(namedForThisRun: run.sorted(),
+                           namedForThisProcess: process.sorted(),
+                           unattributed: other.sorted())
     }
 }
