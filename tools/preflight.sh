@@ -500,7 +500,16 @@ if want tools; then
   # assertion that an unreadable diff REFUSES rather than printing the pass
   # line lives entirely in this gate. Same story, fifth file: a commit editing
   # only that workflow is exactly the one that breaks it.
-  run_gate_scoped '^tools/lib/|^tools/[^/]*\.sh$|^tools/git-hooks/|^go\.work$|^\.github/dependabot\.yml$|^site/install\.sh$|^\.github/workflows/(ars|macos-swift|replaydata-deletion-guard|test)\.yml$' \
+  # .github/workflows/codescene-badge.yml and .github/workflows/coverage.yml
+  # join them for the sixth time (#1710), and as one entry rather than two:
+  # gist-badge-guards_test.sh EXTRACTS each of their gist-write steps and
+  # executes it, so the assertions that a transport failure is ANNOUNCED rather
+  # than aborting the step silently, and that a non-numeric `%{http_code}` is
+  # refused rather than falling through to the success line, live entirely in
+  # this gate. Both defects were live on `main` while the two badges they
+  # publish were the two that worked, so a commit editing only one of these
+  # workflows is exactly the one that breaks it.
+  run_gate_scoped '^tools/lib/|^tools/[^/]*\.sh$|^tools/git-hooks/|^go\.work$|^\.github/dependabot\.yml$|^site/install\.sh$|^\.github/workflows/(ars|codescene-badge|coverage|macos-swift|replaydata-deletion-guard|test)\.yml$' \
                   "tools/lib shell-lib tests" shell_lib_tests
 fi
 
