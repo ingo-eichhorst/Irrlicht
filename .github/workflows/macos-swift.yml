@@ -220,7 +220,63 @@ jobs:
           # measured, all three ways.
           set +e
           set -uo pipefail
-          . tools/lib/swift-suite.sh
+
+          # The harness, and the refusal that tells "the library could not be
+          # LOADED" from anything it would have said (#1702). This source's
+          # status used to be read by nothing, and the result was neither
+          # silent nor wrong — it was UNDIAGNOSED. Measured with the library
+          # removed, under this step's own derived shell:
+          #
+          #   step.sh: line 28: tools/lib/swift-suite.sh: No such file or directory
+          #   step.sh: line 30: swift_suite_run: command not found
+          #   step.sh: line 38: swift_suite_verdict: command not found
+          #   ### ---- exit: 127 ----
+          #
+          # Loud (127 is not 0) and legible only to someone who opens the log.
+          # The missing function IS `swift_suite_verdict`, so the one thing
+          # that would have printed a named `::error::` line — the 240s hang
+          # headline, `last test to start`, TRUNCATED, `Executed 0 tests`,
+          # signal 6 — is precisely what is gone. That is why this is smaller
+          # than the sibling below, where the same statement made four guards
+          # fire and MISdiagnose the run (#1678), and it is still the
+          # "could not determine" outcome with no refusal (#1645).
+          #
+          # TWO checks rather than one, because a source that RETURNS 0 having
+          # defined nothing reads exactly like one that worked — an emptied or
+          # truncated file, or one whose last statement succeeded after an
+          # earlier error. `command -v` is the only thing that tells those
+          # apart, and it is what makes this three outcomes instead of two.
+          #
+          # The names are THIS step's, not the sibling's: it consults its
+          # predicates individually and checks `swift_suite_completed` /
+          # `swift_suite_ran_tests`, neither of which is called here, while
+          # `swift_suite_verdict` — the only predicate this step has, and the
+          # one whose absence causes the whole defect — is not on its list.
+          # A list copied from it would pass a library missing exactly the
+          # verdict and land straight back in 127.
+          #
+          # `exit 1`, and the status is a choice rather than a leftover.
+          # `swift_suite_verdict` is this step's LAST command, so its status is
+          # the step's status, and it returns 0 or 1 and nothing else — there
+          # is no `bad` here and nothing after it to reach. 1 is therefore what
+          # this step already means by "failed"; 127 was the shell reporting
+          # the last "command not found", not the workflow reporting anything.
+          # Both refuse HERE rather than continuing, because `swift_suite_run`
+          # is what PRODUCES the log the verdict judges: going on would judge a
+          # run that was never started. The two wordings are deliberately
+          # disjoint, because a shared exit 1 is satisfied by refusals that all
+          # fire together (#1644).
+          if ! . tools/lib/swift-suite.sh; then
+            echo "::error::could not load the test harness tools/lib/swift-suite.sh, so the suite was never started and there is no verdict to judge it. This is NOT a hung or truncated run — look at the checkout, not at the toolchain."
+            exit 1
+          fi
+          for fn in swift_suite_run swift_suite_verdict; do
+            if ! command -v "$fn" >/dev/null 2>&1; then
+              echo "::error::tools/lib/swift-suite.sh was read but defines no $fn, so the suite was never started and there is no verdict to judge it. This is NOT a hung or truncated run — the harness loaded and is unusable."
+              exit 1
+            fi
+          done
+
           log="$RUNNER_TEMP/swift-test.log"
           ( cd platforms/macos && swift_suite_run "$log" \
               swift test --skip LauncherTestHarness --skip LauncherHarnessTests \
