@@ -48,6 +48,14 @@ name: macOS (Swift)
 # suite on a developer Mac, where the display, the fonts and the audio stack
 # are the ones the app actually ships against.
 #
+# WHY five suites are skipped rather than fixed, and why that is now permanent,
+# is in `AGENTS.md`'s "macOS app" bullet under Testing — the decision record for
+# #1615. It is not restated here: this file's own copy of it said CI gates "270
+# of 318 tests", then "272 of 320", and was 115 tests stale by the time #1615
+# closed. The current figures are printed by
+# `ImageSnapshotCIScopeTests.testTheUngatedPopulationIsExactlyTheSkippedSuites`
+# on every run of the suite, and the ungated count is asserted there.
+#
 # A THIRD job, `swift-snapshot-evidence`, runs the five skipped suites on
 # purpose and uploads what they render (#1615, step 1). Until it existed, the
 # skipped suites failed on no machine anybody could look at, so every statement
@@ -59,17 +67,36 @@ name: macOS (Swift)
 # thing. Since #1678 those five are told apart from each other as well, not
 # only from health: the first used to be reported as the second.
 #
-# It costs a third macOS job per PR (macOS minutes bill at 10×). That is
-# deliberate for as long as the suites are skipped and #1615's step 3 is open;
-# once the policy question is answered, narrowing this job to
-# `workflow_dispatch` — or deleting it — is the cheap part.
+# Since #1615 it runs on `workflow_dispatch` ONLY, and that is the cost the
+# decision releases: it collected the evidence for a policy question that is now
+# answered, and a third macOS job per PR (macOS minutes bill at 10×) buys
+# nothing while the answer stands. It is narrowed rather than deleted because it
+# is the only way anyone can ever look at these pixels again — a runner OS bump,
+# a contributor asking whether the residual moved, or #1615 being reopened — and
+# rebuilding it from a git revert is strictly more work than dispatching it:
+#
+#   gh workflow run "macOS (Swift)" --ref <branch>
+#
+# runs all three jobs and produces two artifacts (14-day retention):
+# `swift-snapshot-evidence` — every failure image the five suites wrote, the
+# committed `__References__` beside them to diff against, and
+# `RasterPrimitiveEvidenceTests`' six primitive rasters + hashes — and
+# `swift-snapshot-evidence-log`, the run itself. There is no diff image: that
+# branch of SnapshotTesting is behind `__XCODE_BUILT_PRODUCTS_DIR_PATHS`, which
+# SwiftPM does not set, so the diff is computed off the pair after download.
+#
+# Note what it becomes on a PR: SKIPPED, not absent. That is the distinction the
+# `paths:` decision above turns on — a skipped job is reported and legible,
+# where an undispatched workflow's check reads as "still queued".
 
 on:
   pull_request:
   push:
     branches: [main]
-  # So the pixels can be re-collected on demand — for a toolchain bump on the
-  # runner, say — without pushing a commit to ask.
+  # The build and test jobs run on every event here. `swift-snapshot-evidence`
+  # runs on THIS one only (its `if:` below) — since #1615 it is the sole way its
+  # pixels are collected, which is why the trigger stays and why the job names
+  # it rather than the workflow dropping it.
   workflow_dispatch:
 
 permissions:
@@ -151,45 +178,30 @@ jobs:
       # `<target>.<class>`, so either alone stops covering the harness the
       # moment a class is added or the target is renamed.
       #
-      # The five suites after them are image snapshots that still differ from
-      # their references on a runner AFTER the scale fix, and the reason they
-      # are skipped rather than re-recorded is the substance of #1530's blocker
-      # 1. Measured on this workflow's own first run: the failure message
-      # changed from the pixel-count form (`…@(350.0, 48.0) does not match
-      # reference@(350.0, 48.0).`, 35×) to the byte form (`Newly-taken snapshot
-      # does not match reference.`, 36×), which is the branch in
-      # SnapshotTesting's `compare` that is only reachable once the pixel
-      # dimensions agree. So the scale half is fixed and a rasterisation half
-      # is now visible underneath it.
+      # The five suites after them are image snapshots that differ from their
+      # references on a runner, byte for byte, for a reason nobody has explained
+      # — and that is now a permanent, deliberate exclusion rather than a
+      # pending fix. The decision, the pixel measurements behind it, and the
+      # three levers it rejects (re-recording, a perceptual tolerance, pinning
+      # the runner's Xcode — all three measured) are in `AGENTS.md`'s "macOS
+      # app" bullet under Testing. No figure from it is repeated here; this
+      # comment carried two and both went stale.
       #
-      # It is NOT the Xcode difference this comment used to name. Measured by
-      # #1615's evidence job and its throwaway probe: all 15 Xcodes installed
-      # on `macos-latest` — 26.0 through 26.6, including 26.3.0 build 17C529,
-      # bit-for-bit the reference Mac's own — produce the same 36 failures,
-      # while that Mac on that build produces none. The toolchain is not the
-      # variable; the OS is (runner macOS 26.5.2 / 25F84, reference 26.5 /
-      # 25F71). Re-recording to make it green is the move #1034
-      # and #1044 both made and both got wrong, and #1509 measured a perceptual
-      # tolerance wide enough to absorb this drift as also wide enough to pass
-      # a missing architecture segment. The residual is #1615.
-      #
-      # What they render is not lost by being skipped: `swift-snapshot-evidence`
-      # below runs these same five and uploads the images, which is how #1615
-      # gets looked at rather than reasoned about.
+      # Two image-snapshot suites are deliberately NOT skipped: they pass on a
+      # runner, which is itself the evidence that the residual is
+      # content-dependent rather than a blanket host difference.
       #
       # This list cannot silently drift: `Tests/ImageSnapshotCIScopeTests.swift`
       # derives the set of image-snapshot suites from the test sources and
-      # cross-checks it against these very arguments — and, since the evidence
-      # job exists, against ITS arguments too, so the two invocations cannot
-      # come to disagree about which suites are the skipped ones.
+      # cross-checks it against these very arguments — and against the evidence
+      # job's arguments too, so the two invocations cannot come to disagree
+      # about which suites are the skipped ones. That file also counts what the
+      # skip costs and asserts it, so the population CI never grades cannot grow
+      # without a line in a diff.
       #
-      # This still gates 272 of 320 tests, against 0 before — measured, on this
-      # workflow's own run, not derived from the list above by hand (the first
-      # draft of this comment said "270 of 318" and was stale by exactly the
-      # two tests the tripwire itself adds). Two image-snapshot suites are
-      # deliberately NOT skipped — they pass on a runner, and their passing is
-      # itself evidence that the residual is content-dependent rather than a
-      # blanket toolchain difference.
+      # What they render is not lost by being skipped: `swift-snapshot-evidence`
+      # below runs these same five on demand and uploads the images (see the
+      # `gh workflow run` line in this file's header).
       - name: Test (bounded, streamed under a pty)
         shell: bash
         run: |
@@ -312,7 +324,16 @@ jobs:
   # this job is to run the assertions that fail, so sharing a conclusion with
   # it would either turn that check red for the expected outcome or force this
   # one to swallow its own failures.
+  #
+  # ON DEMAND ONLY since #1615 (see this file's header for the trade and for how
+  # to invoke it). The condition is on the JOB rather than the workflow because
+  # the workflow's other two jobs must keep running on every PR and push, and
+  # because `Tests/ImageSnapshotCIScopeTests.swift` cross-checks this job's
+  # `--filter` list against `swift-test`'s `--skip` list — splitting it into a
+  # dispatch-only workflow of its own would move one half of that check into a
+  # file the check does not read.
   swift-snapshot-evidence:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: macos-latest
     timeout-minutes: 20
     steps:

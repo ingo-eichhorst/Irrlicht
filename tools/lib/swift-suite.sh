@@ -63,7 +63,14 @@
 # The four numbers it has to sit under, all measured or documented elsewhere in
 # the repo rather than invented here:
 #
-#   suite, healthy         ~5s (318 tests, this machine), ~30s under heavy load
+#   suite, healthy         ~4s (436 tests, this machine, 2026-08-19), ~30s
+#                          under heavy load. Dated because it is a hand-typed
+#                          count of a growing suite: it read 318 for as long as
+#                          the suite held 435, and the same drift in
+#                          macos-swift.yml is what #1615 had to fix. The live
+#                          figure is printed by ImageSnapshotCIScopeTests'
+#                          census line on every run. What the bound below needs
+#                          from it is only its ORDER of magnitude.
 #   cold `swift build`     ~105s measured; the swift gate builds BEFORE the suite
 #   pre-push budget        540s (tools/preflight.sh --budget, #1570)
 #   agent command budget   600s (one foreground Bash tool call)

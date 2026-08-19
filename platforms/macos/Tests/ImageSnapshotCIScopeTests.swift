@@ -1,39 +1,21 @@
+import ObjectiveC
 import XCTest
 
-/// Keeps `macos-swift.yml`'s image-snapshot skip list honest (#1530).
+/// Keeps `macos-swift.yml`'s image-snapshot skip list honest (#1530), and
+/// measures what that list costs (#1615).
 ///
-/// ## Why there is a skip list at all
+/// ## The policy this file enforces is written down once, in AGENTS.md
 ///
-/// #1530's blocker 1 was two problems stacked, and the first was masking the
-/// second. The committed references are 2× and a runner's display is 1×, so
-/// every comparison failed on PIXEL COUNT — SnapshotTesting returns from that
-/// guard before comparing a byte. `PinnedScaleSnapshot` fixes that half, which
-/// is what made the second half visible for the first time: on the runner the
-/// failure message changed from
-///
-///     Newly-taken snapshot@(350.0, 48.0) does not match reference@(350.0, 48.0).   (35×, pixel counts)
-///
-/// to
-///
-///     Newly-taken snapshot does not match reference.                               (36×, bytes)
-///
-/// The remaining difference is rasterisation, and it is #1615. It is not the
-/// Xcode gap this comment used to name: measured by that issue's evidence job,
-/// all 15 Xcodes on `macos-latest` — including 26.3.0 build 17C529, the
-/// reference Mac's own build — produce the same 36 failures, and the residual
-/// is confined to the brand icons `SessionState.adapterIcon` rasterises from
-/// inline SVG through `NSImage(data:)`, at 1-5/255 on 0.3-0.9% of a row's
-/// pixels. It is deliberately NOT papered over here:
-/// re-recording a snapshot to make it pass is the exact move #1034 and #1044
-/// both made and both got wrong, and #1509 measured a perceptual tolerance
-/// wide enough to absorb this drift as also wide enough to pass a missing
-/// architecture segment.
-///
-/// So CI runs everything else — 272 of 320 tests, against 0 before — and these
-/// suites stay gated on a developer Mac by `tools/preflight.sh --only swift`,
-/// where they demonstrably pass. Both figures are read off runs rather than
-/// added up from the table below; the first draft added them up and was two
-/// low, having forgotten the tests in this very file.
+/// Image snapshots are graded on the reference host only, permanently and by
+/// choice. The decision, the measured evidence behind it, why re-recording and
+/// `perceptualPrecision` are not the fix, and what is still unknown are all in
+/// `AGENTS.md`'s "macOS app" bullet under Testing (#1615, step 3). Nothing here
+/// restates any of it, because a fact written down in N places drifts in N-1 of
+/// them — which is not a worry but this file's own history: the paragraph
+/// removed from here said CI gates "272 of 320 tests", a figure measured once
+/// on one run and 115 tests stale when #1615 was closed. It lives in
+/// `testTheUngatedPopulationIsExactlyTheSkippedSuites` below now, where it is
+/// re-derived on every run.
 ///
 /// ## Why this test exists
 ///
@@ -50,6 +32,14 @@ import XCTest
 /// deliberately opposite argument lists, so the parse below is per-invocation:
 /// a union over the file is satisfied by moving a suite from one command to the
 /// other, which is exactly the drift worth catching.
+///
+/// That job now runs only on `workflow_dispatch` (the policy it was collecting
+/// evidence for is decided), and the parse deliberately does not care: it reads
+/// the two commands' ARGUMENTS, not the triggers, so both invocations stay
+/// cross-checked whether or not one of them fires on a PR. A job whose skip
+/// list has silently drifted apart from this classification produces a
+/// misleading artifact on the day someone finally dispatches it, which is worse
+/// than an ordinary red — nothing else would ever look.
 final class ImageSnapshotCIScopeTests: XCTestCase {
 
     /// Every suite that takes an image snapshot, and whether `macos-swift.yml`
@@ -289,5 +279,135 @@ final class ImageSnapshotCIScopeTests: XCTestCase {
                       "an evidence-only suite now takes image snapshots: \(derived.intersection(Self.evidenceOnlySuites).sorted())")
         XCTAssertTrue(Set(Self.imageSnapshotSuites.keys).isDisjoint(with: Self.evidenceOnlySuites),
                       "a suite is classified both as an image-snapshot suite and as evidence-only")
+    }
+
+    // MARK: - What the decision costs, counted rather than typed (#1615)
+
+    /// How many tests the reference-host-only decision takes out of CI.
+    ///
+    /// Pinned because it is the one figure the decision record in `AGENTS.md`
+    /// states, and a number that documents behaviour without being produced by
+    /// it drifts silently and is then quoted with full confidence — this
+    /// repo's rule for the replay census, applied to the same failure one
+    /// platform over. It moves only when someone adds or removes a test in a
+    /// suite CI does not run, which is precisely the event the record needs
+    /// surfaced: a test written into an ungated suite is graded on one machine
+    /// in the world, forever, and that should cost a deliberate line in a diff.
+    ///
+    /// The TOTAL is deliberately not pinned. It moves with every test added
+    /// anywhere in the target — 320 when the workflow header typed it, 435 at
+    /// #1615 — so pinning it would make an unrelated PR edit a literal about
+    /// image snapshots, and the ratchet would be reset rather than read. It is
+    /// printed instead, on every run of this test and by every run of the
+    /// suite itself (`Executed N tests`).
+    private static let committedUngatedTestCount = 48
+
+    /// The module the gated test target's classes live in, read off this class
+    /// rather than typed: a literal here that stopped naming the real target
+    /// would select no classes at all, and "found nothing" is the failure this
+    /// whole file exists to make impossible.
+    private static var gatedTargetModule: String {
+        String(NSStringFromClass(ImageSnapshotCIScopeTests.self).split(separator: ".").first ?? "")
+    }
+
+    /// Every `XCTestCase` subclass in this target, by simple name.
+    ///
+    /// Deliberately scoped to one module, which is what keeps
+    /// `LauncherTestHarness` out — its classes drive real applications through
+    /// `NSRunningApplication`, and while merely counting a class's test methods
+    /// runs none of them, the safest way not to run that target is not to touch
+    /// it. That also makes the total the RIGHT one: `swift test` skips the
+    /// harness at every invocation this repo documents, so the number below is
+    /// the number a run reports.
+    private static func testCaseClasses() -> [String: AnyClass] {
+        let module = gatedTargetModule
+        var found: [String: AnyClass] = [:]
+        let count = objc_getClassList(nil, 0)
+        guard count > 0 else { return found }
+        let buffer = UnsafeMutablePointer<AnyClass>.allocate(capacity: Int(count))
+        defer { buffer.deallocate() }
+        objc_getClassList(AutoreleasingUnsafeMutablePointer<AnyClass>(buffer), count)
+
+        for index in 0..<Int(count) {
+            let candidate: AnyClass = buffer[index]
+            let mangled = NSStringFromClass(candidate).split(separator: ".", maxSplits: 1)
+            guard mangled.count == 2, mangled[0] == module, descendsFromXCTestCase(candidate) else { continue }
+            found[String(mangled[1])] = candidate
+        }
+        return found
+    }
+
+    /// Walks the superclass chain rather than asking `is XCTestCase.Type`,
+    /// because a subclass of a subclass is still a suite XCTest runs and the
+    /// count has to match what a run reports.
+    private static func descendsFromXCTestCase(_ candidate: AnyClass) -> Bool {
+        var parent: AnyClass? = class_getSuperclass(candidate)
+        while let step = parent {
+            if step == XCTestCase.self { return true }
+            parent = class_getSuperclass(step)
+        }
+        return false
+    }
+
+    /// How many tests XCTest would run for one class — asked of XCTest itself,
+    /// so it agrees with the run's own `Executed N tests` by construction
+    /// rather than by a source scan agreeing with a test runner by luck.
+    private static func testCount(of cls: AnyClass) -> Int {
+        XCTestSuite(forTestCaseClass: cls).tests.count
+    }
+
+    /// The census: how much of the suite CI grades, how much it does not, and
+    /// that the ungated part still exists.
+    ///
+    /// Two failures it is built to report and one it is not. It reports the
+    /// ungated population CHANGING, which is the figure `AGENTS.md` quotes.
+    /// And it reports a skipped suite going EMPTY — a suite that runs on one
+    /// machine and contains nothing runs nowhere, and reads exactly like a
+    /// suite that passes everywhere, which is the shape this repo keeps
+    /// removing. It does NOT report those tests failing on the reference host;
+    /// only running them does that, which is why the decision record names
+    /// `tools/preflight.sh --only swift` and the pre-push hook as the whole of
+    /// the gate.
+    func testTheUngatedPopulationIsExactlyTheSkippedSuites() throws {
+        let classes = Self.testCaseClasses()
+        XCTAssertGreaterThan(classes.count, 20,
+                             "found \(classes.count) test classes in module \(Self.gatedTargetModule) — the runtime scan cannot have worked, and an empty scan would report a comfortable 0 ungated tests")
+
+        var counts: [String: Int] = [:]
+        for name in Self.imageSnapshotSuites.keys.sorted() {
+            guard let cls = classes[name] else {
+                XCTFail("\(name) is classified for CI but is not a test class in this bundle — the classification names a suite that no longer exists")
+                continue
+            }
+            counts[name] = Self.testCount(of: cls)
+        }
+
+        let skipped = Self.imageSnapshotSuites.filter { $0.value }.keys.sorted()
+        for name in skipped {
+            XCTAssertGreaterThan(counts[name] ?? 0, 0,
+                                 "\(name) is skipped in CI and now holds no tests at all — it runs on no machine anywhere, which is indistinguishable from passing on all of them")
+        }
+
+        let ungated = skipped.reduce(0) { $0 + (counts[$1] ?? 0) }
+        let total = classes.values.reduce(0) { $0 + Self.testCount(of: $1) }
+        XCTAssertGreaterThan(total, ungated,
+                             "counted \(total) tests in total and \(ungated) ungated — the total cannot be the smaller number")
+
+        // Printed on every run, because the figures a reader wants are the two
+        // this test refuses to pin, and a passing test that prints nothing is
+        // an unread measurement.
+        print("ci-scope census: module=\(Self.gatedTargetModule) total=\(total) "
+              + "gated=\(total - ungated) ungated=\(ungated) skippedSuites=\(skipped.count)")
+        for name in Self.imageSnapshotSuites.keys.sorted() {
+            print("ci-scope suite \(name) tests=\(counts[name] ?? -1) "
+                  + "skippedInCI=\(Self.imageSnapshotSuites[name] == true)")
+        }
+
+        XCTAssertEqual(ungated, Self.committedUngatedTestCount, """
+            the number of tests CI never grades changed: \(ungated), committed \(Self.committedUngatedTestCount).
+            Those tests run on the reference Mac and nowhere else (AGENTS.md, "macOS app"), so this is a
+            deliberate line in a diff rather than a stale figure. If the change is intended, set
+            `committedUngatedTestCount` to \(ungated) and say in the PR which suite moved.
+            """)
     }
 }
