@@ -328,48 +328,28 @@ final class InMemoryDefaultsTests: XCTestCase {
         let mustReport: [String]
     }
 
-    func testAttributionReportsEveryLeakShapeAndStaysSilentOnEveryChurnShape() throws {
-        let runToken = UUID().uuidString
-        let domains = PreferencesDirectoryWitness.processApplicationDomains
-        let processDomain = try XCTUnwrap(
-            domains.sorted().first,
-            "this process's application domain could not be derived, so the clause that catches a "
-            + "write reaching `super` is graded by nothing below"
-        )
-        // A UUID this run minted for NOTHING — it names no domain, no key, and
-        // is handed to no subject. It stands in for #1661's leaked filenames as
-        // produced by somebody else's process.
-        let foreignUUID = UUID().uuidString
-        XCTAssertNotEqual(foreignUUID, runToken)
+    /// The measured #1714 failure, and the background churn
+    /// `tools/lib/swift-suite.sh` measured over an 870s window of ordinary
+    /// interactive use. Committed as fixtures rather than described, so the
+    /// evidence outlives the PR that produced it.
+    private static let churnFixtures = [
+        "com.apple.siri.ODDI.MetricsWorker.plist",
+        "com.apple.bluetooth.plist",
+        "com.apple.DuetExpertCenter.MagicalMoments.plist",
+        "com.apple.voicetrigger.plist",
+        "com.googlecode.iterm2.plist",
+    ]
 
-        // The measured #1714 failure, and the background churn
-        // `tools/lib/swift-suite.sh` measured over an 870s window of ordinary
-        // interactive use. Committed as fixtures rather than described.
-        let churn = [
-            "com.apple.siri.ODDI.MetricsWorker.plist",
-            "com.apple.bluetooth.plist",
-            "com.apple.DuetExpertCenter.MagicalMoments.plist",
-            "com.apple.voicetrigger.plist",
-            "com.googlecode.iterm2.plist",
-        ]
-
-        // A premise, not decoration: if a derived process domain ever appeared
-        // inside one of those names the silent rows would go red for a reason
-        // unrelated to what they grade — and that condition is exactly "the
-        // derivation became too generic to be an attribution", which is worth
-        // failing on in its own right.
-        for name in churn {
-            for domain in domains {
-                XCTAssertFalse(
-                    name.contains(domain),
-                    "the derived process domain '\(domain)' occurs inside the churn fixture "
-                    + "'\(name)' — that derivation cannot attribute anything"
-                )
-            }
-        }
-
+    /// One row per shape, both verdicts carried. Lifted into its own table for
+    /// the reason `guardedConstructions()` is one in
+    /// `core/application/services/construction_test.go`: a corpus grows a row
+    /// at a time, and a row is easier to add to a table than to a method.
+    private func attributionCorpus(runToken: String,
+                                   processDomain: String,
+                                   foreignUUID: String) -> [AttributionCase] {
         let leak1661 = "io.irrlicht.tests.NotificationMasterGate.\(runToken).plist"
-        let corpus: [AttributionCase] = [
+        let probeDomain = "io.irrlicht.tests.leakProbe.\(runToken).round0.plist"
+        return [
             .init(what: "#1661's own artifact — the empty plist cfprefsd left behind for a UUID "
                       + "suite the test minted",
                   appeared: [leak1661],
@@ -378,13 +358,13 @@ final class InMemoryDefaultsTests: XCTestCase {
                   appeared: ["\(runToken).plist"],
                   mustReport: ["\(runToken).plist"]),
             .init(what: "the domain this test itself names when it drives removePersistentDomain",
-                  appeared: ["io.irrlicht.tests.leakProbe.\(runToken).round0.plist"],
-                  mustReport: ["io.irrlicht.tests.leakProbe.\(runToken).round0.plist"]),
+                  appeared: [probeDomain],
+                  mustReport: [probeDomain]),
             .init(what: "a spelling that merely CONTAINS the minted identifier — a suffixed or "
                       + "temporary form is not a way past the guard, which is why the match is "
                       + "containment and not equality",
-                  appeared: ["io.irrlicht.tests.leakProbe.\(runToken).round0.plist.tmp"],
-                  mustReport: ["io.irrlicht.tests.leakProbe.\(runToken).round0.plist.tmp"]),
+                  appeared: ["\(probeDomain).tmp"],
+                  mustReport: ["\(probeDomain).tmp"]),
             .init(what: "a write that reached `super` — this process's own application domain, "
                       + "which is what init(suiteName: nil) binds",
                   appeared: ["\(processDomain).plist"],
@@ -399,7 +379,7 @@ final class InMemoryDefaultsTests: XCTestCase {
                   appeared: ["com.apple.siri.ODDI.MetricsWorker.plist"],
                   mustReport: []),
             .init(what: "the background churn swift-suite.sh measured over an 870s window",
-                  appeared: churn,
+                  appeared: Self.churnFixtures,
                   mustReport: []),
             .init(what: "THE DECLARED LIMIT: a <uuid>.plist — #1661's exact shape — bearing a UUID "
                       + "this run did not mint is NOT reported. That is what attribution gives up, "
@@ -411,8 +391,40 @@ final class InMemoryDefaultsTests: XCTestCase {
                   appeared: [],
                   mustReport: []),
         ]
+    }
 
-        for probe in corpus {
+    func testAttributionReportsEveryLeakShapeAndStaysSilentOnEveryChurnShape() throws {
+        let runToken = UUID().uuidString
+        let domains = PreferencesDirectoryWitness.processApplicationDomains
+        let processDomain = try XCTUnwrap(
+            domains.sorted().first,
+            "this process's application domain could not be derived, so the clause that catches a "
+            + "write reaching `super` is graded by nothing below"
+        )
+        // A UUID this run minted for NOTHING — it names no domain, no key, and
+        // is handed to no subject. It stands in for #1661's leaked filenames as
+        // produced by somebody else's process.
+        let foreignUUID = UUID().uuidString
+        XCTAssertNotEqual(foreignUUID, runToken)
+
+        // A premise, not decoration: if a derived process domain ever appeared
+        // inside one of the churn fixtures the silent rows would go red for a
+        // reason unrelated to what they grade — and that condition is exactly
+        // "the derivation became too generic to be an attribution", which is
+        // worth failing on in its own right.
+        for name in Self.churnFixtures {
+            for domain in domains {
+                XCTAssertFalse(
+                    name.contains(domain),
+                    "the derived process domain '\(domain)' occurs inside the churn fixture "
+                    + "'\(name)' — that derivation cannot attribute anything"
+                )
+            }
+        }
+
+        for probe in attributionCorpus(runToken: runToken,
+                                       processDomain: processDomain,
+                                       foreignUUID: foreignUUID) {
             let attribution = try PreferencesDirectoryWitness.attribute(probe.appeared, toRun: runToken)
             XCTAssertEqual(attribution.names, probe.mustReport.sorted(), probe.what)
             XCTAssertEqual(
