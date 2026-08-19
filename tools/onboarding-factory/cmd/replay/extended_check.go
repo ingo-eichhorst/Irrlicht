@@ -3,6 +3,7 @@ package main
 import (
 	"sort"
 
+	"irrlicht/core/application/services"
 	"irrlicht/core/domain/lifecycle"
 )
 
@@ -82,6 +83,51 @@ func (ec *extendedCheck) Fabricates() bool {
 	return ec.RecordedCount == 0 && ec.ReplayedCount > 0
 }
 
+// syntheticReasons is the set of reason strings that mark a transition as
+// SYNTHESIZED — emitted to recover an episode the observer would otherwise have
+// missed entirely (a collapsed waiting blip, a collapsed turn boundary, a turn
+// that had already finished before discovery) rather than decided by the
+// classifier ladder against what the transcript said.
+//
+// It names the exported constants rather than copying their text, so a rename
+// is a compile error here. Completeness is the part a reference cannot give:
+// a SIXTH synthesizer added to state_classifier.go would leave this set short
+// and CrossMechanism silently under-reporting, which is the failure mode where
+// "found nothing" and "could not look" produce the same output. That is why
+// TestSyntheticReasonsNamesEveryConstant scans that file's own source instead
+// of trusting this list — the same move TestAllHookEvents_CoversEveryConstant
+// makes for hook events.
+var syntheticReasons = map[string]bool{
+	services.SyntheticWaitingReason:          true,
+	services.SyntheticTurnSettleReason:       true,
+	services.SyntheticQueuedTurnStartReason:  true,
+	services.SyntheticCatchUpTurnStartReason: true,
+	services.SyntheticCatchUpTurnDoneReason:  true,
+}
+
+// CrossMechanism reports the one reason-level disagreement that is not a
+// mechanism NAME and cannot be produced by renaming a string: exactly one side
+// of this pair is a SYNTHESIZED transition and the other is a classifier
+// verdict (or the two sides are different synthesizers).
+//
+// The distinction matters because it is the only reason-level difference that
+// survives compareOrdered's own argument. A synthesized transition recovers an
+// episode that has no classifier verdict at all, so a pair that puts one
+// against the other is describing two different things however well their state
+// edges line up — where "transcript activity (ready → working)" against "force
+// ready→working on first activity" is one transition under two names, measured
+// (see compareOrdered).
+//
+// It is a REPORT, not a demotion. The pair keeps its timing delta, because
+// removing it would silently shrink #1480's population; what the catalog gate
+// asserts is that every such pair is already visible to an existing mechanism.
+func (d timeDelta) CrossMechanism() bool {
+	if d.RecordedReason == d.ReplayedReason {
+		return false
+	}
+	return syntheticReasons[d.RecordedReason] || syntheticReasons[d.ReplayedReason]
+}
+
 // dropInitTransitions filters out the synthetic initial-state row (empty
 // PrevState) that replay always emits first but the sidecar never records.
 func dropInitTransitions(replayed []transition) []transition {
@@ -113,6 +159,27 @@ func dropInitTransitions(replayed []transition) []transition {
 // are not the same transition there — that is what state_differs means — so
 // subtracting their timestamps yields a number with no meaning, and counting it
 // would report one sequence divergence twice.
+//
+// The REASON strings are carried out of this traversal but are deliberately NOT
+// part of the match predicate, and #1707 is where that was measured rather than
+// assumed. The tempting rule — "the two sides give different reasons, so they
+// are not the same transition" — is false, because a reason names the MECHANISM
+// that produced a transition and both mechanisms exist on both sides. The
+// catalog's dominant shape is a session's FIRST ready→working, which the daemon
+// reaches through the classifier's transcript_activity default while the replay
+// reaches it through the force bounce; the same recording then agrees on
+// "force" for every LATER ready→working. As of #1707: 49 of 836 kind-matched
+// pairs differ on reason, 45 of them that one shape, and the differing
+// population sits CLOSER in time than the agreeing one (77.6% within 1ms
+// against 19.7%) — i.e. more provably the same transition, not less. Demoting
+// them would inject 45 false divergences and delete four real drift
+// measurements, three of them pinned by name in knownFirstTransitionDrift.
+// Those figures are quoted as of that measurement, not as current counts, the
+// same way driftThreshold's histogram is.
+//
+// What IS worth reporting is the narrow shape a rename cannot produce, and it
+// has its own predicate rather than a second reading of these two strings — see
+// CrossMechanism.
 func compareOrdered(recorded []lifecycle.Event, replayedReal []transition) (matched []timeDelta, mismatches []transitionMismatch) {
 	n := min(len(recorded), len(replayedReal))
 	matched = make([]timeDelta, 0, n)
@@ -120,9 +187,11 @@ func compareOrdered(recorded []lifecycle.Event, replayedReal []transition) (matc
 		r, p := recorded[i], replayedReal[i]
 		if r.PrevState == p.PrevState && r.NewState == p.NewState {
 			matched = append(matched, timeDelta{
-				Index: i,
-				Kind:  r.PrevState + "→" + r.NewState,
-				Delta: p.VirtualTime.Sub(r.Timestamp),
+				Index:          i,
+				Kind:           r.PrevState + "→" + r.NewState,
+				Delta:          p.VirtualTime.Sub(r.Timestamp),
+				RecordedReason: r.Reason,
+				ReplayedReason: p.Reason,
 			})
 			continue
 		}

@@ -1,0 +1,39 @@
+{
+  "description": "the vacuity guard: both sides agree on the reason, so a predicate that reported everything would be indistinguishable from one that reports correctly",
+  "recorded": [
+    {
+      "seq": 1,
+      "ts": "2026-06-11T23:03:14.327000+02:00",
+      "kind": "state_transition",
+      "session_id": "s",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity"
+    },
+    {
+      "seq": 2,
+      "ts": "2026-06-11T23:03:32.250000+02:00",
+      "kind": "state_transition",
+      "session_id": "s",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready"
+    }
+  ],
+  "replayed": [
+    {
+      "virtual_time": "2026-06-11T23:03:14.327000+02:00",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity"
+    },
+    {
+      "virtual_time": "2026-06-11T23:03:32.249000+02:00",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready"
+    }
+  ],
+  "want_cross_mechanism": [],
+  "want_unreported": false
+}

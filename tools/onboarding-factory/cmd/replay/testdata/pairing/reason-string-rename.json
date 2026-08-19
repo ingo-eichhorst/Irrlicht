@@ -1,0 +1,24 @@
+{
+  "description": "a reason string edited after the recording was frozen, so the sidecar keeps the old wording forever. Benign by construction and expected to grow: must stay silent",
+  "recorded": [
+    {
+      "seq": 1,
+      "ts": "2026-04-11T11:52:09.100000+02:00",
+      "kind": "state_transition",
+      "session_id": "s",
+      "prev_state": "working",
+      "new_state": "waiting",
+      "reason": "turn ended with question → waiting"
+    }
+  ],
+  "replayed": [
+    {
+      "virtual_time": "2026-04-11T11:52:09.100000+02:00",
+      "prev_state": "working",
+      "new_state": "waiting",
+      "reason": "turn ended with question or cue → waiting"
+    }
+  ],
+  "want_cross_mechanism": [],
+  "want_unreported": false
+}

@@ -1,0 +1,26 @@
+{
+  "description": "a synthesized catch-up paired against a classifier verdict, in a sequence with no mismatch anywhere — the shape the catalog gate must flag, because nothing else in this package would report it",
+  "recorded": [
+    {
+      "seq": 1,
+      "ts": "2026-08-05T19:02:28.760000+02:00",
+      "kind": "state_transition",
+      "session_id": "s",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "turn already complete at first discovery → synthetic catch-up"
+    }
+  ],
+  "replayed": [
+    {
+      "virtual_time": "2026-08-05T19:02:10.139000+02:00",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready"
+    }
+  ],
+  "want_cross_mechanism": [
+    0
+  ],
+  "want_unreported": true
+}
