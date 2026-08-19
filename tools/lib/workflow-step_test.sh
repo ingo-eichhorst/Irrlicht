@@ -239,7 +239,7 @@ fi
 echo ""
 echo "== the derivation follows a step that gains or loses \`shell:\` =="
 REAL=.github/workflows/ars.yml
-REALSTEP='Commit badge update'
+REALSTEP='Run ARS scan'
 if [[ ! -f "$REAL" ]]; then
   fail "$REAL is readable" "the workflow file" "not found — the mutation could not run"
 else
@@ -321,7 +321,7 @@ real_row() { # <workflow> <step> <expected>
   fi
   return 0
 }
-real_row .github/workflows/ars.yml                        'Commit badge update'                         "$DEFAULT"
+real_row .github/workflows/ars.yml                        'Run ARS scan'                                "$DEFAULT"
 real_row .github/workflows/test.yml                       'Test the shared shell libs'                  "$DEFAULT"
 real_row .github/workflows/replaydata-deletion-guard.yml  'Detect deletions of load-bearing replaydata' "$DEFAULT"
 real_row .github/workflows/macos-swift.yml                'Test (bounded, streamed under a pty)'        "$BASH"

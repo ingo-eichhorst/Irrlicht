@@ -9,7 +9,7 @@
 [![Version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fingo-eichhorst%2FIrrlicht%2Fmain%2Fversion.json&query=%24.version&label=version&color=%2334C759)](version.json)
 
 [![CodeScene](https://img.shields.io/endpoint?url=https%3A%2F%2Fgist.githubusercontent.com%2Fingo-eichhorst%2F9f14c8e5f25c1ccf5d6500c1685fd9fb%2Fraw%2Fcodescene.json)](https://github.com/ingo-eichhorst/Irrlicht/actions/workflows/codescene-badge.yml)
-[![ARS](https://img.shields.io/badge/ARS-Agent--Ready%208.1%2F10-green)](https://github.com/ingo-eichhorst/agent-readyness)
+[![ARS](https://img.shields.io/endpoint?url=https%3A%2F%2Fgist.githubusercontent.com%2Fingo-eichhorst%2F9f14c8e5f25c1ccf5d6500c1685fd9fb%2Fraw%2Fars.json)](https://github.com/ingo-eichhorst/agent-readyness)
 [![Security Rating](https://sonarcloud.io/api/project_badges/measure?project=ingo-eichhorst_Irrlicht&metric=security_rating)](https://sonarcloud.io/summary/overall?id=ingo-eichhorst_Irrlicht)
 [![Reliability Rating](https://sonarcloud.io/api/project_badges/measure?project=ingo-eichhorst_Irrlicht&metric=reliability_rating)](https://sonarcloud.io/summary/overall?id=ingo-eichhorst_Irrlicht)
 [![Maintainability Rating](https://sonarcloud.io/api/project_badges/measure?project=ingo-eichhorst_Irrlicht&metric=sqale_rating)](https://sonarcloud.io/summary/overall?id=ingo-eichhorst_Irrlicht)

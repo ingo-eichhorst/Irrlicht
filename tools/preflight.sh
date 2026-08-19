@@ -486,10 +486,14 @@ if want tools; then
   # goes through the shared runner rather than growing its own loop back, and a
   # commit editing only that workflow is again exactly the one that breaks it.
   # .github/workflows/ars.yml joins them for the fourth time (#1641):
-  # ars-badge-push_test.sh EXTRACTS that workflow's "Commit badge update" step
-  # and executes it, so the assertion that an exhausted push-retry fails the
-  # step lives entirely in this gate — and a commit editing only ars.yml is
-  # once again exactly the one that breaks it.
+  # ars-badge-push_test.sh EXTRACTS that workflow's `run:` steps and executes
+  # them, so the assertion that each of them refuses distinguishably — rather
+  # than going green with a stale badge — lives entirely in this gate, and a
+  # commit editing only ars.yml is once again exactly the one that breaks it.
+  # #1654 replaced the step that first earned this entry ("Commit badge
+  # update", whose push to main the Protect Main ruleset refused on every run)
+  # with a gist PATCH; the entry needed no widening, only the steps behind it
+  # changed.
   # .github/workflows/replaydata-deletion-guard.yml joins them for the fifth
   # time (#1645): replaydata-deletion-guard_test.sh EXTRACTS that workflow's
   # "Detect deletions of load-bearing replaydata" step and executes it, so the

@@ -223,12 +223,37 @@ Before marking a ticket done, run the full suite — every layer must pass:
   whether the regression is worth addressing before merging. Deterministic
   and workflow-agnostic: it fires on any push, not tied to a specific agent
   skill.
+  **What IS required is stated here positively**, because "not required by
+  branch protection" appears twice in this section and nothing said what is —
+  the sentence #1432 filed as the one creating the false impression. Measured
+  with `gh api repos/ingo-eichhorst/Irrlicht/rulesets/15993081`: the "Protect
+  Main" ruleset is active on `main` with **zero** bypass actors and carries
+  `pull_request`, `required_linear_history`, `deletion`, `non_fast_forward`
+  and `required_status_checks`, whose required contexts are exactly **`go-test`
+  and `build-test`**. Classic branch protection on `main` is empty
+  (`.required_status_checks.contexts` is `[]`), so the ruleset is the whole of
+  it. When #1432 was filed (2026-08-09) that ruleset carried no
+  `required_status_checks` rule at all, so this is a behaviour CHANGE, not a
+  restatement. Its consequence is #1432's own scope item 3: a **CONFLICTING**
+  PR dispatches no `pull_request` workflows, so those two checks come back
+  ABSENT rather than red — and an absent required check reads as "waiting for
+  status to be reported", i.e. indistinguishable from still-queued. That is
+  correct behaviour with a confusing symptom; rebase the PR and the checks
+  appear.
+  The ARS score is also what the README's ARS badge shows, and since #1654 it
+  is published the way the CodeScene one is: `.github/workflows/ars.yml`
+  PATCHes a shields.io endpoint payload into the badges gist on every push to
+  `main` and writes nothing to the repository. It used to commit a rewritten
+  README.md and push it to `main` — which the `pull_request` rule above refused
+  on every run from 2026-04-26 onward, silently until #1647.
 - Code health: CodeScene posts a "CodeScene Code Health Review" check on every
   PR automatically (via the CodeScene GitHub App, configured on codescene.io
   project 82148 — not a workflow in this repo). Like the ARS score, it's
   advisory, not a merge gate: neither branch protection nor the "Protect
-  Main" ruleset requires it to pass. A red result is a prompt to look
-  closer, not something to chase to green before merging or releasing. The
+  Main" ruleset requires it to pass — that ruleset's required contexts are
+  `go-test` and `build-test` and nothing else (bullet above). A red result is
+  a prompt to look closer, not something to chase to green before merging or
+  releasing. The
   README's CodeScene badge shows the live score, auto-refreshed on every
   push to `main` by `.github/workflows/codescene-badge.yml`. For concrete,
   file:line-level findings (rule, message, fix effort) rather than a
@@ -1151,112 +1176,104 @@ Before marking a ticket done, run the full suite — every layer must pass:
   actually gets — DERIVED from the workflow, today `bash -e` (see "Which bash a
   workflow step gets" below; this bullet claimed
   `bash --noprofile --norc -e -o pipefail` until #1650). Behavioural rather
-  than a text scan, because a
-  scan pins one spelling of a guard where running the block pins the property.
-  Before #1641 the push-retry loop's last statement was `sleep`, which
-  succeeds, so five failed attempts ended the loop — and the step, the job and
-  this workflow's check — at status 0 with the badge unpushed and nothing
-  saying so; the observable symptom is a README badge that quietly stops
-  tracking `main` behind a green history. `-e` does not save it: errexit is
-  suppressed for every command in an `&&` list except the one after the final
-  `&&`, which is exactly what MAKES the loop a retry. Three things are
-  load-bearing. The pre-fix loop is emitted verbatim there and re-measured on
-  every run, so "five failures exit 0" is a fact rather than a sentence in a
-  merged PR body — and it is the vacuity guard, since a bash that stopped
-  behaving that way would leave every other arm passing for the wrong reason.
-  The **third-attempt** arm is what keeps the fix honest: a "fix" dropping the
-  retry, or one that stops suppressing errexit inside the `&&` list, satisfies
-  the exhausted-case arm just as well and simply gives up after one attempt.
-  And the git stub answers an **unmodelled** subcommand with a loud, distinctive
-  99 naming the call, never a quiet 0 — a stub that said "fine" to a call it
-  does not model would make every arm pass for a reason unrelated to its
-  obligation (seen red: adding one `git status` to the step reports
-  `STUB: unmodelled call`, not a pass).
-  **No linter was built, and the measurement is the reason.** Over the 19
-  multi-line `run:` blocks in `.github/workflows/`, a rule keyed on "the
-  block's last statement is `echo`/`sleep`/`cat`/`printf`" flags 6 and **misses
-  this very defect** — the loop is nested inside an `if`/`else`, so the block's
-  last line is `fi` — while 4 of the 6 it does flag are correct code; a rule
-  keyed on `|| true` flags 2 and also misses it; "the block contains a loop"
-  flags 3, of which 1 is the defect. No candidate both catches the subject and
-  stays quiet on the correct blocks, so a green would claim coverage it does
-  not have — the same conclusion #1629 reached by the same measurement about a
-  `$?`-keyed rule, and #1639 about the sibling family. `preflight.sh`'s `tools`
-  trigger gains `ars.yml`, its fourth widening for this reason (#1591, #1629,
-  #1639), because that assertion lives entirely inside that gate.
-  **The two steps ABOVE it produced the same symptom for the same reason**
-  (#1644): `ars scan … || true` followed by a `cat` that succeeds, then an
+  than a text scan, because a scan pins one spelling of a guard where running
+  the block pins the property. The FILENAME now describes nothing in the file
+  and is kept deliberately: it was written for a "Commit badge update" step
+  (#1641), and #1654 deleted that step, so there is no push left anywhere in
+  this workflow. Its header is the description instead.
+  **The job could never do what it was built to do, and was green about it for
+  four months** (#1654). It pushed the badge commit straight to `main`, which
+  the "Protect Main" ruleset refuses — `GH013: Repository rule violations
+  found` — and a rule violation is not a transient condition, so none of the
+  five retries could ever clear it. Every run since 2026-04-26 computed a
+  score, rewrote README.md on the runner and threw it away: README read
+  `8.1/10` while the scan returned `7.9/10`. Before #1647 made the failure
+  loud, it did that behind a green check. The fix is codescene-badge.yml's
+  shape — the extract step builds a shields.io ENDPOINT payload, a new "Update
+  Gist with ARS score" step PATCHes it into the same badges gist coverage.yml
+  and codescene-badge.yml already write to (no new secret: `GIST_SECRET` and
+  `COVERAGE_GIST_ID` were already configured), and README's badge became an
+  `img.shields.io/endpoint?url=…` pointing at `ars.json` in that gist. Nothing
+  is committed, so nothing can be refused, and the job dropped from
+  `contents: write` to `contents: read` — a real reduction, since that grant
+  existed only for the push and this job runs a third-party CLI (pinned by
+  commit, but still) next to the workflow token.
+  **What that deleted is a real loss and is named rather than glossed**:
+  #1641's four obligations (the pre-fix retry loop replayed verbatim, five
+  failed pushes exiting 0; the exhausted case failing loudly; the
+  third-attempt arm proving the retry is still a retry; the clean paths) and
+  #1655's six (the same loop against REAL git in a throwaway repo — the
+  mid-rebase wreckage, the ordinary rejected push, the committed rejected
+  `git rebase --abort` spelling, the unabortable-rebase refusal). "A rewritten
+  guard replays its predecessor's cases" is about a guard being REWRITTEN;
+  here the mechanism was REMOVED, and contorting those obligations into
+  passing against a step that does not exist is the vacuous green this whole
+  family is about. The retry-loop defect they fixed is now covered nowhere,
+  because no retry loop remains in this repo's workflows — if one is written
+  again, they are in git history at `ae85182f`. `workflow-step_test.sh` moved
+  its real-workflow row and its `shell:` mutation target from
+  'Commit badge update' to 'Run ARS scan' for the same reason.
+  **The two steps that PRODUCE the badge are #1644's and they survived the
+  deletion**: `ars scan … || true` followed by a `cat` that succeeds, then an
   extract step whose `if [ -n "$ARS_BADGE" ]` skipped in silence — three green
-  steps, `No badge changes to commit`, and a frozen badge. The `|| true` was
-  **not** protecting a legitimate low-score exit, and that had to be checked
-  rather than assumed because the issue proposed leaving it in place: pinned
-  v0.0.9 returns `ExitError{Code: 2}` only under `if p.threshold > 0`, this
-  invocation passes no `--threshold`, and there is no `.arsrc.yml` to supply
-  one — measured, the pinned binary scoring `./core` at 7.9/10 exits 0. So the
-  scan's status is now read (`|| scan_status=$?`, never a bare `; rc=$?`, the
-  line #1629's implicit `-e` never reaches) and three outcomes are
-  distinguished where there were two: the scan FAILED / it succeeded with no
-  badge line in its output / the badge was extracted. Three things about the
-  shape are worth carrying. Each refusal asserts the other two's WORDING is
-  ABSENT, because a shared non-zero is satisfied by three refusals that all
-  fire together — measured: deleting the missing-badge refusal leaves the step
-  exiting 1 via the URL refusal, so every status arm stays green and only the
-  wording arms go red. The last guard is the same defect one level down —
-  `sed` exits 0 having matched nothing, so the file is re-read for the URL just
-  written, which is also what tells the legitimate no-op of an unchanged score
-  (the URL is present, because it was written back identically) from a rewrite
-  that landed nowhere; deleting THAT refusal is not merely silent, since the
-  empty `$ARS_URL` then deletes README's badge URL outright (measured). And a
-  failed scan **fails the job**, because this workflow gates nothing: it runs
-  post-merge on `main`, no PR and no merge depends on it, and its own "Install
-  ARS CLI" step already fails the job for the likeliest transient cause (a
-  `go install` outage) — a scan that could not run was the one failure here
-  that was silent.
-  **#1655 is the same loop again, and the defect there is STATE rather than
-  status** — which is why it needed a second kind of fixture. A `git pull
-  --rebase` that fails INSIDE the rebase leaves the tree mid-rebase, and every
-  later `git pull` then refuses outright (`Pulling is not possible because you
-  have unmerged files`), so four of the five attempts could not run while the
-  closing message attributed all five to the push. The stub above cannot
-  produce that and cannot undo it, so obligations 12-17 run the extracted body
-  against **real git in a throwaway repo** whose "origin" is a local path —
-  one fixture that conflicts add/add, one whose `pre-receive` declines the
-  first N pushes (the ordinary race, which leaves no rebase). The property
-  asserted is not a message git may reword: it is how many attempts reached
-  `git pull` with a clean tree, read off git's own rebase state.
-  Three things are load-bearing. The step **asks** whether a rebase is in
-  progress (`git rev-parse --git-path rebase-merge`/`rebase-apply`) before
-  aborting, because "no rebase in progress" is the NORMAL case and
-  `git rebase --abort` exits 128 there — so a spelling that merely reads that
-  status turns every healthy retry red, and the `|| true` spelling discards the
-  one status that matters (already refused by name by this file's existing
-  arm). That rejected spelling is **committed** beside the shipped one and
-  re-measured: it is indistinguishable from the fix on the CONFLICTING fixture
-  and only the ordinary-rejection fixture tells them apart, which is why that
-  fixture exists. And the closing message states a **derived** count
-  (`$attempts of 5`) rather than a literal 5 — the issue's own point, that
-  "all 5 failed" is only true if all 5 were attempted. Today that number is
-  always 5 there; deriving it is what stops the sentence outrunning the facts
-  if the loop ever grows another way to skip one. The one branch the fix ADDS —
-  an abort that itself fails, where the tree is still dirty and stopping is the
-  only honest move — has no "before the fix" to be red against, so it carries
-  an injected mutation (the fixture makes `git rebase --abort` answer non-zero)
-  rather than a reproduction: a rebase that genuinely cannot be aborted has no
-  portable fixture. Reachability is carried from the issue **unchanged**: the
-  mechanism is measured (run 31963062408, a `workflow_dispatch` whose ref
-  differed from main), that a push-to-main run reaches it is ASSUMED. The
-  `actions/checkout@v7` here still carries no `fetch-depth:` — the depth-1
-  clone is why that run saw add/add — and #1655 deliberately did not change it.
-  Audited while there, per "dismissals carry evidence": the only statement left
-  in this job whose status is read more narrowly than it is produced is
-  `git diff --staged --quiet`, whose three-valued status (0 / 1 / error) an
-  `if` reads as two-valued — and the misread routes to the `else` branch, where
-  `git commit` with nothing staged exits 1 and errexit aborts the step.
-  Measured under `bash -e` rather than argued: it degrades to a LOUD failure,
-  never a silent pass. `git config` / `git add` / `git commit` are simple
-  commands in bare statement position, so errexit already decides on them (also
-  measured), and no `run:` block in this workflow reads a `${{ }}` expansion, so
-  #1645's second hazard has no instance here.
+  steps and a frozen badge. The `|| true` was **not** protecting a legitimate
+  low-score exit, and that had to be checked rather than assumed because the
+  issue proposed leaving it in place: pinned v0.0.9 returns `ExitError{Code: 2}`
+  only under `if p.threshold > 0`, this invocation passes no `--threshold`, and
+  there is no `.arsrc.yml` to supply one — measured, the pinned binary scoring
+  `./core` at 7.9/10 exits 0. So the scan's status is read (`|| scan_status=$?`,
+  never a bare `; rc=$?`, the line #1629's implicit `-e` never reaches) and
+  three outcomes are distinguished where there were two. A failed scan **fails
+  the job**, because this workflow gates nothing: it runs post-merge on `main`,
+  no PR and no merge depends on it, and its own "Install ARS CLI" step already
+  fails the job for the likeliest transient cause (a `go install` outage) — a
+  scan that could not run was the one failure here that was silent.
+  Each refusal asserts EVERY other refusal's WORDING is ABSENT — nine of them
+  now, across three steps, driven from one table rather than pairwise by hand —
+  because a shared non-zero is satisfied by refusals that all fire together.
+  Re-measured against the new extract step: deleting the missing-badge refusal
+  leaves it exiting 1 via the URL refusal, so every status arm stays green and
+  only the wording arms go red, exactly as #1644 measured on its predecessor.
+  **The gist step is entirely new, so every one of its obligations passes the
+  moment it is written**, and the two mutations worth carrying are the ones
+  that do NOT simply flip a status. Dropping `|| curl_status=$?` makes a
+  transport failure abort the step under the implicit `-e` with an EMPTY log —
+  no annotation, no diagnosis, "could not be attempted" going silent — while
+  the status arm stays green. And replacing the numeric-shape check on
+  `%{http_code}` with a bare `[ -z … ]` lets a non-numeric code print
+  `integer expression expected` twice, evaluate FALSE, and reach the SUCCESS
+  line: a failed publish reported as a publish. Both spellings are
+  codescene-badge.yml's, noted here rather than changed there.
+  **The decode is the guard that is easy to leave out**, and it is the same
+  class of defect one level down. shields.io's STATIC-badge path is escaped
+  (`--` is a literal dash, `_` and `%20` are spaces, `__` is a literal
+  underscore, `%2F` is a slash) while the ENDPOINT schema takes plain text, so
+  publishing the path's bytes renders a badge reading
+  `Agent--Assisted%207.9%2F10` — wrong, permanently, and green about it. An
+  escape the step does not model is a refusal rather than a guess. It needs TWO
+  mutations, not one: skipping the decode entirely is caught by the
+  percent-escape refusal acting as a second line of defence, so the arm that
+  pins the decode itself is only discriminating against a decode wrong in one
+  way the `%` guard cannot see — dropping just the `--` → `-` restore, which
+  reddens exactly the payload-equality arms and nothing else.
+  The **`contents: read`** claim is a lock, so it is driven against two
+  deliberately mutated copies as well as the real file, and the real file is
+  mutated too: a predicate that had stopped matching would read identically to
+  a clean workflow.
+  **No linter was built, and the measurement is the reason.** Over the
+  multi-line `run:` blocks in `.github/workflows/`, a rule keyed on "the
+  block's last statement is `echo`/`sleep`/`cat`/`printf`" flagged 6 and
+  **missed the #1641 defect** — that loop was nested inside an `if`/`else`, so
+  the block's last line was `fi` — while 4 of the 6 it did flag were correct
+  code; a rule keyed on `|| true` flagged 2 and also missed it; "the block
+  contains a loop" flagged 3, of which 1 was the defect. That subject is gone
+  with the push step, but the conclusion is not: no candidate rule both catches
+  its subject and stays quiet on the correct blocks, so a green would claim
+  coverage it does not have — the same conclusion #1629 reached by the same
+  measurement about a `$?`-keyed rule, and #1639 about the sibling family.
+  `preflight.sh`'s `tools` trigger already carries `ars.yml` (#1641's widening,
+  the fourth for this reason — #1591, #1629, #1639), so #1654 needed no sixth:
+  the new assertions simply join the gate that already covers the file.
 - The replaydata deletion guard:
   `tools/lib/replaydata-deletion-guard_test.sh` does to
   `.github/workflows/replaydata-deletion-guard.yml`'s "Detect deletions of
@@ -1438,7 +1455,10 @@ Before marking a ticket done, run the full suite — every layer must pass:
   Verified while fixing it, per "dismissals carry evidence": **no live pipefail
   dependency existed** anywhere in `.github/workflows/`. All 16 pipeline-
   carrying lines were read — ars.yml's two are `$(… | head -1 || echo "")` and
-  its `sed "s|…|…|"` is a delimiter not a pipe; the deletion guard sets its own
+  its `sed "s|…|…|"` was a delimiter not a pipe (that `sed` went with the
+  README rewrite in #1654, which added no pipeline: its `jq` calls read and
+  write files rather than piping, and its `curl` status is captured with
+  `|| curl_status=$?`); the deletion guard sets its own
   `set -euo pipefail`; macos-swift.yml is on the `shell: bash` side already;
   test.yml's is inside an `echo` message; and codescene-badge.yml's
   `SCORE=$(… | jq -r …)` and coverage.yml's `pct=$(…)` are each followed
