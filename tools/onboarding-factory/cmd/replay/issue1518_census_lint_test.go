@@ -121,19 +121,20 @@ var coincidentalCensusFigures = []censusFigureExemption{
 	},
 	{
 		File:   "replay_sidecar.go",
-		Marker: "+ 28ms cluster (rejected)",
+		Marker: "+ 2ms cluster window",
 		Reason: "the divergent column of a REJECTED cluster-window configuration " +
 			"in #1478's calibration table. The block above it says the columns " +
 			"'no longer equal the live gate's figures' and to read the table as a " +
-			"comparison between rows. It coincides with DivergentByCountsAndKinds.",
+			"comparison between rows. It coincides with Divergent.",
 	},
 	{
 		File:   "replay_sidecar.go",
 		Marker: "+ 69ms cluster (rejected)",
 		Reason: "the divergent column of another rejected row of the same #1478 " +
-			"table, coinciding with Divergent. That two rejected rows collide " +
-			"with two different census fields is coincidence twice over, which is " +
-			"the strongest argument available that neither is a restatement.",
+			"table, coinciding with DivergentByCountsAndKinds. That two rejected " +
+			"rows collide with two different census fields is coincidence twice " +
+			"over, which is the strongest argument available that neither is a " +
+			"restatement.",
 	},
 }
 
@@ -154,6 +155,12 @@ var coincidentalCensusFigures = []censusFigureExemption{
 // 28ms row started colliding and regained an entry, and the 69ms row swapped
 // fields again. Two runs, opposite signs, the same table, collisions tracking
 // the figures both times. A restatement cannot do that in either direction.
+//
+// #1699 is the third run and it reproduces #1388's direction exactly: one new
+// claudecode recording, both fields up by one, every collision one row further
+// up the same unchanged table — the 28ms entry stopped suppressing anything and
+// was deleted again, the 2ms row regained one, and the 69ms row swapped fields
+// back to where #1388 left it. Three runs now, and the table has never moved.
 //
 // No figure is quoted in this paragraph, deliberately: the first draft of it did
 // quote them and this very check reported five sites, in its own exemption file.

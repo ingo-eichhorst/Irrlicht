@@ -62,15 +62,30 @@ type stopRecording struct {
 //
 // The two zero rows are the finding this file exists to keep visible, and they
 // correct the claim #1695 was filed with ("affects both hook adapters equally —
-// claudecode's Stop-bearing recordings have the same property"). Measured:
-// replaydata/agents/claudecode/ carries NO Stop-bearing sidecar at all — its 15
-// hook-bearing recordings are PermissionRequest / PreToolUse / PostToolUse /
-// PostToolUseFailure only. The catalog's other two Stops are co-resident
-// claude-code sessions inside another adapter's multi-agent recording, and
-// neither is gradeable for a reason that has nothing to do with Stop handling.
+// claudecode's Stop-bearing recordings have the same property"). Measured at
+// #1695: replaydata/agents/claudecode/ carried NO Stop-bearing sidecar at all —
+// its 15 hook-bearing recordings were PermissionRequest / PreToolUse /
+// PostToolUse / PostToolUseFailure only. The catalog's two zero rows are
+// co-resident claude-code sessions inside another adapter's multi-agent
+// recording, and neither is gradeable for a reason that has nothing to do with
+// Stop handling.
+//
+// #1699 closed the claudecode gap by RECORDING one, which is the only thing
+// that could: those two zero rows carry a real, correctly-handled claudecode
+// Stop and are ungradeable for reasons a harness change cannot reach. Note what
+// the two Reproduced:1 rows do NOT have in common, because it is the reason the
+// claudecode row is worth its own recording rather than a duplicate of codex's:
+// in codex's, the DAEMON flipped 0.8ms after the POST, so replay and daemon
+// agree; in claudecode's, the daemon's own flip landed 2.1s later at the next
+// debounce boundary (still decided_by_tier "hook", sidecar seq 187) while replay
+// flips at the hook's own timestamp. Same channel, opposite side of the debounce
+// — see knownFirstTransitionDrift's neighbours in issue1480_timing_test.go.
 //
 // Regenerate by pasting the literal the test prints.
 var stopHookCensus = map[string]stopRecording{
+	"claudecode/scenarios/2-13_turn-end-terminal-text/recordings/2026-08-19-19-59-30_irrlichd-0.5.10+ae85182/transcript.jsonl": {
+		Stops: 1, Reproduced: 1,
+	},
 	"codex/scenarios/2-13_turn-end-terminal-text/recordings/2026-08-18-00-42-27_irrlichd-0.5.10+1869727/transcript.jsonl": {
 		Stops: 1, Reproduced: 1,
 	},

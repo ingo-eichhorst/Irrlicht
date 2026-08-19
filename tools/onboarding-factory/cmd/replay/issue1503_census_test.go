@@ -109,11 +109,11 @@ type catalogCensus struct {
 // point is that it cannot move UNNOTICED, and that no doc comment anywhere
 // carries a second, hand-typed copy of it.
 var censusOfTheCommittedCatalog = catalogCensus{
-	Recordings:                313,
+	Recordings:                314,
 	Zero:                      1,
 	Fabricated:                1,
-	Divergent:                 142,
-	DivergentByCountsAndKinds: 141,
+	Divergent:                 143,
+	DivergentByCountsAndKinds: 142,
 	UnpairedSidecars:          0,
 	PairedButUngraded:         85,
 }

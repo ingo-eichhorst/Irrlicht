@@ -1601,15 +1601,32 @@ Before marking a ticket done, run the full suite — every layer must pass:
   reproduced to 4 of 4 with zero mismatches, and #1388's two ">1s drift"
   entries left that population — those were the short-circuit, not the
   "structural" debounce lag they were recorded as.
-  Only ONE recording in the catalog can grade a Stop, and the register that
-  says so is machine-generated (`stopHookCensus`,
-  `TestStopHookIsGradedByTheCommittedCatalog`) because a hand-written one is
-  what #1695 had to correct: `replaydata/agents/claudecode/` carries no
-  Stop-bearing sidecar at all, and the catalog's other two Stops belong to
-  co-resident claude-code sessions inside another adapter's multi-agent
-  recording — one naming a session the replay does not drive, one on a sidecar
-  that cannot drive a replay. A catalog with no Stop at all is a REFUSAL there,
-  not a pass.
+  Which recordings can grade a Stop is a register that is machine-generated
+  (`stopHookCensus`, `TestStopHookIsGradedByTheCommittedCatalog`) because a
+  hand-written one is what #1695 had to correct: at #1695 exactly ONE could,
+  codex's, and `replaydata/agents/claudecode/` carried no Stop-bearing sidecar
+  at all — the catalog's other two Stops belong to co-resident claude-code
+  sessions inside another adapter's multi-agent recording, one naming a session
+  the replay does not drive, one on a sidecar that cannot drive a replay. A
+  catalog with no Stop at all is a REFUSAL there, not a pass.
+  **#1699 is the second, and the point is that it is not a duplicate of the
+  first.** Claude Code is the adapter the Stop channel was built for
+  (`session.HookStop`'s doc comment names it), so a claudecode-specific Stop
+  regression had no golden that would notice; the only fix was to RECORD one,
+  since those two zero rows carry a real, correctly-handled claudecode Stop and
+  are ungradeable for reasons no harness change can reach. What the recording
+  then showed is the sentence above with the sides swapped. In codex's
+  recording the daemon flipped 0.8ms after the POST; in claudecode's it flipped
+  **2.1s** later, at the next debounce boundary — still the hook's decision
+  (`decided_by_tier: "hook"`, `hook_turn_done: true` in the sidecar), because
+  `dispatchHookActivity` pushes its synthetic event onto the DEBOUNCED channel
+  and a transcript write 97ms after the POST re-opened the 2s window. So which
+  side of the debounce a Stop lands on is a property of what the CLI wrote in
+  the 2s after its own Stop, not of the adapter, and replay — which applies the
+  hook at its own timestamp — is now the EARLY side. That is a real replay/daemon
+  fidelity gap and it is carried as a `knownFirstTransitionDrift`-style ratchet
+  entry rather than tuned away; #1388's paragraph in `issue1480_timing_test.go`
+  is where the three readings of it live side by side.
 
 - Replay goldens (when a recording or replay-output change is in play):
   regenerate with `UPDATE_REPLAY_GOLDENS=1 go test
