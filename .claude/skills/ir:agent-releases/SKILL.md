@@ -77,12 +77,13 @@ you verified against, since it may lag the newest release.
 - Note: sessions have been SQLite (drizzle) since ~2026-02-14, **not** JSON files. Legacy JSON storage still exists in `packages/opencode/src/storage/storage.ts` but `session.ts` no longer routes through it — do not mistake the leftover for live storage.
 - The DB filename is channel-scoped upstream (`opencode-<channel>.db`); stable channels (`latest`/`beta`/`prod`) get plain `opencode.db` — see `packages/core/src/database/database.ts`
 
-#### Gemini CLI — ⚠️ unmaintained, skip by default
-- **Unmaintained — skip in sweeps** unless the user explicitly asks. The standing watches below are not being acted on. `references/monitoring-surface.md` §10 is the authoritative statement (rationale + reopen condition); don't restate it here.
+#### Gemini CLI
+- Maintained — track it in sweeps like any other adapter. It carried an "unmaintained, skip by default" marking from 2026-07-15 until #1717 reversed it: the flag was about maintainer time, not viability, and #1717 shipped a hook-based state-detection pilot against it (`core/adapters/inbound/agents/geminicli/hooks.go`), which needs the same release watch every other hook-installing adapter gets.
 - Check: `https://github.com/google-gemini/gemini-cli/releases` — **authoritative; the repo has no root `CHANGELOG.md`** (404s on `main`)
 - Releases very frequently (nightlies + previews) — focus on stable, group the rest
 - Best evidence is a local clone + `git diff <old-tag>..<new-tag>` on `packages/core/src/config/storage.ts` and `packages/core/src/services/chatRecordingService.ts`
 - Focus on: session transcript format under `~/.gemini/tmp/`, process naming (`bin/gemini`), heap-bump worker re-exec behavior
+- Since #1717: also watch the hook system this adapter now installs into (`packages/core/src/hooks/hookEventHandler.js` in the monorepo) — the `HookEventName` enum, `HookType` (still `{Command, Runtime, Plugin}` with no JSON-expressible `Http` as of 0.56.0 — an added HTTP delivery type would make the beacon workaround unnecessary), the exit-code-to-decision mapping in `hookRunner.js` (0/1/other → allow/allow-with-warning/deny — the reason a bare `curl` install would be unsafe), and the `NotificationType` enum (currently the single member `ToolPermission`, which this adapter's whole "waiting" signal depends on staying narrow)
 - Standing watch: SEA/native binary becoming default (`argv[0] === argv[1]`, env `GEMINI_CLI_NO_RELAUNCH=true`), and the `adk.agentSessionSubagentEnabled` flag — see #1068
 
 #### Kiro CLI

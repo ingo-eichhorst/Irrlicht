@@ -489,15 +489,45 @@ Lines arrive `TrimSpace`'d, so leading indentation is already gone.
 - Drop/reformat `> Tokens: … sent, … received` → kills tokens, cost, model attribution, **and** `assistant_message` in one stroke. Localization or thousands-separators (`1,234`) also defeat `[\d.]+`.
 - ⚠️ **The subtlest one:** aider printing **periodic keepalive/spinner/progress lines** into the `.md` would reset the idle anchor every tick and **suppress `IdleFlush` indefinitely → permanent `working`**. This requires no change to any marker string, just extra output.
 
-### 10. Gemini CLI (`gemini-cli`) — ⚠️ unmaintained
+### 10. Gemini CLI (`gemini-cli`)
 
-**As of 2026-07-15 this adapter is no longer actively maintained and is skipped in release sweeps** (this section is the authoritative statement of that; `SKILL.md` only points here). It still ships and still monitors live sessions, so it is listed for completeness — but upstream Gemini CLI changes are **not** tracked, and a break-risk analysis is deliberately out of scope.
+**Maintained — track it in sweeps like any other adapter.** It carried an "unmaintained,
+skip by default" marking from 2026-07-15 until #1717 reversed it: the flag was about
+maintainer time, not viability. #1717's audit found the flag was blocking the strongest
+hook-based state-detection candidate in the whole set — Gemini CLI ships `gemini hooks
+migrate` ("Migrate hooks from Claude Code to Gemini CLI"), deliberate upstream evidence
+of the Claude-Code-shaped envelope convergence the hook epic (#1355) depends on — and
+shipped it: `core/adapters/inbound/agents/geminicli/hooks.go` installs `Notification`
+(gated on `notification_type == "ToolPermission"`), `AfterTool` (broad release) and
+`AfterAgent` (the turn-done push, retiring the heuristic fallback below for sessions that
+grant the hooks permission).
 
 - **Transcript path**: `~/.gemini/tmp/<project>/chats/session-<timestamp>-<8hex>.jsonl`
-- **Adapter source**: `core/adapters/inbound/agents/geminicli/` — consult it directly if this adapter ever needs attention again.
-- **Reopen condition**: someone resumes maintenance, or a user reports gemini-cli sessions misbehaving. Until then, an upstream Gemini change is not a finding.
+- **Adapter source**: `core/adapters/inbound/agents/geminicli/` — `hooks.go` and
+  `hookinstaller.go` are the hook half; both carry the source citations (bundle line
+  offsets, exact byte-identical claims at two installed versions) rather than restating
+  them here.
+- **Hook delivery is the beacon, not a native http hook**: source-read from the installed
+  CLI's own bundle, `HookType` is `{Command, Runtime, Plugin}` — there is no
+  JSON-expressible `Http` type — so `irrlichd hook-post gemini-cli`
+  (`core/pkg/hookbeacon`) is what gets installed, never a bare `curl` line. That matters
+  for a release check specifically: Gemini CLI's own exit-code-to-decision mapping turns
+  ANY exit code other than 0 or 1 into `decision: "deny"` for a hook whose stdout didn't
+  parse as JSON, which the scheduler then turns into a denied tool call or a blocked
+  turn — a delivery type change here is a correctness question, not a compatibility one.
+- **Version floor**: `minCLIVersion = "0.54.0"` in `hookinstaller.go`, deliberately set at
+  the edge of what was directly source-verified (0.54.4 and 0.56.0, seven months apart,
+  byte-identical) rather than at the PR-archaeology date the hook system actually shipped
+  (~2025-09-22, google-gemini/gemini-cli #9074-#9112) — see that constant's doc comment
+  before assuming an earlier floor is safe to backdate.
+- **Reopen condition for the OLD marking**: none — it will not return. A genuine future
+  maintenance lapse is a new, separately-justified decision, not a reinstatement of this
+  one.
 
-> ⚠️ **#1068 is not the reason, and is not a deprecation notice** — don't cite it as either. It's a *watch item* about the native SEA binary possibly becoming default (which would break `DiscoverPID` and the heap-bump exclusion), closed as completed with the verdict "No impact today; no code change required". The maintenance decision is separate and out-of-band.
+> ⚠️ **#1068 is not a deprecation notice** — don't cite it as one. It's a *watch item*
+> about the native SEA binary possibly becoming default (which would break `DiscoverPID`
+> and the heap-bump exclusion), closed as completed with the verdict "No impact today; no
+> code change required".
 
 ---
 
@@ -509,7 +539,7 @@ Lines arrive `TrimSpace`'d, so leading indentation is already gone.
 | **Root relocation via a new env var** | Upstream ships `$VIBE_HOME`-style override for an adapter that hardcodes its root | CRITICAL — silent blackout; the watcher waits on a path that never appears |
 | **DB schema change** (opencode, antigravity) | Table/column rename, protobuf field renumbering | CRITICAL — errors are logged and swallowed, or decode silently returns zeroes |
 | **Transcript format change** | JSONL schema altered, event types renamed/removed | HIGH — state classification fails |
-| **Turn-end shape change** | Trailing tool call on the final message, or a text-only message mid-turn | HIGH — the 4 heuristic adapters (vibe, kiro-cli, antigravity, gemini-cli) stick in `working` forever, or flicker to `ready` early. aider is spared the stick by its idle flush; the 4 explicit adapters are unaffected. |
+| **Turn-end shape change** | Trailing tool call on the final message, or a text-only message mid-turn | HIGH — vibe, kiro-cli and antigravity (still purely heuristic, no independent signal) stick in `working` forever, or flicker to `ready` early. aider is spared the stick by its idle flush; the explicit adapters are unaffected. gemini-cli's own transcript parsing is still heuristic and equally exposed, but since #1717 a session with the hooks permission granted has an independent, transcript-shape-agnostic backstop — `AfterAgent` carries its own turn text and fires regardless of what the transcript looks like — so this row applies to it only when hooks are not granted (or the install has gone stale and `Verify` hasn't yet repaired it). |
 | **Tool system change** | Tool names renamed, tool_use/tool_result structure changed | HIGH — waiting/subagent detection breaks |
 | **Process change** | Binary renamed, wrapped under `node`/`python`, `setproctitle` adopted, CWD no longer accessible | HIGH — PID tracking fails; **total loss for aider** (no file fallback) and **opencode** (live-process discovery gate) |
 | **Prose/marker rewording** | `"The command failed"`, `"Request cancelled"`, `> Applied edit to`, `#### ` | HIGH — English-literal dependencies; localization breaks them silently |
