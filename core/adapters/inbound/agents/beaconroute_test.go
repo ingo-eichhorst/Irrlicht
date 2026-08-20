@@ -6,6 +6,7 @@ import (
 	"irrlicht/core/adapters/inbound/agents/claudecode"
 	"irrlicht/core/adapters/inbound/agents/codex"
 	"irrlicht/core/adapters/inbound/agents/copilot"
+	"irrlicht/core/adapters/inbound/agents/geminicli"
 	"irrlicht/core/pkg/hookbeacon"
 )
 
@@ -35,6 +36,7 @@ func TestBeaconEndpointPathMatchesTheInstalledReceivers(t *testing.T) {
 		"claudecode": claudecode.HookEndpointPath,
 		"codex":      codex.HookEndpointPath,
 		"copilot":    copilot.HookEndpointPath,
+		"gemini-cli": geminicli.HookEndpointPath,
 	} {
 		if got := hookbeacon.EndpointPath(segment); got != want {
 			t.Errorf("hookbeacon.EndpointPath(%q) = %q, but the receiver is registered at %q — the beacon would post into a route nothing serves", segment, got, want)
