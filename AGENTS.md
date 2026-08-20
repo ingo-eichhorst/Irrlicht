@@ -113,6 +113,28 @@ were added before they could catch anything and carry the weaker evidence that t
 it plants (below), and the harness built on #1390's lesson from the start, carrying a
 deliberate no-match row that must report `STALE` (#1450).
 
+**A figure that documents behaviour states the command that produces it, or it
+is marked as an estimate.** This is the counterpart to the rule above, from
+the other direction: that one is about a check going silently blind, this one
+is about a *number* silently drifting away from what it once measured — typed
+once, then repeated by hand until it no longer describes anything. First
+named for the replay tree's own catalog counts ("Replay's measured figures"
+below, where `knownFirstTransitionDrift` and `censusOfTheCommittedCatalog` are
+the machine-generated shape to copy), it is not scoped to replay and was
+violated twice in one day outside it (#1726). PR #1724's version-floor
+rationale claimed two source-read versions were *"seven months apart with
+zero drift"* — in `hookinstaller.go`, in `monitoring-surface.md`, and in the
+PR body — where `npm view @google/gemini-cli time` puts them **twelve days**
+apart (2026-08-07 to 2026-08-19); the error ran in the direction that
+overstates the evidence, since a
+twelve-day window is far weaker support for "byte-identical" than seven
+months. The review that caught it then wrote its own summary claiming
+subagents "stalled seven times"; the real count, from the transcript, is
+five. Neither figure had a command behind it — both were typed from memory
+under the same pressure the rule exists to catch. The fix is the same shape
+either way: derive the number in code and print the literal, or say in the
+same sentence that the figure is an estimate and how it was arrived at.
+
 **A fixture that waits by SLEEPING has not observed what it waits for, and the
 assertion after the sleep is not evidence that it has.** Poll the condition to a
 generous deadline and fail with the elapsed time: that turns "the machine was busy"
@@ -1570,10 +1592,11 @@ Before marking a ticket done, run the full suite — every layer must pass:
   figure beside the divergence figure, because a `go test` that passes prints
   nothing without `-v` and an unread measurement is the failure mode this
   closes.
-- Replay's measured figures: the counterpart rule to "a verification mechanism
-  must fail loudly when it cannot run" is that **a number which documents
-  behaviour but is not produced by it drifts silently, and is then quoted with
-  full confidence**. The replay tree carried one example of each outcome:
+- Replay's measured figures: the worked example for the general rule above —
+  "a figure that documents behaviour states the command that produces it, or
+  it is marked as an estimate," including the evidence it was violated
+  outside the replay tree (#1726) — rather than repeating either here. The
+  replay tree carried one example of each outcome:
   `knownFirstTransitionDrift` is machine-generated and stayed right across a
   change that reshaped the distribution it describes, while the
   `zero`/`fabricated`/`divergent` counts were typed by hand and went wrong twice
@@ -2408,7 +2431,12 @@ invocations it takes. **Do not background the unscoped run to make it fit**:
 a subagent is not woken by its own background job, so the run stalls silently
 with the work committed but never pushed
 (`.claude/skills/ir:exec/SKILL.md` Phase 4 step 11 has the incident and the
-same recipe). Chunking is still the recipe for a *manual* unscoped run;
+same recipe). The same shape recurs for any subagent driving an interactive
+process, not just preflight — one Bash call per step, every wait a bounded
+polling loop, `timeout N` on anything that can hang, and findings
+checkpointed to a file before they're used, so a stall costs a turn instead
+of the work — see the two bullets that skill's Notes section carries beside
+that same incident (#1726). Chunking is still the recipe for a *manual* unscoped run;
 `--budget` is what covers the `--changed` run the hook performs, and the two
 compose — `--only <group> --budget <n>` bounds one group.
 

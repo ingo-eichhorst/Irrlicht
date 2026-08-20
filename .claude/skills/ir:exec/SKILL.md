@@ -1039,3 +1039,31 @@ Phase 6.
   notification wakes a subagent from its own background job; the run stalls
   silently, indistinguishable from having finished. Block in the foreground
   instead, however slow.
+- **Driving an interactive CLI (a `tmux` pane, a chat REPL, anything a turn
+  would otherwise wait on) hits the same 600s watchdog as an unscoped
+  `preflight.sh` run, and loses more when it does** — the environment stays
+  live while the agent's own work in flight is gone. One Bash call per step:
+  issue the command and return; never send input and then wait on the same
+  call. Every wait is a bounded polling loop that always returns, e.g.
+  ```bash
+  for i in $(seq 1 10); do sleep 3; tmux -S <sock> capture-pane -p -t <sess> | tail -20; echo "--- poll $i ---"; done
+  ```
+  `timeout N` wraps anything that can hang, and a minified or multi-megabyte
+  bundle is never read whole — `timeout 60 grep -n -o -E
+  '.{200}<pattern>.{600}'` or `sed -n '<a>,<b>p'`, the same bounded-read shape
+  as chunking `preflight.sh` above. Tear down every spawned process before
+  ending a turn — a stall here doesn't just cost the turn, it leaves the
+  process running. (Real incident, #1726: five watchdog stalls plus one
+  API-error death in one session driving interactive CLIs for #1716/#1717 —
+  one stall left two orphaned CLI processes running ~20 minutes against the
+  account, another left 1526 lines uncommitted.)
+- **Findings that live only in an agent's context die with the turn, exactly
+  the way uncommitted code does.** For any multi-phase audit or
+  investigation, checkpoint findings to a scratchpad file as you go — append,
+  never rewrite, so a stall costs at most the last unwritten increment. It's
+  the same discipline `git commit -m wip` applies to code (never `git stash`,
+  whose stack is shared across worktrees — AGENTS.md's Process Rules), aimed
+  at notes instead of a working tree. (Real incident, #1726: three of the
+  five stalls above destroyed audit work that had to be re-derived from
+  scratch; once file-checkpointing was imposed, a fourth stall cost
+  nothing — a 23KB findings file survived and the agent resumed from it.)
