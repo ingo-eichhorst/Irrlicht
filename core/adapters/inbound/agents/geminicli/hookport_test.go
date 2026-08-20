@@ -82,7 +82,7 @@ func TestHookEndpointFollowsBindAddr(t *testing.T) {
 			if err != nil {
 				return false, err
 			}
-			return hookjsonEnsureInstalledForCommand(path, command)
+			return hookjson.EnsureInstalled(hookConfig(path, command))
 		},
 	})
 }
