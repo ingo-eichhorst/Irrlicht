@@ -489,9 +489,19 @@ Lines arrive `TrimSpace`'d, so leading indentation is already gone.
 - Drop/reformat `> Tokens: … sent, … received` → kills tokens, cost, model attribution, **and** `assistant_message` in one stroke. Localization or thousands-separators (`1,234`) also defeat `[\d.]+`.
 - ⚠️ **The subtlest one:** aider printing **periodic keepalive/spinner/progress lines** into the `.md` would reset the idle anchor every tick and **suppress `IdleFlush` indefinitely → permanent `working`**. This requires no change to any marker string, just extra output.
 
-### 10. Gemini CLI (`gemini-cli`)
+### 10. Gemini CLI (`gemini-cli`) — ⚠️ scheduled for deprecation in irrlicht v0.7
 
-**Maintained — track it in sweeps like any other adapter.** It carried an "unmaintained,
+> **Deprecation scheduled 2026-08-20 (at v0.5.10), effective v0.7.** The maintainer's account is
+> tier-ineligible — `IneligibleTierError: This client is no longer supported for Gemini Code
+> Assist for individuals… migrate to the Antigravity suite of products` — so no live turn, and
+> therefore no re-recording, is possible on this machine. The adapter is not broken and did not
+> fail: #1717 shipped its hook channel the same day and every gate passes. It is being retired
+> because it cannot be **verified**, which is a different claim and the honest one. Sweeps
+> continue as described below until v0.7. Reversible: `gemini-api-key` auth (a key from
+> `aistudio.google.com/apikey`, with `security.auth.selectedType` switched away from
+> `oauth-personal`) is a separate path from the retired Code Assist OAuth and was not attempted.
+
+**Tracked in sweeps like any other adapter until then.** It carried an "unmaintained,
 skip by default" marking from 2026-07-15 until #1717 reversed it: the flag was about
 maintainer time, not viability. #1717's audit found the flag was blocking the strongest
 hook-based state-detection candidate in the whole set — Gemini CLI ships `gemini hooks

@@ -77,8 +77,18 @@ you verified against, since it may lag the newest release.
 - Note: sessions have been SQLite (drizzle) since ~2026-02-14, **not** JSON files. Legacy JSON storage still exists in `packages/opencode/src/storage/storage.ts` but `session.ts` no longer routes through it — do not mistake the leftover for live storage.
 - The DB filename is channel-scoped upstream (`opencode-<channel>.db`); stable channels (`latest`/`beta`/`prod`) get plain `opencode.db` — see `packages/core/src/database/database.ts`
 
-#### Gemini CLI
-- Maintained — track it in sweeps like any other adapter. It carried an "unmaintained, skip by default" marking from 2026-07-15 until #1717 reversed it: the flag was about maintainer time, not viability, and #1717 shipped a hook-based state-detection pilot against it (`core/adapters/inbound/agents/geminicli/hooks.go`), which needs the same release watch every other hook-installing adapter gets.
+#### Gemini CLI — ⚠️ scheduled for deprecation in irrlicht v0.7
+- **Deprecation scheduled (decided 2026-08-20, at v0.5.10).** The maintainer can no longer
+  authenticate against Gemini CLI at all: the account is tier-ineligible
+  (`IneligibleTierError: This client is no longer supported for Gemini Code Assist for
+  individuals… migrate to the Antigravity suite of products`), which blocks every live turn and
+  therefore every re-recording. An adapter nobody can exercise cannot be verified, and this repo
+  does not keep claims it cannot re-check. **Until v0.7 it stays in sweeps as below**; at v0.7 it
+  is removed. Note what this is NOT: an upstream break, or a verdict on the adapter's quality —
+  #1717 shipped its hook channel the same day, and it passes every gate. Reversible if auth is
+  restored (an `aistudio.google.com` key with `security.auth.selectedType: "gemini-api-key"` is a
+  separate path from the retired Code Assist OAuth, and was not tried).
+- Until then, track it in sweeps like any other adapter. It carried an "unmaintained, skip by default" marking from 2026-07-15 until #1717 reversed it: the flag was about maintainer time, not viability, and #1717 shipped a hook-based state-detection pilot against it (`core/adapters/inbound/agents/geminicli/hooks.go`), which needs the same release watch every other hook-installing adapter gets.
 - Check: `https://github.com/google-gemini/gemini-cli/releases` — **authoritative; the repo has no root `CHANGELOG.md`** (404s on `main`)
 - Releases very frequently (nightlies + previews) — focus on stable, group the rest
 - Best evidence is a local clone + `git diff <old-tag>..<new-tag>` on `packages/core/src/config/storage.ts` and `packages/core/src/services/chatRecordingService.ts`
