@@ -30,6 +30,19 @@ const (
 	// notification_type discriminator; the daemon acts only on idle_prompt
 	// (issue #1173).
 	HookNotification = "Notification"
+	// HookAfterTool is gemini-cli's own wire name for its broad post-tool
+	// event (issue #1717) — fires after EVERY tool call, unlike claudecode's
+	// narrowly-matchered PostToolUse. It is declared here, not reused from
+	// HookPostToolUse, precisely because the two must never share a row: this
+	// package is a flat map keyed by the literal wire string with no adapter
+	// dimension, so "AfterTool" needs its own key even though its effect
+	// (broad release) is identical in shape to PostToolUse's. Unlike
+	// "Notification" or "Stop" — wire names claudecode and gemini-cli both
+	// happen to use, but for different-enough semantics that a shared row
+	// would be wrong for one of them — "AfterTool" is a name only gemini-cli
+	// fires, so giving it a row here cannot leak into another adapter's
+	// dispatch.
+	HookAfterTool = "AfterTool"
 )
 
 // AllHookEvents is every hook event name the constants above define, in
@@ -51,6 +64,7 @@ var AllHookEvents = []string{
 	HookPreCompact,
 	HookStop,
 	HookNotification,
+	HookAfterTool,
 }
 
 // HookSignalEffect is what one hook event name does to a session's signal
@@ -123,6 +137,16 @@ var hookSignalEffects = map[string]HookSignalEffect{
 	// The tool ran, so whatever was blocking on it no longer is.
 	HookPostToolUse:        {Signal: SignalPermissionPrompt, Release: true},
 	HookPostToolUseFailure: {Signal: SignalPermissionPrompt, Release: true},
+	// gemini-cli's AfterTool fires after every tool call (issue #1717), the
+	// same broad-fires-on-everything shape claudecode's PostToolUse has — see
+	// hookinstaller.go's matcher comment on that adapter for why a broad
+	// RELEASE is safe where a broad ASSERT is not: releasing an unheld signal
+	// is a no-op, so firing on every tool costs nothing, while asserting on
+	// every tool would hold `waiting` on every tool call. gemini-cli's own
+	// narrow assert lives outside this table entirely, on
+	// SessionDetector.HandlePermissionPromptHook — see that method's doc for
+	// why "Notification" cannot get a row here the way this one can.
+	HookAfterTool: {Signal: SignalPermissionPrompt, Release: true},
 	// The turn ended, authoritatively, at true turn end (#1161). Name-only
 	// here: a caller with the hook's payload — SessionDetector.HandleStopHook,
 	// which every adapter routes Stop through — holds SignalTurnDone itself

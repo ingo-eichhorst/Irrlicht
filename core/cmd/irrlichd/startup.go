@@ -19,6 +19,7 @@ import (
 	"irrlicht/core/adapters/inbound/agents/claudecode"
 	"irrlicht/core/adapters/inbound/agents/codex"
 	"irrlicht/core/adapters/inbound/agents/copilot"
+	"irrlicht/core/adapters/inbound/agents/geminicli"
 	"irrlicht/core/adapters/inbound/agents/processlifecycle"
 	backchannelhandler "irrlicht/core/adapters/inbound/backchannel"
 	gastownadapter "irrlicht/core/adapters/inbound/orchestrators/gastown"
@@ -927,9 +928,14 @@ func setupBackchannel(mux *http.ServeMux, deps setupBackchannelDeps) (*services.
 // claudecode.HookTarget) and the per-tick statusline JSON carrying rate_limits
 // for Pro/Max subscribers (issue #309); plus Codex's PermissionRequest/
 // PostToolUse/Stop events (issue #1171) — the detector satisfies
-// codex.HookTarget the same way. All are consent-gated: hooks installed by a
-// pre-consent daemon keep firing until the wizard is answered, so payloads are
-// dropped while pending.
+// codex.HookTarget the same way; plus Copilot's Notification/Stop events; plus
+// Gemini CLI's Notification/AfterTool/AfterAgent events (issue #1717),
+// delivered by the `irrlichd hook-post gemini-cli` beacon rather than a native
+// http hook — the detector satisfies geminicli.HookTarget's extra two methods
+// (HandlePermissionPromptHook, ReleasePermissionPromptHold) alongside the two
+// every other receiver already calls. All are consent-gated: hooks installed
+// by a pre-consent daemon keep firing until the wizard is answered, so
+// payloads are dropped while pending.
 func registerHookRoutes(mux *http.ServeMux, detector *services.SessionDetector, metricsCollector outbound.MetricsCollector, permService *services.PermissionService, logger outbound.Logger) {
 	// mux.Handle, not HandleFunc: each constructor returns a hookjson.HookHandler
 	// — the handler together with the confiner it enforces #1361 with — which
@@ -942,6 +948,8 @@ func registerHookRoutes(mux *http.ServeMux, detector *services.SessionDetector, 
 		codex.NewHookHandler(detector, permService, logger))
 	mux.Handle("POST "+copilot.HookEndpointPath,
 		copilot.NewHookHandler(detector, permService, logger))
+	mux.Handle("POST "+geminicli.HookEndpointPath,
+		geminicli.NewHookHandler(detector, permService, logger))
 }
 
 // publishAddrFile writes the addr file and thereby signals "the daemon is

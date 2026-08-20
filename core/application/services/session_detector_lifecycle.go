@@ -343,6 +343,77 @@ func (d *SessionDetector) HandleStopHook(sessionID, transcriptPath, lastAssistan
 	d.dispatchHookActivity(sessionID, transcriptPath, session.HookStop)
 }
 
+// HandlePermissionPromptHook records gemini-cli's Notification/ToolPermission
+// hook (issue #1717): a tool confirmation prompt is genuinely open and the
+// user is blocked on it right now.
+//
+// A dedicated method rather than the generic name-keyed HandlePermissionHook,
+// and that is load-bearing rather than a style choice. gemini-cli's wire name
+// for this event is literally "Notification" — the SAME string Claude Code
+// uses for its own Notification hook, which session.HookSignal deliberately
+// has no row for (its gate is adapter-side: claudecode dispatches it to
+// HandleIdlePromptHook, never through the generic table). hookSignalEffects is
+// one flat map with no adapter dimension, so adding a row keyed on
+// "Notification" to make THIS call hold SignalPermissionPrompt would also
+// change what claudecode's and copilot's OWN Notification dispatches do —
+// copilot's in particular, whose package comment explains that copilot must
+// dispatch its identically-named notification WITHOUT a hold, because copilot
+// emits nothing at all when the user denies a prompt and a hold with no
+// release would pin the session waiting for the 12-hour ceiling
+// (permissionPromptHoldTimeout). A shared-table row would silently reintroduce
+// that exact bug into copilot.
+//
+// gemini-cli is not in copilot's position: unlike copilot, its AfterAgent
+// event reliably fires after a cancelled confirmation too (a cancelled tool
+// call is converted to a terminal, completed batch entry carrying a synthetic
+// error functionResponse fed back to the model, so the turn completes
+// normally) — source-verified against the installed CLI, not assumed. That is
+// what makes holding here safe: geminicli's AfterAgent handling calls
+// ReleasePermissionPromptHold unconditionally, closing the one case (a denied
+// confirmation) where AfterTool's broad release never fires. See that method
+// and geminicli/hooks.go's package comment for the other half of this pair.
+//
+// Persistent, not consume-once — matching the existing SignalPermissionPrompt
+// policy row's own semantics (session.signalPolicies), which every other
+// asserter of this signal (claudecode's PreToolUse, codex's PermissionRequest)
+// already relies on: the hold must survive every re-evaluation between the
+// prompt opening and it being resolved.
+//
+// Safe to call from any goroutine (e.g. the HTTP handler).
+func (d *SessionDetector) HandlePermissionPromptHook(sessionID, transcriptPath, hookName string) {
+	d.signals.Hold(sessionID, session.SignalPermissionPrompt, session.SignalPayload{}, d.nowFn())
+	d.dispatchHookActivity(sessionID, transcriptPath, hookName)
+}
+
+// ReleasePermissionPromptHold drops any held SignalPermissionPrompt for
+// sessionID without requiring a name-keyed hook event to carry the release.
+//
+// Exists for gemini-cli's AfterAgent handler (issue #1717), which calls this
+// alongside HandleStopHook rather than relying solely on AfterTool's broad
+// release. The gap it closes: on a CANCELLED tool confirmation, gemini-cli's
+// scheduler returns before ever running the tool, so AfterTool never fires for
+// that call — source-verified against the installed CLI (the cancel path
+// converts straight to a terminal batch entry without reaching the tool
+// execution step AfterTool is fired from). Without this call, a denied prompt
+// would stay held until SignalPermissionPrompt's own 12-hour ceiling
+// (permissionPromptHoldTimeout) — technically bounded, but a needless half-day
+// of false `waiting` when the turn that resolved it has, in fact, already
+// completed.
+//
+// Safe to release unconditionally: fireAfterAgentHookSafe (gemini-cli's own
+// gate on firing AfterAgent) cannot fire while a confirmation from that turn
+// is still genuinely open — the agent loop is blocked awaiting the user's
+// answer at that point and has not yet reached the point where AfterAgent
+// could fire — so by the time AfterAgent arrives, any permission prompt opened
+// during that turn has already been resolved one way or another. Release on
+// an unheld signal is a no-op (SignalHolds.Release), so this costs nothing on
+// the far more common case where nothing was held.
+//
+// Safe to call from any goroutine (e.g. the HTTP handler).
+func (d *SessionDetector) ReleasePermissionPromptHold(sessionID string) {
+	d.signals.Release(sessionID, session.SignalPermissionPrompt)
+}
+
 // HandleIdlePromptHook records Claude Code's Notification/idle_prompt hook
 // (issue #1173): the agent has finished its turn and is now idle at the prompt
 // waiting for the user. Holding SignalIdlePrompt makes every subsequent
