@@ -516,8 +516,9 @@ grant the hooks permission).
   parse as JSON, which the scheduler then turns into a denied tool call or a blocked
   turn — a delivery type change here is a correctness question, not a compatibility one.
 - **Version floor**: `minCLIVersion = "0.54.0"` in `hookinstaller.go`, deliberately set at
-  the edge of what was directly source-verified (0.54.4 and 0.56.0, seven months apart,
-  byte-identical) rather than at the PR-archaeology date the hook system actually shipped
+  the edge of what was directly source-verified (0.54.4 and 0.56.0 — published
+  2026-08-07 and 2026-08-19, so a twelve-day, two-minor-release window, not a long
+  stability record — byte-identical) rather than at the PR-archaeology date the hook system actually shipped
   (~2025-09-22, google-gemini/gemini-cli #9074-#9112) — see that constant's doc comment
   before assuming an earlier floor is safe to backdate.
 - **Reopen condition for the OLD marking**: none — it will not return. A genuine future

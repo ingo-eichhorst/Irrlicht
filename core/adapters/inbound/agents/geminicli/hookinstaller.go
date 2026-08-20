@@ -81,14 +81,19 @@ var HookEndpointPath = hookbeacon.EndpointPath(AdapterName)
 // bundle the CLI ships today, so a file-presence diff across that packaging
 // change proves nothing.
 //
-// What IS directly verified, at two points seven months apart with zero
-// drift, is the exact behavior this adapter depends on: 0.54.4 (source-read
+// What IS directly verified, with zero drift across an upgrade that actually
+// happened on the dev machine mid-audit, is the exact behavior this adapter
+// depends on: 0.54.4 (source-read
 // at the start of this issue's audit) and 0.56.0 (source-read again after the
 // installed CLI auto-updated mid-audit) — validateHookConfig's accepted
 // types, the exit-code-to-decision mapping, fireAfterAgentHookSafe's
 // dedup/pending-tool gate, resolveConfirmation's unconditional pre-block
 // notifyHooks call, and the NotificationType/HookEventName enums are
-// byte-identical between them. 0.54.0 is the edge of that verified window,
+// byte-identical between them. Note the honest limit of that window rather
+// than overstating it: npm publishes those two on 2026-08-07 and 2026-08-19
+// (`npm view @google/gemini-cli time`), so it spans TWELVE DAYS and two minor
+// releases — evidence that the shape survived a real upgrade, not evidence
+// that it is long-settled. 0.54.0 is the edge of that verified window,
 // not the edge of "some form of hooks existed" — overshooting a version
 // floor is the safe direction (core/pkg/cliversion fails OPEN on an unknown
 // or unparseable version), undershooting is not, so the floor sits at the
