@@ -21,6 +21,7 @@ import (
 	"irrlicht/core/adapters/inbound/agents/copilot"
 	"irrlicht/core/adapters/inbound/agents/geminicli"
 	"irrlicht/core/adapters/inbound/agents/processlifecycle"
+	"irrlicht/core/adapters/inbound/agents/vibe"
 	backchannelhandler "irrlicht/core/adapters/inbound/backchannel"
 	gastownadapter "irrlicht/core/adapters/inbound/orchestrators/gastown"
 	permissionshandler "irrlicht/core/adapters/inbound/permissions"
@@ -933,9 +934,12 @@ func setupBackchannel(mux *http.ServeMux, deps setupBackchannelDeps) (*services.
 // delivered by the `irrlichd hook-post gemini-cli` beacon rather than a native
 // http hook — the detector satisfies geminicli.HookTarget's extra two methods
 // (HandlePermissionPromptHook, ReleasePermissionPromptHold) alongside the two
-// every other receiver already calls. All are consent-gated: hooks installed
-// by a pre-consent daemon keep firing until the wizard is answered, so
-// payloads are dropped while pending.
+// every other receiver already calls; plus Mistral Vibe's post_agent_turn
+// event (issue #1718), also beacon-delivered (`irrlichd hook-post
+// mistral-vibe`) — the detector satisfies vibe.HookTarget's single method,
+// HandleStopHook, which every other receiver already calls too. All are
+// consent-gated: hooks installed by a pre-consent daemon keep firing until
+// the wizard is answered, so payloads are dropped while pending.
 func registerHookRoutes(mux *http.ServeMux, detector *services.SessionDetector, metricsCollector outbound.MetricsCollector, permService *services.PermissionService, logger outbound.Logger) {
 	// mux.Handle, not HandleFunc: each constructor returns a hookjson.HookHandler
 	// — the handler together with the confiner it enforces #1361 with — which
@@ -950,6 +954,8 @@ func registerHookRoutes(mux *http.ServeMux, detector *services.SessionDetector, 
 		copilot.NewHookHandler(detector, permService, logger))
 	mux.Handle("POST "+geminicli.HookEndpointPath,
 		geminicli.NewHookHandler(detector, permService, logger))
+	mux.Handle("POST "+vibe.HookEndpointPath,
+		vibe.NewHookHandler(detector, permService, logger))
 }
 
 // publishAddrFile writes the addr file and thereby signals "the daemon is

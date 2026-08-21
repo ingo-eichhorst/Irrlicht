@@ -1,6 +1,7 @@
 package vibe
 
 import (
+	"irrlicht/core/adapters/inbound/agents/hookjson"
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/backchannel"
 	"irrlicht/core/domain/permission"
@@ -8,6 +9,21 @@ import (
 
 // PermissionKeyTranscripts gates all Mistral Vibe monitoring (issue #570).
 const PermissionKeyTranscripts = "transcripts"
+
+// Source is the adapter's transcript-tree declaration, shared by Agent() and
+// the hook receiver's path confiner (issue #1718, hooks.go) so the tree the
+// daemon watches and the tree the receiver confines caller-supplied
+// transcript paths to cannot drift apart — the same reasoning geminicli's
+// Source() documents.
+func Source() agent.Source {
+	return agent.FilesUnderRoot{
+		DirFunc:           sessionsDir,
+		SessionIDFromPath: sessionIDFromPath,
+		Parser: agent.JSONLineParser{
+			NewParser: func() agent.LineParser { return &Parser{} },
+		},
+	}
+}
 
 // Agent returns the Mistral Vibe adapter registration. The Source watches
 // ~/.vibe/logs/session and derives each session's ID from the <session-id>
@@ -30,13 +46,7 @@ func Agent() agent.Agent {
 			Match:         agent.CommandPattern{Regex: processCmdRegex},
 			PIDForSession: DiscoverPID,
 		},
-		Source: agent.FilesUnderRoot{
-			DirFunc:           sessionsDir,
-			SessionIDFromPath: sessionIDFromPath,
-			Parser: agent.JSONLineParser{
-				NewParser: func() agent.LineParser { return &Parser{} },
-			},
-		},
+		Source: Source(),
 		Control: agent.Control{
 			SupportsInput: true,
 			Interrupt:     agent.InterruptCtrlC,
@@ -63,6 +73,43 @@ func Agent() agent.Agent {
 					"and reads their working directory to bind a session to its process. " +
 					"Read-only — no file is ever modified. Toggling off stops all reading " +
 					"immediately.",
+			},
+			{
+				Key:             PermissionKeyHooks,
+				Kind:            permission.KindModify,
+				Title:           "Install status hooks",
+				FeatureUnlocked: "Authoritative turn-end detection",
+				// Deliberately NOT "N hook entries" using hookjson.EntriesTouched:
+				// that helper hardcodes the plural, and the #1356 contract's own
+				// count regex accepts singular specifically so a one-event
+				// adapter is not forced into bad grammar — this is that adapter.
+				Touches: "Writes 1 hook entry to ~/.vibe/hooks.toml, and a flag in ~/.vibe/config.toml",
+				Detail: "Adds a post_agent_turn hook entry to ~/.vibe/hooks.toml (Vibe's own " +
+					"hooks file) and sets enable_experimental_hooks = true in " +
+					"~/.vibe/config.toml — the flag that turns Vibe's hook system on at all; " +
+					"the entry cannot fire without it. Vibe's before_tool/after_tool events are " +
+					"deliberately not used: before_tool fires before Vibe's own permission " +
+					"check runs and cannot tell whether a call will prompt the user, so it " +
+					"cannot drive waiting detection. The entry runs `irrlichd hook-post " +
+					"mistral-vibe` — a tiny command irrlicht ships — which reads the daemon's " +
+					"own published address at the moment the hook fires and forwards the " +
+					"payload; it never blocks the agent even when the daemon is not running. " +
+					hookjson.RequiresVersion("Mistral Vibe", minVibeVersion) +
+					" Toggling off removes the entry (also available via " +
+					"`irrlichd --uninstall-hooks`) and clears the flag too, unless other " +
+					"hooks remain in the file.",
+				Apply:  func() error { _, err := EnsureHooksInstalled(); return err },
+				Remove: func() error { _, err := UninstallHooks(); return err },
+				Writes: &agent.ManagedUserFile{
+					Path:      hooksTomlPath,
+					Also:      []func() (string, error){vibeConfigTomlPath},
+					Uninstall: UninstallHooks,
+					Verify:    VerifyHooksInstalled,
+					Version: &agent.VersionGate{
+						Min:   minVibeVersion,
+						Probe: []string{"vibe", "--version"},
+					},
+				},
 			},
 		},
 	}

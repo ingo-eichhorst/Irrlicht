@@ -17,22 +17,23 @@ import (
 func TestDeclaredMatchesRegistry(t *testing.T) {
 	got := Declared()
 
-	// Exhaustive as of this commit: claudecode, codex, copilot and gemini-cli
-	// are the adapters declaring a hooks permission. If a fifth gains one,
-	// this fails and the new adapter joins the list — that is the intended
-	// workflow, not an obstacle.
+	// Exhaustive as of this commit: claudecode, codex, copilot, gemini-cli
+	// and mistral-vibe are the adapters declaring a hooks permission. If a
+	// sixth gains one, this fails and the new adapter joins the list — that
+	// is the intended workflow, not an obstacle.
 	//
-	// copilot joined in #1378 and gemini-cli in #1717, and both are expected
-	// to report StatusGap for a while: each declares hooks, but no recording
-	// for either carries a hook_received event yet, because landing the
-	// permission deliberately re-recorded nothing (the frozen sidecars are
-	// hook-free and the replay goldens had to stay byte-identical — #1717's
-	// own audit measured 0 cells re-recorded). A GAP here is the honest
-	// reading of that, not a defect.
+	// copilot joined in #1378, gemini-cli in #1717, and mistral-vibe in
+	// #1718 — all three are expected to report StatusGap for a while: each
+	// declares hooks, but no recording carries a hook_received event yet,
+	// because landing the permission deliberately re-records nothing (the
+	// frozen sidecars are hook-free and the replay goldens have to stay
+	// byte-identical — the same reasoning #1717's own audit measured at 0
+	// cells re-recorded). A GAP here is the honest reading of that, not a
+	// defect.
 	want := map[string]bool{
 		"aider": false, "antigravity": false, "claudecode": true, "codex": true,
 		"copilot": true, "gemini-cli": true, "hermes": false, "kiro-cli": false,
-		"mistral-vibe": false, "opencode": false, "pi": false,
+		"mistral-vibe": true, "opencode": false, "pi": false,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Declared() = %v\nwant %v", got, want)
