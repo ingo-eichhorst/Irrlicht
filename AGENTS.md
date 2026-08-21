@@ -398,9 +398,7 @@ Before marking a ticket done, run the full suite — every layer must pass:
   an install writes the resolved port not `:7837`, an entry left by a daemon
   on another port is rewritten in place rather than duplicated, and uninstall
   is not port-scoped (#1178). A new hook-installing adapter wires one call
-  (see `hookport_test.go` in `claudecode`, `codex`, `copilot`, `geminicli`,
-  `kirocli` or `vibe` — six today, reproduced with `find
-  core/adapters/inbound/agents -name hookport_test.go`) instead of porting a
+  (see any hooks-declaring adapter's `hookport_test.go`) instead of porting a
   test file. It grades against the delivery route the adapter DECLARES
   (`HookInstaller.Delivery`, #1453), because there are two ways to satisfy it
   and the second makes the first unsatisfiable. `DeliveryURL` — the zero
@@ -469,10 +467,8 @@ Before marking a ticket done, run the full suite — every layer must pass:
   of #1173's seven-event install, so the Notification hook was written to the
   user's `settings.json` undisclosed. Adapters now derive both the count and
   the list from `installedHookEvents` via `hookjson.EventList`, and wire one
-  call (see `hookdisclosure_test.go` in `claudecode`, `codex`, `copilot`,
-  `geminicli`, `kirocli` or `vibe` — six today, reproduced with `find
-  core/adapters/inbound/agents -name hookdisclosure_test.go`). The "names no
-  uninstalled event" arm checks against `session.AllHookEvents`, itself kept
+  call (see any hooks-declaring adapter's `hookdisclosure_test.go`). The
+  "names no uninstalled event" arm checks against `session.AllHookEvents`, itself kept
   honest by `TestAllHookEvents_CoversEveryConstant`, which scans
   `hook_signal.go`'s source rather than trusting a second hand-kept list.
 - Hook path confinement: `contracttesting.AssertHookPathConfined`
@@ -512,10 +508,8 @@ Before marking a ticket done, run the full suite — every layer must pass:
   for an absent file, so a receiver that waves through an unresolvable leaf
   (a reasonable allowance — the hook fires around the write) lets an attacker
   plant a broken link, have it accepted, then create the target. A new
-  hook-receiving adapter wires one call (see `hookpath_test.go` in
-  `claudecode`, `codex`, `copilot`, `geminicli`, `kirocli` or `vibe` — six
-  today, reproduced with `find core/adapters/inbound/agents -name
-  hookpath_test.go`; claudecode wires it twice, because its statusline
+  hook-receiving adapter wires one call (see any hooks-declaring adapter's
+  `hookpath_test.go`; claudecode wires it twice, because its statusline
   endpoint is a receiver too and was the one the original fix forgot).
   **A confinement refusal answers 2xx** — it is reported by the log and the
   counter, never by a status code on the user's critical path. The path is
@@ -574,13 +568,10 @@ Before marking a ticket done, run the full suite — every layer must pass:
   private `codexSupportsHooks` with its own parser and floor constants while
   Claude Code carried nothing and wrote seven entries into the user's
   `settings.json` at any version; every hook-installing adapter now declares
-  the floor the same way — `copilot`, `geminicli`, `kirocli` and `vibe`
-  joined Codex and Claude Code by declaring
+  the floor the same way, by declaring
   `Version: &agent.VersionGate{Min: "x.y.z", Probe: []string{"<cli>",
-  "--version"}}` and nothing else, six of six hook-installing adapters
-  today (`git grep -l "VersionGate{" core/adapters/inbound/agents/*/agent.go`)
-  — re-run rather than trust this list once a seventh joins.
-  `TestEveryHookInstallDeclaresAVersionFloor`
+  "--version"}}` and nothing else. No roster is kept here, because this one
+  is enforced rather than maintained: `TestEveryHookInstallDeclaresAVersionFloor`
   (`core/adapters/inbound/agents/hookversion_test.go`) walks the registry
   projection so a new hook adapter is covered by existing rather than by
   remembering to wire the contract; it narrows on

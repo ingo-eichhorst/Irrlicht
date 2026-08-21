@@ -322,7 +322,7 @@ func TestStatuslineHandler_PermissionGateContract(t *testing.T) {
 		// it forwards is used as a map key by metrics.IngestRateLimit, never
 		// opened (issue #1466 is about the READ, and there is none here).
 		//
-		// Foreign is non-empty here and empty at the three hook receivers, and
+		// Foreign is non-empty here and empty at every other hook receiver, and
 		// the asymmetry is the whole reason the field exists: this is the one
 		// receiver declaring a SINGLE permission, so its derived set leaves
 		// nothing to hold open and the #1475 isolation arm would have no state
