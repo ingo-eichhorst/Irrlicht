@@ -119,6 +119,30 @@ func Agent() agent.Agent {
 						Min:   minCLIVersion,
 						Probe: []string{kiroCLIBinary, "--version"},
 					},
+					// Also: the SAME Apply closure also rewrites
+					// chat.defaultAgent in settings/cli.json
+					// (ensureDefaultAgent, hookinstaller.go) — a second shared,
+					// user-owned file beyond Path (issue #1718's Also field).
+					// Undeclared, that write is invisible to
+					// agents.ManagedUserFiles / --print-managed-files, the
+					// recording rig's snapshot/restore sweep — see
+					// TestKiroCLIAlso_SettingsFileIsAManagedFile
+					// (core/cmd/irrlichd) for the mutation evidence.
+					//
+					// What this does NOT change, stated because it would
+					// otherwise be assumed: PermissionService.sharedConfigRefusal
+					// (#1449) checks Path first and returns immediately on a
+					// refusal, and Path and every Also entry here resolve under
+					// the SAME root (kiroHome(), hookinstaller.go) — so for
+					// THIS adapter Path and Also can never disagree on being
+					// inside or outside the daemon's isolated home, and the
+					// grant-all refusal VERDICT is identical whether or not
+					// this field is declared; declaring it is a
+					// defence-in-depth completeness property for that guard,
+					// not a verdict-changing one. Declared anyway because the
+					// two are independent consumers and the recorder's sweep
+					// is not co-located with anything.
+					Also: []func() (string, error){kiroSettingsPath},
 				},
 			},
 		},
