@@ -84,23 +84,8 @@ func TestKiroCLIAlso_SettingsFileIsAManagedFile(t *testing.T) {
 	if perm.Writes == nil {
 		t.Fatal("kirocli hooks permission declares no Writes")
 	}
-	// Selected by SUFFIX, not by index: this permission declares more than one
-	// Also entry (the prior-default sidecar is the sibling test below), and an
-	// index would make this test's subject depend on declaration order.
 	wantSuffix := filepath.Join("settings", "cli.json")
-	also := ""
-	for i, resolve := range perm.Writes.Also {
-		got, err := resolve()
-		if err != nil {
-			t.Fatalf("resolving Writes.Also[%d]: %v", i, err)
-		}
-		if strings.HasPrefix(got, kiroHome) && strings.HasSuffix(got, wantSuffix) {
-			also = got
-		}
-	}
-	if also == "" {
-		t.Fatalf("Writes.Also declares no entry under %q ending in %q", kiroHome, wantSuffix)
-	}
+	also := resolvedAlsoUnder(t, perm, kiroHome, wantSuffix)
 
 	configs, err := agents.ManagedUserFiles(declaredConsentCatalog())
 	if err != nil {
@@ -187,4 +172,26 @@ func TestKiroCLIAlso_PriorDefaultSidecarIsAManagedFile(t *testing.T) {
 		t.Errorf("--print-managed-files does not list %q — the recording rig protects only what "+
 			"this command names", want)
 	}
+}
+
+// resolvedAlsoUnder returns the one Writes.Also entry that resolves under root
+// and ends in suffix.
+//
+// Selected by what it RESOLVES TO, not by index: kiro-cli's hooks permission
+// declares more than one Also entry, and an index would make a test's subject
+// depend on declaration order — a silent retarget at a different file the day
+// somebody reorders the slice.
+func resolvedAlsoUnder(t *testing.T, perm agent.Permission, root, suffix string) string {
+	t.Helper()
+	for i, resolve := range perm.Writes.Also {
+		got, err := resolve()
+		if err != nil {
+			t.Fatalf("resolving Writes.Also[%d]: %v", i, err)
+		}
+		if strings.HasPrefix(got, root) && strings.HasSuffix(got, suffix) {
+			return got
+		}
+	}
+	t.Fatalf("Writes.Also declares no entry under %q ending in %q", root, suffix)
+	return ""
 }

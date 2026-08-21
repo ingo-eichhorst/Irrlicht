@@ -159,32 +159,44 @@ func TestReconcileNamesEveryWrongShape(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got := strings.Join(Reconcile(tc.rows, tc.exempt, tc.reg), "\n")
-
-			for _, want := range tc.reports {
-				if !strings.Contains(got, want) {
-					t.Errorf("report does not contain %q\nreport was:\n%s", want, got)
-				}
-			}
-			if tc.names != "" && !strings.Contains(got, `"`+tc.names+`"`) {
-				t.Errorf("report does not name the offending adapter %q\nreport was:\n%s", tc.names, got)
-			}
-
-			// Every fragment this case did NOT claim must be absent. "Reconcile
-			// failed" and "THIS check fired" are different claims and only the
-			// second is evidence.
-			for _, frag := range allFragments {
-				if containsString(tc.reports, frag) {
-					continue
-				}
-				if strings.Contains(got, frag) {
-					t.Errorf("report unexpectedly contains %q — this case is wrong in one way and "+
-						"must fire one check\nreport was:\n%s", frag, got)
-				}
-			}
-			if len(tc.reports) == 0 && got != "" {
-				t.Errorf("expected a silent report, got:\n%s", got)
-			}
+			assertReported(t, got, tc.reports, tc.names)
+			assertSilentOnEverythingElse(t, got, tc.reports)
 		})
+	}
+}
+
+// assertReported is the positive half: the fragments this case claims, plus the
+// offending adapter's name. Naming a fragment of the obligation's OWN message
+// rather than accepting any failure is the rule this corpus is built on —
+// "Reconcile failed" and "THIS check fired" are different claims.
+func assertReported(t *testing.T, got string, want []string, names string) {
+	t.Helper()
+	for _, w := range want {
+		if !strings.Contains(got, w) {
+			t.Errorf("report does not contain %q\nreport was:\n%s", w, got)
+		}
+	}
+	if names != "" && !strings.Contains(got, `"`+names+`"`) {
+		t.Errorf("report does not name the offending adapter %q\nreport was:\n%s", names, got)
+	}
+}
+
+// assertSilentOnEverythingElse is the half that carries most of the evidence:
+// without it, eight inputs wrong in eight ways are equally satisfied by a
+// Reconcile that complains about everything.
+func assertSilentOnEverythingElse(t *testing.T, got string, claimed []string) {
+	t.Helper()
+	for _, frag := range allFragments {
+		if containsString(claimed, frag) {
+			continue
+		}
+		if strings.Contains(got, frag) {
+			t.Errorf("report unexpectedly contains %q — this case is wrong in one way and must "+
+				"fire one check\nreport was:\n%s", frag, got)
+		}
+	}
+	if len(claimed) == 0 && got != "" {
+		t.Errorf("expected a silent report, got:\n%s", got)
 	}
 }
 
@@ -250,24 +262,40 @@ func TestTableRefusesRatherThanReturningAShortList(t *testing.T) {
 
 			rows, err := Table(root)
 			if tc.want == "" {
-				if err != nil {
-					t.Fatalf("a well-formed table was refused: %v", err)
-				}
-				if len(rows) != 1 || rows[0].Adapter != "codex" || rows[0].EnvVar != "CODEX_HOME" {
-					t.Fatalf("read %+v, want one codex/CODEX_HOME/optin row", rows)
-				}
+				assertTableWasRead(t, rows, err)
 				return
 			}
-			if err == nil {
-				t.Fatalf("expected a refusal naming %q, got %d rows and no error", tc.want, len(rows))
-			}
-			if !strings.Contains(err.Error(), tc.want) {
-				t.Errorf("refusal does not name %q: %v", tc.want, err)
-			}
-			if rows != nil {
-				t.Errorf("a refusal returned %d rows — a short list is what every check downstream "+
-					"cannot tell from a clean one", len(rows))
-			}
+			assertTableRefused(t, rows, err, tc.want)
 		})
+	}
+}
+
+// assertTableWasRead is this corpus's vacuity guard: a well-formed stand-in
+// must be READ, not merely not-refused, or every refusal row above could be
+// passing because the reader rejects everything it is handed.
+func assertTableWasRead(t *testing.T, rows []Row, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("a well-formed table was refused: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Adapter != "codex" || rows[0].EnvVar != "CODEX_HOME" {
+		t.Fatalf("read %+v, want one codex/CODEX_HOME/optin row", rows)
+	}
+}
+
+// assertTableRefused pins both halves of a refusal: it names its own reason,
+// and it returns NO rows. A short list is exactly what every check downstream
+// cannot tell from a clean one.
+func assertTableRefused(t *testing.T, rows []Row, err error, want string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("expected a refusal naming %q, got %d rows and no error", want, len(rows))
+	}
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("refusal does not name %q: %v", want, err)
+	}
+	if rows != nil {
+		t.Errorf("a refusal returned %d rows — a short list is what every check downstream "+
+			"cannot tell from a clean one", len(rows))
 	}
 }

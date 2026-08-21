@@ -94,80 +94,94 @@ func TestEveryRigHomeRowRelocatesBothHalves(t *testing.T) {
 			home := filepath.Join(t.TempDir(), "scratch-home")
 			t.Setenv(row.EnvVar, home)
 
-			// agents.All() is called AFTER the variable is set, and the order is
-			// the property rather than test hygiene. Three of the four rows
-			// (copilot, codex, kiro-cli) declare a static Source.Dir computed by
-			// their package's sessionsDir() at Agent() CONSTRUCTION time, so the
-			// watched root is frozen when the registry is built; only vibe's
-			// DirFunc re-resolves lazily. That is exactly why run-cell.sh has to
-			// export before spawn_record_daemon rather than at any convenient
-			// point — a daemon already running cannot be relocated. Building the
-			// registry first here reported all three as "does not relocate",
-			// which is true of the object and false of the daemon.
-			var a agent.Agent
-			found := false
-			for _, cand := range agents.All() {
-				if shard.SlugForAdapter(cand.Identity.Name) == row.Adapter {
-					a, found = cand, true
-				}
-			}
-			if !found {
-				t.Fatalf("no registry adapter with slug %q", row.Adapter)
-			}
-
-			// Half one: the watched session root.
-			src, isFiles := a.Source.(agent.FilesUnderRoot)
-			if !isFiles {
-				t.Fatalf("adapter %q declares Source %T, which this arm cannot resolve — a row "+
-					"for a non-FilesUnderRoot adapter needs its own half-one check rather than "+
-					"being waved through", row.Adapter, a.Source)
-			}
-			roots := src.AllRootsFor("darwin")
-			if len(roots) == 0 {
-				t.Fatalf("adapter %q resolves no session roots at all", row.Adapter)
-			}
-			for _, root := range roots {
-				if !strings.HasPrefix(root, home) {
-					t.Errorf("with %s=%s the session root is still %q — the daemon would watch the "+
-						"operator's real store while the driver wrote to the scratch home, and the "+
-						"recording would contain their sessions and not the driver's",
-						row.EnvVar, home, root)
-				}
-			}
-
-			// Half two: every file the hooks install writes.
-			var hooks *agent.Permission
-			for i := range a.Permissions {
-				if a.Permissions[i].Key == permissionKeyHooks {
-					hooks = &a.Permissions[i]
-				}
-			}
-			if hooks == nil {
-				t.Fatalf("adapter %q has a rig home row but declares no hooks permission — this "+
-					"arm's second half has nothing to grade, so the row's promise is only half "+
-					"checked; say so in the table rather than leaving it implied", row.Adapter)
-			}
-			if hooks.Writes == nil || hooks.Writes.Path == nil {
-				t.Fatalf("adapter %q's hooks permission declares no Writes.Path", row.Adapter)
-			}
-
-			resolvers := append([]func() (string, error){hooks.Writes.Path}, hooks.Writes.Also...)
-			for i, resolve := range resolvers {
-				label := "Writes.Path"
-				if i > 0 {
-					label = "Writes.Also[" + itoa(i-1) + "]"
-				}
-				got, err := resolve()
-				if err != nil {
-					t.Fatalf("resolving %s for %q: %v", label, row.Adapter, err)
-				}
-				if !strings.HasPrefix(got, home) {
-					t.Errorf("with %s=%s the hooks install still writes %s to %q — the install "+
-						"would land in the operator's real config while everything else in the run "+
-						"claimed to be isolated", row.EnvVar, home, label, got)
-				}
-			}
+			a := registryAdapterAfterEnv(t, row.Adapter)
+			assertSessionRootRelocates(t, row, home, a)
+			assertHookWritesRelocate(t, row, home, a)
 		})
+	}
+}
+
+// registryAdapterAfterEnv builds the registry and finds one adapter, and is a
+// separate step because it must run AFTER the caller has set the env var.
+//
+// That ordering is the property rather than test hygiene. Three of the four
+// rows (copilot, codex, kiro-cli) declare a static Source.Dir computed by their
+// package's sessionsDir() at Agent() CONSTRUCTION time, so the watched root is
+// frozen when the registry is built; only vibe's DirFunc re-resolves lazily.
+// That is exactly why run-cell.sh has to export before spawn_record_daemon
+// rather than at any convenient point — a daemon already running cannot be
+// relocated. Building the registry first here reported all three as "does not
+// relocate", which is true of the object and false of the daemon.
+func registryAdapterAfterEnv(t *testing.T, slug string) agent.Agent {
+	t.Helper()
+	for _, cand := range agents.All() {
+		if shard.SlugForAdapter(cand.Identity.Name) == slug {
+			return cand
+		}
+	}
+	t.Fatalf("no registry adapter with slug %q", slug)
+	return agent.Agent{}
+}
+
+// assertSessionRootRelocates is half one: if the watched root does not move,
+// the daemon records the operator's own sessions instead of the driver's.
+func assertSessionRootRelocates(t *testing.T, row Row, home string, a agent.Agent) {
+	t.Helper()
+	src, isFiles := a.Source.(agent.FilesUnderRoot)
+	if !isFiles {
+		t.Fatalf("adapter %q declares Source %T, which this arm cannot resolve — a row for a "+
+			"non-FilesUnderRoot adapter needs its own half-one check rather than being waved "+
+			"through", row.Adapter, a.Source)
+	}
+	roots := src.AllRootsFor("darwin")
+	if len(roots) == 0 {
+		t.Fatalf("adapter %q resolves no session roots at all", row.Adapter)
+	}
+	for _, root := range roots {
+		if !strings.HasPrefix(root, home) {
+			t.Errorf("with %s=%s the session root is still %q — the daemon would watch the "+
+				"operator's real store while the driver wrote to the scratch home, and the "+
+				"recording would contain their sessions and not the driver's",
+				row.EnvVar, home, root)
+		}
+	}
+}
+
+// assertHookWritesRelocate is half two: if a written file does not move, the
+// install lands in the operator's real config while everything else in the run
+// claims to be isolated — the worst of the outcomes, because it looks isolated.
+func assertHookWritesRelocate(t *testing.T, row Row, home string, a agent.Agent) {
+	t.Helper()
+	var hooks *agent.Permission
+	for i := range a.Permissions {
+		if a.Permissions[i].Key == permissionKeyHooks {
+			hooks = &a.Permissions[i]
+		}
+	}
+	if hooks == nil {
+		t.Fatalf("adapter %q has a rig home row but declares no hooks permission — this arm's "+
+			"second half has nothing to grade, so the row's promise is only half checked; say "+
+			"so in the table rather than leaving it implied", row.Adapter)
+	}
+	if hooks.Writes == nil || hooks.Writes.Path == nil {
+		t.Fatalf("adapter %q's hooks permission declares no Writes.Path", row.Adapter)
+	}
+
+	resolvers := append([]func() (string, error){hooks.Writes.Path}, hooks.Writes.Also...)
+	for i, resolve := range resolvers {
+		label := "Writes.Path"
+		if i > 0 {
+			label = "Writes.Also[" + itoa(i-1) + "]"
+		}
+		got, err := resolve()
+		if err != nil {
+			t.Fatalf("resolving %s for %q: %v", label, row.Adapter, err)
+		}
+		if !strings.HasPrefix(got, home) {
+			t.Errorf("with %s=%s the hooks install still writes %s to %q — the install would "+
+				"land in the operator's real config while everything else in the run claimed "+
+				"to be isolated", row.EnvVar, home, label, got)
+		}
 	}
 }
 
@@ -218,34 +232,65 @@ func TestEveryRigHomeRowsDriverPassesTheHomeThroughTmux(t *testing.T) {
 					"cannot be checked, and a check that cannot run must say so", row.Adapter, err)
 			}
 
-			lines := strings.Split(string(src), "\n")
-			launches := 0
-			for i, line := range lines {
-				if !strings.Contains(line, "tmux new-session") {
-					continue
-				}
-				launches++
-				// The launch commonly spans continuation lines; take a small
-				// window rather than the single line.
-				end := i + 4
-				if end > len(lines) {
-					end = len(lines)
-				}
-				window := strings.Join(lines[i:end], "\n")
-				if !strings.Contains(window, "env \""+row.EnvVar+"=") &&
-					!strings.Contains(window, "env "+row.EnvVar+"=") {
-					t.Errorf("%s:%d launches the agent under tmux without an explicit "+
-						"`env %s=…` prefix.\n%s\nThe pane inherits the tmux SERVER's environment, "+
-						"not the exported one, so on any machine with a server already running the "+
-						"daemon would watch the scratch home while the CLI wrote to the real one.",
-						path, i+1, row.EnvVar, strings.TrimRight(window, "\n"))
-				}
+			for _, l := range tmuxLaunchesMissingEnv(string(src), row.EnvVar) {
+				t.Errorf("%s:%d launches the agent under tmux without an explicit `env %s=…` "+
+					"prefix.\n%s\nThe pane inherits the tmux SERVER's environment, not the "+
+					"exported one, so on any machine with a server already running the daemon "+
+					"would watch the scratch home while the CLI wrote to the real one.",
+					path, l.line, row.EnvVar, l.window)
 			}
 			// Vacuity guard: a driver with no tmux launch at all satisfies the
-			// loop above by never entering it.
-			if launches == 0 {
+			// check above by having nothing to walk.
+			if n := countTmuxLaunches(string(src)); n == 0 {
 				t.Errorf("%s contains no `tmux new-session` at all — this arm graded nothing", path)
 			}
 		})
 	}
+}
+
+// launchSite is one `tmux new-session` that does not carry the home variable.
+type launchSite struct {
+	line   int
+	window string
+}
+
+// tmuxLaunchWindow returns the launch statement starting at index i — the line
+// plus up to three continuations, since these launches routinely wrap.
+func tmuxLaunchWindow(lines []string, i int) string {
+	end := i + 4
+	if end > len(lines) {
+		end = len(lines)
+	}
+	return strings.TrimRight(strings.Join(lines[i:end], "\n"), "\n")
+}
+
+// countTmuxLaunches is the vacuity guard's own measurement, kept separate from
+// the verdict so "no launches found" cannot be confused with "all launches OK".
+func countTmuxLaunches(src string) int {
+	n := 0
+	for _, line := range strings.Split(src, "\n") {
+		if strings.Contains(line, "tmux new-session") {
+			n++
+		}
+	}
+	return n
+}
+
+// tmuxLaunchesMissingEnv names every launch site that does not pass envVar
+// explicitly. Both quoting styles are accepted because codex's driver writes
+// `env "CODEX_HOME=$X"` and a future one may not quote.
+func tmuxLaunchesMissingEnv(src, envVar string) []launchSite {
+	var out []launchSite
+	lines := strings.Split(src, "\n")
+	for i, line := range lines {
+		if !strings.Contains(line, "tmux new-session") {
+			continue
+		}
+		window := tmuxLaunchWindow(lines, i)
+		if strings.Contains(window, "env \""+envVar+"=") || strings.Contains(window, "env "+envVar+"=") {
+			continue
+		}
+		out = append(out, launchSite{line: i + 1, window: window})
+	}
+	return out
 }

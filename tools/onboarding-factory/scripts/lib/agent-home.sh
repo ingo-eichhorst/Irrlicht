@@ -166,10 +166,18 @@ agent_home_field() {
 
 # agent_home_var <adapter> prints the env var that relocates the adapter's home,
 # or nothing when it has no row.
-agent_home_var() { agent_home_field "$1" 2; }
+agent_home_var() {
+  local adapter="${1:-}"
+  agent_home_field "$adapter" 2
+  return 0
+}
 
 # agent_home_policy <adapter> prints "default" or "optin", or nothing.
-agent_home_policy() { agent_home_field "$1" 3; }
+agent_home_policy() {
+  local adapter="${1:-}"
+  agent_home_field "$adapter" 3
+  return 0
+}
 
 # agent_home_isolate <adapter> <staging-default-dir> resolves, validates,
 # exports and creates the adapter's home, and reports on stdout what it did.

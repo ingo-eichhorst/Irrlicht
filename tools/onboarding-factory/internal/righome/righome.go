@@ -33,6 +33,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"irrlicht/core/pkg/pathutil"
 )
 
 // TableScript is the shell library that carries the declaration, relative to
@@ -93,9 +95,17 @@ var Unisolatable = map[string]string{
 // otherwise be the same answer.
 func Table(repoRoot string) ([]Row, error) {
 	script := filepath.Join(repoRoot, TableScript)
+	// bash is resolved through pathutil rather than run by bare name, which is
+	// this repo's own answer to SonarQube go:S4036 (that package's doc comment
+	// names the rule): a local attacker who can write to a directory earlier on
+	// the inherited PATH would otherwise choose the interpreter that reads the
+	// declaration this whole package exists to trust. MustResolve falls back to
+	// the bare name when no trusted directory has it, so a machine with an
+	// unusual layout degrades to today's behaviour rather than failing to run
+	// the check at all.
 	// #nosec G204 -- script path is built from a caller-supplied repo root and
 	// a package constant, never from external input.
-	cmd := exec.Command("bash", "-c", `set -euo pipefail; source "$1"; agent_home_table`, "_", script)
+	cmd := exec.Command(pathutil.MustResolve("bash"), "-c", `set -euo pipefail; source "$1"; agent_home_table`, "_", script)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("running agent_home_table from %s: %w: %s", script, err, strings.TrimSpace(string(out)))
@@ -142,14 +152,30 @@ func Table(repoRoot string) ([]Row, error) {
 // an adapter, which is a different test), so the committed mutation evidence is
 // a corpus driving THIS function with deliberately wrong inputs.
 func Reconcile(rows []Row, exempt map[string]string, declaresHooks map[string]bool) []string {
-	var problems []string
-
 	if len(declaresHooks) == 0 {
 		return []string{"the adapter registry projection is empty — nothing below can fail, " +
 			"so this is a broken measurement rather than a clean result"}
 	}
 
+	// Three independent questions, one per helper — the table's own rows, the
+	// exemption map's own entries, and the adapters neither of them covers.
+	// Kept apart rather than folded into one walk because each names a
+	// different fragment in its message, and the corpus beside this file
+	// asserts that a case wrong in ONE way fires exactly one of them.
+	rowFor, problems := checkRows(rows, exempt, declaresHooks)
+	problems = append(problems, checkExemptions(exempt, declaresHooks)...)
+	problems = append(problems, checkUncovered(rowFor, exempt, declaresHooks)...)
+
+	sort.Strings(problems)
+	return problems
+}
+
+// checkRows validates the rig table's own rows and returns the row index the
+// uncovered-adapter check needs, so the two cannot disagree about which
+// adapters actually have a usable row (a duplicate contributes only its first).
+func checkRows(rows []Row, exempt map[string]string, declaresHooks map[string]bool) (map[string]Row, []string) {
 	rowFor := make(map[string]Row, len(rows))
+	var problems []string
 	for _, r := range rows {
 		if _, known := declaresHooks[r.Adapter]; !known {
 			problems = append(problems, fmt.Sprintf(
@@ -172,8 +198,16 @@ func Reconcile(rows []Row, exempt map[string]string, declaresHooks map[string]bo
 				r.Adapter, TableScript, r.EnvVar, truncate(reason)))
 		}
 	}
+	return rowFor, problems
+}
 
-	for adapter, reason := range exempt {
+// checkExemptions validates the exemption map's own keys in both directions: an
+// entry for an adapter the registry does not have, and one for an adapter that
+// installs no hooks. Both read as coverage of an obligation that was never
+// there.
+func checkExemptions(exempt map[string]string, declaresHooks map[string]bool) []string {
+	var problems []string
+	for adapter := range exempt {
 		declares, known := declaresHooks[adapter]
 		switch {
 		case !known:
@@ -185,25 +219,29 @@ func Reconcile(rows []Row, exempt map[string]string, declaresHooks map[string]bo
 				"Unisolatable names adapter %q, which declares no hooks permission — it is "+
 					"exempt from an obligation it never had", adapter))
 		}
-		_ = reason
 	}
+	return problems
+}
 
+// checkUncovered is the obligation itself: a hooks-declaring adapter in neither
+// declaration.
+func checkUncovered(rowFor map[string]Row, exempt map[string]string, declaresHooks map[string]bool) []string {
+	var problems []string
 	for _, adapter := range sortedKeys(declaresHooks) {
 		if !declaresHooks[adapter] {
 			continue
 		}
 		_, hasRow := rowFor[adapter]
 		_, isExempt := exempt[adapter]
-		if !hasRow && !isExempt {
-			problems = append(problems, fmt.Sprintf(
-				"adapter %q installs hooks into the user's config but has neither a row in %s "+
-					"nor an Unisolatable entry saying why it cannot have one. Add whichever is "+
-					"true — an isolation story is a decision, and an omission looks exactly like "+
-					"a decision that was made silently", adapter, TableScript))
+		if hasRow || isExempt {
+			continue
 		}
+		problems = append(problems, fmt.Sprintf(
+			"adapter %q installs hooks into the user's config but has neither a row in %s "+
+				"nor an Unisolatable entry saying why it cannot have one. Add whichever is "+
+				"true — an isolation story is a decision, and an omission looks exactly like "+
+				"a decision that was made silently", adapter, TableScript))
 	}
-
-	sort.Strings(problems)
 	return problems
 }
 
