@@ -4,8 +4,9 @@
 // detector must return for it.
 //
 // It exists because TestEveryHookInstallWiresItsContractFamilies passes by
-// construction — all six hooks-declaring adapters wired all seven families the
-// day it landed — and docs/testing-philosophy.md is explicit that this is the
+// construction — every hooks-declaring adapter wired every required family the
+// day it landed, which is what that test being green says — and
+// docs/testing-philosophy.md is explicit that this is the
 // condition the mutation rule exists for, and that the mutation belongs
 // COMMITTED beside the assertion rather than described in a PR body nothing
 // re-runs. The real-tree mutations (delete an adapter's hookpath_test.go, or
@@ -133,7 +134,7 @@ func wiringShapes() []wiringCase {
 			dir:    "direct",
 			want:   map[string]verdict{epConfined: wantCalled},
 			needle: "func TestHookPathConfined(t *testing.T)",
-			why:    "the spelling every one of the six hooks adapters uses today",
+			why:    "the spelling every hooks-declaring adapter uses today",
 			files: map[string]string{
 				"x_test.go": `package shape
 

@@ -84,29 +84,49 @@
 // Stated here rather than left to be discovered, and pinned as executable
 // corpus rows in hookcontracts_shapes_test.go wherever a row can express it:
 //
-//   - PACKAGE GRANULARITY. It asks whether the adapter's test package wires a
-//     family, never which RECEIVER inside that package was wired. claudecode
-//     hosts two receivers — hooks and statusline — and #1361's incident was
-//     the second one. A claudecode that wired AssertHookPathConfined for its
-//     hook receiver and not its statusline receiver passes here. That is the
-//     original bug, and this walk does not close it; hookjson.DecodeConfined
-//     plus core/architecture_hookbody_test.go do, by making an unconfined body
-//     read fail to build.
+//   - PACKAGE GRANULARITY, which is the big one and is MEASURED rather than
+//     reasoned about. The walk asks whether the adapter's test package calls a
+//     family's entry point, never which RECEIVER or which PERMISSION that call
+//     was for. Two real instances in this tree, both established by mutation
+//     while #1740 was being built:
+//
+//     Replacing the AssertHookReceiverPermissionGated call in claudecode's
+//     hooks_test.go with a local no-op left that adapter's row GREEN, because
+//     claudecode's statusline receiver wires the same family in the same
+//     package. claudecode hosts two receivers and #1361's incident was the
+//     second one, so this is precisely the shape that started all of it: this
+//     walk does not close it. hookjson.DecodeConfined and
+//     core/architecture_hookbody_test.go do, by making an unconfined body read
+//     fail to build — which is why that pair, not this walk, is the real
+//     enforcement for confinement.
+//
+//     AssertPermissionGated is excluded from requiredWirings() for the same
+//     reason (see unenforceableHere): claudecode's package calls it for its
+//     INSTRUCTIONS permission, so a row demanding it would be satisfied by that
+//     call while claudecode's hooks install has no such wiring at all.
+//
+//     What the walk DOES still catch, and what #1740 is actually about, is the
+//     new adapter that wires a family nowhere at all.
+//
 //   - A test that is SKIPPED (t.Skip) or a call guarded by a constant false
 //     condition still counts. Reachability here is syntactic; it does not
 //     evaluate.
+//
 //   - A wiring reached through a func literal held in a PACKAGE-LEVEL VAR is
 //     NOT seen, because the literal's body hangs off a ValueSpec rather than a
 //     FuncDecl. That direction is fail-closed — it reports a real wiring as
 //     missing, which is loud — and it is the same declared limit
 //     contracttesting/seam_walk_corpus_test.go pins for its own walk.
+//
 //   - A wiring reached through a helper in ANOTHER package (other than the
 //     adapter's own external test package, which is merged in) is not seen.
 //     Fail-closed again.
+//
 //   - An entry point taken as a VALUE and called later (`f :=
 //     contracttesting.AssertX; f(t, r)`) is not seen. Fail-closed. Requiring a
 //     call expression is what makes `var _ = contracttesting.AssertX` — a
 //     reference that executes nothing — not count.
+//
 //   - It cannot say the wiring is CORRECT. That is what the contract families
 //     themselves are for; this only says one is present and runs.
 package agents
@@ -166,14 +186,20 @@ type requiredWiring struct {
 // rather than leaving the evidence in a PR body.
 //
 // #1740 names the first three. The other four have the identical shape — wired
-// as a test call, enforced by nothing — and were found by measuring rather than
-// assumed: every one of the six hooks-declaring adapters already wires all
-// seven, so including them costs nothing today and covers four more families
-// tomorrow. Reproduce that measurement with:
+// as a test call, enforced by nothing — and were included by measuring rather
+// than assumed out: every hooks-declaring adapter already wires all seven, so
+// they cost nothing today and cover four more families tomorrow.
 //
-//	for f in $(grep -ho 'Assert[A-Za-z]*' core/internal/contracttesting/*.go | sort -u); do …
+// That claim needs no separately-maintained figure, because THIS TEST is what
+// produces it: "every hooks-declaring adapter wires every row" is true exactly
+// when TestEveryHookInstallWiresItsContractFamilies is green. The roster it
+// runs over is derived from All() rather than written down, so neither the
+// count of adapters nor the count of rows can drift away from what was
+// measured. To see the per-adapter breakdown directly:
 //
-// or, more simply, by deleting a row and watching this test stay green.
+//	for f in $(git grep -ho 'func Assert[A-Za-z]*' core/internal/contracttesting/ | sed 's/^func //'); do
+//	  echo "== $f"; git grep -l "contracttesting.$f" -- 'core/adapters/inbound/agents/*/*_test.go'
+//	done
 func requiredWirings() []requiredWiring {
 	return []requiredWiring{
 		{
@@ -224,6 +250,34 @@ func requiredWirings() []requiredWiring {
 	}
 }
 
+// unenforceableHere names contracttesting entry points with the SAME
+// wired-as-a-test-call shape as requiredWirings() which this tripwire
+// deliberately does NOT demand, each with the reason.
+//
+// An omission with no entry is indistinguishable from an omission nobody
+// noticed, which is #1740 reproduced inside its own fix. So the omissions are
+// written down — and, because a reason written once rots, each row's PREMISE is
+// re-checked every run by assertExclusionsStillHold.
+//
+// The single row is here because of this walk's package granularity, measured
+// rather than reasoned: claude-code's test package calls AssertPermissionGated
+// for its INSTRUCTIONS permission (instructioninstaller_test.go), so a
+// requiredWirings() row for it would be satisfied by that call while
+// claude-code's HOOKS install has no such wiring at all — a rule that reads as
+// coverage and is not, which is worse than a stated gap. The gap itself (five
+// of six hooks adapters wire the family for their hooks install; claude-code
+// does not) is a finding about claude-code reported in PR #1740, not something
+// to paper over with a green row here.
+func unenforceableHere() map[string]string {
+	return map[string]string{
+		"AssertPermissionGated": "every hooks-declaring adapter's test package already calls this " +
+			"family, so a required row would discriminate nothing — but for claude-code the call " +
+			"is for its INSTRUCTIONS permission, not its hooks install (five of six adapters wire " +
+			"it in their own hookinstaller_test.go; claude-code does not). Requiring it would be " +
+			"vacuously green there. Reconsider this row if the premise below stops holding.",
+	}
+}
+
 // hookInstall is one hooks-declaring permission and the Go package that
 // declared it.
 type hookInstall struct {
@@ -244,11 +298,26 @@ func TestEveryHookInstallWiresItsContractFamilies(t *testing.T) {
 
 	assertRequiredWiringsExist(t, pkgs, required)
 
+	excluded := unenforceableHere()
+	assertExclusionsAreWellFormed(t, pkgs, required, excluded)
+
 	units := testVariantUnitsByPackage(t, pkgs)
-	want := make([]string, 0, len(required))
+	want := make([]string, 0, len(required)+len(excluded))
 	for _, r := range required {
 		want = append(want, r.Fn)
 	}
+	want = append(want, slices.Sorted(maps.Keys(excluded))...)
+
+	// wiredEverywhere tracks, per excluded entry point, whether EVERY adapter's
+	// package already calls it — which is the stated premise of every row in
+	// unenforceableHere() and the thing that makes a required row worthless
+	// there. Seeded true and narrowed by the loop; the seed is only correct
+	// because hookInstallingAdapters already refused an empty set.
+	wiredEverywhere := map[string]bool{}
+	for name := range excluded {
+		wiredEverywhere[name] = true
+	}
+	missingSomewhere := map[string]string{}
 
 	for _, in := range installs {
 		u := units[in.Pkg]
@@ -291,6 +360,71 @@ func TestEveryHookInstallWiresItsContractFamilies(t *testing.T) {
 				"own receiver/installer. A contract can only fail for an adapter that wired it "+
 				"(issue #1740).",
 				in.Adapter, in.Pkg, in.Key, r.Fn, r.Family, r.Why, r.Fn)
+		}
+		for name := range excluded {
+			if _, ok := scan.Called[name]; !ok {
+				wiredEverywhere[name] = false
+				missingSomewhere[name] = in.Adapter
+			}
+		}
+	}
+
+	assertExclusionsStillHold(t, excluded, wiredEverywhere, missingSomewhere)
+}
+
+// assertExclusionsStillHold re-checks the premise every unenforceableHere() row
+// rests on: that the entry point is ALREADY called by every hooks-declaring
+// adapter's package, which is what makes requiring it discriminate nothing.
+//
+// The polarity is the correction, and it was earned by getting it backwards
+// first. The obvious check — "fail once everybody wires it, so the row gets
+// promoted" — fires immediately and permanently here, because everybody already
+// does; that is the premise, not the trigger. The condition worth reporting is
+// the opposite one: an adapter that does NOT call it means a required row would
+// now catch something, so the exclusion has stopped being free and needs
+// re-reading. An exemption whose stated reason is re-derived each run is the
+// only kind that cannot rot into "you don't need to look here".
+func assertExclusionsStillHold(t *testing.T, excluded map[string]string, wiredEverywhere map[string]bool, missingSomewhere map[string]string) {
+	t.Helper()
+
+	for _, name := range slices.Sorted(maps.Keys(excluded)) {
+		if wiredEverywhere[name] {
+			continue
+		}
+		t.Errorf("unenforceableHere() excludes contracttesting.%s on the premise that every "+
+			"hooks-declaring adapter's package already calls it, so requiring it would discriminate "+
+			"nothing. %s does not call it, so that premise no longer holds.\n"+
+			"\tRe-read the row: a required row would now catch a real omission. The reason it was "+
+			"excluded was: %s", name, missingSomewhere[name], excluded[name])
+	}
+}
+
+// assertExclusionsAreWellFormed checks notYetRequired()'s keys the way
+// requiredWirings()' are checked: the name must exist in contracttesting, and it
+// must not also be required. An exemption naming something that does not exist,
+// or contradicting the requirement table, is worse than no exemption at all —
+// it reads as a considered decision while meaning nothing.
+func assertExclusionsAreWellFormed(t *testing.T, pkgs []*packages.Package, required []requiredWiring, excluded map[string]string) {
+	t.Helper()
+
+	scope := contracttestingScope(t, pkgs)
+	isRequired := map[string]bool{}
+	for _, r := range required {
+		isRequired[r.Fn] = true
+	}
+	for _, name := range slices.Sorted(maps.Keys(excluded)) {
+		if excluded[name] == "" {
+			t.Fatalf("notYetRequired()[%q] carries no reason; an exclusion nobody can justify is "+
+				"one nobody can safely delete", name)
+		}
+		if scope.Lookup(name) == nil {
+			t.Fatalf("notYetRequired() excludes contracttesting.%s, which %s does not declare — the "+
+				"entry stopped naming a real thing and now excludes nothing",
+				name, contracttestingPkg)
+		}
+		if isRequired[name] {
+			t.Fatalf("contracttesting.%s is both required and excluded; the tables contradict each "+
+				"other and only one of them can be the rule", name)
 		}
 	}
 }
@@ -682,17 +816,7 @@ func loadForWiringScan(t *testing.T, patterns []string) []*packages.Package {
 func assertRequiredWiringsExist(t *testing.T, pkgs []*packages.Package, required []requiredWiring) {
 	t.Helper()
 
-	var scope *types.Scope
-	for _, pkg := range pkgs {
-		if pkg.PkgPath == contracttestingPkg && pkg.ID == contracttestingPkg && pkg.Types != nil {
-			scope = pkg.Types.Scope()
-			break
-		}
-	}
-	if scope == nil {
-		t.Fatalf("package %q was not loaded — every entry point below would be unverifiable and "+
-			"this tripwire would be asserting against names nothing checks", contracttestingPkg)
-	}
+	scope := contracttestingScope(t, pkgs)
 	if len(required) == 0 {
 		t.Fatal("requiredWirings() is empty; this tripwire would pass having demanded nothing")
 	}
@@ -763,4 +887,20 @@ func testVariantUnitsByPackage(t *testing.T, pkgs []*packages.Package) map[strin
 func describeScan(s wiringScan) string {
 	return fmt.Sprintf("files=%d roots=%d called=%v unreached=%v",
 		s.TestFiles, s.Roots, slices.Sorted(maps.Keys(s.Called)), slices.Sorted(maps.Keys(s.Unreached)))
+}
+
+// contracttestingScope returns the contract package's top-level scope, and
+// refuses if the load did not produce it — without it every name check below
+// silently becomes a no-op, and this tripwire would be asserting against
+// strings nothing verifies.
+func contracttestingScope(t *testing.T, pkgs []*packages.Package) *types.Scope {
+	t.Helper()
+	for _, pkg := range pkgs {
+		if pkg.PkgPath == contracttestingPkg && pkg.ID == contracttestingPkg && pkg.Types != nil {
+			return pkg.Types.Scope()
+		}
+	}
+	t.Fatalf("package %q was not loaded — every entry-point name check would be unverifiable and "+
+		"this tripwire would be asserting against names nothing checks", contracttestingPkg)
+	return nil
 }

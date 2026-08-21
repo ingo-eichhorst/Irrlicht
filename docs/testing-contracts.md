@@ -432,12 +432,26 @@ below.
   recovering the package under test by trimming `_test` off `PkgPath` instead
   of reading `packages.Package.ID`'s variant tag, which silently dropped every
   test file of any package whose path ends in `_test`.
-  What it does not cover is stated in the file's header rather than implied:
-  package granularity (above), a skipped or constant-false-guarded call, a
-  wiring reached through a package-level func var or a helper in a third
-  package (both fail-closed), an entry point taken as a value and called later
-  (fail-closed), and — the standing one — whether the wiring is CORRECT, which
-  is what the families themselves are for.
+  What it does not cover is stated in the file's header rather than implied,
+  and the headline limit was MEASURED rather than reasoned about. The walk is
+  PACKAGE-granular: it never asks which receiver or which permission a call was
+  for. Replacing the `AssertHookReceiverPermissionGated` call in claudecode's
+  `hooks_test.go` with a local no-op leaves that adapter's row GREEN, because
+  its statusline receiver wires the same family in the same package — the exact
+  #1361 shape. `AssertPermissionGated` is excluded from the required set for the
+  same reason and says so in `unenforceableHere()`, whose row's PREMISE (every
+  hooks adapter's package already calls it, so a required row would discriminate
+  nothing) is re-derived every run rather than trusted once. That exclusion also
+  surfaced a finding worth its own ticket: five of the six hooks-declaring
+  adapters wire `AssertPermissionGated` for their hooks INSTALL closures and
+  claude-code does not — it wires the family only for its instructions
+  permission. The other limits: a skipped or constant-false-guarded call still
+  counts; a wiring reached through a package-level func var or a helper in a
+  third package is not seen (fail-closed); an entry point taken as a value and
+  called later is not seen (fail-closed); and — the standing one — nothing here
+  says the wiring is CORRECT, which is what the families themselves are for.
+  Note what the walk DOES catch, which is what #1740 is about: the new adapter
+  that wires a family nowhere at all.
 - Managed user files: every `modify`-kind permission with an `Apply` closure
   declares the shared, user-owned file(s) that closure writes
   (`agent.Permission.Writes`, an `agent.ManagedUserFile` carrying `Path`,
