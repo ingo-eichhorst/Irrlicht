@@ -49,8 +49,9 @@ name: macOS (Swift)
 # are the ones the app actually ships against.
 #
 # WHY five suites are skipped rather than fixed, and why that is now permanent,
-# is in `AGENTS.md`'s "macOS app" bullet under Testing — the decision record for
-# #1615. It is not restated here: this file's own copy of it said CI gates "270
+# is in `docs/swift-testing.md` (linked from AGENTS.md's "macOS app" bullet
+# under Testing, #1742) — the decision record for #1615. It is not restated
+# here: this file's own copy of it said CI gates "270
 # of 318 tests", then "272 of 320", and was 115 tests stale by the time #1615
 # closed. The current figures are printed by
 # `ImageSnapshotCIScopeTests.testTheUngatedPopulationIsExactlyTheSkippedSuites`
@@ -183,9 +184,10 @@ jobs:
       # — and that is now a permanent, deliberate exclusion rather than a
       # pending fix. The decision, the pixel measurements behind it, and the
       # three levers it rejects (re-recording, a perceptual tolerance, pinning
-      # the runner's Xcode — all three measured) are in `AGENTS.md`'s "macOS
-      # app" bullet under Testing. No figure from it is repeated here; this
-      # comment carried two and both went stale.
+      # the runner's Xcode — all three measured) are in `docs/swift-testing.md`
+      # (linked from AGENTS.md's "macOS app" bullet under Testing, #1742). No
+      # figure from it is repeated here; this comment carried two and both
+      # went stale.
       #
       # Two image-snapshot suites are deliberately NOT skipped: they pass on a
       # runner, which is itself the evidence that the residual is

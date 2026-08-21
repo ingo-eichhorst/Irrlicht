@@ -65,6 +65,16 @@ assert_rc "401-line fixture is one line OVER budget (the mutation)" \
 assert_rc "401-line fixture's failure names the limit too" \
   1 "$FIXTURE_DIR/over-limit.md" "400-line budget"
 
+# --- boundary case: a file with no trailing newline on its last line -------
+# `wc -l` counts NEWLINE CHARACTERS, so a 401-line file whose last line has no
+# trailing newline undercounts to 400 and would silently PASS — found in
+# review of #1742 itself. This fixture is 401 lines by `awk 'END{print NR}'`
+# (which counts a trailing unterminated line as a record) and 400 by `wc -l`;
+# the check must use the former and FAIL here, the same as the ordinary
+# over-limit.md case.
+assert_rc "401 lines with no trailing newline still FAILS (wc -l would undercount to 400)" \
+  1 "$FIXTURE_DIR/over-limit-no-trailing-newline.md" "401 lines"
+
 # --- refusal case: cannot be read at all ------------------------------------
 assert_rc "a path that does not exist is a REFUSAL, not a silent pass" \
   2 "$FIXTURE_DIR/does-not-exist.md" "cannot read"

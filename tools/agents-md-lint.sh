@@ -3,7 +3,7 @@
 #
 # AGENTS.md is pulled into EVERY agent session's context by CLAUDE.md's
 # `@AGENTS.md` import — a whole-file, force-injected pull, unlike a plain
-# markdown link, which only loads on demand. #1742 split a 2571-line AGENTS.md
+# markdown link, which only loads on demand. #1742 split a 2625-line AGENTS.md
 # (dense, incident-laden prose — every paragraph typically a specific
 # issue/measurement/rationale) down to a lean index, moving the deep detail
 # verbatim into topic-scoped docs/*.md files that AGENTS.md now points at with
@@ -42,9 +42,14 @@ agents_md_line_limit_check() {
   fi
 
   local count
-  count=$(wc -l < "$path" 2>/dev/null | tr -d '[:space:]')
+  # awk's NR, not `wc -l`: wc -l counts NEWLINE CHARACTERS, so a file whose
+  # last line has no trailing newline is undercounted by one — a 401-line
+  # AGENTS.md missing a final newline would read as 400 and pass. awk counts
+  # a trailing unterminated line as a record too (verified: `printf
+  # 'a\nb\nc'` — no trailing \n — reports `wc -l` 2, `awk 'END{print NR}'` 3).
+  count=$(awk 'END{print NR}' "$path" 2>/dev/null | tr -d '[:space:]')
   if [[ -z "$count" || ! "$count" =~ ^[0-9]+$ ]]; then
-    echo "REFUSE: agents-md-lint — wc produced no usable line count for $path" >&2
+    echo "REFUSE: agents-md-lint — could not produce a usable line count for $path" >&2
     return 2
   fi
 

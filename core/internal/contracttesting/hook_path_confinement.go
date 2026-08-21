@@ -134,8 +134,9 @@ type HookReceiver struct {
 // handler that confines and the counter proving it can no longer be two objects
 // that disagree, and obligations 2-5 fail directly when the production
 // constructor stops confining. The full argument, including what that
-// obligation never covered either, is in AGENTS.md under "Hook path
-// confinement". The two are near-opposites in spirit: the retired one policed
+// obligation never covered either, is in docs/testing-contracts.md under
+// "Hook path confinement" (AGENTS.md/#1742 links to it rather than restating
+// it). The two are near-opposites in spirit: the retired one policed
 // WIRING and was replaced by a type guarantee, while #1389's polices the
 // VALUE that travels and could not be replaced by one — nothing in the type
 // system distinguishes a confined string from an unconfined one.

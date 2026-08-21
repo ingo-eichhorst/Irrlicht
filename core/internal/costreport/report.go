@@ -1,9 +1,10 @@
 // Package costreport is #1572's reporter: the machinery that turns a measured
 // figure in a doc comment from something REMEMBERED into something PRODUCIBLE.
 //
-// AGENTS.md's "Replay's measured figures" states the rule — a number which
-// documents behaviour but is not produced by it drifts silently, and is then
-// quoted with full confidence — and two trees in core/ had reached the stage
+// docs/replay-testing.md's "Replay's measured figures" (linked from
+// AGENTS.md/#1742) states the rule — a number which documents behaviour but
+// is not produced by it drifts silently, and is then quoted with full
+// confidence — and two trees in core/ had reached the stage
 // where the drift was visible in ONE FILE: bundleIDMemo (processlifecycle/
 // osutil_darwin.go) describes the same `plutil` exec at 2.2ms (#1524) and 9.7ms
 // (#1544). PR #1569 stated the discrepancy and marked both as snapshots, which
@@ -22,9 +23,9 @@
 //
 // ONE package rather than a copy per caller. The two callers' first draft was
 // two copies of this reporter, whose own header argued the duplication was
-// deliberate; AGENTS.md's most on-point precedent says otherwise — "The
-// shell-lib suite runner ... Before #1639 those were two copies of the same loop
-// that disagreed about the only thing that matters." A change filed ABOUT
+// deliberate; docs/ci-gates.md's most on-point precedent says otherwise —
+// "The shell-lib suite runner ... Before #1639 those were two copies of the
+// same loop that disagreed about the only thing that matters." A change filed ABOUT
 // figures drifting should not ship its mechanism in two copies that can drift.
 // It is a non-test package for the reason core/internal/contracttesting is: test
 // files in different packages cannot share test-only code any other way.
