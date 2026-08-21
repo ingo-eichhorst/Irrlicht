@@ -42,6 +42,8 @@
 package contracttesting
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -148,7 +150,7 @@ type HookInstaller struct {
 	ForeignInstall func() (bool, error)
 
 	// EntriesOf extracts the inner hook-entry objects an event's raw value in
-	// the parsed settings map holds, regardless of nesting shape (issue
+	// the PARSED JSON settings map holds, regardless of nesting shape (issue
 	// #1716). Nil means NestedHookEntries — hookjson's own matcher-group
 	// shape, `[ {"matcher": ..., "hooks": [ {...} ] } ]` — which is what every
 	// adapter wired before #1716 (claudecode, codex, copilot, gemini-cli)
@@ -160,26 +162,74 @@ type HookInstaller struct {
 	// `[ {"command": ...} ]`, no matcher-group wrapper — and the four
 	// obligations built on "read back the one entry an event holds" needed a
 	// seam an adapter can supply instead of a shape hardcoded into the
-	// traversal. FlatHookEntries is that shape's counterpart.
+	// traversal. FlatHookEntries is that shape's counterpart, and kiro-cli
+	// sets EntriesOf: FlatHookEntries and nothing else in this struct — the
+	// two fields below exist for adapters this layer cannot reach at all.
 	//
-	// A TOML-shaped installer (mistral-vibe, #1718) fits the SAME seam for its
-	// half of the problem — decoding a TOML table's array-of-tables into
-	// `[]map[string]interface{}` is what most TOML libraries already do, so an
-	// adapter whose event value decodes that way can write its own
-	// EntriesOf identically to FlatHookEntries's body. What this field does
-	// NOT close for TOML is the file-reading step: readHooksMap below still
-	// calls hookjson.ReadSettings (JSON-only) to produce the map EntriesOf is
-	// handed, and #1718's own config is a dedicated hooks.toml rather than a
-	// "hooks" key inside a shared JSON document — so a TOML adapter needs an
-	// analogous seam THERE too (a HookInstaller.ReadSettings func(path string)
-	// (map[string]interface{}, error) field, defaulting to
-	// hookjson.ReadSettings, is the natural shape, mirroring this one) before
-	// AssertHookEndpointFollowsBindAddr can grade it end to end. Left
-	// undone here deliberately: guessing at #1718's exact schema from outside
-	// that work would be speculation this package cannot verify, where
-	// EntriesOf's shape is what THIS issue's own adapter (kiro-cli) already
-	// needs and proves against a real wiring (kirocli/hookport_test.go).
+	// This field is deliberately NOT what a TOML-shaped installer
+	// (mistral-vibe, #1718) uses. #1718's own audit measured the gap
+	// precisely: hooktoml never produces a decoded, generic
+	// map[string]interface{} at any point — it works entirely as byte-range
+	// edits over the original file bytes (scanSections), and identifies "our"
+	// block by bytes.Contains over the WHOLE rendered block's raw text against
+	// Sentinel, never by parsing a field back out. A seam typed
+	// map[string]interface{} cannot represent that without inventing a parse
+	// step that does not exist on that side. See ReadEntries and
+	// EndpointOfRaw below, which a TOML adapter uses INSTEAD of this field —
+	// EntriesOf stays purely a convenience layer for JSON-shaped adapters,
+	// consumed only by ReadEntries's own default implementation.
 	EntriesOf func(hooksMap map[string]interface{}, event string) ([]map[string]interface{}, error)
+
+	// ReadEntries reads the settings file at path and returns the RAW bytes
+	// of every entry belonging to event, however the format encodes one —
+	// for JSON, the marshaled bytes of one inner hook object; for TOML, the
+	// exact bytes of one `[[hooks]]` block. Nil means a default built from
+	// EntriesOf (in turn defaulting to NestedHookEntries) plus
+	// hookjson.ReadSettings plus json.Marshal per entry, which is what every
+	// JSON-shaped adapter — every one wired before #1718, and kiro-cli's
+	// EntriesOf: FlatHookEntries — satisfies without setting this field.
+	//
+	// It exists because the READ step itself has to be pluggable, not just
+	// the traversal after it (#1718's audit, correcting this seam's own first
+	// draft): hooktoml has no "parse to a generic structure" phase for
+	// ReadSettings to feed EntriesOf, so an adapter whose config is not
+	// JSON — TOML, or any future format — supplies ReadEntries directly and
+	// never touches EntriesOf or hookjson.ReadSettings at all. The event
+	// parameter is passed through unfiltered when there is nothing to
+	// filter: #1718's audit records that hooktoml has no per-event
+	// disambiguation today (vibe installs exactly one event, so "the
+	// entry" is unambiguous without it) — an adapter's own ReadEntries is
+	// free to ignore the parameter for that reason, and this seam does not
+	// need to force per-event filtering into existence to be well-formed.
+	//
+	// An entry's raw bytes are also what hasOurRawEntry checks with a plain
+	// bytes.Contains against Sentinel — matching hooktoml's OWN sentinel
+	// convention exactly (a substring of the whole rendered block, not a
+	// named field), so that check needs no adapter-supplied closure at all,
+	// for ANY shape this field can represent.
+	ReadEntries func(path, event string) ([][]byte, error)
+
+	// EndpointOfRaw extracts the delivery string from one entry's raw bytes,
+	// as ReadEntries returns them. Nil means a default that json.Unmarshals
+	// the bytes into a map[string]interface{} and calls EndpointOf on it —
+	// exactly what every JSON-shaped adapter already gets from EndpointOf
+	// alone, so none of them set this field either.
+	//
+	// A TOML adapter supplies both ReadEntries and EndpointOfRaw together —
+	// #1718's own IsCanonical already works by exact []byte comparison
+	// against a freshly-rendered canonical block and never parses a
+	// `command` field back out of TOML text, so EndpointOfRaw is the same
+	// kind of operation applied to a different substring.
+	//
+	// Entry/EndpointOf (above) are UNCHANGED and stay map[string]interface{}
+	// — they compare what the adapter would install NOW, entirely in memory,
+	// against two bind addresses (obligation 1), and never touch the
+	// filesystem. An adapter can honestly answer that question with a map
+	// even when what it actually persists to disk is raw TOML text, because
+	// nothing downstream of Entry()/EndpointOf() reads the file — only
+	// ReadEntries/EndpointOfRaw do, which is exactly why the two pairs are
+	// independent fields rather than one seam trying to serve both jobs.
+	EndpointOfRaw func(entry []byte) string
 }
 
 // AssertHookEndpointFollowsBindAddr runs the issue #1178 contract against h, in
@@ -391,9 +441,8 @@ func assertUninstallIsNotForeignScoped(t armT, h HookInstaller, r deliveryRules,
 	if !modified {
 		t.Fatalf("expected modified=true removing %s from a daemon on %s", r.foreign, AltBindAddr)
 	}
-	hooksMap := readHooksMap(t, path)
 	for _, event := range h.Events {
-		if hasOurEntry(t, h, hooksMap, event) {
+		if hasOurRawEntry(t, h, path, event) {
 			t.Errorf("event %s: %s survived uninstall", event, r.foreign)
 		}
 	}
@@ -416,9 +465,8 @@ func deliveryOn(t armT, h HookInstaller, bindAddr string) string {
 // because an "address-free" delivery grew an address.
 func assertEveryEventDelivers(t armT, h HookInstaller, r deliveryRules, path, want string) {
 	t.Helper()
-	hooksMap := readHooksMap(t, path)
 	for _, event := range h.Events {
-		got := h.EndpointOf(onlyEntry(t, h, hooksMap, event))
+		got := endpointOfRaw(h)(onlyRawEntry(t, h, path, event))
 		assertDeliveryIsOurs(t, h, "event "+event, got)
 		if got != want {
 			t.Errorf("event %s: installed delivery = %q, want %q", event, got, want)
@@ -556,13 +604,12 @@ func seedForeignInstall(t armT, h HookInstaller, r deliveryRules, path string) {
 	r.seed(t, h)
 
 	// Sentinel is the one field nothing else cross-checks, and a wrong value
-	// makes the uninstall-survival assertion pass vacuously — hasOurEntry would
-	// simply find nothing, for the wrong reason. Confirming the seeded install
-	// is matched by the declared sentinel turns that silent hole into a wiring
-	// error.
-	seeded := readHooksMap(t, path)
+	// makes the uninstall-survival assertion pass vacuously — hasOurRawEntry
+	// would simply find nothing, for the wrong reason. Confirming the seeded
+	// install is matched by the declared sentinel turns that silent hole
+	// into a wiring error.
 	for _, event := range h.Events {
-		if !hasOurEntry(t, h, seeded, event) {
+		if !hasOurRawEntry(t, h, path, event) {
 			t.Fatalf("event %s: %s is not matched by Sentinel %q — the contract is wired wrong", event, r.foreign, h.Sentinel)
 		}
 	}
@@ -630,14 +677,63 @@ func FlatHookEntries(hooksMap map[string]interface{}, event string) ([]map[strin
 	return out, nil
 }
 
-// onlyEntry returns the single inner hook entry an event holds, via h's
-// resolved EntriesOf, failing on any other count — which is the assertion,
-// not incidental: an upgrade that appends a second entry (nested shape: a
-// second matcher group; flat shape: a second array element) instead of
-// rewriting in place shows up here as a count of 2, regardless of shape.
-func onlyEntry(t reporter, h HookInstaller, hooksMap map[string]interface{}, event string) map[string]interface{} {
+// rawEntriesOf resolves h's ReadEntries, defaulting to a bridge built from
+// readSettingsHooksMap (hookjson.ReadSettings) + entriesOf(h) (EntriesOf,
+// itself defaulting to NestedHookEntries) + json.Marshal per entry — the
+// path every JSON-shaped adapter (every one wired before #1718, and
+// kiro-cli's EntriesOf: FlatHookEntries) satisfies without setting
+// ReadEntries at all. A non-JSON adapter (TOML, or any future format)
+// supplies ReadEntries directly and this bridge is never called for it.
+func rawEntriesOf(h HookInstaller) func(path, event string) ([][]byte, error) {
+	if h.ReadEntries != nil {
+		return h.ReadEntries
+	}
+	return func(path, event string) ([][]byte, error) {
+		hooksMap, err := readSettingsHooksMap(path)
+		if err != nil {
+			return nil, err
+		}
+		entries, err := entriesOf(h)(hooksMap, event)
+		if err != nil {
+			return nil, err
+		}
+		raw := make([][]byte, 0, len(entries))
+		for _, e := range entries {
+			b, err := json.Marshal(e)
+			if err != nil {
+				return nil, fmt.Errorf("marshal entry: %w", err)
+			}
+			raw = append(raw, b)
+		}
+		return raw, nil
+	}
+}
+
+// endpointOfRaw resolves h's EndpointOfRaw, defaulting to a bridge that
+// json.Unmarshals the bytes into a map and calls h.EndpointOf on it — what
+// every JSON-shaped adapter already gets from EndpointOf alone.
+func endpointOfRaw(h HookInstaller) func(entry []byte) string {
+	if h.EndpointOfRaw != nil {
+		return h.EndpointOfRaw
+	}
+	return func(entry []byte) string {
+		var m map[string]interface{}
+		if err := json.Unmarshal(entry, &m); err != nil {
+			return ""
+		}
+		return h.EndpointOf(m)
+	}
+}
+
+// onlyRawEntry returns the single raw entry an event holds, via h's resolved
+// ReadEntries, failing on any other count — which is the assertion, not
+// incidental: an upgrade that appends a second entry (nested JSON: a second
+// matcher group; flat JSON: a second array element; TOML: a second
+// `[[hooks]]` block) instead of rewriting in place shows up here as a count
+// of 2, regardless of shape.
+func onlyRawEntry(t reporter, h HookInstaller, path, event string) []byte {
 	t.Helper()
-	entries, err := entriesOf(h)(hooksMap, event)
+	entries, err := rawEntriesOf(h)(path, event)
 	if err != nil {
 		t.Fatalf("event %s: %v", event, err)
 	}
@@ -647,42 +743,44 @@ func onlyEntry(t reporter, h HookInstaller, hooksMap map[string]interface{}, eve
 	return entries[0]
 }
 
-// hasOurEntry reports whether ANY of an event's entries carries h.Sentinel,
-// via h's resolved EntriesOf — the flat-shape-aware counterpart of
-// hookjson.HasOurHook, which hardcodes the nested matcher-group traversal
-// (core/adapters/inbound/agents/hookjson's own entryIsSentinel) and so
-// cannot see a flat entry at all. Checks the same two delivery fields
-// entryIsSentinel does ("command", the shape codex/gemini-cli/kiro-cli use,
-// and "url", claudecode's and copilot's native http entries), so an adapter
-// migrating between the two is still recognized either way, matching
-// hookjson's own behaviour for the shapes EntriesOf already normalizes into
-// plain maps.
-func hasOurEntry(t reporter, h HookInstaller, hooksMap map[string]interface{}, event string) bool {
+// hasOurRawEntry reports whether ANY of an event's raw entries contains
+// h.Sentinel as a byte substring, via h's resolved ReadEntries — a single,
+// fully format-agnostic check that replaces hookjson.HasOurHook (which
+// hardcodes the nested matcher-group traversal and inspects only "command"
+// or "url" fields by name, so it cannot see a flat JSON entry and has no
+// notion of a TOML block at all). Matching on raw bytes rather than a named
+// field is not a weaker check adopted for convenience — it is hooktoml's OWN
+// sentinel convention (#1718's audit: "findOurBlock locates our block by
+// bytes.Contains over the whole rendered block's raw bytes... there is no
+// index/key addressing an entry"), so this function satisfies that
+// convention exactly rather than approximating it, and needs no
+// adapter-supplied closure for ANY shape ReadEntries can represent.
+func hasOurRawEntry(t reporter, h HookInstaller, path, event string) bool {
 	t.Helper()
-	entries, err := entriesOf(h)(hooksMap, event)
+	entries, err := rawEntriesOf(h)(path, event)
 	if err != nil {
 		// Not an error here: "missing from the settings file" is exactly
 		// "not found", the answer this predicate is asked for.
 		return false
 	}
+	sentinel := []byte(h.Sentinel)
 	for _, entry := range entries {
-		for _, field := range []string{"command", "url"} {
-			if v, ok := entry[field].(string); ok && strings.Contains(v, h.Sentinel) {
-				return true
-			}
+		if bytes.Contains(entry, sentinel) {
+			return true
 		}
 	}
 	return false
 }
 
-// readHooksMap reads the settings file through the same codec the installers
-// use and returns its top-level "hooks" object (nil when absent).
-func readHooksMap(t reporter, path string) map[string]interface{} {
-	t.Helper()
+// readSettingsHooksMap reads the settings file through the same codec the
+// JSON installers use and returns its top-level "hooks" object (nil when
+// absent). Used only by rawEntriesOf's default JSON bridge — a non-JSON
+// ReadEntries never calls this.
+func readSettingsHooksMap(path string) (map[string]interface{}, error) {
 	settings, err := hookjson.ReadSettings(path)
 	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
+		return nil, err
 	}
 	hooksMap, _ := settings["hooks"].(map[string]interface{})
-	return hooksMap
+	return hooksMap, nil
 }
