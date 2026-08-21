@@ -319,17 +319,28 @@ func TestSharedConfigGate_KiroCLIAlsoDeclarationReachesTheGuard(t *testing.T) {
 	realKiroHome := filepath.Join("/Users/someone", ".kiro")
 	t.Setenv("KIRO_HOME", realKiroHome)
 
+	// The settings/cli.json resolver is picked out by what it RESOLVES TO, not
+	// by its index: kiro-cli declares more than one Also entry (the second is
+	// the prior-default sidecar, core/cmd/irrlichd's
+	// TestKiroCLIAlso_PriorDefaultSidecarIsAManagedFile), and an index would
+	// silently retarget this test at a different file the day the order moved.
 	var kirocliAlso func() (string, error)
 	for _, p := range kirocli.Agent().Permissions {
-		if p.Key == kirocli.PermissionKeyHooks && p.Writes != nil {
-			if len(p.Writes.Also) != 1 {
-				t.Fatalf("kirocli's hooks permission declares %d Also entries, want exactly 1 (settings/cli.json)", len(p.Writes.Also))
+		if p.Key != kirocli.PermissionKeyHooks || p.Writes == nil {
+			continue
+		}
+		for _, resolve := range p.Writes.Also {
+			got, err := resolve()
+			if err != nil {
+				t.Fatalf("resolving one of kiro-cli's Also entries: %v", err)
 			}
-			kirocliAlso = p.Writes.Also[0]
+			if filepath.Base(got) == "cli.json" && filepath.Base(filepath.Dir(got)) == "settings" {
+				kirocliAlso = resolve
+			}
 		}
 	}
 	if kirocliAlso == nil {
-		t.Fatal("kirocli.Agent() declares no hooks permission with Writes")
+		t.Fatal("kirocli.Agent() declares no hooks permission whose Writes.Also resolves a settings/cli.json")
 	}
 	wantAlsoPath, err := kirocliAlso()
 	if err != nil {

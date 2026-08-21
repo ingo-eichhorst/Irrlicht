@@ -198,7 +198,22 @@ launch_repl() {
   # gate to exist before they can observe anything about it.
   [[ -n "${COPILOT_PLAN_MODE:-}" ]] && args+=(--plan)
   [[ -n "${RESUME_ID:-}" ]] && args+=("--resume=$RESUME_ID")
-  tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "${SES_CWD[$ACTIVE]}" copilot "${args[@]}" \
+  # Prefix with `env COPILOT_HOME=…`, as drive-codex-interactive.sh does for
+  # CODEX_HOME. seed_copilot_home EXPORTS the variable, which is enough for a
+  # direct child and not for this one: the pane's command is spawned by the tmux
+  # SERVER, whose environment was fixed when that server started, so on any
+  # machine where a server is already running — a developer's own terminal,
+  # essentially always — the export does not reach copilot. Measured on a
+  # private `-L` socket: against a server started without the variable, a pane
+  # created by a shell that exported it reads <UNSET>, and the same server with
+  # this prefix reads the value. That is the exact failure this driver's own
+  # seed_copilot_home comment describes ("the daemon would observe no copilot
+  # session at all and every cell would record an empty fixture"), reached by a
+  # route the export cannot close. Found by
+  # TestEveryRigHomeRowsDriverPassesTheHomeThroughTmux
+  # (tools/onboarding-factory/internal/righome) on its first run.
+  tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "${SES_CWD[$ACTIVE]}" \
+    env "COPILOT_HOME=$COPILOT_HOME" copilot "${args[@]}" \
     >>"$DRIVER_LOG.stdout.$ACTIVE" 2>>"$DRIVER_LOG.stderr" \
     || { echo "[driver] failed to launch copilot under tmux" >&2; EXIT_REASON="nonzero(2)"; exit 1; }
   tmux pipe-pane -t "$SESSION" -o "cat >> '$DRIVER_LOG.stdout.$ACTIVE'" 2>/dev/null || true

@@ -75,6 +75,11 @@ source "$SCRIPT_DIR/lib/recipe-lint.sh"
 source "$SCRIPT_DIR/lib/pick-recording.sh"
 # shellcheck source=lib/completeness-check.sh
 source "$SCRIPT_DIR/lib/completeness-check.sh"
+# Per-adapter agent-home isolation, shared with run-cell.sh — before this file
+# existed only COPILOT_HOME was handled here while run-cell.sh also handled
+# CODEX_HOME, i.e. exactly the one-rig-only drift #1214 is about.
+# shellcheck source=lib/agent-home.sh
+source "$SCRIPT_DIR/lib/agent-home.sh"
 
 DRY_RUN=0
 positional=()
@@ -230,20 +235,25 @@ write_error_manifest() {
     > "$MANIFEST"
 }
 
-# Copilot resolves its whole config dir — session store included — from
-# COPILOT_HOME, and the DAEMON reads that variable eagerly when it builds the
-# adapter's watcher, so it has to be exported BEFORE the spawn below. The
-# driver defaults it to "<its staging subdir>/copilot-home" only when unset, so
-# leaving it unset here points the daemon at the real ~/.copilot while the
-# driver writes to staging: the daemon then observes every one of the user's
-# own copilot sessions and none of the driver's, and curation fails with
-# "primary session does not appear in the recording". run-cell.sh has always
-# done this; the multi rig predates the copilot adapter and did not.
+# Agent-home isolation, one call per adapter in this cell, from the SAME
+# declaration run-cell.sh reads (lib/agent-home.sh). It has to run BEFORE the
+# spawn below: the DAEMON reads these variables eagerly when it builds each
+# adapter's watcher, and `--print-managed-files` — the list the snapshot
+# protects — resolves under them too.
+#
+# The copilot case this replaces is the one that showed what a missed export
+# costs: unset, the daemon watches the real ~/.copilot while the driver writes
+# to staging, so it observes every one of the user's own copilot sessions and
+# none of the driver's, and curation fails with "primary session does not
+# appear in the recording". Its "<staging subdir>/copilot-home" default is
+# preserved exactly by the per-adapter spelling below.
+#
+# It also closes the drift that motivated the shared lib: this loop handled
+# COPILOT_HOME and nothing else, while run-cell.sh handled CODEX_HOME too — so
+# a codex cross-adapter recording could not be isolated at all, whatever the
+# operator exported.
 for _a in "${ADAPTERS[@]}"; do
-  [[ "$_a" == "copilot" ]] || continue
-  export COPILOT_HOME="${COPILOT_HOME:-$STAGING/copilot/copilot-home}"
-  mkdir -p "$COPILOT_HOME"
-  echo "copilot: COPILOT_HOME=$COPILOT_HOME (daemon + driver share this store)"
+  agent_home_isolate "$_a" "$STAGING/$_a/$_a-home" || exit 1
 done
 
 # --- Spawn ONE isolated --record daemon ---------------------------------
