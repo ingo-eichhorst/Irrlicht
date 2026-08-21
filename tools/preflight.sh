@@ -509,7 +509,13 @@ if want tools; then
   # this gate. Both defects were live on `main` while the two badges they
   # publish were the two that worked, so a commit editing only one of these
   # workflows is exactly the one that breaks it.
-  run_gate_scoped '^tools/lib/|^tools/[^/]*\.sh$|^tools/git-hooks/|^go\.work$|^\.github/dependabot\.yml$|^site/install\.sh$|^\.github/workflows/(ars|codescene-badge|coverage|macos-swift|replaydata-deletion-guard|test)\.yml$' \
+  # AGENTS.md joins the trigger for a seventh reason (#1742):
+  # agents-md-lint_test.sh holds AGENTS.md itself to a 400-line budget (it is
+  # force-injected into every agent session via CLAUDE.md's `@AGENTS.md`
+  # import, so a session pays for every line whether or not the task at hand
+  # needs it), and a commit editing only AGENTS.md is exactly the one that
+  # would otherwise regrow it past that budget unnoticed under `--changed`.
+  run_gate_scoped '^tools/lib/|^tools/[^/]*\.sh$|^tools/git-hooks/|^go\.work$|^\.github/dependabot\.yml$|^site/install\.sh$|^AGENTS\.md$|^\.github/workflows/(ars|codescene-badge|coverage|macos-swift|replaydata-deletion-guard|test)\.yml$' \
                   "tools/lib shell-lib tests" shell_lib_tests
 fi
 
