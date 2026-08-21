@@ -845,19 +845,55 @@ enum PopoverHostReorder {
         popover.parent?.removeChildWindow(popover)
     }
 
-    /// Live call site: looks up `NSApp.orderedWindows` (front-to-back —
-    /// see `candidates(in:)`'s doc comment) and attaches if both a host and
-    /// a popover candidate are found, returning the popover window so the
+    /// Looks up `NSApp.orderedWindows` (front-to-back — see
+    /// `candidates(in:)`'s doc comment) and attaches if both a host and a
+    /// popover candidate are found, returning the popover window so the
     /// caller can `detach` it later. Returns `nil`, doing nothing, when
     /// either is absent — in particular, SwiftUI does not create the
     /// popover's `NSWindow` synchronously with `showPopover` flipping to
-    /// `true`, so callers defer this by one run-loop turn.
+    /// `true`, so callers defer this by one run-loop turn. Driven by
+    /// `PopoverHostReorderModifier` below, not called directly by a view.
     @discardableResult
     @MainActor
     static func reorderIfNeeded() -> NSWindow? {
         guard let (host, popover) = candidates(in: NSApp.orderedWindows) else { return nil }
         attach(host: host, popover: popover)
         return popover
+    }
+}
+
+/// Applies `PopoverHostReorder` to a `.popover(isPresented:)` call site —
+/// pass the SAME `isPresented` value the popover uses. Packaged as a
+/// `ViewModifier` (mirroring `TooltipModifier`/`.tooltip(_:)` in
+/// `SessionListView.swift`, the identical pattern this codebase already
+/// uses for the same z-order problem) so a future `.popover` inherits the
+/// fix instead of hand-copying the deferral/attach/detach sequence.
+private struct PopoverHostReorderModifier: ViewModifier {
+    let isPresented: Bool
+    // Retained so dismiss can PopoverHostReorder.detach it (see that
+    // function's doc comment for why skipping this would leak).
+    @State private var attachedPopoverWindow: NSWindow?
+
+    func body(content: Content) -> some View {
+        content.onChange(of: isPresented) { presented in
+            if presented {
+                // Deferred one run-loop turn: SwiftUI doesn't create the
+                // popover's NSWindow synchronously with this state change
+                // (see PopoverHostReorder.reorderIfNeeded's doc comment).
+                DispatchQueue.main.async {
+                    attachedPopoverWindow = PopoverHostReorder.reorderIfNeeded()
+                }
+            } else if let popover = attachedPopoverWindow {
+                PopoverHostReorder.detach(popover)
+                attachedPopoverWindow = nil
+            }
+        }
+    }
+}
+
+extension View {
+    func reparentPopoverAboveHost(isPresented: Bool) -> some View {
+        modifier(PopoverHostReorderModifier(isPresented: isPresented))
     }
 }
 
@@ -870,11 +906,6 @@ struct SessionControlButton: View {
     @EnvironmentObject var sessionManager: SessionManager
     @State private var showPopover = false
     @State private var draft = ""
-    // The popover window PopoverHostReorder attached as a child of the host
-    // panel, so it can be detached again on dismiss (PopoverHostReorder.detach's
-    // doc comment: addChildWindow keeps a STRONG reference, so skipping this
-    // would leak the popover window across repeated present/dismiss cycles).
-    @State private var attachedPopoverWindow: NSWindow?
 
     var body: some View {
         Button {
@@ -907,19 +938,7 @@ struct SessionControlButton: View {
             }
             .padding(12)
         }
-        .onChange(of: showPopover) { presented in
-            if presented {
-                // Deferred one run-loop turn: SwiftUI doesn't create the
-                // popover's NSWindow synchronously with this state change
-                // (see PopoverHostReorder's doc comment above).
-                DispatchQueue.main.async {
-                    attachedPopoverWindow = PopoverHostReorder.reorderIfNeeded()
-                }
-            } else if let popover = attachedPopoverWindow {
-                PopoverHostReorder.detach(popover)
-                attachedPopoverWindow = nil
-            }
-        }
+        .reparentPopoverAboveHost(isPresented: showPopover)
     }
 
     private func send() {

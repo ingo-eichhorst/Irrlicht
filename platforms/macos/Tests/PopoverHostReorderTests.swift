@@ -17,18 +17,13 @@ import XCTest
 /// z-order read back from `NSApp.orderedWindows` (AppKit's own
 /// front-to-back truth), before and after the fix.
 ///
-/// Review found two things this file's first draft didn't cover, both now
-/// covered: `candidates(in:)`'s "front-most" claim was untested against more
-/// than one below-host-level window (`testCandidatesPicksTheGenuinelyFrontmostOfSeveralLowerLevelWindows`,
-/// `testReorderIfNeededAttachesTheGenuinelyFrontmostCandidate` — the live call
-/// site had been reading `NSApp.windows`, registration order, not z-order,
-/// which is exactly what those two now pin), and `attach`'s counterpart,
-/// `detach`, had no test proving it actually breaks the parent/child
-/// reference `addChildWindow` establishes (`testDetachRemovesTheChildWindowRelationship`).
-/// Not covered, and not expected to be by this file: whether the *reported*
-/// symptom (issue #1743's title says "hover pop-over") is actually this
-/// click-triggered popover rather than some other floating surface — see
-/// this PR's description for that residual uncertainty.
+/// Review found two gaps in this file's first draft, both now covered — see
+/// `candidates(in:)`'s doc comment for the registration-order-vs-z-order
+/// finding those tests pin, and `detach(_:)`'s for the leak `testDetachRemovesTheChildWindowRelationship`
+/// pins. Not covered, and not expected to be by this file: whether the
+/// *reported* symptom (issue #1743's title says "hover pop-over") is
+/// actually this click-triggered popover rather than some other floating
+/// surface — see this PR's description for that residual uncertainty.
 @MainActor
 final class PopoverHostReorderTests: XCTestCase {
 
@@ -55,42 +50,35 @@ final class PopoverHostReorderTests: XCTestCase {
         super.tearDown()
     }
 
-    /// A stand-in for `IrrlichtPanel`: same level, same non-activating/
-    /// borderless shape (`MenuBarController.configurePanel`). Used for the
-    /// `candidates(in:)` tests below, which only read `.level`/`.isVisible`
-    /// and don't depend on `NSApp.orderedWindows`.
-    private func makeHostPanel() -> NSPanel {
-        let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 300, height: 200),
-            styleMask: [.borderless, .nonactivatingPanel],
-            backing: .buffered,
-            defer: false
-        )
-        panel.level = PopoverHostReorder.hostLevel
-        panel.isReleasedWhenClosed = false
-        windows.append(panel)
-        return panel
-    }
-
-    /// Same level as `makeHostPanel()`, but a plain `NSWindow` rather than
-    /// an `NSPanel`. Used for the `NSApp.orderedWindows` z-order proofs
-    /// below: measured on this test host, a `.nonactivatingPanel` does not
-    /// reliably register in `orderedWindows` without a fully-running
-    /// `NSApplication` event loop (`NSApp.run()`, which nothing here calls
-    /// — `swift test` never enters it), while an ordinary `NSWindow` at the
-    /// same level does. That is a property of *this test host*, not of the
-    /// level-based z-order rule under test, which is agnostic to the
-    /// `NSWindow` vs `NSPanel` distinction — level and child-window
-    /// ordering are both plain `NSWindow` mechanics `NSPanel` inherits
-    /// unchanged. The `candidates(in:)` tests above already cover the real
-    /// `NSPanel` type for the property they check.
-    private func makeHostWindow() -> NSWindow {
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 300, height: 200),
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false
-        )
+    /// A stand-in for `IrrlichtPanel`'s level. `asPanel: true` (an actual
+    /// `NSPanel`, borderless + non-activating, matching
+    /// `MenuBarController.configurePanel`) is used for the `candidates(in:)`
+    /// tests, which only read `.level`/`.isVisible`. The default plain
+    /// `NSWindow` is used for the `NSApp.orderedWindows` z-order proofs:
+    /// measured on this test host, a `.nonactivatingPanel` does not reliably
+    /// register in `orderedWindows` without a fully-running `NSApplication`
+    /// event loop (`NSApp.run()`, which nothing here calls — `swift test`
+    /// never enters it), while an ordinary `NSWindow` at the same level
+    /// does. That is a property of *this test host*, not of the level-based
+    /// z-order rule under test, which is agnostic to the `NSWindow` vs
+    /// `NSPanel` distinction — level and child-window ordering are both
+    /// plain `NSWindow` mechanics `NSPanel` inherits unchanged, and the
+    /// `asPanel: true` callers already cover the real type for the property
+    /// they check.
+    private func makeHostWindow(asPanel: Bool = false) -> NSWindow {
+        let window: NSWindow = asPanel
+            ? NSPanel(
+                contentRect: NSRect(x: 0, y: 0, width: 300, height: 200),
+                styleMask: [.borderless, .nonactivatingPanel],
+                backing: .buffered,
+                defer: false
+              )
+            : NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 300, height: 200),
+                styleMask: [.borderless],
+                backing: .buffered,
+                defer: false
+              )
         window.level = PopoverHostReorder.hostLevel
         window.isReleasedWhenClosed = false
         windows.append(window)
@@ -148,7 +136,7 @@ final class PopoverHostReorderTests: XCTestCase {
     // MARK: - candidates(in:)
 
     func testCandidatesPairsTheHostWithTheFrontmostLowerLevelWindow() {
-        let host = makeHostPanel()
+        let host = makeHostWindow(asPanel: true)
         let popover = makePopoverWindow()
         host.orderFrontRegardless()
         popover.orderFrontRegardless()
@@ -164,7 +152,7 @@ final class PopoverHostReorderTests: XCTestCase {
     /// hovering a tooltip while a popover is open could reparent the wrong
     /// window.
     func testCandidatesIgnoresAWindowAboveHostLevel() {
-        let host = makeHostPanel()
+        let host = makeHostWindow(asPanel: true)
         let tooltipLike = makePopoverWindow()
         tooltipLike.level = NSWindow.Level(rawValue: 200)
         host.orderFrontRegardless()
@@ -180,18 +168,18 @@ final class PopoverHostReorderTests: XCTestCase {
         XCTAssertNil(PopoverHostReorder.candidates(in: [popover]))
     }
 
-    func testCandidatesReturnsNilWithoutAVisiblePopover() {
-        let host = makeHostPanel()
+    /// No visible below-host-level window reduces to the same outcome
+    /// whether the popover object is absent entirely (not yet created — the
+    /// deferred-run-loop-turn case, see `reorderIfNeeded()`'s doc comment)
+    /// or present but never ordered front (hidden) — both exercise the same
+    /// post-`.isVisible`-filter path in `candidates(in:)`.
+    func testCandidatesReturnsNilWithNoVisiblePopover() {
+        let host = makeHostWindow(asPanel: true)
+        let hiddenPopover = makePopoverWindow()   // never ordered front
         host.orderFrontRegardless()
-        XCTAssertNil(PopoverHostReorder.candidates(in: [host]))
-    }
 
-    func testCandidatesIgnoresAHiddenPopover() {
-        let host = makeHostPanel()
-        let popover = makePopoverWindow()
-        host.orderFrontRegardless()
-        // popover never ordered front — stays hidden
-        XCTAssertNil(PopoverHostReorder.candidates(in: [host, popover]))
+        XCTAssertNil(PopoverHostReorder.candidates(in: [host]), "popover absent entirely")
+        XCTAssertNil(PopoverHostReorder.candidates(in: [host, hiddenPopover]), "popover present but hidden")
     }
 
     /// Review finding on this fix's first draft: `candidates(in:)`'s doc
@@ -239,7 +227,7 @@ final class PopoverHostReorderTests: XCTestCase {
     /// second `addChildWindow` (which would otherwise grow `childWindows`
     /// unbounded across repeated popover presentations).
     func testAttachIsIdempotent() {
-        let host = makeHostPanel()
+        let host = makeHostWindow(asPanel: true)
         let popover = makePopoverWindow()
         host.orderFrontRegardless()
         popover.orderFrontRegardless()
