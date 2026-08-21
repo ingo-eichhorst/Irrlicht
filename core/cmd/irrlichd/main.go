@@ -423,7 +423,13 @@ func printManagedFiles(w io.Writer) error {
 	return nil
 }
 
-// writeManagedFilePaths prints each distinct path once. The dedup is
+// writeManagedFilePaths prints each distinct path once, flattening every
+// entry's Path AND its Also files (#1718) onto the same one-line-per-file
+// stream: the rig's managed_file_paths() backs up and restores whatever this
+// prints, one file per line, with no notion of "these two lines are one
+// permission" — an Also file left out of this flatten would never be
+// snapshotted before grant-all can write it and never restored after, exactly
+// the gap #1449's guard exists to keep from being silent. The dedup is
 // load-bearing rather than cosmetic: the rig keys its backups by line index, so
 // a path listed twice would be backed up under two indices and restored twice.
 // Since #1383 the shipped catalog actually produces a duplicate — claudecode's
@@ -431,12 +437,18 @@ func printManagedFiles(w io.Writer) error {
 // this is exercised by the real registry rather than only by a synthetic case.
 func writeManagedFilePaths(w io.Writer, configs []agents.ManagedUserFile) {
 	seen := make(map[string]bool, len(configs))
-	for _, c := range configs {
-		if seen[c.Path] {
-			continue
+	print := func(path string) {
+		if seen[path] {
+			return
 		}
-		seen[c.Path] = true
-		fmt.Fprintln(w, c.Path)
+		seen[path] = true
+		fmt.Fprintln(w, path)
+	}
+	for _, c := range configs {
+		print(c.Path)
+		for _, also := range c.Also {
+			print(also)
+		}
 	}
 }
 

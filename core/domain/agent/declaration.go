@@ -199,6 +199,32 @@ type ManagedUserFile struct {
 	// CLAUDE.md instruction blocks, the kitty remote-control block — depend on
 	// no upstream CLI feature and leave it nil.
 	Version *VersionGate
+
+	// Also resolves zero or more ADDITIONAL shared, user-owned files this
+	// permission's single Apply closure writes, beyond Path (issue #1718).
+	//
+	// Path stays what every existing narrowed projection (agents.HookConfigs,
+	// `--uninstall-hooks`) means by "the file this permission writes" — adding
+	// this field changes that meaning for nobody, and all eight declaration
+	// sites that existed before it compile and behave unchanged with it left
+	// nil. It exists because mistral-vibe's hooks install is the first whose
+	// Apply genuinely spans two files: the hook entries themselves
+	// ($VIBE_HOME/hooks.toml) and a separate boolean gate
+	// (enable_experimental_hooks in $VIBE_HOME/config.toml) that must also be
+	// true or the entries are never read. Neither #1449's grant-all refusal nor
+	// the recorder's full backup/restore sweep (agents.ManagedUserFiles) can see
+	// a write this field does not name — an undeclared secondary write is
+	// invisible to both, which is the exact shape of the incident #1449 exists
+	// to prevent, so both MUST resolve every entry here with the same rigor as
+	// Path (core/application/services/permission_shared_config_gate.go,
+	// core/adapters/inbound/agents/managedfiles.go).
+	//
+	// Deliberately not folded into Path becoming a slice: Path is read by name
+	// in enough places (log lines, the narrowed uninstall commands' per-file
+	// reporting) that widening its type would touch every one of them for a
+	// property only two adapters need. An adapter with a second file appends
+	// one resolver here instead.
+	Also []func() (string, error)
 }
 
 // HookEntryStatus is one read-only look at an install (issue #1372): which of

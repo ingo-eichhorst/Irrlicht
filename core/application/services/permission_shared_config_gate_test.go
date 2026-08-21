@@ -177,6 +177,87 @@ func TestSharedConfigGate_PermissionWritingNothingIsNeverGated(t *testing.T) {
 	}
 }
 
+// writingPermissionWithAlso is writingPermission plus one or more Also files
+// (#1718) — the shape mistral-vibe's hooks permission needs: one Apply closure
+// writing hooks.toml (Path) and the enable_experimental_hooks flag in a
+// separate config.toml (Also).
+func writingPermissionWithAlso(path string, also []string, applied *bool) agent.Permission {
+	p := writingPermission(path, applied)
+	for _, a := range also {
+		aPath := a
+		p.Writes.Also = append(p.Writes.Also, func() (string, error) { return aPath, nil })
+	}
+	return p
+}
+
+// TestSharedConfigGate_RefusesWhenAlsoResolvesOutsideTheIsolatedHome is the
+// #1718 widening's defect test: a permission whose Path is safely inside the
+// isolated home but whose Also file is the user's REAL config must still be
+// refused. Checking Path alone would let exactly this Apply run — writing
+// hooks.toml into the recorder's sandbox while the SAME closure flips
+// enable_experimental_hooks in the user's real ~/.vibe/config.toml, unprotected
+// and unrestored, which is #1449's incident one file over.
+func TestSharedConfigGate_RefusesWhenAlsoResolvesOutsideTheIsolatedHome(t *testing.T) {
+	applied := false
+	sandbox := "/tmp/irr-sandbox"
+	safePath := filepath.Join(sandbox, ".vibe", "hooks.toml")
+	realAlso := filepath.Join("/Users/someone", ".vibe", "config.toml")
+	svc, log := sharedConfigService(config.PermissionModeGrantAll, sandbox, false)
+
+	grant(svc, writingPermissionWithAlso(safePath, []string{realAlso}, &applied))
+
+	if applied {
+		t.Error("Apply ran although its Also file resolves outside the isolated home — " +
+			"a grant-all daemon would write enable_experimental_hooks into the user's real config.toml")
+	}
+	if !log.errorMentioning(realAlso) {
+		t.Errorf("the refusal did not name the Also file it refused; errors were %v", log.errors)
+	}
+}
+
+// TestSharedConfigGate_AllowsWhenPathAndAlsoAreBothInsideTheIsolatedHome is the
+// vacuity guard for the test above: a permission declaring Also is not refused
+// merely for declaring it — only when one of its files actually lands outside
+// the isolated home.
+func TestSharedConfigGate_AllowsWhenPathAndAlsoAreBothInsideTheIsolatedHome(t *testing.T) {
+	applied := false
+	sandbox := "/tmp/irr-sandbox"
+	svc, log := sharedConfigService(config.PermissionModeGrantAll, sandbox, false)
+
+	grant(svc, writingPermissionWithAlso(
+		filepath.Join(sandbox, ".vibe", "hooks.toml"),
+		[]string{filepath.Join(sandbox, ".vibe", "config.toml")},
+		&applied))
+
+	if !applied {
+		t.Errorf("Apply was refused although Path and Also both resolve inside the isolated home %s; errors were %v",
+			sandbox, log.errors)
+	}
+}
+
+// TestSharedConfigGate_UnresolvableAlsoFailsClosed mirrors
+// TestSharedConfigGate_UnresolvablePathFailsClosed for the second file: an Also
+// resolver that errors must refuse just as an unresolvable Path does, naming
+// which entry (Also[0]) failed.
+func TestSharedConfigGate_UnresolvableAlsoFailsClosed(t *testing.T) {
+	applied := false
+	sandbox := "/tmp/irr-sandbox"
+	svc, log := sharedConfigService(config.PermissionModeGrantAll, sandbox, false)
+	p := writingPermission(filepath.Join(sandbox, ".vibe", "hooks.toml"), &applied)
+	p.Writes.Also = []func() (string, error){
+		func() (string, error) { return "", errors.New("no vibe home") },
+	}
+
+	grant(svc, p)
+
+	if applied {
+		t.Error("Apply ran although its Also[0] resolver could not resolve a path")
+	}
+	if !log.errorMentioning("no vibe home") || !log.errorMentioning("Also[0]") {
+		t.Errorf("the refusal did not carry the resolution failure and the failing entry's label; errors were %v", log.errors)
+	}
+}
+
 // TestSharedConfigGate_RelativeRootRefuses pins the one comparison detail that
 // could silently invert the guard: pathInsideRoot only ever answers true for a
 // pair of absolute paths, so a root that arrives relative (or empty) refuses

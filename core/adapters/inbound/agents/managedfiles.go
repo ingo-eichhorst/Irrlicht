@@ -17,8 +17,20 @@ type ManagedUserFile struct {
 	Key string
 	// Path is the resolved, absolute file the permission writes.
 	Path string
-	// Uninstall removes irrlicht's content from Path, reporting whether it
-	// modified anything.
+	// Also holds the resolved, absolute paths of every additional file the
+	// SAME permission's Apply closure writes (agent.ManagedUserFile.Also,
+	// #1718) — empty for the eight declarations that predate that field. It is
+	// resolved with the same rigor as Path (non-nil, resolves without error,
+	// absolute), because the two consumers that read it need completeness for
+	// the identical reason they need it of Path: #1449's grant-all refusal must
+	// see every file an Apply can write, not just the first, and the
+	// recorder's backup/restore sweep (ManagedUserFiles) would otherwise hand
+	// a file that was never snapshotted back to the user unrestored.
+	Also []string
+	// Uninstall removes irrlicht's content from Path (and, for a permission
+	// declaring Also, from every one of those files too — that is the
+	// closure's own job, not something this projection orchestrates),
+	// reporting whether it modified anything.
 	Uninstall func() (bool, error)
 }
 
@@ -93,10 +105,29 @@ func collectManagedFiles(catalog []agent.Agent, want func(key string) bool) ([]M
 			if !filepath.IsAbs(path) {
 				return nil, fmt.Errorf("adapter %q permission %q: managed file path %q is not absolute", a.Identity.Name, p.Key, path)
 			}
+			// Also gets the identical rigor as Path (#1718), over the SAME
+			// selected permission — this is not resolving another key's
+			// declaration, so it does not weaken the narrowed-projection rule
+			// collectManagedFiles otherwise upholds (see configsForKey's doc).
+			also := make([]string, 0, len(p.Writes.Also))
+			for i, resolveAlso := range p.Writes.Also {
+				if resolveAlso == nil {
+					return nil, fmt.Errorf("adapter %q permission %q: ManagedUserFile.Also[%d] is a nil resolver", a.Identity.Name, p.Key, i)
+				}
+				aPath, err := resolveAlso()
+				if err != nil {
+					return nil, fmt.Errorf("adapter %q permission %q: resolve managed file Also[%d]: %w", a.Identity.Name, p.Key, i, err)
+				}
+				if !filepath.IsAbs(aPath) {
+					return nil, fmt.Errorf("adapter %q permission %q: managed file Also[%d] path %q is not absolute", a.Identity.Name, p.Key, i, aPath)
+				}
+				also = append(also, aPath)
+			}
 			out = append(out, ManagedUserFile{
 				Adapter:   a.Identity.Name,
 				Key:       p.Key,
 				Path:      path,
+				Also:      also,
 				Uninstall: p.Writes.Uninstall,
 			})
 		}

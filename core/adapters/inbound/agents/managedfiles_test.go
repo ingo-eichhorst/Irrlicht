@@ -202,6 +202,125 @@ func TestManagedUserFilesIgnoresPermissionsThatDeclareNoFile(t *testing.T) {
 	}
 }
 
+// TestManagedUserFilesResolvesAlso is the #1718 widening's defect test:
+// ManagedUserFiles must carry every Also file, resolved to an absolute path,
+// alongside Path — not just Path. It is a defect test rather than a contract
+// test because collectManagedFiles is the ONE function every projection
+// shares, so dropping the resolution there is a single missed loop rather
+// than something that could pass by construction.
+func TestManagedUserFilesResolvesAlso(t *testing.T) {
+	path := func(p string) func() (string, error) {
+		return func() (string, error) { return p, nil }
+	}
+	catalog := []agent.Agent{
+		writerAdapter("mistral-vibe", agent.HooksPermissionKey, &agent.ManagedUserFile{
+			Path:      path("/tmp/vibe/.vibe/hooks.toml"),
+			Also:      []func() (string, error){path("/tmp/vibe/.vibe/config.toml")},
+			Uninstall: func() (bool, error) { return false, nil },
+		}),
+	}
+
+	got, err := ManagedUserFiles(catalog)
+	if err != nil {
+		t.Fatalf("ManagedUserFiles(): %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("ManagedUserFiles() = %v, want exactly one entry", got)
+	}
+	if want := []string{"/tmp/vibe/.vibe/config.toml"}; len(got[0].Also) != 1 || got[0].Also[0] != want[0] {
+		t.Errorf("Also = %v, want %v — the recorder cannot back up a file this projection does not name", got[0].Also, want)
+	}
+}
+
+// TestManagedUserFilesRejectsUnusableAlsoDeclarations mirrors
+// TestManagedUserFilesRejectsUnusableDeclarations for the Also field: a nil
+// resolver, one that errors, or one that resolves to a relative path must be
+// an error from the FULL projection — the same rigor Path already gets,
+// because a silently-dropped Also file is invisible to both
+// --print-managed-files and the recorder in exactly the shape #1449 is about.
+func TestManagedUserFilesRejectsUnusableAlsoDeclarations(t *testing.T) {
+	path := func(p string) func() (string, error) {
+		return func() (string, error) { return p, nil }
+	}
+	uninstall := func() (bool, error) { return false, nil }
+
+	cases := []struct {
+		name string
+		also []func() (string, error)
+		want string
+	}{
+		{"nil Also resolver", []func() (string, error){nil}, "Also[0]"},
+		{"Also resolve fails", []func() (string, error){
+			func() (string, error) { return "", errors.New("no vibe home") },
+		}, "no vibe home"},
+		{"Also relative path", []func() (string, error){path("config.toml")}, "not absolute"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			catalog := []agent.Agent{writerAdapter("mistral-vibe", agent.HooksPermissionKey, &agent.ManagedUserFile{
+				Path:      path("/tmp/vibe/.vibe/hooks.toml"),
+				Also:      tc.also,
+				Uninstall: uninstall,
+			})}
+			got, err := ManagedUserFiles(catalog)
+			if err == nil {
+				t.Fatalf("ManagedUserFiles() = %v, want an error naming %q", got, tc.want)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error %q does not name %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// TestNarrowedProjectionsSurviveABrokenAlsoDeclarationOnAnotherKey is
+// TestNarrowedProjectionsSurviveABrokenDeclarationOnAnotherKey's Also
+// counterpart (#1718): a narrowed projection must not resolve — and so must
+// not be able to fail on — an Also entry belonging to a permission outside its
+// own narrowing, any more than it may fail on that permission's Path.
+//
+// A LOCK, not a defect test: collectManagedFiles resolves Path and Also inside
+// the SAME `want(p.Key)`-filtered loop iteration (see the code), so there is no
+// separate ordering to get wrong — Also's narrow-before-resolve property is
+// structurally inherited from Path's, not a second mechanism that could drift
+// from it. Written anyway because AGENTS.md treats that order as a rule, not
+// an optimization, and a rule earns a test that would catch someone splitting
+// Also's resolution into its own pass later.
+func TestNarrowedProjectionsSurviveABrokenAlsoDeclarationOnAnotherKey(t *testing.T) {
+	path := func(p string) func() (string, error) {
+		return func() (string, error) { return p, nil }
+	}
+	uninstall := func() (bool, error) { return false, nil }
+	brokenAlso := &agent.ManagedUserFile{
+		Path:      path("/tmp/kitty/kitty.conf"),
+		Also:      []func() (string, error){func() (string, error) { return "relative/also.toml", nil }},
+		Uninstall: uninstall,
+	}
+	good := &agent.ManagedUserFile{
+		Path:      path("/tmp/x/CLAUDE.md"),
+		Uninstall: uninstall,
+	}
+	catalog := []agent.Agent{
+		writerAdapter("kitty", "remote-control", brokenAlso),
+		writerAdapter("alpha", agent.InstructionsPermissionKey, good),
+	}
+
+	got, err := InstructionConfigs(catalog)
+	if err != nil {
+		t.Fatalf("InstructionConfigs() failed on a broken Also declaration it does not collect: %v — "+
+			"--uninstall-task-eta would abort without removing anything from the user's CLAUDE.md", err)
+	}
+	if len(got) != 1 || got[0].Adapter != "alpha" {
+		t.Fatalf("InstructionConfigs() = %v, want exactly alpha/instructions", got)
+	}
+
+	// The full projection must still refuse it, the same as for a broken Path.
+	if _, err := ManagedUserFiles(catalog); err == nil {
+		t.Error("ManagedUserFiles() accepted a broken Also declaration — the recorder would read a short list as success")
+	}
+}
+
 // TestHookConfigsIsTheHooksSliceOfManagedUserFiles pins the narrowing
 // `--uninstall-hooks` depends on (#1383). Widening the declaration must not
 // widen what that command touches: it removes hook entries and records the
