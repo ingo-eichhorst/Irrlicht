@@ -317,7 +317,9 @@ Before marking a ticket done, run the full suite — every layer must pass:
     defect test; after #1488 the chokepoint drops the same payload, so every
     dispatch-shaped assertion stays green (measured on all seven receivers —
     claudecode's hooks and statusline, codex, copilot, geminicli, kirocli,
-    vibe). It is not silent about
+    vibe; reproduce the count with `git grep -rl hookjson.RequireConsent
+    core/adapters/inbound/agents/` rather than trusting this list once an
+    eighth adapter ships). It is not silent about
     it: reaching the backstop means a receiver skipped a check or consent was
     revoked mid-request, so it logs an error, where a receiver's own gate
     answers a quiet 200. That difference is both the surviving discriminator
@@ -397,16 +399,19 @@ Before marking a ticket done, run the full suite — every layer must pass:
   on another port is rewritten in place rather than duplicated, and uninstall
   is not port-scoped (#1178). A new hook-installing adapter wires one call
   (see `hookport_test.go` in `claudecode`, `codex`, `copilot`, `geminicli`,
-  `kirocli` or `vibe` — six today) instead of porting a test file. It grades
-  against the delivery route the adapter DECLARES
+  `kirocli` or `vibe` — six today, reproduced with `find
+  core/adapters/inbound/agents -name hookport_test.go`) instead of porting a
+  test file. It grades against the delivery route the adapter DECLARES
   (`HookInstaller.Delivery`, #1453), because there are two ways to satisfy it
   and the second makes the first unsatisfiable. `DeliveryURL` — the zero
-  value, declared by `claudecode`, `codex` and `copilot` — is an entry that
-  CARRIES the daemon's address.
+  value, left unset by `claudecode`, `codex` and `copilot` — is an entry
+  that CARRIES the daemon's address.
   `DeliveryAddressFree` is an entry that carries none, because it names the
   `irrlichd hook-post` beacon (`core/pkg/hookbeacon`, #1373), which reads the
   addr file at fire time — `geminicli` (#1724), `kirocli` (#1732) and `vibe`
-  (#1733) all declare it; three of the four port obligations then fail by
+  (#1733) all declare it (`git grep -n "Delivery:
+  contracttesting.DeliveryAddressFree" core/adapters/`, the other half of
+  the six adapters above); three of the four port obligations then fail by
   construction, measured against a working beacon. That is the good outcome
   rather than an exemption: the beacon makes the whole stale-port class
   INEXPRESSIBLE instead of fixing it once more — the dev daemon that left a
@@ -465,7 +470,8 @@ Before marking a ticket done, run the full suite — every layer must pass:
   user's `settings.json` undisclosed. Adapters now derive both the count and
   the list from `installedHookEvents` via `hookjson.EventList`, and wire one
   call (see `hookdisclosure_test.go` in `claudecode`, `codex`, `copilot`,
-  `geminicli`, `kirocli` or `vibe` — six today). The "names no
+  `geminicli`, `kirocli` or `vibe` — six today, reproduced with `find
+  core/adapters/inbound/agents -name hookdisclosure_test.go`). The "names no
   uninstalled event" arm checks against `session.AllHookEvents`, itself kept
   honest by `TestAllHookEvents_CoversEveryConstant`, which scans
   `hook_signal.go`'s source rather than trusting a second hand-kept list.
@@ -508,7 +514,8 @@ Before marking a ticket done, run the full suite — every layer must pass:
   plant a broken link, have it accepted, then create the target. A new
   hook-receiving adapter wires one call (see `hookpath_test.go` in
   `claudecode`, `codex`, `copilot`, `geminicli`, `kirocli` or `vibe` — six
-  today; claudecode wires it twice, because its statusline
+  today, reproduced with `find core/adapters/inbound/agents -name
+  hookpath_test.go`; claudecode wires it twice, because its statusline
   endpoint is a receiver too and was the one the original fix forgot).
   **A confinement refusal answers 2xx** — it is reported by the log and the
   counter, never by a status code on the user's critical path. The path is
@@ -570,7 +577,10 @@ Before marking a ticket done, run the full suite — every layer must pass:
   the floor the same way — `copilot`, `geminicli`, `kirocli` and `vibe`
   joined Codex and Claude Code by declaring
   `Version: &agent.VersionGate{Min: "x.y.z", Probe: []string{"<cli>",
-  "--version"}}` and nothing else. `TestEveryHookInstallDeclaresAVersionFloor`
+  "--version"}}` and nothing else, six of six hook-installing adapters
+  today (`git grep -l "VersionGate{" core/adapters/inbound/agents/*/agent.go`)
+  — re-run rather than trust this list once a seventh joins.
+  `TestEveryHookInstallDeclaresAVersionFloor`
   (`core/adapters/inbound/agents/hookversion_test.go`) walks the registry
   projection so a new hook adapter is covered by existing rather than by
   remembering to wire the contract; it narrows on
@@ -655,8 +665,9 @@ Before marking a ticket done, run the full suite — every layer must pass:
   undeclared write (`PermissionService.sharedConfigRefusal` and
   `agents.ManagedUserFiles`, both below) resolve every `Also` entry with the
   same rigor as `Path`, because an unprotected secondary write is exactly
-  #1449's incident shape one field over. Three projections read `Writes`, and they read deliberately different
-  slices: `agents.ManagedUserFiles` returns everything — what
+  #1449's incident shape one field over. Three projections read `Writes`,
+  and they read deliberately different slices: `agents.ManagedUserFiles`
+  returns everything — what
   `irrlichd --print-managed-files` prints and the onboarding recorder backs up
   before spawning a `grant-all` daemon against the user's real `$HOME` — while
   `agents.HookConfigs` narrows to `agent.HooksPermissionKey`, so
