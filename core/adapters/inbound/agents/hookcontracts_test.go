@@ -399,7 +399,7 @@ func assertExclusionsStillHold(t *testing.T, excluded map[string]string, wiredEv
 	}
 }
 
-// assertExclusionsAreWellFormed checks notYetRequired()'s keys the way
+// assertExclusionsAreWellFormed checks unenforceableHere()'s keys the way
 // requiredWirings()' are checked: the name must exist in contracttesting, and it
 // must not also be required. An exemption naming something that does not exist,
 // or contradicting the requirement table, is worse than no exemption at all —
@@ -414,11 +414,11 @@ func assertExclusionsAreWellFormed(t *testing.T, pkgs []*packages.Package, requi
 	}
 	for _, name := range slices.Sorted(maps.Keys(excluded)) {
 		if excluded[name] == "" {
-			t.Fatalf("notYetRequired()[%q] carries no reason; an exclusion nobody can justify is "+
+			t.Fatalf("unenforceableHere()[%q] carries no reason; an exclusion nobody can justify is "+
 				"one nobody can safely delete", name)
 		}
 		if scope.Lookup(name) == nil {
-			t.Fatalf("notYetRequired() excludes contracttesting.%s, which %s does not declare — the "+
+			t.Fatalf("unenforceableHere() excludes contracttesting.%s, which %s does not declare — the "+
 				"entry stopped naming a real thing and now excludes nothing",
 				name, contracttestingPkg)
 		}
