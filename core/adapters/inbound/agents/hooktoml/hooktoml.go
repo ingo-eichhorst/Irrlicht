@@ -43,6 +43,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -435,6 +436,87 @@ func HasAnyHooksBlock(path string) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// HookBlocks reads the file at path and returns the raw bytes of every
+// `[[hooks]]` block it contains, in file order — ours and anyone else's
+// alike. An absent file reads as zero blocks, not an error: that is the
+// ordinary "nothing installed yet" state, the same convention every other
+// read-only function in this package follows.
+//
+// This is the seam contracttesting's #1178 contract (issue #1178, widened
+// for TOML in #1734) consumes as HookInstaller.ReadEntries — it exists
+// because hooktoml has no "parse to a generic structure" phase a seam could
+// otherwise plug a traversal into (see the package doc): the file is never
+// decoded into anything but byte ranges, so the READ step itself is what a
+// caller outside this package needs, not a traversal over a structure this
+// package does not produce. It shares scanSections with every writer in this
+// file, so it refuses (ErrUnsafe) on exactly what they refuse on — in
+// particular an unterminated single-line string inside a block reads as
+// "cannot scan this document" rather than as a block silently missing its
+// command field, which is the distinction
+// core/internal/contracttesting/hook_endpoint_toml_test.go's
+// TestReferenceTOMLReadEntries_RejectsUnterminatedCommand exists to pin for a
+// reference installer and this function inherits for free.
+func HookBlocks(path string) ([][]byte, error) {
+	orig, err := readOrEmpty(path)
+	if err != nil {
+		return nil, err
+	}
+	sections, err := scanSections(orig)
+	if err != nil {
+		return nil, err
+	}
+	var blocks [][]byte
+	for _, s := range sections {
+		if s.kind == 2 && s.name == "hooks" {
+			blocks = append(blocks, orig[s.start:s.end])
+		}
+	}
+	return blocks, nil
+}
+
+// FieldValue extracts a `key = "value"` assignment's decoded string value
+// from fragment — typically one block HookBlocks returned — scanning line by
+// line and respecting the same backslash-escape and comment-stripping rules
+// every writer in this package already uses (lineSafety), so it decodes
+// exactly what Quote encoded. Returns ("", false) when key is absent from
+// fragment or its value is not a plain double-quoted single-line string.
+//
+// The seam's HookInstaller.EndpointOfRaw is the intended caller: extracting
+// a field back out of raw TOML text is the same operation IsCanonical
+// already performs by whole-block comparison, applied to one named field
+// instead of the whole block.
+func FieldValue(fragment []byte, key string) (string, bool) {
+	for _, raw := range bytes.Split(fragment, []byte("\n")) {
+		stripped, _ := lineSafety(raw)
+		line := bytes.TrimSpace(stripped)
+		k, v, ok := bytes.Cut(line, []byte("="))
+		if !ok || string(bytes.TrimSpace(k)) != key {
+			continue
+		}
+		return unquoteBasicString(bytes.TrimSpace(v))
+	}
+	return "", false
+}
+
+// unquoteBasicString decodes a TOML basic ("...") string, ignoring any
+// trailing comment already stripped by lineSafety — the same decode
+// vibe/config.go's tomlString hand-rolls for a single known key, generalized
+// here to any fragment this package is asked to read a field out of.
+func unquoteBasicString(v []byte) (string, bool) {
+	if len(v) == 0 || v[0] != '"' {
+		return "", false
+	}
+	p, err := strconv.QuotedPrefix(string(v))
+	if err != nil {
+		return "", false
+	}
+	s, err := strconv.Unquote(p)
+	if err != nil {
+		return "", false
+	}
+	return s, true
 }
 
 // --- top-level scalar operations ---

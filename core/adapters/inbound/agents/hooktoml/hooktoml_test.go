@@ -413,6 +413,98 @@ func TestHasAnyHooksBlock(t *testing.T) {
 	}
 }
 
+// --- HookBlocks / FieldValue (the contracttesting #1178 seam) ---
+
+func TestHookBlocks_AbsentFileIsZeroBlocksNotAnError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hooks.toml")
+
+	blocks, err := HookBlocks(path)
+	if err != nil {
+		t.Fatalf("HookBlocks on an absent file: %v, want nil error", err)
+	}
+	if len(blocks) != 0 {
+		t.Fatalf("HookBlocks on an absent file: got %d blocks, want 0", len(blocks))
+	}
+}
+
+func TestHookBlocks_ReturnsEveryBlockInFileOrder(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hooks.toml")
+	seed := "[[hooks]]\nname = \"a\"\ntype = \"post_agent_turn\"\ncommand = \"cmd-a\"\n\n" +
+		"[[hooks]]\nname = \"b\"\ntype = \"before_tool\"\ncommand = \"cmd-b\"\n"
+	if err := os.WriteFile(path, []byte(seed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	blocks, err := HookBlocks(path)
+	if err != nil {
+		t.Fatalf("HookBlocks: %v", err)
+	}
+	if len(blocks) != 2 {
+		t.Fatalf("HookBlocks returned %d blocks, want 2:\n%v", len(blocks), blocks)
+	}
+	if !strings.Contains(string(blocks[0]), `name = "a"`) {
+		t.Errorf("block 0 = %q, want the \"a\" block", blocks[0])
+	}
+	if !strings.Contains(string(blocks[1]), `name = "b"`) {
+		t.Errorf("block 1 = %q, want the \"b\" block", blocks[1])
+	}
+}
+
+// TestHookBlocks_RefusesOnUnterminatedCommand is the mutation evidence for
+// HookBlocks' own doc comment: a block whose command value is opened and
+// never closed — the state a truncated write leaves behind — must be
+// refused, not silently read as a block with no command field at all. The
+// same fixture shape contracttesting's
+// TestReferenceTOMLReadEntries_RejectsUnterminatedCommand pins for its
+// scanner; this is the identical property pinned directly against
+// HookBlocks, which is what the real #1178 wiring actually calls.
+func TestHookBlocks_RefusesOnUnterminatedCommand(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hooks.toml")
+	malformed := "[[hooks]]\nname = \"broken\"\ntype = \"post_agent_turn\"\ncommand = \"curl -sf http://127.0.0.1:7837/api/v1/hooks\n"
+	if err := os.WriteFile(path, []byte(malformed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	blocks, err := HookBlocks(path)
+	if err == nil {
+		t.Fatalf("HookBlocks on an unterminated command string: got %d blocks and no error, want a refusal", len(blocks))
+	}
+}
+
+func TestFieldValue_ExtractsAndDecodesAQuotedField(t *testing.T) {
+	block := []byte("[[hooks]]\nname = \"irrlicht-turn-done\"\ntype = \"post_agent_turn\"\n" +
+		"command = " + Quote(`/opt/irrlicht/bin/irrlichd --version hook-post mistral-vibe >/dev/null || true`) + "\n")
+
+	got, ok := FieldValue(block, "command")
+	if !ok {
+		t.Fatal("FieldValue did not find the command field")
+	}
+	want := `/opt/irrlicht/bin/irrlichd --version hook-post mistral-vibe >/dev/null || true`
+	if got != want {
+		t.Errorf("FieldValue(command) = %q, want %q", got, want)
+	}
+}
+
+func TestFieldValue_DecodesEscapedQuotesAndBackslashes(t *testing.T) {
+	raw := `/path with "quotes" and \backslash`
+	block := []byte("command = " + Quote(raw) + "\n")
+
+	got, ok := FieldValue(block, "command")
+	if !ok || got != raw {
+		t.Errorf("FieldValue(command) = %q, ok=%v, want %q, true", got, ok, raw)
+	}
+}
+
+func TestFieldValue_AbsentKeyReportsNotFound(t *testing.T) {
+	block := []byte("[[hooks]]\nname = \"a\"\n")
+	if _, ok := FieldValue(block, "command"); ok {
+		t.Error("FieldValue found a command field that is not there")
+	}
+}
+
 // --- refusal on constructs the scanner does not model ---
 
 func TestEnsureInstalled_RefusesOnTripleQuotedString(t *testing.T) {
