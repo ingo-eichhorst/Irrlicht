@@ -16,6 +16,19 @@ import XCTest
 /// `NSWindow`s at the real levels this app uses, ordered the real way, with
 /// z-order read back from `NSApp.orderedWindows` (AppKit's own
 /// front-to-back truth), before and after the fix.
+///
+/// Review found two things this file's first draft didn't cover, both now
+/// covered: `candidates(in:)`'s "front-most" claim was untested against more
+/// than one below-host-level window (`testCandidatesPicksTheGenuinelyFrontmostOfSeveralLowerLevelWindows`,
+/// `testReorderIfNeededAttachesTheGenuinelyFrontmostCandidate` — the live call
+/// site had been reading `NSApp.windows`, registration order, not z-order,
+/// which is exactly what those two now pin), and `attach`'s counterpart,
+/// `detach`, had no test proving it actually breaks the parent/child
+/// reference `addChildWindow` establishes (`testDetachRemovesTheChildWindowRelationship`).
+/// Not covered, and not expected to be by this file: whether the *reported*
+/// symptom (issue #1743's title says "hover pop-over") is actually this
+/// click-triggered popover rather than some other floating surface — see
+/// this PR's description for that residual uncertainty.
 @MainActor
 final class PopoverHostReorderTests: XCTestCase {
 
@@ -181,6 +194,28 @@ final class PopoverHostReorderTests: XCTestCase {
         XCTAssertNil(PopoverHostReorder.candidates(in: [host, popover]))
     }
 
+    /// Review finding on this fix's first draft: `candidates(in:)`'s doc
+    /// comment claims "the front-most OTHER visible window", but the live
+    /// call site passed `NSApp.windows` (registration order, NOT z-order) —
+    /// so with two below-host candidates visible at once (e.g. a transient
+    /// dismiss/re-present race, or an `NSOpenPanel` open alongside a row
+    /// popover), it silently picked the wrong one. This drives
+    /// `candidates(in:)` with genuine `NSApp.orderedWindows` z-order —
+    /// `windowB` registered FIRST but ordered to the front LAST, so if this
+    /// were reading registration order it would wrongly return `windowA`.
+    func testCandidatesPicksTheGenuinelyFrontmostOfSeveralLowerLevelWindows() {
+        let host = makeHostWindow()
+        let windowA = makePopoverWindow()
+        let windowB = makePopoverWindow()
+        host.orderFrontRegardless()
+        windowA.orderFrontRegardless()
+        windowB.orderFrontRegardless()   // ordered front LAST -> genuinely frontmost
+
+        let found = PopoverHostReorder.candidates(in: NSApp.orderedWindows)
+        XCTAssertTrue(found?.popover === windowB,
+                       "must pick the window actually on top, not whichever was created/registered first")
+    }
+
     // MARK: - attach(host:popover:) — the fix itself
 
     /// The green half of the red/green pair above: after `attach`, the
@@ -217,18 +252,71 @@ final class PopoverHostReorderTests: XCTestCase {
 
     /// `reorderIfNeeded()` is the two-line live glue over the two tested
     /// primitives above — this locks that it actually performs the attach
-    /// end to end, from `NSApp.windows` state; not the timing (SwiftUI's
-    /// own deferred presentation), which is glass-box AppKit behavior that
-    /// no test in this file drives from the SwiftUI side.
+    /// end to end, from `NSApp.orderedWindows` state, and returns the
+    /// window it attached (which `SessionControlButton` retains so it can
+    /// `detach` on dismiss). Not covered: the timing (SwiftUI's own
+    /// deferred presentation), which is glass-box AppKit behavior no test
+    /// in this file drives from the SwiftUI side.
     func testReorderIfNeededAttachesFromLiveWindowState() {
         let host = makeHostWindow()
         let popover = makePopoverWindow()
         host.orderFrontRegardless()
         popover.orderFrontRegardless()
 
-        PopoverHostReorder.reorderIfNeeded()
+        let attached = PopoverHostReorder.reorderIfNeeded()
 
+        XCTAssertTrue(attached === popover)
         XCTAssertTrue(popover.parent === host)
         XCTAssertTrue(isInFrontOf(popover, of: host))
+    }
+
+    /// The same registration-order-vs-z-order distinction as the
+    /// `candidates(in:)` test above, driven end to end through the live
+    /// call site.
+    func testReorderIfNeededAttachesTheGenuinelyFrontmostCandidate() {
+        let host = makeHostWindow()
+        let windowA = makePopoverWindow()
+        let windowB = makePopoverWindow()
+        host.orderFrontRegardless()
+        windowA.orderFrontRegardless()
+        windowB.orderFrontRegardless()
+
+        let attached = PopoverHostReorder.reorderIfNeeded()
+
+        XCTAssertTrue(attached === windowB)
+        XCTAssertTrue(windowB.parent === host)
+        XCTAssertNil(windowA.parent, "the non-frontmost candidate must be left alone")
+    }
+
+    // MARK: - detach(_:) — the leak fix
+
+    /// `addChildWindow` gives the parent a STRONG reference (Apple's
+    /// documented behavior) — verified here rather than assumed, since it's
+    /// exactly the property that makes `detach` load-bearing rather than
+    /// cosmetic: without it, a popover attached once and never detached
+    /// stays retained by the host across every subsequent present/dismiss
+    /// cycle.
+    func testDetachRemovesTheChildWindowRelationship() {
+        let host = makeHostWindow()
+        let popover = makePopoverWindow()
+        host.orderFrontRegardless()
+        popover.orderFrontRegardless()
+        PopoverHostReorder.attach(host: host, popover: popover)
+        XCTAssertTrue(host.childWindows?.contains(popover) ?? false, "sanity: attach must have run")
+
+        PopoverHostReorder.detach(popover)
+
+        XCTAssertNil(popover.parent)
+        XCTAssertFalse(host.childWindows?.contains(popover) ?? false)
+    }
+
+    /// A no-op on a window that was never attached — `SessionControlButton`
+    /// calls this unconditionally whenever it holds a stored reference, not
+    /// only when it knows attach succeeded.
+    func testDetachOnAnUnattachedWindowIsHarmless() {
+        let popover = makePopoverWindow()
+        popover.orderFrontRegardless()
+        PopoverHostReorder.detach(popover)
+        XCTAssertNil(popover.parent)
     }
 }

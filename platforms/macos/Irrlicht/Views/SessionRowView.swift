@@ -802,14 +802,21 @@ enum PopoverHostReorder {
     /// host panel.
     static let hostLevel = NSWindow.Level.popUpMenu
 
-    /// Pure lookup over an explicit window list (rather than reading
-    /// `NSApp.windows` directly) so this is testable without depending on
-    /// `.popover`'s own presentation timing. Finds the host panel by its
-    /// fixed level, then the most likely popover window: the front-most
-    /// OTHER visible window strictly BELOW the host's level. That excludes
-    /// `TooltipWindowController`'s own panel, which is deliberately pinned
-    /// ABOVE `hostLevel` (`SessionListView.swift`) so the two mechanisms
-    /// never fight over the same candidate.
+    /// Pure lookup over an explicit window list — a caller passes
+    /// `NSApp.orderedWindows` (front-to-back; see `reorderIfNeeded()`), not
+    /// `NSApp.windows` (unordered registration order — using it here was a
+    /// review finding on this fix's first draft: it silently broke the
+    /// "front-most" claim below whenever more than one below-host-level
+    /// window was visible at once). Passing the list explicitly rather than
+    /// reading `NSApp` directly is what makes this testable without
+    /// depending on `.popover`'s own presentation timing.
+    ///
+    /// Finds the host panel by its fixed level, then the most likely
+    /// popover window: the front-most OTHER visible window strictly BELOW
+    /// the host's level. That excludes `TooltipWindowController`'s own
+    /// panel, which is deliberately pinned ABOVE `hostLevel`
+    /// (`SessionListView.swift`) so the two mechanisms never fight over the
+    /// same candidate.
     static func candidates(in windows: [NSWindow]) -> (host: NSWindow, popover: NSWindow)? {
         let visible = windows.filter(\.isVisible)
         guard let host = visible.first(where: { $0.level == hostLevel }) else { return nil }
@@ -827,15 +834,30 @@ enum PopoverHostReorder {
         host.addChildWindow(popover, ordered: .above)
     }
 
-    /// Live call site: looks up `NSApp.windows` and attaches if both a host
-    /// and a popover candidate are found. A no-op when either is absent —
-    /// in particular, SwiftUI does not create the popover's `NSWindow`
-    /// synchronously with `showPopover` flipping to `true`, so callers
-    /// defer this by one run-loop turn.
+    /// Detaches `popover` from its parent, if any. Callers use this on
+    /// dismiss — `addChildWindow` gives the parent a STRONG reference to
+    /// the child (Apple's own documented behavior), so a popover reparented
+    /// by `attach` and never detached would be kept alive by `host` even
+    /// after SwiftUI itself drops it, which is a real leak/retain-cycle
+    /// risk on repeated present/dismiss cycles, not merely a tidiness
+    /// concern.
+    static func detach(_ popover: NSWindow) {
+        popover.parent?.removeChildWindow(popover)
+    }
+
+    /// Live call site: looks up `NSApp.orderedWindows` (front-to-back —
+    /// see `candidates(in:)`'s doc comment) and attaches if both a host and
+    /// a popover candidate are found, returning the popover window so the
+    /// caller can `detach` it later. Returns `nil`, doing nothing, when
+    /// either is absent — in particular, SwiftUI does not create the
+    /// popover's `NSWindow` synchronously with `showPopover` flipping to
+    /// `true`, so callers defer this by one run-loop turn.
+    @discardableResult
     @MainActor
-    static func reorderIfNeeded() {
-        guard let (host, popover) = candidates(in: NSApp.windows) else { return }
+    static func reorderIfNeeded() -> NSWindow? {
+        guard let (host, popover) = candidates(in: NSApp.orderedWindows) else { return nil }
         attach(host: host, popover: popover)
+        return popover
     }
 }
 
@@ -848,6 +870,11 @@ struct SessionControlButton: View {
     @EnvironmentObject var sessionManager: SessionManager
     @State private var showPopover = false
     @State private var draft = ""
+    // The popover window PopoverHostReorder attached as a child of the host
+    // panel, so it can be detached again on dismiss (PopoverHostReorder.detach's
+    // doc comment: addChildWindow keeps a STRONG reference, so skipping this
+    // would leak the popover window across repeated present/dismiss cycles).
+    @State private var attachedPopoverWindow: NSWindow?
 
     var body: some View {
         Button {
@@ -881,12 +908,16 @@ struct SessionControlButton: View {
             .padding(12)
         }
         .onChange(of: showPopover) { presented in
-            guard presented else { return }
-            // Deferred one run-loop turn: SwiftUI doesn't create the
-            // popover's NSWindow synchronously with this state change (see
-            // PopoverHostReorder's doc comment above).
-            DispatchQueue.main.async {
-                PopoverHostReorder.reorderIfNeeded()
+            if presented {
+                // Deferred one run-loop turn: SwiftUI doesn't create the
+                // popover's NSWindow synchronously with this state change
+                // (see PopoverHostReorder's doc comment above).
+                DispatchQueue.main.async {
+                    attachedPopoverWindow = PopoverHostReorder.reorderIfNeeded()
+                }
+            } else if let popover = attachedPopoverWindow {
+                PopoverHostReorder.detach(popover)
+                attachedPopoverWindow = nil
             }
         }
     }
