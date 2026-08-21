@@ -178,16 +178,6 @@ var installedHookEvents = []string{
 	HookStop,
 }
 
-// matcherForEvent returns the matcher we install for the given event.
-// Neither installed event is tool-scoped in a way we want narrowed at the
-// config level: postToolUse must fire for every tool (it is the broad
-// release side, mirroring gemini-cli's AfterTool), and stop is not a
-// per-tool event at all. So both take no matcher, and the flat entry omits
-// the key entirely — kiro-cli's own schema treats an absent matcher as "no
-// filter" (verified live: the stop entry #1716's audit installed carried no
-// matcher key and fired).
-func matcherForEvent(string) string { return "" }
-
 // ourHookEntry builds the flat inner hook object we install for the
 // currently running daemon: a beacon command (core/pkg/hookbeacon), never a
 // bare curl line. kiro-cli's delivery is exec/command with the payload piped
@@ -218,15 +208,22 @@ func hookEntryIsCanonical(hook map[string]interface{}) bool {
 
 // flatHookConfig is this file's analogue of hookjson.Config, over the flat
 // entry shape kiro-cli requires: Path/Sentinel/Events/Entry/IsCanonical/
-// WriteFile mean exactly what they do in hookjson.Config, and only the
-// per-event MATCHER-GROUP wrapping is gone (matcherForEvent still decides
-// whether an entry carries a "matcher" key, but there is no surrounding
-// {"matcher": ..., "hooks": [...]} group to build).
+// WriteFile mean exactly what they do in hookjson.Config, and the per-event
+// MATCHER-GROUP wrapping is gone entirely — there is no surrounding
+// {"matcher": ..., "hooks": [...]} group to build, and no per-event matcher
+// concept either. Neither installed event is tool-scoped in a way we want
+// narrowed at the config level: postToolUse must fire for every tool (it is
+// the broad release side, mirroring gemini-cli's AfterTool), and stop is not
+// a per-tool event at all. So a flat entry carries no "matcher" key at all —
+// kiro-cli's own schema treats an absent matcher as "no filter" (verified
+// live: the stop entry #1716's audit installed carried no matcher key and
+// fired) — and this struct declares no field for one; an earlier draft did
+// (MatcherFor func(event string) string, assigned matcherForEvent, which
+// always returned "") and nothing ever called it.
 type flatHookConfig struct {
 	Path        string
 	Sentinel    string
 	Events      []string
-	MatcherFor  func(event string) string
 	Entry       func() map[string]interface{}
 	IsCanonical func(hook map[string]interface{}) bool
 	WriteFile   func(path string, data []byte) error
@@ -240,7 +237,6 @@ func kiroHookConfig(path string) flatHookConfig {
 		Path:        path,
 		Sentinel:    hookbeacon.Sentinel(AdapterName),
 		Events:      installedHookEvents,
-		MatcherFor:  matcherForEvent,
 		Entry:       ourHookEntry,
 		IsCanonical: hookEntryIsCanonical,
 		WriteFile:   atomicWriteFile,

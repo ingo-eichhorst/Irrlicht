@@ -345,7 +345,6 @@ func TestForeignBinaryInstall_UpgradedInPlace(t *testing.T) {
 		Path:        configPath,
 		Sentinel:    hookbeacon.Sentinel(AdapterName),
 		Events:      installedHookEvents,
-		MatcherFor:  matcherForEvent,
 		Entry:       func() map[string]interface{} { return flatBeaconEntry(staleCommand) },
 		IsCanonical: hookEntryIsCanonical,
 		WriteFile:   atomicWriteFile,

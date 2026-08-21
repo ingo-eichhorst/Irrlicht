@@ -58,6 +58,15 @@ func kirocliHooksPermission(t *testing.T) agent.Permission {
 // this adapter's shape, not a verdict-changing one. Stated here rather than
 // left implied, because claiming this test exercises the #1449 refusal
 // itself would overclaim what a co-located pair of files can demonstrate.
+//
+// The #1449 refusal itself IS exercised, separately: TestSharedConfigGate_
+// KiroCLIAlsoDeclarationReachesTheGuard (application/services/
+// permission_shared_config_gate_test.go) extracts this SAME real Also
+// resolver and plugs it into a synthetic permission whose Path is
+// deliberately decoupled from kiro-cli's own — the only way to observe
+// sharedConfigRefusal's verdict move at all, given the co-location this
+// comment describes. Both tests were seen red together against the identical
+// mutation (Also commented out here).
 func TestKiroCLIAlso_SettingsFileIsAManagedFile(t *testing.T) {
 	// Hermetic: the resolved path must be a function of what THIS test sets,
 	// never of the machine it runs on (see AGENTS.md's sanitizedChildEnv

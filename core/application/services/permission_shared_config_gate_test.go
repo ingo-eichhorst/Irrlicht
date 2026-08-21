@@ -5,6 +5,14 @@ import (
 	"path/filepath"
 	"testing"
 
+	// Importing an adapter from the services package is confined to this test
+	// file and is the point of the composition test below: it is the only place
+	// kiro-cli's real Also declaration and this package's real enforcement
+	// meet. Test-only, so it does not affect the hexagonal import direction
+	// core/architecture_test.go enforces (that walks non-test package
+	// imports) — see permission_version_gate_test.go's identical import for
+	// the precedent this follows.
+	"irrlicht/core/adapters/inbound/agents/kirocli"
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/config"
 	"irrlicht/core/domain/permission"
@@ -280,5 +288,85 @@ func TestSharedConfigGate_RelativeRootRefuses(t *testing.T) {
 		if got := pathInsideRoot(c.root, c.path); got != c.want {
 			t.Errorf("pathInsideRoot(%q, %q) = %v, want %v", c.root, c.path, got, c.want)
 		}
+	}
+}
+
+// TestSharedConfigGate_KiroCLIAlsoDeclarationReachesTheGuard is the
+// composition test for kiro-cli's own Writes.Also declaration (issue #1716,
+// via #1718's ManagedUserFile.Also widening): it extracts kiro-cli's REAL
+// Also resolver from kirocli.Agent()'s own hooks permission — not a
+// re-implementation of it — and proves the generic mechanism above
+// (TestSharedConfigGate_RefusesWhenAlsoResolvesOutsideTheIsolatedHome)
+// actually gets to evaluate it.
+//
+// It has to decouple Path from Also to observe anything at all. kiro-cli's
+// real Path (agents/irrlicht.json) and its real Also entry
+// (settings/cli.json) both derive from the SAME $KIRO_HOME root
+// (hookinstaller.go's kiroHome()), so in production they can never diverge —
+// see kirocli_alsofile_test.go's (core/cmd/irrlichd) own structural note on
+// exactly this. sharedConfigRefusal checks Path first and returns
+// immediately on its own refusal, so a test using kiro-cli's real Path
+// resolver too would refuse on Path alone regardless of what Also carries —
+// proving nothing about Also specifically. So this test stands a synthetic,
+// always-safe Path in for kiro-cli's real one, and points $KIRO_HOME OUTSIDE
+// the isolated home so the real kiroSettingsPath resolver (reached only via
+// the extracted Also closure, never re-typed) resolves to the user's real
+// settings/cli.json. That isolates exactly the question this test asks —
+// does the DECLARED Also resolver reach the guard — independent of the
+// co-location that would otherwise mask it.
+func TestSharedConfigGate_KiroCLIAlsoDeclarationReachesTheGuard(t *testing.T) {
+	sandbox := "/tmp/irr-sandbox"
+	realKiroHome := filepath.Join("/Users/someone", ".kiro")
+	t.Setenv("KIRO_HOME", realKiroHome)
+
+	var kirocliAlso func() (string, error)
+	for _, p := range kirocli.Agent().Permissions {
+		if p.Key == kirocli.PermissionKeyHooks && p.Writes != nil {
+			if len(p.Writes.Also) != 1 {
+				t.Fatalf("kirocli's hooks permission declares %d Also entries, want exactly 1 (settings/cli.json)", len(p.Writes.Also))
+			}
+			kirocliAlso = p.Writes.Also[0]
+		}
+	}
+	if kirocliAlso == nil {
+		t.Fatal("kirocli.Agent() declares no hooks permission with Writes")
+	}
+	wantAlsoPath, err := kirocliAlso()
+	if err != nil {
+		t.Fatalf("kiro-cli's real Also resolver: %v", err)
+	}
+	if !filepath.IsAbs(wantAlsoPath) || filepath.Base(filepath.Dir(wantAlsoPath)) != "settings" {
+		t.Fatalf("kiro-cli's real Also resolver returned %q, want an absolute .../settings/cli.json path — the fixture below is not testing what it claims to", wantAlsoPath)
+	}
+
+	// With Also declared (this test's synthetic permission carries kiro-cli's
+	// REAL resolver): refused, naming the real settings/cli.json path.
+	applied := false
+	svc, log := sharedConfigService(config.PermissionModeGrantAll, sandbox, false)
+	p := writingPermission(filepath.Join(sandbox, "agents", "irrlicht.json"), &applied)
+	p.Writes.Also = []func() (string, error){kirocliAlso}
+	grant(svc, p)
+	if applied {
+		t.Error("Apply ran although kiro-cli's real Also resolver resolves outside the isolated home — settings/cli.json would have been left rewritten and unrestored under grant-all")
+	}
+	if !log.errorMentioning(wantAlsoPath) {
+		t.Errorf("the refusal did not name kiro-cli's real settings/cli.json path %q; errors were %v", wantAlsoPath, log.errors)
+	}
+
+	// With Also dropped (this permission carries NO Also at all — the exact
+	// state agent.go would be in if the declaration were removed): the same
+	// unsafe file is invisible to the guard, and the synthetic-safe Path
+	// alone lets Apply run. This is the coordinator's requested mutation
+	// expressed as a permanent lock rather than a transient hand-edit: "drop
+	// Also and show the #1449 refusal stops seeing settings/cli.json."
+	applied2 := false
+	svc2, log2 := sharedConfigService(config.PermissionModeGrantAll, sandbox, false)
+	p2 := writingPermission(filepath.Join(sandbox, "agents", "irrlicht.json"), &applied2)
+	grant(svc2, p2)
+	if !applied2 {
+		t.Errorf("Apply was refused even with Also absent; errors were %v — expected the synthetic safe Path alone to pass, proving the guard now sees NOTHING about settings/cli.json", log2.errors)
+	}
+	if log2.errorMentioning(wantAlsoPath) {
+		t.Errorf("the refusal named %q even though Also was not declared on this permission — it cannot have evaluated a resolver it was never given", wantAlsoPath)
 	}
 }
