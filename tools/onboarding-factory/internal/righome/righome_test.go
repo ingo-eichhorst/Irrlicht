@@ -241,7 +241,7 @@ func TestEveryRigHomeRowsDriverPassesTheHomeThroughTmux(t *testing.T) {
 			}
 			// Vacuity guard: a driver with no tmux launch at all satisfies the
 			// check above by having nothing to walk.
-			if n := countTmuxLaunches(string(src)); n == 0 {
+			if countTmuxLaunches(string(src)) == 0 {
 				t.Errorf("%s contains no `tmux new-session` at all — this arm graded nothing", path)
 			}
 		})
