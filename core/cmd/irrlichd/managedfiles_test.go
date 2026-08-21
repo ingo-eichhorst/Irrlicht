@@ -44,12 +44,27 @@ func TestPrintManagedFilesCoversEveryDeclaredFile(t *testing.T) {
 
 	printed := linesOf(t, buf.String())
 
+	// want carries Path AND every Also entry (#1718): writeManagedFilePaths
+	// flattens both onto the printed stream, so a want set built from Path
+	// alone reports a real Also file as an unexplained extra the moment any
+	// adapter actually declares one — which mistral-vibe's hooks
+	// permission (hooks.toml as Path, config.toml as Also) is the first to
+	// do. This is the arm PR #1731 landed without: it shipped ahead of a
+	// real Also consumer and this test's own want-set gap was invisible
+	// until one existed.
 	want := map[string]bool{}
 	for _, c := range configs {
 		want[c.Path] = true
 		if !printed[c.Path] {
 			t.Errorf("%s/%s declares %q, which --print-managed-files does not list: "+
 				"a recording would rewrite that file and never restore it (#1383)", c.Adapter, c.Key, c.Path)
+		}
+		for _, also := range c.Also {
+			want[also] = true
+			if !printed[also] {
+				t.Errorf("%s/%s declares Also %q, which --print-managed-files does not list: "+
+					"a recording would rewrite that file and never restore it (#1718)", c.Adapter, c.Key, also)
+			}
 		}
 	}
 	for p := range printed {
