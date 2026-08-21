@@ -319,18 +319,7 @@ func TestSharedConfigGate_KiroCLIAlsoDeclarationReachesTheGuard(t *testing.T) {
 	realKiroHome := filepath.Join("/Users/someone", ".kiro")
 	t.Setenv("KIRO_HOME", realKiroHome)
 
-	var kirocliAlso func() (string, error)
-	for _, p := range kirocli.Agent().Permissions {
-		if p.Key == kirocli.PermissionKeyHooks && p.Writes != nil {
-			if len(p.Writes.Also) != 1 {
-				t.Fatalf("kirocli's hooks permission declares %d Also entries, want exactly 1 (settings/cli.json)", len(p.Writes.Also))
-			}
-			kirocliAlso = p.Writes.Also[0]
-		}
-	}
-	if kirocliAlso == nil {
-		t.Fatal("kirocli.Agent() declares no hooks permission with Writes")
-	}
+	kirocliAlso := kirocliSettingsAlsoResolver(t)
 	wantAlsoPath, err := kirocliAlso()
 	if err != nil {
 		t.Fatalf("kiro-cli's real Also resolver: %v", err)
@@ -369,4 +358,32 @@ func TestSharedConfigGate_KiroCLIAlsoDeclarationReachesTheGuard(t *testing.T) {
 	if log2.errorMentioning(wantAlsoPath) {
 		t.Errorf("the refusal named %q even though Also was not declared on this permission — it cannot have evaluated a resolver it was never given", wantAlsoPath)
 	}
+}
+
+// kirocliSettingsAlsoResolver extracts kiro-cli's REAL settings/cli.json Also
+// resolver off its own registration.
+//
+// It is picked out by what it RESOLVES TO, not by its index: kiro-cli declares
+// more than one Also entry (the second is the prior-default sidecar,
+// core/cmd/irrlichd's TestKiroCLIAlso_PriorDefaultSidecarIsAManagedFile), and
+// an index would silently retarget the caller at a different file the day the
+// declaration order moved.
+func kirocliSettingsAlsoResolver(t *testing.T) func() (string, error) {
+	t.Helper()
+	for _, p := range kirocli.Agent().Permissions {
+		if p.Key != kirocli.PermissionKeyHooks || p.Writes == nil {
+			continue
+		}
+		for _, resolve := range p.Writes.Also {
+			got, err := resolve()
+			if err != nil {
+				t.Fatalf("resolving one of kiro-cli's Also entries: %v", err)
+			}
+			if filepath.Base(got) == "cli.json" && filepath.Base(filepath.Dir(got)) == "settings" {
+				return resolve
+			}
+		}
+	}
+	t.Fatal("kirocli.Agent() declares no hooks permission whose Writes.Also resolves a settings/cli.json")
+	return nil
 }

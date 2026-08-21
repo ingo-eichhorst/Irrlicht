@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -29,10 +30,13 @@ func kirocliHooksPermission(t *testing.T) agent.Permission {
 
 // TestKiroCLIAlso_SettingsFileIsAManagedFile is the mutation-evidence test for
 // issue #1718's Also field applied to kiro-cli's hooks install (issue #1716):
-// EnsureHooksInstalled's single Apply closure writes TWO shared, user-owned
-// files — the agent config (Writes.Path) and chat.defaultAgent inside
-// settings/cli.json (hookinstaller.go's ensureDefaultAgent) — and only the
-// first is Writes.Path. Undeclared, the second is invisible to both
+// EnsureHooksInstalled's single Apply closure writes THREE shared, user-owned
+// files — the agent config (Writes.Path), chat.defaultAgent inside
+// settings/cli.json (hookinstaller.go's ensureDefaultAgent), and the
+// prior-default sidecar (the sibling test below) — and only the first is
+// Writes.Path. This test grades the settings/cli.json one; each file gets its
+// own test so a declaration that goes missing names WHICH file it was.
+// Undeclared, settings/cli.json is invisible to both
 // consumers that need to see it: the #1449 grant-all refusal
 // (PermissionService.sharedConfigRefusal) and the recording rig's
 // snapshot/restore sweep (agents.ManagedUserFiles, --print-managed-files).
@@ -80,17 +84,8 @@ func TestKiroCLIAlso_SettingsFileIsAManagedFile(t *testing.T) {
 	if perm.Writes == nil {
 		t.Fatal("kirocli hooks permission declares no Writes")
 	}
-	if len(perm.Writes.Also) != 1 {
-		t.Fatalf("Writes.Also has %d entries, want exactly 1 (settings/cli.json)", len(perm.Writes.Also))
-	}
-	also, err := perm.Writes.Also[0]()
-	if err != nil {
-		t.Fatalf("resolving Writes.Also[0]: %v", err)
-	}
 	wantSuffix := filepath.Join("settings", "cli.json")
-	if !strings.HasPrefix(also, kiroHome) || !strings.HasSuffix(also, wantSuffix) {
-		t.Errorf("Writes.Also[0] = %q, want it under %q ending in %q", also, kiroHome, wantSuffix)
-	}
+	also := resolvedAlsoUnder(t, perm, kiroHome, wantSuffix)
 
 	configs, err := agents.ManagedUserFiles(declaredConsentCatalog())
 	if err != nil {
@@ -105,10 +100,10 @@ func TestKiroCLIAlso_SettingsFileIsAManagedFile(t *testing.T) {
 	if kirocliCfg == nil {
 		t.Fatal("agents.ManagedUserFiles projects no kiro-cli/hooks entry at all")
 	}
-	if len(kirocliCfg.Also) != 1 || kirocliCfg.Also[0] != also {
-		t.Errorf("projected ManagedUserFile.Also = %v, want [%q] — the recorder's snapshot/restore "+
-			"sweep resolves this slice directly, so an entry missing here is a file it will never "+
-			"back up before a grant-all daemon can rewrite it", kirocliCfg.Also, also)
+	if !slices.Contains(kirocliCfg.Also, also) {
+		t.Errorf("projected ManagedUserFile.Also = %v, want it to contain %q — the recorder's "+
+			"snapshot/restore sweep resolves this slice directly, so an entry missing here is a "+
+			"file it will never back up before a grant-all daemon can rewrite it", kirocliCfg.Also, also)
 	}
 
 	var buf bytes.Buffer
@@ -119,4 +114,84 @@ func TestKiroCLIAlso_SettingsFileIsAManagedFile(t *testing.T) {
 		t.Errorf("--print-managed-files does not list %q — the recording rig protects only what "+
 			"this command names", also)
 	}
+}
+
+// TestKiroCLIAlso_PriorDefaultSidecarIsAManagedFile covers the THIRD file
+// kiro-cli's single hooks Apply closure writes into the user's real agent
+// home, and the only one #1718's audit did not declare:
+// $KIRO_HOME/.irrlicht-prior-default.json, written by
+// recordPriorDefaultAgentOnce (hookinstaller.go) on the way through
+// ensureDefaultAgent.
+//
+// It matters for one consumer and one failure, both concrete. The onboarding
+// recording rig protects exactly what `--print-managed-files` names
+// (tools/onboarding-factory/scripts/lib/managed-file-snapshot.sh asks the
+// daemon and keeps no literal list), so an undeclared file is one the
+// snapshot never backs up and the EXIT-trap restore never hands back — a
+// grant-all recording daemon creates it in the operator's real ~/.kiro and
+// leaves it there. The residue is not inert: recordPriorDefaultAgentOnce
+// deliberately never overwrites an existing record, so the stale sidecar a
+// recording left behind is what a LATER real grant reads instead of the
+// user's actual chat.defaultAgent — and a subsequent uninstall then restores
+// the recording's snapshot of that setting rather than the user's own choice.
+//
+// Same shape as the settings/cli.json case above and the same fix (one Also
+// entry), separated into its own test so the two files' declarations can fail
+// independently: a single assertion over the whole slice cannot say WHICH
+// file stopped being protected.
+func TestKiroCLIAlso_PriorDefaultSidecarIsAManagedFile(t *testing.T) {
+	kiroHome := filepath.Join(t.TempDir(), "kiro-home")
+	t.Setenv("KIRO_HOME", kiroHome)
+
+	perm := kirocliHooksPermission(t)
+	if perm.Writes == nil {
+		t.Fatal("kirocli hooks permission declares no Writes")
+	}
+
+	want := filepath.Join(kiroHome, ".irrlicht-prior-default.json")
+	found := false
+	for i, resolve := range perm.Writes.Also {
+		got, err := resolve()
+		if err != nil {
+			t.Fatalf("resolving Writes.Also[%d]: %v", i, err)
+		}
+		if got == want {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("Writes.Also declares no entry resolving to %q — recordPriorDefaultAgentOnce "+
+			"writes it on every install, so the recording rig cannot back it up or hand it back", want)
+	}
+
+	var buf bytes.Buffer
+	if err := printManagedFiles(&buf); err != nil {
+		t.Fatalf("printManagedFiles: %v", err)
+	}
+	if !strings.Contains(buf.String(), want) {
+		t.Errorf("--print-managed-files does not list %q — the recording rig protects only what "+
+			"this command names", want)
+	}
+}
+
+// resolvedAlsoUnder returns the one Writes.Also entry that resolves under root
+// and ends in suffix.
+//
+// Selected by what it RESOLVES TO, not by index: kiro-cli's hooks permission
+// declares more than one Also entry, and an index would make a test's subject
+// depend on declaration order — a silent retarget at a different file the day
+// somebody reorders the slice.
+func resolvedAlsoUnder(t *testing.T, perm agent.Permission, root, suffix string) string {
+	t.Helper()
+	for i, resolve := range perm.Writes.Also {
+		got, err := resolve()
+		if err != nil {
+			t.Fatalf("resolving Writes.Also[%d]: %v", i, err)
+		}
+		if strings.HasPrefix(got, root) && strings.HasSuffix(got, suffix) {
+			return got
+		}
+	}
+	t.Fatalf("Writes.Also declares no entry under %q ending in %q", root, suffix)
+	return ""
 }

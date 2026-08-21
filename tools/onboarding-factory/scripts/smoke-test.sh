@@ -72,6 +72,10 @@ echo ""
 echo "== unit tests (lib/golden-scope_test.sh) =="
 bash "$SCRIPT_DIR/lib/golden-scope_test.sh" || rc=1
 
+echo ""
+echo "== unit tests (lib/agent-home_test.sh) =="
+bash "$SCRIPT_DIR/lib/agent-home_test.sh" || rc=1
+
 # completeness-gate / catalog-drift / consistency gates were retired (#528):
 # `of validate` + `of coverage` (Go) now own schema + referential + coverage
 # integrity, and a per-scenario shard is the single source for a cell, so the

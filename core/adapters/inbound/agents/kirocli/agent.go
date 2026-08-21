@@ -119,15 +119,28 @@ func Agent() agent.Agent {
 						Min:   minCLIVersion,
 						Probe: []string{kiroCLIBinary, "--version"},
 					},
-					// Also: the SAME Apply closure also rewrites
-					// chat.defaultAgent in settings/cli.json
-					// (ensureDefaultAgent, hookinstaller.go) — a second shared,
-					// user-owned file beyond Path (issue #1718's Also field).
-					// Undeclared, that write is invisible to
+					// Also: the SAME Apply closure writes TWO further files
+					// beyond Path (issue #1718's Also field), and both are in
+					// the user's real agent home:
+					//   settings/cli.json          — chat.defaultAgent
+					//                                (ensureDefaultAgent)
+					//   .irrlicht-prior-default.json — what that setting held
+					//                                first (recordPriorDefaultAgentOnce)
+					// Undeclared, either write is invisible to
 					// agents.ManagedUserFiles / --print-managed-files, the
 					// recording rig's snapshot/restore sweep — see
-					// TestKiroCLIAlso_SettingsFileIsAManagedFile
+					// TestKiroCLIAlso_SettingsFileIsAManagedFile and
+					// TestKiroCLIAlso_PriorDefaultSidecarIsAManagedFile
 					// (core/cmd/irrlichd) for the mutation evidence.
+					//
+					// The sidecar is irrlicht's OWN document rather than a
+					// file kiro-cli reads, which is why it was missed — but
+					// "shared, user-owned" is about WHERE it lands, not who
+					// authored it, and the residue it leaves is not inert:
+					// recordPriorDefaultAgentOnce deliberately never
+					// overwrites, so a copy a recording left in the
+					// operator's real ~/.kiro is what a LATER real grant
+					// reads instead of their actual chat.defaultAgent.
 					//
 					// What this does NOT change, stated because it would
 					// otherwise be assumed: PermissionService.sharedConfigRefusal
@@ -142,7 +155,7 @@ func Agent() agent.Agent {
 					// not a verdict-changing one. Declared anyway because the
 					// two are independent consumers and the recorder's sweep
 					// is not co-located with anything.
-					Also: []func() (string, error){kiroSettingsPath},
+					Also: []func() (string, error){kiroSettingsPath, priorDefaultStatePath},
 				},
 			},
 		},

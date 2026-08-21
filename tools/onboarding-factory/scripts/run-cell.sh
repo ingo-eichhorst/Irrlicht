@@ -51,6 +51,11 @@ source "$SCRIPT_DIR/lib/pick-recording.sh"
 # reason the daemon lifecycle is (#1214).
 # shellcheck source=lib/completeness-check.sh
 source "$SCRIPT_DIR/lib/completeness-check.sh"
+# Per-adapter agent-home isolation — the declaration of which adapters have a
+# relocatable home, and which of them default to staging, shared with
+# run-cell-multi.sh for the same reason (#1214).
+# shellcheck source=lib/agent-home.sh
+source "$SCRIPT_DIR/lib/agent-home.sh"
 
 RECORDER="off"
 ATTACH=0
@@ -245,41 +250,20 @@ fi
 #    periodic flush, and pick the recording file from whatever the
 #    daemon is writing to (env override > default
 #    ~/.local/share/irrlicht/recordings/).
-# Copilot resolves its whole config dir — session store included — from
-# COPILOT_HOME, and the DAEMON reads that variable eagerly when it builds the
-# adapter's watcher. The driver defaults it to "$STAGING/copilot-home" only
-# when unset, so leaving it unset here would point the daemon at the real
-# ~/.copilot while the driver wrote to staging: the daemon would observe no
-# copilot session at all and every cell would record an empty fixture.
-# Exporting it once, before the daemon spawns, keeps both halves on one store.
-# (--config-dir is deprecated upstream in favour of this variable.)
-if [[ "$ADAPTER" == "copilot" ]]; then
-  export COPILOT_HOME="${COPILOT_HOME:-$STAGING/copilot-home}"
-  mkdir -p "$COPILOT_HOME"
-  echo "copilot: COPILOT_HOME=$COPILOT_HOME (daemon + driver share this store)"
-fi
-
-# Codex resolves its config dir from CODEX_HOME the same way — the daemon's
-# codexHome() and both codex drivers honour it — but it deliberately does NOT
-# get copilot's staging default. Codex keeps its CREDENTIALS in that directory
-# (auth.json), so defaulting to an empty staging dir would leave every codex
-# recording unauthenticated. Isolation is therefore opt-in: export an absolute
-# CODEX_HOME (seeded with a copy of auth.json) to keep the run off the real
-# ~/.codex entirely. Exported here so the DAEMON inherits the same value the
-# drivers will use — codexHome() decides where hooks.json is installed, and
-# hence which file `--print-managed-files` tells the recorder to protect.
-# Absolute-only, because codexHome() ignores a relative value and silently
-# falls back to $HOME/.codex (#1388).
-if [[ "$ADAPTER" == "codex" && -n "${CODEX_HOME:-}" ]]; then
-  if [[ "$CODEX_HOME" != /* ]]; then
-    echo "codex: CODEX_HOME must be absolute (got '$CODEX_HOME') — the daemon" >&2
-    echo "       ignores relative values, so it and the driver would disagree" >&2
-    exit 1
-  fi
-  export CODEX_HOME
-  mkdir -p "$CODEX_HOME"
-  echo "codex: CODEX_HOME=$CODEX_HOME (daemon + driver share this home)"
-fi
+# Agent-home isolation. Which adapters have a relocatable home, which env var
+# each reads, and which of them default to staging rather than being opt-in, is
+# ONE declaration in lib/agent-home.sh — a per-adapter `if` here is how codex's
+# isolation came to exist in this script and not in run-cell-multi.sh (the same
+# split that made #1178's config snapshot reach one recorder and not the other,
+# #1214). It runs BEFORE spawn_record_daemon so the daemon inherits the value
+# and `--print-managed-files` — which is what the snapshot protects — resolves
+# under the isolated home rather than the operator's real one.
+#
+# The staging default is spelled "<adapter>-home" so copilot — the one adapter
+# on the `default` policy — keeps resolving to exactly the "$STAGING/copilot-home"
+# its own driver falls back to when run standalone. Two spellings of one default
+# is how the daemon and the driver end up on different stores.
+agent_home_isolate "$ADAPTER" "$STAGING/$ADAPTER-home" || exit 1
 
 if [[ "$ATTACH" == "1" ]]; then
   ATTACHED_RECORDINGS_DIR="${IRRLICHT_RECORDINGS_DIR:-$HOME/.local/share/irrlicht/recordings}"

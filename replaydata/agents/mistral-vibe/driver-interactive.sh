@@ -97,6 +97,40 @@ DRIVER_LOG="$STAGING/driver.log"
 VIBE_SESSION_GLOB='session_*'
 EXIT_DRIVER_FAULT="nonzero(2)"
 
+# VIBE_HOME, not $HOME: vibe relocates its whole home from that variable
+# (v2.19.1 vibe/core/paths/_vibe_home.py — VIBE_HOME = os.getenv("VIBE_HOME") or
+# ~/.vibe, SESSION_LOG_DIR = VIBE_HOME/"logs"/"session"), and so does the daemon
+# (vibe/adapter.go sessionsDir, vibe/config.go vibeHomeDir). The recording rig
+# exports it before the daemon spawns (tools/onboarding-factory/scripts/lib/
+# agent-home.sh, opt-in — vibe's API key can live in $VIBE_HOME/.env, so a
+# scratch home is never defaulted into), and a driver still resolving
+# $HOME/.vibe would make the two watch and write different homes.
+#
+# Absolute-only, mirroring drive-codex-interactive.sh: upstream applies
+# expanduser().resolve() and would accept "~/x" or a relative path, but irrlicht
+# resolves through agentpaths.FromEnv, which LOGS AND IGNORES anything
+# non-absolute and falls back to ~/.vibe — so accepting one here would be the
+# same daemon/driver disagreement with an extra step.
+VIBE_HOME_RESOLVED="$HOME/.vibe"
+if [[ -n "${VIBE_HOME:-}" ]]; then
+  if [[ "$VIBE_HOME" != /* ]]; then
+    echo "[driver] VIBE_HOME must be absolute — the daemon's agentpaths.FromEnv" >&2
+    echo "[driver] ignores a relative value and falls back to \$HOME/.vibe, so the" >&2
+    echo "[driver] daemon and vibe would use two different homes." >&2
+    echo "[driver] Got: '$VIBE_HOME'" >&2
+    # A bare exit: this runs before `trap cleanup EXIT` is armed, so there is no
+    # exit-reason file to write yet.
+    exit 1
+  fi
+  VIBE_HOME_RESOLVED="$VIBE_HOME"
+fi
+# The one spelling of the session root. It was written out four times before
+# this variable existed, which is three chances for a relocation to reach only
+# some of them.
+VIBE_SESSION_ROOT="$VIBE_HOME_RESOLVED/logs/session"
+mkdir -p "$VIBE_SESSION_ROOT"
+echo "[driver] vibe home: $VIBE_HOME_RESOLVED" >&2
+
 _DRIVE_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../_lib/drive" && pwd)"
 # shellcheck disable=SC2034  # read by the sourced replaydata/_lib/drive/slots.sh:56 (alloc_slot)
 DRIVE_MARKER_PREFIX="$STAGING/.mistral-vibe-marker"
@@ -171,7 +205,7 @@ remaining_seconds() { local now; now=$(date +%s); (( now >= DEADLINE )) && echo 
 # the active slot (TRANSCRIPT is the messages.jsonl, UUID is the dir name).
 resolve_transcript() {
   [[ -n "$TRANSCRIPT" ]] && return 0
-  local sroot="$HOME/.vibe/logs/session"
+  local sroot="$VIBE_SESSION_ROOT"
   local _ d cand
   for _ in $(seq 1 60); do
     cand=""
@@ -262,7 +296,7 @@ FIRST_SEND_PENDING=0
 boot_vibe_active() {
   local prompt="$1" resume_id="$2"
   command -v tmux >/dev/null 2>&1 || { echo "[driver] tmux required" >&2; EXIT_REASON="$EXIT_DRIVER_FAULT"; exit 1; }
-  PRE_LAUNCH_DIRS="$(find "$HOME/.vibe/logs/session" -maxdepth 1 -type d -name "$VIBE_SESSION_GLOB" 2>/dev/null | sort)"
+  PRE_LAUNCH_DIRS="$(find "$VIBE_SESSION_ROOT" -maxdepth 1 -type d -name "$VIBE_SESSION_GLOB" 2>/dev/null | sort)"
   tmux kill-session -t "$SESSION" 2>/dev/null || true
   : > "$DRIVER_LOG.stdout.$ACTIVE"
   mkdir -p "${SES_CWD[$ACTIVE]}"
@@ -296,8 +330,17 @@ boot_vibe_active() {
     vibe_args+=("$prompt")
     echo "[driver] launching with prompt as positional arg: ${prompt:0:60}" >&2
   fi
+  # Prefix with `env VIBE_HOME=…`, exactly as drive-codex-interactive.sh does
+  # for CODEX_HOME: the pane's command is spawned by the tmux SERVER, which on a
+  # dev machine essentially always pre-dates this driver and was started without
+  # VIBE_HOME — so the export the rig performed does NOT reach it. Measured on a
+  # private `-L` socket: against a server started without the variable, a pane
+  # created by a shell that exported it reads <UNSET>, and the same server with
+  # this prefix reads the value. Without it the daemon would watch the isolated
+  # home while vibe wrote to the real one, and the fixture would come back empty
+  # with nothing saying why.
   tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "${SES_CWD[$ACTIVE]}" -- \
-    vibe "${vibe_args[@]}" 2>>"$DRIVER_LOG.stderr" \
+    env "VIBE_HOME=$VIBE_HOME_RESOLVED" vibe "${vibe_args[@]}" 2>>"$DRIVER_LOG.stderr" \
     || { echo "[driver] failed to launch vibe under tmux" >&2; EXIT_REASON="$EXIT_DRIVER_FAULT"; exit 1; }
   tmux pipe-pane -t "$SESSION" -o "cat >> '$DRIVER_LOG.stdout.$ACTIVE'"
   echo "[driver] tmux started: $SESSION (slot=$ACTIVE, cwd=${SES_CWD[$ACTIVE]})" >&2
@@ -355,7 +398,7 @@ launch_repl() {
 # what "the dialog is up" means.
 wait_turn() {
   resolve_transcript || {
-    echo "[driver] wait_turn[s$ACTIVE]: vibe never created a session dir under ~/.vibe/logs/session" >&2
+    echo "[driver] wait_turn[s$ACTIVE]: vibe never created a session dir under $VIBE_SESSION_ROOT" >&2
     EXIT_REASON="readiness_timeout"
     return 1
   }
@@ -454,7 +497,7 @@ slash_cmd() { # <text>
     local old_tmux="$SESSION" old_cwd="${SES_CWD[$ACTIVE]}"
     save_active
     SES_ALIVE[$ACTIVE]=0
-    PRE_LAUNCH_DIRS="$(find "$HOME/.vibe/logs/session" -maxdepth 1 -type d -name "$VIBE_SESSION_GLOB" 2>/dev/null | sort)"
+    PRE_LAUNCH_DIRS="$(find "$VIBE_SESSION_ROOT" -maxdepth 1 -type d -name "$VIBE_SESSION_GLOB" 2>/dev/null | sort)"
     type_enter "$text"
     alloc_slot "$old_tmux" "$old_cwd"
     SES_ALIVE[$ACTIVE]=1
@@ -462,7 +505,7 @@ slash_cmd() { # <text>
     return 0
   fi
   if [[ " $ROTATING_SLASHES " == *" $text "* ]]; then
-    PRE_LAUNCH_DIRS="$(find "$HOME/.vibe/logs/session" -maxdepth 1 -type d -name "$VIBE_SESSION_GLOB" 2>/dev/null | sort)"
+    PRE_LAUNCH_DIRS="$(find "$VIBE_SESSION_ROOT" -maxdepth 1 -type d -name "$VIBE_SESSION_GLOB" 2>/dev/null | sort)"
     type_enter "$text"
     TRANSCRIPT=""; UUID=""
     SES_TRANSCRIPT[$ACTIVE]=""

@@ -115,11 +115,39 @@ mkdir -p "$STAGING"
 DRIVER_LOG="$STAGING/driver.log"
 
 # kiro-cli mints its OWN session UUID per `chat` launch and writes
-# ~/.kiro/sessions/cli/<uuid>.jsonl. We discover it as the newest .jsonl whose
-# mtime is after the slot's MARKER; the session id is the filename stem (the
-# daemon keys on it and it is the `--resume-id` arg).
-KIRO_SESSIONS_DIR="$HOME/.kiro/sessions/cli"
+# <kiro home>/sessions/cli/<uuid>.jsonl. We discover it as the newest .jsonl
+# whose mtime is after the slot's MARKER; the session id is the filename stem
+# (the daemon keys on it and it is the `--resume-id` arg).
+#
+# KIRO_HOME, not $HOME: kiro-cli relocates its entire home from that variable
+# (docs: "global agents, prompts, skills, steering, settings, and sessions"),
+# and so does the daemon — kirocli/adapter.go's sessionsDir and
+# hookinstaller.go's kiroHome both go through agentpaths.FromEnv. The recording
+# rig exports it before the daemon spawns (tools/onboarding-factory/scripts/
+# lib/agent-home.sh, opt-in), so a driver that kept resolving $HOME/.kiro would
+# make the two watch and write different homes.
+#
+# Absolute-only, mirroring drive-codex-interactive.sh and agentpaths.FromEnv
+# itself: a `${KIRO_HOME:-…}` default would accept a relative value the daemon
+# silently ignores in favour of $HOME/.kiro, i.e. the same disagreement.
+KIRO_HOME_RESOLVED="$HOME/.kiro"
+if [[ -n "${KIRO_HOME:-}" ]]; then
+  if [[ "$KIRO_HOME" != /* ]]; then
+    echo "[driver] KIRO_HOME must be absolute — the daemon's agentpaths.FromEnv" >&2
+    echo "[driver] ignores a relative value and falls back to \$HOME/.kiro, so the" >&2
+    echo "[driver] daemon and kiro-cli would use two different homes." >&2
+    echo "[driver] Got: '$KIRO_HOME'" >&2
+    # A bare exit, not EXIT_REASON: this runs before $NONZERO_2 is declared and
+    # before `trap cleanup EXIT` is armed, so there is no exit-reason file to
+    # write and referencing the constant here would die on set -u instead of
+    # printing the diagnosis above.
+    exit 1
+  fi
+  KIRO_HOME_RESOLVED="$KIRO_HOME"
+fi
+KIRO_SESSIONS_DIR="$KIRO_HOME_RESOLVED/sessions/cli"
 mkdir -p "$KIRO_SESSIONS_DIR"
+echo "[driver] kiro home: $KIRO_HOME_RESOLVED" >&2
 
 # Per-run CWD so each launch has its own cwd, isolating the cwd-based PID match.
 # run-cell.sh's cross-adapter mode overrides this via $IRRLICHT_ONBOARD_CWD so a
@@ -239,8 +267,17 @@ boot_session() {
   [[ -n "$resume_id" ]] && launch="$launch --resume-id $resume_id"
   # `|| { … exit … }` keeps a launch failure from aborting under set -e WITHOUT
   # an accurate exit-reason — the cleanup trap then records nonzero(2).
+  # Prefix with `env KIRO_HOME=…`, exactly as drive-codex-interactive.sh does
+  # for CODEX_HOME: the pane's command is spawned by the tmux SERVER, which on
+  # a dev machine essentially always pre-dates this driver and was started
+  # without KIRO_HOME — so the export the rig performed does NOT reach it.
+  # Measured on a private `-L` socket: against a server started without the
+  # variable, a pane created by a shell that exported it reads <UNSET>, and the
+  # same server with this prefix reads the value. Without the prefix the daemon
+  # would watch the isolated home while kiro-cli wrote to the real one, and the
+  # fixture would come back empty with nothing saying why.
   tmux new-session -d -s "$sess" -x 200 -y 50 -c "$cwd" \
-    "$launch" \
+    env "KIRO_HOME=$KIRO_HOME_RESOLVED" sh -c "$launch" \
     >>"$DRIVER_LOG.stdout" 2>>"$DRIVER_LOG.stderr" \
     || { echo "[driver] failed to launch kiro-cli under tmux" >&2; EXIT_REASON="$NONZERO_2"; exit 1; }
   tmux pipe-pane -t "$sess" -o "cat >> '$slot_stdout'"
