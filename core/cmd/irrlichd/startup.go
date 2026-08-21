@@ -20,6 +20,7 @@ import (
 	"irrlicht/core/adapters/inbound/agents/codex"
 	"irrlicht/core/adapters/inbound/agents/copilot"
 	"irrlicht/core/adapters/inbound/agents/geminicli"
+	"irrlicht/core/adapters/inbound/agents/kirocli"
 	"irrlicht/core/adapters/inbound/agents/processlifecycle"
 	"irrlicht/core/adapters/inbound/agents/vibe"
 	backchannelhandler "irrlicht/core/adapters/inbound/backchannel"
@@ -937,7 +938,10 @@ func setupBackchannel(mux *http.ServeMux, deps setupBackchannelDeps) (*services.
 // every other receiver already calls; plus Mistral Vibe's post_agent_turn
 // event (issue #1718), also beacon-delivered (`irrlichd hook-post
 // mistral-vibe`) — the detector satisfies vibe.HookTarget's single method,
-// HandleStopHook, which every other receiver already calls too. All are
+// HandleStopHook, which every other receiver already calls too; plus Kiro
+// CLI's postToolUse/stop events (issue #1716), also beacon-delivered
+// (`irrlichd hook-post kiro-cli`) — the detector satisfies kirocli.HookTarget
+// with the same two methods codex's and copilot's receivers call. All are
 // consent-gated: hooks installed by a pre-consent daemon keep firing until
 // the wizard is answered, so payloads are dropped while pending.
 func registerHookRoutes(mux *http.ServeMux, detector *services.SessionDetector, metricsCollector outbound.MetricsCollector, permService *services.PermissionService, logger outbound.Logger) {
@@ -956,6 +960,8 @@ func registerHookRoutes(mux *http.ServeMux, detector *services.SessionDetector, 
 		geminicli.NewHookHandler(detector, permService, logger))
 	mux.Handle("POST "+vibe.HookEndpointPath,
 		vibe.NewHookHandler(detector, permService, logger))
+	mux.Handle("POST "+kirocli.HookEndpointPath,
+		kirocli.NewHookHandler(detector, permService, logger))
 }
 
 // publishAddrFile writes the addr file and thereby signals "the daemon is

@@ -7,6 +7,7 @@ import (
 	"irrlicht/core/adapters/inbound/agents/codex"
 	"irrlicht/core/adapters/inbound/agents/copilot"
 	"irrlicht/core/adapters/inbound/agents/geminicli"
+	"irrlicht/core/adapters/inbound/agents/kirocli"
 	"irrlicht/core/pkg/hookbeacon"
 )
 
@@ -25,18 +26,19 @@ import (
 // while its route segment is "claudecode". That is why the map keys below are
 // written out literally rather than derived from the adapter constants.
 //
-// Scope, stated honestly: this pins the two receivers that exist. It cannot fail
-// for a THIRD receiver registered at a different prefix, because
-// registerHookRoutes (core/cmd/irrlichd/startup.go) is hand-wired with no
-// registry to enumerate and this map is hand-written. Whoever adds the third
-// receiver adds its row here; until then the convention is pinned, not
-// enforced.
+// Scope, stated honestly: this pins the receivers that exist (five as of
+// #1716's kiro-cli row). It cannot fail for a NEW receiver registered at a
+// different prefix, because registerHookRoutes (core/cmd/irrlichd/startup.go)
+// is hand-wired with no registry to enumerate and this map is hand-written.
+// Whoever adds the next receiver adds its row here; until then the
+// convention is pinned, not enforced.
 func TestBeaconEndpointPathMatchesTheInstalledReceivers(t *testing.T) {
 	for segment, want := range map[string]string{
 		"claudecode": claudecode.HookEndpointPath,
 		"codex":      codex.HookEndpointPath,
 		"copilot":    copilot.HookEndpointPath,
 		"gemini-cli": geminicli.HookEndpointPath,
+		"kiro-cli":   kirocli.HookEndpointPath,
 	} {
 		if got := hookbeacon.EndpointPath(segment); got != want {
 			t.Errorf("hookbeacon.EndpointPath(%q) = %q, but the receiver is registered at %q — the beacon would post into a route nothing serves", segment, got, want)

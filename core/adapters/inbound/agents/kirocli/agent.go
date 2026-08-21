@@ -1,12 +1,22 @@
 package kirocli
 
 import (
+	"irrlicht/core/adapters/inbound/agents/hookjson"
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/permission"
 )
 
 // PermissionKeyTranscripts gates all Kiro CLI monitoring (issue #570).
 const PermissionKeyTranscripts = "transcripts"
+
+// PermissionKeyHooks gates installing and receiving Kiro CLI hooks (issue
+// #1716, epic #1355 Phase D).
+//
+// Aliased to the shared domain constant rather than restated: since #1383 two
+// projections narrow on it — agents.HookConfigs (what --uninstall-hooks
+// revokes) and the managed-user-file catalog — so a literal that drifted
+// would silently drop this install out of both.
+const PermissionKeyHooks = agent.HooksPermissionKey
 
 // Kiro CLI — the Kiro ghost mark. Color picks contrast against the
 // surrounding chrome: near-black on light themes, near-white on dark.
@@ -22,6 +32,20 @@ const iconSVGDark = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="
   <circle cx="62" cy="46" r="6" fill="#E0E0E0"/>
 </svg>`
 
+// Source is the adapter's transcript-tree declaration.
+//
+// The hook receiver's path confiner reads it per request (issue #1361), and
+// Agent() below is its only other caller — one declaration, so the tree the
+// daemon watches and the tree the receiver confines to cannot drift apart.
+func Source() agent.Source {
+	return agent.FilesUnderRoot{
+		Dir: sessionsDir(),
+		Parser: agent.JSONLineParser{
+			NewParser: func() agent.LineParser { return &Parser{} },
+		},
+	}
+}
+
 // Agent returns the Kiro CLI adapter registration.
 func Agent() agent.Agent {
 	return agent.Agent{
@@ -35,12 +59,7 @@ func Agent() agent.Agent {
 			Match:         agent.ExactName{Name: ProcessName},
 			PIDForSession: DiscoverPID,
 		},
-		Source: agent.FilesUnderRoot{
-			Dir: sessionsDir(),
-			Parser: agent.JSONLineParser{
-				NewParser: func() agent.LineParser { return &Parser{} },
-			},
-		},
+		Source:  Source(),
 		Control: agent.Control{SupportsInput: true, Interrupt: agent.InterruptCtrlC},
 		Permissions: []agent.Permission{
 			agent.ControlPermission(),
@@ -58,6 +77,49 @@ func Agent() agent.Agent {
 					"incompatible per-workspace format and is not monitored. Read-only — no " +
 					"file is ever modified. Toggling off stops all reading " +
 					"immediately.",
+			},
+			{
+				Key:             PermissionKeyHooks,
+				Kind:            permission.KindModify,
+				Title:           "Install status hooks",
+				FeatureUnlocked: "Authoritative turn-end detection, and a faster tool-completion refresh",
+				// Count and event list are derived from installedHookEvents,
+				// never restated: this copy is the consent contract, and
+				// hand-maintaining it is how claudecode's came to promise six
+				// entries against a seven-event install (#1356).
+				Touches: hookjson.EntriesTouched(displayAgentConfigPath, installedHookEvents),
+				Detail: "Kiro CLI only fires hooks for an agent config selected via " +
+					"`kiro-cli chat --agent` or `chat.defaultAgent` — your account was running " +
+					"the built-in default, which has no file on disk to add a hooks key to. " +
+					"So granting this creates a new agent, `irrlicht`, as a full copy of your " +
+					"built-in default (kiro-cli agent create --from kiro_default), adds " +
+					hookjson.EventList(installedHookEvents) + " hook entries that run " +
+					"`irrlichd hook-post kiro-cli` (a tiny command irrlicht ships, reading the " +
+					"daemon's own published address at the moment the hook fires so it never " +
+					"blocks a tool call even when the daemon is not running), and sets it as " +
+					"your default agent (kiro-cli agent set-default irrlicht) so " +
+					"`kiro-cli chat` picks it up with no flag. Your previous default (or the " +
+					"built-in, if you had none) is recorded and restored when you toggle this " +
+					"off. The copy is a snapshot: it will not pick up a kiro-cli upgrade's " +
+					"changes to the built-in agent on its own. " +
+					hookjson.RequiresVersion("Kiro CLI", minCLIVersion) +
+					" Toggling off removes the hook entries, restores your prior default " +
+					"agent, and leaves the `irrlicht` agent config in place inert (also " +
+					"available via `irrlichd --uninstall-hooks`).",
+				Apply:  func() error { _, err := EnsureHooksInstalled(); return err },
+				Remove: func() error { _, err := UninstallHooks(); return err },
+				Writes: &agent.ManagedUserFile{
+					Path:      irrlichtAgentConfigPath,
+					Uninstall: UninstallHooks,
+					// Read-only; the repair it feeds runs through
+					// PermissionService, which re-checks consent under its own
+					// lock before writing (#1372).
+					Verify: VerifyHooksInstalled,
+					Version: &agent.VersionGate{
+						Min:   minCLIVersion,
+						Probe: []string{kiroCLIBinary, "--version"},
+					},
+				},
 			},
 		},
 	}
