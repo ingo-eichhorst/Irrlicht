@@ -466,7 +466,7 @@ func deliveryOn(t armT, h HookInstaller, bindAddr string) string {
 func assertEveryEventDelivers(t armT, h HookInstaller, r deliveryRules, path, want string) {
 	t.Helper()
 	for _, event := range h.Events {
-		got := endpointOfRaw(h)(onlyRawEntry(t, h, path, event))
+		got := endpointOfRaw(t, h)(onlyRawEntry(t, h, path, event))
 		assertDeliveryIsOurs(t, h, "event "+event, got)
 		if got != want {
 			t.Errorf("event %s: installed delivery = %q, want %q", event, got, want)
@@ -712,14 +712,39 @@ func rawEntriesOf(h HookInstaller) func(path, event string) ([][]byte, error) {
 // endpointOfRaw resolves h's EndpointOfRaw, defaulting to a bridge that
 // json.Unmarshals the bytes into a map and calls h.EndpointOf on it — what
 // every JSON-shaped adapter already gets from EndpointOf alone.
-func endpointOfRaw(h HookInstaller) func(entry []byte) string {
+//
+// The default bridge FAILS LOUDLY (t.Fatalf) rather than returning "" when
+// the entry does not unmarshal as JSON. It must: "" is not a neutral value
+// for this contract's DeliveryAddressFree route — assertDeliveryCarriesNoAddress
+// checks that the delivery is IDENTICAL across bind addresses and carries no
+// address-shaped fragment, and "" satisfies both trivially. A non-JSON entry
+// shape with no EndpointOfRaw supplied would therefore make obligation 1 pass
+// having graded nothing — the exact "absence of a finding and inability to
+// look must never produce the same output" failure AGENTS.md's Testing
+// section names, and it very nearly shipped that way: the first version of
+// this bridge returned "" and was caught only by assertDeliveryIsOurs, a
+// NEIGHBOURING guard the bridge itself does not control and that obligation 1
+// does not call before its own address check.
+// TestEndpointOfRaw_MissingBridgeFailsLoudlyNotSilently (hook_endpoint_test.go)
+// is the committed lock: it drives this function directly, with no neighbour
+// in the call at all, so there is nothing else in the picture that could be
+// catching it. That isolation was chosen over reproducing the original defect
+// end-to-end (a real installer, run twice — once with assertDeliveryIsOurs
+// intact and once disabled, to tell "something failed" from "THIS bridge
+// caught it" apart) because it grades the same claim without depending on
+// the rest of the contract staying wired the way it happened to be wired the
+// day this was found; that end-to-end double run is recorded as this fix's
+// review evidence rather than committed a second time.
+func endpointOfRaw(t reporter, h HookInstaller) func(entry []byte) string {
 	if h.EndpointOfRaw != nil {
 		return h.EndpointOfRaw
 	}
 	return func(entry []byte) string {
+		t.Helper()
 		var m map[string]interface{}
 		if err := json.Unmarshal(entry, &m); err != nil {
-			return ""
+			t.Fatalf("entry %q does not unmarshal as JSON (%v) — a non-JSON entry shape must supply HookInstaller.EndpointOfRaw", entry, err)
+			return "" // unreachable: t.Fatalf on *testing.T calls runtime.Goexit
 		}
 		return h.EndpointOf(m)
 	}
