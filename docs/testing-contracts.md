@@ -256,7 +256,14 @@ below.
   Since #1389 the contract is only half the enforcement, and the weaker half: a
   contract can fail only for an adapter that WIRED it, so a receiver nobody
   wired it for is invisible to it — which is how the statusline endpoint shipped
-  unconfined in the first place. `hookjson.DecodeConfined` welds the body decode
+  unconfined in the first place. That sentence is general to every family, and
+  since #1740 the *wiring itself* is enforced for hooks-declaring adapters (see
+  "Contract wiring" below) — but note the two close different halves and
+  neither subsumes the other: #1740's tripwire is PACKAGE-granular, so a
+  claudecode that wired this contract for its hook receiver and not for its
+  statusline receiver still passes it. The original bug is closed by the
+  build-level rules that follow, not by that tripwire.
+  `hookjson.DecodeConfined` welds the body decode
   to the confinement (the confiner is an argument to the decode, so a receiver
   cannot reach its payload without supplying one), and
   `core/architecture_hookbody_test.go` fails the build if anything else under
@@ -371,6 +378,80 @@ below.
   a path-confinement rejection counts too (alive-but-misrouted is #1361's); and a
   consent-denied request counts nothing, because noting that a POST arrived is
   itself an observation.
+- Contract wiring: not a contract family — a registry tripwire,
+  `TestEveryHookInstallWiresItsContractFamilies`
+  (`core/adapters/inbound/agents/hookcontracts_test.go`), riding the same
+  projection as #1365's and #1372's. It closes the asymmetry #1740 named: two
+  obligations over a hooks-declaring adapter are things the adapter DECLARES as
+  a struct field (`Verify`, `Version`), which a registry walk can read, and the
+  rest are wired as a TEST CALL in the adapter's own test package, which
+  nothing could. "Harder to detect" was not "less important" — the three the
+  issue was filed about are the ones whose absence is least visible in
+  production (an unconfined caller-supplied path, a dead port behind a granted
+  permission, an undisclosed write to a user's config), and their only
+  enforcement was that whoever added the adapter remembered to copy an existing
+  adapter's test files. Seven entry points are required, not the three #1740
+  named: the other four (`AssertHookVersionGate`,
+  `AssertUnknownHookEventObserved`, `AssertHookReceiptObserved`,
+  `AssertHookReceiverPermissionGated`) have the identical shape and every
+  hooks-declaring adapter already wired all seven, so they were measured in
+  rather than assumed out. Note what the version row adds on top of #1365's
+  floor tripwire: that one proves a floor is DECLARED and parseable, this one
+  that the floor actually refuses.
+  Three things are load-bearing. **It is a static walk and #1740 preferred a
+  registration seam** — the seam was rejected on a fact rather than on cost, and
+  the rejection is recorded in the file's header rather than here: `go test`
+  compiles one binary per package, so a recorder in six adapter processes
+  cannot reach an asserting test in a seventh, and carrying it across processes
+  means a file that is a cache the reader cannot validate — stale entries make
+  a DELETED wiring read as covered, which is #1740's own failure mode with a
+  longer half-life. **It is an AST + type walk, not a grep**, which is what
+  makes it worth more than the issue assumed a static walk would be: a
+  reference in a comment is not a call node, a call must be reachable from a
+  function `go test` actually runs (a helper nothing calls is reported
+  separately, so the failure says re-attach rather than re-write), an aliased
+  import counts, and a local helper that merely shares the name does not.
+  **The adapter's Go package is derived, never mapped** — from `runtime.FuncForPC`
+  over the permission's own `Apply` and `Uninstall` closures, which must agree —
+  because a hand-written adapter-name → directory map is one more thing a new
+  adapter is covered by only if someone remembers to edit it, which is this
+  issue one level up (and `agent.Identity.Name` cannot answer it: "claude-code"
+  is package `claudecode`, "mistral-vibe" is package `vibe`).
+  Its mutation evidence is a committed corpus, `hookcontracts_shapes_test.go`:
+  one synthetic adapter test package per spelling, pinned to a THREE-valued
+  verdict (called / unreached / absent) so a detector that reports dead wirings
+  stays distinguishable from one blind to them. The rows that must NOT be
+  credited carry the value — a name in a comment, a name in a string, a
+  reference that is not a call, a local helper of the same name, a dead helper
+  — and so do the rows pinning declared LIMITS in both directions: a skipped
+  test and a call under `if false` still count (over-crediting), while a wiring
+  held in a package-level var of func type is not seen at all (under-crediting,
+  fail-closed). The corpus has already earned its keep twice: the needle guard
+  caught a case that had stopped containing its own construct, and the
+  `skipped_test` row — whose directory NAME is the fixture — caught the walk
+  recovering the package under test by trimming `_test` off `PkgPath` instead
+  of reading `packages.Package.ID`'s variant tag, which silently dropped every
+  test file of any package whose path ends in `_test`.
+  What it does not cover is stated in the file's header rather than implied,
+  and the headline limit was MEASURED rather than reasoned about. The walk is
+  PACKAGE-granular: it never asks which receiver or which permission a call was
+  for. Replacing the `AssertHookReceiverPermissionGated` call in claudecode's
+  `hooks_test.go` with a local no-op leaves that adapter's row GREEN, because
+  its statusline receiver wires the same family in the same package — the exact
+  #1361 shape. `AssertPermissionGated` is excluded from the required set for the
+  same reason and says so in `unenforceableHere()`, whose row's PREMISE (every
+  hooks adapter's package already calls it, so a required row would discriminate
+  nothing) is re-derived every run rather than trusted once. That exclusion also
+  surfaced a finding worth its own ticket: five of the six hooks-declaring
+  adapters wire `AssertPermissionGated` for their hooks INSTALL closures and
+  claude-code does not — it wires the family only for its instructions
+  permission. The other limits: a skipped or constant-false-guarded call still
+  counts; a wiring reached through a package-level func var or a helper in a
+  third package is not seen (fail-closed); an entry point taken as a value and
+  called later is not seen (fail-closed); and — the standing one — nothing here
+  says the wiring is CORRECT, which is what the families themselves are for.
+  Note what the walk DOES catch, which is what #1740 is about: the new adapter
+  that wires a family nowhere at all.
 - Managed user files: every `modify`-kind permission with an `Apply` closure
   declares the shared, user-owned file(s) that closure writes
   (`agent.Permission.Writes`, an `agent.ManagedUserFile` carrying `Path`,

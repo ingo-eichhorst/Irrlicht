@@ -111,7 +111,9 @@ Before marking a ticket done, run the full suite — every layer must pass:
   the package-local guarded-construction guards and the probe-cost doc
   comment convention — is exercised inside the same `go test ./core/...`
   above. New adapters and new permissions are covered by wiring one call
-  each; full obligation list, self-test harnesses, and incident history:
+  each — and since #1740 a hooks-declaring adapter that skipped one is
+  failed by a registry tripwire rather than by someone noticing; full
+  obligation list, self-test harnesses, and incident history:
   [docs/testing-contracts.md](docs/testing-contracts.md).
 - Factory: `go test ./tools/onboarding-factory/... -race -count=1`.
 - Replay: `tools/replay-fixtures.sh` (golden drift, transition timing,
