@@ -315,18 +315,19 @@ Before marking a ticket done, run the full suite — every layer must pass:
     NOT reproduce: silence.** Deleting a receiver's own `transcripts` gate used
     to fail `…/transcripts/gated_on_the_named_key` plus that adapter's #1466
     defect test; after #1488 the chokepoint drops the same payload, so every
-    dispatch-shaped assertion stays green (measured on all four receivers —
-    claudecode's hooks and statusline, codex, copilot). It is not silent about
+    dispatch-shaped assertion stays green (measured on all seven receivers —
+    claudecode's hooks and statusline, codex, copilot, geminicli, kirocli,
+    vibe). It is not silent about
     it: reaching the backstop means a receiver skipped a check or consent was
     revoked mid-request, so it logs an error, where a receiver's own gate
     answers a quiet 200. That difference is both the surviving discriminator
     and a real user-facing property — an ordinary denied session must not
-    collect an error line per tool call — so each of the four receivers' hand-
+    collect an error line per tool call — so each of the seven receivers' hand-
     written consent tests now asserts **no error was logged**, and each was
     seen red again with its gate deleted. Statusline is the receiver to watch
     here: it declares ONE permission and keeps no second gate, so that
     assertion is the whole of its live per-adapter proof.
-  - Beside those four, the coverage is one shared proof plus one lock per
+  - Beside those seven, the coverage is one shared proof plus one lock per
     adapter: `hookjson/consent_test.go`'s committed `forgetfulReceiver`
     (declares two keys, checks one) grades the backstop for every receiver at
     once, and `AssertDeclaredPermissions` / each adapter's
@@ -390,18 +391,22 @@ Before marking a ticket done, run the full suite — every layer must pass:
   chokepoint move that would remove that remaining act of memory).
 - Hook endpoints: `contracttesting.AssertHookEndpointFollowsBindAddr`
   (`core/internal/contracttesting/hook_endpoint.go`) is the same kind of
-  runtime obligation for adapters that install hooks into a JSON config —
+  runtime obligation for adapters that install hooks into a shared config
+  file (JSON, or since #1734 TOML) —
   an install writes the resolved port not `:7837`, an entry left by a daemon
   on another port is rewritten in place rather than duplicated, and uninstall
   is not port-scoped (#1178). A new hook-installing adapter wires one call
-  (see `claudecode`/`codex`/`copilot` `hookport_test.go`) instead of porting a
-  test file. It grades against the delivery route the adapter DECLARES
+  (see `hookport_test.go` in `claudecode`, `codex`, `copilot`, `geminicli`,
+  `kirocli` or `vibe` — six today) instead of porting a test file. It grades
+  against the delivery route the adapter DECLARES
   (`HookInstaller.Delivery`, #1453), because there are two ways to satisfy it
-  and the second makes the first unsatisfiable. `DeliveryURL` — the zero value,
-  and all three adapters above — is an entry that CARRIES the daemon's address.
+  and the second makes the first unsatisfiable. `DeliveryURL` — the zero
+  value, declared by `claudecode`, `codex` and `copilot` — is an entry that
+  CARRIES the daemon's address.
   `DeliveryAddressFree` is an entry that carries none, because it names the
   `irrlichd hook-post` beacon (`core/pkg/hookbeacon`, #1373), which reads the
-  addr file at fire time; three of the four port obligations then fail by
+  addr file at fire time — `geminicli` (#1724), `kirocli` (#1732) and `vibe`
+  (#1733) all declare it; three of the four port obligations then fail by
   construction, measured against a working beacon. That is the good outcome
   rather than an exemption: the beacon makes the whole stale-port class
   INEXPRESSIBLE instead of fixing it once more — the dev daemon that left a
@@ -417,11 +422,38 @@ Before marking a ticket done, run the full suite — every layer must pass:
   requires them IDENTICAL), so a beacon adapter that forgets the field and a URL
   adapter that sets it both go red. The reasoning, and which obligations each
   route runs, is on `deliveryRules` in that file rather than restated here.
-  Whichever adapter adopts beacon delivery first replaces
-  `hook_endpoint_addressfree_test.go`, the reference wiring the route is
-  currently exercised by — and that file is also the shape to copy, down to
-  resolving the binary path once through `hookbeacon.InstalledCommand` so the
-  config builder stays infallible.
+  Since #1734 the same contract also grades a format the JSON matcher-group
+  walk cannot read at all: `HookInstaller.ReadEntries` (raw `[][]byte` per
+  event) and `EndpointOfRaw` (the delivery string out of one raw entry)
+  default to bridges built from the existing JSON machinery, so every
+  JSON-shaped adapter needs no changes, while `vibe`'s hooks.toml — pure
+  byte-range edits, never a decoded generic structure, matched by
+  `bytes.Contains` rather than a named field — supplies both directly
+  (`vibe/hookport_test.go`).
+  Real adapters now exercise every route and entry shape this family grades —
+  `DeliveryAddressFree` (geminicli, kirocli, vibe), the flat `EntriesOf` shape
+  kiro-cli's schema needs (#1716), and the raw-bytes TOML shape vibe's
+  `hooktoml` needs (#1718) — but none of the three reference-wiring fixtures
+  those adoptions were supposed to retire has been touched since. All three
+  (`hook_endpoint_addressfree_test.go`, `hook_endpoint_flat_test.go`,
+  `hook_endpoint_toml_test.go`) carry the same verbatim sunset clause, each in
+  its own header: "…this file should be
+  reduced to whatever it still uniquely proves, or deleted." Only one has
+  a reason to stay as written: `hook_endpoint_addressfree_test.go`'s
+  `correctBeaconInstaller` is what `hook_endpoint_selftest_test.go`'s whole
+  `DeliveryAddressFree` mutation corpus drives against, so deleting it today
+  would leave that corpus with no fixture rather than a real adapter's — a
+  hermetic fixture the corpus doesn't churn against every time a real
+  adapter's own wiring changes, which is a real justification but not the one
+  the header states. `hook_endpoint_flat_test.go` and
+  `hook_endpoint_toml_test.go` have no such tether —
+  `hook_endpoint_selftest_test.go` references neither — so kiro-cli and vibe
+  meeting each file's own stated sunset condition (`EntriesOf:
+  FlatHookEntries`, `ReadEntries`/`EndpointOfRaw` respectively) leaves both
+  ripe for the reduce-or-delete their headers call for, with no code-level
+  obstacle found. Whether to actually shrink either, or formally re-justify
+  keeping `hook_endpoint_addressfree_test.go` deliberately, is an open
+  question this bullet does not resolve (#1730).
 - Hook disclosure: `contracttesting.AssertHookDisclosureMatchesInstalled`
   (`core/internal/contracttesting/hook_disclosure.go`) binds a hooks
   permission's consent copy to what the installer actually writes — the
@@ -432,7 +464,8 @@ Before marking a ticket done, run the full suite — every layer must pass:
   of #1173's seven-event install, so the Notification hook was written to the
   user's `settings.json` undisclosed. Adapters now derive both the count and
   the list from `installedHookEvents` via `hookjson.EventList`, and wire one
-  call (see `claudecode`/`codex` `hookdisclosure_test.go`). The "names no
+  call (see `hookdisclosure_test.go` in `claudecode`, `codex`, `copilot`,
+  `geminicli`, `kirocli` or `vibe` — six today). The "names no
   uninstalled event" arm checks against `session.AllHookEvents`, itself kept
   honest by `TestAllHookEvents_CoversEveryConstant`, which scans
   `hook_signal.go`'s source rather than trusting a second hand-kept list.
@@ -473,8 +506,9 @@ Before marking a ticket done, run the full suite — every layer must pass:
   for an absent file, so a receiver that waves through an unresolvable leaf
   (a reasonable allowance — the hook fires around the write) lets an attacker
   plant a broken link, have it accepted, then create the target. A new
-  hook-receiving adapter wires one call (see `claudecode`/`codex`
-  `hookpath_test.go`; claudecode wires it twice, because its statusline
+  hook-receiving adapter wires one call (see `hookpath_test.go` in
+  `claudecode`, `codex`, `copilot`, `geminicli`, `kirocli` or `vibe` — six
+  today; claudecode wires it twice, because its statusline
   endpoint is a receiver too and was the one the original fix forgot).
   **A confinement refusal answers 2xx** — it is reported by the log and the
   counter, never by a status code on the user's critical path. The path is
@@ -532,7 +566,9 @@ Before marking a ticket done, run the full suite — every layer must pass:
   same split `AssertPermissionGated` draws. It exists because Codex carried a
   private `codexSupportsHooks` with its own parser and floor constants while
   Claude Code carried nothing and wrote seven entries into the user's
-  `settings.json` at any version; a third adapter joins by declaring
+  `settings.json` at any version; every hook-installing adapter now declares
+  the floor the same way — `copilot`, `geminicli`, `kirocli` and `vibe`
+  joined Codex and Claude Code by declaring
   `Version: &agent.VersionGate{Min: "x.y.z", Probe: []string{"<cli>",
   "--version"}}` and nothing else. `TestEveryHookInstallDeclaresAVersionFloor`
   (`core/adapters/inbound/agents/hookversion_test.go`) walks the registry
@@ -603,9 +639,23 @@ Before marking a ticket done, run the full suite — every layer must pass:
   consent-denied request counts nothing, because noting that a POST arrived is
   itself an observation.
 - Managed user files: every `modify`-kind permission with an `Apply` closure
-  declares the shared, user-owned file that closure writes
-  (`agent.Permission.Writes`, an `agent.ManagedUserFile` carrying `Path` +
-  `Uninstall`). Three projections read it, and they read deliberately different
+  declares the shared, user-owned file(s) that closure writes
+  (`agent.Permission.Writes`, an `agent.ManagedUserFile` carrying `Path`,
+  `Uninstall`, and `Verify`/`Version` (each described in its own bullet
+  above)). Since #1731 it also carries `Also []func() (string, error)`, for
+  the rare permission whose ONE `Apply` writes a SECOND shared file beyond
+  `Path` — two adapters use it today: mistral-vibe's hooks install writes
+  `$VIBE_HOME/hooks.toml` (Path) plus the `enable_experimental_hooks` gate in
+  `$VIBE_HOME/config.toml` (Also), without which the CLI never reads the
+  hooks at all; kiro-cli's writes its hook entries (Path) plus
+  `chat.defaultAgent` in `settings/cli.json` (Also), so the entries are read
+  by the agent kiro-cli actually dispatches to. `Path` stays what every
+  narrowed projection below means by "the file this permission writes" —
+  `Also` changes that for nobody — but both consumers that protect an
+  undeclared write (`PermissionService.sharedConfigRefusal` and
+  `agents.ManagedUserFiles`, both below) resolve every `Also` entry with the
+  same rigor as `Path`, because an unprotected secondary write is exactly
+  #1449's incident shape one field over. Three projections read `Writes`, and they read deliberately different
   slices: `agents.ManagedUserFiles` returns everything — what
   `irrlichd --print-managed-files` prints and the onboarding recorder backs up
   before spawning a `grant-all` daemon against the user's real `$HOME` — while
@@ -649,7 +699,8 @@ Before marking a ticket done, run the full suite — every layer must pass:
   write**. `PermissionService.sharedConfigRefusal` — the same call site as
   #1365's version gate, so #1362's "granted but NOT applied" surfacing and the
   re-answer retry carry it for free — refuses any `Apply` whose `Writes.Path`
-  resolves outside the daemon's own `IRRLICHT_HOME`, with an error naming the
+  OR any `Writes.Also` entry (#1731) resolves outside the daemon's own
+  `IRRLICHT_HOME`, with an error naming the
   file. Note what "isolated" does NOT mean: "`IRRLICHT_HOME` is set and differs
   from `$HOME`" is vacuous here, because the daemon that caused the incident had
   it set and so does the recording rig. A `ManagedUserFile` follows `$HOME` by
@@ -664,9 +715,10 @@ Before marking a ticket done, run the full suite — every layer must pass:
   `spawn-record-daemon.sh`, immediately beside the `snapshot_managed_files`
   call that earns the entitlement. **`ir:test-mac`'s separate mode therefore no
   longer installs hooks** — that was the damage, not a regression.
-  All seven contract families pass by construction against a correct adapter —
-  or, for a delivery route no adapter has adopted yet, against its reference
-  wiring — so their whole value is that they *can* fail. Seven is a count of
+  All seven contract families pass by construction against a correct adapter
+  — every route and entry shape the hook-endpoint family grades now has one
+  (see that bullet above) — so their whole value is that they *can* fail.
+  Seven is a count of
   *obligations*, not of exported `Assert…` functions: `grep -c "^func Assert"`
   over the package currently returns ten, because three of those are not
   families. `AssertPermissionGatedOnEachKey` and
@@ -1107,8 +1159,8 @@ Before marking a ticket done, run the full suite — every layer must pass:
   guard, `style-noisy-but-warning-clean.sh` pinning the floor in the one
   direction the `bad-*` files cannot reach, and the abandonment fixture proved
   by REWORDING its directive line and asserting the hidden SC2115 appears.
-  That suite runs in `linux.yml`, not in test.yml's `tools/lib/*_test.sh` loop —
-  it needs a linter the macOS image lacks, and it is the loop's SECOND skip
+  That suite runs in `linux.yml` for the same reason posix-lint's does
+  (above) — it is the loop's SECOND skip
   argument. `shell-lib-suite_test.sh` now derives that list from the workflow
   step and existence-checks every name, because the one-file check it had would
   have gone on passing while saying nothing about the new entry.
