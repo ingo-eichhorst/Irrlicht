@@ -778,6 +778,67 @@ private struct TaskListView: View {
 
 // MARK: - Session Action Buttons
 
+/// Fixes `.popover(...)` rendering BEHIND this app's host panel (issue
+/// #1743). `SessionControlButton` below is the only native SwiftUI
+/// `.popover` in the app; everything else that needs a floating surface
+/// goes through the hand-rolled `TooltipWindowController` bridge in
+/// `SessionListView.swift` instead, for the exact same underlying reason:
+/// this app's content is hosted inside a custom `NSPanel`
+/// (`IrrlichtPanel`, `App/MenuBarController.swift`) at an elevated
+/// `.popUpMenu` window level, and a SwiftUI system modifier that creates
+/// its own plain-level `NSWindow` does not automatically draw above it —
+/// window level is a hard AppKit z-order band that ordinary front/back
+/// ordering cannot cross. That already broke `.help()` once (#218); it was
+/// never fixed for `.popover()`, the one remaining system-managed window.
+///
+/// The fix mirrors `TooltipWindowController.show(...)`'s own comment:
+/// "Z-order vs the host panel is enforced via addChildWindow(_:ordered:.above)
+/// ... that guarantees rendering above the host regardless of level." A
+/// child window is drawn immediately above its parent irrespective of
+/// level, so reparenting the popover's window under the host panel is
+/// sufficient — no need to touch `.popover`'s own presentation.
+enum PopoverHostReorder {
+    /// The level `MenuBarController.configurePanel()` gives the app's one
+    /// host panel.
+    static let hostLevel = NSWindow.Level.popUpMenu
+
+    /// Pure lookup over an explicit window list (rather than reading
+    /// `NSApp.windows` directly) so this is testable without depending on
+    /// `.popover`'s own presentation timing. Finds the host panel by its
+    /// fixed level, then the most likely popover window: the front-most
+    /// OTHER visible window strictly BELOW the host's level. That excludes
+    /// `TooltipWindowController`'s own panel, which is deliberately pinned
+    /// ABOVE `hostLevel` (`SessionListView.swift`) so the two mechanisms
+    /// never fight over the same candidate.
+    static func candidates(in windows: [NSWindow]) -> (host: NSWindow, popover: NSWindow)? {
+        let visible = windows.filter(\.isVisible)
+        guard let host = visible.first(where: { $0.level == hostLevel }) else { return nil }
+        guard let popover = visible.first(where: { $0 !== host && $0.level.rawValue < hostLevel.rawValue })
+        else { return nil }
+        return (host, popover)
+    }
+
+    /// Reparents `popover` as a child of `host` if it isn't already, so
+    /// AppKit orders it above the host regardless of level — idempotent,
+    /// matching `TooltipWindowController.show`'s own guard.
+    static func attach(host: NSWindow, popover: NSWindow) {
+        guard popover.parent !== host else { return }
+        popover.parent?.removeChildWindow(popover)
+        host.addChildWindow(popover, ordered: .above)
+    }
+
+    /// Live call site: looks up `NSApp.windows` and attaches if both a host
+    /// and a popover candidate are found. A no-op when either is absent —
+    /// in particular, SwiftUI does not create the popover's `NSWindow`
+    /// synchronously with `showPopover` flipping to `true`, so callers
+    /// defer this by one run-loop turn.
+    @MainActor
+    static func reorderIfNeeded() {
+        guard let (host, popover) = candidates(in: NSApp.windows) else { return }
+        attach(host: host, popover: popover)
+    }
+}
+
 /// Backchannel control affordance (#724): a keyboard button that opens a
 /// popover to send text or an interrupt into a controllable session. Shown only
 /// when `session.controllable`. The whole-row tap (focus) is unaffected —
@@ -818,6 +879,15 @@ struct SessionControlButton: View {
                 .buttonStyle(.borderless)
             }
             .padding(12)
+        }
+        .onChange(of: showPopover) { presented in
+            guard presented else { return }
+            // Deferred one run-loop turn: SwiftUI doesn't create the
+            // popover's NSWindow synchronously with this state change (see
+            // PopoverHostReorder's doc comment above).
+            DispatchQueue.main.async {
+                PopoverHostReorder.reorderIfNeeded()
+            }
         }
     }
 
