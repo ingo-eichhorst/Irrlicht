@@ -171,6 +171,7 @@ func sanitizedChildEnv(homeDir, stateDir string) []string {
 		// --print-managed-files under a temp HOME still names a path outside it.
 		"CODEX_HOME=",
 		"COPILOT_HOME=",
+		"KIRO_HOME=",
 		"XDG_CONFIG_HOME=",
 		// Does not move claudeSettingsPath today; cleared for symmetry so the
 		// next adapter that honors it does not reopen this quietly.

@@ -27,7 +27,15 @@ import (
 // hand back.
 //
 // Contract test — it passes by construction; it was seen red by making
-// printManagedFiles emit only the first entry (see the PR body).
+// printManagedFiles emit only the first entry (see the PR body). Widened for
+// issue #1718's Also field (kiro-cli, #1716, is the first adapter to
+// populate it): every Also entry owes the identical two-way coverage Path
+// already had, or a second file a permission's Apply writes is invisible to
+// the exact recorder sweep this test exists to hold honest. Seen red again by
+// commenting out kirocli's Also declaration — want then contains only its
+// Path, printed still contains settings/cli.json (writeManagedFilePaths keeps
+// flattening it), and the second loop below reports it as "listed... which no
+// permission declares".
 func TestPrintManagedFilesCoversEveryDeclaredFile(t *testing.T) {
 	configs, err := agents.ManagedUserFiles(declaredConsentCatalog())
 	if err != nil {
