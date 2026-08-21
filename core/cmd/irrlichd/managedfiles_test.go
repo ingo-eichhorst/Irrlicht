@@ -183,6 +183,32 @@ func TestWriteManagedFilePathsDeduplicates(t *testing.T) {
 	}
 }
 
+// TestWriteManagedFilePathsFlattensAlso is the #1718 widening's defect test:
+// the rig's managed_file_paths() backs up and restores one file per printed
+// line, with no notion that two lines belong to the same permission — so an
+// Also file that is not flattened onto this stream is never snapshotted
+// before a grant-all daemon can write it and never restored after (#1449's
+// gap one layer up). Also entries are deduplicated against Path and against
+// each other exactly like Path is.
+func TestWriteManagedFilePathsFlattensAlso(t *testing.T) {
+	var buf bytes.Buffer
+	writeManagedFilePaths(&buf, []agents.ManagedUserFile{
+		{Adapter: "mistral-vibe", Key: "hooks", Path: "/tmp/vibe/.vibe/hooks.toml",
+			Also: []string{"/tmp/vibe/.vibe/config.toml"}},
+		{Adapter: "alpha", Key: "hooks", Path: "/tmp/alpha/settings.json"},
+	})
+	got := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	want := []string{"/tmp/vibe/.vibe/hooks.toml", "/tmp/vibe/.vibe/config.toml", "/tmp/alpha/settings.json"}
+	if len(got) != len(want) {
+		t.Fatalf("printed %q, want %q — an Also file the recorder never learns about is never backed up", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("line %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 // TestUninstallHookConfigsSurvivesOneFailingAdapter pins the fix for a failure
 // that used to end the whole command: hookjson refuses to rewrite a config it
 // cannot parse, so a single hand-edited ~/.claude/settings.json aborted the

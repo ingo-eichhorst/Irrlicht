@@ -59,21 +59,45 @@ func (s *PermissionService) sharedConfigRefusal(p agent.Permission) error {
 	if s.allowSharedConfigWrites {
 		return nil
 	}
-	// A nil resolver is a malformed declaration, not a permission that writes
-	// nothing — that shape is Writes == nil above. Same direction as an erroring
-	// resolver: a file we cannot name is not one we can call safe. Unreachable
-	// in a CI-green tree (agents.ManagedUserFiles rejects it), but the guard's
-	// correctness must not rest on a test in another package.
-	if p.Writes.Path == nil {
-		return fmt.Errorf("refusing to run %s's install in IRRLICHT_PERMISSION_MODE=grant-all: "+
-			"it declares a managed user file with no Path resolver", p.Key)
+	// Path plus every Also entry (#1718): a single Apply closure that writes
+	// two files is only safe under grant-all when BOTH resolve inside the
+	// isolated home. Checking Path alone would wave an Apply through whose
+	// SECOND file lands in the user's real config — invisible to this guard in
+	// exactly the way an undeclared write always is, which is the incident
+	// #1449 exists to prevent. Path is checked first so its error message (the
+	// one every existing test pins) is unchanged when Also is empty.
+	if err := s.refuseIfOutsideIsolatedHome(p.Key, "Path", p.Writes.Path); err != nil {
+		return err
 	}
-	path, err := p.Writes.Path()
+	for i, also := range p.Writes.Also {
+		if err := s.refuseIfOutsideIsolatedHome(p.Key, fmt.Sprintf("Also[%d]", i), also); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// refuseIfOutsideIsolatedHome resolves one file a permission's Apply writes
+// and refuses if it is unresolvable or lands outside the daemon's isolated
+// home. label names which resolver failed (e.g. "Path", "Also[0]") so a
+// multi-file permission's refusal says which of its files is the problem
+// rather than leaving the reader to guess.
+func (s *PermissionService) refuseIfOutsideIsolatedHome(key, label string, resolve func() (string, error)) error {
+	// A nil resolver is a malformed declaration, not a permission that writes
+	// nothing — that shape is Writes == nil in the caller. Same direction as an
+	// erroring resolver: a file we cannot name is not one we can call safe.
+	// Unreachable in a CI-green tree (agents.ManagedUserFiles rejects it), but
+	// the guard's correctness must not rest on a test in another package.
+	if resolve == nil {
+		return fmt.Errorf("refusing to run %s's install in IRRLICHT_PERMISSION_MODE=grant-all: "+
+			"it declares a managed user file with no %s resolver", key, label)
+	}
+	path, err := resolve()
 	if err != nil {
 		// Fail closed. An unresolvable path is not a licence to write: we cannot
 		// name the file, so we certainly cannot say it is safe to modify.
 		return fmt.Errorf("refusing to write %s's shared config in IRRLICHT_PERMISSION_MODE=grant-all: "+
-			"cannot resolve which file it writes (%v)", p.Key, err)
+			"cannot resolve which file it writes (%s: %v)", key, label, err)
 	}
 	if s.isolatedHome != "" && pathInsideRoot(s.isolatedHome, path) {
 		return nil
