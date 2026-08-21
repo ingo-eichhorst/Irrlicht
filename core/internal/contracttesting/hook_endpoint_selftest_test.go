@@ -395,9 +395,12 @@ func TestEndpointArm_SecondAssertions(t *testing.T) {
 			}, hookjson.EnsureInstalled)
 		}
 		rec := observe(t, func(at armT) { assertUpgradedInPlace(at, mutated, r, mutated.SettingsPath(t)) })
-		mustReport(t, rec, "expected exactly 1 matcher group",
+		mustReport(t, rec, "expected exactly 1 inner hook entry",
 			"an install that appends a second group beside the foreign entry instead of "+
-				"repointing it (M3b)")
+				"repointing it (M3b) — reworded from \"matcher group\" to \"inner hook entry\" "+
+				"when onlyEntry became shape-agnostic (issue #1716's EntriesOf seam): a second "+
+				"matcher group and a second flat array element are the same defect once "+
+				"flattened, so one message now covers both")
 	})
 
 	// Obligation 4's second claim: the entries are actually GONE. Reporting

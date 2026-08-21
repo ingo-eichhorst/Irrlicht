@@ -142,10 +142,44 @@ type HookInstaller struct {
 	// Neither way of getting it wrong passes: an entry that is already
 	// canonical leaves obligation 3 with modified=false, and one that does not
 	// carry Sentinel is not recognized as ours, so EnsureInstalled appends a
-	// second matcher group and onlyEntry fails on the group count. The seed is
+	// second matcher group and onlyEntry fails on the entry count. The seed is
 	// additionally cross-checked against Sentinel before either obligation
 	// runs.
 	ForeignInstall func() (bool, error)
+
+	// EntriesOf extracts the inner hook-entry objects an event's raw value in
+	// the parsed settings map holds, regardless of nesting shape (issue
+	// #1716). Nil means NestedHookEntries — hookjson's own matcher-group
+	// shape, `[ {"matcher": ..., "hooks": [ {...} ] } ]` — which is what every
+	// adapter wired before #1716 (claudecode, codex, copilot, gemini-cli)
+	// already produces, so none of them need to set this field.
+	//
+	// It exists because that nesting is not universal: kiro-cli's hooks
+	// schema rejects it outright and falls back to a different agent while
+	// reporting install success (#1716's own audit), so its entries are FLAT —
+	// `[ {"command": ...} ]`, no matcher-group wrapper — and the four
+	// obligations built on "read back the one entry an event holds" needed a
+	// seam an adapter can supply instead of a shape hardcoded into the
+	// traversal. FlatHookEntries is that shape's counterpart.
+	//
+	// A TOML-shaped installer (mistral-vibe, #1718) fits the SAME seam for its
+	// half of the problem — decoding a TOML table's array-of-tables into
+	// `[]map[string]interface{}` is what most TOML libraries already do, so an
+	// adapter whose event value decodes that way can write its own
+	// EntriesOf identically to FlatHookEntries's body. What this field does
+	// NOT close for TOML is the file-reading step: readHooksMap below still
+	// calls hookjson.ReadSettings (JSON-only) to produce the map EntriesOf is
+	// handed, and #1718's own config is a dedicated hooks.toml rather than a
+	// "hooks" key inside a shared JSON document — so a TOML adapter needs an
+	// analogous seam THERE too (a HookInstaller.ReadSettings func(path string)
+	// (map[string]interface{}, error) field, defaulting to
+	// hookjson.ReadSettings, is the natural shape, mirroring this one) before
+	// AssertHookEndpointFollowsBindAddr can grade it end to end. Left
+	// undone here deliberately: guessing at #1718's exact schema from outside
+	// that work would be speculation this package cannot verify, where
+	// EntriesOf's shape is what THIS issue's own adapter (kiro-cli) already
+	// needs and proves against a real wiring (kirocli/hookport_test.go).
+	EntriesOf func(hooksMap map[string]interface{}, event string) ([]map[string]interface{}, error)
 }
 
 // AssertHookEndpointFollowsBindAddr runs the issue #1178 contract against h, in
@@ -359,7 +393,7 @@ func assertUninstallIsNotForeignScoped(t armT, h HookInstaller, r deliveryRules,
 	}
 	hooksMap := readHooksMap(t, path)
 	for _, event := range h.Events {
-		if hookjson.HasOurHook(hooksMap, event, h.Sentinel) {
+		if hasOurEntry(t, h, hooksMap, event) {
 			t.Errorf("event %s: %s survived uninstall", event, r.foreign)
 		}
 	}
@@ -384,7 +418,7 @@ func assertEveryEventDelivers(t armT, h HookInstaller, r deliveryRules, path, wa
 	t.Helper()
 	hooksMap := readHooksMap(t, path)
 	for _, event := range h.Events {
-		got := h.EndpointOf(onlyEntry(t, hooksMap, event))
+		got := h.EndpointOf(onlyEntry(t, h, hooksMap, event))
 		assertDeliveryIsOurs(t, h, "event "+event, got)
 		if got != want {
 			t.Errorf("event %s: installed delivery = %q, want %q", event, got, want)
@@ -522,44 +556,123 @@ func seedForeignInstall(t armT, h HookInstaller, r deliveryRules, path string) {
 	r.seed(t, h)
 
 	// Sentinel is the one field nothing else cross-checks, and a wrong value
-	// makes the uninstall-survival assertion pass vacuously — HasOurHook would
+	// makes the uninstall-survival assertion pass vacuously — hasOurEntry would
 	// simply find nothing, for the wrong reason. Confirming the seeded install
 	// is matched by the declared sentinel turns that silent hole into a wiring
 	// error.
 	seeded := readHooksMap(t, path)
 	for _, event := range h.Events {
-		if !hookjson.HasOurHook(seeded, event, h.Sentinel) {
+		if !hasOurEntry(t, h, seeded, event) {
 			t.Fatalf("event %s: %s is not matched by Sentinel %q — the contract is wired wrong", event, r.foreign, h.Sentinel)
 		}
 	}
 }
 
-// onlyEntry returns the single inner hook of the event's single matcher group,
-// failing on any other shape — which is the assertion, not incidental: an
-// upgrade that appends a second group instead of rewriting in place shows up
-// here as a group count of 2.
-func onlyEntry(t reporter, hooksMap map[string]interface{}, event string) map[string]interface{} {
-	t.Helper()
+// entriesOf resolves h's EntriesOf, defaulting to NestedHookEntries — the
+// shape every adapter wired before #1716 already produces, so leaving the
+// field nil is what every existing wiring continues to do.
+func entriesOf(h HookInstaller) func(map[string]interface{}, string) ([]map[string]interface{}, error) {
+	if h.EntriesOf != nil {
+		return h.EntriesOf
+	}
+	return NestedHookEntries
+}
+
+// NestedHookEntries is hookjson's own matcher-group shape:
+// `hooksMap[event] = [ {"matcher": ..., "hooks": [ {...}, ... ] }, ... ]`.
+// It flattens every group's inner hooks into one list, so "exactly one
+// entry" (onlyEntry's own obligation) also catches a mutation that appends a
+// second GROUP rather than a second entry within one — the two are
+// indistinguishable once flattened, which is the point: onlyEntry does not
+// need to separately police group count and per-group entry count.
+func NestedHookEntries(hooksMap map[string]interface{}, event string) ([]map[string]interface{}, error) {
 	groups, ok := hooksMap[event].([]interface{})
 	if !ok {
-		t.Fatalf("event %s: missing from the settings file or not an array", event)
+		return nil, fmt.Errorf("missing from the settings file or not an array")
 	}
-	if len(groups) != 1 {
-		t.Fatalf("event %s: expected exactly 1 matcher group (in-place upgrade, no duplicate appended), got %d", event, len(groups))
+	var out []map[string]interface{}
+	for _, g := range groups {
+		group, ok := g.(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("matcher group is not an object: %v", g)
+		}
+		hooks, ok := group["hooks"].([]interface{})
+		if !ok {
+			return nil, fmt.Errorf("matcher group has no \"hooks\" array: %v", group)
+		}
+		for _, e := range hooks {
+			entry, ok := e.(map[string]interface{})
+			if !ok {
+				return nil, fmt.Errorf("inner hook is not an object: %v", e)
+			}
+			out = append(out, entry)
+		}
 	}
-	group, ok := groups[0].(map[string]interface{})
+	return out, nil
+}
+
+// FlatHookEntries is the flat shape kiro-cli's hook schema requires instead:
+// `hooksMap[event] = [ {"command": ...}, ... ]` — no matcher-group wrapper at
+// all, each array element itself the inner hook object.
+func FlatHookEntries(hooksMap map[string]interface{}, event string) ([]map[string]interface{}, error) {
+	arr, ok := hooksMap[event].([]interface{})
 	if !ok {
-		t.Fatalf("event %s: matcher group is not an object: %v", event, groups[0])
+		return nil, fmt.Errorf("missing from the settings file or not an array")
 	}
-	entries, ok := group["hooks"].([]interface{})
-	if !ok || len(entries) != 1 {
-		t.Fatalf("event %s: expected exactly 1 inner hook, got %v", event, group["hooks"])
+	var out []map[string]interface{}
+	for _, e := range arr {
+		entry, ok := e.(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("entry is not an object: %v", e)
+		}
+		out = append(out, entry)
 	}
-	entry, ok := entries[0].(map[string]interface{})
-	if !ok {
-		t.Fatalf("event %s: inner hook is not an object: %v", event, entries[0])
+	return out, nil
+}
+
+// onlyEntry returns the single inner hook entry an event holds, via h's
+// resolved EntriesOf, failing on any other count — which is the assertion,
+// not incidental: an upgrade that appends a second entry (nested shape: a
+// second matcher group; flat shape: a second array element) instead of
+// rewriting in place shows up here as a count of 2, regardless of shape.
+func onlyEntry(t reporter, h HookInstaller, hooksMap map[string]interface{}, event string) map[string]interface{} {
+	t.Helper()
+	entries, err := entriesOf(h)(hooksMap, event)
+	if err != nil {
+		t.Fatalf("event %s: %v", event, err)
 	}
-	return entry
+	if len(entries) != 1 {
+		t.Fatalf("event %s: expected exactly 1 inner hook entry (in-place upgrade, no duplicate appended), got %d", event, len(entries))
+	}
+	return entries[0]
+}
+
+// hasOurEntry reports whether ANY of an event's entries carries h.Sentinel,
+// via h's resolved EntriesOf — the flat-shape-aware counterpart of
+// hookjson.HasOurHook, which hardcodes the nested matcher-group traversal
+// (core/adapters/inbound/agents/hookjson's own entryIsSentinel) and so
+// cannot see a flat entry at all. Checks the same two delivery fields
+// entryIsSentinel does ("command", the shape codex/gemini-cli/kiro-cli use,
+// and "url", claudecode's and copilot's native http entries), so an adapter
+// migrating between the two is still recognized either way, matching
+// hookjson's own behaviour for the shapes EntriesOf already normalizes into
+// plain maps.
+func hasOurEntry(t reporter, h HookInstaller, hooksMap map[string]interface{}, event string) bool {
+	t.Helper()
+	entries, err := entriesOf(h)(hooksMap, event)
+	if err != nil {
+		// Not an error here: "missing from the settings file" is exactly
+		// "not found", the answer this predicate is asked for.
+		return false
+	}
+	for _, entry := range entries {
+		for _, field := range []string{"command", "url"} {
+			if v, ok := entry[field].(string); ok && strings.Contains(v, h.Sentinel) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // readHooksMap reads the settings file through the same codec the installers
