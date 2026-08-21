@@ -301,9 +301,9 @@ func TestStopHook_ForwardsAssistantResponseAndWaitingCue(t *testing.T) {
 	h := NewHookHandler(target, gate, mockLogger{})
 
 	body, err := json.Marshal(kiroHookPayload{
-		HookEventName:      HookStop,
-		SessionID:          "sess-stop2",
-		AssistantResponse:  "All done. Want me to continue?",
+		HookEventName:     HookStop,
+		SessionID:         "sess-stop2",
+		AssistantResponse: "All done. Want me to continue?",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -417,12 +417,26 @@ func TestHostileSessionIDIsConfined(t *testing.T) {
 }
 
 // TestHookReceiver_DeniedHooksConsentDropsQuietly is the #570 gate at the
-// receiving end.
+// receiving end — and this receiver's OWN check, so "quietly" is the load-
+// bearing word: DecodeConfined's shared backstop re-checks the whole
+// declared consent set too (issue #1488), so a mutation deleting this
+// receiver's own `if !consent.Granted(PermissionKeyHooks)` check still
+// dispatches nothing — the backstop catches it — but the backstop logs an
+// ERROR where this receiver's own gate answers quietly. RecordingLogger,
+// not the no-op mockLogger, is what makes that distinction assertable; see
+// claudecode's, codex's, copilot's and gemini-cli's identical tests, each
+// seen red again with its own gate deleted (AGENTS.md, "Permission gating").
 func TestHookReceiver_DeniedHooksConsentDropsQuietly(t *testing.T) {
 	root := kiroSessionRoot(t)
 	writeSessionTranscript(t, root, "sess-stop")
 	target := &mockTarget{}
-	h := NewHookHandler(target, keyedGate{}, mockLogger{})
+	log := &contracttesting.RecordingLogger{}
+	// transcripts GRANTED, hooks DENIED — the isolation state, not "both
+	// denied": with both denied, a deleted hooks check is indistinguishable
+	// from a working one, because the (untouched) transcripts check still
+	// answers first inside this function, and DecodeConfined's backstop is
+	// never reached at all.
+	h := NewHookHandler(target, keyedGate{PermissionKeyTranscripts: true}, log)
 
 	rec := post(t, h, contractPayload("sess-stop", HookStop))
 
@@ -431,6 +445,10 @@ func TestHookReceiver_DeniedHooksConsentDropsQuietly(t *testing.T) {
 	}
 	if n := target.totalCalls(); n != 0 {
 		t.Fatalf("dispatched %d times while hooks consent was denied, want 0", n)
+	}
+	if len(log.Errors()) != 0 {
+		t.Errorf("a hooks-denied hook logged %d error(s): %v — the whole point of the word "+
+			"in this test's name", len(log.Errors()), log.Errors())
 	}
 }
 

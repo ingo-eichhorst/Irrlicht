@@ -89,25 +89,28 @@ func TestHookEntry_IsABeaconCommand(t *testing.T) {
 
 // TestDeliveryCarriesNoAddress is obligation 1 of the #1178 contract's
 // address-free route, driven by hand for the reason this file's package
-// comment gives: the rendered beacon command is IDENTICAL on the default and
-// an alternate bind address, and carries nothing address-shaped — no scheme,
-// no loopback host, no port-shaped fragment, no hook route.
+// comment gives: the entry THIS ADAPTER installs (ourHookEntry, not the
+// shared hookbeacon.InstalledCommand directly — that helper is already
+// covered by hookbeacon's own suite and calling it here would test nothing
+// adapter-specific) is IDENTICAL on the default and an alternate bind
+// address, and carries nothing address-shaped — no scheme, no loopback host,
+// no port-shaped fragment, no hook route.
 func TestDeliveryCarriesNoAddress(t *testing.T) {
 	kiroInstallerHome(t)
 
 	t.Setenv(daemonaddr.EnvBindAddr, "")
-	onDefault, err := hookbeacon.InstalledCommand(AdapterName)
-	if err != nil {
-		t.Fatalf("resolving the beacon command on the default bind addr: %v", err)
+	onDefault, ok := ourHookEntry()["command"].(string)
+	if !ok || onDefault == "" {
+		t.Fatalf("ourHookEntry()[command] on the default bind addr = %v, want a non-empty string", onDefault)
 	}
 	t.Setenv(daemonaddr.EnvBindAddr, contracttesting.AltBindAddr)
-	onAlt, err := hookbeacon.InstalledCommand(AdapterName)
-	if err != nil {
-		t.Fatalf("resolving the beacon command on %s: %v", contracttesting.AltBindAddr, err)
+	onAlt, ok := ourHookEntry()["command"].(string)
+	if !ok || onAlt == "" {
+		t.Fatalf("ourHookEntry()[command] on %s = %v, want a non-empty string", contracttesting.AltBindAddr, onAlt)
 	}
 
 	if onDefault != onAlt {
-		t.Fatalf("beacon command differs between bind addresses (%q vs %q) — an address-free "+
+		t.Fatalf("installed entry differs between bind addresses (%q vs %q) — an address-free "+
 			"install must not vary with %s", onDefault, onAlt, daemonaddr.EnvBindAddr)
 	}
 	assertNoAddressShapedFragment(t, onDefault)
