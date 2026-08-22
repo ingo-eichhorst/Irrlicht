@@ -33,8 +33,35 @@ func TestAgentRegistration(t *testing.T) {
 	if src.SessionIDFromPath == nil {
 		t.Fatal("Source.SessionIDFromPath must be set (constant transcript filename)")
 	}
-	if len(a.Permissions) != 1 {
-		t.Fatalf("want exactly one permission, got %d", len(a.Permissions))
+	// Two permissions since #1723: the observe-kind transcripts read, and the
+	// modify-kind hooks install.
+	assertDeclaresExactly(t, a, PermissionKeyTranscripts, PermissionKeyHooks)
+}
+
+// assertDeclaresExactly pins the permission set by KEY, not by count alone: a
+// count is satisfied by any two permissions, and the PAIR is what three
+// separate projections narrow on (agents.HookConfigs, agents.ManagedUserFiles,
+// and the #1740 contract-wiring tripwire).
+func assertDeclaresExactly(t *testing.T, a agent.Agent, keys ...string) {
+	t.Helper()
+	want := make(map[string]bool, len(keys))
+	for _, key := range keys {
+		want[key] = false
+	}
+	for _, p := range a.Permissions {
+		if _, known := want[p.Key]; !known {
+			t.Errorf("unexpected permission %q", p.Key)
+			continue
+		}
+		want[p.Key] = true
+	}
+	for key, seen := range want {
+		if !seen {
+			t.Errorf("permission %q is not declared", key)
+		}
+	}
+	if len(a.Permissions) != len(want) {
+		t.Errorf("declared %d permissions, want %d", len(a.Permissions), len(want))
 	}
 }
 

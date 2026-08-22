@@ -16,6 +16,7 @@ import (
 
 	activationhandler "irrlicht/core/adapters/inbound/activation"
 	"irrlicht/core/adapters/inbound/agents"
+	"irrlicht/core/adapters/inbound/agents/antigravity"
 	"irrlicht/core/adapters/inbound/agents/claudecode"
 	"irrlicht/core/adapters/inbound/agents/codex"
 	"irrlicht/core/adapters/inbound/agents/copilot"
@@ -986,6 +987,8 @@ func registerHookRoutes(mux *http.ServeMux, detector *services.SessionDetector, 
 		opencode.NewHookHandler(detector, permService, logger))
 	mux.Handle("POST "+hermes.HookEndpointPath,
 		hermes.NewHookHandler(detector, permService, logger))
+	mux.Handle("POST "+antigravity.HookEndpointPath,
+		antigravity.NewHookHandler(detector, permService, logger))
 }
 
 // publishAddrFile writes the addr file and thereby signals "the daemon is

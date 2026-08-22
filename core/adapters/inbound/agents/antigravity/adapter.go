@@ -46,6 +46,20 @@ const (
 	ideBrainDir = ".gemini/antigravity/brain"
 )
 
+// systemGeneratedDirName / logsDirName are the two directories between a
+// conversation directory and its transcript. Named rather than spelled inline
+// because since #1723 there are two readers of the layout that must agree:
+// sessionIDFromPath walks UP it to derive a session id, and the hook
+// receiver's conversationTranscriptPath (hooks.go) composes DOWN it from a
+// conversation id the hook payload delivers. A drift between the two would
+// mint a second session per conversation, which is the exact failure
+// sessionIDFromPath's transcript_full.jsonl exclusion exists to prevent.
+// TestTranscriptPathForRoundTripsThroughSessionIDFromPath pins the pair.
+const (
+	systemGeneratedDirName = ".system_generated"
+	logsDirName            = "logs"
+)
+
 // sessionIDFromPath derives the conversation ID from a transcript path and
 // reports "" for any file the adapter does not own. Antigravity writes
 //
@@ -60,11 +74,11 @@ func sessionIDFromPath(path string) string {
 		return ""
 	}
 	logs := filepath.Dir(path)
-	if filepath.Base(logs) != "logs" {
+	if filepath.Base(logs) != logsDirName {
 		return ""
 	}
 	sysGen := filepath.Dir(logs)
-	if filepath.Base(sysGen) != ".system_generated" {
+	if filepath.Base(sysGen) != systemGeneratedDirName {
 		return ""
 	}
 	conv := filepath.Base(filepath.Dir(sysGen))
