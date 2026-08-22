@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"irrlicht/core/adapters/inbound/agents/hookyaml"
 	"irrlicht/core/domain/permission"
@@ -562,6 +563,93 @@ func TestInstallSurvivesHermesRewritingItsOwnConfig(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestFormatScriptMtimeISO_MatchesHermesConditionalMicroseconds is a
+// regression test for #1766's live finding: hermes' own script_mtime_iso
+// (agent/shell_hooks.py) renders via Python's datetime.isoformat(), which
+// omits the fractional-seconds component entirely when microseconds are
+// exactly zero. A Go formatter that ALWAYS appends ".000000Z" (the
+// pre-#1766 code) disagrees with hermes' own string for a zero-microsecond
+// instant, and hermes' `hooks doctor` compares the two LEXICOGRAPHICALLY
+// (mtime_now > mtime_at) rather than as parsed times — so the mismatch
+// reads as "script modified" forever, for a file (like /bin/sh, this
+// adapter's fixed interpreter) whose mtime never changes.
+//
+// Live-verified against this machine's real /bin/sh (zero-nanosecond
+// mtime) and a real `hermes hooks doctor` run: before this fix, all three
+// installed hooks were reported drifted on every run despite nothing having
+// changed.
+func TestFormatScriptMtimeISO_MatchesHermesConditionalMicroseconds(t *testing.T) {
+	tests := []struct {
+		name string
+		in   time.Time
+		want string
+	}{
+		{
+			name: "zero nanoseconds — hermes omits the fraction entirely",
+			in:   time.Date(2026, 4, 30, 19, 33, 17, 0, time.UTC),
+			want: "2026-04-30T19:33:17Z",
+		},
+		{
+			name: "nonzero nanoseconds — hermes emits exactly 6 digits",
+			in:   time.Date(2026, 4, 30, 19, 33, 17, 123456000, time.UTC),
+			want: "2026-04-30T19:33:17.123456Z",
+		},
+		{
+			name: "non-UTC input is normalized to UTC before formatting",
+			in:   time.Date(2026, 4, 30, 21, 33, 17, 0, time.FixedZone("CEST", 2*3600)),
+			want: "2026-04-30T19:33:17Z",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatScriptMtimeISO(tt.in); got != tt.want {
+				t.Errorf("formatScriptMtimeISO(%v) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestFormatScriptMtimeISO_NoFalseDriftAcrossAZeroMicrosecondRoundTrip pins
+// the actual property `hermes hooks doctor` relies on: OUR recorded
+// ScriptMtimeAtApproval (formatScriptMtimeISO's output — the function under
+// test) must agree, byte-for-byte, with hermes' OWN independently-computed
+// "current" mtime string for the identical, unchanged instant, so hermes'
+// `mtime_now > mtime_at` lexicographic comparison evaluates false rather
+// than a spurious true.
+//
+// mtimeNow is deliberately a HARDCODED literal — hermes' own string for this
+// instant, confirmed live via:
+//
+//	python3 -c "from datetime import datetime, timezone; print(
+//	  datetime.fromtimestamp(1777577597.0, tz=timezone.utc)
+//	    .isoformat().replace('+00:00', 'Z'))"
+//	# -> 2026-04-30T19:33:17Z   (1777577597.0 == this machine's real,
+//	#    zero-fractional /bin/sh mtime at the time of the live #1766 run)
+//
+// rather than a second call to formatScriptMtimeISO. Deriving both sides
+// from the function under test would make this test tautological — it
+// would pass for ANY deterministic implementation, buggy or not, because it
+// would only ever compare formatScriptMtimeISO to itself. (This is exactly
+// the shape #1766's review caught: the original version of this test did
+// that, and stayed green against the pre-fix always-".000000Z" formatting
+// — see git history for the corrected version's red/green proof.)
+func TestFormatScriptMtimeISO_NoFalseDriftAcrossAZeroMicrosecondRoundTrip(t *testing.T) {
+	approvedAt := time.Date(2026, 4, 30, 19, 33, 17, 0, time.UTC)
+	const mtimeNow = "2026-04-30T19:33:17Z" // hermes' own value; see comment above
+
+	mtimeAtApproval := formatScriptMtimeISO(approvedAt)
+
+	if mtimeNow != mtimeAtApproval {
+		t.Fatalf("hermes' own mtimeNow (%q) != our recorded mtimeAtApproval (%q) for an unchanged file", mtimeNow, mtimeAtApproval)
+	}
+	// hermes' own doctor check: `if mtime_now and mtime_at and mtime_now >
+	// mtime_at`. Reproduced here as a plain Go string compare, the same
+	// comparison Python's `>` performs on two str operands.
+	if mtimeNow > mtimeAtApproval {
+		t.Fatalf("hermes' own mtimeNow (%q) lexicographically > our recorded mtimeAtApproval (%q) for an unchanged file — this is the false-positive doctor drift warning", mtimeNow, mtimeAtApproval)
+	}
 }
 
 // stripYAMLComments removes every whole-line comment, which is what hermes'
