@@ -57,6 +57,57 @@
 //     hermes' gate: the grant IS a person answering the same question hermes'
 //     TTY prompt asks, and the consent copy says so in those words.
 //
+// # Live re-verification against a repaired v0.19.0 install (#1766)
+//
+// #1765's audit ran against a hermes checkout that turned out to be stale
+// (`_old/`, ~4 weeks behind) because the installed CLI was a broken shim;
+// #1773 re-derived the same claims from upstream's git history instead
+// (source-read only, HEAD vs origin/main, no CLI). #1766 repaired the local
+// install — `hermes --version` now prints "Hermes Agent v0.19.0 (2026.7.20)
+// · upstream 13f4cfeb · local e289e561" — and this section is what actually
+// running it, live, against a working v0.19.0, confirmed or corrected:
+//
+//   - **The 23-event count.** `hermes hooks test <unknown-event>` prints
+//     `VALID_HOOKS` verbatim in its "Valid events:" error line. Run live it
+//     names exactly 23 events, including all three installed here and all
+//     three of the control-bearing ones this file excludes — the same
+//     number #1773 read out of the source tree, now shown by the CLI itself
+//     rather than inferred from a set literal.
+//   - **`extra.session_key`.** hermes ships no synthetic default payload for
+//     either approval event (`hermes_cli/hooks.py`'s `_DEFAULT_PAYLOADS` has
+//     no `pre_approval_request` / `post_approval_response` entry — a gap in
+//     hermes' OWN test tooling, not this adapter), so reproducing the real
+//     shape needs `hermes hooks test <event> --payload-file <f>` with a
+//     `session_key` field in `<f>`. Fired live this way, `_serialize_payload`
+//     (agent/shell_hooks.py, unchanged from the source #1773 read) puts it
+//     under the response's `extra.session_key`, top-level `session_id`
+//     absent — exactly the shape sessionID() above reads.
+//   - **`hermes hooks doctor` against a real installed entry** — this
+//     machine's actual `~/.hermes` (all three events installed, allowlisted,
+//     and firing) — found all three hooks "ran clean … observer-only", but
+//     also flagged all three with a false "script modified since approval"
+//     on every run. That finding was real and is now fixed: see
+//     formatScriptMtimeISO's doc comment below for the root cause (a
+//     lexicographic-vs-parsed timestamp mismatch with hermes' own
+//     zero-microsecond isoformat spelling) and
+//     TestFormatScriptMtimeISO_MatchesHermesConditionalMicroseconds /
+//     TestFormatScriptMtimeISO_NoFalseDriftAcrossAZeroMicrosecondRoundTrip
+//     (hookinstaller_test.go) for the regression coverage.
+//   - **The three subscription mechanisms.** Shell hooks (this adapter's
+//     route) are confirmed live end-to-end above. The other two — hermes'
+//     plugin loader (`hermes_cli/plugins.py`: bundled/user
+//     `~/.hermes/plugins/`/project/pip sources) and the gateway-only handler
+//     path — are unchanged in the installed source and this adapter uses
+//     neither, so nothing here re-verifies them beyond confirming their code
+//     is still present; #1773 already covered gateway exclusion in depth via
+//     source, and nothing in that area is CLI-reachable to re-check live.
+//
+// Nothing in the event mapping or the `minHermesVersion` floor moved: this
+// is a confirmation of #1773's source-read claims by a different method
+// (a working CLI instead of git history), plus one genuine, previously
+// undiscovered adapter-side bug the CLI surfaced that source-reading alone
+// would not have — the mtime format mismatch above.
+//
 // # Why `pre_tool_call` and `pre_verify` are not installed
 //
 // This is the #1719 safety lesson in its hermes spelling, and it is a source
@@ -643,7 +694,37 @@ func scriptMtimeISO() string {
 	if err != nil {
 		return ""
 	}
-	return info.ModTime().UTC().Format("2006-01-02T15:04:05.000000Z")
+	return formatScriptMtimeISO(info.ModTime())
+}
+
+// formatScriptMtimeISO renders t the way hermes' own script_mtime_iso
+// (agent/shell_hooks.py) renders a Python datetime: via
+// datetime.isoformat().replace("+00:00", "Z"), which OMITS the
+// fractional-seconds component entirely when microseconds are exactly zero
+// and otherwise always emits exactly 6 digits — never any other precision.
+//
+// This is not a cosmetic choice: `hermes hooks doctor` (hermes_cli/hooks.py)
+// compares its own freshly-recomputed mtime against the ScriptMtimeAtApproval
+// this function writes with a LEXICOGRAPHIC `mtime_now > mtime_at` on these
+// strings, not a parsed-time comparison. A format that always appends
+// ".000000Z" disagrees with hermes' own zero-microsecond spelling even when
+// the two instants are identical: "...17Z" sorts AFTER "...17.000000Z"
+// because 'Z' (0x5A) is greater than '.' (0x2E) in a byte-wise compare — a
+// permanent false "script modified since approval" on every doctor run
+// against a file (like /bin/sh) whose mtime carries no fractional component.
+//
+// Verified live (issue #1766): this machine's `/bin/sh` has a
+// zero-nanosecond mtime, and before this fix `hermes hooks doctor` reported
+// all three installed hooks as drifted despite nothing having changed —
+// `was 2026-04-30T19:33:17.000000Z, now 2026-04-30T19:33:17Z` for an
+// UNCHANGED mtime, the ".000000Z" half written by the pre-fix version of
+// this function and the "Z"-only half computed live by hermes itself.
+func formatScriptMtimeISO(t time.Time) string {
+	t = t.UTC()
+	if t.Nanosecond() == 0 {
+		return t.Format("2006-01-02T15:04:05Z")
+	}
+	return t.Format("2006-01-02T15:04:05.000000Z")
 }
 
 func approvalsEqual(a, b []allowlistEntry) bool {
