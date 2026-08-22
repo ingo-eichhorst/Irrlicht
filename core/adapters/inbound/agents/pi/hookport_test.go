@@ -4,10 +4,8 @@
 // hook-post pi` beacon, which resolves the daemon's address itself at fire
 // time.
 //
-// pi is the first ADAPTER on that route — before this it was exercised only
-// by the contract's own reference wiring
-// (contracttesting/hook_endpoint_addressfree_test.go), which #1721 named as
-// the intended outcome.
+// pi is the fourth adapter on that route, after geminicli, kirocli and vibe
+// — #1721's "adopted by nobody" describes the state at #1373, not today.
 //
 // The read-back obligations (2-4) go through HookInstaller.ReadEntries /
 // EndpointOfRaw (#1734), for a reason one step further out than the TOML

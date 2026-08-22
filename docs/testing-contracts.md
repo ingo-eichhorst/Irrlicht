@@ -164,9 +164,15 @@ below.
   JSON-shaped adapter needs no changes, while `vibe`'s hooks.toml — pure
   byte-range edits, never a decoded generic structure, matched by
   `bytes.Contains` rather than a named field — supplies both directly
-  (`vibe/hookport_test.go`).
+  (`vibe/hookport_test.go`). #1721 took that seam one step further out: pi's
+  install is not a document at all but a JavaScript file irrlicht writes into
+  pi's extension directory, so its `ReadEntries` returns the WHOLE FILE as
+  the single entry and `EndpointOfRaw` reads the beacon command back out of
+  it with the same anchored regexp the installer uses to decide staleness.
+  That an adapter with no config document at all fits the seam unchanged is
+  the strongest evidence #1734 generalised it far enough.
   Real adapters now exercise every route and entry shape this family grades —
-  `DeliveryAddressFree` (geminicli, kirocli, vibe), the flat `EntriesOf` shape
+  `DeliveryAddressFree` (geminicli, kirocli, vibe, pi), the flat `EntriesOf` shape
   kiro-cli's schema needs (#1716), and the raw-bytes TOML shape vibe's
   `hooktoml` needs (#1718) — but none of the three reference-wiring fixtures
   those adoptions were supposed to retire has been touched since. All three

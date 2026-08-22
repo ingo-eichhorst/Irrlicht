@@ -5,8 +5,69 @@ import (
 	"path/filepath"
 	"testing"
 
+	"irrlicht/core/domain/permission"
+	"irrlicht/core/internal/contracttesting"
 	"irrlicht/core/pkg/hookbeacon"
 )
+
+// hooksPermission returns the real declared hooks permission's closures.
+func hooksPermission(t *testing.T) (apply, remove func() error) {
+	t.Helper()
+	for _, p := range Agent().Permissions {
+		if p.Key == PermissionKeyHooks {
+			return p.Apply, p.Remove
+		}
+	}
+	t.Fatal("no hooks permission declared")
+	return nil, nil
+}
+
+// TestHooksPermission_IsGated wires the install-type flavour of the #797
+// contract: nothing is written while the permission is pending, granting
+// installs the extension, and denying removes it.
+//
+// The stake here is higher than for a config-entry adapter and worth naming.
+// What this permission's Apply writes is EXECUTABLE CODE that pi loads into
+// every session, so "nothing is exercised while pending or denied" is not
+// only a consent rule — a pre-consent daemon that ran Apply would have put
+// code inside the user's agent before the wizard was ever answered.
+func TestHooksPermission_IsGated(t *testing.T) {
+	piHome(t)
+	apply, remove := hooksPermission(t)
+
+	state := permission.StatePending
+	contracttesting.AssertPermissionGated(t, contracttesting.PermissionGate{
+		Key: PermissionKeyHooks,
+		// transcripts is the adapter's only other declared permission and is
+		// observe-kind, so it has no closure to drive: the key-isolation arm
+		// is INERT here and repeats the revoked arm exactly, the same
+		// situation copilot's, geminicli's and vibe's equivalent tests
+		// document. Install-type wirings hold their own permission's
+		// closures, so a wrong key is not representable — the arm is
+		// load-bearing at the live receiver (hooks_test.go), not here.
+		OtherKeys: []string{PermissionKeyTranscripts},
+		SetState:  contracttesting.OnlyKey(PermissionKeyHooks, func(s permission.State) { state = s }),
+		Exercise: func() {
+			switch state {
+			case permission.StateGranted:
+				if err := apply(); err != nil {
+					t.Fatalf("apply: %v", err)
+				}
+			case permission.StateDenied:
+				if err := remove(); err != nil {
+					t.Fatalf("remove: %v", err)
+				}
+			}
+		},
+		Observe: func() bool {
+			status, err := VerifyHooksInstalled()
+			if err != nil {
+				t.Fatalf("VerifyHooksInstalled: %v", err)
+			}
+			return status.Intact()
+		},
+	})
+}
 
 // piHome relocates $HOME and clears both pi overrides, returning the temp
 // home. Every test in this file WRITES, so isolation is not optional.

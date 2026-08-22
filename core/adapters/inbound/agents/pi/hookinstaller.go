@@ -55,9 +55,16 @@
 // not speak HTTP, does not parse an addr file, and does not know what a port
 // is — it spawns one command and writes JSON to its stdin.
 //
-// pi is the first adopter of the beacon route outside its own reference
-// wiring (core/internal/contracttesting/hook_endpoint_addressfree_test.go),
-// which #1721 named as the intended outcome.
+// #1721 records the beacon as "built, contract-covered, and adopted by
+// nobody". That was true when #1373 landed and is not true now — geminicli
+// (#1717), kirocli (#1716) and vibe (#1718) all declare
+// DeliveryAddressFree, as docs/testing-contracts.md's delivery bullet
+// already says. pi is the fourth adopter, not the first, and the reason to
+// pick the route here is its own rather than "nobody has": what it removes
+// is a chunk of the SHIPPED ARTIFACT. A URL-carrying install would need the
+// JavaScript to speak HTTP and to be rewritten in the user's agent every
+// time the daemon's port changed; naming the beacon means the file spawns
+// one command and knows nothing about addresses.
 package pi
 
 import (
