@@ -3,6 +3,7 @@ package agents
 import (
 	"testing"
 
+	"irrlicht/core/adapters/inbound/agents/antigravity"
 	"irrlicht/core/adapters/inbound/agents/claudecode"
 	"irrlicht/core/adapters/inbound/agents/codex"
 	"irrlicht/core/adapters/inbound/agents/copilot"
@@ -30,17 +31,18 @@ import (
 // while its route segment is "claudecode". That is why the map keys below are
 // written out literally rather than derived from the adapter constants.
 //
-// Scope, stated honestly: this pins the receivers that exist (nine as of
-// #1722's hermes row; #1721's pi row also added the mistral-vibe row #1718
-// never wrote — exactly the omission the paragraph below predicts, and the
-// whole of issue #1759). It cannot fail for a NEW receiver registered at a
+// Scope, stated honestly: this pins the receivers that exist (ten as of
+// #1723's antigravity row; #1721's pi row also added the mistral-vibe row
+// #1718 never wrote — exactly the omission the paragraph below predicts, and
+// the whole of issue #1759). It cannot fail for a NEW receiver registered at a
 // different prefix, because registerHookRoutes (core/cmd/irrlichd/startup.go)
 // is hand-wired with no registry to enumerate and this map is hand-written.
 // Whoever adds the next receiver adds its row here; until then the
 // convention is pinned, not enforced.
 func TestBeaconEndpointPathMatchesTheInstalledReceivers(t *testing.T) {
 	for segment, want := range map[string]string{
-		"claudecode": claudecode.HookEndpointPath,
+		"antigravity": antigravity.HookEndpointPath,
+		"claudecode":  claudecode.HookEndpointPath,
 		"codex":      codex.HookEndpointPath,
 		"copilot":    copilot.HookEndpointPath,
 		"gemini-cli": geminicli.HookEndpointPath,

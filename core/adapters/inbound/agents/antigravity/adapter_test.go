@@ -33,8 +33,26 @@ func TestAgentRegistration(t *testing.T) {
 	if src.SessionIDFromPath == nil {
 		t.Fatal("Source.SessionIDFromPath must be set (constant transcript filename)")
 	}
-	if len(a.Permissions) != 1 {
-		t.Fatalf("want exactly one permission, got %d", len(a.Permissions))
+	// Two permissions since #1723: the observe-kind transcripts read, and the
+	// modify-kind hooks install. Pinned by KEY rather than by count alone,
+	// because a count is satisfied by any two permissions and the pair is what
+	// three separate projections narrow on (agents.HookConfigs,
+	// agents.ManagedUserFiles, the #1740 contract-wiring tripwire).
+	wantKeys := map[string]bool{PermissionKeyTranscripts: false, PermissionKeyHooks: false}
+	for _, p := range a.Permissions {
+		if _, known := wantKeys[p.Key]; !known {
+			t.Errorf("unexpected permission %q", p.Key)
+			continue
+		}
+		wantKeys[p.Key] = true
+	}
+	for key, seen := range wantKeys {
+		if !seen {
+			t.Errorf("permission %q is not declared", key)
+		}
+	}
+	if len(a.Permissions) != len(wantKeys) {
+		t.Errorf("declared %d permissions, want %d", len(a.Permissions), len(wantKeys))
 	}
 }
 

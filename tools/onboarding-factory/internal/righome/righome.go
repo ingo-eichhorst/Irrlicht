@@ -86,6 +86,22 @@ type Row struct {
 // does not declare hooks (or does not exist) fails, exactly as a hooks adapter
 // in neither place does.
 var Unisolatable = map[string]string{
+	"antigravity": "no override exists, and the credential is not in $HOME-relative state at " +
+		"all. The customization root the hooks install writes (~/.gemini/config/hooks.json, " +
+		"antigravity/hookinstaller.go configDirName) and both brain stores " +
+		"(antigravity/adapter.go cliBrainDir/ideBrainDir) are $HOME-relative with no " +
+		"os.Getenv anywhere in core/adapters/inbound/agents/antigravity. JETSKI_APP_DATA_DIR " +
+		"was measured against a scratch directory with hooks.json at <dir>/, <dir>/config/ " +
+		"and <dir>/.gemini/config/ and agy still booted reporting `loaded 0 named hooks from " +
+		"0 hooks.json file(s)`, so it does not relocate the customization root. Even a row " +
+		"that DID move both trees would not produce a recordable session: agy's credential " +
+		"is a macOS login-keychain generic password (svce=\"gemini\", acct=\"antigravity\"), " +
+		"keychain resolution is derived from $HOME, and under any scratch HOME `security " +
+		"default-keychain` reports no default keychain and agy answers \"Please sign in to " +
+		"view available models\" — confirmed as a 2x2 against the token-free `agy models`, " +
+		"with a byte-complete clone of ~/.gemini not helping. So its hook recordings can " +
+		"only run against the real home, with the managed-file snapshot as the whole of the " +
+		"protection, exactly as for gemini-cli.",
 	"claudecode": "HALF-relocatable, which is worse than not at all: transcripts follow " +
 		"CLAUDE_CONFIG_DIR (claudecode/adapter.go transcriptsDir) but the hook config does " +
 		"not — claudeSettingsPath (claudecode/hookinstaller.go) joins os.UserHomeDir() with " +

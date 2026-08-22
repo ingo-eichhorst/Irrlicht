@@ -1,6 +1,7 @@
 package antigravity
 
 import (
+	"irrlicht/core/adapters/inbound/agents/hookjson"
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/permission"
 )
@@ -76,6 +77,55 @@ func Agent() agent.Agent {
 					"Also scans for running agy CLI processes and reads their working " +
 					"directory to bind a session to its process. Read-only — no file is " +
 					"ever modified. Toggling off stops all reading immediately.",
+			},
+			{
+				Key:             PermissionKeyHooks,
+				Kind:            permission.KindModify,
+				Title:           "Install turn-end hook",
+				FeatureUnlocked: "Authoritative turn-end detection",
+				// "1 hook entry" is what contracttesting's #1356 count arm
+				// reads, and it is the honest number: one handler, on one
+				// event. What Touches names in the same breath is the fact
+				// that makes this adapter different from every other hook
+				// install — the file is SHARED with the user's own /hooks
+				// command, so the wizard row (which is what most users read)
+				// has to say that irrlicht merges into it rather than owning
+				// it.
+				Touches: hookjson.EntriesTouched(displayHooksPath, installedHookEvents) +
+					" — a file you may also write with Antigravity's own /hooks command; " +
+					"your other named hooks are left untouched",
+				Detail: "Adds one named hook, \"" + hookName + "\", to " + displayHooksPath +
+					", which is the only file Antigravity loads hooks from and is shared " +
+					"with anything else that writes hooks — your own /hooks command " +
+					"included. Nothing else in the file is read, reordered or rewritten: " +
+					"other named hooks, other keys and your comments are preserved, and " +
+					"turning this off removes only irrlicht's own entry. The hook " +
+					"subscribes to exactly one event, " + hookjson.EventList(installedHookEvents) +
+					", which Antigravity fires when its execution loop finishes a turn. " +
+					"It runs `irrlichd hook-post antigravity`, a small command irrlicht " +
+					"ships, which reads the daemon's own published address at the moment " +
+					"the hook fires — so nothing in your config names a host or a port and " +
+					"it cannot go stale, and it never blocks Antigravity even when the " +
+					"daemon is not running. The handler prints a fixed empty result, which " +
+					"Antigravity reads as \"carry on\": irrlicht's monitoring channel is " +
+					"structurally unable to allow, deny, continue, interrupt or alter " +
+					"anything the agent does, and no event whose result could do so is " +
+					"installed. Only the conversation id is used, to attach the turn end " +
+					"to the session irrlicht is already watching. " +
+					hookjson.RequiresVersion("agy", minAgyVersion) +
+					" Toggling off removes the entry (also available via " +
+					"`irrlichd --uninstall-hooks`).",
+				Apply:  func() error { _, err := EnsureHooksInstalled(); return err },
+				Remove: func() error { _, err := UninstallHooks(); return err },
+				Writes: &agent.ManagedUserFile{
+					Path:      HooksPath,
+					Uninstall: UninstallHooks,
+					Verify:    VerifyHooksInstalled,
+					Version: &agent.VersionGate{
+						Min:   minAgyVersion,
+						Probe: []string{ProcessName, "--version"},
+					},
+				},
 			},
 		},
 	}
