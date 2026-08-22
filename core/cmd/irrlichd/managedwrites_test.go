@@ -732,9 +732,8 @@ func gradeExternalInstallerPackage(t *testing.T, id string, p agent.Permission, 
 			continue
 		}
 		key := pkgName + "." + name
-		if reason, exempt := notAManagedFilePath[key]; exempt {
+		if _, exempt := notAManagedFilePath[key]; exempt {
 			usedExemptions[key] = true
-			_ = reason
 			continue
 		}
 		t.Errorf("%s.%s is a package-level path resolver that %s declares in neither "+
