@@ -4,6 +4,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -153,6 +154,27 @@ type Config struct {
 	// default here too would be a second copy of 5m in a second package that
 	// has to agree with the first forever.
 	HookReverifyInterval time.Duration
+
+	// RecordAdapters narrows grant-all's auto-grant to these adapter identity
+	// names, via IRRLICHT_RECORD_ADAPTERS (comma-separated, e.g. "claudecode"
+	// or "claudecode,codex" for a cross-adapter cell). nil (unset) means no
+	// restriction — every declared permission is granted, matching behaviour
+	// before this existed.
+	//
+	// It exists because grant-all is otherwise all-or-nothing (issue #1769):
+	// lib/spawn-record-daemon.sh:87 sets IRRLICHT_PERMISSION_MODE=grant-all
+	// unconditionally for every recording, whatever adapter the run is
+	// actually about, and PermissionService.Start used to auto-grant EVERY
+	// agent's permissions — including hook installers for adapters this run
+	// has nothing to do with. claudecode is the sharpest case: it is one of
+	// righome.Unisolatable's structurally unrelocatable adapters (its
+	// claudeSettingsPath joins os.UserHomeDir() unconditionally), so recording
+	// e.g. a mistral-vibe cell repointed the operator's REAL
+	// ~/.claude/settings.json at the recording daemon for the run's whole
+	// duration — and since Claude Code reloads its settings file live rather
+	// than snapshotting it at session start, every already-running Claude
+	// Code session on the machine picked up the rig's endpoint too.
+	RecordAdapters []string
 }
 
 // Default returns a Config populated with production defaults, with every
@@ -178,6 +200,8 @@ func Default() Config {
 
 		HookSilentTurns:      envInt("IRRLICHT_HOOK_SILENT_TURNS", defaultHookSilentTurns),
 		HookReverifyInterval: envDuration("IRRLICHT_HOOK_REVERIFY_INTERVAL", 0, minHookReverifyInterval),
+
+		RecordAdapters: envStringList("IRRLICHT_RECORD_ADAPTERS"),
 	}
 }
 
@@ -223,4 +247,23 @@ func envFloat(key string, def float64) float64 {
 		}
 	}
 	return def
+}
+
+// envStringList reads a comma-separated env var into a trimmed, non-empty
+// slice. Unset, empty, or all-whitespace entries yield nil — the sentinel
+// RecordAdapters documents as "no restriction" — rather than an empty
+// non-nil slice, so callers can test len()==0 either way without caring
+// which one they got.
+func envStringList(key string) []string {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return nil
+	}
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }

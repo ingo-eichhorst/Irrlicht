@@ -140,6 +140,10 @@ func guardedConstructions() []guardedConstruction {
 			nilTolerant: map[string]string{
 				"factories": "dependency-supplied (nil means demo mode: no watcher ever starts) " +
 					"and only ever read — startWatching does one lookup, and a nil-map read is legal",
+				"recordAdapters": "nil IS the sentinel for 'no restriction' (issue #1769) — " +
+					"NewPermissionService only ever REPLACES it wholesale, via recordAdapterSet(deps.RecordAdapters) " +
+					"(which itself returns nil for an empty/absent list rather than an allocated empty map), " +
+					"and scopedOutByRecordAdapters only ever READS it (len() and index-read on a nil map are both legal)",
 			},
 			mustBeNonZero: map[string]string{
 				"detectInterval": "Start's time.NewTicker panics outright on a non-positive interval, " +

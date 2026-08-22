@@ -270,7 +270,11 @@ done
 # return means the socket never appeared (it has already said so on stderr); the
 # trap still drains the daemon and restores the config on the way out, so all
 # that is left here is the ERROR manifest the implement skill reads.
-spawn_record_daemon "$DAEMON" "$STAGING" "$ONBOARD_BIND" "$ONBOARD_HOME" \
+# ADAPTERS_CSV narrows grant-all's auto-grant to this run's own pair, so a
+# cross-adapter cell no longer auto-grants — and never Applies — every OTHER
+# adapter's hook installer too (claudecode chief among them: #1769).
+ADAPTERS_CSV="$(IFS=,; echo "${ADAPTERS[*]}")"
+spawn_record_daemon "$DAEMON" "$STAGING" "$ONBOARD_BIND" "$ONBOARD_HOME" "$ADAPTERS_CSV" \
   || { write_error_manifest "daemon_socket_missing"; exit 1; }
 
 # --- Launch every adapter's interactive driver CONCURRENTLY -------------

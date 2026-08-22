@@ -188,6 +188,27 @@ type PermissionService struct {
 	isolatedHome            string
 	allowSharedConfigWrites bool
 
+	// recordAdapters is the set IRRLICHT_RECORD_ADAPTERS names (issue #1769),
+	// or nil when unset. Only consulted in grant-all mode, by Start: it
+	// narrows the auto-grant of hook-install-shaped permissions
+	// (Kind==KindModify with a declared Writes) to the adapter(s) this run is
+	// actually recording, so a rig daemon spawned to record one adapter's
+	// cell no longer auto-grants — and therefore never runs the Apply that
+	// rewrites — every OTHER adapter's real shared config too. claudecode is
+	// the sharpest case (see config.Config.RecordAdapters for the full
+	// mechanism), but the restriction is adapter-agnostic: it applies to
+	// whichever agent's permission it is asked about.
+	//
+	// Deliberately scoped to modify-kind Writes-bearing permissions only:
+	// observe-kind permissions (transcript reading) are granted for every
+	// agent regardless of this set, so a co-resident agent that happens to
+	// be present in the same workspace stays visible via its own
+	// transcript/process signals — only the install-a-real-file side effect,
+	// and the consent state that gates its hook HTTP endpoint, are narrowed.
+	// nil (the zero value) means no restriction, matching every daemon that
+	// predates this field.
+	recordAdapters map[string]bool
+
 	factories map[string]WatcherFactory
 	hasLive   HasLiveProcessFunc
 
@@ -274,6 +295,11 @@ type PermissionServiceDeps struct {
 	// feed the grant-all shared-config guard (#1449) and are inert in ask mode.
 	IsolatedHome            string
 	AllowSharedConfigWrites bool
+
+	// RecordAdapters is config.Config.RecordAdapters, forwarded verbatim
+	// (issue #1769). Inert outside grant-all mode. See the recordAdapters
+	// field for the mechanism.
+	RecordAdapters []string
 }
 
 // newPermissionService allocates a PermissionService with every field the
@@ -320,6 +346,7 @@ func NewPermissionService(deps PermissionServiceDeps) *PermissionService {
 	s.hasLive = deps.HasLive
 	s.isolatedHome = deps.IsolatedHome
 	s.allowSharedConfigWrites = deps.AllowSharedConfigWrites
+	s.recordAdapters = recordAdapterSet(deps.RecordAdapters)
 	// permission.Set is itself map-backed and Put writes to it, so a nil Set —
 	// which a store may return alongside a nil error — is the same nil-map trap
 	// one level down. Keep the allocator's empty one rather than adopting it.
@@ -332,6 +359,21 @@ func NewPermissionService(deps PermissionServiceDeps) *PermissionService {
 // effectKey is the composite key for the effectErrs map.
 func effectKey(agentName, permKey string) string {
 	return agentName + "/" + permKey
+}
+
+// recordAdapterSet turns IRRLICHT_RECORD_ADAPTERS's name list into a lookup
+// set, or nil for an empty list. nil is the sentinel every recordAdapters
+// consumer reads as "no restriction" (issue #1769) — named here so that
+// contract lives in one place rather than being re-derived at each call site.
+func recordAdapterSet(names []string) map[string]bool {
+	if len(names) == 0 {
+		return nil
+	}
+	set := make(map[string]bool, len(names))
+	for _, n := range names {
+		set[n] = true
+	}
+	return set
 }
 
 // SetDetectionProbe overrides process-matcher detection for one agent —
@@ -359,12 +401,22 @@ func (s *PermissionService) Start(ctx context.Context) {
 	s.mu.Lock()
 	s.parent = ctx
 	if s.mode == config.PermissionModeGrantAll {
+		granted, scopedOut := 0, 0
 		for _, a := range s.agents {
 			for _, p := range a.Permissions {
+				if s.scopedOutByRecordAdapters(a.Identity.Name, p) {
+					scopedOut++
+					continue
+				}
 				s.set.Put(a.Identity.Name, p.Key, permission.StateGranted)
+				granted++
 			}
 		}
-		s.log.LogInfo("permissions", "", "IRRLICHT_PERMISSION_MODE=grant-all — all permissions granted, wizard suppressed")
+		msg := "IRRLICHT_PERMISSION_MODE=grant-all — all permissions granted, wizard suppressed"
+		if scopedOut > 0 {
+			msg = fmt.Sprintf("IRRLICHT_PERMISSION_MODE=grant-all — %d permission(s) granted, %d scoped out by IRRLICHT_RECORD_ADAPTERS (not this run's adapter), wizard suppressed", granted, scopedOut)
+		}
+		s.log.LogInfo("permissions", "", msg)
 	}
 	var effects []pendingEffect
 	for _, a := range s.agents {
@@ -382,6 +434,29 @@ func (s *PermissionService) Start(ctx context.Context) {
 	if runPoller {
 		go s.runDetectionLoop(ctx)
 	}
+}
+
+// scopedOutByRecordAdapters reports whether p, declared by agentName, must be
+// excluded from grant-all's auto-grant because IRRLICHT_RECORD_ADAPTERS names
+// a narrower set of adapters than agentName (issue #1769).
+//
+// Narrowed to the shape every hook installer, the CLAUDE.md instruction
+// block, and the kitty remote-control patch share — Kind==KindModify with a
+// declared Writes (a real, shared, user-owned file) — so an observe-kind
+// permission (transcript reading) or a modify permission that writes nothing
+// shared (agent.ControlPermission) is never scoped out: those don't repoint
+// anything at the recording daemon, and gating them would silence a
+// co-resident agent's own transcript/process visibility for no protective
+// gain (the "multiple-agents-same-workspace" scenario family this is
+// deliberately safe against).
+func (s *PermissionService) scopedOutByRecordAdapters(agentName string, p agent.Permission) bool {
+	if len(s.recordAdapters) == 0 {
+		return false
+	}
+	if p.Kind != permission.KindModify || p.Writes == nil {
+		return false
+	}
+	return !s.recordAdapters[agentName]
 }
 
 // anyPendingLocked reports whether any declared permission is still

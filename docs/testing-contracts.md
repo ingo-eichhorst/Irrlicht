@@ -630,6 +630,31 @@ below.
   `spawn-record-daemon.sh`, immediately beside the `snapshot_managed_files`
   call that earns the entitlement. **`ir:test-mac`'s separate mode therefore no
   longer installs hooks** — that was the damage, not a regression.
+  `IRRLICHT_ALLOW_SHARED_CONFIG_WRITES` is all-or-nothing across every
+  adapter, though, and that used to be the whole story: recording ANY
+  adapter's cell ran EVERY adapter's `Apply` under grant-all, including
+  claudecode's — which is one of `righome.Unisolatable`'s structurally
+  unrelocatable adapters, so it repointed the operator's real
+  `~/.claude/settings.json` at the recording daemon whatever the run was
+  actually about (issue #1769). `IRRLICHT_RECORD_ADAPTERS` (comma-separated
+  adapter names, `config.Config.RecordAdapters`) narrows `Start`'s grant-all
+  auto-grant itself — via `PermissionService.scopedOutByRecordAdapters`, a
+  sibling check to `sharedConfigRefusal` rather than a change to it — to only
+  the adapter(s) a run actually names, for modify-kind permissions that
+  declare a `Writes` file. Left unset it is a no-op (every daemon that
+  predates it is unaffected); `run-cell.sh` and `run-cell-multi.sh` set it
+  from their own `$ADAPTER` / `$ADAPTERS`. Because the same consent state
+  gates the hook HTTP endpoint (`admitHookRequest`), withholding a foreign
+  adapter's auto-grant also drops its hook POSTs rather than letting them
+  land in the recording —
+  `core/adapters/inbound/agents/claudecode/hooks_recordadapters_test.go`
+  proves that directly against the real hook handler. It is deliberately
+  scoped to modify-kind `Writes`-bearing permissions only: an observe-kind
+  permission (transcript reading) stays granted for every agent regardless,
+  so a co-resident agent that happens to share the workspace (the
+  `multiple-agents-same-workspace` scenario family) is still visible via its
+  own file-based signal — only the install-a-real-file side effect is
+  narrowed.
   All seven contract families pass by construction against a correct adapter
   — every route and entry shape the hook-endpoint family grades now has one
   (see that bullet above) — so their whole value is that they *can* fail.

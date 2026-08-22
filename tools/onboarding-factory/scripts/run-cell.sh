@@ -374,7 +374,11 @@ else
   # stop_record_daemon as the EXIT trap, and waits for its socket. A non-zero
   # return means the socket never appeared (it has already said so on stderr);
   # the trap still drains the daemon and restores the config on the way out.
-  spawn_record_daemon "$DAEMON" "$STAGING" "$ONBOARD_BIND" "$ONBOARD_HOME" || exit 1
+  # $ADAPTER narrows grant-all's auto-grant to this run's own adapter, so a
+  # cell recording e.g. mistral-vibe no longer auto-grants — and never Applies
+  # — every OTHER adapter's hook installer too (claudecode chief among them:
+  # #1769).
+  spawn_record_daemon "$DAEMON" "$STAGING" "$ONBOARD_BIND" "$ONBOARD_HOME" "$ADAPTER" || exit 1
 fi
 
 # The daemon's socket is bound BEFORE its grant-all Apply closures have written
