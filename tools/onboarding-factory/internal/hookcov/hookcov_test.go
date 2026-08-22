@@ -17,14 +17,13 @@ import (
 func TestDeclaredMatchesRegistry(t *testing.T) {
 	got := Declared()
 
-	// Exhaustive as of this commit: every registry adapter EXCEPT aider and
-	// antigravity declares a hooks permission. If one of those two gains one,
-	// this fails and the map is updated — that is the intended workflow, not
-	// an obstacle.
+	// Exhaustive as of this commit: every registry adapter EXCEPT aider
+	// declares a hooks permission. If aider gains one, this fails and the map
+	// is updated — that is the intended workflow, not an obstacle.
 	//
 	// copilot joined in #1378, gemini-cli in #1717, kiro-cli in #1716,
-	// mistral-vibe in #1718, pi in #1721, opencode in #1719 and hermes in
-	// #1722 — all of them are expected to report
+	// mistral-vibe in #1718, pi in #1721, opencode in #1719, hermes in #1722
+	// and antigravity in #1723 — all of them are expected to report
 	// StatusGap for a while: each declares hooks, but no recording carries a hook_received
 	// event yet, because landing the permission deliberately re-recorded
 	// nothing (the frozen sidecars are hook-free and the replay goldens had
@@ -33,9 +32,12 @@ func TestDeclaredMatchesRegistry(t *testing.T) {
 	// reason; #1721 re-recorded nothing either, and its own audit reports the
 	// rig gaps that would have to close first; #1722 re-recorded nothing
 	// either, and hermes' rig row is opt-in because a bare HERMES_HOME cannot
-	// authenticate). A GAP here is the honest reading of that, not a defect.
+	// authenticate; #1723 re-recorded nothing either, and antigravity has no
+	// rig row at all — righome.Unisolatable records the two measurements that
+	// make one impossible: no home override, and a login-keychain credential
+	// keyed off $HOME). A GAP here is the honest reading of that, not a defect.
 	want := map[string]bool{
-		"aider": false, "antigravity": false, "claudecode": true, "codex": true,
+		"aider": false, "antigravity": true, "claudecode": true, "codex": true,
 		"copilot": true, "gemini-cli": true, "hermes": true, "kiro-cli": true,
 		"mistral-vibe": true, "opencode": true, "pi": true,
 	}

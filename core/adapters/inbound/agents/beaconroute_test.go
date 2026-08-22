@@ -43,11 +43,11 @@ func TestBeaconEndpointPathMatchesTheInstalledReceivers(t *testing.T) {
 	for segment, want := range map[string]string{
 		"antigravity": antigravity.HookEndpointPath,
 		"claudecode":  claudecode.HookEndpointPath,
-		"codex":      codex.HookEndpointPath,
-		"copilot":    copilot.HookEndpointPath,
-		"gemini-cli": geminicli.HookEndpointPath,
-		"hermes":     hermes.HookEndpointPath,
-		"kiro-cli":   kirocli.HookEndpointPath,
+		"codex":       codex.HookEndpointPath,
+		"copilot":     copilot.HookEndpointPath,
+		"gemini-cli":  geminicli.HookEndpointPath,
+		"hermes":      hermes.HookEndpointPath,
+		"kiro-cli":    kirocli.HookEndpointPath,
 		// mistral-vibe was beacon-delivered from the day it shipped (#1718)
 		// but was never added here; found while adding pi's row (#1721).
 		"mistral-vibe": vibe.HookEndpointPath,
