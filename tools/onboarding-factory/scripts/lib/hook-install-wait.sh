@@ -55,7 +55,11 @@ hook_install_pending_paths() {
   local staging="$1" prefix="$2"
   local manifest="$staging/managed-file-backup/manifest"
   [[ -f "$manifest" ]] || return 0
+  # idx is the manifest's backup-slot number. Read into a variable rather than
+  # discarded so the three fields line up positionally with the manifest
+  # lib/managed-file-snapshot.sh writes; nothing here needs its value.
   local state idx path
+  # shellcheck disable=SC2034  # idx is a positional placeholder, see above
   while IFS=$'\t' read -r state idx path; do
     [[ "$state" == "absent" ]] || continue
     [[ "$path" == "$prefix"/* ]] || continue
