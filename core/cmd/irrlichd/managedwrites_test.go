@@ -667,19 +667,12 @@ func pathUnderDir(dir, p string) bool {
 // priorDefaultStatePath from kirocli's Writes.Also (see the PR body), which is
 // #1739 exactly.
 func TestExternalInstallerPackagesDeclareEveryPathResolver(t *testing.T) {
-	catalog := declaredConsentCatalog()
-	permByID := map[string]agent.Permission{}
-	for _, a := range catalog {
-		for _, p := range a.Permissions {
-			permByID[a.Identity.Name+"/"+p.Key] = p
-		}
-	}
-
 	if len(applyRunsAnExternalCLI) == 0 {
 		t.Skip("no permission is exempt from the runtime arm, so there is nothing for the " +
 			"static fallback to grade")
 	}
 
+	permByID := permissionsByID(declaredConsentCatalog())
 	usedExemptions := map[string]bool{}
 	for id := range applyRunsAnExternalCLI {
 		p, ok := permByID[id]
@@ -690,9 +683,27 @@ func TestExternalInstallerPackagesDeclareEveryPathResolver(t *testing.T) {
 			gradeExternalInstallerPackage(t, id, p, usedExemptions)
 		})
 	}
+	assertNoStaleResolverExemptions(t, usedExemptions)
+}
 
+// permissionsByID indexes the catalog by "<adapter>/<key>".
+func permissionsByID(catalog []agent.Agent) map[string]agent.Permission {
+	out := map[string]agent.Permission{}
+	for _, a := range catalog {
+		for _, p := range a.Permissions {
+			out[a.Identity.Name+"/"+p.Key] = p
+		}
+	}
+	return out
+}
+
+// assertNoStaleResolverExemptions is notAManagedFilePath's existence check: an
+// entry the walk never reached is an exemption for something that is no longer
+// there, which reads as coverage.
+func assertNoStaleResolverExemptions(t *testing.T, used map[string]bool) {
+	t.Helper()
 	for key, reason := range notAManagedFilePath {
-		if !usedExemptions[key] {
+		if !used[key] {
 			t.Errorf("notAManagedFilePath names %q (%q), which the walk did not find in any "+
 				"external-installer package — a stale exemption reads as coverage", key, reason)
 		}
@@ -862,21 +873,31 @@ func isPathResolverSignature(ft *ast.FuncType) bool {
 	if ft.TypeParams != nil && len(ft.TypeParams.List) > 0 {
 		return false
 	}
-	var results []string
-	for _, f := range ft.Results.List {
-		id, ok := f.Type.(*ast.Ident)
-		if !ok {
-			return false
+	results, ok := resultTypeNames(ft.Results)
+	return ok && len(results) == 2 && results[0] == "string" && results[1] == "error"
+}
+
+// resultTypeNames flattens a result list into one type name per RESULT, not per
+// field: `(a, b string)` is two results sharing one field, and counting fields
+// would read it as one. Reports false for any result whose type is not a plain
+// identifier — a pointer, a selector or a generic instantiation is not
+// `(string, error)` and must not be guessed at.
+func resultTypeNames(results *ast.FieldList) ([]string, bool) {
+	var out []string
+	for _, f := range results.List {
+		id, isIdent := f.Type.(*ast.Ident)
+		if !isIdent {
+			return nil, false
 		}
-		n := 1
-		if len(f.Names) > 1 {
-			n = len(f.Names)
+		n := len(f.Names)
+		if n == 0 {
+			n = 1 // an unnamed result is still one result
 		}
 		for i := 0; i < n; i++ {
-			results = append(results, id.Name)
+			out = append(out, id.Name)
 		}
 	}
-	return len(results) == 2 && results[0] == "string" && results[1] == "error"
+	return out, true
 }
 
 func containsString(haystack []string, needle string) bool {
