@@ -278,29 +278,36 @@ func hasOwnHookEvent(eventsPath, adapterSlug string) bool {
 	if err != nil {
 		return false
 	}
+	return anyHookEventOwnedBy(events, sessionAdapters(events), adapterSlug)
+}
 
-	// sessionAdapter is session_id -> the on-disk slug of the adapter a
-	// SIBLING event (never hook_received itself, which carries no Adapter)
-	// tagged that session with. Built once per recording rather than per
-	// hook_received event, so a recording with several hook events pays for
-	// one pass over the file.
-	sessionAdapter := make(map[string]string, len(events))
+// sessionAdapters maps session_id -> the on-disk slug of the adapter a
+// SIBLING event (never hook_received itself, which carries no Adapter)
+// tagged that session with. One pass over the whole recording, built once
+// regardless of how many hook_received events it holds.
+func sessionAdapters(events []lifecycle.Event) map[string]string {
+	owners := make(map[string]string, len(events))
 	for _, e := range events {
 		if e.Adapter != "" {
-			sessionAdapter[e.SessionID] = slug(e.Adapter)
+			owners[e.SessionID] = slug(e.Adapter)
 		}
 	}
+	return owners
+}
 
+// anyHookEventOwnedBy reports whether any hook_received event in events
+// belongs to adapterSlug, per owners (session_id -> adapter slug, from
+// sessionAdapters). Comma-ok on the lookup, not a plain map-read: an
+// unattributed session_id must read as "no match" via absence, never
+// coincide with adapterSlug="" (which never occurs here — callers always
+// pass a real on-disk slug — but the explicit check keeps that an invariant
+// rather than a map zero-value accident).
+func anyHookEventOwnedBy(events []lifecycle.Event, owners map[string]string, adapterSlug string) bool {
 	for _, e := range events {
 		if e.Kind != lifecycle.KindHookReceived {
 			continue
 		}
-		// Comma-ok, not a plain map-read: an unattributed session_id must
-		// read as "no match" via absence, never coincide with adapterSlug=""
-		// (which never occurs here — callers always pass a real on-disk
-		// slug — but the explicit check keeps that an invariant rather than
-		// a map zero-value accident).
-		if owner, ok := sessionAdapter[e.SessionID]; ok && owner == adapterSlug {
+		if owner, ok := owners[e.SessionID]; ok && owner == adapterSlug {
 			return true
 		}
 	}

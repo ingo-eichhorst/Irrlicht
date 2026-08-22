@@ -160,6 +160,32 @@ func TestCoverageRelativeRepoRoot(t *testing.T) {
 	}
 }
 
+// mkFile creates path (and its parent directories) with content — the one
+// low-level write every fixture helper below shares, so directory creation
+// and its error handling live in exactly one place.
+func mkFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// writeSingleRecordingCell lays down one cell —
+// replaydata/agents/<adapter>/scenarios/1-1_one, with one recording (r1)
+// whose events.jsonl is eventsJSONL — the minimum shape Coverage reads.
+// Shared by every hookcov test below that needs exactly one cell with one
+// recording, rather than each re-deriving the same directory-and-metadata
+// boilerplate its own way.
+func writeSingleRecordingCell(t *testing.T, root, adapter, eventsJSONL string) {
+	t.Helper()
+	cell := filepath.Join(root, "replaydata", "agents", adapter, "scenarios", "1-1_one")
+	mkFile(t, filepath.Join(cell, "metadata.json"), `{"scenario_id":"one"}`)
+	mkFile(t, filepath.Join(cell, "recordings", "r1", "events.jsonl"), eventsJSONL)
+}
+
 // writeHookFixture lays down one claudecode cell with one hook-bearing
 // recording — the minimum shape Coverage reads. The hook_received line is
 // preceded by a transcript_new for the same session_id carrying
@@ -170,18 +196,7 @@ func TestCoverageRelativeRepoRoot(t *testing.T) {
 // relativity).
 func writeHookFixture(t *testing.T, root string) {
 	t.Helper()
-	mk := func(path, content string) {
-		t.Helper()
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	cell := filepath.Join(root, "replaydata", "agents", "claudecode", "scenarios", "1-1_one")
-	mk(filepath.Join(cell, "metadata.json"), `{"scenario_id":"one"}`)
-	mk(filepath.Join(cell, "recordings", "r1", "events.jsonl"),
+	writeSingleRecordingCell(t, root, "claudecode",
 		`{"seq":1,"ts":"2026-05-01T00:00:00Z","kind":"transcript_new","session_id":"s","adapter":"claude-code"}`+"\n"+
 			`{"seq":2,"ts":"2026-05-01T00:00:01Z","kind":"hook_received","session_id":"s","hook_name":"PostToolUse"}`+"\n")
 }
@@ -230,18 +245,7 @@ func TestHermesCoexistHookNotCredited(t *testing.T) {
 // launder the exact bug #1768 is about.
 func TestUnattributableHookEventDoesNotCount(t *testing.T) {
 	root := t.TempDir()
-	mk := func(path, content string) {
-		t.Helper()
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	cell := filepath.Join(root, "replaydata", "agents", "hermes", "scenarios", "1-1_one")
-	mk(filepath.Join(cell, "metadata.json"), `{"scenario_id":"one"}`)
-	mk(filepath.Join(cell, "recordings", "r1", "events.jsonl"),
+	writeSingleRecordingCell(t, root, "hermes",
 		`{"seq":1,"ts":"2026-05-01T00:00:00Z","kind":"hook_received","session_id":"orphan","hook_name":"Stop"}`+"\n")
 
 	rep := Coverage(root, []string{"hermes"}, map[string]bool{"hermes": true})
@@ -262,18 +266,7 @@ func TestUnattributableHookEventDoesNotCount(t *testing.T) {
 // not a repaired one.
 func TestOwnHookEventStillCounts(t *testing.T) {
 	root := t.TempDir()
-	mk := func(path, content string) {
-		t.Helper()
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	cell := filepath.Join(root, "replaydata", "agents", "hermes", "scenarios", "1-1_one")
-	mk(filepath.Join(cell, "metadata.json"), `{"scenario_id":"one"}`)
-	mk(filepath.Join(cell, "recordings", "r1", "events.jsonl"),
+	writeSingleRecordingCell(t, root, "hermes",
 		`{"seq":1,"ts":"2026-05-01T00:00:00Z","kind":"transcript_new","session_id":"s1","adapter":"hermes"}`+"\n"+
 			`{"seq":2,"ts":"2026-05-01T00:00:01Z","kind":"hook_received","session_id":"s1","hook_name":"Stop"}`+"\n")
 
