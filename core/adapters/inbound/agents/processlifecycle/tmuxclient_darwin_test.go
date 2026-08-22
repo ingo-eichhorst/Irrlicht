@@ -4,6 +4,7 @@ package processlifecycle
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -360,6 +361,57 @@ func spawnPaneSleeperWithEnv(t *testing.T, env []string) int {
 // fallbacks, hostIdentity of the client, AdoptHostIdentity's put-back — is the
 // production code.
 
+// hostScanRetryDeadline bounds readLauncherEnvUntilHostKnown's retries. It has
+// to clear clientHostBudget by more than one multiple: a single
+// ReadLauncherEnv call can already spend the whole clientHostBudget when the
+// environment fails to answer inside it (below), so a deadline of
+// clientHostBudget itself — like fixturePollDeadline above, which is exactly
+// that value — would leave no room to ever retry.
+const hostScanRetryDeadline = 5 * clientHostBudget
+
+// readLauncherEnvUntilHostKnown is ReadLauncherEnv with one addition: when the
+// scan comes back unanswered, it clears socket's clientHostMemo entry and
+// retries, up to hostScanRetryDeadline.
+//
+// Measured (#1760): under enough scheduler load — a full
+// `go test ./core/... -race -count=1` run got there once in the wild, and a
+// loaded machine reproduces it in a handful of iterations — forking the fake
+// tmux script these fixtures stand in with can miss its own
+// clientHostBudget/shelloutTimeout ceiling before the script (a deterministic,
+// sub-10ms `/bin/sh -c printf`) ever gets scheduled to run. hostKnown then
+// reads false in exactly the shape #1492/#1529 already document as correct: a
+// scan (or a candidate) that could not be read inside its budget answers
+// (nil, false), never a false detach. That is the code working as designed,
+// not a defect in it — the defect was in this file, which asserted the scan
+// always completes inside one clientHostBudget on whatever machine happens to
+// be running the test, a guarantee the production contract never makes.
+//
+// A same-process retry cannot just call ReadLauncherEnv again: clientHostMemo
+// (#1514) memoizes a non-answer for clientHostCacheTTL (5s, longer than
+// clientHostBudget itself), so a second call within that window would replay
+// the very timeout being retried rather than re-probing. forgetTmuxClientMemo
+// is what makes the retry a retry instead of an echo.
+//
+// This is the same shape as every other awaitOrFail caller in this package
+// (waitForLauncherEnv, waitForReparentToInit, #1586): an environmental
+// precondition a loaded machine can miss on the first try, polled instead of
+// asserted once — applied here to a one-shot probe with a side effect rather
+// than a pure readiness check.
+func readLauncherEnvUntilHostKnown(t *testing.T, pid int, socket string) (l *session.Launcher, hostKnown bool) {
+	t.Helper()
+	awaitOrFail(t, func() (bool, string) {
+		l, hostKnown = ReadLauncherEnv(pid)
+		if !hostKnown {
+			forgetTmuxClientMemo(socket)
+			return false, fmt.Sprintf("pid %d: scan unanswered (killed by, or never scheduled inside, its budget)", pid)
+		}
+		return true, fmt.Sprintf("pid %d: scan answered", pid)
+	}, fixturePollInterval, hostScanRetryDeadline,
+		"the scan is a deterministic fake with nothing to legitimately wait for — an unanswered read here is "+
+			"the OS failing to schedule a trivial subprocess in time, not evidence about the code under test")
+	return l, hostKnown
+}
+
 // TestReadLauncherEnv_Tmux_AttachedClientIsTheHost is the green half of
 // #1501's defect. Measured live before the fix, against a real tmux 3.6a
 // server with a client attached: the pane resolved to
@@ -383,7 +435,7 @@ func TestReadLauncherEnv_Tmux_AttachedClientIsTheHost(t *testing.T) {
 		"TMUX_PANE=%17",
 	})
 
-	l, hostKnown := ReadLauncherEnv(agentPID)
+	l, hostKnown := readLauncherEnvUntilHostKnown(t, agentPID, socket)
 	if l == nil {
 		t.Fatal("expected non-nil launcher")
 	}
@@ -419,7 +471,7 @@ func TestReadLauncherEnv_Tmux_DetachedResolvesNoHost(t *testing.T) {
 		"KITTY_WINDOW_ID=42",
 	})
 
-	l, hostKnown := ReadLauncherEnv(agentPID)
+	l, hostKnown := readLauncherEnvUntilHostKnown(t, agentPID, socket)
 	if l == nil {
 		t.Fatal("expected non-nil launcher (the pane address is still identity)")
 	}
