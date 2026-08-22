@@ -2,9 +2,15 @@
 # drive-pi.sh — run one scenario against the pi CLI headlessly.
 #
 # Pi's `--session <UUID>` resumes an existing session; we cannot
-# pre-assign a UUID for a fresh session. We also can't redirect with
-# `--session-dir` because the daemon's fswatcher only watches the
-# default $HOME/.pi/agent/sessions tree.
+# pre-assign a UUID for a fresh session.
+#
+# WHERE the session lands is not fixed to the operator's home: since #1721 the
+# pi adapter resolves its watched tree from $PI_CODING_AGENT_SESSION_DIR, then
+# $PI_CODING_AGENT_DIR, then the home default — so this driver resolves it the
+# same way, through sessions-dir.sh, rather than assuming the last of the
+# three. The older claim here ("the daemon's fswatcher only watches the
+# default $HOME tree") stopped being true then, and the driver believing it
+# was what made the rig's own pi home row unusable.
 #
 # Strategy:
 #   1. touch a marker file before launching pi
@@ -42,7 +48,12 @@ PROMPT="$5"
 
 mkdir -p "$STAGING"
 DRIVER_LOG="$STAGING/driver.log"
-PI_SESSIONS_DIR="$HOME/.pi/agent/sessions"
+# Where pi will WRITE this run's transcript, resolved the way pi and the pi
+# adapter both resolve it. Hardcoding $HOME here is what made the rig's own
+# PI_CODING_AGENT_DIR row unusable — see sessions-dir.sh's header.
+# shellcheck source=sessions-dir.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sessions-dir.sh"
+PI_SESSIONS_DIR="$(pi_sessions_dir)"
 
 # Marker scopes the post-run `find -newer` to this invocation.
 # mkdir handles the case where the user has never run pi.

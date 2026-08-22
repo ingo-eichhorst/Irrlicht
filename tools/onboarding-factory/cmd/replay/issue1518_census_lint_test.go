@@ -104,20 +104,44 @@ type censusFigureExemption struct {
 // coincidentalCensusFigures is every site in this package where the check fires
 // on a number that is not a census figure.
 //
-// All three are rows of a committed measurement table whose surrounding prose
+// All of them are rows of a committed measurement table whose surrounding prose
 // already declares itself historical, which is why the reason is checkable
 // rather than a matter of taste. A rule skipping table-shaped comment lines
-// would remove all three and was rejected: it would also blind the check to a
-// real figure quoted in a table, and three reasons a reader can verify are
-// cheaper than one rule they cannot.
+// would remove all of them and was rejected: it would also blind the check to a
+// real figure quoted in a table, and reasons a reader can verify are cheaper
+// than one rule they cannot.
 var coincidentalCensusFigures = []censusFigureExemption{
 	{
 		File:   "replay_sidecar.go",
-		Marker: "+ 2ms cluster window",
-		Reason: "the divergent column of a REJECTED cluster-window configuration " +
-			"in #1478's calibration table. The block above it says the columns " +
-			"'no longer equal the live gate's figures' and to read the table as a " +
-			"comparison between rows. It coincides with Divergent.",
+		Marker: "+ narrowing #329's guard (rejected)",
+		Reason: "the divergent column of a REJECTED draft in #1478's first " +
+			"calibration table. The prose above that table says its shipped row " +
+			"'will silently stop being' current the first time replay fidelity " +
+			"moves, and names censusOfTheCommittedCatalog as the live value. It " +
+			"coincides with Divergent.",
+	},
+	{
+		File:   "replay_sidecar.go",
+		Marker: "+ readBoundaryFor (shipped)",
+		Reason: "the divergent column of the SHIPPED row of that same first " +
+			"table — a snapshot taken on the day it was written, which the prose " +
+			"above it says in as many words. It coincides with Divergent.",
+	},
+	{
+		File:   "replay_sidecar.go",
+		Marker: "#1476 as shipped",
+		Reason: "the divergent column of the baseline row of #1478's SECOND " +
+			"calibration table. The block above it says the columns 'no longer " +
+			"equal the live gate's figures' and to read the table as a comparison " +
+			"between rows. It coincides with Divergent.",
+	},
+	{
+		File:   "timing_drift.go",
+		Marker: "10-100ms",
+		Reason: "a bucket count in #1480's measured |delta| distribution, which " +
+			"the prose above it says is 'deliberately NOT refreshed as the catalog " +
+			"grows' and is quoted 'as of that measurement, not as a current count'. " +
+			"It coincides with PairedButUngraded.",
 	},
 }
 
@@ -152,6 +176,15 @@ var coincidentalCensusFigures = []censusFigureExemption{
 // suppressing anything and was deleted, the 69ms row stopped colliding and lost
 // its entry again, and the 2ms row kept one while swapping which field it
 // shadows. Four runs, both signs, one table that has still never moved.
+//
+// #1770 is the fifth run and it moves the two fields in the same direction
+// again, by one apiece, on opencode's and pi's first hook-bearing recordings.
+// The collisions moved with them one more time and did NOT stay put: the 2ms
+// row stopped suppressing anything and was deleted per this check's own advice,
+// the two rows of the FIRST calibration table started colliding and gained
+// entries, the baseline row of the second table gained one, and the histogram
+// bucket in timing_drift.go regained the one #1735 deleted. Five runs now, both
+// signs, and neither table has ever moved.
 //
 // No figure is quoted in this paragraph, deliberately: the first draft of it did
 // quote them and this very check reported five sites, in its own exemption file.

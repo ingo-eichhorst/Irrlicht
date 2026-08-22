@@ -224,14 +224,28 @@ run_live() {
   # healthy and hook-free, with nothing anywhere saying why — the exact failure
   # #1735 measured for mistral-vibe.
   #
-  # Empty is the same as unset for the beacon (fixedPortOf("") does not match),
-  # so passing it unconditionally is safe when the rig set nothing.
+  # XDG_CONFIG_HOME is the plugin half, and it is the same half-wired lever in
+  # its own right. opencode composes its config dir as
+  # join($XDG_CONFIG_HOME || ~/.config, "opencode") and auto-discovers
+  # plugin/*.js there; irrlicht's installer resolves the SAME variable
+  # (opencode/hookinstaller.go's configHomeEnvVar). opencode has no rig-home
+  # row — agent-home.sh's header says why: its data dir hangs off a SECOND
+  # variable — so the rig never sets this for the operator, but an operator who
+  # DOES export it to isolate the plugin install must have it reach the pane
+  # too. Without this prefix the daemon writes the plugin into the scratch
+  # config dir and the pane's opencode reads the operator's real one, so the
+  # recording comes back hook-free with nothing saying why.
+  #
+  # Empty is the same as unset for both readers (opencode's `||` falls through
+  # on an empty string, and the beacon's fixedPortOf("") does not match), so
+  # passing them unconditionally is safe when the rig set neither.
   #
   # `env` rather than a wrapper shell on purpose: env execs opencode IN PLACE,
   # so the pane process is still opencode itself and oc_opencode_pid's primary
   # lookup below keeps working.
   tmux new-session -d -s "$session" -x 200 -y 50 -c "$RUN_CWD" \
-    env "IRRLICHT_BIND_ADDR=${IRRLICHT_BIND_ADDR:-}" "opencode" \
+    env "IRRLICHT_BIND_ADDR=${IRRLICHT_BIND_ADDR:-}" \
+        "XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-}" "opencode" \
     >>"$DRIVER_LOG.stdout" 2>>"$DRIVER_LOG.stderr"
   # Always tear the TUI down, even on an error/timeout exit below.
   trap 'tmux kill-session -t "$session" 2>/dev/null || true' EXIT
@@ -589,11 +603,14 @@ run_live() {
     tmux kill-session -t "$session" 2>/dev/null || true
     sleep 1
     echo "[driver] live restart: relaunching opencode TUI (tmux=$session, cwd=$RUN_CWD)" >&2
-    # Same IRRLICHT_BIND_ADDR reasoning as the initial launch above — a
-    # relaunched pane that dropped it would post the rest of the recording's
-    # hooks to the production daemon.
+    # Same IRRLICHT_BIND_ADDR and XDG_CONFIG_HOME reasoning as the initial
+    # launch above — a relaunched pane that dropped either would post the rest
+    # of the recording's hooks to the production daemon, or read a different
+    # opencode config directory than the one the daemon installed the plugin
+    # into, for the remainder of the run.
     tmux new-session -d -s "$session" -x 200 -y 50 -c "$RUN_CWD" \
-      env "IRRLICHT_BIND_ADDR=${IRRLICHT_BIND_ADDR:-}" "opencode" \
+      env "IRRLICHT_BIND_ADDR=${IRRLICHT_BIND_ADDR:-}" \
+          "XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-}" "opencode" \
       >>"$DRIVER_LOG.stdout" 2>>"$DRIVER_LOG.stderr"
     # Re-wait the input affordance before any subsequent send (same readiness
     # gate as the initial launch; opencode swallows keystrokes during boot).
