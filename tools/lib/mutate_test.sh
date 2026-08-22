@@ -166,6 +166,98 @@ assert_eq "exits 0 against an anchor containing [ ] and *" "0" "$MUTATE_RC"
 assert_contains "the glob-metacharacter mutation actually landed and was observed" $'\n1\n' $'\n'"$MUTATE_OUTPUT"$'\n'
 
 echo ""
+echo "== every content-reading awk invocation is pinned to LC_ALL=C (static regression pin) =="
+# Review finding (#1750): under a UTF-8 locale, GNU awk's length()/index()/
+# substr() count Unicode CODEPOINTS, not bytes, so any awk invocation that
+# measures or matches file content by byte must run under LC_ALL=C to agree
+# with `wc -c`. This assertion is deliberately environment-INDEPENDENT (it
+# greps the source, it does not run anything) so it catches a regression on
+# every machine regardless of which `awk` happens to be on PATH — the live
+# gawk-forced case right below this one is the version that can only run
+# where gawk is actually installed.
+lc_all_c_awk_count=$(grep -v '^[[:space:]]*#' "$MUTATE_SH" | grep -c 'LC_ALL=C.*awk')
+assert_eq "exactly 3 content-reading awk calls are pinned to LC_ALL=C (byte count, count-guard, apply)" "3" "$lc_all_c_awk_count"
+
+echo ""
+echo "== the same LC_ALL=C fix, exercised live under a real gawk + UTF-8 locale =="
+if command -v gawk >/dev/null 2>&1; then
+  repo="$(new_repo)"
+  # An em dash is 3 bytes in UTF-8 but ONE Unicode codepoint — measured
+  # directly (gawk 5.4.1, en_US.UTF-8): length() on a string containing one
+  # returns a count 2 SHORTER than `wc -c`, which is exactly what would trip
+  # mutate.sh's byte-parity guard (exit 3, "possible NUL byte") on a
+  # perfectly valid file if any awk call here were missing its LC_ALL=C.
+  printf '// em dash — right here, this repo'"'"'s own prose style\npackage foo\n' > "$repo/prose.go"
+  git -C "$repo" add prose.go
+  git -C "$repo" commit -q -m "add a file styled like this repo's own docs"
+  # A private PATH directory fronts `awk` with a symlink to the real gawk
+  # binary, so mutate.sh's own bare `awk` calls resolve to gawk specifically
+  # — reproducing the exact interpreter the review finding was about,
+  # regardless of which awk happens to be this machine's default.
+  gawk_front_dir="$(mktemp -d "${TMPDIR:-/tmp}/mutate-test-gawk.XXXXXX")"
+  SCRATCH_DIRS+=("$gawk_front_dir")
+  ln -s "$(command -v gawk)" "$gawk_front_dir/awk"
+  MUTATE_OUTPUT="$(cd "$repo" && PATH="$gawk_front_dir:$PATH" LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 \
+    "$MUTATE_SH" prose.go "package foo" "package bar" true 2>&1)"
+  MUTATE_RC=$?
+  assert_eq "succeeds against a multi-byte file under gawk + a UTF-8 locale" "0" "$MUTATE_RC"
+  if [[ "$MUTATE_RC" -ne 0 ]]; then
+    echo "    (mutate.sh output was: $MUTATE_OUTPUT)"
+  fi
+else
+  echo "  SKIP: gawk not found on PATH — cannot exercise the codepoint-vs-byte bug live on this machine." \
+       "The static pin above still catches a regression in the fix; install gawk to also run this case live."
+fi
+
+echo ""
+echo "== TOCTOU: the file changing between the count-read and the apply-read is refused, not silently corrupted =="
+# Review finding (#1750): the apply step re-reads the file independently of
+# the count guard, and originally spliced on whatever it found with no check
+# — if the anchor had stopped matching in between (a real concurrent writer),
+# it would have silently written `replacement` onto the file's content MINUS
+# its own first len(anchor) bytes. Reproducing a genuine data race would be a
+# flaky, timing-dependent test (this repo's own convention is to poll, never
+# sleep-and-hope, for exactly this reason) — so instead this fakes the COUNT
+# read lying, which produces the identical observable state (count says 1,
+# the real file has 0 matches) without any timing dependency at all. Only the
+# count-guard's own awk PROGRAM is intercepted (matched by its distinctive
+# `print n` tail); the byte-parity check and the apply step's real awk both
+# still run for real, so this exercises mutate.sh's actual apply-time guard,
+# not a stub standing in for it.
+real_awk="$(command -v awk)"
+fake_awk_dir="$(mktemp -d "${TMPDIR:-/tmp}/mutate-test-fakeawk.XXXXXX")"
+SCRATCH_DIRS+=("$fake_awk_dir")
+cat > "$fake_awk_dir/awk" <<EOF
+#!/usr/bin/env bash
+for a in "\$@"; do
+  case "\$a" in
+    *'print n'*) echo 1; exit 0 ;;
+  esac
+done
+exec "$real_awk" "\$@"
+EOF
+chmod +x "$fake_awk_dir/awk"
+
+repo="$(new_repo)"
+MUTATE_OUTPUT="$(cd "$repo" && PATH="$fake_awk_dir:$PATH" \
+  "$MUTATE_SH" sample.go "text truly absent from sample.go" "replacement" true 2>&1)"
+MUTATE_RC=$?
+assert_eq "refuses with the dedicated TOCTOU exit code" "10" "$MUTATE_RC"
+assert_contains "names the two-read discrepancy" "no longer matches while applying" "$MUTATE_OUTPUT"
+assert_eq "wrote nothing — the file is untouched" "$(git -C "$repo" show HEAD:sample.go)" "$(cat "$repo/sample.go")"
+assert_eq "left the repo clean" "" "$(cd "$repo" && git status --porcelain)"
+
+echo ""
+echo "== precondition: outside a git repo reports THAT, not a false 'dirty tree' diagnosis =="
+non_repo_dir="$(mktemp -d "${TMPDIR:-/tmp}/mutate-test-norepo.XXXXXX")"
+SCRATCH_DIRS+=("$non_repo_dir")
+echo "package foo" > "$non_repo_dir/sample.go"
+MUTATE_OUTPUT="$(cd "$non_repo_dir" && "$MUTATE_SH" sample.go "package foo" "package bar" true 2>&1)"
+MUTATE_RC=$?
+assert_contains "names the real cause (not a git repository), not a dirty-tree misdiagnosis" "not inside a git repository" "$MUTATE_OUTPUT"
+[[ "$MUTATE_RC" -ne 0 ]] && pass "refuses (nonzero exit)" || fail "refuses (nonzero exit)" "nonzero" "0"
+
+echo ""
 echo "== STALE: a deliberate no-match row must be reported as STALE, never pass silently (#1390, #1450) =="
 repo="$(new_repo)"
 run_mutate "$repo" "this text does not occur anywhere in sample.go" "replacement" true

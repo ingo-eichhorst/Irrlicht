@@ -72,9 +72,10 @@
 #   3  could not read <file> byte-for-byte (embedded NUL, or the 0x01 byte
 #      this tool reserves as an internal record separator — measured, not
 #      assumed: file size and what was read disagree).
-#   4  precondition refused — `git status --porcelain` was already non-empty
-#      BEFORE mutating. The post-restore emptiness check could prove nothing
-#      against a tree that started dirty; commit or clean up first.
+#   4  precondition refused — not inside a git repository, or `git status
+#      --porcelain` was already non-empty BEFORE mutating. The post-restore
+#      emptiness check could prove nothing against a tree that started dirty
+#      (or wasn't a tree at all); commit or clean up first.
 #   5  <anchor> is empty. An empty anchor "matches everywhere" and asserts
 #      nothing.
 #   6  <replacement> is byte-identical to <anchor> — a no-op mutation.
@@ -84,6 +85,9 @@
 #      restore itself did not leave the tree clean; this should be
 #      unreachable, and reaching it is reported loudly rather than papered
 #      over.
+#  10  <file> changed between the count read and the apply read (a narrow
+#      TOCTOU window) — the anchor no longer matched on the second read.
+#      Nothing was written; this should be very rare and is safe to retry.
 #
 # Implementation notes:
 #   - Literal text, not regex/glob. <anchor>/<replacement> are matched and
@@ -97,6 +101,13 @@
 #     the latter would also silently normalise a missing final newline.
 #     Guard #3 above is what keeps this safe if that byte, or a NUL, actually
 #     shows up: the read is measured against `wc -c`, not assumed correct.
+#   - Every awk invocation that measures or matches by BYTE runs under
+#     `LC_ALL=C`, not just the `wc -c` it must agree with. Under a UTF-8
+#     locale, gawk's length()/index()/substr() count Unicode codepoints —
+#     measured: a file with one 3-byte em dash (this repo's own prose style)
+#     reads as 2 bytes short under a UTF-8 locale's gawk, which would trip
+#     guard #3 as a false "possible NUL byte" refusal on a perfectly valid
+#     file. `LC_ALL=C` makes every byte its own "character" again.
 set -uo pipefail
 
 self_help() {
@@ -141,16 +152,32 @@ fi
 # 0x01 byte this tool reserves as its own record separator — either way,
 # proceeding would silently operate on a truncated/garbled read.
 FILE_BYTES="$(LC_ALL=C wc -c < "$FILE" | tr -d ' ')"
-SLURPED_LEN="$(awk 'BEGIN{RS="\x01"}{print length($0)}' "$FILE")"
+# LC_ALL=C on every awk invocation below, not just this one — measured
+# (review finding, #1750): under a UTF-8 locale, gawk's length()/index()/
+# substr() count Unicode CODEPOINTS, not bytes, so a file containing any
+# multi-byte character (this repo's own prose uses em dashes throughout)
+# would read as shorter than `wc -c` and trip this guard as a false
+# "possible NUL byte" refusal. `C` makes every byte its own "character",
+# which is what the byte-count comparison above actually needs.
+SLURPED_LEN="$(LC_ALL=C awk 'BEGIN{RS="\x01"}{print length($0)}' "$FILE")"
 if [[ "$SLURPED_LEN" != "$FILE_BYTES" ]]; then
   refuse 3 "could not read '$FILE' byte-for-byte: it is $FILE_BYTES bytes but this tool's exact-byte read measured '$SLURPED_LEN' — likely an embedded NUL byte or this tool's own 0x01 sentinel. Refusing rather than risk a corrupted mutation."
 fi
 
-# ─── Guard: precondition — the tree must already be clean ──────────────────
+# ─── Guard: precondition — a real git repo, and already clean ──────────────
 # The postcondition below (git status --porcelain empty AFTER restoring) can
 # only mean something if it was ALSO empty before this run touched anything —
 # otherwise pre-existing changes elsewhere in the tree make the postcondition
 # vacuous, and a genuine restore failure could hide behind them.
+#
+# Checked as its OWN step, separately from the porcelain read below: `git
+# status --porcelain` outside a repo prints "fatal: not a git repository..."
+# on stderr, which the original version of this guard folded into the same
+# message as a dirty tree — a wrong diagnosis (review finding, #1750): the
+# tree isn't dirty, there IS no tree.
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  refuse 4 "'$PWD' is not inside a git repository — this tool needs one, to assert git status --porcelain is empty before and after mutating"
+fi
 PRE_STATUS="$(git status --porcelain 2>&1)"
 if [[ -n "$PRE_STATUS" ]]; then
   refuse 4 "git status --porcelain is already non-empty BEFORE mutating anything. Commit or clean up first — a tree that starts dirty can never prove the post-restore emptiness check meant anything:
@@ -166,7 +193,7 @@ if [[ "$ANCHOR" == "$REPLACEMENT" ]]; then
 fi
 
 # ─── Guard: the anchor occurs EXACTLY ONCE (#1390) ─────────────────────────
-COUNT="$(MUTATE_ANCHOR="$ANCHOR" awk '
+COUNT="$(MUTATE_ANCHOR="$ANCHOR" LC_ALL=C awk '
   BEGIN { RS = "\x01" }
   {
     content = $0
@@ -207,7 +234,13 @@ restore_file() {
 }
 trap restore_file EXIT
 
-MUTATE_ANCHOR="$ANCHOR" MUTATE_REPLACEMENT="$REPLACEMENT" awk '
+# Re-checks idx == 0 rather than trusting the COUNT guard above: this reads
+# the file a SECOND time, independently, and a review finding (#1750) noted
+# that a file changing between the two reads (a narrow but real TOCTOU
+# window) would otherwise splice `replacement` onto `substr(content, alen)`
+# with no warning — silently dropping the file's own first `alen` bytes.
+# Fails closed instead: refuses rather than writing anything.
+if ! MUTATE_ANCHOR="$ANCHOR" MUTATE_REPLACEMENT="$REPLACEMENT" LC_ALL=C awk '
   BEGIN { RS = "\x01" }
   {
     content = $0
@@ -215,11 +248,18 @@ MUTATE_ANCHOR="$ANCHOR" MUTATE_REPLACEMENT="$REPLACEMENT" awk '
     repl = ENVIRON["MUTATE_REPLACEMENT"]
     alen = length(anchor)
     idx = index(content, anchor)
+    if (idx == 0) {
+      print "mutate: internal — the anchor no longer matches on the apply read (the file changed between reads)" > "/dev/stderr"
+      exit 1
+    }
     prefix = substr(content, 1, idx - 1)
     suffix = substr(content, idx + alen)
     printf "%s", prefix repl suffix
   }
-' "$FILE" > "$BACKUP.mutated"
+' "$FILE" > "$BACKUP.mutated"; then
+  rm -f "$BACKUP.mutated"
+  refuse 10 "the anchor matched exactly once while counting but no longer matches while applying — '$FILE' changed between the two reads. Nothing was written; run again."
+fi
 cat "$BACKUP.mutated" > "$FILE"
 rm -f "$BACKUP.mutated"
 
