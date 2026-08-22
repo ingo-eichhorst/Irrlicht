@@ -55,17 +55,17 @@ hook_install_pending_paths() {
   local staging="$1" prefix="$2"
   local manifest="$staging/managed-file-backup/manifest"
   [[ -f "$manifest" ]] || return 0
-  # idx is the manifest's backup-slot number. Read into a variable rather than
-  # discarded so the three fields line up positionally with the manifest
-  # lib/managed-file-snapshot.sh writes; nothing here needs its value.
-  local state idx path
-  # shellcheck disable=SC2034  # idx is a positional placeholder, see above
-  while IFS=$'\t' read -r state idx path; do
+  # The manifest's middle field is a backup-slot number nothing here needs, so
+  # it is projected away rather than read into a variable that would then be
+  # unused — which is both a shellcheck SC2034 and a Sonar shelldre:S1481, and
+  # a disable comment for each is worse than not creating the variable.
+  local state path
+  while IFS=$'\t' read -r state path; do
     [[ "$state" == "absent" ]] || continue
     [[ "$path" == "$prefix"/* ]] || continue
     [[ -e "$path" ]] && continue
     printf '%s\n' "$path"
-  done < "$manifest"
+  done < <(awk -F'\t' '{ print $1 "\t" $3 }' "$manifest")
   return 0
 }
 
@@ -128,10 +128,23 @@ wait_for_hook_install() {
   # only the silent one is this lib's business. Printing it here is what stops
   # the operator debugging the wait instead of the version floor / auth error
   # that actually stopped the install (#1362, #1365).
+  #
+  # $bind is a loopback host:port for a daemon this rig started itself, and the
+  # daemon's local API is plain HTTP by design — there is no TLS listener to
+  # point at instead. shell:S5332 cannot resolve the variable to see that, so
+  # it is annotated, exactly as run-cell.sh's own permissions fetch is.
+  #
+  # The FILTER IS A VARIABLE so the curl stays ONE PHYSICAL LINE. That is not
+  # style: a NOSONAR annotation suppresses only the line it sits on, so a call
+  # split across a continuation carries the finding on the first line while the
+  # annotation rides the second. This file's first draft did exactly that and
+  # turned SonarCloud's security rating red — which is this lib's own
+  # half-wired-lever failure reproduced inside the fix for it. run-cell.sh
+  # carries the identical note above the fetch it learned it from.
   if [[ -n "$bind" ]]; then
+    local reasons_filter='[(.unapplied_grants // [])[] | select(.agent == $a) | "\(.key): \(.reason)"] | join("; ")'
     local reasons
-    reasons="$(curl -fsS --max-time 2 "http://$bind/api/v1/permissions" 2>/dev/null \
-      | jq -r --arg a "$adapter" '[(.unapplied_grants//[])[]|select(.agent==$a)|"\(.key): \(.reason)"]|join("; ")' 2>/dev/null || true)" # NOSONAR (shell:S5332) — loopback-only daemon API
+    reasons="$(curl -fsS --max-time 2 "http://$bind/api/v1/permissions" 2>/dev/null | jq -r --arg a "$adapter" "$reasons_filter" 2>/dev/null || true)" # NOSONAR (shell:S5332) — loopback-only daemon API, no TLS listener exists
     if [[ -n "$reasons" ]]; then
       echo "hook-install-wait:   the daemon names a refusal: $reasons" >&2 # NOSONAR (shell:S5332) — echoes the loopback response above
     else

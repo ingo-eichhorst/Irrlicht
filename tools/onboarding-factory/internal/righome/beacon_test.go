@@ -157,33 +157,60 @@ func TestScanBeaconPackageNamesEveryWrongShape(t *testing.T) {
 			},
 			wantErr: "parsing broken.go",
 		},
+		{
+			// The row that stops importsTheBeacon returning early. Map order is
+			// unspecified, so a scan that answered on the first beacon import
+			// it found would report this package as a clean beacon adapter or
+			// as an error depending on which file it happened to visit first —
+			// a check dropped nondeterministically, which is strictly worse
+			// than a check dropped always because it cannot be reproduced.
+			name: "a beacon import does not excuse a file that will not parse",
+			files: map[string]string{
+				"adapter.go": "package half\n\nconst AdapterName = \"half\"\n",
+				"hooks.go":   "package half\n\n" + beaconImport + "\n",
+				"broken.go":  "package half\n\nimport (\n",
+			},
+			wantErr: "parsing broken.go",
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			slug, uses, err := ScanBeaconPackage(tc.files)
-			if tc.wantErr == "" && err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
 			if tc.wantErr != "" {
-				if err == nil {
-					t.Fatalf("expected an error naming %q, got none (slug=%q uses=%v)", tc.wantErr, slug, uses)
-				}
-				// Naming a fragment of THIS check's own message, never
-				// accepting a bare failure: "the scan errored" and "the scan
-				// reported THIS" are different claims.
-				if !strings.Contains(err.Error(), tc.wantErr) {
-					t.Fatalf("error %q does not contain %q", err, tc.wantErr)
-				}
+				assertScanRefused(t, slug, uses, err, tc.wantErr)
 				return
 			}
-			if uses != tc.wantUses {
-				t.Errorf("usesBeacon = %v, want %v", uses, tc.wantUses)
-			}
-			if slug != tc.wantSlug {
-				t.Errorf("slug = %q, want %q", slug, tc.wantSlug)
-			}
+			assertScanReported(t, slug, uses, err, tc.wantSlug, tc.wantUses)
 		})
+	}
+}
+
+// assertScanRefused grades a row that must produce an error. It names a
+// FRAGMENT of the scan's own message and refuses a bare failure: "the scan
+// errored" and "the scan reported THIS" are different claims, and only the
+// second is evidence that the row reached the check it was written for.
+func assertScanRefused(t *testing.T, slug string, uses bool, err error, want string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("expected an error naming %q, got none (slug=%q uses=%v)", want, slug, uses)
+	}
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("error %q does not contain %q", err, want)
+	}
+}
+
+// assertScanReported grades a row that must succeed, on both returned facts.
+func assertScanReported(t *testing.T, slug string, uses bool, err error, wantSlug string, wantUses bool) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if uses != wantUses {
+		t.Errorf("usesBeacon = %v, want %v", uses, wantUses)
+	}
+	if slug != wantSlug {
+		t.Errorf("slug = %q, want %q", slug, wantSlug)
 	}
 }
 

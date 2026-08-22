@@ -309,34 +309,79 @@ const DaemonAddrEnvVar = "IRRLICHT_BIND_ADDR"
 // which is the last place to drop a check.
 func ScanBeaconPackage(files map[string]string) (slug string, usesBeacon bool, err error) {
 	fset := token.NewFileSet()
-	for name, src := range files {
-		if strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		f, perr := parser.ParseFile(fset, name, src, parser.ImportsOnly|parser.SkipObjectResolution)
-		if perr != nil {
-			return "", false, fmt.Errorf("parsing %s: %w", name, perr)
-		}
-		for _, imp := range f.Imports {
-			path, uerr := strconv.Unquote(imp.Path.Value)
-			if uerr == nil && path == BeaconPackagePath {
-				usesBeacon = true
-			}
-		}
+	production := productionSources(files)
+
+	usesBeacon, err = importsTheBeacon(fset, production)
+	if err != nil || !usesBeacon {
+		return "", usesBeacon, err
 	}
-	if !usesBeacon {
-		return "", false, nil
-	}
-	for name, src := range files {
-		if strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		if s, ok := adapterNameConst(fset, name, src); ok {
-			return s, true, nil
-		}
+	if s, ok := declaredAdapterName(fset, production); ok {
+		return s, true, nil
 	}
 	return "", true, fmt.Errorf("a package importing %s declares no `const AdapterName` — "+
 		"its catalog slug cannot be derived and the rig cannot check its driver", BeaconPackagePath)
+}
+
+// productionSources drops the _test.go files, in one place rather than at each
+// of the two walks below — a package whose TESTS import the beacon while its
+// production code does not is not a beacon adapter, and two copies of that
+// filter is one copy that can stop matching.
+func productionSources(files map[string]string) map[string]string {
+	out := make(map[string]string, len(files))
+	for name, src := range files {
+		if !strings.HasSuffix(name, "_test.go") {
+			out[name] = src
+		}
+	}
+	return out
+}
+
+// importsTheBeacon reports whether any of these sources imports the beacon
+// package. It parses imports only, and an unparseable file is an ERROR rather
+// than a miss: a file it could not read is where it has the least idea what it
+// is looking at, which is the last place to drop a check.
+//
+// It walks EVERY source before answering, and does not stop at the first
+// beacon import it finds. That is deliberate and it is not an optimisation
+// being declined: map iteration order is unspecified, so an early return would
+// make "a package that imports the beacon AND has a file this cannot parse"
+// answer `(true, nil)` or `(false, err)` depending on which file came first —
+// a validator that silently drops a check, nondeterministically. Pinned by the
+// corpus row of the same name.
+func importsTheBeacon(fset *token.FileSet, sources map[string]string) (bool, error) {
+	found := false
+	for name, src := range sources {
+		f, err := parser.ParseFile(fset, name, src, parser.ImportsOnly|parser.SkipObjectResolution)
+		if err != nil {
+			return false, fmt.Errorf("parsing %s: %w", name, err)
+		}
+		if fileImports(f, BeaconPackagePath) {
+			found = true
+		}
+	}
+	return found, nil
+}
+
+// fileImports reports whether f imports path, under any alias.
+func fileImports(f *ast.File, path string) bool {
+	for _, imp := range f.Imports {
+		if got, err := strconv.Unquote(imp.Path.Value); err == nil && got == path {
+			return true
+		}
+	}
+	return false
+}
+
+// declaredAdapterName returns the first `const AdapterName` these sources
+// declare. Map iteration order is unspecified, which is harmless because a Go
+// package cannot declare the constant twice and still compile.
+func declaredAdapterName(fset *token.FileSet, sources map[string]string) (string, bool) {
+	for name, src := range sources {
+		if s, ok := adapterNameConst(fset, name, src); ok {
+			return s, true
+		}
+	}
+	return "", false
 }
 
 // adapterNameConst finds `const AdapterName = "<slug>"` at package scope.
@@ -351,22 +396,32 @@ func adapterNameConst(fset *token.FileSet, name, src string) (string, bool) {
 			continue
 		}
 		for _, spec := range gd.Specs {
-			vs, ok := spec.(*ast.ValueSpec)
-			if !ok {
-				continue
+			if s, ok := adapterNameInSpec(spec); ok {
+				return s, true
 			}
-			for i, ident := range vs.Names {
-				if ident.Name != "AdapterName" || i >= len(vs.Values) {
-					continue
-				}
-				lit, ok := vs.Values[i].(*ast.BasicLit)
-				if !ok || lit.Kind != token.STRING {
-					continue
-				}
-				if s, err := strconv.Unquote(lit.Value); err == nil {
-					return s, true
-				}
-			}
+		}
+	}
+	return "", false
+}
+
+// adapterNameInSpec pulls the AdapterName string out of one const spec, which
+// may declare several names at once (`const ( Other = "x"; AdapterName = "y" )`
+// arrives as separate specs, but `const a, AdapterName = "x", "y"` does not).
+func adapterNameInSpec(spec ast.Spec) (string, bool) {
+	vs, ok := spec.(*ast.ValueSpec)
+	if !ok {
+		return "", false
+	}
+	for i, ident := range vs.Names {
+		if ident.Name != "AdapterName" || i >= len(vs.Values) {
+			continue
+		}
+		lit, ok := vs.Values[i].(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			continue
+		}
+		if s, err := strconv.Unquote(lit.Value); err == nil {
+			return s, true
 		}
 	}
 	return "", false
