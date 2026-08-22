@@ -391,14 +391,26 @@ func adapterNameConst(fset *token.FileSet, name, src string) (string, bool) {
 		return "", false
 	}
 	for _, decl := range f.Decls {
-		gd, ok := decl.(*ast.GenDecl)
-		if !ok || gd.Tok != token.CONST {
-			continue
+		if s, ok := adapterNameInDecl(decl); ok {
+			return s, true
 		}
-		for _, spec := range gd.Specs {
-			if s, ok := adapterNameInSpec(spec); ok {
-				return s, true
-			}
+	}
+	return "", false
+}
+
+// adapterNameInDecl searches one top-level declaration. Split out so each of
+// the three functions in this chain walks exactly ONE level — file to decl,
+// decl to spec, spec to name. The nesting is real (a const block holds specs
+// and a spec holds names), so the only way to remove it is to let each level
+// name what it is walking.
+func adapterNameInDecl(decl ast.Decl) (string, bool) {
+	gd, ok := decl.(*ast.GenDecl)
+	if !ok || gd.Tok != token.CONST {
+		return "", false
+	}
+	for _, spec := range gd.Specs {
+		if s, ok := adapterNameInSpec(spec); ok {
+			return s, true
 		}
 	}
 	return "", false
