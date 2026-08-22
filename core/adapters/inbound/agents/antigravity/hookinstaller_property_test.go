@@ -211,10 +211,28 @@ func TestMergeProperty_ConvergesAfterAnArbitraryMutation(t *testing.T) {
 
 // --- assertions ---
 
+// reporter is the seam the two preservation assertions below report through.
+//
+// *testing.T satisfies it, which is what the live property test passes; a
+// recording implementation satisfies it too, which is what lets
+// hookinstaller_mutations_test.go drive the same assertions against documents
+// that are wrong in exactly one way and require them to REPORT. Without the
+// seam, "these assertions catch a broken merge" would be a claim in a PR body
+// that nothing re-runs — and docs/testing-philosophy.md asks for a committed
+// fixture instead.
+//
+// Errorf, never Fatalf: Fatalf's runtime.Goexit is not something a recorder
+// can survive, so a mutation that produced a differently-shaped document would
+// take the corpus down instead of being reported by it.
+type reporter interface {
+	Helper()
+	Errorf(format string, args ...interface{})
+}
+
 // assertForeignNamesPreserved is the central obligation: irrlicht does not own
 // this document, so every top-level name that is not ours must survive an
 // install byte-for-byte in meaning.
-func assertForeignNamesPreserved(t *testing.T, before, after map[string]interface{}) {
+func assertForeignNamesPreserved(t reporter, before, after map[string]interface{}) {
 	t.Helper()
 	for name, want := range before {
 		if name == hookName {
@@ -242,16 +260,18 @@ func assertForeignNamesPreserved(t *testing.T, before, after map[string]interfac
 // assertOurHookIsCorrect checks the half of the document irrlicht does own:
 // exactly one canonical handler of ours under Stop, every foreign handler in
 // that array preserved in order, and every other key under our name untouched.
-func assertOurHookIsCorrect(t *testing.T, before, after map[string]interface{}) {
+func assertOurHookIsCorrect(t reporter, before, after map[string]interface{}) {
 	t.Helper()
 	ours, ok := after[hookName].(map[string]interface{})
 	if !ok {
-		t.Fatalf("no %q object after install: %#v", hookName, after)
+		t.Errorf("no %q object after install: %#v", hookName, after)
+		return
 	}
 
 	handlers, ok := ours[HookEventStop].([]interface{})
 	if !ok {
-		t.Fatalf("no %q array under %q after install: %#v", HookEventStop, hookName, ours)
+		t.Errorf("no %q array under %q after install: %#v", HookEventStop, hookName, ours)
+		return
 	}
 	mine := 0
 	var foreignAfter []interface{}
