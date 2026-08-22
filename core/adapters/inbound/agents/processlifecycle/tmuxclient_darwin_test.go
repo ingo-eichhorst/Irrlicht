@@ -366,7 +366,13 @@ func spawnPaneSleeperWithEnv(t *testing.T, env []string) int {
 // ReadLauncherEnv call can already spend the whole clientHostBudget when the
 // environment fails to answer inside it (below), so a deadline of
 // clientHostBudget itself — like fixturePollDeadline above, which is exactly
-// that value — would leave no room to ever retry.
+// that value — would leave no room to ever retry. 5x is a deliberately
+// generous, UNMEASURED margin rather than one fitted to an observed worst
+// case — a reproduction loop of 23 full-suite runs under sustained
+// artificial load (#1760) saw the underlying flake at most once in any
+// given run, so even 2x would likely have been enough; the extra headroom
+// is cheap because it is only ever spent on the rare failing path; a
+// passing first attempt costs nothing extra.
 const hostScanRetryDeadline = 5 * clientHostBudget
 
 // readLauncherEnvUntilHostKnown is ReadLauncherEnv with one addition: when the
