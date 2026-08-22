@@ -100,8 +100,10 @@ func Agent() agent.Agent {
 					"your default agent (kiro-cli agent set-default irrlicht) so " +
 					"`kiro-cli chat` picks it up with no flag. Your previous default (or the " +
 					"built-in, if you had none) is recorded and restored when you toggle this " +
-					"off. The copy is a snapshot: it will not pick up a kiro-cli upgrade's " +
-					"changes to the built-in agent on its own. " +
+					"off. When you upgrade Kiro CLI, irrlicht rebuilds that copy from the new " +
+					"built-in default at its next start so it does not drift from what you " +
+					"would get by upgrading normally — unless you have edited the copy " +
+					"yourself, in which case your version is left alone. " +
 					hookjson.RequiresVersion("Kiro CLI", minCLIVersion) +
 					" Toggling off removes the hook entries, restores your prior default " +
 					"agent, and leaves the `irrlicht` agent config in place inert (also " +
@@ -119,13 +121,17 @@ func Agent() agent.Agent {
 						Min:   minCLIVersion,
 						Probe: []string{kiroCLIBinary, "--version"},
 					},
-					// Also: the SAME Apply closure writes TWO further files
-					// beyond Path (issue #1718's Also field), and both are in
+					// Also: the SAME Apply closure writes THREE further files
+					// beyond Path (issue #1718's Also field), and all are in
 					// the user's real agent home:
 					//   settings/cli.json          — chat.defaultAgent
 					//                                (ensureDefaultAgent)
 					//   .irrlicht-prior-default.json — what that setting held
 					//                                first (recordPriorDefaultAgentOnce)
+					//   .irrlicht-agent-snapshot.json — which kiro-cli built the
+					//                                copy, and what its non-hook
+					//                                content was when we wrote it
+					//                                (#1736, agentrefresh.go)
 					// Undeclared, either write is invisible to
 					// agents.ManagedUserFiles / --print-managed-files, the
 					// recording rig's snapshot/restore sweep — see
@@ -155,7 +161,7 @@ func Agent() agent.Agent {
 					// not a verdict-changing one. Declared anyway because the
 					// two are independent consumers and the recorder's sweep
 					// is not co-located with anything.
-					Also: []func() (string, error){kiroSettingsPath, priorDefaultStatePath},
+					Also: []func() (string, error){kiroSettingsPath, priorDefaultStatePath, agentSnapshotStatePath},
 				},
 			},
 		},

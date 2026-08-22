@@ -433,27 +433,50 @@ func entryHasSentinel(entry map[string]interface{}, sentinel string) bool {
 
 // EnsureHooksInstalled brings the kiro-cli install fully into the granted
 // state: the irrlicht agent config exists (materialized from the user's
-// built-in default on first grant), carries our flat hook entries, and is
-// the effective default agent. Returns true if anything was modified.
+// built-in default on first grant, and REGENERATED from it after a kiro-cli
+// upgrade — agentrefresh.go, issue #1736), carries our flat hook entries, and
+// is the effective default agent. Returns true if anything was modified.
 //
-// The three steps are independent and each is idempotent, so a retry after a
+// The four steps are independent and each is idempotent, so a retry after a
 // partial failure (materialized but not yet defaulted, say) only performs
 // what is still missing.
+//
+// One ordering is load-bearing: the refresh runs BEFORE the hook entries are
+// reconciled, so a rebuilt document goes through the same injection a freshly
+// materialized one does, and so the refresh DECIDES against the file as it
+// actually stands — including an entry of ours that has drifted (#1373), which
+// is a state the baseline must not read as a user edit.
+//
+// The baseline is recorded last, but that position is NOT load-bearing and is
+// deliberately not claimed to be: agentConfigFingerprint subtracts the "hooks"
+// key, so the injection cannot move it. That subtraction is what replaces the
+// "re-record after our own writes" rule a whole-file hash would have needed —
+// see agentrefresh.go's header for why that rule is wrong in the one case that
+// matters.
+//
+// A failed refresh is carried to the end rather than returned at once: it left
+// the previous config restored (regenerateFromBuiltinDefault), so the remaining
+// steps still have work worth doing, and returning early would let one failed
+// rebuild suppress an entry repair.
 func EnsureHooksInstalled() (bool, error) {
 	configPath, err := irrlichtAgentConfigPath()
 	if err != nil {
 		return false, err
 	}
+	ctx := context.Background()
 
-	modified := false
+	modified, created := false, false
 	if _, statErr := os.Stat(configPath); errors.Is(statErr, os.ErrNotExist) {
-		if err := kiroAgentCreateFromDefault(context.Background(), irrlichtAgentName, kiroBuiltinDefaultAgent); err != nil {
+		if err := kiroAgentCreateFromDefault(ctx, irrlichtAgentName, kiroBuiltinDefaultAgent); err != nil {
 			return false, err
 		}
-		modified = true
+		modified, created = true, true
 	} else if statErr != nil {
 		return false, statErr
 	}
+
+	version, verdict, regenerated, refreshErr := reconcileAgentSnapshot(ctx, configPath, created)
+	modified = modified || regenerated
 
 	hookMod, err := ensureFlatHooksInstalled(kiroHookConfig(configPath))
 	if err != nil {
@@ -461,13 +484,17 @@ func EnsureHooksInstalled() (bool, error) {
 	}
 	modified = modified || hookMod
 
-	defaultMod, err := ensureDefaultAgent(context.Background())
+	if err := writeAgentSnapshotState(configPath, version, verdict); err != nil {
+		return modified, err
+	}
+
+	defaultMod, err := ensureDefaultAgent(ctx)
 	if err != nil {
 		return modified, err
 	}
 	modified = modified || defaultMod
 
-	return modified, nil
+	return modified, refreshErr
 }
 
 // ensureDefaultAgent points chat.defaultAgent at the irrlicht agent,
@@ -540,6 +567,19 @@ func UninstallHooks() (bool, error) {
 	if err != nil {
 		return modified, err
 	}
+
+	// The refresh baseline describes an install that no longer exists, and
+	// leaving it behind is the residue #1739 was filed about — a stale copy is
+	// what a LATER grant would read. Removed on a best-effort basis and NOT
+	// counted as a modification, the same treatment restorePriorDefaultAgent
+	// gives its own sidecar: this is irrlicht's bookkeeping, not the user's
+	// hook install. A re-grant finds no baseline and adopts (refreshAdopted),
+	// which is the correct reading — the config on disk is whatever survived
+	// the uninstall, not something we wrote.
+	if statePath, pathErr := agentSnapshotStatePath(); pathErr == nil {
+		_ = os.Remove(statePath)
+	}
+
 	return modified || hookMod, nil
 }
 
