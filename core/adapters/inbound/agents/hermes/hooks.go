@@ -115,6 +115,23 @@ const logComponentHookReceiver = "hermes-hook-receiver"
 // session key falls back to the literal "default" when a turn runs without one
 // (`set_current_session_key(self.session_id or "default")`), and gateway
 // surfaces put a platform routing key in the same field.
+//
+// # Gateway sessions, and why hex length is the whole guard (#1773)
+//
+// Gateway sessions are minted the same date/time shape but with 8 hex
+// characters instead of 6 — `uuid.uuid4().hex[:8]`, gateway/session.py:2831
+// and :3354, unchanged since v0.19.0 — against the CLI/TUI mint's
+// `uuid.uuid4().hex[:6]` (agent/agent_init.py:1647, cli.py:5437,
+// tui_gateway/server.py:7359) this regex actually accepts. At v0.19.0 a
+// gateway approval's top-level session_id was empty, so it was rejected
+// before this regex was ever consulted; hermes 0.20.5's
+// tools/approval.py:126-133 now forwards a well-formed session_id for
+// gateway turns too, so the hex-length distinction here is the ONLY thing
+// standing between a gateway approval and a dispatch. See
+// TestSessionIDShape_RejectsGatewayMintedIDs and
+// TestHookReceiver_GatewaySurfaceApprovalIsQuiet (hooks_test.go), and the
+// mutation check in hooks_mutations_test.go that proves the regex — not
+// something else — is what rejects them.
 var sessionIDShape = regexp.MustCompile(`^[0-9]{8}_[0-9]{6}_[0-9a-f]{6}$`)
 
 // hermesHookPayload is the JSON body hermes pipes to a shell hook's stdin,
