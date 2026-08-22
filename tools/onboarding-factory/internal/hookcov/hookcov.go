@@ -25,12 +25,28 @@
 //
 // # Attribution
 //
-// A recording counts toward the adapter whose cell directory holds it.
-// Per-event attribution is not possible: lifecycle events carry an `adapter`
-// field, but the hook_received events actually present in the corpus leave it
-// empty, so a multi-agent scenario credits its owning adapter even when a
-// co-resident agent produced the hook. Recorded here because the number is
-// otherwise quietly wrong for exactly those cells.
+// A hook_received event is credited to the adapter its OWN session belongs
+// to, not to the cell directory the recording happens to live under (#1768).
+// The two agree everywhere except a co-resident-agent scenario, where they
+// can disagree: replaydata/agents/hermes/scenarios/4-2_multiple-agents-same-workspace
+// is a hermes/claude-code coexistence cell whose one hook_received event is
+// Claude Code's own Stop hook, not hermes's — hermes has none of its own in
+// that recording.
+//
+// hook_name cannot make that distinction: every adapter's turn-done hook
+// dispatches through the same handful of canonical wire names
+// (session.HookStop = "Stop" chief among them; see
+// core/application/services/session_detector_lifecycle.go), so an adapter's
+// OWN hook_received event and a co-resident adapter's carry the identical
+// hook_name. hook_received also never carries its own `adapter` field — every
+// hook_received event actually present in the corpus leaves it empty. But
+// every OTHER event kind for that same session_id (transcript_new,
+// transcript_activity, ...) does carry `adapter`, in the SAME sidecar — so
+// hasOwnHookEvent cross-references a hook_received event's session_id against
+// its sibling events to find whose session it actually is. A session_id with
+// no sibling carrying an adapter at all is unattributable and counts for
+// nobody: never defaulted to the cell's own adapter, which would silently
+// launder the exact bug this join exists to catch.
 //
 // # Scope
 //
@@ -195,7 +211,7 @@ func coverageFor(repoRoot, adapter string, declaresHooks bool) AdapterCoverage {
 		}
 		row.Cells++
 		cellDir := shard.AgentCellDir(repoRoot, adapter, cell.Folder)
-		withHooks, total := hookBearingRecordings(cellDir)
+		withHooks, total := hookBearingRecordings(cellDir, adapter)
 		row.Recordings += total
 		row.WithHooks += withHooks
 	}
@@ -204,11 +220,11 @@ func coverageFor(repoRoot, adapter string, declaresHooks bool) AdapterCoverage {
 }
 
 // hookBearingRecordings counts one cell's recordings and how many of them
-// carry at least one hook_received event.
-func hookBearingRecordings(cellDir string) (withHooks, total int) {
+// carry at least one hook_received event attributable to adapter.
+func hookBearingRecordings(cellDir, adapter string) (withHooks, total int) {
 	for _, recDir := range validate.RecordingDirs(cellDir) {
 		total++
-		if hasHookEvent(filepath.Join(recDir, "events.jsonl")) {
+		if hasOwnHookEvent(filepath.Join(recDir, "events.jsonl"), adapter) {
 			withHooks++
 		}
 	}
@@ -250,18 +266,41 @@ func statusOf(declares bool, withHooks int) Status {
 	}
 }
 
-// hasHookEvent reports whether a recording's events sidecar carries at least
-// one hook_received event. It goes through replay.LoadEvents — the sanctioned
-// reader — rather than scanning bytes, so it cannot disagree with replay about
-// line-length caps or malformed-line handling. A missing or unreadable
-// sidecar counts as "no hooks", the same as an empty one.
-func hasHookEvent(eventsPath string) bool {
+// hasOwnHookEvent reports whether a recording's events sidecar carries at
+// least one hook_received event attributable to adapterSlug — see the
+// package's Attribution section for why hook_name cannot answer this and
+// session_id cross-referencing does. It goes through replay.LoadEvents — the
+// sanctioned reader — rather than scanning bytes, so it cannot disagree with
+// replay about line-length caps or malformed-line handling. A missing or
+// unreadable sidecar counts as "no hooks", the same as an empty one.
+func hasOwnHookEvent(eventsPath, adapterSlug string) bool {
 	events, err := replay.LoadEvents(eventsPath)
 	if err != nil {
 		return false
 	}
+
+	// sessionAdapter is session_id -> the on-disk slug of the adapter a
+	// SIBLING event (never hook_received itself, which carries no Adapter)
+	// tagged that session with. Built once per recording rather than per
+	// hook_received event, so a recording with several hook events pays for
+	// one pass over the file.
+	sessionAdapter := make(map[string]string, len(events))
 	for _, e := range events {
-		if e.Kind == lifecycle.KindHookReceived {
+		if e.Adapter != "" {
+			sessionAdapter[e.SessionID] = slug(e.Adapter)
+		}
+	}
+
+	for _, e := range events {
+		if e.Kind != lifecycle.KindHookReceived {
+			continue
+		}
+		// Comma-ok, not a plain map-read: an unattributed session_id must
+		// read as "no match" via absence, never coincide with adapterSlug=""
+		// (which never occurs here — callers always pass a real on-disk
+		// slug — but the explicit check keeps that an invariant rather than
+		// a map zero-value accident).
+		if owner, ok := sessionAdapter[e.SessionID]; ok && owner == adapterSlug {
 			return true
 		}
 	}
