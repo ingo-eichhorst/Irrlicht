@@ -325,21 +325,31 @@ func gradablePermissions(t *testing.T, catalog []agent.Agent) []gradablePermissi
 
 	seen := map[string]bool{}
 	var out []gradablePermission
-	for _, a := range catalog {
-		for _, p := range a.Permissions {
-			if p.Apply == nil {
-				continue
-			}
-			id := a.Identity.Name + "/" + p.Key
-			seen[id] = true
-			if ext, skip := applyRunsAnExternalCLI[id]; skip {
-				assertExternalInstallerAgrees(t, id, ext, p)
-				continue
-			}
-			out = append(out, gradablePermission{id: id, perm: p, declared: resolveDeclared(p)})
+	for id, p := range permissionsByID(catalog) {
+		if p.Apply == nil {
+			continue
 		}
+		seen[id] = true
+		if ext, skip := applyRunsAnExternalCLI[id]; skip {
+			assertExternalInstallerAgrees(t, id, ext, p)
+			continue
+		}
+		out = append(out, gradablePermission{id: id, perm: p, declared: resolveDeclared(p)})
 	}
+	// Map iteration is unordered; the sub-tests below are named per permission
+	// and a stable order keeps a failure reproducible.
+	sort.Slice(out, func(i, j int) bool { return out[i].id < out[j].id })
 
+	assertNoStaleExternalInstallerKeys(t, seen)
+	return out
+}
+
+// assertNoStaleExternalInstallerKeys is applyRunsAnExternalCLI's existence
+// check: an entry for a permission that has no Apply closure — or does not
+// exist — is an exemption from an obligation nobody had, which reads as
+// coverage.
+func assertNoStaleExternalInstallerKeys(t *testing.T, seen map[string]bool) {
+	t.Helper()
 	for id := range applyRunsAnExternalCLI {
 		if !seen[id] {
 			t.Errorf("applyRunsAnExternalCLI names %q, which is not a permission with an Apply "+
@@ -347,7 +357,6 @@ func gradablePermissions(t *testing.T, catalog []agent.Agent) []gradablePermissi
 				"exist reads as coverage", id)
 		}
 	}
-	return out
 }
 
 // assertExternalInstallerAgrees ties an exemption to the permission's own
@@ -489,9 +498,7 @@ type fileState struct {
 }
 
 // walkScratch records every non-directory entry under root, keyed relative to
-// it. Symlinks are recorded by their target rather than followed: a closure
-// that plants a link into the user's home has written something, and following
-// it would hash whatever it points at instead.
+// it. See stateOf for what one entry's record holds.
 func walkScratch(t *testing.T, root string) map[string]fileState {
 	t.Helper()
 	out := map[string]fileState{}
@@ -506,24 +513,9 @@ func walkScratch(t *testing.T, root string) map[string]fileState {
 		if relErr != nil {
 			return relErr
 		}
-		info, infoErr := d.Info()
-		if infoErr != nil {
-			return infoErr
-		}
-		st := fileState{Size: info.Size(), ModNano: info.ModTime().UnixNano(), Mode: info.Mode()}
-		if d.Type()&fs.ModeSymlink != 0 {
-			target, linkErr := os.Readlink(p)
-			if linkErr != nil {
-				return linkErr
-			}
-			st.Sum = "-> " + target
-		} else if d.Type().IsRegular() {
-			data, readErr := os.ReadFile(p) // #nosec G304 -- path comes from walking a t.TempDir()
-			if readErr != nil {
-				return readErr
-			}
-			sum := sha256.Sum256(data)
-			st.Sum = hex.EncodeToString(sum[:])
+		st, stErr := stateOf(p, d)
+		if stErr != nil {
+			return stErr
 		}
 		out[rel] = st
 		return nil
@@ -533,6 +525,33 @@ func walkScratch(t *testing.T, root string) map[string]fileState {
 			"the same empty diff as a closure that wrote nothing", root, err)
 	}
 	return out
+}
+
+// stateOf records one entry. A symlink is recorded by its TARGET rather than
+// followed: a closure that plants a link into the user's home has written
+// something, and following it would hash whatever it points at instead.
+func stateOf(p string, d fs.DirEntry) (fileState, error) {
+	info, err := d.Info()
+	if err != nil {
+		return fileState{}, err
+	}
+	st := fileState{Size: info.Size(), ModNano: info.ModTime().UnixNano(), Mode: info.Mode()}
+	switch {
+	case d.Type()&fs.ModeSymlink != 0:
+		target, linkErr := os.Readlink(p)
+		if linkErr != nil {
+			return fileState{}, linkErr
+		}
+		st.Sum = "-> " + target
+	case d.Type().IsRegular():
+		data, readErr := os.ReadFile(p) // #nosec G304 -- path comes from walking a t.TempDir()
+		if readErr != nil {
+			return fileState{}, readErr
+		}
+		sum := sha256.Sum256(data)
+		st.Sum = hex.EncodeToString(sum[:])
+	}
+	return st, nil
 }
 
 // treeDiff returns every path whose state differs between two walks — created,
