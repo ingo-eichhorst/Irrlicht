@@ -31,6 +31,7 @@ import (
 	"strings"
 	"time"
 
+	"irrlicht/core/pkg/cliversion"
 	"irrlicht/core/pkg/pathutil"
 	"irrlicht/core/pkg/shellout"
 )
@@ -85,7 +86,16 @@ var kiroCLIPath = func() string { return pathutil.MustResolve(kiroCLIBinary) }
 // runKiroCLI runs `kiro-cli <args...>` and reports whether it exited zero,
 // wrapping stderr into the error when it did not.
 func runKiroCLI(ctx context.Context, args ...string) error {
-	ctx, cancel := context.WithTimeout(ctx, kiroCLITimeout)
+	_, err := runKiroCLIOutput(ctx, kiroCLITimeout, args...)
+	return err
+}
+
+// runKiroCLIOutput is runKiroCLI plus the child's stdout, under a caller-chosen
+// bound. Split out for kiroCLIVersion, which needs the output and wants the
+// tighter budget a read-only probe deserves; every write verb keeps
+// kiroCLITimeout by going through runKiroCLI.
+func runKiroCLIOutput(ctx context.Context, timeout time.Duration, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, kiroCLIPath(), args...)
@@ -106,9 +116,51 @@ func runKiroCLI(ctx context.Context, args ...string) error {
 
 	if err := cmd.Run(); err != nil {
 		combined := strings.TrimSpace(strings.Join([]string{out.String(), errOut.String()}, " "))
-		return fmt.Errorf("kirocli: %s %s: %w: %s", kiroCLIBinary, strings.Join(args, " "), err, combined)
+		return "", fmt.Errorf("kirocli: %s %s: %w: %s", kiroCLIBinary, strings.Join(args, " "), err, combined)
 	}
-	return nil
+	return out.String(), nil
+}
+
+// kiroVersionTimeout bounds `kiro-cli --version`. Shorter than kiroCLITimeout
+// for exactly the reason core/pkg/cliprobe.Timeout is 2s: reading a banner off
+// stdout is not a write, it runs on the consent path with a user watching, and
+// a CLI that hangs has to lose quickly. Kept as its own constant rather than
+// importing cliprobe's, because this probe deliberately does NOT go through
+// cliprobe — see kiroCLIVersion.
+const kiroVersionTimeout = 2 * time.Second
+
+// kiroCLIVersion reads the installed kiro-cli's version, as a bare
+// major.minor.patch string. Empty string plus an error when it cannot be read
+// for any reason (binary missing, hung, non-zero exit, unrecognizable banner).
+//
+// It deliberately does NOT call core/pkg/cliprobe, even though that package
+// exists to run this exact question, and the reason is the one thing that makes
+// the refresh's fail-closed direction defensible (agentrefresh.go):
+//
+//   - cliprobe resolves argv[0] through pathutil's TRUSTED DIRECTORIES first,
+//     which on the machine this adapter was developed on selects
+//     /opt/homebrew/bin/kiro-cli — a DIFFERENT binary from the one this package
+//     actually shells out to, which goes through the kiroCLIPath seam
+//     (measured; see kiroCLIPath's own doc comment).
+//   - A refresh regenerates the agent config by running `kiro-cli agent create
+//     --from kiro_default` through kiroCLIPath. Deciding "has kiro-cli been
+//     upgraded?" from a binary we are not going to run would make the trigger
+//     and the capability two different things that can disagree.
+//
+// Going through the same seam makes "we can read the version" and "we can
+// regenerate" the SAME capability by construction, which is what
+// TestRefreshTriggerAndRegenerationUseTheSameBinarySeam pins.
+func kiroCLIVersion(ctx context.Context) (string, error) {
+	out, err := runKiroCLIOutput(ctx, kiroVersionTimeout, "--version")
+	if err != nil {
+		return "", err
+	}
+	v, ok := cliversion.Parse(out)
+	if !ok {
+		return "", fmt.Errorf("kirocli: %s --version printed no recognizable version: %q",
+			kiroCLIBinary, strings.TrimSpace(out))
+	}
+	return v.String(), nil
 }
 
 // kiroAgentCreateFromDefault materializes name as a full copy of the given
