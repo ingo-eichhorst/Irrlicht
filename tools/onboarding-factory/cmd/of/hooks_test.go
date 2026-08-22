@@ -12,10 +12,10 @@ import (
 // As with --summary the counts are the product, so they are literal here.
 //
 // The `declares` column is NOT fixture data — it is joined at runtime from the
-// daemon's adapter registry, where claudecode and codex declare a "hooks"
-// permission and aider and opencode do not. That join is the part of this
-// command that can rot silently (a renamed permission key, a changed adapter
-// slug), so it is asserted rather than assumed.
+// daemon's adapter registry, where claudecode, codex and antigravity declare a
+// "hooks" permission and aider does not. That join is the part of this command
+// that can rot silently (a renamed permission key, a changed adapter slug), so
+// it is asserted rather than assumed.
 func TestCoverageHooksCounts(t *testing.T) {
 	root := richRepo(t)
 	code, out, errs := runOf("coverage", "--hooks", "--json", "--repo-root", root)
@@ -28,10 +28,10 @@ func TestCoverageHooksCounts(t *testing.T) {
 	}
 
 	want := map[string]hookcov.AdapterCoverage{
-		"aider":       {Adapter: "aider", DeclaresHooks: false, Cells: 1, Recordings: 1, WithHooks: 1, Status: hookcov.StatusIncidental},
+		"aider":       {Adapter: "aider", DeclaresHooks: false, Cells: 1, Recordings: 1, WithHooks: 0, Status: hookcov.StatusNone},
 		"claudecode":  {Adapter: "claudecode", DeclaresHooks: true, Cells: 7, Recordings: 2, WithHooks: 1, Status: hookcov.StatusOK},
 		"codex":       {Adapter: "codex", DeclaresHooks: true, Cells: 2, Recordings: 1, WithHooks: 0, Status: hookcov.StatusGap},
-		"antigravity": {Adapter: "antigravity", DeclaresHooks: false, Cells: 1, Recordings: 1, WithHooks: 0, Status: hookcov.StatusNone},
+		"antigravity": {Adapter: "antigravity", DeclaresHooks: true, Cells: 1, Recordings: 1, WithHooks: 0, Status: hookcov.StatusGap},
 	}
 	got := map[string]hookcov.AdapterCoverage{}
 	for _, a := range rep.Adapters {
@@ -47,15 +47,19 @@ func TestCoverageHooksCounts(t *testing.T) {
 			t.Errorf("%s: got %+v want %+v", name, g, w)
 		}
 	}
-	if rep.Totals.Cells != 11 || rep.Totals.Recordings != 5 || rep.Totals.WithHooks != 2 {
-		t.Errorf("totals: got %+v want cells=11 recordings=5 with-hooks=2", rep.Totals)
+	if rep.Totals.Cells != 11 || rep.Totals.Recordings != 5 || rep.Totals.WithHooks != 1 {
+		t.Errorf("totals: got %+v want cells=11 recordings=5 with-hooks=1", rep.Totals)
 	}
 }
 
 // TestCoverageHooksDistinguishesGapFromNoHooks is the reason this command
 // exists. "Declares hooks and has zero hook-bearing recordings" (codex) is the
-// loud failure; "declares no hooks" (antigravity) is fine. Both have WithHooks==0,
+// loud failure; "declares no hooks" (aider) is fine. Both have WithHooks==0,
 // so a report keying only on that number would conflate them.
+//
+// aider took the second role from antigravity in #1723 and is where it stops:
+// it is the last registry adapter declaring no hooks. See richRepo's comment
+// for what that costs.
 func TestCoverageHooksDistinguishesGapFromNoHooks(t *testing.T) {
 	root := richRepo(t)
 	code, out, errs := runOf("coverage", "--hooks", "--json", "--repo-root", root)
@@ -70,17 +74,30 @@ func TestCoverageHooksDistinguishesGapFromNoHooks(t *testing.T) {
 	for _, a := range rep.Adapters {
 		byName[a.Adapter] = a
 	}
-	if byName["codex"].WithHooks != 0 || byName["antigravity"].WithHooks != 0 {
-		t.Fatalf("fixture precondition: both codex and antigravity should have zero hook-bearing recordings")
+	if byName["codex"].WithHooks != 0 || byName["aider"].WithHooks != 0 {
+		t.Fatalf("fixture precondition: both codex and aider should have zero hook-bearing recordings")
 	}
-	if byName["codex"].Status == byName["antigravity"].Status {
+	if byName["codex"].Status == byName["aider"].Status {
 		t.Errorf("gap and no-hooks-declared must not share a status; both are %q", byName["codex"].Status)
+	}
+	if byName["aider"].Status != hookcov.StatusNone {
+		t.Errorf("aider declares no hooks and has none — want %q, got %q", hookcov.StatusNone, byName["aider"].Status)
 	}
 	if byName["codex"].Status != hookcov.StatusGap {
 		t.Errorf("codex declares hooks with zero hook recordings — want %q, got %q", hookcov.StatusGap, byName["codex"].Status)
 	}
-	if rep.Gaps() == nil || rep.Gaps()[0] != "codex" {
-		t.Errorf("codex should be listed as the gap, got %v", rep.Gaps())
+	// antigravity is a gap too since #1723 — it declares hooks and the fixture
+	// gives it a hook-free recording — so the assertion is that codex is
+	// LISTED, not that it is alone.
+	gaps := map[string]bool{}
+	for _, g := range rep.Gaps() {
+		gaps[g] = true
+	}
+	if !gaps["codex"] {
+		t.Errorf("codex should be listed as a gap, got %v", rep.Gaps())
+	}
+	if gaps["aider"] {
+		t.Errorf("aider declares no hooks and must never be listed as a gap, got %v", rep.Gaps())
 	}
 }
 

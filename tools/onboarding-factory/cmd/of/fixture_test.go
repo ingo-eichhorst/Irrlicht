@@ -11,10 +11,10 @@ import (
 // are both pinned against ONE fixture whose expected counts are stated here
 // rather than recomputed by the assertions.
 //
-// The adapter slugs are real (claudecode, codex, aider, opencode) because
+// The adapter slugs are real (claudecode, codex, aider, antigravity) because
 // `of coverage --hooks` joins the catalog to the daemon's adapter registry:
-// claudecode and codex declare a "hooks" permission, aider and opencode do
-// not. Inventing a slug would silently drop the row from that join.
+// claudecode, codex and antigravity declare a "hooks" permission and aider
+// does not. Inventing a slug would silently drop the row from that join.
 //
 // Cells per agent, and the display state each one derives to:
 //
@@ -23,14 +23,14 @@ import (
 //	            7-1 unknown (supports=unknown)                        → 7 cells
 //	codex       1-1 observed (recorded)   2-1 pending-record          → 2 cells
 //	aider       1-1 observed (recorded)                               → 1 cell
-//	opencode    1-1 observed (recorded)                               → 1 cell
+//	antigravity 1-1 observed (recorded)                               → 1 cell
 //
 // Recordings, and which carry a hook_received event:
 //
 //	claudecode 1-1: r1 (hook_received), r2 (none)  → 2 recordings, 1 with hooks
 //	codex      1-1: r1 (none)                      → 1 recording,  0 with hooks
-//	aider      1-1: r1 (hook_received)             → 1 recording,  1 with hooks
-//	opencode   1-1: r1 (none)                      → 1 recording,  0 with hooks
+//	aider       1-1: r1 (none)                     → 1 recording,  0 with hooks
+//	antigravity 1-1: r1 (none)                     → 1 recording,  0 with hooks
 func richRepo(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
@@ -63,18 +63,26 @@ func richRepo(t *testing.T) string {
 	cell(t, root, "codex", "2-1_two", "yes", "full", "ready")
 	recording(t, root, "codex", "1-1_one", "r1", false)
 
+	// aider is the fixture's "declares no hooks" adapter — the counterweight
+	// TestCoverageHooksDistinguishesGapFromNoHooks measures codex's GAP
+	// against. The role has moved three times, always for the same reason:
+	// opencode held it until #1719, hermes until #1722, antigravity until
+	// #1723, and each move happened because the adapter playing it gained a
+	// hooks permission.
+	//
+	// aider is where it stops, because aider is now the ONLY registry adapter
+	// declaring no hooks. That has a cost this fixture pays deliberately: the
+	// INCIDENTAL status (a hook-bearing recording under an adapter that
+	// declares nothing) needs a SECOND non-declaring adapter, and there is no
+	// longer one to spare — the two roles are mutually exclusive by
+	// construction. So aider's recording is hook-free here and incidental is
+	// pinned one layer down, where it does not need a real registry row:
+	// hookcov's own TestStatusOf table and TestGapsListsOnlyGaps. Losing
+	// the CLI-level incidental row is the lesser loss; gap-vs-none is the
+	// distinction `of coverage --hooks` exists to draw.
 	cell(t, root, "aider", "1-1_one", "yes", "full", "ready")
-	recording(t, root, "aider", "1-1_one", "r1", true)
+	recording(t, root, "aider", "1-1_one", "r1", false)
 
-	// antigravity is the fixture's "declares no hooks" adapter — the
-	// counterweight TestCoverageHooksDistinguishesGapFromNoHooks measures
-	// codex's GAP against. The role has now moved twice: opencode held it
-	// until #1719, hermes until #1722, and each move happened because the
-	// adapter playing it gained a hooks permission. Two registry adapters
-	// declare none today, and aider is the other — but aider cannot take this
-	// role, because it holds the INCIDENTAL one above (a hook-bearing
-	// recording with no permission declared) and the two are mutually
-	// exclusive by construction.
 	cell(t, root, "antigravity", "1-1_one", "yes", "full", "ready")
 	recording(t, root, "antigravity", "1-1_one", "r1", false)
 

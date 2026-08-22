@@ -206,7 +206,27 @@ launch_repl() {
   # an accurate exit-reason — the cleanup trap then records nonzero(2).
   # ${arr[@]+"${arr[@]}"} expands to nothing when the array is empty WITHOUT
   # tripping `set -u` on bash 3.2 (macOS) — a bare "${arr[@]}" is "unbound".
-  tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "${SES_CWD[$ACTIVE]}" "agy" \
+  # IRRLICHT_BIND_ADDR is the beacon half (#1723). antigravity's hooks are
+  # delivered by `irrlichd hook-post antigravity`, which the entry irrlicht
+  # merges into ~/.gemini/config/hooks.json names; that beacon carries no
+  # address at all and resolves one at FIRE time from its own environment —
+  # IRRLICHT_BIND_ADDR first, then the addr file under IRRLICHT_HOME
+  # (core/pkg/daemonaddr resolveClient). The beacon is a descendant of this
+  # pane, so a pane carrying neither variable reads the PRODUCTION addr file
+  # and posts every hook to the daemon on 7837. The recording then comes back
+  # complete, healthy and hook-free, with nothing anywhere saying why — the
+  # exact failure #1735 measured for mistral-vibe.
+  #
+  # There is no isolation half to pair it with: antigravity has no home
+  # override at all (righome.Unisolatable records the measurement), so the
+  # managed-file snapshot is the whole of the protection for the real
+  # ~/.gemini/config/hooks.json.
+  #
+  # Empty is the same as unset for the reader (resolveClient's fixedPortOf("")
+  # does not match), so passing it unconditionally is safe when the rig set
+  # nothing.
+  tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "${SES_CWD[$ACTIVE]}" \
+    env "IRRLICHT_BIND_ADDR=${IRRLICHT_BIND_ADDR:-}" "agy" \
     ${extra_args[@]+"${extra_args[@]}"} \
     >>"$DRIVER_LOG.stdout.$ACTIVE" 2>>"$DRIVER_LOG.stderr" \
     || { echo "[driver] failed to launch agy under tmux" >&2; EXIT_REASON="$NONZERO_2"; exit 1; }
