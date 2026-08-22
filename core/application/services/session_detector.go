@@ -136,6 +136,20 @@ type SessionDetector struct {
 	// --continue, not ghost events from a dying process.
 	deletedSessions map[string]int64
 
+	// deletedStates caches the last known *session.SessionState for a session
+	// removed via PIDManager.deleteSession (process exit, the ready-TTL/
+	// liveness sweep), keyed the same as deletedSessions and cleared at the
+	// same points. It exists so an authoritative turn-done hook (opencode's
+	// session.idle, hermes' on_session_end — anything that sets
+	// agent.Event.Terminal) that loses the race with that exact teardown
+	// still has a session to classify against instead of a repo row that is
+	// simply gone (issue #1772). Not populated for /clear or the dedup/
+	// supersession reconciliation paths, which delete the repo row directly
+	// without going through deleteSession — reviving those would be exactly
+	// the ghost-session class deletedCooldown exists to prevent. See
+	// cacheDeletedSnapshot and processActivity's Terminal branch.
+	deletedStates map[string]*session.SessionState
+
 	// hostGateRejected tracks session IDs the host-ancestry admission gate
 	// (issue #784) has already rejected. No cooldown/expiry, unlike
 	// deletedSessions — a rejected PID's process ancestry (e.g. CodexBar,
@@ -298,6 +312,7 @@ func newSessionDetector() *SessionDetector {
 		merged:                   make(chan identifiedEvent, 16),
 		projectSessions:          make(map[string]string),
 		deletedSessions:          make(map[string]int64),
+		deletedStates:            make(map[string]*session.SessionState),
 		hostGateRejected:         make(map[string]struct{}),
 		debounce:                 make(map[string]*debounceEntry),
 		debouncedEvents:          make(chan agent.Event, 64),
@@ -346,6 +361,7 @@ func NewSessionDetector(watchers []inbound.Watcher, deps SessionDetectorDeps) *S
 		ProcessNames:     deps.ProcessNames,
 		LiveCWDs:         deps.LiveCWDs,
 		OnSessionDeleted: det.removeFromProjectSessions,
+		OnSessionRemoved: det.cacheDeletedSnapshot,
 	})
 	det.pidMgr.SetChildDeletedHandler(det.reevaluateParent)
 	return det

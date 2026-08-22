@@ -300,6 +300,14 @@ func (d *SessionDetector) HandlePermissionHook(sessionID, transcriptPath, hookEv
 // (PreToolUse fires before the write) — while a real fswatcher pass with no
 // transcript growth (e.g. mistral-vibe's content-less slash-command touch)
 // does not force the bounce. See issue #905.
+//
+// It is also marked Terminal exactly when hookName is session.HookStop — the
+// one hook name in this shared dispatch that means "the turn is authoritatively
+// done," as opposed to a permission prompt or compaction signal. processActivity
+// reads Terminal to decide whether a hook arriving for an already-tombstoned
+// session (this call racing PIDManager's own teardown) still deserves a
+// classify pass against the cached snapshot rather than being dropped
+// (issue #1772).
 func (d *SessionDetector) dispatchHookActivity(sessionID, transcriptPath, hookName string) {
 	d.record(lifecycle.Event{
 		Kind:      lifecycle.KindHookReceived,
@@ -313,6 +321,7 @@ func (d *SessionDetector) dispatchHookActivity(sessionID, transcriptPath, hookNa
 		SessionID:      sessionID,
 		TranscriptPath: transcriptPath,
 		Synthetic:      true,
+		Terminal:       hookName == session.HookStop,
 	}:
 	default:
 		d.log.LogError("hook-receiver", sessionID,
@@ -578,7 +587,9 @@ func (d *SessionDetector) seedBackfillMetadata(states []*session.SessionState) {
 
 // pruneDeletedSessionsCache drops deletedSessions entries older than 1 hour,
 // left over from a previous daemon run. Entries that old serve no purpose —
-// the re-creation cooldown they guard is only 10 seconds.
+// the re-creation cooldown they guard is only 10 seconds. deletedStates is
+// keyed identically and pruned in lockstep — it never outlives the tombstone
+// that gates whether anything ever reads it back (issue #1772).
 func (d *SessionDetector) pruneDeletedSessionsCache() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -586,6 +597,7 @@ func (d *SessionDetector) pruneDeletedSessionsCache() {
 	for id, ts := range d.deletedSessions {
 		if ts < pruneThreshold {
 			delete(d.deletedSessions, id)
+			delete(d.deletedStates, id)
 		}
 	}
 }

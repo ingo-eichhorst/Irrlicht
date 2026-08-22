@@ -115,6 +115,16 @@ type PIDManager struct {
 	// clean up its own tracking structures (e.g. projectSessions map).
 	onSessionDeleted func(sessionID string)
 
+	// onSessionRemoved is called from deleteSession — the single choke point
+	// for an actual repo-row removal — with the session's last known state,
+	// just before that row is deleted. Unlike onSessionDeleted (id-only, and
+	// also fired earlier from HandleProcessExit before any state is loaded),
+	// this exists so a caller can cache the state itself: SessionDetector
+	// uses it to let a hook that authoritatively signals turn-done but loses
+	// the teardown race still settle the session to ready instead of being
+	// silently dropped (issue #1772). Optional; nil disables the cache.
+	onSessionRemoved func(*session.SessionState)
+
 	// onChildDeleted is called when a child session is removed by the
 	// liveness sweep so the SessionDetector can re-evaluate the parent.
 	// Without this the parent can be left stuck in `working` forever
@@ -171,6 +181,7 @@ type PIDManagerDeps struct {
 	ProcessNames     map[string]string
 	LiveCWDs         LiveCWDsFunc
 	OnSessionDeleted func(sessionID string)
+	OnSessionRemoved func(*session.SessionState)
 }
 
 // NewPIDManager creates a PIDManager with the given dependencies.
@@ -185,6 +196,7 @@ func NewPIDManager(deps PIDManagerDeps) *PIDManager {
 		processNames:     deps.ProcessNames,
 		liveCWDs:         deps.LiveCWDs,
 		onSessionDeleted: deps.OnSessionDeleted,
+		onSessionRemoved: deps.OnSessionRemoved,
 		pendingPIDs:      make(map[string]int),
 	}
 }
@@ -588,6 +600,9 @@ func (pm *PIDManager) deleteSession(s *session.SessionState, reason string) {
 	})
 	if pm.onSessionDeleted != nil {
 		pm.onSessionDeleted(s.SessionID)
+	}
+	if pm.onSessionRemoved != nil {
+		pm.onSessionRemoved(s)
 	}
 	_ = pm.repo.Delete(s.SessionID)
 	pm.log.LogInfo("session-cleanup", s.SessionID,

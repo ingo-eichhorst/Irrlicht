@@ -157,6 +157,7 @@ func (d *SessionDetector) recentlyDeleted(ev agent.Event) bool {
 		return true
 	}
 	delete(d.deletedSessions, ev.SessionID)
+	delete(d.deletedStates, ev.SessionID)
 	d.log.LogInfo(logComponentSessionDetector, ev.SessionID,
 		"previously deleted session has fresh activity (--continue), allowing re-creation")
 	return false
@@ -610,12 +611,46 @@ func (d *SessionDetector) processActivity(id agent.Identity, ev agent.Event) {
 		deletedAt, deleted := d.deletedSessions[ev.SessionID]
 		if deleted && time.Since(time.Unix(deletedAt, 0)) >= d.deletedCooldown && !isStaleTranscript(ev.TranscriptPath) {
 			delete(d.deletedSessions, ev.SessionID)
+			delete(d.deletedStates, ev.SessionID)
 			deleted = false
 			d.log.LogInfo(logComponentSessionDetector, ev.SessionID,
 				"previously deleted session has fresh activity (--continue), allowing re-creation")
 		}
+		// An authoritative turn-done hook (ev.Terminal — opencode's
+		// session.idle, hermes' on_session_end) racing this exact teardown
+		// still within the cooldown gets one more chance: PIDManager's own
+		// process-exit/liveness-sweep teardown cached the session's last
+		// known state (cacheDeletedSnapshot) before deleting its repo row.
+		// Reviving from that snapshot and running it through the normal
+		// classify pass settles it to ready instead of silently dropping the
+		// hook against a session that has already been torn down (issue
+		// #1772). One-shot: the snapshot is consumed here so a duplicate or
+		// later hook for the same id falls through to the ordinary paths —
+		// repo.Load succeeds once this pass has re-saved the state.
+		// Ordinary (non-Terminal) activity is NOT granted this exception: a
+		// plain transcript write racing teardown is exactly the ghost
+		// resurrection deletedCooldown exists to block.
+		var revive *session.SessionState
+		if deleted && ev.Terminal {
+			revive = d.deletedStates[ev.SessionID]
+			if revive != nil {
+				// Only the one-shot snapshot is consumed here. deletedSessions
+				// itself is deliberately left in place: the row this pass is
+				// about to re-save makes repo.Load succeed again, so nothing
+				// downstream ever consults the tombstone for this id again
+				// until a fresh deletion re-timestamps it.
+				delete(d.deletedStates, ev.SessionID)
+			}
+		}
 		d.mu.Unlock()
 		if deleted {
+			if revive != nil {
+				d.log.LogInfo(logComponentSessionDetector, ev.SessionID,
+					"turn-done hook arrived after teardown — settling cached snapshot to ready")
+				d.pidMgr.WithSessionStateLock(func() {
+					d.processActivityLocked(id, revive, ev)
+				})
+			}
 			return
 		}
 		// Session not tracked yet — treat as new (startup race where activity
