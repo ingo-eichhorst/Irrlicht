@@ -634,6 +634,11 @@ func (d *SessionDetector) processActivity(id agent.Identity, ev agent.Event) {
 		if deleted && ev.Terminal {
 			revive = d.deletedStates[ev.SessionID]
 			if revive != nil {
+				// Only the one-shot snapshot is consumed here. deletedSessions
+				// itself is deliberately left in place: the row this pass is
+				// about to re-save makes repo.Load succeed again, so nothing
+				// downstream ever consults the tombstone for this id again
+				// until a fresh deletion re-timestamps it.
 				delete(d.deletedStates, ev.SessionID)
 			}
 		}
