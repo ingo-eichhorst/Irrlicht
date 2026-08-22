@@ -111,11 +111,14 @@ func scenarioNameOf(folder string) string {
 }
 
 // recording writes one complete recording under a cell. withHook adds a
-// hook_received event, which is what `of coverage --hooks` counts.
+// hook_received event, which is what `of coverage --hooks` counts — attributed
+// to session "s", which the transcript_new line below tags adapter:agent, so
+// hookcov's session_id cross-reference (#1768) resolves it as agent's own
+// rather than dropping it as unattributable.
 func recording(t *testing.T, root, agent, folder, name string, withHook bool) {
 	t.Helper()
 	rec := filepath.Join(root, "replaydata", "agents", agent, "scenarios", folder, "recordings", name)
-	events := `{"seq":1,"ts":"2026-05-01T00:00:00Z","kind":"pid_discovered","session_id":"s"}` + "\n"
+	events := `{"seq":1,"ts":"2026-05-01T00:00:00Z","kind":"transcript_new","session_id":"s","adapter":"` + agent + `"}` + "\n"
 	if withHook {
 		events += `{"seq":2,"ts":"2026-05-01T00:00:01Z","kind":"hook_received","session_id":"s","hook_name":"PostToolUse"}` + "\n"
 	}
