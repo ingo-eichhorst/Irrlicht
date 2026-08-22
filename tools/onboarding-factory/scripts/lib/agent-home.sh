@@ -155,6 +155,18 @@
 #                  one. Defaulting it would also change the recording conditions
 #                  of all 28 existing kiro-cli recordings at once.
 #
+#   hermes     OPT-IN, for kiro-cli's reason in a stronger form. HERMES_HOME is
+#              the one variable that moves EVERYTHING — config.yaml, the
+#              shell-hook allowlist and state.db all hang off it, and the
+#              adapter's own homeDir() reads it — so unlike opencode there is
+#              no half-relocated state to fall into. What stops it defaulting is
+#              that a bare Hermes home cannot authenticate: #1325's recording
+#              work measured five files it has to be seeded with (config.yaml,
+#              .env, auth.json, context_length_cache.yaml,
+#              provider_models_cache.json) before `hermes chat` will start.
+#              Defaulting it would also change the recording conditions of all
+#              22 existing hermes recordings at once.
+#
 #            A "default AND seed from the real home" third policy was considered
 #            and not built: it would copy the operator's own config into staging
 #            on every run, which trades an explicit, auditable operator step for
@@ -198,6 +210,7 @@ codex CODEX_HOME optin
 kiro-cli KIRO_HOME optin
 mistral-vibe VIBE_HOME optin
 pi PI_CODING_AGENT_DIR optin
+hermes HERMES_HOME optin
 TABLE
   return 0
 }

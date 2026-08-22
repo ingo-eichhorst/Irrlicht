@@ -372,7 +372,7 @@ func (w *Watcher) reconcile(db *sql.DB, r storeSessionRow, fallbackCWD string) {
 
 	base := agent.Event{
 		SessionID:       r.id,
-		TranscriptPath:  w.dbPath + sessionQueryParam + r.id,
+		TranscriptPath:  transcriptPathIn(w.dbPath, r.id),
 		CWD:             cwd,
 		ProjectDir:      filepath.Base(cwd),
 		ParentSessionID: r.parentID,

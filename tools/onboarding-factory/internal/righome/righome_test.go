@@ -1,6 +1,7 @@
 package righome
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -127,13 +128,10 @@ func registryAdapterAfterEnv(t *testing.T, slug string) agent.Agent {
 // the daemon records the operator's own sessions instead of the driver's.
 func assertSessionRootRelocates(t *testing.T, row Row, home string, a agent.Agent) {
 	t.Helper()
-	src, isFiles := a.Source.(agent.FilesUnderRoot)
-	if !isFiles {
-		t.Fatalf("adapter %q declares Source %T, which this arm cannot resolve — a row for a "+
-			"non-FilesUnderRoot adapter needs its own half-one check rather than being waved "+
-			"through", row.Adapter, a.Source)
+	roots, err := sessionRootsOf(a)
+	if err != nil {
+		t.Fatalf("adapter %q: %v", row.Adapter, err)
 	}
-	roots := src.AllRootsFor("darwin")
 	if len(roots) == 0 {
 		t.Fatalf("adapter %q resolves no session roots at all", row.Adapter)
 	}
@@ -144,6 +142,37 @@ func assertSessionRootRelocates(t *testing.T, row Row, home string, a agent.Agen
 				"recording would contain their sessions and not the driver's",
 				row.EnvVar, home, root)
 		}
+	}
+}
+
+// sessionRootsOf resolves the paths the daemon watches for one adapter, for
+// each Source variant a row can name.
+//
+// The ProcessOwnedStore branch is #1722's: hermes is the first rowed adapter
+// with no transcript files at all, and for it "the session root" is the single
+// SQLite store the watcher polls. PathForPID is the resolver the daemon itself
+// calls, so grading it asks the same question the FilesUnderRoot branch asks —
+// a store that has not moved means the daemon polls the operator's real
+// sessions while the driver writes to the scratch home. The pid argument is
+// ignored by every ProcessOwnedStore declaration (the store is shared, not
+// per-process), which is why passing a placeholder is honest rather than a
+// stand-in for something the test could not arrange.
+//
+// The default case stays a hard failure rather than an empty result: an
+// unresolvable Source and a Source with nothing to relocate must not read the
+// same way.
+func sessionRootsOf(a agent.Agent) ([]string, error) {
+	switch src := a.Source.(type) {
+	case agent.FilesUnderRoot:
+		return src.AllRootsFor("darwin"), nil
+	case agent.ProcessOwnedStore:
+		if src.PathForPID == nil {
+			return nil, fmt.Errorf("declares ProcessOwnedStore with no PathForPID, so there is no store path to grade")
+		}
+		return []string{src.PathForPID(0)}, nil
+	default:
+		return nil, fmt.Errorf("declares Source %T, which this arm cannot resolve — a row for it "+
+			"needs its own half-one check rather than being waved through", a.Source)
 	}
 }
 

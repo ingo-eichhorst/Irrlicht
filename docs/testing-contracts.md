@@ -221,7 +221,7 @@ below.
   the second makes the first unsatisfiable. `PathFromBody` — the zero value, and
   every receiver before #1719 — is the six obligations below. `PathDaemonDerived`
   is a receiver whose payload names no filesystem path, because the adapter has
-  no file for a caller to name: opencode's `Source` is an
+  no file for a caller to name: opencode's and hermes' `Source` is an
   `agent.ProcessOwnedStore`, one SQLite database with no file per session, so
   the path every consumer keys a session on is composed by the daemon from its
   own store resolver and the body carries a session id. That route reaches its

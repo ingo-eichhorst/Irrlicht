@@ -20,6 +20,7 @@ import (
 	"irrlicht/core/adapters/inbound/agents/codex"
 	"irrlicht/core/adapters/inbound/agents/copilot"
 	"irrlicht/core/adapters/inbound/agents/geminicli"
+	"irrlicht/core/adapters/inbound/agents/hermes"
 	"irrlicht/core/adapters/inbound/agents/kirocli"
 	"irrlicht/core/adapters/inbound/agents/opencode"
 	"irrlicht/core/adapters/inbound/agents/pi"
@@ -951,6 +952,16 @@ func setupBackchannel(mux *http.ServeMux, deps setupBackchannelDeps) (*services.
 // satisfying pi.HookTarget's single method, HandleStopHook. All are
 // consent-gated: hooks installed by a pre-consent daemon keep firing until
 // the wizard is answered, so payloads are dropped while pending.
+//
+// Hermes Agent's pre_approval_request/post_approval_response/on_session_end
+// events (issue #1722) are beacon-delivered too (`irrlichd hook-post hermes`),
+// and are the second receiver — after opencode's — whose adapter reads a
+// SHARED STORE rather than transcript files: the approval pair is a
+// blocked-on-user state hermes persists nowhere, so it is not reachable from
+// state.db at any polling interval. Delivered by a `hooks:` entry in the
+// user's config.yaml naming irrlicht's own binary, so unlike opencode and pi
+// nothing executable is installed. The detector satisfies hermes.HookTarget's
+// three methods, the same set opencode's receiver calls.
 func registerHookRoutes(mux *http.ServeMux, detector *services.SessionDetector, metricsCollector outbound.MetricsCollector, permService *services.PermissionService, logger outbound.Logger) {
 	// mux.Handle, not HandleFunc: each constructor returns a hookjson.HookHandler
 	// — the handler together with the confiner it enforces #1361 with — which
@@ -973,6 +984,8 @@ func registerHookRoutes(mux *http.ServeMux, detector *services.SessionDetector, 
 		pi.NewHookHandler(detector, permService, logger))
 	mux.Handle("POST "+opencode.HookEndpointPath,
 		opencode.NewHookHandler(detector, permService, logger))
+	mux.Handle("POST "+hermes.HookEndpointPath,
+		hermes.NewHookHandler(detector, permService, logger))
 }
 
 // publishAddrFile writes the addr file and thereby signals "the daemon is
