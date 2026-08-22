@@ -112,29 +112,12 @@ type censusFigureExemption struct {
 // cheaper than one rule they cannot.
 var coincidentalCensusFigures = []censusFigureExemption{
 	{
-		File:   "timing_drift.go",
-		Marker: "1-5s        85",
-		Reason: "a bucket count from #1480's |delta| histogram, measured over the " +
-			"826 kind-matched pairs the catalog held then. Its own block says it " +
-			"is 'quoted here as of that measurement, not as a current count'. It " +
-			"coincides with PairedButUngraded and has nothing to do with it.",
-	},
-	{
 		File:   "replay_sidecar.go",
 		Marker: "+ 2ms cluster window",
 		Reason: "the divergent column of a REJECTED cluster-window configuration " +
 			"in #1478's calibration table. The block above it says the columns " +
 			"'no longer equal the live gate's figures' and to read the table as a " +
 			"comparison between rows. It coincides with Divergent.",
-	},
-	{
-		File:   "replay_sidecar.go",
-		Marker: "+ 69ms cluster (rejected)",
-		Reason: "the divergent column of another rejected row of the same #1478 " +
-			"table, coinciding with DivergentByCountsAndKinds. That two rejected " +
-			"rows collide with two different census fields is coincidence twice " +
-			"over, which is the strongest argument available that neither is a " +
-			"restatement.",
 	},
 }
 
@@ -161,6 +144,14 @@ var coincidentalCensusFigures = []censusFigureExemption{
 // up the same unchanged table — the 28ms entry stopped suppressing anything and
 // was deleted again, the 2ms row regained one, and the 69ms row swapped fields
 // back to where #1388 left it. Three runs now, and the table has never moved.
+//
+// #1735 is the fourth run and the first driven by two DIFFERENT adapters' first
+// hook-bearing recordings landing together. It reproduces #1388's and #1699's
+// direction once more: both fields up by one, and the collisions moved with
+// them rather than staying put — the histogram entry in timing_drift.go stopped
+// suppressing anything and was deleted, the 69ms row stopped colliding and lost
+// its entry again, and the 2ms row kept one while swapping which field it
+// shadows. Four runs, both signs, one table that has still never moved.
 //
 // No figure is quoted in this paragraph, deliberately: the first draft of it did
 // quote them and this very check reported five sites, in its own exemption file.

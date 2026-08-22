@@ -97,6 +97,13 @@ var stopHookCensus = map[string]stopRecording{
 		Stops: 1, Reproduced: 0,
 		Why: "the sidecar could not drive this replay: sidecar cannot drive a replay: no transcript_activity events with file_size for primary session 20260803_011105_d40f63",
 	},
+	"kiro-cli/scenarios/2-2_auto-executed-tool-call/recordings/2026-08-22-03-52-01_irrlichd-0.5.10+1f26512/transcript.jsonl": {
+		Stops: 1, Reproduced: 1,
+	},
+	"mistral-vibe/scenarios/2-1_basic-turn/recordings/2026-08-22-03-50-34_irrlichd-0.5.10+763e5ca/transcript.jsonl": {
+		Stops: 1, Reproduced: 0,
+		Why: "the sidecar could not drive this replay: sidecar cannot drive a replay: no transcript_activity events with file_size for primary session session_20260822_015033_156d37d3",
+	},
 }
 
 // sidecarHookEvent is the sliver of lifecycle.Event this walk reads. Decoded
