@@ -442,6 +442,82 @@ func TestHookReceiver_ForeignSessionIDIsQuiet(t *testing.T) {
 	}
 }
 
+// TestSessionIDShape_RejectsGatewayMintedIDs pins the ACTUAL mechanism that
+// keeps hermes' messaging-gateway sessions out of this adapter: sessionIDShape's
+// hex length. hookinstaller.go used to say `source` filtering did this; the
+// shell-hook envelope carries no `source` field at all (#1773).
+//
+// Upstream mint sites (all origin/main @ 261a4efb, v0.20.5 — unchanged since
+// v0.19.0):
+//   - gateway sessions: `uuid.uuid4().hex[:8]` — gateway/session.py:2831, :3354
+//   - CLI/TUI sessions: `uuid.uuid4().hex[:6]` — agent/agent_init.py:1647,
+//     cli.py:5437, tui_gateway/server.py:7359
+//
+// Table-driven so the failure names which rule rejects each row: the gateway
+// mint is rejected specifically on hex length, while "default" (the
+// contextvar fallback, `set_current_session_key(self.session_id or
+// "default")`) and a platform routing key are rejected because they are not
+// date/time-shaped at all.
+//
+// This is a LOCK — it pins behaviour that must not change, not a defect fix —
+// so it has no red-before-green phase. hooks_mutations_test.go's mutation
+// check is what earns it: widening the hex run to {6,8} flips this exact
+// table's gateway-mint row.
+func TestSessionIDShape_RejectsGatewayMintedIDs(t *testing.T) {
+	tests := []struct {
+		name string
+		id   string
+		want bool
+	}{
+		{"cli/tui 6-hex mint is accepted", "20260802_233614_c97a8d", true},
+		{"gateway 8-hex mint is rejected on hex length", "20260802_233614_c97a8d12", false},
+		{"contextvar default fallback is rejected (not date-shaped)", "default", false},
+		{"gateway routing key is rejected (not date-shaped)", "whatsapp:4915112345678", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := sessionIDShape.MatchString(tt.id); got != tt.want {
+				t.Errorf("sessionIDShape.MatchString(%q) = %v, want %v", tt.id, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestHookReceiver_GatewaySurfaceApprovalIsQuiet is a LOCK on the same
+// mechanism as the table above, exercised through the real receiver rather
+// than the regex alone: a 0.20.5-shaped gateway approval — a WELL-FORMED
+// 8-hex top-level session_id (tools/approval.py:126-133 now forwards one for
+// gateway turns too, unlike v0.19.0's empty field) plus a routing key in
+// extra.session_key — must dispatch nothing.
+//
+// This is the row that would have caught the drift: it fails the moment
+// either the gateway mint shape or the receiver's first-field preference
+// (payload.sessionID(), which reads top-level session_id before
+// extra.session_key) moves. TestHookReceiver_ForeignSessionIDIsQuiet does not
+// cover this — its rows share the same malformed string in both fields, never
+// a WELL-FORMED-but-wrong-length top-level id the way 0.20.5 actually sends
+// one.
+func TestHookReceiver_GatewaySurfaceApprovalIsQuiet(t *testing.T) {
+	hermesHome(t)
+	h, target := newReceiver(t)
+
+	const gatewayMintedSessionID = "20260802_233614_c97a8d12" // 8 hex — gateway mint shape
+	body := `{"hook_event_name":"` + HookEventPreApprovalRequest +
+		`","session_id":"` + gatewayMintedSessionID +
+		`","extra":{"session_key":"whatsapp:4915112345678","surface":"gateway"}}`
+
+	rec := post(t, h, body)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", rec.Code)
+	}
+	if n := target.totalCalls(); n != 0 {
+		t.Fatalf("dispatched %d times for a gateway-surface approval, want 0 — hex length is "+
+			"the only guard left standing since hermes 0.20.5 forwards a well-formed session_id "+
+			"for gateway turns too", n)
+	}
+}
+
 // TestHookReceiver_PermissionGateContract runs the shared #797 contract once
 // per permission this receiver must honour, derived from the receiver's own
 // declaration (issue #1488).

@@ -15,8 +15,11 @@
 // HERMES_HOME:
 //
 //   - **hermes has a first-class hook system with its own CLI subcommand.**
-//     `hermes hooks {list|test|revoke|doctor}` (hermes_cli/hooks.py), 25
-//     lifecycle events (`VALID_HOOKS` in hermes_cli/plugins.py), and THREE
+//     `hermes hooks {list|test|revoke|doctor}` (hermes_cli/hooks.py) and a
+//     growing set of lifecycle events (`VALID_HOOKS` in
+//     hermes_cli/plugins.py — 23 at v0.19.0, 37 at v0.20.5 five weeks later;
+//     #1773. No single count is asserted here because nothing in this
+//     adapter re-derives it, and one already went stale), and THREE
 //     independent subscription mechanisms — a gateway-only Python handler
 //     directory, in-process Python plugins under `~/.hermes/plugins/`, and
 //     SHELL hooks declared as a `hooks:` block in `~/.hermes/config.yaml`
@@ -89,7 +92,12 @@
 //     under another profile is watched by the store watcher alone, exactly as
 //     it was before this channel existed.
 //   - The gateway platforms (whatsapp, slack, …). The hooks fire there too,
-//     but those sessions are filtered out of this adapter by `source`.
+//     but those sessions never reach a dispatch: gateway sessions are minted
+//     `uuid.uuid4().hex[:8]` against the `hex[:6]` sessionIDShape (hooks.go)
+//     actually accepts, so the exclusion is id-shape by hex length — not
+//     `source`, which the shell-hook envelope does not carry at all. See
+//     TestSessionIDShape_RejectsGatewayMintedIDs and
+//     TestHookReceiver_GatewaySurfaceApprovalIsQuiet in hooks_test.go (#1773).
 package hermes
 
 import (
@@ -167,7 +175,8 @@ const (
 //
 //   - `post_tool_call`, `subagent_start`/`subagent_stop`, the `kanban_*`
 //     trio and the gateway hooks are either store-covered or out of this
-//     adapter's scope (`source` filtering excludes the gateway platforms).
+//     adapter's scope (the gateway platforms are excluded by sessionIDShape's
+//     hex length, not by `source` — see hooks.go and the tests named above).
 var installedHookEvents = []string{
 	HookEventPreApprovalRequest,
 	HookEventPostApprovalResponse,
