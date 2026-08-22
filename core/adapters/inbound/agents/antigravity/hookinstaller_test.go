@@ -562,6 +562,60 @@ func TestUninstallHooks_IsNotScopedToTheInstallingDaemon(t *testing.T) {
 // diagnostics bundle. Both are worse than not checking, so the corpus grades
 // the two answers against each other rather than against a hand-written
 // expectation.
+// mustInstall runs the install and fails the test if it errors.
+func mustInstall(t *testing.T) {
+	t.Helper()
+	if _, err := EnsureHooksInstalled(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// mustSeedForeignInstall writes the entry a DIFFERENTLY-situated daemon would
+// have installed — the address-free counterpart of seeding a stale port.
+func mustSeedForeignInstall(t *testing.T) {
+	t.Helper()
+	foreign, err := hookbeacon.Command(foreignBinaryPath, AdapterName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ensureInstalledWithCommand(foreign); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// mustWriteDoc persists a decoded document through the same writer the
+// installer uses, so a seeded corpus row cannot accidentally produce bytes the
+// installer would never have written.
+func mustWriteDoc(t *testing.T, path string, doc map[string]interface{}) {
+	t.Helper()
+	if err := hookjson.WriteSettings(path, doc, atomicWriteFile); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// tamperWithInstalledEntry installs, then lets break mutate OUR handler object
+// in place, then writes it back. Three corpus rows differ only in that one
+// closure, and spelling the install/read/write dance out per row hid that.
+func tamperWithInstalledEntry(t *testing.T, path string, break_ func(entry map[string]interface{})) {
+	t.Helper()
+	mustInstall(t)
+	doc := readDoc(t, path)
+	ours, ok := doc[hookName].(map[string]interface{})
+	if !ok {
+		t.Fatalf("no %q object to tamper with: %v", hookName, doc)
+	}
+	handlers, ok := ours[HookEventStop].([]interface{})
+	if !ok || len(handlers) == 0 {
+		t.Fatalf("no %q handlers to tamper with: %v", HookEventStop, ours)
+	}
+	entry, ok := handlers[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("handler is %T, not an object", handlers[0])
+	}
+	break_(entry)
+	mustWriteDoc(t, path, doc)
+}
+
 func TestVerifyAgreesWithEnsureInstalled(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -582,74 +636,39 @@ func TestVerifyAgreesWithEnsureInstalled(t *testing.T) {
 		{"our name, Stop is not an array", func(t *testing.T, path string) {
 			writeDoc(t, path, `{"`+hookName+`":{"Stop":"nope"}}`)
 		}},
-		{"a fresh, correct install", func(t *testing.T, path string) {
-			if _, err := EnsureHooksInstalled(); err != nil {
-				t.Fatal(err)
-			}
+		{"a fresh, correct install", func(t *testing.T, _ string) {
+			mustInstall(t)
 		}},
-		{"a foreign daemon's entry", func(t *testing.T, path string) {
-			foreign, err := hookbeacon.Command(foreignBinaryPath, AdapterName)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := ensureInstalledWithCommand(foreign); err != nil {
-				t.Fatal(err)
-			}
+		{"a foreign daemon's entry", func(t *testing.T, _ string) {
+			mustSeedForeignInstall(t)
 		}},
 		{"our entry with the wrong timeout", func(t *testing.T, path string) {
-			if _, err := EnsureHooksInstalled(); err != nil {
-				t.Fatal(err)
-			}
-			doc := readDoc(t, path)
-			ours := doc[hookName].(map[string]interface{})
-			entry := ours[HookEventStop].([]interface{})[0].(map[string]interface{})
-			entry["timeout"] = 60
-			if err := hookjson.WriteSettings(path, doc, atomicWriteFile); err != nil {
-				t.Fatal(err)
-			}
+			tamperWithInstalledEntry(t, path, func(entry map[string]interface{}) {
+				entry["timeout"] = 60
+			})
 		}},
 		{"our entry with the inert result stripped", func(t *testing.T, path string) {
-			if _, err := EnsureHooksInstalled(); err != nil {
-				t.Fatal(err)
-			}
-			doc := readDoc(t, path)
-			ours := doc[hookName].(map[string]interface{})
-			entry := ours[HookEventStop].([]interface{})[0].(map[string]interface{})
-			command, _ := entry["command"].(string)
-			entry["command"] = strings.TrimSuffix(command, inertResultSuffix)
-			if err := hookjson.WriteSettings(path, doc, atomicWriteFile); err != nil {
-				t.Fatal(err)
-			}
+			tamperWithInstalledEntry(t, path, func(entry map[string]interface{}) {
+				command, _ := entry["command"].(string)
+				entry["command"] = strings.TrimSuffix(command, inertResultSuffix)
+			})
 		}},
 		{"our entry with a stray extra key", func(t *testing.T, path string) {
-			if _, err := EnsureHooksInstalled(); err != nil {
-				t.Fatal(err)
-			}
-			doc := readDoc(t, path)
-			ours := doc[hookName].(map[string]interface{})
-			entry := ours[HookEventStop].([]interface{})[0].(map[string]interface{})
-			entry["matcher"] = "*"
-			if err := hookjson.WriteSettings(path, doc, atomicWriteFile); err != nil {
-				t.Fatal(err)
-			}
+			tamperWithInstalledEntry(t, path, func(entry map[string]interface{}) {
+				entry["matcher"] = "*"
+			})
 		}},
 		{"two copies of ours", func(t *testing.T, path string) {
-			if _, err := EnsureHooksInstalled(); err != nil {
-				t.Fatal(err)
-			}
+			mustInstall(t)
 			doc := readDoc(t, path)
 			ours := doc[hookName].(map[string]interface{})
 			arr := ours[HookEventStop].([]interface{})
 			ours[HookEventStop] = append(arr, arr[0])
-			if err := hookjson.WriteSettings(path, doc, atomicWriteFile); err != nil {
-				t.Fatal(err)
-			}
+			mustWriteDoc(t, path, doc)
 		}},
 		{"ours plus a foreign handler", func(t *testing.T, path string) {
 			writeDoc(t, path, `{"`+hookName+`":{"Stop":[{"command":"./theirs.sh"}]}}`)
-			if _, err := EnsureHooksInstalled(); err != nil {
-				t.Fatal(err)
-			}
+			mustInstall(t)
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

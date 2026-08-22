@@ -23,7 +23,7 @@
 set -euo pipefail
 
 roots=()
-if [ "$#" -gt 0 ]; then
+if [[ "$#" -gt 0 ]]; then
 	roots=("$@")
 else
 	roots=("$HOME/.gemini/antigravity-cli/brain" "$HOME/.gemini/antigravity/brain")
@@ -31,12 +31,12 @@ fi
 
 present=()
 for root in "${roots[@]}"; do
-	if [ -d "$root" ]; then
+	if [[ -d "$root" ]]; then
 		present+=("$root")
 	fi
 done
 
-if [ "${#present[@]}" -eq 0 ]; then
+if [[ "${#present[@]}" -eq 0 ]]; then
 	echo "REFUSING: none of the requested brain stores exists:" >&2
 	printf '  %s\n' "${roots[@]}" >&2
 	echo "This machine has no Antigravity conversations to census. That is not a census of zero." >&2

@@ -123,7 +123,7 @@ func writeContractTranscript(t *testing.T, dir string) string {
 // absent value means the sole installed event (see eventOf). The contract
 // wirings need to be able to name an event explicitly, which is what keeps
 // #1364's unrecognized-event path reachable, so it is rendered here.
-func contractPayload(_ string, event string) string {
+func contractPayload(_, event string) string {
 	body, err := json.Marshal(antigravityHookPayload{
 		HookEventName:  event,
 		ConversationID: contractConversationID,

@@ -67,69 +67,116 @@ func TestMergeProperty_OverGeneratedUserDocuments(t *testing.T) {
 			path := antigravityConfigHome(t)
 			writeDoc(t, path, rendered)
 
-			before, err := hookjson.ReadSettings(path)
-			if err != nil {
-				t.Fatalf("the generator produced a document hookjson cannot read: %v\n%s", err, rendered)
-			}
-			if !reflect.DeepEqual(normalize(before), normalize(doc)) {
-				t.Fatalf("the generator's rendering does not decode back to the document it built —\n"+
-					"the generator is broken, and every property below would be grading the wrong input\n%s", rendered)
-			}
-
-			// --- install ---
-			if _, err := EnsureHooksInstalled(); err != nil {
-				t.Fatalf("install: %v\n%s", err, rendered)
-			}
-			after, err := hookjson.ReadSettings(path)
-			if err != nil {
-				t.Fatalf("read after install: %v", err)
-			}
+			// Each line below is one property, named for what it claims. The
+			// bodies are helpers rather than inline blocks so this reads as
+			// the list of obligations the merge owes — which is the point of
+			// the file, and which a single 60-line body buried.
+			before := assertGeneratorRoundTrips(t, path, doc, rendered)
+			after := installOnce(t, path, rendered)
 
 			assertForeignNamesPreserved(t, before, after)
 			assertOurHookIsCorrect(t, before, after)
-
-			// --- idempotence, on the bytes ---
-			firstBytes := mustRead(t, path)
-			changed, err := EnsureHooksInstalled()
-			if err != nil {
-				t.Fatalf("second install: %v", err)
-			}
-			if changed {
-				t.Errorf("second install reported a change:\n%s", firstBytes)
-			}
-			if got := mustRead(t, path); got != firstBytes {
-				t.Errorf("second install rewrote the file:\n--- first ---\n%s\n--- second ---\n%s", firstBytes, got)
-			}
-
-			// --- verify agrees ---
-			status, err := VerifyHooksInstalled()
-			if err != nil {
-				t.Fatalf("verify after install: %v", err)
-			}
-			if len(status.Missing) > 0 || len(status.Stale) > 0 {
-				t.Errorf("verify reports %+v immediately after a successful install", status)
-			}
-
-			// --- uninstall round-trips to the original, minus us ---
-			if _, err := UninstallHooks(); err != nil {
-				t.Fatalf("uninstall: %v", err)
-			}
-			final, err := hookjson.ReadSettings(path)
-			if err != nil {
-				t.Fatalf("read after uninstall: %v", err)
-			}
-			want := normalize(stripOurs(before))
-			if got := normalize(final); !reflect.DeepEqual(got, want) {
-				t.Errorf("uninstall did not restore the user's document.\nwant: %#v\ngot:  %#v\nseed doc:\n%s",
-					want, got, rendered)
-			}
+			assertInstallIsIdempotent(t, path)
+			assertVerifyReportsClean(t, "immediately after a successful install")
+			assertUninstallRestores(t, path, before, rendered)
 		})
 	}
 
-	// A generator that stopped producing one of the shapes it exists to
-	// produce would leave every property above green while covering less —
-	// which is the #1753 failure, one level up. Assert the corpus actually
-	// contains each shape rather than trusting the weights.
+	assertCorpusCoversEveryShape(t, shapes)
+}
+
+// assertGeneratorRoundTrips is the guard that runs BEFORE any property: the
+// rendering the generator wrote must decode back to the document it built.
+//
+// It is not ceremony. renderJSONC serializes by hand — comments, key order,
+// CRLF — so a generator bug produces a document that parses into something
+// else, and every property below would then grade an input nobody intended
+// while reporting green. Returns the decoded document the properties compare
+// against.
+func assertGeneratorRoundTrips(t *testing.T, path string, doc map[string]interface{}, rendered string) map[string]interface{} {
+	t.Helper()
+	before, err := hookjson.ReadSettings(path)
+	if err != nil {
+		t.Fatalf("the generator produced a document hookjson cannot read: %v\n%s", err, rendered)
+	}
+	if !reflect.DeepEqual(normalize(before), normalize(doc)) {
+		t.Fatalf("the generator's rendering does not decode back to the document it built —\n"+
+			"the generator is broken, and every property below would be grading the wrong input\n%s", rendered)
+	}
+	return before
+}
+
+// installOnce runs the install and returns the document it produced.
+func installOnce(t *testing.T, path, rendered string) map[string]interface{} {
+	t.Helper()
+	if _, err := EnsureHooksInstalled(); err != nil {
+		t.Fatalf("install: %v\n%s", err, rendered)
+	}
+	after, err := hookjson.ReadSettings(path)
+	if err != nil {
+		t.Fatalf("read after install: %v", err)
+	}
+	return after
+}
+
+// assertInstallIsIdempotent pins the property on the BYTES, not on the decoded
+// document: hookjson has no "the bytes did not change, skip the write" branch,
+// so an install that reported no change while rewriting the file would still be
+// churning a user's config on every daemon start.
+func assertInstallIsIdempotent(t *testing.T, path string) {
+	t.Helper()
+	firstBytes := mustRead(t, path)
+	changed, err := EnsureHooksInstalled()
+	if err != nil {
+		t.Fatalf("second install: %v", err)
+	}
+	if changed {
+		t.Errorf("second install reported a change:\n%s", firstBytes)
+	}
+	if got := mustRead(t, path); got != firstBytes {
+		t.Errorf("second install rewrote the file:\n--- first ---\n%s\n--- second ---\n%s", firstBytes, got)
+	}
+}
+
+// assertVerifyReportsClean is the read-only half agreeing with the write half.
+// when names the moment being graded, so a failure says which of the two call
+// sites (post-install, post-repair) disagreed.
+func assertVerifyReportsClean(t *testing.T, when string) {
+	t.Helper()
+	status, err := VerifyHooksInstalled()
+	if err != nil {
+		t.Fatalf("verify %s: %v", when, err)
+	}
+	if len(status.Missing) > 0 || len(status.Stale) > 0 {
+		t.Errorf("verify reports %+v %s", status, when)
+	}
+}
+
+// assertUninstallRestores is the round-trip property: uninstalling from an
+// installed document leaves exactly the user's original, minus irrlicht's own
+// handler.
+func assertUninstallRestores(t *testing.T, path string, before map[string]interface{}, rendered string) {
+	t.Helper()
+	if _, err := UninstallHooks(); err != nil {
+		t.Fatalf("uninstall: %v", err)
+	}
+	final, err := hookjson.ReadSettings(path)
+	if err != nil {
+		t.Fatalf("read after uninstall: %v", err)
+	}
+	want := normalize(stripOurs(before))
+	if got := normalize(final); !reflect.DeepEqual(got, want) {
+		t.Errorf("uninstall did not restore the user's document.\nwant: %#v\ngot:  %#v\nseed doc:\n%s",
+			want, got, rendered)
+	}
+}
+
+// assertCorpusCoversEveryShape is the #1753 failure one level up: a generator
+// that stopped producing one of the states the installer must reconcile would
+// leave every property green while covering less. The weights are not trusted;
+// the shapes actually produced are counted.
+func assertCorpusCoversEveryShape(t *testing.T, shapes map[string]int) {
+	t.Helper()
 	for _, shape := range []string{"ours-absent", "ours-correct", "ours-stale", "ours-with-foreign"} {
 		if shapes[shape] == 0 {
 			t.Errorf("the generator produced no %q document in %d cases — the corpus has stopped "+
@@ -157,55 +204,71 @@ func TestMergeProperty_ConvergesAfterAnArbitraryMutation(t *testing.T) {
 		t.Run(fmt.Sprintf("case%03d", i), func(t *testing.T) {
 			path := antigravityConfigHome(t)
 			writeDoc(t, path, rendered)
-			if _, err := EnsureHooksInstalled(); err != nil {
-				t.Fatalf("install: %v", err)
-			}
+			installOnce(t, path, rendered)
 
-			doc, err := hookjson.ReadSettings(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !mutate(rng, doc) {
+			if !mutateInstalledDocument(t, rng, path) {
 				return
 			}
 			mutated++
-			if err := hookjson.WriteSettings(path, doc, atomicWriteFile); err != nil {
-				t.Fatalf("write the mutated document: %v", err)
-			}
-
-			if _, err := EnsureHooksInstalled(); err != nil {
-				// A mutation can legitimately produce the one document the
-				// installer refuses (a non-object at our key). That is a
-				// refusal, not a convergence failure — but it must be THAT
-				// refusal and not something else.
-				if strings.Contains(err.Error(), "refusing to overwrite") {
-					return
-				}
-				t.Fatalf("install after mutation: %v", err)
-			}
-
-			status, err := VerifyHooksInstalled()
-			if err != nil {
-				t.Fatalf("verify: %v", err)
-			}
-			if len(status.Missing) > 0 || len(status.Stale) > 0 {
-				t.Errorf("one Ensure did not repair the mutation: verify still reports %+v", status)
-			}
-
-			settled := mustRead(t, path)
-			changed, err := EnsureHooksInstalled()
-			if err != nil {
-				t.Fatal(err)
-			}
-			if changed || mustRead(t, path) != settled {
-				t.Errorf("the installer did not converge — a second Ensure changed the file again")
-			}
+			assertConverges(t, path)
 		})
 	}
 
 	if mutated == 0 {
 		t.Fatalf("no document was mutated in %d cases — the mutation generator did nothing, and "+
 			"every convergence assertion above graded an unmutated file", propertyCases)
+	}
+}
+
+// mutateInstalledDocument applies one arbitrary structural change to the
+// installed file and reports whether anything changed. A false means this case
+// has nothing to grade — the caller returns rather than asserting convergence
+// against an unmutated document.
+func mutateInstalledDocument(t *testing.T, rng *rand.Rand, path string) bool {
+	t.Helper()
+	doc, err := hookjson.ReadSettings(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !mutate(rng, doc) {
+		return false
+	}
+	if err := hookjson.WriteSettings(path, doc, atomicWriteFile); err != nil {
+		t.Fatalf("write the mutated document: %v", err)
+	}
+	return true
+}
+
+// assertConverges is the whole obligation after a mutation: ONE Ensure makes
+// Verify clean, and a second writes nothing.
+//
+// It deliberately does not require that every mutation be REPAIRED — some are
+// none of irrlicht's business — only that the installer settles. A repair that
+// never converges rewrites a user's config on every daemon start forever, which
+// is the failure hookbeacon.IsCanonical's two deliberate "true" answers exist
+// to prevent.
+func assertConverges(t *testing.T, path string) {
+	t.Helper()
+	if _, err := EnsureHooksInstalled(); err != nil {
+		// A mutation can legitimately produce the one document the installer
+		// refuses (a non-object at our key). That is a refusal, not a
+		// convergence failure — but it must be THAT refusal and not something
+		// else, so the message is matched rather than the error tolerated.
+		if strings.Contains(err.Error(), "refusing to overwrite") {
+			return
+		}
+		t.Fatalf("install after mutation: %v", err)
+	}
+
+	assertVerifyReportsClean(t, "after one Ensure repaired the mutation")
+
+	settled := mustRead(t, path)
+	changed, err := EnsureHooksInstalled()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed || mustRead(t, path) != settled {
+		t.Errorf("the installer did not converge — a second Ensure changed the file again")
 	}
 }
 
@@ -273,45 +336,77 @@ func assertOurHookIsCorrect(t reporter, before, after map[string]interface{}) {
 		t.Errorf("no %q array under %q after install: %#v", HookEventStop, hookName, ours)
 		return
 	}
-	mine := 0
-	var foreignAfter []interface{}
+
+	beforeOurs, _ := before[hookName].(map[string]interface{})
+	mine, foreignAfter := partitionHandlers(handlers)
+	_, foreignBefore := partitionHandlers(stopHandlersOf(beforeOurs))
+
+	assertExactlyOneCanonicalHandlerOfOurs(t, mine)
+	assertForeignHandlersPreserved(t, foreignBefore, foreignAfter)
+	assertForeignKeysUnderOurNamePreserved(t, beforeOurs, ours)
+}
+
+// stopHandlersOf returns a named hook's Stop array, or nil for a spec that has
+// none. Indexing a nil map is legal in Go, so a document with no named hook of
+// ours flows through here as "no handlers" rather than needing a branch at each
+// call site.
+func stopHandlersOf(spec map[string]interface{}) []interface{} {
+	arr, _ := spec[HookEventStop].([]interface{})
+	return arr
+}
+
+// partitionHandlers splits one event's array into the handlers irrlicht owns
+// and everything else, preserving order in both.
+func partitionHandlers(handlers []interface{}) (mine []map[string]interface{}, foreign []interface{}) {
 	for _, h := range handlers {
 		entry, isObject := h.(map[string]interface{})
 		if isObject && isOurs(entry) {
-			mine++
-			if !entryIsCanonical(entry) {
-				t.Errorf("our installed handler is not canonical: %#v", entry)
-			}
+			mine = append(mine, entry)
 			continue
 		}
-		foreignAfter = append(foreignAfter, h)
+		foreign = append(foreign, h)
 	}
-	if mine != 1 {
-		t.Errorf("found %d handlers of ours under %s, want exactly 1", mine, HookEventStop)
-	}
+	return mine, foreign
+}
 
-	// Foreign handlers in our own event array, and every other key under our
-	// name, are somebody else's content and must survive.
-	beforeOurs, _ := before[hookName].(map[string]interface{})
-	var foreignBefore []interface{}
-	if arr, ok := beforeOurs[HookEventStop].([]interface{}); ok {
-		for _, h := range arr {
-			entry, isObject := h.(map[string]interface{})
-			if isObject && isOurs(entry) {
-				continue
-			}
-			foreignBefore = append(foreignBefore, h)
+// assertExactlyOneCanonicalHandlerOfOurs pins the half irrlicht does own. Two
+// of ours on one event means two beacon spawns per turn, forever; zero means
+// the install did not land.
+func assertExactlyOneCanonicalHandlerOfOurs(t reporter, mine []map[string]interface{}) {
+	t.Helper()
+	if len(mine) != 1 {
+		t.Errorf("found %d handlers of ours under %s, want exactly 1", len(mine), HookEventStop)
+	}
+	for _, entry := range mine {
+		if !entryIsCanonical(entry) {
+			t.Errorf("our installed handler is not canonical: %#v", entry)
 		}
 	}
-	if !reflect.DeepEqual(normalizeValue(foreignAfter), normalizeValue(foreignBefore)) {
+}
+
+// assertForeignHandlersPreserved covers a handler somebody else put inside OUR
+// named hook's event array. Upstream merges and runs multiple named hooks per
+// event sequentially, so this is unusual rather than impossible — and it is
+// still not irrlicht's to delete.
+func assertForeignHandlersPreserved(t reporter, before, after []interface{}) {
+	t.Helper()
+	if !reflect.DeepEqual(normalizeValue(after), normalizeValue(before)) {
 		t.Errorf("foreign handlers inside our own event array were changed:\nwant %#v\ngot  %#v",
-			foreignBefore, foreignAfter)
+			before, after)
 	}
-	for key, want := range beforeOurs {
+}
+
+// assertForeignKeysUnderOurNamePreserved covers every key under our own name
+// that is not the event we install — `enabled` above all, which is how a user
+// turns our hook off through the /hooks TUI and which the installer must not
+// reassert on the next daemon start.
+func assertForeignKeysUnderOurNamePreserved(t reporter, before, after map[string]interface{}) {
+	t.Helper()
+	for key, want := range before {
 		if key == HookEventStop {
 			continue
 		}
-		got, present := ours[key]
+		got, present := after[key]
 		if !present {
 			t.Errorf("the install deleted %q from under our own name", key)
 			continue
@@ -325,6 +420,12 @@ func assertOurHookIsCorrect(t reporter, before, after map[string]interface{}) {
 // stripOurs is the expected result of uninstalling from a document: our
 // sentinel-bearing handlers gone, an emptied event key gone, and our whole
 // named hook gone once nothing of anyone's is left under it.
+//
+// It is a deliberate REIMPLEMENTATION of what UninstallHooks does, not a call
+// into it. An oracle computed by the code under test cannot fail: the
+// round-trip property would hold for any uninstall, including one that deleted
+// the user's whole file. The duplication with dropOurHandlers is the price of
+// the property meaning anything.
 func stripOurs(doc map[string]interface{}) map[string]interface{} {
 	out := map[string]interface{}{}
 	for name, value := range doc {
@@ -334,37 +435,51 @@ func stripOurs(doc map[string]interface{}) map[string]interface{} {
 		}
 		ours, isObject := value.(map[string]interface{})
 		if !isObject {
+			// Not a shape uninstall can model, so it is left exactly as it is.
 			out[name] = value
 			continue
 		}
-		kept := map[string]interface{}{}
-		for key, v := range ours {
-			if key != HookEventStop {
-				kept[key] = v
-				continue
-			}
-			arr, isArray := v.([]interface{})
-			if !isArray {
-				kept[key] = v
-				continue
-			}
-			var survivors []interface{}
-			for _, h := range arr {
-				entry, isEntry := h.(map[string]interface{})
-				if isEntry && isOurs(entry) {
-					continue
-				}
-				survivors = append(survivors, h)
-			}
-			if len(survivors) > 0 {
-				kept[key] = survivors
-			}
-		}
-		if len(kept) > 0 {
+		if kept := stripOursFromNamedHook(ours); len(kept) > 0 {
 			out[name] = kept
 		}
 	}
 	return out
+}
+
+// stripOursFromNamedHook removes our handler from one named hook's events,
+// dropping an event key whose array we emptied. An empty result means the whole
+// named hook goes.
+func stripOursFromNamedHook(ours map[string]interface{}) map[string]interface{} {
+	kept := map[string]interface{}{}
+	for key, v := range ours {
+		if key != HookEventStop {
+			kept[key] = v
+			continue
+		}
+		arr, isArray := v.([]interface{})
+		if !isArray {
+			kept[key] = v
+			continue
+		}
+		if survivors := withoutOurHandlers(arr); len(survivors) > 0 {
+			kept[key] = survivors
+		}
+	}
+	return kept
+}
+
+// withoutOurHandlers drops every handler carrying our sentinel, keeping the
+// rest in order.
+func withoutOurHandlers(arr []interface{}) []interface{} {
+	var survivors []interface{}
+	for _, h := range arr {
+		entry, isEntry := h.(map[string]interface{})
+		if isEntry && isOurs(entry) {
+			continue
+		}
+		survivors = append(survivors, h)
+	}
+	return survivors
 }
 
 // --- generator ---
@@ -575,55 +690,97 @@ func mutate(rng *rand.Rand, doc map[string]interface{}) bool {
 		return false
 	}
 	key := keys[rng.Intn(len(keys))]
+	return documentMutations[rng.Intn(len(documentMutations))].apply(rng, doc, key)
+}
 
-	switch rng.Intn(6) {
-	case 0: // delete a whole named hook — the sync-by-omission clobber shape
-		delete(doc, key)
-		return true
-	case 1: // replace a named hook with something unmodellable
-		doc[key] = "clobbered by another tool"
-		return true
-	case 2: // add a named hook nobody has seen
-		doc["newcomer"] = map[string]interface{}{"Stop": []interface{}{map[string]interface{}{"command": "./new.sh"}}}
-		return true
-	case 3: // empty a named hook's event arrays
-		spec, ok := doc[key].(map[string]interface{})
-		if !ok {
-			return false
-		}
-		for _, event := range allEvents {
-			if _, present := spec[event]; present {
-				spec[event] = []interface{}{}
-				return true
-			}
-		}
+// documentMutation is one arbitrary structural change a /hooks run, a
+// hand-edit or another tool could make to this file.
+//
+// A table of named functions rather than a switch, because the value of this
+// generator is in WHICH changes it makes: a reader has to be able to see the
+// list, and an unnamed `case 3:` inside a 50-line switch is a change nobody can
+// audit for coverage.
+type documentMutation struct {
+	name string
+	// apply mutates doc in place and reports whether it changed anything. A
+	// false is normal — a mutation can find no site to act on — and the caller
+	// skips that case rather than grading an unmutated document.
+	apply func(rng *rand.Rand, doc map[string]interface{}, key string) bool
+}
+
+var documentMutations = []documentMutation{
+	{"delete a whole named hook", deleteNamedHook},
+	{"replace a named hook with something unmodellable", clobberNamedHook},
+	{"add a named hook nobody has seen", addUnknownNamedHook},
+	{"empty a named hook's event array", emptyAnEventArray},
+	{"scramble a handler's command", scrambleAHandlerCommand},
+	{"toggle enabled", toggleEnabled},
+}
+
+// deleteNamedHook is the sync-by-omission clobber shape #1372 documents for
+// gemini-cli's settings writer.
+func deleteNamedHook(_ *rand.Rand, doc map[string]interface{}, key string) bool {
+	delete(doc, key)
+	return true
+}
+
+// clobberNamedHook replaces a named hook with a value the installer cannot
+// model — which, at our own key, is the one document it refuses.
+func clobberNamedHook(_ *rand.Rand, doc map[string]interface{}, key string) bool {
+	doc[key] = "clobbered by another tool"
+	return true
+}
+
+func addUnknownNamedHook(_ *rand.Rand, doc map[string]interface{}, _ string) bool {
+	doc["newcomer"] = map[string]interface{}{
+		"Stop": []interface{}{map[string]interface{}{"command": "./new.sh"}},
+	}
+	return true
+}
+
+func emptyAnEventArray(_ *rand.Rand, doc map[string]interface{}, key string) bool {
+	spec, ok := doc[key].(map[string]interface{})
+	if !ok {
 		return false
-	case 4: // scramble one handler's command, which is what makes ours stale
-		spec, ok := doc[key].(map[string]interface{})
-		if !ok {
-			return false
-		}
-		for _, event := range allEvents {
-			arr, isArray := spec[event].([]interface{})
-			if !isArray || len(arr) == 0 {
-				continue
-			}
-			entry, isObject := arr[0].(map[string]interface{})
-			if !isObject {
-				continue
-			}
-			entry["command"] = "./tampered.sh"
+	}
+	for _, event := range allEvents {
+		if _, present := spec[event]; present {
+			spec[event] = []interface{}{}
 			return true
 		}
+	}
+	return false
+}
+
+// scrambleAHandlerCommand is what makes OUR entry stale when it lands on our
+// own named hook, and an ordinary user edit when it lands elsewhere.
+func scrambleAHandlerCommand(_ *rand.Rand, doc map[string]interface{}, key string) bool {
+	spec, ok := doc[key].(map[string]interface{})
+	if !ok {
 		return false
-	default: // toggle enabled
-		spec, ok := doc[key].(map[string]interface{})
-		if !ok {
-			return false
+	}
+	for _, event := range allEvents {
+		arr, isArray := spec[event].([]interface{})
+		if !isArray || len(arr) == 0 {
+			continue
 		}
-		spec["enabled"] = rng.Intn(2) == 0
+		entry, isObject := arr[0].(map[string]interface{})
+		if !isObject {
+			continue
+		}
+		entry["command"] = "./tampered.sh"
 		return true
 	}
+	return false
+}
+
+func toggleEnabled(rng *rand.Rand, doc map[string]interface{}, key string) bool {
+	spec, ok := doc[key].(map[string]interface{})
+	if !ok {
+		return false
+	}
+	spec["enabled"] = rng.Intn(2) == 0
+	return true
 }
 
 // --- small helpers ---

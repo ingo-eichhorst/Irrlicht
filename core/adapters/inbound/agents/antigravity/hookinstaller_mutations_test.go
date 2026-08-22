@@ -181,10 +181,21 @@ func TestMergeAssertionsCatchEveryCommittedMutation(t *testing.T) {
 		t.Fatal("the corpus is empty — a mutation table with no rows grades nothing and passes")
 	}
 
-	// One seeded document rich enough to express every row: another named
-	// hook, a foreign key under our name, and a foreign handler in our own
-	// event array.
-	seed := `{
+	t.Run("correct_install_is_silent", func(t *testing.T) {
+		assertCorrectInstallIsSilent(t, mergeCorpusSeed)
+	})
+
+	for _, m := range mergeMutations {
+		t.Run(m.name, func(t *testing.T) {
+			assertMutationIsCaught(t, mergeCorpusSeed, m)
+		})
+	}
+}
+
+// mergeCorpusSeed is one document rich enough to express every row: another
+// named hook, a foreign key under our own name, and a foreign handler in our
+// own event array.
+const mergeCorpusSeed = `{
   "lint-checker": { "PostToolUse": [ { "matcher": "*", "hooks": [ { "command": "./lint.sh" } ] } ] },
   "` + hookName + `": {
     "enabled": false,
@@ -193,39 +204,47 @@ func TestMergeAssertionsCatchEveryCommittedMutation(t *testing.T) {
 }
 `
 
-	// The vacuity guard: a CORRECT install must leave both assertions silent,
-	// or every row below would pass for a reason unrelated to its mutation.
-	t.Run("correct_install_is_silent", func(t *testing.T) {
-		before, after := installFromSeed(t, seed)
-		names, hook := runMergeAssertions(before, after)
-		if names.reported() {
-			t.Errorf("assertForeignNamesPreserved reported against a CORRECT install: %v", names.reports)
-		}
-		if hook.reported() {
-			t.Errorf("assertOurHookIsCorrect reported against a CORRECT install: %v", hook.reports)
-		}
-	})
+// assertCorrectInstallIsSilent is the vacuity guard. Without it, an assertion
+// that reported unconditionally would satisfy every row below and read as
+// excellent coverage.
+func assertCorrectInstallIsSilent(t *testing.T, seed string) {
+	t.Helper()
+	before, after := installFromSeed(t, seed)
+	names, hook := runMergeAssertions(before, after)
+	if names.reported() {
+		t.Errorf("assertForeignNamesPreserved reported against a CORRECT install: %v", names.reports)
+	}
+	if hook.reported() {
+		t.Errorf("assertOurHookIsCorrect reported against a CORRECT install: %v", hook.reports)
+	}
+}
 
-	for _, m := range mergeMutations {
-		t.Run(m.name, func(t *testing.T) {
-			before, after := installFromSeed(t, seed)
-			m.break_(before, after)
+// assertMutationIsCaught runs one corpus row: break the install result in
+// exactly one way, and require the named assertion to report while the other
+// stays SILENT.
+//
+// The silence half is not decoration — it is half the evidence. Without it,
+// five mutations against two assertions are equally satisfied by two assertions
+// that report on everything.
+func assertMutationIsCaught(t *testing.T, seed string, m mergeMutation) {
+	t.Helper()
+	if !m.wantForeignNames && !m.wantOurHook {
+		t.Fatalf("row %q expects no assertion to report — it would pass for a broken merge "+
+			"and for a working one alike", m.name)
+	}
 
-			names, hook := runMergeAssertions(before, after)
+	before, after := installFromSeed(t, seed)
+	m.break_(before, after)
 
-			if got := names.reported(); got != m.wantForeignNames {
-				t.Errorf("assertForeignNamesPreserved reported=%v, want %v.\nmutation stands in for: %s\nreports: %v",
-					got, m.wantForeignNames, m.why, names.reports)
-			}
-			if got := hook.reported(); got != m.wantOurHook {
-				t.Errorf("assertOurHookIsCorrect reported=%v, want %v.\nmutation stands in for: %s\nreports: %v",
-					got, m.wantOurHook, m.why, hook.reports)
-			}
-			if !m.wantForeignNames && !m.wantOurHook {
-				t.Fatalf("row %q expects no assertion to report — it would pass for a broken merge "+
-					"and for a working one alike", m.name)
-			}
-		})
+	names, hook := runMergeAssertions(before, after)
+
+	if got := names.reported(); got != m.wantForeignNames {
+		t.Errorf("assertForeignNamesPreserved reported=%v, want %v.\nmutation stands in for: %s\nreports: %v",
+			got, m.wantForeignNames, m.why, names.reports)
+	}
+	if got := hook.reported(); got != m.wantOurHook {
+		t.Errorf("assertOurHookIsCorrect reported=%v, want %v.\nmutation stands in for: %s\nreports: %v",
+			got, m.wantOurHook, m.why, hook.reports)
 	}
 }
 
