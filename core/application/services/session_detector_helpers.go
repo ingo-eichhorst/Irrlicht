@@ -29,6 +29,34 @@ func (d *SessionDetector) removeFromProjectSessions(sessionID string) {
 	d.forgetSessionScopedState(sessionID)
 }
 
+// cacheDeletedSnapshot stashes state's last known in-memory value, keyed by
+// session ID, alongside the deletedSessions tombstone removeFromProjectSessions
+// writes for the same id. It exists so a hook that authoritatively signals
+// turn-done (opencode's session.idle, hermes' on_session_end — anything that
+// dispatches an agent.Event with Terminal set) but loses the race with THIS
+// exact teardown — HandleProcessExit records ProcessExited and the repo row
+// is gone before the plugin's own HTTP beacon can land — still has a session
+// to classify against instead of nothing at all. See processActivity's
+// Terminal branch and issue #1772.
+//
+// Wired as PIDManagerDeps.OnSessionRemoved, fired only from deleteSession —
+// the single choke point every actual repo-row removal routes through
+// (process exit, the ready-TTL/liveness sweep, the startup zombie sweep).
+// Deliberately NOT fired from HandleProcessExit's own early onSessionDeleted
+// call (no state is loaded yet at that point) and NOT fired by the /clear
+// cleanup or dedup/supersession paths, which call repo.Delete directly
+// without going through deleteSession — reviving a session removed on
+// purpose would be exactly the ghost-session class deletedCooldown exists to
+// prevent.
+func (d *SessionDetector) cacheDeletedSnapshot(state *session.SessionState) {
+	if state == nil {
+		return
+	}
+	d.mu.Lock()
+	d.deletedStates[state.SessionID] = state
+	d.mu.Unlock()
+}
+
 // forgetSessionScopedState drops the per-session bookkeeping that only the
 // session itself gives meaning to. It exists because there are TWO teardown
 // paths and they are not the same one:
