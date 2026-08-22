@@ -505,25 +505,69 @@ func TestRefresh_SkipsAUserEditedConfig(t *testing.T) {
 		t.Errorf("last verdict = %q, want %q — a skip nobody can see is indistinguishable "+
 			"from a refresh that never triggered", got, refreshUserEdited)
 	}
+
+	// A SECOND upgrade must skip too. Without this arm a skip that quietly
+	// re-baselined over the user's bytes would pass everything above and then
+	// destroy the edit at the next upgrade — one release later, with nothing
+	// connecting the two events.
+	fake.setVersion("2.8.0")
+	if _, err := EnsureHooksInstalled(); err != nil {
+		t.Fatalf("install after a second upgrade: %v", err)
+	}
+	if got := readAgentConfig(t)["prompt"]; got != "my own prompt, hands off" {
+		t.Errorf("prompt after a SECOND upgrade = %v; the first skip adopted the user's own "+
+			"bytes as irrlicht's baseline, so the next upgrade overwrote them", got)
+	}
 }
 
-// TestRefresh_OurOwnHookEntryRewriteIsNotAUserEdit is the load-bearing half of
-// #1736's "does not also fire on our own hook entries" requirement, driven
-// end-to-end rather than asserted about the fingerprint alone.
+// TestUninstall_RemovesTheRefreshBaseline pins that the sidecar does not outlive
+// the install it describes. It is the #1739 residue shape:
+// recordPriorDefaultAgentOnce's sidecar had to be declared and cleaned up for
+// exactly this reason, and a baseline left behind claims a config irrlicht no
+// longer wrote as one it did.
+func TestUninstall_RemovesTheRefreshBaseline(t *testing.T) {
+	steerableKiroHome(t)
+	if _, err := EnsureHooksInstalled(); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	path, err := agentSnapshotStatePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("install did not record a baseline at %s: %v", path, err)
+	}
+
+	if _, err := UninstallHooks(); err != nil {
+		t.Fatalf("uninstall: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("%s survives uninstall (stat err = %v) — a stale baseline is what a LATER "+
+			"grant reads instead of the state it should adopt", path, err)
+	}
+}
+
+// TestRefresh_DriftedOwnEntryIsNotAUserEdit is the load-bearing half of #1736's
+// "does not also fire on our own hook entries" requirement, driven end-to-end
+// rather than asserted about the fingerprint alone.
 //
-// The setup reproduces #1373's beacon drift: an entry of ours naming a binary
-// path that is no longer the running one, which EnsureHooksInstalled rewrites in
-// place. That rewrite is a WRITE to the agent config by this adapter. If the
-// baseline were a whole-file hash, or were recorded before the entries were
-// injected, the very next upgrade would read our own bytes as a user edit and
-// skip forever.
-func TestRefresh_OurOwnHookEntryRewriteIsNotAUserEdit(t *testing.T) {
+// It reproduces the one shape in which OUR OWN entries genuinely differ from
+// what the baseline was taken over: #1373's beacon drift, an entry of ours
+// naming a binary path that is no longer the running one, co-occurring with a
+// kiro-cli upgrade. The decision is made before ensureFlatHooksInstalled
+// repairs it, so at that instant the hooks key on disk is not the one we last
+// wrote. A whole-file baseline would read that as a user edit and skip — and
+// then keep skipping, because the drift repeats for every user whose daemon
+// binary ever moved.
+//
+// Also asserts the entries were repaired in the same pass, so a refresh cannot
+// buy its green by leaving the drift in place.
+func TestRefresh_DriftedOwnEntryIsNotAUserEdit(t *testing.T) {
 	_, fake := steerableKiroHome(t)
 	if _, err := EnsureHooksInstalled(); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 
-	// Point our own entries at a binary this daemon is not running from.
 	configPath := mustAgentConfigPath(t)
 	staleCommand, err := hookbeacon.Command("/nonexistent-irrlicht-1736/bin/irrlichd", AdapterName)
 	if err != nil {
@@ -540,11 +584,6 @@ func TestRefresh_OurOwnHookEntryRewriteIsNotAUserEdit(t *testing.T) {
 		t.Fatalf("seed a drifted entry: %v", err)
 	}
 
-	// This call rewrites them back to canonical — an irrlicht write to the file.
-	if _, err := EnsureHooksInstalled(); err != nil {
-		t.Fatalf("repair the drifted entry: %v", err)
-	}
-
 	fake.setVersion("2.7.0")
 	if _, err := EnsureHooksInstalled(); err != nil {
 		t.Fatalf("install after upgrade: %v", err)
@@ -552,9 +591,15 @@ func TestRefresh_OurOwnHookEntryRewriteIsNotAUserEdit(t *testing.T) {
 
 	if got := readAgentConfig(t)["prompt"]; got != "built-in as of 2.7.0" {
 		t.Errorf("prompt after the upgrade = %v, want the 2.7.0 built-in. The refresh read "+
-			"irrlicht's OWN hook-entry rewrite as a user edit and skipped (verdict %q) — "+
-			"the trigger is dead for every user whose daemon binary ever moved",
+			"irrlicht's OWN drifted hook entry as a user edit and skipped (verdict %q) — "+
+			"the trigger is then dead for every user whose daemon binary ever moved",
 			got, readAgentSnapshotState().LastVerdict)
+	}
+	status, err := VerifyHooksInstalled()
+	if err != nil || !status.Intact() {
+		t.Errorf("entries after the refresh: intact=%v err=%v damage=%s — the drift that "+
+			"made this test interesting was carried across instead of repaired",
+			status.Intact(), err, status.Damage())
 	}
 }
 

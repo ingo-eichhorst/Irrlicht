@@ -441,12 +441,18 @@ func entryHasSentinel(entry map[string]interface{}, sentinel string) bool {
 // partial failure (materialized but not yet defaulted, say) only performs
 // what is still missing.
 //
-// Two orderings are load-bearing rather than incidental:
+// One ordering is load-bearing: the refresh runs BEFORE the hook entries are
+// reconciled, so a rebuilt document goes through the same injection a freshly
+// materialized one does, and so the refresh DECIDES against the file as it
+// actually stands — including an entry of ours that has drifted (#1373), which
+// is a state the baseline must not read as a user edit.
 //
-//   - the refresh runs BEFORE the hook entries are reconciled, so a rebuilt
-//     document goes through the same injection a freshly materialized one does;
-//   - the snapshot baseline is recorded AFTER it, so the fingerprint describes
-//     the file as this adapter actually left it.
+// The baseline is recorded last, but that position is NOT load-bearing and is
+// deliberately not claimed to be: agentConfigFingerprint subtracts the "hooks"
+// key, so the injection cannot move it. That subtraction is what replaces the
+// "re-record after our own writes" rule a whole-file hash would have needed —
+// see agentrefresh.go's header for why that rule is wrong in the one case that
+// matters.
 //
 // A failed refresh is carried to the end rather than returned at once: it left
 // the previous config restored (regenerateFromBuiltinDefault), so the remaining
