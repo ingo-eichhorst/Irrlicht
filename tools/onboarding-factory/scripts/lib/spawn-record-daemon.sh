@@ -76,8 +76,53 @@ record_daemon_sock() {
 # down in spawn_record_daemon: snapshot_managed_files backs up every one of
 # those files first and the EXIT trap hands them back. Keep the two together —
 # if the snapshot ever stops running, this must stop being set.
+# adapter_slug_to_daemon_name <slug> prints the daemon's registered
+# agent.Identity.Name for an onboarding-factory adapter SLUG ($ADAPTER, the
+# replaydata/agents/<slug> directory name). Every adapter's slug matches its
+# daemon identity verbatim EXCEPT claudecode: the pre-#319 registry spelling
+# "claude-code" survives (mirrors
+# tools/onboarding-factory/internal/shard/shard.go's SlugForAdapter, which
+# maps the same divergence in the OPPOSITE direction — identity to slug).
+#
+# This is not cosmetic: record_adapter_names feeds straight into
+# PermissionService.Start's EXACT-STRING recordAdapters lookup
+# (permission_service.go, scopedOutByRecordAdapters), so a mismatched name
+# doesn't fail loudly — it silently scopes OUT the very adapter the run is
+# recording. A first cut of #1769 shipped IRRLICHT_RECORD_ADAPTERS=claudecode
+# unmodified and was caught only by a review subagent driving the real
+# PermissionService end to end: recording a claudecode cell would have
+# withheld claudecode's OWN hooks/statusline/instructions grants, breaking
+# every hook-delivered signal in that adapter's recordings — the one adapter
+# this issue exists to protect.
+adapter_slug_to_daemon_name() {
+  case "$1" in
+    claudecode) printf '%s' "claude-code" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
+# record_adapter_names <comma-separated-slugs> translates each onboarding-
+# factory adapter slug to its daemon identity name (adapter_slug_to_daemon_name
+# above) and rejoins with commas, for IRRLICHT_RECORD_ADAPTERS. Empty input
+# prints nothing.
+record_adapter_names() {
+  local slugs="$1" out="" slug
+  [[ -z "$slugs" ]] && return 0
+  local IFS=','
+  # shellcheck disable=SC2206  # word-splitting on IFS=',' is the point: each
+  # element is a bare adapter slug (no spaces, no glob metacharacters).
+  local parts=($slugs)
+  for slug in "${parts[@]}"; do
+    [[ -z "$slug" ]] && continue
+    if [[ -z "$out" ]]; then out="$(adapter_slug_to_daemon_name "$slug")"
+    else out="$out,$(adapter_slug_to_daemon_name "$slug")"; fi
+  done
+  printf '%s' "$out"
+}
+
 # IRRLICHT_RECORD_ADAPTERS is emitted only when the caller names adapters
-# (comma-separated). Since #1449's ALLOW_SHARED_CONFIG_WRITES lifts the
+# (comma-separated, translated to daemon identity names by
+# record_adapter_names). Since #1449's ALLOW_SHARED_CONFIG_WRITES lifts the
 # shared-config guard for EVERY adapter, not just the one this call is
 # recording, grant-all used to auto-grant and Apply every OTHER adapter's
 # hook installer too — including claudecode's, which is one of
@@ -98,7 +143,9 @@ record_daemon_env() {
   printf '%s\n' "IRRLICHT_PERMISSION_MODE=grant-all"
   printf '%s\n' "IRRLICHT_ALLOW_SHARED_CONFIG_WRITES=1"
   [[ -n "$home" ]] && printf '%s\n' "IRRLICHT_HOME=$home"
-  [[ -n "$adapters" ]] && printf '%s\n' "IRRLICHT_RECORD_ADAPTERS=$adapters"
+  if [[ -n "$adapters" ]]; then
+    printf '%s\n' "IRRLICHT_RECORD_ADAPTERS=$(record_adapter_names "$adapters")"
+  fi
   [[ -n "${IRRLICHT_READY_SESSION_TTL:-}" ]] && printf '%s\n' "IRRLICHT_READY_SESSION_TTL=$IRRLICHT_READY_SESSION_TTL"
   return 0
 }

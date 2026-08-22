@@ -156,8 +156,12 @@ type Config struct {
 	HookReverifyInterval time.Duration
 
 	// RecordAdapters narrows grant-all's auto-grant to these adapter identity
-	// names, via IRRLICHT_RECORD_ADAPTERS (comma-separated, e.g. "claudecode"
-	// or "claudecode,codex" for a cross-adapter cell). nil (unset) means no
+	// names — agent.Identity.Name, e.g. "codex" or "claude-code" (NOT the
+	// onboarding-factory slug: claudecode's registry spelling is hyphenated
+	// and differs from its "claudecode" replaydata/rig-CLI slug; every other
+	// adapter's slug matches its identity verbatim) — via
+	// IRRLICHT_RECORD_ADAPTERS (comma-separated, e.g. "claude-code" or
+	// "claude-code,codex" for a cross-adapter cell). nil (unset) means no
 	// restriction — every declared permission is granted, matching behaviour
 	// before this existed.
 	//
