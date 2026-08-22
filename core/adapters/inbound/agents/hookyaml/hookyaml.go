@@ -797,64 +797,107 @@ func (w *topLevelWalk) refuse(i int, message string) error {
 	return &UnsafeConstructError{Path: w.cfg.Path, Line: i + 1, Message: message}
 }
 
-// readBlock walks the lines under the block key, recording its own keys and
-// this owner's region.
+// readBlock walks the lines under the block key, recording its own keys, this
+// owner's region, and the extent of every block-level entry (so a
+// sentinel-bearing one can be removed whole).
+//
+// Split the same way findBlockKey is: the region markers and the entries are
+// two independent readings of one line stream, and reading them interleaved is
+// what made the top-level walk hard to follow.
 func (d *document) readBlock(cfg Config, src []byte) error {
-	begin, end := BeginMarker(cfg.Owner), EndMarker(cfg.Owner)
-	regionStart, regionStartLine := -1, -1
-	// openKey/openEnd track the extent of the block-level entry currently
-	// being read, so a sentinel-bearing one can be removed whole.
-	openKey, openEnd := -1, -1
-	openName := ""
+	w := blockWalk{doc: d, cfg: cfg, src: src, regionStart: -1, regionStartLine: -1, openKey: -1}
 
 	for i := d.blockKeyLine + 1; i < len(d.lines); i++ {
 		l := d.lines[i]
 		if l.blank || l.comment {
-			if trimmed := strings.TrimSpace(l.text); trimmed == begin {
-				if regionStart >= 0 {
-					return &UnsafeConstructError{Path: cfg.Path, Line: i + 1,
-						Message: "a second irrlicht-managed BEGIN marker before the first was closed"}
-				}
-				regionStart, regionStartLine = l.start, i
-			} else if trimmed == end {
-				if regionStart < 0 {
-					return &UnsafeConstructError{Path: cfg.Path, Line: i + 1,
-						Message: "an irrlicht-managed END marker with no BEGIN before it"}
-				}
-				d.region = &byteRange{start: regionStart, end: l.end}
-				regionStart = -1
+			if err := w.marker(i, l); err != nil {
+				return err
 			}
 			continue
 		}
 		if l.indent == 0 {
 			break // the next top-level key ends the block
 		}
-		if regionStart >= 0 {
+		if w.regionStart >= 0 {
 			continue // inside our own region; not a user key
 		}
-		if d.blockContentIndent == 0 {
-			d.blockContentIndent = l.indent
-		}
-		if l.indent != d.blockContentIndent {
-			if openKey >= 0 {
-				openEnd = l.end // still part of the entry that key opened
-			}
-			continue // nested deeper than the block's own keys
-		}
-		d.closeEntry(cfg, src, openKey, openEnd, openName)
-		name, err := d.recordBlockKey(cfg, i, l)
-		if err != nil {
+		if err := w.contentLine(i, l); err != nil {
 			return err
 		}
-		openKey, openEnd, openName = l.start, l.end, name
 	}
-	d.closeEntry(cfg, src, openKey, openEnd, openName)
+	return w.finish()
+}
 
-	if regionStart >= 0 {
-		return &UnsafeConstructError{Path: cfg.Path, Line: regionStartLine + 1,
-			Message: "an irrlicht-managed BEGIN marker with no matching END — the region's extent is unknown, so rewriting it could delete a user's own hooks"}
+// blockWalk carries readBlock's cross-line state: the open region and the open
+// entry.
+type blockWalk struct {
+	doc *document
+	cfg Config
+	src []byte
+
+	regionStart, regionStartLine int
+	// openKey/openEnd/openName describe the block-level entry currently being
+	// read, from its key line to the last line indented under it.
+	openKey, openEnd int
+	openName         string
+}
+
+// marker handles a blank or comment line, opening and closing the region.
+func (w *blockWalk) marker(i int, l lineSpan) error {
+	switch strings.TrimSpace(l.text) {
+	case BeginMarker(w.cfg.Owner):
+		if w.regionStart >= 0 {
+			return w.refuse(i, "a second irrlicht-managed BEGIN marker before the first was closed")
+		}
+		w.regionStart, w.regionStartLine = l.start, i
+	case EndMarker(w.cfg.Owner):
+		if w.regionStart < 0 {
+			return w.refuse(i, "an irrlicht-managed END marker with no BEGIN before it")
+		}
+		w.doc.region = &byteRange{start: w.regionStart, end: l.end}
+		w.regionStart = -1
 	}
 	return nil
+}
+
+// contentLine handles a non-blank line inside the block and outside the
+// region: either one of the block's own keys, or a line nested under one.
+func (w *blockWalk) contentLine(i int, l lineSpan) error {
+	if w.doc.blockContentIndent == 0 {
+		w.doc.blockContentIndent = l.indent
+	}
+	if l.indent != w.doc.blockContentIndent {
+		if w.openKey >= 0 {
+			w.openEnd = l.end // still part of the entry that key opened
+		}
+		return nil
+	}
+	w.closeOpenEntry()
+	name, err := w.doc.recordBlockKey(w.cfg, i, l)
+	if err != nil {
+		return err
+	}
+	w.openKey, w.openEnd, w.openName = l.start, l.end, name
+	return nil
+}
+
+func (w *blockWalk) closeOpenEntry() {
+	w.doc.closeEntry(w.cfg, w.src, w.openKey, w.openEnd, w.openName)
+	w.openKey, w.openEnd, w.openName = -1, -1, ""
+}
+
+// finish closes the last entry and reports a region left open.
+func (w *blockWalk) finish() error {
+	w.closeOpenEntry()
+	if w.regionStart < 0 {
+		return nil
+	}
+	return w.refuse(w.regionStartLine,
+		"an irrlicht-managed BEGIN marker with no matching END — the region's extent is unknown, so rewriting it could delete a user's own hooks")
+}
+
+func (w *blockWalk) refuse(i int, message string) error {
+	return &UnsafeConstructError{Path: w.cfg.Path, Line: i + 1, Message: message}
 }
 
 // closeEntry finishes the block-level entry that started at start, recording

@@ -681,72 +681,92 @@ func generateDocument(rng *rand.Rand) document9 {
 }
 
 func writeBlock(b *strings.Builder, rng *rand.Rand, nl string, mode int, doc *document9) {
+	doc.hasBlock = mode != 0
 	switch mode {
 	case 1:
-		doc.hasBlock = true
 		b.WriteString("hooks:" + nl)
 	case 2:
-		doc.hasBlock = true
-		doc.flowEmpty = true
-		doc.keyLine, doc.normalizedKeyLine = "hooks: {}"+nl, "hooks:"+nl
-		if rng.Intn(2) == 0 {
-			doc.keyLine = "hooks: {}   # nothing configured" + nl
-			doc.normalizedKeyLine = "hooks:   # nothing configured" + nl
-		}
-		b.WriteString(doc.keyLine)
+		writeFlowEmptyBlock(b, rng, nl, doc)
 	case 3:
-		doc.hasBlock = true
-		indent := 2
-		if rng.Intn(2) == 0 {
-			indent = 4
+		writePopulatedBlock(b, rng, nl, doc)
+	}
+}
+
+// writeFlowEmptyBlock emits `hooks: {}`, the spelling an agent's own defaults
+// carry, half the time with a trailing comment — the two strings the round
+// trip is graded against for that shape.
+func writeFlowEmptyBlock(b *strings.Builder, rng *rand.Rand, nl string, doc *document9) {
+	doc.flowEmpty = true
+	doc.keyLine, doc.normalizedKeyLine = "hooks: {}"+nl, "hooks:"+nl
+	if rng.Intn(2) == 0 {
+		doc.keyLine = "hooks: {}   # nothing configured" + nl
+		doc.normalizedKeyLine = "hooks:   # nothing configured" + nl
+	}
+	b.WriteString(doc.keyLine)
+}
+
+// writePopulatedBlock emits a block holding one to three entries, each either
+// a user hook or one of OUR entries with the markers gone.
+func writePopulatedBlock(b *strings.Builder, rng *rand.Rand, nl string, doc *document9) {
+	indent := 2
+	if rng.Intn(2) == 0 {
+		indent = 4
+	}
+	doc.blockIndent = indent
+	pad := strings.Repeat(" ", indent)
+	b.WriteString("hooks:" + nl)
+	if rng.Intn(3) == 0 {
+		b.WriteString(pad + "# my own hooks" + nl)
+	}
+
+	// used keeps the generated block a legal YAML mapping. Without it a stray
+	// and a user entry can pick the same event name, which is a duplicate
+	// key — a malformed FIXTURE, and every assertion downstream would then be
+	// grading the wrong thing.
+	used := map[string]bool{}
+	n := 1 + rng.Intn(3)
+	for i := 0; i < n; i++ {
+		// One entry in five is a STRAY: ours, sentinel and all, with the
+		// markers gone — the state the agent's own config writer leaves
+		// behind. It is NOT recorded in declaredEvents, because it is not a
+		// user key and must not be read as a collision.
+		if rng.Intn(5) == 0 {
+			writeStrayEntry(b, rng, nl, pad, used, doc)
+			continue
 		}
-		doc.blockIndent = indent
-		pad := strings.Repeat(" ", indent)
-		b.WriteString("hooks:" + nl)
-		if rng.Intn(3) == 0 {
-			b.WriteString(pad + "# my own hooks" + nl)
-		}
-		// used keeps the generated block a legal YAML mapping. Without it a
-		// stray and a user entry can pick the same event name, which is a
-		// duplicate key — a malformed FIXTURE, and every assertion downstream
-		// would then be grading the wrong thing.
-		used := map[string]bool{}
-		n := 1 + rng.Intn(3)
-		for i := 0; i < n; i++ {
-			// One entry in five is a STRAY: ours, sentinel and all, with the
-			// markers gone — the state the agent's own config writer leaves
-			// behind. It is NOT recorded in declaredEvents, because it is not
-			// a user key and must not be read as a collision.
-			if rng.Intn(5) == 0 {
-				event := pickUnused(rng, regionEvents, used)
-				if event == "" {
-					continue
-				}
-				doc.hasStrays = true
-				b.WriteString(pad + event + ":" + nl)
-				b.WriteString(pad + pad + `- command: "/bin/sh -c '/opt/irrlichd ` + testSentinel + `'"` + nl)
-				continue
-			}
-			// One entry in six declares one of OUR event names as a user hook,
-			// which is what exercises the collision refusal.
-			pool := userEvents
-			if rng.Intn(6) == 0 {
-				pool = regionEvents
-			}
-			event := pickUnused(rng, pool, used)
-			if event == "" {
-				continue
-			}
-			doc.declaredEvents = append(doc.declaredEvents, event)
-			b.WriteString(pad + event + ":" + nl)
-			b.WriteString(pad + pad + `- command: "/usr/local/bin/tool --flag # not a comment"` + nl)
-			if rng.Intn(2) == 0 {
-				b.WriteString(pad + pad + "  timeout: 30" + nl)
-			}
-			if rng.Intn(4) == 0 {
-				b.WriteString(nl)
-			}
-		}
+		writeUserEntry(b, rng, nl, pad, used, doc)
+	}
+}
+
+func writeStrayEntry(b *strings.Builder, rng *rand.Rand, nl, pad string, used map[string]bool, doc *document9) {
+	event := pickUnused(rng, regionEvents, used)
+	if event == "" {
+		return
+	}
+	doc.hasStrays = true
+	b.WriteString(pad + event + ":" + nl)
+	b.WriteString(pad + pad + `- command: "/bin/sh -c '/opt/irrlichd ` + testSentinel + `'"` + nl)
+}
+
+func writeUserEntry(b *strings.Builder, rng *rand.Rand, nl, pad string, used map[string]bool, doc *document9) {
+	// One entry in six declares one of OUR event names as a user hook, which
+	// is what exercises the collision refusal.
+	pool := userEvents
+	if rng.Intn(6) == 0 {
+		pool = regionEvents
+	}
+	event := pickUnused(rng, pool, used)
+	if event == "" {
+		return
+	}
+	doc.declaredEvents = append(doc.declaredEvents, event)
+	b.WriteString(pad + event + ":" + nl)
+	b.WriteString(pad + pad + `- command: "/usr/local/bin/tool --flag # not a comment"` + nl)
+	if rng.Intn(2) == 0 {
+		b.WriteString(pad + pad + "  timeout: 30" + nl)
+	}
+	if rng.Intn(4) == 0 {
+		b.WriteString(nl)
 	}
 }
 
