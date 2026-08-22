@@ -96,7 +96,14 @@ SCRIPT_JSON="$5"
 
 mkdir -p "$STAGING"
 DRIVER_LOG="$STAGING/driver.log"
-PI_SESSIONS_DIR="$HOME/.pi/agent/sessions"
+# Where pi will WRITE this run's transcripts, resolved the way pi and the pi
+# adapter both resolve it. This driver already prefixes `env
+# PI_CODING_AGENT_DIR=…` on its tmux launch (see boot_session); reading the
+# transcript back out of $HOME regardless is what made that prefix a
+# half-wired lever — see sessions-dir.sh's header.
+# shellcheck source=sessions-dir.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sessions-dir.sh"
+PI_SESSIONS_DIR="$(pi_sessions_dir)"
 mkdir -p "$PI_SESSIONS_DIR"
 
 # Per-run CWD so pi creates a session under a unique project dir

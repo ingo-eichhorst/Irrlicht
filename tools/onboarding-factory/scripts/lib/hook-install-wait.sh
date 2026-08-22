@@ -38,6 +38,11 @@
 # under $VAR. With no isolated home there is nothing to select on, and it says
 # so and waits for nothing rather than reporting a check it did not perform.
 #
+# THE ESCAPE HATCH for the adapters that structurally cannot have a row —
+# opencode (two XDG variables) and gemini-cli (no override at all) — is
+# HOOK_INSTALL_WAIT_PATHS: the operator names the path, and it is checked
+# against the daemon's own manifest before it is polled. See the knob below.
+#
 # Usage — after spawn_record_daemon, before the driver runs:
 #   source "$SCRIPT_DIR/lib/hook-install-wait.sh"
 #   wait_for_hook_install "$ADAPTER" "$STAGING" "$ONBOARD_BIND" || exit 1
@@ -47,6 +52,57 @@
 # 60 × 0.5s = 30s, generously above the ~4s observed for a vibe install.
 HOOK_INSTALL_WAIT_TICKS="${HOOK_INSTALL_WAIT_TICKS:-60}"
 HOOK_INSTALL_WAIT_TICK_S="${HOOK_INSTALL_WAIT_TICK_S:-0.5}"
+
+# HOOK_INSTALL_WAIT_PATHS — the operator naming, absolutely, the file(s) this
+# run's install must create before the CLI may be launched. Colon- or
+# newline-separated; unset for every ordinary run.
+#
+# WHY IT EXISTS. The prefix selection below can only speak for an adapter that
+# has a rig-home row, and two hooks-declaring adapters deliberately do not have
+# one (agent-home.sh's NOT IN THE TABLE section: opencode's paths split across
+# two XDG variables, gemini-cli has no override at all). For those, this file's
+# honest answer has been "NOT waiting" — which leaves exactly the #1735 race it
+# was written to remove. An operator who KNOWS the path — because they set the
+# variable that moves it, or because it is simply the home default — can name
+# it, and then the same poll runs.
+#
+# It is not a bypass, and the check it adds is stronger than the one it stands
+# in for: every named path must appear in the daemon's own managed-file
+# manifest. So a typo, a stale path, or — the case this was written for — an
+# XDG_CONFIG_HOME the operator exported after the daemon had already resolved
+# its config dir somewhere else is REFUSED here, rather than becoming a poll
+# that watches a file nothing will ever write. That is the daemon/CLI
+# disagreement agent-home.sh's header is about, caught before the credits are
+# spent instead of after.
+HOOK_INSTALL_WAIT_PATHS="${HOOK_INSTALL_WAIT_PATHS:-}"
+
+# hook_install_explicit_paths prints one path per line from
+# HOOK_INSTALL_WAIT_PATHS, splitting on both ':' and newline and dropping empty
+# fields. Nothing is validated here — the caller does that, so that a refusal
+# can name which path and why.
+hook_install_explicit_paths() {
+  local raw="${HOOK_INSTALL_WAIT_PATHS:-}" p
+  [[ -n "$raw" ]] || return 0
+  # The trailing newline on the printf is load-bearing: `read` returns non-zero
+  # on a final line that has none, and a `while read` loop exits BEFORE running
+  # its body on that line — so a single unterminated path would split to
+  # nothing, the caller would see an empty list, and the run would silently
+  # take the "not waiting" arm the operator had just asked it not to take.
+  while IFS= read -r p; do
+    [[ -n "$p" ]] && printf '%s\n' "$p"
+  done < <(printf '%s\n' "$raw" | tr ':\n' '\n\n')
+  return 0
+}
+
+# hook_install_manifest_has <staging> <path> reports whether the daemon's
+# managed-file manifest declares <path> at all, in any state. This is what
+# turns an operator-supplied path from an assertion into a checked one.
+hook_install_manifest_has() {
+  local staging="$1" want="$2"
+  local manifest="$staging/managed-file-backup/manifest"
+  [[ -f "$manifest" ]] || return 1
+  awk -F'\t' -v w="$want" '$3 == w { found = 1; exit } END { exit !found }' "$manifest"
+}
 
 # hook_install_pending_paths <staging> <home-prefix> prints every path the
 # snapshot manifest recorded as `absent` that lives under home-prefix and does
@@ -90,32 +146,68 @@ hook_install_declared_under() {
 wait_for_hook_install() {
   local adapter="${1:-}" staging="${2:-}" bind="${3:-}"
   local var prefix declared pending waited=0
+  local explicit="" p subject=""
 
   if [[ -z "$adapter" || -z "$staging" ]]; then
     echo "hook-install-wait: usage: wait_for_hook_install <adapter> <staging> [<bind-addr>]" >&2
     return 1
   fi
 
-  var="$(agent_home_var "$adapter")"
-  prefix="${var:+${!var:-}}"
-  if [[ -z "$prefix" ]]; then
-    echo "hook-install-wait: $adapter — no isolated home is exported, so this adapter's managed files"
-    echo "hook-install-wait:   cannot be told from every other adapter's in the manifest. NOT waiting;"
-    echo "hook-install-wait:   if the CLI reads its hook config at startup, this run can race the install."
-    return 0
-  fi
+  explicit="$(hook_install_explicit_paths)"
+  if [[ -n "$explicit" ]]; then
+    # Validated BEFORE the poll, and every failure here is a refusal rather
+    # than a fallback: an operator who named a path has asked for this run to
+    # be gated on it, and quietly polling something else — or nothing — is the
+    # outcome this whole file exists to prevent.
+    declared=0
+    while IFS= read -r p; do
+      [[ -n "$p" ]] || continue
+      if [[ "$p" != /* ]]; then
+        echo "hook-install-wait: HOOK_INSTALL_WAIT_PATHS must name absolute paths (got '$p')" >&2
+        return 1
+      fi
+      if ! hook_install_manifest_has "$staging" "$p"; then
+        echo "hook-install-wait: $adapter — the daemon does not declare $p as a managed file." >&2
+        echo "hook-install-wait:   Nothing will ever create it, so waiting for it would hang and then lie." >&2
+        echo "hook-install-wait:   The usual cause is that the daemon resolved this adapter's config" >&2
+        echo "hook-install-wait:   directory somewhere else than you did — check that the home/XDG" >&2
+        echo "hook-install-wait:   variable was exported BEFORE the daemon was spawned." >&2
+        return 1
+      fi
+      declared=$((declared + 1))
+    done <<< "$explicit"
+    subject="the $declared operator-named path(s)"
+  else
+    var="$(agent_home_var "$adapter")"
+    prefix="${var:+${!var:-}}"
+    if [[ -z "$prefix" ]]; then
+      echo "hook-install-wait: $adapter — no isolated home is exported, so this adapter's managed files"
+      echo "hook-install-wait:   cannot be told from every other adapter's in the manifest. NOT waiting;"
+      echo "hook-install-wait:   if the CLI reads its hook config at startup, this run can race the install."
+      echo "hook-install-wait:   Set HOOK_INSTALL_WAIT_PATHS=<absolute path> to gate the run on it anyway."
+      return 0
+    fi
 
-  declared="$(hook_install_declared_under "$staging" "$prefix")"
-  if [[ "$declared" == "0" ]]; then
-    echo "hook-install-wait: $adapter — the daemon declares no managed file under $prefix;"
-    echo "hook-install-wait:   there is nothing to wait for and nothing was checked."
-    return 0
+    declared="$(hook_install_declared_under "$staging" "$prefix")"
+    if [[ "$declared" == "0" ]]; then
+      echo "hook-install-wait: $adapter — the daemon declares no managed file under $prefix;"
+      echo "hook-install-wait:   there is nothing to wait for and nothing was checked."
+      return 0
+    fi
+    subject="all $declared managed file(s) under $prefix"
   fi
 
   while (( waited < HOOK_INSTALL_WAIT_TICKS )); do
-    pending="$(hook_install_pending_paths "$staging" "$prefix")"
+    if [[ -n "$explicit" ]]; then
+      pending=""
+      while IFS= read -r p; do
+        [[ -n "$p" && ! -e "$p" ]] && pending+="${pending:+$'\n'}$p"
+      done <<< "$explicit"
+    else
+      pending="$(hook_install_pending_paths "$staging" "$prefix")"
+    fi
     if [[ -z "$pending" ]]; then
-      echo "hook-install-wait: $adapter — all $declared managed file(s) under $prefix are present after $(awk -v w="$waited" -v t="$HOOK_INSTALL_WAIT_TICK_S" 'BEGIN{printf "%.1f", w*t}')s"
+      echo "hook-install-wait: $adapter — $subject are present after $(awk -v w="$waited" -v t="$HOOK_INSTALL_WAIT_TICK_S" 'BEGIN{printf "%.1f", w*t}')s"
       return 0
     fi
     waited=$((waited + 1))

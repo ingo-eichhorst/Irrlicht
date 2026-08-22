@@ -104,7 +104,36 @@ var stopHookCensus = map[string]stopRecording{
 		Stops: 1, Reproduced: 0,
 		Why: "the sidecar could not drive this replay: sidecar cannot drive a replay: no transcript_activity events with file_size for primary session session_20260822_015033_156d37d3",
 	},
+	"opencode/scenarios/2-5_synchronous-slash-command/recordings/2026-08-22-14-10-01_irrlichd-0.5.10+ae8b836/transcript.jsonl": {
+		Stops: 1, Reproduced: 0,
+		Why: "the sidecar could not drive this replay: sidecar cannot drive a replay: no transcript_activity events with file_size for primary session ses_fd69f27acffePoG9lVtPjn9640",
+	},
+	"pi/scenarios/1-1_session-start/recordings/2026-08-22-14-14-18_irrlichd-0.5.10+ae8b836/transcript.jsonl": {
+		Stops: 1, Reproduced: 0,
+		Why: "every Stop names a session the replay does not drive",
+	},
 }
+
+// READ THE `Why` STRINGS AS WHAT THEY ARE, which the two rows added by #1770
+// make worth spelling out because both are easy to misread as an accusation.
+//
+// `hook_name` in a sidecar is NOT the adapter's wire name. Every adapter whose
+// turn-end event routes through SessionDetector.HandleStopHook records the
+// CANONICAL session.HookStop — the literal string "Stop" — whatever it was
+// called on the wire: pi's `agent_settled` (pi/hooks.go:194), opencode's
+// `session.idle` (opencode/hooks.go:206), mistral-vibe's `post_agent_turn`,
+// kiro-cli's lowercase `stop`. session_detector_lifecycle.go:343 passes
+// session.HookStop, not the wire name. So a "Stop" in a pi or opencode
+// recording is that adapter's own hook, and the thing that attributes it is
+// the SESSION_ID: both rows above name their own adapter's session
+// (`ses_…` / the pi rollout stem), not a foreign one.
+//
+// And "every Stop names a session the replay does not drive" is gradeStops'
+// CATCH-ALL for Reproduced == 0 with no sidecar fallback — it is inferred from
+// the timestamp match failing, not measured from session ownership. The pi row
+// carries it because the hook lands BEFORE the transcript activity that drives
+// the replayed transitions, so no replayed transition sits at the hook's own
+// virtual time. It is not evidence that the Stop belongs to another agent.
 
 // sidecarHookEvent is the sliver of lifecycle.Event this walk reads. Decoded
 // locally rather than through lifecycle.Event so a future field addition there
