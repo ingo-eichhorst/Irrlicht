@@ -339,8 +339,22 @@ boot_vibe_active() {
   # this prefix reads the value. Without it the daemon would watch the isolated
   # home while vibe wrote to the real one, and the fixture would come back empty
   # with nothing saying why.
+  #
+  # IRRLICHT_BIND_ADDR rides along for a DIFFERENT reason, and it is the reason
+  # mistral-vibe had zero hook-bearing recordings. Vibe's hooks are BEACON
+  # delivered (core/pkg/hookbeacon): the [[hooks]] entry written into
+  # hooks.toml carries no address at all, just `irrlichd hook-post
+  # mistral-vibe`, and the beacon resolves where to POST at fire time from its
+  # own environment — IRRLICHT_BIND_ADDR, then the addr file under
+  # IRRLICHT_HOME (core/pkg/daemonaddr resolveClient). The beacon is a child of
+  # vibe, which is this pane, so a pane carrying neither variable reads the
+  # PRODUCTION addr file and posts every post_agent_turn to the daemon on 7837.
+  # The recording daemon then sees nothing, and the fixture reads as an adapter
+  # that cannot report state rather than as a misrouted hook. Empty is the same
+  # as unset for the beacon (resolveClient's fixedPortOf("") does not match), so
+  # passing it unconditionally is safe when the rig did not set it.
   tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "${SES_CWD[$ACTIVE]}" -- \
-    env "VIBE_HOME=$VIBE_HOME_RESOLVED" vibe "${vibe_args[@]}" 2>>"$DRIVER_LOG.stderr" \
+    env "VIBE_HOME=$VIBE_HOME_RESOLVED" "IRRLICHT_BIND_ADDR=${IRRLICHT_BIND_ADDR:-}" vibe "${vibe_args[@]}" 2>>"$DRIVER_LOG.stderr" \
     || { echo "[driver] failed to launch vibe under tmux" >&2; EXIT_REASON="$EXIT_DRIVER_FAULT"; exit 1; }
   tmux pipe-pane -t "$SESSION" -o "cat >> '$DRIVER_LOG.stdout.$ACTIVE'"
   echo "[driver] tmux started: $SESSION (slot=$ACTIVE, cwd=${SES_CWD[$ACTIVE]})" >&2

@@ -187,7 +187,23 @@ boot_session() {
   local extra_env=()
   [[ -n "${GOOGLE_GEMINI_BASE_URL:-}" ]] && extra_env+=(-e "GOOGLE_GEMINI_BASE_URL=$GOOGLE_GEMINI_BASE_URL")
   [[ -n "${GEMINI_MODEL:-}" ]] && extra_env+=(-e "GEMINI_MODEL=$GEMINI_MODEL")
+  # IRRLICHT_BIND_ADDR is where a BEACON-delivered hook must POST. gemini-cli's
+  # hooks are beacon delivered (core/pkg/hookbeacon): the settings.json entry
+  # carries no address, just `irrlichd hook-post gemini-cli`, and the beacon —
+  # a child of gemini-cli, i.e. of this pane — resolves the target at fire time
+  # from its own environment (core/pkg/daemonaddr resolveClient:
+  # IRRLICHT_BIND_ADDR, then the addr file under IRRLICHT_HOME). Without it a
+  # coexisting recording daemon on 7838 never sees a hook, because the pane
+  # reads the PRODUCTION addr file and posts to 7837 instead. Empty is the same
+  # as unset for the beacon, so it is passed unconditionally.
+  #
+  # gemini-cli is NOT recordable on the machine this was written on (the
+  # account is tier-ineligible, #1725 schedules deprecation), so unlike
+  # kiro-cli's and mistral-vibe's this line is UNVERIFIED against a live run —
+  # it is here so the beacon passthrough is a property of every beacon driver
+  # rather than of the two that happened to be recorded.
   tmux new-session -d -s "$sess" -x 200 -y 50 -c "$cwd" \
+    -e "IRRLICHT_BIND_ADDR=${IRRLICHT_BIND_ADDR:-}" \
     -e "GEMINI_API_KEY=$GEMINI_API_KEY" -e "GEMINI_CLI_TRUST_WORKSPACE=true" \
     ${extra_env[@]+"${extra_env[@]}"} \
     "$@" \

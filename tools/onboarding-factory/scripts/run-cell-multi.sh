@@ -104,6 +104,14 @@ fi
 ONBOARD_BIND="${IRRLICHT_ONBOARD_BIND_ADDR:-127.0.0.1:7838}"
 export IRRLICHT_ONBOARD_HOME="$ONBOARD_HOME"
 export IRRLICHT_ONBOARD_BIND_ADDR="$ONBOARD_BIND"
+# Where a beacon-delivered hook must POST. Exported for the same reason and with
+# the same limits as run-cell.sh's copy — see the long comment there. This rig is
+# coexist-ONLY, so a beacon adapter recorded here without it would post every
+# hook to the production daemon 100% of the time rather than only in coexist
+# mode. #1214's lesson is exactly that a recorder-lifecycle fix landing in one of
+# these two scripts and not the other is the default outcome, not the unlucky
+# one.
+export IRRLICHT_BIND_ADDR="$ONBOARD_BIND"
 
 # --- Resolve the cross-adapter cell -------------------------------------
 # Post-consolidation (#511): there is no `cross_adapter[]` list. The cell lives
