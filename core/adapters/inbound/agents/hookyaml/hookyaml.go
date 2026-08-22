@@ -264,52 +264,69 @@ func readAllowingMissing(path string) ([]byte, error) {
 // install / uninstall over the scanned document
 // ---------------------------------------------------------------------------
 
+// install is the three-way decision, one branch per placement. Each branch is
+// its own function because the three differ in what they render, where they
+// splice and what they may rewrite, and reading them interleaved is how the
+// end-of-file case below hid.
 func install(cfg Config, src []byte) ([]byte, bool, error) {
 	doc, err := scan(cfg, src)
 	if err != nil {
 		return nil, false, err
 	}
-
 	if doc.region != nil {
-		region, err := doc.wantRegion(cfg)
-		if err != nil {
-			return nil, false, err
-		}
-		if bytes.Equal(src[doc.region.start:doc.region.end], region) {
-			return nil, false, nil
-		}
-		return splice(src, doc.region.start, doc.region.end, region), true, nil
+		return rewriteRegion(cfg, src, doc)
 	}
-
 	if err := doc.checkCollisions(cfg); err != nil {
 		return nil, false, err
 	}
-
 	if doc.blockKeyLine < 0 {
-		// No block at all: irrlicht creates it, so the key line goes INSIDE
-		// the region and uninstall takes it away again.
-		region, err := renderOwnedRegion(cfg)
-		if err != nil {
-			return nil, false, err
-		}
-		var out bytes.Buffer
-		out.Write(src)
-		if len(src) > 0 && !bytes.HasSuffix(src, []byte("\n")) {
-			out.WriteString("\n")
-		}
-		out.Write(region)
-		return out.Bytes(), true, nil
+		return createBlock(cfg, src)
 	}
+	return insertIntoBlock(cfg, src, doc)
+}
 
+// rewriteRegion replaces an already-present region, in whichever placement it
+// occupies. Reports no change when the bytes already match.
+func rewriteRegion(cfg Config, src []byte, doc *document) ([]byte, bool, error) {
+	region, err := doc.wantRegion(cfg)
+	if err != nil {
+		return nil, false, err
+	}
+	if bytes.Equal(src[doc.region.start:doc.region.end], region) {
+		return nil, false, nil
+	}
+	return splice(src, doc.region.start, doc.region.end, region), true, nil
+}
+
+// createBlock appends the owned region — markers, block key and entries — at
+// the end of the document. The key goes INSIDE the region because irrlicht is
+// what put it there, so uninstall takes it away again.
+func createBlock(cfg Config, src []byte) ([]byte, bool, error) {
+	region, err := renderOwnedRegion(cfg)
+	if err != nil {
+		return nil, false, err
+	}
+	var out bytes.Buffer
+	out.Write(src)
+	if len(src) > 0 && !bytes.HasSuffix(src, []byte("\n")) {
+		out.WriteString("\n")
+	}
+	out.Write(region)
+	return out.Bytes(), true, nil
+}
+
+// insertIntoBlock puts the region inside a block the USER owns, directly after
+// the key line.
+func insertIntoBlock(cfg Config, src []byte, doc *document) ([]byte, bool, error) {
 	region, err := renderRegion(cfg, doc.blockIndent())
 	if err != nil {
 		return nil, false, err
 	}
+	line := doc.lines[doc.blockKeyLine]
 
 	if doc.blockInlineEmpty {
 		// `<key>: {}` becomes `<key>:` followed by the region — the one line
 		// outside the region any operation here rewrites. See the package doc.
-		line := doc.lines[doc.blockKeyLine]
 		replacement := []byte(cfg.BlockKey + ":" + doc.blockKeyComment + lineEndingOr(line.ending))
 		out := splice(src, line.start, line.end, replacement)
 		at := line.start + len(replacement)
@@ -323,12 +340,10 @@ func install(cfg Config, src []byte) ([]byte, bool, error) {
 	// the marker is no longer a line and uninstall can never find the region
 	// again. The property test's "block is the last top-level key" axis found
 	// this the first run it produced that position.
-	line := doc.lines[doc.blockKeyLine]
-	at := line.end
 	if line.ending == "" {
 		region = append([]byte("\n"), region...)
 	}
-	return splice(src, at, at, region), true, nil
+	return splice(src, line.end, line.end, region), true, nil
 }
 
 // wantRegion renders the bytes an already-present region should hold, in
@@ -602,76 +617,119 @@ func splitLines(src []byte) []lineSpan {
 // findBlockKey locates the top-level BlockKey and, on the way, asserts the
 // column-0 invariant this package rests on.
 func (d *document) findBlockKey(cfg Config) error {
-	begin, end := BeginMarker(cfg.Owner), EndMarker(cfg.Owner)
-	ownedStart, ownedStartLine := -1, -1
-
+	w := topLevelWalk{doc: d, cfg: cfg, ownedStart: -1, ownedStartLine: -1}
 	for i, l := range d.lines {
 		if err := refuseTabIndent(cfg, i, l); err != nil {
 			return err
 		}
-		if l.indent == 0 && l.comment {
-			switch strings.TrimSpace(l.text) {
-			case begin:
-				if ownedStart >= 0 {
-					return &UnsafeConstructError{Path: cfg.Path, Line: i + 1,
-						Message: "a second irrlicht-managed BEGIN marker before the first was closed"}
-				}
-				ownedStart, ownedStartLine = l.start, i
-				continue
-			case end:
-				if ownedStart < 0 {
-					return &UnsafeConstructError{Path: cfg.Path, Line: i + 1,
-						Message: "an irrlicht-managed END marker with no BEGIN before it"}
-				}
-				if !d.regionOwnsBlock {
-					return &UnsafeConstructError{Path: cfg.Path, Line: i + 1,
-						Message: fmt.Sprintf("a top-level irrlicht-managed region that does not contain a %q key — irrlicht only writes one at that level to carry the key it created", cfg.BlockKey)}
-				}
-				d.region = &byteRange{start: ownedStart, end: l.end}
-				ownedStart = -1
-				continue
-			}
+		handled, err := w.marker(i, l)
+		if err != nil {
+			return err
 		}
-		if l.blank || l.comment || l.indent > 0 {
+		if handled || l.blank || l.comment || l.indent > 0 {
 			continue
 		}
-		if isDocumentMarker(l.text) {
-			return &UnsafeConstructError{Path: cfg.Path, Line: i + 1,
-				Message: "a YAML document marker — this package models a single-document file and will not guess which document to edit"}
+		if err := w.key(i, l); err != nil {
+			return err
 		}
-		key, rest, ok := splitKey(l.text)
-		if !ok {
-			return &UnsafeConstructError{Path: cfg.Path, Line: i + 1,
-				Message: "a line at column 0 that is not a key, a comment or a document marker — the file is not a plain block mapping and will not be edited"}
-		}
-		if key != cfg.BlockKey {
-			continue
-		}
-		if d.blockKeyLine >= 0 {
-			return &UnsafeConstructError{Path: cfg.Path, Line: i + 1,
-				Message: fmt.Sprintf("a second top-level %q key — a duplicate mapping key resolves silently to one of the two, so which one to edit is not knowable", cfg.BlockKey)}
-		}
-		switch v := strings.TrimSpace(stripComment(rest)); v {
-		case "":
-		case emptyFlowMapping:
-			// The one inline value that is modelled, because it is the
-			// spelling the agent's OWN default config carries for "no hooks
-			// configured". Installing rewrites the line to a block mapping.
-			d.blockInlineEmpty = true
-			d.blockKeyComment = trailingComment(rest)
-		default:
-			return &UnsafeConstructError{Path: cfg.Path, Line: i + 1,
-				Message: fmt.Sprintf("%q carries the inline value %q; only a block mapping (or the empty %s) is modelled", cfg.BlockKey, v, emptyFlowMapping)}
-		}
-		d.blockKeyLine = i
-		d.regionOwnsBlock = ownedStart >= 0
 	}
+	return w.finish()
+}
 
-	if ownedStart >= 0 {
-		return &UnsafeConstructError{Path: cfg.Path, Line: ownedStartLine + 1,
-			Message: "a top-level irrlicht-managed BEGIN marker with no matching END — the region's extent is unknown, so rewriting it could delete a user's own configuration"}
+// topLevelWalk carries findBlockKey's cross-line state: whether a top-level
+// irrlicht region is currently open. Split out because the marker half and the
+// key half are two independent grammars over the same line stream, and reading
+// them interleaved is what let the region-placement bug hide.
+type topLevelWalk struct {
+	doc                        *document
+	cfg                        Config
+	ownedStart, ownedStartLine int
+}
+
+// marker handles a column-0 region marker, reporting whether the line was one.
+func (w *topLevelWalk) marker(i int, l lineSpan) (bool, error) {
+	if l.indent != 0 || !l.comment {
+		return false, nil
 	}
+	switch strings.TrimSpace(l.text) {
+	case BeginMarker(w.cfg.Owner):
+		if w.ownedStart >= 0 {
+			return true, w.refuse(i, "a second irrlicht-managed BEGIN marker before the first was closed")
+		}
+		w.ownedStart, w.ownedStartLine = l.start, i
+		return true, nil
+	case EndMarker(w.cfg.Owner):
+		if w.ownedStart < 0 {
+			return true, w.refuse(i, "an irrlicht-managed END marker with no BEGIN before it")
+		}
+		if !w.doc.regionOwnsBlock {
+			return true, w.refuse(i, fmt.Sprintf(
+				"a top-level irrlicht-managed region that does not contain a %q key — irrlicht only writes one at that level to carry the key it created",
+				w.cfg.BlockKey))
+		}
+		w.doc.region = &byteRange{start: w.ownedStart, end: l.end}
+		w.ownedStart = -1
+		return true, nil
+	}
+	return false, nil
+}
+
+// key handles a column-0 non-comment line: it must be the target key, another
+// key, or a shape this package refuses.
+func (w *topLevelWalk) key(i int, l lineSpan) error {
+	if isDocumentMarker(l.text) {
+		return w.refuse(i, "a YAML document marker — this package models a single-document file and will not guess which document to edit")
+	}
+	key, rest, ok := splitKey(l.text)
+	if !ok {
+		return w.refuse(i, "a line at column 0 that is not a key, a comment or a document marker — the file is not a plain block mapping and will not be edited")
+	}
+	if key != w.cfg.BlockKey {
+		return nil
+	}
+	if w.doc.blockKeyLine >= 0 {
+		return w.refuse(i, fmt.Sprintf(
+			"a second top-level %q key — a duplicate mapping key resolves silently to one of the two, so which one to edit is not knowable",
+			w.cfg.BlockKey))
+	}
+	if err := w.inlineValue(i, rest); err != nil {
+		return err
+	}
+	w.doc.blockKeyLine = i
+	w.doc.regionOwnsBlock = w.ownedStart >= 0
 	return nil
+}
+
+// inlineValue classifies whatever follows the target key on its own line.
+func (w *topLevelWalk) inlineValue(i int, rest string) error {
+	switch v := strings.TrimSpace(stripComment(rest)); v {
+	case "":
+		return nil
+	case emptyFlowMapping:
+		// The one inline value that is modelled, because it is the spelling
+		// the agent's OWN default config carries for "no hooks configured".
+		// Installing rewrites the line to a block mapping.
+		w.doc.blockInlineEmpty = true
+		w.doc.blockKeyComment = trailingComment(rest)
+		return nil
+	default:
+		return w.refuse(i, fmt.Sprintf(
+			"%q carries the inline value %q; only a block mapping (or the empty %s) is modelled",
+			w.cfg.BlockKey, v, emptyFlowMapping))
+	}
+}
+
+// finish reports a region left open at end of document.
+func (w *topLevelWalk) finish() error {
+	if w.ownedStart < 0 {
+		return nil
+	}
+	return w.refuse(w.ownedStartLine,
+		"a top-level irrlicht-managed BEGIN marker with no matching END — the region's extent is unknown, so rewriting it could delete a user's own configuration")
+}
+
+func (w *topLevelWalk) refuse(i int, message string) error {
+	return &UnsafeConstructError{Path: w.cfg.Path, Line: i + 1, Message: message}
 }
 
 // readBlock walks the lines under the block key, recording its own keys and
