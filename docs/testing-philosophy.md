@@ -151,3 +151,24 @@ generator was widened. And **which properties survive which mutation** — "ever
 comment is preserved" is false for a deletion, since the deleted subtree's comments
 go with it, and asserting it anyway produces false failures that erode the test.
 
+**Varying an axis means varying the SPELLING the code classifies on, not the axis's
+name — and the generator itself needs a vacuity guard.** Both halves were earned in
+one run, on `hooktoml`'s splicer (#1753), which had to be widened to model the
+multi-line arrays mistral-vibe's own writer emits. The generator was extended to
+place multi-line arrays in five positions with an adversarial element pool spelling
+`[[hooks]]`, `[table]`, `#` and `]` — a widening that reads as thorough and produced
+arrays in 1539 of 2000 documents. Then deleting the one line that makes the widening
+safe (the guard that classifies NOTHING inside an array as a header, a comment or a
+key) left the whole suite, those 2000 documents included, **green**: every
+adversarial element was a *quoted string*, and `"[[hooks]]"` starts with a quote and
+is header-shaped to nobody. The shape that bites is a bare nested array written as
+the last element with no trailing comma — its line reads `[1, 2]`, which is exactly
+what the header matcher matches. The generator now emits that too and the same
+mutation reddens three tests. So state the axis in the vocabulary of the code under
+test (what the scanner *matches on*), not of the format. And because a generator can
+also stop emitting the construct entirely — one character in an `rng.Intn` threshold
+does it — count what was actually produced and fail when it drops, the same way any
+other mechanism must fail loudly when it cannot run: `assertArrayAxisWasExercised`
+(`core/adapters/inbound/agents/hooktoml/property_test.go`) prints the census on every
+run and is itself seen red by disabling the four call sites.
+
