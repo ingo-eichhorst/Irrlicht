@@ -29,10 +29,10 @@ func TestStatusSummaryCounts(t *testing.T) {
 	// model does not apply to — not a defect in the fixture.
 	const core = 12
 	want := map[string]agentSummary{
-		"aider":      {Agent: "aider", Recorded: 1, Total: 1, Earned: matrix.MaturityPlanned, CoreTotal: core},
-		"claudecode": {Agent: "claudecode", Recorded: 1, Pending: 1, Blocked: 2, Unobservable: 1, NotApplicable: 1, Unknown: 1, Total: 7, Earned: matrix.MaturityPlanned, CoreTotal: core},
-		"codex":      {Agent: "codex", Recorded: 1, Pending: 1, Total: 2, Earned: matrix.MaturityPlanned, CoreTotal: core},
-		"hermes":     {Agent: "hermes", Recorded: 1, Total: 1, Earned: matrix.MaturityPlanned, CoreTotal: core},
+		"aider":       {Agent: "aider", Recorded: 1, Total: 1, Earned: matrix.MaturityPlanned, CoreTotal: core},
+		"claudecode":  {Agent: "claudecode", Recorded: 1, Pending: 1, Blocked: 2, Unobservable: 1, NotApplicable: 1, Unknown: 1, Total: 7, Earned: matrix.MaturityPlanned, CoreTotal: core},
+		"codex":       {Agent: "codex", Recorded: 1, Pending: 1, Total: 2, Earned: matrix.MaturityPlanned, CoreTotal: core},
+		"antigravity": {Agent: "antigravity", Recorded: 1, Total: 1, Earned: matrix.MaturityPlanned, CoreTotal: core},
 	}
 	if len(v.Agents) != len(want) {
 		t.Fatalf("want %d agent rows, got %d: %+v", len(want), len(v.Agents), v.Agents)

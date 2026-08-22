@@ -17,24 +17,26 @@ import (
 func TestDeclaredMatchesRegistry(t *testing.T) {
 	got := Declared()
 
-	// Exhaustive as of this commit: claudecode, codex, copilot, gemini-cli,
-	// kiro-cli, mistral-vibe and pi are the adapters declaring a hooks
-	// permission. If an eighth gains one, this fails and the new adapter
-	// joins the list — that is the intended workflow, not an obstacle.
+	// Exhaustive as of this commit: every registry adapter EXCEPT aider and
+	// antigravity declares a hooks permission. If one of those two gains one,
+	// this fails and the map is updated — that is the intended workflow, not
+	// an obstacle.
 	//
 	// copilot joined in #1378, gemini-cli in #1717, kiro-cli in #1716,
-	// mistral-vibe in #1718 and pi in #1721 — all five are expected to report
+	// mistral-vibe in #1718, pi in #1721, opencode in #1719 and hermes in
+	// #1722 — all of them are expected to report
 	// StatusGap for a while: each declares hooks, but no recording carries a hook_received
 	// event yet, because landing the permission deliberately re-recorded
 	// nothing (the frozen sidecars are hook-free and the replay goldens had
 	// to stay byte-identical — #1717's own audit measured 0 cells
 	// re-recorded, and #1716's/#1718's Phase 2 is plan-only for the same
 	// reason; #1721 re-recorded nothing either, and its own audit reports the
-	// rig gaps that would have to close first). A GAP here is the honest
-	// reading of that, not a defect.
+	// rig gaps that would have to close first; #1722 re-recorded nothing
+	// either, and hermes' rig row is opt-in because a bare HERMES_HOME cannot
+	// authenticate). A GAP here is the honest reading of that, not a defect.
 	want := map[string]bool{
 		"aider": false, "antigravity": false, "claudecode": true, "codex": true,
-		"copilot": true, "gemini-cli": true, "hermes": false, "kiro-cli": true,
+		"copilot": true, "gemini-cli": true, "hermes": true, "kiro-cli": true,
 		"mistral-vibe": true, "opencode": true, "pi": true,
 	}
 	if !reflect.DeepEqual(got, want) {

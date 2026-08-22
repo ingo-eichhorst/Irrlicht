@@ -36,7 +36,7 @@ func richRepo(t *testing.T) string {
 	root := t.TempDir()
 
 	write(t, filepath.Join(root, "replaydata", "agents", "scenarios.json"), `{
-  "meta": {"min_versions": {"aider": "1.0.0", "claudecode": "2.0.0", "codex": "1.0.0", "hermes": "1.0.0"}},
+  "meta": {"min_versions": {"aider": "1.0.0", "claudecode": "2.0.0", "codex": "1.0.0", "antigravity": "1.0.0"}},
   "scenarios": [
     {"id": "1.1", "name": "one",   "description": "d", "process": "p", "acceptance_criteria": "a"},
     {"id": "2.1", "name": "two",   "description": "d", "process": "p", "acceptance_criteria": "a"},
@@ -66,12 +66,17 @@ func richRepo(t *testing.T) string {
 	cell(t, root, "aider", "1-1_one", "yes", "full", "ready")
 	recording(t, root, "aider", "1-1_one", "r1", true)
 
-	// hermes is the fixture's "declares no hooks" adapter — the counterweight
-	// TestCoverageHooksDistinguishesGapFromNoHooks measures codex's GAP
-	// against. It used to be opencode, until #1719 gave opencode a hooks
-	// permission and the two roles collapsed onto one adapter.
-	cell(t, root, "hermes", "1-1_one", "yes", "full", "ready")
-	recording(t, root, "hermes", "1-1_one", "r1", false)
+	// antigravity is the fixture's "declares no hooks" adapter — the
+	// counterweight TestCoverageHooksDistinguishesGapFromNoHooks measures
+	// codex's GAP against. The role has now moved twice: opencode held it
+	// until #1719, hermes until #1722, and each move happened because the
+	// adapter playing it gained a hooks permission. Two registry adapters
+	// declare none today, and aider is the other — but aider cannot take this
+	// role, because it holds the INCIDENTAL one above (a hook-bearing
+	// recording with no permission declared) and the two are mutually
+	// exclusive by construction.
+	cell(t, root, "antigravity", "1-1_one", "yes", "full", "ready")
+	recording(t, root, "antigravity", "1-1_one", "r1", false)
 
 	return root
 }

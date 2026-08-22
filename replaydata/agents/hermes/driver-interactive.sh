@@ -239,7 +239,27 @@ launch_repl() {
   # `hermes chat` is the interactive REPL. HERMES_HOME must already point at
   # the recording home (the rig exports it) so this never writes into a real
   # session store.
-  tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "${SES_CWD[$ACTIVE]}" "hermes chat" \
+  #
+  # IRRLICHT_BIND_ADDR is passed per pane because hermes' hooks are
+  # beacon-delivered (#1722): the `hooks:` entry irrlicht installs carries no
+  # address at all and `irrlichd hook-post hermes` resolves one at FIRE time
+  # from its own environment — IRRLICHT_BIND_ADDR first, then the addr file
+  # under IRRLICHT_HOME (core/pkg/daemonaddr resolveClient). The beacon is a
+  # descendant of this pane, and a tmux pane inherits the tmux SERVER's
+  # environment rather than anything run-cell.sh exported, so a pane carrying
+  # neither variable reads the PRODUCTION addr file and posts every hook to the
+  # daemon on 7837. The recording then comes back complete, healthy and
+  # hook-free with nothing anywhere saying why — the failure #1735 measured.
+  # HERMES_HOME is the isolation half, for the same inheritance reason: the rig
+  # exports it (lib/agent-home.sh's opt-in hermes row) so the DAEMON resolves
+  # the scratch store, and without this prefix the pane's `hermes chat` would
+  # write into the operator's real ~/.hermes while the daemon watched the
+  # scratch one.
+  #
+  # Empty is the same as unset for both readers, so passing them unconditionally
+  # is safe when the rig set neither.
+  tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "${SES_CWD[$ACTIVE]}" \
+    env "HERMES_HOME=${HERMES_HOME:-}" "IRRLICHT_BIND_ADDR=${IRRLICHT_BIND_ADDR:-}" "hermes chat" \
     >>"$DRIVER_LOG.stdout.$ACTIVE" 2>>"$DRIVER_LOG.stderr" \
     || { echo "[driver] failed to launch hermes under tmux" >&2; EXIT_REASON="nonzero(2)"; exit 1; }
 

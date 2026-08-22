@@ -83,8 +83,8 @@ func TestAgentRegistration(t *testing.T) {
 		t.Error("PathForPID must ignore the pid — the store is shared, not per-process")
 	}
 
-	if len(a.Permissions) != 1 {
-		t.Fatalf("len(Permissions) = %d, want 1", len(a.Permissions))
+	if len(a.Permissions) != 2 {
+		t.Fatalf("len(Permissions) = %d, want 2 (store + hooks)", len(a.Permissions))
 	}
 	p := a.Permissions[0]
 	if p.Key != PermissionKeyStore {
@@ -97,6 +97,29 @@ func TestAgentRegistration(t *testing.T) {
 	// stop watchers), so it must carry no closures of its own.
 	if p.Apply != nil || p.Remove != nil {
 		t.Error("observe permission must have nil Apply/Remove")
+	}
+
+	// The hooks permission (#1722) is the other way round: it owns its own
+	// install, so it must carry both closures and declare both files they
+	// write. The contract families in hook*_test.go grade the contents; this
+	// is the shape lock.
+	h := a.Permissions[1]
+	if h.Key != PermissionKeyHooks {
+		t.Fatalf("Permission[1].Key = %q, want %q", h.Key, PermissionKeyHooks)
+	}
+	if h.Kind != permission.KindModify {
+		t.Errorf("hooks Permission.Kind = %q, want modify", h.Kind)
+	}
+	if h.Apply == nil || h.Remove == nil {
+		t.Error("a modify permission that installs must carry Apply and Remove")
+	}
+	if h.Writes == nil || h.Writes.Path == nil {
+		t.Fatal("the hooks permission declares no managed user file")
+	}
+	if len(h.Writes.Also) != 1 {
+		t.Errorf("Writes.Also has %d entries, want 1 — hermes will not run a configured hook "+
+			"whose approval is not recorded, so the allowlist is the other half of the install",
+			len(h.Writes.Also))
 	}
 }
 

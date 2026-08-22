@@ -7,6 +7,7 @@ import (
 	"irrlicht/core/adapters/inbound/agents/codex"
 	"irrlicht/core/adapters/inbound/agents/copilot"
 	"irrlicht/core/adapters/inbound/agents/geminicli"
+	"irrlicht/core/adapters/inbound/agents/hermes"
 	"irrlicht/core/adapters/inbound/agents/kirocli"
 	"irrlicht/core/adapters/inbound/agents/opencode"
 	"irrlicht/core/adapters/inbound/agents/pi"
@@ -29,8 +30,8 @@ import (
 // while its route segment is "claudecode". That is why the map keys below are
 // written out literally rather than derived from the adapter constants.
 //
-// Scope, stated honestly: this pins the receivers that exist (eight as of
-// #1719's opencode row; #1721's pi row also added the mistral-vibe row #1718
+// Scope, stated honestly: this pins the receivers that exist (nine as of
+// #1722's hermes row; #1721's pi row also added the mistral-vibe row #1718
 // never wrote — exactly the omission the paragraph below predicts, and the
 // whole of issue #1759). It cannot fail for a NEW receiver registered at a
 // different prefix, because registerHookRoutes (core/cmd/irrlichd/startup.go)
@@ -43,6 +44,7 @@ func TestBeaconEndpointPathMatchesTheInstalledReceivers(t *testing.T) {
 		"codex":      codex.HookEndpointPath,
 		"copilot":    copilot.HookEndpointPath,
 		"gemini-cli": geminicli.HookEndpointPath,
+		"hermes":     hermes.HookEndpointPath,
 		"kiro-cli":   kirocli.HookEndpointPath,
 		// mistral-vibe was beacon-delivered from the day it shipped (#1718)
 		// but was never added here; found while adding pi's row (#1721).

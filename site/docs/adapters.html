@@ -234,6 +234,8 @@
         <li><code>sessions.cwd</code> is populated only for TUI sessions &mdash; the interactive <code>hermes chat</code> REPL records <code>source='cli'</code> and carries an empty cwd, so the project binding is borrowed from the live process instead</li>
         <li>Process discovery via command-line match: <code>hermes</code> is a Python console-script, so the OS process name is the interpreter and an exact-name match would never fire</li>
         <li>Second <code>agent.ProcessOwnedStore</code> adapter after opencode, and the first whose store is shared across every surface the agent has</li>
+        <li><strong>Writes (behind the <code>hooks</code> consent):</strong> three shell-hook entries in a marked block of <code>$HERMES_HOME/config.yaml</code>, plus the matching approvals in <code>$HERMES_HOME/shell-hooks-allowlist.json</code> &mdash; Hermes does not run a configured hook until it is approved. No code is installed: each entry runs <code>irrlichd hook-post hermes</code>, which resolves the daemon&rsquo;s address at fire time</li>
+        <li><code>pre_approval_request</code> / <code>post_approval_response</code> are the reason the channel exists: Hermes holds a pending approval in process memory and <code>state.db</code> has no approval table, so <code>waiting</code> is not reachable from the store at any polling interval. <code>on_session_end</code> fires once per turn and carries <code>completed</code> / <code>interrupted</code></li>
         <li><strong>Adapter name:</strong> <code>"hermes"</code></li>
         <li>Stage: <strong>alpha</strong></li>
       </ul>

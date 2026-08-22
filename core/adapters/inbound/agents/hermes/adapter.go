@@ -138,6 +138,24 @@ func StorePath() string {
 	return filepath.Join(homeDir(), storeRelPath)
 }
 
+// transcriptPathIn renders the string every downstream consumer keys a Hermes
+// session on, for a given store path. Hermes has no per-session file, so this
+// composed spelling IS the session's identity as far as the rest of the daemon
+// is concerned, and ComputeMetrics splits it back apart.
+//
+// The watcher and the hook receiver must produce the same string or one
+// session becomes two, so there is one function and two thin callers rather
+// than two spellings — the shape opencode's transcriptPathFor already uses.
+func transcriptPathIn(dbPath, sessionID string) string {
+	return dbPath + sessionQueryParam + sessionID
+}
+
+// transcriptPathFor is transcriptPathIn against the store this daemon resolves
+// — what the hook receiver uses, since a hook payload names no file.
+func transcriptPathFor(sessionID string) string {
+	return transcriptPathIn(StorePath(), sessionID)
+}
+
 // isServiceArgv reports whether argv belongs to a long-lived Hermes service
 // rather than an agent session.
 //
