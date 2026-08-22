@@ -21,9 +21,32 @@ const defaultRootDir = ".pi/agent/sessions"
 // directory itself (not a parent).
 const sessionDirEnvVar = "PI_CODING_AGENT_SESSION_DIR"
 
-// sessionsDir returns the directory the Pi adapter should watch —
-// $PI_CODING_AGENT_SESSION_DIR itself when that override is set (it names the
-// session directory, not a root above it), else defaultRootDir.
+// sessionsDir returns the directory the Pi adapter should watch, resolving
+// the same two overrides pi itself does and in the same order.
+//
+// pi composes the sessions directory as getAgentDir() + "/sessions"
+// (dist/config.js's getSessionsDir), where getAgentDir honours
+// $PI_CODING_AGENT_DIR; $PI_CODING_AGENT_SESSION_DIR then overrides the
+// result outright (dist/main.js reads it directly, and pi's own --help
+// describes --session-dir as overriding it).
+//
+// The $PI_CODING_AGENT_DIR leg is issue #1721's: before it, setting only
+// that variable — the documented way to relocate a whole pi installation —
+// moved pi's sessions while irrlicht kept watching ~/.pi/agent/sessions and
+// saw nothing. It matters more now than it did: the hook receiver confines
+// caller-supplied transcript paths to THIS root (hooks.go's
+// transcriptConfiner), so a wrong root does not merely miss transcripts, it
+// rejects every hook the extension delivers.
 func sessionsDir() string {
-	return agentpaths.FromEnv("pi", sessionDirEnvVar, defaultRootDir)
+	// FromEnv with an empty default is how "was this override set to an
+	// absolute path?" is asked without restating the absolute-path check and
+	// its warn-once logging.
+	if dir := agentpaths.FromEnv("pi", sessionDirEnvVar, ""); dir != "" {
+		return dir
+	}
+	return agentpaths.FromEnv("pi", agentDirEnvVar, defaultRootDir, sessionsSubdir)
 }
+
+// sessionsSubdir is the agent-dir-relative directory pi writes transcripts
+// into — the "sessions" in getSessionsDir's join(getAgentDir(), "sessions").
+const sessionsSubdir = "sessions"
