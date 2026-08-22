@@ -109,13 +109,13 @@ type catalogCensus struct {
 // point is that it cannot move UNNOTICED, and that no doc comment anywhere
 // carries a second, hand-typed copy of it.
 var censusOfTheCommittedCatalog = catalogCensus{
-	Recordings:                314,
+	Recordings:                315,
 	Zero:                      1,
 	Fabricated:                1,
-	Divergent:                 143,
-	DivergentByCountsAndKinds: 142,
+	Divergent:                 144,
+	DivergentByCountsAndKinds: 143,
 	UnpairedSidecars:          0,
-	PairedButUngraded:         85,
+	PairedButUngraded:         86,
 }
 
 // literal renders the census as the Go source to paste over the declaration

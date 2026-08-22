@@ -276,8 +276,22 @@ boot_session() {
   # same server with this prefix reads the value. Without the prefix the daemon
   # would watch the isolated home while kiro-cli wrote to the real one, and the
   # fixture would come back empty with nothing saying why.
+  #
+  # IRRLICHT_BIND_ADDR rides along for a DIFFERENT reason, and it is the reason
+  # kiro-cli had zero hook-bearing recordings. kiro-cli's hooks are BEACON
+  # delivered (core/pkg/hookbeacon): the entry written into the agent config
+  # carries no address at all, just `irrlichd hook-post kiro-cli`, and the
+  # beacon resolves where to POST at fire time from its own environment —
+  # IRRLICHT_BIND_ADDR, then the addr file under IRRLICHT_HOME
+  # (core/pkg/daemonaddr resolveClient). The beacon is a child of kiro-cli,
+  # which is this pane, so a pane carrying neither variable reads the
+  # PRODUCTION addr file and posts every hook to the daemon on 7837. The
+  # recording daemon then sees nothing, and the fixture reads as an adapter
+  # that cannot report state rather than as a misrouted hook. Empty is the same
+  # as unset for the beacon (resolveClient's fixedPortOf("") does not match),
+  # so passing it unconditionally is safe when the rig did not set it.
   tmux new-session -d -s "$sess" -x 200 -y 50 -c "$cwd" \
-    env "KIRO_HOME=$KIRO_HOME_RESOLVED" sh -c "$launch" \
+    env "KIRO_HOME=$KIRO_HOME_RESOLVED" "IRRLICHT_BIND_ADDR=${IRRLICHT_BIND_ADDR:-}" sh -c "$launch" \
     >>"$DRIVER_LOG.stdout" 2>>"$DRIVER_LOG.stderr" \
     || { echo "[driver] failed to launch kiro-cli under tmux" >&2; EXIT_REASON="$NONZERO_2"; exit 1; }
   tmux pipe-pane -t "$sess" -o "cat >> '$slot_stdout'"

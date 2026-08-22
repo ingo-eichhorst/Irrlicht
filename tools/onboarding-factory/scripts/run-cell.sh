@@ -56,6 +56,10 @@ source "$SCRIPT_DIR/lib/completeness-check.sh"
 # run-cell-multi.sh for the same reason (#1214).
 # shellcheck source=lib/agent-home.sh
 source "$SCRIPT_DIR/lib/agent-home.sh"
+# Bounded wait for the daemon's hook install to land before the CLI reads its
+# hook config — see the lib header for the recording it was written against.
+# shellcheck source=lib/hook-install-wait.sh
+source "$SCRIPT_DIR/lib/hook-install-wait.sh"
 
 RECORDER="off"
 ATTACH=0
@@ -223,9 +227,23 @@ REPLAY_BIN="$REPO_ROOT/.build/refresh/bin/replay"
 # clashing on 7837. Filesystem-observed adapters (codex/pi/aider/opencode)
 # record fine this way because they watch the real $HOME (e.g.
 # ~/.codex/sessions) regardless of IRRLICHT_HOME. Hook-driven observation
-# (claudecode, codex) works too since #1178: the endpoint the installers write
-# follows IRRLICHT_BIND_ADDR, so hooks reach this daemon rather than
-# production's.
+# works too, but for TWO different reasons depending on how the adapter's
+# installed entry reaches the daemon, and only the first of them is #1178's:
+#
+#   URL delivery (claudecode, codex, copilot) — the entry the installer writes
+#   CARRIES the address, resolved from IRRLICHT_BIND_ADDR at install time, so
+#   the bytes in the user's config already name this daemon (#1178).
+#
+#   Beacon delivery (gemini-cli, kiro-cli, mistral-vibe — every adapter that
+#   imports core/pkg/hookbeacon) — the entry carries NO address at all. It
+#   names `irrlichd hook-post <adapter>`, and the beacon resolves where to POST
+#   at FIRE time, from ITS OWN process environment: IRRLICHT_BIND_ADDR first,
+#   then the addr file under IRRLICHT_HOME (core/pkg/daemonaddr resolveClient).
+#   That process is a child of the agent CLI, which the driver launches under
+#   tmux — so in coexist mode a pane carrying neither variable resolves the
+#   PRODUCTION addr file and posts every hook to the daemon on 7837. The
+#   recording then contains no hook_received event and reads as an adapter that
+#   cannot report state. See the IRRLICHT_BIND_ADDR export below.
 ONBOARD_HOME="${IRRLICHT_ONBOARD_HOME:-}"
 if [[ -n "$ONBOARD_HOME" ]]; then
   # Coexist mode: default to an alternate port so we don't clash with a
@@ -236,6 +254,21 @@ if [[ -n "$ONBOARD_HOME" ]]; then
 else
   ONBOARD_BIND="${IRRLICHT_ONBOARD_BIND_ADDR:-127.0.0.1:7837}"
 fi
+
+# The address a beacon-delivered hook must POST to, exported so the driver
+# inherits it and can forward it into the tmux pane. This is the same
+# half-wiring agent-home.sh's header describes for the *_HOME variables and the
+# same fix: exporting it reaches the daemon (a direct child) but NOT the agent
+# CLI, whose pane is spawned by the tmux SERVER. Each beacon adapter's driver
+# therefore carries an explicit `env IRRLICHT_BIND_ADDR=…` prefix on its
+# `tmux new-session`, and TestEveryBeaconAdapterDriverPassesTheDaemonAddress
+# (tools/onboarding-factory/internal/righome) fails if one stops doing so.
+#
+# Exported unconditionally, including in the non-coexist path where the value
+# is the default port the beacon would have picked anyway: a variable set only
+# on the branch that needs it is a variable whose passthrough is exercised only
+# on that branch.
+export IRRLICHT_BIND_ADDR="$ONBOARD_BIND"
 
 # --- Daemon source ------------------------------------------------------
 # Two modes:
@@ -342,6 +375,16 @@ else
   # return means the socket never appeared (it has already said so on stderr);
   # the trap still drains the daemon and restores the config on the way out.
   spawn_record_daemon "$DAEMON" "$STAGING" "$ONBOARD_BIND" "$ONBOARD_HOME" || exit 1
+fi
+
+# The daemon's socket is bound BEFORE its grant-all Apply closures have written
+# the adapter's hook config, and every agent CLI here reads that config once, at
+# startup. Driving now would record a complete, healthy-looking fixture with no
+# hook events in it (#1735). Skipped on the attach path, where the daemon has
+# been up since long before this script started and run-cell's own
+# unapplied_grants check above already graded its installs.
+if [[ "$ATTACH" != "1" ]]; then
+  wait_for_hook_install "$ADAPTER" "$STAGING" "$ONBOARD_BIND" || exit 1
 fi
 
 # --- Drive the agent ----------------------------------------------------

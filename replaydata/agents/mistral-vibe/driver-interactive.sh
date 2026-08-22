@@ -127,7 +127,54 @@ fi
 # The one spelling of the session root. It was written out four times before
 # this variable existed, which is three chances for a relocation to reach only
 # some of them.
-VIBE_SESSION_ROOT="$VIBE_HOME_RESOLVED/logs/session"
+#
+# VIBE_HOME is NOT the whole answer, and assuming it was is what made the first
+# two attempts at a hook-bearing recording look like an auth failure (#1735).
+# config.toml's [session_logging].save_dir OVERRIDES the VIBE_HOME-derived
+# default, vibe writes it as an ABSOLUTE path, and the operator's own file
+# therefore carries `/Users/<them>/.vibe/logs/session` — so a scratch home
+# seeded by copying config.toml (which agent-home.sh tells you to do) relocates
+# everything EXCEPT the transcripts. vibe then wrote three sessions into the
+# operator's real ~/.vibe/logs/session while the driver waited on an empty
+# scratch directory and timed out with "vibe never created a session dir".
+#
+# The daemon does not make this mistake — vibe/config.go's configuredSaveDir()
+# reads the same key — so resolving it here is what keeps the two agreeing,
+# rather than a second guess about where vibe writes. Same key, same file, same
+# precedence.
+vibe_configured_save_dir() {
+  local cfg="$VIBE_HOME_RESOLVED/config.toml"
+  [[ -f "$cfg" ]] || return 0
+  awk '
+    /^[[:space:]]*\[session_logging\][[:space:]]*$/ { in_section = 1; next }
+    /^[[:space:]]*\[/                               { in_section = 0 }
+    in_section && /^[[:space:]]*save_dir[[:space:]]*=/ {
+      sub(/^[^=]*=[[:space:]]*/, ""); gsub(/^"|"[[:space:]]*$/, ""); print; exit
+    }
+  ' "$cfg"
+}
+VIBE_SESSION_ROOT="$(vibe_configured_save_dir)"
+if [[ -n "$VIBE_SESSION_ROOT" ]]; then
+  echo "[driver] session root from config.toml [session_logging].save_dir: $VIBE_SESSION_ROOT" >&2
+else
+  VIBE_SESSION_ROOT="$VIBE_HOME_RESOLVED/logs/session"
+fi
+# Half-isolation is worse than none, so it is a hard failure rather than a
+# warning: an operator who exported VIBE_HOME asked for this run to stay off
+# their real home, and a save_dir pointing outside it silently grants the
+# opposite while every other file obeys. Naming the file and the key is the
+# whole fix — delete the line, or point it inside the scratch home.
+if [[ -n "${VIBE_HOME:-}" && "$VIBE_SESSION_ROOT" != "$VIBE_HOME_RESOLVED"/* ]]; then
+  echo "[driver] VIBE_HOME=$VIBE_HOME_RESOLVED asks for an isolated home, but" >&2
+  echo "[driver] $VIBE_HOME_RESOLVED/config.toml sets" >&2
+  echo "[driver]   [session_logging] save_dir = \"$VIBE_SESSION_ROOT\"" >&2
+  echo "[driver] which is OUTSIDE it — vibe would write this recording's transcripts" >&2
+  echo "[driver] into that directory (the operator's real home, when the seed was" >&2
+  echo "[driver] copied from it) while the driver watched an empty scratch one." >&2
+  echo "[driver] Remove the save_dir line from the seeded config.toml, or point it" >&2
+  echo "[driver] at $VIBE_HOME_RESOLVED/logs/session." >&2
+  exit 1
+fi
 mkdir -p "$VIBE_SESSION_ROOT"
 echo "[driver] vibe home: $VIBE_HOME_RESOLVED" >&2
 
@@ -339,8 +386,45 @@ boot_vibe_active() {
   # this prefix reads the value. Without it the daemon would watch the isolated
   # home while vibe wrote to the real one, and the fixture would come back empty
   # with nothing saying why.
+  #
+  # IRRLICHT_BIND_ADDR rides along for a DIFFERENT reason, and it is the reason
+  # mistral-vibe had zero hook-bearing recordings. Vibe's hooks are BEACON
+  # delivered (core/pkg/hookbeacon): the [[hooks]] entry written into
+  # hooks.toml carries no address at all, just `irrlichd hook-post
+  # mistral-vibe`, and the beacon resolves where to POST at fire time from its
+  # own environment — IRRLICHT_BIND_ADDR, then the addr file under
+  # IRRLICHT_HOME (core/pkg/daemonaddr resolveClient). The beacon is a child of
+  # vibe, which is this pane, so a pane carrying neither variable reads the
+  # PRODUCTION addr file and posts every post_agent_turn to the daemon on 7837.
+  # The recording daemon then sees nothing, and the fixture reads as an adapter
+  # that cannot report state rather than as a misrouted hook. Empty is the same
+  # as unset for the beacon (resolveClient's fixedPortOf("") does not match), so
+  # passing it unconditionally is safe when the rig did not set it.
+  #
+  # VIBE_ENABLE_UPDATE_CHECKS=0 stops vibe stalling the pane on its startup
+  # UPDATE PICKER, which no driver has an arm for — the run just times out with
+  # "vibe never created a session dir" and reads as an adapter or auth problem.
+  # It is not a scratch-home artifact and it is not hypothetical: the prompt is
+  # driven by $VIBE_HOME/cache.toml's [update_cache], which vibe refreshes on a
+  # DAILY background check and reads on the NEXT launch (cli.py
+  # _maybe_run_startup_update_prompt → get_pending_update_from_cache). So the
+  # launch that discovers a newer release is fine and the one after it blocks.
+  # Measured 2026-08-22 on vibe 2.19.1 with latest 2.24.3 in the cache: without
+  # this variable the pane renders "› Update now   Continue with current
+  # version" and goes no further; with it the REPL comes up normally. The
+  # operator's REAL ~/.vibe/cache.toml was six weeks stale at the time, so this
+  # was one background refresh away from breaking every mistral-vibe recording,
+  # isolated home or not.
+  #
+  # An env var rather than a config edit on purpose: VibeConfig is a pydantic
+  # BaseSettings with env_prefix="VIBE_", and settings_customise_sources puts
+  # env_settings AHEAD of the TOML source (v2.19.1
+  # vibe/core/config/_settings.py), so this wins over an explicit
+  # `enable_update_checks = true` in config.toml — and the driver never has to
+  # write into a home that may be the operator's real one.
   tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "${SES_CWD[$ACTIVE]}" -- \
-    env "VIBE_HOME=$VIBE_HOME_RESOLVED" vibe "${vibe_args[@]}" 2>>"$DRIVER_LOG.stderr" \
+    env "VIBE_HOME=$VIBE_HOME_RESOLVED" "IRRLICHT_BIND_ADDR=${IRRLICHT_BIND_ADDR:-}" \
+        "VIBE_ENABLE_UPDATE_CHECKS=0" vibe "${vibe_args[@]}" 2>>"$DRIVER_LOG.stderr" \
     || { echo "[driver] failed to launch vibe under tmux" >&2; EXIT_REASON="$EXIT_DRIVER_FAULT"; exit 1; }
   tmux pipe-pane -t "$SESSION" -o "cat >> '$DRIVER_LOG.stdout.$ACTIVE'"
   echo "[driver] tmux started: $SESSION (slot=$ACTIVE, cwd=${SES_CWD[$ACTIVE]})" >&2
