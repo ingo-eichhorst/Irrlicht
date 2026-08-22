@@ -144,6 +144,34 @@ while IFS= read -r _; do entries=$((entries + 1)); done \
   < <(record_daemon_env "/s/recordings" "127.0.0.1:7838" "/tmp/my onboard home")
 assert_eq "five entries, not six" "5" "$entries"
 
+echo "== naming adapters forwards IRRLICHT_RECORD_ADAPTERS, absent otherwise =="
+# #1769: naming the adapter(s) this call is recording narrows PermissionService's
+# grant-all auto-grant to them, so a cell recording e.g. mistral-vibe no longer
+# auto-grants (and Applies) every OTHER adapter's hook installer too.
+assert_eq "adapters forwarded" "IRRLICHT_RECORD_ADAPTERS=mistral-vibe" \
+  "$(record_daemon_env /s/recordings 127.0.0.1:7837 "" mistral-vibe | grep RECORD_ADAPTERS)"
+assert_eq "comma-joined pair forwarded verbatim" "IRRLICHT_RECORD_ADAPTERS=hermes,kiro-cli" \
+  "$(record_daemon_env /s/recordings 127.0.0.1:7837 "" hermes,kiro-cli | grep RECORD_ADAPTERS)"
+assert_eq "absent when no adapters given" "" \
+  "$(record_daemon_env /s/recordings 127.0.0.1:7837 "" | grep RECORD_ADAPTERS)"
+
+echo "== the claudecode SLUG is translated to the daemon's hyphenated identity =="
+# claudecode is the one adapter whose replaydata/rig-CLI slug ("claudecode")
+# differs from its daemon agent.Identity.Name ("claude-code") — see
+# shard.go's SlugForAdapter for the same divergence in the opposite direction.
+# Forwarding the slug unmodified would feed PermissionService.Start's
+# exact-string recordAdapters lookup a name that never matches claudecode's
+# OWN identity, silently scoping claudecode itself OUT of its own recording
+# (caught in review, not by an earlier version of this test).
+assert_eq "bare claudecode slug -> claude-code" "IRRLICHT_RECORD_ADAPTERS=claude-code" \
+  "$(record_daemon_env /s/recordings 127.0.0.1:7837 "" claudecode | grep RECORD_ADAPTERS)"
+assert_eq "claudecode translated inside a comma-joined pair" "IRRLICHT_RECORD_ADAPTERS=claude-code,kiro-cli" \
+  "$(record_daemon_env /s/recordings 127.0.0.1:7837 "" claudecode,kiro-cli | grep RECORD_ADAPTERS)"
+assert_eq "claudecode translated as the SECOND half of a pair too" "IRRLICHT_RECORD_ADAPTERS=kiro-cli,claude-code" \
+  "$(record_daemon_env /s/recordings 127.0.0.1:7837 "" kiro-cli,claudecode | grep RECORD_ADAPTERS)"
+assert_eq "an adapter whose slug already matches its identity passes through" "IRRLICHT_RECORD_ADAPTERS=codex" \
+  "$(record_daemon_env /s/recordings 127.0.0.1:7837 "" codex | grep RECORD_ADAPTERS)"
+
 echo "== a caller-set ready-session TTL is forwarded, absent otherwise =="
 # shellcheck disable=SC2034  # not read by this file: it is set so
 # record_daemon_env picks it out of the ENVIRONMENT and forwards it, which is
