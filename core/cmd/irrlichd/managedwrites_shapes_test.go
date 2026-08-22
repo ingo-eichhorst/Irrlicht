@@ -245,47 +245,43 @@ func TestPathUnderDirRefusesEveryUncontainedShape(t *testing.T) {
 func TestPackageLevelPathResolversPinsEverySpelling(t *testing.T) {
 	cases := []struct {
 		name string
-		file string // file name inside the synthetic package
+		// file is the name inside the synthetic package. Empty means
+		// "a.go" — only the _test.go row needs to say otherwise, and repeating
+		// it on every other row is noise a reader has to check anyway.
+		file string
 		src  string
 		want []string
 	}{{
 		name: "the ordinary spelling",
-		file: "a.go",
 		src:  "package p\nfunc settingsPath() (string, error) { return \"\", nil }\n",
 		want: []string{"settingsPath"},
 	}, {
 		name: "named results",
-		file: "a.go",
 		src:  "package p\nfunc settingsPath() (path string, err error) { return }\n",
 		want: []string{"settingsPath"},
 	}, {
 		name: "two names on one result field",
-		file: "a.go",
 		src:  "package p\nfunc twoStrings() (a, b string) { return }\n",
 		want: nil, // (string, string), not (string, error)
 	}, {
 		name: "exported is still a resolver",
-		file: "a.go",
 		src:  "package p\nfunc SettingsPath() (string, error) { return \"\", nil }\n",
 		want: []string{"SettingsPath"},
 	}, {
 		// FALSE POSITIVE a text rule produces: it takes a parameter, so it is
 		// not something a ManagedUserFile field can hold.
 		name: "takes a parameter",
-		file: "a.go",
 		src:  "package p\nfunc pathUnder(root string) (string, error) { return \"\", nil }\n",
 		want: nil,
 	}, {
 		// FALSE POSITIVE: the result types are not (string, error).
 		name: "returns the wrong pair",
-		file: "a.go",
 		src:  "package p\nfunc info() (string, bool) { return \"\", false }\n",
 		want: nil,
 	}, {
 		// FALSE POSITIVE: a METHOD cannot be a ManagedUserFile resolver, and
 		// its receiver is what tells it apart from one.
 		name: "a method with the same signature",
-		file: "a.go",
 		src:  "package p\ntype T struct{}\nfunc (t T) settingsPath() (string, error) { return \"\", nil }\n",
 		want: nil,
 	}, {
@@ -296,14 +292,12 @@ func TestPackageLevelPathResolversPinsEverySpelling(t *testing.T) {
 		// resolver", so it is a hole rather than a loud refusal, which is
 		// exactly why it is written down.
 		name: "a func literal in a package-level var",
-		file: "a.go",
 		src:  "package p\nvar settingsPath = func() (string, error) { return \"\", nil }\n",
 		want: nil,
 	}, {
 		// DECLARED LIMIT: the walk compares result types syntactically, so a
 		// local alias of error is not recognised.
 		name: "an aliased error type",
-		file: "a.go",
 		src:  "package p\ntype myErr = error\nfunc settingsPath() (string, myErr) { return \"\", nil }\n",
 		want: nil,
 	}, {
@@ -315,7 +309,6 @@ func TestPackageLevelPathResolversPinsEverySpelling(t *testing.T) {
 		want: nil,
 	}, {
 		name: "several in one file, sorted",
-		file: "a.go",
 		src: "package p\n" +
 			"func zPath() (string, error) { return \"\", nil }\n" +
 			"func aPath() (string, error) { return \"\", nil }\n",
@@ -324,15 +317,19 @@ func TestPackageLevelPathResolversPinsEverySpelling(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			name := tc.file
+			if name == "" {
+				name = "a.go"
+			}
 			dir := t.TempDir()
-			if err := os.WriteFile(filepath.Join(dir, tc.file), []byte(tc.src), 0o600); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte(tc.src), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			// The row's own vacuity guard: the case must actually contain the
 			// construct it plants, or a corpus that quietly stopped carrying
 			// its own test cases would read as a pass (the rule
 			// core/architecture_hookbody_shapes_test.go states).
-			assertParses(t, dir, tc.file)
+			assertParses(t, dir, name)
 
 			got, err := packageLevelPathResolvers(dir)
 			if err != nil {
