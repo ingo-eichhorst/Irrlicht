@@ -56,6 +56,10 @@ source "$SCRIPT_DIR/lib/completeness-check.sh"
 # run-cell-multi.sh for the same reason (#1214).
 # shellcheck source=lib/agent-home.sh
 source "$SCRIPT_DIR/lib/agent-home.sh"
+# Bounded wait for the daemon's hook install to land before the CLI reads its
+# hook config — see the lib header for the recording it was written against.
+# shellcheck source=lib/hook-install-wait.sh
+source "$SCRIPT_DIR/lib/hook-install-wait.sh"
 
 RECORDER="off"
 ATTACH=0
@@ -371,6 +375,16 @@ else
   # return means the socket never appeared (it has already said so on stderr);
   # the trap still drains the daemon and restores the config on the way out.
   spawn_record_daemon "$DAEMON" "$STAGING" "$ONBOARD_BIND" "$ONBOARD_HOME" || exit 1
+fi
+
+# The daemon's socket is bound BEFORE its grant-all Apply closures have written
+# the adapter's hook config, and every agent CLI here reads that config once, at
+# startup. Driving now would record a complete, healthy-looking fixture with no
+# hook events in it (#1735). Skipped on the attach path, where the daemon has
+# been up since long before this script started and run-cell's own
+# unapplied_grants check above already graded its installs.
+if [[ "$ATTACH" != "1" ]]; then
+  wait_for_hook_install "$ADAPTER" "$STAGING" "$ONBOARD_BIND" || exit 1
 fi
 
 # --- Drive the agent ----------------------------------------------------
