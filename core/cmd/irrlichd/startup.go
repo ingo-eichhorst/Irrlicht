@@ -21,6 +21,7 @@ import (
 	"irrlicht/core/adapters/inbound/agents/copilot"
 	"irrlicht/core/adapters/inbound/agents/geminicli"
 	"irrlicht/core/adapters/inbound/agents/kirocli"
+	"irrlicht/core/adapters/inbound/agents/opencode"
 	"irrlicht/core/adapters/inbound/agents/pi"
 	"irrlicht/core/adapters/inbound/agents/processlifecycle"
 	"irrlicht/core/adapters/inbound/agents/vibe"
@@ -970,6 +971,8 @@ func registerHookRoutes(mux *http.ServeMux, detector *services.SessionDetector, 
 		kirocli.NewHookHandler(detector, permService, logger))
 	mux.Handle("POST "+pi.HookEndpointPath,
 		pi.NewHookHandler(detector, permService, logger))
+	mux.Handle("POST "+opencode.HookEndpointPath,
+		opencode.NewHookHandler(detector, permService, logger))
 }
 
 // publishAddrFile writes the addr file and thereby signals "the daemon is

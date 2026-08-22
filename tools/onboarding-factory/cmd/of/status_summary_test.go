@@ -32,7 +32,7 @@ func TestStatusSummaryCounts(t *testing.T) {
 		"aider":      {Agent: "aider", Recorded: 1, Total: 1, Earned: matrix.MaturityPlanned, CoreTotal: core},
 		"claudecode": {Agent: "claudecode", Recorded: 1, Pending: 1, Blocked: 2, Unobservable: 1, NotApplicable: 1, Unknown: 1, Total: 7, Earned: matrix.MaturityPlanned, CoreTotal: core},
 		"codex":      {Agent: "codex", Recorded: 1, Pending: 1, Total: 2, Earned: matrix.MaturityPlanned, CoreTotal: core},
-		"opencode":   {Agent: "opencode", Recorded: 1, Total: 1, Earned: matrix.MaturityPlanned, CoreTotal: core},
+		"hermes":     {Agent: "hermes", Recorded: 1, Total: 1, Earned: matrix.MaturityPlanned, CoreTotal: core},
 	}
 	if len(v.Agents) != len(want) {
 		t.Fatalf("want %d agent rows, got %d: %+v", len(want), len(v.Agents), v.Agents)

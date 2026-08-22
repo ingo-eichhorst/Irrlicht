@@ -102,6 +102,120 @@ func DecodeConfined[T any](
 	get func(*T) string,
 	set func(*T, string),
 ) bool {
+	if !consentAllowsRead(w, log, component, consent) {
+		return false
+	}
+
+	// Fail closed on a receiver wired without a confiner. Returning "not
+	// decoded" drops the payload with a 2xx, the same shape every other refusal
+	// takes, rather than dispatching an unconfined path because the guard
+	// itself was missing.
+	//
+	// Checked AFTER consent and BEFORE the read, so the three refusals keep the
+	// order TestDecodeConfined_RefusesBeforeReadingAnything pins: a denied
+	// request costs no decode, no path resolution and no confiner counter.
+	if c == nil {
+		log.LogError(component, "", "hook body dropped: receiver has no path confiner")
+		w.WriteHeader(http.StatusOK)
+		return false
+	}
+
+	if !readBody(w, r, p) {
+		return false
+	}
+
+	raw := get(p)
+	confined, reason := c.Confine(raw)
+	if reason != RejectNone {
+		RejectPath(w, log, component, raw, reason)
+		return false
+	}
+	set(p, confined)
+
+	// Postcondition: get and set must name the SAME location, or the payload
+	// still holds the caller's raw string while this function reports success.
+	//
+	// This is not defensive clutter — it is the one failure this design could
+	// otherwise not detect, and it was found green by review. Passing behaviour
+	// as two closures puts the obligation at each call site, where no checker
+	// can see it: a receiver whose set writes a field its get never reads (or a
+	// no-op set, which is a one-character edit away) forwards the unconfined
+	// path, and every test in the tree still passes — including
+	// AssertHookPathConfined, which asserts THAT the receiver dispatched, never
+	// WHICH spelling it dispatched. Verifying it here fails closed once, for
+	// every present and future receiver, instead of asking four contract
+	// wirings to each notice.
+	if got := get(p); got != confined {
+		log.LogError(component, "", fmt.Sprintf(
+			"hook body dropped: payload still names %q after confinement to %q — "+
+				"this receiver's get/set pair do not address the same field", got, confined))
+		w.WriteHeader(http.StatusOK)
+		return false
+	}
+	return true
+}
+
+// DecodeSealed decodes an inbound hook body that names NO filesystem path at
+// all, into p.
+//
+// It reports whether the payload survived, on the same terms as DecodeConfined:
+// on false the response has ALREADY been written and the caller must return
+// without dispatching.
+//
+// # Why a second entry point rather than a confiner over an empty string
+//
+// It exists for issue #1719's opencode receiver, whose Source is an
+// agent.ProcessOwnedStore: session state lives in one SQLite database, there is
+// no file per session, and the "transcript path" the daemon keys a session on
+// is a string the daemon COMPOSES from its own store resolver
+// (<db>-wal?session=<id>). There is nothing a caller could name that the daemon
+// would open, so the honest payload carries a session id and stops there.
+//
+// Handing DecodeConfined an empty path instead would not be the same thing. It
+// would answer RejectEmptyPath, drop every hook, and log a confinement refusal
+// for traffic that is behaving correctly — a mechanism reporting a defect it
+// invented. And a confiner over a self-derived path would be worse still: the
+// input is our own resolver's output, not a caller's, so resolution could only
+// fail (a store not yet created, a WAL checkpointed away between events) and
+// each failure would silently drop a legitimate hook to satisfy a guard that
+// was protecting nothing.
+//
+// # What is NOT relaxed
+//
+// Everything on this path except the confinement is identical to
+// DecodeConfined, and deliberately so: the same consent backstop in the same
+// place (#1488), the same 1 MiB bound on an unauthenticated local endpoint, and
+// the same single body-reading function — readBody, which
+// core/architecture_hookbody_test.go pins as the ONE place under
+// core/adapters/inbound/agents/... an inbound body may be read. That rule is
+// what makes this a second ENTRY POINT rather than a second door: a receiver
+// still cannot reach a payload without going through the chokepoint, and a
+// receiver that DOES carry a caller-supplied path still cannot reach it without
+// supplying a confiner.
+//
+// The obligation this shifts rather than removes is "prove nothing
+// caller-supplied travels", and it is graded from outside by
+// contracttesting.AssertHookPathConfined's PathDaemonDerived route: the two
+// routes make contradictory assertions about the same two strings, so a
+// receiver that declares the wrong one cannot pass quietly.
+func DecodeSealed[T any](
+	w http.ResponseWriter,
+	r *http.Request,
+	log outbound.Logger,
+	component string,
+	consent Consent,
+	p *T,
+) bool {
+	if !consentAllowsRead(w, log, component, consent) {
+		return false
+	}
+	return readBody(w, r, p)
+}
+
+// consentAllowsRead is the #1488 backstop both entry points run before the body
+// is touched. It reports whether reading may proceed; on false the response has
+// already been written.
+func consentAllowsRead(w http.ResponseWriter, log outbound.Logger, component string, consent Consent) bool {
 	// Fail closed on a receiver that named no permission. Every hook receiver
 	// acts under at least one (#570), so an empty declaration is a wiring that
 	// went through Consent{} rather than RequireConsent — it cannot be typed
@@ -133,56 +247,25 @@ func DecodeConfined[T any](
 		w.WriteHeader(http.StatusOK)
 		return false
 	}
+	return true
+}
 
-	// Fail closed on a receiver wired without a confiner. Returning "not
-	// decoded" drops the payload with a 2xx, the same shape every other refusal
-	// takes, rather than dispatching an unconfined path because the guard
-	// itself was missing.
-	if c == nil {
-		log.LogError(component, "", "hook body dropped: receiver has no path confiner")
-		w.WriteHeader(http.StatusOK)
-		return false
-	}
-
-	// Bound the body. These endpoints are unauthenticated and local, so an
-	// unbounded decode is a local process's way to make the daemon allocate
-	// without limit. The daemon's other inbound decoders already do this; the
-	// hook receivers now share one decode, so they get it in one place and a
-	// fifth receiver inherits it. 1 MiB is far above any real hook envelope —
-	// the largest field is a truncated last_assistant_message.
+// readBody is the single place an inbound hook body is read.
+//
+// It is unexported and both entry points funnel through it, which is what keeps
+// core/architecture_hookbody_test.go's Arm B — "this package reads a request
+// body in exactly ONE function" — true across #1719's second entry point. A
+// second body-reading function here would be a second way to skip whatever the
+// entry points are enforcing, which is the #1389 hazard restated.
+//
+// The bound is the reason this is not simply inlined twice. These endpoints are
+// unauthenticated and local, so an unbounded decode is a local process's way to
+// make the daemon allocate without limit. 1 MiB is far above any real hook
+// envelope — the largest field is a truncated last_assistant_message.
+func readBody[T any](w http.ResponseWriter, r *http.Request, p *T) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, maxHookBodyBytes)
-
 	if err := json.NewDecoder(r.Body).Decode(p); err != nil {
 		http.Error(w, "bad request: invalid JSON", http.StatusBadRequest)
-		return false
-	}
-
-	raw := get(p)
-	confined, reason := c.Confine(raw)
-	if reason != RejectNone {
-		RejectPath(w, log, component, raw, reason)
-		return false
-	}
-	set(p, confined)
-
-	// Postcondition: get and set must name the SAME location, or the payload
-	// still holds the caller's raw string while this function reports success.
-	//
-	// This is not defensive clutter — it is the one failure this design could
-	// otherwise not detect, and it was found green by review. Passing behaviour
-	// as two closures puts the obligation at each call site, where no checker
-	// can see it: a receiver whose set writes a field its get never reads (or a
-	// no-op set, which is a one-character edit away) forwards the unconfined
-	// path, and every test in the tree still passes — including
-	// AssertHookPathConfined, which asserts THAT the receiver dispatched, never
-	// WHICH spelling it dispatched. Verifying it here fails closed once, for
-	// every present and future receiver, instead of asking four contract
-	// wirings to each notice.
-	if got := get(p); got != confined {
-		log.LogError(component, "", fmt.Sprintf(
-			"hook body dropped: payload still names %q after confinement to %q — "+
-				"this receiver's get/set pair do not address the same field", got, confined))
-		w.WriteHeader(http.StatusOK)
 		return false
 	}
 	return true

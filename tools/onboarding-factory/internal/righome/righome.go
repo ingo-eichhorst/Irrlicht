@@ -69,10 +69,17 @@ type Row struct {
 }
 
 // Unisolatable names every hooks-declaring adapter that has NO row, with the
-// structural reason. Both entries are properties of the adapter's own path
+// structural reason. Each entry is a property of the adapter's own path
 // resolution rather than work nobody has got to yet, which is the difference
 // between an exemption list and a to-do list — if one of these ever became
 // "not done yet", it should move out of here and into agent-home.sh.
+//
+// opencode's entry (#1719) is the one that carries a named remainder rather
+// than being purely structural, and it says so out loud instead of reading as
+// settled: the SPLIT across two XDG variables is opencode's, and no
+// one-variable row can express it — but the reason the second variable would
+// not help either is an irrlicht gap (StorePath ignores $XDG_DATA_HOME), and
+// that half is fixable.
 //
 // The keys are existence-checked in both directions by
 // TestRigHomeTableMatchesTheAdapterRegistry: an entry naming an adapter that
@@ -85,6 +92,7 @@ var Unisolatable = map[string]string{
 		".claude/settings.json unconditionally. A row would move the session store while the " +
 		"install kept landing in the operator's real settings.json, i.e. claim an isolation " +
 		"it does not have.",
+	"opencode": "split across TWO XDG variables, which a one-variable row cannot express, and irrlicht honours neither. opencode resolves its config dir (the plugin irrlicht installs) from $XDG_CONFIG_HOME and its DATA dir (the SQLite store the daemon watches) from $XDG_DATA_HOME (Global.Path: join(XDG_CONFIG_HOME || ~/.config, \"opencode\") and join(XDG_DATA_HOME || ~/.local/share, \"opencode\")). A row naming XDG_CONFIG_HOME would relocate the install while the store stayed real — claudecode's half-relocatable shape in mirror image — and one naming XDG_DATA_HOME would be worse still, because opencode's StorePath() joins $HOME with \".local/share/opencode/opencode.db\" unconditionally: the CLI would move and the daemon would keep watching the operator's real database. Closing this means teaching StorePath() about XDG_DATA_HOME AND giving the table a two-variable row shape; until both, the managed-file snapshot is the whole of the protection, exactly as it is for gemini-cli.",
 	"gemini-cli": "no override exists at all: defaultRootDir is \".gemini/tmp\" under $HOME and " +
 		"geminiHome() is $HOME/.gemini, with no os.Getenv anywhere in " +
 		"core/adapters/inbound/agents/geminicli. Its hook recordings can only run against the " +

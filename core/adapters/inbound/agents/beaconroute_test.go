@@ -8,6 +8,7 @@ import (
 	"irrlicht/core/adapters/inbound/agents/copilot"
 	"irrlicht/core/adapters/inbound/agents/geminicli"
 	"irrlicht/core/adapters/inbound/agents/kirocli"
+	"irrlicht/core/adapters/inbound/agents/opencode"
 	"irrlicht/core/adapters/inbound/agents/pi"
 	"irrlicht/core/adapters/inbound/agents/vibe"
 	"irrlicht/core/pkg/hookbeacon"
@@ -28,9 +29,10 @@ import (
 // while its route segment is "claudecode". That is why the map keys below are
 // written out literally rather than derived from the adapter constants.
 //
-// Scope, stated honestly: this pins the receivers that exist (seven as of
-// #1721's pi row, which also added the mistral-vibe row #1718 never wrote —
-// exactly the omission the paragraph below predicts). It cannot fail for a NEW receiver registered at a
+// Scope, stated honestly: this pins the receivers that exist (eight as of
+// #1719's opencode row; #1721's pi row also added the mistral-vibe row #1718
+// never wrote — exactly the omission the paragraph below predicts, and the
+// whole of issue #1759). It cannot fail for a NEW receiver registered at a
 // different prefix, because registerHookRoutes (core/cmd/irrlichd/startup.go)
 // is hand-wired with no registry to enumerate and this map is hand-written.
 // Whoever adds the next receiver adds its row here; until then the
@@ -45,6 +47,7 @@ func TestBeaconEndpointPathMatchesTheInstalledReceivers(t *testing.T) {
 		// mistral-vibe was beacon-delivered from the day it shipped (#1718)
 		// but was never added here; found while adding pi's row (#1721).
 		"mistral-vibe": vibe.HookEndpointPath,
+		"opencode":     opencode.HookEndpointPath,
 		"pi":           pi.HookEndpointPath,
 	} {
 		if got := hookbeacon.EndpointPath(segment); got != want {

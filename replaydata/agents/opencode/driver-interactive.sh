@@ -213,7 +213,25 @@ run_live() {
 
   echo "[driver] live mode: launching opencode TUI (tmux=$session, cwd=$RUN_CWD)" >&2
   tmux kill-session -t "$session" 2>/dev/null || true
-  tmux new-session -d -s "$session" -x 200 -y 50 -c "$RUN_CWD" "opencode" \
+  # IRRLICHT_BIND_ADDR is the beacon half (#1719). opencode's hooks are
+  # delivered by `irrlichd hook-post opencode` (core/pkg/hookbeacon): the
+  # plugin irrlicht installs carries NO address, and the beacon resolves where
+  # to POST at FIRE time from its own environment — IRRLICHT_BIND_ADDR first,
+  # then the addr file under IRRLICHT_HOME (core/pkg/daemonaddr's
+  # resolveClient). The beacon is a child of opencode, which is this pane, so a
+  # pane carrying neither variable reads the PRODUCTION addr file and posts
+  # every hook to the daemon on 7837. The recording then comes back complete,
+  # healthy and hook-free, with nothing anywhere saying why — the exact failure
+  # #1735 measured for mistral-vibe.
+  #
+  # Empty is the same as unset for the beacon (fixedPortOf("") does not match),
+  # so passing it unconditionally is safe when the rig set nothing.
+  #
+  # `env` rather than a wrapper shell on purpose: env execs opencode IN PLACE,
+  # so the pane process is still opencode itself and oc_opencode_pid's primary
+  # lookup below keeps working.
+  tmux new-session -d -s "$session" -x 200 -y 50 -c "$RUN_CWD" \
+    env "IRRLICHT_BIND_ADDR=${IRRLICHT_BIND_ADDR:-}" "opencode" \
     >>"$DRIVER_LOG.stdout" 2>>"$DRIVER_LOG.stderr"
   # Always tear the TUI down, even on an error/timeout exit below.
   trap 'tmux kill-session -t "$session" 2>/dev/null || true' EXIT
@@ -503,9 +521,10 @@ run_live() {
   # while it keeps the parent+child sessions alive.
   oc_opencode_pid() {
     local pid="" p pane_pid comm
-    # Common case: `tmux new-session ... "opencode"` execs the single-word
-    # command directly, so the PANE process IS opencode — exactly the PID the
-    # daemon's DiscoverPIDByCWD tracks. Use it without guessing or scanning.
+    # Common case: the pane command is `env IRRLICHT_BIND_ADDR=... opencode`,
+    # and env execs opencode IN PLACE — so the PANE process IS opencode,
+    # exactly the PID the daemon's DiscoverPIDByCWD tracks. Use it without
+    # guessing or scanning.
     pane_pid=$(tmux list-panes -t "$session" -F '#{pane_pid}' 2>/dev/null | head -1)
     if [[ -n "$pane_pid" ]]; then
       comm=$(ps -o comm= -p "$pane_pid" 2>/dev/null | tr -d ' ')
@@ -570,7 +589,11 @@ run_live() {
     tmux kill-session -t "$session" 2>/dev/null || true
     sleep 1
     echo "[driver] live restart: relaunching opencode TUI (tmux=$session, cwd=$RUN_CWD)" >&2
-    tmux new-session -d -s "$session" -x 200 -y 50 -c "$RUN_CWD" "opencode" \
+    # Same IRRLICHT_BIND_ADDR reasoning as the initial launch above — a
+    # relaunched pane that dropped it would post the rest of the recording's
+    # hooks to the production daemon.
+    tmux new-session -d -s "$session" -x 200 -y 50 -c "$RUN_CWD" \
+      env "IRRLICHT_BIND_ADDR=${IRRLICHT_BIND_ADDR:-}" "opencode" \
       >>"$DRIVER_LOG.stdout" 2>>"$DRIVER_LOG.stderr"
     # Re-wait the input affordance before any subsequent send (same readiness
     # gate as the initial launch; opencode swallows keystrokes during boot).

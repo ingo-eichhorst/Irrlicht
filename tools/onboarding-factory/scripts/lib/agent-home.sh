@@ -176,8 +176,20 @@
 #                os.Getenv anywhere in core/adapters/inbound/agents/geminicli.
 #                Its hook recordings can only run against the real home, with
 #                the managed-file snapshot as the whole of the protection.
+#   opencode     SPLIT ACROSS TWO XDG VARIABLES, which a one-variable row
+#                cannot express. opencode resolves its config dir — where
+#                irrlicht installs its plugin — from $XDG_CONFIG_HOME, and its
+#                DATA dir — the SQLite store the daemon watches — from
+#                $XDG_DATA_HOME. A row naming the first relocates the install
+#                while the store stays real (claudecode's problem in mirror
+#                image); a row naming the second is worse, because irrlicht's
+#                own StorePath() joins $HOME with .local/share/opencode
+#                unconditionally, so the CLI would move and the daemon would
+#                keep watching the operator's real database. Closing it needs
+#                BOTH an XDG_DATA_HOME-aware StorePath and a two-variable row
+#                shape here (#1719).
 #
-# Those two are named in righome.Unisolatable with the same reasons, and the
+# Those three are named in righome.Unisolatable with the same reasons, and the
 # tripwire fails if a hooks-declaring adapter is in neither place.
 agent_home_table() {
   cat <<'TABLE'
