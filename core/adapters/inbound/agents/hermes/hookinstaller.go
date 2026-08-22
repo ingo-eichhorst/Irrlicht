@@ -337,6 +337,21 @@ func hookYAMLConfig(path, command string) hookyaml.Config {
 		BlockKey: hookBlockKey,
 		Owner:    hookRegionOwner,
 		Entries:  hookEntries(command),
+		// hermes rewrites its whole config.yaml from a parsed dict whenever it
+		// saves one — `hermes config set`, the setup wizard, a dashboard save
+		// (hermes_cli/config.save_config -> utils.atomic_yaml_write). Every
+		// comment in the file goes with it, INCLUDING the markers that
+		// delimit our region, while the entries survive as data and keep
+		// firing. Without a sentinel this installer would then read its own
+		// entries as a user's colliding hooks forever and
+		// `--uninstall-hooks` would find nothing to remove, leaving them in
+		// the user's config with no way to take them out.
+		//
+		// The beacon sentinel is the right token: it is in every command this
+		// installer writes, it deliberately excludes the binary path so an
+		// entry naming a moved irrlichd is still ours, and it is the same
+		// string every other adapter identifies its entries by.
+		Sentinel: hookbeacon.Sentinel(AdapterName),
 	}
 }
 

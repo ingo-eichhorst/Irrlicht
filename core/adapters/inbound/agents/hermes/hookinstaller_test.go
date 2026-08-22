@@ -474,3 +474,108 @@ func TestHookRegionMarkersAreYAMLComments(t *testing.T) {
 		}
 	}
 }
+
+// TestInstallSurvivesHermesRewritingItsOwnConfig is the defect test for the
+// one failure mode a marker-delimited region has and a data-level entry does
+// not.
+//
+// hermes rewrites config.yaml from a parsed dict on every save — `hermes
+// config set`, the setup wizard, a dashboard save all go through
+// `save_config` -> `atomic_yaml_write` — so every comment in the file is
+// dropped while the data survives. Our region markers are comments. After one
+// of those saves the three entries are still there and still firing, and
+// nothing identifies them.
+//
+// Both halves matter and both were broken before the sentinel existed:
+// EnsureHooksInstalled reported its OWN entries as a user's colliding hooks,
+// forever, as a false "granted but NOT applied"; and UninstallHooks found no
+// region, removed nothing, and left irrlicht's entries in the user's config
+// with no supported way to take them out.
+func TestInstallSurvivesHermesRewritingItsOwnConfig(t *testing.T) {
+	hermesHome(t)
+	const preamble = "model:\n  default: \"anthropic/claude-opus-4.6\"\n"
+	writeConfig(t, preamble)
+	if _, err := EnsureHooksInstalled(); err != nil {
+		t.Fatalf("EnsureHooksInstalled: %v", err)
+	}
+
+	// What hermes' own writer leaves behind: the same data, no comments.
+	stripped := stripYAMLComments(readConfig(t))
+	if strings.Contains(stripped, hookyaml.BeginMarker(hookRegionOwner)) {
+		t.Fatal("the fixture still carries a marker — the rewrite being simulated did not happen")
+	}
+	for _, event := range installedHookEvents {
+		if !strings.Contains(stripped, event+":") {
+			t.Fatalf("the fixture lost event %q — hermes' rewrite keeps the DATA", event)
+		}
+	}
+	writeConfig(t, stripped)
+
+	t.Run("verify reports it as present but not intact", func(t *testing.T) {
+		status, err := VerifyHooksInstalled()
+		if err != nil {
+			t.Fatalf("VerifyHooksInstalled: %v", err)
+		}
+		if status.Intact() {
+			t.Error("a marker-less install reads as Intact, so #1372's verifier would never restore the markers")
+		}
+	})
+
+	t.Run("ensure recovers instead of colliding with itself", func(t *testing.T) {
+		changed, err := EnsureHooksInstalled()
+		if err != nil {
+			t.Fatalf("EnsureHooksInstalled after hermes' rewrite: %v", err)
+		}
+		if !changed {
+			t.Error("reported no change while the markers were missing")
+		}
+		got := readConfig(t)
+		if n := strings.Count(got, hookyaml.BeginMarker(hookRegionOwner)); n != 1 {
+			t.Errorf("found %d regions after recovery, want 1:\n%s", n, got)
+		}
+		for _, event := range installedHookEvents {
+			if n := strings.Count(got, event+":"); n != 1 {
+				t.Errorf("event %q appears %d times after recovery, want 1 — a duplicate YAML key silently keeps only one:\n%s", event, n, got)
+			}
+		}
+		if !strings.HasPrefix(got, preamble) {
+			t.Errorf("recovery did not leave the user's own config alone:\n%s", got)
+		}
+	})
+
+	t.Run("uninstall removes them without the markers", func(t *testing.T) {
+		writeConfig(t, stripYAMLComments(readConfig(t)))
+		changed, err := UninstallHooks()
+		if err != nil {
+			t.Fatalf("UninstallHooks: %v", err)
+		}
+		if !changed {
+			t.Fatal("UninstallHooks found nothing to remove — irrlicht's entries would stay in the user's config with no supported way to take them out")
+		}
+		got := readConfig(t)
+		if strings.Contains(got, hookbeacon.Sentinel(AdapterName)) {
+			t.Errorf("an entry of ours survived uninstall:\n%s", got)
+		}
+		for _, event := range installedHookEvents {
+			if strings.Contains(got, event+":") {
+				t.Errorf("event %q survived uninstall:\n%s", event, got)
+			}
+		}
+	})
+}
+
+// stripYAMLComments removes every whole-line comment, which is what hermes'
+// dict round-trip does to the file. Whole-line only: a trailing comment is
+// dropped by hermes too, but keeping them here makes the fixture a STRICTER
+// input (the region's own markers are whole-line, so removing exactly those is
+// what reproduces the failure).
+func stripYAMLComments(src string) string {
+	var out []string
+	for _, line := range strings.Split(src, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
+}

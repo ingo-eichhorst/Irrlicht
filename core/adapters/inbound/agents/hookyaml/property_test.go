@@ -30,6 +30,10 @@
 //     though the region itself is written with LF.
 //  7. The number of USER event keys already in the block (0-3), drawn from
 //     names that never collide with the region's own.
+//  8. STRAY entries: entries carrying the owner's sentinel with no markers
+//     around them, which is what the agent's own config writer leaves behind
+//     when it re-serializes the document from a parsed dict and drops every
+//     comment. Those must be recovered, not read as a user's colliding hooks.
 //
 // # Which properties survive which mutation
 //
@@ -136,6 +140,7 @@ var requiredAxes = []string{
 	"CRLF line endings",
 	"no trailing newline",
 	"block is the last top-level key",
+	"stray sentinel-bearing entries (markers dropped by the agent's own writer)",
 }
 
 func assertEveryAxisWasExercised(t *testing.T, census map[string]int) {
@@ -175,6 +180,9 @@ func (d document9) recordAxes(census map[string]int) {
 	if d.blockIsLast {
 		census["block is the last top-level key"]++
 	}
+	if d.hasStrays {
+		census["stray sentinel-bearing entries (markers dropped by the agent's own writer)"]++
+	}
 }
 
 // propertyConfig varies the region's own contents too: one to three entries,
@@ -197,8 +205,12 @@ func propertyConfig(path string, rng *rand.Rand) Config {
 		}
 		entries = append(entries, e)
 	}
-	return Config{Path: path, BlockKey: testBlock, Owner: testOwner, Entries: entries}
+	return Config{Path: path, BlockKey: testBlock, Owner: testOwner, Entries: entries, Sentinel: testSentinel}
 }
+
+// testSentinel is the substring every command above carries. It stands in for
+// the beacon sentinel a real adapter passes.
+const testSentinel = "hook-post hermes"
 
 // --- the operations ---
 
@@ -227,7 +239,56 @@ func opInstall(t *testing.T, cfg Config, doc document9, _ int) bool {
 		return unchangedOnDisk(t, cfg, doc)
 	}
 	out := mustRead(t, cfg.Path)
+	if doc.hasStrays {
+		// The line-preservation claim does not hold for a recovery: the stray
+		// entries are deliberately REMOVED. What must hold instead is that
+		// nothing of ours survives outside the region, and that the user's own
+		// keys are untouched — asserted here rather than folded into
+		// wantRoundTrip, because pretending a recovery is a no-op edit is the
+		// kind of blanket property that produces false failures.
+		return assertStraysRecovered(t, cfg, doc, out)
+	}
 	return assertOnlyTheRegionWasAdded(t, cfg, doc, out)
+}
+
+// assertStraysRecovered is opInstall's claim for a document the agent's own
+// writer had stripped: exactly one region, every event named once (a duplicate
+// YAML key silently keeps only one), and the user's own keys still there.
+func assertStraysRecovered(t *testing.T, cfg Config, doc document9, out string) bool {
+	t.Helper()
+	if n := strings.Count(out, BeginMarker(cfg.Owner)); n != 1 {
+		t.Errorf("found %d regions after recovery, want 1:\n%s", n, out)
+		return false
+	}
+	// Counted as KEY LINES rather than at a fixed indent: when the strays were
+	// the block's only content the block empties out, so the region is
+	// rendered at the default indent rather than the one the strays sat at.
+	// That is correct, and an indent-pinned assertion reported it as a
+	// disappearing event.
+	for _, e := range cfg.Entries {
+		if n := countKeyLines(out, e.Event); n != 1 {
+			t.Errorf("event %q appears as a key %d times after recovery, want 1 — a duplicate YAML key keeps only one:\n%s", e.Event, n, out)
+			return false
+		}
+	}
+	for _, declared := range doc.declaredEvents {
+		if countKeyLines(out, declared) != 1 {
+			t.Errorf("the user's own event %q was removed by the recovery:\n%s", declared, out)
+			return false
+		}
+	}
+	return true
+}
+
+// countKeyLines counts lines whose whole content is `<name>:`.
+func countKeyLines(out, name string) int {
+	n := 0
+	for _, line := range strings.Split(out, "\n") {
+		if strings.TrimSpace(strings.TrimRight(line, "\r")) == name+":" {
+			n++
+		}
+	}
+	return n
 }
 
 // opInstallTwice asserts idempotence — the second call must report no change
@@ -274,6 +335,16 @@ func opRoundTrip(t *testing.T, cfg Config, doc document9, i int) bool {
 		return false
 	}
 	got := mustRead(t, cfg.Path)
+	if doc.hasStrays {
+		// A recovery is not reversible by definition — the strays were ours
+		// and are gone. What uninstall owes here is that NOTHING of ours is
+		// left, which is the property the sentinel exists for.
+		if strings.Contains(got, cfg.Sentinel) {
+			t.Errorf("an entry of ours survived uninstall:\n%s", got)
+			return false
+		}
+		return true
+	}
 	if want := doc.wantRoundTrip(); got != want {
 		t.Errorf("round trip is not the original:\n--- got ---\n%q\n--- want ---\n%q", got, want)
 		return false
@@ -290,6 +361,20 @@ func opUninstallOnly(t *testing.T, cfg Config, doc document9, _ int) bool {
 	if err != nil {
 		t.Errorf("uninstall: %v", err)
 		return false
+	}
+	if doc.hasStrays {
+		// Not "no region of ours" at all: the entries are ours, only the
+		// markers are gone. Uninstall must still take them out — that is the
+		// half of the sentinel that keeps an install removable.
+		if !changed {
+			t.Error("uninstall found nothing to remove in a document holding our own marker-less entries")
+			return false
+		}
+		if got := mustRead(t, cfg.Path); strings.Contains(got, cfg.Sentinel) {
+			t.Errorf("an entry of ours survived uninstall:\n%s", got)
+			return false
+		}
+		return true
 	}
 	if changed {
 		t.Error("uninstall reported a change against a document holding no region of ours")
@@ -459,6 +544,9 @@ type document9 struct {
 	// install turns it into — the property the round trip is graded against
 	// for that one shape.
 	keyLine, normalizedKeyLine string
+	// hasStrays records that the block holds sentinel-bearing entries with no
+	// markers — the state the agent's own config writer leaves behind.
+	hasStrays bool
 	// blockIsLast records that no top-level key follows the block, which is
 	// the case with nothing to terminate it.
 	blockIsLast bool
@@ -618,13 +706,36 @@ func writeBlock(b *strings.Builder, rng *rand.Rand, nl string, mode int, doc *do
 		if rng.Intn(3) == 0 {
 			b.WriteString(pad + "# my own hooks" + nl)
 		}
+		// used keeps the generated block a legal YAML mapping. Without it a
+		// stray and a user entry can pick the same event name, which is a
+		// duplicate key — a malformed FIXTURE, and every assertion downstream
+		// would then be grading the wrong thing.
+		used := map[string]bool{}
 		n := 1 + rng.Intn(3)
 		for i := 0; i < n; i++ {
-			event := userEvents[rng.Intn(len(userEvents))]
-			// One document in six declares one of OUR events, which is what
-			// exercises the collision refusal.
+			// One entry in five is a STRAY: ours, sentinel and all, with the
+			// markers gone — the state the agent's own config writer leaves
+			// behind. It is NOT recorded in declaredEvents, because it is not
+			// a user key and must not be read as a collision.
+			if rng.Intn(5) == 0 {
+				event := pickUnused(rng, regionEvents, used)
+				if event == "" {
+					continue
+				}
+				doc.hasStrays = true
+				b.WriteString(pad + event + ":" + nl)
+				b.WriteString(pad + pad + `- command: "/bin/sh -c '/opt/irrlichd ` + testSentinel + `'"` + nl)
+				continue
+			}
+			// One entry in six declares one of OUR event names as a user hook,
+			// which is what exercises the collision refusal.
+			pool := userEvents
 			if rng.Intn(6) == 0 {
-				event = regionEvents[rng.Intn(len(regionEvents))]
+				pool = regionEvents
+			}
+			event := pickUnused(rng, pool, used)
+			if event == "" {
+				continue
 			}
 			doc.declaredEvents = append(doc.declaredEvents, event)
 			b.WriteString(pad + event + ":" + nl)
@@ -637,6 +748,20 @@ func writeBlock(b *strings.Builder, rng *rand.Rand, nl string, mode int, doc *do
 			}
 		}
 	}
+}
+
+// pickUnused returns a name from pool that this block has not used yet, or ""
+// when every one is taken.
+func pickUnused(rng *rand.Rand, pool []string, used map[string]bool) string {
+	start := rng.Intn(len(pool))
+	for i := range pool {
+		name := pool[(start+i)%len(pool)]
+		if !used[name] {
+			used[name] = true
+			return name
+		}
+	}
+	return ""
 }
 
 // filler renders one non-block top-level section. Between them the six shapes

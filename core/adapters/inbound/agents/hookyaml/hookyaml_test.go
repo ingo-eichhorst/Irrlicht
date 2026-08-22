@@ -395,3 +395,101 @@ func TestRenderRegion_RefusesAnEmptyOrUnnamedRegion(t *testing.T) {
 		t.Error("rendered a region with an empty command")
 	}
 }
+
+// TestSentinelRecoversFromACommentStrippingRewrite is the unit-level statement
+// of what Config.Sentinel is for.
+//
+// An agent that re-serializes its own config from a parsed structure keeps the
+// data and drops every comment — and the region markers ARE comments. Without
+// the sentinel the surviving entries read as a user's colliding hooks (install
+// refuses forever) and uninstall finds nothing to remove (the entries stay in
+// the user's config with no supported way to take them out).
+func TestSentinelRecoversFromACommentStrippingRewrite(t *testing.T) {
+	cfg := testConfig("")
+	cfg.Sentinel = "hook-post x"
+
+	// What the agent's writer leaves: our two events, our command, no markers,
+	// beside a hook the user owns.
+	const stripped = `model:
+  default: "x"
+hooks:
+  post_tool_call:
+    - command: "/usr/local/bin/theirs"
+  on_session_end:
+    - command: "/bin/sh -c 'beacon hook-post x'"
+      timeout: 2
+  pre_approval_request:
+    - command: "/bin/sh -c 'beacon hook-post x'"
+      timeout: 2
+`
+	t.Run("install recovers rather than colliding with itself", func(t *testing.T) {
+		path := writeTemp(t, stripped)
+		c := cfg
+		c.Path = path
+		changed, err := EnsureInstalled(c)
+		if err != nil {
+			t.Fatalf("EnsureInstalled: %v", err)
+		}
+		if !changed {
+			t.Error("reported no change while the markers were missing")
+		}
+		got := read(t, path)
+		if n := strings.Count(got, BeginMarker(testOwner)); n != 1 {
+			t.Errorf("found %d regions, want 1:\n%s", n, got)
+		}
+		for _, event := range []string{"on_session_end", "pre_approval_request"} {
+			if n := strings.Count(got, "\n  "+event+":"); n != 1 {
+				t.Errorf("event %q appears %d times, want 1 — a duplicate YAML key keeps only one:\n%s", event, n, got)
+			}
+		}
+		if !strings.Contains(got, `- command: "/usr/local/bin/theirs"`) {
+			t.Errorf("the user's own hook was removed:\n%s", got)
+		}
+	})
+
+	t.Run("uninstall removes them without the markers", func(t *testing.T) {
+		path := writeTemp(t, stripped)
+		c := cfg
+		c.Path = path
+		changed, err := Uninstall(c)
+		if err != nil {
+			t.Fatalf("Uninstall: %v", err)
+		}
+		if !changed {
+			t.Fatal("found nothing to remove — the entries would stay in the user's config forever")
+		}
+		got := read(t, path)
+		if strings.Contains(got, c.Sentinel) {
+			t.Errorf("an entry of ours survived:\n%s", got)
+		}
+		if !strings.Contains(got, `- command: "/usr/local/bin/theirs"`) {
+			t.Errorf("the user's own hook was removed:\n%s", got)
+		}
+	})
+
+	t.Run("inspect calls them present but not canonical", func(t *testing.T) {
+		path := writeTemp(t, stripped)
+		c := cfg
+		c.Path = path
+		present, canonical, err := Inspect(c)
+		if err != nil {
+			t.Fatalf("Inspect: %v", err)
+		}
+		if !present {
+			t.Error("reported absent — uninstall would then have nothing to look for")
+		}
+		if canonical {
+			t.Error("reported canonical — #1372's verifier would never restore the markers")
+		}
+	})
+
+	t.Run("an empty sentinel disables recovery", func(t *testing.T) {
+		path := writeTemp(t, stripped)
+		c := cfg
+		c.Path = path
+		c.Sentinel = ""
+		if _, err := EnsureInstalled(c); err == nil {
+			t.Error("an empty sentinel silently recovered anyway — the opt-in is the vacuity guard for every arm above")
+		}
+	})
+}

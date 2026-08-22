@@ -102,6 +102,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -151,6 +152,21 @@ type Config struct {
 	Owner string
 	// Entries are the hook definitions to install, in order.
 	Entries []Entry
+	// Sentinel is a substring that appears in every entry this owner writes
+	// and in nothing a user would write — a beacon command's
+	// `hook-post <adapter> `, for instance.
+	//
+	// It exists because the markers are COMMENTS, and an agent that rewrites
+	// its own config from a parsed structure deletes every comment in it while
+	// keeping the data. Hermes' `save_config` does exactly that
+	// (`atomic_yaml_write` over a dict) on `hermes config set`, on the setup
+	// wizard, and on a dashboard save. After one of those the entries are
+	// still there and still firing, but the region that identifies them is
+	// gone — so without this, EnsureInstalled would report the surviving
+	// entries as a user's own colliding hooks forever, and Uninstall would
+	// find nothing to remove and leave them in the user's config with no way
+	// to take them out. Empty disables the recovery.
+	Sentinel string
 	// WriteFile persists the new bytes. Injected so the caller owns atomicity
 	// and permissions; AtomicWriteFile is the default implementation.
 	WriteFile func(path string, data []byte) error
@@ -233,7 +249,14 @@ func Inspect(cfg Config) (present, canonical bool, err error) {
 		return false, false, err
 	}
 	if doc.region == nil {
-		return false, false, nil
+		// Orphaned entries are PRESENT (they are firing) but not canonical:
+		// reporting them Missing would make #1372's verifier repair by
+		// re-installing, which is the right action, while reporting them
+		// absent would leave `--uninstall-hooks` with nothing to find.
+		return len(doc.strays) > 0, false, nil
+	}
+	if len(doc.strays) > 0 {
+		return true, false, nil
 	}
 	want, err := doc.wantRegion(cfg)
 	if err != nil {
@@ -273,8 +296,37 @@ func install(cfg Config, src []byte) ([]byte, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
+
+	// Recover first: entries of ours the agent's own config rewrite orphaned
+	// are removed, and everything below then runs against a document with no
+	// trace of a previous install. Doing it as a separate pass with a re-scan,
+	// rather than folding the deletions into the edit below, keeps every byte
+	// offset in `doc` valid for exactly one operation.
+	if len(doc.strays) > 0 {
+		src = deleteRanges(src, doc.strays)
+		doc, err = scan(cfg, src)
+		if err != nil {
+			return nil, false, err
+		}
+		if len(doc.strays) > 0 {
+			return nil, false, fmt.Errorf("hookyaml: %s still carries an entry marked %q after removing the ones found; refusing to write rather than loop",
+				cfg.Path, cfg.Sentinel)
+		}
+		out, _, err := installInto(cfg, src, doc)
+		// changed is true regardless: the strays came out.
+		return out, true, err
+	}
+	return installInto(cfg, src, doc)
+}
+
+// installInto is install with recovery already done.
+func installInto(cfg Config, src []byte, doc *document) ([]byte, bool, error) {
 	if doc.region != nil {
-		return rewriteRegion(cfg, src, doc)
+		out, changed, err := rewriteRegion(cfg, src, doc)
+		if !changed && err == nil {
+			return src, false, nil
+		}
+		return out, changed, err
 	}
 	if err := doc.checkCollisions(cfg); err != nil {
 		return nil, false, err
@@ -363,13 +415,18 @@ func uninstall(cfg Config, src []byte) ([]byte, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
-	if doc.region == nil {
+	// Both the region and any orphaned entries come out. The block key is
+	// inside the region exactly when this install created it, so there is no
+	// "should the key go too?" question left to get wrong.
+	ranges := append([]byteRange(nil), doc.strays...)
+	if doc.region != nil {
+		ranges = append(ranges, *doc.region)
+	}
+	if len(ranges) == 0 {
 		return nil, false, nil
 	}
-	// One byte-range deletion and nothing else. The block key is inside the
-	// range exactly when this install created it, so there is no "should the
-	// key go too?" question left to get wrong.
-	return splice(src, doc.region.start, doc.region.end, nil), true, nil
+	sort.Slice(ranges, func(i, j int) bool { return ranges[i].start < ranges[j].start })
+	return deleteRanges(src, ranges), true, nil
 }
 
 // lineEndingOr returns the line's own terminator, or "\n" for a final line
@@ -537,6 +594,10 @@ type document struct {
 	// regionOwnsBlock reports that the region encloses the block key line,
 	// i.e. this install created the block. Uninstall then removes both.
 	regionOwnsBlock bool
+	// strays are entries OUTSIDE the region that carry Config.Sentinel — this
+	// owner's own entries, left behind after the agent rewrote its config from
+	// a parsed structure and dropped the marker comments. See Config.Sentinel.
+	strays []byteRange
 	// blockInlineEmpty records `<BlockKey>: {}` — a block that exists and is
 	// empty, written in flow style. Installing replaces the key line.
 	blockInlineEmpty bool
@@ -559,6 +620,10 @@ func (d *document) blockIndent() int {
 	return defaultBlockIndent
 }
 
+// checkCollisions refuses an event key the USER declares. A key that is one of
+// ours orphaned by the agent's own config rewrite is not a collision — install
+// removes it first (see Config.Sentinel), and scan has already emptied
+// blockKeys of those.
 func (d *document) checkCollisions(cfg Config) error {
 	for _, e := range cfg.Entries {
 		if line, ok := d.blockKeys[e.Event]; ok {
@@ -583,7 +648,7 @@ func scan(cfg Config, src []byte) (*document, error) {
 		// there are no user keys to collide with and no second region to find.
 		return doc, nil
 	}
-	if err := doc.readBlock(cfg); err != nil {
+	if err := doc.readBlock(cfg, src); err != nil {
 		return nil, err
 	}
 	return doc, nil
@@ -734,9 +799,13 @@ func (w *topLevelWalk) refuse(i int, message string) error {
 
 // readBlock walks the lines under the block key, recording its own keys and
 // this owner's region.
-func (d *document) readBlock(cfg Config) error {
+func (d *document) readBlock(cfg Config, src []byte) error {
 	begin, end := BeginMarker(cfg.Owner), EndMarker(cfg.Owner)
 	regionStart, regionStartLine := -1, -1
+	// openKey/openEnd track the extent of the block-level entry currently
+	// being read, so a sentinel-bearing one can be removed whole.
+	openKey, openEnd := -1, -1
+	openName := ""
 
 	for i := d.blockKeyLine + 1; i < len(d.lines); i++ {
 		l := d.lines[i]
@@ -767,12 +836,19 @@ func (d *document) readBlock(cfg Config) error {
 			d.blockContentIndent = l.indent
 		}
 		if l.indent != d.blockContentIndent {
+			if openKey >= 0 {
+				openEnd = l.end // still part of the entry that key opened
+			}
 			continue // nested deeper than the block's own keys
 		}
-		if err := d.recordBlockKey(cfg, i, l); err != nil {
+		d.closeEntry(cfg, src, openKey, openEnd, openName)
+		name, err := d.recordBlockKey(cfg, i, l)
+		if err != nil {
 			return err
 		}
+		openKey, openEnd, openName = l.start, l.end, name
 	}
+	d.closeEntry(cfg, src, openKey, openEnd, openName)
 
 	if regionStart >= 0 {
 		return &UnsafeConstructError{Path: cfg.Path, Line: regionStartLine + 1,
@@ -781,33 +857,58 @@ func (d *document) readBlock(cfg Config) error {
 	return nil
 }
 
-func (d *document) recordBlockKey(cfg Config, i int, l lineSpan) error {
+// closeEntry finishes the block-level entry that started at start, recording
+// it as a stray when it carries the owner's sentinel.
+func (d *document) closeEntry(cfg Config, src []byte, start, end int, name string) {
+	if start < 0 || cfg.Sentinel == "" {
+		return
+	}
+	if !bytes.Contains(src[start:end], []byte(cfg.Sentinel)) {
+		return
+	}
+	d.strays = append(d.strays, byteRange{start: start, end: end})
+	// It is ours, so it is not a user key: dropping it here is what stops
+	// checkCollisions refusing an install over our own orphaned entry.
+	delete(d.blockKeys, name)
+}
+
+// deleteRanges removes ranges from src, back to front so earlier offsets stay
+// valid. Ranges must not overlap.
+func deleteRanges(src []byte, ranges []byteRange) []byte {
+	out := src
+	for i := len(ranges) - 1; i >= 0; i-- {
+		out = splice(out, ranges[i].start, ranges[i].end, nil)
+	}
+	return out
+}
+
+func (d *document) recordBlockKey(cfg Config, i int, l lineSpan) (string, error) {
 	body := strings.TrimLeft(l.text, " ")
 	if strings.HasPrefix(body, "- ") || body == "-" {
-		return &UnsafeConstructError{Path: cfg.Path, Line: i + 1,
+		return "", &UnsafeConstructError{Path: cfg.Path, Line: i + 1,
 			Message: fmt.Sprintf("the %s block is a sequence, not a mapping of event names", cfg.BlockKey)}
 	}
 	if strings.HasPrefix(body, "<<:") {
-		return &UnsafeConstructError{Path: cfg.Path, Line: i + 1,
+		return "", &UnsafeConstructError{Path: cfg.Path, Line: i + 1,
 			Message: "a YAML merge key inside the block — what the merged mapping contributes is not visible from this file"}
 	}
 	key, rest, ok := splitKey(body)
 	if !ok {
-		return &UnsafeConstructError{Path: cfg.Path, Line: i + 1,
+		return "", &UnsafeConstructError{Path: cfg.Path, Line: i + 1,
 			Message: "a line inside the block that is not a key — the block is not the plain mapping of event names this package models"}
 	}
 	if v := strings.TrimSpace(stripComment(rest)); v != "" {
 		switch v[0] {
 		case '&', '*':
-			return &UnsafeConstructError{Path: cfg.Path, Line: i + 1,
+			return "", &UnsafeConstructError{Path: cfg.Path, Line: i + 1,
 				Message: fmt.Sprintf("event %q uses a YAML anchor or alias; the entries it resolves to are not visible from this file", key)}
 		case '|', '>':
-			return &UnsafeConstructError{Path: cfg.Path, Line: i + 1,
+			return "", &UnsafeConstructError{Path: cfg.Path, Line: i + 1,
 				Message: fmt.Sprintf("event %q carries a block scalar; the indented lines below it are text, not entries", key)}
 		}
 	}
 	d.blockKeys[key] = i
-	return nil
+	return key, nil
 }
 
 func refuseTabIndent(cfg Config, i int, l lineSpan) error {
