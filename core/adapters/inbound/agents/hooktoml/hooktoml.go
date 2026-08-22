@@ -191,6 +191,41 @@ loop:
 // a fragment and nothing else.
 func stripComment(line []byte) []byte { return scanLine(line).stripped }
 
+// refusalFor reports the refusal one scanned line earns, or nil. depthAfter is
+// the bracket depth this line leaves behind.
+//
+// Shared by BOTH scanners in this file — scanDocument and topLevelKeyLine —
+// because they must agree on exactly which documents are refusable and are
+// reached through different public entry points, so a drift between them would
+// show up as one operation succeeding while its sibling refuses the same file,
+// with nothing anywhere comparing the two. TestScannerRefusals_Corpus drives
+// every row through both, which is the assertion this function makes cheap to
+// keep true.
+func refusalFor(path string, lineNo int, sc lineScan, depthAfter int) error {
+	switch {
+	case sc.unterminated:
+		return unsafeAt(path, lineNo, "an unterminated quote")
+	case sc.braces != 0:
+		return unsafeAt(path, lineNo, "an inline table spanning more than one line")
+	case depthAfter < 0:
+		return unsafeAt(path, lineNo, "an unbalanced ']'")
+	}
+	return nil
+}
+
+// headerOf classifies a comment-stripped, trimmed line as a [[array]] or
+// [table] header. Callers must only ask it about a line at bracket depth
+// ZERO — inside a multi-line array a header-shaped line is an ELEMENT.
+func headerOf(trimmed []byte) (kind byte, name string, ok bool) {
+	switch {
+	case isArrayHeaderLine(trimmed):
+		return 2, string(bytes.TrimSpace(trimmed[2 : len(trimmed)-2])), true
+	case isTableHeaderLine(trimmed):
+		return 1, string(bytes.TrimSpace(trimmed[1 : len(trimmed)-1])), true
+	}
+	return 0, "", false
+}
+
 func isArrayHeaderLine(t []byte) bool {
 	return len(t) >= 4 && bytes.HasPrefix(t, []byte("[[")) && bytes.HasSuffix(t, []byte("]]"))
 }
@@ -288,37 +323,26 @@ func scanDocument(path string, src []byte) ([]scannedLine, error) {
 		lineNo++
 		raw := src[pos:end]
 		sc := scanLine(raw)
-		if sc.unterminated {
-			return nil, unsafeAt(path, lineNo, "an unterminated quote")
-		}
-		if sc.braces != 0 {
-			return nil, unsafeAt(path, lineNo, "an inline table spanning more than one line")
+		if err := refusalFor(path, lineNo, sc, depth+sc.brackets); err != nil {
+			return nil, err
 		}
 
 		li := scannedLine{start: pos, continuation: depth > 0}
 		if depth == 0 {
 			trimmed := bytes.TrimSpace(sc.stripped)
-			switch {
-			case isArrayHeaderLine(trimmed):
-				li.isHeader, li.headerKind = true, 2
-				li.headerName = string(bytes.TrimSpace(trimmed[2 : len(trimmed)-2]))
-			case isTableHeaderLine(trimmed):
-				li.isHeader, li.headerKind = true, 1
-				li.headerName = string(bytes.TrimSpace(trimmed[1 : len(trimmed)-1]))
-			default:
+			if kind, name, ok := headerOf(trimmed); ok {
+				li.isHeader, li.headerKind, li.headerName = true, kind, name
+			} else {
 				rawTrimmed := bytes.TrimSpace(raw)
 				li.isCommentOnly = len(rawTrimmed) > 0 && rawTrimmed[0] == '#'
+			}
+			if sc.brackets > 0 {
+				openedAt = lineNo
 			}
 		}
 		lines = append(lines, li)
 
-		if depth == 0 && sc.brackets > 0 {
-			openedAt = lineNo
-		}
 		depth += sc.brackets
-		if depth < 0 {
-			return nil, unsafeAt(path, lineNo, "an unbalanced ']'")
-		}
 		if end >= len(src) {
 			break
 		}
@@ -699,28 +723,22 @@ func topLevelKeyLine(path string, src []byte, key string) (start, end int, found
 		}
 		lineNo++
 		sc := scanLine(src[pos:lineEnd])
-		if sc.unterminated {
-			return 0, 0, false, unsafeAt(path, lineNo, "an unterminated quote")
-		}
-		if sc.braces != 0 {
-			return 0, 0, false, unsafeAt(path, lineNo, "an inline table spanning more than one line")
+		if err := refusalFor(path, lineNo, sc, depth+sc.brackets); err != nil {
+			return 0, 0, false, err
 		}
 		if depth == 0 {
 			trimmed := bytes.TrimSpace(sc.stripped)
-			if isArrayHeaderLine(trimmed) || isTableHeaderLine(trimmed) {
+			if _, _, isHeader := headerOf(trimmed); isHeader {
 				return 0, 0, false, nil
 			}
 			logicalStart = pos
 			k, _, ok := bytes.Cut(trimmed, []byte("="))
 			matching = ok && string(bytes.TrimSpace(k)) == key
-		}
-		if depth == 0 && sc.brackets > 0 {
-			openedAt = lineNo
+			if sc.brackets > 0 {
+				openedAt = lineNo
+			}
 		}
 		depth += sc.brackets
-		if depth < 0 {
-			return 0, 0, false, unsafeAt(path, lineNo, "an unbalanced ']'")
-		}
 		if depth == 0 && matching {
 			return logicalStart, lineEnd, true, nil
 		}
