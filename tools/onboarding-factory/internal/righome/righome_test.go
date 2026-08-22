@@ -276,9 +276,52 @@ func countTmuxLaunches(src string) int {
 	return n
 }
 
+// launchWindowCarries reports whether one `tmux new-session` statement passes
+// envVar into the pane, in any spelling the drivers actually use.
+//
+// Three axes, and each was learned from a driver that was correct and would
+// have been failed by a narrower rule.
+//
+// QUOTING: codex writes `env "CODEX_HOME=$X"`; a future driver may not quote.
+//
+// MECHANISM: an `env VAR=… <cmd>` prefix on the command, which the *_HOME rows
+// use, or tmux's own `-e VAR=…` flag, which gemini-cli's driver already uses
+// for GEMINI_API_KEY. The two are equivalent here — `-e` sets the new session's
+// environment and the pane command inherits it.
+//
+// POSITION: one `env` prefix carries as MANY assignments as it likes, and only
+// the first of them follows the word `env`. This is the axis the first draft
+// got wrong, and it is not hypothetical: `env "KIRO_HOME=…" "IRRLICHT_BIND_ADDR=…"`
+// is what kiro-cli's driver writes, and a rule keyed on the literal
+// `env IRRLICHT_BIND_ADDR=` reported it as missing. A finding against a driver
+// that is correct is the one kind that gets a rule ignored rather than fixed.
+//
+// So: an `-e` flag naming the variable, or an `env` prefix somewhere in the
+// statement plus an assignment to that variable after it. The assignment must
+// start on a quote or whitespace boundary, so FOO_IRRLICHT_BIND_ADDR= is not
+// mistaken for it — the false direction that matters is claiming the variable
+// is carried when it is not.
+func launchWindowCarries(window, envVar string) bool {
+	for _, flag := range []string{"-e \"" + envVar + "=", "-e " + envVar + "="} {
+		if strings.Contains(window, flag) {
+			return true
+		}
+	}
+	env := strings.Index(window, "env ")
+	if env < 0 {
+		return false
+	}
+	rest := window[env:]
+	for _, assign := range []string{"\"" + envVar + "=", " " + envVar + "="} {
+		if strings.Contains(rest, assign) {
+			return true
+		}
+	}
+	return false
+}
+
 // tmuxLaunchesMissingEnv names every launch site that does not pass envVar
-// explicitly. Both quoting styles are accepted because codex's driver writes
-// `env "CODEX_HOME=$X"` and a future one may not quote.
+// explicitly, in any spelling launchWindowCarries accepts.
 func tmuxLaunchesMissingEnv(src, envVar string) []launchSite {
 	var out []launchSite
 	lines := strings.Split(src, "\n")
@@ -287,7 +330,7 @@ func tmuxLaunchesMissingEnv(src, envVar string) []launchSite {
 			continue
 		}
 		window := tmuxLaunchWindow(lines, i)
-		if strings.Contains(window, "env \""+envVar+"=") || strings.Contains(window, "env "+envVar+"=") {
+		if launchWindowCarries(window, envVar) {
 			continue
 		}
 		out = append(out, launchSite{line: i + 1, window: window})

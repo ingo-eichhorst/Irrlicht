@@ -29,9 +29,14 @@ package righome
 import (
 	"bufio"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"irrlicht/core/pkg/pathutil"
@@ -260,4 +265,167 @@ func truncate(s string) string {
 		return s
 	}
 	return s[:max] + "…"
+}
+
+// BeaconPackagePath is the package an adapter imports when its hooks are
+// delivered by the beacon rather than by a URL baked into the installed entry.
+const BeaconPackagePath = "irrlicht/core/pkg/hookbeacon"
+
+// AgentsDir is where the adapter packages live, relative to the repo root.
+const AgentsDir = "core/adapters/inbound/agents"
+
+// DaemonAddrEnvVar is the variable a beacon resolves its target from first
+// (core/pkg/daemonaddr's EnvBindAddr). It is the one thing the rig must put in
+// the agent CLI's pane, and the reason is not the same as a *_HOME row's.
+//
+// A URL-delivered hook carries the daemon's address in the bytes the installer
+// wrote, so a coexisting recording daemon is named by the config itself. A
+// BEACON-delivered hook carries none: the installed entry names
+// `irrlichd hook-post <adapter>` and the beacon resolves where to POST at FIRE
+// time, in its own process — which is a child of the agent CLI. In coexist mode
+// a pane carrying neither this variable nor IRRLICHT_HOME falls through to the
+// default state tree's addr file and posts every hook to the PRODUCTION daemon.
+//
+// Nothing fails when that happens: the recording daemon simply records no
+// hook_received event and the fixture reads as an adapter that cannot report
+// state. Measured in #1735 — all three beacon adapters had zero hook-bearing
+// recordings, and mistral-vibe's first two attempts came back
+// driver_exit_reason=ok with a complete, hook-free capture.
+const DaemonAddrEnvVar = "IRRLICHT_BIND_ADDR"
+
+// ScanBeaconPackage reports whether one adapter package's NON-TEST sources
+// reach the daemon through the beacon, and the adapter slug they declare.
+//
+// files maps a file name to its source. Only names not ending in _test.go are
+// read: a package whose tests import hookbeacon while its production code does
+// not is not a beacon adapter, and counting it would put an obligation on a
+// driver that cannot satisfy it.
+//
+// The slug comes from the package's own `const AdapterName`, which every
+// adapter already declares and which is already the on-disk catalog slug — so
+// there is no second package-directory-to-slug map to drift. A package that
+// uses the beacon and declares no AdapterName is an ERROR rather than a skip:
+// it is the case where this function has the least idea what it is looking at,
+// which is the last place to drop a check.
+func ScanBeaconPackage(files map[string]string) (slug string, usesBeacon bool, err error) {
+	fset := token.NewFileSet()
+	for name, src := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, perr := parser.ParseFile(fset, name, src, parser.ImportsOnly|parser.SkipObjectResolution)
+		if perr != nil {
+			return "", false, fmt.Errorf("parsing %s: %w", name, perr)
+		}
+		for _, imp := range f.Imports {
+			path, uerr := strconv.Unquote(imp.Path.Value)
+			if uerr == nil && path == BeaconPackagePath {
+				usesBeacon = true
+			}
+		}
+	}
+	if !usesBeacon {
+		return "", false, nil
+	}
+	for name, src := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		if s, ok := adapterNameConst(fset, name, src); ok {
+			return s, true, nil
+		}
+	}
+	return "", true, fmt.Errorf("a package importing %s declares no `const AdapterName` — "+
+		"its catalog slug cannot be derived and the rig cannot check its driver", BeaconPackagePath)
+}
+
+// adapterNameConst finds `const AdapterName = "<slug>"` at package scope.
+func adapterNameConst(fset *token.FileSet, name, src string) (string, bool) {
+	f, err := parser.ParseFile(fset, name, src, parser.SkipObjectResolution)
+	if err != nil {
+		return "", false
+	}
+	for _, decl := range f.Decls {
+		gd, ok := decl.(*ast.GenDecl)
+		if !ok || gd.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gd.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for i, ident := range vs.Names {
+				if ident.Name != "AdapterName" || i >= len(vs.Values) {
+					continue
+				}
+				lit, ok := vs.Values[i].(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					continue
+				}
+				if s, err := strconv.Unquote(lit.Value); err == nil {
+					return s, true
+				}
+			}
+		}
+	}
+	return "", false
+}
+
+// BeaconAdapters returns the sorted slugs of every beacon-delivered adapter in
+// the tree. It REFUSES on an empty result rather than returning a short list,
+// for the reason Table does: every check downstream is vacuously satisfied by
+// finding no beacon adapters, so "none use the beacon" and "the scan broke"
+// would otherwise be the same answer.
+func BeaconAdapters(repoRoot string) ([]string, error) {
+	dir := filepath.Join(repoRoot, AgentsDir)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", AgentsDir, err)
+	}
+	var out []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		files, ferr := goSourcesIn(filepath.Join(dir, e.Name()))
+		if ferr != nil {
+			return nil, ferr
+		}
+		slug, uses, serr := ScanBeaconPackage(files)
+		if serr != nil {
+			return nil, fmt.Errorf("%s/%s: %w", AgentsDir, e.Name(), serr)
+		}
+		if uses {
+			out = append(out, slug)
+		}
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("no package under %s imports %s — every check over the result "+
+			"is vacuously satisfied, so this is a broken scan rather than a clean one",
+			AgentsDir, BeaconPackagePath)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// goSourcesIn reads one directory's .go files into the map ScanBeaconPackage
+// takes. Non-recursive: an adapter's own package is one directory.
+func goSourcesIn(dir string) (map[string]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", dir, err)
+	}
+	files := make(map[string]string, len(entries))
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") {
+			continue
+		}
+		b, rerr := os.ReadFile(filepath.Join(dir, e.Name())) // #nosec G304 -- path built from a caller-supplied repo root and a directory listing
+		if rerr != nil {
+			return nil, fmt.Errorf("reading %s: %w", filepath.Join(dir, e.Name()), rerr)
+		}
+		files[e.Name()] = string(b)
+	}
+	return files, nil
 }
