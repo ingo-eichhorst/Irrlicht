@@ -19,6 +19,7 @@
 package contracttesting
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -61,9 +62,54 @@ type HookReceiverUnderTest struct {
 	ObservedPath func() string
 }
 
+// PathRoute declares HOW a receiver obtains the transcript path it dispatches,
+// and therefore which obligations AssertHookPathConfined can grade it on.
+//
+// It is a DECLARATION, not an exemption, for the same reason
+// HookInstaller.Delivery is one (#1453): the two routes make CONTRADICTORY
+// assertions about the same two strings, so declaring the wrong one cannot pass
+// quietly. PathFromBody requires the dispatched path to VARY with what the
+// caller named — and requires an out-of-tree spelling to be refused outright —
+// while PathDaemonDerived requires it to be INVARIANT across every spelling a
+// caller can put on the wire. A from-body receiver declaring PathDaemonDerived
+// dispatches nothing for the hostile bodies and fails; a daemon-derived
+// receiver declaring PathFromBody dispatches for all of them and fails.
+type PathRoute int
+
+const (
+	// PathFromBody is the zero value and every receiver in the tree before
+	// #1719: the payload names a transcript file, that string is
+	// caller-supplied on a local unauthenticated endpoint, and the receiver
+	// confines it to the adapter's declared roots before anything downstream
+	// opens it. Six obligations.
+	PathFromBody PathRoute = iota
+
+	// PathDaemonDerived is a receiver whose payload names NO filesystem path,
+	// because the adapter has no file for a caller to name. #1719's opencode is
+	// the first: its Source is an agent.ProcessOwnedStore — one SQLite database,
+	// no file per session — so the "transcript path" the daemon keys a session
+	// on is a string the daemon COMPOSES from its own store resolver, and the
+	// hook body carries a session id and stops there.
+	//
+	// This is the confinement family's counterpart to
+	// DeliveryAddressFree: rather than confining the path-traversal class one
+	// more time, the route makes it INEXPRESSIBLE — there is no caller-supplied
+	// path on this receiver's dispatch path at all. So, exactly as the
+	// address-free delivery route does, the obligations assert that the
+	// property was actually OBTAINED (nothing the caller writes reaches the
+	// dispatch, and the receiver holds no confiner because it has nothing to
+	// confine) rather than being skipped.
+	PathDaemonDerived
+)
+
 // HookReceiver wires one adapter's hook receiver into AssertHookPathConfined.
 // Every field is required.
 type HookReceiver struct {
+	// Route declares how this receiver obtains the path it dispatches. The zero
+	// value, PathFromBody, is the caller-supplied-path route every receiver
+	// before #1719 takes; see PathRoute for why declaring the wrong one fails.
+	Route PathRoute
+
 	// Root relocates the adapter's declared transcript root to a
 	// test-controlled directory — by t.Setenv of whatever env var moves it
 	// ($HOME, $CODEX_HOME) — creates it, and returns its absolute path. Called
@@ -98,6 +144,31 @@ type HookReceiver struct {
 
 	// EndpointPath is the adapter's hook route, used to build the request.
 	EndpointPath string
+
+	// DerivedPath returns the exact string a PathDaemonDerived receiver must
+	// dispatch for the payload PayloadFor renders — the daemon's own composed
+	// path, resolved AFTER Root has run so it lands inside the test's scratch
+	// directories.
+	//
+	// Required for PathDaemonDerived and rejected for PathFromBody: a from-body
+	// receiver has no single answer to give here (its dispatched path is a
+	// function of what the caller sent), so a wiring that supplied one would be
+	// declaring the wrong route.
+	DerivedPath func(t *testing.T) string
+
+	// ForeignPathPayload renders a body this receiver WILL dispatch on, with a
+	// caller-supplied path spliced into it under whatever key a hostile caller
+	// would try — i.e. the body a PathDaemonDerived receiver must be indifferent
+	// to. Required for PathDaemonDerived and rejected for PathFromBody.
+	//
+	// The wiring renders it rather than the contract, because "the key a caller
+	// would try" is adapter-shaped: it is the field name the adapter's own
+	// payload struct would have carried had it carried one. The contract does
+	// check that this actually produced a DIFFERENT body from PayloadFor's — a
+	// wiring that ignored its argument would otherwise make the invariance
+	// obligation compare a string to itself, which is the "a mechanism that
+	// cannot run must fail loudly" rule in its local form.
+	ForeignPathPayload func(path string) string
 }
 
 // AssertHookPathConfined runs the issue #1361 contract against r. Six
@@ -151,6 +222,69 @@ type HookReceiver struct {
 // rule rather than leaving each adapter to rediscover it (issues #1361, #1364).
 func AssertHookPathConfined(t *testing.T, r HookReceiver) {
 	t.Helper()
+
+	// The route check and the PathDaemonDerived obligations are INLINE rather
+	// than two helpers, because a helper taking *testing.T first is exactly what
+	// seam_walk_test.go's rule 1 exists to stop: it could not be driven by a
+	// negative self-test, so its own failure would be un-gradeable. The arms it
+	// runs (assertDerivedDispatch, assertNoConfinerHeld) take reporter and ARE
+	// driven, in hook_path_confinement_selftest_test.go.
+	switch r.Route {
+	case PathDaemonDerived:
+		if r.DerivedPath == nil {
+			t.Fatal("Route is PathDaemonDerived but DerivedPath is nil — this route's whole claim is that the daemon composes the path, so there is nothing to compare the dispatch against")
+		}
+		if r.ForeignPathPayload == nil {
+			t.Fatal("Route is PathDaemonDerived but ForeignPathPayload is nil — without a body carrying a caller-supplied path, the invariance obligation would compare a string to itself")
+		}
+		// The PathDaemonDerived route. Three obligations, each independently
+		// failable:
+		//
+		//  1. a well-formed payload IS still dispatched — the vacuity guard, without
+		//     which a receiver that answers nothing at all satisfies 2 and 3 perfectly;
+		//  2. the string dispatched is the daemon's own composed path, and the receiver
+		//     holds no confiner — the two halves of "the property was obtained";
+		//  3. the dispatched string does not move when the body names a path, for each
+		//     of the four escapes the from-body route has to refuse.
+		//
+		// Obligation 3 is the one that makes this a route rather than an exemption: it
+		// contradicts obligations 2-5 of the other route directly. There, each of those
+		// four bodies must dispatch NOTHING; here, each must dispatch the SAME thing a
+		// clean body does.
+		t.Run("well_formed_payload_dispatches", func(t *testing.T) {
+			r.Root(t)
+			assertDerivedDispatch(realT(t), r, r.New(t), r.PayloadFor(""), r.DerivedPath(t), "a well-formed payload")
+		})
+		t.Run("dispatched_path_is_the_daemons_own", func(t *testing.T) {
+			r.Root(t)
+			rut := r.New(t)
+			assertDerivedDispatch(realT(t), r, rut, r.PayloadFor(""), r.DerivedPath(t), "a well-formed payload")
+			assertNoConfinerHeld(realT(t), rut)
+		})
+		for _, spelling := range hostilePathSpellings {
+			t.Run("dispatch_is_indifferent_to_"+spelling.name, func(t *testing.T) {
+				root := r.Root(t)
+				want := r.DerivedPath(t)
+				body := hostileBodyFor(t, r, spelling.path(t, root, t.TempDir()))
+				assertDerivedDispatch(realT(t), r, r.New(t), body, want, "a body naming "+spelling.name)
+			})
+		}
+		return
+	case PathFromBody:
+		// Deliberately a hard failure rather than a skip. The two routes'
+		// required fields are disjoint, so a wiring that supplied a
+		// PathDaemonDerived field on this route has either declared the wrong
+		// route or copied a neighbour's wiring wholesale — and in both cases the
+		// obligations that then run grade something other than what the author
+		// believes. That is the shape #1453 records for the delivery routes and
+		// the same answer applies here.
+		if r.DerivedPath != nil || r.ForeignPathPayload != nil {
+			t.Fatal("Route is PathFromBody (the zero value) but a PathDaemonDerived-only field is set — either the route declaration is wrong, or a neighbouring wiring was copied wholesale")
+		}
+	default:
+		t.Fatalf("unknown PathRoute %d", r.Route)
+	}
+
 	// Every wiring closure — Root, WriteTranscript, New — is called HERE, on
 	// the sub-test's real *testing.T, rather than inside an arm. That is the
 	// split AssertHookEndpointFollowsBindAddr already draws, and it is what
@@ -186,7 +320,7 @@ func AssertHookPathConfined(t *testing.T, r HookReceiver) {
 		outside := r.WriteTranscript(t, t.TempDir())
 		link := filepath.Join(mkSubdir(t, root, "linked"), filepath.Base(outside))
 		if err := os.Symlink(outside, link); err != nil {
-			t.Fatalf("symlink %s -> %s: %v", link, outside, err)
+			t.Fatalf(symlinkFailure, link, outside, err)
 		}
 		assertRefused(realT(t), r, r.New(t), link, whatSymlinkEscape)
 	})
@@ -197,7 +331,7 @@ func AssertHookPathConfined(t *testing.T, r HookReceiver) {
 		target := filepath.Join(t.TempDir(), "planted"+r.TranscriptExt)
 		link := filepath.Join(mkSubdir(t, root, "dangling"), filepath.Base(target))
 		if err := os.Symlink(target, link); err != nil {
-			t.Fatalf("symlink %s -> %s: %v", link, target, err)
+			t.Fatalf(symlinkFailure, link, target, err)
 		}
 		assertRefused(realT(t), r, r.New(t), link, whatDangling)
 	})
@@ -313,4 +447,114 @@ func assertRefused(t reporter, r HookReceiver, rut HookReceiverUnderTest, path, 
 func postHookPath(t reporter, r HookReceiver, rut HookReceiverUnderTest, path string) *httptest.ResponseRecorder {
 	t.Helper()
 	return postHookBody(t, rut.Handler, r.EndpointPath, r.PayloadFor(path))
+}
+
+// --- PathDaemonDerived route ---
+
+// plantedTranscriptName is the leaf every hostile spelling below points at. A
+// constant because five call sites name it and a sixth that misspelled it would
+// still plant a file, just not the one the case describes.
+const plantedTranscriptName = "planted.jsonl"
+
+// symlinkFailure is the fixture-failure message this file reports when a
+// symlink cannot be created. Named once so the three planting sites cannot
+// drift into three different spellings of the same environmental failure.
+const symlinkFailure = "symlink %s -> %s: %v"
+
+// hostilePathSpellings are the four bodies obligation 3 posts at a
+// PathDaemonDerived receiver. They are the SAME four escapes obligations 2-5
+// grade a from-body receiver on, which is the point: on this route each one
+// must be a no-op rather than a refusal, and running them proves the receiver
+// is indifferent to the exact inputs the other route has to defend against.
+var hostilePathSpellings = []struct {
+	name string
+	// path builds the caller-supplied path, given the relocated root and a
+	// scratch directory outside it.
+	path func(t *testing.T, root, outside string) string
+}{
+	{"out_of_tree", func(_ *testing.T, _, outside string) string {
+		return filepath.Join(outside, plantedTranscriptName)
+	}},
+	{"parent_traversal", func(_ *testing.T, root, outside string) string {
+		return root + strings.Repeat("/..", 32) + filepath.Join(outside, plantedTranscriptName)
+	}},
+	{"symlink_escape", func(t *testing.T, root, outside string) string {
+		target := filepath.Join(outside, plantedTranscriptName)
+		if err := os.WriteFile(target, []byte("{}\n"), 0o600); err != nil {
+			t.Fatalf("write %s: %v", target, err)
+		}
+		link := filepath.Join(mkSubdir(t, root, "linked"), plantedTranscriptName)
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatalf(symlinkFailure, link, target, err)
+		}
+		return link
+	}},
+	{"dangling_symlink", func(t *testing.T, root, outside string) string {
+		target := filepath.Join(outside, "never-created.jsonl")
+		link := filepath.Join(mkSubdir(t, root, "dangling"), plantedTranscriptName)
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatalf(symlinkFailure, link, target, err)
+		}
+		return link
+	}},
+}
+
+// hostileBodyFor renders the body one hostile spelling posts, and refuses the
+// run when the wiring's ForeignPathPayload did not actually splice the path in.
+//
+// Fixture machinery, not an obligation, which is why it reports on *testing.T
+// and is named in seam_walk_test.go's deferredToTheSeam: a wiring that ignored
+// its argument would make the invariance obligation compare the clean dispatch
+// to itself, and "this obligation could not run" must be loud rather than
+// recorded as the obligation firing (#1479).
+func hostileBodyFor(t *testing.T, r HookReceiver, hostile string) string {
+	t.Helper()
+	body := r.ForeignPathPayload(hostile)
+	if body == r.PayloadFor("") {
+		t.Fatalf("ForeignPathPayload(%q) rendered the same body as PayloadFor — this obligation cannot run, and would otherwise report a pass having posted nothing hostile", hostile)
+	}
+	if !strings.Contains(body, jsonEscapedFragment(hostile)) {
+		t.Fatalf("ForeignPathPayload(%q) rendered a body that does not contain that path — this obligation cannot run: %s", hostile, body)
+	}
+	return body
+}
+
+// assertDerivedDispatch is the shared grading step of all three obligations: a
+// POST of body must be answered 2xx, must dispatch, and must dispatch exactly
+// want.
+func assertDerivedDispatch(t reporter, r HookReceiver, rut HookReceiverUnderTest, body, want, what string) {
+	t.Helper()
+	rec := postHookBody(t, rut.Handler, r.EndpointPath, body)
+	assertHookStatus2xx(t, rec, what)
+	if !rut.Observed() {
+		t.Fatalf("%s dispatched nothing — on the PathDaemonDerived route every body the receiver understands must dispatch the daemon's own path, so this is either a broken receiver or a wiring that declared the wrong route", what)
+	}
+	if got := rut.ObservedPath(); got != want {
+		t.Errorf("%s dispatched %q, want the daemon's own composed path %q — on this route nothing a caller writes may reach the dispatch, and a path that MOVED with the body is a caller-supplied path travelling under a different name", what, got, want)
+	}
+}
+
+// assertNoConfinerHeld is the structural half of obligation 2. A
+// PathDaemonDerived receiver reaches its payload through
+// hookjson.DecodeSealed, which takes no confiner; a nil Confiner is what makes
+// DecodeConfined fail closed for it, so a later edit that switched the receiver
+// back to the confining decode without giving it roots drops payloads instead
+// of dispatching unconfined ones.
+func assertNoConfinerHeld(t reporter, rut HookReceiverUnderTest) {
+	t.Helper()
+	if rut.Handler.Confiner != nil {
+		t.Errorf("the receiver publishes a PathConfiner (%d rejection(s) so far) while declaring PathDaemonDerived — a receiver that holds a confiner has something to confine, which is the PathFromBody route",
+			rut.Handler.Confiner.RejectionCount())
+	}
+}
+
+// jsonEscapedFragment renders path the way it appears inside a JSON string, so
+// the guard above matches a body built with encoding/json (which escapes
+// backslashes) as well as one built by hand.
+func jsonEscapedFragment(path string) string {
+	b, err := json.Marshal(path)
+	if err != nil {
+		return path
+	}
+	return strings.Trim(string(b), `"`)
 }

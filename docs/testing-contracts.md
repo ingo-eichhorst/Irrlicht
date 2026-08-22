@@ -215,7 +215,36 @@ below.
   inbound hook body is caller-supplied on a local, unauthenticated endpoint, so
   a receiver confines it to the adapter's own declared transcript roots
   (`agent.Source`'s `FilesUnderRoot.AllRootsFor`, never a second list that can
-  drift) before anything downstream opens it. Six obligations: an in-tree path
+  drift) before anything downstream opens it.
+  Like the delivery family, it grades against a ROUTE the wiring declares
+  (`HookReceiver.Route`, #1719), because there are two ways to satisfy it and
+  the second makes the first unsatisfiable. `PathFromBody` — the zero value, and
+  every receiver before #1719 — is the six obligations below. `PathDaemonDerived`
+  is a receiver whose payload names no filesystem path, because the adapter has
+  no file for a caller to name: opencode's `Source` is an
+  `agent.ProcessOwnedStore`, one SQLite database with no file per session, so
+  the path every consumer keys a session on is composed by the daemon from its
+  own store resolver and the body carries a session id. That route reaches its
+  payload through `hookjson.DecodeSealed` rather than `DecodeConfined`, and its
+  three obligations assert the property was actually OBTAINED — a well-formed
+  payload still dispatches (the vacuity guard), the dispatched string is the
+  daemon's own composed path, and it does not MOVE when the body names an
+  out-of-tree path, a `..` traversal or a symlink. That is the same move
+  `DeliveryAddressFree` makes: rather than confining the traversal class once
+  more, the route makes it inexpressible. Declaring the wrong route cannot pass
+  quietly, which is why this is a declaration and not an exemption: the two
+  routes make contradictory assertions about the same two strings — from-body
+  requires each hostile spelling to be REFUSED (nothing dispatched) while
+  daemon-derived requires each to dispatch the IDENTICAL string a clean body
+  does — so a from-body receiver that declared `PathDaemonDerived` and a
+  daemon-derived one that declared `PathFromBody` both go red. Note what the
+  route costs elsewhere, stated rather than left implied: `AssertHookReceiptObserved`'s
+  third obligation ("a path-confinement rejection still counts") degenerates
+  into a repeat of its first for such a receiver, since the body it posts is
+  indistinguishable from a clean one. That arm is kept with no opt-out anyway,
+  for the reason `OtherKeys` is on an install-type permission gate — a flag this
+  wiring could take is one a from-body wiring could take too.
+  The from-body route's six obligations: an in-tree path
   is still accepted (the vacuity guard); an out-of-tree path, a `..`
   traversal, a symlink planted inside the root and a *dangling* symlink inside
   the root are each refused, logged and counted; and for a path that IS
@@ -274,11 +303,18 @@ below.
   cannot reach its payload without supplying one), and
   `core/architecture_hookbody_test.go` fails the build if anything else under
   `core/adapters/inbound/agents/...` reads an inbound request body. Two arms:
-  none outside `hookjson`, and **exactly one** inside it, in `DecodeConfined` —
-  the second is what stops the exemption being a hole, and doubles as the
-  vacuity guard. There is deliberately **no exemption list** (neither has
+  none outside `hookjson`, and **exactly one** inside it — the second is what
+  stops the exemption being a hole, and doubles as the vacuity guard. Since
+  #1719 that one function is the unexported `hookjson.readBody` rather than
+  `DecodeConfined` itself, because `DecodeSealed` joined it as a second entry
+  point (see the `PathDaemonDerived` route above) and both funnel through it.
+  Naming the shared helper keeps Arm B's claim EXACTLY as strong as it was —
+  this package reads a body in ONE function — where a second exempt entry-point
+  NAME would have turned a pin into a two-element list, which is the direction a
+  third one grows from. There is deliberately **no exemption list** (neither has
   `architecture_test.go`): an endpoint that genuinely carries no path amends the
-  rule in a reviewable diff. The archaeology — why the rule #1389 proposed
+  rule in a reviewable diff — which is what #1719 did, in one line of that
+  file plus a route on the contract that grades what replaces confinement. The archaeology — why the rule #1389 proposed
   (keying on files referencing a `HookEndpointPath`) selects zero receiver files
   and would have passed against the very bug it was written for, and the four
   things the implemented rule does not cover — is in that file's header, next to
@@ -298,9 +334,9 @@ below.
   accepted path on the adapter's DECLARED root — which on macOS is the `/var`
   spelling of a `/private/var` temp dir, and a naive comparison fails there for
   a reason unrelated to the obligation.
-  `DecodeConfined` also bounds the body (`http.MaxBytesReader`, 1 MiB): these
-  endpoints are unauthenticated and local, and sharing one decode is what lets
-  every receiver, present and future, inherit the bound.
+  `readBody` also bounds the body (`http.MaxBytesReader`, 1 MiB) for both entry
+  points: these endpoints are unauthenticated and local, and sharing one decode
+  is what lets every receiver, present and future, inherit the bound.
 - Hook version floors: `contracttesting.AssertHookVersionGate`
   (`core/internal/contracttesting/hook_version.go`) is the static half of
   #1365 — a hooks permission declares the minimum upstream CLI version its

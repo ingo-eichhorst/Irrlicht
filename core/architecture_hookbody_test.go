@@ -22,9 +22,22 @@
 //
 // So the obligation is moved from "a contract the next adapter must remember to
 // wire" to "the build fails": inside core/adapters/inbound/agents/..., reading
-// an inbound *http.Request's body is the exclusive privilege of
-// hookjson.DecodeConfined, which cannot decode without being handed a
-// *PathConfiner.
+// an inbound *http.Request's body happens in exactly one function, in one
+// package — hookjson's unexported readBody. Both of hookjson's entry points
+// funnel through it, and the one a receiver carrying a caller-supplied path
+// must use, DecodeConfined, cannot decode without being handed a *PathConfiner.
+//
+// The chokepoint is the unexported helper rather than DecodeConfined itself
+// because #1719 added a second entry point, DecodeSealed, for a receiver whose
+// payload names no filesystem path (opencode's store has no file per session,
+// so there is nothing a caller could name that the daemon would open). Naming
+// the shared helper keeps Arm B's claim EXACTLY as strong as it was — this
+// package reads a body in ONE function — where a second exempt entry-point name
+// would have turned a pin into a two-element list, which is the direction a
+// third one grows from. Which entry point a receiver may use is a different
+// question, graded from outside by contracttesting.AssertHookPathConfined's two
+// routes, whose obligations contradict each other so a wrong declaration cannot
+// pass quietly.
 //
 // # Why the rule in issue #1389 is not the rule implemented here
 //
@@ -94,8 +107,13 @@ const agentAdapterPattern = "./adapters/inbound/agents/..."
 // worse failure mode for a guard whose whole job is to be legible when broken.
 const (
 	chokepointPkg  = "irrlicht/core/adapters/inbound/agents/hookjson"
-	chokepointFunc = "DecodeConfined"
+	chokepointFunc = "readBody"
 )
+
+// chokepointEntryPoints are the exported functions readBody exists to serve.
+// Named only so the failure messages below can point a reader at the call they
+// should be making; the RULE is about chokepointFunc alone.
+const chokepointEntryPoints = "hookjson.DecodeConfined (a payload naming a path) or hookjson.DecodeSealed (a payload naming none)"
 
 // knownAgentPackages are packages the load MUST return. This is the vacuity
 // guard, and it is the one that matters: a pattern typo, a build break confined
@@ -108,6 +126,7 @@ var knownAgentPackages = []string{
 	"irrlicht/core/adapters/inbound/agents/claudecode",
 	"irrlicht/core/adapters/inbound/agents/codex",
 	"irrlicht/core/adapters/inbound/agents/copilot",
+	"irrlicht/core/adapters/inbound/agents/opencode",
 }
 
 // bodyConsumingMethods are *http.Request methods that read the request body
@@ -168,8 +187,8 @@ func TestNoDirectRequestBodyReadsInAgentAdapters(t *testing.T) {
 	// has to argue for itself in a reviewable diff.
 	for _, read := range outside {
 		t.Errorf("hook-body violation: %s reads an inbound *http.Request body at %s\n"+
-			"\tinside %s, an inbound request body may only be read by %s.%s, which cannot decode without a *PathConfiner (issue #1389)\n"+
-			"\tif this is a hook receiver: call hookjson.DecodeConfined instead of decoding r.Body yourself\n"+
+			"\tinside %s, an inbound request body may only be read by %s.%s (issue #1389)\n"+
+			"\tif this is a hook receiver: call "+chokepointEntryPoints+" instead of decoding r.Body yourself\n"+
 			"\tif this is a new kind of endpoint that carries no path: this rule has no exemption list by design — amend the rule, with a test",
 			read.Pkg, read, agentAdapterPattern, chokepointPkg, chokepointFunc)
 	}
@@ -205,7 +224,8 @@ func assertChokepointIsSingular(t *testing.T, inside []requestBodyRead) {
 		}
 		for _, read := range funcs[name] {
 			t.Errorf("hook-body violation: %s reads an inbound *http.Request body at %s\n"+
-				"\t%s is exempt only for %s — the single decode every receiver is forced through.\n"+
+				"\t%s is exempt only for %s — the single decode every receiver is forced through,\n"+
+				"\tbehind "+chokepointEntryPoints+".\n"+
 				"\tA second body-reading function here is a second way to skip confinement (issue #1389)",
 				chokepointPkg, read, chokepointPkg, chokepointFunc)
 		}

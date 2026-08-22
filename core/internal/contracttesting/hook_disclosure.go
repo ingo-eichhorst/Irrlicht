@@ -47,9 +47,26 @@ var entryCountPattern = regexp.MustCompile(`(\d+) hook entr(?:y|ies)`)
 var eventShapedToken = regexp.MustCompile(`^[A-Z][a-z]+(?:[A-Z][a-z]+)+$`)
 
 // wordPattern splits consent copy into identifier-shaped words. Deliberately
-// includes digits and underscores so "cli_version" is one word rather than two,
-// which keeps a fragment from being mistaken for an event name.
-var wordPattern = regexp.MustCompile(`[A-Za-z][A-Za-z0-9_]*`)
+// whole-word: "PostToolUse" occurs inside "PostToolUseFailure", so a substring
+// test on copy naming only the latter would read as disclosing both.
+//
+// A word may contain INTERNAL dots, and that is #1719's addition rather than
+// laxity. Hook event names are not all single identifiers: opencode's are
+// "permission.asked", "permission.replied" and "session.idle", and under the
+// original pattern a copy naming them correctly tokenized as "permission",
+// "asked", ... so the names-every-installed-event arm could never be satisfied
+// by any wording at all — an adapter whose disclosure was RIGHT would have been
+// reported as undisclosed.
+//
+// A dot is only taken when a letter follows it, so ordinary sentence-final
+// punctuation is still excluded: "…writes the Stop hook." yields "Stop", not
+// "Stop.". What does change for the existing adapters is that a path-shaped
+// token like "settings.json" is now one word instead of two — measured against
+// every adapter's copy in the tree, no arm reads either half (the installed-set
+// arm looks for event names, and the over-promise arm's CamelCase test cannot
+// match a token containing a dot), which is why the widening is safe here and
+// is stated rather than assumed.
+var wordPattern = regexp.MustCompile(`[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*`)
 
 // HookDisclosure wires one adapter's hooks permission into
 // AssertHookDisclosureMatchesInstalled. Installed is the same slice the

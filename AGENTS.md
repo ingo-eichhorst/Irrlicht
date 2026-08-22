@@ -98,7 +98,7 @@ Before marking a ticket done, run the full suite — every layer must pass:
   under `t.TempDir()`, so it never touches the production daemon). Also runs
   `core/architecture_test.go` (hexagonal import-direction, statically
   enforced) and `core/architecture_hookbody_test.go` (which inbound hook
-  body reads are confined to `hookjson.DecodeConfined`).
+  body reads are confined to `hookjson`'s single decode).
 - Architecture score (advisory, not a merge gate): `tools/ars-gate.sh` /
   `tools/preflight.sh`'s `arch` gate — flags a regression in the Agent
   Readiness Score (composite or any category) vs `origin/main`.

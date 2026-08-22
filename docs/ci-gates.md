@@ -37,8 +37,9 @@ CI parity section (chunking, the budget, and what it makes visible).
   `NeedSyntax|NeedTypes|NeedTypesInfo` over a narrow pattern rather than
   `NeedName|NeedImports` over the module. It enforces that inside
   `core/adapters/inbound/agents/...` an inbound `*http.Request`'s body may be
-  read only by `hookjson.DecodeConfined` — see "Hook path confinement" below
-  for why. Its corpus is `core/architecture_hookbody_shapes_test.go`: one file
+  read only by `hookjson.readBody`, the single decode both of that package's
+  entry points (`DecodeConfined`, `DecodeSealed`) funnel through — see "Hook
+  path confinement" below for why. Its corpus is `core/architecture_hookbody_shapes_test.go`: one file
   per spelling (decoder in a variable, `io.ReadAll`, an aliased body, a helper
   in another file, `r.FormValue`, a request stashed in a struct field) pinned
   to the verdict the detector must return, plus two `want:false` cases —

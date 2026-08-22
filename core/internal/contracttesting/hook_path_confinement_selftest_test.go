@@ -79,7 +79,7 @@ func confinementArmBuilders() []armBuilder {
 			outside := r.WriteTranscript(t, t.TempDir())
 			link := filepath.Join(mkSubdir(t, root, "linked"), filepath.Base(outside))
 			if err := os.Symlink(outside, link); err != nil {
-				t.Fatalf("symlink %s -> %s: %v", link, outside, err)
+				t.Fatalf(symlinkFailure, link, outside, err)
 			}
 			rut := r.New(t)
 			return func(at armT) { assertRefused(at, r, rut, link, whatSymlinkEscape) }
@@ -92,7 +92,7 @@ func confinementArmBuilders() []armBuilder {
 			target := filepath.Join(t.TempDir(), "planted"+r.TranscriptExt)
 			link := filepath.Join(mkSubdir(t, root, "dangling"), filepath.Base(target))
 			if err := os.Symlink(target, link); err != nil {
-				t.Fatalf("symlink %s -> %s: %v", link, target, err)
+				t.Fatalf(symlinkFailure, link, target, err)
 			}
 			rut := r.New(t)
 			return func(at armT) { assertRefused(at, r, rut, link, whatDangling) }

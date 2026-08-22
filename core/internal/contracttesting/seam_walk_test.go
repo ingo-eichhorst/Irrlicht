@@ -110,6 +110,9 @@ var deferredToTheSeam = map[string]string{
 	"unknownEventTranscript": "fixture construction, same shape as receiptTranscript (#1479).",
 	"unknownEventName": "derives a per-sub-test, per-invocation event name from t.Name(), which no " +
 		"reporter carries. It decides no verdict; a name it cannot derive is a fixture failure (#1364, #1479).",
+	"hostileBodyFor": "fixture construction: renders the body one PathDaemonDerived case posts and " +
+		"refuses when the wiring's ForeignPathPayload ignored its argument. A fixture that cannot be " +
+		"BUILT must be loud rather than recorded as the obligation firing (#1479, #1719).",
 	"unknownEventHash": "the t.Name() half the two name functions share, so they cannot drift onto " +
 		"different derivations. It decides no verdict (#1512 review).",
 }

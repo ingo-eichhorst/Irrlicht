@@ -35,7 +35,7 @@ func TestDeclaredMatchesRegistry(t *testing.T) {
 	want := map[string]bool{
 		"aider": false, "antigravity": false, "claudecode": true, "codex": true,
 		"copilot": true, "gemini-cli": true, "hermes": false, "kiro-cli": true,
-		"mistral-vibe": true, "opencode": false, "pi": true,
+		"mistral-vibe": true, "opencode": true, "pi": true,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Declared() = %v\nwant %v", got, want)

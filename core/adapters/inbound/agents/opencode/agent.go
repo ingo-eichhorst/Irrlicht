@@ -1,6 +1,7 @@
 package opencode
 
 import (
+	"irrlicht/core/adapters/inbound/agents/hookjson"
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/permission"
 	"irrlicht/core/domain/session"
@@ -62,6 +63,53 @@ func Agent() agent.Agent {
 					"~/.local/share/opencode/opencode.db in read-only mode to derive " +
 					"session state, cost, and token metrics. No row is ever written. " +
 					"Toggling off stops all polling immediately.",
+			},
+			{
+				Key:             PermissionKeyHooks,
+				Kind:            permission.KindModify,
+				Title:           "Install status hooks",
+				FeatureUnlocked: "Blocked-on-user detection and authoritative turn-end detection",
+				// "3 hook entries" is what contracttesting's #1356 count arm
+				// reads, and it is the honest number: three event
+				// subscriptions. They live in ONE file, which is the unusual
+				// part, so Touches names the shape in the same breath rather
+				// than leaving it to Detail — the wizard row is what most users
+				// read.
+				Touches: "Writes 3 hook entries to " + displayPluginPath +
+					" — a small JavaScript file that opencode loads and runs",
+				Detail: "opencode has no hooks section in its config: its experimental " +
+					"settings carry no hook key, and the only way to observe its lifecycle " +
+					"is a plugin, so this permission installs one. That is a single " +
+					"JavaScript file at " + displayPluginPath + ", which opencode " +
+					"auto-discovers and executes inside every opencode session with your " +
+					"own permissions. It is code irrlicht ships in its own binary, not a " +
+					"package fetched from anywhere — no npm, no git, no build step — and " +
+					"opencode's own config file is not touched at all. The file imports " +
+					"only node:child_process, subscribes to exactly three opencode events " +
+					"(" + hookjson.EventList(installedHookEvents) + ") and does one thing " +
+					"with each: runs `irrlichd hook-post opencode`, a tiny command " +
+					"irrlicht ships, handing it the session id. That command reads the " +
+					"daemon's own published address at the moment the event fires, so " +
+					"nothing in the file names a host or a port and it cannot go stale; it " +
+					"also never blocks opencode, even when the daemon is not running. The " +
+					"file deliberately registers only opencode's read-only event tap, " +
+					"never a hook that could answer a permission prompt for you or change " +
+					"what opencode does. " +
+					hookjson.RequiresVersion("opencode", minOpenCodeVersion) +
+					" Toggling off deletes the file (also available via " +
+					"`irrlichd --uninstall-hooks`); nothing else in your opencode " +
+					"installation was changed, so there is nothing else to undo.",
+				Apply:  func() error { _, err := EnsureHooksInstalled(); return err },
+				Remove: func() error { _, err := UninstallHooks(); return err },
+				Writes: &agent.ManagedUserFile{
+					Path:      PluginPath,
+					Uninstall: UninstallHooks,
+					Verify:    VerifyHooksInstalled,
+					Version: &agent.VersionGate{
+						Min:   minOpenCodeVersion,
+						Probe: []string{"opencode", "--version"},
+					},
+				},
 			},
 		},
 	}

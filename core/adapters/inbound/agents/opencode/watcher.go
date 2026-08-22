@@ -98,14 +98,21 @@ type sessionCursor struct {
 	lastObserved time.Time
 }
 
+// transcriptPathFor renders this watcher's own spelling of a session key.
+//
+// A method on the watcher rather than a call to the package-level
+// transcriptPathFor, because a watcher built with NewWithDBPath points at a
+// scratch database and must key sessions on THAT one; the package-level
+// function is what a caller with no watcher in hand (the hook receiver) uses,
+// and New() below makes the two agree by resolving through the same StorePath.
+func (w *Watcher) transcriptPathFor(sessionID string) string {
+	return w.dbPath + "-wal" + sessionQueryParam + sessionID
+}
+
 // New creates a Watcher for the OpenCode database relative to $HOME.
 func New(maxAge time.Duration) *Watcher {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		log.Printf("opencode: $HOME not set, using relative path: %v", err)
-	}
 	return &Watcher{
-		dbPath:            filepath.Join(home, dbRelPath),
+		dbPath:            StorePath(),
 		adapter:           AdapterName,
 		maxAge:            maxAge,
 		cursors:           make(map[string]*sessionCursor),
@@ -384,7 +391,7 @@ func (w *Watcher) maybeEmitNewSession(s sessionRow, cur *sessionCursor, live map
 	// parseTranscriptPath. The WAL suffix routes isStaleTranscript()
 	// at the WAL (updated on every write), not the checkpoint-only
 	// main DB.
-	walPath := w.dbPath + "-wal" + sessionQueryParam + s.id
+	walPath := w.transcriptPathFor(s.id)
 	w.broadcast(agent.Event{
 		Type:            agent.EventNewSession,
 		SessionID:       s.id,
@@ -451,7 +458,7 @@ func (w *Watcher) emitRemovedForArchivedSessions(db *sql.DB) {
 		if !known {
 			continue
 		}
-		walPath := w.dbPath + "-wal" + sessionQueryParam + id
+		walPath := w.transcriptPathFor(id)
 		w.broadcast(agent.Event{
 			Type:           agent.EventRemoved,
 			SessionID:      id,
@@ -544,7 +551,7 @@ func (w *Watcher) scanParts(db *sql.DB, sessionID, directory string, cur *sessio
 			Type:           agent.EventActivity,
 			SessionID:      sessionID,
 			ProjectDir:     filepath.Base(directory),
-			TranscriptPath: w.dbPath + "-wal" + sessionQueryParam + sessionID,
+			TranscriptPath: w.transcriptPathFor(sessionID),
 			CWD:            directory,
 			Terminal:       acc.hasTerminal,
 		})

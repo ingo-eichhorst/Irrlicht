@@ -36,7 +36,7 @@ func richRepo(t *testing.T) string {
 	root := t.TempDir()
 
 	write(t, filepath.Join(root, "replaydata", "agents", "scenarios.json"), `{
-  "meta": {"min_versions": {"aider": "1.0.0", "claudecode": "2.0.0", "codex": "1.0.0", "opencode": "1.0.0"}},
+  "meta": {"min_versions": {"aider": "1.0.0", "claudecode": "2.0.0", "codex": "1.0.0", "hermes": "1.0.0"}},
   "scenarios": [
     {"id": "1.1", "name": "one",   "description": "d", "process": "p", "acceptance_criteria": "a"},
     {"id": "2.1", "name": "two",   "description": "d", "process": "p", "acceptance_criteria": "a"},
@@ -66,8 +66,12 @@ func richRepo(t *testing.T) string {
 	cell(t, root, "aider", "1-1_one", "yes", "full", "ready")
 	recording(t, root, "aider", "1-1_one", "r1", true)
 
-	cell(t, root, "opencode", "1-1_one", "yes", "full", "ready")
-	recording(t, root, "opencode", "1-1_one", "r1", false)
+	// hermes is the fixture's "declares no hooks" adapter — the counterweight
+	// TestCoverageHooksDistinguishesGapFromNoHooks measures codex's GAP
+	// against. It used to be opencode, until #1719 gave opencode a hooks
+	// permission and the two roles collapsed onto one adapter.
+	cell(t, root, "hermes", "1-1_one", "yes", "full", "ready")
+	recording(t, root, "hermes", "1-1_one", "r1", false)
 
 	return root
 }

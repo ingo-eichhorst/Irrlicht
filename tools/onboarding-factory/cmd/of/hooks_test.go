@@ -31,7 +31,7 @@ func TestCoverageHooksCounts(t *testing.T) {
 		"aider":      {Adapter: "aider", DeclaresHooks: false, Cells: 1, Recordings: 1, WithHooks: 1, Status: hookcov.StatusIncidental},
 		"claudecode": {Adapter: "claudecode", DeclaresHooks: true, Cells: 7, Recordings: 2, WithHooks: 1, Status: hookcov.StatusOK},
 		"codex":      {Adapter: "codex", DeclaresHooks: true, Cells: 2, Recordings: 1, WithHooks: 0, Status: hookcov.StatusGap},
-		"opencode":   {Adapter: "opencode", DeclaresHooks: false, Cells: 1, Recordings: 1, WithHooks: 0, Status: hookcov.StatusNone},
+		"hermes":     {Adapter: "hermes", DeclaresHooks: false, Cells: 1, Recordings: 1, WithHooks: 0, Status: hookcov.StatusNone},
 	}
 	got := map[string]hookcov.AdapterCoverage{}
 	for _, a := range rep.Adapters {
@@ -54,7 +54,7 @@ func TestCoverageHooksCounts(t *testing.T) {
 
 // TestCoverageHooksDistinguishesGapFromNoHooks is the reason this command
 // exists. "Declares hooks and has zero hook-bearing recordings" (codex) is the
-// loud failure; "declares no hooks" (opencode) is fine. Both have WithHooks==0,
+// loud failure; "declares no hooks" (hermes) is fine. Both have WithHooks==0,
 // so a report keying only on that number would conflate them.
 func TestCoverageHooksDistinguishesGapFromNoHooks(t *testing.T) {
 	root := richRepo(t)
@@ -70,10 +70,10 @@ func TestCoverageHooksDistinguishesGapFromNoHooks(t *testing.T) {
 	for _, a := range rep.Adapters {
 		byName[a.Adapter] = a
 	}
-	if byName["codex"].WithHooks != 0 || byName["opencode"].WithHooks != 0 {
-		t.Fatalf("fixture precondition: both codex and opencode should have zero hook-bearing recordings")
+	if byName["codex"].WithHooks != 0 || byName["hermes"].WithHooks != 0 {
+		t.Fatalf("fixture precondition: both codex and hermes should have zero hook-bearing recordings")
 	}
-	if byName["codex"].Status == byName["opencode"].Status {
+	if byName["codex"].Status == byName["hermes"].Status {
 		t.Errorf("gap and no-hooks-declared must not share a status; both are %q", byName["codex"].Status)
 	}
 	if byName["codex"].Status != hookcov.StatusGap {
