@@ -353,8 +353,31 @@ boot_vibe_active() {
   # that cannot report state rather than as a misrouted hook. Empty is the same
   # as unset for the beacon (resolveClient's fixedPortOf("") does not match), so
   # passing it unconditionally is safe when the rig did not set it.
+  #
+  # VIBE_ENABLE_UPDATE_CHECKS=0 stops vibe stalling the pane on its startup
+  # UPDATE PICKER, which no driver has an arm for — the run just times out with
+  # "vibe never created a session dir" and reads as an adapter or auth problem.
+  # It is not a scratch-home artifact and it is not hypothetical: the prompt is
+  # driven by $VIBE_HOME/cache.toml's [update_cache], which vibe refreshes on a
+  # DAILY background check and reads on the NEXT launch (cli.py
+  # _maybe_run_startup_update_prompt → get_pending_update_from_cache). So the
+  # launch that discovers a newer release is fine and the one after it blocks.
+  # Measured 2026-08-22 on vibe 2.19.1 with latest 2.24.3 in the cache: without
+  # this variable the pane renders "› Update now   Continue with current
+  # version" and goes no further; with it the REPL comes up normally. The
+  # operator's REAL ~/.vibe/cache.toml was six weeks stale at the time, so this
+  # was one background refresh away from breaking every mistral-vibe recording,
+  # isolated home or not.
+  #
+  # An env var rather than a config edit on purpose: VibeConfig is a pydantic
+  # BaseSettings with env_prefix="VIBE_", and settings_customise_sources puts
+  # env_settings AHEAD of the TOML source (v2.19.1
+  # vibe/core/config/_settings.py), so this wins over an explicit
+  # `enable_update_checks = true` in config.toml — and the driver never has to
+  # write into a home that may be the operator's real one.
   tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "${SES_CWD[$ACTIVE]}" -- \
-    env "VIBE_HOME=$VIBE_HOME_RESOLVED" "IRRLICHT_BIND_ADDR=${IRRLICHT_BIND_ADDR:-}" vibe "${vibe_args[@]}" 2>>"$DRIVER_LOG.stderr" \
+    env "VIBE_HOME=$VIBE_HOME_RESOLVED" "IRRLICHT_BIND_ADDR=${IRRLICHT_BIND_ADDR:-}" \
+        "VIBE_ENABLE_UPDATE_CHECKS=0" vibe "${vibe_args[@]}" 2>>"$DRIVER_LOG.stderr" \
     || { echo "[driver] failed to launch vibe under tmux" >&2; EXIT_REASON="$EXIT_DRIVER_FAULT"; exit 1; }
   tmux pipe-pane -t "$SESSION" -o "cat >> '$DRIVER_LOG.stdout.$ACTIVE'"
   echo "[driver] tmux started: $SESSION (slot=$ACTIVE, cwd=${SES_CWD[$ACTIVE]})" >&2
