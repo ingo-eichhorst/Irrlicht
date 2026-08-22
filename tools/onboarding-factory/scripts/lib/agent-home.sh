@@ -123,6 +123,18 @@
 #                  refusal surfaces only in unapplied_grants. Collapsing every
 #                  multi-line array onto one line in the SEED is what unblocked
 #                  the recording. That is a workaround, not a fix.
+#     pi           CREDENTIALS, the same rule codex's row states. pi resolves
+#                  every agent-dir path from getAgentDir()
+#                  (dist/config.js) — sessions/, settings.json, extensions/
+#                  AND auth.json — so PI_CODING_AGENT_DIR relocates the store,
+#                  the hook install and the credentials together. That
+#                  togetherness is what makes the row honest where claudecode's
+#                  would not be (see below): irrlicht's own pi install writes
+#                  ~/.pi/agent/extensions/irrlicht.js, resolved through the
+#                  SAME override (pi/hookinstaller.go's piAgentDir), so an
+#                  isolated home isolates the extension too. It also means an
+#                  isolated home starts with no auth.json, hence optin rather
+#                  than default.
 #     kiro-cli     PERSISTED TRUST-ALL CONSENT — and note this is the one row
 #                  where the credential rule says "safe to default" and the
 #                  answer is still no. kiro-cli's token is at
@@ -173,6 +185,7 @@ copilot COPILOT_HOME default
 codex CODEX_HOME optin
 kiro-cli KIRO_HOME optin
 mistral-vibe VIBE_HOME optin
+pi PI_CODING_AGENT_DIR optin
 TABLE
   return 0
 }

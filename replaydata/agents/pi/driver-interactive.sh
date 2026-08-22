@@ -182,7 +182,32 @@ boot_session() {
   : > "$slot_stdout"
   mkdir -p "$cwd"
   tmux kill-session -t "$sess" 2>/dev/null || true
-  tmux new-session -d -s "$sess" -c "$cwd" "$@"
+  # The pane's command is spawned by the tmux SERVER, whose environment was
+  # fixed when that server started — on a dev machine, long before this
+  # recording. Anything run-cell.sh exported reaches the DAEMON (a direct
+  # child) and not this pane, so both variables are re-applied here, per pane.
+  #
+  # PI_CODING_AGENT_DIR is the isolation half: agent-home.sh's pi row points it
+  # at a staging directory, and without this prefix pi would write its sessions
+  # into the operator's real ~/.pi/agent while the recording daemon watched the
+  # staging tree.
+  #
+  # IRRLICHT_BIND_ADDR is the beacon half (#1721). pi's hooks are delivered by
+  # the JavaScript extension irrlicht installs, which spawns
+  # `irrlichd hook-post pi`; that beacon carries no address at all and resolves
+  # one at FIRE time from its own environment — IRRLICHT_BIND_ADDR first, then
+  # the addr file under IRRLICHT_HOME (core/pkg/daemonaddr resolveClient). The
+  # beacon is a descendant of this pane, so a pane carrying neither variable
+  # reads the PRODUCTION addr file and posts every hook to the daemon on 7837.
+  # The recording then comes back complete, healthy and hook-free, with nothing
+  # anywhere saying why — the exact failure #1735 measured for mistral-vibe.
+  #
+  # Empty is the same as unset for both readers (pi's getAgentDir tests the
+  # value for truthiness; resolveClient's fixedPortOf("") does not match), so
+  # passing them unconditionally is safe when the rig set neither.
+  tmux new-session -d -s "$sess" -c "$cwd" \
+    env "PI_CODING_AGENT_DIR=${PI_CODING_AGENT_DIR:-}" \
+        "IRRLICHT_BIND_ADDR=${IRRLICHT_BIND_ADDR:-}" "$@"
   tmux pipe-pane -t "$sess" -o "cat >> '$slot_stdout'"
   echo "[driver] tmux started: $sess (slot=$ACTIVE, cwd=$cwd, argv: $*)" >&2
 
