@@ -81,7 +81,7 @@
 //     `session_key` field in `<f>`. Fired live this way, `_serialize_payload`
 //     (agent/shell_hooks.py, unchanged from the source #1773 read) puts it
 //     under the response's `extra.session_key`, top-level `session_id`
-//     absent — exactly the shape sessionID() above reads.
+//     absent — exactly the shape hooks.go's sessionID() reads.
 //   - **`hermes hooks doctor` against a real installed entry** — this
 //     machine's actual `~/.hermes` (all three events installed, allowlisted,
 //     and firing) — found all three hooks "ran clean … observer-only", but
@@ -719,6 +719,16 @@ func scriptMtimeISO() string {
 // `was 2026-04-30T19:33:17.000000Z, now 2026-04-30T19:33:17Z` for an
 // UNCHANGED mtime, the ".000000Z" half written by the pre-fix version of
 // this function and the "Z"-only half computed live by hermes itself.
+//
+// This closes the digit-COUNT gap (0 vs 6), which is what the live evidence
+// above actually exercises and the only thing #1766 found broken. It does
+// NOT chase digit-VALUE agreement for a nonzero fraction: hermes derives its
+// microseconds from Python's `round()` on a float-seconds mtime (round half
+// to even), while this truncates the integer nanosecond value — a
+// pre-existing gap, unchanged by this fix, that could in principle still
+// misalign a sub-microsecond-boundary mtime. Not fixed here because nothing
+// live observed it; flagged so a future report of drift on a NONZERO
+// fraction is not mistaken for a regression of this fix.
 func formatScriptMtimeISO(t time.Time) string {
 	t = t.UTC()
 	if t.Nanosecond() == 0 {

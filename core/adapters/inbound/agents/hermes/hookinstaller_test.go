@@ -612,27 +612,43 @@ func TestFormatScriptMtimeISO_MatchesHermesConditionalMicroseconds(t *testing.T)
 }
 
 // TestFormatScriptMtimeISO_NoFalseDriftAcrossAZeroMicrosecondRoundTrip pins
-// the actual property `hermes hooks doctor` relies on: recording an
-// approval's ScriptMtimeAtApproval and then recomputing the "current" mtime
-// for the SAME zero-microsecond instant must produce byte-identical strings,
-// so hermes' `mtime_now > mtime_at` lexicographic comparison — the exact
-// mechanism the live doctor run exercised — evaluates false rather than a
-// spurious true.
+// the actual property `hermes hooks doctor` relies on: OUR recorded
+// ScriptMtimeAtApproval (formatScriptMtimeISO's output — the function under
+// test) must agree, byte-for-byte, with hermes' OWN independently-computed
+// "current" mtime string for the identical, unchanged instant, so hermes'
+// `mtime_now > mtime_at` lexicographic comparison evaluates false rather
+// than a spurious true.
+//
+// mtimeNow is deliberately a HARDCODED literal — hermes' own string for this
+// instant, confirmed live via:
+//
+//	python3 -c "from datetime import datetime, timezone; print(
+//	  datetime.fromtimestamp(1777577597.0, tz=timezone.utc)
+//	    .isoformat().replace('+00:00', 'Z'))"
+//	# -> 2026-04-30T19:33:17Z   (1777577597.0 == this machine's real,
+//	#    zero-fractional /bin/sh mtime at the time of the live #1766 run)
+//
+// rather than a second call to formatScriptMtimeISO. Deriving both sides
+// from the function under test would make this test tautological — it
+// would pass for ANY deterministic implementation, buggy or not, because it
+// would only ever compare formatScriptMtimeISO to itself. (This is exactly
+// the shape #1766's review caught: the original version of this test did
+// that, and stayed green against the pre-fix always-".000000Z" formatting
+// — see git history for the corrected version's red/green proof.)
 func TestFormatScriptMtimeISO_NoFalseDriftAcrossAZeroMicrosecondRoundTrip(t *testing.T) {
 	approvedAt := time.Date(2026, 4, 30, 19, 33, 17, 0, time.UTC)
-	recordedAt := approvedAt // the file was never touched between the two reads
+	const mtimeNow = "2026-04-30T19:33:17Z" // hermes' own value; see comment above
 
 	mtimeAtApproval := formatScriptMtimeISO(approvedAt)
-	mtimeNow := formatScriptMtimeISO(recordedAt)
 
 	if mtimeNow != mtimeAtApproval {
-		t.Fatalf("mtimeNow (%q) != mtimeAtApproval (%q) for an unchanged file", mtimeNow, mtimeAtApproval)
+		t.Fatalf("hermes' own mtimeNow (%q) != our recorded mtimeAtApproval (%q) for an unchanged file", mtimeNow, mtimeAtApproval)
 	}
 	// hermes' own doctor check: `if mtime_now and mtime_at and mtime_now >
 	// mtime_at`. Reproduced here as a plain Go string compare, the same
 	// comparison Python's `>` performs on two str operands.
 	if mtimeNow > mtimeAtApproval {
-		t.Fatalf("mtimeNow (%q) lexicographically > mtimeAtApproval (%q) for an unchanged file — this is the false-positive doctor drift warning", mtimeNow, mtimeAtApproval)
+		t.Fatalf("hermes' own mtimeNow (%q) lexicographically > our recorded mtimeAtApproval (%q) for an unchanged file — this is the false-positive doctor drift warning", mtimeNow, mtimeAtApproval)
 	}
 }
 
