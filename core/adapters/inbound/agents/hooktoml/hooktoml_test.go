@@ -1,6 +1,7 @@
 package hooktoml
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -526,7 +527,14 @@ func TestEnsureInstalled_RefusesOnTripleQuotedString(t *testing.T) {
 	}
 }
 
-func TestEnsureInstalled_RefusesOnMultiLineArray(t *testing.T) {
+// TestEnsureInstalled_ModelsAMultiLineArray replaces
+// TestEnsureInstalled_RefusesOnMultiLineArray, which pinned the OPPOSITE
+// verdict on this exact seed until #1753. The behaviour it locked was wrong:
+// mistral-vibe's own writer emits multi-line arrays, so refusing them refused
+// every realistic user config. The seed is kept byte-for-byte from the
+// predecessor so the change of verdict is visible as a change of verdict
+// rather than as a test that quietly stopped existing.
+func TestEnsureInstalled_ModelsAMultiLineArray(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "hooks.toml")
 	seed := "tags = [\n  \"a\",\n  \"b\",\n]\n"
@@ -535,9 +543,238 @@ func TestEnsureInstalled_RefusesOnMultiLineArray(t *testing.T) {
 	}
 	cfg := testConfig(t, path, "irrlichd hook-post mistral-vibe >/dev/null || true")
 
-	_, err := EnsureInstalled(cfg)
+	modified, err := EnsureInstalled(cfg)
+	if err != nil {
+		t.Fatalf("EnsureInstalled refused a document containing a multi-line array: %v", err)
+	}
+	if !modified {
+		t.Fatal("EnsureInstalled reported no modification")
+	}
+	got, _ := os.ReadFile(path)
+	if !strings.HasPrefix(string(got), seed) {
+		t.Errorf("the pre-existing multi-line array did not survive verbatim:\n%s", got)
+	}
+	present, canonical, err := Inspect(cfg)
+	if err != nil || !present || !canonical {
+		t.Errorf("Inspect after install: present=%v canonical=%v err=%v", present, canonical, err)
+	}
+}
+
+// TestScannerRefusals_Corpus is the committed mutation evidence for every
+// construct the scanner still refuses after #1753 widened it, and — the half
+// that carries the value — for the documents it must NOT refuse. A scanner
+// that refused everything and one that refuses correctly are
+// indistinguishable without the must-accept rows, and that is not a
+// hypothetical here: refusing too much is precisely the defect this ticket
+// exists to fix.
+//
+// Both entry points are driven for every row, because they are two separate
+// scanners over the same bytes (scanDocument for the [[hooks]] operations,
+// topLevelKeyLine for the top-level scalar) and #1753 is the ticket where one
+// of them refusing while the other did not would have been invisible.
+func TestScannerRefusals_Corpus(t *testing.T) {
+	cases := []struct {
+		name string
+		doc  string
+		// refuseNaming is the fragment the refusal must name; "" means the
+		// document must be ACCEPTED by both entry points.
+		refuseNaming string
+		// line, when non-zero, is the 1-based line the refusal must point at.
+		line int
+	}{
+		// --- still refused ---
+		{"triple-quoted basic string", "a = \"\"\"\nx\n\"\"\"\n", "triple-quoted", 1},
+		{"triple-quoted literal string", "k = 1\nb = '''\nx\n'''\n", "triple-quoted", 2},
+		{"unterminated basic quote", "k = 1\nname = \"oops\nother = 2\n", "unterminated quote", 2},
+		{"unterminated literal quote", "name = 'oops\n", "unterminated quote", 1},
+		{"multi-line inline table", "k = 1\npoint = { x = 1,\n  y = 2 }\n", "inline table spanning", 2},
+		{"stray closing bracket", "k = 1\n]\n", "unbalanced ']'", 2},
+		{"array never closed (reported at its OPENING line)", "k = 1\ntags = [\n  \"a\",\n", "never closed", 2},
+
+		// --- must be accepted (the vacuity guard) ---
+		{"empty document", "", "", 0},
+		{"single-line array", "tags = [\"a\", \"b\"]\n", "", 0},
+		{"multi-line array at the top level", "tags = [\n  \"a\",\n]\n", "", 0},
+		{"multi-line array inside a table", "[t]\ntags = [\n  \"a\",\n]\n", "", 0},
+		{"multi-line array of single-line inline tables", "t = [\n  { a = 1 },\n  { b = 2 },\n]\n", "", 0},
+		{"nested multi-line array", "m = [\n  [1, 2],\n  [\n    3,\n  ],\n]\n", "", 0},
+		{"brackets and braces inside strings", "s = \"[ { ] }\"\nl = '] } ['\n", "", 0},
+		{"array opener carrying a comment", "tags = [  # why\n  \"a\",\n]\n", "", 0},
+		{"a header-shaped string inside an array", "tags = [\n  \"[[hooks]]\",\n]\n[[hooks]]\nname = \"x\"\n", "", 0},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "doc.toml")
+			if err := os.WriteFile(path, []byte(tc.doc), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			// Entry point 1: the [[hooks]] scanner, reached read-only so an
+			// accepted document is not rewritten under the next assertion.
+			_, blocksErr := HookBlocks(path)
+			// Entry point 2: the top-level scalar scanner.
+			_, _, scalarErr := TopLevelBool(path, "enable_experimental_hooks")
+
+			for label, err := range map[string]error{"HookBlocks": blocksErr, "TopLevelBool": scalarErr} {
+				if tc.refuseNaming == "" {
+					if err != nil {
+						t.Errorf("%s refused a document it must accept: %v", label, err)
+					}
+					continue
+				}
+				if err == nil {
+					t.Errorf("%s accepted a document it must refuse", label)
+					continue
+				}
+				if !errors.Is(err, ErrUnsafe) {
+					t.Errorf("%s: error %v does not wrap ErrUnsafe", label, err)
+				}
+				var unsafe *UnsafeConstructError
+				if !errors.As(err, &unsafe) {
+					t.Fatalf("%s: error %v is not an *UnsafeConstructError", label, err)
+				}
+				if !strings.Contains(unsafe.Construct, tc.refuseNaming) {
+					t.Errorf("%s: refusal names %q, want it to mention %q", label, unsafe.Construct, tc.refuseNaming)
+				}
+				if unsafe.Path != path {
+					t.Errorf("%s: refusal names path %q, want %q", label, unsafe.Path, path)
+				}
+				if tc.line != 0 && unsafe.Line != tc.line {
+					t.Errorf("%s: refusal points at line %d, want %d", label, unsafe.Line, tc.line)
+				}
+				if !strings.Contains(err.Error(), path) {
+					t.Errorf("%s: rendered message %q does not name the file — it is what the wizard shows", label, err.Error())
+				}
+			}
+		})
+	}
+}
+
+// --- continuation lines are classified as NOTHING ---
+//
+// The two tests below are the committed mutation evidence for the single
+// rule that makes #1753's widening safe rather than merely permissive:
+// inside a multi-line array, no line is a header, a comment or a key.
+//
+// They exist because the property test did NOT catch it. Deleting
+// scanDocument's `if depth == 0` guard left the entire suite — 4000 generated
+// documents included — green, because every adversarial array element the
+// generator emitted was a QUOTED string, and `"[[hooks]]"` starts with a
+// quote and is header-shaped to nobody. The shape that bites is a bare nested
+// array written as the last element without a trailing comma: its line reads
+// `[1, 2]`, which is precisely what isTableHeaderLine matches. The generator
+// now emits that too (property_test.go), and these two pin it deterministically
+// at the two places a spurious header actually changes bytes.
+
+// TestHookBlocks_HeaderShapedArrayElementDoesNotSplitABlock: a spurious
+// header inside an array truncates the block it sits in, so the block's own
+// later fields silently stop being part of it.
+func TestHookBlocks_HeaderShapedArrayElementDoesNotSplitABlock(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hooks.toml")
+	seed := "[[hooks]]\nname = \"a\"\nmatrix = [\n  [1, 2]\n]\ncommand = \"eslint .\"\n\n[[hooks]]\nname = \"b\"\n"
+	if err := os.WriteFile(path, []byte(seed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	blocks, err := HookBlocks(path)
+	if err != nil {
+		t.Fatalf("HookBlocks: %v", err)
+	}
+	if len(blocks) != 2 {
+		t.Fatalf("HookBlocks returned %d blocks, want 2:\n%s", len(blocks), blocks)
+	}
+	if !strings.Contains(string(blocks[0]), `command = "eslint ."`) {
+		t.Errorf("block 0 lost the field below its multi-line array — a line inside the array "+
+			"was classified as a section header:\n%s", blocks[0])
+	}
+}
+
+// TestEnsureBoolTrue_InsertsAfterAPreambleArrayNotInsideIt: a spurious header
+// inside a PREAMBLE array is what firstHeaderOffset returns, so the new
+// assignment is spliced into the middle of the user's array.
+func TestEnsureBoolTrue_InsertsAfterAPreambleArrayNotInsideIt(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	seed := "matrix = [\n  [1, 2]\n]\n\n[session_logging]\nenabled = true\n"
+	if err := os.WriteFile(path, []byte(seed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := EnsureBoolTrue(path, "enable_experimental_hooks", AtomicWriteFile); err != nil {
+		t.Fatalf("EnsureBoolTrue: %v", err)
+	}
+	got, _ := os.ReadFile(path)
+	if !strings.HasPrefix(string(got), "matrix = [\n  [1, 2]\n]\n") {
+		t.Errorf("the flag was spliced INSIDE the user's preamble array:\n%s", got)
+	}
+	if !strings.Contains(string(got), "enable_experimental_hooks = true\n[session_logging]") {
+		t.Errorf("the flag did not land immediately before the first header:\n%s", got)
+	}
+}
+
+// TestEnsureBoolTrue_ReplacesTheWholeOfAMultiLineValue is the evidence for
+// the second half of topLevelKeyLine's #1753 change — that it returns the
+// LOGICAL line's range, through the closing bracket, not just the physical
+// opening line.
+//
+// The property test cannot reach this: its generator always renders the flag
+// as a bool, which is the only shape vibe or this daemon ever writes. So the
+// state is constructed by hand — a user (or a botched hand-edit) who left the
+// gate key holding an array. Replacing only the opening line would leave
+// `enable_experimental_hooks = true` followed by two lines of orphaned array
+// syntax, which is a corrupted config.toml: the outcome hooktoml's whole
+// refuse-rather-than-guess posture exists to prevent.
+func TestEnsureBoolTrue_ReplacesTheWholeOfAMultiLineValue(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	seed := "a = 1\nenable_experimental_hooks = [\n  \"nonsense\",\n]\nb = 2\n"
+	if err := os.WriteFile(path, []byte(seed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	modified, err := EnsureBoolTrue(path, "enable_experimental_hooks", AtomicWriteFile)
+	if err != nil {
+		t.Fatalf("EnsureBoolTrue: %v", err)
+	}
+	if !modified {
+		t.Fatal("EnsureBoolTrue reported no modification")
+	}
+	got, _ := os.ReadFile(path)
+	want := "a = 1\nenable_experimental_hooks = true\nb = 2\n"
+	if string(got) != want {
+		t.Errorf("EnsureBoolTrue left orphaned array syntax behind:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestEnsureBoolTrue_RefusalNamesTheFileAndLine is #1753's route-3 half. The
+// SURFACING already existed (#1362 records the effect error verbatim and both
+// wizards render "granted but NOT applied, because <reason>"), so nothing new
+// is built for it; what did not exist was a reason a user could act on. This
+// pins the three facts that make it actionable.
+func TestEnsureBoolTrue_RefusalNamesTheFileAndLine(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	// The construct is on line 3, after two perfectly ordinary lines.
+	seed := "a = 1\nb = 2\nbanner = \"\"\"\nhi\n\"\"\"\n"
+	if err := os.WriteFile(path, []byte(seed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := EnsureBoolTrue(path, "enable_experimental_hooks", AtomicWriteFile)
 	if err == nil {
-		t.Fatal("EnsureInstalled did not refuse a document containing a multi-line array")
+		t.Fatal("EnsureBoolTrue did not refuse a document containing a triple-quoted string")
+	}
+	msg := err.Error()
+	for _, want := range []string{path, ":3", "triple-quoted", "grant again", "`enable_experimental_hooks = true`"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("refusal %q does not mention %q", msg, want)
+		}
+	}
+	if got, _ := os.ReadFile(path); string(got) != seed {
+		t.Errorf("file was modified despite the refusal:\n%s", got)
 	}
 }
 

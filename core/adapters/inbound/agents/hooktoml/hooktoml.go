@@ -26,45 +26,120 @@
 // comments the same way json.MarshalIndent over a bare map did before
 // hookjson existed.
 //
-// Anything the scanner cannot confidently classify — a triple-quoted
-// string, a multi-line array, an unterminated single-line string — makes it
-// refuse the WHOLE document rather than guess. Unlike hookjson, which falls
-// back to a lossy whole-document re-encode when a splice is not safe, there
-// is no safe fallback encoder here: a generic map[string]interface{}-style
-// TOML dump is precisely the read-modify-marshal this package exists to
-// avoid, so it is never reached for as a fallback. "Cannot splice safely"
-// therefore means "do not write," not "write something worse" — refusing an
-// install into an exotic hand-crafted hooks.toml is the safe direction; a
-// corrupted one is not.
+// A MULTI-LINE ARRAY is modelled (issue #1753); a triple-quoted string, an
+// unterminated single-line string and a multi-line inline table are not, and
+// make the scanner refuse the WHOLE document rather than guess. The
+// multi-line array had to move from the second list to the first because it
+// is not exotic at all: mistral-vibe's OWN writer emits them — twelve in the
+// config.toml measured when #1753 was filed — so refusing them meant refusing
+// every realistic user config, with the hooks permission still reading
+// `granted` and no hook ever firing. Modelling one costs a single integer of
+// state carried across lines (see scanDocument): a logical line continues
+// while its bracket depth is above zero, and NOTHING inside it is classified
+// as a header, a comment or a key.
+//
+// Unlike hookjson, which falls back to a lossy whole-document re-encode when
+// a splice is not safe, there is no safe fallback encoder here: a generic
+// map[string]interface{}-style TOML dump is precisely the read-modify-marshal
+// this package exists to avoid, so it is never reached for as a fallback.
+// "Cannot splice safely" therefore means "do not write," not "write something
+// worse" — refusing an install into an exotic hand-crafted hooks.toml is the
+// safe direction; a corrupted one is not. What #1753 changed is WHICH
+// documents land in that bucket, not what happens to the ones that do — and
+// for those, the refusal now names the file and the line (UnsafeConstructError)
+// so the "granted but NOT applied, because …" the wizards already render
+// (#1362) points at something the user can act on.
 package hooktoml
 
 import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
 )
 
-// ErrUnsafe means this document contains a construct the line-oriented
-// scanner does not model with confidence — a triple-quoted string, an
-// unterminated single-line string, or a multi-line array. The caller must
-// not write; there is no lossy fallback (see the package doc).
-var ErrUnsafe = errors.New("hooktoml: file contains a construct this splicer does not model safely (multi-line string, multi-line array, or unterminated quote) — refusing rather than guessing")
+// ErrUnsafe is the sentinel every refusal in this package wraps: the document
+// contains a construct the line-oriented scanner does not model with
+// confidence — a triple-quoted string, an unterminated single-line string, or
+// a multi-line inline table. The caller must not write; there is no lossy
+// fallback (see the package doc).
+//
+// Callers test it with errors.Is. The value a caller actually receives is an
+// *UnsafeConstructError, which names the file, the line and the construct.
+var ErrUnsafe = errors.New("hooktoml: file contains a construct this splicer does not model safely")
+
+// UnsafeConstructError is the error every refusal in this package returns —
+// ErrUnsafe with the three facts a user needs to act on it.
+//
+// It exists because of the way this class of failure reaches a user. The
+// consent effect's error is recorded verbatim by
+// services.PermissionService.runClosureEffect and rendered by both wizards as
+// "granted but NOT applied, because <reason>" (#1362), and re-answering the
+// permission re-runs the effect — so the reason string IS the instruction,
+// and the gesture that reads it is the gesture that retries it (#1365
+// established the shape for a version floor). A reason naming neither the
+// file nor the line, as this package's original single sentinel did, tells a
+// user their vibe hooks are dead and nothing else.
+type UnsafeConstructError struct {
+	// Path is the file that could not be scanned, "" for a document handed
+	// to this package in memory.
+	Path string
+	// Line is the 1-based line the refusal was decided on, 0 when the
+	// construct is document-wide.
+	Line int
+	// Construct names what was found, in words a user can search their own
+	// file for.
+	Construct string
+}
+
+func (e *UnsafeConstructError) Error() string {
+	where := e.Path
+	if where == "" {
+		where = "the file"
+	}
+	if e.Line > 0 {
+		where = fmt.Sprintf("%s:%d", where, e.Line)
+	}
+	return fmt.Sprintf("hooktoml: %s contains %s, which this splicer does not model safely — "+
+		"refusing rather than guessing; simplify that line (or make the edit by hand) and grant again",
+		where, e.Construct)
+}
+
+func (e *UnsafeConstructError) Unwrap() error { return ErrUnsafe }
+
+func unsafeAt(path string, line int, construct string) error {
+	return &UnsafeConstructError{Path: path, Line: line, Construct: construct}
+}
 
 // --- line-level scanning primitives ---
 
-// lineSafety scans one line (no embedded '\n'), respecting single-line basic
+// lineScan is what one physical line tells the scanner. brackets and braces
+// are net counts OUTSIDE strings and comments; unterminated means a quote was
+// still open when the line ended, which in TOML can only be a multi-line
+// string this package does not model.
+type lineScan struct {
+	stripped     []byte
+	unterminated bool
+	brackets     int
+	braces       int
+}
+
+// scanLine scans one line (no embedded '\n'), respecting single-line basic
 // ("...") and literal ('...') strings, and reports the comment-stripped
-// content plus whether the line looks like it continues onto the next one —
-// an unterminated quote (the start of some multi-line construct this
-// scanner does not model) or an unbalanced '['/']' count outside strings
-// (a multi-line array). continues is the signal every caller in this
-// package refuses on rather than guesses through.
-func lineSafety(line []byte) (stripped []byte, continues bool) {
+// content plus the three facts scanDocument carries across lines.
+//
+// Bracket and brace counts are reported SEPARATELY and are not symmetric in
+// how callers treat them: a bracket run that stays open is a multi-line
+// array, which #1753 taught this package to model, while an open brace is a
+// multi-line inline table, which it does not — TOML 1.0 does not permit one,
+// so a document containing it is malformed or written to a dialect this
+// scanner has never seen, and either way is the last place to start guessing.
+func scanLine(line []byte) lineScan {
 	inBasic, inLiteral := false, false
-	depth := 0
+	var sc lineScan
 	commentAt := -1
 loop:
 	for i := 0; i < len(line); i++ {
@@ -92,18 +167,63 @@ loop:
 				commentAt = i
 				break loop
 			case '[':
-				depth++
+				sc.brackets++
 			case ']':
-				depth--
+				sc.brackets--
+			case '{':
+				sc.braces++
+			case '}':
+				sc.braces--
 			}
 		}
 	}
 	if commentAt >= 0 {
-		stripped = line[:commentAt]
+		sc.stripped = line[:commentAt]
 	} else {
-		stripped = line
+		sc.stripped = line
 	}
-	return stripped, inBasic || inLiteral || depth != 0
+	sc.unterminated = inBasic || inLiteral
+	return sc
+}
+
+// stripComment returns line's comment-stripped content — scanLine's first
+// result, for the two readers (scalarValue, FieldValue) that want the text of
+// a fragment and nothing else.
+func stripComment(line []byte) []byte { return scanLine(line).stripped }
+
+// refusalFor reports the refusal one scanned line earns, or nil. depthAfter is
+// the bracket depth this line leaves behind.
+//
+// Shared by BOTH scanners in this file — scanDocument and topLevelKeyLine —
+// because they must agree on exactly which documents are refusable and are
+// reached through different public entry points, so a drift between them would
+// show up as one operation succeeding while its sibling refuses the same file,
+// with nothing anywhere comparing the two. TestScannerRefusals_Corpus drives
+// every row through both, which is the assertion this function makes cheap to
+// keep true.
+func refusalFor(path string, lineNo int, sc lineScan, depthAfter int) error {
+	switch {
+	case sc.unterminated:
+		return unsafeAt(path, lineNo, "an unterminated quote")
+	case sc.braces != 0:
+		return unsafeAt(path, lineNo, "an inline table spanning more than one line")
+	case depthAfter < 0:
+		return unsafeAt(path, lineNo, "an unbalanced ']'")
+	}
+	return nil
+}
+
+// headerOf classifies a comment-stripped, trimmed line as a [[array]] or
+// [table] header. Callers must only ask it about a line at bracket depth
+// ZERO — inside a multi-line array a header-shaped line is an ELEMENT.
+func headerOf(trimmed []byte) (kind byte, name string, ok bool) {
+	switch {
+	case isArrayHeaderLine(trimmed):
+		return 2, string(bytes.TrimSpace(trimmed[2 : len(trimmed)-2])), true
+	case isTableHeaderLine(trimmed):
+		return 1, string(bytes.TrimSpace(trimmed[1 : len(trimmed)-1])), true
+	}
+	return 0, "", false
 }
 
 func isArrayHeaderLine(t []byte) bool {
@@ -138,46 +258,98 @@ type scannedLine struct {
 	headerKind    byte
 	headerName    string
 	isCommentOnly bool // the whole line (leading whitespace aside) is a '#' comment
-	continues     bool
+	// continuation is true when this line is INSIDE a multi-line array
+	// opened on an earlier line. Such a line is deliberately classified as
+	// nothing at all: a `[[x]]`-shaped or `#`-shaped element of an array is
+	// an element, not a header and not a standalone comment, and treating it
+	// as either is how a scanner that merely stopped refusing multi-line
+	// arrays would start CORRUPTING them.
+	continuation bool
 }
 
-// classifyLines splits src into scannedLines, refusing (ErrUnsafe) rather
-// than guessing at any construct lineSafety cannot classify — including a
-// document-wide check for triple-quoted strings, which lineSafety's
-// single-line model cannot see at all (three isolated double quotes in a
-// row look, one line at a time, like an empty string followed by an opening
-// quote).
-func classifyLines(src []byte) ([]scannedLine, error) {
-	if bytes.Contains(src, []byte(`"""`)) || bytes.Contains(src, []byte(`'''`)) {
-		return nil, ErrUnsafe
+// tripleQuoteAt reports the byte offset of the first triple-quote in src, or
+// -1. Checked document-wide because scanLine's single-line model cannot see
+// one at all: three isolated double quotes in a row look, one line at a time,
+// like an empty string followed by an opening quote.
+func tripleQuoteAt(src []byte) int {
+	basic := bytes.Index(src, []byte(`"""`))
+	literal := bytes.Index(src, []byte(`'''`))
+	switch {
+	case basic < 0:
+		return literal
+	case literal < 0:
+		return basic
+	case basic < literal:
+		return basic
+	default:
+		return literal
+	}
+}
+
+// lineNumberAt returns the 1-based line number of byte offset off in src.
+func lineNumberAt(src []byte, off int) int {
+	if off < 0 || off > len(src) {
+		return 0
+	}
+	return 1 + bytes.Count(src[:off], []byte("\n"))
+}
+
+// scanDocument splits src into scannedLines, carrying ONE integer of state
+// across lines — the open-bracket depth — so a multi-line array reads as a
+// single logical line rather than as a refusal (issue #1753). Everything it
+// still cannot model makes it refuse the whole document, now naming the file
+// and the line: a triple-quoted string, a quote left open at end of line, a
+// brace left open at end of line (a multi-line inline table, which TOML 1.0
+// does not permit), a stray `]` that drives the depth negative, and an array
+// still open at end of file.
+//
+// path is used only to build that error; it is never opened here.
+func scanDocument(path string, src []byte) ([]scannedLine, error) {
+	if off := tripleQuoteAt(src); off >= 0 {
+		return nil, unsafeAt(path, lineNumberAt(src, off), "a multi-line (triple-quoted) string")
 	}
 	var lines []scannedLine
-	pos := 0
+	pos, lineNo, depth := 0, 0, 0
+	// openedAt is the line the currently-open array started on, so an array
+	// that is never closed is reported at its OPENING line rather than at end
+	// of file: the opener is the line a user has to go and look at, and in a
+	// 392-line config the two are nowhere near each other.
+	openedAt := 0
 	for pos <= len(src) {
 		end := pos
 		for end < len(src) && src[end] != '\n' {
 			end++
 		}
+		lineNo++
 		raw := src[pos:end]
-		stripped, continues := lineSafety(raw)
-		trimmed := bytes.TrimSpace(stripped)
-		li := scannedLine{start: pos, continues: continues}
-		switch {
-		case isArrayHeaderLine(trimmed):
-			li.isHeader, li.headerKind = true, 2
-			li.headerName = string(bytes.TrimSpace(trimmed[2 : len(trimmed)-2]))
-		case isTableHeaderLine(trimmed):
-			li.isHeader, li.headerKind = true, 1
-			li.headerName = string(bytes.TrimSpace(trimmed[1 : len(trimmed)-1]))
-		default:
-			rawTrimmed := bytes.TrimSpace(raw)
-			li.isCommentOnly = len(rawTrimmed) > 0 && rawTrimmed[0] == '#'
+		sc := scanLine(raw)
+		if err := refusalFor(path, lineNo, sc, depth+sc.brackets); err != nil {
+			return nil, err
+		}
+
+		li := scannedLine{start: pos, continuation: depth > 0}
+		if depth == 0 {
+			trimmed := bytes.TrimSpace(sc.stripped)
+			if kind, name, ok := headerOf(trimmed); ok {
+				li.isHeader, li.headerKind, li.headerName = true, kind, name
+			} else {
+				rawTrimmed := bytes.TrimSpace(raw)
+				li.isCommentOnly = len(rawTrimmed) > 0 && rawTrimmed[0] == '#'
+			}
+			if sc.brackets > 0 {
+				openedAt = lineNo
+			}
 		}
 		lines = append(lines, li)
+
+		depth += sc.brackets
 		if end >= len(src) {
 			break
 		}
 		pos = end + 1
+	}
+	if depth != 0 {
+		return nil, unsafeAt(path, openedAt, "an array that is never closed")
 	}
 	return lines, nil
 }
@@ -193,8 +365,8 @@ func classifyLines(src []byte) ([]scannedLine, error) {
 // that comment behind as an orphan — caught by
 // TestEnsureAndUninstall_PropertyRandomMutations, which is why every
 // generated sentinel block in that test carries one.
-func scanSections(src []byte) ([]section, error) {
-	lines, err := classifyLines(src)
+func scanSections(path string, src []byte) ([]section, error) {
+	lines, err := scanDocument(path, src)
 	if err != nil {
 		return nil, err
 	}
@@ -214,9 +386,6 @@ func scanSections(src []byte) ([]section, error) {
 	var sections []section
 	cur := section{kind: 0, start: 0}
 	for idx, li := range lines {
-		if li.continues {
-			return nil, ErrUnsafe
-		}
 		if li.isHeader {
 			cur.end = headerTrueStart[idx]
 			sections = append(sections, cur)
@@ -232,8 +401,8 @@ func scanSections(src []byte) ([]section, error) {
 // array-of-tables header line in src, or len(src) if there is none —
 // the only place a NEW top-level scalar may be inserted, since TOML
 // requires every bare key/value pair to precede all table sections.
-func firstHeaderOffset(src []byte) (int, error) {
-	sections, err := scanSections(src)
+func firstHeaderOffset(path string, src []byte) (int, error) {
+	sections, err := scanSections(path, src)
 	if err != nil {
 		return 0, err
 	}
@@ -357,7 +526,7 @@ func EnsureInstalled(cfg HookConfig) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	sections, err := scanSections(orig)
+	sections, err := scanSections(cfg.Path, orig)
 	if err != nil {
 		return false, err
 	}
@@ -383,7 +552,7 @@ func Uninstall(cfg HookConfig) (bool, error) {
 	if len(orig) == 0 {
 		return false, nil
 	}
-	sections, err := scanSections(orig)
+	sections, err := scanSections(cfg.Path, orig)
 	if err != nil {
 		return false, err
 	}
@@ -405,7 +574,7 @@ func Inspect(cfg HookConfig) (present, canonical bool, err error) {
 	if err != nil {
 		return false, false, err
 	}
-	sections, err := scanSections(orig)
+	sections, err := scanSections(cfg.Path, orig)
 	if err != nil {
 		return false, false, err
 	}
@@ -426,7 +595,7 @@ func HasAnyHooksBlock(path string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	sections, err := scanSections(orig)
+	sections, err := scanSections(path, orig)
 	if err != nil {
 		return false, err
 	}
@@ -463,7 +632,7 @@ func HookBlocks(path string) ([][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	sections, err := scanSections(orig)
+	sections, err := scanSections(path, orig)
 	if err != nil {
 		return nil, err
 	}
@@ -489,7 +658,7 @@ func HookBlocks(path string) ([][]byte, error) {
 // instead of the whole block.
 func FieldValue(fragment []byte, key string) (string, bool) {
 	for _, raw := range bytes.Split(fragment, []byte("\n")) {
-		stripped, _ := lineSafety(raw)
+		stripped := stripComment(raw)
 		line := bytes.TrimSpace(stripped)
 		k, v, ok := bytes.Cut(line, []byte("="))
 		if !ok || string(bytes.TrimSpace(k)) != key {
@@ -522,32 +691,64 @@ func unquoteBasicString(v []byte) (string, bool) {
 // --- top-level scalar operations ---
 
 // topLevelKeyLine finds a `key = value` assignment before the first table
-// header, returning its line's byte range. The search stops at the first
-// [table] or [[array]] header, matching TOML's own rule that top-level
+// header, returning its LOGICAL line's byte range. The search stops at the
+// first [table] or [[array]] header, matching TOML's own rule that top-level
 // key/value pairs must precede every table section — so a same-named key
 // INSIDE some unrelated table is correctly never matched.
-func topLevelKeyLine(src []byte, key string) (start, end int, found bool, err error) {
-	pos := 0
+//
+// "Logical" is what #1753 changed and it is load-bearing twice over. Skipping
+// a preceding multi-line array is what lets this function reach a header at
+// all in a config vibe wrote — `applied_migrations = [` sits at the TOP level
+// of one, before every header, so the scan used to refuse on line 44 of 392
+// and the experimental-hooks gate was never written. And returning the range
+// through the value's CLOSING line is what keeps the caller's splice honest
+// if the key it is asked about ever holds a multi-line value itself:
+// replacing only the opening line would leave the remaining elements behind
+// as orphaned syntax.
+//
+// A triple-quoted string anywhere in the document is refused here exactly as
+// scanDocument refuses it, so the two entry points into this file agree on
+// which documents are scannable; without it a `"""` inside a table would be
+// invisible to this preamble-only scan.
+func topLevelKeyLine(path string, src []byte, key string) (start, end int, found bool, err error) {
+	if off := tripleQuoteAt(src); off >= 0 {
+		return 0, 0, false, unsafeAt(path, lineNumberAt(src, off), "a multi-line (triple-quoted) string")
+	}
+	pos, lineNo, depth := 0, 0, 0
+	logicalStart, matching, openedAt := 0, false, 0
 	for pos <= len(src) {
 		lineEnd := pos
 		for lineEnd < len(src) && src[lineEnd] != '\n' {
 			lineEnd++
 		}
-		stripped, continues := lineSafety(src[pos:lineEnd])
-		trimmed := bytes.TrimSpace(stripped)
-		if isArrayHeaderLine(trimmed) || isTableHeaderLine(trimmed) {
-			return 0, 0, false, nil
+		lineNo++
+		sc := scanLine(src[pos:lineEnd])
+		if err := refusalFor(path, lineNo, sc, depth+sc.brackets); err != nil {
+			return 0, 0, false, err
 		}
-		if continues {
-			return 0, 0, false, ErrUnsafe
+		if depth == 0 {
+			trimmed := bytes.TrimSpace(sc.stripped)
+			if _, _, isHeader := headerOf(trimmed); isHeader {
+				return 0, 0, false, nil
+			}
+			logicalStart = pos
+			k, _, ok := bytes.Cut(trimmed, []byte("="))
+			matching = ok && string(bytes.TrimSpace(k)) == key
+			if sc.brackets > 0 {
+				openedAt = lineNo
+			}
 		}
-		if k, _, ok := bytes.Cut(trimmed, []byte("=")); ok && string(bytes.TrimSpace(k)) == key {
-			return pos, lineEnd, true, nil
+		depth += sc.brackets
+		if depth == 0 && matching {
+			return logicalStart, lineEnd, true, nil
 		}
 		if lineEnd >= len(src) {
 			break
 		}
 		pos = lineEnd + 1
+	}
+	if depth != 0 {
+		return 0, 0, false, unsafeAt(path, openedAt, "an array that is never closed")
 	}
 	return 0, 0, false, nil
 }
@@ -560,7 +761,7 @@ func scalarValue(src []byte, start, end int) string {
 	if !ok {
 		return ""
 	}
-	stripped, _ := lineSafety(eq)
+	stripped := stripComment(eq)
 	return strings.TrimSpace(string(stripped))
 }
 
@@ -576,9 +777,9 @@ func setTopLevelBool(path, key string, want bool, writeFile func(string, []byte)
 	if want {
 		wantStr = "true"
 	}
-	start, end, found, err := topLevelKeyLine(orig, key)
+	start, end, found, err := topLevelKeyLine(path, orig, key)
 	if err != nil {
-		return false, err
+		return false, namingTheEditItWanted(err, key, wantStr)
 	}
 	if found {
 		if scalarValue(orig, start, end) == wantStr {
@@ -592,9 +793,9 @@ func setTopLevelBool(path, key string, want bool, writeFile func(string, []byte)
 		// there is nothing to clear.
 		return false, nil
 	}
-	insertAt, err := firstHeaderOffset(orig)
+	insertAt, err := firstHeaderOffset(path, orig)
 	if err != nil {
-		return false, err
+		return false, namingTheEditItWanted(err, key, wantStr)
 	}
 	line := key + " = " + wantStr + "\n"
 	// A guard appendBlock also needs and gets, for the identical reason:
@@ -609,6 +810,23 @@ func setTopLevelBool(path, key string, want bool, writeFile func(string, []byte)
 	}
 	out := spliceReplace(orig, insertAt, insertAt, []byte(line))
 	return true, writeFile(path, out)
+}
+
+// namingTheEditItWanted appends the edit this package was ASKED to make to a
+// refusal, and leaves every other error alone.
+//
+// "Simplify that line and grant again" tells a user where to look but not what
+// the daemon was trying to do there — and for the one scalar this package
+// writes, that is the whole instruction: a user who knows irrlicht wanted
+// `enable_experimental_hooks = true` can make the one-line edit themselves and
+// have working hooks without touching the construct at all. The wrap keeps
+// errors.Is(ErrUnsafe) and errors.As(*UnsafeConstructError) working, so no
+// caller has to learn about it.
+func namingTheEditItWanted(err error, key, wantStr string) error {
+	if !errors.Is(err, ErrUnsafe) {
+		return err
+	}
+	return fmt.Errorf("%w — the edit it wanted to make is `%s = %s`", err, key, wantStr)
 }
 
 // EnsureBoolTrue sets `key = true` at the top level of the file at path,
@@ -634,7 +852,7 @@ func TopLevelBool(path, key string) (value, found bool, err error) {
 	if err != nil {
 		return false, false, err
 	}
-	start, end, ok, err := topLevelKeyLine(orig, key)
+	start, end, ok, err := topLevelKeyLine(path, orig, key)
 	if err != nil {
 		return false, false, err
 	}
