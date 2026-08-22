@@ -510,6 +510,64 @@ below.
   `applyWritesNoUserFile` with its reason rather than falling out silently.
   `agent.ControlPermission` needs no entry: its `Apply` is nil, which is the
   shape to prefer.
+  That tripwire asks whether a declaration EXISTS, and #1741 is the other half
+  — whether it **covers every file `Apply` actually writes**. Two defects came
+  through that gap, the second after the first was supposedly the lesson:
+  #1718/#1731 (a second shared file, fixed by adding `Also`) and #1739
+  (`$KIRO_HOME/.irrlicht-prior-default.json`, still undeclared *after* `Also`
+  existed, and not inert — `recordPriorDefaultAgentOnce` deliberately never
+  overwrites, so a copy a recording leaves behind is what a later real grant
+  reads instead of the operator's own `chat.defaultAgent`). The completeness
+  tripwire is `core/cmd/irrlichd/managedwrites_test.go`, and it is **two arms
+  because one mechanism cannot reach every permission**.
+  `TestEveryModifyPermissionDeclaresEveryFileItsApplyWrites` is the one that
+  carries the weight: it runs each `Apply` against a scratch `$HOME` and grades
+  the files that actually CHANGED, which is the only thing that sees a path
+  built inline with `filepath.Join` inside `Apply` — the shape #1741 measured
+  the obvious static rule to miss entirely. Three properties are load-bearing.
+  The environment is scrubbed to an **allow-list** (`envKeptDuringScrub`), not
+  a deny-list of known overrides: an unknown `FOO_HOME` a future adapter reads
+  resolves to `""` and falls back to its `$HOME`-relative default, i.e. into
+  the sandbox, where a deny-list would have pointed that install at the
+  developer's real config while the test believed itself sandboxed. A canary
+  variable is set and then swept up by the scrub, so "the scrub ran" is
+  observed rather than assumed. And it **fails closed**: every declared path in
+  the whole catalog is resolved and proven inside the scratch tree before a
+  single closure runs — deliberately not by routing through #1449's
+  `sharedConfigRefusal`, which refuses one `Apply` at a time and would let
+  eight closures execute before the ninth's escape was noticed, and whose
+  `IRRLICHT_ALLOW_SHARED_CONFIG_WRITES` escape hatch is the last thing that
+  should be in reach of a test that runs installers. It grades **both**
+  directions, and the second is why a broken sandbox is loud: an undeclared
+  write is #1741 itself, while a DECLARED file nothing wrote means the writes
+  did not land where the test is looking — without it, a sandbox that never
+  took would report a flawless sweep.
+  `TestExternalInstallerPackagesDeclareEveryPathResolver` is the fallback for
+  the one permission the runtime arm must not execute. kiro-cli's `Apply`
+  shells out to the real CLI, and running it in `go test ./core/...` was
+  measured non-deterministic in two independent ways: with the binary absent
+  (any CI runner) the closure fails at its first step and writes NOTHING, so
+  the arm would grade an empty set; with it present the CHILD writes its own
+  state — `$HOME/Library/Application Support/kiro-cli/data.sqlite3`, measured
+  2026-08-22 — and how much more depends on whether the developer is logged in.
+  So that permission is named in `applyRunsAnExternalCLI` with the reason, its
+  `Binary` cross-checked against the permission's own `Writes.Version.Probe[0]`
+  so the exemption cannot claim a shellout the declaration does not
+  corroborate, and its package is graded statically instead: every
+  package-level `func() (string, error)` there must be one the declaration
+  names (**derived by reflecting the function names out of `Writes`**, so it
+  cannot drift from a hand-kept list) or be named in `notAManagedFilePath`.
+  That rule is scoped to the external-installer packages rather than run
+  catalog-wide for a measured reason: #1741 put it at roughly one false
+  positive per adapter — every adapter has a home-ROOT resolver with that exact
+  signature — so scoped it costs one exemption and catalog-wide it would cost
+  one per adapter while adding nothing the runtime arm does not already cover
+  more strongly. The committed mutation evidence, and the declared limits
+  (a hard-coded absolute path outside `$HOME`; a write that restores size,
+  mtime AND content; a directory-only creation; a resolver held in a
+  package-level `var`, which is the same `ast.FuncDecl` limit
+  `architecture_hookbody_test.go` and `seam_walk_corpus_test.go` carry), are in
+  `managedwrites_shapes_test.go`.
   Since #1449 the declaration is also what a **grant-all daemon refuses to
   write**. `PermissionService.sharedConfigRefusal` — the same call site as
   #1365's version gate, so #1362's "granted but NOT applied" surfacing and the
