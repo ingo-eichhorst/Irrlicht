@@ -224,6 +224,24 @@ func TestEveryModifyPermissionDeclaresEveryFileItsApplyWrites(t *testing.T) {
 	// needs it without an IRRLICHT_ALLOW_SHARED_CONFIG_WRITES escape hatch in
 	// reach.
 	graded := gradablePermissions(t, catalog)
+	assertEveryDeclaredPathIsContained(t, sh, graded)
+
+	allowed := scratchAllowances(sh)
+	for _, g := range graded {
+		t.Run(g.id, func(t *testing.T) { applyAndGrade(t, sh, g, allowed) })
+	}
+
+	if len(graded) == 0 {
+		t.Fatal("no permission was executed — every modify permission is exempt, so this " +
+			"check graded nothing")
+	}
+}
+
+// assertEveryDeclaredPathIsContained is the fail-closed precondition, and it
+// runs over the WHOLE set before any closure does — see the call site for why
+// #1449's per-Apply guard is not what runs here.
+func assertEveryDeclaredPathIsContained(t *testing.T, sh scratchHome, graded []gradablePermission) {
+	t.Helper()
 	for _, g := range graded {
 		for _, f := range g.declared {
 			if f.err != nil {
@@ -237,46 +255,36 @@ func TestEveryModifyPermissionDeclaresEveryFileItsApplyWrites(t *testing.T) {
 			}
 		}
 	}
+}
 
-	allowed := scratchAllowances(sh)
-	executed := 0
-	for _, g := range graded {
-		t.Run(g.id, func(t *testing.T) {
-			before := walkScratch(t, sh.Root)
-			applyErr := g.perm.Apply()
-			after := walkScratch(t, sh.Root)
+// applyAndGrade runs one permission's Apply and reports both directions.
+func applyAndGrade(t *testing.T, sh scratchHome, g gradablePermission, allowed []allowance) {
+	t.Helper()
+	before := walkScratch(t, sh.Root)
+	applyErr := g.perm.Apply()
+	after := walkScratch(t, sh.Root)
 
-			if applyErr != nil {
-				t.Fatalf("Apply returned %v — the closure was cut short, so the file set below "+
-					"is whatever it managed before failing and grading it would report a "+
-					"partial sweep as a clean one. If this permission's install genuinely "+
-					"cannot complete in a scratch home, name it in applyRunsAnExternalCLI "+
-					"with the reason", applyErr)
-			}
-
-			observed := treeDiff(before, after)
-			v := gradeWrites(observed, g.declaredRel(sh.Root), allowed)
-
-			for _, p := range v.Undeclared {
-				t.Errorf("Apply wrote %q, which %s declares in neither Writes.Path nor "+
-					"Writes.Also. That file is invisible to --print-managed-files, so the "+
-					"recording rig never backs it up and #1449's grant-all refusal never sees "+
-					"it (#1741). Declare it, or explain it as an allowance", p, g.id)
-			}
-			for _, p := range v.Missing {
-				t.Errorf("%s declares %q but running Apply changed nothing there. Either the "+
-					"declaration resolves to the wrong file, or the closure no longer writes "+
-					"it — and if NEITHER is true, the scratch home is not where the writes "+
-					"went, which makes every 'no undeclared write' result above meaningless",
-					g.id, p)
-			}
-		})
-		executed++
+	if applyErr != nil {
+		t.Fatalf("Apply returned %v — the closure was cut short, so the file set below "+
+			"is whatever it managed before failing and grading it would report a "+
+			"partial sweep as a clean one. If this permission's install genuinely "+
+			"cannot complete in a scratch home, name it in applyRunsAnExternalCLI "+
+			"with the reason", applyErr)
 	}
 
-	if executed == 0 {
-		t.Fatal("no permission was executed — every modify permission is exempt, so this " +
-			"check graded nothing")
+	v := gradeWrites(treeDiff(before, after), g.declaredRel(sh.Root), allowed)
+	for _, p := range v.Undeclared {
+		t.Errorf("Apply wrote %q, which %s declares in neither Writes.Path nor "+
+			"Writes.Also. That file is invisible to --print-managed-files, so the "+
+			"recording rig never backs it up and #1449's grant-all refusal never sees "+
+			"it (#1741). Declare it, or explain it as an allowance", p, g.id)
+	}
+	for _, p := range v.Missing {
+		t.Errorf("%s declares %q but running Apply changed nothing there. Either the "+
+			"declaration resolves to the wrong file, or the closure no longer writes "+
+			"it — and if NEITHER is true, the scratch home is not where the writes "+
+			"went, which makes every 'no undeclared write' result above meaningless",
+			g.id, p)
 	}
 }
 
@@ -819,19 +827,28 @@ func packageLevelPathResolvers(dir string) ([]string, error) {
 	var out []string
 	for _, pkg := range pkgs {
 		for _, file := range pkg.Files {
-			for _, decl := range file.Decls {
-				fn, ok := decl.(*ast.FuncDecl)
-				if !ok || fn.Recv != nil {
-					continue
-				}
-				if isPathResolverSignature(fn.Type) {
-					out = append(out, fn.Name.Name)
-				}
-			}
+			out = append(out, pathResolversIn(file)...)
 		}
 	}
 	sort.Strings(out)
 	return out, nil
+}
+
+// pathResolversIn names the package-level `func() (string, error)` FuncDecls in
+// one file. A receiver disqualifies: a method is not something a
+// ManagedUserFile field can hold.
+func pathResolversIn(file *ast.File) []string {
+	var out []string
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Recv != nil {
+			continue
+		}
+		if isPathResolverSignature(fn.Type) {
+			out = append(out, fn.Name.Name)
+		}
+	}
+	return out
 }
 
 // isPathResolverSignature reports whether ft is exactly `() (string, error)`.
