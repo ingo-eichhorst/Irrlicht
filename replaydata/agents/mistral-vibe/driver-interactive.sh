@@ -127,7 +127,54 @@ fi
 # The one spelling of the session root. It was written out four times before
 # this variable existed, which is three chances for a relocation to reach only
 # some of them.
-VIBE_SESSION_ROOT="$VIBE_HOME_RESOLVED/logs/session"
+#
+# VIBE_HOME is NOT the whole answer, and assuming it was is what made the first
+# two attempts at a hook-bearing recording look like an auth failure (#1735).
+# config.toml's [session_logging].save_dir OVERRIDES the VIBE_HOME-derived
+# default, vibe writes it as an ABSOLUTE path, and the operator's own file
+# therefore carries `/Users/<them>/.vibe/logs/session` — so a scratch home
+# seeded by copying config.toml (which agent-home.sh tells you to do) relocates
+# everything EXCEPT the transcripts. vibe then wrote three sessions into the
+# operator's real ~/.vibe/logs/session while the driver waited on an empty
+# scratch directory and timed out with "vibe never created a session dir".
+#
+# The daemon does not make this mistake — vibe/config.go's configuredSaveDir()
+# reads the same key — so resolving it here is what keeps the two agreeing,
+# rather than a second guess about where vibe writes. Same key, same file, same
+# precedence.
+vibe_configured_save_dir() {
+  local cfg="$VIBE_HOME_RESOLVED/config.toml"
+  [[ -f "$cfg" ]] || return 0
+  awk '
+    /^[[:space:]]*\[session_logging\][[:space:]]*$/ { in_section = 1; next }
+    /^[[:space:]]*\[/                               { in_section = 0 }
+    in_section && /^[[:space:]]*save_dir[[:space:]]*=/ {
+      sub(/^[^=]*=[[:space:]]*/, ""); gsub(/^"|"[[:space:]]*$/, ""); print; exit
+    }
+  ' "$cfg"
+}
+VIBE_SESSION_ROOT="$(vibe_configured_save_dir)"
+if [[ -n "$VIBE_SESSION_ROOT" ]]; then
+  echo "[driver] session root from config.toml [session_logging].save_dir: $VIBE_SESSION_ROOT" >&2
+else
+  VIBE_SESSION_ROOT="$VIBE_HOME_RESOLVED/logs/session"
+fi
+# Half-isolation is worse than none, so it is a hard failure rather than a
+# warning: an operator who exported VIBE_HOME asked for this run to stay off
+# their real home, and a save_dir pointing outside it silently grants the
+# opposite while every other file obeys. Naming the file and the key is the
+# whole fix — delete the line, or point it inside the scratch home.
+if [[ -n "${VIBE_HOME:-}" && "$VIBE_SESSION_ROOT" != "$VIBE_HOME_RESOLVED"/* ]]; then
+  echo "[driver] VIBE_HOME=$VIBE_HOME_RESOLVED asks for an isolated home, but" >&2
+  echo "[driver] $VIBE_HOME_RESOLVED/config.toml sets" >&2
+  echo "[driver]   [session_logging] save_dir = \"$VIBE_SESSION_ROOT\"" >&2
+  echo "[driver] which is OUTSIDE it — vibe would write this recording's transcripts" >&2
+  echo "[driver] into that directory (the operator's real home, when the seed was" >&2
+  echo "[driver] copied from it) while the driver watched an empty scratch one." >&2
+  echo "[driver] Remove the save_dir line from the seeded config.toml, or point it" >&2
+  echo "[driver] at $VIBE_HOME_RESOLVED/logs/session." >&2
+  exit 1
+fi
 mkdir -p "$VIBE_SESSION_ROOT"
 echo "[driver] vibe home: $VIBE_HOME_RESOLVED" >&2
 
