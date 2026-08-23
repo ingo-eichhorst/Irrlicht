@@ -26,6 +26,7 @@ import (
 	"testing"
 
 	"irrlicht/core/internal/contracttesting"
+	"irrlicht/core/pkg/atomicfile"
 	"irrlicht/core/pkg/hookbeacon"
 )
 
@@ -103,7 +104,7 @@ func seedForeignKiroInstall() (bool, error) {
 		Events:      installedHookEvents,
 		Entry:       func() map[string]interface{} { return flatBeaconEntry(staleCommand) },
 		IsCanonical: hookEntryIsCanonical,
-		WriteFile:   atomicWriteFile,
+		WriteFile:   atomicfile.WriteFile,
 	})
 }
 

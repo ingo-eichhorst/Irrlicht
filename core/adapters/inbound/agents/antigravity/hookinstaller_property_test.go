@@ -44,6 +44,7 @@ import (
 	"testing"
 
 	"irrlicht/core/adapters/inbound/agents/hookjson"
+	"irrlicht/core/pkg/atomicfile"
 	"irrlicht/core/pkg/hookbeacon"
 )
 
@@ -233,7 +234,7 @@ func mutateInstalledDocument(t *testing.T, rng *rand.Rand, path string) bool {
 	if !mutate(rng, doc) {
 		return false
 	}
-	if err := hookjson.WriteSettings(path, doc, atomicWriteFile); err != nil {
+	if err := hookjson.WriteSettings(path, doc, atomicfile.WriteFile); err != nil {
 		t.Fatalf("write the mutated document: %v", err)
 	}
 	return true

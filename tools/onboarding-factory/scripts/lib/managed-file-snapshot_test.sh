@@ -324,8 +324,9 @@ assert_eq "the user's mid-run content is recoverable" "a rule the user added dur
 
 echo "== a directory the run created for an absent file is removed too (#1383) =="
 # The residue that survived moving the file aside. grant-all runs the kitty
-# Apply on a machine with no kitty, whose atomicWriteFile mkdir -p's
-# ~/.config/kitty on the way to the file; KittyDetected() returns true on the
+# Apply on a machine with no kitty, whose write goes through
+# core/pkg/atomicfile (WriteFile), which mkdir -p's ~/.config/kitty on the
+# way to the file; KittyDetected() returns true on the
 # mere EXISTENCE of that directory, so leaving it behind makes the user's
 # production daemon offer the kitty permission in the wizard from then on.
 fresh_env createddir

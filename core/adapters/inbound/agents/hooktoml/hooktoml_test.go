@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"irrlicht/core/pkg/atomicfile"
 )
 
 const testSentinel = "hook-post mistral-vibe "
@@ -30,7 +32,7 @@ func testConfig(t *testing.T, path, command string) HookConfig {
 		Sentinel:    testSentinel,
 		Entry:       func() []byte { return testEntry(command) },
 		IsCanonical: testCanonical(command),
-		WriteFile:   AtomicWriteFile,
+		WriteFile:   atomicfile.WriteFile,
 	}
 }
 
@@ -265,7 +267,7 @@ func TestEnsureBoolTrue_CreatesFileWhenAbsent(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
 
-	modified, err := EnsureBoolTrue(path, "enable_experimental_hooks", AtomicWriteFile)
+	modified, err := EnsureBoolTrue(path, "enable_experimental_hooks", atomicfile.WriteFile)
 	if err != nil || !modified {
 		t.Fatalf("EnsureBoolTrue: modified=%v err=%v, want true/nil", modified, err)
 	}
@@ -278,12 +280,12 @@ func TestEnsureBoolTrue_CreatesFileWhenAbsent(t *testing.T) {
 func TestEnsureBoolTrue_IsIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
-	if _, err := EnsureBoolTrue(path, "enable_experimental_hooks", AtomicWriteFile); err != nil {
+	if _, err := EnsureBoolTrue(path, "enable_experimental_hooks", atomicfile.WriteFile); err != nil {
 		t.Fatal(err)
 	}
 	before, _ := os.ReadFile(path)
 
-	modified, err := EnsureBoolTrue(path, "enable_experimental_hooks", AtomicWriteFile)
+	modified, err := EnsureBoolTrue(path, "enable_experimental_hooks", atomicfile.WriteFile)
 	if err != nil || modified {
 		t.Fatalf("second call: modified=%v err=%v, want false/nil", modified, err)
 	}
@@ -307,7 +309,7 @@ name = "mistral"
 		t.Fatal(err)
 	}
 
-	modified, err := EnsureBoolTrue(path, "enable_experimental_hooks", AtomicWriteFile)
+	modified, err := EnsureBoolTrue(path, "enable_experimental_hooks", atomicfile.WriteFile)
 	if err != nil || !modified {
 		t.Fatalf("EnsureBoolTrue: modified=%v err=%v", modified, err)
 	}
@@ -342,7 +344,7 @@ func TestEnsureBoolTrue_DoesNotMatchTheKeyInsideATable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	modified, err := EnsureBoolTrue(path, "enable_experimental_hooks", AtomicWriteFile)
+	modified, err := EnsureBoolTrue(path, "enable_experimental_hooks", atomicfile.WriteFile)
 	if err != nil || !modified {
 		t.Fatalf("EnsureBoolTrue: modified=%v err=%v", modified, err)
 	}
@@ -366,7 +368,7 @@ func TestClearBoolIfPresent_LeavesAnAbsentKeyAbsent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	modified, err := ClearBoolIfPresent(path, "enable_experimental_hooks", AtomicWriteFile)
+	modified, err := ClearBoolIfPresent(path, "enable_experimental_hooks", atomicfile.WriteFile)
 	if err != nil || modified {
 		t.Fatalf("ClearBoolIfPresent on an absent key: modified=%v err=%v, want false/nil", modified, err)
 	}
@@ -379,11 +381,11 @@ func TestClearBoolIfPresent_LeavesAnAbsentKeyAbsent(t *testing.T) {
 func TestClearBoolIfPresent_SetsAnExistingKeyFalse(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
-	if _, err := EnsureBoolTrue(path, "enable_experimental_hooks", AtomicWriteFile); err != nil {
+	if _, err := EnsureBoolTrue(path, "enable_experimental_hooks", atomicfile.WriteFile); err != nil {
 		t.Fatal(err)
 	}
 
-	modified, err := ClearBoolIfPresent(path, "enable_experimental_hooks", AtomicWriteFile)
+	modified, err := ClearBoolIfPresent(path, "enable_experimental_hooks", atomicfile.WriteFile)
 	if err != nil || !modified {
 		t.Fatalf("ClearBoolIfPresent: modified=%v err=%v, want true/nil", modified, err)
 	}
@@ -703,7 +705,7 @@ func TestEnsureBoolTrue_InsertsAfterAPreambleArrayNotInsideIt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := EnsureBoolTrue(path, "enable_experimental_hooks", AtomicWriteFile); err != nil {
+	if _, err := EnsureBoolTrue(path, "enable_experimental_hooks", atomicfile.WriteFile); err != nil {
 		t.Fatalf("EnsureBoolTrue: %v", err)
 	}
 	got, _ := os.ReadFile(path)
@@ -735,7 +737,7 @@ func TestEnsureBoolTrue_ReplacesTheWholeOfAMultiLineValue(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	modified, err := EnsureBoolTrue(path, "enable_experimental_hooks", AtomicWriteFile)
+	modified, err := EnsureBoolTrue(path, "enable_experimental_hooks", atomicfile.WriteFile)
 	if err != nil {
 		t.Fatalf("EnsureBoolTrue: %v", err)
 	}
@@ -763,7 +765,7 @@ func TestEnsureBoolTrue_RefusalNamesTheFileAndLine(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := EnsureBoolTrue(path, "enable_experimental_hooks", AtomicWriteFile)
+	_, err := EnsureBoolTrue(path, "enable_experimental_hooks", atomicfile.WriteFile)
 	if err == nil {
 		t.Fatal("EnsureBoolTrue did not refuse a document containing a triple-quoted string")
 	}
@@ -786,7 +788,7 @@ func TestEnsureBoolTrue_RefusesOnTripleQuotedStringInThePreamble(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := EnsureBoolTrue(path, "enable_experimental_hooks", AtomicWriteFile)
+	_, err := EnsureBoolTrue(path, "enable_experimental_hooks", atomicfile.WriteFile)
 	if err == nil {
 		t.Fatal("EnsureBoolTrue did not refuse a document containing a triple-quoted string")
 	}

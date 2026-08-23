@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"irrlicht/core/pkg/atomicfile"
 )
 
 // property_test.go is the property test AGENTS.md requires for any code
@@ -524,9 +526,9 @@ func TestSetTopLevelBool_PropertyRandomMutations(t *testing.T) {
 		var err error
 		switch op {
 		case "ensure":
-			modified, err = EnsureBoolTrue(path, key, AtomicWriteFile)
+			modified, err = EnsureBoolTrue(path, key, atomicfile.WriteFile)
 		case "clear":
-			modified, err = ClearBoolIfPresent(path, key, AtomicWriteFile)
+			modified, err = ClearBoolIfPresent(path, key, atomicfile.WriteFile)
 		}
 		if err != nil {
 			fail("unexpected refusal: %v", err)
@@ -566,9 +568,9 @@ func TestSetTopLevelBool_PropertyRandomMutations(t *testing.T) {
 		var modified2 bool
 		switch op {
 		case "ensure":
-			modified2, err = EnsureBoolTrue(path, key, AtomicWriteFile)
+			modified2, err = EnsureBoolTrue(path, key, atomicfile.WriteFile)
 		case "clear":
-			modified2, err = ClearBoolIfPresent(path, key, AtomicWriteFile)
+			modified2, err = ClearBoolIfPresent(path, key, atomicfile.WriteFile)
 		}
 		if err != nil {
 			fail("second %s: %v", op, err)

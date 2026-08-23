@@ -107,6 +107,7 @@ import (
 	"path/filepath"
 
 	"irrlicht/core/adapters/inbound/agents/hookjson"
+	"irrlicht/core/pkg/atomicfile"
 )
 
 // agentSnapshotStateFilename is irrlicht's own record of WHICH kiro-cli built
@@ -292,7 +293,7 @@ func regenerateFromBuiltinDefault(ctx context.Context, configPath string) error 
 	if hooks != nil {
 		rebuilt["hooks"] = hooks
 	}
-	if err := hookjson.WriteSettings(configPath, rebuilt, atomicWriteFile); err != nil {
+	if err := hookjson.WriteSettings(configPath, rebuilt, atomicfile.WriteFile); err != nil {
 		return errors.Join(err, restoreAgentConfig(configPath, previous))
 	}
 	return nil
@@ -303,7 +304,7 @@ func regenerateFromBuiltinDefault(ctx context.Context, configPath string) error 
 // reading "the rebuild failed" needs to know whether the restore also failed,
 // and which one happened first.
 func restoreAgentConfig(configPath string, previous []byte) error {
-	return atomicWriteFile(configPath, previous)
+	return atomicfile.WriteFile(configPath, previous)
 }
 
 // hooksObjectOf extracts the "hooks" object from an agent config document, or
@@ -399,7 +400,7 @@ func writeAgentSnapshotState(configPath string, version string, verdict refreshV
 	if existing, err := os.ReadFile(path); err == nil && string(existing) == string(data) {
 		return nil
 	}
-	return atomicWriteFile(path, data)
+	return atomicfile.WriteFile(path, data)
 }
 
 // agentSnapshotStatePath is the sidecar's absolute path. A sibling of agents/

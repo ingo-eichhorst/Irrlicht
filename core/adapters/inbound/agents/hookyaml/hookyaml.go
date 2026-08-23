@@ -101,10 +101,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+
+	"irrlicht/core/pkg/atomicfile"
 )
 
 // markerPrefix leads both region markers. It is a YAML comment, so a config
@@ -168,7 +169,7 @@ type Config struct {
 	// to take them out. Empty disables the recovery.
 	Sentinel string
 	// WriteFile persists the new bytes. Injected so the caller owns atomicity
-	// and permissions; AtomicWriteFile is the default implementation.
+	// and permissions; atomicfile.WriteFile is the default implementation.
 	WriteFile func(path string, data []byte) error
 }
 
@@ -269,7 +270,7 @@ func (c Config) write(data []byte) error {
 	if c.WriteFile != nil {
 		return c.WriteFile(c.Path, data)
 	}
-	return AtomicWriteFile(c.Path, data)
+	return atomicfile.WriteFile(c.Path, data)
 }
 
 func readAllowingMissing(path string) ([]byte, error) {
@@ -1029,32 +1030,4 @@ func stripComment(rest string) string {
 		return rest[:i]
 	}
 	return rest
-}
-
-// AtomicWriteFile writes data to path via a temp file plus rename, creating
-// the parent directory. The agent may load the file at any moment, so it must
-// never see a partial write.
-func AtomicWriteFile(path string, data []byte) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(dir, ".irrlicht-*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }()
-
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Chmod(tmpName, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, path)
 }

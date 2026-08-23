@@ -162,6 +162,7 @@ import (
 
 	"irrlicht/core/adapters/inbound/agents/hookyaml"
 	"irrlicht/core/domain/agent"
+	"irrlicht/core/pkg/atomicfile"
 	"irrlicht/core/pkg/hookbeacon"
 )
 
@@ -617,7 +618,7 @@ func writeAllowlist(f allowlistFile) error {
 	if err != nil {
 		return err
 	}
-	return hookyaml.AtomicWriteFile(path, append(b, '\n'))
+	return atomicfile.WriteFile(path, append(b, '\n'))
 }
 
 // isOurApproval reports whether an allowlist entry is one irrlicht wrote. It

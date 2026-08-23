@@ -25,6 +25,7 @@ import (
 
 	"irrlicht/core/adapters/inbound/agents/hooktoml"
 	"irrlicht/core/domain/agent"
+	"irrlicht/core/pkg/atomicfile"
 	"irrlicht/core/pkg/hookbeacon"
 )
 
@@ -138,7 +139,7 @@ func vibeHookConfig(path, command string) hooktoml.HookConfig {
 		IsCanonical: func(section []byte) bool {
 			return bytes.Equal(bytes.TrimSpace(section), canonical)
 		},
-		WriteFile: hooktoml.AtomicWriteFile,
+		WriteFile: atomicfile.WriteFile,
 	}
 }
 
@@ -161,7 +162,7 @@ func EnsureHooksInstalled() (bool, error) {
 		return false, err
 	}
 
-	flagModified, err := hooktoml.EnsureBoolTrue(configPath, experimentalHooksFlag, hooktoml.AtomicWriteFile)
+	flagModified, err := hooktoml.EnsureBoolTrue(configPath, experimentalHooksFlag, atomicfile.WriteFile)
 	if err != nil {
 		return false, err
 	}
@@ -205,7 +206,7 @@ func UninstallHooks() (bool, error) {
 		return entryModified, nil
 	}
 
-	flagModified, err := hooktoml.ClearBoolIfPresent(configPath, experimentalHooksFlag, hooktoml.AtomicWriteFile)
+	flagModified, err := hooktoml.ClearBoolIfPresent(configPath, experimentalHooksFlag, atomicfile.WriteFile)
 	if err != nil {
 		return entryModified, err
 	}

@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"irrlicht/core/adapters/inbound/agents/hookjson"
+	"irrlicht/core/pkg/atomicfile"
 )
 
 // ManagedBlockSentinelPrefix is the opening text every irrlicht-managed block
@@ -486,23 +487,11 @@ func removeManagedBlock(existing, beginSentinel, endSentinel string) (string, bo
 	}
 }
 
-// atomicWriteFile writes data to path via a temp file + rename, creating the
-// parent dir. Shared by the settings.json (writeClaudeSettings) and CLAUDE.md
-// (writeMemoryFile) writers so a hardening change applies to both — CLAUDE.md
-// is the more sensitive, user-authored file and must not silently keep a
-// weaker write.
-func atomicWriteFile(path string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
-}
-
 // writeMemoryFile writes content atomically, creating ~/.claude if needed.
+// Shared with the settings.json writer (writeClaudeSettings in
+// hookinstaller.go) via atomicfile.WriteFile so a hardening change applies to
+// both — CLAUDE.md is the more sensitive, user-authored file and must not
+// silently keep a weaker write.
 func writeMemoryFile(path, content string) error {
-	return atomicWriteFile(path, []byte(content))
+	return atomicfile.WriteFile(path, []byte(content))
 }

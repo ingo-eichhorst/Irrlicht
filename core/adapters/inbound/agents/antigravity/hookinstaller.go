@@ -78,15 +78,14 @@
 package antigravity
 
 import (
-	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
 	"irrlicht/core/adapters/inbound/agents/agentpaths"
 	"irrlicht/core/adapters/inbound/agents/hookjson"
 	"irrlicht/core/domain/agent"
+	"irrlicht/core/pkg/atomicfile"
 	"irrlicht/core/pkg/hookbeacon"
 )
 
@@ -384,7 +383,7 @@ func ensureInstalledWithCommand(beacon string) (bool, error) {
 	}
 
 	doc[hookName] = ours
-	return true, hookjson.WriteSettings(path, doc, atomicWriteFile)
+	return true, hookjson.WriteSettings(path, doc, atomicfile.WriteFile)
 }
 
 // ourNamedHook returns the named-hook object irrlicht owns, creating an empty
@@ -575,7 +574,7 @@ func UninstallHooks() (bool, error) {
 	if len(ours) == 0 {
 		delete(doc, hookName)
 	}
-	return true, hookjson.WriteSettings(path, doc, atomicWriteFile)
+	return true, hookjson.WriteSettings(path, doc, atomicfile.WriteFile)
 }
 
 // dropOurHandlers removes every handler of ours from one event's array,
@@ -592,40 +591,4 @@ func dropOurHandlers(handlers []interface{}) ([]interface{}, bool) {
 		kept = append(kept, h)
 	}
 	return kept, removed
-}
-
-// atomicWriteFile writes data to path via a temp file + rename so antigravity
-// never loads a half-written hooks.json. Creates the config directory. Matches
-// every sibling hook-installing adapter's own atomic writer.
-func atomicWriteFile(path string, data []byte) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(dir, ".irrlicht-hooks-*.json.tmp")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer func() {
-		if err := os.Remove(tmpName); err != nil && !errors.Is(err, os.ErrNotExist) {
-			// Best effort: the rename below already succeeded or the write
-			// already failed, and a leftover temp file is not worth failing an
-			// install over.
-			_ = err
-		}
-	}()
-
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, path)
 }
