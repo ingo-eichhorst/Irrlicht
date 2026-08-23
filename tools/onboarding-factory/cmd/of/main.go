@@ -10,6 +10,7 @@
 //	of status   [--agent a] [--scenario s] [--runs] [--summary] [--json]  coverage / run status
 //	of validate [--json]                                                  schema + referential integrity
 //	of coverage [--hooks] [--json]                                        derived rollup, or hook coverage
+//	of hookcheck --agent a --events e                                     one staged recording's hook coverage
 //
 // Exit codes (matching the sibling cmd tools):
 //
@@ -48,7 +49,8 @@ const usage = `usage:
   of verify --agent a --scenario s [--folder f] [--json]
   of record run --agent a --scenario s [--attach] [--dry-run]
   of record prereq-check --agent a
-  of record verify --agent a --scenario s`
+  of record verify --agent a --scenario s
+  of hookcheck --agent a --events events.jsonl`
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 
@@ -74,6 +76,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runVerify(args[1:], stdout, stderr)
 	case "record":
 		return runRecord(args[1:], stdout, stderr)
+	case "hookcheck":
+		return runHookCheck(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintln(stderr, usage)
 		return exitUsage
