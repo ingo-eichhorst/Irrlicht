@@ -225,6 +225,45 @@ type ManagedUserFile struct {
 	// property only two adapters need. An adapter with a second file appends
 	// one resolver here instead.
 	Also []func() (string, error)
+
+	// RealFixture declares this permission's committed, real-world config
+	// document (issue #1756) — a document CAPTURED from the agent's own
+	// output (or the shared file it manages), not one any test constructed.
+	//
+	// #1753 shipped because every hook-install test in the tree graded
+	// against a config its OWN test wrote: a document whose shape the test
+	// author already knew how to handle. mistral-vibe's real config.toml
+	// (core/adapters/inbound/agents/vibe/testdata/real-config-2.19.1.toml,
+	// captured for #1755) carries twelve multi-line arrays no hand-written
+	// fixture ever had; hooktoml's splicer refused all of them, Apply failed,
+	// and consent kept reading granted. Nil means no such document is
+	// declared — which TestEveryHookInstallDeclaresARealConfigFixture
+	// (core/adapters/inbound/agents/hookrealfixture_test.go) flags for any
+	// hooks-installing adapter not named in that test's own explicit,
+	// reasoned gap list, so an omission is a loud failure rather than a
+	// silent one.
+	RealFixture *RealConfigFixture
+}
+
+// RealConfigFixture is one committed, real-world config fixture (issue
+// #1756): a maintainer-captured copy of a document the AGENT ITSELF
+// produced (or manages, for a shared settings file), secrets redacted,
+// exercised by the declaring adapter's own install/uninstall tests in
+// addition to whatever synthetic documents those tests construct by hand.
+type RealConfigFixture struct {
+	// Path is the fixture file, relative to the declaring adapter's own
+	// package directory — e.g. "testdata/real-config-2.19.1.toml". Read by
+	// TestEveryHookInstallDeclaresARealConfigFixture to confirm the file
+	// actually exists and is not a stub, and referenced (as a literal) by
+	// the adapter's own guard test that reads it.
+	Path string
+
+	// CLIVersion is the upstream CLI version that produced the captured
+	// document, so a later reader can tell how stale the evidence is — the
+	// same staleness problem docs/replay-testing.md names for replay
+	// goldens. Required whenever Path is set: an unstamped fixture is
+	// evidence nobody can date.
+	CLIVersion string
 }
 
 // HookEntryStatus is one read-only look at an install (issue #1372): which of
