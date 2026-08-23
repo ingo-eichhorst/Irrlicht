@@ -56,6 +56,22 @@ description: >
      the bind addr defaults to `127.0.0.1:7838` and the precheck refuses 7837
      (it would clash with production). Pick another free port if 7838 is taken.
 
+     **Hook delivery reaching the coexisting daemon is not one adapter-neutral
+     guarantee** (#1754). URL-delivery adapters (claudecode, codex, copilot)
+     bake the daemon address into the installed entry at install time, so they
+     always reach it. Beacon-delivery adapters — every adapter importing
+     `core/pkg/hookbeacon` (gemini-cli, kiro-cli, mistral-vibe) — carry NO
+     address in the entry at all; `irrlichd hook-post` resolves the daemon from
+     its OWN process environment at fire time, a child of the CLI's tmux pane.
+     `of record run` / `run-cell.sh` already export and forward
+     `IRRLICHT_BIND_ADDR` into that pane for you
+     (`TestEveryBeaconAdapterDriverPassesTheDaemonAddress` in
+     `tools/onboarding-factory/internal/righome` enforces it), so this needs no
+     action through the normal path — but it is why driving a beacon-delivery
+     adapter's CLI any other way silently posts every hook at production
+     instead, and the resulting recording looks complete and healthy with zero
+     hook events in it (#1735).
+
    **Onboarding a NEW adapter is always the coexist case**, by construction: the
    running `irrlichd` is an installed release whose binary has no such adapter
    compiled in, so it observes nothing no matter how healthy it looks. Coexist
