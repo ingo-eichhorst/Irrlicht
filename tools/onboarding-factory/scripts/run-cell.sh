@@ -60,6 +60,12 @@ source "$SCRIPT_DIR/lib/agent-home.sh"
 # hook config — see the lib header for the recording it was written against.
 # shellcheck source=lib/hook-install-wait.sh
 source "$SCRIPT_DIR/lib/hook-install-wait.sh"
+# unapplied_grants — the daemon's own account of an install that was granted
+# but never applied (#1362). Shared between the attach and spawn paths
+# (#1754); see the lib header for why the spawn path never checked this
+# before.
+# shellcheck source=lib/unapplied-grants-check.sh
+source "$SCRIPT_DIR/lib/unapplied-grants-check.sh"
 
 RECORDER="off"
 ATTACH=0
@@ -346,27 +352,17 @@ if [[ "$ATTACH" == "1" ]]; then
     # adapter looks incapable of reporting state, which is worse than not
     # recording at all. unapplied_grants is the daemon's own list of exactly
     # this (an older daemon omits the field → empty → skipped).
-    # Scoped to THIS cell's adapter, not the whole list. unapplied_grants is
-    # daemon-wide and carries every adapter's #1362 install failures and #1365
-    # version-floor refusals — so an unrelated old codex CLI would otherwise
-    # block a claude-code recording, with advice (set the override) that cannot
-    # fix a version floor. Only a refusal on the adapter this cell records can
-    # damage this cell's fixture.
+    # Scoped to THIS cell's adapter, not the whole list, by check_unapplied_grants
+    # (lib/unapplied-grants-check.sh, shared with the spawn path below, #1754):
+    # unapplied_grants is daemon-wide and carries every adapter's #1362 install
+    # failures and #1365 version-floor refusals — so an unrelated old codex CLI
+    # would otherwise block a claude-code recording, with advice (set the
+    # override) that cannot fix a version floor. Only a refusal on the adapter
+    # this cell records can damage this cell's fixture.
     # $ADAPTER alone, with no partner: a cross-adapter cell never reaches this
     # point — a non-empty partner_adapter exits above, pointing at
     # run-cell-multi.sh, which has no attach path at all.
-    # The filter is a variable so the jq call stays one physical line: a
-    # NOSONAR annotation only suppresses the line it sits on, and Sonar's taint
-    # tracking carries S5332 from the curl above into every reader of $PERM_JSON.
-    UNAPPLIED_FILTER='[.unapplied_grants // [] | .[] | select(.agent == $a) | "\(.agent)/\(.key): \(.reason)"] | join("; ")'
-    UNAPPLIED="$(jq -r --arg a "$ADAPTER" "$UNAPPLIED_FILTER" <<<"$PERM_JSON" 2>/dev/null || echo "")" # NOSONAR (shell:S5332) — reads the loopback response above
-    if [[ -n "$UNAPPLIED" ]]; then
-      echo "attach: daemon at $ONBOARD_BIND has grants that were NOT applied — it would record a fixture missing those signals" >&2 # NOSONAR (shell:S5332) — names the loopback daemon above
-      echo "        $UNAPPLIED" >&2 # NOSONAR (shell:S5332) — echoes the loopback response above
-      echo "        if this is the #1449 shared-config refusal: back up the files that irrlichd --print-managed-files names," >&2
-      echo "        then restart the daemon with IRRLICHT_ALLOW_SHARED_CONFIG_WRITES=1 (or record without --attach, which snapshots them for you)" >&2
-      exit 1
-    fi
+    check_unapplied_grants "$ONBOARD_BIND" "$ADAPTER" "$PERM_JSON" || exit 1 # NOSONAR (shell:S5332) — reads the loopback response fetched above
   fi
   echo "attach: using running daemon's recordings at $ATTACHED_RECORDINGS_DIR"
 else
@@ -388,6 +384,16 @@ fi
 # been up since long before this script started and run-cell's own
 # unapplied_grants check above already graded its installs.
 if [[ "$ATTACH" != "1" ]]; then
+  # Same surface the attach path checks above, moved out where it can be
+  # shared (#1754): an install that failed silently ("granted but NOT
+  # applied", #1362's shape) reads "granted" in .permissions on the spawn
+  # path too, and unapplied_grants is the only place that names it. Polled,
+  # not sampled once: the socket comes up BEFORE the daemon's grant-all Apply
+  # pass runs (see unapplied-grants-check.sh's header for the trace), so a
+  # single immediate check can read "clean" only because it hasn't been
+  # evaluated yet. wait_for_unapplied_grants_clear trusts a refusal instantly
+  # but polls a clean reading out to a deadline before believing it.
+  wait_for_unapplied_grants_clear "$ONBOARD_BIND" "$ADAPTER" || exit 1
   wait_for_hook_install "$ADAPTER" "$STAGING" "$ONBOARD_BIND" || exit 1
 fi
 

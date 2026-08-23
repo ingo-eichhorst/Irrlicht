@@ -65,6 +65,14 @@ echo "== unit tests (lib/atomic-promote_test.sh) =="
 bash "$SCRIPT_DIR/lib/atomic-promote_test.sh" || rc=1
 
 echo ""
+echo "== unit tests (lib/promote-hookcheck_test.sh) =="
+bash "$SCRIPT_DIR/lib/promote-hookcheck_test.sh" || rc=1
+
+echo ""
+echo "== unit tests (lib/unapplied-grants-check_test.sh) =="
+bash "$SCRIPT_DIR/lib/unapplied-grants-check_test.sh" || rc=1
+
+echo ""
 echo "== unit tests (lib/adapter-tables_test.sh) =="
 bash "$SCRIPT_DIR/lib/adapter-tables_test.sh" || rc=1
 

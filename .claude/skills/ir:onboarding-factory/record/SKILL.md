@@ -56,6 +56,24 @@ description: >
      the bind addr defaults to `127.0.0.1:7838` and the precheck refuses 7837
      (it would clash with production). Pick another free port if 7838 is taken.
 
+     **Hook delivery reaching the coexisting daemon is not one adapter-neutral
+     guarantee** (#1754). URL-delivery adapters (claudecode, codex, copilot)
+     bake the daemon address into the installed entry at install time, so they
+     always reach it. Beacon-delivery adapters — every adapter importing
+     `core/pkg/hookbeacon`; as of this writing antigravity, gemini-cli, hermes,
+     kiro-cli, opencode, pi and mistral-vibe, but that list is not the source
+     of truth and will drift — `righome.BeaconAdapters` (derived from the
+     import graph) is — carry NO address in the entry at all; `irrlichd
+     hook-post` resolves the daemon from its OWN process environment at fire
+     time, a child of the CLI's tmux pane. `of record run` / `run-cell.sh`
+     already export and forward `IRRLICHT_BIND_ADDR` into that pane for you
+     (`TestEveryBeaconAdapterDriverPassesTheDaemonAddress` in
+     `tools/onboarding-factory/internal/righome` enforces it), so this needs no
+     action through the normal path — but it is why driving a beacon-delivery
+     adapter's CLI any other way silently posts every hook at production
+     instead, and the resulting recording looks complete and healthy with zero
+     hook events in it (#1735).
+
    **Onboarding a NEW adapter is always the coexist case**, by construction: the
    running `irrlichd` is an installed release whose binary has no such adapter
    compiled in, so it observes nothing no matter how healthy it looks. Coexist
@@ -209,6 +227,17 @@ This copies `events.jsonl` + the transcript + a `manifest.json` into a new
 write any artifacts cache into `metadata.json`: the on-disk `recordings/<name>/`
 tree IS the record (the single source of truth). The replay golden is added by
 Step 5; nothing else needs wiring.
+
+**If `<agent>` declares a hooks permission and this recording carries no
+`hook_received` event, promote-recording.sh prompts rather than promoting
+silently** (#1754) — the exact failure mode #1735 took three attempts to
+diagnose. When the scenario genuinely produces no hook (confirm against `of
+coverage --hooks` if unsure), that's a real "yes, intended" — since you run
+non-interactively, answer it with `IRRLICHT_PROMOTE_HOOKFREE_OK=1
+tools/promote-recording.sh <staging-dir> <agent> <folder>` rather than
+retrying blind against an unanswerable prompt. Anything else — a scenario that
+SHOULD have produced a hook — is the bug this check exists to catch: go back
+to Step 2's diagnosis rather than overriding it.
 
 **Retry exactly once** on a `timeout` / `transcript_missing` outcome (often a
 lazy-transcript nudge or trailing-sleep timing issue). On a second failure, or

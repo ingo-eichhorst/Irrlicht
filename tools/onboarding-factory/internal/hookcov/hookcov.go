@@ -281,6 +281,17 @@ func hasOwnHookEvent(eventsPath, adapterSlug string) bool {
 	return anyHookEventOwnedBy(events, sessionAdapters(events), adapterSlug)
 }
 
+// HasOwnHookEvent is hasOwnHookEvent, exported for a caller asking the same
+// question about ONE staged candidate recording rather than the whole
+// committed corpus hookBearingRecordings walks. `of hookcheck` is that caller
+// (#1754): promote-recording.sh's promote-time prompt needs exactly this
+// attribution logic — not a cruder "does events.jsonl contain the string
+// hook_received anywhere" check, which would misfire on a co-resident
+// adapter's hook events the same way hookBearingRecordings would without it.
+func HasOwnHookEvent(eventsPath, adapterSlug string) bool {
+	return hasOwnHookEvent(eventsPath, adapterSlug)
+}
+
 // sessionAdapters maps session_id -> the on-disk slug of the adapter a
 // SIBLING event (never hook_received itself, which carries no Adapter)
 // tagged that session with. One pass over the whole recording, built once

@@ -55,9 +55,27 @@ elif [[ -n "${IRRLICHT_ONBOARD_HOME:-}" ]]; then
   # Coexist mode: the recording daemon gets its OWN IRRLICHT_HOME (socket
   # + state) and an alternate bind port, so a running production irrlichd
   # is fine — they don't share a socket or port. We only require that OUR
-  # target port is free. Hook-driven adapters work here too since #1178:
-  # the endpoint their installers write follows IRRLICHT_BIND_ADDR, so
-  # hooks reach $ONBOARD_BIND rather than production.
+  # target port is free.
+  #
+  # Hooks reaching $ONBOARD_BIND rather than production is NOT one
+  # adapter-neutral guarantee — it is two different mechanisms, correct for
+  # opposite reasons (#1754). URL delivery (claudecode, codex, copilot) bakes
+  # the address INTO the installed entry at install time, so it always
+  # reaches this daemon (#1178). Beacon delivery — every adapter importing
+  # core/pkg/hookbeacon; as of this writing antigravity, gemini-cli, hermes,
+  # kiro-cli, opencode, pi and mistral-vibe, but the LIST here is not the
+  # source of truth and will drift — `righome.BeaconAdapters` (derived from
+  # the import graph) and TestEveryBeaconAdapterDriverPassesTheDaemonAddress
+  # (tools/onboarding-factory/internal/righome) are — writes NO address into
+  # the entry at all; `irrlichd hook-post` resolves the daemon from its OWN
+  # process environment at FIRE time, and that process is a child of the
+  # agent CLI run-cell.sh launches under tmux. That only
+  # reaches $ONBOARD_BIND because run-cell.sh explicitly exports
+  # IRRLICHT_BIND_ADDR and forwards it into the tmux pane
+  # (TestEveryBeaconAdapterDriverPassesTheDaemonAddress in
+  # tools/onboarding-factory/internal/righome enforces it) — a caller that
+  # drives the CLI some other way inherits none of that for free, and a
+  # hook-free "healthy" recording is what #1735 measured when it didn't.
   ONBOARD_BIND="${IRRLICHT_ONBOARD_BIND_ADDR:-127.0.0.1:7838}"
   ONBOARD_PORT="${ONBOARD_BIND##*:}"
   if [[ ! "$ONBOARD_PORT" =~ ^[0-9]+$ ]]; then
