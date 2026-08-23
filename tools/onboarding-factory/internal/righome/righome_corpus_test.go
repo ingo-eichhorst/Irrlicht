@@ -186,7 +186,94 @@ func assertReported(t *testing.T, got string, want []string, names string) {
 // Reconcile that complains about everything.
 func assertSilentOnEverythingElse(t *testing.T, got string, claimed []string) {
 	t.Helper()
-	for _, frag := range allFragments {
+	assertSilentOnFragmentsExcept(t, got, allFragments, claimed)
+}
+
+func containsString(hay []string, needle string) bool {
+	for _, h := range hay {
+		if h == needle {
+			return true
+		}
+	}
+	return false
+}
+
+// sourceVariantFragments is every distinguishing phrase SourceVariantCoverage
+// can produce. As with allFragments above, a case names the ones it expects
+// and everything else in this list must be absent — otherwise a mutation
+// wrong in one way could be "satisfied" by an unrelated complaint.
+var sourceVariantFragments = []string{
+	"has no case in sessionRootsOf's type switch",
+	"no longer declares",
+}
+
+// TestSourceVariantCoverageNamesEveryWrongShape is the committed mutation
+// evidence for SourceVariantCoverage (#1767), in the same shape as
+// TestReconcileNamesEveryWrongShape above and for the same reason: the real
+// switch cannot be mutated to prove this discriminates without adding a
+// fourth variant to core/domain/agent/source.go, a different change with a
+// different blast radius, so the evidence drives the pure function directly
+// with deliberately wrong sets instead.
+//
+// This is also the proof that #1767's fix actually changes behaviour: before
+// SourceVariantCoverage existed, the "declared variant with no case" row
+// below is exactly the shape that used to fall silently to sessionRootsOf's
+// default branch and fatal only if some adapter's row ever exercised it —
+// this test instead reddens on the missing case directly, with the variant
+// named, independent of any adapter.
+func TestSourceVariantCoverageNamesEveryWrongShape(t *testing.T) {
+	cases := []struct {
+		name     string
+		declared []string
+		handled  []string
+		reports  []string // fragments that MUST appear; empty means "silent"
+		names    string   // a variant name the report must also carry, when relevant
+	}{
+		{
+			name:     "the real shape reports nothing",
+			declared: []string{"FilesUnderCWD", "FilesUnderRoot", "ProcessOwnedStore"},
+			handled:  []string{"FilesUnderCWD", "FilesUnderRoot", "ProcessOwnedStore"},
+		},
+		{
+			// The shape this issue is about: a variant source.go declares that
+			// sessionRootsOf names no case for — before #1767, this fell to
+			// `default` and was indistinguishable from a Source that simply
+			// cannot be resolved.
+			name:     "a declared variant with no case",
+			declared: []string{"FilesUnderCWD", "FilesUnderRoot", "ProcessOwnedStore", "RemoteAPISession"},
+			handled:  []string{"FilesUnderCWD", "FilesUnderRoot", "ProcessOwnedStore"},
+			reports:  []string{"has no case in sessionRootsOf's type switch"},
+			names:    "RemoteAPISession",
+		},
+		{
+			// The mirror direction: a case naming a variant source.go no
+			// longer declares. Reconcile's checkExemptions guards the same
+			// direction for its own exemption map, for the same reason — a
+			// stale entry reads as coverage of something that is not there.
+			name:     "a case naming a variant that no longer exists",
+			declared: []string{"FilesUnderRoot", "ProcessOwnedStore"},
+			handled:  []string{"FilesUnderCWD", "FilesUnderRoot", "ProcessOwnedStore"},
+			reports:  []string{"no longer declares"},
+			names:    "FilesUnderCWD",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := strings.Join(SourceVariantCoverage(tc.declared, tc.handled), "\n")
+			assertReported(t, got, tc.reports, tc.names)
+			assertSilentOnFragmentsExcept(t, got, sourceVariantFragments, tc.reports)
+		})
+	}
+}
+
+// assertSilentOnFragmentsExcept generalizes assertSilentOnEverythingElse over
+// an explicit fragment universe, so this corpus and Reconcile's can each pin
+// their own set of distinguishing phrases without one silently checking the
+// other's.
+func assertSilentOnFragmentsExcept(t *testing.T, got string, universe, claimed []string) {
+	t.Helper()
+	for _, frag := range universe {
 		if containsString(claimed, frag) {
 			continue
 		}
@@ -200,13 +287,141 @@ func assertSilentOnEverythingElse(t *testing.T, got string, claimed []string) {
 	}
 }
 
-func containsString(hay []string, needle string) bool {
-	for _, h := range hay {
-		if h == needle {
-			return true
-		}
+// TestSourceVariantsFromNamesEveryWrongShape is the committed evidence for
+// sourceVariantsFrom, in the same map[string]string-driven shape
+// TestScanBeaconPackageNamesEveryWrongShape (beacon_test.go) already uses for
+// ScanBeaconPackage — the split exists so a corpus can drive the scan with
+// synthetic packages instead of the real repo tree.
+//
+// The two-file case is the regression test for a review finding against this
+// PR: an earlier version of this scan read core/domain/agent/source.go by
+// name, so a variant declared in any OTHER file in the package (a real
+// pattern this repo already uses for a type that varies per platform or
+// concern — see ports.ProcessObserver's process_{darwin,linux,other}.go
+// split) would have been silently invisible to
+// TestSessionRootsOfCoversEveryAgentSourceVariant, undermining the very
+// existence-check guarantee #1767 added. Scanning the whole non-test package
+// is what closes that gap; this case is what proves it stays closed.
+func TestSourceVariantsFromNamesEveryWrongShape(t *testing.T) {
+	cases := []struct {
+		name    string
+		files   map[string]string
+		want    []string
+		wantErr string
+	}{
+		{
+			// The regression case above: a variant per file, plus a pointer
+			// receiver (bareTypeName's StarExpr branch), plus a same-named
+			// type that only exists in a _test.go file — which must NOT
+			// count, the same rule ScanBeaconPackage applies to a
+			// test-only beacon import.
+			name: "a variant in every file of the package is found, a _test.go-only one is not",
+			files: map[string]string{
+				"source.go": "package agent\n\ntype FilesUnderRoot struct{}\nfunc (FilesUnderRoot) isSource() {}\n",
+				"source_remote.go": "package agent\n\ntype RemoteAPISession struct{}\n" +
+					"func (*RemoteAPISession) isSource() {}\n",
+				"source_test.go": "package agent\n\ntype testOnlyVariant struct{}\nfunc (testOnlyVariant) isSource() {}\n",
+			},
+			want: []string{"FilesUnderRoot", "RemoteAPISession"},
+		},
+		{
+			name:    "no isSource() anywhere is an error, not an empty list",
+			files:   map[string]string{"source.go": "package agent\n\ntype FilesUnderRoot struct{}\n"},
+			wantErr: "declares no isSource() method at all",
+		},
+		{
+			name:    "unparseable source is an error, not a quiet miss",
+			files:   map[string]string{"source.go": "package agent\n\nfunc (\n"},
+			wantErr: "parsing source.go",
+		},
 	}
-	return false
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := sourceVariantsFrom(tc.files)
+			assertNamesOrErr(t, got, err, tc.want, tc.wantErr)
+		})
+	}
+}
+
+// assertNamesOrErr is the shared verdict for the two corpora below: either an
+// error containing wantErr, or a clean result equal to want. Split out
+// because sourceVariantsFrom and switchCasesFrom return the same ([]string,
+// error) shape and their two corpora were asserting it identically —
+// the same move this file already made once for
+// assertSilentOnEverythingElse/assertSilentOnFragmentsExcept.
+func assertNamesOrErr(t *testing.T, got []string, err error, want []string, wantErr string) {
+	t.Helper()
+	if wantErr != "" {
+		if err == nil || !strings.Contains(err.Error(), wantErr) {
+			t.Fatalf("got (%v, %v), want an error containing %q", got, err, wantErr)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+// TestSwitchCasesFromNamesEveryWrongShape is switchCasesFrom's counterpart to
+// the corpus above, driving it with synthetic function bodies instead of the
+// real sessionRootsOf.
+func TestSwitchCasesFromNamesEveryWrongShape(t *testing.T) {
+	const funcName = "resolve"
+
+	cases := []struct {
+		name    string
+		src     string
+		want    []string
+		wantErr string
+	}{
+		{
+			// Proves the loop over cc.List: a single case clause naming TWO
+			// types at once (`case agent.A, agent.B:`) must contribute both,
+			// not just the first — a shape switchCasesIn's one real caller
+			// does not currently use, so nothing else in this diff would
+			// have caught a scanner that silently took only cc.List[0].
+			name: "a case naming two types at once contributes both",
+			src: "package p\nimport \"irrlicht/core/domain/agent\"\n" +
+				"func resolve(a agent.Agent) ([]string, error) {\n" +
+				"\tswitch v := a.Source.(type) {\n" +
+				"\tcase agent.FilesUnderRoot, agent.FilesUnderCWD:\n\t\t_ = v\n" +
+				"\tcase agent.ProcessOwnedStore:\n\t\t_ = v\n" +
+				"\tdefault:\n\t}\n\treturn nil, nil\n}\n",
+			want: []string{"FilesUnderCWD", "FilesUnderRoot", "ProcessOwnedStore"},
+		},
+		{
+			name:    "no func with that name is an error",
+			src:     "package p\nfunc other() {}\n",
+			wantErr: "declares no func resolve",
+		},
+		{
+			name:    "a func with no type switch at all is an error",
+			src:     "package p\nfunc resolve() { _ = 1 }\n",
+			wantErr: "declares no type switch",
+		},
+		{
+			name: "a type switch with only a default clause names no case",
+			src: "package p\nfunc resolve(a interface{}) {\n" +
+				"\tswitch a.(type) {\n\tdefault:\n\t}\n}\n",
+			wantErr: "names no case at all",
+		},
+		{
+			name:    "unparseable source is an error, not a quiet miss",
+			src:     "package p\nfunc (\n",
+			wantErr: "parsing",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := switchCasesFrom([]byte(tc.src), "input.go", funcName)
+			assertNamesOrErr(t, got, err, tc.want, tc.wantErr)
+		})
+	}
 }
 
 // TestTableRefusesRatherThanReturningAShortList covers the reader. Every check

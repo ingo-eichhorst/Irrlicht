@@ -158,9 +158,25 @@ func assertSessionRootRelocates(t *testing.T, row Row, home string, a agent.Agen
 // per-process), which is why passing a placeholder is honest rather than a
 // stand-in for something the test could not arrange.
 //
+// The FilesUnderCWD branch is #1767's: aider is the only adapter using this
+// variant today, has no rig-home row (its transcript lives under the
+// project's own working directory, not a directory a HOME-style env var can
+// relocate), and so this arm has never actually run against it. It is named
+// here anyway, with the reason recorded, rather than left to fall through to
+// default the way it did before #1767 — the same "one branch per variant,
+// with a recorded reason where there is genuinely no sensible answer" shape
+// applyWritesNoUserFile and notAManagedFilePath use in core/cmd/irrlichd. A
+// future FilesUnderCWD adapter that DOES earn a row gets a clear, named
+// failure here instead of the generic one below.
+//
 // The default case stays a hard failure rather than an empty result: an
 // unresolvable Source and a Source with nothing to relocate must not read the
-// same way.
+// same way. It should now be unreachable —
+// TestSessionRootsOfCoversEveryAgentSourceVariant asserts every agent.Source
+// variant declared in core/domain/agent/source.go has a named case above,
+// derived from source rather than hand-kept, so a fourth variant fails that
+// dedicated, existence-checked test the moment it is introduced rather than
+// waiting for some future adapter's relocation test to trip over it.
 func sessionRootsOf(a agent.Agent) ([]string, error) {
 	switch src := a.Source.(type) {
 	case agent.FilesUnderRoot:
@@ -170,9 +186,41 @@ func sessionRootsOf(a agent.Agent) ([]string, error) {
 			return nil, fmt.Errorf("declares ProcessOwnedStore with no PathForPID, so there is no store path to grade")
 		}
 		return []string{src.PathForPID(0)}, nil
+	case agent.FilesUnderCWD:
+		return nil, fmt.Errorf("declares FilesUnderCWD — session data lives under the process's " +
+			"own working directory, not a directory a HOME-style env var can relocate, so there is " +
+			"no session root here to grade; an adapter using this variant needs its own isolation " +
+			"story (see righome.Unisolatable) rather than a rig-home row")
 	default:
-		return nil, fmt.Errorf("declares Source %T, which this arm cannot resolve — a row for it "+
-			"needs its own half-one check rather than being waved through", a.Source)
+		return nil, fmt.Errorf("declares Source %T, which this arm cannot resolve — "+
+			"TestSessionRootsOfCoversEveryAgentSourceVariant should have failed before this ever "+
+			"ran; if it did not, that test's own scan has a bug", a.Source)
+	}
+}
+
+// TestSessionRootsOfCoversEveryAgentSourceVariant is the existence-checked
+// backstop #1767 asks for: it fires the moment core/domain/agent/source.go
+// gains a new Source variant, whether or not any adapter using it has earned
+// a rig-home row yet — rather than waiting for sessionRootsOf's default
+// branch to fatal inside some later adapter's relocation test the way it did
+// for hermes (#1722/#1765).
+//
+// declared and handled are each derived from an AST scan (righome.go), never
+// hand-kept, so the two projections cannot silently drift apart the way a
+// hand-maintained list could.
+func TestSessionRootsOfCoversEveryAgentSourceVariant(t *testing.T) {
+	root := repoRoot(t)
+	declared, err := sourceVariantsIn(root)
+	if err != nil {
+		t.Fatalf("deriving agent.Source's declared variants: %v", err)
+	}
+	handled, err := switchCasesIn(root,
+		"tools/onboarding-factory/internal/righome/righome_test.go", "sessionRootsOf")
+	if err != nil {
+		t.Fatalf("deriving sessionRootsOf's handled variants: %v", err)
+	}
+	for _, p := range SourceVariantCoverage(declared, handled) {
+		t.Error(p)
 	}
 }
 

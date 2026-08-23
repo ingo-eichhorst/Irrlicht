@@ -291,6 +291,244 @@ func truncate(s string) string {
 	return s[:max] + "…"
 }
 
+// SourceVariantCoverage reports every disagreement between agent.Source's
+// declared variants (derived from every non-test file in core/domain/agent,
+// not just source.go — see sourceVariantsIn) and the cases a switch over that
+// type actually names. An empty result means every declared variant has a
+// named case, and every named case still names a variant that exists.
+//
+// This is #1767's fix. Before it, sessionRootsOf's type switch understood
+// only the variants whichever adapter's rig-home row had exercised so far —
+// FilesUnderRoot from day one, ProcessOwnedStore added in #1722/#1765 for
+// hermes — and an unhandled variant surfaced only as that switch's `default`
+// branch fataling inside a DIFFERENT adapter's relocation test, at the moment
+// some later adapter's row happened to use it. That is a runtime accident,
+// not a check: the failure lands on whoever adds the next adapter, unrelated
+// to what they were doing, telling them to extend a mechanism they did not
+// know existed. A guard over a closed, enumerable sum should instead fail the
+// moment the sum itself gains a variant nothing names — which is what calling
+// this with the two AST-derived projections below achieves.
+//
+// Split out as a pure function for the same reason Reconcile is: the real
+// switch cannot be mutated to prove this discriminates (mutating it means
+// adding a fourth variant to core/domain/agent/source.go, a different change
+// with a different blast radius), so the committed mutation evidence
+// (righome_corpus_test.go) drives THIS function directly with deliberately
+// wrong sets instead.
+func SourceVariantCoverage(declared, handled []string) []string {
+	handledSet := make(map[string]bool, len(handled))
+	for _, h := range handled {
+		handledSet[h] = true
+	}
+	declaredSet := make(map[string]bool, len(declared))
+	for _, d := range declared {
+		declaredSet[d] = true
+	}
+
+	var problems []string
+	for _, d := range declared {
+		if !handledSet[d] {
+			problems = append(problems, fmt.Sprintf(
+				"agent.Source variant %q has no case in sessionRootsOf's type switch — a rig-home "+
+					"row for an adapter using it would fall to the default branch and fatal inside "+
+					"whatever unrelated adapter's relocation test first exercised it, instead of "+
+					"failing here, now, by name", d))
+		}
+	}
+	for _, h := range handled {
+		if !declaredSet[h] {
+			problems = append(problems, fmt.Sprintf(
+				"sessionRootsOf names a case for %q, which core/domain/agent/source.go no longer "+
+					"declares — a stale case reads as coverage of a variant that does not exist", h))
+		}
+	}
+	sort.Strings(problems)
+	return problems
+}
+
+// AgentDomainDir is the package that declares agent.Source and its variants,
+// relative to the repo root.
+const AgentDomainDir = "core/domain/agent"
+
+// sourceVariantsIn returns the sorted names of every type anywhere in
+// core/domain/agent that declares the isSource() sealing method — the
+// authoritative, derived-from-source list of agent.Source's variants, rather
+// than a hand-kept one that can drift the moment a variant is added.
+//
+// It scans every non-test .go file in the PACKAGE, not just source.go by
+// name: the three variants all happen to live in one file today, but this
+// repo's own convention for a domain type whose variants multiply per-OS or
+// per-concern is to split them across sibling files in the same package (see
+// core/pkg/ports.ProcessObserver's process_{darwin,linux,other}.go). A scan
+// scoped to one filename would silently stop covering a variant the moment
+// someone followed that convention here, which is exactly the "existence
+// check that quietly checks less than it claims to" this issue exists to
+// avoid — so it reads the whole directory and delegates to sourceVariantsFrom,
+// the same split ScanBeaconPackage/BeaconAdapters already use: a thin
+// disk-reading wrapper around a pure, in-memory function a corpus can drive
+// directly with synthetic packages.
+func sourceVariantsIn(repoRoot string) ([]string, error) {
+	dir := filepath.Join(repoRoot, AgentDomainDir)
+	files, err := goSourcesIn(dir)
+	if err != nil {
+		return nil, err
+	}
+	names, err := sourceVariantsFrom(files)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", AgentDomainDir, err)
+	}
+	return names, nil
+}
+
+// sourceVariantsFrom is sourceVariantsIn's pure half: every type across these
+// sources (a filename → source map, in the shape ScanBeaconPackage already
+// takes) that declares isSource(). Non-test files only — a type declared only
+// in a _test.go file is not a real agent.Source variant.
+func sourceVariantsFrom(files map[string]string) ([]string, error) {
+	fset := token.NewFileSet()
+	var names []string
+	for name, src := range productionSources(files) {
+		f, err := parser.ParseFile(fset, name, src, parser.SkipObjectResolution)
+		if err != nil {
+			return nil, fmt.Errorf("parsing %s: %w", name, err)
+		}
+		for _, decl := range f.Decls {
+			if variant, ok := isSourceReceiverName(decl); ok {
+				names = append(names, variant)
+			}
+		}
+	}
+	if len(names) == 0 {
+		return nil, fmt.Errorf("declares no isSource() method at all — the scan is broken, not " +
+			"the domain type")
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+// isSourceReceiverName reports the receiver type name of one top-level
+// declaration, if it is a method named isSource — the sealing marker every
+// agent.Source variant declares (core/domain/agent/source.go's own doc
+// comment on the interface names it as such).
+func isSourceReceiverName(decl ast.Decl) (string, bool) {
+	fn, ok := decl.(*ast.FuncDecl)
+	if !ok || fn.Recv == nil || fn.Name.Name != "isSource" || len(fn.Recv.List) != 1 {
+		return "", false
+	}
+	return bareTypeName(fn.Recv.List[0].Type)
+}
+
+// bareTypeName strips a pointer off a receiver's type expression and returns
+// the underlying identifier. Every isSource() today is a value receiver, but
+// a future variant switching to a pointer should not silently vanish from the
+// scan.
+func bareTypeName(expr ast.Expr) (string, bool) {
+	switch t := expr.(type) {
+	case *ast.Ident:
+		return t.Name, true
+	case *ast.StarExpr:
+		return bareTypeName(t.X)
+	default:
+		return "", false
+	}
+}
+
+// switchCasesIn returns the sorted agent.<Name> case types a type switch
+// inside the named function resolves, read from source rather than by
+// importing the package that declares the function — sessionRootsOf lives in
+// a _test.go file this production package cannot import without a cycle.
+//
+// A thin disk-reading wrapper around switchCasesFrom, the pure half a corpus
+// drives directly with synthetic source — same split as sourceVariantsIn.
+func switchCasesIn(repoRoot, relPath, funcName string) ([]string, error) {
+	path := filepath.Join(repoRoot, relPath)
+	// #nosec G304 -- path built from a caller-supplied repo root and a package constant.
+	src, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", relPath, err)
+	}
+	names, err := switchCasesFrom(src, relPath, funcName)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", relPath, err)
+	}
+	return names, nil
+}
+
+// switchCasesFrom parses one Go source file and returns the sorted case
+// types a type switch inside funcName resolves. filename is used only for
+// parser diagnostics.
+func switchCasesFrom(src []byte, filename, funcName string) ([]string, error) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, filename, src, parser.SkipObjectResolution)
+	if err != nil {
+		return nil, fmt.Errorf("parsing: %w", err)
+	}
+
+	fn := topLevelFunc(f, funcName)
+	if fn == nil {
+		return nil, fmt.Errorf("declares no func %s — the case scan has nothing to read", funcName)
+	}
+	sw := firstTypeSwitch(fn)
+	if sw == nil {
+		return nil, fmt.Errorf("%s declares no type switch — the case scan has nothing to read", funcName)
+	}
+
+	var names []string
+	for _, stmt := range sw.Body.List {
+		cc, ok := stmt.(*ast.CaseClause)
+		if !ok {
+			continue
+		}
+		for _, expr := range cc.List { // a nil List is `default:` and contributes nothing
+			if name, ok := selectorName(expr); ok {
+				names = append(names, name)
+			}
+		}
+	}
+	if len(names) == 0 {
+		return nil, fmt.Errorf("%s's type switch names no case at all — the scan is broken, not "+
+			"the switch", funcName)
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+// topLevelFunc finds a package-level (non-method) function by name.
+func topLevelFunc(f *ast.File, name string) *ast.FuncDecl {
+	for _, decl := range f.Decls {
+		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv == nil && fn.Name.Name == name {
+			return fn
+		}
+	}
+	return nil
+}
+
+// firstTypeSwitch returns the first type switch statement in fn's body. A
+// function with more than one is not a shape this package's callers produce.
+func firstTypeSwitch(fn *ast.FuncDecl) *ast.TypeSwitchStmt {
+	var found *ast.TypeSwitchStmt
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if found != nil {
+			return false
+		}
+		if sw, ok := n.(*ast.TypeSwitchStmt); ok {
+			found = sw
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+// selectorName reads the `Name` off a `pkg.Name` case expression.
+func selectorName(expr ast.Expr) (string, bool) {
+	sel, ok := expr.(*ast.SelectorExpr)
+	if !ok {
+		return "", false
+	}
+	return sel.Sel.Name, true
+}
+
 // BeaconPackagePath is the package an adapter imports when its hooks are
 // delivered by the beacon rather than by a URL baked into the installed entry.
 const BeaconPackagePath = "irrlicht/core/pkg/hookbeacon"
