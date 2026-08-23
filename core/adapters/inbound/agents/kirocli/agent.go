@@ -163,6 +163,22 @@ func Agent() agent.Agent {
 					// is not co-located with anything.
 					Also: []func() (string, error){kiroSettingsPath, priorDefaultStatePath, agentSnapshotStatePath},
 				},
+				// Advisory: kiro-cli's OWN identity store, not irrlicht content —
+				// see agent.AdvisoryWrite and kiroDataStorePath for why this is a
+				// separate category from Also rather than a fourth entry in it
+				// (issue #1748). Deliberately does not change Touches/Detail above:
+				// this write is an unconditional side effect of the binary
+				// launching, not a separate consent decision, and the operator
+				// visibility this exists for is --print-advisory-files and the
+				// recording rig's warning, not the grant wizard.
+				Advisory: []agent.AdvisoryWrite{{
+					Path: kiroDataStorePath,
+					Reason: "kiro-cli agent create/set-default (kiroctl.go) spawn the real " +
+						"kiro-cli binary, whose own identity database this is. No irrlicht " +
+						"content lives here, so Uninstall is meaningless for it; it is only " +
+						"verified on darwin; and a live sqlite store cannot be safely " +
+						"snapshotted or restored, so it is reported, never backed up (#1748).",
+				}},
 			},
 		},
 	}

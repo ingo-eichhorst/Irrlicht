@@ -30,11 +30,19 @@
 # Usage — call the first before spawning the daemon, the second from cleanup:
 #   source "$SCRIPT_DIR/lib/managed-file-snapshot.sh"
 #   snapshot_managed_files "$STAGING/managed-file-backup" "$DAEMON" || exit 1
+#   warn_advisory_files "$DAEMON"   # optional: report-only, see below
 #   ... spawn daemon, drive agent ...
 #   restore_managed_files
 #
 # restore_managed_files is a no-op unless a snapshot completed, so it is safe to
 # call unconditionally from an EXIT trap.
+#
+# warn_advisory_files is a THIRD, separate category (issue #1748):
+# `irrlichd --print-advisory-files` names paths an Apply is KNOWN to write
+# that hold no irrlicht content and cannot be safely snapshotted/restored (an
+# agent CLI's own store — kiro-cli's identity database is the one declared
+# case). Never backed up, never restored — see the function's own doc for why
+# that is deliberate rather than a gap in this one.
 
 # MANAGED_FILE_BACKUP_DIR is the only state the pair shares, and it is set ONLY
 # by a snapshot that ran to completion. Everything restore does comes out of the
@@ -206,6 +214,74 @@ snapshot_managed_files() {
   fi
 
   MANAGED_FILE_BACKUP_DIR="$backup_dir"
+  return 0
+}
+
+# warn_advisory_files <daemon-bin> prints one WARN line per advisory path
+# (`irrlichd --print-advisory-files`, issue #1748) — a path an Apply is KNOWN
+# to write that holds no irrlicht content and cannot be safely snapshotted or
+# restored (kiro-cli's own agent-identity sqlite store is the motivating,
+# and today only, case). Unlike snapshot_managed_files above, this is
+# VISIBILITY ONLY: nothing here is backed up, nothing here is restored — the
+# whole point is telling the operator a recording touched a store this rig
+# cannot safely undo, not pretending the rig can undo it.
+#
+# Best-effort and NEVER fails the recording, on purpose: an irrlichd predating
+# the flag is rejected by `hasFlag` and prints nothing to stdout (the same
+# fallthrough managed_file_paths' own doc names), and a catalog with no
+# advisory declarations at all is the ordinary case, not a fault. Either way
+# this returns 0 — including when the daemon exits non-zero or hangs.
+#
+# Deliberately NOT `"$daemon_bin" ... | while read ...`: both real callers
+# (run-cell.sh, run-cell-multi.sh) run under `set -euo pipefail`, and this is
+# invoked as a bare statement in spawn_record_daemon — under `pipefail` a
+# non-zero daemon exit becomes the PIPELINE's exit status, and under the
+# inherited `errexit` that aborts the whole calling script right there,
+# before this function's own `return 0` ever runs (measured: a stub daemon
+# exiting 2 killed the caller under bash 3.2, this repo's floor). Redirecting
+# to a file and reading it back afterward, exactly like managed_file_paths
+# above, keeps this function's own exit status the only thing that reaches
+# the caller.
+#
+# Every `wait`/`kill` below is ALSO guarded with its own `|| true` /
+# `|| rc=$?`, not just the pipe removed above. `wait "$pid"; rc=$?` alone is
+# the SAME hazard one line down: under `errexit`, a bare `wait` returning the
+# backgrounded process's non-zero status aborts the caller right there, same
+# as the pipe did — it only happens NOT to fire for managed_file_paths' own
+# copy of this pattern because that function's one call site is the left side
+# of `||` in snapshot_managed_files, which (per bash's documented -e
+# semantics) suspends errexit for that whole function body as a side effect
+# of the CALL site, not a property of the function itself. This function's
+# own doc promises "never fails the recording" regardless of how it is
+# invoked, so it does not rely on being called that way — every internal
+# command that can return non-zero is guarded here directly (measured: this
+# was caught by this file's own committed regression test, which drives the
+# function under `set -euo pipefail` as a bare statement, matching
+# spawn_record_daemon's actual call site).
+warn_advisory_files() {
+  local daemon_bin="$1" secs="${MANAGED_FILE_PROBE_TIMEOUT_S:-20}"
+  local outf rc pid watchdog path reason
+  outf="$(mktemp)" || return 0
+
+  "$daemon_bin" --print-advisory-files >"$outf" 2>/dev/null &
+  pid=$!
+  { sleep "$secs"; kill -KILL "$pid" 2>/dev/null || true; } >/dev/null 2>&1 &
+  watchdog=$!
+  rc=0
+  wait "$pid" || rc=$?
+  kill "$watchdog" 2>/dev/null || true
+  wait "$watchdog" 2>/dev/null || true
+
+  if [[ "$rc" -ne 0 ]]; then
+    rm -f "$outf"
+    return 0
+  fi
+
+  while IFS=$'\t' read -r path reason; do
+    [[ -n "$path" ]] || continue
+    echo "managed-file-snapshot: ADVISORY — this recording's grant-all daemon is expected to write $path ($reason); not backed up, not restored (#1748)" >&2
+  done < "$outf"
+  rm -f "$outf"
   return 0
 }
 

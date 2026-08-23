@@ -135,6 +135,60 @@ func collectManagedFiles(catalog []agent.Agent, want func(key string) bool) ([]M
 	return out, nil
 }
 
+// AdvisoryFile is one permission's declared agent.AdvisoryWrite, resolved —
+// a path its Apply is known to write that holds no irrlicht content, so
+// unlike ManagedUserFile it carries no Uninstall and is never a backup/restore
+// candidate (issue #1748).
+type AdvisoryFile struct {
+	// Adapter is the declaration's label (agent.Identity.Name).
+	Adapter string
+	// Key is the permission key whose Apply causes the write.
+	Key string
+	// Path is the resolved, absolute path.
+	Path string
+	// Reason is agent.AdvisoryWrite.Reason, carried through verbatim so a
+	// reader of --print-advisory-files (or the rig's warning) sees WHY this
+	// path is advisory rather than a plain managed file.
+	Reason string
+}
+
+// AdvisoryFiles projects the consent catalog onto every declared
+// agent.AdvisoryWrite, resolved. --print-advisory-files is its only consumer
+// today (the recording rig's warn-only step); it is deliberately not folded
+// into ManagedUserFiles, whose two consumers (--print-managed-files' backup
+// contract and #1449's grant-all refusal) both assume a resolved path is
+// something they may snapshot, restore or refuse on — none of which apply to
+// an entry declared here.
+//
+// Unlike collectManagedFiles, a Path that fails to resolve is SKIPPED rather
+// than making the whole call an error: an agent.AdvisoryWrite's own contract
+// (see its doc) allows it to be scoped to a platform where the write has
+// actually been observed, so "cannot resolve here" is an expected outcome
+// wherever the declaration doesn't cover this OS — not the "our own required
+// config disappeared" case ManagedUserFiles' Path is. A nil Path resolver
+// stays fatal: that is a malformed declaration, not an unresolvable platform.
+func AdvisoryFiles(catalog []agent.Agent) ([]AdvisoryFile, error) {
+	var out []AdvisoryFile
+	for _, a := range catalog {
+		for _, p := range a.Permissions {
+			for i, adv := range p.Advisory {
+				if adv.Path == nil {
+					return nil, fmt.Errorf("adapter %q permission %q: Advisory[%d] has a nil Path resolver", a.Identity.Name, p.Key, i)
+				}
+				path, err := adv.Path()
+				if err != nil {
+					continue
+				}
+				if !filepath.IsAbs(path) {
+					return nil, fmt.Errorf("adapter %q permission %q: Advisory[%d] path %q is not absolute", a.Identity.Name, p.Key, i, path)
+				}
+				out = append(out, AdvisoryFile{Adapter: a.Identity.Name, Key: p.Key, Path: path, Reason: adv.Reason})
+			}
+		}
+	}
+	return out, nil
+}
+
 // HookConfigs is the hooks slice of the managed-file declaration — the agent
 // config files irrlicht installs hooks into, and nothing else.
 //

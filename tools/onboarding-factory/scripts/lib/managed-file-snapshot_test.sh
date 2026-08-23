@@ -382,6 +382,76 @@ restore_managed_files
 [[ -e "$ROOT/backup/replaced" ]] && got=present || got=absent
 assert_eq "nothing was copied aside" "absent" "$got"
 
+echo "== warn_advisory_files reports without touching anything (#1748) =="
+# fake_advisory_daemon answers --print-advisory-files with the tab-separated
+# "<path>\t<reason>" lines given, standing in for the real irrlichd.
+fake_advisory_daemon() {
+  local bin="$1"; shift
+  printf '%s\n' "$@" > "$bin.advisory"
+  cat > "$bin" <<EOF
+#!/usr/bin/env bash
+[[ "\${1:-}" == "--print-advisory-files" ]] || { echo "unexpected args: \$*" >&2; exit 2; }
+cat "$bin.advisory"
+EOF
+  chmod +x "$bin"
+  return 0
+}
+
+fresh_env advisory_basic
+fake_advisory_daemon "$DAEMON" "$(printf '/tmp/kiro/data.sqlite3\tkiro-cli own store')"
+out="$(warn_advisory_files "$DAEMON" 2>&1)"
+rc=$?
+assert_eq "warn_advisory_files always succeeds" "0" "$rc"
+assert_eq "the warning names the path" "1" \
+  "$(grep -c "/tmp/kiro/data.sqlite3" <<<"$out" | tr -d ' ')"
+assert_eq "the warning is marked ADVISORY" "1" \
+  "$(grep -c "ADVISORY" <<<"$out" | tr -d ' ')"
+assert_eq "the warning names the reason" "1" \
+  "$(grep -c "kiro-cli own store" <<<"$out" | tr -d ' ')"
+assert_eq "nothing is backed up" "absent" \
+  "$([[ -e "$ROOT/managed-file-backup" ]] && echo present || echo absent)"
+
+echo "== warn_advisory_files is silent and succeeds with nothing declared =="
+fresh_env advisory_empty
+fake_advisory_daemon "$DAEMON"
+out="$(warn_advisory_files "$DAEMON" 2>&1)"
+rc=$?
+assert_eq "warn_advisory_files succeeds with nothing declared" "0" "$rc"
+assert_eq "nothing is printed" "" "$out"
+
+echo "== warn_advisory_files never fails when the daemon predates the flag =="
+fresh_env advisory_predates
+cat > "$DAEMON" <<'EOF'
+#!/usr/bin/env bash
+echo 'irrlichd: unknown flag "--print-advisory-files"' >&2
+exit 2
+EOF
+chmod +x "$DAEMON"
+out="$(warn_advisory_files "$DAEMON" 2>&1)"
+rc=$?
+assert_eq "warn_advisory_files never fails the recording" "0" "$rc"
+
+echo "== warn_advisory_files under production's set -euo pipefail never kills the caller =="
+# Reproduces the exact hazard at the real call site rather than this file's
+# own `set -uo pipefail` (no -e, deliberately, so assertions can capture a
+# non-zero return): both run-cell.sh and run-cell-multi.sh run under
+# `set -euo pipefail`, and spawn_record_daemon calls warn_advisory_files as a
+# BARE statement. A pipe-based implementation (`daemon | while read ...`) lets
+# a non-zero daemon exit become the PIPELINE's own status, which errexit then
+# treats as the whole script failing, right there — before this function's
+# own `return 0` ever runs. $DAEMON here is still the exit-2 stub the case
+# above just wrote.
+subshell_out="$(bash -c '
+  set -euo pipefail
+  source "'"$DIR"'/managed-file-snapshot.sh"
+  warn_advisory_files "'"$DAEMON"'"
+  echo SURVIVED
+' 2>&1)"
+subshell_rc=$?
+assert_eq "the calling script survives under set -euo pipefail" "0" "$subshell_rc"
+assert_eq "execution continues past the bare call" "1" \
+  "$(grep -c SURVIVED <<<"$subshell_out" | tr -d ' ')"
+
 echo "== the lib names no agent config path of its own (#1357) =="
 # The literal list is the defect. A path spelled out here is one the daemon
 # does not have to agree with, which is how the two drifted in the first place.

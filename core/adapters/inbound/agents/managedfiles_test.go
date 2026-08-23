@@ -357,3 +357,110 @@ func TestHookConfigsIsTheHooksSliceOfManagedUserFiles(t *testing.T) {
 			"uninstall the instruction blocks and the host config patch nobody asked it to touch", hooks)
 	}
 }
+
+// advisoryAdapter builds a one-permission adapter carrying the given
+// agent.AdvisoryWrite entries under the given key, with no Writes — Advisory
+// is independent of ManagedUserFile (issue #1748: a permission can shell out
+// to an external CLI that writes only advisory content).
+func advisoryAdapter(name, key string, advisory []agent.AdvisoryWrite) agent.Agent {
+	return agent.Agent{
+		Identity:    agent.Identity{Name: name},
+		Permissions: []agent.Permission{{Key: key, Kind: permission.KindModify, Advisory: advisory}},
+	}
+}
+
+// TestAdvisoryFilesResolves is AdvisoryFiles' basic contract: a declared,
+// resolvable path is projected with its adapter, key, and reason intact.
+func TestAdvisoryFilesResolves(t *testing.T) {
+	catalog := []agent.Agent{
+		advisoryAdapter("kiro-cli", "hooks", []agent.AdvisoryWrite{{
+			Path:   func() (string, error) { return "/tmp/kiro/data.sqlite3", nil },
+			Reason: "kiro-cli's own identity store",
+		}}),
+	}
+
+	got, err := AdvisoryFiles(catalog)
+	if err != nil {
+		t.Fatalf("AdvisoryFiles(): %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("AdvisoryFiles() = %v, want exactly one entry", got)
+	}
+	want := AdvisoryFile{Adapter: "kiro-cli", Key: "hooks", Path: "/tmp/kiro/data.sqlite3", Reason: "kiro-cli's own identity store"}
+	if got[0] != want {
+		t.Errorf("AdvisoryFiles() = %+v, want %+v", got[0], want)
+	}
+}
+
+// TestAdvisoryFilesSkipsAnUnresolvablePath is the deliberate asymmetry with
+// Writes.Path/Also: an agent.AdvisoryWrite is allowed to be scoped to a
+// platform where the write has actually been observed (kirocli's own
+// resolver is darwin-only), so a resolution error is skipped rather than
+// failing the whole projection — the same tolerance --print-advisory-files
+// and the recording rig's warning both need in order to run unmodified on an
+// OS an advisory entry does not cover.
+func TestAdvisoryFilesSkipsAnUnresolvablePath(t *testing.T) {
+	catalog := []agent.Agent{
+		advisoryAdapter("kiro-cli", "hooks", []agent.AdvisoryWrite{{
+			Path:   func() (string, error) { return "", errors.New("unverified on this OS") },
+			Reason: "platform-specific",
+		}}),
+	}
+
+	got, err := AdvisoryFiles(catalog)
+	if err != nil {
+		t.Fatalf("AdvisoryFiles() = %v, want no error — an unresolvable advisory path is skipped, not fatal", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("AdvisoryFiles() = %v, want none — the unresolvable entry must be skipped", got)
+	}
+}
+
+// TestAdvisoryFilesRejectsAMalformedDeclaration mirrors
+// TestManagedUserFilesRejectsUnusableDeclarations for Advisory: a nil Path
+// resolver is a malformed declaration (not an unresolvable platform) and must
+// fail loudly, and a resolved path that is not absolute is meaningless to
+// report.
+func TestAdvisoryFilesRejectsAMalformedDeclaration(t *testing.T) {
+	cases := []struct {
+		name     string
+		advisory []agent.AdvisoryWrite
+		want     string
+	}{
+		{"nil Path resolver", []agent.AdvisoryWrite{{Path: nil, Reason: "x"}}, "nil Path resolver"},
+		{"relative path", []agent.AdvisoryWrite{{
+			Path: func() (string, error) { return "data.sqlite3", nil }, Reason: "x",
+		}}, "not absolute"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			catalog := []agent.Agent{advisoryAdapter("kiro-cli", "hooks", tc.advisory)}
+			got, err := AdvisoryFiles(catalog)
+			if err == nil {
+				t.Fatalf("AdvisoryFiles() = %v, want an error naming %q", got, tc.want)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error %q does not name %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// TestAdvisoryFilesIgnoresPermissionsThatDeclareNone is a lock: a permission
+// with no Advisory entries contributes nothing, the common case for every
+// permission except kirocli's hooks install today.
+func TestAdvisoryFilesIgnoresPermissionsThatDeclareNone(t *testing.T) {
+	catalog := []agent.Agent{
+		writerAdapter("alpha", agent.HooksPermissionKey, &agent.ManagedUserFile{
+			Path:      func() (string, error) { return "/tmp/alpha/settings.json", nil },
+			Uninstall: func() (bool, error) { return false, nil },
+		}),
+	}
+	got, err := AdvisoryFiles(catalog)
+	if err != nil {
+		t.Fatalf("AdvisoryFiles(): %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("AdvisoryFiles() = %v, want none — alpha declares no Advisory entry", got)
+	}
+}

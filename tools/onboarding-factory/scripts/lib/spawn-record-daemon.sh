@@ -175,6 +175,11 @@ spawn_record_daemon() {
     return 1
   fi
 
+  # Report-only, never gating (issue #1748): an agent CLI's own store that an
+  # Apply is known to write but that the snapshot above deliberately does not
+  # protect — see warn_advisory_files' own doc for why.
+  warn_advisory_files "$daemon_bin"
+
   # Read the env into an array so a value containing spaces (e.g. an
   # IRRLICHT_HOME path with a space) stays one word — an unquoted
   # ${home:+VAR="$home"} would word-split on it.

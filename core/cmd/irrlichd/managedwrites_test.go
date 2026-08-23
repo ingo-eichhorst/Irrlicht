@@ -43,17 +43,49 @@
 //     2026-08-22, `kiro-cli agent create irrlicht --from kiro_default` under a
 //     scratch $HOME created
 //     $HOME/Library/Application Support/kiro-cli/data.sqlite3 (see the PR body
-//     for the raw output). Which further files it writes depends on whether
-//     the developer is logged in — a verdict nobody controls.
+//     for the raw output) — present even though that install FAILED (not
+//     logged in), so it is a property of the binary launching at all, not of
+//     the install succeeding. Which further files beyond that one it writes
+//     still depends on whether the developer is logged in — a verdict nobody
+//     controls, and #1748 leaves that residue exactly as unaudited as this
+//     paragraph always said it was.
 //
 // So kiro-cli's Apply is not run. Its permission is named in
 // applyRunsAnExternalCLI with that reason, and the static arm grades its
 // package instead: every package-level `func() (string, error)` there must be
-// one the declaration names, or be named in notAManagedFilePath with why. The
-// declared side is DERIVED from production by reflecting the function names out
-// of Writes.Path/Writes.Also, so it cannot drift from a hand-kept list, and the
-// walk is vacuity-guarded by requiring every reflected name to be found in the
+// one the declaration names — in Writes.Path, Writes.Also, OR Advisory
+// (#1748, below) — or be named in notAManagedFilePath with why. The declared
+// side is DERIVED from production by reflecting the function names out of all
+// three, so it cannot drift from a hand-kept list, and the walk is
+// vacuity-guarded by requiring every reflected name to be found in the
 // package it claims to have parsed.
+//
+// # A third declaration for what neither Writes nor an exemption can name
+//
+// #1741's own report on data.sqlite3 (the measured write above) left it as a
+// known, unaudited exception — true, but not yet a place in the declaration
+// model for it to LIVE. It is not a missing Also entry: the three reasons are
+// in agent.Permission.Advisory's own doc (no irrlicht content, so Uninstall
+// is meaningless; unverified beyond darwin; a live external sqlite store is a
+// corruption risk to snapshot/restore blindly, not a protection). #1748
+// answers the question #1741 left open by giving it a category of its own —
+// agent.AdvisoryWrite, reported by --print-advisory-files and warned about
+// (never backed up or restored) by the recording rig — rather than either
+// forcing it into Also's undo/backup contract or leaving it a comment nobody
+// enforces. kirocli.kiroDataStorePath is the first, and so far only, entry;
+// the static arm above already treats it as declared once it appears in
+// Advisory, and TestExternalInstallerAdvisoryFilesAreDeclared below is its own
+// existence check, the same shape applyRunsAnExternalCLI's is.
+//
+// Deliberately NOT wired into #1449's sharedConfigRefusal: that guard refuses
+// an ENTIRE Apply when a declared path escapes the daemon's isolated home, and
+// extending it to Advisory would, for kiro-cli specifically, only ever matter
+// when $HOME itself is not redirected into that isolated home — a
+// configuration nothing here has exercised live. Getting that wrong in the
+// refusing direction would silently break every grant-all recording of
+// kiro-cli's hook install; getting it wrong in the permitting direction adds
+// nothing #1748 asked for. Left as a documented option for whoever next
+// measures that case, not a guess shipped in this PR.
 //
 // #1741 measured the static rule at roughly one false positive per adapter —
 // every adapter has a home-ROOT resolver with that exact signature — which is
@@ -87,6 +119,7 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -141,8 +174,9 @@ var applyRunsAnExternalCLI = map[string]externalInstaller{
 			"`kiro-cli agent set-default` (kiroctl.go). Measured 2026-08-22: with the " +
 			"binary ABSENT the closure fails at its first step and writes nothing, so the " +
 			"runtime arm would grade an empty set; with it PRESENT the child writes its own " +
-			"state under $HOME/Library/Application Support/kiro-cli/, and how much more it " +
-			"writes depends on whether the developer is logged in. Either way the verdict " +
+			"state under $HOME/Library/Application Support/kiro-cli/ (data.sqlite3, now " +
+			"declared as an agent.AdvisoryWrite — #1748), and how much more it writes beyond " +
+			"that depends on whether the developer is logged in. Either way the verdict " +
 			"stops being a property of this repo. Graded by the static arm instead",
 	},
 }
@@ -382,6 +416,28 @@ func assertExternalInstallerAgrees(t *testing.T, id string, ext externalInstalle
 // resolveDeclared resolves Writes.Path and every Writes.Also entry, keeping the
 // resolution error rather than dropping it: a resolver that fails is a file we
 // cannot prove is inside the scratch home, which is the fail-closed case.
+//
+// Deliberately does NOT also resolve p.Advisory (issue #1748). The static
+// arm's declaredResolverNames folds Advisory in because it only asks "is this
+// resolver NAMED somewhere" — but this function feeds
+// assertEveryDeclaredPathIsContained, which is fail-closed on ANY resolution
+// error (`t.Fatalf`, by design: a test that cannot name a file must not run
+// the closure that writes it). An agent.AdvisoryWrite's own contract is the
+// opposite of that assumption — it is EXPECTED to fail to resolve off its
+// declared platform (kirocli's kiroDataStorePath is darwin-only) — so
+// folding it in here as-is would abort the entire runtime arm, for every
+// permission, the moment any adapter's Advisory entry legitimately can't
+// resolve on the CI runner's OS. Today this is inert either way: the one
+// Advisory declaration belongs to kiro-cli/hooks, which gradablePermissions
+// excludes from the runtime arm entirely (via applyRunsAnExternalCLI) before
+// resolveDeclared is ever called on it. A FUTURE adapter that declares
+// Advisory on a permission the runtime arm DOES execute would need this
+// function (and assertEveryDeclaredPathIsContained's fail-closed check) to
+// tell an Advisory resolution error apart from a Writes.Path/Also one before
+// folding it in — left undone here because no such adapter exists yet to
+// verify the fix against, matching the same reasoning
+// permission_shared_config_gate.go's sharedConfigRefusal doc gives for not
+// wiring Advisory in there either.
 func resolveDeclared(p agent.Permission) []declaredFile {
 	if p.Writes == nil {
 		return nil
@@ -705,6 +761,128 @@ func TestExternalInstallerPackagesDeclareEveryPathResolver(t *testing.T) {
 	assertNoStaleResolverExemptions(t, usedExemptions)
 }
 
+// knownExternalWrites names, for a permission in applyRunsAnExternalCLI, the
+// file basenames its external CLI is MEASURED to write beyond anything a Go
+// resolver in the package could ever name (#1748) — a claim someone wrote
+// down and a reviewer can check, exactly like applyRunsAnExternalCLI itself
+// (see its own doc for why this cannot be derived). PR #1747's own body
+// measured `kiro-cli agent create`/`agent set-default` creating
+// $HOME/Library/Application Support/kiro-cli/data.sqlite3 even when the
+// install itself failed (not logged in) — a side effect of the binary
+// launching at all, not of the install succeeding.
+//
+// This is the existence check for that claim: every basename here must appear
+// among the permission's OWN declared agent.AdvisoryWrite entries, resolved.
+// A basename that stops appearing means #1748's whole point — that irrlicht
+// KNOWS this write happens — silently regressed back to an unaudited aside.
+var knownExternalWrites = map[string][]string{
+	"kiro-cli/hooks": {"data.sqlite3"},
+}
+
+// TestExternalInstallerAdvisoryFilesAreDeclared is knownExternalWrites'
+// existence check, run in both directions: an entry naming a permission that
+// does not exist fails loudly rather than being skipped, and a permission
+// whose declared Advisory basenames do not match what was measured fails by
+// name.
+//
+// Two properties are checked on EVERY platform, not only the one an entry's
+// Path resolver happens to resolve on: the permission must declare at least
+// one Advisory entry at all, and every declared entry must have a non-nil
+// Path and a non-empty Reason. Only the exact-basename comparison is
+// conditional — an agent.AdvisoryWrite's own contract allows a Path resolver
+// to be scoped to one platform (kirocli's kiroDataStorePath is darwin-only),
+// and asserting basename equality unconditionally would make this pass on
+// every OTHER platform's CI runner having checked nothing (measured: it
+// failed build-test's `Test (linux, race)` job with `got=[]` the first time
+// this test shipped, see the PR body). assertAdvisoryBasenames skips only
+// that one comparison when every resolver in the entry errored, and says so,
+// rather than silently reporting a clean result for a check that never ran.
+//
+// Contract test — it passes by construction; seen red (tools/mutate.sh) by
+// removing kirocli's Advisory declaration, see the PR body for the captured
+// output (that mutation fails BOTH the structural check here and
+// TestExternalInstallerPackagesDeclareEveryPathResolver above, on every
+// platform, since the structural checks do not depend on any resolver
+// actually resolving).
+func TestExternalInstallerAdvisoryFilesAreDeclared(t *testing.T) {
+	perms := permissionsByID(declaredConsentCatalog())
+	for id, want := range knownExternalWrites {
+		p, ok := perms[id]
+		if !ok {
+			t.Fatalf("knownExternalWrites names permission %q, which does not exist in the catalog", id)
+		}
+		if len(p.Advisory) == 0 {
+			t.Fatalf("%s: knownExternalWrites measured an external write for this permission, but "+
+				"it declares no Advisory entry at all (#1748)", id)
+		}
+		assertAdvisoryBasenames(t, id, p.Advisory, want)
+	}
+}
+
+// assertAdvisoryBasenames is TestExternalInstallerAdvisoryFilesAreDeclared's
+// per-permission body, pulled out so the platform-conditional skip reads as
+// one decision rather than nested inside the outer loop.
+func assertAdvisoryBasenames(t *testing.T, id string, advisory []agent.AdvisoryWrite, want []string) {
+	t.Helper()
+	var got []string
+	resolveErrs := 0
+	for i, adv := range advisory {
+		if adv.Path == nil {
+			t.Errorf("%s: Advisory[%d] has a nil Path resolver", id, i)
+			continue
+		}
+		if adv.Reason == "" {
+			t.Errorf("%s: Advisory[%d] has an empty Reason", id, i)
+		}
+		path, err := adv.Path()
+		if err != nil {
+			resolveErrs++
+			continue // unresolvable on this platform — agent.AdvisoryWrite's own contract
+		}
+		got = append(got, filepath.Base(path))
+	}
+
+	if len(got) == 0 && resolveErrs == len(advisory) {
+		t.Logf("%s: every Advisory Path resolver errored on %s — skipping the exact-basename "+
+			"check (a resolver may legitimately be scoped to one platform, #1748); the "+
+			"structural checks above (an entry exists, with a Path and a Reason) still ran",
+			id, runtime.GOOS)
+		return
+	}
+
+	sort.Strings(got)
+	wantSorted := append([]string(nil), want...)
+	sort.Strings(wantSorted)
+	if strings.Join(got, ",") != strings.Join(wantSorted, ",") {
+		t.Errorf("%s: Advisory declares basenames %v, want %v (#1748) — the measured "+
+			"external write this permission is known to cause is no longer named anywhere "+
+			"the declaration model can report it", id, got, wantSorted)
+	}
+}
+
+// TestAssertAdvisoryBasenamesSkipsWhenEveryResolverErrors is the defect test
+// for the shape TestExternalInstallerAdvisoryFilesAreDeclared shipped with
+// initially: a hard equality check against `got` failed on ANY platform where
+// every Advisory Path resolver legitimately errors (measured on this PR's own
+// build-test job, `Test (linux, race)`, before this fix — see the PR body for
+// the captured failure). Driven with a synthetic, always-erroring resolver
+// rather than depending on runtime.GOOS actually being non-darwin, so this
+// stays a real regression test on every CI runner rather than one that can
+// only ever exercise itself on Linux.
+func TestAssertAdvisoryBasenamesSkipsWhenEveryResolverErrors(t *testing.T) {
+	ok := t.Run("inner", func(t *testing.T) {
+		assertAdvisoryBasenames(t, "fake/perm", []agent.AdvisoryWrite{{
+			Path:   func() (string, error) { return "", errors.New("unsupported on this platform") },
+			Reason: "test-only synthetic entry",
+		}}, []string{"data.sqlite3"})
+	})
+	if !ok {
+		t.Error("assertAdvisoryBasenames failed when every resolver legitimately errored — this " +
+			"is exactly the shape a platform-scoped Advisory entry produces off its declared " +
+			"platform, and it must not fail the test (#1748)")
+	}
+}
+
 // permissionsByID indexes the catalog by "<adapter>/<key>".
 func permissionsByID(catalog []agent.Agent) map[string]agent.Permission {
 	out := map[string]agent.Permission{}
@@ -775,10 +953,12 @@ func gradeExternalInstallerPackage(t *testing.T, id string, p agent.Permission, 
 			continue
 		}
 		t.Errorf("%s.%s is a package-level path resolver that %s declares in neither "+
-			"Writes.Path nor Writes.Also. If its Apply writes that file, it is invisible to "+
-			"--print-managed-files, to the recording rig's backup and to #1449's grant-all "+
-			"refusal (#1739). Declare it, or add %q to notAManagedFilePath with the reason "+
-			"it names no managed file", pkgName, name, id, key)
+			"Writes.Path, Writes.Also, nor Advisory. If its Apply writes that file, it is "+
+			"invisible to --print-managed-files, to the recording rig's backup and to #1449's "+
+			"grant-all refusal (#1739) — or, if it holds no irrlicht content and cannot be "+
+			"safely backed up, invisible to --print-advisory-files and the rig's warning "+
+			"(#1748). Declare it under whichever fits, or add %q to notAManagedFilePath with "+
+			"the reason it names no managed file", pkgName, name, id, key)
 	}
 }
 
@@ -788,9 +968,6 @@ func gradeExternalInstallerPackage(t *testing.T, id string, p agent.Permission, 
 // package walk cannot match, which surfaces as the vacuity failure above rather
 // than as silence.
 func declaredResolverNames(p agent.Permission) []string {
-	if p.Writes == nil {
-		return nil
-	}
 	var out []string
 	add := func(f func() (string, error)) {
 		if f == nil {
@@ -802,9 +979,20 @@ func declaredResolverNames(p agent.Permission) []string {
 		}
 		out = append(out, fn.Name())
 	}
-	add(p.Writes.Path)
-	for _, also := range p.Writes.Also {
-		add(also)
+	if p.Writes != nil {
+		add(p.Writes.Path)
+		for _, also := range p.Writes.Also {
+			add(also)
+		}
+	}
+	// Advisory (#1748): a resolver declared here is just as much a KNOWN,
+	// named file as one in Writes.Path/Also — it is only the backup/restore
+	// and Uninstall semantics that differ, which this arm does not grade.
+	// Omitting it would make kirocli's kiroDataStorePath read as an
+	// undeclared resolver the moment it existed, exactly the false positive
+	// this arm exists to avoid.
+	for _, adv := range p.Advisory {
+		add(adv.Path)
 	}
 	return out
 }

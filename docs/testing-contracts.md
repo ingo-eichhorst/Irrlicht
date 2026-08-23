@@ -691,6 +691,45 @@ below.
   `multiple-agents-same-workspace` scenario family) is still visible via its
   own file-based signal — only the install-a-real-file side effect is
   narrowed.
+  #1748 gives the declaration model a **third category**, for a write neither
+  `Writes` nor an `applyRunsAnExternalCLI` exemption can express: kiro-cli's
+  `Apply` shells out to the real binary, and that CHILD process's own
+  identity store (`$HOME/Library/Application Support/kiro-cli/data.sqlite3`,
+  the same measured write `TestExternalInstallerPackagesDeclareEveryPathResolver`
+  above names) is a path no Go resolver in the adapter ever computes — there
+  is no `filepath.Join` call to find, static or runtime. It is not a missing
+  `Also` entry: `Also`'s whole contract assumes the content is irrlicht's
+  (so `Uninstall` can remove it) and that a snapshot/restore is safe (so the
+  recorder can protect it) — neither holds for another CLI's own live
+  database, which holds no irrlicht content and would risk corruption if
+  blindly copied back over a process that may still be writing to it.
+  `agent.Permission.Advisory` (`[]agent.AdvisoryWrite{Path, Reason}`) is the
+  category for exactly this: declared for VISIBILITY only, resolved by
+  `agents.AdvisoryFiles` (a resolution failure is SKIPPED rather than fatal —
+  unlike `Writes.Path`/`Also`, an advisory entry is allowed to be scoped to
+  one platform; kirocli's is darwin-only, unverified elsewhere per the issue),
+  reported by a new, separate flag `--print-advisory-files` (`<path>\t<reason>`
+  per line — kept off `--print-managed-files`'s own stream because that one's
+  rig consumer backs up and restores whatever it prints, keyed by LINE INDEX,
+  with no room for a non-path line or a second field), and warned about
+  (never backed up, never restored) by the recording rig's new
+  `warn_advisory_files` (`managed-file-snapshot.sh`), called right after
+  `snapshot_managed_files` in `spawn_record_daemon`. The static arm above
+  now folds `Advisory` into its own "declared" set alongside `Writes.Path`/
+  `Also` (`declaredResolverNames`), so kirocli's new `kiroDataStorePath`
+  resolver reads as declared rather than as a package-level resolver nobody
+  named. A second registry check, `TestExternalInstallerAdvisoryFilesAreDeclared`
+  (`knownExternalWrites`), is `applyRunsAnExternalCLI`'s own existence-check
+  pattern one field over: it pins that the ONE measured external write
+  (`data.sqlite3`) stays named in `Advisory` rather than silently regressing
+  to the unaudited aside #1741 originally left it as. Deliberately **not**
+  wired into `sharedConfigRefusal` above: extending that refusal to `Advisory`
+  would only matter for kiro-cli when `$HOME` itself is not redirected into
+  the isolated home, a configuration nothing here has measured live — getting
+  it wrong in the refusing direction would silently break every grant-all
+  recording of kiro-cli's hook install. Left as a documented option
+  (`permission_shared_config_gate.go`'s own doc comment) for whoever next
+  measures that case, not a guess shipped with the visibility fix.
   All seven contract families pass by construction against a correct adapter
   — every route and entry shape the hook-endpoint family grades now has one
   (see that bullet above) — so their whole value is that they *can* fail.

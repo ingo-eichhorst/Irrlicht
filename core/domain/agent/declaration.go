@@ -115,6 +115,52 @@ type Permission struct {
 	// carries what callers OUTSIDE the adapter need: which file, and how to
 	// take irrlicht's content back out.
 	Writes *ManagedUserFile
+
+	// Advisory declares paths this permission's Apply is KNOWN to cause to be
+	// written, that ManagedUserFile cannot represent (issue #1748). The
+	// motivating case: kiro-cli/hooks's Apply shells out to the real
+	// `kiro-cli` binary, and that child process writes its OWN identity store
+	// ($HOME/Library/Application Support/kiro-cli/data.sqlite3) as a side
+	// effect of merely launching — measured true even when the install itself
+	// fails. Also cannot hold this because Also's whole contract (#1718)
+	// assumes what ManagedUserFile assumes everywhere else: the content is
+	// irrlicht's, so Uninstall can remove it and a snapshot/restore can safely
+	// stand in for "don't touch it". Neither holds for an agent CLI's own
+	// database:
+	//
+	//   - It carries no irrlicht content, so Uninstall is meaningless for it.
+	//   - Where it lives is platform-specific and has only been verified on
+	//     one OS (kiro-cli's own resolver may put it somewhere else entirely
+	//     on another).
+	//   - It is a live external store; blindly snapshotting and restoring one
+	//     is a corruption risk, not a protection.
+	//
+	// So Advisory entries are declared for VISIBILITY only:
+	// --print-advisory-files reports them separately from
+	// --print-managed-files, and the recording rig warns that a recording
+	// touched them without attempting to back them up or restore them. See
+	// agents.AdvisoryFiles and core/cmd/irrlichd/managedwrites_test.go's
+	// static arm, which now recognizes an Advisory resolver as declared the
+	// same way it already recognizes Writes.Path/Also.
+	Advisory []AdvisoryWrite
+}
+
+// AdvisoryWrite is one path a permission's Apply is known to write that holds
+// no irrlicht-authored content — see Permission.Advisory for why it is a
+// separate category from ManagedUserFile rather than another Also entry.
+type AdvisoryWrite struct {
+	// Path resolves the absolute path the write is known to land at. Unlike
+	// ManagedUserFile.Path, a resolution error here is tolerated by every
+	// consumer (agents.AdvisoryFiles skips it) rather than treated as fatal:
+	// an advisory declaration is explicitly allowed to be scoped to a
+	// platform where the write has actually been observed, and "unverified
+	// elsewhere" is not the same defect as "our own required config failed to
+	// resolve".
+	Path func() (string, error)
+	// Reason documents what the path is and why it is advisory rather than a
+	// Writes.Also entry — shown verbatim by --print-advisory-files and the
+	// recording rig's warning.
+	Reason string
 }
 
 // HooksPermissionKey is the permission key under which an adapter installs

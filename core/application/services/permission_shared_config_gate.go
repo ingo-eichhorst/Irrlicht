@@ -52,6 +52,21 @@ import (
 // are not symmetric: a false "outside" refuses an install (safe, and says why),
 // while a false "inside" would permit one. Lexical comparison can only err
 // toward refusing, so it is the fail-closed choice rather than a shortcut.
+// Deliberately does not check p.Advisory (issue #1748). That field names a
+// path an Apply is KNOWN to write but that ManagedUserFile cannot represent —
+// kiro-cli's own agent-identity sqlite store is the one declared instance —
+// and it would seem to belong here on the same logic as Path/Also: the
+// hazard this guard exists for (a grant-all daemon writing into the
+// operator's real $HOME) is identical in shape. It is left out because
+// extending the refusal is a live-behavior change nothing has measured:
+// whether kiro-cli's data store actually escapes the isolated home under
+// today's recording setups depends on whether $HOME itself is redirected
+// there, which no test here exercises. Wiring this in wrong, in the refusing
+// direction, would silently break every grant-all recording of kiro-cli's
+// hook install; wrong in the permitting direction adds nothing #1748 asked
+// for (Advisory already gets its own visibility path — see agent.AdvisoryWrite,
+// agents.AdvisoryFiles, --print-advisory-files). Left as a documented option
+// for whoever next measures that configuration, not a guess shipped here.
 func (s *PermissionService) sharedConfigRefusal(p agent.Permission) error {
 	if s.mode != config.PermissionModeGrantAll || p.Writes == nil {
 		return nil
