@@ -3,7 +3,6 @@ package claudecode
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -39,36 +38,40 @@ func hooksVersionGate(t *testing.T) *agent.VersionGate {
 	return nil
 }
 
-// TestHooksGate_RefusesTooOldClaudeCode pins the boundary in real terms. 2.1.121
-// is the version one patch below the floor, and the reason it is refused is not
-// tidiness: below 2.1.122 a hooks entry Claude Code cannot parse invalidates the
-// user's whole settings.json (upstream changelog 2.1.122, "Fixed a malformed
-// hooks entry in settings.json no longer invalidating the entire file"), and
-// below 2.1.101 an unrecognized event name does the same.
-func TestHooksGate_RefusesTooOldClaudeCode(t *testing.T) {
-	gate := hooksVersionGate(t)
-
-	allowed, why := gate.Permits("2.1.121 (Claude Code)")
-	if allowed {
-		t.Fatalf("gate permits Claude Code 2.1.121, below the %s floor", minCLIVersion)
-	}
-	if !strings.Contains(why, minCLIVersion) {
-		t.Errorf("refusal %q never names the required version", why)
-	}
-}
-
-// TestHooksGate_AllowsCurrentClaudeCode is a LOCK against the floor being set
-// so high that ordinary users stop getting hooks. The banner form is the one
-// `claude --version` actually prints, so this also pins that the parser copes
-// with the suffix.
-func TestHooksGate_AllowsCurrentClaudeCode(t *testing.T) {
-	gate := hooksVersionGate(t)
-	for _, v := range []string{minCLIVersion, "2.1.122 (Claude Code)", "2.1.226 (Claude Code)", "3.0.0"} {
-		if allowed, why := gate.Permits(v); !allowed {
-			t.Errorf("gate refuses Claude Code %q: %s", v, why)
-		}
-	}
-}
+// What is deliberately NOT here: RefusesTooOldClaudeCode and
+// AllowsCurrentClaudeCode, formerly a hand-picked "2.1.121 (Claude Code)"
+// below-floor refusal and a hand-picked list of at-or-above values, both
+// driven straight through gate.Permits with no Observed/transcript
+// involvement — the same shape #1762 found and removed in five sibling
+// adapters (issue #1721 / PR #1758 did the first, for pi).
+// AssertHookVersionGate already runs both obligations more thoroughly:
+//
+//   - assertFloorRefusesOlder refuses THREE field-wise predecessors of the
+//     real floor (major/minor/patch decremented independently — the patch
+//     predecessor of 2.1.122 is the exact 2.1.121 the deleted test picked by
+//     hand), each refusal checked to name both versions, PLUS a vacuity guard
+//     a floor with nothing below it fails outright, which the deleted lock had
+//     no equivalent of.
+//   - The "(Claude Code)" banner-suffix format the deleted tests exercised
+//     is independently pinned at the shared cliversion package
+//     (cliversion_test.go: "2.1.226 (Claude Code)"), so nothing about this
+//     adapter's parsing was uniquely covered here.
+//
+// Proven by mutation, not by inspection: weakening minCLIVersion to 0.0.0
+// reddens the contract —
+//
+//	--- FAIL: .../floor_refuses_an_older_cli
+//	    hook_version.go:62: declared floor 0.0.0 has no version below it, so this
+//	    obligation asserts nothing — a floor of 0.0.0 permits every CLI and is not a gate
+//
+// — while AllowsCurrentClaudeCode (the vacuity-blind lock) stayed GREEN under
+// the same mutation, which is exactly the coverage gap deleting it closes.
+//
+// TestHooksGate_DeclaresBothVersionSources stays: the contract only requires
+// Observed OR Probe, never both, and this adapter's floor is decorative
+// without Observed (see its own doc comment). The four
+// TestNewestObservedCLIVersion_* tests below it are untouched — they pin the
+// transcript-parsing AssertHookVersionGate never reaches at all.
 
 // TestHooksGate_DeclaresBothVersionSources is the regression guard for the
 // review finding that nearly shipped: with only a Probe declared, this gate is

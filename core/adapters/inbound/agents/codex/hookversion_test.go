@@ -89,19 +89,37 @@ func TestHooksGate_BelowFloorSaysWhy(t *testing.T) {
 	}
 }
 
-// TestHooksGate_AtOrAboveFloorInstalls is a LOCK: it pins that the gate does
-// not become a blanket refusal. It passes by construction and is here because
-// a floor that rejects everything looks identical, from the log, to a floor
-// that works.
-func TestHooksGate_AtOrAboveFloorInstalls(t *testing.T) {
-	for _, v := range []string{minCLIVersion, "0.146.1", "rust-v0.120.3"} {
-		writeCodexSessionWithVersion(t, v)
-		gate := hooksVersionGate(t)
-		if allowed, why := gate.Permits(gate.Observed()); !allowed {
-			t.Errorf("gate refuses Codex %s, at or above the %s floor: %s", v, minCLIVersion, why)
-		}
-	}
-}
+// What is deliberately NOT here: TestHooksGate_AtOrAboveFloorInstalls, a
+// hand-picked list of at-or-above versions (including "rust-v0.120.3", Codex's
+// own banner format) run through writeCodexSessionWithVersion + Observed(),
+// asserted a LOCK against the gate becoming a blanket refusal. The same shape
+// was removed from five other adapters by #1721/#1758 and #1762.
+//
+// It added nothing AssertHookVersionGate doesn't already cover more
+// thoroughly: Permits(gate.Min) allowed, PLUS a vacuity guard a floor with
+// nothing below it fails outright, which this lock had no equivalent of.
+// newestObservedCLIVersion has no format-dependent branching — it is a bare
+// JSON field read (hookinstaller.go) — so re-exercising it against three
+// different version strings proved nothing beyond what
+// TestHooksGate_BelowFloorSaysWhy below already proves once; the
+// "rust-v0.120.3" banner format itself is independently pinned at the shared
+// cliversion package (cliversion_test.go).
+//
+// Proven by mutation, not by inspection: weakening minCLIVersion to 0.0.0
+// reddens the contract —
+//
+//	--- FAIL: .../floor_refuses_an_older_cli
+//	    hook_version.go:62: declared floor 0.0.0 has no version below it, so this
+//	    obligation asserts nothing — a floor of 0.0.0 permits every CLI and is not a gate
+//
+// — while TestHooksGate_AtOrAboveFloorInstalls stayed GREEN under the same
+// mutation (its own value list also reads the mutated minCLIVersion, so every
+// check in it still "passed"), which is exactly the coverage gap deleting it
+// closes. TestHooksGate_BelowFloorSaysWhy and
+// TestHooksGate_NoTranscriptFallsThroughToProbe stay: each is the ONLY test
+// exercising newestObservedCLIVersion's real transcript-reading path (a
+// written cli_version, and the zero-sessions fallback to ""), which the
+// shared contract never reaches at all.
 
 // TestHooksGate_NoTranscriptFallsThroughToProbe pins that a machine with no
 // Codex sessions yet does not resolve to "version 0" — Observed returns "",
