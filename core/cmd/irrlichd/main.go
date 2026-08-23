@@ -93,6 +93,7 @@ var knownFlags = []string{
 	"--diagnose",
 	"--uninstall-hooks",
 	"--print-managed-files",
+	"--print-advisory-files",
 	"--uninstall-task-eta",
 }
 
@@ -157,6 +158,7 @@ const (
 	actionVersion
 	actionUninstallHooks
 	actionPrintManagedFiles
+	actionPrintAdvisoryFiles
 	actionUninstallTaskEta
 	actionDiagnose
 	actionUnknownFlag
@@ -202,6 +204,8 @@ func selectAction(args []string) cliAction {
 		return actionUninstallHooks
 	case hasFlagIn(args, "--print-managed-files"):
 		return actionPrintManagedFiles
+	case hasFlagIn(args, "--print-advisory-files"):
+		return actionPrintAdvisoryFiles
 	case hasFlagIn(args, "--uninstall-task-eta"):
 		return actionUninstallTaskEta
 	case hasFlagIn(args, "--diagnose"):
@@ -252,6 +256,11 @@ func runCLIAction(action cliAction, args []string) int {
 		uninstallHooks()
 	case actionPrintManagedFiles:
 		if err := printManagedFiles(os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+	case actionPrintAdvisoryFiles:
+		if err := printAdvisoryFiles(os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
@@ -449,6 +458,43 @@ func writeManagedFilePaths(w io.Writer, configs []agents.ManagedUserFile) {
 		for _, also := range c.Also {
 			print(also)
 		}
+	}
+}
+
+// printAdvisoryFiles writes one "<path>\t<reason>" line for every declared
+// agent.AdvisoryWrite (issue #1748) — paths an Apply is known to write that
+// hold no irrlicht content, are unverified outside their declared platform, or
+// are otherwise unsafe to snapshot/restore (kiro-cli's own agent-identity
+// sqlite store is the motivating, and today only, case).
+//
+// Kept a SEPARATE flag from --print-managed-files rather than a second section
+// of the same stream: writeManagedFilePaths' own doc states the rig's
+// managed_file_paths() backs up and restores whatever that prints, ONE FILE
+// PER LINE, keyed by line index, with no notion of "this line means something
+// different" — folding a path+reason pair into that stream would make the rig
+// try to back up a line that is not a bare path, or silently misindex every
+// path after it.
+//
+// An empty result is NOT an error here, unlike printManagedFiles: advisory
+// declarations are inherently optional (most permissions have none, and an
+// entry itself may resolve on only one platform), so "nothing to report"
+// is the ordinary case rather than a sign the safety net is off.
+func printAdvisoryFiles(w io.Writer) error {
+	files, err := agents.AdvisoryFiles(declaredConsentCatalog())
+	if err != nil {
+		return fmt.Errorf("failed to resolve advisory files: %w", err)
+	}
+	writeAdvisoryFiles(w, files)
+	return nil
+}
+
+// writeAdvisoryFiles prints one tab-separated "<path>\t<reason>" line per
+// entry. Not deduplicated like writeManagedFilePaths: unlike Path/Also, two
+// advisory entries naming the same path with different reasons is not a
+// contradiction worth hiding, and there is exactly one declaration today.
+func writeAdvisoryFiles(w io.Writer, files []agents.AdvisoryFile) {
+	for _, f := range files {
+		fmt.Fprintf(w, "%s\t%s\n", f.Path, f.Reason)
 	}
 }
 

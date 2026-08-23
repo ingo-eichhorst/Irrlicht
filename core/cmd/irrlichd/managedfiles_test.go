@@ -8,6 +8,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -79,6 +80,102 @@ func TestPrintManagedFilesCoversEveryDeclaredFile(t *testing.T) {
 		if !want[p] {
 			t.Errorf("--print-managed-files listed %q, which no permission declares", p)
 		}
+	}
+}
+
+// TestPrintAdvisoryFilesCoversEveryDeclaredAdvisoryFile mirrors
+// TestPrintManagedFilesCoversEveryDeclaredFile for the advisory category
+// (#1748): whatever agents.AdvisoryFiles resolves out of the live catalog must
+// appear in --print-advisory-files' output, and nothing else.
+//
+// An empty `files` is only a pass on a platform where kirocli's
+// kiroDataStorePath is EXPECTED to be unresolvable (anything but darwin,
+// #1748) — and even there it is a loud, named t.Skip rather than a silent
+// zero-iteration loop, so "checked and found nothing" stays distinguishable
+// from "cannot check here" (the same distinction
+// TestExternalInstallerAdvisoryFilesAreDeclared's structural half draws in
+// managedwrites_test.go). On darwin an empty result is still a hard failure:
+// the one declaration that exists today is expected to resolve there.
+//
+// Contract test — it passes by construction; seen red (tools/mutate.sh) by
+// removing kirocli's Advisory declaration, which empties the resolved set
+// while leaving nothing for the loop below to check — see the PR body.
+func TestPrintAdvisoryFilesCoversEveryDeclaredAdvisoryFile(t *testing.T) {
+	files, err := agents.AdvisoryFiles(declaredConsentCatalog())
+	if err != nil {
+		t.Fatalf("agents.AdvisoryFiles(declaredConsentCatalog()): %v", err)
+	}
+	skipOrFailIfNoAdvisoryFilesResolved(t, files)
+
+	var buf bytes.Buffer
+	if err := printAdvisoryFiles(&buf); err != nil {
+		t.Fatalf("printAdvisoryFiles: %v", err)
+	}
+	out := buf.String()
+
+	for _, f := range files {
+		line := f.Path + "\t" + f.Reason
+		if !strings.Contains(out, line) {
+			t.Errorf("--print-advisory-files does not list %s/%s's declared %q: an operator "+
+				"or the recording rig has no way to learn a recording touched it (#1748)",
+				f.Adapter, f.Key, f.Path)
+		}
+	}
+}
+
+// skipOrFailIfNoAdvisoryFilesResolved is
+// TestPrintAdvisoryFilesCoversEveryDeclaredAdvisoryFile's empty-result
+// decision, pulled out so the platform-conditional branch reads as one named
+// choice rather than nested inside the test itself.
+//
+// An empty `files` is only a pass on a platform where kirocli's
+// kiroDataStorePath is EXPECTED to be unresolvable (anything but darwin,
+// #1748) — and even there it is a loud, named t.Skip rather than a silent
+// zero-iteration loop, so "checked and found nothing" stays distinguishable
+// from "cannot check here" (the same distinction
+// TestExternalInstallerAdvisoryFilesAreDeclared's structural half draws in
+// managedwrites_test.go). On darwin an empty result is still a hard failure:
+// the one declaration that exists today is expected to resolve there.
+func skipOrFailIfNoAdvisoryFilesResolved(t *testing.T, files []agents.AdvisoryFile) {
+	t.Helper()
+	if len(files) != 0 {
+		return
+	}
+	if runtime.GOOS != "darwin" {
+		t.Skipf("no advisory file resolves on %s — kirocli's kiroDataStorePath is "+
+			"darwin-only (#1748); TestExternalInstallerAdvisoryFilesAreDeclared still checks "+
+			"the declaration's structure on every platform", runtime.GOOS)
+	}
+	t.Fatal("no advisory file resolved on darwin — this check would otherwise pass " +
+		"vacuously, and kirocli's declaration is expected to resolve here")
+}
+
+// TestWriteAdvisoryFilesFormat pins the "<path>\t<reason>" shape the rig's
+// warn-only step (tools/onboarding-factory/scripts/lib/managed-file-snapshot.sh)
+// parses. Unlike writeManagedFilePaths there is no dedup requirement: advisory
+// entries are reported, never backed up or restored, so two entries naming the
+// same path is not the index-collision hazard #1449 is about.
+func TestWriteAdvisoryFilesFormat(t *testing.T) {
+	var buf bytes.Buffer
+	writeAdvisoryFiles(&buf, []agents.AdvisoryFile{
+		{Adapter: "kiro-cli", Key: "hooks", Path: "/tmp/kiro/data.sqlite3", Reason: "kiro-cli's own store"},
+	})
+	want := "/tmp/kiro/data.sqlite3\tkiro-cli's own store\n"
+	if got := buf.String(); got != want {
+		t.Errorf("writeAdvisoryFiles() = %q, want %q", got, want)
+	}
+}
+
+// TestPrintAdvisoryFilesEmptyIsNotAnError is the deliberate asymmetry with
+// printManagedFiles: an advisory declaration is optional by nature (most
+// permissions have none, and kirocli's own resolver is darwin-only), so an
+// empty catalog of advisory files is the ordinary case, not a sign the safety
+// net silently went missing the way an empty --print-managed-files would be.
+func TestPrintAdvisoryFilesEmptyIsNotAnError(t *testing.T) {
+	var buf bytes.Buffer
+	writeAdvisoryFiles(&buf, nil)
+	if got := buf.String(); got != "" {
+		t.Errorf("writeAdvisoryFiles(nil) printed %q, want empty", got)
 	}
 }
 

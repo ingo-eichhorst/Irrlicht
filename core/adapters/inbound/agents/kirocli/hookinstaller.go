@@ -66,8 +66,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"irrlicht/core/adapters/inbound/agents/agentpaths"
@@ -715,6 +717,31 @@ func priorDefaultStatePath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(home, priorDefaultStateFilename), nil
+}
+
+// kiroDataStorePath resolves kiro-cli's OWN agent-identity sqlite store — NOT
+// anything irrlicht writes, and NOT under kiroHome(): kiroAgentCreateFromDefault
+// / kiroAgentSetDefault (kiroctl.go) spawn the real kiro-cli binary, and that
+// child process writes this file as a side effect of the platform's own
+// application-data convention, a different root than everything else this
+// package resolves. Measured 2026-08-22 (PR #1747's body) — present even when
+// the install itself fails (not logged in), so it is a property of the binary
+// launching at all, not of the install succeeding.
+//
+// Declared as agent.AdvisoryWrite rather than agent.ManagedUserFile.Also
+// (issue #1748): only darwin has been observed, so a non-darwin OS returns an
+// error here rather than guess — an AdvisoryWrite's own contract (see its doc)
+// is that a resolution failure is tolerated by every consumer, unlike Path/
+// Also, which must always resolve.
+func kiroDataStorePath() (string, error) {
+	if runtime.GOOS != "darwin" {
+		return "", fmt.Errorf("kirocli: data store location is unverified on %s (#1748)", runtime.GOOS)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, "Library", "Application Support", "kiro-cli", "data.sqlite3"), nil
 }
 
 // atomicWriteFile writes data to path via a temp file + rename so a reader
