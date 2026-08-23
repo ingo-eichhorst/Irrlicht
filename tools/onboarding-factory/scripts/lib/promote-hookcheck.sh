@@ -83,11 +83,20 @@ default_hookfree_check() {
     echo "$json"
     return 1
   fi
-  if ! declares="$(jq -r '.declares_hooks' <<<"$json" 2>/dev/null)" || [[ -z "$declares" ]]; then
+  # Checked against the literal words true/false, not just non-empty: a
+  # missing or null field makes jq -r print the 4-byte string "null", which
+  # IS non-empty and would otherwise slip past an emptiness-only guard and
+  # silently read as declares_hooks=false downstream — coercing a schema
+  # drift in `of hookcheck`'s own output into "nothing to ask" instead of a
+  # loud refusal. A validator that can't parse its input checks MORE, never
+  # less (AGENTS.md).
+  if ! declares="$(jq -r '.declares_hooks' <<<"$json" 2>/dev/null)" \
+    || { [[ "$declares" != "true" ]] && [[ "$declares" != "false" ]]; }; then
     echo "of hookcheck produced unparseable output: $json"
     return 1
   fi
-  if ! has_hook="$(jq -r '.has_hook_event' <<<"$json" 2>/dev/null)" || [[ -z "$has_hook" ]]; then
+  if ! has_hook="$(jq -r '.has_hook_event' <<<"$json" 2>/dev/null)" \
+    || { [[ "$has_hook" != "true" ]] && [[ "$has_hook" != "false" ]]; }; then
     echo "of hookcheck produced unparseable output: $json"
     return 1
   fi

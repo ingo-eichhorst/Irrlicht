@@ -77,6 +77,36 @@ rc=$?
 assert_eq "returns 2 (check failure, distinct from a real gap)" "2" "$rc"
 assert_eq "confirm_fn not called" "0" "$CONFIRM_CALLS"
 
+# --- default_hookfree_check: hardened jq parsing --------------------------
+# `go` is shadowed (same idiom as curl elsewhere) so these exercise the REAL
+# check_fn's parsing without a live `of hookcheck` build. REPO_ROOT must
+# resolve so `cd "$REPO_ROOT"` doesn't fail before the fake `go` ever runs.
+# shellcheck disable=SC2034  # read by the SOURCED default_hookfree_check,
+# not by this file — same shape as the other sourced-knob disables above.
+REPO_ROOT="$PWD"
+
+echo "== default_hookfree_check: well-formed output still parses (lock) =="
+go() { printf '{"agent":"codex","declares_hooks":true,"has_hook_event":false}'; }
+out="$(default_hookfree_check codex /tmp/x.jsonl 2>/dev/null)"
+rc=$?
+assert_eq "returns 0" "0" "$rc"
+assert_eq "echoes 'true false'" "true false" "$out"
+
+echo "== default_hookfree_check: declares_hooks MISSING entirely — refused, not read as false =="
+go() { printf '{"agent":"codex","has_hook_event":false}'; }
+default_hookfree_check codex /tmp/x.jsonl >/dev/null 2>&1
+assert_eq "returns 1 (a missing field is a parse failure, not a false)" "1" "$?"
+
+echo "== default_hookfree_check: declares_hooks is JSON null — jq prints the string 'null', still refused =="
+go() { printf '{"agent":"codex","declares_hooks":null,"has_hook_event":false}'; }
+default_hookfree_check codex /tmp/x.jsonl >/dev/null 2>&1
+assert_eq "returns 1 (nonempty 'null' must not slip past an emptiness-only guard)" "1" "$?"
+
+echo "== default_hookfree_check: has_hook_event missing while declares_hooks is fine — still refused =="
+go() { printf '{"agent":"codex","declares_hooks":true}'; }
+default_hookfree_check codex /tmp/x.jsonl >/dev/null 2>&1
+assert_eq "returns 1" "1" "$?"
+
 echo
 if [[ "$fails" -eq 0 ]]; then
   echo "all promote-hookcheck_test.sh cases passed"

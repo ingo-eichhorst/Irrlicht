@@ -28,6 +28,12 @@
 #
 # <staging-dir> is the output of run-cell.sh
 #   (.build/refresh/<agent>/<folder>-<TS>/).
+#
+# If <agent> declares a hooks permission and the staged recording carries no
+# hook_received event attributable to it, this prompts before promoting
+# (#1754) — legitimate when the scenario genuinely produces no hook, so
+# answer non-interactively with IRRLICHT_PROMOTE_HOOKFREE_OK=1 rather than
+# retrying against an unanswerable prompt.
 
 set -euo pipefail
 

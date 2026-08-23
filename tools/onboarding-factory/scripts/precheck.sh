@@ -62,10 +62,14 @@ elif [[ -n "${IRRLICHT_ONBOARD_HOME:-}" ]]; then
   # opposite reasons (#1754). URL delivery (claudecode, codex, copilot) bakes
   # the address INTO the installed entry at install time, so it always
   # reaches this daemon (#1178). Beacon delivery — every adapter importing
-  # core/pkg/hookbeacon (gemini-cli, kiro-cli, mistral-vibe) — writes NO
-  # address into the entry at all; `irrlichd hook-post` resolves the daemon
-  # from its OWN process environment at FIRE time, and that process is a
-  # child of the agent CLI run-cell.sh launches under tmux. That only
+  # core/pkg/hookbeacon; as of this writing antigravity, gemini-cli, hermes,
+  # kiro-cli, opencode, pi and mistral-vibe, but the LIST here is not the
+  # source of truth and will drift — `righome.BeaconAdapters` (derived from
+  # the import graph) and TestEveryBeaconAdapterDriverPassesTheDaemonAddress
+  # (tools/onboarding-factory/internal/righome) are — writes NO address into
+  # the entry at all; `irrlichd hook-post` resolves the daemon from its OWN
+  # process environment at FIRE time, and that process is a child of the
+  # agent CLI run-cell.sh launches under tmux. That only
   # reaches $ONBOARD_BIND because run-cell.sh explicitly exports
   # IRRLICHT_BIND_ADDR and forwards it into the tmux pane
   # (TestEveryBeaconAdapterDriverPassesTheDaemonAddress in

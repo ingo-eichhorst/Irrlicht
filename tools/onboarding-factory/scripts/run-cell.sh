@@ -362,7 +362,7 @@ if [[ "$ATTACH" == "1" ]]; then
     # $ADAPTER alone, with no partner: a cross-adapter cell never reaches this
     # point — a non-empty partner_adapter exits above, pointing at
     # run-cell-multi.sh, which has no attach path at all.
-    check_unapplied_grants "$ONBOARD_BIND" "$ADAPTER" || exit 1
+    check_unapplied_grants "$ONBOARD_BIND" "$ADAPTER" "$PERM_JSON" || exit 1
   fi
   echo "attach: using running daemon's recordings at $ATTACHED_RECORDINGS_DIR"
 else
@@ -387,11 +387,13 @@ if [[ "$ATTACH" != "1" ]]; then
   # Same surface the attach path checks above, moved out where it can be
   # shared (#1754): an install that failed silently ("granted but NOT
   # applied", #1362's shape) reads "granted" in .permissions on the spawn
-  # path too, and unapplied_grants is the only place that names it. Checked
-  # immediately once the daemon's socket is up — Apply has already run by
-  # then — rather than only discovered the slow way, up to 30s later, by
-  # wait_for_hook_install's file-presence timeout below.
-  check_unapplied_grants "$ONBOARD_BIND" "$ADAPTER" || exit 1
+  # path too, and unapplied_grants is the only place that names it. Polled,
+  # not sampled once: the socket comes up BEFORE the daemon's grant-all Apply
+  # pass runs (see unapplied-grants-check.sh's header for the trace), so a
+  # single immediate check can read "clean" only because it hasn't been
+  # evaluated yet. wait_for_unapplied_grants_clear trusts a refusal instantly
+  # but polls a clean reading out to a deadline before believing it.
+  wait_for_unapplied_grants_clear "$ONBOARD_BIND" "$ADAPTER" || exit 1
   wait_for_hook_install "$ADAPTER" "$STAGING" "$ONBOARD_BIND" || exit 1
 fi
 
