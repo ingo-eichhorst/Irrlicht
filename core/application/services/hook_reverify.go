@@ -50,9 +50,18 @@
 // and the write that follows may wait on a mutex behind an in-flight wizard
 // answer. A background repair that outlives consent would break #570 more
 // thoroughly than the bug it fixes, so the loop owns no write path of its own —
-// it can only ask the service, and the service can say no. Each of the three
-// has been individually deleted and seen to turn a test red; see
-// hook_reverify_gate_internal_test.go for the one that only a race can reach.
+// it can only ask the service, and the service can say no.
+//
+// Gates 1 and 3 have each been individually deleted and seen to turn a test
+// red — see hook_reverify_gate_internal_test.go for gate 3, the one that only
+// a race can reach. Gate 2 cannot be shown that way: gate 3 re-derives the
+// identical fact from the same recorded state immediately before the closure
+// runs, so no write-observing test can ever tell "gate 2 refused" from "gate 2
+// let it through and gate 3 refused a moment later" (#1751, mutation-verified
+// via tools/mutate.sh). Gate 2's own, independently provable property is
+// contention avoidance, not write safety — see
+// hook_reverify_gate_internal_test.go's header and
+// TestRepairGrantedHookInstall_DoesNotContendForEffectMuWhenNotGranted.
 package services
 
 import (
