@@ -11,6 +11,7 @@ import (
 	"irrlicht/core/adapters/inbound/agents/hookjson"
 	"irrlicht/core/domain/permission"
 	"irrlicht/core/internal/contracttesting"
+	"irrlicht/core/pkg/atomicfile"
 	"irrlicht/core/pkg/hookbeacon"
 )
 
@@ -365,7 +366,7 @@ func TestEnsureHooksInstalled_DropsADuplicateOfOurs(t *testing.T) {
 	doc := readDoc(t, path)
 	ours := doc[hookName].(map[string]interface{})
 	ours[HookEventStop] = append(handlers, handlers[0])
-	if err := hookjson.WriteSettings(path, doc, atomicWriteFile); err != nil {
+	if err := hookjson.WriteSettings(path, doc, atomicfile.WriteFile); err != nil {
 		t.Fatal(err)
 	}
 
@@ -588,7 +589,7 @@ func mustSeedForeignInstall(t *testing.T) {
 // installer would never have written.
 func mustWriteDoc(t *testing.T, path string, doc map[string]interface{}) {
 	t.Helper()
-	if err := hookjson.WriteSettings(path, doc, atomicWriteFile); err != nil {
+	if err := hookjson.WriteSettings(path, doc, atomicfile.WriteFile); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -730,7 +731,7 @@ func TestVerifyHooksInstalled_ReportsMissingAndStaleSeparately(t *testing.T) {
 	ours := doc[hookName].(map[string]interface{})
 	entry := ours[HookEventStop].([]interface{})[0].(map[string]interface{})
 	entry["timeout"] = 99
-	if err := hookjson.WriteSettings(path, doc, atomicWriteFile); err != nil {
+	if err := hookjson.WriteSettings(path, doc, atomicfile.WriteFile); err != nil {
 		t.Fatal(err)
 	}
 	status, err = VerifyHooksInstalled()

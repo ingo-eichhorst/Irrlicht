@@ -88,6 +88,7 @@ import (
 
 	"irrlicht/core/adapters/inbound/agents/agentpaths"
 	"irrlicht/core/domain/agent"
+	"irrlicht/core/pkg/atomicfile"
 	"irrlicht/core/pkg/hookbeacon"
 )
 
@@ -358,7 +359,7 @@ func ensureInstalledWithCommand(command string) (bool, error) {
 		return false, readErr
 	}
 
-	if err := atomicWriteFile(path, want); err != nil {
+	if err := atomicfile.WriteFile(path, want); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -436,35 +437,4 @@ func UninstallHooks() (bool, error) {
 		return false, err
 	}
 	return true, nil
-}
-
-// atomicWriteFile writes data to path via a temp file + rename so opencode
-// never loads a half-written plugin. Creates the parent directory. Matches
-// every sibling hook-installing adapter's own atomic writer.
-func atomicWriteFile(path string, data []byte) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(dir, ".irrlicht-*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }()
-
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	// 0o600, matching pi's installer: opencode runs as the same user that
-	// installed this, so nothing needs to read it but the owner, and the file
-	// is executable code inside the user's agent.
-	if err := os.Chmod(tmpName, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, path)
 }

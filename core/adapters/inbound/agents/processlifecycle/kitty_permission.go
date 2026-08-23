@@ -15,6 +15,7 @@ import (
 
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/permission"
+	"irrlicht/core/pkg/atomicfile"
 )
 
 // errKittyBlockMalformed guards the hand-edited-file case: a dangling
@@ -127,7 +128,7 @@ func EnsureKittyConfigPatched() (bool, error) {
 	if updated == content {
 		return false, nil
 	}
-	return true, atomicWriteFile(path, []byte(updated))
+	return true, atomicfile.WriteFile(path, []byte(updated))
 }
 
 // UninstallKittyConfig removes the irrlicht-managed block from kitty.conf.
@@ -151,7 +152,7 @@ func UninstallKittyConfig() (bool, error) {
 	if !found {
 		return false, nil
 	}
-	return true, atomicWriteFile(path, []byte(stripped))
+	return true, atomicfile.WriteFile(path, []byte(stripped))
 }
 
 // --- helpers ---
@@ -247,17 +248,4 @@ func removeKittyBlock(content string) (string, bool) {
 		merged = ""
 	}
 	return merged, true
-}
-
-// atomicWriteFile writes data to path via a temp file + rename, creating
-// the parent dir. Mirrors the claudecode installer's writer.
-func atomicWriteFile(path string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
 }

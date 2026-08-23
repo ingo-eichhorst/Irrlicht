@@ -15,6 +15,7 @@ import (
 	"irrlicht/core/adapters/inbound/agents/hookjson"
 	"irrlicht/core/domain/permission"
 	"irrlicht/core/internal/contracttesting"
+	"irrlicht/core/pkg/atomicfile"
 	"irrlicht/core/pkg/hookbeacon"
 )
 
@@ -347,7 +348,7 @@ func TestForeignBinaryInstall_UpgradedInPlace(t *testing.T) {
 		Events:      installedHookEvents,
 		Entry:       func() map[string]interface{} { return flatBeaconEntry(staleCommand) },
 		IsCanonical: hookEntryIsCanonical,
-		WriteFile:   atomicWriteFile,
+		WriteFile:   atomicfile.WriteFile,
 	}); err != nil {
 		t.Fatalf("seed stale install: %v", err)
 	}

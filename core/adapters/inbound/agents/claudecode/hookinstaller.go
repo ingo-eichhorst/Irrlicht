@@ -15,6 +15,7 @@ import (
 	"irrlicht/core/adapters/inbound/agents/agentpaths"
 	"irrlicht/core/adapters/inbound/agents/hookjson"
 	"irrlicht/core/domain/agent"
+	"irrlicht/core/pkg/atomicfile"
 	"irrlicht/core/pkg/daemonaddr"
 )
 
@@ -203,7 +204,7 @@ func hookConfig(path string) hookjson.Config {
 		MatcherFor:  matcherForEvent,
 		Entry:       ourHookEntry,
 		IsCanonical: hookEntryIsCanonical,
-		WriteFile:   atomicWriteFile,
+		WriteFile:   atomicfile.WriteFile,
 	}
 }
 
@@ -260,7 +261,7 @@ func readClaudeSettings(path string) (map[string]interface{}, error) {
 }
 
 func writeClaudeSettings(path string, settings map[string]interface{}) error {
-	return hookjson.WriteSettings(path, settings, atomicWriteFile)
+	return hookjson.WriteSettings(path, settings, atomicfile.WriteFile)
 }
 
 // hookEntryIsCanonical reports whether an inner hook object is already in the

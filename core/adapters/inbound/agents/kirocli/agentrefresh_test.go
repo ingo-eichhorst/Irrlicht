@@ -27,6 +27,7 @@ import (
 	"strings"
 	"testing"
 
+	"irrlicht/core/pkg/atomicfile"
 	"irrlicht/core/pkg/hookbeacon"
 )
 
@@ -579,7 +580,7 @@ func TestRefresh_DriftedOwnEntryIsNotAUserEdit(t *testing.T) {
 		Events:      installedHookEvents,
 		Entry:       func() map[string]interface{} { return flatBeaconEntry(staleCommand) },
 		IsCanonical: func(map[string]interface{}) bool { return false },
-		WriteFile:   atomicWriteFile,
+		WriteFile:   atomicfile.WriteFile,
 	}); err != nil {
 		t.Fatalf("seed a drifted entry: %v", err)
 	}

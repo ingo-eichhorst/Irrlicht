@@ -7,6 +7,7 @@ import (
 
 	"irrlicht/core/domain/permission"
 	"irrlicht/core/internal/contracttesting"
+	"irrlicht/core/pkg/atomicfile"
 	"irrlicht/core/pkg/hookbeacon"
 )
 
@@ -226,7 +227,7 @@ func TestVerifyAgreesWithEnsureInstalled(t *testing.T) {
 		{
 			name: "ours_but_naming_another_binary",
 			seed: func(t *testing.T, path string) {
-				if err := atomicWriteFile(path, stale); err != nil {
+				if err := atomicfile.WriteFile(path, stale); err != nil {
 					t.Fatal(err)
 				}
 			},
