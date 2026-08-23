@@ -17,6 +17,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"irrlicht/core/adapters/inbound/agents/hookjson"
 )
 
 // realConfigFixture is the committed copy of the maintainer's own
@@ -177,15 +179,14 @@ func TestEnsureHooksInstalled_ReinstallsIntoAConfigGeminiCLIItselfWrote(t *testi
 	assertNonHookKeysUnchanged(t, before, after)
 }
 
+// readJSONDoc reads and decodes path via hookjson.ReadSettings — the same
+// codec the installer itself reads and writes through — rather than a
+// second, hand-rolled read+unmarshal.
 func readJSONDoc(t *testing.T, path string) map[string]interface{} {
 	t.Helper()
-	data, err := os.ReadFile(path)
+	m, err := hookjson.ReadSettings(path)
 	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-	var m map[string]interface{}
-	if err := json.Unmarshal(data, &m); err != nil {
-		t.Fatalf("unmarshal %s: %v", path, err)
+		t.Fatalf("hookjson.ReadSettings(%s): %v", path, err)
 	}
 	return m
 }

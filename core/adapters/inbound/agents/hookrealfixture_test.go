@@ -48,13 +48,15 @@
 package agents
 
 import (
+	"go/ast"
 	"go/build"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
-
-	"irrlicht/core/domain/agent"
 )
 
 // minRealFixtureBytes is the floor below which a declared fixture reads as a
@@ -152,38 +154,119 @@ func adapterPackageDir(t *testing.T, importPath string) string {
 }
 
 // testPackageReferencesFixture reports whether some _test.go file in dir
-// contains the fixture's relative path as a quoted string literal — i.e.
-// whether some test in the adapter's own package actually reads the declared
-// file, rather than the fixture sitting under testdata/ unused.
+// passes the fixture's relative path — as a raw string literal, or through a
+// same-file const/var initialized to it — into an actual function CALL,
+// i.e. whether some test in the adapter's own package genuinely READS the
+// declared file rather than merely mentioning its name.
 //
-// A plain substring scan over source text, not an AST/reachability walk like
-// hookcontracts_test.go's scanContractWirings: this asks a narrower question
-// ("is the file referenced by name at all") than "wired and reachable", and a
-// false positive from a match inside a comment is a fail-open risk this test
-// accepts explicitly rather than hides — see the package doc's "does NOT
-// dictate what a guard checks".
+// An AST walk over each file's syntax tree (go/parser), not a full
+// AST+type-checking reachability walk like hookcontracts_test.go's
+// scanContractWirings: this stops short of that file's stronger guarantee —
+// that the call is reachable from a function `go test` actually runs — and
+// accepts that gap explicitly rather than hiding it (see the package doc's
+// "does NOT dictate what a guard checks"). It DOES close the two cheaper
+// loopholes a plain substring scan would leave open: a mention inside a
+// comment (not a syntax node at all) and a fixture path sitting in an
+// otherwise-unused const/var declaration that nothing ever passes to a call —
+// both would satisfy "the text is present somewhere in the file" while
+// proving nothing was ever read.
 func testPackageReferencesFixture(t *testing.T, dir, relPath string) bool {
 	t.Helper()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatalf("reading %s: %v", dir, err)
 	}
-	needle := `"` + relPath + `"`
-	found := false
+	fset := token.NewFileSet()
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), "_test.go") {
 			continue
 		}
-		src, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		path := filepath.Join(dir, e.Name())
+		file, err := parser.ParseFile(fset, path, nil, 0)
 		if err != nil {
-			t.Fatalf("reading %s: %v", e.Name(), err)
+			t.Fatalf("parsing %s: %v", path, err)
 		}
-		if strings.Contains(string(src), needle) {
-			found = true
-			break
+		if fileCallsWithFixtureArg(file, relPath) {
+			return true
 		}
 	}
+	return false
+}
+
+// fileCallsWithFixtureArg reports whether file contains a call expression
+// with an argument that is either the fixture path as a raw string literal,
+// or an identifier resolving (via a same-file, untyped const/var lookup) to
+// a string literal equal to the fixture path.
+func fileCallsWithFixtureArg(file *ast.File, relPath string) bool {
+	literals := stringLiteralsByIdent(file)
+	found := false
+	ast.Inspect(file, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		for _, arg := range call.Args {
+			if argResolvesTo(arg, relPath, literals) {
+				found = true
+				return false
+			}
+		}
+		return true
+	})
 	return found
+}
+
+// argResolvesTo reports whether expr is the fixture path — directly as a
+// quoted string literal, or as an identifier this file's own top-level
+// const/var declarations initialize to that same literal.
+func argResolvesTo(expr ast.Expr, relPath string, literals map[string]string) bool {
+	switch e := expr.(type) {
+	case *ast.BasicLit:
+		if e.Kind != token.STRING {
+			return false
+		}
+		v, err := strconv.Unquote(e.Value)
+		return err == nil && v == relPath
+	case *ast.Ident:
+		v, ok := literals[e.Name]
+		return ok && v == relPath
+	default:
+		return false
+	}
+}
+
+// stringLiteralsByIdent maps every top-level const/var name in file to its
+// string value, for names declared as `NAME = "literal"` (single value, no
+// type conversion). Good enough to resolve the realConfigFixture-style
+// constant every adapter's guard test declares, without needing full
+// type-checking.
+func stringLiteralsByIdent(file *ast.File) map[string]string {
+	out := map[string]string{}
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || (gen.Tok != token.CONST && gen.Tok != token.VAR) {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok || len(vs.Names) != len(vs.Values) {
+				continue
+			}
+			for i, name := range vs.Names {
+				lit, ok := vs.Values[i].(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					continue
+				}
+				if v, err := strconv.Unquote(lit.Value); err == nil {
+					out[name.Name] = v
+				}
+			}
+		}
+	}
+	return out
 }
 
 // TestEveryHookInstallDeclaresARealConfigFixture is the registry-wide
@@ -207,24 +290,13 @@ func TestEveryHookInstallDeclaresARealConfigFixture(t *testing.T) {
 	for _, in := range installs {
 		seenAdapters[in.Adapter] = true
 
-		var p *agent.Permission
-		for _, a := range All() {
-			if a.Identity.Name != in.Adapter {
-				continue
-			}
-			for i := range a.Permissions {
-				if a.Permissions[i].Key == in.Key {
-					p = &a.Permissions[i]
-				}
-			}
-		}
-		if p == nil {
-			t.Fatalf("%s/%s: hookInstallingAdapters found this permission but All() no longer "+
-				"has it — the registry changed under this test", in.Adapter, in.Key)
-		}
-
+		// in.Permission is the exact value hookInstallingAdapters already
+		// found while walking All() once — reading it here rather than
+		// re-walking the registry a second time to relocate the same
+		// permission (which All()'s own deterministic construction can
+		// never disagree with inside one test process).
 		reason, gapped := gaps[in.Adapter]
-		fixture := p.Writes.RealFixture
+		fixture := in.Permission.Writes.RealFixture
 
 		if gapped {
 			if reason == "" {

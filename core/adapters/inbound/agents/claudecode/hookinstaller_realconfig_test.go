@@ -118,6 +118,31 @@ func nonHookKeys(doc map[string]interface{}) map[string]interface{} {
 	return out
 }
 
+// assertNonHookKeysUnchanged fails unless every non-"hooks" key in before
+// survives into after with an identical value (compared as decoded JSON, so
+// key/array ordering differences from the atomic rewrite don't cause a false
+// failure — only a VALUE difference would).
+func assertNonHookKeysUnchanged(t *testing.T, before, after map[string]interface{}) {
+	t.Helper()
+	wantOther := nonHookKeys(before)
+	gotOther := nonHookKeys(after)
+	if len(wantOther) != len(gotOther) {
+		t.Fatalf("non-hook key count changed: had %d, now %d", len(wantOther), len(gotOther))
+	}
+	for k, wantV := range wantOther {
+		gotV, ok := gotOther[k]
+		if !ok {
+			t.Errorf("dropped unrelated key %q", k)
+			continue
+		}
+		wantJSON, _ := json.Marshal(wantV)
+		gotJSON, _ := json.Marshal(gotV)
+		if string(wantJSON) != string(gotJSON) {
+			t.Errorf("changed unrelated key %q:\n  before: %s\n  after:  %s", k, wantJSON, gotJSON)
+		}
+	}
+}
+
 // TestUninstallHooks_FromAConfigClaudeCodeItselfWrote uninstalls against the
 // real fixture and asserts every one of our entries is gone — including from
 // EVERY duplicate group the real file carries, not just the first — while
@@ -146,26 +171,8 @@ func TestUninstallHooks_FromAConfigClaudeCodeItselfWrote(t *testing.T) {
 		}
 	}
 
-	// Every other real key survives byte-for-byte (compared as decoded JSON,
-	// so key/array ordering differences from the atomic rewrite don't cause a
-	// false failure — only a VALUE difference would).
-	wantOther := nonHookKeys(before)
-	gotOther := nonHookKeys(after)
-	if len(wantOther) != len(gotOther) {
-		t.Fatalf("non-hook key count changed: had %d, now %d", len(wantOther), len(gotOther))
-	}
-	for k, wantV := range wantOther {
-		gotV, ok := gotOther[k]
-		if !ok {
-			t.Errorf("uninstall dropped unrelated key %q", k)
-			continue
-		}
-		wantJSON, _ := json.Marshal(wantV)
-		gotJSON, _ := json.Marshal(gotV)
-		if string(wantJSON) != string(gotJSON) {
-			t.Errorf("uninstall changed unrelated key %q:\n  before: %s\n  after:  %s", k, wantJSON, gotJSON)
-		}
-	}
+	// Every other real key survives byte-for-byte.
+	assertNonHookKeysUnchanged(t, before, after)
 }
 
 // TestEnsureHooksInstalled_ReinstallsIntoAConfigClaudeCodeItselfWrote runs the
@@ -196,18 +203,5 @@ func TestEnsureHooksInstalled_ReinstallsIntoAConfigClaudeCodeItselfWrote(t *test
 	}
 
 	after := readJSON(t, path)
-	wantOther := nonHookKeys(before)
-	gotOther := nonHookKeys(after)
-	for k, wantV := range wantOther {
-		gotV, ok := gotOther[k]
-		if !ok {
-			t.Errorf("reinstall round trip dropped unrelated key %q", k)
-			continue
-		}
-		wantJSON, _ := json.Marshal(wantV)
-		gotJSON, _ := json.Marshal(gotV)
-		if string(wantJSON) != string(gotJSON) {
-			t.Errorf("reinstall round trip changed unrelated key %q:\n  before: %s\n  after:  %s", k, wantJSON, gotJSON)
-		}
-	}
+	assertNonHookKeysUnchanged(t, before, after)
 }

@@ -284,6 +284,12 @@ type hookInstall struct {
 	Adapter string
 	Key     string
 	Pkg     string
+	// Permission is the exact agent.Permission this walk found — carried
+	// rather than left for a caller to re-derive, so a second consumer (e.g.
+	// hookrealfixture_test.go's #1756 tripwire) can read Writes.RealFixture
+	// directly instead of re-walking All() to relocate the same value this
+	// walk already had in hand.
+	Permission agent.Permission
 }
 
 func TestEveryHookInstallWiresItsContractFamilies(t *testing.T) {
@@ -452,9 +458,10 @@ func hookInstallingAdapters(t *testing.T) []hookInstall {
 				continue
 			}
 			out = append(out, hookInstall{
-				Adapter: a.Identity.Name,
-				Key:     p.Key,
-				Pkg:     declaringPackage(t, a.Identity.Name, p),
+				Adapter:    a.Identity.Name,
+				Key:        p.Key,
+				Pkg:        declaringPackage(t, a.Identity.Name, p),
+				Permission: p,
 			})
 		}
 	}
