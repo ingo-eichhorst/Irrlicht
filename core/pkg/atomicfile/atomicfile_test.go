@@ -130,6 +130,48 @@ func TestWriteFile_OverwritesExistingContent(t *testing.T) {
 	}
 }
 
+// TestWriteFile_OverwriteTightensLooserExistingMode locks the behavior the
+// permission unification actually depends on: two of the eleven prior copies
+// (claudecode's and processlifecycle's) wrote at the weaker 0o644, so a file
+// they left behind before this refactor must come out at 0o600 the very next
+// time anything writes it through the shared path — WriteFile always lands
+// via a freshly created 0o600 temp file plus rename, never an in-place
+// chmod, so a looser pre-existing mode can never survive a write. Found
+// missing from this suite by the #1761 review pass (docs/testing-philosophy.md:
+// a rewrite owes its predecessor's cases, not just its own new ones).
+func TestWriteFile_OverwriteTightensLooserExistingMode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+
+	if err := os.WriteFile(path, []byte("old, world-readable"), 0o644); err != nil {
+		t.Fatalf("seed pre-existing 0644 file: %v", err)
+	}
+	if info, err := os.Stat(path); err != nil {
+		t.Fatalf("Stat seed: %v", err)
+	} else if perm := info.Mode().Perm(); perm != 0o644 {
+		t.Fatalf("test setup: seed file mode = %o, want 0644", perm)
+	}
+
+	if err := WriteFile(path, []byte("new content")); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("mode after overwrite = %o, want 0600 (a looser pre-existing mode must not survive)", perm)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(got) != "new content" {
+		t.Fatalf("content = %q, want %q", got, "new content")
+	}
+}
+
 // TestWriteFile_NoLeftoverTempFileOnSuccess locks the cleanup shape nine of
 // the eleven prior copies had (a deferred best-effort Remove of the temp
 // file, which is a no-op once Rename has already moved it away): after a
