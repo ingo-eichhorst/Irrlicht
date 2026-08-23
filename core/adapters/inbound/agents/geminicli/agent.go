@@ -110,6 +110,12 @@ func Agent() agent.Agent {
 						Min:   minCLIVersion,
 						Probe: []string{"gemini", "--version"},
 					},
+					// The maintainer's own real ~/.gemini/settings.json (issue
+					// #1756) — see hookinstaller_realconfig_test.go.
+					RealFixture: &agent.RealConfigFixture{
+						Path:       "testdata/real-config-0.56.0.json",
+						CLIVersion: "0.56.0",
+					},
 				},
 			},
 		},

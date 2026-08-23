@@ -1,0 +1,43 @@
+{
+  "security": {
+    "auth": {
+      "selectedType": "oauth-personal"
+    }
+  },
+  "ide": {
+    "hasSeenNudge": true,
+    "enabled": true
+  },
+  "hooks": {
+    "AfterAgent": [
+      {
+        "hooks": [
+          {
+            "command": "'/Users/ingo/projects/irrlicht/core/bin/irrlichd' --version hook-post gemini-cli >/dev/null || true",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "AfterTool": [
+      {
+        "hooks": [
+          {
+            "command": "'/Users/ingo/projects/irrlicht/core/bin/irrlichd' --version hook-post gemini-cli >/dev/null || true",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "command": "'/Users/ingo/projects/irrlicht/core/bin/irrlichd' --version hook-post gemini-cli >/dev/null || true",
+            "type": "command"
+          }
+        ]
+      }
+    ]
+  }
+}

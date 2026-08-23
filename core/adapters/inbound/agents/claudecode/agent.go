@@ -119,6 +119,12 @@ func Agent() agent.Agent {
 						Probe:    []string{"claude", "--version"},
 						Observed: newestObservedCLIVersion,
 					},
+					// The maintainer's own real ~/.claude/settings.json (issue
+					// #1756) — see hookinstaller_realconfig_test.go.
+					RealFixture: &agent.RealConfigFixture{
+						Path:       "testdata/real-config-2.1.240.json",
+						CLIVersion: "2.1.240",
+					},
 				},
 			},
 			{

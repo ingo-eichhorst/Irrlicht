@@ -1,0 +1,245 @@
+{
+  "model": "sonnet",
+  "hooks": {
+    "Notification": [
+      {
+        "matcher": "idle_prompt",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:7837/api/v1/hooks/claudecode",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|mcp__.*|AskUserQuestion|ExitPlanMode",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:7837/api/v1/hooks/claudecode",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|mcp__.*|AskUserQuestion|ExitPlanMode",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:7837/api/v1/hooks/claudecode",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|mcp__.*|AskUserQuestion|ExitPlanMode",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:7837/api/v1/hooks/claudecode",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|mcp__.*|AskUserQuestion|ExitPlanMode",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:7837/api/v1/hooks/claudecode",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|mcp__.*|AskUserQuestion|ExitPlanMode",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:7837/api/v1/hooks/claudecode",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|mcp__.*|AskUserQuestion|ExitPlanMode",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:7837/api/v1/hooks/claudecode",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|mcp__.*|AskUserQuestion|ExitPlanMode",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:7837/api/v1/hooks/claudecode",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|mcp__.*|AskUserQuestion|ExitPlanMode",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:7837/api/v1/hooks/claudecode",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|mcp__.*|AskUserQuestion|ExitPlanMode",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:7837/api/v1/hooks/claudecode",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|mcp__.*|AskUserQuestion|ExitPlanMode",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:7837/api/v1/hooks/claudecode",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|mcp__.*|AskUserQuestion|ExitPlanMode",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:7837/api/v1/hooks/claudecode",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|mcp__.*|AskUserQuestion|ExitPlanMode",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:7837/api/v1/hooks/claudecode",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "manual",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:7837/api/v1/hooks/claudecode",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "manual",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:7837/api/v1/hooks/claudecode",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "manual",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:7837/api/v1/hooks/claudecode",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "manual",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:7837/api/v1/hooks/claudecode",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "AskUserQuestion|ExitPlanMode",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:7837/api/v1/hooks/claudecode",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "AskUserQuestion|ExitPlanMode",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:7837/api/v1/hooks/claudecode",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "AskUserQuestion|ExitPlanMode",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:7837/api/v1/hooks/claudecode",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "AskUserQuestion|ExitPlanMode",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:7837/api/v1/hooks/claudecode",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:7837/api/v1/hooks/claudecode",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "bash -c 'tee >(curl -fsS --max-time 1 -X POST --data-binary @- http://localhost:7837/api/v1/hooks/claudecode/statusline >/dev/null 2>&1 || true) | bash -c '\\''tee >(curl -fsS --max-time 1 -X POST --data-binary @- http://localhost:7837/api/v1/hooks/claudecode/statusline >/dev/null 2>&1 || true) | bash -c '\\''\\'\\'''\\''tee >(curl -fsS --max-time 1 -X POST --data-binary @- http://localhost:7837/api/v1/hooks/claudecode/statusline >/dev/null 2>&1 || true) | bash ~/.claude/interplay-statusline.sh'\\''\\'\\'''\\'''\\'''"
+  },
+  "alwaysThinkingEnabled": true,
+  "effortLevel": "xhigh",
+  "theme": "dark"
+}

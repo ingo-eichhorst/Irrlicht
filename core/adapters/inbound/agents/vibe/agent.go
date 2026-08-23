@@ -109,6 +109,12 @@ func Agent() agent.Agent {
 						Min:   minVibeVersion,
 						Probe: []string{"vibe", "--version"},
 					},
+					// #1753's real fixture (captured before #1756 existed to
+					// require declaring it) — see hookinstaller_realconfig_test.go.
+					RealFixture: &agent.RealConfigFixture{
+						Path:       "testdata/real-config-2.19.1.toml",
+						CLIVersion: "2.19.1",
+					},
 				},
 			},
 		},
