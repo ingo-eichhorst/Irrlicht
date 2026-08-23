@@ -166,17 +166,24 @@ assert_eq "exits 0 against an anchor containing [ ] and *" "0" "$MUTATE_RC"
 assert_contains "the glob-metacharacter mutation actually landed and was observed" $'\n1\n' $'\n'"$MUTATE_OUTPUT"$'\n'
 
 echo ""
-echo "== every content-reading awk invocation is pinned to LC_ALL=C (static regression pin) =="
+echo "== every content read goes through byte_awk(), which is the ONLY place LC_ALL=C is set (static regression pin) =="
 # Review finding (#1750): under a UTF-8 locale, GNU awk's length()/index()/
 # substr() count Unicode CODEPOINTS, not bytes, so any awk invocation that
 # measures or matches file content by byte must run under LC_ALL=C to agree
-# with `wc -c`. This assertion is deliberately environment-INDEPENDENT (it
-# greps the source, it does not run anything) so it catches a regression on
-# every machine regardless of which `awk` happens to be on PATH — the live
-# gawk-forced case right below this one is the version that can only run
-# where gawk is actually installed.
+# with `wc -c`. Centralised in byte_awk() (not repeated per call site) so a
+# future content-reading awk call added to this file inherits the fix rather
+# than needing to remember it — this pin asserts that centralisation holds:
+# exactly ONE `LC_ALL=C ... awk` (byte_awk's own definition), and exactly
+# THREE call sites actually going through byte_awk (byte-count, count-guard,
+# apply-splice). Deliberately environment-INDEPENDENT (it greps the source,
+# it does not run anything) so it catches a regression on every machine
+# regardless of which `awk` happens to be on PATH — the live gawk-forced case
+# right below this one is the version that can only run where gawk is
+# actually installed.
 lc_all_c_awk_count=$(grep -v '^[[:space:]]*#' "$MUTATE_SH" | grep -c 'LC_ALL=C.*awk')
-assert_eq "exactly 3 content-reading awk calls are pinned to LC_ALL=C (byte count, count-guard, apply)" "3" "$lc_all_c_awk_count"
+assert_eq "LC_ALL=C is set in exactly ONE place (byte_awk's own definition)" "1" "$lc_all_c_awk_count"
+byte_awk_call_sites=$(grep -v '^[[:space:]]*#' "$MUTATE_SH" | grep -c "byte_awk '")
+assert_eq "exactly 3 call sites go through byte_awk (byte count, count-guard, apply)" "3" "$byte_awk_call_sites"
 
 echo ""
 echo "== the same LC_ALL=C fix, exercised live under a real gawk + UTF-8 locale =="
@@ -210,40 +217,32 @@ else
 fi
 
 echo ""
-echo "== TOCTOU: the file changing between the count-read and the apply-read is refused, not silently corrupted =="
-# Review finding (#1750): the apply step re-reads the file independently of
-# the count guard, and originally spliced on whatever it found with no check
-# — if the anchor had stopped matching in between (a real concurrent writer),
-# it would have silently written `replacement` onto the file's content MINUS
-# its own first len(anchor) bytes. Reproducing a genuine data race would be a
-# flaky, timing-dependent test (this repo's own convention is to poll, never
-# sleep-and-hope, for exactly this reason) — so instead this fakes the COUNT
-# read lying, which produces the identical observable state (count says 1,
-# the real file has 0 matches) without any timing dependency at all. Only the
-# count-guard's own awk PROGRAM is intercepted (matched by its distinctive
-# `print n` tail); the byte-parity check and the apply step's real awk both
-# still run for real, so this exercises mutate.sh's actual apply-time guard,
-# not a stub standing in for it.
-real_awk="$(command -v awk)"
-fake_awk_dir="$(mktemp -d "${TMPDIR:-/tmp}/mutate-test-fakeawk.XXXXXX")"
-SCRATCH_DIRS+=("$fake_awk_dir")
-cat > "$fake_awk_dir/awk" <<EOF
+echo "== TOCTOU (guard #10): a live file that no longer matches its own snapshot is refused, not silently corrupted =="
+# Review finding (#1750): mutate.sh takes ONE snapshot and counts/splices
+# against it, then must confirm the LIVE file still matches that snapshot
+# before writing back — otherwise a file that changed underneath it (a real
+# concurrent writer) could be overwritten with a mutation computed from bytes
+# that are no longer there. Reproducing a genuine data race would be a flaky,
+# timing-dependent test (this repo's own convention is to poll, never
+# sleep-and-hope, for exactly this reason) — so instead this fakes the ONE
+# seam that decides this guard: `cmp`, made to always report "different"
+# regardless of its actual arguments. Every other command (awk, git, cp)
+# still runs for real, so this exercises mutate.sh's real guard, not a stub
+# standing in for it.
+fake_cmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/mutate-test-fakecmp.XXXXXX")"
+SCRATCH_DIRS+=("$fake_cmp_dir")
+cat > "$fake_cmp_dir/cmp" <<'EOF'
 #!/usr/bin/env bash
-for a in "\$@"; do
-  case "\$a" in
-    *'print n'*) echo 1; exit 0 ;;
-  esac
-done
-exec "$real_awk" "\$@"
+exit 1
 EOF
-chmod +x "$fake_awk_dir/awk"
+chmod +x "$fake_cmp_dir/cmp"
 
 repo="$(new_repo)"
-MUTATE_OUTPUT="$(cd "$repo" && PATH="$fake_awk_dir:$PATH" \
-  "$MUTATE_SH" sample.go "text truly absent from sample.go" "replacement" true 2>&1)"
+MUTATE_OUTPUT="$(cd "$repo" && PATH="$fake_cmp_dir:$PATH" \
+  "$MUTATE_SH" sample.go "$THE_IF_ANCHOR" "$THE_IF_REPLACED" true 2>&1)"
 MUTATE_RC=$?
 assert_eq "refuses with the dedicated TOCTOU exit code" "10" "$MUTATE_RC"
-assert_contains "names the two-read discrepancy" "no longer matches while applying" "$MUTATE_OUTPUT"
+assert_contains "names the snapshot/live-file discrepancy" "changed after this tool read it" "$MUTATE_OUTPUT"
 assert_eq "wrote nothing — the file is untouched" "$(git -C "$repo" show HEAD:sample.go)" "$(cat "$repo/sample.go")"
 assert_eq "left the repo clean" "" "$(cd "$repo" && git status --porcelain)"
 
@@ -252,8 +251,7 @@ echo "== precondition: outside a git repo reports THAT, not a false 'dirty tree'
 non_repo_dir="$(mktemp -d "${TMPDIR:-/tmp}/mutate-test-norepo.XXXXXX")"
 SCRATCH_DIRS+=("$non_repo_dir")
 echo "package foo" > "$non_repo_dir/sample.go"
-MUTATE_OUTPUT="$(cd "$non_repo_dir" && "$MUTATE_SH" sample.go "package foo" "package bar" true 2>&1)"
-MUTATE_RC=$?
+run_mutate "$non_repo_dir" "package foo" "package bar" true
 assert_contains "names the real cause (not a git repository), not a dirty-tree misdiagnosis" "not inside a git repository" "$MUTATE_OUTPUT"
 [[ "$MUTATE_RC" -ne 0 ]] && pass "refuses (nonzero exit)" || fail "refuses (nonzero exit)" "nonzero" "0"
 
@@ -261,7 +259,7 @@ echo ""
 echo "== STALE: a deliberate no-match row must be reported as STALE, never pass silently (#1390, #1450) =="
 repo="$(new_repo)"
 run_mutate "$repo" "this text does not occur anywhere in sample.go" "replacement" true
-assert_eq "refuses (nonzero)" "1" "$([[ "$MUTATE_RC" -ne 0 ]] && echo 1 || echo 0)"
+[[ "$MUTATE_RC" -ne 0 ]] && pass "refuses (nonzero exit)" || fail "refuses (nonzero exit)" "nonzero" "0"
 assert_contains "the refusal literally says STALE" "STALE" "$MUTATE_OUTPUT"
 assert_contains "...and names the guard it is enforcing" "occurs 0 times" "$MUTATE_OUTPUT"
 assert_eq "left the repo clean — a refused run must not leave partial state" "" "$(cd "$repo" && git status --porcelain)"
@@ -320,8 +318,7 @@ assert_contains "names the byte-count mismatch" "could not read" "$MUTATE_OUTPUT
 echo ""
 echo "== usage: refuses when the test command is missing entirely =="
 repo="$(new_repo)"
-MUTATE_OUTPUT="$(cd "$repo" && "$MUTATE_SH" sample.go "$THE_IF_ANCHOR" "$THE_IF_REPLACED" 2>&1)"
-MUTATE_RC=$?
+run_mutate "$repo" "$THE_IF_ANCHOR" "$THE_IF_REPLACED"   # no trailing test-cmd args at all
 assert_contains "prints a usage line" "usage:" "$MUTATE_OUTPUT"
 [[ "$MUTATE_RC" -ne 0 ]] && pass "refuses (nonzero exit)" || fail "refuses (nonzero exit)" "nonzero" "0"
 

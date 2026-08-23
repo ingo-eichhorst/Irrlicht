@@ -85,9 +85,10 @@
 #      restore itself did not leave the tree clean; this should be
 #      unreachable, and reaching it is reported loudly rather than papered
 #      over.
-#  10  <file> changed between the count read and the apply read (a narrow
-#      TOCTOU window) — the anchor no longer matched on the second read.
-#      Nothing was written; this should be very rare and is safe to retry.
+#  10  <file> changed after this tool read it — between taking the snapshot
+#      it counts/splices against and writing the mutation back. Checked by a
+#      single direct comparison against the live file immediately before the
+#      write; nothing was written. Should be very rare and is safe to retry.
 #
 # Implementation notes:
 #   - Literal text, not regex/glob. <anchor>/<replacement> are matched and
@@ -95,27 +96,43 @@
 #     through ENVIRON rather than -v — -v applies backslash-escape processing
 #     to its value (so a literal `\n` inside a real anchor would silently
 #     become a newline), ENVIRON does not.
+#   - ONE snapshot, not repeated live reads. The file is copied to a backup
+#     ONCE, immediately after the existence/read-write checks, and every
+#     content-reading guard below (byte-parity, the anchor count, the splice)
+#     reads that same immutable copy — so they cannot disagree with each
+#     other; they are three views of identical bytes, not three independent
+#     looks at a file that could be changing underneath them. The single
+#     place that still reads the LIVE file is one direct `cmp` immediately
+#     before the final write, which is the one point a real concurrent
+#     change actually matters (guard #10). An earlier version re-read the
+#     live file a second time at apply time and re-checked the anchor there;
+#     this replaces that second independent look (and its own copy of the
+#     match logic) with a single explicit comparison at the point that needs
+#     it (review finding, #1750).
 #   - The whole file is read as ONE awk record via `RS="\x01"` (a byte
 #     practically never present in source text) so a multi-line anchor is
 #     matched as ONE literal string rather than reassembled line by line —
 #     the latter would also silently normalise a missing final newline.
 #     Guard #3 above is what keeps this safe if that byte, or a NUL, actually
 #     shows up: the read is measured against `wc -c`, not assumed correct.
-#   - Every awk invocation that measures or matches by BYTE runs under
-#     `LC_ALL=C`, not just the `wc -c` it must agree with. Under a UTF-8
-#     locale, gawk's length()/index()/substr() count Unicode codepoints —
-#     measured: a file with one 3-byte em dash (this repo's own prose style)
-#     reads as 2 bytes short under a UTF-8 locale's gawk, which would trip
-#     guard #3 as a false "possible NUL byte" refusal on a perfectly valid
-#     file. `LC_ALL=C` makes every byte its own "character" again.
+#   - Every awk invocation that measures or matches by BYTE goes through
+#     byte_awk() (below), which centralises `LC_ALL=C` in ONE place rather
+#     than repeating it at each call site — measured (review finding,
+#     #1750): under a UTF-8 locale, gawk's length()/index()/substr() count
+#     Unicode CODEPOINTS, not bytes, so a file containing any multi-byte
+#     character (this repo's own prose uses em dashes throughout) would read
+#     as shorter than `wc -c` and trip guard #3 as a false "possible NUL
+#     byte" refusal. `LC_ALL=C` makes every byte its own "character" again,
+#     and funnelling every content-reading call through byte_awk() means a
+#     future one added here inherits the fix instead of needing to remember
+#     it.
 set -uo pipefail
 
-self_help() {
-  awk 'NR>1 && /^#/ {sub(/^# ?/, ""); print; next} NR>1 {exit}' "$0"
-}
-
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-  self_help
+  # Matches tools/bash-lint.sh, tools/posix-lint.sh, tools/preflight.sh,
+  # tools/security-scan.sh and tools/skill-lint.sh BYTE-FOR-BYTE, so --help
+  # can't drift into a sixth, subtly different self-help format.
+  awk 'NR>1 && /^#/ {print; next} NR>1 {exit}' "$0"
   exit 0
 fi
 
@@ -137,6 +154,13 @@ refuse() {
   exit "$code"
 }
 
+# byte_awk <awk-program> [file...] — the ONLY way this script reads or
+# matches file content. See the implementation notes above for why LC_ALL=C
+# lives here and nowhere else.
+byte_awk() {
+  LC_ALL=C awk "$@"
+}
+
 # ─── Guard: the file itself ────────────────────────────────────────────────
 if [[ ! -f "$FILE" ]]; then
   refuse 2 "'$FILE' does not exist or is not a regular file"
@@ -145,23 +169,35 @@ if [[ ! -r "$FILE" || ! -w "$FILE" ]]; then
   refuse 2 "'$FILE' is not both readable and writable"
 fi
 
-# ─── Guard: the file can be read byte-for-byte through the RS="\x01" slurp ──
+# ─── Snapshot the file ONCE, before anything reads its content ────────────
+# See "ONE snapshot, not repeated live reads" above. Every content-reading
+# guard from here on reads $BACKUP, never $FILE directly, until the single
+# `cmp` right before the final write.
+BACKUP="$(mktemp "${TMPDIR:-/tmp}/mutate.XXXXXX")"
+cp -p "$FILE" "$BACKUP"
+
+RESTORED=0
+restore_file() {
+  # Idempotent: safe to call more than once (the trap calls it as a safety
+  # net even after the main flow already restored explicitly).
+  if [[ "$RESTORED" -eq 0 && -f "$BACKUP" ]]; then
+    cp -p "$BACKUP" "$FILE"
+    rm -f "$BACKUP"
+    RESTORED=1
+  fi
+}
+trap restore_file EXIT
+
+# ─── Guard: the snapshot can be read byte-for-byte via the RS="\x01" slurp ──
 # Measured, not assumed (AGENTS.md: "a validator that can't parse its input
 # checks MORE, never less"). A mismatch means the file contains a NUL byte
 # (many awk implementations truncate C-style strings there) or literally the
 # 0x01 byte this tool reserves as its own record separator — either way,
 # proceeding would silently operate on a truncated/garbled read.
-FILE_BYTES="$(LC_ALL=C wc -c < "$FILE" | tr -d ' ')"
-# LC_ALL=C on every awk invocation below, not just this one — measured
-# (review finding, #1750): under a UTF-8 locale, gawk's length()/index()/
-# substr() count Unicode CODEPOINTS, not bytes, so a file containing any
-# multi-byte character (this repo's own prose uses em dashes throughout)
-# would read as shorter than `wc -c` and trip this guard as a false
-# "possible NUL byte" refusal. `C` makes every byte its own "character",
-# which is what the byte-count comparison above actually needs.
-SLURPED_LEN="$(LC_ALL=C awk 'BEGIN{RS="\x01"}{print length($0)}' "$FILE")"
-if [[ "$SLURPED_LEN" != "$FILE_BYTES" ]]; then
-  refuse 3 "could not read '$FILE' byte-for-byte: it is $FILE_BYTES bytes but this tool's exact-byte read measured '$SLURPED_LEN' — likely an embedded NUL byte or this tool's own 0x01 sentinel. Refusing rather than risk a corrupted mutation."
+SNAPSHOT_BYTES="$(LC_ALL=C wc -c < "$BACKUP" | tr -d ' ')"
+SLURPED_LEN="$(byte_awk 'BEGIN{RS="\x01"}{print length($0)}' "$BACKUP")"
+if [[ "$SLURPED_LEN" != "$SNAPSHOT_BYTES" ]]; then
+  refuse 3 "could not read '$FILE' byte-for-byte: it is $SNAPSHOT_BYTES bytes but this tool's exact-byte read measured '$SLURPED_LEN' — likely an embedded NUL byte or this tool's own 0x01 sentinel. Refusing rather than risk a corrupted mutation."
 fi
 
 # ─── Guard: precondition — a real git repo, and already clean ──────────────
@@ -172,7 +208,7 @@ fi
 #
 # Checked as its OWN step, separately from the porcelain read below: `git
 # status --porcelain` outside a repo prints "fatal: not a git repository..."
-# on stderr, which the original version of this guard folded into the same
+# on stderr, which an earlier version of this guard folded into the same
 # message as a dirty tree — a wrong diagnosis (review finding, #1750): the
 # tree isn't dirty, there IS no tree.
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -192,8 +228,8 @@ if [[ "$ANCHOR" == "$REPLACEMENT" ]]; then
   refuse 6 "the replacement is byte-identical to the anchor — this mutation would leave '$FILE' UNCHANGED"
 fi
 
-# ─── Guard: the anchor occurs EXACTLY ONCE (#1390) ─────────────────────────
-COUNT="$(MUTATE_ANCHOR="$ANCHOR" LC_ALL=C awk '
+# ─── Guard: the anchor occurs EXACTLY ONCE (#1390), counted from the snapshot ──
+COUNT="$(MUTATE_ANCHOR="$ANCHOR" byte_awk '
   BEGIN { RS = "\x01" }
   {
     content = $0
@@ -209,7 +245,7 @@ COUNT="$(MUTATE_ANCHOR="$ANCHOR" LC_ALL=C awk '
     }
     print n
   }
-' "$FILE")"
+' "$BACKUP")"
 
 if [[ "$COUNT" -eq 0 ]]; then
   refuse 7 "STALE — the anchor occurs 0 times in '$FILE'. A stale anchor that no longer matches must not silently do nothing (#1390); update the anchor to match the current text."
@@ -218,29 +254,10 @@ if [[ "$COUNT" -gt 1 ]]; then
   refuse 8 "the anchor occurs $COUNT times in '$FILE', not exactly once — an ambiguous anchor could mutate the wrong occurrence. Widen it with more surrounding context until it is unique."
 fi
 
-# ─── Backup, apply, and an EXIT trap so a restore always happens ───────────
-BACKUP="$(mktemp "${TMPDIR:-/tmp}/mutate.XXXXXX")"
-cp -p "$FILE" "$BACKUP"
-
-RESTORED=0
-restore_file() {
-  # Idempotent: safe to call more than once (the trap calls it as a safety
-  # net even after the main flow already restored explicitly).
-  if [[ "$RESTORED" -eq 0 && -f "$BACKUP" ]]; then
-    cp -p "$BACKUP" "$FILE"
-    rm -f "$BACKUP"
-    RESTORED=1
-  fi
-}
-trap restore_file EXIT
-
-# Re-checks idx == 0 rather than trusting the COUNT guard above: this reads
-# the file a SECOND time, independently, and a review finding (#1750) noted
-# that a file changing between the two reads (a narrow but real TOCTOU
-# window) would otherwise splice `replacement` onto `substr(content, alen)`
-# with no warning — silently dropping the file's own first `alen` bytes.
-# Fails closed instead: refuses rather than writing anything.
-if ! MUTATE_ANCHOR="$ANCHOR" MUTATE_REPLACEMENT="$REPLACEMENT" LC_ALL=C awk '
+# ─── Splice against the SAME snapshot just counted — guaranteed to agree ───
+# with COUNT above by construction (one immutable read, not a second
+# independent look that could see something different).
+MUTATE_ANCHOR="$ANCHOR" MUTATE_REPLACEMENT="$REPLACEMENT" byte_awk '
   BEGIN { RS = "\x01" }
   {
     content = $0
@@ -248,18 +265,21 @@ if ! MUTATE_ANCHOR="$ANCHOR" MUTATE_REPLACEMENT="$REPLACEMENT" LC_ALL=C awk '
     repl = ENVIRON["MUTATE_REPLACEMENT"]
     alen = length(anchor)
     idx = index(content, anchor)
-    if (idx == 0) {
-      print "mutate: internal — the anchor no longer matches on the apply read (the file changed between reads)" > "/dev/stderr"
-      exit 1
-    }
     prefix = substr(content, 1, idx - 1)
     suffix = substr(content, idx + alen)
     printf "%s", prefix repl suffix
   }
-' "$FILE" > "$BACKUP.mutated"; then
+' "$BACKUP" > "$BACKUP.mutated"
+
+# ─── The ONE point that still reads the LIVE file (guard #10) ─────────────
+# Has it changed since the snapshot was taken? A single direct comparison
+# right before the write, rather than a second independent read-and-recount
+# reconciled after the fact.
+if ! cmp -s "$BACKUP" "$FILE"; then
   rm -f "$BACKUP.mutated"
-  refuse 10 "the anchor matched exactly once while counting but no longer matches while applying — '$FILE' changed between the two reads. Nothing was written; run again."
+  refuse 10 "'$FILE' changed after this tool read it — between taking the snapshot and applying the mutation. Refusing to write a mutation computed from bytes that are no longer there; run again."
 fi
+
 cat "$BACKUP.mutated" > "$FILE"
 rm -f "$BACKUP.mutated"
 
