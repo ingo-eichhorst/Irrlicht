@@ -494,6 +494,42 @@ below.
   says the wiring is CORRECT, which is what the families themselves are for.
   Note what the walk DOES catch, which is what #1740 is about: the new adapter
   that wires a family nowhere at all.
+- Real config fixtures: not a contract family — a registry tripwire,
+  `TestEveryHookInstallDeclaresARealConfigFixture`
+  (`core/adapters/inbound/agents/hookrealfixture_test.go`), riding the same
+  `hookInstallingAdapters()` projection as #1365's and #1372's. It closes the
+  gap #1753 shipped through: every hook-install test in the tree — including
+  every contract family above — grades against a config the adapter's OWN
+  test constructed, a document whose shape the test author already knew how
+  to handle. mistral-vibe's install could not write into a `config.toml` vibe
+  itself writes (#1755's real fixture carries twelve multi-line TOML arrays;
+  `hooktoml`'s splicer refused all of them), and it was found by accident,
+  during a live recording, not by any test. This tripwire requires every
+  hooks-installing adapter to EITHER declare `agent.RealConfigFixture` (a
+  committed, secrets-redacted document captured from the agent's own output —
+  or the shared file it manages — plus a guard test in the adapter's own
+  package that reads it and asserts it still carries whatever construct
+  mattered) OR be named in the tripwire's own `knownFixtureGaps()`, with a
+  checked (not assumed) reason. There is no third way to pass: an adapter in
+  neither bucket fails loudly, the same "covered by default, not by whoever
+  remembers" property #1372/#1365's tripwires already have. It does not
+  dictate what a guard checks — only that the declared file exists,
+  is non-trivial, and is referenced by name in some test the adapter's own
+  package runs — because the construct worth protecting is necessarily
+  adapter-specific (vibe's counts multi-line arrays; claude-code's and
+  gemini-cli's assert real, non-hook settings survive an uninstall/reinstall
+  round trip). As of #1756, real fixtures are declared for mistral-vibe,
+  claude-code and gemini-cli; codex and copilot are explicit gaps (both
+  install into a file only irrlicht itself ever writes, so no
+  non-irrlicht-authored specimen can exist even in principle); antigravity,
+  hermes, kiro-cli, opencode and pi gained hooks installs after #1756 was
+  filed and are also explicit gaps, each with its own checked reason —
+  antigravity and hermes install into the same shared-file risk class as
+  vibe/claude-code/gemini-cli and are the best candidates for a fast
+  follow-up. `knownFixtureGaps()`'s own doc comment carries the full,
+  per-adapter reasoning and is re-validated every run: a gap entry for an
+  adapter that no longer installs hooks, or that has since grown a real
+  fixture, fails loudly rather than rotting silently.
 - Managed user files: every `modify`-kind permission with an `Apply` closure
   declares the shared, user-owned file(s) that closure writes
   (`agent.Permission.Writes`, an `agent.ManagedUserFile` carrying `Path`,
