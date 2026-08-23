@@ -6,13 +6,24 @@
 // Every other test in this package builds its own settings.json by hand.
 // This one is the maintainer's own real ~/.claude/settings.json, captured
 // whole — scanned for anything credential-shaped before committing (none
-// found: the only hits were env-var NAMES inside autoMode.environment,
-// explicitly labelled "(names only, not values)" in the file itself) — and it
-// carries a construct no hand-written fixture ever would: several events
-// already hold MULTIPLE hook groups that all point at our own endpoint. A
-// single EnsureHooksInstalled call never produces more than one group per
-// event, so this file is evidence of real accumulated history (repeated
-// installs across daemon rebuilds) rather than something a test constructed.
+// found in the keys kept here) — and it carries a construct no hand-written
+// fixture ever would: several events already hold MULTIPLE hook groups that
+// all point at our own endpoint. A single EnsureHooksInstalled call never
+// produces more than one group per event, so this file is evidence of real
+// accumulated history (repeated installs across daemon rebuilds) rather than
+// something a test constructed.
+//
+// The captured file originally also carried a top-level "autoMode" key —
+// Claude Code's own security-policy notes for this repo (which local files
+// hold secrets, which CI secret NAMES exist, an explicit map of which
+// controls are and are NOT configured). A credential/token/password/secret
+// grep found nothing there, but it is not hook-install config, it is not
+// needed by anything this file tests, and publishing an explicit "here is
+// what is NOT protected" map is its own kind of exposure independent of
+// whether any single value is secret-shaped. Removed before commit; the
+// remaining keys (model, hooks, statusLine, alwaysThinkingEnabled,
+// effortLevel, theme) are all plain preferences with nothing sensitive in
+// them.
 package claudecode
 
 import (
@@ -47,9 +58,9 @@ func TestRealClaudeCodeConfigFixture_StillCarriesRealComplexity(t *testing.T) {
 	}
 
 	// Real, non-hook complexity a hand-written fixture never has a reason to
-	// include: the maintainer's actual model/UI/policy preferences, all of
-	// which EnsureHooksInstalled/UninstallHooks must leave untouched.
-	for _, key := range []string{"model", "statusLine", "autoMode", "alwaysThinkingEnabled", "effortLevel", "theme"} {
+	// include: the maintainer's actual model/UI preferences, all of which
+	// EnsureHooksInstalled/UninstallHooks must leave untouched.
+	for _, key := range []string{"model", "statusLine", "alwaysThinkingEnabled", "effortLevel", "theme"} {
 		if _, ok := doc[key]; !ok {
 			t.Errorf("fixture is missing top-level key %q — it no longer carries the real, "+
 				"non-hook complexity this test exists to exercise the merge against", key)
@@ -146,7 +157,7 @@ func assertNonHookKeysUnchanged(t *testing.T, before, after map[string]interface
 // TestUninstallHooks_FromAConfigClaudeCodeItselfWrote uninstalls against the
 // real fixture and asserts every one of our entries is gone — including from
 // EVERY duplicate group the real file carries, not just the first — while
-// every other real key (model, statusLine, autoMode, …) survives untouched.
+// every other real key (model, statusLine, theme, …) survives untouched.
 func TestUninstallHooks_FromAConfigClaudeCodeItselfWrote(t *testing.T) {
 	_, path := seedRealConfig(t)
 	before := readJSON(t, path)

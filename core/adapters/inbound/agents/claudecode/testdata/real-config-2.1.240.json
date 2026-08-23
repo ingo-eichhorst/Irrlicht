@@ -241,37 +241,5 @@
   },
   "alwaysThinkingEnabled": true,
   "effortLevel": "xhigh",
-  "theme": "dark",
-  "autoMode": {
-    "soft_deny": [
-      "$defaults",
-      "Bash(.claude/skills/ir:test-mac/restore-prod.sh:*) in ~/projects/irrlicht — filename indicates a prod-restore action, not covered by default Production Deploy/Production Reads carve-outs by name match alone"
-    ],
-    "environment": [
-      "### Org-wide",
-      "**Organization**: None configured — single-maintainer OSS project (ingo-eichhorst)",
-      "**Cloud provider(s)**: None configured",
-      "**Repository visibility**: PUBLIC — `ingo-eichhorst/Irrlicht` on GitHub (confirmed via gh api). Any push here is publishing.",
-      "**Internal sharing / snippet hosting**: None configured — treat public paste/gist services as outside the trust boundary",
-      "**Secrets management**: None configured — repo uses gitignored `.env` / `.env.example` (SONAR_TOKEN, SONAR_ORGANIZATION, SONAR_PROJECT_KEY) and CI secrets CODESCENE_API_TOKEN, COVERAGE_GIST_ID, GIST_SECRET, GITHUB_TOKEN (names only, not values)",
-      "**Default / protected branches**: `main` is default and protected (ruleset `Protect Main` active, classic protection also lists `main`)",
-      "**CI/CD deploy targets**: None configured",
-      "**Network posture**: None configured",
-      "**Source control**: GitHub — trusted repo `ingo-eichhorst/Irrlicht` (origin) and its fork remote `mboegers-fork` (MBoegers/Irrlicht) as scoped by Trusted repo/Repository visibility below; no additional orgs configured",
-      "**Trusted internal domains**: None configured",
-      "**Trusted cloud buckets**: None configured",
-      "**Key internal services**: sonarcloud.io, codescene.io (contacted repeatedly in this project's transcripts — CI quality-gate/coverage reporting)",
-      "**Internal package registry**: None configured",
-      "**Sensitive data locations & audiences**: `.env`, `.env.example`, `examples/coding-factory/.env`, `examples/coding-factory/.env.example` (local SonarQube credentials, gitignored) — never commit; share only with audiences cleared at the [named+specifics] bar. `.claude/skills/ir:test-mac/restore-prod.sh` — filename suggests a prod-restore script, treat as sensitive/destructive",
-      "**Data retention / declassification**: None configured",
-      "**Sensitive remote targets**: any namespace, host, or container whose name carries `prod` or `production` as a whole word/segment — e.g. `restore-prod.sh`",
-      "**Protected deployment namespaces / environments**: None configured — fall back to the Sensitive remote targets heuristic (k8s namespaces seen: tools, core, replaydata, echo, git, over — none carry prod/production)",
-      "**Protected IaC scopes**: IAM, RBAC, networking, quota, and node-pool resources; anything whose name or tag carries `prod` or `production` as a whole word or name segment",
-      "### User-specific",
-      "**Primary use of Claude Code**: software development (this repo — Irrlicht, a macOS menu-bar app + Go daemon for monitoring AI coding agent sessions)",
-      "**Trusted repo**: `/Users/ingo/projects/irrlicht`, remotes `origin` (github.com/ingo-eichhorst/Irrlicht, public) and `mboegers-fork` (github.com/MBoegers/Irrlicht). Public repo: only this repo's own work belongs here — content ported from other checkouts or first read outside this session is not its own work.",
-      "**Org-specific CLIs**: None configured — project-specific non-standard tools seen: `tools` (dispatch wrapper, 60×), `gofmt`, `herdr`, `govulncheck`, `shellcheck`, `swift`/`swiftc`",
-      "routine under ~/projects/irrlicht/ prefix: gofmt, go test/build tooling, tools/* scripts, and skill-invoked gh/git operations scoped to this repo's worktrees (.claude/worktrees/)"
-    ]
-  }
+  "theme": "dark"
 }
