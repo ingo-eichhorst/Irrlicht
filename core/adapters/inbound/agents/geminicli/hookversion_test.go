@@ -12,7 +12,6 @@
 package geminicli
 
 import (
-	"strings"
 	"testing"
 
 	"irrlicht/core/domain/agent"
@@ -44,44 +43,37 @@ func hooksVersionGate(t *testing.T) *agent.VersionGate {
 	return nil
 }
 
-// TestHooksGate_BelowFloorSaysWhy pins that a Gemini CLI older than the
-// declared floor is refused WITH a reason naming both versions.
-func TestHooksGate_BelowFloorSaysWhy(t *testing.T) {
-	gate := hooksVersionGate(t)
-
-	allowed, why := gate.Permits("0.53.9")
-	if allowed {
-		t.Fatal("gate permits installing into Gemini CLI 0.53.9, below the declared floor")
-	}
-	if !strings.Contains(why, "0.53.9") || !strings.Contains(why, minCLIVersion) {
-		t.Errorf("refusal %q names neither the installed version nor the required one; "+
-			"the reason has to tell the user what to upgrade", why)
-	}
-}
-
-// TestHooksGate_AtOrAboveFloorInstalls is a LOCK: it pins that the gate has
-// not become a blanket refusal, which from a log looks identical to one that
-// works.
-func TestHooksGate_AtOrAboveFloorInstalls(t *testing.T) {
-	gate := hooksVersionGate(t)
-	for _, v := range []string{minCLIVersion, "0.54.4", "0.56.0", "1.0.0"} {
-		if allowed, why := gate.Permits(v); !allowed {
-			t.Errorf("gate refuses Gemini CLI %s, at or above the %s floor: %s", v, minCLIVersion, why)
-		}
-	}
-}
-
-// TestHooksGate_UnknownVersionFailsOpen pins the documented direction
-// (core/pkg/cliversion): an unparseable or unknown version must not block an
-// install. The daemon runs under launchd with a minimal PATH and routinely
-// cannot see the user's CLI at all, so "unknown" must read as "not proven
-// old", not as "assume the worst".
-func TestHooksGate_UnknownVersionFailsOpen(t *testing.T) {
-	gate := hooksVersionGate(t)
-	if allowed, why := gate.Permits(""); !allowed {
-		t.Errorf("gate refuses on an unknown version: %s", why)
-	}
-}
+// What is deliberately NOT here: BelowFloorSaysWhy, AtOrAboveFloorInstalls
+// and UnknownVersionFailsOpen — each a hand-picked restatement of an
+// obligation AssertHookVersionGate already runs, strictly more weakly, the
+// same pattern issue #1721 / PR #1758 found and removed from pi, and #1762
+// removes here and from claudecode, codex, copilot, kirocli and vibe:
+//
+//   - assertFloorRefusesOlder checks gate.Permits(gate.Min) is ALLOWED (the
+//     at-or-above lock), then refuses THREE field-wise predecessors — major,
+//     minor and patch decremented independently, because a single synthetic
+//     "just below" value exercises only the borrow path — and requires each
+//     refusal's reason to name both versions. The hand-written copy picked
+//     ONE older version by hand.
+//   - It also carries a vacuity guard the copies had no equivalent of: a
+//     floor with nothing below it fails, rather than passing having asserted
+//     only that the gate permits itself.
+//   - assertUnknownFailsOpen drives THREE unreadable spellings ("",
+//     "not a version", "2.1"). The hand-written copy drove one.
+//
+// Proven by mutation, not by inspection: weakening minCLIVersion to 0.0.0
+// reddens the contract —
+//
+//	--- FAIL: .../floor_refuses_an_older_cli
+//	    hook_version.go:62: declared floor 0.0.0 has no version below it, so this
+//	    obligation asserts nothing — a floor of 0.0.0 permits every CLI and is not a gate
+//
+// — while AtOrAboveFloorInstalls (the vacuity-blind lock) stayed GREEN under
+// the same mutation, which is exactly the coverage gap deleting it closes.
+//
+// TestHooksGate_ProbeIsGeminiVersion below stays, because it is the one thing
+// the contract does NOT cover: assertVersionSourceDeclared only requires
+// Observed or Probe to be non-empty, never that the argv is the right one.
 
 // TestHooksGate_ProbeIsGeminiVersion pins the argv this adapter asks
 // cliversion to run — gemini --version prints a bare number (e.g. "0.56.0",
