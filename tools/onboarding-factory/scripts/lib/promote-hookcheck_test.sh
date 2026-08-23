@@ -25,9 +25,9 @@ assert_eq() {
 
 # --- injected fakes -------------------------------------------------------
 # Each check_* prints "<declares> <has_hook>" and exits 0, or fails per its name.
-check_declares_has_hook()    { echo "true true"; }
-check_declares_no_hook()     { echo "true false"; }
-check_no_declares_no_hook()  { echo "false false"; }
+check_declares_has_hook()    { echo "true true"; return 0; }
+check_declares_no_hook()     { echo "true false"; return 0; }
+check_no_declares_no_hook()  { echo "false false"; return 0; }
 check_broken()               { echo "of hookcheck: connection refused" >&2; return 1; }
 
 # confirm_* — CONFIRM_CALLS counts invocations so a case can assert the
@@ -86,24 +86,24 @@ assert_eq "confirm_fn not called" "0" "$CONFIRM_CALLS"
 REPO_ROOT="$PWD"
 
 echo "== default_hookfree_check: well-formed output still parses (lock) =="
-go() { printf '{"agent":"codex","declares_hooks":true,"has_hook_event":false}'; }
+go() { printf '{"agent":"codex","declares_hooks":true,"has_hook_event":false}'; return 0; }
 out="$(default_hookfree_check codex /tmp/x.jsonl 2>/dev/null)"
 rc=$?
 assert_eq "returns 0" "0" "$rc"
 assert_eq "echoes 'true false'" "true false" "$out"
 
 echo "== default_hookfree_check: declares_hooks MISSING entirely — refused, not read as false =="
-go() { printf '{"agent":"codex","has_hook_event":false}'; }
+go() { printf '{"agent":"codex","has_hook_event":false}'; return 0; }
 default_hookfree_check codex /tmp/x.jsonl >/dev/null 2>&1
 assert_eq "returns 1 (a missing field is a parse failure, not a false)" "1" "$?"
 
 echo "== default_hookfree_check: declares_hooks is JSON null — jq prints the string 'null', still refused =="
-go() { printf '{"agent":"codex","declares_hooks":null,"has_hook_event":false}'; }
+go() { printf '{"agent":"codex","declares_hooks":null,"has_hook_event":false}'; return 0; }
 default_hookfree_check codex /tmp/x.jsonl >/dev/null 2>&1
 assert_eq "returns 1 (nonempty 'null' must not slip past an emptiness-only guard)" "1" "$?"
 
 echo "== default_hookfree_check: has_hook_event missing while declares_hooks is fine — still refused =="
-go() { printf '{"agent":"codex","declares_hooks":true}'; }
+go() { printf '{"agent":"codex","declares_hooks":true}'; return 0; }
 default_hookfree_check codex /tmp/x.jsonl >/dev/null 2>&1
 assert_eq "returns 1" "1" "$?"
 

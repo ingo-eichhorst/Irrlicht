@@ -85,7 +85,7 @@ CALLS_FILE="$(mktemp)"
 trap 'rm -f "$CALLS_FILE"' EXIT
 FAKE_SEQUENCE=()   # one JSON string per call; the last entry repeats past the end
 
-calls() { cat "$CALLS_FILE"; }
+calls() { cat "$CALLS_FILE"; return 0; }
 
 curl() {
   local n

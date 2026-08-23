@@ -362,7 +362,7 @@ if [[ "$ATTACH" == "1" ]]; then
     # $ADAPTER alone, with no partner: a cross-adapter cell never reaches this
     # point — a non-empty partner_adapter exits above, pointing at
     # run-cell-multi.sh, which has no attach path at all.
-    check_unapplied_grants "$ONBOARD_BIND" "$ADAPTER" "$PERM_JSON" || exit 1
+    check_unapplied_grants "$ONBOARD_BIND" "$ADAPTER" "$PERM_JSON" || exit 1 # NOSONAR (shell:S5332) — reads the loopback response fetched above
   fi
   echo "attach: using running daemon's recordings at $ATTACHED_RECORDINGS_DIR"
 else
