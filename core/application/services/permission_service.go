@@ -530,10 +530,23 @@ func (s *PermissionService) HookChannelReady(agentName string) bool {
 // declining to write is the correct outcome, not a failure to be retried.
 //
 // There are two consent checks on this path and they cover different windows.
-// The pre-check below is the one that refuses every ordinary revoked caller —
-// it is a real gate, not decoration, and deleting it is visible as a red test.
-// But it can only be as fresh as the instant it was asked, and the write that
-// follows may wait on a mutex first. So the write itself is not performed here:
+// The pre-check below refuses every ordinary revoked caller before it ever
+// queues anything — but that refusal is NOT independently visible in a
+// write-observing test (issue #1751, mutation-verified via tools/mutate.sh):
+// runEffects' re-read below (gate 3) re-derives the identical fact from the
+// same recorded state, immediately before the closure runs, against the same
+// hardcoded target (StateGranted) this function always passes. Deleting the
+// pre-check alone therefore leaves every Apply/Remove/attempted/err assertion
+// in core/application/services and core/adapters/inbound/agents/kirocli green
+// — see hook_reverify_gate_internal_test.go's header for why no test can ever
+// tell the two apart by their output.
+//
+// What the pre-check alone buys, and the one thing a test CAN pin
+// (TestRepairGrantedHookInstall_DoesNotContendForEffectMuWhenNotGranted), is
+// CONTENTION: a repair for a permission that was never granted must never
+// take effectMu at all, because the write that would follow may have to wait
+// on that mutex first — behind an in-flight wizard answer, for however long
+// that answer's own effect takes. So the write itself is not performed here:
 // it goes through runEffects, exactly as a wizard answer does, which means the
 // background repair inherits every guarantee the interactive path already had
 // and cannot drift from it:
