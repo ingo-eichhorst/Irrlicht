@@ -251,22 +251,31 @@ func stringLiteralsByIdent(file *ast.File) map[string]string {
 			continue
 		}
 		for _, spec := range gen.Specs {
-			vs, ok := spec.(*ast.ValueSpec)
-			if !ok || len(vs.Names) != len(vs.Values) {
-				continue
-			}
-			for i, name := range vs.Names {
-				lit, ok := vs.Values[i].(*ast.BasicLit)
-				if !ok || lit.Kind != token.STRING {
-					continue
-				}
-				if v, err := strconv.Unquote(lit.Value); err == nil {
-					out[name.Name] = v
-				}
-			}
+			addStringLiteralsFromSpec(spec, out)
 		}
 	}
 	return out
+}
+
+// addStringLiteralsFromSpec records name -> string value into out for every
+// `NAME = "literal"` pair in spec, the one-name-per-value shape
+// stringLiteralsByIdent resolves. Split out so that function's own nesting
+// stops at "which decls/specs qualify" rather than also descending into
+// "which name/value pairs within one spec qualify".
+func addStringLiteralsFromSpec(spec ast.Spec, out map[string]string) {
+	vs, ok := spec.(*ast.ValueSpec)
+	if !ok || len(vs.Names) != len(vs.Values) {
+		return
+	}
+	for i, name := range vs.Names {
+		lit, ok := vs.Values[i].(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			continue
+		}
+		if v, err := strconv.Unquote(lit.Value); err == nil {
+			out[name.Name] = v
+		}
+	}
 }
 
 // TestEveryHookInstallDeclaresARealConfigFixture is the registry-wide
