@@ -50,8 +50,7 @@ promote_hookcheck() {
     [[ -n "$result" ]] && echo "$result" >&2
     return 2
   fi
-  declares="$(awk '{print $1}' <<<"$result")"
-  has_hook="$(awk '{print $2}' <<<"$result")"
+  read -r declares has_hook <<<"$result"
 
   [[ "$declares" == "true" ]] || return 0    # doesn't declare hooks — nothing to ask
   [[ "$has_hook" != "true" ]] || return 0    # declares hooks AND has one — the healthy case
@@ -83,24 +82,24 @@ default_hookfree_check() {
     echo "$json"
     return 1
   fi
-  # Checked against the literal words true/false, not just non-empty: a
-  # missing or null field makes jq -r print the 4-byte string "null", which
-  # IS non-empty and would otherwise slip past an emptiness-only guard and
-  # silently read as declares_hooks=false downstream — coercing a schema
-  # drift in `of hookcheck`'s own output into "nothing to ask" instead of a
-  # loud refusal. A validator that can't parse its input checks MORE, never
-  # less (AGENTS.md).
-  if ! declares="$(jq -r '.declares_hooks' <<<"$json" 2>/dev/null)" \
-    || { [[ "$declares" != "true" ]] && [[ "$declares" != "false" ]]; }; then
-    echo "of hookcheck produced unparseable output: $json"
-    return 1
-  fi
-  if ! has_hook="$(jq -r '.has_hook_event' <<<"$json" 2>/dev/null)" \
-    || { [[ "$has_hook" != "true" ]] && [[ "$has_hook" != "false" ]]; }; then
-    echo "of hookcheck produced unparseable output: $json"
-    return 1
-  fi
+  declares="$(hookfree_parse_bool_field "$json" declares_hooks)" || { echo "of hookcheck produced unparseable output: $json"; return 1; }
+  has_hook="$(hookfree_parse_bool_field "$json" has_hook_event)" || { echo "of hookcheck produced unparseable output: $json"; return 1; }
   echo "$declares $has_hook"
+}
+
+# hookfree_parse_bool_field <json> <field> prints <json>'s .<field> and
+# succeeds only when it is the literal word true or false. Checked against
+# those two words, not just non-empty: a missing or null field makes jq -r
+# print the 4-byte string "null", which IS non-empty and would otherwise slip
+# past an emptiness-only guard and silently read as false downstream —
+# coercing a schema drift in `of hookcheck`'s own output into "nothing to ask"
+# instead of a loud refusal. A validator that can't parse its input checks
+# MORE, never less (AGENTS.md).
+hookfree_parse_bool_field() {
+  local json="$1" field="$2" v
+  v="$(jq -r ".$field" <<<"$json" 2>/dev/null)" || return 1
+  [[ "$v" == "true" || "$v" == "false" ]] || return 1
+  echo "$v"
 }
 
 # default_hookfree_confirm — the real confirm_fn: an explicit non-interactive
