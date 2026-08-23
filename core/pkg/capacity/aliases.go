@@ -124,6 +124,11 @@ var modelAliases = map[string]string{
 	"gpt-5.1-codex-high": "gpt-5.1", // LOCAL_OVERRIDE: codeburn → gpt-5.3-codex (not in LiteLLM). Version-aligned with the input slug, but the codex / high-reasoning tier is unpriced — this under-prices by whatever premium Cursor's codex tier carries over base 5.1.
 	// OpenAI Codex frontend prefixes the model id; gpt-5.5 is in LiteLLM.
 	"openai-codex:gpt-5.5": "gpt-5.5",
+	// Codex's "auto review" activity id is a product surface, not a distinct
+	// subscription SKU or LiteLLM row — it draws from the same session model's
+	// credit pool (public tracker: openai/codex#32224). Price as the bundled
+	// review model rather than treating the id as honestly $0.
+	"codex-auto-review": "gpt-5.5",
 
 	// Moonshot Kimi family — codeburn maps three coding-focused aliases to
 	// "kimi-k2-thinking", which LiteLLM ships only under the dotted
@@ -204,6 +209,11 @@ var modelAliases = map[string]string{
 	// Hermes Agent stores the same id lowercased in its sessions table, so it
 	// misses the capitalized alias above; map the lowercase spelling too.
 	"glm-5.2": "glm-5p1",
+	// GLM-5.3 is not in the LiteLLM snapshot yet either. Price as the nearest
+	// released sibling (GLM-5.2 / glm-5p2). Same lowercase-Hermes duplication
+	// as GLM-5.2 above.
+	"GLM-5.3": "glm-5p2",
+	"glm-5.3": "glm-5p2",
 
 	// xAI Grok — codeburn's "grok-build-0.1" canonical isn't in LiteLLM (no
 	// grok-build pricing yet). Zero-value capacity + log on miss until the key
@@ -214,6 +224,8 @@ var modelAliases = map[string]string{
 	// canonical is in LiteLLM's pricing table yet. Zero-value capacity + log
 	// on miss until the keys land upstream.
 	"mimo-v2-flash":    "xiaomi/mimo-v2-flash",
+	"mimo-v2.5-pro":    "xiaomi/mimo-v2.5-pro",
+	"mimo-v2.5":        "xiaomi/mimo-v2.5",
 	"kat-coder-pro-v1": "kwaipilot/kat-coder-pro",
 
 	// Mistral Vibe (irrlicht's own adapter, not sourced from codeburn) reports
