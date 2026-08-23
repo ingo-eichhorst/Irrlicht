@@ -102,8 +102,8 @@
 #                  irrlicht git repo and is untrusted whichever home is in use
 #                  (see launch_repl in the mistral-vibe driver). Relocating the
 #                  home loses nothing there that a fresh cwd had not lost.
-#                  TWO MORE SEEDING GOTCHAS, both measured in #1735 and both
-#                  invisible until a run has already been spent.
+#                  ONE MORE SEEDING GOTCHA, measured in #1735 and invisible
+#                  until a run has already been spent.
 #                  [session_logging].save_dir in config.toml is an ABSOLUTE path
 #                  and OVERRIDES the VIBE_HOME-derived default, so a config.toml
 #                  copied from the operator's real home relocates everything
@@ -112,17 +112,15 @@
 #                  scratch one and timed out. Point it inside the scratch home
 #                  or delete the line; the driver reads the key and refuses
 #                  rather than recording half-isolated.
-#                  A real config.toml also DEFEATS the hooks install outright,
-#                  which is an adapter bug rather than a seeding one and is
-#                  noted here only because it is what a recording operator runs
-#                  into: hooktoml's splicer refuses any document containing a
-#                  multi-line array, vibe writes twelve of them by default
+#                  A real config.toml used to DEFEAT the hooks install outright
+#                  (#1753): hooktoml's splicer refused any document containing
+#                  a multi-line array, vibe writes twelve of them by default
 #                  (applied_migrations plus the [tools.*] allow/deny lists), and
-#                  Apply then fails with "contains a construct this splicer does
-#                  not model safely". The permission still reads granted and the
-#                  refusal surfaces only in unapplied_grants. Collapsing every
-#                  multi-line array onto one line in the SEED is what unblocked
-#                  the recording. That is a workaround, not a fix.
+#                  Apply then failed with "contains a construct this splicer
+#                  does not model safely" — permission still read granted, and
+#                  the refusal surfaced only in unapplied_grants. #1753 is fixed
+#                  (#1755, hooktoml models multi-line arrays), so the seed is a
+#                  real, unedited config.toml — no collapsing.
 #     pi           CREDENTIALS, the same rule codex's row states. pi resolves
 #                  every agent-dir path from getAgentDir()
 #                  (dist/config.js) — sessions/, settings.json, extensions/
