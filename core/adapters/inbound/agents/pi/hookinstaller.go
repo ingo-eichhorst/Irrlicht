@@ -71,15 +71,14 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 
 	"irrlicht/core/adapters/inbound/agents/agentpaths"
+	"irrlicht/core/adapters/inbound/agents/hookartifact"
 	"irrlicht/core/domain/agent"
-	"irrlicht/core/pkg/atomicfile"
 	"irrlicht/core/pkg/hookbeacon"
 )
 
@@ -229,13 +228,12 @@ func beaconCommandOf(src []byte) (string, bool) {
 	return command, true
 }
 
-// isOurs reports whether a file on disk is an irrlicht-installed extension —
-// by the beacon sentinel, which deliberately excludes the binary path, so a
-// copy naming an irrlichd that has since moved is still recognized as ours.
-// Recognizing it is the precondition for rewriting it in place instead of
-// appending a second one beside it.
+// isOurs reports whether a file on disk is an irrlicht-installed extension.
+// See hookartifact's package doc for why this check (a beacon-sentinel
+// substring test that deliberately excludes the binary path) is the one
+// this adapter shares with opencode rather than reimplementing.
 func isOurs(src []byte) bool {
-	return strings.Contains(string(src), hookbeacon.Sentinel(AdapterName))
+	return installer.IsOurs(src)
 }
 
 // --- path resolution ---
@@ -266,6 +264,30 @@ func ExtensionPath() (string, error) {
 }
 
 // --- install / verify / uninstall ---
+//
+// The install/verify/uninstall lifecycle itself is shared with opencode
+// (issue #1764) — both adapters install a single executable artifact that
+// their upstream agent auto-discovers from a directory glob, and the four
+// operations that shape (resolve path, write atomically, recognize "is this
+// ours", remove on uninstall) requires are identical modulo the artifact's
+// own content. See hookartifact's package doc for the shared mechanism and
+// why "is this ours" is the property that matters most to keep in one place.
+
+// installer is the pi extension's hookartifact.Installer. A package-level
+// var, not constructed per call, so every entry point below shares the same
+// wiring — but every field it holds is itself a function, so nothing here is
+// resolved (a path, an environment override, the running binary) until the
+// moment an operation actually runs.
+var installer = hookartifact.Installer{
+	AdapterName: AdapterName,
+	Sentinel:    hookbeacon.Sentinel(AdapterName),
+	ResolveCommand: func() (string, error) {
+		return hookbeacon.InstalledCommand(AdapterName)
+	},
+	Path:   ExtensionPath,
+	Render: renderExtension,
+	Events: installedHookEvents,
+}
 
 // EnsureHooksInstalled writes irrlicht's pi extension for the irrlichd that
 // is running now, creating pi's extensions directory if it does not exist.
@@ -275,50 +297,14 @@ func ExtensionPath() (string, error) {
 // copy whose beacon command names a different irrlichd is rewritten IN PLACE
 // (same path, one file), never duplicated.
 func EnsureHooksInstalled() (bool, error) {
-	command, err := hookbeacon.InstalledCommand(AdapterName)
-	if err != nil {
-		return false, err
-	}
-	return ensureInstalledWithCommand(command)
+	return installer.EnsureInstalled()
 }
 
 // ensureInstalledWithCommand is EnsureHooksInstalled with the beacon command
 // resolved by the caller — the seam the #1178 contract's ForeignInstall uses
 // to seed the install a DIFFERENTLY-situated daemon would have written.
-// hookbeacon.InstalledCommand is called exactly once per entry point, which
-// is the shape hookbeacon's own doc comment asks adopters for.
 func ensureInstalledWithCommand(command string) (bool, error) {
-	path, err := ExtensionPath()
-	if err != nil {
-		return false, err
-	}
-	want, err := renderExtension(command)
-	if err != nil {
-		return false, err
-	}
-
-	existing, readErr := os.ReadFile(path)
-	switch {
-	case readErr == nil && isOurs(existing):
-		if string(existing) == string(want) {
-			return false, nil
-		}
-		// Ours, but stale — a moved irrlichd, or a template change.
-	case readErr == nil:
-		// A file we did not write occupies the path we install to.
-		// Overwriting it would destroy a user's own extension for the sake
-		// of monitoring, which is never the right trade; refusing surfaces
-		// as "granted but NOT applied" in the wizard (issue #1362) with this
-		// message, which is the honest outcome.
-		return false, fmt.Errorf("pi: %s exists and was not written by irrlicht; refusing to overwrite it", path)
-	case !errors.Is(readErr, os.ErrNotExist):
-		return false, readErr
-	}
-
-	if err := atomicfile.WriteFile(path, want); err != nil {
-		return false, err
-	}
-	return true, nil
+	return installer.EnsureInstalledWithCommand(command)
 }
 
 // VerifyHooksInstalled reports whether the installed extension is still
@@ -328,36 +314,7 @@ func ensureInstalledWithCommand(command string) (bool, error) {
 // `pi install` / `pi remove` and any manual tidy of the extensions directory
 // can remove this file with the permission still reading granted.
 func VerifyHooksInstalled() (agent.HookEntryStatus, error) {
-	path, err := ExtensionPath()
-	if err != nil {
-		return agent.HookEntryStatus{}, err
-	}
-	command, err := hookbeacon.InstalledCommand(AdapterName)
-	if err != nil {
-		return agent.HookEntryStatus{}, err
-	}
-	want, err := renderExtension(command)
-	if err != nil {
-		return agent.HookEntryStatus{}, err
-	}
-
-	existing, readErr := os.ReadFile(path)
-	if errors.Is(readErr, os.ErrNotExist) {
-		return agent.HookEntryStatus{Missing: append([]string(nil), installedHookEvents...)}, nil
-	}
-	if readErr != nil {
-		return agent.HookEntryStatus{}, readErr
-	}
-	if !isOurs(existing) {
-		// Something else owns the path now. Reported as Missing rather than
-		// Stale: "stale" means EnsureHooksInstalled would rewrite it, and it
-		// deliberately will not.
-		return agent.HookEntryStatus{Missing: append([]string(nil), installedHookEvents...)}, nil
-	}
-	if string(existing) != string(want) {
-		return agent.HookEntryStatus{Stale: append([]string(nil), installedHookEvents...)}, nil
-	}
-	return agent.HookEntryStatus{}, nil
+	return installer.VerifyInstalled()
 }
 
 // UninstallHooks removes irrlicht's pi extension. Returns true if anything
@@ -374,22 +331,5 @@ func VerifyHooksInstalled() (agent.HookEntryStatus, error) {
 // ordinary state for a pi installation, and removing a directory a user's
 // editor or shell may have open is a worse surprise than leaving one behind.
 func UninstallHooks() (bool, error) {
-	path, err := ExtensionPath()
-	if err != nil {
-		return false, err
-	}
-	existing, readErr := os.ReadFile(path)
-	if errors.Is(readErr, os.ErrNotExist) {
-		return false, nil
-	}
-	if readErr != nil {
-		return false, readErr
-	}
-	if !isOurs(existing) {
-		return false, nil
-	}
-	if err := os.Remove(path); err != nil {
-		return false, err
-	}
-	return true, nil
+	return installer.Uninstall()
 }
