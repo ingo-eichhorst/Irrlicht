@@ -49,6 +49,10 @@ source "$REPO_ROOT/tools/onboarding-factory/scripts/lib/shard-lib.sh"
 # reach the tree.
 # shellcheck source=onboarding-factory/scripts/lib/atomic-promote.sh
 source "$REPO_ROOT/tools/onboarding-factory/scripts/lib/atomic-promote.sh"
+# Promote-time hook-coverage prompt (#1754): the last gate before a
+# hooks-declaring adapter's hook-free recording becomes committed truth.
+# shellcheck source=onboarding-factory/scripts/lib/promote-hookcheck.sh
+source "$REPO_ROOT/tools/onboarding-factory/scripts/lib/promote-hookcheck.sh"
 
 STAGED_DIR="$STAGING/replaydata/agents/$AGENT/scenarios/$SCENARIO"
 TARGET_DIR="$REPO_ROOT/replaydata/agents/$AGENT/scenarios/$SCENARIO"
@@ -58,6 +62,14 @@ if [[ ! -f "$STAGED_DIR/events.jsonl" ]]; then
   echo "promote: no staged events.jsonl at $STAGED_DIR" >&2
   exit 1
 fi
+
+# A hooks-declaring adapter's recording with no hook_received event attributed
+# to it is the exact failure #1735 took three attempts to diagnose (a
+# complete, healthy-looking recording whose hook channel never fired). Never
+# a hard failure — some scenarios genuinely produce no hook — so this prompts
+# / accepts an explicit override rather than blocking (see the lib header).
+promote_hookcheck "$AGENT" "$STAGED_DIR/events.jsonl" \
+  default_hookfree_check default_hookfree_confirm || exit 1
 
 # Daemon + agent CLI versions + recipe hash for the manifest.
 DAEMON_VER="unknown"
