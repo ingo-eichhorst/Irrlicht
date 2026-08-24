@@ -3,11 +3,14 @@ package filesystem_test
 import (
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"irrlicht/core/adapters/outbound/filesystem"
 	"irrlicht/core/domain/session"
+	"irrlicht/core/internal/contracttesting"
 )
 
 func TestRepository_SaveAndLoad(t *testing.T) {
@@ -192,6 +195,143 @@ func TestRepository_ListAll_SkipsNonJSON(t *testing.T) {
 	}
 	if len(states) != 1 {
 		t.Errorf("expected 1 valid state, got %d", len(states))
+	}
+}
+
+// TestRepository_ListAll_KeepsUnknownState covers #1797. ListAll used to
+// os.Remove any session file whose state fell outside a hardcoded three-entry
+// allowlist, so a daemon that predates a newly-introduced state DESTROYS every
+// session file carrying it — irrecoverably, on the first sweep after a
+// downgrade or a mixed-version install. Forward compatibility is the point:
+// an unrecognised state is a value this build does not understand yet, never a
+// licence to delete the user's data.
+//
+// The surviving-file assertion is the defect test (seen red on the
+// pre-#1797 tree, where the file is gone by the time ListAll returns). The
+// "not in the returned slice" assertion is a LOCK, not red-first evidence: a
+// three-state build already skipped the state and must keep skipping it, since
+// every downstream consumer (grouping, counts, the state machine) is written
+// against exactly three values.
+func TestRepository_ListAll_KeepsUnknownState(t *testing.T) {
+	dir := t.TempDir()
+	repo := filesystem.NewWithDir(dir)
+
+	known := &session.SessionState{SessionID: "known", State: session.StateWorking, UpdatedAt: time.Now().Unix()}
+	if err := repo.Save(known); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	unknownPath := filepath.Join(dir, "unknown.json")
+	payload := []byte(`{"version":1,"session_id":"unknown","state":"zzz-unknown","first_seen":1,"updated_at":2}`)
+	if err := os.WriteFile(unknownPath, payload, 0o600); err != nil {
+		t.Fatalf("write unknown-state file: %v", err)
+	}
+
+	states, err := repo.ListAll()
+	if err != nil {
+		t.Fatalf("ListAll: %v", err)
+	}
+
+	// The defect: the file must survive the sweep, byte for byte.
+	got, err := os.ReadFile(unknownPath)
+	if err != nil {
+		t.Fatalf("unknown-state file was deleted by ListAll: %v", err)
+	}
+	if string(got) != string(payload) {
+		t.Errorf("unknown-state file was rewritten: got %q, want %q", got, payload)
+	}
+
+	// The lock: it must not reach a three-state consumer.
+	ids := make([]string, 0, len(states))
+	for _, s := range states {
+		ids = append(ids, s.SessionID)
+	}
+	if !slices.Equal(ids, []string{"known"}) {
+		t.Errorf("ListAll returned %v; want only the known session (the unknown-state one must be skipped)", ids)
+	}
+}
+
+// TestRepository_ListAll_WarnsOncePerUnknownState covers the reporting half of
+// #1797. Skipping a session SILENTLY is its own defect: the session vanishes
+// from the user's list with no artifact anywhere saying why. Two things are
+// asserted, and both matter:
+//
+//   - the warning goes through the Logger PORT, not stdlib log — see
+//     SessionRepository.logger for why stderr reaches nobody in the shipped app.
+//   - it fires ONCE PER DISTINCT VALUE, not once per sighting. ListAll runs on
+//     the poll loop, so per-occurrence logging would repeat the same line every
+//     few seconds for as long as the file exists.
+//
+// Mutation check (this mechanism is added by #1797, so it has no pre-fix state
+// to run red against): drop the `LoadOrStore` early-return and the
+// second-ListAll assertion goes red; drop the `r.logger != nil` branch and the
+// first one does.
+func TestRepository_ListAll_WarnsOncePerUnknownState(t *testing.T) {
+	dir := t.TempDir()
+	repo := filesystem.NewWithDir(dir)
+	logger := &contracttesting.RecordingLogger{}
+	repo.SetLogger(logger)
+
+	// ListAll walks os.ReadDir, which sorts by filename, so the warnings arrive
+	// a.json-then-c.json. b.json repeats a.json's value and must be deduped away.
+	writeRawStateFile(t, dir, "a.json", "zzz-unknown")
+	writeRawStateFile(t, dir, "b.json", "zzz-unknown") // same value, second file
+	writeRawStateFile(t, dir, "c.json", "yyy-other")   // a different unrecognized value
+
+	if _, err := repo.ListAll(); err != nil {
+		t.Fatalf("ListAll: %v", err)
+	}
+
+	msgs := logger.Errors()
+	if len(msgs) != 2 {
+		t.Fatalf("first ListAll: got %d warnings, want 2 (one per DISTINCT unknown value): %q", len(msgs), msgs)
+	}
+	if !strings.Contains(msgs[0], "zzz-unknown") || !strings.Contains(msgs[1], "yyy-other") {
+		t.Errorf("warnings do not name their unrecognized values, in ReadDir order: %q", msgs)
+	}
+	wantEvents := []string{"session_state_unrecognized", "session_state_unrecognized"}
+	if got := logger.EventTypes(); !slices.Equal(got, wantEvents) {
+		t.Errorf("event types: got %v, want %v", got, wantEvents)
+	}
+
+	// The poll loop calls ListAll again and again; the warning must not repeat.
+	if _, err := repo.ListAll(); err != nil {
+		t.Fatalf("second ListAll: %v", err)
+	}
+	if after := logger.Errors(); len(after) != 2 {
+		t.Errorf("second ListAll: got %d warnings total, want still 2 (once per value, not per sighting)", len(after))
+	}
+}
+
+// writeRawStateFile drops a session file with a state value the repository's
+// own Save() would never produce — the point being to simulate a file written
+// by a DIFFERENT (newer) build.
+func writeRawStateFile(t *testing.T, dir, name, state string) {
+	t.Helper()
+	payload := []byte(`{"session_id":"` + name + `","state":"` + state + `","updated_at":2}`)
+	if err := os.WriteFile(filepath.Join(dir, name), payload, 0o600); err != nil {
+		t.Fatalf("write %s: %v", name, err)
+	}
+}
+
+// TestRepository_ListAll_KeepsUnparseableFile pins the other half of #1797's
+// data-safety property: a file this build cannot decode at all is skipped, not
+// deleted. ListAll's `continue` on a json.Unmarshal error already behaved this
+// way, so this is a LOCK, not a defect test — it exists so a future "tidy up
+// junk on load" change has to break a named test rather than a code comment.
+func TestRepository_ListAll_KeepsUnparseableFile(t *testing.T) {
+	dir := t.TempDir()
+	repo := filesystem.NewWithDir(dir)
+
+	badPath := filepath.Join(dir, "bad.json")
+	if err := os.WriteFile(badPath, []byte("not{json"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := repo.ListAll(); err != nil {
+		t.Fatalf("ListAll: %v", err)
+	}
+	if _, err := os.Stat(badPath); err != nil {
+		t.Errorf("unparseable file was deleted by ListAll: %v", err)
 	}
 }
 

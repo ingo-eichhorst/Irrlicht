@@ -14,9 +14,22 @@ const svgIcons = {
   waiting: '<svg viewBox="0 0 16 16" fill="none"><rect x="4" y="3" width="2.5" height="10" rx="1" fill="#FF9500"/><rect x="9.5" y="3" width="2.5" height="10" rx="1" fill="#FF9500"/></svg>',
   ready: '<svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="#34C759" stroke-width="1.5"/><path d="M5 8.2l2 2 4-4.4" stroke="#34C759" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   cancelled: '<svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="#8E8E93" stroke-width="1.5"/><path d="M5.5 5.5l5 5M10.5 5.5l-5 5" stroke="#8E8E93" stroke-width="1.5" stroke-linecap="round"/></svg>',
+  // Unknown / unrecognized state (#1797) — a session state this build has
+  // never heard of, e.g. one written by a newer daemon. Deliberately
+  // `currentColor` rather than an inlined hex: the .state-unknown rule in
+  // irrlicht.css points that at var(--unknown), a token paired by value with
+  // macOS IrrHex.unknown. (The `cancelled` entry above inlines its hex and so
+  // follows no theme override at all — a known wart, left alone rather than
+  // copied.)
+  unknown: '<svg class="state-unknown" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.5"/><path d="M6.2 6.2a1.85 1.85 0 113 1.5c-.7.5-1.2.85-1.2 1.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="8" cy="11.6" r="0.85" fill="currentColor"/></svg>',
 };
 
-export function stateIcon(state) { return svgIcons[state] || svgIcons.ready; }
+// stateIcon maps a session state to its 12px glyph. An unrecognized state gets
+// the neutral `unknown` icon, NEVER the green ready checkmark (#1797): green
+// reads as "this session finished cleanly", which is the single worst thing to
+// claim at the exact moment the dashboard cannot interpret what the daemon
+// said. A blank/missing state lands here too, for the same reason.
+export function stateIcon(state) { return svgIcons[state] || svgIcons.unknown; }
 
 // --- Helpers ---
 export function shortModel(m) {

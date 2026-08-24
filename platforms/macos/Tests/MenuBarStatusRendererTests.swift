@@ -53,6 +53,76 @@ final class MenuBarStatusRendererTests: XCTestCase {
         XCTAssertTrue(svg.contains(">4</text>"))
     }
 
+    // #1797 — a group of nothing but unrecognized sessions must not report
+    // "all done" in the menu bar.
+    //
+    // What this test actually guards is `State.dominant(in:)`, whose final
+    // `return .ready` used to answer green for an all-unknown collection.
+    // Mutation check (verified, not asserted): revert `dominant` to
+    // `return .ready` and this goes red.
+    //
+    // It does NOT guard `segmentOrder` — dropping `.unknown` from that list
+    // leaves this test green, because the single-segment `??` fallback also
+    // routes to `.unknown`. `testStateSegmentsCoverEveryUnknownStateSession`
+    // below is the one that covers `segmentOrder`. Recording the split
+    // explicitly because the obvious reading of these two tests gets it
+    // backwards.
+    func testAggregatedGroupSVGNeverPaintsUnknownSessionsGreen() {
+        let sessions = (1...3).map { makeSession(id: "\($0)", state: .unknown) }
+
+        let svg = MenuBarStatusRenderer.aggregatedGroupSVG(for: sessions)
+
+        XCTAssertFalse(
+            svg.contains(IrrSVG.ready),
+            "a group of only unrecognized sessions must not render ready-green: \(svg)"
+        )
+        XCTAssertTrue(svg.contains(IrrSVG.unknown), "expected the neutral hue: \(svg)")
+        XCTAssertTrue(svg.contains(">3</text>"))
+    }
+
+    // #1797 — the universal form of the invariant, stated over EVERY state
+    // rather than over `.unknown` specifically: whatever the vocabulary is, the
+    // pie must account for all of it. `segmentOrder` derives from `allCases`
+    // now, so this holds by construction and would catch a 5th state that
+    // arrived with a `menuBarRank` but no wedge.
+    func testStateSegmentsCoverEveryDeclaredState() {
+        let sessions = SessionState.State.allCases.enumerated().map { i, s in
+            makeSession(id: "\(i)", state: s)
+        }
+
+        let segments = MenuBarStatusRenderer.stateSegments(for: sessions)
+
+        XCTAssertEqual(
+            Set(segments.map(\.state)), Set(SessionState.State.allCases),
+            "every declared state needs a wedge, or the dot renders with a hole"
+        )
+        XCTAssertEqual(segments.map(\.fraction).reduce(0, +), 1.0, accuracy: 0.0001)
+    }
+
+    // The pie fractions must still sum to the whole circle once unknown
+    // sessions are in the mix — otherwise the dot renders with a hole.
+    //
+    // This is the test that guards `segmentOrder`'s coverage of `.unknown`
+    // specifically (#1797). Mutation check (verified): pin segmentOrder back to
+    // a literal `[.waiting, .working, .ready]` and this goes red with count
+    // 2-of-4 and fractions summing to 0.5.
+    func testStateSegmentsCoverEveryUnknownStateSession() {
+        let sessions = [
+            makeSession(id: "1", state: .waiting),
+            makeSession(id: "2", state: .unknown),
+            makeSession(id: "3", state: .ready),
+            makeSession(id: "4", state: .unknown)
+        ]
+
+        let segments = MenuBarStatusRenderer.stateSegments(for: sessions)
+
+        XCTAssertEqual(segments.map(\.count).reduce(0, +), sessions.count)
+        XCTAssertEqual(segments.map(\.fraction).reduce(0, +), 1.0, accuracy: 0.0001)
+        // Unknown sorts last, after every state we can actually read.
+        XCTAssertEqual(segments.last?.state, .unknown)
+        XCTAssertEqual(segments.last?.count, 2)
+    }
+
     func testBuildStatusImageReturnsImageForSessions() {
         let image = MenuBarStatusRenderer.buildStatusImage(
             sessions: [makeSession(id: "1", state: .working)],

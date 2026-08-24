@@ -62,6 +62,11 @@ func initSessionStorage(logger outbound.Logger, cfg config.Config) (*filesystem.
 		os.Exit(1)
 	}
 
+	// #1797: the port logger, not the stderr fallback — see
+	// SessionRepository.logger for why. Must precede the first ListAll (the
+	// PruneStale below) and any sharing of fsRepo across goroutines.
+	fsRepo.SetLogger(logger)
+
 	pruned, err := fsRepo.PruneStale(cfg.MaxSessionAge)
 	if err != nil {
 		logger.LogError("startup", "", fmt.Sprintf("failed to prune stale sessions: %v", err))

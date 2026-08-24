@@ -9,10 +9,23 @@ import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const cssPath = join(here, '..', 'irrlicht.css')
+const macosTokensPath = join(here, '..', '..', 'macos', 'Irrlicht', 'Theme', 'Tokens.swift')
 
 /** The dashboard's stylesheet, read from disk so the artifact tracks the real CSS. */
 export function readCss() {
   return readFileSync(cssPath, 'utf8')
+}
+
+/**
+ * The macOS app's design tokens, read from disk. Lets a web test assert that a
+ * state hue defined on both platforms actually agrees, instead of comparing
+ * against a hand-copied literal that cannot fail when the Swift side drifts
+ * (#1797). Path resolution lives here, beside readCss, because this module
+ * resolves from `import.meta.url` in a plain node context — doing the same from
+ * a jsdom-environment test file yields a non-file URL.
+ */
+export function readMacosTokens() {
+  return readFileSync(macosTokensPath, 'utf8')
 }
 
 /**

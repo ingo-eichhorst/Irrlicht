@@ -258,15 +258,17 @@ func declaredPermissionsMismatch(t reporter, h hookjson.HookHandler, want ...str
 // three packages had grown the same ten lines, and "what a refusal may log" is
 // a decision about the contract rather than about an adapter.
 type RecordingLogger struct {
-	mu     sync.Mutex
-	errors []string
+	mu         sync.Mutex
+	errors     []string
+	eventTypes []string
 }
 
 // LogError records. The other methods are deliberately inert: only the error
 // channel carries the obligation above.
-func (l *RecordingLogger) LogError(_, _, msg string) {
+func (l *RecordingLogger) LogError(eventType, _, msg string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.eventTypes = append(l.eventTypes, eventType)
 	l.errors = append(l.errors, msg)
 }
 
@@ -281,4 +283,15 @@ func (l *RecordingLogger) Errors() []string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return slices.Clone(l.errors)
+}
+
+// EventTypes returns the event-type tag of each recorded ERROR, newest last and
+// index-aligned with Errors(). Callers that only care about the message can
+// ignore it; a caller asserting WHICH channel a line was filed under (#1797's
+// unrecognized-state warning is one) needs the tag, and hand-rolling a private
+// double just to see it is what this type exists to stop.
+func (l *RecordingLogger) EventTypes() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.eventTypes)
 }

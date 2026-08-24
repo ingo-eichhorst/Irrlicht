@@ -11,6 +11,11 @@ enum IrrHex {
     static let waiting   = "#FF9500"
     static let ready     = "#34C759"
     static let cancelled = "#8E8E93"
+    // Unrecognized session state (#1797) — a state this build has never heard
+    // of, e.g. one written by a newer daemon. Same neutral grey as `cancelled`
+    // by value, kept as its own token because the two mean different things:
+    // `cancelled` is a state that was retired, `unknown` is one we can't read.
+    static let unknown   = "#8E8E93"
 
     // Pressure scale
     static let pressureLow      = "#34C759"
@@ -32,6 +37,7 @@ enum IrrSVG {
     static let waiting   = "FF9500"
     static let ready     = "34C759"
     static let cancelled = "8E8E93"
+    static let unknown   = "8E8E93"
 }
 
 enum IrrColors {
@@ -39,6 +45,7 @@ enum IrrColors {
     static let waiting   = Color(hex: IrrHex.waiting)
     static let ready     = Color(hex: IrrHex.ready)
     static let cancelled = Color(hex: IrrHex.cancelled)
+    static let unknown   = Color(hex: IrrHex.unknown)
 
     // 12%-alpha soft backgrounds (--working-dim / --waiting-dim / --ready-dim).
     static let workingDim = working.opacity(0.12)

@@ -825,12 +825,20 @@ struct SessionState: Identifiable, Codable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         
         id = try container.decode(String.self, forKey: .id)
-        // Handle backwards compatibility: "finished" -> "ready"
+        // Handle backwards compatibility: "finished" -> "ready". This branch is
+        // a deliberate RENAME shim (the daemon's old spelling of `ready`), not
+        // an unknown state — #1797 leaves it exactly as it was.
         let stateString = try container.decode(String.self, forKey: .state)
         if stateString == "finished" {
             state = .ready
         } else {
-            state = State(rawValue: stateString) ?? .ready
+            // #1797: anything this build does not recognize becomes `.unknown`,
+            // NEVER `.ready`. The old `?? .ready` painted a state we cannot
+            // interpret green — the single worst wrong answer, because green
+            // asserts "this session finished cleanly" at exactly the moment the
+            // app has no idea what the daemon is reporting. `.unknown` renders
+            // neutral grey and says so.
+            state = State(rawValue: stateString) ?? .unknown
         }
         model = try container.decodeIfPresent(String.self, forKey: .model) ?? "unknown"
         cwd = try container.decodeIfPresent(String.self, forKey: .cwd) ?? ""
@@ -930,14 +938,28 @@ struct SessionState: Identifiable, Codable {
         self.yieldState = yieldState
     }
 
+    /// The daemon's three-state lifecycle, plus a fourth case this app owns.
+    ///
+    /// `unknown` is NOT a daemon state and never comes off the wire as itself
+    /// — it is where `init(from:)` puts a state string this build does not
+    /// recognize (#1797), e.g. one written by a newer daemon during a staged
+    /// upgrade. Every rendering below therefore has to answer for it, and the
+    /// answer is always neutral: grey, a question mark, never green.
+    ///
+    /// ⚠️ `.unknown` must never be WRITTEN BACK to the daemon. It is `Codable`
+    /// only because the enclosing type is, and nothing encodes a SessionState
+    /// today; if something ever does, `"state":"unknown"` is a value the daemon
+    /// does not recognize and would skip on its next load — silently removing
+    /// the session. Encode the original state, or refuse.
     enum State: String, CaseIterable, Codable {
-        case working, waiting, ready
+        case working, waiting, ready, unknown
 
         var glyph: String {
             switch self {
             case .working: return "hammer.fill"
             case .waiting: return "hourglass"
             case .ready: return "checkmark.circle.fill"
+            case .unknown: return "questionmark.circle"
             }
         }
 
@@ -946,6 +968,7 @@ struct SessionState: Identifiable, Codable {
             case .working: return IrrColors.working
             case .waiting: return IrrColors.waiting
             case .ready:   return IrrColors.ready
+            case .unknown: return IrrColors.unknown
             }
         }
 
@@ -955,14 +978,36 @@ struct SessionState: Identifiable, Codable {
             case .working: return IrrSVG.working
             case .waiting: return IrrSVG.waiting
             case .ready:   return IrrSVG.ready
+            case .unknown: return IrrSVG.unknown
+            }
+        }
+
+        /// Ordering key for summaries that lay the states out in a fixed
+        /// sequence (the menu bar's pie dot). A `switch` on purpose: it is the
+        /// mechanism that stops a future 5th state from being silently left out
+        /// of a hand-written array, which is exactly how `.unknown` came to be
+        /// omitted from `segmentOrder` and fall through to green (#1797).
+        var menuBarRank: Int {
+            switch self {
+            case .waiting: return 0
+            case .working: return 1
+            case .ready:   return 2
+            case .unknown: return 3   // last: outranked by anything we can read
             }
         }
 
         /// Highest-priority state in a collection (waiting > working > ready).
+        ///
+        /// `unknown` sits below all three: a group that contains even one
+        /// session in a state we can read is better summarized by that. It only
+        /// wins when there is nothing else to say — and then it must win, or a
+        /// group of nothing but unreadable sessions summarizes as green (#1797).
+        /// An EMPTY collection keeps its historical `.ready` answer.
         static func dominant<C: Collection>(in states: C) -> State where C.Element == State {
             if states.contains(.waiting) { return .waiting }
             if states.contains(.working) { return .working }
-            return .ready
+            if states.contains(.ready) { return .ready }
+            return states.isEmpty ? .ready : .unknown
         }
 
         var emoji: String {
@@ -970,6 +1015,7 @@ struct SessionState: Identifiable, Codable {
             case .working: return "🟣"   // purple circle
             case .waiting: return "🟠"   // orange circle
             case .ready: return "🟢"  // green circle
+            case .unknown: return "⚪️"  // white circle — neutral, not a verdict
             }
         }
 
@@ -978,6 +1024,7 @@ struct SessionState: Identifiable, Codable {
             case .working: return "Working"
             case .waiting: return "Waiting for input"
             case .ready: return "Ready"
+            case .unknown: return "Unknown state"
             }
         }
     }

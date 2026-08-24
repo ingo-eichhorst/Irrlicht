@@ -25,7 +25,21 @@ struct MenuBarStatusRenderer {
     private static let fontSize: CGFloat = 10
     private static let maxVisibleGroups = 5
     private static let overflowFillHex = IrrSVG.cancelled
-    private static let segmentOrder: [SessionState.State] = [.waiting, .working, .ready]
+    /// Slice order for the per-group pie dot — DERIVED from `allCases`, never
+    /// hand-listed (#1797).
+    ///
+    /// The fractions are `count / sessions.count`, so a state missing from this
+    /// list is a session counted in the denominator with no wedge of its own
+    /// (the dot renders with a hole), and a group of nothing but the missing
+    /// state produced NO segments at all and fell through
+    /// `aggregatedCircleElements`' single-segment path to a green dot. That is
+    /// how `.unknown` broke it, and a literal array would let a 5th state break
+    /// it again in exactly the same way — an array is the one state reader the
+    /// Swift compiler cannot force to be exhaustive. Sorting `allCases` by
+    /// `menuBarRank`, which IS a compiler-forced switch, moves the requirement
+    /// somewhere it cannot be forgotten.
+    private static let segmentOrder: [SessionState.State] =
+        SessionState.State.allCases.sorted { $0.menuBarRank < $1.menuBarRank }
 
     static func buildStatusImage(
         sessions: [SessionState],
@@ -174,9 +188,17 @@ struct MenuBarStatusRenderer {
         let cy = height / 2
 
         guard segments.count > 1 else {
-            let hex = segments.first?.state.hexColor ?? SessionState.State.ready.hexColor
+            // One state covers the whole group: a solid dot in its own hue,
+            // no pie. `segments` cannot be empty here — segmentOrder spans
+            // every case, so it is empty only for an empty session list, and
+            // renderGroup sends anything with <= 3 sessions to
+            // renderCompactGroup. Returning "" rather than inventing a color
+            // for the impossible case: a `?? .ready` here was one of the ways
+            // an unreadable group used to paint green (#1797), and no fallback
+            // hue is better than a wrong one.
+            guard let only = segments.first else { return "" }
             return """
-            <circle cx="\(svgNumber(cx))" cy="\(svgNumber(cy))" r="\(svgNumber(radius))" fill="#\(hex)" stroke="rgba(0,0,0,0.25)" stroke-width="0.5"/>
+            <circle cx="\(svgNumber(cx))" cy="\(svgNumber(cy))" r="\(svgNumber(radius))" fill="#\(only.state.hexColor)" stroke="rgba(0,0,0,0.25)" stroke-width="0.5"/>
             """
         }
 

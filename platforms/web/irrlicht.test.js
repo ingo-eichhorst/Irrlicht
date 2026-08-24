@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, beforeAll, afterAll } from 'vitest'
 
-import { formatCO2, co2TierTitle } from './formatters.js'
-import { readCss } from './snapshots/serialize.js'
+import { formatCO2, co2TierTitle, stateIcon } from './formatters.js'
+import { readCss, readMacosTokens } from './snapshots/serialize.js'
 import {
   permissionEffectNotice,
   anyEffectFailed,
@@ -171,6 +171,78 @@ describe('co2TierTitle', () => {
   test('discloses the fallback approximation for any other tier', () => {
     expect(co2TierTitle('fallback')).toMatch(/cross-model fallback/)
     expect(co2TierTitle(undefined)).toMatch(/cross-model fallback/)
+  })
+})
+
+// #1797 — stateIcon used to answer `svgIcons[state] || svgIcons.ready`, so a
+// state this build has never heard of rendered the GREEN CHECKMARK. Green is
+// the single worst wrong answer: it tells the user a session finished cleanly
+// at exactly the moment the daemon is saying something this dashboard cannot
+// interpret. An unrecognised state gets a neutral icon of its own.
+describe('stateIcon (#1797)', () => {
+  // LOCK — the three canonical icons must not move. Passes by construction.
+  test('known states keep their own icons', () => {
+    expect(stateIcon('working')).toMatch(/#8B5CF6/)
+    expect(stateIcon('waiting')).toMatch(/#FF9500/)
+    expect(stateIcon('ready')).toMatch(/#34C759/)
+  })
+
+  test('an unrecognized state does not render as ready', () => {
+    const icon = stateIcon('zzz-unknown')
+    expect(icon).not.toBe(stateIcon('ready'))
+    expect(icon).not.toBe(stateIcon('working'))
+    expect(icon).not.toBe(stateIcon('waiting'))
+    // Not merely "different markup that happens to be green": the ready
+    // icon's hue must not appear at all.
+    expect(icon).not.toMatch(/34C759/i)
+    // ...and it must still render something rather than an empty string.
+    expect(icon).toMatch(/^<svg\b/)
+    expect(icon).toMatch(/<\/svg>$/)
+  })
+
+  test('a missing state renders the unknown icon, not ready', () => {
+    expect(stateIcon(undefined)).toBe(stateIcon('zzz-unknown'))
+    expect(stateIcon('')).toBe(stateIcon('zzz-unknown'))
+    // The two `toBe`s above are equality checks, and pre-fix BOTH sides were
+    // the ready checkmark — so they were equal and this test passed against
+    // the defect. This is what makes the test's name true.
+    expect(stateIcon(undefined)).not.toMatch(/34C759/i)
+  })
+
+  // The unknown icon takes its color from a CSS token rather than inlining a
+  // hex. The `cancelled` entry beside it predates that rule and is deliberately
+  // left alone (out of scope, #1797) — this asserts the NEW icon didn't copy
+  // the mistake.
+  test('the unknown icon is token-driven, not a hardcoded hex', () => {
+    const icon = stateIcon('zzz-unknown')
+    expect(icon).toMatch(/currentColor/)
+    expect(icon).not.toMatch(/#[0-9a-f]{6}/i)
+  })
+
+  test('the stylesheet points the unknown icon at the --unknown token', () => {
+    const css = readCss()
+    expect(css).toMatch(/svg\.state-unknown/)
+    // The rule must actually carry a declaration — a selector with none would
+    // leave the icon inheriting whatever color the row happens to have.
+    const rule = css.match(/svg\.state-unknown[^{]*\{[^}]*\}/)
+    expect(rule).not.toBeNull()
+    expect(rule[0]).toMatch(/var\(--unknown\)/)
+  })
+
+  // #1797 — every state hue is paired by value across the two frontends, and
+  // `unknown` is no exception. This READS Tokens.swift rather than comparing
+  // against a hand-typed literal: a third copy of the constant could not fail
+  // when the Swift side drifts, which is the only scenario this test exists
+  // for. Both extractions are asserted to have matched, so "could not find the
+  // token" fails loudly instead of silently passing (AGENTS.md).
+  test('--unknown matches the macOS IrrHex.unknown value', () => {
+    const cssDecl = readCss().match(/--unknown:\s*([^;]+);/)
+    expect(cssDecl, 'no --unknown custom property found in irrlicht.css').not.toBeNull()
+
+    const swiftDecl = readMacosTokens().match(/static let unknown\s*=\s*"(#[0-9A-Fa-f]{6})"/)
+    expect(swiftDecl, 'no IrrHex.unknown found in platforms/macos/Irrlicht/Theme/Tokens.swift').not.toBeNull()
+
+    expect(cssDecl[1].trim().toLowerCase()).toBe(swiftDecl[1].toLowerCase())
   })
 })
 
