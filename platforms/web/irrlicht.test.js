@@ -180,6 +180,7 @@ describe('co2TierTitle', () => {
 // at exactly the moment the daemon is saying something this dashboard cannot
 // interpret. An unrecognised state gets a neutral icon of its own.
 describe('stateIcon (#1797)', () => {
+  // LOCK — the three canonical icons must not move. Passes by construction.
   test('known states keep their own icons', () => {
     expect(stateIcon('working')).toMatch(/#8B5CF6/)
     expect(stateIcon('waiting')).toMatch(/#FF9500/)
@@ -206,27 +207,43 @@ describe('stateIcon (#1797)', () => {
   test('a missing state renders the unknown icon, not ready', () => {
     expect(stateIcon(undefined)).toBe(stateIcon('zzz-unknown'))
     expect(stateIcon('')).toBe(stateIcon('zzz-unknown'))
+    // The two `toBe`s above are equality checks, and pre-fix BOTH sides were
+    // the ready checkmark — so they were equal and this test passed against
+    // the defect. These are what make the test's name true.
+    expect(stateIcon(undefined)).not.toMatch(/34C759/i)
+    expect(stateIcon('')).not.toMatch(/34C759/i)
   })
 
-  // The unknown icon takes its color from the theme rather than inlining a
-  // hex, so it follows the light-mode palette. The `cancelled` entry beside it
-  // predates that rule and is deliberately left alone (out of scope, #1797) —
-  // this asserts the NEW icon didn't copy the mistake.
-  test('the unknown icon is theme-aware, not a hardcoded hex', () => {
+  // The unknown icon takes its color from a CSS token rather than inlining a
+  // hex. The `cancelled` entry beside it predates that rule and is deliberately
+  // left alone (out of scope, #1797) — this asserts the NEW icon didn't copy
+  // the mistake.
+  test('the unknown icon is token-driven, not a hardcoded hex', () => {
     const icon = stateIcon('zzz-unknown')
     expect(icon).toMatch(/currentColor/)
     expect(icon).not.toMatch(/#[0-9a-f]{6}/i)
   })
 
-  test('the stylesheet gives the unknown icon a muted color', () => {
+  test('the stylesheet points the unknown icon at the --unknown token', () => {
     const css = readCss()
     expect(css).toMatch(/svg\.state-unknown/)
-    // The rule must actually resolve to the theme's muted token — a selector
-    // with no declaration would leave the icon inheriting whatever color the
-    // row happens to have.
+    // The rule must actually carry a declaration — a selector with none would
+    // leave the icon inheriting whatever color the row happens to have.
     const rule = css.match(/svg\.state-unknown[^{]*\{[^}]*\}/)
     expect(rule).not.toBeNull()
-    expect(rule[0]).toMatch(/var\(--muted\)/)
+    expect(rule[0]).toMatch(/var\(--unknown\)/)
+  })
+
+  // #1797 — every state hue is paired by value across the two frontends, and
+  // `unknown` is no exception. macOS holds it in IrrHex.unknown
+  // (platforms/macos/Irrlicht/Theme/Tokens.swift); if that value is changed on
+  // one side only, this fails rather than the two dashboards quietly drifting
+  // to different greys for the same session.
+  test('--unknown is defined and matches the macOS IrrHex.unknown value', () => {
+    const css = readCss()
+    const decl = css.match(/--unknown:\s*([^;]+);/)
+    expect(decl).not.toBeNull()
+    expect(decl[1].trim().toLowerCase()).toBe('#8e8e93')
   })
 })
 

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"irrlicht/core/domain/session"
+	"irrlicht/core/ports/outbound"
 )
 
 const appSupportDir = "Library/Application Support/Irrlicht"
@@ -23,7 +24,21 @@ type SessionRepository struct {
 	// into a log flood (see warnUnknownStateOnce). A sync.Map because ListAll is
 	// reachable from more than one goroutine through CachedRepository.
 	warnedStates sync.Map
+	// logger, when set, receives the unrecognised-state warning. It has to be
+	// the Logger PORT and not stdlib `log`, because in the shipped product the
+	// macOS app spawns irrlichd with both stdout and stderr pointed at
+	// FileHandle.nullDevice (DaemonManager.spawnDaemon) — a `log.Printf` there
+	// reaches nobody, and this warning is the ONLY signal that a session
+	// silently vanished from the list. Set once at startup via SetLogger; nil
+	// for the CLI paths (--diagnose, irrlicht-ls), which keep the stderr
+	// fallback because their stderr is a terminal.
+	logger outbound.Logger
 }
+
+// SetLogger attaches the daemon's structured logger. Safe to leave unset —
+// warnUnknownStateOnce falls back to stderr. Call it before the repository is
+// shared with other goroutines (startup wiring does).
+func (r *SessionRepository) SetLogger(l outbound.Logger) { r.logger = l }
 
 // New returns a SessionRepository rooted at the user's Application Support directory.
 func New() (*SessionRepository, error) {
@@ -138,8 +153,19 @@ func (r *SessionRepository) ListAll() ([]*session.SessionState, error) {
 			// not an option — grouping, the state counters and the state
 			// machine are all written against exactly working/waiting/ready,
 			// so an unknown value would surface as a mis-rendered session
-			// rather than an absent one. Skipping loses only visibility, and
-			// the file is still on disk for the build that does understand it.
+			// rather than an absent one.
+			//
+			// Two consequences of skipping, stated rather than implied:
+			//   - PruneStale iterates ListAll, so these files are exempt from
+			//     MaxSessionAge and accumulate until a build that understands
+			//     the state reaps them. Deliberate: unbounded-but-intact beats
+			//     the data loss this block exists to stop, and age-based
+			//     reaping of states we cannot read is its own decision.
+			//   - Load() does NOT filter by state, so a session this daemon
+			//     still receives events for is loaded normally and the next
+			//     Save() rewrites the state to a canonical one. "Kept for the
+			//     build that understands it" therefore holds for sessions this
+			//     daemon never sees again — not for live ones.
 			r.warnUnknownStateOnce(state.State, name)
 			continue
 		}
@@ -158,9 +184,14 @@ func (r *SessionRepository) warnUnknownStateOnce(state, name string) {
 	if _, seen := r.warnedStates.LoadOrStore(state, struct{}{}); seen {
 		return
 	}
-	log.Printf("filesystem repository: session file %q has unrecognized state %q "+
-		"(this build knows only %s/%s/%s) — keeping the file on disk and skipping the session",
+	msg := fmt.Sprintf("session file %q has unrecognized state %q (this build knows only %s/%s/%s) "+
+		"— keeping the file on disk and skipping the session",
 		name, state, session.StateWorking, session.StateWaiting, session.StateReady)
+	if r.logger != nil {
+		r.logger.LogError("session_state_unrecognized", "", msg)
+		return
+	}
+	log.Printf("filesystem repository: %s", msg)
 }
 
 // PruneStale deletes session files older than maxAge and returns the count.

@@ -3,6 +3,8 @@ package filesystem_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -246,6 +248,92 @@ func TestRepository_ListAll_KeepsUnknownState(t *testing.T) {
 	}
 	if len(states) != 1 {
 		t.Errorf("ListAll: got %d states, want 1 (the known session)", len(states))
+	}
+}
+
+// recordingLogger captures the Logger port calls the repository makes.
+type recordingLogger struct {
+	mu       sync.Mutex
+	errors   []string
+	eventIDs []string
+}
+
+func (l *recordingLogger) LogInfo(eventType, sessionID, message string) {}
+func (l *recordingLogger) LogError(eventType, sessionID, errorMsg string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.eventIDs = append(l.eventIDs, eventType)
+	l.errors = append(l.errors, errorMsg)
+}
+func (l *recordingLogger) LogProcessingTime(eventType, sessionID string, processingTimeMs int64, payloadSize int, result string) {
+}
+func (l *recordingLogger) Close() error { return nil }
+
+func (l *recordingLogger) snapshot() ([]string, []string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]string(nil), l.eventIDs...), append([]string(nil), l.errors...)
+}
+
+// TestRepository_ListAll_WarnsOncePerUnknownState covers the reporting half of
+// #1797. Skipping a session SILENTLY is its own defect: the session vanishes
+// from the user's list with no artifact anywhere saying why. Two things are
+// asserted, and both matter:
+//
+//   - the warning goes through the Logger PORT, not stdlib log. In the shipped
+//     product the macOS app spawns irrlichd with stdout and stderr on
+//     FileHandle.nullDevice, so a `log.Printf` here reaches nobody.
+//   - it fires ONCE PER DISTINCT VALUE, not once per sighting. ListAll runs on
+//     the poll loop, so per-occurrence logging would repeat the same line every
+//     few seconds for as long as the file exists.
+//
+// Mutation check (this mechanism is added by #1797, so it has no pre-fix state
+// to run red against): drop the `LoadOrStore` early-return and the
+// second-ListAll assertion goes red; drop the `r.logger != nil` branch and the
+// first one does.
+func TestRepository_ListAll_WarnsOncePerUnknownState(t *testing.T) {
+	dir := t.TempDir()
+	repo := filesystem.NewWithDir(dir)
+	logger := &recordingLogger{}
+	repo.SetLogger(logger)
+
+	for name, state := range map[string]string{
+		"a.json": "zzz-unknown",
+		"b.json": "zzz-unknown", // same value, second file
+		"c.json": "yyy-other",   // a different unrecognized value
+	} {
+		payload := []byte(`{"session_id":"` + name + `","state":"` + state + `","updated_at":2}`)
+		if err := os.WriteFile(filepath.Join(dir, name), payload, 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	if _, err := repo.ListAll(); err != nil {
+		t.Fatalf("ListAll: %v", err)
+	}
+
+	events, msgs := logger.snapshot()
+	if len(msgs) != 2 {
+		t.Fatalf("first ListAll: got %d warnings, want 2 (one per DISTINCT unknown value): %q", len(msgs), msgs)
+	}
+	for _, ev := range events {
+		if ev != "session_state_unrecognized" {
+			t.Errorf("event type: got %q, want session_state_unrecognized", ev)
+		}
+	}
+	joined := strings.Join(msgs, "\n")
+	for _, want := range []string{"zzz-unknown", "yyy-other"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("warning text does not name the unrecognized value %q: %q", want, joined)
+		}
+	}
+
+	// The poll loop calls ListAll again and again; the warning must not repeat.
+	if _, err := repo.ListAll(); err != nil {
+		t.Fatalf("second ListAll: %v", err)
+	}
+	if _, after := logger.snapshot(); len(after) != 2 {
+		t.Errorf("second ListAll: got %d warnings total, want still 2 (once per value, not per sighting)", len(after))
 	}
 }
 

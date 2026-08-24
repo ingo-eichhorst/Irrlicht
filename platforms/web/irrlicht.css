@@ -27,6 +27,13 @@
       --ready-glow: rgba(52, 199, 89, 0.2);
       --cancelled: #8E8E93;
       --cancelled-dim: rgba(142, 142, 147, 0.1);
+      /* Unrecognized session state (#1797) — a state this build has never
+         heard of. Paired by value with macOS IrrHex.unknown; every other state
+         hex matches across the two platforms and this one must too, which is
+         why it is its own token rather than a borrowed --muted (whose value
+         differs per theme AND from the macOS side). Like --cancelled, it is
+         defined once: a mid-grey that reads on both light and dark surfaces. */
+      --unknown: #8E8E93;
       /* Pressure-bar colors — mirror overlay's ContextBarColor / pressure_level mapping:
          safe → low, caution → medium, warning → high, critical → critical. */
       --pressure-low: #34C759;
@@ -580,12 +587,13 @@
 
     /* Unknown/unrecognized session state (#1797) — a session state this build
        has never heard of. Its SVG paints with currentColor, so setting `color`
-       here is what makes it neutral grey AND theme-aware: --muted is redefined
-       by both light-mode blocks at the top of this file, which the older
-       hex-inlined `cancelled` icon never picks up. */
+       here is what colors it. Goes through the --unknown token rather than an
+       inlined hex (which is what leaves the older `cancelled` icon unable to
+       follow any theme override) and rather than --muted (which would drift
+       from the macOS value). */
     .row-state-icon svg.state-unknown,
     .app-state-icon svg.state-unknown {
-      color: var(--muted);
+      color: var(--unknown);
     }
 
     /* Working state — opacity-only "breathe" on a large solid dot.

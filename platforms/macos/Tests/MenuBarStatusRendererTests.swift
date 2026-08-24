@@ -53,13 +53,20 @@ final class MenuBarStatusRendererTests: XCTestCase {
         XCTAssertTrue(svg.contains(">4</text>"))
     }
 
-    // #1797 — `segmentOrder` is the menu bar's state vocabulary, and a state
-    // missing from it is a session counted in the pie's denominator with no
-    // wedge of its own. A group of nothing but unrecognized sessions produced
-    // zero segments and fell through to the solid-circle path, which defaulted
-    // to READY GREEN — the menu bar reporting "all done" for sessions it could
-    // not read. Mutation check for this guard (there is no pre-fix state to run
-    // it against): drop `.unknown` from segmentOrder and this goes red.
+    // #1797 — a group of nothing but unrecognized sessions must not report
+    // "all done" in the menu bar.
+    //
+    // What this test actually guards is `State.dominant(in:)`, whose final
+    // `return .ready` used to answer green for an all-unknown collection.
+    // Mutation check (verified, not asserted): revert `dominant` to
+    // `return .ready` and this goes red.
+    //
+    // It does NOT guard `segmentOrder` — dropping `.unknown` from that list
+    // leaves this test green, because the single-segment `??` fallback also
+    // routes to `.unknown`. `testStateSegmentsCoverEveryUnknownStateSession`
+    // below is the one that covers `segmentOrder`. Recording the split
+    // explicitly because the obvious reading of these two tests gets it
+    // backwards.
     func testAggregatedGroupSVGNeverPaintsUnknownSessionsGreen() {
         let sessions = (1...3).map { makeSession(id: "\($0)", state: .unknown) }
 
@@ -75,6 +82,10 @@ final class MenuBarStatusRendererTests: XCTestCase {
 
     // The pie fractions must still sum to the whole circle once unknown
     // sessions are in the mix — otherwise the dot renders with a hole.
+    //
+    // This is the test that guards `segmentOrder` (#1797). Mutation check
+    // (verified): drop `.unknown` from segmentOrder and this goes red with
+    // count 2-of-4 and fractions summing to 0.5.
     func testStateSegmentsCoverEveryUnknownStateSession() {
         let sessions = [
             makeSession(id: "1", state: .waiting),

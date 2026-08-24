@@ -62,6 +62,12 @@ func initSessionStorage(logger outbound.Logger, cfg config.Config) (*filesystem.
 		os.Exit(1)
 	}
 
+	// Route the unrecognized-state warning (#1797) into the structured log
+	// before the first ListAll. The app spawns irrlichd with stdout/stderr on
+	// nullDevice, so the stderr fallback inside the repository would otherwise
+	// discard the only signal that a session was skipped.
+	fsRepo.SetLogger(logger)
+
 	pruned, err := fsRepo.PruneStale(cfg.MaxSessionAge)
 	if err != nil {
 		logger.LogError("startup", "", fmt.Sprintf("failed to prune stale sessions: %v", err))

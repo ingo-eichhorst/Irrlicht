@@ -180,10 +180,15 @@ struct MenuBarStatusRenderer {
         let cy = height / 2
 
         guard segments.count > 1 else {
-            // The `??` fires only when there are no segments at all, which
-            // after #1797's segmentOrder covers every state means an empty
-            // session list. Grey, not green: with nothing to summarize, "all
-            // done" is a claim we have no basis for.
+            // Grey, not green: with nothing to summarize, "all done" is a
+            // claim we have no basis for.
+            //
+            // Note this `??` is currently UNREACHABLE and no test covers it:
+            // once segmentOrder spans every case, stateSegments returns []
+            // only for an empty session list, and renderGroup routes anything
+            // with <= 3 sessions to renderCompactGroup, so this path never
+            // sees fewer than 4. Kept as defensive depth, but do not count it
+            // as a guarded behavior.
             let hex = segments.first?.state.hexColor ?? SessionState.State.unknown.hexColor
             return """
             <circle cx="\(svgNumber(cx))" cy="\(svgNumber(cy))" r="\(svgNumber(radius))" fill="#\(hex)" stroke="rgba(0,0,0,0.25)" stroke-width="0.5"/>
