@@ -272,18 +272,11 @@ func TestRepository_ListAll_WarnsOncePerUnknownState(t *testing.T) {
 	logger := &contracttesting.RecordingLogger{}
 	repo.SetLogger(logger)
 
-	// A fixed slice, not a map: map iteration order is randomized, and nothing
-	// here wants that.
-	for _, f := range []struct{ name, state string }{
-		{"a.json", "zzz-unknown"},
-		{"b.json", "zzz-unknown"}, // same value, second file
-		{"c.json", "yyy-other"},   // a different unrecognized value
-	} {
-		payload := []byte(`{"session_id":"` + f.name + `","state":"` + f.state + `","updated_at":2}`)
-		if err := os.WriteFile(filepath.Join(dir, f.name), payload, 0o600); err != nil {
-			t.Fatalf("write %s: %v", f.name, err)
-		}
-	}
+	// ListAll walks os.ReadDir, which sorts by filename, so the warnings arrive
+	// a.json-then-c.json. b.json repeats a.json's value and must be deduped away.
+	writeRawStateFile(t, dir, "a.json", "zzz-unknown")
+	writeRawStateFile(t, dir, "b.json", "zzz-unknown") // same value, second file
+	writeRawStateFile(t, dir, "c.json", "yyy-other")   // a different unrecognized value
 
 	if _, err := repo.ListAll(); err != nil {
 		t.Fatalf("ListAll: %v", err)
@@ -293,16 +286,12 @@ func TestRepository_ListAll_WarnsOncePerUnknownState(t *testing.T) {
 	if len(msgs) != 2 {
 		t.Fatalf("first ListAll: got %d warnings, want 2 (one per DISTINCT unknown value): %q", len(msgs), msgs)
 	}
-	for _, ev := range logger.EventTypes() {
-		if ev != "session_state_unrecognized" {
-			t.Errorf("event type: got %q, want session_state_unrecognized", ev)
-		}
+	if !strings.Contains(msgs[0], "zzz-unknown") || !strings.Contains(msgs[1], "yyy-other") {
+		t.Errorf("warnings do not name their unrecognized values, in ReadDir order: %q", msgs)
 	}
-	joined := strings.Join(msgs, "\n")
-	for _, want := range []string{"zzz-unknown", "yyy-other"} {
-		if !strings.Contains(joined, want) {
-			t.Errorf("warning text does not name the unrecognized value %q: %q", want, joined)
-		}
+	wantEvents := []string{"session_state_unrecognized", "session_state_unrecognized"}
+	if got := logger.EventTypes(); !slices.Equal(got, wantEvents) {
+		t.Errorf("event types: got %v, want %v", got, wantEvents)
 	}
 
 	// The poll loop calls ListAll again and again; the warning must not repeat.
@@ -311,6 +300,17 @@ func TestRepository_ListAll_WarnsOncePerUnknownState(t *testing.T) {
 	}
 	if after := logger.Errors(); len(after) != 2 {
 		t.Errorf("second ListAll: got %d warnings total, want still 2 (once per value, not per sighting)", len(after))
+	}
+}
+
+// writeRawStateFile drops a session file with a state value the repository's
+// own Save() would never produce — the point being to simulate a file written
+// by a DIFFERENT (newer) build.
+func writeRawStateFile(t *testing.T, dir, name, state string) {
+	t.Helper()
+	payload := []byte(`{"session_id":"` + name + `","state":"` + state + `","updated_at":2}`)
+	if err := os.WriteFile(filepath.Join(dir, name), payload, 0o600); err != nil {
+		t.Fatalf("write %s: %v", name, err)
 	}
 }
 
