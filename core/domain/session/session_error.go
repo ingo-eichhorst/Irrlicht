@@ -1,6 +1,9 @@
 package session
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // ErrorPhase says whether the agent is still trying, or has given up.
 //
@@ -118,13 +121,86 @@ type SessionError struct {
 	// RetryIn is how long the agent will wait before the next attempt, or nil
 	// when unreported.
 	//
-	// A duration rather than a number of milliseconds because the source is
-	// fractional: claudecode writes retryInMs as a float (616.4520045919932
-	// in the recordings), so an int field would silently truncate. Nil rather
-	// than zero because "retrying immediately" and "no delay was reported"
-	// are different facts, and a Phase of ErrorPhaseRetrying with a nil
-	// RetryIn is the honest "another attempt is coming, timing unstated".
-	RetryIn *time.Duration `json:"retry_in,omitempty"`
+	// A time.Duration rather than a number because the source is fractional:
+	// claudecode writes retryInMs as a float (616.4520045919932 in the
+	// recordings), so an int-milliseconds field would silently truncate. Nil
+	// rather than zero because "retrying immediately" and "no delay was
+	// reported" are different facts, and ErrorPhaseRetrying with a nil RetryIn
+	// is the honest "another attempt is coming, timing unstated".
+	//
+	// It is deliberately NOT serialized as a bare Duration. Go marshals one as
+	// unlabelled nanoseconds (616452004), and every other serialized time
+	// quantity in this package names its unit — ElapsedSeconds,
+	// RateLimitWindow.WindowMinutes, RateLimitForecastEta. The JS and Swift
+	// clients that render this (#1801, #1802) would have to know, from nothing
+	// in the payload, both the unit and that it is the only field using it. So
+	// SessionError carries explicit Marshal/UnmarshalJSON emitting
+	// `retry_in_ms` as a fractional number, which is also the unit the agents
+	// themselves report.
+	//
+	// No struct tag: the custom marshaller owns this field's wire form, and a
+	// tag here would be dead code that reads like the source of truth.
+	RetryIn *time.Duration `json:"-"`
+}
+
+// sessionErrorJSON is SessionError's wire form. Split out rather than hand-
+// writing the encoder so the field list stays a struct — a hand-rolled
+// json.Marshal would have to be edited in two places every time a field is
+// added, which is the drift newMergedMetrics' allowlist already demonstrates
+// the cost of.
+//
+// Only RetryIn differs from the Go shape; everything else is copied by name so
+// the two cannot disagree about a tag.
+type sessionErrorJSON struct {
+	Phase       ErrorPhase `json:"phase,omitempty"`
+	Class       string     `json:"class,omitempty"`
+	Message     string     `json:"message,omitempty"`
+	HTTPStatus  *int       `json:"http_status,omitempty"`
+	Attempt     *int       `json:"attempt,omitempty"`
+	MaxAttempts *int       `json:"max_attempts,omitempty"`
+	RetryInMs   *float64   `json:"retry_in_ms,omitempty"`
+}
+
+// MarshalJSON emits RetryIn as fractional milliseconds under an explicitly
+// unit-named key. See the RetryIn field for why.
+func (e SessionError) MarshalJSON() ([]byte, error) {
+	out := sessionErrorJSON{
+		Phase:       e.Phase,
+		Class:       e.Class,
+		Message:     e.Message,
+		HTTPStatus:  e.HTTPStatus,
+		Attempt:     e.Attempt,
+		MaxAttempts: e.MaxAttempts,
+	}
+	if e.RetryIn != nil {
+		ms := float64(*e.RetryIn) / float64(time.Millisecond)
+		out.RetryInMs = &ms
+	}
+	return json.Marshal(out)
+}
+
+// UnmarshalJSON is MarshalJSON's inverse, so a persisted session state round-
+// trips. Without it the custom encoder would be write-only and every reload
+// would silently drop the retry delay — the same class of one-directional
+// plumbing bug as a field missing from the merge allowlist.
+func (e *SessionError) UnmarshalJSON(b []byte) error {
+	var in sessionErrorJSON
+	if err := json.Unmarshal(b, &in); err != nil {
+		return err
+	}
+	*e = SessionError{
+		Phase:       in.Phase,
+		Class:       in.Class,
+		Message:     in.Message,
+		HTTPStatus:  in.HTTPStatus,
+		Attempt:     in.Attempt,
+		MaxAttempts: in.MaxAttempts,
+	}
+	if in.RetryInMs != nil {
+		d := time.Duration(*in.RetryInMs * float64(time.Millisecond))
+		e.RetryIn = &d
+	}
+	return nil
 }
 
 // IsRetrying reports whether another attempt is known to be coming.
@@ -138,33 +214,37 @@ func (e *SessionError) IsRetrying() bool {
 }
 
 // Equal reports whether two errors carry the same content, treating nil as a
-// value. Used to avoid re-broadcasting a session whose error has not actually
-// changed across a poll — the same reason subagentSummary has an Equal.
+// value.
 //
 // Compares the POINTED-TO values, not the pointers: two errors parsed from two
-// passes over the same transcript line hold equal-but-distinct *int fields, and
-// a pointer comparison would report every pass as a change.
+// passes over the same transcript line hold equal-but-distinct *int fields, so
+// a pointer comparison would report every pass as a change. That is the whole
+// reason it cannot be `==`.
+//
+// NO PRODUCTION CALLER YET — it is used by this package's tests and is here
+// for #1801, which needs it to avoid re-broadcasting a session whose error has
+// not actually changed across a poll (the job subagentSummary.Equal does at
+// session_detector_activity.go's re-broadcast check). Said plainly rather than
+// implied, so nobody reads this comment as a description of behaviour that
+// exists. The same holds for IsRetrying above.
 func (e *SessionError) Equal(o *SessionError) bool {
 	if e == nil || o == nil {
 		return e == o
 	}
-	if e.Phase != o.Phase || e.Class != o.Class || e.Message != o.Message {
-		return false
-	}
-	return eqIntPtr(e.HTTPStatus, o.HTTPStatus) &&
-		eqIntPtr(e.Attempt, o.Attempt) &&
-		eqIntPtr(e.MaxAttempts, o.MaxAttempts) &&
-		eqDurPtr(e.RetryIn, o.RetryIn)
+	return e.Phase == o.Phase &&
+		e.Class == o.Class &&
+		e.Message == o.Message &&
+		eqPtr(e.HTTPStatus, o.HTTPStatus) &&
+		eqPtr(e.Attempt, o.Attempt) &&
+		eqPtr(e.MaxAttempts, o.MaxAttempts) &&
+		eqPtr(e.RetryIn, o.RetryIn)
 }
 
-func eqIntPtr(a, b *int) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return *a == *b
-}
-
-func eqDurPtr(a, b *time.Duration) bool {
+// eqPtr compares two optional values by what they point AT, treating nil as a
+// value: two nils are equal, a nil and a non-nil are not. One generic helper
+// rather than one per pointed-to type, so a field added to SessionError with a
+// new numeric type does not need a fourth near-identical copy of it.
+func eqPtr[T comparable](a, b *T) bool {
 	if a == nil || b == nil {
 		return a == b
 	}

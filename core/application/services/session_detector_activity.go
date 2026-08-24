@@ -1831,7 +1831,19 @@ func (d *SessionDetector) refreshStaleSessions() {
 		switch state.State {
 		case session.StateWorking:
 			d.reclassifyFromTranscript(state, now)
-		case session.StateWaiting, session.StateReady:
+		// #1798: StateError joins the idle arm rather than falling through to
+		// no arm at all. "Idle" here means "not working", and an errored
+		// session is exactly that — it is also, by construction, a session
+		// that has stopped producing transcript activity, so nothing else will
+		// ever bring it back for another look.
+		//
+		// This is load-bearing, not tidiness. shouldRevisitIdleSession is what
+		// asks signals.HasAny, and a classify pass is the ONLY thing that
+		// evaluates a hold's ceiling — so leaving error out of this switch
+		// made sessionErrorHoldTimeout unreachable: a declared ceiling that
+		// could never fire, which is worse than no ceiling because it reads
+		// like a safety net in the policy table.
+		case session.StateWaiting, session.StateReady, session.StateError:
 			d.retryIdleProjectResolution(state, now)
 
 			// Only when something outstanding could make a full pass decide

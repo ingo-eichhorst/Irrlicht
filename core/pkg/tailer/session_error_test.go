@@ -64,6 +64,17 @@ func (p *sessionErrorTestParser) ParseLine(raw map[string]interface{}) *ParsedEv
 	case "user":
 		ev.EventType = "user"
 		ev.ClearToolNames = true
+	case "tool_result":
+		// Claude Code delivers a tool result as a user-ROLE line, and its
+		// parser raises ClearToolNames for every `user` event — so a tool
+		// result carries BOTH ClearToolNames and ToolResultIDs. Modelling that
+		// faithfully is the whole point: the first version of this fixture set
+		// ClearToolNames only on real user turns, which quietly encoded the
+		// author's assumption instead of the adapter's behaviour and let a
+		// clear-on-every-tool-call bug through.
+		ev.EventType = "user"
+		ev.ClearToolNames = true
+		ev.ToolResultIDs = []string{"toolu_1"}
 	default:
 		ev.EventType = "assistant"
 	}
@@ -179,19 +190,25 @@ func TestSessionError_ClearedByNextUserTurn(t *testing.T) {
 }
 
 // TestSessionError_SurvivesMidTurnActivity is the guard against clearing too
-// eagerly, and the reason clearSessionErrorOnRecovery keys on ClearToolNames
-// rather than on a user-role event type.
+// eagerly.
 //
-// Tool results arrive on user-role events in several transcript formats. If
-// those counted as "the next turn started", a mid-turn error would be cleared
-// by the next tool round-trip — roughly one second later — which is
-// indistinguishable from never having shown it at all.
+// The tool_result line is the one that matters, and it is why
+// clearSessionErrorOnRecovery carries a `len(ToolResultIDs) == 0` guard rather
+// than reading ClearToolNames alone. Claude Code delivers tool results as
+// user-role lines whose parser raises ClearToolNames, so without the guard a
+// mid-turn error is cleared by the very next tool round-trip — roughly one
+// second later, which is indistinguishable from never having shown it. #558
+// hit precisely this with the task-estimate chip.
+//
+// Found by review: the first version of this test used a fixture whose tool
+// results did not raise ClearToolNames, so it passed against the broken code.
 func TestSessionError_SurvivesMidTurnActivity(t *testing.T) {
 	path := writeTranscriptLines(t, []map[string]interface{}{
 		{"kind": "user", "timestamp": ts(0)},
 		{"kind": "error", "phase": "retrying", "attempt": 1, "timestamp": ts(1)},
 		{"kind": "assistant", "timestamp": ts(2)},
-		{"kind": "assistant", "timestamp": ts(3)},
+		{"kind": "tool_result", "timestamp": ts(3)}, // user-ROLE, raises ClearToolNames
+		{"kind": "assistant", "timestamp": ts(4)},
 	})
 
 	m, err := newSessionErrorTailer(path, true).TailAndProcess()
@@ -199,8 +216,9 @@ func TestSessionError_SurvivesMidTurnActivity(t *testing.T) {
 		t.Fatal(err)
 	}
 	if m.SessionError == nil {
-		t.Fatal("ordinary mid-turn activity must NOT clear a standing error — " +
-			"only a completed turn or a new user turn does")
+		t.Fatal("mid-turn activity cleared a standing error. A tool_result arrives as a " +
+			"user-role line that raises ClearToolNames, so clearSessionErrorOnRecovery must " +
+			"also require len(ToolResultIDs) == 0 — otherwise every tool call wipes the error")
 	}
 }
 

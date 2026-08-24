@@ -712,3 +712,122 @@ func TestShouldSynthesizeCollapsedTurnBoundary(t *testing.T) {
 		})
 	}
 }
+
+// TestClassify_SessionErrorRoutesToError is the direct behavioural test of
+// #1798's rule: a session carrying an unrecovered failure classifies to
+// StateError, and one that does not carry one is unaffected.
+//
+// TestStateRules_LadderIsTierConsistent covers the rule's PLACEMENT as a
+// property; this covers its OUTCOME, which that test deliberately says
+// nothing about — it checks tier ordering, not which state won.
+func TestClassify_SessionErrorRoutesToError(t *testing.T) {
+	tests := []struct {
+		name    string
+		current string
+		metrics *session.SessionMetrics
+		want    string
+	}{
+		{
+			// The headline case: a terminal failure whose transcript tail
+			// reads exactly like a finished turn. Without the rule sitting
+			// above agent_done this is `ready` — a failed session painted
+			// green, which is the defect the fourth state exists to fix.
+			name:    "terminal error on a turn that looks finished → error, not ready",
+			current: session.StateWorking,
+			metrics: &session.SessionMetrics{
+				LastEventType: "turn_done",
+				SessionError:  &session.SessionError{Phase: session.ErrorPhaseTerminal, Class: "provider"},
+			},
+			want: session.StateError,
+		},
+		{
+			name:    "retry in progress → error",
+			current: session.StateWorking,
+			metrics: &session.SessionMetrics{
+				LastEventType: "assistant",
+				SessionError:  &session.SessionError{Phase: session.ErrorPhaseRetrying, Class: "rate_limit"},
+			},
+			want: session.StateError,
+		},
+		{
+			// A failure with no phase reported is still a failure. Real case:
+			// copilot's errorType "query" says nothing about retrying.
+			name:    "unknown phase is still an error",
+			current: session.StateReady,
+			metrics: &session.SessionMetrics{
+				LastEventType: "assistant",
+				SessionError:  &session.SessionError{Class: "query", Message: "could not connect"},
+			},
+			want: session.StateError,
+		},
+		{
+			// The settled clearing rule's hook half. A Stop hook is an
+			// authoritative turn boundary, so the turn completed and the
+			// failure is over — agent_done takes it.
+			name:    "hook-delivered turn done clears the error → ready",
+			current: session.StateError,
+			metrics: &session.SessionMetrics{
+				LastEventType: "assistant_message",
+				HookTurnDone:  true,
+				SessionError:  &session.SessionError{Phase: session.ErrorPhaseTerminal, Class: "provider"},
+			},
+			want: session.StateReady,
+		},
+		{
+			// An open permission prompt outranks a past failure: the session
+			// is blocked on a human right now, which is actionable, while the
+			// error is not.
+			name:    "an open permission prompt still outranks an error",
+			current: session.StateError,
+			metrics: &session.SessionMetrics{
+				LastEventType:     "assistant",
+				PermissionPending: true,
+				SessionError:      &session.SessionError{Phase: session.ErrorPhaseTerminal},
+			},
+			want: session.StateWaiting,
+		},
+		{
+			// The tailer cleared the error (the transcript half of the rule),
+			// so the ladder never sees one and the ordinary verdict stands.
+			name:    "no error → unchanged verdict",
+			current: session.StateWorking,
+			metrics: &session.SessionMetrics{LastEventType: "turn_done"},
+			want:    session.StateReady,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, _ := ClassifyState(tt.current, tt.metrics)
+			if got != tt.want {
+				t.Errorf("ClassifyState(%q) = %q, want %q", tt.current, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestClassify_SessionErrorIsAttributedToItsRule pins the provenance a
+// recorded trace needs: the verdict must name the session_error rule and its
+// tier, not merely land on the right state. Two rules could produce StateError
+// in future (#1800 adds a process-death producer at TierProcess), and a
+// recording has to say which one decided.
+func TestClassify_SessionErrorIsAttributedToItsRule(t *testing.T) {
+	v := ClassifyStateTiered(session.StateWorking, &session.SessionMetrics{
+		LastEventType: "turn_done",
+		SessionError:  &session.SessionError{Phase: session.ErrorPhaseTerminal, Class: "provider"},
+	})
+
+	if v.State != session.StateError {
+		t.Fatalf("state = %q, want error", v.State)
+	}
+	if v.Rule != string(session.SignalSessionError) {
+		t.Errorf("rule = %q, want %q", v.Rule, session.SignalSessionError)
+	}
+	if v.Tier != session.TierTranscript {
+		t.Errorf("tier = %v, want TierTranscript — a transcript-derived failure must not "+
+			"claim hook authority", v.Tier)
+	}
+	if v.Reason == "" {
+		t.Error("an error transition must carry a reason")
+	}
+}

@@ -1,6 +1,11 @@
 package session
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+	"time"
+)
 
 // TestMergeMetrics_CarriesSessionError is the #1256 trap, aimed at #1798's new
 // field.
@@ -104,5 +109,100 @@ func TestSessionError_AbsentNumbersStayAbsent(t *testing.T) {
 	}
 	if unknown.IsRetrying() {
 		t.Error("an unknown phase must not read as retrying")
+	}
+}
+
+// TestSessionError_RetryInSerializesWithItsUnitNamed is #1798's wire contract,
+// and the reason SessionError carries a custom marshaller at all.
+//
+// A bare `*time.Duration` marshals to unlabelled nanoseconds (616452004). The
+// JS and Swift clients that render this field (#1801, #1802) would have to
+// know both the unit and that this is the only field in the payload using it,
+// from nothing in the payload itself — while every other serialized time
+// quantity in this package names its unit in the key.
+func TestSessionError_RetryInSerializesWithItsUnitNamed(t *testing.T) {
+	d := 616452004 * time.Nanosecond // the real recorded 616.452004ms
+	b, err := json.Marshal(&SessionError{
+		Phase:   ErrorPhaseRetrying,
+		Class:   "rate_limit",
+		RetryIn: &d,
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	got := string(b)
+
+	if !strings.Contains(got, `"retry_in_ms"`) {
+		t.Errorf("payload does not name the unit — a consumer cannot tell what the number means.\ngot: %s", got)
+	}
+	if strings.Contains(got, "616452004") {
+		t.Errorf("payload carries raw nanoseconds.\ngot: %s", got)
+	}
+	// Fractional milliseconds must survive: the whole reason RetryIn is a
+	// Duration rather than an int is that the source value has a fraction.
+	if !strings.Contains(got, "616.452004") {
+		t.Errorf("the fractional millisecond value was lost.\ngot: %s", got)
+	}
+}
+
+// TestSessionError_JSONRoundTrips guards against the custom encoder being
+// write-only. Without UnmarshalJSON every reload of a persisted session would
+// silently drop the retry delay — one-directional plumbing, the same class of
+// bug as a field missing from the merge allowlist.
+func TestSessionError_JSONRoundTrips(t *testing.T) {
+	status, attempt, max := 429, 3, 10
+	d := 616452004 * time.Nanosecond
+	original := &SessionError{
+		Phase:       ErrorPhaseRetrying,
+		Class:       "rate_limit",
+		Message:     "slow down",
+		HTTPStatus:  &status,
+		Attempt:     &attempt,
+		MaxAttempts: &max,
+		RetryIn:     &d,
+	}
+
+	b, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var back SessionError
+	if err := json.Unmarshal(b, &back); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if !original.Equal(&back) {
+		t.Errorf("round trip lost or changed data:\n before: %+v\n  after: %+v", original, &back)
+	}
+}
+
+// TestSessionError_JSONRoundTripsWithEverythingAbsent is the other half, and
+// the case the recorded terminal shapes actually produce: no status, no
+// counters, no delay. Absent must come back absent, never as a zero that a
+// consumer would render as "attempt 0 of 0".
+func TestSessionError_JSONRoundTripsWithEverythingAbsent(t *testing.T) {
+	original := &SessionError{
+		Phase:   ErrorPhaseTerminal,
+		Class:   "provider",
+		Message: "API Error: API returned an empty or malformed response (HTTP 200)",
+	}
+
+	b, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(b), "retry_in_ms") || strings.Contains(string(b), "attempt") {
+		t.Errorf("absent optional fields must be omitted entirely, not emitted as zero.\ngot: %s", b)
+	}
+
+	var back SessionError
+	if err := json.Unmarshal(b, &back); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if back.RetryIn != nil || back.Attempt != nil || back.MaxAttempts != nil || back.HTTPStatus != nil {
+		t.Errorf("an absent field came back non-nil: %+v", &back)
+	}
+	if !original.Equal(&back) {
+		t.Errorf("round trip changed data:\n before: %+v\n  after: %+v", original, &back)
 	}
 }

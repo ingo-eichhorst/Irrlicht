@@ -65,10 +65,16 @@ const (
 	// terminal `isApiErrorMessage` event, copilot's `session.error`. #1800
 	// adds process death, whose evidence is the OS view of the agent process
 	// rather than anything written down, and which therefore belongs at
-	// TierProcess. A policy row declares exactly one tier, so that arrives as
-	// its own kind rather than by widening this one — and the classifier rule
-	// below is written to read whichever of them is present, so adding it does
-	// not restructure the ladder.
+	// TierProcess.
+	//
+	// A policy row declares exactly one tier, so that arrives as its own kind
+	// rather than by widening this one. The classifier's session_error rule
+	// reads SessionError directly, so its PREDICATE already covers a
+	// process-death producer — but its TIER resolves through this row via
+	// TierOf, so routing #1800's evidence through it would record TierProcess
+	// evidence as TierTranscript. Understating a tier never trips the ladder
+	// invariant, so nothing would catch it. #1800 adds a second rule row (or a
+	// `tierOf` override) rather than reusing this one.
 	//
 	// Named for the condition rather than the producer, matching the two rows
 	// above it, so the string is also the classifier rule id.

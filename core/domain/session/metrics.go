@@ -362,45 +362,49 @@ type SessionMetrics struct {
 	// adapters).
 	Tasks []Task `json:"tasks,omitempty"`
 
-	// RateLimit is the most recent subscription quota snapshot observed for
-	// this session. Populated by the Codex parser (from token_count events)
-	// and by the Claude Code statusline hook. Nil when the underlying
-	// provider doesn't surface quota (API-key Claude Code, Bedrock, Vertex)
-	// or when no snapshot has arrived yet.
 	// SessionError is the session's current unrecovered session-level failure
 	// (#1798), or nil when the session is healthy. It is what the classifier's
 	// session_error rule reads to route a session to StateError, and what the
 	// UIs render on the red error line (#1801, #1802).
 	//
-	// PER-PASS RECOMPUTED, NOT CARRIED FORWARD — an explicit decision the
-	// issue asked for, and the two halves of it matter in opposite
-	// directions. The tailer holds the error sticky across passes and owns the
+	// PER-PASS RECOMPUTED, NOT CARRIED FORWARD — an explicit decision the issue
+	// asked for. The tailer holds the error sticky across passes and owns the
 	// clearing rule (see clearSessionErrorOnRecovery), so by the time metrics
-	// are built this field already IS the current verdict: it is non-nil for
-	// as long as the error stands and nil the moment a successful turn clears
-	// it. It is therefore copied verbatim in newMergedMetrics and deliberately
-	// absent from carryForwardOverlayState.
+	// are built this field already IS the current verdict: non-nil for as long
+	// as the error stands, nil the moment a successful turn clears it. It is
+	// therefore copied verbatim in newMergedMetrics and deliberately absent
+	// from carryForwardOverlayState.
 	//
 	// Adding it to a carry-forward helper would be the natural-looking change
 	// and would break the feature: carry-forward preserves oldM's value when
-	// newM's reads unset, and "unset" is precisely how the tailer says
-	// CLEARED. An error would then resurrect on every subsequent pass and no
-	// session could ever leave StateError.
+	// newM's reads unset, and "unset" is precisely how the tailer says CLEARED.
+	// An error would resurrect on every later pass and no session could ever
+	// leave StateError.
 	//
-	// THE COST, stated precisely rather than left to be discovered, because
-	// it is a half-measure and not a clean either/or. The field IS persisted
-	// (it has a json tag, so a UI can render it and the startup seed pass
-	// re-derives StateError from it), but the TAILER's sticky copy is not in
-	// LedgerState. So after a daemon restart a standing error survives the
-	// seed classification and is then dropped by the first fresh tailer pass,
-	// whose newM carries nil and is copied verbatim by the line above. Net
-	// effect: an errored session comes back red at boot and goes green at the
-	// next poll of its transcript. That is the self-limiting direction, and
-	// the clean fix is ledger persistence — deliberately not built here,
-	// since no adapter emits this field yet and #1800 is where the first
-	// producer and the first real evidence arrive together.
+	// DOES NOT SURVIVE A DAEMON RESTART, and the json tag does not change that.
+	// The value is persisted, but the startup path destroys it before anything
+	// reads it: seedReevaluateOne calls enricher.RefreshMetrics first, which is
+	// MergeMetrics against a fresh tailer pass carrying nil, and the line in
+	// newMergedMetrics copies that nil verbatim — the same behaviour
+	// TestMergeMetrics_ClearedSessionErrorStaysCleared locks in. So a session
+	// that died on a provider error reads GREEN after a restart, which is the
+	// silent direction this state exists to eliminate.
+	//
+	// That is a real gap, recorded here rather than glossed: the fix is to
+	// persist the sticky error in the tailer's LedgerState, exactly as
+	// LastTaskEstimate/FirstTaskEstimate are persisted there and for the
+	// identical reason ("a daemon restart would otherwise blank the ETA chip").
+	// Deliberately not built in this phase — no adapter emits this field yet,
+	// so there is nothing to lose across a restart until #1799/#1800 land, and
+	// that is where the first producer and the first real evidence arrive
+	// together.
 	SessionError *SessionError `json:"session_error,omitempty"`
 
+	// RateLimit is the most recent subscription quota snapshot observed for
+	// this session. Populated by the Codex parser (from token_count events)
+	// and by the Claude Code statusline hook. Nil when the underlying
+	// provider doesn't surface quota (API-key Claude Code, Bedrock, Vertex)
+	// or when no snapshot has arrived yet.
 	RateLimit *RateLimitSnapshot `json:"rate_limit,omitempty"`
 
 	// RateLimitForecastEta is the projected wall-clock time (Unix seconds)

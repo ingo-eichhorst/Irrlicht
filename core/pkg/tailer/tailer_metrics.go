@@ -71,17 +71,24 @@ func (t *TranscriptTailer) applySessionError(parsed *ParsedEvent) {
 //     would pin a terminal error red for the rest of the session, since a
 //     give-up produces no turn boundary of its own to clear it.
 //
-// A tool result is NOT a recovery even though it arrives on a user-role event
-// in some formats, which is why this reads ClearToolNames — the flag parsers
-// already set for exactly "this is a real user turn boundary, reset open tool
-// state" — rather than matching on the event type. Getting that wrong would
-// clear a mid-turn error on the next tool round-trip, i.e. after roughly one
-// second, which is indistinguishable from never showing it.
+// A TOOL RESULT IS NOT A RECOVERY, and the `len(ToolResultIDs) == 0` guard is
+// what makes that true rather than aspirational. Claude Code delivers tool
+// results as user-ROLE lines, and its parser raises ClearToolNames for every
+// `user` event — so a bare ClearToolNames check clears the error on the next
+// tool round-trip, roughly a second later, which is indistinguishable from
+// never having shown it. This is the identical trap #558 hit with the
+// task-estimate chip (it vanished mid-task on every tool call); the guard here
+// is deliberately spelled the same way as the one in applyAssistantTextAndMarkers
+// so the two read as instances of one rule.
 func (t *TranscriptTailer) clearSessionErrorOnRecovery(parsed *ParsedEvent) {
 	if t.sessionError == nil {
 		return
 	}
-	if parsed.EventType == "turn_done" || parsed.ClearToolNames {
+	if parsed.EventType == "turn_done" {
+		t.sessionError = nil
+		return
+	}
+	if parsed.ClearToolNames && len(parsed.ToolResultIDs) == 0 {
 		t.sessionError = nil
 	}
 }

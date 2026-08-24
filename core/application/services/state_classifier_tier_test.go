@@ -85,15 +85,7 @@ func TestStateRules_LadderIsTierConsistent(t *testing.T) {
 			}
 			won[winner.Rule] = true
 
-			for i := winnerIdx + 1; i < len(stateRules); i++ {
-				if stateRules[i].when != nil && !stateRules[i].when(cur, base.metrics) {
-					continue
-				}
-				if lower := stateRules[i].tierFor(base.metrics); lower.Outranks(winner.Tier) {
-					t.Errorf("%s (current=%s): rule %q (tier %v) decided, but lower rule %q (tier %v) outranks it",
-						base.name, cur, winner.Rule, winner.Tier, stateRules[i].id, lower)
-				}
-			}
+			assertNoLowerRuleOutranks(t, base, cur, winner, winnerIdx)
 		}
 	}
 
@@ -108,6 +100,26 @@ func TestStateRules_LadderIsTierConsistent(t *testing.T) {
 			"proved nothing about it. Restore the session-error fixtures in\n"+
 			"reachableMetricFixtures, or fix whatever now shadows the rule.",
 			session.SignalSessionError)
+	}
+}
+
+// assertNoLowerRuleOutranks is the invariant itself: of the rules BELOW the
+// one that decided, none that would also have fired on these metrics may sit
+// on a strictly higher tier.
+//
+// Split out of the sweep above so the property is stated in one place at one
+// level of nesting, rather than as the innermost two branches of a triple
+// loop.
+func assertNoLowerRuleOutranks(t *testing.T, base metricFixture, cur string, winner StateVerdict, winnerIdx int) {
+	t.Helper()
+	for i := winnerIdx + 1; i < len(stateRules); i++ {
+		if stateRules[i].when != nil && !stateRules[i].when(cur, base.metrics) {
+			continue
+		}
+		if lower := stateRules[i].tierFor(base.metrics); lower.Outranks(winner.Tier) {
+			t.Errorf("%s (current=%s): rule %q (tier %v) decided, but lower rule %q (tier %v) outranks it",
+				base.name, cur, winner.Rule, winner.Tier, stateRules[i].id, lower)
+		}
 	}
 }
 
@@ -238,13 +250,18 @@ func reachableMetricFixtures(t *testing.T) []metricFixture {
 }
 
 // payloadFor is the payload a hold of this kind must carry for its policy's
-// apply to do anything.
+// apply to do anything. Only SignalSessionError needs one: its apply is a
+// no-op on an empty payload, since there is no error to fold.
 //
-// Only SignalSessionError needs one here: its apply is a no-op on an empty
-// payload (there is no error to fold), so a corpus built with a bare
-// SignalPayload{} would place the hold, apply nothing, and produce fixtures
-// indistinguishable from "no error" — the property test would then report a
-// clean ladder having never once exercised the rule it was extended to cover.
+// What it buys, stated accurately after review refuted a stronger claim: it
+// widens the corpus so the ladder sweep also covers metrics whose error
+// arrived through the HOLD rather than being set on the fixture directly.
+// Neutralizing it does NOT turn this file red — the three session-error
+// transcript fixtures set the field directly and satisfy the coverage
+// assertion on their own. The hold path's own behaviour is asserted where it
+// belongs, in session.TestSignalSessionError_HoldAppliesItsPayload, which does
+// go red when the policy row is broken.
+//
 // SignalTurnDone's payload fields are optional by design and left empty.
 func payloadFor(kind session.SignalKind) session.SignalPayload {
 	if kind == session.SignalSessionError {
