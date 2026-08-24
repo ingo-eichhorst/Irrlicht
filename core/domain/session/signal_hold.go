@@ -54,6 +54,25 @@ const (
 	// for the condition rather than the producer, so the string matches the
 	// classifier rule id that reads it.
 	SignalOpenToolStalled SignalKind = "open_tool_stalled"
+
+	// SignalSessionError is #1798's fourth-state signal: the session's own
+	// machinery failed — the provider refused or failed the call, credentials
+	// were rejected, the agent process died mid-turn — and the session must
+	// read StateError rather than a silently green ready.
+	//
+	// TierTranscript, because the only producer this phase can have reads the
+	// failure out of the transcript: claudecode's `system`/`api_error` and its
+	// terminal `isApiErrorMessage` event, copilot's `session.error`. #1800
+	// adds process death, whose evidence is the OS view of the agent process
+	// rather than anything written down, and which therefore belongs at
+	// TierProcess. A policy row declares exactly one tier, so that arrives as
+	// its own kind rather than by widening this one — and the classifier rule
+	// below is written to read whichever of them is present, so adding it does
+	// not restructure the ladder.
+	//
+	// Named for the condition rather than the producer, matching the two rows
+	// above it, so the string is also the classifier rule id.
+	SignalSessionError SignalKind = "session_error"
 )
 
 // compactHoldTimeout bounds the SignalCompactInProgress hold (#657). Normally
@@ -144,6 +163,32 @@ const permissionPromptHoldTimeout = 12 * time.Hour
 // stopped being parsed, not the expected path.
 const idlePromptHoldTimeout = 12 * time.Hour
 
+// sessionErrorHoldTimeout bounds the SignalSessionError hold (#1798).
+//
+// A ceiling is not strictly required here — TestSignalPolicies_HookPersistentHolds
+// DeclareACeiling only compels one for persistent TierHook rows, and this row
+// is TierTranscript. It is declared anyway because the argument that made that
+// test exist applies with more force, not less: TierTranscript is the BOTTOM
+// of the ladder, so there is no lower tier left to correct a stuck hold. The
+// hold's own staleness rule is its only other end-of-life, and that rule reads
+// a hook signal — so a session whose hook channel goes away (an uninstalled
+// hook, a port change, a daemon restart mid-turn) would hold an error hold
+// with nothing able to retire it.
+//
+// Twelve hours, matching permissionPromptHoldTimeout and idlePromptHoldTimeout
+// rather than picking a third number, because the governing workflow is the
+// same one: an agent left running overnight and reviewed the next morning. A
+// session that died on a provider error at 22:00 must still read red at 08:00
+// — that is the entire point of the state — and a shorter ceiling would turn
+// the failure green again while the user slept, which is the silent direction.
+//
+// It stays a separate constant from the other two despite the identical value
+// because the coverage stories differ: those rows are corrected from below by
+// a transcript-tier fallback (partly, and not at all, respectively), while
+// this one has no tier beneath it. Collapsing them would let a future retune
+// of one silently move the others.
+const sessionErrorHoldTimeout = 12 * time.Hour
+
 // stalledEditToolThreshold is how long a permission-gated file-edit tool
 // (Edit/Write/MultiEdit/NotebookEdit) may stay open before it is read as a held
 // permission prompt and SignalOpenToolStalled applies — the transcript-based
@@ -181,6 +226,14 @@ type SignalPayload struct {
 	// hook's *full* message text, rather than the 200-rune transcript tail
 	// the classifier would otherwise see (#1150).
 	WaitingCue bool
+
+	// SessionError is the failure a SignalSessionError hold is asserting
+	// (#1798). Only that row reads it, and only an out-of-band producer sets
+	// it — the transcript path writes SessionMetrics.SessionError directly
+	// from the tailer and places no hold at all, exactly as the transcript
+	// permission signal writes TranscriptPermissionPending rather than going
+	// through SignalPermissionPrompt.
+	SessionError *SessionError
 }
 
 // holdContext is everything a staleness rule may read: the metrics the signal
@@ -476,6 +529,39 @@ var signalPolicies = []signalPolicy{
 		stale:   func(c holdContext) bool { return c.Metrics.SawManualCompactBoundary },
 		ceiling: compactHoldTimeout,
 		apply:   func(c holdContext) { c.Metrics.CompactInProgress = true },
+	},
+
+	{
+		kind: SignalSessionError,
+		tier: TierTranscript,
+		// Persistent: a failure stands until the session recovers, and the
+		// hold must survive every poll in between — which for an errored
+		// session is most of them, since a failed turn produces no further
+		// transcript activity to re-derive it from.
+		//
+		// POSITION: after SignalTurnDone, whose apply sets the HookTurnDone
+		// this row's staleness reads — the same one-directional dependency
+		// SignalIdlePrompt has on the same row, and for the same reason.
+		// Reverse them and a Stop hook arriving alongside a held error would
+		// be evaluated against metrics that do not yet know the turn ended, so
+		// the error would survive a turn that actually completed. Before
+		// SignalOpenToolStalled, which must stay last (it reads the
+		// PermissionPending that the first row writes).
+		//
+		// STALE = the settled clearing rule's hook half: "error → ready on
+		// turn_done". A Stop hook is an authoritative turn boundary, so a turn
+		// completed and the failure is over. The transcript half of the same
+		// rule lives in the tailer, which is the only layer that sees whether
+		// the boundary arrived before or after the error — see
+		// clearSessionErrorOnRecovery. Neither half is a timeout: there is no
+		// minimum hold and no decay, by decision (#1796).
+		stale:   func(c holdContext) bool { return c.Metrics.HookTurnDone },
+		ceiling: sessionErrorHoldTimeout,
+		apply: func(c holdContext) {
+			if c.Payload.SessionError != nil {
+				c.Metrics.SessionError = c.Payload.SessionError
+			}
+		},
 	},
 
 	{

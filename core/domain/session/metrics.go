@@ -367,6 +367,40 @@ type SessionMetrics struct {
 	// and by the Claude Code statusline hook. Nil when the underlying
 	// provider doesn't surface quota (API-key Claude Code, Bedrock, Vertex)
 	// or when no snapshot has arrived yet.
+	// SessionError is the session's current unrecovered session-level failure
+	// (#1798), or nil when the session is healthy. It is what the classifier's
+	// session_error rule reads to route a session to StateError, and what the
+	// UIs render on the red error line (#1801, #1802).
+	//
+	// PER-PASS RECOMPUTED, NOT CARRIED FORWARD — an explicit decision the
+	// issue asked for, and the two halves of it matter in opposite
+	// directions. The tailer holds the error sticky across passes and owns the
+	// clearing rule (see clearSessionErrorOnRecovery), so by the time metrics
+	// are built this field already IS the current verdict: it is non-nil for
+	// as long as the error stands and nil the moment a successful turn clears
+	// it. It is therefore copied verbatim in newMergedMetrics and deliberately
+	// absent from carryForwardOverlayState.
+	//
+	// Adding it to a carry-forward helper would be the natural-looking change
+	// and would break the feature: carry-forward preserves oldM's value when
+	// newM's reads unset, and "unset" is precisely how the tailer says
+	// CLEARED. An error would then resurrect on every subsequent pass and no
+	// session could ever leave StateError.
+	//
+	// THE COST, stated precisely rather than left to be discovered, because
+	// it is a half-measure and not a clean either/or. The field IS persisted
+	// (it has a json tag, so a UI can render it and the startup seed pass
+	// re-derives StateError from it), but the TAILER's sticky copy is not in
+	// LedgerState. So after a daemon restart a standing error survives the
+	// seed classification and is then dropped by the first fresh tailer pass,
+	// whose newM carries nil and is copied verbatim by the line above. Net
+	// effect: an errored session comes back red at boot and goes green at the
+	// next poll of its transcript. That is the self-limiting direction, and
+	// the clean fix is ledger persistence — deliberately not built here,
+	// since no adapter emits this field yet and #1800 is where the first
+	// producer and the first real evidence arrive together.
+	SessionError *SessionError `json:"session_error,omitempty"`
+
 	RateLimit *RateLimitSnapshot `json:"rate_limit,omitempty"`
 
 	// RateLimitForecastEta is the projected wall-clock time (Unix seconds)
@@ -658,6 +692,15 @@ func newMergedMetrics(newM *SessionMetrics) *SessionMetrics {
 		RateLimitForecastEta:        newM.RateLimitForecastEta,
 		TaskEstimate:                newM.TaskEstimate,
 		TaskCompletionEta:           newM.TaskCompletionEta,
+		// The tailer recomputes this every pass from its own sticky state and
+		// owns the clearing rule, so newM's value — nil included — is the
+		// current verdict and is copied verbatim (#1798). It MUST be listed:
+		// this allowlist silently drops any field it omits, which is how
+		// TranscriptPermissionPending above came to be computed correctly and
+		// thrown away on the only path that mattered. Deliberately NOT in
+		// carryForwardOverlayState — see the field's own comment for why a
+		// carry-forward would make the error unclearable.
+		SessionError: newM.SessionError,
 	}
 }
 

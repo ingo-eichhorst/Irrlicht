@@ -585,7 +585,7 @@ func classifierInputs(m *session.SessionMetrics) *lifecycle.ClassifierInputs {
 	if m == nil {
 		return nil
 	}
-	return &lifecycle.ClassifierInputs{
+	in := &lifecycle.ClassifierInputs{
 		HasLiveBackgroundProcess:          m.HasLiveBackgroundProcess,
 		PermissionPending:                 m.PermissionPending,
 		CompactInProgress:                 m.CompactInProgress,
@@ -601,6 +601,15 @@ func classifierInputs(m *session.SessionMetrics) *lifecycle.ClassifierInputs {
 		HookTurnDone:                      m.HookTurnDone,
 		IdlePromptPending:                 m.IdlePromptPending,
 	}
+	// #1798: the two facts that make an error transition debuggable from a
+	// recording. Guarded rather than unconditional so a healthy session's
+	// snapshot is byte-identical to what it was before this field existed —
+	// both are omitempty, so a nil error adds nothing to any sidecar.
+	if m.SessionError != nil {
+		in.SessionErrorClass = m.SessionError.Class
+		in.SessionErrorPhase = string(m.SessionError.Phase)
+	}
+	return in
 }
 
 // withProvenance stamps the deciding rule and tier onto a classifier-inputs

@@ -1,31 +1,75 @@
-// session.go holds the core lifecycle types: the three-state machine
-// (working/waiting/ready — see STATES.md), the yield verdict recorded once a
-// session goes ready, SessionState itself, and the launcher/background-agent
-// metadata attached to it. Per-pass computed metrics live in metrics.go; the
-// "is the agent waiting on me" text heuristics live in waiting_cue.go.
+// session.go holds the core lifecycle types: the four-state machine
+// (working/waiting/ready/error — see events.md), the yield verdict recorded
+// once a session goes ready, SessionState itself, and the launcher/background-
+// agent metadata attached to it. Per-pass computed metrics live in metrics.go;
+// the "is the agent waiting on me" text heuristics live in waiting_cue.go.
 package session
 
 import (
 	"time"
 )
 
-// State constants — three MECE states for session lifecycle.
-// See STATES.md for the formal state machine specification.
+// State constants — four MECE states for session lifecycle.
+// See events.md for the formal state machine specification.
 const (
 	StateWorking = "working" // Agent actively processing (tools, text generation, hooks, compaction, or a live Bash background process)
 	StateWaiting = "waiting" // Agent finished turn, waiting for user input
 	StateReady   = "ready"   // Session inactive (process exited, transcript removed, cancelled)
+	// StateError is #1796's fourth state: the session's own machinery failed
+	// — the provider refused or failed the call, credentials were rejected,
+	// the agent process died mid-turn, or Irrlicht could not read the
+	// session. It exists so such a session is visibly red instead of
+	// silently green, which is what every one of those cases used to be.
+	//
+	// NOT a tool failure. A grep that matched nothing and a build that broke
+	// are the agent working normally; see ParsedEvent.IsError for that half.
+	//
+	// Cleared by the next SUCCESSFUL turn and by nothing else — error→working
+	// when the next turn starts, error→ready on turn_done. There is
+	// deliberately no minimum hold, so a provider error that recovers in a
+	// few hundred milliseconds may flash too briefly to see; that cost was
+	// accepted when the rule was settled and is measured in #1803's
+	// provider-overloaded-retry recording rather than pre-empted here.
+	StateError = "error"
 )
 
-// IsCanonicalState reports whether s is one of the three valid lifecycle
-// states. Anything else (empty, "cancelled", a typo) is a domain violation.
+// canonicalStates is the lifecycle-state vocabulary, declared exactly once.
+//
+// Order is the ladder's own: the three ordinary states in the sequence a
+// session moves through them, then the failure state. Callers that render the
+// list to a human (see the filesystem repository's unrecognized-state warning)
+// get a stable, readable order for free, and a fifth state cannot desynchronise
+// the check from the message the way a hand-typed "%s/%s/%s" did (#1798).
+var canonicalStates = []string{StateWorking, StateWaiting, StateReady, StateError}
+
+// CanonicalStates returns the lifecycle-state vocabulary, newest-state-last.
+//
+// It returns a copy: the backing array is package state, and a caller that
+// sorted or truncated the slice in place would silently redefine what every
+// other caller — IsCanonicalState included — considers a valid state.
+func CanonicalStates() []string {
+	out := make([]string, len(canonicalStates))
+	copy(out, canonicalStates)
+	return out
+}
+
+// IsCanonicalState reports whether s is one of the valid lifecycle states.
+// Anything else (empty, "cancelled", a typo) is a domain violation.
+//
+// Reads canonicalStates rather than spelling the values out again, so this
+// predicate and every message that lists the vocabulary cannot drift apart.
 func IsCanonicalState(s string) bool {
-	return s == StateWorking || s == StateWaiting || s == StateReady
+	for _, c := range canonicalStates {
+		if s == c {
+			return true
+		}
+	}
+	return false
 }
 
 // Yield state constants — whether a finished session's work survived in the
 // repo or was reverted (#373). An independent dimension from the lifecycle
-// State above: a session is always in one of the three lifecycle states, and
+// State above: a session is always in exactly one of the lifecycle states, and
 // separately carries one of these yield verdicts once it has gone ready.
 const (
 	YieldUnknown    = "unknown"    // not git-tracked, or not yet evaluated

@@ -219,6 +219,29 @@ type ClassifierInputs struct {
 	HookTurnDone      bool `json:"hook_turn_done,omitempty"`
 	IdlePromptPending bool `json:"idle_prompt_pending,omitempty"`
 
+	// SessionErrorClass and SessionErrorPhase are the #1798 failure, reduced
+	// to the two facts a recorded trace needs: what kind of failure it was,
+	// and whether the agent was still retrying or had given up.
+	//
+	// The Reason string on an error transition is the fixed "session error →
+	// error", because reason prose is pinned byte-for-byte by the replay
+	// goldens and cannot carry per-session detail. So this is where a
+	// transition becomes debuggable: without it a recording shows a session
+	// going red and gives no way to tell a rate-limit retry storm from
+	// rejected credentials — which is precisely the question anyone opening
+	// the recording is there to answer.
+	//
+	// The human message is deliberately NOT copied here. It is unbounded,
+	// attacker-influenced (it is provider text), and already carried on the
+	// session's own metrics; duplicating it into every transition event would
+	// bloat each sidecar for no extra diagnostic power.
+	//
+	// An empty Phase means the agent reported a failure without saying
+	// whether another attempt follows — a real, recorded case (copilot's
+	// errorType "query"), not a gap in the plumbing.
+	SessionErrorClass string `json:"session_error_class,omitempty"`
+	SessionErrorPhase string `json:"session_error_phase,omitempty"`
+
 	// DecidedByTier is the authority tier of the evidence that decided this
 	// transition ("hook", "transcript", …) and DecidedByRule the id of the
 	// rule that claimed it. Together they are the provenance half of #1288:

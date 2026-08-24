@@ -44,7 +44,8 @@ Use `./.build` for build artifacts.
 ## Key Conventions
 
 - Go code follows hexagonal architecture: `domain/` → `ports/` → `adapters/` → `application/services/`
-- Three session states only: `working`, `waiting`, `ready` — no cancelled state
+- Four session states only: `working`, `waiting`, `ready`, `error` — no cancelled state.
+  The vocabulary is declared once in `session.CanonicalStates()`; derive from it, never retype it
 - Errors are logged via `Logger` interface, not propagated with `fmt.Errorf`
 - Child sessions (subagents and background agents) use `ParentSessionID` for parent-child linking
 - Adapters declare `Permissions` on `agent.Agent` (with Apply/Remove effect closures); every read or modification an adapter performs must be consent-gated behind one of its declared permissions — nothing is exercised while pending or denied

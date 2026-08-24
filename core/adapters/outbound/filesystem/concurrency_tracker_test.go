@@ -492,6 +492,14 @@ func TestStateSeries_Empty(t *testing.T) {
 	if res.Peak != 0 || res.Average != 0 || res.Current != 0 {
 		t.Errorf("want zero summary, got peak=%v avg=%v current=%v", res.Peak, res.Average, res.Current)
 	}
+	// The states StateSeries actually declares buckets for. Deliberately NOT
+	// session.CanonicalStates(): the ByState map is a three-key literal in
+	// StateSeries and emptyStateSeriesResult, and #1798's fourth state is not
+	// in it — the Activity Matrix's own widening is #1801's, along with the
+	// web `toEqual({working,waiting,ready})` assertion that pins the same
+	// shape on the client. Reading the domain vocabulary here would make this
+	// test demand a key the production code does not yet emit, i.e. fail for
+	// a gap that is scoped elsewhere rather than for a regression.
 	for _, state := range []string{session.StateWorking, session.StateWaiting, session.StateReady} {
 		if len(res.ByState[state]) != 0 {
 			t.Errorf("by_state[%s] should be empty, got %v", state, res.ByState[state])

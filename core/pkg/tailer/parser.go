@@ -279,6 +279,65 @@ type ParsedEvent struct {
 	// heuristic-fallback task summary (issue #738). Adapters that don't set
 	// it simply have no heuristic fallback (the marker still works).
 	UserText string
+
+	// SessionError, when non-nil, reports that this event is a SESSION-LEVEL
+	// failure: the provider refused or failed the call, credentials were
+	// rejected, the turn was aborted (issue #1798). The tailer holds it as
+	// the session's current unrecovered error until the next successful turn
+	// clears it, and the classifier routes such a session to
+	// session.StateError.
+	//
+	// KEPT STRICTLY DISTINCT FROM IsError above, which is a tool_result
+	// failure. A grep that matched nothing, a failing build, a command
+	// exiting non-zero — those are the agent working normally and must never
+	// turn a session red. The precedent is IsUserInterrupt, which is kept
+	// distinct from IsError for exactly the same reason ("so the classifier
+	// can tell an ESC apart from a normal tool failure"); this is that
+	// argument applied to the other end of the severity scale.
+	//
+	// The one existing adapter that already conflates the two is geminicli,
+	// which sets IsError=true on a top-level type:"error" event and smuggles
+	// the reason out through AssistantText because IsError has no readers.
+	// #1800 moves it onto this field.
+	//
+	// Nil for the overwhelming majority of events, so the pointer costs
+	// nothing and keeps "no error on this event" distinguishable from a
+	// zero-valued error — the same shape as RateLimit, TaskEstimate and
+	// AwaySummary above.
+	SessionError *SessionError
+}
+
+// ErrorPhase mirrors session.ErrorPhase inside the tailer package. See that
+// type for why terminal-ness is the adapter's verdict and never derived from
+// Attempt == MaxAttempts.
+type ErrorPhase string
+
+const (
+	ErrorPhaseUnknown  ErrorPhase = ""
+	ErrorPhaseRetrying ErrorPhase = "retrying"
+	ErrorPhaseTerminal ErrorPhase = "terminal"
+)
+
+// SessionError mirrors session.SessionError inside the tailer package so
+// parsers can report a session-level failure without importing the domain —
+// the same boundary RateLimitSnapshot, TaskEstimate and AwaySummary sit on,
+// converted by the adapter glue (core/application/replayengine/metrics.go).
+//
+// Every numeric field is a pointer because the recorded payloads disagree
+// about which numbers exist: claudecode's retrying `api_error` carries all of
+// them, its terminal `isApiErrorMessage` event carries none, and copilot's
+// `session.error` carries a statusCode for "rate_limit" but not for "query".
+// With plain ints all three absences would read as 0, and "attempt 0 of 0"
+// would derive a give-up from data that said nothing. See
+// session.SessionError for the full argument and the fixture evidence.
+type SessionError struct {
+	Phase       ErrorPhase
+	Class       string
+	Message     string
+	HTTPStatus  *int
+	Attempt     *int
+	MaxAttempts *int
+	RetryIn     *time.Duration
 }
 
 // RateLimitSnapshot mirrors session.RateLimitSnapshot inside the tailer

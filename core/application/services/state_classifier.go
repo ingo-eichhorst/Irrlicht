@@ -194,6 +194,50 @@ var stateRules = []stateRule{
 		decide: toState(session.StateWaiting, "idle prompt hook → waiting"),
 	},
 	{
+		// The session's own machinery failed — provider refusal, rejected
+		// credentials, an aborted turn (#1798) → error.
+		//
+		// WHY HERE, ABOVE agent_done. A give-up and a completed turn look the
+		// same from the transcript tail: claudecode records a terminal API
+		// failure as an ordinary assistant message carrying an
+		// `isApiErrorMessage` flag and a terminal stop_reason, so IsAgentDone
+		// reads true and agent_done would route it to ready — a session that
+		// failed, reported as finished, painted green. That is the exact
+		// defect the fourth state exists to fix, so the failure verdict has to
+		// outrank the finished-turn verdict. Below the five waiting rules
+		// above, because a session blocked on a human is actionable now while
+		// a past failure is not, and because those rules include hook-tier
+		// rows a transcript-tier rule must never preempt.
+		//
+		// WHY THE HookTurnDone GUARD, rather than a bare nil check. It is the
+		// settled clearing rule ("error → ready on turn_done") stated where
+		// the ladder can see it: an authoritative Stop hook means a turn
+		// completed, so the error is over and agent_done should have it. That
+		// also makes this rule and agent_done MUTUALLY EXCLUSIVE at
+		// TierHook — agent_done is hook-tier only when HookTurnDone, which is
+		// exactly the case this guard excludes — so a transcript-tier rule can
+		// never sit above a hook-tier one that would also have fired. The
+		// ladder stays tier-consistent BY CONSTRUCTION rather than by
+		// argument, and TestStateRules_LadderIsTierConsistent proves it
+		// against fixtures that hold both signals at once rather than taking
+		// this comment's word for it.
+		//
+		// The rule's other half — a turn boundary the TRANSCRIPT reported —
+		// never reaches here at all: the tailer clears its sticky error on
+		// that boundary, so SessionError is already nil. Order is why that
+		// half cannot live in this predicate; see clearSessionErrorOnRecovery.
+		//
+		// Tier resolves through the held signal, so #1800's process-death
+		// producer lands at TierProcess by declaring its own policy row rather
+		// than by editing this rule.
+		id:     string(session.SignalSessionError),
+		signal: session.SignalSessionError,
+		when: func(_ string, m *session.SessionMetrics) bool {
+			return m.SessionError != nil && !m.HookTurnDone
+		},
+		decide: toState(session.StateError, "session error → error"),
+	},
+	{
 		// Agent finished turn — check if waiting for user input first. A
 		// hook-delivered Stop (#1161, #1171) is authoritative here: IsAgentDone
 		// consults metrics.HookTurnDone ahead of the transcript-tail heuristic,

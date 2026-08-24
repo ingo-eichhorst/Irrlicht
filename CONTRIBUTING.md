@@ -105,8 +105,9 @@ when relevant (`Fixes #42`).
 **Go (daemon).** Follow `gofmt`/`go vet`. Errors are logged via the `Logger`
 interface, not propagated with `fmt.Errorf` for observability-only failures.
 Adapter packages own their format-specific parsers — don't move parsing into
-shared code. Three session states only: `working`, `waiting`, `ready` (no
-`cancelled`).
+shared code. Four session states only: `working`, `waiting`, `ready`, `error`
+(no `cancelled`) — read the vocabulary from `session.CanonicalStates()` rather
+than retyping it.
 
 **Swift (app).** Follow the
 [Swift API Design Guidelines](https://www.swift.org/documentation/api-design-guidelines/).

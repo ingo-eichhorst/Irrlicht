@@ -1276,6 +1276,25 @@ func (d *SessionDetector) applyStateTransition(state *session.SessionState, ev a
 		// Stamp HEAD + yield verdict on the turn-done → ready edge so the
 		// yield sweep can correlate reverts back to it (#373).
 		d.enricher.CaptureYieldOnReady(state)
+	case session.StateError:
+		// #1798, audited deliberately rather than left to the zero case:
+		//
+		//   - WaitingStartTime is NOT set. It measures how long a human has
+		//     been kept waiting on a prompt, and drives the waiting-duration
+		//     display; an errored session is not blocked on the user, so
+		//     starting that clock would report a fabricated wait.
+		//   - WaitingStartTime is NOT cleared either. error is reachable from
+		//     waiting (a session blocked on a prompt whose next call fails),
+		//     and the settled clearing rule sends it back through working or
+		//     ready — both of which own the field above. Clearing it here
+		//     would lose a real, still-running wait on a round trip the user
+		//     never participated in.
+		//   - CaptureYieldOnReady is NOT called. The yield verdict answers
+		//     "did this session's work survive in the repo", which is a
+		//     question about a FINISHED session; a failed turn has not
+		//     finished, and the next successful one will reach ready and
+		//     stamp it then. Stamping here would also record a HEAD for a
+		//     turn that produced nothing.
 	}
 }
 

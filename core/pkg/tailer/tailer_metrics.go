@@ -24,6 +24,66 @@ func (t *TranscriptTailer) applyMetadata(parsed *ParsedEvent) {
 	if parsed.PendingBackgroundAgentCount != nil {
 		t.lastPendingBackgroundAgentCount = *parsed.PendingBackgroundAgentCount
 	}
+	t.applySessionError(parsed)
+}
+
+// applySessionError maintains the sticky session-level error (issue #1798):
+// it records a failure the parser reported on this event, and clears a
+// standing one once the session recovers.
+//
+// IT LIVES IN applyMetadata ON PURPOSE, and that is the single most important
+// line in this function. scanParsedLine routes an event down one of two
+// mutually exclusive paths — applySkippedEvent for Skip=true, processParsedEvent
+// otherwise — and applyMetadata is the ONLY thing both of them call. The two
+// error shapes this exists for currently land on opposite sides of that fork:
+// claudecode's `system`/`api_error` is Skip=true (it falls through
+// handleSystemEvent's catch-all skip), while copilot's `session.error` would
+// naturally be parsed as an ordinary event. Folding this in processParsedEvent
+// alone would therefore work for one adapter, silently drop the other, and pass
+// every test written against the adapter that worked — the exact shape of the
+// TranscriptPermissionPending defect (#1256), which was correct in the parser,
+// correct under replay, and dropped on the only path that mattered.
+//
+// Ordering within the event is deliberate: a parser reporting BOTH a failure
+// and a turn boundary on one event is reporting a turn that ended in failure,
+// so the error is recorded after the clear and survives.
+func (t *TranscriptTailer) applySessionError(parsed *ParsedEvent) {
+	t.clearSessionErrorOnRecovery(parsed)
+	if parsed.SessionError != nil {
+		t.sessionError = parsed.SessionError
+	}
+}
+
+// clearSessionErrorOnRecovery implements the settled clearing rule from #1796:
+// THE NEXT SUCCESSFUL TURN CLEARS THE ERROR, and nothing else does. There is
+// no minimum hold and no timeout.
+//
+// Two events count as that next successful turn, and they are the two halves
+// of the settled statement "error→working when the next turn starts,
+// error→ready on turn_done":
+//
+//   - a turn boundary (EventType "turn_done") — the retry case. The session
+//     sat red for the whole retry window; the turn then completed, so the
+//     failure is over and the session settles to ready. This is what makes
+//     provider-overloaded-retry end green rather than staying red forever.
+//   - a genuine user message — the next turn starting. A user who types again
+//     has moved on; holding the previous turn's failure against the new one
+//     would pin a terminal error red for the rest of the session, since a
+//     give-up produces no turn boundary of its own to clear it.
+//
+// A tool result is NOT a recovery even though it arrives on a user-role event
+// in some formats, which is why this reads ClearToolNames — the flag parsers
+// already set for exactly "this is a real user turn boundary, reset open tool
+// state" — rather than matching on the event type. Getting that wrong would
+// clear a mid-turn error on the next tool round-trip, i.e. after roughly one
+// second, which is indistinguishable from never showing it.
+func (t *TranscriptTailer) clearSessionErrorOnRecovery(parsed *ParsedEvent) {
+	if t.sessionError == nil {
+		return
+	}
+	if parsed.EventType == "turn_done" || parsed.ClearToolNames {
+		t.sessionError = nil
+	}
 }
 
 // IngestRateLimit accepts an externally-sourced snapshot (the Claude Code
@@ -408,6 +468,17 @@ func (t *TranscriptTailer) surfaceSporadicMetrics() {
 	t.metrics.PendingWaitingCue = t.lastPendingWaitingCue
 	t.metrics.AwaySummary = t.lastAwaySummary
 	t.metrics.PendingBackgroundAgentCount = t.lastPendingBackgroundAgentCount
+
+	// Surfaced HERE rather than in computeMetrics, and that placement is the
+	// behaviour: computeMetrics returns early on a pass that read no new
+	// transcript bytes, so an errored session polled while idle — which is
+	// every poll between the failure and the user noticing it — would surface
+	// a nil error and flip straight back out of StateError. This function runs
+	// unconditionally, which is why the sporadic fields above live in it too.
+	//
+	// Copied verbatim rather than merged: the sticky field IS the current
+	// verdict, including when it is nil because the clearing rule just fired.
+	t.metrics.SessionError = t.sessionError
 }
 
 // computeBackgroundProcessMetrics surfaces background-process bookkeeping.

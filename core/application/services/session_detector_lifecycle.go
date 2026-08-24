@@ -547,6 +547,16 @@ func (d *SessionDetector) seedReevaluateOne(state *session.SessionState) {
 	// Only apply transitions to waiting or ready (not working promotion)
 	// because seed is re-evaluating persisted state, not responding to
 	// new activity.
+	//
+	// #1798: error is deliberately NOT added to the exclusion. The filter
+	// exists to stop a persisted session being promoted to working on no
+	// evidence — "working" is a claim that something is happening right now,
+	// and at boot nothing is. error is the opposite kind of claim: it is
+	// re-derived from SessionError, which is persisted in the session JSON, so
+	// a session that failed before the daemon restarted still has its failure
+	// on disk and should still read red rather than come back green. Blocking
+	// it here would make a restart quietly clear every error — the silent
+	// direction, and the one the fourth state exists to eliminate.
 	newState, reason := ClassifyState(state.State, state.Metrics)
 	if newState != state.State && newState != session.StateWorking {
 		if reason != "" {

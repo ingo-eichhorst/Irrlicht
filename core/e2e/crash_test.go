@@ -15,8 +15,15 @@ import (
 
 // TestSession_NoCancelledState_OnSIGKILL verifies that when an agent process
 // is killed with SIGKILL mid-session, the resulting session never enters a
-// "cancelled" (or any non-canonical) state. Per project convention there are
-// only three states: working, waiting, ready.
+// "cancelled" (or any non-canonical) state.
+//
+// The invariant is membership of the canonical vocabulary, not a count of it,
+// which is why the assertion below delegates to session.IsCanonicalState and
+// keeps holding as the vocabulary grows: #1798 widened it to four
+// (working/waiting/ready/error) and this test needed no change to its logic.
+// "cancelled" specifically is still forbidden — a killed process resolves to
+// ready, and #1796's new error state is for a session whose machinery FAILED,
+// which a deliberate SIGKILL from the user is not.
 //
 // Concretely: the scanner-tracked pre-session must either remain in a
 // canonical state or be deleted entirely — but never end up in a forbidden

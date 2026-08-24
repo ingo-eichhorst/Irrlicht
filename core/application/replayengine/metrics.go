@@ -1,6 +1,8 @@
 package replayengine
 
 import (
+	"time"
+
 	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/tailer"
 	"irrlicht/core/ports/outbound"
@@ -98,6 +100,46 @@ func convertTasks(in []tailer.Task) []session.Task {
 	return out
 }
 
+// convertSessionError maps the tailer's session-error mirror onto the domain
+// type (#1798). Nil in, nil out — a healthy session has no error, and that
+// must stay distinguishable from a zero-valued one.
+//
+// The pointer fields are DEEP-COPIED rather than aliased. The tailer keeps its
+// sticky error across passes, so aliasing would hand the domain a pointer into
+// live tailer state that a later pass can mutate underneath a session snapshot
+// already handed to the API — the same aliasing class as the mockRepo race
+// that produced the recurring services -race flakes.
+func convertSessionError(e *tailer.SessionError) *session.SessionError {
+	if e == nil {
+		return nil
+	}
+	return &session.SessionError{
+		Phase:       session.ErrorPhase(e.Phase),
+		Class:       e.Class,
+		Message:     e.Message,
+		HTTPStatus:  copyIntPtr(e.HTTPStatus),
+		Attempt:     copyIntPtr(e.Attempt),
+		MaxAttempts: copyIntPtr(e.MaxAttempts),
+		RetryIn:     copyDurationPtr(e.RetryIn),
+	}
+}
+
+func copyIntPtr(v *int) *int {
+	if v == nil {
+		return nil
+	}
+	c := *v
+	return &c
+}
+
+func copyDurationPtr(v *time.Duration) *time.Duration {
+	if v == nil {
+		return nil
+	}
+	c := *v
+	return &c
+}
+
 // Convert maps the tailer's metrics struct into the domain type consumed by
 // services.ClassifyState.
 func (mc *MetricsConverter) Convert(m *tailer.SessionMetrics) *session.SessionMetrics {
@@ -142,6 +184,7 @@ func (mc *MetricsConverter) Convert(m *tailer.SessionMetrics) *session.SessionMe
 		SubagentCompletions:               convertSubagentCompletions(m.SubagentCompletions),
 		AppliedTaskDeltas:                 convertAppliedTaskDeltas(m.AppliedTaskDeltas),
 		Tasks:                             convertTasks(m.Tasks),
+		SessionError:                      convertSessionError(m.SessionError),
 	}
 	// Task summary (issue #738): the agent's in-band marker wins; the first
 	// user message is the heuristic fallback for agents that emit none. Both

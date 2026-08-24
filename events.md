@@ -1,24 +1,51 @@
 # Irrlicht Session State Machine
 
-## States (3, MECE)
+## States (4, MECE)
 
 | State | Definition |
 |-------|-----------|
 | **`working`** | Agent actively processing (tools, text generation, hooks, compaction, API retries) |
 | **`waiting`** | User-blocking tool open -- agent needs user to respond (AskUserQuestion, ExitPlanMode) |
 | **`ready`** | Agent idle at prompt, waiting for next user message |
+| **`error`** | The session's own machinery failed -- provider refused or failed the call, credentials rejected, agent process died mid-turn, or Irrlicht could not read the session (#1796) |
+
+`error` is NOT a tool failure. A grep that matched nothing or a build that
+broke is the agent working normally and stays `working`.
+
+The vocabulary is declared once, in `session.CanonicalStates()`; the daemon
+derives both `IsCanonicalState` and every message that lists the states from
+it, so this table is documentation rather than a second source of truth.
 
 ### Decision Tree
 
 1. Is there an open user-blocking tool? **Yes** -> `waiting`
-2. Is the agent actively processing? **Yes** -> `working`
-3. Otherwise -> `ready`
+2. Is there an unrecovered session-level failure? **Yes** -> `error`
+3. Is the agent actively processing? **Yes** -> `working`
+4. Otherwise -> `ready`
+
+Step 2 sits above step 3 deliberately: a terminal provider failure often
+leaves a transcript tail that reads like a finished turn, so a lower placement
+would report a failed session as `ready` -- green, and silent.
+
+### Leaving `error`
+
+The next SUCCESSFUL turn clears it, and nothing else does -- no timeout, no
+minimum hold:
+
+- `error -> working` when the next turn starts
+- `error -> ready` on `turn_done`
+
+Known and accepted: with no minimum hold, a provider error that recovers in a
+few hundred milliseconds can enter and leave `error` inside one poll interval
+and never be seen.
+
+An errored session does not count toward concurrency, the same as `ready`.
 
 ---
 
 ## Application Lifecycle Events
 
-These events manage the existence of sessions -- creation and deletion. They are independent of the working/waiting/ready state machine.
+These events manage the existence of sessions -- creation and deletion. They are independent of the lifecycle state machine.
 
 | User Scenario | Before | After | Technical Trigger | Detection |
 |--------------|--------|-------|-------------------|-----------|
@@ -56,7 +83,7 @@ Pre-sessions (`proc-<pid>`) are synthetic sessions created by the process scanne
 
 ## Session State Transitions
 
-These transitions change the working/waiting/ready state of an existing session.
+These transitions change the lifecycle state of an existing session.
 
 | User Scenario | Before | After | Technical Trigger | Detection |
 |--------------|--------|-------|-------------------|-----------|
@@ -130,7 +157,7 @@ Parent-child relationships are derived from the transcript path: Claude Code wri
 subagentSummary { total, working, waiting, ready int }
 ```
 
-Subagent sessions run independent state machines with the same 3 states.
+Subagent sessions run independent state machines with the same states.
 
 ---
 
