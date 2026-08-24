@@ -1,8 +1,6 @@
 package replayengine
 
 import (
-	"time"
-
 	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/tailer"
 	"irrlicht/core/ports/outbound"
@@ -117,22 +115,18 @@ func convertSessionError(e *tailer.SessionError) *session.SessionError {
 		Phase:       session.ErrorPhase(e.Phase),
 		Class:       e.Class,
 		Message:     e.Message,
-		HTTPStatus:  copyIntPtr(e.HTTPStatus),
-		Attempt:     copyIntPtr(e.Attempt),
-		MaxAttempts: copyIntPtr(e.MaxAttempts),
-		RetryIn:     copyDurationPtr(e.RetryIn),
+		HTTPStatus:  copyPtr(e.HTTPStatus),
+		Attempt:     copyPtr(e.Attempt),
+		MaxAttempts: copyPtr(e.MaxAttempts),
+		RetryIn:     copyPtr(e.RetryIn),
 	}
 }
 
-func copyIntPtr(v *int) *int {
-	if v == nil {
-		return nil
-	}
-	c := *v
-	return &c
-}
-
-func copyDurationPtr(v *time.Duration) *time.Duration {
+// copyPtr returns a fresh pointer to the same value, or nil for nil. One
+// generic helper rather than one per pointed-to type, so a field added to
+// SessionError with a new numeric type does not need another near-identical
+// copy of it — the same reasoning as session.eqPtr.
+func copyPtr[T any](v *T) *T {
 	if v == nil {
 		return nil
 	}
