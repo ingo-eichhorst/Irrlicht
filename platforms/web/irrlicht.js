@@ -727,7 +727,12 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     }
 
     function updateSessionRow(el, agent, isChild) {
-      const state = agent.state || 'ready';
+      // #1797: fall back to 'unknown', never 'ready' — this value reaches
+      // stateIcon via renderRowStateIcon, and 'ready' would re-introduce the
+      // green checkmark that stateIcon's own default was fixed to stop.
+      // isActive is unaffected: 'unknown' is neither working nor waiting,
+      // exactly as 'ready' was.
+      const state = agent.state || 'unknown';
       const metrics = agent.metrics || {};
       const isActive = state === 'working' || state === 'waiting';
 
@@ -1369,7 +1374,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       const list = topLevel || [];
       let sig = 'count:' + list.length;
       if (list.length === 0) sig = 'empty';
-      else if (list.length <= 3) sig = 'icons:' + list.map(s => s.state || 'ready').join(',');
+      else if (list.length <= 3) sig = 'icons:' + list.map(s => s.state || 'unknown').join(',');
       if (host.dataset.sig === sig) return;
       host.dataset.sig = sig;
       if (list.length === 0) {
@@ -1379,7 +1384,8 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       if (list.length <= 3) {
         let html = '';
         for (const s of list) {
-          html += '<span class="app-state-icon" title="' + esc(s.state || 'ready') + '">' + stateIcon(s.state || 'ready') + '</span>';
+          // #1797: 'unknown', not 'ready' — see updateSessionRow.
+          html += '<span class="app-state-icon" title="' + esc(s.state || 'unknown') + '">' + stateIcon(s.state || 'unknown') + '</span>';
         }
         host.innerHTML = html;
         return;

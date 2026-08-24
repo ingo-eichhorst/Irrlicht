@@ -28,22 +28,21 @@ struct SessionStateIcon: View {
             WorkingIcon(size: size)
         case .waiting:
             WaitingIcon(size: size)
-        case .ready:
+        case .ready, .unknown:
+            // Both are SF Symbols, so they share one arm and read their glyph
+            // and hue from the enum rather than re-hardcoding them here — the
+            // enum's `glyph` has a production consumer of its own
+            // (SessionManager's menu-bar summary), and a second copy could
+            // silently disagree with it.
+            //
             // The font keeps the glyph's optical size (the working dot is
             // tuned to match it); the explicit frame clamps the layout box
             // to size × size — without it the symbol's font metrics make
-            // the box wider and push the rest of the row to the right.
-            Image(systemName: "checkmark.circle.fill")
+            // the box wider and push the rest of the row to the right (#596).
+            // That clamp is why `.unknown` can join this arm safely.
+            Image(systemName: state.glyph)
                 .font(.system(size: size))
-                .foregroundColor(IrrColors.ready)
-                .frame(width: size, height: size)
-        case .unknown:
-            // #1797 — a state this build cannot interpret. Neutral grey
-            // question mark, same clamped size × size box as the others so an
-            // unreadable state doesn't reflow the row (issue #596).
-            Image(systemName: "questionmark.circle")
-                .font(.system(size: size))
-                .foregroundColor(IrrColors.unknown)
+                .foregroundColor(state.color)
                 .frame(width: size, height: size)
         }
     }

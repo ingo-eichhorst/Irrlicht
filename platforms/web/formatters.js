@@ -17,9 +17,10 @@ const svgIcons = {
   // Unknown / unrecognized state (#1797) — a session state this build has
   // never heard of, e.g. one written by a newer daemon. Deliberately
   // `currentColor` rather than an inlined hex: the .state-unknown rule in
-  // irrlicht.css points that at var(--muted), so the icon follows the
-  // light-theme palette. (The `cancelled` entry above predates that rule and
-  // does NOT follow it — a known wart, left alone here rather than copied.)
+  // irrlicht.css points that at var(--unknown), a token paired by value with
+  // macOS IrrHex.unknown. (The `cancelled` entry above inlines its hex and so
+  // follows no theme override at all — a known wart, left alone rather than
+  // copied.)
   unknown: '<svg class="state-unknown" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.5"/><path d="M6.2 6.2a1.85 1.85 0 113 1.5c-.7.5-1.2.85-1.2 1.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="8" cy="11.6" r="0.85" fill="currentColor"/></svg>',
 };
 

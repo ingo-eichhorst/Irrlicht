@@ -25,13 +25,21 @@ struct MenuBarStatusRenderer {
     private static let fontSize: CGFloat = 10
     private static let maxVisibleGroups = 5
     private static let overflowFillHex = IrrSVG.cancelled
-    /// Slice order for the per-group pie dot. `.unknown` is last but MUST be
-    /// present (#1797): the fractions are `count / sessions.count`, so a state
-    /// missing from this list is a session counted in the denominator with no
-    /// wedge of its own — the dot renders with a hole. Worse, a group of
-    /// nothing but unrecognized sessions produced NO segments at all and fell
-    /// through `aggregatedCircleElements`' single-segment path to a green dot.
-    private static let segmentOrder: [SessionState.State] = [.waiting, .working, .ready, .unknown]
+    /// Slice order for the per-group pie dot — DERIVED from `allCases`, never
+    /// hand-listed (#1797).
+    ///
+    /// The fractions are `count / sessions.count`, so a state missing from this
+    /// list is a session counted in the denominator with no wedge of its own
+    /// (the dot renders with a hole), and a group of nothing but the missing
+    /// state produced NO segments at all and fell through
+    /// `aggregatedCircleElements`' single-segment path to a green dot. That is
+    /// how `.unknown` broke it, and a literal array would let a 5th state break
+    /// it again in exactly the same way — an array is the one state reader the
+    /// Swift compiler cannot force to be exhaustive. Sorting `allCases` by
+    /// `menuBarRank`, which IS a compiler-forced switch, moves the requirement
+    /// somewhere it cannot be forgotten.
+    private static let segmentOrder: [SessionState.State] =
+        SessionState.State.allCases.sorted { $0.menuBarRank < $1.menuBarRank }
 
     static func buildStatusImage(
         sessions: [SessionState],
@@ -180,18 +188,17 @@ struct MenuBarStatusRenderer {
         let cy = height / 2
 
         guard segments.count > 1 else {
-            // Grey, not green: with nothing to summarize, "all done" is a
-            // claim we have no basis for.
-            //
-            // Note this `??` is currently UNREACHABLE and no test covers it:
-            // once segmentOrder spans every case, stateSegments returns []
-            // only for an empty session list, and renderGroup routes anything
-            // with <= 3 sessions to renderCompactGroup, so this path never
-            // sees fewer than 4. Kept as defensive depth, but do not count it
-            // as a guarded behavior.
-            let hex = segments.first?.state.hexColor ?? SessionState.State.unknown.hexColor
+            // One state covers the whole group: a solid dot in its own hue,
+            // no pie. `segments` cannot be empty here — segmentOrder spans
+            // every case, so it is empty only for an empty session list, and
+            // renderGroup sends anything with <= 3 sessions to
+            // renderCompactGroup. Returning "" rather than inventing a color
+            // for the impossible case: a `?? .ready` here was one of the ways
+            // an unreadable group used to paint green (#1797), and no fallback
+            // hue is better than a wrong one.
+            guard let only = segments.first else { return "" }
             return """
-            <circle cx="\(svgNumber(cx))" cy="\(svgNumber(cy))" r="\(svgNumber(radius))" fill="#\(hex)" stroke="rgba(0,0,0,0.25)" stroke-width="0.5"/>
+            <circle cx="\(svgNumber(cx))" cy="\(svgNumber(cy))" r="\(svgNumber(radius))" fill="#\(only.state.hexColor)" stroke="rgba(0,0,0,0.25)" stroke-width="0.5"/>
             """
         }
 

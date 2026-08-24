@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, beforeAll, afterAll } from 'vitest'
 
 import { formatCO2, co2TierTitle, stateIcon } from './formatters.js'
-import { readCss } from './snapshots/serialize.js'
+import { readCss, readMacosTokens } from './snapshots/serialize.js'
 import {
   permissionEffectNotice,
   anyEffectFailed,
@@ -194,12 +194,8 @@ describe('stateIcon (#1797)', () => {
     expect(icon).not.toBe(stateIcon('waiting'))
     // Not merely "different markup that happens to be green": the ready
     // icon's hue must not appear at all.
-    expect(icon).not.toMatch(/#34C759/)
     expect(icon).not.toMatch(/34C759/i)
-  })
-
-  test('the unknown icon still renders something', () => {
-    const icon = stateIcon('zzz-unknown')
+    // ...and it must still render something rather than an empty string.
     expect(icon).toMatch(/^<svg\b/)
     expect(icon).toMatch(/<\/svg>$/)
   })
@@ -209,9 +205,8 @@ describe('stateIcon (#1797)', () => {
     expect(stateIcon('')).toBe(stateIcon('zzz-unknown'))
     // The two `toBe`s above are equality checks, and pre-fix BOTH sides were
     // the ready checkmark — so they were equal and this test passed against
-    // the defect. These are what make the test's name true.
+    // the defect. This is what makes the test's name true.
     expect(stateIcon(undefined)).not.toMatch(/34C759/i)
-    expect(stateIcon('')).not.toMatch(/34C759/i)
   })
 
   // The unknown icon takes its color from a CSS token rather than inlining a
@@ -235,15 +230,19 @@ describe('stateIcon (#1797)', () => {
   })
 
   // #1797 — every state hue is paired by value across the two frontends, and
-  // `unknown` is no exception. macOS holds it in IrrHex.unknown
-  // (platforms/macos/Irrlicht/Theme/Tokens.swift); if that value is changed on
-  // one side only, this fails rather than the two dashboards quietly drifting
-  // to different greys for the same session.
-  test('--unknown is defined and matches the macOS IrrHex.unknown value', () => {
-    const css = readCss()
-    const decl = css.match(/--unknown:\s*([^;]+);/)
-    expect(decl).not.toBeNull()
-    expect(decl[1].trim().toLowerCase()).toBe('#8e8e93')
+  // `unknown` is no exception. This READS Tokens.swift rather than comparing
+  // against a hand-typed literal: a third copy of the constant could not fail
+  // when the Swift side drifts, which is the only scenario this test exists
+  // for. Both extractions are asserted to have matched, so "could not find the
+  // token" fails loudly instead of silently passing (AGENTS.md).
+  test('--unknown matches the macOS IrrHex.unknown value', () => {
+    const cssDecl = readCss().match(/--unknown:\s*([^;]+);/)
+    expect(cssDecl, 'no --unknown custom property found in irrlicht.css').not.toBeNull()
+
+    const swiftDecl = readMacosTokens().match(/static let unknown\s*=\s*"(#[0-9A-Fa-f]{6})"/)
+    expect(swiftDecl, 'no IrrHex.unknown found in platforms/macos/Irrlicht/Theme/Tokens.swift').not.toBeNull()
+
+    expect(cssDecl[1].trim().toLowerCase()).toBe(swiftDecl[1].toLowerCase())
   })
 })
 

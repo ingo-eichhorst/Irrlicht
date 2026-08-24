@@ -3,13 +3,14 @@ package filesystem_test
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"irrlicht/core/adapters/outbound/filesystem"
 	"irrlicht/core/domain/session"
+	"irrlicht/core/internal/contracttesting"
 )
 
 func TestRepository_SaveAndLoad(t *testing.T) {
@@ -241,38 +242,13 @@ func TestRepository_ListAll_KeepsUnknownState(t *testing.T) {
 	}
 
 	// The lock: it must not reach a three-state consumer.
+	ids := make([]string, 0, len(states))
 	for _, s := range states {
-		if s.SessionID == "unknown" {
-			t.Errorf("ListAll returned the unknown-state session %q; want it skipped", s.State)
-		}
+		ids = append(ids, s.SessionID)
 	}
-	if len(states) != 1 {
-		t.Errorf("ListAll: got %d states, want 1 (the known session)", len(states))
+	if !slices.Equal(ids, []string{"known"}) {
+		t.Errorf("ListAll returned %v; want only the known session (the unknown-state one must be skipped)", ids)
 	}
-}
-
-// recordingLogger captures the Logger port calls the repository makes.
-type recordingLogger struct {
-	mu       sync.Mutex
-	errors   []string
-	eventIDs []string
-}
-
-func (l *recordingLogger) LogInfo(eventType, sessionID, message string) {}
-func (l *recordingLogger) LogError(eventType, sessionID, errorMsg string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.eventIDs = append(l.eventIDs, eventType)
-	l.errors = append(l.errors, errorMsg)
-}
-func (l *recordingLogger) LogProcessingTime(eventType, sessionID string, processingTimeMs int64, payloadSize int, result string) {
-}
-func (l *recordingLogger) Close() error { return nil }
-
-func (l *recordingLogger) snapshot() ([]string, []string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return append([]string(nil), l.eventIDs...), append([]string(nil), l.errors...)
 }
 
 // TestRepository_ListAll_WarnsOncePerUnknownState covers the reporting half of
@@ -280,9 +256,8 @@ func (l *recordingLogger) snapshot() ([]string, []string) {
 // from the user's list with no artifact anywhere saying why. Two things are
 // asserted, and both matter:
 //
-//   - the warning goes through the Logger PORT, not stdlib log. In the shipped
-//     product the macOS app spawns irrlichd with stdout and stderr on
-//     FileHandle.nullDevice, so a `log.Printf` here reaches nobody.
+//   - the warning goes through the Logger PORT, not stdlib log — see
+//     SessionRepository.logger for why stderr reaches nobody in the shipped app.
 //   - it fires ONCE PER DISTINCT VALUE, not once per sighting. ListAll runs on
 //     the poll loop, so per-occurrence logging would repeat the same line every
 //     few seconds for as long as the file exists.
@@ -294,17 +269,19 @@ func (l *recordingLogger) snapshot() ([]string, []string) {
 func TestRepository_ListAll_WarnsOncePerUnknownState(t *testing.T) {
 	dir := t.TempDir()
 	repo := filesystem.NewWithDir(dir)
-	logger := &recordingLogger{}
+	logger := &contracttesting.RecordingLogger{}
 	repo.SetLogger(logger)
 
-	for name, state := range map[string]string{
-		"a.json": "zzz-unknown",
-		"b.json": "zzz-unknown", // same value, second file
-		"c.json": "yyy-other",   // a different unrecognized value
+	// A fixed slice, not a map: map iteration order is randomized, and nothing
+	// here wants that.
+	for _, f := range []struct{ name, state string }{
+		{"a.json", "zzz-unknown"},
+		{"b.json", "zzz-unknown"}, // same value, second file
+		{"c.json", "yyy-other"},   // a different unrecognized value
 	} {
-		payload := []byte(`{"session_id":"` + name + `","state":"` + state + `","updated_at":2}`)
-		if err := os.WriteFile(filepath.Join(dir, name), payload, 0o600); err != nil {
-			t.Fatalf("write %s: %v", name, err)
+		payload := []byte(`{"session_id":"` + f.name + `","state":"` + f.state + `","updated_at":2}`)
+		if err := os.WriteFile(filepath.Join(dir, f.name), payload, 0o600); err != nil {
+			t.Fatalf("write %s: %v", f.name, err)
 		}
 	}
 
@@ -312,11 +289,11 @@ func TestRepository_ListAll_WarnsOncePerUnknownState(t *testing.T) {
 		t.Fatalf("ListAll: %v", err)
 	}
 
-	events, msgs := logger.snapshot()
+	msgs := logger.Errors()
 	if len(msgs) != 2 {
 		t.Fatalf("first ListAll: got %d warnings, want 2 (one per DISTINCT unknown value): %q", len(msgs), msgs)
 	}
-	for _, ev := range events {
+	for _, ev := range logger.EventTypes() {
 		if ev != "session_state_unrecognized" {
 			t.Errorf("event type: got %q, want session_state_unrecognized", ev)
 		}
@@ -332,7 +309,7 @@ func TestRepository_ListAll_WarnsOncePerUnknownState(t *testing.T) {
 	if _, err := repo.ListAll(); err != nil {
 		t.Fatalf("second ListAll: %v", err)
 	}
-	if _, after := logger.snapshot(); len(after) != 2 {
+	if after := logger.Errors(); len(after) != 2 {
 		t.Errorf("second ListAll: got %d warnings total, want still 2 (once per value, not per sighting)", len(after))
 	}
 }

@@ -35,9 +35,15 @@ type SessionRepository struct {
 	logger outbound.Logger
 }
 
-// SetLogger attaches the daemon's structured logger. Safe to leave unset —
-// warnUnknownStateOnce falls back to stderr. Call it before the repository is
-// shared with other goroutines (startup wiring does).
+// SetLogger attaches the daemon's structured logger; see the logger field for
+// why the port and not stderr. Safe to leave unset — warnUnknownStateOnce falls
+// back to stderr.
+//
+// A plain field rather than a mutex/atomic, unlike its warnedStates neighbour,
+// because the write is ordered by construction rather than by a lock:
+// initSessionStorage (core/cmd/irrlichd/startup.go) is the only caller and runs
+// it before NewCachedSessionRepository hands the repository to any other
+// goroutine, so the write happens-before every read. Call it there, not later.
 func (r *SessionRepository) SetLogger(l outbound.Logger) { r.logger = l }
 
 // New returns a SessionRepository rooted at the user's Application Support directory.
@@ -158,9 +164,14 @@ func (r *SessionRepository) ListAll() ([]*session.SessionState, error) {
 			// Two consequences of skipping, stated rather than implied:
 			//   - PruneStale iterates ListAll, so these files are exempt from
 			//     MaxSessionAge and accumulate until a build that understands
-			//     the state reaps them. Deliberate: unbounded-but-intact beats
-			//     the data loss this block exists to stop, and age-based
-			//     reaping of states we cannot read is its own decision.
+			//     the state reaps them. The cost is recurring work, not just
+			//     disk: each stuck file is re-read and re-unmarshalled on every
+			//     sweep forever (~1/s under session activity, behind the 3s
+			//     cache), for a session discarded three lines later. Deliberate:
+			//     unbounded-but-intact beats the data loss this block exists to
+			//     stop, and age-based reaping of states we cannot read is its
+			//     own decision. Bounded in practice by how many sessions the
+			//     newer build created.
 			//   - Load() does NOT filter by state, so a session this daemon
 			//     still receives events for is loaded normally and the next
 			//     Save() rewrites the state to a canonical one. "Kept for the

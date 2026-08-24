@@ -62,10 +62,9 @@ func initSessionStorage(logger outbound.Logger, cfg config.Config) (*filesystem.
 		os.Exit(1)
 	}
 
-	// Route the unrecognized-state warning (#1797) into the structured log
-	// before the first ListAll. The app spawns irrlichd with stdout/stderr on
-	// nullDevice, so the stderr fallback inside the repository would otherwise
-	// discard the only signal that a session was skipped.
+	// #1797: the port logger, not the stderr fallback — see
+	// SessionRepository.logger for why. Must precede the first ListAll (the
+	// PruneStale below) and any sharing of fsRepo across goroutines.
 	fsRepo.SetLogger(logger)
 
 	pruned, err := fsRepo.PruneStale(cfg.MaxSessionAge)

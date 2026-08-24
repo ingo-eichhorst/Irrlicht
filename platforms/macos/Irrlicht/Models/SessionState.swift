@@ -945,6 +945,12 @@ struct SessionState: Identifiable, Codable {
     /// recognize (#1797), e.g. one written by a newer daemon during a staged
     /// upgrade. Every rendering below therefore has to answer for it, and the
     /// answer is always neutral: grey, a question mark, never green.
+    ///
+    /// ⚠️ `.unknown` must never be WRITTEN BACK to the daemon. It is `Codable`
+    /// only because the enclosing type is, and nothing encodes a SessionState
+    /// today; if something ever does, `"state":"unknown"` is a value the daemon
+    /// does not recognize and would skip on its next load — silently removing
+    /// the session. Encode the original state, or refuse.
     enum State: String, CaseIterable, Codable {
         case working, waiting, ready, unknown
 
@@ -973,6 +979,20 @@ struct SessionState: Identifiable, Codable {
             case .waiting: return IrrSVG.waiting
             case .ready:   return IrrSVG.ready
             case .unknown: return IrrSVG.unknown
+            }
+        }
+
+        /// Ordering key for summaries that lay the states out in a fixed
+        /// sequence (the menu bar's pie dot). A `switch` on purpose: it is the
+        /// mechanism that stops a future 5th state from being silently left out
+        /// of a hand-written array, which is exactly how `.unknown` came to be
+        /// omitted from `segmentOrder` and fall through to green (#1797).
+        var menuBarRank: Int {
+            switch self {
+            case .waiting: return 0
+            case .working: return 1
+            case .ready:   return 2
+            case .unknown: return 3   // last: outranked by anything we can read
             }
         }
 
