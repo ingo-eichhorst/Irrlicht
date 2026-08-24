@@ -53,6 +53,45 @@ final class MenuBarStatusRendererTests: XCTestCase {
         XCTAssertTrue(svg.contains(">4</text>"))
     }
 
+    // #1797 — `segmentOrder` is the menu bar's state vocabulary, and a state
+    // missing from it is a session counted in the pie's denominator with no
+    // wedge of its own. A group of nothing but unrecognized sessions produced
+    // zero segments and fell through to the solid-circle path, which defaulted
+    // to READY GREEN — the menu bar reporting "all done" for sessions it could
+    // not read. Mutation check for this guard (there is no pre-fix state to run
+    // it against): drop `.unknown` from segmentOrder and this goes red.
+    func testAggregatedGroupSVGNeverPaintsUnknownSessionsGreen() {
+        let sessions = (1...3).map { makeSession(id: "\($0)", state: .unknown) }
+
+        let svg = MenuBarStatusRenderer.aggregatedGroupSVG(for: sessions)
+
+        XCTAssertFalse(
+            svg.contains(IrrSVG.ready),
+            "a group of only unrecognized sessions must not render ready-green: \(svg)"
+        )
+        XCTAssertTrue(svg.contains(IrrSVG.unknown), "expected the neutral hue: \(svg)")
+        XCTAssertTrue(svg.contains(">3</text>"))
+    }
+
+    // The pie fractions must still sum to the whole circle once unknown
+    // sessions are in the mix — otherwise the dot renders with a hole.
+    func testStateSegmentsCoverEveryUnknownStateSession() {
+        let sessions = [
+            makeSession(id: "1", state: .waiting),
+            makeSession(id: "2", state: .unknown),
+            makeSession(id: "3", state: .ready),
+            makeSession(id: "4", state: .unknown)
+        ]
+
+        let segments = MenuBarStatusRenderer.stateSegments(for: sessions)
+
+        XCTAssertEqual(segments.map(\.count).reduce(0, +), sessions.count)
+        XCTAssertEqual(segments.map(\.fraction).reduce(0, +), 1.0, accuracy: 0.0001)
+        // Unknown sorts last, after every state we can actually read.
+        XCTAssertEqual(segments.last?.state, .unknown)
+        XCTAssertEqual(segments.last?.count, 2)
+    }
+
     func testBuildStatusImageReturnsImageForSessions() {
         let image = MenuBarStatusRenderer.buildStatusImage(
             sessions: [makeSession(id: "1", state: .working)],

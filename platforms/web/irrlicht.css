@@ -578,6 +578,16 @@
       display: block;
     }
 
+    /* Unknown/unrecognized session state (#1797) — a session state this build
+       has never heard of. Its SVG paints with currentColor, so setting `color`
+       here is what makes it neutral grey AND theme-aware: --muted is redefined
+       by both light-mode blocks at the top of this file, which the older
+       hex-inlined `cancelled` icon never picks up. */
+    .row-state-icon svg.state-unknown,
+    .app-state-icon svg.state-unknown {
+      color: var(--muted);
+    }
+
     /* Working state — opacity-only "breathe" on a large solid dot.
        Footprint is r=7 of 20 viewBox (70 % of cell), so the dot stays
        clearly visible even if the animation is dropped by the renderer

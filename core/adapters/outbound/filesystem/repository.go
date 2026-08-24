@@ -3,9 +3,11 @@ package filesystem
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"irrlicht/core/domain/session"
@@ -16,6 +18,11 @@ const appSupportDir = "Library/Application Support/Irrlicht"
 // SessionRepository implements ports/outbound.SessionRepository using the local filesystem.
 type SessionRepository struct {
 	instancesDir string
+	// warnedStates records which unrecognised state values ListAll has already
+	// logged, so a forward-compatible skip does not turn the daemon's poll loop
+	// into a log flood (see warnUnknownStateOnce). A sync.Map because ListAll is
+	// reachable from more than one goroutine through CachedRepository.
+	warnedStates sync.Map
 }
 
 // New returns a SessionRepository rooted at the user's Application Support directory.
@@ -118,18 +125,42 @@ func (r *SessionRepository) ListAll() ([]*session.SessionState, error) {
 		if err := json.Unmarshal(data, &state); err != nil {
 			continue
 		}
-		validStates := map[string]bool{
-			session.StateWorking: true,
-			session.StateWaiting: true,
-			session.StateReady:   true,
-		}
-		if !validStates[state.State] {
-			os.Remove(filepath.Join(r.instancesDir, name))
+		if !session.IsCanonicalState(state.State) {
+			// #1797: an unrecognised state is a value THIS build does not
+			// understand — a session written by a newer daemon, read after a
+			// downgrade or in a mixed-version install. It is not junk, and it
+			// is never a licence to delete the user's data: this used to
+			// os.Remove the file, which destroyed every such session
+			// irrecoverably on the first sweep.
+			//
+			// What a three-state build does with it, decided here: keep the
+			// file untouched and skip the session. Handing it downstream is
+			// not an option — grouping, the state counters and the state
+			// machine are all written against exactly working/waiting/ready,
+			// so an unknown value would surface as a mis-rendered session
+			// rather than an absent one. Skipping loses only visibility, and
+			// the file is still on disk for the build that does understand it.
+			r.warnUnknownStateOnce(state.State, name)
 			continue
 		}
 		states = append(states, &state)
 	}
 	return states, nil
+}
+
+// warnUnknownStateOnce logs an unrecognised session state the first time this
+// repository sees that value, and stays quiet for every later sighting.
+// ListAll runs on the daemon's poll loop, so logging per occurrence would emit
+// the same line every few seconds for as long as the file exists — which
+// buries the one sighting that carries information (a session state this build
+// has never heard of) under thousands of duplicates.
+func (r *SessionRepository) warnUnknownStateOnce(state, name string) {
+	if _, seen := r.warnedStates.LoadOrStore(state, struct{}{}); seen {
+		return
+	}
+	log.Printf("filesystem repository: session file %q has unrecognized state %q "+
+		"(this build knows only %s/%s/%s) — keeping the file on disk and skipping the session",
+		name, state, session.StateWorking, session.StateWaiting, session.StateReady)
 }
 
 // PruneStale deletes session files older than maxAge and returns the count.

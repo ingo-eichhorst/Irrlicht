@@ -7,8 +7,10 @@ import SwiftUI
 ///            between 0.55 and 1.0 over 1.4 s.
 /// - waiting: two-bar pause.
 /// - ready:   SF Symbol `checkmark.circle.fill` (unchanged from before).
+/// - unknown: SF Symbol `questionmark.circle` in neutral grey — a state this
+///            build does not recognize (#1797), never painted green.
 ///
-/// All three states occupy the same fixed `size × size` layout box
+/// All four states occupy the same fixed `size × size` layout box
 /// (issue #596): the session row is a leading HStack, so a state whose
 /// icon measured wider — the ready SF Symbol's font-derived box is 14 pt
 /// at size 12 — shifted the agent number, title, and context bar of that
@@ -34,6 +36,14 @@ struct SessionStateIcon: View {
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: size))
                 .foregroundColor(IrrColors.ready)
+                .frame(width: size, height: size)
+        case .unknown:
+            // #1797 — a state this build cannot interpret. Neutral grey
+            // question mark, same clamped size × size box as the others so an
+            // unreadable state doesn't reflow the row (issue #596).
+            Image(systemName: "questionmark.circle")
+                .font(.system(size: size))
+                .foregroundColor(IrrColors.unknown)
                 .frame(width: size, height: size)
         }
     }

@@ -25,7 +25,13 @@ struct MenuBarStatusRenderer {
     private static let fontSize: CGFloat = 10
     private static let maxVisibleGroups = 5
     private static let overflowFillHex = IrrSVG.cancelled
-    private static let segmentOrder: [SessionState.State] = [.waiting, .working, .ready]
+    /// Slice order for the per-group pie dot. `.unknown` is last but MUST be
+    /// present (#1797): the fractions are `count / sessions.count`, so a state
+    /// missing from this list is a session counted in the denominator with no
+    /// wedge of its own — the dot renders with a hole. Worse, a group of
+    /// nothing but unrecognized sessions produced NO segments at all and fell
+    /// through `aggregatedCircleElements`' single-segment path to a green dot.
+    private static let segmentOrder: [SessionState.State] = [.waiting, .working, .ready, .unknown]
 
     static func buildStatusImage(
         sessions: [SessionState],
@@ -174,7 +180,11 @@ struct MenuBarStatusRenderer {
         let cy = height / 2
 
         guard segments.count > 1 else {
-            let hex = segments.first?.state.hexColor ?? SessionState.State.ready.hexColor
+            // The `??` fires only when there are no segments at all, which
+            // after #1797's segmentOrder covers every state means an empty
+            // session list. Grey, not green: with nothing to summarize, "all
+            // done" is a claim we have no basis for.
+            let hex = segments.first?.state.hexColor ?? SessionState.State.unknown.hexColor
             return """
             <circle cx="\(svgNumber(cx))" cy="\(svgNumber(cy))" r="\(svgNumber(radius))" fill="#\(hex)" stroke="rgba(0,0,0,0.25)" stroke-width="0.5"/>
             """

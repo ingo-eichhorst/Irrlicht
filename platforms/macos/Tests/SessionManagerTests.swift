@@ -144,7 +144,12 @@ final class SessionManagerTests: XCTestCase {
         XCTAssertEqual(SessionState.State.ready.hexColor, "34C759")
     }
 
-    func testUnknownStateFallsBackToReady() throws {
+    // #1797. This test used to be `testUnknownStateFallsBackToReady` and
+    // asserted `.ready` — it locked in the defect: `State(rawValue:) ?? .ready`
+    // painted every state this build had never heard of GREEN, which claims a
+    // session finished cleanly at the exact moment the app cannot interpret
+    // what the daemon said. It now decodes to `.unknown` and renders neutral.
+    func testUnknownStateDecodesToUnknownNotReady() throws {
         let jsonData = """
         {
             "session_id": "sess_unknown123",
@@ -161,7 +166,53 @@ final class SessionManagerTests: XCTestCase {
         let session = try JSONDecoder().decode(SessionState.self, from: jsonData)
 
         XCTAssertEqual(session.id, "sess_unknown123")
+        XCTAssertNotEqual(session.state, .ready, "an unrecognized state must never render as ready/green")
+        XCTAssertEqual(session.state, .unknown)
+    }
+
+    // The `"finished"` -> `.ready` branch is a deliberate RENAME-compatibility
+    // shim, not an unknown state. #1797 must not sweep it up with the rest:
+    // this is a LOCK on behavior that must NOT change, so it passed before the
+    // fix by construction.
+    func testFinishedStillDecodesToReady() throws {
+        let jsonData = """
+        {
+            "session_id": "sess_finished",
+            "state": "finished",
+            "updated_at": 1234567890,
+            "first_seen": 1234567800
+        }
+        """.data(using: .utf8)!
+
+        let session = try JSONDecoder().decode(SessionState.self, from: jsonData)
         XCTAssertEqual(session.state, .ready)
+    }
+
+    // #1797: the neutral rendering has to be neutral all the way down — a
+    // decode that lands on `.unknown` but then borrows ready's green glyph or
+    // hue has fixed nothing the user can see.
+    func testUnknownStateRendersNeutrally() {
+        let unknown = SessionState.State.unknown
+        XCTAssertNotEqual(unknown.hexColor, SessionState.State.ready.hexColor)
+        XCTAssertNotEqual(unknown.glyph, SessionState.State.ready.glyph)
+        XCTAssertNotEqual(unknown.emoji, SessionState.State.ready.emoji)
+        XCTAssertNotEqual(unknown.label, SessionState.State.ready.label)
+        XCTAssertEqual(unknown.hexColor, IrrSVG.unknown)
+    }
+
+    // #1797: the menu-bar summary asks `dominant(in:)` for one state to paint.
+    // A group of nothing but unrecognized sessions used to fall through its
+    // final `return .ready` and paint the menu bar green.
+    func testDominantStateOfAllUnknownIsNotReady() {
+        XCTAssertEqual(SessionState.State.dominant(in: [.unknown, .unknown]), .unknown)
+        // Known states still outrank unknown, and the priority order among
+        // them is unchanged (LOCK).
+        XCTAssertEqual(SessionState.State.dominant(in: [.unknown, .ready]), .ready)
+        XCTAssertEqual(SessionState.State.dominant(in: [.unknown, .working]), .working)
+        XCTAssertEqual(SessionState.State.dominant(in: [.unknown, .waiting]), .waiting)
+        XCTAssertEqual(SessionState.State.dominant(in: [.ready, .working, .waiting]), .waiting)
+        // An empty collection keeps its historical answer (LOCK).
+        XCTAssertEqual(SessionState.State.dominant(in: [SessionState.State]()), .ready)
     }
     
     // MARK: - Display Formatting Tests

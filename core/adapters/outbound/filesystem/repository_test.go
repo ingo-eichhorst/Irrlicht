@@ -195,6 +195,81 @@ func TestRepository_ListAll_SkipsNonJSON(t *testing.T) {
 	}
 }
 
+// TestRepository_ListAll_KeepsUnknownState covers #1797. ListAll used to
+// os.Remove any session file whose state fell outside a hardcoded three-entry
+// allowlist, so a daemon that predates a newly-introduced state DESTROYS every
+// session file carrying it — irrecoverably, on the first sweep after a
+// downgrade or a mixed-version install. Forward compatibility is the point:
+// an unrecognised state is a value this build does not understand yet, never a
+// licence to delete the user's data.
+//
+// The surviving-file assertion is the defect test (seen red on the
+// pre-#1797 tree, where the file is gone by the time ListAll returns). The
+// "not in the returned slice" assertion is a LOCK, not red-first evidence: a
+// three-state build already skipped the state and must keep skipping it, since
+// every downstream consumer (grouping, counts, the state machine) is written
+// against exactly three values.
+func TestRepository_ListAll_KeepsUnknownState(t *testing.T) {
+	dir := t.TempDir()
+	repo := filesystem.NewWithDir(dir)
+
+	known := &session.SessionState{SessionID: "known", State: session.StateWorking, UpdatedAt: time.Now().Unix()}
+	if err := repo.Save(known); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	unknownPath := filepath.Join(dir, "unknown.json")
+	payload := []byte(`{"version":1,"session_id":"unknown","state":"zzz-unknown","first_seen":1,"updated_at":2}`)
+	if err := os.WriteFile(unknownPath, payload, 0o600); err != nil {
+		t.Fatalf("write unknown-state file: %v", err)
+	}
+
+	states, err := repo.ListAll()
+	if err != nil {
+		t.Fatalf("ListAll: %v", err)
+	}
+
+	// The defect: the file must survive the sweep, byte for byte.
+	got, err := os.ReadFile(unknownPath)
+	if err != nil {
+		t.Fatalf("unknown-state file was deleted by ListAll: %v", err)
+	}
+	if string(got) != string(payload) {
+		t.Errorf("unknown-state file was rewritten: got %q, want %q", got, payload)
+	}
+
+	// The lock: it must not reach a three-state consumer.
+	for _, s := range states {
+		if s.SessionID == "unknown" {
+			t.Errorf("ListAll returned the unknown-state session %q; want it skipped", s.State)
+		}
+	}
+	if len(states) != 1 {
+		t.Errorf("ListAll: got %d states, want 1 (the known session)", len(states))
+	}
+}
+
+// TestRepository_ListAll_KeepsUnparseableFile pins the other half of #1797's
+// data-safety property: a file this build cannot decode at all is skipped, not
+// deleted. ListAll's `continue` on a json.Unmarshal error already behaved this
+// way, so this is a LOCK, not a defect test — it exists so a future "tidy up
+// junk on load" change has to break a named test rather than a code comment.
+func TestRepository_ListAll_KeepsUnparseableFile(t *testing.T) {
+	dir := t.TempDir()
+	repo := filesystem.NewWithDir(dir)
+
+	badPath := filepath.Join(dir, "bad.json")
+	if err := os.WriteFile(badPath, []byte("not{json"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := repo.ListAll(); err != nil {
+		t.Fatalf("ListAll: %v", err)
+	}
+	if _, err := os.Stat(badPath); err != nil {
+		t.Errorf("unparseable file was deleted by ListAll: %v", err)
+	}
+}
+
 func TestRepository_FilePermissions(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "instances")
 	repo := filesystem.NewWithDir(dir)
