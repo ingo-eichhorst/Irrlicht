@@ -6,6 +6,7 @@
 package session
 
 import (
+	"slices"
 	"time"
 )
 
@@ -24,12 +25,10 @@ const (
 	// NOT a tool failure. A grep that matched nothing and a build that broke
 	// are the agent working normally; see ParsedEvent.IsError for that half.
 	//
-	// Cleared by the next SUCCESSFUL turn and by nothing else — error→working
-	// when the next turn starts, error→ready on turn_done. There is
-	// deliberately no minimum hold, so a provider error that recovers in a
-	// few hundred milliseconds may flash too briefly to see; that cost was
-	// accepted when the rule was settled and is measured in #1803's
-	// provider-overloaded-retry recording rather than pre-empted here.
+	// Cleared by the next SUCCESSFUL turn and by nothing else. The rule and
+	// its accepted cost live with the code that implements each half:
+	// clearSessionErrorOnRecovery in the tailer, and graceFor in
+	// state_dwell.go for why neither edge is debounced.
 	StateError = "error"
 )
 
@@ -48,9 +47,7 @@ var canonicalStates = []string{StateWorking, StateWaiting, StateReady, StateErro
 // sorted or truncated the slice in place would silently redefine what every
 // other caller — IsCanonicalState included — considers a valid state.
 func CanonicalStates() []string {
-	out := make([]string, len(canonicalStates))
-	copy(out, canonicalStates)
-	return out
+	return slices.Clone(canonicalStates)
 }
 
 // IsCanonicalState reports whether s is one of the valid lifecycle states.
@@ -59,12 +56,7 @@ func CanonicalStates() []string {
 // Reads canonicalStates rather than spelling the values out again, so this
 // predicate and every message that lists the vocabulary cannot drift apart.
 func IsCanonicalState(s string) bool {
-	for _, c := range canonicalStates {
-		if s == c {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(canonicalStates, s)
 }
 
 // Yield state constants — whether a finished session's work survived in the

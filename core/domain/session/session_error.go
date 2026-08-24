@@ -143,61 +143,47 @@ type SessionError struct {
 	RetryIn *time.Duration `json:"-"`
 }
 
-// sessionErrorJSON is SessionError's wire form. Split out rather than hand-
-// writing the encoder so the field list stays a struct — a hand-rolled
-// json.Marshal would have to be edited in two places every time a field is
-// added, which is the drift newMergedMetrics' allowlist already demonstrates
-// the cost of.
+// sessionErrorAlias strips SessionError's methods (so json does not recurse
+// into MarshalJSON) while keeping every struct tag, RetryIn's `json:"-"`
+// included.
+type sessionErrorAlias SessionError
+
+// sessionErrorWire is the on-the-wire shape: everything SessionError already
+// tags, plus the one field whose Go type and JSON form differ.
 //
-// Only RetryIn differs from the Go shape; everything else is copied by name so
-// the two cannot disagree about a tag.
-type sessionErrorJSON struct {
-	Phase       ErrorPhase `json:"phase,omitempty"`
-	Class       string     `json:"class,omitempty"`
-	Message     string     `json:"message,omitempty"`
-	HTTPStatus  *int       `json:"http_status,omitempty"`
-	Attempt     *int       `json:"attempt,omitempty"`
-	MaxAttempts *int       `json:"max_attempts,omitempty"`
-	RetryInMs   *float64   `json:"retry_in_ms,omitempty"`
+// Embedding rather than restating the field list is the point. A mirror struct
+// would have to be edited every time SessionError gains a field — three edit
+// sites for one addition — which is the drift a custom codec is supposed to
+// avoid, not introduce. Here a new field is picked up by both directions for
+// free.
+type sessionErrorWire struct {
+	sessionErrorAlias
+	RetryInMs *float64 `json:"retry_in_ms,omitempty"`
 }
 
 // MarshalJSON emits RetryIn as fractional milliseconds under an explicitly
-// unit-named key. See the RetryIn field for why.
+// unit-named key. See the RetryIn field for why it is not a bare Duration.
 func (e SessionError) MarshalJSON() ([]byte, error) {
-	out := sessionErrorJSON{
-		Phase:       e.Phase,
-		Class:       e.Class,
-		Message:     e.Message,
-		HTTPStatus:  e.HTTPStatus,
-		Attempt:     e.Attempt,
-		MaxAttempts: e.MaxAttempts,
-	}
+	w := sessionErrorWire{sessionErrorAlias: sessionErrorAlias(e)}
 	if e.RetryIn != nil {
 		ms := float64(*e.RetryIn) / float64(time.Millisecond)
-		out.RetryInMs = &ms
+		w.RetryInMs = &ms
 	}
-	return json.Marshal(out)
+	return json.Marshal(w)
 }
 
 // UnmarshalJSON is MarshalJSON's inverse, so a persisted session state round-
-// trips. Without it the custom encoder would be write-only and every reload
-// would silently drop the retry delay — the same class of one-directional
-// plumbing bug as a field missing from the merge allowlist.
+// trips. Without it the codec would be write-only and every reload would
+// silently drop the retry delay — the same class of one-directional plumbing
+// bug as a field missing from the merge allowlist.
 func (e *SessionError) UnmarshalJSON(b []byte) error {
-	var in sessionErrorJSON
-	if err := json.Unmarshal(b, &in); err != nil {
+	var w sessionErrorWire
+	if err := json.Unmarshal(b, &w); err != nil {
 		return err
 	}
-	*e = SessionError{
-		Phase:       in.Phase,
-		Class:       in.Class,
-		Message:     in.Message,
-		HTTPStatus:  in.HTTPStatus,
-		Attempt:     in.Attempt,
-		MaxAttempts: in.MaxAttempts,
-	}
-	if in.RetryInMs != nil {
-		d := time.Duration(*in.RetryInMs * float64(time.Millisecond))
+	*e = SessionError(w.sessionErrorAlias)
+	if w.RetryInMs != nil {
+		d := time.Duration(*w.RetryInMs * float64(time.Millisecond))
 		e.RetryIn = &d
 	}
 	return nil

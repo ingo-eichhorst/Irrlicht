@@ -1,9 +1,6 @@
 package session
 
-import (
-	"testing"
-	"time"
-)
+import "testing"
 
 // TestCanonicalStates_ReturnsACopy is the mutation fixture for the defensive
 // copy in CanonicalStates.
@@ -58,8 +55,10 @@ func TestCanonicalStates_ReturnsACopy(t *testing.T) {
 // — that a held error reaches metrics, and that a hook-delivered turn end
 // retires it.
 func TestSignalSessionError_HoldAppliesItsPayload(t *testing.T) {
-	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
-	const sid = "s"
+	// holdT0 / holdSID: the package's shared hold fixtures, so this test moves
+	// with the other ~20 TestSignalHolds_* cases rather than pinning a second
+	// time origin nobody would think to update.
+	now, sid := holdT0, holdSID
 
 	holds := NewSignalHolds()
 	holds.Hold(sid, SignalSessionError, SignalPayload{

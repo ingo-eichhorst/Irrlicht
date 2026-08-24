@@ -119,8 +119,15 @@ func validateFlags(format, state string) error {
 	if format != "text" && format != "json" {
 		return fmt.Errorf("unknown format %q (want text or json)", format)
 	}
-	if state != "" && state != session.StateWorking && state != session.StateWaiting && state != session.StateReady {
-		return fmt.Errorf("unknown state %q (want working, waiting or ready)", state)
+	// Both halves read the domain rather than restating it — a hand-rolled
+	// IsCanonicalState next to a hand-typed vocabulary in the message is the
+	// same two-part defect #1798 fixed in the filesystem repository's
+	// unrecognized-state warning, and this copy was missed the first time.
+	// Left as it was, `--state error` rejected a state the daemon emits and
+	// told the user the tool knew three.
+	if state != "" && !session.IsCanonicalState(state) {
+		return fmt.Errorf("unknown state %q (want %s)", state,
+			strings.Join(session.CanonicalStates(), ", "))
 	}
 	return nil
 }

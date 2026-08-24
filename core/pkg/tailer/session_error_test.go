@@ -87,19 +87,11 @@ func newSessionErrorTailer(path string, skipErrors bool) *TranscriptTailer {
 	return tl
 }
 
-// TestSessionError_RecordedOnBothRoutingPaths is the #1256-shaped defect this
-// design exists to avoid, made explicit.
-//
-// scanParsedLine routes an event down exactly one of two mutually exclusive
-// paths — applySkippedEvent for Skip=true, processParsedEvent otherwise — and
-// the two error shapes that matter land on OPPOSITE sides of that fork:
-// claudecode's `system`/`api_error` is Skip=true (it falls through
-// handleSystemEvent's catch-all), while copilot's `session.error` is an
-// ordinary event. Folding the error in processParsedEvent alone would work for
-// one adapter, silently drop the other, and pass every test written against
-// the adapter that happened to work.
-//
-// So this runs the identical transcript twice, differing only in Skip.
+// TestSessionError_RecordedOnBothRoutingPaths runs the identical transcript
+// twice, differing only in Skip — because the two error shapes that matter
+// land on opposite sides of scanParsedLine's fork, and folding the error into
+// only one arm would work for one adapter and silently drop the other. See
+// applySessionError for why that is the #1256 shape.
 func TestSessionError_RecordedOnBothRoutingPaths(t *testing.T) {
 	for _, tc := range []struct {
 		name       string

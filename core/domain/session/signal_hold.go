@@ -563,8 +563,16 @@ var signalPolicies = []signalPolicy{
 		// minimum hold and no decay, by decision (#1796).
 		stale:   func(c holdContext) bool { return c.Metrics.HookTurnDone },
 		ceiling: sessionErrorHoldTimeout,
+		// Applies only into an EMPTY slot. Overlay runs after the metrics are
+		// rebuilt, so an unconditional write would let this row silently
+		// outrank the transcript path — two writers at the same tier, with the
+		// winner decided by call order rather than by anything declared. The
+		// transcript is the fresher observation (it was just re-read this
+		// pass), so it keeps the slot; a hold fills in only when the
+		// transcript reports nothing, which is exactly the process-death case
+		// #1800 adds it for.
 		apply: func(c holdContext) {
-			if c.Payload.SessionError != nil {
+			if c.Metrics.SessionError == nil && c.Payload.SessionError != nil {
 				c.Metrics.SessionError = c.Payload.SessionError
 			}
 		},

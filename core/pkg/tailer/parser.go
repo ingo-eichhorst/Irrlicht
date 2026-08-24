@@ -324,12 +324,8 @@ const (
 // converted by the adapter glue (core/application/replayengine/metrics.go).
 //
 // Every numeric field is a pointer because the recorded payloads disagree
-// about which numbers exist: claudecode's retrying `api_error` carries all of
-// them, its terminal `isApiErrorMessage` event carries none, and copilot's
-// `session.error` carries a statusCode for "rate_limit" but not for "query".
-// With plain ints all three absences would read as 0, and "attempt 0 of 0"
-// would derive a give-up from data that said nothing. See
-// session.SessionError for the full argument and the fixture evidence.
+// about which numbers exist at all. See session.SessionError for the argument
+// and the fixture evidence.
 type SessionError struct {
 	Phase       ErrorPhase
 	Class       string
@@ -338,6 +334,30 @@ type SessionError struct {
 	Attempt     *int
 	MaxAttempts *int
 	RetryIn     *time.Duration
+}
+
+// StartsNewUserTurn reports whether this event begins a GENUINE new user turn
+// — a fresh prompt, an ESC, an answer to a question — as opposed to a tool
+// round-trip.
+//
+// The distinction exists because several transcript formats deliver tool
+// results on USER-ROLE lines. Claude Code is the one that bites: its parser
+// raises ClearToolNames for every `user` event, so a bare ClearToolNames check
+// reads every tool result as a new turn. #558 is what that costs — the
+// task-estimate chip was reset on each tool call and vanished mid-task until
+// the agent emitted another marker.
+//
+// Named once here rather than re-spelled per caller: before this the same
+// expression appeared verbatim at three sites in tailer.go plus a fourth in
+// tailer_metrics.go, each re-explaining #558 in its own words, and the #1798
+// session-error clearing rule was written as the fourth copy. A concept that
+// four callers agree on is a method on the event, not a convention.
+//
+// Note tailer.go's assistant-text reset deliberately does NOT use this: it
+// clears on a bare ClearToolNames, tool results included. That is an exception
+// on purpose, and it reads as one now that the shared rule has a name.
+func (e *ParsedEvent) StartsNewUserTurn() bool {
+	return e.ClearToolNames && len(e.ToolResultIDs) == 0
 }
 
 // RateLimitSnapshot mirrors session.RateLimitSnapshot inside the tailer

@@ -968,7 +968,7 @@ func (t *TranscriptTailer) applyToolCallDeltas(parsed *ParsedEvent, sawUserBlock
 		}
 		delete(t.openToolCalls, id)
 	}
-	if parsed.ClearToolNames && len(parsed.ToolResultIDs) == 0 {
+	if parsed.StartsNewUserTurn() {
 		t.openToolCalls = make(map[string]string)
 	}
 }
@@ -1209,7 +1209,7 @@ func (t *TranscriptTailer) applyAssistantTextAndMarkers(parsed *ParsedEvent) {
 	if t.firstUserText == "" && parsed.UserText != "" {
 		t.firstUserText = cleanSummaryText(parsed.UserText)
 	}
-	if parsed.ClearToolNames && len(parsed.ToolResultIDs) == 0 {
+	if parsed.StartsNewUserTurn() {
 		// A REAL user message (new prompt, ESC, answer) starts a new task or
 		// redirects the current one — the previous estimate no longer
 		// describes what the agent is doing, so reset it like

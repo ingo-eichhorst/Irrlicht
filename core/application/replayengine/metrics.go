@@ -122,10 +122,14 @@ func convertSessionError(e *tailer.SessionError) *session.SessionError {
 	}
 }
 
-// copyPtr returns a fresh pointer to the same value, or nil for nil. One
-// generic helper rather than one per pointed-to type, so a field added to
-// SessionError with a new numeric type does not need another near-identical
-// copy of it — the same reasoning as session.eqPtr.
+// copyPtr returns a fresh pointer to the same value, or nil for nil.
+//
+// One generic helper rather than one per pointed-to type: this replaced two
+// SessionError-specific copiers and copyTailerTaskEstimate (#753), which were
+// three token-identical bodies in this one file. Shallow by design — a struct
+// it copies may hold pointers of its own, and every caller so far wants
+// exactly that (tailer.TaskEstimate's Confidence pointer is read-only once
+// parsed, which is why sharing it was already safe).
 func copyPtr[T any](v *T) *T {
 	if v == nil {
 		return nil
@@ -245,18 +249,6 @@ func (mc *MetricsConverter) questionHeadline(source string, markerAuthored bool,
 		return q
 	}
 	return mc.compact(topic+": "+q, outbound.CompactQuestionVerbatim)
-}
-
-// copyTailerTaskEstimate copies a tailer task estimate struct so a timeline
-// snapshot never aliases the tailer's mutable cumulative state (#753). Not a
-// deep clone — the Confidence pointer is shared, which is safe: it's read-only
-// once parsed.
-func copyTailerTaskEstimate(e *tailer.TaskEstimate) *tailer.TaskEstimate {
-	if e == nil {
-		return nil
-	}
-	c := *e
-	return &c
 }
 
 func copyStrings(s []string) []string {
