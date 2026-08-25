@@ -1,6 +1,9 @@
 package pi
 
 import (
+	"encoding/json"
+	"strings"
+
 	"irrlicht/core/pkg/tailer"
 )
 
@@ -115,9 +118,19 @@ func handleSessionEvent(ev *tailer.ParsedEvent, raw map[string]interface{}) {
 // parseAssistantMessage fills ev from an assistant-role Pi message.
 func parseAssistantMessage(ev *tailer.ParsedEvent, piMsg map[string]interface{}) {
 	stopReason, _ := piMsg["stopReason"].(string)
-	if stopReason == "stop" {
+	switch stopReason {
+	case "stop":
 		ev.EventType = "turn_done" // end-of-turn (primary path for IsAgentDone)
-	} else {
+	case "error":
+		// #1800. A failed turn is an ENDED turn, and this arm fixes two
+		// defects at once. Before it, "error" fell into the mid-turn branch
+		// below and emitted "assistant": pi has no inactivity sweep on
+		// `working` and writes nothing further after a refusal, so the
+		// session stuck in `working` for the rest of its life. And the
+		// errorMessage — the only place pi says WHY — was read by nothing.
+		ev.EventType = "turn_done"
+		ev.SessionError = piSessionError(piMsg)
+	default:
 		ev.EventType = "assistant" // mid-turn (toolUse, etc.)
 	}
 
@@ -140,6 +153,52 @@ func parseAssistantMessage(ev *tailer.ParsedEvent, piMsg map[string]interface{})
 		// and prefers provider-reported cost when present.
 		ev.Contribution = extractPiContribution(ev.ModelName, usage)
 	}
+}
+
+// piSessionError builds the session-level failure from an assistant message
+// whose stopReason is "error".
+//
+// Never nil: stopReason already IS the verdict, so a message with no
+// errorMessage still reports the failure — with an empty Message rather than
+// no error at all. Silently returning nil would make a pi release that stops
+// writing errorMessage look like a healthy turn.
+//
+// errorMessage is a DOUBLE-ENCODED JSON string in the recorded fixture:
+//
+//	"errorMessage": "{\"detail\":\"The 'x' model is not supported …\"}"
+//
+// so the readable sentence is one unwrap down. The unwrap is best-effort and
+// falls back to the raw string, which is still readable prose — never worse
+// than what a UI would show today, which is nothing.
+//
+// Phase is always terminal. Pi records no retry ladder: there is no attempt
+// counter, no retry delay, and the message carrying stopReason:"error" closes
+// the turn. ErrorPhaseRetrying is unreachable for this adapter, not merely
+// unimplemented.
+//
+// No HTTPStatus: the recorded refusal is a model-unsupported error rendered as
+// prose with no status anywhere in the payload. A pointer field left nil is
+// #1798's whole reason for making these pointers — "attempt 0 of 0" from data
+// that said nothing is the failure mode being avoided.
+func piSessionError(piMsg map[string]interface{}) *tailer.SessionError {
+	rawMsg, _ := piMsg["errorMessage"].(string)
+	se := &tailer.SessionError{
+		Phase:   tailer.ErrorPhaseTerminal,
+		Class:   "provider",
+		Message: strings.TrimSpace(rawMsg),
+	}
+	var detail struct {
+		Detail  string `json:"detail"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(rawMsg), &detail); err == nil {
+		if detail.Detail != "" {
+			se.Message = detail.Detail
+		} else if detail.Message != "" {
+			se.Message = detail.Message
+		}
+	}
+	return se
 }
 
 // extractPiToolCallsAndMarkers walks an assistant message's content[] blocks,

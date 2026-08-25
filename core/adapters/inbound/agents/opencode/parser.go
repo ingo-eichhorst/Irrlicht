@@ -1,6 +1,7 @@
 package opencode
 
 import (
+	"encoding/json"
 	"time"
 
 	"irrlicht/core/pkg/tailer"
@@ -71,9 +72,18 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 	// excluded — it carries its own terminal reason, handled below — and a
 	// normal (non-errored) part exports "_error": null, so this never fires
 	// outside an actual error.
+	//
+	// #1800 CHANGES TWO THINGS HERE. It carries the failure detail through
+	// instead of discarding it, and it routes the shape test through
+	// sessionErrorFrom — the same predicate watcher.go's isErrorMessage uses.
+	// Before that they disagreed: this site fired on ANY non-nil value, so an
+	// `"_error": {}` or `"_error": false` ended the turn under replay while
+	// the live daemon ignored it. A golden and the daemon disagreeing about
+	// the same session is the one thing the replay corpus exists to rule out.
 	if partType != "step-finish" {
-		if errVal, ok := raw["_error"]; ok && errVal != nil {
+		if se := sessionErrorFrom(raw["_error"]); se != nil {
 			ev.EventType = "turn_done"
+			ev.SessionError = se
 			return ev
 		}
 	}
@@ -135,6 +145,18 @@ func parseStepFinish(raw map[string]interface{}, ev *tailer.ParsedEvent) *tailer
 	case "error":
 		// API or other error — the agent stopped generating.
 		ev.EventType = "turn_done"
+		// #1800. step-finish carries no message of its own — the reason IS
+		// the whole report — so Message says only what opencode said. NO
+		// FIXTURE COVERS THIS ARM: across every recorded opencode transcript
+		// the step-finish reasons are 49 × "stop", 44 × "tool-calls" and
+		// 1 × "length", and opencode's own 2-14 cell is stamped
+		// driver_capability: gap:error-export. Stated so the arm is not read
+		// as fixture-backed.
+		ev.SessionError = &tailer.SessionError{
+			Phase:   tailer.ErrorPhaseTerminal,
+			Class:   "provider",
+			Message: "turn ended with reason \"error\"",
+		}
 	case "content-filter":
 		// Model output was filtered — generation is definitively done.
 		ev.EventType = "turn_done"
@@ -317,4 +339,90 @@ func extractCost(raw map[string]interface{}) float64 {
 		return v
 	}
 	return 0
+}
+
+// messageErrorFrom extracts the raw `error` value from a message row's JSON
+// data column, for the live path to hand to the parser. Returns nil — never a
+// typed nil — when the blob does not parse or carries no error, so a caller
+// can test it against nil directly.
+func messageErrorFrom(data string) interface{} {
+	var raw map[string]interface{}
+	if err := json.Unmarshal([]byte(data), &raw); err != nil {
+		return nil
+	}
+	if raw["error"] == nil {
+		return nil
+	}
+	return raw["error"]
+}
+
+// sessionErrorFrom converts opencode's `error` value into a session-level
+// failure, or nil when the value is not one.
+//
+// THE RECORDED SHAPE IS `{name, data:{message}}`, not `{name, message}` as
+// this file's comment claimed until #1800. Every non-null `_error` in the
+// corpus (4 of them, across two recordings) reads:
+//
+//	{"name":"UnknownError","data":{"message":"…"}}
+//
+// A reader written from the old comment would have looked up
+// error["message"], found nothing, and shipped an error line with no text.
+// Both spellings are accepted here because one of them is documented upstream
+// and the other is what was actually observed, and neither costs anything.
+//
+// `name` is carried as Class rather than mapped: opencode's only recorded
+// value is the entirely uninformative "UnknownError", so any mapping would be
+// inventing a taxonomy from one sample. Class is free-form by #1798's design
+// for exactly this reason — the vocabularies genuinely differ per agent.
+//
+// Phase is terminal: opencode writes the message-level error INSTEAD OF a
+// terminal step-finish part, so it is the turn's last word and no further
+// attempt follows. No retry ladder is recorded anywhere in the corpus.
+//
+// The shape rules are the fail-open ones isErrorMessage has always had: a
+// non-empty string or a non-empty object counts; nil, an empty string, an
+// empty object, and any other JSON type (bool/number/array) do not.
+func sessionErrorFrom(v interface{}) *tailer.SessionError {
+	switch e := v.(type) {
+	case string:
+		if e == "" {
+			return nil
+		}
+		return &tailer.SessionError{
+			Phase:   tailer.ErrorPhaseTerminal,
+			Class:   "provider",
+			Message: e,
+		}
+	case map[string]interface{}:
+		if len(e) == 0 {
+			return nil
+		}
+		name, _ := e["name"].(string)
+		if name == "" {
+			name = "provider"
+		}
+		return &tailer.SessionError{
+			Phase:   tailer.ErrorPhaseTerminal,
+			Class:   name,
+			Message: opencodeErrorMessage(e),
+		}
+	default:
+		// nil (absent/null), and any unexpected shape (bool/number/array) —
+		// not a real error signal.
+		return nil
+	}
+}
+
+// opencodeErrorMessage digs the human text out of an error object, preferring
+// the observed `data.message` over the upstream-documented top-level
+// `message`. Returns "" when neither is present, which is honest: an error
+// with no text is better than a fabricated one.
+func opencodeErrorMessage(e map[string]interface{}) string {
+	if data, ok := e["data"].(map[string]interface{}); ok {
+		if msg, _ := data["message"].(string); msg != "" {
+			return msg
+		}
+	}
+	msg, _ := e["message"].(string)
+	return msg
 }

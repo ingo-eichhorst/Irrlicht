@@ -183,8 +183,15 @@ func applyCodexEventType(eventType string, raw map[string]interface{}, ev *taile
 		// flickers working→ready→working every time the agent writes an
 		// intermediate assistant message before calling a tool (typical at
 		// the start of a turn).
+		//
+		// #1800 reads turn_aborted's `reason`, which the parser previously
+		// ignored entirely: an errored abort and a user ESC produced a
+		// byte-identical event, so a failed turn settled green. The turn
+		// boundary itself is unchanged — both still emit `turn_done` — and
+		// only the failure detail is added.
 		if codexEventMsgIsTurnDone(raw) {
 			ev.EventType = "turn_done"
+			ev.SessionError = codexAbortError(raw)
 		} else {
 			ev.Skip = true
 		}
@@ -223,6 +230,107 @@ func codexEventMsgIsTurnDone(raw map[string]interface{}) bool {
 	}
 	pt, _ := payload["type"].(string)
 	return pt == "task_complete" || pt == "turn_aborted"
+}
+
+// codexAbortReasonInterrupted is the only value any committed codex fixture
+// carries on turn_aborted. Measured, not assumed — across all 48 recorded
+// codex transcripts there are exactly 4 turn_aborted events and all 4 read
+// "interrupted":
+//
+//	find replaydata/agents/codex -name transcript.jsonl -print0 | xargs -0 cat \
+//	  | jq -r 'select(.type=="event_msg" and .payload.type=="turn_aborted") | .payload.reason' \
+//	  | sort | uniq -c
+//	   4 interrupted
+//
+// Corroborated against a much larger INDEPENDENT corpus — the developer's own
+// ~/.codex history, which is not fixture data and was never curated for this:
+//
+//	find ~/.codex/sessions -name '*.jsonl' | wc -l          → 327
+//	(same jq over those 327 files)                          → 47 interrupted
+//
+// 51 aborts across two unrelated corpora, one value. So "interrupted" is not a
+// fixture artefact.
+//
+// It means the USER pressed ESC. That is not a failure, and #1798's
+// SessionError doc is explicit that a deliberate cancel must not turn a
+// session red.
+const codexAbortReasonInterrupted = "interrupted"
+
+// codexAbortError reports the session-level failure a turn boundary carries,
+// or nil when the turn ended normally.
+//
+// THE HONEST STATE OF THIS ADAPTER, recorded rather than papered over: codex
+// has no recorded provider-error fixture at all. There is no `stream_error`
+// event anywhere in the repository (`rg -uuu stream_error replaydata/` → 0
+// matches, hidden and gitignored files included), and the only turn_aborted
+// reason ever recorded is a user ESC. So the branch below that produces an
+// error is exercised by hand-built unit fixtures only, and says so; its cell
+// (replaydata/agents/codex/scenarios/2-14_turn-aborted-by-error) is frozen
+// applicable:false for want of an OpenAI-side 5xx injector.
+//
+// What that costs, and why the branch still ships: reading `reason` is what
+// makes an errored abort DISTINGUISHABLE from an ESC at all. Without it the
+// two are the same event and the distinction can never be made, recording or
+// no recording. With it, the day a recording exists the mapping is already
+// there — and until then the ESC path, which IS recorded, is pinned by
+// TestParser_TurnAbortedInterrupted_IsNotASessionError.
+//
+// An UNRECOGNIZED reason reports an error rather than nothing. codex is free
+// to add values, and "an abort we cannot explain" is closer to a failure than
+// to a clean finish; the alternative — treating every unknown reason as a
+// normal turn end — is the silent-green outcome the fourth state exists to
+// prevent.
+//
+// THERE IS DELIBERATELY NO ALLOWLIST OF KNOWN REASONS, and that is what makes
+// the paragraph above safe to write without codex's own enum in hand. Only one
+// value is named in this file — "interrupted", the one measured 51 times above
+// — and everything else falls through to the error branch. An allowlist would
+// need the real TurnAbortReason variants, and I could not establish them:
+// codex 0.148.0 ships as a native binary with no source, and while its string
+// table does contain the bare literals "error" and "timeout" alongside
+// "interrupted", the strings are concatenated into one blob with no recoverable
+// adjacency, so there is no way to tell a serde variant from any other use of
+// those extremely common words. UNVERIFIED, therefore, and deliberately not
+// relied on: the hand-built fixtures below use reason:"error" as a
+// REPRESENTATIVE non-interrupted value, not as a claim about the enum.
+//
+// task_complete carries no reason and returns nil, which is the whole of the
+// clean path.
+func codexAbortError(raw map[string]interface{}) *tailer.SessionError {
+	payload, ok := raw["payload"].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	if pt, _ := payload["type"].(string); pt != "turn_aborted" {
+		return nil
+	}
+	reason, _ := payload["reason"].(string)
+	if reason == codexAbortReasonInterrupted {
+		return nil
+	}
+	return &tailer.SessionError{
+		// Terminal: codex emits turn_aborted INSTEAD OF task_complete, so the
+		// turn is over. It records no retry ladder — no attempt counter, no
+		// delay — anywhere in the corpus, so ErrorPhaseRetrying is
+		// unreachable for this adapter rather than unimplemented.
+		Phase: tailer.ErrorPhaseTerminal,
+		Class: "aborted",
+		// The reason is the only thing codex says about the abort; there is
+		// no message field on this payload. Carried verbatim rather than
+		// prettified so a value codex adds tomorrow reaches the user as
+		// codex's own word for it.
+		Message: codexAbortMessage(reason),
+	}
+}
+
+// codexAbortMessage renders the abort reason as display prose. An empty
+// reason — a turn_aborted with the field absent, which no fixture shows but
+// the payload permits — must not render as an empty error line.
+func codexAbortMessage(reason string) string {
+	if reason == "" {
+		return "turn aborted (no reason reported)"
+	}
+	return "turn aborted: " + reason
 }
 
 // codexAgentVersion extracts payload.cli_version from a session_meta /

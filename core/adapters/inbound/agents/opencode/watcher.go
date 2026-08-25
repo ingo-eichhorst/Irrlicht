@@ -491,25 +491,19 @@ func isTerminalPart(data string) bool {
 // quota, context overflow) on message.data.error rather than emitting a
 // step-finish part with reason="error", so for such turns the message-level
 // error is the only signal that the turn has ended — without it the session
-// sticks in `working` until the process exits. opencode writes error as an
-// `{name, message, …}` object (or occasionally a bare string); only a
-// non-empty string or object counts. Fail-open (returns false) on a parse
-// failure, a missing/empty error, or any other JSON shape. (#493)
+// sticks in `working` until the process exits. (#493)
+//
+// Delegates the shape rules to sessionErrorFrom so this predicate and the
+// parser's `_error` branch cannot drift: before #1800 they were two
+// independent readings of the same field and disagreed on `{}` and on
+// non-error shapes, which meant a replay golden and the live daemon could
+// classify one session two ways.
 func isErrorMessage(data string) bool {
 	var raw map[string]interface{}
 	if err := json.Unmarshal([]byte(data), &raw); err != nil {
 		return false
 	}
-	switch e := raw["error"].(type) {
-	case string:
-		return e != ""
-	case map[string]interface{}:
-		return len(e) > 0
-	default:
-		// nil (absent/null), and any unexpected shape (bool/number/array) —
-		// not a real error signal.
-		return false
-	}
+	return sessionErrorFrom(raw["error"]) != nil
 }
 
 // scanParts queries new/updated part rows for a session since lastCursor and

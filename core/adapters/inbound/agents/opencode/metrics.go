@@ -98,6 +98,15 @@ func querySessionMetrics(db *sql.DB, sessionID, dbPath string) (*session.Session
 	var tasks []session.Task
 	taskByID := make(map[string]int)
 
+	// The session-level failure fold, mirroring the tailer's applySessionError
+	// (core/pkg/tailer/tailer_metrics.go) because this path bypasses the
+	// tailer entirely — the same reason the task accumulator above is a
+	// hand-rolled mirror. Unlike the tailer's, this one needs no persistence
+	// across passes: querySessionMetrics rebuilds from EVERY part row on every
+	// call, so the fold below re-derives the current verdict from the whole
+	// history each time and the sticky field is simply this local.
+	var sessionErr *tailer.SessionError
+
 	for rows.Next() {
 		var partData, msgData string
 		var timeUpdated int64
@@ -110,7 +119,7 @@ func querySessionMetrics(db *sql.DB, sessionID, dbPath string) (*session.Session
 
 		role, modelID := applyRoleAndModel(msgData, metrics)
 
-		raw, ok := buildPartRaw(partData, role, directory, timeUpdated, modelID)
+		raw, ok := buildPartRaw(partData, role, directory, timeUpdated, modelID, msgData)
 		if !ok {
 			continue
 		}
@@ -121,6 +130,7 @@ func querySessionMetrics(db *sql.DB, sessionID, dbPath string) (*session.Session
 		}
 
 		lastEventType = ev.EventType
+		applySessionError(ev, &sessionErr)
 
 		applyToolTracking(ev, &openTools)
 		tailer.ApplyTaskDeltas(ev.TaskDeltas, &tasks, taskByID)
@@ -157,6 +167,7 @@ func querySessionMetrics(db *sql.DB, sessionID, dbPath string) (*session.Session
 	metrics.CumCacheReadTokens = cumCacheRead
 	metrics.ElapsedSeconds = int64(lastTS.Sub(firstTS).Seconds())
 	metrics.Tasks = tasks
+	metrics.SessionError = convertSessionError(sessionErr)
 
 	// Surface the agent-authored task estimate + projected completion ETA
 	// (issue #558) — mirrors the conversion the shared metrics adapter does
@@ -168,6 +179,75 @@ func querySessionMetrics(db *sql.DB, sessionID, dbPath string) (*session.Session
 		tailer.ComputeContextUtilization(metrics.ModelName, metrics.TotalTokens, cm, 0)
 
 	return metrics, nil
+}
+
+// applySessionError folds one parsed event into the running session-level
+// failure. It is the tailer's applySessionError rule restated for the path
+// that bypasses the tailer, and the ORDER is the same and is deliberate:
+// clear first, then record, so an event carrying BOTH a failure and a turn
+// boundary — which is exactly opencode's shape, since the errored part is
+// itself the turn_done — reports a turn that ended in failure rather than a
+// turn that recovered.
+//
+// The two clearing events are the two halves of #1796's settled rule: a turn
+// boundary (the retry case settling green) and a genuine new user turn. A
+// TOOL RESULT IS NOT A RECOVERY, which is what StartsNewUserTurn encodes —
+// see it for the #558 incident behind the distinction.
+func applySessionError(ev *tailer.ParsedEvent, cur **tailer.SessionError) {
+	if *cur != nil && recoversFromSessionError(ev) {
+		*cur = nil
+	}
+	if ev.SessionError != nil {
+		*cur = ev.SessionError
+	}
+}
+
+// recoversFromSessionError reports whether ev is one of the two events that
+// count as the next successful turn: a turn boundary, or a genuine new user
+// turn. Named so applySessionError above reads as clear-then-record rather than
+// as a compound condition.
+func recoversFromSessionError(ev *tailer.ParsedEvent) bool {
+	return ev.EventType == "turn_done" || ev.StartsNewUserTurn()
+}
+
+// convertSessionError copies the tailer's mirror type into the domain one.
+//
+// A NEAR-TWIN OF replayengine.convertSessionError, and deliberately not shared.
+// The two sit on opposite sides of the hexagon — this one in an inbound
+// adapter, that one in application/ — and there is no package today that both
+// may import: the duplication is a direct consequence of #1798's tailer-mirror
+// types, which exist precisely so a parser need not import the domain.
+// core/adapters/outbound/metrics is where the tailer's own doc comment says
+// this glue belongs, but it carries no SessionError conversion yet and opencode
+// imports nothing from outbound/ — so giving these a shared home is a
+// cross-cutting refactor that touches #1798's code, not a tidy-up for this PR.
+// Recorded rather than silently duplicated; worth a follow-up.
+// The pointers are deep-copied rather than aliased for the same reason
+// replayengine.convertSessionError does it: two passes over the same row
+// would otherwise share numeric fields, and a later mutation of one would be
+// visible through the other.
+func convertSessionError(se *tailer.SessionError) *session.SessionError {
+	if se == nil {
+		return nil
+	}
+	return &session.SessionError{
+		Phase:       session.ErrorPhase(se.Phase),
+		Class:       se.Class,
+		Message:     se.Message,
+		HTTPStatus:  copyPtr(se.HTTPStatus),
+		Attempt:     copyPtr(se.Attempt),
+		MaxAttempts: copyPtr(se.MaxAttempts),
+		RetryIn:     copyPtr(se.RetryIn),
+	}
+}
+
+// copyPtr returns a pointer to a copy of *p, or nil for a nil p.
+func copyPtr[T any](p *T) *T {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
 }
 
 // trackTimestampRange extends the [firstTS, lastTS] window to include ts.
@@ -204,7 +284,16 @@ func applyRoleAndModel(msgData string, metrics *session.SessionMetrics) (role, m
 // buildPartRaw unmarshals a part's JSON data column and injects the
 // synthetic context keys Parser.ParseLine expects. Returns ok=false when the
 // JSON fails to parse.
-func buildPartRaw(partData, role, cwd string, timeUpdated int64, modelID string) (raw map[string]interface{}, ok bool) {
+//
+// `_error` is the key #1800 added, and its absence was a real gap rather than
+// an omission of detail. The onboarding driver exports message.data.error onto
+// every part as `_error`, so the parser's error branch fired under REPLAY —
+// but this function builds the parser's input on the LIVE path and never set
+// the key, so live sessions took a different branch through the same parser.
+// The live turn still ended (watcher.go's isErrorMessage sets Terminal on the
+// activity event), but ComputeMetrics saw an ordinary part and produced
+// neither the turn_done nor, once #1798 existed, any SessionError at all.
+func buildPartRaw(partData, role, cwd string, timeUpdated int64, modelID, msgData string) (raw map[string]interface{}, ok bool) {
 	if err := json.Unmarshal([]byte(partData), &raw); err != nil {
 		return nil, false
 	}
@@ -213,6 +302,9 @@ func buildPartRaw(partData, role, cwd string, timeUpdated int64, modelID string)
 	raw["_ts"] = float64(timeUpdated)
 	if modelID != "" {
 		raw["_model"] = modelID
+	}
+	if errVal := messageErrorFrom(msgData); errVal != nil {
+		raw["_error"] = errVal
 	}
 	return raw, true
 }

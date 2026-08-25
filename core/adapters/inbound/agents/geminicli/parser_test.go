@@ -183,8 +183,17 @@ func TestParseLine_ErrorLineSettlesTurn(t *testing.T) {
 	if ev.EventType != "turn_done" {
 		t.Fatalf("error line: want turn_done, got %q", ev.EventType)
 	}
-	if !ev.IsError {
-		t.Error("error line should set IsError")
+	// #1800 MOVED THIS ASSERTION, deliberately, and inverted it. IsError means
+	// a TOOL RESULT failed; a session-level provider refusal is a different
+	// fact and #1798 built ParsedEvent.SessionError for it. This line used to
+	// be the one place in the codebase that conflated them — named as such in
+	// core/pkg/tailer/parser.go's SessionError doc, which says #1800 moves it.
+	// The signal is not lost: see TestParser_TopLevelError_IsASessionError.
+	if ev.IsError {
+		t.Error("error line must NOT set IsError — that flag is a tool_result failure")
+	}
+	if ev.SessionError == nil {
+		t.Error("error line should report a session-level failure")
 	}
 	if ev.AssistantText == "" {
 		t.Error("error line should carry the error text as AssistantText for waiting display")

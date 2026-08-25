@@ -1,6 +1,7 @@
 package geminicli
 
 import (
+	"encoding/json"
 	"regexp"
 	"strings"
 
@@ -45,6 +46,12 @@ type Parser struct {
 	// `todowrite`) into task-progress deltas. Todos carry no stable ID, so
 	// they're keyed by their `description` text.
 	todos tailer.TodoReconciler
+
+	// lastError is the failure the most recent type:"error" line reported,
+	// carried so the "This request failed…" info notice that follows it can
+	// re-report the SAME error rather than a poorer one built from its own
+	// prose. See failureNotice for why that matters and what nil means.
+	lastError *tailer.SessionError
 }
 
 // workspaceRe pulls the first workspace directory out of the bootstrap
@@ -182,9 +189,37 @@ func (p *Parser) parseMessage(raw map[string]interface{}, ev *tailer.ParsedEvent
 // request ("This request failed. Press F12 …"). Matched with HasPrefix on the
 // trimmed content. Benign info notices (e.g. "Model set to gemini-2.5-flash", an
 // empty placeholder) continue the turn and must NOT match.
-var terminalInfoMarkers = []string{
-	"Request cancelled",
-	"This request failed",
+// THE TWO MARKERS MEAN OPPOSITE THINGS, and #1800 tells them apart.
+// "Request cancelled." is a user ESC or a quota abort the user caused (#659) —
+// not a failure, and #1798 is explicit that a deliberate cancel must never turn
+// a session red. "This request failed…" is the agent reporting that the call
+// died (#676). Both close the turn; only the second is an error.
+//
+// WHAT isError DOES AND DOES NOT BUY, stated precisely because it changed under
+// this branch's feet. gemini normally writes a failure as a PAIR — a
+// type:"error" line carrying the API body, then this info notice one line later
+// — and when this split was written, the notice WAS what kept the pair alive:
+// both lines parse to turn_done, and the tailer cleared a standing error on any
+// turn boundary, so a notice carrying no error of its own wiped the error the
+// line before had just recorded and the session settled green. The committed
+// 2-14 golden showed exactly that: `working → ready`, unmoved by the promotion.
+//
+// #1799 then landed SessionError.ClearedByTurnBoundary, which retires only an
+// ErrorPhaseRetrying error on a boundary. Every error this adapter emits is
+// terminal, so the pair now survives WITHOUT this flag — measured: neutralising
+// isError leaves TestTailer_GeminiErrorPairKeepsTheSessionError green.
+//
+// It is kept for the case that rule does not cover: a "This request failed…"
+// notice arriving with NO error line before it, which #676 records as a real
+// gemini shape. Without the flag that notice settles the turn and reports
+// nothing at all. That case is what TestParser_StandaloneFailureNotice covers,
+// and it is the only thing this flag is still load-bearing for.
+var terminalInfoMarkers = []struct {
+	prefix  string
+	isError bool
+}{
+	{"Request cancelled", false},
+	{"This request failed", true},
 }
 
 // parseError handles a top-level type:"error" message: gemini-cli records a
@@ -192,12 +227,149 @@ var terminalInfoMarkers = []string{
 // no end-of-turn marker and there is no inactivity sweep on `working`, so this
 // is the turn's last word — settle to ready, surfacing the error text for the
 // waiting display (#665).
+//
+// #1800 PROMOTES THIS TO ParsedEvent.SessionError, and DROPS the IsError flag
+// it used to set. IsError means a TOOL RESULT failed — a grep that matched
+// nothing, a build that broke — which must never turn a session red;
+// applyGeminiToolCall below is the site that legitimately raises it. The
+// top-level error is the other end of the severity scale, and #1798 built a
+// separate channel for it rather than widening IsError. Nothing read IsError
+// (core/pkg/tailer/tailer.go:1163 says so in as many words and does not even
+// track it), so dropping it here changes no behaviour; what changes is that
+// the failure now reaches the classifier instead of only the prose display.
+//
+// AssistantText is deliberately KEPT alongside it. It is what #665 settles the
+// waiting headline with, and SessionError.Message is the same text on a
+// channel the UI has not been taught to read yet (#1801/#1802). Removing it
+// would regress the display in exchange for nothing.
 func (p *Parser) parseError(raw map[string]interface{}, ev *tailer.ParsedEvent) bool {
 	content, _ := raw["content"].(string)
 	ev.EventType = "turn_done"
 	ev.AssistantText = tailer.TruncateAssistantText(content)
-	ev.IsError = true
+	ev.SessionError = geminiSessionError(content)
+	p.lastError = ev.SessionError
 	return true
+}
+
+// failureNotice is the error a "This request failed…" info notice reports.
+//
+// It re-reports the PRECEDING type:"error" line's error verbatim when there was
+// one, rather than building a fresh one from the notice's prose. The two lines
+// are one failure written twice: the error line carries the provider's body
+// (status code, provider message), the notice carries only UI chatter about
+// pressing F12. The tailer records the LATEST error it is handed, so a fresh
+// one built here would silently DOWNGRADE every gemini failure — dropping the
+// status code the unwrap above exists to recover — while still looking correct
+// in every test that feeds one line at a time.
+//
+// The fallback matters too: #676's notice can arrive with no error line before
+// it at all (a request that failed before gemini wrote one), and after a daemon
+// restart mid-pair the parser is fresh and holds nothing. Both land here with
+// lastError nil, and a generic terminal error is the honest answer — the notice
+// really is all that was seen.
+func (p *Parser) failureNotice(trimmed string) *tailer.SessionError {
+	if p.lastError != nil {
+		return p.lastError
+	}
+	return &tailer.SessionError{
+		Phase:   tailer.ErrorPhaseTerminal,
+		Class:   "provider",
+		Message: trimmed,
+	}
+}
+
+// geminiAPIErrorBody matches the `[API Error: {…}]` envelope gemini-cli wraps
+// the provider's own JSON body in. The recorded shape is
+//
+//	[API Error: {"error":{"code":400,"message":"…","status":"INVALID_ARGUMENT"}}]
+//
+// so the structured code lives inside a string, not as a field of the line —
+// the line's only keys are id/timestamp/type/content. Recovering it needs this
+// unwrap; there is no other route.
+var geminiAPIErrorBody = regexp.MustCompile(`(?s)\[API Error:\s*(\{.*\})\s*\]`)
+
+// geminiSessionError builds the session-level failure from a type:"error"
+// line's content.
+//
+// Never nil: the line IS the failure, so a content string this function cannot
+// parse still produces an error carrying the raw prose. Returning nil on an
+// unparseable body would mean a shape gemini-cli changes tomorrow silently
+// stops turning the session red — the failure mode AGENTS.md's "a validator
+// that can't parse its input checks MORE, never less" rule is about.
+//
+// Phase is always terminal: gemini-cli records no retry ladder anywhere in the
+// recorded corpus (no attempt counter, no retry delay, no second error line
+// for the same turn), and this line is by construction the turn's last word.
+// ErrorPhaseRetrying is therefore unreachable for this adapter rather than
+// merely unimplemented.
+func geminiSessionError(content string) *tailer.SessionError {
+	se := &tailer.SessionError{
+		Phase:   tailer.ErrorPhaseTerminal,
+		Class:   "provider",
+		Message: strings.TrimSpace(content),
+	}
+	m := geminiAPIErrorBody.FindStringSubmatch(content)
+	if m == nil {
+		return se
+	}
+	var body struct {
+		Error struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+			Status  string `json:"status"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(m[1]), &body); err != nil {
+		return se
+	}
+	if body.Error.Code > 0 {
+		code := body.Error.Code
+		se.HTTPStatus = &code
+		se.Class = geminiErrorClass(code, body.Error.Status)
+	}
+	if body.Error.Message != "" {
+		se.Message = body.Error.Message
+	}
+	return se
+}
+
+// geminiErrorClass normalizes the provider's status code into the vocabulary
+// SessionError.Class uses. Deliberately coarse: the classes are what a UI
+// groups by, and inventing a finer split than the payload supports would be
+// guessing. `status` is Google's own enum string and is only consulted where
+// the numeric code is genuinely ambiguous.
+// STATUS IS CONSULTED BEFORE THE CODE, and that order is the whole of this
+// function's correctness. Google returns RESOURCE_EXHAUSTED — a spent quota —
+// as HTTP 429, the same code as ordinary rate limiting. An earlier draft
+// checked the code first and reached for `status` only in a `code >= 400` arm
+// below the 429 case, which made the quota branch UNREACHABLE: every real quota
+// exhaustion reported as `rate_limit`.
+//
+// That is the one distinction a user acts on differently. A rate limit clears by
+// waiting a few seconds; an exhausted quota does not clear at all until the
+// window rolls over or they pay, and "wait a moment" is exactly the wrong advice
+// for it. Deriving it from the code alone is impossible, which is why `status`
+// is read at all.
+func geminiErrorClass(code int, status string) string {
+	switch status {
+	case "RESOURCE_EXHAUSTED":
+		return "quota"
+	case "UNAUTHENTICATED", "PERMISSION_DENIED":
+		return "auth"
+	}
+	switch {
+	case code == 429:
+		return "rate_limit"
+	case code == 401 || code == 403:
+		// A 403 with no status is a disabled key or a billing stop; both read
+		// to the user as "fix your auth".
+		return "auth"
+	case code >= 500:
+		return "provider"
+	case code >= 400:
+		return "query"
+	}
+	return "provider"
 }
 
 // parseInfo handles a bare "info" notice — a mixed-semantics line. A TERMINAL
@@ -218,10 +390,14 @@ func (p *Parser) parseInfo(raw map[string]interface{}, ev *tailer.ParsedEvent) b
 	content, _ := raw["content"].(string)
 	trimmed := strings.TrimSpace(content)
 	for _, marker := range terminalInfoMarkers {
-		if strings.HasPrefix(trimmed, marker) {
-			ev.EventType = "turn_done"
-			return true
+		if !strings.HasPrefix(trimmed, marker.prefix) {
+			continue
 		}
+		ev.EventType = "turn_done"
+		if marker.isError {
+			ev.SessionError = p.failureNotice(trimmed)
+		}
+		return true
 	}
 	return false
 }

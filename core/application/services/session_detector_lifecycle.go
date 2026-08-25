@@ -215,8 +215,235 @@ func (d *SessionDetector) HandleProcessExit(pid int, sessionID, reason string) {
 }
 
 // HandlePIDAssigned records a newly-discovered PID for a session.
+//
+// Also retires any standing process-death verdict (#1800): a session that has
+// a live PID again is not a session whose process is gone. This is the
+// end-of-life notice the hold's own staleness rule cannot supply, because
+// nothing about a resumed session's metrics says "the process came back" —
+// exactly the shape ReleasePermissionPromptHold exists for. A no-op when no
+// such hold stands, which is every ordinary PID discovery.
 func (d *SessionDetector) HandlePIDAssigned(pid int, sessionID string) {
+	d.signals.Release(sessionID, session.SignalProcessDeath)
+	d.forgetProcessDeathVerdict(sessionID)
 	d.pidMgr.HandlePIDAssigned(pid, sessionID)
+}
+
+// processDeathRetention is how long a session that died mid-turn is KEPT in
+// `error` before the ordinary reaper takes it.
+//
+// Twelve hours, and the argument is permissionPromptHoldTimeout's, which this
+// deliberately matches: the governing workflow is an agent left running
+// overnight and reviewed the next morning, so a crash at 22:00 must still be
+// visible at 08:00. Shorter, and the one session the user most needed to see is
+// the one silently deleted before they looked.
+//
+// IT IS BOUNDED BY WALL CLOCK ONLY WITHIN A SINGLE DAEMON RUN. A restart inside
+// the window reaps the row instead of showing it — see retainAsProcessDeath's
+// note, and #1815, which owns that gap. That is the honest ceiling on what this
+// constant can promise.
+const processDeathRetention = 12 * time.Hour
+
+// retainAsProcessDeath decides whether a process exit should convert the
+// session to StateError and KEEP it, instead of deleting it (#1800). Returns
+// true when the session was retained.
+//
+// THE PROBLEM IT SOLVES. Before this, a process exit deleted the row outright,
+// whatever state it was in. That is right for a session that finished — its
+// work is done and the row is bookkeeping — and it is exactly wrong for one
+// that died with a turn open, because the row vanishing is indistinguishable
+// from the row never having mattered. The single most useful thing irrlicht
+// can tell a user about an agent left running is that it stopped without
+// finishing, and until now that was the one outcome it could not report.
+//
+// WHAT COUNTS AS DIED MID-TURN — see diedMidTurn. Deliberately narrow, because
+// this issue's own rule is that a wrong error state is worse than no error
+// state.
+//
+// RETENTION IS OWNED BY ONE REGISTRY, NOT BY THE HOLD'S CEILING. An earlier
+// draft let the SignalProcessDeath hold expire on a ceiling and returned "keep"
+// for as long as the hold stood. That looked bounded and was not: once the
+// ceiling dropped the hold, the next classify pass re-derived `working` from
+// the frozen transcript, the next sweep called this function again, diedMidTurn
+// said yes a second time, and the session was re-converted — forever, emitting
+// a spurious "the agent is working" transition every twelve hours for a process
+// that had been dead for days. The verdict registry below is what makes the
+// retention terminal: a session that has already had its verdict is never
+// re-converted, only kept until the deadline and then released to the ordinary
+// reaper. The hold therefore carries NO ceiling, and that is safe precisely
+// because it cannot outlive the row — this function reaps the row, and
+// HandlePIDAssigned releases the hold if the process ever comes back.
+//
+// IDEMPOTENT, because it has to be: both exit paths funnel here (the
+// kqueue/pidfd watcher via SessionDetector.HandleProcessExit, and the periodic
+// sweep via reapDeadOrInfraPID), and the sweep calls it again every few seconds
+// for as long as the row exists.
+//
+// IT DOES NOT SURVIVE A DAEMON RESTART, and that is a real gap rather than an
+// oversight — named here because the twelve-hour window above is exactly the
+// window a restart falls inside. seedAlivePIDs deletes any persisted session
+// whose PID is already dead, by a direct deleteWithChildren that never reaches
+// HandleProcessExit, so a crashed session is reaped at the next daemon start.
+// Routing that path through this function would currently make things WORSE,
+// not better: #1798's SessionError does not survive a restart either
+// (seedReevaluateOne calls RefreshMetrics — a merge against a fresh nil —
+// BEFORE ClassifyState), so the row would come back GREEN, and a stale row that
+// lies is worse than a missing one. The fix is ledger persistence plus a seed
+// ordering change, it applies equally to #1799's producers, and it now has one:
+// TRACKED AS #1815, filed after this branch and #1799 reported it independently.
+// Do not fix it here.
+func (d *SessionDetector) retainAsProcessDeath(state *session.SessionState, pid int, reason string) bool {
+	sid := state.SessionID
+
+	if at, ok := d.processDeathVerdictAt(sid); ok {
+		if d.nowFn().Sub(at) < d.processDeathRetention {
+			return true
+		}
+		// The window has closed. Drop the verdict and let the caller reap the
+		// row through the unchanged delete path; because the entry is gone,
+		// the branch below cannot re-convert it on the next sweep.
+		d.forgetProcessDeathVerdict(sid)
+		d.signals.Release(sid, session.SignalProcessDeath)
+		d.log.LogInfo(logComponentProcessExit, sid,
+			fmt.Sprintf("process-death verdict expired after %v — releasing the session to the reaper",
+				d.processDeathRetention))
+		return false
+	}
+
+	if !diedMidTurn(state) {
+		return false
+	}
+
+	d.markProcessDeathVerdict(sid)
+	d.signals.Hold(sid, session.SignalProcessDeath, session.SignalPayload{
+		SessionError: &session.SessionError{
+			// Terminal without qualification: a process that exited is not
+			// going to try again. This is the one producer in the system for
+			// which ErrorPhaseRetrying is impossible rather than merely
+			// unobserved.
+			Phase:   session.ErrorPhaseTerminal,
+			Class:   session.ErrorClassProcessDeath,
+			Message: fmt.Sprintf("agent process (pid %d) exited mid-turn — %s", pid, reason),
+		},
+	}, d.nowFn())
+
+	d.log.LogInfo(logComponentProcessExit, sid,
+		fmt.Sprintf("pid %d exited mid-turn (was %s) — keeping the session as %s",
+			pid, state.State, session.StateError))
+
+	// Re-classify now rather than waiting for the next fswatcher pass, which
+	// for a dead process may never come: the transcript is frozen, so nothing
+	// will touch this session again. Synthetic, and NOT Terminal — Terminal
+	// means "the turn is authoritatively done", which is the opposite of what
+	// happened here.
+	select {
+	case d.debouncedEvents <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      sid,
+		TranscriptPath: state.TranscriptPath,
+		Synthetic:      true,
+	}:
+	default:
+		// The hold stands regardless, so the verdict is not lost — it simply
+		// surfaces on the next classify pass instead of this instant. Logged
+		// because a full channel is worth knowing about on its own.
+		d.log.LogError(logComponentProcessExit, sid,
+			"debouncedEvents channel full, process-death re-classification deferred")
+	}
+	return true
+}
+
+// processDeathVerdictAt reports when sid was converted to a process-death
+// error, if it was.
+func (d *SessionDetector) processDeathVerdictAt(sessionID string) (time.Time, bool) {
+	d.processDeathMu.Lock()
+	defer d.processDeathMu.Unlock()
+	at, ok := d.processDeathVerdicts[sessionID]
+	return at, ok
+}
+
+// markProcessDeathVerdict records that sid has had its one process-death
+// verdict. Guarded by its own mutex because HandleProcessExit reaches here from
+// two goroutines — the process watcher's callback and the periodic liveness
+// sweep.
+func (d *SessionDetector) markProcessDeathVerdict(sessionID string) {
+	d.processDeathMu.Lock()
+	defer d.processDeathMu.Unlock()
+	if d.processDeathVerdicts == nil {
+		d.processDeathVerdicts = make(map[string]time.Time)
+	}
+	d.processDeathVerdicts[sessionID] = d.nowFn()
+}
+
+// forgetProcessDeathVerdict drops sid's verdict, so a later exit for the same
+// id is judged on its own merits again. Called when the retention window closes
+// and when the session gets a live PID back; the map is otherwise bounded by
+// the number of sessions that died mid-turn and are still on disk.
+func (d *SessionDetector) forgetProcessDeathVerdict(sessionID string) {
+	d.processDeathMu.Lock()
+	defer d.processDeathMu.Unlock()
+	delete(d.processDeathVerdicts, sessionID)
+}
+
+// diedMidTurn reports whether state was in the middle of a turn when its
+// process went away.
+//
+// EVERY CLAUSE FAILS CLOSED — an unknown answer means "not a crash", so the
+// session is deleted exactly as it was before #1800. That direction is chosen
+// deliberately: a missed crash costs the user a signal they never had, while a
+// false crash puts a red session in front of them that nothing they do will
+// explain.
+//
+// WHAT IRRLICHT CANNOT SEE, stated plainly because it bounds what this
+// predicate can ever mean: there is no exit status available. irrlicht is not
+// the agent's parent, so neither kqueue's NOTE_EXIT nor Linux's pidfd poll
+// yields a wait status, and the liveness sweep's probe is syscall.Kill(pid, 0)
+// — a liveness question with a yes/no answer. A segfault, an OOM kill, a
+// `kill -9` typed by the user and a clean exit(1) are therefore the SAME
+// observation. The clauses below are the only discriminators that exist, and
+// all of them are about what the SESSION looked like, never about how the
+// process ended.
+//
+// The residual false positive that leaves: a user who deliberately kills an
+// agent mid-turn gets `error` rather than the row disappearing. That is a
+// deliberate call — the turn genuinely did not finish, and "this session
+// stopped without completing" is a true statement about it either way — but it
+// IS a behaviour change and is named here rather than discovered later.
+func diedMidTurn(state *session.SessionState) bool {
+	// Only a session that was actively working. A session already in ready or
+	// waiting had nothing in flight to lose, and error means this already ran.
+	if state.State != session.StateWorking {
+		return false
+	}
+
+	// Children are the parent's problem. A subagent's process IS the parent's
+	// process, so a subagent row never has a PID of its own to exit, and
+	// reapStaleChild already owns their teardown on a rule of its own.
+	if state.ParentSessionID != "" {
+		return false
+	}
+
+	m := state.Metrics
+	if m == nil {
+		return false
+	}
+
+	// The turn had actually ended and the daemon simply had not caught up —
+	// an agent that finishes and immediately exits is the ordinary shape of
+	// `claude -p`, not a crash. Classification lags the transcript by up to a
+	// poll interval, so `working` alone is not enough.
+	if m.IsAgentDone() {
+		return false
+	}
+
+	// The USER stopped it. An ESC or a denied tool leaves a marker in the
+	// transcript and routes to ready through the user_interrupt rule; catching
+	// the window before that pass runs is what this clause is for, and it is
+	// what keeps the 2-20_user-esc-interrupt scenario's arc intact.
+	if m.LastWasUserInterrupt || m.LastWasToolDenial {
+		return false
+	}
+
+	return true
 }
 
 // ReconcilePreSessionBackchannel carries a still-open trust-dialog Waiting

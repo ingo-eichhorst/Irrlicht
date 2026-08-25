@@ -400,6 +400,27 @@ type SessionMetrics struct {
 	// together.
 	SessionError *SessionError `json:"session_error,omitempty"`
 
+	// ProcessDeath is true when the agent PROCESS went away while a turn was
+	// still open (#1800). It is the classifier's process_death predicate.
+	//
+	// WHY THIS EXISTS RATHER THAN A Class == ErrorClassProcessDeath CHECK, which
+	// is the obvious alternative and is the one thing that must not be done
+	// here. The classifier's process_death rule claims TierProcess authority,
+	// and a tier is a claim about the CHANNEL the evidence arrived on. Class is
+	// a free-form string any adapter may write from a transcript it parsed, so
+	// keying the tier on it would let transcript-tier evidence claim process
+	// tier — and an OVERSTATED tier is the direction the ladder invariant
+	// cannot silently absorb. This flag is settable only by the
+	// SignalProcessDeath hold, whose only producer is the daemon's process-exit
+	// path, so the channel and the claim cannot come apart.
+	//
+	// An overlay flag like PermissionPending / IdlePromptPending /
+	// CompactInProgress above, and json:"-" for the same reason they are: it is
+	// re-derived from the hold on every Overlay pass, so persisting it would
+	// create a second source of truth that could disagree with the hold. The
+	// error's own persistence question is SessionError's, not this flag's.
+	ProcessDeath bool `json:"-"`
+
 	// RateLimit is the most recent subscription quota snapshot observed for
 	// this session. Populated by the Codex parser (from token_count events)
 	// and by the Claude Code statusline hook. Nil when the underlying
@@ -626,9 +647,10 @@ func MergeMetrics(newM, oldM *SessionMetrics) *SessionMetrics {
 // newMergedMetrics copies the fields a fresh tailer pass always recomputes
 // verbatim from newM. Fields not listed here are deliberately left at their
 // zero value: LastCWD, PermissionPending, HookTurnDone, IdlePromptPending,
-// SawUserBlockingToolClosedThisPass, OpenToolStalled, and CompactInProgress are
-// per-pass overlay/transient signals that the detector (re-)sets fresh after
-// each merge, so carrying stale values here would be a bug, not a convenience.
+// SawUserBlockingToolClosedThisPass, OpenToolStalled, CompactInProgress, and
+// ProcessDeath are per-pass overlay/transient signals that the detector
+// (re-)sets fresh after each merge, so carrying stale values here would be a
+// bug, not a convenience.
 func newMergedMetrics(newM *SessionMetrics) *SessionMetrics {
 	return &SessionMetrics{
 		ElapsedSeconds:       newM.ElapsedSeconds,

@@ -1378,3 +1378,21 @@ func TestParser_PendingWaitingCue_BeyondDisplayTail(t *testing.T) {
 		})
 	}
 }
+
+// task_complete carries no reason and must never report a failure. LOCK, in
+// this file specifically because CodeScene notes parser.go is usually changed
+// together with it. The turn_aborted cases live in session_error_test.go.
+func TestParser_TaskCompleteHasNoSessionError(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"timestamp": "2026-05-16T20:54:07.895Z",
+		"type":      "event_msg",
+		"payload":   map[string]interface{}{"type": "task_complete"},
+	})
+	if ev == nil || ev.EventType != "turn_done" {
+		t.Fatalf("precondition: task_complete must be turn_done, got %+v", ev)
+	}
+	if ev.SessionError != nil {
+		t.Errorf("a completed turn must carry no session error, got %+v", ev.SessionError)
+	}
+}

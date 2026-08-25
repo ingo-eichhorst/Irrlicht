@@ -264,10 +264,12 @@ func TestSignalHolds_StaleIsCheckedOnTheFirstPass(t *testing.T) {
 //     IsAgentDone, which reads the HookTurnDone that turn_done's apply just
 //     set. Reversed, a hook-corrected waiting is discarded as stale one
 //     instruction before it would have been applied.
+//
 //   - SignalPermissionPrompt before SignalOpenToolStalled: the stalled row's
 //     ripe rule reads PermissionPending, which the permission row's apply
 //     sets. Reversed, the transcript fallback fires alongside the hook it is
 //     supposed to defer to.
+//
 //   - SignalTurnDone before SignalSessionError (#1798): the error row's
 //     staleness reads HookTurnDone, which turn_done's apply sets on the same
 //     pass — the same dependency idle_prompt has, for the same reason.
@@ -275,9 +277,16 @@ func TestSignalHolds_StaleIsCheckedOnTheFirstPass(t *testing.T) {
 //     against metrics that do not yet know the turn ended, so a failure
 //     survives a turn that actually completed and the session stays red.
 //
-// SignalSessionError sits before SignalOpenToolStalled only because that row
-// must stay last; nothing reads what the error row writes, so its position is
-// otherwise free.
+//   - SignalTurnDone before SignalProcessDeath (#1800): the same dependency
+//     again — the process-death row's staleness also reads HookTurnDone.
+//
+// SignalSessionError and SignalProcessDeath sit before SignalOpenToolStalled
+// only because that row must stay last; nothing reads what either error row
+// writes, so their positions are otherwise free — including relative to each
+// other. Both apply SessionError into an EMPTY slot only, so neither can
+// overwrite the other and their relative order changes no outcome. The
+// process-death row additionally writes ProcessDeath unconditionally, which no
+// other row reads or writes.
 //
 // Pinned as the exact full sequence rather than as two pairwise checks so that
 // adding a row is a deliberate act — the test names the position, and whoever
@@ -289,6 +298,7 @@ func TestSignalPolicies_OrderIsPinned(t *testing.T) {
 		SignalIdlePrompt,
 		SignalCompactInProgress,
 		SignalSessionError,
+		SignalProcessDeath,
 		SignalOpenToolStalled,
 	}
 

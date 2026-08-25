@@ -356,13 +356,35 @@ const (
 // re-recorded, and #1800 will move this floor again for the same reason on its
 // own adapters.
 //
-// Re-tightened onto the new measurement (835), per the paragraph above, rather
-// than left at 836 as slack. minMeasuredRecordings is deliberately NOT
-// re-tightened here even though it measures 279 against a floor of 278: this
-// change did not move it, and narrowing an untouched ratchet mid-change would
-// fail a later diff for a reason that diff does not contain.
+// Re-tightened onto the new measurement, per the paragraph above, rather than
+// left as slack. minMeasuredRecordings is deliberately NOT re-tightened even
+// though it measures 279 against a floor of 278: neither change moved it, and
+// narrowing an untouched ratchet mid-change would fail a later diff for a
+// reason that diff does not contain.
+//
+// #1800 IS THE SECOND DOWNWARD MOVE, and it is the one #1799's paragraph above
+// predicted in as many words — "#1800 will move this floor again for the same
+// reason on its own adapters". 835 -> 833, two pairs, and the two are named:
+//
+//	gemini-cli 2-14 (…2026-06-13-20-23-43…)  ordered_matches 2 -> 1
+//	pi         2-14 (…2026-05-25-05-20-53…)  ordered_matches 2 -> 1
+//
+// Measured per golden with
+//
+//	git show origin/main:<golden> | jq '.extended_check.ordered_matches'
+//
+// against the same expression over the working copy — not inferred from the
+// number of goldens the change rewrote, which is five. Both are
+// turn-aborted-by-error cells whose failing turn now replays `working→error`
+// where the frozen sidecar logged `working→ready`; a differing kind is a
+// state_differs rather than a kind-matched pair, so one pair leaves each. The
+// recording count does not move, which is the shape to expect for existing
+// recordings losing pairs rather than dropping out.
+//
+// Same frozen-sidecar cost as #1799's, for the same reason, and it resolves the
+// same way: on re-record.
 const (
-	minKindMatchedPairs   = 835
+	minKindMatchedPairs   = 833
 	minMeasuredRecordings = 278
 )
 
