@@ -588,3 +588,24 @@ func TestParser_TaskEstimate_UserMessageIgnored(t *testing.T) {
 		t.Fatalf("user-pasted marker must not feed the estimate, got %+v", ev.TaskEstimate)
 	}
 }
+
+// A healthy end-of-turn must carry no session error. LOCK, in this file
+// specifically because CodeScene notes parser.go is usually changed together
+// with it — the hint that surfaced a real defect in #1809. The errored
+// counterpart lives in session_error_test.go.
+func TestParser_NormalStopHasNoSessionError(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type": "message",
+		"message": map[string]interface{}{
+			"role": "assistant", "stopReason": "stop",
+			"content": []interface{}{map[string]interface{}{"type": "text", "text": "done"}},
+		},
+	})
+	if ev == nil || ev.EventType != "turn_done" {
+		t.Fatalf("precondition: stopReason \"stop\" must be turn_done, got %+v", ev)
+	}
+	if ev.SessionError != nil {
+		t.Errorf("a clean turn must carry no session error, got %+v", ev.SessionError)
+	}
+}

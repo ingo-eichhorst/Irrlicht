@@ -874,3 +874,69 @@ func TestClassify_SessionErrorIsAttributedToItsRule(t *testing.T) {
 		t.Error("an error transition must carry a reason")
 	}
 }
+
+// TestClassify_ProcessDeathRoutesToError exercises #1800's rule through the
+// ubiquitous entry point rather than through the tiered one, and covers the
+// state transitions either side of it.
+//
+// Added because CodeScene notes that state_classifier.go is usually changed
+// together with THIS file, and #1798's review found a real defect
+// (`error → ready on turn_done` was unreachable) through exactly that hint.
+func TestClassify_ProcessDeathRoutesToError(t *testing.T) {
+	processDead := func() *session.SessionMetrics {
+		return &session.SessionMetrics{
+			LastEventType: "assistant",
+			ProcessDeath:  true,
+			SessionError: &session.SessionError{
+				Phase: session.ErrorPhaseTerminal,
+				Class: session.ErrorClassProcessDeath,
+			},
+		}
+	}
+
+	t.Run("working to error", func(t *testing.T) {
+		got, reason := ClassifyState(session.StateWorking, processDead())
+		if got != session.StateError {
+			t.Errorf("state = %q, want %q", got, session.StateError)
+		}
+		if reason == "" {
+			t.Error("a real transition must carry a reason")
+		}
+	})
+
+	// Already red: the rule owns the outcome, so no lower rule may run, and no
+	// transition is emitted. An empty reason is the signal for that, and it is
+	// what stops a dead session re-broadcasting on every poll — which for a
+	// process-death row is every poll for as long as it is retained.
+	t.Run("error stays error without re-emitting", func(t *testing.T) {
+		got, reason := ClassifyState(session.StateError, processDead())
+		if got != session.StateError {
+			t.Errorf("state = %q, want %q", got, session.StateError)
+		}
+		if reason != "" {
+			t.Errorf("a no-op re-classification must emit no transition, got %q", reason)
+		}
+	})
+
+	// The flag alone is not enough: SessionError carries what the UI renders,
+	// and a red session with nothing to show would be worse than none.
+	t.Run("flag without detail does not route to error", func(t *testing.T) {
+		m := processDead()
+		m.SessionError = nil
+		if got, _ := ClassifyState(session.StateWorking, m); got == session.StateError {
+			t.Error("ProcessDeath without a SessionError must not paint the session red")
+		}
+	})
+
+	// The clearing half, from `error`. A session that reaches a real turn
+	// boundary leaves error — the path #1798's review found unreachable when
+	// classifyAgentDone enumerated the states it promotes from.
+	t.Run("a finished turn leaves error", func(t *testing.T) {
+		got, _ := ClassifyState(session.StateError, &session.SessionMetrics{
+			LastEventType: "turn_done",
+		})
+		if got != session.StateReady {
+			t.Errorf("state = %q, want %q — a completed turn must clear the error", got, session.StateReady)
+		}
+	})
+}

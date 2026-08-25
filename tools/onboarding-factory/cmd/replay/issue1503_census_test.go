@@ -132,12 +132,36 @@ type catalogCensus struct {
 // record, so the replay reproducing one is the intended new behaviour rather
 // than a drift from the daemon. It resolves on re-record. #1800 will move these
 // figures again on its own adapters.
+//
+// #1800 moved Divergent and DivergentByCountsAndKinds up by exactly TWO
+// recordings each, and both divergences SHOULD exist. (The values are
+// deliberately not restated here — the machine-generated literal below is the
+// one copy, and TestNoCommentRestatesALiveCensusFigure enforces that.)
+//
+// Both are turn-aborted-by-error cells whose sidecar was recorded against a
+// daemon that could not see the failure, and both are frozen:
+//
+//   - pi's 2-14. pi reports a failed turn as `stopReason:"error"`, which the
+//     parser did not read: the event was emitted as a mid-turn "assistant", so
+//     the session stuck in `working` for the rest of its life. The parser now
+//     emits `turn_done` plus a SessionError, so the reconstruction settles
+//     where the frozen recording did not.
+//   - gemini-cli's 2-14. Its failure settles to `error` now rather than to
+//     `ready`.
+//
+// Neither can come back into agreement without a re-record, which is exactly
+// what `known_failing` means.
+//
+// Attribution measured rather than inferred, once per recording: disabling
+// only pi's new `case "error"` arm accounts for the first, and disabling only
+// gemini's terminal-info error for the second. Nothing else in the change
+// moves either figure.
 var censusOfTheCommittedCatalog = catalogCensus{
 	Recordings:                316,
 	Zero:                      1,
 	Fabricated:                1,
-	Divergent:                 148,
-	DivergentByCountsAndKinds: 147,
+	Divergent:                 150,
+	DivergentByCountsAndKinds: 149,
 	UnpairedSidecars:          0,
 	PairedButUngraded:         87,
 }

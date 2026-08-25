@@ -162,6 +162,11 @@ type PIDManager struct {
 	// SessionDetector lock.
 	assignMu sync.Mutex
 
+	// onProcessDiedMidTurn converts a mid-turn process exit into a retained
+	// StateError session instead of a deletion (#1800). Nil disables the
+	// branch entirely.
+	onProcessDiedMidTurn func(state *session.SessionState, pid int, reason string) bool
+
 	// recorder captures lifecycle events for offline replay (optional).
 	// Set by SessionDetector.SetRecorder.
 	recorder    outbound.EventRecorder
@@ -182,6 +187,13 @@ type PIDManagerDeps struct {
 	LiveCWDs         LiveCWDsFunc
 	OnSessionDeleted func(sessionID string)
 	OnSessionRemoved func(*session.SessionState)
+
+	// OnProcessDiedMidTurn is consulted before a process-exit teardown and
+	// reports whether the session was converted to StateError and must be
+	// kept (#1800). Optional: a nil hook restores the pre-#1800 behaviour of
+	// deleting every session whose process exits, which is what the
+	// PIDManager-only unit tests construct.
+	OnProcessDiedMidTurn func(state *session.SessionState, pid int, reason string) bool
 }
 
 // NewPIDManager creates a PIDManager with the given dependencies.
@@ -197,7 +209,9 @@ func NewPIDManager(deps PIDManagerDeps) *PIDManager {
 		liveCWDs:         deps.LiveCWDs,
 		onSessionDeleted: deps.OnSessionDeleted,
 		onSessionRemoved: deps.OnSessionRemoved,
-		pendingPIDs:      make(map[string]int),
+
+		onProcessDiedMidTurn: deps.OnProcessDiedMidTurn,
+		pendingPIDs:          make(map[string]int),
 	}
 }
 
@@ -421,24 +435,71 @@ func (pm *PIDManager) record(ev lifecycle.Event) {
 // the triggering edge (e.g. "pid exited (ESRCH)") and is recorded on both the
 // KindProcessExited event and the resulting deletion, so a trace explains why
 // the session went away (issue #757).
+// #1800 ADDS ONE BRANCH IN FRONT OF THAT: a process that vanished while a turn
+// was still open did not end the session, it FAILED it, and deleting the row is
+// how that failure became invisible. onProcessDiedMidTurn owns the whole
+// decision (SessionDetector.retainAsProcessDeath) and returns true when the
+// session was converted to `error` and must be kept.
+//
+// The load moved ABOVE the teardown record and the onSessionDeleted callback,
+// because both are teardown steps and neither may run on the retain path —
+// onSessionDeleted writes the deletion tombstone AND drops the session's signal
+// holds, which would discard the very hold the verdict rests on. Event order,
+// log lines and behaviour on the delete path are otherwise unchanged.
+//
+// KindProcessExited is deliberately NOT recorded for a retained session. In
+// this codebase that Kind MEANS teardown — the replay state machine deletes the
+// session on it (tools/onboarding-factory/internal/replay/state_machine.go) —
+// so recording it for a session that survives would make a recording contradict
+// the daemon it recorded. The state transition to `error` carries the pid and
+// the exit reason instead, which is the same fact on the Kind that matches it.
+//
+// Both entry points funnel here — the kqueue/pidfd watcher via
+// SessionDetector.HandleProcessExit and the periodic sweep via
+// reapDeadOrInfraPID — so the branch must be idempotent: the sweep calls this
+// again every few seconds for as long as the row exists, and retainAsProcessDeath
+// answers "keep" for as long as the hold stands rather than re-converting.
 func (pm *PIDManager) HandleProcessExit(pid int, sessionID, reason string) {
+	state, loadErr := pm.repo.Load(sessionID)
+
+	if pm.retainedAsProcessDeath(state, loadErr, pid, reason) {
+		return
+	}
+
 	pm.record(lifecycle.Event{Kind: lifecycle.KindProcessExited, SessionID: sessionID, PID: pid, Reason: reason})
 
 	if pm.onSessionDeleted != nil {
 		pm.onSessionDeleted(sessionID)
 	}
 
-	state, err := pm.repo.Load(sessionID)
-	if err != nil || state == nil {
-		pm.log.LogInfo("process-exit", sessionID,
+	if loadErr != nil || state == nil {
+		pm.log.LogInfo(logComponentProcessExit, sessionID,
 			fmt.Sprintf("pid %d exited but session not found (already cleaned up)", pid))
 		return
 	}
 
-	pm.log.LogInfo("process-exit", sessionID,
+	pm.log.LogInfo(logComponentProcessExit, sessionID,
 		fmt.Sprintf("pid %d exited, deleting session (was %s)", pid, state.State))
 
 	pm.deleteWithChildren(state, reason)
+}
+
+// retainedAsProcessDeath asks the detector whether this exit should convert the
+// session to StateError and keep it (#1800), and reports whether it did.
+//
+// Split out of HandleProcessExit rather than inlined as a four-term condition
+// so the teardown path above reads as one question, and so the three
+// preconditions — the row loaded, it exists, and the hook is wired — are stated
+// where they can be read. A nil hook is the pre-#1800 behaviour and is what the
+// PIDManager-only unit tests construct.
+func (pm *PIDManager) retainedAsProcessDeath(state *session.SessionState, loadErr error, pid int, reason string) bool {
+	if loadErr != nil || state == nil {
+		return false // nothing to convert; the teardown path logs the miss
+	}
+	if pm.onProcessDiedMidTurn == nil {
+		return false // pre-#1800 behaviour, which the PIDManager-only tests use
+	}
+	return pm.onProcessDiedMidTurn(state, pid, reason)
 }
 
 // CleanupZombies is a one-shot synchronous startup sweep that deletes any

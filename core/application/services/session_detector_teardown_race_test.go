@@ -74,8 +74,29 @@ func TestSessionDetector_LateStopHookAfterProcessExit_SettlesToReady(t *testing.
 	// the repo row deleted — before the hook lands.
 	det.HandleProcessExit(54321, sid, "test: pid exited (ESRCH)")
 
-	if state, _ := repo.Load(sid); state != nil {
-		t.Fatal("precondition: session should be deleted by HandleProcessExit")
+	// #1800 CHANGED WHAT THIS PRECONDITION CAN SAY, and the change is in this
+	// test's favour rather than against it.
+	//
+	// This fixture is `working` with a tail that does not say the turn ended,
+	// which is now exactly the shape a mid-turn process death produces — so
+	// HandleProcessExit no longer deletes the row, it converts it and keeps
+	// it. That is provisional, not a verdict: the SignalProcessDeath hold goes
+	// stale the moment a classify pass sees IsAgentDone, which is precisely
+	// what the Stop hook below causes. So the race #1772 is about — the row
+	// being gone before the beacon lands — cannot happen for this shape any
+	// more, and the assertion that matters (the session settles to `ready`,
+	// below) is now reached without needing the deletedStates revive path at
+	// all.
+	//
+	// The revive path is NOT dead and is still what this test guards: it is
+	// what a session deleted on ANY other ground still depends on — a `ready`
+	// or `waiting` session at exit, a session with no metrics, a child
+	// session. Those all still take the delete branch (see diedMidTurn), and
+	// TestSessionDetector_HandleProcessExit_DeletesReadySession pins one of
+	// them.
+	if state, _ := repo.Load(sid); state == nil {
+		t.Fatal("precondition: a mid-turn process exit must now RETAIN the session (#1800), " +
+			"not delete it")
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

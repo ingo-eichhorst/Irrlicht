@@ -207,6 +207,22 @@ func (p *Parser) closeModelCall(m []string) *tailer.ParsedEvent {
 // `working`. The error text is surfaced as AssistantText so the dashboard
 // shows what happened. Tokens/Contribution are intentionally nil because
 // no usage was reported.
+//
+// #1800 also reports it as a SESSION-LEVEL failure. aider was listed in that
+// issue among the adapters with "no error signal at all"; that is wrong, and
+// errorRE above is the evidence — aider has had one since the regex was
+// written, it was simply smuggled out through AssistantText, the same shape
+// #1798 named for geminicli's parseError and did not know about here.
+//
+// Class is "provider" without further discrimination, and that is the honest
+// ceiling for this adapter rather than a shortcut: aider's transcript is
+// PLAINTEXT CHAT HISTORY, so the only thing available is the prose aider
+// printed. errorRE matches on `Error`/`Exception` appearing in a blockquote —
+// `litellm.BadRequestError`, `OpenAIException`, a bare `LookupError` — and
+// there is no status code, no structured class, and no retry counter anywhere
+// in the format to read. Phase is terminal because this line is by
+// construction the turn's last word: it is what fires when no `> Tokens:` line
+// will follow.
 func (p *Parser) flushErrorTurn(line string) *tailer.ParsedEvent {
 	errText := strings.TrimSpace(strings.TrimPrefix(line, ">"))
 	p.assistantBuffer.Reset()
@@ -215,6 +231,11 @@ func (p *Parser) flushErrorTurn(line string) *tailer.ParsedEvent {
 		EventType:     "turn_done",
 		ModelName:     p.model,
 		AssistantText: tailer.TruncateAssistantText(errText),
+		SessionError: &tailer.SessionError{
+			Phase:   tailer.ErrorPhaseTerminal,
+			Class:   "provider",
+			Message: errText,
+		},
 	}
 }
 

@@ -56,8 +56,8 @@
       "virtual_time": "2026-06-12T14:25:17.904769+02:00",
       "cause": "debounce_coalesce",
       "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
+      "new_state": "error",
+      "reason": "session error → error",
       "last_event_type": "turn_done",
       "has_open_tool": false,
       "is_agent_done": true,
@@ -110,7 +110,7 @@
       {
         "index": 1,
         "kind": "extra_in_replay",
-        "replayed": "working→ready"
+        "replayed": "working→error"
       }
     ],
     "recorded_unique_kinds": [
@@ -118,10 +118,10 @@
     ],
     "replayed_unique_kinds": [
       "ready→working",
-      "working→ready"
+      "working→error"
     ],
     "extra_kinds": [
-      "working→ready"
+      "working→error"
     ]
   }
 }
