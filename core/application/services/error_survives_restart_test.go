@@ -561,13 +561,23 @@ func TestSeedRetainRestoredError_SkipsARecoveredSession(t *testing.T) {
 // connected "a place that deletes rows" to "consult the exemption", so the miss
 // was invisible: every behavioural test passed, because none of them exercised
 // that particular reaper. A per-site inventory in a doc comment has the same
-// weakness — it was written already stale.
+// weakness — the one this fix removed was written already stale.
 //
-// The exemption list below is the deliberate part. A deleter on it is one that
-// must NOT consult the exemption, with the reason stated; adding a new reaper
-// means either calling retainsError or arguing here why it is exempt.
+// DELEGATION IS DERIVED, NOT DECLARED, and that is load-bearing. A reaper may
+// put its whole keep-or-delete decision in a named predicate (isStartupZombie,
+// reapsIdleTopLevel) — better structure, not an evasion — so a delegating caller
+// must still pass. An earlier version of this test accepted a hand-written list
+// of delegate NAMES, and that quietly broke it: with the guard deleted from
+// reapsIdleTopLevel the test still passed, because the caller was still calling
+// a name on the list. The list described the shape of the code rather than
+// checking it. So the delegate set is now computed from the source — a function
+// counts as consulting only if it calls retainsError itself, or calls something
+// that does — and removing the guard anywhere makes every path through it fail.
+//
+// The exempt map below is the deliberate part. A deleter on it is one that must
+// NOT consult the exemption, with the reason stated; adding a new reaper means
+// calling retainsError, delegating to something that does, or arguing here.
 func TestEveryReaperConsultsTheErrorExemption(t *testing.T) {
-	// Deleters that intentionally do not consult it, and why.
 	exempt := map[string]string{
 		"deleteSession":                      "the shared choke point; guarding here would strand an errored CHILD whose parent was deleted, leaving a dangling ParentSessionID nothing can collect",
 		"deleteWithChildren":                 "same choke-point argument, and it would re-shield a row whose verdict HandlePIDAssigned deliberately retired (TestHandlePIDAssigned_RetiresAProcessDeathVerdict)",
@@ -581,67 +591,88 @@ func TestEveryReaperConsultsTheErrorExemption(t *testing.T) {
 		"HandleProcessExit":                  "routes through onProcessDiedMidTurn (retainAsProcessDeath), which owns the live-path retention via the verdict map",
 	}
 
-	src, err := os.ReadFile("pid_manager.go")
-	if err != nil {
-		t.Fatalf("read pid_manager.go: %v", err)
-	}
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "pid_manager.go", src, 0)
+	file, err := parser.ParseFile(fset, "pid_manager.go", nil, 0)
 	if err != nil {
 		t.Fatalf("parse pid_manager.go: %v", err)
 	}
 
-	var checked int
+	// calls[fn] is the set of method names fn invokes.
+	calls := map[string]map[string]bool{}
 	for _, decl := range file.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
 		if !ok || fn.Body == nil {
 			continue
 		}
-		name := fn.Name.Name
-		if _, ok := exempt[name]; ok {
-			continue
-		}
-		var deletes, consults bool
+		seen := map[string]bool{}
 		ast.Inspect(fn.Body, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok {
-				return true
-			}
-			switch sel.Sel.Name {
-			case "deleteWithChildren", "deleteSession", "removeSessionUntracked":
-				deletes = true
-			case "retainsError", "isStartupZombie":
-				// isStartupZombie counts as consulting: the guard lives inside
-				// that predicate, so its callers inherit it. Delegation is a
-				// legitimate way to satisfy this check; re-implementing the
-				// window at the call site is not.
-				consults = true
+			if call, ok := n.(*ast.CallExpr); ok {
+				if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+					seen[sel.Sel.Name] = true
+				}
 			}
 			return true
 		})
+		calls[fn.Name.Name] = seen
+	}
+
+	// Derive the consulting set: retainsError itself, then anything that calls
+	// something already in the set, to a fixed point.
+	consulting := map[string]bool{"retainsError": true}
+	for changed := true; changed; {
+		changed = false
+		for fn, seen := range calls {
+			if consulting[fn] {
+				continue
+			}
+			for name := range seen {
+				if consulting[name] {
+					consulting[fn] = true
+					changed = true
+					break
+				}
+			}
+		}
+	}
+
+	deleters := map[string]bool{"deleteWithChildren": true, "deleteSession": true, "removeSessionUntracked": true}
+	var checked int
+	for fn, seen := range calls {
+		if exempt[fn] != "" {
+			continue
+		}
+		var deletes bool
+		for name := range seen {
+			if deleters[name] {
+				deletes = true
+				break
+			}
+		}
 		if !deletes {
 			continue
 		}
 		checked++
-		if !consults {
-			t.Errorf("%s deletes session rows but never calls retainsError — #1815: an errored "+
-				"row within its retention window is deleted by this path. Either consult the "+
-				"exemption, or add %s to this test's `exempt` map with the reason.", name, name)
+		if !consulting[fn] {
+			t.Errorf("%s deletes session rows but nothing on its call path consults retainsError "+
+				"— #1815: an errored row within its retention window is deleted by this path. "+
+				"Either consult the exemption (directly or via a predicate that does), or add "+
+				"%s to this test's `exempt` map with the reason.", fn, fn)
 		}
 	}
 
 	// The tripwire must fail loudly when it cannot run: an AST walk that matched
-	// nothing looks identical to a clean result. Four non-exempt deleters exist
-	// today (isStartupZombie's caller CleanupZombies, seedAlivePIDs,
-	// reapOrRetainDeadSeedPID, sweepStaleSnapshot); a floor of 3 leaves room for
-	// refactoring without letting the check silently go inert.
+	// nothing looks identical to a clean result. Three non-exempt deleters exist
+	// today (CleanupZombies, seedAlivePIDs, reapOrRetainDeadSeedPID,
+	// sweepStaleSnapshot); a floor of 3 leaves room for refactoring without
+	// letting the check silently go inert.
 	if checked < 3 {
 		t.Fatalf("the reaper scan matched only %d deleting function(s) — the AST walk or the "+
-			"call-name list has gone stale, and this test is no longer checking anything", checked)
+			"deleter-name list has gone stale, and this test is no longer checking anything", checked)
+	}
+	// And the consulting set must be more than its seed, or the fixed point
+	// never ran and every delegating caller would be reported as a violation.
+	if len(consulting) < 2 {
+		t.Fatalf("no function was found to consult retainsError — the delegation walk is inert")
 	}
 }
 

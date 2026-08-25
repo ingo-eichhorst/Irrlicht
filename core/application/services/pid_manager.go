@@ -1269,28 +1269,37 @@ func (pm *PIDManager) sweepStaleSnapshot(snap livenessSnapshot) {
 		return
 	}
 
-	if !isStaleUpdatedAt(snap.updatedAt, pm.readyTTL) {
+	if !pm.reapsIdleTopLevel(snap) {
 		return
+	}
+	pm.log.LogInfo(logComponentSessionDetector, snap.state.SessionID,
+		fmt.Sprintf("%s session (pid=%d) idle for >%v, deleting",
+			snap.sessionState, snap.pid, pm.readyTTL))
+	pm.deleteWithChildren(snap.state,
+		fmt.Sprintf("%s session (pid=%d) idle >%v — liveness sweep", snap.sessionState, snap.pid, pm.readyTTL))
+}
+
+// reapsIdleTopLevel reports whether an idle top-level session is due for
+// deletion by the liveness sweep. Broken out of sweepStaleSnapshot so the
+// decision has a name and the sweep reads as dispatch rather than as a ladder
+// of guards.
+func (pm *PIDManager) reapsIdleTopLevel(snap livenessSnapshot) bool {
+	if !isStaleUpdatedAt(snap.updatedAt, pm.readyTTL) {
+		return false
 	}
 	// Don't delete sessions whose process is still alive.
 	if snap.pid > 0 && syscall.Kill(snap.pid, 0) == nil {
-		return
+		return false
 	}
 	// The FIFTH reaper an errored row can reach, and the one the first cut of
-	// #1815 missed: `snap.pid == 0` takes an errored row whose PID discovery
-	// never bound, after readyTTL (30 minutes) rather than after the twelve
-	// hours that state was promised. Consulted here for the same reason as at
-	// every other reaper predicate — see PIDManager.retainsError.
+	// #1815 missed: the `snap.pid == 0` arm below takes an errored row whose
+	// PID discovery never bound, after readyTTL (30 minutes) rather than after
+	// the twelve hours that state was promised. Consulted here for the same
+	// reason as at every other reaper predicate — see PIDManager.retainsError.
 	if pm.retainsError(snap.state) {
-		return
+		return false
 	}
-	if snap.sessionState == session.StateReady || snap.pid == 0 {
-		pm.log.LogInfo(logComponentSessionDetector, snap.state.SessionID,
-			fmt.Sprintf("%s session (pid=%d) idle for >%v, deleting",
-				snap.sessionState, snap.pid, pm.readyTTL))
-		pm.deleteWithChildren(snap.state,
-			fmt.Sprintf("%s session (pid=%d) idle >%v — liveness sweep", snap.sessionState, snap.pid, pm.readyTTL))
-	}
+	return snap.sessionState == session.StateReady || snap.pid == 0
 }
 
 // reapStaleChild deletes snap when it's a finished or zombie subagent (ready,
