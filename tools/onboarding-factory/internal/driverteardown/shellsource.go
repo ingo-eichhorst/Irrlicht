@@ -209,96 +209,145 @@ func (s *Source) Body(name string) (string, bool) {
 // statement — and attributing "this teardown is gated" wrongly in EITHER
 // direction is the failure mode INV-1 is about.
 func (s *Source) buildStatements(code []bool) error {
-	var conds []string
-	var blocks []string
+	var n nesting
 	for i := 0; i < len(s.lines); i++ {
 		if !code[i] {
 			continue
 		}
 		start := i
-		joined := s.lines[i]
-		words, open := shellWordsOpen(joined)
-		for i+1 < len(s.lines) {
-			if strings.HasSuffix(strings.TrimRight(joined, " \t"), "\\") {
-				joined = strings.TrimSuffix(strings.TrimRight(joined, " \t"), "\\") + " " + s.lines[i+1]
-				i++
-				words, open = shellWordsOpen(joined)
-				continue
-			}
-			// A quote left open at end of line continues onto the next one.
-			// mistral-vibe embeds a multi-line `awk '…'` program whose braces
-			// are DATA; without this they were counted as shell blocks and the
-			// whole file was reported as unreadable.
-			if open == 0 {
-				break
-			}
-			joined += "\n" + s.lines[i+1]
-			i++
-			words, open = shellWordsOpen(joined)
+		joined, words, end, err := s.joinLogicalLine(start)
+		if err != nil {
+			return err
 		}
-		// The joiner ran out of file still looking for the closing quote. Every
-		// remaining line has been swallowed into one quoted word — the sink of
-		// the same class of silent loss the shared scanner closes above, and the
-		// one shape a shared scanner cannot see, because both halves agree the
-		// quote is open. Refuse: an unreadable tail and a clean tail must not be
-		// the same answer.
-		if open != 0 {
-			return fmt.Errorf("%s:%d: a %c quote opened on this line is never closed before the "+
-				"end of the file, so every statement after it is swallowed into one quoted word "+
-				"— this file cannot be read, and a check that cannot run must say so",
-				s.Path, start+1, open)
-		}
+		i = end
 		for _, cmd := range splitCommands(words) {
-			words := cmd.words
-			if len(words) == 0 {
+			if len(cmd.words) == 0 {
 				continue
 			}
-			switch words[0] {
-			case "if", "case", "do", "{":
-				blocks = append(blocks, words[0])
-			case "fi", "esac", "done", "}":
-				if len(blocks) == 0 {
-					return fmt.Errorf("%s:%d: `%s` closes a compound statement that was never "+
-						"opened — this file's block structure cannot be read, and a check that "+
-						"cannot run must say so", s.Path, start+1, words[0])
-				}
-				blocks = blocks[:len(blocks)-1]
-			}
-			switch words[0] {
-			case "if":
-				conds = append(conds, strings.Join(words[1:], " "))
-			case "elif":
-				if len(conds) == 0 {
-					return fmt.Errorf("%s:%d: `elif` with no open `if`", s.Path, start+1)
-				}
-				conds[len(conds)-1] = strings.Join(words[1:], " ")
-			case "fi":
-				if len(conds) == 0 {
-					return fmt.Errorf("%s:%d: `fi` with no open `if` — the if/fi structure "+
-						"cannot be read, and a check that cannot run must say so", s.Path, start+1)
-				}
-				conds = conds[:len(conds)-1]
+			if err := n.track(s.Path, start+1, cmd.words); err != nil {
+				return err
 			}
 			st := Statement{
-				Line: start + 1, Text: joined, Words: words,
-				Prefix: cmd.prefix, Func: s.funcAt(start + 1), Depth: len(blocks),
+				Line: start + 1, Text: joined, Words: cmd.words,
+				Prefix: cmd.prefix, Func: s.funcAt(start + 1),
 			}
-			if len(blocks) > 0 {
-				st.Blocks = append([]string(nil), blocks...)
-			}
-			if len(conds) > 0 {
-				st.Conds = append([]string(nil), conds...)
-			}
+			n.stamp(&st)
 			s.stmts = append(s.stmts, st)
 		}
 	}
-	if len(conds) != 0 {
-		return fmt.Errorf("%s: %d `if` block(s) are never closed by `fi` — the if/fi structure "+
-			"cannot be read, and a check that cannot run must say so", s.Path, len(conds))
+	return n.close(s.Path)
+}
+
+// joinLogicalLine gathers the physical lines that form the logical line starting
+// at index i — those held open by a trailing backslash, and those swallowed by a
+// quote left open at end of line — and returns the joined text, its words, and
+// the index of the last physical line it consumed.
+//
+// The open-quote join is not optional. mistral-vibe embeds a multi-line
+// `awk '…'` program whose braces are DATA; without it they were counted as shell
+// blocks and the whole file was reported as unreadable.
+func (s *Source) joinLogicalLine(i int) (joined string, words []string, end int, err error) {
+	start := i
+	joined = s.lines[i]
+	words, open := shellWordsOpen(joined)
+	for i+1 < len(s.lines) {
+		trimmed := strings.TrimRight(joined, " \t")
+		switch {
+		case strings.HasSuffix(trimmed, "\\"):
+			joined = strings.TrimSuffix(trimmed, "\\") + " " + s.lines[i+1]
+		case open != 0:
+			joined += "\n" + s.lines[i+1]
+		default:
+			return joined, words, i, nil
+		}
+		i++
+		words, open = shellWordsOpen(joined)
 	}
-	if len(blocks) != 0 {
+	// The joiner ran out of file still looking for the closing quote. Every
+	// remaining line has been swallowed into one quoted word — the sink of the
+	// same class of silent loss the shared scanner closes in shellWordsOpen, and
+	// the one shape a shared scanner cannot see, because both halves agree the
+	// quote is open. Refuse: an unreadable tail and a clean tail must not be the
+	// same answer.
+	if open != 0 {
+		return "", nil, 0, fmt.Errorf("%s:%d: a %c quote opened on this line is never closed "+
+			"before the end of the file, so every statement after it is swallowed into one "+
+			"quoted word — this file cannot be read, and a check that cannot run must say so",
+			s.Path, start+1, open)
+	}
+	return joined, words, i, nil
+}
+
+// nesting is the compound-block and `if`-condition stack buildStatements carries
+// down a file. The two live in ONE type because they have to agree: a `fi` that
+// popped a block but not a condition would attribute a gate to the wrong
+// statement, and attributing "this teardown is gated" wrongly in either
+// direction is the failure mode INV-1 is about.
+type nesting struct {
+	blocks []string // kinds of the enclosing compound statements, outermost first
+	conds  []string // the `if`/`elif` conditions enclosing, outermost first
+}
+
+// track updates the stack for one command's leading word, refusing whenever the
+// file's structure does not balance rather than truncating to a best effort.
+func (n *nesting) track(path string, line int, words []string) error {
+	switch words[0] {
+	case "if":
+		n.blocks = append(n.blocks, words[0])
+		n.conds = append(n.conds, strings.Join(words[1:], " "))
+	case "case", "do", "{":
+		n.blocks = append(n.blocks, words[0])
+	case "fi":
+		if err := n.popBlock(path, line, words[0]); err != nil {
+			return err
+		}
+		if len(n.conds) == 0 {
+			return fmt.Errorf("%s:%d: `fi` with no open `if` — the if/fi structure "+
+				"cannot be read, and a check that cannot run must say so", path, line)
+		}
+		n.conds = n.conds[:len(n.conds)-1]
+	case "esac", "done", "}":
+		return n.popBlock(path, line, words[0])
+	case "elif":
+		if len(n.conds) == 0 {
+			return fmt.Errorf("%s:%d: `elif` with no open `if`", path, line)
+		}
+		n.conds[len(n.conds)-1] = strings.Join(words[1:], " ")
+	}
+	return nil
+}
+
+func (n *nesting) popBlock(path string, line int, word string) error {
+	if len(n.blocks) == 0 {
+		return fmt.Errorf("%s:%d: `%s` closes a compound statement that was never "+
+			"opened — this file's block structure cannot be read, and a check that "+
+			"cannot run must say so", path, line, word)
+	}
+	n.blocks = n.blocks[:len(n.blocks)-1]
+	return nil
+}
+
+// stamp records where in the nesting a statement was found. Depth and Blocks are
+// read off the same slice, so the count and the kinds cannot drift apart.
+func (n *nesting) stamp(st *Statement) {
+	st.Depth = len(n.blocks)
+	if len(n.blocks) > 0 {
+		st.Blocks = append([]string(nil), n.blocks...)
+	}
+	if len(n.conds) > 0 {
+		st.Conds = append([]string(nil), n.conds...)
+	}
+}
+
+// close refuses a file whose stacks never emptied.
+func (n *nesting) close(path string) error {
+	if len(n.conds) != 0 {
+		return fmt.Errorf("%s: %d `if` block(s) are never closed by `fi` — the if/fi structure "+
+			"cannot be read, and a check that cannot run must say so", path, len(n.conds))
+	}
+	if len(n.blocks) != 0 {
 		return fmt.Errorf("%s: %d compound statement(s) are never closed — the block structure "+
-			"cannot be read, and a check that cannot run must say so", s.Path, len(blocks))
+			"cannot be read, and a check that cannot run must say so", path, len(n.blocks))
 	}
 	return nil
 }
@@ -417,9 +466,8 @@ func shellWordsOpen(s string) (words []string, open rune) {
 		c := rs[i]
 		switch {
 		case c == '\\' && i+1 < len(rs):
-			cur.WriteRune(c)
+			cur.WriteString(string(rs[i : i+2]))
 			i++
-			cur.WriteRune(rs[i])
 		case c == '#' && cur.Len() == 0:
 			// A comment starts only at a word boundary — and it runs to the end
 			// of the text, so nothing after it can open a quote.
@@ -427,34 +475,20 @@ func shellWordsOpen(s string) (words []string, open rune) {
 			return words, 0
 		case c == ' ' || c == '\t':
 			flush()
-		case c == '\'':
-			j := i + 1
-			for j < len(rs) && rs[j] != '\'' {
-				j++
-			}
-			if j >= len(rs) {
-				j = len(rs) - 1
-				open = '\''
-			}
-			cur.WriteString(string(rs[i : j+1]))
-			i = j
-		case c == '"':
-			j, closed := scanQuotedOK(rs, i)
+		case c == '\'' || c == '"':
+			j, closed := scanQuoted(rs, i)
 			if !closed {
-				open = '"'
+				open = c
 			}
 			cur.WriteString(string(rs[i : j+1]))
 			i = j
-		case c == '$' && i+1 < len(rs) && (rs[i+1] == '(' || rs[i+1] == '{'):
+		case opensExpansion(rs, i):
 			j := scanExpansion(rs, i)
 			cur.WriteString(string(rs[i : j+1]))
 			i = j
 		case c == ';' || c == '|' || c == '&':
 			flush()
-			j := i
-			for j+1 < len(rs) && rs[j+1] == c {
-				j++
-			}
+			j := runEnd(rs, i)
 			words = append(words, string(rs[i:j+1]))
 			i = j
 		case c == '(' || c == ')':
@@ -468,21 +502,68 @@ func shellWordsOpen(s string) (words []string, open rune) {
 	return words, open
 }
 
-// scanQuotedOK returns the index of the `"` closing the one at i, stepping over
-// escapes and over `$( … )` / `${ … }` (which may contain quotes of their own).
-// An unterminated quote yields the last index and closed=false.
-func scanQuotedOK(rs []rune, i int) (int, bool) {
+// scanQuoted returns the index of the quote closing the one at i, and whether it
+// found one. An unterminated quote yields the last index and closed=false.
+//
+// The two quote kinds need different scans — a single-quoted string has no
+// escapes and no expansions — but they report the SAME shape, so shellWordsOpen
+// handles them in one arm and the "which quote is still open" answer cannot come
+// to depend on which quote it was. That is the same unification, for the same
+// reason, that shellWordsOpen's own doc comment sets out.
+func scanQuoted(rs []rune, i int) (int, bool) {
+	if rs[i] == '\'' {
+		return scanSingleQuoted(rs, i)
+	}
+	return scanDoubleQuoted(rs, i)
+}
+
+// scanSingleQuoted returns the index of the `'` closing the one at i. Nothing
+// inside a single-quoted string is special, so the scan is a plain search.
+func scanSingleQuoted(rs []rune, i int) (int, bool) {
+	for j := i + 1; j < len(rs); j++ {
+		if rs[j] == '\'' {
+			return j, true
+		}
+	}
+	return len(rs) - 1, false
+}
+
+// scanDoubleQuoted returns the index of the `"` closing the one at i, stepping
+// over escapes and over `$( … )` / `${ … }` (which may contain quotes of their
+// own).
+func scanDoubleQuoted(rs []rune, i int) (int, bool) {
 	for j := i + 1; j < len(rs); j++ {
 		switch {
 		case rs[j] == '\\':
 			j++
-		case rs[j] == '$' && j+1 < len(rs) && (rs[j+1] == '(' || rs[j+1] == '{'):
+		case opensExpansion(rs, j):
 			j = scanExpansion(rs, j)
 		case rs[j] == '"':
 			return j, true
 		}
 	}
 	return len(rs) - 1, false
+}
+
+// opensExpansion reports whether a `$( … )` or `${ … }` expansion begins at i.
+//
+// One spelling, consulted by both the word scanner and the double-quote scanner.
+// They have to agree about where an expansion starts: a `"` or a `#` inside one
+// is not a quote or a comment, and shellWordsOpen's doc comment is the record of
+// what it cost the last time two scanners in this file disagreed about a
+// boundary.
+func opensExpansion(rs []rune, i int) bool {
+	return rs[i] == '$' && i+1 < len(rs) && (rs[i+1] == '(' || rs[i+1] == '{')
+}
+
+// runEnd returns the last index of the run of the operator character at i, so
+// `&&` and `;;` come out as one word rather than two.
+func runEnd(rs []rune, i int) int {
+	j := i
+	for j+1 < len(rs) && rs[j+1] == rs[i] {
+		j++
+	}
+	return j
 }
 
 // scanExpansion returns the index of the bracket closing the expansion at i.

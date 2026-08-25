@@ -178,6 +178,22 @@ func LaunchCount(src string) int {
 	return n
 }
 
+// tmuxArgs reports whether a statement runs `tmux <verb>`, returning the
+// command's arguments (verb included) when it does.
+//
+// It is the ONE place the shape of a tmux invocation is recognised. INV-1 asks
+// for `kill-session` and INV-3 asks for `new-session` from two different places;
+// a third and fourth hand-written spelling of the same test is a place they
+// could come to disagree about what counts as a launch — and INV-3's own vacuity
+// refusal fires precisely when the lexer and the text disagree about that.
+func tmuxArgs(st Statement, verb string) ([]string, bool) {
+	name, args, ok := st.Command()
+	if !ok || name != "tmux" || len(args) == 0 || args[0] != verb {
+		return nil, false
+	}
+	return args, true
+}
+
 // CheckDriver grades one driver against INV-1 through INV-4.
 //
 // libs are the shell libraries the driver sources. They are read for the
@@ -224,22 +240,22 @@ func CheckDriver(driver File, libs []File) ([]Finding, error) {
 	}
 	findings := checkTrapExists(driver, traps)
 
-	inv1, err := checkTeardownUngated(src, traps)
-	findings = append(findings, inv1...)
-	if err != nil {
-		return refuse(findings, err)
-	}
-
-	inv3, err := checkSessionNamesCarryPID(src, parsedLibs)
-	findings = append(findings, inv3...)
-	if err != nil {
-		return refuse(findings, err)
-	}
-
-	inv4, err := checkVerdictCannotBeStale(src, traps)
-	findings = append(findings, inv4...)
-	if err != nil {
-		return refuse(findings, err)
+	// INV-1, INV-3, INV-4 — in that order, each keeping the findings already
+	// established when it refuses. That rule is written ONCE here rather than
+	// once per invariant on purpose: `return nil, err` from any single one of
+	// them discards a finding that is the CAUSE of its own refusal, which is the
+	// defect gradedError was added for, and the shape a fifth invariant spliced
+	// in below would otherwise be free to repeat.
+	for _, grade := range []func() ([]Finding, error){
+		func() ([]Finding, error) { return checkTeardownUngated(src, traps) },
+		func() ([]Finding, error) { return checkSessionNamesCarryPID(src, parsedLibs) },
+		func() ([]Finding, error) { return checkVerdictCannotBeStale(src, traps) },
+	} {
+		found, err := grade()
+		findings = append(findings, found...)
+		if err != nil {
+			return refuse(findings, err)
+		}
 	}
 	return findings, nil
 }
@@ -305,46 +321,68 @@ type exitTrap struct {
 func exitTraps(src *Source, libs []*Source) ([]exitTrap, error) {
 	var out []exitTrap
 	for _, st := range src.Statements() {
-		name, args, ok := st.Command()
-		if !ok || name != "trap" || len(args) < 2 {
+		handler, arms := armedEXITHandler(st)
+		if !arms {
 			continue
 		}
-		if !argsNameEXIT(args[1:]) {
-			continue
+		t, err := resolveHandler(src, libs, st.Line, handler)
+		if err != nil {
+			return nil, err
 		}
-		handler := unquote(args[0])
-		if handler == "-" || handler == "" {
-			continue // `trap - EXIT` disarms; it arms nothing to grade
-		}
-		t := exitTrap{line: st.Line}
-		if isIdentifier(handler) {
-			owner, body, found := lookupFunc(handler, src, libs)
-			if !found {
-				return nil, fmt.Errorf("%s:%d: `trap %s EXIT` names a handler that is defined "+
-					"neither in this driver nor in any library it sources — the trap cannot be "+
-					"graded, and a check that cannot run must say so", src.Path, st.Line, handler)
-			}
-			t.fn, t.body = handler, body
-			for _, s := range owner.Statements() {
-				if s.Func == handler {
-					t.stmts = append(t.stmts, s)
-				}
-			}
-		} else {
-			t.body = handler
-			// An inline handler is one quoted word, so its commands are not
-			// statements of the enclosing file. Parse the word's text as its
-			// own source rather than reading the handler as an opaque string.
-			inline, err := Parse(fmt.Sprintf("%s:%d (inline EXIT trap)", src.Path, st.Line), handler)
-			if err != nil {
-				return nil, err
-			}
-			t.stmts = inline.Statements()
-		}
-		t.tearsDown = strings.Contains(t.body, "tmux kill-session")
 		out = append(out, t)
 	}
 	return out, nil
+}
+
+// armedEXITHandler names the handler a statement ARMS for EXIT, if it arms one.
+// `trap - EXIT` disarms and arms nothing to grade — see the package comment for
+// why a disarm is deliberately left ungraded rather than given a rule that would
+// look like it grades this and does not.
+func armedEXITHandler(st Statement) (string, bool) {
+	name, args, ok := st.Command()
+	if !ok || name != "trap" || len(args) < 2 || !argsNameEXIT(args[1:]) {
+		return "", false
+	}
+	handler := unquote(args[0])
+	if handler == "-" || handler == "" {
+		return "", false
+	}
+	return handler, true
+}
+
+// resolveHandler resolves one armed trap's handler to the body and the
+// statements the invariants read. A handler it cannot resolve is an error:
+// "this driver has no teardown trap" and "the trap's handler could not be found"
+// must not be the same answer.
+func resolveHandler(src *Source, libs []*Source, line int, handler string) (exitTrap, error) {
+	t := exitTrap{line: line}
+	switch {
+	case isIdentifier(handler):
+		owner, body, found := lookupFunc(handler, src, libs)
+		if !found {
+			return exitTrap{}, fmt.Errorf("%s:%d: `trap %s EXIT` names a handler that is defined "+
+				"neither in this driver nor in any library it sources — the trap cannot be "+
+				"graded, and a check that cannot run must say so", src.Path, line, handler)
+		}
+		t.fn, t.body = handler, body
+		for _, s := range owner.Statements() {
+			if s.Func == handler {
+				t.stmts = append(t.stmts, s)
+			}
+		}
+	default:
+		t.body = handler
+		// An inline handler is one quoted word, so its commands are not
+		// statements of the enclosing file. Parse the word's text as its own
+		// source rather than reading the handler as an opaque string.
+		inline, err := Parse(fmt.Sprintf("%s:%d (inline EXIT trap)", src.Path, line), handler)
+		if err != nil {
+			return exitTrap{}, err
+		}
+		t.stmts = inline.Statements()
+	}
+	t.tearsDown = strings.Contains(t.body, "tmux kill-session")
+	return t, nil
 }
 
 func argsNameEXIT(args []string) bool {
@@ -470,22 +508,12 @@ func checkTeardownUngated(src *Source, traps []exitTrap) ([]Finding, error) {
 	}
 
 	for _, st := range src.Statements() {
-		name, args, ok := st.Command()
-		if !ok || name != "tmux" || len(args) == 0 || args[0] != "kill-session" {
+		if _, kills := tmuxArgs(st, "kill-session"); !kills {
 			continue
 		}
-		where := ""
-		switch {
-		case st.Func == "" && isStepDispatchArm(st):
-			// A per-step arm of a top-level dispatch. Step-level work that
-			// happens not to live in a function — see isStepDispatchArm.
+		where, isTeardown := teardownSite(st, handlerFuncs)
+		if !isTeardown {
 			continue
-		case st.Func == "":
-			where = "this top-level teardown"
-		case handlerFuncs[st.Func]:
-			where = fmt.Sprintf("this teardown inside the EXIT-trap handler %s()", st.Func)
-		default:
-			continue // step-level: legitimately allowed to gate on liveness
 		}
 		sites++
 		if !gatedOnLiveness(st) {
@@ -503,6 +531,25 @@ func checkTeardownUngated(src *Source, traps []exitTrap) ([]Finding, error) {
 			"cannot run must say so", src.Path)
 	}
 	return findings, nil
+}
+
+// teardownSite reports whether a `tmux kill-session` statement is END-OF-RUN
+// teardown — the position INV-1 requires to be ungated — and names it for the
+// finding. It is the structural classification checkTeardownUngated documents,
+// stated once: the arms below are that comment's two-line table.
+func teardownSite(st Statement, handlerFuncs map[string]bool) (string, bool) {
+	switch {
+	case st.Func == "" && isStepDispatchArm(st):
+		// A per-step arm of a top-level dispatch. Step-level work that happens
+		// not to live in a function — see isStepDispatchArm.
+		return "", false
+	case st.Func == "":
+		return "this top-level teardown", true
+	case handlerFuncs[st.Func]:
+		return fmt.Sprintf("this teardown inside the EXIT-trap handler %s()", st.Func), true
+	default:
+		return "", false // step-level: legitimately allowed to gate on liveness
+	}
 }
 
 // isStepDispatchArm reports whether a statement sits in a `case` arm that a
@@ -640,74 +687,59 @@ func checkVerdictCannotBeStale(src *Source, traps []exitTrap) ([]Finding, error)
 	lastLaunch := lastLaunchLine(src)
 	var findings []Finding
 	for _, t := range traps {
-		write, idx, v, ok := verdictWrite(t.stmts)
+		write, ok := verdictWrite(t.stmts)
 		if !ok {
 			continue // derived exemption: this handler writes no verdict variable
 		}
-		initial, ok := initialVerdict(src, v, t.line)
+		initial, ok := initialVerdict(src, write.v, t.line)
 		if !ok {
 			return nil, fmt.Errorf("%s:%d: the EXIT-trap handler writes $%s to %s, but %s is "+
 				"never assigned unconditionally at top level before the trap is armed — INV-4 "+
 				"has no initial value to compare against and graded nothing, and a check that "+
-				"cannot run must say so", src.Path, write.Line, v, exitReasonFile, v)
+				"cannot run must say so", src.Path, write.line, write.v, exitReasonFile, write.v)
 		}
-		if f := gradeVerdictGuard(src, t, idx, v, initial, lastLaunch); f != nil {
+		q := staleVerdict{
+			src: src, trap: t, write: write, initial: initial,
+			ep: epilogue{trapLine: t.line, lastLaunch: lastLaunch},
+		}
+		if f := q.grade(); f != nil {
 			findings = append(findings, *f)
 		}
 	}
 	return findings, nil
 }
 
-// gradeVerdictGuard returns the INV-4 finding for one handler, or nil when the
-// handler satisfies either shape. The reason it reports is the most specific
-// one that applies, so the message names what to change rather than restating
-// the rule.
-func gradeVerdictGuard(src *Source, t exitTrap, writeIdx int, v, initial string, lastLaunch int) *Finding {
-	// (b) fail-closed: the success path itself moves the verdict off its
-	// initialiser, so an abort and a completed run write different bytes.
-	for _, a := range epilogueAssignments(src, v, t.line, lastLaunch) {
-		if a != initial {
-			return nil
-		}
-	}
+// staleVerdict is INV-4's question about ONE EXIT-trap handler, with every fact
+// the answer needs in one place instead of threaded through as loose strings and
+// line numbers: which variable the handler writes to the verdict file and where
+// in the handler that write sits, the value the variable holds when the trap
+// arms, and the epilogue window an assignment has to fall in to count as
+// progress through the run.
+type staleVerdict struct {
+	src     *Source
+	trap    exitTrap
+	write   verdictWriteSite
+	initial string
+	ep      epilogue
+}
 
-	reason := ""
-	for _, st := range t.stmts[:writeIdx] {
-		rhs, assigns := assignedValue(st, v)
-		if !assigns {
-			continue
-		}
-		others := condVarsExcept(strings.TrimSpace(st.Prefix+" "+strings.Join(st.Conds, " ")), v)
-		if len(others) == 0 {
-			reason = fmt.Sprintf("the only re-assignment of $%s before the write is guarded by "+
-				"nothing but $%s itself, which is equally true on a run that completed", v, v)
-			continue
-		}
-		if _, _, isVar := soleVar(rhs); !isVar && unquote(rhs) == initial {
-			reason = fmt.Sprintf("the guard on the write assigns $%s its own initial value %q, "+
-				"so it changes nothing", v, initial)
-			continue
-		}
-		set := false
-		for _, o := range others {
-			if len(epilogueAssignments(src, o, t.line, lastLaunch)) > 0 {
-				set = true
-			}
-		}
-		if set {
-			return nil // (a) guard, satisfied
-		}
-		reason = fmt.Sprintf("the guard on the write consults %s, and nothing assigns any of "+
-			"them unconditionally at top level after the trap is armed and after the last "+
-			"`tmux new-session` — so no amount of progress through the run can change what "+
-			"the handler writes", strings.Join(dollarize(others), ", "))
+// grade returns the INV-4 finding for this handler, or nil when it satisfies
+// either shape. The reason it reports is the most specific one that applies, so
+// the message names what to change rather than restating the rule.
+func (q staleVerdict) grade() *Finding {
+	if q.failsClosed() {
+		return nil
+	}
+	reason, guarded := q.guardReason()
+	if guarded {
+		return nil
 	}
 	if reason == "" {
 		reason = fmt.Sprintf("the handler writes $%s unconditionally, and nothing between the "+
-			"trap arming and the write can change it", v)
+			"trap arming and the write can change it", q.write.v)
 	}
 	return &Finding{
-		Invariant: "INV-4", Path: src.Path, Line: t.line, Excerpt: t.body,
+		Invariant: "INV-4", Path: q.src.Path, Line: q.trap.line, Excerpt: q.trap.body,
 		Detail: fmt.Sprintf("this EXIT-trap handler can write %s with $%s still at its initial "+
 			"value %q: %s. Before an EXIT trap existed, an abort wrote NO %s and run-cell.sh:443 "+
 			"read the absence as `unknown`; a handler that writes the initialiser turns that into "+
@@ -715,15 +747,81 @@ func gradeVerdictGuard(src *Source, t exitTrap, writeIdx int, v, initial string,
 			"success while leaking. Either guard the write on a sentinel the epilogue sets "+
 			"unconditionally at top level (aider's `REACHED_EPILOGUE`), or start $%s at a fault "+
 			"and promote it on the success path.",
-			exitReasonFile, v, initial, reason, exitReasonFile, v),
+			exitReasonFile, q.write.v, q.initial, reason, exitReasonFile, q.write.v),
 	}
 }
 
+// failsClosed is shape (b): the epilogue itself moves the verdict variable off
+// its initialiser, so an abort and a completed run write different bytes and no
+// guard is needed. A driver whose verdict starts at a fault and is promoted to
+// success at the end satisfies INV-4 this way — a rule that failed it would be
+// prescribing one implementation rather than the property.
+func (q staleVerdict) failsClosed() bool {
+	for _, a := range q.ep.assigns(q.src, q.write.v) {
+		if a != q.initial {
+			return true
+		}
+	}
+	return false
+}
+
+// guardReason looks for shape (a) among the handler statements that run BEFORE
+// the verdict write: a conditional re-assignment of the verdict variable whose
+// condition consults some OTHER variable the epilogue moves, and which does not
+// assign the initial value straight back.
+//
+// It reports guarded=true the moment it finds one. Otherwise it returns the most
+// specific reason it saw — the LAST one, matching the order the statements run
+// in — so the finding names what to change.
+func (q staleVerdict) guardReason() (reason string, guarded bool) {
+	v := q.write.v
+	for _, st := range q.trap.stmts[:q.write.idx] {
+		rhs, assigns := assignedValue(st, v)
+		if !assigns {
+			continue
+		}
+		others := condVarsExcept(guardCondition(st), v)
+		_, _, rhsIsVar := soleVar(rhs)
+		switch {
+		case len(others) == 0:
+			reason = fmt.Sprintf("the only re-assignment of $%s before the write is guarded by "+
+				"nothing but $%s itself, which is equally true on a run that completed", v, v)
+		case !rhsIsVar && unquote(rhs) == q.initial:
+			reason = fmt.Sprintf("the guard on the write assigns $%s its own initial value %q, "+
+				"so it changes nothing", v, q.initial)
+		case q.ep.setsAny(q.src, others):
+			return "", true // (a) guard, satisfied
+		default:
+			reason = fmt.Sprintf("the guard on the write consults %s, and nothing assigns any of "+
+				"them unconditionally at top level after the trap is armed and after the last "+
+				"`tmux new-session` — so no amount of progress through the run can change what "+
+				"the handler writes", strings.Join(dollarize(others), ", "))
+		}
+	}
+	return reason, false
+}
+
+// guardCondition is the code a statement's execution is conditional on: the
+// `[[ … ]]` earlier in its own logical line, plus every enclosing `if`/`elif`.
+func guardCondition(st Statement) string {
+	return strings.TrimSpace(st.Prefix + " " + strings.Join(st.Conds, " "))
+}
+
+// verdictWriteSite is the handler command that redirects into the staging
+// contract's verdict file: the line it sits on, its index among the handler's
+// statements — so the guard search knows which statements run before it — and
+// the variable whose value it writes.
+type verdictWriteSite struct {
+	line int
+	idx  int
+	v    string
+}
+
 // verdictWrite finds the handler command that redirects into the verdict file
-// and names the variable whose value it writes, with its index in the handler.
-// A handler that writes a literal reports ok=false: there is no initial value
-// for it to be stale at, which is the derived half of INV-4's precondition.
-func verdictWrite(stmts []Statement) (st Statement, idx int, v string, ok bool) {
+// and names the variable whose value it writes. A handler that writes a literal
+// reports ok=false: there is no initial value for it to be stale at, which is
+// the derived half of INV-4's precondition.
+func verdictWrite(stmts []Statement) (verdictWriteSite, bool) {
 	for i, s := range stmts {
 		if !writesVerdictFile(s) {
 			continue
@@ -734,12 +832,12 @@ func verdictWrite(stmts []Statement) (st Statement, idx int, v string, ok bool) 
 		}
 		for _, a := range args {
 			if name, pos, isVar := soleVar(a); isVar && pos == 0 && name != "" {
-				return s, i, name, true
+				return verdictWriteSite{line: s.Line, idx: i, v: name}, true
 			}
 		}
-		return s, i, "", false
+		return verdictWriteSite{}, false
 	}
-	return Statement{}, 0, "", false
+	return verdictWriteSite{}, false
 }
 
 // writesVerdictFile reports whether a command redirects into the staging
@@ -775,14 +873,23 @@ func initialVerdict(src *Source, v string, trapLine int) (string, bool) {
 	return val, found
 }
 
-// epilogueAssignments lists the values assigned to a variable by an
-// unconditional top-level statement placed after the trap arms AND after the
-// driver's last tmux launch — the name-free structural stand-in for "the
-// epilogue set it, once the run's work was behind it".
-func epilogueAssignments(src *Source, v string, trapLine, lastLaunch int) []string {
+// epilogue is the structural window INV-4's "the epilogue set it" rests on: the
+// region of a driver after its EXIT trap arms AND after its last `tmux
+// new-session`. An unconditional top-level assignment placed there is what "the
+// run got far enough to have formed a verdict" looks like with the variable
+// NAMES removed — which is what keeps INV-4 from being satisfiable by naming a
+// sentinel the rule already knows. See checkVerdictCannotBeStale.
+type epilogue struct {
+	trapLine   int
+	lastLaunch int
+}
+
+// assigns lists the values an unconditional top-level statement in the epilogue
+// gives to v.
+func (e epilogue) assigns(src *Source, v string) []string {
 	var out []string
 	for _, st := range src.Statements() {
-		if st.Line <= trapLine || st.Line <= lastLaunch || !isUnconditionalTopLevel(st) {
+		if st.Line <= e.trapLine || st.Line <= e.lastLaunch || !isUnconditionalTopLevel(st) {
 			continue
 		}
 		if rhs, ok := assignedValue(st, v); ok {
@@ -790,6 +897,18 @@ func epilogueAssignments(src *Source, v string, trapLine, lastLaunch int) []stri
 		}
 	}
 	return out
+}
+
+// setsAny reports whether the epilogue assigns any of the named variables — the
+// test that separates a guard consulting a live sentinel from one consulting a
+// variable no amount of progress through the run can move.
+func (e epilogue) setsAny(src *Source, names []string) bool {
+	for _, n := range names {
+		if len(e.assigns(src, n)) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // isUnconditionalTopLevel reports whether a statement runs on every path
@@ -811,8 +930,7 @@ func assignedValue(st Statement, v string) (string, bool) {
 func lastLaunchLine(src *Source) int {
 	last := 0
 	for _, st := range src.Statements() {
-		if name, args, ok := st.Command(); ok && name == "tmux" && len(args) > 0 &&
-			args[0] == "new-session" {
+		if _, launches := tmuxArgs(st, "new-session"); launches {
 			last = st.Line
 		}
 	}
@@ -981,8 +1099,8 @@ func newNameFlow(src *Source, libs []*Source) (*nameFlow, error) {
 func (f *nameFlow) seed(src *Source) error {
 	launches := 0
 	for _, st := range src.Statements() {
-		name, args, ok := st.Command()
-		if !ok || name != "tmux" || len(args) == 0 || args[0] != "new-session" {
+		args, launched := tmuxArgs(st, "new-session")
+		if !launched {
 			continue
 		}
 		launches++
@@ -1018,47 +1136,51 @@ func flagValue(args []string, flag string) (string, bool) {
 }
 
 // propagate runs one pass of the closure over one file, reporting whether it
-// learned anything new.
+// learned anything new. The closure grows along two edges, and they are graded
+// separately below because they are different relations: an ASSIGNMENT relates
+// two variables (or a variable and one of its function's parameters), while a
+// CALL relates an argument to the parameter position it lands on.
 func (f *nameFlow) propagate(src *Source) bool {
 	changed := false
 	for _, st := range src.Statements() {
-		for _, a := range st.Assignments() {
-			lhs, rhs := a[0], a[2]
-			v, positional, isVar := soleVar(rhs)
-			if !isVar {
-				continue
-			}
-			switch {
-			case positional > 0:
-				// Marked against THIS file's definition. Marking a definition no
-				// call resolves to is harmless — nothing reads that key — and
-				// keeping it unconditional keeps the fixpoint a single pass.
-				ref := funcRef{file: src.Path, name: st.Func}
-				if f.vars[lhs] && st.Func != "" && !f.posHas(ref, positional) {
-					f.markPos(ref, positional)
-					changed = true
-				}
-			default:
-				if f.vars[lhs] && !f.vars[v] {
-					f.vars[v] = true
-					changed = true
-				}
-				if f.vars[v] && !f.vars[lhs] {
-					f.vars[lhs] = true
-					changed = true
-				}
-			}
+		if f.propagateAssignments(src.Path, st) {
+			changed = true
 		}
-		name, args, ok := st.Command()
-		if !ok || len(f.posOf(name)) == 0 {
+		if f.propagateCallArgs(st) {
+			changed = true
+		}
+	}
+	return changed
+}
+
+// propagateAssignments walks one statement's `LHS=RHS` pairs. `local sess="$1"`
+// inside a function marks that function's PARAMETER position; everything else
+// relates two variables, and the relation runs both ways — a name-carrying
+// variable assigned from another makes that other name-carrying too, which is
+// what walks the closure backwards from the launch to the text that mints it.
+func (f *nameFlow) propagateAssignments(path string, st Statement) bool {
+	changed := false
+	for _, a := range st.Assignments() {
+		lhs, rhs := a[0], a[2]
+		v, positional, isVar := soleVar(rhs)
+		switch {
+		case !isVar:
 			continue
-		}
-		for n := range f.posOf(name) {
-			if n > len(args) {
+		case positional > 0:
+			// Marked against THIS file's definition. Marking a definition no
+			// call resolves to is harmless — nothing reads that key — and
+			// keeping it unconditional keeps the fixpoint a single pass.
+			if !f.vars[lhs] || st.Func == "" {
 				continue
 			}
-			if v, _, isVar := soleVar(args[n-1]); isVar && v != "" && !f.vars[v] {
-				f.vars[v] = true
+			if f.markPos(funcRef{file: path, name: st.Func}, positional) {
+				changed = true
+			}
+		default:
+			if f.vars[lhs] && f.markVar(v) {
+				changed = true
+			}
+			if f.vars[v] && f.markVar(lhs) {
 				changed = true
 			}
 		}
@@ -1066,13 +1188,46 @@ func (f *nameFlow) propagate(src *Source) bool {
 	return changed
 }
 
-func (f *nameFlow) posHas(fn funcRef, n int) bool { return f.pos[fn][n] }
+// propagateCallArgs marks the variable passed at a name-carrying argument
+// position of the ONE definition this call resolves to.
+func (f *nameFlow) propagateCallArgs(st Statement) bool {
+	name, args, ok := st.Command()
+	if !ok {
+		return false
+	}
+	changed := false
+	for n := range f.posOf(name) {
+		if n > len(args) {
+			continue
+		}
+		if v, _, isVar := soleVar(args[n-1]); isVar && v != "" && f.markVar(v) {
+			changed = true
+		}
+	}
+	return changed
+}
 
-func (f *nameFlow) markPos(fn funcRef, n int) {
+// markVar records that a variable carries a tmux session name, reporting whether
+// that was new — which is what drives the fixpoint to a halt.
+func (f *nameFlow) markVar(v string) bool {
+	if f.vars[v] {
+		return false
+	}
+	f.vars[v] = true
+	return true
+}
+
+// markPos records that argument n of one function DEFINITION carries a session
+// name, reporting whether that was new.
+func (f *nameFlow) markPos(fn funcRef, n int) bool {
+	if f.pos[fn][n] {
+		return false
+	}
 	if f.pos[fn] == nil {
 		f.pos[fn] = map[int]bool{}
 	}
 	f.pos[fn][n] = true
+	return true
 }
 
 // posOf gives the name-carrying argument positions of the ONE definition a call
@@ -1091,17 +1246,15 @@ func (f *nameFlow) posOf(fn string) map[int]bool {
 // name-carrying argument position.
 func (f *nameFlow) mintSites(src *Source) []mintSite {
 	out := append([]mintSite(nil), f.seeds...)
+	add := func(line int, word string) {
+		if lit, ok := composedLiteral(word); ok {
+			out = append(out, mintSite{line: line, literal: lit})
+		}
+	}
 	for _, st := range src.Statements() {
 		for _, a := range st.Assignments() {
-			lhs, rhs := a[0], a[2]
-			if !f.vars[lhs] {
-				continue
-			}
-			if _, _, isVar := soleVar(rhs); isVar {
-				continue
-			}
-			if lit := unquote(rhs); strings.TrimSpace(lit) != "" {
-				out = append(out, mintSite{line: st.Line, literal: lit})
+			if lhs, rhs := a[0], a[2]; f.vars[lhs] {
+				add(st.Line, rhs)
 			}
 		}
 		name, args, ok := st.Command()
@@ -1112,17 +1265,30 @@ func (f *nameFlow) mintSites(src *Source) []mintSite {
 			if n > len(args) {
 				continue
 			}
-			arg := args[n-1]
-			if _, _, isVar := soleVar(arg); isVar {
-				continue
-			}
-			if lit := unquote(arg); strings.TrimSpace(lit) != "" {
-				out = append(out, mintSite{line: st.Line, literal: lit})
-			}
+			add(st.Line, args[n-1])
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].line < out[j].line })
 	return out
+}
+
+// composedLiteral reports the text a word contributes when it MINTS a name
+// rather than merely carrying one: a bare variable expansion is the closure's
+// business and not a mint site, and empty text names nothing.
+//
+// Deliberately not shared with nameFlow.seed, whose test differs: at a launch,
+// `tmux new-session -s "$1"` is a POSITIONAL expansion that soleVar reports as a
+// variable with no name, and seed grades it as a literal — a session name it
+// cannot trace is one INV-3 must still report on, not one it quietly drops.
+func composedLiteral(word string) (string, bool) {
+	if _, _, isVar := soleVar(word); isVar {
+		return "", false
+	}
+	lit := unquote(word)
+	if strings.TrimSpace(lit) == "" {
+		return "", false
+	}
+	return lit, true
 }
 
 // Adapters lists every adapter in the catalog that ships a driver, read from
