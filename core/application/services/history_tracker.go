@@ -23,8 +23,17 @@ const (
 	statePriorityWorking = 1
 	statePriorityWaiting = 2
 	// statePriorityNoData encodes empty/unfilled buckets on the wire. Stored
-	// in-memory as int8(-1); only surfaces when bit-packing for transport.
+	// in-memory as int8(bucketNoData); only surfaces when bit-packing for
+	// transport.
 	statePriorityNoData = 3
+
+	// bucketNoData is the IN-MEMORY sentinel for a bucket with no renderable
+	// state — an unfilled slot, or a state this build cannot encode (see
+	// statePriority). Deliberately negative rather than reusing the wire code
+	// 3: a negative value loses every max-merge in upgrade(), so an
+	// unencodable transition can never overwrite activity the bucket already
+	// observed, whereas 3 would outrank waiting and blank it.
+	bucketNoData = -1
 )
 
 var validGranularities = []int{1, 10, 60}
@@ -39,48 +48,112 @@ func validGranularity(sec int) bool {
 }
 
 // statePriority maps a lifecycle state onto the 2-bit code the history bar
-// transports.
+// transports. Anything without a code becomes bucketNoData — a blank slot on
+// both clients, never green (#1807).
 //
-// session.StateError (#1798) HAS NO CODE and falls through to
-// statePriorityReady — an errored bucket paints GREEN on the sparkline, which
-// is precisely the silent-green failure the fourth state exists to remove.
-// That is a known, accepted gap, not an oversight: all four codes of the
-// 2-bit field are already taken (ready/working/waiting/no-data), so carrying a
-// fifth value is a wire-format change across Go, Swift and JS. #1796 cut it
-// from the epic's delivery path for that reason and filed it as #1805/#1807,
-// where this — a red session showing green in its own history — is the
-// concrete symptom to fix rather than "widen the encoding".
+// The cases below are the ENCODABLE set, which is deliberately NOT
+// session.CanonicalStates(): they differ by exactly session.StateError, which
+// is canonical (#1798) yet has no code, because all four slots of the 2-bit
+// field are spent (ready/working/waiting/no-data). Widening the field is a
+// wire-format change across Go, Swift and JS and belongs to #1805; this
+// function must therefore not be rewritten as a session.IsCanonicalState
+// check, which would classify `error` as encodable and hand a 5th value to
+// packPriorities' 2-bit mask. A canonical state added later lands on
+// bucketNoData too, which is the safe direction: blank, not a wrong colour.
 //
-// Deliberately left as `default` rather than an explicit `case StateError`:
-// spelling it out would read as a considered mapping of error onto ready,
-// which it is not.
+// #1807 — THE DECISION, AND ITS WIRE CONSEQUENCE.
+//
+// Before this, the default arm returned statePriorityReady, so `error` and any
+// name written by a newer daemon both painted GREEN, and save() then rewrote
+// history.json with the coerced value — the same destroy-the-user's-data shape
+// #1797/#1806 removed from the session-file reader, one file over.
+//
+// The choice made here is PRESERVE, not downgrade: an unencodable bucket keeps
+// its verbatim state string in ringBuffer.unencodable, so snapshot() — and
+// therefore save() — writes back exactly what was read. Only the RENDERED
+// value degrades. Consequences, stated because they are the part a reader
+// needs and #1815 exists for the case that was neither handled nor mentioned:
+//
+//   - The wire format is UNCHANGED: still 60 buckets × 2 bits = 15 bytes = 20
+//     base64 chars, still four codes. No client decoder moves, and neither
+//     does the length assertion in SessionManager+History.swift, irrlicht.js
+//     or decodeHistoryString. An unencodable bucket ships as
+//     statePriorityNoData, which Swift's historyPriorityToState and the web's
+//     HISTORY_PRIORITY_TO_STATE already map to "" and both render as a blank
+//     slot rather than a colour.
+//   - history.json can therefore now contain a state string this build cannot
+//     render. That is intentional — it is what makes a downgrade
+//     non-destructive, and #1805 will be able to display those buckets once
+//     the encoding widens. A build OLDER than this fix reads such a bucket as
+//     ready/green, exactly as it already did with the value it wrote itself,
+//     so nothing regresses for it.
+//   - Aggregation is unaffected: bucketNoData is negative, so an unencodable
+//     transition loses upgrade()'s max-merge and the activity already recorded
+//     in the open bucket survives (#1805's documented interim behaviour — the
+//     strip shows what the session was doing, not that it errored). Making it
+//     WIN the merge would need the clients to accept a downgrade, which their
+//     priority-based merge cannot express — i.e. a client change, which is
+//     precisely what this fix is scoped to avoid.
 func statePriority(s string) int {
 	switch s {
 	case session.StateWaiting:
 		return statePriorityWaiting
 	case session.StateWorking:
 		return statePriorityWorking
-	default:
+	case session.StateReady:
 		return statePriorityReady
+	default:
+		return bucketNoData
 	}
+}
+
+// wireCode maps an in-memory bucket priority onto the 2-bit code clients
+// decode, so nothing outside this file ever sees the negative sentinel.
+func wireCode(p int8) int8 {
+	if p < 0 {
+		return statePriorityNoData
+	}
+	return p
 }
 
 // ringBuffer is a fixed-size circular buffer of state strings.
 type ringBuffer struct {
-	buckets   [HistoryBucketCount]int8
-	head      int
-	size      int
-	tickMod   int
-	tickAcc   int
-	lastState string
+	buckets [HistoryBucketCount]int8
+	// unencodable holds the verbatim state string for those buckets whose
+	// priority is bucketNoData BECAUSE the state has no 2-bit code — keyed by
+	// bucket index, nil until one appears (#1807). It is what lets save()
+	// write back a value this build cannot render instead of erasing it.
+	// Genuinely empty slots are absent from the map, not stored as "".
+	unencodable map[int]string
+	head        int
+	size        int
+	tickMod     int
+	tickAcc     int
+	lastState   string
 }
 
 func newRingBuffer(granularitySec int) *ringBuffer {
 	rb := &ringBuffer{tickMod: granularitySec}
 	for i := range rb.buckets {
-		rb.buckets[i] = -1
+		rb.buckets[i] = bucketNoData
 	}
 	return rb
+}
+
+// setBucket writes bucket i from a state string, keeping the verbatim value
+// when the state has no 2-bit code. Every write to buckets[] goes through here
+// so buckets and unencodable cannot drift apart.
+func (rb *ringBuffer) setBucket(i int, state string) {
+	p := statePriority(state)
+	rb.buckets[i] = int8(p)
+	if p == bucketNoData && state != "" {
+		if rb.unencodable == nil {
+			rb.unencodable = make(map[int]string, 1)
+		}
+		rb.unencodable[i] = state
+		return
+	}
+	delete(rb.unencodable, i) // no-op on a nil map
 }
 
 func (rb *ringBuffer) current() int {
@@ -93,13 +166,15 @@ func (rb *ringBuffer) current() int {
 func (rb *ringBuffer) upgrade(newState string) {
 	p := int8(statePriority(newState))
 	if rb.size == 0 {
-		rb.buckets[rb.head] = p
+		rb.setBucket(rb.head, newState)
 		rb.head = (rb.head + 1) % HistoryBucketCount
 		rb.size = 1
 	} else {
 		cur := rb.current()
+		// An unencodable state carries bucketNoData, which is negative and so
+		// never wins here — the open bucket keeps the activity it observed.
 		if p > rb.buckets[cur] {
-			rb.buckets[cur] = p
+			rb.setBucket(cur, newState)
 		}
 	}
 	rb.lastState = newState
@@ -115,13 +190,16 @@ func (rb *ringBuffer) tick() (bool, int8) {
 	}
 	rb.tickAcc = 0
 
-	p := int8(statePriority(rb.lastState))
-	rb.buckets[rb.head] = p
+	rb.setBucket(rb.head, rb.lastState)
+	p := rb.buckets[rb.head]
 	rb.head = (rb.head + 1) % HistoryBucketCount
 	if rb.size < HistoryBucketCount {
 		rb.size++
 	}
-	return true, p
+	// The caller ships this straight to clients, so hand back the wire code:
+	// a sealed bucket carrying an unencodable state (or a session that has not
+	// reported one yet) is no-data, which both decoders render blank.
+	return true, wireCode(p)
 }
 
 func (rb *ringBuffer) snapshot() []string {
@@ -131,7 +209,14 @@ func (rb *ringBuffer) snapshot() []string {
 	out := make([]string, rb.size)
 	start := (rb.head - rb.size + HistoryBucketCount) % HistoryBucketCount
 	for i := 0; i < rb.size; i++ {
-		out[i] = priorityToState(rb.buckets[(start+i)%HistoryBucketCount])
+		idx := (start + i) % HistoryBucketCount
+		// A state this build cannot encode round-trips verbatim, so save()
+		// writes back what it read rather than a coerced value (#1807).
+		if s, ok := rb.unencodable[idx]; ok {
+			out[i] = s
+			continue
+		}
+		out[i] = priorityToState(rb.buckets[idx])
 	}
 	return out
 }
@@ -151,12 +236,7 @@ func (rb *ringBuffer) encodePriorities() [HistoryBucketCount]uint8 {
 	start := (rb.head - rb.size + HistoryBucketCount) % HistoryBucketCount
 	dst := HistoryBucketCount - rb.size
 	for i := 0; i < rb.size; i++ {
-		p := rb.buckets[(start+i)%HistoryBucketCount]
-		if p < 0 {
-			out[dst+i] = statePriorityNoData
-		} else {
-			out[dst+i] = uint8(p)
-		}
+		out[dst+i] = uint8(wireCode(rb.buckets[(start+i)%HistoryBucketCount]))
 	}
 	return out
 }
@@ -170,10 +250,11 @@ func (rb *ringBuffer) restore(states []string) {
 		states = states[len(states)-HistoryBucketCount:]
 	}
 	for i := range rb.buckets {
-		rb.buckets[i] = -1
+		rb.buckets[i] = bucketNoData
 	}
+	rb.unencodable = nil
 	for i, s := range states {
-		rb.buckets[i] = int8(statePriority(s))
+		rb.setBucket(i, s)
 	}
 	n := len(states)
 	rb.head = n % HistoryBucketCount
@@ -181,14 +262,27 @@ func (rb *ringBuffer) restore(states []string) {
 	rb.lastState = states[n-1]
 }
 
+// priorityToState is snapshot()'s half of the pair: it names the state a
+// bucket's 2-bit code stands for, and is used only to build the []string that
+// save() persists and Snapshot() returns — never to decode the wire, which the
+// Swift and JS clients do themselves.
+//
+// Everything that is not one of the three encodable codes — an unfilled slot,
+// or a bucket whose unencodable string has already been consumed by snapshot()
+// — yields "" (no data). It must NOT fall back to session.StateReady: that is
+// the mirror half of #1807's bug, where a blank bucket was persisted as `ready`
+// and came back green on the next Load. "" is the same no-data spelling both
+// client decoders already use.
 func priorityToState(p int8) string {
 	switch p {
 	case statePriorityWaiting:
 		return session.StateWaiting
 	case statePriorityWorking:
 		return session.StateWorking
-	default:
+	case statePriorityReady:
 		return session.StateReady
+	default:
+		return ""
 	}
 }
 
@@ -335,7 +429,13 @@ func (h *HistoryTracker) OnTransition(sessionID, newState string, _ time.Time) {
 	}
 	sb.mu.Unlock()
 
-	if emit != nil {
+	// An unencodable state produces no upgrade message. Both clients merge an
+	// upgrade by priority and no-data is their lowest, so such a message could
+	// only ever be discarded — and the ring above did not change either, for
+	// the same reason (see upgrade()). Sending nothing keeps client and server
+	// in step without putting a value on the wire that means "downgrade this
+	// bucket", which the 2-bit contract has no way to say (#1807).
+	if emit != nil && statePriority(newState) != bucketNoData {
 		emit(HistoryEvent{
 			Kind:      HistoryEventUpgrade,
 			SessionID: sessionID,

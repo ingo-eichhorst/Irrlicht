@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -572,6 +573,140 @@ func TestHistoryTracker_EmitSnapshot(t *testing.T) {
 		if p != statePriorityNoData {
 			t.Errorf("fresh snapshot bucket[%d] = %d, want no-data", i, p)
 		}
+	}
+}
+
+// --- #1807: states the 2-bit history strip cannot encode --------------------
+
+// unencodableStates are the two shapes that reach statePriority without a
+// 2-bit code. `error` is canonical (#1798) but has no slot left (#1805);
+// "quarantined" stands in for a state a NEWER daemon wrote into history.json
+// that this build has never heard of — the downgrade/mixed-version path.
+var unencodableStates = []string{"error", "quarantined"}
+
+func readHistoryFile(t *testing.T, dir string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(dir, "history.json"))
+	if err != nil {
+		t.Fatalf("read history.json: %v", err)
+	}
+	return string(b)
+}
+
+// TestHistoryTracker_LoadUnencodableStateIsNotReady is #1807's defect test.
+// A history.json bucket holding a state this build cannot encode must (a) not
+// restore as `ready`, (b) not reach either client as the green `ready` code,
+// and (c) survive the next save() with its original value intact.
+func TestHistoryTracker_LoadUnencodableStateIsNotReady(t *testing.T) {
+	for _, state := range unencodableStates {
+		t.Run(state, func(t *testing.T) {
+			dir := t.TempDir()
+			payload := `{"version":1,"sessions":{"s":{"1":["working","` + state + `","waiting"]}}}`
+			if err := os.WriteFile(filepath.Join(dir, "history.json"), []byte(payload), 0600); err != nil {
+				t.Fatal(err)
+			}
+			ht := NewHistoryTrackerWithDir(dir)
+			ht.Load()
+
+			snap, ok := ht.Snapshot("s", 1)
+			if !ok {
+				t.Fatal("snapshot missing after Load")
+			}
+			if len(snap) != 3 {
+				t.Fatalf("len(snap) = %d, want 3 (%v)", len(snap), snap)
+			}
+			if snap[1] == "ready" {
+				t.Errorf("bucket[1] = %q — an unencodable state must never restore as ready", snap[1])
+			}
+			if snap[1] != state {
+				t.Errorf("bucket[1] = %q, want %q preserved verbatim", snap[1], state)
+			}
+
+			// On the wire it must be the no-data code, which both client
+			// decoders render as a blank slot — never the code that paints green.
+			enc, ok := ht.Encode("s")
+			if !ok {
+				t.Fatal("Encode failed")
+			}
+			buckets := decodeHistoryString(t, enc.History["1"])
+			if got := buckets[HistoryBucketCount-2]; got != statePriorityNoData {
+				t.Errorf("wire bucket = %d, want %d (no-data); %d is ready/green",
+					got, statePriorityNoData, statePriorityReady)
+			}
+
+			// ...and save() must write the original value back, not a coerced one.
+			ht.save()
+			if raw := readHistoryFile(t, dir); !strings.Contains(raw, `"`+state+`"`) {
+				t.Errorf("save() erased the unencodable bucket %q: %s", state, raw)
+			}
+		})
+	}
+}
+
+// TestHistoryTracker_UnencodableTransitionNeverSealsReady covers #1807's live
+// half: a session that transitions into an unencodable state seals its
+// following buckets as no-data rather than green, and emits nothing a client
+// could merge into a green bucket.
+func TestHistoryTracker_UnencodableTransitionNeverSealsReady(t *testing.T) {
+	ht := NewHistoryTracker()
+	var events []HistoryEvent
+	ht.SetEmitFunc(func(ev HistoryEvent) { events = append(events, ev) })
+	sid := "errored"
+
+	ht.OnTransition(sid, "error", epoch)
+	for _, ev := range events {
+		if ev.Kind == HistoryEventUpgrade {
+			t.Errorf("unencodable transition emitted an upgrade (priority %d): %+v", ev.Priority, ev)
+		}
+	}
+
+	events = nil
+	ht.tick() // seals a bucket carrying lastState == "error"
+
+	enc, ok := ht.Encode(sid)
+	if !ok {
+		t.Fatal("Encode failed")
+	}
+	buckets := decodeHistoryString(t, enc.History["1"])
+	for _, i := range []int{HistoryBucketCount - 2, HistoryBucketCount - 1} {
+		if buckets[i] != statePriorityNoData {
+			t.Errorf("wire bucket[%d] = %d, want %d (no-data); %d is ready/green",
+				i, buckets[i], statePriorityNoData, statePriorityReady)
+		}
+	}
+	sawTick := false
+	for _, ev := range events {
+		if ev.Kind != HistoryEventTick || ev.GranularitySec != 1 {
+			continue
+		}
+		sawTick = true
+		if p, ok := ev.Buckets[sid]; ok && p != statePriorityNoData {
+			t.Errorf("tick bucket = %d, want %d (no-data)", p, statePriorityNoData)
+		}
+	}
+	if !sawTick {
+		t.Fatal("no 1s tick event observed — the assertion above never ran")
+	}
+}
+
+// TestHistoryTracker_UnencodableDoesNotClobberObservedActivity is a GUARD this
+// change adds, not a defect test: it passes by construction both before and
+// after the fix. It pins the aggregation half of #1807's decision — an
+// unencodable transition LOSES the open bucket's max-merge, so the activity
+// actually observed in that second survives instead of being blanked. Mutate
+// bucketNoData to a value above statePriorityWaiting to see it go red.
+func TestHistoryTracker_UnencodableDoesNotClobberObservedActivity(t *testing.T) {
+	ht := NewHistoryTracker()
+	sid := "merge"
+	ht.OnTransition(sid, "working", epoch)
+	ht.OnTransition(sid, "error", epoch)
+
+	snap, ok := ht.Snapshot(sid, 1)
+	if !ok {
+		t.Fatal("snapshot missing")
+	}
+	if got := snap[len(snap)-1]; got != "working" {
+		t.Errorf("open bucket = %q, want working — an unencodable state must not erase observed activity", got)
 	}
 }
 
