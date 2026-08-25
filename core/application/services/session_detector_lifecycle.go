@@ -345,19 +345,25 @@ func (d *SessionDetector) HandleStopHook(sessionID, transcriptPath, lastAssistan
 		WaitingCue:        waitingCue,
 	}, d.nowFn())
 
-	// A turn that completed retires the session's failure, and the tailer is
-	// the only layer that owns that sticky state (#1799). The hold above cannot
-	// do it: SignalTurnDone is consume-once, so the HookTurnDone it overlays
-	// suppresses the classifier's session_error rule for exactly one pass, and
-	// the pass after that reads the untouched error again — an error → ready →
-	// error pair in the UI and in the recorded trace. #1798 named this and
-	// deferred it here, to the first producer that could reach it.
+	// Tell the tailer the turn ended, so it can retire a session error the same
+	// way it would on the transcript's own `turn_done` line (#1799). The hold
+	// above cannot do it: SignalTurnDone is consume-once, so the HookTurnDone it
+	// overlays suppresses the classifier's session_error rule for exactly one
+	// pass, and the pass after that would read the untouched error again — the
+	// error → ready → error pair #1798 named and deferred to the first producer.
+	//
+	// It retires only what a completed turn actually retires
+	// (tailer.SessionError.ClearedByTurnBoundary). This hook fires for whichever
+	// turn just ended, INCLUDING one that ended by failing — both of #1799's
+	// producers write their terminal failure inside a turn that then ends
+	// normally — so an unconditional clear here would erase the very failures
+	// the fourth state exists to show.
 	//
 	// Nil-guarded the same way the background-process purge at
 	// session_detector_activity.go is: a detector constructed without a metrics
-	// collector has no tailer, and therefore no sticky error to retire.
+	// collector has no tailer, and therefore no error to retire.
 	if d.metrics != nil {
-		d.metrics.ClearSessionError(transcriptPath)
+		d.metrics.IngestTurnBoundary(transcriptPath)
 	}
 
 	// classifyAndTransition overlays HookTurnDone onto the metrics before

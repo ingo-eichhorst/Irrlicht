@@ -2,7 +2,6 @@ package claudecode
 
 import (
 	"strings"
-	"time"
 
 	"irrlicht/core/pkg/tailer"
 )
@@ -58,10 +57,10 @@ func apiErrorFromSystemEvent(raw map[string]interface{}) *tailer.SessionError {
 	se := &tailer.SessionError{
 		Class:       apiErrorClass(errObj),
 		Message:     apiErrorMessage(errObj),
-		HTTPStatus:  optInt(errObj, "status"),
-		Attempt:     optInt(raw, "retryAttempt"),
-		MaxAttempts: optInt(raw, "maxRetries"),
-		RetryIn:     optDurationFromMillis(raw, "retryInMs"),
+		HTTPStatus:  tailer.OptInt(errObj, "status"),
+		Attempt:     tailer.OptInt(raw, "retryAttempt"),
+		MaxAttempts: tailer.OptInt(raw, "maxRetries"),
+		RetryIn:     tailer.OptDurationFromMillis(raw, "retryInMs"),
 	}
 	if se.Attempt != nil || se.RetryIn != nil {
 		se.Phase = tailer.ErrorPhaseRetrying
@@ -143,39 +142,4 @@ func nestedProviderError(errObj map[string]interface{}) map[string]interface{} {
 		return nil
 	}
 	return inner
-}
-
-// optInt reads a JSON number as *int, returning nil when the key is absent or
-// is not a number.
-//
-// Optional rather than the zero-defaulting read used elsewhere in this package,
-// because absence and zero are different facts here: "attempt 0 of 0" would
-// derive as an exhausted ladder from a payload that said nothing at all. See
-// session.SessionError for why every numeric field on it is a pointer.
-func optInt(m map[string]interface{}, key string) *int {
-	if m == nil {
-		return nil
-	}
-	f, ok := m[key].(float64)
-	if !ok {
-		return nil
-	}
-	v := int(f)
-	return &v
-}
-
-// optDurationFromMillis reads a fractional-millisecond JSON number as a
-// *time.Duration. Claude Code writes retryInMs as a float
-// (616.4520045919932 in the recordings), so an integer-millisecond read would
-// truncate it.
-func optDurationFromMillis(m map[string]interface{}, key string) *time.Duration {
-	if m == nil {
-		return nil
-	}
-	f, ok := m[key].(float64)
-	if !ok {
-		return nil
-	}
-	d := time.Duration(f * float64(time.Millisecond))
-	return &d
 }

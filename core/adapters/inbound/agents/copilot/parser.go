@@ -363,23 +363,8 @@ func parseSessionError(data map[string]any, ev *tailer.ParsedEvent) {
 		Phase:      tailer.ErrorPhaseUnknown,
 		Class:      str(data, "errorType"),
 		Message:    strings.TrimSpace(str(data, "message")),
-		HTTPStatus: optInt(data, "statusCode"),
+		HTTPStatus: tailer.OptInt(data, "statusCode"),
 	}
-}
-
-// optInt reads a JSON number as *int, returning nil when the key is absent or
-// is not a number. The optional counterpart to num(), which zero-defaults —
-// see parseSessionError for why absence must not read as HTTP 0.
-func optInt(m map[string]any, key string) *int {
-	if m == nil {
-		return nil
-	}
-	f, ok := m[key].(float64)
-	if !ok {
-		return nil
-	}
-	v := int(f)
-	return &v
 }
 
 // parsePermissionRequested opens a permission prompt: the agent has stopped

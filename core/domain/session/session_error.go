@@ -115,7 +115,7 @@ type SessionError struct {
 	// the agent does not report one.
 	//
 	// It counts attempts within ONE API call and resets to 1 for the next
-	// call — verified against the recorded ladder, which runs 1..5, then
+	// call — verified against the recorded ladder, which runs 1..6, then
 	// restarts at 1 after the user queues a message. It is not a
 	// session-lifetime counter and must not be summed across errors.
 	Attempt *int `json:"attempt,omitempty"`

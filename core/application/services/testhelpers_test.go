@@ -405,7 +405,7 @@ func (m *mockMetrics) IngestTaskEstimate(path string, est *session.TaskEstimate)
 
 func (m *mockMetrics) IngestTaskSummary(path, text string, observedAt int64) {}
 
-func (m *mockMetrics) ClearSessionError(path string) {}
+func (m *mockMetrics) IngestTurnBoundary(path string) {}
 
 func (m *mockMetrics) PurgeDeadBackgroundProcs(path string, _ []string) {
 	m.mu.Lock()
@@ -471,7 +471,7 @@ func (m *funcMetrics) IngestTaskEstimate(path string, est *session.TaskEstimate)
 
 func (m *funcMetrics) IngestTaskSummary(path, text string, observedAt int64) {}
 
-func (m *funcMetrics) ClearSessionError(path string) {
+func (m *funcMetrics) IngestTurnBoundary(path string) {
 	m.purgeMu.Lock()
 	m.errCleared = append(m.errCleared, path)
 	m.purgeMu.Unlock()

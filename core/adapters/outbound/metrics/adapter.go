@@ -300,7 +300,7 @@ func (a *Adapter) IngestTaskSummary(transcriptPath, text string, observedAt int6
 // tailer is the correct no-op here rather than a dropped signal — with no
 // tailer there is no sticky error to clear, and the next ComputeMetrics
 // rebuilds from the transcript.
-func (a *Adapter) ClearSessionError(transcriptPath string) {
+func (a *Adapter) IngestTurnBoundary(transcriptPath string) {
 	if transcriptPath == "" {
 		return
 	}
@@ -311,7 +311,7 @@ func (a *Adapter) ClearSessionError(transcriptPath string) {
 		return
 	}
 	lt.mu.Lock()
-	lt.t.ClearSessionError()
+	lt.t.IngestTurnBoundary()
 	lt.mu.Unlock()
 }
 

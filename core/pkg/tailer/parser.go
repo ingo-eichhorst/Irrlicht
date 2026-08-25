@@ -336,6 +336,41 @@ type SessionError struct {
 	RetryIn     *time.Duration
 }
 
+// ClearedByTurnBoundary reports whether a completed turn retires this error
+// (#1799). It is the single predicate behind BOTH channels that can deliver
+// such a boundary — the transcript's own `turn_done` line
+// (clearSessionErrorOnRecovery) and the Stop hook (IngestTurnBoundary) — because
+// those describe the same event and a rule that differed between them would be
+// decided by delivery latency rather than by what happened.
+//
+// ONLY ErrorPhaseRetrying qualifies, and the two exclusions are the interesting
+// half:
+//
+//   - ErrorPhaseTerminal. The agent gave up, and the boundary that follows a
+//     give-up is the failed turn's OWN epilogue, not a later turn that
+//     succeeded. claudecode writes `system`/`turn_duration` on the line
+//     immediately after its "API Error: …" message, and its Stop hook fires for
+//     that same turn — so treating either as a recovery turns the session green
+//     a few milliseconds after it failed. session.ErrorPhaseTerminal's doc
+//     already stated the intended rule: "Only the next turn the user starts
+//     clears it."
+//   - ErrorPhaseUnknown. The agent did not say whether another attempt was
+//     coming, and an absence of information is not evidence of recovery.
+//     Reading it as one is the silent direction — the session goes green while
+//     the failure stands. copilot's `session.error` is exactly this case and it
+//     lands AFTER copilot's own `assistant.turn_end`, so an optimistic rule
+//     would paint every copilot failure green.
+//
+// A retrying error is the one shape where a turn boundary genuinely means
+// recovery: the agent said another attempt was coming, and the turn then
+// completed. That is what makes provider-overloaded-retry end green rather than
+// staying red forever.
+//
+// nil-receiver safe so callers can ask without a nil check first.
+func (e *SessionError) ClearedByTurnBoundary() bool {
+	return e != nil && e.Phase == ErrorPhaseRetrying
+}
+
 // StartsNewUserTurn reports whether this event begins a GENUINE new user turn
 // — a fresh prompt, an ESC, an answer to a question — as opposed to a tool
 // round-trip.
@@ -1002,6 +1037,51 @@ func ExtractUsage(usage map[string]interface{}) *TokenSnapshot {
 		return nil
 	}
 	return snap
+}
+
+// OptInt reads a JSON number as *int, returning nil when m is nil, the key is
+// absent, or the value is not a number.
+//
+// The OPTIONAL counterpart to the zero-defaulting reads adapters use for
+// ordinary fields, and it lives beside the other shared parser primitives
+// rather than in each adapter because absence and zero are different facts
+// wherever it is used. #1799 needed it in two adapters at once — claudecode's
+// `error.status` and copilot's `statusCode` — and one of copilot's two recorded
+// shapes omits the key entirely. With a plain int that absence reads as HTTP 0,
+// which is a fabricated status code rather than a missing one. See
+// session.SessionError for why every numeric field on it is a pointer.
+//
+// encoding/json decodes every JSON number into float64, so that is the only
+// type asserted; an int cannot occur from a decoded transcript line.
+func OptInt(m map[string]interface{}, key string) *int {
+	if m == nil {
+		return nil
+	}
+	f, ok := m[key].(float64)
+	if !ok {
+		return nil
+	}
+	v := int(f)
+	return &v
+}
+
+// OptDurationFromMillis reads a fractional-millisecond JSON number as a
+// *time.Duration, returning nil under the same conditions as OptInt.
+//
+// Fractional on purpose: claudecode writes retryInMs as a float
+// (616.4520045919932 in the recordings), so an integer-millisecond read would
+// truncate it. Paired with OptInt here so the "an absent number is not zero"
+// argument is stated once for both rather than re-derived per adapter.
+func OptDurationFromMillis(m map[string]interface{}, key string) *time.Duration {
+	if m == nil {
+		return nil
+	}
+	f, ok := m[key].(float64)
+	if !ok {
+		return nil
+	}
+	d := time.Duration(f * float64(time.Millisecond))
+	return &d
 }
 
 // ParseTimestamp extracts a timestamp from a raw JSON map, trying RFC3339

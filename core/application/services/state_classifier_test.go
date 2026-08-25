@@ -761,15 +761,58 @@ func TestClassify_SessionErrorRoutesToError(t *testing.T) {
 			want: session.StateError,
 		},
 		{
-			// The settled clearing rule's hook half. A Stop hook is an
-			// authoritative turn boundary, so the turn completed and the
-			// failure is over — agent_done takes it.
-			name:    "hook-delivered turn done clears the error → ready",
+			// #1798 wrote this case as `→ ready`, reading a Stop hook as
+			// "the turn completed, so the failure is over". #1799 flipped it,
+			// because the first real producers showed the premise is false:
+			// BOTH of them emit their terminal failure inside a turn that then
+			// ends normally, so the Stop hook fires for the very turn that
+			// failed. claudecode writes `system`/`turn_duration` on the line
+			// after its "API Error: …" message; copilot writes
+			// `assistant.turn_end` ~6ms BEFORE its `session.error`.
+			//
+			// A Stop hook says the turn ENDED. It does not say the turn
+			// SUCCEEDED, and nothing else in the hook payload can. Reading it
+			// as a recovery painted the epic's headline scenario green on any
+			// machine with hooks installed — which is every default install.
+			//
+			// The error is retired instead by the tailer, under the same
+			// ClearedByTurnBoundary rule the transcript arm uses, so a
+			// SessionError still standing when agent_done decides is one no
+			// turn boundary retires. See classifyAgentDone.
+			name:    "hook-delivered turn done on a FAILED turn → error, not ready",
 			current: session.StateError,
 			metrics: &session.SessionMetrics{
 				LastEventType: "assistant_message",
 				HookTurnDone:  true,
 				SessionError:  &session.SessionError{Phase: session.ErrorPhaseTerminal, Class: "provider"},
+			},
+			want: session.StateError,
+		},
+		{
+			// Same shape with no phase reported — copilot's `query`. An
+			// absence of information about a further attempt is not evidence
+			// the turn recovered, so this must not be the case that leaks
+			// green.
+			name:    "hook-delivered turn done with an unknown-phase error → error",
+			current: session.StateWorking,
+			metrics: &session.SessionMetrics{
+				LastEventType: "assistant_message",
+				HookTurnDone:  true,
+				SessionError:  &session.SessionError{Class: "query", Message: "could not connect"},
+			},
+			want: session.StateError,
+		},
+		{
+			// The genuine recovery: a retrying error whose turn then
+			// completed. The tailer's ClearedByTurnBoundary retires it before
+			// the classifier ever sees it, so what reaches here is a nil
+			// SessionError and agent_done answers ready — the arm below is
+			// what proves this path is not accidentally red.
+			name:    "a retry that completed leaves no error → ready",
+			current: session.StateError,
+			metrics: &session.SessionMetrics{
+				LastEventType: "assistant_message",
+				HookTurnDone:  true,
 			},
 			want: session.StateReady,
 		},

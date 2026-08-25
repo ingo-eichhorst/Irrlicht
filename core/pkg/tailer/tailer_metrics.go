@@ -86,28 +86,22 @@ func (t *TranscriptTailer) applySessionError(parsed *ParsedEvent) {
 // see it for why a bare ClearToolNames check would clear the error on the next
 // tool round-trip, i.e. within about a second.
 //
-// AND A TERMINAL ERROR'S OWN EPILOGUE IS NOT A RECOVERY EITHER (#1799). The
-// turn-boundary half above is the RETRY case: the session sat red through the
-// retry window and the turn then completed, so the failure is over. A terminal
-// failure is the opposite — the boundary that follows it is the failed turn's
-// own epilogue, not a later turn that succeeded. ErrorPhaseTerminal's doc
-// already stated the intended rule ("Only the next turn the user starts clears
-// it"); this is where it is implemented, and it was unreachable until #1799
-// because no adapter produced a phase.
+// AND A TURN BOUNDARY ONLY COUNTS FOR A RETRYING ERROR (#1799). Which phases a
+// completed turn retires is ClearedByTurnBoundary's decision, not this
+// function's — the Stop hook applies the identical rule through
+// IngestTurnBoundary, and the two must not be able to drift. See that predicate
+// for why terminal and unknown are both excluded.
 //
 // It is not hypothetical. In the committed 2-14_turn-aborted-by-error
-// recording, claudecode writes `system`/`turn_duration` on the line
-// IMMEDIATELY after the "API Error: …" epilogue, and the replay golden shows
-// both landing in the same read pass — so without this distinction a session
-// went red and green again inside one poll, which is precisely the silently-
-// green outcome the fourth state exists to eliminate. Reproduce with:
+// recording, claudecode writes `system`/`turn_duration` on the line IMMEDIATELY
+// after the "API Error: …" epilogue, and both land in the same read pass — so
+// without the distinction the failure was cleared inside the very pass that
+// recorded it, and the session never went red at all. (Not a flicker: the
+// tailer emits one snapshot per pass, so there is no intra-pass state for
+// anything to observe.) Reproduce the ordering with:
 //
 //	jq -c '{t:.type, sub:.subtype, apiErr:.isApiErrorMessage}' \
 //	  replaydata/agents/claudecode/scenarios/2-14_turn-aborted-by-error/recordings/*/transcript.jsonl
-//
-// Only ErrorPhaseTerminal is excepted, not ErrorPhaseUnknown: an unknown phase
-// is the agent declining to say whether another attempt is coming, which is no
-// reason to override the settled clearing rule.
 func (t *TranscriptTailer) clearSessionErrorOnRecovery(parsed *ParsedEvent) {
 	if t.sessionError == nil {
 		return
@@ -116,41 +110,44 @@ func (t *TranscriptTailer) clearSessionErrorOnRecovery(parsed *ParsedEvent) {
 		t.sessionError = nil
 		return
 	}
-	if parsed.EventType == "turn_done" && t.sessionError.Phase != ErrorPhaseTerminal {
+	if parsed.EventType == "turn_done" && t.sessionError.ClearedByTurnBoundary() {
 		t.sessionError = nil
 	}
 }
 
-// ClearSessionError drops the sticky session-level error because an
-// out-of-band, authoritative turn boundary said the turn completed — today
-// that is the Stop hook, delivered through SessionDetector.HandleStopHook
-// (#1799). It is the hook-path twin of clearSessionErrorOnRecovery's
-// turn_done arm, and it exists for the same reason IngestRateLimit does: the
-// tailer owns the state, and an HTTP handler must be able to update it without
-// driving the parser.
+// IngestTurnBoundary records that a turn ended, delivered out of band rather
+// than read off the transcript — today the Stop hook, via
+// SessionDetector.HandleStopHook (#1799). Broken out so an HTTP handler can
+// update a session without driving the parser, exactly as IngestRateLimit is.
 //
-// WITHOUT IT THE HOOK PATH PRODUCES A SPURIOUS error→ready→error PAIR, which is
-// the defect #1798 recorded against the classifier's session_error rule and
-// deferred to the first producer. That rule is guarded on !HookTurnDone, but
-// SignalTurnDone is consume-once, so HookTurnDone is true for exactly the one
-// classify pass that consumed the hold — a ONE-PASS SUPPRESSION, not a clear.
-// The Stop hook fires before the transcript's own turn-boundary line flushes
-// (that latency is the entire point of the hook fast path), so the suppressed
-// pass reads ready and the very next pass reads the still-sticky error again.
-// Clearing the tailer's copy is what makes the suppression stick, because only
-// the tailer can end the error's life.
+// IT APPLIES THE SAME CLEARING RULE AS THE TRANSCRIPT ARM, through the same
+// predicate (ClearedByTurnBoundary). A Stop hook and the `turn_done` line it
+// races describe ONE event, so a rule that differed between them would be
+// decided by which arrived first — and the daemon has no control over that.
+// #1799's first draft cleared unconditionally here and erased the terminal
+// failures the transcript arm had just been taught to keep, through the other
+// channel, on the same turn boundary, in the same change.
 //
-// It deliberately does NOT consult the phase. clearSessionErrorOnRecovery
-// exempts ErrorPhaseTerminal from a TRANSCRIPT turn boundary because that
-// boundary may be the failed turn's own epilogue — an ordering question only
-// the transcript reader can answer. A Stop hook carries no such ambiguity: it
-// is an out-of-band assertion that the turn ended, arriving after everything
-// the transcript has written, so it retires a terminal failure too.
+// WHY IT IS NEEDED AT ALL. The classifier's session_error rule is guarded on
+// !HookTurnDone, but SignalTurnDone is consume-once, so HookTurnDone is true for
+// exactly the one classify pass that consumed the hold — a ONE-PASS
+// SUPPRESSION, not a clear. Without an equivalent clear in the tailer, a
+// recoverable error suppressed on the hook's pass reappears on the next one:
+// the spurious error → ready → error pair #1798 recorded and deferred to the
+// first producer.
+//
+// WHAT IT IS NOT: a latch. HandleStopHook runs before the classify pass that
+// tails the transcript, so on the common ordering this fires while the tailer
+// has not yet read the error line — and the error recorded a moment later must
+// stand, because this boundary describes the turn BEFORE it. The one-pass
+// suppression is handled where it happens, in classifyAgentDone; see there.
 //
 // The caller (the metrics adapter) holds the per-tailer lock, mirroring
 // IngestRateLimit.
-func (t *TranscriptTailer) ClearSessionError() {
-	t.sessionError = nil
+func (t *TranscriptTailer) IngestTurnBoundary() {
+	if t.sessionError.ClearedByTurnBoundary() {
+		t.sessionError = nil
+	}
 }
 
 // IngestRateLimit accepts an externally-sourced snapshot (the Claude Code
