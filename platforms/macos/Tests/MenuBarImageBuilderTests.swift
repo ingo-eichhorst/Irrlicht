@@ -72,23 +72,25 @@ final class MenuBarImageBuilderTests: XCTestCase {
         XCTAssertEqual(result?.size.height, 18) // max(18, 12)
     }
 
-    // MARK: - shouldFallBackToDotsForUsageStyle (issue #909 review fix)
+    // MARK: - shouldShowDotsInUsageStyle (issue #909 review fix; #1802's error arm)
 
     /// `.usage` style with a renderable dots image but no quota yet must
-    /// not collapse to the "no sessions" icon — see the fallback comment in
-    /// `combinedImage`.
+    /// not collapse to the "no sessions" icon — see the comment in
+    /// `combinedImage`. LOCK: pre-#1802 behaviour that must not change.
     func testFallsBackToDotsWhenUsageStyleHasNoQuotaButDotsRendered() {
         let dots = NSImage(size: NSSize(width: 10, height: 18))
-        XCTAssertTrue(MenuBarImageBuilder.shouldFallBackToDotsForUsageStyle(
-            style: .usage, quotaImage: nil, dotsImage: dots
+        XCTAssertTrue(MenuBarImageBuilder.shouldShowDotsInUsageStyle(
+            style: .usage, quotaImage: nil, dotsImage: dots, hasErroredSession: false
         ))
     }
 
+    /// LOCK: with quota renderable and nothing wrong, `.usage` still means
+    /// quota only.
     func testDoesNotFallBackWhenUsageStyleHasQuotaImage() {
         let quota = NSImage(size: NSSize(width: 10, height: 18))
         let dots = NSImage(size: NSSize(width: 10, height: 18))
-        XCTAssertFalse(MenuBarImageBuilder.shouldFallBackToDotsForUsageStyle(
-            style: .usage, quotaImage: quota, dotsImage: dots
+        XCTAssertFalse(MenuBarImageBuilder.shouldShowDotsInUsageStyle(
+            style: .usage, quotaImage: quota, dotsImage: dots, hasErroredSession: false
         ))
     }
 
@@ -97,18 +99,66 @@ final class MenuBarImageBuilderTests: XCTestCase {
     /// out from under it) — the fallback must key off the actual dots image,
     /// not a raw session count that doesn't guarantee dots render.
     func testDoesNotFallBackWhenUsageStyleHasNoRenderableDotsEither() {
-        XCTAssertFalse(MenuBarImageBuilder.shouldFallBackToDotsForUsageStyle(
-            style: .usage, quotaImage: nil, dotsImage: nil
+        XCTAssertFalse(MenuBarImageBuilder.shouldShowDotsInUsageStyle(
+            style: .usage, quotaImage: nil, dotsImage: nil, hasErroredSession: false
         ))
     }
 
     func testDoesNotFallBackForLightsOrCombinedStyles() {
         let dots = NSImage(size: NSSize(width: 10, height: 18))
-        XCTAssertFalse(MenuBarImageBuilder.shouldFallBackToDotsForUsageStyle(
-            style: .lights, quotaImage: nil, dotsImage: dots
+        XCTAssertFalse(MenuBarImageBuilder.shouldShowDotsInUsageStyle(
+            style: .lights, quotaImage: nil, dotsImage: dots, hasErroredSession: false
         ))
-        XCTAssertFalse(MenuBarImageBuilder.shouldFallBackToDotsForUsageStyle(
-            style: .combined, quotaImage: nil, dotsImage: dots
+        XCTAssertFalse(MenuBarImageBuilder.shouldShowDotsInUsageStyle(
+            style: .combined, quotaImage: nil, dotsImage: dots, hasErroredSession: false
         ))
+    }
+
+    // MARK: - #1802: `.usage` must not swallow the red circle
+
+    /// The reason the error arm exists. `.usage` suppresses the dots outright,
+    /// so without this the red circle is invisible for every user on that
+    /// style and the feature silently does nothing for them. The dots are
+    /// ADDED here, not substituted — `composeSideBySide` renders both halves,
+    /// so the user's chosen quota bars are kept.
+    ///
+    /// A check the change ADDS, so there is no "before the fix" run.
+    /// Mutation-proved: dropping `|| hasErroredSession` from
+    /// `shouldShowDotsInUsageStyle` turns this red while the four LOCKs above
+    /// stay green.
+    func testUsageStyleShowsDotsWhenASessionIsErrored() {
+        let quota = NSImage(size: NSSize(width: 20, height: 18))
+        let dots = NSImage(size: NSSize(width: 10, height: 18))
+        XCTAssertTrue(MenuBarImageBuilder.shouldShowDotsInUsageStyle(
+            style: .usage, quotaImage: quota, dotsImage: dots, hasErroredSession: true
+        ))
+    }
+
+    /// An error cannot conjure dots that do not render.
+    func testNoDotsImageMeansNoDotsEvenWithAnError() {
+        let quota = NSImage(size: NSSize(width: 20, height: 18))
+        XCTAssertFalse(MenuBarImageBuilder.shouldShowDotsInUsageStyle(
+            style: .usage, quotaImage: quota, dotsImage: nil, hasErroredSession: true
+        ))
+    }
+
+    /// LOCK: the other two styles never route through this decision at all,
+    /// error or not.
+    func testOtherStylesAreUnaffectedByAnError() {
+        let quota = NSImage(size: NSSize(width: 20, height: 18))
+        let dots = NSImage(size: NSSize(width: 10, height: 18))
+        for style in [MenuBarStyle.lights, .combined] {
+            XCTAssertFalse(MenuBarImageBuilder.shouldShowDotsInUsageStyle(
+                style: style, quotaImage: quota, dotsImage: dots, hasErroredSession: true
+            ), "\(style) must not be changed by an errored session")
+        }
+    }
+
+    /// An errored session must NOT promote the icon to `.attention`, which is
+    /// a FULL REPLACEMENT of the dots and would hide the very circle #1802
+    /// adds. LOCK on `iconState`'s untouched priority order.
+    func testErrorDoesNotPromoteToTheAttentionIcon() {
+        XCTAssertEqual(MenuBarImageBuilder.iconState(pendingConsentCount: 0, sessionCount: 3), .dots)
+        XCTAssertEqual(MenuBarImageBuilder.iconState(pendingConsentCount: 1, sessionCount: 3), .attention)
     }
 }

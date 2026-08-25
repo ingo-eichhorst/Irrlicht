@@ -132,7 +132,7 @@ Before marking a ticket done, run the full suite — every layer must pass:
 - macOS app (only when touching `platforms/macos/`): `cd platforms/macos &&
   swift build && swift test --skip LauncherTestHarness --skip
   LauncherHarnessTests`, also run by `tools/preflight.sh --only swift` and
-  CI's `macos-swift.yml`. Five image-snapshot suites are gated on the
+  CI's `macos-swift.yml`. Seven image-snapshot suites are gated on the
   reference host only, permanently, and never in CI. Full write-up (why,
   and the pinned-scale/locale/timezone/`@AppStorage`/now environment seams
   that make the rest host-independent):

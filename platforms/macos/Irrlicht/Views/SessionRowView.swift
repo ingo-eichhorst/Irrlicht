@@ -170,6 +170,91 @@ struct SessionRowView: View {
         }
     }
 
+    /// The red error line (#1802) — why this session failed, under the row
+    /// that failed.
+    ///
+    /// Gated on the STATE, not on the presence of a detail. The daemon's
+    /// verdict is `state == .error`; `session.error` is whatever it managed to
+    /// say about it, and the recorded transcript shapes routinely carry a
+    /// failure with no message and no numbers (copilot's `session.error` with
+    /// errorType "query" is exactly that). Keying the line on the detail would
+    /// therefore leave the worst-reported failures rendering as a red icon with
+    /// nothing under it — the silent case this whole feature exists to end —
+    /// so a missing detail falls back to `displayMessage`'s bare statement.
+    ///
+    /// Shape copied from the context-pressure alert below rather than invented:
+    /// `exclamationmark.triangle` + text on an 8% wash at `IrrRadius.sm`. It is
+    /// NOT subject to the collapse-all toggle, for the same reason
+    /// `cacheBloatBlock` is not — a fault is not optional context.
+    ///
+    /// Text uses `IrrColors.errorPillText`, not the raw `error` hue: the hue
+    /// measures under WCAG AA against this wash in both appearances (#984's
+    /// finding, one colour over). The wash itself stays the plain brand hue so
+    /// the dots and icons elsewhere are untouched.
+    @ViewBuilder
+    private var errorBlock: some View {
+        if session.state == .error {
+            let detail = session.error
+            let message = detail?.displayMessage ?? "The session failed"
+            let suffix = detail?.detailSuffix ?? ""
+            // The suffix goes on its own line rather than beside the message.
+            // Sharing one line is what the first recording of this view did,
+            // and the 380 pt panel is not wide enough for both at 9 pt: the
+            // monospaced counters won the space contest and squeezed the
+            // agent's own wording down to "Overloade / d — the…", which is the
+            // one part of the line that has to survive.
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 9))
+                        .foregroundColor(IrrColors.errorPillText)
+                    Text(message)
+                        .font(.system(size: 9))
+                        .foregroundColor(IrrColors.errorPillText)
+                        .lineLimit(2)
+                        .truncationMode(.tail)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                }
+                if !suffix.isEmpty {
+                    Text(suffix)
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundColor(IrrColors.errorPillText.opacity(0.85))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        // Aligned under the message, not under the triangle:
+                        // icon width (9) + the HStack's 4 pt gap.
+                        .padding(.leading, 13)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .padding(.horizontal, 4)
+            .padding(.vertical, 2)
+            .background(IrrColors.error.opacity(0.08))
+            .cornerRadius(IrrRadius.sm)
+            .padding(.top, 2)
+            // The row truncates at two lines; the tooltip carries the agent's
+            // full wording, which for a provider error is often the only thing
+            // that says what to actually do about it. `.tooltip`, never
+            // `.help` — ViewTooltipsLintTests fails the build on the latter.
+            .tooltip(errorTooltip(detail, message: message, suffix: suffix))
+            .accessibilityIdentifier("session-error-line-\(session.id)")
+        }
+    }
+
+    /// Full failure text for the hover: the agent's message, its detail
+    /// numbers, and the failure class when the class is not already the
+    /// message. Assembled here rather than inline so the view body stays a
+    /// layout description.
+    private func errorTooltip(_ detail: SessionError?, message: String, suffix: String) -> String {
+        var lines = [message]
+        if !suffix.isEmpty { lines.append(suffix) }
+        if let cls = detail?.class, !cls.isEmpty, cls != message {
+            lines.append("class: \(cls)")
+        }
+        return lines.joined(separator: "\n")
+    }
+
     /// Cache-creation regression badge (#813, was #374's bare icon+tooltip) —
     /// an always-visible red pill naming the regression so a user isn't
     /// required to hover to learn anything happened. Rendered below the main
@@ -385,6 +470,12 @@ struct SessionRowView: View {
             // Pin row to the tallest bar (history at 16pt) so toggling between
             // Context and 1s/10s/60s doesn't shift row height.
             .frame(minHeight: 16)
+
+            // The red error line (#1802). First among the sub-lines: it is the
+            // only one that says the row above it did not do its job, so
+            // anything below reads as detail about a failed session rather
+            // than as the headline.
+            errorBlock
 
             // Task summary + waiting question — a single collapsible block
             // (issue #738). The summary ("what is this session about") shows

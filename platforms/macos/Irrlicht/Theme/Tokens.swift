@@ -16,6 +16,18 @@ enum IrrHex {
     // by value, kept as its own token because the two mean different things:
     // `cancelled` is a state that was retired, `unknown` is one we can't read.
     static let unknown   = "#8E8E93"
+    // Failed session state (#1802) — the session's own machinery failed: the
+    // provider refused the call, credentials were rejected, the agent process
+    // died mid-turn, or Irrlicht could not read the session.
+    //
+    // Value-equal to `pressureHigh` on purpose and by instruction (#1802): this
+    // app already paints red at #FF3B30 — the pressure scale, the cache-bloat
+    // pill, `OffFlameImage`'s attention badge — and a second, almost-identical
+    // red would read as a rendering bug rather than as a distinction. It is
+    // nonetheless its OWN token, for the reason `unknown` is separate from
+    // `cancelled`: the two mean different things, and a future retune of the
+    // context-pressure scale must not silently restyle the error state.
+    static let error     = "#FF3B30"
 
     // Pressure scale
     static let pressureLow      = "#34C759"
@@ -38,6 +50,7 @@ enum IrrSVG {
     static let ready     = "34C759"
     static let cancelled = "8E8E93"
     static let unknown   = "8E8E93"
+    static let error     = "FF3B30"
 }
 
 enum IrrColors {
@@ -46,11 +59,13 @@ enum IrrColors {
     static let ready     = Color(hex: IrrHex.ready)
     static let cancelled = Color(hex: IrrHex.cancelled)
     static let unknown   = Color(hex: IrrHex.unknown)
+    static let error     = Color(hex: IrrHex.error)
 
     // 12%-alpha soft backgrounds (--working-dim / --waiting-dim / --ready-dim).
     static let workingDim = working.opacity(0.12)
     static let waitingDim = waiting.opacity(0.12)
     static let readyDim   = ready.opacity(0.12)
+    static let errorDim   = error.opacity(0.12)
 
     // Glow halos (--working-glow 0.25, --waiting-glow / --ready-glow 0.20).
     static let workingGlow = working.opacity(0.25)
@@ -73,6 +88,24 @@ enum IrrColors {
     // untouched.
     static let waitingPillText = Color.adaptive(light: "#8F5300", dark: IrrHex.waiting)
 
+    // Pill/alert *text* color for the session error line and the daemon-wide
+    // error banner (#1802) — the same per-appearance retune `waitingPillText`
+    // is, for the same reason and against the same 12% wash. `IrrHex.error`
+    // itself measures under WCAG AA's 4.5:1 for 9pt text in BOTH appearances
+    // once composited, so unlike `waitingPillText` neither mode gets to use
+    // the plain brand hue.
+    //
+    // Every figure here is PRINTED BY THE CHECK, not typed beside it —
+    // `swift test --filter TokenContrastTests` composites the wash and
+    // computes the WCAG ratio from these very tokens:
+    //
+    //     raw IrrHex.error on its own 12% wash   light 3.02:1   dark 4.18:1
+    //     errorPillText    on that same wash     light 5.30:1   dark 5.83:1
+    //
+    // The wash keeps using plain `error`, so dots, icons and glows elsewhere
+    // are untouched.
+    static let errorPillText = Color.adaptive(light: "#C1121C", dark: "#FF7A70")
+
     static let wsConnected    = Color(hex: IrrHex.wsConnected)
     static let wsConnecting   = Color(hex: IrrHex.wsConnecting)
     static let wsDisconnected = Color(hex: IrrHex.wsDisconnected)
@@ -88,13 +121,22 @@ enum IrrColors {
     static let trackFill          = Color.primary.opacity(0.08)
 
     /// State/status string → color, mirroring the web `stateColor` palette
-    /// (working/waiting/ready, muted fallback). Used for Gas Town global-agent
-    /// dots, convoy progress, and rig status badges.
+    /// (working/waiting/ready/error, muted fallback). Used for Gas Town
+    /// global-agent dots, convoy progress, and rig status badges.
+    ///
+    /// `"error"` is here for the same reason the state enum has an `.error`
+    /// case (#1802): without it a failing rig status fell through to
+    /// `Color.secondary` — neutral grey, the "nothing to report" answer — at
+    /// the one moment there is something to report. The states themselves come
+    /// through `SessionState.State`, which is a compiler-forced switch; this
+    /// map takes a raw String from a different payload and has to be kept in
+    /// step by hand, which is what `IrrColorsForStateTests` pins.
     static func forState(_ s: String?) -> Color {
         switch s {
         case "working": return working
         case "waiting": return waiting
         case "ready":   return ready
+        case "error":   return error
         default:        return Color.secondary
         }
     }

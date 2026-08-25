@@ -415,4 +415,25 @@ class SessionManager: ObservableObject {
     var readySessions: Int {
         sessions.filter { $0.state == .ready }.count
     }
+
+    /// The daemon-wide error banner's content, or nil when there is nothing to
+    /// say (#1802). Pure — the derivation lives in `DaemonHealth` and is
+    /// unit-tested without a manager; this only supplies the inputs.
+    var daemonErrorSummary: DaemonErrorSummary? {
+        DaemonErrorSummary(items: DaemonHealth.faults(
+            useLocalDaemon: useLocalDaemon,
+            localConnectionStalled: localConnectionStalled
+        ))
+    }
+
+    /// Failed sessions (#1802).
+    ///
+    /// Deliberately NOT folded into `hasActiveSessions`. Nothing clears an
+    /// error until the next successful turn, so an errored session counted as
+    /// active would keep the app claiming work is in progress indefinitely —
+    /// the same reasoning that keeps `error` out of the daemon's own
+    /// `concurrencyActive()`.
+    var errorSessions: Int {
+        sessions.filter { $0.state == .error }.count
+    }
 }

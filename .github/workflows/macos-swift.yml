@@ -295,8 +295,10 @@ jobs:
           ( cd platforms/macos && swift_suite_run "$log" \
               swift test --skip LauncherTestHarness --skip LauncherHarnessTests \
                          --skip BackchannelRulesViewSnapshotTests \
+                         --skip DaemonErrorBannerRenderTests \
                          --skip GroupViewSnapshotTests \
                          --skip HistoryViewSnapshotTests \
+                         --skip SessionListDaemonErrorWiringTests \
                          --skip SessionListUnappliedGrantsWiringTests \
                          --skip SessionRowSnapshotTests )
           rc=$?
@@ -439,9 +441,11 @@ jobs:
           ( cd platforms/macos && swift_suite_run "$log" \
               swift test --skip LauncherTestHarness --skip LauncherHarnessTests \
                          --filter BackchannelRulesViewSnapshotTests \
+                         --filter DaemonErrorBannerRenderTests \
                          --filter GroupViewSnapshotTests \
                          --filter HistoryViewSnapshotTests \
                          --filter RasterPrimitiveEvidenceTests \
+                         --filter SessionListDaemonErrorWiringTests \
                          --filter SessionListUnappliedGrantsWiringTests \
                          --filter SessionRowSnapshotTests )
           rc=$?

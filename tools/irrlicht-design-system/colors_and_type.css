@@ -18,11 +18,13 @@
   --waiting: #FF9500;         /* orange — agent needs your judgment */
   --ready:   #34C759;         /* green — idle, available */
   --cancelled: #8E8E93;       /* grey — cancelled/stopped */
+  --error:   #FF3B30;         /* red — the session's own machinery failed (#1802) */
 
   /* Soft fills for badges / backgrounds */
   --working-dim: rgba(139, 92, 246, 0.12);
   --waiting-dim: rgba(255, 149, 0, 0.12);
   --ready-dim:   rgba(52, 199, 89, 0.12);
+  --error-dim:   rgba(255, 59, 48, 0.12);
 
   /* Halo glows for orbs / dots */
   --working-glow: rgba(139, 92, 246, 0.25);

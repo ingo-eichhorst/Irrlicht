@@ -337,6 +337,16 @@ struct SessionListView: View {
     private var mainPanel: some View {
         Group {
             VStack(alignment: .leading, spacing: 0) {
+                // #1802: a daemon-wide fault sits ABOVE the session list, not
+                // below it with the other banners. It is the one condition that
+                // changes how everything under it should be read — while the
+                // daemon is not answering, every row below is stale — so a
+                // reader has to meet it before the rows, not after them.
+                if let daemonError = sessionManager.daemonErrorSummary {
+                    DaemonErrorBanner(summary: daemonError)
+                    Divider()
+                }
+
                 if sessionManager.apiGroups.isEmpty && sessionManager.sessions.isEmpty {
                     emptyStateView
                 } else {
