@@ -279,6 +279,85 @@ type ParsedEvent struct {
 	// heuristic-fallback task summary (issue #738). Adapters that don't set
 	// it simply have no heuristic fallback (the marker still works).
 	UserText string
+
+	// SessionError, when non-nil, reports that this event is a SESSION-LEVEL
+	// failure: the provider refused or failed the call, credentials were
+	// rejected, the turn was aborted (issue #1798). The tailer holds it as
+	// the session's current unrecovered error until the next successful turn
+	// clears it, and the classifier routes such a session to
+	// session.StateError.
+	//
+	// KEPT STRICTLY DISTINCT FROM IsError above, which is a tool_result
+	// failure. A grep that matched nothing, a failing build, a command
+	// exiting non-zero — those are the agent working normally and must never
+	// turn a session red. The precedent is IsUserInterrupt, which is kept
+	// distinct from IsError for exactly the same reason ("so the classifier
+	// can tell an ESC apart from a normal tool failure"); this is that
+	// argument applied to the other end of the severity scale.
+	//
+	// The one existing adapter that already conflates the two is geminicli,
+	// which sets IsError=true on a top-level type:"error" event and smuggles
+	// the reason out through AssistantText because IsError has no readers.
+	// #1800 moves it onto this field.
+	//
+	// Nil for the overwhelming majority of events, so the pointer costs
+	// nothing and keeps "no error on this event" distinguishable from a
+	// zero-valued error — the same shape as RateLimit, TaskEstimate and
+	// AwaySummary above.
+	SessionError *SessionError
+}
+
+// ErrorPhase mirrors session.ErrorPhase inside the tailer package. See that
+// type for why terminal-ness is the adapter's verdict and never derived from
+// Attempt == MaxAttempts.
+type ErrorPhase string
+
+const (
+	ErrorPhaseUnknown  ErrorPhase = ""
+	ErrorPhaseRetrying ErrorPhase = "retrying"
+	ErrorPhaseTerminal ErrorPhase = "terminal"
+)
+
+// SessionError mirrors session.SessionError inside the tailer package so
+// parsers can report a session-level failure without importing the domain —
+// the same boundary RateLimitSnapshot, TaskEstimate and AwaySummary sit on,
+// converted by the adapter glue (core/application/replayengine/metrics.go).
+//
+// Every numeric field is a pointer because the recorded payloads disagree
+// about which numbers exist at all. See session.SessionError for the argument
+// and the fixture evidence.
+type SessionError struct {
+	Phase       ErrorPhase
+	Class       string
+	Message     string
+	HTTPStatus  *int
+	Attempt     *int
+	MaxAttempts *int
+	RetryIn     *time.Duration
+}
+
+// StartsNewUserTurn reports whether this event begins a GENUINE new user turn
+// — a fresh prompt, an ESC, an answer to a question — as opposed to a tool
+// round-trip.
+//
+// The distinction exists because several transcript formats deliver tool
+// results on USER-ROLE lines. Claude Code is the one that bites: its parser
+// raises ClearToolNames for every `user` event, so a bare ClearToolNames check
+// reads every tool result as a new turn. #558 is what that costs — the
+// task-estimate chip was reset on each tool call and vanished mid-task until
+// the agent emitted another marker.
+//
+// Named once here rather than re-spelled per caller: before this the same
+// expression appeared verbatim at three sites in tailer.go plus a fourth in
+// tailer_metrics.go, each re-explaining #558 in its own words, and the #1798
+// session-error clearing rule was written as the fourth copy. A concept that
+// four callers agree on is a method on the event, not a convention.
+//
+// Note tailer.go's assistant-text reset deliberately does NOT use this: it
+// clears on a bare ClearToolNames, tool results included. That is an exception
+// on purpose, and it reads as one now that the shared rule has a name.
+func (e *ParsedEvent) StartsNewUserTurn() bool {
+	return e.ClearToolNames && len(e.ToolResultIDs) == 0
 }
 
 // RateLimitSnapshot mirrors session.RateLimitSnapshot inside the tailer

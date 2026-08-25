@@ -194,6 +194,70 @@ var stateRules = []stateRule{
 		decide: toState(session.StateWaiting, "idle prompt hook → waiting"),
 	},
 	{
+		// The session's own machinery failed — provider refusal, rejected
+		// credentials, an aborted turn (#1798) → error.
+		//
+		// WHY HERE, ABOVE agent_done. A give-up and a completed turn look the
+		// same from the transcript tail: claudecode records a terminal API
+		// failure as an ordinary assistant message carrying an
+		// `isApiErrorMessage` flag and a terminal stop_reason, so IsAgentDone
+		// reads true and agent_done would route it to ready — a session that
+		// failed, reported as finished, painted green. That is the exact
+		// defect the fourth state exists to fix, so the failure verdict has to
+		// outrank the finished-turn verdict. Below the five waiting rules
+		// above, because a session blocked on a human is actionable now while
+		// a past failure is not, and because those rules include hook-tier
+		// rows a transcript-tier rule must never preempt.
+		//
+		// WHY THE HookTurnDone GUARD, rather than a bare nil check. An
+		// authoritative Stop hook means a turn completed, so the failure is
+		// over and agent_done should have the decision. It also makes this
+		// rule and agent_done MUTUALLY EXCLUSIVE at TierHook — agent_done is
+		// hook-tier only when HookTurnDone, which is exactly the case this
+		// guard excludes — so a transcript-tier rule can never sit above a
+		// hook-tier one that would also have fired. The ladder stays
+		// tier-consistent BY CONSTRUCTION, and
+		// TestStateRules_LadderIsTierConsistent proves it against fixtures
+		// that hold both signals at once rather than taking this comment's
+		// word for it.
+		//
+		// IT IS A ONE-PASS SUPPRESSION, NOT A CLEAR, and calling it the latter
+		// would be wrong in a way that matters. SignalTurnDone is
+		// consumeOnce, so HookTurnDone is true for exactly the pass that
+		// consumed it; the tailer's sticky error is untouched by the hook path
+		// (the transcript path places no hold at all). So a hook-triggered
+		// pass that lands BEFORE the transcript's own turn-boundary line
+		// flushes — which is precisely what the hook fast path exists to do —
+		// yields ready on that pass and error again on the next, i.e. a
+		// spurious error→ready→error pair in the UI and the recorded trace.
+		//
+		// Not fixed here, and unreachable in this phase: no adapter emits
+		// SessionError yet, so no session can be in this position until
+		// #1799/#1800. The fix belongs with the first producer — the hook path
+		// needs a way to clear the tailer's sticky error, mirroring
+		// TranscriptTailer.IngestRateLimit — because only the tailer owns that
+		// state. Recorded rather than left to be rediscovered.
+		//
+		// The rule's other half — a turn boundary the TRANSCRIPT reported —
+		// never reaches here at all: the tailer clears its sticky error on
+		// that boundary, so SessionError is already nil. Order is why that
+		// half cannot live in this predicate; see clearSessionErrorOnRecovery.
+		//
+		// TIER IS PINNED TO TierTranscript by the `signal` field below, which
+		// resolves through TierOf. The PREDICATE is producer-agnostic, but the
+		// tier is not: #1800's process-death evidence is TierProcess (3), and
+		// routing it through this rule would record it as TierTranscript (5).
+		// Understating a tier never trips the ladder invariant, so that would
+		// be silent. #1800 therefore adds its own rule row — or gives this one
+		// a `tierOf` the way agent_done has one — rather than reusing this.
+		id:     string(session.SignalSessionError),
+		signal: session.SignalSessionError,
+		when: func(_ string, m *session.SessionMetrics) bool {
+			return m.SessionError != nil && !m.HookTurnDone
+		},
+		decide: toState(session.StateError, "session error → error"),
+	},
+	{
 		// Agent finished turn — check if waiting for user input first. A
 		// hook-delivered Stop (#1161, #1171) is authoritative here: IsAgentDone
 		// consults metrics.HookTurnDone ahead of the transcript-tail heuristic,
@@ -299,10 +363,20 @@ func classifyAgentDone(currentState string, metrics *session.SessionMetrics) (st
 	if metrics.IsWaitingForUserInput() {
 		return transitionTo(currentState, session.StateWaiting, "turn ended with question or cue → waiting")
 	}
-	if currentState == session.StateWorking || currentState == session.StateWaiting {
-		return session.StateReady, "agent finished turn → ready"
-	}
-	return currentState, ""
+	// #1798: this used to name the states it would promote FROM —
+	// `currentState == StateWorking || currentState == StateWaiting`, falling
+	// through to a no-op for anything else. That was a complete enumeration
+	// when there were three states (the only remainder was ready, which is
+	// already the target), and it silently became an incomplete one the moment
+	// a fourth arrived: a session in `error` fell into the no-op branch and
+	// could NEVER reach ready through this rule, so the settled clearing rule's
+	// hook half — "error → ready on turn_done" — was dead on arrival.
+	//
+	// transitionTo expresses the actual intent, "move to ready unless already
+	// there", without enumerating anything, so a fifth state cannot reintroduce
+	// the bug. Behaviour is identical for all three original states, including
+	// the empty reason from ready, so no replay golden moves.
+	return transitionTo(currentState, session.StateReady, "agent finished turn → ready")
 }
 
 // isUserInterruptReady reports whether the user_interrupt rule of ClassifyState applies: the

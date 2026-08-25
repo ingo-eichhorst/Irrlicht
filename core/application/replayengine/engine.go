@@ -272,8 +272,8 @@ func (r *replayer) recordMetricsSnapshot(virtTime time.Time, metrics *tailer.Ses
 	r.result.MetricsTimeline = append(r.result.MetricsTimeline, MetricsSnapshot{
 		VirtualTime:      virtTime,
 		Metrics:          TailerToDomain(metrics),
-		TaskEstimate:     copyTailerTaskEstimate(metrics.TaskEstimate),
-		TaskEstimateBase: copyTailerTaskEstimate(metrics.TaskEstimateBase),
+		TaskEstimate:     copyPtr(metrics.TaskEstimate),
+		TaskEstimateBase: copyPtr(metrics.TaskEstimateBase),
 	})
 }
 

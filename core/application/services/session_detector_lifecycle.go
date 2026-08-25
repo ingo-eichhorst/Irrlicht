@@ -547,6 +547,23 @@ func (d *SessionDetector) seedReevaluateOne(state *session.SessionState) {
 	// Only apply transitions to waiting or ready (not working promotion)
 	// because seed is re-evaluating persisted state, not responding to
 	// new activity.
+	//
+	// #1798: error is deliberately NOT added to the exclusion. The filter
+	// exists to stop a persisted session being promoted to working on no
+	// evidence — "working" is a claim that something is happening right now,
+	// and at boot nothing is. An error is the opposite kind of claim: it
+	// describes something that already happened, so re-asserting it at boot is
+	// sound in a way re-asserting "working" is not.
+	//
+	// It does not actually fire today, and that is a known gap rather than a
+	// contradiction of the above. RefreshMetrics ran a few lines up, and it
+	// merges against a fresh tailer pass whose SessionError is nil — the tailer
+	// does not persist its sticky error — so the persisted value is gone before
+	// ClassifyState reads it and this path sees a healthy session. The fix is
+	// LedgerState persistence in the tailer, deferred to #1800; see
+	// SessionMetrics.SessionError for the full account. The filter is written
+	// to accept error now so that landing the persistence is a one-file change
+	// rather than also having to notice this line.
 	newState, reason := ClassifyState(state.State, state.Metrics)
 	if newState != state.State && newState != session.StateWorking {
 		if reason != "" {

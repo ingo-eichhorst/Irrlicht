@@ -72,6 +72,29 @@ const waitingExitDwell = 6 * time.Second
 //   - ready→working. Reversing it wrongly would hide a finished turn, which is
 //     the same silent class of error as a dropped waiting.
 //
+// ERROR (#1798) IS NOT DEBOUNCED IN EITHER DIRECTION. This is a decision, not
+// an omission — the issue required one to be made and written down here.
+//
+//   - INTO error: raising a come-look cue, and the most urgent one in the
+//     system. Delaying it spends the grace in the expensive direction, which
+//     is the same argument that leaves working→ready undebounced. A session
+//     whose provider call just failed should say so on the pass that decides
+//     it.
+//   - OUT OF error: the only thing that clears an error is a successful turn
+//     (error→working when the next one starts, error→ready on turn_done).
+//     Both are real events rather than flaps, so there is nothing to
+//     suppress; debouncing them would just hold a stale red over a session
+//     that has demonstrably recovered, and error→working in particular is the
+//     user having typed, which must never look ignored.
+//
+// The known cost, accepted when the clearing rule was settled and deliberately
+// NOT mitigated here: with no minimum hold, a provider error that recovers in
+// a few hundred milliseconds can enter and leave error inside one poll
+// interval and never be seen. Adding a floor here is the obvious fix and is
+// premature — #1803 measures the real dwell in the provider-overloaded-retry
+// recording, and that measurement is what a hold should be calibrated against
+// if one is added at all.
+//
 // The residual, stated plainly rather than left to be discovered: the
 // working→ready→waiting sequence a late idle_prompt produces still reaches the
 // UI as two transitions. #1366 does not claim to remove it.

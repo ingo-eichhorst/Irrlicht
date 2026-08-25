@@ -81,6 +81,13 @@ func TestReplayTranscript_producesWaitingFromQuestion(t *testing.T) {
 		t.Errorf("first transition = %+v; want init→ready", got)
 	}
 
+	// "At least one of each was observed", not an exhaustive sweep of the
+	// state universe — so #1798's fourth state is inert here by design. It is
+	// worth saying which of the two this is: the switch has no default, and a
+	// reader could mistake the missing arm for an oversight. A replay of a
+	// healthy fixture must NOT produce an error transition, and the
+	// sawError-style assertion belongs with the error fixtures #1803 records,
+	// not here.
 	var sawWaiting, sawWorking bool
 	var prevTime = res.Transitions[0].VirtualTime
 	for i, tr := range res.Transitions {

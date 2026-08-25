@@ -98,6 +98,46 @@ func convertTasks(in []tailer.Task) []session.Task {
 	return out
 }
 
+// convertSessionError maps the tailer's session-error mirror onto the domain
+// type (#1798). Nil in, nil out — a healthy session has no error, and that
+// must stay distinguishable from a zero-valued one.
+//
+// The pointer fields are DEEP-COPIED rather than aliased. The tailer keeps its
+// sticky error across passes, so aliasing would hand the domain a pointer into
+// live tailer state that a later pass can mutate underneath a session snapshot
+// already handed to the API — the same aliasing class as the mockRepo race
+// that produced the recurring services -race flakes.
+func convertSessionError(e *tailer.SessionError) *session.SessionError {
+	if e == nil {
+		return nil
+	}
+	return &session.SessionError{
+		Phase:       session.ErrorPhase(e.Phase),
+		Class:       e.Class,
+		Message:     e.Message,
+		HTTPStatus:  copyPtr(e.HTTPStatus),
+		Attempt:     copyPtr(e.Attempt),
+		MaxAttempts: copyPtr(e.MaxAttempts),
+		RetryIn:     copyPtr(e.RetryIn),
+	}
+}
+
+// copyPtr returns a fresh pointer to the same value, or nil for nil.
+//
+// One generic helper rather than one per pointed-to type: this replaced two
+// SessionError-specific copiers and copyTailerTaskEstimate (#753), which were
+// three token-identical bodies in this one file. Shallow by design — a struct
+// it copies may hold pointers of its own, and every caller so far wants
+// exactly that (tailer.TaskEstimate's Confidence pointer is read-only once
+// parsed, which is why sharing it was already safe).
+func copyPtr[T any](v *T) *T {
+	if v == nil {
+		return nil
+	}
+	c := *v
+	return &c
+}
+
 // Convert maps the tailer's metrics struct into the domain type consumed by
 // services.ClassifyState.
 func (mc *MetricsConverter) Convert(m *tailer.SessionMetrics) *session.SessionMetrics {
@@ -142,6 +182,7 @@ func (mc *MetricsConverter) Convert(m *tailer.SessionMetrics) *session.SessionMe
 		SubagentCompletions:               convertSubagentCompletions(m.SubagentCompletions),
 		AppliedTaskDeltas:                 convertAppliedTaskDeltas(m.AppliedTaskDeltas),
 		Tasks:                             convertTasks(m.Tasks),
+		SessionError:                      convertSessionError(m.SessionError),
 	}
 	// Task summary (issue #738): the agent's in-band marker wins; the first
 	// user message is the heuristic fallback for agents that emit none. Both
@@ -208,18 +249,6 @@ func (mc *MetricsConverter) questionHeadline(source string, markerAuthored bool,
 		return q
 	}
 	return mc.compact(topic+": "+q, outbound.CompactQuestionVerbatim)
-}
-
-// copyTailerTaskEstimate copies a tailer task estimate struct so a timeline
-// snapshot never aliases the tailer's mutable cumulative state (#753). Not a
-// deep clone — the Confidence pointer is shared, which is safe: it's read-only
-// once parsed.
-func copyTailerTaskEstimate(e *tailer.TaskEstimate) *tailer.TaskEstimate {
-	if e == nil {
-		return nil
-	}
-	c := *e
-	return &c
 }
 
 func copyStrings(s []string) []string {

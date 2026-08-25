@@ -38,6 +38,22 @@ func validGranularity(sec int) bool {
 	return false
 }
 
+// statePriority maps a lifecycle state onto the 2-bit code the history bar
+// transports.
+//
+// session.StateError (#1798) HAS NO CODE and falls through to
+// statePriorityReady — an errored bucket paints GREEN on the sparkline, which
+// is precisely the silent-green failure the fourth state exists to remove.
+// That is a known, accepted gap, not an oversight: all four codes of the
+// 2-bit field are already taken (ready/working/waiting/no-data), so carrying a
+// fifth value is a wire-format change across Go, Swift and JS. #1796 cut it
+// from the epic's delivery path for that reason and filed it as #1805/#1807,
+// where this — a red session showing green in its own history — is the
+// concrete symptom to fix rather than "widen the encoding".
+//
+// Deliberately left as `default` rather than an explicit `case StateError`:
+// spelling it out would read as a considered mapping of error onto ready,
+// which it is not.
 func statePriority(s string) int {
 	switch s {
 	case session.StateWaiting:

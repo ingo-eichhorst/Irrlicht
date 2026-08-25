@@ -218,6 +218,13 @@ type SessionMetrics struct {
 	// Nil for sessions that have not called TaskCreate.
 	Tasks []Task `json:"tasks,omitempty"`
 
+	// SessionError is the session's current unrecovered session-level failure
+	// (issue #1798), or nil when the session is healthy. Recomputed from the
+	// tailer's sticky sessionError on every pass, so it appears and
+	// disappears exactly as the clearing rule says (see
+	// clearSessionErrorOnRecovery) rather than accumulating.
+	SessionError *SessionError `json:"session_error,omitempty"`
+
 	// RateLimit is the most recent rate-limit snapshot observed for this
 	// session. Populated by parsers that surface subscription quota (codex
 	// from token_count events) and by the Claude Code statusline hook
@@ -363,6 +370,24 @@ type TranscriptTailer struct {
 	// Kept distinct from lastWasUserInterrupt so the cancellation rule
 	// only fires on real ESC, not on denials (which don't end the turn).
 	lastWasToolDenial bool
+
+	// sessionError is the session's current UNRECOVERED session-level failure
+	// (issue #1798), or nil. Sticky across passes by design: the clearing rule
+	// settled in #1796 is "the next successful turn clears the error", so it
+	// must survive every intervening poll — unlike the per-pass transients
+	// above, and like lastWasUserInterrupt, which it is modelled on.
+	//
+	// THE TAILER OWNS THE CLEARING RULE because the tailer is the only layer
+	// that sees event ORDER. "The next successful turn" means a turn boundary
+	// that arrives AFTER the error, and by the time metrics reach the
+	// classifier the whole pass has collapsed into a single snapshot in which
+	// "turn_done then error" and "error then turn_done" are indistinguishable.
+	// Those two orderings mean opposite things — a turn that failed after
+	// finishing versus a turn that recovered — so the discrimination has to
+	// happen here, while the events are still in sequence.
+	//
+	// See clearSessionErrorOnRecovery for the two events that clear it.
+	sessionError *SessionError
 
 	// lastCWD tracks the most recent working directory seen in transcript lines.
 	lastCWD string
@@ -943,7 +968,7 @@ func (t *TranscriptTailer) applyToolCallDeltas(parsed *ParsedEvent, sawUserBlock
 		}
 		delete(t.openToolCalls, id)
 	}
-	if parsed.ClearToolNames && len(parsed.ToolResultIDs) == 0 {
+	if parsed.StartsNewUserTurn() {
 		t.openToolCalls = make(map[string]string)
 	}
 }
@@ -1184,7 +1209,7 @@ func (t *TranscriptTailer) applyAssistantTextAndMarkers(parsed *ParsedEvent) {
 	if t.firstUserText == "" && parsed.UserText != "" {
 		t.firstUserText = cleanSummaryText(parsed.UserText)
 	}
-	if parsed.ClearToolNames && len(parsed.ToolResultIDs) == 0 {
+	if parsed.StartsNewUserTurn() {
 		// A REAL user message (new prompt, ESC, answer) starts a new task or
 		// redirects the current one — the previous estimate no longer
 		// describes what the agent is doing, so reset it like

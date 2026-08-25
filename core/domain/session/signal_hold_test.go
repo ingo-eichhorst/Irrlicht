@@ -268,6 +268,16 @@ func TestSignalHolds_StaleIsCheckedOnTheFirstPass(t *testing.T) {
 //     ripe rule reads PermissionPending, which the permission row's apply
 //     sets. Reversed, the transcript fallback fires alongside the hook it is
 //     supposed to defer to.
+//   - SignalTurnDone before SignalSessionError (#1798): the error row's
+//     staleness reads HookTurnDone, which turn_done's apply sets on the same
+//     pass — the same dependency idle_prompt has, for the same reason.
+//     Reversed, a Stop hook arriving alongside a held error is evaluated
+//     against metrics that do not yet know the turn ended, so a failure
+//     survives a turn that actually completed and the session stays red.
+//
+// SignalSessionError sits before SignalOpenToolStalled only because that row
+// must stay last; nothing reads what the error row writes, so its position is
+// otherwise free.
 //
 // Pinned as the exact full sequence rather than as two pairwise checks so that
 // adding a row is a deliberate act — the test names the position, and whoever
@@ -278,6 +288,7 @@ func TestSignalPolicies_OrderIsPinned(t *testing.T) {
 		SignalTurnDone,
 		SignalIdlePrompt,
 		SignalCompactInProgress,
+		SignalSessionError,
 		SignalOpenToolStalled,
 	}
 

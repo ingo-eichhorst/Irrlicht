@@ -154,12 +154,15 @@ func (r *SessionRepository) ListAll() ([]*session.SessionState, error) {
 			// os.Remove the file, which destroyed every such session
 			// irrecoverably on the first sweep.
 			//
-			// What a three-state build does with it, decided here: keep the
-			// file untouched and skip the session. Handing it downstream is
-			// not an option — grouping, the state counters and the state
-			// machine are all written against exactly working/waiting/ready,
-			// so an unknown value would surface as a mis-rendered session
-			// rather than an absent one.
+			// What a build that does not know the value does with it,
+			// decided here: keep the file untouched and skip the session.
+			// Handing it downstream is not an option — grouping, the state
+			// counters and the state machine are all written against the
+			// vocabulary this build compiled with, so an unknown value would
+			// surface as a mis-rendered session rather than an absent one.
+			// (#1798 widened that vocabulary to include "error"; the reasoning
+			// is unchanged and deliberately stated without a fixed arity, so
+			// the next state does not make this comment wrong.)
 			//
 			// Two consequences of skipping, stated rather than implied:
 			//   - PruneStale iterates ListAll, so these files are exempt from
@@ -195,9 +198,16 @@ func (r *SessionRepository) warnUnknownStateOnce(state, name string) {
 	if _, seen := r.warnedStates.LoadOrStore(state, struct{}{}); seen {
 		return
 	}
-	msg := fmt.Sprintf("session file %q has unrecognized state %q (this build knows only %s/%s/%s) "+
+	// The vocabulary is read from the domain, never retyped here. This line
+	// used to be a "%s/%s/%s" with three constants passed positionally — a
+	// second, hand-maintained copy of the state list that #1798's fourth state
+	// would have left asserting "this build knows only working/waiting/ready"
+	// while the build knew four. A log line whose whole job is telling a
+	// human which states this build understands is the last place that may
+	// drift from IsCanonicalState, so both now read canonicalStates.
+	msg := fmt.Sprintf("session file %q has unrecognized state %q (this build knows only %s) "+
 		"— keeping the file on disk and skipping the session",
-		name, state, session.StateWorking, session.StateWaiting, session.StateReady)
+		name, state, strings.Join(session.CanonicalStates(), "/"))
 	if r.logger != nil {
 		r.logger.LogError("session_state_unrecognized", "", msg)
 		return

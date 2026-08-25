@@ -59,8 +59,21 @@ func TestClassify_HookOutranksTranscript(t *testing.T) {
 // a future change let the two co-occur, this test fails rather than the badge
 // silently regressing.
 func TestStateRules_LadderIsTierConsistent(t *testing.T) {
+	// Which rules actually decided something across the whole corpus. A
+	// property test that sweeps a corpus reports "no violations" identically
+	// whether the corpus covers the rule or cannot reach it at all, so the
+	// coverage is asserted below rather than assumed — the same reason this
+	// file's other helpers explain why their fixtures are REACHABLE.
+	won := map[string]bool{}
+
 	for _, base := range reachableMetricFixtures(t) {
-		for _, cur := range []string{session.StateWorking, session.StateWaiting, session.StateReady} {
+		// Every canonical state, read from the domain rather than retyped.
+		// This loop used to name the three states literally, which meant that
+		// #1798's fourth state would have left it compiling, passing, and
+		// silently no longer exhaustive — the ladder invariant would simply
+		// never have been checked for a session currently in error. Reading
+		// CanonicalStates makes a fifth state extend the corpus on its own.
+		for _, cur := range session.CanonicalStates() {
 			// Ask the real classifier who won, rather than re-walking the
 			// ladder here: a private copy of the walk would keep passing if
 			// ClassifyStateTiered ever gained a guard the copy didn't, and the
@@ -70,16 +83,42 @@ func TestStateRules_LadderIsTierConsistent(t *testing.T) {
 			if winnerIdx < 0 {
 				t.Fatalf("%s: no rule fired — the ladder must be total", base.name)
 			}
+			won[winner.Rule] = true
 
-			for i := winnerIdx + 1; i < len(stateRules); i++ {
-				if stateRules[i].when != nil && !stateRules[i].when(cur, base.metrics) {
-					continue
-				}
-				if lower := stateRules[i].tierFor(base.metrics); lower.Outranks(winner.Tier) {
-					t.Errorf("%s (current=%s): rule %q (tier %v) decided, but lower rule %q (tier %v) outranks it",
-						base.name, cur, winner.Rule, winner.Tier, stateRules[i].id, lower)
-				}
-			}
+			assertNoLowerRuleOutranks(t, base, cur, winner, winnerIdx)
+		}
+	}
+
+	// The corpus must actually reach the session_error rule (#1798). Without
+	// this, deleting the error fixtures — or a future guard that makes them
+	// unreachable — would leave this test passing while the one rule whose
+	// placement is genuinely contentious went unchecked. It is asserted for
+	// this rule specifically rather than for all nine because the other eight
+	// predate the corpus and are covered by named tests of their own.
+	if !won[string(session.SignalSessionError)] {
+		t.Errorf("no fixture reached the %q rule — the ladder-consistency sweep above therefore\n"+
+			"proved nothing about it. Restore the session-error fixtures in\n"+
+			"reachableMetricFixtures, or fix whatever now shadows the rule.",
+			session.SignalSessionError)
+	}
+}
+
+// assertNoLowerRuleOutranks is the invariant itself: of the rules BELOW the
+// one that decided, none that would also have fired on these metrics may sit
+// on a strictly higher tier.
+//
+// Split out of the sweep above so the property is stated in one place at one
+// level of nesting, rather than as the innermost two branches of a triple
+// loop.
+func assertNoLowerRuleOutranks(t *testing.T, base metricFixture, cur string, winner StateVerdict, winnerIdx int) {
+	t.Helper()
+	for i := winnerIdx + 1; i < len(stateRules); i++ {
+		if stateRules[i].when != nil && !stateRules[i].when(cur, base.metrics) {
+			continue
+		}
+		if lower := stateRules[i].tierFor(base.metrics); lower.Outranks(winner.Tier) {
+			t.Errorf("%s (current=%s): rule %q (tier %v) decided, but lower rule %q (tier %v) outranks it",
+				base.name, cur, winner.Rule, winner.Tier, stateRules[i].id, lower)
 		}
 	}
 }
@@ -124,6 +163,37 @@ func reachableMetricFixtures(t *testing.T) []metricFixture {
 			LastEventType: "turn_done", HasLiveBackgroundProcess: true,
 		}},
 		{"compacting", &session.SessionMetrics{LastEventType: "assistant", CompactInProgress: true}},
+		// #1798. Three transcript shapes carrying a session-level failure,
+		// crossed below with every hold set — including turn-done, which is
+		// the pair that matters. The session_error rule sits ABOVE agent_done
+		// and is transcript-tier, while agent_done becomes HOOK-tier the
+		// moment a Stop hook lands, so without these rows nothing would ever
+		// check that the two cannot contend. The rule's !HookTurnDone guard is
+		// what makes them exclusive; this corpus is what PROVES it rather than
+		// taking the guard's comment at its word.
+		//
+		// The error is set directly on the fixture rather than through a hold
+		// because the transcript path genuinely writes it that way — the
+		// tailer sets SessionMetrics.SessionError and places no hold, exactly
+		// as it does for TranscriptPermissionPending. The out-of-band path
+		// (SignalSessionError) is crossed in separately via the hold sets.
+		{"session-error-terminal", &session.SessionMetrics{
+			LastEventType: "assistant",
+			SessionError:  &session.SessionError{Phase: session.ErrorPhaseTerminal, Class: "provider"},
+		}},
+		{"session-error-retrying", &session.SessionMetrics{
+			LastEventType: "assistant",
+			SessionError:  &session.SessionError{Phase: session.ErrorPhaseRetrying, Class: "rate_limit"},
+		}},
+		// The dangerous one: a failure whose transcript tail ALSO reads as a
+		// finished turn. This is claudecode's real terminal shape — a
+		// synthetic assistant message with a terminal stop_reason — and it is
+		// the fixture on which agent_done would otherwise paint a failed
+		// session green.
+		{"session-error-on-finished-turn", &session.SessionMetrics{
+			LastEventType: "turn_done",
+			SessionError:  &session.SessionError{Phase: session.ErrorPhaseTerminal, Class: "provider"},
+		}},
 	}
 
 	holdSets := []struct {
@@ -148,10 +218,19 @@ func reachableMetricFixtures(t *testing.T) []metricFixture {
 		{"permission+stalled-edit", []session.SignalKind{
 			session.SignalPermissionPrompt, session.SignalOpenToolStalled,
 		}},
+		// #1798's out-of-band error path, and — the row that earns its place —
+		// that hold crossed with the Stop hook. session_error is transcript
+		// tier and sits above agent_done, which turns hook tier exactly when
+		// SignalTurnDone lands, so this is the combination that would catch
+		// an inversion.
+		{"session-error", []session.SignalKind{session.SignalSessionError}},
+		{"session-error+turn-done", []session.SignalKind{
+			session.SignalSessionError, session.SignalTurnDone,
+		}},
 		{"all", []session.SignalKind{
 			session.SignalPermissionPrompt, session.SignalTurnDone,
 			session.SignalIdlePrompt, session.SignalCompactInProgress,
-			session.SignalOpenToolStalled,
+			session.SignalOpenToolStalled, session.SignalSessionError,
 		}},
 	}
 
@@ -161,13 +240,39 @@ func reachableMetricFixtures(t *testing.T) []metricFixture {
 			m := *tr.metrics // copy: Overlay mutates
 			holds := session.NewSignalHolds()
 			for _, k := range hs.kinds {
-				holds.Hold("s", k, session.SignalPayload{}, armedAt(k))
+				holds.Hold("s", k, payloadFor(k), armedAt(k))
 			}
 			holds.Overlay("s", &m, holdT0)
 			out = append(out, metricFixture{name: tr.name + "/" + hs.name, metrics: &m})
 		}
 	}
 	return out
+}
+
+// payloadFor is the payload a hold of this kind must carry for its policy's
+// apply to do anything. Only SignalSessionError needs one: its apply is a
+// no-op on an empty payload, since there is no error to fold.
+//
+// What it buys, stated accurately after review refuted a stronger claim: it
+// widens the corpus so the ladder sweep also covers metrics whose error
+// arrived through the HOLD rather than being set on the fixture directly.
+// Neutralizing it does NOT turn this file red — the three session-error
+// transcript fixtures set the field directly and satisfy the coverage
+// assertion on their own. The hold path's own behaviour is asserted where it
+// belongs, in session.TestSignalSessionError_HoldAppliesItsPayload, which does
+// go red when the policy row is broken.
+//
+// SignalTurnDone's payload fields are optional by design and left empty.
+func payloadFor(kind session.SignalKind) session.SignalPayload {
+	if kind == session.SignalSessionError {
+		return session.SignalPayload{
+			SessionError: &session.SessionError{
+				Phase: session.ErrorPhaseTerminal,
+				Class: "provider",
+			},
+		}
+	}
+	return session.SignalPayload{}
 }
 
 // armedAt is when a hold of this kind must have been placed for the pass at
