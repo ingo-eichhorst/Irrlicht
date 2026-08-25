@@ -805,6 +805,15 @@ func runDaemon() {
 
 	registerHookRoutes(mux, detector, metricsCollector, permService, logger)
 
+	// Registered before publishAddrFile: once the addr file exists, every
+	// reader of it treats the daemon as alive and expects a clean shutdown
+	// to remove it. Installing the handler first — it costs nothing — closes
+	// the window where a SIGTERM landing between the two got the default
+	// disposition and killed the process before os.Remove(addrPath) below
+	// ever ran (#1808).
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
+
 	publishAddrFile(addrPath, resolvedAddr, logger)
 
 	go func() { _ = srv.Serve(unixL) }()
@@ -836,9 +845,8 @@ func runDaemon() {
 
 	logger.LogInfo("startup", "", fmt.Sprintf("irrlichd %s listening on unix:%s and tcp:%s", Version, sockPath, resolvedAddr))
 
-	// Wait for SIGTERM or SIGINT.
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
+	// Wait for SIGTERM or SIGINT (handler installed above, before the addr
+	// file was published).
 	<-sig
 
 	logger.LogInfo("shutdown", "", "signal received, shutting down")
