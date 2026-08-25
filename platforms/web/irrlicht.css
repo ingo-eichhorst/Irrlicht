@@ -25,6 +25,18 @@
       --ready: #34C759;
       --ready-dim: rgba(52, 199, 89, 0.12);
       --ready-glow: rgba(52, 199, 89, 0.2);
+      /* Session error (#1801) — the fourth lifecycle state. Apple's system
+         red, which is already this palette's failure hue (--pressure-high and
+         --ws-disconnected are the same value) rather than a fifth red nobody
+         asked for. #1802 adds the matching macOS IrrHex.error; until it does,
+         irrlicht.test.js pins this against the red Tokens.swift ALREADY
+         declares, so the two frontends cannot ship different reds in the gap.
+         Unlike --cancelled/--unknown this DOES get a light-theme override
+         below: at 3.01:1 against its own wash on white it fails WCAG AA, so
+         copying the dark value would repeat exactly the #984 defect the
+         light-palette block exists to fix. */
+      --error: #FF3B30;
+      --error-dim: rgba(255, 59, 48, 0.12);
       --cancelled: #8E8E93;
       --cancelled-dim: rgba(142, 142, 147, 0.1);
       /* Unrecognized session state (#1797) — a state this build has never
@@ -78,6 +90,18 @@
         --waiting-dim: rgba(136, 79, 0, 0.12);
         --ready: #207936;
         --ready-dim: rgba(32, 121, 54, 0.12);
+        /* #1801, same rule as the three above and measured the same way. The
+           dark --error (#FF3B30) reads 3.01:1 against its own 12% wash on
+           --surface #ffffff — under the 4.5:1 minimum, and the worst possible
+           colour to render illegibly. #CC0C00 is the same hue (H=3.6deg,
+           S=100%) darkened to L=40%, measuring 4.69:1 against its own wash and
+           5.80:1 against plain white, which puts it in the same band as
+           --ready's 4.62:1. Reproduce with:
+             node platforms/web/snapshots/contrast.mjs
+           and the assertion lives in platforms/web/sessionError.test.js so it
+           is re-run by CI, not just recorded here. */
+        --error: #CC0C00;
+        --error-dim: rgba(204, 12, 0, 0.12);
       }
     }
     :root[data-theme="light"] {
@@ -102,6 +126,8 @@
       --waiting-dim: rgba(136, 79, 0, 0.12);
       --ready: #207936;
       --ready-dim: rgba(32, 121, 54, 0.12);
+      --error: #CC0C00;
+      --error-dim: rgba(204, 12, 0, 0.12);
     }
 
     body {
@@ -596,6 +622,16 @@
       color: var(--unknown);
     }
 
+    /* Session error (#1801) — same construction as the unknown icon above and
+       for the same reason: the glyph paints with currentColor so it follows
+       the light-theme --error override, instead of freezing at the dark hex
+       the way working/waiting/ready/cancelled do. Those four are a known wart
+       left alone (#1797); this one does not copy it. */
+    .row-state-icon svg.state-error,
+    .app-state-icon svg.state-error {
+      color: var(--error);
+    }
+
     /* Working state — opacity-only "breathe" on a large solid dot.
        Footprint is r=7 of 20 viewBox (70 % of cell), so the dot stays
        clearly visible even if the animation is dropped by the renderer
@@ -823,6 +859,47 @@
       cursor: default;
     }
 
+    /* Session-error row (#1801) — the red line beneath an errored session,
+       carrying the agent's own failure text. Its own row rather than an inline
+       slot for the reason createSessionRow's anatomy comment gives about the
+       cache-bloat badge: a provider error message is a sentence, not something
+       that fits a fixed-width column.
+       Deliberately NOT copying .row-cache-bloat's `white-space: nowrap` +
+       ellipsis. That badge renders a short derived phrase, so clipping it
+       loses nothing; this renders an agent's verbatim error, where the part
+       that gets clipped is exactly the part the user needs. It wraps instead,
+       the same call .perm-unapplied-list makes (`overflow-wrap: anywhere`) for
+       the same kind of content. */
+    .row-error-row {
+      margin: 0 10px 4px 24px;
+      font-family: var(--font-mono);
+    }
+    /* Unreachable today, and kept deliberately: emitGroup never recurses into
+       a.children, so no sub-row is emitted for a child session. Present for
+       parity with .row-cache-bloat-row.child above, which is unreachable for
+       exactly the same reason — dropping one without the other would make the
+       two rows look like they differ when they do not. */
+    .row-error-row.child { margin-left: 44px; }
+    .row-error {
+      display: inline-block;
+      max-width: 100%;
+      font-size: 10px;
+      font-weight: 600;
+      padding: 3px 6px;
+      border-radius: 4px;
+      background: var(--error-dim);
+      color: var(--error);
+      overflow-wrap: anywhere;
+      cursor: default;
+    }
+    /* The retry ladder ("attempt 3 of 10, next in 0.6s") is secondary to the
+       message and reads as a separate clause. Same hue at reduced weight
+       rather than --muted, so it stays legibly part of the error. */
+    .row-error-retry {
+      font-weight: 400;
+      opacity: 0.85;
+    }
+
     /* Pending question — collapsible block beneath the parent row, shown only
        while waiting (issue #738, narrowed by #979: a finished session has
        nothing left to report). A clickable head (chevron + "Waiting for
@@ -933,6 +1010,43 @@
       background: rgba(255, 59, 48, 0.1);
       border-color: rgba(255, 59, 48, 0.4);
       color: var(--pressure-high);
+    }
+
+    /* Daemon-error banner (#1801) — "Irrlicht's own monitoring is degraded".
+       The THIRD banner and the one that takes the error palette, because
+       unlike the two below it this says the dashboard cannot vouch for what
+       it is showing: a dead hook channel silently demotes every session of
+       that adapter to slower transcript-only classification, so the list can
+       look entirely healthy while being wrong.
+       Visibility is [hidden]-driven like the unapplied-grants banner, not
+       class-driven like the connection banner, for the same reason #1385
+       gives: it clears by being fixed, and there is no dismiss. */
+    #daemon-error-banner {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      padding: 6px 10px;
+      margin-bottom: 8px;
+      border-radius: 4px;
+      background: var(--error-dim);
+      border: 1px solid var(--error);
+      color: var(--error);
+    }
+    #daemon-error-banner[hidden] {
+      display: none;
+    }
+    .daemon-error-list {
+      margin: 4px 0 0;
+      padding-left: 16px;
+      /* --text, not --error: the detail is the longest text on the strip and
+         the same WCAG argument .perm-unapplied-list records applies — the
+         error hue over its own 12% wash sits at 4.60:1 (dark) / 4.69:1
+         (light), which clears AA but leaves no headroom for a paragraph. The
+         scope stays in the error hue so the strip still reads as one thing. */
+      color: var(--text);
+      overflow-wrap: anywhere;
+    }
+    .daemon-error-scope {
+      color: var(--error);
     }
 
     /* Unapplied-grants banner (#1385) — "N permissions are granted but not
@@ -1600,6 +1714,13 @@
     .hsm-seg-working { background: var(--working); }
     .hsm-seg-waiting { background: var(--waiting); }
     .hsm-seg-ready { background: var(--ready); }
+    /* #1801 — the fourth stack segment. These classes are generated from
+       historyTab.js's STATE_STACK_ORDER, so a state without a rule here paints
+       transparent: the segment still takes its share of the bar's flex space
+       and simply disappears, which reads as a gap rather than as a missing
+       colour. That silent-hole property is why the list is derived on the JS
+       side and why this rule is not optional. */
+    .hsm-seg-error { background: var(--error); }
     .hsm-seg-cap { border-radius: 3px 3px 0 0; }
 
     .hsm-tooltip {

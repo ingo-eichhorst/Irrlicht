@@ -587,6 +587,14 @@ type registerSessionRoutesDeps struct {
 	Push         outbound.PushBroadcaster
 	Logger       outbound.Logger
 	GitResolver  *git.Adapter
+	// HookHealth is the same live snapshot function the diagnostics bundle
+	// gets (liveHookHealth). #1801 gives its two client-invisible diagnoses —
+	// entries that went missing, channels that have gone silent — a second
+	// outlet on /api/v1/sessions, because a hook fault degrades every
+	// session's classification and until now was visible only inside a
+	// `--diagnose` tarball. nil is valid and means "report no daemon-wide
+	// faults", matching liveHookHealth's own nil-meaningful seam.
+	HookHealth func() services.HookHealthSnapshot
 }
 
 // registerSessionRoutes wires the sessions/history/focus endpoints. Kept
@@ -600,7 +608,7 @@ func registerSessionRoutes(mux *http.ServeMux, deps registerSessionRoutesDeps) {
 				return s.Controllable(sessionID)
 			}
 			return false
-		}))
+		}, deps.HookHealth))
 
 	// History tab analytics (issue #369): trailing/calendar/custom-range cost
 	// series + linear forecast, computed from the cost snapshot files. #373 adds

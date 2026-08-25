@@ -47,8 +47,16 @@ func TestHandleGetHistory_StateChart(t *testing.T) {
 	if len(resp.Projects) != 1 || resp.Projects[0] != "projX" {
 		t.Errorf("projects: want [projX], got %+v", resp.Projects)
 	}
-	if resp.ByState == nil || resp.ByState[session.StateWorking] == nil || resp.ByState[session.StateWaiting] == nil || resp.ByState[session.StateReady] == nil {
-		t.Fatalf("by_state must carry all three canonical states, got %+v", resp.ByState)
+	// Reads the vocabulary rather than listing it (#1801): by_state must carry
+	// EVERY canonical state, error included, so the client can rely on the key
+	// existing whether or not anything happened in that state this window.
+	if resp.ByState == nil {
+		t.Fatalf("by_state missing entirely: %+v", resp)
+	}
+	for _, state := range session.CanonicalStates() {
+		if _, ok := resp.ByState[state]; !ok {
+			t.Fatalf("by_state must carry every canonical state; %q is missing, got %+v", state, resp.ByState)
+		}
 	}
 	if sum(resp.ByState[session.StateWorking]["projX"]) <= 0 {
 		t.Errorf("working[projX] should have positive activity, got series %v", resp.ByState[session.StateWorking]["projX"])

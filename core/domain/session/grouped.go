@@ -286,16 +286,19 @@ func ComputeSubagentSummary(parent *SessionState, childSessions []*SessionState)
 		Total:   inProcess + len(fileChildren),
 		Working: inProcess,
 	}
+	// Tally by key, not by switch (#1801): Total already counts every file
+	// child, so any state missing from the buckets breaks the invariant that
+	// they sum to it. A map cannot go silently incomplete; the readout below
+	// is the only place states are named, and a canonical state absent from it
+	// is caught by TestComputeSubagentSummary_BucketsSumToTotal.
+	byState := map[string]int{}
 	for _, c := range fileChildren {
-		switch c.State {
-		case StateWorking:
-			summary.Working++
-		case StateWaiting:
-			summary.Waiting++
-		case StateReady:
-			summary.Ready++
-		}
+		byState[c.State]++
 	}
+	summary.Working += byState[StateWorking]
+	summary.Waiting = byState[StateWaiting]
+	summary.Ready = byState[StateReady]
+	summary.Error = byState[StateError]
 	return summary
 }
 

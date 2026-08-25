@@ -146,10 +146,19 @@ without an empty first paint, and serves the `platforms/web/` dashboard:
 
 | Endpoint              | Body                                                            |
 | --------------------- | -------------------------------------------------------------- |
-| `GET /api/v1/sessions` | `{ "groups": [...] }` — `BuildDashboard` over the cached sessions (grouped by project; no **orchestrator** (Gas Town) state in v0). |
+| `GET /api/v1/sessions` | `{ "groups": [...] }` — `BuildDashboard` over the cached sessions (grouped by project; no **orchestrator** (Gas Town) state in v0). **No `daemon_errors`** — see below. |
 | `GET /api/v1/agents`   | union of every connected daemon's registry, deduped by `name`. |
 | `GET /api/v1/version`  | the relay's own build version.                                 |
 | `GET /` (+ assets)     | the dashboard, served from disk (`IRRLICHT_UI_DIR` override, else dev/bundle lookup). |
+
+The daemon's own `/api/v1/sessions` carries a top-level `daemon_errors` array
+(#1801) reporting faults in Irrlicht's own machinery — hook entries that went
+missing, hook channels that have gone silent — which the dashboard renders as a
+banner. **The relay does not forward it.** It rebuilds this payload from its
+session cache, and the envelope carries no daemon health at all, so a
+relay-connected dashboard shows no daemon-error banner. Same for
+`/api/v1/permissions`, which the relay does not re-serve, so its unapplied-grants
+banner is equally absent. Both need an envelope change rather than a field.
 
 WebSocket `CheckOrigin` is permissive by default (the dashboard served from a
 different port is cross-origin). `serve --origin-allowlist host1,host2`

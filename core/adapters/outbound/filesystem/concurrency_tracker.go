@@ -116,7 +116,7 @@ func (t *ConcurrencyTracker) Dir() string { return t.dir }
 // state timeline.
 type stateChange struct {
 	ts    int64
-	state string // working|waiting|ready
+	state string // any session.CanonicalStates() value
 }
 
 // sessionTimeline accumulates one session's state transitions and project label
@@ -141,6 +141,19 @@ type interval struct {
 // is "concurrent" while working or waiting, and stops once it goes ready
 // (process exited / cancelled / transcript removed) — the three-state model
 // read literally (#751).
+//
+// `error` is NOT active, and that is a settled decision rather than an
+// oversight of #1798's fourth state (events.md; #1801). Nothing clears a
+// session error until the next successful turn, so an errored session counted
+// here would inflate the concurrency metric for the whole rest of its life —
+// the failure mode is permanent, not transient.
+//
+// This is one half of a partition whose other half is
+// session.SessionState.HasWorkInFlight ("is more work coming?"), where an
+// errored-but-retrying session DOES count. The two cannot be one function and
+// this one cannot read the error detail even if it wanted to: it is handed a
+// bare state string off a persisted timeline that carries no SessionError at
+// all. Read HasWorkInFlight's doc before merging them.
 func concurrencyActive(state string) bool {
 	return state == session.StateWorking || state == session.StateWaiting
 }
@@ -302,11 +315,7 @@ func (t *ConcurrencyTracker) StateSeries(q outbound.SeriesQuery) (*outbound.Stat
 		End:           end,
 		BucketSeconds: bucketSeconds,
 		BucketStarts:  make([]int64, n),
-		ByState: map[string]map[string][]float64{
-			session.StateWorking: {},
-			session.StateWaiting: {},
-			session.StateReady:   {},
-		},
+		ByState:       outbound.NewStateBuckets(),
 	}
 	for i := range out.BucketStarts {
 		out.BucketStarts[i] = start + int64(i)*bucketSeconds
@@ -317,7 +326,7 @@ func (t *ConcurrencyTracker) StateSeries(q outbound.SeriesQuery) (*outbound.Stat
 		return nil, err
 	}
 
-	byState, readyByProject, current := collectScopedStateIntervals(timelines, q, start, end)
+	byState, instants, current := collectScopedStateIntervals(timelines, q, start, end)
 	out.Current = current
 
 	var allActive []interval
@@ -330,32 +339,46 @@ func (t *ConcurrencyTracker) StateSeries(q outbound.SeriesQuery) (*outbound.Stat
 	}
 	out.Peak, out.Average = totalPeakAndAverage(allActive, start, end)
 
-	for project, events := range readyByProject {
-		dst := make([]float64, n)
-		for _, ts := range events {
-			idx := int((ts - start) / bucketSeconds)
-			if idx >= 0 && idx < n {
-				dst[idx]++
-			}
+	for state, byProject := range instants {
+		for project, events := range byProject {
+			out.ByState[state][project] = bucketTransitionCounts(events, start, bucketSeconds, n)
 		}
-		out.ByState[session.StateReady][project] = dst
 	}
 
 	return out, nil
 }
 
+// bucketTransitionCounts histograms instantaneous transition timestamps into
+// the series' buckets — the counterpart of bucketPeakSeries, which measures
+// duration states instead. Timestamps outside [start, start+n*bucketSeconds)
+// are dropped rather than clamped: a transition outside the window did not
+// happen in any of its buckets, and folding it into the nearest one would
+// invent activity at an edge.
+func bucketTransitionCounts(events []int64, start, bucketSeconds int64, n int) []float64 {
+	dst := make([]float64, n)
+	for _, ts := range events {
+		if idx := int((ts - start) / bucketSeconds); idx >= 0 && idx < n {
+			dst[idx]++
+		}
+	}
+	return dst
+}
+
 // collectScopedStateIntervals is collectScopedIntervals' per-state
 // counterpart: it gathers each in-scope session's working/waiting intervals,
-// clamped to [start, end) and grouped by state then project, plus every ready
-// transition timestamp landing in [start, end), grouped by project. current
-// counts sessions active (in either state) strictly across end, matching
-// collectScopedIntervals' "still active now" semantics exactly.
-func collectScopedStateIntervals(timelines map[string]*sessionTimeline, q outbound.SeriesQuery, start, end int64) (byState map[string]map[string][]interval, readyByProject map[string][]int64, current float64) {
-	byState = map[string]map[string][]interval{
-		session.StateWorking: {},
-		session.StateWaiting: {},
-	}
-	readyByProject = map[string][]int64{}
+// clamped to [start, end) and grouped by state then project, plus every
+// instantaneous transition landing in [start, end), grouped by state then
+// project. current counts sessions active (in either duration state) strictly
+// across end, matching collectScopedIntervals' "still active now" semantics
+// exactly.
+//
+// The duration seeding is derived from the vocabulary filtered by
+// concurrencyActive rather than typed out, so it and stateReconstruction's
+// routing below cannot disagree about which states have a duration — a
+// disagreement would be a nil-map write in appendClampedStateIntervals.
+func collectScopedStateIntervals(timelines map[string]*sessionTimeline, q outbound.SeriesQuery, start, end int64) (byState map[string]map[string][]interval, instants map[string]map[string][]int64, current float64) {
+	byState = newDurationBuckets()
+	instants = map[string]map[string][]int64{}
 	for sid, tl := range timelines {
 		if !concurrencyScopeMatches(q, sid, tl.project) {
 			continue
@@ -363,16 +386,50 @@ func collectScopedStateIntervals(timelines map[string]*sessionTimeline, q outbou
 		// See the matching comment in collectScopedIntervals: "" is left raw
 		// for handlers.go's resolveUnknownStateProject to decide (issue #1046).
 		project := tl.project
-		ivs, readyAt := tl.stateReconstruction()
+		ivs, instantAt := tl.stateReconstruction()
 		current += appendClampedStateIntervals(byState, project, ivs, start, end)
-		// Only touch readyByProject when there is something to record: an
-		// unconditional append would mint a key for every in-scope project,
-		// turning "no ready transitions" into an empty series downstream.
-		if inWindow := readyInWindow(readyAt, start, end); len(inWindow) > 0 {
-			readyByProject[project] = append(readyByProject[project], inWindow...)
+		appendInstantsInWindow(instants, project, instantAt, start, end)
+	}
+	return byState, instants, current
+}
+
+// newDurationBuckets seeds one project map per state that HAS a duration —
+// outbound.NewStateBuckets' counterpart for the interval side.
+//
+// Derived by filtering the vocabulary through concurrencyActive rather than
+// listing working/waiting, so this and stateReconstruction's routing cannot
+// disagree about which states get intervals. A disagreement would surface as a
+// nil-map write in appendClampedStateIntervals rather than a wrong number,
+// which is the failure mode worth engineering for here.
+func newDurationBuckets() map[string]map[string][]interval {
+	out := map[string]map[string][]interval{}
+	for _, s := range session.CanonicalStates() {
+		if concurrencyActive(s) {
+			out[s] = map[string][]interval{}
 		}
 	}
-	return byState, readyByProject, current
+	return out
+}
+
+// appendInstantsInWindow folds one session's transition timestamps into the
+// shared state -> project -> timestamps index, keeping only those inside
+// [start, end).
+//
+// A key is minted only when there is something to record. An unconditional
+// append would create an entry for every in-scope project, which downstream
+// turns "no transitions of this kind here" into an empty SERIES — a row of
+// zeroes the dashboard draws, rather than an absence it skips.
+func appendInstantsInWindow(dst map[string]map[string][]int64, project string, instantAt map[string][]int64, start, end int64) {
+	for state, at := range instantAt {
+		inWindow := instantsInWindow(at, start, end)
+		if len(inWindow) == 0 {
+			continue
+		}
+		if dst[state] == nil {
+			dst[state] = map[string][]int64{}
+		}
+		dst[state][project] = append(dst[state][project], inWindow...)
+	}
 }
 
 // appendClampedStateIntervals appends every interval in ivs — clamped to
@@ -393,10 +450,10 @@ func appendClampedStateIntervals(byState map[string]map[string][]interval, proje
 	return current
 }
 
-// readyInWindow returns the ready-transition timestamps landing in [start, end).
-func readyInWindow(readyAt []int64, start, end int64) []int64 {
+// instantsInWindow returns the transition timestamps landing in [start, end).
+func instantsInWindow(at []int64, start, end int64) []int64 {
 	var out []int64
-	for _, ts := range readyAt {
+	for _, ts := range at {
 		if ts >= start && ts < end {
 			out = append(out, ts)
 		}
@@ -412,11 +469,7 @@ func emptyStateSeriesResult(start, end, bucketSeconds int64) *outbound.StateSeri
 		End:           end,
 		BucketSeconds: bucketSeconds,
 		BucketStarts:  []int64{},
-		ByState: map[string]map[string][]float64{
-			session.StateWorking: {},
-			session.StateWaiting: {},
-			session.StateReady:   {},
-		},
+		ByState:       outbound.NewStateBuckets(),
 	}
 }
 
@@ -514,15 +567,28 @@ func concurrencyScopeMatches(q outbound.SeriesQuery, sessionID, project string) 
 // interval, which only tracks "active" (working or waiting, merged).
 type stateInterval struct {
 	enter, exit int64
-	state       string // session.StateWorking | session.StateWaiting
+	state       string // a concurrencyActive state: session.StateWorking | session.StateWaiting
 }
 
 // stateReconstruction rebuilds a session's full timeline: working/waiting
 // spans as durations (stateInterval, tagged by which of the two states was
-// active) and every transition into ready as an instantaneous timestamp —
-// ready is session.go's terminal state, with no duration to be concurrent in,
-// so "how many agents went ready in bucket X" (issue #981) is a transition
-// count, not a concurrency count. A session still working/waiting at its last
+// active) and every transition into a NON-duration state as an instantaneous
+// timestamp — ready has no duration to be concurrent in, so "how many agents
+// went ready in bucket X" (issue #981) is a transition count, not a
+// concurrency count.
+//
+// #1801 puts `error` on the transition-count side with ready, and the split is
+// concurrencyActive rather than a second list, deliberately. An errored
+// session is settled as NOT active (events.md; nothing clears an error until
+// the next successful turn, so a dwell would inflate both the concurrency
+// series and `current` for the rest of the session's life). Once it is not
+// active it has no interval to contribute, and a transition count — "how many
+// sessions went red in bucket X" — is the only honest thing left to record.
+// Deriving the two sides from one predicate also means they cannot disagree:
+// a state seeded as a duration but routed as an instant, or vice versa, would
+// be a nil-map write rather than a wrong number.
+//
+// A session still working/waiting at its last
 // recorded event (no terminator) is bounded at that last event — "last known
 // alive" — so a daemon that died mid-session doesn't leave it counted as alive
 // forever; same rule the merged reconstruction below always used. (lastEventTS
@@ -540,7 +606,7 @@ type stateInterval struct {
 // AgentsSeries and StateSeries despite clearly having been active at that
 // instant (issue #983). A one-second floor is the same granularity every
 // timestamp here already uses (ev.Timestamp.Unix()).
-func (tl *sessionTimeline) stateReconstruction() (ivs []stateInterval, readyAt []int64) {
+func (tl *sessionTimeline) stateReconstruction() (ivs []stateInterval, instantAt map[string][]int64) {
 	if len(tl.transitions) == 0 {
 		return nil, nil
 	}
@@ -548,9 +614,13 @@ func (tl *sessionTimeline) stateReconstruction() (ivs []stateInterval, readyAt [
 	sort.SliceStable(tr, func(i, j int) bool { return tr[i].ts < tr[j].ts })
 
 	for _, c := range tr {
-		if c.state == session.StateReady {
-			readyAt = append(readyAt, c.ts)
+		if concurrencyActive(c.state) {
+			continue
 		}
+		if instantAt == nil {
+			instantAt = map[string][]int64{}
+		}
+		instantAt[c.state] = append(instantAt[c.state], c.ts)
 	}
 
 	if last := tr[len(tr)-1]; concurrencyActive(last.state) {
@@ -565,7 +635,7 @@ func (tl *sessionTimeline) stateReconstruction() (ivs []stateInterval, readyAt [
 			ivs = append(ivs, stateInterval{cur.ts, next.ts, cur.state})
 		}
 	}
-	return ivs, readyAt
+	return ivs, instantAt
 }
 
 // activeIntervals reports the merged working-or-waiting spans a session was
