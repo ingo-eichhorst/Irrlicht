@@ -747,7 +747,10 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       // exactly as 'ready' was.
       const state = agent.state || 'unknown';
       const metrics = agent.metrics || {};
-      const isActive = state === 'working' || state === 'waiting';
+      // #1801: one shared predicate rather than a second inline copy. This
+      // drives whether the elapsed clock keeps ticking, and a session that is
+      // mid-retry is still running its turn.
+      const isActive = hasWorkInFlight(agent);
 
       // Each column updates independently; the renderRow* helpers below own
       // one concern each and touch only their own .row-* element(s) + dataset
@@ -1060,11 +1063,37 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       }
     }
 
+    // hasWorkInFlight is the web mirror of session.SessionState.HasWorkInFlight
+    // in the Go domain (#1801), and exists for the same reason: "is this
+    // session still doing something" was re-derived inline in two places here
+    // as `state === 'working' || state === 'waiting'`, which was a complete
+    // partition over three states and silently became an incomplete one over
+    // four.
+    //
+    // A session in `error` whose phase is `retrying` is still working — the
+    // agent has another attempt scheduled — so its elapsed clock must keep
+    // ticking rather than freeze at the moment the provider first refused.
+    // TERMINAL and unknown-phase errors are not: no further attempt is coming,
+    // and inferring one from a transcript that said nothing is the invented
+    // verdict the daemon's pointer fields exist to prevent.
+    //
+    // Deliberately NOT the same question as "does this consume a concurrency
+    // slot", where an errored session never counts (events.md) — that half has
+    // no web caller; see the Go predicate's doc for why the two cannot merge.
+    // formatters.js's activeSubagentCount is also left on working-or-waiting:
+    // it is the display count whose Go twin, subagentSummary, gained a separate
+    // Error bucket rather than folding errors into the active one.
+    function hasWorkInFlight(agent) {
+      const state = agent?.state;
+      if (state === 'working' || state === 'waiting') return true;
+      return state === 'error' && (agent?.metrics?.session_error?.phase === 'retrying');
+    }
+
     // pressureAlertItem builds the pressure-alert sub-row for an active
     // agent in an alert-worthy pressure state, or null otherwise. Extracted
     // from emitAgentRowItems (issue #901 cognitive-complexity cleanup).
     function pressureAlertItem(a) {
-      const isActive = a.state === 'working' || a.state === 'waiting';
+      const isActive = hasWorkInFlight(a);
       const pressure = a.metrics ? a.metrics.pressure_level : '';
       if (!isActive || !isAlertPressure(pressure)) return null;
       return {type: 'alert', key: 'al:' + a.session_id, pressure: pressure};
@@ -2381,7 +2410,7 @@ export {
   // neither it nor stateIcon was covered is half right; stateIcon gained one
   // in #1797, this one had nothing, and it is the map a new state is most
   // likely to be forgotten in.
-  stateColor, sessionErrorText, daemonErrorSummary, renderDaemonErrorBanner,
+  stateColor, sessionErrorText, daemonErrorSummary, renderDaemonErrorBanner, hasWorkInFlight,
   formatCost, costCellDisplay, pressureClass, historyPriorityForState,
   taskEtaPresentation,
   lastNotifiedPressure,

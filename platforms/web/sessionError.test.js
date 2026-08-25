@@ -7,6 +7,9 @@ import {
   DARK_BLOCK, LIGHT_MEDIA_BLOCK, LIGHT_THEME_BLOCK,
 } from './snapshots/contrast.mjs'
 import * as irr from './irrlicht.js'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 // --- #1801: the `error` session state on the web dashboard -----------------
 //
@@ -340,5 +343,58 @@ describe('the daemon-wide error banner (#1801)', () => {
     expect(banner().querySelector('img')).toBeNull()
     expect(banner().querySelector('script')).toBeNull()
     expect(banner().textContent).toContain('<img src=x onerror=alert(1)>')
+  })
+})
+
+describe('the web "is active" partition (#1801)', () => {
+  // The client had its own two inline copies of `working || waiting`, and they
+  // drift for exactly the reason the Go ones did. Collapsed into one predicate
+  // mirroring session.SessionState.HasWorkInFlight.
+
+  // LOCK — passes by construction; the three original answers must not move.
+  test('the original states keep their answers', () => {
+    expect(irr.hasWorkInFlight({ state: 'working' })).toBe(true)
+    expect(irr.hasWorkInFlight({ state: 'waiting' })).toBe(true)
+    expect(irr.hasWorkInFlight({ state: 'ready' })).toBe(false)
+  })
+
+  test('a RETRYING errored session is still working', () => {
+    // The elapsed clock must keep ticking: the agent has another attempt
+    // scheduled, so the turn has not stopped.
+    expect(irr.hasWorkInFlight(sessionWithError(errorPayload({ phase: 'retrying' })))).toBe(true)
+  })
+
+  test('a TERMINAL or unknown-phase errored session is not', () => {
+    expect(irr.hasWorkInFlight(sessionWithError(errorPayload({ phase: 'terminal' })))).toBe(false)
+    // Unknown phase is an honest "the transcript did not say", not a licence to
+    // assume another attempt is coming.
+    expect(irr.hasWorkInFlight(sessionWithError(errorPayload({ phase: '' })))).toBe(false)
+    expect(irr.hasWorkInFlight(sessionWithError(null))).toBe(false)
+  })
+
+  test('it never throws on a partial session object', () => {
+    // Sessions arrive from the websocket as whole-object replacements and a
+    // freshly-discovered one can be missing metrics entirely.
+    for (const a of [undefined, null, {}, { state: 'error' }, { state: 'error', metrics: {} }]) {
+      expect(() => irr.hasWorkInFlight(a)).not.toThrow()
+      expect(irr.hasWorkInFlight(a)).toBe(false)
+    }
+  })
+
+  test('it agrees with the Go domain predicate it mirrors', () => {
+    // Reads the Go source rather than restating its rule, so the two cannot
+    // drift silently — the same technique the --error/Tokens.swift pairing
+    // uses. Asserted to have FOUND the function, so "could not look" fails
+    // loudly instead of passing.
+    const go = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'core', 'domain', 'session', 'session.go'),
+      'utf8',
+    )
+    const body = go.match(/func \(s \*SessionState\) HasWorkInFlight\(\) bool \{[\s\S]*?\n\}/)
+    expect(body, 'HasWorkInFlight not found in core/domain/session/session.go').not.toBeNull()
+    expect(body[0]).toMatch(/StateWorking/)
+    expect(body[0]).toMatch(/StateWaiting/)
+    expect(body[0]).toMatch(/StateError/)
+    expect(body[0]).toMatch(/IsRetrying/)
   })
 })
