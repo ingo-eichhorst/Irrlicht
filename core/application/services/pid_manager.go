@@ -171,6 +171,32 @@ type PIDManager struct {
 	// Set by SessionDetector.SetRecorder.
 	recorder    outbound.EventRecorder
 	recorderSeq *int64 // shared with SessionDetector for monotonic ordering
+
+	// errorRetentionOverride, when non-zero, replaces processDeathRetention in
+	// this manager's #1815 exemption. Zero means "use the package default".
+	//
+	// It exists so the sweeps' window and SessionDetector's stay ONE knob:
+	// SetProcessDeathRetention forwards here, and a test that compresses twelve
+	// hours to milliseconds compresses both halves. Without it a compressed test
+	// would shorten the detector's retention and leave the sweeps measuring the
+	// real twelve hours — two windows the code repeatedly calls "the same twelve
+	// hours", silently disagreeing.
+	errorRetentionOverride time.Duration
+}
+
+// SetErrorRetention overrides the window this manager's #1815 exemption measures.
+// Forwarded from SessionDetector.SetProcessDeathRetention so the two cannot drift.
+func (pm *PIDManager) SetErrorRetention(dur time.Duration) {
+	pm.errorRetentionOverride = dur
+}
+
+// errorRetention is the window the startup exemptions measure — the override
+// when one is set, the shared default otherwise.
+func (pm *PIDManager) errorRetention() time.Duration {
+	if pm.errorRetentionOverride > 0 {
+		return pm.errorRetentionOverride
+	}
+	return processDeathRetention
 }
 
 // PIDManagerDeps bundles NewPIDManager's dependencies. PW and Broadcaster may
@@ -622,6 +648,13 @@ func (pm *PIDManager) HasLiveProcessInCWD(adapter, cwd string) bool {
 // supply one — typically pm.newLiveLookupCache().
 func (pm *PIDManager) isStartupZombie(state *session.SessionState, liveLookup func(adapter string) map[string]struct{}) bool {
 	if state == nil {
+		return false
+	}
+	// Above every branch below, not only the dead-PID one: an errored row within
+	// its retention window is worth keeping whatever this sweep's reason for
+	// wanting it gone (#1815). See retainedErrorAcrossRestart for the full list
+	// of paths that consult it.
+	if retainedErrorAcrossRestart(state, time.Now(), pm.errorRetention()) {
 		return false
 	}
 	if state.PID > 0 {
@@ -1363,12 +1396,20 @@ func (pm *PIDManager) seedAlivePIDs(states []*session.SessionState) map[int]*ses
 			if pm.handleAlivePIDState(state) {
 				pm.trackNewestByPID(state, newestByPID)
 			}
-		case state.PID == 0 && isOrphanAtSeed(state):
+		case state.PID == 0 && !retainedErrorAcrossRestart(state, time.Now(), pm.errorRetention()) && isOrphanAtSeed(state):
 			// Orphan from exited process (PID discovery never succeeded).
 			// Child sessions (ParentSessionID set) are exempt — they run
 			// inside the parent process and never get their own PID.
 			// cwdMissing also catches zombies re-touched by `claude --resume`
 			// after the worktree was deleted (#321).
+			//
+			// THE THIRD DELETER an errored row can reach (#1815), and the least
+			// obvious: it has nothing to do with a dead PID. A headless run that
+			// fails on a provider error and exits before PID discovery ever binds
+			// leaves a row with PID==0, and an errored session's transcript is
+			// stale by definition once orphanTranscriptAge (2 minutes) has passed
+			// — so isOrphanAtSeed says yes to exactly the rows the other two
+			// exemptions just spared.
 			pm.log.LogInfo(logComponentSessionDetectorSeed, state.SessionID, "deleting orphan session")
 			pm.deleteWithChildren(state, "orphan session at seed — PID discovery never succeeded")
 		}
@@ -1401,6 +1442,17 @@ func isOrphanAtSeed(state *session.SessionState) bool {
 // Returns true when the state remains alive after processing.
 func (pm *PIDManager) handleAlivePIDState(state *session.SessionState) bool {
 	if syscall.Kill(state.PID, 0) == syscall.ESRCH {
+		// A SECOND DEAD-PID DELETER, and it has to make the same exemption as
+		// isStartupZombie or that one is worth nothing (#1815). CleanupZombies
+		// runs first and would normally have taken this row already; this path is
+		// what catches it when that sweep is skipped (demo mode) or when SeedPIDs
+		// is reached by any route that did not run it.
+		if retainedErrorAcrossRestart(state, time.Now(), pm.errorRetention()) {
+			pm.log.LogInfo(logComponentSessionDetectorSeed, state.SessionID,
+				fmt.Sprintf("pid %d dead but session is %s within the retention window — keeping (#1815)",
+					state.PID, state.State))
+			return false
+		}
 		pm.log.LogInfo(logComponentSessionDetectorSeed, state.SessionID,
 			fmt.Sprintf("pid %d dead, deleting session", state.PID))
 		pm.deleteWithChildren(state, fmt.Sprintf("pid %d dead at seed (ESRCH)", state.PID))

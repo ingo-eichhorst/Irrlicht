@@ -54,6 +54,11 @@ func (t *TranscriptTailer) GetLedgerState() LedgerState {
 	s.LastTaskSummary = t.lastTaskSummary
 	s.FirstUserText = t.firstUserText
 	s.LastTaskQuestion = t.lastTaskQuestion
+	// The sticky session-level failure, so a daemon restart keeps an errored
+	// session red (#1815). Assigned unconditionally — including when it is nil,
+	// which is how the clearing rule says "recovered" — under the same
+	// reassigned-never-mutated argument as the estimate pointers above.
+	s.SessionError = t.sessionError
 	return s
 }
 
@@ -127,6 +132,17 @@ func (t *TranscriptTailer) SetLedgerState(s LedgerState) {
 	t.lastTaskSummary = s.LastTaskSummary
 	t.firstUserText = s.FirstUserText
 	t.lastTaskQuestion = s.LastTaskQuestion
+	// Restore the sticky session-level failure so a resume-at-EOF pass keeps an
+	// errored session in StateError instead of settling it green (#1815).
+	//
+	// Only the private field, deliberately — surfaceSporadicMetrics copies it
+	// onto t.metrics on EVERY pass, above computeMetrics' empty-MessageHistory
+	// early return, exactly as it does for lastPendingWaitingCue and
+	// lastPendingBackgroundAgentCount above. LastAssistantText is the one field
+	// here that also needs the t.metrics half, because its copy lives BELOW that
+	// early return; writing t.metrics.SessionError here as well would add a
+	// second writer to a slot surfaceSporadicMetrics already owns.
+	t.sessionError = s.SessionError
 }
 
 // restoreCumByModel deep-copies a persisted per-model usage breakdown into

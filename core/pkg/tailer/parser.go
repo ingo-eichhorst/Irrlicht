@@ -326,14 +326,26 @@ const (
 // Every numeric field is a pointer because the recorded payloads disagree
 // about which numbers exist at all. See session.SessionError for the argument
 // and the fixture evidence.
+// The struct tags exist for ONE consumer: LedgerState.SessionError, which puts
+// this type on disk so an errored session stays red across a daemon restart
+// (#1815). Nothing else marshals it — the adapter glue converts field-by-field
+// into session.SessionError, which owns the CLIENT-facing wire form and its
+// custom retry_in_ms codec. Spelled out here so the two are not mistaken for
+// one contract: this one may be renamed with a ledger schema bump, that one may
+// not.
+//
+// RetryIn is tagged with its unit because a bare Duration marshals as unlabelled
+// nanoseconds, which is the exact complaint session.SessionError.RetryIn's doc
+// makes about its own wire form. Plain int64 nanoseconds round-trip losslessly,
+// so the ledger needs no codec of its own — only an honest key.
 type SessionError struct {
-	Phase       ErrorPhase
-	Class       string
-	Message     string
-	HTTPStatus  *int
-	Attempt     *int
-	MaxAttempts *int
-	RetryIn     *time.Duration
+	Phase       ErrorPhase     `json:"phase,omitempty"`
+	Class       string         `json:"class,omitempty"`
+	Message     string         `json:"message,omitempty"`
+	HTTPStatus  *int           `json:"http_status,omitempty"`
+	Attempt     *int           `json:"attempt,omitempty"`
+	MaxAttempts *int           `json:"max_attempts,omitempty"`
+	RetryIn     *time.Duration `json:"retry_in_ns,omitempty"`
 }
 
 // ClearedByTurnBoundary reports whether a completed turn retires this error
@@ -766,6 +778,39 @@ type LedgerState struct {
 	// existed restores exactly the (inert-guard) behaviour it had when it was
 	// written, and no schema bump is needed to read it.
 	PendingBackgroundAgentCount int `json:"pending_background_agent_count,omitempty"`
+	// SessionError persists the tailer's sticky session-level failure (#1798)
+	// so a DAEMON RESTART keeps an errored session red instead of quietly
+	// re-classifying it green (#1815).
+	//
+	// THIS IS THE FIELD THE RESTART CASE TURNS ON, and its absence was the whole
+	// of the first of that issue's two mechanisms. The sticky error lived only in
+	// TranscriptTailer.sessionError, so a restart rebuilt the tailer with nil;
+	// the post-restart pass resumes at LastOffset and reads ZERO new lines, so
+	// nothing re-derived the failure, and the session settled through agent_done
+	// to `ready` off a transcript frozen at the moment it failed. Measured
+	// against a real restarted daemon before the fix:
+	//
+	//	go test ./core/cmd/irrlichd/ -run TestErrorStateSurvivesDaemonRestart
+	//	  -> reads "ready", want "error"
+	//
+	// Exactly the LastAssistantText (#705) and PendingBackgroundAgentCount
+	// (#1076) heals above, on the same resume-at-EOF pass and for the same
+	// reason: a verdict that cannot be re-derived from zero new bytes has to be
+	// carried, not recomputed.
+	//
+	// NO SCHEMA BUMP, following ResumeFingerprint and PendingWaitingCue: a ledger
+	// written before this field simply lacks it and rehydrates to nil, which is
+	// byte-for-byte the pre-fix behaviour. Discarding every live session's ledger
+	// to force a re-scan would be a far bigger hammer than an additive field
+	// warrants — and a re-scan could not recover the verdict anyway, since
+	// clearSessionErrorOnRecovery would replay the same lines to the same result.
+	//
+	// A CLEARED ERROR IS PERSISTED AS CLEARED. The field stores nil when the
+	// tailer's sticky error is nil, so the clearing rule survives a restart too;
+	// this is a snapshot of the verdict, never a carry-forward that could
+	// resurrect one (see SessionMetrics.SessionError for why that distinction is
+	// load-bearing).
+	SessionError *SessionError `json:"session_error,omitempty"`
 }
 
 // --- Shared helpers used by multiple parsers ---

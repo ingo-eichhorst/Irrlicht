@@ -381,23 +381,28 @@ type SessionMetrics struct {
 	// An error would resurrect on every later pass and no session could ever
 	// leave StateError.
 	//
-	// DOES NOT SURVIVE A DAEMON RESTART, and the json tag does not change that.
-	// The value is persisted, but the startup path destroys it before anything
-	// reads it: seedReevaluateOne calls enricher.RefreshMetrics first, which is
-	// MergeMetrics against a fresh tailer pass carrying nil, and the line in
-	// newMergedMetrics copies that nil verbatim — the same behaviour
-	// TestMergeMetrics_ClearedSessionErrorStaysCleared locks in. So a session
-	// that died on a provider error reads GREEN after a restart, which is the
-	// silent direction this state exists to eliminate.
+	// SURVIVES A DAEMON RESTART SINCE #1815, and NOT because of the json tag —
+	// that was always here and was never sufficient. The value was persisted and
+	// then destroyed before anything read it: seedReevaluateOne calls
+	// enricher.RefreshMetrics first, which is MergeMetrics against a fresh tailer
+	// pass carrying nil, and the line in newMergedMetrics copies that nil
+	// verbatim — the same behaviour TestMergeMetrics_ClearedSessionErrorStaysCleared
+	// locks in. A session that died on a provider error read GREEN after a
+	// restart, which is the silent direction this state exists to eliminate.
 	//
-	// That is a real gap, recorded here rather than glossed: the fix is to
-	// persist the sticky error in the tailer's LedgerState, exactly as
+	// RefreshMetrics still merges against a fresh pass, and that copier is
+	// unchanged. What changed is what the fresh pass CARRIES: the tailer now
+	// persists its sticky error in LedgerState.SessionError, exactly as
 	// LastTaskEstimate/FirstTaskEstimate are persisted there and for the
-	// identical reason ("a daemon restart would otherwise blank the ETA chip").
-	// Deliberately not built in this phase — no adapter emits this field yet,
-	// so there is nothing to lose across a restart until #1799/#1800 land, and
-	// that is where the first producer and the first real evidence arrive
-	// together.
+	// identical reason ("a daemon restart would otherwise blank the ETA chip"),
+	// so the merge sees the real verdict instead of a nil.
+	//
+	// THAT ROUTE COVERS THE TRANSCRIPT-DERIVED HALF ONLY. A process-death verdict
+	// is synthesized by the daemon from the OS view of the process, never written
+	// to any transcript, so no ledger can reconstruct it — seedRestoreErrorVerdict
+	// re-places its hold from the persisted row instead. Both halves also depend
+	// on the row still existing at seed time, which is retainedErrorAcrossRestart's
+	// job. Three pieces, one guarantee; see #1815 for why it took all three.
 	SessionError *SessionError `json:"session_error,omitempty"`
 
 	// ProcessDeath is true when the agent PROCESS went away while a turn was
