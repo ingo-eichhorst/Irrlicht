@@ -17,8 +17,23 @@ export const CHART_LABELS = { cost: 'Cost', tokens: 'Tokens', co2: 'CO2', models
 // count at once (see historyGranularitySpecs on the daemon side).
 const GRANULARITY_LABELS = { '1m': '1 min', '10m': '10 min', '60m': '60 min', '8h': '8 hr', '24h': '24 hr', '7d': '7 day', '1mo': '1 mo', '6mo': '6 mo', '1y': '1 yr' };
 // Fixed stack order for the activity matrix's per-cell mini bar, bottom to
-// top — mirrors the canonical state order in core/domain/session/session.go.
-const STATE_STACK_ORDER = ['working', 'waiting', 'ready'];
+// top — mirrors the canonical state order in core/domain/session/session.go,
+// including #1798's `error` (#1801). The daemon emits a bucket for every
+// canonical state, so a state missing from this list is silently dropped from
+// the chart, the tooltip, the legend AND the CSV export at once, which is
+// exactly what happened to `error` between #1798 and here.
+//
+// The labels live in the same table as the order, because before #1801 the
+// pairs were re-typed in three more places (legend, tooltip, and two hardcoded
+// working+waiting+ready sums) and a fourth state had to be added to all of
+// them or the chart would disagree with itself about what a cell totals.
+const STATE_STACK = [
+  ['working', 'Working'],
+  ['waiting', 'Waiting'],
+  ['ready', 'Ready'],
+  ['error', 'Error'],
+];
+const STATE_STACK_ORDER = STATE_STACK.map(([state]) => state);
 // Drilldown order: clicking a contributor scopes to it and re-groups by the
 // next finer axis. A leaf (no entry) makes that contributor non-drillable.
 export const DRILL_NEXT = { project: 'branch', branch: 'session', provider: 'model', model: 'session' };
@@ -628,8 +643,8 @@ function paintHistoryChart() {
 
 const STATE_CELL_INNER_H = 26; // px — must match the bar's available height in irrlicht.css (.hsm-cell's grid row height minus .hsm-bar's bottom margin)
 
-// stateCellCounts returns one (project, bucket-index) cell's
-// {working, waiting, ready} counts, defaulting missing entries to 0.
+// stateCellCounts returns one (project, bucket-index) cell's per-state counts,
+// one key per STATE_STACK_ORDER entry, defaulting missing entries to 0.
 export function stateCellCounts(data, project, i) {
   const by = data?.by_state || {};
   const out = {};
@@ -637,10 +652,21 @@ export function stateCellCounts(data, project, i) {
   return out;
 }
 
-// stateCellTotal sums one cell's working+waiting+ready counts.
+// stateCellTotal sums one cell's per-state counts.
+//
+// Derived from the stack order rather than adding three named fields (#1801):
+// the hand-written sum was a second enumeration that had to be kept in step
+// with the first, and a state present in the chart but absent from the total
+// would size every bar wrong.
 export function stateCellTotal(data, project, i) {
-  const counts = stateCellCounts(data, project, i);
-  return counts.working + counts.waiting + counts.ready;
+  return sumCounts(stateCellCounts(data, project, i));
+}
+
+// sumCounts totals a per-state counts object over the stack order.
+function sumCounts(counts) {
+  let total = 0;
+  for (const state of STATE_STACK_ORDER) total += counts[state] || 0;
+  return total;
 }
 
 // stateMatrixMaxTotal finds the busiest single cell across the whole visible
@@ -701,11 +727,11 @@ function buildStateCell(project, ts, counts, maxTotal) {
   cell.tabIndex = 0;
   cell.setAttribute('role', 'img');
   cell.setAttribute('aria-label', project + ', ' + new Date(ts * 1000).toLocaleString() + ': ' +
-    counts.working + ' working, ' + counts.waiting + ' waiting, ' + counts.ready + ' ready');
+    STATE_STACK.map(([state]) => counts[state] + ' ' + state).join(', '));
 
   const bar = document.createElement('div');
   bar.className = 'hsm-bar';
-  const total = counts.working + counts.waiting + counts.ready;
+  const total = sumCounts(counts);
   if (total > 0) {
     bar.style.height = Math.max(3, Math.round((total / maxTotal) * STATE_CELL_INNER_H)) + 'px';
     let lastNonZero = null;
@@ -776,7 +802,7 @@ function renderStatePanel() {
     appendHistoryEmpty(listEl, 'no agents in this range');
     return;
   }
-  for (const [state, label] of [['working', 'Working'], ['waiting', 'Waiting'], ['ready', 'Ready']]) {
+  for (const [state, label] of STATE_STACK) {
     const li = document.createElement('li');
     const dot = document.createElement('span'); dot.className = 'dot hsm-seg-' + state;
     const lab = document.createElement('span'); lab.className = 'label'; lab.textContent = label;
@@ -806,7 +832,7 @@ function showStateTooltip(cell, project, ts, counts) {
   const title = document.createElement('div'); title.className = 'hsm-tooltip-title'; title.textContent = project;
   const range = document.createElement('div'); range.className = 'hsm-tooltip-range'; range.textContent = new Date(ts * 1000).toLocaleString();
   el.append(title, range);
-  for (const [state, label] of [['working', 'Working'], ['waiting', 'Waiting'], ['ready', 'Ready']]) {
+  for (const [state, label] of STATE_STACK) {
     const row = document.createElement('div'); row.className = 'hsm-tooltip-row';
     const key = document.createElement('span'); key.className = 'hsm-tooltip-key';
     const dot = document.createElement('i'); dot.className = 'hsm-tooltip-dot hsm-seg-' + state;
@@ -1305,15 +1331,20 @@ function yieldCsvLines(d) {
   return lines;
 }
 
+// stateCsvLines exports the activity matrix.
+//
+// Header and rows both come from STATE_STACK_ORDER (#1801), so the columns
+// cannot disagree with each other or with the chart. The header GAINS an
+// `error` column, which is a deliberate change to what the export looks like:
+// the alternative is an export that silently omits a state the chart shows,
+// and a spreadsheet whose columns no longer sum to what the tooltip says.
 function stateCsvLines(d) {
-  const lines = ['bucket_start,project,working,waiting,ready'];
+  const lines = [['bucket_start', 'project', ...STATE_STACK_ORDER].join(',')];
   const by = d.by_state || {};
   for (const project of (d.projects || [])) {
     (d.bucket_starts || []).forEach((ts, i) => {
-      const w = by.working?.[project]?.[i] || 0;
-      const wt = by.waiting?.[project]?.[i] || 0;
-      const r = by.ready?.[project]?.[i] || 0;
-      lines.push([new Date(ts * 1000).toISOString(), historyCsvCell(project), w, wt, r].join(','));
+      const cells = STATE_STACK_ORDER.map(state => by[state]?.[project]?.[i] || 0);
+      lines.push([new Date(ts * 1000).toISOString(), historyCsvCell(project), ...cells].join(','));
     });
   }
   return lines;

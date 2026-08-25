@@ -577,10 +577,23 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       WebSearch: 'Search', WebFetch: 'Fetch', TodoWrite: 'Todo',
     };
 
+    // stateColor maps a session state to the CSS variable that paints it.
+    //
+    // Every arm returns a var(), never a literal hex, so the light-theme
+    // overrides apply — which is what makes this the RIGHT place to add a
+    // state and svgIcons the wrong-by-default one (see formatters.js).
+    //
+    // The fallback is var(--muted), and #1801 leaves it alone deliberately.
+    // The #1797 argument that replaced stateIcon's `|| ready` fallback does
+    // not transfer: green claims "this finished cleanly", which is an actively
+    // wrong claim, while grey claims nothing. --muted does differ per theme and
+    // from the macOS side, but it is only ever reached by a state no build
+    // knows, where "some neutral colour" is the whole requirement.
     function stateColor(s) {
       if (s === 'working') return 'var(--working)';
       if (s === 'waiting') return 'var(--waiting)';
       if (s === 'ready') return 'var(--ready)';
+      if (s === 'error') return 'var(--error)';
       return 'var(--muted)';
     }
 
@@ -1096,6 +1109,12 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     // per-agent loop body (issue #901 cognitive-complexity cleanup).
     function emitAgentRowItems(items, a, agentNum, depth) {
       items.push({type: 'agent', key: 'a:' + a.session_id, agent: a, num: agentNum, isChild: false, depth: depth});
+      // #1801: FIRST of the sub-rows, above the context-pressure alert. When a
+      // session has both, "the provider refused the call" is the thing that
+      // stopped it; "switch to a fresh session soon" is advice about a
+      // different problem, and burying the failure under it inverts the two.
+      const sessionErr = sessionErrorItem(a);
+      if (sessionErr) items.push(sessionErr);
       const alert = pressureAlertItem(a);
       if (alert) items.push(alert);
       const cacheBloat = cacheBloatItem(a);
@@ -1172,6 +1191,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
           item => item.key,
           item => {
             if (item.type === 'group') return createGroupHeader(item.group, item.groupKey, item.depth);
+            if (item.type === 'error') return createSessionErrorRow(item.agent, item.isChild);
             if (item.type === 'alert') return createAlertRow(item.pressure);
             if (item.type === 'cachebloat') return createCacheBloatRow(item.agent);
             if (item.type === 'tasks') return createTaskListRow(item.agent, item.isChild);
@@ -1183,6 +1203,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
           },
           (el, item) => {
             if (item.type === 'group') { updateGroupHeader(el, item.group, item.groupKey, item.depth); return; }
+            if (item.type === 'error') { updateSessionErrorRow(el, item.agent); return; }
             if (item.type === 'alert') { updateAlertRow(el, item.pressure); return; }
             if (item.type === 'cachebloat') { updateCacheBloatRow(el, item.agent); return; }
             if (item.type === 'tasks') { updateTaskListRow(el, item.agent); return; }
@@ -1265,6 +1286,103 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       // rendered verbatim so both UIs never re-derive (and silently diverge
       // on) the wording.
       el.querySelector('.row-cache-bloat').title = metrics.cache_bloat_explanation || '';
+    }
+
+    // sessionErrorText renders one session_error payload as the two strings the
+    // red line shows: the agent's own message, and the retry ladder beside it.
+    //
+    // Returns null when there is nothing to say, so the row's *Item() predicate
+    // and the reconciler can drop the row rather than render an empty pill.
+    //
+    // EVERY NUMBER IS CHECKED FOR null, NOT FOR FALSINESS. The daemon's
+    // SessionError makes every numeric field a pointer precisely because the
+    // recorded payloads disagree about which ones exist — claudecode's retrying
+    // api_error carries all four, its terminal variant carries none, copilot
+    // carries statusCode for one error type and not another. A `||` fallback
+    // here would turn "the agent said nothing" into "attempt 0 of 0", which is
+    // the invented verdict the pointer types exist to prevent. `attempt == null`
+    // catches both null and undefined and leaves a real 0 alone.
+    function sessionErrorText(sessionError) {
+      const e = sessionError;
+      if (!e) return null;
+      const message = (e.message || '').trim();
+      // A class with no message still beats silence: "rate_limit" tells the
+      // user what happened, and an errored row with a blank line beneath it
+      // would read as a rendering bug.
+      const head = message || e.class || 'the agent reported a failure';
+
+      const parts = [];
+      if (e.attempt != null) {
+        parts.push(e.max_attempts != null
+          ? 'attempt ' + e.attempt + ' of ' + e.max_attempts
+          : 'attempt ' + e.attempt);
+      }
+      if (e.retry_in_ms != null) {
+        // retry_in_ms is fractional milliseconds (the daemon's own unit-named
+        // wire form). Seconds to one decimal is the readable form of a value
+        // the recordings show landing around 600ms.
+        parts.push('next in ' + (e.retry_in_ms / 1000).toFixed(1) + 's');
+      }
+      if (!parts.length && e.phase === 'retrying') {
+        // ErrorPhaseRetrying with no counters at all is a real shape, not a
+        // gap — "another attempt is coming, timing unstated". Say that rather
+        // than dropping the only fact the user can act on.
+        parts.push('retrying');
+      }
+      return { head, retry: parts.join(', ') };
+    }
+
+    // sessionErrorItem emits the red line beneath an errored session (#1801).
+    // Null when the session carries no error, which is how the reconciler
+    // removes the row again once the next successful turn clears it.
+    //
+    // Keyed off the ERROR, not off the state: a session can carry a standing
+    // error while already back in `working` on its next turn, and the daemon
+    // clears the payload rather than the state. Rendering off `state ===
+    // 'error'` would blank the line a moment before the error is actually gone.
+    function sessionErrorItem(a) {
+      const text = sessionErrorText((a.metrics || {}).session_error);
+      if (!text) return null;
+      return { type: 'error', key: 'er:' + a.session_id, agent: a, isChild: !!a.parent_session_id };
+    }
+
+    // Session-error row (#1801) — its own row beneath the parent, like the
+    // cache-bloat badge and for the reason createSessionRow's anatomy comment
+    // gives: a provider error is a sentence, not a fixed-width slot.
+    function createSessionErrorRow(agent, isChild) {
+      const el = document.createElement('div');
+      el.className = 'row-error-row' + (isChild ? ' child' : '');
+      el.dataset.sessionId = agent.session_id;
+      updateSessionErrorRow(el, agent);
+      return el;
+    }
+
+    function updateSessionErrorRow(el, agent) {
+      const text = sessionErrorText((agent.metrics || {}).session_error);
+      if (!text) return;
+      const key = text.head + ' ' + text.retry;
+      // Skip-if-unchanged, the same guard updateCacheBloatRow uses: this runs
+      // on every render, and rebuilding the node would fight text selection
+      // and re-announce inside the aria-live session list.
+      if (el.dataset.errorKey === key) return;
+      el.dataset.errorKey = key;
+
+      // Built with createElement/textContent rather than innerHTML: `head` is
+      // an agent's VERBATIM error text, arriving from a transcript this
+      // process does not control. esc() would also do, but the DOM API cannot
+      // be forgotten the way an esc() call can — the same choice
+      // renderUnappliedGrantsBanner makes for the daemon's reason strings.
+      el.textContent = '';
+      const pill = document.createElement('span');
+      pill.className = 'row-error';
+      pill.appendChild(document.createTextNode(text.head));
+      if (text.retry) {
+        const retry = document.createElement('span');
+        retry.className = 'row-error-retry';
+        retry.textContent = ' · ' + text.retry;
+        pill.appendChild(retry);
+      }
+      el.appendChild(pill);
     }
 
     // Shared factory for trailing-row variants rendered beneath the parent
@@ -1449,6 +1567,25 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     // We mirror that here; the daemon's bucket priorities drive the per-row
     // paint via paintRowHistory(). State→color is local so we don't depend on
     // CSS vars at canvas-paint time.
+    //
+    // NO `error` ENTRY, AND THAT IS DELIBERATE (#1801) — this is the one place
+    // the fourth state deliberately stops, so it is written down here rather
+    // than left to be discovered as a bug.
+    //
+    // The strip's wire format is 2 bits per bucket and all four codes are
+    // taken: HISTORY_PRIORITY_TO_STATE above maps 0=ready, 1=working,
+    // 2=waiting, 3=no-data. There is no fifth value to spend, so `error` cannot
+    // be carried without widening the daemon's packing — deferred to #1805/
+    // #1807, which own the strip.
+    //
+    // What that costs today, stated plainly: the daemon's history_tracker maps
+    // `error` to the ready priority (statePriority's default arm, named as this
+    // exact symptom in #1798's own commit), so an errored bucket paints GREEN
+    // on the sparkline while the row's state icon beside it is red. That is a
+    // real inconsistency in the shipped UI, not a hypothetical, and it is
+    // #1805/#1807's to fix rather than something this map can paper over —
+    // adding a key here would do nothing, because no bucket can ever decode to
+    // 'error' in the first place.
     const HISTORY_BAR_COLORS = {
       working: '#8B5CF6',
       waiting: '#FF9500',
@@ -1529,11 +1666,93 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       }
     }
 
+    // daemonErrorSummary reduces the /api/v1/sessions `daemon_errors` list to
+    // what the banner shows, or null when there is nothing to show (#1801).
+    //
+    // Pure, and separate from the renderer, for the reason
+    // unappliedGrantSummary is: the headline's pluralization and the
+    // "is anything wrong at all" decision are the parts worth testing without
+    // a DOM.
+    //
+    // A NON-ARRAY OR ABSENT FIELD IS "NOTHING WRONG", NOT AN ERROR. The daemon
+    // omits the key entirely when healthy (omitempty), and a relay-connected
+    // dashboard never receives it at all — cmd/irrlichd/handlers.go records
+    // that gap. Both must read as a quiet banner rather than a crash.
+    function daemonErrorSummary(resp) {
+      const items = (resp && !Array.isArray(resp) && Array.isArray(resp.daemon_errors)) ? resp.daemon_errors : [];
+      if (!items.length) return null;
+      const n = items.length;
+      return {
+        count: n,
+        text: n === 1
+          ? "Irrlicht's own monitoring is degraded — 1 fault"
+          : "Irrlicht's own monitoring is degraded — " + n + ' faults',
+        items,
+      };
+    }
+
+    // renderDaemonErrorBanner reconciles the daemon-wide fault banner with the
+    // latest /api/v1/sessions payload (#1801). Modelled on
+    // renderUnappliedGrantsBanner, including the three things it deliberately
+    // does not do: it never opens a wizard, never nags, and offers no dismiss —
+    // a hide button would let a live fault be silenced while still broken,
+    // which is the defect rather than the cure. It clears by being fixed.
+    //
+    // role="alert" (see index.html for why that differs from #1385's
+    // role="status") is aria-atomic by default, so a rebuild re-announces the
+    // whole banner. This runs on the initial load and on every 30s rehydrate
+    // poll, so an unchanged banner would be read out repeatedly — the exact
+    // nagging the alert role makes worse rather than better. The key lives on
+    // the ELEMENT, not in a module variable, so a replaced DOM starts clean.
+    function renderDaemonErrorBanner(resp) {
+      const el = document.getElementById('daemon-error-banner');
+      if (!el) return;
+      const summary = daemonErrorSummary(resp);
+      const key = summary
+        ? JSON.stringify([summary.text, summary.items.map(e => [e.kind, e.scope, e.message, e.detail])])
+        : '';
+      if (el.dataset.bannerKey === key) return;
+      el.dataset.bannerKey = key;
+      el.textContent = '';
+      if (!summary) {
+        el.hidden = true;
+        return;
+      }
+
+      const head = document.createElement('strong');
+      head.textContent = summary.text;
+      el.appendChild(head);
+
+      const list = document.createElement('ul');
+      list.className = 'daemon-error-list';
+      for (const e of summary.items) {
+        const li = document.createElement('li');
+        const scope = document.createElement('span');
+        scope.className = 'daemon-error-scope';
+        scope.textContent = (e.scope || '') + ': ';
+        li.appendChild(scope);
+        // The message verbatim — it is composed daemon-side precisely so the
+        // two frontends cannot word the same fault differently. createElement
+        // + textContent throughout rather than innerHTML: these strings carry
+        // config paths and an agent config's own error text.
+        li.appendChild(document.createTextNode(e.message || ''));
+        if (e.detail) {
+          const detail = document.createElement('div');
+          detail.textContent = e.detail;
+          li.appendChild(detail);
+        }
+        list.appendChild(li);
+      }
+      el.appendChild(list);
+      el.hidden = false;
+    }
+
     function ingestInitialSessions(resp) {
       if (!resp) return;
       dashboardGroups = Array.isArray(resp) ? resp : (resp.groups || []);
       normalizeGroupAgents(dashboardGroups);
       dashboardProviderCosts = (resp && !Array.isArray(resp) && resp.provider_costs) || {};
+      renderDaemonErrorBanner(resp);
       rebuildIndex();
     }
     // structureSignature captures the daemon-computed shape of the group tree:
@@ -1573,6 +1792,12 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     function rehydratePoll() {
       return fetch('/api/v1/sessions').then(r => r.json()).catch(() => null).then(resp => {
         if (!resp) return;
+        // #1801: before either branch below, and unconditionally. The daemon
+        // fault list is not part of structureSignature (which hashes group
+        // nesting and per-session identity), so a fault appearing or clearing
+        // takes the "structure unchanged" path — putting this inside either
+        // branch would mean a banner that never goes away once shown.
+        renderDaemonErrorBanner(resp);
         const fresh = Array.isArray(resp) ? resp : (resp.groups || []);
         // Structure / role metadata changed → adopt the daemon's tree.
         if (structureSignature(fresh) !== structureSignature(dashboardGroups)) {
@@ -2151,6 +2376,12 @@ import { reconcile, paintRowNum } from './domReconcile.js';
 
 export {
   resolvedTheme, rowLabel, maybeNotifyOnUpdate,
+  // #1801: stateColor and the session-error helpers are exported so they can
+  // be tested. stateColor had no test at all before — the issue's claim that
+  // neither it nor stateIcon was covered is half right; stateIcon gained one
+  // in #1797, this one had nothing, and it is the map a new state is most
+  // likely to be forgotten in.
+  stateColor, sessionErrorText, daemonErrorSummary, renderDaemonErrorBanner,
   formatCost, costCellDisplay, pressureClass, historyPriorityForState,
   taskEtaPresentation,
   lastNotifiedPressure,

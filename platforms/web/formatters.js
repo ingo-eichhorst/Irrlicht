@@ -22,6 +22,18 @@ const svgIcons = {
   // follows no theme override at all — a known wart, left alone rather than
   // copied.)
   unknown: '<svg class="state-unknown" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.5"/><path d="M6.2 6.2a1.85 1.85 0 113 1.5c-.7.5-1.2.85-1.2 1.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="8" cy="11.6" r="0.85" fill="currentColor"/></svg>',
+  // Session error (#1801) — the fourth lifecycle state: the agent's own
+  // machinery failed. `currentColor` + a class hook, like `unknown` above and
+  // for the same reason: the .state-error rule in irrlicht.css points it at
+  // var(--error), whose light-theme value is a DIFFERENT hex (WCAG-corrected),
+  // so an inlined hex here would render the light theme at 3.01:1. The four
+  // entries above inline theirs and follow no override — the known wart #1797
+  // recorded, deliberately not copied.
+  //
+  // Deliberately NOT given the `core` class: that is what
+  // `.row-state-icon svg circle.core` animates, and a pulsing red dot would
+  // read as "working" — the one thing an errored session is not.
+  error: '<svg class="state-error" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.5"/><path d="M8 4.6v4.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="11.4" r="0.9" fill="currentColor"/></svg>',
 };
 
 // stateIcon maps a session state to its 12px glyph. An unrecognized state gets

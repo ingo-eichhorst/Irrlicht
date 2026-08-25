@@ -167,6 +167,25 @@
          able to fix right now, so it must inform without interrupting. -->
     <div id="permission-apply-banner" role="status" aria-live="polite" hidden></div>
 
+    <!-- #1801: "Irrlicht's own monitoring is degraded" — a fault in the daemon
+         itself, with no session to attach it to. role=alert, NOT status, and
+         the choice is the deliberate opposite of #1385's above.
+         #1385 reports a standing condition the user may not be able to act on
+         now, and the sessions around it are still being reported correctly —
+         so it informs without interrupting. This one says the dashboard cannot
+         vouch for what it is showing: a silent hook channel demotes every
+         session of that adapter to transcript-only classification, so the list
+         goes on looking healthy while being wrong. A user who keeps reading a
+         display that is quietly incorrect is the harm, which is what alert's
+         interruption is for — the same call #connection-banner above makes for
+         "no source is reachable".
+         aria-live=polite alongside it, copied from #connection-banner: alert
+         semantics so it is announced as a fault, polite delivery so it waits
+         for a pause instead of cutting off whatever is being read. The
+         renderer additionally skips a rebuild when the content is unchanged,
+         so a standing fault is announced once rather than on every poll. -->
+    <div id="daemon-error-banner" role="alert" aria-live="polite" hidden></div>
+
     <div id="view-live">
       <div id="empty-state">
         <div class="empty-dot"></div>

@@ -1307,6 +1307,10 @@ describe('activity matrix (chart=state, #981)', () => {
     expect(CHART_LABELS.state).toBe('Activity')
   })
 
+  // #1801 widened by_state to every canonical state, `error` included. The
+  // fixture carries one so the matrix is exercised on the real payload shape;
+  // before this it pinned a three-key object and was the client-side half of
+  // the handoff #1798 left in concurrency_tracker_test.go.
   const sampleData = {
     projects: ['projA', 'projB'],
     bucket_starts: [1000, 2000, 3000],
@@ -1314,23 +1318,35 @@ describe('activity matrix (chart=state, #981)', () => {
       working: { projA: [1, 2, 0] },
       waiting: { projA: [0, 1, 1], projB: [3, 0, 0] },
       ready: { projA: [0, 0, 1] },
+      error: { projA: [0, 0, 2] },
     },
   }
 
   test('stateCellCounts defaults missing states/projects to 0', () => {
-    expect(stateCellCounts(sampleData, 'projA', 1)).toEqual({ working: 2, waiting: 1, ready: 0 })
-    expect(stateCellCounts(sampleData, 'projB', 0)).toEqual({ working: 0, waiting: 3, ready: 0 })
-    expect(stateCellCounts(sampleData, 'unknownProject', 0)).toEqual({ working: 0, waiting: 0, ready: 0 })
+    expect(stateCellCounts(sampleData, 'projA', 1)).toEqual({ working: 2, waiting: 1, ready: 0, error: 0 })
+    expect(stateCellCounts(sampleData, 'projB', 0)).toEqual({ working: 0, waiting: 3, ready: 0, error: 0 })
+    expect(stateCellCounts(sampleData, 'unknownProject', 0)).toEqual({ working: 0, waiting: 0, ready: 0, error: 0 })
   })
 
-  test('stateCellTotal sums working+waiting+ready for one cell', () => {
+  test('stateCellCounts carries the error bucket (#1801)', () => {
+    // A cell whose only activity is errors must still report it — this is the
+    // assertion that would have caught the daemon emitting a fourth bucket
+    // the client silently dropped.
+    expect(stateCellCounts(sampleData, 'projA', 2).error).toBe(2)
+  })
+
+  test('stateCellTotal sums every state for one cell', () => {
     expect(stateCellTotal(sampleData, 'projA', 1)).toBe(3)
-    expect(stateCellTotal(sampleData, 'projA', 2)).toBe(2)
+    // projA bucket 2: 0 working, 1 waiting, 1 ready, 2 error = 4. Pre-#1801
+    // the hand-written working+waiting+ready sum returned 2, so an errored
+    // cell was drawn at half the height of its own contents.
+    expect(stateCellTotal(sampleData, 'projA', 2)).toBe(4)
   })
 
   test('stateMatrixMaxTotal finds the busiest cell across the whole grid', () => {
-    // projA totals: 1, 3, 2 — projB totals: 3, 0, 0. Busiest is 3.
-    expect(stateMatrixMaxTotal(sampleData)).toBe(3)
+    // projA totals: 1, 3, 4 — projB totals: 3, 0, 0. Busiest is projA's
+    // bucket 2, at 4, and it is the bucket whose activity is mostly errors.
+    expect(stateMatrixMaxTotal(sampleData)).toBe(4)
   })
 
   test('stateMatrixMaxTotal is 0 for an empty grid', () => {
