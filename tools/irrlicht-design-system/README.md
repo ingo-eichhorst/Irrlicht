@@ -88,7 +88,8 @@ Irrlicht writes like a quietly confident German open-source maintainer. Copy is 
 ### Casing & punctuation
 
 - **Sentence case** for headings (`How it works`, `The light system`), never Title Case.
-- State names are **always lowercase**: `working`, `waiting`, `ready`, `cancelled`. Even in UI badges.
+- State names are **always lowercase**: `working`, `waiting`, `ready`, `error`. Even in UI badges.
+  (`cancelled` is not a state and never was a rendered one — it maps to `ready`.)
 - Em-dashes (—) are load-bearing. Curly quotes ("…") throughout. `&mdash;` in HTML.
 - Numbers: compact (`<1s`, `~5MB`, `80%`, `$0.42`) with no thin-space padding.
 - Code in backticks mid-sentence: *"watches `.jsonl` transcripts."*

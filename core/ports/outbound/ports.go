@@ -405,7 +405,8 @@ type ConcurrencyReader interface {
 	AgentsSeries(q SeriesQuery) (*ConcurrencyResult, error)
 	// StateSeries is AgentsSeries' per-state counterpart (issue #981): where
 	// AgentsSeries merges working+waiting into one "active" count, StateSeries
-	// keeps the three states separate — see StateSeriesResult.
+	// keeps one bucket per canonical state — see StateSeriesResult, whose key
+	// set NewStateBuckets derives from session.CanonicalStates().
 	StateSeries(q SeriesQuery) (*StateSeriesResult, error)
 }
 

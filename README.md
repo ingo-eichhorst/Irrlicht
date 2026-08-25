@@ -41,7 +41,7 @@ curl -fsSL https://irrlicht.io/install.sh | sh
 
 ## What it does
 
-- **Three-state menu-bar dot per session** — 🟣 working, 🟠 waiting, 🟢 ready
+- **A menu-bar dot per session** — 🟣 working, 🟠 waiting, 🟢 ready, 🔴 error
 - **Context-pressure gauge** — 🟢 → 🟡 → 🔴 → ⚠️ before the auto-compact cliff, so you can `/compact` while quality is still intact
 - **Live per-session cost in USD** — model-aware via LiteLLM pricing
 - **History view** — spend over time with projection, attribution by project / branch / model, a productive-vs-reverted yield ratio, DORA metrics, and an Activity Matrix of working/waiting/ready agent counts per project (macOS app + web dashboard)

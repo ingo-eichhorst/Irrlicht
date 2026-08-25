@@ -159,7 +159,13 @@
 
       <!-- ─── State Transitions ─── -->
       <h2>State Transitions</h2>
-      <p>Once a session is active, it moves between exactly three states: <span class="badge badge-working">working</span>, <span class="badge badge-waiting">waiting</span>, and <span class="badge badge-ready">ready</span>. These map directly to the three light colors in the menu bar.</p>
+      <p>Once a session is active, it moves between four states: <span class="badge badge-working">working</span>, <span class="badge badge-waiting">waiting</span>, <span class="badge badge-ready">ready</span>, and <span class="badge badge-error">error</span>. Each maps to one light color in the menu bar.</p>
+
+      <p><span class="badge badge-error">error</span> means the session's own machinery failed &mdash; the provider refused or failed the call, credentials were rejected, the agent process died mid-turn, or Irrlicht could not read the session. It is <em>not</em> a tool failure: a <code>grep</code> that matched nothing and a build that broke are the agent working normally.</p>
+
+      <p>Two things clear it, on different conditions. Your next message clears it <em>immediately</em>, before the new turn's outcome is known &mdash; someone who has typed again has moved on, and holding the old failure against the new turn would pin the session red for the rest of its life. A completed turn also clears it, but only when the failure was a <em>retrying</em> one; a terminal failure is not retired by a turn boundary. Neither edge is a timeout and neither has a minimum hold.</p>
+
+      <p>A process that died mid-turn is always recorded as terminal &mdash; a process that exited will not try again &mdash; so neither of those applies to it. Its row is kept in <span class="badge badge-error">error</span> for 12 hours and then reaped, so a crash at 22:00 is still visible at 08:00.</p>
 
       <table>
         <thead>
@@ -210,27 +216,62 @@
             <td><span class="badge badge-waiting">waiting</span></td>
             <td><span class="badge badge-working">working</span></td>
           </tr>
+          <tr>
+            <td>Provider refused or failed the call; credentials rejected</td>
+            <td><span class="badge badge-working">working</span></td>
+            <td><span class="badge badge-error">error</span></td>
+          </tr>
+          <tr>
+            <td>Agent process died mid-turn (the session row is kept, not deleted)</td>
+            <td><span class="badge badge-working">working</span></td>
+            <td><span class="badge badge-error">error</span></td>
+          </tr>
+          <tr>
+            <td>User sends the next message after a failure (clears it outright)</td>
+            <td><span class="badge badge-error">error</span></td>
+            <td><span class="badge badge-working">working</span></td>
+          </tr>
+          <tr>
+            <td>A <em>retrying</em> failure's next turn completes</td>
+            <td><span class="badge badge-error">error</span></td>
+            <td><span class="badge badge-ready">ready</span></td>
+          </tr>
         </tbody>
       </table>
+
+      <p>Note that the last two rows clear the failure on different conditions:
+      your next message clears it outright, while a completed turn clears it only
+      when the failure was a retrying one. A process death is terminal, so it
+      leaves <span class="badge badge-error">error</span> by neither &mdash; it
+      ages out of the list instead.</p>
 
       <div class="diagram">                  +-----------+
   user sends  |           |  end_turn / ESC
   message     |  working  |----------------+
  +----------->|           |                |
  |            +-----+-----+                |
- |                  |                      v
- |      AskUser /   |                +---------+
- |      ExitPlan    |                |  ready  |
- |                  v                +---------+
- |            +-----------+                ^
- |            |           |                |
- +------------|  waiting  |  (process exit |
-  user        |           |   only)        |
-  answers     +-----------+----------------+</div>
+ |                  |    \                 v
+ |      AskUser /   |     \ provider  +---------+
+ |      ExitPlan    |      \ failure  |  ready  |
+ |                  v       \ or      +---------+
+ |            +-----------+ \ death        ^
+ |            |           |  \             |
+ +------------|  waiting  |   \ (process exit
+  user        |           |    \  only)    |
+  answers     +-----------+     \----------+
+                                 v         ^
+                            +---------+    | retrying
+                            |  error  |----+ failure's
+                            +---------+      turn ends
+                                 |
+                                 | user's next message
+                                 +--------> working (above)</div>
 
       <!-- ─── Impossible Transitions ─── -->
       <h2>Impossible Transitions</h2>
-      <p>Two transitions are structurally impossible and the state machine enforces this:</p>
+      <p>Two transitions are structurally impossible and the state machine enforces this. Both constrain only <span class="badge badge-working">working</span>, <span class="badge badge-waiting">waiting</span> and <span class="badge badge-ready">ready</span> &mdash; no impossibility is claimed about <span class="badge badge-error">error</span> in either direction.</p>
+
+      <p>Whether <span class="badge badge-error">error</span> or <span class="badge badge-waiting">waiting</span> wins is decided per cause, not once. A <strong>dead process</strong> outranks waiting: it leaves any open question unanswerable forever, and sending someone to answer a question in a process that no longer exists is worse than saying nothing. A <strong>provider failure on a live session</strong> is the other way round &mdash; if that session then opens a blocking tool, it reads <span class="badge badge-waiting">waiting</span>.</p>
 
       <table>
         <thead>
@@ -253,7 +294,7 @@
 
       <div class="callout callout-warning">
         <strong>No cancelled state</strong>
-        There is no fourth "cancelled" state. Cancellation (ESC) maps directly to <span class="badge badge-ready">ready</span>. The system maintains exactly three states: working, waiting, and ready.
+        There is no "cancelled" state. Cancellation (ESC) maps directly to <span class="badge badge-ready">ready</span> &mdash; from the user's side a cancelled turn and a finished turn leave the agent in the same place, idle at the prompt. This is unrelated to <span class="badge badge-error">error</span>, which is reserved for the session's own machinery failing rather than for anything the user did.
       </div>
 
       <!-- ─── Detection Logic ─── -->
@@ -317,7 +358,7 @@
 
       <!-- ─── Orthogonal Axes ─── -->
       <h2>Orthogonal Axes</h2>
-      <p>Beyond the three core states, the state machine tracks several orthogonal dimensions that do not affect the primary state transition logic but provide additional context.</p>
+      <p>Beyond the core states, the state machine tracks several orthogonal dimensions that do not affect the primary state transition logic but provide additional context.</p>
 
       <h3>Adapter</h3>
       <p>Identifies which AI coding agent is running:</p>
@@ -375,11 +416,11 @@
         <li>The agent stops executing, so <code>IsAgentDone()</code> fires.</li>
         <li>The session transitions to <span class="badge badge-ready">ready</span>.</li>
       </ul>
-      <p>This is a deliberate design choice. From the user's perspective, a cancelled turn is equivalent to a completed turn &mdash; the agent is idle and waiting for the next message. The three-state model (<span class="badge badge-working">working</span> / <span class="badge badge-waiting">waiting</span> / <span class="badge badge-ready">ready</span>) remains clean and unambiguous.</p>
+      <p>This is a deliberate design choice. From the user's perspective, a cancelled turn is equivalent to a completed turn &mdash; the agent is idle and waiting for the next message. Folding it into <span class="badge badge-ready">ready</span> keeps the state model free of a value that would carry no information the user could act on.</p>
 
       <!-- ─── Lifecycle Event Kinds ─── -->
       <h2>Lifecycle Event Kinds</h2>
-      <p>Underneath the three-state model, the daemon records a lower-level stream of typed events for session recording and replay &mdash; not just transcript-derived state transitions but also process lifecycle, filesystem, debounce, and parent-child signals. Each event carries a <code>Kind</code> discriminant (<code>core/domain/lifecycle/event.go</code>); this table enumerates all 18 constants, grouped as the source file itself groups them.</p>
+      <p>Underneath the state machine, the daemon records a lower-level stream of typed events for session recording and replay &mdash; not just transcript-derived state transitions but also process lifecycle, filesystem, debounce, and parent-child signals. Each event carries a <code>Kind</code> discriminant (<code>core/domain/lifecycle/event.go</code>); this table enumerates all 18 constants, grouped as the source file itself groups them.</p>
 
       <table>
         <thead>

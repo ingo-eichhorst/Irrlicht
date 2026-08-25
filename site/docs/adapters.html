@@ -561,7 +561,7 @@ type Watcher interface {
         <li>Adapter package at <code>core/adapters/inbound/agents/&lt;name&gt;/</code></li>
         <li>Exports an <code>agent.Agent</code> from <code>Agent()</code> with the right <code>Source</code> variant (<code>FilesUnderRoot</code> / <code>FilesUnderCWD</code> / <code>ProcessOwnedStore</code>), parser, and PID-discovery hook</li>
         <li>Registered in the <code>allAgents</code> slice in <code>core/cmd/irrlichd/main.go</code></li>
-        <li>Emits all three lifecycle states: <code>working</code>, <code>waiting</code>, <code>ready</code></li>
+        <li>Emits the ordinary lifecycle states: <code>working</code>, <code>waiting</code>, <code>ready</code> (<code>error</code> additionally requires a failure signal the adapter can parse)</li>
         <li>Scenario cells assessed via the <code>assess</code> verb of <code>/ir:onboarding-factory</code>, recorded in <code>replaydata/agents/&lt;name&gt;/scenarios/&lt;cell&gt;/metadata.json</code></li>
         <li><strong>Machine-checked (#1369):</strong> the four <em>alpha-floor</em> core scenarios are settled &mdash; <code>session-start</code>, <code>basic-turn</code>, <code>auto-executed-tool-call</code>, <code>turn-end-terminal-text</code>. All four are reachable from lifecycle hooks alone, which is what makes <code>alpha</code> a day-one tier for an adapter that has hooks and no transcript parser: it asserts <strong>state only, no metrics</strong>.</li>
         <li>An entry in <code>replaydata/agents/adapters.json</code> declaring this maturity and any missing capabilities. <code>of validate</code> fails if the claim exceeds what the core scenarios earn.</li>

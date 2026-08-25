@@ -20,7 +20,7 @@
   "@context": "https://schema.org",
   "@type": "SoftwareApplication",
   "name": "Irrlicht",
-  "description": "A macOS menu bar app that monitors Claude Code, OpenAI Codex, Pi, and other AI coding agents in real time. Three states: working, waiting, ready.",
+  "description": "A macOS menu bar app that monitors Claude Code, OpenAI Codex, Pi, and other AI coding agents in real time. One light per session: working, waiting, ready, error.",
   "url": "https://irrlicht.io",
   "applicationCategory": "DeveloperApplication",
   "operatingSystem": "macOS 13 Ventura or later",
@@ -1031,6 +1031,18 @@ section {
   opacity: 0.7;
 }
 
+/* The fourth state. It is deliberately a line of prose under the three light
+   cards rather than a fourth card: the row above is the everyday rhythm, and
+   `error` is the exception to it. */
+.why-states-note {
+  max-width: 46rem;
+  margin: 2rem auto 0;
+  text-align: center;
+  font-size: 0.92rem;
+  line-height: 1.7;
+  color: var(--text-dim, #8b93a7);
+}
+
 /* ─── Demo video ─── */
 .demo {
   padding: 6rem 0 2rem;
@@ -1602,7 +1614,7 @@ footer {
       </div>
     </div>
 
-    <p class="why-states-label">Three states. No ambiguity.</p>
+    <p class="why-states-label">One light per session. No ambiguity.</p>
     <div class="lights-row reveal">
       <div class="light-card">
         <div class="light-orb orb-working"></div>
@@ -1620,6 +1632,7 @@ footer {
         <p>The path ahead is clear. The session is idle, ready for your next instruction.</p>
       </div>
     </div>
+    <p class="why-states-note">When the session itself fails &mdash; the provider refuses the call, credentials expire, the process dies mid-turn &mdash; the light turns red instead of quietly green. <a href="docs/light-system.html">The Light System</a> has all four.</p>
   </div>
 </section>
 
@@ -1814,7 +1827,7 @@ footer {
           <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="10" cy="10" r="3"/><path d="M10 2v3m0 10v3M2 10h3m10 0h3M4.22 4.22l2.12 2.12m7.32 7.32l2.12 2.12M4.22 15.78l2.12-2.12m7.32-7.32l2.12-2.12"/></svg>
         </div>
         <h3>Real-Time Monitoring</h3>
-        <p>Sub-second state detection via FSEvents and kqueue. See working, waiting, and ready the moment they change.</p>
+        <p>Sub-second state detection via FSEvents and kqueue. See every state change the moment it happens.</p>
       </div>
       <div class="feature-card">
         <div class="feature-icon fi-orange">

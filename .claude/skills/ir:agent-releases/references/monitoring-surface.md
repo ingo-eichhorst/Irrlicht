@@ -1,6 +1,6 @@
 # Irrlicht Monitoring Surface
 
-Irrlicht is a daemon that monitors coding agent sessions. It watches transcript files and processes to classify sessions into 3 states: **working**, **waiting**, **ready**. Any upstream agent change that alters the items below can break detection.
+Irrlicht is a daemon that monitors coding agent sessions. It watches transcript files and processes to classify sessions into the states declared by `session.CanonicalStates()` (`core/domain/session/session.go`) — currently **working**, **waiting**, **ready**, **error**. Any upstream agent change that alters the items below can break detection.
 
 This file exists to brief a release-sweep analysis (`/ir:agent-releases`) on what it should actually look for. It covers all twelve sections irrlicht ships: the **eleven agent adapters** in `core/adapters/inbound/agents/` (`all.go`'s `All()` — claude-code, codex, pi, aider, opencode, kiro-cli, gemini-cli, antigravity, mistral-vibe, copilot, hermes) **plus the Gas Town orchestrator**, which is a different layer entirely (`core/adapters/inbound/orchestrators/gastown` — it polls a CLI, has no `Source` variant, and so is absent from the discovery table below).
 

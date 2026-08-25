@@ -66,8 +66,11 @@ mentions.
 
 - **V1 — References resolve.** Every file path, directory, symbol/function name, command, and
   flag a doc names exists in the repo / `--help`. FAIL = the reference + why it doesn't resolve.
-- **V2 — Counts/enumerations match.** Stated numbers ("supports N agents", "three states",
+- **V2 — Counts/enumerations match.** Stated numbers ("supports N agents", "N session states",
   ports, durations, versions) equal the code-derived value. FAIL = stated vs actual.
+  A *closed enumeration* ("the states are X, Y and Z") is a count in prose and is
+  graded the same way — the shape most likely to be stale, because it was correct
+  when it was written and nothing re-reads it.
 - **V3 — Internal links/anchors resolve.** Markdown/HTML internal links and anchors resolve.
   External links are checked and reported (4xx/5xx) but are **never blocking and never raise a
   Critical/Major** — at most a Nit. FAIL (internal) = the broken link/anchor.
@@ -151,8 +154,9 @@ boundary; recompute against the live tree each run.
   route named with no example or no response shape.
 - **V1** — PASS: a doc cites `core/cmd/irrlichd/main.go` and it exists. FAIL: a doc references
   `core/cmd/irrlicht-watch/` which does not exist.
-- **V2** — PASS: "three session states" equals the 3 constants in `session.go`. FAIL: "supports
-  6 agents" while `All()` returns 7.
+- **V2** — PASS: a stated session-state count equals `len(session.CanonicalStates())`. FAIL:
+  "three session states" while that slice holds four; FAIL: "supports 6 agents" while `All()`
+  returns 7.
 - **V3** — PASS: an in-page anchor that resolves. FAIL: a relative link to a renamed/missing file.
 - **V4** — PASS: `CONTRIBUTING.md` and `site/docs/contributing.html` describe the same PR flow.
   FAIL: README says "squash and delete branch" while the site says "merge commit".
@@ -173,9 +177,19 @@ adding noise that careful readers wouldn't.
   only on a genuine mismatch (a frame type in the doc absent from `envelope.go`, or vice versa).
 - **`+`-suffixed dev versions.** `0.5.1+abc1234.dirty` is the documented dev-build format
   (`tools/version.sh`), not a stale-version drift from `version.json`'s `0.5.1`.
-- **Three-states intentionally excludes "cancelled".** Docs stating exactly three states
-  (working/waiting/ready) are correct; cancellation maps to `ready` by design. Do not "complete"
-  the list with a fourth state.
+- **"cancelled" is not a state, but `error` is.** Cancellation maps to `ready` by design, so a
+  doc that omits `cancelled` is correct and must not be "completed" with it. That exemption
+  covers `cancelled` and nothing else: since #1796 the vocabulary is four values, and a doc
+  still claiming three **is** a V2 finding. Derive the list from `session.CanonicalStates()`
+  (`core/domain/session/session.go`) rather than from this bullet, which is exactly the kind of
+  hand-copied vocabulary the axis exists to catch — it asserted "three" for a year after that
+  stopped being true.
+- **`unknown` is a client-side fallback, not a state.** `platforms/macos`' `SessionState.State`
+  and `platforms/web`'s icon map both carry an `unknown` case so an unrecognised value from a
+  newer daemon renders neutrally instead of green (#1797). The daemon never emits it. A doc that
+  omits `unknown` from the state list is **correct**; documenting it as a fifth state is a
+  finding in the other direction. The macOS menu bar's five-way precedence
+  (`error > waiting > working > ready > unknown`) is a rendering order, not the domain.
 - **`CLAUDE.md` → `AGENTS.md`.** `CLAUDE.md` intentionally just includes `AGENTS.md`; its
   brevity is not a U1/C-axis gap.
 - **Internal/dev tools.** Missing docs for `tools/onboarding-factory/cmd/*` (`of`, `viewer`,

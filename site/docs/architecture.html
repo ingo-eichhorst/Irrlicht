@@ -194,7 +194,7 @@
         <li><strong>Watchers</strong> &mdash; <code>cmd/irrlichd/wiring.go</code> dispatches on each <code>agent.Agent</code>'s <code>Source</code> variant: <code>FilesUnderRoot</code> adapters (Claude Code, Codex, Pi) get a shared fswatcher plus a process scanner; <code>FilesUnderCWD</code> (Aider) and <code>ProcessOwnedStore</code> (OpenCode) adapters get a process scanner only. Every watcher exposes <code>Identity()</code> so per-event adapter naming flows through the merge pipeline rather than being stamped at emit time.</li>
         <li><strong>SessionDetector</strong> &mdash; thin coordinator that delegates to:
           <ul>
-            <li><strong>StateClassifier</strong> &mdash; pure functions for working/waiting/ready transitions</li>
+            <li><strong>StateClassifier</strong> &mdash; pure functions for lifecycle state transitions</li>
             <li><strong>MetadataEnricher</strong> &mdash; git metadata, CWD, model, and metrics resolution</li>
             <li><strong>PIDManager</strong> &mdash; PID discovery with retry/backoff, process exit handling, liveness sweeps, subagent cleanup</li>
           </ul>
@@ -210,7 +210,7 @@
         <li>Inbound adapter emits <code>agent.Event</code></li>
         <li>SessionDetector receives event, creates or updates session</li>
         <li>MetricsCollector computes metrics from transcript</li>
-        <li>State machine determines <span class="badge badge-working">working</span> / <span class="badge badge-waiting">waiting</span> / <span class="badge badge-ready">ready</span></li>
+        <li>State machine determines <span class="badge badge-working">working</span> / <span class="badge badge-waiting">waiting</span> / <span class="badge badge-ready">ready</span> / <span class="badge badge-error">error</span></li>
         <li>PushService broadcasts change via WebSocket</li>
         <li>SessionRepository persists to filesystem</li>
       </ol>
