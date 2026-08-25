@@ -89,15 +89,35 @@ func IsCanonicalState(s string) bool {
 // verdict every pointer field on SessionError exists to prevent.
 //
 // ONLY hasActiveChildren (parent-ready gating) consumes this today, because it
-// is the only site whose answer actually changes. The others were each checked
-// and deliberately left on their current answer: isOrphanedChild and
-// findCompletionTarget gate PROMOTION to ready, where admitting a retrying
-// session would clear a live error rather than preserve it; isUserInterruptReady
-// leaves an errored session red after an ESC, matching "cleared by the next
-// successful turn and by nothing else"; aggregateSubagentEstimate is
-// working-only by design because an errored child contributes no estimate.
-// Said out loud here so the next reader inherits the decision instead of the
-// question.
+// is the only site whose answer actually changes. Every other site was checked;
+// each is named here with its reason, so the next reader inherits the decision
+// instead of the question:
+//
+//   - isOrphanedChild and findCompletionTarget gate PROMOTION to ready.
+//     Admitting a retrying session there would CLEAR a live error rather than
+//     preserve it — the opposite of what this predicate is for.
+//   - isUserInterruptReady leaves an errored session red after an ESC, matching
+//     "cleared by the next successful turn and by nothing else".
+//   - aggregateSubagentEstimate is working-only by design: an errored child
+//     contributes no estimate.
+//   - refreshStaleSessions is not a three-state site at all any more — #1798
+//     already widened it (session_detector_activity.go's
+//     `case StateWaiting, StateReady, StateError`), which is what makes
+//     sessionErrorHoldTimeout reachable.
+//   - pid_manager's liveness sweep keys off `== StateReady`, not off
+//     working-or-waiting, so `error` behaves there exactly as `working` always
+//     did. Nothing to change.
+//
+// ONE CAVEAT ON THE HOLD THIS CREATES, since a parent held forever would be a
+// worse bug than the one being fixed. For transcript-backed children the hold
+// is bounded well below the error's own 12h ceiling: reapStaleChild reaps any
+// non-ready child whose transcript has been idle past orphanTranscriptAge (2
+// minutes) and fires onChildDeleted, which releases the parent. DB-backed
+// children (the `?session=` adapters — hermes, opencode, antigravity) are
+// exempt from that sweep, so there a stuck Phase==retrying child holds its
+// parent until the adapter's own maxAge or the 12h ceiling. That is latent
+// rather than live: no inbound adapter emits SessionError yet, which is
+// #1799/#1800's work, and it is theirs to bound.
 func (s *SessionState) HasWorkInFlight() bool {
 	if s == nil {
 		return false

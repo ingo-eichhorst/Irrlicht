@@ -718,7 +718,7 @@ function buildStateRowLabel(project) {
 }
 
 // buildStateCell renders one grid cell: a bottom-anchored stacked mini bar
-// (working/waiting/ready, fixed stack order — see STATE_STACK_ORDER) sized
+// (one per STATE_STACK_ORDER entry, in that fixed bottom-to-top order) sized
 // against maxTotal, with a hover/focus tooltip and an aria-label carrying the
 // exact counts for anyone not using the tooltip.
 function buildStateCell(project, ts, counts, maxTotal) {

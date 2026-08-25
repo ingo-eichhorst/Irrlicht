@@ -341,18 +341,27 @@ func (t *ConcurrencyTracker) StateSeries(q outbound.SeriesQuery) (*outbound.Stat
 
 	for state, byProject := range instants {
 		for project, events := range byProject {
-			dst := make([]float64, n)
-			for _, ts := range events {
-				idx := int((ts - start) / bucketSeconds)
-				if idx >= 0 && idx < n {
-					dst[idx]++
-				}
-			}
-			out.ByState[state][project] = dst
+			out.ByState[state][project] = bucketTransitionCounts(events, start, bucketSeconds, n)
 		}
 	}
 
 	return out, nil
+}
+
+// bucketTransitionCounts histograms instantaneous transition timestamps into
+// the series' buckets — the counterpart of bucketPeakSeries, which measures
+// duration states instead. Timestamps outside [start, start+n*bucketSeconds)
+// are dropped rather than clamped: a transition outside the window did not
+// happen in any of its buckets, and folding it into the nearest one would
+// invent activity at an edge.
+func bucketTransitionCounts(events []int64, start, bucketSeconds int64, n int) []float64 {
+	dst := make([]float64, n)
+	for _, ts := range events {
+		if idx := int((ts - start) / bucketSeconds); idx >= 0 && idx < n {
+			dst[idx]++
+		}
+	}
+	return dst
 }
 
 // collectScopedStateIntervals is collectScopedIntervals' per-state
@@ -384,21 +393,30 @@ func collectScopedStateIntervals(timelines map[string]*sessionTimeline, q outbou
 		project := tl.project
 		ivs, instantAt := tl.stateReconstruction()
 		current += appendClampedStateIntervals(byState, project, ivs, start, end)
-		// Only mint a key when there is something to record: an unconditional
-		// append would create an entry for every in-scope project, turning "no
-		// transitions of this kind" into an empty series downstream.
-		for state, at := range instantAt {
-			inWindow := instantsInWindow(at, start, end)
-			if len(inWindow) == 0 {
-				continue
-			}
-			if instants[state] == nil {
-				instants[state] = map[string][]int64{}
-			}
-			instants[state][project] = append(instants[state][project], inWindow...)
-		}
+		appendInstantsInWindow(instants, project, instantAt, start, end)
 	}
 	return byState, instants, current
+}
+
+// appendInstantsInWindow folds one session's transition timestamps into the
+// shared state -> project -> timestamps index, keeping only those inside
+// [start, end).
+//
+// A key is minted only when there is something to record. An unconditional
+// append would create an entry for every in-scope project, which downstream
+// turns "no transitions of this kind here" into an empty SERIES — a row of
+// zeroes the dashboard draws, rather than an absence it skips.
+func appendInstantsInWindow(dst map[string]map[string][]int64, project string, instantAt map[string][]int64, start, end int64) {
+	for state, at := range instantAt {
+		inWindow := instantsInWindow(at, start, end)
+		if len(inWindow) == 0 {
+			continue
+		}
+		if dst[state] == nil {
+			dst[state] = map[string][]int64{}
+		}
+		dst[state][project] = append(dst[state][project], inWindow...)
+	}
 }
 
 // appendClampedStateIntervals appends every interval in ivs — clamped to

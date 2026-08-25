@@ -98,8 +98,8 @@
            5.80:1 against plain white, which puts it in the same band as
            --ready's 4.62:1. Reproduce with:
              node platforms/web/snapshots/contrast.mjs
-           and the assertion lives in irrlicht.test.js so it is re-run, not
-           just recorded here. */
+           and the assertion lives in platforms/web/sessionError.test.js so it
+           is re-run by CI, not just recorded here. */
         --error: #CC0C00;
         --error-dim: rgba(204, 12, 0, 0.12);
       }
@@ -839,6 +839,26 @@
        row beneath the parent (mirrors macOS SessionRowView.cacheBloatBlock),
        since the version-attribution string can be a full sentence, too wide
        for the fixed-width icon row. Indent matches .row-summary-row. */
+    .row-cache-bloat-row {
+      margin: 0 10px 4px 24px;
+      font-family: var(--font-mono);
+    }
+    .row-cache-bloat-row.child { margin-left: 44px; }
+    .row-cache-bloat {
+      display: inline-block;
+      max-width: 100%;
+      font-size: 10px;
+      font-weight: 600;
+      padding: 3px 6px;
+      border-radius: 4px;
+      background: rgba(255, 59, 48, 0.12);
+      color: var(--pressure-high);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      cursor: default;
+    }
+
     /* Session-error row (#1801) — the red line beneath an errored session,
        carrying the agent's own failure text. Its own row rather than an inline
        slot for the reason createSessionRow's anatomy comment gives about the
@@ -854,6 +874,11 @@
       margin: 0 10px 4px 24px;
       font-family: var(--font-mono);
     }
+    /* Unreachable today, and kept deliberately: emitGroup never recurses into
+       a.children, so no sub-row is emitted for a child session. Present for
+       parity with .row-cache-bloat-row.child above, which is unreachable for
+       exactly the same reason — dropping one without the other would make the
+       two rows look like they differ when they do not. */
     .row-error-row.child { margin-left: 44px; }
     .row-error {
       display: inline-block;
@@ -873,26 +898,6 @@
     .row-error-retry {
       font-weight: 400;
       opacity: 0.85;
-    }
-
-    .row-cache-bloat-row {
-      margin: 0 10px 4px 24px;
-      font-family: var(--font-mono);
-    }
-    .row-cache-bloat-row.child { margin-left: 44px; }
-    .row-cache-bloat {
-      display: inline-block;
-      max-width: 100%;
-      font-size: 10px;
-      font-weight: 600;
-      padding: 3px 6px;
-      border-radius: 4px;
-      background: rgba(255, 59, 48, 0.12);
-      color: var(--pressure-high);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      cursor: default;
     }
 
     /* Pending question — collapsible block beneath the parent row, shown only

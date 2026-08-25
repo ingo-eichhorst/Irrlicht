@@ -1340,6 +1340,12 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       // would read as a rendering bug.
       const head = message || e.class || 'the agent reported a failure';
 
+      return { head, retry: retryLadderText(e) };
+    }
+
+    // retryLadderText renders the "attempt 3 of 10, next in 0.6s" clause, or ''
+    // when the agent reported nothing to say.
+    function retryLadderText(e) {
       const parts = [];
       if (e.attempt != null) {
         parts.push(e.max_attempts != null
@@ -1356,9 +1362,9 @@ import { reconcile, paintRowNum } from './domReconcile.js';
         // ErrorPhaseRetrying with no counters at all is a real shape, not a
         // gap — "another attempt is coming, timing unstated". Say that rather
         // than dropping the only fact the user can act on.
-        parts.push('retrying');
+        return 'retrying';
       }
-      return { head, retry: parts.join(', ') };
+      return parts.join(', ');
     }
 
     // sessionErrorItem emits the red line beneath an errored session (#1801).
@@ -1372,7 +1378,14 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     function sessionErrorItem(a) {
       const text = sessionErrorText((a.metrics || {}).session_error);
       if (!text) return null;
-      return { type: 'error', key: 'er:' + a.session_id, agent: a, isChild: !!a.parent_session_id };
+      // isChild: false to match every other sub-row item (alert, cachebloat,
+      // summary, tasks). emitGroup iterates g.agents and never recurses into
+      // a.children, so no sub-row is ever emitted for a child session and
+      // `!!a.parent_session_id` could only ever evaluate false here — a branch
+      // that reads as a supported case but is not one. The
+      // `.row-error-row.child` rule in irrlicht.css is kept for parity with
+      // `.row-cache-bloat-row.child`, which is unreachable for the same reason.
+      return { type: 'error', key: 'er:' + a.session_id, agent: a, isChild: false };
     }
 
     // Session-error row (#1801) — its own row beneath the parent, like the
@@ -2411,6 +2424,12 @@ export {
   // in #1797, this one had nothing, and it is the map a new state is most
   // likely to be forgotten in.
   stateColor, sessionErrorText, daemonErrorSummary, renderDaemonErrorBanner, hasWorkInFlight,
+  // rehydratePoll is exported for its BANNER PLACEMENT, not its polling: the
+  // call to renderDaemonErrorBanner has to sit before the structure branch, and
+  // the only way to assert that is to drive the poll itself. Review found the
+  // placement documented at length and covered by nothing — moving it inside
+  // the branch left 247/247 green.
+  rehydratePoll,
   formatCost, costCellDisplay, pressureClass, historyPriorityForState,
   taskEtaPresentation,
   lastNotifiedPressure,

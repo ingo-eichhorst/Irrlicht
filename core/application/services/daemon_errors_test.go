@@ -2,6 +2,7 @@ package services_test
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -70,7 +71,7 @@ func TestDaemonErrors_ReportsTheTwoClientInvisibleDiagnoses(t *testing.T) {
 				h.Channels[0].TurnsSinceReceipt = 7
 			},
 			wantKind: services.DaemonErrorHookChannelSilent,
-			wantIn:   []string{"claude-code", "7"},
+			wantIn:   []string{"claude-code"},
 		},
 	}
 
@@ -122,19 +123,32 @@ func TestDaemonErrors_UnwatchedAndDisarmedRowsAreNotFaults(t *testing.T) {
 	}
 }
 
-// TestDaemonErrors_OrderIsStable guards the client's re-announce suppression.
-// The banner keys on its own rendered content and skips a rebuild when it has
-// not changed; an order that varied between polls would defeat that and
-// re-announce the same standing fault to a screen reader on every refresh —
-// the nagging #1385's banner was explicitly designed to avoid.
+// TestDaemonErrors_OrderIsStable guards the client's re-announce suppression:
+// the banner keys on its own rendered content and skips a rebuild when it has
+// not changed, so an order that varied between polls would re-announce the same
+// standing fault to a screen reader on every refresh.
+//
+// IT SHUFFLES THE INPUT, and that is the whole test. The first version called
+// DaemonErrors 21 times on ONE fixed input and compared the runs — which Go
+// slices satisfy by construction whether or not the sort exists. It passed with
+// `sort.SliceStable` deleted (verified by mutation in review): a green that was
+// never red. Feeding a permuted snapshot and demanding byte-identical output is
+// what actually pins the ordering.
 func TestDaemonErrors_OrderIsStable(t *testing.T) {
-	h := healthyHookSnapshot()
-	h.Channels[0].Silent = true
-	h.Channels[1].Silent = true
-	h.EntryReverification.Targets[0].Missing = []string{"Stop"}
-	h.EntryReverification.Targets[1].Missing = []string{"Stop"}
+	build := func(reversed bool) services.HookHealthSnapshot {
+		h := healthyHookSnapshot()
+		h.Channels[0].Silent = true
+		h.Channels[1].Silent = true
+		h.EntryReverification.Targets[0].Missing = []string{"Stop"}
+		h.EntryReverification.Targets[1].Missing = []string{"Stop"}
+		if reversed {
+			slices.Reverse(h.Channels)
+			slices.Reverse(h.EntryReverification.Targets)
+		}
+		return h
+	}
 
-	first := services.DaemonErrors(h)
+	first := services.DaemonErrors(build(false))
 	if len(first) != 4 {
 		t.Fatalf("want 4 faults, got %d: %+v", len(first), first)
 	}
@@ -142,14 +156,57 @@ func TestDaemonErrors_OrderIsStable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	for i := 0; i < 20; i++ {
-		got, err := json.Marshal(services.DaemonErrors(h))
+	// Guard the guard: the two orderings must genuinely differ as INPUT, or
+	// "the outputs match" would be measuring nothing.
+	a := build(false)
+	b := build(true)
+	if a.Channels[0].Adapter == b.Channels[0].Adapter {
+		t.Fatalf("the fixture is not actually being permuted — both orderings start with %q", a.Channels[0].Adapter)
+	}
+
+	for i, reversed := range []bool{true, false, true} {
+		got, err := json.Marshal(services.DaemonErrors(build(reversed)))
 		if err != nil {
 			t.Fatalf("marshal: %v", err)
 		}
 		if string(got) != string(want) {
-			t.Fatalf("run %d differs from run 0:\n got %s\nwant %s", i+1, got, want)
+			t.Fatalf("run %d (reversed=%v) differs from the baseline:\n got %s\nwant %s", i+1, reversed, got, want)
 		}
+	}
+}
+
+// TestDaemonErrors_NoFieldMovesWhileTheFaultStands is the other half of the
+// same protection, and the one that catches the defect review found: ordering
+// can be perfectly stable while a fault's own CONTENT changes on every poll.
+//
+// The silent-channel fault's obvious detail is TurnsSinceReceipt, and using it
+// made every poll look like a new fault to the client — re-announcing the whole
+// role="alert" banner roughly every 30s for as long as the channel stayed dead.
+// Every field is part of the fault's identity, so nothing that moves under a
+// standing fault may appear in one.
+func TestDaemonErrors_NoFieldMovesWhileTheFaultStands(t *testing.T) {
+	at := func(turns int, repairs uint64) []byte {
+		h := healthyHookSnapshot()
+		h.Channels[0].Silent = true
+		h.Channels[0].TurnsSinceReceipt = turns
+		h.Channels[0].Receipts = uint64(turns)
+		h.EntryReverification.Targets[0].Missing = []string{"Stop"}
+		h.EntryReverification.Targets[0].Repairs = repairs
+		h.EntryReverification.Targets[0].ConsecutiveRepairs = int(repairs)
+		b, err := json.Marshal(services.DaemonErrors(h))
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		return b
+	}
+
+	// The same two faults, observed later: more turns have gone by with no
+	// receipt, and the repair loop has run more times. Nothing the user could
+	// act on has changed.
+	early := at(3, 1)
+	late := at(97, 42)
+	if string(early) != string(late) {
+		t.Errorf("a standing fault changed while nothing about it did:\n at turn 3:  %s\n at turn 97: %s\nA field that moves under an unchanged fault makes the client re-announce it on every poll.", early, late)
 	}
 }
 

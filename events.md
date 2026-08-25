@@ -154,8 +154,13 @@ Note: transcript silence on a non-blocking open tool call (e.g. a long-running b
 Parent-child relationships are derived from the transcript path: Claude Code writes an `isSidechain` transcript under `<parent>/subagents/agent-*.jsonl` for every `Agent` tool call, and the fswatcher registers each as a child session linked via `ParentSessionID`. Parent sessions carry a `subagentSummary` under the JSON key `subagents`:
 
 ```
-subagentSummary { total, working, waiting, ready int }
+subagentSummary { total, working, waiting, ready, error int }
 ```
+
+The per-state buckets sum to `total`: every child lands in exactly one of them.
+`error` was added in #1801 for that reason — before it, an errored child was
+counted in `total` and in none of the buckets, so a red subagent was invisible
+in the one badge a user checks to find out why a parent is stuck.
 
 Subagent sessions run independent state machines with the same states.
 

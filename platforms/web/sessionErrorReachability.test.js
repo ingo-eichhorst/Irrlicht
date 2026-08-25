@@ -1,5 +1,7 @@
 import { describe, test, expect } from 'vitest'
 
+let irr
+
 // Reachability for #1801, and the counterpart of sessionError.test.js: every
 // assertion in that file calls sessionErrorText / renderDaemonErrorBanner
 // DIRECTLY, so deleting the `sessionErrorItem` push inside emitAgentRowItems,
@@ -80,7 +82,7 @@ describe('the dashboard actually wires the error state up (#1801)', () => {
     document.body.innerHTML +=
       '<div id="daemon-error-banner" role="alert" aria-live="polite" hidden></div>'
 
-    await import('./irrlicht.js')
+    irr = await import('./irrlicht.js')
     await new Promise((r) => setTimeout(r, 0))
 
     // Guard the guard: if the list did not render at all, every "is the error
@@ -138,6 +140,42 @@ describe('the dashboard actually wires the error state up (#1801)', () => {
     expect(document.querySelectorAll('#session-list .row-error-row')).toHaveLength(0)
     const row = document.querySelector('#session-list .session-row[data-session-id="sess-red"]')
     expect(row.dataset.state).toBe('working')
+  })
+
+  test('the rehydrate poll clears the banner when the fault is fixed', async () => {
+    // The placement of renderDaemonErrorBanner inside rehydratePoll is argued
+    // at length in a comment — it must run BEFORE the structureSignature
+    // branch, because a daemon fault is not part of that signature, so a fault
+    // appearing or clearing always takes the "structure unchanged" path.
+    // Review found that argument covered by nothing: moving the call inside
+    // either branch left the whole 247-test suite green while leaving an alert
+    // banner up forever.
+    //
+    // rehydratePoll is driven directly rather than by advancing the 30s timer:
+    // faking timers here deadlocks on irrlicht.js's own setInterval loops, the
+    // same reason snapshots/render-html.test.js fakes only Date.
+    const banner = document.getElementById('daemon-error-banner')
+
+    // Put the fault back up first, so "hidden" below is a transition and not
+    // just the state it was already in.
+    const faulted = { ...sessionsPayload }
+    global.fetch = (url) => String(url).includes('/api/v1/sessions')
+      ? Promise.resolve({ ok: true, json: () => Promise.resolve(faulted) })
+      : Promise.resolve({ ok: false, json: () => Promise.resolve(null) })
+    await irr.rehydratePoll()
+    expect(banner.hidden, 'precondition: the banner should be up before we clear it').toBe(false)
+
+    // Now the SAME groups with the fault resolved. Identical structure, so this
+    // takes the "structure unchanged" path — the one the comment is about.
+    const healed = { ...sessionsPayload }
+    delete healed.daemon_errors
+    global.fetch = (url) => String(url).includes('/api/v1/sessions')
+      ? Promise.resolve({ ok: true, json: () => Promise.resolve(healed) })
+      : Promise.resolve({ ok: false, json: () => Promise.resolve(null) })
+    await irr.rehydratePoll()
+
+    expect(banner.hidden, 'the fault cleared but the banner stayed up — the poll is not refreshing it').toBe(true)
+    expect(banner.textContent).toBe('')
   })
 
   test('an error arriving over the websocket adds the red line', () => {

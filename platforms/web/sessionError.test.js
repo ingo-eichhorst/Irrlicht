@@ -183,6 +183,19 @@ describe('--error is declared in every theme block (#1801)', () => {
     // this asserts against IrrHex.error itself and goes red if #1802 picked a
     // different hue. Both branches assert loudly that they found something to
     // compare, so "could not look" can never pass as "matches".
+    //
+    // CHECKED AGAINST THE REAL SIBLING BRANCH, not assumed: #1802's PR #1810
+    // declares `static let error = "#FF3B30"`, which is both this file's dark
+    // --error and the existing IrrHex.wsDisconnected — so both branches of the
+    // fallback agree today and this test passes either side of that merge.
+    // (Verified by running these exact regexes over `git show
+    // pr1810:platforms/macos/Irrlicht/Theme/Tokens.swift`.)
+    //
+    // The LIGHT halves diverge by design and are not compared: this file
+    // overrides --error itself to #CC0C00, while #1810 keeps IrrHex.error as
+    // the base hue and re-tunes only the pill TEXT via
+    // Color.adaptive(light: "#C1121C", dark: "#FF7A70"). Both clear AA against
+    // their own platform's surface, which is a different colour on each.
     const tokens = readMacosTokens()
     const explicit = tokens.match(/static let error\s*=\s*"(#[0-9A-Fa-f]{6})"/)
     const existingRed = tokens.match(/static let wsDisconnected\s*=\s*"(#[0-9A-Fa-f]{6})"/)

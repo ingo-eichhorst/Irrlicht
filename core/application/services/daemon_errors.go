@@ -77,40 +77,14 @@ func DaemonErrors(h HookHealthSnapshot) []DaemonError {
 	var out []DaemonError
 
 	for _, t := range h.EntryReverification.Targets {
-		if !t.Watched {
-			continue
-		}
-		switch {
-		case t.LastError != "":
-			out = append(out, DaemonError{
-				Kind:    DaemonErrorHookEntriesMissing,
-				Scope:   t.Adapter + "/" + t.Permission,
-				Message: fmt.Sprintf("Irrlicht could not keep its %s hooks installed — %s sessions may be misclassified.", t.Adapter, t.Adapter),
-				Detail:  detailWithPath(t.LastError, t.ConfigPath),
-			})
-		case len(t.Missing) > 0:
-			out = append(out, DaemonError{
-				Kind:    DaemonErrorHookEntriesMissing,
-				Scope:   t.Adapter + "/" + t.Permission,
-				Message: fmt.Sprintf("Irrlicht's %s hook entries went missing from the agent's config — %s sessions may be misclassified.", t.Adapter, t.Adapter),
-				Detail:  detailWithPath(joinShort(t.Missing), t.ConfigPath),
-			})
+		if e, ok := entryFault(t); ok {
+			out = append(out, e)
 		}
 	}
-
 	for _, c := range h.Channels {
-		// Armed means consent is granted AND the install reported success, so
-		// a silent armed channel is the case where everything LOOKS configured
-		// and nothing is arriving — the one #1368 exists for.
-		if !c.Armed || !c.Silent {
-			continue
+		if e, ok := channelFault(c); ok {
+			out = append(out, e)
 		}
-		out = append(out, DaemonError{
-			Kind:    DaemonErrorHookChannelSilent,
-			Scope:   c.Adapter,
-			Message: fmt.Sprintf("Irrlicht is receiving no hook events from %s — its sessions have fallen back to slower transcript-only detection.", c.Adapter),
-			Detail:  fmt.Sprintf("%d completed turns with no receipt", c.TurnsSinceReceipt),
-		})
 	}
 
 	// Deterministic order. The client's banner skips a re-render when the
@@ -124,6 +98,76 @@ func DaemonErrors(h HookHealthSnapshot) []DaemonError {
 		return out[i].Scope < out[j].Scope
 	})
 	return out
+}
+
+// entryFault turns one re-verification target into a fault, or reports ok=false
+// when the target is healthy or is not being watched.
+//
+// An UNWATCHED target means consent was never granted, or no pass has run yet.
+// That is a user decision or a cold start, not Irrlicht failing, and reporting
+// it would put a permanent banner on every daemon whose user declined one
+// adapter — a banner that is always on is a banner nobody reads.
+//
+// LastError outranks Missing: if the config could not be read at all, "your
+// entries are missing" is a guess about a file nobody managed to look at.
+func entryFault(t HookEntryHealth) (DaemonError, bool) {
+	if !t.Watched {
+		return DaemonError{}, false
+	}
+	scope := t.Adapter + "/" + t.Permission
+	switch {
+	case t.LastError != "":
+		return DaemonError{
+			Kind:  DaemonErrorHookEntriesMissing,
+			Scope: scope,
+			Message: fmt.Sprintf("Irrlicht could not keep its %s hooks installed — %s sessions may be misclassified.",
+				t.Adapter, t.Adapter),
+			Detail: detailWithPath(t.LastError, t.ConfigPath),
+		}, true
+	case len(t.Missing) > 0:
+		return DaemonError{
+			Kind:  DaemonErrorHookEntriesMissing,
+			Scope: scope,
+			Message: fmt.Sprintf("Irrlicht's %s hook entries went missing from the agent's config — %s sessions may be misclassified.",
+				t.Adapter, t.Adapter),
+			Detail: detailWithPath(joinShort(t.Missing), t.ConfigPath),
+		}, true
+	}
+	return DaemonError{}, false
+}
+
+// channelFault turns one hook channel into a fault, or reports ok=false when
+// the channel is healthy or unwatched.
+//
+// ARMED means consent is granted AND the install effect reported success, so an
+// armed-but-silent channel is the case where everything LOOKS configured and
+// nothing is arriving — the one #1368 exists for. A disarmed channel is the
+// same "not a fault" as an unwatched target above.
+func channelFault(c HookChannelHealth) (DaemonError, bool) {
+	if !c.Armed || !c.Silent {
+		return DaemonError{}, false
+	}
+	return DaemonError{
+		Kind:  DaemonErrorHookChannelSilent,
+		Scope: c.Adapter,
+		Message: fmt.Sprintf("Irrlicht is receiving no hook events from %s — its sessions have fallen back to slower transcript-only detection.",
+			c.Adapter),
+		// NO TURN COUNTER HERE, deliberately. The obvious detail for this fault
+		// is TurnsSinceReceipt, and the first version of this code used it — but
+		// that counter climbs on every turn boundary for as long as the channel
+		// stays dead (hook_liveness.go's silentTurns, whose own doc notes it
+		// "keeps climbing past the threshold"). A value that changes while the
+		// fault stands makes every poll look like a NEW fault to the client,
+		// which re-announces the whole role="alert" banner to a screen reader
+		// roughly every 30s forever — the exact nagging the banner's re-render
+		// guard exists to stop.
+		//
+		// EVERY FIELD ON A DaemonError IS PART OF ITS IDENTITY, so none of them
+		// may move while the underlying fault does not. The counter is still
+		// published in the diagnostics bundle's hooks.json, which is where a
+		// monotonic debugging number belongs.
+		// TestDaemonErrors_NoFieldMovesWhileTheFaultStands pins this.
+	}, true
 }
 
 // detailWithPath appends the config path to a detail string when there is one,

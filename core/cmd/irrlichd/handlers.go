@@ -1172,9 +1172,11 @@ func buildStateResponse(rangeKey, scope string, s *outbound.StateSeriesResult) h
 }
 
 // pruneStateProjects drops every by-state project entry outside the capped
-// row set kept (all three canonical state keys are always preserved, even if
-// their pruned sub-map ends up empty) — the response shouldn't carry
-// per-bucket series for rows the client will never draw (#1046).
+// row set kept (EVERY canonical state key is preserved, even if its pruned
+// sub-map ends up empty) — the response shouldn't carry per-bucket series for
+// rows the client will never draw (#1046). The code iterates byState rather
+// than naming states, so it was already correct when #1801 added a fourth;
+// this sentence said "all three" and was the copy that went stale.
 func pruneStateProjects(byState map[string]map[string][]float64, keep []string) map[string]map[string][]float64 {
 	keepSet := make(map[string]bool, len(keep))
 	for _, p := range keep {
