@@ -357,9 +357,10 @@ func retainedErrorAcrossRestart(state *session.SessionState, now time.Time, wind
 //
 //   - retainedErrorAcrossRestart exempts an errored row from the three STARTUP
 //     deleters for the same twelve hours this constant already promised;
-//   - seedRetainRestoredError re-registers a retention entry in the verdict map
-//     below, stamped at the persisted UpdatedAt. That is what carries the row
-//     past THIS function, which is not a startup path at all: the periodic sweep
+//   - seedRetainErroredRows re-registers a retention entry in the verdict map
+//     below, stamped at the persisted UpdatedAt, for EVERY row that starts in
+//     `error` — not only the ones the consent-gated seed pass examined. That is
+//     what carries the row past THIS function, which is not a startup path at all: the periodic sweep
 //     calls in here every few seconds, and a restored row with no entry fell
 //     straight through to diedMidTurn — false for anything already in `error`
 //     ("error means this already ran") — and was deleted about five seconds
@@ -814,6 +815,10 @@ func (d *SessionDetector) seedFromDisk() {
 
 	d.seedProjectSessions(states)
 	d.seedReevaluateStates(states)
+	// AFTER re-evaluation and BEFORE SeedPIDs. After, so a row the classifier
+	// just moved off `error` (it recovered while the daemon was down) is not
+	// retained; before, because SeedPIDs is itself one of the deleters.
+	d.seedRetainErroredRows(states)
 	d.seedBackfillMetadata(states)
 
 	// Clean up dead sessions and register alive PIDs with ProcessWatcher.
@@ -915,10 +920,6 @@ func (d *SessionDetector) seedReevaluateOne(state *session.SessionState) {
 		}
 		state.State = newState
 	}
-	// After the classifier has ruled, so a session that recovered while the
-	// daemon was down is not shielded from the reaper (#1815).
-	d.seedRetainRestoredError(state, persistedError)
-
 	_ = d.repo.Save(state)
 	if d.historyTracker != nil {
 		d.historyTracker.OnTransition(state.SessionID, state.State, time.Now())
@@ -1013,37 +1014,38 @@ func (d *SessionDetector) seedRestoreErrorVerdict(state *session.SessionState, p
 	}
 }
 
-// seedRetainRestoredError registers, for a row that came off disk in `error` AND
-// that this daemon's own classifier still reads as `error`, a retention entry in
-// the process-death verdict map — stamped with the PERSISTED timestamp, so the
-// window continues rather than starting over (#1815).
+// seedRetainErroredRows registers a retention entry for every row this daemon
+// starts with in `error`, so the PERIODIC liveness sweep spares it for whatever
+// is left of its window (#1815).
 //
-// WHY THE VERDICT MAP RATHER THAN A PREDICATE IN THE SWEEP. The periodic
-// liveness sweep is a deleter the startup exemptions cannot reach, and it needs
-// to know "a previous daemon already ruled on this row". That is exactly what
-// the verdict map means, and reusing it inherits its whole lifecycle for free —
-// most importantly HandlePIDAssigned's retirement, so a session that comes back
-// under a new PID becomes an ordinary reapable row again. A state-shaped
-// predicate in retainAsProcessDeath cannot make that distinction (a retired row
-// still looks `error` and recent) and broke
-// TestHandlePIDAssigned_RetiresAProcessDeathVerdict when it was tried.
+// IT WALKS EVERY PERSISTED ROW, NOT THE ONES THE SEED PASS EXAMINED, and that
+// is the whole reason it is a separate pass rather than a line inside
+// seedReevaluateOne. The first cut put it there, and seedReevaluateStates skips
+// any row with no TranscriptPath or whose adapter's observe permission is not
+// granted — so a skipped row was spared by the startup exemption and then
+// deleted about five seconds later by the sweep, which found no verdict and got
+// `false` from diedMidTurn (which is false for anything already in `error`).
+// Neither skip condition is exotic: a pending observe permission is EVERY
+// adapter's state on a fresh IRRLICHT_HOME, so the user most likely to hit it
+// was the one who had not finished onboarding.
 //
-// EVERY ERROR CLASS, not just process death. A transcript-derived failure is the
-// reporter's own case, has no verdict of its own in the new process, and was the
-// one being deleted five seconds after each restart.
+// SAME PREDICATE AS THE STARTUP EXEMPTION, deliberately. What the sweeps spare
+// and what the sweep retains are then one rule with one window, and cannot
+// disagree about a row at the edge of it. Past the window nothing is registered
+// and the ordinary reaper takes the row, exactly as before.
 //
-// CALLED AFTER ClassifyState, WHICH IS THE GATE. If the transcript grew while
-// the daemon was down and the tailer's clearing rule fired, RefreshMetrics
-// returns no error, the classifier moves the row off `error`, and this registers
-// nothing — so a recovered session is not shielded from the reaper for twelve
-// hours. It is also what keeps a provisional process-death hold that Overlay
-// judged NOT a crash from being retained: the hold never applied, so the row
-// classifies away from `error` and never reaches the registration.
-func (d *SessionDetector) seedRetainRestoredError(state *session.SessionState, persisted *session.SessionError) {
-	if persisted == nil || state.State != session.StateError {
-		return
+// CALLED AFTER seedReevaluateStates so a row that recovered while the daemon
+// was down — the transcript grew, the tailer's clearing rule fired, and the
+// classifier moved it off `error` — is not shielded from the reaper. That
+// ordering is the gate; see the call site.
+func (d *SessionDetector) seedRetainErroredRows(states []*session.SessionState) {
+	now := d.nowFn()
+	for _, state := range states {
+		if !retainedErrorAcrossRestart(state, now, d.processDeathRetention) {
+			continue
+		}
+		d.restoreErrorRetention(state.SessionID, time.Unix(state.UpdatedAt, 0))
 	}
-	d.restoreErrorRetention(state.SessionID, time.Unix(state.UpdatedAt, 0))
 }
 
 // restoreErrorRetention re-registers a retention entry for a verdict a PREVIOUS
