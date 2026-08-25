@@ -139,6 +139,7 @@ REACHED_EPILOGUE=0
 # The REACHED_EPILOGUE guard below subsumes the template's per-`exit` "set
 # EXIT_REASON before a failing exit" discipline for this driver's launch path,
 # so the launch line stays unchanged.
+# BEGIN cleanup
 cleanup() {
   # An abort that never reached the epilogue never formed a verdict, so
   # EXIT_REASON is still its initial "ok". Writing that would report SUCCESS for
@@ -151,6 +152,7 @@ cleanup() {
   [[ -n "${SESSION:-}" ]] && tmux kill-session -t "$SESSION" 2>/dev/null || true
   echo "$EXIT_REASON" > "$STAGING/driver.exit-reason"
 }
+# END cleanup
 trap cleanup EXIT
 
 # Tear down any stale session with the same name (defensive, shouldn't happen).

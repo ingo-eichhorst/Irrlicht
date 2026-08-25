@@ -289,10 +289,26 @@ CI parity section (chunking, the budget, and what it makes visible).
   `tools/onboarding-factory/internal/driverteardown`, over every
   `replaydata/agents/*/driver-interactive.sh` enumerated from disk, so a new
   adapter is covered the day it lands rather than the day someone remembers it.
-  It grades three invariants — an end-of-run `tmux kill-session` is never gated
-  on a liveness flag (INV-1), a driver that launches tmux installs a
-  `trap … EXIT` whose handler tears the session down (INV-2), and every session
-  name it mints carries the driver's own `$$` as a `-`-delimited field (INV-3).
+  It grades four invariants — a `tmux kill-session` in the EXIT-trap handler or
+  at top level is never gated on a liveness flag (INV-1), a driver that launches
+  tmux installs a `trap … EXIT` whose handler tears the session down (INV-2),
+  every session name it mints carries the driver's own `$$` as a `-`-delimited
+  field (INV-3), and a handler that writes `driver.exit-reason` cannot write the
+  verdict variable's INITIAL value on an abort path (INV-4).
+  INV-4 is the one guarding a regression the #1825 fix would otherwise have
+  shipped, so it is the one most easily weakened by accident: before that fix an
+  aborting driver wrote no `driver.exit-reason` at all and `run-cell.sh` read the
+  absence as `unknown`, but a trap writing `"$EXIT_REASON"` unconditionally turns
+  that absence into the initialiser — `ok` — reporting SUCCESS for a run that
+  never formed a verdict. Nine drivers had that hole, six of them before the trap
+  work started. A handler writing a literal rather than a variable has no
+  initial-value hazard and is exempt BY DERIVATION, not by an allowlist
+  (opencode, whose inline trap writes no verdict at all).
+  INV-1 says "at top level", not "the end-of-run sweep", and the two are not the
+  same set: a driver whose step dispatch is a top-level `while … case` — copilot
+  today — has its per-step kills classified as teardown. They are ungated, so it
+  passes; the note matters because a kiro-cli-shaped step guard would read as a
+  violation there.
   It is the STATIC half of a pair: the runtime half is
   `tools/onboarding-factory/scripts/lib/tmux-teardown-check.sh`, which
   `run-cell.sh` calls after the driver returns to assert no session carrying
@@ -363,6 +379,25 @@ CI parity section (chunking, the budget, and what it makes visible).
   `_budget_kill_tree`'s own guard reddens the tripwire and leaves
   `gate-budget_test.sh`'s whole `-e` block green, because that helper is only
   ever reached through a region `budget_run` guards separately.
+- Two defaults for shell logic, both learned the hard way and both re-broken
+  inside the very PR that documented them (#1825, caught at review):
+  - **A suite under a `lib/` directory is DISCOVERED, never listed.**
+    `shell_lib_suite_run <dir>` globs `*_test.sh`, so a hand-written
+    "run this suite" block beside it does not add coverage — it re-runs a suite
+    the glob already found, and it re-creates the membership-by-hand problem the
+    glob exists to remove. #1803 added two suites that a hand-typed list did not
+    notice; #1825 then added two blocks four lines below the glob that had
+    already picked them up, and each of those suites ran twice.
+  - **Shell logic that needs a RUNTIME test gets marker-extracted, not
+    re-implemented in the test.** Wrap the block in `# BEGIN <name>` /
+    `# END <name>`, have the test extract and `eval` it against stubs, and make a
+    missing marker a loud REFUSAL rather than an empty pass — a test that
+    reimplements the code under test passes while the real code is broken, which
+    is the same "graded nothing" failure a vacuity guard exists to catch.
+    `tools/onboarding-factory/scripts/lib/run-cell-multi-teardown_test.sh` is the
+    reference; the drivers' `cleanup()` handlers use it to prove INV-4's guard
+    actually rewrites an aborted verdict, which the static checker cannot see.
+
 - The shell-lib suite runner: `tools/lib/shell-lib-suite.sh` is the ONE
   implementation behind test.yml's "Test the shared shell libs" step and
   `tools/preflight.sh`'s `tools` gate. Before #1639 those were two copies of

@@ -230,6 +230,7 @@ source "$_DRIVE_LIB/teardown.sh"
 # normal path; this overwrites it with the same value. That double write is
 # deliberate and idempotent — the trap is the one that covers the abort paths
 # the epilogue never reaches.
+# BEGIN cleanup
 cleanup() {
   local i
   for (( i = 1; i <= N_SLOTS; i++ )); do
@@ -245,6 +246,7 @@ cleanup() {
   fi
   echo "$EXIT_REASON" > "$STAGING/driver.exit-reason"
 }
+# END cleanup
 trap cleanup EXIT
 
 # The four boot gates codex can put on screen, as named predicates over a
@@ -688,11 +690,17 @@ step_exit_clean() {
   # even when the cap expires with the session still up, and SES_ALIVE=0 was set
   # regardless — so an exit key that stopped working (as claude's did) read
   # exactly like one that worked, and the run still reported exit-reason=ok.
-  if require_tmux_session_gone "$SESSION" 2; then
+  # Cap: DRIVE_EXIT_CLEAN_CAP_S (_lib/drive/teardown.sh). This site passed 2s
+  # until the #1825 review. That 2 was the pre-#1018 SETTLE budget, where
+  # overrunning was free; the strict poll turned the same number into a hard
+  # deadline that SIGHUPs the pane mid-flush and fails the run. It is now the
+  # fleet-uniform generous bound, and that constant carries how the number was
+  # arrived at: it is a bound, not a measurement.
+  if require_tmux_session_gone "$SESSION" "$DRIVE_EXIT_CLEAN_CAP_S"; then
     SES_ALIVE[$ACTIVE]=0
     echo "[driver] exit_clean: sent Ctrl-D to $SESSION (session gone)" >&2
   else
-    echo "[driver] exit_clean: FAILED — $SESSION still alive 2s after Ctrl-D;" \
+    echo "[driver] exit_clean: FAILED — $SESSION still alive ${DRIVE_EXIT_CLEAN_CAP_S}s after Ctrl-D;" \
          "killing it explicitly. codex did NOT shut down gracefully, so this" \
          "recording has no real clean-exit process_exited." >&2
     tmux kill-session -t "$SESSION" 2>/dev/null || true

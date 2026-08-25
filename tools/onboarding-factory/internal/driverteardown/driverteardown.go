@@ -188,6 +188,16 @@ func LaunchCount(src string) int {
 // It returns an error, not an empty finding list, whenever it could not
 // actually look: an empty driver, a structure it cannot parse, a launch with
 // no `-s`, a tmux-launching driver in which it found nothing to grade.
+//
+// A refusal does NOT discard the findings already established, and that is not
+// tidiness. The invariants are not independent: deleting a `trap cleanup EXIT`
+// from a driver whose trap is its ONLY teardown — hermes has no top-level sweep
+// — violates INV-2 AND leaves INV-1 with no site to grade. Returning `nil, err`
+// on the second of those threw the first away, so the gate went red naming INV-1
+// as having "graded nothing" and dropped the one sentence that says what to do
+// about it. The refusal was the consequence; the finding is the cause. See
+// gradedError, which carries both so the diagnosis points at the defect
+// regardless of whether the caller reads findings, the error, or only the error.
 func CheckDriver(driver File, libs []File) ([]Finding, error) {
 	if strings.TrimSpace(driver.Src) == "" {
 		return nil, fmt.Errorf("%s is empty — a driver that cannot be read graded nothing, "+
@@ -215,22 +225,56 @@ func CheckDriver(driver File, libs []File) ([]Finding, error) {
 	findings := checkTrapExists(driver, traps)
 
 	inv1, err := checkTeardownUngated(src, traps)
-	if err != nil {
-		return nil, err
-	}
 	findings = append(findings, inv1...)
+	if err != nil {
+		return refuse(findings, err)
+	}
 
 	inv3, err := checkSessionNamesCarryPID(src, parsedLibs)
-	if err != nil {
-		return nil, err
-	}
 	findings = append(findings, inv3...)
+	if err != nil {
+		return refuse(findings, err)
+	}
 
 	inv4, err := checkVerdictCannotBeStale(src, traps)
+	findings = append(findings, inv4...)
 	if err != nil {
+		return refuse(findings, err)
+	}
+	return findings, nil
+}
+
+// gradedError is a vacuity refusal that still names what was already found.
+//
+// Every caller of CheckDriver treats a non-nil error as fatal and prints it;
+// TestEveryDriverTearsDownEverySession does exactly that. So a refusal that
+// arrives after a real finding has to carry the finding in its own message, or
+// the finding is invisible however carefully the caller was written.
+type gradedError struct {
+	err      error
+	findings []Finding
+}
+
+func (e *gradedError) Error() string {
+	var b strings.Builder
+	b.WriteString(e.err.Error())
+	b.WriteString("\n\n  …and this driver was ALREADY in violation before that refusal. The " +
+		"refusal is downstream of what follows, which is the defect to fix:")
+	for _, f := range e.findings {
+		b.WriteString("\n  " + f.String())
+	}
+	return b.String()
+}
+
+func (e *gradedError) Unwrap() error { return e.err }
+
+// refuse pairs a vacuity error with the findings already established, so a
+// caller that reads only the error still sees them.
+func refuse(findings []Finding, err error) ([]Finding, error) {
+	if len(findings) == 0 {
 		return nil, err
 	}
-	return append(findings, inv4...), nil
+	return findings, &gradedError{err: err, findings: findings}
 }
 
 func parseAll(files []File) ([]*Source, error) {
@@ -368,10 +412,17 @@ func checkTrapExists(driver File, traps []exitTrap) []Finding {
 // The distinction is STRUCTURAL — where the `tmux kill-session` sits — not
 // textual, because both spellings of the gate are byte-identical:
 //
-//	teardown (must be ungated)   : the EXIT-trap handler, and the end-of-run
-//	                               sweep, which every driver writes at TOP
-//	                               LEVEL after the step loop has finished.
-//	step-level (may be gated)    : anything inside an ordinary function.
+//	teardown (must be ungated)   : the EXIT-trap handler, and every kill AT TOP
+//	                               LEVEL that is not inside a `case` arm a loop
+//	                               re-enters.
+//	step-level (may be gated)    : anything inside an ordinary function, and the
+//	                               arms of a top-level step dispatch.
+//
+// The second half of each line is the correction #1827 made. The rule was
+// written as "top level" and DOCUMENTED as "the end-of-run sweep", and those are
+// not the same set: copilot's step dispatch is a top-level `while … case`, so
+// its resume/restart/exit_clean kills sit at Func "" and were graded as the
+// end-of-run sweep. isStepDispatchArm is where that difference now lives.
 //
 // kiro-cli is the case that forces this. Its `step_exit_clean` and
 // `step_sigkill` open with `if [[ "${SES_ALIVE[$ACTIVE]:-0}" != "1" ]]; then
@@ -425,8 +476,12 @@ func checkTeardownUngated(src *Source, traps []exitTrap) ([]Finding, error) {
 		}
 		where := ""
 		switch {
+		case st.Func == "" && isStepDispatchArm(st):
+			// A per-step arm of a top-level dispatch. Step-level work that
+			// happens not to live in a function — see isStepDispatchArm.
+			continue
 		case st.Func == "":
-			where = "this end-of-run teardown"
+			where = "this top-level teardown"
 		case handlerFuncs[st.Func]:
 			where = fmt.Sprintf("this teardown inside the EXIT-trap handler %s()", st.Func)
 		default:
@@ -448,6 +503,63 @@ func checkTeardownUngated(src *Source, traps []exitTrap) ([]Finding, error) {
 			"cannot run must say so", src.Path)
 	}
 	return findings, nil
+}
+
+// isStepDispatchArm reports whether a statement sits in a `case` arm that a
+// loop re-enters — the shape of a per-step dispatch, which is step-level work
+// even when it is written at top level rather than inside a function.
+//
+// copilot is the driver that forces this, and it is the mirror image of the
+// kiro-cli case that forced the structural rule in the first place. Its step
+// dispatch is a top-level `while IFS= read -r step; do … case "$type" in …`,
+// not a function, so the `tmux kill-session` in its resume, restart and
+// exit_clean arms — `grep -n 'tmux kill-session'
+// replaydata/agents/copilot/driver-interactive.sh`, the three inside that
+// `while` — have Func "" and were classified as "this end-of-run teardown".
+// (Line numbers are deliberately not quoted: the drivers are edited often
+// enough that three of them moved while this comment was being written.) They
+// are ungated today, so nothing
+// fired — but the kiro-cli-shaped `SES_ALIVE` entry check this package
+// deliberately ACCEPTS at step level (correct there, because reset_session
+// aliases a retired slot number onto a pane a live slot now owns) would have
+// been a FALSE POSITIVE the moment copilot, hermes, mistral-vibe or antigravity
+// needed one. That is precisely the outcome aliveGate's tradeoff note says gets
+// a rule ignored rather than fixed.
+//
+// BOTH halves of the test are load-bearing, and each was checked against the
+// eleven shipped drivers rather than assumed:
+//
+//   - "inside a loop" alone would excuse the end-of-run sweep itself, which
+//     every slot-model driver writes as `for (( i = 1; i <= N_SLOTS; i++ )); do
+//     … done`. That would gut INV-1; inv1_gated_final_sweep.sh is the row that
+//     holds it.
+//   - "inside a `case`" alone would excuse the trailing `case "$EXIT_REASON"
+//     in` that aider, claudecode and opencode already write at the bottom of
+//     their drivers (`git grep -n 'case "$EXIT_REASON"' -- replaydata/agents`).
+//     A liveness-gated kill in one of those arms IS end-of-run teardown;
+//     inv1_gated_case_at_exit.sh is the row that holds it.
+//
+// Requiring a loop OUTSIDE the `case` keeps both graded and moves only the
+// dispatch. What it still costs: a driver that put its final sweep inside a
+// `case` arm within a loop would have it read as step-level — the same shape,
+// and the same acceptance, as the `final_teardown()` helper named above.
+//
+// The exclusion applies ONLY to the top-level branch. Everything reached
+// through an EXIT-trap handler's name stays teardown by definition, however it
+// is nested inside that handler.
+func isStepDispatchArm(st Statement) bool {
+	loop := false
+	for _, b := range st.Blocks {
+		switch b {
+		case "do":
+			loop = true
+		case "case":
+			if loop {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func inv1Detail(where string) string {
@@ -802,17 +914,52 @@ type mintSite struct {
 	literal string
 }
 
+// funcRef identifies ONE function definition: the file it is written in, plus
+// its name.
+//
+// Keying positional facts on the bare NAME was a defect. LoadDriver globs the
+// whole replaydata/_lib/drive directory and hands every adapter every file in
+// it, sourced or not, and two different `alloc_slot`s exist (`git grep -n
+// 'alloc_slot()' -- replaydata`): the shared _lib/drive/slots.sh takes the tmux
+// session name at argument 1, while claudecode's private one, defined in its own
+// driver, takes it at argument 2. On one bare key
+// both positions get marked, and a literal at the wrong position is then graded
+// as a session name — a false INV-3 against a correct driver.
+//
+// It does not fire today, and that was measured rather than assumed: the flow
+// resolves claudecode to {2} and codex to {1} with no contamination, but only
+// because claudecode never touches SESSION or SES_SESSION, so slots.sh's `sess`
+// never becomes name-carrying in claudecode's pass. One driver that used the
+// shared slot model AND kept a `SESSION` alias would light it.
+// inv3_shadowed_alloc_slot_ok.sh is that driver.
+type funcRef struct {
+	file string
+	name string
+}
+
 // nameFlow is the fixpoint of "what carries a tmux session name".
 type nameFlow struct {
-	vars  map[string]bool         // variable names
-	pos   map[string]map[int]bool // function name -> name-carrying argument positions
-	seeds []mintSite              // names written inline at the launch itself
+	vars  map[string]bool          // variable names
+	pos   map[funcRef]map[int]bool // one DEFINITION -> its name-carrying argument positions
+	def   map[string]string        // function name -> the file whose definition a call resolves to
+	seeds []mintSite               // names written inline at the launch itself
 	all   []*Source
 }
 
 func newNameFlow(src *Source, libs []*Source) (*nameFlow, error) {
-	f := &nameFlow{vars: map[string]bool{}, pos: map[string]map[int]bool{}}
+	f := &nameFlow{vars: map[string]bool{}, pos: map[funcRef]map[int]bool{}, def: map[string]string{}}
 	f.all = append([]*Source{src}, libs...)
+	// Which definition a call resolves to: the driver's own if it has one, else
+	// the first library that defines the name. Same precedence as lookupFunc,
+	// and the same reason — a driver that defines a helper the shared libs also
+	// define is shadowing it, because its definition is sourced last.
+	for _, s := range f.all {
+		for _, fn := range s.funcs {
+			if _, seen := f.def[fn.Name]; !seen {
+				f.def[fn.Name] = s.Path
+			}
+		}
+	}
 	if err := f.seed(src); err != nil {
 		return nil, err
 	}
@@ -883,8 +1030,12 @@ func (f *nameFlow) propagate(src *Source) bool {
 			}
 			switch {
 			case positional > 0:
-				if f.vars[lhs] && st.Func != "" && !f.posHas(st.Func, positional) {
-					f.markPos(st.Func, positional)
+				// Marked against THIS file's definition. Marking a definition no
+				// call resolves to is harmless — nothing reads that key — and
+				// keeping it unconditional keeps the fixpoint a single pass.
+				ref := funcRef{file: src.Path, name: st.Func}
+				if f.vars[lhs] && st.Func != "" && !f.posHas(ref, positional) {
+					f.markPos(ref, positional)
 					changed = true
 				}
 			default:
@@ -899,10 +1050,10 @@ func (f *nameFlow) propagate(src *Source) bool {
 			}
 		}
 		name, args, ok := st.Command()
-		if !ok || len(f.pos[name]) == 0 {
+		if !ok || len(f.posOf(name)) == 0 {
 			continue
 		}
-		for n := range f.pos[name] {
+		for n := range f.posOf(name) {
 			if n > len(args) {
 				continue
 			}
@@ -915,13 +1066,24 @@ func (f *nameFlow) propagate(src *Source) bool {
 	return changed
 }
 
-func (f *nameFlow) posHas(fn string, n int) bool { return f.pos[fn][n] }
+func (f *nameFlow) posHas(fn funcRef, n int) bool { return f.pos[fn][n] }
 
-func (f *nameFlow) markPos(fn string, n int) {
+func (f *nameFlow) markPos(fn funcRef, n int) {
 	if f.pos[fn] == nil {
 		f.pos[fn] = map[int]bool{}
 	}
 	f.pos[fn][n] = true
+}
+
+// posOf gives the name-carrying argument positions of the ONE definition a call
+// to fn resolves to, so a same-named function in a library the driver never
+// sources cannot contribute positions to it.
+func (f *nameFlow) posOf(fn string) map[int]bool {
+	file, ok := f.def[fn]
+	if !ok {
+		return nil
+	}
+	return f.pos[funcRef{file: file, name: fn}]
 }
 
 // mintSites lists every composed literal in ONE file that becomes a tmux
@@ -946,7 +1108,7 @@ func (f *nameFlow) mintSites(src *Source) []mintSite {
 		if !ok {
 			continue
 		}
-		for n := range f.pos[name] {
+		for n := range f.posOf(name) {
 			if n > len(args) {
 				continue
 			}
@@ -988,8 +1150,19 @@ func Adapters(root string) ([]string, error) {
 	return out, nil
 }
 
-// LoadDriver reads one adapter's driver plus every shell library it can source
+// LoadDriver reads one adapter's driver plus every shell library it CAN source
 // — the shared drive libs and the adapter's own sibling scripts.
+//
+// "Can", not "does": the whole _lib/drive directory is globbed for every
+// adapter, because a driver's `source` lines are computed paths
+// (`"$_DRIVE_LIB/slots.sh"`, `"$(dirname "${BASH_SOURCE[0]}")/turn-count.sh"`)
+// and libraries source one another, so resolving the real set statically would
+// itself be a place this package could be wrong — and getting it wrong DOWNWARD
+// turns a resolvable trap handler into a refusal for the whole fleet.
+//
+// The cost is that every adapter is handed definitions it never sources. That
+// is why nameFlow keys positional facts on a funcRef rather than on a bare
+// function name: see funcRef for the two `alloc_slot`s this collides.
 func LoadDriver(root, adapter string) (File, []File, error) {
 	path := filepath.Join(root, AgentsDir, adapter, DriverName)
 	src, err := os.ReadFile(path) // #nosec G304 -- built from the repo root and a scanned adapter slug

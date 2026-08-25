@@ -147,6 +147,7 @@ ACTIVE=0
 # SINGLE WRITER, deliberately: the straight-line epilogue below no longer
 # writes driver.exit-reason — this trap is the only writer, so there is exactly
 # one place the staging contract's exit reason comes from on every path.
+# BEGIN cleanup
 cleanup() {
   local i
   for (( i = 1; i <= N_SLOTS; i++ )); do
@@ -162,6 +163,7 @@ cleanup() {
   fi
   echo "$EXIT_REASON" > "$STAGING/driver.exit-reason"
 }
+# END cleanup
 trap cleanup EXIT
 
 # Persist the active-view variables back into the active slot.
@@ -575,11 +577,17 @@ step_exit_clean() {
   # Observe the death rather than asserting it. The old `sleep 1` + unconditional
   # SES_ALIVE=0 is the whole of #1825: nine runs recorded the slot as dead and
   # leaked a live claude plus its tmux session while reporting exit-reason=ok.
-  if require_tmux_session_gone "$CURRENT_TMUX" 2; then
+  # Cap: DRIVE_EXIT_CLEAN_CAP_S (_lib/drive/teardown.sh). This site passed 2s
+  # until the #1825 review. That 2 was the pre-#1018 SETTLE budget, where
+  # overrunning was free; the strict poll turned the same number into a hard
+  # deadline that SIGHUPs the pane mid-flush and fails the run. It is now the
+  # fleet-uniform generous bound, and that constant carries how the number was
+  # arrived at: it is a bound, not a measurement.
+  if require_tmux_session_gone "$CURRENT_TMUX" "$DRIVE_EXIT_CLEAN_CAP_S"; then
     SES_ALIVE[$ACTIVE]=0
     echo "[driver] exit_clean: sent Ctrl-D to $CURRENT_TMUX (session gone)" >&2
   else
-    echo "[driver] exit_clean: FAILED — $CURRENT_TMUX still alive 2s after Ctrl-D Ctrl-D;" \
+    echo "[driver] exit_clean: FAILED — $CURRENT_TMUX still alive ${DRIVE_EXIT_CLEAN_CAP_S}s after Ctrl-D Ctrl-D;" \
          "killing it explicitly. The graceful-exit path did NOT work — this recording" \
          "does not contain a real process_exited from a clean shutdown." >&2
     tmux kill-session -t "$CURRENT_TMUX" 2>/dev/null || true

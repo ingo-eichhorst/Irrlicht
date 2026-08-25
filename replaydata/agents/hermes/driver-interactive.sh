@@ -147,6 +147,7 @@ not_implemented() { # <step-type>
 # Always honor the staging contract: write driver.exit-reason on ANY exit
 # (including a `set -e` abort mid-launch) and tear tmux down if a session was
 # started. Set EXIT_REASON before a failing `exit` so the reason is accurate.
+# BEGIN cleanup
 cleanup() {
   local i
   for (( i = 1; i <= N_SLOTS; i++ )); do
@@ -163,6 +164,7 @@ cleanup() {
   fi
   echo "$EXIT_REASON" > "$STAGING/driver.exit-reason"
 }
+# END cleanup
 trap cleanup EXIT
 
 # --- Scenario settings → <HERMES_HOME>/config.yaml ---------------------------

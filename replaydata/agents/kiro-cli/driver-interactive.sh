@@ -241,6 +241,7 @@ not_implemented() { # <step-type>
 # (including the name a reset_session slot shares with its successor) is a
 # harmless no-op, which is exactly why presence is the right gate. Same shape as
 # scripts/templates/drive-interactive.sh.tmpl:147-154.
+# BEGIN cleanup
 cleanup() {
   local i
   for (( i = 1; i <= N_SLOTS; i++ )); do
@@ -256,6 +257,7 @@ cleanup() {
   fi
   echo "$EXIT_REASON" > "$STAGING/driver.exit-reason"
 }
+# END cleanup
 trap cleanup EXIT
 
 # --- AGENT-SPECIFIC SEAM 1: launch the REPL under tmux -----------------------
@@ -573,11 +575,17 @@ step_exit_clean() {
   # even when the cap expires with the session still up, and SES_ALIVE=0 was set
   # regardless — so a /quit that stopped working would read exactly like one
   # that worked, and the run would still report exit-reason=ok.
-  if require_tmux_session_gone "$SESSION" 2; then
+  # Cap: DRIVE_EXIT_CLEAN_CAP_S (_lib/drive/teardown.sh). This site passed 2s
+  # until the #1825 review. That 2 was the pre-#1018 SETTLE budget, where
+  # overrunning was free; the strict poll turned the same number into a hard
+  # deadline that SIGHUPs the pane mid-flush and fails the run. It is now the
+  # fleet-uniform generous bound, and that constant carries how the number was
+  # arrived at: it is a bound, not a measurement.
+  if require_tmux_session_gone "$SESSION" "$DRIVE_EXIT_CLEAN_CAP_S"; then
     SES_ALIVE[$ACTIVE]=0
     echo "[driver] exit_clean[s$ACTIVE]: sent /quit to $SESSION (uuid=$UUID, session gone)" >&2
   else
-    echo "[driver] exit_clean[s$ACTIVE]: FAILED — $SESSION still alive 2s after /quit;" \
+    echo "[driver] exit_clean[s$ACTIVE]: FAILED — $SESSION still alive ${DRIVE_EXIT_CLEAN_CAP_S}s after /quit;" \
          "killing it explicitly. kiro-cli did NOT shut down gracefully, so this" \
          "recording has no real clean-exit process_exited." >&2
     tmux kill-session -t "$SESSION" 2>/dev/null || true

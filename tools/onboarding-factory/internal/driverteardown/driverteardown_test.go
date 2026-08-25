@@ -17,8 +17,13 @@ func repoRoot(t *testing.T) string {
 	return strings.TrimSpace(string(out))
 }
 
-// loadFixture reads one testdata driver plus the one shell library it sources.
-func loadFixture(t *testing.T, name, lib string) (File, []File) {
+// loadFixture reads one testdata driver plus the shell libraries it is HANDED.
+//
+// Handed, not sourced: LoadDriver globs the whole replaydata/_lib/drive
+// directory for every adapter, so a driver is analysed alongside libraries it
+// never sources. inv3_shadowed_alloc_slot_ok.sh is the fixture that depends on
+// that distinction being reproducible here.
+func loadFixture(t *testing.T, name string, libNames ...string) (File, []File) {
 	t.Helper()
 	path := filepath.Join("testdata", name)
 	src, err := os.ReadFile(path) // #nosec G304 -- a literal testdata path
@@ -26,7 +31,7 @@ func loadFixture(t *testing.T, name, lib string) (File, []File) {
 		t.Fatalf("reading fixture %s: %v", name, err)
 	}
 	var libs []File
-	if lib != "" {
+	for _, lib := range libNames {
 		lp := filepath.Join("testdata", "lib", lib)
 		lsrc, err := os.ReadFile(lp) // #nosec G304 -- a literal testdata path
 		if err != nil {
@@ -55,43 +60,74 @@ func loadFixture(t *testing.T, name, lib string) (File, []File) {
 //
 // HOW A TEARDOWN SITE IS TOLD APART FROM A STEP-LEVEL GUARD — and what that
 // choice costs — is written out on checkTeardownUngated. In one line: the
-// distinction is STRUCTURAL (the EXIT-trap handler and the top-level end-of-run
-// sweep are teardown; anything inside an ordinary function is not), because
-// both spellings of the gate are byte-identical, and the cost is that a driver
-// which moved its end-of-run sweep into a helper function would have that
-// sweep read as step-level. The flag NAME the gate is matched on
-// (`aliveGate`) carries its own tradeoff note.
+// distinction is STRUCTURAL (the EXIT-trap handler is teardown, and so is a kill
+// at top level UNLESS it sits in a `case` arm a loop re-enters; anything inside
+// an ordinary function, and every arm of a top-level step dispatch, is not),
+// because both spellings of the gate are byte-identical. The cost is that a
+// driver which moved its end-of-run sweep into a helper function, or into a
+// `case` arm inside a loop, would have that sweep read as step-level. The three
+// rows that hold the two halves of the `case` rule apart are
+// inv1_step_dispatch_case_arm_ok.sh (copilot's dispatch, must stay clean),
+// inv1_gated_case_at_exit.sh (a trailing `case "$EXIT_REASON"`, must fire) and
+// inv1_gated_final_sweep.sh (the `for … do … done` sweep, must fire). The flag
+// NAME the gate is matched on (`aliveGate`) carries its own tradeoff note.
 func TestCheckerGradesEveryFixture(t *testing.T) {
 	cases := []struct {
 		fixture string
-		lib     string
+		libs    []string
 		want    []string // one invariant name per expected finding, in order
 	}{
-		{fixture: "good_driver.sh", lib: "slots.sh"},
-		{fixture: "inv1_step_guard_ok.sh", lib: "slots.sh"},
-		{fixture: "inv3_alloc_arg2_good.sh", lib: "slots_pos2.sh"},
+		{fixture: "good_driver.sh", libs: []string{"slots.sh"}},
+		{fixture: "inv1_step_guard_ok.sh", libs: []string{"slots.sh"}},
+		{fixture: "inv3_alloc_arg2_good.sh", libs: []string{"slots_pos2.sh"}},
 		{fixture: "no_tmux_exempt.sh"},
-		{fixture: "inv4_renamed_sentinel_ok.sh", lib: "slots.sh"},
-		{fixture: "inv4_fail_closed_ok.sh", lib: "slots.sh"},
-		{fixture: "inv4_literal_verdict_ok.sh", lib: "slots.sh"},
+		{fixture: "inv4_renamed_sentinel_ok.sh", libs: []string{"slots.sh"}},
+		{fixture: "inv4_fail_closed_ok.sh", libs: []string{"slots.sh"}},
+		{fixture: "inv4_literal_verdict_ok.sh", libs: []string{"slots.sh"}},
+		// A multi-line `awk '…'` program: the join this package needs, and the
+		// thing a `#`-is-a-comment rule could end early. A LOCK — green before
+		// the shellsource.go fix and after it.
+		{fixture: "quote_multiline_awk_ok.sh", libs: []string{"slots.sh"}},
+		// copilot's top-level `while … case` dispatch, carrying kiro-cli's
+		// legitimate SES_ALIVE entry check. RED before the classification was
+		// narrowed: the arm was graded as "this end-of-run teardown".
+		{fixture: "inv1_step_dispatch_case_arm_ok.sh", libs: []string{"slots.sh"}},
+		// A driver with its OWN alloc_slot (name at argument 2), handed the
+		// shared slots.sh (name at argument 1) that it never sources. RED before
+		// nameFlow keyed positions on a definition instead of a bare name: the
+		// uuid at argument 1 was graded as a session name.
+		{fixture: "inv3_shadowed_alloc_slot_ok.sh", libs: []string{"slots.sh"}},
 
-		{fixture: "inv1_gated_trap.sh", lib: "slots.sh", want: []string{"INV-1"}},
-		{fixture: "inv1_gated_final_sweep.sh", lib: "slots.sh", want: []string{"INV-1"}},
+		{fixture: "inv1_gated_trap.sh", libs: []string{"slots.sh"}, want: []string{"INV-1"}},
+		{fixture: "inv1_gated_final_sweep.sh", libs: []string{"slots.sh"}, want: []string{"INV-1"}},
+		// A comment glued to code, whose apostrophe used to be read as an
+		// unterminated quote: everything below it was swallowed, INV-1 reported
+		// CLEAN, and `sites` stayed non-zero so the vacuity guard saw nothing.
+		{fixture: "inv1_comment_glued_to_code.sh", libs: []string{"slots.sh"}, want: []string{"INV-1"}},
+		// A trailing `case "$EXIT_REASON" in` — a top-level `case` that no loop
+		// re-enters — is teardown, so the step-dispatch narrowing must not
+		// excuse it.
+		{fixture: "inv1_gated_case_at_exit.sh", libs: []string{"slots.sh"}, want: []string{"INV-1"}},
 		{fixture: "inv2_no_trap.sh", want: []string{"INV-2"}},
 		{fixture: "inv2_trap_without_teardown.sh", want: []string{"INV-2"}},
-		{fixture: "inv3_no_pid.sh", lib: "slots.sh", want: []string{"INV-3"}},
-		{fixture: "inv3_glued_pid.sh", lib: "slots.sh", want: []string{"INV-3"}},
-		{fixture: "inv3_alloc_arg2_bad.sh", lib: "slots_pos2.sh", want: []string{"INV-3"}},
-		{fixture: "inv4_unconditional_write.sh", lib: "slots.sh", want: []string{"INV-4"}},
-		{fixture: "inv4_guard_consults_only_itself.sh", lib: "slots.sh", want: []string{"INV-4"}},
-		{fixture: "inv4_sentinel_never_set.sh", lib: "slots.sh", want: []string{"INV-4"}},
-		{fixture: "inv4_guard_reassigns_initial.sh", lib: "slots.sh", want: []string{"INV-4"}},
-		{fixture: "inv4_case_arm_is_not_the_epilogue.sh", lib: "slots.sh", want: []string{"INV-4"}},
+		{fixture: "inv3_no_pid.sh", libs: []string{"slots.sh"}, want: []string{"INV-3"}},
+		{fixture: "inv3_glued_pid.sh", libs: []string{"slots.sh"}, want: []string{"INV-3"}},
+		{fixture: "inv3_alloc_arg2_bad.sh", libs: []string{"slots_pos2.sh"}, want: []string{"INV-3"}},
+		// The shadowed-alloc_slot driver with a genuinely PID-less name at
+		// argument 2. ONE finding: the fix must silence the contaminated
+		// position without silencing the real one, and this row is what tells
+		// those two apart. It reported TWO before the fix.
+		{fixture: "inv3_shadowed_alloc_slot_bad.sh", libs: []string{"slots.sh"}, want: []string{"INV-3"}},
+		{fixture: "inv4_unconditional_write.sh", libs: []string{"slots.sh"}, want: []string{"INV-4"}},
+		{fixture: "inv4_guard_consults_only_itself.sh", libs: []string{"slots.sh"}, want: []string{"INV-4"}},
+		{fixture: "inv4_sentinel_never_set.sh", libs: []string{"slots.sh"}, want: []string{"INV-4"}},
+		{fixture: "inv4_guard_reassigns_initial.sh", libs: []string{"slots.sh"}, want: []string{"INV-4"}},
+		{fixture: "inv4_case_arm_is_not_the_epilogue.sh", libs: []string{"slots.sh"}, want: []string{"INV-4"}},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.fixture, func(t *testing.T) {
-			driver, libs := loadFixture(t, tc.fixture, tc.lib)
+			driver, libs := loadFixture(t, tc.fixture, tc.libs...)
 			got, err := CheckDriver(driver, libs)
 			if err != nil {
 				t.Fatalf("checking %s: %v", tc.fixture, err)
@@ -116,20 +152,30 @@ func TestCheckerGradesEveryFixture(t *testing.T) {
 func TestCheckerRefusesRatherThanReportingClean(t *testing.T) {
 	cases := []struct {
 		fixture string
-		lib     string
+		libs    []string
 		wantErr string // a fragment of the checker's own message
 	}{
 		{fixture: "vacuous_empty.sh", wantErr: "is empty"},
 		{fixture: "vacuous_no_teardown.sh", wantErr: "INV-1 graded nothing here"},
 		{fixture: "vacuous_unnamed_session.sh", wantErr: "with no `-s <name>`"},
 		{fixture: "vacuous_unclosed_function.sh", wantErr: "is never closed by a `}`"},
-		{fixture: "vacuous_uninitialised_verdict.sh", lib: "slots.sh",
+		{fixture: "vacuous_uninitialised_verdict.sh", libs: []string{"slots.sh"},
 			wantErr: "INV-4 has no initial value to compare against"},
+		// A quote still open at end of file: the joiner walks to EOF and the
+		// word scanner swallows every remaining statement into one quoted word.
+		// This is the one shape a single shared scanner CANNOT see — both halves
+		// agree the quote is open — so it is refused rather than graded.
+		{fixture: "vacuous_unterminated_quote.sh",
+			wantErr: "is never closed before the end of the file"},
+		// Refuses AND carries a finding. TestARefusalStillNamesTheFindingThatCausedIt
+		// is where that second half is graded; this row pins that it still refuses.
+		{fixture: "inv2_no_trap_no_sweep.sh", libs: []string{"slots.sh"},
+			wantErr: "INV-1 graded nothing here"},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.fixture, func(t *testing.T) {
-			driver, libs := loadFixture(t, tc.fixture, tc.lib)
+			driver, libs := loadFixture(t, tc.fixture, tc.libs...)
 			got, err := CheckDriver(driver, libs)
 			if err == nil {
 				t.Fatalf("%s returned no error (%d finding(s)) — this input could not be graded, "+
@@ -142,13 +188,137 @@ func TestCheckerRefusesRatherThanReportingClean(t *testing.T) {
 	}
 }
 
+// TestAGluedCommentDoesNotSwallowTheStatementsAfterIt is finding 6's
+// reproduction, kept at the level the defect actually lived at.
+//
+// `bar=1;# the driver's flag` glues a comment to code. Two scanners disagreed
+// about where that comment starts — the line-joiner accepted a `#` only at
+// column 0 or after a space/tab, while the word scanner accepted any `#` that
+// opens a word — so the joiner read the apostrophe in "driver's" as an
+// unterminated quote, joined the rest of the file onto line 3 to close it, and
+// the word scanner then truncated the joined text at the `#`. Lines 4 and 5
+// disappeared with NO error, because the dropped lines took their own `if`/`fi`
+// and `do`/`done` with them and the balance assertions stayed happy.
+//
+// This is not cosmetic. A dropped `trap … EXIT` or `REACHED_EPILOGUE=1` is a
+// false positive and merely noisy; a dropped top-level gated `tmux kill-session`
+// is a false CLEAN on INV-1 with `sites` still non-zero — the one failure this
+// package's vacuity guard cannot see. inv1_comment_glued_to_code.sh is the
+// end-to-end half of the same defect.
+func TestAGluedCommentDoesNotSwallowTheStatementsAfterIt(t *testing.T) {
+	const src = `tmux new-session -d -s "drv-$$" "agent"
+foo() { echo hi; }
+bar=1;# the driver's flag
+baz=2
+trap foo EXIT`
+
+	parsed, err := Parse("glued.sh", src)
+	if err != nil {
+		t.Fatalf("parsing: %v", err)
+	}
+	first := map[int]string{}
+	for _, st := range parsed.Statements() {
+		if len(st.Words) > 0 {
+			if _, seen := first[st.Line]; !seen {
+				first[st.Line] = st.Words[0]
+			}
+		}
+	}
+	for _, want := range []struct {
+		line int
+		word string
+	}{{3, "bar=1"}, {4, "baz=2"}, {5, "trap"}} {
+		if got := first[want.line]; got != want.word {
+			t.Errorf("line %d parsed as %q, want %q — the comment glued to line 3 swallowed it. "+
+				"A `#` must end a line for the joiner and the word scanner identically, which is "+
+				"why there is now one scanner (shellWordsOpen) rather than two.",
+				want.line, got, want.word)
+		}
+	}
+}
+
+// TestShellWordsOpenSettlesCommentsAndQuotesTogether is the boundary rule that
+// finding 6 turned on, graded directly.
+//
+// Every row is a place the two former scanners could disagree, plus the
+// expansions the aligned rule makes newly reachable: a `#` inside `${x#y}` is
+// not a comment, and a `#` glued to the right of a word is not one either.
+func TestShellWordsOpenSettlesCommentsAndQuotesTogether(t *testing.T) {
+	cases := []struct {
+		name string
+		line string
+		open rune
+		last string // the last word the scanner should emit
+	}{
+		{"comment glued to a `;`", `bar=1;# the driver's flag`, 0, ";"},
+		{"comment after a space", `echo hi # don't`, 0, "hi"},
+		{"a whole-line comment", `# the recipe's own note`, 0, ""},
+		{"comment glued to a `&`", `foo &# the driver's flag`, 0, "&"},
+		{"a `#` inside an expansion is not a comment", `echo "${x#y}"`, 0, `"${x#y}"`},
+		{"a `#` glued to the right of a word is not a comment", `echo a#b`, 0, "a#b"},
+		{"an unterminated single quote", `tmux capture-pane | awk '`, '\'', "'"},
+		{"an unterminated double quote", `MSG="unterminated`, '"', `MSG="unterminated`},
+		{"a quote closed on the same line", `echo 'done'`, 0, "'done'"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			words, open := shellWordsOpen(tc.line)
+			if open != tc.open {
+				t.Errorf("shellWordsOpen(%q) left %q open, want %q", tc.line, open, tc.open)
+			}
+			last := ""
+			if len(words) > 0 {
+				last = words[len(words)-1]
+			}
+			if last != tc.last {
+				t.Errorf("shellWordsOpen(%q) ended at word %q, want %q", tc.line, last, tc.last)
+			}
+		})
+	}
+}
+
+// TestARefusalStillNamesTheFindingThatCausedIt is finding 8.
+//
+// The invariants are not independent. Deleting `trap cleanup EXIT` from a driver
+// whose trap is its ONLY teardown — hermes writes no top-level sweep — violates
+// INV-2 and, as a direct consequence, leaves INV-1 with no site to grade.
+// CheckDriver returned `nil, err` on that second event, so the gate went red
+// naming INV-1 as having "graded nothing" and dropped the one sentence that says
+// what to do: install a `trap … EXIT`, see the template's `cleanup`.
+//
+// Both halves are graded here, because a caller may read either: the finding
+// survives in the returned slice, AND the refusal names it in its own message
+// for the callers (TestEveryDriverTearsDownEverySession included) that treat a
+// non-nil error as fatal and print only that.
+func TestARefusalStillNamesTheFindingThatCausedIt(t *testing.T) {
+	driver, libs := loadFixture(t, "inv2_no_trap_no_sweep.sh", "slots.sh")
+	got, err := CheckDriver(driver, libs)
+	if err == nil {
+		t.Fatalf("this driver has no teardown site at all; INV-1 must refuse rather than report "+
+			"clean\n%s", joinFindings(got))
+	}
+	if len(got) != 1 || got[0].Invariant != "INV-2" {
+		t.Errorf("the INV-2 finding did not survive the INV-1 refusal: got %d finding(s)\n%s",
+			len(got), joinFindings(got))
+	}
+	if !strings.Contains(err.Error(), "installs no `trap … EXIT`") {
+		t.Errorf("the refusal does not name the defect that caused it, so the gate goes red "+
+			"pointing at the wrong invariant:\n%v", err)
+	}
+	if !strings.Contains(err.Error(), "INV-1 graded nothing here") {
+		t.Errorf("the refusal no longer says why INV-1 could not run — a check that cannot run "+
+			"must still say so:\n%v", err)
+	}
+}
+
 // TestExemptionIsDerivedNotListed grades the derived exemption on both halves
 // at once: no tmux launch means no findings, AND the file was still read.
 // Without the second half, a driver that failed to load would be indexed as
 // "exempt" — the shape #1423, #1611 and #1684 all took, where a selection rule
 // that silently drops a whole family reads exactly like a gate that passed.
 func TestExemptionIsDerivedNotListed(t *testing.T) {
-	driver, _ := loadFixture(t, "no_tmux_exempt.sh", "")
+	driver, _ := loadFixture(t, "no_tmux_exempt.sh")
 	if strings.TrimSpace(driver.Src) == "" {
 		t.Fatal("the exempt fixture is empty — it proves nothing about exemption")
 	}

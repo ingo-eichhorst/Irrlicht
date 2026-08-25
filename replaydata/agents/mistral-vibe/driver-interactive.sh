@@ -300,6 +300,7 @@ not_implemented() { # <step-type>
 # Always honor the staging contract: write driver.exit-reason on ANY exit
 # (including a `set -e` abort mid-launch) and tear tmux down if a session was
 # started. Set EXIT_REASON before a failing `exit` so the reason is accurate.
+# BEGIN cleanup
 cleanup() {
   local i
   for (( i = 1; i <= N_SLOTS; i++ )); do
@@ -315,6 +316,7 @@ cleanup() {
   fi
   echo "$EXIT_REASON" > "$STAGING/driver.exit-reason"
 }
+# END cleanup
 trap cleanup EXIT
 
 # --- AGENT-SPECIFIC SEAM 1: launch the REPL under tmux -----------------------
@@ -648,12 +650,16 @@ step_exit_clean() {
   # STRICT poll (#1825): the old best-effort wait_tmux_session_gone returns 0
   # even when the cap expires with the session still up, and SES_ALIVE=0 was set
   # regardless — so the log line below claimed "process exited" on the strength
-  # of nothing. 15s cap preserved (vibe's teardown is the slowest in the fleet).
-  if require_tmux_session_gone "$SESSION" 15; then
+  # of nothing. Vibe's teardown is the slowest in the fleet.
+  # Cap: DRIVE_EXIT_CLEAN_CAP_S (_lib/drive/teardown.sh) — still 15s, unchanged.
+  # Named once for the whole fleet rather than typed per driver (#1825 review),
+  # and the six drivers that passed 2s were raised to it. That constant carries
+  # how the number was arrived at.
+  if require_tmux_session_gone "$SESSION" "$DRIVE_EXIT_CLEAN_CAP_S"; then
     SES_ALIVE[$ACTIVE]=0
     echo "[driver] exit_clean[s$ACTIVE]: sent /exit; process exited (sid=$(daemon_sid "$TRANSCRIPT"))" >&2
   else
-    echo "[driver] exit_clean[s$ACTIVE]: FAILED — $SESSION still alive 15s after /exit;" \
+    echo "[driver] exit_clean[s$ACTIVE]: FAILED — $SESSION still alive ${DRIVE_EXIT_CLEAN_CAP_S}s after /exit;" \
          "killing it explicitly. vibe did NOT shut down gracefully, so this" \
          "recording has no real clean-exit process_exited." >&2
     tmux kill-session -t "$SESSION" 2>/dev/null || true

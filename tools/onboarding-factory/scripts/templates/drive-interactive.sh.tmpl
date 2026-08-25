@@ -167,6 +167,7 @@ not_implemented() { # <step-type>
 # immediately before its final exit. Port BOTH halves or neither: the flag
 # without the guard does nothing, and the guard without the flag reports every
 # successful run as a driver fault.
+# BEGIN cleanup
 cleanup() {
   local i
   for (( i = 1; i <= N_SLOTS; i++ )); do
@@ -182,6 +183,7 @@ cleanup() {
   fi
   echo "$EXIT_REASON" > "$STAGING/driver.exit-reason"
 }
+# END cleanup
 trap cleanup EXIT
 
 # --- AGENT-SPECIFIC SEAM 1: launch the REPL under tmux -----------------------

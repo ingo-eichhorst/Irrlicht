@@ -53,6 +53,17 @@ type Statement struct {
 	// unconditionally and passed all ten drivers on a fail-closed reading they
 	// had not earned.
 	Depth int
+	// Blocks are the KINDS of those enclosing compound statements, outermost
+	// first: "if", "case", "do" (a loop body), "{" (a group or a function
+	// body). len(Blocks) is Depth — they are maintained as one stack so the
+	// count and the kinds cannot drift apart.
+	//
+	// Depth alone could not tell INV-1's two top-level shapes apart. The
+	// end-of-run sweep every driver writes is `for (( i = 1; i <= N_SLOTS;
+	// i++ )); do … done`, and copilot's step dispatch is `while … case … esac
+	// … done`; both put a `tmux kill-session` at Func "" and a non-zero depth.
+	// The kinds, in order, are what separates them. See isStepDispatchArm.
+	Blocks []string
 	// Func is the name of the top-level function whose body contains this
 	// statement, or "" when the statement is at top level.
 	Func string
@@ -199,44 +210,59 @@ func (s *Source) Body(name string) (string, bool) {
 // direction is the failure mode INV-1 is about.
 func (s *Source) buildStatements(code []bool) error {
 	var conds []string
-	depth := 0
+	var blocks []string
 	for i := 0; i < len(s.lines); i++ {
 		if !code[i] {
 			continue
 		}
 		start := i
 		joined := s.lines[i]
+		words, open := shellWordsOpen(joined)
 		for i+1 < len(s.lines) {
 			if strings.HasSuffix(strings.TrimRight(joined, " \t"), "\\") {
 				joined = strings.TrimSuffix(strings.TrimRight(joined, " \t"), "\\") + " " + s.lines[i+1]
 				i++
+				words, open = shellWordsOpen(joined)
 				continue
 			}
 			// A quote left open at end of line continues onto the next one.
 			// mistral-vibe embeds a multi-line `awk '…'` program whose braces
 			// are DATA; without this they were counted as shell blocks and the
 			// whole file was reported as unreadable.
-			if openQuote(joined) == 0 {
+			if open == 0 {
 				break
 			}
 			joined += "\n" + s.lines[i+1]
 			i++
+			words, open = shellWordsOpen(joined)
 		}
-		for _, cmd := range splitCommands(shellWords(joined)) {
+		// The joiner ran out of file still looking for the closing quote. Every
+		// remaining line has been swallowed into one quoted word — the sink of
+		// the same class of silent loss the shared scanner closes above, and the
+		// one shape a shared scanner cannot see, because both halves agree the
+		// quote is open. Refuse: an unreadable tail and a clean tail must not be
+		// the same answer.
+		if open != 0 {
+			return fmt.Errorf("%s:%d: a %c quote opened on this line is never closed before the "+
+				"end of the file, so every statement after it is swallowed into one quoted word "+
+				"— this file cannot be read, and a check that cannot run must say so",
+				s.Path, start+1, open)
+		}
+		for _, cmd := range splitCommands(words) {
 			words := cmd.words
 			if len(words) == 0 {
 				continue
 			}
 			switch words[0] {
 			case "if", "case", "do", "{":
-				depth++
+				blocks = append(blocks, words[0])
 			case "fi", "esac", "done", "}":
-				depth--
-				if depth < 0 {
+				if len(blocks) == 0 {
 					return fmt.Errorf("%s:%d: `%s` closes a compound statement that was never "+
 						"opened — this file's block structure cannot be read, and a check that "+
 						"cannot run must say so", s.Path, start+1, words[0])
 				}
+				blocks = blocks[:len(blocks)-1]
 			}
 			switch words[0] {
 			case "if":
@@ -255,7 +281,10 @@ func (s *Source) buildStatements(code []bool) error {
 			}
 			st := Statement{
 				Line: start + 1, Text: joined, Words: words,
-				Prefix: cmd.prefix, Func: s.funcAt(start + 1), Depth: depth,
+				Prefix: cmd.prefix, Func: s.funcAt(start + 1), Depth: len(blocks),
+			}
+			if len(blocks) > 0 {
+				st.Blocks = append([]string(nil), blocks...)
 			}
 			if len(conds) > 0 {
 				st.Conds = append([]string(nil), conds...)
@@ -267,9 +296,9 @@ func (s *Source) buildStatements(code []bool) error {
 		return fmt.Errorf("%s: %d `if` block(s) are never closed by `fi` — the if/fi structure "+
 			"cannot be read, and a check that cannot run must say so", s.Path, len(conds))
 	}
-	if depth != 0 {
+	if len(blocks) != 0 {
 		return fmt.Errorf("%s: %d compound statement(s) are never closed — the block structure "+
-			"cannot be read, and a check that cannot run must say so", s.Path, depth)
+			"cannot be read, and a check that cannot run must say so", s.Path, len(blocks))
 	}
 	return nil
 }
@@ -348,10 +377,34 @@ func splitCommands(words []string) []command {
 	return append(out, command{words: cur, prefix: prefix})
 }
 
-// shellWords splits one logical line into shell words, keeping quotes and
-// expansions intact and emitting command separators as their own words.
-func shellWords(s string) []string {
-	var words []string
+// shellWordsOpen splits one logical line into shell words, keeping quotes and
+// expansions intact and emitting command separators as their own words, and
+// reports the quote character left unterminated at the end of s — 0 when the
+// text ends outside any quote, INCLUDING when it ends inside a comment, which
+// cannot open one.
+//
+// WHY ONE FUNCTION ANSWERS BOTH QUESTIONS. It used to be two, and they
+// disagreed about where a comment starts. This scanner's rule is "a `#` that
+// opens a word"; a separate openQuote's rule was "a `#` at column 0 or after a
+// space/tab". A comment glued to code sat in the gap:
+//
+//	bar=1;# the driver's flag
+//
+// openQuote read the apostrophe in "driver's" as an unterminated quote, so
+// buildStatements joined the following lines on to close it, and this scanner
+// then truncated the joined text at the `#` — dropping every statement that had
+// just been joined in. Silently: the dropped lines took their own `if`/`fi` and
+// `do`/`done` with them, so the balance assertions stayed happy. A dropped
+// `trap … EXIT` or `REACHED_EPILOGUE=1` is a false POSITIVE and merely noisy,
+// but a dropped top-level gated `tmux kill-session` is a false CLEAN on INV-1
+// with `sites` still non-zero, which is the one failure the vacuity guard
+// cannot catch.
+//
+// Aligning the two rules would have fixed the shape and left the hazard: two
+// scanners doing the same job drift. Deleting one is what makes the class of
+// defect unreachable, and this file's contract is that every place it can be
+// wrong is a place it refuses instead.
+func shellWordsOpen(s string) (words []string, open rune) {
 	var cur strings.Builder
 	flush := func() {
 		if cur.Len() > 0 {
@@ -368,8 +421,10 @@ func shellWords(s string) []string {
 			i++
 			cur.WriteRune(rs[i])
 		case c == '#' && cur.Len() == 0:
+			// A comment starts only at a word boundary — and it runs to the end
+			// of the text, so nothing after it can open a quote.
 			flush()
-			return words // a comment starts only at a word boundary
+			return words, 0
 		case c == ' ' || c == '\t':
 			flush()
 		case c == '\'':
@@ -379,11 +434,15 @@ func shellWords(s string) []string {
 			}
 			if j >= len(rs) {
 				j = len(rs) - 1
+				open = '\''
 			}
 			cur.WriteString(string(rs[i : j+1]))
 			i = j
 		case c == '"':
-			j := scanQuoted(rs, i)
+			j, closed := scanQuotedOK(rs, i)
+			if !closed {
+				open = '"'
+			}
 			cur.WriteString(string(rs[i : j+1]))
 			i = j
 		case c == '$' && i+1 < len(rs) && (rs[i+1] == '(' || rs[i+1] == '{'):
@@ -406,17 +465,12 @@ func shellWords(s string) []string {
 		}
 	}
 	flush()
-	return words
+	return words, open
 }
 
-// scanQuoted returns the index of the `"` closing the one at i, stepping over
+// scanQuotedOK returns the index of the `"` closing the one at i, stepping over
 // escapes and over `$( … )` / `${ … }` (which may contain quotes of their own).
 // An unterminated quote yields the last index and closed=false.
-func scanQuoted(rs []rune, i int) int {
-	j, _ := scanQuotedOK(rs, i)
-	return j
-}
-
 func scanQuotedOK(rs []rune, i int) (int, bool) {
 	for j := i + 1; j < len(rs); j++ {
 		switch {
@@ -429,37 +483,6 @@ func scanQuotedOK(rs []rune, i int) (int, bool) {
 		}
 	}
 	return len(rs) - 1, false
-}
-
-// openQuote reports the quote character left unterminated at the end of s, or
-// 0 when every quote on the line is closed. Text after an unquoted `#` is a
-// comment and never opens one — an apostrophe in prose is not a shell quote.
-func openQuote(s string) rune {
-	rs := []rune(s)
-	for i := 0; i < len(rs); i++ {
-		switch {
-		case rs[i] == '\\':
-			i++
-		case rs[i] == '#' && (i == 0 || rs[i-1] == ' ' || rs[i-1] == '\t'):
-			return 0
-		case rs[i] == '\'':
-			j := i + 1
-			for j < len(rs) && rs[j] != '\'' {
-				j++
-			}
-			if j >= len(rs) {
-				return '\''
-			}
-			i = j
-		case rs[i] == '"':
-			j, ok := scanQuotedOK(rs, i)
-			if !ok {
-				return '"'
-			}
-			i = j
-		}
-	}
-	return 0
 }
 
 // scanExpansion returns the index of the bracket closing the expansion at i.
