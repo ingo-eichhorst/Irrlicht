@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// The daemon-wide error strip (#1802).
@@ -33,6 +34,15 @@ import SwiftUI
 struct DaemonErrorBanner: View {
     let summary: DaemonErrorSummary
 
+    /// The headline last announced, so a re-render does not re-announce an
+    /// unchanged fault. This is the AppKit counterpart of the web banner's
+    /// `el.dataset.bannerKey` reconcile-and-skip (#1801's
+    /// `renderUnappliedGrantsBanner`), and it exists for the same reason:
+    /// SwiftUI rebuilds this view on every `@Published` touch of the manager,
+    /// and an announcement per rebuild would talk over a screen-reader user
+    /// continuously while the fault stands.
+    @State private var announced: String?
+
     var body: some View {
         VStack(alignment: .leading, spacing: IrrSpacing.sp1) {
             HStack(spacing: IrrSpacing.sp2) {
@@ -62,14 +72,37 @@ struct DaemonErrorBanner: View {
         .padding(.horizontal, IrrSpacing.sp3)
         .padding(.vertical, 6)
         .background(IrrColors.errorDim)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(summary.text)
+        .accessibilityIdentifier("daemon-error-banner")
         // An interruption rather than a standing report — the AppKit
         // counterpart of `role="alert"`, not `role="status"`. The grants banner
         // chose `status` because an unapplied grant is a condition you can read
         // whenever you get to it; a daemon that is not responding invalidates
         // everything else on the panel, so it is worth cutting in for.
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(summary.text)
-        .accessibilityAddTraits(.isStaticText)
-        .accessibilityIdentifier("daemon-error-banner")
+        //
+        // The container modifiers above are what `UnappliedGrantsBanner`
+        // applies for `status`, and on their own they announce NOTHING — they
+        // only make the strip readable once focus reaches it. `alert` is the
+        // posted announcement below; without it the comment would be claiming
+        // a role the code does not implement, and the two banners would be
+        // indistinguishable to assistive tech.
+        .onAppear { announce() }
+        .onChange(of: summary.text) { _ in announce() }
+    }
+
+    /// Posts a VoiceOver announcement once per distinct headline. Guarded on
+    /// `announced` rather than fired unconditionally — see that property.
+    private func announce() {
+        guard announced != summary.text else { return }
+        announced = summary.text
+        NSAccessibility.post(
+            element: NSApp as Any,
+            notification: .announcementRequested,
+            userInfo: [
+                .announcement: summary.text,
+                .priority: NSAccessibilityPriorityLevel.high.rawValue,
+            ]
+        )
     }
 }

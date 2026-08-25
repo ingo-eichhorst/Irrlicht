@@ -12,11 +12,16 @@ import AppKit
 /// `fill="#8E8E93"`, the neutral grey `.unknown` hue, instead of red.
 @MainActor
 final class SessionErrorStateTests: XCTestCase {
-    private func decode(state: String, errorJSON: String = "") throws -> SessionState {
+    /// Builds a session the way the DAEMON does: the error detail nested
+    /// under `metrics.session_error`, never as a top-level `error` key. That
+    /// placement is the whole of what `testDaemonGoldenPayloadDecodes` guards,
+    /// and writing it correctly here is what keeps these tests honest about
+    /// the shape they claim to cover.
+    private func decode(state: String, errorJSON: String? = nil) throws -> SessionState {
+        let metrics = errorJSON.map { #","metrics":{"session_error":\#($0)}"# } ?? ""
         let json = """
         {"session_id":"s1","state":"\(state)","model":"m","cwd":"/tmp/p",
-         "project_name":"p","first_seen":1700000000,"updated_at":1700000000
-         \(errorJSON)}
+         "project_name":"p","first_seen":1700000000,"updated_at":1700000000\(metrics)}
         """.data(using: .utf8)!
         return try JSONDecoder().decode(SessionState.self, from: json)
     }
@@ -84,10 +89,6 @@ final class SessionErrorStateTests: XCTestCase {
     /// Mutation check (verified): delete `if states.contains(.error)` from
     /// `dominant(in:)` and this goes red with
     /// `XCTAssertEqual failed: ("waiting") is not equal to ("error")`.
-    ///
-    /// Mutation check (verified): delete `if states.contains(.error)` from
-    /// `dominant(in:)` and this goes red with
-    /// `XCTAssertEqual failed: ("waiting") is not equal to ("error")`.
     func testDominantRanksErrorAboveEverything() {
         XCTAssertEqual(SessionState.State.dominant(in: [.unknown]), .unknown)
         XCTAssertEqual(SessionState.State.dominant(in: [.ready, .unknown]), .ready)
@@ -102,10 +103,6 @@ final class SessionErrorStateTests: XCTestCase {
     /// `menuBarRank` drives `segmentOrder`, which is derived from `allCases`.
     /// The ranks must agree with `dominant` or the pie's first wedge and the
     /// count label's colour disagree about which state leads the group.
-    ///
-    /// Mutation check (verified): give `.error` rank 5 and this goes red with
-    /// the sorted order reported as `[waiting, working, ready, unknown,
-    /// error]`, and `testMixedGroupSummarisesAsError` goes red with it.
     ///
     /// Mutation check (verified): give `.error` rank 5 and this goes red with
     /// the sorted order reported as `[waiting, working, ready, unknown,
@@ -129,12 +126,6 @@ final class SessionErrorStateTests: XCTestCase {
         // (`fill="#FF3B30"` was present in the failure's markup); it is the
         // count LABEL that reverted to orange. The two are painted by
         // different code paths, and only the label reads `dominant`.
-        //
-        // Mutation check (verified): demote `.error`'s `menuBarRank` and this
-        // goes red — and instructively so. The pie still drew a red WEDGE
-        // (`fill="#FF3B30"` is present in the failure's markup); it is the
-        // count LABEL that reverted to orange. The two are painted by
-        // different code paths, and only the label reads `dominant`.
         let svg = MenuBarStatusRenderer.aggregatedGroupSVG(for: sessions)
         XCTAssertTrue(svg.contains("fill=\"#\(IrrSVG.error)\">4</text>"),
                       "the aggregated count label must take the dominant (error) hue — svg was: \(svg)")
@@ -145,8 +136,8 @@ final class SessionErrorStateTests: XCTestCase {
     /// The rich claudecode `api_error` shape: every field present.
     func testErrorDetailDecodesEveryField() throws {
         let s = try decode(state: "error", errorJSON: """
-        ,"error":{"phase":"retrying","class":"rate_limit","message":"Overloaded",
-                  "http_status":429,"attempt":3,"max_attempts":10,"retry_in_ms":616.4520045919932}
+        {"phase":"retrying","class":"rate_limit","message":"Overloaded",
+         "http_status":429,"attempt":3,"max_attempts":10,"retry_in_ms":616.4520045919932}
         """)
         let e = try XCTUnwrap(s.error)
         XCTAssertEqual(e.phase, "retrying")
@@ -167,7 +158,7 @@ final class SessionErrorStateTests: XCTestCase {
     /// data that said nothing.
     func testAbsentNumbersStayNilRatherThanZero() throws {
         let s = try decode(state: "error", errorJSON: """
-        ,"error":{"class":"query","message":"API Error: API returned an empty or malformed response (HTTP 200)"}
+        {"class":"query","message":"API Error: API returned an empty or malformed response (HTTP 200)"}
         """)
         let e = try XCTUnwrap(s.error)
         XCTAssertNil(e.httpStatus)
@@ -191,7 +182,7 @@ final class SessionErrorStateTests: XCTestCase {
     /// rather than dropped, because a class this build has not heard of is
     /// still the most specific thing anyone knows about the failure.
     func testUnknownClassIsShownVerbatimNotSwallowed() throws {
-        let s = try decode(state: "error", errorJSON: #","error":{"class":"kraken_attack"}"#)
+        let s = try decode(state: "error", errorJSON: #"{"class":"kraken_attack"}"#)
         XCTAssertEqual(try XCTUnwrap(s.error).displayMessage, "kraken_attack")
     }
 
@@ -206,9 +197,149 @@ final class SessionErrorStateTests: XCTestCase {
     /// `withState` rebuilds the struct field by field, which is how #1797's
     /// `children` came to be dropped. The detail has to survive the same copy.
     func testWithStatePreservesTheErrorDetail() throws {
-        let s = try decode(state: "error", errorJSON: #","error":{"message":"boom"}"#)
+        let s = try decode(state: "error", errorJSON: #"{"message":"boom"}"#)
         XCTAssertEqual(s.withState(.ready).error?.message, "boom")
         XCTAssertEqual(s.withChildren(nil).error?.message, "boom")
+    }
+
+    // MARK: - Review-round fixes (#1810)
+
+    /// A terminal failure and an unreported phase must not render identically.
+    /// `ErrorPhase`'s own doc calls that distinction the whole reason the field
+    /// exists: "a user looking at a red session wants to know whether to wait
+    /// or to intervene, and that is exactly this field."
+    func testTerminalPhaseSaysSoRatherThanGoingSilent() throws {
+        let terminal = try decode(state: "error",
+                                  errorJSON: #"{"phase":"terminal","class":"auth","http_status":401}"#)
+        XCTAssertEqual(try XCTUnwrap(terminal.error).detailSuffix, "HTTP 401 · no further retries")
+
+        // …and an UNREPORTED phase stays silent, which is what makes the line
+        // above informative rather than boilerplate.
+        let unreported = try decode(state: "error",
+                                    errorJSON: #"{"class":"auth","http_status":401}"#)
+        XCTAssertEqual(try XCTUnwrap(unreported.error).detailSuffix, "HTTP 401")
+    }
+
+    /// A failed CHILD row is a single-line HStack with no room for the error
+    /// line, so its icon tooltip is the only channel carrying WHY.
+    func testStateTooltipCarriesTheReasonForSubagentRows() throws {
+        let errored = try decode(state: "error", errorJSON: #"{"message":"credentials rejected"}"#)
+        XCTAssertEqual(errored.stateTooltip, "Error — the session failed — credentials rejected")
+
+        // Healthy states, and an error with no detail, fall back to the plain
+        // label — never to a dangling separator.
+        let working = try decode(state: "working")
+        XCTAssertEqual(working.stateTooltip, working.state.label)
+        let bare = try decode(state: "error")
+        XCTAssertEqual(bare.stateTooltip, SessionState.State.error.label)
+    }
+
+    /// The subagent error bucket #1801 adds to the wire. OPTIONAL, so today's
+    /// daemon — which sends no such key — still decodes.
+    func testSubagentErrorCountDecodesAndIsAbsentToday() throws {
+        let json = """
+        {"session_id":"p","state":"working","model":"m","cwd":"/tmp/p",
+         "first_seen":1700000000,"updated_at":1700000000,
+         "subagents":{"total":3,"working":1,"waiting":0,"ready":1,"error":1}}
+        """.data(using: .utf8)!
+        let s = try JSONDecoder().decode(SessionState.self, from: json)
+        XCTAssertEqual(s.erroredSubagentCount, 1)
+        XCTAssertEqual(s.activeSubagentCount, 1, "a failed child is not active")
+
+        // Today's daemon omits the key entirely — this must decode, not throw.
+        let legacy = """
+        {"session_id":"p","state":"working","model":"m","cwd":"/tmp/p",
+         "first_seen":1700000000,"updated_at":1700000000,
+         "subagents":{"total":2,"working":1,"waiting":0,"ready":1}}
+        """.data(using: .utf8)!
+        let old = try JSONDecoder().decode(SessionState.self, from: legacy)
+        XCTAssertEqual(old.erroredSubagentCount, 0)
+    }
+
+    // MARK: - Agreement with the daemon's own payload
+
+    /// THE KEY-PLACEMENT GUARD, and the one test in this file that is not
+    /// written against a JSON literal I typed myself.
+    ///
+    /// Every other decode test here hand-writes its payload, so all of them
+    /// would have passed just as green against a client reading a key the
+    /// daemon does not emit — which is exactly what this PR did on its first
+    /// pass: `SessionError` decoded from a TOP-LEVEL `error` key, while the
+    /// daemon writes it at `metrics.session_error`
+    /// (`core/domain/session/metrics.go:401`, and where the web client reads
+    /// it, #1801). The result renders the bare "The session failed" fallback
+    /// for every error on every adapter, permanently, and looks like working
+    /// code because the fallback is a real string.
+    ///
+    /// So this decodes the daemon's OWN committed golden push payload and
+    /// asserts against that. Two halves, and the first is what makes the
+    /// second mean anything:
+    ///   1. the file is found, parsed, and really carries the metrics we then
+    ///      look inside — otherwise "no error found" and "could not look"
+    ///      produce the same green;
+    ///   2. an error injected at the daemon's key is visible through
+    ///      `session.error`.
+    ///
+    /// Mutation check (verified): point `SessionState.error` anywhere other
+    /// than `metrics.sessionError` and this goes red with "an error written at
+    /// the daemon's own `metrics.session_error` key did not reach
+    /// SessionState.error" — and the three error-row SNAPSHOTS go red with it,
+    /// because the line collapses to the bare "The session failed" fallback.
+    /// That pair is the whole point: the hand-written-JSON tests below stay
+    /// green under that mutation, which is how the bug shipped in the first
+    /// place.
+    func testDaemonGoldenPayloadDecodes() throws {
+        let golden = URL(fileURLWithPath: #filePath)      // …/platforms/macos/Tests/<this file>
+            .deletingLastPathComponent()                  // …/platforms/macos/Tests
+            .deletingLastPathComponent()                  // …/platforms/macos
+            .deletingLastPathComponent()                  // …/platforms
+            .deletingLastPathComponent()                  // repo root
+            .appendingPathComponent("core/cmd/irrlichd/testdata/push/session_updated.golden.json")
+
+        let data = try Data(contentsOf: golden)
+        var envelope = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: data) as? [String: Any],
+            "golden push payload is not a JSON object: \(golden.path)")
+        var sessionDict = try XCTUnwrap(
+            envelope["session"] as? [String: Any],
+            "golden push payload has no `session` object — the envelope shape changed")
+
+        // Vacuity guards. A golden that stopped carrying metrics would make
+        // the injection below decode into nothing and still pass.
+        var metrics = try XCTUnwrap(
+            sessionDict["metrics"] as? [String: Any],
+            "golden session carries no `metrics` object — this test can no longer prove where the error key lives")
+        XCTAssertNil(sessionDict["error"],
+                     "the daemon has started emitting a TOP-LEVEL `error` key — re-check which one SessionState should read")
+        XCTAssertNil(metrics["session_error"],
+                     "the golden already carries an error; pick a healthy fixture so the injection below is what is measured")
+
+        // A healthy golden decodes with no error, and the state is readable.
+        let healthy = try JSONDecoder().decode(
+            SessionState.self,
+            from: JSONSerialization.data(withJSONObject: sessionDict))
+        XCTAssertNil(healthy.error, "a healthy daemon payload must decode with no error detail")
+
+        // Now inject one at the daemon's OWN key and require it to arrive.
+        metrics["session_error"] = [
+            "phase": "retrying", "class": "rate_limit", "message": "Overloaded",
+            "http_status": 429, "attempt": 3, "max_attempts": 10, "retry_in_ms": 616.45,
+        ]
+        sessionDict["metrics"] = metrics
+        sessionDict["state"] = "error"
+        envelope["session"] = sessionDict
+
+        let errored = try JSONDecoder().decode(
+            SessionState.self,
+            from: JSONSerialization.data(withJSONObject: sessionDict))
+        XCTAssertEqual(errored.state, .error)
+        let detail = try XCTUnwrap(
+            errored.error,
+            "an error written at the daemon's own `metrics.session_error` key did not reach SessionState.error")
+        XCTAssertEqual(detail.message, "Overloaded")
+        XCTAssertEqual(detail.attempt, 3)
+        XCTAssertEqual(detail.httpStatus, 429)
+        XCTAssertTrue(detail.isRetrying)
     }
 
     // MARK: - The manager's buckets
@@ -240,8 +371,9 @@ final class SessionErrorStateTests: XCTestCase {
 ///
 /// 0.12 is the worst case of the two washes the feature uses (the row's error
 /// line sits on 0.08, the banner on `errorDim` = 0.12): more wash moves the
-/// background AWAY from the text's luminance in light mode and TOWARD it in
-/// dark, so bounding 0.12 bounds both.
+/// background TOWARD the text's luminance in BOTH appearances — a light
+/// window ground darkens toward the dark `#C1121C` text, a dark one lightens
+/// toward `#FF7A70` — so bounding 0.12 bounds both.
 @MainActor
 final class TokenContrastTests: XCTestCase {
     private func srgb(_ color: Color, in appearance: NSAppearance.Name) -> (r: Double, g: Double, b: Double) {
@@ -333,41 +465,92 @@ final class TokenContrastTests: XCTestCase {
 /// this is the half that makes "no finding" and "could not look" produce
 /// different output.
 final class DaemonHealthTests: XCTestCase {
+    /// Faults are only reported when the AGGREGATE is unhealthy — the mask the
+    /// connection dot applies (`SessionListView.statusColor`). Without it a
+    /// user with both sources, local stalled and relay carrying the list fine,
+    /// gets a red "the daemon is not responding" banner beside a GREEN
+    /// connection dot: two surfaces disagreeing about one fact.
+    private func faults(
+        aggregate: ConnectionState = .reconnecting,
+        useLocalDaemon: Bool = true,
+        localStalled: Bool = false,
+        useRelay: Bool = false,
+        relayURL: String = "",
+        relayStalled: Bool = false
+    ) -> [DaemonFault] {
+        DaemonHealth.faults(
+            aggregate: aggregate,
+            useLocalDaemon: useLocalDaemon,
+            localConnectionStalled: localStalled,
+            useRelayServer: useRelay,
+            relayServerURL: relayURL,
+            relayConnectionStalled: relayStalled)
+    }
+
     func testHealthyDaemonProducesNoBanner() {
-        XCTAssertTrue(DaemonHealth.faults(useLocalDaemon: true, localConnectionStalled: false).isEmpty)
-        XCTAssertNil(DaemonErrorSummary(items: DaemonHealth.faults(
-            useLocalDaemon: true, localConnectionStalled: false)),
-            "a healthy daemon must render no banner at all")
+        XCTAssertTrue(faults().isEmpty)
+        XCTAssertNil(DaemonErrorSummary(items: faults()),
+                     "a healthy daemon must render no banner at all")
     }
 
     func testStalledLocalDaemonProducesABanner() {
-        let faults = DaemonHealth.faults(useLocalDaemon: true, localConnectionStalled: true)
-        XCTAssertEqual(faults.count, 1)
-        let summary = DaemonErrorSummary(items: faults)
-        XCTAssertNotNil(summary)
+        let items = faults(localStalled: true)
+        XCTAssertEqual(items.count, 1)
+        let summary = DaemonErrorSummary(items: items)
         XCTAssertEqual(summary?.count, 1)
         XCTAssertEqual(summary?.text, "Irrlicht has a problem")
-        // The reason is what tells two faults sharing a title apart, so it
-        // must not be empty.
-        XCTAssertFalse(try XCTUnwrap(faults.first).reason.isEmpty)
+        XCTAssertFalse(try! XCTUnwrap(items.first).reason.isEmpty,
+                       "the reason is what tells two faults sharing a title apart")
+    }
+
+    /// A relay-only user whose relay is stalled sees every row go stale. The
+    /// app already models that fault (`relayConnectionStalled`, #846) and the
+    /// connection dot already treats it as equally severe.
+    func testStalledRelayProducesABanner() {
+        let items = faults(useLocalDaemon: false, useRelay: true,
+                           relayURL: "wss://relay.example", relayStalled: true)
+        XCTAssertEqual(items.map(\.id), ["relay/unreachable"])
+    }
+
+    /// A relay that was never configured cannot be stalled — the dot's own
+    /// condition includes the URL-emptiness check, so this one does too.
+    func testUnconfiguredRelayIsNotAFault() {
+        XCTAssertTrue(faults(useRelay: true, relayURL: "", relayStalled: true).isEmpty)
+    }
+
+    /// Both stalled at once: two faults, both named, neither collapsed.
+    func testBothSourcesStalledReportBoth() {
+        let items = faults(localStalled: true, useRelay: true,
+                           relayURL: "wss://relay.example", relayStalled: true)
+        XCTAssertEqual(items.map(\.id), ["daemon/unreachable", "relay/unreachable"])
+        XCTAssertEqual(DaemonErrorSummary(items: items)?.text, "Irrlicht has 2 problems")
+    }
+
+    /// THE MASK. A stalled local source while the aggregate is `.connected`
+    /// (the relay is carrying the session list) must NOT raise a banner.
+    ///
+    /// Mutation check (verified): delete the `guard aggregate != .connected`
+    /// line from `DaemonHealth.faults` and this goes red.
+    func testAConnectedAggregateMasksAStalledSource() {
+        XCTAssertTrue(faults(aggregate: .connected, localStalled: true).isEmpty,
+                      "a banner here would contradict the green connection dot beside it")
     }
 
     /// A relay-only setup has no local daemon to be stalled, and the flag can
-    /// be left set from an earlier local session — the same gate the
-    /// connection dot applies.
+    /// be left set from an earlier local session.
     func testRelayOnlySetupIsNotReportedAsAStalledLocalDaemon() {
-        XCTAssertTrue(DaemonHealth.faults(useLocalDaemon: false, localConnectionStalled: true).isEmpty)
+        XCTAssertTrue(faults(useLocalDaemon: false, localStalled: true).isEmpty)
     }
 
-    /// Plural wording, and stable ids so SwiftUI does not rebuild a standing
-    /// fault's row on every republish.
+    /// Stable ids so SwiftUI does not rebuild a standing fault's row on every
+    /// republish, and so the banner's announcement fires once per headline.
     func testSummaryPluralisesAndKeepsStableIDs() {
         let items = [
             DaemonFault(id: "a", title: "T1", reason: "R1"),
             DaemonFault(id: "b", title: "T2", reason: "R2"),
         ]
         XCTAssertEqual(DaemonErrorSummary(items: items)?.text, "Irrlicht has 2 problems")
-        XCTAssertEqual(Set(items.map(\.id)).count, 2, "fault ids must be unique within a render pass")
+        XCTAssertEqual(Set(items.map(\.id)).count, 2)
     }
 
     /// Empty in, nil out — the whole hide mechanism, stated on its own.

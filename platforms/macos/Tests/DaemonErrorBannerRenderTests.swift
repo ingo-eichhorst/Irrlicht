@@ -33,7 +33,8 @@ final class DaemonErrorBannerRenderTests: XCTestCase {
 
     /// The real fault this build can report today.
     func testStalledDaemonRenders() throws {
-        let items = DaemonHealth.faults(useLocalDaemon: true, localConnectionStalled: true)
+        let items = DaemonHealth.faults(aggregate: .reconnecting, useLocalDaemon: true,
+                                            localConnectionStalled: true)
         assertSnapshot(of: try host(items), as: .pinnedImage, named: "daemon-unreachable")
     }
 
@@ -56,7 +57,7 @@ final class DaemonErrorBannerRenderTests: XCTestCase {
     /// captures above cover exactly half of it.
     func testBannerReadableInLightMode() throws {
         let summary = try XCTUnwrap(DaemonErrorSummary(items: DaemonHealth.faults(
-            useLocalDaemon: true, localConnectionStalled: true)))
+            aggregate: .reconnecting, useLocalDaemon: true, localConnectionStalled: true)))
         let root = DaemonErrorBanner(summary: summary)
             .background(Color(NSColor.windowBackgroundColor))
         let view = PinnedSnapshotHost(root, width: SessionListView.panelWidth,

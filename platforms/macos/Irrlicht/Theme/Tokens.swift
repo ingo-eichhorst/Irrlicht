@@ -130,7 +130,8 @@ enum IrrColors {
     /// the one moment there is something to report. The states themselves come
     /// through `SessionState.State`, which is a compiler-forced switch; this
     /// map takes a raw String from a different payload and has to be kept in
-    /// step by hand, which is what `IrrColorsForStateTests` pins.
+    /// step by hand, which is what
+    /// `SessionErrorStateTests.testForStateMapsErrorToTheErrorHue` pins.
     static func forState(_ s: String?) -> Color {
         switch s {
         case "working": return working

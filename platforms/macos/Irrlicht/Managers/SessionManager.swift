@@ -421,12 +421,17 @@ class SessionManager: ObservableObject {
     /// unit-tested without a manager; this only supplies the inputs.
     var daemonErrorSummary: DaemonErrorSummary? {
         DaemonErrorSummary(items: DaemonHealth.faults(
+            aggregate: aggregateConnectionState,
             useLocalDaemon: useLocalDaemon,
-            localConnectionStalled: localConnectionStalled
+            localConnectionStalled: localConnectionStalled,
+            useRelayServer: useRelayServer,
+            relayServerURL: relayServerURL,
+            relayConnectionStalled: relayConnectionStalled
         ))
     }
 
-    /// Failed sessions (#1802).
+    /// Failed sessions (#1802). Consumed by `DebugState` alongside its three
+    /// siblings.
     ///
     /// Deliberately NOT folded into `hasActiveSessions`. Nothing clears an
     /// error until the next successful turn, so an errored session counted as

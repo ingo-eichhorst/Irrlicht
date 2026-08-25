@@ -108,13 +108,26 @@ extension SessionManager {
         let notifyReady = defaults.bool(forKey: "notifyOnReady")
         let notifyWaiting = defaults.bool(forKey: "notifyOnWaiting")
 
+        // `.error` counts as a turn in progress alongside `.working` (#1802).
+        // `previousState` is the immediately-previous LIVE state, so once the
+        // fourth state can sit between them, `working → error → waiting`
+        // arrives here with `previousState == .error` and falls through to
+        // `default: return` — silently dropping the "Agent waiting for input"
+        // notification the user used to get before #1798 existed. An error
+        // that recovers into waiting or ready is exactly a transition worth
+        // announcing: the agent asked for help, or finished, after failing.
+        //
+        // Only the SOURCE side widens. Entering `.error` still notifies
+        // nothing — that decision is #1802's and is unchanged.
+        let turnWasInProgress = previousState == .working || previousState == .error
+
         let title: String
         let event: NotificationEvent
         switch session.state {
-        case .ready where notifyReady && previousState == .working:
+        case .ready where notifyReady && turnWasInProgress:
             title = "Agent ready"
             event = .ready
-        case .waiting where notifyWaiting && previousState == .working:
+        case .waiting where notifyWaiting && turnWasInProgress:
             title = "Agent waiting for input"
             event = .waiting
         default:

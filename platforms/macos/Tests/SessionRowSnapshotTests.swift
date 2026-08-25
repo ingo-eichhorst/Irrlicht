@@ -92,7 +92,8 @@ final class SessionRowSnapshotTests: XCTestCase {
         cacheBloat: Bool? = nil,
         cacheBloatPercent: Int? = nil,
         cacheBloatTooltip: String? = nil,
-        cacheBloatExplanation: String? = nil
+        cacheBloatExplanation: String? = nil,
+        sessionError: SessionError? = nil
     ) -> SessionMetrics {
         SessionMetrics(
             elapsedSeconds: 0,
@@ -111,7 +112,8 @@ final class SessionRowSnapshotTests: XCTestCase {
             cacheBloat: cacheBloat,
             cacheBloatPercent: cacheBloatPercent,
             cacheBloatTooltip: cacheBloatTooltip,
-            cacheBloatExplanation: cacheBloatExplanation
+            cacheBloatExplanation: cacheBloatExplanation,
+            sessionError: sessionError
         )
     }
 
@@ -126,8 +128,7 @@ final class SessionRowSnapshotTests: XCTestCase {
         roleIcon: String? = nil,
         workerName: String? = nil,
         workerID: String? = nil,
-        daemonID: String? = nil,
-        error: SessionError? = nil
+        daemonID: String? = nil
     ) -> SessionState {
         var session = SessionState(
             id: "sess_row_test",
@@ -149,8 +150,7 @@ final class SessionRowSnapshotTests: XCTestCase {
             roleIcon: roleIcon,
             workerName: workerName,
             workerID: workerID,
-            background: background,
-            error: error
+            background: background
         )
         // daemonID is stamped after construction by SessionManager from the relay
         // envelope; mirror that here so the relay cloud indicator can render.
@@ -430,12 +430,11 @@ final class SessionRowSnapshotTests: XCTestCase {
     func testErrorRowWithFullDetail() {
         let session = makeSession(
             state: .error,
-            metrics: makeMetrics(),
-            error: SessionError(
+            metrics: makeMetrics(sessionError: SessionError(
                 phase: "retrying", class: "rate_limit",
                 message: "Overloaded — the provider is rejecting requests",
                 httpStatus: 429, attempt: 3, maxAttempts: 10, retryInMs: 616.45
-            )
+            ))
         )
         assertSnapshot(of: host(session, height: 72), as: .pinnedImage)
     }
@@ -447,12 +446,11 @@ final class SessionRowSnapshotTests: XCTestCase {
     func testErrorRowWithMessageOnly() {
         let session = makeSession(
             state: .error,
-            metrics: makeMetrics(),
-            error: SessionError(
+            metrics: makeMetrics(sessionError: SessionError(
                 phase: nil, class: "query",
                 message: "API Error: API returned an empty or malformed response (HTTP 200)",
                 httpStatus: nil, attempt: nil, maxAttempts: nil, retryInMs: nil
-            )
+            ))
         )
         assertSnapshot(of: host(session, height: 72), as: .pinnedImage)
     }
@@ -462,7 +460,7 @@ final class SessionRowSnapshotTests: XCTestCase {
     /// red line — a red icon with nothing under it is the silent case this
     /// feature exists to end.
     func testErrorRowWithNoDetailAtAll() {
-        let session = makeSession(state: .error, metrics: makeMetrics(), error: nil)
+        let session = makeSession(state: .error, metrics: makeMetrics())
         assertSnapshot(of: host(session, height: 72), as: .pinnedImage)
     }
 
@@ -473,11 +471,10 @@ final class SessionRowSnapshotTests: XCTestCase {
     func testErrorRowReadableInLightMode() {
         let session = makeSession(
             state: .error,
-            metrics: makeMetrics(),
-            error: SessionError(
+            metrics: makeMetrics(sessionError: SessionError(
                 phase: "terminal", class: "auth", message: "Invalid API key",
                 httpStatus: 401, attempt: nil, maxAttempts: nil, retryInMs: nil
-            )
+            ))
         )
         assertSnapshot(of: hostLight(session, height: 72), as: .pinnedImage)
     }

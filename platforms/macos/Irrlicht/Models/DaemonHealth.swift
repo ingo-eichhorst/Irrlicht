@@ -75,24 +75,35 @@ struct DaemonErrorSummary: Equatable {
 enum DaemonHealth {
     /// The faults the app can see on its own, right now.
     ///
-    /// `localConnectionStalled` is the one genuinely daemon-wide fault macOS
-    /// can observe with no wire change, and it is not a transient blip: it is
-    /// set only after three consecutive failed reconnects have forced a
-    /// `URLSession` recycle (#843), whose own doc says it exists "so the UI can
-    /// show something stronger than 'reconnecting'". Until now nothing showed
-    /// anything stronger — it rendered as a red six-point dot and a tooltip.
-    /// This is that stronger thing.
+    /// A stalled reconnect — local (#843) or relay (#846) — is not a transient
+    /// blip: it is set only after three consecutive failed attempts force a
+    /// `URLSession` recycle, and `localConnectionStalled`'s own doc says it
+    /// exists "so the UI can show something stronger than 'reconnecting'".
+    /// Until now nothing showed anything stronger; it was a six-point red dot
+    /// and a tooltip. It matters more than it looks: while a source is
+    /// stalled, the sessions it feeds are stale, so a row sitting green is
+    /// asserting something the app has no current evidence for.
     ///
-    /// It matters more than it looks: while the local connection is stalled
-    /// every session on screen is stale, so a row sitting green is asserting
-    /// something the app has no current evidence for. A user who cannot see
-    /// that reads the panel as up to date.
-    static func faults(useLocalDaemon: Bool, localConnectionStalled: Bool) -> [DaemonFault] {
+    /// THE `aggregate != .connected` MASK IS PART OF THE GATE, not a detail of
+    /// the dot. `statusColor` in `SessionListView` applies it, and dropping it
+    /// here would put a red "the daemon is not responding" banner next to a
+    /// green connection dot — two surfaces disagreeing about one fact. It is
+    /// right on the merits too: with both sources configured, one can be
+    /// carrying the session list perfectly well while the other is stuck, and
+    /// `aggregateConnectionState` already reports that (`.connected` wins).
+    ///
+    /// The relay arm mirrors the dot's own three-part condition, URL emptiness
+    /// included — a relay that was never configured cannot be stalled.
+    static func faults(
+        aggregate: ConnectionState,
+        useLocalDaemon: Bool,
+        localConnectionStalled: Bool,
+        useRelayServer: Bool = false,
+        relayServerURL: String = "",
+        relayConnectionStalled: Bool = false
+    ) -> [DaemonFault] {
+        guard aggregate != .connected else { return [] }
         var out: [DaemonFault] = []
-        // Gated on `useLocalDaemon` for the same reason the connection dot is
-        // (SessionListView's status dot): a relay-only setup has no local
-        // daemon to be stalled, and the flag can be left set from an earlier
-        // local session.
         if useLocalDaemon && localConnectionStalled {
             out.append(DaemonFault(
                 id: "daemon/unreachable",
@@ -100,6 +111,15 @@ enum DaemonHealth {
                 reason: "Reconnect attempts keep failing, so the sessions below "
                     + "may be out of date. Irrlicht keeps retrying; if it does "
                     + "not recover, restart the daemon."
+            ))
+        }
+        if useRelayServer && !relayServerURL.isEmpty && relayConnectionStalled {
+            out.append(DaemonFault(
+                id: "relay/unreachable",
+                title: "The relay server is not responding",
+                reason: "Reconnect attempts keep failing, so sessions from other "
+                    + "machines may be missing or out of date. Local sessions are "
+                    + "unaffected."
             ))
         }
         return out

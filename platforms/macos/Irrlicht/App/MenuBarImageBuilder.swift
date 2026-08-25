@@ -25,6 +25,27 @@ enum MenuBarImageBuilder {
         return .off
     }
 
+    /// Whether any session that will actually be DRAWN as a dot is errored.
+    ///
+    /// The filter has to match what `MenuBarStatusRenderer` draws, or the icon
+    /// widens to point at a red circle that is not in it. Subagents are the
+    /// trap: they live in `sessionManager.sessions` but
+    /// `MenuBarStatusRenderer.orderedProjectGroups` excludes them
+    /// (`where session.parentSessionId == nil`), so a failed CHILD would
+    /// otherwise widen the icon while adding no red dot anywhere.
+    ///
+    /// Still an over-approximation in one known case: a group past
+    /// `maxVisibleGroups` collapses into the grey overflow ellipsis, so an
+    /// error only in the sixth project widens the icon without adding a dot.
+    /// Narrowing that would mean re-deriving the whole grouping here, and the
+    /// cost is one ellipsis rather than a missed error.
+    ///
+    /// Pure, so it is testable without a SessionManager — the same reason
+    /// `iconState` and `shouldShowDotsInUsageStyle` are.
+    static func hasErroredDot(in sessions: [SessionState]) -> Bool {
+        sessions.contains { $0.parentSessionId == nil && $0.state == .error }
+    }
+
     /// Whether `.usage` style should render the session dots after all.
     ///
     /// Two independent reasons, both of which end with the icon lying about
@@ -97,7 +118,7 @@ enum MenuBarImageBuilder {
         let style = MenuBarStyle.current
         // Computed once regardless of style so the .usage fallback below can
         // check its actual success/failure instead of re-deriving it from a
-        // raw session count (see shouldFallBackToDotsForUsageStyle's doc).
+        // raw session count (see shouldShowDotsInUsageStyle's doc).
         let computedDotsImage = MenuBarStatusRenderer.buildStatusImage(
             sessions: nonGtSessions,
             projectGroupOrder: sessionManager.projectGroupOrder
@@ -122,12 +143,9 @@ enum MenuBarImageBuilder {
         // back — no renderable quota, or an errored session that would
         // otherwise have nowhere to be red. See shouldShowDotsInUsageStyle.
         //
-        // The errored check reads `nonGtSessions`, the same list the dots are
-        // built from, rather than every session the manager holds: a Gas Town
-        // session excluded from the dot render has no circle to turn red, so
-        // counting it here would widen the icon for a signal that cannot
-        // appear in it.
-        let hasErroredSession = nonGtSessions.contains { $0.state == .error }
+        // `nonGtSessions` has already dropped Gas Town sessions; hasErroredDot
+        // drops subagents. Both filters are needed — see its doc.
+        let hasErroredSession = hasErroredDot(in: nonGtSessions)
         let dotsImage = style != .usage || shouldShowDotsInUsageStyle(
             style: style, quotaImage: quotaImage, dotsImage: computedDotsImage,
             hasErroredSession: hasErroredSession

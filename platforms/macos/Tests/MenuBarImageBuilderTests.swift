@@ -72,6 +72,16 @@ final class MenuBarImageBuilderTests: XCTestCase {
         XCTAssertEqual(result?.size.height, 18) // max(18, 12)
     }
 
+    private func makeSession(
+        id: String, state: SessionState.State, parentSessionId: String? = nil
+    ) -> SessionState {
+        SessionState(
+            id: id, state: state, model: "m", cwd: "/tmp/p", projectName: "p",
+            firstSeen: Date(timeIntervalSince1970: 1_700_000_000),
+            updatedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            parentSessionId: parentSessionId)
+    }
+
     // MARK: - shouldShowDotsInUsageStyle (issue #909 review fix; #1802's error arm)
 
     /// `.usage` style with a renderable dots image but no quota yet must
@@ -152,6 +162,33 @@ final class MenuBarImageBuilderTests: XCTestCase {
                 style: style, quotaImage: quota, dotsImage: dots, hasErroredSession: true
             ), "\(style) must not be changed by an errored session")
         }
+    }
+
+    // MARK: - #1802 review round: only a session that will be DRAWN may widen
+
+    /// A failed SUBAGENT must not widen the `.usage` icon. Subagents live in
+    /// `sessionManager.sessions` but `MenuBarStatusRenderer.orderedProjectGroups`
+    /// excludes them (`where session.parentSessionId == nil`), so counting one
+    /// here widens the status item to point at a red circle that is not in it.
+    ///
+    /// Mutation check (verified): drop `$0.parentSessionId == nil` from
+    /// `hasErroredDot` and this goes red.
+    func testErroredSubagentDoesNotCountAsADot() {
+        let child = makeSession(id: "c", state: .error, parentSessionId: "p")
+        XCTAssertFalse(MenuBarImageBuilder.hasErroredDot(in: [child]),
+                       "a subagent is never drawn as a dot, so it cannot make one red")
+    }
+
+    func testErroredTopLevelSessionCountsAsADot() {
+        let top = makeSession(id: "t", state: .error)
+        XCTAssertTrue(MenuBarImageBuilder.hasErroredDot(in: [top]))
+    }
+
+    func testHealthySessionsProduceNoErroredDot() {
+        XCTAssertFalse(MenuBarImageBuilder.hasErroredDot(in: [
+            makeSession(id: "a", state: .working),
+            makeSession(id: "b", state: .ready),
+        ]))
     }
 
     /// An errored session must NOT promote the icon to `.attention`, which is
