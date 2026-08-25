@@ -7,10 +7,13 @@
 #
 # Hard gates (fail the run):
 #   1. bash -n syntax check on every *.sh under scripts/ (incl. lib/)
-#   2. lib/reconcile_test.sh unit tests
-# Advisory (printed, never fails — the rig predates shellcheck and may carry
-# legacy warnings; tighten later if desired):
-#   3. shellcheck -S warning, if installed
+#   2. every lib/*_test.sh, discovered (not listed) via shell_lib_suite_run
+#   3. the driver-lib and adapter-local suites under replaydata/
+#
+# No advisory tier. There used to be one — "shellcheck -S warning, if
+# installed" — and #1684 deleted it precisely because it could not fail: see
+# the note above the shellcheck stub at the bottom of this file. It survived
+# here as a stale header item, numbered 3 twice.
 #
 # Run directly:  tools/onboarding-factory/scripts/smoke-test.sh
 set -uo pipefail
@@ -29,60 +32,25 @@ while IFS= read -r f; do
 done < <(find "$SCRIPT_DIR" -maxdepth 3 -name '*.sh' -type f | sort)
 
 echo ""
-echo "== unit tests (lib/reconcile_test.sh) =="
-bash "$SCRIPT_DIR/lib/reconcile_test.sh" || rc=1
-
-echo ""
-echo "== unit tests (lib/recipe-lint_test.sh) =="
-bash "$SCRIPT_DIR/lib/recipe-lint_test.sh" || rc=1
-
-echo ""
-echo "== unit tests (lib/cell-integrity_test.sh) =="
-bash "$SCRIPT_DIR/lib/cell-integrity_test.sh" || rc=1
-
-echo ""
-echo "== unit tests (lib/classify-failure_test.sh) =="
-bash "$SCRIPT_DIR/lib/classify-failure_test.sh" || rc=1
-
-echo ""
-echo "== unit tests (lib/managed-file-snapshot_test.sh) =="
-bash "$SCRIPT_DIR/lib/managed-file-snapshot_test.sh" || rc=1
-
-echo ""
-echo "== unit tests (lib/spawn-record-daemon_test.sh) =="
-bash "$SCRIPT_DIR/lib/spawn-record-daemon_test.sh" || rc=1
-
-echo ""
-echo "== unit tests (lib/completeness-check_test.sh) =="
-bash "$SCRIPT_DIR/lib/completeness-check_test.sh" || rc=1
-
-echo ""
-echo "== unit tests (lib/pick-recording_test.sh) =="
-bash "$SCRIPT_DIR/lib/pick-recording_test.sh" || rc=1
-
-echo ""
-echo "== unit tests (lib/atomic-promote_test.sh) =="
-bash "$SCRIPT_DIR/lib/atomic-promote_test.sh" || rc=1
-
-echo ""
-echo "== unit tests (lib/promote-hookcheck_test.sh) =="
-bash "$SCRIPT_DIR/lib/promote-hookcheck_test.sh" || rc=1
-
-echo ""
-echo "== unit tests (lib/unapplied-grants-check_test.sh) =="
-bash "$SCRIPT_DIR/lib/unapplied-grants-check_test.sh" || rc=1
-
-echo ""
-echo "== unit tests (lib/adapter-tables_test.sh) =="
-bash "$SCRIPT_DIR/lib/adapter-tables_test.sh" || rc=1
-
-echo ""
-echo "== unit tests (lib/golden-scope_test.sh) =="
-bash "$SCRIPT_DIR/lib/golden-scope_test.sh" || rc=1
-
-echo ""
-echo "== unit tests (lib/agent-home_test.sh) =="
-bash "$SCRIPT_DIR/lib/agent-home_test.sh" || rc=1
+echo "== unit tests (lib/*_test.sh) =="
+# DISCOVERED, not listed. This block was fourteen hand-written
+# `bash "$SCRIPT_DIR/lib/<name>_test.sh" || rc=1` lines, and a suite whose
+# membership is typed by hand is a suite a new test file silently never joins:
+# #1803 added two and the list did not notice, which is the same
+# absence-reads-as-success shape the shellcheck note below this block was
+# removed for. shell_lib_suite_run is the repo's existing answer — it refuses
+# when the corpus is empty, runs EVERY file rather than stopping at the first
+# failure, and prints a found/ran/failed census so a truncated run cannot look
+# like a clean one. See tools/lib/shell-lib-suite.sh's header for the CI
+# incident it was written against.
+#
+# `|| rc2=$?` and not a bare call: the function returns 0, 1 or 2, and under
+# this file's own options a bare non-zero return would be lost.
+# shellcheck source=../../lib/shell-lib-suite.sh
+source "$SCRIPT_DIR/../../lib/shell-lib-suite.sh"
+rc2=0
+shell_lib_suite_run "$SCRIPT_DIR/lib" || rc2=$?
+[[ $rc2 -eq 0 ]] || rc=1
 
 # completeness-gate / catalog-drift / consistency gates were retired (#528):
 # `of validate` + `of coverage` (Go) now own schema + referential + coverage

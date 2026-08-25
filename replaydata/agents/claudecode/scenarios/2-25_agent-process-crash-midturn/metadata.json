@@ -1,0 +1,63 @@
+{
+  "scenario_id": "agent-process-crash-midturn",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "confidence": 0.7,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "record_blocked": null,
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector_lifecycle.go",
+          "note": "retainAsProcessDeath + diedMidTurn: the five fail-closed clauses, the ErrorClassProcessDeath verdict, and processDeathRetention (12h). Also names the known gap that the verdict does not survive a daemon restart (#1815)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/signal_hold.go",
+          "note": "SignalProcessDeath: TierProcess, stale: IsAgentDone(), and the only policy row with no ceiling — its subject is provably dead and its lifetime is bounded by the verdict registry's."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/pid_manager.go",
+          "note": "SweepDeadPIDs: 5s base interval backing off to 15s after 3 clean sweeps; the probe is syscall.Kill(pid, 0). This is the safety net behind the instant kqueue/pidfd exit edge."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/driver-interactive.sh",
+          "note": "step_sigkill kills by pgrep -f 'claude.*--session-id $UUID'; sigkill is declared in DRIVE_ELICITS so recipe-lint accepts the step."
+        }
+      ],
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nNo mock is needed: the driver's `sigkill` step kills the active session's claude PID by `pgrep -f \"claude.*--session-id $UUID\"`. The recipe kills mid-turn — after the prompt lands, before `wait_turn` — so the transcript freezes with the turn still open.\n\nThis is the one of the four whose evidence is NOT transcript-tier. `retainAsProcessDeath` reads the OS view of the PID, and `diedMidTurn` fails CLOSED on five clauses (state must be working, no ParentSessionID, metrics present, !IsAgentDone(), no user interrupt or tool denial). claudecode is the safest adapter to record it on: it has no idle flush, so a frozen transcript does not synthesize a turn_done that would make `IsAgentDone()` true and take the verdict away.\n\n## Distinct from 1.2 session-end, deliberately\n\n1.2 also SIGKILLs, and its sessions are SUPPOSED to disappear. Here the row must be RETAINED as `error` — 'your agent stopped without finishing' is the single most useful thing irrlicht can say about an abandoned agent, and a row that vanishes is indistinguishable from one that never mattered. The prompt is deliberately long-running so the kill lands inside the turn rather than after it."
+    },
+    "recipe": {
+      "applicable": true,
+      "script": [
+        {
+          "type": "send",
+          "text": "Count slowly from 1 to 40, one number per line, with a short sentence about each number."
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        },
+        {
+          "type": "sigkill"
+        },
+        {
+          "type": "sleep",
+          "seconds": 20
+        }
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}

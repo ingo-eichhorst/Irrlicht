@@ -69,6 +69,10 @@ source "$SCRIPT_DIR/lib/reconcile.sh"
 # cross-adapter path also refuses a missing driver step BEFORE recording.
 # shellcheck source=lib/recipe-lint.sh
 source "$SCRIPT_DIR/lib/recipe-lint.sh"
+# bare_mode / env / mock — this rig does not implement them; it refuses a cell
+# that declares one (#1803). See recipe_runtime_unsupported.
+# shellcheck source=lib/recipe-runtime.sh
+source "$SCRIPT_DIR/lib/recipe-runtime.sh"
 # Recording-file selection + "did this run finish?", both shared with
 # run-cell.sh so a fix can't reach only one rig (#1214).
 # shellcheck source=lib/pick-recording.sh
@@ -153,6 +157,25 @@ for a in "${ADAPTERS[@]}"; do
     echo "semantic_gap: $a/$SCENARIO uses step(s) the driver accepts but doesn't elicit (per its DRIVE_ELICITS):" >&2
     while IFS= read -r p; do [[ -n "$p" ]] && printf '  - %s\n' "$p" >&2; done <<< "$sem"
     exit 4
+  fi
+  # Runtime-block backstop (#1803): mirror run-cell.sh's exit 5. THIS RIG DOES
+  # NOT IMPLEMENT the runtime block — no mock is launched, no --bare, no env
+  # reaches the pane — so a cell carrying one would be driven against the REAL
+  # provider and record a healthy-looking fixture, which is precisely what the
+  # block exists to prevent. Refusing is the whole point; implementing it here
+  # is not, because no cross-adapter cell needs a mock today (every mock in
+  # this tree overrides ONE provider's base URL, and a cross-adapter cell has
+  # two adapters with two providers).
+  #
+  # A refusal rather than a silent skip, and stated here rather than assumed
+  # unreachable: run-cell.sh and this script have diverged before — the #1178
+  # config snapshot reached one and not the other (#1214).
+  if runtime_gaps="$(recipe_runtime_unsupported "$COVERAGE_ID" "$a")" && [[ -n "$runtime_gaps" ]]; then
+    echo "runtime_gap: $a/$SCENARIO declares a recipe runtime block that the CROSS-ADAPTER rig does not implement:" >&2
+    while IFS= read -r p; do [[ -n "$p" ]] && printf '  - %s\n' "$p" >&2; done <<< "$runtime_gaps"
+    echo "run-cell-multi.sh launches no mock and passes no env to the pane, so this cell would drive the REAL provider." >&2
+    echo "Record it with: scripts/run-cell.sh $a $COVERAGE_ID" >&2
+    exit 5
   fi
 done
 

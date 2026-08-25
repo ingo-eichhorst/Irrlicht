@@ -1,0 +1,83 @@
+{
+  "scenario_id": "provider-overloaded-terminal",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "confidence": 0.7,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "record_blocked": null,
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/sessionerror.go",
+          "note": "Both shapes claudecode can report. system/subtype:\"api_error\" -> apiErrorFromSystemEvent reads error.status, retryAttempt, maxRetries, retryInMs and sets Phase=retrying when Attempt or RetryIn is present. An assistant message with isApiErrorMessage:true -> terminalAPIError sets Phase=terminal. The gate is on the boolean VALUE, never on field presence — four recorded ESC interrupts carry isApiErrorMessage:false."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "The session_error rule routes a standing SessionError to StateError, and classifyAgentDone routes a hook-delivered turn_done on a FAILED turn to StateError rather than ready."
+        },
+        {
+          "kind": "file",
+          "ref": "./tools/onboarding-factory/recording/mock-anthropic-error/main.go",
+          "note": "The parameterised Anthropic stub these three cells drive. --status/--error-type choose the failure, --succeed-after chooses whether it ever clears. Same streamHappyPath bytes as mock-anthropic-429 so a healthy turn is identical across mocks."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/scripts/lib/recipe-runtime.sh",
+          "note": "The recipe runtime block (bare_mode/env/mock) these cells use instead of a bespoke recorder. run-cell.sh refuses the cell outright if the driver does not declare DRIVE_SUPPORTS for what the recipe asks, and after the drive asserts both the driver's env receipt and that the mock actually served requests."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/session_error.go",
+          "note": "ErrorPhaseTerminal: 'Only the next turn the user starts clears it.' The clearing predicate is SessionError.ClearedByTurnBoundary, shared by the transcript and hook arms so the two channels cannot disagree."
+        }
+      ],
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe pair to 2.22, differing in ONE mock flag (`--succeed-after 0`). It is the cell that makes the retry-vs-give-up distinction testable: both sessions sit in `error`, and what separates them is whether another attempt is coming and what the session settles to.\n\nTwo things must hold that a single failure cannot show:\n\n1. The failed turn's OWN epilogue must not clear the error. `ErrorPhaseTerminal`'s doc says only the next turn the USER starts clears it, and #1799 found the code did not implement that — the session went red and green inside one read pass.\n2. The session must not stick in `working` either. Both silent-green and stuck-working are the outcomes #1796 exists to remove.\n\n**No `--retry-after`.** An earlier cut passed `--retry-after 1` to compress the ladder, on the assumption that an unpinned backoff would make the recording minutes long. Both halves were measured false: claude short-circuits a repeated 529 after four attempts in ~2.2s with or without it, and 2-24 measured that claude-code 2.1.245 IGNORES the header entirely (a 401 climbed its own 1,3,5,7,9,10,17,34s ladder while the mock was sending `retry-after: 1`). Leaving it on would have contaminated the one cell that reports a dwell as claude's own behaviour with a flag that does nothing."
+    },
+    "recipe": {
+      "applicable": true,
+      "bare_mode": true,
+      "env": {
+        "ANTHROPIC_API_KEY": "sk-mock-key-for-recording-only",
+        "ANTHROPIC_BASE_URL": "http://{{MOCK_ADDR}}",
+        "CLAUDE_CODE_LOOP_PERSISTENT": ""
+      },
+      "mock": {
+        "package": "./tools/onboarding-factory/recording/mock-anthropic-error",
+        "port": 18768,
+        "args": [
+          "--status",
+          "529",
+          "--error-type",
+          "overloaded_error",
+          "--succeed-after",
+          "0"
+        ],
+        "request_log_pattern": "POST /v1/messages #[0-9]+"
+      },
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "sleep",
+          "seconds": 30
+        },
+        {
+          "type": "exit_clean"
+        }
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}

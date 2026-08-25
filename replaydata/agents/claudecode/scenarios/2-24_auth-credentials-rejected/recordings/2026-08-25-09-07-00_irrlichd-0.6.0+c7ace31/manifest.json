@@ -1,0 +1,10 @@
+{
+  "promoted_at": "2026-08-25T07:11:36Z",
+  "daemon_version": "0.6.0+c7ace31",
+  "agent_cli_version": "2.1.245",
+  "recipe_hash": "e41000465bee90abec69b576113c6f1630eb98b4831973704b9b8117116137bb",
+  "expected_pass_rate": "4/4 phases passed",
+  "recording_started_at": "2026-08-25T09:07:00.349572+02:00",
+  "git_head_start": "c7ace316",
+  "git_head_end": "c7ace316"
+}

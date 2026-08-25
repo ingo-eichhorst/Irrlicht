@@ -1,0 +1,87 @@
+{
+  "scenario_id": "provider-overloaded-retry",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "confidence": 0.9,
+    "notes": "agent_supports: yes\ndaemon_capability: incapable; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "record_blocked": null,
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/sessionerror.go",
+          "note": "Both shapes claudecode can report. system/subtype:\"api_error\" -> apiErrorFromSystemEvent reads error.status, retryAttempt, maxRetries, retryInMs and sets Phase=retrying when Attempt or RetryIn is present. An assistant message with isApiErrorMessage:true -> terminalAPIError sets Phase=terminal. The gate is on the boolean VALUE, never on field presence — four recorded ESC interrupts carry isApiErrorMessage:false."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "The session_error rule routes a standing SessionError to StateError, and classifyAgentDone routes a hook-delivered turn_done on a FAILED turn to StateError rather than ready."
+        },
+        {
+          "kind": "file",
+          "ref": "./tools/onboarding-factory/recording/mock-anthropic-error/main.go",
+          "note": "The parameterised Anthropic stub these three cells drive. --status/--error-type choose the failure, --succeed-after chooses whether it ever clears. Same streamHappyPath bytes as mock-anthropic-429 so a healthy turn is identical across mocks."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/scripts/lib/recipe-runtime.sh",
+          "note": "The recipe runtime block (bare_mode/env/mock) these cells use instead of a bespoke recorder. run-cell.sh refuses the cell outright if the driver does not declare DRIVE_SUPPORTS for what the recipe asks, and after the drive asserts both the driver's env receipt and that the mock actually served requests."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/state_dwell.go",
+          "note": "graceFor: error is debounced in neither direction, by decision. Its comment names provider-overloaded-retry as the recording that measures the real dwell."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/2-9_token-quota-exhausted/recordings",
+          "note": "The counter-evidence: two recordings on claude-code 2.1.143 whose transcripts carry six system/subtype:\"api_error\" lines each (retryAttempt 1..6 of 10, retryInMs 616ms..19.2s), against the same kind of loopback base-URL mock. This is what makes the 2.1.243/2.1.245 result a version regression rather than a property of the transport."
+        }
+      ],
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: incapable; driver_capability: ready\n\n## This verdict is MEASURED, and it overturns the one this cell was written with\n\nclaudecode's parser is the only one in the tree that CAN produce `ErrorPhaseRetrying` (`apiErrorFromSystemEvent`, gated on `Attempt != nil || RetryIn != nil`), and the committed 2-9 recording proves the line it reads once existed. It no longer does, which is why this trait is declared `untraced` for all eleven adapters including this one — no adapter can demonstrate a pending retry today. Four recordings driven through run-cell.sh's recipe runtime block against `tools/onboarding-factory/recording/mock-anthropic-error`, on claude-code 2.1.243/2.1.245:\n\n| mock | POSTs | `system/subtype:\"api_error\"` lines | state arc |\n|---|---|---|---|\n| `--status 529 --succeed-after 1` | 2 | **0** | ready -> working -> ready |\n| `--status 529 --succeed-after 3` | 4 | **0** | ready -> working -> ready |\n| `--status 429 --succeed-after 3` | 5 | **0** | ready -> working -> ready |\n| `--status 401 --succeed-after 0` | 22 | **0** | ready -> working -> error (at +184s) |\n\nThe ladder still runs — the 401 run's TUI pane reads `401 invalid x-api-key . Retrying in 7s . attempt 6/10`, so claude is tracking attempt and delay exactly as before — but it is now rendered to the TUI and NOT persisted. Compare the committed 2-9 recording, made on claude-code **2.1.143** against the same kind of local mock, which carries six of them:\n\n    jq -rc 'select(.subtype==\"api_error\")|{status:.error.status,attempt:.retryAttempt,retryInMs}' \\\n      replaydata/agents/claudecode/scenarios/2-9_token-quota-exhausted/recordings/*/transcript.jsonl\n    {\"status\":429,\"attempt\":1,\"max\":10,\"retryInMs\":616.45}\n    ... through attempt 6, retryInMs 19183.90\n\nSame transport (a loopback base-URL override), different CLI version. So this is `untraced` in the capability model's exact sense — the agent HAS the feature and exercising it leaves no trace in any Source the adapter reads — and `incapable` rather than `bug`, because there is no trace to mis-handle. The adapter code is correct and unchanged; the row flips back the moment claude-code persists the line again.\n\n## What this settles for #1798\n\n#1798 accepted a risk that a fast-recovering overload would flash red too briefly to see, and deferred the measurement to this recording. The measurement says the flash does not exist: in all three recovering runs the session never entered `error` at all, because nothing is written during the retry window. The risk that IS real is the opposite one, and the 2-24 cell measures it — a rejected credential leaves the session GREEN for 184 seconds before it turns red. A minimum hold would address neither.\n\n## The recipe is kept, and applicable\n\nIt drives correctly and its recording is the evidence above; what it cannot do is produce a red session. Left runnable so the next reader can re-measure against a newer claude-code in one command rather than rebuilding the rig."
+    },
+    "recipe": {
+      "applicable": true,
+      "bare_mode": true,
+      "env": {
+        "ANTHROPIC_API_KEY": "sk-mock-key-for-recording-only",
+        "ANTHROPIC_BASE_URL": "http://{{MOCK_ADDR}}",
+        "CLAUDE_CODE_LOOP_PERSISTENT": ""
+      },
+      "mock": {
+        "package": "./tools/onboarding-factory/recording/mock-anthropic-error",
+        "port": 18767,
+        "args": [
+          "--status",
+          "529",
+          "--error-type",
+          "overloaded_error",
+          "--succeed-after",
+          "3"
+        ],
+        "request_log_pattern": "POST /v1/messages #[0-9]+"
+      },
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "exit_clean"
+        }
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}

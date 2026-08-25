@@ -1,0 +1,80 @@
+{
+  "scenario_id": "auth-credentials-rejected",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "confidence": 0.7,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "record_blocked": null,
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/sessionerror.go",
+          "note": "Both shapes claudecode can report. system/subtype:\"api_error\" -> apiErrorFromSystemEvent reads error.status, retryAttempt, maxRetries, retryInMs and sets Phase=retrying when Attempt or RetryIn is present. An assistant message with isApiErrorMessage:true -> terminalAPIError sets Phase=terminal. The gate is on the boolean VALUE, never on field presence — four recorded ESC interrupts carry isApiErrorMessage:false."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "The session_error rule routes a standing SessionError to StateError, and classifyAgentDone routes a hook-delivered turn_done on a FAILED turn to StateError rather than ready."
+        },
+        {
+          "kind": "file",
+          "ref": "./tools/onboarding-factory/recording/mock-anthropic-error/main.go",
+          "note": "The parameterised Anthropic stub these three cells drive. --status/--error-type choose the failure, --succeed-after chooses whether it ever clears. Same streamHappyPath bytes as mock-anthropic-429 so a healthy turn is identical across mocks."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/scripts/lib/recipe-runtime.sh",
+          "note": "The recipe runtime block (bare_mode/env/mock) these cells use instead of a bespoke recorder. run-cell.sh refuses the cell outright if the driver does not declare DRIVE_SUPPORTS for what the recipe asks, and after the drive asserts both the driver's env receipt and that the mock actually served requests."
+        }
+      ],
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nA 401 is non-retryable *in principle*, which is why this scenario is live on adapters whose SDK swallows a retryable overload. **claude-code is not one of them, and this recording is what established that**: it retries a 401 up to ten times with its own exponential backoff (the pane reads `401 invalid x-api-key . Retrying in 7s . attempt 6/10`) and ignores the `retry-after` header. Measured `ready->working` to `working->error`: **184.357s**, from this cell's own events.jsonl. Nothing is written for any attempt, so the session is GREEN for those three minutes and the only persisted record is the give-up line.\n\n## One thing this recording settles that source reading could not\n\nWHICH of claudecode's two error shapes a 401 takes is not derivable from the corpus: no recorded api_error carries a non-429 status. If claude writes a 401 as `system/api_error` WITH retry fields, `apiErrorFromSystemEvent`'s `Attempt != nil || RetryIn != nil` gate would label a permanently-rejected credential `Phase: retrying` — telling the user to wait for a retry that cannot help. The recording is the evidence either way; see the cell's expected.jsonl."
+    },
+    "recipe": {
+      "applicable": true,
+      "bare_mode": true,
+      "env": {
+        "ANTHROPIC_API_KEY": "sk-mock-key-for-recording-only",
+        "ANTHROPIC_BASE_URL": "http://{{MOCK_ADDR}}",
+        "CLAUDE_CODE_LOOP_PERSISTENT": ""
+      },
+      "mock": {
+        "package": "./tools/onboarding-factory/recording/mock-anthropic-error",
+        "port": 18769,
+        "args": [
+          "--status",
+          "401",
+          "--error-type",
+          "authentication_error",
+          "--error-message",
+          "invalid x-api-key",
+          "--succeed-after",
+          "0"
+        ],
+        "request_log_pattern": "POST /v1/messages #[0-9]+"
+      },
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "sleep",
+          "seconds": 200
+        },
+        {
+          "type": "exit_clean"
+        }
+      ],
+      "settings": {},
+      "timeout_seconds": 300
+    }
+  }
+}
