@@ -180,8 +180,38 @@ assert_eq "gone after 3 checks: sleeps 3x" 3 "$SLEEP_CALLS"
 assert_eq "gone after 3 checks: checks 4x" 4 "$HAS_SESSION_CALLS"
 
 HAS_SESSION_TRUE_COUNT=999; HAS_SESSION_CALLS=0; SLEEP_CALLS=0
-wait_tmux_session_gone "sess" 1
+wait_tmux_session_gone "sess" 1; rc=$?
 assert_eq "never gone: capped at max_wait*5 ticks" 5 "$SLEEP_CALLS"
+# LOCK, not a defect test (#1018, restated #1825): returning 0 on a capped-out
+# poll is DELIBERATE here — this function is the settle used by callers that
+# already killed the session themselves. The strict sibling below is what a
+# caller with no other evidence must use. Do not "fix" this to return 1.
+assert_eq "never gone: still returns 0 (deliberate best-effort contract)" 0 "$rc"
+
+echo "== require_tmux_session_gone: strict sibling — non-zero when the cap expires =="
+# Same fakes; the difference under test is purely the return contract.
+HAS_SESSION_TRUE_COUNT=0; HAS_SESSION_CALLS=0; SLEEP_CALLS=0
+require_tmux_session_gone "sess" 2; rc=$?
+assert_eq "already gone: returns 0" 0 "$rc"
+assert_eq "already gone: no sleep" 0 "$SLEEP_CALLS"
+assert_eq "already gone: checks once" 1 "$HAS_SESSION_CALLS"
+
+HAS_SESSION_TRUE_COUNT=3; HAS_SESSION_CALLS=0; SLEEP_CALLS=0
+require_tmux_session_gone "sess" 2; rc=$?
+assert_eq "gone after 3 checks: returns 0" 0 "$rc"
+assert_eq "gone after 3 checks: sleeps 3x" 3 "$SLEEP_CALLS"
+assert_eq "gone after 3 checks: checks 4x" 4 "$HAS_SESSION_CALLS"
+
+# The arm the whole of #1825 turns on: the TUI ignored its exit key, the
+# session is still there when the cap expires, and the caller MUST be told.
+HAS_SESSION_TRUE_COUNT=999; HAS_SESSION_CALLS=0; SLEEP_CALLS=0
+require_tmux_session_gone "sess" 1; rc=$?
+[[ $rc -ne 0 ]] && pass "never gone: returns NON-ZERO" \
+  || fail "never gone: returns NON-ZERO" "non-zero" "$rc"
+assert_eq "never gone: same sleep budget as the best-effort poll" 5 "$SLEEP_CALLS"
+# One observation per tick plus the final one that decided the failure — the
+# verdict is a fresh has-session answer, never inferred from the tick counter.
+assert_eq "never gone: verdict comes from an observation, not the counter" 6 "$HAS_SESSION_CALLS"
 
 unset -f tmux sleep
 

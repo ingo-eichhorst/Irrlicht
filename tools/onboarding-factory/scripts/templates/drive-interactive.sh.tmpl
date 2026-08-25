@@ -131,6 +131,10 @@ mkdir -p "$RUN_CWD"
 RUN_CWD="$(cd "$RUN_CWD" && pwd -P)"   # canonicalize (resolve symlinks) for the daemon's cwd match
 DEADLINE=$(( $(date +%s) + TIMEOUT_S ))
 EXIT_REASON="ok"
+# Raised to 1 by the epilogue, immediately before the final exit. cleanup() reads
+# it to tell a run that FINISHED (EXIT_REASON is its verdict) apart from a `set
+# -e` abort that never formed one (#1825) — see cleanup().
+REACHED_EPILOGUE=0
 SESSION=""
 
 remaining_seconds() { local now; now=$(date +%s); (( now >= DEADLINE )) && echo 0 || echo $((DEADLINE - now)); }
@@ -144,11 +148,38 @@ not_implemented() { # <step-type>
 # Always honor the staging contract: write driver.exit-reason on ANY exit
 # (including a `set -e` abort mid-launch) and tear tmux down if a session was
 # started. Set EXIT_REASON before a failing `exit` so the reason is accurate.
+#
+# THE REACHED_EPILOGUE GUARD IS NOT OPTIONAL, and it is the half that the
+# "set EXIT_REASON before a failing `exit`" sentence above does NOT cover
+# (#1825). That discipline is per-`exit`: it works for the exits this file
+# writes, and says nothing about a `set -e` abort, which is every other command
+# in the driver. A driver with no trap at all wrote NO driver.exit-reason on an
+# abort and run-cell.sh:418 read it as "unknown" — accurate, if unhelpful. A
+# trap that writes "$EXIT_REASON" unconditionally turns that "unknown" into
+# `ok`: the INITIAL value, reported as a verdict by a run that never formed one.
+# That is the same "reports success while it actually failed" shape #1825 was
+# opened for, reintroduced by the fix for it. So an abort that never reached the
+# epilogue, with EXIT_REASON still at its initial `ok`, is recorded as a driver
+# fault instead. A verdict already formed (timeout, readiness_timeout, …) is
+# left exactly as the step that formed it set it.
+#
+# The other half of the contract is the epilogue raising REACHED_EPILOGUE=1
+# immediately before its final exit. Port BOTH halves or neither: the flag
+# without the guard does nothing, and the guard without the flag reports every
+# successful run as a driver fault.
 cleanup() {
   local i
   for (( i = 1; i <= N_SLOTS; i++ )); do
     [[ -n "${SES_SESSION[$i]:-}" ]] && tmux kill-session -t "${SES_SESSION[$i]}" 2>/dev/null || true
   done
+  # An abort that never reached the epilogue never formed a verdict, so
+  # EXIT_REASON is still its initial "ok". Writing that would report SUCCESS for
+  # a failed run — the exact shape #1825 exists to stop — so record the
+  # driver-fault reason instead. A verdict already formed (timeout, …) stands.
+  if [[ "$REACHED_EPILOGUE" != "1" && "$EXIT_REASON" == "ok" ]]; then
+    EXIT_REASON="nonzero(2)"
+    echo "[driver] aborted before the epilogue — recording exit reason $EXIT_REASON, not ok" >&2
+  fi
   echo "$EXIT_REASON" > "$STAGING/driver.exit-reason"
 }
 trap cleanup EXIT
@@ -223,4 +254,7 @@ done < <(jq -c '.[]' <<<"$SCRIPT_JSON")
 # transcript path; switch to the first-line UUID if __AGENT__ keys on that (see
 # drive-pi-interactive.sh). drive_exit maps EXIT_REASON → the process exit code.
 emit_session_contract "$(daemon_sid "${SES_TRANSCRIPT[1]}")"
+# The epilogue completed: EXIT_REASON is this run's real verdict, so cleanup()
+# must record it as-is rather than rewrite it as an abort.
+REACHED_EPILOGUE=1
 drive_exit

@@ -116,6 +116,42 @@ fi
 SESSION="aider-onboard-${UUID:0:8}-$$"
 DEADLINE=$(( $(date +%s) + TIMEOUT_S ))
 EXIT_REASON="ok"
+# Raised to 1 by the epilogue, immediately before the final exit. cleanup() reads
+# it to tell a run that FINISHED (EXIT_REASON is its verdict) apart from a `set
+# -e` abort that never formed one (#1825) — see cleanup().
+REACHED_EPILOGUE=0
+
+# Always honor the staging contract: tear the tmux session down and write
+# driver.exit-reason on ANY exit, including a `set -e` abort mid-run (#1825).
+# Installed HERE, before the launch below, because everything from `tmux
+# new-session` onward can abort: this driver runs under `set -euo pipefail` and
+# its only other teardown is the `tmux kill-session` at the very bottom, which a
+# failed wait_turn, a failed jq or a timeout `exit` never reaches — leaking both
+# the pane and the live aider process. Same shape as the scaffold template's
+# cleanup (scripts/templates/drive-interactive.sh.tmpl:144-154), reduced to this
+# driver's single scalar SESSION: aider has no slot model and no exit_clean, so
+# there is one session to kill and presence of its NAME is the gate.
+#
+# SINGLE WRITER, deliberately: the epilogue below no longer writes
+# driver.exit-reason — this trap is the only writer, so the staging contract's
+# exit reason comes from exactly one place on every path.
+#
+# The REACHED_EPILOGUE guard below subsumes the template's per-`exit` "set
+# EXIT_REASON before a failing exit" discipline for this driver's launch path,
+# so the launch line stays unchanged.
+cleanup() {
+  # An abort that never reached the epilogue never formed a verdict, so
+  # EXIT_REASON is still its initial "ok". Writing that would report SUCCESS for
+  # a failed run — the exact shape #1825 exists to stop — so record the
+  # driver-fault reason instead. A verdict already formed (timeout, …) stands.
+  if [[ "$REACHED_EPILOGUE" != "1" && "$EXIT_REASON" == "ok" ]]; then
+    EXIT_REASON="nonzero(2)"
+    echo "[driver] aborted before the epilogue — recording exit reason $EXIT_REASON, not ok" >&2
+  fi
+  [[ -n "${SESSION:-}" ]] && tmux kill-session -t "$SESSION" 2>/dev/null || true
+  echo "$EXIT_REASON" > "$STAGING/driver.exit-reason"
+}
+trap cleanup EXIT
 
 # Tear down any stale session with the same name (defensive, shouldn't happen).
 tmux kill-session -t "$SESSION" 2>/dev/null || true
@@ -236,7 +272,9 @@ tmux kill-session -t "$SESSION" 2>/dev/null || true
   echo "=== exit reason: $EXIT_REASON ==="
 } > "$DRIVER_LOG"
 
-echo "$EXIT_REASON" > "$STAGING/driver.exit-reason"
+# driver.exit-reason is written by cleanup() (the EXIT trap), the SINGLE writer
+# — see its comment. Writing it here too would be redundant on this path and
+# would read as authoritative on paths that never reach this line.
 echo "$UUID" > "$STAGING/session.uuid"
 if [[ -f "$TRANSCRIPT" ]]; then
   echo "$TRANSCRIPT" > "$STAGING/transcript.path"
@@ -245,6 +283,10 @@ else
 fi
 
 echo "drive-aider-interactive: $EXIT_REASON (uuid=$UUID, transcript=$TRANSCRIPT)"
+
+# The epilogue completed: EXIT_REASON is this run's real verdict, so cleanup()
+# must record it as-is rather than rewrite it as an abort.
+REACHED_EPILOGUE=1
 
 case "$EXIT_REASON" in
   ok)            exit 0 ;;

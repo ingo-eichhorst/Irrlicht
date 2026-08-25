@@ -243,8 +243,23 @@ to Step 2's diagnosis rather than overriding it.
 lazy-transcript nudge or trailing-sleep timing issue). On a second failure, or
 on a classified `cli_not_found` / `cli_too_old` / `auth_failed` /
 daemon-not-running, return `status: infra_fail` (don't loop, don't mark the cell
-un-doable — the environment is the problem). When unsure of the failure class,
-classify the staging dir:
+un-doable — the environment is the problem).
+
+**Never retry `driver_session_leaked` blind (#1825).** The driver returned while
+its agent was still running, so a retry starts a SECOND live agent in the same
+workspace beside the first. Both write into the recording, and the fixture that
+comes out is of two interleaved sessions rather than the scenario. Kill the
+survivor the manifest names — `.tmux_teardown_detail` carries the session name,
+so `tmux kill-session -t <name>` — then retry at most once. A leak that recurs
+is a driver bug: go to that agent's `driver-interactive.sh` teardown, not to a
+third run.
+
+**`driver_teardown_unverifiable` is not evidence the run was clean** — it means
+the check could not look at all (no `tmux` binary, an unreadable session list).
+Return `status: infra_fail` and fix the host rather than promoting the staging
+dir. `daemon_not_ready` and `replay_failed` are `infra_fail` too.
+
+When unsure of the failure class, classify the staging dir:
 
 ```bash
 bash tools/onboarding-factory/scripts/lib/classify-failure.sh <staging-dir>

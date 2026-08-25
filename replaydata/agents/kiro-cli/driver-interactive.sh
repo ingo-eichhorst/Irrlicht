@@ -158,6 +158,10 @@ RUN_CWD="$(cd "$RUN_CWD" && pwd -P)"   # canonicalize (resolve symlinks) for the
 
 DEADLINE=$(( $(date +%s) + TIMEOUT_S ))
 EXIT_REASON="ok"
+# Raised to 1 by the epilogue, immediately before the final exit. cleanup() reads
+# it to tell a run that FINISHED (EXIT_REASON is its verdict) apart from a `set
+# -e` abort that never formed one (#1825) — see cleanup().
+REACHED_EPILOGUE=0
 # Shared exit-reason literal for a bad launch/dispatch error (S1192: defined
 # once here, referenced at every site below instead of repeating the string).
 NONZERO_2='nonzero(2)'
@@ -225,13 +229,31 @@ not_implemented() { # <step-type>
 }
 
 # Always honor the staging contract: write driver.exit-reason on ANY exit
-# (including a `set -e` abort mid-launch) and tear every still-alive tmux session
-# down. Set EXIT_REASON before a failing `exit` so the reason is accurate.
+# (including a `set -e` abort mid-launch) and tear down EVERY tmux session this
+# run allocated. Set EXIT_REASON before a failing `exit` so the reason is
+# accurate.
+#
+# Gated on session-name PRESENCE, never on SES_ALIVE (#1825). This trap used to
+# gate on the same optimistic flag as the end-of-run loop below, so kiro-cli had
+# two teardown nets and BOTH were switched off by whichever step wrongly cleared
+# it — the leak claudecode shipped. SES_ALIVE is the driver's INTENT; nothing
+# re-derives it from `tmux has-session`. kill-session on an already-dead name
+# (including the name a reset_session slot shares with its successor) is a
+# harmless no-op, which is exactly why presence is the right gate. Same shape as
+# scripts/templates/drive-interactive.sh.tmpl:147-154.
 cleanup() {
   local i
   for (( i = 1; i <= N_SLOTS; i++ )); do
-    [[ "${SES_ALIVE[$i]:-0}" == "1" ]] && tmux kill-session -t "${SES_SESSION[$i]}" 2>/dev/null || true
+    [[ -n "${SES_SESSION[$i]:-}" ]] && tmux kill-session -t "${SES_SESSION[$i]}" 2>/dev/null || true
   done
+  # An abort that never reached the epilogue never formed a verdict, so
+  # EXIT_REASON is still its initial "ok". Writing that would report SUCCESS for
+  # a failed run — the exact shape #1825 exists to stop — so record the
+  # driver-fault reason instead. A verdict already formed (timeout, …) stands.
+  if [[ "$REACHED_EPILOGUE" != "1" && "$EXIT_REASON" == "ok" ]]; then
+    EXIT_REASON="$NONZERO_2"
+    echo "[driver] aborted before the epilogue — recording exit reason $EXIT_REASON, not ok" >&2
+  fi
   echo "$EXIT_REASON" > "$STAGING/driver.exit-reason"
 }
 trap cleanup EXIT
@@ -547,9 +569,21 @@ step_exit_clean() {
   tmux send-keys -t "$SESSION" -l -- "/quit"
   sleep 0.3
   tmux send-keys -t "$SESSION" Enter
-  wait_tmux_session_gone "$SESSION" 2
-  SES_ALIVE[$ACTIVE]=0
-  echo "[driver] exit_clean[s$ACTIVE]: sent /quit to $SESSION (uuid=$UUID)" >&2
+  # STRICT poll (#1825): the old best-effort wait_tmux_session_gone returns 0
+  # even when the cap expires with the session still up, and SES_ALIVE=0 was set
+  # regardless — so a /quit that stopped working would read exactly like one
+  # that worked, and the run would still report exit-reason=ok.
+  if require_tmux_session_gone "$SESSION" 2; then
+    SES_ALIVE[$ACTIVE]=0
+    echo "[driver] exit_clean[s$ACTIVE]: sent /quit to $SESSION (uuid=$UUID, session gone)" >&2
+  else
+    echo "[driver] exit_clean[s$ACTIVE]: FAILED — $SESSION still alive 2s after /quit;" \
+         "killing it explicitly. kiro-cli did NOT shut down gracefully, so this" \
+         "recording has no real clean-exit process_exited." >&2
+    tmux kill-session -t "$SESSION" 2>/dev/null || true
+    SES_ALIVE[$ACTIVE]=0
+    EXIT_REASON="$NONZERO_2"
+  fi
 }
 
 # --- TEARDOWN SEAM B: sigkill ------------------------------------------------
@@ -872,9 +906,11 @@ done
 
 sleep 0.5
 
-# Tear down every still-alive session.
+# Tear down every session this run allocated — gated on session-name PRESENCE,
+# not on SES_ALIVE (#1825), for the same reason cleanup() above is. This is the
+# second of the two nets; before #1825 both gated on the same optimistic flag.
 for (( i = 1; i <= N_SLOTS; i++ )); do
-  if [[ "${SES_ALIVE[$i]}" == "1" ]]; then
+  if [[ -n "${SES_SESSION[$i]:-}" ]]; then
     tmux kill-session -t "${SES_SESSION[$i]}" 2>/dev/null || true
   fi
 done
@@ -903,4 +939,7 @@ emit_session_contract "$(daemon_sid "${SES_TRANSCRIPT[1]}")"
 
 echo "drive-kiro-cli-interactive: $EXIT_REASON (slots=${N_SLOTS}, primary=$(daemon_sid "${SES_TRANSCRIPT[1]}"), transcript=${SES_TRANSCRIPT[1]})"
 
+# The epilogue completed: EXIT_REASON is this run's real verdict, so cleanup()
+# must record it as-is rather than rewrite it as an abort.
+REACHED_EPILOGUE=1
 drive_exit

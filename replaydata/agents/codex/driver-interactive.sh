@@ -164,6 +164,10 @@ mkdir -p "$RUN_CWD"
 
 DEADLINE=$(( $(date +%s) + TIMEOUT_S ))
 EXIT_REASON="ok"
+# Raised to 1 by the epilogue, immediately before the final exit. cleanup() reads
+# it to tell a run that FINISHED (EXIT_REASON is its verdict) apart from a `set
+# -e` abort that never formed one (#1825) — see cleanup().
+REACHED_EPILOGUE=0
 
 # Active-session view — the step functions read/write these. They are a
 # cache of the active slot's state, kept in sync via save_active /
@@ -205,12 +209,44 @@ TRUSTED_CWDS=()
 _DRIVE_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../_lib/drive" && pwd)"
 # shellcheck disable=SC2034  # read by the sourced replaydata/_lib/drive/slots.sh:56 (alloc_slot)
 DRIVE_MARKER_PREFIX="$STAGING/.codex-start-marker"
-# shellcheck source=lib/drive/slots.sh
+# shellcheck source=../../_lib/drive/slots.sh
 source "$_DRIVE_LIB/slots.sh"
-# shellcheck source=lib/drive/contracts.sh
+# shellcheck source=../../_lib/drive/contracts.sh
 source "$_DRIVE_LIB/contracts.sh"
-# shellcheck source=lib/drive/teardown.sh
+# shellcheck source=../../_lib/drive/teardown.sh
 source "$_DRIVE_LIB/teardown.sh"
+
+# Always honor the staging contract: write driver.exit-reason on ANY exit
+# (including a `set -e` abort mid-launch) and tear down EVERY tmux session this
+# run allocated. Gated on session-name PRESENCE, never on SES_ALIVE (#1825):
+# SES_ALIVE is the driver's INTENT — nothing re-derives it from `tmux
+# has-session` — so a step that wrongly believed it killed a session would
+# otherwise take the last net down with it. kill-session on an already-dead
+# name (including the name a swap_after_slash slot shares with its successor)
+# is a harmless no-op, which is exactly why presence is the right gate. Same
+# shape as scripts/templates/drive-interactive.sh.tmpl:147-154.
+#
+# emit_session_contract (contracts.sh) ALSO writes driver.exit-reason on the
+# normal path; this overwrites it with the same value. That double write is
+# deliberate and idempotent — the trap is the one that covers the abort paths
+# the epilogue never reaches.
+cleanup() {
+  local i
+  for (( i = 1; i <= N_SLOTS; i++ )); do
+    [[ -n "${SES_SESSION[$i]:-}" ]] && tmux kill-session -t "${SES_SESSION[$i]}" 2>/dev/null || true
+  done
+  # An abort that never reached the epilogue never formed a verdict, so
+  # EXIT_REASON is still its initial "ok". Writing that would report SUCCESS for
+  # a failed run — the exact shape #1825 exists to stop — so record the
+  # driver-fault reason instead. A verdict already formed (timeout, …) stands.
+  if [[ "$REACHED_EPILOGUE" != "1" && "$EXIT_REASON" == "ok" ]]; then
+    EXIT_REASON="nonzero(2)"
+    echo "[driver] aborted before the epilogue — recording exit reason $EXIT_REASON, not ok" >&2
+  fi
+  echo "$EXIT_REASON" > "$STAGING/driver.exit-reason"
+}
+trap cleanup EXIT
+
 # The four boot gates codex can put on screen, as named predicates over a
 # captured pane, with a committed corpus of real 0.147.0 captures behind them
 # (#1388). Inline greps here could stop matching without failing anything —
@@ -646,11 +682,23 @@ swap_after_slash() {
 step_exit_clean() {
   # codex's TUI binds Ctrl-D to "exit". Ctrl-D triggers a graceful
   # shutdown so codex flushes its rollout and the daemon emits
-  # process_exited. Sleep gives codex time to terminate.
+  # process_exited.
   tmux send-keys -t "$SESSION" C-d
-  wait_tmux_session_gone "$SESSION" 2
-  SES_ALIVE[$ACTIVE]=0
-  echo "[driver] exit_clean: sent Ctrl-D to $SESSION" >&2
+  # STRICT poll (#1825): the old best-effort wait_tmux_session_gone returns 0
+  # even when the cap expires with the session still up, and SES_ALIVE=0 was set
+  # regardless — so an exit key that stopped working (as claude's did) read
+  # exactly like one that worked, and the run still reported exit-reason=ok.
+  if require_tmux_session_gone "$SESSION" 2; then
+    SES_ALIVE[$ACTIVE]=0
+    echo "[driver] exit_clean: sent Ctrl-D to $SESSION (session gone)" >&2
+  else
+    echo "[driver] exit_clean: FAILED — $SESSION still alive 2s after Ctrl-D;" \
+         "killing it explicitly. codex did NOT shut down gracefully, so this" \
+         "recording has no real clean-exit process_exited." >&2
+    tmux kill-session -t "$SESSION" 2>/dev/null || true
+    SES_ALIVE[$ACTIVE]=0
+    EXIT_REASON="nonzero(2)"
+  fi
 }
 
 step_resume() {
@@ -747,6 +795,7 @@ step_restart() {
   # trust state (codex caches trust per directory).
   resolve_transcript || true
   save_active
+  # shellcheck disable=SC2034  # SES_ALIVE is deliberately write-only in this file since #1825 — both teardown nets (cleanup() and the end-of-run loop) now gate on session-name PRESENCE, because gating them on this flag is exactly what leaked a live agent + tmux session per exit_clean run. It stays as the fleet's shared slot vocabulary (the sourced replaydata/_lib/drive/slots.sh:66 sets it; kiro-cli's driver-interactive.sh:552 exit_clean entry guard and antigravity's :505 resume branch do branch on their own copies) and as the per-step record of what the driver BELIEVES about each slot.
   SES_ALIVE[$ACTIVE]=0
   tmux kill-session -t "$SESSION" 2>/dev/null || true
   sleep 1
@@ -880,9 +929,12 @@ done
 
 sleep 0.5
 
-# Tear down every still-alive session.
+# Tear down every session this run allocated — gated on session-name PRESENCE,
+# not on SES_ALIVE (#1825). SES_ALIVE is what the driver BELIEVES; a step that
+# cleared it for a session still running (claudecode's exit_clean did exactly
+# that) made this loop skip the one kill that would have caught the leak.
 for (( i = 1; i <= N_SLOTS; i++ )); do
-  if [[ "${SES_ALIVE[$i]}" == "1" ]]; then
+  if [[ -n "${SES_SESSION[$i]:-}" ]]; then
     tmux kill-session -t "${SES_SESSION[$i]}" 2>/dev/null || true
   fi
 done
@@ -907,4 +959,7 @@ emit_session_contract "$(daemon_sid "${SES_TRANSCRIPT[1]}")"
 
 echo "drive-codex-interactive: $EXIT_REASON (slots=${N_SLOTS}, primary=$(daemon_sid "${SES_TRANSCRIPT[1]}"), transcript=${SES_TRANSCRIPT[1]})"
 
+# The epilogue completed: EXIT_REASON is this run's real verdict, so cleanup()
+# must record it as-is rather than rewrite it as an abort.
+REACHED_EPILOGUE=1
 drive_exit

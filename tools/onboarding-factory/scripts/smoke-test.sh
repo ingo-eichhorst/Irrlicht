@@ -52,6 +52,14 @@ rc2=0
 shell_lib_suite_run "$SCRIPT_DIR/lib" || rc2=$?
 [[ $rc2 -eq 0 ]] || rc=1
 
+echo ""
+echo "== unit tests (lib/tmux-teardown-check_test.sh) =="
+bash "$SCRIPT_DIR/lib/tmux-teardown-check_test.sh" || rc=1
+
+echo ""
+echo "== unit tests (lib/run-cell-multi-teardown_test.sh) =="
+bash "$SCRIPT_DIR/lib/run-cell-multi-teardown_test.sh" || rc=1
+
 # completeness-gate / catalog-drift / consistency gates were retired (#528):
 # `of validate` + `of coverage` (Go) now own schema + referential + coverage
 # integrity, and a per-scenario shard is the single source for a cell, so the

@@ -71,6 +71,14 @@ SCRIPT_JSON="$5"
 mkdir -p "$STAGING"
 DRIVER_LOG="$STAGING/driver.log"
 
+# claudecode owns its OWN slot bookkeeping (SES_TMUX / CURRENT_TMUX rather than
+# the shared SES_SESSION model), so it deliberately does not source slots.sh.
+# It does source the teardown polls: require_tmux_session_gone is what turns
+# "sent the exit key" into "observed the session die" (#1825).
+_DRIVE_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../_lib/drive" && pwd)"
+# shellcheck source=../../_lib/drive/teardown.sh
+source "$_DRIVE_LIB/teardown.sh"
+
 # recipe-lint contract (#508 #4): the step types this driver genuinely ELICITS
 # (a subset of its case arms — accepting ≠ producing), and whether slash needs a
 # dedicated step type. recipe-lint reads these directly so the grammar has ONE
@@ -102,6 +110,10 @@ mkdir -p "$RUN_CWD"
 
 DEADLINE=$(( $(date +%s) + TIMEOUT_S ))
 EXIT_REASON="ok"
+# Raised to 1 by the epilogue, immediately before the final exit. cleanup() reads
+# it to tell a run that FINISHED (EXIT_REASON is its verdict) apart from a `set
+# -e` abort that never formed one (#1825) — see cleanup().
+REACHED_EPILOGUE=0
 
 # Active-session view — the step functions read/write these. They are a
 # cache of the active slot's state, kept in sync via save_active /
@@ -122,6 +134,35 @@ SES_EXPECTED=()
 SES_ALIVE=()
 N_SLOTS=0
 ACTIVE=0
+
+# Always honor the staging contract: write driver.exit-reason on ANY exit
+# (including a `set -e` abort mid-launch) and tear down EVERY tmux session this
+# run allocated. Gated on session-name PRESENCE, never on SES_ALIVE (#1825):
+# SES_ALIVE is the driver's INTENT — nothing re-derives it from `tmux
+# has-session` — so a step that wrongly believed it killed a session would
+# otherwise take the last net down with it. kill-session on an already-dead
+# name is a harmless no-op, which is exactly why presence is the right gate.
+# Same shape as scripts/templates/drive-interactive.sh.tmpl:147-154.
+#
+# SINGLE WRITER, deliberately: the straight-line epilogue below no longer
+# writes driver.exit-reason — this trap is the only writer, so there is exactly
+# one place the staging contract's exit reason comes from on every path.
+cleanup() {
+  local i
+  for (( i = 1; i <= N_SLOTS; i++ )); do
+    [[ -n "${SES_TMUX[$i]:-}" ]] && tmux kill-session -t "${SES_TMUX[$i]}" 2>/dev/null || true
+  done
+  # An abort that never reached the epilogue never formed a verdict, so
+  # EXIT_REASON is still its initial "ok". Writing that would report SUCCESS for
+  # a failed run — the exact shape #1825 exists to stop — so record the
+  # driver-fault reason instead. A verdict already formed (timeout, …) stands.
+  if [[ "$REACHED_EPILOGUE" != "1" && "$EXIT_REASON" == "ok" ]]; then
+    EXIT_REASON="nonzero(2)"
+    echo "[driver] aborted before the epilogue — recording exit reason $EXIT_REASON, not ok" >&2
+  fi
+  echo "$EXIT_REASON" > "$STAGING/driver.exit-reason"
+}
+trap cleanup EXIT
 
 # Persist the active-view variables back into the active slot.
 save_active() {
@@ -509,14 +550,42 @@ step_sigkill() {
 }
 
 step_exit_clean() {
-  # claude's TUI binds Ctrl-D to "exit". /exit isn't a recognized
-  # slash command, so send Ctrl-D directly for a graceful shutdown.
-  # Sleep gives claude time to write any final transcript lines
-  # before its process terminates.
-  tmux send-keys -t "$CURRENT_TMUX" C-d
-  sleep 1
-  SES_ALIVE[$ACTIVE]=0
-  echo "[driver] exit_clean: sent Ctrl-D to $CURRENT_TMUX" >&2
+  # claude's TUI binds Ctrl-D to "exit". /exit isn't a recognized slash
+  # command, so send Ctrl-D directly for a graceful shutdown.
+  #
+  # TWO Ctrl-D IN ONE send-keys, AND THAT IS NOT A BELT-AND-BRACES TYPO
+  # (#1825, live-verified on the leaked pane claudecode-onboard-1787641617-95883):
+  # claude answers the FIRST Ctrl-D with "Press Ctrl-D again to exit" and then
+  # lets that confirmation expire. One press left the process alive and the pane
+  # unchanged. A second press sent 1.5s later ALSO did nothing — by then the
+  # confirmation window had closed. Only `send-keys ... C-d C-d` in a single
+  # invocation (both presses inside the window) actually exited the process.
+  # Typing `zz` into the pane between attempts confirmed keystrokes were
+  # reaching the TUI, so this is not a send-keys delivery problem. Do not
+  # "simplify" this back to one press, and do not split the two C-d across two
+  # send-keys calls — the single call is the part that was verified to work.
+  #
+  # The separate C-u before them clears the input line: Ctrl-D does not exit
+  # when the buffer holds text (it deletes forward instead), so a step that left
+  # a half-typed prompt behind would otherwise silently turn the exit into a
+  # no-op. It is its own call so the verified `C-d C-d` invocation stays exactly
+  # as verified.
+  tmux send-keys -t "$CURRENT_TMUX" C-u
+  tmux send-keys -t "$CURRENT_TMUX" C-d C-d
+  # Observe the death rather than asserting it. The old `sleep 1` + unconditional
+  # SES_ALIVE=0 is the whole of #1825: nine runs recorded the slot as dead and
+  # leaked a live claude plus its tmux session while reporting exit-reason=ok.
+  if require_tmux_session_gone "$CURRENT_TMUX" 2; then
+    SES_ALIVE[$ACTIVE]=0
+    echo "[driver] exit_clean: sent Ctrl-D to $CURRENT_TMUX (session gone)" >&2
+  else
+    echo "[driver] exit_clean: FAILED — $CURRENT_TMUX still alive 2s after Ctrl-D Ctrl-D;" \
+         "killing it explicitly. The graceful-exit path did NOT work — this recording" \
+         "does not contain a real process_exited from a clean shutdown." >&2
+    tmux kill-session -t "$CURRENT_TMUX" 2>/dev/null || true
+    SES_ALIVE[$ACTIVE]=0
+    EXIT_REASON="nonzero(2)"
+  fi
 }
 
 step_reset_session() {
@@ -536,6 +605,7 @@ step_reset_session() {
   # Retire the old slot (its uuid is no longer being written) but keep
   # it in the slot list so the epilogue flushes it.
   save_active
+  # shellcheck disable=SC2034  # SES_ALIVE is deliberately write-only in this file since #1825 — both teardown nets (cleanup() and the end-of-run loop) now gate on session-name PRESENCE, because gating them on this flag is exactly what leaked a live claude + tmux session per exit_clean run. It stays as the fleet's shared slot vocabulary (replaydata/_lib/drive/slots.sh:66 sets it; kiro-cli's driver-interactive.sh:552 exit_clean entry guard and antigravity's :505 resume branch do branch on their own copies) and as the per-step record of what the driver BELIEVES about each slot.
   SES_ALIVE[$ACTIVE]=0
   sleep 2
 
@@ -684,9 +754,12 @@ done
 
 sleep 0.5
 
-# Tear down every still-alive session.
+# Tear down every session this run allocated — gated on session-name PRESENCE,
+# not on SES_ALIVE (#1825). SES_ALIVE is what the driver BELIEVES; the whole
+# defect was a step clearing that flag for a session that was still running, at
+# which point this loop skipped the one kill that would have caught it.
 for (( i = 1; i <= N_SLOTS; i++ )); do
-  if [[ "${SES_ALIVE[$i]}" == "1" ]]; then
+  if [[ -n "${SES_TMUX[$i]:-}" ]]; then
     tmux kill-session -t "${SES_TMUX[$i]}" 2>/dev/null || true
   fi
 done
@@ -706,7 +779,11 @@ done
 # Keep a combined .stdout for backward-compat with any tooling that reads it.
 cat "$DRIVER_LOG".stdout.* > "$DRIVER_LOG.stdout" 2>/dev/null || true
 
-echo "$EXIT_REASON" > "$STAGING/driver.exit-reason"
+# driver.exit-reason is written by cleanup() (the EXIT trap), which is the
+# SINGLE writer — see its comment. Writing it here too would be redundant on
+# the happy path and, worse, would read as the authoritative write on a path
+# where it is not: an abort before this line never reaches it, and any step
+# that sets EXIT_REASON after it would not be reflected.
 
 # Primary session = slot 1 (kept for backward-compat with the existing
 # single-session run-cell + curate code paths).
@@ -723,6 +800,10 @@ for (( i = 1; i <= N_SLOTS; i++ )); do
 done
 
 echo "drive-claudecode-interactive: $EXIT_REASON (slots=${N_SLOTS}, primary=${SES_UUID[1]}, transcript=${SES_TRANSCRIPT[1]})"
+
+# The epilogue completed: EXIT_REASON is this run's real verdict, so cleanup()
+# must record it as-is rather than rewrite it as an abort.
+REACHED_EPILOGUE=1
 
 case "$EXIT_REASON" in
   ok)            exit 0 ;;

@@ -132,6 +132,10 @@ mkdir -p "$RUN_CWD"
 RUN_CWD="$(cd "$RUN_CWD" && pwd -P)"   # canonicalize (resolve symlinks) for the daemon's cwd match
 DEADLINE=$(( $(date +%s) + TIMEOUT_S ))
 EXIT_REASON="ok"
+# Raised to 1 by the epilogue, immediately before the final exit. cleanup() reads
+# it to tell a run that FINISHED (EXIT_REASON is its verdict) apart from a `set
+# -e` abort that never formed one (#1825) — see cleanup().
+REACHED_EPILOGUE=0
 # Shared exit-reason literal for a bad launch/dispatch error (S1192: defined
 # once here, referenced at every site below instead of repeating the string).
 NONZERO_2='nonzero(2)'
@@ -186,6 +190,14 @@ cleanup() {
   for (( i = 1; i <= N_SLOTS; i++ )); do
     [[ -n "${SES_SESSION[$i]:-}" ]] && tmux kill-session -t "${SES_SESSION[$i]}" 2>/dev/null || true
   done
+  # An abort that never reached the epilogue never formed a verdict, so
+  # EXIT_REASON is still its initial "ok". Writing that would report SUCCESS for
+  # a failed run — the exact shape #1825 exists to stop — so record the
+  # driver-fault reason instead. A verdict already formed (timeout, …) stands.
+  if [[ "$REACHED_EPILOGUE" != "1" && "$EXIT_REASON" == "ok" ]]; then
+    EXIT_REASON="$NONZERO_2"
+    echo "[driver] aborted before the epilogue — recording exit reason $EXIT_REASON, not ok" >&2
+  fi
   echo "$EXIT_REASON" > "$STAGING/driver.exit-reason"
 }
 trap cleanup EXIT
@@ -447,13 +459,25 @@ agy_pid() {
 
 # --- AGENT-SPECIFIC SEAM: exit_clean — Ctrl-D graceful shutdown --------------
 # agy's Ink REPL exits on Ctrl-D; the OS terminates the agy process and the
-# daemon's process scanner emits process_exited. Sleep gives agy time to flush.
+# daemon's process scanner emits process_exited.
 step_exit_clean() {
   resolve_transcript || true
   tmux send-keys -t "$SESSION" C-d
-  wait_tmux_session_gone "$SESSION" 2
-  SES_ALIVE[$ACTIVE]=0
-  echo "[driver] exit_clean[s$ACTIVE]: sent Ctrl-D to $SESSION" >&2
+  # STRICT poll (#1825): the old best-effort wait_tmux_session_gone returns 0
+  # even when the cap expires with the session still up, and SES_ALIVE=0 was set
+  # regardless — so an exit key that stopped working (as claude's did) read
+  # exactly like one that worked, and the run still reported exit-reason=ok.
+  if require_tmux_session_gone "$SESSION" 2; then
+    SES_ALIVE[$ACTIVE]=0
+    echo "[driver] exit_clean[s$ACTIVE]: sent Ctrl-D to $SESSION (session gone)" >&2
+  else
+    echo "[driver] exit_clean[s$ACTIVE]: FAILED — $SESSION still alive 2s after Ctrl-D;" \
+         "killing it explicitly. agy did NOT shut down gracefully, so this" \
+         "recording has no real clean-exit process_exited." >&2
+    tmux kill-session -t "$SESSION" 2>/dev/null || true
+    SES_ALIVE[$ACTIVE]=0
+    EXIT_REASON="$NONZERO_2"
+  fi
 }
 
 # --- AGENT-SPECIFIC SEAM: sigkill — kill -9 the active session's agy PID ------
@@ -597,4 +621,7 @@ emit_session_contract "${SES_UUID[1]}"
 for (( i = 1; i <= N_SLOTS; i++ )); do
   echo "${SES_UUID[$i]}" >> "$STAGING/session.uuids"
 done
+# The epilogue completed: EXIT_REASON is this run's real verdict, so cleanup()
+# must record it as-is rather than rewrite it as an abort.
+REACHED_EPILOGUE=1
 drive_exit

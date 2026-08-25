@@ -76,6 +76,13 @@ source "$SCRIPT_DIR/lib/unapplied-grants-check.sh"
 # shellcheck source=lib/recipe-runtime.sh
 source "$SCRIPT_DIR/lib/recipe-runtime.sh"
 
+# "Did the driver's tmux sessions actually go away?" — the post-run counterpart
+# to the completeness check, for the same reason (#1825): driver.exit-reason is
+# the driver's claim about ITSELF, and every exit_clean recording for months
+# left a live agent + tmux session behind while reporting `ok`.
+# shellcheck source=lib/tmux-teardown-check.sh
+source "$SCRIPT_DIR/lib/tmux-teardown-check.sh"
+
 RECORDER="off"
 ATTACH=0
 positional=()
@@ -554,10 +561,75 @@ fi
 start_recipe_mock
 write_driver_env
 
+# The driver's pid is this run's IDENTITY for the tmux-teardown gate below
+# (#1825 / AC4): every interactive driver embeds its own `$$` as a field of
+# every tmux session name it creates, so the pid is what separates this run's
+# leftovers from a concurrent cell's or the operator's own tmux. A foreground
+# call never sets `$!`, so the pid is taken from the driver ITSELF: `bash -c`
+# writes the pid it is running under, then `exec`s the driver into that same
+# process — so driver.pid holds exactly the `$$` the driver will go on to see.
+#
+# Deliberately NOT `"$DRIVER" … & DRIVER_PID=$!; wait` (which is what
+# run-cell-multi.sh:297-312 does, because it genuinely needs the concurrency).
+# Measured on this bash: an async child of a NON-interactive shell gets stdin
+# redirected from /dev/null and SIGINT/SIGQUIT set to SIG_IGN — so backgrounding
+# would quietly change what a driver reads from stdin and stop it answering a
+# Ctrl-C on the recording operator's terminal, to learn a pid the exec wrapper
+# hands over for free. The wrapper keeps the call in the foreground, in the same
+# process group, with the same stdin, argv and exit status as before.
+DRIVER_PID_FILE="$STAGING/driver.pid"
 set +e
-"$DRIVER" "$STAGING" "$UUID" "$TIMEOUT_S" "$STAGING/settings.json" "$DRIVER_INPUT"
+bash -c 'printf "%s\n" "$$" > "$1" || exit 1; shift; exec "$@"' \
+  bash "$DRIVER_PID_FILE" \
+  "$DRIVER" "$STAGING" "$UUID" "$TIMEOUT_S" "$STAGING/settings.json" "$DRIVER_INPUT"
 set -e
 DRIVER_REASON="$(cat "$STAGING/driver.exit-reason" 2>/dev/null || echo "unknown")"
+DRIVER_PID="$(tr -d '[:space:]' < "$DRIVER_PID_FILE" 2>/dev/null || true)"
+
+# --- Did the driver's tmux sessions actually die? MEASURE (#1825 / AC4) --
+# Measured HERE, one line after the driver returns and before anything else
+# gets a chance to take time — the daemon flush below alone spends 6s on the
+# attach path, and a look taken after it is a strictly more lenient look. The
+# VERDICT is acted on further down, at the first point where
+# write_error_manifest exists, so the failure is a structured manifest like
+# every other hard gate rather than a bare exit.
+#
+# Scoped to interactive cells by the same $SCRIPT_JSON discriminator that chose
+# the driver above, so both halves stay honest: an interactive driver cannot
+# have recorded anything without tmux (so "no tmux" there is a broken lookup and
+# fails loudly), while a headless `prompt` cell legitimately never starts one —
+# verified: `grep -c tmux replaydata/agents/*/driver.sh` is 0 for all four.
+TMUX_GATE_STATUS="skipped"
+TMUX_GATE_DETAIL="headless cell — no interactive driver ran, and no driver.sh uses tmux"
+if [[ -n "$SCRIPT_JSON" ]]; then
+  # The pair await_gone_bound checks (see the lib header's rule 3). The
+  # lifetime is the cell's own driver timeout — the upper bound on how long the
+  # session could have lived; the grace is a tenth of it, capped at 5s so a
+  # 900s cell does not buy a 90s wait for a session that should already be gone,
+  # and floored at 1s so the arithmetic can never produce the "look exactly
+  # once" deadline await_gone_bound refuses. A cell whose timeout is under 10s
+  # therefore fails the bound and is reported LOUDLY as unreadable, which is the
+  # honest answer: at that ratio the check would assert nothing. (Every
+  # applicable cell today declares 60s or more.)
+  TEARDOWN_LIFETIME_S="$TIMEOUT_S"
+  TEARDOWN_DEADLINE_S=$(( TEARDOWN_LIFETIME_S / 10 ))
+  if [[ "$TEARDOWN_DEADLINE_S" -gt 5 ]]; then TEARDOWN_DEADLINE_S=5; fi
+  if [[ "$TEARDOWN_DEADLINE_S" -lt 1 ]]; then TEARDOWN_DEADLINE_S=1; fi
+
+  TMUX_GATE_RC=0
+  check_tmux_teardown "$DRIVER_PID" "$TEARDOWN_DEADLINE_S" "$TEARDOWN_LIFETIME_S" \
+    "the cell's own driver timeout" || TMUX_GATE_RC=$?
+  case "$TMUX_GATE_RC" in
+    0) TMUX_GATE_STATUS="clean"
+       TMUX_GATE_DETAIL="no tmux session carries driver pid ${DRIVER_PID:-<unrecorded>} (settled after ${TMUX_TEARDOWN_ELAPSED}s)" ;;
+    1) TMUX_GATE_STATUS="leaked"
+       TMUX_GATE_DETAIL="$TMUX_TEARDOWN_SURVIVORS" ;;
+    *) TMUX_GATE_STATUS="unreadable"
+       TMUX_GATE_DETAIL="$TMUX_TEARDOWN_REASON" ;;
+  esac
+  echo "tmux teardown: $TMUX_GATE_STATUS — $TMUX_GATE_DETAIL"
+fi
+
 # The mock has nothing left to serve; stop it before the daemon so its log is
 # complete in staging when the recorder flushes.
 stop_recipe_mock
@@ -580,6 +652,72 @@ fi
 # --- Read driver-resolved transcript + actual UUID ----------------------
 TRANSCRIPT="$(cat "$STAGING/transcript.path" 2>/dev/null || true)"
 ACTUAL_UUID="$(cat "$STAGING/session.uuid" 2>/dev/null || true)"
+
+MANIFEST="$STAGING/run-manifest.json"
+DAEMON_SHUTDOWN="$(cat "$STAGING/daemon.shutdown" 2>/dev/null || echo "unknown")"
+
+# Write an ERROR-verdict run-manifest with the standard envelope plus
+# error-specific fields supplied as a JSON object (pass '{}' for none).
+#
+# Defined HERE — at the first line where all of its inputs exist (ACTUAL_UUID
+# and DRIVER_REASON from the driver, DAEMON_SHUTDOWN from the flush above) —
+# rather than further down next to its first caller, so that EVERY hard gate
+# after the driver returns can use it. It used to sit below the recording
+# picker, which meant the picker's own `|| exit 1` left no manifest at all
+# (#1825): a gate placed after it would have been skipped on exactly the runs
+# that had already gone wrong.
+write_error_manifest() {
+  local error_code="$1"
+  local extras_json="$2"
+  jq -n \
+    --arg adapter "$ADAPTER" \
+    --arg scenario "$FOLDER" \
+    --arg session_uuid "$ACTUAL_UUID" \
+    --arg error "$error_code" \
+    --arg driver_exit_reason "$DRIVER_REASON" \
+    --arg daemon_shutdown "$DAEMON_SHUTDOWN" \
+    --arg staging "$STAGING" \
+    --argjson extras "$extras_json" \
+    '{adapter: $adapter,
+      scenario: $scenario,
+      session_uuid: $session_uuid,
+      verdict: "ERROR",
+      error: $error,
+      driver_exit_reason: $driver_exit_reason,
+      daemon_shutdown: $daemon_shutdown,
+      staging: $staging} + $extras' \
+    > "$MANIFEST"
+}
+
+# --- Did the driver's tmux sessions actually die? VERDICT (#1825 / AC4) --
+# The measurement was taken the instant the driver returned; this is where it
+# is acted on. A hard gate, not advisory: unlike the completeness check (whose
+# header documents a real ~7% legitimately-incomplete population), a tmux
+# session still carrying THIS run's driver pid has no legitimate population —
+# the driver said it was gone, and it is not. `unreadable` fails just as hard
+# and under its own error code, because #1825 is precisely the bug of an
+# unasked question and an answered one printing the same thing.
+case "$TMUX_GATE_STATUS" in
+  clean | skipped) ;;
+  *)
+    if [[ "$TMUX_GATE_STATUS" == "leaked" ]]; then
+      TMUX_GATE_ERROR="driver_tmux_session_survived"
+    else
+      TMUX_GATE_ERROR="driver_tmux_teardown_unreadable"
+    fi
+    write_error_manifest "$TMUX_GATE_ERROR" \
+      "$(jq -nc \
+          --arg tmux_teardown "$TMUX_GATE_STATUS" \
+          --arg tmux_teardown_detail "$TMUX_GATE_DETAIL" \
+          --arg driver_pid "$DRIVER_PID" \
+          '{tmux_teardown: $tmux_teardown, tmux_teardown_detail: $tmux_teardown_detail, driver_pid: $driver_pid}')"
+    echo "ERROR: driver tmux teardown $TMUX_GATE_STATUS (driver pid ${DRIVER_PID:-<unrecorded>}): $TMUX_GATE_DETAIL" >&2
+    if [[ "$TMUX_GATE_STATUS" == "leaked" ]]; then
+      echo "  kill the survivor(s) with: tmux kill-session -t <name>" >&2
+    fi
+    exit 1
+    ;;
+esac
 
 # Multi-session: drivers that chain `restart` steps (e.g. claudecode's
 # session-end scenario) write the full UUID + transcript lists to
@@ -653,34 +791,6 @@ if [[ -n "$RECORDING" && -n "$TRANSCRIPT" ]]; then
     echo "$ACTUAL_UUID" > "$STAGING/session.uuid"
   fi
 fi
-
-MANIFEST="$STAGING/run-manifest.json"
-DAEMON_SHUTDOWN="$(cat "$STAGING/daemon.shutdown" 2>/dev/null || echo "unknown")"
-
-# Write an ERROR-verdict run-manifest with the standard envelope plus
-# error-specific fields supplied as a JSON object (pass '{}' for none).
-write_error_manifest() {
-  local error_code="$1"
-  local extras_json="$2"
-  jq -n \
-    --arg adapter "$ADAPTER" \
-    --arg scenario "$FOLDER" \
-    --arg session_uuid "$ACTUAL_UUID" \
-    --arg error "$error_code" \
-    --arg driver_exit_reason "$DRIVER_REASON" \
-    --arg daemon_shutdown "$DAEMON_SHUTDOWN" \
-    --arg staging "$STAGING" \
-    --argjson extras "$extras_json" \
-    '{adapter: $adapter,
-      scenario: $scenario,
-      session_uuid: $session_uuid,
-      verdict: "ERROR",
-      error: $error,
-      driver_exit_reason: $driver_exit_reason,
-      daemon_shutdown: $daemon_shutdown,
-      staging: $staging} + $extras' \
-    > "$MANIFEST"
-}
 
 if [[ -z "$TRANSCRIPT" || -z "$RECORDING" || -z "$ACTUAL_UUID" ]]; then
   write_error_manifest "transcript_recording_or_uuid_missing" \

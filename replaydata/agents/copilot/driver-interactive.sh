@@ -142,6 +142,10 @@ mkdir -p "$RUN_CWD"
 RUN_CWD="$(cd "$RUN_CWD" && pwd -P)"   # canonicalize (resolve symlinks) for the daemon's cwd match
 DEADLINE=$(( $(date +%s) + TIMEOUT_S ))
 EXIT_REASON="ok"
+# Raised to 1 by the epilogue, immediately before the final exit. cleanup() reads
+# it to tell a run that FINISHED (EXIT_REASON is its verdict) apart from a `set
+# -e` abort that never formed one (#1825) — see cleanup().
+REACHED_EPILOGUE=0
 SESSION=""
 
 remaining_seconds() { local now; now=$(date +%s); (( now >= DEADLINE )) && echo 0 || echo $((DEADLINE - now)); }
@@ -160,6 +164,14 @@ cleanup() {
   for (( i = 1; i <= N_SLOTS; i++ )); do
     [[ -n "${SES_SESSION[$i]:-}" ]] && tmux kill-session -t "${SES_SESSION[$i]}" 2>/dev/null || true
   done
+  # An abort that never reached the epilogue never formed a verdict, so
+  # EXIT_REASON is still its initial "ok". Writing that would report SUCCESS for
+  # a failed run — the exact shape #1825 exists to stop — so record the
+  # driver-fault reason instead. A verdict already formed (timeout, …) stands.
+  if [[ "$REACHED_EPILOGUE" != "1" && "$EXIT_REASON" == "ok" ]]; then
+    EXIT_REASON="nonzero(2)"
+    echo "[driver] aborted before the epilogue — recording exit reason $EXIT_REASON, not ok" >&2
+  fi
   echo "$EXIT_REASON" > "$STAGING/driver.exit-reason"
 }
 trap cleanup EXIT
@@ -502,8 +514,18 @@ while IFS= read -r step; do
     sigkill)         sigkill_and_wait "$(active_pid)" 15 || true
                      SES_ALIVE[$ACTIVE]=0 ;;
     # Copilot exits on /exit; Ctrl-D is not a documented quit path here.
+    # STRICT poll (#1825): wait_tmux_session_gone returns 0 even when the cap
+    # expires with the session still up, and SES_ALIVE=0 was set regardless — so
+    # a /exit that stopped working would read exactly like one that worked and
+    # the run would still report exit-reason=ok. 15s cap preserved.
     exit_clean)      slash_cmd "/exit"
-                     wait_tmux_session_gone "$SESSION" 15 || true
+                     if ! require_tmux_session_gone "$SESSION" 15; then
+                       echo "[driver] exit_clean: FAILED — $SESSION still alive 15s after /exit;" \
+                            "killing it explicitly. copilot did NOT shut down gracefully, so this" \
+                            "recording has no real clean-exit process_exited." >&2
+                       tmux kill-session -t "$SESSION" 2>/dev/null || true
+                       EXIT_REASON="nonzero(2)"
+                     fi
                      # shellcheck disable=SC2034  # part of the shared slot model replaydata/_lib/drive/slots.sh:64 (alloc_slot) initialises; this driver keeps it current but has no branch that reads it, while sibling drivers do (e.g. antigravity's exit summary)
                      SES_ALIVE[$ACTIVE]=0 ;;
     start_session)   save_active
@@ -535,4 +557,7 @@ for _rt in "${RETIRED_TRANSCRIPTS[@]:-}"; do
   echo "$_rt" >> "$STAGING/transcript.paths"
 done
 
+# The epilogue completed: EXIT_REASON is this run's real verdict, so cleanup()
+# must record it as-is rather than rewrite it as an abort.
+REACHED_EPILOGUE=1
 drive_exit
