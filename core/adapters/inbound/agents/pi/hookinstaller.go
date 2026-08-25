@@ -119,7 +119,7 @@ const HookEventAgentSettled = "agent_settled"
 //     excluded on the same evidence copilot's, gemini-cli's and kiro-cli's
 //     analogous exclusions cite: the transcript's own lines already open the
 //     turn and already record the session, so a hook duplicating them buys
-//     nothing irrlicht's three-state model needs, at the cost of a process
+//     nothing irrlicht's lifecycle state model needs, at the cost of a process
 //     spawn each.
 //
 //   - project_trust is pi's ONE genuine blocked-on-user prompt and is

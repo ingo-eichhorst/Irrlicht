@@ -38,4 +38,6 @@ Thanks for the PR! A few notes before you submit:
 - [ ] Commit messages use [Conventional Commits](https://www.conventionalcommits.org/)
 - [ ] No new abstractions added ahead of need
 - [ ] Documentation updated if behavior changed (README, `site/docs/`, or `events.md`)
-- [ ] No `cancelled` session state introduced — three states only: `working`, `waiting`, `ready`
+- [ ] No `cancelled` session state introduced — cancellation maps to `ready`. The
+      lifecycle vocabulary is `session.CanonicalStates()`; a new state is added there,
+      never by retyping the list at a call site

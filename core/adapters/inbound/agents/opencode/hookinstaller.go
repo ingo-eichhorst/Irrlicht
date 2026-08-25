@@ -138,7 +138,7 @@ const (
 //     rejected for the reason copilot's, gemini-cli's and pi's analogous
 //     exclusions cite: the store's own rows already open the turn — the
 //     watcher emits EventActivity off new `part` rows — so a hook duplicating
-//     it buys nothing irrlicht's three-state model needs, at the cost of a
+//     it buys nothing irrlicht's lifecycle state model needs, at the cost of a
 //     process spawn per turn.
 //
 //   - `tool.execute.before` / `tool.execute.after` were considered as the

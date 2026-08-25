@@ -1,6 +1,7 @@
 // StateClassifier provides pure functions for session state classification.
-// These functions encapsulate the decision tree used to determine whether a
-// session is working, waiting, or ready based on transcript metrics.
+// These functions encapsulate the decision tree that maps transcript metrics
+// onto one of session.CanonicalStates() — see events.md for the tree itself
+// and for why the failure branch is evaluated above the activity branch.
 package services
 
 import (

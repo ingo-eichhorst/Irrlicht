@@ -517,6 +517,29 @@ if want tools; then
   # would otherwise regrow it past that budget unnoticed under `--changed`.
   run_gate_scoped '^tools/lib/|^tools/[^/]*\.sh$|^tools/git-hooks/|^go\.work$|^\.github/dependabot\.yml$|^site/install\.sh$|^AGENTS\.md$|^\.github/workflows/(ars|codescene-badge|coverage|macos-swift|replaydata-deletion-guard|test)\.yml$' \
                   "tools/lib shell-lib tests" shell_lib_tests
+
+  # UNSCOPED, deliberately, and the only gate in this group that is (#1804).
+  #
+  # Every other gate here has a corpus you can name — tools/lib/, a workflow
+  # file, AGENTS.md — so `--changed` can honestly decide the diff cannot break
+  # it. This one's corpus is the repository: a file that hand-types three of
+  # the four session states, and so goes stale the next time the vocabulary
+  # grows, can be a Go file, a Swift view, a stylesheet, an HTML doc page, a
+  # markdown README or a shell script, and the stale ones this gate was written
+  # against were spread across exactly that range. A trigger regex would
+  # therefore have to match everything, and a regex that matches everything is
+  # a scoping claim that is not true — the failure mode #1209 named, where a
+  # gate silently stops firing on precisely the push it exists to catch.
+  #
+  # Affordable: ~2.4s of CPU, after the scan's own case-folded index()
+  # pre-check discards the lines that cannot qualify. Reproduce with
+  # `/usr/bin/time -p tools/state-vocabulary-lint.sh` and read `user` — wall
+  # clock on this machine swings between 15s and 21s purely on how many other
+  # agents are running, so it is not the figure to quote. It sits in phase 1
+  # with the other cheap deterministic gates, so a squeezed `--budget` run
+  # keeps it.
+  run_gate "state-vocabulary lint (incomplete state enumerations)" \
+           tools/state-vocabulary-lint.sh
 fi
 
 # ---- go group, cheap half (mirrors test.yml's gofmt step) ------------------

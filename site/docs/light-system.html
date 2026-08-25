@@ -4,16 +4,16 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>The Light System — Irrlicht Docs</title>
-<meta name="description" content="Irrlicht's three-state light system: working, waiting, and ready. No ambiguity — each session is a single light whose color tells the truth.">
+<meta name="description" content="Irrlicht's light system: working, waiting, ready and error. No ambiguity — each session is a single light whose color tells the truth.">
 <link rel="canonical" href="https://irrlicht.io/docs/light-system.html">
 <meta property="og:type" content="article">
 <meta property="og:title" content="The Light System — Irrlicht Docs">
-<meta property="og:description" content="Irrlicht's three-state light system: working, waiting, and ready. No ambiguity — each session is a single light whose color tells the truth.">
+<meta property="og:description" content="Irrlicht's light system: working, waiting, ready and error. No ambiguity — each session is a single light whose color tells the truth.">
 <meta property="og:url" content="https://irrlicht.io/docs/light-system.html">
 <meta property="og:site_name" content="Irrlicht">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="The Light System — Irrlicht Docs">
-<meta name="twitter:description" content="Irrlicht's three-state light system: working, waiting, and ready. No ambiguity — each session is a single light whose color tells the truth.">
+<meta name="twitter:description" content="Irrlicht's light system: working, waiting, ready and error. No ambiguity — each session is a single light whose color tells the truth.">
 
 <link rel="icon" type="image/svg+xml" href="../assets/favicon.svg">
 <link rel="icon" type="image/png" sizes="32x32" href="../assets/favicon-32x32.png">
@@ -87,16 +87,18 @@
     <div class="docs-content">
 
       <h1>The Light System</h1>
-      <p class="page-subtitle">Three states. No ambiguity. Each session is a single light whose color tells the truth. For the folklore behind the name, see <a href="story.html">The Story</a>.</p>
+      <p class="page-subtitle">One light per session. No ambiguity. Each session is a single light whose color tells the truth. For the folklore behind the name, see <a href="story.html">The Story</a>.</p>
 
-      <!-- The Three States -->
-      <h2>The Three States</h2>
+      <!-- The States -->
+      <h2>The States</h2>
       <img src="../assets/mascot/mascot-trio-state-cycle.webp"
            alt=""
            class="mascot mascot-float-right"
            loading="lazy" />
 
-      <p>Irrlicht's state model is <strong>MECE</strong> &mdash; mutually exclusive, collectively exhaustive. Every session is in exactly one state at any given moment. There is no fourth state, no "unknown", no "cancelled". Three states, three colors, three meanings.</p>
+      <p>Irrlicht's state model is <strong>MECE</strong> &mdash; mutually exclusive, collectively exhaustive. Every session is in exactly one state at any given moment: <span class="badge badge-working">working</span>, <span class="badge badge-waiting">waiting</span>, <span class="badge badge-ready">ready</span> or <span class="badge badge-error">error</span>. One color each, one meaning each.</p>
+
+      <p>There is no "cancelled" state &mdash; cancellation maps to <span class="badge badge-ready">ready</span>. And "unknown" is not a state either: the macOS app and the web dashboard each keep an <code>unknown</code> rendering fallback so that a value from a <em>newer</em> daemon than they were built against paints neutral grey instead of a confident green. Nothing ever emits it as a state; it is what a client shows when it does not recognise what it was sent.</p>
 
       <h3><span class="badge badge-working">working</span></h3>
 
@@ -126,7 +128,7 @@
 
       <div class="callout callout-warning">
         <strong>This one needs you</strong>
-        An orange light is the only state that demands your attention. Switch to this terminal and answer the question.
+        An orange light means the agent has stopped and cannot continue without you. Switch to this terminal and answer the question. (A red <span class="badge badge-error">error</span> light also needs you, and outranks orange in the menu bar &mdash; but it needs a retry rather than an answer.)
       </div>
 
       <h3><span class="badge badge-ready">ready</span></h3>
@@ -140,20 +142,42 @@
         <li>The session has been idle beyond the grace period</li>
       </ul>
 
+      <h3><span class="badge badge-error">error</span></h3>
+
+      <p>The session's own machinery failed. Something outside the agent's normal work went wrong and the session cannot make progress until it is retried.</p>
+
+      <ul>
+        <li>The provider refused or failed the call (rate limit, overload, a 5xx)</li>
+        <li>Credentials were rejected or expired</li>
+        <li>The agent process died mid-turn, with no turn-end in sight</li>
+        <li>Irrlicht could not read the session at all</li>
+      </ul>
+
+      <div class="callout callout-warning">
+        <strong>Not a tool failure</strong>
+        A <code>grep</code> that matched nothing, a failing build, a <code>find</code> hitting a protected directory &mdash; those are the agent working normally and stay <span class="badge badge-working">working</span>. A red light is about the session, not about what the agent found.
+      </div>
+
+      <p>Nothing clears <span class="badge badge-error">error</span> except the next <em>successful</em> turn &mdash; there is no timeout and no minimum hold. Starting a retry moves the session to <span class="badge badge-working">working</span>; only completing one takes it to <span class="badge badge-ready">ready</span>. The tradeoff is accepted and named: a provider error that recovers within a few hundred milliseconds can enter and leave <span class="badge badge-error">error</span> inside one poll interval and never be seen.</p>
+
       <div class="callout callout-info">
         <strong>No "cancelled" state</strong>
-        Cancellation is not a separate state. When you press ESC, the agent returns to the prompt &mdash; that is <span class="badge badge-ready">ready</span>. Three states only: working, waiting, ready.
+        Cancellation is not a separate state. When you press ESC, the agent returns to the prompt &mdash; that is <span class="badge badge-ready">ready</span>. Nor is a cancelled turn an <span class="badge badge-error">error</span>: you meant to stop it.
       </div>
 
       <!-- Decision Tree -->
       <h2>Decision Tree</h2>
 
-      <p>The state machine evaluates each transcript update with a simple three-step decision:</p>
+      <p>The state machine evaluates each transcript update with a simple four-step decision:</p>
 
       <ol class="steps">
         <li>
           <strong>Is there an open user-blocking tool?</strong><br>
           If the last tool result is pending and the tool is <code>AskUserQuestion</code> or <code>ExitPlanMode</code>, the state is <span class="badge badge-waiting">waiting</span>.
+        </li>
+        <li>
+          <strong>Is there an unrecovered session-level failure?</strong><br>
+          If the session's own machinery failed and no successful turn has happened since, the state is <span class="badge badge-error">error</span>. This sits above the next question deliberately: a terminal provider failure often leaves a transcript tail that reads like a finished turn, so asking it any later would report a failed session as <span class="badge badge-ready">ready</span> &mdash; green, and silent.
         </li>
         <li>
           <strong>Is the agent actively processing?</strong><br>
@@ -168,14 +192,19 @@
       <div class="diagram">  transcript update
         |
         v
-  +---------------------+
+  +----------------------+
   | user-blocking tool?  |--yes--> waiting (orange)
-  +---------------------+
+  +----------------------+
         | no
         v
-  +---------------------+
+  +----------------------+
+  | unrecovered failure? |--yes--> error   (red)
+  +----------------------+
+        | no
+        v
+  +----------------------+
   | active processing?   |--yes--> working (purple)
-  +---------------------+
+  +----------------------+
         | no
         v
       ready (green)</div>
@@ -183,7 +212,7 @@
       <!-- Context Pressure -->
       <h2>Context Pressure</h2>
 
-      <p>Context pressure is <strong>orthogonal</strong> to the three states. It measures how full the agent's context window is and overlays a second dimension onto whatever state the session is in. A session can be <span class="badge badge-working">working</span> at any pressure level.</p>
+      <p>Context pressure is <strong>orthogonal</strong> to the state machine. It measures how full the agent's context window is and overlays a second dimension onto whatever state the session is in. A session can be <span class="badge badge-working">working</span> at any pressure level.</p>
 
       <table>
         <thead>
@@ -230,7 +259,7 @@
 
       <div class="callout callout-info">
         <strong>Pressure is not state</strong>
-        A session at <code>critical</code> pressure can still be <span class="badge badge-working">working</span>, <span class="badge badge-waiting">waiting</span>, or <span class="badge badge-ready">ready</span>. The two dimensions are independent.
+        A session at <code>critical</code> pressure can still be in any state &mdash; <span class="badge badge-working">working</span>, <span class="badge badge-waiting">waiting</span>, <span class="badge badge-ready">ready</span> or <span class="badge badge-error">error</span>. The two dimensions are independent.
       </div>
 
       <!-- Cost Estimation -->

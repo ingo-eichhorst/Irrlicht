@@ -1,0 +1,135 @@
+# state-vocabulary-lint.waivers — sites that name a PROPER SUBSET of
+# session.CanonicalStates() on one line, on purpose.
+#
+# Format: <path> <whitespace> <reason>.  `#` starts a comment; blank lines are
+# ignored.  A waiver is keyed on a PATH and covers every site in that file, so
+# the list does not churn every time a line moves.
+#
+# THIS FILE IS THE "ADDING A FIFTH STATE" CHECKLIST.  Every entry names a place
+# that has already been looked at once and judged not-a-defect *for the current
+# vocabulary*.  Most of those judgements are conditional on the vocabulary, not
+# permanent — an entry saying "the history strip only encodes three" stops being
+# true the moment a fifth state exists.  Re-read each reason then; do not
+# re-waive by reflex.
+#
+# Both directions fail (tools/state-vocabulary-lint.sh):
+#   a flagged site with no waiver      -> FAIL, a new hand-typed vocabulary
+#   a waiver matching no flagged site  -> FAIL, the entry rotted
+#
+# ---------------------------------------------------------------------------
+# 1. THE HISTORY BAR'S 2-BIT STRIP — genuinely cannot carry a fourth state (#1805)
+#
+# The history bar packs each bucket's state into a 2-bit field whose four codes
+# are already spent (ready/working/waiting/no-data), so every producer,
+# consumer and test along THAT path is three-state by construction rather than
+# by oversight.  #1805 tracks widening the encoding; #1807 tracks history.json
+# coercing an unrecognised state to `ready`.  When either lands, these are the
+# sites it has to touch.
+#
+# Scope note, because the first draft of this section got it wrong and a wrong
+# dismissal is the one error class that stops anyone re-checking: this covers
+# the history BAR only.  The Activity Matrix is a different mechanism and is
+# NOT excused here — see section 1b.
+
+core/application/services/history_tracker.go        2-bit history-strip encoding; the four codes are spent (#1805)
+core/application/services/history_tracker_test.go   pins the 2-bit encoding above; moves with it (#1805)
+platforms/web/irrlicht.js                           HISTORY_PRIORITY_TO_STATE — the client half of the 2-bit decode (#1805)
+platforms/macos/Irrlicht/Views/HistoryBarView.swift decodes the same priority codes (#1805)
+platforms/macos/Tests/HistoryBarColorTests.swift    LOCK on those three canonical buckets — it must NOT silently gain a fourth
+
+# ---------------------------------------------------------------------------
+# 1b. THE ACTIVITY MATRIX — NOT encoding-limited, and macOS is genuinely behind
+#
+# `chart=state` / `StateSeries` / `by_state` is a plain
+# map[string]map[string][]float64 with NO encoding limit, and its key set comes
+# from outbound.NewStateBuckets(), which derives from session.CanonicalStates().
+# It has emitted a fourth `error` series since #1801, and the web consumes it
+# (platforms/web/historyTab.js's STATE_STACK has four entries; irrlicht.test.js
+# pins that).
+#
+# So these are NOT "deferred behind #1805".  macOS drops the `error` series it
+# is already being sent — HistoryData.Counts is a hard-coded triple whose
+# `total` therefore normalises every stacked bar against a total that excludes
+# errors — and that is tracked as its own bug rather than excused as an
+# encoding limit.  Waived here only because fixing it is a macOS UI change, not
+# a docs change. Tracked as #1821.
+
+platforms/macos/Irrlicht/Views/HistoryView.swift    macOS Activity Matrix + its CSV export header — genuinely behind the wire (#1821, NOT #1805)
+platforms/macos/Tests/HistoryViewSnapshotTests.swift pins that three-bucket macOS behaviour; moves when #1821 is fixed
+core/cmd/irrlichd/history_state_endpoint_test.go    reconstructs the grid from recordings whose corpus predates `error`
+platforms/web/irrlicht.css                          Activity-Matrix mini-bar styling, plus a comment narrating the pre-#1797 icon wart
+
+# ---------------------------------------------------------------------------
+# 2. PAST-TENSE NARRATION OF A BUG THAT IS ALREADY FIXED
+#
+# These quote what the code USED to say, as the evidence for why it no longer
+# says it.  Completing the list would destroy the explanation.
+
+core/adapters/outbound/filesystem/repository.go       quotes the old "knows only working/waiting/ready" message #1798 removed
+core/adapters/outbound/filesystem/repository_vocabulary_test.go quotes the same removed message; asserts the vocabulary, not a spelling
+core/ports/outbound/ports.go                          quotes the three stale literals #1801 replaced with NewStateBuckets()
+core/application/services/session_detector_hold_ceiling_test.go narrates which states the pre-#1798 pipeline covered
+
+# ---------------------------------------------------------------------------
+# 3. DELIBERATE PARTITIONS — a subset is the point
+#
+# Each names some-but-not-all states because the distinction it draws is
+# genuinely between them.  See session.HasWorkInFlight for the partition and
+# why it cannot be one function.
+
+core/domain/session/session.go                        HasWorkInFlight's doc, explaining the partition itself
+core/application/services/session_detector_activity.go a case arm that deliberately excludes `working`
+
+# ---------------------------------------------------------------------------
+# 4. PROSE ABOUT ONE STATE'S OWN EDGES
+#
+# A paragraph describing what `error` is and how it is entered and left names
+# error/working/ready because those ARE its edges; `waiting` is not one of them.
+# Completing the list would make the sentence wrong.
+#
+# state-machine.html used to be here too. Rewriting its clearing rule for
+# accuracy (#1804 review) split the claim across sentences and the site stopped
+# firing — which is why this gate fails on a stale waiver rather than ignoring
+# one.
+
+site/docs/light-system.html    the `error` section's clearing rule
+events.md                      the Impossible Transitions bullet — reconciled by the paragraph directly beneath it
+
+# ---------------------------------------------------------------------------
+# 5. A DIFFERENT ENUM THAT HAPPENS TO SHARE WORDS
+
+site/docs/api-reference.html   notification-rule `trigger.event` — waiting/ready/working plus context_pressure*, not the state vocabulary
+platforms/web/sessionError.test.js  a not-error control group: three real states plus a deliberate junk value
+platforms/macos/Tests/SessionErrorStateTests.swift  three sites enumerate domain states plus the CLIENT-SIDE `.unknown` fallback (#1797), which is not a state; a fourth is a legacy-payload fixture asserting a `subagents` object with no `error` key still decodes
+platforms/macos/Tests/SessionManagerTests.swift     same, for `dominant(in:)`
+platforms/macos/Tests/MenuBarStatusRendererTests.swift a comment quoting the literal a test would use if precedence were hardcoded
+platforms/macos/Irrlicht/Theme/Tokens.swift         CSS custom-property NAMES (--working-dim, --waiting-glow …), not a state list
+
+# ---------------------------------------------------------------------------
+# 6. DESCRIBES A FIXED ARTEFACT
+#
+# The artefact really does show three states; the text is a caption for it, and
+# correcting the text without re-rendering the artefact would make it wrong.
+
+site/index.html                alt text for assets/explainer.png, which depicts a three-state dropdown
+assets/extender-prompt.txt     an image-generation prompt for the three-light brand eyebrow
+assets/mascot/image-prompts.md the prompt that produced mascot-trio-state-cycle.webp
+README.md                      describes the Activity Matrix artefact, whose grid is the 2-bit strip above (#1805)
+
+# ---------------------------------------------------------------------------
+# 7. OWNED BY ANOTHER TREE — do not edit from here
+#
+# tools/onboarding-factory/ was off-limits while #1803 was in flight (it adds
+# four error scenarios).  These four sites are real and unfixed; they belong to
+# that tree's own pass, not to #1804.
+
+tools/onboarding-factory/internal/validate/expected.go        ExpectedState doc comment (#1803's tree)
+tools/onboarding-factory/internal/viewer/web/viewer.js        timeline state-band comment (#1803's tree)
+tools/onboarding-factory/internal/viewer/web/playbackView.js  paintStateBand comment (#1803's tree)
+tools/onboarding-factory/internal/viewer/web/playbackTimeline.js expected_state comment (#1803's tree)
+
+# ---------------------------------------------------------------------------
+# 8. MISCELLANEOUS
+
+tools/replay-fixtures.sh                             census over the three states the replay corpus actually contains — CONDITIONAL on that corpus, which this gate never re-checks: #1803 adds error scenarios, and when they land this census divides by a total that includes `error` while omitting its row
+tools/irrlicht-design-system/ui_kits/dashboard/index.html a standalone demo UI kit, not the shipped dashboard

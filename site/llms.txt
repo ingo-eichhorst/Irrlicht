@@ -2,13 +2,13 @@
 
 > A free, open-source macOS menu bar application that monitors AI coding agent sessions in real time.
 
-Irrlicht provides menu-bar telemetry for AI coding agents like Claude Code, OpenAI Codex, and Pi. It uses a three-state light system — working (purple), waiting (orange), and ready (green) — to show each agent's status at a glance. The app detects sessions automatically via filesystem watching and process scanning, requires zero configuration, and runs entirely on-device with no data leaving the machine. Built with Go and SwiftUI, it supports multi-agent monitoring, context pressure tracking, cost estimation, and git-aware session grouping. MIT licensed.
+Irrlicht provides menu-bar telemetry for AI coding agents like Claude Code, OpenAI Codex, and Pi. It uses a light system — working (purple), waiting (orange), ready (green), error (red) — to show each agent's status at a glance. The app detects sessions automatically via filesystem watching and process scanning, requires zero configuration, and runs entirely on-device with no data leaving the machine. Built with Go and SwiftUI, it supports multi-agent monitoring, context pressure tracking, cost estimation, and git-aware session grouping. MIT licensed.
 
 ## Documentation
 
 - [Installation](https://irrlicht.io/docs/installation.html): Install via DMG, PKG, or build from source
 - [Quick Start](https://irrlicht.io/docs/quickstart.html): Get up and running in minutes
-- [The Light System](https://irrlicht.io/docs/light-system.html): Three states — working, waiting, ready
+- [The Light System](https://irrlicht.io/docs/light-system.html): The session states — working, waiting, ready, error
 - [State Machine](https://irrlicht.io/docs/state-machine.html): Deterministic session state transitions
 - [Session Detection](https://irrlicht.io/docs/session-detection.html): How sessions are discovered and tracked
 - [Configuration](https://irrlicht.io/docs/configuration.html): Environment variables and settings

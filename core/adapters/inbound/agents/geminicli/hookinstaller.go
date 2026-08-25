@@ -127,7 +127,7 @@ var hookEventSince = map[string]string{
 //     information as a real, narrow signal instead.
 //   - SessionStart/SessionEnd/PreCompress/BeforeModel/AfterModel/
 //     BeforeToolSelection are excluded on evidence: none of them has a
-//     stated payoff for irrlicht's three-state model (working/waiting/ready)
+//     stated payoff for irrlicht's lifecycle state model
 //     beyond what process discovery and transcript tailing already give, and
 //     BeforeModel/AfterModel additionally carry full LLM request/response
 //     bodies — blast radius with no offsetting benefit. SessionStart and

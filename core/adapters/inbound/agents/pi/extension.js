@@ -49,7 +49,7 @@ const IRRLICHT_BEACON = "__IRRLICHT_BEACON_COMMAND__";
 // The single pi lifecycle event this extension subscribes to. agent_settled
 // means "pi will not continue running automatically" — no retry, no
 // auto-compaction, no queued follow-up left — which is the authoritative
-// turn-end signal irrlicht's three-state model wants, and which pi's
+// turn-end signal irrlicht's lifecycle state model wants, and which pi's
 // transcript alone only implies.
 const IRRLICHT_EVENT = "agent_settled";
 

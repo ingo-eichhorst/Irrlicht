@@ -139,8 +139,8 @@ type interval struct {
 
 // concurrencyActive reports whether a state counts toward concurrency: an agent
 // is "concurrent" while working or waiting, and stops once it goes ready
-// (process exited / cancelled / transcript removed) — the three-state model
-// read literally (#751).
+// (process exited / cancelled / transcript removed) — #751 read literally,
+// back when those three were the whole vocabulary.
 //
 // `error` is NOT active, and that is a settled decision rather than an
 // oversight of #1798's fourth state (events.md; #1801). Nothing clears a

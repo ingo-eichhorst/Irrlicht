@@ -114,7 +114,7 @@
           "adapter": "claude-code",
           "project_name": "irrlicht",
           "pid": 12345,
-          "subagents": { "total": 3, "working": 2, "waiting": 0, "ready": 1 },
+          "subagents": { "total": 3, "working": 2, "waiting": 0, "ready": 1, "error": 0 },
           "children": [
             {
               "session_id": "agent-a1cad...",
@@ -137,7 +137,7 @@
 
       <h3>GET /state</h3>
 
-      <p>Human-readable state summary. Shows count of working, waiting, and ready sessions, plus the total session count.</p>
+      <p>Human-readable state summary. Returns <code>sessionCount</code> plus one count per lifecycle state &mdash; <code>workingCount</code>, <code>waitingCount</code>, <code>readyCount</code>, <code>errorCount</code>.</p>
 
       <h3>GET /api/v1/sessions/stream</h3>
 
@@ -226,7 +226,7 @@
           <tr>
             <td><code>chart</code></td>
             <td><code>cost</code> (default), <code>tokens</code>, <code>co2</code>, <code>models</code>, <code>providers</code>, <code>agents</code>, <code>state</code>, <code>yield</code>, <code>dora</code></td>
-            <td>Which series to build. <code>models</code> / <code>providers</code> are presets that pin the stacking axis; <code>co2</code> sums the estimated CO2e footprint like <code>cost</code> sums spend; <code>agents</code> returns the concurrent-agents timeline; <code>state</code> returns the per-project, per-state (working/waiting/ready) activity matrix; <code>yield</code> returns the per-project productive-vs-reverted aggregate; <code>dora</code> returns one project's DORA metrics (requires <code>project</code>)</td>
+            <td>Which series to build. <code>models</code> / <code>providers</code> are presets that pin the stacking axis; <code>co2</code> sums the estimated CO2e footprint like <code>cost</code> sums spend; <code>agents</code> returns the concurrent-agents timeline; <code>state</code> returns the per-project, per-state activity matrix; <code>yield</code> returns the per-project productive-vs-reverted aggregate; <code>dora</code> returns one project's DORA metrics (requires <code>project</code>)</td>
           </tr>
           <tr>
             <td><code>group</code></td>
@@ -256,12 +256,12 @@
         </tbody>
       </table>
 
-      <p>The <code>cost</code> / <code>tokens</code> / <code>co2</code> / <code>models</code> / <code>providers</code> / <code>agents</code> charts return a time-series payload (<code>range</code>, <code>chart</code>, <code>group</code>, <code>start</code>, <code>end</code>, <code>bucket_seconds</code>, <code>bucket_starts</code>, <code>total</code>, <code>series</code>, <code>top_contributors</code>, with optional <code>forecast</code>, <code>token_split</code>, and <code>scope</code>). <code>chart=agents</code> swaps in a <code>concurrency</code> block. <code>chart=state</code> is shaped differently &mdash; a dense grid rather than a sparse series &mdash; returning <code>projects</code> (row order, busiest first) and <code>by_state</code> (<code>working</code>/<code>waiting</code>/<code>ready</code>, each a <code>project &rarr; per-bucket array</code> map aligned to <code>bucket_starts</code>), plus the same <code>concurrency</code> block as <code>agents</code> (working+waiting combined). <code>chart=yield</code> returns a per-project shape (<code>productive_cost</code>, <code>reverted_cost</code>, <code>unknown_cost</code>, <code>total_cost</code>, <code>yield</code>, <code>projects</code>). <code>chart=dora</code> returns one project's four metrics (<code>deployment_frequency</code>, <code>lead_time</code>, <code>change_failure_rate</code>, <code>mttr</code>), each with <code>value</code>/<code>unit</code>/<code>sample_size</code>/<code>available</code>. Returns <code>400</code> for an unknown <code>chart</code> / <code>group</code> / <code>token_type</code> / <code>granularity</code> or an invalid range.</p>
+      <p>The <code>cost</code> / <code>tokens</code> / <code>co2</code> / <code>models</code> / <code>providers</code> / <code>agents</code> charts return a time-series payload (<code>range</code>, <code>chart</code>, <code>group</code>, <code>start</code>, <code>end</code>, <code>bucket_seconds</code>, <code>bucket_starts</code>, <code>total</code>, <code>series</code>, <code>top_contributors</code>, with optional <code>forecast</code>, <code>token_split</code>, and <code>scope</code>). <code>chart=agents</code> swaps in a <code>concurrency</code> block. <code>chart=state</code> is shaped differently &mdash; a dense grid rather than a sparse series &mdash; returning <code>projects</code> (row order, busiest first) and <code>by_state</code> (one key per lifecycle state &mdash; <code>working</code>, <code>waiting</code>, <code>ready</code>, <code>error</code> &mdash; each a <code>project &rarr; per-bucket array</code> map aligned to <code>bucket_starts</code>; the key set is built from the daemon's own state vocabulary, so a future state appears here without a client change), plus the same <code>concurrency</code> block as <code>agents</code> (working+waiting combined). <code>chart=yield</code> returns a per-project shape (<code>productive_cost</code>, <code>reverted_cost</code>, <code>unknown_cost</code>, <code>total_cost</code>, <code>yield</code>, <code>projects</code>). <code>chart=dora</code> returns one project's four metrics (<code>deployment_frequency</code>, <code>lead_time</code>, <code>change_failure_rate</code>, <code>mttr</code>), each with <code>value</code>/<code>unit</code>/<code>sample_size</code>/<code>available</code>. Returns <code>400</code> for an unknown <code>chart</code> / <code>group</code> / <code>token_type</code> / <code>granularity</code> or an invalid range.</p>
 
       <pre><code># Weekly cost by project
 curl "http://127.0.0.1:7837/api/v1/history?chart=cost&group=project&range=week" | jq
 
-# Activity Matrix: working/waiting/ready per project, last 24 hourly buckets
+# Activity Matrix: one row per project, one series per state, last 24 hourly buckets
 curl "http://127.0.0.1:7837/api/v1/history?chart=state&granularity=24h" | jq</code></pre>
 
       <h3>GET /api/v1/permissions</h3>
@@ -557,7 +557,7 @@ curl -OJ http://127.0.0.1:7837/debug/bundle</code></pre>
           <tr>
             <td><code>state</code></td>
             <td>string</td>
-            <td><code>working</code>, <code>waiting</code>, or <code>ready</code></td>
+            <td><code>working</code>, <code>waiting</code>, <code>ready</code>, or <code>error</code></td>
           </tr>
           <tr>
             <td><code>adapter</code></td>
@@ -655,8 +655,18 @@ curl -OJ http://127.0.0.1:7837/debug/bundle</code></pre>
             <td>int</td>
             <td>Count of children in <code>ready</code> state</td>
           </tr>
+          <tr>
+            <td><code>error</code></td>
+            <td>int</td>
+            <td>Count of children in <code>error</code> state</td>
+          </tr>
         </tbody>
       </table>
+
+      <p>The per-state counts sum to <code>total</code>: every child lands in exactly one bucket.
+      <code>error</code> was added in #1801 for that reason &mdash; before it, an errored child
+      was counted in <code>total</code> and in none of the buckets, so a red subagent was
+      invisible in the one badge a user checks to find out why a parent is stuck.</p>
 
       <h2>SessionMetrics Schema</h2>
 

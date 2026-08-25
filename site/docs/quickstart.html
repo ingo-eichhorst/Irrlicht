@@ -140,11 +140,12 @@
         <li><span class="badge badge-working">working</span> -- the agent is processing</li>
         <li><span class="badge badge-waiting">waiting</span> -- the agent needs your input</li>
         <li><span class="badge badge-ready">ready</span> -- the agent is idle</li>
+        <li><span class="badge badge-error">error</span> -- the session's own machinery failed (the provider refused the call, credentials were rejected, the process died mid-turn). Not a failing build or an empty grep -- those are the agent working normally.</li>
       </ul>
 
       <div class="callout callout-tip">
         <strong>Tip</strong>
-        These three states map directly to the menu bar light color. Learn more in <a href="light-system.html">The Light System</a>.
+        Each state maps to one menu bar light color. Learn more in <a href="light-system.html">The Light System</a>.
       </div>
 
       <h2>Web Dashboard <span class="badge badge-beta" style="font-size:0.65em;vertical-align:middle;padding:2px 6px;background:rgba(89,52,0,0.15);color:#FF9500;border-radius:3px;">beta</span></h2>

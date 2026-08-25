@@ -29,11 +29,25 @@ would report a failed session as `ready` -- green, and silent.
 
 ### Leaving `error`
 
-The next SUCCESSFUL turn clears it, and nothing else does -- no timeout, no
-minimum hold:
+Two edges, and they clear the failure on different conditions. Neither is a
+timeout and neither has a minimum hold (`clearSessionErrorOnRecovery`, in the
+tailer):
 
-- `error -> working` when the next turn starts
-- `error -> ready` on `turn_done`
+- `error -> working` when the user's next message arrives. This clears the
+  sticky error IMMEDIATELY and UNCONDITIONALLY -- the function returns on
+  `StartsNewUserTurn` before it examines the failure at all. A user who has
+  typed again has moved on, and holding the previous turn's failure against the
+  new one would pin the session red for the rest of its life.
+- `error -> ready` on `turn_done`, but ONLY for a failure whose phase is
+  `retrying` (`SessionError.ClearedByTurnBoundary`). A terminal failure is not
+  retired by a turn boundary.
+
+A process that died mid-turn is recorded as TERMINAL -- the one producer for
+which `retrying` is impossible, since a process that exited will not try again
+-- so NEITHER edge above applies to it. Its row is kept in `error` for
+`processDeathRetention` (12h) and then reaped. That ceiling holds only within a
+single daemon run; a restart inside the window reaps the row instead of showing
+it (#1815 owns that gap).
 
 Known and accepted: with no minimum hold, a provider error that recovers in a
 few hundred milliseconds can enter and leave `error` inside one poll interval
@@ -95,11 +109,31 @@ These transitions change the lifecycle state of an existing session.
 | AskUserQuestion tool opened | `working` | `waiting` | Tool use in transcript | `NeedsUserAttention()=true` |
 | ExitPlanMode tool opened | `working` | `waiting` | Tool use in transcript | `NeedsUserAttention()=true` |
 | User answers question / approves plan | `waiting` | `working` | Tool result in transcript | `NeedsUserAttention()=false` |
+| Provider refuses or fails the call, or credentials are rejected | `working` | `error` | Adapter parses a session-level failure out of the transcript | classifier rule `session error -> error`, signal `SignalSessionError`. The transcript path places NO hold -- the sticky error reaches the classifier through the tailer's own metrics; the signal names the rule's tier |
+| Agent process dies mid-turn | `working` | `error` | Process exit with no turn-end in sight | `SignalProcessDeath` hold, raised by `SessionDetector.retainAsProcessDeath` -- the row is RETAINED rather than deleted, unlike every process-exit row in the lifecycle table above; classifier rule `agent process died mid-turn -> error` |
+| User sends the next message after a failure | `error` | `working` | Transcript write | `clearSessionErrorOnRecovery` clears the failure on the message itself, before the turn's outcome is known |
+| A RETRYING failure's next turn completes | `error` | `ready` | `turn_done` | `clearSessionErrorOnRecovery`, gated on `ClearedByTurnBoundary` -- a terminal failure stays `error` |
 
 ### Impossible Transitions
 
 - `ready` -> `waiting`: Cannot skip `working`; any activity goes through `working` first
 - `waiting` -> `ready` (via content): Agent cannot finish while a blocking tool is open; only process exit clears it (as deletion)
+
+Both bullets predate `error` and constrain only the three original states. **No
+impossibility is asserted about `error` in either direction** -- its edges are
+the two in "Leaving `error`" above. If a genuine `error` impossibility is ever
+established it belongs here; do not infer one from this list's silence.
+
+**`error` vs `waiting` is decided per producer, not once.** The classifier is a
+ladder and the two error rules sit on opposite sides of the waiting rules:
+
+- `process_death` is ABOVE them. A process killed while `AskUserQuestion` was
+  open leaves that call open forever, so `user_blocking_tool` would keep firing
+  and keep painting a dead session `waiting` -- and sending a user to answer a
+  question in a process that no longer exists is worse than saying nothing.
+  Pinned by `TestProcessDeath_OutranksAFrozenWaitingTranscript`.
+- `session_error` (the transcript path) is BELOW them, so a live session that
+  hit a provider failure and then opened a blocking tool does read `waiting`.
 
 ---
 

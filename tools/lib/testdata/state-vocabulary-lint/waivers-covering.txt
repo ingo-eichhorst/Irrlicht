@@ -1,0 +1,1 @@
+tools/lib/testdata/state-vocabulary-lint/three-of-four.md   the mutation fixture, waived so the "site covered by a live waiver" direction can be exercised

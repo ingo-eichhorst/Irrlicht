@@ -382,7 +382,7 @@ Nobody is gating on the plan, so skip the HTML artifact and the wait entirely:
     - If the work is complex/multi-part, break it into tasks with `TaskCreate` and work
       them in order (as you naturally would). For a small change, just implement it.
     - Follow the repo's conventions (AGENTS.md): surgical changes, match surrounding
-      style, three-state model, hexagonal layering, etc.
+      style, the derived session-state vocabulary, hexagonal layering, etc.
 11. **Verify** before declaring done. Run **`tools/preflight.sh`** — the Local CI
     parity gate (AGENTS.md's "Local CI parity" section) that mirrors every
     PR-gating check (test.yml + web-test.yml + ars-gate.yml + linux.yml's

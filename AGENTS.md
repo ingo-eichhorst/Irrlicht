@@ -143,6 +143,15 @@ Before marking a ticket done, run the full suite — every layer must pass:
   are two independent suites, each with its own `node_modules`. Runs
   `vitest run`. **Never `npm install`** (rewrites `package-lock.json`) —
   use `npm ci`.
+- State vocabulary: `tools/state-vocabulary-lint.sh` (#1804) flags any single
+  line naming three-or-more-but-not-all of `session.CanonicalStates()` — the
+  hand-typed enumeration that is complete when written and silently stale one
+  state later (#1796 shipped four such defects). Sites that name a proper
+  subset on purpose live in `tools/state-vocabulary-lint.waivers` with a
+  reason, and a waiver that stops matching fails too. It reads one line at a
+  time, so a partition split across lines — a `switch` with two arms and a
+  `default` — is invisible to it: it complements review rather than replacing
+  it. `tools/lib/state-vocabulary-lint_test.sh` carries the mutation fixtures.
 - Skill files: `tools/skill-lint.sh` (`.claude/skills/**/*.md`). AGENTS.md's
   own 400-line budget (#1742 — this file is force-injected into every agent
   session via CLAUDE.md's `@AGENTS.md` import, so it never gets to just grow):

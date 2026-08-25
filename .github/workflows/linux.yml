@@ -96,6 +96,45 @@ jobs:
       - name: Test the bash-lint gate
         run: bash tools/lib/bash-lint_test.sh
 
+      # STATE-VOCABULARY gate (#1804) — the third repo-wide lint in this job,
+      # and it is here for the reason the two above are here rather than for
+      # their host-specific one. posix-lint and bash-lint need ubuntu (dash as
+      # a real /bin/sh; an image that ships shellcheck). This one needs nothing
+      # the macos image lacks — it needs a JOB AT ALL, which it did not have:
+      # until now `tools/state-vocabulary-lint.sh` was reachable only through
+      # tools/preflight.sh's `tools` gate, i.e. only through the pre-push hook.
+      #
+      # ONE STEP, NOT TWO, and the asymmetry with the pairs above is
+      # deliberate. Their unit tests are in this file because they need
+      # shellcheck; this gate's tests
+      # (tools/lib/state-vocabulary-lint_test.sh) need nothing, so they are
+      # already picked up by test.yml's `tools/lib/*_test.sh` loop. What was
+      # missing was never the tests — CI proved the lint WORKS — it was the
+      # lint actually reading the repo. Nothing proved the repo PASSES it.
+      #
+      # That is the same argument test.yml makes over its shell-lib loop: a
+      # check whose only local gate is the pre-push hook rides on a gate that
+      # `git push --no-verify` disables. Not hypothetical — the PR that added
+      # this step was itself pushed with --no-verify, because the hook's 540s
+      # budget kills the Swift gate. A gate reachable only through a hook
+      # people routinely disable is a gate that drifts, and this one exists to
+      # catch the enumeration class that produced four separate defects in
+      # #1796.
+      #
+      # CI runs the same script preflight's `tools` gate runs, so the two judge
+      # a run by one implementation rather than by two that can disagree — the
+      # reason test.yml and macos-swift.yml both give for sharing their
+      # runners.
+      #
+      # Incidental benefit of running it here: this is the only place the
+      # matcher meets a NON-macOS awk (mawk or gawk, not BWK awk). An awk that
+      # matched differently could not fail quietly — under-matching retires
+      # waivers, and a waiver that matches no site is itself an error — so the
+      # gate's two-directional waiver check doubles as a cross-awk conformance
+      # check for free.
+      - name: Lint the session-state vocabulary
+        run: tools/state-vocabulary-lint.sh
+
       - name: Set up Go
         uses: actions/setup-go@v7
         with:

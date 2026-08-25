@@ -174,8 +174,8 @@ var hookEventSince = map[string]string{
 //   - userPromptSubmit is excluded on the same evidence copilot's and
 //     gemini-cli's analogous exclusions cite: the transcript's own turn-
 //     opening event (a "Prompt"-kind line, parser.go) already opens the turn,
-//     so a hook duplicating that signal buys nothing irrlicht's three-state
-//     model needs.
+//     so a hook duplicating that signal buys nothing irrlicht's lifecycle
+//     state model needs.
 var installedHookEvents = []string{
 	HookPostToolUse,
 	HookStop,

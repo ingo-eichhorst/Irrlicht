@@ -1,6 +1,6 @@
 ---
 name: ir:code-review
-description: Review a working diff for defects and report findings worst-first — the repo-owned, agent-invocable counterpart to the built-in `/code-review`, which is `disable-model-invocation` and can only be run by a human. Scales from a single read to an adversarially-verified pass, and checks this repo's own conventions (three-state model, hexagonal layering, permission gating, defect-tests-seen-red) on top of ordinary correctness. Invoked as `/ir:code-review [effort] [base]`. Triggers on "/ir:code-review", "review the diff", "review my changes", "review this branch", or when `ir:exec` Phase 5 reaches its review gate.
+description: Review a working diff for defects and report findings worst-first — the repo-owned, agent-invocable counterpart to the built-in `/code-review`, which is `disable-model-invocation` and can only be run by a human. Scales from a single read to an adversarially-verified pass, and checks this repo's own conventions (the derived session-state vocabulary, hexagonal layering, permission gating, defect-tests-seen-red) on top of ordinary correctness. Invoked as `/ir:code-review [effort] [base]`. Triggers on "/ir:code-review", "review the diff", "review my changes", "review this branch", or when `ir:exec` Phase 5 reaches its review gate.
 ---
 
 # Review the Working Diff
@@ -77,7 +77,13 @@ Defects first — this skill hunts bugs. Quality cleanups are secondary here
   state, aliasing of returned structs), resource leaks, boundary conditions.
 - **Repo conventions** (`AGENTS.md` Key Conventions — a break here is a real
   finding, not a nit):
-  - Three session states only — `working`, `waiting`, `ready`. No cancelled state.
+  - The session-state vocabulary is `session.CanonicalStates()` and nothing else —
+    a call site that retypes the list has become a second source of truth. No
+    cancelled state (cancellation maps to `ready`). Watch for enumerations that
+    were complete under an older vocabulary: a `case` arm, a `switch`, a format
+    string or a doc line naming some-but-not-all states is the shape that shipped
+    four separate defects in #1796. `tools/state-vocabulary-lint.sh` catches the
+    single-line ones; a partition split across lines is yours to catch.
   - Hexagonal import direction: `domain/` → `ports/` → `adapters/` →
     `application/services/`. `domain/` and `ports/` must not import outward;
     `application/services/` reaches `adapters/inbound/` only through `ports/`.

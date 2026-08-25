@@ -106,14 +106,28 @@ Public API routes are the `/api/v1/*` set; `/debug/pprof/*` and `/state` are int
 
 **Documented mention** = the route appears in `site/docs/api-reference.html`.
 
-## 5. Session states (exactly 3) and lifecycle events
+## 5. Session states and lifecycle events
 
-Authoritative states: `core/domain/session/session.go`.
+Authoritative states: `core/domain/session/session.go`, whose `canonicalStates` slice is the
+single declaration everything else derives from.
 
 ```bash
-grep -oE 'State(Working|Waiting|Ready)\s*=\s*"[a-z]+"' core/domain/session/session.go
-# → working / waiting / ready  (the count "three" is checkable here)
+# Read the slice, then resolve each constant — do NOT grep for the state names,
+# which is the hand-copied vocabulary this section exists to check against.
+# A pattern naming the constants would go stale the same day the docs did: the
+# previous version of this command matched only Working/Waiting/Ready and so
+# reported "three" for a year after a fourth state shipped.
+sed -n 's/.*canonicalStates *= *\[\]string{\([^}]*\)}.*/\1/p' core/domain/session/session.go
+# → StateWorking, StateWaiting, StateReady, StateError   (the count is len(that list))
 ```
+
+`tools/state-vocabulary-lint.sh --list` derives the same vocabulary and prints every
+single-line site in the repo that names some-but-not-all of it — a ready-made worklist
+for this axis.
+
+`unknown` is **not** in that list and must not be counted: `platforms/macos` and
+`platforms/web` each carry an `unknown` rendering fallback for a value a newer daemon
+might send (#1797), which the daemon itself never emits.
 
 Authoritative event kinds: `core/domain/lifecycle/event.go`.
 
@@ -122,8 +136,9 @@ grep -oE 'Kind[A-Za-z]+\s+Kind\s+=\s+"[a-z_]+"' core/domain/lifecycle/event.go
 ```
 
 **Documented mention** = states/events described in `events.md`, `site/docs/state-machine.html`,
-`site/docs/session-detection.html`. The literal claim "three states" must equal the count above
-(axis V, V2).
+`site/docs/light-system.html`. Any stated count, and any closed enumeration of the states, must
+equal the vocabulary above (axis V, V2). `site/docs/session-detection.html` was named here until
+#1804 and no longer belongs: its "three complementary methods" is about *detection*, not states.
 
 ## 6. Relay wire protocol
 

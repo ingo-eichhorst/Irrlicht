@@ -157,7 +157,7 @@ irrlichd --record</code></pre>
         <li><code>--format text|json</code> &mdash; Output format; <code>json</code> emits the same grouped tree as <code>GET /api/v1/sessions</code> (minus cost aggregation)</li>
         <li><code>--yield</code> &mdash; Append two columns after the cost: the yield state and the session's HEAD commit (7 chars)</li>
         <li><code>--id &lt;prefix&gt;</code> &mdash; Filter by session ID prefix (case-insensitive)</li>
-        <li><code>--state working|waiting|ready</code> &mdash; Filter by session state</li>
+        <li><code>--state working|waiting|ready|error</code> &mdash; Filter by session state (the accepted values are the daemon's own vocabulary, so <code>--help</code> is authoritative)</li>
         <li><code>--project &lt;substring&gt;</code> &mdash; Filter by project name (case-insensitive substring)</li>
         <li><code>--adapter &lt;name&gt;</code> &mdash; Filter by <a href="adapters.html">agent adapter</a> (the per-agent integration, e.g. <code>claude-code</code>, <code>codex</code>)</li>
       </ul>

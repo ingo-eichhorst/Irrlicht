@@ -1,0 +1,1 @@
+tools/lib/testdata/state-vocabulary-lint/all-four.md   names the whole vocabulary, so it is never flagged — this entry is therefore STALE by construction
