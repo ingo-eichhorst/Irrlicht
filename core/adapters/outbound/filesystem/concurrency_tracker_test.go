@@ -848,3 +848,75 @@ func TestConcurrencyProject_MemoizesConcurrentRequests(t *testing.T) {
 		t.Errorf("concurrent chart reads: want 1 resolver call, got %d", got)
 	}
 }
+
+// TestStateSeries_ErrorIsTransitionCountAndNotConcurrency is #1801's own
+// behaviour, and it pins BOTH halves of the settled decision in one fixture
+// because they are only meaningful together.
+//
+// A session goes working → error → working → ready. The error transition must
+// be counted in by_state["error"] (before #1801, stateReconstruction dropped
+// every non-ready transition on the floor, so the series did not exist and the
+// key was not even present) — AND the time spent in error must contribute
+// nothing to peak/average concurrency, which is the half events.md settles.
+//
+// Asserting the second half here rather than in its own test is deliberate:
+// the obvious way to make the first half pass is to give `error` a duration
+// like working/waiting, and that is exactly what would break the second.
+func TestStateSeries_ErrorIsTransitionCountAndNotConcurrency(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "recordings")
+	seedRecording(t, dir, "run.jsonl", []lifecycle.Event{
+		transcriptNew(1, 90, "s1", "/home/me/projX"),
+		transition(2, 100, "s1", session.StateWorking),
+		// Provider call fails at t=130 and the session sits red until t=190.
+		transition(3, 130, "s1", session.StateError),
+		transition(4, 190, "s1", session.StateWorking),
+		transition(5, 200, "s1", session.StateReady),
+	})
+	tr := NewConcurrencyTrackerWithDir(dir, nil)
+
+	res, err := tr.StateSeries(outbound.SeriesQuery{Start: 0, End: 240, BucketSeconds: 60})
+	if err != nil {
+		t.Fatalf("StateSeries: %v", err)
+	}
+
+	// The one error transition (t=130) lands in bucket 2 ([120,180)).
+	if got, want := res.ByState[session.StateError]["projX"], []float64{0, 0, 1, 0}; !floatsEq(got, want) {
+		t.Errorf("error[projX]: want %v, got %v — the transition into error must be counted", want, got)
+	}
+
+	// Every canonical series is bucketed over the same window, so a state that
+	// had quietly been given a different shape shows up here.
+	if got, want := len(res.ByState[session.StateError]["projX"]), len(res.ByState[session.StateWorking]["projX"]); got != want {
+		t.Errorf("error and working series must have the same bucket count, got %d vs %d", got, want)
+	}
+
+	// The concurrency half. One session that never overlaps itself has a peak
+	// of 1; giving `error` a duration would not change that, but it WOULD show
+	// up in the average, which is time-weighted over the whole window. The
+	// session is concurrency-active only over [100,130) and [190,200) — 40 of
+	// the window's 240 seconds. The 60 seconds it spent red must contribute
+	// nothing, so an implementation that made `error` a dwell would read
+	// 100/240 here instead.
+	if res.Peak != 1 {
+		t.Errorf("peak concurrency: want 1, got %v — an errored session must not add a concurrent agent", res.Peak)
+	}
+	if !approxEq(res.Average, 40.0/240.0) {
+		t.Errorf("average concurrency: want %.6f (40s active of a 240s window), got %v — time spent in error must not count", 40.0/240.0, res.Average)
+	}
+	// `current` counts sessions spanning the window end. This one went ready
+	// at t=200, inside the window, so nothing spans it.
+	if res.Current != 0 {
+		t.Errorf("current: want 0, got %v", res.Current)
+	}
+
+	// The merged view is built on the same reconstruction and must agree — the
+	// two cannot be allowed to drift on what counts as active.
+	ag, err := tr.AgentsSeries(outbound.SeriesQuery{Start: 0, End: 240, BucketSeconds: 60})
+	if err != nil {
+		t.Fatalf("AgentsSeries: %v", err)
+	}
+	if ag.Peak != res.Peak || !approxEq(ag.Average, res.Average) {
+		t.Errorf("merged summary (peak %v, avg %v) disagrees with the per-state one (peak %v, avg %v)",
+			ag.Peak, ag.Average, res.Peak, res.Average)
+	}
+}
