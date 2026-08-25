@@ -22,9 +22,15 @@
 # The history bar packs each bucket's state into a 2-bit field whose four codes
 # are already spent (ready/working/waiting/no-data), so every producer,
 # consumer and test along THAT path is three-state by construction rather than
-# by oversight.  #1805 tracks widening the encoding; #1807 tracks history.json
-# coercing an unrecognised state to `ready`.  When either lands, these are the
-# sites it has to touch.
+# by oversight.  #1805 tracks widening the encoding, and when it lands these
+# are the sites it has to touch.
+#
+# #1807 has LANDED and did not widen anything: a state with no code now maps to
+# the no-data code instead of `ready`, and its verbatim string is preserved in
+# history.json rather than rewritten.  So an errored bucket paints blank, not
+# green — but the field is still 2 bits and these sites still enumerate exactly
+# the three states it can carry.  The waivers below therefore stand as written;
+# they are #1805's checklist alone now.
 #
 # Scope note, because the first draft of this section got it wrong and a wrong
 # dismissal is the one error class that stops anyone re-checking: this covers
