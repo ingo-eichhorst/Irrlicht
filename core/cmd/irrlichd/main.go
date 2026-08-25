@@ -810,7 +810,11 @@ func runDaemon() {
 	// to remove it. Installing the handler first — it costs nothing — closes
 	// the window where a SIGTERM landing between the two got the default
 	// disposition and killed the process before os.Remove(addrPath) below
-	// ever ran (#1808).
+	// ever ran (#1808). Trade-off: a SIGTERM arriving during startup is no
+	// longer fatal — it is buffered in sig and only consumed once <-sig
+	// below runs — so if startup itself hangs before reaching <-sig, SIGTERM
+	// can no longer stop the daemon and SIGKILL is required instead (see
+	// #1815 for the general shape of a startup hang going unhandled).
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
 

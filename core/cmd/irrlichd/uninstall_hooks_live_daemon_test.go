@@ -201,6 +201,25 @@ func shortTempDir(t *testing.T) string {
 	return dir
 }
 
+// waitForAddrFileTight polls for a non-empty addr file at addrPath with a
+// 100µs cadence — deliberately tighter than waitForAddr's 20ms poll — so a
+// caller racing a signal against the instant the file appears (#1808) loses
+// as little of the window as possible to its own detection latency. Fails
+// the test loudly on deadline rather than returning quietly: a fixture that
+// cannot observe what it waits for must not read as a pass.
+func waitForAddrFileTight(t *testing.T, addrPath string, deadline time.Time) {
+	t.Helper()
+	for {
+		if b, err := os.ReadFile(addrPath); err == nil && strings.TrimSpace(string(b)) != "" {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("daemon never wrote addr file %s before the deadline", addrPath)
+		}
+		time.Sleep(100 * time.Microsecond)
+	}
+}
+
 // seedGrantedHooksConsent writes a permissions.json granting Claude Code's
 // hooks permission, so the daemon under test boots into the only state in
 // which this defect can occur: consent granted, entries installed, a

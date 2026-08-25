@@ -4,7 +4,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -30,7 +29,7 @@ import (
 //
 // Seen red before the fix (`go test -run TestSIGTERMRightAfterAddrPublishLeavesNoAddrFile -race -count=1 -v ./core/cmd/irrlichd/`):
 //
-//	sigterm_window_test.go:88: addr file <dir>/irrlichd.addr should be removed after a SIGTERM landing right after it was published, stat err = <nil>
+//	addr file <dir>/irrlichd.addr should be removed after a SIGTERM landing right after it was published, stat err = <nil>
 func TestSIGTERMRightAfterAddrPublishLeavesNoAddrFile(t *testing.T) {
 	bin := buildIrrlichd(t)
 	// shortTempDir, not t.TempDir(): IRRLICHT_HOME holds the unix socket and a
@@ -65,22 +64,13 @@ func TestSIGTERMRightAfterAddrPublishLeavesNoAddrFile(t *testing.T) {
 	})
 
 	addrPath := filepath.Join(stateDir, "irrlichd.addr")
-	// Deliberately tighter than waitForAddr's 20ms poll: the point is to
+	// waitForAddrFileTight, not waitForAddr's 20ms poll: the point is to
 	// detect the addr file, and fire the SIGTERM, as close to the instant
 	// publishAddrFile's os.Rename lands as this process can manage — a
 	// looser poll would let the daemon's remaining startup work finish
 	// before the signal is even sent, which would prove nothing about the
 	// window this test exists to close.
-	deadline := time.Now().Add(15 * time.Second)
-	for {
-		if b, err := os.ReadFile(addrPath); err == nil && strings.TrimSpace(string(b)) != "" {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("daemon never wrote addr file %s within 15s", addrPath)
-		}
-		time.Sleep(100 * time.Microsecond)
-	}
+	waitForAddrFileTight(t, addrPath, time.Now().Add(15*time.Second))
 	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatalf("send SIGTERM: %v", err)
 	}
