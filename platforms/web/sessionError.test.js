@@ -177,34 +177,29 @@ describe('--error is declared in every theme block (#1801)', () => {
     // a third copy of the constant cannot fail when the Swift side drifts,
     // which is the only scenario this test exists for (#1797's reasoning).
     //
-    // #1802 owns adding IrrHex.error. Until it lands the pairing is asserted
-    // against the red macOS ALREADY declares for its failure surfaces, so the
-    // two frontends cannot ship two different reds in the gap; once it lands,
-    // this asserts against IrrHex.error itself and goes red if #1802 picked a
-    // different hue. Both branches assert loudly that they found something to
-    // compare, so "could not look" can never pass as "matches".
-    //
-    // CHECKED AGAINST THE REAL SIBLING BRANCH, not assumed: #1802's PR #1810
-    // declares `static let error = "#FF3B30"`, which is both this file's dark
-    // --error and the existing IrrHex.wsDisconnected — so both branches of the
-    // fallback agree today and this test passes either side of that merge.
-    // (Verified by running these exact regexes over `git show
-    // pr1810:platforms/macos/Irrlicht/Theme/Tokens.swift`.)
-    //
-    // The LIGHT halves diverge by design and are not compared: this file
-    // overrides --error itself to #CC0C00, while #1810 keeps IrrHex.error as
-    // the base hue and re-tunes only the pill TEXT via
-    // Color.adaptive(light: "#C1121C", dark: "#FF7A70"). Both clear AA against
-    // their own platform's surface, which is a different colour on each.
-    const tokens = readMacosTokens()
-    const explicit = tokens.match(/static let error\s*=\s*"(#[0-9A-Fa-f]{6})"/)
-    const existingRed = tokens.match(/static let wsDisconnected\s*=\s*"(#[0-9A-Fa-f]{6})"/)
-    expect(existingRed, 'no IrrHex.wsDisconnected in platforms/macos/Irrlicht/Theme/Tokens.swift').not.toBeNull()
-    const want = (explicit ? explicit[1] : existingRed[1]).toLowerCase()
+    // STRICT: IrrHex.error must exist. #1802 landed it in PR #1810 as
+    // "#FF3B30" — the same value as this file's dark --error. While that was
+    // still in flight this test fell back to comparing against
+    // IrrHex.wsDisconnected (which holds the same red), so it would pass
+    // either side of that merge; the fallback is gone now that the real token
+    // is on main, because a fallback would mean a DELETED IrrHex.error
+    // silently downgraded this to checking a different constant instead of
+    // failing. The assertion is loud in both directions: not-null on the
+    // extraction, then equality.
+    const swiftDecl = readMacosTokens().match(/static let error\s*=\s*"(#[0-9A-Fa-f]{6})"/)
+    expect(swiftDecl, 'no IrrHex.error found in platforms/macos/Irrlicht/Theme/Tokens.swift').not.toBeNull()
+
     // The DARK value is the paired one: Color(hex:) is not appearance-aware,
     // so the Swift side carries one hex per token and adapts, where it does at
     // all, through Color.adaptive — the seam waitingPillText already uses.
-    expect(readToken(readCss(), DARK_BLOCK, 'error').toLowerCase()).toBe(want)
+    //
+    // The LIGHT halves diverge BY DESIGN and are deliberately not compared.
+    // This file overrides --error itself to #CC0C00; #1810 keeps IrrHex.error
+    // as the base hue and re-tunes only the pill TEXT via
+    // Color.adaptive(light: "#C1121C", dark: "#FF7A70"). Both clear AA against
+    // their own platform's surface, which is a different colour on each — the
+    // web composites over #ffffff, the macOS pill over its own measured wash.
+    expect(readToken(readCss(), DARK_BLOCK, 'error').toLowerCase()).toBe(swiftDecl[1].toLowerCase())
   })
 })
 
