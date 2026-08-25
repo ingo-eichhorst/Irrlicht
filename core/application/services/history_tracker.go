@@ -87,13 +87,13 @@ func validGranularity(sec int) bool {
 //     the encoding widens. A build OLDER than this fix reads such a bucket as
 //     ready/green, exactly as it already did with the value it wrote itself,
 //     so nothing regresses for it.
-//   - Aggregation is unaffected: bucketNoData is negative, so an unencodable
-//     transition loses upgrade()'s max-merge and the activity already recorded
-//     in the open bucket survives (#1805's documented interim behaviour — the
-//     strip shows what the session was doing, not that it errored). Making it
-//     WIN the merge would need the clients to accept a downgrade, which their
-//     priority-based merge cannot express — i.e. a client change, which is
-//     precisely what this fix is scoped to avoid.
+//   - Aggregation is unaffected — the activity already recorded in the open
+//     bucket survives, which is #1805's documented interim behaviour ("the
+//     strip shows what the session was doing, not that it errored"). See
+//     upgrade()'s merge comment for the mechanism. Making an unencodable state
+//     WIN that merge instead would need the clients to accept a downgrade,
+//     which their priority-based merge cannot express — i.e. a client change,
+//     which is precisely what this fix is scoped to avoid.
 //   - WHAT A USER SEES, stated because it is a real change and the only
 //     alternatives are lies: that carry-forward protection covers the single
 //     open bucket, not the strip. tick() seals each new bucket from lastState,
@@ -121,6 +121,13 @@ func statePriority(s string) int {
 
 // wireCode maps an in-memory bucket priority onto the 2-bit code clients
 // decode, so nothing outside this file ever sees the negative sentinel.
+//
+// A sign test rather than `== bucketNoData` on purpose: the wire contract is
+// "0..3 and nothing else", so any negative belongs on the no-data code,
+// including one a later sentinel might add. That is the whole invariant —
+// TestHistoryTracker_NoNegativePriorityReachesTheWire pins it end to end,
+// because PushMessage.Buckets/.Priority are plain int8 and neither the hub nor
+// json.Marshal would object to a -1 going out.
 func wireCode(p int8) int8 {
 	if p < 0 {
 		return statePriorityNoData
@@ -165,7 +172,14 @@ func (rb *ringBuffer) setBucket(i int, state string) {
 		rb.unencodable[i] = state
 		return
 	}
-	delete(rb.unencodable, i) // no-op on a nil map
+	// Guarded rather than unconditional: this is the common path (every
+	// encodable tick, for every session, every second), and `delete` on a nil
+	// map is a real out-of-line runtime call — ~1.0 ns/op unguarded vs
+	// ~0.25 ns/op behind this len check (measured, go test -bench, go1.25
+	// darwin/arm64), which is most of the per-tick cost this field added.
+	if len(rb.unencodable) > 0 {
+		delete(rb.unencodable, i)
+	}
 }
 
 func (rb *ringBuffer) current() int {
@@ -183,14 +197,16 @@ func (rb *ringBuffer) upgrade(newState string) {
 		rb.size = 1
 	} else {
 		cur := rb.current()
-		// An unencodable state carries bucketNoData, which is negative and so
-		// never wins the strict comparison — the open bucket keeps the activity
-		// it observed. The one exception is a bucket holding no activity
-		// either: recording the verbatim string there overwrites nothing and is
-		// what stops a live `error` from being dropped purely because of which
-		// tick phase it arrived in (#1807). Among successive unencodable states
-		// in one bucket the last one wins, matching "most recent state seen".
-		if p > rb.buckets[cur] || (p == bucketNoData && rb.buckets[cur] == bucketNoData) {
+		// `>=`, not `>`, and the difference is load-bearing (#1807). An
+		// unencodable state carries bucketNoData, which is below every real
+		// priority, so it still cannot displace activity the bucket observed.
+		// What the equal case buys is bucketNoData meeting bucketNoData: the
+		// bucket holds nothing, so recording the verbatim string overwrites
+		// nothing, and a live `error` stops being dropped purely because of
+		// which tick phase it arrived in. A tie between two REAL priorities is
+		// a no-op write — each code maps to exactly one state name, so the
+		// value is the one already there.
+		if p >= rb.buckets[cur] {
 			rb.setBucket(cur, newState)
 		}
 	}
@@ -228,14 +244,17 @@ func (rb *ringBuffer) snapshot() []string {
 	for i := 0; i < rb.size; i++ {
 		idx := (start + i) % HistoryBucketCount
 		// A state this build cannot encode round-trips verbatim, so save()
-		// writes back what it read rather than a coerced value (#1807). The
-		// priority is re-checked rather than trusted: setBucket is the only
-		// writer that maintains both, so gating here means a future write
-		// straight to buckets[] degrades to a blank bucket instead of silently
-		// resurrecting a dead state string into a live one.
-		if s, ok := rb.unencodable[idx]; ok && rb.buckets[idx] == bucketNoData {
-			out[i] = s
-			continue
+		// writes back what it read rather than a coerced value (#1807). Only a
+		// no-data bucket can carry one, and asking that first is deliberate
+		// twice over: it gates on the priority rather than trusting the map, so
+		// a future write straight to buckets[] degrades to a blank bucket
+		// instead of resurrecting a dead state name into a live one — and it
+		// skips the map lookup entirely for every encodable bucket.
+		if rb.buckets[idx] == bucketNoData {
+			if s, ok := rb.unencodable[idx]; ok {
+				out[i] = s
+				continue
+			}
 		}
 		out[i] = priorityToState(rb.buckets[idx])
 	}
@@ -452,15 +471,16 @@ func (h *HistoryTracker) OnTransition(sessionID, newState string, _ time.Time) {
 
 	// An unencodable state produces no upgrade message. Both clients merge an
 	// upgrade by priority and no-data is their lowest, so such a message could
-	// only ever be discarded — and the ring above did not change either, for
+	// only ever be discarded — and the ring above kept whatever it held, for
 	// the same reason (see upgrade()). Sending nothing keeps client and server
 	// in step without putting a value on the wire that means "downgrade this
 	// bucket", which the 2-bit contract has no way to say (#1807).
-	if emit != nil && statePriority(newState) != bucketNoData {
+	p := statePriority(newState)
+	if emit != nil && p != bucketNoData {
 		emit(HistoryEvent{
 			Kind:      HistoryEventUpgrade,
 			SessionID: sessionID,
-			Priority:  int8(statePriority(newState)),
+			Priority:  int8(p),
 		})
 	}
 }

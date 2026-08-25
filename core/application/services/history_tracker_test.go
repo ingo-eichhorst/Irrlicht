@@ -774,6 +774,49 @@ func TestHistoryTracker_UnencodableSurvivesOntoABlankOpenBucket(t *testing.T) {
 	assertWireBucketsNoData(t, ht, sid, HistoryBucketCount-1)
 }
 
+// TestHistoryTracker_NoNegativePriorityReachesTheWire pins the one invariant
+// nothing downstream re-checks: PushMessage.Buckets/.Priority are plain int8
+// and historyEventBroadcaster copies them field-for-field into json.Marshal,
+// so a leaked bucketNoData (-1) would serialize as literal -1 to clients that
+// expect a 2-bit code. wireCode() in tick() and OnTransition's encodability
+// gate are the only two things standing between the sentinel and the socket;
+// break either and this goes red.
+func TestHistoryTracker_NoNegativePriorityReachesTheWire(t *testing.T) {
+	ht := NewHistoryTracker()
+	var events []HistoryEvent
+	ht.SetEmitFunc(func(ev HistoryEvent) { events = append(events, ev) })
+
+	// A workload mixing encodable and unencodable states across every ring.
+	states := []string{"working", "error", "waiting", "quarantined", "ready", ""}
+	for i := 0; i < 120; i++ {
+		ht.OnTransition("mixed", states[i%len(states)], epoch)
+		ht.tick()
+	}
+
+	sawTick, sawUpgrade := 0, 0
+	for _, ev := range events {
+		switch ev.Kind {
+		case HistoryEventTick:
+			for sid, p := range ev.Buckets {
+				sawTick++
+				if p < 0 || p > statePriorityNoData {
+					t.Fatalf("tick bucket for %q = %d, outside the 2-bit contract 0..%d", sid, p, statePriorityNoData)
+				}
+			}
+		case HistoryEventUpgrade:
+			sawUpgrade++
+			if ev.Priority < 0 || ev.Priority > statePriorityWaiting {
+				t.Fatalf("upgrade priority = %d, outside 0..%d", ev.Priority, statePriorityWaiting)
+			}
+		case HistoryEventSnapshot:
+			// carries base64, already masked to 2 bits by packPriorities
+		}
+	}
+	if sawTick == 0 || sawUpgrade == 0 {
+		t.Fatalf("observed %d tick bucket(s) and %d upgrade(s) — the assertions above never ran", sawTick, sawUpgrade)
+	}
+}
+
 // TestHistoryTracker_UnencodableDoesNotClobberObservedActivity is a GUARD this
 // change adds, not a defect test: it passes by construction both before and
 // after the fix. It pins the aggregation half of #1807's decision — an
