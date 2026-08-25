@@ -406,3 +406,60 @@ describe('the web "is active" partition (#1801)', () => {
     expect(body[0]).toMatch(/IsRetrying/)
   })
 })
+
+describe('the wire contract the renderer reads (#1801)', () => {
+  // #1802's PR #1810 had a MERGE BLOCKER of exactly this shape: its Swift
+  // decoded a top-level `error` key that the daemon does not emit, so it would
+  // have rendered a fallback string forever while looking like working code —
+  // every hand-written test fixture agreed with the decoder, because the same
+  // author wrote both.
+  //
+  // These read the REAL Go struct tags instead. A fixture cannot disagree with
+  // itself; the daemon's source can.
+  const goSrc = (...parts) => readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'core', 'domain', 'session', ...parts),
+    'utf8',
+  )
+
+  test('the error hangs off metrics.session_error, not off the session root', () => {
+    const metrics = goSrc('metrics.go')
+    const decl = metrics.match(/SessionError \*SessionError\s+`json:"([^"]+)"`/)
+    expect(decl, 'SessionError field not found in core/domain/session/metrics.go').not.toBeNull()
+    const [key, ...opts] = decl[1].split(',')
+    expect(key).toBe('session_error')
+    // omitempty is what makes "healthy" and "old daemon" the same payload, and
+    // is why the renderer must treat an absent key as healthy rather than as a
+    // parse failure.
+    expect(opts).toContain('omitempty')
+
+    // And it is a field of SessionMetrics — the struct the client reaches
+    // through `agent.metrics` — not of SessionState.
+    const metricsStruct = metrics.match(/type SessionMetrics struct \{[\s\S]*?\n\}/)
+    expect(metricsStruct, 'SessionMetrics struct not found').not.toBeNull()
+    expect(metricsStruct[0]).toContain('SessionError *SessionError')
+  })
+
+  test('every key the renderer reads is one the daemon actually emits', () => {
+    const src = goSrc('session_error.go')
+    // The tags SessionError declares, plus the one its custom marshaller owns.
+    const declared = new Set([...src.matchAll(/`json:"([a-z_]+)[,"]/g)].map(m => m[1]))
+    expect(declared.size, 'no json tags parsed out of session_error.go — the regex has gone stale').toBeGreaterThan(4)
+
+    // Exactly the keys sessionErrorText touches.
+    for (const key of ['phase', 'class', 'message', 'attempt', 'max_attempts', 'retry_in_ms']) {
+      expect(declared.has(key), `the renderer reads "${key}" but the daemon does not emit it`).toBe(true)
+    }
+  })
+
+  test('the phase values the renderer branches on are the ones Go declares', () => {
+    // sessionErrorText and hasWorkInFlight both compare phase against the
+    // string 'retrying'; a renamed constant would silently stop matching and
+    // every retrying session would render as terminal.
+    const src = goSrc('session_error.go')
+    expect(src).toMatch(/ErrorPhaseRetrying\s+ErrorPhase = "retrying"/)
+    expect(src).toMatch(/ErrorPhaseTerminal\s+ErrorPhase = "terminal"/)
+    // The unknown phase is the empty string, which is why hasWorkInFlight
+    // cannot treat "no phase" as retrying.
+    expect(src).toMatch(/ErrorPhaseUnknown\s+ErrorPhase = ""/)
+  })
+})
