@@ -294,6 +294,27 @@ func (a *Adapter) IngestTaskSummary(transcriptPath, text string, observedAt int6
 	lt.mu.Unlock()
 }
 
+// ClearSessionError implements ports/outbound.MetricsCollector. Mirrors
+// IngestRateLimit: the Stop hook's authoritative turn boundary retires the
+// session's sticky error when a tailer exists; otherwise no-op. A missing
+// tailer is the correct no-op here rather than a dropped signal — with no
+// tailer there is no sticky error to clear, and the next ComputeMetrics
+// rebuilds from the transcript.
+func (a *Adapter) ClearSessionError(transcriptPath string) {
+	if transcriptPath == "" {
+		return
+	}
+	a.mu.Lock()
+	lt, ok := a.tailers[transcriptPath]
+	a.mu.Unlock()
+	if !ok {
+		return
+	}
+	lt.mu.Lock()
+	lt.t.ClearSessionError()
+	lt.mu.Unlock()
+}
+
 // PurgeDeadBackgroundProcs implements ports/outbound.MetricsCollector. The
 // session detector calls it when its lsof liveness probe finds no live writer
 // on any of the probed output files: those processes died without a

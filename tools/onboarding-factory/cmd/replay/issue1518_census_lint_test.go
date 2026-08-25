@@ -111,30 +111,16 @@ type censusFigureExemption struct {
 // real figure quoted in a table, and reasons a reader can verify are cheaper
 // than one rule they cannot.
 var coincidentalCensusFigures = []censusFigureExemption{
-	{
-		File:   "replay_sidecar.go",
-		Marker: "+ narrowing #329's guard (rejected)",
-		Reason: "the divergent column of a REJECTED draft in #1478's first " +
-			"calibration table. The prose above that table says its shipped row " +
-			"'will silently stop being' current the first time replay fidelity " +
-			"moves, and names censusOfTheCommittedCatalog as the live value. It " +
-			"coincides with Divergent.",
-	},
-	{
-		File:   "replay_sidecar.go",
-		Marker: "+ readBoundaryFor (shipped)",
-		Reason: "the divergent column of the SHIPPED row of that same first " +
-			"table — a snapshot taken on the day it was written, which the prose " +
-			"above it says in as many words. It coincides with Divergent.",
-	},
-	{
-		File:   "replay_sidecar.go",
-		Marker: "#1476 as shipped",
-		Reason: "the divergent column of the baseline row of #1478's SECOND " +
-			"calibration table. The block above it says the columns 'no longer " +
-			"equal the live gate's figures' and to read the table as a comparison " +
-			"between rows. It coincides with Divergent.",
-	},
+	// #1799 deleted three entries here, all of them replay_sidecar.go rows that
+	// collided with Divergent while it read 145 — the two rows of #1478's first
+	// calibration table and the baseline row of its second. Divergent moved to
+	// a different value when the first session-error producers landed, so those
+	// rows stopped colliding with anything and every one of their reasons
+	// stopped describing a real suppression. This check reported all three in
+	// the same run and told us to delete rather than keep them, which is the
+	// #1388 behaviour the paragraph below records, seen from the other
+	// direction: there a figure moved ONTO new rows, here it moved OFF old
+	// ones. The tables themselves are unchanged and still historical.
 	{
 		File:   "timing_drift.go",
 		Marker: "10-100ms",

@@ -345,6 +345,21 @@ func (d *SessionDetector) HandleStopHook(sessionID, transcriptPath, lastAssistan
 		WaitingCue:        waitingCue,
 	}, d.nowFn())
 
+	// A turn that completed retires the session's failure, and the tailer is
+	// the only layer that owns that sticky state (#1799). The hold above cannot
+	// do it: SignalTurnDone is consume-once, so the HookTurnDone it overlays
+	// suppresses the classifier's session_error rule for exactly one pass, and
+	// the pass after that reads the untouched error again — an error → ready →
+	// error pair in the UI and in the recorded trace. #1798 named this and
+	// deferred it here, to the first producer that could reach it.
+	//
+	// Nil-guarded the same way the background-process purge at
+	// session_detector_activity.go is: a detector constructed without a metrics
+	// collector has no tailer, and therefore no sticky error to retire.
+	if d.metrics != nil {
+		d.metrics.ClearSessionError(transcriptPath)
+	}
+
 	// classifyAndTransition overlays HookTurnDone onto the metrics before
 	// calling ClassifyState. The Stop hook fires at true turn end (after the
 	// transcript flush), so a synthetic activity event is what drives the

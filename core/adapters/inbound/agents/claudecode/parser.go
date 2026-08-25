@@ -87,6 +87,10 @@ func (p *Parser) ParseLine(raw map[string]interface{}) *tailer.ParsedEvent {
 
 	askUserQuestion := scanMessageContent(raw, ev)
 	applyAssistantText(raw, ev, eventType, askUserQuestion)
+	// The second of claudecode's two failure shapes (#1799): a terminal API
+	// error arrives as an ordinary assistant message, so it reaches here rather
+	// than handleSystemEvent. Gated on the flag's VALUE — see terminalAPIError.
+	ev.SessionError = terminalAPIError(raw)
 	return ev
 }
 
@@ -246,6 +250,13 @@ func handleSystemEvent(raw map[string]interface{}, ev *tailer.ParsedEvent) {
 				ev.AwaySummary = &tailer.AwaySummary{Text: text, ObservedAt: ev.Timestamp.Unix()}
 			}
 		}
+	}
+	// api_error keeps skipping — it is not a turn boundary and must not be
+	// promoted to one — but the failure it describes is read off it first
+	// (#1799). The tailer folds SessionError in applyMetadata, which runs on
+	// the skipped path too, which is the whole reason that fold lives there.
+	if subtype == systemSubtypeAPIError {
+		ev.SessionError = apiErrorFromSystemEvent(raw)
 	}
 	ev.Skip = true
 }

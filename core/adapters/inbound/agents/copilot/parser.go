@@ -24,6 +24,7 @@ const (
 	evPermRequested    = "permission.requested"
 	evPermCompleted    = "permission.completed"
 	evUsageCheckpoint  = "session.usage_checkpoint"
+	evSessionError     = "session.error"
 	evShutdown         = "session.shutdown"
 	evSubagentStarted  = "subagent.started"
 	evSubagentDone     = "subagent.completed"
@@ -142,6 +143,21 @@ var eventHandlers = map[string]eventHandler{
 
 	evUsageCheckpoint: (*Parser).parseUsage,
 	evShutdown:        (*Parser).parseUsage,
+
+	// A session-level failure (#1799). Skipped for the same reason every other
+	// lifecycle event in this table is — see the package doc's "Lifecycle and
+	// metrics events are NOT activity" — and the failure still lands, because
+	// the tailer folds ParsedEvent.SessionError in applyMetadata, which runs on
+	// the skipped path too (that is precisely why #1798 put it there).
+	//
+	// Skipping is what keeps the recorded trace honest. copilot writes
+	// assistant.turn_end ~6ms BEFORE this event, so the turn really did end;
+	// letting session.error become the session's LastEventType would flip
+	// is_agent_done to false in every state-transition snapshot and claim the
+	// agent was still mid-turn. The session still reads `error`, because the
+	// classifier's session_error rule sits ABOVE agent_done and fires on the
+	// error itself rather than on the tail's shape.
+	evSessionError: func(_ *Parser, d map[string]any, ev *tailer.ParsedEvent) { parseSessionError(d, ev) },
 
 	evSubagentStarted: func(p *Parser, d map[string]any, ev *tailer.ParsedEvent) { p.trackSubagent(d, true, ev) },
 	evSubagentDone:    func(p *Parser, d map[string]any, ev *tailer.ParsedEvent) { p.trackSubagent(d, false, ev) },
@@ -310,6 +326,60 @@ func parseToolComplete(data map[string]any, ev *tailer.ParsedEvent) {
 	if success, ok := data["success"].(bool); ok && !success {
 		ev.IsError = true
 	}
+}
+
+// parseSessionError maps copilot's `session.error` onto a session-level failure
+// (#1799). Two shapes are recorded, and they differ in whether statusCode
+// exists at all: errorType "rate_limit" carries 429, errorType "query" carries
+// no code — which is why HTTPStatus is a pointer and why num() (which returns 0
+// for an absent key) must not be used for it.
+//
+// PHASE STAYS UNKNOWN, deliberately. copilot's payload says nothing about
+// whether another attempt is coming: there is no retry counter, no phase field,
+// and copilot emits no per-attempt error event at all — its retry ladder is
+// invisible on disk. session.ErrorPhaseUnknown is documented as exactly this
+// case ("a copilot session.error with errorType 'query' is exactly this"), and
+// claiming "terminal" would mean deriving a verdict from the message prose.
+//
+// What IS observed, in both recordings, is that assistant.turn_end lands ~6ms
+// BEFORE this event and session.shutdown after it. That ordering is what makes
+// the error survive: the turn boundary finds nothing to clear, and shutdown
+// carries no boundary of its own. It is a property of these two recordings, not
+// a guarantee the payload states, so it informs the tests rather than the phase.
+//
+// Class is copilot's own errorType verbatim. session.SessionError.Class is
+// free-form precisely so an adapter can pass through the vocabulary its agent
+// already uses instead of inventing a mapping.
+//
+// IsError is not touched: that channel is a failed tool result, which is the
+// agent working normally.
+//
+// Skip=true with no EventType — see the table arm for why. A skipped event's
+// EventType is never applied to the session, so naming one here would be a
+// value no reader could act on.
+func parseSessionError(data map[string]any, ev *tailer.ParsedEvent) {
+	ev.Skip = true
+	ev.SessionError = &tailer.SessionError{
+		Phase:      tailer.ErrorPhaseUnknown,
+		Class:      str(data, "errorType"),
+		Message:    strings.TrimSpace(str(data, "message")),
+		HTTPStatus: optInt(data, "statusCode"),
+	}
+}
+
+// optInt reads a JSON number as *int, returning nil when the key is absent or
+// is not a number. The optional counterpart to num(), which zero-defaults —
+// see parseSessionError for why absence must not read as HTTP 0.
+func optInt(m map[string]any, key string) *int {
+	if m == nil {
+		return nil
+	}
+	f, ok := m[key].(float64)
+	if !ok {
+		return nil
+	}
+	v := int(f)
+	return &v
 }
 
 // parsePermissionRequested opens a permission prompt: the agent has stopped

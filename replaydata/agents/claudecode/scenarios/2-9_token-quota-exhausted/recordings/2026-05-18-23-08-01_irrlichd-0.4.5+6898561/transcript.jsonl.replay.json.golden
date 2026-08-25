@@ -10,7 +10,7 @@
   "summary": {
     "total_events": 10,
     "consumed_events": 10,
-    "total_transitions": 4,
+    "total_transitions": 5,
     "first_event_time": "2026-05-18T23:08:01.542307+02:00",
     "last_event_time": "2026-05-18T23:08:24.11175+02:00",
     "wall_clock_session_duration": 22569443000,
@@ -87,6 +87,20 @@
       "is_agent_done": false,
       "needs_user_attention": false,
       "waiting_for_user_input": false
+    },
+    {
+      "index": 4,
+      "event_index": 1,
+      "virtual_time": "2026-05-18T23:08:04.815208+02:00",
+      "cause": "event",
+      "prev_state": "working",
+      "new_state": "error",
+      "reason": "session error → error",
+      "last_event_type": "user",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
     }
   ],
   "sessions": [
@@ -111,15 +125,26 @@
   "extended_check": {
     "sidecar_path": "",
     "recorded_transition_count": 3,
-    "replayed_transition_count": 3,
+    "replayed_transition_count": 4,
     "ordered_matches": 3,
+    "ordered_mismatches": [
+      {
+        "index": 3,
+        "kind": "extra_in_replay",
+        "replayed": "working→error"
+      }
+    ],
     "recorded_unique_kinds": [
       "ready→working",
       "working→ready"
     ],
     "replayed_unique_kinds": [
       "ready→working",
+      "working→error",
       "working→ready"
+    ],
+    "extra_kinds": [
+      "working→error"
     ]
   }
 }

@@ -278,6 +278,8 @@ func (m *stubMetrics) IngestTaskEstimate(_ string, _ *session.TaskEstimate) {}
 
 func (m *stubMetrics) IngestTaskSummary(_, _ string, _ int64) {}
 
+func (m *stubMetrics) ClearSessionError(_ string) {}
+
 func (m *stubMetrics) PurgeDeadBackgroundProcs(_ string, _ []string) {}
 
 func (m *stubMetrics) PurgeDeadBackgroundPIDs(_ string, _ []string) {}

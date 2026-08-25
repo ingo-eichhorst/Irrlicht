@@ -211,6 +211,14 @@ type MetricsCollector interface {
 	// path. observedAt is the marker's unix-seconds timestamp. Same
 	// no-op-without-tailer semantics as IngestRateLimit.
 	IngestTaskSummary(transcriptPath, text string, observedAt int64)
+	// ClearSessionError drops the session's sticky session-level error
+	// because a hook delivered an authoritative turn boundary (#1799). Called
+	// by the detector's Stop-hook path: the classifier's session_error rule
+	// only SUPPRESSES itself for the single pass that consumed the hook's
+	// consume-once hold, so without clearing the tailer's own copy the
+	// session flickers error → ready → error. Same no-op-without-tailer
+	// semantics as IngestRateLimit.
+	ClearSessionError(transcriptPath string)
 	// PurgeDeadBackgroundProcs drops the session's tracked background
 	// processes whose output path is in outputs, after the detector's
 	// liveness probe verdicts them dead — they died without a

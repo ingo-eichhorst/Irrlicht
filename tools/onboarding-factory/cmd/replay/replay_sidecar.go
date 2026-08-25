@@ -975,6 +975,23 @@ func (r *sidecarReplayer) applyHookEvent(hookEv lifecycle.Event) {
 		return
 	}
 	r.signals.ApplyHook(replaySessionKey, effect, hookEv.Timestamp)
+	// A Stop hook retires the tailer's sticky session error, exactly as
+	// SessionDetector.HandleStopHook does in the daemon (#1799). Without it the
+	// harness would reproduce the error → ready → error flicker the daemon no
+	// longer has, and the extended check would score that divergence against
+	// the recording rather than against the bug.
+	//
+	// Both halves are needed and they retire different copies. ClearSessionError
+	// ends the sticky field, so every LATER pass stays clear; the metrics
+	// assignment below covers THIS pass, because a hook pass reads the cached
+	// r.lastMetrics rather than re-tailing. The daemon needs only the first
+	// because its hook dispatches a synthetic activity event and re-tails.
+	if effect.Signal == session.SignalTurnDone && !effect.Release {
+		r.tailer.ClearSessionError()
+		if r.lastMetrics != nil {
+			r.lastMetrics.SessionError = nil
+		}
+	}
 	if r.lastMetrics == nil {
 		return
 	}

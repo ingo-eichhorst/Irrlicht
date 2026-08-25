@@ -405,6 +405,8 @@ func (m *mockMetrics) IngestTaskEstimate(path string, est *session.TaskEstimate)
 
 func (m *mockMetrics) IngestTaskSummary(path, text string, observedAt int64) {}
 
+func (m *mockMetrics) ClearSessionError(path string) {}
+
 func (m *mockMetrics) PurgeDeadBackgroundProcs(path string, _ []string) {
 	m.mu.Lock()
 	m.purged = append(m.purged, path)
@@ -443,6 +445,11 @@ type funcMetrics struct {
 	purged      []string            // any purge call (path), kind-agnostic
 	purgedProcs map[string][]string // path → dead output paths handed to PurgeDeadBackgroundProcs
 	purgedPIDs  map[string][]string // path → dead PIDs handed to PurgeDeadBackgroundPIDs
+
+	// errCleared logs every ClearSessionError call by transcript path, so a
+	// test can assert the Stop hook actually retired the tailer's sticky error
+	// rather than only holding the consume-once turn-done signal (#1799).
+	errCleared []string
 }
 
 func (m *funcMetrics) ComputeMetrics(path, adapter string) (*session.SessionMetrics, error) {
@@ -463,6 +470,19 @@ func (m *funcMetrics) IngestRateLimit(path string, snap *session.RateLimitSnapsh
 func (m *funcMetrics) IngestTaskEstimate(path string, est *session.TaskEstimate) {}
 
 func (m *funcMetrics) IngestTaskSummary(path, text string, observedAt int64) {}
+
+func (m *funcMetrics) ClearSessionError(path string) {
+	m.purgeMu.Lock()
+	m.errCleared = append(m.errCleared, path)
+	m.purgeMu.Unlock()
+}
+
+// errClearedSnapshot returns a race-free copy of the ClearSessionError call log.
+func (m *funcMetrics) errClearedSnapshot() []string {
+	m.purgeMu.Lock()
+	defer m.purgeMu.Unlock()
+	return append([]string(nil), m.errCleared...)
+}
 
 func (m *funcMetrics) PurgeDeadBackgroundProcs(path string, outputs []string) {
 	m.purgeMu.Lock()
