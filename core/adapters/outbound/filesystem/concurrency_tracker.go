@@ -377,12 +377,7 @@ func bucketTransitionCounts(events []int64, start, bucketSeconds int64, n int) [
 // routing below cannot disagree about which states have a duration — a
 // disagreement would be a nil-map write in appendClampedStateIntervals.
 func collectScopedStateIntervals(timelines map[string]*sessionTimeline, q outbound.SeriesQuery, start, end int64) (byState map[string]map[string][]interval, instants map[string]map[string][]int64, current float64) {
-	byState = map[string]map[string][]interval{}
-	for _, s := range session.CanonicalStates() {
-		if concurrencyActive(s) {
-			byState[s] = map[string][]interval{}
-		}
-	}
+	byState = newDurationBuckets()
 	instants = map[string]map[string][]int64{}
 	for sid, tl := range timelines {
 		if !concurrencyScopeMatches(q, sid, tl.project) {
@@ -396,6 +391,24 @@ func collectScopedStateIntervals(timelines map[string]*sessionTimeline, q outbou
 		appendInstantsInWindow(instants, project, instantAt, start, end)
 	}
 	return byState, instants, current
+}
+
+// newDurationBuckets seeds one project map per state that HAS a duration —
+// outbound.NewStateBuckets' counterpart for the interval side.
+//
+// Derived by filtering the vocabulary through concurrencyActive rather than
+// listing working/waiting, so this and stateReconstruction's routing cannot
+// disagree about which states get intervals. A disagreement would surface as a
+// nil-map write in appendClampedStateIntervals rather than a wrong number,
+// which is the failure mode worth engineering for here.
+func newDurationBuckets() map[string]map[string][]interval {
+	out := map[string]map[string][]interval{}
+	for _, s := range session.CanonicalStates() {
+		if concurrencyActive(s) {
+			out[s] = map[string][]interval{}
+		}
+	}
+	return out
 }
 
 // appendInstantsInWindow folds one session's transition timestamps into the

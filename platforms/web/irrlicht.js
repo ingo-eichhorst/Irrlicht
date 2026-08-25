@@ -1765,18 +1765,26 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       head.textContent = summary.text;
       el.appendChild(head);
 
+      el.appendChild(daemonErrorList(summary.items));
+      el.hidden = false;
+    }
+
+    // daemonErrorList builds the <ul> of faults.
+    //
+    // createElement + textContent throughout, never innerHTML: these strings
+    // carry config paths and an agent config's own error text, from files this
+    // process does not control. The message is inserted verbatim because it is
+    // composed daemon-side precisely so the two frontends cannot word the same
+    // fault differently.
+    function daemonErrorList(items) {
       const list = document.createElement('ul');
       list.className = 'daemon-error-list';
-      for (const e of summary.items) {
+      for (const e of items) {
         const li = document.createElement('li');
         const scope = document.createElement('span');
         scope.className = 'daemon-error-scope';
         scope.textContent = (e.scope || '') + ': ';
         li.appendChild(scope);
-        // The message verbatim — it is composed daemon-side precisely so the
-        // two frontends cannot word the same fault differently. createElement
-        // + textContent throughout rather than innerHTML: these strings carry
-        // config paths and an agent config's own error text.
         li.appendChild(document.createTextNode(e.message || ''));
         if (e.detail) {
           const detail = document.createElement('div');
@@ -1785,8 +1793,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
         }
         list.appendChild(li);
       }
-      el.appendChild(list);
-      el.hidden = false;
+      return list;
     }
 
     function ingestInitialSessions(resp) {
