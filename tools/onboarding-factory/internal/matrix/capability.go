@@ -78,9 +78,21 @@ type Trait struct {
 // invented to silence a finding. The JSON says only which VALUE each adapter
 // takes for a trait named here.
 //
-// Coverage: these 32 traits cover, one-for-one, the 32 scenarios that have at
-// least one dead cell today. The other 14 scenarios have none and therefore no trait — the
-// model deliberately says nothing about a scenario nothing has ever failed.
+// Coverage: these traits cover, one-for-one, the scenarios that have at least
+// one dead cell today. The remaining scenarios have none and therefore no
+// trait — the model deliberately says nothing about a scenario nothing has ever
+// failed. The split is deliberately NOT written down here; print it with:
+//
+//	go test ./tools/onboarding-factory/internal/matrix/ \
+//	  -run TestTraitCoverageCensus -v -count=1
+//
+// The previous spelling of this comment carried the counts ("32 traits ... 32
+// scenarios ... other 14") and was wrong the moment a scenario landed. The
+// spelling after that named the command AND restated the numbers, which
+// reintroduced the drift in the same sentence that described it. A live figure
+// belongs in output, not in a comment — see cmd/replay's
+// TestNoCommentRestatesALiveCensusFigure for the same rule enforced
+// mechanically.
 var Traits = []Trait{
 	{"cloud_agent", "dispatches a run onto remote infrastructure with no local PID", "cloud-background-agent"},
 	{"session_resume", "resumes a prior session under a stable session id", "session-resume"},
@@ -90,6 +102,35 @@ var Traits = []Trait{
 	{"permission_classifier", "auto-classifies a tool call against a permission policy", "auto-classified-permission"},
 	{"context_compaction", "compacts its own context window", "context-compaction"},
 	{"error_epilogue", "writes a terminal record when a turn dies of an error", "turn-aborted-by-error"},
+	// The four #1803 traits below are all error-shaped, and none of them is
+	// folded into error_epilogue — deliberately, under this file's own rule
+	// that a trait may span scenarios only while those scenarios are
+	// guaranteed to move together for EVERY adapter. Measured, they do not:
+	//
+	//   overload_retry vs error_epilogue — a retry-in-progress record and a
+	//   terminal epilogue are different bytes. Exactly ONE adapter writes the
+	//   first (claudecode's system/subtype:"api_error", which is the only site
+	//   in the tree that can produce ErrorPhaseRetrying — the gate is
+	//   claudecode/sessionerror.go's `Attempt != nil || RetryIn != nil`), while
+	//   five more write the second. A shared trait would have to be wrong for
+	//   one group or the other.
+	//
+	//   auth_refusal vs overload_* — an overload is retryable and a rejected
+	//   credential is not, and the adapters that swallow retryable statuses
+	//   into invisibility (gemini-cli's retryWithBackoff on 429/500/503,
+	//   opencode's AI-SDK on 429 — both documented in their mocks' headers)
+	//   still surface a non-retryable refusal. Same adapter, opposite value.
+	//
+	//   process_crash vs all three — a process death is not transcript
+	//   evidence at all. It is TierProcess, produced by the daemon's
+	//   exit-edge (retainAsProcessDeath), and an adapter that parses no error
+	//   line whatsoever can still have its PID observed dying mid-turn. A
+	//   trait keyed on transcript parsing would declare those adapters dead
+	//   for a scenario they actually pass.
+	{"overload_retry", "records that a failed provider call has another attempt pending", "provider-overloaded-retry"},
+	{"overload_terminal", "records a provider overload it never recovered from", "provider-overloaded-terminal"},
+	{"auth_refusal", "records a rejected-credentials refusal no retry can clear", "auth-credentials-rejected"},
+	{"process_crash", "leaves a turn unfinished when the agent process dies under a bound PID", "agent-process-crash-midturn"},
 	{"file_transcript", "writes a line-oriented transcript file (vs a store)", "oversized-transcript-line"},
 	{"structured_question", "asks the user a structured, blocking question", "user-blocking-question"},
 	{"plan_mode", "holds a plan-approval gate the user must clear", "user-blocking-plan-mode-approval"},

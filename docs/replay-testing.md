@@ -222,8 +222,8 @@ the `replaydata/agents/adapters.json` maturity + capability model.
   the traits it lacks. `of validate` gates three things over it, and all three
   are scoped to a catalog that actually carries the core set, so a partial
   fixture tree is unaffected:
-  - **The core twelve.** Only 12 of the 46 scenarios gate a promotion; the
-    other 34 are optional and block nothing. The set, and one line of
+  - **The core twelve.** Only 12 of the 50 scenarios gate a promotion; the
+    other 38 are optional and block nothing. The set, and one line of
     justification per scenario, is in `internal/matrix/vocabulary.go` — in code
     rather than in data, so weakening it is a reviewable diff. `alpha` requires
     four state scenarios reachable from hooks alone, `beta` all nine

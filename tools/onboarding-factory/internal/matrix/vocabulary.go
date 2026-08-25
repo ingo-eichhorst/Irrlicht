@@ -257,14 +257,14 @@ func IsValidCapabilityState(v string) bool {
 // ---------------------------------------------------------------------------
 
 // CoreStateScenarios and CoreMetricsScenarios together are the CORE TWELVE:
-// the only scenarios that gate a maturity promotion. The other 34 are
+// the only scenarios that gate a maturity promotion. The other 38 are
 // optional — they are still assessed, still recorded, still rendered, and
 // still gated for schema validity by `of validate`; they simply do not hold an
 // adapter back from a tier.
 //
 // WHY A CORE SET EXISTS AT ALL. 84% of an onboarding PR is recorded fixtures:
 // copilot's #1332 was 14,426 additions of which 12,130 were replaydata/ and
-// only 2,218 were adapter code. Requiring all 46 before an adapter counts as
+// only 2,218 were adapter code. Requiring all 50 before an adapter counts as
 // anything makes the recording cost the gate on adoption, and the recording
 // cost is the one part of onboarding that does not get cheaper with practice.
 //

@@ -96,6 +96,14 @@ shard_has_assessment() {
 #   → the run-cell projection: scenario-level description/acceptance_criteria/process
 #     (from the catalog) plus the recipe's per-adapter fields (from metadata.json),
 #     flattened (the legacy CELL_JSON shape). Empty when the cell is absent.
+#
+#   THE FIELD LIST IS A GATE, not a convenience: a recipe key absent from it is
+#   invisible to run-cell.sh no matter what the recipe says, silently. That is
+#   exactly how `env`/`bare_mode` stayed inexpressible until #1803 and why two
+#   scenarios needed bespoke recorders instead — see lib/recipe-runtime.sh's
+#   header. Adding a recipe field means adding it HERE too.
+#   bare_mode/env/mock are validated by lib/recipe-runtime.sh, not here; this
+#   function only carries them across.
 shard_cell() {
   local coverage_id="$1" adapter="$2"
   local g cf; g="$(scenario_global "$coverage_id")"; cf="$(agent_cell_file "$coverage_id" "$adapter")"
@@ -105,7 +113,8 @@ shard_cell() {
     {description: $scen.description, acceptance_criteria: $scen.acceptance_criteria, process: $scen.process,
      applicable: $r.applicable, scope_note: $r.scope_note, notes: $r.notes,
      partner_adapter: $r.partner_adapter, prompt: $r.prompt, script: $r.script,
-     settings: $r.settings, timeout_seconds: $r.timeout_seconds}
+     settings: $r.settings, timeout_seconds: $r.timeout_seconds,
+     bare_mode: $r.bare_mode, env: $r.env, mock: $r.mock}
   ' 2>/dev/null
 }
 

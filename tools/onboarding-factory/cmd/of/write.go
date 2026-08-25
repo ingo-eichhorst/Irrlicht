@@ -438,16 +438,46 @@ func runAgentUpdate(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "of agent update: --id is required")
 		return exitUsage
 	}
-	metaPath := filepath.Join(*repoRoot, "replaydata", "agents", *id, "metadata.json")
-	b, err := os.ReadFile(metaPath)
-	if err != nil {
-		fmt.Fprintf(stderr, "of agent update: no agent %q at %s (use `of agent add` for a new column)\n", *id, metaPath)
-		return exitFail
+	// An update that changes nothing must not report success. With no mutating
+	// flag this printed `of agent update: <id> ok (...)` and returned 0 having
+	// written the file back byte-identically — so a caller that typo'd a flag
+	// name, or a script whose variable came through empty, got a green "ok"
+	// for a no-op. That is the same failure this function's own comment below
+	// calls "the worse outcome" for --provider, arriving through the front
+	// door instead. --repo-root and --id are not mutations; every other flag
+	// is.
+	if !agentUpdateHasMutation(fs, addPrereqs, caps) {
+		fmt.Fprintf(stderr, "of agent update: %s — nothing to do; pass at least one of "+
+			"--name, --provider, --prereq, --add-prereq, --min-version, --maturity, --capability\n", *id)
+		return exitUsage
 	}
-	var am agentMeta
-	if err := json.Unmarshal(b, &am); err != nil {
-		fmt.Fprintf(stderr, "of agent update: %s is not valid agent metadata: %v\n", metaPath, err)
-		return exitFail
+	// TWO FILES, TWO REGISTRIES — and this verb writes to both (#1803).
+	//
+	//	replaydata/agents/<id>/metadata.json  descriptive: name, provider, prereqs
+	//	replaydata/agents/adapters.json       the capability model: maturity, traits
+	//
+	// It used to require the FIRST unconditionally, including for an update
+	// that only touches the second. Five of the eleven onboarded columns have
+	// no metadata.json at all — they predate `of agent add` — so declaring a
+	// capability for aider, claudecode, codex, opencode or pi was impossible
+	// through the CLI, and the only remedy was the hand-edit of replaydata/
+	// this tool exists to prevent. Reproduce the five with:
+	//
+	//	for a in $(jq -r '.meta.min_versions|keys[]' replaydata/agents/scenarios.json); do
+	//	  [ -f "replaydata/agents/$a/metadata.json" ] || echo "$a"; done
+	//
+	// So the requirement is now per-flag. The authoritative answer to "is this
+	// a real column" is scenarios.json's meta.min_versions, which is what
+	// `of validate` checks the capability model against; metadata.json is
+	// optional descriptive data and is required only by the flags that write
+	// into it. Refusing those rather than silently dropping them is the point:
+	// a --provider that reported ok and changed nothing is the worse outcome.
+	descriptive := flagPassed(fs, "name") || flagPassed(fs, "provider") ||
+		flagPassed(fs, "prereq") || len(addPrereqs) > 0
+	metaPath := agentMetaPath(*repoRoot, *id)
+	am, haveMeta, rc := loadAgentMetaForUpdate(*repoRoot, *id, descriptive, stderr)
+	if rc != exitOK {
+		return rc
 	}
 	if flagPassed(fs, "name") {
 		am.Name = *name
@@ -474,13 +504,42 @@ func runAgentUpdate(args []string, stdout, stderr io.Writer) int {
 			return exitUsage
 		}
 	}
-	am.ID = *id // the path is authoritative; a mismatched id in the file is a bug
-	if err := writeJSONFileAtomic(metaPath, am); err != nil {
-		fmt.Fprintf(stderr, "of agent update: write: %v\n", err)
-		return exitUsage
+	// Only write the descriptive file when there is descriptive data to write.
+	// Creating one from an empty struct would stamp a column with an empty
+	// name and provider, which `of validate` and the viewer both read as a
+	// real declaration — a fabricated fact is worse than a missing one.
+	if haveMeta || descriptive {
+		am.ID = *id // the path is authoritative; a mismatched id in the file is a bug
+		if err := writeJSONFileAtomic(metaPath, am); err != nil {
+			fmt.Fprintf(stderr, "of agent update: write: %v\n", err)
+			return exitUsage
+		}
+		fmt.Fprintf(stdout, "of agent update: %s ok (provider=%s, prereqs=%d)\n", *id, am.Provider, len(am.Prerequisites))
+		return exitOK
 	}
-	fmt.Fprintf(stdout, "of agent update: %s ok (provider=%s, prereqs=%d)\n", *id, am.Provider, len(am.Prerequisites))
+	fmt.Fprintf(stdout, "of agent update: %s ok (capability model only; no agent metadata.json)\n", *id)
 	return exitOK
+}
+
+// agentColumnRegistered reports whether id is an onboarded column, i.e. carries
+// a meta.min_versions entry in the catalog. That map is the authoritative
+// column registry — `of validate`'s capability gate checks the model's adapter
+// set against it in both directions (validate_maturity.go's "adapter %q is not
+// an onboarded column" / "has no entry") — so it, not the optional per-agent
+// metadata.json, is what a capability-only update must be gated on.
+func agentColumnRegistered(repoRoot, id string) bool {
+	cat, err := loadWriteCatalog(repoRoot)
+	if err != nil {
+		return false
+	}
+	var meta struct {
+		MinVersions map[string]string `json:"min_versions"`
+	}
+	if err := json.Unmarshal(cat.Meta, &meta); err != nil {
+		return false
+	}
+	_, ok := meta.MinVersions[id]
+	return ok
 }
 
 // registerAgentColumn adds id→minVer to scenarios.json meta.min_versions,
@@ -728,4 +787,63 @@ func marshalNoEscape(v any) ([]byte, error) {
 		return nil, err
 	}
 	return bytes.TrimRight(buf.Bytes(), "\n"), nil // Encode appends a trailing newline
+}
+
+// agentUpdateHasMutation reports whether `of agent update` was given at least
+// one flag that actually changes something. Split out of runAgentUpdate rather
+// than inlined: that function already carries the two-registry branch, and both
+// CodeScene and Sonar (go:S3776, cognitive complexity 24 > 15) flagged it once
+// this arm was added.
+//
+// `caps` and `addPrereqs` are checked by LENGTH, not via flagPassed: both are
+// flag.Value accumulators, so "passed but empty" is not a state they can be in
+// — and flagPassed would report true for a `--capability` that failed to
+// parse into an entry.
+func agentUpdateHasMutation(fs *flag.FlagSet, addPrereqs prereqFlag, caps capabilityFlag) bool {
+	for _, name := range []string{"name", "provider", "prereq", "min-version", "maturity"} {
+		if flagPassed(fs, name) {
+			return true
+		}
+	}
+	return len(addPrereqs) > 0 || len(caps) > 0
+}
+
+// loadAgentMetaForUpdate resolves the per-agent metadata.json for an update,
+// applying the per-flag requirement described at the call site: the file is
+// mandatory only when a descriptive flag needs somewhere to be written, and a
+// capability-only update is gated on the column being registered instead.
+//
+// Split out of runAgentUpdate purely to keep it readable — Sonar (go:S3776)
+// and CodeScene both flagged that function once the two-registry branch landed
+// on top of what was already there.
+//
+// Returns (meta, haveMeta, exitOK) on success; the caller returns the code on
+// anything else.
+func loadAgentMetaForUpdate(repoRoot, id string, descriptive bool, stderr io.Writer) (agentMeta, bool, int) {
+	var am agentMeta
+	metaPath := agentMetaPath(repoRoot, id)
+	b, readErr := os.ReadFile(metaPath)
+	if readErr != nil {
+		if descriptive {
+			fmt.Fprintf(stderr, "of agent update: no agent %q at %s — --name/--provider/--prereq have nowhere to be written (use `of agent add` for a new column)\n", id, metaPath)
+			return am, false, exitFail
+		}
+		if !agentColumnRegistered(repoRoot, id) {
+			fmt.Fprintf(stderr, "of agent update: %q is not an onboarded column (see replaydata/agents/scenarios.json meta.min_versions; use `of agent add` for a new one)\n", id)
+			return am, false, exitFail
+		}
+		return am, false, exitOK
+	}
+	if err := json.Unmarshal(b, &am); err != nil {
+		fmt.Fprintf(stderr, "of agent update: %s is not valid agent metadata: %v\n", metaPath, err)
+		return am, false, exitFail
+	}
+	return am, true, exitOK
+}
+
+// agentMetaPath is the per-agent descriptive file. Derived in one place rather
+// than passed alongside the id it is built from — two parameters that must
+// always agree are one parameter.
+func agentMetaPath(repoRoot, id string) string {
+	return filepath.Join(repoRoot, "replaydata", "agents", id, "metadata.json")
 }

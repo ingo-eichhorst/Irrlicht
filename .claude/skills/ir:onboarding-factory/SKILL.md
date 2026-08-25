@@ -111,10 +111,10 @@ ports the missing step from the reference driver before it drives.
 
 ### Not every cell is worth a sweep (#1369)
 
-A sweep over all 46 scenarios is no longer the price of admission. Two things
+A sweep over all 50 scenarios is no longer the price of admission. Two things
 changed, and both are visible in `of status --summary`:
 
-- **12 of the 46 scenarios are core**; the other 34 are optional and block no
+- **12 of the 50 scenarios are core**; the other 38 are optional and block no
   maturity promotion. Prioritise the core set when onboarding a new agent —
   `of status --summary` prints each adapter's `core` column (settled / 12) and
   its claimed vs earned maturity. The set lives in

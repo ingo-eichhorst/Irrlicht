@@ -3,8 +3,12 @@
 #
 # Pipeline:
 #   recipe-lint  →  refuse a step type the driver lacks (#476, exit 3)
+#   recipe-runtime → refuse a bare_mode/env/mock block the driver cannot honor
+#                    (#1803, exit 5) — recording without it drives the REAL provider
 #   precheck.sh  →  spawn isolated irrlichd --record
+#                →  build + launch the cell's `mock` server, wait for it to LISTEN
 #                →  drive-<adapter>.sh (runs the agent under timeout)
+#                →  stop the mock, then assert the driver's env receipt
 #                →  SIGINT → 6s grace → SIGTERM → SIGKILL the daemon
 #                →  resolve transcript path from session UUID
 #                →  tools/curate-lifecycle-fixture.sh -d <staging>/replaydata/agents
@@ -66,6 +70,11 @@ source "$SCRIPT_DIR/lib/hook-install-wait.sh"
 # before.
 # shellcheck source=lib/unapplied-grants-check.sh
 source "$SCRIPT_DIR/lib/unapplied-grants-check.sh"
+# bare_mode / env / mock — the per-cell recipe's runtime block (#1803). Its
+# header says what each field is for and why every one of its checks is a hard
+# refusal rather than a warning.
+# shellcheck source=lib/recipe-runtime.sh
+source "$SCRIPT_DIR/lib/recipe-runtime.sh"
 
 RECORDER="off"
 ATTACH=0
@@ -179,6 +188,132 @@ if [[ -n "$SCRIPT_JSON" ]]; then
     exit 4
   fi
 fi
+
+# --- Recipe runtime block (#1803) ---------------------------------------
+# `bare_mode`, `env` and `mock` decide WHERE the agent's provider calls go. A
+# recipe that asks for a mock and silently doesn't get one records the agent
+# talking to the REAL provider — real credentials, real tokens, and a green
+# fixture that proves nothing about the error path it was written for. So this
+# is validated statically, BEFORE a daemon or a CLI exists, alongside the other
+# pre-record refusals. Exit 5 = runtime_gap, distinct from 3 (driver_gap) and
+# 4 (semantic_gap) so a caller routes it to the right fix.
+#
+# Resolved here rather than at the drive block below because the refusal is
+# about the driver's declared capabilities, and both branches need the path.
+if [[ -n "$SCRIPT_JSON" ]]; then
+  DRIVER="$REPO_ROOT/replaydata/agents/$ADAPTER/driver-interactive.sh"
+else
+  DRIVER="$REPO_ROOT/replaydata/agents/$ADAPTER/driver.sh"
+fi
+if ! recipe_runtime_mock_check "$CELL_JSON"; then
+  echo "runtime_gap: $ADAPTER/$SCENARIO declares a malformed .mock block — not recording." >&2
+  exit 5
+fi
+MOCK_ADDR="$(recipe_runtime_mock_addr "$CELL_JSON")"
+if ! DRIVER_ENV_LINES="$(recipe_runtime_env_lines "$CELL_JSON" "$MOCK_ADDR")"; then
+  echo "runtime_gap: $ADAPTER/$SCENARIO declares an .env block that cannot be rendered — not recording." >&2
+  exit 5
+fi
+RUNTIME_GAPS="$(recipe_runtime_driver_gaps "$CELL_JSON" "$DRIVER")"
+if [[ -n "$RUNTIME_GAPS" ]]; then
+  echo "runtime_gap: $ADAPTER/$SCENARIO needs runtime support its driver does not declare (DRIVE_SUPPORTS):" >&2
+  while IFS= read -r g; do [[ -n "$g" ]] && printf '  - %s\n' "$g" >&2; done <<<"$RUNTIME_GAPS"
+  echo "Teach $(basename "$DRIVER") to honor it and add it to DRIVE_SUPPORTS — recording without it would drive the REAL provider." >&2
+  exit 5
+fi
+
+MOCK_PID=""
+
+# start_recipe_mock — build and launch the cell's mock, wait for it to LISTEN,
+# and compose its teardown into the EXIT trap. No-op when the cell declares no
+# mock.
+#
+# `go build` into $STAGING rather than `go run`: `go run` puts a toolchain
+# process between this script and the server, so $! is the wrong pid to kill
+# and the server outlives the run. Both bespoke recorders build for the same
+# reason.
+start_recipe_mock() {
+  [[ -n "$MOCK_ADDR" ]] || return 0
+  local pkg bin port args_json
+  pkg="$(jq -r '.mock.package' <<<"$CELL_JSON")"
+  port="${MOCK_ADDR##*:}"
+  bin="$STAGING/mock-server"
+
+  # Refuse a port already in use rather than racing a stale mock from an
+  # earlier run: a leftover server on the same port answers the agent, and the
+  # recording would be of the WRONG mock's script.
+  if nc -z 127.0.0.1 "$port" 2>/dev/null; then
+    echo "runtime_gap: port $port is already in use — kill the stale mock before recording $ADAPTER/$SCENARIO" >&2
+    exit 5
+  fi
+
+  echo "mock: building $pkg"
+  ( cd "$REPO_ROOT" && go build -o "$bin" "$pkg" ) || {
+    echo "runtime_gap: could not build the cell's mock package $pkg" >&2
+    exit 5
+  }
+
+  local -a mock_args=(--addr "$MOCK_ADDR")
+  args_json="$(jq -r '(.mock.args // [])[]' <<<"$CELL_JSON")"
+  while IFS= read -r a; do [[ -n "$a" ]] && mock_args+=("$a"); done <<<"$args_json"
+
+  "$bin" "${mock_args[@]}" > "$STAGING/mock.log" 2>&1 &
+  MOCK_PID=$!
+  echo "mock: pid $MOCK_PID on $MOCK_ADDR (${mock_args[*]})"
+
+  # Compose, don't replace. lib/spawn-record-daemon.sh owns the EXIT trap and
+  # its header says callers never write `trap` themselves — but the mock needs
+  # a teardown too, and on the --attach path nothing arms a trap at all. So
+  # read back what IS armed and assert it is the one thing this composition
+  # knows how to preserve; a different value means the lib changed and this
+  # block is stale, which is a stop, not something to guess through.
+  local armed
+  armed="$(trap -p EXIT)"
+  case "$armed" in
+    "") trap stop_recipe_mock EXIT ;;
+    "trap -- 'stop_record_daemon' EXIT")
+      trap 'stop_recipe_mock; stop_record_daemon' EXIT ;;
+    *)
+      echo "runtime_gap: unexpected EXIT trap [$armed] — run-cell.sh's mock teardown does not know how to compose with it" >&2
+      kill "$MOCK_PID" 2>/dev/null || true
+      exit 5
+      ;;
+  esac
+
+  recipe_runtime_wait_listening 127.0.0.1 "$port" 15 || {
+    echo "runtime_gap: the cell's mock never came up; its log follows" >&2
+    cat "$STAGING/mock.log" >&2
+    exit 5
+  }
+  # Listening is not the same as alive: a server that binds and then dies on
+  # its first request would pass the probe above.
+  kill -0 "$MOCK_PID" 2>/dev/null || {
+    echo "runtime_gap: the cell's mock exited right after binding; its log follows" >&2
+    cat "$STAGING/mock.log" >&2
+    exit 5
+  }
+}
+
+# stop_recipe_mock — idempotent; safe to call from the trap and explicitly.
+stop_recipe_mock() {
+  [[ -n "${MOCK_PID:-}" ]] || return 0
+  kill "$MOCK_PID" 2>/dev/null || true
+  wait "$MOCK_PID" 2>/dev/null || true
+  MOCK_PID=""
+  return 0
+}
+
+# write_driver_env — hand the rendered runtime block to the driver as FILES
+# under $STAGING, the same path-not-blob convention settings.json uses (a
+# KEY=VALUE blob on argv would be back to shell-quoting fragility, and an
+# exported variable would not reach a tmux pane at all — the tmux server's
+# environment is not the calling shell's).
+write_driver_env() {
+  rm -f "$STAGING/driver-env" "$STAGING/driver-bare" "$STAGING/driver-env.applied"
+  [[ -n "$DRIVER_ENV_LINES" ]] && printf '%s\n' "$DRIVER_ENV_LINES" > "$STAGING/driver-env"
+  [[ "$(recipe_runtime_bare "$CELL_JSON")" == "true" ]] && echo 1 > "$STAGING/driver-bare"
+  return 0
+}
 
 # --- Precheck ------------------------------------------------------------
 # PRECHECK_JSON_OUT captures the CLI version precheck detects, so
@@ -405,17 +540,29 @@ fi
 # Cells with a `script` block route through the interactive driver (REPL +
 # step-script). Plain `prompt` cells use the headless driver.
 if [[ -n "$SCRIPT_JSON" ]]; then
-  DRIVER="$REPO_ROOT/replaydata/agents/$ADAPTER/driver-interactive.sh"
   DRIVER_INPUT="$SCRIPT_JSON"
 else
-  DRIVER="$REPO_ROOT/replaydata/agents/$ADAPTER/driver.sh"
   DRIVER_INPUT="$PROMPT"
 fi
 [[ -x "$DRIVER" ]] || { echo "driver missing: $DRIVER" >&2; exit 1; }
+
+# --- Recipe runtime: mock server + driver env (#1803) -------------------
+# Launched as late as possible — after the daemon is up and its hook installs
+# are graded — so the mock's lifetime is bounded by the drive itself. The
+# driver reads both files from $STAGING, the same path-not-blob convention
+# settings.json uses.
+start_recipe_mock
+write_driver_env
+
 set +e
 "$DRIVER" "$STAGING" "$UUID" "$TIMEOUT_S" "$STAGING/settings.json" "$DRIVER_INPUT"
 set -e
 DRIVER_REASON="$(cat "$STAGING/driver.exit-reason" 2>/dev/null || echo "unknown")"
+# The mock has nothing left to serve; stop it before the daemon so its log is
+# complete in staging when the recorder flushes.
+stop_recipe_mock
+recipe_runtime_assert_env_receipt "$STAGING" "$(basename "$DRIVER")" || exit 5
+recipe_runtime_assert_mock_used "$STAGING" "$CELL_JSON" "$MOCK_ADDR" || exit 5
 
 # Flush the daemon's recorder before we curate.
 #  - isolated: SIGINT and wait for graceful shutdown (flushes on Close).

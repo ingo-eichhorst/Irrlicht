@@ -449,3 +449,81 @@ func TestAgentUpdateWritesTheCapabilityModel(t *testing.T) {
 		}
 	}
 }
+
+// TestAgentUpdateDeclaresForAColumnWithNoAgentMetadata is #1803's defect test.
+//
+// The capability model lives in replaydata/agents/adapters.json, but `of agent
+// update` required — and then rewrote — replaydata/agents/<id>/metadata.json,
+// a different file describing a different thing. FIVE of the eleven onboarded
+// columns have no such file (they predate `of agent add`):
+//
+//	$ for a in $(jq -r '.meta.min_versions|keys[]' replaydata/agents/scenarios.json); do
+//	    [ -f "replaydata/agents/$a/metadata.json" ] || echo "$a"; done
+//	aider
+//	claudecode
+//	codex
+//	opencode
+//	pi
+//
+// so declaring a capability for any of them was impossible through the CLI and
+// the only remedy was the hand-edit of replaydata/ the factory exists to
+// prevent — the same anti-pattern TestAgentAddLeavesTheTreeValid names.
+//
+// The authoritative column registry is scenarios.json's meta.min_versions,
+// which is what `of validate` checks the model against; the per-agent
+// metadata.json is optional descriptive data and is now only required when a
+// flag that actually writes into it is passed (see the sibling below).
+func TestAgentUpdateDeclaresForAColumnWithNoAgentMetadata(t *testing.T) {
+	root := maturityRepo(t)
+	// claudecode is a registered column in the fixture's min_versions and has
+	// no replaydata/agents/claudecode/metadata.json — exactly the real shape.
+	if _, err := os.Stat(filepath.Join(root, "replaydata", "agents", "claudecode", "metadata.json")); !os.IsNotExist(err) {
+		t.Fatalf("precondition: the fixture column must have no agent metadata.json (stat err = %v)", err)
+	}
+
+	code, _, errs := runOf("agent", "update", "--repo-root", root,
+		"--id", "claudecode", "--capability", "interrupt=untraced")
+	if code != exitOK {
+		t.Fatalf("of agent update exit=%d stderr=%s", code, errs)
+	}
+	m, err := matrix.LoadRepo(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.Capabilities().CapabilityState("claudecode", "interrupt"); got != matrix.CapabilityUntraced {
+		t.Fatalf("capability state = %q, want %q", got, matrix.CapabilityUntraced)
+	}
+	// A capability-only update must not conjure descriptive metadata it was
+	// never given: an agent metadata.json with an empty name and provider is
+	// worse than none, because `of validate` and the viewer both read it as a
+	// real declaration.
+	if _, err := os.Stat(filepath.Join(root, "replaydata", "agents", "claudecode", "metadata.json")); !os.IsNotExist(err) {
+		t.Errorf("a capability-only update wrote an agent metadata.json it had no data for (stat err = %v)", err)
+	}
+	if msgs := validateFindings(t, root); len(msgs) != 0 {
+		t.Fatalf("declaring a capability must leave the tree valid, got:\n  %s", strings.Join(msgs, "\n  "))
+	}
+}
+
+// TestAgentUpdateStillRefusesDescriptiveFieldsWithNoAgentMetadata is the other
+// half of the loosening above, and the reason it is a loosening rather than a
+// removal: --name/--provider/--prereq have nowhere to go without the per-agent
+// file, so those must still refuse. Silently discarding them would be the
+// worse failure — the command would report ok and change nothing.
+func TestAgentUpdateStillRefusesDescriptiveFieldsWithNoAgentMetadata(t *testing.T) {
+	root := maturityRepo(t)
+	for _, tc := range []struct{ flag, val string }{
+		{"--name", "Claude Code"},
+		{"--provider", "anthropic"},
+		{"--prereq", "claude on PATH"},
+	} {
+		code, _, errs := runOf("agent", "update", "--repo-root", root, "--id", "claudecode", tc.flag, tc.val)
+		if code == exitOK {
+			t.Errorf("%s was accepted for a column with no agent metadata.json — it has nowhere to be written", tc.flag)
+			continue
+		}
+		if !strings.Contains(errs, "metadata.json") {
+			t.Errorf("%s refusal must name the missing file, got: %s", tc.flag, errs)
+		}
+	}
+}

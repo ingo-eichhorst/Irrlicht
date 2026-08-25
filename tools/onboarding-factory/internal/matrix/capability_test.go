@@ -1,8 +1,12 @@
 package matrix
 
 import (
+	"path/filepath"
 	"slices"
+	"sort"
 	"testing"
+
+	"irrlicht/tools/onboarding-factory/internal/shard"
 )
 
 // These are LOCKS on the #1369 schema — they pass by construction against a
@@ -133,4 +137,62 @@ func TestMaturityRankOrder(t *testing.T) {
 	if IsValidMaturity("") {
 		t.Error("empty maturity must be invalid: an adapter in the model has to state a claim")
 	}
+}
+
+// TestTraitCoverageCensus prints the trait/scenario split the Traits doc
+// comment cites, instead of that figure being typed by hand and re-typed on
+// every catalog change. It said "32 traits ... 32 scenarios ... other 14" for
+// long enough to be wrong the moment #1803 added four of each; a number that
+// documents behaviour states the command that produces it (AGENTS.md).
+//
+// It is a CENSUS, not a threshold: the only thing it fails on is a trait whose
+// scenario is not in the committed catalog — the same condition `of validate`
+// fails on (validate_maturity.go's "trait %q names scenario %q, which is not in
+// the catalog"), asserted here too so a Go-only change is caught by `go test`
+// without needing the CLI gate.
+//
+//	go test ./tools/onboarding-factory/internal/matrix/ -run TestTraitCoverageCensus -v -count=1
+func TestTraitCoverageCensus(t *testing.T) {
+	repoRoot := filepath.Join("..", "..", "..", "..")
+	shards := shard.LoadAll(repoRoot)
+	// FATAL, not Skip. This test's whole job is the FK arm below — a trait
+	// naming a scenario the catalog does not have — and `t.Skip` on an empty
+	// load would disarm exactly that while the package still reports `ok`.
+	// Anything that makes LoadAll return empty (a moved catalog, a rename, a
+	// parse error) would then turn the gate off silently, which is the failure
+	// AGENTS.md names: absence of a finding and inability to look must not
+	// produce the same output. The neighbouring TestShardCellEquivalence does
+	// skip, and that is a different trade — it asserts a property OF the
+	// corpus, so no corpus means nothing to assert. This one asserts a property
+	// of the Go trait table, which exists either way.
+	if len(shards) == 0 {
+		t.Fatalf("no scenarios loaded from %s — the trait/catalog FK check cannot run, "+
+			"and a check that cannot run must fail rather than pass quietly", shard.File(repoRoot))
+	}
+
+	inCatalog := map[string]bool{}
+	for _, sh := range shards {
+		inCatalog[sh.Name] = true
+	}
+
+	traited := map[string]bool{}
+	for _, tr := range Traits {
+		if !inCatalog[tr.Scenario] {
+			t.Errorf("trait %q names scenario %q, which is not in the committed catalog", tr.ID, tr.Scenario)
+			continue
+		}
+		traited[tr.Scenario] = true
+	}
+
+	var untraited []string
+	for _, sh := range shards {
+		if !traited[sh.Name] {
+			untraited = append(untraited, sh.Name)
+		}
+	}
+	sort.Strings(untraited)
+
+	t.Logf("trait coverage census: %d traits, %d scenarios, %d untraited",
+		len(Traits), len(shards), len(untraited))
+	t.Logf("untraited scenarios: %v", untraited)
 }

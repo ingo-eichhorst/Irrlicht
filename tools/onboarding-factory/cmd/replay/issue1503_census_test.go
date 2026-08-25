@@ -157,11 +157,11 @@ type catalogCensus struct {
 // gemini's terminal-info error for the second. Nothing else in the change
 // moves either figure.
 var censusOfTheCommittedCatalog = catalogCensus{
-	Recordings:                316,
+	Recordings:                319,
 	Zero:                      1,
 	Fabricated:                1,
-	Divergent:                 150,
-	DivergentByCountsAndKinds: 149,
+	Divergent:                 151,
+	DivergentByCountsAndKinds: 150,
 	UnpairedSidecars:          0,
 	PairedButUngraded:         87,
 }

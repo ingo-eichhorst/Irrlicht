@@ -81,6 +81,15 @@ DRIVER_LOG="$STAGING/driver.log"
 DRIVE_ELICITS="send slash wait_turn interrupt keys sleep restart resume reset_session sigkill exit_clean start_session session"
 # shellcheck disable=SC2034  # scraped from this file's SOURCE by tools/onboarding-factory/scripts/lib/recipe-lint.sh:113 (sed), never expanded in shell
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
+# Recipe runtime block this driver honors (#1803), scraped the same way by
+# tools/onboarding-factory/scripts/lib/recipe-runtime.sh's
+# driver_runtime_supports. run-cell.sh REFUSES a recipe asking for a capability
+# missing from this line, because a driver that silently drops `env` launches
+# claude against the real Anthropic endpoint with the operator's real
+# credentials and records a green fixture. Do not add a word here without
+# implementing it in init_session AND writing it into the receipt.
+# shellcheck disable=SC2034  # scraped from this file's SOURCE, never expanded in shell
+DRIVE_SUPPORTS="env bare"
 
 # Per-run CWD so claude writes its transcript under a unique
 # ~/.claude/projects/<slug>/ dir; also keeps the trust dialog isolated to
@@ -195,7 +204,43 @@ init_session() {
   else
     claude_args+=(--session-id "$CURRENT_UUID")
   fi
-  tmux new-session -d -s "$CURRENT_TMUX" -c "$CURRENT_CWD" -- \
+
+  # Recipe runtime block (#1803). run-cell.sh renders it into two files here;
+  # both are absent for every scenario that does not ask for one.
+  #
+  #   $STAGING/driver-bare  — run claude with --bare, so it reads
+  #     ANTHROPIC_API_KEY + ANTHROPIC_BASE_URL from the environment instead of
+  #     preferring OAuth/keychain. Without it the env below is accepted and
+  #     IGNORED, and the run silently reaches the real provider.
+  #   $STAGING/driver-env   — one KEY=VALUE line per variable, passed as
+  #     `tmux new-session -e`. Exporting them here would NOT work: a pane
+  #     inherits the tmux SERVER's environment, not this shell's, which is the
+  #     same trap run-cell.sh's IRRLICHT_BIND_ADDR comment describes.
+  local -a tmux_env=()
+  local -a receipt=()
+  if [[ -f "$STAGING/driver-bare" ]]; then
+    claude_args=(--bare "${claude_args[@]}")
+    receipt+=("__bare__")
+  fi
+  if [[ -s "$STAGING/driver-env" ]]; then
+    local kv
+    while IFS= read -r kv; do
+      [[ -n "$kv" ]] || continue
+      tmux_env+=(-e "$kv")
+      receipt+=("${kv%%=*}")
+    done < "$STAGING/driver-env"
+  fi
+  # The receipt is what run-cell.sh's assert_driver_applied_env reads. Written
+  # from the SAME arrays that reach tmux, not from the input files, so a
+  # variable dropped between reading and launching cannot still be receipted.
+  # Names only — a recipe may legitimately carry a credential, and staging is
+  # copied into the promoted fixture.
+  if [[ ${#receipt[@]} -gt 0 ]]; then
+    printf '%s\n' "${receipt[@]}" > "$STAGING/driver-env.applied"
+    echo "[driver] runtime: ${#tmux_env[@]} env flag(s), bare=$([[ -f "$STAGING/driver-bare" ]] && echo yes || echo no)" >&2
+  fi
+
+  tmux new-session -d -s "$CURRENT_TMUX" -c "$CURRENT_CWD" ${tmux_env+"${tmux_env[@]}"} -- \
     claude "${claude_args[@]}"
   tmux pipe-pane -t "$CURRENT_TMUX" -o "cat >> '$slot_stdout'"
   echo "[driver] tmux started: $CURRENT_TMUX (slot=$ACTIVE, uuid=$CURRENT_UUID, cwd=$CURRENT_CWD, mode=${RESUME_MODE:+resume})" >&2
@@ -215,12 +260,38 @@ init_session() {
   # wait so we don't stall for dialogs that will never appear. We keep
   # scanning until "auto mode on" so BOTH dialogs (import-then-trust) get
   # answered if they fire in sequence.
-  if cwd_already_trusted; then
+  #   3. "Detected a custom API key" — fires ONLY under --bare with an
+  #      ANTHROPIC_API_KEY in the pane's environment, i.e. exactly the
+  #      recipe-runtime path (#1803). Unanswered, claude never starts a turn.
+  #      Because it depends on the ENVIRONMENT and not on the directory,
+  #      claude does not cache it per-cwd the way it caches the other two —
+  #      so the scan below must run even when the cwd is already trusted.
+  local scan_dialogs=1
+  if cwd_already_trusted && [[ ! -f "$STAGING/driver-bare" ]]; then
+    scan_dialogs=0
+  fi
+  if [[ $scan_dialogs -eq 0 ]]; then
     echo "[driver] trust: cwd already trusted by an earlier session — skipping prompt" >&2
   else
-    local waited=0 import_done=0 trust_done=0
+    local waited=0 import_done=0 trust_done=0 apikey_done=0
     while [[ $waited -lt 30 ]]; do
       if [[ -f "$slot_stdout" ]]; then
+        # Answered first: it is the first dialog claude shows under --bare,
+        # and it blocks the ones below. Matched on two single words for the
+        # same reason the imports dialog is — the TUI breaks the title up
+        # with per-word cursor-move escapes, so a multi-word literal never
+        # matches the raw pane bytes.
+        if [[ $apikey_done -eq 0 ]] && [[ -f "$STAGING/driver-bare" ]] && \
+           grep -aq 'Detected' "$slot_stdout" 2>/dev/null && \
+           grep -aq 'custom' "$slot_stdout" 2>/dev/null; then
+          tmux send-keys -t "$CURRENT_TMUX" "1"
+          sleep 0.3
+          tmux send-keys -t "$CURRENT_TMUX" Enter
+          echo "[driver] accepted custom-API-key dialog" >&2
+          apikey_done=1
+          sleep 0.5
+          continue
+        fi
         # The TUI lays the dialog title out with per-word cursor-move
         # escapes (e.g. "external\e[18GCLAUDE.md\e[28Gimports"), so a
         # literal multi-word phrase never matches the raw pane bytes.
