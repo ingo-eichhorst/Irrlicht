@@ -335,8 +335,34 @@ const (
 // contributes two kind-matched pairs. Both halves move because this is the
 // other case the sentence above names — a NEW recording joining, rather than an
 // existing one gaining pairs.
+//
+// #1799 is the FIRST time this floor moves DOWN, 836 -> 835, and that direction
+// is the one this gate exists to make expensive — so the reason is measured
+// rather than asserted. The whole drop is claudecode
+// 2-14_turn-aborted-by-error: its committed golden's ordered_matches goes 4 ->
+// 1, because the recording's two terminal API errors now replay as
+// `working→error` and `error→working` where the frozen sidecar logged
+// `working→ready` and `ready→working`. A kind that differs is a state_differs,
+// not a kind-matched pair, so three pairs leave the population. Measured, not
+// inferred: `go test -run TestSidecarReplayTransitionTimesMatchTheDaemonsOwnLog
+// -v` reports "838 pairs across 279 recordings" at 32ec3efb and "835 pairs
+// across 279 recordings" here. The recording count does not move — 2-14 still
+// contributes its remaining pair — which is the shape to expect for an existing
+// recording losing pairs rather than dropping out.
+//
+// This is the frozen-sidecar cost of the fourth state, not a replay-fidelity
+// bug: those sidecars were recorded before `error` existed, so the daemon they
+// are compared against could not have produced it. It resolves when 2-14 is
+// re-recorded, and #1800 will move this floor again for the same reason on its
+// own adapters.
+//
+// Re-tightened onto the new measurement (835), per the paragraph above, rather
+// than left at 836 as slack. minMeasuredRecordings is deliberately NOT
+// re-tightened here even though it measures 279 against a floor of 278: this
+// change did not move it, and narrowing an untouched ratchet mid-change would
+// fail a later diff for a reason that diff does not contain.
 const (
-	minKindMatchedPairs   = 836
+	minKindMatchedPairs   = 835
 	minMeasuredRecordings = 278
 )
 

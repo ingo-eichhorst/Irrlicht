@@ -17,8 +17,16 @@ import (
 // `Attempt == MaxAttempts`. That equality looks like the obvious derivation
 // and is wrong against the recorded data: across every api_error in
 // replaydata (16 events, claudecode 2-9_token-quota-exhausted), the attempt
-// counter never once reaches maxRetries — the observed range is 1..5 of 10,
+// counter never once reaches maxRetries — the observed range is 1..6 of 10,
 // and the ladder is abandoned when the user intervenes rather than exhausted.
+// Reproduce the census with:
+//
+//	grep -rh '"subtype":"api_error"' replaydata/agents/claudecode/ \
+//	  | jq -c '.retryAttempt' | sort -n | uniq -c
+//
+// (This said 1..5 until #1799 re-ran it against the fixtures. The argument is
+// unchanged — 6 of 10 is still nowhere near the ceiling — but a figure that
+// documents behaviour states the command that produces it.)
 // Meanwhile the shapes that ARE terminal carry no counters at all: claudecode
 // writes an `isApiErrorMessage` assistant event with no retry fields, and
 // copilot writes `session.error` with none either. Deriving from the counters
@@ -107,7 +115,7 @@ type SessionError struct {
 	// the agent does not report one.
 	//
 	// It counts attempts within ONE API call and resets to 1 for the next
-	// call — verified against the recorded ladder, which runs 1..5, then
+	// call — verified against the recorded ladder, which runs 1..6, then
 	// restarts at 1 after the user queues a message. It is not a
 	// session-lifetime counter and must not be summed across errors.
 	Attempt *int `json:"attempt,omitempty"`

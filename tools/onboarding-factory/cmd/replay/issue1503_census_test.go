@@ -108,12 +108,36 @@ type catalogCensus struct {
 // #1478's whole purpose, and Divergent falling is a replay-fidelity win. The
 // point is that it cannot move UNNOTICED, and that no doc comment anywhere
 // carries a second, hand-typed copy of it.
+// #1799 moved two figures, both upward by three and both for one reason: the
+// first adapters to produce a session error now replay `error` transitions
+// against sidecars recorded before that state existed. Divergent rose from 145
+// and DivergentByCountsAndKinds from 144 — the new values are the literal
+// below, deliberately not restated here (see
+// TestNoCommentRestatesALiveCensusFigure, which fails on a hand-typed copy).
+//
+// The three that joined are all claudecode: 2-14_turn-aborted-by-error
+// (ordered_mismatches 0 -> 3) and both 2-9_token-quota-exhausted recordings
+// (0 -> 1 each). The two copilot recordings whose goldens this change also
+// touched were ALREADY divergent and stayed at their existing counts (2 and 4)
+// — their mismatch changed content, not existence — which is why the figure
+// moves by three and not five. Measured per file with
+//
+//	git show HEAD:<golden> | jq '(.extended_check.ordered_mismatches // []) | length'
+//
+// against the same expression over the working copy, not inferred from the
+// number of goldens the change rewrote.
+//
+// This is the frozen-sidecar cost of the fourth state and not a replay-fidelity
+// regression: the daemon that produced those sidecars had no `error` state to
+// record, so the replay reproducing one is the intended new behaviour rather
+// than a drift from the daemon. It resolves on re-record. #1800 will move these
+// figures again on its own adapters.
 var censusOfTheCommittedCatalog = catalogCensus{
 	Recordings:                316,
 	Zero:                      1,
 	Fabricated:                1,
-	Divergent:                 145,
-	DivergentByCountsAndKinds: 144,
+	Divergent:                 148,
+	DivergentByCountsAndKinds: 147,
 	UnpairedSidecars:          0,
 	PairedButUngraded:         87,
 }

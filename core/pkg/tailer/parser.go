@@ -336,6 +336,41 @@ type SessionError struct {
 	RetryIn     *time.Duration
 }
 
+// ClearedByTurnBoundary reports whether a completed turn retires this error
+// (#1799). It is the single predicate behind BOTH channels that can deliver
+// such a boundary — the transcript's own `turn_done` line
+// (clearSessionErrorOnRecovery) and the Stop hook (IngestTurnBoundary) — because
+// those describe the same event and a rule that differed between them would be
+// decided by delivery latency rather than by what happened.
+//
+// ONLY ErrorPhaseRetrying qualifies, and the two exclusions are the interesting
+// half:
+//
+//   - ErrorPhaseTerminal. The agent gave up, and the boundary that follows a
+//     give-up is the failed turn's OWN epilogue, not a later turn that
+//     succeeded. claudecode writes `system`/`turn_duration` on the line
+//     immediately after its "API Error: …" message, and its Stop hook fires for
+//     that same turn — so treating either as a recovery turns the session green
+//     a few milliseconds after it failed. session.ErrorPhaseTerminal's doc
+//     already stated the intended rule: "Only the next turn the user starts
+//     clears it."
+//   - ErrorPhaseUnknown. The agent did not say whether another attempt was
+//     coming, and an absence of information is not evidence of recovery.
+//     Reading it as one is the silent direction — the session goes green while
+//     the failure stands. copilot's `session.error` is exactly this case and it
+//     lands AFTER copilot's own `assistant.turn_end`, so an optimistic rule
+//     would paint every copilot failure green.
+//
+// A retrying error is the one shape where a turn boundary genuinely means
+// recovery: the agent said another attempt was coming, and the turn then
+// completed. That is what makes provider-overloaded-retry end green rather than
+// staying red forever.
+//
+// nil-receiver safe so callers can ask without a nil check first.
+func (e *SessionError) ClearedByTurnBoundary() bool {
+	return e != nil && e.Phase == ErrorPhaseRetrying
+}
+
 // StartsNewUserTurn reports whether this event begins a GENUINE new user turn
 // — a fresh prompt, an ESC, an answer to a question — as opposed to a tool
 // round-trip.

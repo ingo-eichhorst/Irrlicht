@@ -211,6 +211,21 @@ type MetricsCollector interface {
 	// path. observedAt is the marker's unix-seconds timestamp. Same
 	// no-op-without-tailer semantics as IngestRateLimit.
 	IngestTaskSummary(transcriptPath, text string, observedAt int64)
+	// IngestTurnBoundary records that a hook delivered an authoritative turn
+	// boundary for the session at transcriptPath (#1799). Called by the
+	// detector's Stop-hook path.
+	//
+	// It retires a standing session error under the SAME rule a transcript
+	// `turn_done` line applies — recoverable failures only; see
+	// tailer.SessionError.ClearedByTurnBoundary. Both channels describe one
+	// event, so a rule that differed between them would be decided by which
+	// arrived first. It is needed at all because the classifier's session_error
+	// rule only SUPPRESSES itself for the single pass that consumed the hook's
+	// consume-once hold, which would otherwise leave a recoverable error
+	// reappearing on the next pass.
+	//
+	// Same no-op-without-tailer semantics as IngestRateLimit.
+	IngestTurnBoundary(transcriptPath string)
 	// PurgeDeadBackgroundProcs drops the session's tracked background
 	// processes whose output path is in outputs, after the detector's
 	// liveness probe verdicts them dead — they died without a

@@ -34,15 +34,26 @@ func (t *TranscriptTailer) applyMetadata(parsed *ParsedEvent) {
 // IT LIVES IN applyMetadata ON PURPOSE, and that is the single most important
 // line in this function. scanParsedLine routes an event down one of two
 // mutually exclusive paths — applySkippedEvent for Skip=true, processParsedEvent
-// otherwise — and applyMetadata is the ONLY thing both of them call. The two
-// error shapes this exists for currently land on opposite sides of that fork:
-// claudecode's `system`/`api_error` is Skip=true (it falls through
-// handleSystemEvent's catch-all skip), while copilot's `session.error` would
-// naturally be parsed as an ordinary event. Folding this in processParsedEvent
-// alone would therefore work for one adapter, silently drop the other, and pass
-// every test written against the adapter that worked — the exact shape of the
+// otherwise — and applyMetadata is the ONLY thing both of them call. Folding
+// this into processParsedEvent alone would work for whichever adapters happen
+// to route their error as an ordinary event, silently drop the rest, and pass
+// every test written against an adapter that worked — the exact shape of the
 // TranscriptPermissionPending defect (#1256), which was correct in the parser,
 // correct under replay, and dropped on the only path that mattered.
+//
+// WHICH SIDE OF THE FORK AN ERROR LANDS ON IS AN ADAPTER-LOCAL CHOICE, and it
+// has already moved once. Both of #1799's producers ship Skip=true —
+// claudecode's `system`/`api_error` falls through handleSystemEvent's catch-all,
+// and copilot's `session.error` is skipped so it cannot become the session's
+// LastEventType and flip is_agent_done false for a turn that really ended. That
+// is a routing decision each adapter makes on its own grounds and may revisit;
+// this placement is what makes the fold independent of it. (Both paths stay
+// exercised regardless — see TestSessionError_RecordedOnBothRoutingPaths, which
+// runs one transcript twice with Skip toggled.)
+//
+// Note the consequence for the skipped side: applySkippedEvent must also report
+// the pass as substantive, or the detector's #329 short-circuit drops it. See
+// that function.
 //
 // Ordering within the event is deliberate: a parser reporting BOTH a failure
 // and a turn boundary on one event is reporting a turn that ended in failure,
@@ -74,15 +85,67 @@ func (t *TranscriptTailer) applySessionError(parsed *ParsedEvent) {
 // A TOOL RESULT IS NOT A RECOVERY. That is what StartsNewUserTurn encodes —
 // see it for why a bare ClearToolNames check would clear the error on the next
 // tool round-trip, i.e. within about a second.
+//
+// AND A TURN BOUNDARY ONLY COUNTS FOR A RETRYING ERROR (#1799). Which phases a
+// completed turn retires is ClearedByTurnBoundary's decision, not this
+// function's — the Stop hook applies the identical rule through
+// IngestTurnBoundary, and the two must not be able to drift. See that predicate
+// for why terminal and unknown are both excluded.
+//
+// It is not hypothetical. In the committed 2-14_turn-aborted-by-error
+// recording, claudecode writes `system`/`turn_duration` on the line IMMEDIATELY
+// after the "API Error: …" epilogue, and both land in the same read pass — so
+// without the distinction the failure was cleared inside the very pass that
+// recorded it, and the session never went red at all. (Not a flicker: the
+// tailer emits one snapshot per pass, so there is no intra-pass state for
+// anything to observe.) Reproduce the ordering with:
+//
+//	jq -c '{t:.type, sub:.subtype, apiErr:.isApiErrorMessage}' \
+//	  replaydata/agents/claudecode/scenarios/2-14_turn-aborted-by-error/recordings/*/transcript.jsonl
 func (t *TranscriptTailer) clearSessionErrorOnRecovery(parsed *ParsedEvent) {
 	if t.sessionError == nil {
 		return
 	}
-	if parsed.EventType == "turn_done" {
+	if parsed.StartsNewUserTurn() {
 		t.sessionError = nil
 		return
 	}
-	if parsed.StartsNewUserTurn() {
+	if parsed.EventType == "turn_done" && t.sessionError.ClearedByTurnBoundary() {
+		t.sessionError = nil
+	}
+}
+
+// IngestTurnBoundary records that a turn ended, delivered out of band rather
+// than read off the transcript — today the Stop hook, via
+// SessionDetector.HandleStopHook (#1799). Broken out so an HTTP handler can
+// update a session without driving the parser, exactly as IngestRateLimit is.
+//
+// IT APPLIES THE SAME CLEARING RULE AS THE TRANSCRIPT ARM, through the same
+// predicate (ClearedByTurnBoundary). A Stop hook and the `turn_done` line it
+// races describe ONE event, so a rule that differed between them would be
+// decided by which arrived first — and the daemon has no control over that.
+// #1799's first draft cleared unconditionally here and erased the terminal
+// failures the transcript arm had just been taught to keep, through the other
+// channel, on the same turn boundary, in the same change.
+//
+// WHY IT IS NEEDED AT ALL. The classifier's session_error rule is guarded on
+// !HookTurnDone, but SignalTurnDone is consume-once, so HookTurnDone is true for
+// exactly the one classify pass that consumed the hold — a ONE-PASS
+// SUPPRESSION, not a clear. Without an equivalent clear in the tailer, a
+// recoverable error suppressed on the hook's pass reappears on the next one:
+// the spurious error → ready → error pair #1798 recorded and deferred to the
+// first producer.
+//
+// WHAT IT IS NOT: a latch. HandleStopHook runs before the classify pass that
+// tails the transcript, so on the common ordering this fires while the tailer
+// has not yet read the error line — and the error recorded a moment later must
+// stand, because this boundary describes the turn BEFORE it. The one-pass
+// suppression is handled where it happens, in classifyAgentDone; see there.
+//
+// The caller (the metrics adapter) holds the per-tailer lock, mirroring
+// IngestRateLimit.
+func (t *TranscriptTailer) IngestTurnBoundary() {
+	if t.sessionError.ClearedByTurnBoundary() {
 		t.sessionError = nil
 	}
 }

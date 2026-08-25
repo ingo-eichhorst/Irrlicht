@@ -802,6 +802,20 @@ func (t *TranscriptTailer) applySkippedEvent(parsed *ParsedEvent) bool {
 	if parsed.TaskSnapshot != nil {
 		substantive = true
 	}
+	// A session-level failure arriving on a skipped event must reach the
+	// detector (#1799). claudecode's `system`/`api_error` is Skip=true, so a
+	// poll whose only new bytes are error lines would otherwise set
+	// NoSubstantiveActivity — which the detector short-circuits on (#329) — and
+	// the session would never be re-classified. It would sit green for the whole
+	// retry window while the tailer held the error, which is the failure the
+	// fourth state exists to prevent rather than a cosmetic miss.
+	//
+	// Unlike AwaySummary below, this is not a passive data upgrade: it changes
+	// what STATE the session is in, so it has to reset the idle clock the same
+	// way a subagent completion or a background-process exit does.
+	if parsed.SessionError != nil {
+		substantive = true
+	}
 	// away_summary arrives on a Skip=true system event by design (it must
 	// never be promoted to turn_done, issue #329) — but its content is still
 	// worth reading, so it's applied here without flipping substantive: a

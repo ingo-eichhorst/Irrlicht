@@ -969,12 +969,60 @@ func (r *sidecarReplayer) clusterBoundary(eventIdx int) int64 {
 // sidecar (it records no stat for the hook's own moment), and the approximation
 // errs toward reproducing the daemon's recorded transition rather than toward
 // dropping it — which is the direction the whole extended check is scored in.
+// hookRetiresSessionError reports whether a hook effect asserts a turn boundary
+// — the one hook effect that can retire a session error (#1799). A Release is
+// the opposite assertion and must not qualify.
+//
+// Named rather than inlined so the harness's mirror of the daemon rule is a
+// thing a test can hold, because no committed recording reaches it: as of #1799
+// the corpus has no recording carrying BOTH a hook event and a session error.
+// Reproduce with
+//
+//	grep -rl '"hook_name"' replaydata/agents/{claudecode,copilot}/scenarios/2-{9,14}*/recordings/*/events.jsonl
+//
+// which matches nothing. The fixtures that produce errors pre-date hook
+// recording, so replay fidelity here is guarded by the unit test rather than by
+// a golden — a real gap until one of those cells is re-recorded with hooks
+// installed.
+func hookRetiresSessionError(effect session.HookSignalEffect) bool {
+	return effect.Signal == session.SignalTurnDone && !effect.Release
+}
+
+// retireSessionErrorOnHookBoundary mirrors SessionDetector.HandleStopHook for
+// the offline harness (#1799): a hook-delivered turn boundary retires the
+// tailer's sticky session error under the SAME rule the daemon applies. Without
+// it the harness would reproduce an error → ready → error flicker the daemon no
+// longer has, and the extended check would score that divergence against the
+// recording rather than against the bug.
+//
+// It touches TWO copies, and the second is what the daemon does not need. The
+// tailer call ends the sticky field, so every LATER pass stays clear; the cached
+// r.lastMetrics is THIS pass's view, because a hook pass classifies off that
+// cache rather than re-tailing. The daemon re-tails via the synthetic activity
+// event HandleStopHook dispatches, so one call suffices there.
+//
+// Both copies are retired under ClearedByTurnBoundary rather than
+// unconditionally. An earlier draft blanked the cached copy outright, which
+// would have shown a terminal failure as retired for exactly the pass a viewer
+// renders while the tailer still held it — the two views disagreeing is worse
+// than either answer.
+func (r *sidecarReplayer) retireSessionErrorOnHookBoundary(effect session.HookSignalEffect) {
+	if !hookRetiresSessionError(effect) {
+		return
+	}
+	r.tailer.IngestTurnBoundary()
+	if r.lastMetrics != nil && r.lastMetrics.SessionError.ClearedByTurnBoundary() {
+		r.lastMetrics.SessionError = nil
+	}
+}
+
 func (r *sidecarReplayer) applyHookEvent(hookEv lifecycle.Event) {
 	effect, ok := session.HookSignal(hookEv.HookName)
 	if !ok {
 		return
 	}
 	r.signals.ApplyHook(replaySessionKey, effect, hookEv.Timestamp)
+	r.retireSessionErrorOnHookBoundary(effect)
 	if r.lastMetrics == nil {
 		return
 	}

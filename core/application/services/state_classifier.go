@@ -224,19 +224,29 @@ var stateRules = []stateRule{
 		// IT IS A ONE-PASS SUPPRESSION, NOT A CLEAR, and calling it the latter
 		// would be wrong in a way that matters. SignalTurnDone is
 		// consumeOnce, so HookTurnDone is true for exactly the pass that
-		// consumed it; the tailer's sticky error is untouched by the hook path
-		// (the transcript path places no hold at all). So a hook-triggered
-		// pass that lands BEFORE the transcript's own turn-boundary line
-		// flushes — which is precisely what the hook fast path exists to do —
-		// yields ready on that pass and error again on the next, i.e. a
-		// spurious error→ready→error pair in the UI and the recorded trace.
+		// consumed it; the tailer's sticky error is untouched by this rule
+		// (the transcript path places no hold at all).
 		//
-		// Not fixed here, and unreachable in this phase: no adapter emits
-		// SessionError yet, so no session can be in this position until
-		// #1799/#1800. The fix belongs with the first producer — the hook path
-		// needs a way to clear the tailer's sticky error, mirroring
-		// TranscriptTailer.IngestRateLimit — because only the tailer owns that
-		// state. Recorded rather than left to be rediscovered.
+		// #1799 SUPPLIED THE MISSING HALVES, in the two places that own them
+		// rather than by widening this predicate:
+		//
+		//   - END OF LIFE is the tailer's. TranscriptTailer.IngestTurnBoundary
+		//     applies the identical ClearedByTurnBoundary rule the transcript
+		//     arm does, so a hook-delivered boundary retires a recoverable
+		//     error for good instead of hiding it for one pass. Without it the
+		//     suppressed pass read ready and the next read error again — the
+		//     spurious error→ready→error pair #1798 recorded here.
+		//   - THE VERDICT on a pass this rule suppresses is classifyAgentDone's.
+		//     A Stop hook says the turn ENDED, not that it succeeded, and both
+		//     of #1799's producers emit their failure inside a turn that then
+		//     ends normally. So an error still standing when agent_done decides
+		//     routes to StateError there. See that function.
+		//
+		// The guard therefore no longer changes any outcome — both branches
+		// answer `error` for a standing failure. What it still does is keep the
+		// LADDER tier-consistent: it is what makes this rule and agent_done
+		// mutually exclusive at TierHook, as the paragraph above describes. Do
+		// not delete it as dead.
 		//
 		// The rule's other half — a turn boundary the TRANSCRIPT reported —
 		// never reaches here at all: the tailer clears its sticky error on
@@ -360,6 +370,42 @@ func transitionTo(currentState, target, reason string) (string, string) {
 // its turn. It routes to waiting first when the turn ended with a question
 // or imperative cue (issue #381), otherwise to ready.
 func classifyAgentDone(currentState string, metrics *session.SessionMetrics) (string, string) {
+	// A TURN THAT ENDED IN FAILURE IS NOT A TURN THAT FINISHED (#1799).
+	//
+	// Reaching here with a SessionError standing implies HookTurnDone: the
+	// session_error rule above is guarded on !HookTurnDone and would otherwise
+	// have decided. So this arm is exactly the hook case, and it is the one
+	// #1798 could not test because no adapter emitted the field yet.
+	//
+	// #1798 read a Stop hook as "the turn completed, so the failure is over".
+	// Both of #1799's producers falsify the premise: each emits its terminal
+	// failure INSIDE a turn that then ends normally, so the hook fires for the
+	// very turn that failed (claudecode writes system/turn_duration on the next
+	// line; copilot writes assistant.turn_end ~6ms BEFORE session.error). A Stop
+	// hook says the turn ENDED — nothing in its payload says it SUCCEEDED.
+	//
+	// This is not a second clearing rule competing with the tailer's. The tailer
+	// owns end-of-life and applies ClearedByTurnBoundary to BOTH channels, so an
+	// error a completed turn genuinely retires is already nil by the time the
+	// classifier runs. What survives to here is a failure no turn boundary
+	// retires, plus the ordering case where the error was read on this very
+	// pass — in which case the turn ended with the failure as its last word,
+	// which is equally red.
+	//
+	// Above the waiting check deliberately: #1796 settled the precedence as
+	// error > waiting > working > ready, so a failed turn whose epilogue happens
+	// to trip a prose waiting cue must read as the failure it is.
+	//
+	// Placing it HERE rather than relaxing the session_error rule's
+	// !HookTurnDone guard keeps the ladder tier-consistent by construction. That
+	// guard makes the two rules mutually exclusive at TierHook; relaxing it
+	// would let a TierTranscript rule decide while a TierHook rule below it also
+	// fired, which TestStateRules_LadderIsTierConsistent rejects — correctly, in
+	// this case: when a hook delivered the boundary the verdict IS hook-tier,
+	// and agent_done is the rule that carries that tier (see tierAgentDone).
+	if metrics.SessionError != nil {
+		return transitionTo(currentState, session.StateError, "turn ended in failure → error")
+	}
 	if metrics.IsWaitingForUserInput() {
 		return transitionTo(currentState, session.StateWaiting, "turn ended with question or cue → waiting")
 	}
