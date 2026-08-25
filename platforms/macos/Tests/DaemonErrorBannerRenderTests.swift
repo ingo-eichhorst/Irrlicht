@@ -39,8 +39,9 @@ final class DaemonErrorBannerRenderTests: XCTestCase {
 
     /// The real fault this build can report today.
     func testStalledDaemonRenders() throws {
-        let items = DaemonHealth.faults(aggregate: .reconnecting, useLocalDaemon: true,
-                                            localConnectionStalled: true)
+        let items = DaemonHealth.faults(aggregate: .reconnecting,
+                                            local: .init(isConfigured: true, isStalled: true),
+                                            relay: .init(isConfigured: false, isStalled: false))
         assertSnapshot(of: try host(items), as: .pinnedImage, named: "daemon-unreachable")
     }
 
@@ -62,8 +63,9 @@ final class DaemonErrorBannerRenderTests: XCTestCase {
     /// Light mode: `errorPillText` is a per-appearance retune, so the dark-only
     /// captures above cover exactly half of it.
     func testBannerReadableInLightMode() throws {
-        let items = DaemonHealth.faults(aggregate: .reconnecting, useLocalDaemon: true,
-                                        localConnectionStalled: true)
+        let items = DaemonHealth.faults(aggregate: .reconnecting,
+                                        local: .init(isConfigured: true, isStalled: true),
+                                        relay: .init(isConfigured: false, isStalled: false))
         assertSnapshot(of: try host(items, appearance: .aqua), as: .pinnedImage, named: "light-mode")
     }
 }

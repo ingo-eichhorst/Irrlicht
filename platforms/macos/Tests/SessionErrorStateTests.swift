@@ -472,29 +472,27 @@ final class DaemonHealthTests: XCTestCase {
     /// connection dot: two surfaces disagreeing about one fact.
     private func faults(
         aggregate: ConnectionState = .reconnecting,
-        useLocalDaemon: Bool = true,
-        localStalled: Bool = false,
-        useRelay: Bool = false,
-        relayURL: String = "",
-        relayStalled: Bool = false
+        local: DaemonHealth.Source = .init(isConfigured: true, isStalled: false),
+        relay: DaemonHealth.Source = .init(isConfigured: false, isStalled: false)
     ) -> [DaemonFault] {
-        DaemonHealth.faults(
-            aggregate: aggregate,
-            useLocalDaemon: useLocalDaemon,
-            localConnectionStalled: localStalled,
-            useRelayServer: useRelay,
-            relayServerURL: relayURL,
-            relayConnectionStalled: relayStalled)
+        DaemonHealth.faults(aggregate: aggregate, local: local, relay: relay)
     }
 
+    /// Named source shorthands, so each test below reads as the situation it
+    /// describes rather than as four booleans.
+    private static let stalled = DaemonHealth.Source(isConfigured: true, isStalled: true)
+    private static let healthy = DaemonHealth.Source(isConfigured: true, isStalled: false)
+    private static let unconfiguredButStalled =
+        DaemonHealth.Source(isConfigured: false, isStalled: true)
+
     func testHealthyDaemonProducesNoBanner() {
-        XCTAssertTrue(faults().isEmpty)
-        XCTAssertNil(DaemonErrorSummary(items: faults()),
+        XCTAssertTrue(faults(local: Self.healthy).isEmpty)
+        XCTAssertNil(DaemonErrorSummary(items: faults(local: Self.healthy)),
                      "a healthy daemon must render no banner at all")
     }
 
     func testStalledLocalDaemonProducesABanner() {
-        let items = faults(localStalled: true)
+        let items = faults(local: Self.stalled)
         XCTAssertEqual(items.count, 1)
         let summary = DaemonErrorSummary(items: items)
         XCTAssertEqual(summary?.count, 1)
@@ -507,21 +505,21 @@ final class DaemonHealthTests: XCTestCase {
     /// app already models that fault (`relayConnectionStalled`, #846) and the
     /// connection dot already treats it as equally severe.
     func testStalledRelayProducesABanner() {
-        let items = faults(useLocalDaemon: false, useRelay: true,
-                           relayURL: "wss://relay.example", relayStalled: true)
+        let items = faults(local: .init(isConfigured: false, isStalled: false),
+                           relay: Self.stalled)
         XCTAssertEqual(items.map(\.id), ["relay/unreachable"])
     }
 
     /// A relay that was never configured cannot be stalled — the dot's own
     /// condition includes the URL-emptiness check, so this one does too.
     func testUnconfiguredRelayIsNotAFault() {
-        XCTAssertTrue(faults(useRelay: true, relayURL: "", relayStalled: true).isEmpty)
+        XCTAssertTrue(faults(relay: Self.unconfiguredButStalled).isEmpty,
+                      "a relay toggled on with no URL has nowhere to connect")
     }
 
     /// Both stalled at once: two faults, both named, neither collapsed.
     func testBothSourcesStalledReportBoth() {
-        let items = faults(localStalled: true, useRelay: true,
-                           relayURL: "wss://relay.example", relayStalled: true)
+        let items = faults(local: Self.stalled, relay: Self.stalled)
         XCTAssertEqual(items.map(\.id), ["daemon/unreachable", "relay/unreachable"])
         XCTAssertEqual(DaemonErrorSummary(items: items)?.text, "Irrlicht has 2 problems")
     }
@@ -532,14 +530,14 @@ final class DaemonHealthTests: XCTestCase {
     /// Mutation check (verified): delete the `guard aggregate != .connected`
     /// line from `DaemonHealth.faults` and this goes red.
     func testAConnectedAggregateMasksAStalledSource() {
-        XCTAssertTrue(faults(aggregate: .connected, localStalled: true).isEmpty,
+        XCTAssertTrue(faults(aggregate: .connected, local: Self.stalled).isEmpty,
                       "a banner here would contradict the green connection dot beside it")
     }
 
     /// A relay-only setup has no local daemon to be stalled, and the flag can
     /// be left set from an earlier local session.
     func testRelayOnlySetupIsNotReportedAsAStalledLocalDaemon() {
-        XCTAssertTrue(faults(useLocalDaemon: false, localStalled: true).isEmpty)
+        XCTAssertTrue(faults(local: Self.unconfiguredButStalled).isEmpty)
     }
 
     /// Stable ids so SwiftUI does not rebuild a standing fault's row on every

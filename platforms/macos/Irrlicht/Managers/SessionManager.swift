@@ -430,11 +430,13 @@ class SessionManager: ObservableObject {
     var daemonFaults: [DaemonFault] {
         DaemonHealth.faults(
             aggregate: aggregateConnectionState,
-            useLocalDaemon: useLocalDaemon,
-            localConnectionStalled: localConnectionStalled,
-            useRelayServer: useRelayServer,
-            relayServerURL: relayServerURL,
-            relayConnectionStalled: relayConnectionStalled
+            local: .init(isConfigured: useLocalDaemon,
+                         isStalled: localConnectionStalled),
+            // A relay toggled on with no URL has nowhere to connect, so it
+            // cannot be stalled — the third clause the connection dot has
+            // always carried, kept here rather than dropped into `isStalled`.
+            relay: .init(isConfigured: useRelayServer && !relayServerURL.isEmpty,
+                         isStalled: relayConnectionStalled)
         )
     }
 

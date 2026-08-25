@@ -73,38 +73,46 @@ struct DaemonErrorSummary: Equatable {
 /// report its own faults, they append to `faults(...)`'s result and every
 /// layer above — summary, banner, tests — is unchanged.
 enum DaemonHealth {
+    /// One connection source and whether it is stuck.
+    ///
+    /// A value type rather than a pair of loose booleans per source, because
+    /// `isFaulted` is the whole rule and it belongs next to the fields it
+    /// reads — spelled inline at each call site it becomes the "complex
+    /// conditional" this type exists to retire, and it is exactly the kind of
+    /// predicate that drifts between two copies (which is how the connection
+    /// dot and this banner came to disagree in the first place).
+    struct Source {
+        /// Whether the user has this source turned on AND it has somewhere to
+        /// connect to. A relay toggled on with no URL is not configured.
+        let isConfigured: Bool
+        /// Whether its reconnect loop has stopped being a transient blip —
+        /// set only after three consecutive failures force a `URLSession`
+        /// recycle (local #843, relay #846).
+        let isStalled: Bool
+
+        var isFaulted: Bool { isConfigured && isStalled }
+    }
+
     /// The faults the app can see on its own, right now.
     ///
-    /// A stalled reconnect — local (#843) or relay (#846) — is not a transient
-    /// blip: it is set only after three consecutive failed attempts force a
-    /// `URLSession` recycle, and `localConnectionStalled`'s own doc says it
-    /// exists "so the UI can show something stronger than 'reconnecting'".
-    /// Until now nothing showed anything stronger; it was a six-point red dot
-    /// and a tooltip. It matters more than it looks: while a source is
-    /// stalled, the sessions it feeds are stale, so a row sitting green is
-    /// asserting something the app has no current evidence for.
+    /// A stalled reconnect is not a transient blip: `localConnectionStalled`'s
+    /// own doc says it exists "so the UI can show something stronger than
+    /// 'reconnecting'". Until #1802 nothing showed anything stronger; it was a
+    /// six-point red dot and a tooltip. It matters more than it looks — while
+    /// a source is stalled the sessions it feeds are stale, so a row sitting
+    /// green is asserting something the app has no current evidence for.
     ///
     /// THE `aggregate != .connected` MASK IS PART OF THE GATE, not a detail of
-    /// the dot. `statusColor` in `SessionListView` applies it, and dropping it
-    /// here would put a red "the daemon is not responding" banner next to a
-    /// green connection dot — two surfaces disagreeing about one fact. It is
-    /// right on the merits too: with both sources configured, one can be
-    /// carrying the session list perfectly well while the other is stuck, and
+    /// the connection dot. With both sources configured, one can be carrying
+    /// the session list perfectly well while the other is stuck, and
     /// `aggregateConnectionState` already reports that (`.connected` wins).
-    ///
-    /// The relay arm mirrors the dot's own three-part condition, URL emptiness
-    /// included — a relay that was never configured cannot be stalled.
-    static func faults(
-        aggregate: ConnectionState,
-        useLocalDaemon: Bool,
-        localConnectionStalled: Bool,
-        useRelayServer: Bool = false,
-        relayServerURL: String = "",
-        relayConnectionStalled: Bool = false
-    ) -> [DaemonFault] {
+    /// `SessionListView.statusColor` reads this function's result rather than
+    /// re-deriving the rule, so a red banner can no longer appear beside a
+    /// green dot.
+    static func faults(aggregate: ConnectionState, local: Source, relay: Source) -> [DaemonFault] {
         guard aggregate != .connected else { return [] }
         var out: [DaemonFault] = []
-        if useLocalDaemon && localConnectionStalled {
+        if local.isFaulted {
             out.append(DaemonFault(
                 id: "daemon/unreachable",
                 title: "The Irrlicht daemon is not responding",
@@ -113,7 +121,7 @@ enum DaemonHealth {
                     + "not recover, restart the daemon."
             ))
         }
-        if useRelayServer && !relayServerURL.isEmpty && relayConnectionStalled {
+        if relay.isFaulted {
             out.append(DaemonFault(
                 id: "relay/unreachable",
                 title: "The relay server is not responding",
