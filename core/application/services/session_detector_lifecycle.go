@@ -258,19 +258,23 @@ const processDeathRetention = 12 * time.Hour
 // is the precondition for every other part of this fix: a verdict restored onto
 // a row that has already been deleted restores nothing.
 //
-// FOUR CALLERS, AND THE COUNT IS THE POINT. An errored row is reachable by more
-// deleters than the obvious one, and exempting a proper subset leaves the
-// outcome unchanged — the row simply dies at the next gate instead of the first:
+// MORE DELETERS REACH AN ERRORED ROW THAN IS OBVIOUS, and exempting a proper
+// subset leaves the outcome unchanged — the row simply dies at the next gate
+// instead of the first. Reapers in the PIDManager consult it through
+// PIDManager.retainsError; the live path is handled separately by the verdict
+// map (see retainAsProcessDeath).
 //
-//   - isStartupZombie, via the synchronous CleanupZombies pre-pass;
-//   - seedAlivePIDs' PID>0 branch (handleAlivePIDState);
-//   - seedAlivePIDs' PID==0 branch (isOrphanAtSeed) — reachable for a headless
-//     run that failed and exited before PID discovery ever bound, whose frozen
-//     transcript is stale by definition after orphanTranscriptAge;
-//   - retainAsProcessDeath, reached from the PERIODIC liveness sweep every few
-//     seconds. This one is not a startup path at all, and it is the reason the
-//     other three are not sufficient on their own: without it a rescued row was
-//     deleted about five seconds after the restart rather than at it.
+// DELIBERATELY NOT LISTING THE CALL SITES HERE. The first version of this
+// comment enumerated them and named a count, and it was already wrong when it
+// landed — it missed sweepStaleSnapshot's ready-TTL branch, which had gone on
+// deleting PID==0 errored rows after thirty minutes. A hand-maintained
+// inventory of "everywhere that deletes a row" is exactly the thing that goes
+// stale, so the invariant is enforced by a check that reads the code instead:
+// TestEveryReaperConsultsTheErrorExemption walks pid_manager.go's AST and fails
+// on any deleting function that neither consults the exemption nor sits on its
+// documented exempt list. Run it for the current answer:
+//
+//	go test ./core/application/services/ -run TestEveryReaperConsultsTheErrorExemption
 //
 // In isStartupZombie the guard sits above ALL of that predicate's branches, not
 // only the dead-PID one, so the DB-backed-orphan and stale-transcript branches
@@ -999,7 +1003,8 @@ func (d *SessionDetector) seedRestoreErrorVerdict(state *session.SessionState, p
 	// given; a ceiling that rewrites a session's state without saying so
 	// anywhere is the debugging blind spot #1360 added SignalExpiry to close,
 	// and the seed path is no more exempt from that than the live path is.
-	d.reportHoldExpiries(state, d.signals.Overlay(sid, state.Metrics, d.nowFn()), d.nowFn())
+	now := d.nowFn()
+	d.reportHoldExpiries(state, d.signals.Overlay(sid, state.Metrics, now), now)
 
 	if state.Metrics != nil && state.Metrics.ProcessDeath {
 		d.log.LogInfo(logComponentSessionDetectorSeed, sid,
@@ -1055,9 +1060,6 @@ func (d *SessionDetector) seedRetainRestoredError(state *session.SessionState, p
 func (d *SessionDetector) restoreErrorRetention(sessionID string, at time.Time) {
 	d.processDeathMu.Lock()
 	defer d.processDeathMu.Unlock()
-	if d.processDeathVerdicts == nil {
-		d.processDeathVerdicts = make(map[string]time.Time)
-	}
 	if _, exists := d.processDeathVerdicts[sessionID]; exists {
 		return
 	}

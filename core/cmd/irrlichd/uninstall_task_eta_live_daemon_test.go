@@ -247,11 +247,7 @@ func runUninstallTaskEta(t *testing.T, bin, homeDir, stateDir string) {
 // filesystem.PermissionStore and is documented as bumpable.
 func seedGrantedInstructionsConsent(t *testing.T, stateDir string) {
 	t.Helper()
-	set := permission.Set{}
-	set.Put(claudecode.AdapterName, claudecode.PermissionKeyInstructions, permission.StateGranted)
-	if err := filesystem.NewPermissionStore(stateDir).Save(set); err != nil {
-		t.Fatalf("seed permissions store in %s: %v", stateDir, err)
-	}
+	seedGrantedConsent(t, stateDir, claudecode.PermissionKeyInstructions)
 }
 
 // seedUserAuthoredCLAUDEMd writes prose the user owns into the temp HOME's

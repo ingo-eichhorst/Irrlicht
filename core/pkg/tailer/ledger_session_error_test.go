@@ -47,12 +47,10 @@ func TestLedger_SessionErrorSurvivesRestart(t *testing.T) {
 	// Every numeric field is a pointer precisely because absence and zero are
 	// different facts, so the round-trip has to preserve the distinction rather
 	// than just the struct.
-	assertIntPtr(t, "HTTPStatus", got.HTTPStatus, status)
-	assertIntPtr(t, "Attempt", got.Attempt, attempt)
-	assertIntPtr(t, "MaxAttempts", got.MaxAttempts, maxAttempts)
-	if got.RetryIn == nil || *got.RetryIn != retryIn {
-		t.Errorf("RetryIn = %v, want %v — the fractional retry delay did not round-trip", got.RetryIn, retryIn)
-	}
+	assertPtr(t, "HTTPStatus", got.HTTPStatus, status)
+	assertPtr(t, "Attempt", got.Attempt, attempt)
+	assertPtr(t, "MaxAttempts", got.MaxAttempts, maxAttempts)
+	assertPtr(t, "RetryIn", got.RetryIn, retryIn)
 }
 
 // TestLedger_ClearedSessionErrorStaysCleared is a LOCK, not a defect test: it
@@ -121,20 +119,36 @@ func restartThroughLedger(t *testing.T, src *TranscriptTailer) *TranscriptTailer
 	return dst
 }
 
-func assertIntPtr(t *testing.T, name string, got *int, want int) {
+// assertPtr checks an optional field by what it points AT, and reports a nil
+// distinctly from a wrong value.
+//
+// Generic over the pointed-to type so RetryIn (*time.Duration) gets the same
+// "an absent number is not a zero one" message as the three *int fields, rather
+// than an inline comparison on the one field where the distinction is least
+// obvious.
+func assertPtr[T comparable](t *testing.T, name string, got *T, want T) {
 	t.Helper()
 	if got == nil {
-		t.Errorf("%s = nil, want %d — an absent number is not the same fact as a zero one", name, want)
+		t.Errorf("%s = nil, want %v — an absent value is not the same fact as a zero one", name, want)
 		return
 	}
 	if *got != want {
-		t.Errorf("%s = %d, want %d", name, *got, want)
+		t.Errorf("%s = %v, want %v", name, *got, want)
 	}
 }
 
-// newLedgerTestTailer builds the minimum TranscriptTailer the ledger paths
-// touch. GetLedgerState and SetLedgerState both read and write t.metrics, so a
-// bare &TranscriptTailer{} nil-derefs — the zero value is not a usable tailer.
+// newLedgerTestTailer builds a tailer through the package's real constructor,
+// as every sibling ledger test does.
+//
+// NOT a &TranscriptTailer{metrics: &SessionMetrics{}} literal, which is enough
+// to make these tests pass today and is the wrong shape: NewTranscriptTailer
+// also initialises openToolCalls, openPermissions, openBackgroundProcs,
+// pendingBashPolls, pendingTaskCreates, cumByModel and windowSize. A ledger
+// test asserting round-trip fidelity against a tailer the daemon never
+// constructs is one field away from a nil-map panic or a false green — in the
+// one file whose whole job is ledger fidelity.
+//
+// The path is never opened: none of these tests call TailAndProcess.
 func newLedgerTestTailer() *TranscriptTailer {
-	return &TranscriptTailer{metrics: &SessionMetrics{}}
+	return newTestTailer("/nonexistent/ledger-test.jsonl")
 }

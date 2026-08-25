@@ -14,7 +14,6 @@ import (
 
 	"irrlicht/core/adapters/inbound/agents/claudecode"
 	"irrlicht/core/adapters/outbound/filesystem"
-	"irrlicht/core/domain/permission"
 	"irrlicht/core/domain/session"
 )
 
@@ -79,6 +78,11 @@ func TestErrorStateSurvivesDaemonRestart(t *testing.T) {
 	// produces the verdict off the transcript (and writes the ledger the fix
 	// turns on), the second must still report it.
 	t.Run("agent process alive across the restart", func(t *testing.T) {
+		// Each subtest owns its HOME, its IRRLICHT_HOME (and so its unix socket
+		// path), and an ephemeral TCP port, so the three are independent. Run
+		// concurrently: each spends 8s doing nothing but holding an invariant,
+		// and serialising that is ~15s of pure wall clock on every CI run.
+		t.Parallel()
 		homeDir := t.TempDir()
 		stateDir := shortTempDir(t)
 		seedGrantedTranscriptsConsent(t, stateDir)
@@ -145,6 +149,7 @@ func TestErrorStateSurvivesDaemonRestart(t *testing.T) {
 		{"provider error", "rate_limit_error", "API Error: Repeated 529 Overloaded errors."},
 	} {
 		t.Run("agent process dead across the restart ("+tc.name+")", func(t *testing.T) {
+			t.Parallel()
 			homeDir := t.TempDir()
 			stateDir := shortTempDir(t)
 			seedGrantedTranscriptsConsent(t, stateDir)
@@ -235,7 +240,12 @@ func holdSessionState(t *testing.T, addr, sessionID, want string, d time.Duratio
 // "ready" learns the row survived and the verdict did not.
 func liveSessionState(t *testing.T, addr, sessionID string) string {
 	t.Helper()
-	resp, err := http.Get("http://" + addr + "/api/v1/sessions")
+	// Its own client rather than http.DefaultClient: smokeDaemon.shutdown calls
+	// http.DefaultClient.CloseIdleConnections(), which is process-global, so
+	// under t.Parallel one subtest's teardown would drop the others' idle
+	// keep-alives. Harmless (they redial) but a coupling worth not having.
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get("http://" + addr + "/api/v1/sessions")
 	if err != nil {
 		t.Fatalf("GET /api/v1/sessions: %v", err)
 	}
@@ -289,17 +299,9 @@ func findSessionState(node any, want string) (string, bool) {
 // way: a fresh IRRLICHT_HOME leaves every permission PENDING, seedReevaluateStates
 // is consent-gated per adapter, and an un-consented session is simply left
 // persisted as-is — so the test would pass while the daemon monitored nothing.
-//
-// Written through the daemon's own store rather than as a JSON literal, for the
-// reason seedGrantedHooksConsent states: the on-disk shape belongs to
-// filesystem.PermissionStore and is documented as bumpable.
 func seedGrantedTranscriptsConsent(t *testing.T, stateDir string) {
 	t.Helper()
-	set := permission.Set{}
-	set.Put(claudecode.AdapterName, claudecode.PermissionKeyTranscripts, permission.StateGranted)
-	if err := filesystem.NewPermissionStore(stateDir).Save(set); err != nil {
-		t.Fatalf("seed permissions store in %s: %v", stateDir, err)
-	}
+	seedGrantedConsent(t, stateDir, claudecode.PermissionKeyTranscripts)
 }
 
 // seedPersistedSession writes one session row into the state dir the daemon will

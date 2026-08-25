@@ -1,6 +1,9 @@
 package services
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,7 +13,6 @@ import (
 	"time"
 
 	"irrlicht/core/domain/session"
-	"irrlicht/core/ports/outbound"
 )
 
 // #1815 — an errored session must survive a daemon restart. Three things have to
@@ -217,13 +219,6 @@ func TestSeedRestoreErrorVerdict_IgnoresANonErroredRow(t *testing.T) {
 // seedRestoreErrorVerdict) are all unexported, so the shared builders in
 // package services_test cannot reach them.
 
-// restartLog swallows log output. The paths under test log heavily on the way
-// through, and none of it is what is being asserted.
-type restartLog struct{ outbound.Logger }
-
-func (restartLog) LogInfo(_, _, _ string)  {}
-func (restartLog) LogError(_, _, _ string) {}
-
 // restartRepo is a minimal in-memory SessionRepository that COUNTS deletions —
 // which is the observable the sweep tests actually assert on. A sweep that
 // deletes the row is the defect; a sweep that merely declines to report it alive
@@ -284,7 +279,7 @@ func restartPIDManager(t *testing.T) (*PIDManager, *restartRepo) {
 	repo := &restartRepo{}
 	pm := NewPIDManager(PIDManagerDeps{
 		Repo:     repo,
-		Log:      restartLog{},
+		Log:      bornLog{},
 		ReadyTTL: 10 * time.Minute,
 	})
 	return pm, repo
@@ -294,7 +289,7 @@ func restartPIDManager(t *testing.T) (*PIDManager, *restartRepo) {
 // restore touches: a signal-hold store, the verdict registry, a clock and a log.
 func newSeedRestoreDetector(t *testing.T) *SessionDetector {
 	t.Helper()
-	return NewSessionDetector(nil, SessionDetectorDeps{Log: restartLog{}})
+	return NewSessionDetector(nil, SessionDetectorDeps{Log: bornLog{}})
 }
 
 // deadPIDForRestartTest spawns and reaps a process, returning a PID known to be
@@ -326,44 +321,6 @@ func liveProcessForRestartTest(t *testing.T) int {
 		_ = cmd.Wait()
 	})
 	return cmd.Process.Pid
-}
-
-// TestSeedRestoreErrorVerdict_DropsAHoldWhoseTurnActuallyFinished is a LOCK: it
-// passes before #1815 by construction (the restore did not exist, so nothing was
-// ever applied) and pins the direction the restore must NOT break.
-//
-// The exit edge places a process-death hold PROVISIONALLY, because at the moment
-// a process dies the daemon cannot tell a crash from a clean exit — a headless
-// agent writes its turn-ending line and exits microseconds later. Overlay's
-// staleness rule is the actual verdict. Restoring the hold at seed time must go
-// through that same rule rather than around it, or every clean `claude -p` run
-// on disk at boot would come back red.
-func TestSeedRestoreErrorVerdict_DropsAHoldWhoseTurnActuallyFinished(t *testing.T) {
-	d := newSeedRestoreDetector(t)
-
-	state := &session.SessionState{
-		SessionID: "finished-1815",
-		State:     session.StateError,
-		UpdatedAt: time.Now().Unix(),
-		Metrics: &session.SessionMetrics{
-			SessionError: &session.SessionError{
-				Phase: session.ErrorPhaseTerminal,
-				Class: session.ErrorClassProcessDeath,
-			},
-		},
-	}
-	persisted := persistedErrorVerdict(state)
-
-	// The turn HAD in fact ended before the process exited.
-	state.Metrics = &session.SessionMetrics{LastEventType: "turn_done"}
-
-	d.seedRestoreErrorVerdict(state, persisted)
-
-	if state.Metrics.ProcessDeath {
-		t.Errorf("a session whose turn had finished was pinned as a process death — " +
-			"the seed restore bypassed Overlay's staleness rule, so every clean headless " +
-			"exit sitting on disk at boot comes back red")
-	}
 }
 
 // TestStartupSweeps_KeepARetainedErrorOrphanRow covers the THIRD deleter, found
@@ -533,8 +490,16 @@ func TestSeedRestoreErrorVerdict_NoVerdictWhenOverlayDropsTheHold(t *testing.T) 
 
 	d.seedRestoreErrorVerdict(state, persisted)
 
+	// A LOCK, and the precondition for the assertion below: the exit edge places
+	// a process-death hold PROVISIONALLY, because at the moment a process dies
+	// the daemon cannot tell a crash from a clean exit — a headless agent writes
+	// its turn-ending line and exits microseconds later. Overlay's staleness rule
+	// is the actual verdict, and the seed restore must go THROUGH it rather than
+	// around it, or every clean `claude -p` run sitting on disk at boot comes
+	// back red.
 	if state.Metrics.ProcessDeath {
-		t.Fatalf("Overlay should have dropped the hold as stale for a finished turn")
+		t.Fatalf("a session whose turn had finished was pinned as a process death — the seed " +
+			"restore bypassed Overlay's staleness rule")
 	}
 
 	// The hold never applied, so the classifier settles the row away from
@@ -582,5 +547,149 @@ func TestSeedRetainRestoredError_SkipsARecoveredSession(t *testing.T) {
 	if _, ok := d.processDeathVerdictAt("recovered-across-restart-1815"); ok {
 		t.Errorf("a recovered session was registered for retention — it is now shielded from " +
 			"the reaper for the whole window despite no longer being in error")
+	}
+}
+
+// TestEveryReaperConsultsTheErrorExemption is a STRUCTURAL tripwire, not a
+// behavioural test: it fails when a function that deletes session rows does not
+// consult the #1815 error exemption.
+//
+// WHY A STATIC CHECK RATHER THAN MORE CASES. The first cut of this fix inlined
+// the exemption at the three deleters its author had found, and a fourth —
+// sweepStaleSnapshot's ready-TTL branch — went on deleting a PID==0 errored row
+// after 30 minutes, inside the twelve-hour window. Nothing structurally
+// connected "a place that deletes rows" to "consult the exemption", so the miss
+// was invisible: every behavioural test passed, because none of them exercised
+// that particular reaper. A per-site inventory in a doc comment has the same
+// weakness — it was written already stale.
+//
+// The exemption list below is the deliberate part. A deleter on it is one that
+// must NOT consult the exemption, with the reason stated; adding a new reaper
+// means either calling retainsError or arguing here why it is exempt.
+func TestEveryReaperConsultsTheErrorExemption(t *testing.T) {
+	// Deleters that intentionally do not consult it, and why.
+	exempt := map[string]string{
+		"deleteSession":                      "the shared choke point; guarding here would strand an errored CHILD whose parent was deleted, leaving a dangling ParentSessionID nothing can collect",
+		"deleteWithChildren":                 "same choke-point argument, and it would re-shield a row whose verdict HandlePIDAssigned deliberately retired (TestHandlePIDAssigned_RetiresAProcessDeathVerdict)",
+		"cleanupChildren":                    "children are reaped on their parent's lifecycle, not their own state",
+		"reapStaleChild":                     "same: a child's retention belongs to its parent",
+		"reapUnboundReadyGhost":              "ready-state ghosts only; an errored row never reaches it",
+		"dedupeByPID":                        "supersession, not reaping — the surviving row carries the identity",
+		"sweepSupersededPreSessions":         "presession supersession, not reaping — only `proc-` rows, which never carry a verdict",
+		"sweepSupersededPreSessionsPeriodic": "same, on the periodic timer — verified to `continue` on any id without the `proc-` prefix",
+		"removeSessionUntracked":             "the untracked-removal primitive the two supersession sweeps call",
+		"HandleProcessExit":                  "routes through onProcessDiedMidTurn (retainAsProcessDeath), which owns the live-path retention via the verdict map",
+	}
+
+	src, err := os.ReadFile("pid_manager.go")
+	if err != nil {
+		t.Fatalf("read pid_manager.go: %v", err)
+	}
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "pid_manager.go", src, 0)
+	if err != nil {
+		t.Fatalf("parse pid_manager.go: %v", err)
+	}
+
+	var checked int
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			continue
+		}
+		name := fn.Name.Name
+		if _, ok := exempt[name]; ok {
+			continue
+		}
+		var deletes, consults bool
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			switch sel.Sel.Name {
+			case "deleteWithChildren", "deleteSession", "removeSessionUntracked":
+				deletes = true
+			case "retainsError", "isStartupZombie":
+				// isStartupZombie counts as consulting: the guard lives inside
+				// that predicate, so its callers inherit it. Delegation is a
+				// legitimate way to satisfy this check; re-implementing the
+				// window at the call site is not.
+				consults = true
+			}
+			return true
+		})
+		if !deletes {
+			continue
+		}
+		checked++
+		if !consults {
+			t.Errorf("%s deletes session rows but never calls retainsError — #1815: an errored "+
+				"row within its retention window is deleted by this path. Either consult the "+
+				"exemption, or add %s to this test's `exempt` map with the reason.", name, name)
+		}
+	}
+
+	// The tripwire must fail loudly when it cannot run: an AST walk that matched
+	// nothing looks identical to a clean result. Four non-exempt deleters exist
+	// today (isStartupZombie's caller CleanupZombies, seedAlivePIDs,
+	// reapOrRetainDeadSeedPID, sweepStaleSnapshot); a floor of 3 leaves room for
+	// refactoring without letting the check silently go inert.
+	if checked < 3 {
+		t.Fatalf("the reaper scan matched only %d deleting function(s) — the AST walk or the "+
+			"call-name list has gone stale, and this test is no longer checking anything", checked)
+	}
+}
+
+// TestStaleSweep_KeepsARetainedErrorRow is the behavioural half of the fifth
+// deleter the structural tripwire above exists to prevent.
+//
+// sweepStaleSnapshot's `snap.pid == 0` branch deletes after readyTTL — 30
+// minutes by default — which is inside the twelve-hour window an errored row is
+// promised. It takes exactly the shape #1815's own comments describe: a headless
+// run that fails on a provider error and exits before PID discovery binds.
+func TestStaleSweep_KeepsARetainedErrorRow(t *testing.T) {
+	pm, repo := restartPIDManager(t)
+
+	state := &session.SessionState{
+		SessionID: "stale-error-1815",
+		State:     session.StateError,
+		PID:       0,
+		// Well past readyTTL, well inside the error retention window.
+		UpdatedAt: time.Now().Add(-2 * time.Hour).Unix(),
+		Metrics: &session.SessionMetrics{
+			SessionError: &session.SessionError{Phase: session.ErrorPhaseTerminal, Class: "provider"},
+		},
+	}
+	pm.sweepStaleSnapshot(snapshotForTest(state))
+
+	if repo.deletedCount() != 0 {
+		t.Fatalf("the ready-TTL liveness sweep deleted an errored row %v old — #1815: the "+
+			"twelve-hour promise is really readyTTL (%v) for a PID==0 errored session",
+			2*time.Hour, pm.readyTTL)
+	}
+
+	// The window still closes: past the retention, the sweep reaps as before.
+	pm2, repo2 := restartPIDManager(t)
+	stale := *state
+	stale.UpdatedAt = time.Now().Add(-processDeathRetention - time.Hour).Unix()
+	pm2.sweepStaleSnapshot(snapshotForTest(&stale))
+	if repo2.deletedCount() != 1 {
+		t.Errorf("an errored row past the retention window was not reaped by the stale sweep — "+
+			"the exemption never expires (deleted %d)", repo2.deletedCount())
+	}
+}
+
+// snapshotForTest builds the livenessSnapshot sweepStaleSnapshot consumes.
+func snapshotForTest(state *session.SessionState) livenessSnapshot {
+	return livenessSnapshot{
+		state:        state,
+		pid:          state.PID,
+		sessionState: state.State,
+		updatedAt:    state.UpdatedAt,
 	}
 }

@@ -226,14 +226,26 @@ func waitForAddrFileTight(t *testing.T, addrPath string, deadline time.Time) {
 // re-verification loop watching them.
 func seedGrantedHooksConsent(t *testing.T, stateDir string) {
 	t.Helper()
-	// Through the daemon's own store, not a hand-written JSON literal: the
-	// on-disk shape (the filename, the version field, the nesting) belongs to
-	// filesystem.PermissionStore and is documented as bumpable. A literal here
-	// would keep parsing as valid-but-empty after such a bump, and the test
-	// would then fail at its vacuity guard complaining about hook entries
-	// rather than about the schema.
+	seedGrantedConsent(t, stateDir, claudecode.PermissionKeyHooks)
+}
+
+// seedGrantedConsent writes a permissions.json granting one Claude Code
+// permission, for a daemon that is about to boot against stateDir.
+//
+// Through the daemon's own store, not a hand-written JSON literal: the on-disk
+// shape (the filename, the version field, the nesting) belongs to
+// filesystem.PermissionStore and is documented as bumpable. A literal here would
+// keep parsing as valid-but-empty after such a bump, and the caller would then
+// fail at its vacuity guard complaining about the thing it seeded rather than
+// about the schema.
+//
+// One helper rather than one per key: Save replaces the whole set, so the three
+// live-daemon tests that need this were three byte-identical copies differing
+// only in a constant.
+func seedGrantedConsent(t *testing.T, stateDir, key string) {
+	t.Helper()
 	set := permission.Set{}
-	set.Put(claudecode.AdapterName, claudecode.PermissionKeyHooks, permission.StateGranted)
+	set.Put(claudecode.AdapterName, key, permission.StateGranted)
 	if err := filesystem.NewPermissionStore(stateDir).Save(set); err != nil {
 		t.Fatalf("seed permissions store in %s: %v", stateDir, err)
 	}

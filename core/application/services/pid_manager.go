@@ -172,31 +172,37 @@ type PIDManager struct {
 	recorder    outbound.EventRecorder
 	recorderSeq *int64 // shared with SessionDetector for monotonic ordering
 
-	// errorRetentionOverride, when non-zero, replaces processDeathRetention in
-	// this manager's #1815 exemption. Zero means "use the package default".
-	//
-	// It exists so the sweeps' window and SessionDetector's stay ONE knob:
-	// SetProcessDeathRetention forwards here, and a test that compresses twelve
-	// hours to milliseconds compresses both halves. Without it a compressed test
-	// would shorten the detector's retention and leave the sweeps measuring the
-	// real twelve hours — two windows the code repeatedly calls "the same twelve
-	// hours", silently disagreeing.
-	errorRetentionOverride time.Duration
+	// errorRetention is how long this manager's sweeps spare an errored row
+	// after a daemon restart (#1815). Defaulted to processDeathRetention in
+	// NewPIDManager and overwritten wholesale by SetErrorRetention, exactly as
+	// SessionDetector holds its own copy — rather than as a zero-means-default
+	// sentinel, which would make SetErrorRetention(0) mean "twelve hours" here
+	// while SetProcessDeathRetention(0) means "never retain" there. Two knobs
+	// the code calls "the same twelve hours" must not disagree at any value.
+	errorRetention time.Duration
 }
 
 // SetErrorRetention overrides the window this manager's #1815 exemption measures.
 // Forwarded from SessionDetector.SetProcessDeathRetention so the two cannot drift.
 func (pm *PIDManager) SetErrorRetention(dur time.Duration) {
-	pm.errorRetentionOverride = dur
+	pm.errorRetention = dur
 }
 
-// errorRetention is the window the startup exemptions measure — the override
-// when one is set, the shared default otherwise.
-func (pm *PIDManager) errorRetention() time.Duration {
-	if pm.errorRetentionOverride > 0 {
-		return pm.errorRetentionOverride
-	}
-	return processDeathRetention
+// retainsError reports whether state is an errored row this sweep must spare.
+//
+// ONE METHOD, CONSULTED BY EVERY REAPER PREDICATE, rather than the predicate
+// inlined per site. The distinction is not cosmetic: the first cut of #1815
+// inlined it at the three sites its author had found, and a fourth — the
+// ready-TTL branch of sweepStaleSnapshot — went on deleting a PID==0 errored
+// row after readyTTL (30 minutes by default), which made the twelve-hour promise
+// false for exactly the shape #1815's own comments describe (a headless run that
+// fails on a provider error and exits before PID discovery binds). Nothing
+// structurally connected "a place that deletes rows" to "consult the exemption",
+// so the miss was invisible. Keeping the call one short name makes adding the
+// next reaper's consultation cheap, and TestEveryReaperConsultsTheErrorExemption
+// fails if a new deleter forgets.
+func (pm *PIDManager) retainsError(state *session.SessionState) bool {
+	return retainedErrorAcrossRestart(state, time.Now(), pm.errorRetention)
 }
 
 // PIDManagerDeps bundles NewPIDManager's dependencies. PW and Broadcaster may
@@ -238,6 +244,7 @@ func NewPIDManager(deps PIDManagerDeps) *PIDManager {
 
 		onProcessDiedMidTurn: deps.OnProcessDiedMidTurn,
 		pendingPIDs:          make(map[string]int),
+		errorRetention:       processDeathRetention,
 	}
 }
 
@@ -654,7 +661,7 @@ func (pm *PIDManager) isStartupZombie(state *session.SessionState, liveLookup fu
 	// its retention window is worth keeping whatever this sweep's reason for
 	// wanting it gone (#1815). See retainedErrorAcrossRestart for the full list
 	// of paths that consult it.
-	if retainedErrorAcrossRestart(state, time.Now(), pm.errorRetention()) {
+	if pm.retainsError(state) {
 		return false
 	}
 	if state.PID > 0 {
@@ -1269,6 +1276,14 @@ func (pm *PIDManager) sweepStaleSnapshot(snap livenessSnapshot) {
 	if snap.pid > 0 && syscall.Kill(snap.pid, 0) == nil {
 		return
 	}
+	// The FIFTH reaper an errored row can reach, and the one the first cut of
+	// #1815 missed: `snap.pid == 0` takes an errored row whose PID discovery
+	// never bound, after readyTTL (30 minutes) rather than after the twelve
+	// hours that state was promised. Consulted here for the same reason as at
+	// every other reaper predicate — see PIDManager.retainsError.
+	if pm.retainsError(snap.state) {
+		return
+	}
 	if snap.sessionState == session.StateReady || snap.pid == 0 {
 		pm.log.LogInfo(logComponentSessionDetector, snap.state.SessionID,
 			fmt.Sprintf("%s session (pid=%d) idle for >%v, deleting",
@@ -1396,7 +1411,7 @@ func (pm *PIDManager) seedAlivePIDs(states []*session.SessionState) map[int]*ses
 			if pm.handleAlivePIDState(state) {
 				pm.trackNewestByPID(state, newestByPID)
 			}
-		case state.PID == 0 && !retainedErrorAcrossRestart(state, time.Now(), pm.errorRetention()) && isOrphanAtSeed(state):
+		case state.PID == 0 && !pm.retainsError(state) && isOrphanAtSeed(state):
 			// Orphan from exited process (PID discovery never succeeded).
 			// Child sessions (ParentSessionID set) are exempt — they run
 			// inside the parent process and never get their own PID.
@@ -1442,20 +1457,7 @@ func isOrphanAtSeed(state *session.SessionState) bool {
 // Returns true when the state remains alive after processing.
 func (pm *PIDManager) handleAlivePIDState(state *session.SessionState) bool {
 	if syscall.Kill(state.PID, 0) == syscall.ESRCH {
-		// A SECOND DEAD-PID DELETER, and it has to make the same exemption as
-		// isStartupZombie or that one is worth nothing (#1815). CleanupZombies
-		// runs first and would normally have taken this row already; this path is
-		// what catches it when that sweep is skipped (demo mode) or when SeedPIDs
-		// is reached by any route that did not run it.
-		if retainedErrorAcrossRestart(state, time.Now(), pm.errorRetention()) {
-			pm.log.LogInfo(logComponentSessionDetectorSeed, state.SessionID,
-				fmt.Sprintf("pid %d dead but session is %s within the retention window — keeping (#1815)",
-					state.PID, state.State))
-			return false
-		}
-		pm.log.LogInfo(logComponentSessionDetectorSeed, state.SessionID,
-			fmt.Sprintf("pid %d dead, deleting session", state.PID))
-		pm.deleteWithChildren(state, fmt.Sprintf("pid %d dead at seed (ESRCH)", state.PID))
+		pm.reapOrRetainDeadSeedPID(state)
 		return false
 	}
 	if pm.pw != nil {
@@ -1481,6 +1483,32 @@ func (pm *PIDManager) handleAlivePIDState(state *session.SessionState) bool {
 		_ = pm.repo.Save(state)
 	}
 	return true
+}
+
+// reapOrRetainDeadSeedPID handles a seeded session whose PID is already dead:
+// deleted as before, unless it is an errored row still inside its retention
+// window (#1815).
+//
+// A SECOND DEAD-PID DELETER, and it has to make the same exemption as
+// isStartupZombie or that one is worth nothing. CleanupZombies runs first and
+// would normally have taken this row already; this path is what catches it when
+// that sweep is skipped (demo mode) or when SeedPIDs is reached by any route
+// that did not run it.
+//
+// Broken out of handleAlivePIDState rather than nested inside it so the one
+// function a reader opens to answer "what deletes a seeded row?" does not
+// interleave this decision with the watcher registration and launcher/badge
+// backfill that follow it.
+func (pm *PIDManager) reapOrRetainDeadSeedPID(state *session.SessionState) {
+	if pm.retainsError(state) {
+		pm.log.LogInfo(logComponentSessionDetectorSeed, state.SessionID,
+			fmt.Sprintf("pid %d dead but session is %s within the retention window — keeping (#1815)",
+				state.PID, state.State))
+		return
+	}
+	pm.log.LogInfo(logComponentSessionDetectorSeed, state.SessionID,
+		fmt.Sprintf("pid %d dead, deleting session", state.PID))
+	pm.deleteWithChildren(state, fmt.Sprintf("pid %d dead at seed (ESRCH)", state.PID))
 }
 
 // backfillLauncher reattempts Launcher capture for pre-existing sessions that
