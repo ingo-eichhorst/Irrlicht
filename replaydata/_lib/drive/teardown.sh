@@ -34,6 +34,104 @@ wait_tmux_session_gone() { # <session> [max_wait_secs]
   return 0   # best-effort poll: hitting the cap is not a caller-visible failure
 }
 
+# require_tmux_session_gone <session> [max_wait_secs]
+#   STRICT sibling of wait_tmux_session_gone (#1825). Same 0.2s cadence, same
+#   default cap, same worst-case timing — the ONLY difference is the return
+#   contract: 0 exclusively when `tmux has-session` has actually been observed
+#   to fail (the session is gone), NON-ZERO when the cap expired with the
+#   session still present. It never reports success without an observation.
+#
+#   WHY BOTH EXIST, and which to reach for:
+#     * wait_tmux_session_gone is a SETTLE. The caller has already made the
+#       session's death certain by other means — it killed the session itself
+#       (copilot's restart arm, `tmux kill-session` then wait) or the process
+#       is expected to be gone already — and only wants to avoid racing the
+#       next step. Hitting the cap there is genuinely not a failure, which is
+#       why it returns 0 unconditionally, and drive-lib_test.sh locks that.
+#     * require_tmux_session_gone is a VERIFICATION. The caller asked a live
+#       TUI to exit and has no other evidence it obeyed. #1825: claude answers
+#       a single Ctrl-D with "Press Ctrl-D again to exit" and then lets the
+#       confirmation expire, so nine recording runs sent the key, slept, marked
+#       the slot dead and leaked a live process plus its tmux session while
+#       reporting driver.exit-reason=ok. A poll that cannot fail turns "the
+#       exit key stopped working" into "the exit key worked" — the exact shape
+#       AGENTS.md's "a verification mechanism must fail loudly when it cannot
+#       run" forbids. Every graceful-exit site uses THIS one and acts on the
+#       non-zero: log, kill the session explicitly, set a non-zero EXIT_REASON.
+#
+#   Costs one extra `has-session` call versus the best-effort poll in the
+#   timeout case (the cap is checked INSIDE the loop, after an observation,
+#   so the answer is always a fresh observation rather than an inference from
+#   the tick counter). The sleep budget is identical: max_wait*5 ticks.
+#
+#   Assumes `tmux` is on PATH — every driver hard-fails at launch if it is not
+#   (`command -v tmux || exit 1`). A missing tmux binary would make has-session
+#   fail and read as "gone"; that is out of this poll's reach by design, and is
+#   why the post-run assertion in run-cell.sh checks it can look at all.
+#
+#   THE CAP CALLERS SHOULD PASS IS DRIVE_EXIT_CLEAN_CAP_S, below — not a literal,
+#   and NOT this function's `max_wait` default of 2, which exists only so the
+#   best-effort sibling's signature stays unchanged.
+require_tmux_session_gone() { # <session> [max_wait_secs]
+  local session="$1" max_wait="${2:-2}"
+  local ticks=$(( max_wait * 5 )) w=0
+  while tmux has-session -t "$session" 2>/dev/null; do
+    if [[ $w -ge $ticks ]]; then
+      return 1   # cap expired and the session is STILL there — a real failure
+    fi
+    sleep 0.2
+    w=$((w + 1))
+  done
+  return 0       # has-session failed: the session is OBSERVED gone
+}
+
+# DRIVE_EXIT_CLEAN_CAP_S — the cap every driver's step_exit_clean hands to
+# require_tmux_session_gone. Defined ONCE: this is a figure that documents
+# behaviour, and a number re-typed at eight call sites plus eight log strings
+# drifts away from the justification below (AGENTS.md, "a number typed once and
+# repeated by hand drifts silently away from what it measured").
+#
+# HOW THIS NUMBER WAS ARRIVED AT — it is NOT a measurement, and saying so is the
+# whole point (#1825 review, finding 3).
+#
+# Six drivers carried `2`. That 2 was inherited verbatim from the flat `sleep 2`
+# the #1018 poll extraction replaced — see wait_tmux_session_gone above, whose
+# own doc says "the same duration as the sleep it replaces, so worst-case timing
+# never regresses". Under that sleep, 2s was a SETTLE BUDGET and overrunning it
+# was FREE: a TUI that took 3s to die still died, the wait just ended early, and
+# nothing failed. #1825 gave that same number a second and far harsher meaning —
+# at the cap the driver now SIGHUPs the pane with `tmux kill-session` and sets a
+# non-zero EXIT_REASON, which run-cell-multi.sh escalates into failing the whole
+# cross-adapter run. A duration chosen when overrunning was free had never been
+# justified as a deadline that truncates a transcript and fails a run, and the
+# fleet's own inconsistency was the tell: copilot and mistral-vibe were given 15.
+#
+# WHY NOT A MEASURED PER-ADAPTER TABLE. That needs live recording runs per
+# adapter on a loaded host, repeated enough to see the tail — a recording-rig
+# exercise, not something this change can produce. It would also have holes in
+# exactly the adapters whose slow case is being bounded: gemini-cli cannot be
+# driven on this host at all (its account is tier-ineligible — see that driver's
+# own note at driver-interactive.sh, "gemini-cli is NOT recordable on the machine
+# this was written on"), and it is one of the two Ink/node TUIs whose V8 teardown
+# plus final transcript flush is the latency actually at issue.
+#
+# So the cap is a deliberately GENEROUS bound rather than a fitted one: 15s, the
+# value copilot and mistral-vibe already carried (mistral-vibe's step_exit_clean
+# calls its teardown "the slowest in the fleet"), applied uniformly so that no
+# adapter is held to a tighter deadline than the slowest one anyone has looked
+# at. Raising it is close to free because the poll returns on the FIRST
+# successful observation: a clean exit costs one `tmux has-session` that fails,
+# exactly what `2` cost. The cap only bounds the pathological case — and there
+# the outcome it prevents is a truncated transcript plus a spurious driver fault
+# on an agent that was still flushing.
+#
+# Lowering it again needs the measurement this comment could not take: per
+# adapter, wall-clock from the exit key to `tmux has-session` failing, on a
+# loaded host, over enough runs to see the tail.
+# shellcheck disable=SC2034  # read by the DRIVERS that source this lib (each
+# step_exit_clean), never by this file.
+DRIVE_EXIT_CLEAN_CAP_S=15
+
 # wait_pid_gone <pid> [max_wait_secs]
 #   Poll every 0.2s until <pid> no longer exists (kill -0 fails), capped at
 #   <max_wait_secs> (default 1). No-op if <pid> is empty — callers that

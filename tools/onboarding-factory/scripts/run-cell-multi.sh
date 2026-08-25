@@ -84,6 +84,14 @@ source "$SCRIPT_DIR/lib/completeness-check.sh"
 # CODEX_HOME, i.e. exactly the one-rig-only drift #1214 is about.
 # shellcheck source=lib/agent-home.sh
 source "$SCRIPT_DIR/lib/agent-home.sh"
+# "Did the driver's tmux sessions actually die?" — the same library run-cell.sh
+# sources, wired here for the same reason #1214 made the daemon lifecycle
+# shared: a gate that lands in one rig and not the other is the DEFAULT outcome,
+# not the unlucky one. This rig needs it more, not less: it is coexist-only by
+# construction, so a leaked agent keeps running next to the operator's
+# production daemon, in a shared workspace two adapters were both writing to.
+# shellcheck source=lib/tmux-teardown-check.sh
+source "$SCRIPT_DIR/lib/tmux-teardown-check.sh"
 
 DRY_RUN=0
 positional=()
@@ -303,7 +311,12 @@ spawn_record_daemon "$DAEMON" "$STAGING" "$ONBOARD_BIND" "$ONBOARD_HOME" "$ADAPT
 # --- Launch every adapter's interactive driver CONCURRENTLY -------------
 # All share $SHARED_CWD (the same workspace). Each gets its own staging
 # subdir, fresh preferred-UUID, settings.json, and the cell's script.
-declare -a DRV_PIDS=() DRV_ADAPTERS=()
+# DRV_TIMEOUTS is the third parallel array (bash 3.2 — no associative arrays):
+# each driver's own `timeout_seconds`, which the teardown gate below needs as
+# the upper bound on how long the session it asks about could have lived. It is
+# per-ADAPTER, not per-run — the two agents in a cross-adapter cell routinely
+# declare different timeouts — so it cannot be re-derived after this loop.
+declare -a DRV_PIDS=() DRV_ADAPTERS=() DRV_TIMEOUTS=()
 for a in "${ADAPTERS[@]}"; do
   sub="$STAGING/$a"
   mkdir -p "$sub"
@@ -318,9 +331,123 @@ for a in "${ADAPTERS[@]}"; do
   IRRLICHT_ONBOARD_CWD="$SHARED_CWD" \
     "$driver" "$sub" "$uuid" "$timeout_s" "$sub/settings.json" "$script_json" \
     >"$sub/driver.out" 2>&1 &
+  # `$!` is the RUN IDENTITY the teardown gate matches session names against,
+  # and this rig needs no `driver.pid` file to learn it (run-cell.sh does, since
+  # its call is in the foreground): the command backgrounded above is a simple
+  # command, so bash forks once and execs the driver in that same child — `$!`
+  # and the `$$` the driver goes on to embed in its tmux session names are one
+  # number. Measured on this bash rather than assumed:
+  #     $ FOO=bar ./drv.sh a b c >out 2>&1 & ; echo "parent \$! = $!"; wait; cat out
+  #     parent $! = 81518
+  #     driver sees $$ = 81518
+  # (bash 3.2.57(1)-release, arm64-apple-darwin25 — the recording host.)
   DRV_PIDS+=($!)
   DRV_ADAPTERS+=("$a")
+  DRV_TIMEOUTS+=("$timeout_s")
 done
+
+# --- Did each driver's tmux sessions actually die? (#1825 / AC4) --------
+# Same two-part shape as run-cell.sh:441-489 — MEASURE the instant a driver
+# returns, act on the VERDICT further down — for the same reason: everything
+# after the driver returns (the daemon drain, the recording pick) takes time,
+# and a look taken after it is strictly more lenient than the one this gate is
+# supposed to be taking.
+#
+# Per driver, not per run: each adapter's sessions carry its OWN pid, so the
+# check is scoped to one driver at a time and a survivor can be attributed. The
+# measurement runs inside the wait loop, so driver 0's sessions are inspected
+# while driver 1 may still be live — which is fine and deliberate, because pid
+# scoping is what separates them.
+TMUX_TEARDOWN_JSON="{}"   # adapter -> {status, detail, driver_pid}
+TMUX_LEAKED=""            # space-joined adapters whose sessions outlived them
+TMUX_UNREADABLE=""        # space-joined adapters whose check could not be made
+
+# BEGIN record_driver_teardown — extracted verbatim and executed against a
+# shadowed tmux by lib/run-cell-multi-teardown_test.sh. Keep the markers.
+record_driver_teardown() {
+  local a="$1" pid="$2" lifetime="$3"
+  local deadline status detail rc=0
+  # The deadline/lifetime pair await_gone_bound checks, computed exactly as
+  # run-cell.sh:469-472 computes it (a tenth of the driver timeout, capped at 5s
+  # so a long cell does not buy a long wait for a session that should already be
+  # gone, floored at 1s so it can never become the "look exactly once" deadline
+  # await_gone_bound refuses). Duplicated rather than shared because the pair is
+  # the CALLER's policy, not the library's — but see the note in the report:
+  # a tmux_teardown_deadline_for helper in the lib would be the better home.
+  deadline=$(( lifetime / 10 ))
+  if [[ "$deadline" -gt 5 ]]; then deadline=5; fi
+  if [[ "$deadline" -lt 1 ]]; then deadline=1; fi
+
+  check_tmux_teardown "$pid" "$deadline" "$lifetime" "the cell's own driver timeout" || rc=$?
+  case "$rc" in
+    0) status="clean"
+       detail="no tmux session carries driver pid ${pid:-<unrecorded>} (settled after ${TMUX_TEARDOWN_ELAPSED}s)" ;;
+    1) status="leaked"
+       detail="$TMUX_TEARDOWN_SURVIVORS"
+       TMUX_LEAKED="${TMUX_LEAKED:+$TMUX_LEAKED }$a" ;;
+    *) status="unreadable"
+       detail="$TMUX_TEARDOWN_REASON"
+       TMUX_UNREADABLE="${TMUX_UNREADABLE:+$TMUX_UNREADABLE }$a" ;;
+  esac
+  TMUX_TEARDOWN_JSON="$(jq -n \
+    --argjson o "$TMUX_TEARDOWN_JSON" \
+    --arg k "$a" --arg status "$status" --arg detail "$detail" --arg pid "$pid" \
+    '$o + {($k): {status: $status, detail: $detail, driver_pid: $pid}}')"
+  echo "tmux teardown [$a]: $status — $detail"
+  return 0
+}
+# END record_driver_teardown
+
+# BEGIN tmux_teardown_verdict — same extraction contract as above.
+#
+# ONE LEAKING DRIVER FAILS THE WHOLE RUN. Not "only that adapter's cell", for
+# two reasons that are specific to this rig rather than tidiness:
+#
+#   1. There is no per-adapter verdict to degrade. This rig writes ONE
+#      run-manifest.json for the run and promote-recording.sh takes the staging
+#      dir as a unit; "adapter A's fixture is fine, adapter B's is not" is not a
+#      state it can express.
+#   2. The leak is not confined to the leaker. Every adapter's events.jsonl is
+#      curated over the WHOLE workspace — ALL_SIDS unions every session of every
+#      adapter in — and all of them share one cwd and one daemon. A still-live
+#      agent is therefore inside every fixture this run would stage, not just
+#      its own, so promoting the "unaffected" ones would promote fixtures whose
+#      workspace was still changing while they were cut.
+#
+# When both a leak and an unreadable check happened, the LEAK names the manifest:
+# it is the finding with an action attached (kill the session), and the
+# unreadable adapters are still listed in the per-adapter detail so neither is
+# lost. They stay distinct codes for the same reason run-cell.sh keeps them
+# distinct — "it leaked" and "nothing was checked" must not print the same thing.
+tmux_teardown_verdict() {
+  [[ -n "$TMUX_LEAKED" || -n "$TMUX_UNREADABLE" ]] || return 0
+
+  local TMUX_MULTI_ERROR
+  if [[ -n "$TMUX_LEAKED" ]]; then
+    TMUX_MULTI_ERROR="driver_tmux_session_survived"
+  else
+    TMUX_MULTI_ERROR="driver_tmux_teardown_unreadable"
+  fi
+  write_error_manifest "$TMUX_MULTI_ERROR" \
+    "$(jq -nc \
+        --argjson tmux_teardown "$TMUX_TEARDOWN_JSON" \
+        --arg tmux_teardown_leaked "$TMUX_LEAKED" \
+        --arg tmux_teardown_unreadable "$TMUX_UNREADABLE" \
+        --arg tmux_teardown_detail "leaked=[${TMUX_LEAKED:-none}] unreadable=[${TMUX_UNREADABLE:-none}]" \
+        '{tmux_teardown: $tmux_teardown,
+          tmux_teardown_leaked: $tmux_teardown_leaked,
+          tmux_teardown_unreadable: $tmux_teardown_unreadable,
+          tmux_teardown_detail: $tmux_teardown_detail}')"
+  if [[ -n "$TMUX_LEAKED" ]]; then
+    echo "ERROR: tmux sessions outlived their driver — adapter(s): $TMUX_LEAKED" >&2
+    echo "  kill the survivor(s) with: tmux kill-session -t <name> (names are in run-manifest.json .tmux_teardown)" >&2
+  fi
+  if [[ -n "$TMUX_UNREADABLE" ]]; then
+    echo "ERROR: the tmux-teardown check could not be made — adapter(s): $TMUX_UNREADABLE" >&2
+  fi
+  return 1
+}
+# END tmux_teardown_verdict
 
 # Wait for all drivers; record each exit status.
 DRV_FAIL=0
@@ -332,11 +459,21 @@ for i in "${!DRV_PIDS[@]}"; do
     echo "driver ${DRV_ADAPTERS[$i]}: FAILED (exit $rc)" >&2
     DRV_FAIL=1
   fi
+  # Measured HERE, one statement after this driver returned — see the block
+  # comment above. A driver that FAILED is measured too: a crashed driver is
+  # the likeliest one to have skipped its own teardown.
+  record_driver_teardown "${DRV_ADAPTERS[$i]}" "${DRV_PIDS[$i]}" "${DRV_TIMEOUTS[$i]}"
 done
 
 # --- Drain the daemon ---------------------------------------------------
 stop_record_daemon   # also disarms the EXIT trap it armed
 DAEMON_SHUTDOWN="$(cat "$STAGING/daemon.shutdown" 2>/dev/null || echo unknown)"
+
+# The teardown VERDICT, taken here rather than in the wait loop: this is the
+# first line where DAEMON_SHUTDOWN is known, so the ERROR manifest carries the
+# same envelope as every other failure path instead of a placeholder — and the
+# daemon is drained and the operator's agent config restored before we exit.
+tmux_teardown_verdict || exit 1
 
 # --- Locate the single recording ----------------------------------------
 RECORDING="$(pick_isolated_recording "$STAGING/recordings" '*.jsonl')" || true

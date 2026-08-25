@@ -7,7 +7,8 @@ contract family (those live in
 suite (those live in [replay-testing.md](replay-testing.md) and
 [swift-testing.md](swift-testing.md)): the core `go test` + architecture +
 ARS score + CodeScene gates; the skill-file, POSIX-shell, and bash linters and
-the sourced-shell-library and shell-lib-suite-runner tripwires; the
+the recording-driver teardown tripwire and the sourced-shell-library and
+shell-lib-suite-runner tripwires; the
 extract-and-execute harnesses over the ARS badge job, the two other gist
 badge jobs, the replaydata deletion guard, the Swift snapshot-evidence copy
 step, and the Swift test-harness source step; the "which bash a workflow step
@@ -284,6 +285,54 @@ CI parity section (chunking, the budget, and what it makes visible).
   step and existence-checks every name, because the one-file check it had would
   have gone on passing while saying nothing about the new entry.
 
+- Recording-driver teardown: a Go tripwire,
+  `tools/onboarding-factory/internal/driverteardown`, over every
+  `replaydata/agents/*/driver-interactive.sh` enumerated from disk, so a new
+  adapter is covered the day it lands rather than the day someone remembers it.
+  It grades four invariants — a `tmux kill-session` in the EXIT-trap handler or
+  at top level is never gated on a liveness flag (INV-1), a driver that launches
+  tmux installs a `trap … EXIT` whose handler tears the session down (INV-2),
+  every session name it mints carries the driver's own `$$` as a `-`-delimited
+  field (INV-3), and a handler that writes `driver.exit-reason` cannot write the
+  verdict variable's INITIAL value on an abort path (INV-4).
+  INV-4 is the one guarding a regression the #1825 fix would otherwise have
+  shipped, so it is the one most easily weakened by accident: before that fix an
+  aborting driver wrote no `driver.exit-reason` at all and `run-cell.sh` read the
+  absence as `unknown`, but a trap writing `"$EXIT_REASON"` unconditionally turns
+  that absence into the initialiser — `ok` — reporting SUCCESS for a run that
+  never formed a verdict. Nine drivers had that hole, six of them before the trap
+  work started. A handler writing a literal rather than a variable has no
+  initial-value hazard and is exempt BY DERIVATION, not by an allowlist
+  (opencode, whose inline trap writes no verdict at all).
+  INV-1 says "at top level", not "the end-of-run sweep", and the two are not the
+  same set: a driver whose step dispatch is a top-level `while … case` — copilot
+  today — has its per-step kills classified as teardown. They are ungated, so it
+  passes; the note matters because a kiro-cli-shaped step guard would read as a
+  violation there.
+  It is the STATIC half of a pair: the runtime half is
+  `tools/onboarding-factory/scripts/lib/tmux-teardown-check.sh`, which
+  `run-cell.sh` calls after the driver returns to assert no session carrying
+  that run's `driver.pid` survived. That runtime check matches on the pid
+  alone, so it is only sound while INV-3 holds — which is exactly why INV-3 is
+  enforced rather than assumed, and why the two halves are named in each
+  other's headers.
+  Structure, not text, separates a teardown site from a legitimate step-level
+  guard: both spellings of the gate are byte-identical, so INV-1 grades a
+  `kill-session` inside the EXIT-trap handler or at top level, and leaves one
+  inside an ordinary function alone (kiro-cli's `step_exit_clean` /
+  `step_sigkill` entry guards are correct — `reset_session` aliases a retired
+  slot number onto a live slot's pane). The accepted blind spot is a driver
+  that moves its end-of-run sweep into a helper function; INV-2 still binds
+  there. Every structural assumption is a refusal rather than a best-effort
+  parse — an unclosed function, an unbalanced `if`/`fi`, a `tmux new-session`
+  with no `-s`, an empty file, or a driver where INV-1 graded nothing all
+  return errors, so "found no violation" and "could not look" never produce
+  the same output. #1825 is the incident: `step_exit_clean` signalled a
+  graceful exit, slept a second, and marked the slot dead without observing
+  it; the teardown loop was gated on that flag and skipped the only session
+  that needed killing. Nine recordings in one morning each leaked a live
+  `claude` and its tmux session.
+
 - Sourced shell libraries: not a contract family — a tripwire,
   `tools/lib/shell-lib-errexit_test.sh`, over every `tools/lib/*.sh` that is
   not a `*_test.sh`. Each function it can drive must, under a caller's
@@ -330,6 +379,25 @@ CI parity section (chunking, the budget, and what it makes visible).
   `_budget_kill_tree`'s own guard reddens the tripwire and leaves
   `gate-budget_test.sh`'s whole `-e` block green, because that helper is only
   ever reached through a region `budget_run` guards separately.
+- Two defaults for shell logic, both learned the hard way and both re-broken
+  inside the very PR that documented them (#1825, caught at review):
+  - **A suite under a `lib/` directory is DISCOVERED, never listed.**
+    `shell_lib_suite_run <dir>` globs `*_test.sh`, so a hand-written
+    "run this suite" block beside it does not add coverage — it re-runs a suite
+    the glob already found, and it re-creates the membership-by-hand problem the
+    glob exists to remove. #1803 added two suites that a hand-typed list did not
+    notice; #1825 then added two blocks four lines below the glob that had
+    already picked them up, and each of those suites ran twice.
+  - **Shell logic that needs a RUNTIME test gets marker-extracted, not
+    re-implemented in the test.** Wrap the block in `# BEGIN <name>` /
+    `# END <name>`, have the test extract and `eval` it against stubs, and make a
+    missing marker a loud REFUSAL rather than an empty pass — a test that
+    reimplements the code under test passes while the real code is broken, which
+    is the same "graded nothing" failure a vacuity guard exists to catch.
+    `tools/onboarding-factory/scripts/lib/run-cell-multi-teardown_test.sh` is the
+    reference; the drivers' `cleanup()` handlers use it to prove INV-4's guard
+    actually rewrites an aborted verdict, which the static checker cannot see.
+
 - The shell-lib suite runner: `tools/lib/shell-lib-suite.sh` is the ONE
   implementation behind test.yml's "Test the shared shell libs" step and
   `tools/preflight.sh`'s `tools` gate. Before #1639 those were two copies of

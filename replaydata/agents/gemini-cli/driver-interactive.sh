@@ -71,6 +71,10 @@ mkdir -p "$RUN_CWD"
 
 DEADLINE=$(( $(date +%s) + TIMEOUT_S ))
 EXIT_REASON="ok"
+# Raised to 1 by the epilogue, immediately before the final exit. cleanup() reads
+# it to tell a run that FINISHED (EXIT_REASON is its verdict) apart from a `set
+# -e` abort that never formed one (#1825) — see cleanup().
+REACHED_EPILOGUE=0
 # Shared exit-reason literal for a bad launch/dispatch error (S1192: defined
 # once here, referenced at every site below instead of repeating the string).
 NONZERO_2='nonzero(2)'
@@ -374,11 +378,34 @@ step_keys() { # <keys>
 step_exit_clean() {
   # Gemini's Ink TUI exits gracefully on Ctrl-D. The OS terminates the
   # `node .../bin/gemini` launcher and the daemon's process scanner emits
-  # process_exited. Sleep gives gemini time to flush final transcript lines.
+  # process_exited.
   tmux send-keys -t "$SESSION" C-d
-  wait_tmux_session_gone "$SESSION" 2
-  SES_ALIVE[$ACTIVE]=0
-  echo "[driver] exit_clean[s$ACTIVE]: sent Ctrl-D to $SESSION" >&2
+  # STRICT poll (#1825): the old best-effort wait_tmux_session_gone returns 0
+  # even when the cap expires with the session still up, and SES_ALIVE=0 was set
+  # regardless — so an exit key that stopped working (as claude's did) read
+  # exactly like one that worked, and the run still reported exit-reason=ok.
+  # Cap: DRIVE_EXIT_CLEAN_CAP_S (_lib/drive/teardown.sh). This site passed 2s
+  # until the #1825 review. That 2 was the pre-#1018 SETTLE budget, where
+  # overrunning was free; the strict poll turned the same number into a hard
+  # deadline that SIGHUPs the pane mid-flush and fails the run. It is now the
+  # fleet-uniform generous bound, and that constant carries how the number was
+  # arrived at: it is a bound, not a measurement.
+  if require_tmux_session_gone "$SESSION" "$DRIVE_EXIT_CLEAN_CAP_S"; then
+    SES_ALIVE[$ACTIVE]=0
+    echo "[driver] exit_clean[s$ACTIVE]: sent Ctrl-D to $SESSION (session gone)" >&2
+  else
+    echo "[driver] exit_clean[s$ACTIVE]: FAILED — $SESSION still alive ${DRIVE_EXIT_CLEAN_CAP_S}s after Ctrl-D;" \
+         "killing its process tree explicitly. gemini did NOT shut down gracefully," \
+         "so this recording has no real clean-exit process_exited." >&2
+    # kill_tree BEFORE kill-session, exactly as the teardown loops do: gemini's
+    # detached `node --max-old-space` worker survives the pane SIGHUP and is
+    # reparented to launchd, so kill-session alone would leave it behind.
+    # (kill_tree is defined further down; bash resolves it at call time.)
+    kill_tree "${SES_PANE_PID[$ACTIVE]:-}"
+    tmux kill-session -t "$SESSION" 2>/dev/null || true
+    SES_ALIVE[$ACTIVE]=0
+    EXIT_REASON="$NONZERO_2"
+  fi
 }
 
 # Find the launcher PID the daemon binds: the lowest-PID `bin/gemini` process
@@ -504,6 +531,7 @@ step_reset_session() {
   # (1s granularity), then re-touch to be safe.
   sleep 1
   alloc_slot "$old_tmux" "$old_cwd"
+  # shellcheck disable=SC2034  # SES_ALIVE is deliberately write-only in this file since #1825 — both teardown nets (cleanup() and the end-of-run loop) now gate on session-name PRESENCE, because gating them on this flag is exactly what leaked a live agent + tmux session per exit_clean run. It stays as the fleet's shared slot vocabulary (the sourced replaydata/_lib/drive/slots.sh:66 sets it; kiro-cli's driver-interactive.sh:552 exit_clean entry guard and antigravity's :505 resume branch do branch on their own copies) and as the per-step record of what the driver BELIEVES about each slot.
   SES_ALIVE[$ACTIVE]=1
   touch "$MARKER"
   echo "[driver] reset_session: new slot #${ACTIVE}, marker bumped, awaiting new chats file" >&2
@@ -540,14 +568,24 @@ kill_tree() {
   kill -KILL "$pid" 2>/dev/null || true
 }
 
+# BEGIN cleanup
 cleanup() {
   local i
   for (( i = 1; i <= N_SLOTS; i++ )); do
     kill_tree "${SES_PANE_PID[$i]:-}"
     tmux kill-session -t "${SES_SESSION[$i]}" 2>/dev/null || true
   done
+  # An abort that never reached the epilogue never formed a verdict, so
+  # EXIT_REASON is still its initial "ok". Writing that would report SUCCESS for
+  # a failed run — the exact shape #1825 exists to stop — so record the
+  # driver-fault reason instead. A verdict already formed (timeout, …) stands.
+  if [[ "$REACHED_EPILOGUE" != "1" && "$EXIT_REASON" == "ok" ]]; then
+    EXIT_REASON="$NONZERO_2"
+    echo "[driver] aborted before the epilogue — recording exit reason $EXIT_REASON, not ok" >&2
+  fi
   echo "$EXIT_REASON" > "$STAGING/driver.exit-reason"
 }
+# END cleanup
 trap cleanup EXIT
 
 require_api_key
@@ -609,10 +647,16 @@ done
 
 sleep 0.5
 
-# Tear down every still-alive session (kill the process tree, not just the tmux
-# session — see kill_tree).
+# Tear down every session this run allocated (kill the process tree, not just
+# the tmux session — see kill_tree). Gated on session-name PRESENCE, not on
+# SES_ALIVE (#1825). gemini-cli did not leak even before this — cleanup() at the
+# trap below is ungated and does the same kill_tree + kill-session per slot — but
+# the invariant is stated flat across every adapter ("no end-of-run teardown kill
+# is gated on SES_ALIVE") rather than as "gated is fine IF an ungated trap sits
+# behind it", because the second form is harder to state than to violate. Both
+# nets now gate the same way, and SES_ALIVE stays the driver's INTENT only.
 for (( i = 1; i <= N_SLOTS; i++ )); do
-  if [[ "${SES_ALIVE[$i]}" == "1" ]]; then
+  if [[ -n "${SES_SESSION[$i]:-}" ]]; then
     kill_tree "${SES_PANE_PID[$i]:-}"
     tmux kill-session -t "${SES_SESSION[$i]}" 2>/dev/null || true
   fi
@@ -639,4 +683,7 @@ emit_session_contract "$(daemon_sid "${SES_TRANSCRIPT[1]}")"
 
 echo "drive-gemini-cli-interactive: $EXIT_REASON (slots=${N_SLOTS}, primary=$(daemon_sid "${SES_TRANSCRIPT[1]}"), transcript=${SES_TRANSCRIPT[1]})"
 
+# The epilogue completed: EXIT_REASON is this run's real verdict, so cleanup()
+# must record it as-is rather than rewrite it as an abort.
+REACHED_EPILOGUE=1
 drive_exit
