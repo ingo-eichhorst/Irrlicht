@@ -643,6 +643,58 @@ func TestHistoryTracker_LoadUnencodableStateIsNotReady(t *testing.T) {
 	}
 }
 
+// assertNoUpgradeEmitted fails if any event is an upgrade — an unencodable
+// state has no 2-bit code, so there is nothing a client could merge.
+func assertNoUpgradeEmitted(t *testing.T, events []HistoryEvent) {
+	t.Helper()
+	for _, ev := range events {
+		if ev.Kind == HistoryEventUpgrade {
+			t.Errorf("unencodable transition emitted an upgrade (priority %d): %+v", ev.Priority, ev)
+		}
+	}
+}
+
+// assertWireBucketsNoData decodes sid's 1s strip and checks the named bucket
+// indices carry the no-data code rather than a colour.
+func assertWireBucketsNoData(t *testing.T, ht *HistoryTracker, sid string, idx ...int) {
+	t.Helper()
+	enc, ok := ht.Encode(sid)
+	if !ok {
+		t.Fatal("Encode failed")
+	}
+	buckets := decodeHistoryString(t, enc.History["1"])
+	for _, i := range idx {
+		if buckets[i] != statePriorityNoData {
+			t.Errorf("wire bucket[%d] = %d, want %d (no-data); %d is ready/green",
+				i, buckets[i], statePriorityNoData, statePriorityReady)
+		}
+	}
+}
+
+// assertTickBucketNoData checks the 1s tick events carry the no-data code for
+// sid, and fails if no such event was observed at all — absence of a finding
+// and inability to look must not read the same.
+func assertTickBucketNoData(t *testing.T, events []HistoryEvent, sid string) {
+	t.Helper()
+	saw := false
+	for _, ev := range events {
+		if ev.Kind != HistoryEventTick || ev.GranularitySec != 1 {
+			continue
+		}
+		p, ok := ev.Buckets[sid]
+		if !ok {
+			continue
+		}
+		saw = true
+		if p != statePriorityNoData {
+			t.Errorf("tick bucket = %d, want %d (no-data)", p, statePriorityNoData)
+		}
+	}
+	if !saw {
+		t.Fatal("no 1s tick event carried this session — the assertion never ran")
+	}
+}
+
 // TestHistoryTracker_UnencodableTransitionNeverSealsReady covers #1807's live
 // half: a session that transitions into an unencodable state seals its
 // following buckets as no-data rather than green, and emits nothing a client
@@ -654,39 +706,72 @@ func TestHistoryTracker_UnencodableTransitionNeverSealsReady(t *testing.T) {
 	sid := "errored"
 
 	ht.OnTransition(sid, "error", epoch)
-	for _, ev := range events {
-		if ev.Kind == HistoryEventUpgrade {
-			t.Errorf("unencodable transition emitted an upgrade (priority %d): %+v", ev.Priority, ev)
-		}
-	}
+	assertNoUpgradeEmitted(t, events)
 
 	events = nil
 	ht.tick() // seals a bucket carrying lastState == "error"
 
-	enc, ok := ht.Encode(sid)
+	assertWireBucketsNoData(t, ht, sid, HistoryBucketCount-2, HistoryBucketCount-1)
+	assertTickBucketNoData(t, events, sid)
+}
+
+// TestHistoryTracker_UnencodableIsPurgedWhenItsBucketIsReused pins the
+// invariant setBucket's doc comment promises: the verbatim string is dropped
+// the moment its bucket takes an encodable value, so a reused ring slot can
+// never resurrect a dead state name into a live bucket — or into history.json.
+func TestHistoryTracker_UnencodableIsPurgedWhenItsBucketIsReused(t *testing.T) {
+	ht := NewHistoryTracker()
+	sid := "reuse"
+	ht.OnTransition(sid, "error", epoch)
+	ht.OnTransition(sid, "waiting", epoch) // outranks no-data, takes the bucket
+
+	rb := ht.sessions[sid].bufs[0]
+	if n := len(rb.unencodable); n != 0 {
+		t.Errorf("unencodable retained %d entr(ies) after the bucket was reused: %v", n, rb.unencodable)
+	}
+	snap, ok := ht.Snapshot(sid, 1)
 	if !ok {
-		t.Fatal("Encode failed")
+		t.Fatal("snapshot missing")
 	}
-	buckets := decodeHistoryString(t, enc.History["1"])
-	for _, i := range []int{HistoryBucketCount - 2, HistoryBucketCount - 1} {
-		if buckets[i] != statePriorityNoData {
-			t.Errorf("wire bucket[%d] = %d, want %d (no-data); %d is ready/green",
-				i, buckets[i], statePriorityNoData, statePriorityReady)
-		}
+	if got := snap[len(snap)-1]; got != "waiting" {
+		t.Errorf("open bucket = %q, want waiting", got)
 	}
-	sawTick := false
-	for _, ev := range events {
-		if ev.Kind != HistoryEventTick || ev.GranularitySec != 1 {
-			continue
-		}
-		sawTick = true
-		if p, ok := ev.Buckets[sid]; ok && p != statePriorityNoData {
-			t.Errorf("tick bucket = %d, want %d (no-data)", p, statePriorityNoData)
-		}
+
+	// A full wrap must drain the map rather than accumulate one entry per slot.
+	ht.OnTransition(sid, "error", epoch)
+	for i := 0; i < HistoryBucketCount; i++ {
+		ht.tick()
 	}
-	if !sawTick {
-		t.Fatal("no 1s tick event observed — the assertion above never ran")
+	ht.OnTransition(sid, "working", epoch)
+	for i := 0; i < HistoryBucketCount; i++ {
+		ht.tick()
 	}
+	if n := len(rb.unencodable); n != 0 {
+		t.Errorf("unencodable held %d entr(ies) after a full wrap of encodable ticks", n)
+	}
+}
+
+// TestHistoryTracker_UnencodableSurvivesOntoABlankOpenBucket covers the tick
+// phase where an unencodable transition lands on a bucket that holds no
+// observed activity either. Nothing is overwritten, so the verbatim string
+// must be recorded — otherwise whether a live `error` reaches history.json
+// depends on when in the second it arrived.
+func TestHistoryTracker_UnencodableSurvivesOntoABlankOpenBucket(t *testing.T) {
+	ht := NewHistoryTracker()
+	sid := "blank-open"
+	ht.EmitSnapshot(sid) // creates the session with no reported state
+	ht.tick()            // seals a blank bucket (lastState is still "")
+	ht.OnTransition(sid, "error", epoch)
+
+	snap, ok := ht.Snapshot(sid, 1)
+	if !ok {
+		t.Fatal("snapshot missing")
+	}
+	if got := snap[len(snap)-1]; got != "error" {
+		t.Errorf("open bucket = %q, want %q preserved onto an otherwise blank bucket", got, "error")
+	}
+	// Rendering is unchanged: preserved, still not painted.
+	assertWireBucketsNoData(t, ht, sid, HistoryBucketCount-1)
 }
 
 // TestHistoryTracker_UnencodableDoesNotClobberObservedActivity is a GUARD this

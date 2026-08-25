@@ -94,6 +94,18 @@ func validGranularity(sec int) bool {
 //     WIN the merge would need the clients to accept a downgrade, which their
 //     priority-based merge cannot express — i.e. a client change, which is
 //     precisely what this fix is scoped to avoid.
+//   - WHAT A USER SEES, stated because it is a real change and the only
+//     alternatives are lies: that carry-forward protection covers the single
+//     open bucket, not the strip. tick() seals each new bucket from lastState,
+//     so a session that STAYS unencodable blanks its whole strip within one
+//     ring (60 buckets: 60 s at 1 s, 1 h at 60 s) and both clients then render
+//     an empty track, having trimmed the leading no-data slots away. Since
+//     #1812/#1813 put real sessions into `error`, that is the common case, not
+//     a corner. It is still the right trade: the 2-bit field's only other
+//     codes are ready/working/waiting, so anything but no-data would paint a
+//     colour the session is not in — which is the bug being fixed. The row's
+//     state icon beside the strip is red throughout, so the user is not
+//     misled, and #1805 is what makes the strip itself say `error`.
 func statePriority(s string) int {
 	switch s {
 	case session.StateWaiting:
@@ -172,8 +184,13 @@ func (rb *ringBuffer) upgrade(newState string) {
 	} else {
 		cur := rb.current()
 		// An unencodable state carries bucketNoData, which is negative and so
-		// never wins here — the open bucket keeps the activity it observed.
-		if p > rb.buckets[cur] {
+		// never wins the strict comparison — the open bucket keeps the activity
+		// it observed. The one exception is a bucket holding no activity
+		// either: recording the verbatim string there overwrites nothing and is
+		// what stops a live `error` from being dropped purely because of which
+		// tick phase it arrived in (#1807). Among successive unencodable states
+		// in one bucket the last one wins, matching "most recent state seen".
+		if p > rb.buckets[cur] || (p == bucketNoData && rb.buckets[cur] == bucketNoData) {
 			rb.setBucket(cur, newState)
 		}
 	}
@@ -211,8 +228,12 @@ func (rb *ringBuffer) snapshot() []string {
 	for i := 0; i < rb.size; i++ {
 		idx := (start + i) % HistoryBucketCount
 		// A state this build cannot encode round-trips verbatim, so save()
-		// writes back what it read rather than a coerced value (#1807).
-		if s, ok := rb.unencodable[idx]; ok {
+		// writes back what it read rather than a coerced value (#1807). The
+		// priority is re-checked rather than trusted: setBucket is the only
+		// writer that maintains both, so gating here means a future write
+		// straight to buckets[] degrades to a blank bucket instead of silently
+		// resurrecting a dead state string into a live one.
+		if s, ok := rb.unencodable[idx]; ok && rb.buckets[idx] == bucketNoData {
 			out[i] = s
 			continue
 		}

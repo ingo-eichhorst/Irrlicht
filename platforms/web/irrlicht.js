@@ -1617,17 +1617,18 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     // The strip's wire format is 2 bits per bucket and all four codes are
     // taken: HISTORY_PRIORITY_TO_STATE above maps 0=ready, 1=working,
     // 2=waiting, 3=no-data. There is no fifth value to spend, so `error` cannot
-    // be carried without widening the daemon's packing — deferred to #1805/
-    // #1807, which own the strip.
+    // be carried without widening the daemon's packing — deferred to #1805,
+    // which owns the strip's encoding.
     //
-    // What that costs today, stated plainly: the daemon's history_tracker maps
-    // `error` to the ready priority (statePriority's default arm, named as this
-    // exact symptom in #1798's own commit), so an errored bucket paints GREEN
-    // on the sparkline while the row's state icon beside it is red. That is a
-    // real inconsistency in the shipped UI, not a hypothetical, and it is
-    // #1805/#1807's to fix rather than something this map can paper over —
-    // adding a key here would do nothing, because no bucket can ever decode to
-    // 'error' in the first place.
+    // What that costs today, stated plainly: #1807 stopped the daemon coercing
+    // `error` to the ready priority, so an errored bucket no longer paints
+    // GREEN — it decodes to 3 (no-data) and falls through the `if (!color)
+    // continue` guard in paintRowHistory, painting nothing. A session that
+    // STAYS errored therefore blanks its whole strip within one ring while the
+    // row's state icon beside it is red. That is the honest reading of a field
+    // with no code to spare, not the end state: adding a key to this map still
+    // does nothing, because no bucket can decode to 'error' until #1805 widens
+    // the packing.
     const HISTORY_BAR_COLORS = {
       working: '#8B5CF6',
       waiting: '#FF9500',
