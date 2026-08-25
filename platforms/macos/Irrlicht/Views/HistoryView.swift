@@ -1037,8 +1037,8 @@ private struct HistoryDoraMetricRow: View {
 
 // MARK: - Activity Matrix grid (#981, #1028)
 //
-// Web parity for the projects × time-bucket grid of working/waiting/ready
-// counts. Web renders this as a hand-built CSS grid with position:sticky on
+// Web parity for the projects × time-bucket grid of working/waiting/ready/
+// error counts. Web renders this as a hand-built CSS grid with position:sticky on
 // both the row-label column and the column-header row; SwiftUI has no
 // built-in two-axis sticky-header grid. This ports only the row-label
 // column as sticky (a plain non-scrolling VStack beside a horizontally
@@ -1180,6 +1180,7 @@ struct HistoryActivityContentView: View {
             Spacer(minLength: 0)
             if total > 0 {
                 VStack(spacing: 1) {
+                    if counts.error > 0 { Rectangle().fill(IrrColors.error).frame(height: segHeight(counts.error, total, barHeight)) }
                     if counts.ready > 0 { Rectangle().fill(IrrColors.ready).frame(height: segHeight(counts.ready, total, barHeight)) }
                     if counts.waiting > 0 { Rectangle().fill(IrrColors.waiting).frame(height: segHeight(counts.waiting, total, barHeight)) }
                     if counts.working > 0 { Rectangle().fill(IrrColors.working).frame(height: segHeight(counts.working, total, barHeight)) }
@@ -1201,9 +1202,9 @@ struct HistoryActivityContentView: View {
     }
 
     /// Matches the web tooltip's field order (project, full timestamp, then
-    /// working/waiting/ready). Ready is explicitly labeled as a per-bucket
-    /// transition count, not a concurrency count — it has no duration to be
-    /// "concurrent" in, unlike working/waiting.
+    /// working/waiting/ready/error). Ready and error are explicitly labeled
+    /// as per-bucket transition counts, not concurrency counts — neither has
+    /// a duration to be "concurrent" in, unlike working/waiting.
     ///
     /// The full timestamp lives in `HistoryFormat.fullDateTime` (#1659) rather
     /// than in a `private static let DateFormatter` here: it was the third
@@ -1218,7 +1219,7 @@ struct HistoryActivityContentView: View {
                                     timeZone: TimeZone, locale: Locale) -> String {
         let date = Date(timeIntervalSince1970: TimeInterval(ts))
         let when = HistoryFormat.fullDateTime(date, timeZone: timeZone, locale: locale)
-        return "\(project), \(when): \(Int(counts.working)) working, \(Int(counts.waiting)) waiting, \(Int(counts.ready)) transitioned to ready"
+        return "\(project), \(when): \(Int(counts.working)) working, \(Int(counts.waiting)) waiting, \(Int(counts.ready)) transitioned to ready, \(Int(counts.error)) errored"
     }
 }
 
@@ -1771,15 +1772,16 @@ enum HistoryExport {
         return s
     }
 
-    /// `bucket_start,project,working,waiting,ready` rows, one per (project,
-    /// bucket) pair — matching the web `exportHistoryCSV`'s chart=state branch.
+    /// `bucket_start,project,working,waiting,ready,error` rows, one per
+    /// (project, bucket) pair — matching the web `exportHistoryCSV`'s
+    /// chart=state branch (`stateCsvLines`, `error` column added by #1801).
     static func csvState(_ data: HistoryStateResponse) -> String {
-        var lines = ["bucket_start,project,working,waiting,ready"]
+        var lines = ["bucket_start,project,working,waiting,ready,error"]
         for project in data.projects {
             for (i, ts) in data.bucketStarts.enumerated() {
                 let counts = data.counts(project: project, bucketIndex: i)
                 let dateStr = iso.string(from: Date(timeIntervalSince1970: TimeInterval(ts)))
-                lines.append("\(dateStr),\(cell(project)),\(fmt(counts.working)),\(fmt(counts.waiting)),\(fmt(counts.ready))")
+                lines.append("\(dateStr),\(cell(project)),\(fmt(counts.working)),\(fmt(counts.waiting)),\(fmt(counts.ready)),\(fmt(counts.error))")
             }
         }
         return lines.joined(separator: "\n") + "\n"

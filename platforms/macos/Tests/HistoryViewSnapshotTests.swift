@@ -308,6 +308,11 @@ final class HistoryViewSnapshotTests: XCTestCase {
 
     // MARK: Activity Matrix (#1028)
 
+    /// #1821: carries a non-zero `error` bucket (irrlicht, bucket index 6) so
+    /// the four-state rendering — the error segment's color, the normalized
+    /// bar height, and the tooltip/CSV export — is exercised by the
+    /// content-correctness fixture rather than only by the empty/wide
+    /// fixtures, which never populate `error`.
     private func activityFixture() -> HistoryStateResponse {
         let hour: Int64 = 3_600
         let base: Int64 = 1_700_000_000
@@ -321,6 +326,7 @@ final class HistoryViewSnapshotTests: XCTestCase {
                 "working": ["irrlicht": [1, 2, 2, 1, 0, 1, 3, 2, 1, 0], "besenkammer": [0, 1, 0, 0, 1, 0, 0, 1, 0, 0]],
                 "waiting": ["irrlicht": [0, 0, 1, 1, 0, 0, 1, 0, 0, 0], "besenkammer": [0, 0, 0, 1, 0, 0, 0, 0, 0, 0]],
                 "ready":   ["irrlicht": [1, 0, 0, 1, 1, 0, 1, 0, 1, 1], "besenkammer": [0, 0, 1, 0, 0, 1, 0, 0, 0, 0]],
+                "error":   ["irrlicht": [0, 0, 0, 0, 0, 0, 2, 0, 0, 0], "besenkammer": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]],
             ],
             concurrency: HistoryStateConcurrency(peak: 3, average: 1.2, current: 0),
             scope: nil

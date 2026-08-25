@@ -290,12 +290,13 @@ struct HistoryScope: Equatable {
 // Activity Matrix): a per-project, per-state agent-count grid, unlike every
 // other chart's single-value-per-point series. `projects` is row order
 // (server-sorted busiest-first); `byState` is keyed state -> project ->
-// one count per bucket index, aligned to `bucketStarts`. Working/waiting
-// counts are per-bucket peak concurrency; ready counts are a transition
-// histogram (sessions that turned ready within the bucket), since ready has
-// no duration to be "concurrent" in — not a bug, just a different meaning
-// behind the same-shaped number, and worth remembering wherever this is
-// rendered or described.
+// one count per bucket index, aligned to `bucketStarts`, and carries every
+// canonical state including `error` (#1801). Working/waiting counts are
+// per-bucket peak concurrency; ready and error counts are transition
+// histograms (sessions that turned ready, or errored, within the bucket),
+// since neither has a duration to be "concurrent" in — not a bug, just a
+// different meaning behind the same-shaped number, and worth remembering
+// wherever this is rendered or described.
 struct HistoryStateResponse: Codable {
     let range: String
     let chart: String
@@ -321,17 +322,25 @@ struct HistoryStateResponse: Codable {
     /// the web `hasData` gate for that same empty case.
     var hasData: Bool { !projects.isEmpty && !bucketStarts.isEmpty }
 
-    /// One cell's raw counts. A named triple (not a `[String: Double]`)
+    /// One cell's raw counts. A named quadruple (not a `[String: Double]`)
     /// so every call site gets `.total` for free instead of re-deriving it,
-    /// and painting order — working bottom, waiting middle, ready top,
+    /// and painting order — working, waiting, ready, error, bottom to top —
     /// mirroring the canonical state order in core/domain/session/session.go
     /// and the web's STATE_STACK_ORDER — is just field order, not a runtime
     /// loop over string keys.
+    ///
+    /// `error` was missing here through #1821: `total` silently summed only
+    /// three of the four states the daemon sends (#1801), so any bucket with
+    /// error activity both dropped that activity entirely AND normalized its
+    /// other three segments against an undercounted total — drawing them
+    /// proportionally too large in exactly the buckets that have something
+    /// to report.
     struct Counts {
         let working: Double
         let waiting: Double
         let ready: Double
-        var total: Double { working + waiting + ready }
+        let error: Double
+        var total: Double { working + waiting + ready + error }
     }
 
     /// Raw counts for one project at one bucket index, defaulting any
@@ -340,7 +349,8 @@ struct HistoryStateResponse: Codable {
         Counts(
             working: byState["working"]?[project]?[safe: bucketIndex] ?? 0,
             waiting: byState["waiting"]?[project]?[safe: bucketIndex] ?? 0,
-            ready: byState["ready"]?[project]?[safe: bucketIndex] ?? 0
+            ready: byState["ready"]?[project]?[safe: bucketIndex] ?? 0,
+            error: byState["error"]?[project]?[safe: bucketIndex] ?? 0
         )
     }
 }
