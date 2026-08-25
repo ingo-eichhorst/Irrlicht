@@ -349,17 +349,20 @@ type ConcurrencyResult struct {
 // counts over time, returned by ConcurrencyReader.StateSeries (issue #981,
 // the optional "time-in-state" second half of #751). It parallels
 // ConcurrencyResult: BucketStarts holds each bucket's start (unix seconds).
-// ByState maps each canonical state (session.StateWorking/StateWaiting/
-// StateReady) to a project -> per-bucket slice (each slice has len ==
-// len(BucketStarts)). Working/waiting counts are per-bucket peak concurrency
-// in that specific state — the same semantics as ConcurrencyResult.ByKey,
-// just split by state instead of merged into one "active" count. Ready
-// counts are the number of sessions that transitioned to ready within the
-// bucket: ready is session.go's terminal state, with no duration to be
-// concurrent in, so it's a transition histogram rather than a concurrency
-// count. Peak/Average/Current mirror ConcurrencyResult's working+waiting
-// summary (the "how busy" headline), computed over the same reconstructed
-// intervals.
+// ByState maps each state in session.CanonicalStates() to a project ->
+// per-bucket slice (each slice has len == len(BucketStarts)); every canonical
+// state is always a key, so a client tells "nothing happened in this window"
+// from "this daemon does not know that state" by whether the key exists.
+// Working/waiting counts are per-bucket peak concurrency in that specific
+// state — the same semantics as ConcurrencyResult.ByKey, just split by state
+// instead of merged into one "active" count. Ready and error counts are the
+// number of sessions that transitioned into that state within the bucket:
+// neither is concurrency-active, so neither has a duration to be concurrent
+// in, and a transition histogram is what is left (see stateReconstruction for
+// why the split follows concurrencyActive rather than a second list).
+// Peak/Average/Current mirror ConcurrencyResult's working+waiting summary (the
+// "how busy" headline), computed over the same reconstructed intervals — an
+// errored session contributes to none of the three, by the same settled rule.
 type StateSeriesResult struct {
 	Start         int64                           `json:"start"`
 	End           int64                           `json:"end"`
@@ -369,6 +372,26 @@ type StateSeriesResult struct {
 	Peak          float64                         `json:"peak"`
 	Average       float64                         `json:"average"`
 	Current       float64                         `json:"current"`
+}
+
+// NewStateBuckets returns an empty StateSeriesResult.ByState with one bucket
+// per canonical lifecycle state.
+//
+// Derived from session.CanonicalStates() rather than typed out (#1801). The
+// key list existed as a literal in THREE places — StateSeries,
+// emptyStateSeriesResult, and handlers.go's nil-reader fallback — and all
+// three said working/waiting/ready, so #1798's fourth state was missing from
+// the wire in three places at once and no client could have drawn a red
+// segment even once a producer existed. It lives here, beside the type whose
+// field it builds, because the three callers span the adapter, the daemon
+// command, and this package's own tests.
+func NewStateBuckets() map[string]map[string][]float64 {
+	states := session.CanonicalStates()
+	out := make(map[string]map[string][]float64, len(states))
+	for _, s := range states {
+		out[s] = map[string][]float64{}
+	}
+	return out
 }
 
 // ConcurrencyReader reconstructs a concurrent-agents time series from the

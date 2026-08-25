@@ -34,7 +34,13 @@ func main() {
 	flag.StringVar(&format, "format", "text", `output format: "text" or "json"`)
 	flag.BoolVar(&showYield, "yield", false, "show yield state and revert SHA (7-char) columns")
 	flag.StringVar(&f.idPrefix, "id", "", "filter: session ID prefix")
-	flag.StringVar(&f.state, "state", "", "filter: session state (working|waiting|ready)")
+	// #1801: the help text is the THIRD copy of the vocabulary in this file's
+	// history and was the one #1798 missed — validateFlags and its rejection
+	// message were both fixed to read the domain while `--help` went on
+	// advertising three states and hiding the fourth. Derived, so it can't
+	// drift again.
+	flag.StringVar(&f.state, "state", "",
+		"filter: session state ("+strings.Join(session.CanonicalStates(), "|")+")")
 	flag.StringVar(&f.project, "project", "", "filter: project name substring")
 	flag.StringVar(&f.adapter, "adapter", "", "filter: agent adapter (e.g. claude-code, codex)")
 	flag.Parse()

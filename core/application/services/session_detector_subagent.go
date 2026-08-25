@@ -192,9 +192,10 @@ func (d *SessionDetector) applyOneSubagentCompletion(s *session.SessionState, pa
 	})
 }
 
-// hasActiveChildren returns true if any child session of the given parent is
-// still working or waiting, OR Claude Code's own turn_duration accounting
-// (issue #1036) says a background subagent is still running. The two are
+// hasActiveChildren returns true if any child session of the given parent
+// still has work in flight (see session.SessionState.HasWorkInFlight — working,
+// waiting, or errored-but-retrying), OR Claude Code's own turn_duration
+// accounting (issue #1036) says a background subagent is still running. The two are
 // independent signals for the same question — has the parent's background
 // work actually finished — combined here so every caller gets one
 // indivisible verdict instead of two booleans it would otherwise have to
@@ -212,8 +213,11 @@ func (d *SessionDetector) hasActiveChildren(parentID string, metrics *session.Se
 		return false
 	}
 	for _, s := range states {
-		if s.ParentSessionID == parentID &&
-			(s.State == session.StateWorking || s.State == session.StateWaiting) {
+		// #1801: the predicate lives in the domain rather than being spelled
+		// out here. Inline, this read `working || waiting` — complete over
+		// three states, silently incomplete over four, so a child mid-retry
+		// answered "not active" and released its parent to ready.
+		if s.ParentSessionID == parentID && s.HasWorkInFlight() {
 			return true
 		}
 	}

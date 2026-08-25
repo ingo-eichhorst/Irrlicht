@@ -1139,27 +1139,34 @@ func silentChannelNote(channels []HookChannelHealth) string {
 		"the permission rather than here (#1362). Check the daemon's bind port next."
 }
 
+// stateView is the diagnostics bundle's state.json. One count per canonical
+// state — error_count joins the other three in #1801, for the same reason as
+// the /state endpoint: a bundle whose buckets don't sum to session_count is
+// worse than useless when the thing being diagnosed is a red session.
+//
+// The tally is by map key rather than by switch, so the loop carries no
+// enumeration that can go silently incomplete when the vocabulary grows;
+// only the readout below names states, and it has to.
 func stateView(sessions []*session.SessionState, now time.Time) any {
 	view := struct {
 		SessionCount int    `json:"session_count"`
 		WorkingCount int    `json:"working_count"`
 		WaitingCount int    `json:"waiting_count"`
 		ReadyCount   int    `json:"ready_count"`
+		ErrorCount   int    `json:"error_count"`
 		GeneratedAt  string `json:"generated_at"`
 	}{
 		SessionCount: len(sessions),
 		GeneratedAt:  now.UTC().Format(time.RFC3339),
 	}
+	byState := map[string]int{}
 	for _, ss := range sessions {
-		switch ss.State {
-		case session.StateWorking:
-			view.WorkingCount++
-		case session.StateWaiting:
-			view.WaitingCount++
-		case session.StateReady:
-			view.ReadyCount++
-		}
+		byState[ss.State]++
 	}
+	view.WorkingCount = byState[session.StateWorking]
+	view.WaitingCount = byState[session.StateWaiting]
+	view.ReadyCount = byState[session.StateReady]
+	view.ErrorCount = byState[session.StateError]
 	return view
 }
 

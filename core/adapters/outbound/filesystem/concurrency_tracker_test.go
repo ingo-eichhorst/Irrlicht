@@ -492,17 +492,24 @@ func TestStateSeries_Empty(t *testing.T) {
 	if res.Peak != 0 || res.Average != 0 || res.Current != 0 {
 		t.Errorf("want zero summary, got peak=%v avg=%v current=%v", res.Peak, res.Average, res.Current)
 	}
-	// The states StateSeries actually declares buckets for. Deliberately NOT
-	// session.CanonicalStates(): the ByState map is a three-key literal in
-	// StateSeries and emptyStateSeriesResult, and #1798's fourth state is not
-	// in it — the Activity Matrix's own widening is #1801's, along with the
-	// web `toEqual({working,waiting,ready})` assertion that pins the same
-	// shape on the client. Reading the domain vocabulary here would make this
-	// test demand a key the production code does not yet emit, i.e. fail for
-	// a gap that is scoped elsewhere rather than for a regression.
-	for _, state := range []string{session.StateWorking, session.StateWaiting, session.StateReady} {
-		if len(res.ByState[state]) != 0 {
-			t.Errorf("by_state[%s] should be empty, got %v", state, res.ByState[state])
+	// #1801 took the handoff #1798 left here: the three-key literal is gone
+	// from StateSeries, emptyStateSeriesResult and handlers.go's nil-reader
+	// fallback, all three now built by outbound.NewStateBuckets from the
+	// domain vocabulary. So this reads the vocabulary too — a fifth state adds
+	// a bucket in one place and this test follows it for free, which is the
+	// whole reason the literal was retired.
+	//
+	// The key must EXIST and be empty, not be absent: absent is how a client
+	// would tell "this daemon has never heard of that state" from "nothing
+	// happened", and every canonical state gets the same answer.
+	for _, state := range session.CanonicalStates() {
+		series, ok := res.ByState[state]
+		if !ok {
+			t.Errorf("by_state is missing the %q bucket entirely — every canonical state must be a key", state)
+			continue
+		}
+		if len(series) != 0 {
+			t.Errorf("by_state[%s] should be empty, got %v", state, series)
 		}
 	}
 	if res.BucketStarts == nil {

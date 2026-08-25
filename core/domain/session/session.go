@@ -59,6 +59,58 @@ func IsCanonicalState(s string) bool {
 	return slices.Contains(canonicalStates, s)
 }
 
+// HasWorkInFlight reports whether more work is coming for this session, so
+// that whatever is waiting on it must keep waiting.
+//
+// THIS IS ONE HALF OF A PARTITION, and the half that is NOT about concurrency.
+// Seven call sites spell some variant of `state == StateWorking || state ==
+// StateWaiting` inline; #1798 flagged that they had silently become an
+// INCOMPLETE enumeration when the fourth state arrived, and #1801 settles the
+// split here rather than leaving each site to drift:
+//
+//   - "Does this session occupy a concurrency slot?" — working or waiting, and
+//     nothing else. `error` is excluded deliberately and permanently: nothing
+//     clears an error until the next successful turn, so counting it would
+//     inflate the active count for the whole remaining life of the session.
+//     That half stays in the concurrency tracker's own `concurrencyActive`,
+//     which reads a bare state string off a persisted timeline that carries no
+//     error detail at all — which is itself why the two cannot be one
+//     function. events.md records the rule.
+//
+//   - "Is more work coming?" — this one. A session in `error` whose Phase is
+//     `retrying` has another attempt scheduled: it is still working, and
+//     releasing its parent in that gap paints the parent green while its
+//     subagent sits red mid-retry.
+//
+// A TERMINAL error is not work in flight — no further attempt is coming, and
+// the thing waiting is free to finish. Neither is ErrorPhaseUnknown:
+// IsRetrying is false for it on purpose (see its doc), and reading "probably
+// still going" out of a transcript that said nothing is exactly the invented
+// verdict every pointer field on SessionError exists to prevent.
+//
+// ONLY hasActiveChildren (parent-ready gating) consumes this today, because it
+// is the only site whose answer actually changes. The others were each checked
+// and deliberately left on their current answer: isOrphanedChild and
+// findCompletionTarget gate PROMOTION to ready, where admitting a retrying
+// session would clear a live error rather than preserve it; isUserInterruptReady
+// leaves an errored session red after an ESC, matching "cleared by the next
+// successful turn and by nothing else"; aggregateSubagentEstimate is
+// working-only by design because an errored child contributes no estimate.
+// Said out loud here so the next reader inherits the decision instead of the
+// question.
+func (s *SessionState) HasWorkInFlight() bool {
+	if s == nil {
+		return false
+	}
+	if s.State == StateWorking || s.State == StateWaiting {
+		return true
+	}
+	if s.State != StateError || s.Metrics == nil {
+		return false
+	}
+	return s.Metrics.SessionError.IsRetrying()
+}
+
 // Yield state constants — whether a finished session's work survived in the
 // repo or was reverted (#373). An independent dimension from the lifecycle
 // State above: a session is always in exactly one of the lifecycle states, and
@@ -79,11 +131,20 @@ type MetricsTimelinePoint struct {
 }
 
 // subagentSummary tracks the aggregate state of all child sessions.
+//
+// Error joins the other three in #1801. Without it an errored child was
+// counted in Total and in none of the buckets, so working+waiting+ready
+// silently stopped summing to total and a red subagent was invisible in the
+// parent's badge — the one place a user would look to find out why the parent
+// is stuck. No `omitempty`: the existing three always serialize, and a bucket
+// that vanishes at zero would make "no errored children" and "this daemon
+// predates the field" the same wire value.
 type subagentSummary struct {
 	Total   int `json:"total"`
 	Working int `json:"working"`
 	Waiting int `json:"waiting"`
 	Ready   int `json:"ready"`
+	Error   int `json:"error"`
 }
 
 // Equal reports whether two summaries carry the same counts. Nil receivers

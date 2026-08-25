@@ -625,9 +625,11 @@ func serveHistoryStateChart(w http.ResponseWriter, concurrency outbound.Concurre
 		sr = &outbound.StateSeriesResult{
 			Start: query.Start, End: query.End, BucketSeconds: query.BucketSeconds,
 			BucketStarts: []int64{},
-			ByState: map[string]map[string][]float64{
-				session.StateWorking: {}, session.StateWaiting: {}, session.StateReady: {},
-			},
+			// #1801: the same buckets a real reader would have produced,
+			// derived from the vocabulary. Hand-typing the key list here was
+			// how a no-reader response came to carry a DIFFERENT set of states
+			// from a live one.
+			ByState: outbound.NewStateBuckets(),
 		}
 	}
 	writeHistoryJSON(w, buildStateResponse(rangeKey, scopeEcho, sr))
@@ -1552,12 +1554,18 @@ func handleGetState(repo outbound.SessionRepository) http.HandlerFunc {
 		TotalTokens        int64   `json:"totalTokens"`
 	}
 
+	// One count per canonical state. ErrorCount joins the other three in #1801:
+	// without it an errored session was counted in SessionCount and in none of
+	// the buckets, so the parts stopped summing to the whole and a red session
+	// was invisible in every aggregate. TestStateEndpoint_CountsEveryCanonicalState
+	// pins that this list keeps pace with session.CanonicalStates().
 	type stateResponse struct {
 		Sessions     []sessionEntry `json:"sessions"`
 		SessionCount int            `json:"sessionCount"`
 		WorkingCount int            `json:"workingCount"`
 		WaitingCount int            `json:"waitingCount"`
 		ReadyCount   int            `json:"readyCount"`
+		ErrorCount   int            `json:"errorCount"`
 		LastUpdated  string         `json:"lastUpdated"`
 	}
 
@@ -1569,7 +1577,11 @@ func handleGetState(repo outbound.SessionRepository) http.HandlerFunc {
 		}
 
 		entries := make([]sessionEntry, 0, len(sessions))
-		var workingCount, waitingCount, readyCount int
+		// Tally into a map rather than a switch (#1801). A switch over the
+		// state constants is an enumeration that reads as complete and goes
+		// silently incomplete the next time the vocabulary grows — which is
+		// precisely how `error` came to be dropped here. Counting by key can't.
+		byState := map[string]int{}
 		for _, s := range sessions {
 			var ctxUtil float64
 			var totalTokens int64
@@ -1589,22 +1601,16 @@ func handleGetState(repo outbound.SessionRepository) http.HandlerFunc {
 				ContextUtilization: ctxUtil,
 				TotalTokens:        totalTokens,
 			})
-			switch s.State {
-			case session.StateWorking:
-				workingCount++
-			case session.StateWaiting:
-				waitingCount++
-			case session.StateReady:
-				readyCount++
-			}
+			byState[s.State]++
 		}
 
 		resp := stateResponse{
 			Sessions:     entries,
 			SessionCount: len(sessions),
-			WorkingCount: workingCount,
-			WaitingCount: waitingCount,
-			ReadyCount:   readyCount,
+			WorkingCount: byState[session.StateWorking],
+			WaitingCount: byState[session.StateWaiting],
+			ReadyCount:   byState[session.StateReady],
+			ErrorCount:   byState[session.StateError],
 			LastUpdated:  time.Now().UTC().Format(time.RFC3339),
 		}
 

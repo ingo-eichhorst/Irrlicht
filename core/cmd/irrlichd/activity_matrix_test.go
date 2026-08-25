@@ -8,6 +8,21 @@ import (
 	"irrlicht/core/ports/outbound"
 )
 
+// stateBuckets builds a ByState fixture the way production does — every
+// canonical state present as a key (#1801) — with `working` carrying the
+// per-project series under test and the rest empty.
+//
+// Built on outbound.NewStateBuckets rather than typed out, so these fixtures
+// exercise the real key set instead of a three-key hand copy that would go on
+// passing after production started emitting a fourth. That is exactly how the
+// pre-#1801 versions of these tests stayed green while `error` was missing
+// from every by_state payload the daemon shipped.
+func stateBuckets(working map[string][]float64) map[string]map[string][]float64 {
+	by := outbound.NewStateBuckets()
+	by[session.StateWorking] = working
+	return by
+}
+
 // hasUnknownContributor reports whether resp's top-contributors list surfaces
 // the "unknown" label, the same check TestHandleGetHistory_UnknownBucketRule
 // uses for the cost chart's equivalent rule.
@@ -73,11 +88,7 @@ func TestBuildStateResponse_UnknownShareRule(t *testing.T) {
 	// Kept: unknown total 3 / grand 12 = 25%.
 	kept := buildStateResponse("24h", "", &outbound.StateSeriesResult{
 		BucketStarts: []int64{},
-		ByState: map[string]map[string][]float64{
-			session.StateWorking: {"projA": {9}, "": {3}},
-			session.StateWaiting: {},
-			session.StateReady:   {},
-		},
+		ByState:      stateBuckets(map[string][]float64{"projA": {9}, "": {3}}),
 	})
 	if !hasProject(kept.Projects, "unknown") {
 		t.Errorf("≥10%% unknown should be surfaced as a project row, got %+v", kept.Projects)
@@ -95,11 +106,7 @@ func TestBuildStateResponse_UnknownShareRule(t *testing.T) {
 	// Dropped: unknown total 1 / grand 100 = 1%.
 	dropped := buildStateResponse("24h", "", &outbound.StateSeriesResult{
 		BucketStarts: []int64{},
-		ByState: map[string]map[string][]float64{
-			session.StateWorking: {"projA": {99}, "": {1}},
-			session.StateWaiting: {},
-			session.StateReady:   {},
-		},
+		ByState:      stateBuckets(map[string][]float64{"projA": {99}, "": {1}}),
 	})
 	if hasProject(dropped.Projects, "unknown") || hasProject(dropped.Projects, "") {
 		t.Errorf("<10%% unknown should be dropped entirely, got %+v", dropped.Projects)
@@ -123,11 +130,7 @@ func TestBuildStateResponse_Top8Cap(t *testing.T) {
 	}
 	resp := buildStateResponse("1y", "", &outbound.StateSeriesResult{
 		BucketStarts: []int64{},
-		ByState: map[string]map[string][]float64{
-			session.StateWorking: byProject,
-			session.StateWaiting: {},
-			session.StateReady:   {},
-		},
+		ByState:      stateBuckets(byProject),
 	})
 
 	if len(resp.Projects) != 8 {
