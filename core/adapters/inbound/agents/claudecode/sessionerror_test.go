@@ -26,6 +26,10 @@ const (
 		"2026-05-22-15-49-22_irrlichd-unknown/transcript.jsonl"
 	fixtureESCInterrupt = "2-20_user-esc-interrupt/recordings/" +
 		"2026-05-19-00-11-42_irrlichd-0.4.5+898a14f/transcript.jsonl"
+	fixtureProviderOverloadedTerminal = "2-23_provider-overloaded-terminal/recordings/" +
+		"2026-08-25-12-32-35_irrlichd-0.6.0+a036ed9/transcript.jsonl"
+	fixtureAuthCredentialsRejected = "2-24_auth-credentials-rejected/recordings/" +
+		"2026-08-25-09-07-00_irrlichd-0.6.0+c7ace31/transcript.jsonl"
 )
 
 // scenarioFixture resolves a committed claudecode scenario recording.
@@ -184,14 +188,103 @@ func TestParser_TerminalAPIErrorMessage_FromRecording(t *testing.T) {
 		t.Errorf("Message = %q, want the agent's verbatim epilogue", first.Message)
 	}
 	// The recorded text says "(HTTP 200)". Deriving a status from prose would
-	// record the transport's success code as the failure code.
+	// record the transport's success code as the failure code. This recording
+	// (claude-code 2.1.148) predates the `apiErrorStatus` field entirely, so
+	// this also pins that tailer.OptInt leaves HTTPStatus nil for an absent
+	// key rather than a fabricated 0 (#1818).
 	if first.HTTPStatus != nil {
 		t.Errorf("HTTPStatus = %v, want nil — this shape carries no status field, "+
 			"and the 200 in its prose is the transport's success code", *first.HTTPStatus)
 	}
+	// This recording's own `"error"` field reads "unknown" — claude-code's
+	// spelling of "no classification offered" — so Class must fall back to
+	// the generic constant rather than surfacing "unknown" verbatim (#1818).
+	if first.Class != terminalAPIErrorClass {
+		t.Errorf("Class = %q, want %q (the fallback: this recording's own "+
+			"error field is the literal string \"unknown\")", first.Class, terminalAPIErrorClass)
+	}
 	if first.Attempt != nil || first.MaxAttempts != nil || first.RetryIn != nil {
 		t.Errorf("retry fields must stay nil for the terminal shape: attempt=%v max=%v retryIn=%v",
 			first.Attempt, first.MaxAttempts, first.RetryIn)
+	}
+}
+
+// TestParser_TerminalAPIError_StructuredFields_FromRecording is the red-first
+// defect test for #1818: claude-code 2.1.245 started writing two structured
+// top-level fields next to isApiErrorMessage — `apiErrorStatus` (the real
+// HTTP status) and `error` (a machine token) — and the unfixed parser derived
+// neither. Both fixtures were recorded fresh for #1803's four error scenarios
+// and need no re-recording.
+func TestParser_TerminalAPIError_StructuredFields_FromRecording(t *testing.T) {
+	cases := []struct {
+		name       string
+		fixture    string
+		wantStatus int
+		wantClass  string
+		wantPrefix string
+	}{
+		{
+			name:       "provider overloaded (529)",
+			fixture:    fixtureProviderOverloadedTerminal,
+			wantStatus: 529,
+			wantClass:  "server_error",
+			wantPrefix: "API Error: Repeated 529 Overloaded errors",
+		},
+		{
+			name:       "auth credentials rejected (401)",
+			fixture:    fixtureAuthCredentialsRejected,
+			wantStatus: 401,
+			wantClass:  "authentication_failed",
+			wantPrefix: "Invalid API key",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			lines := fixtureLines(t, scenarioFixture(t, tc.fixture))
+
+			p := &Parser{}
+			var first *tailer.SessionError
+			seen := 0
+			for _, raw := range lines {
+				ev := p.ParseLine(raw)
+				flagged, _ := raw["isApiErrorMessage"].(bool)
+				if !flagged {
+					continue
+				}
+				seen++
+				if ev.SessionError == nil {
+					t.Fatalf("isApiErrorMessage:true line %d produced no SessionError", seen)
+				}
+				if first == nil {
+					first = ev.SessionError
+				}
+			}
+			if seen == 0 {
+				t.Fatalf("no isApiErrorMessage:true line found in %s — this test "+
+					"cannot observe the shape it exists to pin", tc.fixture)
+			}
+
+			if first.Phase != tailer.ErrorPhaseTerminal {
+				t.Errorf("Phase = %q, want %q", first.Phase, tailer.ErrorPhaseTerminal)
+			}
+			if first.HTTPStatus == nil || *first.HTTPStatus != tc.wantStatus {
+				t.Errorf("HTTPStatus = %v, want %d — read from the transcript's own "+
+					"`apiErrorStatus` field, not derived from the message text",
+					first.HTTPStatus, tc.wantStatus)
+			}
+			if first.Class != tc.wantClass {
+				t.Errorf("Class = %q, want %q (claude-code's own top-level `error` token)",
+					first.Class, tc.wantClass)
+			}
+			if !strings.HasPrefix(first.Message, tc.wantPrefix) {
+				t.Errorf("Message = %q, want prefix %q", first.Message, tc.wantPrefix)
+			}
+			if first.Attempt != nil || first.MaxAttempts != nil || first.RetryIn != nil {
+				t.Errorf("retry fields must stay nil for the terminal shape: attempt=%v max=%v retryIn=%v",
+					first.Attempt, first.MaxAttempts, first.RetryIn)
+			}
+		})
 	}
 }
 

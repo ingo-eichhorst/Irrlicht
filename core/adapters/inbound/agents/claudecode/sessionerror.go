@@ -25,16 +25,17 @@ const (
 	// systemSubtypeAPIError is the `system` subtype carrying a provider error.
 	systemSubtypeAPIError = "api_error"
 
-	// terminalAPIErrorClass is the class recorded for the isApiErrorMessage
-	// shape.
-	//
-	// It is a constant rather than a field read because the only classification
-	// claudecode offers on this shape is a top-level `"error"` whose recorded
-	// value is the string "unknown" — the absence of a class rather than one.
-	// (Both occurrences in replaydata carry it: reproduce with
-	// `grep -rh '"isApiErrorMessage":true' replaydata/agents/claudecode/ | jq -c .error`.)
-	// "provider" is the generic bucket from session.SessionError.Class's
-	// vocabulary; the real information is in Message, which is carried verbatim.
+	// terminalAPIErrorClass is the fallback class recorded for the
+	// isApiErrorMessage shape when the transcript's own top-level `"error"`
+	// token is either absent or the literal string "unknown" — claude-code's
+	// own spelling of "no classification offered," true of every recording
+	// before 2.1.245. From 2.1.245 on, that same field carries a real machine
+	// token (`server_error`, `authentication_failed`, ...) that
+	// terminalAPIErrorMessageClass prefers over this constant. Reproduce the
+	// split with `grep -rh '"isApiErrorMessage":true' replaydata/agents/claudecode/
+	// | jq -c .error`. "provider" is the generic bucket from
+	// session.SessionError.Class's vocabulary; the real information is in
+	// Message, which is carried verbatim.
 	terminalAPIErrorClass = "provider"
 )
 
@@ -84,10 +85,18 @@ func apiErrorFromSystemEvent(raw map[string]interface{}) *tailer.SessionError {
 // common interaction in the product. TestParser_ESCInterrupt_IsApiErrorMessage
 // FalseIsNotAnError is the fixture that catches it.
 //
-// No status code is derived. The recorded text is "API Error: API returned an
-// empty or malformed response (HTTP 200)" — the number in the prose is the
-// transport's SUCCESS code, so reading a status out of the message would record
-// 200 as a failure code. HTTPStatus stays nil, which is what the pointer is for.
+// HTTPStatus is read from the top-level `apiErrorStatus` field claude-code
+// 2.1.245 started writing alongside isApiErrorMessage — the real HTTP status
+// (529, 401, ...). It is never derived from the message text: the recorded
+// text can itself read "API Error: API returned an empty or malformed
+// response (HTTP 200)", and the number in THAT prose is the transport's
+// SUCCESS code, not a failure code — apiErrorStatus is a structured sibling
+// field, not a re-parse of the string. Recordings older than 2.1.245 carry no
+// apiErrorStatus key at all, and tailer.OptInt returns nil rather than a
+// fabricated 0 for a missing key, so HTTPStatus stays nil for them — which is
+// what the pointer is for. See TestParser_TerminalAPIErrorMessage_FromRecording
+// for the pre-field fixture and TestParser_TerminalAPIError_StructuredFields
+// for the two post-field ones (#1818).
 func terminalAPIError(raw map[string]interface{}) *tailer.SessionError {
 	// A non-bool or absent value yields false, which is the correct reading:
 	// only an explicit true is claudecode saying this message IS the error.
@@ -95,10 +104,24 @@ func terminalAPIError(raw map[string]interface{}) *tailer.SessionError {
 		return nil
 	}
 	return &tailer.SessionError{
-		Phase:   tailer.ErrorPhaseTerminal,
-		Class:   terminalAPIErrorClass,
-		Message: strings.TrimSpace(tailer.ExtractAssistantFullText(raw)),
+		Phase:      tailer.ErrorPhaseTerminal,
+		Class:      terminalAPIErrorMessageClass(raw),
+		Message:    strings.TrimSpace(tailer.ExtractAssistantFullText(raw)),
+		HTTPStatus: tailer.OptInt(raw, "apiErrorStatus"),
 	}
+}
+
+// terminalAPIErrorMessageClass prefers claudecode's own machine-readable
+// top-level `"error"` token (server_error, authentication_failed, ...) over
+// the generic terminalAPIErrorClass fallback. "unknown" is claudecode's own
+// spelling of "no classification offered" — every occurrence of it in
+// replaydata predates apiErrorStatus/error carrying real values — so it is
+// treated the same as absence rather than surfaced verbatim as a Class.
+func terminalAPIErrorMessageClass(raw map[string]interface{}) string {
+	if e, _ := raw["error"].(string); e != "" && e != "unknown" {
+		return e
+	}
+	return terminalAPIErrorClass
 }
 
 // apiErrorClass prefers the provider's own nested error type over the summary
