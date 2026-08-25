@@ -795,26 +795,44 @@ func TestHistoryTracker_NoNegativePriorityReachesTheWire(t *testing.T) {
 
 	sawTick, sawUpgrade := 0, 0
 	for _, ev := range events {
-		switch ev.Kind {
-		case HistoryEventTick:
-			for sid, p := range ev.Buckets {
-				sawTick++
-				if p < 0 || p > statePriorityNoData {
-					t.Fatalf("tick bucket for %q = %d, outside the 2-bit contract 0..%d", sid, p, statePriorityNoData)
-				}
-			}
-		case HistoryEventUpgrade:
-			sawUpgrade++
-			if ev.Priority < 0 || ev.Priority > statePriorityWaiting {
-				t.Fatalf("upgrade priority = %d, outside 0..%d", ev.Priority, statePriorityWaiting)
-			}
-		case HistoryEventSnapshot:
-			// carries base64, already masked to 2 bits by packPriorities
-		}
+		sawTick += assertTickCodesInRange(t, ev)
+		sawUpgrade += assertUpgradeCodeInRange(t, ev)
 	}
 	if sawTick == 0 || sawUpgrade == 0 {
 		t.Fatalf("observed %d tick bucket(s) and %d upgrade(s) — the assertions above never ran", sawTick, sawUpgrade)
 	}
+}
+
+// assertTickCodesInRange checks every bucket a tick event carries is a valid
+// 2-bit code, returning how many it checked. Non-tick events check nothing and
+// return 0. (Snapshot events carry base64, already masked by packPriorities.)
+func assertTickCodesInRange(t *testing.T, ev HistoryEvent) int {
+	t.Helper()
+	if ev.Kind != HistoryEventTick {
+		return 0
+	}
+	n := 0
+	for sid, p := range ev.Buckets {
+		n++
+		if p < 0 || p > statePriorityNoData {
+			t.Fatalf("tick bucket for %q = %d, outside the 2-bit contract 0..%d", sid, p, statePriorityNoData)
+		}
+	}
+	return n
+}
+
+// assertUpgradeCodeInRange checks an upgrade event's priority is one of the
+// three encodable codes, returning 1 if it checked and 0 otherwise. No-data is
+// out of range here on purpose: an upgrade to no-data is never emitted.
+func assertUpgradeCodeInRange(t *testing.T, ev HistoryEvent) int {
+	t.Helper()
+	if ev.Kind != HistoryEventUpgrade {
+		return 0
+	}
+	if ev.Priority < 0 || ev.Priority > statePriorityWaiting {
+		t.Fatalf("upgrade priority = %d, outside 0..%d", ev.Priority, statePriorityWaiting)
+	}
+	return 1
 }
 
 // TestHistoryTracker_UnencodableDoesNotClobberObservedActivity is a GUARD this
