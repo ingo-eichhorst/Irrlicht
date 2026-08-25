@@ -65,6 +65,7 @@ extension SessionManager {
                 workingCount: workingSessions,
                 waitingCount: waitingSessions,
                 readyCount: readySessions,
+                errorCount: errorSessions,
                 lastUpdated: formatter.string(from: Date())
             )
 
@@ -100,5 +101,9 @@ private struct DebugState: Codable {
     let workingCount: Int
     let waitingCount: Int
     let readyCount: Int
+    /// Failed sessions (#1802). Alongside its three siblings so a debug dump
+    /// accounts for every state a session can be in — a state missing here
+    /// makes the counts silently fail to sum to the session total.
+    let errorCount: Int
     let lastUpdated: String
 }

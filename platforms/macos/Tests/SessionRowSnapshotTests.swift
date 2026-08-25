@@ -92,7 +92,8 @@ final class SessionRowSnapshotTests: XCTestCase {
         cacheBloat: Bool? = nil,
         cacheBloatPercent: Int? = nil,
         cacheBloatTooltip: String? = nil,
-        cacheBloatExplanation: String? = nil
+        cacheBloatExplanation: String? = nil,
+        sessionError: SessionError? = nil
     ) -> SessionMetrics {
         SessionMetrics(
             elapsedSeconds: 0,
@@ -111,7 +112,8 @@ final class SessionRowSnapshotTests: XCTestCase {
             cacheBloat: cacheBloat,
             cacheBloatPercent: cacheBloatPercent,
             cacheBloatTooltip: cacheBloatTooltip,
-            cacheBloatExplanation: cacheBloatExplanation
+            cacheBloatExplanation: cacheBloatExplanation,
+            sessionError: sessionError
         )
     }
 
@@ -217,8 +219,13 @@ final class SessionRowSnapshotTests: XCTestCase {
             SessionRowView(session: makeSession(state: .working, metrics: makeMetrics()), agentNumber: 1)
             SessionRowView(session: makeSession(state: .waiting, metrics: makeMetrics()), agentNumber: 2)
             SessionRowView(session: makeSession(state: .ready, metrics: makeMetrics()), agentNumber: 3)
+            // #1802 — the error row joins the alignment stack. Its glyph is an
+            // SF Symbol like `ready`'s, so it is exactly the shape #596 was
+            // about: an unclamped symbol box would shift this row's agent
+            // number and context bar against its neighbours.
+            SessionRowView(session: makeSession(state: .error, metrics: makeMetrics()), agentNumber: 4)
         }
-        let view = host(rows, height: 144)
+        let view = host(rows, height: 192)
         assertSnapshot(of: view, as: .pinnedImage)
     }
 
@@ -413,6 +420,63 @@ final class SessionRowSnapshotTests: XCTestCase {
             metrics: makeMetrics(tokens: 920_000, pressure: "critical", utilization: 92)
         )
         assertSnapshot(of: host(session, height: 72), as: .pinnedImage)
+    }
+
+    // MARK: - #1802: the red error line under the session
+
+    /// The rich shape: the agent's own message plus every number it reported.
+    /// This is the row the feature was asked for — a red line under the
+    /// session saying what went wrong.
+    func testErrorRowWithFullDetail() {
+        let session = makeSession(
+            state: .error,
+            metrics: makeMetrics(sessionError: SessionError(
+                phase: "retrying", class: "rate_limit",
+                message: "Overloaded — the provider is rejecting requests",
+                httpStatus: 429, attempt: 3, maxAttempts: 10, retryInMs: 616.45
+            ))
+        )
+        assertSnapshot(of: host(session, height: 72), as: .pinnedImage)
+    }
+
+    /// The shape the recordings say is common: a real failure carrying no
+    /// numbers at all (claudecode's terminal `isApiErrorMessage`, copilot's
+    /// `session.error` with errorType "query"). The line must still read as an
+    /// error rather than collapsing to a bare message with a stray separator.
+    func testErrorRowWithMessageOnly() {
+        let session = makeSession(
+            state: .error,
+            metrics: makeMetrics(sessionError: SessionError(
+                phase: nil, class: "query",
+                message: "API Error: API returned an empty or malformed response (HTTP 200)",
+                httpStatus: nil, attempt: nil, maxAttempts: nil, retryInMs: nil
+            ))
+        )
+        assertSnapshot(of: host(session, height: 72), as: .pinnedImage)
+    }
+
+    /// The daemon said the session failed but could not say why. The state is
+    /// the verdict and the detail is optional, so the row must still carry a
+    /// red line — a red icon with nothing under it is the silent case this
+    /// feature exists to end.
+    func testErrorRowWithNoDetailAtAll() {
+        let session = makeSession(state: .error, metrics: makeMetrics())
+        assertSnapshot(of: host(session, height: 72), as: .pinnedImage)
+    }
+
+    /// Light mode, for the same reason #984 pinned the question pill there:
+    /// `errorPillText` is a per-appearance retune and only one appearance is
+    /// covered by every other test in this suite. `TokenContrastTests` proves
+    /// the ratio numerically; this proves it renders.
+    func testErrorRowReadableInLightMode() {
+        let session = makeSession(
+            state: .error,
+            metrics: makeMetrics(sessionError: SessionError(
+                phase: "terminal", class: "auth", message: "Invalid API key",
+                httpStatus: 401, attempt: nil, maxAttempts: nil, retryInMs: nil
+            ))
+        )
+        assertSnapshot(of: hostLight(session, height: 72), as: .pinnedImage)
     }
 
     func testRoleOrchestratorRow() {

@@ -415,4 +415,46 @@ class SessionManager: ObservableObject {
     var readySessions: Int {
         sessions.filter { $0.state == .ready }.count
     }
+
+    /// Every daemon-wide fault the app can currently see (#1802).
+    ///
+    /// THE single answer to "is a source stuck", read by both surfaces that
+    /// depend on it: this banner, and the connection dot's `statusColor`. It
+    /// is exposed rather than kept inside `daemonErrorSummary` precisely
+    /// because the dot used to carry its own copy of the same three-part
+    /// predicate — and a banner saying "the daemon is not responding" beside a
+    /// green dot is the failure mode two copies produce.
+    ///
+    /// Pure — the derivation lives in `DaemonHealth` and is unit-tested
+    /// without a manager; this only supplies the inputs.
+    var daemonFaults: [DaemonFault] {
+        DaemonHealth.faults(
+            aggregate: aggregateConnectionState,
+            local: .init(isConfigured: useLocalDaemon,
+                         isStalled: localConnectionStalled),
+            // A relay toggled on with no URL has nowhere to connect, so it
+            // cannot be stalled — the third clause the connection dot has
+            // always carried, kept here rather than dropped into `isStalled`.
+            relay: .init(isConfigured: useRelayServer && !relayServerURL.isEmpty,
+                         isStalled: relayConnectionStalled)
+        )
+    }
+
+    /// The daemon-wide error banner's content, or nil when there is nothing to
+    /// say (#1802). The failable initializer is the whole hide mechanism.
+    var daemonErrorSummary: DaemonErrorSummary? {
+        DaemonErrorSummary(items: daemonFaults)
+    }
+
+    /// Failed sessions (#1802). Consumed by `DebugState` alongside its three
+    /// siblings.
+    ///
+    /// Deliberately NOT folded into `hasActiveSessions`. Nothing clears an
+    /// error until the next successful turn, so an errored session counted as
+    /// active would keep the app claiming work is in progress indefinitely —
+    /// the same reasoning that keeps `error` out of the daemon's own
+    /// `concurrencyActive()`.
+    var errorSessions: Int {
+        sessions.filter { $0.state == .error }.count
+    }
 }

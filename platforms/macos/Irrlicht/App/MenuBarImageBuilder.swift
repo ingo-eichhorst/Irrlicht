@@ -13,28 +13,72 @@ enum MenuBarImageBuilder {
     /// Pending consent outranks everything: while items are unanswered the
     /// daemon isn't monitoring those agents, so the bar must say "act to
     /// make me work again" — not show dots or the idle flame.
+    ///
+    /// An errored session (#1802) deliberately does NOT promote to
+    /// `.attention`. It was considered and rejected: `.attention` is a FULL
+    /// REPLACEMENT of the dots, so routing errors through it would hide the
+    /// red circle at exactly the moment there is one to show — the opposite of
+    /// what the feature was asked for. The error signal is the red dot itself.
     static func iconState(pendingConsentCount: Int, sessionCount: Int) -> IconState {
         if pendingConsentCount > 0 { return .attention }
         if sessionCount > 0 { return .dots }
         return .off
     }
 
-    /// True when `.usage` style has nothing to show (no renderable quota
-    /// yet) but the dots view is actually renderable — see the fallback
-    /// comment at its call site in `combinedImage`. Takes the already-built
-    /// dots image rather than a raw session count: a non-zero session count
-    /// doesn't guarantee `buildStatusImage` succeeds (e.g. sessions whose
-    /// parent was pruned out from under them still carry a non-nil
-    /// `parentSessionId` and get excluded from every project group), and
-    /// checking the actual image avoids re-deriving that success/failure a
+    /// Whether any session that will actually be DRAWN as a dot is errored.
+    ///
+    /// The filter has to match what `MenuBarStatusRenderer` draws, or the icon
+    /// widens to point at a red circle that is not in it. Subagents are the
+    /// trap: they live in `sessionManager.sessions` but
+    /// `MenuBarStatusRenderer.orderedProjectGroups` excludes them
+    /// (`where session.parentSessionId == nil`), so a failed CHILD would
+    /// otherwise widen the icon while adding no red dot anywhere.
+    ///
+    /// Still an over-approximation in one known case: a group past
+    /// `maxVisibleGroups` collapses into the grey overflow ellipsis, so an
+    /// error only in the sixth project widens the icon without adding a dot.
+    /// Narrowing that would mean re-deriving the whole grouping here, and the
+    /// cost is one ellipsis rather than a missed error.
+    ///
+    /// Pure, so it is testable without a SessionManager — the same reason
+    /// `iconState` and `shouldShowDotsInUsageStyle` are.
+    static func hasErroredDot(in sessions: [SessionState]) -> Bool {
+        sessions.contains { $0.parentSessionId == nil && $0.state == .error }
+    }
+
+    /// Whether `.usage` style should render the session dots after all.
+    ///
+    /// Two independent reasons, both of which end with the icon lying about
+    /// the world if the dots stay hidden:
+    ///
+    ///   - **No renderable quota yet** (fresh daemon start, or the selected
+    ///     provider hasn't ticked a statusline sample). With both halves nil
+    ///     the caller falls through to `OffFlameImage.menuBar`, the "no
+    ///     sessions running" icon, while sessions are in fact active.
+    ///   - **A session is errored** (#1802). `.usage` suppresses the dots
+    ///     outright, so the red circle this feature exists to show would be
+    ///     invisible for every user on that style — the feature would silently
+    ///     do nothing for them. Here the dots are ADDED rather than
+    ///     substituted: `composeSideBySide` renders both halves, so the user's
+    ///     chosen quota bars are kept and the red dot appears beside them. The
+    ///     icon widens while an error stands, which is the intended cost — an
+    ///     alert that never changes the icon's footprint is one nobody notices.
+    ///
+    /// Takes the already-built dots image rather than a raw session count: a
+    /// non-zero session count doesn't guarantee `buildStatusImage` succeeds
+    /// (e.g. sessions whose parent was pruned out from under them still carry a
+    /// non-nil `parentSessionId` and get excluded from every project group),
+    /// and checking the actual image avoids re-deriving that success/failure a
     /// second time. Pure decision, extracted for testability without a
     /// SessionManager, mirroring `iconState`.
-    static func shouldFallBackToDotsForUsageStyle(
+    static func shouldShowDotsInUsageStyle(
         style: MenuBarStyle,
         quotaImage: NSImage?,
-        dotsImage: NSImage?
+        dotsImage: NSImage?,
+        hasErroredSession: Bool
     ) -> Bool {
-        style == .usage && quotaImage == nil && dotsImage != nil
+        guard style == .usage, dotsImage != nil else { return false }
+        return quotaImage == nil || hasErroredSession
     }
 
     static func build(
@@ -74,7 +118,7 @@ enum MenuBarImageBuilder {
         let style = MenuBarStyle.current
         // Computed once regardless of style so the .usage fallback below can
         // check its actual success/failure instead of re-deriving it from a
-        // raw session count (see shouldFallBackToDotsForUsageStyle's doc).
+        // raw session count (see shouldShowDotsInUsageStyle's doc).
         let computedDotsImage = MenuBarStatusRenderer.buildStatusImage(
             sessions: nonGtSessions,
             projectGroupOrder: sessionManager.projectGroupOrder
@@ -95,15 +139,16 @@ enum MenuBarImageBuilder {
             compact: style == .combined,
             now: Date()
         )
-        // .usage style with sessions active but no renderable quota yet
-        // (fresh daemon start, or the selected provider hasn't ticked a
-        // statusline sample) must not collapse to nothing here — with
-        // dotsImage nil and quotaImage nil, the caller falls through to
-        // OffFlameImage.menuBar, the "no sessions running" icon, while
-        // sessions are in fact active. Fall back to dots so the icon stays
-        // honest about "something is running" even without quota data.
-        let dotsImage = style != .usage || shouldFallBackToDotsForUsageStyle(
-            style: style, quotaImage: quotaImage, dotsImage: computedDotsImage
+        // .usage style hides the dots by default. Two conditions bring them
+        // back — no renderable quota, or an errored session that would
+        // otherwise have nowhere to be red. See shouldShowDotsInUsageStyle.
+        //
+        // `nonGtSessions` has already dropped Gas Town sessions; hasErroredDot
+        // drops subagents. Both filters are needed — see its doc.
+        let hasErroredSession = hasErroredDot(in: nonGtSessions)
+        let dotsImage = style != .usage || shouldShowDotsInUsageStyle(
+            style: style, quotaImage: quotaImage, dotsImage: computedDotsImage,
+            hasErroredSession: hasErroredSession
         ) ? computedDotsImage : nil
         // Dots first (left), quota bars last (right) — closest to the
         // system status icons (WiFi/battery/clock), matching issue #909's

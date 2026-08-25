@@ -15,7 +15,10 @@ struct SubagentRowView: View {
 
             // State indicator (small)
             SessionStateIcon(state: session.state, size: 12)
-                .tooltip(session.state.label)
+                // `stateTooltip`, not `state.label`: this compact row has no
+                // sub-line stack, so for a failed child this tooltip is the
+                // only thing carrying WHY (#1802).
+                .tooltip(session.stateTooltip)
 
             // Context utilization
             if let metrics = session.metrics, metrics.hasContextData {

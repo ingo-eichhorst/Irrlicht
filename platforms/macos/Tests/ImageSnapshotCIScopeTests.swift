@@ -56,7 +56,16 @@ final class ImageSnapshotCIScopeTests: XCTestCase {
         "GroupViewSnapshotTests": true,                 // 6/6
         "HistoryViewSnapshotTests": true,               // 2/14
         "SessionListUnappliedGrantsWiringTests": true,  // 2/2
-        "SessionRowSnapshotTests": true,                // 24/24
+        "SessionListDaemonErrorWiringTests": true,      // 2/2 — panel host, same as the grants pair
+        "SessionRowSnapshotTests": true,                // 28/28
+        // #1802. `true` is a CONSERVATIVE CLASSIFICATION, not a measurement:
+        // unlike the two `false` entries below it, nobody has run this suite on
+        // a runner. It is the sibling of `UnappliedGrantsBannerRenderTests`
+        // (same shape, same host width, `false` there) so it will probably pass
+        // in CI too — but "probably" is exactly what the `false` comments
+        // refuse to be, so it starts skipped and can be flipped after one
+        // measured run rather than reddening an unrelated PR to find out.
+        "DaemonErrorBannerRenderTests": true,          // 3/3 — unmeasured on a runner
         "PermissionWizardEffectErrorRenderTests": false, // 3/3 pass on a runner
         "UnappliedGrantsBannerRenderTests": false,       // 2/2 pass on a runner
     ]
@@ -300,7 +309,7 @@ final class ImageSnapshotCIScopeTests: XCTestCase {
     /// image snapshots, and the ratchet would be reset rather than read. It is
     /// printed instead, on every run of this test and by every run of the
     /// suite itself (`Executed N tests`).
-    private static let committedUngatedTestCount = 48
+    private static let committedUngatedTestCount = 57
 
     /// The module the gated test target's classes live in, read off this class
     /// rather than typed: a literal here that stopped naming the real target

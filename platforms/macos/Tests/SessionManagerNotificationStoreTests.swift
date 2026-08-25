@@ -155,6 +155,96 @@ final class SessionManagerNotificationStoreTests: XCTestCase {
     /// `masterEnabledKey` is deliberately never seeded, matching the app: it is
     /// kept out of that seed on purpose so `object(forKey:)` can still answer
     /// nil and the upgrade fallback stays reachable.
+    // MARK: - #1802: the fourth state must not swallow a recovery notification
+
+    /// Drives one state transition and returns the keys the DRIVEN store was
+    /// asked for during the call — a delta, so `SessionManager.init`'s own
+    /// reads cannot be mistaken for the gate's.
+    ///
+    /// Reaching the firing path is what makes `sendNotification` ask for the
+    /// master key, so that read IS the evidence the switch arm was entered.
+    /// Asserting on a downstream value is impossible here —
+    /// `canUseUserNotifications` is false outside an app bundle — and the
+    /// precondition is checked rather than assumed, so a runner that ever
+    /// gained a bundle fails loudly instead of firing real notifications at a
+    /// developer. Returns nil in that case, having already failed.
+    ///
+    /// `arrangedManager(enabling:)` sets each event's own `enabledKey`, so no
+    /// caller here re-types `"notifyOnWaiting"` — the enum owns that string.
+    private func keysAskedDriving(
+        _ session: SessionState,
+        from previousState: SessionState.State,
+        enabling events: [NotificationEvent]
+    ) -> Set<String>? {
+        let (manager, store) = arrangedManager(enabling: events)
+        guard !manager.canUseUserNotifications else {
+            XCTFail(bundleGuardMessage)
+            return nil
+        }
+        let before = store.readKeys
+        manager.checkStateTransitionNotification(session: session, previousState: previousState)
+        return store.readKeys.subtracting(before)
+    }
+
+    /// `working → error → waiting` must still announce "Agent waiting for
+    /// input".
+    ///
+    /// `previousState` is the immediately-previous LIVE state. Before #1802 the
+    /// two arms required `previousState == .working` literally, so once the
+    /// fourth state could sit between them the transition arrived with
+    /// `previousState == .error` and fell through `default: return` — silently
+    /// dropping a notification the user got before #1798 existed. Latent when
+    /// #1802 was written (no adapter produced `.error` yet) and live the moment
+    /// #1799/#1800 land, which is precisely the kind of gap that goes unnoticed.
+    ///
+    /// Mutation check (verified): restore `previousState == .working` on the
+    /// `.waiting` arm and this goes red — the master key is never asked for.
+    func testAWaitingTransitionOutOfErrorStillNotifies() {
+        guard let asked = keysAskedDriving(waitingSession(), from: .error, enabling: [.waiting])
+        else { return }
+
+        XCTAssertTrue(
+            asked.contains(NotificationSettings.masterEnabledKey),
+            """
+            checkStateTransitionNotification never reached the firing path for \
+            working → error → waiting, so the "Agent waiting for input" \
+            notification was silently dropped. Everything the call asked this \
+            store for: \(asked.sorted()).
+            """)
+    }
+
+    /// The same for `working → error → ready`.
+    func testAReadyTransitionOutOfErrorStillNotifies() {
+        guard let asked = keysAskedDriving(readySession(), from: .error, enabling: [.ready])
+        else { return }
+
+        XCTAssertTrue(
+            asked.contains(NotificationSettings.masterEnabledKey),
+            "working → error → ready did not reach the firing path; asked: \(asked.sorted()).")
+    }
+
+    /// LOCK — ENTERING `.error` still notifies nothing. Only the SOURCE side of
+    /// the two arms widened; #1802 deliberately adds no error notification, and
+    /// a retrying error flaps, so one would be noise. Driven with EVERY event
+    /// enabled, so the silence is the switch's doing and not a disabled toggle.
+    func testEnteringErrorNotifiesNothing() {
+        guard let asked = keysAskedDriving(erroredSession(), from: .working,
+                                           enabling: NotificationEvent.allCases)
+        else { return }
+
+        XCTAssertFalse(
+            asked.contains(NotificationSettings.masterEnabledKey),
+            "entering .error reached the firing path — #1802 adds no error notification.")
+    }
+
+    private func waitingSession() -> SessionState {
+        readySession().withState(.waiting)
+    }
+
+    private func erroredSession() -> SessionState {
+        readySession().withState(.error)
+    }
+
     private func arrangedManager(enabling events: [NotificationEvent] = [])
         -> (manager: SessionManager, store: InMemoryDefaults) {
         let store = InMemoryDefaults()

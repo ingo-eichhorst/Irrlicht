@@ -32,10 +32,10 @@ timeout/witness design.
   blanket host difference.
   **How big the exclusion is, is DERIVED and asserted rather than typed.**
   `ImageSnapshotCIScopeTests.testTheUngatedPopulationIsExactlyTheSkippedSuites`
-  counts those five suites' tests off the live bundle through XCTest's own
+  counts those seven suites' tests off the live bundle through XCTest's own
   `XCTestSuite(forTestCaseClass:)` — so it agrees with a run's `Executed N
   tests` by construction rather than by a source scan agreeing with a test
-  runner by luck — pins the total at **48**, and prints the whole census on
+  runner by luck — pins the total at **57**, and prints the whole census on
   every run. It also fails if a skipped suite goes EMPTY, which is the rot this
   decision creates: a suite that runs on one machine and holds nothing runs
   nowhere, and reads exactly like one that passes everywhere. The gated
@@ -82,7 +82,7 @@ timeout/witness design.
   *should* now be rasterisation only, and no post-#1658 runner render has been
   diffed against the reference to confirm it.
   **What the decision costs, stated here rather than discovered later: a
-  contributor without a Mac cannot run these 48 tests at all, and CI will not
+  contributor without a Mac cannot run these 57 tests at all, and CI will not
   run them either.** An outside contributor's image-snapshot change is ungraded
   until the maintainer next runs `tools/preflight.sh --only swift` or pushes
   through the pre-push hook — and CI is not merely silent about it, it is
@@ -91,7 +91,7 @@ timeout/witness design.
   touching five files in `platforms/macos/`. It touched no image-snapshot suite,
   so it is the shape rather than an instance, and no cheap mitigation is built
   here — the honest statement is that the local gate and the pre-push hook are
-  the whole of the coverage for those 48, and that a fork PR's green `swift-test`
+  the whole of the coverage for those 57, and that a fork PR's green `swift-test`
   check says nothing about them.
   **The pixels can still be collected, on demand.** `swift-snapshot-evidence`
   ran on every PR while the policy question was open and now runs on

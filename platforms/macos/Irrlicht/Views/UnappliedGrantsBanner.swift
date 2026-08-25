@@ -30,39 +30,25 @@ struct UnappliedGrantsBanner: View {
     let onReview: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: IrrSpacing.sp1) {
-            HStack(spacing: IrrSpacing.sp2) {
-                Image(systemName: "exclamationmark.triangle")
-                    .foregroundColor(IrrColors.waitingPillText)
-                Text(summary.text)
-                    .font(.caption)
-                    .foregroundColor(IrrColors.waitingPillText)
-                Spacer()
+        BannerStrip(
+            icon: "exclamationmark.triangle",
+            // waitingPillText, not the raw `waiting` hue: this text sits on the
+            // same 12% wash the question pill does, where the brand hue
+            // measures ~2:1 and fails WCAG AA (#984).
+            tint: IrrColors.waitingPillText,
+            wash: IrrColors.waitingDim,
+            headline: summary.text,
+            rows: summary.items.map {
+                BannerRow(id: $0.id, lead: "\($0.agentDisplayName) — \($0.title)", reason: $0.reason)
             }
-            ForEach(summary.items) { grant in
-                // waitingPillText, not the raw `waiting` hue: this text sits
-                // on the same 12% wash the question pill does, where the
-                // brand hue measures ~2:1 and fails WCAG AA (#984). The
-                // reason itself uses native primary — it is the longest text
-                // here and has to stay the most readable thing on the strip.
-                (Text("\(grant.agentDisplayName) — \(grant.title): ")
-                    .foregroundColor(IrrColors.waitingPillText)
-                 + Text(grant.reason)
-                    .foregroundColor(.primary))
-                    .font(.caption2)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+        ) {
+            // A standing condition being reported, not an interruption — the
+            // AppKit counterpart of the web banner's role="status", so no
+            // announcement is posted. The route on is this button, which the
+            // user chooses to press.
             Button("Review permissions", action: onReview)
                 .font(.caption)
                 .padding(.top, 2)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, IrrSpacing.sp3)
-        .padding(.vertical, 6)
-        .background(IrrColors.waitingDim)
-        // A standing condition being reported, not an interruption — the
-        // AppKit counterpart of the web banner's role="status".
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(summary.text)
     }
 }

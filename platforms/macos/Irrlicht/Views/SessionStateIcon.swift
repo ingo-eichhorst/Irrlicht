@@ -7,10 +7,12 @@ import SwiftUI
 ///            between 0.55 and 1.0 over 1.4 s.
 /// - waiting: two-bar pause.
 /// - ready:   SF Symbol `checkmark.circle.fill` (unchanged from before).
+/// - error:   SF Symbol `exclamationmark.circle.fill` in red — the session's
+///            own machinery failed (#1802).
 /// - unknown: SF Symbol `questionmark.circle` in neutral grey — a state this
 ///            build does not recognize (#1797), never painted green.
 ///
-/// All four states occupy the same fixed `size × size` layout box
+/// All five states occupy the same fixed `size × size` layout box
 /// (issue #596): the session row is a leading HStack, so a state whose
 /// icon measured wider — the ready SF Symbol's font-derived box is 14 pt
 /// at size 12 — shifted the agent number, title, and context bar of that
@@ -28,10 +30,10 @@ struct SessionStateIcon: View {
             WorkingIcon(size: size)
         case .waiting:
             WaitingIcon(size: size)
-        case .ready, .unknown:
-            // Both are SF Symbols, so they share one arm and read their glyph
-            // and hue from the enum rather than re-hardcoding them here — the
-            // enum's `glyph` has a production consumer of its own
+        case .ready, .error, .unknown:
+            // All three are SF Symbols, so they share one arm and read their
+            // glyph and hue from the enum rather than re-hardcoding them here
+            // — the enum's `glyph` has a production consumer of its own
             // (SessionManager's menu-bar summary), and a second copy could
             // silently disagree with it.
             //
@@ -39,7 +41,9 @@ struct SessionStateIcon: View {
             // tuned to match it); the explicit frame clamps the layout box
             // to size × size — without it the symbol's font metrics make
             // the box wider and push the rest of the row to the right (#596).
-            // That clamp is why `.unknown` can join this arm safely.
+            // That clamp is why `.unknown` and `.error` can join this arm
+            // safely, and `SessionStateIconLayoutTests` iterates `allCases`,
+            // so each new state is measured against it automatically.
             Image(systemName: state.glyph)
                 .font(.system(size: size))
                 .foregroundColor(state.color)

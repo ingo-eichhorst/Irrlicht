@@ -388,6 +388,17 @@ struct SessionMetrics: Codable {
     let cacheBloatPercent: Int?            // how far above the project baseline, as a rounded percent (issue #946)
     let cacheBloatTooltip: String?         // hover text naming the regressing version (empty when no attribution)
     let cacheBloatExplanation: String?     // longer plain-language hover text, composed daemon-side (issue #827)
+    /// Why this session failed, when `state == "error"` (#1802).
+    ///
+    /// It lives on METRICS, not on the session, because that is where the
+    /// daemon puts it — `session.SessionMetrics.SessionError` at
+    /// `core/domain/session/metrics.go:401`, `json:"session_error"`. The
+    /// session object carries no top-level `error` key and none is planned;
+    /// the web client reads `agent.metrics.session_error` (#1801). Reading it
+    /// anywhere else decodes nothing, silently, forever — and renders the
+    /// bare "The session failed" fallback as though the daemon had said
+    /// nothing, which looks exactly like working code.
+    let sessionError: SessionError?
 
     enum CodingKeys: String, CodingKey {
         case elapsedSeconds = "elapsed_seconds"
@@ -413,6 +424,7 @@ struct SessionMetrics: Codable {
         case cacheBloatPercent = "cache_bloat_percent"
         case cacheBloatTooltip = "cache_bloat_tooltip"
         case cacheBloatExplanation = "cache_bloat_explanation"
+        case sessionError = "session_error"
     }
 
     init(from decoder: Decoder) throws {
@@ -452,6 +464,7 @@ struct SessionMetrics: Codable {
         cacheBloatPercent = try c.decodeIfPresent(Int.self, forKey: .cacheBloatPercent)
         cacheBloatTooltip = try c.decodeIfPresent(String.self, forKey: .cacheBloatTooltip)
         cacheBloatExplanation = try c.decodeIfPresent(String.self, forKey: .cacheBloatExplanation)
+        sessionError = try c.decodeIfPresent(SessionError.self, forKey: .sessionError)
     }
 
     /// Explicit memberwise initializer for SwiftUI previews and tests that
@@ -480,7 +493,8 @@ struct SessionMetrics: Codable {
         cacheBloat: Bool? = nil,
         cacheBloatPercent: Int? = nil,
         cacheBloatTooltip: String? = nil,
-        cacheBloatExplanation: String? = nil
+        cacheBloatExplanation: String? = nil,
+        sessionError: SessionError? = nil
     ) {
         self.elapsedSeconds = elapsedSeconds
         self.totalTokens = totalTokens
@@ -505,6 +519,7 @@ struct SessionMetrics: Codable {
         self.cacheBloatPercent = cacheBloatPercent
         self.cacheBloatTooltip = cacheBloatTooltip
         self.cacheBloatExplanation = cacheBloatExplanation
+        self.sessionError = sessionError
     }
 
     func encode(to encoder: Encoder) throws {
@@ -532,6 +547,7 @@ struct SessionMetrics: Codable {
         try c.encodeIfPresent(cacheBloatPercent, forKey: .cacheBloatPercent)
         try c.encodeIfPresent(cacheBloatTooltip, forKey: .cacheBloatTooltip)
         try c.encodeIfPresent(cacheBloatExplanation, forKey: .cacheBloatExplanation)
+        try c.encodeIfPresent(sessionError, forKey: .sessionError)
     }
     
     // Computed properties for UI display
@@ -686,6 +702,16 @@ struct SubagentSummary: Codable {
     let working: Int
     let waiting: Int
     let ready: Int
+    /// Failed children (#1802). OPTIONAL, unlike its three siblings: #1801
+    /// adds `Error int` to the daemon's `subagentSummary`, and until that
+    /// lands the key is simply absent — a non-optional `Int` would make every
+    /// summary fail to decode against today's daemon and take the whole
+    /// session row down with it.
+    ///
+    /// Read by `erroredSubagentCount`, not by `activeSubagentCount`: a failed
+    /// child is not working, and counting it as active would keep the parent's
+    /// badge claiming work is in flight after everything under it has stopped.
+    let error: Int?
 }
 
 /// BackgroundAgent marks a session as a background agent spawned via the agent's
@@ -747,9 +773,112 @@ struct Launcher: Codable, Hashable {
     }
 }
 
+/// One session-level failure, as the daemon reports it (#1802).
+///
+/// Mirrors `session.SessionError` in `core/domain/session/session_error.go`
+/// field for field — including the reason EVERY NUMERIC FIELD IS OPTIONAL,
+/// which is load-bearing rather than stylistic. The recorded transcript shapes
+/// disagree about which numbers exist at all: claudecode's retrying `api_error`
+/// carries status/attempt/maxRetries, its TERMINAL `isApiErrorMessage` carries
+/// none of them, and copilot's `session.error` carries a status only for
+/// `rate_limit`. Decoding an absent number as 0 would render "attempt 0 of 0" —
+/// a give-up invented out of data that said nothing.
+///
+/// DISTINCT FROM a failed tool call, permanently. A grep that matched nothing
+/// or a build that broke is the agent working normally and never lands here.
+struct SessionError: Codable, Equatable {
+    /// Whether another attempt is known to be coming. `nil`/absent is an
+    /// honest answer, not a missing one — the transcript reported a failure
+    /// without saying whether the agent will try again — so it is deliberately
+    /// NOT collapsed into `.terminal`.
+    let phase: String?
+    /// The adapter's normalized failure class: "rate_limit", "quota", "auth",
+    /// "context_limit", "provider", "query", "process_death". Free-form,
+    /// because the vocabularies genuinely differ per agent.
+    let `class`: String?
+    /// The agent's own failure text, verbatim. This is what the user reads.
+    let message: String?
+    let httpStatus: Int?
+    /// 1-based attempt within ONE API call. Resets to 1 for the next call, so
+    /// it must never be summed across errors.
+    let attempt: Int?
+    /// The agent's retry ceiling for this call, or nil when unreported.
+    let maxAttempts: Int?
+    /// Fractional milliseconds until the next attempt. The unit is in the key
+    /// on purpose (`retry_in_ms`): the Go side refuses to serialize a bare
+    /// Duration precisely so this client does not have to know, from nothing in
+    /// the payload, that one field is unlabelled nanoseconds.
+    let retryInMs: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case phase, message, attempt
+        case `class`
+        case httpStatus = "http_status"
+        case maxAttempts = "max_attempts"
+        case retryInMs = "retry_in_ms"
+    }
+
+    /// True only when the agent SAID another attempt is coming. An unreported
+    /// phase is not a retry — mirrors `SessionError.IsRetrying` in Go, and the
+    /// caller that needs "we were not told" reads `phase` itself.
+    var isRetrying: Bool { phase == "retrying" }
+
+    /// The one line the row shows. Prefers the agent's own wording; falls back
+    /// to the class, then to a bare statement — never to an empty string,
+    /// because an error line that renders blank is indistinguishable from no
+    /// error at all, which is the failure this whole feature exists to end.
+    var displayMessage: String {
+        if let message, !message.isEmpty { return message }
+        if let cls = self.class, !cls.isEmpty { return Self.classLabel(cls) }
+        return "The session failed"
+    }
+
+    /// Trailing detail — "attempt 3 of 10", "HTTP 429", "retrying in 0.6s" —
+    /// appended after the message. Empty when the transcript reported no
+    /// numbers, which is a common shape rather than an exceptional one.
+    var detailSuffix: String {
+        var parts: [String] = []
+        if let attempt {
+            parts.append(maxAttempts.map { "attempt \(attempt) of \($0)" } ?? "attempt \(attempt)")
+        }
+        if let httpStatus { parts.append("HTTP \(httpStatus)") }
+        if isRetrying {
+            // Seconds, one decimal: the source is fractional milliseconds
+            // (616.45 in the recordings) and "retrying in 616ms" reads as
+            // false precision for something the user experiences as a pause.
+            parts.append(retryInMs.map { String(format: "retrying in %.1fs", $0 / 1000) } ?? "retrying")
+        } else if phase == "terminal" {
+            // Said explicitly, because "wait or intervene?" is the whole
+            // question a user has in front of a red row, and it is exactly
+            // what `ErrorPhase` exists to answer. Silence here would render a
+            // terminal failure identically to one whose phase went unreported
+            // — collapsing the distinction the daemon took care to carry.
+            parts.append("no further retries")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    /// Human label for a class code, used only when the agent supplied no
+    /// message of its own.
+    private static func classLabel(_ cls: String) -> String {
+        switch cls {
+        case "rate_limit":    return "Rate limited by the provider"
+        case "quota":         return "Usage quota exhausted"
+        case "auth":          return "Authentication was rejected"
+        case "context_limit": return "Context window limit reached"
+        case "provider":      return "The provider failed the request"
+        case "process_death": return "The agent process exited mid-turn"
+        // Unrecognized classes are shown verbatim rather than dropped: a class
+        // this build has not heard of is still the most specific thing anyone
+        // knows about the failure (the vocabularies are per-agent and grow).
+        default:              return cls
+        }
+    }
+}
+
 struct SessionState: Identifiable, Codable {
     let id: String              // session_id
-    let state: State            // working, waiting, ready
+    let state: State            // working, waiting, ready, error
     let model: String           // claude-3.7-sonnet, etc.
     let cwd: String             // working directory
     let transcriptPath: String? // path to transcript.jsonl (optional for backwards compatibility)
@@ -784,11 +913,44 @@ struct SessionState: Identifiable, Codable {
     // daemons that share a session_id — see `rowID`. nil for local sessions.
     var daemonID: String? = nil
 
+    /// Row tooltip for the state icon: the state's label, plus the failure
+    /// reason when there is one (#1802).
+    ///
+    /// It exists for `SubagentRowView`, whose compact single-line HStack has
+    /// no sub-line stack for `SessionRowView.errorBlock` to live in — so for a
+    /// failed CHILD session this tooltip is the only channel carrying WHY, and
+    /// a bare "Error — the session failed" tells the user nothing they cannot
+    /// already see from the red icon.
+    ///
+    /// `SessionRowView` deliberately keeps the plain `state.label` on its own
+    /// icon: that row renders the full error line two lines below, so
+    /// repeating the message in the icon tooltip would be redundant.
+    var stateTooltip: String {
+        guard state == .error, let error else { return state.label }
+        return "\(state.label) — \(error.displayMessage)"
+    }
+
     /// Render/identity key (#537). Compound `(daemon, session_id)` for relay
     /// sessions with a known daemon, else the bare `id` — so local rows and the
     /// persisted session order are unchanged. Only ever compared/keyed, never
     /// split, so a "/" delimiter is safe.
     var rowID: String { daemonID.map { "\($0)/\(id)" } ?? id }
+
+    /// Why this session failed, when `state == .error` (#1802).
+    ///
+    /// A PASSTHROUGH to `metrics.session_error`, not a field of its own: that
+    /// is the only place the daemon writes it (`metrics.go:401`) and where the
+    /// web client reads it. Computed rather than stored so there is exactly one
+    /// copy — a second stored field would have to be threaded through
+    /// `init(from:)`, the memberwise init, `withState` and `withChildren`, and
+    /// dropping it from any one of those is this repo's recurring bug (#1797
+    /// lost `children` in exactly that way).
+    ///
+    /// A session can be `.error` with a nil detail — the state is the daemon's
+    /// verdict and this is what it managed to say about it. The row stays red
+    /// either way; `SessionRowView.errorBlock` renders a bare "The session
+    /// failed" rather than nothing.
+    var error: SessionError? { metrics?.sessionError }
 
     private static let logger = Logger(subsystem: "io.irrlicht.app", category: "SessionState")
 
@@ -938,7 +1100,14 @@ struct SessionState: Identifiable, Codable {
         self.yieldState = yieldState
     }
 
-    /// The daemon's three-state lifecycle, plus a fourth case this app owns.
+    /// The daemon's four-state lifecycle, plus a fifth case this app owns.
+    ///
+    /// `error` (#1802) IS a daemon state — `session.StateError`, added by
+    /// #1798 — and means the session's own machinery failed: the provider
+    /// refused or failed the call, credentials were rejected, the agent
+    /// process died mid-turn, or Irrlicht could not read the session. It is
+    /// NOT a tool failure; a grep that matched nothing is the agent working
+    /// normally and stays `working`.
     ///
     /// `unknown` is NOT a daemon state and never comes off the wire as itself
     /// — it is where `init(from:)` puts a state string this build does not
@@ -952,13 +1121,19 @@ struct SessionState: Identifiable, Codable {
     /// does not recognize and would skip on its next load — silently removing
     /// the session. Encode the original state, or refuse.
     enum State: String, CaseIterable, Codable {
-        case working, waiting, ready, unknown
+        case working, waiting, ready, error, unknown
 
         var glyph: String {
             switch self {
             case .working: return "hammer.fill"
             case .waiting: return "hourglass"
             case .ready: return "checkmark.circle.fill"
+            // Circle-family, matching `ready`'s silhouette rather than the
+            // `exclamationmark.triangle` the row's context-pressure line and
+            // the error line itself use — the state icon and the alert line
+            // sit two rows apart, and two identical triangles read as one
+            // repeated warning instead of a state plus its explanation.
+            case .error: return "exclamationmark.circle.fill"
             case .unknown: return "questionmark.circle"
             }
         }
@@ -968,6 +1143,7 @@ struct SessionState: Identifiable, Codable {
             case .working: return IrrColors.working
             case .waiting: return IrrColors.waiting
             case .ready:   return IrrColors.ready
+            case .error:   return IrrColors.error
             case .unknown: return IrrColors.unknown
             }
         }
@@ -978,6 +1154,7 @@ struct SessionState: Identifiable, Codable {
             case .working: return IrrSVG.working
             case .waiting: return IrrSVG.waiting
             case .ready:   return IrrSVG.ready
+            case .error:   return IrrSVG.error
             case .unknown: return IrrSVG.unknown
             }
         }
@@ -989,21 +1166,32 @@ struct SessionState: Identifiable, Codable {
         /// omitted from `segmentOrder` and fall through to green (#1797).
         var menuBarRank: Int {
             switch self {
-            case .waiting: return 0
-            case .working: return 1
-            case .ready:   return 2
-            case .unknown: return 3   // last: outranked by anything we can read
+            case .error:   return 0   // first: the only state that needs you now
+            case .waiting: return 1
+            case .working: return 2
+            case .ready:   return 3
+            case .unknown: return 4   // last: outranked by anything we can read
             }
         }
 
-        /// Highest-priority state in a collection (waiting > working > ready).
+        /// Highest-priority state in a collection
+        /// (error > waiting > working > ready > unknown).
         ///
-        /// `unknown` sits below all three: a group that contains even one
+        /// `error` on top is the settled decision of #1802, and it has an
+        /// ACCEPTED COST worth stating where the ordering lives: while any
+        /// session in a group is errored, that group's menu-bar dot is red, so
+        /// the orange "a session is asking you a question" hint is not visible
+        /// at a glance. The trade was made deliberately — a failed session is
+        /// the one the user can least afford to miss, and unlike a waiting one
+        /// it does not resolve itself by being ignored.
+        ///
+        /// `unknown` sits below all four: a group that contains even one
         /// session in a state we can read is better summarized by that. It only
         /// wins when there is nothing else to say — and then it must win, or a
         /// group of nothing but unreadable sessions summarizes as green (#1797).
         /// An EMPTY collection keeps its historical `.ready` answer.
         static func dominant<C: Collection>(in states: C) -> State where C.Element == State {
+            if states.contains(.error) { return .error }
             if states.contains(.waiting) { return .waiting }
             if states.contains(.working) { return .working }
             if states.contains(.ready) { return .ready }
@@ -1015,6 +1203,7 @@ struct SessionState: Identifiable, Codable {
             case .working: return "🟣"   // purple circle
             case .waiting: return "🟠"   // orange circle
             case .ready: return "🟢"  // green circle
+            case .error: return "🔴"  // red circle
             case .unknown: return "⚪️"  // white circle — neutral, not a verdict
             }
         }
@@ -1024,6 +1213,7 @@ struct SessionState: Identifiable, Codable {
             case .working: return "Working"
             case .waiting: return "Waiting for input"
             case .ready: return "Ready"
+            case .error: return "Error — the session failed"
             case .unknown: return "Unknown state"
             }
         }
@@ -1077,12 +1267,19 @@ struct SessionState: Identifiable, Codable {
             role: role, roleIcon: roleIcon, roleDescription: roleDescription,
             workerName: workerName, workerID: workerID,
             children: children, launcher: launcher,
+            // The error detail rides along inside `metrics`, which is already
+            // carried here — see `error`'s doc for why it is a passthrough
+            // rather than a fifth field this copy could drop.
             yieldState: yieldState
         )
         copy.duplicateIndex = duplicateIndex
         copy.daemonID = daemonID
         return copy
     }
+
+    /// Failed children (#1802). Absent on today's daemon — see
+    /// `SubagentSummary.error` — so this is 0 until #1801 lands the wire.
+    var erroredSubagentCount: Int { subagents?.error ?? 0 }
 
     var activeSubagentCount: Int {
         (subagents?.working ?? 0) + (subagents?.waiting ?? 0)
