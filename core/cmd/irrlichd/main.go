@@ -743,6 +743,10 @@ func runDaemon() {
 		Push:         push,
 		Logger:       logger,
 		GitResolver:  gitResolver,
+		// Same live snapshot registerCoreRoutes hands the diagnostics bundle
+		// (#1801) — one source, two outlets, so the banner and hooks.json can
+		// never disagree about whether hooks are healthy.
+		HookHealth: liveHookHealth(hookLiveness, hookVerifier),
 	})
 
 	var watcherFactories map[string]services.WatcherFactory

@@ -55,9 +55,26 @@ const costAttachTTL = 5 * time.Second
 // ProviderCosts holds per-provider trailing-window spend
 // (providerKey → timeframe → USD) so clients can render windowed usage chips
 // without re-attributing project costs — a single project can mix providers.
+//
+// DaemonErrors (#1801) is the one field here that is not about sessions: it
+// carries faults in Irrlicht's OWN machinery that have no session to attach
+// to, so the dashboard can say so instead of rendering a confidently green
+// list it has no right to. It rides on this endpoint rather than getting its
+// own because this is the payload the client already re-fetches on load and on
+// every rehydrate poll, so a standing fault surfaces and clears without a new
+// push type — and because a fault of this kind is precisely a reason to
+// distrust the sessions in the same response.
+//
+// KNOWN GAP, stated rather than implied: cmd/irrlichtrelay rebuilds this
+// payload from its own session cache and has no daemon-health data in its
+// envelope at all, so a relay-connected dashboard never sees these. That is
+// the same hole /api/v1/permissions' unapplied-grants banner already has (the
+// relay does not re-serve that route either), and closing it is a relay
+// protocol change, not a field.
 type sessionsResponse struct {
 	Groups        []*session.AgentGroup         `json:"groups"`
 	ProviderCosts map[string]map[string]float64 `json:"provider_costs,omitempty"`
+	DaemonErrors  []services.DaemonError        `json:"daemon_errors,omitempty"`
 }
 
 // costAttachCache caches the last project + provider cost scans so successive
@@ -87,7 +104,12 @@ func (c *costAttachCache) put(now time.Time, byProject, byProvider map[string]ma
 	c.mu.Unlock()
 }
 
-func handleGetSessions(repo outbound.SessionRepository, orchMonitor *services.OrchestratorMonitor, tracker outbound.CostTracker, controllable func(sessionID string) bool) http.HandlerFunc {
+// handleGetSessions serves the dashboard payload. hookHealth is nil-tolerant
+// and nil in every context that has no live hook counters to report (the tests
+// below, and any process that is not the daemon that served the hooks) — the
+// same nil-meaningful seam liveHookHealth already documents for the
+// diagnostics bundle.
+func handleGetSessions(repo outbound.SessionRepository, orchMonitor *services.OrchestratorMonitor, tracker outbound.CostTracker, controllable func(sessionID string) bool, hookHealth func() services.HookHealthSnapshot) http.HandlerFunc {
 	cache := &costAttachCache{}
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessions, err := repo.ListAll()
@@ -105,6 +127,9 @@ func handleGetSessions(repo outbound.SessionRepository, orchMonitor *services.Or
 		groups := session.BuildDashboard(sessions, orchMonitor.State("gastown"))
 		annotateControllable(groups, controllable)
 		resp := sessionsResponse{Groups: groups}
+		if hookHealth != nil {
+			resp.DaemonErrors = services.DaemonErrors(hookHealth())
+		}
 		if tracker != nil {
 			byProject, byProvider := costMaps(tracker, cache)
 			attachGroupCosts(groups, byProject)
