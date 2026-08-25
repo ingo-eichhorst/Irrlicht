@@ -42,6 +42,36 @@ extension View {
     }
 }
 
+/// Shared chrome for the row's full-width ALERT strips — an icon plus text on
+/// a tinted wash, as opposed to `PillText`'s text-only pill.
+///
+/// Two users, and they had drifted: the context-pressure alert (#689) and the
+/// session error line (#1802) hand-rolled the same five modifiers with
+/// different constants. One copy now, so a future third strip cannot introduce
+/// a fourth set.
+///
+/// The wash is 0.12, matching `PillText` and every other tinted notice in this
+/// app — the strips previously used 0.08. That is a deliberate, visible
+/// change: `TokenContrastTests` measures WCAG contrast against a 0.12 wash, so
+/// while the strips shipped 0.08 the test was bounding the rendered value
+/// rather than measuring it. Now it measures what ships.
+private struct AlertStrip: ViewModifier {
+    let wash: Color
+
+    func body(content: Content) -> some View {
+        content
+            .padding(.horizontal, 4)
+            .padding(.vertical, 2)
+            .background(wash.opacity(0.12))
+            .cornerRadius(IrrRadius.sm)
+            .padding(.top, 2)
+    }
+}
+
+extension View {
+    fileprivate func alertStrip(wash: Color) -> some View { modifier(AlertStrip(wash: wash)) }
+}
+
 struct ContextBar: View {
     let utilization: Double
     let pressureColor: Color
@@ -228,11 +258,7 @@ struct SessionRowView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            .padding(.horizontal, 4)
-            .padding(.vertical, 2)
-            .background(IrrColors.error.opacity(0.08))
-            .cornerRadius(IrrRadius.sm)
-            .padding(.top, 2)
+            .alertStrip(wash: IrrColors.error)
             // The row truncates at two lines; the tooltip carries the agent's
             // full wording, which for a provider error is often the only thing
             // that says what to actually do about it. `.tooltip`, never
@@ -503,11 +529,7 @@ struct SessionRowView: View {
                         .foregroundColor(alertColor)
                     Spacer()
                 }
-                .padding(.horizontal, 4)
-                .padding(.vertical, 2)
-                .background(alertColor.opacity(0.08))
-                .cornerRadius(IrrRadius.sm)
-                .padding(.top, 2)
+                .alertStrip(wash: alertColor)
                 .tooltip("Context window nearing limit")
             }
 

@@ -20,7 +20,12 @@ final class DaemonErrorBannerRenderTests: XCTestCase {
         DaemonFault(id: id, title: title, reason: reason)
     }
 
-    private func host(_ items: [DaemonFault]) throws -> PinnedSnapshotHost {
+    /// Takes `appearance:` rather than having a second near-copy for light
+    /// mode — the shape `SessionRowSnapshotTests` already uses for the same
+    /// reason (its `host(_:height:appearance:)` plus a one-line `hostLight`).
+    private func host(
+        _ items: [DaemonFault], appearance: NSAppearance.Name = .darkAqua
+    ) throws -> PinnedSnapshotHost {
         let summary = try XCTUnwrap(DaemonErrorSummary(items: items))
         // The window background is load-bearing, not decoration. This banner's
         // ground is a 12%-alpha wash; hosted on transparency it composites onto
@@ -28,7 +33,8 @@ final class DaemonErrorBannerRenderTests: XCTestCase {
         // first recording came out unreadable.
         let root = DaemonErrorBanner(summary: summary)
             .background(Color(NSColor.windowBackgroundColor))
-        return PinnedSnapshotHost(root, width: SessionListView.panelWidth, height: 120)
+        return PinnedSnapshotHost(root, width: SessionListView.panelWidth,
+                                  height: 120, appearance: appearance)
     }
 
     /// The real fault this build can report today.
@@ -56,13 +62,9 @@ final class DaemonErrorBannerRenderTests: XCTestCase {
     /// Light mode: `errorPillText` is a per-appearance retune, so the dark-only
     /// captures above cover exactly half of it.
     func testBannerReadableInLightMode() throws {
-        let summary = try XCTUnwrap(DaemonErrorSummary(items: DaemonHealth.faults(
-            aggregate: .reconnecting, useLocalDaemon: true, localConnectionStalled: true)))
-        let root = DaemonErrorBanner(summary: summary)
-            .background(Color(NSColor.windowBackgroundColor))
-        let view = PinnedSnapshotHost(root, width: SessionListView.panelWidth,
-                                      height: 120, appearance: .aqua)
-        assertSnapshot(of: view, as: .pinnedImage, named: "light-mode")
+        let items = DaemonHealth.faults(aggregate: .reconnecting, useLocalDaemon: true,
+                                        localConnectionStalled: true)
+        assertSnapshot(of: try host(items, appearance: .aqua), as: .pinnedImage, named: "light-mode")
     }
 }
 

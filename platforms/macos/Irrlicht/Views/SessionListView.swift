@@ -1212,13 +1212,14 @@ struct SessionListView: View {
         // healthy source, though — the other connection can be carrying the
         // session list just fine while this one is stuck, and the aggregate
         // already reports that (`.connected` wins in `aggregateConnectionState`).
-        if aggregate != .connected {
-            if sessionManager.useLocalDaemon && sessionManager.localConnectionStalled {
-                return IrrColors.wsDisconnected
-            }
-            if sessionManager.useRelayServer && !sessionManager.relayServerURL.isEmpty && sessionManager.relayConnectionStalled {
-                return IrrColors.wsDisconnected
-            }
+        //
+        // That whole rule — the aggregate mask and both per-source
+        // conditions — now lives once, in `DaemonHealth.faults`, and this dot
+        // and the daemon-error banner (#1802) read the SAME answer. They used
+        // to derive it separately, which is how a red banner could end up
+        // beside a green dot.
+        if !sessionManager.daemonFaults.isEmpty {
+            return IrrColors.wsDisconnected
         }
         switch aggregate {
         case .connected: return IrrColors.wsConnected

@@ -44,36 +44,15 @@ struct DaemonErrorBanner: View {
     @State private var announced: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: IrrSpacing.sp1) {
-            HStack(spacing: IrrSpacing.sp2) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundColor(IrrColors.errorPillText)
-                Text(summary.text)
-                    .font(.caption)
-                    .foregroundColor(IrrColors.errorPillText)
-                Spacer()
+        BannerStrip(
+            icon: "exclamationmark.triangle.fill",
+            tint: IrrColors.errorPillText,
+            wash: IrrColors.errorDim,
+            headline: summary.text,
+            rows: summary.items.map {
+                BannerRow(id: $0.id, lead: $0.title, reason: $0.reason)
             }
-            ForEach(summary.items) { fault in
-                // errorPillText, not the raw `error` hue: this text sits on a
-                // 12% wash of that same hue, where the brand red measures under
-                // WCAG AA in both appearances — the finding #984 made about the
-                // question pill, one colour over. The reason itself uses native
-                // primary: it is the longest text here and has to stay the most
-                // readable thing on the strip.
-                (Text("\(fault.title): ")
-                    .foregroundColor(IrrColors.errorPillText)
-                 + Text(fault.reason)
-                    .foregroundColor(.primary))
-                    .font(.caption2)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, IrrSpacing.sp3)
-        .padding(.vertical, 6)
-        .background(IrrColors.errorDim)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(summary.text)
+        )
         .accessibilityIdentifier("daemon-error-banner")
         // An interruption rather than a standing report — the AppKit
         // counterpart of `role="alert"`, not `role="status"`. The grants banner
@@ -81,12 +60,12 @@ struct DaemonErrorBanner: View {
         // whenever you get to it; a daemon that is not responding invalidates
         // everything else on the panel, so it is worth cutting in for.
         //
-        // The container modifiers above are what `UnappliedGrantsBanner`
-        // applies for `status`, and on their own they announce NOTHING — they
-        // only make the strip readable once focus reaches it. `alert` is the
-        // posted announcement below; without it the comment would be claiming
-        // a role the code does not implement, and the two banners would be
-        // indistinguishable to assistive tech.
+        // `BannerStrip`'s own accessibility modifiers are the `status` half —
+        // they make the strip readable once focus reaches it, and announce
+        // NOTHING on their own. `alert` is the posted announcement below;
+        // without it the comment above would be claiming a role the code does
+        // not implement, and the two banners would be indistinguishable to
+        // assistive tech.
         .onAppear { announce() }
         .onChange(of: summary.text) { _ in announce() }
     }
