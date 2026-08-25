@@ -229,36 +229,53 @@ func buildTaskSnapshot(contentArr []interface{}) []tailer.TaskSnapshotEntry {
 // hold (#657). Auto-compaction fires mid-turn and continues, so it stays
 // skipped — promoting it would emit a spurious ready-blip.
 func handleSystemEvent(raw map[string]interface{}, ev *tailer.ParsedEvent) {
-	subtype, _ := raw["subtype"].(string)
-	if subtype == "turn_duration" || subtype == "stop_hook_summary" {
+	switch subtype, _ := raw["subtype"].(string); subtype {
+	case "turn_duration", "stop_hook_summary":
 		ev.EventType = "turn_done"
 		applyPendingBackgroundAgentCount(raw, ev, subtype)
 		return
-	}
-	if subtype == "compact_boundary" {
-		if meta, ok := raw["compactMetadata"].(map[string]interface{}); ok {
-			if trigger, _ := meta["trigger"].(string); trigger == "manual" {
-				ev.EventType = "turn_done"
-				ev.IsManualCompactBoundary = true
-				return
-			}
+	case "compact_boundary":
+		if isManualCompactBoundary(raw) {
+			ev.EventType = "turn_done"
+			ev.IsManualCompactBoundary = true
+			return
 		}
-	}
-	if subtype == "away_summary" {
-		if content, ok := raw["content"].(string); ok {
-			if text := strings.TrimSpace(content); text != "" {
-				ev.AwaySummary = &tailer.AwaySummary{Text: text, ObservedAt: ev.Timestamp.Unix()}
-			}
-		}
-	}
-	// api_error keeps skipping — it is not a turn boundary and must not be
-	// promoted to one — but the failure it describes is read off it first
-	// (#1799). The tailer folds SessionError in applyMetadata, which runs on
-	// the skipped path too, which is the whole reason that fold lives there.
-	if subtype == systemSubtypeAPIError {
+	case "away_summary":
+		applyAwaySummary(raw, ev)
+	case systemSubtypeAPIError:
+		// Still skipped below — an api_error is not a turn boundary and must
+		// not be promoted to one — but the failure it describes is read off it
+		// first (#1799). The tailer folds SessionError in applyMetadata, which
+		// runs on the skipped path too; that is the whole reason the fold lives
+		// there rather than in processParsedEvent.
 		ev.SessionError = apiErrorFromSystemEvent(raw)
 	}
 	ev.Skip = true
+}
+
+// isManualCompactBoundary reports whether a compact_boundary event describes a
+// user-invoked /compact rather than an automatic mid-turn compaction. Only the
+// manual one ends the prior turn; see handleSystemEvent.
+func isManualCompactBoundary(raw map[string]interface{}) bool {
+	meta, ok := raw["compactMetadata"].(map[string]interface{})
+	if !ok {
+		return false
+	}
+	trigger, _ := meta["trigger"].(string)
+	return trigger == "manual"
+}
+
+// applyAwaySummary extracts an away_summary's recap text onto ev (#979). The
+// event itself stays skipped — see handleSystemEvent for why it must never be
+// promoted to a turn boundary.
+func applyAwaySummary(raw map[string]interface{}, ev *tailer.ParsedEvent) {
+	content, ok := raw["content"].(string)
+	if !ok {
+		return
+	}
+	if text := strings.TrimSpace(content); text != "" {
+		ev.AwaySummary = &tailer.AwaySummary{Text: text, ObservedAt: ev.Timestamp.Unix()}
+	}
 }
 
 // applyPendingBackgroundAgentCount reads Claude Code's background-agent count
