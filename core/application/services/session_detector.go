@@ -184,8 +184,13 @@ type SessionDetector struct {
 	// forever. Guarded by processDeathMu — HandleProcessExit reaches it from
 	// both the process-watcher callback and the liveness sweep.
 	//
-	// In-memory on purpose: it does not need to survive a restart, because the
-	// rows it describes do not either (see retainAsProcessDeath).
+	// In-memory, but REPOPULATED AT SEED since #1815 — this comment used to say
+	// the map did not need to survive a restart "because the rows it describes
+	// do not either", and both halves are now false. The rows survive
+	// (retainedErrorAcrossRestart), and seedRestoreErrorVerdict re-registers an
+	// entry here for each one whose hold re-applied, stamped with the PERSISTED
+	// timestamp rather than with the restart, so the window continues instead of
+	// starting over.
 	processDeathVerdicts map[string]time.Time
 	processDeathMu       sync.Mutex
 
@@ -422,6 +427,13 @@ func (d *SessionDetector) HandleProcessExitRetainedForTest(pid int, sessionID, r
 // otherwise could not reach the expiry branch at all.
 func (d *SessionDetector) SetProcessDeathRetention(dur time.Duration) {
 	d.processDeathRetention = dur
+	// Forwarded so the startup sweeps' #1815 exemption measures the SAME window
+	// this one does. They are described throughout as "the same twelve hours";
+	// a knob that moved only one of them would make that false in exactly the
+	// tests written to check it.
+	if d.pidMgr != nil {
+		d.pidMgr.SetErrorRetention(dur)
+	}
 }
 
 // SetDeletedCooldown overrides the deleted-session cooldown.

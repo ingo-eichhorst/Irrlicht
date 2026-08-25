@@ -237,11 +237,82 @@ func (d *SessionDetector) HandlePIDAssigned(pid int, sessionID string) {
 // visible at 08:00. Shorter, and the one session the user most needed to see is
 // the one silently deleted before they looked.
 //
-// IT IS BOUNDED BY WALL CLOCK ONLY WITHIN A SINGLE DAEMON RUN. A restart inside
-// the window reaps the row instead of showing it — see retainAsProcessDeath's
-// note, and #1815, which owns that gap. That is the honest ceiling on what this
-// constant can promise.
+// IT IS BOUNDED BY WALL CLOCK ACROSS DAEMON RUNS, which is what #1815 changed.
+// It used to hold only within a single run: a restart inside the window reaped
+// the row instead of showing it, so the twelve hours this constant promises were
+// really "twelve hours, or until the next daemon start, whichever came first" —
+// and a release, a reboot or an `ir:test-mac` all land inside exactly that
+// window. retainedErrorAcrossRestart below now measures the same twelve hours
+// against the PERSISTED UpdatedAt, so the promise survives the restart.
 const processDeathRetention = 12 * time.Hour
+
+// retainedErrorAcrossRestart reports whether state is an errored session whose
+// verdict must outlive this daemon start — the predicate EVERY path that could
+// delete such a row consults before removing it (#1815).
+//
+// THIS IS WHERE THE RESTART CASE IS NAMED. Before it, the sweeps read a dead PID
+// as proof the row was garbage, which is true for every state except the one
+// state whose DEFINING evidence is a dead process. A session that crashed at
+// 22:00 was converted to `error` and kept — and then deleted by the next daemon
+// start, so the user who looked at 08:00 found nothing at all. The row surviving
+// is the precondition for every other part of this fix: a verdict restored onto
+// a row that has already been deleted restores nothing.
+//
+// MORE DELETERS REACH AN ERRORED ROW THAN IS OBVIOUS, and exempting a proper
+// subset leaves the outcome unchanged — the row simply dies at the next gate
+// instead of the first. Reapers in the PIDManager consult it through
+// PIDManager.retainsError; the live path is handled separately by the verdict
+// map (see retainAsProcessDeath).
+//
+// DELIBERATELY NOT LISTING THE CALL SITES HERE. The first version of this
+// comment enumerated them and named a count, and it was already wrong when it
+// landed — it missed sweepStaleSnapshot's ready-TTL branch, which had gone on
+// deleting PID==0 errored rows after thirty minutes. A hand-maintained
+// inventory of "everywhere that deletes a row" is exactly the thing that goes
+// stale, so the invariant is enforced by a check that reads the code instead:
+// TestEveryReaperConsultsTheErrorExemption walks pid_manager.go's AST and fails
+// on any deleting function that neither consults the exemption nor sits on its
+// documented exempt list. Run it for the current answer:
+//
+//	go test ./core/application/services/ -run TestEveryReaperConsultsTheErrorExemption
+//
+// In isStartupZombie the guard sits above ALL of that predicate's branches, not
+// only the dead-PID one, so the DB-backed-orphan and stale-transcript branches
+// are covered too. That is deliberate: an errored row is worth keeping whatever
+// the sweep's reason for wanting it gone.
+//
+// BOUNDED BY THE PERSISTED UpdatedAt AND THE EXISTING TWELVE HOURS, not by a new
+// constant. processDeathRetention above already is the answer to "how long is an
+// errored session worth keeping", and it was calibrated on this exact workflow
+// (crash overnight, reviewed next morning). A second constant here would be the
+// same number with a second place to retune it, and the two would drift.
+// Anchoring on UpdatedAt rather than on this daemon's start time is what makes
+// the window CONTINUE across the restart instead of resetting: a row that has
+// already burned eleven of its twelve hours gets one more, not twelve more, so a
+// restart loop cannot keep a dead session alive indefinitely.
+//
+// now AND window ARE PARAMETERS RATHER THAN time.Since AND THE CONST, so this
+// predicate answers to the same knobs the rest of the retention does.
+// SessionDetector.processDeathRetention exists precisely so a twelve-hour window
+// can be exercised without a twelve-hour test; a predicate reading the const
+// directly would have compressed one half of "the same twelve hours" and not the
+// other, and the two could then disagree silently.
+//
+// Past the window the predicate goes false and the ordinary sweeps reap the row
+// exactly as they always did — this is a retention window, not an exemption.
+//
+// The one imprecision, named rather than left to be discovered: UpdatedAt is
+// "when the row was last written", not "when the session failed". Anything that
+// re-saves an errored row extends its window. Nothing should — the process is
+// gone and the transcript is frozen — and the direction of the error is to keep
+// a dead session visible slightly too long rather than to delete it too early,
+// which is the side this state exists to err on.
+func retainedErrorAcrossRestart(state *session.SessionState, now time.Time, window time.Duration) bool {
+	if state == nil || state.State != session.StateError {
+		return false
+	}
+	return now.Sub(time.Unix(state.UpdatedAt, 0)) < window
+}
 
 // retainAsProcessDeath decides whether a process exit should convert the
 // session to StateError and KEEP it, instead of deleting it (#1800). Returns
@@ -278,19 +349,33 @@ const processDeathRetention = 12 * time.Hour
 // sweep via reapDeadOrInfraPID), and the sweep calls it again every few seconds
 // for as long as the row exists.
 //
-// IT DOES NOT SURVIVE A DAEMON RESTART, and that is a real gap rather than an
-// oversight — named here because the twelve-hour window above is exactly the
-// window a restart falls inside. seedAlivePIDs deletes any persisted session
-// whose PID is already dead, by a direct deleteWithChildren that never reaches
-// HandleProcessExit, so a crashed session is reaped at the next daemon start.
-// Routing that path through this function would currently make things WORSE,
-// not better: #1798's SessionError does not survive a restart either
-// (seedReevaluateOne calls RefreshMetrics — a merge against a fresh nil —
-// BEFORE ClassifyState), so the row would come back GREEN, and a stale row that
-// lies is worse than a missing one. The fix is ledger persistence plus a seed
-// ordering change, it applies equally to #1799's producers, and it now has one:
-// TRACKED AS #1815, filed after this branch and #1799 reported it independently.
-// Do not fix it here.
+// IT NOW SURVIVES A DAEMON RESTART — #1815, and this comment used to say the
+// opposite. The gap was real: the startup dead-PID deleters removed a crashed
+// session's row before anything could look at it, and even a row that survived
+// came back GREEN because RefreshMetrics merged against a fresh nil before
+// ClassifyState ran. Three pieces close it, and one of them IS here:
+//
+//   - retainedErrorAcrossRestart exempts an errored row from the three STARTUP
+//     deleters for the same twelve hours this constant already promised;
+//   - seedRetainErroredRows re-registers a retention entry in the verdict map
+//     below, stamped at the persisted UpdatedAt, for EVERY row that starts in
+//     `error` — not only the ones the consent-gated seed pass examined. That is
+//     what carries the row past THIS function, which is not a startup path at all: the periodic sweep
+//     calls in here every few seconds, and a restored row with no entry fell
+//     straight through to diedMidTurn — false for anything already in `error`
+//     ("error means this already ran") — and was deleted about five seconds
+//     AFTER the restart rather than at it. Measured against a real daemon.
+//   - tailer.LedgerState.SessionError carries #1799's transcript-derived half.
+//
+// THIS FUNCTION'S BODY IS UNCHANGED, and that is the design rather than an
+// accident. The restored row is carried by the map's OWN first branch, so the
+// restart case needs no special case here — and, decisively, it inherits the
+// existing retirement path for free: HandlePIDAssigned forgets the verdict when
+// a process comes back, so a resumed session becomes an ordinary row again.
+// An earlier cut of this fix added a state-shaped branch here instead
+// (`is this row `error` and recent?`) and broke exactly that, because a row
+// whose verdict had been deliberately retired still looks errored and recent.
+// TestHandlePIDAssigned_RetiresAProcessDeathVerdict is what caught it.
 func (d *SessionDetector) retainAsProcessDeath(state *session.SessionState, pid int, reason string) bool {
 	sid := state.SessionID
 
@@ -730,6 +815,10 @@ func (d *SessionDetector) seedFromDisk() {
 
 	d.seedProjectSessions(states)
 	d.seedReevaluateStates(states)
+	// AFTER re-evaluation and BEFORE SeedPIDs. After, so a row the classifier
+	// just moved off `error` (it recovered while the daemon was down) is not
+	// retained; before, because SeedPIDs is itself one of the deleters.
+	d.seedRetainErroredRows(states)
 	d.seedBackfillMetadata(states)
 
 	// Clean up dead sessions and register alive PIDs with ProcessWatcher.
@@ -781,7 +870,20 @@ func (d *SessionDetector) seedReevaluateStates(states []*session.SessionState) {
 // for idle sessions that never get another transcript_activity event to
 // trigger RefreshOnActivity + Save.
 func (d *SessionDetector) seedReevaluateOne(state *session.SessionState) {
+	// Captured BEFORE RefreshMetrics, which is the whole trick (#1815).
+	// RefreshMetrics merges against a fresh tailer pass, and for a
+	// daemon-synthesized verdict — process death — that pass carries nil,
+	// because the tailer never saw the failure: nothing was written to the
+	// transcript, the daemon watched the PROCESS go away. The ledger cannot help
+	// there. So the persisted row is the only copy, and one line later it is
+	// gone.
+	persistedError := persistedErrorVerdict(state)
+
 	d.enricher.RefreshMetrics(state)
+
+	// Re-place the hold the previous daemon held, so the classifier below keeps
+	// agreeing with the state on disk (#1815).
+	d.seedRestoreErrorVerdict(state, persistedError)
 
 	// Probe background-process liveness before re-classifying so a session
 	// persisted as `working` solely because a Bash run_in_background
@@ -803,15 +905,13 @@ func (d *SessionDetector) seedReevaluateOne(state *session.SessionState) {
 	// describes something that already happened, so re-asserting it at boot is
 	// sound in a way re-asserting "working" is not.
 	//
-	// It does not actually fire today, and that is a known gap rather than a
-	// contradiction of the above. RefreshMetrics ran a few lines up, and it
-	// merges against a fresh tailer pass whose SessionError is nil — the tailer
-	// does not persist its sticky error — so the persisted value is gone before
-	// ClassifyState reads it and this path sees a healthy session. The fix is
-	// LedgerState persistence in the tailer, deferred to #1800; see
-	// SessionMetrics.SessionError for the full account. The filter is written
-	// to accept error now so that landing the persistence is a one-file change
-	// rather than also having to notice this line.
+	// #1815: it now fires. It used to be dead code — RefreshMetrics merged
+	// against a fresh tailer pass whose SessionError was nil, so the persisted
+	// verdict was gone before ClassifyState read it and this path always saw a
+	// healthy session. Two changes made it live, and they cover different halves:
+	// LedgerState.SessionError carries a TRANSCRIPT-derived failure through the
+	// restart, and seedRestoreErrorVerdict above re-places the hold for a
+	// DAEMON-synthesized one (process death), which no ledger can reconstruct.
 	newState, reason := ClassifyState(state.State, state.Metrics)
 	if newState != state.State && newState != session.StateWorking {
 		if reason != "" {
@@ -824,6 +924,148 @@ func (d *SessionDetector) seedReevaluateOne(state *session.SessionState) {
 	if d.historyTracker != nil {
 		d.historyTracker.OnTransition(state.SessionID, state.State, time.Now())
 	}
+}
+
+// persistedErrorVerdict returns the session-level failure a previous daemon
+// persisted onto this row, or nil when the row is not an errored one.
+//
+// Gated on the persisted STATE as well as on the payload, so a stale
+// SessionError left on a row that has since recovered cannot resurrect the
+// error. The pair is what the previous daemon actually concluded; either half
+// alone is not.
+func persistedErrorVerdict(state *session.SessionState) *session.SessionError {
+	if state == nil || state.State != session.StateError || state.Metrics == nil {
+		return nil
+	}
+	return state.Metrics.SessionError
+}
+
+// seedRestoreErrorVerdict re-places, at daemon start, the SignalProcessDeath
+// hold the previous daemon was holding, and overlays it onto the freshly rebuilt
+// metrics so the seed's own ClassifyState agrees with the state on disk (#1815).
+//
+// PROCESS DEATH ONLY, AND THAT NARROWNESS IS THE DESIGN. It is tempting to
+// re-place a hold for every errored class, and it is wrong for all the others:
+//
+//   - A process-death verdict is synthesized by the daemon from the OS view of
+//     the process and is written to no transcript, so no ledger can reconstruct
+//     it. The hold is the only copy there is. It also has a real end-of-life —
+//     Overlay's IsAgentDone staleness rule, and HandlePIDAssigned's Release if
+//     the process ever comes back.
+//   - A TRANSCRIPT-derived failure has neither property. The tailer owns it,
+//     LedgerState.SessionError already carries it across the restart, and — the
+//     decisive half — the tailer also owns CLEARING it. A hold placed here would
+//     fight that: SignalSessionError's apply writes the payload into any empty
+//     SessionError slot, so the moment clearSessionErrorOnRecovery cleared the
+//     error the hold would write it straight back, and the session would read
+//     `error` through the whole of the user's recovery turn. For the adapters
+//     with no Stop hook (aider, opencode, pi) the row's only staleness rule —
+//     HookTurnDone — never fires at all, so "the whole recovery turn" becomes
+//     the full twelve-hour ceiling. Restoring nothing is strictly better: the
+//     ledger already has it, and if the ledger is gone the verdict degrades to
+//     the pre-fix behaviour rather than to a wrong red.
+//
+// So this function deliberately does nothing for any other class, and the row is
+// still kept alive by retainedErrorAcrossRestart while the ledger supplies the
+// verdict.
+//
+// WHY A HOLD AND NOT JUST THE METRICS FIELD, for the class it does handle.
+// Writing SessionError onto the metrics would satisfy the classifier's
+// session_error rule, and that rule sits BELOW the transcript-tier rules — so a
+// transcript frozen mid-turn, which is exactly what a crashed agent leaves
+// behind, is matched by user_blocking_tool first and the session reads
+// `waiting`. The process_death rule outranks those, and it reads
+// Metrics.ProcessDeath, a json:"-" flag only a hold can set. Re-placing the hold
+// restores the RUNG, not just the payload.
+//
+// HELD AT THE PERSISTED UpdatedAt, NOT AT NOW, so the window the previous daemon
+// started continues rather than restarting — the same argument, and the same
+// twelve hours, as retainedErrorAcrossRestart.
+func (d *SessionDetector) seedRestoreErrorVerdict(state *session.SessionState, persisted *session.SessionError) {
+	if persisted == nil || persisted.Class != session.ErrorClassProcessDeath {
+		return
+	}
+	sid := state.SessionID
+	heldAt := time.Unix(state.UpdatedAt, 0)
+
+	// TierProcess evidence comes back on the process row. Routing it through the
+	// transcript row would record it a tier below the channel it actually
+	// arrived on, and an understated tier never trips the ladder invariant — so
+	// nothing would catch it. See SignalProcessDeath's doc.
+	d.signals.Hold(sid, session.SignalProcessDeath, session.SignalPayload{SessionError: persisted}, heldAt)
+
+	// Overlay now rather than waiting for the next classify pass: for a dead
+	// process there may never BE one — the transcript is frozen, so nothing will
+	// touch this session again — and the seed's own ClassifyState runs a few
+	// lines below.
+	//
+	// The expiries are REPORTED, not discarded. Overlay evaluates staleness and
+	// the ceiling before apply, so this call can silently drop the hold it was
+	// given; a ceiling that rewrites a session's state without saying so
+	// anywhere is the debugging blind spot #1360 added SignalExpiry to close,
+	// and the seed path is no more exempt from that than the live path is.
+	now := d.nowFn()
+	d.reportHoldExpiries(state, d.signals.Overlay(sid, state.Metrics, now), now)
+
+	if state.Metrics != nil && state.Metrics.ProcessDeath {
+		d.log.LogInfo(logComponentSessionDetectorSeed, sid,
+			fmt.Sprintf("restored process-death verdict held since %s across the daemon restart (#1815)",
+				heldAt.Format(time.RFC3339)))
+	}
+}
+
+// seedRetainErroredRows registers a retention entry for every row this daemon
+// starts with in `error`, so the PERIODIC liveness sweep spares it for whatever
+// is left of its window (#1815).
+//
+// IT WALKS EVERY PERSISTED ROW, NOT THE ONES THE SEED PASS EXAMINED, and that
+// is the whole reason it is a separate pass rather than a line inside
+// seedReevaluateOne. The first cut put it there, and seedReevaluateStates skips
+// any row with no TranscriptPath or whose adapter's observe permission is not
+// granted — so a skipped row was spared by the startup exemption and then
+// deleted about five seconds later by the sweep, which found no verdict and got
+// `false` from diedMidTurn (which is false for anything already in `error`).
+// Neither skip condition is exotic: a pending observe permission is EVERY
+// adapter's state on a fresh IRRLICHT_HOME, so the user most likely to hit it
+// was the one who had not finished onboarding.
+//
+// SAME PREDICATE AS THE STARTUP EXEMPTION, deliberately. What the sweeps spare
+// and what the sweep retains are then one rule with one window, and cannot
+// disagree about a row at the edge of it. Past the window nothing is registered
+// and the ordinary reaper takes the row, exactly as before.
+//
+// CALLED AFTER seedReevaluateStates so a row that recovered while the daemon
+// was down — the transcript grew, the tailer's clearing rule fired, and the
+// classifier moved it off `error` — is not shielded from the reaper. That
+// ordering is the gate; see the call site.
+func (d *SessionDetector) seedRetainErroredRows(states []*session.SessionState) {
+	now := d.nowFn()
+	for _, state := range states {
+		if !retainedErrorAcrossRestart(state, now, d.processDeathRetention) {
+			continue
+		}
+		d.restoreErrorRetention(state.SessionID, time.Unix(state.UpdatedAt, 0))
+	}
+}
+
+// restoreErrorRetention re-registers a retention entry for a verdict a PREVIOUS
+// daemon run made, stamped with when that daemon made it rather than with now,
+// so the window continues instead of restarting.
+//
+// Separate from markProcessDeathVerdict, which stamps nowFn() and is the right
+// thing for a verdict being made for the first time. Collapsing the two would
+// silently convert every restart into a window extension — on a machine that
+// reboots daily the twelve-hour ceiling would never be reached at all.
+//
+// Set-once: an entry this process already holds is authoritative over a
+// persisted timestamp, so a re-seed cannot rewind a live verdict.
+func (d *SessionDetector) restoreErrorRetention(sessionID string, at time.Time) {
+	d.processDeathMu.Lock()
+	defer d.processDeathMu.Unlock()
+	if _, exists := d.processDeathVerdicts[sessionID]; exists {
+		return
+	}
+	d.processDeathVerdicts[sessionID] = at
 }
 
 // seedBackfillMetadata fills ProjectName / CWD / GitBranch for sessions that
