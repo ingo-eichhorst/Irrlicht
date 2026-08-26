@@ -1063,6 +1063,55 @@ Phase 6.
     draft at all.
 19. **Merge**: `gh pr merge --squash` (no `--delete-branch` — keep the remote
     branch, per existing repo convention).
+19a. **Tick the parent epic's checkbox** for the issue that just closed. An epic
+    tracks its phases as a checklist of `- [ ] #<child>` lines in its body, and
+    closing a child does not tick them — so a fully delivered epic keeps reading
+    as in-flight. (Real incident, #1796: all eight phases #1797–#1804 closed and
+    every PR merged, and the epic body still showed eight empty boxes.) This is
+    **not a gate** — the merge already happened, so nothing here may block or
+    reverse it; on any failure, report and move to step 20.
+
+    ```bash
+    REPO=ingo-eichhorst/Irrlicht
+    N=<issue just closed>
+    # Bounded: one search, at most 10 candidates. Never iterate every open issue.
+    if ! parents=$(timeout 90 gh issue list --repo "$REPO" --state open \
+                     --search "$N in:body" --limit 10 --json number --jq '.[].number' 2>err); then
+      echo "PARENT-TICK: COULD NOT LOOK — gh issue list failed: $(cat err)"
+      # stop here — an empty $parents from an error must not read as "no parent"
+    fi
+    ```
+
+    Then for each candidate `$p` (skip `$p == $N`), fetch the body and decide on
+    the **exact** checklist line:
+
+    ```bash
+    timeout 90 gh issue view "$p" --repo "$REPO" --json body --jq .body > body.md  # never a blind sed
+    hits=$(grep -cE "^[[:space:]]*- \[ \] #$N([^0-9]|$)" body.md || true)  # grep -c exits 1 on zero
+    awk -v n="$N" '$0 ~ "^[[:space:]]*- \\[ \\] #" n "([^0-9]|$)" { sub(/- \[ \]/, "- [x]") } { print }' \
+      body.md > body.new
+    gh issue edit "$p" --repo "$REPO" --body-file body.new   # only when hits == 1
+    ```
+
+    The `([^0-9]|$)` is load-bearing: without it `#179` ticks the `#1796` line.
+    Verified by hand against #1796's real body — `179`, `17`, `1796`, `1790` and
+    `1797` each match only their own line, and a number with no line yields
+    `hits=0`.
+
+    **Four outcomes, four distinct messages** — absence of a finding and inability
+    to look must never print the same thing (AGENTS.md, Testing):
+    - search returned nothing → *"no parent epic references #N — nothing to tick"*.
+      Say it once, quietly; this is the common case and a legitimate no-op.
+    - search or `gh issue view` **errored** → *"COULD NOT LOOK — …"* with the error
+      text. Never fold this into the line above.
+    - body fetched, `hits == 1` → tick it and report `#<parent>` ticked. Re-diff
+      `body.md` vs `body.new` first and confirm exactly `hits` lines changed; if
+      not, say so and leave the body untouched.
+    - body fetched, `hits == 0` → the candidate mentions `#N` in prose but carries
+      no unticked line for it. If a `- [x] #N` line is already there, say
+      *"already ticked"*; otherwise say plainly that the expected line was **not
+      found** in `#<parent>`, naming it. A body you read and could not match is a
+      finding, not silence.
 20. **Clean up the local worktree**: `git -C <main-repo> worktree remove <path>`,
     and move the session back to the main repo.
 21. **Confirm final state** (`git worktree list`) and report the merged PR link.
