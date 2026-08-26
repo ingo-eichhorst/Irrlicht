@@ -669,13 +669,38 @@ type ReplayStoreStager interface {
 // under the current parser. Bump it whenever a LedgerState change (or a parser
 // fix) makes previously persisted state misleading.
 //
+// ADDITIVE-FIELD IS NOT THE TEST, and reading it as one is the mistake #1815
+// made. Versions 4 and 5 are BOTH plain additive `omitempty` fields
+// (last_event_type, last_assistant_text) and both bumped; ResumeFingerprint,
+// PendingWaitingCue and PendingBackgroundAgentCount are also additive
+// `omitempty` fields and correctly did not. The discriminator is what the
+// CURRENT parser would make of the bytes the old ledger already consumed:
+//
+//   - Same reading, missing shortcut → NO BUMP. The old parser classified the
+//     consumed prefix exactly as this one would; the field only spares a
+//     re-derivation. A pre-field ledger is degraded, not wrong, and discarding
+//     every live session's accumulated cost to reclaim a shortcut is the
+//     bigger hammer. (#1104, #1150, #1076.)
+//   - Different reading → BUMP. A parser change makes the old summary a
+//     verdict reached by a parser that could not see what this one sees. The
+//     re-scan is not a cost, it is the point. (#649, #705, #1815.)
+//
+// TestLedgerState_FieldSetChangeRequiresASchemaDecision pins the field set so
+// the next field added has to answer this question rather than inherit an
+// answer by silence — which is exactly how #1815 shipped without one.
+//
 // History: 3 — #615 (authoritative task IDs + TaskSeq);
 // 4 — #649 (LastEventType persisted; the bump also heals sessions stranded
 // in `working` by pre-#642 parsers, since the re-scan reclassifies them);
 // 5 — #705 (LastAssistantText persisted; the bump also heals sessions
 // mis-demoted from `waiting` to `ready` on restart, since the re-scan
-// recovers the question text IsWaitingForUserInput needs).
-const LedgerSchemaVersion = 5
+// recovers the question text IsWaitingForUserInput needs);
+// 6 — #1815 (SessionError persisted; the bump also heals sessions that failed
+// under a pre-#1796 parser, which had NO session-error concept at all — v0.6.0's
+// parser.go contains no SessionError whatsoever — since the re-scan re-derives
+// the failure from lines that parser read as ordinary and settles them `error`
+// instead of leaving them permanently `ready`).
+const LedgerSchemaVersion = 6
 
 // LedgerState is the durable portion of a tailer's accumulation state, written
 // to disk after every TailAndProcess pass so that daemon restarts don't reset
@@ -798,12 +823,28 @@ type LedgerState struct {
 	// reason: a verdict that cannot be re-derived from zero new bytes has to be
 	// carried, not recomputed.
 	//
-	// NO SCHEMA BUMP, following ResumeFingerprint and PendingWaitingCue: a ledger
-	// written before this field simply lacks it and rehydrates to nil, which is
-	// byte-for-byte the pre-fix behaviour. Discarding every live session's ledger
-	// to force a re-scan would be a far bigger hammer than an additive field
-	// warrants — and a re-scan could not recover the verdict anyway, since
-	// clearSessionErrorOnRecovery would replay the same lines to the same result.
+	// SCHEMA BUMP TO 6. #1815 originally shipped this field WITHOUT one, reasoning
+	// from ResumeFingerprint and PendingWaitingCue that an additive field never
+	// needs a bump. That reasoning was wrong twice over, and both corrections are
+	// worth keeping because each was load-bearing on its own:
+	//
+	//   - Additive is not the test. Versions 4 and 5 are additive `omitempty`
+	//     fields that bumped. See LedgerSchemaVersion for the actual rule.
+	//   - "A re-scan could not recover the verdict anyway, since
+	//     clearSessionErrorOnRecovery would replay the same lines to the same
+	//     result" — the original text — has the conclusion backwards. Replaying
+	//     the same lines to the same result IS recovery: this sticky error has
+	//     exactly one non-ledger writer, applySessionError, fed only by
+	//     parsed.SessionError off the transcript, so it is a pure function of the
+	//     consumed lines and a full re-scan re-derives it exactly.
+	//     (session.NewProcessDeathError is NOT a counterexample: it is raised in
+	//     the detector and travels as a signal payload, never through this field.)
+	//
+	// The bump is what makes the re-scan happen at all. Without it a session that
+	// failed under a v0.6.0 daemon — whose parser.go has no SessionError anywhere,
+	// so the failure was never derived once — keeps its v5 ledger, resumes at
+	// LastOffset, reads ZERO new lines, and stays green forever under a daemon
+	// that can now see the failure sitting in bytes it will never re-read.
 	//
 	// A CLEARED ERROR IS PERSISTED AS CLEARED. The field stores nil when the
 	// tailer's sticky error is nil, so the clearing rule survives a restart too;
