@@ -1063,6 +1063,74 @@ Phase 6.
     draft at all.
 19. **Merge**: `gh pr merge --squash` (no `--delete-branch` — keep the remote
     branch, per existing repo convention).
+19a. **Tick the parent epic's checkbox** for the issue that just closed. An epic
+    tracks its phases as a checklist of `- [ ] #<child>` lines in its body, and
+    closing a child does not tick them — so a fully delivered epic keeps reading
+    as in-flight. (Real incident, #1796: all eight phases #1797–#1804 closed and
+    every PR merged, and the epic body still showed eight empty boxes.) This is
+    **not a gate** — the merge already happened, so nothing here may block or
+    reverse it; on any failure, report and move to step 20.
+
+    ```bash
+    REPO=ingo-eichhorst/Irrlicht
+    N=<issue just closed>
+    TMP=$(mktemp -d)                # scratch lives outside the repo, never in it
+    # Bounded: one search, at most 10 candidates. Never iterate every open issue.
+    # `2>&1` keeps the error text in the variable; never `2>err`, which drops a
+    # stray file into whatever worktree this phase happens to be standing in.
+    if ! parents=$(timeout 90 gh issue list --repo "$REPO" --state open \
+                     --search "$N in:body" --limit 10 --json number --jq '.[].number' 2>&1); then
+      echo "PARENT-TICK: COULD NOT LOOK — gh issue list failed: $parents"
+      exit 0   # a REAL stop, not a comment: go to step 20. An empty $parents left
+    fi         # over from an error must never fall through and read as "no parent".
+    if [ -z "$parents" ]; then
+      echo "PARENT-TICK: no parent epic references #$N — nothing to tick."
+      exit 0
+    fi
+    ```
+
+    (`exit`, `return`, or whatever ends the block in the shell you actually run —
+    the requirement is that nothing below executes, so the two conditions above
+    keep producing their own distinct messages.)
+
+    Then for each candidate `$p` (skip `$p == $N`), fetch the body and decide on
+    the **exact** checklist line:
+
+    ```bash
+    for p in $parents; do
+      [ "$p" = "$N" ] && continue
+      if ! body=$(timeout 90 gh issue view "$p" --repo "$REPO" --json body --jq .body 2>&1); then
+        echo "PARENT-TICK: COULD NOT LOOK — could not fetch #$p's body: $body"; continue
+      fi
+      printf '%s\n' "$body" > "$TMP/body.md"
+      hits=$(grep -cE "^[[:space:]]*- \[ \] #$N([^0-9]|$)" "$TMP/body.md" || true)  # grep -c exits 1 on zero
+      [ "$hits" -eq 1 ] || { echo "PARENT-TICK: #$p — $hits matching line(s), not editing"; continue; }
+      awk -v n="$N" '$0 ~ "^[[:space:]]*- \\[ \\] #" n "([^0-9]|$)" { sub(/- \[ \]/, "- [x]") } { print }' \
+        "$TMP/body.md" > "$TMP/body.new"
+      gh issue edit "$p" --repo "$REPO" --body-file "$TMP/body.new"   # never a blind sed
+    done
+    ```
+
+    The `([^0-9]|$)` is load-bearing: without it `#179` ticks the `#1796` line.
+    Verified by hand against #1796's eight-phase checklist — `1797` matches
+    exactly one line, while `179`, `17`, `1790` and `1796` match none of it, and
+    a number with no line yields `hits=0`.
+
+    **Four outcomes, four distinct messages** — absence of a finding and inability
+    to look must never print the same thing (AGENTS.md, Testing):
+    - search returned nothing → *"no parent epic references #N — nothing to tick"*.
+      Say it once, quietly; this is the common case and a legitimate no-op.
+    - search or `gh issue view` **errored** → *"COULD NOT LOOK — …"* with the error
+      text. Never fold this into the line above.
+    - body fetched, `hits == 1` → tick it and report `#<parent>` ticked. Re-diff
+      `$TMP/body.md` vs `$TMP/body.new` first and confirm exactly one line changed; if
+      not, say so and leave the body untouched.
+    - body fetched, `hits != 1` → do not edit. At zero, the candidate mentions
+      `#N` in prose but carries no unticked line for it: if a `- [x] #N` line is
+      already there say *"already ticked"*, otherwise say plainly that the
+      expected line was **not found** in `#<parent>`, naming it. Above one, say
+      how many and leave the body alone rather than guessing. A body you read and
+      could not match is a finding, not silence.
 20. **Clean up the local worktree**: `git -C <main-repo> worktree remove <path>`,
     and move the session back to the main repo.
 21. **Confirm final state** (`git worktree list`) and report the merged PR link.
