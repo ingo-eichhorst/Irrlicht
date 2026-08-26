@@ -515,6 +515,16 @@ func (m *StateMachine) applyLocked(ev lifecycle.Event) {
 		state.LastEvent = string(ev.Kind)
 		m.broadcast(outbound.PushTypeUpdated, state)
 
+	case lifecycle.KindProcessDiedMidTurn:
+		// The OPPOSITE of the removal edge above: #1800 keeps this row, as
+		// `error`. The state itself arrives on the KindStateTransition the
+		// conversion emits, so bookkeeping is all that is owed here — hence the
+		// fallthrough rather than a copy of the default arm, which would drift
+		// the moment that arm gains a step. The case exists to be a compile
+		// error (duplicate case) for anyone who later adds this Kind to the
+		// deletion list above.
+		fallthrough
+
 	default:
 		// debounce_coalesced, file_event, hook_received: bookkeeping
 		// only — bump event count if the session exists.

@@ -481,11 +481,16 @@ func (pm *PIDManager) record(ev lifecycle.Event) {
 // log lines and behaviour on the delete path are otherwise unchanged.
 //
 // KindProcessExited is deliberately NOT recorded for a retained session. In
-// this codebase that Kind MEANS teardown — the replay state machine deletes the
-// session on it (tools/onboarding-factory/internal/replay/state_machine.go) —
-// so recording it for a session that survives would make a recording contradict
-// the daemon it recorded. The state transition to `error` carries the pid and
-// the exit reason instead, which is the same fact on the Kind that matches it.
+// this codebase that Kind MEANS the row went away, so recording it for a
+// session that survives would make a recording contradict the daemon it
+// recorded; lifecycle.KindProcessDiedMidTurn's doc has the consumer list and
+// what overloading it was measured to cost. The retained edge is recorded as
+// that Kind instead, by SessionDetector.retainAsProcessDeath.
+//
+// The `error` transition is NOT a substitute for it: it carries neither the pid
+// nor the exit reason (its Reason is the classifier's own "agent process died
+// mid-turn → error"), and it is an OUTPUT the replay harness grades itself
+// against, so feeding it back as a replay input would make that check circular.
 //
 // Both entry points funnel here — the kqueue/pidfd watcher via
 // SessionDetector.HandleProcessExit and the periodic sweep via

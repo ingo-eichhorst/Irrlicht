@@ -459,7 +459,12 @@
           <tr>
             <td><code>process_exited</code></td>
             <td>Process lifecycle</td>
-            <td>A tracked agent process exits (kqueue <code>NOTE_EXIT</code>).</td>
+            <td>A tracked agent process exits (kqueue <code>NOTE_EXIT</code>) <em>and its session row is deleted</em>. This kind means teardown: every consumer removes the session on it. An exit that caught a turn still open is recorded as <code>process_died_midturn</code> instead.</td>
+          </tr>
+          <tr>
+            <td><code>process_died_midturn</code></td>
+            <td>Process lifecycle</td>
+            <td>The other outcome of an exit: the PID went away while a turn was still open, so the session is converted to <code>error</code> and <em>kept</em> rather than deleted. Carries the PID and the exit reason. Recorded once per session, on the conversion edge.</td>
           </tr>
           <tr>
             <td><code>file_event</code></td>

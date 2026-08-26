@@ -48,6 +48,27 @@ describe('eventStyle', () => {
     const st = eventStyle({ kind: 'mystery_event' })
     expect(st).toEqual({ color: '#94a3b8', size: 7, opacity: 0.5, label: 'mystery_event' })
   })
+  // #1817. process_died_midturn is the key event of a crash recording — the
+  // moment the agent stopped without finishing — and it is the ONE kind whose
+  // fallback is actively misleading: the default arm renders a 7px 0.5-opacity
+  // slate dot labelled `process_died_midturn`, i.e. visually indistinguishable
+  // from routine bookkeeping. Asserting the full object (not just the label) is
+  // what makes deleting the case fail here rather than silently degrading.
+  test('process_died_midturn is a full-size red dot, distinct from the teardown edge', () => {
+    const died = eventStyle({ kind: 'process_died_midturn', session_id: 'uuid-1' })
+    expect(died).toEqual({
+      color: '#ef4444',
+      size: 14,
+      opacity: 1,
+      label: 'Process died mid-turn — session kept as an error',
+    })
+    // Not the fallback, and not the same as process_exited: the two are
+    // opposite outcomes (row kept as error vs row deleted), so a viewer must
+    // be able to tell them apart at a glance.
+    const exited = eventStyle({ kind: 'process_exited', session_id: 'uuid-1' })
+    expect(died.color).not.toBe(exited.color)
+    expect(died.label).not.toBe(exited.label)
+  })
 })
 
 describe('computeStateBand', () => {

@@ -326,7 +326,7 @@ func retainedErrorAcrossRestart(state *session.SessionState, now time.Time, wind
 // can tell a user about an agent left running is that it stopped without
 // finishing, and until now that was the one outcome it could not report.
 //
-// WHAT COUNTS AS DIED MID-TURN — see diedMidTurn. Deliberately narrow, because
+// WHAT COUNTS AS DIED MID-TURN — see DiedMidTurn. Deliberately narrow, because
 // this issue's own rule is that a wrong error state is worse than no error
 // state.
 //
@@ -334,7 +334,7 @@ func retainedErrorAcrossRestart(state *session.SessionState, now time.Time, wind
 // draft let the SignalProcessDeath hold expire on a ceiling and returned "keep"
 // for as long as the hold stood. That looked bounded and was not: once the
 // ceiling dropped the hold, the next classify pass re-derived `working` from
-// the frozen transcript, the next sweep called this function again, diedMidTurn
+// the frozen transcript, the next sweep called this function again, DiedMidTurn
 // said yes a second time, and the session was re-converted — forever, emitting
 // a spurious "the agent is working" transition every twelve hours for a process
 // that had been dead for days. The verdict registry below is what makes the
@@ -362,7 +362,7 @@ func retainedErrorAcrossRestart(state *session.SessionState, now time.Time, wind
 //     `error` — not only the ones the consent-gated seed pass examined. That is
 //     what carries the row past THIS function, which is not a startup path at all: the periodic sweep
 //     calls in here every few seconds, and a restored row with no entry fell
-//     straight through to diedMidTurn — false for anything already in `error`
+//     straight through to DiedMidTurn — false for anything already in `error`
 //     ("error means this already ran") — and was deleted about five seconds
 //     AFTER the restart rather than at it. Measured against a real daemon.
 //   - tailer.LedgerState.SessionError carries #1799's transcript-derived half.
@@ -394,21 +394,47 @@ func (d *SessionDetector) retainAsProcessDeath(state *session.SessionState, pid 
 		return false
 	}
 
-	if !diedMidTurn(state) {
+	if !state.DiedMidTurn() {
 		return false
 	}
 
-	d.markProcessDeathVerdict(sid)
+	// Record the OBSERVATION, so a recording can be replayed back into this
+	// same verdict (#1817). Before this, the retain path recorded nothing an
+	// offline replay could act on — PIDManager.HandleProcessExit writes
+	// KindProcessExited only on the delete branch it returns before — so the
+	// only trace of the death in a recording was the state_transition it
+	// caused. That is the classifier's OUTPUT, and the replay harness grades
+	// itself against exactly those transitions, so it could not be used as an
+	// input without making the check circular. The result was a committed
+	// fixture (claudecode 2-25_agent-process-crash-midturn) asserting that a
+	// crashed agent replays green.
+	//
+	// GATED ON THE TEST-AND-SET, not merely placed on the conversion edge. Two
+	// goroutines reach this function concurrently (see markProcessDeathVerdict),
+	// so "the verdict was absent when I looked" is not the same claim as "I am
+	// the one who set it" — only the latter bounds this to one event per
+	// session. Recording in HandleProcessExit instead would be worse again: the
+	// sweep calls it every few seconds for as long as the row survives and this
+	// function answers "keep" every time, so a recording would carry one event
+	// per tick for up to processDeathRetention.
+	//
+	// Timestamp is left unset on purpose: record() stamps it, the same way every
+	// other recorded event in this detector is stamped. nowFn is deliberately
+	// exempt from recorded-event stamping (see its doc), and a death stamped off
+	// a driven clock while the state_transition it must precede is stamped off
+	// the wall clock would invert their order in the sidecar — which
+	// buildTimeline sorts timestamp-primary.
+	if d.markProcessDeathVerdict(sid) {
+		d.record(lifecycle.Event{
+			Kind:      lifecycle.KindProcessDiedMidTurn,
+			SessionID: sid,
+			PID:       pid,
+			Reason:    reason,
+		})
+	}
+
 	d.signals.Hold(sid, session.SignalProcessDeath, session.SignalPayload{
-		SessionError: &session.SessionError{
-			// Terminal without qualification: a process that exited is not
-			// going to try again. This is the one producer in the system for
-			// which ErrorPhaseRetrying is impossible rather than merely
-			// unobserved.
-			Phase:   session.ErrorPhaseTerminal,
-			Class:   session.ErrorClassProcessDeath,
-			Message: fmt.Sprintf("agent process (pid %d) exited mid-turn — %s", pid, reason),
-		},
+		SessionError: session.NewProcessDeathError(pid, reason),
 	}, d.nowFn())
 
 	d.log.LogInfo(logComponentProcessExit, sid,
@@ -447,16 +473,30 @@ func (d *SessionDetector) processDeathVerdictAt(sessionID string) (time.Time, bo
 }
 
 // markProcessDeathVerdict records that sid has had its one process-death
-// verdict. Guarded by its own mutex because HandleProcessExit reaches here from
-// two goroutines — the process watcher's callback and the periodic liveness
-// sweep.
-func (d *SessionDetector) markProcessDeathVerdict(sessionID string) {
+// verdict, and reports whether THIS call is the one that set it.
+//
+// The boolean is what makes "one death event per session" true rather than
+// merely intended. HandleProcessExit is reached from two independent
+// goroutines — the process watcher's callback (cmd/irrlichd/startup.go) and the
+// periodic liveness sweep (reapDeadOrInfraPID) — and nothing serialises them
+// against each other. Reading the map through processDeathVerdictAt and then
+// writing it here under a SECOND acquisition leaves a window in which both
+// callers miss the verdict and both proceed: measured at 13 double-conversions
+// in 300 runs with two concurrent callers under -race, rising with the caller
+// count. The visible cost was a recording that says the process died twice.
+// Test-and-set under one acquisition closes it; every caller that must act at
+// most once keys off the return value rather than off the earlier read.
+func (d *SessionDetector) markProcessDeathVerdict(sessionID string) bool {
 	d.processDeathMu.Lock()
 	defer d.processDeathMu.Unlock()
 	if d.processDeathVerdicts == nil {
 		d.processDeathVerdicts = make(map[string]time.Time)
 	}
+	if _, exists := d.processDeathVerdicts[sessionID]; exists {
+		return false
+	}
 	d.processDeathVerdicts[sessionID] = d.nowFn()
+	return true
 }
 
 // forgetProcessDeathVerdict drops sid's verdict, so a later exit for the same
@@ -467,68 +507,6 @@ func (d *SessionDetector) forgetProcessDeathVerdict(sessionID string) {
 	d.processDeathMu.Lock()
 	defer d.processDeathMu.Unlock()
 	delete(d.processDeathVerdicts, sessionID)
-}
-
-// diedMidTurn reports whether state was in the middle of a turn when its
-// process went away.
-//
-// EVERY CLAUSE FAILS CLOSED — an unknown answer means "not a crash", so the
-// session is deleted exactly as it was before #1800. That direction is chosen
-// deliberately: a missed crash costs the user a signal they never had, while a
-// false crash puts a red session in front of them that nothing they do will
-// explain.
-//
-// WHAT IRRLICHT CANNOT SEE, stated plainly because it bounds what this
-// predicate can ever mean: there is no exit status available. irrlicht is not
-// the agent's parent, so neither kqueue's NOTE_EXIT nor Linux's pidfd poll
-// yields a wait status, and the liveness sweep's probe is syscall.Kill(pid, 0)
-// — a liveness question with a yes/no answer. A segfault, an OOM kill, a
-// `kill -9` typed by the user and a clean exit(1) are therefore the SAME
-// observation. The clauses below are the only discriminators that exist, and
-// all of them are about what the SESSION looked like, never about how the
-// process ended.
-//
-// The residual false positive that leaves: a user who deliberately kills an
-// agent mid-turn gets `error` rather than the row disappearing. That is a
-// deliberate call — the turn genuinely did not finish, and "this session
-// stopped without completing" is a true statement about it either way — but it
-// IS a behaviour change and is named here rather than discovered later.
-func diedMidTurn(state *session.SessionState) bool {
-	// Only a session that was actively working. A session already in ready or
-	// waiting had nothing in flight to lose, and error means this already ran.
-	if state.State != session.StateWorking {
-		return false
-	}
-
-	// Children are the parent's problem. A subagent's process IS the parent's
-	// process, so a subagent row never has a PID of its own to exit, and
-	// reapStaleChild already owns their teardown on a rule of its own.
-	if state.ParentSessionID != "" {
-		return false
-	}
-
-	m := state.Metrics
-	if m == nil {
-		return false
-	}
-
-	// The turn had actually ended and the daemon simply had not caught up —
-	// an agent that finishes and immediately exits is the ordinary shape of
-	// `claude -p`, not a crash. Classification lags the transcript by up to a
-	// poll interval, so `working` alone is not enough.
-	if m.IsAgentDone() {
-		return false
-	}
-
-	// The USER stopped it. An ESC or a denied tool leaves a marker in the
-	// transcript and routes to ready through the user_interrupt rule; catching
-	// the window before that pass runs is what this clause is for, and it is
-	// what keeps the 2-20_user-esc-interrupt scenario's arc intact.
-	if m.LastWasUserInterrupt || m.LastWasToolDenial {
-		return false
-	}
-
-	return true
 }
 
 // ReconcilePreSessionBackchannel carries a still-open trust-dialog Waiting
@@ -1024,7 +1002,7 @@ func (d *SessionDetector) seedRestoreErrorVerdict(state *session.SessionState, p
 // any row with no TranscriptPath or whose adapter's observe permission is not
 // granted — so a skipped row was spared by the startup exemption and then
 // deleted about five seconds later by the sweep, which found no verdict and got
-// `false` from diedMidTurn (which is false for anything already in `error`).
+// `false` from DiedMidTurn (which is false for anything already in `error`).
 // Neither skip condition is exotic: a pending observe permission is EVERY
 // adapter's state on a fresh IRRLICHT_HOME, so the user most likely to hit it
 // was the one who had not finished onboarding.

@@ -623,7 +623,7 @@ var signalPolicies = []signalPolicy{
 		// The producer cannot tell a crash from a clean exit at the moment the
 		// process dies, and neither can anything else: irrlicht is not the
 		// agent's parent, so no exit status is available on any platform (see
-		// diedMidTurn). What it CAN do is ask again a moment later, against a
+		// DiedMidTurn). What it CAN do is ask again a moment later, against a
 		// transcript that is now final — a headless agent writes its
 		// turn-ending line and exits microseconds later, so on the exit edge
 		// the daemon has usually not read that line yet, and EVERY clean

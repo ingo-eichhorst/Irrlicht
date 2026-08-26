@@ -91,7 +91,7 @@ func TestSessionDetector_LateStopHookAfterProcessExit_SettlesToReady(t *testing.
 	// The revive path is NOT dead and is still what this test guards: it is
 	// what a session deleted on ANY other ground still depends on — a `ready`
 	// or `waiting` session at exit, a session with no metrics, a child
-	// session. Those all still take the delete branch (see diedMidTurn), and
+	// session. Those all still take the delete branch (see DiedMidTurn), and
 	// TestSessionDetector_HandleProcessExit_DeletesReadySession pins one of
 	// them.
 	if state, _ := repo.Load(sid); state == nil {

@@ -3,11 +3,13 @@ package services_test
 import (
 	"context"
 	"os"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"irrlicht/core/domain/agent"
+	"irrlicht/core/domain/lifecycle"
 	"irrlicht/core/domain/session"
 )
 
@@ -97,12 +99,12 @@ func TestHandleProcessExit_MidTurnDeathRetainsSessionAsError(t *testing.T) {
 	}
 }
 
-// TestHandleProcessExit_CleanShapesAreStillDeleted is diedMidTurn's fail-closed
+// TestHandleProcessExit_CleanShapesAreStillDeleted is DiedMidTurn's fail-closed
 // side, one row per clause.
 //
 // Every one of these passed before #1800 too — the old code deleted
 // unconditionally — so they are LOCKS, not red-first evidence. Their value is
-// the mutation in the PR body: drop any single clause from diedMidTurn and the
+// the mutation in the PR body: drop any single clause from DiedMidTurn and the
 // matching row here turns red, which is the only way to show that clause
 // reaches anything.
 func TestHandleProcessExit_CleanShapesAreStillDeleted(t *testing.T) {
@@ -315,7 +317,7 @@ func TestHandlePIDAssigned_RetiresAProcessDeathVerdict(t *testing.T) {
 // RED BEFORE THE FIX: retention was owned by the SignalProcessDeath hold's
 // ceiling, and "keep the row" meant "the hold still stands". Once the ceiling
 // dropped the hold, the next classify pass re-derived `working` from the frozen
-// transcript, the next sweep called retainAsProcessDeath again, diedMidTurn said
+// transcript, the next sweep called retainAsProcessDeath again, DiedMidTurn said
 // yes a second time, and the session was re-converted — forever, emitting a
 // spurious "the agent is working" transition every twelve hours for a process
 // that had been dead for days. The doc comment claimed there was "no way for a
@@ -384,10 +386,137 @@ func TestProcessDeath_DoesNotReconvertAfterExpiry(t *testing.T) {
 	}
 	if det.HandleProcessExitRetainedForTest(livePID, sid, "sweep after expiry") {
 		t.Fatal("the session was re-converted after its retention window closed — " +
-			"diedMidTurn still says yes for a frozen mid-turn transcript, so the " +
+			"DiedMidTurn still says yes for a frozen mid-turn transcript, so the " +
 			"verdict registry is the only thing that can make retention terminal")
 	}
 	if st, _ := repo.Load(sid); st != nil {
 		t.Errorf("session should have been reaped once the verdict expired, got %q", st.State)
+	}
+}
+
+// deathEventsIn filters a recorder snapshot to one Kind. The recorder itself is
+// testhelpers_test.go's mockRecorder, which is already mutex-guarded precisely
+// because the detector records from multiple goroutines — the property
+// TestProcessDeathIsRecordedOnceUnderConcurrentExitPaths depends on.
+func deathEventsIn(events []lifecycle.Event, k lifecycle.Kind) []lifecycle.Event {
+	var out []lifecycle.Event
+	for _, ev := range events {
+		if ev.Kind == k {
+			out = append(out, ev)
+		}
+	}
+	return out
+}
+
+// TestProcessDeathIsRecordedForOfflineReplay is the PRODUCER half of #1817, and
+// it is the half that has no other coverage: every replay-side test in
+// tools/onboarding-factory splices the event in by hand, so deleting this
+// d.record call is green in both modules and silently re-opens the issue — the
+// symptom would not appear until some future re-record still replayed divergent.
+//
+// It asserts the fields the replay actually consumes, not merely that something
+// was recorded: the sidecar keys off the Kind, reads PID and Reason into the
+// SessionError message, and orders the timeline by timestamp.
+func TestProcessDeathIsRecordedForOfflineReplay(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	const sid = "recorded-1"
+	repo.states[sid] = workingMidTurn(sid)
+
+	det := newDetector(tw, pw, repo)
+	rec := &mockRecorder{}
+	det.SetRecorder(rec)
+
+	det.HandleProcessExit(livePID, sid, "test: pid exited (ESRCH)")
+
+	deaths := deathEventsIn(rec.snapshot(), lifecycle.KindProcessDiedMidTurn)
+	if len(deaths) != 1 {
+		t.Fatalf("recorded %d %s events, want 1 — an offline replay has nothing to reconstruct the death from",
+			len(deaths), lifecycle.KindProcessDiedMidTurn)
+	}
+	got := deaths[0]
+	if got.SessionID != sid {
+		t.Errorf("SessionID = %q, want %q", got.SessionID, sid)
+	}
+	if got.PID != livePID {
+		t.Errorf("PID = %d, want %d — the replay puts this in the SessionError message", got.PID, livePID)
+	}
+	if got.Reason == "" {
+		t.Error("Reason is empty — the exit edge that caused the death is not recorded")
+	}
+	if got.Timestamp.IsZero() {
+		t.Error("Timestamp is zero — buildTimeline orders the replay by it, so an unstamped event sorts first")
+	}
+	if got.Seq == 0 {
+		t.Error("Seq is zero — record() did not stamp it, so it cannot tiebreak against the transition it precedes")
+	}
+
+	// The teardown Kind must NOT also be written: it means "the row was
+	// deleted", and this row survives. A recording carrying both would
+	// contradict itself, which is why #1800 suppressed it in the first place.
+	if exits := deathEventsIn(rec.snapshot(), lifecycle.KindProcessExited); len(exits) != 0 {
+		t.Errorf("recorded %d %s events for a RETAINED session — the recording says the row was both kept and torn down",
+			len(exits), lifecycle.KindProcessExited)
+	}
+}
+
+// TestProcessDeathIsRecordedOnceUnderConcurrentExitPaths checks the SYMPTOM of
+// the race end to end: whatever else is true, a recording must not say the
+// process died twice.
+//
+// HandleProcessExit is reached from two goroutines that nothing serialises —
+// the process watcher's kqueue/pidfd callback and the periodic liveness sweep —
+// and the verdict was originally read and written under two separate
+// acquisitions of processDeathMu, so both callers could miss it and both
+// convert.
+//
+// IT IS NOT THE REGRESSION GATE FOR THAT FIX, and must not be read as one.
+// Removing the test-and-set was measured to make this test red in only 2 of 300
+// `-race` runs — green at `-count=5`, reliably red only around `-count=60` —
+// because it depends on the scheduler actually interleaving two callers inside
+// a very narrow window. On the repo's actual gate (`-count=1`) it would pass
+// over the reintroduced bug, which is precisely the "a check that cannot fail
+// reads like a check that found nothing" failure the #1796 arc is about. An
+// earlier revision of this comment claimed 8 callers gave "the margin to fail
+// reliably in CI"; the measurement above refutes that, and it is corrected here
+// rather than quietly deleted.
+//
+// The gate is TestMarkProcessDeathVerdictAdmitsExactlyOneCaller
+// (process_death_verdict_internal_test.go), which asserts the contract rather
+// than the symptom and so goes red on the first run at `-count=1`. This test
+// earns its place as the end-to-end companion: it is the only one that proves
+// the verdict actually reaches d.record.
+func TestProcessDeathIsRecordedOnceUnderConcurrentExitPaths(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	const sid = "raced-1"
+	repo.states[sid] = workingMidTurn(sid)
+
+	det := newDetector(tw, pw, repo)
+	rec := &mockRecorder{}
+	det.SetRecorder(rec)
+
+	const callers = 8
+	var start, done sync.WaitGroup
+	start.Add(1)
+	done.Add(callers)
+	for i := 0; i < callers; i++ {
+		go func() {
+			defer done.Done()
+			start.Wait()
+			det.HandleProcessExit(livePID, sid, "test: pid exited (ESRCH)")
+		}()
+	}
+	start.Done()
+	done.Wait()
+
+	if deaths := deathEventsIn(rec.snapshot(), lifecycle.KindProcessDiedMidTurn); len(deaths) != 1 {
+		t.Fatalf("recorded %d %s events from %d concurrent exit paths, want exactly 1 — "+
+			"the verdict registry's check-and-set is not atomic, so the recording claims the process died more than once",
+			len(deaths), lifecycle.KindProcessDiedMidTurn, callers)
 	}
 }

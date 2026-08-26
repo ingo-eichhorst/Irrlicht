@@ -20,6 +20,12 @@ const (
 	// This simulates the production daemon's periodic poll catching the
 	// parser past its idle threshold (currently aider-only).
 	causeIdleFlush transitionCause = "idle_flush"
+	// causeProcessDeath is emitted for a recorded process_died_midturn — the
+	// RETAINED exit edge — see applyProcessDeath. Named for that Kind and not
+	// for process_exited, which routes to the teardown-only branch and can
+	// never produce it. Distinct from causeEvent because no transcript byte
+	// moved; the transition is driven by the sidecar's process stream alone.
+	causeProcessDeath transitionCause = "process_death"
 )
 
 // transition is a single recorded state change emitted by the replay.
