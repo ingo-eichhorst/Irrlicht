@@ -185,7 +185,7 @@ func TestSeedRestoreErrorVerdict_ProcessDeathOutranksAFrozenTranscript(t *testin
 	at, ok := d.processDeathVerdictAt("crashed-1815")
 	if !ok {
 		t.Fatalf("no retention entry was registered — retainAsProcessDeath falls through to " +
-			"diedMidTurn, which is false for a row already in error, and the periodic liveness " +
+			"DiedMidTurn, which is false for a row already in error, and the periodic liveness " +
 			"sweep reaps the row this restore just rescued a few seconds later")
 	}
 	if !at.Equal(persistedAt.Truncate(time.Second)) {
@@ -379,7 +379,7 @@ func TestStartupSweeps_KeepARetainedErrorOrphanRow(t *testing.T) {
 // The startup sweeps are not the only deleter: SweepDeadPIDs ticks every few
 // seconds into retainAsProcessDeath, and a row restored from a previous daemon
 // run has no verdict of its own in this process. It therefore fell through to
-// diedMidTurn — which is false for anything already in `error` — and was deleted
+// DiedMidTurn — which is false for anything already in `error` — and was deleted
 // about five seconds AFTER the restart rather than at it. The row was rescued at
 // boot and gone before a human could look, which is the issue's own outcome with
 // a delay in front of it.
@@ -759,7 +759,7 @@ func snapshotForTest(state *session.SessionState) livenessSnapshot {
 //
 // A row the seed pass skips therefore got no entry, and the periodic liveness
 // sweep deleted it about five seconds after the restart — retainAsProcessDeath
-// finds no verdict, and diedMidTurn is false for anything already in `error`.
+// finds no verdict, and DiedMidTurn is false for anything already in `error`.
 // The startup exemption spared the row and then nothing kept it.
 //
 // NOT A HYPOTHETICAL COMBINATION. Both skip conditions are ordinary: an adapter

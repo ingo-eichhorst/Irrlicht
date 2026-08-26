@@ -65,6 +65,13 @@ func applyGhostEvent(ev lifecycle.Event, g *ghostAgg) {
 		if ev.Reason != "" {
 			g.finalReason = ev.Reason
 		}
+	case lifecycle.KindProcessDiedMidTurn:
+		// NOT a removal edge — #1800 keeps the row as `error`, so a session
+		// that ends here is present rather than a ghost. Deliberately empty:
+		// the session's own working transition already set `substantive`, and
+		// leaving `removed` false is the whole of what this Kind means here.
+		// Stated as its own case so adding it to the removal list below is a
+		// compile error (duplicate case) rather than a silent reclassification.
 	case lifecycle.KindTranscriptRemoved, lifecycle.KindProcessExited, lifecycle.KindPreSessionRemoved:
 		// Keep the FIRST removal edge: a HandleProcessExit reap records
 		// KindProcessExited and then KindTranscriptRemoved for the same

@@ -138,7 +138,7 @@ func TestErrorStateSurvivesDaemonRestart(t *testing.T) {
 	// and only one of them was covered at first. A process_death row is retained
 	// by its own re-registered verdict; a transcript-derived one (the reporter's
 	// actual 529) has no verdict of its own in the new process, and used to fall
-	// through the periodic sweep's diedMidTurn check and be deleted five seconds
+	// through the periodic sweep's DiedMidTurn check and be deleted five seconds
 	// after the restart — invisible to a test that stopped at the first poll.
 	for _, tc := range []struct {
 		name       string
