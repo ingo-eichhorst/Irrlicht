@@ -141,8 +141,8 @@ boundary; recompute against the live tree each run.
   number". FAIL: a block referencing `$IRRLICHT_HOME` with no prior definition.
 - **U4** — PASS: "3. Run `go test ./core/...` — it prints `ok`." FAIL: "Set everything up and
   run it" with no command and no expected result.
-- **U5** — PASS: "see [CONTRIBUTING.md](../CONTRIBUTING.md)" and that file exists. FAIL: "see the
-  onboarding guide" with no such surface anywhere.
+- **U5** — PASS: a "see `CONTRIBUTING.md`" pointer whose link target resolves from the file it
+  is written in. FAIL: "see the onboarding guide" with no such surface anywhere.
 - **U6** — PASS: one consistent install path. FAIL: §2 says "default port 7837" and §5 says
   "listens on 7838" in the same doc.
 - **C1** — PASS: `geminicli` appears in the agents grid. FAIL: an adapter present in `All()` with

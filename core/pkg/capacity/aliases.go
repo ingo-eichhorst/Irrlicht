@@ -37,6 +37,8 @@ const (
 	modelGemini3FlashPreview = "gemini-3-flash-preview"
 	modelGemini35Flash       = "gemini-3.5-flash"
 	modelGPT53Codex          = "gpt-5.3-codex"
+	modelClaudeSonnet4Dated  = "claude-sonnet-4-20250514"
+	modelGPTOSS120BSlash     = "openai/gpt-oss-120b"
 )
 
 var modelAliases = map[string]string{
@@ -73,9 +75,9 @@ var modelAliases = map[string]string{
 	// (-high, -low, -medium, -thinking, -high-thinking, -fast-mode) that
 	// LiteLLM does not index. Sources: Cursor's public model docs and forum
 	// posts quoting literal slugs.
-	"claude-4-sonnet":                 "claude-sonnet-4-20250514", // LOCAL_OVERRIDE: codeburn → claude-sonnet-4; LiteLLM only ships the date-suffixed key.
-	"claude-4-sonnet-1m":              "claude-sonnet-4-20250514", // LOCAL_OVERRIDE: codeburn → claude-sonnet-4; LiteLLM only ships the date-suffixed key.
-	"claude-4-sonnet-thinking":        modelClaudeSonnet45,
+	"claude-4-sonnet":                 modelClaudeSonnet4Dated, // LOCAL_OVERRIDE: codeburn → claude-sonnet-4; LiteLLM only ships the date-suffixed key.
+	"claude-4-sonnet-1m":              modelClaudeSonnet4Dated, // LOCAL_OVERRIDE: codeburn → claude-sonnet-4; LiteLLM only ships the date-suffixed key.
+	"claude-4-sonnet-thinking":        modelClaudeSonnet4Dated, // LOCAL_OVERRIDE: codeburn → claude-sonnet-4; LiteLLM only ships the date-suffixed key. Aligned with its "claude-4-sonnet" / "claude-4-sonnet-1m" siblings above, which name the same generation.
 	"claude-4.5-sonnet":               modelClaudeSonnet45,
 	"claude-4.5-sonnet-thinking":      modelClaudeSonnet45,
 	"claude-4.6-sonnet":               modelClaudeSonnet46,
@@ -200,6 +202,17 @@ var modelAliases = map[string]string{
 	"claude-4-6-sonnet-high-fast": modelClaudeSonnet46,
 	"claude-4-7-opus-xhigh":       modelClaudeOpus47,
 	"claude-4-7-opus-xhigh-fast":  modelClaudeOpus47,
+
+	// OrcaRouter fusion tiers — codeburn routes all three to OpenAI's open
+	// gpt-oss-120b under the slash-prefixed spelling "openai/gpt-oss-120b",
+	// which LiteLLM does not ship (it carries "openai.gpt-oss-120b-1:0", the
+	// Bedrock-style key the Antigravity entry above uses). Kept as codeburn's
+	// canonical rather than repointed: the two keys are not established to
+	// price the same, so these resolve to a zero-value capacity and log the
+	// mapping on miss until LiteLLM ships the slash form.
+	"orcarouter/fusion":       modelGPTOSS120BSlash,
+	"orcarouter/fusion-flash": modelGPTOSS120BSlash,
+	"orcarouter/fusion-mini":  modelGPTOSS120BSlash,
 
 	// Zhipu GLM — codeburn maps "GLM-5.2" to "glm-5p1", which LiteLLM does not
 	// ship (it carries zai.glm-5, with no context window populated yet). Kept
