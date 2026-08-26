@@ -392,6 +392,21 @@ row 'gosec-report.sh::gosec_report_check' 'gosec_report_check (a clean report)' 
     '. tools/lib/gosec-report.sh' \
     'gosec_report_check tools/lib/testdata/gosec-report/clean.json tripwire >/dev/null 2>&1'
 
+# rebase_conflict_check documents three statuses (0 clean, 1 FINDING, 2
+# REFUSAL); only 0 and 2 are distinctive here, for the same reason
+# await_gone's and gate-budget's own true-predicate statuses are (above): a
+# documented 1 is indistinguishable from an errexit abort, which also exits
+# 1. The FINDING path — and the exact `CONFLICT:` output it produces — is
+# graded by its own tools/lib/rebase-conflict-check_test.sh, which is not
+# under `-e`; what is asserted here is the errexit/option property on the two
+# statuses a caller under `-e` can actually tell apart.
+row 'rebase-conflict-check.sh::rebase_conflict_check' 'rebase_conflict_check (a clean file)' 0 \
+    '. tools/lib/rebase-conflict-check.sh' \
+    'rebase_conflict_check tools/lib/testdata/rebase-conflict-check/clean.txt >/dev/null'
+row 'rebase-conflict-check.sh::rebase_conflict_check' 'rebase_conflict_check (refuses when no files are named)' 2 \
+    '. tools/lib/rebase-conflict-check.sh' \
+    'rebase_conflict_check 2>/dev/null'
+
 # Driven against a THROWAWAY corpus, never against tools/lib itself: this
 # function runs every `*_test.sh` it finds, and this file is one of them, so
 # pointing it at the real directory would re-enter the whole suite (and this

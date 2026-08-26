@@ -1,0 +1,9 @@
+package example
+
+func Greeting() string {
+<<<<<<< HEAD
+	return "hello from main"
+=======
+	return "hello from feature branch"
+>>>>>>> feat/1824-checkpoint-idiom
+}
