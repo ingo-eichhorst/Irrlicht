@@ -344,8 +344,16 @@ assert_contains "confirms the NUL at its exact offset (67966), not a guess and n
   "confirmed: an embedded NUL byte (0x00) at offset 67966" "$MUTATE_OUTPUT"
 assert_eq "left the repo clean — a refusal must never look like a survived mutation" \
   "" "$(cd "$repo" && git status --porcelain)"
-assert_eq "left the file byte-for-byte untouched" \
-  "$(git -C "$repo" show HEAD:large-with-nul.bin | wc -c)" "$(wc -c < "$repo/large-with-nul.bin")"
+# BYTE-IDENTICAL via cmp, not just byte-COUNT via wc -c (review finding,
+# #1816): the same idiom already used above for the small fixture — a
+# length-preserving content corruption would pass a wc -c comparison but
+# not this one. cmp is exactly as NUL-safe as wc -c (both are byte-stream
+# tools with no C-string semantics of their own).
+if cmp -s <(git -C "$repo" show HEAD:large-with-nul.bin) "$repo/large-with-nul.bin"; then
+  pass "left the file byte-for-byte untouched"
+else
+  fail "left the file byte-for-byte untouched" "no diff" "cmp reported a difference"
+fi
 
 echo ""
 echo "== the other confirmed cause: an embedded 0x01 (this tool's own sentinel) is named as such, not as a NUL =="
@@ -362,6 +370,25 @@ MUTATE_RC=$?
 [[ "$MUTATE_RC" -ne 0 ]] && pass "refuses (nonzero exit)" || fail "refuses (nonzero exit)" "nonzero" "0"
 assert_contains "names the 0x01 sentinel specifically, not a NUL" \
   "confirmed: one or more embedded 0x01 bytes (this tool's own record-separator sentinel) split the read into multiple records" \
+  "$MUTATE_OUTPUT"
+
+echo ""
+echo "== the 0x01 sentinel AS THE FILE'S LAST BYTE: only ONE record, so confirmation goes through the dd/od single-byte read, not the multi-record heuristic (review finding, #1816) =="
+# RS="\x01" does not emit a trailing empty record when the separator is the
+# file's final byte (verified: neither macOS's system awk nor gawk does) —
+# so this is the ONLY way to reach the dd/od branch (mutate.sh's `elif`) with
+# a 0x01 byte rather than a NUL, exercising the one case the review found
+# untested: a regression in the dd `skip=` arithmetic, or the two case arms
+# (00/01) getting swapped, would ship undetected without this.
+repo="$(new_repo)"
+printf 'abc\x01' > "$repo/trailing-sentinel.bin"
+git -C "$repo" add trailing-sentinel.bin
+git -C "$repo" commit -q -m "add a file whose last byte is this tool's own 0x01 sentinel"
+MUTATE_OUTPUT="$(cd "$repo" && "$MUTATE_SH" trailing-sentinel.bin "abc" "xyz" true 2>&1)"
+MUTATE_RC=$?
+[[ "$MUTATE_RC" -ne 0 ]] && pass "refuses (nonzero exit)" || fail "refuses (nonzero exit)" "nonzero" "0"
+assert_contains "the dd/od single-byte read correctly identifies 0x01 at its exact offset, not a NUL" \
+  "confirmed: this tool's own 0x01 record-separator sentinel at offset 3" \
   "$MUTATE_OUTPUT"
 
 echo ""
