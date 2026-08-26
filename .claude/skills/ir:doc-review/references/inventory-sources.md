@@ -12,7 +12,7 @@ parentheses are illustrative, not assertions to trust blindly — recompute ever
 
 ---
 
-## 1. Agent adapters (currently 9)
+## 1. Agent adapters (11 at the time of writing — recompute, never trust this number)
 
 Authoritative: `core/adapters/inbound/agents/all.go`, function `All()`. The slice order is the
 canonical order.
@@ -20,7 +20,7 @@ canonical order.
 ```bash
 sed -n '/^func All()/,/^}/p' core/adapters/inbound/agents/all.go \
   | grep -oE '[a-z]+\.Agent\(\)' | sed 's/\.Agent()//' | sort
-# → aider antigravity claudecode codex geminicli kirocli opencode pi vibe
+# → aider antigravity claudecode codex copilot geminicli hermes kirocli opencode pi vibe
 ```
 
 Per-adapter `Capabilities`/`Permissions` follow the `agent.Agent` struct idiom in

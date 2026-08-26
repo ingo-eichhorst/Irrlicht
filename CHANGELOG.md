@@ -12,6 +12,87 @@ beyond), see the [Roadmap](https://irrlicht.io/docs/roadmap.html).
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-08-26
+
+### A session that fails now reads red — `error` is the fourth session state, and it reaches the menu bar, the dashboard and the wire
+
+### Highlights
+
+#### A failed session turns red instead of green
+![A macOS session row and three web dashboard rows, each showing a red error state with the provider's own message](assets/releases/v0.6.1/error-state.png)
+
+Until now a session whose provider call failed, whose credentials were rejected, or whose process died mid-turn kept reading `ready` — green, finished, nothing to see. Irrlicht now carries a fourth state, `error`, and shows the agent's own failure text under the session: the HTTP status, the provider's message, and where the retry ladder stands.
+
+**Why it matters:** the one session you most need to look at was the one Irrlicht told you to ignore. A red row and a verbatim provider message tell you whether to wait for the retry or go fix a credential.
+
+(#1796, #1798, #1799, #1800, #1801, #1802)
+
+#### Irrlicht now reports its own faults
+![The macOS panel with a red banner reading "Irrlicht has a problem — the Irrlicht daemon is not responding"](assets/releases/v0.6.1/daemon-error-banner.png)
+
+A fault in Irrlicht's own machinery has no session to attach to, so it used to be visible only inside a `--diagnose` tarball. Two diagnoses the daemon already computed — hook entries that went missing, and a hook channel that is installed but receiving nothing — now surface as a banner in the macOS panel and the web dashboard.
+
+**Why it matters:** a silently degraded daemon and a genuinely quiet machine used to look identical. The banner says plainly when Irrlicht cannot vouch for what it is showing.
+
+(#1801, #1802, #1372, #1368)
+
+### Also in this release
+
+**Added**
+- **The `error` domain state and its detail payload** (#1798, #1809) — phase (retrying / terminal / unknown), class, message, HTTP status and the three retry counters, every number optional because the recorded payloads disagree about which ones exist.
+- **claude-code and GitHub Copilot report their API and session errors** (#1799, #1811) — the retry ladder and the give-up message for claude-code, both recorded `session.error` shapes for Copilot, driven entirely off recordings already in the corpus.
+- **gemini-cli, opencode, codex, pi and aider report errors too** (#1800, #1813) — five real defects, one per adapter; pi's errored turn used to stick in `working` for the rest of the session's life.
+- **Process death is detected as an error, not as a clean finish** (#1800, #1813) — an agent that dies mid-turn is kept and turned red instead of being deleted or left `waiting` forever on an open tool call.
+- **`error` on the wire** (#1801, #1812) — `errorCount` on `/state` and the diagnostics bundle, an `error` bucket in the subagent summary, and `by_state` derived from the canonical vocabulary instead of a three-key literal typed in three places.
+- **The macOS Activity Matrix carries the error series** (#1821, #1831) — the chart, tooltip, accessibility text and CSV export all gained the fourth column; the other three segments were being normalized against a total that excluded it.
+- **Four onboarding-factory error scenarios** (#1803, #1819) — provider-overloaded-retry, provider-overloaded-terminal, auth-credentials-rejected and agent-process-crash-midturn, so a declaration replaces a hand-written cell in 40 of 44 adapter/scenario pairs.
+- **Model alias sync**: three new frontend model IDs from codeburn (`orcarouter/fusion`, `orcarouter/fusion-flash`, `orcarouter/fusion-mini`), and `claude-4-sonnet-thinking` repointed to the generation its slug actually names — so those sessions stop pricing as the wrong model.
+
+**Fixed**
+- **An errored session stays red across a daemon restart** (#1815, #1833) — a release, a reboot or a rebuild used to reset it to green, or delete the row outright. Five separate reapers could take an errored row; a static tripwire now fails any new one that does not consult the exemption.
+- **Upgrading to this release heals a session that failed under v0.6.0** (#1843) — the ledger schema version is bumped, so the transcript is re-scanned and the failure re-derived instead of the session sitting green over bytes the daemon will never re-read.
+- **The history strip no longer paints an unknown state green — or overwrites it on disk** (#1807, #1832) — an unencodable state used to be coerced to `ready` and written back to `history.json` every 60 ticks, destroying the original value.
+- **An unrecognized session state is tolerated rather than deleted or painted green** (#1797, #1806).
+- **claude-code's terminal API error carries its real HTTP status and class** (#1818, #1834) — 2.1.245 writes both as structured fields; the adapter read neither, hardcoding a generic bucket and a nil status.
+- **Replay reconstructs a mid-turn process death instead of replaying it green** (#1817, #1835) and the crash fixture was re-recorded so it stops asserting the old behaviour (#1836, #1842).
+- **A SIGTERM landing right after the daemon publishes its address file no longer leaves a stale file behind** (#1808, #1830) — the root cause of an intermittent Linux CI failure.
+- **Recording drivers observe teardown instead of asserting it** (#1825, #1827) — every `exit_clean` run used to leak a live agent process and its tmux session; nine leaked `claude` processes in one morning showed up as real sessions in the menu bar.
+
+**Changed / Docs**
+- **The "three states only" claim is retired repo-wide, with a tripwire** (#1804, #1820) — a static check now flags any line naming three-or-more-but-not-all of the canonical states, so the fifth state does not have to be found by review one defect at a time.
+- **`tools/mutate.sh` names the confirmed cause of a byte-parity refusal** instead of guessing between two (#1816, #1838).
+- **Three verification steps that could silently not run now fail loudly** (#1823, #1839) — plus full `go vet` (and therefore `copylocks`) as two new preflight gates.
+- **`ir:exec` spells out the checkpoint-and-restore idiom** (#1824, #1840) — four agents had each independently discarded uncommitted work restoring a mutation against ambient `HEAD`.
+- **`ir:exec` ticks the parent epic's checklist on close, and `ir:triage` derives milestones from `version.json`** rather than from the latest published tag, which could not express a patch release inside the current cycle (#1841).
+
+**Known limitation**
+- The history strip stays three-state: its wire format is 2 bits per bucket and all four codes are taken, so an errored bucket renders blank rather than red. Tracked in #1805.
+
+### Technical appendix
+
+
+- **The state.** `StateError` plus `CanonicalStates()` as the single declaration of the vocabulary; `IsCanonicalState` and the filesystem repository's unrecognized-state warning both derive from it instead of carrying a hand-typed three-way format string. (#1798, #1809)
+- **The detail type.** `session.SessionError` carries Phase, Class, Message and four optional numeric fields. Terminal-ness is the adapter's verdict and never `Attempt == MaxAttempts` — across all 16 recorded `api_error` events the counter runs 1..6 of 10 and never reaches the ceiling. `RetryIn` serializes as `retry_in_ms`, a fractional number, rather than as bare unlabelled nanoseconds. (#1798, #1809)
+- **The pipe.** The fold lives in `applyMetadata`, the one function both of the tailer's mutually exclusive routing paths call, so a `Skip=true` `api_error` and an ordinary `session.error` are both seen. Surfaced from `surfaceSporadicMetrics` above `computeMetrics`' early return, since a transcript of only skipped error events has an empty message history. Added to `newMergedMetrics`' allowlist and deliberately not to any carry-forward helper, which would make the error unclearable. (#1798, #1809)
+- **The rule.** `SignalSessionError` sits at `TierTranscript` with its own policy row and ceiling, immediately above `agent_done`, because a terminal failure leaves a transcript tail that reads as a finished turn. `SignalProcessDeath` gets its own `SignalKind` and its own row above the transcript-tier waiting rules — a dead process leaves an open tool call open forever, so those rules keep firing and keep painting a dead session `waiting`; placement, not the tier value, was the hard part. (#1798, #1800, #1809, #1813)
+- **A Stop hook ends a turn, it does not succeed it.** Both producers emit their failure inside a turn that then ends normally — claude-code writes `system`/`turn_duration` on the next line, Copilot writes `assistant.turn_end` about 6ms **before** `session.error`. So the clearing rule is one shared predicate, `SessionError.ClearedByTurnBoundary`, applied identically by the hook arm and the transcript arm; and a `SessionError` still standing when `classifyAgentDone` runs routes to `StateError`. `ErrorPhaseUnknown` clears like terminal, not like retrying: an absence of information about a further attempt is not evidence of recovery. (#1799, #1811)
+- **`isApiErrorMessage` is matched on the flag's value, never its presence.** claude-code writes the field on assistant messages whether or not anything failed — 4 of the 6 occurrences in `replaydata` are `false`, all user interrupts. The committed ESC fixture is the defect test and goes red against a presence-matching implementation. (#1799, #1811)
+- **`IsError` is never a session error.** That channel means a tool result failed and must not turn a session red; gemini-cli was the one site in the tree conflating the two. (#1798, #1800, #1813)
+- **The is-active partition, settled.** Seven sites re-derived "is this session active" inline while asking two genuinely different questions. `SessionState.HasWorkInFlight` ("is more work coming?", where an errored-but-retrying session counts) is now distinct from `concurrencyActive` ("does this occupy a slot?", where it never does). Only `hasActiveChildren` changed behaviour, and it was the site whose answer was wrong: a child mid-retry answered "not active" and released its parent to green while the subagent sat red. The web client's two inline copies collapsed into `hasWorkInFlight`, with a test that reads the Go source and asserts both rules name the same states. (#1801, #1812)
+- **Colour is defined three times, and the light value is not a copy.** The dark `#FF3B30` measures 3.01:1 against its own wash on white; `#CC0C00` is the same hue at L=40%, 4.69:1, the same band as `--ready`. Figures come from `platforms/web/snapshots/contrast.mjs` and are re-asserted in the suite rather than typed into a comment once. The macOS and web reds are pinned to each other by a test that extracts `IrrHex.error` from `Tokens.swift`. (#1801, #1802, #1810, #1812)
+- **The error line is keyed off the payload, not off `state === 'error'`** — the daemon clears the payload on recovery while the state has already moved on — and every numeric field is checked for `null` rather than falsiness, so a transcript that said nothing never renders "attempt 0 of 0". (#1801, #1812)
+- **The banner is `role="alert"`, deliberately unlike the unapplied-grants banner's `role="status"`.** One reports a standing condition while the sessions around it are still correct; this one says the dashboard cannot vouch for what it is showing. `TurnsSinceReceipt` was removed from the fault payload because it climbed on every turn boundary, changing the banner key and re-announcing to a screen reader roughly every 30 seconds forever. Known gap, stated in the struct doc: `irrlichtrelay` rebuilds the payload from its own cache and carries no daemon health, so a relay-connected dashboard does not see these. (#1801, #1802, #1810, #1812)
+- **macOS decoded the error from a key the daemon does not emit.** `SessionError` read a top-level `error`; the daemon writes `metrics.session_error`. Every error would have rendered the bare "The session failed" fallback, silently, forever, while looking like working code. `SessionState.error` is now a passthrough to `metrics.sessionError`, and `testDaemonGoldenPayloadDecodes` decodes the daemon's own committed golden payload rather than hand-written JSON. (#1802, #1810)
+- **Restart survival needed four mechanisms plus a fifth found by `/simplify`.** `LedgerState.SessionError` persists the sticky failure; `retainedErrorAcrossRestart` exempts an errored row from three startup deleters; `seedRetainRestoredError` re-registers a retention entry so the row also survives the periodic liveness sweep, which the startup exemptions cannot reach; `seedRestoreErrorVerdict` re-places the process-death hold. The fifth deleter — `sweepStaleSnapshot`'s `pid == 0` branch, firing after the 30-minute ready TTL, well inside the 12 hours an errored row is promised — was found by execution, and the fix is structural: `PIDManager.retainsError` is the one predicate every reaper consults, and `TestEveryReaperConsultsTheErrorExemption` walks the AST and fails any deleting function that neither consults it nor sits on a documented exempt list. Both the deletion relation and the delegation relation are derived from the source to a fixed point, not typed. (#1815, #1833)
+- **Retention was behind the consent gate.** The seeding ran only for rows whose adapter's observe permission was granted — which on a fresh `IRRLICHT_HOME` is no adapter at all, so the user most likely to hit it was the one who had not finished onboarding. Replaced by a seed-level pass over every persisted row, using the same predicate as the startup exemption. (#1815, #1833)
+- **The ledger schema bump, and the rule that decides one.** Additive is not the discriminator — versions 4 and 5 were both additive `omitempty` fields and both bumped. The test, now written on the constant, is whether the current parser would read bytes an existing ledger has already consumed differently than the parser that wrote them. `TestLedgerState_FieldSetChangeRequiresASchemaDecision` pins the field set and the literal version, so the question is asked rather than skipped. (#1843)
+- **`history.json`'s coercion.** `statePriority()`'s default arm mapped every state without a 2-bit code onto `statePriorityReady`, so the bucket painted green and `save()` rewrote the file with the coerced value. Unencodable states now carry a negative in-memory sentinel encoding to the existing no-data wire code, and the verbatim string is kept so `snapshot()` writes back exactly what was read. The wire format is untouched: still 60 buckets × 2 bits = 15 bytes = 20 base64 characters. (#1807, #1832)
+- **Replay.** `case timelineProcessExit` hard-codes ready but is unreachable for a mid-turn death, so the crash recording carried no process event at all. Routing that branch through the predicate was measured and rejected: it left the crash fixture untouched and made other goldens fabricate a `working→error` their own daemon never produced. The observation gets its own `lifecycle.KindProcessDiedMidTurn`, gated on a test-and-set of the verdict registry because the two exit paths race. Both hold-release edges are mirrored; without the teardown one, a recording carrying death-then-teardown pinned the **next** lifetime to `error`. (#1817, #1835)
+- **The re-record.** A recording is frozen, so only a new one clears a golden. The new claude-code 2-25 recording was captured on a daemon built at/after the fix, coexisting on 127.0.0.1:7842 under its own `/tmp` `IRRLICHT_HOME`; its golden now reads 2 recorded transitions, 2 replayed, 2 ordered matches, no mismatches and no missing kinds. Census moved by exactly one figure: recordings +1. (#1836, #1842)
+- **Driver teardown.** Claude Code answers one Ctrl-D with "press Ctrl-D again" and lets the confirmation expire, so `step_exit_clean`'s single press plus a one-second sleep observed nothing. Death is now an observation at four levels: a strict `require_tmux_session_gone`, an unconditional `trap … EXIT` per driver, a post-driver assertion in `run-cell.sh` built on the gone/survived/could-not-look contract, and a Go tripwire grading four invariants over every driver enumerated from disk. A guard was added against the false success the fix would otherwise create: a trap writing the exit reason unconditionally would turn "never formed a verdict" into `ok`. (#1825, #1827)
+- **Verification that cannot run must not look like verification that found nothing.** `/simplify`'s four review angles must be confirmed considered; the preflight chunk list was missing `swift` and `bash`, so an agent following only the skill skipped the whole macOS gate on a `platforms/macos/` change; and `go test` runs only vet's small high-confidence subset, which excludes `copylocks`. Each is a check this change **adds**, so each carries a committed mutation fixture that breaks the thing it protects and confirms the check goes red. (#1823, #1839)
+- **`mutate.sh`'s NUL refusal.** The byte-parity guard reads the whole file as one awk record; macOS's system awk represents that record as a NUL-terminated C string, so `length()` stops at the first embedded NUL — confirmed against `platforms/web/irrlicht.js` (117644 bytes, one NUL at offset 67966; the guard measured exactly 67966) and ruled out as a buffer ceiling. The guard now reads the stopping byte via `dd`/`od`, never through awk, and names the confirmed cause with its offset. (#1816, #1838)
+
 ## [0.6.0] — 2026-08-24
 
 ### The hooks epic closes: every adapter that can observe an approval prompt or a turn boundary now does, live — kiro-cli, gemini-cli, mistral-vibe, opencode, pi, hermes, antigravity and copilot's http tier all shipped this cycle, on top of months of safety hardening to the channel underneath them
@@ -1685,7 +1766,8 @@ Four distinct bugs caused long-running Claude Code sessions to bounce between
 - First bundled macOS installer `Irrlicht-0.2.0-mac-installer.pkg` containing
   the daemon, menu bar app, and auto-start LaunchAgent.
 
-[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.6.1
 [0.6.0]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.6.0
 [0.5.10]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.5.10
 [0.5.9]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.5.9

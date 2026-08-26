@@ -749,6 +749,11 @@ curl -OJ http://127.0.0.1:7837/debug/bundle</code></pre>
             <td>int64</td>
             <td>Projected unix-seconds completion time for the current task, derived from the measured progress rate; absent when no progress has been reported</td>
           </tr>
+          <tr>
+            <td><code>session_error</code></td>
+            <td>object</td>
+            <td>Detail of the failure behind a <code>state</code> of <code>error</code> &mdash; <code>phase</code> (<code>retrying</code>, <code>terminal</code>, or absent when the agent reported no classification), <code>class</code> (the agent&rsquo;s own error token, e.g. <code>rate_limit</code>), <code>message</code> (its verbatim text), and the optional numbers <code>http_status</code>, <code>attempt</code>, <code>max_attempts</code>, <code>retry_in_ms</code>. Every number is omitted rather than zeroed when the agent did not report it, so read each for presence and never for falsiness. Absent while the session is healthy, and cleared when the failure retires &mdash; render off this object rather than off <code>state</code>, which moves first on recovery</td>
+          </tr>
         </tbody>
       </table>
 

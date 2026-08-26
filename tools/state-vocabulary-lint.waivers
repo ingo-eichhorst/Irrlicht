@@ -120,7 +120,6 @@ platforms/macos/Irrlicht/Theme/Tokens.swift         CSS custom-property NAMES (-
 site/index.html                alt text for assets/explainer.png, which depicts a three-state dropdown
 assets/extender-prompt.txt     an image-generation prompt for the three-light brand eyebrow
 assets/mascot/image-prompts.md the prompt that produced mascot-trio-state-cycle.webp
-README.md                      describes the Activity Matrix artefact, whose grid is the 2-bit strip above (#1805)
 
 # ---------------------------------------------------------------------------
 # 7. OWNED BY ANOTHER TREE — do not edit from here
