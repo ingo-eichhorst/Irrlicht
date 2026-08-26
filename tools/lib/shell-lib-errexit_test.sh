@@ -523,12 +523,16 @@ row 'swift-suite.sh::_swift_suite_witness_domain_verdict' '_swift_suite_witness_
 # ACTIVE on this host, so an entry that stops naming a real function fails
 # rather than quietly doing nothing. tw_exempt_reason returns non-zero when the
 # function is drivable here, in which case its recipe runs normally.
-TW_EXEMPT_KEYS='swift-suite.sh::swift_suite_run'
+TW_EXEMPT_KEYS='swift-suite.sh::swift_suite_run mutation-assert.sh::assert_mutation_is_red'
 tw_exempt_reason() {
   case "$1" in
     'swift-suite.sh::swift_suite_run')
       [[ "$(uname -s)" == "Darwin" ]] && return 1
       echo "needs BSD script(1) for its pty; the spelling and argument order differ on $(uname -s), and the only production caller is a Darwin-guarded gate. Driven on macOS, which is where test.yml runs this suite."
+      return 0
+      ;;
+    'mutation-assert.sh::assert_mutation_is_red')
+      echo "drives tools/mutate.sh against a REAL tracked file and requires a clean git worktree as mutate.sh's own precondition (exit 4 otherwise) — the fixture-dependency category this file's own header names as exempt-worthy (#1823), not something safe to blind-call from a generic per-function walk. Its two callers (preflight-groups-skill-mutations_test.sh, simplify-angle-guard-mutations_test.sh) already exercise it directly and run under CI; both run under 'set -uo pipefail', never '-e', so the errexit contract this tripwire checks is not live for it in production use either."
       return 0
       ;;
   esac
