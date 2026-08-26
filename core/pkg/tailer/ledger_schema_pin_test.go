@@ -183,23 +183,27 @@ func ledgerFieldSignature(t reflect.Type) string {
 	return strings.Join(lines, "\n")
 }
 
+// lineSet indexes a signature's lines so membership is one map lookup.
+func lineSet(sig string) map[string]bool {
+	set := map[string]bool{}
+	for _, l := range strings.Split(sig, "\n") {
+		set[l] = true
+	}
+	return set
+}
+
+// linesNotIn returns sig's lines that set does not hold, in sig's own order.
+func linesNotIn(sig string, set map[string]bool) []string {
+	var out []string
+	for _, l := range strings.Split(sig, "\n") {
+		if !set[l] {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
 // signatureDiff reports which lines want has that got lacks, and vice versa.
 func signatureDiff(want, got string) (added, removed []string) {
-	inWant := map[string]bool{}
-	for _, l := range strings.Split(want, "\n") {
-		inWant[l] = true
-	}
-	inGot := map[string]bool{}
-	for _, l := range strings.Split(got, "\n") {
-		inGot[l] = true
-		if !inWant[l] {
-			added = append(added, l)
-		}
-	}
-	for _, l := range strings.Split(want, "\n") {
-		if !inGot[l] {
-			removed = append(removed, l)
-		}
-	}
-	return added, removed
+	return linesNotIn(got, lineSet(want)), linesNotIn(want, lineSet(got))
 }
