@@ -71,24 +71,29 @@ func TestLedger_ClearedSessionErrorStaysCleared(t *testing.T) {
 	}
 }
 
-// TestLedger_PreFieldLedgerRehydratesToNoError pins the no-schema-bump decision:
-// a ledger written before #1815 simply lacks the key, and must rehydrate to the
-// exact pre-fix behaviour rather than failing to load.
+// TestLedger_KeylessCurrentLedgerRehydratesToNoError pins the ordinary case that
+// `omitempty` creates: a CURRENT-schema ledger for a session that never failed
+// carries no session_error key at all, and must rehydrate to "no error" rather
+// than to a parse failure.
 //
-// This is what makes the additive field safe without discarding every live
-// session's ledger — the claim LedgerState.SessionError's doc makes, asserted
-// against a real pre-field payload rather than left as prose.
-func TestLedger_PreFieldLedgerRehydratesToNoError(t *testing.T) {
-	// A ledger body with no session_error key at all — what every ledger on
-	// disk looks like today.
+// NOTE THE SCOPE, which narrowed when #1815's bump to 6 landed. This is no longer
+// a statement about OLD ledgers: a pre-#1815 ledger is stamped 5 and loadLedger
+// discards it outright, so it never reaches this code path at all —
+// TestLoadLedger_RejectsPreSessionErrorSchema owns that half, and it has to,
+// because a v0.6.0 ledger's missing key is not "this session was fine" but "the
+// parser that wrote me could not tell". Rehydrating it would assert the former.
+// What survives here is the every-session-every-pass case: absent key → no error.
+func TestLedger_KeylessCurrentLedgerRehydratesToNoError(t *testing.T) {
+	// A ledger body with no session_error key — what a healthy session's ledger
+	// looks like on disk.
 	raw := []byte(`{"schema_version":` + strconv.Itoa(LedgerSchemaVersion) + `,"last_offset":4096,"last_event_type":"assistant"}`)
 
 	var s LedgerState
 	if err := json.Unmarshal(raw, &s); err != nil {
-		t.Fatalf("a pre-#1815 ledger no longer parses: %v", err)
+		t.Fatalf("a keyless current ledger no longer parses: %v", err)
 	}
 	if s.SessionError != nil {
-		t.Errorf("SessionError = %+v, want nil for a ledger written before the field existed", s.SessionError)
+		t.Errorf("SessionError = %+v, want nil for a ledger that carries no session_error key", s.SessionError)
 	}
 
 	after := newLedgerTestTailer()
