@@ -321,6 +321,39 @@ gofmt_check() {
   fi
 }
 
+# go vet — deliberately NOT the small "high confidence" subset (atomic,
+# bool, buildtags, directive, errorsas, ifaceassert, nilfunc, printf,
+# stringintconv) that `go test` runs automatically before compiling test
+# binaries. That subset EXCLUDES copylocks, the check that flags a struct
+# holding a sync.Mutex (or any other sync.Locker) getting copied by value —
+# a real defect `go test`, even under `-race`, does not reach unless the
+# copy happens to be exercised concurrently at runtime. #1823: nothing in
+# this repo ran full `go vet` anywhere before this (`git grep -n "go vet"
+# -- tools/preflight.sh tools/lib` returned nothing), so every agent that
+# ran it during the #1796 epic did so only because a human typed it into
+# their prompt. tools/lib/go-vet-copylocks_test.sh carries the committed
+# proof: a copylocks violation that leaves `go test` green and this red.
+#
+# Scoped and placed alongside `core_module_tests`/the onboarding-factory
+# `go test` call below (Phase 2, same trigger regexes), not unscoped in
+# Phase 1 next to gofmt: unlike gofmt, `go vet` has no CI-parity gate to
+# mirror (`.github/workflows/test.yml` runs gofmt but never vet) and costs
+# 10-100x gofmt's ~0.1s (measured ~9.3s cold-cache for `./core/...` alone),
+# so running it unconditionally under `--changed` broke that mode's own
+# documented contract (line 73-74: "scope every gate to the packages/trees
+# this branch changes") for no CI-parity reason. Two independent gates,
+# not one chained with `&&`: a chain would let a core/ vet failure
+# short-circuit past an unrelated onboarding-factory violation and hide it
+# until the first one is fixed and the gate re-run.
+#
+# `go_vet_core` (below `core_module_tests`) goes one level further than the
+# trigger regex: it reuses `changed_core_packages` so a single-package
+# `--changed` diff vets that one package, not `./core/...` whole — matching
+# `core_module_tests`'s own scoping exactly, not just its trigger. The
+# onboarding-factory `go test` gate was already unscoped to its own module
+# before this change, so `go vet (onboarding-factory)` matches its sibling
+# as-is with no equivalent helper needed.
+
 # changed_core_packages — import paths of the changed core/ packages that
 # still exist (renames/deletions are dropped by the `go list` guard), plus the
 # module-root package irrlicht/core that hosts architecture_test.go. Including
@@ -350,6 +383,26 @@ core_module_tests() {
   echo "scoped to changed packages:"
   printf '  %s\n' $pkgs
   go test $pkgs -race -count=1
+}
+
+# go_vet_core — same package-list scoping as core_module_tests immediately
+# above (same helper, same go.mod/go.sum fallback-to-full rule), so a
+# single-package `--changed` diff pays for one package's vet, not the whole
+# module's. Kept as its own function rather than a parameter to
+# core_module_tests: `go vet` and `go test -race` are different gates with
+# different names in the summary (#1823 review — chaining them with `&&`
+# would let one mask the other's failure), so they stay two call sites that
+# happen to share this one piece of scoping logic.
+go_vet_core() {
+  if [[ "$CHANGED" != 1 ]] || changed_matches '^core/go\.(mod|sum)$'; then
+    go vet ./core/...
+    return
+  fi
+  local pkgs
+  pkgs=$(changed_core_packages)
+  echo "scoped to changed packages:"
+  printf '  %s\n' $pkgs
+  go vet $pkgs
 }
 
 # -- web (mirrors web-test.yml) ---------------------------------------------
@@ -571,7 +624,11 @@ fi
 if want go; then
   CURRENT_GROUP=go
   run_gate_scoped '^core/.*\.go$|^core/go\.(mod|sum)$' \
+                  "go vet (core)"             go_vet_core
+  run_gate_scoped '^core/.*\.go$|^core/go\.(mod|sum)$' \
                   "core module tests"        core_module_tests
+  run_gate_scoped '^tools/onboarding-factory/.*\.go$' \
+                  "go vet (onboarding-factory)" go vet ./tools/onboarding-factory/...
   run_gate_scoped '^tools/onboarding-factory/.*\.go$' \
                   "onboarding-factory tests" go test ./tools/onboarding-factory/... -count=1
   run_gate_scoped '^replaydata/|^tools/onboarding-factory/' \

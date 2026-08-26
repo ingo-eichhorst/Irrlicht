@@ -401,14 +401,22 @@ Nobody is gating on the plan, so skip the HTML artifact and the wait entirely:
     tools/preflight.sh --only tools
     tools/preflight.sh --only skills
     tools/preflight.sh --only posix
+    tools/preflight.sh --only bash
     tools/preflight.sh --only security
+    tools/preflight.sh --only swift     # only when the change touches platforms/macos/
     ```
-    (`tools/preflight.sh --help` lists the current group set — `--only linux`
-    is separately opt-in and needs Docker; skip it unless the change is
-    Linux-specific.) Every gate still runs; chunking only changes how many
-    `Bash` calls it takes. If `--only go` alone is close to timing out here,
-    that's expected — it's the long pole and there's no finer selector to fall
-    back to. AGENTS.md's Local CI parity section carries the same recipe.
+    (`tools/preflight.sh --help` lists the current group set — this list runs
+    every one of them except `--only linux`, which stays opt-in and needs
+    Docker; skip it unless the change is Linux-specific. This list previously
+    omitted `swift` and `bash` — #1823 — so an agent following it on a
+    `platforms/macos/` change skipped the whole macOS gate without either side
+    saying so; `tools/lib/preflight-groups-skill_test.sh` now derives the
+    canonical set from `--help` and fails loudly if this list and it disagree,
+    so that can't silently recur.) Every gate still runs; chunking only
+    changes how many `Bash` calls it takes. If `--only go` alone is close to
+    timing out here, that's expected — it's the long pole and there's no
+    finer selector to fall back to. AGENTS.md's Local CI parity section
+    carries the same recipe.
 
     **Never end a turn waiting on your own background or monitored work** — not
     `run_in_background: true`, not `Monitor`, not tailing a log file. A
@@ -876,8 +884,34 @@ either step.
     the review fixes went in. For **Medium/Large** diffs run the `/simplify`
     skill with the same explicit base (`/simplify origin/main...HEAD`, for the
     reason in step 13); for **Trivial/Small** diffs skip its 4-agent fan-out
-    and do the reuse/simplification/efficiency/altitude review inline, stating
-    what you checked. Push any cleanup.
+    and do the four-angle review yourself, inline.
+
+    **Whichever path this diff takes, the same four angles and the same
+    discipline apply: reuse, simplification, efficiency, altitude.** Before
+    treating the phase as complete, confirm each of the four was actually
+    considered and account for it by name — a finding, or an explicit
+    "clean" — reading `/simplify`'s own report on the Medium/Large path, or
+    your own inline pass on the Trivial/Small one. A silent angle — one
+    `/simplify`'s report never mentions, or one an inline "looked simple,
+    nothing to do" glance skipped without saying so — is indistinguishable
+    from never having been checked at all: on the Medium/Large path because
+    `/simplify` is a built-in this repo does not own and cannot edit or
+    instrument, and its own fan-out can silently drop a subagent while the
+    phase still reads as "done" (#1823); on the Trivial/Small path because an
+    inline pass with no per-angle accounting is exactly as easy to shortcut.
+    Nothing on our side can make the built-in itself fail loudly, and no lint
+    can watch an inline pass happen — `tools/lib/simplify-angle-guard_test.sh`
+    guards this paragraph's own wording against eroding out of the file, the
+    same way `tools/skill-lint.sh` guards other skill prose, but unlike step
+    13's `test -f` precondition it cannot observe whether a given run actually
+    did the confirming — so on both paths the obligation moves to
+    the same place: treat a silent angle the same as step 13's `MISSING`
+    reviewer — **surface it and pause** rather than pushing on. An aggregate
+    "no findings"/"done", or a vague "looked simple", does not stand in for
+    four individually-accounted-for ones. State in the transcript which of
+    the four you confirmed and what each found (or "clean"), the same way
+    step 13 requires an explicit "no findings" for the review subagent. Push
+    any cleanup.
 14a. **Clear the WIP marker** — active work on this branch is over, and the PR
     should stop saying otherwise before you hand it to a human. Do this only
     once step 13's findings are applied and step 14's cleanup is pushed; a run
