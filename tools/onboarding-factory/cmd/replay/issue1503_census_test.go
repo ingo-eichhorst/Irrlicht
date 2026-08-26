@@ -156,8 +156,20 @@ type catalogCensus struct {
 // only pi's new `case "error"` arm accounts for the first, and disabling only
 // gemini's terminal-info error for the second. Nothing else in the change
 // moves either figure.
+//
+// #1836 moved exactly ONE figure — Recordings, up by one — and the figure it
+// was expected to move, Divergent, did not move at all. The re-record of
+// claudecode's 2-25_agent-process-crash-midturn on a daemon carrying
+// lifecycle.KindProcessDiedMidTurn added a recording whose golden reproduces
+// the daemon exactly (no ordered_mismatches), so it joins the denominator
+// without joining Divergent. The superseded 2026-08-25 recording is retained
+// beside it under #268's deletion guard and is still divergent, so nothing
+// LEAVES Divergent either. Divergent counts divergent RECORDINGS, not
+// divergent cells: a re-record that keeps its predecessor can only ever hold
+// that figure still. It would fall only when the older recording is retired
+// out of the catalog into regressions/, which is a separate, deliberate act.
 var censusOfTheCommittedCatalog = catalogCensus{
-	Recordings:                319,
+	Recordings:                320,
 	Zero:                      1,
 	Fabricated:                1,
 	Divergent:                 151,
