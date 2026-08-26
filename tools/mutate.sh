@@ -70,8 +70,9 @@
 #   1  usage error (wrong number of arguments, or --help).
 #   2  <file> does not exist, is not a regular file, or is not read/writable.
 #   3  could not read <file> byte-for-byte (embedded NUL, or the 0x01 byte
-#      this tool reserves as an internal record separator — measured, not
-#      assumed: file size and what was read disagree).
+#      this tool reserves as an internal record separator — file size and
+#      what was read disagree). Which one is named in the refusal message is
+#      itself confirmed by a direct byte read, never guessed (#1816).
 #   4  precondition refused — not inside a git repository, or `git status
 #      --porcelain` was already non-empty BEFORE mutating. The post-restore
 #      emptiness check could prove nothing against a tree that started dirty
@@ -191,13 +192,36 @@ trap restore_file EXIT
 # ─── Guard: the snapshot can be read byte-for-byte via the RS="\x01" slurp ──
 # Measured, not assumed (AGENTS.md: "a validator that can't parse its input
 # checks MORE, never less"). A mismatch means the file contains a NUL byte
-# (many awk implementations truncate C-style strings there) or literally the
-# 0x01 byte this tool reserves as its own record separator — either way,
-# proceeding would silently operate on a truncated/garbled read.
+# (many awk implementations — including macOS's system /usr/bin/awk, the "one
+# true awk" — represent $0 as a NUL-terminated C string, so length()/index()/
+# substr() silently stop at the first NUL rather than seeing the true byte
+# count; confirmed directly against this repo's own platforms/web/irrlicht.js,
+# #1816) or literally the 0x01 byte this tool reserves as its own record
+# separator — either way, proceeding would silently operate on a
+# truncated/garbled read.
 SNAPSHOT_BYTES="$(LC_ALL=C wc -c < "$BACKUP" | tr -d ' ')"
 SLURPED_LEN="$(byte_awk 'BEGIN{RS="\x01"}{print length($0)}' "$BACKUP")"
 if [[ "$SLURPED_LEN" != "$SNAPSHOT_BYTES" ]]; then
-  refuse 3 "could not read '$FILE' byte-for-byte: it is $SNAPSHOT_BYTES bytes but this tool's exact-byte read measured '$SLURPED_LEN' — likely an embedded NUL byte or this tool's own 0x01 sentinel. Refusing rather than risk a corrupted mutation."
+  # Confirm which of the two known causes it actually was (#1816) instead of
+  # naming both as an unconfirmed guess. Read straight from the byte-safe
+  # $BACKUP snapshot with tools that carry no C-string semantics of their own
+  # (dd/od, never awk — awk is exactly the thing whose C-string read cannot
+  # see past a NUL), so the claim below is measured, not inferred.
+  CAUSE="unconfirmed: the measurement ('$SLURPED_LEN') did not match a recognized shape"
+  if [[ "$SLURPED_LEN" == *$'\n'* ]]; then
+    # RS="\x01" can only ever produce more than one record by actually
+    # splitting on a literal 0x01 byte — so this is confirmed by
+    # construction, not inferred from the byte count alone.
+    CAUSE="confirmed: one or more embedded 0x01 bytes (this tool's own record-separator sentinel) split the read into multiple records instead of one"
+  elif [[ "$SLURPED_LEN" =~ ^[0-9]+$ ]] && [[ "$SLURPED_LEN" -lt "$SNAPSHOT_BYTES" ]]; then
+    STOP_BYTE="$(dd if="$BACKUP" bs=1 skip="$SLURPED_LEN" count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')"
+    case "$STOP_BYTE" in
+      00) CAUSE="confirmed: an embedded NUL byte (0x00) at offset $SLURPED_LEN" ;;
+      01) CAUSE="confirmed: this tool's own 0x01 record-separator sentinel at offset $SLURPED_LEN" ;;
+      *)  CAUSE="unconfirmed: the read stopped at byte 0x$STOP_BYTE (offset $SLURPED_LEN), which is neither a NUL nor this tool's 0x01 sentinel" ;;
+    esac
+  fi
+  refuse 3 "could not read '$FILE' byte-for-byte: it is $SNAPSHOT_BYTES bytes but this tool's exact-byte read measured '$SLURPED_LEN' — $CAUSE. Refusing rather than risk a corrupted mutation."
 fi
 
 # ─── Guard: precondition — a real git repo, and already clean ──────────────

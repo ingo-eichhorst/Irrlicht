@@ -314,6 +314,55 @@ MUTATE_OUTPUT="$(cd "$repo" && "$MUTATE_SH" embedded-nul.bin "abc" "xyz" true 2>
 MUTATE_RC=$?
 assert_contains "names the byte-count mismatch" "could not read" "$MUTATE_OUTPUT"
 [[ "$MUTATE_RC" -ne 0 ]] && pass "refuses (nonzero exit)" || fail "refuses (nonzero exit)" "nonzero" "0"
+# #1816: the refusal must name the CONFIRMED cause (measured by an independent
+# byte read) rather than a guess between "NUL or this tool's own sentinel" —
+# this NUL is at byte offset 3 ("abc" is 3 bytes), and the message must say so.
+assert_contains "names the confirmed cause, not a guess between two possibilities" \
+  "confirmed: an embedded NUL byte (0x00) at offset 3" "$MUTATE_OUTPUT"
+
+echo ""
+echo "== root-cause regression (#1816): a NUL deep inside a large file is confirmed at its EXACT offset =="
+# platforms/web/irrlicht.js carries exactly one literal NUL, used as a string
+# separator, at byte offset 67966 in a 117644-byte file — this reproduces
+# that shape (a single embedded NUL far past any small-fixture edge case) in
+# a throwaway repo rather than pointing mutate.sh at this repo's own tree.
+repo="$(new_repo)"
+python3 -c "
+import sys
+data = bytearray((i % 250) + 2 for i in range(120000))  # never 0x00 or 0x01
+data[67966] = 0  # the one confirmed offset from #1816's investigation
+with open('$repo/large-with-nul.bin', 'wb') as f:
+    f.write(data)
+"
+git -C "$repo" add large-with-nul.bin
+git -C "$repo" commit -q -m "add a large file with one NUL at a known offset"
+MUTATE_OUTPUT="$(cd "$repo" && "$MUTATE_SH" large-with-nul.bin "abc" "xyz" true 2>&1)"
+MUTATE_RC=$?
+[[ "$MUTATE_RC" -ne 0 ]] && pass "refuses (nonzero exit)" || fail "refuses (nonzero exit)" "nonzero" "0"
+assert_contains "names the true file size (120000), not a truncated one" "120000 bytes" "$MUTATE_OUTPUT"
+assert_contains "confirms the NUL at its exact offset (67966), not a guess and not a buffer-boundary number" \
+  "confirmed: an embedded NUL byte (0x00) at offset 67966" "$MUTATE_OUTPUT"
+assert_eq "left the repo clean — a refusal must never look like a survived mutation" \
+  "" "$(cd "$repo" && git status --porcelain)"
+assert_eq "left the file byte-for-byte untouched" \
+  "$(git -C "$repo" show HEAD:large-with-nul.bin | wc -c)" "$(wc -c < "$repo/large-with-nul.bin")"
+
+echo ""
+echo "== the other confirmed cause: an embedded 0x01 (this tool's own sentinel) is named as such, not as a NUL =="
+# RS=\"\\x01\" can only ever produce MORE than one record by splitting on a
+# literal 0x01 byte, so this branch of the confirmed-cause guard is reached a
+# different way than the NUL branch above — exercise it for real rather than
+# trusting it by inspection.
+repo="$(new_repo)"
+printf 'abc\x01def\n' > "$repo/embedded-sentinel.bin"
+git -C "$repo" add embedded-sentinel.bin
+git -C "$repo" commit -q -m "add a file with this tool's own 0x01 sentinel byte"
+MUTATE_OUTPUT="$(cd "$repo" && "$MUTATE_SH" embedded-sentinel.bin "abc" "xyz" true 2>&1)"
+MUTATE_RC=$?
+[[ "$MUTATE_RC" -ne 0 ]] && pass "refuses (nonzero exit)" || fail "refuses (nonzero exit)" "nonzero" "0"
+assert_contains "names the 0x01 sentinel specifically, not a NUL" \
+  "confirmed: one or more embedded 0x01 bytes (this tool's own record-separator sentinel) split the read into multiple records" \
+  "$MUTATE_OUTPUT"
 
 echo ""
 echo "== usage: refuses when the test command is missing entirely =="
