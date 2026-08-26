@@ -467,6 +467,40 @@ Nobody is gating on the plan, so skip the HTML artifact and the wait entirely:
     the test, then restore — never `git stash`, whose stack is shared across
     worktrees (AGENTS.md).
 
+    **The checkpoint idiom, precisely** (#1824): commit before mutating —
+    `git add -A && git commit -m wip`, then capture its exact SHA (`git
+    rev-parse HEAD`) and confirm `git status --porcelain` is empty right
+    after. The `git add -A` is not optional: a bare `git commit -m wip`
+    commits only what is already staged, so a new untracked file — an
+    ordinary part of implementing a fix — silently never enters the
+    checkpoint at all, and a later "revert" that deletes it has nothing to
+    read back (`git show <sha>:<path>` fails outright, since the file was
+    never in any commit). Restore *only* by reading the checkpoint back —
+    `git show
+    <checkpoint-sha>:<path> > <path>` per file — never by writing over the
+    tree with `git checkout -- <file>`, `git restore --source=HEAD`, `git
+    reset --hard`, or any command of the same shape. Every one of those
+    resolves against whatever HEAD *currently* is rather than the checkpoint
+    you captured, and this repo already forbids all three everywhere for
+    exactly that reason (`tools/mutate.sh`'s own header: worktrees share the
+    parent repo's `.git` dir, and a restore must not touch shared state that
+    is not isolated per worktree). `git show <sha>:<path>` is a plain read
+    from the checkpoint commit, never a write against ambient state, which
+    is what keeps it off that list. The banned commands silently discard
+    anything sitting uncommitted in the tree — including work made *after*
+    the checkpoint, which is exactly what bit three separate runs here
+    (#1799 and #1801 via `checkout --`; #1817 via `restore --source=HEAD`
+    reverting uncommitted review fixes mid-mutation — same mechanism,
+    different command name). Never mutate a dirty tree either: commit or
+    clean up anything else sitting uncommitted before you checkpoint, so the
+    checkpoint SHA *is* the whole known-good state and reading it back is
+    unambiguous. And never keep the pre-mutation state as a hand-rolled
+    backup in `/tmp` or a scratchpad instead of a commit — the same
+    reasoning as step 2b's base-SHA ban applies: those directories are
+    shared and recycled across concurrent agents, and one run here (#1800)
+    had a `/tmp` backup go stale and silently revert a change, caught only
+    by re-reading the file afterward.
+
     A test that **passes** on `main` is not a regression test. Either the
     diagnosis is wrong, or the test doesn't reach the defect — e.g. it exercises
     a stub that is blind to the field it asserts on. **STOP and report.** Do not
@@ -660,12 +694,24 @@ the rebase (step 2b).
 - **The rebase stops with a conflict** — expected on this path, not an anomaly;
   the incident below hit exactly that. Resolve each conflicted hunk on its merits
   (both sides deliberate, so neither `--ours` nor `--theirs` wholesale is an
-  answer), `git add` and `git rebase --continue`, then apply the semantic re-read
-  above. If you can't resolve it confidently, `git rebase --abort` — which returns
-  the branch intact to its pre-rebase state — and **surface it and pause**. Never
-  walk on to step 12 from inside a stopped rebase: `HEAD` is detached mid-replay,
-  so the `--shortstat` below mis-tiers steps 13–14 and the `git push -u` pushes
-  the wrong ref.
+  answer), `git add` and `git rebase --continue`. **Then check for a marker that
+  survived anyway, before trusting the "continue":**
+  ```bash
+  git diff --name-only -z origin/main...HEAD \
+    | xargs -0 -r bash tools/lib/rebase-conflict-check.sh
+  ```
+  `git rebase --continue` only checks that every conflicted path was `git add`ed
+  — never that the content is actually resolved, so `git add -A` on a hunk that
+  still carries `<<<<<<<`/`=======`/`>>>>>>>` reports success (#1824, instance 3:
+  caught only because `go build` happened to choke on it downstream — nothing in
+  this playbook checked directly until now). A non-empty `CONFLICT:` line means
+  fix the file and amend before continuing further, exactly as for a conflict
+  the rebase itself reported. Then apply the semantic re-read above. If you
+  can't resolve it confidently, `git rebase --abort` — which returns the branch
+  intact to its pre-rebase state — and **surface it and pause**. Never walk on
+  to step 12 from inside a stopped rebase: `HEAD` is detached mid-replay, so the
+  `--shortstat` below mis-tiers steps 13–14 and the `git push -u` pushes the
+  wrong ref.
 
   (Real incident: during #1199 / PR #1204, `origin/main` advanced twice mid-run,
   and PR #1201 landed edits to *both* files that run was in the middle of

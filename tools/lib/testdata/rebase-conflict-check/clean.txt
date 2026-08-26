@@ -1,0 +1,5 @@
+package example
+
+func Greeting() string {
+	return "hello from feature branch"
+}
