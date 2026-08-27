@@ -59,7 +59,16 @@ final class MenuBarController: NSObject {
         self.sessionManager = sessionManager
         self.gasTownProvider = gasTownProvider
         self.updateManager = updateManager
+        // Carry any position AppKit persisted under its generated name over to
+        // the declared one BEFORE `autosaveName` is assigned below — that
+        // assignment is what makes AppKit look the new key up, so the value
+        // has to be there first. See MenuBarStatusItemIdentity (#1845).
+        MenuBarStatusItemIdentity.migrateLegacyPreferredPosition(in: UserDefaults.standard)
+
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        // Declaring the name is what makes the user's Cmd-drag position a
+        // property of this app rather than of its startup order (#1845).
+        self.statusItem.autosaveName = MenuBarStatusItemIdentity.autosaveName
 
         let root = SessionListView()
             .environmentObject(daemonManager)

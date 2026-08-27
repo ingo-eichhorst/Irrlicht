@@ -24,6 +24,9 @@ struct MenuBarStatusRenderer {
     private static let height: CGFloat = 18
     private static let fontSize: CGFloat = 10
     private static let maxVisibleGroups = 5
+    /// Advance width of one digit of the session count in the aggregate dot's
+    /// Menlo label. Measured against the rendered glyph, not derived.
+    private static let countDigitWidth: CGFloat = 6.5
     private static let overflowFillHex = IrrSVG.cancelled
     /// Slice order for the per-group pie dot — DERIVED from `allCases`, never
     /// hand-listed (#1797).
@@ -45,21 +48,7 @@ struct MenuBarStatusRenderer {
         sessions: [SessionState],
         projectGroupOrder: [String]
     ) -> NSImage? {
-        guard let (svg, totalWidth) = buildStatusSVG(
-            sessions: sessions,
-            projectGroupOrder: projectGroupOrder
-        ) else {
-            return nil
-        }
-
-        guard let data = svg.data(using: .utf8),
-              let image = NSImage(data: data) else {
-            return nil
-        }
-
-        image.isTemplate = false
-        image.size = NSSize(width: totalWidth, height: height)
-        return image
+        image(from: buildStatusSVG(sessions: sessions, projectGroupOrder: projectGroupOrder))
     }
 
     static func buildStatusSVG(
@@ -71,25 +60,75 @@ struct MenuBarStatusRenderer {
         if groups.count > maxVisibleGroups {
             renders.append(renderOverflow())
         }
-        let totalWidth = totalRenderWidth(renders)
+        return assemble(renders)
+    }
 
-        guard totalWidth > 0 else { return nil }
+    // MARK: - Compact style (issue #1845)
 
-        var svg = """
-        <svg xmlns="http://www.w3.org/2000/svg" width="\(Int(totalWidth))" height="\(Int(height))">
-        """
+    /// Render EVERY top-level session as a single aggregate dot, ignoring
+    /// project boundaries entirely.
+    ///
+    /// This is the width fix. `buildStatusSVG` costs one render per project
+    /// plus a `groupGap` between each, so its width grows with the number of
+    /// projects until `maxVisibleGroups` caps it — by which point the icon
+    /// can already be wide enough to sit behind the notch on a 13"/14" screen
+    /// with a crowded menu bar. This function's width depends only on the
+    /// number of DIGITS in the session count, so it is constant at 18.5pt for
+    /// 1-9 sessions and 25pt for 10-99, no matter how many projects are open.
+    static func buildAggregateStatusImage(sessions: [SessionState]) -> NSImage? {
+        image(from: buildAggregateStatusSVG(sessions: sessions))
+    }
 
+    static func buildAggregateStatusSVG(sessions: [SessionState]) -> (svg: String, width: CGFloat)? {
+        let topLevel = topLevelSessions(sessions)
+        guard !topLevel.isEmpty else { return nil }
+        return assemble([aggregateRender(topLevel)])
+    }
+
+    // MARK: - Shared assembly
+
+    /// Lay renders out left to right with `groupGap` between them and wrap
+    /// the result in one `<svg>`. Shared by the per-project and aggregate
+    /// paths so the two cannot drift in how they space or size themselves.
+    /// One loop, deliberately. The layout offsets and the declared total
+    /// width are the same arithmetic, and they used to be computed by two
+    /// separate loops each carrying its own `if index > 0` gap rule. Review
+    /// of #1849 showed that dropping the gap from one of them left the
+    /// declared width at 32 while the content laid out to 38 — clipping the
+    /// last dot off the icon — with the whole suite green. Deriving the
+    /// width from the same walk that places the groups makes that
+    /// divergence unrepresentable.
+    private static func assemble(_ renders: [GroupRender]) -> (svg: String, width: CGFloat)? {
+        var body = ""
         var offsetX: CGFloat = 0
         for (index, render) in renders.enumerated() {
             if index > 0 {
                 offsetX += groupGap
             }
-            svg += "<g transform=\"translate(\(svgNumber(offsetX)),0)\">\(render.elements)</g>"
+            body += "<g transform=\"translate(\(svgNumber(offsetX)),0)\">\(render.elements)</g>"
             offsetX += render.width
         }
-        svg += "</svg>"
+
+        let totalWidth = offsetX
+        guard totalWidth > 0 else { return nil }
+
+        let svg = """
+        <svg xmlns="http://www.w3.org/2000/svg" width="\(Int(totalWidth))" height="\(Int(height))">
+        """ + body + "</svg>"
 
         return (svg, totalWidth)
+    }
+
+    private static func image(from built: (svg: String, width: CGFloat)?) -> NSImage? {
+        guard let (svg, totalWidth) = built,
+              let data = svg.data(using: .utf8),
+              let image = NSImage(data: data) else {
+            return nil
+        }
+
+        image.isTemplate = false
+        image.size = NSSize(width: totalWidth, height: height)
+        return image
     }
 
     static func stateSegments(for sessions: [SessionState]) -> [StateSegment] {
@@ -121,12 +160,19 @@ struct MenuBarStatusRenderer {
         """
     }
 
+    /// The sessions the icon counts: top-level only, never a subagent or a
+    /// background agent (those are linked to a parent via `parentSessionId`
+    /// and are already represented by it).
+    private static func topLevelSessions(_ sessions: [SessionState]) -> [SessionState] {
+        sessions.filter { $0.parentSessionId == nil }
+    }
+
     private static func orderedProjectGroups(
         from sessions: [SessionState],
         projectGroupOrder: [String]
     ) -> [(String, [SessionState])] {
         var groupMap: [String: [SessionState]] = [:]
-        for session in sessions where session.parentSessionId == nil {
+        for session in topLevelSessions(sessions) {
             let key = session.projectName ?? session.cwd
             groupMap[key, default: []].append(session)
         }
@@ -151,8 +197,15 @@ struct MenuBarStatusRenderer {
         if sessions.count <= 3 {
             return renderCompactGroup(sessions)
         }
+        return aggregateRender(sessions)
+    }
 
-        let countWidth = CGFloat(String(sessions.count).count) * 6.5
+    /// One pie dot plus the session count. Used both for a single crowded
+    /// project (>3 sessions) and, by the Compact style, for every project at
+    /// once — so the two share this width arithmetic rather than repeating
+    /// the digit-width constant.
+    private static func aggregateRender(_ sessions: [SessionState]) -> GroupRender {
+        let countWidth = CGFloat(String(sessions.count).count) * countDigitWidth
         let elements = aggregatedGroupSVG(for: sessions)
         let width = radius * 2 + 2 + countWidth
         return GroupRender(elements: elements, width: width)
@@ -191,8 +244,13 @@ struct MenuBarStatusRenderer {
             // One state covers the whole group: a solid dot in its own hue,
             // no pie. `segments` cannot be empty here — segmentOrder spans
             // every case, so it is empty only for an empty session list, and
-            // renderGroup sends anything with <= 3 sessions to
-            // renderCompactGroup. Returning "" rather than inventing a color
+            // neither caller can pass one: renderGroup sends anything with
+            // <= 3 sessions to renderCompactGroup, and buildAggregateStatusSVG
+            // guards on `!topLevel.isEmpty` before it ever gets here (#1845 —
+            // the Compact style is the second caller, and it deliberately
+            // DOES route 1-3 sessions through the aggregate path, so the
+            // first clause alone no longer covers every route in).
+            // Returning "" rather than inventing a color
             // for the impossible case: a `?? .ready` here was one of the ways
             // an unreadable group used to paint green (#1797), and no fallback
             // hue is better than a wrong one.
@@ -253,17 +311,6 @@ struct MenuBarStatusRenderer {
             x: centerX + radius * CGFloat(cos(radians)),
             y: centerY + radius * CGFloat(sin(radians))
         )
-    }
-
-    private static func totalRenderWidth(_ renders: [GroupRender]) -> CGFloat {
-        var totalWidth: CGFloat = 0
-        for (index, render) in renders.enumerated() {
-            if index > 0 {
-                totalWidth += groupGap
-            }
-            totalWidth += render.width
-        }
-        return totalWidth
     }
 
     private static func svgNumber(_ value: CGFloat) -> String {

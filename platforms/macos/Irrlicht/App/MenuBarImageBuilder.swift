@@ -30,9 +30,9 @@ enum MenuBarImageBuilder {
     /// The filter has to match what `MenuBarStatusRenderer` draws, or the icon
     /// widens to point at a red circle that is not in it. Subagents are the
     /// trap: they live in `sessionManager.sessions` but
-    /// `MenuBarStatusRenderer.orderedProjectGroups` excludes them
-    /// (`where session.parentSessionId == nil`), so a failed CHILD would
-    /// otherwise widen the icon while adding no red dot anywhere.
+    /// `MenuBarStatusRenderer` excludes them from every render path (its
+    /// `topLevelSessions` filter), so a failed CHILD would otherwise widen
+    /// the icon while adding no red dot anywhere.
     ///
     /// Still an over-approximation in one known case: a group past
     /// `maxVisibleGroups` collapses into the grey overflow ellipsis, so an
@@ -77,8 +77,49 @@ enum MenuBarImageBuilder {
         dotsImage: NSImage?,
         hasErroredSession: Bool
     ) -> Bool {
-        guard style == .usage, dotsImage != nil else { return false }
+        guard style.hidesDotsWhenQuotaIsRenderable, dotsImage != nil else { return false }
         return quotaImage == nil || hasErroredSession
+    }
+
+    /// The dot half of the icon, for a given style.
+    ///
+    /// Extracted from `combinedImage` so the style-to-renderer routing is
+    /// reachable from a test without a `SessionManager` — the same reason
+    /// `iconState` and `shouldShowDotsInUsageStyle` are pure. Review of
+    /// #1849 measured that this wiring was the one part of the change no
+    /// test could see: inverting the condition here left all 527 tests
+    /// green while collapsing every shipped style to a single dot.
+    static func dotsImage(
+        style: MenuBarStyle,
+        sessions: [SessionState],
+        projectGroupOrder: [String]
+    ) -> NSImage? {
+        style.aggregatesSessionDots
+            ? MenuBarStatusRenderer.buildAggregateStatusImage(sessions: sessions)
+            : MenuBarStatusRenderer.buildStatusImage(
+                sessions: sessions,
+                projectGroupOrder: projectGroupOrder
+            )
+    }
+
+    /// The quota half of the icon, for a given style — nil when the style
+    /// carries no quota bars at all. Extracted for the same reason as
+    /// `dotsImage`: swapping `usesNarrowQuotaBars` for `showsQuotaBars` in
+    /// the `compact:` argument is a one-word slip that silently re-lays-out
+    /// every `.usage` user's icon, and nothing could see it.
+    static func quotaImage(
+        style: MenuBarStyle,
+        sessions: [SessionState],
+        providerKey: String?,
+        now: Date
+    ) -> NSImage? {
+        guard style.showsQuotaBars else { return nil }
+        return QuotaMenuBarRenderer.imageForSelectedProvider(
+            sessions: sessions,
+            providerKey: providerKey,
+            compact: style.usesNarrowQuotaBars,
+            now: now
+        )
     }
 
     static func build(
@@ -119,7 +160,11 @@ enum MenuBarImageBuilder {
         // Computed once regardless of style so the .usage fallback below can
         // check its actual success/failure instead of re-deriving it from a
         // raw session count (see shouldShowDotsInUsageStyle's doc).
-        let computedDotsImage = MenuBarStatusRenderer.buildStatusImage(
+        //
+        // The Compact style (#1845) collapses every project into ONE
+        // aggregate dot, so its width does not grow with the project count.
+        let computedDotsImage = dotsImage(
+            style: style,
             sessions: nonGtSessions,
             projectGroupOrder: sessionManager.projectGroupOrder
         )
@@ -133,10 +178,10 @@ enum MenuBarImageBuilder {
         // this is that place, once, visibly, rather than twice inside
         // `rowSVG` where the 5h and 7d rows could be paced against two
         // different instants.
-        let quotaImage = style == .lights ? nil : QuotaMenuBarRenderer.imageForSelectedProvider(
+        let builtQuotaImage = quotaImage(
+            style: style,
             sessions: nonGtSessions,
             providerKey: MenuBarQuotaProvider.current,
-            compact: style == .combined,
             now: Date()
         )
         // .usage style hides the dots by default. Two conditions bring them
@@ -145,9 +190,14 @@ enum MenuBarImageBuilder {
         //
         // `nonGtSessions` has already dropped Gas Town sessions; hasErroredDot
         // drops subagents. Both filters are needed — see its doc.
+        //
+        // The locals are named `built…`/`shown…` rather than reusing the
+        // helpers' own names: `let quotaImage = quotaImage(...)` compiles, but
+        // it gives one identifier two meanings inside a single function and
+        // reads like recursion at a glance.
         let hasErroredSession = hasErroredDot(in: nonGtSessions)
-        let dotsImage = style != .usage || shouldShowDotsInUsageStyle(
-            style: style, quotaImage: quotaImage, dotsImage: computedDotsImage,
+        let shownDotsImage = !style.hidesDotsWhenQuotaIsRenderable || shouldShowDotsInUsageStyle(
+            style: style, quotaImage: builtQuotaImage, dotsImage: computedDotsImage,
             hasErroredSession: hasErroredSession
         ) ? computedDotsImage : nil
         // Dots first (left), quota bars last (right) — closest to the
@@ -155,7 +205,9 @@ enum MenuBarImageBuilder {
         // mockup ordering. Uses the same gap as between dot-groups
         // themselves (MenuBarStatusRenderer.groupGap) so the dots-to-quota
         // seam in Combined style reads as "one more group," not a wider gap.
-        let baseImage = composeSideBySide(dotsImage, quotaImage, gap: MenuBarStatusRenderer.groupGap)
+        let baseImage = composeSideBySide(
+            shownDotsImage, builtQuotaImage, gap: MenuBarStatusRenderer.groupGap
+        )
 
         guard gasTownProvider.isDaemonRunning else { return baseImage }
 

@@ -95,6 +95,37 @@ The **11 onboarded coding agents** below declare their stage in [`replaydata/age
 
 → [Adapters reference](https://ingo-eichhorst.github.io/Irrlicht/docs/adapters.html#maturity-stages) for stage criteria, watch paths, model detection, and roadmap.
 
+## The menu bar icon is hidden
+
+macOS gives every app a slice of the menu bar and hands out what's left in
+launch order. On a 13" or 14" screen — or any screen with a crowded menu bar —
+Irrlicht's icon can end up behind the notch or behind the frontmost app's
+menus, where you can neither see nor click it. Four things to try, cheapest
+first:
+
+1. **Cmd-drag it somewhere you can see.** Hold ⌘ and drag the icon along the
+   menu bar. Irrlicht asks macOS to remember the spot, so it should still be
+   there after a quit and a relaunch.
+2. **Switch to a narrower icon style.** Settings → *Menu Bar Icon*. **Compact**
+   collapses every project into one dot with a session count and drops the
+   quota bars, so its width stays the same no matter how many projects you
+   have open — from two projects on it is the narrowest style (measured:
+   18.5pt, against 90pt for Lights and 117pt for Combined at six projects).
+   **Lights** (the default) draws one dot-group per project and grows with
+   them; **Combined** is the widest, adding quota bars on the right.
+3. **Mind the notch.** On a notched Mac the menu bar has a dead zone in the
+   middle. macOS does not flow icons around it — an icon pushed into that
+   range is simply not drawn. Removing any other status item, or using a
+   narrower style, moves Irrlicht back out.
+4. **Use a menu bar manager** if you run a lot of status items:
+   [Ice](https://github.com/jordanbaird/Ice) (free, open source),
+   [Bartender](https://www.macbartender.com/), or
+   [Hidden Bar](https://github.com/dwarvesf/hidden). All three let you pin
+   Irrlicht to the always-visible section.
+
+If the icon is gone entirely and none of the above brings it back, Irrlicht is
+probably not running — relaunch it from `/Applications`.
+
 ## Posture
 
 Local-first · no telemetry · MIT · ~5 MB RAM · signed Homebrew cask · transcripts read-only.
