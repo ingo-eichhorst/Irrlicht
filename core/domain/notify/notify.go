@@ -18,8 +18,11 @@ package notify
 
 import "time"
 
-// State is a session's position in the three-state machine of events.md:
-// working, waiting, ready. The engine tolerates values outside these three —
+// State is a session's position in the lifecycle machine of events.md. The
+// vocabulary is session.CanonicalStates(); this package spells it again
+// rather than importing it, because notify imports nothing from the rest of
+// the module (§5.1, ADR-5) — vocabulary_test.go's TestStateVocabularyMatchesTheDomain
+// holds the two copies together. The engine tolerates values outside it —
 // wire input is untrusted, and a future state name must degrade silent.
 type State string
 
@@ -27,6 +30,12 @@ const (
 	StateWorking State = "working"
 	StateWaiting State = "waiting"
 	StateReady   State = "ready"
+	// StateError is the session's own machinery having failed: the provider
+	// refused the call, credentials were rejected, the agent process died
+	// mid-turn. It notifies on the same terms as waiting rather than ready's
+	// — it is cleared by the next SUCCESSFUL turn and by nothing else, so it
+	// cannot flap back inside a hold-down and there is nothing to debounce.
+	StateError State = "error"
 )
 
 // EventKind names what happened; anything unrecognized is ignored rather
@@ -123,6 +132,7 @@ type Config struct {
 	BurstThreshold int           // default 3: a 4th candidate within BurstWindow becomes a summary
 	TTLWaiting     time.Duration // default 1h
 	TTLReady       time.Duration // default 10m
+	TTLError       time.Duration // default 1h; an error stays true like a waiting does
 	TTLDaemon      time.Duration // default 10m (watchdog + reconnect)
 	DaemonGrace    time.Duration // default 60s before a disconnect push (§6.4)
 }
@@ -138,6 +148,7 @@ func DefaultConfig() Config {
 		BurstThreshold: 3,
 		TTLWaiting:     time.Hour,
 		TTLReady:       10 * time.Minute,
+		TTLError:       time.Hour,
 		TTLDaemon:      10 * time.Minute,
 		DaemonGrace:    60 * time.Second,
 	}

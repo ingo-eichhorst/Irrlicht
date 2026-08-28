@@ -69,6 +69,7 @@ func fastConfig() Config {
 		BurstThreshold: 2,
 		TTLWaiting:     111 * time.Second,
 		TTLReady:       222 * time.Second,
+		TTLError:       444 * time.Second,
 		TTLDaemon:      333 * time.Second,
 		DaemonGrace:    400 * time.Millisecond,
 	}
@@ -146,7 +147,8 @@ func runStorm(t *testing.T, rng *rand.Rand, seed int64, iter int) {
 			if rec, known := o.sessions[id]; known && rng.Intn(4) == 0 {
 				st = rec.state // explicit duplicate same-state update
 			} else {
-				st = []State{StateWorking, StateWaiting, StateReady, State("compacting")}[rng.Intn(4)]
+				jumps := append(allStates, State("compacting"))
+				st = jumps[rng.Intn(len(jumps))]
 			}
 			label := "L-" + id
 			if rng.Intn(3) == 0 {
@@ -227,6 +229,7 @@ type stormOracle struct {
 type oracleIdentity struct {
 	lastWaitingPush time.Time
 	lastReadyPush   time.Time
+	lastErrorPush   time.Time
 }
 
 type oracleSession struct {
@@ -252,9 +255,15 @@ func newStormOracle(cfg Config) *stormOracle {
 
 // checkPushes grades one call's pushes against the model as it stood BEFORE
 // the call's event is applied. That is sound on both push sources: due-timer
-// pushes chronologically precede the event, and the only event-driven
-// session push (the waiting edge) requires a session already known before
-// the event.
+// pushes chronologically precede the event, and the event-driven session
+// pushes (the waiting and error edges) require a session already known
+// before the event.
+//
+// It is also why neither of those two edges is graded against rec.state the
+// way the ready edge is: ready is fired by a timer, so the model already
+// holds StateReady when its push is checked, while waiting and error are
+// fired by the very event the model has not applied yet. That the error edge
+// is not held down is asserted directly, in TestErrorIsNotHeldDown.
 func (o *stormOracle) checkPushes(fail func(string, ...any), pushes []Push, now time.Time) {
 	for i, p := range pushes {
 		if p.Payload.Version != payloadVersion {
@@ -309,7 +318,7 @@ func (o *stormOracle) checkSessionPush(fail func(string, ...any), i int, p Push,
 	if edge == StateWorking {
 		fail("push %d: I2: session push with state working", i)
 	}
-	if edge != StateWaiting && edge != StateReady {
+	if edge != StateWaiting && edge != StateReady && edge != StateError {
 		fail("push %d: session push on a non-edge state %q", i, edge)
 		return
 	}
@@ -319,16 +328,24 @@ func (o *stormOracle) checkSessionPush(fail func(string, ...any), i int, p Push,
 				i, id, now.Sub(rec.stateAt), o.cfg.HoldDown, rec.state)
 		}
 	}
-	last := rec.ident.lastWaitingPush
-	if edge == StateReady {
+	var last time.Time
+	switch edge {
+	case StateReady:
 		last = rec.ident.lastReadyPush
+	case StateError:
+		last = rec.ident.lastErrorPush
+	default:
+		last = rec.ident.lastWaitingPush
 	}
 	if !last.IsZero() && now.Sub(last) < o.cfg.Cooldown {
 		fail("push %d: I4: %s push for %q only %v after the last (cooldown %v)", i, edge, id, now.Sub(last), o.cfg.Cooldown)
 	}
-	if edge == StateReady {
+	switch edge {
+	case StateReady:
 		rec.ident.lastReadyPush = now
-	} else {
+	case StateError:
+		rec.ident.lastErrorPush = now
+	default:
 		rec.ident.lastWaitingPush = now
 	}
 
@@ -344,8 +361,11 @@ func (o *stormOracle) checkSessionPush(fail func(string, ...any), i int, p Push,
 	o.pushTimes = append(o.pushTimes, now)
 
 	wantTTL, wantUrgency := o.cfg.TTLWaiting, UrgencyHigh
-	if edge == StateReady {
+	switch edge {
+	case StateReady:
 		wantTTL, wantUrgency = o.cfg.TTLReady, UrgencyNormal
+	case StateError:
+		wantTTL = o.cfg.TTLError
 	}
 	if p.TTL != wantTTL || p.Urgency != wantUrgency || !p.Renotify || p.Topic != id {
 		fail("push %d: I8: %s push headers wrong: %+v", i, edge, p)
@@ -422,6 +442,9 @@ func (o *stormOracle) applyEvent(ev Event, now time.Time) {
 		}
 		if old.ident.lastReadyPush.After(dst.ident.lastReadyPush) {
 			dst.ident.lastReadyPush = old.ident.lastReadyPush
+		}
+		if old.ident.lastErrorPush.After(dst.ident.lastErrorPush) {
+			dst.ident.lastErrorPush = old.ident.lastErrorPush
 		}
 	case EventDaemonDown:
 		if ev.DaemonID == "" {

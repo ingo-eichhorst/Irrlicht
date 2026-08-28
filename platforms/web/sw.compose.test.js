@@ -136,6 +136,37 @@ describe('composeNotification (arc42 §8.2/§8.4)', () => {
     expect(n.renotify).toBe(true)
   })
 
+  test('session error → "<label> hit an error", never ready\'s verb', () => {
+    // The three-state ternary this replaced rendered every non-waiting state
+    // as "is ready", so an agent that died mid-turn announced itself as
+    // finished — the most misleading string the composer could produce.
+    const n = sw.composeNotification({
+      v: 1, kind: 'session', session_id: 's-3', label: 'gemini-cli',
+      project: 'relay', state: 'error', at: 1755000000, renotify: true,
+    })
+    expect(n.title).toBe('gemini-cli hit an error')
+    expect(n.body).toBe('relay')
+    expect(n.tag).toBe('s-3')
+  })
+
+  test('an unknown future state does not borrow a verb it has not earned', () => {
+    // Degrade-silent is the engine's rule for a state it does not know; the
+    // composer's version is to name the session without asserting anything
+    // about it, rather than guessing "is ready" as the old ternary did.
+    const n = sw.composeNotification({
+      v: 1, kind: 'session', session_id: 's-4', label: 'pi',
+      project: 'p', state: 'compacting', at: 1755000000, renotify: false,
+    })
+    expect(n.title).not.toContain('is ready')
+    expect(n.title).not.toContain('needs input')
+    expect(n.title).toContain('pi')
+    // A payload naming an inherited property must not resolve to a verb
+    // either, which is what a plain lookup object would have done.
+    expect(sw.composeNotification({
+      v: 1, kind: 'session', session_id: 's-5', label: 'pi', state: 'constructor', at: 1, renotify: false,
+    }).title).toBe('pi')
+  })
+
   test('summary → "N agents need attention" + member labels, tag "summary"', () => {
     const n = sw.composeNotification({
       v: 1, kind: 'summary', count: 3, sessions: ['claude-code', 'codex', 'aider'],

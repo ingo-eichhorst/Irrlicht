@@ -56,15 +56,31 @@ function daemonName(payload) {
 // `data` is what a tap can act on (R6): only the session kind names one
 // session, so only it carries an id. A summary names several and the daemon
 // kinds name none — they open the app with no target rather than guessing one.
+// One arm per state the engine notifies on (core/domain/notify). A state
+// this worker does not know names the session and asserts nothing: an
+// installed worker outlives the relay that pushes to it, so guessing is how
+// a `* → is ready` ternary announced an agent that had died mid-turn as
+// finished. A switch rather than a lookup object, so a payload naming an
+// inherited property ('constructor') cannot resolve to a verb either.
+function sessionVerb(state) {
+  switch (state) {
+    case 'waiting': return 'needs input';
+    case 'ready': return 'is ready';
+    case 'error': return 'hit an error';
+    default: return '';
+  }
+}
+
 self.composeNotification = function (payload) {
   if (!payload || payload.v !== 1 || typeof payload.kind !== 'string') {
     return genericNotification();
   }
   switch (payload.kind) {
     case 'session': {
-      const verb = payload.state === 'waiting' ? 'needs input' : 'is ready';
+      const who = payload.label || payload.session_id || 'Session';
+      const verb = sessionVerb(payload.state);
       return {
-        title: (payload.label || payload.session_id || 'Session') + ' ' + verb,
+        title: verb ? who + ' ' + verb : who,
         body: payload.project || '',
         tag: payload.session_id,
         renotify: !!payload.renotify,

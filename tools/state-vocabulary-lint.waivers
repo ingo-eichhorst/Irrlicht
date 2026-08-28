@@ -138,3 +138,24 @@ tools/onboarding-factory/internal/viewer/web/playbackTimeline.js expected_state 
 
 tools/replay-fixtures.sh                             census over the three states the replay corpus actually contains — CONDITIONAL on that corpus, which this gate never re-checks: #1803 adds error scenarios, and when they land this census divides by a total that includes `error` while omitting its row
 tools/irrlicht-design-system/ui_kits/dashboard/index.html a standalone demo UI kit, not the shipped dashboard
+
+# ---------------------------------------------------------------------------
+# N. THE NOTIFYING EDGES — a subset by policy, not by oversight (#1346)
+#
+# core/domain/notify's push policy divides the vocabulary in two: `waiting`,
+# `ready` and `error` are edges that produce a notification, and `working` is
+# not, because entering work is never news to a phone (§8.4 of
+# docs/mobile-notifications-arc42.md). Every site below names the notifying
+# three on one line for that reason, so completing the list would make each of
+# them WRONG rather than more complete.
+#
+# This is not a deferral and there is nothing tracking it. A fifth state does
+# have to be decided about here, but the decision is "does it notify", not "add
+# it to the list" — and that decision is enforced elsewhere, by
+# TestEveryCanonicalStateHasADecidedPolicy in vocabulary_test.go, which fails
+# on a canonical state the engine has no recorded policy for. That test is the
+# reason this waiver is safe; without it, waiving these sites would be exactly
+# the silence that let `error` reach production notifying nobody.
+
+core/domain/notify/engine.go        the three NOTIFYING edges; `working` is excluded by policy (§8.4)
+core/domain/notify/storm_test.go    the oracle grades those same three edges (§8.4)

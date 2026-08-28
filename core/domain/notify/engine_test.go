@@ -43,6 +43,7 @@ func TestDefaultConfigMatchesPolicyTable(t *testing.T) {
 		BurstThreshold: 3,
 		TTLWaiting:     time.Hour,
 		TTLReady:       10 * time.Minute,
+		TTLError:       time.Hour,
 		TTLDaemon:      10 * time.Minute,
 		DaemonGrace:    60 * time.Second,
 	}

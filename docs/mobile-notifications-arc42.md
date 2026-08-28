@@ -236,7 +236,7 @@ sequenceDiagram
     SW->>SW: fold, then setAppBadge — the only path that lowers it
 ```
 
-`* → waiting` follows the same path with no hold-down and TTL 1 h.
+`* → waiting` and `* → error` follow the same path with no hold-down and TTL 1 h.
 
 **What the PWA is when open.** Twice now this paragraph has been wrong, in opposite directions, and
 both errors are worth keeping visible. The first draft said the PWA becomes an ordinary WS client
@@ -388,6 +388,7 @@ House rule: absence of a finding and inability to look must never produce the sa
 |---|---|
 | `* → waiting` | Push immediately — latency is the feature |
 | `working → ready` | Push after 7 s hold-down; cancelled if the session leaves `ready` |
+| `* → error` | Push immediately, no hold-down. `error` is `session.StateError` — the session's own machinery failed (provider refused, credentials rejected, agent process died mid-turn), *not* a tool that returned non-zero. The hold-down exists because a `ready` is undone by a follow-up prompt within seconds; an error is cleared by the next SUCCESSFUL turn and by nothing else, so there is no flap to wait out. This edge was missing for the whole of the engine's first life: it was written against the three-state machine, the domain grew a fourth in #1796, and a session whose agent died mid-turn notified nobody. `TestStateVocabularyMatchesTheDomain` and `TestEveryCanonicalStateHasADecidedPolicy` are what make that non-repeatable |
 | `* → working` | Never |
 | First sighting / snapshot seed | Silent (no push), except a genuine state *diff* on reconcile (§6.3) |
 | Subagent sessions (`ParentSessionID` set) | Never — parent covers them (matches both existing client implementations) |
@@ -395,7 +396,7 @@ House rule: absence of a finding and inability to look must never produce the sa
 | Collapse | One notification per session. The device-side `tag` **is** the session id; the `Topic` header is `base64url(sha256(id))[:32]`, because RFC 8030 §5.4 caps a Topic at 32 base64url chars and a session UUID is 36. Same collapse semantics, deterministic, but the header never carries the id — which is also why it is a stable pseudonym rather than a leak of the id itself (§8.2) |
 | Cooldown | 60 s per (session, edge) — the backchannel engine's default |
 | Burst | > 3 pushes within 20 s → single summary "N agents need attention" (itself Topic-replaced) |
-| TTL | `waiting` 1 h · `ready` 10 m · watchdog 10 m — stale `ready` is noise, `waiting` stays true |
+| TTL and urgency | Per edge, and the split is one idea: a stale `ready` is noise, so it expires in 10 m at `normal` urgency. The other two notifying edges above stay TRUE until a human or a successful turn changes them, so both keep 1 h at `high`. Watchdog 10 m |
 | Presession → real-session rekey | The engine rekeys cooldown/hold-down state (the #1002 class) — **but nothing emits `EventRekey`**: the relay's mapper produces only session-update and session-delete (`push_observer.go` `sessionEvent`), so a promotion arrives as a delete plus a silent first sighting and the cooldown is dropped. Policy that is correct in the package and unreachable end-to-end; the relay has no promotion signal to map, since the wire protocol carries none (ADR-4) |
 
 ### 8.5 State on the phone

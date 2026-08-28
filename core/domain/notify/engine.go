@@ -32,13 +32,41 @@ type session struct {
 	label   string
 	project string
 
-	// lastWaitingPush / lastReadyPush are the per-(session, edge) cooldown
-	// stamps (§8.4). Zero means never pushed on that edge.
+	// lastWaitingPush / lastReadyPush / lastErrorPush are the
+	// per-(session, edge) cooldown stamps (§8.4). Zero means never pushed on
+	// that edge. Read and written through lastPushOn/recordPushOn so a
+	// fourth edge is one case arm rather than a third pair of call sites.
 	lastWaitingPush time.Time
 	lastReadyPush   time.Time
+	lastErrorPush   time.Time
 
 	holdDownPending bool
 	holdDownAt      time.Time
+}
+
+// lastPushOn / recordPushOn read and write the cooldown stamp for one edge.
+// An unrecognized edge shares the waiting stamp, which is where the engine's
+// degrade-silent path already sends anything it does not know.
+func (s *session) lastPushOn(edge State) time.Time {
+	switch edge {
+	case StateReady:
+		return s.lastReadyPush
+	case StateError:
+		return s.lastErrorPush
+	default:
+		return s.lastWaitingPush
+	}
+}
+
+func (s *session) recordPushOn(edge State, at time.Time) {
+	switch edge {
+	case StateReady:
+		s.lastReadyPush = at
+	case StateError:
+		s.lastErrorPush = at
+	default:
+		s.lastWaitingPush = at
+	}
 }
 
 func (s *session) cancelHoldDown() {
@@ -109,6 +137,9 @@ func New(cfg Config) *Engine {
 	}
 	if cfg.TTLReady == 0 {
 		cfg.TTLReady = def.TTLReady
+	}
+	if cfg.TTLError == 0 {
+		cfg.TTLError = def.TTLError
 	}
 	if cfg.TTLDaemon == 0 {
 		cfg.TTLDaemon = def.TTLDaemon
@@ -285,6 +316,15 @@ func (e *Engine) sessionUpdate(ev Event, now time.Time) []Push {
 	case ev.State == StateWaiting:
 		rec.cancelHoldDown()
 		return e.candidate(ev.SessionID, rec, StateWaiting, now)
+	case ev.State == StateError:
+		// Not held down, unlike ready. §6.2's hold-down exists because a
+		// ready is undone by a follow-up prompt within seconds; an error is
+		// cleared by the next SUCCESSFUL turn and by nothing else
+		// (session.StateError), so there is no flap to wait out. A session
+		// whose agent died mid-turn is the case a phone is most useful for,
+		// and holding it for 7s would only delay it.
+		rec.cancelHoldDown()
+		return e.candidate(ev.SessionID, rec, StateError, now)
 	case ev.State == StateReady:
 		// events.md says only working → ready occurs, but wire input is
 		// untrusted: any prev arms (or replaces) the hold-down.
@@ -301,24 +341,17 @@ func (e *Engine) sessionUpdate(ev Event, now time.Time) []Push {
 }
 
 // candidate runs one push candidate through cooldown and burst coalescing
-// (§8.4). edge is StateWaiting or StateReady and equals rec.state on every
-// path that reaches here.
+// (§8.4). edge is StateWaiting, StateReady or StateError, and equals
+// rec.state on every path that reaches here.
 func (e *Engine) candidate(id string, rec *session, edge State, now time.Time) []Push {
-	last := rec.lastWaitingPush
-	if edge == StateReady {
-		last = rec.lastReadyPush
-	}
+	last := rec.lastPushOn(edge)
 	// A suppressed candidate does not refresh the stamp — otherwise a
 	// flapping session could silence itself forever. Exactly Cooldown
 	// elapsed is allowed.
 	if !last.IsZero() && now.Sub(last) < e.cfg.Cooldown {
 		return nil
 	}
-	if edge == StateReady {
-		rec.lastReadyPush = now
-	} else {
-		rec.lastWaitingPush = now
-	}
+	rec.recordPushOn(edge, now)
 
 	e.window = append(e.window, windowEntry{at: now, sessionID: id})
 	e.pruneWindow(now)
@@ -330,9 +363,16 @@ func (e *Engine) candidate(id string, rec *session, edge State, now time.Time) [
 	// again.
 	e.summaryRenotifyArmed = true
 
+	// A stale ready is noise, so it expires in ten minutes and defers to the
+	// device's power state. A waiting and an error both stay TRUE until a
+	// human or a successful turn changes them, so both keep the long TTL and
+	// the urgency that wakes the phone.
 	ttl, urgency := e.cfg.TTLWaiting, UrgencyHigh
-	if edge == StateReady {
+	switch edge {
+	case StateReady:
 		ttl, urgency = e.cfg.TTLReady, UrgencyNormal
+	case StateError:
+		ttl = e.cfg.TTLError
 	}
 	return []Push{{
 		Topic:    id,
@@ -459,6 +499,9 @@ func (e *Engine) rekey(ev Event) {
 	}
 	if old.lastReadyPush.After(dst.lastReadyPush) {
 		dst.lastReadyPush = old.lastReadyPush
+	}
+	if old.lastErrorPush.After(dst.lastErrorPush) {
+		dst.lastErrorPush = old.lastErrorPush
 	}
 	if old.holdDownPending && (!dst.holdDownPending || old.holdDownAt.Before(dst.holdDownAt)) {
 		dst.holdDownPending, dst.holdDownAt = true, old.holdDownAt
