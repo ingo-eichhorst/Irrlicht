@@ -39,13 +39,20 @@ final class MenuBarController: NSObject {
     private var escapeMonitor: Any?
     private var resignObserver: NSObjectProtocol?
 
-    // Last-seen values for the menu-bar quota settings (issue #909), so the
-    // broad UserDefaults.didChangeNotification (fires for *any* default,
-    // mirroring the pattern SessionManager.init uses for sourcesSettingsChanged)
-    // only triggers a rebuild when one of these three actually changed.
-    private var lastMenuBarStyle = UserDefaults.standard.string(forKey: MenuBarStyle.storageKey) ?? ""
-    private var lastMenuBarQuotaProvider = UserDefaults.standard.string(forKey: MenuBarQuotaProvider.storageKey) ?? ""
-    private var lastMenuBarQuotaVisual = UserDefaults.standard.string(forKey: QuotaVisualStyle.storageKey) ?? ""
+    // Last-seen menu-bar icon settings (issue #909), so the broad
+    // UserDefaults.didChangeNotification (fires for *any* default, mirroring
+    // the pattern SessionManager.init uses for sourcesSettingsChanged) only
+    // triggers a rebuild when one of them actually changed.
+    //
+    // One Equatable value rather than one field per setting (#1852): the
+    // compact modifier was the fourth setting, and the old shape needed it
+    // added in four separate places, where forgetting any one leaves the icon
+    // stale until an unrelated event repaints it and nothing fails.
+    //
+    // Assigned in `init` rather than here, because the property initialiser
+    // would run BEFORE init's body — capturing the pre-migration style and
+    // making the first post-upgrade launch report a spurious change.
+    private var lastIconSettings: MenuBarIconSettings
 
     private static let escapeKeyCode: UInt16 = 53
 
@@ -64,6 +71,14 @@ final class MenuBarController: NSObject {
         // assignment is what makes AppKit look the new key up, so the value
         // has to be there first. See MenuBarStatusItemIdentity (#1845).
         MenuBarStatusItemIdentity.migrateLegacyPreferredPosition(in: UserDefaults.standard)
+        // Carry a user off #1849's Compact *style* onto the equivalent style
+        // plus modifier, BEFORE anything reads either key: an unmigrated
+        // `menuBarStyle = "compact"` does not parse, so it would fall back to
+        // Lights with the modifier off and silently discard the choice.
+        // See MenuBarAppearance.migrateLegacyCompactStyle (#1852).
+        MenuBarAppearance.migrateLegacyCompactStyle(in: UserDefaults.standard)
+        // Only now is the store settled enough to snapshot as "last seen".
+        self.lastIconSettings = MenuBarIconSettings.current(in: .standard)
 
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         // Declaring the name is what makes the user's Cmd-drag position a
@@ -157,21 +172,14 @@ final class MenuBarController: NSObject {
             // (what SessionManager's sourcesSettingsChanged observer actually
             // uses), a plain Combine publisher delivers on whatever thread
             // posted the notification. Hop to main before the compactMap
-            // below mutates lastMenuBarStyle/etc — those are plain, non-atomic
-            // properties read/written elsewhere on the main thread.
+            // below mutates lastIconSettings — a plain, non-atomic property
+            // read/written elsewhere on the main thread.
             .receive(on: RunLoop.main)
             .compactMap { [weak self] _ -> Void? in
                 guard let self else { return nil }
-                let style = UserDefaults.standard.string(forKey: MenuBarStyle.storageKey) ?? ""
-                let provider = UserDefaults.standard.string(forKey: MenuBarQuotaProvider.storageKey) ?? ""
-                let visual = UserDefaults.standard.string(forKey: QuotaVisualStyle.storageKey) ?? ""
-                guard style != self.lastMenuBarStyle
-                    || provider != self.lastMenuBarQuotaProvider
-                    || visual != self.lastMenuBarQuotaVisual
-                else { return nil }
-                self.lastMenuBarStyle = style
-                self.lastMenuBarQuotaProvider = provider
-                self.lastMenuBarQuotaVisual = visual
+                let settings = MenuBarIconSettings.current(in: .standard)
+                guard settings != self.lastIconSettings else { return nil }
+                self.lastIconSettings = settings
                 return ()
             }
             .eraseToAnyPublisher()

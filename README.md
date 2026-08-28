@@ -106,17 +106,35 @@ first:
 1. **Cmd-drag it somewhere you can see.** Hold ⌘ and drag the icon along the
    menu bar. Irrlicht asks macOS to remember the spot, so it should still be
    there after a quit and a relaunch.
-2. **Switch to a narrower icon style.** Settings → *Menu Bar Icon*. **Compact**
-   collapses every project into one dot with a session count and drops the
-   quota bars, so its width stays the same no matter how many projects you
-   have open — from two projects on it is the narrowest style (measured:
-   18.5pt, against 90pt for Lights and 117pt for Combined at six projects).
-   **Lights** (the default) draws one dot-group per project and grows with
-   them; **Combined** is the widest, adding quota bars on the right.
+2. **Turn on Compact.** Settings → *Menu Bar Icon* → **Compact**. It is a
+   toggle on whichever style you already use, not a style of its own, so you
+   keep the content you picked and only change how densely it is drawn: every
+   project collapses into one dot with a session count, and on *Usage* the
+   quota bars switch to the narrow, label-less layout *Combined* already uses.
+   Its width then stops growing with your project count.
+
+   Measured in points, by `cd platforms/macos && swift test --filter
+   testMeasuredWidthOfEachStyle` (a committed test, not numbers typed by
+   hand) — `+C` is Compact on:
+
+   | projects | Lights | Lights+C | Usage | Usage+C | Combined | Combined+C |
+   |---|---|---|---|---|---|---|
+   | 1 | 10.00 | 18.50 | 50.00 | 20.80 | 36.80 | 45.30 |
+   | 2 | 26.00 | 18.50 | 50.00 | 20.80 | 52.80 | 45.30 |
+   | 3 | 42.00 | 18.50 | 50.00 | 20.80 | 68.80 | 45.30 |
+   | 5 | 74.00 | 18.50 | 50.00 | 20.80 | 100.80 | 45.30 |
+   | 6 | 90.00 | 18.50 | 50.00 | 20.80 | 116.80 | 45.30 |
+   | 8 | 90.00 | 18.50 | 50.00 | 20.80 | 116.80 | 45.30 |
+
+   Lights plateaus at 90.00 because only five dot-groups plus an overflow
+   marker are ever drawn. Compact costs width only in the trivial
+   one-project case (18.50 against 10.00) and wins from two projects on,
+   which is the crowded menu bar this section is about. With Compact **off**,
+   every style renders exactly what it always did.
 3. **Mind the notch.** On a notched Mac the menu bar has a dead zone in the
    middle. macOS does not flow icons around it — an icon pushed into that
-   range is simply not drawn. Removing any other status item, or using a
-   narrower style, moves Irrlicht back out.
+   range is simply not drawn. Removing any other status item, or turning on
+   Compact, moves Irrlicht back out.
 4. **Use a menu bar manager** if you run a lot of status items:
    [Ice](https://github.com/jordanbaird/Ice) (free, open source),
    [Bartender](https://www.macbartender.com/), or
