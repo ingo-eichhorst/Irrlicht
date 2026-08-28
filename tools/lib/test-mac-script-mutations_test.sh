@@ -11,7 +11,7 @@
 # when the thing it protects is broken — so each gate is broken here, one at a
 # time, and the lock test is required to go red naming that specific gate.
 #
-# Twenty-two mutations, applied and asserted SEPARATELY. A single combined mutation
+# Twenty-three mutations, applied and asserted SEPARATELY. A single combined mutation
 # could go red on one gate while another was silently unguarded, which is the
 # exact shape of defect this whole file exists to rule out. Each one is written
 # as the plausible REGRESSION, not as arbitrary damage: the reachability abort
@@ -215,17 +215,30 @@ red_case "swift-status" \
 # Developer-ID bundle. This row is why the codesign stub emits a realistic line
 # count: a one-line stub cannot reproduce the SIGPIPE and passed regardless.
 red_case "backup-refresh" \
-  "F1: the Developer-ID check is piped into grep -q again" \
+  "F1a: the Developer-ID check goes straight back through a pipe" \
   "$SUBJECT" \
-  $'    CODESIGN_INFO="$(codesign -dv --verbose=4 "$PROD_APP" 2>&1 || true)"\n    if printf \'%s\\n\' "$CODESIGN_INFO" | grep -q "^Authority=Developer ID Application"; then' \
+  $'    CODESIGN_INFO="$(codesign -dv --verbose=4 "$PROD_APP" 2>&1 || true)"\n    if [[ "$NL$CODESIGN_INFO" == *"${NL}Authority=Developer ID Application"* ]]; then' \
   $'    if codesign -dv --verbose=4 "$PROD_APP" 2>&1 | grep -q "^Authority=Developer ID Application"; then' \
+  'GATE backup-freshness: the stale backup was NOT refreshed'
+
+# ── 10b. ...and the INTERMEDIATE wrong fix, which is the subtle one ────────
+# "Capture first, then pipe the capture into grep -q" looks like it fixes F1
+# and does not: the producer is now `printf` instead of `codesign`, but it is
+# still a producer racing a `grep -q` that exits early. It survives only while
+# the captured text fits one pipe buffer, i.e. by headroom rather than by
+# construction. This row is what forces the match to happen IN-SHELL.
+red_case "backup-refresh" \
+  "F1b: the captured output is piped into grep -q (fix by headroom, not construction)" \
+  "$SUBJECT" \
+  $'    if [[ "$NL$CODESIGN_INFO" == *"${NL}Authority=Developer ID Application"* ]]; then' \
+  $'    if printf \'%s\\n\' "$CODESIGN_INFO" | grep -q "^Authority=Developer ID Application"; then' \
   'GATE backup-freshness: the stale backup was NOT refreshed'
 
 # ── 11. ...and the same hazard in the teardown half ───────────────────────
 red_case "restore-signed" \
   "F1: restore-prod.sh's Developer-ID check is piped into grep -q again" \
   ".claude/skills/ir:test-mac/restore-prod.sh" \
-  $'elif { CODESIGN_INFO="$(codesign -dv --verbose=4 "$PROD_APP" 2>&1 || true)"\n       printf \'%s\\n\' "$CODESIGN_INFO" | grep -q "^Authority=Developer ID Application"; }; then' \
+  $'elif { CODESIGN_INFO="$(codesign -dv --verbose=4 "$PROD_APP" 2>&1 || true)"\n       [[ "$NL$CODESIGN_INFO" == *"${NL}Authority=Developer ID Application"* ]]; }; then' \
   $'elif codesign -dv --verbose=4 "$PROD_APP" 2>&1 | grep -q "^Authority=Developer ID Application"; then' \
   'restore-prod: a genuine Developer-ID app with no backup'
 

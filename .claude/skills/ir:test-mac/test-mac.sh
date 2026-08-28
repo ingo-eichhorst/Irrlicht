@@ -104,6 +104,7 @@ DEBUG_DIR="$REPO_ROOT/platforms/macos/.build/arm64-apple-macosx/debug"
 DEBUG_BIN="$DEBUG_DIR/Irrlicht"
 DEBUG_SPARKLE="$DEBUG_DIR/Sparkle.framework"
 ENTITLEMENTS="$SWIFT_SRC_DIR/Resources/Irrlicht-dev.entitlements"
+NL=$'\n'   # line-start anchor for the in-shell codesign match below
 
 # ─── Step 0c: everything the two axes derive ───────────────────────────────
 if [[ "$MODE" == "replace" ]]; then
@@ -273,17 +274,20 @@ if want_app; then
     # signed (a prior replace-mode run's dev build, still installed) and no
     # backup exists either, REFUSE rather than overwrite the only remaining
     # copy with no safety net.
-    # CAPTURE FIRST, MATCH SECOND — never `codesign … | grep -q` in the
-    # condition. `grep -q` exits at its first match; the real
-    # `codesign -dv --verbose=4` writes 28 unbuffered lines with `Authority=`
-    # at line 20, so it is still writing when the pipe closes and dies of
-    # SIGPIPE (141). Under `set -o pipefail` that 141 IS the pipeline's status,
-    # so the branch is skipped EXACTLY WHEN THE APP IS GENUINELY SIGNED —
-    # measured 5/5 against a real Developer-ID bundle. This gate ran fine as a
-    # fenced block because those had no pipefail; adding it is what broke it
-    # (#1855 review F1).
+    # NO PIPE IN THIS CONDITION — not `codesign … | grep -q`, and not a capture
+    # piped into `grep -q` either. `grep -q` exits at its first match, so
+    # anything still writing to that pipe dies of SIGPIPE (141), and under
+    # `set -o pipefail` the 141 IS the pipeline's status — the branch is then
+    # skipped EXACTLY WHEN THE APP IS GENUINELY SIGNED. Both spellings were
+    # shipped and both were wrong (#1855 review F1): the direct pipe fails
+    # 5/5 against a real bundle, and capture-then-pipe only survives because
+    # ~1.5 KiB fits one write into a 64 KiB pipe buffer — it is correct by
+    # headroom, not by construction, and the padded fixture proves it fails.
+    # Matching in-shell has no second process, so there is no race at all.
+    # The leading newline anchors the match to the start of a line, which is
+    # what the old `grep "^Authority=…"` did.
     CODESIGN_INFO="$(codesign -dv --verbose=4 "$PROD_APP" 2>&1 || true)"
-    if printf '%s\n' "$CODESIGN_INFO" | grep -q "^Authority=Developer ID Application"; then
+    if [[ "$NL$CODESIGN_INFO" == *"${NL}Authority=Developer ID Application"* ]]; then
       rm -rf "$PROD_BACKUP"
       mkdir -p "$(dirname "$PROD_BACKUP")"
       if ! cp -R "$PROD_APP" "$PROD_BACKUP"; then
@@ -361,13 +365,13 @@ PLIST
   # the identity. Uses the dev-only entitlements file — no com.apple.developer.*
   # entries, which Apple gates to its own certificates and which would make
   # launchd refuse to spawn a self-signed/ad-hoc binary that claims them.
-  # Captured, not piped, for the same reason as the codesign check above: the
-  # real output is short enough to flush today (rc 0, 10/10), but if it ever
-  # grows past a pipe buffer this silently drops to ad-hoc signing and
-  # invalidates TCC on every rebuild — the exact thing the stable identity
+  # Matched in-shell, not piped, for the same reason as the codesign check
+  # above: a keychain with many identities would eventually outgrow the pipe
+  # buffer, and the failure mode is silent — it drops to ad-hoc signing and
+  # invalidates TCC on every rebuild, the exact thing the stable identity
   # exists to prevent.
   IDENTITIES="$(security find-identity -v -p codesigning 2>/dev/null || true)"
-  if printf '%s\n' "$IDENTITIES" | grep -q "Irrlicht Dev"; then
+  if [[ "$IDENTITIES" == *"Irrlicht Dev"* ]]; then
     codesign --force --deep --sign "Irrlicht Dev" --entitlements "$ENTITLEMENTS" "$APP_TARGET" 2>&1
   else
     codesign --force --deep --sign - --entitlements "$ENTITLEMENTS" "$APP_TARGET" 2>&1

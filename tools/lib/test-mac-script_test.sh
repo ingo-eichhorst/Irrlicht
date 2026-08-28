@@ -205,15 +205,29 @@ STUB
   # codesign: `-dv` reports the authority under test; anything else is a real
   # signing call and just succeeds.
   #
-  # THE OUTPUT SHAPE IS LOAD-BEARING, not decoration. The real
-  # `codesign -dv --verbose=4` writes 28 unbuffered lines to stderr with the
-  # `Authority=` block at line 20 (measured against
-  # .build/irrlicht-prod-backup/Irrlicht.app). A one-line stub fits a single
-  # write, so `… | grep -q` never SIGPIPEs it and the pipeline returns 0 — which
+  # THE OUTPUT SHAPE IS LOAD-BEARING, not decoration.
+  #
+  # The real `codesign -dv --verbose=4` writes 28 unbuffered lines to stderr
+  # with the `Authority=` block at line 20 (measured against
+  # .build/irrlicht-prod-backup/Irrlicht.app), so the header below mirrors that.
+  # A one-line stub fits a single write, never SIGPIPEs under `… | grep -q`, and
   # made GATE 3a pass against a script whose Developer-ID check could not
-  # succeed at all under `set -o pipefail` (rc 141, 5/5; #1855 review F1/F2).
-  # A stub that cannot reproduce the subject's real I/O shape is a stub that
-  # certifies the wrong thing.
+  # succeed at all under `set -o pipefail` (#1855 review F1/F2).
+  #
+  # THE LARGE TAIL IS WHY THIS IS DETERMINISTIC. `grep -q` exits at its first
+  # match; whether the writer then dies of SIGPIPE is a RACE — it only loses if
+  # it is still writing. The real codesign loses it essentially always because
+  # it is a real binary walking a bundle between writes (rc 141, 5/5 locally).
+  # A shell stub is fast enough to WIN that race, and did: the 28-line version
+  # reproduced the failure on this machine 22/22 but stayed GREEN on the GitHub
+  # macOS runner, so the F1 mutation rows silently proved nothing there.
+  #
+  # Volume replaces the timing hope with a structural guarantee: once the
+  # unread output exceeds the pipe buffer (64 KiB on macOS and Linux) the writer
+  # MUST block in write(), so a reader that has already exited leaves it holding
+  # a broken pipe. ~360 KiB is far past any of them. This is the same rule as
+  # "a fixture that waits by sleeping hasn't observed what it waits for"
+  # (AGENTS.md) — a fixture must not assert a race it merely tends to win.
   cat > "$b/codesign" <<'STUB'
 #!/bin/sh
 printf 'codesign %s\n' "$*" >>"$STUB_LOG"
@@ -224,8 +238,15 @@ case "$1" in
     printf '%s\n' "${STUB_CODESIGN_AUTHORITY:-Authority=Irrlicht Dev}" >&2
     printf 'Authority=Developer ID Certification Authority\n' >&2
     printf 'Authority=Apple Root CA\n' >&2
+    # Built in two loops rather than 4000 printfs: ~140 iterations total, so the
+    # padding costs milliseconds per call across all cases.
+    line='Tail=lines after the Authority block, padded so an unread pipe fills and the writer blocks .......'
+    block=''
     i=1
-    while [ "$i" -le 6 ]; do printf 'Tail-%02d=lines after the Authority block\n' "$i" >&2; i=$((i + 1)); done
+    while [ "$i" -le 36 ]; do block="$block$line
+"; i=$((i + 1)); done
+    i=1
+    while [ "$i" -le 100 ]; do printf '%s' "$block"; i=$((i + 1)); done >&2
     ;;
 esac
 exit 0

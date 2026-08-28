@@ -31,6 +31,7 @@ PROD_BACKUP="$MAIN_REPO/.build/irrlicht-prod-backup/Irrlicht.app"
 PORT="${IRRLICHT_TESTMAC_PORT:-7837}"
 
 APP_PATTERN="Irrlicht\.app/Contents/MacOS/Irrlicht"
+NL=$'\n'   # line-start anchor for the in-shell codesign match below
 
 echo "Stopping dev app + daemon…"
 pkill -f "$APP_PATTERN" 2>/dev/null || true   # the app (production or dev-overwritten)
@@ -76,17 +77,17 @@ elif [[ ! -d "$PROD_APP" ]]; then
   echo "       Run the DMG/PKG installer first, then re-run this script." >&2
   exit 1
 elif { CODESIGN_INFO="$(codesign -dv --verbose=4 "$PROD_APP" 2>&1 || true)"
-       printf '%s\n' "$CODESIGN_INFO" | grep -q "^Authority=Developer ID Application"; }; then
-  # CAPTURE FIRST, MATCH SECOND. `codesign … | grep -q` in the condition looks
-  # right and is wrong under this file's own `set -o pipefail`: grep -q exits at
-  # its first match, the real `codesign -dv --verbose=4` is 28 unbuffered lines
-  # with Authority= at line 20, so codesign dies of SIGPIPE (141) and pipefail
-  # makes 141 the pipeline's status — the arm is skipped EXACTLY WHEN THE APP IS
-  # GENUINELY SIGNED (measured 5/5 against a real Developer-ID bundle). This
-  # script would then fall through to the refusal below and tell someone with a
-  # correctly installed production app to reinstall it — after having already
-  # killed their app and daemon (#1855 review F1, found in test-mac.sh; the same
-  # line was here).
+       [[ "$NL$CODESIGN_INFO" == *"${NL}Authority=Developer ID Application"* ]]; }; then
+  # NO PIPE IN THIS CONDITION. `codesign … | grep -q` looks right and is wrong
+  # under this file's own `set -o pipefail`: grep -q exits at its first match,
+  # codesign is still writing, dies of SIGPIPE (141), and pipefail makes 141 the
+  # pipeline's status — so the arm is skipped EXACTLY WHEN THE APP IS GENUINELY
+  # SIGNED (measured 5/5 against a real Developer-ID bundle). This script would
+  # then fall through to the refusal below and tell someone with a correctly
+  # installed production app to reinstall it, after having already killed their
+  # app and daemon. Capturing and THEN piping into grep -q is the same bug with
+  # more headroom; matching in-shell has no second process and no race
+  # (#1855 review F1, found in test-mac.sh — the same line was here).
   echo "No backup at $PROD_BACKUP — $PROD_APP is already genuinely production-signed; nothing to restore."
 else
   echo "ERROR: $PROD_APP is not Developer-ID-signed (looks like a leftover dev build) and no backup exists at $PROD_BACKUP." >&2
