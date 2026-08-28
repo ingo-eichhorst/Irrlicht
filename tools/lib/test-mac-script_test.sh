@@ -240,13 +240,25 @@ case "$1" in
     printf 'Authority=Apple Root CA\n' >&2
     # Built in two loops rather than 4000 printfs: ~140 iterations total, so the
     # padding costs milliseconds per call across all cases.
+    #
+    # `|| exit 141` is the part that makes this portable. Volume guarantees the
+    # writer is still writing when a `grep -q` reader exits; it does NOT
+    # guarantee how THIS shell reports that. If SIGPIPE is delivered, the stub
+    # dies 141 on its own; if it is ignored or handled (which varies by /bin/sh
+    # build), write() returns EPIPE, printf reports failure, and without this
+    # the stub would run on to `exit 0` and hand the pipeline a SUCCESS. That
+    # is exactly what happened: the direct-pipe mutation went red on the dev
+    # machine and stayed GREEN on the GitHub macOS runner, while the sibling
+    # mutation whose producer is the script's own printf went red on both.
+    # Reporting the broken pipe explicitly models what the real codesign does
+    # (measured: rc 141) without depending on signal disposition.
     line='Tail=lines after the Authority block, padded so an unread pipe fills and the writer blocks .......'
     block=''
     i=1
     while [ "$i" -le 36 ]; do block="$block$line
 "; i=$((i + 1)); done
     i=1
-    while [ "$i" -le 100 ]; do printf '%s' "$block"; i=$((i + 1)); done >&2
+    while [ "$i" -le 100 ]; do printf '%s' "$block" || exit 141; i=$((i + 1)); done >&2
     ;;
 esac
 exit 0
@@ -663,6 +675,44 @@ case_abort_hint() {
   fi
 }
 
+# ─── The codesign stub must reproduce the hazard it exists to reproduce ────
+# The two most valuable mutation rows (F1a/F1b in the fixtures file) assert
+# that piping codesign into `grep -q` breaks the Developer-ID check. That only
+# proves anything if THIS stub actually reports a broken pipe. The first
+# version could not (one line, no SIGPIPE) and the second could only when
+# SIGPIPE was delivered — which the GitHub runner did not do, so the rows
+# stayed green there while passing here. This case pins the property directly
+# instead of leaving it as an assumption inside a heredoc.
+case_stub_fidelity() {
+  local R rc rc_ignored out
+  R=$(new_env)
+  for mode in default ignored; do
+    if [[ "$mode" == ignored ]]; then pre='trap "" PIPE; '; else pre=''; fi
+    out=$(env -i PATH="/usr/bin:/bin" STUB_LOG="$R/stub.log" \
+            STUB_CODESIGN_AUTHORITY="Authority=Developer ID Application: X" \
+            bash -c "${pre}set -o pipefail; \"\$1\" -dv --verbose=4 x 2>&1 | grep -q '^Authority=Developer ID Application'; echo \$?" \
+            _ "$R/bin/codesign" 2>&1)
+    if [[ "$mode" == default ]]; then rc="$out"; else rc_ignored="$out"; fi
+  done
+  if [[ "$rc" != 141 ]]; then
+    fail "STUB-FIDELITY: piping the codesign stub into grep -q returned '$rc', not 141 — the stub no longer reproduces the SIGPIPE hazard, so the F1 mutation rows prove nothing"
+  elif [[ "$rc_ignored" != 141 ]]; then
+    fail "STUB-FIDELITY: with SIGPIPE IGNORED the stub returned '$rc_ignored', not 141 — it depends on signal delivery, so the F1 rows go green on any host that ignores SIGPIPE (this is exactly what the GitHub runner did)"
+  else
+    pass "STUB-FIDELITY: the codesign stub reports a broken pipe as 141 under both signal dispositions"
+  fi
+  # ...and it must still be MATCHABLE when read whole, or every backup case is
+  # passing for the wrong reason.
+  out=$(env -i PATH="/usr/bin:/bin" STUB_LOG="$R/stub.log" \
+          STUB_CODESIGN_AUTHORITY="Authority=Developer ID Application: X" \
+          bash -c 'C="$("$1" -dv --verbose=4 x 2>&1 || true)"; case "
+$C" in *"
+Authority=Developer ID Application"*) echo MATCH ;; *) echo NOMATCH ;; esac' _ "$R/bin/codesign" 2>&1)
+  [[ "$out" == MATCH ]] \
+    && pass "STUB-FIDELITY: ...and its output still carries a line-anchored Authority= line when read whole" \
+    || fail "STUB-FIDELITY: reading the stub's output whole does not find a line-anchored Authority= line (got '$out') — the backup cases would pass for the wrong reason"
+}
+
 # ─── The seams are honoured BEHAVIOURALLY, not just present as text ────────
 # The text guard at the top would pass on a seam that survives only in a
 # comment, at which point every case silently starts driving the real
@@ -767,7 +817,7 @@ CASES=(happy reachability app-exit backup-refresh backup-refuse build-output
        enum kill-order freshness freshness-vacuous swift-status
        target-daemon target-macos target-macos-nodaemon
        daemon-launch separate-full sign-order install-details abort-hint
-       seams restore-signed restore-refuse preflight-trigger)
+       seams stub-fidelity restore-signed restore-refuse preflight-trigger)
 
 echo "== $NAME: $SCRIPT${CASE_FILTER:+ (case: $CASE_FILTER)} =="
 
