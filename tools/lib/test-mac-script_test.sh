@@ -598,7 +598,7 @@ case_abort_hint() {
   if [[ $ST -eq 0 ]]; then
     fail "GATE abort-hint: a failing launch after the install must not exit 0 — the bundle now holds a dev build: $(flat "$OUT")"
   elif [[ "$OUT" != *"now holds a DEV build"* || "$OUT" != *"restore-prod.sh"* ]]; then
-    fail "GATE abort-hint: it failed (exit $ST) after overwriting $PROD_APP but never said so, nor pointed at restore-prod.sh — the user is left with a silently dev-ified production bundle: $(flat "$OUT")"
+    fail "GATE abort-hint: it failed (exit $ST) after overwriting the production bundle but never said so, nor pointed at restore-prod.sh — the user is left with a silently dev-ified production bundle: $(flat "$OUT")"
   else
     pass "GATE abort-hint: a failure after the install names the dev-ified bundle and points at restore-prod.sh"
   fi

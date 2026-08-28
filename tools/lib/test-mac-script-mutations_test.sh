@@ -134,8 +134,8 @@ red_case "app-exit" \
 red_case "backup-refresh" \
   "backup freshness: an existing backup is trusted blindly" \
   "$SUBJECT" \
-  $'    if codesign -dv --verbose=4 "$PROD_APP" 2>&1 | grep -q "^Authority=Developer ID Application"; then' \
-  $'    if [[ ! -d "$PROD_BACKUP" ]] && codesign -dv --verbose=4 "$PROD_APP" 2>&1 | grep -q "^Authority=Developer ID Application"; then' \
+  $'    if printf \'%s\\n\' "$CODESIGN_INFO" | grep -q "^Authority=Developer ID Application"; then' \
+  $'    if [[ ! -d "$PROD_BACKUP" ]] && printf \'%s\\n\' "$CODESIGN_INFO" | grep -q "^Authority=Developer ID Application"; then' \
   'GATE backup-freshness: the stale backup was NOT refreshed'
 
 # ── 4. The no-safety-net refusal stops refusing ─────────────────────────────
