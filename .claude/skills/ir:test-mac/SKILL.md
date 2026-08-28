@@ -17,6 +17,7 @@ description: >
 **The procedure is a script. Run it — do not reimplement it inline.**
 
 ```bash
+cd "$(git rev-parse --show-toplevel)"                      # the paths below are repo-root-relative
 .claude/skills/ir:test-mac/test-mac.sh [MODE] [TARGET]     # defaults: replace full
 .claude/skills/ir:test-mac/test-mac.sh --help              # the full contract
 ```
@@ -94,7 +95,7 @@ Quitting the app is **not** enough, for two independent reasons:
   the dev build, so relaunching that bundle launches the **dev** binary.
 
 ```bash
-.claude/skills/ir:test-mac/restore-prod.sh
+"$(git rev-parse --show-toplevel)/.claude/skills/ir:test-mac/restore-prod.sh"
 ```
 
 It does the whole sequence: kill the app + daemon → restore the backed-up
@@ -127,6 +128,10 @@ that lock test to go red. Both run inside `tools/preflight.sh --only tools`.
   target port — a gate, not a courtesy sleep. If the app starts with nothing
   reachable on 7837 it runs `pkill -x irrlichd` and respawns a daemon **without**
   `--record`, silently defeating the run.
+- If it fails **after** overwriting `/Applications/Irrlicht.app` — the
+  reachability abort above is one such path — it says so and points at
+  `restore-prod.sh`, rather than leaving a silently dev-ified production bundle
+  behind with no hint that a teardown exists.
 
 ## Notes
 
@@ -135,6 +140,6 @@ that lock test to go red. Both run inside `tools/preflight.sh --only tools`.
 - **separate mode does NOT install hooks, by design (#1449).** `IRRLICHT_HOME` isolates daemon state; it does not move `~/.claude/settings.json`, `~/.codex/hooks.json` or `~/.config/kitty/kitty.conf`, which follow `$HOME`. A grant-all daemon on 7838 that installed hooks would repoint your REAL config at 7838 and leave it there when the dev daemon dies — the incident #1449 was filed for, which had already happened three times. Those installs are refused with an error naming each file, and the permission shows as "granted but NOT applied" in the wizard. Everything not backed by a shared config file (transcripts, watchers, control) works normally. To test hook installation itself, back the files up (`irrlichd --print-managed-files` lists them) and add `IRRLICHT_ALLOW_SHARED_CONFIG_WRITES=1` — then restore them afterwards.
 - **separate mode gets `IRRLICHT_PERMISSION_MODE=grant-all`**, because a fresh isolated state dir has no consent answers (#570) and the daemon would otherwise monitor nothing until the permission wizard is answered. Drop that variable (edit the script for the run) when the point of the session *is* the wizard. replace mode omits it, reading the user's real answers instead.
 - **replace mode — single instance on production's footprint.** Runs the dev binaries on port 7837 with the production state dir (no `IRRLICHT_HOME`), so the statusline quota feed and the production session/cost/ledger stores all apply, and (for `TARGET=macos`/`full`) the Swift app is installed directly into `/Applications/Irrlicht.app`. Because the dev daemon runs with `--record`, recordings land in the production recordings dir (`~/.local/share/irrlicht/recordings/`). **⚠️ The dev daemon mutates production data.** Without `IRRLICHT_HOME` its startup sweeps (`PruneStale` / dead-proc / orphan-ledger / cost prune) run against the real `~/.local/share/irrlicht/` + `~/Library/Application Support/Irrlicht/` stores — exactly the isolation #448 added, deliberately removed here. Only use replace mode when the dev build's on-disk schema matches the installed production build; a dev branch mid-migration can prune or rewrite production sessions/ledgers/cost rows that the production binary then misreads.
-- **Backup freshness.** The production backup at `.build/irrlicht-prod-backup/Irrlicht.app` is refreshed automatically whenever `/Applications/Irrlicht.app` is still Developer-ID-signed (a genuine, untouched production build) — so installing a *new* production release via the DMG/PKG installer, then running replace mode again, captures the new release as the restore baseline instead of reinstalling a stale one. If the app is already dev-signed (mid-test) and the backup is missing (e.g. `.build` was wiped), the script refuses rather than overwriting the last remaining copy with no safety net — reinstall via the DMG/PKG installer to recover.
+- **Backup freshness.** The production backup lives at `.build/irrlicht-prod-backup/Irrlicht.app` in the **main checkout** — a stable absolute path, not a worktree-relative one, so it survives a worktree being removed. (The daemon binary at `core/bin/irrlichd` is anchored the same way, so the build and launch steps agree even when you run this from a worktree; the SOURCE compiled is still the worktree's.) It is refreshed automatically whenever `/Applications/Irrlicht.app` is still Developer-ID-signed (a genuine, untouched production build) — so installing a *new* production release via the DMG/PKG installer, then running replace mode again, captures the new release as the restore baseline instead of reinstalling a stale one. If the app is already dev-signed (mid-test) and the backup is missing (e.g. `.build` was wiped), the script refuses rather than overwriting the last remaining copy with no safety net — reinstall via the DMG/PKG installer to recover.
 - **TCC in replace mode.** The dev build is signed and launched at production's own path, so expect one extra Accessibility/Automation re-grant prompt the first time. Production's own grant (tied to its Developer ID signature) is unaffected once restored. Run `tools/dev-sign-setup.sh` once to install the `"Irrlicht Dev"` self-signed identity — the script signs with it when present, which gives the app a stable designated requirement so grants persist across rebuilds. Without it, every rebuild invalidates TCC.
 - Daemon logs: `/tmp/irrlichd-dev.log` · Swift app logs: `/tmp/irrlicht-app-dev.log`

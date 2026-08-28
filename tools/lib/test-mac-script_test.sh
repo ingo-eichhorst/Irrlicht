@@ -3,17 +3,24 @@
 # .claude/skills/ir:test-mac/test-mac.sh (#1855).
 #
 # WHAT THIS IS. #1855 turned nine fenced bash blocks in that skill's SKILL.md
-# into one script. Six gates were MOVED across in that extraction and three
-# were added; each has an incident behind it and several fail SILENTLY when
-# broken, which is exactly why an extraction is where they get lost. This file
-# drives the real script end to end and asserts each gate still holds.
-# tools/lib/test-mac-script-mutations_test.sh then breaks each gate in turn
-# and requires THIS file to go red — a green that was never red is a claim,
-# not evidence (AGENTS.md, Testing).
+# into one script. Six gates were MOVED across in that extraction and four were
+# added; each has an incident behind it and several fail SILENTLY when broken,
+# which is exactly why an extraction is where they get lost. This file drives
+# both of the skill's scripts end to end and asserts each gate still holds.
+# tools/lib/test-mac-script-mutations_test.sh then breaks each one in turn and
+# requires THIS file to go red — a green that was never red is a claim, not
+# evidence (AGENTS.md, Testing).
 #
-# SAFETY. The script under test kills processes and overwrites
-# /Applications/Irrlicht.app. Four things keep it off this machine, and every
-# one of them is load-bearing:
+# GATES ARE NOT THE WHOLE JOB. A gate says "it refuses correctly"; the CALL-SITE
+# cases below say "it does the right thing when it proceeds". That half exists
+# because a mutation battery over the first draft found eleven survivors and
+# every one was a call site — --record dropped from the daemon launch, the
+# replace-mode port changed, separate mode's whole bundle assembly never
+# executed. A refactor moves risk to call sites, and this ticket is a refactor.
+#
+# SAFETY. The scripts under test kill processes and overwrite (test-mac.sh) or
+# delete and replace (restore-prod.sh) /Applications/Irrlicht.app. Four things
+# keep them off this machine, and every one is load-bearing:
 #   1. IRRLICHT_TESTMAC_PROD_APP / _DEV_APP / _MAIN_REPO / _REPO_ROOT /
 #      _LOG_DIR / _PLISTBUDDY redirect every path it touches into a mktemp -d.
 #   2. HOME is that temp dir too, so the replace-mode socket path under
@@ -32,12 +39,14 @@
 #
 # CASE SELECTION. With no case named every case runs, which is what the `tools`
 # gate does. Naming one (argv, or $TESTMAC_CASE) runs only that one — which is
-# how the mutations fixture keeps its cost sane: it applies eleven mutations,
-# and re-running all fifteen cases for each of them took 194s and pushed the
-# whole `tools` gate from 116s to 327s, well past what the pre-push hook's 540s
-# budget can absorb alongside every other gate (measured, #1855). A NAME THAT
-# MATCHES NOTHING IS A REFUSAL (exit 2), never a quiet zero-case pass: a typo
-# in a fixture row must not produce the same output as a case that ran.
+# how the mutations fixture keeps its cost sane. Re-running every case for each
+# mutation took 194s for that file and pushed the whole `tools` gate from 116s
+# to 327s, past what the pre-push hook's 540s budget can absorb alongside every
+# other gate. Figures measured with:
+#     S=$(date +%s); tools/preflight.sh --only tools >/dev/null 2>&1; echo $(( $(date +%s) - S ))
+# re-run after any change here rather than trusted from this comment. A NAME
+# THAT MATCHES NOTHING IS A REFUSAL (exit 2), never a quiet zero-case pass: a
+# typo in a fixture row must not produce the same output as a case that ran.
 #
 # Convention follows tools/lib/install-uninstall_test.sh and
 # tools/lib/agents-md-lint_test.sh: plain bash, `set -uo pipefail` (never -e —
@@ -70,13 +79,27 @@ if [[ ! -x "$REPO_ROOT/$SCRIPT" ]]; then
 fi
 
 # The isolation seams are what keep every case below off the real machine. If
-# the script stops honouring them, this file would silently start driving the
-# real /Applications/Irrlicht.app — so refuse to run rather than find out.
+# either script stops honouring them, this file would silently start driving
+# the real /Applications/Irrlicht.app — so refuse to run rather than find out.
+#
+# This is a cheap TEXT check and it is deliberately not the only one: a seam
+# that survives only inside a comment would pass it. The `seams` case below is
+# the behavioural one — it points a seam at a fixture path and requires the
+# script's own error to name THAT path. Both exist because this check runs
+# before anything else and must be able to stop the file dead, while the case
+# is what actually proves the redirection works.
 for seam in IRRLICHT_TESTMAC_REPO_ROOT IRRLICHT_TESTMAC_MAIN_REPO IRRLICHT_TESTMAC_PROD_APP \
             IRRLICHT_TESTMAC_DEV_APP IRRLICHT_TESTMAC_LOG_DIR IRRLICHT_TESTMAC_PLISTBUDDY; do
   if ! grep -q "$seam" "$REPO_ROOT/$SCRIPT"; then
     echo "FAIL: $NAME — REFUSING TO RUN: $SCRIPT no longer honours \$$seam." >&2
     echo "      Without it this test drives the real production app and daemon." >&2
+    exit 2
+  fi
+done
+for seam in IRRLICHT_TESTMAC_MAIN_REPO IRRLICHT_TESTMAC_PROD_APP IRRLICHT_TESTMAC_PORT; do
+  if ! grep -q "$seam" "$REPO_ROOT/.claude/skills/ir:test-mac/restore-prod.sh"; then
+    echo "FAIL: $NAME — REFUSING TO RUN: restore-prod.sh no longer honours \$$seam." >&2
+    echo "      Without it the restore cases below delete the real /Applications/Irrlicht.app." >&2
     exit 2
   fi
 done
@@ -103,7 +126,14 @@ trap 'rm -rf "$WORK"' EXIT
 # something on the way past it.
 new_env() {
   local root
-  root="$(mktemp -d "$WORK/env.XXXXXX")" || return 1
+  # A failed mktemp must not yield an empty root: `IRRLICHT_TESTMAC_PROD_APP=`
+  # is an EMPTY override, so the script falls back to its real default and the
+  # case starts driving /Applications/Irrlicht.app. No caller checks new_env's
+  # status (they are all `R=$(new_env)`), so the refusal has to be fatal here.
+  if ! root="$(mktemp -d "$WORK/env.XXXXXX")" || [[ -z "$root" || ! -d "$root" ]]; then
+    echo "FAIL: $NAME — could not create a fixture root under $WORK; refusing to run a case that would fall back to the real machine" >&2
+    exit 2
+  fi
   mkdir -p "$root/home" "$root/bin" "$root/logs"
 
   # --- the worktree the script builds from ---
@@ -612,6 +642,33 @@ case_abort_hint() {
   fi
 }
 
+# ─── The seams are honoured BEHAVIOURALLY, not just present as text ────────
+# The text guard at the top would pass on a seam that survives only in a
+# comment, at which point every case silently starts driving the real
+# /Applications/Irrlicht.app. This case makes the script name the redirected
+# path in its own error: a message naming the fixture root can only come from
+# the override actually being read.
+case_seams() {
+  local R; R=$(new_env)
+  rm -rf "$R/Applications/Irrlicht.app"
+  run_script "$R" -- replace full
+  if [[ $ST -eq 0 ]]; then
+    fail "SEAMS: a missing production bundle must abort, but the script exited 0: $(flat "$OUT")"
+  elif [[ "$OUT" != *"$R/Applications/Irrlicht.app is not installed"* ]]; then
+    fail "SEAMS: the script did not name the FIXTURE bundle ($R/Applications/Irrlicht.app) — it is not reading \$IRRLICHT_TESTMAC_PROD_APP, so every case in this file is pointed at the real machine: $(flat "$OUT")"
+  else
+    pass "SEAMS: test-mac.sh resolves \$IRRLICHT_TESTMAC_PROD_APP to the fixture, not /Applications"
+  fi
+  R=$(new_env)
+  rm -rf "$R/Applications/Irrlicht.app"
+  run_restore "$R"
+  if [[ "$OUT" != *"$R/Applications/Irrlicht.app"* ]]; then
+    fail "SEAMS: restore-prod.sh did not name the FIXTURE bundle — it is not reading \$IRRLICHT_TESTMAC_PROD_APP, so the restore cases operate on the real /Applications/Irrlicht.app: $(flat "$OUT")"
+  else
+    pass "SEAMS: restore-prod.sh does too"
+  fi
+}
+
 # ─── restore-prod.sh — the teardown half, carrying the same F1 hazard ───────
 # It had no test at all. These two cases exist because the identical
 # `codesign … | grep -q` pipeline was in it, under its own `set -o pipefail`.
@@ -689,7 +746,7 @@ CASES=(happy reachability app-exit backup-refresh backup-refuse build-output
        enum kill-order freshness freshness-vacuous swift-status
        target-daemon target-macos target-macos-nodaemon
        daemon-launch separate-full sign-order install-details abort-hint
-       restore-signed restore-refuse preflight-trigger)
+       seams restore-signed restore-refuse preflight-trigger)
 
 echo "== $NAME: $SCRIPT${CASE_FILTER:+ (case: $CASE_FILTER)} =="
 

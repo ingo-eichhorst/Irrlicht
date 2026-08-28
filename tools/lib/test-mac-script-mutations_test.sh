@@ -3,7 +3,8 @@
 # tools/lib/test-mac-script_test.sh (#1855).
 #
 # WHY THIS FILE EXISTS. Six gates in .claude/skills/ir:test-mac/test-mac.sh
-# were MOVED there out of SKILL.md's fenced bash blocks; three more were ADDED.
+# were MOVED there out of SKILL.md's fenced bash blocks; four more were ADDED,
+# and the review of this same PR added a further eleven CALL-SITE rows.
 # Either way there is no "before the fix" to run red: the lock test passes the
 # moment it is written. Per AGENTS.md's Testing section and
 # docs/testing-philosophy.md it earns its place only by being seen to fail
@@ -32,10 +33,13 @@
 # tools/lib/checkpoint-idiom-guard-mutations_test.sh.
 #
 # COST. Each row runs the lock test scoped to the ONE case it is about (see
-# red_case below). Running all fifteen cases per row instead cost 194s here and
-# took the whole `tools` gate from 116s to 327s — against a 540s budget the
-# pre-push hook shares with every other gate, which is a regression for every
-# push in the repo, not just this one (measured, #1855).
+# red_case below). Running every case per row instead cost 194s here and took
+# the whole `tools` gate from 116s to 327s — against a 540s budget the pre-push
+# hook shares with every other gate, which is a regression for every push in
+# the repo, not just this one. Measured with:
+#     S=$(date +%s); MUTATION_FIXTURES_STRICT=1 bash tools/lib/test-mac-script-mutations_test.sh >/dev/null 2>&1; echo $(( $(date +%s) - S ))
+#     S=$(date +%s); tools/preflight.sh --only tools >/dev/null 2>&1; echo $(( $(date +%s) - S ))
+# Re-measure rather than trusting these numbers after adding rows.
 
 set -uo pipefail
 
@@ -90,9 +94,9 @@ fails=0
 # red_case <case> <label> <file> <anchor> <replacement> <want_match>
 #
 # Scopes the lock test to the ONE case a mutation is about. Without this every
-# row re-ran all fifteen cases: 194s for this file and 327s for the whole
-# `tools` gate, against a 540s pre-push budget shared with every other gate
-# (measured, #1855). $TESTMAC_CASE is the spelling used because
+# row re-ran every case: 194s for this file and 327s for the whole `tools`
+# gate, against a 540s pre-push budget shared with every other gate (see COST
+# above for the commands). $TESTMAC_CASE is the spelling used because
 # mutation-assert.sh runs the lock test as a bare `bash <path>` and cannot
 # append an argument.
 #
