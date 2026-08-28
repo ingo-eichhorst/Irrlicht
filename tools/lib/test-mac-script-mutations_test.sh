@@ -138,8 +138,8 @@ red_case "app-exit" \
 red_case "backup-refresh" \
   "backup freshness: an existing backup is trusted blindly" \
   "$SUBJECT" \
-  $'    if printf \'%s\\n\' "$CODESIGN_INFO" | grep -q "^Authority=Developer ID Application"; then' \
-  $'    if [[ ! -d "$PROD_BACKUP" ]] && printf \'%s\\n\' "$CODESIGN_INFO" | grep -q "^Authority=Developer ID Application"; then' \
+  $'    if [[ "$NL$CODESIGN_INFO" == *"${NL}Authority=Developer ID Application"* ]]; then\n      rm -rf "$PROD_BACKUP"' \
+  $'    if [[ ! -d "$PROD_BACKUP" && "$NL$CODESIGN_INFO" == *"${NL}Authority=Developer ID Application"* ]]; then\n      rm -rf "$PROD_BACKUP"' \
   'GATE backup-freshness: the stale backup was NOT refreshed'
 
 # ── 4. The no-safety-net refusal stops refusing ─────────────────────────────
