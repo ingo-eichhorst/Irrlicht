@@ -183,6 +183,28 @@ restore_file() {
   # net even after the main flow already restored explicitly).
   if [[ "$RESTORED" -eq 0 && -f "$BACKUP" ]]; then
     cp -p "$BACKUP" "$FILE"
+    # `cp -p` preserves the BACKUP's mtime, which is the file's PRE-mutation
+    # mtime — so a correct restore would stamp the source as older than any
+    # build product compiled from the mutated source while it was applied.
+    # An mtime-driven build system then considers that product up to date and
+    # will not rebuild it: the mutated binary outlives the mutation, silently,
+    # and disagrees with both the source and the test suite that just passed.
+    #
+    # That is not hypothetical. During #1852 a `swift build` run against an
+    # applied mutation left `platforms/macos/.build/debug/Irrlicht` carrying
+    # `MenuBarAppearance.usesNarrowQuotaBars`'s `.combined` arm returning
+    # `isCompact` instead of `true`; the binary was installed 22 seconds after
+    # the restore and QA'd as a real product defect. Disassembly of the shipped
+    # binary against a fresh build differed by exactly ONE instruction out of
+    # 1,003,608 — that arm — while the source, the tests and `git status` were
+    # all clean and correct.
+    #
+    # Bumping the mtime is what makes the contamination self-healing: the next
+    # build of any mtime-driven toolchain rebuilds. Content is still restored
+    # byte-for-byte (that is what the caller is promised, and what the
+    # post-restore `cmp` and `git status` checks verify); only the timestamp
+    # differs, which git does not track.
+    touch "$FILE"
     rm -f "$BACKUP"
     RESTORED=1
   fi
