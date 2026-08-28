@@ -4,7 +4,9 @@ description: >
   Autonomously triage GitHub issues on ingo-eichhorst/Irrlicht. Diagnostic-only:
   assesses the spec, scores a 7-axis readiness rubric, lands the issue at
   ready-for-agent or needs-info, and emits an effective complexity level (1-10)
-  plus the run plan ir:exec should spend on it — one-line justification per label.
+  plus the run plan ir:exec should spend on it and a two-part time estimate
+  (agent-active range, and the human gates that stop the run) — one-line
+  justification per label.
   Triggers: "/ir:triage" (sweep), "/ir:triage #N" (single), "/ir:triage #N #M".
 ---
 
@@ -55,7 +57,7 @@ Every comment posted during triage **must** start with:
 2. **Verify (light).** For bugs, sanity-check that cited code paths still exist. Don't run tests. For enhancements, glance at `core/domain/` / `core/ports/` if proposed interfaces are named.
 3. **Assess the spec** (Spec assessment below) — lint the statements, name the quadrant, gate the open decisions. This *produces* the Specification verdict and the openness surcharge; don't also score Specification by eye.
 4. **Score the 7 axes** (Readiness Rubric below). Each axis is ✓ or ✗ with a one-liner. The verdict falls out of the scoring — except a ✗ on Observability, which is priced first and only blocks at High cost.
-5. **Level and route** (Complexity and Run plan below) — base level plus the surcharge from step 3, then read the band's row.
+5. **Level and route** (Complexity and Run plan below) — base level plus the surcharge from step 3, then read the band's row. The same level fixes the estimate's starting band; name the gates separately, because they cost calendar time the band cannot see.
 6. **Justify every label** — category, priority, scope, flags, milestone. One line each. If you can't justify, don't apply.
 7. **Post** the assessment using the template below.
 8. **Label and milestone** in a single `gh issue edit` call (one round-trip per issue). Close if `wontfix`.
@@ -221,6 +223,37 @@ Two rules the table cannot carry:
 
 The bands are **set, not measured** — a starting grid. `ir:exec`'s own diff tiers correct them once a real diff exists.
 
+### Estimate
+
+The run plan says what the run spends. The estimate says how long that spend takes and where it stops. It rides inside the run plan's carve-out — it constrains how the work is run, never what the code should do — so it costs no new licence to prescribe.
+
+Report two numbers, never one, for the same reason Complexity reports base and surcharge separately: a single figure hides which half the reader can act on.
+
+**Agent-active time** — start from the band the effective level lands in:
+
+| Effective level | Agent-active |
+|---|---|
+| 1–2 | 15–45 min |
+| 3–4 | 45 min – 2 h |
+| 5–6 | 1.5–3 h |
+| 7–8 | 2.5–5 h |
+| 9–10 | — blocked above; estimate each child on its own |
+
+Depart from the band only for a driver you can name and point at: a large committed fixture suite the change perturbs, a sub-step the issue itself marks optional, a gate you measured and found slow. "It feels bigger" is not a driver. Name the dominant term in the one-liner, so a reader can disagree with the right thing.
+
+**Gates** — every point where the agent stops and waits for a person. A gate is *not* a verdict change. It costs calendar time, agent time is unaffected, and the two never trade against each other. Name each gate and who clears it:
+
+- The plan-approval gate, on every `plan`-mode run (levels 7–8).
+- A physical or credentialed step the agent cannot perform mid-run — a drag on a real menu bar, a device reboot, a browser sign-in, a keychain prompt. The rubric already routes these to Observability at Low or Medium cost, which correctly leaves the verdict at `ready-for-agent`. That is a statement about *readiness*, not about *duration*: an issue can be startable and still unable to finish unattended. This is the gate triage most often misses, because every axis it touches passes.
+- Anything the state rules land as a maintainer-prereq. Those block the verdict as well, so no range is meaningful — write "n/a — blocked" instead.
+
+**Two ways this estimate goes wrong**, both learned the expensive way:
+
+- **Elapsed PR time is not agent time.** `createdAt → mergedAt` is the obvious calibration and it measures the wrong thing. Irrlicht PR #1686 merged 1058 changed lines in 0.1 h, because the work happened before the PR opened; #917 took 14.2 h for a comparable diff, because it waited on a review. Read a merged PR for *scale* — files touched, lines, commits — never for duration.
+- **The slow-looking gate is often not the bottleneck.** When the estimate leans on how long a suite takes, run one cycle and time it. Measured on this repo: a warm `swift build && swift test` over `platforms/macos` takes ~24 s for 512 cases, not the several minutes its 62 suites suggest. Assume it dominates, and the whole estimate inherits that error.
+
+Like the run plan's own bands, this grid is **set, not measured** — one bottom-up calibration point (#1845, level 8, 2.5–4 h) and a shape around it. Always write the estimate as a range with a named driver, never as a figure.
+
 ## Decision rules
 
 ### Category (apply with one-liner)
@@ -338,6 +371,7 @@ Single template for both verdicts. The brief is purely diagnostic — short, str
 **Spec:** <Effective | Redundant | Contradiction | Theater> — <one-liner: what binds, what's still open>
 **Complexity:** <effective> (base <n>, openness +<n>) — <one-liner: touch points, delegable decisions>
 **Run plan:** `<full | plan>` · investigation <none | 1 Explore | 2–3 Explore> · review <low | medium | high> · <inline glance | /simplify> *(omit if needs-info)*
+**Estimate:** <range> agent-active · gates: <none | named, with who clears each> — <one-liner: the dominant term> *(omit if needs-info)*
 
 **Readiness:**
 - ✓/✗ **Scope** — <one-liner>
@@ -415,6 +449,7 @@ For a localized OpenCode adapter bug (one root cause, three named files, clear a
 **Spec:** Effective — root cause, fix path and the debounce constant are all bound; one placement choice left open on purpose.
 **Complexity:** 6 (base 5, openness +1) — three packages in one slice (`core/domain/agent` flag, OpenCode watcher, session detector short-circuit); one delegable placement decision.
 **Run plan:** `full` · investigation 1–2 Explore · review medium · /simplify — established patterns, nothing needing a human gate.
+**Estimate:** 2–3 h agent-active · gates: none — level-6 band; the replay fixture already exists, so the debounce change and its assertion are the whole run.
 
 **Readiness:**
 - ✓ **Scope** — three named files, all foreseeable from the issue body.
@@ -510,6 +545,7 @@ The case the axis exists for: a well-specified adapter bug that nothing on disk 
 **Spec:** Effective — the outcome (child carries its parent's id) is bound in one sentence; nothing open.
 **Complexity:** 2 (base 2, openness +0) — one adapter, one concern (`ParentSessionID` on the child).
 **Run plan:** `full` · investigation none — the adapter file is named · review low · inline glance.
+**Estimate:** 1–1.5 h agent-active · gates: none — above the level-2 band, because the recording in the Observability plan runs before the fix and drives a live agent.
 
 **Readiness:**
 - ✓ **Scope** — one adapter file named in the body.
