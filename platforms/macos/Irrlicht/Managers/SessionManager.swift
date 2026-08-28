@@ -289,7 +289,7 @@ class SessionManager: ObservableObject {
     /// `summaryDisplayMode`, `projectGroupOrder`, the Sources flags, the
     /// notification toggles and the `register(defaults:)` seed. Preferences
     /// read elsewhere (`MenuBarController`, `LoginItemManager`,
-    /// `ContextPressureThreshold.current`, `MenuBarStyle.current`) still
+    /// `ContextPressureThreshold.current`, `MenuBarAppearance.current`) still
     /// resolve `.standard`; the views' own `@AppStorage` reads are covered by
     /// `PinnedSnapshotHost`'s `defaultAppStorage` pin instead.
     let defaults: UserDefaults

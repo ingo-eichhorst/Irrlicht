@@ -182,6 +182,7 @@ final class PinnedAppStorageSnapshotTests: XCTestCase {
         @AppStorage("advancedSettingsExpanded") private var advancedSettingsExpanded: Bool = false
         @AppStorage("backchannelActivation") private var backchannelActivation: Bool = false
         @AppStorage(MenuBarStyle.storageKey) private var menuBarStyle: String = MenuBarStyle.lights.rawValue
+        @AppStorage(MenuBarAppearance.compactStorageKey) private var menuBarCompact: Bool = false
         @AppStorage(NotificationSettings.masterEnabledKey) private var notificationsEnabled: Bool = false
         @AppStorage(NotificationEvent.contextPressure.enabledKey) private var notifyOnContextPressure: Bool = false
         @AppStorage(NotificationEvent.ready.enabledKey) private var notifyOnReady: Bool = false
@@ -202,6 +203,7 @@ final class PinnedAppStorageSnapshotTests: XCTestCase {
                 "advancedSettingsExpanded": String(advancedSettingsExpanded),
                 "backchannelActivation": String(backchannelActivation),
                 MenuBarStyle.storageKey: menuBarStyle,
+                MenuBarAppearance.compactStorageKey: String(menuBarCompact),
                 NotificationSettings.masterEnabledKey: String(notificationsEnabled),
                 NotificationEvent.contextPressure.enabledKey: String(notifyOnContextPressure),
                 NotificationEvent.ready.enabledKey: String(notifyOnReady),
@@ -228,6 +230,7 @@ final class PinnedAppStorageSnapshotTests: XCTestCase {
         "advancedSettingsExpanded": true,
         "backchannelActivation": true,
         MenuBarStyle.storageKey: MenuBarStyle.combined.rawValue,
+        MenuBarAppearance.compactStorageKey: true,
         NotificationSettings.masterEnabledKey: true,
         NotificationEvent.contextPressure.enabledKey: true,
         NotificationEvent.ready.enabledKey: true,

@@ -42,6 +42,10 @@ struct SettingsView: View {
     // Menu bar icon content (issue #909): dots / quota bars / both. Default
     // .lights keeps today's icon unchanged for existing users.
     @AppStorage(MenuBarStyle.storageKey) private var menuBarStyle: String = MenuBarStyle.lights.rawValue
+    // How densely that content is drawn (issue #1852) — orthogonal to the
+    // style above, so all six combinations are reachable. Defaults to false,
+    // which is byte-identical to what each style rendered before it existed.
+    @AppStorage(MenuBarAppearance.compactStorageKey) private var menuBarCompact: Bool = false
     @AppStorage(MenuBarQuotaProvider.storageKey) private var menuBarQuotaProvider: String = ""
     @AppStorage(QuotaVisualStyle.storageKey) private var menuBarQuotaVisual: String = QuotaVisualStyle.bars.rawValue
     // Master gate (issue #940): collapses the whole Notifications section
@@ -150,7 +154,7 @@ struct SettingsView: View {
                                 .font(.caption)
                                 .fontWeight(.medium)
                                 .foregroundColor(.secondary)
-                            InfoIcon(text: "Lights shows session-state dots (today's default). Usage replaces them with reported subscription quota bars. Combined shows both side by side. Compact collapses every project into one dot and drops the quota bars, so its width does not grow with your project count — for a crowded menu bar.")
+                            InfoIcon(text: "Lights shows session-state dots (today's default). Usage replaces them with reported subscription quota bars. Combined shows both side by side.")
                             Spacer()
                         }
                         // A real Picker(pickerStyle: .segmented) only centers
@@ -167,14 +171,23 @@ struct SettingsView: View {
                         )
                         .frame(maxWidth: .infinity, minHeight: 22)
 
-                        // Ask the style whether it renders quota bars at all,
-                        // rather than testing "is not Lights" — Compact is the
-                        // second style with no quota half, and a `!=` here
-                        // would have offered it two settings it ignores
-                        // (#1845). Parsed from the @AppStorage string, never
-                        // from MenuBarStyle.current, so this stays readable
-                        // under a pinned store.
-                        if (MenuBarStyle(rawValue: menuBarStyle) ?? .lights).showsQuotaBars {
+                        // Compact is a modifier on whichever style is
+                        // selected, not a style of its own (#1852) — that is
+                        // what makes "quota bars AND a narrow icon" reachable,
+                        // which #1845's fourth enum case could not express.
+                        LeadingToggle(
+                            isOn: $menuBarCompact,
+                            label: "Compact",
+                            info: "Collapses every project into one dot with a session count, so the icon's width stops growing with your project count. On Usage it also switches to the narrower, label-less quota bars. For a crowded menu bar."
+                        )
+
+                        // Ask the appearance whether it renders quota bars at
+                        // all, rather than testing "is not Lights" — a `!=`
+                        // here would offer two settings to a style that
+                        // ignores them (#1845). Parsed from the @AppStorage
+                        // values, never from MenuBarAppearance.current, so
+                        // this stays readable under a pinned store.
+                        if menuBarAppearance.showsQuotaBars {
                             HStack(spacing: 6) {
                                 Text("Quota provider")
                                     .font(.caption)
@@ -656,6 +669,23 @@ struct SettingsView: View {
             .fixedSize()
             Spacer()
         }
+    }
+
+    /// The menu bar appearance this view is currently editing, assembled from
+    /// the two `@AppStorage` values rather than read through
+    /// `MenuBarAppearance.current` (#1852).
+    ///
+    /// That distinction is load-bearing, not stylistic: `current` reads
+    /// `UserDefaults.standard`, which a pinned-store test cannot reach, and
+    /// `PersistentDefaultsLintTests` forbids a `UserDefaults.standard`
+    /// receiver anywhere under `Irrlicht/Views/` for exactly that reason.
+    /// Going through the property wrappers keeps the Settings UI readable
+    /// under `.defaultAppStorage`.
+    private var menuBarAppearance: MenuBarAppearance {
+        MenuBarAppearance(
+            style: MenuBarStyle(rawValue: menuBarStyle) ?? .lights,
+            isCompact: menuBarCompact
+        )
     }
 
     /// Provider keys with a rate_limit-carrying session right now, for the

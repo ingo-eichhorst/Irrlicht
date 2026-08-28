@@ -84,7 +84,7 @@ import XCTest
 ///
 /// Its declared limit is the same one a directory scan always has: a view
 /// calling a helper that reads the process domain for it is invisible here
-/// (`MenuBarStyle` and `ContextPressureThreshold` both contain such reads).
+/// (`MenuBarAppearance` and `ContextPressureThreshold` both contain such reads).
 /// That is a false NEGATIVE, so it cannot make the rule wrong — only incomplete
 /// — and closing it would need a call-graph, which is what the behavioural half
 /// (`PinnedAppStorageSnapshotTests`) covers for the sites that matter.
