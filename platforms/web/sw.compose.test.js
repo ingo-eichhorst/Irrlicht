@@ -10,12 +10,15 @@ import { WEB_DIR } from './shippedFiles.testutil.js'
 
 const swSource = readFileSync(join(WEB_DIR, 'sw.js'), 'utf8')
 
+const WORKER_ORIGIN = 'https://relay.example'
+
 function loadWorkerFrom(source) {
   const self = {
     listeners: Object.create(null),
     addEventListener(type, fn) {
       ;(this.listeners[type] ||= []).push(fn)
     },
+    location: { origin: WORKER_ORIGIN },
     registration: { showNotification: vi.fn(() => Promise.resolve()) },
     clients: {
       matchAll: vi.fn(() => Promise.resolve([])),
@@ -631,6 +634,38 @@ describe('messages from the app (arc42 §8.5)', () => {
     sw.listeners.message[0](ev)
     await ev.chain
     expect(ev.replies).toEqual([{ error: 'QuotaExceededError' }])
+  })
+
+  test('a message is handled from this origin and refused from any other', async () => {
+    // A service worker is only reachable from its OWN origin's clients — a
+    // cross-origin page cannot get a handle on this registration — so the
+    // refusal arm cannot be reached by a browser today. It is asserted anyway
+    // because this handler WRITES: a live-sessions message rewrites the ledger
+    // and repaints the badge, and "nothing can reach it" is a property of the
+    // platform rather than of sw.js. The accept arm is the vacuity guard: a
+    // handler that refused everything would satisfy the refusal on its own.
+    const mine = workerWithLedger({ seed: { 's-gone': { state: 'waiting' } } })
+    const ok = messageEvent({
+      type: 'elfdans-live-sessions',
+      sessions: [{ session_id: 's-1', state: 'waiting', at: 1755000100 }],
+    })
+    ok.origin = WORKER_ORIGIN
+    mine.sw.listeners.message[0](ok)
+    await ok.chain
+    expect([...mine.backend.rows.keys()]).toEqual(['s-1'])
+    expect(ok.replies).toEqual([{ ok: true }])
+
+    const theirs = workerWithLedger({ seed: { 's-gone': { state: 'waiting' } } })
+    const foreign = messageEvent({
+      type: 'elfdans-live-sessions',
+      sessions: [{ session_id: 's-1', state: 'waiting', at: 1755000100 }],
+    })
+    foreign.origin = 'https://not-this-relay.example'
+    theirs.sw.listeners.message[0](foreign)
+    await foreign.chain
+    // Untouched: the seeded row is still the only one, and nobody was answered.
+    expect([...theirs.backend.rows.keys()]).toEqual(['s-gone'])
+    expect(foreign.replies).toEqual([])
   })
 
   test('a message with no reply port does not throw', async () => {

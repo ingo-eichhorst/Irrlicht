@@ -431,5 +431,14 @@ self.addEventListener('notificationclick', function (event) {
 });
 
 self.addEventListener('message', function (event) {
+  // Same-origin only. A service worker is reachable solely from its own
+  // origin's clients — a cross-origin page cannot get a handle on this
+  // registration — so this refuses nothing a browser can send today. It is
+  // here because the handler WRITES: a live-sessions message rewrites the
+  // ledger and repaints the badge, and "nothing can reach it" is a property
+  // of the platform, not of this file. A blank origin is what
+  // ExtendableMessageEvent carries for a port-delivered message from our own
+  // page, so it passes; a foreign one never does.
+  if (event.origin && event.origin !== self.location.origin) return;
   event.waitUntil(self.handleMessage(event));
 });

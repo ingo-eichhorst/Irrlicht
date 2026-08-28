@@ -46,7 +46,7 @@ require_tools() {
 }
 
 relay_running() {
-    [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null
+    [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null
 }
 
 relay_env() {
@@ -85,7 +85,7 @@ port_free_or_die() {
 # ── up ───────────────────────────────────────────────────────────────
 cmd_up() {
     local serve=0
-    [ "${1:-}" = "--serve" ] && serve=1
+    [[ "${1:-}" = "--serve" ]] && serve=1
     require_tools go curl
 
     relay_running && die "a rig relay is already running (pid $(cat "$PID_FILE")) — 'down' first"
@@ -95,11 +95,11 @@ cmd_up() {
     chmod 700 "$STATE_DIR"
     ( cd "$REPO_ROOT/core" && go build -o "$BIN" ./cmd/irrlichtrelay/ ) || die "build failed"
 
-    if [ ! -s "$TOKEN_FILE" ]; then
+    if [[ ! -s "$TOKEN_FILE" ]]; then
         info "issuing a client token"
         relay_env "$BIN" token issue --label "elfdans-rig-client" --workspace rig \
             | awk '/^  /{print $1}' | tail -1 > "$TOKEN_FILE"
-        [ -s "$TOKEN_FILE" ] || die "token issue produced no plaintext token"
+        [[ -s "$TOKEN_FILE" ]] || die "token issue produced no plaintext token"
         chmod 600 "$TOKEN_FILE"
     fi
 
@@ -107,7 +107,7 @@ cmd_up() {
     start_relay
     ok "relay up (pid $(cat "$PID_FILE"))"
 
-    if [ "$serve" = "1" ]; then
+    if [[ "$serve" = "1" ]]; then
         require_tools tailscale
         info "publishing over Tailscale"
         tailscale serve --bg "$PORT" || die "tailscale serve failed"
@@ -156,8 +156,8 @@ b64url() { base64 | tr -d '\n' | tr '+/' '-_' | tr -d '='; }
 api() {
     local method="$1" path="$2" bearer="${3:-}" payload="${4:-}"
     local args=(-sS -o "$RIG_DIR/.body" -w '%{http_code}' -X "$method")
-    if [ -n "$bearer" ]; then args+=(-H "Authorization: Bearer $bearer"); fi
-    if [ -n "$payload" ]; then args+=(-H 'Content-Type: application/json' -d "$payload"); fi
+    if [[ -n "$bearer" ]]; then args+=(-H "Authorization: Bearer $bearer"); fi
+    if [[ -n "$payload" ]]; then args+=(-H 'Content-Type: application/json' -d "$payload"); fi
     args+=("$BASE$path")
     curl "${args[@]}"
 }
@@ -172,7 +172,7 @@ cmd_check() {
     step() { printf '\033[36m--\033[0m %s\n' "$*"; }
 
     step "push/info advertises push on an auth-enabled relay"
-    [ "$(api GET /api/v1/push/info)" = "200" ] || die "push/info did not answer 200"
+    [[ "$(api GET /api/v1/push/info)" = "200" ]] || die "push/info did not answer 200"
     echo "$(body)" | grep -q '"enabled":true' || die "push/info: enabled is not true — $(body)"
     echo "$(body)" | grep -q '"vapid_public_key":"[A-Za-z0-9_-]\{80,\}"' \
         || die "push/info carries no plausible VAPID public key — $(body)"
@@ -180,40 +180,40 @@ cmd_check() {
 
     step "state files are 0600"
     for f in tokens.json vapid-keys.json; do
-        [ -f "$STATE_DIR/$f" ] || die "$f was never written"
+        [[ -f "$STATE_DIR/$f" ]] || die "$f was never written"
         local mode; mode=$(stat -f '%Lp' "$STATE_DIR/$f" 2>/dev/null || stat -c '%a' "$STATE_DIR/$f")
-        [ "$mode" = "600" ] || die "$f is mode $mode, want 600"
+        [[ "$mode" = "600" ]] || die "$f is mode $mode, want 600"
     done
     ok "tokens.json and vapid-keys.json are 0600"
 
     step "pairing: mint → redeem → subscribe"
-    [ "$(api POST /api/v1/push/pairings "$token")" = "201" ] || die "mint failed: $(body)"
+    [[ "$(api POST /api/v1/push/pairings "$token")" = "201" ]] || die "mint failed: $(body)"
     local code; code=$(body | sed -n 's/.*"code":"\([^"]*\)".*/\1/p')
-    [ -n "$code" ] || die "mint returned no code: $(body)"
+    [[ -n "$code" ]] || die "mint returned no code: $(body)"
     # Every JSON payload is built in a variable and passed as "$var". Inlining
     # it as "$(api … "{\"a\":1,\"b\":2}")" does not work: the outer quoting
     # layer consumes the backslashes, the inner command sees an unquoted
     # {a,b}, and bash brace-expands it into two arguments — so api runs twice,
     # each time with half a body, and the relay answers a truthful 401.
     local payload; payload=$(printf '{"code":"%s","label":"rig-phone"}' "$code")
-    [ "$(api POST /api/v1/push/pair "" "$payload")" = "200" ] \
+    [[ "$(api POST /api/v1/push/pair "" "$payload")" = "200" ]] \
         || die "redeem failed: $(body)"
     local device; device=$(body | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
     local device_id; device_id=$(body | sed -n 's/.*"token_id":"\([^"]*\)".*/\1/p')
-    [ -n "$device" ] || die "redeem returned no device token: $(body)"
+    [[ -n "$device" ]] || die "redeem returned no device token: $(body)"
     ok "device token $device_id issued in the code's workspace"
 
     step "the same code cannot be redeemed twice"
     local replay; replay=$(printf '{"code":"%s"}' "$code")
-    [ "$(api POST /api/v1/push/pair "" "$replay")" = "401" ] \
+    [[ "$(api POST /api/v1/push/pair "" "$replay")" = "401" ]] \
         || die "a spent code was accepted again — single-use is broken"
     ok "spent code answers the uniform 401"
 
     step "a valid subscription registers under the authenticated token"
     local sub; sub=$(make_subscription_json "https://push.example.test/v2/rig-capability-path")
-    [ "$(api POST /api/v1/push/subscriptions "$device" "$sub")" = "204" ] \
+    [[ "$(api POST /api/v1/push/subscriptions "$device" "$sub")" = "204" ]] \
         || die "subscribe failed: $(body)"
-    [ "$(api GET /api/v1/push/subscriptions "$device")" = "200" ] || die "health read failed"
+    [[ "$(api GET /api/v1/push/subscriptions "$device")" = "200" ]] || die "health read failed"
     echo "$(body)" | grep -q '"registered":true' || die "health says not registered — $(body)"
     ok "registered, and readable by its own device token"
 
@@ -224,7 +224,7 @@ cmd_check() {
 
     step "a malformed subscription is refused at the door"
     local bad; bad='{"endpoint":"https://x.test/p","keys":{"p256dh":"AAAA","auth":"AAAA"}}'
-    [ "$(api POST /api/v1/push/subscriptions "$device" "$bad")" = "400" ] \
+    [[ "$(api POST /api/v1/push/subscriptions "$device" "$bad")" = "400" ]] \
         || die "a malformed subscription was accepted: $(body)"
     ok "400, not a stored dud"
 
@@ -233,8 +233,8 @@ cmd_check() {
     cmd_down >/dev/null
     start_relay
     api GET /api/v1/push/info >/dev/null
-    [ "$(body)" = "$key_before" ] || die "VAPID key changed across restart — every phone would be orphaned"
-    [ "$(api GET /api/v1/push/subscriptions "$device")" = "200" ] || die "subscription lost across restart"
+    [[ "$(body)" = "$key_before" ]] || die "VAPID key changed across restart — every phone would be orphaned"
+    [[ "$(api GET /api/v1/push/subscriptions "$device")" = "200" ]] || die "subscription lost across restart"
     ok "same VAPID key, subscription intact"
 
     step "revoking the device token prunes its delivery address"
@@ -244,7 +244,7 @@ cmd_check() {
         grep -q "$device_id" "$STATE_DIR/push-subscriptions.json" 2>/dev/null || { pruned=1; break; }
         sleep 0.5
     done
-    [ "$pruned" = "1" ] || die "revoked token still has a subscription after 15s — the §8.1 coupling is broken"
+    [[ "$pruned" = "1" ]] || die "revoked token still has a subscription after 15s — the §8.1 coupling is broken"
     ok "subscription pruned"
 
     relay_running || die "the checks passed but the relay is not running — 'up' before the device phases"
@@ -258,7 +258,7 @@ cmd_check_guard() {
     require_tools curl
     local gport=$((PORT + 10)) gdir="$RIG_DIR/guard-state" gbase
     gbase="http://127.0.0.1:$gport"
-    [ -x "$BIN" ] || die "no relay binary at $BIN — 'up' first (it builds one)"
+    [[ -x "$BIN" ]] || die "no relay binary at $BIN — 'up' first (it builds one)"
     rm -rf "$gdir"; mkdir -p "$gdir"
     info "starting a second relay with --auth off on $gbase"
     env IRRLICHT_HOME="$gdir" "$BIN" serve --addr "127.0.0.1:$gport" --auth off >"$RIG_DIR/guard.log" 2>&1 &
@@ -272,16 +272,16 @@ cmd_check_guard() {
     # that never started. That is the one diagnosis that sends the reader into
     # the wrong file, and it is what this ran into: `check` before `up` left no
     # binary to exec, and the rig blamed the §8.1 guard for it.
-    [ -n "$ready" ] || die "the --auth off guard relay never answered on $gbase — $(tail -n 1 "$RIG_DIR/guard.log" 2>/dev/null || echo 'no guard.log')"
+    [[ -n "$ready" ]] || die "the --auth off guard relay never answered on $gbase — $(tail -n 1 "$RIG_DIR/guard.log" 2>/dev/null || echo 'no guard.log')"
 
     curl -sS "$gbase/api/v1/push/info" | grep -q '"enabled":false' \
         || die "an anonymous relay advertises push as enabled"
     local status
     status=$(curl -sS -o "$RIG_DIR/.gbody" -w '%{http_code}' -X POST "$gbase/api/v1/push/pairings")
-    [ "$status" = "403" ] || die "anonymous relay answered $status to a mint, want 403"
+    [[ "$status" = "403" ]] || die "anonymous relay answered $status to a mint, want 403"
     grep -q -- '--auth tokens-file' "$RIG_DIR/.gbody" \
         || die "the 403 does not name the fix — $(cat "$RIG_DIR/.gbody")"
-    [ -f "$gdir/vapid-keys.json" ] && die "an anonymous relay generated VAPID key material"
+    [[ -f "$gdir/vapid-keys.json" ]] && die "an anonymous relay generated VAPID key material"
     ok "anonymous mode refuses push, names the fix, and mints no key"
 }
 
@@ -301,8 +301,8 @@ cmd_check_guard() {
 cmd_drive() {
     require_tools go curl
     relay_running || die "no rig relay running — 'up' first"
-    [ -s "$TOKEN_FILE" ] || die "no client token at $TOKEN_FILE — 'up' first"
-    [ "$#" -ge 1 ] || die "usage: tools/elfdans-rig.sh drive <scenario> [flags]  ('drive -h' lists them)"
+    [[ -s "$TOKEN_FILE" ]] || die "no client token at $TOKEN_FILE — 'up' first"
+    [[ "$#" -ge 1 ]] || die "usage: tools/elfdans-rig.sh drive <scenario> [flags]  ('drive -h' lists them)"
 
     info "building elfdans-drive"
     ( cd "$REPO_ROOT/tools/elfdans-drive" && go build -o "$DRIVE_BIN" . ) || die "build failed"
@@ -319,7 +319,7 @@ cmd_status() {
         echo "relay: not running"
     fi
     echo "state: $STATE_DIR"
-    [ -f "$STATE_DIR/push-subscriptions.json" ] \
+    [[ -f "$STATE_DIR/push-subscriptions.json" ]] \
         && echo "paired: $(grep -c token_id "$STATE_DIR/push-subscriptions.json" || echo 0) subscription(s)"
     echo "log:   $LOG_FILE"
 }
@@ -331,7 +331,7 @@ cmd_down() {
     fi
     rm -f "$PID_FILE"
     command -v tailscale >/dev/null 2>&1 && tailscale serve --https="$PORT" off >/dev/null 2>&1 || true
-    if [ "${1:-}" = "--wipe" ]; then
+    if [[ "${1:-}" = "--wipe" ]]; then
         rm -rf "$RIG_DIR"
         echo "rig stopped and state wiped"
     else
