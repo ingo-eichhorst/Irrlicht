@@ -152,12 +152,20 @@ final class MenuBarImageBuilderTests: XCTestCase {
         ))
     }
 
-    /// LOCK: the other two styles never route through this decision at all,
-    /// error or not.
+    /// LOCK: every style OTHER than `.usage` never routes through this
+    /// decision at all, error or not.
+    ///
+    /// Derived from `allCases` rather than the hand-written
+    /// `[MenuBarStyle.lights, .combined]` this used to be: that array was
+    /// complete when written and silently stale the moment `.compact` was
+    /// added (#1845), which is the same failure mode
+    /// `MenuBarStatusRenderer.segmentOrder` documents for state lists (#1797).
     func testOtherStylesAreUnaffectedByAnError() {
         let quota = NSImage(size: NSSize(width: 20, height: 18))
         let dots = NSImage(size: NSSize(width: 10, height: 18))
-        for style in [MenuBarStyle.lights, .combined] {
+        let others = MenuBarStyle.allCases.filter { $0 != .usage }
+        XCTAssertFalse(others.isEmpty, "allCases must yield at least one non-.usage style")
+        for style in others {
             XCTAssertFalse(MenuBarImageBuilder.shouldShowDotsInUsageStyle(
                 style: style, quotaImage: quota, dotsImage: dots, hasErroredSession: true
             ), "\(style) must not be changed by an errored session")

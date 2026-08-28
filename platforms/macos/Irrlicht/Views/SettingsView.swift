@@ -150,13 +150,13 @@ struct SettingsView: View {
                                 .font(.caption)
                                 .fontWeight(.medium)
                                 .foregroundColor(.secondary)
-                            InfoIcon(text: "Lights shows session-state dots (today's default). Usage replaces them with reported subscription quota bars. Combined shows both side by side.")
+                            InfoIcon(text: "Lights shows session-state dots (today's default). Usage replaces them with reported subscription quota bars. Combined shows both side by side. Compact collapses every project into one dot and drops the quota bars, so its width does not grow with your project count — for a crowded menu bar.")
                             Spacer()
                         }
                         // A real Picker(pickerStyle: .segmented) only centers
                         // within extra width instead of stretching into it —
                         // EqualWidthSegmentedControl bridges to NSSegmentedControl
-                        // so the three segments split the full row edge to edge
+                        // so the segments split the full row edge to edge
                         // (issue #940), tinted with the app's accent instead of
                         // the system default blue.
                         EqualWidthSegmentedControl(
@@ -167,7 +167,14 @@ struct SettingsView: View {
                         )
                         .frame(maxWidth: .infinity, minHeight: 22)
 
-                        if menuBarStyle != MenuBarStyle.lights.rawValue {
+                        // Ask the style whether it renders quota bars at all,
+                        // rather than testing "is not Lights" — Compact is the
+                        // second style with no quota half, and a `!=` here
+                        // would have offered it two settings it ignores
+                        // (#1845). Parsed from the @AppStorage string, never
+                        // from MenuBarStyle.current, so this stays readable
+                        // under a pinned store.
+                        if (MenuBarStyle(rawValue: menuBarStyle) ?? .lights).showsQuotaBars {
                             HStack(spacing: 6) {
                                 Text("Quota provider")
                                     .font(.caption)
