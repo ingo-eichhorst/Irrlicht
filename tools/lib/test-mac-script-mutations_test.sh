@@ -10,7 +10,7 @@
 # when the thing it protects is broken — so each gate is broken here, one at a
 # time, and the lock test is required to go red naming that specific gate.
 #
-# Eleven mutations, applied and asserted SEPARATELY. A single combined mutation
+# Twenty-two mutations, applied and asserted SEPARATELY. A single combined mutation
 # could go red on one gate while another was silently unguarded, which is the
 # exact shape of defect this whole file exists to rule out. Each one is written
 # as the plausible REGRESSION, not as arbitrary damage: the reachability abort
@@ -203,7 +203,101 @@ red_case "swift-status" \
   $'  swift build --package-path "$REPO_ROOT/platforms/macos" 2>&1 | tail -5 || true' \
   'GATE swift-build-status: a failed swift build must abort'
 
-# ── 10. The `tools` gate stops firing on this script's own directory ───────
+# ── 10. F1: the Developer-ID check goes back through a pipe ────────────────
+# The regression this PR's own review found: `codesign … | grep -q` under
+# `set -o pipefail` returns 141 (SIGPIPE — grep -q exits at its first match
+# while the 28-line codesign output is still being written), so the branch is
+# skipped EXACTLY WHEN THE APP IS GENUINELY SIGNED. Measured 5/5 against a real
+# Developer-ID bundle. This row is why the codesign stub emits a realistic line
+# count: a one-line stub cannot reproduce the SIGPIPE and passed regardless.
+red_case "backup-refresh" \
+  "F1: the Developer-ID check is piped into grep -q again" \
+  "$SUBJECT" \
+  $'    CODESIGN_INFO="$(codesign -dv --verbose=4 "$PROD_APP" 2>&1 || true)"\n    if printf \'%s\\n\' "$CODESIGN_INFO" | grep -q "^Authority=Developer ID Application"; then' \
+  $'    if codesign -dv --verbose=4 "$PROD_APP" 2>&1 | grep -q "^Authority=Developer ID Application"; then' \
+  'GATE backup-freshness: the stale backup was NOT refreshed'
+
+# ── 11. ...and the same hazard in the teardown half ───────────────────────
+red_case "restore-signed" \
+  "F1: restore-prod.sh's Developer-ID check is piped into grep -q again" \
+  ".claude/skills/ir:test-mac/restore-prod.sh" \
+  $'elif { CODESIGN_INFO="$(codesign -dv --verbose=4 "$PROD_APP" 2>&1 || true)"\n       printf \'%s\\n\' "$CODESIGN_INFO" | grep -q "^Authority=Developer ID Application"; }; then' \
+  $'elif codesign -dv --verbose=4 "$PROD_APP" 2>&1 | grep -q "^Authority=Developer ID Application"; then' \
+  'restore-prod: a genuine Developer-ID app with no backup'
+
+# ── 12-14. CALL SITES: the daemon launch ──────────────────────────────────
+# `--record` is the single value the reachability gate exists to protect, and
+# the port is the value the whole fresh-shell bug was about. Both survived a
+# mutation battery before the daemon-launch case existed (#1855 review F3).
+red_case "daemon-launch" \
+  "call site: --record is dropped from the daemon launch" \
+  "$SUBJECT" \
+  $'    IRRLICHT_BIND_ADDR="127.0.0.1:$PORT" \\\n      nohup "$IRRLICHTD_BIN" --record > "$LOG_DIR/irrlichd-dev.log" 2>&1 &' \
+  $'    IRRLICHT_BIND_ADDR="127.0.0.1:$PORT" \\\n      nohup "$IRRLICHTD_BIN" > "$LOG_DIR/irrlichd-dev.log" 2>&1 &' \
+  'started WITHOUT --record'
+
+red_case "daemon-launch" \
+  "call site: replace mode binds the wrong port" \
+  "$SUBJECT" \
+  $'  PORT=7837                                          # production port' \
+  $'  PORT=7838                                          # production port' \
+  'did not bind 127.0.0.1:7837'
+
+# ── 15-16. CALL SITES: signing ────────────────────────────────────────────
+red_case "sign-order" \
+  "call site: the rpath fix-up is deleted" \
+  "$SUBJECT" \
+  $'  install_name_tool -add_rpath @executable_path/../Frameworks "$APP_TARGET/Contents/MacOS/Irrlicht"' \
+  $'  : "rpath fix-up removed"' \
+  'COULD NOT LOOK'
+
+red_case "sign-order" \
+  "call site: codesign loses --entitlements" \
+  "$SUBJECT" \
+  $'    codesign --force --deep --sign - --entitlements "$ENTITLEMENTS" "$APP_TARGET" 2>&1' \
+  $'    codesign --force --deep --sign - "$APP_TARGET" 2>&1' \
+  'codesign was called without --entitlements'
+
+# ── 17-18. CALL SITES: separate mode's bundle assembly ────────────────────
+# Half the MODE axis had no case at all before separate-full.
+red_case "separate-full" \
+  "call site: separate mode never copies the built binary in" \
+  "$SUBJECT" \
+  $'    cp "$DEBUG_BIN" "$APP_TARGET/Contents/MacOS/Irrlicht"\n    cp "$SWIFT_SRC_DIR/Resources/AppIcon.icns" "$APP_TARGET/Contents/Resources/AppIcon.icns"\n    # Embed Sparkle.framework' \
+  $'    cp "$SWIFT_SRC_DIR/Resources/AppIcon.icns" "$APP_TARGET/Contents/Resources/AppIcon.icns"\n    # Embed Sparkle.framework' \
+  'is not the built binary'
+
+red_case "separate-full" \
+  "call site: the dev app is launched without its port override" \
+  "$SUBJECT" \
+  $'    open --env IRRLICHT_DAEMON_PORT="$PORT" --env IRRLICHT_HOME="$DEV_HOME" \\' \
+  $'    open \\' \
+  'it would talk to PRODUCTION on 7837'
+
+# ── 19-20. CALL SITES: the two quiet install writes ───────────────────────
+red_case "install-details" \
+  "call site: the icon refresh is dropped" \
+  "$SUBJECT" \
+  $'    cp "$SWIFT_SRC_DIR/Resources/AppIcon.icns" "$APP_TARGET/Contents/Resources/AppIcon.icns"\n    # Stamp the version string too' \
+  $'    # Stamp the version string too' \
+  'still holds the production copy'
+
+red_case "install-details" \
+  "call site: the stale-socket cleanup is dropped" \
+  "$SUBJECT" \
+  $'  rm -f "$SOCK"' \
+  $'  : "socket cleanup removed"' \
+  'the stale socket survived'
+
+# ── 21. F5: the abort safety net stops firing ─────────────────────────────
+red_case "abort-hint" \
+  "F5: a failure after the bundle is overwritten says nothing" \
+  "$SUBJECT" \
+  $'trap on_exit EXIT' \
+  $': "trap not installed"' \
+  'never said so, nor pointed at restore-prod.sh'
+
+# ── 22. The `tools` gate stops firing on this script's own directory ───────
 # Not a gate inside the script, but the gate that RUNS the two files above.
 # Without the trigger alternative added in #1855, a push that changes only
 # test-mac.sh skips the whole `tools` group under `--changed`, and a gate that

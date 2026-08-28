@@ -125,6 +125,12 @@ new_env() {
   # --- the stable main checkout (daemon binary + production backup live here) ---
   mkdir -p "$root/main/core/bin" "$root/main/.build"
 
+  # The replace-mode socket lives under $HOME; pre-create it so the cleanup
+  # step has something to actually remove and its absence afterwards means
+  # something.
+  mkdir -p "$root/home/.local/share/irrlicht"
+  echo 'stale-socket' > "$root/home/.local/share/irrlicht/irrlichd.sock"
+
   # --- the "installed" production bundle ---
   local app="$root/Applications/Irrlicht.app"
   mkdir -p "$app/Contents/MacOS" "$app/Contents/Frameworks/Sparkle.framework" "$app/Contents/Resources"
@@ -138,9 +144,24 @@ new_env() {
   # Recording stubs: an assertion can prove a call ACTUALLY HAPPENED (and in
   # what order) rather than that the script merely exited without complaining.
   local s
-  for s in pkill open nohup install_name_tool; do
+  for s in pkill install_name_tool; do
     printf '#!/bin/sh\nprintf "%%s %%s\\n" "%s" "$*" >>"$STUB_LOG"\nexit 0\n' "$s" > "$b/$s"
   done
+  # open: STUB_OPEN_RC=1 stands in for any failure AFTER the bundle has been
+  # overwritten, which is what the teardown-hint case needs.
+  printf '#!/bin/sh\nprintf "open %%s\\n" "$*" >>"$STUB_LOG"\nexit "${STUB_OPEN_RC:-0}"\n' > "$b/open"
+  # nohup records the ENVIRONMENT it was handed, not just its argv. Everything
+  # that decides what the daemon actually is — `--record`, the bind address, the
+  # state dir, the permission mode — is passed that way, so an assertion that
+  # cannot see it cannot tell a correct launch from a silently wrong one. Every
+  # one of those was a surviving mutation before this (#1855 review F3).
+  cat > "$b/nohup" <<'STUB'
+#!/bin/sh
+printf 'nohup BIND=%s IRRHOME=%s PERM=%s ARGV=%s\n' \
+  "${IRRLICHT_BIND_ADDR:-<unset>}" "${IRRLICHT_HOME:-<unset>}" \
+  "${IRRLICHT_PERMISSION_MODE:-<unset>}" "$*" >>"$STUB_LOG"
+exit 0
+STUB
   # pgrep: exit 1 = "no such process" (the app died). STUB_PGREP_RC=0 makes it
   # immortal, which is what the app-exit gate is for.
   printf '#!/bin/sh\nprintf "pgrep %%s\\n" "$*" >>"$STUB_LOG"\nexit "${STUB_PGREP_RC:-1}"\n' > "$b/pgrep"
@@ -153,11 +174,29 @@ new_env() {
   printf '#!/bin/sh\nprintf "swift %%s\\n" "$*" >>"$STUB_LOG"\necho "stub swift build"\nexit "${STUB_SWIFT_RC:-0}"\n' > "$b/swift"
   # codesign: `-dv` reports the authority under test; anything else is a real
   # signing call and just succeeds.
+  #
+  # THE OUTPUT SHAPE IS LOAD-BEARING, not decoration. The real
+  # `codesign -dv --verbose=4` writes 28 unbuffered lines to stderr with the
+  # `Authority=` block at line 20 (measured against
+  # .build/irrlicht-prod-backup/Irrlicht.app). A one-line stub fits a single
+  # write, so `… | grep -q` never SIGPIPEs it and the pipeline returns 0 — which
+  # made GATE 3a pass against a script whose Developer-ID check could not
+  # succeed at all under `set -o pipefail` (rc 141, 5/5; #1855 review F1/F2).
+  # A stub that cannot reproduce the subject's real I/O shape is a stub that
+  # certifies the wrong thing.
   cat > "$b/codesign" <<'STUB'
 #!/bin/sh
 printf 'codesign %s\n' "$*" >>"$STUB_LOG"
 case "$1" in
-  -dv) printf '%s\n' "${STUB_CODESIGN_AUTHORITY:-Authority=Irrlicht Dev}" >&2 ;;
+  -dv)
+    i=1
+    while [ "$i" -le 19 ]; do printf 'Filler-%02d=padding to the real tool line count\n' "$i" >&2; i=$((i + 1)); done
+    printf '%s\n' "${STUB_CODESIGN_AUTHORITY:-Authority=Irrlicht Dev}" >&2
+    printf 'Authority=Developer ID Certification Authority\n' >&2
+    printf 'Authority=Apple Root CA\n' >&2
+    i=1
+    while [ "$i" -le 6 ]; do printf 'Tail-%02d=lines after the Authority block\n' "$i" >&2; i=$((i + 1)); done
+    ;;
 esac
 exit 0
 STUB
@@ -451,6 +490,172 @@ case_target_macos_nodaemon() {
   fi
 }
 
+# ─── CALL SITES, not just gate definitions ─────────────────────────────────
+# This change is an EXTRACTION, so the risk moved to the call sites: the values
+# each step passes. A battery of fourteen mutations found eleven survivors and
+# every one was a call site — `--record` dropped from the daemon launch, the
+# replace-mode port changed to 7838, IRRLICHT_BIND_ADDR removed, the whole
+# `separate` bundle assembly never executed, install_name_tool deleted, the
+# socket cleanup deleted (#1855 review F3). Gates say "it refuses correctly";
+# these say "it does the right thing when it proceeds".
+
+# The daemon is the whole point of the run: a daemon without --record, or on
+# the wrong port, silently produces nothing while every gate above stays green.
+case_daemon_launch() {
+  local R L; R=$(new_env); with_backup "$R"
+  run_script "$R" -- replace full
+  L="$(grep '^nohup ' "$R/stub.log" 2>/dev/null | head -1)"
+  if [[ -z "$L" ]]; then
+    fail "CALL-SITE daemon-launch: COULD NOT LOOK — the daemon was never launched, so its arguments prove nothing. Log: $(flat "$(cat "$R/stub.log")")"
+    return
+  fi
+  [[ "$L" == *"--record"* ]] \
+    && pass "CALL-SITE daemon-launch: replace mode passes --record" \
+    || fail "CALL-SITE daemon-launch: the daemon was started WITHOUT --record — the run records nothing, and every reachability gate still passes: $L"
+  [[ "$L" == *"BIND=127.0.0.1:7837"* ]] \
+    && pass "CALL-SITE daemon-launch: ...on the production port, via IRRLICHT_BIND_ADDR" \
+    || fail "CALL-SITE daemon-launch: replace mode did not bind 127.0.0.1:7837 — a missing PORT makes the daemon bind '127.0.0.1:' (invalid), the exact silent failure this script exists to remove: $L"
+  [[ "$L" == *"IRRHOME=<unset>"* ]] \
+    && pass "CALL-SITE daemon-launch: ...with no IRRLICHT_HOME override, so it reads production state" \
+    || fail "CALL-SITE daemon-launch: replace mode passed an IRRLICHT_HOME override, so it would not see production's sessions/cost data: $L"
+}
+
+# separate mode's ENTIRE bundle assembly and its open --env launch had no case
+# at all: the only `separate` run was `separate daemon`, which skips every app
+# step. Half the MODE axis was unexercised.
+case_separate_full() {
+  local R L APP; R=$(new_env)
+  run_script "$R" -- separate full
+  APP="$R/IrrlichtDev.app"
+  if [[ $ST -ne 0 ]]; then
+    fail "CALL-SITE separate-full: the run must complete, but it exited $ST: $(flat "$OUT")"
+    return
+  fi
+  [[ "$(cat "$APP/Contents/MacOS/Irrlicht" 2>/dev/null)" == FRESH-BUILD ]] \
+    && pass "CALL-SITE separate-full: the freshly built binary is installed into the dev bundle" \
+    || fail "CALL-SITE separate-full: $APP/Contents/MacOS/Irrlicht is not the built binary — the dev app would run whatever was there before, or not launch at all"
+  [[ -d "$APP/Contents/Frameworks/Sparkle.framework" ]] \
+    && pass "CALL-SITE separate-full: ...with Sparkle.framework embedded" \
+    || fail "CALL-SITE separate-full: Sparkle.framework is missing from the assembled bundle — dyld cannot resolve it and the app crashes at launch"
+  grep -q 'io.irrlicht.app' "$APP/Contents/Info.plist" 2>/dev/null \
+    && pass "CALL-SITE separate-full: ...and an Info.plist carrying the bundle identifier" \
+    || fail "CALL-SITE separate-full: the assembled Info.plist has no io.irrlicht.app identifier — UNUserNotificationCenter (the reason the bundle is assembled at all) will not work"
+  L="$(grep '^open ' "$R/stub.log" 2>/dev/null | head -1)"
+  if [[ "$L" != *"IRRLICHT_DAEMON_PORT=7838"* ]]; then
+    fail "CALL-SITE separate-full: the dev app was launched without --env IRRLICHT_DAEMON_PORT=7838, so it would talk to PRODUCTION on 7837: ${L:-<no open call>}"
+  else
+    pass "CALL-SITE separate-full: the dev app is pointed at the isolated daemon on 7838"
+  fi
+  L="$(grep '^nohup ' "$R/stub.log" 2>/dev/null | head -1)"
+  if [[ "$L" != *"BIND=127.0.0.1:7838"* || "$L" != *"PERM=grant-all"* || "$L" != *"IRRHOME=$R/repo/.build/irrlicht-home"* ]]; then
+    fail "CALL-SITE separate-full: the isolated daemon was not started on 7838 with an isolated IRRLICHT_HOME and grant-all (#570: without grant-all a fresh state dir monitors nothing): ${L:-<no nohup call>}"
+  else
+    pass "CALL-SITE separate-full: the isolated daemon gets 7838 + its own IRRLICHT_HOME + grant-all"
+  fi
+}
+
+# install_name_tool MUST run before codesign — it mutates the binary and so
+# invalidates any signature applied first. The script says so; nothing checked.
+case_sign_order() {
+  local R IN CS; R=$(new_env); with_backup "$R"
+  run_script "$R" -- replace full
+  IN=$(grep -n '^install_name_tool ' "$R/stub.log" 2>/dev/null | head -1 | cut -d: -f1)
+  CS=$(grep -n '^codesign --force' "$R/stub.log" 2>/dev/null | head -1 | cut -d: -f1)
+  if [[ -z "$IN" || -z "$CS" ]]; then
+    fail "CALL-SITE sign-order: COULD NOT LOOK — install_name_tool (line '${IN:-none}') and/or the signing codesign (line '${CS:-none}') never ran, so their order proves nothing. Log: $(flat "$(cat "$R/stub.log")")"
+  elif [[ "$IN" -ge "$CS" ]]; then
+    fail "CALL-SITE sign-order: codesign ran at line $CS, at or before install_name_tool at line $IN — the rpath edit invalidates the signature just applied"
+  else
+    pass "CALL-SITE sign-order: install_name_tool (line $IN) runs before codesign (line $CS)"
+  fi
+  if grep -q '^codesign --force.*--entitlements' "$R/stub.log" 2>/dev/null; then
+    pass "CALL-SITE sign-order: ...and the signature carries the dev entitlements file"
+  else
+    fail "CALL-SITE sign-order: codesign was called without --entitlements — the dev build loses the entitlements the app needs: $(flat "$(grep '^codesign --force' "$R/stub.log")")"
+  fi
+}
+
+# The two remaining install-time writes, and the socket cleanup — all three
+# were surviving mutations.
+case_install_details() {
+  local R; R=$(new_env); with_backup "$R"
+  run_script "$R" -- replace full
+  [[ "$(cat "$R/Applications/Irrlicht.app/Contents/Resources/AppIcon.icns" 2>/dev/null)" == icns ]] \
+    && pass "CALL-SITE install-details: the icon is refreshed from the worktree's Resources/" \
+    || fail "CALL-SITE install-details: AppIcon.icns still holds the production copy — a developer iterating on Resources/ sees a stale icon in replace mode but not in separate mode"
+  [[ ! -e "$R/home/.local/share/irrlicht/irrlichd.sock" ]] \
+    && pass "CALL-SITE install-details: the stale socket is removed before the daemon restarts" \
+    || fail "CALL-SITE install-details: the stale socket survived — this is the \$SOCK the old fenced blocks dropped, turning cleanup into a silent no-op"
+  grep -q '^plistbuddy .*CFBundleShortVersionString dev' "$R/stub.log" 2>/dev/null \
+    && pass "CALL-SITE install-details: the version string is stamped to 'dev'" \
+    || fail "CALL-SITE install-details: CFBundleShortVersionString was not stamped — Settings/About shows whatever release version was last installed on a freshly compiled dev build"
+}
+
+# ─── F5: an abort AFTER the bundle is overwritten must say how to recover ───
+case_abort_hint() {
+  local R; R=$(new_env); with_backup "$R"
+  run_script "$R" STUB_OPEN_RC=1 -- replace full
+  if [[ $ST -eq 0 ]]; then
+    fail "GATE abort-hint: a failing launch after the install must not exit 0 — the bundle now holds a dev build: $(flat "$OUT")"
+  elif [[ "$OUT" != *"now holds a DEV build"* || "$OUT" != *"restore-prod.sh"* ]]; then
+    fail "GATE abort-hint: it failed (exit $ST) after overwriting $PROD_APP but never said so, nor pointed at restore-prod.sh — the user is left with a silently dev-ified production bundle: $(flat "$OUT")"
+  else
+    pass "GATE abort-hint: a failure after the install names the dev-ified bundle and points at restore-prod.sh"
+  fi
+  # ...and it must NOT cry wolf on a run that never touched the bundle.
+  R=$(new_env); with_backup "$R"
+  run_script "$R" STUB_CURL_RC=1 -- replace daemon
+  if [[ "$OUT" == *"now holds a DEV build"* ]]; then
+    fail "GATE abort-hint: a TARGET=daemon run never touches the bundle, but it still told the user to restore production: $(flat "$OUT")"
+  else
+    pass "GATE abort-hint: ...and stays quiet when the bundle was never written"
+  fi
+}
+
+# ─── restore-prod.sh — the teardown half, carrying the same F1 hazard ───────
+# It had no test at all. These two cases exist because the identical
+# `codesign … | grep -q` pipeline was in it, under its own `set -o pipefail`.
+run_restore() {
+  local root="$1"; shift
+  OUT=$(env -i \
+    HOME="$root/home" \
+    PATH="$root/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+    STUB_LOG="$root/stub.log" \
+    IRRLICHT_TESTMAC_MAIN_REPO="$root/main" \
+    IRRLICHT_TESTMAC_PROD_APP="$root/Applications/Irrlicht.app" \
+    IRRLICHT_TESTMAC_PORT=7837 \
+    ${1+"$@"} \
+    bash "$REPO_ROOT/.claude/skills/ir:test-mac/restore-prod.sh" 2>&1)
+  ST=$?
+  return 0
+}
+
+case_restore_signed() {
+  local R; R=$(new_env)   # no backup dir; the app is genuinely Developer-ID-signed
+  run_restore "$R" STUB_CODESIGN_AUTHORITY="Authority=Developer ID Application: Ingo"
+  if [[ $ST -ne 0 ]]; then
+    fail "restore-prod: a genuine Developer-ID app with no backup means there is nothing to restore, but it exited $ST — it kills the app and daemon and THEN tells the user to reinstall a correctly installed app: $(flat "$OUT")"
+  elif [[ "$OUT" != *"nothing to restore"* ]]; then
+    fail "restore-prod: exited 0 but did not report 'nothing to restore': $(flat "$OUT")"
+  elif ! logged "$R" 'open '; then
+    fail "restore-prod: it reported success without ever launching production: $(flat "$(cat "$R/stub.log")")"
+  else
+    pass "restore-prod: a genuine production app with no backup ⇒ nothing to restore, and production is relaunched"
+  fi
+}
+
+case_restore_refuse() {
+  local R; R=$(new_env)   # default authority is "Irrlicht Dev", and no backup
+  run_restore "$R"
+  if [[ $ST -eq 0 ]]; then
+    fail "restore-prod: a dev-signed app with no backup cannot be restored and must refuse, but it exited 0: $(flat "$OUT")"
+  elif [[ "$OUT" != *"Cannot confirm production is intact"* ]]; then
+    fail "restore-prod: refused (exit $ST) but not with the cannot-confirm message: $(flat "$OUT")"
+  else
+    pass "restore-prod: a dev-signed app with no backup ⇒ refuse, naming the reinstall path"
+  fi
+}
+
 # ─── The gate that runs this file must fire on this file's SUBJECT ──────────
 # tools/preflight.sh --changed scopes the `tools` gate by a trigger regex. The
 # script under test lives outside tools/, so without an explicit alternative a
@@ -482,7 +687,9 @@ case_preflight_trigger() {
 # ─── dispatch ───────────────────────────────────────────────────────────────
 CASES=(happy reachability app-exit backup-refresh backup-refuse build-output
        enum kill-order freshness freshness-vacuous swift-status
-       target-daemon target-macos target-macos-nodaemon preflight-trigger)
+       target-daemon target-macos target-macos-nodaemon
+       daemon-launch separate-full sign-order install-details abort-hint
+       restore-signed restore-refuse preflight-trigger)
 
 echo "== $NAME: $SCRIPT${CASE_FILTER:+ (case: $CASE_FILTER)} =="
 

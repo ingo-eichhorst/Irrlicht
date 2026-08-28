@@ -124,6 +124,26 @@ fi
 want_daemon() { [[ "$TARGET" == "daemon" || "$TARGET" == "full" ]]; }
 want_app()    { [[ "$TARGET" == "macos"  || "$TARGET" == "full" ]]; }
 
+# ─── Abort safety net ──────────────────────────────────────────────────────
+# Once the replace-mode install has written into $PROD_APP, ANY later failure
+# leaves the PRODUCTION bundle holding a dev build. Several such paths exist and
+# are not hypothetical: step 7's reachability ABORT fires after the install by
+# design, and under `set -e` so do install_name_tool (it exits 1 on a duplicate
+# LC_RPATH), PlistBuddy on a missing key, codesign, and open. Without this the
+# user is left with a silently dev-ified /Applications/Irrlicht.app and no hint
+# that a teardown exists (#1855 review F5).
+BUNDLE_DIRTIED=""
+on_exit() {
+  local rc=$?
+  if [[ $rc -ne 0 && -n "$BUNDLE_DIRTIED" ]]; then
+    echo >&2
+    echo "NOTE: $PROD_APP now holds a DEV build — this run overwrote it and then failed." >&2
+    echo "      Restore production with:  $(dirname "$0")/restore-prod.sh" >&2
+  fi
+  return "$rc"
+}
+trap on_exit EXIT
+
 echo "MODE=$MODE TARGET=$TARGET PORT=$PORT DEV_HOME=${DEV_HOME:-<production>}"
 
 # ─── Step 1: build the Go daemon ───────────────────────────────────────────
@@ -218,7 +238,14 @@ if want_app; then
     echo "       against nothing and pass vacuously. Refusing rather than reporting a green it did not earn." >&2
     exit 1
   fi
-  STALE_SRC="$(find "$SWIFT_SRC_DIR" -name '*.swift' -type f -newer "$DEBUG_BIN" -print 2>/dev/null | head -1)"
+  # `-print -quit` rather than `… -print | head -1`: the pipe is the same
+  # SIGPIPE-under-pipefail trap as the codesign check below, and here it would
+  # abort the script with status 141 and NO MESSAGE — so "the build is fresh"
+  # and "the freshness check could not run" would look identical, which is the
+  # one thing a verification mechanism must never do. Measured: the pipe form
+  # aborts 0/300 against this repo's 80 sources but 40/40 at 500 files, i.e.
+  # correct today only by headroom that shrinks as the target dir grows.
+  STALE_SRC="$(find "$SWIFT_SRC_DIR" -name '*.swift' -type f -newer "$DEBUG_BIN" -print -quit 2>/dev/null)"
   if [[ -n "$STALE_SRC" ]]; then
     echo "ERROR: $STALE_SRC is NEWER than the built binary $DEBUG_BIN." >&2
     echo "       The build output is stale — refusing to install it into $APP_TARGET." >&2
@@ -246,7 +273,17 @@ if want_app; then
     # signed (a prior replace-mode run's dev build, still installed) and no
     # backup exists either, REFUSE rather than overwrite the only remaining
     # copy with no safety net.
-    if codesign -dv --verbose=4 "$PROD_APP" 2>&1 | grep -q "^Authority=Developer ID Application"; then
+    # CAPTURE FIRST, MATCH SECOND — never `codesign … | grep -q` in the
+    # condition. `grep -q` exits at its first match; the real
+    # `codesign -dv --verbose=4` writes 28 unbuffered lines with `Authority=`
+    # at line 20, so it is still writing when the pipe closes and dies of
+    # SIGPIPE (141). Under `set -o pipefail` that 141 IS the pipeline's status,
+    # so the branch is skipped EXACTLY WHEN THE APP IS GENUINELY SIGNED —
+    # measured 5/5 against a real Developer-ID bundle. This gate ran fine as a
+    # fenced block because those had no pipefail; adding it is what broke it
+    # (#1855 review F1).
+    CODESIGN_INFO="$(codesign -dv --verbose=4 "$PROD_APP" 2>&1 || true)"
+    if printf '%s\n' "$CODESIGN_INFO" | grep -q "^Authority=Developer ID Application"; then
       rm -rf "$PROD_BACKUP"
       mkdir -p "$(dirname "$PROD_BACKUP")"
       if ! cp -R "$PROD_APP" "$PROD_BACKUP"; then
@@ -260,6 +297,7 @@ if want_app; then
       exit 1
     fi
 
+    BUNDLE_DIRTIED=1   # point of no return: every failure from here owes the user the teardown hint
     cp "$DEBUG_BIN" "$APP_TARGET/Contents/MacOS/Irrlicht"
     rm -rf "$APP_TARGET/Contents/Frameworks/Sparkle.framework"
     cp -R "$DEBUG_SPARKLE" "$APP_TARGET/Contents/Frameworks/Sparkle.framework"
@@ -323,7 +361,13 @@ PLIST
   # the identity. Uses the dev-only entitlements file — no com.apple.developer.*
   # entries, which Apple gates to its own certificates and which would make
   # launchd refuse to spawn a self-signed/ad-hoc binary that claims them.
-  if security find-identity -v -p codesigning 2>/dev/null | grep -q "Irrlicht Dev"; then
+  # Captured, not piped, for the same reason as the codesign check above: the
+  # real output is short enough to flush today (rc 0, 10/10), but if it ever
+  # grows past a pipe buffer this silently drops to ad-hoc signing and
+  # invalidates TCC on every rebuild — the exact thing the stable identity
+  # exists to prevent.
+  IDENTITIES="$(security find-identity -v -p codesigning 2>/dev/null || true)"
+  if printf '%s\n' "$IDENTITIES" | grep -q "Irrlicht Dev"; then
     codesign --force --deep --sign "Irrlicht Dev" --entitlements "$ENTITLEMENTS" "$APP_TARGET" 2>&1
   else
     codesign --force --deep --sign - --entitlements "$ENTITLEMENTS" "$APP_TARGET" 2>&1
