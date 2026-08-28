@@ -34,8 +34,7 @@ type session struct {
 
 	// lastWaitingPush / lastReadyPush / lastErrorPush are the
 	// per-(session, edge) cooldown stamps (§8.4). Zero means never pushed on
-	// that edge. Read and written through lastPushOn/recordPushOn so a
-	// fourth edge is one case arm rather than a third pair of call sites.
+	// that edge. Reached only through cooldownStamp.
 	lastWaitingPush time.Time
 	lastReadyPush   time.Time
 	lastErrorPush   time.Time
@@ -44,28 +43,23 @@ type session struct {
 	holdDownAt      time.Time
 }
 
-// lastPushOn / recordPushOn read and write the cooldown stamp for one edge.
+// cooldownStamp addresses one edge's cooldown stamp, for reading and for
+// writing. A pointer rather than a get/set pair on purpose: two parallel
+// switches would have to agree on which field each edge maps to, and a
+// disagreement between them is silent — the read consults one stamp while
+// the write refreshes another, so the edge never comes off cooldown, or
+// never goes on. There is one mapping here because there is one switch.
+//
 // An unrecognized edge shares the waiting stamp, which is where the engine's
 // degrade-silent path already sends anything it does not know.
-func (s *session) lastPushOn(edge State) time.Time {
+func (s *session) cooldownStamp(edge State) *time.Time {
 	switch edge {
 	case StateReady:
-		return s.lastReadyPush
+		return &s.lastReadyPush
 	case StateError:
-		return s.lastErrorPush
+		return &s.lastErrorPush
 	default:
-		return s.lastWaitingPush
-	}
-}
-
-func (s *session) recordPushOn(edge State, at time.Time) {
-	switch edge {
-	case StateReady:
-		s.lastReadyPush = at
-	case StateError:
-		s.lastErrorPush = at
-	default:
-		s.lastWaitingPush = at
+		return &s.lastWaitingPush
 	}
 }
 
@@ -344,14 +338,14 @@ func (e *Engine) sessionUpdate(ev Event, now time.Time) []Push {
 // (§8.4). edge is StateWaiting, StateReady or StateError, and equals
 // rec.state on every path that reaches here.
 func (e *Engine) candidate(id string, rec *session, edge State, now time.Time) []Push {
-	last := rec.lastPushOn(edge)
+	last := rec.cooldownStamp(edge)
 	// A suppressed candidate does not refresh the stamp — otherwise a
 	// flapping session could silence itself forever. Exactly Cooldown
 	// elapsed is allowed.
-	if !last.IsZero() && now.Sub(last) < e.cfg.Cooldown {
+	if !last.IsZero() && now.Sub(*last) < e.cfg.Cooldown {
 		return nil
 	}
-	rec.recordPushOn(edge, now)
+	*last = now
 
 	e.window = append(e.window, windowEntry{at: now, sessionID: id})
 	e.pruneWindow(now)
