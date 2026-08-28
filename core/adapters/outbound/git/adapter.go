@@ -927,6 +927,11 @@ func cwdFromFallbackSidecars(transcriptPath string) string {
 		// (fixed filename, cwd nested under environment.working_directory) —
 		// see issue #906 (presession promotion can't CWD-match without this).
 		transcript.ExtractCWDFromVibeMetaJSON,
+		// Junie names the working directory only in a nested
+		// CurrentDirectoryUpdatedEvent (which the junie parser surfaces),
+		// but a session that never started a task emits none — its project
+		// directory lives in the ~/.junie/processes/ sidecar instead.
+		transcript.ExtractCWDFromJunieSidecar,
 	}
 	for _, extract := range extractors {
 		if cwd := extract(transcriptPath); cwd != "" {
