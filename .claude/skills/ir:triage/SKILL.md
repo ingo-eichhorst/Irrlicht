@@ -286,18 +286,22 @@ Milestones group issues by release cycle. The convention is `vMAJOR.MINOR` (e.g.
 
 **If the issue already has a maintainer-set milestone, do not change it.** Note the existing milestone in the brief; the maintainer's choice wins.
 
-**Resolution.** At the start of the run (or first single-issue invocation), enumerate open milestones and compute the three buckets from the latest published release:
+**Resolution.** At the start of the run (or first single-issue invocation), enumerate open milestones and compute the three buckets from the version **currently in development** — the repo-root `version.json`:
 
 ```bash
-LATEST_MM=$(gh release view --repo ingo-eichhorst/Irrlicht --json tagName --jq .tagName \
-            | sed -E 's/^v//; s/^([0-9]+\.[0-9]+).*/\1/')
-# 0.4 → ACTIVE=0.5, NEXT=0.6, FUTURE=0.7
-ACTIVE="v$(awk -v v="$LATEST_MM" 'BEGIN{split(v,a,"."); print a[1]"."a[2]+1}')"
-NEXT="v$(awk   -v v="$LATEST_MM" 'BEGIN{split(v,a,"."); print a[1]"."a[2]+2}')"
-FUTURE="v$(awk -v v="$LATEST_MM" 'BEGIN{split(v,a,"."); print a[1]"."a[2]+3}')"
+DEV_MM=$(jq -r .version "$(git rev-parse --show-toplevel)/version.json" \
+         | sed -E 's/^v//; s/^([0-9]+\.[0-9]+).*/\1/')
+# version.json 0.6.0 → ACTIVE=v0.6, NEXT=v0.7, FUTURE=v0.8
+ACTIVE="v$DEV_MM"
+NEXT="v$(awk   -v v="$DEV_MM" 'BEGIN{split(v,a,"."); print a[1]"."a[2]+1}')"
+FUTURE="v$(awk -v v="$DEV_MM" 'BEGIN{split(v,a,"."); print a[1]"."a[2]+2}')"
 
 gh api "repos/ingo-eichhorst/Irrlicht/milestones?state=open" --jq '.[] | .title'
 ```
+
+**Why `version.json` and not the latest release tag** — do not revert this to `gh release view`. The published tag says what **shipped**; `version.json` says what is **being built next** (`tools/build-release.sh` reads it as the base version, `/ir:release` bumps it). Only the second distinguishes a patch inside the current cycle from a new minor. When the maintainer is cutting `0.6.1`, the latest tag is still `v0.6.0`, and a tag-derived formula reads that as "0.6 shipped, so the live cycle must be 0.7" — routing every freshly triaged issue to `v0.7`/`v0.8` and skipping the live milestone entirely. `version.json` still reads `0.6.0`, so `ACTIVE` correctly stays `v0.6`. (Real incident: five issues triaged mid-`0.6.1`, all three `ready-for-agent` ones landed in `v0.8`.)
+
+If `version.json` is missing or its `version` is unparseable, **say so and stop resolving milestones** — apply labels without one and note it in the brief. Silently falling back to the tag reintroduces exactly the bug above.
 
 **Pick by priority:**
 

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"irrlicht/core/pkg/tailer"
@@ -22,6 +23,56 @@ func TestLoadLedger_RejectsOldSchema(t *testing.T) {
 	}
 	if s := loadLedger(lp); s != nil {
 		t.Errorf("loadLedger accepted a schema-3 ledger: %+v (must discard → full re-scan)", s)
+	}
+}
+
+// preSessionErrorLedgerVersion is the schema a v0.6.0 daemon stamps: the last
+// version whose parser had NO session-error concept at all (`git show
+// v0.6.0:core/pkg/tailer/parser.go | grep -c SessionError` → 0). Written as a
+// LITERAL on purpose. It is the fixed historical fact the test below is about,
+// and spelling it symbolically would make the test follow the bump it exists to
+// pin — reverting LedgerSchemaVersion to 5 would leave it green.
+const preSessionErrorLedgerVersion = 5
+
+// TestLoadLedger_RejectsPreSessionErrorSchema pins the #1815 bump to 6: a ledger
+// stamped by a daemon that could not derive session errors must be DISCARDED, so
+// the session gets a full transcript re-scan under the current parser.
+//
+// Why the re-scan is the whole point, and why nothing else supplies it: the
+// tailer's sticky error is a pure function of the transcript lines
+// (applySessionError is its only non-ledger writer), so a session that failed
+// under v0.6.0 has its failure sitting in bytes ALREADY PAST LastOffset. Accept
+// that ledger as current and the post-restart pass reads zero new lines, nothing
+// re-derives the failure, and the session stays `ready` forever under a daemon
+// that would have called it `error`.
+//
+// This is a guard, so it has no pre-fix red of its own — the mutation it was
+// verified against is `LedgerSchemaVersion = 5`, i.e. reverting the bump, which
+// makes the payload below current and turns this test red.
+func TestLoadLedger_RejectsPreSessionErrorSchema(t *testing.T) {
+	// Fail loudly rather than vacuously if the bump is ever reverted: with the
+	// two equal, the payload below is a CURRENT ledger and "discarded" would be
+	// asserting the opposite of what this test means.
+	if tailer.LedgerSchemaVersion <= preSessionErrorLedgerVersion {
+		t.Fatalf("LedgerSchemaVersion = %d, must exceed the pre-session-error schema %d — "+
+			"the #1815 bump was reverted, so a v0.6.0 ledger is now accepted as current and "+
+			"every session that failed under it stays green after upgrading",
+			tailer.LedgerSchemaVersion, preSessionErrorLedgerVersion)
+	}
+
+	dir := t.TempDir()
+	lp := filepath.Join(dir, "pre-session-error.ledger.json")
+	// A real v0.6.0 ledger shape: current-looking, mid-session, and carrying no
+	// session_error key because that daemon had no field to write one into.
+	v5 := []byte(`{"schema_version":` + strconv.Itoa(preSessionErrorLedgerVersion) +
+		`,"last_offset":3115960,"last_event_type":"assistant","cum_provider_cost_usd":1.25}`)
+	if err := os.WriteFile(lp, v5, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if s := loadLedger(lp); s != nil {
+		t.Errorf("loadLedger accepted a schema-%d ledger: %+v — a session that errored under "+
+			"v0.6.0 will resume at LastOffset, read zero new lines, and never go red",
+			preSessionErrorLedgerVersion, s)
 	}
 }
 
