@@ -15,7 +15,8 @@ import {
   cacheBloatBadgeText,
 } from './formatters.js';
 import { reconcile, paintRowNum } from './domReconcile.js';
-import { initElfdans, publishLedgerSnapshot, ledgerEntry } from './elfdans.js';
+import { initElfdans } from './elfdans.js';
+import { createElfdansDashboard } from './elfdansDashboard.js';
 
     // --- State ---
     let dashboardGroups = [];
@@ -1295,9 +1296,7 @@ import { initElfdans, publishLedgerSnapshot, ledgerEntry } from './elfdans.js';
       // className, so the notification selection is repainted from state; a tap
       // still waiting on its session gets another look at the fresh list; and
       // the phone's ledger is told what the dashboard can now see.
-      paintElfdansFocus();
-      attemptElfdansFocus();
-      scheduleLedgerPublish();
+      elfdansDash.onRender();
     }
 
     // Keep the header summary-mode button's glyph/label in sync with the
@@ -1830,7 +1829,7 @@ import { initElfdans, publishLedgerSnapshot, ledgerEntry } from './elfdans.js';
 
     function ingestInitialSessions(resp) {
       if (!resp) return;
-      elfdansLiveDataArrived = true;
+      elfdansDash.noteLiveData();
       dashboardGroups = Array.isArray(resp) ? resp : (resp.groups || []);
       normalizeGroupAgents(dashboardGroups);
       dashboardProviderCosts = (resp && !Array.isArray(resp) && resp.provider_costs) || {};
@@ -2068,14 +2067,9 @@ import { initElfdans, publishLedgerSnapshot, ledgerEntry } from './elfdans.js';
         if (src.kind === 'relay' && settings.relayToken) hello.token = settings.relayToken;
         try { ws.send(JSON.stringify(hello)); } catch (e) { console.debug('irrlicht: failed to send hello frame', e); }
         updateWsStatus();
-        // Publish the ledger on the CONNECT edge, not only from render().
-        // Nothing renders when a socket opens, so a phone whose handshake
-        // completes after the last render would otherwise publish nothing
-        // until the next session frame — and if there are no sessions there
-        // is no next frame. That is precisely the case the fold exists for:
-        // opened after everything ended, the empty set is the news that takes
-        // the push fold's last `waiting` row and its badge back down (§8.5).
-        scheduleLedgerPublish();
+        // The ledger publishes on the CONNECT edge too, not only from
+        // render() — elfdansDashboard.js carries why.
+        elfdansDash.noteSourceConnected();
         // Re-read consent on every (re)connect, mirroring the macOS app's
         // connect() (#1385). A daemon restart re-runs every granted effect
         // at boot, and a failure there is broadcast by nobody: Start emits
@@ -2105,7 +2099,7 @@ import { initElfdans, publishLedgerSnapshot, ledgerEntry } from './elfdans.js';
         // reconnect an unchanged live set would otherwise be suppressed as
         // "already published", leaving the push fold's `waiting` row and its
         // badge in place with nothing left to correct them.
-        elfdansPublishedSignature = null;
+        elfdansDash.noteSourceDisconnected();
         updateWsStatus();
         scheduleReconnect(src);
       };
@@ -2242,7 +2236,7 @@ import { initElfdans, publishLedgerSnapshot, ledgerEntry } from './elfdans.js';
       if (!msg.session) return;
       // A session frame landed, from any source — so "the session is not in
       // the list" has stopped being a race and can be reported (arc42 R6).
-      elfdansLiveDataArrived = true;
+      elfdansDash.noteLiveData();
       const s = msg.session;
       if (msg.type === 'session_deleted') {
         applySessionDelete(s.session_id);
@@ -2256,242 +2250,24 @@ import { initElfdans, publishLedgerSnapshot, ledgerEntry } from './elfdans.js';
       render();
     }
 
-    // --- Elfdans: notification deep link + live ledger fold (arc42 §8.5, R6) ---
-    //
-    // A push payload names the relay's BARE session id — Payload in
-    // core/domain/notify/notify.go carries no daemon id for the session kind —
-    // while a relay-sourced row is keyed by the compound `<daemon>\0<id>` that
-    // normalizeSourcedFrame folds in above (#537), and that compound id is what
-    // reaches `data-session-id`. A link keyed on the bare id therefore matches
-    // no row at all, silently, for exactly the sessions notifications are
-    // about. Resolution runs through displaySessionId — compoundSessionId's
-    // documented inverse (sessionIdentity.js) — rather than through a second
-    // derivation that could drift from it.
+    // Irrlicht Elfdans's dashboard half — the notification deep link (R6) and
+    // the live ledger fold (§8.5) — lives in elfdansDashboard.js. What stays
+    // here is this construction and the five calls it hands back: the
+    // dashboard holds no Elfdans state and takes no Elfdans branch, so the
+    // feature can be dropped, or shipped as its own artifact, without being
+    // unpicked from this file.
+    const elfdansDash = createElfdansDashboard({
+      sessionIds: () => sessionIndex.keys(),
+      groupOf: (sessionId) => sessionIndex.get(sessionId)?.group || null,
+      groups: () => dashboardGroups,
+      render,
+      anySourceConnected: () => [...sources.values()].some(s => s.state === 'connected'),
+    });
 
-    // How long a tap waits for the session list before "not here" is a verdict
-    // rather than a race: the app may have been opened COLD by the tap and be
-    // waiting on its first frame.
-    const ELFDANS_TARGET_GRACE_MS = 2500;
-    // The live fold is published on a debounce: a metrics tick is not news to
-    // the ledger, and a phone should not post one message per row update.
-    const ELFDANS_PUBLISH_DEBOUNCE_MS = 500;
-
-    let elfdansTarget = null;          // { bareId, deadline } — a tap not yet resolved
-    let elfdansGraceTimer = null;
-    let elfdansLiveDataArrived = false;
-    let elfdansFocusedSessionId = '';
-
-    // Every row a bare id can mean. Plural on purpose: two daemons may deliver
-    // the same bare session_id (`proc-<pid>` collides readily) — the ambiguity
-    // the compound key exists to keep apart, and the one a notification cannot
-    // resolve, since it names no daemon.
-    function elfdansRowIdsFor(bareId) {
-      const out = [];
-      for (const id of sessionIndex.keys()) {
-        if (displaySessionId(id) === bareId) out.push(id);
-      }
-      return out;
-    }
-
-    // Entry point for a notification tap, handed to elfdans.js at wiring time.
+    // Kept as a named export because it IS the dashboard's entry point for a
+    // notification tap — irrlicht.elfdans.test.js drives it as one.
     export function focusSessionFromNotification(bareId) {
-      if (!bareId) return;
-      elfdansTarget = { bareId: String(bareId), deadline: Date.now() + ELFDANS_TARGET_GRACE_MS };
-      clearElfdansGraceTimer();
-      // A retry rides every render, but a phone that receives no frame at all
-      // renders nothing — so the verdict carries its own clock too.
-      elfdansGraceTimer = setTimeout(() => { elfdansGraceTimer = null; attemptElfdansFocus(); }, ELFDANS_TARGET_GRACE_MS);
-      attemptElfdansFocus();
-    }
-
-    function clearElfdansGraceTimer() {
-      if (elfdansGraceTimer === null) return;
-      clearTimeout(elfdansGraceTimer);
-      elfdansGraceTimer = null;
-    }
-
-    function attemptElfdansFocus() {
-      if (!elfdansTarget) return;
-      const bareId = elfdansTarget.bareId;
-      const ids = elfdansRowIdsFor(bareId);
-      if (ids.length === 0 && !elfdansLiveDataArrived && Date.now() < elfdansTarget.deadline) return;
-      elfdansTarget = null;
-      clearElfdansGraceTimer();
-      if (ids.length > 0) { selectElfdansRow(ids, bareId); return; }
-      // Never a tap that appears to have done nothing (R6): if the session is
-      // not in the list, the app opens and says so.
-      reportElfdansSessionMissing(bareId);
-    }
-
-    function elfdansRowElement(sessionId) {
-      // Attribute-selector lookup would have to escape a compound id, which
-      // carries a NUL delimiter; the existing repaintHistory walk is the idiom.
-      for (const el of document.querySelectorAll('#session-list .session-row')) {
-        if (el.dataset.sessionId === sessionId) return el;
-      }
-      return null;
-    }
-
-    function selectElfdansRow(ids, bareId) {
-      elfdansFocusedSessionId = ids[0];
-      let row = elfdansRowElement(ids[0]);
-      if (!row) {
-        // The dashboard holds the session but is not painting it: its group is
-        // collapsed. Expanding is the honest move — reporting "not in the list"
-        // about a row a chevron would reveal is a lie.
-        expandGroupsForSession(ids[0]);
-        render();
-        row = elfdansRowElement(ids[0]);
-      }
-      if (!row) { reportElfdansSessionMissing(bareId); return; }
-      paintElfdansFocus();
-      if (typeof row.scrollIntoView === 'function') row.scrollIntoView({ block: 'center' });
-      showElfdansNotice(ids.length > 1
-        ? 'Two sessions share that id — showing the first. The notification named no daemon, so this app cannot tell them apart.'
-        : '');
-    }
-
-    // reconcile rewrites a session row's className on every update, so the
-    // selection is re-applied from state after each render rather than set once
-    // on the element.
-    function paintElfdansFocus() {
-      for (const el of document.querySelectorAll('#session-list .session-row')) {
-        el.classList.toggle('elfdans-focus', !!elfdansFocusedSessionId && el.dataset.sessionId === elfdansFocusedSessionId);
-      }
-    }
-
-    // The collapse key is path-qualified (see emitGroup), so the chain is
-    // rebuilt the same way rather than guessed from the group's own name.
-    function elfdansGroupKeyChain(group) {
-      let chain = [];
-      (function walk(groups, parentKey, ancestors) {
-        for (const g of (groups || [])) {
-          if (chain.length) return;
-          const key = parentKey ? parentKey + '/' + g.name : g.name;
-          const next = ancestors.concat([key]);
-          if (g === group) { chain = next; return; }
-          if (g.groups?.length) walk(g.groups, key, next);
-        }
-      })(dashboardGroups, '', []);
-      return chain;
-    }
-
-    function expandGroupsForSession(sessionId) {
-      const entry = sessionIndex.get(sessionId);
-      if (!entry) return;
-      for (const key of elfdansGroupKeyChain(entry.group)) {
-        if (isGroupCollapsed(key)) toggleGroupCollapsed(key);
-      }
-    }
-
-    async function reportElfdansSessionMissing(bareId) {
-      elfdansFocusedSessionId = '';
-      paintElfdansFocus();
-      let entry = null;
-      try {
-        entry = await ledgerEntry(bareId);
-      } catch (e) {
-        console.debug('irrlicht: failed to read the elfdans ledger', e);
-      }
-      showElfdansNotice(missingSessionText(bareId, entry));
-    }
-
-    // What the app says when a tap resolves to no row. The ledger is the only
-    // thing that still knows anything about that session (arc42 §8.5), so its
-    // last-known state IS the answer — stated "as of <time>", never as now.
-    // Pure; exported for tests.
-    export function missingSessionText(bareId, entry) {
-      const who = [entry?.label, entry?.project].filter(Boolean).join(' · ')
-        || ('Session ' + String(bareId || '').slice(0, 8));
-      if (entry?.state) {
-        return who + ' — last known ' + entry.state + ' ' + elfdansAsOfText(entry.at)
-          + ', and not in the list this device is watching.';
-      }
-      return who + ' is not in the list this device is watching, and this phone kept no last-known state for it.';
-    }
-
-    function elfdansAsOfText(atSeconds) {
-      const n = Number(atSeconds);
-      if (!Number.isFinite(n) || n <= 0) return 'at an unknown time';
-      return 'as of ' + new Date(n * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    }
-
-    // Created on demand and removed when it has nothing to say: this notice is
-    // Elfdans's only mark on the dashboard chrome, and a dashboard nobody taps a
-    // notification into never grows it (arc42 §5.2).
-    function showElfdansNotice(text) {
-      let el = document.getElementById('elfdans-notice');
-      if (!text) { if (el) el.remove(); return; }
-      if (!el) {
-        el = document.createElement('div');
-        el.id = 'elfdans-notice';
-        el.setAttribute('role', 'status');
-        el.title = 'Dismiss';
-        el.addEventListener('click', () => el.remove());
-        const list = document.getElementById('session-list');
-        if (list?.parentNode) list.parentNode.insertBefore(el, list);
-        else document.body.appendChild(el);
-      }
-      el.textContent = text;
-    }
-
-    // --- The live fold (arc42 §8.5) ---
-    let elfdansPublishTimer = null;
-    // null, not '': "nothing has been published yet" and "the empty set has
-    // been published" are different states, and an empty set is the single
-    // most important snapshot this fold sends. A phone opened after every
-    // session ended connects, renders zero rows, and that nothing is exactly
-    // the news — it is what takes the last `waiting` row the push fold wrote
-    // out of the ledger. Held as '' they compare equal, the first publish is
-    // skipped, and the badge never returns to zero.
-    let elfdansPublishedSignature = null;
-
-    // What the ledger gets from the live view. Top-level sessions only: §8.4
-    // never notifies about a subagent (the parent covers it), so counting one
-    // in the badge would claim attention nobody was asked for. Keyed by the
-    // BARE id — the key space the push fold already writes.
-    function elfdansLedgerSessions() {
-      const at = Math.floor(Date.now() / 1000);
-      const out = [];
-      (function walk(groups) {
-        for (const g of (groups || [])) {
-          for (const a of (g.agents || [])) {
-            if (!a.session_id) continue;
-            out.push({
-              session_id: displaySessionId(a.session_id),
-              state: a.state || '',
-              // Mirrors what the relay composes into a push payload
-              // (push_observer.go: Label = adapter, Project = project name), so
-              // the two folds write the same fields rather than two dialects.
-              label: a.adapter || '',
-              project: a.project_name || '',
-              at,
-            });
-          }
-          if (g.groups?.length) walk(g.groups);
-        }
-      })(dashboardGroups);
-      return out;
-    }
-
-    function scheduleLedgerPublish() {
-      // A disconnected dashboard's list is not a smaller truth, it is no truth
-      // at all — publishing it would delete the ledger §8.5 keeps for exactly
-      // that moment ("as of 14:32").
-      if (![...sources.values()].some(s => s.state === 'connected')) return;
-      if (elfdansPublishTimer !== null) return;
-      elfdansPublishTimer = setTimeout(() => {
-        elfdansPublishTimer = null;
-        const rows = elfdansLedgerSessions();
-        const signature = rows.map(r => r.session_id + ':' + r.state).join('|');
-        if (signature === elfdansPublishedSignature) return;
-        // Recorded only once it actually published: an unpaired dashboard
-        // answers false, and a phone paired a minute later must not then be
-        // skipped because the set has not changed since.
-        publishLedgerSnapshot(rows).then((published) => {
-          elfdansPublishedSignature = published ? signature : null;
-        });
-      }, ELFDANS_PUBLISH_DEBOUNCE_MS);
+      elfdansDash.focusSessionFromNotification(bareId);
     }
 
     // --- Connection status (header dot + banner + tooltip) ---
@@ -2746,6 +2522,7 @@ export {
   sessionOrigin, sourceIdOf, localBareIds, isShadowedRemote,
   daemonSessionIds, structureSignature,
 };
+export { missingSessionText } from './elfdansDashboard.js';
 export { formatUsageCost } from './quotaChips.js';
 export { pendingWizardAgents, buildPermissionAnswers, stillPendingForAgents } from './permissionsWizard.js';
 export {

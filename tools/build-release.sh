@@ -40,6 +40,7 @@ WEB_FILES=(
     irrlicht.js
     elfdans-icon.svg
     elfdans.js
+    elfdansDashboard.js
     elfdans.webmanifest
     collapsedGroups.js
     collapsedSet.js
