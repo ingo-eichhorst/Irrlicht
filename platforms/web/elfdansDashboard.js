@@ -247,22 +247,25 @@ function elfdansRowElement(sessionId) {
 // Elfdans's only mark on the dashboard chrome, and a dashboard nobody taps a
 // notification into never grows it (arc42 §5.2).
 function showElfdansNotice(text) {
-  let el = document.getElementById('elfdans-notice');
+  const existing = document.getElementById('elfdans-notice');
   if (!text) {
-    if (el) el.remove();
+    existing?.remove();
     return;
   }
-  if (!el) {
-    el = document.createElement('div');
-    el.id = 'elfdans-notice';
-    el.setAttribute('role', 'status');
-    el.title = 'Dismiss';
-    el.addEventListener('click', () => el.remove());
-    const list = document.getElementById('session-list');
-    if (list?.parentNode) list.parentNode.insertBefore(el, list);
-    else document.body.appendChild(el);
-  }
+  const el = existing || insertNotice();
   el.textContent = text;
+}
+
+function insertNotice() {
+  const el = document.createElement('div');
+  el.id = 'elfdans-notice';
+  el.setAttribute('role', 'status');
+  el.title = 'Dismiss';
+  el.addEventListener('click', () => el.remove());
+  const list = document.getElementById('session-list');
+  if (list?.parentNode) list.parentNode.insertBefore(el, list);
+  else document.body.appendChild(el);
+  return el;
 }
 
 function elfdansAsOfText(atSeconds) {
@@ -291,23 +294,28 @@ export function missingSessionText(bareId, entry) {
 export function elfdansLedgerSessions(groups) {
   const at = Math.floor(Date.now() / 1000);
   const out = [];
-  (function walk(gs) {
-    for (const g of (gs || [])) {
-      for (const a of (g.agents || [])) {
-        if (!a.session_id) continue;
-        out.push({
-          session_id: displaySessionId(a.session_id),
-          state: a.state || '',
-          // Mirrors what the relay composes into a push payload
-          // (push_observer.go: Label = adapter, Project = project name), so
-          // the two folds write the same fields rather than two dialects.
-          label: a.adapter || '',
-          project: a.project_name || '',
-          at,
-        });
-      }
-      if (g.groups?.length) walk(g.groups);
-    }
-  })(groups);
+  forEachTopLevelAgent(groups, (a) => {
+    if (a.session_id) out.push(ledgerRow(a, at));
+  });
   return out;
+}
+
+function forEachTopLevelAgent(groups, visit) {
+  for (const g of (groups || [])) {
+    for (const a of (g.agents || [])) visit(a);
+    if (g.groups?.length) forEachTopLevelAgent(g.groups, visit);
+  }
+}
+
+function ledgerRow(agent, at) {
+  return {
+    session_id: displaySessionId(agent.session_id),
+    state: agent.state || '',
+    // Mirrors what the relay composes into a push payload (push_observer.go:
+    // Label = adapter, Project = project name), so the two folds write the
+    // same fields rather than two dialects.
+    label: agent.adapter || '',
+    project: agent.project_name || '',
+    at,
+  };
 }
