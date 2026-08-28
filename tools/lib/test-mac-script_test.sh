@@ -3,10 +3,10 @@
 # .claude/skills/ir:test-mac/test-mac.sh (#1855).
 #
 # WHAT THIS IS. #1855 turned nine fenced bash blocks in that skill's SKILL.md
-# into one script. Six gates were MOVED across in that extraction and one was
-# added; each has an incident behind it and several fail SILENTLY when broken,
-# which is exactly why an extraction is where they get lost. This file drives
-# the real script end to end and asserts each gate still holds.
+# into one script. Six gates were MOVED across in that extraction and three
+# were added; each has an incident behind it and several fail SILENTLY when
+# broken, which is exactly why an extraction is where they get lost. This file
+# drives the real script end to end and asserts each gate still holds.
 # tools/lib/test-mac-script-mutations_test.sh then breaks each gate in turn
 # and requires THIS file to go red — a green that was never red is a claim,
 # not evidence (AGENTS.md, Testing).
@@ -30,11 +30,20 @@
 # run at full fidelity in zero time. The loops are the thing under test; their
 # wall-clock cost is not.
 #
+# CASE SELECTION. With no case named every case runs, which is what the `tools`
+# gate does. Naming one (argv, or $TESTMAC_CASE) runs only that one — which is
+# how the mutations fixture keeps its cost sane: it applies eleven mutations,
+# and re-running all fifteen cases for each of them took 194s and pushed the
+# whole `tools` gate from 116s to 327s, well past what the pre-push hook's 540s
+# budget can absorb alongside every other gate (measured, #1855). A NAME THAT
+# MATCHES NOTHING IS A REFUSAL (exit 2), never a quiet zero-case pass: a typo
+# in a fixture row must not produce the same output as a case that ran.
+#
 # Convention follows tools/lib/install-uninstall_test.sh and
 # tools/lib/agents-md-lint_test.sh: plain bash, `set -uo pipefail` (never -e —
-# a non-zero status from the subject is DATA here, half the cases expect one),
-# a `fails` counter, and "ALL PASS" / "N FAILED" at the end. FAIL lines start
-# at column 0 because tools/lib/mutation-assert.sh greps `^FAIL:` to decide
+# a non-zero status from the subject is DATA here, most cases expect one), a
+# `fails` counter, and "ALL PASS" / "N FAILED" at the end. FAIL lines start at
+# column 0 because tools/lib/mutation-assert.sh greps `^FAIL:` to decide
 # whether a mutation went red.
 set -uo pipefail
 
@@ -43,6 +52,11 @@ REPO_ROOT=$(git rev-parse --show-toplevel) || { echo "FAIL: $NAME — not inside
 cd "$REPO_ROOT" || { echo "FAIL: $NAME — cannot cd to $REPO_ROOT" >&2; exit 2; }
 
 SCRIPT=".claude/skills/ir:test-mac/test-mac.sh"
+# Positional for a human ("run just this one"), $TESTMAC_CASE for the mutations
+# fixture — tools/lib/mutation-assert.sh runs the lock test as a bare
+# `bash <path>` and has no way to append an argument, so the env spelling is
+# the one it can actually reach. Positional wins if both are given.
+CASE_FILTER="${1:-${TESTMAC_CASE:-}}"
 
 # A missing tool is a hard REFUSAL (exit 2), never a skip: exiting 0 here would
 # read as a PASS to shell-lib-suite.sh, so the gate would go green having
@@ -159,9 +173,14 @@ STUB
   echo "$root"
 }
 
+# with_backup <root> — the common precondition for every case that is NOT
+# about the backup gates: a backup exists, so the no-safety-net refusal does
+# not fire first and mask the gate actually under test.
+with_backup() { mkdir -p "$1/main/.build/irrlicht-prod-backup/Irrlicht.app"; }
+
 # run_script <root> [VAR=VAL ...] -- [script args...]
 # Sets OUT and ST. Never aborts: a non-zero status is the expected outcome of
-# half the cases here.
+# most cases here.
 run_script() {
   local root="$1"; shift
   local extra=()
@@ -188,17 +207,16 @@ sentinel_intact() { [[ "$(cat "$1/Applications/Irrlicht.app/Contents/MacOS/Irrli
 sparkle_intact()  { [[ "$(cat "$1/Applications/Irrlicht.app/Contents/Frameworks/Sparkle.framework/marker" 2>/dev/null)" == PRODUCTION ]]; }
 logged()          { grep -qF -- "$2" "$1/stub.log" 2>/dev/null; }
 
-echo "== $NAME: $SCRIPT =="
-
-# ─── 0. The happy path runs clean — the vacuity guard for everything below ──
+# ─── happy: the whole run completes — the vacuity guard for everything else ──
 # Without this, every abort case could be passing because the fixture is
 # broken rather than because a gate fired.
-R=$(new_env)
-mkdir -p "$R/main/.build/irrlicht-prod-backup/Irrlicht.app"   # dev-signed + a backup ⇒ the refusal below does not fire
-run_script "$R" -- replace full
-if [[ $ST -ne 0 ]]; then
-  fail "the happy path (replace full) completes — it exited $ST, so every abort case below proves nothing: $(flat "$OUT")"
-else
+case_happy() {
+  local R; R=$(new_env); with_backup "$R"
+  run_script "$R" -- replace full
+  if [[ $ST -ne 0 ]]; then
+    fail "the happy path (replace full) completes — it exited $ST, so every abort case proves nothing: $(flat "$OUT")"
+    return
+  fi
   pass "the happy path (replace full) completes"
   if logged "$R" 'open '; then pass "...and the app was launched"; else
     fail "the happy path launches the app — no 'open' call was recorded: $(flat "$OUT")"; fi
@@ -207,227 +225,245 @@ else
   else
     fail "the happy path installs the dev build — the bundle executable was not replaced"
   fi
-fi
+}
 
 # ─── GATE 1: daemon reachability, before the app is launched ────────────────
 # If the app starts while no --record daemon answers on 7837, it runs
 # `pkill -x irrlichd` and respawns one WITHOUT --record, silently defeating the
 # whole run. A gate, not a courtesy sleep.
-R=$(new_env)
-mkdir -p "$R/main/.build/irrlicht-prod-backup/Irrlicht.app"
-run_script "$R" STUB_CURL_RC=1 -- replace full
-if [[ $ST -eq 0 ]]; then
-  fail "GATE daemon-reachability: an unreachable daemon must abort, but the script exited 0: $(flat "$OUT")"
-elif [[ "$OUT" != *"never became reachable"* ]]; then
-  fail "GATE daemon-reachability: aborted (exit $ST) but not with the reachability message: $(flat "$OUT")"
-elif logged "$R" 'open '; then
-  fail "GATE daemon-reachability: it aborted, but the app was launched anyway — the app would pkill our daemon and respawn one without --record"
-else
-  pass "GATE daemon-reachability: no reachable daemon ⇒ abort, and the app is never launched"
-fi
+case_reachability() {
+  local R; R=$(new_env); with_backup "$R"
+  run_script "$R" STUB_CURL_RC=1 -- replace full
+  if [[ $ST -eq 0 ]]; then
+    fail "GATE daemon-reachability: an unreachable daemon must abort, but the script exited 0: $(flat "$OUT")"
+  elif [[ "$OUT" != *"never became reachable"* ]]; then
+    fail "GATE daemon-reachability: aborted (exit $ST) but not with the reachability message: $(flat "$OUT")"
+  elif logged "$R" 'open '; then
+    fail "GATE daemon-reachability: it aborted, but the app was launched anyway — the app would pkill our daemon and respawn one without --record"
+  else
+    pass "GATE daemon-reachability: no reachable daemon ⇒ abort, and the app is never launched"
+  fi
+}
 
 # ─── GATE 2: wait for the app to exit before overwriting its bundle ─────────
-R=$(new_env)
-mkdir -p "$R/main/.build/irrlicht-prod-backup/Irrlicht.app"
-run_script "$R" STUB_PGREP_RC=0 -- replace full
-if [[ $ST -eq 0 ]]; then
-  fail "GATE app-exit-wait: a still-running app must abort, but the script exited 0: $(flat "$OUT")"
-elif [[ "$OUT" != *"still running"* ]]; then
-  fail "GATE app-exit-wait: aborted (exit $ST) but not with the still-running message: $(flat "$OUT")"
-elif ! sentinel_intact "$R"; then
-  fail "GATE app-exit-wait: it aborted, but the bundle executable was overwritten while the process was still alive"
-else
-  pass "GATE app-exit-wait: a live app process ⇒ abort, and its bundle is left untouched"
-fi
+case_app_exit() {
+  local R; R=$(new_env); with_backup "$R"
+  run_script "$R" STUB_PGREP_RC=0 -- replace full
+  if [[ $ST -eq 0 ]]; then
+    fail "GATE app-exit-wait: a still-running app must abort, but the script exited 0: $(flat "$OUT")"
+  elif [[ "$OUT" != *"still running"* ]]; then
+    fail "GATE app-exit-wait: aborted (exit $ST) but not with the still-running message: $(flat "$OUT")"
+  elif ! sentinel_intact "$R"; then
+    fail "GATE app-exit-wait: it aborted, but the bundle executable was overwritten while the process was still alive"
+  else
+    pass "GATE app-exit-wait: a live app process ⇒ abort, and its bundle is left untouched"
+  fi
+}
 
 # ─── GATE 3a: backup freshness — refresh a Developer-ID-signed original ─────
 # Never trust an existing backup blindly: it can predate a newer production
 # release installed since, which would make restore-prod.sh silently reinstall
 # a stale build.
-R=$(new_env)
-mkdir -p "$R/main/.build/irrlicht-prod-backup/Irrlicht.app/Contents/MacOS"
-echo 'STALE-BACKUP' > "$R/main/.build/irrlicht-prod-backup/Irrlicht.app/Contents/MacOS/Irrlicht"
-run_script "$R" STUB_CODESIGN_AUTHORITY="Authority=Developer ID Application: Ingo" -- replace full
-BACKED="$(cat "$R/main/.build/irrlicht-prod-backup/Irrlicht.app/Contents/MacOS/Irrlicht" 2>/dev/null)"
-if [[ $ST -ne 0 ]]; then
-  fail "GATE backup-freshness: a Developer-ID-signed app must be backed up and installed over, but it exited $ST: $(flat "$OUT")"
-elif [[ "$BACKED" != PRODUCTION ]]; then
-  fail "GATE backup-freshness: the stale backup was NOT refreshed from the untouched original (backup holds '$BACKED', wanted PRODUCTION) — restore-prod.sh would reinstall a stale build"
-else
-  pass "GATE backup-freshness: a Developer-ID-signed original refreshes the backup before being overwritten"
-fi
+case_backup_refresh() {
+  local R BACKED; R=$(new_env)
+  mkdir -p "$R/main/.build/irrlicht-prod-backup/Irrlicht.app/Contents/MacOS"
+  echo 'STALE-BACKUP' > "$R/main/.build/irrlicht-prod-backup/Irrlicht.app/Contents/MacOS/Irrlicht"
+  run_script "$R" STUB_CODESIGN_AUTHORITY="Authority=Developer ID Application: Ingo" -- replace full
+  BACKED="$(cat "$R/main/.build/irrlicht-prod-backup/Irrlicht.app/Contents/MacOS/Irrlicht" 2>/dev/null)"
+  if [[ $ST -ne 0 ]]; then
+    fail "GATE backup-freshness: a Developer-ID-signed app must be backed up and installed over, but it exited $ST: $(flat "$OUT")"
+  elif [[ "$BACKED" != PRODUCTION ]]; then
+    fail "GATE backup-freshness: the stale backup was NOT refreshed from the untouched original (backup holds '$BACKED', wanted PRODUCTION) — restore-prod.sh would reinstall a stale build"
+  else
+    pass "GATE backup-freshness: a Developer-ID-signed original refreshes the backup before being overwritten"
+  fi
+}
 
 # ─── GATE 3b: backup freshness — refuse dev-signed with NO backup ───────────
-R=$(new_env)   # default authority is "Irrlicht Dev", and no backup dir is created
-run_script "$R" -- replace full
-if [[ $ST -eq 0 ]]; then
-  fail "GATE backup-refusal: dev-signed app + no backup must refuse, but the script exited 0: $(flat "$OUT")"
-elif [[ "$OUT" != *"no backup exists"* ]]; then
-  fail "GATE backup-refusal: aborted (exit $ST) but not with the no-backup message: $(flat "$OUT")"
-elif ! sentinel_intact "$R"; then
-  fail "GATE backup-refusal: it refused, but the only remaining copy of the bundle was overwritten anyway"
-else
-  pass "GATE backup-refusal: dev-signed app with no backup ⇒ refuse, with the last copy left intact"
-fi
+case_backup_refuse() {
+  local R; R=$(new_env)   # default authority is "Irrlicht Dev", and no backup dir is created
+  run_script "$R" -- replace full
+  if [[ $ST -eq 0 ]]; then
+    fail "GATE backup-refusal: dev-signed app + no backup must refuse, but the script exited 0: $(flat "$OUT")"
+  elif [[ "$OUT" != *"no backup exists"* ]]; then
+    fail "GATE backup-refusal: aborted (exit $ST) but not with the no-backup message: $(flat "$OUT")"
+  elif ! sentinel_intact "$R"; then
+    fail "GATE backup-refusal: it refused, but the only remaining copy of the bundle was overwritten anyway"
+  else
+    pass "GATE backup-refusal: dev-signed app with no backup ⇒ refuse, with the last copy left intact"
+  fi
+}
 
 # ─── GATE 4: build-output existence, checked before rm -rf'ing Sparkle ──────
-R=$(new_env)
-mkdir -p "$R/main/.build/irrlicht-prod-backup/Irrlicht.app"
-rm -f "$R/repo/platforms/macos/.build/arm64-apple-macosx/debug/Irrlicht"
-run_script "$R" -- replace full
-if [[ $ST -eq 0 ]]; then
-  fail "GATE build-output-exists: a missing build product must abort, but the script exited 0: $(flat "$OUT")"
-elif [[ "$OUT" != *"did not produce"* ]]; then
-  fail "GATE build-output-exists: aborted (exit $ST) but not with the missing-build-output message: $(flat "$OUT")"
-elif ! sparkle_intact "$R"; then
-  fail "GATE build-output-exists: it aborted, but Sparkle.framework was already deleted with nothing to replace it"
-else
-  pass "GATE build-output-exists: a missing build product ⇒ abort, with Sparkle.framework left in place"
-fi
+case_build_output() {
+  local R; R=$(new_env); with_backup "$R"
+  rm -f "$R/repo/platforms/macos/.build/arm64-apple-macosx/debug/Irrlicht"
+  run_script "$R" -- replace full
+  if [[ $ST -eq 0 ]]; then
+    fail "GATE build-output-exists: a missing build product must abort, but the script exited 0: $(flat "$OUT")"
+  elif [[ "$OUT" != *"did not produce"* ]]; then
+    fail "GATE build-output-exists: aborted (exit $ST) but not with the missing-build-output message: $(flat "$OUT")"
+  elif ! sparkle_intact "$R"; then
+    fail "GATE build-output-exists: it aborted, but Sparkle.framework was already deleted with nothing to replace it"
+  else
+    pass "GATE build-output-exists: a missing build product ⇒ abort, with Sparkle.framework left in place"
+  fi
+}
 
 # ─── GATE 5: MODE/TARGET validated against the literal enum, no default ─────
-R=$(new_env)
-# A backup exists, so a typo that slipped through would run to completion
-# rather than being stopped by a later gate — which is what makes "it exited 0"
-# below the honest description of the hazard.
-mkdir -p "$R/main/.build/irrlicht-prod-backup/Irrlicht.app"
-run_script "$R" -- seperate
-if [[ $ST -eq 0 ]]; then
-  fail "GATE enum-validation: the typo 'seperate' must be refused, but the script exited 0 and would have silently run in replace mode: $(flat "$OUT")"
-elif [[ "$OUT" != *"unrecognised argument"* ]]; then
-  fail "GATE enum-validation: refused (exit $ST) but not with the unrecognised-argument message: $(flat "$OUT")"
-else
-  pass "GATE enum-validation: an unrecognised axis value is refused instead of silently no-opping every step"
-fi
-# Vacuity guard: a validator that rejected EVERYTHING would satisfy the case
-# above while making the script unusable.
-R=$(new_env)
-run_script "$R" -- separate daemon
-if [[ "$OUT" == *"unrecognised argument"* ]]; then
-  fail "GATE enum-validation: the valid pair 'separate daemon' was rejected — the validator rejects everything: $(flat "$OUT")"
-elif [[ "$OUT" != *"MODE=separate TARGET=daemon"* ]]; then
-  fail "GATE enum-validation: 'separate daemon' did not resolve to MODE=separate TARGET=daemon: $(flat "$OUT")"
-else
-  pass "GATE enum-validation: ...and the valid spellings are still accepted, in either order"
-fi
+case_enum() {
+  local R; R=$(new_env)
+  # A backup exists, so a typo that slipped through would run to completion
+  # rather than being stopped by a later gate — which is what makes "it exited
+  # 0" below the honest description of the hazard.
+  with_backup "$R"
+  run_script "$R" -- seperate
+  if [[ $ST -eq 0 ]]; then
+    fail "GATE enum-validation: the typo 'seperate' must be refused, but the script exited 0 and would have silently run in replace mode: $(flat "$OUT")"
+  elif [[ "$OUT" != *"unrecognised argument"* ]]; then
+    fail "GATE enum-validation: refused (exit $ST) but not with the unrecognised-argument message: $(flat "$OUT")"
+  else
+    pass "GATE enum-validation: an unrecognised axis value is refused instead of silently no-opping every step"
+  fi
+  # Vacuity guard: a validator that rejected EVERYTHING would satisfy the case
+  # above while making the script unusable.
+  R=$(new_env)
+  run_script "$R" -- separate daemon
+  if [[ "$OUT" == *"unrecognised argument"* ]]; then
+    fail "GATE enum-validation: the valid pair 'separate daemon' was rejected — the validator rejects everything: $(flat "$OUT")"
+  elif [[ "$OUT" != *"MODE=separate TARGET=daemon"* ]]; then
+    fail "GATE enum-validation: 'separate daemon' did not resolve to MODE=separate TARGET=daemon: $(flat "$OUT")"
+  else
+    pass "GATE enum-validation: ...and the valid spellings are still accepted, in either order"
+  fi
+}
 
 # ─── GATE 6: the app is killed BEFORE the daemon ────────────────────────────
 # So a live app never observes a momentary daemon-less gap and reacts by
 # spawning its own replacement, which could win the port race against the
 # daemon the script starts next.
-R=$(new_env)
-mkdir -p "$R/main/.build/irrlicht-prod-backup/Irrlicht.app"
-run_script "$R" -- replace full
-APP_LINE=$(grep -nF -- 'pkill -f Irrlicht\.app/Contents/MacOS/Irrlicht' "$R/stub.log" 2>/dev/null | head -1 | cut -d: -f1)
-DMN_LINE=$(grep -nF -- 'pkill -x irrlichd' "$R/stub.log" 2>/dev/null | head -1 | cut -d: -f1)
-if [[ -z "$APP_LINE" || -z "$DMN_LINE" ]]; then
-  fail "GATE kill-order: COULD NOT LOOK — the app pkill (line '${APP_LINE:-none}') and/or the daemon pkill (line '${DMN_LINE:-none}') never happened, so their order proves nothing. Log: $(flat "$(cat "$R/stub.log")")"
-elif [[ "$APP_LINE" -ge "$DMN_LINE" ]]; then
-  fail "GATE kill-order: the daemon was killed at line $DMN_LINE, at or before the app at line $APP_LINE — a live app can observe the daemon-less gap and spawn its own replacement"
-else
-  pass "GATE kill-order: the app is killed (line $APP_LINE) before the daemon (line $DMN_LINE)"
-fi
+case_kill_order() {
+  local R APP_LINE DMN_LINE; R=$(new_env); with_backup "$R"
+  run_script "$R" -- replace full
+  APP_LINE=$(grep -nF -- 'pkill -f Irrlicht\.app/Contents/MacOS/Irrlicht' "$R/stub.log" 2>/dev/null | head -1 | cut -d: -f1)
+  DMN_LINE=$(grep -nF -- 'pkill -x irrlichd' "$R/stub.log" 2>/dev/null | head -1 | cut -d: -f1)
+  if [[ -z "$APP_LINE" || -z "$DMN_LINE" ]]; then
+    fail "GATE kill-order: COULD NOT LOOK — the app pkill (line '${APP_LINE:-none}') and/or the daemon pkill (line '${DMN_LINE:-none}') never happened, so their order proves nothing. Log: $(flat "$(cat "$R/stub.log")")"
+  elif [[ "$APP_LINE" -ge "$DMN_LINE" ]]; then
+    fail "GATE kill-order: the daemon was killed at line $DMN_LINE, at or before the app at line $APP_LINE — a live app can observe the daemon-less gap and spawn its own replacement"
+  else
+    pass "GATE kill-order: the app is killed (line $APP_LINE) before the daemon (line $DMN_LINE)"
+  fi
+}
 
 # ─── GATE 7 (ADDED by #1855): build freshness ───────────────────────────────
 # Existence is not freshness. A product left over from an earlier compile —
 # including one compiled while a tools/mutate.sh mutation was applied — is a
 # perfectly valid binary and passes GATE 4, so installing it means debugging a
 # defect the source does not have. That happened on this machine.
-R=$(new_env)
-mkdir -p "$R/main/.build/irrlicht-prod-backup/Irrlicht.app"
-touch -t 202601030101 "$R/repo/platforms/macos/Irrlicht/App.swift"   # source now NEWER than the product
-run_script "$R" -- replace full
-if [[ $ST -eq 0 ]]; then
-  fail "GATE build-freshness: a source newer than the build product must abort, but the script exited 0 and installed a stale binary: $(flat "$OUT")"
-elif [[ "$OUT" != *"NEWER than the built binary"* ]]; then
-  fail "GATE build-freshness: aborted (exit $ST) but not with the staleness message: $(flat "$OUT")"
-elif ! sentinel_intact "$R"; then
-  fail "GATE build-freshness: it aborted, but the stale binary was installed over the bundle anyway"
-else
-  pass "GATE build-freshness: a source newer than the build product ⇒ abort, with the bundle left untouched"
-fi
+case_freshness() {
+  local R; R=$(new_env); with_backup "$R"
+  touch -t 202601030101 "$R/repo/platforms/macos/Irrlicht/App.swift"   # source now NEWER than the product
+  run_script "$R" -- replace full
+  if [[ $ST -eq 0 ]]; then
+    fail "GATE build-freshness: a source newer than the build product must abort, but the script exited 0 and installed a stale binary: $(flat "$OUT")"
+  elif [[ "$OUT" != *"NEWER than the built binary"* ]]; then
+    fail "GATE build-freshness: aborted (exit $ST) but not with the staleness message: $(flat "$OUT")"
+  elif ! sentinel_intact "$R"; then
+    fail "GATE build-freshness: it aborted, but the stale binary was installed over the bundle anyway"
+  else
+    pass "GATE build-freshness: a source newer than the build product ⇒ abort, with the bundle left untouched"
+  fi
+}
+
 # ...and the freshness check must REFUSE when it cannot run, rather than pass
 # vacuously against an empty source set (AGENTS.md: absence of a finding and
 # inability to look must never produce the same output).
-R=$(new_env)
-mkdir -p "$R/main/.build/irrlicht-prod-backup/Irrlicht.app"
-find "$R/repo/platforms/macos/Irrlicht" -name '*.swift' -delete
-run_script "$R" -- replace full
-if [[ $ST -eq 0 ]]; then
-  fail "GATE build-freshness: with no .swift sources the check cannot run, but the script exited 0 — a vacuous pass: $(flat "$OUT")"
-elif [[ "$OUT" != *"no .swift sources found"* ]]; then
-  fail "GATE build-freshness: refused (exit $ST) but not with the cannot-run message: $(flat "$OUT")"
-else
-  pass "GATE build-freshness: ...and it REFUSES when it has nothing to compare against"
-fi
+case_freshness_vacuous() {
+  local R; R=$(new_env); with_backup "$R"
+  find "$R/repo/platforms/macos/Irrlicht" -name '*.swift' -delete
+  run_script "$R" -- replace full
+  if [[ $ST -eq 0 ]]; then
+    fail "GATE build-freshness: with no .swift sources the check cannot run, but the script exited 0 — a vacuous pass: $(flat "$OUT")"
+  elif [[ "$OUT" != *"no .swift sources found"* ]]; then
+    fail "GATE build-freshness: refused (exit $ST) but not with the cannot-run message: $(flat "$OUT")"
+  else
+    pass "GATE build-freshness: ...and it REFUSES when it has nothing to compare against"
+  fi
+}
 
 # ─── GATE 8 (ADDED by #1855): a failed swift build never reaches the bundle ─
 # The pre-script procedure ran `swift build 2>&1 | tail -5`, whose exit status
 # is tail's. A failed build reported success and the run continued into the
 # install with whatever binary happened to be lying around.
-R=$(new_env)
-mkdir -p "$R/main/.build/irrlicht-prod-backup/Irrlicht.app"
-run_script "$R" STUB_SWIFT_RC=1 -- replace full
-if [[ $ST -eq 0 ]]; then
-  fail "GATE swift-build-status: a failed swift build must abort, but the script exited 0 (its status came from the pipe, not from swift): $(flat "$OUT")"
-elif [[ "$OUT" != *"swift build failed"* ]]; then
-  fail "GATE swift-build-status: aborted (exit $ST) but not with the build-failed message: $(flat "$OUT")"
-elif ! sentinel_intact "$R"; then
-  fail "GATE swift-build-status: it aborted, but the bundle was overwritten anyway"
-else
-  pass "GATE swift-build-status: a failed swift build ⇒ abort, with the bundle left untouched"
-fi
+case_swift_status() {
+  local R; R=$(new_env); with_backup "$R"
+  run_script "$R" STUB_SWIFT_RC=1 -- replace full
+  if [[ $ST -eq 0 ]]; then
+    fail "GATE swift-build-status: a failed swift build must abort, but the script exited 0 (its status came from the pipe, not from swift): $(flat "$OUT")"
+  elif [[ "$OUT" != *"swift build failed"* ]]; then
+    fail "GATE swift-build-status: aborted (exit $ST) but not with the build-failed message: $(flat "$OUT")"
+  elif ! sentinel_intact "$R"; then
+    fail "GATE swift-build-status: it aborted, but the bundle was overwritten anyway"
+  else
+    pass "GATE swift-build-status: a failed swift build ⇒ abort, with the bundle left untouched"
+  fi
+}
 
-# ─── TARGET axis: daemon-only and macos-only skip the other component ───────
-R=$(new_env)
-mkdir -p "$R/main/.build/irrlicht-prod-backup/Irrlicht.app"
-run_script "$R" -- replace daemon
-if [[ $ST -ne 0 ]]; then
-  fail "TARGET=daemon completes — it exited $ST: $(flat "$OUT")"
-elif logged "$R" 'open '; then
-  fail "TARGET=daemon must not touch the app, but it launched one: $(flat "$(cat "$R/stub.log")")"
-elif ! sentinel_intact "$R"; then
-  fail "TARGET=daemon must not touch the app bundle, but the executable was overwritten"
-else
-  pass "TARGET=daemon rebuilds the daemon and leaves the app alone"
-fi
+# ─── The TARGET axis actually skips the component it names ──────────────────
+case_target_daemon() {
+  local R; R=$(new_env); with_backup "$R"
+  run_script "$R" -- replace daemon
+  if [[ $ST -ne 0 ]]; then
+    fail "TARGET=daemon completes — it exited $ST: $(flat "$OUT")"
+  elif logged "$R" 'open '; then
+    fail "TARGET=daemon must not touch the app, but it launched one: $(flat "$(cat "$R/stub.log")")"
+  elif ! sentinel_intact "$R"; then
+    fail "TARGET=daemon must not touch the app bundle, but the executable was overwritten"
+  else
+    pass "TARGET=daemon rebuilds the daemon and leaves the app alone"
+  fi
+}
 
-R=$(new_env)
-mkdir -p "$R/main/.build/irrlicht-prod-backup/Irrlicht.app"
-run_script "$R" -- replace macos   # no daemon started; one must already be reachable
-if [[ $ST -ne 0 ]]; then
-  fail "TARGET=macos completes against a reachable daemon — it exited $ST: $(flat "$OUT")"
-elif logged "$R" 'nohup '; then
-  fail "TARGET=macos must not start a daemon, but it did: $(flat "$(cat "$R/stub.log")")"
-else
-  pass "TARGET=macos relaunches the app without starting a daemon"
-fi
+case_target_macos() {
+  local R; R=$(new_env); with_backup "$R"
+  run_script "$R" -- replace macos   # no daemon started; one must already be reachable
+  if [[ $ST -ne 0 ]]; then
+    fail "TARGET=macos completes against a reachable daemon — it exited $ST: $(flat "$OUT")"
+  elif logged "$R" 'nohup '; then
+    fail "TARGET=macos must not start a daemon, but it did: $(flat "$(cat "$R/stub.log")")"
+  else
+    pass "TARGET=macos relaunches the app without starting a daemon"
+  fi
+}
 
-R=$(new_env)
-mkdir -p "$R/main/.build/irrlicht-prod-backup/Irrlicht.app"
-run_script "$R" STUB_CURL_RC=1 -- replace macos
-if [[ $ST -eq 0 ]]; then
-  fail "TARGET=macos with no reachable daemon must abort, but it exited 0: $(flat "$OUT")"
-elif [[ "$OUT" != *"doesn't start one"* ]]; then
-  fail "TARGET=macos aborted (exit $ST) but not with the no-daemon message: $(flat "$OUT")"
-elif logged "$R" 'open '; then
-  fail "TARGET=macos aborted, but launched the app anyway"
-else
-  pass "TARGET=macos with no reachable daemon ⇒ abort, and the app is never launched"
-fi
+case_target_macos_nodaemon() {
+  local R; R=$(new_env); with_backup "$R"
+  run_script "$R" STUB_CURL_RC=1 -- replace macos
+  if [[ $ST -eq 0 ]]; then
+    fail "TARGET=macos with no reachable daemon must abort, but it exited 0: $(flat "$OUT")"
+  elif [[ "$OUT" != *"doesn't start one"* ]]; then
+    fail "TARGET=macos aborted (exit $ST) but not with the no-daemon message: $(flat "$OUT")"
+  elif logged "$R" 'open '; then
+    fail "TARGET=macos aborted, but launched the app anyway"
+  else
+    pass "TARGET=macos with no reachable daemon ⇒ abort, and the app is never launched"
+  fi
+}
 
-# ─── The gate that runs this file must actually fire on this file's SUBJECT ──
+# ─── The gate that runs this file must fire on this file's SUBJECT ──────────
 # tools/preflight.sh --changed scopes the `tools` gate by a trigger regex. The
 # script under test lives outside tools/, so without an explicit alternative a
 # push that changes ONLY that script skips this whole file — and a gate that
 # never ran is indistinguishable from one that found nothing.
-PF=tools/preflight.sh
-tools_re=$(grep -a "run_gate_scoped '\^tools/lib/" "$PF" \
-           | sed -E "s/^[[:space:]]*run_gate_scoped '//; s/'[[:space:]]*\\\\?[[:space:]]*$//")
-if [[ -z "$tools_re" ]]; then
-  fail "preflight-trigger: COULD NOT LOOK — no run_gate_scoped line starting ^tools/lib/ in $PF; the scan has gone blind, not the trigger wrong"
-else
-  probe_fails=0
+case_preflight_trigger() {
+  local PF=tools/preflight.sh tools_re probe probe_fails=0
+  tools_re=$(grep -a "run_gate_scoped '\^tools/lib/" "$PF" \
+             | sed -E "s/^[[:space:]]*run_gate_scoped '//; s/'[[:space:]]*\\\\?[[:space:]]*$//")
+  if [[ -z "$tools_re" ]]; then
+    fail "preflight-trigger: COULD NOT LOOK — no run_gate_scoped line starting ^tools/lib/ in $PF; the scan has gone blind, not the trigger wrong"
+    return
+  fi
   for probe in "$SCRIPT" ".claude/skills/ir:test-mac/restore-prod.sh" "tools/lib/$NAME.sh"; do
     if ! printf '%s\n' "$probe" | grep -qE "$tools_re"; then
       fail "preflight-trigger: the tools gate does NOT fire on a diff touching $probe — this file would be skipped on the very push that changes its subject. Regex: $tools_re"
@@ -441,12 +477,34 @@ else
   elif [[ $probe_fails -eq 0 ]]; then
     pass "preflight-trigger: the tools gate fires on the script, its teardown half and this test, and still scopes"
   fi
+}
+
+# ─── dispatch ───────────────────────────────────────────────────────────────
+CASES=(happy reachability app-exit backup-refresh backup-refuse build-output
+       enum kill-order freshness freshness-vacuous swift-status
+       target-daemon target-macos target-macos-nodaemon preflight-trigger)
+
+echo "== $NAME: $SCRIPT${CASE_FILTER:+ (case: $CASE_FILTER)} =="
+
+ran=0
+for c in "${CASES[@]}"; do
+  [[ -n "$CASE_FILTER" && "$CASE_FILTER" != "$c" ]] && continue
+  "case_${c//-/_}"
+  ran=$((ran + 1))
+done
+
+# A filter that matches nothing must NEVER read as a clean run: a typo in a
+# mutation fixture's case name would otherwise produce an "ALL PASS" over zero
+# assertions, which is the exact shape AGENTS.md forbids.
+if [[ $ran -eq 0 ]]; then
+  echo "FAIL: $NAME — case filter '$CASE_FILTER' matched none of: ${CASES[*]}. Nothing was checked." >&2
+  exit 2
 fi
 
 echo
 if [[ $fails -eq 0 ]]; then
-  echo "$NAME: ALL PASS"
+  echo "$NAME: ALL PASS ($ran case(s))"
   exit 0
 fi
-echo "$NAME: $fails FAILED" >&2
+echo "$NAME: $fails FAILED ($ran case(s))" >&2
 exit 1

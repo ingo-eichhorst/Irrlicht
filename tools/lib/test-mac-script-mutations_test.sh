@@ -2,20 +2,24 @@
 # test-mac-script-mutations_test.sh — the committed mutation fixtures for
 # tools/lib/test-mac-script_test.sh (#1855).
 #
-# WHY THIS FILE EXISTS. Every gate in .claude/skills/ir:test-mac/test-mac.sh
-# was MOVED there out of SKILL.md's fenced bash blocks, and two more were
-# ADDED. Either way there is no "before the fix" to run red: the lock test
-# passes the moment it is written. Per AGENTS.md's Testing section and
+# WHY THIS FILE EXISTS. Six gates in .claude/skills/ir:test-mac/test-mac.sh
+# were MOVED there out of SKILL.md's fenced bash blocks; three more were ADDED.
+# Either way there is no "before the fix" to run red: the lock test passes the
+# moment it is written. Per AGENTS.md's Testing section and
 # docs/testing-philosophy.md it earns its place only by being seen to fail
 # when the thing it protects is broken — so each gate is broken here, one at a
 # time, and the lock test is required to go red naming that specific gate.
 #
-# Nine mutations, applied and asserted SEPARATELY. A single combined mutation
+# Eleven mutations, applied and asserted SEPARATELY. A single combined mutation
 # could go red on one gate while another was silently unguarded, which is the
 # exact shape of defect this whole file exists to rule out. Each one is written
 # as the plausible REGRESSION, not as arbitrary damage: the reachability abort
 # demoted to a no-op, the backup refresh demoted to "make it once, ever", the
 # `swift build` status read back through the pipe the way SKILL.md used to.
+#
+# The last row is not a gate inside the script at all — it is the `tools` gate
+# that RUNS these two files, whose --changed trigger regex must cover the
+# skill directory or a push touching only test-mac.sh skips both of them.
 #
 # Every row drives the real tools/mutate.sh, which owns the mechanics this file
 # must not re-improvise: the stale-anchor guard, the no-op replacement refusal,
@@ -27,11 +31,11 @@
 # shared with tools/lib/preflight-groups-skill-mutations_test.sh and
 # tools/lib/checkpoint-idiom-guard-mutations_test.sh.
 #
-# COST. Each row re-runs the whole lock test (~16s), so this file is the
-# slowest thing in the `tools` gate by a wide margin. That is the price of
-# nine independently-proven gates and it is paid deliberately; the alternative
-# — one combined mutation, or a filtered lock test — buys seconds by giving up
-# the thing being bought.
+# COST. Each row runs the lock test scoped to the ONE case it is about (see
+# red_case below). Running all fifteen cases per row instead cost 194s here and
+# took the whole `tools` gate from 116s to 327s — against a 540s budget the
+# pre-push hook shares with every other gate, which is a regression for every
+# push in the repo, not just this one (measured, #1855).
 
 set -uo pipefail
 
@@ -83,10 +87,29 @@ fi
 
 fails=0
 
+# red_case <case> <label> <file> <anchor> <replacement> <want_match>
+#
+# Scopes the lock test to the ONE case a mutation is about. Without this every
+# row re-ran all fifteen cases: 194s for this file and 327s for the whole
+# `tools` gate, against a 540s pre-push budget shared with every other gate
+# (measured, #1855). $TESTMAC_CASE is the spelling used because
+# mutation-assert.sh runs the lock test as a bare `bash <path>` and cannot
+# append an argument.
+#
+# A case name that matches nothing makes the lock test REFUSE (exit 2) rather
+# than pass over zero assertions, so a typo here cannot turn into a mutation
+# that "went red" against a test that checked nothing.
+red_case() {
+  local c="$1"; shift
+  export TESTMAC_CASE="$c"
+  assert_mutation_is_red "$@"
+  unset TESTMAC_CASE
+}
+
 # ── 1. The daemon-reachability gate is demoted to a no-op ───────────────────
 # The failure it prevents is silent: the app finds no daemon on 7837, runs
 # `pkill -x irrlichd`, and respawns one WITHOUT --record.
-assert_mutation_is_red \
+red_case "reachability" \
   "reachability gate: the abort never fires" \
   "$SUBJECT" \
   $'  if [[ -z "$READY" ]]; then\n    echo "ABORT: daemon never became reachable on $PORT' \
@@ -96,7 +119,7 @@ assert_mutation_is_red \
 # ── 2. The app-exit wait stops hard-aborting ────────────────────────────────
 # The bundle is then overwritten while the process that has those files open is
 # still alive.
-assert_mutation_is_red \
+red_case "app-exit" \
   "app-exit wait: the hard abort never fires" \
   "$SUBJECT" \
   $'  if [[ "$MODE" == "replace" ]] && pgrep -f "$APP_KILL_PATTERN" >/dev/null 2>&1; then' \
@@ -108,7 +131,7 @@ assert_mutation_is_red \
 # adding the natural-looking `[[ ! -d "$PROD_BACKUP" ]] &&` — after which a
 # backup taken before a newer production release is never refreshed, and
 # restore-prod.sh silently reinstalls a stale build.
-assert_mutation_is_red \
+red_case "backup-refresh" \
   "backup freshness: an existing backup is trusted blindly" \
   "$SUBJECT" \
   $'    if codesign -dv --verbose=4 "$PROD_APP" 2>&1 | grep -q "^Authority=Developer ID Application"; then' \
@@ -116,7 +139,7 @@ assert_mutation_is_red \
   'GATE backup-freshness: the stale backup was NOT refreshed'
 
 # ── 4. The no-safety-net refusal stops refusing ─────────────────────────────
-assert_mutation_is_red \
+red_case "backup-refuse" \
   "backup refusal: a dev-signed app with no backup is overwritten anyway" \
   "$SUBJECT" \
   $'    elif [[ ! -d "$PROD_BACKUP" ]]; then' \
@@ -124,7 +147,7 @@ assert_mutation_is_red \
   'GATE backup-refusal: dev-signed app + no backup must refuse'
 
 # ── 5. The build-output existence check stops checking ──────────────────────
-assert_mutation_is_red \
+red_case "build-output" \
   "build-output existence: a missing product no longer stops the install" \
   "$SUBJECT" \
   $'  if [[ ! -x "$DEBUG_BIN" || ! -d "$DEBUG_SPARKLE" ]]; then' \
@@ -134,7 +157,7 @@ assert_mutation_is_red \
 # ── 6. The enum gains the default branch it was written without ─────────────
 # A typo like `seperate` then silently runs the DESTRUCTIVE default instead of
 # erroring — the exact hazard SKILL.md's step 0 named.
-assert_mutation_is_red \
+red_case "enum" \
   "enum validation: an unrecognised axis value is silently ignored" \
   "$SUBJECT" \
   $'    *)\n      echo "ERROR: unrecognised argument \'$arg\'." >&2' \
@@ -144,7 +167,7 @@ assert_mutation_is_red \
 # ── 7. The daemon is killed before the app ─────────────────────────────────
 # A still-alive app then observes a daemon-less gap and spawns its own
 # replacement, which can win the port race against the daemon started next.
-assert_mutation_is_red \
+red_case "kill-order" \
   "kill order: the daemon is killed first" \
   "$SUBJECT" \
   $'if want_app; then\n  echo "Stopping the app ($APP_KILL_PATTERN) …"' \
@@ -152,7 +175,7 @@ assert_mutation_is_red \
   'GATE kill-order: the daemon was killed at line'
 
 # ── 8. Build freshness (ADDED by #1855) stops firing ───────────────────────
-assert_mutation_is_red \
+red_case "freshness" \
   "build freshness: a stale build product is installed anyway" \
   "$SUBJECT" \
   $'  if [[ -n "$STALE_SRC" ]]; then' \
@@ -162,7 +185,7 @@ assert_mutation_is_red \
 # ── 8b. ...and its own cannot-run refusal stops refusing ───────────────────
 # A freshness check with nothing to compare against would otherwise report the
 # same green as one that looked and found nothing.
-assert_mutation_is_red \
+red_case "freshness-vacuous" \
   "build freshness: an empty source set passes vacuously" \
   "$SUBJECT" \
   $'  if [[ "$SWIFT_SRC_COUNT" -eq 0 ]]; then' \
@@ -173,7 +196,7 @@ assert_mutation_is_red \
 # This is SKILL.md's own pre-#1855 spelling (`swift build 2>&1 | tail -5`),
 # whose exit status is tail's. A failed build reported success and the run
 # walked into the install with whatever binary was lying around.
-assert_mutation_is_red \
+red_case "swift-status" \
   "swift build status: a failed build is reported as success by the pipe" \
   "$SUBJECT" \
   $'  if ! swift build --package-path "$REPO_ROOT/platforms/macos" 2>&1 | tail -5; then\n    echo "ERROR: swift build failed — not touching $APP_TARGET." >&2\n    exit 1\n  fi' \
@@ -185,7 +208,7 @@ assert_mutation_is_red \
 # Without the trigger alternative added in #1855, a push that changes only
 # test-mac.sh skips the whole `tools` group under `--changed`, and a gate that
 # never ran is indistinguishable from one that found nothing.
-assert_mutation_is_red \
+red_case "preflight-trigger" \
   "preflight trigger: the tools gate stops covering .claude/skills/ir:test-mac/" \
   "tools/preflight.sh" \
   $'|^\\.claude/skills/ir:test-mac/|^\\.github/workflows/(ars|codescene-badge' \
