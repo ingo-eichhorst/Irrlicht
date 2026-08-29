@@ -8,7 +8,13 @@ import (
 	"irrlicht/core/pkg/capacity"
 )
 
-func (t *TranscriptTailer) applyMetadata(parsed *ParsedEvent) {
+// Returns true when this pass retired a standing session error — see
+// clearSessionErrorOnRecovery's return value, which this just relays.
+// applySkippedEvent is the one caller that uses it (a Skip=true pass that
+// only clears an error carries no other substantive signal of its own); the
+// other caller, processParsedEvent, discards it because a non-skipped event
+// is already substantive by definition.
+func (t *TranscriptTailer) applyMetadata(parsed *ParsedEvent) bool {
 	t.applyModelMetadata(parsed)
 	t.applyTokenSnapshot(parsed.Tokens)
 	t.accumulateTokens(parsed)
@@ -24,7 +30,7 @@ func (t *TranscriptTailer) applyMetadata(parsed *ParsedEvent) {
 	if parsed.PendingBackgroundAgentCount != nil {
 		t.lastPendingBackgroundAgentCount = *parsed.PendingBackgroundAgentCount
 	}
-	t.applySessionError(parsed)
+	return t.applySessionError(parsed)
 }
 
 // applySessionError maintains the sticky session-level error (issue #1798):
@@ -52,26 +58,32 @@ func (t *TranscriptTailer) applyMetadata(parsed *ParsedEvent) {
 // runs one transcript twice with Skip toggled.)
 //
 // Note the consequence for the skipped side: applySkippedEvent must also report
-// the pass as substantive, or the detector's #329 short-circuit drops it. See
-// that function.
+// the pass as substantive, or the detector's #329 short-circuit drops it. It
+// does so by using this function's own return value (relayed through
+// applyMetadata) rather than re-deriving the same verdict independently — see
+// clearSessionErrorOnRecovery's return value.
 //
 // Ordering within the event is deliberate: a parser reporting BOTH a failure
 // and a turn boundary on one event is reporting a turn that ended in failure,
 // so the error is recorded after the clear and survives.
-func (t *TranscriptTailer) applySessionError(parsed *ParsedEvent) {
-	t.clearSessionErrorOnRecovery(parsed)
+//
+// Returns whether this event retired a standing error — see
+// clearSessionErrorOnRecovery.
+func (t *TranscriptTailer) applySessionError(parsed *ParsedEvent) bool {
+	cleared := t.clearSessionErrorOnRecovery(parsed)
 	if parsed.SessionError != nil {
 		t.sessionError = parsed.SessionError
 	}
+	return cleared
 }
 
 // clearSessionErrorOnRecovery implements the settled clearing rule from #1796:
 // THE NEXT SUCCESSFUL TURN CLEARS THE ERROR, and nothing else does. There is
 // no minimum hold and no timeout.
 //
-// Two events count as that next successful turn, and they are the two halves
-// of the settled statement "error→working when the next turn starts,
-// error→ready on turn_done":
+// Three events count as that next successful turn — the original two halves
+// of "error→working when the next turn starts, error→ready on turn_done",
+// plus a third #1858 added for the one shape neither of those can see:
 //
 //   - a turn boundary (EventType "turn_done") — the retry case. The session
 //     sat red for the whole retry window; the turn then completed, so the
@@ -81,16 +93,29 @@ func (t *TranscriptTailer) applySessionError(parsed *ParsedEvent) {
 //     has moved on; holding the previous turn's failure against the new one
 //     would pin a terminal error red for the rest of the session, since a
 //     give-up produces no turn boundary of its own to clear it.
+//   - an agent-initiated resume (ParsedEvent.IsAgentResume) — the SAME "next
+//     turn starting" fact as the line above, for when the adapter's own
+//     agent writes that opening prompt instead of the user typing it.
+//     claudecode's auto-continuation (sent once a usage limit resets) and
+//     the wrapper it uses to resume a stalled subagent are both isMeta:true
+//     and short-circuited by handleUserEvent before ClearToolNames is ever
+//     raised, so StartsNewUserTurn is false for the very event that starts
+//     the recovery turn (#1858). See IsAgentResume and ClearedByAgentResume.
 //
 // A TOOL RESULT IS NOT A RECOVERY. That is what StartsNewUserTurn encodes —
 // see it for why a bare ClearToolNames check would clear the error on the next
 // tool round-trip, i.e. within about a second.
 //
-// AND A TURN BOUNDARY ONLY COUNTS FOR A RETRYING ERROR (#1799). Which phases a
-// completed turn retires is ClearedByTurnBoundary's decision, not this
-// function's — the Stop hook applies the identical rule through
-// IngestTurnBoundary, and the two must not be able to drift. See that predicate
-// for why terminal and unknown are both excluded.
+// A TURN BOUNDARY ONLY COUNTS FOR A RETRYING ERROR (#1799), AND AN AGENT
+// RESUME ONLY COUNTS FOR A TERMINAL ONE (#1858) — deliberately opposite
+// phases, not one merged check. Which phases each retires is
+// ClearedByTurnBoundary's and ClearedByAgentResume's decision respectively,
+// not this function's — the Stop hook applies the identical
+// ClearedByTurnBoundary rule through IngestTurnBoundary, and the two must not
+// be able to drift. See those predicates for why each phase is included or
+// excluded; in particular ClearedByAgentResume for why a resume-shaped event
+// is not also given an early exit against a RETRYING error, which keeps its
+// existing single exit through the turn-boundary bullet above.
 //
 // It is not hypothetical. In the committed 2-14_turn-aborted-by-error
 // recording, claudecode writes `system`/`turn_duration` on the line IMMEDIATELY
@@ -102,17 +127,38 @@ func (t *TranscriptTailer) applySessionError(parsed *ParsedEvent) {
 //
 //	jq -c '{t:.type, sub:.subtype, apiErr:.isApiErrorMessage}' \
 //	  replaydata/agents/claudecode/scenarios/2-14_turn-aborted-by-error/recordings/*/transcript.jsonl
-func (t *TranscriptTailer) clearSessionErrorOnRecovery(parsed *ParsedEvent) {
+//
+// RETURNS WHETHER IT ACTUALLY CLEARED THE ERROR (#1858 review finding). A
+// clear on a Skip=true pass changes what STATE the session is in exactly the
+// same way a session error ARRIVING on one does (applySkippedEvent's
+// `parsed.SessionError != nil` block, next to its caller) — so it must mark
+// that pass substantive or the detector's #329 short-circuit sits on the
+// stale state until whatever transcript activity happens to follow next. An
+// earlier version of this method had no return value, and applySkippedEvent
+// independently RE-DERIVED "is this event about to clear a terminal error" by
+// reading parsed.IsAgentResume and t.sessionError.ClearedByAgentResume()
+// itself, one line before calling into this method through applyMetadata —
+// the same two-field check written out twice, required to stay in lockstep
+// by comment rather than by the compiler. Returning the verdict directly
+// removes the second copy: the mutating call is the only place that knows
+// whether it mutated.
+func (t *TranscriptTailer) clearSessionErrorOnRecovery(parsed *ParsedEvent) bool {
 	if t.sessionError == nil {
-		return
+		return false
 	}
 	if parsed.StartsNewUserTurn() {
 		t.sessionError = nil
-		return
+		return true
+	}
+	if parsed.IsAgentResume && t.sessionError.ClearedByAgentResume() {
+		t.sessionError = nil
+		return true
 	}
 	if parsed.EventType == "turn_done" && t.sessionError.ClearedByTurnBoundary() {
 		t.sessionError = nil
+		return true
 	}
+	return false
 }
 
 // IngestTurnBoundary records that a turn ended, delivered out of band rather

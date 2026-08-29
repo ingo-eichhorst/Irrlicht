@@ -130,6 +130,28 @@ type ParsedEvent struct {
 	// the PreCompact force-working hold (#657). Auto-compaction never sets this.
 	IsManualCompactBoundary bool
 
+	// IsAgentResume is true for an event the ADAPTER itself identifies as
+	// resuming a stalled or failed session, as opposed to the user typing a
+	// fresh prompt (#1858). Claude Code's isMeta:true resume prompts —
+	// auto-continuation once a usage limit resets, and the "user sent a new
+	// message while you were working" wrapper it also uses to resume a
+	// subagent — are short-circuited by handleUserEvent before ClearToolNames
+	// is ever raised, so StartsNewUserTurn is false for them even though they
+	// ARE the next turn starting. Set only by claudecode today; other
+	// adapters that never synthesize a resume simply leave it false.
+	//
+	// Consumed narrowly: clearSessionErrorOnRecovery gates it on
+	// SessionError.ClearedByAgentResume (TERMINAL phase only). It is
+	// deliberately NOT folded into ClearToolNames/StartsNewUserTurn — the
+	// origin.kind:"human" shape is not exclusive to a resume, Claude Code
+	// uses the identical wrapper for a genuine mid-turn interjection, and
+	// that path also resets the task estimate/summary/question and sweeps
+	// open tool calls (#558, #641). Doing that for an ordinary interjection
+	// unrelated to any error would be wrong; scoping this field to the one
+	// place that only ever matters when a terminal error is already standing
+	// keeps it a no-op everywhere else.
+	IsAgentResume bool
+
 	// PendingBackgroundAgentCount, when non-nil, is Claude Code's own
 	// live count of background subagents (Agent-tool launches) still
 	// running as of this turn_duration event. Nil when the transcript's
@@ -381,6 +403,41 @@ type SessionError struct {
 // nil-receiver safe so callers can ask without a nil check first.
 func (e *SessionError) ClearedByTurnBoundary() bool {
 	return e != nil && e.Phase == ErrorPhaseRetrying
+}
+
+// ClearedByAgentResume reports whether an agent-initiated resume
+// (ParsedEvent.IsAgentResume) retires this error (#1858). The mirror image
+// of ClearedByTurnBoundary above, for the phase that predicate deliberately
+// excludes:
+//
+//   - ErrorPhaseTerminal is the ONLY phase that qualifies. A give-up
+//     produces no turn boundary of its own to clear it — that is exactly
+//     why StartsNewUserTurn's doc says "only the next turn the user starts
+//     clears it" — and #1858 found a shape of "the next turn starting"
+//     that StartsNewUserTurn cannot see: Claude Code sometimes writes that
+//     turn's opening prompt itself (auto-continuation after a usage-limit
+//     reset; the "user sent a new message while you were working" wrapper
+//     it also uses to resume a stalled subagent), flags it isMeta:true, and
+//     handleUserEvent short-circuits it before ClearToolNames is ever
+//     raised. IsAgentResume is the adapter's substitute signal for that one
+//     case.
+//   - ErrorPhaseRetrying is EXCLUDED on purpose, not by omission. It already
+//     has a working, well-tested exit — ClearedByTurnBoundary, the turn
+//     actually completing — and origin.kind:"human" (one of the two shapes
+//     IsAgentResume recognizes) is not exclusive to a resume: Claude Code
+//     uses the identical wrapper for a genuine mid-turn interjection, which
+//     by definition can only land while a turn is still open, i.e. exactly
+//     the window a retrying error occupies. Granting it a second, earlier
+//     exit here would mean an ordinary "hang on, also do X" typed while a
+//     retry is in flight retires the error before the retry has actually
+//     resolved. Giving only the terminal phase this exit avoids that: a
+//     terminal error has no live turn left for an interjection to land
+//     inside, since the failed turn's own epilogue (turn_duration) already
+//     fired before any resume prompt does.
+//
+// nil-receiver safe, matching ClearedByTurnBoundary.
+func (e *SessionError) ClearedByAgentResume() bool {
+	return e != nil && e.Phase == ErrorPhaseTerminal
 }
 
 // StartsNewUserTurn reports whether this event begins a GENUINE new user turn
