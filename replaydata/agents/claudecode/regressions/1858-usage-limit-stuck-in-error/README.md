@@ -30,17 +30,21 @@ limit resets.
 
 | capture | transitions | time in `error` | clears at |
 |---|---|---|---|
-| top-level | 3 → 22 | 4826.089 s (80m26s) → 970.563 s (16m10.563s) | first observable event after the 18:01:53.464Z resume prompt |
-| subagent | 3 → 4 | 1810.219 s (30m10s) → 1030.822 s (17m10.822s) | first observable event after the 18:02:52.912Z resume prompt |
+| top-level | 3 → 24 | 4826.089 s (80m26s) → 960.090 s (16m00.090s) | exactly the 18:01:53.464Z resume prompt |
+| subagent | 3 → 5 | 1810.219 s (30m10s) → 1020.646 s (17m00.646s) | exactly the 18:02:52.912Z resume prompt |
 
 The remaining ~16-17 minutes in `error` is the REAL usage-limit wait — the gap between
-the give-up and Claude Code's resume prompt landing — not a residual bug. The top-level
-session's subsequent turns (10,790 output tokens, ~$8.21 estimated spend) now track
-normally instead of staying red for all of them. Each clearing timestamp lands a few
-seconds after its resume prompt's own timestamp (never at the resumed turn's eventual
-completion) because the resume prompt itself is `Skip=true` — the replay engine's first
-observable pass after it is the very next transcript event, not a separate tick of its
-own.
+the give-up and Claude Code's resume prompt landing — not a residual bug (it matches the
+issue's cited probe, ~16m00s / ~17m00s, almost exactly). The top-level session's
+subsequent turns (10,790 output tokens, ~$8.21 estimated spend) now track normally
+instead of staying red for all of them.
+
+An earlier version of this fix cleared `t.sessionError` correctly but without marking
+the pass substantive, so the OBSERVABLE transition lagged the resume prompt by ~10
+seconds (until whatever transcript activity happened to arrive next) rather than firing
+on it directly — caught by this PR's own review pass (`applySkippedEvent` in
+`core/pkg/tailer/tailer.go`, mirroring the existing SessionError-arriving half of the
+same function from #1799). `TestSessionError_AgentResumeIsSubstantive` pins it.
 
 ## Why it was broken, and why the fix is scoped the way it is
 

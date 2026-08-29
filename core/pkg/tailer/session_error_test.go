@@ -241,6 +241,50 @@ func TestSessionError_AgentResumeDoesNotClearRetryingError(t *testing.T) {
 	}
 }
 
+// TestSessionError_AgentResumeIsSubstantive is the review-caught #1858
+// follow-up: clearing t.sessionError via IsAgentResume is not enough by
+// itself. The resume line is Skip=true and typically carries no other
+// signal (no subagent completion, no task snapshot), so unless the clear
+// also marks the pass substantive, NoSubstantiveActivity stays true,
+// applyTailAndProcessSummary's caller short-circuits re-classification
+// (#329), and the now-nil SessionError sits unobserved until whatever
+// transcript activity happens to follow — exactly the staleness the
+// SessionError-ARRIVING half of applySkippedEvent was already written to
+// avoid (#1799), just on the clearing side instead.
+//
+// Driven as two SEPARATE TailAndProcess passes — the resume line must be
+// the ONLY new content in its own pass, or a bundled follow-up event would
+// paper over a substantive=false verdict on the resume line itself.
+func TestSessionError_AgentResumeIsSubstantive(t *testing.T) {
+	path := writeTranscriptLines(t, []map[string]interface{}{
+		{"kind": "user", "timestamp": ts(0)},
+		{"kind": "error", "phase": "terminal", "timestamp": ts(1)},
+	})
+	tl := newSessionErrorTailer(path, true)
+	first, err := tl.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.SessionError == nil {
+		t.Fatal("precondition: the first pass must observe the terminal error")
+	}
+
+	appendTranscriptLine(t, path, map[string]interface{}{"kind": "resume", "timestamp": ts(2)})
+	second, err := tl.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.SessionError != nil {
+		t.Fatalf("precondition: the resume must still clear the error; got %+v", second.SessionError)
+	}
+	if second.NoSubstantiveActivity {
+		t.Fatal("a resume that clears a standing terminal error must mark its pass " +
+			"substantive — otherwise the detector's #329 short-circuit skips " +
+			"re-classification and the session keeps reading `error` until whatever " +
+			"transcript activity happens to arrive next")
+	}
+}
+
 // TestSessionError_SurvivesMidTurnActivity is the guard against clearing too
 // eagerly.
 //
