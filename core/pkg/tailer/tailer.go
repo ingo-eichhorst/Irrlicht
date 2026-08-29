@@ -783,12 +783,10 @@ func (t *TranscriptTailer) parseTranscriptLine(line string, isRawLine bool, rawL
 // apply (issue #282). Returns true when the event counts as substantive
 // activity for this pass.
 func (t *TranscriptTailer) applySkippedEvent(parsed *ParsedEvent) bool {
-	// Captured BEFORE applyMetadata mutates t.sessionError, so this asks "is
-	// this event ABOUT to clear a standing terminal error" rather than
-	// "is one standing now" — see the IsAgentResume check below, which
-	// depends on catching the pre-clear state.
-	resumesTerminalError := parsed.IsAgentResume && t.sessionError.ClearedByAgentResume()
-	t.applyMetadata(parsed)
+	// applyMetadata's return reports whether THIS call retired a standing
+	// session error (clearSessionErrorOnRecovery, via applySessionError) —
+	// used below alongside the SessionError-ARRIVING check, its mirror image.
+	clearedError := t.applyMetadata(parsed)
 	substantive := false
 	if len(parsed.SubagentCompletions) > 0 {
 		t.metrics.SubagentCompletions = append(t.metrics.SubagentCompletions, parsed.SubagentCompletions...)
@@ -822,21 +820,30 @@ func (t *TranscriptTailer) applySkippedEvent(parsed *ParsedEvent) bool {
 		substantive = true
 	}
 	// The mirror image of the block above, on the CLEARING side (#1858).
-	// IsAgentResume retiring a standing terminal error changes what STATE the
-	// session is in exactly the same way a session error arriving does, so it
-	// must reach the detector on the SAME pass rather than sit invisible
-	// until whatever transcript activity happens to follow next. Without this,
-	// clearSessionErrorOnRecovery's new ClearedByAgentResume path (tailer_metrics.go)
-	// silently retires t.sessionError, but the pass carries no other
+	// Retiring a standing error changes what STATE the session is in exactly
+	// the same way a session error arriving does, so it must reach the
+	// detector on the SAME pass rather than sit invisible until whatever
+	// transcript activity happens to follow next. Without this, an
+	// IsAgentResume event that clears t.sessionError (clearSessionErrorOnRecovery's
+	// ClearedByAgentResume path, tailer_metrics.go) carries no OTHER
 	// substantive content of its own — the resume prompt IS the whole event,
 	// Skip=true and empty of tool calls or subagent signals — so
-	// NoSubstantiveActivity stays true, the detector's #329 short-circuit
-	// skips re-classification, and the session keeps READING error until the
-	// next real activity (measured against the committed fixture: 10-11s
-	// later in both captures, the model's actual post-resume inference
-	// round-trip, not an artifact of the fixture — and unbounded in the
-	// worst case, e.g. a long tool call opening the resumed turn).
-	if resumesTerminalError {
+	// NoSubstantiveActivity would stay true, the detector's #329
+	// short-circuit would skip re-classification, and the session would keep
+	// READING error until the next real activity (measured against the
+	// committed fixture before this line existed: 10-11s later in both
+	// captures, the model's actual post-resume inference round-trip, not an
+	// artifact of the fixture — and unbounded in the worst case, e.g. a long
+	// tool call opening the resumed turn).
+	//
+	// Reads applyMetadata's return rather than re-deriving "did this event
+	// clear an error" from parsed.IsAgentResume/t.sessionError a second time:
+	// clearSessionErrorOnRecovery is the only place that knows whether it
+	// actually mutated t.sessionError, so it is the only place that should
+	// answer this. Any of its three clearing rules counts, not only the
+	// IsAgentResume one — a clear is inherently substantive regardless of
+	// which rule fired, so this generalizes rather than special-cases.
+	if clearedError {
 		substantive = true
 	}
 	// away_summary arrives on a Skip=true system event by design (it must

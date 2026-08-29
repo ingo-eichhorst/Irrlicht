@@ -348,6 +348,20 @@ func handleUserEvent(raw map[string]interface{}, ev *tailer.ParsedEvent) bool {
 	return false
 }
 
+// originKind reads a transcript line's `origin.kind` string, or "" when the
+// line carries no origin object at all (most lines) or a malformed one.
+// Shared by every origin.kind-keyed check in this file (isAgentResumeOrigin,
+// handleTaskNotification) so the two-level type assertion over `raw` is
+// written once rather than once per caller.
+func originKind(raw map[string]interface{}) string {
+	origin, ok := raw["origin"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	kind, _ := origin["kind"].(string)
+	return kind
+}
+
 // isAgentResumeOrigin reports whether an isMeta:true user line's origin.kind
 // is one of the two shapes Claude Code uses to resume a stalled or failed
 // session rather than to relay something the user typed (#1858):
@@ -370,11 +384,7 @@ func handleUserEvent(raw map[string]interface{}, ev *tailer.ParsedEvent) bool {
 //     ClearedByAgentResume's phase gate, which is what keeps an ordinary
 //     interjection from being misread as one.
 func isAgentResumeOrigin(raw map[string]interface{}) bool {
-	origin, ok := raw["origin"].(map[string]interface{})
-	if !ok {
-		return false
-	}
-	switch kind, _ := origin["kind"].(string); kind {
+	switch originKind(raw) {
 	case "auto-continuation", "human":
 		return true
 	}
@@ -385,11 +395,7 @@ func isAgentResumeOrigin(raw map[string]interface{}) bool {
 // transcript's task-notification events. Returns true when the event was a
 // task-notification and the caller should skip it. See issue #134.
 func handleTaskNotification(raw map[string]interface{}, ev *tailer.ParsedEvent) bool {
-	origin, ok := raw["origin"].(map[string]interface{})
-	if !ok {
-		return false
-	}
-	if kind, _ := origin["kind"].(string); kind != "task-notification" {
+	if originKind(raw) != "task-notification" {
 		return false
 	}
 	if msg, ok := raw["message"].(map[string]interface{}); ok {

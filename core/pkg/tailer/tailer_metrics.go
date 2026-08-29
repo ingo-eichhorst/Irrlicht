@@ -8,7 +8,13 @@ import (
 	"irrlicht/core/pkg/capacity"
 )
 
-func (t *TranscriptTailer) applyMetadata(parsed *ParsedEvent) {
+// Returns true when this pass retired a standing session error — see
+// clearSessionErrorOnRecovery's return value, which this just relays.
+// applySkippedEvent is the one caller that uses it (a Skip=true pass that
+// only clears an error carries no other substantive signal of its own); the
+// other caller, processParsedEvent, discards it because a non-skipped event
+// is already substantive by definition.
+func (t *TranscriptTailer) applyMetadata(parsed *ParsedEvent) bool {
 	t.applyModelMetadata(parsed)
 	t.applyTokenSnapshot(parsed.Tokens)
 	t.accumulateTokens(parsed)
@@ -24,7 +30,7 @@ func (t *TranscriptTailer) applyMetadata(parsed *ParsedEvent) {
 	if parsed.PendingBackgroundAgentCount != nil {
 		t.lastPendingBackgroundAgentCount = *parsed.PendingBackgroundAgentCount
 	}
-	t.applySessionError(parsed)
+	return t.applySessionError(parsed)
 }
 
 // applySessionError maintains the sticky session-level error (issue #1798):
@@ -52,17 +58,23 @@ func (t *TranscriptTailer) applyMetadata(parsed *ParsedEvent) {
 // runs one transcript twice with Skip toggled.)
 //
 // Note the consequence for the skipped side: applySkippedEvent must also report
-// the pass as substantive, or the detector's #329 short-circuit drops it. See
-// that function.
+// the pass as substantive, or the detector's #329 short-circuit drops it. It
+// does so by using this function's own return value (relayed through
+// applyMetadata) rather than re-deriving the same verdict independently — see
+// clearSessionErrorOnRecovery's return value.
 //
 // Ordering within the event is deliberate: a parser reporting BOTH a failure
 // and a turn boundary on one event is reporting a turn that ended in failure,
 // so the error is recorded after the clear and survives.
-func (t *TranscriptTailer) applySessionError(parsed *ParsedEvent) {
-	t.clearSessionErrorOnRecovery(parsed)
+//
+// Returns whether this event retired a standing error — see
+// clearSessionErrorOnRecovery.
+func (t *TranscriptTailer) applySessionError(parsed *ParsedEvent) bool {
+	cleared := t.clearSessionErrorOnRecovery(parsed)
 	if parsed.SessionError != nil {
 		t.sessionError = parsed.SessionError
 	}
+	return cleared
 }
 
 // clearSessionErrorOnRecovery implements the settled clearing rule from #1796:
@@ -115,21 +127,38 @@ func (t *TranscriptTailer) applySessionError(parsed *ParsedEvent) {
 //
 //	jq -c '{t:.type, sub:.subtype, apiErr:.isApiErrorMessage}' \
 //	  replaydata/agents/claudecode/scenarios/2-14_turn-aborted-by-error/recordings/*/transcript.jsonl
-func (t *TranscriptTailer) clearSessionErrorOnRecovery(parsed *ParsedEvent) {
+//
+// RETURNS WHETHER IT ACTUALLY CLEARED THE ERROR (#1858 review finding). A
+// clear on a Skip=true pass changes what STATE the session is in exactly the
+// same way a session error ARRIVING on one does (applySkippedEvent's
+// `parsed.SessionError != nil` block, next to its caller) — so it must mark
+// that pass substantive or the detector's #329 short-circuit sits on the
+// stale state until whatever transcript activity happens to follow next. An
+// earlier version of this method had no return value, and applySkippedEvent
+// independently RE-DERIVED "is this event about to clear a terminal error" by
+// reading parsed.IsAgentResume and t.sessionError.ClearedByAgentResume()
+// itself, one line before calling into this method through applyMetadata —
+// the same two-field check written out twice, required to stay in lockstep
+// by comment rather than by the compiler. Returning the verdict directly
+// removes the second copy: the mutating call is the only place that knows
+// whether it mutated.
+func (t *TranscriptTailer) clearSessionErrorOnRecovery(parsed *ParsedEvent) bool {
 	if t.sessionError == nil {
-		return
+		return false
 	}
 	if parsed.StartsNewUserTurn() {
 		t.sessionError = nil
-		return
+		return true
 	}
 	if parsed.IsAgentResume && t.sessionError.ClearedByAgentResume() {
 		t.sessionError = nil
-		return
+		return true
 	}
 	if parsed.EventType == "turn_done" && t.sessionError.ClearedByTurnBoundary() {
 		t.sessionError = nil
+		return true
 	}
+	return false
 }
 
 // IngestTurnBoundary records that a turn ended, delivered out of band rather
