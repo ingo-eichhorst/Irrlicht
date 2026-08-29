@@ -315,6 +315,13 @@ func applyPendingBackgroundAgentCount(raw map[string]interface{}, ev *tailer.Par
 func handleUserEvent(raw map[string]interface{}, ev *tailer.ParsedEvent) bool {
 	if isMeta, ok := raw["isMeta"].(bool); ok && isMeta {
 		ev.Skip = true
+		// Most isMeta lines are ordinary noise the pipeline must ignore
+		// (Stop-hook feedback, local-command caveats, tool results — #1858's
+		// census found 19 of these in the catalog, none carrying an origin at
+		// all). Two shapes are different: Claude Code's own resume of a
+		// stalled or failed session, carried on this SAME isMeta:true line
+		// rather than a typed prompt. See isAgentResumeOrigin.
+		ev.IsAgentResume = isAgentResumeOrigin(raw)
 		return true
 	}
 	// The synthetic continuation summary written when the conversation is
@@ -338,6 +345,39 @@ func handleUserEvent(raw map[string]interface{}, ev *tailer.ParsedEvent) bool {
 		return true
 	}
 	recordUserInterruptFlags(msg, ev)
+	return false
+}
+
+// isAgentResumeOrigin reports whether an isMeta:true user line's origin.kind
+// is one of the two shapes Claude Code uses to resume a stalled or failed
+// session rather than to relay something the user typed (#1858):
+//
+//   - "auto-continuation" — the top-level session's own resume, written once
+//     Claude Code detects the usage-limit reset it was waiting on. Zero
+//     occurrences anywhere in the catalog before #1858's capture landed
+//     (`find replaydata/agents/claudecode -name '*.jsonl' | xargs cat | jq
+//     -rc 'select(.type=="user")|.origin.kind' | sort | uniq -c`), so
+//     nothing exercises this kind for any other purpose today.
+//   - "human" — the SAME wrapper Claude Code uses to inject "the user sent a
+//     new message while you were working" for a genuine mid-turn
+//     interjection. The recorded subagent resume in #1858 is delivered this
+//     way instead of auto-continuation, and its transcript slice carries no
+//     turn_duration/stop_hook_summary at all across the whole recovery, so a
+//     rule keyed on turn boundaries alone cannot reach it. Because this kind
+//     is not exclusive to a resume, the caller must never treat it as
+//     equivalent to a real StartsNewUserTurn (ClearToolNames, task-estimate
+//     reset, tool-call sweep) — see IsAgentResume's doc and
+//     ClearedByAgentResume's phase gate, which is what keeps an ordinary
+//     interjection from being misread as one.
+func isAgentResumeOrigin(raw map[string]interface{}) bool {
+	origin, ok := raw["origin"].(map[string]interface{})
+	if !ok {
+		return false
+	}
+	switch kind, _ := origin["kind"].(string); kind {
+	case "auto-continuation", "human":
+		return true
+	}
 	return false
 }
 

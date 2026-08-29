@@ -25,7 +25,10 @@ import (
 //	{"kind":"error", ...}  → SessionError, Skip as configured
 //	{"kind":"turn_done"}   → EventType "turn_done"
 //	{"kind":"user"}        → a real user turn boundary (ClearToolNames)
-//	{"kind":"assistant"}   → ordinary mid-turn activity
+//	{"kind":"resume"}      → an agent-initiated resume (#1858): Skip=true,
+//	                         IsAgentResume=true, no ClearToolNames — the
+//	                         isMeta:true shape claudecode's handleUserEvent
+//	                         short-circuits before ClearToolNames is raised
 type sessionErrorTestParser struct {
 	// skipErrors mirrors claudecode's real routing: its `system`/`api_error`
 	// event is Skip=true, so it reaches applySkippedEvent and never
@@ -64,6 +67,10 @@ func (p *sessionErrorTestParser) ParseLine(raw map[string]interface{}) *ParsedEv
 	case "user":
 		ev.EventType = "user"
 		ev.ClearToolNames = true
+	case "resume":
+		ev.EventType = "user"
+		ev.Skip = true
+		ev.IsAgentResume = true
 	case "tool_result":
 		// Claude Code delivers a tool result as a user-ROLE line, and its
 		// parser raises ClearToolNames for every `user` event — so a tool
@@ -178,6 +185,59 @@ func TestSessionError_ClearedByNextUserTurn(t *testing.T) {
 	}
 	if m.SessionError != nil {
 		t.Fatalf("a new user turn must clear the previous turn's failure; got %+v", m.SessionError)
+	}
+}
+
+// TestSessionError_ClearedByAgentResume is the #1858 regression: a terminal
+// give-up's only exit is "the next turn the user starts" (see
+// TestSessionError_ClearedByNextUserTurn), but Claude Code sometimes writes
+// that next turn itself — the auto-continuation it sends once a usage limit
+// resets, or the equivalent wrapper it uses to resume a stalled subagent —
+// flagged isMeta:true and therefore invisible to StartsNewUserTurn (which
+// requires ClearToolNames, never raised on the Skip=true path). IsAgentResume
+// is the signal that closes that gap.
+func TestSessionError_ClearedByAgentResume(t *testing.T) {
+	path := writeTranscriptLines(t, []map[string]interface{}{
+		{"kind": "user", "timestamp": ts(0)},
+		{"kind": "error", "phase": "terminal", "timestamp": ts(1)},
+		{"kind": "resume", "timestamp": ts(2)}, // Claude Code resumes the session itself
+	})
+
+	m, err := newSessionErrorTailer(path, true).TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.SessionError != nil {
+		t.Fatalf("an agent-initiated resume must clear a terminal error; got %+v", m.SessionError)
+	}
+}
+
+// TestSessionError_AgentResumeDoesNotClearRetryingError pins
+// ClearedByAgentResume's phase gate: a RETRYING error keeps its existing
+// single exit (a completed turn, via ClearedByTurnBoundary) and is not given
+// a second, earlier one here. origin.kind:"human" is not exclusive to
+// resuming a failed session — Claude Code uses the identical wrapper for a
+// genuine mid-turn interjection — so admitting it against a retrying error
+// (which by definition means the agent is still actively mid-turn, i.e.
+// exactly when a real interjection could plausibly land) would risk retiring
+// the error out from under a retry that has not actually completed.
+func TestSessionError_AgentResumeDoesNotClearRetryingError(t *testing.T) {
+	path := writeTranscriptLines(t, []map[string]interface{}{
+		{"kind": "user", "timestamp": ts(0)},
+		{"kind": "error", "phase": "retrying", "attempt": 1, "timestamp": ts(1)},
+		{"kind": "resume", "timestamp": ts(2)},
+	})
+
+	m, err := newSessionErrorTailer(path, true).TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.SessionError == nil {
+		t.Fatal("a resume-shaped event must not clear a RETRYING error — only " +
+			"ClearedByTurnBoundary governs that phase")
+	}
+	if m.SessionError.Phase != ErrorPhaseRetrying {
+		t.Errorf("Phase = %q, want retrying (unchanged)", m.SessionError.Phase)
 	}
 }
 

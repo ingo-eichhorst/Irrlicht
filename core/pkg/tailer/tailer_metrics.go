@@ -69,9 +69,9 @@ func (t *TranscriptTailer) applySessionError(parsed *ParsedEvent) {
 // THE NEXT SUCCESSFUL TURN CLEARS THE ERROR, and nothing else does. There is
 // no minimum hold and no timeout.
 //
-// Two events count as that next successful turn, and they are the two halves
-// of the settled statement "error→working when the next turn starts,
-// error→ready on turn_done":
+// Three events count as that next successful turn — the original two halves
+// of "error→working when the next turn starts, error→ready on turn_done",
+// plus a third #1858 added for the one shape neither of those can see:
 //
 //   - a turn boundary (EventType "turn_done") — the retry case. The session
 //     sat red for the whole retry window; the turn then completed, so the
@@ -81,16 +81,29 @@ func (t *TranscriptTailer) applySessionError(parsed *ParsedEvent) {
 //     has moved on; holding the previous turn's failure against the new one
 //     would pin a terminal error red for the rest of the session, since a
 //     give-up produces no turn boundary of its own to clear it.
+//   - an agent-initiated resume (ParsedEvent.IsAgentResume) — the SAME "next
+//     turn starting" fact as the line above, for when the adapter's own
+//     agent writes that opening prompt instead of the user typing it.
+//     claudecode's auto-continuation (sent once a usage limit resets) and
+//     the wrapper it uses to resume a stalled subagent are both isMeta:true
+//     and short-circuited by handleUserEvent before ClearToolNames is ever
+//     raised, so StartsNewUserTurn is false for the very event that starts
+//     the recovery turn (#1858). See IsAgentResume and ClearedByAgentResume.
 //
 // A TOOL RESULT IS NOT A RECOVERY. That is what StartsNewUserTurn encodes —
 // see it for why a bare ClearToolNames check would clear the error on the next
 // tool round-trip, i.e. within about a second.
 //
-// AND A TURN BOUNDARY ONLY COUNTS FOR A RETRYING ERROR (#1799). Which phases a
-// completed turn retires is ClearedByTurnBoundary's decision, not this
-// function's — the Stop hook applies the identical rule through
-// IngestTurnBoundary, and the two must not be able to drift. See that predicate
-// for why terminal and unknown are both excluded.
+// A TURN BOUNDARY ONLY COUNTS FOR A RETRYING ERROR (#1799), AND AN AGENT
+// RESUME ONLY COUNTS FOR A TERMINAL ONE (#1858) — deliberately opposite
+// phases, not one merged check. Which phases each retires is
+// ClearedByTurnBoundary's and ClearedByAgentResume's decision respectively,
+// not this function's — the Stop hook applies the identical
+// ClearedByTurnBoundary rule through IngestTurnBoundary, and the two must not
+// be able to drift. See those predicates for why each phase is included or
+// excluded; in particular ClearedByAgentResume for why a resume-shaped event
+// is not also given an early exit against a RETRYING error, which keeps its
+// existing single exit through the turn-boundary bullet above.
 //
 // It is not hypothetical. In the committed 2-14_turn-aborted-by-error
 // recording, claudecode writes `system`/`turn_duration` on the line IMMEDIATELY
@@ -107,6 +120,10 @@ func (t *TranscriptTailer) clearSessionErrorOnRecovery(parsed *ParsedEvent) {
 		return
 	}
 	if parsed.StartsNewUserTurn() {
+		t.sessionError = nil
+		return
+	}
+	if parsed.IsAgentResume && t.sessionError.ClearedByAgentResume() {
 		t.sessionError = nil
 		return
 	}

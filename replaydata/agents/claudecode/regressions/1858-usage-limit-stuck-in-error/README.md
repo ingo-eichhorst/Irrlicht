@@ -1,10 +1,12 @@
 # Usage-limit 429 leaves a session stuck in `error` — issue #1858
 
-**The committed goldens in this folder pin the DEFECT, not the wanted behaviour.**
-Read that first. A green `TestFixtureReplayByteIdentity` over this capture proves the
-bug still reproduces; it does not prove the daemon is correct. When #1858 lands, both
-goldens must move, and the shape of that move is the red-first evidence the fix is
-required to show:
+**Fixed.** The goldens in this folder now pin the CORRECT recovery — the session
+leaves `error` once Claude Code's own resume prompt lands, rather than staying red
+for the rest of the session. Before the fix, the identical capture replayed to 3
+transitions per file with the error never clearing at all; that before/after golden
+diff (regenerated with the command below) is the red-first evidence for the defect.
+It is preserved in the fix's PR description rather than re-committed here, so this
+README does not itself pin a wrong answer for a future reader to trust by accident.
 
 ```
 UPDATE_REPLAY_GOLDENS=1 go test ./tools/onboarding-factory/cmd/replay/... -count=1
@@ -24,25 +26,42 @@ cherry-picked, so the ordering the tailer sees is the ordering that shipped.
 Both hit the same HTTP 429 at 17:45:52, and both are resumed automatically once the
 limit resets.
 
-## The recorded (wrong) outcome
+## The corrected outcome
 
-| capture | transitions | time in `error` |
-|---|---|---|
-| top-level | 3 | 4826.089 s (80m26s) — never leaves |
-| subagent | 3 | 1810.219 s (30m10s) — never leaves |
+| capture | transitions | time in `error` | clears at |
+|---|---|---|---|
+| top-level | 3 → 22 | 4826.089 s (80m26s) → 970.563 s (16m10.563s) | first observable event after the 18:01:53.464Z resume prompt |
+| subagent | 3 → 4 | 1810.219 s (30m10s) → 1030.822 s (17m10.822s) | first observable event after the 18:02:52.912Z resume prompt |
 
-The top-level session ran two more complete turns inside that window (10,790 output
-tokens, ~$8.21 estimated spend) and stayed red for all of them.
+The remaining ~16-17 minutes in `error` is the REAL usage-limit wait — the gap between
+the give-up and Claude Code's resume prompt landing — not a residual bug. The top-level
+session's subsequent turns (10,790 output tokens, ~$8.21 estimated spend) now track
+normally instead of staying red for all of them. Each clearing timestamp lands a few
+seconds after its resume prompt's own timestamp (never at the resumed turn's eventual
+completion) because the resume prompt itself is `Skip=true` — the replay engine's first
+observable pass after it is the very next transcript event, not a separate tick of its
+own.
 
-## Why
+## Why it was broken, and why the fix is scoped the way it is
 
 `clearSessionErrorOnRecovery` retires a terminal error only on
 `ParsedEvent.StartsNewUserTurn()` — a turn boundary cannot, because
 `ClearedByTurnBoundary()` is true only for `ErrorPhaseRetrying`. The prompt that
 actually resumes a usage-limited session is written by Claude Code itself and flagged
 `isMeta: true` (`origin.kind` is `auto-continuation` for the parent, `human` for the
-subagent), so `handleUserEvent` skips it before `ClearToolNames` is ever raised. The
-one event that starts the recovery turn is therefore invisible to the clearing rule.
+subagent), so `handleUserEvent` skipped it before `ClearToolNames` was ever raised. The
+one event that starts the recovery turn was therefore invisible to the clearing rule.
 
-Full diagnosis, the `origin.kind` census, and the measured probe that confirms this
-fixture discriminates: issue #1858.
+The fix adds a narrow, adapter-set `ParsedEvent.IsAgentResume` signal — NOT a change to
+`StartsNewUserTurn`/`ClearToolNames` themselves. `origin.kind:"human"` is not exclusive
+to a resume (Claude Code uses the identical wrapper for a genuine mid-turn
+interjection), so treating it as a real turn start would also reset the task
+estimate/summary/question and sweep open tool calls for an ordinary interjection
+unrelated to any error. `IsAgentResume` is consumed only by a new
+`SessionError.ClearedByAgentResume()` predicate gated on `ErrorPhaseTerminal` — the
+mirror image of `ClearedByTurnBoundary`'s `ErrorPhaseRetrying` gate — so it is a no-op
+on every pass without a standing terminal error and never touches the retrying-error
+path at all.
+
+Full diagnosis, the `origin.kind` census, and the measured probe that first confirmed
+this fixture discriminates: issue #1858.

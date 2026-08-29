@@ -10,14 +10,14 @@
   "summary": {
     "total_events": 31,
     "consumed_events": 31,
-    "total_transitions": 3,
+    "total_transitions": 4,
     "first_event_time": "2026-08-28T17:36:48.413Z",
     "last_event_time": "2026-08-28T18:16:02.485Z",
     "wall_clock_session_duration": 2354072000000,
     "state_durations": {
-      "error": 1810219000000,
+      "error": 1030822000000,
       "ready": 1471000000,
-      "working": 542382000000
+      "working": 1321779000000
     },
     "flicker_count": 0,
     "flickers_by_category": {},
@@ -75,6 +75,21 @@
       "needs_user_attention": false,
       "waiting_for_user_input": false,
       "last_assistant_text_head": "You've hit your session limit · resets 8pm (Europe/Berlin)"
+    },
+    {
+      "index": 3,
+      "event_index": 7,
+      "virtual_time": "2026-08-28T18:03:03.088Z",
+      "cause": "debounce_coalesce",
+      "prev_state": "error",
+      "new_state": "working",
+      "reason": "transcript activity (error → working)",
+      "last_event_type": "assistant_streaming",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "Continuing. The four angle agents are still out; meanwhile let me do the real en…"
     }
   ]
 }
