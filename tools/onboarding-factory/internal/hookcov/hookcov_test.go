@@ -31,9 +31,11 @@ func repoRoot(t *testing.T) string {
 func TestDeclaredMatchesRegistry(t *testing.T) {
 	got := Declared()
 
-	// Exhaustive as of this commit: every registry adapter EXCEPT aider
-	// declares a hooks permission. If aider gains one, this fails and the map
-	// is updated — that is the intended workflow, not an obstacle.
+	// Exhaustive as of this commit: every registry adapter EXCEPT aider and
+	// junie declares a hooks permission (junie's upstream exposes no hook
+	// system at all, so its adapter is observe-only). If either gains one,
+	// this fails and the map is updated — that is the intended workflow, not
+	// an obstacle.
 	//
 	// copilot joined in #1378, gemini-cli in #1717, kiro-cli in #1716,
 	// mistral-vibe in #1718, pi in #1721, opencode in #1719, hermes in #1722
@@ -52,8 +54,8 @@ func TestDeclaredMatchesRegistry(t *testing.T) {
 	// keyed off $HOME). A GAP here is the honest reading of that, not a defect.
 	want := map[string]bool{
 		"aider": false, "antigravity": true, "claudecode": true, "codex": true,
-		"copilot": true, "gemini-cli": true, "hermes": true, "kiro-cli": true,
-		"mistral-vibe": true, "opencode": true, "pi": true,
+		"copilot": true, "gemini-cli": true, "hermes": true, "junie": false,
+		"kiro-cli": true, "mistral-vibe": true, "opencode": true, "pi": true,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Declared() = %v\nwant %v", got, want)
