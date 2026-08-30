@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 )
 
 // deadPID is above any real macOS/Linux PID range (macOS pid_max is 99999;
@@ -106,8 +107,25 @@ func fakeJunieProcess(t *testing.T, workDir string) int {
 		_ = cmd.Wait()
 	})
 	pid := cmd.Process.Pid
-	if !liveJuniePID(pid) {
-		t.Fatalf("fake junie process %d does not pass liveJuniePID; fix the fixture", pid)
+	// cmd.Start() returns as soon as the fork succeeds, which on Linux is
+	// BEFORE execve completes. In that window /proc/<pid>/cmdline reads back
+	// empty, linuxObserver.ArgvOf maps that to nil, and liveJuniePID rejects
+	// a process that is healthy a millisecond later. Measured at ~10% of
+	// starts in a golang:1.25 container (200 rounds), and load-dependent: the
+	// real test failed 2 of 25 runs under --cpus=0.5 and 0 of 15 unthrottled,
+	// which is why loaded CI runners saw it and this fixture's author did not.
+	// macOS never shows it — kern.procargs2 exposes no such pre-exec window —
+	// so the macOS job passed while the Linux one failed.
+	//
+	// Poll the condition to a deadline rather than sleeping a fixed amount,
+	// and report the elapsed time on failure, so a fixture that genuinely
+	// breaks stays distinguishable from one that merely lost a race.
+	start := time.Now()
+	for !liveJuniePID(pid) {
+		if elapsed := time.Since(start); elapsed > 10*time.Second {
+			t.Fatalf("fake junie process %d never passed liveJuniePID within %s; fix the fixture", pid, elapsed)
+		}
+		time.Sleep(time.Millisecond)
 	}
 	return pid
 }
