@@ -177,10 +177,6 @@ extension SessionManager {
         let generations: [String: UInt64]?
         let bucketGenerations: [String: UInt64]?
 
-        // input_requested payload (#724): the daemon asking us to inject into
-        // an AppleScript-only backend (iTerm2/Terminal.app).
-        let input: InputRequestPayload?
-
         enum CodingKeys: String, CodingKey {
             case type
             case session
@@ -192,14 +188,7 @@ extension SessionManager {
             case priority
             case generations
             case bucketGenerations = "bucket_generations"
-            case input
         }
-    }
-
-    /// Payload of a PushTypeInputRequested message.
-    struct InputRequestPayload: Decodable {
-        let action: String   // "input" | "interrupt"
-        let data: String?
     }
 
     func handleWsMessage(_ text: String) {
@@ -263,14 +252,6 @@ extension SessionManager {
                 if let session = envelope.session {
                     DispatchQueue.main.async {
                         SessionLauncher.jump(session)
-                    }
-                }
-            case "input_requested":
-                // The daemon can't script iTerm2/Terminal.app directly (no
-                // Automation TCC grant); it delegates the injection to us (#724).
-                if let session = envelope.session, let input = envelope.input {
-                    DispatchQueue.main.async {
-                        SessionInputActivator.inject(session, action: input.action, data: input.data ?? "")
                     }
                 }
             case "history_snapshot":

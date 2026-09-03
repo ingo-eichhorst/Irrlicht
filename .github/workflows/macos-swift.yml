@@ -17,7 +17,7 @@ name: macOS (Swift)
 #      a byte. `Tests/PinnedScaleSnapshot.swift` pins the scale, regenerating
 #      no reference — the committed references still match byte for byte, which
 #      is the evidence the fix is a fix. That made the second visible: a
-#      genuine rasterisation difference, tracked as #1615, which is why five
+#      genuine rasterisation difference, tracked as #1615, which is why six
 #      suites are skipped in the test step below.
 #   2. A hang, reported against a different test on every run. Sparkle's
 #      `startUpdater` fails outside an app bundle and answers by running a
@@ -48,7 +48,7 @@ name: macOS (Swift)
 # suite on a developer Mac, where the display, the fonts and the audio stack
 # are the ones the app actually ships against.
 #
-# WHY five suites are skipped rather than fixed, and why that is now permanent,
+# WHY six suites are skipped rather than fixed, and why that is now permanent,
 # is in `docs/swift-testing.md` (linked from AGENTS.md's "macOS app" bullet
 # under Testing, #1742) — the decision record for #1615. It is not restated
 # here: this file's own copy of it said CI gates "270
@@ -57,7 +57,7 @@ name: macOS (Swift)
 # `ImageSnapshotCIScopeTests.testTheUngatedPopulationIsExactlyTheSkippedSuites`
 # on every run of the suite, and the ungated count is asserted there.
 #
-# A THIRD job, `swift-snapshot-evidence`, runs the five skipped suites on
+# A THIRD job, `swift-snapshot-evidence`, runs the six skipped suites on
 # purpose and uploads what they render (#1615, step 1). Until it existed, the
 # skipped suites failed on no machine anybody could look at, so every statement
 # about WHAT differs was inferred from which suites pass. It is not a gate on
@@ -65,7 +65,7 @@ name: macOS (Swift)
 # — but it IS a gate on itself: a run whose harness never loaded, or that hung,
 # was truncated, executed nothing, or produced no images fails it, because
 # "collected no evidence" and "found no difference" must never print the same
-# thing. Since #1678 those five are told apart from each other as well, not
+# thing. Since #1678 those six are told apart from each other as well, not
 # only from health: the first used to be reported as the second.
 #
 # Since #1615 it runs on `workflow_dispatch` ONLY, and that is the cost the
@@ -79,7 +79,7 @@ name: macOS (Swift)
 #   gh workflow run "macOS (Swift)" --ref <branch>
 #
 # runs all three jobs and produces two artifacts (14-day retention):
-# `swift-snapshot-evidence` — every failure image the five suites wrote, the
+# `swift-snapshot-evidence` — every failure image the six suites wrote, the
 # committed `__References__` beside them to diff against, and
 # `RasterPrimitiveEvidenceTests`' six primitive rasters + hashes — and
 # `swift-snapshot-evidence-log`, the run itself. There is no diff image: that
@@ -179,7 +179,7 @@ jobs:
       # `<target>.<class>`, so either alone stops covering the harness the
       # moment a class is added or the target is renamed.
       #
-      # The five suites after them are image snapshots that differ from their
+      # The six suites after them are image snapshots that differ from their
       # references on a runner, byte for byte, for a reason nobody has explained
       # — and that is now a permanent, deliberate exclusion rather than a
       # pending fix. The decision, the pixel measurements behind it, and the
@@ -202,7 +202,7 @@ jobs:
       # without a line in a diff.
       #
       # What they render is not lost by being skipped: `swift-snapshot-evidence`
-      # below runs these same five on demand and uploads the images (see the
+      # below runs these same six on demand and uploads the images (see the
       # `gh workflow run` line in this file's header).
       - name: Test (bounded, streamed under a pty)
         shell: bash
@@ -294,7 +294,6 @@ jobs:
           log="$RUNNER_TEMP/swift-test.log"
           ( cd platforms/macos && swift_suite_run "$log" \
               swift test --skip LauncherTestHarness --skip LauncherHarnessTests \
-                         --skip BackchannelRulesViewSnapshotTests \
                          --skip DaemonErrorBannerRenderTests \
                          --skip GroupViewSnapshotTests \
                          --skip HistoryViewSnapshotTests \
@@ -440,7 +439,6 @@ jobs:
           mkdir -p "$SNAPSHOT_ARTIFACTS"
           ( cd platforms/macos && swift_suite_run "$log" \
               swift test --skip LauncherTestHarness --skip LauncherHarnessTests \
-                         --filter BackchannelRulesViewSnapshotTests \
                          --filter DaemonErrorBannerRenderTests \
                          --filter GroupViewSnapshotTests \
                          --filter HistoryViewSnapshotTests \
@@ -531,6 +529,13 @@ jobs:
             # a message that spells one is an argument as far as a text scan is
             # concerned — measured: an earlier wording of this line injected a
             # suite named "list" into the parse.
+            # NOTE 2: "five" below is stale (six suites are skipped as of
+            # #1874) and is deliberately NOT corrected here. This exact string
+            # is matched verbatim by tools/lib/swift-snapshot-evidence_test.sh
+            # (its NO_FAILURES), so rewording it reddens that test; the two
+            # must move in one commit, and #1874's file boundary excluded
+            # tools/. The comment at the top of the evidence job carries the
+            # same caveat.
             echo "::error::not one of the five suites produced a failure image. Either SNAPSHOT_ARTIFACTS stopped being honoured, or those suites now PASS on a runner — in which case ImageSnapshotCIScopeTests' classification, and the skip list in swift-test derived from it, is stale and #1615 has moved."
             bad=1
           fi

@@ -24,9 +24,10 @@ import SwiftUI
 ///
 /// ## Why the environment could NOT reach the formatters as they stood
 ///
-/// `\.formatLocale` works for `BackchannelRulesView` because a `FormatStyle` is
-/// *constructed per render*, inside `body`, so the view can hand it a value it
-/// read from the environment. `HistoryFormat`'s formatters were file-scope
+/// `\.formatLocale` worked for the rule editor #1874 deleted because a
+/// `FormatStyle` is *constructed per render*, inside `body`, so the view can
+/// hand it a value it read from the environment. `HistoryFormat`'s formatters
+/// were file-scope
 /// `private static let DateFormatter`s: one object per process, built on first
 /// touch, reachable from no view. Setting this key alone would therefore have
 /// changed nothing — the vacuous-green shape #1630 measured for

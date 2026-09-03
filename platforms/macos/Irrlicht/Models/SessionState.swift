@@ -19,20 +19,11 @@ struct AgentBranding: Decodable {
     let displayName: String
     let iconSVGLight: String
     let iconSVGDark: String
-    /// Backchannel presets this agent supports (issue #754), e.g. ["compact"].
-    /// Optional with a default so an older daemon that omits the field still
-    /// decodes (and call sites that predate it still build).
-    var presets: [String]? = nil
-
-    /// Non-nil accessor for the supported preset ids.
-    var supportedPresets: [String] { presets ?? [] }
-
     enum CodingKeys: String, CodingKey {
         case name
         case displayName = "display_name"
         case iconSVGLight = "icon_svg_light"
         case iconSVGDark = "icon_svg_dark"
-        case presets
     }
 }
 
@@ -911,7 +902,6 @@ struct SessionState: Identifiable, Codable {
     var workerID: String?       // orchestrator worker/bead ID
     let children: [SessionState]? // nested child sessions from API (optional)
     let launcher: Launcher?     // terminal/IDE that spawned this session (optional)
-    let controllable: Bool?     // daemon would accept input/interrupt now (backchannel, #724)
     let background: BackgroundAgent? // detached background agent marker (#744)
     let yieldState: String?     // yield verdict: "productive"/"reverted"/"unknown" (#373)
 
@@ -987,7 +977,6 @@ struct SessionState: Identifiable, Codable {
         case workerID = "worker_id"
         case children
         case launcher
-        case controllable
         case background
         case yieldState = "yield_state"
     }
@@ -1032,7 +1021,6 @@ struct SessionState: Identifiable, Codable {
         workerID = try container.decodeIfPresent(String.self, forKey: .workerID)
         children = try container.decodeIfPresent([SessionState].self, forKey: .children)
         launcher = try container.decodeIfPresent(Launcher.self, forKey: .launcher)
-        controllable = try container.decodeIfPresent(Bool.self, forKey: .controllable)
         background = try container.decodeIfPresent(BackgroundAgent.self, forKey: .background)
         yieldState = try container.decodeIfPresent(String.self, forKey: .yieldState)
 
@@ -1080,7 +1068,7 @@ struct SessionState: Identifiable, Codable {
     }
     
     // Regular initializer for testing/preview purposes
-    init(id: String, state: State, model: String, cwd: String, transcriptPath: String? = nil, gitBranch: String? = nil, projectName: String? = nil, firstSeen: Date, updatedAt: Date, eventCount: Int? = nil, lastEvent: String? = nil, metrics: SessionMetrics? = nil, pid: Int? = nil, parentSessionId: String? = nil, subagents: SubagentSummary? = nil, adapter: String? = nil, daemonVersion: String? = nil, role: String? = nil, roleIcon: String? = nil, roleDescription: String? = nil, workerName: String? = nil, workerID: String? = nil, children: [SessionState]? = nil, launcher: Launcher? = nil, controllable: Bool? = nil, background: BackgroundAgent? = nil, yieldState: String? = nil) {
+    init(id: String, state: State, model: String, cwd: String, transcriptPath: String? = nil, gitBranch: String? = nil, projectName: String? = nil, firstSeen: Date, updatedAt: Date, eventCount: Int? = nil, lastEvent: String? = nil, metrics: SessionMetrics? = nil, pid: Int? = nil, parentSessionId: String? = nil, subagents: SubagentSummary? = nil, adapter: String? = nil, daemonVersion: String? = nil, role: String? = nil, roleIcon: String? = nil, roleDescription: String? = nil, workerName: String? = nil, workerID: String? = nil, children: [SessionState]? = nil, launcher: Launcher? = nil, background: BackgroundAgent? = nil, yieldState: String? = nil) {
         self.id = id
         self.state = state
         self.model = model
@@ -1105,7 +1093,6 @@ struct SessionState: Identifiable, Codable {
         self.workerID = workerID
         self.children = children
         self.launcher = launcher
-        self.controllable = controllable
         self.background = background
         self.yieldState = yieldState
     }

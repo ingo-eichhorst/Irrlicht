@@ -7,8 +7,9 @@ import XCTest
 /// zone it is ASKED for, not the one the machine happens to be in.
 ///
 /// The obvious test — "renders 00:00" — is the trap, and it is the same one
-/// `PinnedScaleSnapshotTests` and `PinnedLocaleSnapshotTests` are written
-/// around. `HistoryViewSnapshotTests` used to assign `NSTimeZone.default = UTC`
+/// `PinnedScaleSnapshotTests` is written around (as `PinnedLocaleSnapshotTests`
+/// was, until #1874 retired it with its only subject).
+/// `HistoryViewSnapshotTests` used to assign `NSTimeZone.default = UTC`
 /// in `setUp`, so on any machine an assertion of "renders as UTC" passes
 /// whether the formatter read its argument or the process default. The fix is
 /// to drive BOTH zones through one view: whatever `NSTimeZone.default` is, at
