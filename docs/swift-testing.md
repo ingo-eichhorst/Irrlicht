@@ -32,9 +32,13 @@ timeout/witness design.
   cross-checked against `macos-swift.yml`'s own arguments. Every OTHER statement
   of the set is prose no test reads, and there are three: this roster,
   `macos-swift.yml`'s own header comments, and `AGENTS.md`'s one-line summary.
-  All three have been stale before; the count in `AGENTS.md` is stale right now
-  (it says seven), because #1874's file boundary did not include it. Two further
-  image-snapshot suites
+  Measured on `origin/main` immediately before #1874, against an actual seven:
+  this roster said five, `macos-swift.yml` said five at nine sites, and
+  `AGENTS.md` said seven — so two of the three were already stale, and the third
+  was correct only until #1874 moved the count. All three are right as of #1874,
+  which had to edit every one by hand. That is the standing cost of keeping
+  three uncross-checked copies, not an incident. Two further image-snapshot
+  suites
   (`PermissionWizardEffectErrorRenderTests`, `UnappliedGrantsBannerRenderTests`)
   reproduce byte-identically on a runner, stay gated there, and their passing is
   itself the evidence that the residual is content-dependent rather than a
