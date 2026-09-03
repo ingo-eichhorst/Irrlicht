@@ -262,9 +262,18 @@ var stateRules = []stateRule{
 		// ready. Live-only — the hold is only ever placed while the finished
 		// turn is still idle (and never under replay), so this rule is inert
 		// for every non-hook path.
+		//
+		// This notification must not mask a terminal session error (#1871). The
+		// agent stopped because the turn failed, not because it awaits user
+		// input. ErrorPhaseTerminal also says that only the next user turn can
+		// clear the failure, so idle_prompt must not mask it in the meantime.
+		// Retrying and unknown-phase errors keep the prior hook precedence: they
+		// do not carry that terminal verdict.
 		id:     string(session.SignalIdlePrompt),
 		signal: session.SignalIdlePrompt,
-		when:   func(_ string, m *session.SessionMetrics) bool { return m.IdlePromptPending },
+		when: func(_ string, m *session.SessionMetrics) bool {
+			return m.IdlePromptPending && !hasTerminalSessionError(m)
+		},
 		decide: toState(session.StateWaiting, "idle prompt hook → waiting"),
 	},
 	{
@@ -278,10 +287,12 @@ var stateRules = []stateRule{
 		// reads true and agent_done would route it to ready — a session that
 		// failed, reported as finished, painted green. That is the exact
 		// defect the fourth state exists to fix, so the failure verdict has to
-		// outrank the finished-turn verdict. Below the five waiting rules
-		// above, because a session blocked on a human is actionable now while
-		// a past failure is not, and because those rules include hook-tier
-		// rows a transcript-tier rule must never preempt.
+		// outrank the finished-turn verdict. Below the waiting rules above,
+		// because a session blocked on a human is actionable now while a past
+		// failure is not, and because those rules include hook-tier rows a
+		// transcript-tier rule must never preempt. The idle_prompt rule is
+		// mutually exclusive with this one for terminal failures: an idle
+		// notification cannot recover them.
 		//
 		// WHY THE HookTurnDone GUARD, rather than a bare nil check. An
 		// authoritative Stop hook means a turn completed, so the failure is
@@ -434,6 +445,13 @@ func ClassifyStateTiered(currentState string, metrics *session.SessionMetrics) S
 	// future edit that removes it degrades to "no transition" rather than to
 	// an out-of-range panic.
 	return StateVerdict{State: currentState}
+}
+
+// hasTerminalSessionError reports whether the adapter said that the current
+// failure ended the turn. It uses ErrorPhase rather than an adapter-specific
+// Class value because the phase owns recovery semantics across adapters.
+func hasTerminalSessionError(metrics *session.SessionMetrics) bool {
+	return metrics.SessionError != nil && metrics.SessionError.Phase == session.ErrorPhaseTerminal
 }
 
 // transitionTo returns (target, reason) when currentState differs from
