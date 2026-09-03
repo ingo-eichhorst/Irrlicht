@@ -1,6 +1,6 @@
 ---
 name: ir:code-review
-description: Review a working diff for defects and report findings worst-first — the repo-owned, agent-invocable counterpart to the built-in `/code-review`, which is `disable-model-invocation` and can only be run by a human. Scales from a single read to an adversarially-verified pass, and checks this repo's own conventions (the derived session-state vocabulary, hexagonal layering, permission gating, defect-tests-seen-red) on top of ordinary correctness. Invoked as `/ir:code-review [effort] [base]`. Triggers on "/ir:code-review", "review the diff", "review my changes", "review this branch", or when `ir:exec` Phase 5 reaches its review gate.
+description: Review a working diff for defects and report findings worst-first — the repo-owned, agent-invocable counterpart to the built-in `/code-review`, which is `disable-model-invocation` and can only be run by a human. Scales from a single read to an adversarially-verified pass, and checks this repo's own conventions (the derived session-state vocabulary, hexagonal layering, permission gating, defect-tests-seen-red) on top of ordinary correctness. Invoked as `/ir:code-review [effort] [base]`. Triggers on "/ir:code-review", "review the diff", "review my changes", "review this branch", or when `ir:exec` reaches its review gate.
 ---
 
 # Review the Working Diff
@@ -143,7 +143,7 @@ Rank **most-severe first**. Every finding carries:
 
 **Always put the findings in your final text**, carrying the fields above.
 This is not optional and not a fallback: when you run as a subagent — the
-common case, and the one `ir:exec` step 13 depends on — your tool calls never
+common case, and the one `ir:exec` depends on — your tool calls never
 reach the agent that spawned you. Only your final text does. A reply like
 *"reviewed at medium effort, 3 findings reported"* delivers nothing to the
 caller, and worse, reads to it as a **clean** gate.

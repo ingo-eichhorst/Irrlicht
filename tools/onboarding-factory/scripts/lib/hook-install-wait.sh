@@ -18,7 +18,7 @@
 # already read it. Promoting that fixture would have frozen "mistral-vibe
 # reports no hooks" as catalog truth.
 #
-# This is the same rule #1449 wrote into ir:exec's Phase 4 step 11: a readiness
+# This is the same rule #1449 wrote into ir:exec's verification stage: a readiness
 # signal narrower than the thing under test fires BEFORE the consent effects
 # run, so a deliberately broken binary comes back green.
 #

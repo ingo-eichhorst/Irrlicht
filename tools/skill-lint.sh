@@ -28,11 +28,10 @@
 #
 # What the checks read
 # -------------------
-# Markdown that *talks about* markers is not markdown that *has* them.
-# `.claude/skills/ir:exec/SKILL.md` documents the plan.html template and so
-# mentions `{{TOKEN}}`, `REPEAT:step` and `OPTIONAL:ui` a dozen times — always
-# inside backticks. So checks 2 and 4 skip fenced blocks and blank inline code
-# spans. Check 3 keeps inline code (a reference can legitimately be written
+# Markdown that *talks about* markers is not markdown that *has* them. The
+# fixture corpus documents `{{TOKEN}}`, `REPEAT:step`, and `OPTIONAL:ui` inside
+# code spans. Checks 2 and 4 skip fenced blocks and blank inline code spans.
+# Check 3 keeps inline code (a reference can legitimately be written
 # `` `Auto mode` below ``) and check 1 reads raw lines outside fences, because
 # a conflict marker inside a fence is illustrative but anywhere else is a
 # corrupted file. Frontmatter is

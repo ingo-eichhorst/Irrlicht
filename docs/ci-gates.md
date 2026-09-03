@@ -835,8 +835,8 @@ and needs Docker). Every gate still runs — chunking only changes how many
 invocations it takes. **Do not background the unscoped run to make it fit**:
 a subagent is not woken by its own background job, so the run stalls silently
 with the work committed but never pushed
-(`.claude/skills/ir:exec/SKILL.md` Phase 4 step 11 has the incident and the
-same recipe). The same shape recurs for any subagent driving an interactive
+(`.claude/skills/ir:exec/SKILL.md` has the same recipe). The same shape recurs
+for any subagent driving an interactive
 process, not just preflight — one Bash call per step, every wait a bounded
 polling loop, `timeout N` on anything that can hang, and findings
 checkpointed to a file before they're used, so a stall costs a turn instead
@@ -849,7 +849,7 @@ Also read a push's exit status directly, never through a pipe: `git push … |
 tail` reports `tail`'s status, so a push the hook refused looks like a success
 to the caller. Assert afterwards that `git status -sb` shows a tracking branch —
 this is a plausible cause of the "committed but never pushed" incident recorded
-in `ir:exec` Phase 4 (#1570).
+in `ir:exec`'s verification stage (#1570).
 
 **Not `PIPESTATUS`**, which is what this paragraph advised until #1559's agent
 tried it: this repo's shell is zsh, where the array is spelled `$pipestatus` and
@@ -966,4 +966,3 @@ be committed to be pushed — and wrong for every manual `--changed` run.
 Two of the failure modes it won't catch: environment-specific timing flakes
 that only manifest on loaded Linux CI runners (not this machine), and true
 Linux-only bugs unless you pass `--linux`.
-

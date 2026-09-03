@@ -243,27 +243,6 @@ else
   fail "the walk found the real corpus" ">= 10 files" "${found:-<no summary line>}"
 fi
 
-echo "== the template's marker vocabulary and the linter's must not drift =="
-# ir:exec's plan.html is where {{TOKEN}} and REPEAT:/OPTIONAL: come from, and it
-# is deliberately NOT linted (it carries dozens of each by construction, and the
-# markdown machinery is meaningless in HTML). That leaves the spelling defined
-# in two unconnected places: rename the convention in the template and check 2
-# silently stops detecting leftovers, with every fixture still green because the
-# fixtures embed the old spelling too. Pointing the linter at the template makes
-# it the vocabulary's fixture instead of a second definition.
-TEMPLATE="$ROOT/.claude/skills/ir:exec/templates/plan.html"
-if [[ -f "$TEMPLATE" ]]; then
-  # The template is HTML, so lint it as a one-off file argument (the walk never
-  # picks it up). Every token and marker it contains must be one check 2 knows.
-  lint "$TEMPLATE"
-  assert_contains "the linter recognises the template's {{TOKEN}} spelling" \
-    "[template-token]" "$OUT"
-  assert_contains "the linter recognises the template's REPEAT:/OPTIONAL: spelling" \
-    "[template-scaffold]" "$OUT"
-else
-  echo "  SKIP: $TEMPLATE not found — ir:exec template moved or removed"
-fi
-
 echo ""
 if [[ "$fails" -eq 0 ]]; then
   echo "skill-lint_test: ALL PASS"
