@@ -169,30 +169,7 @@ func TestSessionPayloadType_CarriesNoControllableTag(t *testing.T) {
 	const retiredTag = "controllable"
 
 	seen := map[reflect.Type]bool{}
-	found := []string{}
-	var walk func(t reflect.Type, path string)
-	walk = func(ty reflect.Type, path string) {
-		for ty.Kind() == reflect.Ptr || ty.Kind() == reflect.Slice ||
-			ty.Kind() == reflect.Array || ty.Kind() == reflect.Map {
-			ty = ty.Elem()
-		}
-		if ty.Kind() != reflect.Struct || seen[ty] {
-			return
-		}
-		seen[ty] = true
-		for i := 0; i < ty.NumField(); i++ {
-			f := ty.Field(i)
-			name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
-			if name == "" {
-				name = f.Name
-			}
-			if name == retiredTag {
-				found = append(found, path+"."+f.Name)
-			}
-			walk(f.Type, path+"."+f.Name)
-		}
-	}
-	walk(reflect.TypeOf(sessionsResponse{}), "sessionsResponse")
+	found := findJSONTag(reflect.TypeOf(sessionsResponse{}), "sessionsResponse", retiredTag, seen)
 
 	// Guard the guard: a walk that reached nothing reports no tag for the
 	// same reason a walk over a cleaned tree does. Pin a field that must
@@ -203,4 +180,37 @@ func TestSessionPayloadType_CarriesNoControllableTag(t *testing.T) {
 	if len(found) != 0 {
 		t.Errorf("session payload still carries a %q JSON tag at: %v", retiredTag, found)
 	}
+}
+
+// findJSONTag walks ty's struct graph and returns the field paths whose JSON
+// name is tag. seen doubles as a recursion guard (the group tree is recursive)
+// and as this test's own reachability witness.
+func findJSONTag(ty reflect.Type, path, tag string, seen map[reflect.Type]bool) []string {
+	for ty.Kind() == reflect.Ptr || ty.Kind() == reflect.Slice ||
+		ty.Kind() == reflect.Array || ty.Kind() == reflect.Map {
+		ty = ty.Elem()
+	}
+	if ty.Kind() != reflect.Struct || seen[ty] {
+		return nil
+	}
+	seen[ty] = true
+	var found []string
+	for i := 0; i < ty.NumField(); i++ {
+		f := ty.Field(i)
+		fieldPath := path + "." + f.Name
+		if jsonName(f) == tag {
+			found = append(found, fieldPath)
+		}
+		found = append(found, findJSONTag(f.Type, fieldPath, tag, seen)...)
+	}
+	return found
+}
+
+// jsonName is the key f serializes under: its json tag's name, or the Go field
+// name when the tag names none.
+func jsonName(f reflect.StructField) string {
+	if name, _, _ := strings.Cut(f.Tag.Get("json"), ","); name != "" {
+		return name
+	}
+	return f.Name
 }
