@@ -184,8 +184,6 @@ const hookMatcherPreCompact = "manual"
 //     the user (`{waitingFor:"input needed", notification: … type:
 //     Qwo(w)?"elicitation_url_dialog":"elicitation_dialog"}`). These set their
 //     own type, so permission_prompt does NOT cover them.
-//   - agent_needs_input: a sub-agent or teammate is blocked
-//     (`band==="blocked"` → "<label> needs your input").
 //
 // DELIBERATELY NOT INSTALLED:
 //
@@ -196,13 +194,42 @@ const hookMatcherPreCompact = "manual"
 //     `waiting` would mislabel a session that is genuinely working. Wiring it
 //     needs the worker→session mapping this adapter does not have; filed rather
 //     than guessed.
+//
+//   - agent_needs_input ("<label> needs your input"): the SAME defect, which is
+//     why it sits here and not four lines up — it was installed once, and #1882
+//     took it back out. FleetView's renderer builds it in `Uy`, which pushes
+//     `{message, notificationType}` and puts the blocked agent's own id on a
+//     separate array that `Rg` drains only into analytics
+//     (`tengu_bg_agent_notification`, id redacted through `Re()`). The
+//     notification renders through `Gv(A, bC(), …)`, and `bC()` is the CURRENT
+//     session — so the hook arrives stamped with the WATCHER's id and nothing on
+//     the payload names the session that is actually blocked. Routing it would
+//     pin an orchestrator at `waiting` while it is genuinely working, and the
+//     clearing edge does not save it: a session watching agents BETWEEN turns
+//     has no turn end coming.
+//
+//     THE COST, recorded because it is a trade and not a free removal: this
+//     type has a second emitter that IS correctly attributed. The dialog
+//     registry's `LOe` entry — the teammate iTerm2-integration prompt,
+//     `{waitingFor:"input needed", notification:{text:"Teammate setup needs
+//     your input", type:"agent_needs_input"}}` — reaches `r5` → `GUe(n.text,
+//     n.type ?? "permission_prompt", …)`, which resolves `bC()` for a dialog on
+//     its OWN session. Its explicit type overrides the permission_prompt
+//     default that would otherwise have covered it, so dropping the type drops
+//     that dialog's only state-driving signal. Accepted: the two emitters are
+//     indistinguishable on the wire except by their user-facing English message
+//     text, and matching on that would let a UI copy edit silently change
+//     daemon state. The wrong case is also the common one — an orchestrator
+//     watching background agents is exactly the session an operator most needs
+//     reported honestly.
+//
 //   - auth_success, agent_completed, push_notification, computer_use_*,
 //     quota_auto_resume_*: none of them means a human is blocked right now.
 //
 // This matcher takes bCt's exact-name path rather than hookMatcher's
 // short-circuit: it matches Wcr's /^[a-zA-Z0-9_|, -]+$/ class, so Claude Code
 // splits it on | and compares names — no regexp is compiled.
-const hookMatcherNotification = "agent_needs_input|elicitation_dialog|elicitation_url_dialog|idle_prompt|permission_prompt"
+const hookMatcherNotification = "elicitation_dialog|elicitation_url_dialog|idle_prompt|permission_prompt"
 
 // minCLIVersion is the lowest Claude Code version this install may be written
 // into (issue #1365). Declared here, enforced generically by PermissionService
@@ -274,8 +301,9 @@ var installedHookEvents = []string{
 // matcher is compared AGAINST is per-event and decided by Claude Code's WQn:
 // for the tool events it is the tool name (match-all since #1861); for
 // PreCompact it is the compaction trigger ("manual"); for Notification it is
-// the notification_type (a five-name list — see hookMatcherNotification, and
-// do not assume it is still idle_prompt-only); for Stop it is empty — Claude
+// the notification_type (an explicit name list — read hookMatcherNotification
+// for its current membership rather than trusting a count restated here, and do
+// not assume it is still idle_prompt-only); for Stop it is empty — Claude
 // Code's Stop hook takes no matcher (it fires at every turn end) and rejects
 // settings.json that gives it one, so hookjson omits the matcher key entirely
 // for an empty matcher.

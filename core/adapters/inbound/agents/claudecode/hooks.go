@@ -63,14 +63,15 @@ const notificationTypeIdlePrompt = "idle_prompt"
 //
 // permission_prompt is also Claude Code's DEFAULT type for a dialog
 // notification that sets none of its own, so it covers the unnamed remainder;
-// the elicitation and agent types set their own and would otherwise be missed.
+// the elicitation types set their own and would otherwise be missed.
 // hookMatcherNotification carries the full type vocabulary and the reasons the
-// remaining types are excluded.
+// remaining types are excluded — including agent_needs_input, which was here
+// until #1882 showed its payload names the watching session, not the blocked
+// one.
 const (
 	notificationTypePermissionPrompt = "permission_prompt"
 	notificationTypeElicitation      = "elicitation_dialog"
 	notificationTypeElicitationURL   = "elicitation_url_dialog"
-	notificationTypeAgentNeedsInput  = "agent_needs_input"
 )
 
 // notificationRoute is where a state-driving notification_type is dispatched.
@@ -104,7 +105,6 @@ var notificationTypesDrivingState = map[string]notificationRoute{
 	notificationTypePermissionPrompt: routeBlockingDialog,
 	notificationTypeElicitation:      routeBlockingDialog,
 	notificationTypeElicitationURL:   routeBlockingDialog,
-	notificationTypeAgentNeedsInput:  routeBlockingDialog,
 }
 
 // compactTriggerManual is the PreCompact trigger value for a user-invoked

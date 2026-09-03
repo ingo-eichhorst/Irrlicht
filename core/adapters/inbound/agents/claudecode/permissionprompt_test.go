@@ -234,12 +234,17 @@ func TestEnsureHooksInstalled_WidensNarrowPermissionMatcherInPlace(t *testing.T)
 // elicitation_url_dialog explicitly, so permission_prompt (which is only the
 // DEFAULT for a dialog notification that sets no type) does not cover them.
 // #1861's first revision missed exactly that and shipped a matcher covering
-// two of these five.
+// only permission_prompt and idle_prompt out of this list.
+//
+// agent_needs_input was a member until #1882: its payload names the WATCHING
+// session rather than the blocked one, so acting on it pinned an orchestrator
+// at waiting while it was working. See hookinstaller.go's DELIBERATELY NOT
+// INSTALLED block for the evidence and for the one correctly-attributed emitter
+// that dropping it costs us.
 var blockingNotificationTypes = []string{
 	"permission_prompt",
 	"elicitation_dialog",
 	"elicitation_url_dialog",
-	"agent_needs_input",
 }
 
 // allDrivingNotificationTypes is every type the daemon acts on: the blocking
@@ -393,5 +398,78 @@ func TestHookHandler_NotificationBlockingDialogConsentGated(t *testing.T) {
 				t.Errorf("dispatched %d permission-prompt calls while the permission was not granted", n)
 			}
 		})
+	}
+}
+
+// TestHookHandler_AgentNeedsInputDoesNotHoldTheWatcher is #1882's defect test.
+//
+// agent_needs_input is emitted by FleetView's renderer for a *watched* agent
+// that has blocked. In the 2.1.259 bundle, Uy pushes the notification carrying
+// only {message, notificationType} and puts the blocked agent's own id on a
+// SEPARATE array, which Rg drains solely into analytics
+// (`tengu_bg_agent_notification`, id redacted through Re()). The notification
+// itself renders through Gv(A, bC(), …) — bC() being the CURRENT session. So the
+// hook reaches us stamped with the watcher's id, and nothing on the payload
+// names the session that is actually blocked.
+//
+// Routing it to routeBlockingDialog therefore holds the ORCHESTRATOR at
+// waiting while it is genuinely working — the exact mislabeling this adapter
+// already refuses for worker_permission_prompt, four lines up in
+// hookinstaller.go's DELIBERATELY NOT INSTALLED block.
+//
+// This asserts the negative at the handler, which is where the damage would be
+// done. The install side is covered by the bidirectional tripwire
+// TestNotificationTypesDrivingState_MatchesTheInstalledMatcher.
+func TestHookHandler_AgentNeedsInputDoesNotHoldTheWatcher(t *testing.T) {
+	target := &mockTarget{}
+	handler := NewHookHandler(target, nil, nil, mockLogger{})
+
+	rec := postHook(t, handler, hookPayload{
+		TranscriptPath:   inTreeTranscript(t, "sess-watcher"),
+		HookEventName:    "Notification",
+		NotificationType: "agent_needs_input",
+	})
+
+	// Still 200: an unhandled notification_type is a POST we accept and drop,
+	// not an error. Only the state effect is the defect.
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if n := len(target.getPermissionPromptCalls()); n != 0 {
+		t.Errorf("agent_needs_input armed %d permission-prompt holds, want 0 — the payload "+
+			"carries the WATCHING session's id, so this pins an orchestrator at waiting "+
+			"while it is working (#1882)", n)
+	}
+	if n := len(target.getIdlePromptCalls()); n != 0 {
+		t.Errorf("agent_needs_input reached the idle-prompt branch %d times, want 0: the "+
+			"watcher's turn is not over either (#1882)", n)
+	}
+}
+
+// TestAgentNeedsInputIsInstalledNowhere pins #1882's removal against a
+// re-add from either direction. The bidirectional tripwire above keeps the
+// matcher and the route map in step with EACH OTHER, so it stays green if
+// agent_needs_input is put back into both at once — which is precisely how it
+// arrived. This names the type itself.
+//
+// The type is overloaded in the bundle: besides FleetView's misattributed path,
+// the LOe teammate-setup dialog ("Teammate setup needs your input", the iTerm2
+// integration prompt) sets type:"agent_needs_input" explicitly and IS correctly
+// attributed, because it opens on the current session. Dropping the type drops
+// that dialog's only state-driving signal too. That is an accepted trade, not an
+// oversight: the two are indistinguishable on the wire except by their
+// user-facing English message text, and matching on that would let a UI copy
+// edit silently change daemon state. See hookinstaller.go's NOT INSTALLED block.
+func TestAgentNeedsInputIsInstalledNowhere(t *testing.T) {
+	const ntype = "agent_needs_input"
+
+	if hookDelivers(t, hookMatcherNotification, ntype) {
+		t.Errorf("hookMatcherNotification %q asks Claude Code to deliver %q, whose payload "+
+			"names the watching session rather than the blocked one (#1882)",
+			hookMatcherNotification, ntype)
+	}
+	if _, drivesState := notificationTypesDrivingState[ntype]; drivesState {
+		t.Errorf("notificationTypesDrivingState acts on %q, which would hold a working "+
+			"orchestrator at waiting (#1882)", ntype)
 	}
 }
