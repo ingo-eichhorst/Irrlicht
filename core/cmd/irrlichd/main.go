@@ -608,8 +608,9 @@ func runDaemon() {
 	// during replay without duplicating the construction.
 	allAgents := agents.All()
 
-	// Outbound relay publishing (#722) + remote control (#724) — see
-	// setupRelay's doc comment for the full rationale.
+	// Outbound relay publishing (#722) — see setupRelay's doc comment for the
+	// full rationale. One-way since #1875: the daemon publishes telemetry and
+	// accepts no instruction back.
 	rel := setupRelay(logger, push, cachedRepo, allAgents)
 	defer rel.cancel()
 

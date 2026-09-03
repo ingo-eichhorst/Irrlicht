@@ -363,18 +363,18 @@ func tmuxPaneAwaitsItsClient(l *session.Launcher) bool {
 // tmux's own TERM_PROGRAM marker — and copied the pane address alongside it.
 // Everything that routes on that address then addressed a stranger's pane
 // (#1582). That is the failure #1348 removed for herdr, reached through the
-// one field #1499 deliberately left populated for a descendant. (resolveBackend
+// one field #1499 deliberately left populated for a descendant. (The consumer
 // has since grown a socket requirement of its own, #1593 — an independent rule
 // that would not have caught this one, because $TMUX is inherited beside
 // $TMUX_PANE and a descendant carries both.)
 //
 // The CAPTURE is the only place this can be decided, which is why the fix is
-// here and resolveBackend was untouched by it. A stored launcher cannot tell the two
+// here and no consumer was touched by it. A stored launcher cannot tell the two
 // apart: a genuine pane that adopted its client's identity (#1501) and a
 // descendant that reported its own end up with the same fields —
 // {TermProgram: iTerm.app, ITermSessionID, TmuxPane, TmuxSocket} — and nothing
 // records which process the host came from. Requiring BOTH tmux fields the way
-// resolveBackend requires both herdr ones does not discriminate either: $TMUX
+// a herdr address requires both of its own does not discriminate either: $TMUX
 // is inherited beside $TMUX_PANE, so a descendant carries the socket too.
 //
 // It runs AFTER the ancestry fallbacks, and not inside launcherFromEnv, because
@@ -383,8 +383,8 @@ func tmuxPaneAwaitsItsClient(l *session.Launcher) bool {
 // exactly that (kitty sets no TERM_PROGRAM of its own, upstream kitty#4793) —
 // so at env time a genuine pane and a kitty descendant are the same map, and an
 // env-only check would leave that descendant addressing the pane kitty was
-// launched from while its own kitty backend sat one branch further down
-// resolveBackend. The walk is what separates them: from a genuine pane it
+// launched from rather than its own kitty window. The walk is what separates
+// them: from a genuine pane it
 // terminates at the reparented tmux server having found nothing, and from a
 // descendant it finds the host app.
 //

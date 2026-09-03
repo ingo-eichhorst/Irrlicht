@@ -1256,8 +1256,8 @@ func newPIDManagerForTestWithSupersededSpy(repo *mockRepo, superseded *[]superse
 // TestHandlePIDAssigned_FiresSupersededHook: cleanupStalePIDHolders (the
 // same-PID reconciliation path — the one that actually fired in the #997
 // mistral-vibe recording) must fire the re-key hook with (old, new) before
-// deleting the old row, so a subsystem carrying its own per-session state
-// (e.g. TerminalObserver's dialog cache) can move it onto the new id first.
+// deleting the old row, so a subsystem carrying its own per-session state can
+// move it onto the new id first.
 func TestHandlePIDAssigned_FiresSupersededHook(t *testing.T) {
 	repo := newMockRepo()
 	now := time.Now().Unix()

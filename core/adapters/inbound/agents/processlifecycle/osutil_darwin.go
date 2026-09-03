@@ -1408,8 +1408,8 @@ func resolveClientHostIdentityVia(ctx context.Context, kind clientLoopKind, pids
 //
 // Only ever called with a socket path the daemon captured from the pane's own
 // $HERDR_SOCKET_PATH, so a resolved identity always accompanies a complete
-// herdr address; control keeps routing to herdr (resolveBackend requires both
-// Herdr fields and tests them first) rather than to any tmux/kitty identity
+// herdr address; the session keeps addressing herdr (session.Launcher.pane()
+// tests HerdrPaneID before TmuxPane) rather than any tmux/kitty identity
 // adopted from the client.
 //
 // Every outcome is memoized briefly, non-answers included, because every pane

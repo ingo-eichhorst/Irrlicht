@@ -339,9 +339,9 @@ var herdrPaneEnv = map[string]string{
 }
 
 // TestLauncherFromEnv_HerdrSuppressesInheritedIdentity pins the defect: without
-// suppression, resolveBackend sees TmuxPane/%0 on a foreign socket and injects
-// input into an unrelated pane in a different window — strictly worse than
-// reporting the session uncontrollable.
+// suppression the session stores TmuxPane/%0 on a foreign socket, so every
+// consumer of that address reaches an unrelated pane in a different window —
+// strictly worse than storing no pane address at all.
 func TestLauncherFromEnv_HerdrSuppressesInheritedIdentity(t *testing.T) {
 	l := launcherFromEnv(herdrPaneEnv)
 	if l.TermProgram != "" {
@@ -519,9 +519,9 @@ func TestLauncherFromEnv_TmuxCapture(t *testing.T) {
 // inherited, and this process's address is its own (nothing else claimed a host
 // for it), so the drop deliberately keeps it.
 //
-// So `{TmuxPane: "%4", TmuxSocket: ""}` reaches control.resolveBackend, which
-// is why TestResolveBackend_TmuxPaneWithoutSocketIsNotAddressable is a defect
-// test rather than a lock over an unreachable state.
+// So `{TmuxPane: "%4", TmuxSocket: ""}` is a launcher shape that really does
+// get stored, which is why #1593's socket requirement addressed a reachable
+// state rather than an impossible one.
 func TestLauncherFromEnv_TmuxPaneSurvivesAClearedTmux(t *testing.T) {
 	env := map[string]string{}
 	for k, v := range tmuxPaneEnv {
@@ -627,8 +627,8 @@ func TestDropInheritedTmuxPane(t *testing.T) {
 		{"genuine pane", session.Launcher{TmuxPane: pane, TmuxSocket: socket}, true},
 		// The same pane with $TMUX cleared (`unset TMUX`, the documented way to
 		// nest tmux). Still this process's own address, so still kept — which
-		// is what leaves a socket-less pane reaching control.resolveBackend and
-		// makes #1593 a live defect rather than a state #1582 closed off.
+		// is what leaves a socket-less pane address stored, and makes #1593 a
+		// live defect rather than a state #1582 closed off.
 		{"genuine pane whose $TMUX was cleared", session.Launcher{TmuxPane: pane}, true},
 		// The shape the issue was filed about: `open -a iTerm` from a pane.
 		{"descendant reporting its own TERM_PROGRAM",
@@ -644,8 +644,8 @@ func TestDropInheritedTmuxPane(t *testing.T) {
 		{"descendant whose host came from the ancestry walk",
 			session.Launcher{HostBundleID: "net.kovidgoyal.kitty", TmuxPane: pane, TmuxSocket: socket}, false},
 		// Same descendant once the kitty back-fill has run. Dropping the pane
-		// is what lets control.resolveBackend reach the kitty branch, which is
-		// the backend that actually addresses this session's window.
+		// is what leaves the kitty identity as the one that actually addresses
+		// this session's window.
 		{"descendant with its own kitty backend",
 			session.Launcher{TermProgram: "kitty", KittyListenOn: "unix:/tmp/kitty/sock", KittyWindowID: "42", TmuxPane: pane, TmuxSocket: socket}, false},
 		// Vacuity guards: neither row has an address to decide about, and a

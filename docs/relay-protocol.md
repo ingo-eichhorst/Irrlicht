@@ -3,11 +3,14 @@
 The relay link lets an `irrlichd` daemon push its session events to a standalone
 `irrlichtrelay` server, which fans them out to macOS and web clients. The daemon
 pushes **out** to the relay, so it needs no inbound reachability (works behind
-NAT). The protocol is strictly **one-way**: nothing a client sends reaches a
-daemon. A `control` frame existed until #1875 retired it along with the rest of
-the remote-control path; the relay and the daemon now read and discard whatever
-arrives on the socket, so the read serves only to notice the socket closing. Hub-mode inside `irrlichd` was rejected — the relay is always its own
-binary. See the [Relay-Server wiki](https://github.com/ingo-eichhorst/Irrlicht/wiki/Relay-Server).
+NAT). Traffic is **one-way**: session state flows daemon → relay → client, and
+nothing a client sends reaches a daemon. A `control` frame ran the other way
+until #1875 retired it with the rest of the remote-control path; a client's
+socket is now read and discarded, and the read serves only to notice the socket
+closing. (The relay still decodes every frame a *daemon* sends — that is the
+telemetry stream itself.) Hub-mode inside `irrlichd` was rejected — the relay
+is always its own binary. See the
+[Relay-Server wiki](https://github.com/ingo-eichhorst/Irrlicht/wiki/Relay-Server).
 
 This document covers **only what v0 builds**. Fields marked _reserved_ are named
 here so the shape is stable, but they are neither sent nor honored yet.

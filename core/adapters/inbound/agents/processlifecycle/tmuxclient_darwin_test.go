@@ -572,8 +572,8 @@ func TestReadLauncherEnv_Tmux_InheritedPaneKeepsItsOwnHost(t *testing.T) {
 		t.Errorf("a session that reported its own host must keep it: %+v", l)
 	}
 	if l.TmuxPane != "" || l.TmuxSocket != "" {
-		t.Errorf("an inherited pane address must not be recorded — control.resolveBackend routes on it "+
-			"and would send-keys into a pane in someone else's window (#1582): pane=%q socket=%q",
+		t.Errorf("an inherited pane address must not be recorded — consumers route on it "+
+			"and would reach a pane in someone else's window (#1582): pane=%q socket=%q",
 			l.TmuxPane, l.TmuxSocket)
 	}
 	if !hostKnown {

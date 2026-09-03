@@ -221,9 +221,9 @@ func (s *subagentSummary) Equal(o *subagentSummary) bool {
 //
 // Such a descendant's pane ADDRESS is dropped rather than stored, which is a
 // separate decision from the suppression above and was made later (#1582): the
-// two fields are what control.resolveBackend routes on, so keeping them sent
-// the user's input into a stranger's pane, in a window they were not looking
-// at, and interrupt and read-back went to the same one. It has to be
+// two fields are the session's pane address, so keeping them pointed every
+// consumer at a stranger's pane, in a window the user was not looking at. It
+// has to be
 // decided at capture, because these fields cannot carry their own provenance —
 // a genuine pane that adopted its client's identity and a descendant that
 // reported its own are the same struct. So a TmuxPane that reaches this type is
@@ -420,8 +420,8 @@ func (l *Launcher) AdoptHostIdentity(from *Launcher) bool {
 //
 // Only the pane's OWN address is put back. A herdr client that is itself
 // running inside tmux contributes real TmuxPane/TmuxSocket fields — the client
-// really is in that pane — and those must pass through, which is what
-// control.resolveBackend's herdr-before-tmux ordering depends on.
+// really is in that pane — and those must pass through, which is what the
+// herdr-before-tmux ordering in pane() depends on.
 func (l *Launcher) putBackOwnPaneAddress(merged *Launcher) {
 	switch l.pane().kind {
 	case paneKindHerdr:

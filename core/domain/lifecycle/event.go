@@ -153,8 +153,11 @@ type Event struct {
 	TaskSubject string `json:"task_subject,omitempty"` // create only
 	TaskStatus  string `json:"task_status,omitempty"`  // pending | in_progress | completed
 
-	// Terminal-backend read-back (KindUIDetected). The UI state read off the
-	// rendered terminal screen, e.g. "trust_dialog". Empty on the clearing edge.
+	// Terminal-backend read-back (KindUIDetected). The UI state that was read
+	// off the rendered terminal screen, e.g. "trust_dialog"; empty on the
+	// clearing edge. Like the kind itself, nothing writes this since #1875
+	// retired terminal read-back — it is retained so frozen recordings under
+	// replaydata/ stay decodable.
 	UIKind string `json:"ui_kind,omitempty"`
 
 	// Held-signal ceiling expiry (KindHoldExpired, issue #1360). HeldForMS is

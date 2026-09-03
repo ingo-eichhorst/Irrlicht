@@ -73,29 +73,7 @@ func TestRetiredControlSurface(t *testing.T) {
 
 	t.Run("retired routes are unrouted", func(t *testing.T) {
 		for _, rt := range retiredRoutes {
-			req, err := http.NewRequest(rt.method, "http://"+d.addr+rt.path, strings.NewReader(`{"data":"x"}`))
-			if err != nil {
-				t.Fatalf("build request: %v", err)
-			}
-			req.Header.Set("Content-Type", "application/json")
-			resp, err := http.DefaultClient.Do(req)
-			if err != nil {
-				t.Fatalf("%s %s: %v", rt.method, rt.path, err)
-			}
-			body, err := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			if err != nil {
-				t.Fatalf("read body: %v", err)
-			}
-			if resp.StatusCode != http.StatusNotFound {
-				t.Errorf("%s %s: got %d, want 404 — the route is still registered (body: %s)",
-					rt.method, rt.path, resp.StatusCode, bytes.TrimSpace(body))
-				continue
-			}
-			if !strings.Contains(string(body), muxNotFoundBody) {
-				t.Errorf("%s %s: the 404 came from a handler, not from an unrouted path (body: %s)",
-					rt.method, rt.path, bytes.TrimSpace(body))
-			}
+			assertUnrouted(t, "http://"+d.addr, rt.method, rt.path)
 		}
 	})
 
@@ -109,6 +87,38 @@ func TestRetiredControlSurface(t *testing.T) {
 			}
 		}
 	})
+}
+
+// assertUnrouted issues one request and asserts nothing is serving that path.
+//
+// Both halves are load-bearing. The status must be 404, and the BODY must be
+// net/http's own not-found text: the retired input/interrupt handlers could
+// themselves answer 404 ("session not found"), so a status check alone cannot
+// tell "the route is gone" from "the route is there and the session isn't".
+func assertUnrouted(t *testing.T, base, method, path string) {
+	t.Helper()
+	req, err := http.NewRequest(method, base+path, strings.NewReader(`{"data":"x"}`))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, path, err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	switch {
+	case resp.StatusCode != http.StatusNotFound:
+		t.Errorf("%s %s: got %d, want 404 — the route is still registered (body: %s)",
+			method, path, resp.StatusCode, bytes.TrimSpace(body))
+	case !strings.Contains(string(body), muxNotFoundBody):
+		t.Errorf("%s %s: the 404 came from a handler, not from an unrouted path (body: %s)",
+			method, path, bytes.TrimSpace(body))
+	}
 }
 
 // stubUIDir is a directory holding a minimal index.html, enough for the

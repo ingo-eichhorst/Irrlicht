@@ -230,9 +230,9 @@ func TestLauncher_AdoptHostIdentity_TmuxPaneKeepsItsAddress(t *testing.T) {
 // TestLauncher_AdoptHostIdentity_HerdrPaneKeepsTheClientsTmuxAddress is the
 // lock the #1501 put-back had to not break. A herdr client can itself be
 // running inside a tmux pane, in which case its TmuxPane/TmuxSocket are its
-// OWN and describe the window displaying the herdr pane —
-// control.resolveBackend's herdr-before-tmux ordering exists precisely because
-// both addresses can be present and mean different things.
+// OWN and describe the window displaying the herdr pane — pane()'s
+// herdr-before-tmux ordering exists precisely because both addresses can be
+// present and mean different things.
 //
 // So the put-back is the pane's own address only, chosen by the same
 // herdr-then-tmux precedence processlifecycle.launcherFromEnv captures with. A
