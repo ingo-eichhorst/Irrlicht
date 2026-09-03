@@ -12,6 +12,10 @@ beyond), see the [Roadmap](https://irrlicht.io/docs/roadmap.html).
 
 ## [Unreleased]
 
+### Removed
+
+- **The backchannel is gone — Irrlicht observes your agents and no longer types into them.** The write-back path that let the daemon send input, interrupts and event→action rules into a discovered session's terminal (tmux, kitty, herdr) is removed in full, along with its master toggle, the per-agent `control` permission, the relay's remote-control frames, the macOS Backchannel Rules editor, and the `POST /api/v1/sessions/{id}/input` and `/interrupt` endpoints. Two onboarding scenarios (`backchannel-control`, `backchannel-observe`) leave the fixture matrix with them: 13 cells are retired outright and mistral-vibe's two recorded cells move to `replaydata/agents/mistral-vibe/regressions/1846-retired-terminal-*`, where their three replay goldens keep exercising the transcript tailer with no live cell behind them. **What this gives up:** the folder-trust prompt at launch — Claude Code's "Do you trust the files in this folder?" — was visible only by reading the rendered terminal back, and it blocks before any hook event exists, so a session held at it now reads `ready` instead of `waiting`. The per-tool half of that signal is unaffected: `Notification/permission_prompt` became authoritative in #1861, and the lost path was already default-off and additionally gated on `control` consent plus a tmux or kitty backend. **What is unchanged:** click-to-focus and the whole Launcher stack, herdr host resolution, `irrlicht-focus`, relay telemetry and the relay token model, and every read-only observation Irrlicht makes. (#1846, phases #1874/#1875/#1876)
+
 ## [0.6.2] — 2026-09-03
 
 ### Compact menu bar controls keep crowded screens usable, with early Junie support and stricter error recovery

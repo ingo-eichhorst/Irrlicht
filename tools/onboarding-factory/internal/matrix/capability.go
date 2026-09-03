@@ -12,9 +12,15 @@ import (
 )
 
 // This file is the capability model (#1369): the machine-readable answer to
-// "why is this cell dead?", replacing 122 hand-written per-cell assessments
-// with 124 one-line declarations in a single reviewable file (122 of them
-// re-encoding a cell that exists, 2 declaring a pair that had no cell at all).
+// "why is this cell dead?", replacing hand-written per-cell assessments with
+// one-line declarations in a single reviewable file. At #1369 that measured
+// 122 assessments becoming 124 declarations, only 2 of which had no cell
+// directory at all — a reading of that moment, not a live figure, and both
+// halves have moved a long way since. Print the current directory-less set
+// (never restate it here) with:
+//
+//	go test ./tools/onboarding-factory/internal/matrix/ \
+//	  -run TestShardCellEquivalence -v -count=1
 //
 // WHAT IT IS NOT. It is not a predictor at all, and the measurement is worth
 // stating plainly because the ticket that asked for this model assumed
@@ -25,9 +31,12 @@ import (
 // Cross-scenario inference accounts for ZERO of the 122 structural cells.
 //
 // Two multi-scenario traits were written and both were withdrawn on evidence —
-// architect_editor for asserting something false, backchannel_* for making the
-// validator unsatisfiable. Each entry below records its own case. The rule
-// that survives them is stated at backchannel_control.
+// architect_editor for asserting something false, and a second, since-retired
+// pair for making the validator unsatisfiable. architect_editor's entry below
+// records its own case; the retired pair's case, and the general rule that
+// survives them both, are written up in docs/replay-testing.md under "The
+// one-scenario trait rule". That write-up keeps the historical trait names,
+// because the rule is only legible through the two cases that produced it.
 //
 // WHAT IT IS FOR, given that. Two things a per-cell assessment cannot do:
 //
@@ -35,11 +44,12 @@ import (
 //     longer needs to exist on disk: `Load` synthesizes it, so a new adapter
 //     ships its recorded cells plus `of agent update --capability t=absent`
 //     per missing feature, instead of a directory with a metadata.json and a
-//     written assessment body per dead cell. Note the tense — 122 of the 124
+//     written assessment body per dead cell. Note the tense — most of the
 //     declarations re-encode a cell that still exists on disk, and nothing
 //     schedules deleting those. So the corpus now carries two statements of
-//     the same fact, kept honest by the validator; the saving is prospective,
-//     and only the 2 already-directory-less pairs realise it today.
+//     the same fact, kept honest by the validator; the saving is realised only
+//     by the pairs that already have no directory, and the census command
+//     above is what prints which those are.
 //  2. Drift. Once the model exists, the stored axes and the declared
 //     capability are two statements that can contradict each other, and
 //     `of validate` fails when they do. Before this file there was no second
@@ -61,9 +71,10 @@ import (
 // observable, together with the scenario that needs it.
 //
 // ONE scenario, not a list. A list was tried twice and withdrawn twice (see
-// architect_editor and backchannel_control below), so the type is now the
-// lock: widening a trait is a deliberate type change rather than an edit to a
-// literal, which is the bar those two comments ask for. It also removes the
+// architect_editor below, and the since-retired pair written up in
+// docs/replay-testing.md under "The one-scenario trait rule"), so the type is
+// now the lock: widening a trait is a deliberate type change rather than an
+// edit to a literal, which is the bar those two cases ask for. It also removes the
 // case the validator cannot describe — a trait spanning scenarios whose cells
 // disagree has no truthful value, and nothing in this matrix guarantees two
 // scenarios move together for every adapter.
@@ -163,24 +174,14 @@ var Traits = []Trait{
 	// declared a live cell dead.
 	{"subscription_signal", "exposes which billing model the session is on", "subscription-detection"},
 	{"burndown_progression", "exposes a rate-limit window that moves across turns", "quota-burndown"},
-	// Split, like architect_editor above, and for a sharper reason: a trait
-	// spanning two scenarios whose cells disagree has NO truthful value.
-	// `backchannel` covering both was tried; mistral-vibe is `observed` on
-	// control and `blocked-daemon` on observe, and that observe cell's own
-	// notes say "RE-ASSESS after Control fix" — so the very next edit to it
-	// would have made `of validate` unsatisfiable: `traced` fails the reverse
-	// arm on observe, `untraced`/`absent` fail the forward arm on control, and
-	// the only escape is writing a record_blocked reason that would mean the
-	// wrong thing. Two traits, two truthful values, no escape needed.
-	//
 	// THE GENERAL RULE, for whoever is tempted to widen one: a trait may span
 	// several scenarios only while those scenarios are guaranteed to move
 	// together for every adapter. Nothing in this matrix guarantees that, and
 	// both attempts to assume it were wrong within one ticket — so every trait
-	// here now covers exactly one scenario, and the cost of that is one JSON
-	// line per cell rather than per feature.
-	{"backchannel_control", "can be driven through a controlling terminal", "backchannel-control"},
-	{"backchannel_observe", "can be observed through a controlling terminal", "backchannel-observe"},
+	// here covers exactly one scenario, and the cost of that is one JSON line
+	// per cell rather than per feature. Both cases are in docs/replay-testing.md
+	// under "The one-scenario trait rule"; the second pair was retired with the
+	// feature it described, so only the write-up survives it.
 }
 
 // TraitForScenario returns the trait a scenario needs, if any. At most one

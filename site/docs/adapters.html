@@ -218,7 +218,7 @@
         <li>The <code>!</code> shell escape runs locally with no model turn; its injected records are skipped so a settled session is not bounced back to <code>working</code> with nothing left to close it</li>
         <li>Tokens and cost are live from <code>assistant.message.outputTokens</code> per message &mdash; <code>session.usage_checkpoint</code> carries no counts, and the cumulative block exists only at <code>session.shutdown</code></li>
         <li>In-process subagents (<code>task</code>/<code>explore</code>) are counted on the parent: Copilot creates no child session directory and appends every subagent record to the parent's own <code>events.jsonl</code>, distinguished by a top-level <code>agentId</code></li>
-        <li>No <code>Control</code> block is declared &mdash; the adapter is observe-only, gated behind a single <code>transcripts</code> permission</li>
+        <li>The adapter is observe-only, gated behind a single <code>transcripts</code> permission</li>
         <li><strong>Adapter name:</strong> <code>"copilot"</code></li>
         <li>Stage: <strong>alpha</strong></li>
       </ul>
@@ -293,12 +293,11 @@
 
       <p>Defined as a sealed-sum across three orthogonal axes in <code>core/domain/agent/</code>: <code>Identity</code> (name + branding), <code>Process</code> (how to find the OS process), and <code>Source</code> (where the conversation lives).</p>
 
-<pre><code>// Top-level declaration — Identity × Process × Source × Control × Permissions.
+<pre><code>// Top-level declaration — Identity × Process × Source × Permissions.
 type Agent struct {
     Identity    Identity
     Process     Process
     Source      Source
-    Control     Control     // backchannel write-back capability (issue #724); zero value = not controllable
     Permissions []Permission // consent-gated capabilities the daemon may exercise
 }
 
@@ -367,14 +366,6 @@ type FileParser interface{ isFileParser() }
 
 type JSONLineParser struct { NewParser func() LineParser }
 type RawLineParser  struct { NewParser func() RawParser }
-
-// Control declares whether and how the daemon may write input back into a
-// discovered session's terminal backend (issue #724, the "backchannel").
-type Control struct {
-    SupportsInput bool              // true for interactive TUI/REPL agents (false for headless stores)
-    Interrupt     InterruptMethod   // how an interrupt is delivered (none / Ctrl-C / signal)
-    Presets       map[string]string // backchannel preset id → this agent's literal command text
-}
 
 // Permission declares one consent-gated capability: what it touches, what
 // feature it unlocks, and (for modify-kind entries) how to apply/undo it.
@@ -551,7 +542,7 @@ type Watcher interface {
 
       <p>Adapters and platforms in the compatibility grid share the same four-tier ladder: <code>planned</code>, <code>alpha</code>, <code>beta</code>, <code>stable</code>. Each tier states a <strong>common ladder</strong> (time, bug count, real-world use) once and then a small set of component-specific artefact checks. Every box can be ticked from public artefacts (the repo, GitHub issues, tagged releases) -- stage assignment reduces to running through the checklist.</p>
 
-      <p>Since #1369 each <em>adapter</em> tier above <code>planned</code> has a <strong>machine-checked floor</strong> alongside its human criteria (platform tiers remain editorial). The floor is a set of <em>core</em> scenarios drawn from the 46 in the matrix &mdash; twelve of them, chosen for discriminating power rather than coverage (the set and the reasoning per scenario live in <code>tools/onboarding-factory/internal/matrix/vocabulary.go</code>). A scenario <em>settles</em> when it is recorded and observed, or when <code>replaydata/agents/adapters.json</code> declares a capability the adapter structurally lacks. The other 34 scenarios are <strong>optional</strong> and never block a promotion. <code>of validate</code> fails when an adapter claims a tier its core standing has not earned; claiming <em>less</em> is always allowed, because the time-and-adoption criteria below are invisible to it.</p>
+      <p>Since #1369 each <em>adapter</em> tier above <code>planned</code> has a <strong>machine-checked floor</strong> alongside its human criteria (platform tiers remain editorial). The floor is a set of <em>core</em> scenarios drawn from the 48 in the matrix &mdash; twelve of them, chosen for discriminating power rather than coverage (the set and the reasoning per scenario live in <code>tools/onboarding-factory/internal/matrix/vocabulary.go</code>). A scenario <em>settles</em> when it is recorded and observed, or when <code>replaydata/agents/adapters.json</code> declares a capability the adapter structurally lacks. The other 34 scenarios are <strong>optional</strong> and never block a promotion. <code>of validate</code> fails when an adapter claims a tier its core standing has not earned; claiming <em>less</em> is always allowed, because the time-and-adoption criteria below are invisible to it.</p>
 
       <p>The shape borrows from <a href="https://kubernetes.io/docs/reference/command-line-tools-reference/feature-gates/">Kubernetes feature stages</a> (alpha experimental, beta opt-out-able, GA stable) and the <a href="https://github.com/cncf/toc/blob/main/process/graduation_criteria.md">CNCF graduation criteria</a> (real adopters, time at the previous tier).</p>
 

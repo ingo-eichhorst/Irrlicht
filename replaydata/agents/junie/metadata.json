@@ -5,7 +5,7 @@
   "prerequisites": [
     "Junie CLI installed and on PATH as `junie` (JetBrains standalone launcher; the real binary lives under ~/.local/share/junie/.../junie.app/Contents/MacOS/junie); `junie --version` prints e.g. 'Junie version: 26.8.24 (2929.4) eap'",
     "Auth via JetBrains AI account (login out-of-band on first run); no API key env var",
-    "Observe-only adapter: no hooks, no backchannel control. Sessions are read from ~/.junie/sessions/<session-id>/events.jsonl; PID binding via ~/.junie/processes/<pid>-<session-id>-<hash>.json sidecars",
+    "Observe-only adapter: no hooks. Sessions are read from ~/.junie/sessions/<session-id>/events.jsonl; PID binding via ~/.junie/processes/<pid>-<session-id>-<hash>.json sidecars",
     "The events.jsonl schema is unversioned/undocumented (reverse-engineered 2026-08); re-verify event kinds against a live session after Junie updates"
   ]
 }
