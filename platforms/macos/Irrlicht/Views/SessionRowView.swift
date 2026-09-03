@@ -887,11 +887,10 @@ private struct TaskListView: View {
 /// Fixes `.popover(...)` rendering BEHIND this app's host panel (issue
 /// #1743). **No view applies this today**: its only caller was the
 /// per-session control button #1874 deleted, and the app now ships no native
-/// SwiftUI
-/// `.popover` at all. It is kept rather than deleted because the AppKit
-/// constraint it encodes is a property of the app's window structure, not
-/// of that button — the next `.popover` anyone adds hits the same wall, and
-/// `PopoverHostReorderTests` is where the measured behaviour is written
+/// SwiftUI `.popover` at all. It is kept rather than deleted because the
+/// AppKit constraint it encodes is a property of the app's window structure,
+/// not of that button — the next `.popover` anyone adds hits the same wall,
+/// and `PopoverHostReorderTests` is where the measured behaviour is written
 /// down. Everything that needs a floating surface today goes through the
 /// hand-rolled `TooltipWindowController` bridge in
 /// `SessionListView.swift` instead, for the exact same underlying reason:

@@ -29,8 +29,11 @@ timeout/witness design.
   seventh, `BackchannelRulesViewSnapshotTests`, was in this set until #1874
   deleted its subject with the rest of the backchannel. This roster is not the
   source of truth — `ImageSnapshotCIScopeTests`' map is, and that map is
-  cross-checked against `macos-swift.yml`'s own arguments, so this prose is the
-  one copy of the list that can go stale without a test noticing. Two further
+  cross-checked against `macos-swift.yml`'s own arguments. Every OTHER statement
+  of the set is prose no test reads, and there are three: this roster,
+  `macos-swift.yml`'s own header comments, and `AGENTS.md`'s one-line summary.
+  All three have been stale before; the count in `AGENTS.md` is stale right now
+  (it says seven), because #1874's file boundary did not include it. Two further
   image-snapshot suites
   (`PermissionWizardEffectErrorRenderTests`, `UnappliedGrantsBannerRenderTests`)
   reproduce byte-identically on a runner, stay gated there, and their passing is
@@ -85,7 +88,12 @@ timeout/witness design.
   maxΔ 142/197, the same glyphs sitting ~1 device pixel lower, i.e. a sub-point
   baseline landing on a different pixel phase. That editor and its two
   references were deleted by #1874, so the second population is now empty and
-  the 36 figure is historical: only the 34 icon-box failures remain reachable.
+  the 36 figure is historical: of the population that was MEASURED, only the 34
+  icon-box failures remain reachable. That is not a prediction of what a runner
+  would produce today — `DaemonErrorBannerRenderTests` and
+  `SessionListDaemonErrorWiringTests` joined the skip set afterwards and are
+  classified conservatively rather than measured (`ImageSnapshotCIScopeTests`
+  says so at its map), so the true count could be higher and nobody has looked.
   The toolchain is measured NOT to be the variable: all 15 Xcodes on
   `macos-latest`, including 26.3.0 build 17C529 which is bit-for-bit the
   reference Mac's, produce the same 36 failures,

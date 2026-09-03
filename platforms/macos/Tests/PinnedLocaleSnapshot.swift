@@ -22,10 +22,21 @@ import SwiftUI
 ///
 /// That view was the app's only `FormatStyle` render, and #1874 deleted it
 /// along with the rest of the feature it belonged to — so **no surviving
-/// reference is locale-dependent**, and a wrong value here would now redden
-/// nothing. The pin stays anyway: it is what keeps the next locale-sensitive
-/// render from silently photographing a machine, and `docs/swift-testing.md`
-/// records that whoever adds one owes the family a fresh lock.
+/// reference PNG is locale-dependent**: flipping this constant regenerates
+/// nothing and reddens no image comparison (measured on #1874 under both
+/// `en_US` and `fr_FR`).
+///
+/// It does NOT follow that a wrong value here is unobserved, and the tempting
+/// short version of that sentence is false. `PinnedNowSnapshotTests` reads
+/// `referenceLocale` (its `de` helper) and asserts literal `de_DE` renderings,
+/// so flipping it to `en_US` reddens five of its tests and to `fr_FR` reddens
+/// two — measured, not assumed. What #1874 removed is the *image* half of the
+/// lock, not the constant's whole guard.
+///
+/// The pin stays for the same reason it was introduced: it is what keeps the
+/// next locale-sensitive render from silently photographing a machine, and
+/// `docs/swift-testing.md` records that whoever adds one owes the family a
+/// fresh both-locales lock over that real view.
 ///
 /// ## Why `de_DE` and not `en_US`
 ///
@@ -44,13 +55,18 @@ enum PinnedLocaleSnapshot {
     /// The locale every committed reference was recorded under. Measured:
     /// `defaults read -g AppleLocale` on the reference Mac → `de_DE`.
     ///
-    /// Anchored on the surviving set rather than on one PNG's visible
-    /// grouping, because #1874 deleted the only reference that had any: the
-    /// evidence is that all 60 references under `Tests/__Snapshots__`
-    /// (`find Tests/__Snapshots__ -name '*.png' | wc -l`) still match
-    /// byte-for-byte on that host with this pin applied — `git status
-    /// --porcelain platforms/macos/Tests/__Snapshots__` is the check, and it
-    /// was empty across #1630, #1659, #1662, #1663 and #1874.
+    /// #1874 deleted the only reference PNG whose pixels showed this value, so
+    /// the per-PNG anchor is gone. **The reference set is no longer evidence
+    /// for it**: the 60 committed PNGs match byte-for-byte under `en_US` and
+    /// `fr_FR` too (measured), so "the snapshots still pass" is compatible with
+    /// any value here and proves nothing — exactly the vacuous green this
+    /// family exists to refuse.
+    ///
+    /// What DOES discriminate, and is what to re-check if this constant is ever
+    /// questioned: `defaults read -g AppleLocale` on the recording host, and
+    /// `PinnedNowSnapshotTests`, which reads this constant and asserts literal
+    /// `de_DE` output (`"09:00"`, `"Fr. 9:00"`). Five of its tests redden under
+    /// `en_US`, two under `fr_FR`.
     static let referenceLocale = Locale(identifier: "de_DE")
 
     /// A locale that groups thousands differently from `referenceLocale`.
