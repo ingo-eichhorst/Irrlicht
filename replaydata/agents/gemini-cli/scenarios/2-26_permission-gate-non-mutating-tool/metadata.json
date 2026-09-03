@@ -1,0 +1,183 @@
+{
+  "scenario_id": "permission-gate-non-mutating-tool",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.56.0",
+    "daemon_version": "0.6.1+cfb8d62",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes (write.toml gates web_fetch — a READ-ONLY tool — at decision=ask_user alongside run_shell_command/write_file/replace); daemon_capability: full (resolveConfirmation fires notifyHooks -> Notification/ToolPermission unconditionally, tool-class agnostic, BEFORE it blocks; AfterTool releases, AfterAgent backstops); driver_capability: ready (C-y leaves the driver's hard-coded -y YOLO for DEFAULT). SUPERSEDES the stale daemon=incapable on gemini-cli's 2-19 sibling, assessed before #1717 shipped gemini-cli hooks."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "permission-gate-non-mutating-tool",
+      "agent": "gemini-cli",
+      "assessed_at": "2026-09-03T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\nRoute: record.\n\n## Agent — gemini-cli gates a read-only tool BY DEFAULT, and the rule is data, not code\n\nGemini CLI's approval decisions are a declarative TOML PolicyEngine shipped inside the\nbundle (`bundle/policies/*.toml`), so the tool-class question is answered by reading a\ntable rather than by inference.\n\n`policies/read-only.toml` ALLOWS at priority 50: `glob`, `grep_search`,\n`list_directory`, `read_file`, `google_web_search`, … — those never raise a dialog in\nDEFAULT mode.\n\n`policies/write.toml` puts these four in the SAME `decision = \"ask_user\", priority = 10,\ninteractive = true` block:\n\n| toolName | class |\n|---|---|\n| `run_shell_command` | mutating |\n| `write_file` | mutating |\n| `replace` | mutating |\n| **`web_fetch`** | **read-only** |\n\n`web_fetch` changes nothing in the workspace — it retrieves a URL — and it is the one\nread-only tool gated in DEFAULT mode. That is exactly the pair this row needs, in one\nsession, with no configuration beyond DEFAULT approval mode.\n\nThe read-only dialog is a real, distinct dialog, not the generic one:\n`WebFetchToolInvocation.getConfirmationDetails` overrides the base and returns\n`{type: \"info\", title: \"Confirm Web Fetch\", prompt, urls}` — a literal the recording can\nassert on. The mutating half renders `ShellToolInvocation`'s `type: \"exec\"` confirmation.\nBoth offer `Allow once` as option index 0, so `Enter` answers either.\n\nSecond, independent confirmation that gemini treats read-only gating as first-class:\n`policies/plan.toml` gates EVERY read-only tool in plan mode —\n`toolName=\"*\", toolAnnotations = { readOnlyHint = true }, decision = \"ask_user\",\npriority = 50, modes = [\"plan\"]`. Not usable for this cell (plan mode's catch-all\n`decision = \"deny\", priority = 40` blocks the mutating half), but it settles `agent=yes`\nbeyond the single `web_fetch` row.\n\n## Daemon — the permission hook fire site is tool-class agnostic, by construction\n\nThe emission side, read in the installed 0.56.0 bundle. `resolveConfirmation` is the\nsingle confirmation loop for every tool:\n\n```js\nconst details = await currentInvocation.shouldConfirmExecute(signal, deps.forcedDecision);\nif (!details) { outcome = ProceedOnce; break; }\nif (deps.systemMessage) details.systemMessage = deps.systemMessage;\nawait notifyHooks(deps, details);                       // <-- unconditional, pre-block\nstate.updateStatus(callId, \"awaiting_approval\", {...});\nawait waitForConfirmation(deps.messageBus, correlationId, signal, ideConfirmation);\n```\n\n`notifyHooks` -> `config.getHookSystem().fireToolNotificationEvent(details)` ->\n`hookEventHandler.fireNotificationEvent(\"ToolPermission\", message, serializedDetails)`.\nNothing on that path reads the tool name, the tool class, or the confirmation `type`. A\n`web_fetch` (`type:\"info\"`) confirmation therefore produces a byte-identical hook event\nto a `run_shell_command` (`type:\"exec\"`) one. **That is the whole claim of this row, and\nfor gemini-cli it holds structurally rather than by luck.** It also fires BEFORE the call\nis parked at `awaiting_approval` and before the UI blocks, so the `waiting` edge is not\non a timer (contrast claudecode's 6000 ms `Notification` delay in #1861).\n\nThe reception side, in irrlicht on this worktree:\n\n- `geminicli/hookinstaller.go` installs `Notification` with **no matcher**\n  (`matcherForEvent` returns `\"\"` for every event) — deliberately, so filtering happens\n  adapter-side and cannot be bypassed by a hand-edited settings.json.\n- `geminicli/hooks.go` `handleNotificationHook` admits `notification_type ==\n  \"ToolPermission\"` and calls `target.HandlePermissionPromptHook(...)`.\n- `session_detector_lifecycle.go` `HandlePermissionPromptHook` ->\n  `d.signals.Hold(sessionID, session.SignalPermissionPrompt, …)` + a synthetic activity\n  dispatch, so the reclassify happens now rather than on the next fswatcher pass.\n- `state_classifier.go` rule `permission_prompt` (`m.PermissionPending`) -> `waiting`.\n- Release: `hook_signal.go` `hookSignalEffects[HookAfterTool] = {Signal:\n  SignalPermissionPrompt, Release: true}`, so the approved tool's `AfterTool` drops the\n  hold -> `working`.\n- Turn end: `handleAfterAgentHook` calls `HandleStopHook` **and**\n  `ReleasePermissionPromptHold` unconditionally -> `ready`, and that unconditional\n  release is the documented backstop for a CANCELLED confirmation (where `AfterTool`\n  never fires at all).\n\nEvery edge this row asserts — two `working -> waiting` entries, two releases, and a final\n`ready` that survives a trailing idle — has a named producer on both sides. `daemon=full`.\n\n## This supersedes gemini-cli's 2-19 sibling, which is stale\n\n`replaydata/agents/gemini-cli/scenarios/2-19_tool-gate-permission-prompt/metadata.json`\nrecords `daemon_capability: incapable` with the reasoning \"Gemini fires no such hook …\nthe hook receiver is wired for Claude Code only\". That was assessed 2026-06-11 against\ndaemon 0.5.1, BEFORE #1717 shipped the gemini-cli hook installer and receiver. On this\nworktree (0.6.1) the geminicli package contains `hooks.go`, `hookinstaller.go` and eight\nhook test files, and `Agent()` declares a `PermissionKeyHooks` modify permission whose\ncopy names the install. The 2-19 verdict is stale as written. Flagged here rather than\nedited — it is a different cell and not this subagent's to rewrite.\n\n## Driver — a near-miss gap, ruled out\n\n`driver_step_types_from_file replaydata/agents/gemini-cli/driver-interactive.sh` reports\n`exit_clean keys reset_session restart resume send session sigkill slash sleep\nstart_session wait_turn` — every primitive the recipe needs.\n\nThe real obstacle is not a missing step: the driver hard-codes `gemini -y` at all four\nboot sites, and `policies/yolo.toml`'s `toolName = \"*\", decision = \"allow\", priority =\n998, modes = [\"yolo\"]` auto-approves everything, so in YOLO mode NO confirmation is\nraised, NO hook fires, and this cell would have nothing to observe. The driver also\nignores the recipe's `settings` blob outright (its header says `$4 (settings-path)` is\naccepted \"for ABI parity\" and unused; `write_auth_settings` overwrites\n`<cwd>/.gemini/settings.json` with the auth key alone), so approval mode cannot be\ninjected that way either.\n\nRuled out as a gap using a primitive the driver already has:\n`keybindings` maps `\"app.toggleYolo\" -> new KeyBinding(\"ctrl+y\")`, and\n`useApprovalModeIndicator` computes\n`nextApprovalMode = config.getApprovalMode() === \"yolo\" ? \"default\" : \"yolo\"` on that\nkey. One `{\"type\":\"keys\",\"keys\":\"C-y\"}` step lands the session in DEFAULT approval mode.\n`step_keys` forwards the token straight to `tmux send-keys`, so `C-y` is exactly what\ngemini receives. `driver=ready`.\n\n## Recipe shape: two turns, on purpose\n\nThe scenario permits driving the two calls in separate turns and gemini needs it.\n`SignalPermissionPrompt` is ONE per-session hold and `AfterTool` releases it broadly, so\ntwo confirmations open at once would collapse into a single `waiting` episode, and the\nfirst tool's `AfterTool` would release the hold while the second dialog is still on\nscreen. One gated call per turn keeps the two episodes distinct and separately\nattributable, which is the entire point of this row.\n",
+      "caveats": [
+        "VACUOUS-PASS CONDITION (the main risk): the cell passes while proving nothing if the model satisfies the read-only half with `run_shell_command curl <url>` instead of `web_fetch`. That yields two waiting episodes, both from a MUTATING tool, with a green spec that has not tested the thing the row is about. Record MUST carry positive proof of the tool class for the second episode: a pane capture containing the literal `Confirm Web Fetch` while the dialog is open, AND the transcript's toolCall for that turn named `web_fetch`. A run whose second gate was a shell call is INCONCLUSIVE, not a pass. The prompt is written to make this unlikely (it names the tool), but a model is free to ignore it.",
+        "LOAD-BEARING ENVIRONMENT PROPERTY: the driver boots `gemini -y`. The recipe's first `keys: C-y` step exists solely to leave YOLO, and it is the difference between this cell testing anything and testing nothing. If the driver is ever changed to boot in DEFAULT approval mode, that step must be REMOVED or it toggles INTO yolo and silently disables every gate. Record should assert the approval-mode footer no longer reads YOLO before the first send, and log what it observed.",
+        "TWO TURNS, NOT ONE: irrlicht's SignalPermissionPrompt is a single per-session hold and AfterTool releases it broadly, so two simultaneously-open confirmations would merge into one waiting episode and the first AfterTool would release the hold while the second dialog is still open. The recipe drives one gated call per turn for that reason; the scenario explicitly allows it.",
+        "STALE SIBLING: gemini-cli's 2-19 tool-gate-permission-prompt cell still records daemon_capability=incapable with the reasoning 'Gemini fires no such hook', assessed 2026-06-11 against daemon 0.5.1 — before #1717 shipped the gemini-cli hook installer and receiver that this cell's daemon=full rests on. Same for 2-11 auto-classified-permission (same date, same reasoning). Both look re-assessable; neither is edited here.",
+        "PROVISIONAL, EMISSION-SIDE: this machine cannot make any gemini model call (the account returns IneligibleTierError), so nothing here was live-confirmed. daemon=full is derived from reading both sides of the wire — gemini's resolveConfirmation/notifyHooks fire site and irrlicht's receiver — not from a recording. Confidence 0.8 rather than higher for exactly that reason; record promotes it from provisional to settled.",
+        "NO CEILING PINNED ON THE WAITING EDGES: gemini-cli hooks are BEACON-delivered (`irrlichd hook-post gemini-cli` re-resolves the daemon address per fire) rather than direct HTTP, and that per-fire process spawn was not timed. The spec deliberately pins no max_delay_ms on either dialog_waiting phase; record can add one once a real latency is measured.",
+        "ADJACENT READ-ONLY GATE THAT THIS CELL DOES NOT COVER, AND THAT WOULD FAIL: gemini has a SECOND read-only permission dialog — checkPermissions() scans `@path` at-commands in the submitted prompt and raises a ConsentPrompt ('The following files are outside your workspace: … Do you want to allow this read?') before submitQuery runs. It bypasses resolveConfirmation entirely, so it fires NO hook and the daemon cannot see it. It is tool-free and pre-submit, so it belongs to the 2-27 row's shape, not this one; noted so a future reader does not read this cell's daemon=full as covering every read-only gate gemini has.",
+        "ADAPTER DEPRECATION: gemini-cli is scheduled for deprecation on 2026-08-20 (PR #1725). Unmaintained is not the same as broken — the hook support this verdict rests on shipped in #1717 on that same day, and the 0.56.0 bundle read here is dated 2026-08-19 by npm. Recording this cell is still worthwhile before the retirement date; after it, treat a failure as a retirement artifact before treating it as a regression."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@google/gemini-cli/bundle/policies/write.toml",
+          "note": "gemini-cli 0.56.0 default policy. `toolName = \"web_fetch\", decision = \"ask_user\", priority = 10, interactive = true` sits in the same block as run_shell_command / write_file / replace. This is the read-only half of the row, shipped as data."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@google/gemini-cli/bundle/policies/read-only.toml",
+          "note": "ALLOWs glob, grep_search, list_directory, read_file, google_web_search at priority 50 — so those never raise a dialog in DEFAULT mode, and web_fetch is the read-only tool that does."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@google/gemini-cli/bundle/policies/plan.toml",
+          "note": "Independent corroboration that read-only gating is first-class: `toolName=\"*\", toolAnnotations = { readOnlyHint = true }, decision = \"ask_user\", priority = 50, modes = [\"plan\"]`. Unusable for this cell because the same file's catch-all `decision=\"deny\", priority=40` blocks the mutating half in plan mode."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@google/gemini-cli/bundle/policies/yolo.toml",
+          "note": "`toolName=\"*\", decision=\"allow\", priority=998, modes=[\"yolo\"]` — why the driver's hard-coded `-y` must be undone before this cell can observe anything."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@google/gemini-cli/bundle/chunk-NUVMJEWM.js",
+          "note": "0.56.0 bundle. resolveConfirmation: `await notifyHooks(deps, details)` runs immediately after shouldConfirmExecute returns details and BEFORE state.updateStatus(callId,'awaiting_approval') and waitForConfirmation — unconditional and tool-class agnostic. notifyHooks -> fireToolNotificationEvent -> fireNotificationEvent('ToolPermission', message, serializedDetails). BaseDeclarativeTool.shouldConfirmExecute routes the policy's 'ask_user' to getConfirmationDetails. WebFetchToolInvocation.getConfirmationDetails returns {type:'info', title:'Confirm Web Fetch', prompt, urls} — the literal the record step asserts on. Tool-confirmation option list puts 'Allow once' at index 0 for every confirmation type (edit/exec/info/mcp/sandbox_expansion), so Enter answers either dialog."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/hookinstaller.go",
+          "note": "installedHookEvents = [Notification, AfterTool, AfterAgent]; matcherForEvent returns \"\" for every event, so Notification is installed with NO matcher and filtering is adapter-side by design. minCLIVersion 0.54.0; the installed CLI is 0.56.0."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/geminicli/hooks.go",
+          "note": "handleNotificationHook admits notification_type == \"ToolPermission\" and calls HandlePermissionPromptHook; AfterTool dispatches HandlePermissionHook (broad release); handleAfterAgentHook calls HandleStopHook AND ReleasePermissionPromptHold unconditionally. The three events together carry entry, release and turn end."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector_lifecycle.go",
+          "note": "HandlePermissionPromptHook holds session.SignalPermissionPrompt and dispatches a synthetic activity so the reclassify is immediate; ReleasePermissionPromptHold drops it on AfterAgent, documented as the backstop for a CANCELLED confirmation where AfterTool never fires."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/hook_signal.go",
+          "note": "hookSignalEffects[HookAfterTool] = {Signal: SignalPermissionPrompt, Release: true} — the release edge for each of the two waiting episodes."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "The permission_prompt rule (`m.PermissionPending`) is the rung that turns the held signal into waiting; it is hook-tier, so it outranks the transcript-native rules that would otherwise call the session working."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@google/gemini-cli/bundle/interactiveCli-BAGEJ4VO.js",
+          "note": "keybindings: [\"app.toggleYolo\", [new KeyBinding(\"ctrl+y\")]] and [\"app.cycleApprovalMode\", [new KeyBinding(\"shift+tab\")]]; useApprovalModeIndicator computes nextApprovalMode = getApprovalMode()===\"yolo\" ? \"default\" : \"yolo\" on TOGGLE_YOLO. This is what turns an apparent driver gap (hard-coded `-y`) into a one-step `keys` fix."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/driver-interactive.sh",
+          "note": "driver_step_types_from_file: exit_clean keys reset_session restart resume send session sigkill slash sleep start_session wait_turn. Also the constraint this recipe works around: `boot_session \"$GEMINI_BIN\" -y` at all four boot sites, and a header note that the recipe's settings-path argument is accepted for ABI parity and unused."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/scenarios/2-19_tool-gate-permission-prompt/metadata.json",
+          "note": "The sibling this cell contradicts: daemon_capability=incapable, assessed 2026-06-11 against daemon 0.5.1 on the reasoning 'Gemini fires no such hook … the hook receiver is wired for Claude Code only'. Stale as of #1717; flagged, not edited."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/scenarios/2-17_user-blocking-question/expected.jsonl",
+          "note": "Where observations.model = gemini-3.5-flash comes from: record settled it live on the API-key tier (correcting the earlier doc-derived gemini-3-flash-preview). Inherited here rather than re-guessed; still record-correctable."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "gemini CLI on PATH, version >= 0.54.0 (the adapter's hook floor). Assessed against 0.56.0.",
+        "BLOCKING ON THIS HOST: gemini model calls are not possible — the account is tier-ineligible (IneligibleTierError). Recording needs a GEMINI_API_KEY on a billable tier; the driver already requires GEMINI_API_KEY and fails loudly without it.",
+        "Network egress from the recording host, since the read-only half is a real web_fetch of a stable URL.",
+        "irrlicht's gemini-cli `hooks` permission GRANTED, so ~/.gemini/settings.json carries the Notification/AfterTool/AfterAgent beacon entries. With the permission pending or denied nothing is installed and the cell has no signal at all — verify the entries are present before driving, do not assume.",
+        "irrlichd is recording with the gemini-cli adapter enabled (run-cell.sh isolated mode, or --attach against a daemon started with --record).",
+        "RE-PROBE AT RECORD TIME: that the C-y step actually left YOLO. Assert the approval-mode footer no longer reads YOLO before the first send and log what was observed — this is the difference between the cell testing anything and testing nothing."
+      ],
+      "setup": [
+        "Fresh empty cwd under <staging>/cwd/, so no per-command session allowlist and no persisted 'allow for all future sessions' policy is pre-seeded for either tool.",
+        "Confirm ~/.gemini/settings.json contains the three irrlicht beacon hook entries before boot.",
+        "Boot interactively (driver start_session). Headless `gemini -p` is denied outright for these tools — write.toml's `interactive = false` rule maps run_shell_command/write_file/replace/web_fetch to `deny` — so a headless run raises no dialog at all."
+      ],
+      "script": [
+        {
+          "type": "keys",
+          "keys": "C-y"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "send",
+          "text": "Use the run_shell_command tool to run exactly: echo GATE1. Use no other tool."
+        },
+        {
+          "type": "sleep",
+          "seconds": 20
+        },
+        {
+          "type": "keys",
+          "keys": "Enter"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        },
+        {
+          "type": "send",
+          "text": "Use the web_fetch tool to fetch https://example.com and reply with the page title only. Do not use run_shell_command or curl."
+        },
+        {
+          "type": "sleep",
+          "seconds": 20
+        },
+        {
+          "type": "keys",
+          "keys": "Enter"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        }
+      ],
+      "verify": [
+        "PROOF THE GATE IS ARMED (must fail loudly): a pane capture taken after the C-y step and before the first send shows the approval-mode footer NOT reading YOLO. If the capture cannot be taken or does not show it, the run is INCONCLUSIVE — in YOLO mode nothing is gated and every later assertion is vacuous.",
+        "PROOF OF DIALOG 1 (mutating): a pane capture taken during the first 20s sleep contains the shell confirmation with 'Allow once' offered. Absence is INCONCLUSIVE, never a pass.",
+        "PROOF OF DIALOG 2 AND OF ITS TOOL CLASS (the load-bearing one): a pane capture taken during the second 20s sleep contains the literal 'Confirm Web Fetch', AND the session transcript's toolCall for that turn is named web_fetch. If the second gate was a run_shell_command (e.g. the model reached for curl), the run is INCONCLUSIVE and proves nothing about tool class — re-run, do not grade.",
+        "events.jsonl shows a session_birth ready and a pid_discovered for the launcher bound by cwd within ~2000 ms of start.",
+        "events.jsonl shows exactly TWO state_transition to waiting for the session, each preceded by a working and each followed by a working — not one merged episode.",
+        "each waiting begins while its dialog is on screen: the transition timestamp falls inside the corresponding 20s sleep window, not after the wait_turn that follows it.",
+        "the session makes at least two tool calls across the two turns.",
+        "final state is ready and STILL ready across the >=10s trailing idle (no state_transition to waiting in that window)."
+      ],
+      "settings": {},
+      "timeout_seconds": 300
+    }
+  }
+}

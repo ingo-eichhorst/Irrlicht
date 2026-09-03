@@ -1,0 +1,94 @@
+{
+  "scenario_id": "blocking-dialog-without-tool-call",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "gap:no-interactive-driver",
+    "agent_cli_version": "2929.5",
+    "daemon_version": "0.6.1+6d64e83c",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes (2 of the row's 4 triggers present in junie 2929.5 -- ProjectTrustScreen, which also covers the configured-server half via 'This project defines MCP servers that will be loaded once trusted:', with a live ~/.junie/trust/<sha>.json artifact on this host; and StatisticsConsentScreen / InvalidModelConfirmationScreen / the onboarding screens for the settings-review trigger. Sandbox+network-access ABSENT, cited as an empty scan. MCP elicitation not wired on the TUI path -- no setElicitationHandler caller -- and its ACP-path variant is marked UNVERIFIED)\ndaemon_capability: incapable (the dialogs are TUI Screens; SessionStore writes only a2ux AgentEvents to events.jsonl, and junie creates events.jsonl only when the first TASK starts -- verified on disk, the session directory carried no events.jsonl for the ~73s the trust dialog blocked, and the session id then changed across the grant. Neither edge has a trace; all waiting rungs unreachable, and a run would show the presession pinned at READY, the inversion of the failure the trailing idle catches)\ndriver_capability: gap:no-interactive-driver (replaydata/agents/junie/ holds only metadata.json; there is no driver-interactive.sh, and the trust trigger is launch-shaped rather than prompt-shaped anyway)"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "blocking-dialog-without-tool-call",
+      "agent": "junie",
+      "assessed_at": "2026-09-03T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "gap:no-interactive-driver",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes (2 of the row's 4 triggers present and demonstrated on disk;\n1 absent with a cited empty scan; 1 present only on the ACP path, flagged\nunverified)\ndaemon_capability: incapable\ndriver_capability: gap:no-interactive-driver\n\n## Reasoning\n\n**Agent -- junie does raise blocking dialogs that name no tool.** Checking each\nof the four triggers the scenario names, against the shipped fat jar (build\n2929.5) and the live ~/.junie state on this host:\n\n1. *Sandbox / network-access confirmation* -- **ABSENT.** `/sandbox` exists as a\n   slash command (`Command$Sandbox`), but it navigates to a Screen rendered by\n   `TestViewKt$SandboxView` -- a developer playground, not a security sandbox.\n   A scan of every matterhorn class for `network access` / `Allow network` /\n   `internet access` returns exactly two hits, both non-dialogs: the string\n   `build without network access` (a Gradle `--offline` completion description\n   inside `DefaultCommandSpecs`) and `Do NOT spend steps trying to work around\n   network/internet access restrictions` (subagent prompt text in\n   `GitPromptProvider`). junie has no sandbox model and asks no\n   network-access question. Cited as an empty scan.\n\n2. *First-use trust prompt for the workspace, or for a configured server* --\n   **PRESENT, and demonstrated by an artifact on this machine.** The TUI has\n   `Screen$ProjectTrustScreen`, `ProjectTrustViewModel` (with `onTrust`),\n   `ProjectTrustViewKt`, plus `UntrustedProjectNoticeEntry` and\n   `TrustNotPersistedNoticeEntry` static entries. `ProjectTrustViewKt` carries\n   the literal line **\"This project defines MCP servers that will be loaded once\n   trusted:\"** -- so the one screen covers both halves of this trigger, the\n   workspace and its configured servers. Granting it writes\n   `~/.junie/trust/<sha256>.json` = `{\"kind\":\"EXACT_PROJECT\",\"path\":\"<dir>\",\n   \"mac\":\"...\"}`; one such file exists on this host.\n\n3. *Server-driven MCP elicitation* -- **NOT ON THE TUI PATH.** The MCP Kotlin\n   SDK is bundled (`io/modelcontextprotocol/kotlin/sdk/CreateElicitationRequest`,\n   `Client$setElicitationHandler`), but no matterhorn class calls\n   `setElicitationHandler`, so junie-as-MCP-client never surfaces a server\n   elicitation. Elicitation does appear on the ACP path\n   (`acp/session/AcpEvent$ElicitationRequest`, `JunieAgentSession$planDecider`,\n   `FeedbackCommandKt$elicitationFlow`) -- there junie is the AGENT and the IDE\n   is the client. UNVERIFIED whether an ACP elicitation writes anything to\n   events.jsonl; it needs an IDE client to drive and was not exercised. Marked\n   unverified rather than dismissed.\n\n4. *Auto-mode or settings review the product raises before it proceeds* --\n   **PRESENT.** `Screen$StatisticsConsentScreen` + `StatisticsConsentViewModel`\n   (the anonymous-statistics consent; `shareAnonymousStatistics` is a persisted\n   settings key), `Screen$InvalidModelConfirmationScreen`,\n   `Screen$ProjectOnboardingScreen`, `Screen$OnboardingModelScreen`,\n   `Screen$ConfirmationScreen`.\n\nSo `agent_supports: yes` on the strength of (2) and (4), which are the two the\nrecipe would have used.\n\n**Daemon -- incapable, and the reason is the transport, not a classifier gap.**\n\nThe junie adapter is `agent.FilesUnderRoot{Dir: \".junie/sessions\",\nSessionIDFromPath: sessionIDFromPath}`. `sessionIDFromPath` mints a session ONLY\nfrom a file whose basename is exactly `events.jsonl` sitting directly under a\n`session-*` directory. Two independent lines of evidence say the tool-less\ndialogs never put a line in that file:\n\n*Code.* The writer is\n`ej/app/cli/standalone/tui/app/state/SessionStore`, and its constant pool shows\nit serializing `org.jetbrains.a2ux.api.AgentEvent` /\n`org.jetbrains.a2ux.extensions.A2uxEvent` -- the agent's own step stream. Every\none of the dialogs above is a `Screen` in\n`ej/app/cli/standalone/tui/app/state/Screen`, i.e. TUI application state, raised\nby the CLI shell around the agent and never by an agent step. There is no\n`A2uxEvent` for \"the trust screen is up\".\n\n*Disk.* On this host, junie process 82188 ran a single launch across two session\nidentities:\n\n    19:40:07  sessions/session-260830-194006-s23k/  -> transcript.md ONLY, no events.jsonl\n              processes/82188-session-260830-194006-s23k-....json written\n    19:41:20  trust/e8f8d8e7....json written  (the trust screen was answered)\n    19:41:20  sessions/session-260830-194120-17p0/  -> a NEW session id, same pid\n    19:44:30  .../session-260830-194120-17p0/events.jsonl first written\n\nFor the ~73 seconds the trust dialog was on screen, the session directory that\nexisted carried no `events.jsonl` at all -- so the adapter had nothing to tail\nand minted no session. (The same shape holds for `session-260830-192328-11lx`,\nthe first-launch onboarding session: transcript.md, no events.jsonl.) Worse for\nany post-hoc reconstruction, the session ID CHANGES across the trust grant, so\nthe eventual working session is not even the row the dialog blocked.\n\nWalking the waiting ladder for completeness\n(`core/application/services/state_classifier.go`): the two hook-tier rungs are\nunreachable because `junie.Agent()` declares no hooks at all (observe-only, one\n`transcripts` permission); `transcript_permission_prompt` needs\n`TranscriptPermissionPending`, which the junie parser only ever sets from a\n`SessionA2uxEvent` under `event.state == \"INPUT_REQUIRED\"` -- an agent-step\nevent that by definition does not exist while the CLI is sitting on a Screen;\n`user_blocking_tool` needs an open tool call, which this row's premise excludes;\nand `open_tool_stalled` likewise needs an OPEN tool call. What a recording would\nactually show during the block is a proc-<PID> presession sitting at `ready`\nwhile the user stares at the modal -- pinned-at-ready, the inversion of the\npinned-at-waiting failure the trailing idle exists to catch.\n\nNeither edge this row asserts has a trace. `daemon=incapable`, not `bug`: there\nis no mis-handled signal, there is no signal.\n\n**Driver.** Moot for routing, but recorded honestly: `replaydata/agents/junie/`\nholds only `metadata.json`. There is no `driver-interactive.sh` -- every one of\nthe other eleven agents has one -- so `send`, `keys`, `wait_turn` and `sleep`\nare all unimplemented for junie. Separately, the trust trigger is\nlaunch-shaped rather than prompt-shaped: it cannot be reached by any `send`,\nonly by launching into an untrusted cwd, which no existing driver primitive\nexpresses either.\n\n## What would unblock this cell\n\nNothing in irrlicht's classifier. It needs junie to write the dialog into the\nsession's `events.jsonl` -- an upstream change -- or a second, non-transcript\nsensor for junie (there is none: no hooks, no backchannel, and the sidecar under\n`~/.junie/processes/` carries only pid/sessionId/projectPath/startedAt). Re-open\nthis cell if a junie release starts emitting an `A2uxEvent` for the trust or\nconsent screens, or if the ACP elicitation path (trigger 3) is shown to reach\nevents.jsonl.\n",
+      "caveats": [
+        "UNVERIFIED, deliberately marked rather than dismissed: whether an ACP-path elicitation (AcpEvent$ElicitationRequest, JunieAgentSession$planDecider, FeedbackCommandKt$elicitationFlow) reaches ~/.junie/sessions/<id>/events.jsonl. Driving it needs an IDE acting as the ACP client (junie --acp=true), which this assessment did not do -- no agent CLI was invoked at all. If it DOES reach events.jsonl under event.state=INPUT_REQUIRED, this cell's daemon pillar is wrong and the row becomes recordable on the ACP path; that is the single most valuable follow-up here.",
+        "VACUOUS PASS: junie CAN reach waiting -- via a genuine agent question (AskAsyncRequestUpdatedEvent / ChoiceRequestUpdatedEvent under INPUT_REQUIRED, which is scenario 2-17's subject) or via a tool approval (2-19 / 2-26). Because the tool-less dialogs leave no trace at all, ANY waiting episode a future junie recording of THIS cell shows is by construction not the dialog this row is about. Never accept a waiting episode here without naming which Screen produced it and which events.jsonl line carried it.",
+        "LOAD-BEARING ENVIRONMENT PROPERTY that would make a run report 'no dialog appeared' for a configuration reason rather than an agent-capability one: the run cwd must be UNTRUSTED (no ~/.junie/trust/<sha256>.json entry of kind EXACT_PROJECT naming it) for trigger 2, and shareAnonymousStatistics must be unset in ~/.junie/settings.json for trigger 4's consent screen. Both are one-shot and persist: once answered on a host, neither re-appears. A re-assessment that skips this will see no dialog and wrongly conclude agent_supports: no.",
+        "The trust dialog additionally CHANGES THE SESSION ID across the grant (observed: session-260830-194006-s23k -> session-260830-194120-17p0 under one pid), so even a hypothetical future daemon-side reconstruction could not attach the block to the session that eventually works. This is a second, independent reason the entry and release edges cannot be paired.",
+        "Assessed against junie build 2929.5 (release channel), from the shipped jar and the live ~/.junie state -- NOT from a recording; junie is maturity=planned with 0 recordings. The events.jsonl schema is unversioned and reverse-engineered (see the adapter's package doc). A junie release that starts writing Screen transitions into the a2ux stream would flip this verdict, so re-check the SessionStore serializer and the Screen sealed set together.",
+        "driver=gap:no-interactive-driver is recorded for accuracy but is NOT what freezes this cell -- daemon=incapable is. Writing the junie driver would not make this row recordable. Do not read the gap as the actionable item here."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/junie/adapter.go",
+          "note": "sessionIDFromPath accepts ONLY a file named exactly events.jsonl directly under a session-* directory; index.jsonl, state.json, transcript.md and task-*/ are all rejected. A session directory with no events.jsonl therefore mints no irrlicht session -- which is the state of the world for the whole time a trust/consent Screen is up."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/junie/agent.go",
+          "note": "Agent() declares Source=FilesUnderRoot, a single `transcripts` permission, and NO hooks and no Control ('observe-only, the aider pattern'). There is no second sensor that could see a dialog the transcript does not carry."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/junie/parser.go",
+          "note": "TranscriptPermissionPending is set only from parseInputRequest, which requires a SessionA2uxEvent whose event.state == \"INPUT_REQUIRED\" -- an agent-step event. No Screen transition produces one."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "The waiting ladder. The two hook-tier rungs are unreachable (junie declares no hooks); transcript_permission_prompt (:152) is unreachable (no INPUT_REQUIRED line exists); user_blocking_tool and open_tool_stalled both need an OPEN tool call, which this row's premise excludes by definition. Default falls through to working, and with no transcript at all the presession sits at ready."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.junie/trust/e8f8d8e76c862fa0dda4b3adb155316378e0d9ff0a43b00a506b3f330c1f4264.json",
+          "note": "Live artifact of trigger 2 on this host: {\"kind\":\"EXACT_PROJECT\",\"path\":\"/private/tmp/.../scratchpad\",\"mac\":\"...\"}, mtime 2026-08-30 19:41:20."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.junie/sessions/",
+          "note": "The disk timeline that makes daemon=incapable concrete. Under one pid (82188): session-260830-194006-s23k created 19:40:07 with transcript.md and NO events.jsonl; trust/<sha>.json written 19:41:20; a DIFFERENT session id session-260830-194120-17p0 created 19:41:20, whose events.jsonl first appears 19:44:30. session-260830-192328-11lx (first launch/onboarding) is the same shape: transcript.md, no events.jsonl. For the ~73s the trust dialog blocked, no file the adapter tails existed."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.local/share/junie/versions/2929.5/Applications/junie.app/Contents/app/junie-release-2929.5.jar",
+          "note": "Shipped fat jar, build 2929.5. Scans cited: (a) ej/app/cli/standalone/tui/app/state/Screen$ sealed set includes ProjectTrustScreen, StatisticsConsentScreen, InvalidModelConfirmationScreen, ConfirmationScreen, ProjectOnboardingScreen, OnboardingModelScreen, McpOAuthScreen -- all TUI Screens, none an A2uxEvent; (b) ProjectTrustViewKt carries 'This project defines MCP servers that will be loaded once trusted:'; (c) SessionStore (the events.jsonl writer) serializes org.jetbrains.a2ux.api.AgentEvent / a2ux.extensions.A2uxEvent only; (d) NO matterhorn class calls io.modelcontextprotocol...Client.setElicitationHandler; (e) 'network access' matches only DefaultCommandSpecs' Gradle --offline description and GitPromptProvider's subagent prompt text -- empty scan for a network/sandbox confirmation; (f) Command$Sandbox ('/sandbox', '/bypass' sibling) routes to TestViewKt$SandboxView, a developer playground."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.junie/settings.json",
+          "note": "Persisted consent/settings keys on this host: shareAnonymousStatistics=false (trigger 4's StatisticsConsentScreen has already been answered here), braveMode=AUTO, sessionCount=3. These are the one-shot properties that make triggers 2 and 4 unreachable on a host that has already answered them."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/junie/",
+          "note": "metadata.json only -- no driver-interactive.sh and no scenarios/ directory. All eleven other agents ship a driver. Basis for driver=gap:no-interactive-driver."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/aider/scenarios/2-27_blocking-dialog-without-tool-call/metadata.json",
+          "note": "Sibling frozen cell; same daemon=incapable shape for a different reason (aider's dialog reaches only the terminal). Template for the documented-target spec written here."
+        },
+        {
+          "kind": "issue",
+          "ref": "ingo-eichhorst/Irrlicht#1861",
+          "note": "The row's provenance. No claim about junie is made on its basis."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "FROZEN on the daemon axis (daemon_capability: incapable), and separately blocked on the driver axis (gap:no-interactive-driver -- replaydata/agents/junie/ has no driver-interactive.sh at all). Left applicable:false with no script because no step sequence could produce the assertion: (a) every tool-less dialog junie raises is a TUI Screen (ProjectTrustScreen, StatisticsConsentScreen, InvalidModelConfirmationScreen, the onboarding screens), and SessionStore -- the writer of ~/.junie/sessions/<id>/events.jsonl -- serializes only a2ux AgentEvents, so no line is written on either edge; (b) worse, junie creates events.jsonl only when the first TASK starts, so while the trust dialog blocks there is no file for the adapter to tail and no irrlicht session at all (verified on disk: session-260830-194006-s23k held transcript.md and no events.jsonl for the ~73s the dialog was up, and the session id then CHANGED across the grant); (c) the trust trigger is launch-shaped, not prompt-shaped -- it is reached by launching into an untrusted cwd, which no driver primitive expresses; and (d) both surviving triggers are one-shot and already answered on this host (a trust entry exists; shareAnonymousStatistics is set), so a re-probe must reset them or it will misread configuration as incapability. Recording is deliberately NOT attempted. The expected.jsonl alongside this cell states the arc as a documented target so a future re-assessment has something concrete to compare against."
+    }
+  }
+}

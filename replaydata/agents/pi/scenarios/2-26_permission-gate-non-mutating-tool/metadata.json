@@ -1,0 +1,88 @@
+{
+  "scenario_id": "permission-gate-non-mutating-tool",
+  "metadata": {
+    "agent_supports": "no",
+    "daemon_capability": "n/a",
+    "driver_capability": "n/a",
+    "agent_cli_version": "0.83.0",
+    "daemon_version": "0.6.1+8a379e2",
+    "confidence": 0.85,
+    "notes": "agent_supports: no — pi 0.83.0 has no per-tool permission gate for EITHER tool class, so the row's read-only half has no dialog to raise. Re-verified at 0.83.0 (the package renamed to @earendil-works/pi-coding-agent since the 0.70.0-era sibling cells): a grep for /permission/i across the 180 non-vendor dist/*.js files returns three hits, all irrelevant (an MIT licence header in utils/ansi.js:10/:17 and a swallowed clipboard error at modes/interactive/interactive-mode.js:2100); requiresApproval|needsApproval|askPermission|requestPermission|permissionMode|autoApprove returns zero. pi's own docs state it three times (README.md:499 'No permission popups', README.md:386 'Permission gates and path protection' under features pi does NOT build, docs/usage.md:296 'intentionally does not include ... permission popups'), and docs/security.md:31 'No Built-in Sandbox' gives the reason: built-in tools run with the pi process's permissions, so nothing blocks before a tool runs. daemon_capability / driver_capability: n/a — the agent never enters the gated state."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "permission-gate-non-mutating-tool",
+      "agent": "pi",
+      "agent_supports": "no",
+      "daemon_capability": "n/a",
+      "driver_capability": "n/a",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: **no**; daemon_capability: **n/a**; driver_capability: **n/a** → route **frozen**.\n\n## What the row asserts\n\nTwo DISTINCT `waiting` episodes in one session — one raised by a tool that CHANGES the workspace, one raised by a tool that only READS — with the arc `ready → working → waiting → working → waiting → working → ready` and a final `ready` that survives a ≥10s trailing idle. The mutating half is `tool-gate-permission-prompt`'s territory; the read-only half is what this row adds.\n\npi never raises the dialog for either class, so the row is frozen at the agent layer — not at the transport.\n\n## agent_supports: no — the Step-2 scan, re-run at 0.83.0\n\nThe two sibling cells that already record `no` for pi (`2-19 tool-gate-permission-prompt`, `2-11 auto-classified-permission`) were assessed against `@mariozechner/pi-coding-agent@0.70.0`. The package has since been **renamed to `@earendil-works/pi-coding-agent`** and the installed build is **0.83.0**, so their scan is re-run here rather than inherited.\n\n`pi` on PATH is a Node shim resolving to `@earendil-works/pi-coding-agent/dist/cli.js`, so the authoritative scan is over the bundled `dist/` tree (180 non-vendor `*.js` files), not `strings $(which pi)`:\n\n- `/permission/i` → **3 hits, none a gate**: an MIT licence header (`dist/utils/ansi.js:10`, `:17`) and a swallowed clipboard error (`dist/modes/interactive/interactive-mode.js:2100` — \"Silently ignore clipboard errors (may not have permission, etc.)\").\n- `requiresApproval|needsApproval|askPermission|requestPermission|permissionMode|autoApprove` → **0 hits**.\n- `\\.confirm\\(` across all non-vendor `dist/*.js` → **2 hits**, both inside the bundled *llama* extension (`dist/extensions/llama/index.js:99` \"Unload model?\", `dist/extensions/llama/ui.js:399`) — model-management UI, not tool approval.\n- `ui\\.select\\(` across all non-vendor `dist/*.js` → **exactly 1 hit**: `dist/core/project-trust.js:9`, the project-trust prompt. That is the ONLY blocking dialog stock pi raises through its own UI helpers, and it belongs to no tool call (it is scenario 2.27's subject, assessed separately).\n\npi's own primary docs state the same thing three ways:\n\n- `README.md:499` — **\"No permission popups.** Run in a container, or build your own confirmation flow with extensions inline with your environment and security requirements.\"\n- `README.md:386` — \"Permission gates and path protection\" listed under the features pi deliberately does NOT build in.\n- `docs/usage.md:296` — \"It intentionally does not include built-in MCP, sub-agents, **permission popups**, plan mode, to-dos, or background bash.\"\n\nand `docs/security.md:31` (\"No Built-in Sandbox\") supplies the reason rather than a mere omission: *\"Pi does not include a built-in sandbox. Built-in tools can read files, write files, edit files, and run shell commands with the permissions of the pi process.\"* There is no pre-execution boundary for a gate to sit on.\n\n### The tool classes exist; the gate does not\n\npi's built-in tool set (`docs/usage.md:214`) is `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls` — a clean read-only class (`read`/`grep`/`find`/`ls`) and a mutating class (`edit`/`write`/`bash`). So the row's *distinction* is expressible for pi; the *dialog* is not. The only tool-gating surface pi ships is a launch-time availability allowlist (`docs/usage.md:207-212`: `--tools`/`-t`, `--exclude-tools`/`-xt`, `--no-builtin-tools`/`-nbt`, `--no-tools`/`-nt`). A tool excluded there never exists for the whole session; nothing ever pauses an in-flight turn for a per-call decision.\n\n### Extensions could add one — and that is exactly why it is not stock\n\npi's extension API exposes a `tool_call` event that \"can block\" (`docs/extensions.md`, Lifecycle Overview). A user-authored extension can therefore build a permission flow, which is precisely the escape hatch `README.md:499` points at. That is not stock pi and would need its own assessment. Nothing in the shipped `examples/extensions/` supplies one either: `confirm-destructive.ts` gates *session* actions (`session_before_switch`, `session_before_fork` — clear/resume/fork), never a tool call; `sandbox/` and `gondolin/` push isolation to the OS/VM layer rather than raising a dialog.\n\n## daemon_capability: n/a; driver_capability: n/a\n\nPer the routing table, `agent_supports: no` freezes the cell at the agent layer and both downstream pillars are `n/a` — the agent never enters the gated state, so there is nothing to observe and nothing to drive.\n\nGrounding it anyway, against the CURRENT sensor set (re-read rather than inherited — the pi adapter grew a hook channel in #1721, after the sibling cells were written):\n\n- **Transport.** `core/adapters/inbound/agents/pi/agent.go` declares `Source() = agent.FilesUnderRoot{Dir: sessionsDir()}` over `~/.pi/agent/sessions/` with `agent.ExactName{pi}`. `parser.go`'s `ParseLine` maps `session` / `model_change` / `compaction` / `message{assistant|user|toolResult|bashExecution}` only — there is no permission/ask event kind, so no `waiting`-producing transcript event exists for a gate even if pi had one.\n- **Hooks (the part that changed).** The adapter now installs a pi extension, but `hookinstaller.go:128` sets `installedHookEvents = []string{HookEventAgentSettled}` — **one** event, turn-end only. `hookinstaller.go:102-116` records why the tool pair was rejected on a source fact and not a preference: `tool_call` is dispatched by pi's runner without the try/catch every other event gets (a handler returning `{block:true}` would break the user's tool call), and `tool_execution_start`/`_end` were rejected because \"pi has no approval prompt to assert on — it has no sandbox at all\", so installing them \"would spawn a beacon per tool call to release a signal nothing ever holds.\" So the hook channel adds turn-end authority, not a permission edge.\n\n## What would change the verdict\n\nStock pi growing a per-call approval prompt (a `tool_call`-blocking gate in the core, not an extension), which would need to gate the read-only class as well as the mutating one. At that point the daemon pillar becomes the live question, and the answer would NOT be automatic: see the caveats on `SignalOpenToolStalled`, which is armed for `edit`/`write` only and can never cover `read`/`grep`/`find`/`ls`.",
+      "caveats": [
+        "VACUOUS-PASS (structural, applies to any future recordable version of this row): the expected.jsonl phase schema has no tool-name field, so a recipe that drove BOTH gates through pi's single `bash` tool — e.g. `cat file` for the read and `echo > file` for the write — would satisfy every phase while testing nothing about tool class. The documented-target recipe below therefore pins two DIFFERENT tools (`read` or `grep` for the read-only gate, `write` or `edit` for the mutating gate) and pins them in the prompt text; a re-record must confirm from the transcript's own tool_use blocks that two distinct tool names appear, because the spec cannot.",
+        "VACUOUS-PASS (pi-specific, and a live false-positive risk today): a `waiting` episode around a pi tool call does NOT imply a permission gate. `core/domain/session/metrics.go:503-545` (isPermissionGatedEditTool) names pi explicitly as an adapter emitting lowercase `write`/`edit`, and `SignalOpenToolStalled` flips such an open tool to `waiting` once it has been open past `stalledEditToolThreshold`. A pi `edit`/`write` that simply runs long would therefore produce a `waiting` episode with no dialog anywhere. That fallback is armed for edit-class tools ONLY — `read`/`grep`/`find`/`ls`/`bash` are deliberately excluded — so it can never satisfy this row's read-only half, and a green on the mutating half alone would be the exact false pass the row exists to catch.",
+        "TIMING: `stalledEditToolThreshold` is 30s (`core/domain/session/signal_hold.go`, raised from 5s in #1130). Any future recordable pi recipe for this row must hold each dialog well past 30s — a `sleep 14` between raise and answer, as several older recipes still use, sits BELOW the arming threshold and would silently fail to reach `waiting`.",
+        "pi's launch-time tool allowlist (`--tools`/`--exclude-tools`/`--no-builtin-tools`/`--no-tools`, docs/usage.md:207-212) is process-start availability gating, not an interactive per-call prompt: a disabled tool never exists for the turn, so it produces no working→waiting arc.",
+        "A user-authored extension CAN add a blocking gate via pi's `tool_call` event (docs/extensions.md Lifecycle Overview, '(can block)'), which is what README.md:499 points at. That is not stock pi. Nothing under examples/extensions/ supplies one: confirm-destructive.ts gates session_before_switch/session_before_fork (clear/resume/fork), never a tool call.",
+        "PROVISIONAL BOUNDARY: this verdict is a docs+bundle read of the installed 0.83.0 build; it was NOT confirmed by driving pi (this verb runs no recording and makes no model call). What a live run could still surface is an approval path reachable only at runtime — but the dist scan found no code that could implement one, so the residual risk is low."
+      ],
+      "sources": [
+        {
+          "kind": "docs",
+          "ref": "@earendil-works/pi-coding-agent@0.83.0 README.md:499",
+          "note": "'No permission popups. Run in a container, or build your own confirmation flow with extensions inline with your environment and security requirements.' — the load-bearing agent-layer citation."
+        },
+        {
+          "kind": "docs",
+          "ref": "@earendil-works/pi-coding-agent@0.83.0 README.md:386",
+          "note": "'Permission gates and path protection' listed under the features pi deliberately does NOT build in."
+        },
+        {
+          "kind": "docs",
+          "ref": "@earendil-works/pi-coding-agent@0.83.0 docs/usage.md:296",
+          "note": "'It intentionally does not include built-in MCP, sub-agents, permission popups, plan mode, to-dos, or background bash.'"
+        },
+        {
+          "kind": "docs",
+          "ref": "@earendil-works/pi-coding-agent@0.83.0 docs/security.md:31-33 ('No Built-in Sandbox')",
+          "note": "'Pi does not include a built-in sandbox. Built-in tools can read files, write files, edit files, and run shell commands with the permissions of the pi process.' — no pre-execution boundary exists for a gate to sit on."
+        },
+        {
+          "kind": "binary-scan",
+          "ref": "@earendil-works/pi-coding-agent@0.83.0 dist/ — 180 non-vendor *.js (pi on PATH is a Node shim → dist/cli.js)",
+          "note": "Step-2 guard re-run at 0.83.0 after the @mariozechner→@earendil-works package rename. /permission/i → 3 hits, all irrelevant (MIT licence header utils/ansi.js:10,:17; clipboard-error comment modes/interactive/interactive-mode.js:2100). requiresApproval|needsApproval|askPermission|requestPermission|permissionMode|autoApprove → 0 hits. \\.confirm\\( → 2 hits, both in the bundled llama extension (model unload/cancel UI). ui\\.select\\( → exactly 1 hit, core/project-trust.js:9 (the project-trust prompt, scenario 2.27's subject). No per-call approval mechanism exists in the shipped bundle."
+        },
+        {
+          "kind": "docs",
+          "ref": "@earendil-works/pi-coding-agent@0.83.0 docs/usage.md:207-214",
+          "note": "The ONLY tool-gating surface: launch-time availability flags --tools/-t, --exclude-tools/-xt, --no-builtin-tools/-nbt, --no-tools/-nt. Built-in tools are read, bash, edit, write, grep, find, ls — so the row's read-only vs mutating classes both exist for pi; only the dialog does not."
+        },
+        {
+          "kind": "file",
+          "ref": "@earendil-works/pi-coding-agent@0.83.0 examples/extensions/confirm-destructive.ts",
+          "note": "The closest shipped example to a permission flow, and it is not one: it hooks session_before_switch / session_before_fork (clear, resume, fork) and never a tool call."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/pi/hookinstaller.go:98-128",
+          "note": "CURRENT sensor set, re-read rather than inherited (#1721 added a hook channel after the 0.70.0-era sibling cells). installedHookEvents = [agent_settled] — one event, turn-end only. The doc comment records that tool_execution_start/_end were rejected because 'pi has no approval prompt to assert on — it has no sandbox at all', and tool_call because pi's runner dispatches it without a try/catch and a blocking handler would break the user's tool call."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/pi/agent.go / parser.go",
+          "note": "Source = FilesUnderRoot over ~/.pi/agent/sessions/ with ExactName{pi}; ParseLine maps session/model_change/compaction/message{assistant,user,toolResult,bashExecution} only — no permission/ask event kind, so no waiting-producing transcript event exists for a gate even if pi had one."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/metrics.go:503-545 + core/domain/session/signal_hold.go (SignalOpenToolStalled, stalledEditToolThreshold=30s)",
+          "note": "isPermissionGatedEditTool names pi explicitly as emitting lowercase write/edit. The one path by which a pi session can show `waiting` around a tool call is this stall fallback, armed for edit-class tools ONLY — never read/grep/find/ls/bash. Grounds the vacuous-pass caveats: it is a false-positive source for the mutating half and structurally cannot cover the read-only half."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "FROZEN at the AGENT layer (agent_supports: no) — pi 0.83.0 raises no per-call permission dialog for any tool class, so no step sequence can produce the assertion. applicable:false with no script, matching the hermes/2-26 sibling. WHAT THE RECIPE WOULD BE if stock pi ever ships a tool_call-blocking gate: launch pi interactively (tmux driver; the driver's DRIVE_ELICITS already carries send/keys/wait_turn/sleep, so no driver work is needed); send ONE prompt that forces two calls through TWO DIFFERENT tools — e.g. \\\"Use the `read` tool to read /etc/hosts, then use the `write` tool to create ./gate-probe.txt containing the single word OK. Use exactly those two tools; do not use bash for either.\\\" — so the read-only gate comes from `read`/`grep` and the mutating gate from `write`/`edit`. THE TWO-TOOL CONSTRAINT IS LOAD-BEARING, NOT STYLE: expected.jsonl has no tool-name field, so driving both gates through pi's single `bash` tool (a `cat` and a `>` redirect) would pass all seven phases while testing nothing about tool class. Hold EACH dialog >30s before answering with `keys` — stalledEditToolThreshold is 30s (#1130), so a shorter hold sits below the arming threshold; then `wait_turn` and a >=10s trailing idle. A re-record must ALSO read the transcript's tool_use blocks and confirm two distinct tool names, and confirm the first waiting episode began while the dialog was on screen rather than being minted by SignalOpenToolStalled on a slow edit."
+    }
+  }
+}

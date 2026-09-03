@@ -1,0 +1,162 @@
+{
+  "scenario_id": "permission-gate-non-mutating-tool",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "gap:no-interactive-driver",
+    "agent_cli_version": "2929.5",
+    "daemon_version": "0.6.1+6d64e83c",
+    "confidence": 0.7,
+    "notes": "agent_supports: yes (HumanInLoop.shouldAllowAction is called from OpenFileAgentAction/OpenEntireFileAgentAction -- gated on ConfigFileDetector.isSecretFile -- and from GetFileStructureRpcAction and McpAction, alongside BashToolActionNew; the captured real-terminal-approval fixture gates a purely read-only `cat`/`sed` command and offers an allowReadonlyCommands allow-list option)\ndaemon_capability: full, PROVISIONAL on emission (parser.go keys permissions on event.state==INPUT_REQUIRED + stepId with NO tool-name list; aeViewFiles and aeTool sit in the same approval arm as aeTerminal/aeFileChanges, and both are ApprovableBlockUpdatedEvent implementors in the a2ux API -- but no live capture of a read-only approval exists yet)\ndriver_capability: gap:no-interactive-driver (replaydata/agents/junie/ contains only metadata.json; there is no driver-interactive.sh at all, unlike all eleven other agents)"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "permission-gate-non-mutating-tool",
+      "agent": "junie",
+      "assessed_at": "2026-09-03T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "gap:no-interactive-driver",
+      "confidence": 0.7,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full (PROVISIONAL on emission -- see caveats)\ndriver_capability: gap:no-interactive-driver\n\n## Reasoning\n\n**Agent -- Junie gates read-only tools, not just mutating ones.** Junie's\nhuman-in-the-loop surface is the `HumanInLoop` interface\n(`com/intellij/ml/llm/matterhorn/agent/hitl/HumanInLoop.class`), whose only two\napproval members are `shouldAllowAction` and `shouldAllowEdit` (plus\n`askQuestion` / `askAsyncQuestion` / `askChoice`). A binary-safe scan of the\nshipped fat jar for callers of `shouldAllowAction` returns a list that spans\nBOTH tool classes:\n\n    MUTATING / EXECUTING\n      agent/actions/tools/BashToolActionNew$run$2\n      agent/actions/rpc/RunTestRpcAction, RunBuildRpcAction\n      agent/actions/rpc/android/RunAndroidAppRpcAction, ClearAppDataRpcAction\n      agent/actions/rpc/ios/RunIosAppRpcAction\n    READ-ONLY\n      agent/actions/open/OpenFileAgentAction$Companion\n      agent/actions/open/OpenEntireFileAgentAction$Companion\n      agent/actions/rpc/GetFileStructureRpcAction\n      agent/actions/mcp/McpAction        (MCP tools, read-only ones included)\n\n`OpenFileAgentAction$Companion` is a pure READ path and it carries the whole\ngate: it references `HumanInLoopAction`, `HumanInLoopResponse$AgreeDisagree`,\n`agent/hitl/ConfigFileDetectorKt`, and the literal refusal string\n\n    \" was explicitly rejected by user. Don't try accessing this file again.\"\n\n`isSecretFile` (ConfigFileDetector.kt) is called from exactly two places -- the\ntwo Open*FileAgentAction companions -- and its SECRET_FILE_NAMES /\nSECRET_FILE_EXTENSIONS / SECRET_FILE_PATTERNS sets contain `.env`, `.env.local`,\n`.aws/credentials`, `.netrc`, `.npmrc`, `.pgpass`, `.my.cnf`, `.pem`, `.key`,\n`.p12`, `.pfx`, `.jks`, `.keystore`. So \"open a .env file\" is a file READ that\nraises a blocking approval, which is precisely the tool class this row exists\nfor. (`isConfigOrHiddenFile` is the edit-side twin, reached only from\n`HumanInLoopInteractive.requestEditApproval`.)\n\nIndependent live corroboration that the gate is not restricted to destructive\nwork: the adapter's own captured fixture\n`core/adapters/inbound/agents/junie/testdata/real-terminal-approval.jsonl` is a\nreal session in which the gated command is\n\n    cat .../ddl-schema.cql; echo ====; sed -n 1,80p .../ddl-data.cql\n\n-- a purely read-only command -- and the approvalRequest it raised offers\n`{\"label\":\"Always allow all read-only commands (ls, cat, grep, etc.)\",\n\"allowReadonlyCommands\":true}`. An allow-list option whose whole purpose is to\nbatch-approve read-only commands only exists because read-only commands ask.\n\nThe gate is armed by brave mode: `/brave` (alias `/bypass`) cycles\n`off / auto / on` (Command$Brave: \"Brave mode: <v> (cycle off / auto / on)\"),\npersisted as `braveMode` in `~/.junie/settings.json`. `AUTO` -- the value on this\nmachine -- routes bash through `hitl/safety/BashCommandAutoApprover` +\n`BashCommandSafetyClassifier`, which is scenario 2.11's subject and which\nauto-approves read-only commands. `OFF` is the mode this row needs.\n\n**Daemon -- the junie adapter's permission path is tool-class agnostic BY\nCONSTRUCTION, which is the exact property #1861 found missing in claudecode.**\nirrlicht does not subscribe to a tool-name list for junie; there is no hook\nchannel at all. `parseA2ux` routes on the a2ux block kind and then keys the\npermission purely on the session-level state plus the block's `stepId`\n(core/adapters/inbound/agents/junie/parser.go):\n\n    case aeTerminal, aeTool, aeViewFiles, aeFileChanges, aeMcp:\n        if _, isApproval := agentEvent[\"approvalRequest\"]; isApproval || p.isOpenInputRequest(agentEvent) {\n            p.parseInputRequest(agentEvent, state, ev)\n            ...\n    // parseInputRequest: state == \"INPUT_REQUIRED\" && status != COMPLETED -> permission_requested\n\n`aeViewFiles` (ViewFilesBlockUpdatedEvent -- the file-read block) and `aeTool`\n(ToolBlockUpdatedEvent, whose `toolType` enum is Build/Code/Download/Edit/Mcp/\nPlan/Read/Run/Search/Skill/Test/WebSearch) are in that list alongside the\nmutating kinds, and a jar scan confirms both are `ApprovableBlockUpdatedEvent`\nimplementors -- the a2ux supertype that declares the `approvalRequest` field --\nexactly like TerminalBlockUpdatedEvent and FileChangesBlockUpdatedEvent. The\nproducer `agent/a2ux/steps/StepEventData` carries `approvalRequest` alongside\n`fileViews` and `toolType` in one record, so a read step and a terminal step\nreach the wire through the same approval field.\n\nFrom there the arc is fully traced in irrlicht: `permission_requested` ->\n`ParsedEvent.PermissionRequestIDs` -> `tailer.openPermissions`\n(core/pkg/tailer/tailer.go:1033) -> `TranscriptPermissionPending`\n(core/pkg/tailer/tailer_metrics.go:656) -> the `transcript_permission_prompt`\nrung (core/application/services/state_classifier.go:152) -> **waiting**. The\nrelease is the same stepId leaving INPUT_REQUIRED, with\nUserAsyncResponseEvent / UserResponseEvent / CancelAgentEvent / TaskState as\ndrains. `core/adapters/inbound/agents/junie/parser_test.go:361-393` already\nasserts that whole arc at the tailer level for the Ask flavour, and\n`TestParser_TerminalApproval_OpenGrantComplete` asserts open -> grant -> complete\nagainst the captured terminal-approval fixture.\n\nNothing in that path can distinguish a read-only block from a mutating one, so\n`daemon=full` -- with the emission caveat below.\n\n**Driver.** `replaydata/agents/junie/` contains a single file, `metadata.json`.\nThere is NO `driver-interactive.sh` (every one of the other eleven agents --\naider, antigravity, claudecode, codex, copilot, gemini-cli, hermes, kiro-cli,\nmistral-vibe, opencode, pi -- has one). The gap is therefore not a missing step\ntype but the whole driver: `send`, `keys`, `wait_turn` and `sleep` are all\nunimplemented for junie. `driver=gap:no-interactive-driver`. This is tooling\nwork, not an observability limit -- the recipe below is real and records the\nmoment `record` writes the driver.\n",
+      "caveats": [
+        "PROVISIONAL ON EMISSION (the assess-verb rule about observation vs emission). daemon=full is derived from reading the parser plus the a2ux type hierarchy, NOT from a live capture of a read-only approval. What is captured live is a TERMINAL approval (testdata/real-terminal-approval.jsonl). What is inferred is that OpenFileAgentAction's shouldAllowAction gate surfaces on the wire as a ViewFilesBlockUpdatedEvent or ToolBlockUpdatedEvent carrying `approvalRequest` under event.state=INPUT_REQUIRED. If it instead surfaces as a MessageBlockUpdatedEvent or a TestRunBlockUpdatedEvent -- both are ApprovableBlockUpdatedEvent implementors and NEITHER is in the adapter's `case aeTerminal, aeTool, aeViewFiles, aeFileChanges, aeMcp` list -- the block falls to the parser's default arm and is skipped, the session never leaves working, and this cell becomes daemon=bug. record must settle this and write the correction back. Confidence is 0.7 for this reason.",
+        "SECOND EMISSION UNKNOWN, lower risk: ApprovableBlockUpdatedEvent declares TWO approval fields, `approvalRequest` and `approvalInputRequest` (type ApproveInputRequest, whose data subclasses are ApproveEditFileData / ApproveTouchFileData -- both edit-side). The adapter's isApproval check reads ONLY `approvalRequest`. A binary scan of the whole matterhorn tree found no producer that sets `approvalInputRequest`, so it looks like an unused/ACP-only protocol field -- but that is an empty scan, not a proof, and it is why the mutating half of this recipe is deliberately a TERMINAL command (whose `approvalRequest` shape is captured live) rather than a file edit (whose field is unverified).",
+        "VACUOUS-PASS CONDITION: this cell passes while proving nothing if junie satisfies the read-only step with a shell `cat` instead of the native open-file tool. That produces two waiting episodes -- both TerminalBlockUpdatedEvent -- which is byte-for-byte indistinguishable at the state-arc level from the two-tool-class arc the row asserts, and it would silently degrade the cell into a duplicate of 2-19. The verify step therefore reads events.jsonl and asserts the SECOND approvalRequest sits on a ViewFilesBlockUpdatedEvent or ToolBlockUpdatedEvent, and fails LOUDLY (inconclusive, not pass) if events.jsonl is unreadable or the block kind cannot be determined.",
+        "LOAD-BEARING ENVIRONMENT PROPERTIES, all to be RE-PROBED at record time rather than trusted: (1) ~/.junie/settings.json must carry braveMode=OFF. The value on this machine today is AUTO, which routes bash through BashCommandAutoApprover and auto-approves read-only commands -- the mutating half would still gate but the recording would not be the arc this row asserts. (2) The persisted action allow-list must not already contain the commands or files under test; AgentActionsWhitelist.addToAllowList / setAllowReadonlyCommands mean one earlier `Always allow` click permanently hollows out every later run on that machine. (3) The run cwd must ALREADY be trusted (a ~/.junie/trust/<sha256>.json entry of kind EXACT_PROJECT naming it), or junie opens the ProjectTrustScreen at launch and no task -- hence no events.jsonl and no session -- is ever created.",
+        "The dialog must be answered with `Allow once`, never `Always allow`. ApprovalOption's variants are AllowOnce / AlwaysAllow / Deny; AlwaysAllow writes the allow-list entry described above and poisons both the second gate of this same run and every future re-record. record must confirm which option the Enter key selects before relying on a bare `keys: Enter`, and use explicit arrow-key navigation if the default is not AllowOnce.",
+        "COST IS DELIBERATELY NOT ASSERTED. junie on this machine runs against a local model through a LiteLLM proxy, and the live LlmResponseMetadataEvent carries \"cost\": 0.0 (verified against ~/.junie/sessions/session-260830-194120-17p0/events.jsonl). tokens_nonzero holds; cost_nonzero cannot and must not be added. `model` is left unpinned for record to fill from the recording -- it is whatever the record-time proxy serves (qwen3-35b-moe on this machine today), not a junie property.",
+        "BIRTH SHAPE IS AN INFERENCE, flagged for record to correct. junie has zero recordings, so nothing observed pins it. sessionIDFromPath mints a session only from a file named events.jsonl under a session-* directory, and events.jsonl is created only when the first TASK starts -- verified on disk: two local session directories (session-260830-192328-11lx, session-260830-194006-s23k) contain transcript.md and no events.jsonl at all. Meanwhile the CommandPattern matcher binds the junie process at launch, so pid_manager should mint a proc-<PID> presession first. The spec therefore models a presession birth followed by the real session appearing already in `working` on its first line (a UserPromptEvent). If a recording shows a different shape, record re-anchors; this is the codex/gemini-cli presession pattern, not the claudecode single-birth one.",
+        "The adapter's events.jsonl schema is unversioned and reverse-engineered (adapter.go's package doc says so). This assessment reads junie build 2929.5; the captured fixtures in testdata/ are from 2929.4-era sessions. A junie update can move any of this, and the ToolType / ApprovableBlockUpdatedEvent scans above are the cheapest way to re-check it."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/junie/parser.go",
+          "note": "parseA2ux's approval arm: `case aeTerminal, aeTool, aeViewFiles, aeFileChanges, aeMcp` then `if _, isApproval := agentEvent[\"approvalRequest\"]`. parseInputRequest opens on event.state==INPUT_REQUIRED keyed on stepId. NO tool-name list anywhere -- the read-only block kinds (aeViewFiles, aeTool) sit in the same arm as the mutating ones, which is the property this row asserts."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/junie/testdata/real-terminal-approval.jsonl",
+          "note": "Live captured 3-line approval flow. The gated command is `cat ...; echo ====; sed -n 1,80p ...` -- READ-ONLY -- and the approvalRequest offers allowListOptions[0] = {label:\"Always allow all read-only commands (ls, cat, grep, etc.)\", allowReadonlyCommands:true}. Direct evidence that junie's gate is not restricted to destructive operations."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/junie/parser_test.go",
+          "note": "TestParser_TerminalApproval_OpenGrantComplete (open -> grant -> complete against the captured fixture) and the tailer-level lifecycle test at :361-393 asserting ready -> working -> waiting(INPUT_REQUIRED) -> working -> ready via TranscriptPermissionPending."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer.go",
+          "note": "PermissionRequestIDs insert into openPermissions at :1033 and PermissionResolvedIDs delete at :1039; tailer_metrics.go:656 derives TranscriptPermissionPending = len(openPermissions) > 0."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "Rung `transcript_permission_prompt` at :152 fires on m.TranscriptPermissionPending -> waiting. This is the rung junie reaches; the two hook-tier rungs are unreachable because the junie adapter declares no hooks (agent.go: observe-only, one transcripts permission)."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.local/share/junie/versions/2929.5/Applications/junie.app/Contents/app/junie-release-2929.5.jar",
+          "note": "Shipped fat jar, build 2929.5 (release channel; CFBundleShortVersionString in junie.app/Contents/Info.plist). Scans cited: (a) callers of `shouldAllowAction` include agent/actions/open/OpenFileAgentAction$Companion, OpenEntireFileAgentAction$Companion, agent/actions/rpc/GetFileStructureRpcAction and agent/actions/mcp/McpAction -- all read-only -- alongside BashToolActionNew$run$2, RunTestRpcAction, RunBuildRpcAction; (b) org/jetbrains/a2ux/api/ToolType enum = Build, Code, Download, Edit, Mcp, Plan, Read, Run, Search, Skill, Test, WebSearch; (c) the classes whose constant pool names ApprovableBlockUpdatedEvent are FileChanges, Mcp, Message, Terminal, TestRun, Tool and ViewFiles block events; (d) org/jetbrains/a2ux/api/ApprovableBlockUpdatedEvent declares both `approvalRequest` and `approvalInputRequest`, and no matterhorn class sets the latter; (e) agent/hitl/HumanInLoop declares exactly askQuestion/askAsyncQuestion/askChoice/shouldAllowAction/shouldAllowEdit."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.local/share/junie/versions/2929.5/.../agent/hitl/ConfigFileDetectorKt.class",
+          "note": "isSecretFile / isConfigOrHiddenFile / isBuildScriptFile. SECRET_FILE_NAMES+EXTENSIONS+PATTERNS include .env, .env.local, .aws/credentials, .netrc, .npmrc, .pgpass, .my.cnf, .pem, .key, .p12, .pfx, .jks, .keystore. isSecretFile's ONLY callers are the two Open*FileAgentAction companions -- i.e. it gates READS. OpenFileAgentAction$Companion also carries the refusal string ' was explicitly rejected by user. Don't try accessing this file again.'"
+        },
+        {
+          "kind": "file",
+          "ref": "~/.junie/settings.json",
+          "note": "Live settings on the assessment host: braveMode=AUTO, modelForLaunch=qwen3-35b-moe, providerForLaunch=litellm. AUTO is the mode that auto-approves read-only bash via BashCommandAutoApprover, which is why the recipe pins braveMode=OFF as a re-probed precondition."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.junie/sessions/session-260830-194120-17p0/events.jsonl",
+          "note": "Live junie session on this host. LlmResponseMetadataEvent modelUsage entry = {model: qwen3-35b-moe, cost: 0.0, inputTokens: 74, outputTokens: 2378} -- the reason cost_nonzero is NOT asserted. Also the source of the observed top-level kind census (SessionA2uxEvent, UserMessagesCommittedToHistory, SkillsStatusEvent, UserPromptEvent, TaskStartedEvent, TaskState)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/junie/",
+          "note": "Contains metadata.json and nothing else -- no driver-interactive.sh, no scenarios/ directory. All eleven other agents ship a driver-interactive.sh. This is the whole basis for driver=gap:no-interactive-driver."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/2-26_permission-gate-non-mutating-tool/metadata.json",
+          "note": "Sibling cell. Its daemon=bug is a hook-matcher allowlist defect specific to claudecode's PermissionRequest installation; junie has no hook channel and keys on a session state instead, so the same defect cannot arise here. Template for the phase names used below."
+        },
+        {
+          "kind": "issue",
+          "ref": "ingo-eichhorst/Irrlicht#1861",
+          "note": "The report this row was created from. Cited as the row's provenance only -- no claim is made here about junie's behaviour on the basis of it."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "timeout_seconds": 420,
+      "settings": {
+        "braveMode": "OFF",
+        "_note": "Written into ~/.junie/settings.json before launch. OFF is the only mode in which both halves gate: AUTO routes bash through BashCommandAutoApprover (scenario 2.11) and auto-approves read-only commands, ON approves everything. providerForLaunch/modelForLaunch are left to the host's LiteLLM setup and must NOT be pinned here."
+      },
+      "preconditions": [
+        "junie on PATH (JetBrains standalone launcher; real binary at ~/.local/share/junie/versions/<v>/Applications/junie.app/Contents/MacOS/junie). Assessed against build 2929.5, release channel.",
+        "A LiteLLM proxy is reachable and its endpoint is persisted in JUNIE_LITELLM_URL. junie calls /v1/model/info at startup, which a bare mlx server does not implement; the endpoint is persisted through the env var, not a flag.",
+        "RE-PROBE AT RECORD TIME, do not trust: ~/.junie/settings.json has braveMode=OFF. The host default observed during assessment was AUTO.",
+        "RE-PROBE AT RECORD TIME: the persisted action allow-list carries no entry covering the command or the file under test. One earlier `Always allow` click (AgentActionsWhitelist.addToAllowList / setAllowReadonlyCommands) permanently hollows the cell out.",
+        "RE-PROBE AT RECORD TIME: the run cwd is ALREADY trusted -- ~/.junie/trust/ holds a {\"kind\":\"EXACT_PROJECT\",\"path\":\"<run cwd>\"} entry. An untrusted cwd sends junie to the ProjectTrustScreen at launch, and no events.jsonl (hence no irrlicht session) is created until trust is granted.",
+        "irrlichd is recording and the junie `transcripts` permission is GRANTED (the adapter is observe-only and everything it sees is gated behind that one permission; a pending or denied grant means zero observations).",
+        "DRIVER MUST BE WRITTEN FIRST: replaydata/agents/junie/driver-interactive.sh does not exist. record ports it from a sibling (the aider/kiro-cli observe-only shape is closest) and must implement send, keys, wait_turn and sleep."
+      ],
+      "setup": [
+        "Create an empty run cwd and trust it (launch junie once in it and accept the trust screen, or write the ~/.junie/trust/<sha256>.json entry) BEFORE the recorded run, so the recorded launch is not consumed by the trust screen.",
+        "Write a decoy secret file at <cwd>/.env containing a single line `FAKE_TOKEN=not-a-real-secret`. `.env` is in ConfigFileDetector's SECRET_FILE_NAMES, which is what makes the READ half gate.",
+        "Write <cwd>/gate.txt containing the single line BEFORE, so the mutating half has something to change and the read half has a deterministic target if the .env route is later re-scoped.",
+        "Set braveMode=OFF in ~/.junie/settings.json and confirm no allow-list entry covers `printf`/`tee` or `.env`."
+      ],
+      "script": [
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "send",
+          "text": "Do exactly these two steps, in this order, one at a time. Finish step 1 completely before starting step 2.\nStep 1: run this terminal command and nothing else: printf 'AFTER\\n' > gate.txt\nStep 2: open the file .env in this directory and show me its contents. Use your file-opening tool for step 2 -- do NOT use the terminal, do not run cat, head, sed or grep, and do not run any command at all in step 2.\nWhen both steps are done, reply with exactly one line containing only the token TWOGATES"
+        },
+        {
+          "type": "sleep",
+          "seconds": 25
+        },
+        {
+          "type": "keys",
+          "keys": "Enter"
+        },
+        {
+          "type": "sleep",
+          "seconds": 25
+        },
+        {
+          "type": "keys",
+          "keys": "Enter"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 14
+        }
+      ],
+      "verify": [
+        "PROOF OF GATE, must fail LOUDLY and report INCONCLUSIVE rather than pass, and must never read an unreadable file as 'no gate': <session>/events.jsonl exists and is parseable, and contains AT LEAST TWO SessionA2uxEvent lines whose event.state == \"INPUT_REQUIRED\" and whose event.agentEvent carries an `approvalRequest`, with two DISTINCT stepId values.",
+        "TOOL-CLASS PROOF (the assertion this row adds over 2-19): of those two approvalRequest lines, one has event.agentEvent.kind == \"TerminalBlockUpdatedEvent\" (the mutating half) and the other has kind \"ViewFilesBlockUpdatedEvent\" or \"ToolBlockUpdatedEvent\" (the read-only half). TWO TerminalBlockUpdatedEvent approvals is a FAILED run, not a passed one -- it means junie satisfied step 2 with a shell read and the cell degenerated into a duplicate of 2-19.",
+        "If the read-only half's block kind is anything OTHER than ViewFiles/Tool/Mcp/FileChanges/Terminal -- MessageBlockUpdatedEvent and TestRunBlockUpdatedEvent are the two live risks -- the adapter's approval arm never sees it and this cell's daemon pillar is WRONG: record must write daemon=bug back into the cell with the observed kind cited, per the observability_correction contract.",
+        "Each of the two approvalRequests is followed by a line with the same stepId leaving INPUT_REQUIRED (state IN_PROGRESS) or reporting status COMPLETED -- the release edge.",
+        "gate.txt contains AFTER, proving the mutating command actually ran after its approval rather than being denied.",
+        "The final assistant text contains the literal token TWOGATES.",
+        "No allow-list entry was created during the run (the answers were Allow once, not Always allow) -- otherwise the recording is not re-runnable and the next record is vacuous."
+      ]
+    }
+  }
+}

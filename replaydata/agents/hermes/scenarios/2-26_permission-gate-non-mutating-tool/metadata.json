@@ -1,0 +1,104 @@
+{
+  "scenario_id": "permission-gate-non-mutating-tool",
+  "metadata": {
+    "agent_supports": "no",
+    "daemon_capability": "n/a",
+    "driver_capability": "n/a",
+    "agent_cli_version": "0.19.0",
+    "daemon_version": "0.6.1+6d64e83",
+    "confidence": 0.85,
+    "notes": "agent_supports: no — hermes 0.19.0 opens a human permission dialog on exactly two default surfaces, both mutating (`terminal` via check_all_command_guards, whose only non-test importer is tools/terminal_tool.py:256, and `execute_code` via check_execute_code_guard), plus an opt-in memory/skills WRITE gate. Every read-only tool (read_file, search_files, session_search, web_search, web_extract, browser_snapshot, read_terminal) was checked at its own module and none references the approval system; hermes' read-side guards are refusals returned to the MODEL (file_tools.py:595 'Refusing to write to sensitive system path', _search_result_read_block_error), never a modal. The only way to gate a read tool is an operator-installed pre_tool_call plugin rule calling request_tool_approval — fabricating a gate hermes does not ship."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "permission-gate-non-mutating-tool",
+      "agent": "hermes",
+      "assessed_at": "2026-09-03T00:00:00Z",
+      "agent_supports": "no",
+      "daemon_capability": "n/a",
+      "driver_capability": "n/a",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: no (hermes 0.19.0 raises a human permission dialog on exactly two default surfaces \u2014 the `terminal` shell tool and `execute_code` \u2014 and on NO read-only tool; the read-side guards it does have are refusals handed to the model, never a dialog)\ndaemon_capability: n/a (the agent never performs the behaviour, so there is nothing for the daemon to observe; a second, independent blocker is documented below so a future re-assessment does not have to rediscover it)\ndriver_capability: n/a\n\n## What the row asserts, and which half is missing\n\n2.26 asserts TWO distinct `waiting` episodes in one session: one raised by a\ntool that changes the workspace, one raised by a tool that only READS (a file\nread, a code search, a directory listing, a web fetch). The mutating half is\nthe path `tool-gate-permission-prompt` (2.19) already covers on this column.\nThe read-only half is the whole of what this row adds, and it is the half\nhermes has no default surface for.\n\n## agent = no \u2014 every approval call site in the tree, and what it gates\n\n`_fire_approval_hook` and the three prompt entry points were enumerated\ntree-wide (grep over `--include='*.py'`, tests excluded). The complete set of\ncall sites that can open a blocking human prompt on a TOOL is:\n\n| entry point | gates | class |\n|---|---|---|\n| `tools/approval.py:3180 check_all_command_guards` | `terminal` only \u2014 its sole non-test importer is `tools/terminal_tool.py:256` | mutating (shell) |\n| `tools/approval.py:3637 check_execute_code_guard` | `execute_code` (`tools/code_execution_tool.py`) | mutating |\n| `tools/write_approval.py` | `memory` / `skills` writes, default OFF (`CONFIG_KEY = \"write_approval\"`, schema default `False` at `hermes_cli/config.py:2362` and `:2536`) | mutating |\n| `tools/approval.py:2947 request_tool_approval` | ANY tool \u2014 but documented as \"the entry point for a plugin `pre_tool_call` hook\", i.e. reachable only through an operator-installed plugin rule | not a default surface |\n| `tools/mcp_tool.py` ElicitationHandler -> `tools/approval.py:3867 request_elicitation_consent` | a server-driven consent, raised mid-tool-call | server-driven, not tool-class |\n\nNothing else prompts. Each read-only tool in hermes' roster was then checked at\nits own implementing module for any reference to the approval system:\n\n- `read_file`, `search_files` -> `tools/file_tools.py` \u2014 two COMMENT mentions\n  (lines 568 and 613-614) and zero calls.\n- `session_search` -> `tools/session_search_tool.py` \u2014 0 references.\n- `web_search`, `web_extract` -> `tools/web_tools.py` \u2014 0 references.\n- `browser_snapshot` (and the rest of the `browser_*` family) ->\n  `tools/browser_tool.py` \u2014 0 references.\n- `read_terminal` -> `tools/read_terminal_tool.py` \u2014 0 references.\n\nThe read-side guard hermes DOES ship is the structural opposite of a dialog:\n`tools/file_tools.py:595 _check_sensitive_path` returns the string \"Refusing to\nwrite to sensitive system path: ...\" to the MODEL, and\n`_search_result_read_block_error` silently drops blocked paths out of a search\nresult (`tools/file_tools.py:555-565`). A refusal the agent reads is not a\nmodal the user answers, and it produces no `waiting` episode by construction.\n`agent/file_safety.py:377` says the same thing about the cross-profile guard in\nhermes' own words: \"Soft guard, NOT a security boundary ... the agent is told\nthe boundary exists\". This is why hermes lands opposite antigravity, which\ngates READ access by file LOCATION and persists it as an `ask_permission` tool\ncall \u2014 hermes has no such construct.\n\n## The two near-misses, and why neither is the behaviour\n\n**1. A read-only COMMAND is not a read-only TOOL.** `terminal` can run `cat`,\n`ls` or `curl`, and tirith can flag a fetch-shaped command (`tests/tools/\ntest_command_guards.py` drives `curl https://bit.ly/abc` to a prompt). But the\ngate is on the shell tool either way: the integration failure 2.26 exists to\ncatch is one that subscribes to permission events for a hand-written list of\ndangerous tools (shell, write, edit), and a hermes `terminal cat` gate is\ndelivered to exactly that list. Driving two `terminal` calls would satisfy the\nletter of the arc while testing nothing about tool class \u2014 see `caveats`.\n\nNote also that `manual` mode does NOT mean \"prompt on every command\". The\nladder at `tools/approval.py:3352-3380` gathers findings from tirith plus\n`detect_dangerous_command` and returns `{\"approved\": True}` when the warnings\nlist is empty; `approvals.mode` only chooses whether an aux LLM pre-screens the\nwarnings that were already raised. A plain `ls` never reaches a prompt in any\nmode.\n\n**2. The plugin route would be a fabricated gate.** `request_tool_approval`\ncould gate `read_file`, and one of hermes' own tests drives it with\n`browser_navigate` (`tests/tools/test_request_tool_approval.py:97`). Reaching\nit requires the operator to write a `pre_tool_call` plugin rule that returns\n`{\"action\": \"approve\"}` for a read-only tool \u2014 inventing behaviour hermes does\nnot ship, which would make any recording of this row a recording of the\nfixture rather than of the agent. This is the same reasoning that closed the\n`write_file` workaround on 2.19.\n\n## The second, independent blocker (documented, not the routing verdict)\n\nEven if hermes gained a read-only gate tomorrow, this column has one more\nobstacle that a re-assessment should start from rather than rediscover, and it\nis NOT the same one 2.19 recorded \u2014 that cell predates this adapter's hook\nchannel and its `daemon=incapable` is now stale on this point.\n\nThis adapter now installs three hermes shell hooks \u2014\n`pre_approval_request`, `post_approval_response`, `on_session_end`\n(`core/adapters/inbound/agents/hermes/hookinstaller.go:232-236`, dispatched in\n`hooks.go`) \u2014 and `HandlePermissionPromptHook` / `ReleasePermissionPromptHold`\ngive hermes a real `waiting` state for the first time. But hermes fires\n`_fire_approval_hook` from only four sites (`tools/approval.py:154`, `:162`\nvia `_prepare_smart_approval_observer` / `_observe_smart_approval_verdict`;\n`:3099` and `:3167` inside `_await_gateway_decision`; `:3576` and `:3592`\naround `check_all_command_guards`' CLI prompt). `_run_approval_gate`\n(`:2644-2862`) \u2014 the shared gate BOTH `check_dangerous_command` and\n`request_tool_approval` return through \u2014 contains no `_fire_approval_hook`\ncall at all. So a plugin-raised gate on a read-only tool would reach neither\nsensor: no store row (the store has no approval table, and the assistant\ntool_calls row is flushed before dispatch) and no hook event. That is a real\nupstream gap worth reporting to hermes if this row is ever wanted on this\ncolumn.\n\n## Route\n\nagent=no -> daemon n/a, driver n/a -> **frozen** (`of status` renders `n/a`).\nRecipe `applicable: false`, matching this column's other `agent=no` cells\n(2.16, 3.1).",
+      "caveats": [
+        "VACUOUS-PASS CONDITION: this cell would pass while proving nothing if a future recipe drove two `terminal` calls in one session \u2014 one read-only command (`cat`/`ls`/`curl`), one mutating (`rm`) \u2014 under `approvals.mode: manual` with tirith enabled. Both gates open, the arc ready->working->waiting->working->waiting->working->ready appears verbatim, and every acceptance criterion is green. It proves nothing about tool CLASS, because both episodes are the same `terminal` tool and both would be delivered to the very allowlist-shaped integration #1861 describes. If this row is ever unfrozen, the spec must bind the two episodes to two DIFFERENT tool names.",
+        "SECOND VACUOUS-PASS CONDITION: an operator-installed `pre_tool_call` plugin rule calling `request_tool_approval('read_file', ...)` produces a genuine read-only-tool dialog and would make the cell green \u2014 for a gate hermes does not ship. Any recording of this row must assert that no plugin rule is installed (`~/.hermes/plugins/` empty of approval rules) as a load-bearing precondition, or it records the fixture rather than the agent.",
+        "`agent_supports: no` is a NEGATIVE derived from an exhaustive call-site scan, not from a documented statement. What was actually run: a tree-wide grep for `check_all_command_guards`, `request_tool_approval` and `prompt_dangerous_approval` over `--include='*.py'` with tests excluded, plus a per-module grep for `approval` in each read-only tool's implementing file (file_tools.py, session_search_tool.py, web_tools.py, browser_tool.py, read_terminal_tool.py). Tool names came from the registrations in tools/*.py. If upstream adds a gate to a read tool, this verdict flips with no other change.",
+        "The mutating HALF of this row is present on hermes and is not in dispute \u2014 it is 2.19's subject, and this cell says nothing about it. `agent_supports: no` here means the read-only half, which is the only thing this row adds, has no default surface. Do not read it as 'hermes has no permission gate'.",
+        "2.19's `daemon=incapable` on this column is now STALE on one point: it was written when this adapter installed no hooks ('hermes installs no hooks in this PR'), and the adapter now installs pre_approval_request/post_approval_response/on_session_end. That does not change THIS cell's routing (agent=no decides it), but a re-assessment of 2.19 is warranted and would likely land daemon=full for the `terminal` gate.",
+        "No `observations` block is asserted. `of verify` hard-asserts only against the newest recording's replay-golden summary (tools/onboarding-factory/internal/validate/observations.go:141-160), and hermes' Parser sets only `ev.ModelName` (parser.go:78) while the store-derived token lift is gated `adapter == antigravity.AdapterName` (tools/onboarding-factory/cmd/replay/metrics.go:59) \u2014 so tokens_nonzero and cost_nonzero can never pass on this column. Verified independently here; the column's own 2-17 cell records the same conclusion after seeing both pins red."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/tools/terminal_tool.py",
+          "note": "Line 256 is the only non-test importer of check_all_command_guards in the whole hermes tree (tree-wide grep, tests excluded). hermes' shell-command approval gate therefore exists on the `terminal` tool and nowhere else."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/tools/approval.py",
+          "note": "The complete prompt surface. check_all_command_guards (3180) gates terminal; check_execute_code_guard (3637) gates execute_code; request_tool_approval (2947) can gate any tool but is documented as 'the entry point for a plugin pre_tool_call hook'; request_elicitation_consent (3867) serves MCP elicitation. _run_approval_gate (2644-2862) is the shared gate for check_dangerous_command and request_tool_approval and fires NO approval hook. Lines 3352-3380 show the decision ladder returning {'approved': True} when no tirith/dangerous finding was raised, which is why `approvals.mode: manual` does not prompt on an ordinary read-only command."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/tools/file_tools.py",
+          "note": "read_file and search_files live here and never call the approval system \u2014 the only two occurrences of the word are comments at 568 and 613-614. _check_sensitive_path (595) returns 'Refusing to write to sensitive system path' to the MODEL and _search_result_read_block_error (555-565) silently omits blocked paths from search results. hermes' read-side guards are refusals, never dialogs."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/agent/file_safety.py",
+          "note": "Line 377 states the cross-profile guard is a 'Soft guard, NOT a security boundary ... the agent is told the boundary exists' \u2014 a refusal handed to the model, corroborating that hermes' file-access limits are never escalated to a human prompt."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/tools/write_approval.py",
+          "note": "The one other default-shipped gate: memory/skill WRITES, staged or prompted when <subsystem>.write_approval is on. Its own header states the gate is off by default ('false (default) - write freely'), and hermes_cli/config.py:2362 and :2536 carry False as the schema default. Mutating class, and opt-in, so it is not the read-only half either."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/tests/tools/test_request_tool_approval.py",
+          "note": "Line 97 drives request_tool_approval('browser_navigate', 'external URL') \u2014 evidence that the plugin route CAN gate a non-shell tool, and equally that doing so is a plugin rule's doing rather than hermes' default behaviour."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/hermes-local/.hermes/hermes-agent/hermes_cli/plugins.py",
+          "note": "VALID_HOOKS at line 135 \u2014 23 lifecycle events at v0.19.0, of which pre_approval_request/post_approval_response are the only approval-shaped pair. None of them is raised by a read-only tool call."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/hookinstaller.go",
+          "note": "installedHookEvents (232-236) \u2014 this adapter now installs pre_approval_request, post_approval_response and on_session_end against a 0.19.0 floor (minHermesVersion, line 275). This is what makes 2.19's 'hermes installs no hooks' stale, and it is why the second blocker above is stated in terms of which hermes call sites fire the hook rather than 'no channel exists'."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/hooks.go",
+          "note": "The receiver: pre_approval_request -> HandlePermissionPromptHook, post_approval_response -> ReleasePermissionPromptHold, on_session_end -> release + HandleStopHook. Its header documents that state.db has no approval table and that hermes' store cannot express (its words) the user is being asked right now \u2014 the store-side half of the second blocker."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/hermes/parser.go",
+          "note": "The event kinds the store can yield: user_message, assistant_message + ToolUses, turn_done, tool_result, plus PendingWaitingCue from assistant prose. Line 78 is the only metric assignment (ev.ModelName), which is what makes tokens_nonzero/cost_nonzero unassertable on this column."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/internal/validate/observations.go",
+          "note": "ValidateObservations (141-160) hard-asserts only against the newest recording's replay-golden summary; with cmd/replay/metrics.go:59 gating the store-derived token lift to antigravity, a hermes golden carries no token or cost figure. Verified here rather than taken from the brief."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/scenarios/2-19_tool-gate-permission-prompt/metadata.json",
+          "note": "The sibling cell for the MUTATING half on this column: agent=yes, daemon=incapable, driver=gap:keys. Read for context; its daemon verdict predates this adapter's hook channel and its agent-side scope claim (the gate exists only on `terminal`) was re-verified independently here rather than trusted."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/antigravity/scenarios/2-26_permission-gate-non-mutating-tool/metadata.json",
+          "note": "The contrast that makes hermes' verdict legible: antigravity gates READ access by file location and persists it as an ask_permission tool call, so its cell is agent=yes/daemon=bug. hermes has no equivalent construct \u2014 its read-side limits are model-facing refusals."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "agent_supports=no \u2014 hermes raises no permission dialog on any read-only tool, so no driver step sequence can produce the second waiting episode this row asserts. A recipe that drove two `terminal` calls (one read-only command, one mutating) would satisfy the arc while testing nothing about tool class, and a recipe that installed a pre_tool_call plugin rule would record a fabricated gate; both are named in caveats as vacuous passes. IF UPSTREAM ADDS A READ-TOOL GATE, the recipe is: interactive `hermes chat`, approvals.mode at its default and no --yolo, no plugin rules installed; one send whose turn needs a gated read (e.g. read_file outside the workspace) and one send whose turn needs a gated mutating call; a keys step to answer each modal (the hermes driver stubs `keys` \u2014 port it in the same pass, see 2.19); wait_turn and a >=10s trailing sleep. The two episodes must be bound to two DIFFERENT tool names in the spec."
+    }
+  }
+}

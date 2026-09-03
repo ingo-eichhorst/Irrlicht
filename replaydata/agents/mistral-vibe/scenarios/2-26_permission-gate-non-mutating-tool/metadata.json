@@ -1,0 +1,104 @@
+{
+  "scenario_id": "permission-gate-non-mutating-tool",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.19.1",
+    "daemon_version": "0.6.1+220ff3e",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes (web_fetch/web_search declare ToolPermission.ASK and read_file escalates to ASK outside the workdir, so a read-only gate is raisable from a tool other than write_file); daemon_capability: incapable (nothing reaches messages.jsonl while a gate is held — not even the assistant tool_calls line — and the one installed hook, post_agent_turn, fires at turn end); driver_capability: ready (DRIVE_ELICITS now carries keys + wait_turn)"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "permission-gate-non-mutating-tool",
+      "agent": "mistral-vibe",
+      "assessed_at": "2026-09-03T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes (Mistral Vibe 2.19.1 gates READ-ONLY tools by default and by their own declaration, not only mutating ones: `web_fetch` and `web_search` both declare `permission: ToolPermission.ASK`, and `read_file` \u2014 declared ALWAYS \u2014 escalates to ASK whenever the path is outside the workdir or matches a sensitive pattern. Two different tool classes, two different tools, both gated with stock config.)\ndaemon_capability: incapable (nothing at all is written to the watched `messages.jsonl` while an approval prompt is held \u2014 not the tool result, and not even the assistant `tool_calls` line that raised it \u2014 so neither gate has a trace to observe, and the two classes are indistinguishable because BOTH are invisible)\ndriver_capability: ready (the driver now elicits send/keys/wait_turn/sleep; the 2-19 sibling's `gap:keys` note is stale)\n\n## Scenario signal\n\n2.26 asserts two DISTINCT `waiting` episodes in one session \u2014 one raised by a mutating tool, one by a read-only tool \u2014 with the arc ready\u2192working\u2192waiting\u2192working\u2192waiting\u2192working\u2192ready and a final `ready` surviving a >=10s trailing idle. The load-bearing half is the read-only one: the row exists because an integration subscribing to a hand-written list of dangerous tools (shell/write/edit) receives nothing for a file read or a web fetch.\n\n## Agent supports it (agent_supports: yes)\n\nVibe's per-tool permission declarations, read from the installed 2.19.1 package:\n\n- MUTATING, gated: `write_file` `permission: ToolPermission.ASK` (builtins/write_file.py:40); `edit` ASK (builtins/edit.py:67); `bash` ASK (builtins/bash.py:259).\n- READ-ONLY, gated: `web_fetch` ASK (builtins/web_fetch.py:63), whose `resolve_permission` returns ASK with a `PermissionScope.URL_PATTERN` RequiredPermission per domain (:94-113); `web_search` ASK (builtins/web_search.py:50).\n- READ-ONLY, conditionally gated: `read_file` declares ALWAYS (builtins/read_file.py:78) but routes through `resolve_file_tool_permission` (core/tools/utils.py:64-124), which returns `PermissionContext(permission=ToolPermission.ASK, ...)` whenever the path matches `sensitive_patterns` (default `**/.env`, `**/.env.*`) or fails `is_path_within_workdir` \u2014 an `OUTSIDE_DIRECTORY` RequiredPermission. `grep` (builtins/grep.py:37) is ALWAYS and does not escalate.\n\nThe gate itself is `_should_execute_tool` (core/agent_loop/_loop.py:1689): with `bypass_tool_permissions` false, an ASK context with uncovered `required_permissions` calls `_ask_approval` (:1734), which awaits `self.approval_callback`. The CLI exposes the bypass as `--auto-approve, --yolo`. So a single session CAN raise one gate from `write_file` and a second from `read_file` (path outside cwd) or `web_fetch` \u2014 two DIFFERENT tools, which is what the row requires.\n\n## Daemon cannot observe it (daemon_capability: incapable)\n\nRe-verified against the installed 2.19.1 source, because the 2-19 sibling's transport paragraph is now partly stale (it says vibe has \"NO HTTP hook channel and NO Control declared\"; both are wrong today \u2014 #1718 added a hook channel and agent.go declares Control). The conclusion nevertheless survives, on a DIFFERENT and stronger ground:\n\n1. **The one hook irrlicht installs fires at the wrong time.** vibe/hooks.go installs exactly `post_agent_turn`, dispatched to `HandleStopHook`. It fires at turn end. Vibe's other two hook types are `before_tool` and `after_tool` (vibe/core/hooks/models.py: HookType). `before_tool` fires unconditionally for EVERY tool call, *before* the permission check runs \u2014 `_execute_tool_call` runs `_run_before_tool_pipeline` at _loop.py:1533 and only then `_should_execute_tool` at :1547 \u2014 and its payload (BeforeToolInvocation) carries no field saying whether this call will prompt. So the hook-tier `SignalPermissionPrompt` rule (state_classifier.go rule 0) is dead for vibe by construction, for both halves of this row.\n2. **Nothing reaches the transcript while the prompt is held.** `SessionLogger.save_interaction` is the only writer of `messages.jsonl` (core/session/session_logger.py:306, appending via `_persist_messages_sync` :252). In `_conversation_loop` (_loop.py:1144) it is called only AFTER `_perform_llm_turn()` returns \u2014 the code's own comment says \"Per-turn save so the on-disk log stays fresh; after the inner loop\" (:1195-1197) \u2014 and `_perform_llm_turn` (:1319) runs `_handle_tool_calls` (which blocks in `_ask_approval`) to completion first. `_open_user_turn` (:1108) does not save either. So the assistant `tool_calls` line AND its `role:\"tool\"` result land together, in one append, AFTER the user answers. The daemon sees a silent write-gap, not an open tool call.\n3. **Therefore the transcript-tier fallbacks cannot arm either.** `SignalOpenToolStalled` (rule `open_tool_stalled`) needs `HasOpenToolCall` plus a permission-gated edit-tool name. I verified the name claim the fallback depends on rather than trusting it: `core/domain/session/metrics.go:540` asserts `write_file` is vibe's snake_case spelling, and that IS correct here \u2014 `BaseTool.get_name()` (core/tools/base.py:367) snake-cases the class name, so `WriteFile` -> `write_file`. It is moot: the fallback needs an OPEN tool call, and per (2) the tool-call line only ever reaches disk together with its result, so `HasOpenToolCall` is never true during a held gate. `NeedsUserAttention` covers only `ask_user_question`/`exit_plan_mode` (different scenarios, 2.17/2.18). `TranscriptPermissionPending` is fed from `ParsedEvent.PermissionRequestIDs`, which vibe/parser.go never sets \u2014 vibe writes no permission record of any kind.\n4. **Not a `bug`.** No spec-required observable is mis-handled; the pending state is simply outside the read path. This is the transport limit, the same verdict the codex- and opencode-shaped 2-19 siblings carry.\n\nNet: the daemon reports `working` across both gates and `ready` after. Zero `waiting` episodes, so the row's \"two distinct episodes\" claim is not merely unproven but unproducible \u2014 and, notably, vibe is NOT an instance of #1861's defect shape (a per-tool-name allowlist that drops read-only tools). Its read-only gates are invisible for exactly the same reason its mutating gates are.\n\n## Driver is ready (driver_capability: ready)\n\n`replaydata/agents/mistral-vibe/driver-interactive.sh` now declares `DRIVE_ELICITS=\"send slash sleep wait_turn exit_clean restart sigkill resume keys start_session session interrupt\"` (:218). A full two-gate recipe needs send + keys + wait_turn + sleep, all present. The 2-19 sibling's \"a resolve-half would be gap:keys\" note is stale and should not be carried forward.\n\n## Route\n\nincapable daemon -> **frozen**. No recording is authored. This unfreezes only if BOTH of these change: (a) irrlicht installs vibe's `before_tool` hook (which does carry `tool_name` + `tool_call_id`, models.py BeforeToolInvocation) so a tool call becomes visible at prompt time, AND (b) something distinguishes a call that will prompt from one that will not \u2014 either an upstream payload field, or a stalled-open-tool threshold applied to the hook-delivered open call the way `SignalOpenToolStalled` already does for transcript-delivered ones. vibe/hooks.go rejects `before_tool` today on the first ground alone (\"asserting SignalPermissionPrompt on it would hold `waiting` on every single tool call\"), which a threshold would address; that trade is a product decision, not a fact this cell can settle.",
+      "caveats": [
+        "THE VACUOUS-PASS CONDITION FOR THIS ROW, recorded because it is the trap the phase schema cannot catch: expected.jsonl has NO tool-name field. If this cell is ever unfrozen, a recipe that drives both gates through the SAME tool passes every phase below while testing nothing about tool class. On vibe the concrete wrong shape is two `bash` calls (`cat f` and `echo > f`): bash is ASK (builtins/bash.py:259) so both gate, both produce a waiting episode, and the spec goes 2/2 green with the row's actual claim untested. The RIGHT shape is two different tools \u2014 `write_file` (ASK by config, write_file.py:40) for the mutating half and `read_file` of a path OUTSIDE the workdir (ASK via the OUTSIDE_DIRECTORY escalation, core/tools/utils.py:106-118) or `web_fetch` (ASK by URL_PATTERN, web_fetch.py:94-113) for the read-only half. A re-record detects a regression to the same-tool shape only OUT OF BAND: the recording's own messages.jsonl must show two assistant tool_calls with two DIFFERENT function.name values. Nothing in the phase list can assert that.",
+        "A second recipe fragility if unfrozen: nothing forces the model to pick `read_file` over `bash cat` for the read half. The prompt must name the tool, and the check above must confirm which one it actually used.",
+        "daemon=incapable rests on a source-read of the save ordering, not on a live probe: no vibe session was driven through a held gate while tailing messages.jsonl in real time (this verb runs no recording). The ordering claim is anchored at _loop.py:1195-1197 (save AFTER _perform_llm_turn) and :1533/:1547 (before_tool pipeline BEFORE _should_execute_tool). Confidence 0.85 reflects that.",
+        "CORRECTION to the committed 2-19 sibling, which future readers will hit first: its transport paragraph says vibe has 'NO HTTP hook channel and NO Control declared'. Both are false as of this daemon \u2014 vibe/hooks.go installs a post_agent_turn receiver (#1718) and agent.go declares agent.Control with SupportsInput/InterruptCtrlC. The incapable verdict survives on the narrower ground stated in the body: the ONE installed hook fires at turn end, and before_tool (which would fire at the right time) is deliberately not installed.",
+        "The metrics.go:540 doc comment's `write_file` claim is CORRECT for mistral-vibe \u2014 verified at core/tools/base.py:367, where BaseTool.get_name() snake-cases the class name (WriteFile -> write_file) \u2014 unlike the antigravity half of the same sentence, which was disproved earlier in this run. It changes nothing here: SignalOpenToolStalled needs an OPEN tool call and vibe never exposes one during a gate.",
+        "Not a #1861 instance. #1861's shape is a per-tool-name allowlist that admits nine named tools and drops read-only ones. vibe has no such allowlist on this path; its read-only gates are invisible for exactly the same transport reason its mutating gates are, so unfreezing this row would not by itself prove tool-class parity on vibe \u2014 it would prove the transport changed."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/hooks.go",
+          "note": "Exactly ONE hook installed: post_agent_turn -> HandleStopHook (turn end). The file's own header documents why before_tool and after_tool are not installed: before_tool fires for every tool call BEFORE vibe's permission check and carries no field saying whether the call will prompt. So the hook-tier SignalPermissionPrompt path (state_classifier rule 0) is dead for vibe."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/agent.go",
+          "note": "Source = FilesUnderRoot over ~/.vibe/logs/session/<id>/messages.jsonl with a meta.json sidecar; Control IS declared (SupportsInput, InterruptCtrlC, /compact preset) and a hooks Permission exists \u2014 both contradicting the stale 2-19 sibling text, neither changing the verdict."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/parser.go",
+          "note": "Emits only user_message / assistant_message(+tool_uses) / tool_result / turn_done. Never sets ParsedEvent.PermissionRequestIDs or PermissionResolvedIDs, so the transcript_permission_prompt rule (fed from tailer openPermissions) can never fire for vibe."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go:113-175",
+          "note": "The four waiting rules: permission_prompt (hook-only, dead for vibe), transcript_permission_prompt (needs PermissionRequestIDs, never set), user_blocking_tool (ask_user_question/exit_plan_mode only), open_tool_stalled (needs HasOpenToolCall + a gated edit-tool name). None can fire during a vibe approval prompt."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/metrics.go:520-556",
+          "note": "isPermissionGatedEditTool includes write_file, with the doc comment claiming it is vibe's spelling. Verified TRUE for vibe (see base.py:367 below). Irrelevant here because HasOpenToolCall is never true during a held vibe gate."
+        },
+        {
+          "kind": "file",
+          "ref": "mistral-vibe 2.19.1 site-packages: vibe/core/agent_loop/_loop.py:1144-1221 (_conversation_loop), :1195-1197, :1319-1345 (_perform_llm_turn), :1108-1143 (_open_user_turn)",
+          "note": "THE LOAD-BEARING ORDERING. _save_messages() is called only AFTER _perform_llm_turn() returns ('Per-turn save ... after the inner loop', :1195-1197) and in the finally at :1221; _perform_llm_turn runs _handle_tool_calls to completion first; _open_user_turn does not save at all. So nothing reaches messages.jsonl while an approval prompt is held \u2014 not even the assistant tool_calls line that raised it."
+        },
+        {
+          "kind": "file",
+          "ref": "mistral-vibe 2.19.1: vibe/core/agent_loop/_loop.py:1506-1560 (_execute_tool_call), :1689-1733 (_should_execute_tool), :1734-1760 (_ask_approval)",
+          "note": "_run_before_tool_pipeline (:1533) runs BEFORE _should_execute_tool (:1547) \u2014 the source-level confirmation of the before_tool ordering hooks.go documents. _should_execute_tool routes an ASK context with uncovered required_permissions into _ask_approval, which awaits the approval_callback."
+        },
+        {
+          "kind": "file",
+          "ref": "mistral-vibe 2.19.1: vibe/core/session/session_logger.py:252-269 (_persist_messages_sync), :306-345 (save_interaction)",
+          "note": "save_interaction is the ONLY writer of messages.jsonl (append of new messages when the fingerprint boundary is unchanged, full rewrite otherwise). It is reached only from the _loop.py call sites above, so there is no mid-turn flush path."
+        },
+        {
+          "kind": "file",
+          "ref": "mistral-vibe 2.19.1: vibe/core/tools/builtins/{write_file.py:40, edit.py:67, bash.py:259, web_fetch.py:63+94-113, web_search.py:50, read_file.py:78, grep.py:37}",
+          "note": "The per-tool permission declarations that make agent_supports=yes: write_file/edit/bash ASK (mutating); web_fetch/web_search ASK (read-only); read_file ALWAYS but escalating; grep ALWAYS and not escalating."
+        },
+        {
+          "kind": "file",
+          "ref": "mistral-vibe 2.19.1: vibe/core/tools/utils.py:64-124 (resolve_file_tool_permission)",
+          "note": "read_file's escalation path: a sensitive-pattern match (**/.env) or a path failing is_path_within_workdir yields PermissionContext(permission=ASK, required_permissions=[OUTSIDE_DIRECTORY|FILE_PATTERN]). This is how a READ-ONLY tool raises its own dialog on stock config \u2014 the read-only half the row needs, from a tool other than write_file."
+        },
+        {
+          "kind": "file",
+          "ref": "mistral-vibe 2.19.1: vibe/core/tools/base.py:367 (BaseTool.get_name)",
+          "note": "get_name() = re.sub(r'(?<!^)(?=[A-Z])','_',cls.__name__).lower(). WriteFile -> write_file, WebFetch -> web_fetch, ReadFile -> read_file. Confirms metrics.go:540's snake_case claim for vibe (the antigravity half of that same comment was disproved separately)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/mistral-vibe/driver-interactive.sh:218",
+          "note": "DRIVE_ELICITS=\\\"send slash sleep wait_turn exit_clean restart sigkill resume keys start_session session interrupt\\\" \u2014 keys and wait_turn are present, so driver=ready. The 2-19 sibling's gap:keys note predates this and is stale."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/mistral-vibe/scenarios/2-19_tool-gate-permission-prompt/metadata.json",
+          "note": "Committed sibling, same transport, frozen on the same save-ordering ground. Its file refs point at /Users/merlin/... which does not exist on this host; every claim reused here was re-derived from the local 2.19.1 install and two of its transport statements were found stale (see caveats)."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "note": "Route is frozen on daemon=incapable \u2014 no recipe authored. If a future daemon makes a held vibe gate observable (see the body's two-part unblock condition), the recipe MUST drive the two gates through TWO DIFFERENT TOOLS, because expected.jsonl has no tool-name field and a same-tool recipe passes every phase while testing nothing. Concretely: send one prompt asking for a write to ./gate.txt via write_file AND a read of a file outside the workdir (e.g. /etc/hosts) via read_file; answer each dialog with a `keys` step choosing the one-time option (never 'always', which persists an ApprovedRule into the session PermissionStore and suppresses the second gate); then wait_turn plus a >=10s sleep. Launch WITHOUT --auto-approve/--yolo (bypass_tool_permissions must be false) and with a config that leaves write_file/read_file at their defaults. Verify out of band that the recording's messages.jsonl shows two assistant tool_calls with two DIFFERENT function.name values."
+    }
+  }
+}

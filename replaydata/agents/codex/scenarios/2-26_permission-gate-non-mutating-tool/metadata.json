@@ -1,0 +1,165 @@
+{
+  "scenario_id": "permission-gate-non-mutating-tool",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.153.0",
+    "daemon_version": "0.6.1+cfb8d62",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes (codex `-a untrusted` -> exec_policy.rs render_decision_for_unmatched_command: Decision::Prompt for EVERY unmatched command, no read-only exemption; codex has no read-only tool at all, reads go through the same exec tool)\ndaemon_capability: full (codex's PermissionRequest/PostToolUse are installed with hookMatcher = \".*\" -- no tool-name allowlist, so #1861 has no codex analogue; HandlePermissionHook is tool-name agnostic)\ndriver_capability: ready (send/keys/wait_turn/sleep all present)"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "permission-gate-non-mutating-tool",
+      "agent": "codex",
+      "assessed_at": "2026-09-03T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: **yes** \u2014 under `-a untrusted` codex prompts for EVERY command not matched by an execpolicy rule, with no read-only exemption.\ndaemon_capability: **full** \u2014 irrlicht installs codex's PermissionRequest/PostToolUse hooks with `hookMatcher = \".*\"`, so there is no tool-name allowlist for a read-only call to fall out of. #1861 has no codex analogue.\ndriver_capability: **ready** \u2014 `driver_step_types_from_file replaydata/agents/codex/driver-interactive.sh` reports send / keys / wait_turn / sleep (plus slash, interrupt, fork, resume, restart, sigkill, reset_session, start_session, session, exit_clean); the recipe needs the first four.\n\n## Agent: codex gates by COMMAND, not by tool class\n\nCodex has no read-only exemption because it has no read-only *tool*. Its whole\nfilesystem surface is the exec tool (`shell` / `unified_exec`) plus\n`apply_patch`; `core/src/tools/handlers/` contains no `read_file`, `grep` or\n`glob` handler. A read is `cat`/`ls`/`rg` through the same tool a write goes\nthrough.\n\nThe gate is therefore decided per COMMAND, in\n`core/src/exec_policy.rs`'s `render_decision_for_unmatched_command_for_platform`\n(\"If a command is not matched by any execpolicy rule, derive a Decision\"):\n\n    AskForApproval::UnlessTrusted => {\n        // Projects marked untrusted require approval for every command\n        // that is not explicitly allowed by an exec policy rule.\n        Decision::Prompt\n    }\n\n`UnlessTrusted` is the `-a untrusted` the sibling cell `2-19\ntool-gate-permission-prompt` already launches with. That arm returns `Prompt`\nunconditionally \u2014 it is reached before any sandbox consideration and does not\ninspect what the command does \u2014 so `cat gate.txt` raises the same blocking\napproval overlay (\"Would you like to run the following command?\") as\n`echo GATE-OK > gate.txt`. `assess_patch_safety` (`core/src/safety.rs:49`)\nshort-circuits the same way for `apply_patch`: `UnlessTrusted =>\nSafetyCheck::AskUser`.\n\nGuardian auto-review cannot silently swallow either gate under this policy:\n`routes_approval_policy_to_guardian` (`core/src/guardian/review.rs:209`) returns\ntrue only for `OnRequest | Granular` AND `approvals_reviewer == AutoReview`.\n`untrusted` is neither, so this host's `approvals_reviewer =\n\"guardian_subagent\"` in `~/.codex/config.toml` is inert here. That is worth\nstating because it is the obvious way this cell could have been hollow.\n\n## Daemon: codex's matcher is `.*`, which is exactly what #1861 is about\n\nThe defect this row exists to catch is a subscriber that hand-lists dangerous\ntool names. irrlicht does that for claudecode (`hookMatcher =\n\"Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|mcp__.*|AskUserQuestion|ExitPlanMode\"`)\nand does NOT do it for codex:\n\n    // hookMatcher matches every tool for the PermissionRequest/PostToolUse events.\n    // PermissionRequest only fires for tools that actually need approval, so a wide\n    // matcher is a no-op there; PostToolUse must match all tools so the\n    // permission-pending overlay is always cleared once an approved tool runs.\n    const hookMatcher = \".*\"\n    (core/adapters/inbound/agents/codex/hookinstaller.go)\n\nThe installed `~/.codex/hooks.json` on this host carries that matcher verbatim\nfor both PermissionRequest and PostToolUse. And on codex's side every approval\nthat can be raised at all flows through ONE function \u2014 `run_permission_request_hooks`\n(`core/src/hook_runtime.rs:246`), whose sole caller is\n`core/src/tools/approvals.rs`. Its `ApprovalAction::permission_request_payload()`\ngives each variant a hook `tool_name`: `HookToolName::bash()` = `\"Bash\"` for\nExecCommand / Execve / NetworkAccess, `\"apply_patch\"` (matcher aliases\n`Write`/`Edit`) for ApplyPatch, the server tool name for McpToolCall,\n`\"write_stdin\"`, `\"request_permissions\"`. `.*` matches all of them, so BOTH\nhalves of this cell deliver.\n\nDownstream is tool-name agnostic: `SessionDetector.HandlePermissionHook`\n(`core/application/services/session_detector_lifecycle.go:279`) looks the event\nname up in `session.HookSignal` and holds `SignalPermissionPrompt` \u2014 it never\nreads a tool name \u2014 so `state_classifier.go` rule 0 (`permission_prompt` \u2192\nwaiting) fires identically for the read. `PostToolUse` (same `.*` matcher)\nclears the overlay once each approved command runs, which is what produces the\n`waiting \u2192 working` between the two episodes, and `Stop` closes the turn at\n`ready`.\n\n## What this cell can and cannot prove\n\nBecause codex routes both halves through the same exec tool with the same hook\n`tool_name` (`\"Bash\"`), a green here does NOT demonstrate tool-class\ndiscrimination the way claudecode's cell does. It demonstrates the weaker,\nstill-real claim the row's acceptance criteria actually state: a gate raised by\na call that only reads produces its own user-visible `waiting` episode, is not\nskipped, and is not merged into the mutating call's episode. The interesting\npart of the codex column is the contrast \u2014 codex is structurally immune to\n#1861 because irrlicht never narrowed its matcher.\n\n## Confidence\n\n0.8. The waiting entry on a codex approval overlay is settled: live-confirmed on\n0.144.4/0.146.1 and RECORDED on 0.147.0 in #1388 (`hook_received:\nPermissionRequest` at seq 191 followed by `state_transition working\u2192waiting`).\nWhat is provisional is the SECOND episode and the `waiting \u2192 working` between\nthem \u2014 i.e. that PostToolUse clears the first overlay cleanly and the second\nPermissionRequest re-arms it inside one turn. That is a claim about emission\nordering under codex 0.153.0 that only `record` can settle.",
+      "caveats": [
+        "VACUOUS-PASS CONDITION (two halves). (1) The cell passes while proving nothing if the second gate is not actually raised by a read-only call \u2014 the model running `sed -i`/`tee`/`>>` instead of `cat`, or folding both steps into ONE shell invocation so a single approval covers both. record must read the two exec items out of the rollout and confirm the second command's argv only reads. (2) Even a clean pass does NOT prove tool-class discrimination on codex: both halves ride the same exec tool and reach the hook with the same tool_name \"Bash\" (HookToolName::bash()), and irrlicht's codex matcher is \".*\", so there is no tool-name allowlist for a read-only tool to fall out of. The row's claim on codex is the weaker one its acceptance criteria state.",
+        "LOAD-BEARING ENVIRONMENT PROPERTY, re-probe at record time: codex's exec-policy rule layers. `load_exec_policy` (core/src/exec_policy.rs) reads `<config-folder>/rules/*` from every config layer, and codex APPENDS to `~/.codex/rules/default.rules` whenever a user answers an overlay with \"Yes, and don't ask again for commands that start with `...`\". That file already holds 18 prefix_rules on this host (git clone, docker compose, curl ..., /bin/zsh -lc \"docker logs ...\"); none matches this recipe's two commands today. A rule that DID match would make the gate not open at all \u2014 and that is indistinguishable in events.jsonl from the daemon missing it. Grep the file for the recipe's commands before the run and record what was found.",
+        "ANSWER WITH THE PRESELECTED OPTION ONLY. codex 0.153.0's approval overlay lists \"Yes, just this once\" / \"Yes, proceed\" first, then \"Yes, and don't ask again for this command in this session\", \"Yes, and don't ask again for commands that start with `...`\", \"No, continue without running it\", \"No, and tell Codex what to do differently\". A bare Enter takes the preselected first (one-time) option. Selecting a \"don't ask again\" option writes a rule into ~/.codex/rules/default.rules and silently hollows out every LATER re-record of this cell, not just this one.",
+        "Guardian auto-review is NOT a risk under this recipe, and that is verified rather than assumed: routes_approval_policy_to_guardian (core/src/guardian/review.rs:209) requires approval_policy in {OnRequest, Granular} AND approvals_reviewer == AutoReview. The recipe pins `-a untrusted`, so the host's `approvals_reviewer = \"guardian_subagent\"` cannot auto-decide either gate. If a future recipe drops `-a untrusted`, this caveat stops holding.",
+        "codex gates hook EXECUTION behind an interactive trust menu keyed on the hooks.json path+content (1=Review hooks, 2=Trust all and continue, 3=Continue without trusting). Unanswered it falls through to option 3 and the run records ZERO hook_received while looking entirely healthy \u2014 this is #1388's real blocker. driver-interactive.sh answers it during boot via replaydata/agents/codex/boot-gates.sh; the headless driver.sh cannot, so this cell MUST use the interactive driver.",
+        "Launch args deviate from the 2-19 sibling on purpose: `-s workspace-write` instead of `-s read-only`. Under read-only the mutating half is gated by the sandbox AND by the approval policy and has to run escalated after approval; under workspace-write both halves are gated by the SAME mechanism (the untrusted policy) and differ only in what the command does, which is the comparison this row is about. If the mutating half fails to gate under workspace-write, `-s read-only` is the fallback (proven by 2-19).",
+        "The two episodes are asserted as the row's own subject, not as an incidental cycle count \u2014 there is no count pinned beyond the two the scenario itself names. The daemon's 2s debounce could in principle coalesce them if the model answered both gates within one window, but the recipe's ~30s sleeps between the two Enters put the gap far outside it.",
+        "PROVISIONAL until recorded: the daemon=full verdict for the SECOND episode rests on PostToolUse clearing PermissionPending after the first approved command and a second PermissionRequest re-arming it inside the same turn. That is an emission-ordering property of codex 0.153.0 read from source, not observed. #1174 is the known adjacent gap (a DENIED approval that aborts the turn leaves the overlay set until the next tool call) \u2014 out of this recipe's arc, which approves both.",
+        "model is deliberately left unpinned for record to fill from the recording. This host's ~/.codex/config.toml default is `gpt-5.6-sol`, while the existing codex goldens pin `gpt-5.5`; pinning either from here would fail every recording until corrected."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/src/exec_policy.rs (openai/codex, read via gh api at HEAD)",
+          "note": "render_decision_for_unmatched_command_for_platform: `AskForApproval::UnlessTrusted => { // Projects marked untrusted require approval for every command that is not explicitly allowed by an exec policy rule. Decision::Prompt }`. The arm is unconditional and inspects nothing about what the command does \u2014 the primary evidence that codex gates read-only commands identically to mutating ones. load_exec_policy in the same file is what reads ~/.codex/rules/*."
+        },
+        {
+          "kind": "file",
+          "ref": "core/src/safety.rs (openai/codex)",
+          "note": "assess_patch_safety line 49: `AskForApproval::UnlessTrusted => { return SafetyCheck::AskUser; }` \u2014 apply_patch short-circuits to a user prompt under the same policy, so the mutating half gates whether the model uses shell or apply_patch."
+        },
+        {
+          "kind": "file",
+          "ref": "core/src/tools/approvals.rs (openai/codex)",
+          "note": "ApprovalAction (ExecCommand / WriteStdin / Execve / ApplyPatch / McpToolCall / NetworkAccess / RequestPermissions) and its permission_request_payload(), which stamps each with a hook tool_name. The sole call site of run_permission_request_hooks \u2014 i.e. the only thing in codex that can fire a PermissionRequest hook."
+        },
+        {
+          "kind": "file",
+          "ref": "core/src/tools/hook_names.rs (openai/codex)",
+          "note": "HookToolName::bash() = \"Bash\"; HookToolName::apply_patch() = \"apply_patch\" with matcher aliases Write/Edit. The concrete tool_name values both halves of this cell deliver to irrlicht's `.*` matcher."
+        },
+        {
+          "kind": "file",
+          "ref": "core/src/guardian/review.rs (openai/codex)",
+          "note": "routes_approval_policy_to_guardian (line 209): guardian auto-review engages only for OnRequest|Granular AND approvals_reviewer == AutoReview. Rules out the host's guardian_subagent reviewer silently approving either gate under `-a untrusted`."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/hookinstaller.go",
+          "note": "const hookMatcher = \".*\" for PermissionRequest and PostToolUse, with the doc comment explaining why a wide matcher is a no-op for PermissionRequest. This is the line that makes #1861 a claudecode-only defect: codex has no nine-tool allowlist for a read-only call to be excluded from."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector_lifecycle.go",
+          "note": "HandlePermissionHook (line 279) resolves the hook by EVENT NAME through session.HookSignal and holds SignalPermissionPrompt; it never reads tool_name. So rule 0 in state_classifier.go fires identically for the read-only gate."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/2-19_tool-gate-permission-prompt/metadata.json",
+          "note": "Sibling cell, RECORDED in #1388 on codex 0.147.0: hook_received PermissionRequest at seq 191 then state_transition working\u2192waiting via rule 0. Source of the launch-args/boot-gates recipe shape and of the hook-trust-menu caveat; also the evidence that the old ':7837 hardcode blocks factory recording' deferral is obsolete (hookEndpointURL is daemonaddr.LocalURL)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/2-17_user-blocking-question/expected.jsonl",
+          "note": "codex presession-birth template: proc-<PID> presession born ready, rollout session reconciles with a distinct session_id, pid_bind, then every later phase anchored to the REAL session."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.codex/rules/default.rules",
+          "note": "The user-layer exec policy on this host: 18 prefix_rules, all accumulated from 'don't ask again' answers (git clone, docker compose/logs/inspect/exec/ps/top, curl ..., lsof ..., /bin/zsh -lc \"docker logs ...\"). None matches `echo GATE-OK > gate.txt` or `cat gate.txt` today, which is why the recipe gates \u2014 and why that file is a load-bearing precondition rather than background."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.codex/hooks.json",
+          "note": "The live install on this host: PermissionRequest and PostToolUse both with matcher \".*\", Stop with none, each POSTing to /api/v1/hooks/codex. Confirms the matcher this assessment reasons about is the one actually deployed."
+        },
+        {
+          "kind": "issue",
+          "ref": "ingo-eichhorst/Irrlicht#1861",
+          "note": "The report this row was created from. Its finding is specific to claudecode's nine-tool PermissionRequest matcher; the codex column is the control case."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "codex CLI on PATH and authenticated; >= 0.114.0 (hook floor). Assessed against codex-cli 0.153.0 (`codex --version`), rust binary at @openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex, `version: 0.153.0`.",
+        "irrlichd is recording with the codex `hooks` and `transcripts` permissions granted, on ANY bind port \u2014 the installer writes the resolved port (daemonaddr.LocalURL, #1178/#1207), so the coexist recorder receives the hook. No --attach on :7837 is needed (#1388).",
+        "codex's interactive hook-trust menu must be answered \"2. Trust all and continue\" during boot or ZERO hooks fire while the run looks healthy. driver-interactive.sh + replaydata/agents/codex/boot-gates.sh do this; the headless driver.sh cannot, so this cell must use the interactive driver.",
+        "RE-PROBE AT RECORD TIME: no exec-policy rule may match either of the recipe's two commands. Grep every layer's rules dir \u2014 at minimum `~/.codex/rules/*` (18 prefix_rules on this host today, none matching) and `<cwd>/.codex/rules/*` \u2014 for `echo GATE-OK` and `cat gate.txt`, and record what was found. A matching rule makes the gate not open, which is indistinguishable in events.jsonl from the daemon missing it.",
+        "RE-PROBE AT RECORD TIME: `~/.codex/config.toml` must not have been edited to `approval_policy = \"never\"` in a way that survives the CLI flag, and must not carry a `[projects.\"<staging cwd>\"]` entry that pre-approves commands. The `trust_level = \"trusted\"` project entries this host accumulates affect the folder-trust question, not the `-a untrusted` command gate \u2014 but re-read the file rather than assuming.",
+        "launch_args in the cell's settings blob carry `-a untrusted -s workspace-write`; driver-interactive.sh applies them."
+      ],
+      "setup": [
+        "The interactive driver launches codex in a fresh per-run cwd under <staging>/cwd/ with the settings blob's launch_args and --no-alt-screen, answers the folder-trust and hook-trust boot gates, and waits for the TUI banner + MCP boot before sending the first prompt.",
+        "Confirm <cwd>/gate.txt does NOT already exist before the run \u2014 the read half must be reading what the write half just created, not a leftover."
+      ],
+      "script": [
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "send",
+          "text": "Run exactly two shell commands, in this order, one at a time. Wait for the first to finish before starting the second. Do not combine them into one command and do not run anything else. Command 1 (this one WRITES): echo GATE-OK > gate.txt   Command 2 (this one only READS): cat gate.txt   After the second command has finished, reply with exactly one line containing only the token GATE-OK"
+        },
+        {
+          "type": "sleep",
+          "seconds": 30
+        },
+        {
+          "type": "keys",
+          "keys": "Enter"
+        },
+        {
+          "type": "sleep",
+          "seconds": 30
+        },
+        {
+          "type": "keys",
+          "keys": "Enter"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        }
+      ],
+      "verify": [
+        "PROOF OF GATE (must fail loudly; absence of a finding and inability to look must not read the same): events.jsonl contains at least TWO `hook_received` entries with HookName=PermissionRequest on the rollout session_id. Fewer than two means at most one overlay opened \u2014 the run is INCONCLUSIVE and nothing below is evidence. Zero means the hook-trust menu was not answered (option 3 fallthrough) and the whole run is void.",
+        "PROOF OF TOOL CLASS: the rollout JSONL contains two separate exec items, the first whose command creates gate.txt and the second whose command only reads it (`cat gate.txt`, no redirect, no -i). If the model folded both into one shell invocation, or used a mutating command for the read half, re-drive \u2014 a merged episode does not satisfy this row.",
+        "events.jsonl contains a presession_created (proc-<PID>) in ready within 1000 ms of launch, and a transcript_new for the rollout session with a DISTINCT session_id, born ready.",
+        "events.jsonl contains a pid_discovered bound to the rollout session_id.",
+        "events.jsonl shows, on the rollout session_id in order: \u2192working, \u2192waiting, \u2192working, \u2192waiting, \u2192working, \u2192ready.",
+        "the final assistant message contains the literal token GATE-OK, proving the read really executed after its approval rather than being denied or skipped.",
+        "events.jsonl shows NO state_transition to waiting on the rollout session_id across the >=10s trailing idle after the final ready.",
+        "record must report which exec-policy rules files were grepped and what was found (see preconditions) \u2014 a silent skip of that probe invalidates the pass."
+      ],
+      "timeout_seconds": 240,
+      "settings": {
+        "launch_args": [
+          "-a",
+          "untrusted",
+          "-s",
+          "workspace-write"
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,152 @@
+{
+  "scenario_id": "permission-gate-non-mutating-tool",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "bug",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.1.259",
+    "daemon_version": "0.6.1+0e9d3bb1",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: bug (#1861 — PermissionRequest matcher is a nine-tool allowlist; Read/Glob/Grep deliver nothing and no lower classifier rung re-derives the prompt); driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "permission-gate-non-mutating-tool",
+      "agent": "claudecode",
+      "assessed_at": "2026-09-03T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "bug",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: bug; driver_capability: ready\n\n## Reasoning\n\n**Agent.** Claude Code's permission system is tool-agnostic: any tool call that is\nnot covered by an allow rule opens a blocking modal, and a `PreToolUse` hook\nreturning `permissionDecision: \"ask\"` forces that modal for a named tool\nregardless of the allowlist (this is exactly the mechanism the sibling cell\n`2-19 tool-gate-permission-prompt` already uses for `Bash`). Nothing in the\nproduct distinguishes read-only tools here \u2014 `Read`, `Glob`, `Grep`, `WebSearch`\ngate the same way `Write` and `Bash` do. The #1861 live run against 2.1.259\nconfirmed the agent side directly: with the daemon's hook matcher temporarily\nset to `Read`, a modal on `Read` delivered `PermissionRequest tool=Read`. So the\nagent raises the dialog and Claude Code even fires the hook event for it \u2014 the\nloss is entirely on the subscriber side.\n\n**Daemon \u2014 this is the defect the row exists to catch.** irrlicht installs\n`PermissionRequest` with a nine-alternative TOOL-NAME allowlist:\n\n    hookMatcher = \"Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|mcp__.*|AskUserQuestion|ExitPlanMode\"\n    (core/adapters/inbound/agents/claudecode/hookinstaller.go, `hookMatcher`)\n\nClaude Code matches a Notification/PermissionRequest matcher against the tool\nname, so a modal on `Read` / `Glob` / `Grep` / `LS` / `WebSearch` / `Task` /\n`Skill` / `SlashCommand` delivers NOTHING to the daemon. `PermissionPending` is\nnever set, so `ClassifyState`'s rule 0 (`permission_prompt` \u2192 waiting) never\nfires.\n\n**And there is no lower rung that re-derives it.** Walking the ladder in\n`core/application/services/state_classifier.go` for an open `Read` with the\nprompt on screen:\n\n- `permission_prompt` (hook tier) \u2014 not set, per the matcher above.\n- `transcript_permission_prompt` \u2014 claudecode's parser never sets\n  `TranscriptPermissionPending`; that signal is copilot's\n  `permission.requested`/`permission.completed` pair (#1256).\n- `user_blocking_tool` \u2014 `isUserBlockingTool` is exactly\n  `AskUserQuestion|ExitPlanMode|question|ask_user_question|exit_plan_mode|ask_user`\n  (core/domain/session/metrics.go). `Read` is not in it.\n- `open_tool_stalled` (#488, the transcript fallback for a hook that can't\n  reach the daemon) \u2014 armed only by `HasOpenEditPermissionTool`, and\n  `isPermissionGatedEditTool` matches exactly\n  `edit|write|multiedit|notebookedit|write_file` (metrics.go). `Read` is not in\n  it, so the fallback is never even armed.\n- `idle_prompt` / `session_error` / `agent_done` \u2014 a turn with an open tool call\n  is not done.\n- default `transcript_activity` \u2192 **working**.\n\nSo on `main` the session reads `working` for the entire time the user is looking\nat a `Read` permission modal, and the recording will show ONE waiting episode\n(the `Write` half) where the scenario requires two. The gap is not an inference:\n`core/domain/session/signal_hold.go` states it in the source, in\n`permissionPromptHoldTimeout`'s doc comment, which enumerates the same matcher\nand splits it into \"COVERED (expiry is soft): Write, Edit, MultiEdit,\nNotebookEdit\" vs \"NOT COVERED (expiry is silent): Bash, WebFetch, mcp__.*,\nAskUserQuestion, ExitPlanMode\" \u2014 a coverage table written for the tools that ARE\nin the matcher, which by construction says nothing at all about the ones that\nare not.\n\n`daemon=bug`, not `incapable`: the trace exists and reaches Claude Code's hook\nlayer; only irrlicht's installed matcher throws it away. **PR #1867 (open, not\nmerged; this worktree is based on `main` without it) widens `hookMatcher` to\n`\"*\"`, which is the fix.** The spec below therefore asserts the CORRECT arc\n(two distinct waiting episodes) and is flagged `known_failing`.\n\n**Driver.** `replaydata/agents/claudecode/driver-interactive.sh` implements\n`send`, `keys`, `wait_turn` and `sleep` (verified with\n`driver_step_types_from_file`), which is every step the recipe needs.\n",
+      "caveats": [
+        "PR #1867 is the open fix (hookMatcher widened to \"*\"). It is NOT merged and this worktree is based on main without it, so this cell is assessed against main and records known_failing. When #1867 lands, re-record and drop known_failing \u2014 nothing else in the cell should need to change.",
+        "VACUOUS-PASS CONDITION: this cell passes while proving nothing if the READ-ONLY modal never actually opens. A session in which Read is pre-approved produces exactly one waiting episode \u2014 which is byte-for-byte what the bug also produces, so the recording cannot tell 'the daemon missed the second gate' from 'there was no second gate'. Two guards, both load-bearing: (1) the recipe's own PreToolUse ask hook appends a line to .gate-hook.log BEFORE emitting its ask decision, so record can assert the gate fired twice rather than inferring it from an absence; (2) the recipe pins permissions.defaultMode=default with an empty allow list.",
+        "LOAD-BEARING ENVIRONMENT PROPERTIES, to be re-probed at record time, not trusted: the session must NOT run under auto mode, plan mode, --dangerously-skip-permissions, or acceptEdits, and ~/.claude/settings.json must not carry a user-level permissions.allow entry for Read or Write. Any of these pre-approves one or both halves and silently degrades the cell into a duplicate of 2-19 with a green spec.",
+        "The two gates must land as two SEPARATE modals. Claude Code batches independent tool calls into one assistant message; the prompt creates a real data dependency (read back what step 1 wrote) and says so explicitly, which is what serialises them. If a recording shows one merged waiting episode, the scenario is explicit that this does NOT satisfy the row \u2014 record should re-drive as two turns (Write in turn 1, Read in turn 2) and note the extra ready in the middle of the arc.",
+        "The mutating half is deliberately Write rather than the Bash that 2-19 already uses, so the two cells exercise different covered tools; Write is additionally covered by the #488 open_tool_stalled fallback at 30s, so record should answer the first dialog well inside that window or the fallback, not the hook, becomes the thing under test."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/hookinstaller.go",
+          "note": "hookMatcher = \"Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|mcp__.*|AskUserQuestion|ExitPlanMode\" \u2014 the nine-alternative tool-name allowlist PermissionRequest is installed with. Read/Glob/Grep/LS/WebSearch/Task/Skill/SlashCommand are absent, so their modals deliver no hook."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "The full ladder. With PermissionPending unset and Read open, no rung claims the decision until the total default transcript_activity \u2192 working. Rule 0 (permission_prompt) is the only rung that would have produced waiting."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/metrics.go",
+          "note": "isUserBlockingTool (AskUserQuestion/ExitPlanMode/question/ask_user_question/exit_plan_mode/ask_user) and isPermissionGatedEditTool (edit/write/multiedit/notebookedit/write_file) \u2014 the two lower-tier tool-name sets. Read is in neither, so neither user_blocking_tool nor open_tool_stalled can re-derive the prompt."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/signal_hold.go",
+          "note": "permissionPromptHoldTimeout's doc comment enumerates the same nine-alternative matcher and splits it into COVERED (Write/Edit/MultiEdit/NotebookEdit, re-derivable by SignalOpenToolStalled) vs NOT COVERED. The table is written only for tools inside the matcher \u2014 tools outside it never reach a hold at all."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/2-19_tool-gate-permission-prompt/metadata.json",
+          "note": "Sibling cell; source of the PreToolUse permissionDecision=ask technique this recipe reuses to force a modal deterministically for a named tool."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/driver-interactive.sh",
+          "note": "driver_step_types_from_file reports send/keys/wait_turn/sleep among its step types \u2014 every primitive this recipe needs. driver=ready."
+        },
+        {
+          "kind": "issue",
+          "ref": "ingo-eichhorst/Irrlicht#1861",
+          "note": "The report. Live run against claude 2.1.259: with the shipped nine-tool matcher a modal on Read delivered 0 hook events; with the matcher set to Read the same modal delivered PermissionRequest tool=Read. A class-1 (tool-named) dialog reached waiting in 0.0 s."
+        },
+        {
+          "kind": "issue",
+          "ref": "ingo-eichhorst/Irrlicht#1867",
+          "note": "The open, unmerged fix \u2014 widens hookMatcher to \"*\". Not present in this worktree, which is why the cell is known_failing rather than record."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "claude CLI on PATH and authenticated; version >= 2.1.122 (the daemon's hook-install floor). Assessed against 2.1.259.",
+        "irrlichd is recording (--attach against a daemon started with --record, or isolated mode), with the claudecode hook installer already run so PermissionRequest/PostToolUse route to the daemon.",
+        "RE-PROBE AT RECORD TIME: the session must not run under auto mode, plan mode, acceptEdits, or --dangerously-skip-permissions, and ~/.claude/settings.json must carry no permissions.allow entry matching Read or Write. Any of these pre-approves a half and hollows the cell out.",
+        "no other claudecode session uses the same UUID"
+      ],
+      "setup": [
+        "Generate a fresh lowercased session UUID",
+        "Create an empty cwd under <staging>/cwd/ (claude prompts for trust on first encounter \u2014 the driver auto-accepts)",
+        "Write the recipe's settings blob as the project-local .claude/settings.json in that cwd: it pins permissions.defaultMode=default with an empty allow list, and installs a PreToolUse hook matching Write|Read that appends one line to .gate-hook.log and then returns permissionDecision=ask. The log line is the cell's own proof-of-gate \u2014 see the vacuous-pass caveat.",
+        "Confirm .gate-hook.log does not already exist in the cwd before the run."
+      ],
+      "script": [
+        {
+          "type": "sleep",
+          "seconds": 2
+        },
+        {
+          "type": "send",
+          "text": "Do exactly these two steps, one at a time. Wait for each step to finish completely before starting the next one; do NOT issue them as parallel tool calls, and do not use any tool other than the two named here.\nStep 1: use the Write tool to create a file named gate.txt in the current directory whose entire contents are the single line GATE-OK\nStep 2: use the Read tool to read gate.txt back.\nWhen both steps are done, reply with exactly one line containing only the text you read in step 2."
+        },
+        {
+          "type": "sleep",
+          "seconds": 15
+        },
+        {
+          "type": "keys",
+          "keys": "Enter"
+        },
+        {
+          "type": "sleep",
+          "seconds": 15
+        },
+        {
+          "type": "keys",
+          "keys": "Enter"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        }
+      ],
+      "verify": [
+        "PROOF OF GATE (must fail loudly, never read a missing file as 'no gate'): <cwd>/.gate-hook.log EXISTS and contains at least 2 lines. If the file is absent or short, the run is INCONCLUSIVE \u2014 the ask hook never fired, so neither modal opened and nothing below is evidence of anything.",
+        "transcript.jsonl contains an assistant tool_use with name=Write and, LATER, a separate assistant tool_use with name=Read, in two different assistant messages (not one batched message) \u2014 this is what makes the two episodes distinguishable at all.",
+        "the tool_result for the Read tool_use is timestamped AFTER the driver's second keys step, proving the Read call was actually held by a modal rather than executed straight through.",
+        "the final assistant message contains the literal token GATE-OK, proving the Read call really executed after approval.",
+        "events.jsonl contains a presession_created for proc-<PID> within 1000 ms and a transcript_new for the UUID session within 500 ms of the send.",
+        "ASSERTION UNDER TEST (expected to FAIL on main, #1861): events.jsonl shows TWO distinct state_transition\u2192waiting for the UUID with a state_transition\u2192working between them \u2014 one bound to the Write gate, one to the Read gate.",
+        "events.jsonl shows the session back at ready after the second approval, and STILL ready across the >=10 s trailing idle (no state_transition to waiting in that window)."
+      ],
+      "settings": {
+        "permissions": {
+          "defaultMode": "default",
+          "allow": []
+        },
+        "hooks": {
+          "PreToolUse": [
+            {
+              "matcher": "Write|Read",
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "printf 'ask %s\\n' \"$(date +%s)\" >> \"${CLAUDE_PROJECT_DIR:-.}/.gate-hook.log\"; printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\"}}'",
+                  "timeout": 5
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "timeout_seconds": 240
+    }
+  }
+}
