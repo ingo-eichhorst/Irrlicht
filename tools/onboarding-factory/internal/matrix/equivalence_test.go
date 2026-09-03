@@ -73,9 +73,13 @@ func wantedCellsByAgent(repoRoot string, shards []shard.Shard) map[string]map[st
 // declares structurally dead. So the oracle still catches a cell appearing
 // from nowhere — it just no longer treats the model as nowhere.
 //
-// Two cells take this path on the committed corpus today, both
-// backchannel-observe (antigravity, opencode), both from a `backchannel:
-// absent` declaration whose sibling backchannel-control cell is on disk.
+// Which cells take this path is a live figure and is deliberately not restated
+// here — a count typed once drifts away from what it measured (this comment
+// previously named two, from a trait pair since retired in #1846, while the
+// corpus had long carried many more). Print the current set with:
+//
+//	go test ./tools/onboarding-factory/internal/matrix/ \
+//	  -run TestTraitCoverageCensus -v -count=1
 func assertApplicableCellsMatchShard(t *testing.T, m *Matrix, wantByAgent map[string]map[string]bool) {
 	t.Helper()
 	for _, agent := range m.Agents() {

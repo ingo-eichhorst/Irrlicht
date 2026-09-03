@@ -243,3 +243,51 @@ the `replaydata/agents/adapters.json` maturity + capability model.
     failure; declaring less never is (the 30-day / adoption criteria live in
     `site/docs/adapters.html` and no gate can see them). `of status --summary`
     shows claimed vs earned side by side.
+
+## The one-scenario trait rule
+
+`internal/matrix/capability.go` declares every trait against exactly **one**
+scenario, and `Trait.Scenario` is a single string rather than a slice so that
+widening one is a deliberate type change rather than an edit to a literal. That
+shape is not an aesthetic choice — it is what two withdrawn multi-scenario
+traits cost, and the rule is only legible through the two cases that produced
+it. Both are recorded here because the second one's traits have since been
+removed along with the feature they described (#1846 / #1876), and the rule has
+to outlive them.
+
+**Case 1 — `architect_editor`, withdrawn for asserting something false.**
+`architect-editor-pair` was very nearly folded into `plan_mode`: five adapters'
+5.4 assessments say in as many words that it is "the SAME architectural
+blocker" as their 2.18. It has two instantiations and only one goes through a
+plan gate — (b) is the plan→implement mode pair, but (a) is a genuine two-model
+handoff, and the acceptance criteria are written for (a): two model
+contributions in one turn, each with its own `ModelName`. The bundled version
+was written and then measured. It synthesized an `unobservable`
+architect-editor-pair cell for **aider** — the one adapter whose signature
+feature *is* architect/editor mode — out of a `plan_mode` value that says only
+that aider's `/ask` gate is not persisted. A false claim, in a cell nobody had
+assessed. Splitting the trait cost the model its second predicting trait and
+was worth it. `architect_editor` is still in `Traits` today; its comment there
+carries the short form.
+
+**Case 2 — `backchannel_control` / `backchannel_observe`, withdrawn for making
+the validator unsatisfiable.** A single `backchannel` trait covering both
+`backchannel-control` and `backchannel-observe` was tried. mistral-vibe was
+`observed` on control and `blocked-daemon` on observe, and that observe cell's
+own notes said "RE-ASSESS after Control fix" — so the very next edit to it
+would have made `of validate` unsatisfiable: `traced` fails the reverse arm on
+observe, `untraced`/`absent` fail the forward arm on control, and the only
+escape is writing a `record_blocked` reason that would mean the wrong thing.
+Two traits, two truthful values, no escape needed. This is the sharper of the
+two cases: a trait spanning two scenarios **whose cells disagree** has no
+truthful value at all, where case 1 merely had a wrong one.
+
+**The rule that survives them.** A trait may span several scenarios only while
+those scenarios are guaranteed to move together for **every** adapter. Nothing
+in this matrix guarantees that, and both attempts to assume it were wrong
+within one ticket. So every trait covers exactly one scenario, and the cost of
+that is one JSON line in `adapters.json` per cell rather than per feature. The
+same rule is why the three #1803 error traits (`overload_retry`,
+`overload_terminal`, `auth_refusal`) are not folded into `error_epilogue`, and
+why `subscription_signal` is split from `burndown_progression` — those splits
+carry their own measured evidence in `capability.go`.

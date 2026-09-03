@@ -25,9 +25,12 @@ import (
 // Cross-scenario inference accounts for ZERO of the 122 structural cells.
 //
 // Two multi-scenario traits were written and both were withdrawn on evidence —
-// architect_editor for asserting something false, backchannel_* for making the
-// validator unsatisfiable. Each entry below records its own case. The rule
-// that survives them is stated at backchannel_control.
+// architect_editor for asserting something false, and a second, since-retired
+// pair for making the validator unsatisfiable. architect_editor's entry below
+// records its own case; the retired pair's case, and the general rule that
+// survives them both, are written up in docs/replay-testing.md under "The
+// one-scenario trait rule". That write-up keeps the historical trait names,
+// because the rule is only legible through the two cases that produced it.
 //
 // WHAT IT IS FOR, given that. Two things a per-cell assessment cannot do:
 //
@@ -61,9 +64,10 @@ import (
 // observable, together with the scenario that needs it.
 //
 // ONE scenario, not a list. A list was tried twice and withdrawn twice (see
-// architect_editor and backchannel_control below), so the type is now the
-// lock: widening a trait is a deliberate type change rather than an edit to a
-// literal, which is the bar those two comments ask for. It also removes the
+// architect_editor below, and the since-retired pair written up in
+// docs/replay-testing.md under "The one-scenario trait rule"), so the type is
+// now the lock: widening a trait is a deliberate type change rather than an
+// edit to a literal, which is the bar those two cases ask for. It also removes the
 // case the validator cannot describe — a trait spanning scenarios whose cells
 // disagree has no truthful value, and nothing in this matrix guarantees two
 // scenarios move together for every adapter.
@@ -163,24 +167,14 @@ var Traits = []Trait{
 	// declared a live cell dead.
 	{"subscription_signal", "exposes which billing model the session is on", "subscription-detection"},
 	{"burndown_progression", "exposes a rate-limit window that moves across turns", "quota-burndown"},
-	// Split, like architect_editor above, and for a sharper reason: a trait
-	// spanning two scenarios whose cells disagree has NO truthful value.
-	// `backchannel` covering both was tried; mistral-vibe is `observed` on
-	// control and `blocked-daemon` on observe, and that observe cell's own
-	// notes say "RE-ASSESS after Control fix" — so the very next edit to it
-	// would have made `of validate` unsatisfiable: `traced` fails the reverse
-	// arm on observe, `untraced`/`absent` fail the forward arm on control, and
-	// the only escape is writing a record_blocked reason that would mean the
-	// wrong thing. Two traits, two truthful values, no escape needed.
-	//
 	// THE GENERAL RULE, for whoever is tempted to widen one: a trait may span
 	// several scenarios only while those scenarios are guaranteed to move
 	// together for every adapter. Nothing in this matrix guarantees that, and
 	// both attempts to assume it were wrong within one ticket — so every trait
-	// here now covers exactly one scenario, and the cost of that is one JSON
-	// line per cell rather than per feature.
-	{"backchannel_control", "can be driven through a controlling terminal", "backchannel-control"},
-	{"backchannel_observe", "can be observed through a controlling terminal", "backchannel-observe"},
+	// here covers exactly one scenario, and the cost of that is one JSON line
+	// per cell rather than per feature. Both cases are in docs/replay-testing.md
+	// under "The one-scenario trait rule"; the second pair was retired with the
+	// feature it described, so only the write-up survives it.
 }
 
 // TraitForScenario returns the trait a scenario needs, if any. At most one

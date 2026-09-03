@@ -12,7 +12,7 @@ Irrlicht provides menu-bar telemetry for AI coding agents like Claude Code, Open
 - [State Machine](https://irrlicht.io/docs/state-machine.html): Deterministic session state transitions
 - [Session Detection](https://irrlicht.io/docs/session-detection.html): How sessions are discovered and tracked
 - [Configuration](https://irrlicht.io/docs/configuration.html): Environment variables and settings
-- [Tips & Tricks](https://irrlicht.io/docs/tips-and-tricks.html): Easy-to-miss settings — menu bar styles, quota forecasts, spoken alerts, click-to-jump, backchannel rules
+- [Tips & Tricks](https://irrlicht.io/docs/tips-and-tricks.html): Easy-to-miss settings — menu bar styles, quota forecasts, spoken alerts, click-to-jump, usage exports
 - [CLI Tools](https://irrlicht.io/docs/cli-tools.html): The irrlichd daemon and irrlicht-ls tool
 - [API Reference](https://irrlicht.io/docs/api-reference.html): HTTP and WebSocket API
 - [Architecture](https://irrlicht.io/docs/architecture.html): Hexagonal architecture with ports and adapters

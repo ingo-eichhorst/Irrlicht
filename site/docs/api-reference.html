@@ -189,22 +189,20 @@
 
       <h3>GET /api/v1/agents</h3>
 
-      <p>Returns the registered adapter branding so frontends can look up an adapter's display name and icon by <code>name</code> instead of hardcoding their own switches. Order mirrors <code>allAgents</code> in <code>core/cmd/irrlichd/main.go</code>; frontends should treat ordering as informational only and key by <code>name</code>. <code>presets</code> lists the backchannel command presets the adapter supports (empty when none); frontends render these as one-click actions in the backchannel UI.</p>
+      <p>Returns the registered adapter branding so frontends can look up an adapter's display name and icon by <code>name</code> instead of hardcoding their own switches. Order mirrors <code>allAgents</code> in <code>core/cmd/irrlichd/main.go</code>; frontends should treat ordering as informational only and key by <code>name</code>.</p>
 
       <pre><code>[
   {
     "name": "claude-code",
     "display_name": "Claude Code",
     "icon_svg_light": "&lt;svg ...&gt;...&lt;/svg&gt;",
-    "icon_svg_dark":  "&lt;svg ...&gt;...&lt;/svg&gt;",
-    "presets": ["compact"]
+    "icon_svg_dark":  "&lt;svg ...&gt;...&lt;/svg&gt;"
   },
   {
     "name": "opencode",
     "display_name": "OpenCode",
     "icon_svg_light": "&lt;svg ...&gt;...&lt;/svg&gt;",
-    "icon_svg_dark":  "&lt;svg ...&gt;...&lt;/svg&gt;",
-    "presets": []
+    "icon_svg_dark":  "&lt;svg ...&gt;...&lt;/svg&gt;"
   }
 ]</code></pre>
 
@@ -348,39 +346,6 @@ curl "http://127.0.0.1:7837/api/v1/history?chart=state&granularity=24h" | jq</co
       <pre><code># Focus a session's terminal/IDE window
 curl -X POST http://127.0.0.1:7837/api/v1/sessions/52d087d1-.../focus</code></pre>
 
-      <h3>POST /api/v1/sessions/{id}/input</h3>
-
-      <p>Forwards text into a session's controlling terminal &mdash; the &ldquo;backchannel&rdquo; write path that lets Irrlicht act on an agent, not just observe it. Body: <code>{"data": string}</code>, a plain (JSON-escaped) byte string; control characters travel as JSON <code>\u</code> escapes (e.g. <code>{"data":"hello\r"}</code>). Input is injected as if you typed it, by scripting the terminal backend (tmux/kitty/herdr/&hellip;) that owns the session. <strong>Loopback only</strong>, and mutating cross-origin browser requests are rejected (<code>Sec-Fetch-Site</code>). Gated by the backchannel master toggle <em>and</em> the per-adapter <code>control</code> permission &mdash; both must be on.</p>
-
-      <p>Responses: <code>200</code> forwarded &middot; <code>400</code> malformed request &middot; <code>403</code> backchannel disabled or <code>control</code> consent not granted &middot; <code>404</code> session not found &middot; <code>405</code> non-<code>POST</code> &middot; <code>409</code> session has no controllable terminal backend.</p>
-
-      <pre><code># Reply to a waiting agent
-curl -X POST http://127.0.0.1:7837/api/v1/sessions/52d087d1-.../input \
-  -d '{"data":"yes, proceed\r"}'</code></pre>
-
-      <h3>POST /api/v1/sessions/{id}/interrupt</h3>
-
-      <p>Delivers an interrupt to a running turn (the read of a Ctrl-C into the terminal backend). No request body; same gating and same response codes as the input endpoint.</p>
-
-      <pre><code># Interrupt a running turn
-curl -X POST http://127.0.0.1:7837/api/v1/sessions/52d087d1-.../interrupt</code></pre>
-
-      <h3>GET / POST / DELETE /api/v1/activation/backchannel</h3>
-
-      <p>The default-OFF master toggle that gates the whole backchannel capability. <code>GET</code> reads the state, <code>POST</code> enables, <code>DELETE</code> disables, each replying <code>{"backchannel_enabled": bool}</code>. <strong>Loopback only</strong>; the mutating verbs reject cross-origin browser requests. Enabling the toggle is necessary but not sufficient &mdash; each agent still needs its <code>control</code> permission granted before input is forwarded.</p>
-
-      <pre><code># Enable the backchannel master toggle
-curl -X POST http://127.0.0.1:7837/api/v1/activation/backchannel
-# → {"backchannel_enabled":true}</code></pre>
-
-      <h3>GET / POST / DELETE /api/v1/activation/relay-control</h3>
-
-      <p>Default-OFF toggle gating whether the relay forwarder acts on inbound control frames (the outer remote-control gate, for driving sessions from a relay-served client). Same verbs and loopback/cross-origin rules; replies <code>{"relay_control_enabled": bool}</code>. A standalone/headless daemon can instead enable it at startup via <code>IRRLICHT_RELAY_CONTROL=on</code>.</p>
-
-      <pre><code># Read the relay-control gate state
-curl http://127.0.0.1:7837/api/v1/activation/relay-control
-# → {"relay_control_enabled":false}</code></pre>
-
       <h3>GET / POST / DELETE /api/v1/activation/task-eta</h3>
 
       <p>Legacy alias (issue #558) over the <code>claude-code</code> adapter&rsquo;s <code>instructions</code> permission (issue #577), kept so the macOS Settings toggle&rsquo;s wire shape stays stable. <code>GET</code> reads the state, <code>POST</code> grants, <code>DELETE</code> revokes, each replying <code>{"task_eta_enabled": bool}</code>. <strong>Loopback only</strong>; the mutating verbs reject cross-origin browser requests, since the granted effect rewrites <code>~/.claude/CLAUDE.md</code>.</p>
@@ -388,17 +353,6 @@ curl http://127.0.0.1:7837/api/v1/activation/relay-control
       <pre><code># Grant the task-eta instructions permission
 curl -X POST http://127.0.0.1:7837/api/v1/activation/task-eta
 # → {"task_eta_enabled":true}</code></pre>
-
-      <h3>GET / PUT /api/v1/backchannel/rules</h3>
-
-      <p>The event&rarr;action rule set (e.g. context pressure &rarr; <code>/compact</code>). <code>GET</code> returns the current rules; <code>PUT</code> replaces the set with <code>{"rules": [&hellip;]}</code>. The rule engine fires through the same backchannel write path, so the same master-toggle + per-adapter <code>control</code> gates apply. <strong>Loopback only</strong>; <code>PUT</code> rejects cross-origin browser requests.</p>
-
-      <p>Each rule carries an <code>id</code>, an <code>enabled</code> flag, a <code>trigger</code>, and an ordered <code>actions</code> list. <code>trigger.event</code> is one of <code>waiting</code> / <code>ready</code> / <code>working</code> / <code>context_pressure</code> / <code>context_pressure_tokens</code>; <code>trigger.threshold</code> is a percentage (0&ndash;100) for <code>context_pressure</code> or an absolute token count for <code>context_pressure_tokens</code>, and defaults to 85 / 150000 when omitted. <code>actions[].kind</code> is <code>input</code> or <code>interrupt</code>; an <code>input</code> action either names a <code>preset</code> (currently <code>compact</code>, translated per agent) or sends <code>data</code> verbatim. Optional <code>name</code>, <code>adapter</code> (scope to one agent), and <code>cooldown_seconds</code> (default 60) round out the rule.</p>
-
-      <pre><code># Replace the rule set: at 85% context utilization, send the agent-agnostic compact preset
-curl -X PUT http://127.0.0.1:7837/api/v1/backchannel/rules \
-  -H 'Content-Type: application/json' \
-  -d '{"rules":[{"id":"compact-at-85","enabled":true,"name":"Compact at 85%","trigger":{"event":"context_pressure","threshold":85},"actions":[{"kind":"input","preset":"compact"}],"adapter":"claude-code"}]}'</code></pre>
 
       <h3>GET /api/v1/relay/publish</h3>
 

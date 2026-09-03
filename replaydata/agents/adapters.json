@@ -39,8 +39,6 @@
       "maturity": "alpha",
       "capabilities": {
         "architect_editor": "untraced",
-        "backchannel_control": "absent",
-        "backchannel_observe": "absent",
         "background_process": "untraced",
         "burndown_progression": "untraced",
         "checkpoint_rewind": "absent",
@@ -112,8 +110,6 @@
       "maturity": "alpha",
       "capabilities": {
         "auth_refusal": "untraced",
-        "backchannel_control": "untraced",
-        "backchannel_observe": "untraced",
         "burndown_progression": "untraced",
         "cloud_agent": "untraced",
         "file_transcript": "absent",
@@ -133,8 +129,6 @@
         "architect_editor": "absent",
         "auth_refusal": "untraced",
         "autonomous_loop": "absent",
-        "backchannel_control": "untraced",
-        "backchannel_observe": "untraced",
         "background_process": "untraced",
         "burndown_progression": "untraced",
         "checkpoint_rewind": "absent",
@@ -205,8 +199,6 @@
     "opencode": {
       "maturity": "alpha",
       "capabilities": {
-        "backchannel_control": "absent",
-        "backchannel_observe": "absent",
         "background_process": "absent",
         "cloud_agent": "absent",
         "file_transcript": "absent",

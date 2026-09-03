@@ -26,9 +26,11 @@ Confirmed instances (#1018 retrospective on the mistral-vibe onboarding run):
 2. **`TerminalObserver` live state** — #997 → #1001
    (`core/application/services/terminal_observer.go`) — a `lastUI` map keyed
    by session id that was never re-keyed. The textbook case of this shape.
-3. **`BackchannelEngine` live state** — #1002 → #1007
-   (`backchannel_service.go`) — same shape as #997, per that PR's own
-   description.
+3. **Terminal write-back rule-engine live state** — #1002 → #1007 — same shape
+   as #997, per that PR's own description. Its service was removed wholesale
+   with the terminal write-back feature (#1846), so unlike the two above there
+   is no file left to point at; the instance still counts, because what recurred
+   three times is the SHAPE, not the file.
 
 Each was discovered fresh, with no cross-reference until after the fact —
 the single biggest cost driver of that onboarding run (three full
