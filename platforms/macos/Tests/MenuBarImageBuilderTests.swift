@@ -156,6 +156,82 @@ final class MenuBarImageBuilderTests: XCTestCase {
                        "an errored top-level session must not widen .usage past its quota-only width")
     }
 
+    /// #1862's guarantee has to hold at BOTH densities, and the LOCK above
+    /// pins only `isCompact: false`.
+    ///
+    /// Compact is a modifier on HOW DENSELY the icon draws, never on WHAT it
+    /// draws — that separation is the whole point of #1852. An error arm
+    /// re-added under an `!isCompact` guard would therefore be a content
+    /// decision wearing a density costume, and it would slip past the
+    /// single-density LOCK above without anything going red. Crossing the
+    /// modifier here closes that.
+    ///
+    /// Two errored projects rather than one, so the aggregate (`compact`) and
+    /// per-project (`!compact`) dot layouts differ in width from each other —
+    /// a fixture where both layouts happened to be the same width would pass
+    /// this test for the wrong reason.
+    ///
+    /// Mutation-proved: replacing `shouldShowDotsInUsageStyle`'s
+    /// `return quotaImage == nil` with `return true` — which is #1862's bug,
+    /// re-expressed — turns this red at both densities while
+    /// `testUsageStyleStillShowsDotsWhenErroredAndNoQuotaIsRenderable` below
+    /// stays green.
+    func testUsageStyleKeepsDotsHiddenWhenErroredAtBothDensities() throws {
+        let sessions = [
+            MenuBarFixtures.session(id: "e1", state: .error, project: "alpha"),
+            MenuBarFixtures.session(id: "e2", state: .error, project: "beta"),
+            MenuBarFixtures.sessionWithQuota(),
+        ]
+        for compact in [false, true] {
+            let usage = MenuBarAppearance(style: .usage, isCompact: compact)
+            let quota = try XCTUnwrap(MenuBarImageBuilder.quotaImage(
+                appearance: usage, sessions: sessions, providerKey: nil, now: fixedNow
+            ), "compact=\(compact): the fixture must render a quota, or this proves nothing")
+            let composed = try XCTUnwrap(icon(usage, sessions: sessions))
+            XCTAssertEqual(
+                composed.size.width, quota.size.width, accuracy: 0.01,
+                "compact=\(compact): errored sessions must not widen .usage past quota-only"
+            )
+        }
+    }
+
+    /// LOCK on the arm #1862 KEPT, in the one combination where a later
+    /// change is most likely to drop it by accident: a session is errored AND
+    /// no quota is renderable.
+    ///
+    /// "`.usage` never shows dots" is the wrong summary of #1862, and it is
+    /// the summary someone reads off the test above. Applied here it would
+    /// collapse the icon to `OffFlameImage.menuBar` — the "no sessions
+    /// running" icon — while sessions are in fact running and one of them has
+    /// failed, which is a worse lie about the world than the widening #1862
+    /// removed.
+    ///
+    /// Mutation-proved: replacing that same `return quotaImage == nil` with
+    /// `return false` turns this red while the two width LOCKs above stay
+    /// green.
+    func testUsageStyleStillShowsDotsWhenErroredAndNoQuotaIsRenderable() throws {
+        // acrossProjects carries no rate-limit data, so the quota half cannot
+        // render — see its doc, which names this as its intended use.
+        var sessions = MenuBarFixtures.acrossProjects(2)
+        sessions.append(MenuBarFixtures.session(id: "e1", state: .error, project: "gamma"))
+        let usage = MenuBarAppearance(style: .usage, isCompact: false)
+        XCTAssertNil(
+            MenuBarImageBuilder.quotaImage(
+                appearance: usage, sessions: sessions, providerKey: nil, now: fixedNow
+            ),
+            "this fixture must render NO quota, or the fallback under test never runs"
+        )
+        let dots = try XCTUnwrap(MenuBarImageBuilder.dotsImage(
+            appearance: usage, sessions: sessions, projectGroupOrder: []
+        ))
+        let composed = try XCTUnwrap(
+            icon(usage, sessions: sessions),
+            "an errored session with no renderable quota must not collapse the icon"
+        )
+        XCTAssertEqual(composed.size.width, dots.size.width, accuracy: 0.01,
+                       "with no quota to show, .usage falls back to its dots")
+    }
+
     /// LOCK: without a renderable dots image, `.usage` can never show dots —
     /// the guard short-circuits before `quotaImage` is even inspected.
     func testNoDotsImageMeansNoDotsRegardlessOfQuota() {
