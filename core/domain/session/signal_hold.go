@@ -62,46 +62,22 @@ const (
 	//
 	// TierTranscript, because the only producer this phase can have reads the
 	// failure out of the transcript: claudecode's `system`/`api_error` and its
-	// terminal `isApiErrorMessage` event, copilot's `session.error`. #1800
-	// adds process death, whose evidence is the OS view of the agent process
-	// rather than anything written down, and which therefore belongs at
-	// TierProcess.
+	// terminal `isApiErrorMessage` event, copilot's `session.error`.
 	//
-	// A policy row declares exactly one tier, so that arrives as its own kind
-	// rather than by widening this one. The classifier's session_error rule
-	// reads SessionError directly, so its PREDICATE already covers a
-	// process-death producer — but its TIER resolves through this row via
-	// TierOf, so routing #1800's evidence through it would record TierProcess
-	// evidence as TierTranscript. Understating a tier never trips the ladder
-	// invariant, so nothing would catch it. #1800 adds a second rule row (or a
-	// `tierOf` override) rather than reusing this one.
+	// A POSSIBLE SECOND CHANNEL, AND WHY IT IS NOT HERE. #1800 added process
+	// death — the agent's process vanishing mid-turn — as a second failure
+	// producer at TierProcess, deliberately as its own kind rather than by
+	// widening this one: a policy row declares exactly one tier, and routing
+	// process evidence through this row would have recorded TierProcess evidence
+	// as TierTranscript, which understates a tier and so never trips the ladder
+	// invariant. #1860 removed that producer entirely (the daemon is not the
+	// agent's parent, so a crash and a deliberate quit are one observation), and
+	// the reasoning is kept because it is what any future non-transcript failure
+	// channel has to answer: it arrives as its own kind, not as this one.
 	//
 	// Named for the condition rather than the producer, matching the two rows
 	// above it, so the string is also the classifier rule id.
 	SignalSessionError SignalKind = "session_error"
-
-	// SignalProcessDeath is #1800's answer to the tier problem SignalSessionError
-	// names above: the agent process went away while a turn was still open, so
-	// the session failed and the evidence is the OS view of the process rather
-	// than anything the agent wrote down.
-	//
-	// TierProcess (3), and it is the FIRST signal in the system to sit there —
-	// the tier was declared by #1288 and reserved until now.
-	//
-	// WHY A SECOND KIND RATHER THAN WIDENING SignalSessionError. A policy row
-	// declares exactly one tier, and these two carry the same VERDICT on
-	// genuinely different channels. Routing process evidence through the
-	// transcript row would record it as TierTranscript, and understating a tier
-	// never trips the ladder invariant (which only fires when a LOWER rule
-	// outranks the winner), so the misattribution would be silent in every
-	// recorded trace. Two kinds also mean the classifier can place the two
-	// verdicts at different rungs, which it must — see the process_death rule
-	// in state_classifier.go for why a dead process has to outrank the
-	// transcript-tier waiting rules that a frozen transcript keeps reporting.
-	//
-	// Named for the condition rather than the producer, like every row above,
-	// so the string is also the classifier rule id.
-	SignalProcessDeath SignalKind = "process_death"
 )
 
 // compactHoldTimeout bounds the SignalCompactInProgress hold (#657). Normally
@@ -595,86 +571,6 @@ var signalPolicies = []signalPolicy{
 		// transcript reports nothing, which is exactly the process-death case
 		// #1800 adds it for.
 		apply: func(c holdContext) {
-			if c.Metrics.SessionError == nil && c.Payload.SessionError != nil {
-				c.Metrics.SessionError = c.Payload.SessionError
-			}
-		},
-	},
-
-	{
-		kind: SignalProcessDeath,
-		tier: TierProcess,
-		// Persistent, and more absolutely so than any other row: a dead
-		// process produces no further evidence of any kind. Every poll after
-		// the exit re-derives metrics from a transcript frozen at the moment
-		// of death, so without the hold the verdict would survive exactly one
-		// classify pass.
-		//
-		// POSITION: after SignalTurnDone for the same one-directional reason
-		// SignalSessionError and SignalIdlePrompt sit there — its staleness
-		// calls IsAgentDone, which consults the HookTurnDone that row's apply
-		// writes on the same pass. Before SignalOpenToolStalled, which must
-		// stay last.
-		//
-		// STALE = IsAgentDone, and this row is where the whole producer's
-		// correctness actually lives — it is not the afterthought the
-		// equivalent line is on the two rows above.
-		//
-		// The producer cannot tell a crash from a clean exit at the moment the
-		// process dies, and neither can anything else: irrlicht is not the
-		// agent's parent, so no exit status is available on any platform (see
-		// DiedMidTurn). What it CAN do is ask again a moment later, against a
-		// transcript that is now final — a headless agent writes its
-		// turn-ending line and exits microseconds later, so on the exit edge
-		// the daemon has usually not read that line yet, and EVERY clean
-		// headless run would otherwise be reported as a crash. That is not an
-		// edge case; it is the ordinary shape of `claude -p`, `codex exec` and
-		// `opencode run`.
-		//
-		// So the exit edge places the hold provisionally, and this rule is the
-		// verdict: on the next classify pass the metrics have been rebuilt
-		// from the finished transcript, and IsAgentDone answers the question
-		// the exit edge could not. A turn that had in fact completed drops the
-		// hold unapplied, the session settles through agent_done exactly as it
-		// always did, and the next liveness sweep reaps it. A turn that was
-		// genuinely open keeps the hold and the session reads `error`.
-		//
-		// IsAgentDone rather than HookTurnDone (which is what the two rows
-		// above use) precisely because most of the adapters this matters for
-		// have no hooks at all: HookTurnDone would answer "no" for a clean
-		// gemini-cli or pi exit and pin a false crash. IsAgentDone consults
-		// the hook first and falls back to the transcript tail, which is the
-		// only signal seven of the nine adapters ever produce.
-		stale: func(c holdContext) bool { return c.Metrics.IsAgentDone() },
-		// NO CEILING, deliberately, and it is the one row in this table without
-		// one. The other persistent rows need a ceiling because they can pin a
-		// LIVE session forever when their end-of-life notice never arrives
-		// (#1360). This row cannot: its subject is a process that is provably
-		// gone, its lifetime is bounded by the session ROW's, and the row is
-		// reaped by the very function that placed the hold — see
-		// SessionDetector.retainAsProcessDeath, which owns the retention window
-		// and explains why a ceiling HERE actively caused a bug (the hold
-		// expiring let the session re-classify to `working` off a frozen
-		// transcript and be re-converted on the next sweep, forever).
-		// HandlePIDAssigned releases it if the process ever comes back.
-		//
-		// Two writes, and the asymmetry between them is the point.
-		//
-		// ProcessDeath is written UNCONDITIONALLY: it is a fact about the OS,
-		// not a competing opinion about the failure, and nothing else in the
-		// system can set it. It is what the classifier's process_death rule
-		// reads, so the rule's tier claim rests on this channel alone and can
-		// never be reached by an adapter-supplied Class string.
-		//
-		// SessionError is written only into an EMPTY slot, matching
-		// SignalSessionError for the reason stated there: the transcript was
-		// re-read this pass and is the fresher observation, so it keeps the
-		// slot. Concretely — an agent that logged a provider failure and THEN
-		// died keeps the provider's own message, which says more than "the
-		// process went away", while still being routed by the process-tier
-		// rule.
-		apply: func(c holdContext) {
-			c.Metrics.ProcessDeath = true
 			if c.Metrics.SessionError == nil && c.Payload.SessionError != nil {
 				c.Metrics.SessionError = c.Payload.SessionError
 			}

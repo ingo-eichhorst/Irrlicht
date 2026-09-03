@@ -35,9 +35,8 @@
 # The `assert_mutation_is_red` mechanics live in tools/lib/mutation-assert.sh,
 # shared with tools/lib/preflight-groups-skill-mutations_test.sh and
 # tools/lib/simplify-angle-guard-mutations_test.sh — reused here rather than
-# copied a third time. Convention for the rest follows
-# tools/lib/error-retention-mutations_test.sh: plain bash, a `fails` counter,
-# "ALL PASS" / "N FAILED" at the end.
+# copied a third time. Convention for the rest follows tools/lib/mutate_test.sh:
+# plain bash, a `fails` counter, "ALL PASS" / "N FAILED" at the end.
 
 set -uo pipefail
 
@@ -63,9 +62,10 @@ fi
 # mutate.sh refuses (exit 4) against an already-dirty tree, because its
 # post-restore emptiness check could prove nothing then.
 #
-# A DIRTY TREE MUST NOT SILENTLY PASS — see error-retention-mutations_test.sh
-# for the full reasoning; this file repeats the same guard rather than
-# sourcing it, matching the convention every fixture in this directory uses.
+# A DIRTY TREE MUST NOT SILENTLY PASS — see
+# tools/lib/preflight-groups-skill-mutations_test.sh for the full reasoning;
+# this file repeats the same guard rather than sourcing it, matching the
+# convention every fixture in this directory uses.
 if [[ -n "$(git -C "$REPO_ROOT" status --porcelain)" ]]; then
   echo "checkpoint-idiom-guard-mutations: CANNOT RUN — the worktree is dirty, and mutate.sh needs a" >&2
   echo "  clean tree for its post-restore check to mean anything. Commit or clean up, then:" >&2

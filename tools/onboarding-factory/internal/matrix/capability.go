@@ -102,7 +102,7 @@ var Traits = []Trait{
 	{"permission_classifier", "auto-classifies a tool call against a permission policy", "auto-classified-permission"},
 	{"context_compaction", "compacts its own context window", "context-compaction"},
 	{"error_epilogue", "writes a terminal record when a turn dies of an error", "turn-aborted-by-error"},
-	// The four #1803 traits below are all error-shaped, and none of them is
+	// The three #1803 traits below are all error-shaped, and none of them is
 	// folded into error_epilogue — deliberately, under this file's own rule
 	// that a trait may span scenarios only while those scenarios are
 	// guaranteed to move together for EVERY adapter. Measured, they do not:
@@ -120,17 +120,9 @@ var Traits = []Trait{
 	//   into invisibility (gemini-cli's retryWithBackoff on 429/500/503,
 	//   opencode's AI-SDK on 429 — both documented in their mocks' headers)
 	//   still surface a non-retryable refusal. Same adapter, opposite value.
-	//
-	//   process_crash vs all three — a process death is not transcript
-	//   evidence at all. It is TierProcess, produced by the daemon's
-	//   exit-edge (retainAsProcessDeath), and an adapter that parses no error
-	//   line whatsoever can still have its PID observed dying mid-turn. A
-	//   trait keyed on transcript parsing would declare those adapters dead
-	//   for a scenario they actually pass.
 	{"overload_retry", "records that a failed provider call has another attempt pending", "provider-overloaded-retry"},
 	{"overload_terminal", "records a provider overload it never recovered from", "provider-overloaded-terminal"},
 	{"auth_refusal", "records a rejected-credentials refusal no retry can clear", "auth-credentials-rejected"},
-	{"process_crash", "leaves a turn unfinished when the agent process dies under a bound PID", "agent-process-crash-midturn"},
 	{"file_transcript", "writes a line-oriented transcript file (vs a store)", "oversized-transcript-line"},
 	{"structured_question", "asks the user a structured, blocking question", "user-blocking-question"},
 	{"plan_mode", "holds a plan-approval gate the user must clear", "user-blocking-plan-mode-approval"},

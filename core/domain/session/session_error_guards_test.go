@@ -62,7 +62,7 @@ func TestSignalSessionError_HoldAppliesItsPayload(t *testing.T) {
 
 	holds := NewSignalHolds()
 	holds.Hold(sid, SignalSessionError, SignalPayload{
-		SessionError: &SessionError{Phase: ErrorPhaseTerminal, Class: "process_death"},
+		SessionError: &SessionError{Phase: ErrorPhaseTerminal, Class: "provider"},
 	}, now)
 
 	m := &SessionMetrics{LastEventType: "assistant"}
@@ -72,8 +72,8 @@ func TestSignalSessionError_HoldAppliesItsPayload(t *testing.T) {
 		t.Fatal("a held session error did not reach the metrics — the policy row's apply " +
 			"never ran, so nothing out-of-band can ever put a session in StateError")
 	}
-	if m.SessionError.Class != "process_death" {
-		t.Errorf("Class = %q, want process_death", m.SessionError.Class)
+	if m.SessionError.Class != "provider" {
+		t.Errorf("Class = %q, want provider", m.SessionError.Class)
 	}
 
 	// Persistent, not consume-once: an error stands until the session

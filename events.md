@@ -7,7 +7,7 @@
 | **`working`** | Agent actively processing (tools, text generation, hooks, compaction, API retries) |
 | **`waiting`** | User-blocking tool open -- agent needs user to respond (AskUserQuestion, ExitPlanMode) |
 | **`ready`** | Agent idle at prompt, waiting for next user message |
-| **`error`** | The session's own machinery failed -- provider refused or failed the call, credentials rejected, agent process died mid-turn, or Irrlicht could not read the session (#1796) |
+| **`error`** | The session's own machinery failed -- provider refused or failed the call, credentials rejected, or Irrlicht could not read the session (#1796) |
 
 `error` is NOT a tool failure. A grep that matched nothing or a build that
 broke is the agent working normally and stays `working`.
@@ -42,12 +42,17 @@ tailer):
   `retrying` (`SessionError.ClearedByTurnBoundary`). A terminal failure is not
   retired by a turn boundary.
 
-A process that died mid-turn is recorded as TERMINAL -- the one producer for
-which `retrying` is impossible, since a process that exited will not try again
--- so NEITHER edge above applies to it. Its row is kept in `error` for
-`processDeathRetention` (12h) and then reaped. That ceiling holds only within a
-single daemon run; a restart inside the window reaps the row instead of showing
-it (#1815 owns that gap).
+EVERY PRODUCER OF `error` READS A TRANSCRIPT. #1800 added one that did not --
+the daemon synthesizing a failure when the agent PROCESS went away mid-turn --
+and #1860 removed it. irrlicht is not the agent's parent, so it gets no exit
+status on any platform: a segfault, an OOM kill, a `kill -9` and a clean
+`exit(0)` are one observation, and the verdict had to be guessed from the
+session's shape. The guess was wrong for the two commonest endings, an ESC
+interrupt and a denied tool prompt, because the classifier's activity debounce
+means the exit edge routinely reads a row that has not yet seen them. A process
+exit therefore deletes the row again, whatever state the row was in --
+knowingly giving up a genuine mid-turn crash, which now disappears silently
+too, in exchange for never showing a false one.
 
 Known and accepted: with no minimum hold, a provider error that recovers in a
 few hundred milliseconds can enter and leave `error` inside one poll interval
@@ -110,7 +115,6 @@ These transitions change the lifecycle state of an existing session.
 | ExitPlanMode tool opened | `working` | `waiting` | Tool use in transcript | `NeedsUserAttention()=true` |
 | User answers question / approves plan | `waiting` | `working` | Tool result in transcript | `NeedsUserAttention()=false` |
 | Provider refuses or fails the call, or credentials are rejected | `working` | `error` | Adapter parses a session-level failure out of the transcript | classifier rule `session error -> error`, signal `SignalSessionError`. The transcript path places NO hold -- the sticky error reaches the classifier through the tailer's own metrics; the signal names the rule's tier |
-| Agent process dies mid-turn | `working` | `error` | Process exit with no turn-end in sight | `SignalProcessDeath` hold, raised by `SessionDetector.retainAsProcessDeath` -- the row is RETAINED rather than deleted, unlike every process-exit row in the lifecycle table above; classifier rule `agent process died mid-turn -> error` |
 | User sends the next message after a failure | `error` | `working` | Transcript write | `clearSessionErrorOnRecovery` clears the failure on the message itself, before the turn's outcome is known |
 | A RETRYING failure's next turn completes | `error` | `ready` | `turn_done` | `clearSessionErrorOnRecovery`, gated on `ClearedByTurnBoundary` -- a terminal failure stays `error` |
 
@@ -124,16 +128,14 @@ impossibility is asserted about `error` in either direction** -- its edges are
 the two in "Leaving `error`" above. If a genuine `error` impossibility is ever
 established it belongs here; do not infer one from this list's silence.
 
-**`error` vs `waiting` is decided per producer, not once.** The classifier is a
-ladder and the two error rules sit on opposite sides of the waiting rules:
-
-- `process_death` is ABOVE them. A process killed while `AskUserQuestion` was
-  open leaves that call open forever, so `user_blocking_tool` would keep firing
-  and keep painting a dead session `waiting` -- and sending a user to answer a
-  question in a process that no longer exists is worse than saying nothing.
-  Pinned by `TestProcessDeath_OutranksAFrozenWaitingTranscript`.
-- `session_error` (the transcript path) is BELOW them, so a live session that
-  hit a provider failure and then opened a blocking tool does read `waiting`.
+**`error` sits BELOW the waiting rules.** The classifier is a ladder, and
+`session_error` (the only error producer, and a transcript-tier one) is placed
+under them: a live session that hit a provider failure and then opened a
+blocking tool does read `waiting`, because the user really is being asked
+something. #1800 briefly added a second error rule ABOVE them at TierProcess,
+for a session whose process was dead and whose frozen transcript therefore kept
+reporting an open blocking tool forever; #1860 removed that producer, so the
+case no longer arises -- the row is deleted instead.
 
 ---
 

@@ -60,9 +60,15 @@ func (p ErrorPhase) Known() bool {
 }
 
 // SessionError is one session-level failure: the provider refused or failed
-// the call, credentials were rejected, the agent process died mid-turn, or
-// Irrlicht could not read the session. It is what puts a session in
-// StateError, and what a UI renders on the red error line (#1801, #1802).
+// the call, credentials were rejected, or Irrlicht could not read the session.
+// It is what puts a session in StateError, and what a UI renders on the red
+// error line (#1801, #1802).
+//
+// EVERY PRODUCER READS A TRANSCRIPT. #1800 briefly added one that did not — the
+// daemon synthesizing a failure from the agent PROCESS going away mid-turn —
+// and #1860 removed it, because the daemon is not the agent's parent and so
+// cannot tell a crash from a deliberate quit. A failure reaches this type only
+// because the agent wrote it down.
 //
 // DISTINCT FROM ParsedEvent.IsError, deliberately and permanently. IsError is
 // a tool_result failure — a grep that matched nothing, a build that broke, a
@@ -94,7 +100,7 @@ type SessionError struct {
 	Phase ErrorPhase `json:"phase,omitempty"`
 
 	// Class is the adapter's normalized failure class — "rate_limit",
-	// "quota", "auth", "context_limit", "provider", "query", "process_death".
+	// "quota", "auth", "context_limit", "provider", "query".
 	// Free-form on purpose: the vocabularies genuinely differ per agent
 	// (copilot types its own errorType; claudecode's is nested inside the
 	// error object) and flattening them into a shared enum here would mean

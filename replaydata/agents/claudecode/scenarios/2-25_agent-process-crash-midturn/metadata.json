@@ -16,13 +16,8 @@
       "sources": [
         {
           "kind": "file",
-          "ref": "core/application/services/session_detector_lifecycle.go",
-          "note": "retainAsProcessDeath + session.SessionState.DiedMidTurn (core/domain/session/session.go, shared with the replay harness since #1817): the fail-closed clauses, the ErrorClassProcessDeath verdict, and processDeathRetention (12h). Also names the known gap that the verdict does not survive a daemon restart (#1815)."
-        },
-        {
-          "kind": "file",
-          "ref": "core/domain/session/signal_hold.go",
-          "note": "SignalProcessDeath: TierProcess, stale: IsAgentDone(), and the only policy row with no ceiling — its subject is provably dead and its lifetime is bounded by the verdict registry's."
+          "ref": "core/application/services/pid_manager.go",
+          "note": "HandleProcessExit: records lifecycle.KindProcessExited and deletes the row, whatever state the row was in. #1800 added a retain branch in front of it and #1860 removed it again — the daemon is not the agent's parent, so no exit status is available on any platform and a crash cannot be told from a deliberate quit."
         },
         {
           "kind": "file",
@@ -35,7 +30,7 @@
           "note": "step_sigkill kills by pgrep -f 'claude.*--session-id $UUID'; sigkill is declared in DRIVE_ELICITS so recipe-lint accepts the step."
         }
       ],
-      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nNo mock is needed: the driver's `sigkill` step kills the active session's claude PID by `pgrep -f \"claude.*--session-id $UUID\"`. The recipe kills mid-turn — after the prompt lands, before `wait_turn` — so the transcript freezes with the turn still open.\n\nThis is the one of the four whose evidence is NOT transcript-tier. `retainAsProcessDeath` reads the OS view of the PID, and `session.SessionState.DiedMidTurn` fails CLOSED on its clauses (state must be working, no ParentSessionID, metrics present, !IsAgentDone(), no user interrupt or tool denial). claudecode is the safest adapter to record it on: it has no idle flush, so a frozen transcript does not synthesize a turn_done that would make `IsAgentDone()` true and take the verdict away.\n\n## Distinct from 1.2 session-end, deliberately\n\n1.2 also SIGKILLs, and its sessions are SUPPOSED to disappear. Here the row must be RETAINED as `error` — 'your agent stopped without finishing' is the single most useful thing irrlicht can say about an abandoned agent, and a row that vanishes is indistinguishable from one that never mattered. The prompt is deliberately long-running so the kill lands inside the turn rather than after it."
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nNo mock is needed: the driver's `sigkill` step kills the active session's claude PID by `pgrep -f \"claude.*--session-id $UUID\"`. The recipe kills mid-turn — after the prompt lands, before `wait_turn` — so the transcript freezes with the turn still open.\n\nThe daemon observable is the PID exit itself: `process_exited` on the kqueue/pidfd edge (or within one liveness sweep), followed by the row's deletion. There is no verdict to derive, and that is the point of the cell — #1800 tried to derive one from the session's shape and #1860 removed it, because irrlicht is not the agent's parent and gets no exit status, so a segfault, an OOM kill and a clean `exit(0)` are one observation. The guess was wrong for the two commonest endings (an ESC interrupt and a denied tool prompt), and a wrong red is worse than no red.\n\n## Shares its outcome with 1.2 session-end, and is kept anyway\n\n1.2 also SIGKILLs and its sessions also disappear. This cell is kept separate because it is the only one that kills mid-turn under a BOUND PID with the turn still open — the exact shape the removed inference keyed on — so it is where a re-introduced guess would show up first. The prompt is deliberately long-running so the kill lands inside the turn rather than after it.\n\n## Recordings predate #1860\n\nBoth committed recordings were captured on daemons carrying #1800, so their frozen events.jsonl holds a `working→error` and no `process_exited` at all. The cell is `known_failing` until it is re-recorded; see expected.jsonl's notes."
     },
     "recipe": {
       "applicable": true,
