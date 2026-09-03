@@ -236,6 +236,13 @@ Linux-only bugs unless you pass `--linux`.
 
 ## Task Management
 - Use github issues to track tickets
+- **Never open an issue nobody asked for.** Filing into the tracker is an
+  outward-facing action, and the maintainer decides what gets tracked. A
+  finding worth recording goes in the final answer, the PR body, or a comment
+  on the issue already in play — name it there and ask before filing. This
+  binds transitively: never put "open a follow-up issue" in a subagent brief
+  unless that issue was requested, or it lands in the tracker without the
+  maintainer ever seeing the instruction that created it.
 - Break down larger tasks into tasks using a task tool (e.g. todowrite in opencode or TaskCreate in claude code)
 - An agent picking up an issue should self-assign before starting work
   (`gh issue edit <N> --add-assignee @me`), so others can see it's actively
