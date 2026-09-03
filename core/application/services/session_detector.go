@@ -60,10 +60,10 @@ const (
 	// initial-scan seeding pass, distinct from steady-state handling.
 	logComponentSessionDetectorSeed = "session-detector-seed"
 
-	// logComponentProcessExit tags the process-exit path's own log lines,
-	// including #1800's mid-turn conversion. Named rather than repeated
-	// inline: pid_manager.go and session_detector_lifecycle.go both write
-	// under it, so a typo in one would split the stream in two silently.
+	// logComponentProcessExit tags the process-exit path's own log lines.
+	// Named rather than repeated inline so the two call sites in
+	// pid_manager.go cannot drift apart on a typo and split the stream in
+	// two silently.
 	logComponentProcessExit = "process-exit"
 )
 
@@ -175,29 +175,6 @@ type SessionDetector struct {
 	// so all processActivity calls run in the single event-loop goroutine
 	// and never overlap for the same session.
 	debouncedEvents chan agent.Event
-
-	// processDeathVerdicts records, per session id, WHEN a mid-turn process
-	// exit was converted into a retained StateError row (#1800). It is what
-	// makes that retention terminal: a session already in the map is kept
-	// until its window closes and then released to the reaper, never
-	// re-converted. Without it the sweep re-converted the same dead session
-	// forever. Guarded by processDeathMu — HandleProcessExit reaches it from
-	// both the process-watcher callback and the liveness sweep.
-	//
-	// In-memory, but REPOPULATED AT SEED since #1815 — this comment used to say
-	// the map did not need to survive a restart "because the rows it describes
-	// do not either", and both halves are now false. The rows survive
-	// (retainedErrorAcrossRestart), and seedRestoreErrorVerdict re-registers an
-	// entry here for each one whose hold re-applied, stamped with the PERSISTED
-	// timestamp rather than with the restart, so the window continues instead of
-	// starting over.
-	processDeathVerdicts map[string]time.Time
-	processDeathMu       sync.Mutex
-
-	// processDeathRetention is processDeathRetention, overridable by tests
-	// through SetProcessDeathRetention so a twelve-hour window can be
-	// exercised without a twelve-hour test.
-	processDeathRetention time.Duration
 
 	// deletedCooldown is the minimum time after deletion before a session
 	// can be re-created from transcript activity (e.g. --continue). Prevents
@@ -346,8 +323,6 @@ func newSessionDetector() *SessionDetector {
 		debounce:                 make(map[string]*debounceEntry),
 		debouncedEvents:          make(chan agent.Event, 64),
 		deletedCooldown:          10 * time.Second,
-		processDeathRetention:    processDeathRetention,
-		processDeathVerdicts:     make(map[string]time.Time),
 		signals:                  session.NewSignalHolds(),
 		dwell:                    session.NewStateDwell(),
 		idleProjectRetryAttempts: make(map[string]int),
@@ -393,47 +368,9 @@ func NewSessionDetector(watchers []inbound.Watcher, deps SessionDetectorDeps) *S
 		LiveCWDs:         deps.LiveCWDs,
 		OnSessionDeleted: det.removeFromProjectSessions,
 		OnSessionRemoved: det.cacheDeletedSnapshot,
-
-		// #1800. The decision lives on the detector rather than in PIDManager
-		// because it places a signal hold, and SignalHolds is the detector's:
-		// PIDManager owns PID plumbing, not classification policy — the same
-		// split that keeps holdParentWorkingForNewChild here and
-		// parentProcessLive there.
-		OnProcessDiedMidTurn: det.retainAsProcessDeath,
 	})
 	det.pidMgr.SetChildDeletedHandler(det.reevaluateParent)
 	return det
-}
-
-// HandleProcessExitRetainedForTest drives the real process-exit path once and
-// reports whether the session SURVIVED it — i.e. was retained as a
-// process-death error rather than deleted.
-//
-// It reads the answer back from the repo rather than returning
-// retainAsProcessDeath's own boolean, because calling that decision directly
-// AND then the exit path would evaluate it twice: the second evaluation sees a
-// registry entry the first one just removed, judges the frozen mid-turn
-// transcript on its merits again, and re-converts — reproducing the very loop
-// this helper exists to test against. Reading the row is unambiguous and has no
-// second call.
-func (d *SessionDetector) HandleProcessExitRetainedForTest(pid int, sessionID, reason string) bool {
-	d.HandleProcessExit(pid, sessionID, reason)
-	state, err := d.repo.Load(sessionID)
-	return err == nil && state != nil
-}
-
-// SetProcessDeathRetention overrides how long a session that died mid-turn is
-// kept in `error` before the reaper takes it (#1800). Intended for tests, which
-// otherwise could not reach the expiry branch at all.
-func (d *SessionDetector) SetProcessDeathRetention(dur time.Duration) {
-	d.processDeathRetention = dur
-	// Forwarded so the startup sweeps' #1815 exemption measures the SAME window
-	// this one does. They are described throughout as "the same twelve hours";
-	// a knob that moved only one of them would make that false in exactly the
-	// tests written to check it.
-	if d.pidMgr != nil {
-		d.pidMgr.SetErrorRetention(dur)
-	}
 }
 
 // SetDeletedCooldown overrides the deleted-session cooldown.

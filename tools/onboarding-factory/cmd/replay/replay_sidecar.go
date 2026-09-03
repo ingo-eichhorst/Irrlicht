@@ -190,22 +190,9 @@ func resolvePrimarySession(cfg reportSettings, sidecarEvents []lifecycle.Event) 
 // with empty prev_state (resumed session — the "new session created" marker
 // the daemon writes when it re-attaches).
 type sidecarBuckets struct {
-	fswatches    []lifecycle.Event
-	hookEvents   []lifecycle.Event
-	processExits []lifecycle.Event
-	// processDeaths is the RETAINED half of a process exit (#1800): the pid
-	// went away mid-turn, so the daemon converted the row to `error` and kept
-	// it. Kept in its own stream because processExits above is the teardown
-	// half and the two produce opposite outcomes.
-	processDeaths []lifecycle.Event
-	// pidAssignments is the RELEASE edge for the hold processDeaths places.
-	// SignalProcessDeath is the one policy with no ceiling, which is safe in
-	// the daemon only because two things bound it — the row's own reaping, and
-	// SessionDetector.HandlePIDAssigned releasing the hold when a process comes
-	// back. A replay has no reaper, so this is the only bound it can mirror,
-	// and without it a crash-then-resume recording would replay pinned at
-	// `error` from the resume onwards.
-	pidAssignments   []lifecycle.Event
+	fswatches        []lifecycle.Event
+	hookEvents       []lifecycle.Event
+	processExits     []lifecycle.Event
 	lifecycleStarts  []lifecycle.Event
 	childTransitions []lifecycle.Event
 	orphanTriggers   []orphanTrigger
@@ -213,15 +200,6 @@ type sidecarBuckets struct {
 	// parent_linked. finalState carries the last recorded state; state
 	// is the mutable field the timeline walk updates.
 	children map[string]*childInfo
-	// parentSessionID is the primary session's OWN parent, when the sidecar
-	// says it has one — i.e. the reverse of the children map above. It exists
-	// for exactly one consumer, SessionState.DiedMidTurn's subagent clause,
-	// and it is read from the recording rather than assumed empty because that
-	// clause fails closed: a child's process IS its parent's process, so a
-	// child must never be converted to `error` on the parent's exit. Normally
-	// empty (findPrimarySessionID picks a top-level session), non-empty when
-	// --session targets a subagent.
-	parentSessionID string
 }
 
 // childInfo tracks a single subagent for the parent-hold check. finalState
@@ -282,14 +260,6 @@ func bucketPrimaryEventByKind(ev lifecycle.Event, b *sidecarBuckets) {
 		}
 	case lifecycle.KindProcessExited:
 		b.processExits = append(b.processExits, ev)
-	case lifecycle.KindProcessDiedMidTurn:
-		b.processDeaths = append(b.processDeaths, ev)
-	case lifecycle.KindPIDDiscovered:
-		b.pidAssignments = append(b.pidAssignments, ev)
-	case lifecycle.KindParentLinked:
-		if ev.ParentSessionID != "" {
-			b.parentSessionID = ev.ParentSessionID
-		}
 	case lifecycle.KindHookReceived:
 		b.hookEvents = append(b.hookEvents, ev)
 	case lifecycle.KindTranscriptNew:
@@ -1067,8 +1037,6 @@ const (
 	timelineFS = iota
 	timelineHook
 	timelineProcessExit
-	timelineProcessDeath
-	timelinePIDAssigned
 	timelineLifecycleStart
 	timelineChildTransition
 	timelineChildOrphan
@@ -1092,8 +1060,7 @@ type timelineEntry struct {
 // moment in virtual time.
 func buildTimeline(b sidecarBuckets) []timelineEntry {
 	cap := len(b.fswatches) + len(b.hookEvents) + len(b.processExits) +
-		len(b.processDeaths) + len(b.pidAssignments) + len(b.lifecycleStarts) +
-		len(b.childTransitions) + len(b.orphanTriggers)
+		len(b.lifecycleStarts) + len(b.childTransitions) + len(b.orphanTriggers)
 	timeline := make([]timelineEntry, 0, cap)
 	for i, ev := range b.fswatches {
 		timeline = append(timeline, timelineEntry{kind: timelineFS, idx: i, seq: ev.Seq, ts: ev.Timestamp})
@@ -1103,12 +1070,6 @@ func buildTimeline(b sidecarBuckets) []timelineEntry {
 	}
 	for i, ev := range b.processExits {
 		timeline = append(timeline, timelineEntry{kind: timelineProcessExit, idx: i, seq: ev.Seq, ts: ev.Timestamp})
-	}
-	for i, ev := range b.processDeaths {
-		timeline = append(timeline, timelineEntry{kind: timelineProcessDeath, idx: i, seq: ev.Seq, ts: ev.Timestamp})
-	}
-	for i, ev := range b.pidAssignments {
-		timeline = append(timeline, timelineEntry{kind: timelinePIDAssigned, idx: i, seq: ev.Seq, ts: ev.Timestamp})
 	}
 	for i, ev := range b.lifecycleStarts {
 		timeline = append(timeline, timelineEntry{kind: timelineLifecycleStart, idx: i, seq: ev.Seq, ts: ev.Timestamp})
@@ -1212,16 +1173,6 @@ func (r *sidecarReplayer) applyTimelineControlEntry(entry timelineEntry, b sidec
 		return true, nil
 	case timelineProcessExit:
 		return true, r.applyProcessTeardown(entry, d)
-	case timelineProcessDeath:
-		return true, r.applyProcessDeathEntry(entry, b, d)
-	case timelinePIDAssigned:
-		// Mirrors SessionDetector.HandlePIDAssigned: a session with a live PID
-		// again is not one whose process is gone. A no-op when no such hold
-		// stands, which is every ordinary PID discovery — and every PID
-		// discovery in the catalog today, since no committed recording yet
-		// carries a process death.
-		r.signals.Release(replaySessionKey, session.SignalProcessDeath)
-		return true, nil
 	case timelineHook:
 		if !d.alive {
 			return true, nil
@@ -1246,11 +1197,8 @@ func (r *sidecarReplayer) applyTimelineControlEntry(entry timelineEntry, b sidec
 	return false, nil
 }
 
-// applyProcessTeardown handles a recorded process_exited: the DELETE edge, and
-// only the delete edge. That is a property of the recorded Kind, not a
-// simplification here — see lifecycle.KindProcessDiedMidTurn's doc for why the
-// two edges are separate Kinds and what routing this one through DiedMidTurn
-// was measured to cost.
+// applyProcessTeardown handles a recorded process_exited, which is the only
+// outcome a process exit has: the row is deleted whatever state it was in.
 func (r *sidecarReplayer) applyProcessTeardown(entry timelineEntry, d *debounceState) error {
 	// A window whose deadline already passed is not "pending" — the daemon's
 	// timer fired it, and the transitions it produced are in the sidecar. Catch
@@ -1267,22 +1215,6 @@ func (r *sidecarReplayer) applyProcessTeardown(entry timelineEntry, d *debounceS
 	if err := r.flushDebounceIfExpired(entry.ts, d); err != nil {
 		return fmt.Errorf("flush before process exit: %w", err)
 	}
-	// Release the process-death hold before resetting, mirroring
-	// retainAsProcessDeath's own expiry branch, which calls
-	// signals.Release(SignalProcessDeath) immediately before returning false and
-	// letting HandleProcessExit reap the row and write process_exited
-	// (session_detector_lifecycle.go:390). Death-then-teardown is therefore a
-	// shape a recording can genuinely contain — it is what a crash whose 12h
-	// retention expired looks like — and without this the hold would still stand
-	// after the reset below. SignalProcessDeath is the one policy with NO
-	// ceiling, so nothing else would ever drop it: the next lifetime's first
-	// classify would overlay it onto fresh metrics and pin a brand-new session
-	// to `error`.
-	//
-	// A no-op on every recording committed today, none of which carries a
-	// process death at all; TestSidecarReleasesTheDeathHoldOnTeardown is what
-	// keeps it honest.
-	r.signals.Release(replaySessionKey, session.SignalProcessDeath)
 	// Daemon torn down: a pending timer that has NOT yet expired is genuinely
 	// cancelled (not fired), and the next lifetime starts a fresh session in
 	// ready. Reset state so lifetime-2 events don't coalesce with lifetime-1
@@ -1290,97 +1222,6 @@ func (r *sidecarReplayer) applyProcessTeardown(entry timelineEntry, d *debounceS
 	*d = debounceState{debounceDelay: d.debounceDelay}
 	r.state = session.StateReady
 	return nil
-}
-
-// applyProcessDeathEntry handles a recorded process_died_midturn: the RETAIN
-// edge. The row survives, so nothing here resets the lifetime.
-//
-// NO alive-gate, unlike the hook branch, and the asymmetry is deliberate:
-// `alive` is false only before the first lifecycle start or after a teardown —
-// and a teardown has already set r.state to ready, which DiedMidTurn's first
-// clause rejects. A gate here would be unreachable by construction, i.e. a
-// branch no test could ever turn red. The state clause is what actually decides.
-func (r *sidecarReplayer) applyProcessDeathEntry(entry timelineEntry, b sidecarBuckets, d *debounceState) error {
-	// Flush an already-expired window first, exactly as the exit, hook and
-	// orphan branches do (#1342), so the death transition does not smear into
-	// transitions the daemon's own timer had already fired. Unpinned: on the one
-	// crash recording in the catalog, moving the death inside an open window
-	// changes no output. Kept because the three sibling branches all do it and a
-	// lone omission would read as an oversight.
-	if err := r.flushDebounceIfExpired(entry.ts, d); err != nil {
-		return fmt.Errorf("flush before process death: %w", err)
-	}
-	r.applyProcessDeath(b.processDeaths[entry.idx], b.parentSessionID)
-	return nil
-}
-
-// applyProcessDeath is the replay half of SessionDetector.retainAsProcessDeath
-// (#1800): it decides whether a recorded process death was a crash mid-turn
-// and, when it was, reproduces the daemon's `error` verdict.
-//
-// IT SHARES THE PREDICATE RATHER THAN RESTATING IT. The fail-closed clauses
-// live once, on the domain value, as SessionState.DiedMidTurn — this
-// function's whole job is to assemble the argument. That is the same decision
-// #1288 made for the signal-hold mechanism and for the same reason: this
-// harness exists to catch classifier regressions, so a private copy of a
-// lifecycle rule inside it can drift out of agreement with the rule it is
-// supposed to be checking, and no test would notice.
-//
-// The verdict likewise comes out of the real ladder, not from an assignment
-// here: the same SignalProcessDeath hold the daemon places is placed on the
-// same session.SignalHolds, and services.ClassifyState's process tier is what
-// turns it into StateError. Nothing below names a target state.
-//
-// WHAT IS NOT MIRRORED, and why that is sound: the daemon's verdict registry
-// (processDeathVerdicts / processDeathRetention) and the HandlePIDAssigned
-// retirement. Both exist because the live sweep calls the exit path again
-// every few seconds for as long as the row survives, so the decision has to be
-// idempotent and terminal. A replay walks one finite timeline once, and a
-// recording carries at most one exit edge per lifetime, so there is nothing
-// here for that machinery to make idempotent.
-func (r *sidecarReplayer) applyProcessDeath(ev lifecycle.Event, parentSessionID string) {
-	// No transcript read yet means no metrics, which is DiedMidTurn's
-	// metrics-present clause reached one step early — fail closed the same way.
-	if r.lastMetrics == nil {
-		return
-	}
-	// Overlaid BEFORE the ask, because the daemon asks the same question of the
-	// persisted row, whose metrics already carry every standing hold's effect.
-	//
-	// Re-overlaying THIS value rather than a fresh one is deliberate and is the
-	// safe direction: Overlay DELETES consume-once holds as it applies them
-	// (session.SignalHolds.Overlay), so applying the first pass to a throwaway
-	// probe would consume such a hold and lose its effect for the value that
-	// actually reaches the classifier. Applying twice to the same value cannot
-	// lose anything — every apply in the policy table is a set-true or a
-	// fill-if-empty. The residue that remains: on the fail-closed return below
-	// the overlay has already run against a value nothing classifies, so a
-	// consume-once hold standing at that instant would be spent. No producer
-	// reaches that shape today (SignalTurnDone is consumed by classifyAt's own
-	// overlay before lastMetrics is ever non-nil), which is why the clauses are
-	// not hand-copied here to short-circuit ahead of it.
-	domainMetrics := replayengine.TailerToDomain(r.lastMetrics)
-	domainMetrics.NoSubstantiveActivity = false
-	r.signals.Overlay(replaySessionKey, domainMetrics, ev.Timestamp)
-	crashed := (&session.SessionState{
-		State:           r.state,
-		ParentSessionID: parentSessionID,
-		Metrics:         domainMetrics,
-	}).DiedMidTurn()
-	if !crashed {
-		return
-	}
-
-	r.signals.Hold(replaySessionKey, session.SignalProcessDeath, session.SignalPayload{
-		SessionError: session.NewProcessDeathError(ev.PID, ev.Reason),
-	}, ev.Timestamp)
-
-	// Fold the hold just placed into the same value, then let the real ladder
-	// decide. grew=false is the honest answer — no transcript byte moved — and
-	// it costs nothing: the force-ready→working bounce it gates requires the
-	// current state to be ready, which DiedMidTurn has just ruled out.
-	r.signals.Overlay(replaySessionKey, domainMetrics, ev.Timestamp)
-	r.runClassifier(domainMetrics, transitionCtx{eventIdx: -1, virtTime: ev.Timestamp, cause: causeProcessDeath}, false)
 }
 
 // applyChildOrphan fires a synthetic orphan-promotion for a child whose

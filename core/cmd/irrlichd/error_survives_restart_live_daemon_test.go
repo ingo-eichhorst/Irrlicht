@@ -6,9 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -36,153 +34,81 @@ const terminalAPIErrorTranscript = `{"type":"user","uuid":"11111111-1111-1111-11
 {"type":"assistant","uuid":"33333333-3333-3333-3333-333333333333","timestamp":"2026-08-25T10:33:23.706Z","message":{"role":"assistant","model":"<synthetic>","stop_reason":"stop_sequence","content":[{"type":"text","text":"API Error: Repeated 529 Overloaded errors. The API is at capacity — this is usually temporary."}],"usage":{"input_tokens":0,"output_tokens":0}},"error":"server_error","isApiErrorMessage":true,"apiErrorStatus":529,"session_id":"SESSION_ID"}
 `
 
-// midTurnTranscript ends with an OPEN tool call — an assistant `tool_use` with
-// no matching `tool_result`. That is what an agent's transcript looks like when
-// its process dies mid-turn, and it is the shape the dead-process case needs:
-// the transcript alone reads as work still in flight, so restoring only the
-// persisted SessionError would not be enough to keep the session red. The
-// classifier's process_death rule outranks the transcript-tier rules precisely
-// so a frozen transcript like this one cannot repaint a dead session, and that
-// rule reads a flag only a re-placed hold can set.
-const midTurnTranscript = `{"type":"user","uuid":"44444444-4444-4444-4444-444444444444","timestamp":"2026-08-25T10:40:00.000Z","message":{"role":"user","content":"refactor the parser"},"cwd":"/tmp/irrlicht-1815","session_id":"SESSION_ID"}
-{"type":"assistant","uuid":"55555555-5555-5555-5555-555555555555","timestamp":"2026-08-25T10:40:05.000Z","message":{"role":"assistant","model":"claude-opus-4-6","content":[{"type":"tool_use","id":"toolu_1815","name":"Edit","input":{"file_path":"/tmp/irrlicht-1815/parser.go"}}],"usage":{"input_tokens":12,"output_tokens":8}},"session_id":"SESSION_ID"}
-`
-
-// TestErrorStateSurvivesDaemonRestart is #1815's acceptance shape, run against a
-// real irrlichd on an ephemeral port under temp dirs: drive a session into
-// `error`, restart the daemon on the SAME state dir, assert it STILL reads
-// `error`.
+// TestErrorStateSurvivesDaemonRestart is #1815's surviving acceptance shape,
+// run against a real irrlichd on an ephemeral port under temp dirs: drive a
+// session into `error`, restart the daemon on the SAME state dir, assert it
+// STILL reads `error`.
 //
-// TWO CASES, AND THE DIFFERENCE BETWEEN THEM IS THE WHOLE POINT. #1815 names two
-// independent mechanisms with the same user-visible outcome, and exactly one
-// fact separates them — whether the agent process is alive across the restart:
+// ONE CASE NOW, AND WHICH ONE IS THE POINT. #1815 named two independent
+// mechanisms with the same user-visible outcome, separated by exactly one fact
+// — whether the agent process is alive across the restart:
 //
-//   - alive: the row survives every startup sweep (isStartupZombie's dead-PID
-//     predicate is false), and what is lost is the VERDICT. The tailer's sticky
-//     sessionError was in-memory only, so the second daemon re-classified off a
-//     frozen transcript and landed on ready. This is the mechanism the reporter
-//     reproduced live at 6e646c7c.
-//   - dead: the row itself is DELETED, by either of the two startup dead-PID
-//     deleters, before anything can look at it. The reporter's run deliberately
-//     did not cover this one and asked for it to be run rather than assumed.
+//   - alive (this test): the row survives every startup sweep on its own
+//     (isStartupZombie's dead-PID predicate is false), and what was lost was
+//     the VERDICT. The tailer's sticky sessionError was in-memory only, so the
+//     second daemon re-classified off a frozen transcript and landed on ready.
+//     tailer.LedgerState.SessionError is what fixed that, and #1860 KEEPS it:
+//     a session whose process is still running and whose transcript reports a
+//     failure is the surviving error producer, and this is its only end-to-end
+//     proof.
+//   - dead: covered by the two subtests #1860 deleted along with the mechanism
+//     they tested. #1815 spared an errored row from the startup and periodic
+//     deleters for twelve hours; #1860 removed that exemption, because the
+//     daemon gets no exit status and so cannot tell a crash from a deliberate
+//     quit. A dead process's row is deleted again, whatever state it was in,
+//     and there is nothing left there to survive a restart.
 //
-// Both drive the FIRST daemon into `error` off a real transcript rather than
-// seeding the verdict, so the ledger under test is written by the daemon itself.
-// The lifetime-1 assertion is therefore also the vacuity guard: if the
+// It drives the FIRST daemon into `error` off a real transcript rather than
+// seeding the verdict, so the ledger under test is written by the daemon
+// itself. The lifetime-1 assertion is therefore also the vacuity guard: if the
 // transcript stopped producing an error, this test fails there and says so,
 // instead of passing lifetime 2 against a session that was never red.
 func TestErrorStateSurvivesDaemonRestart(t *testing.T) {
 	bin := buildIrrlichd(t)
 
-	// MECHANISM 1 — the in-memory sticky error. Two daemon lifetimes: the first
-	// produces the verdict off the transcript (and writes the ledger the fix
-	// turns on), the second must still report it.
-	t.Run("agent process alive across the restart", func(t *testing.T) {
-		// Each subtest owns its HOME, its IRRLICHT_HOME (and so its unix socket
-		// path), and an ephemeral TCP port, so the three are independent. Run
-		// concurrently: each spends 8s doing nothing but holding an invariant,
-		// and serialising that is ~15s of pure wall clock on every CI run.
-		t.Parallel()
-		homeDir := t.TempDir()
-		stateDir := shortTempDir(t)
-		seedGrantedTranscriptsConsent(t, stateDir)
+	// Owns its HOME, its IRRLICHT_HOME (and so its unix socket path), and an
+	// ephemeral TCP port, so nothing here collides with a concurrent test.
+	homeDir := t.TempDir()
+	stateDir := shortTempDir(t)
+	seedGrantedTranscriptsConsent(t, stateDir)
 
-		sessionID := "e5f1a2b3-1815-4c5d-8e9f-a0b1c2d3e4f5"
-		transcript := writeTranscript(t, t.TempDir(), sessionID, terminalAPIErrorTranscript)
+	sessionID := "e5f1a2b3-1815-4c5d-8e9f-a0b1c2d3e4f5"
+	transcript := writeTranscript(t, t.TempDir(), sessionID, terminalAPIErrorTranscript)
 
-		// State `working` on purpose: the FIRST daemon has to produce the verdict
-		// itself off the transcript, or the ledger this issue is about is never
-		// written and lifetime 2 would be asserting against a hand-seeded value.
-		seedPersistedSession(t, stateDir, &session.SessionState{
-			SessionID:      sessionID,
-			Adapter:        claudecode.AdapterName,
-			State:          session.StateWorking,
-			PID:            liveProcessPIDForRestart(t),
-			TranscriptPath: transcript,
-			CWD:            filepath.Dir(transcript),
-			FirstSeen:      time.Now().Unix(),
-			UpdatedAt:      time.Now().Unix(),
-		})
-
-		d := bootSmokeDaemonIn(t, bin, homeDir, stateDir)
-
-		// Vacuity guard AND precondition: the first daemon must actually reach
-		// `error`. Polled rather than slept — the seed runs inside
-		// SessionDetector.Run, which starts AFTER the addr file is published, so
-		// waitForAddr returning says nothing about whether the seed has run.
-		if !pollUntil(t, 15*time.Second, 25*time.Millisecond, func() bool {
-			return liveSessionState(t, d.addr, sessionID) == session.StateError
-		}) {
-			t.Fatalf("first daemon never classified %s as %s (got %q) — the transcript stopped "+
-				"producing a session error, so nothing below would test a restart",
-				sessionID, session.StateError, liveSessionState(t, d.addr, sessionID))
-		}
-
-		d.shutdown(t)
-
-		d2 := bootSmokeDaemonIn(t, bin, homeDir, stateDir)
-		defer d2.shutdown(t)
-		requireSessionState(t, d2.addr, sessionID, session.StateError)
-		holdSessionState(t, d2.addr, sessionID, session.StateError, 8*time.Second)
+	// State `working` on purpose: the FIRST daemon has to produce the verdict
+	// itself off the transcript, or the ledger this issue is about is never
+	// written and lifetime 2 would be asserting against a hand-seeded value.
+	seedPersistedSession(t, stateDir, &session.SessionState{
+		SessionID:      sessionID,
+		Adapter:        claudecode.AdapterName,
+		State:          session.StateWorking,
+		PID:            liveProcessPIDForRestart(t),
+		TranscriptPath: transcript,
+		CWD:            filepath.Dir(transcript),
+		FirstSeen:      time.Now().Unix(),
+		UpdatedAt:      time.Now().Unix(),
 	})
 
-	// MECHANISM 2 — the startup sweeps deleting exactly these rows. ONE daemon
-	// lifetime, because the seeded row IS the previous daemon's output: this is
-	// byte-for-byte what retainAsProcessDeath persists when an agent dies
-	// mid-turn (StateError, the dead PID still recorded, a process_death
-	// SessionError on the metrics). Booting a daemon against it IS the restart.
-	//
-	// The reporter's live run deliberately did not cover this case and asked for
-	// it to be run rather than assumed.
-	// BOTH ERROR CLASSES, because they are rescued by different halves of the fix
-	// and only one of them was covered at first. A process_death row is retained
-	// by its own re-registered verdict; a transcript-derived one (the reporter's
-	// actual 529) has no verdict of its own in the new process, and used to fall
-	// through the periodic sweep's DiedMidTurn check and be deleted five seconds
-	// after the restart — invisible to a test that stopped at the first poll.
-	for _, tc := range []struct {
-		name       string
-		errClass   string
-		errMessage string
-	}{
-		{"process death", session.ErrorClassProcessDeath, "agent process exited mid-turn — process watcher"},
-		{"provider error", "rate_limit_error", "API Error: Repeated 529 Overloaded errors."},
-	} {
-		t.Run("agent process dead across the restart ("+tc.name+")", func(t *testing.T) {
-			t.Parallel()
-			homeDir := t.TempDir()
-			stateDir := shortTempDir(t)
-			seedGrantedTranscriptsConsent(t, stateDir)
+	d := bootSmokeDaemonIn(t, bin, homeDir, stateDir)
 
-			sessionID := "c4d5e6f7-1815-4a1b-9c2d-3e4f5a6b7c8d"
-			transcript := writeTranscript(t, t.TempDir(), sessionID, midTurnTranscript)
-			deadPID := deadPIDForRestart(t)
-
-			seedPersistedSession(t, stateDir, &session.SessionState{
-				SessionID:      sessionID,
-				Adapter:        claudecode.AdapterName,
-				State:          session.StateError,
-				PID:            deadPID,
-				TranscriptPath: transcript,
-				CWD:            filepath.Dir(transcript),
-				FirstSeen:      time.Now().Unix(),
-				UpdatedAt:      time.Now().Unix(),
-				Metrics: &session.SessionMetrics{
-					SessionError: &session.SessionError{
-						Phase:   session.ErrorPhaseTerminal,
-						Class:   tc.errClass,
-						Message: tc.errMessage + " (pid " + strconv.Itoa(deadPID) + ")",
-					},
-				},
-			})
-
-			d := bootSmokeDaemonIn(t, bin, homeDir, stateDir)
-			defer d.shutdown(t)
-			requireSessionState(t, d.addr, sessionID, session.StateError)
-			// Past at least one liveness-sweep tick — see holdSessionState.
-			holdSessionState(t, d.addr, sessionID, session.StateError, 8*time.Second)
-		})
+	// Vacuity guard AND precondition: the first daemon must actually reach
+	// `error`. Polled rather than slept — the seed runs inside
+	// SessionDetector.Run, which starts AFTER the addr file is published, so
+	// waitForAddr returning says nothing about whether the seed has run.
+	if !pollUntil(t, 15*time.Second, 25*time.Millisecond, func() bool {
+		return liveSessionState(t, d.addr, sessionID) == session.StateError
+	}) {
+		t.Fatalf("first daemon never classified %s as %s (got %q) — the transcript stopped "+
+			"producing a session error, so nothing below would test a restart",
+			sessionID, session.StateError, liveSessionState(t, d.addr, sessionID))
 	}
+
+	d.shutdown(t)
+
+	d2 := bootSmokeDaemonIn(t, bin, homeDir, stateDir)
+	defer d2.shutdown(t)
+	requireSessionState(t, d2.addr, sessionID, session.StateError)
+	holdSessionState(t, d2.addr, sessionID, session.StateError, 8*time.Second)
 }
 
 // requireSessionState polls the running daemon until sessionID reports want, and
@@ -211,12 +137,12 @@ func requireSessionState(t *testing.T, addr, sessionID, want string) {
 // d, rather than merely reaching it once.
 //
 // SURVIVING STARTUP IS NOT SURVIVING. requireSessionState returns on the first
-// matching poll, which for the dead-process case happened in ~30ms — before the
-// periodic liveness sweep had ticked even once. That sweep is a SEPARATE deleter
-// from the two startup ones, and it took the rescued row about five seconds
-// later; the test was green throughout, because the failure lives entirely in
-// the window after the first successful poll. The hold has to outlast at least
-// one sweep interval for "it survived the restart" to mean anything.
+// matching poll, which under #1815 happened in ~30ms — before the periodic
+// liveness sweep had ticked even once. That sweep is a SEPARATE deleter from
+// the startup ones, and it took a rescued row about five seconds later; the
+// test was green throughout, because the failure lives entirely in the window
+// after the first successful poll. The hold has to outlast at least one sweep
+// interval for "it survived the restart" to mean anything.
 func holdSessionState(t *testing.T, addr, sessionID, want string, d time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(d)
@@ -234,16 +160,19 @@ func holdSessionState(t *testing.T, addr, sessionID, want string, d time.Duratio
 // liveSessionState asks the RUNNING daemon what state it currently reports for
 // one session, or "<absent>" when the session is not in the list at all.
 //
-// Absent and green are DIFFERENT failures — #1815's two mechanisms produce one
-// each — so they must not collapse into the same string. A caller that saw
-// "<absent>" learns the row was deleted (the startup sweep); one that saw
-// "ready" learns the row survived and the verdict did not.
+// Absent and green are DIFFERENT failures — #1815 named one of each — so they
+// must not collapse into the same string. A caller that saw "<absent>" learns
+// the row was deleted (a sweep took it); one that saw "ready" learns the row
+// survived and the verdict did not.
 func liveSessionState(t *testing.T, addr, sessionID string) string {
 	t.Helper()
-	// Its own client rather than http.DefaultClient: smokeDaemon.shutdown calls
-	// http.DefaultClient.CloseIdleConnections(), which is process-global, so
-	// under t.Parallel one subtest's teardown would drop the others' idle
-	// keep-alives. Harmless (they redial) but a coupling worth not having.
+	// Its own client rather than http.DefaultClient, for the timeout: this is
+	// polled in a loop against a daemon that is being started and stopped, and
+	// DefaultClient has no deadline at all, so a single hung dial would take the
+	// whole test's budget instead of one poll's. (It used to be justified by
+	// t.Parallel isolation, which was never true — Transport is nil, so this
+	// shares http.DefaultTransport's idle pool with DefaultClient — and #1860
+	// removed the subtests that made the claim testable at all.)
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Get("http://" + addr + "/api/v1/sessions")
 	if err != nil {
@@ -331,7 +260,9 @@ func writeTranscript(t *testing.T, dir, sessionID, fixture string) string {
 }
 
 // liveProcessPIDForRestart returns the PID of a child that stays alive for the
-// whole test — the "agent still running" half of #1815's split.
+// whole test. The live PID is load-bearing, not scenery: it is what makes this
+// the ALIVE case, where the row survives every sweep on its own and only the
+// verdict was ever at risk.
 func liveProcessPIDForRestart(t *testing.T) int {
 	t.Helper()
 	cmd := exec.Command("sleep", "120")
@@ -343,25 +274,4 @@ func liveProcessPIDForRestart(t *testing.T) int {
 		_ = cmd.Wait()
 	})
 	return cmd.Process.Pid
-}
-
-// deadPIDForRestart spawns and reaps a process, returning a PID known to be
-// dead — the "agent gone" half of #1815's split, and the case its reporter
-// explicitly left unrun.
-//
-// Skips rather than guesses if the kernel recycles the PID before we can
-// confirm it: a recycled PID is alive, which would silently convert this into a
-// second copy of the live case.
-func deadPIDForRestart(t *testing.T) int {
-	t.Helper()
-	cmd := exec.Command("true")
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("start true: %v", err)
-	}
-	pid := cmd.Process.Pid
-	_ = cmd.Wait()
-	if err := syscall.Kill(pid, 0); err == nil {
-		t.Skipf("dead PID %d was recycled before the test could observe it", pid)
-	}
-	return pid
 }

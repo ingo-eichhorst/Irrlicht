@@ -162,47 +162,10 @@ type PIDManager struct {
 	// SessionDetector lock.
 	assignMu sync.Mutex
 
-	// onProcessDiedMidTurn converts a mid-turn process exit into a retained
-	// StateError session instead of a deletion (#1800). Nil disables the
-	// branch entirely.
-	onProcessDiedMidTurn func(state *session.SessionState, pid int, reason string) bool
-
 	// recorder captures lifecycle events for offline replay (optional).
 	// Set by SessionDetector.SetRecorder.
 	recorder    outbound.EventRecorder
 	recorderSeq *int64 // shared with SessionDetector for monotonic ordering
-
-	// errorRetention is how long this manager's sweeps spare an errored row
-	// after a daemon restart (#1815). Defaulted to processDeathRetention in
-	// NewPIDManager and overwritten wholesale by SetErrorRetention, exactly as
-	// SessionDetector holds its own copy — rather than as a zero-means-default
-	// sentinel, which would make SetErrorRetention(0) mean "twelve hours" here
-	// while SetProcessDeathRetention(0) means "never retain" there. Two knobs
-	// the code calls "the same twelve hours" must not disagree at any value.
-	errorRetention time.Duration
-}
-
-// SetErrorRetention overrides the window this manager's #1815 exemption measures.
-// Forwarded from SessionDetector.SetProcessDeathRetention so the two cannot drift.
-func (pm *PIDManager) SetErrorRetention(dur time.Duration) {
-	pm.errorRetention = dur
-}
-
-// retainsError reports whether state is an errored row this sweep must spare.
-//
-// ONE METHOD, CONSULTED BY EVERY REAPER PREDICATE, rather than the predicate
-// inlined per site. The distinction is not cosmetic: the first cut of #1815
-// inlined it at the three sites its author had found, and a fourth — the
-// ready-TTL branch of sweepStaleSnapshot — went on deleting a PID==0 errored
-// row after readyTTL (30 minutes by default), which made the twelve-hour promise
-// false for exactly the shape #1815's own comments describe (a headless run that
-// fails on a provider error and exits before PID discovery binds). Nothing
-// structurally connected "a place that deletes rows" to "consult the exemption",
-// so the miss was invisible. Keeping the call one short name makes adding the
-// next reaper's consultation cheap, and TestEveryReaperConsultsTheErrorExemption
-// fails if a new deleter forgets.
-func (pm *PIDManager) retainsError(state *session.SessionState) bool {
-	return retainedErrorAcrossRestart(state, time.Now(), pm.errorRetention)
 }
 
 // PIDManagerDeps bundles NewPIDManager's dependencies. PW and Broadcaster may
@@ -219,13 +182,6 @@ type PIDManagerDeps struct {
 	LiveCWDs         LiveCWDsFunc
 	OnSessionDeleted func(sessionID string)
 	OnSessionRemoved func(*session.SessionState)
-
-	// OnProcessDiedMidTurn is consulted before a process-exit teardown and
-	// reports whether the session was converted to StateError and must be
-	// kept (#1800). Optional: a nil hook restores the pre-#1800 behaviour of
-	// deleting every session whose process exits, which is what the
-	// PIDManager-only unit tests construct.
-	OnProcessDiedMidTurn func(state *session.SessionState, pid int, reason string) bool
 }
 
 // NewPIDManager creates a PIDManager with the given dependencies.
@@ -241,10 +197,7 @@ func NewPIDManager(deps PIDManagerDeps) *PIDManager {
 		liveCWDs:         deps.LiveCWDs,
 		onSessionDeleted: deps.OnSessionDeleted,
 		onSessionRemoved: deps.OnSessionRemoved,
-
-		onProcessDiedMidTurn: deps.OnProcessDiedMidTurn,
-		pendingPIDs:          make(map[string]int),
-		errorRetention:       processDeathRetention,
+		pendingPIDs:      make(map[string]int),
 	}
 }
 
@@ -468,48 +421,30 @@ func (pm *PIDManager) record(ev lifecycle.Event) {
 // the triggering edge (e.g. "pid exited (ESRCH)") and is recorded on both the
 // KindProcessExited event and the resulting deletion, so a trace explains why
 // the session went away (issue #757).
-// #1800 ADDS ONE BRANCH IN FRONT OF THAT: a process that vanished while a turn
-// was still open did not end the session, it FAILED it, and deleting the row is
-// how that failure became invisible. onProcessDiedMidTurn owns the whole
-// decision (SessionDetector.retainAsProcessDeath) and returns true when the
-// session was converted to `error` and must be kept.
-//
-// The load moved ABOVE the teardown record and the onSessionDeleted callback,
-// because both are teardown steps and neither may run on the retain path —
-// onSessionDeleted writes the deletion tombstone AND drops the session's signal
-// holds, which would discard the very hold the verdict rests on. Event order,
-// log lines and behaviour on the delete path are otherwise unchanged.
-//
-// KindProcessExited is deliberately NOT recorded for a retained session. In
-// this codebase that Kind MEANS the row went away, so recording it for a
-// session that survives would make a recording contradict the daemon it
-// recorded; lifecycle.KindProcessDiedMidTurn's doc has the consumer list and
-// what overloading it was measured to cost. The retained edge is recorded as
-// that Kind instead, by SessionDetector.retainAsProcessDeath.
-//
-// The `error` transition is NOT a substitute for it: it carries neither the pid
-// nor the exit reason (its Reason is the classifier's own "agent process died
-// mid-turn → error"), and it is an OUTPUT the replay harness grades itself
-// against, so feeding it back as a replay input would make that check circular.
+// WHATEVER STATE THE ROW WAS IN — including mid-turn `working` (#1860). #1800
+// added a branch in front of this that converted a mid-turn exit into a
+// retained `error` row instead, on the theory that a process which vanished
+// with a turn open had FAILED rather than finished. It was removed because the
+// premise does not hold: irrlicht is not the agent's parent, so no exit status
+// is available on any platform, and a segfault, an OOM kill, a `kill -9` and a
+// clean exit(0) are one observation. The verdict had to be guessed from the
+// session's SHAPE, and the guess was wrong for the two commonest endings — an
+// ESC interrupt and a denied tool prompt — because the classifier's activity
+// debounce means the exit edge routinely reads a row that has not yet seen
+// them. A wrong red is worse than no red, so the whole producer is gone; a
+// genuine mid-turn crash now disappears silently, which is the accepted cost.
 //
 // Both entry points funnel here — the kqueue/pidfd watcher via
 // SessionDetector.HandleProcessExit and the periodic sweep via
-// reapDeadOrInfraPID — so the branch must be idempotent: the sweep calls this
-// again every few seconds for as long as the row exists, and retainAsProcessDeath
-// answers "keep" for as long as the hold stands rather than re-converting.
+// reapDeadOrInfraPID.
 func (pm *PIDManager) HandleProcessExit(pid int, sessionID, reason string) {
-	state, loadErr := pm.repo.Load(sessionID)
-
-	if pm.retainedAsProcessDeath(state, loadErr, pid, reason) {
-		return
-	}
-
 	pm.record(lifecycle.Event{Kind: lifecycle.KindProcessExited, SessionID: sessionID, PID: pid, Reason: reason})
 
 	if pm.onSessionDeleted != nil {
 		pm.onSessionDeleted(sessionID)
 	}
 
+	state, loadErr := pm.repo.Load(sessionID)
 	if loadErr != nil || state == nil {
 		pm.log.LogInfo(logComponentProcessExit, sessionID,
 			fmt.Sprintf("pid %d exited but session not found (already cleaned up)", pid))
@@ -520,24 +455,6 @@ func (pm *PIDManager) HandleProcessExit(pid int, sessionID, reason string) {
 		fmt.Sprintf("pid %d exited, deleting session (was %s)", pid, state.State))
 
 	pm.deleteWithChildren(state, reason)
-}
-
-// retainedAsProcessDeath asks the detector whether this exit should convert the
-// session to StateError and keep it (#1800), and reports whether it did.
-//
-// Split out of HandleProcessExit rather than inlined as a four-term condition
-// so the teardown path above reads as one question, and so the three
-// preconditions — the row loaded, it exists, and the hook is wired — are stated
-// where they can be read. A nil hook is the pre-#1800 behaviour and is what the
-// PIDManager-only unit tests construct.
-func (pm *PIDManager) retainedAsProcessDeath(state *session.SessionState, loadErr error, pid int, reason string) bool {
-	if loadErr != nil || state == nil {
-		return false // nothing to convert; the teardown path logs the miss
-	}
-	if pm.onProcessDiedMidTurn == nil {
-		return false // pre-#1800 behaviour, which the PIDManager-only tests use
-	}
-	return pm.onProcessDiedMidTurn(state, pid, reason)
 }
 
 // CleanupZombies is a one-shot synchronous startup sweep that deletes any
@@ -660,13 +577,6 @@ func (pm *PIDManager) HasLiveProcessInCWD(adapter, cwd string) bool {
 // supply one — typically pm.newLiveLookupCache().
 func (pm *PIDManager) isStartupZombie(state *session.SessionState, liveLookup func(adapter string) map[string]struct{}) bool {
 	if state == nil {
-		return false
-	}
-	// Above every branch below, not only the dead-PID one: an errored row within
-	// its retention window is worth keeping whatever this sweep's reason for
-	// wanting it gone (#1815). See retainedErrorAcrossRestart for the full list
-	// of paths that consult it.
-	if pm.retainsError(state) {
 		return false
 	}
 	if state.PID > 0 {
@@ -1296,14 +1206,6 @@ func (pm *PIDManager) reapsIdleTopLevel(snap livenessSnapshot) bool {
 	if snap.pid > 0 && syscall.Kill(snap.pid, 0) == nil {
 		return false
 	}
-	// The FIFTH reaper an errored row can reach, and the one the first cut of
-	// #1815 missed: the `snap.pid == 0` arm below takes an errored row whose
-	// PID discovery never bound, after readyTTL (30 minutes) rather than after
-	// the twelve hours that state was promised. Consulted here for the same
-	// reason as at every other reaper predicate — see PIDManager.retainsError.
-	if pm.retainsError(snap.state) {
-		return false
-	}
 	return snap.sessionState == session.StateReady || snap.pid == 0
 }
 
@@ -1425,20 +1327,12 @@ func (pm *PIDManager) seedAlivePIDs(states []*session.SessionState) map[int]*ses
 			if pm.handleAlivePIDState(state) {
 				pm.trackNewestByPID(state, newestByPID)
 			}
-		case state.PID == 0 && !pm.retainsError(state) && isOrphanAtSeed(state):
+		case state.PID == 0 && isOrphanAtSeed(state):
 			// Orphan from exited process (PID discovery never succeeded).
 			// Child sessions (ParentSessionID set) are exempt — they run
 			// inside the parent process and never get their own PID.
 			// cwdMissing also catches zombies re-touched by `claude --resume`
 			// after the worktree was deleted (#321).
-			//
-			// THE THIRD DELETER an errored row can reach (#1815), and the least
-			// obvious: it has nothing to do with a dead PID. A headless run that
-			// fails on a provider error and exits before PID discovery ever binds
-			// leaves a row with PID==0, and an errored session's transcript is
-			// stale by definition once orphanTranscriptAge (2 minutes) has passed
-			// — so isOrphanAtSeed says yes to exactly the rows the other two
-			// exemptions just spared.
 			pm.log.LogInfo(logComponentSessionDetectorSeed, state.SessionID, "deleting orphan session")
 			pm.deleteWithChildren(state, "orphan session at seed — PID discovery never succeeded")
 		}
@@ -1471,7 +1365,13 @@ func isOrphanAtSeed(state *session.SessionState) bool {
 // Returns true when the state remains alive after processing.
 func (pm *PIDManager) handleAlivePIDState(state *session.SessionState) bool {
 	if syscall.Kill(state.PID, 0) == syscall.ESRCH {
-		pm.reapOrRetainDeadSeedPID(state)
+		// A SECOND DEAD-PID DELETER. CleanupZombies runs first and would normally
+		// have taken this row already; this path is what catches it when that sweep
+		// is skipped (demo mode) or when SeedPIDs is reached by any route that did
+		// not run it.
+		pm.log.LogInfo(logComponentSessionDetectorSeed, state.SessionID,
+			fmt.Sprintf("pid %d dead, deleting session", state.PID))
+		pm.deleteWithChildren(state, fmt.Sprintf("pid %d dead at seed (ESRCH)", state.PID))
 		return false
 	}
 	if pm.pw != nil {
@@ -1497,32 +1397,6 @@ func (pm *PIDManager) handleAlivePIDState(state *session.SessionState) bool {
 		_ = pm.repo.Save(state)
 	}
 	return true
-}
-
-// reapOrRetainDeadSeedPID handles a seeded session whose PID is already dead:
-// deleted as before, unless it is an errored row still inside its retention
-// window (#1815).
-//
-// A SECOND DEAD-PID DELETER, and it has to make the same exemption as
-// isStartupZombie or that one is worth nothing. CleanupZombies runs first and
-// would normally have taken this row already; this path is what catches it when
-// that sweep is skipped (demo mode) or when SeedPIDs is reached by any route
-// that did not run it.
-//
-// Broken out of handleAlivePIDState rather than nested inside it so the one
-// function a reader opens to answer "what deletes a seeded row?" does not
-// interleave this decision with the watcher registration and launcher/badge
-// backfill that follow it.
-func (pm *PIDManager) reapOrRetainDeadSeedPID(state *session.SessionState) {
-	if pm.retainsError(state) {
-		pm.log.LogInfo(logComponentSessionDetectorSeed, state.SessionID,
-			fmt.Sprintf("pid %d dead but session is %s within the retention window — keeping (#1815)",
-				state.PID, state.State))
-		return
-	}
-	pm.log.LogInfo(logComponentSessionDetectorSeed, state.SessionID,
-		fmt.Sprintf("pid %d dead, deleting session", state.PID))
-	pm.deleteWithChildren(state, fmt.Sprintf("pid %d dead at seed (ESRCH)", state.PID))
 }
 
 // backfillLauncher reattempts Launcher capture for pre-existing sessions that

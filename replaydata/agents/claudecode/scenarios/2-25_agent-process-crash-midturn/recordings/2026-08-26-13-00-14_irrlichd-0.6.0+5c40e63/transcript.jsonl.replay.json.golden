@@ -10,12 +10,12 @@
   "summary": {
     "total_events": 3,
     "consumed_events": 3,
-    "total_transitions": 3,
+    "total_transitions": 2,
     "first_event_time": "2026-08-26T13:01:02.044264+02:00",
-    "last_event_time": "2026-08-26T13:01:07.914332+02:00",
-    "wall_clock_session_duration": 5870068000,
+    "last_event_time": "2026-08-26T13:01:02.863471+02:00",
+    "wall_clock_session_duration": 819207000,
     "state_durations": {
-      "working": 5870068000
+      "working": 819207000
     },
     "flicker_count": 0,
     "flickers_by_category": {},
@@ -44,20 +44,6 @@
       "prev_state": "ready",
       "new_state": "working",
       "reason": "force ready→working on first activity",
-      "last_event_type": "user",
-      "has_open_tool": false,
-      "is_agent_done": false,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false
-    },
-    {
-      "index": 2,
-      "event_index": -1,
-      "virtual_time": "2026-08-26T13:01:07.914332+02:00",
-      "cause": "process_death",
-      "prev_state": "working",
-      "new_state": "error",
-      "reason": "agent process died mid-turn → error",
       "last_event_type": "user",
       "has_open_tool": false,
       "is_agent_done": false,
@@ -104,14 +90,23 @@
   "extended_check": {
     "sidecar_path": "",
     "recorded_transition_count": 2,
-    "replayed_transition_count": 2,
-    "ordered_matches": 2,
+    "replayed_transition_count": 1,
+    "ordered_matches": 1,
+    "ordered_mismatches": [
+      {
+        "index": 1,
+        "kind": "missing_in_replay",
+        "recorded": "working→error"
+      }
+    ],
     "recorded_unique_kinds": [
       "ready→working",
       "working→error"
     ],
     "replayed_unique_kinds": [
-      "ready→working",
+      "ready→working"
+    ],
+    "missing_kinds": [
       "working→error"
     ]
   }

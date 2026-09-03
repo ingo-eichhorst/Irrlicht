@@ -161,11 +161,11 @@
       <h2>State Transitions</h2>
       <p>Once a session is active, it moves between four states: <span class="badge badge-working">working</span>, <span class="badge badge-waiting">waiting</span>, <span class="badge badge-ready">ready</span>, and <span class="badge badge-error">error</span>. Each maps to one light color in the menu bar.</p>
 
-      <p><span class="badge badge-error">error</span> means the session's own machinery failed &mdash; the provider refused or failed the call, credentials were rejected, the agent process died mid-turn, or Irrlicht could not read the session. It is <em>not</em> a tool failure: a <code>grep</code> that matched nothing and a build that broke are the agent working normally.</p>
+      <p><span class="badge badge-error">error</span> means the session's own machinery failed &mdash; the provider refused or failed the call, credentials were rejected, or Irrlicht could not read the session. It is <em>not</em> a tool failure: a <code>grep</code> that matched nothing and a build that broke are the agent working normally.</p>
 
       <p>Two things clear it, on different conditions. Your next message clears it <em>immediately</em>, before the new turn's outcome is known &mdash; someone who has typed again has moved on, and holding the old failure against the new turn would pin the session red for the rest of its life. A completed turn also clears it, but only when the failure was a <em>retrying</em> one; a terminal failure is not retired by a turn boundary. Neither edge is a timeout and neither has a minimum hold.</p>
 
-      <p>A process that died mid-turn is always recorded as terminal &mdash; a process that exited will not try again &mdash; so neither of those applies to it. Its row is kept in <span class="badge badge-error">error</span> for 12 hours and then reaped, so a crash at 22:00 is still visible at 08:00.</p>
+      <p>Every producer of <span class="badge badge-error">error</span> reads a transcript. A crashed agent is <em>not</em> one of them, and that is a deliberate call: Irrlicht is not the agent&rsquo;s parent process, so it gets no exit status on any platform &mdash; a segfault, an OOM kill, a <code>kill -9</code> and a clean exit are the same observation. A version that guessed a crash from what the session looked like when the PID went away painted ordinary endings red (an ESC interrupt, a denied tool prompt), so the guess was removed. A process exit deletes the session row, whatever state the row was in &mdash; which means a genuine mid-turn crash disappears silently too. That is the accepted cost of never showing a false one.</p>
 
       <table>
         <thead>
@@ -222,11 +222,6 @@
             <td><span class="badge badge-error">error</span></td>
           </tr>
           <tr>
-            <td>Agent process died mid-turn (the session row is kept, not deleted)</td>
-            <td><span class="badge badge-working">working</span></td>
-            <td><span class="badge badge-error">error</span></td>
-          </tr>
-          <tr>
             <td>User sends the next message after a failure (clears it outright)</td>
             <td><span class="badge badge-error">error</span></td>
             <td><span class="badge badge-working">working</span></td>
@@ -241,9 +236,8 @@
 
       <p>Note that the last two rows clear the failure on different conditions:
       your next message clears it outright, while a completed turn clears it only
-      when the failure was a retrying one. A process death is terminal, so it
-      leaves <span class="badge badge-error">error</span> by neither &mdash; it
-      ages out of the list instead.</p>
+      when the failure was a retrying one. A terminal failure on a session nobody
+      returns to is cleared by neither &mdash; it ages out of the list instead.</p>
 
       <div class="diagram">                  +-----------+
   user sends  |           |  end_turn / ESC
@@ -459,12 +453,7 @@
           <tr>
             <td><code>process_exited</code></td>
             <td>Process lifecycle</td>
-            <td>A tracked agent process exits (kqueue <code>NOTE_EXIT</code>) <em>and its session row is deleted</em>. This kind means teardown: every consumer removes the session on it. An exit that caught a turn still open is recorded as <code>process_died_midturn</code> instead.</td>
-          </tr>
-          <tr>
-            <td><code>process_died_midturn</code></td>
-            <td>Process lifecycle</td>
-            <td>The other outcome of an exit: the PID went away while a turn was still open, so the session is converted to <code>error</code> and <em>kept</em> rather than deleted. Carries the PID and the exit reason. Recorded once per session, on the conversion edge.</td>
+            <td>A tracked agent process exits (kqueue <code>NOTE_EXIT</code>) <em>and its session row is deleted</em>. This kind means teardown: every consumer removes the session on it, whatever state the row was in &mdash; including a turn that was still open.</td>
           </tr>
           <tr>
             <td><code>file_event</code></td>

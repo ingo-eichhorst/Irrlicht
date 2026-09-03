@@ -894,8 +894,6 @@ type LedgerState struct {
 	//     exactly one non-ledger writer, applySessionError, fed only by
 	//     parsed.SessionError off the transcript, so it is a pure function of the
 	//     consumed lines and a full re-scan re-derives it exactly.
-	//     (session.NewProcessDeathError is NOT a counterexample: it is raised in
-	//     the detector and travels as a signal payload, never through this field.)
 	//
 	// The bump is what makes the re-scan happen at all. Without it a session that
 	// failed under a v0.6.0 daemon — whose parser.go has no SessionError anywhere,

@@ -98,23 +98,6 @@ func (d *SessionDetector) forgetSessionScopedState(sessionID string) {
 	d.idleMu.Lock()
 	delete(d.idleProjectRetryAttempts, sessionID)
 	d.idleMu.Unlock()
-
-	// The #1800 process-death verdict registry — added here by #1815, which is
-	// where this function's own doc said the previous map belonged and where it
-	// was missed anyway.
-	//
-	// A STALE ENTRY IS NOT INERT, it is actively wrong. retainAsProcessDeath
-	// keys on presence first: an expired entry takes the EXPIRY branch and
-	// returns false, so the first mid-turn death under a recycled session id
-	// (`claude --resume <uuid>` after the old row aged out) is DELETED instead
-	// of converted to `error` — precisely the signal that map exists to
-	// preserve. It does not self-heal in time either: forgetProcessDeathVerdict
-	// runs only on that same branch, so the entry is dropped only after it has
-	// already eaten one death.
-	//
-	// #1815 made it materially likelier by registering an entry at every seed
-	// for every errored row, where before only a live mid-turn death made one.
-	d.forgetProcessDeathVerdict(sessionID)
 }
 
 // broadcast sends a push notification if a broadcaster is configured. For

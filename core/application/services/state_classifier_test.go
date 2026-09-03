@@ -851,9 +851,9 @@ func TestClassify_SessionErrorRoutesToError(t *testing.T) {
 
 // TestClassify_SessionErrorIsAttributedToItsRule pins the provenance a
 // recorded trace needs: the verdict must name the session_error rule and its
-// tier, not merely land on the right state. Two rules could produce StateError
-// in future (#1800 adds a process-death producer at TierProcess), and a
-// recording has to say which one decided.
+// tier, not merely land on the right state. More than one rule could produce
+// StateError (#1800 briefly added a process-death producer at TierProcess; it
+// was removed by #1860), and a recording has to say which one decided.
 func TestClassify_SessionErrorIsAttributedToItsRule(t *testing.T) {
 	v := ClassifyStateTiered(session.StateWorking, &session.SessionMetrics{
 		LastEventType: "turn_done",
@@ -875,56 +875,40 @@ func TestClassify_SessionErrorIsAttributedToItsRule(t *testing.T) {
 	}
 }
 
-// TestClassify_ProcessDeathRoutesToError exercises #1800's rule through the
-// ubiquitous entry point rather than through the tiered one, and covers the
-// state transitions either side of it.
+// TestClassify_ErroredSessionIsIdempotentAndClears covers the two edges either
+// side of the `error` rung that the table above does not: re-classifying a row
+// that is ALREADY red must emit no transition, and a row that reaches a real
+// turn boundary must leave `error`.
 //
 // Added because CodeScene notes that state_classifier.go is usually changed
 // together with THIS file, and #1798's review found a real defect
 // (`error → ready on turn_done` was unreachable) through exactly that hint.
-func TestClassify_ProcessDeathRoutesToError(t *testing.T) {
-	processDead := func() *session.SessionMetrics {
+//
+// It used to be spelled against #1800's process-death producer; #1860 removed
+// that producer, and both edges are properties of the `error` rung rather than
+// of any one producer, so it is re-pointed at the transcript-derived one that
+// remains.
+func TestClassify_ErroredSessionIsIdempotentAndClears(t *testing.T) {
+	failed := func() *session.SessionMetrics {
 		return &session.SessionMetrics{
 			LastEventType: "assistant",
-			ProcessDeath:  true,
 			SessionError: &session.SessionError{
 				Phase: session.ErrorPhaseTerminal,
-				Class: session.ErrorClassProcessDeath,
+				Class: "provider",
 			},
 		}
 	}
 
-	t.Run("working to error", func(t *testing.T) {
-		got, reason := ClassifyState(session.StateWorking, processDead())
-		if got != session.StateError {
-			t.Errorf("state = %q, want %q", got, session.StateError)
-		}
-		if reason == "" {
-			t.Error("a real transition must carry a reason")
-		}
-	})
-
 	// Already red: the rule owns the outcome, so no lower rule may run, and no
 	// transition is emitted. An empty reason is the signal for that, and it is
-	// what stops a dead session re-broadcasting on every poll — which for a
-	// process-death row is every poll for as long as it is retained.
+	// what stops a failed session re-broadcasting on every poll.
 	t.Run("error stays error without re-emitting", func(t *testing.T) {
-		got, reason := ClassifyState(session.StateError, processDead())
+		got, reason := ClassifyState(session.StateError, failed())
 		if got != session.StateError {
 			t.Errorf("state = %q, want %q", got, session.StateError)
 		}
 		if reason != "" {
 			t.Errorf("a no-op re-classification must emit no transition, got %q", reason)
-		}
-	})
-
-	// The flag alone is not enough: SessionError carries what the UI renders,
-	// and a red session with nothing to show would be worse than none.
-	t.Run("flag without detail does not route to error", func(t *testing.T) {
-		m := processDead()
-		m.SessionError = nil
-		if got, _ := ClassifyState(session.StateWorking, m); got == session.StateError {
-			t.Error("ProcessDeath without a SessionError must not paint the session red")
 		}
 	})
 

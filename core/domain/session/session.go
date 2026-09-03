@@ -6,7 +6,6 @@
 package session
 
 import (
-	"fmt"
 	"slices"
 	"time"
 )
@@ -130,107 +129,6 @@ func (s *SessionState) HasWorkInFlight() bool {
 		return false
 	}
 	return s.Metrics.SessionError.IsRetrying()
-}
-
-// DiedMidTurn reports whether s was in the middle of a turn when its process
-// went away. It is the whole of #1800's "was this a crash or an ending"
-// decision, and it lives here — on the domain value it interrogates — because
-// it has two consumers that must never be allowed to answer it differently:
-// the live daemon (services.SessionDetector.retainAsProcessDeath, which turns
-// a true into a retained `error` row) and the offline replay harness
-// (tools/onboarding-factory/cmd/replay, which reconstructs the same decision
-// from a recording). A second copy in the harness is exactly the drift #1288
-// removed for the signal-hold mechanism, and #1817 is what it looks like when
-// the two disagree: the sidecar replayed every process exit as `ready`, so the
-// committed corpus asserted that a crashed agent comes back green.
-//
-// EVERY CLAUSE FAILS CLOSED — an unknown answer means "not a crash", so the
-// session is deleted exactly as it was before #1800. That direction is chosen
-// deliberately: a missed crash costs the user a signal they never had, while a
-// false crash puts a red session in front of them that nothing they do will
-// explain.
-//
-// WHAT IRRLICHT CANNOT SEE, stated plainly because it bounds what this
-// predicate can ever mean: there is no exit status available. irrlicht is not
-// the agent's parent, so neither kqueue's NOTE_EXIT nor Linux's pidfd poll
-// yields a wait status, and the liveness sweep's probe is syscall.Kill(pid, 0)
-// — a liveness question with a yes/no answer. A segfault, an OOM kill, a
-// `kill -9` typed by the user and a clean exit(1) are therefore the SAME
-// observation. The clauses below are the only discriminators that exist, and
-// all of them are about what the SESSION looked like, never about how the
-// process ended.
-//
-// The residual false positive that leaves: a user who deliberately kills an
-// agent mid-turn gets `error` rather than the row disappearing. That is a
-// deliberate call — the turn genuinely did not finish, and "this session
-// stopped without completing" is a true statement about it either way — but it
-// IS a behaviour change and is named here rather than discovered later.
-//
-// FIELDS READ, stated because one consumer does not have a row to hand: the
-// replay harness assembles a SessionState purely to ask this question, so a
-// clause added here that reads a fourth field would silently get that field's
-// zero value there. Today: State, ParentSessionID, and Metrics'
-// IsAgentDone/LastWasUserInterrupt/LastWasToolDenial. Widen this list with the
-// clauses.
-func (s *SessionState) DiedMidTurn() bool {
-	// A nil row is "I could not load it", which is an unknown answer and so
-	// fails closed like every clause below.
-	if s == nil {
-		return false
-	}
-
-	// Only a session that was actively working. A session already in ready or
-	// waiting had nothing in flight to lose, and error means this already ran.
-	if s.State != StateWorking {
-		return false
-	}
-
-	// Children are the parent's problem. A subagent's process IS the parent's
-	// process, so a subagent row never has a PID of its own to exit, and
-	// reapStaleChild already owns their teardown on a rule of its own.
-	if s.ParentSessionID != "" {
-		return false
-	}
-
-	m := s.Metrics
-	if m == nil {
-		return false
-	}
-
-	// The turn had actually ended and the daemon simply had not caught up —
-	// an agent that finishes and immediately exits is the ordinary shape of
-	// `claude -p`, not a crash. Classification lags the transcript by up to a
-	// poll interval, so `working` alone is not enough.
-	if m.IsAgentDone() {
-		return false
-	}
-
-	// The USER stopped it. An ESC or a denied tool leaves a marker in the
-	// transcript and routes to ready through the user_interrupt rule; catching
-	// the window before that pass runs is what this clause is for, and it is
-	// what keeps the 2-20_user-esc-interrupt scenario's arc intact.
-	if m.LastWasUserInterrupt || m.LastWasToolDenial {
-		return false
-	}
-
-	return true
-}
-
-// NewProcessDeathError builds the SessionError that a mid-turn process death
-// produces. It lives beside DiedMidTurn, and for the same reason: the live
-// daemon and the offline replay harness both raise this error, and a verdict
-// whose PREDICATE is shared while its PAYLOAD is copied has simply moved the
-// drift one field along. The message wording is part of the verdict.
-//
-// Terminal without qualification: a process that exited is not going to try
-// again. This is the one producer in the system for which ErrorPhaseRetrying is
-// impossible rather than merely unobserved.
-func NewProcessDeathError(pid int, reason string) *SessionError {
-	return &SessionError{
-		Phase:   ErrorPhaseTerminal,
-		Class:   ErrorClassProcessDeath,
-		Message: fmt.Sprintf("agent process (pid %d) exited mid-turn — %s", pid, reason),
-	}
 }
 
 // Yield state constants — whether a finished session's work survived in the
