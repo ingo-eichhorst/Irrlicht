@@ -76,16 +76,29 @@ func wantedCellsByAgent(repoRoot string, shards []shard.Shard) map[string]map[st
 // Which cells take this path is a live figure and is deliberately not restated
 // here — a count typed once drifts away from what it measured (this comment
 // previously named two, from a trait pair since retired in #1846, while the
-// corpus had long carried many more). Print the current set with:
+// corpus had long carried many more). The set is printed by this test itself,
+// which is where the derived cells are already in hand:
 //
 //	go test ./tools/onboarding-factory/internal/matrix/ \
-//	  -run TestTraitCoverageCensus -v -count=1
+//	  -run TestShardCellEquivalence -v -count=1
 func assertApplicableCellsMatchShard(t *testing.T, m *Matrix, wantByAgent map[string]map[string]bool) {
 	t.Helper()
+	// The census the comment above points at. Logged rather than asserted: it
+	// is a live figure, so pinning it here would be the very drift that
+	// comment describes.
+	var derivedCensus []string
+	defer func() {
+		sort.Strings(derivedCensus)
+		t.Logf("derived (model-synthesized, no directory) cells: %d", len(derivedCensus))
+		for _, line := range derivedCensus {
+			t.Logf("  %s", line)
+		}
+	}()
 	for _, agent := range m.Agents() {
 		got := map[string]bool{}
 		for _, cs := range m.ApplicableCells(agent) {
 			if cs.Derived {
+				derivedCensus = append(derivedCensus, agent+"/"+cs.CoverageID+" -> "+string(cs.DisplayState))
 				// Admissible only if the model really does declare it dead.
 				want, ok := m.Capabilities().StructuralState(agent, cs.CoverageID)
 				if !ok {

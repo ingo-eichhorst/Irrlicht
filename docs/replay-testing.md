@@ -222,8 +222,8 @@ the `replaydata/agents/adapters.json` maturity + capability model.
   the traits it lacks. `of validate` gates three things over it, and all three
   are scoped to a catalog that actually carries the core set, so a partial
   fixture tree is unaffected:
-  - **The core twelve.** Only 12 of the 50 scenarios gate a promotion; the
-    other 38 are optional and block nothing. The set, and one line of
+  - **The core twelve.** Only 12 of the 48 scenarios gate a promotion; the
+    other 36 are optional and block nothing. The set, and one line of
     justification per scenario, is in `internal/matrix/vocabulary.go` — in code
     rather than in data, so weakening it is a reviewable diff. `alpha` requires
     four state scenarios reachable from hooks alone, `beta` all nine
@@ -267,8 +267,10 @@ architect-editor-pair cell for **aider** — the one adapter whose signature
 feature *is* architect/editor mode — out of a `plan_mode` value that says only
 that aider's `/ask` gate is not persisted. A false claim, in a cell nobody had
 assessed. Splitting the trait cost the model its second predicting trait and
-was worth it. `architect_editor` is still in `Traits` today; its comment there
-carries the short form.
+was worth it. `architect_editor` is still in `Traits` today, and its comment
+there is the original write-up of this case, kept in place because the trait it
+explains is still there to explain; the paragraph above restates it so both
+cases can be read side by side.
 
 **Case 2 — `backchannel_control` / `backchannel_observe`, withdrawn for making
 the validator unsatisfiable.** A single `backchannel` trait covering both

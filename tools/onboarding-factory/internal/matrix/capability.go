@@ -12,9 +12,15 @@ import (
 )
 
 // This file is the capability model (#1369): the machine-readable answer to
-// "why is this cell dead?", replacing 122 hand-written per-cell assessments
-// with 124 one-line declarations in a single reviewable file (122 of them
-// re-encoding a cell that exists, 2 declaring a pair that had no cell at all).
+// "why is this cell dead?", replacing hand-written per-cell assessments with
+// one-line declarations in a single reviewable file. At #1369 that measured
+// 122 assessments becoming 124 declarations, only 2 of which had no cell
+// directory at all — a reading of that moment, not a live figure, and both
+// halves have moved a long way since. Print the current directory-less set
+// (never restate it here) with:
+//
+//	go test ./tools/onboarding-factory/internal/matrix/ \
+//	  -run TestShardCellEquivalence -v -count=1
 //
 // WHAT IT IS NOT. It is not a predictor at all, and the measurement is worth
 // stating plainly because the ticket that asked for this model assumed
@@ -38,11 +44,12 @@ import (
 //     longer needs to exist on disk: `Load` synthesizes it, so a new adapter
 //     ships its recorded cells plus `of agent update --capability t=absent`
 //     per missing feature, instead of a directory with a metadata.json and a
-//     written assessment body per dead cell. Note the tense — 122 of the 124
+//     written assessment body per dead cell. Note the tense — most of the
 //     declarations re-encode a cell that still exists on disk, and nothing
 //     schedules deleting those. So the corpus now carries two statements of
-//     the same fact, kept honest by the validator; the saving is prospective,
-//     and only the 2 already-directory-less pairs realise it today.
+//     the same fact, kept honest by the validator; the saving is realised only
+//     by the pairs that already have no directory, and the census command
+//     above is what prints which those are.
 //  2. Drift. Once the model exists, the stored axes and the declared
 //     capability are two statements that can contradict each other, and
 //     `of validate` fails when they do. Before this file there was no second
