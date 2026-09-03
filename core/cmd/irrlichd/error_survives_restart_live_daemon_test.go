@@ -166,10 +166,13 @@ func holdSessionState(t *testing.T, addr, sessionID, want string, d time.Duratio
 // survived and the verdict did not.
 func liveSessionState(t *testing.T, addr, sessionID string) string {
 	t.Helper()
-	// Its own client rather than http.DefaultClient: smokeDaemon.shutdown calls
-	// http.DefaultClient.CloseIdleConnections(), which is process-global, so
-	// under t.Parallel one subtest's teardown would drop the others' idle
-	// keep-alives. Harmless (they redial) but a coupling worth not having.
+	// Its own client rather than http.DefaultClient, for the timeout: this is
+	// polled in a loop against a daemon that is being started and stopped, and
+	// DefaultClient has no deadline at all, so a single hung dial would take the
+	// whole test's budget instead of one poll's. (It used to be justified by
+	// t.Parallel isolation, which was never true — Transport is nil, so this
+	// shares http.DefaultTransport's idle pool with DefaultClient — and #1860
+	// removed the subtests that made the claim testable at all.)
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Get("http://" + addr + "/api/v1/sessions")
 	if err != nil {
@@ -257,7 +260,9 @@ func writeTranscript(t *testing.T, dir, sessionID, fixture string) string {
 }
 
 // liveProcessPIDForRestart returns the PID of a child that stays alive for the
-// whole test — the "agent still running" half of #1815's split.
+// whole test. The live PID is load-bearing, not scenery: it is what makes this
+// the ALIVE case, where the row survives every sweep on its own and only the
+// verdict was ever at risk.
 func liveProcessPIDForRestart(t *testing.T) int {
 	t.Helper()
 	cmd := exec.Command("sleep", "120")

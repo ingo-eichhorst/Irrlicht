@@ -12,6 +12,10 @@ beyond), see the [Roadmap](https://irrlicht.io/docs/roadmap.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **A crashed agent's session row disappears again instead of turning red.** 0.6.1 shipped a fourth state, `error`, and one of its producers guessed that a process which vanished mid-turn had *crashed*. Irrlicht is not the agent's parent, so it gets no exit status on any platform — a segfault, an OOM kill, a `kill -9` and a clean exit are the same observation — and the guess had to be made from what the session looked like. It was wrong for the two commonest endings, an ESC interrupt and a denied tool prompt, which left a red row standing for twelve hours over a session the user had deliberately stopped. A process exit now deletes the row again, whatever state it was in. **What this gives up:** a genuine mid-turn crash now disappears silently too — the accepted cost of never showing a false one. **What is unchanged:** a session whose process is still running and whose transcript reports a failure still reads red, still shows the provider's own message, and still survives a daemon restart. (#1860, withdrawing #1800/#1815/#1817)
+
 ## [0.6.1] — 2026-08-26
 
 ### A session that fails now reads red — `error` is the fourth session state, and it reaches the menu bar, the dashboard and the wire

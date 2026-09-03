@@ -93,15 +93,15 @@ func TestStateRules_LadderIsTierConsistent(t *testing.T) {
 	// this, deleting the error fixtures — or a future guard that makes them
 	// unreachable — would leave this test passing while the one rule whose
 	// placement is genuinely contentious went unchecked. It is asserted for
-	// this rule specifically rather than for all nine because the other eight
-	// predate the corpus and are covered by named tests of their own.
+	// this rule specifically; the others predate the corpus and are covered by
+	// named tests of their own. Deliberately no count — the population moves
+	// (#1860 removed a rule) and a hand-typed one goes stale silently.
 	if !won[string(session.SignalSessionError)] {
 		t.Errorf("no fixture reached the %q rule — the ladder-consistency sweep above therefore\n"+
 			"proved nothing about it. Restore the session-error fixtures in\n"+
 			"reachableMetricFixtures, or fix whatever now shadows the rule.",
 			session.SignalSessionError)
 	}
-
 }
 
 // assertNoLowerRuleOutranks is the invariant itself: of the rules BELOW the

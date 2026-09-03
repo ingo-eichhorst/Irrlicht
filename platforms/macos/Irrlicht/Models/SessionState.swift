@@ -793,8 +793,12 @@ struct SessionError: Codable, Equatable {
     /// NOT collapsed into `.terminal`.
     let phase: String?
     /// The adapter's normalized failure class: "rate_limit", "quota", "auth",
-    /// "context_limit", "provider", "query", "process_death". Free-form,
-    /// because the vocabularies genuinely differ per agent.
+    /// "context_limit", "provider", "query". Free-form, because the
+    /// vocabularies genuinely differ per agent.
+    ///
+    /// "process_death" is NOT in that list any more — #1860 removed the daemon
+    /// producer that emitted it — but `classLabel` below still knows the string
+    /// on purpose. See its comment.
     let `class`: String?
     /// The agent's own failure text, verbatim. This is what the user reads.
     let message: String?
@@ -867,6 +871,12 @@ struct SessionError: Codable, Equatable {
         case "auth":          return "Authentication was rejected"
         case "context_limit": return "Context window limit reached"
         case "provider":      return "The provider failed the request"
+        // Kept after #1860 removed the producer, deliberately: a row persisted
+        // by a <=0.6.1 daemon can still carry this class, and a staged upgrade
+        // (new app, old daemon) can still send it. Falling through to `default`
+        // would render the raw string "process_death" at the user, which is
+        // strictly worse than the sentence. Delete it once no supported daemon
+        // can emit it.
         case "process_death": return "The agent process exited mid-turn"
         // Unrecognized classes are shown verbatim rather than dropped: a class
         // this build has not heard of is still the most specific thing anyone
