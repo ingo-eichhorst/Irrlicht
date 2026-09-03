@@ -182,15 +182,15 @@ func TestNarrowedProjectionsSurviveABrokenDeclarationOnAnotherKey(t *testing.T) 
 
 // TestManagedUserFilesIgnoresPermissionsThatDeclareNoFile is a lock: only a
 // permission that actually declares a file contributes one. A transcripts
-// permission (read-only) and the shared control permission (modify-kind, but
-// writes nothing to disk) must not be swept in — the recorder would back up a
-// file nobody writes, and uninstall would report on it.
+// permission (read-only) and a modify-kind permission that writes nothing to
+// disk must not be swept in — the recorder would back up a file nobody
+// writes, and uninstall would report on it.
 func TestManagedUserFilesIgnoresPermissionsThatDeclareNoFile(t *testing.T) {
 	a := agent.Agent{
 		Identity: agent.Identity{Name: "alpha"},
 		Permissions: []agent.Permission{
 			{Key: "transcripts", Kind: permission.KindObserve},
-			agent.ControlPermission(),
+			{Key: "writes-nothing", Kind: permission.KindModify},
 		},
 	}
 	got, err := ManagedUserFiles([]agent.Agent{a})

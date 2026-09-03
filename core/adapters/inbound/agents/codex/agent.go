@@ -46,10 +46,8 @@ func Agent() agent.Agent {
 			Match:         agent.ExactName{Name: ProcessName},
 			PIDForSession: DiscoverPID,
 		},
-		Source:  Source(),
-		Control: agent.Control{SupportsInput: true, Interrupt: agent.InterruptCtrlC},
+		Source: Source(),
 		Permissions: []agent.Permission{
-			agent.ControlPermission(),
 			{
 				Key:             PermissionKeyTranscripts,
 				Kind:            permission.KindObserve,

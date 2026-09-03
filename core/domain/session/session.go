@@ -198,9 +198,9 @@ func (s *subagentSummary) Equal(o *subagentSummary) bool {
 // $KITTY_*, $VSCODE_PID — describes whatever environment the *server* was
 // started in, frozen at that moment and handed to every pane it will ever
 // spawn. Capturing them verbatim sent click-to-focus to an unrelated
-// application, and, for a server started inside tmux, made the backchannel
-// resolve to tmux and type into a foreign pane in a different window. This is
-// the rationale the capture and control paths refer back to (#1348).
+// application, and, for a server started inside tmux, made the pane address
+// resolve to a foreign pane in a different window. This is the rationale the
+// capture paths refer back to (#1348).
 //
 // The Tmux* fields are the same case, established by live measurement on tmux
 // 3.6a (#1486): tmux's server daemonizes at first use, is reparented to PID 1,
@@ -411,8 +411,7 @@ func (l *Launcher) AdoptHostIdentity(from *Launcher) bool {
 // all. Until then the only pane that adopted anything was a herdr one, so the
 // put-back could name Herdr* unconditionally. A tmux pane adopts too now, and
 // its address has to survive the copy for exactly the same reason:
-// TmuxPane/TmuxSocket are what the backchannel routes on
-// (control.resolveBackend) and what the macOS TmuxActivator selects with, and
+// TmuxPane/TmuxSocket are what the macOS TmuxActivator selects with, and
 // the attached client carries neither — it is a GUI terminal, not a pane.
 // Leaving them behind would resolve the window and lose the pane inside it,
 // which is a worse outcome than the nil it replaced: a click would raise the

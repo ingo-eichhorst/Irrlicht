@@ -31,10 +31,9 @@ func Source() agent.Source {
 // prefers Junie's own ~/.junie/processes/ sidecars over the CWD scan (pid.go).
 //
 // Junie exposes no hook system, so the adapter is observe-only (the aider
-// pattern): a single transcripts permission, no hooks, no Control — turn-end
+// pattern): a single transcripts permission and no hooks — turn-end
 // detection comes from the TaskState events Junie writes explicitly, so no
-// idle-flush heuristic or hook is needed. Backchannel control (forwarding
-// input to Junie's TUI) is deferred until live-verified.
+// idle-flush heuristic or hook is needed.
 func Agent() agent.Agent {
 	return agent.Agent{
 		Identity: agent.Identity{

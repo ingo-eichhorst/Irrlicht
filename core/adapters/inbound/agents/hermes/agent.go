@@ -16,12 +16,6 @@ const PermissionKeyStore = "store"
 // shared SQLite store. That makes this the second adapter on that variant
 // after opencode, so buildAgentWatchers dispatches on the adapter name to
 // pick a store watcher (see core/cmd/irrlichd/wiring.go).
-//
-// Control is deliberately left at its zero value: Hermes has an interactive
-// TUI that would plausibly accept injected keystrokes, but nothing in this
-// PR exercised that, and declaring SupportsInput obliges the adapter to
-// carry the shared control consent gate for a capability never tested.
-// Wiring it is a follow-up, not an omission.
 func Agent() agent.Agent {
 	return agent.Agent{
 		Identity: agent.Identity{

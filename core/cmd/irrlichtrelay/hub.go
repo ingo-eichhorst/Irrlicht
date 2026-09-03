@@ -598,45 +598,13 @@ func (h *hub) clientReadPump(cc *clientConn) {
 		cc.conn.SetReadDeadline(time.Now().Add(pongTimeout))
 		return nil
 	})
+	// Read-and-discard: the relay accepts no inbound frame from a client
+	// (#1875 retired the one that existed), so the read exists only to drive
+	// the pong deadline and to notice the socket closing.
 	for {
-		_, data, err := cc.conn.ReadMessage()
-		if err != nil {
+		if _, _, err := cc.conn.ReadMessage(); err != nil {
 			return
 		}
-		if relay.FrameType(data) == relay.MsgControl {
-			h.routeControl(cc, data)
-		}
-	}
-}
-
-// routeControl forwards an upstream control frame from a client to the daemon
-// it addresses (issue #724). The target daemon is looked up ONLY within the
-// client's own token-derived workspace, so a token for workspace A can never
-// drive a daemon in workspace B. A revoked client, an unknown target, or a
-// daemon with no live write queue is silently dropped (best-effort, like
-// fan-out). The frame is relayed verbatim — the daemon re-gates it locally.
-func (h *hub) routeControl(cc *clientConn, data []byte) {
-	if h.revoked(cc.tokenID) {
-		return
-	}
-	var ctrl relay.Control
-	if json.Unmarshal(data, &ctrl) != nil || ctrl.TargetDaemon == "" {
-		return
-	}
-	h.mu.Lock()
-	var send chan []byte
-	if ws := h.workspaces[cc.workspace]; ws != nil {
-		if d := ws.daemons[ctrl.TargetDaemon]; d != nil {
-			send = d.send
-		}
-	}
-	h.mu.Unlock()
-	if send == nil {
-		return
-	}
-	select {
-	case send <- data:
-	default: // daemon's queue full — drop rather than block the read pump
 	}
 }
 

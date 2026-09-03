@@ -491,9 +491,8 @@ func TestLauncherFromEnv_TmuxSuppressesInheritedIdentity(t *testing.T) {
 
 // TestLauncherFromEnv_TmuxCapture covers the other half: the pane's own
 // address, which is the only thing in that env that actually describes it and
-// which the backchannel routes on (resolveBackend reaches backendTmux from
-// these two fields, before it ever looks at TermProgram — and since #1593 it
-// needs BOTH of them). Keeping them is what makes the suppression above a
+// which the macOS TmuxActivator selects on — and since #1593 it needs BOTH of
+// them. Keeping them is what makes the suppression above a
 // click-to-focus change and not a control regression.
 func TestLauncherFromEnv_TmuxCapture(t *testing.T) {
 	l := launcherFromEnv(tmuxPaneEnv)
@@ -624,7 +623,7 @@ func TestDropInheritedTmuxPane(t *testing.T) {
 		// Nothing claimed a host: launcherFromEnv suppressed the inherited
 		// identity and the ancestry walk terminated at the reparented tmux
 		// server having found nothing. That is a genuine pane, and dropping its
-		// address would cost it click-to-focus and the backchannel.
+		// address would cost it click-to-focus.
 		{"genuine pane", session.Launcher{TmuxPane: pane, TmuxSocket: socket}, true},
 		// The same pane with $TMUX cleared (`unset TMUX`, the documented way to
 		// nest tmux). Still this process's own address, so still kept — which

@@ -48,13 +48,12 @@ const (
 	// assertable observable in onboarding fixtures.
 	KindTaskDelta Kind = "task_delta"
 
-	// Terminal-backend read-back (issue #732, Phase 3 of #724). KindUIDetected
-	// records a transcript-invisible UI state read off the rendered terminal
-	// (today: the trust/permission dialog) — the read counterpart to the
-	// backchannel write path. KindTerminalFrame is reserved for raw frame
-	// capture (pipe-pane + a screen-buffer parser) and is not emitted yet.
-	KindUIDetected    Kind = "ui_detected"
-	KindTerminalFrame Kind = "terminal_frame"
+	// Terminal-backend read-back (issue #732). KindUIDetected records a
+	// transcript-invisible UI state read off the rendered terminal (the
+	// trust/permission dialog). No daemon path emits it since #1875 retired
+	// terminal read-back; the kind is retained because frozen recordings
+	// under replaydata/ carry it and must stay readable.
+	KindUIDetected Kind = "ui_detected"
 
 	// Cache-creation regression (issue #374). Emitted once per
 	// (project, regressing_version) pair within a daemon process lifetime when

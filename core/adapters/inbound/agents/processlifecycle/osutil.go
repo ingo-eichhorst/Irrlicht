@@ -361,9 +361,7 @@ func tmuxPaneAwaitsItsClient(l *session.Launcher) bool {
 // pane address belonging to a different process in a different window. #1499
 // already keeps such a session's own host identity — its suppression keys on
 // tmux's own TERM_PROGRAM marker — and copied the pane address alongside it.
-// control.resolveBackend routed to the tmux backend on that address, so the
-// backchannel ran `tmux -S <inherited socket> send-keys -t %17 -l -- <text>`
-// into a stranger's pane, and interrupt and capture addressed the same one
+// Everything that routes on that address then addressed a stranger's pane
 // (#1582). That is the failure #1348 removed for herdr, reached through the
 // one field #1499 deliberately left populated for a descendant. (resolveBackend
 // has since grown a socket requirement of its own, #1593 — an independent rule
@@ -391,9 +389,9 @@ func tmuxPaneAwaitsItsClient(l *session.Launcher) bool {
 // descendant it finds the host app.
 //
 // It fails towards DROPPING. An address wrongly dropped costs click-to-focus
-// and the backchannel for that one session, which keeps its own host and stays
-// visible; an address wrongly kept types the user's text into a terminal they
-// were not looking at, and no amount of it being rare makes that the better
+// for that one session, which keeps its own host and stays visible; an address
+// wrongly kept raises a terminal the user was not looking at, and no amount of
+// it being rare makes that the better
 // error. The residual is a descendant whose host cannot be resolved at all (no
 // $TERM_PROGRAM of its own, no `.app` in its ancestry): it is indistinguishable
 // from a genuine pane here and keeps the address, which is the same residual

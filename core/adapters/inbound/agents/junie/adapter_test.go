@@ -67,9 +67,6 @@ func TestAgent_ObserveOnly(t *testing.T) {
 	if p.Apply != nil || p.Remove != nil || p.Writes != nil {
 		t.Error("observe permission must carry no Apply/Remove/Writes effects")
 	}
-	if a.Control.SupportsInput {
-		t.Error("Control is deliberately undeclared in v1 (deferred until live-verified)")
-	}
 }
 
 func TestSessionIDFromPath(t *testing.T) {

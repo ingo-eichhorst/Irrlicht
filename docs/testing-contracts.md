@@ -21,10 +21,9 @@ below.
   before a read/write, or by wiring a permission's `Apply`/`Remove` closures.
   New adapters should wire it into their test suite for every `modify`-kind
   permission they declare — see `claudecode`'s hooks/statusline (a live
-  per-request `ConsentGate`), `claudecode`'s instructions and `processlifecycle`'s
-  kitty remote-control (install-type `Apply`/`Remove`), and `InputService`'s
-  backchannel forwarding (the shared "control" gate) for the three call-site
-  shapes it covers.
+  per-request `ConsentGate`), and `claudecode`'s instructions and
+  `processlifecycle`'s kitty remote-control (install-type `Apply`/`Remove`),
+  for the call-site shapes it covers.
   For a **hook receiver** the key set is no longer the wiring's to name. Since
   #1488 a receiver declares its permissions to `hookjson.NewHandler` (via
   `hookjson.RequireConsent`, whose first key is positional — a keyless receiver
@@ -586,8 +585,8 @@ below.
   the adapter author picked and which a file-writing permission could be given
   wrongly; a permission whose `Apply` writes nothing is named in
   `applyWritesNoUserFile` with its reason rather than falling out silently.
-  `agent.ControlPermission` needs no entry: its `Apply` is nil, which is the
-  shape to prefer.
+  A permission whose `Apply` is nil needs no entry: it falls outside by
+  construction, which is the shape to prefer.
   That tripwire asks whether a declaration EXISTS, and #1741 is the other half
   — whether it **covers every file `Apply` actually writes**. Two defects came
   through that gap, the second after the first was supposedly the lesson:

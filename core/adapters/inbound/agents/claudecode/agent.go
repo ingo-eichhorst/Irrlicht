@@ -3,7 +3,6 @@ package claudecode
 import (
 	"irrlicht/core/adapters/inbound/agents/hookjson"
 	"irrlicht/core/domain/agent"
-	"irrlicht/core/domain/backchannel"
 	"irrlicht/core/domain/permission"
 	"irrlicht/core/pkg/tailer"
 )
@@ -57,13 +56,6 @@ func Agent() agent.Agent {
 			ExcludeArgv:   IsInfraArgv,
 		},
 		Source: Source(),
-		Control: agent.Control{
-			SupportsInput: true,
-			Interrupt:     agent.InterruptCtrlC,
-			Presets: map[string]string{
-				backchannel.PresetCompact: "/compact",
-			},
-		},
 		Permissions: []agent.Permission{
 			{
 				Key:             PermissionKeyTranscripts,
@@ -177,7 +169,6 @@ func Agent() agent.Agent {
 					Uninstall: UninstallInstructionBlocks,
 				},
 			},
-			agent.ControlPermission(),
 		},
 	}
 }

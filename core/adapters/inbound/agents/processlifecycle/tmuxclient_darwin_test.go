@@ -535,9 +535,8 @@ func TestReadLauncherEnv_Tmux_UnreachableServerKeepsNothingAndKnowsNothing(t *te
 //
 // Since #1582 it carries a third, which is the one that was seen RED: the
 // inherited address is not recorded either. Until then the launcher kept it
-// beside the correct host, control.resolveBackend picked the tmux backend from
-// that field alone, and the backchannel typed into a pane in a window the user
-// was not looking at.
+// beside the correct host, and everything that routed on that field alone
+// addressed a pane in a window the user was not looking at.
 //
 // That third claim is why the hostKnown assertion below reads the other way
 // round from #1501's. The tri-state answers "was the host of the pane this
