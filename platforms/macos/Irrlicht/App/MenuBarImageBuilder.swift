@@ -25,44 +25,24 @@ enum MenuBarImageBuilder {
         return .off
     }
 
-    /// Whether any session that will actually be DRAWN as a dot is errored.
-    ///
-    /// The filter has to match what `MenuBarStatusRenderer` draws, or the icon
-    /// widens to point at a red circle that is not in it. Subagents are the
-    /// trap: they live in `sessionManager.sessions` but
-    /// `MenuBarStatusRenderer` excludes them from every render path (its
-    /// `topLevelSessions` filter), so a failed CHILD would otherwise widen
-    /// the icon while adding no red dot anywhere.
-    ///
-    /// Still an over-approximation in one known case: a group past
-    /// `maxVisibleGroups` collapses into the grey overflow ellipsis, so an
-    /// error only in the sixth project widens the icon without adding a dot.
-    /// Narrowing that would mean re-deriving the whole grouping here, and the
-    /// cost is one ellipsis rather than a missed error.
-    ///
-    /// Pure, so it is testable without a SessionManager — the same reason
-    /// `iconState` and `shouldShowDotsInUsageStyle` are.
-    static func hasErroredDot(in sessions: [SessionState]) -> Bool {
-        sessions.contains { $0.parentSessionId == nil && $0.state == .error }
-    }
-
     /// Whether `.usage` style should render the session dots after all.
     ///
-    /// Two independent reasons, both of which end with the icon lying about
-    /// the world if the dots stay hidden:
+    /// One reason, and it is the case where hiding the dots would make the
+    /// icon lie about the world: **no renderable quota yet** (fresh daemon
+    /// start, or the selected provider hasn't ticked a statusline sample).
+    /// With both halves nil the caller falls through to
+    /// `OffFlameImage.menuBar`, the "no sessions running" icon, while
+    /// sessions are in fact active.
     ///
-    ///   - **No renderable quota yet** (fresh daemon start, or the selected
-    ///     provider hasn't ticked a statusline sample). With both halves nil
-    ///     the caller falls through to `OffFlameImage.menuBar`, the "no
-    ///     sessions running" icon, while sessions are in fact active.
-    ///   - **A session is errored** (#1802). `.usage` suppresses the dots
-    ///     outright, so the red circle this feature exists to show would be
-    ///     invisible for every user on that style — the feature would silently
-    ///     do nothing for them. Here the dots are ADDED rather than
-    ///     substituted: `composeSideBySide` renders both halves, so the user's
-    ///     chosen quota bars are kept and the red dot appears beside them. The
-    ///     icon widens while an error stands, which is the intended cost — an
-    ///     alert that never changes the icon's footprint is one nobody notices.
+    /// #1802 added a second arm — bring the dots back whenever a session is
+    /// errored, so `.usage` would still show the red circle. #1862 removed
+    /// it: the caller re-adds the WHOLE dot bank (`computedDotsImage` in
+    /// `iconImage`), not just the errored project, and an `error` state does
+    /// not clear on a timer — so the escalation had become the normal view
+    /// for every `.usage` user rather than a rare alert. `.usage` now honors
+    /// its own style strictly: quota bars only, error or not. That leaves
+    /// #1802's error signal with no surface on this style (tracked as a
+    /// follow-up to #1862).
     ///
     /// Takes the already-built dots image rather than a raw session count: a
     /// non-zero session count doesn't guarantee `buildStatusImage` succeeds
@@ -74,11 +54,10 @@ enum MenuBarImageBuilder {
     static func shouldShowDotsInUsageStyle(
         appearance: MenuBarAppearance,
         quotaImage: NSImage?,
-        dotsImage: NSImage?,
-        hasErroredSession: Bool
+        dotsImage: NSImage?
     ) -> Bool {
         guard appearance.hidesDotsWhenQuotaIsRenderable, dotsImage != nil else { return false }
-        return quotaImage == nil || hasErroredSession
+        return quotaImage == nil
     }
 
     /// Whether the dot half is drawn at all — the WHOLE decision, not just the
@@ -96,15 +75,13 @@ enum MenuBarImageBuilder {
     static func showsDots(
         appearance: MenuBarAppearance,
         quotaImage: NSImage?,
-        dotsImage: NSImage?,
-        hasErroredSession: Bool
+        dotsImage: NSImage?
     ) -> Bool {
         guard appearance.hidesDotsWhenQuotaIsRenderable else { return true }
         return shouldShowDotsInUsageStyle(
             appearance: appearance,
             quotaImage: quotaImage,
-            dotsImage: dotsImage,
-            hasErroredSession: hasErroredSession
+            dotsImage: dotsImage
         )
     }
 
@@ -205,21 +182,17 @@ enum MenuBarImageBuilder {
             providerKey: providerKey,
             now: now
         )
-        // .usage style hides the dots by default. Two conditions bring them
-        // back — no renderable quota, or an errored session that would
-        // otherwise have nowhere to be red. See showsDots.
-        //
-        // `sessions` has already dropped Gas Town sessions; hasErroredDot
-        // drops subagents. Both filters are needed — see its doc.
+        // .usage style hides the dots by default, and brings them back only
+        // when there is no renderable quota to show instead — see
+        // shouldShowDotsInUsageStyle. (#1862: an errored session used to
+        // bring them back too; that arm is gone — see that function's doc.)
         //
         // The locals are named `built…`/`shown…` rather than reusing the
         // helpers' own names: `let quotaImage = quotaImage(...)` compiles, but
         // it gives one identifier two meanings inside a single function and
         // reads like recursion at a glance.
-        let hasErroredSession = hasErroredDot(in: sessions)
         let shownDotsImage = showsDots(
-            appearance: appearance, quotaImage: builtQuotaImage, dotsImage: computedDotsImage,
-            hasErroredSession: hasErroredSession
+            appearance: appearance, quotaImage: builtQuotaImage, dotsImage: computedDotsImage
         ) ? computedDotsImage : nil
         // Dots first (left), quota bars last (right) — closest to the
         // system status icons (WiFi/battery/clock), matching issue #909's

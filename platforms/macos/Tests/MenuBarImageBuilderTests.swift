@@ -72,17 +72,7 @@ final class MenuBarImageBuilderTests: XCTestCase {
         XCTAssertEqual(result?.size.height, 18) // max(18, 12)
     }
 
-    private func makeSession(
-        id: String, state: SessionState.State, parentSessionId: String? = nil
-    ) -> SessionState {
-        SessionState(
-            id: id, state: state, model: "m", cwd: "/tmp/p", projectName: "p",
-            firstSeen: Date(timeIntervalSince1970: 1_700_000_000),
-            updatedAt: Date(timeIntervalSince1970: 1_700_000_000),
-            parentSessionId: parentSessionId)
-    }
-
-    // MARK: - shouldShowDotsInUsageStyle (issue #909 review fix; #1802's error arm)
+    // MARK: - shouldShowDotsInUsageStyle (issue #909 review fix)
 
     /// The appearance these tests exercise. `isCompact` defaults to false so
     /// every assertion below keeps meaning exactly what it meant before #1852
@@ -95,23 +85,25 @@ final class MenuBarImageBuilderTests: XCTestCase {
 
     /// `.usage` style with a renderable dots image but no quota yet must
     /// not collapse to the "no sessions" icon — see the comment in
-    /// `combinedImage`. LOCK: pre-#1802 behaviour that must not change.
+    /// `combinedImage`. LOCK: the one arm #1862 kept — without it a
+    /// `.usage` user with active sessions and no renderable quota yet would
+    /// fall through to the "no sessions running" icon while sessions are in
+    /// fact running.
     func testFallsBackToDotsWhenUsageStyleHasNoQuotaButDotsRendered() {
         let dots = NSImage(size: NSSize(width: 10, height: 18))
         XCTAssertTrue(MenuBarImageBuilder.shouldShowDotsInUsageStyle(
-            appearance: appearance(.usage), quotaImage: nil, dotsImage: dots,
-            hasErroredSession: false
+            appearance: appearance(.usage), quotaImage: nil, dotsImage: dots
         ))
     }
 
-    /// LOCK: with quota renderable and nothing wrong, `.usage` still means
-    /// quota only.
+    /// LOCK: with quota renderable, `.usage` means quota only — including
+    /// while a session is errored (#1862 removed the arm that used to make
+    /// an exception here).
     func testDoesNotFallBackWhenUsageStyleHasQuotaImage() {
         let quota = NSImage(size: NSSize(width: 10, height: 18))
         let dots = NSImage(size: NSSize(width: 10, height: 18))
         XCTAssertFalse(MenuBarImageBuilder.shouldShowDotsInUsageStyle(
-            appearance: appearance(.usage), quotaImage: quota, dotsImage: dots,
-            hasErroredSession: false
+            appearance: appearance(.usage), quotaImage: quota, dotsImage: dots
         ))
     }
 
@@ -121,50 +113,55 @@ final class MenuBarImageBuilderTests: XCTestCase {
     /// not a raw session count that doesn't guarantee dots render.
     func testDoesNotFallBackWhenUsageStyleHasNoRenderableDotsEither() {
         XCTAssertFalse(MenuBarImageBuilder.shouldShowDotsInUsageStyle(
-            appearance: appearance(.usage), quotaImage: nil, dotsImage: nil,
-            hasErroredSession: false
+            appearance: appearance(.usage), quotaImage: nil, dotsImage: nil
         ))
     }
 
     func testDoesNotFallBackForLightsOrCombinedStyles() {
         let dots = NSImage(size: NSSize(width: 10, height: 18))
         XCTAssertFalse(MenuBarImageBuilder.shouldShowDotsInUsageStyle(
-            appearance: appearance(.lights), quotaImage: nil, dotsImage: dots,
-            hasErroredSession: false
+            appearance: appearance(.lights), quotaImage: nil, dotsImage: dots
         ))
         XCTAssertFalse(MenuBarImageBuilder.shouldShowDotsInUsageStyle(
-            appearance: appearance(.combined), quotaImage: nil, dotsImage: dots,
-            hasErroredSession: false
+            appearance: appearance(.combined), quotaImage: nil, dotsImage: dots
         ))
     }
 
-    // MARK: - #1802: `.usage` must not swallow the red circle
+    // MARK: - #1862: `.usage` honors its style strictly, even while errored
 
-    /// The reason the error arm exists. `.usage` suppresses the dots outright,
-    /// so without this the red circle is invisible for every user on that
-    /// style and the feature silently does nothing for them. The dots are
-    /// ADDED here, not substituted — `composeSideBySide` renders both halves,
-    /// so the user's chosen quota bars are kept.
+    /// #1802 added an arm to `shouldShowDotsInUsageStyle` so an errored
+    /// session would bring the dots back on `.usage`. #1862 removed it:
+    /// `iconImage` re-adds the WHOLE dot bank (`computedDotsImage`), not
+    /// just the errored project, and an `error` state does not clear on a
+    /// timer — so the escalation had become the normal view for every
+    /// `.usage` user, not a rare alert. `.usage` now means quota bars only,
+    /// error or not.
     ///
-    /// A check the change ADDS, so there is no "before the fix" run.
-    /// Mutation-proved: dropping `|| hasErroredSession` from
-    /// `shouldShowDotsInUsageStyle` turns this red while the four LOCKs above
-    /// stay green.
-    func testUsageStyleShowsDotsWhenASessionIsErrored() {
-        let quota = NSImage(size: NSSize(width: 20, height: 18))
-        let dots = NSImage(size: NSSize(width: 10, height: 18))
-        XCTAssertTrue(MenuBarImageBuilder.shouldShowDotsInUsageStyle(
-            appearance: appearance(.usage), quotaImage: quota, dotsImage: dots,
-            hasErroredSession: true
-        ))
+    /// This is the reporter's exact repro from #1862: a top-level session
+    /// in `.error` state, sitting alongside a renderable quota. Exercised
+    /// end-to-end through `iconImage` (rather than the removed
+    /// `hasErroredSession` parameter, which no longer exists) so the
+    /// assertion reflects what a real session list produces.
+    func testUsageStyleKeepsDotsHiddenWhenASessionIsErrored() throws {
+        let sessions = [
+            MenuBarFixtures.session(id: "e1", state: .error, project: "alpha"),
+            MenuBarFixtures.sessionWithQuota(),
+        ]
+        let usage = MenuBarAppearance(style: .usage, isCompact: false)
+        let quota = try XCTUnwrap(MenuBarImageBuilder.quotaImage(
+            appearance: usage, sessions: sessions, providerKey: nil, now: fixedNow
+        ), "the fixture must have a renderable quota, or this test proves nothing")
+        let composed = try XCTUnwrap(icon(usage, sessions: sessions))
+        XCTAssertEqual(composed.size.width, quota.size.width, accuracy: 0.01,
+                       "an errored top-level session must not widen .usage past its quota-only width")
     }
 
-    /// An error cannot conjure dots that do not render.
-    func testNoDotsImageMeansNoDotsEvenWithAnError() {
+    /// LOCK: without a renderable dots image, `.usage` can never show dots —
+    /// the guard short-circuits before `quotaImage` is even inspected.
+    func testNoDotsImageMeansNoDotsRegardlessOfQuota() {
         let quota = NSImage(size: NSSize(width: 20, height: 18))
         XCTAssertFalse(MenuBarImageBuilder.shouldShowDotsInUsageStyle(
-            appearance: appearance(.usage), quotaImage: quota, dotsImage: nil,
-            hasErroredSession: true
+            appearance: appearance(.usage), quotaImage: quota, dotsImage: nil
         ))
     }
 
@@ -187,13 +184,12 @@ final class MenuBarImageBuilderTests: XCTestCase {
         for style in MenuBarStyle.allCases {
             for compact in [false, true] {
                 // Only `.usage` ever withholds its dots, and only while the
-                // quota is renderable and nothing is errored. Density never
-                // enters into it.
+                // quota is renderable. Density never enters into it.
                 let expected = style != .usage
                 XCTAssertEqual(
                     MenuBarImageBuilder.showsDots(
                         appearance: appearance(style, compact: compact),
-                        quotaImage: quota, dotsImage: dots, hasErroredSession: false
+                        quotaImage: quota, dotsImage: dots
                     ),
                     expected,
                     "\(style) compact=\(compact) with a renderable quota"
@@ -202,17 +198,9 @@ final class MenuBarImageBuilderTests: XCTestCase {
                 XCTAssertTrue(
                     MenuBarImageBuilder.showsDots(
                         appearance: appearance(style, compact: compact),
-                        quotaImage: nil, dotsImage: dots, hasErroredSession: false
+                        quotaImage: nil, dotsImage: dots
                     ),
                     "\(style) compact=\(compact) with no renderable quota"
-                )
-                // And an errored session always brings them back (#1802).
-                XCTAssertTrue(
-                    MenuBarImageBuilder.showsDots(
-                        appearance: appearance(style, compact: compact),
-                        quotaImage: quota, dotsImage: dots, hasErroredSession: true
-                    ),
-                    "\(style) compact=\(compact) with an errored session"
                 )
             }
         }
@@ -343,61 +331,12 @@ final class MenuBarImageBuilderTests: XCTestCase {
                        "the icon must compose dots first, quota bars second")
     }
 
-    /// LOCK: every style OTHER than `.usage` never routes through this
-    /// decision at all, error or not — at either density.
-    ///
-    /// Derived from `allCases` rather than the hand-written
-    /// `[MenuBarStyle.lights, .combined]` this used to be: that array was
-    /// complete when written and silently stale the moment a case was added
-    /// (#1845), which is the same failure mode
-    /// `MenuBarStatusRenderer.segmentOrder` documents for state lists (#1797).
-    /// Since #1852 it also crosses the compact modifier, so a density choice
-    /// cannot quietly become a content one.
-    func testOtherStylesAreUnaffectedByAnError() {
-        let quota = NSImage(size: NSSize(width: 20, height: 18))
-        let dots = NSImage(size: NSSize(width: 10, height: 18))
-        let others = MenuBarStyle.allCases.filter { $0 != .usage }
-        XCTAssertFalse(others.isEmpty, "allCases must yield at least one non-.usage style")
-        for style in others {
-            for compact in [false, true] {
-                XCTAssertFalse(MenuBarImageBuilder.shouldShowDotsInUsageStyle(
-                    appearance: appearance(style, compact: compact), quotaImage: quota,
-                    dotsImage: dots, hasErroredSession: true
-                ), "\(style) compact=\(compact) must not be changed by an errored session")
-            }
-        }
-    }
-
-    // MARK: - #1802 review round: only a session that will be DRAWN may widen
-
-    /// A failed SUBAGENT must not widen the `.usage` icon. Subagents live in
-    /// `sessionManager.sessions` but `MenuBarStatusRenderer.orderedProjectGroups`
-    /// excludes them (`where session.parentSessionId == nil`), so counting one
-    /// here widens the status item to point at a red circle that is not in it.
-    ///
-    /// Mutation check (verified): drop `$0.parentSessionId == nil` from
-    /// `hasErroredDot` and this goes red.
-    func testErroredSubagentDoesNotCountAsADot() {
-        let child = makeSession(id: "c", state: .error, parentSessionId: "p")
-        XCTAssertFalse(MenuBarImageBuilder.hasErroredDot(in: [child]),
-                       "a subagent is never drawn as a dot, so it cannot make one red")
-    }
-
-    func testErroredTopLevelSessionCountsAsADot() {
-        let top = makeSession(id: "t", state: .error)
-        XCTAssertTrue(MenuBarImageBuilder.hasErroredDot(in: [top]))
-    }
-
-    func testHealthySessionsProduceNoErroredDot() {
-        XCTAssertFalse(MenuBarImageBuilder.hasErroredDot(in: [
-            makeSession(id: "a", state: .working),
-            makeSession(id: "b", state: .ready),
-        ]))
-    }
+    // MARK: - iconState priority order (untouched by #1862)
 
     /// An errored session must NOT promote the icon to `.attention`, which is
-    /// a FULL REPLACEMENT of the dots and would hide the very circle #1802
-    /// adds. LOCK on `iconState`'s untouched priority order.
+    /// a FULL REPLACEMENT of the dots. `iconState` never inspects session
+    /// state at all — this LOCKs its untouched priority order, unaffected by
+    /// either #1802 or #1862.
     func testErrorDoesNotPromoteToTheAttentionIcon() {
         XCTAssertEqual(MenuBarImageBuilder.iconState(pendingConsentCount: 0, sessionCount: 3), .dots)
         XCTAssertEqual(MenuBarImageBuilder.iconState(pendingConsentCount: 1, sessionCount: 3), .attention)
