@@ -438,14 +438,13 @@ func (pm *PIDManager) record(ev lifecycle.Event) {
 // SessionDetector.HandleProcessExit and the periodic sweep via
 // reapDeadOrInfraPID.
 func (pm *PIDManager) HandleProcessExit(pid int, sessionID, reason string) {
-	state, loadErr := pm.repo.Load(sessionID)
-
 	pm.record(lifecycle.Event{Kind: lifecycle.KindProcessExited, SessionID: sessionID, PID: pid, Reason: reason})
 
 	if pm.onSessionDeleted != nil {
 		pm.onSessionDeleted(sessionID)
 	}
 
+	state, loadErr := pm.repo.Load(sessionID)
 	if loadErr != nil || state == nil {
 		pm.log.LogInfo(logComponentProcessExit, sessionID,
 			fmt.Sprintf("pid %d exited but session not found (already cleaned up)", pid))

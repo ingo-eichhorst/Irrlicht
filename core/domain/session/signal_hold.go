@@ -568,8 +568,12 @@ var signalPolicies = []signalPolicy{
 		// winner decided by call order rather than by anything declared. The
 		// transcript is the fresher observation (it was just re-read this
 		// pass), so it keeps the slot; a hold fills in only when the
-		// transcript reports nothing, which is exactly the process-death case
-		// #1800 adds it for.
+		// transcript reports nothing. No production code places a hold of this
+		// kind today — the row exists to give the classifier's session_error
+		// rule its tier through TierOf — so this apply states the rule a future
+		// out-of-band producer must satisfy rather than describing a live case.
+		// #1800's process death was such a producer and had its own kind; #1860
+		// removed it.
 		apply: func(c holdContext) {
 			if c.Metrics.SessionError == nil && c.Payload.SessionError != nil {
 				c.Metrics.SessionError = c.Payload.SessionError

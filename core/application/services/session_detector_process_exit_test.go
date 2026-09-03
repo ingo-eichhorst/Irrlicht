@@ -1,22 +1,12 @@
 package services_test
 
 import (
-	"context"
-	"os"
 	"testing"
 	"time"
 
 	"irrlicht/core/domain/lifecycle"
 	"irrlicht/core/domain/session"
 )
-
-// selfPID is this test process, used so the detector's startup seed does not
-// delete a fixture before the test drives the exit itself: seedAlivePIDs reaps
-// any persisted session whose PID is already dead (ESRCH), by a direct delete
-// that never reaches HandleProcessExit. A live PID keeps the row until the test
-// drives the exit, which is also the real sequence — the kqueue callback fires
-// for a process the daemon was watching.
-var selfPID = os.Getpid()
 
 // midTurnWorkingSession is the shape a session has when its process goes away
 // with a turn still open: actively working, with a tool call the agent will
@@ -30,11 +20,11 @@ var selfPID = os.Getpid()
 // NeedsUserAttention stays false, so this fixture classifies to `working` on
 // its own and the assertion below is about the process evidence rather than
 // about a waiting rule.
-func midTurnWorkingSession(sid string) *session.SessionState {
+func midTurnWorkingSession(sid string, pid int) *session.SessionState {
 	return &session.SessionState{
 		SessionID:      sid,
 		State:          session.StateWorking,
-		PID:            selfPID,
+		PID:            pid,
 		Adapter:        "geminicli",
 		TranscriptPath: "/tmp/" + sid + ".jsonl",
 		FirstSeen:      time.Now().Unix(),
@@ -62,26 +52,30 @@ func midTurnWorkingSession(sid string) *session.SessionState {
 // `exit(0)` are one observation, and a state that is wrong is worse than a
 // state that is absent. A process exit therefore deletes the row, whatever
 // state the row was in.
+//
+// NO det.Run, DELIBERATELY, matching the two HandleProcessExit tests in
+// session_detector_lifecycle_test.go. The whole path is synchronous, so the
+// event loop buys this test nothing — and starting it introduces a real race
+// against seedFromDisk, whose SeedPIDs pass re-Saves a row with a live PID and
+// so resurrects the very row the assertion is about. Measured at 17 failures
+// in 30 runs under -race before the goroutine was dropped, and the resurrected
+// row reads `working`, which is a different failure from the one this test
+// exists to catch. In production the two cannot overlap: SeedPIDs runs
+// synchronously inside Run before the event loop's select and before the sweep
+// goroutine exists (see its doc), so neither real caller of HandleProcessExit
+// can race it.
 func TestHandleProcessExit_MidTurnExitDeletesTheRow(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
 	repo := newMockRepo()
 
 	const sid = "midturn-exit-1"
-	repo.states[sid] = midTurnWorkingSession(sid)
+	const pid = 30535
+	repo.states[sid] = midTurnWorkingSession(sid, pid)
 
 	det := newDetector(tw, pw, repo)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- det.Run(ctx) }()
-	// Two defers, LIFO: cancel runs first, then the join.
-	defer func() { <-done }()
-	defer cancel()
-
-	det.HandleProcessExit(selfPID, sid, "test: pid exited (ESRCH)")
-
-	waitForSessionDeleted(repo, sid, 2*time.Second)
+	det.HandleProcessExit(pid, sid, "test: pid exited (ESRCH)")
 
 	if state, err := repo.Load(sid); err == nil && state != nil {
 		t.Fatalf("session survived the process exit — state=%q; a process exit must delete the row, "+
@@ -104,20 +98,13 @@ func TestHandleProcessExit_RecordsProcessExitedForAMidTurnDeath(t *testing.T) {
 	rec := &mockRecorder{}
 
 	const sid = "midturn-exit-2"
-	repo.states[sid] = midTurnWorkingSession(sid)
+	const pid = 30536
+	repo.states[sid] = midTurnWorkingSession(sid, pid)
 
 	det := newDetector(tw, pw, repo)
 	det.SetRecorder(rec)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- det.Run(ctx) }()
-	defer func() { <-done }()
-	defer cancel()
-
-	det.HandleProcessExit(selfPID, sid, "test: pid exited (ESRCH)")
-
-	waitForSessionDeleted(repo, sid, 2*time.Second)
+	det.HandleProcessExit(pid, sid, "test: pid exited (ESRCH)")
 
 	var exited int
 	for _, ev := range rec.snapshot() {

@@ -60,10 +60,10 @@ const (
 	// initial-scan seeding pass, distinct from steady-state handling.
 	logComponentSessionDetectorSeed = "session-detector-seed"
 
-	// logComponentProcessExit tags the process-exit path's own log lines,
-	// including #1800's mid-turn conversion. Named rather than repeated
-	// inline: pid_manager.go and session_detector_lifecycle.go both write
-	// under it, so a typo in one would split the stream in two silently.
+	// logComponentProcessExit tags the process-exit path's own log lines.
+	// Named rather than repeated inline so the two call sites in
+	// pid_manager.go cannot drift apart on a typo and split the stream in
+	// two silently.
 	logComponentProcessExit = "process-exit"
 )
 

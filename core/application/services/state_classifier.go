@@ -262,11 +262,13 @@ var stateRules = []stateRule{
 		//
 		// TIER IS PINNED TO TierTranscript by the `signal` field below, which
 		// resolves through TierOf. The PREDICATE is producer-agnostic, but the
-		// tier is not: #1800's process-death evidence is TierProcess (3), and
-		// routing it through this rule would record it as TierTranscript (5).
-		// Understating a tier never trips the ladder invariant, so that would
-		// be silent. #1800 therefore adds its own rule row — or gives this one
-		// a `tierOf` the way agent_done has one — rather than reusing this.
+		// tier is not, and that is what any future non-transcript failure
+		// channel has to answer: routing evidence from a higher tier through
+		// this rule would record it as TierTranscript (5). Understating a tier
+		// never trips the ladder invariant, so it would be silent. #1800's
+		// process death was TierProcess (3) and correctly got its own rule row
+		// rather than reusing this one; #1860 removed that producer, and the
+		// reasoning is kept because the next one inherits it.
 		id:     string(session.SignalSessionError),
 		signal: session.SignalSessionError,
 		when: func(_ string, m *session.SessionMetrics) bool {
