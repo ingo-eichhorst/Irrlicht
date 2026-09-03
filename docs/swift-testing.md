@@ -24,14 +24,14 @@ timeout/witness design.
   than restating it.** Six suites — `DaemonErrorBannerRenderTests`,
   `GroupViewSnapshotTests`, `HistoryViewSnapshotTests`,
   `SessionListDaemonErrorWiringTests`, `SessionListUnappliedGrantsWiringTests`,
-  `SessionRowSnapshotTests` — are
-  `--skip`ped in CI and run under `tools/preflight.sh --only swift` and the
-  pre-push hook and nowhere else. A seventh,
-  `BackchannelRulesViewSnapshotTests`, was in this set until #1874 deleted its
-  subject with the rest of the backchannel; the roster here is not the source
-  of truth for it — `ImageSnapshotCIScopeTests`' map is, and it is
+  `SessionRowSnapshotTests` — are `--skip`ped in CI and run under
+  `tools/preflight.sh --only swift` and the pre-push hook and nowhere else. A
+  seventh, `BackchannelRulesViewSnapshotTests`, was in this set until #1874
+  deleted its subject with the rest of the backchannel. This roster is not the
+  source of truth — `ImageSnapshotCIScopeTests`' map is, and that map is
   cross-checked against `macos-swift.yml`'s own arguments, so this prose is the
-  only copy that can go stale unnoticed. Two further image-snapshot suites
+  one copy of the list that can go stale without a test noticing. Two further
+  image-snapshot suites
   (`PermissionWizardEffectErrorRenderTests`, `UnappliedGrantsBannerRenderTests`)
   reproduce byte-identically on a runner, stay gated there, and their passing is
   itself the evidence that the residual is content-dependent rather than a
@@ -49,10 +49,11 @@ timeout/witness design.
   test anyone adds anywhere in the target — 487 of 542 on 2026-09-03 on the
   reference Mac, read off the `ci-scope census:` line that
   `swift test --skip LauncherTestHarness --skip LauncherHarnessTests` prints
-  (392 of 440 on 2026-08-19, before #1802's suites arrived and #1874's left). That split is "Replay's measured figures" applied one
-  platform over, and this is the file that earned it: `macos-swift.yml`'s header
-  claimed "270 of 318", was corrected to "272 of 320" by the PR that measured
-  it, and was 115 tests stale (320 → 435) by the time #1615 was closed.
+  (392 of 440 on 2026-08-19, before #1802's suites arrived and #1874's left).
+  That split is "Replay's measured figures" applied one platform over, and this
+  is the file that earned it: `macos-swift.yml`'s header claimed "270 of 318",
+  was corrected to "272 of 320" by the PR that measured it, and was 115 tests
+  stale (320 → 435) by the time #1615 was closed.
   **Re-recording the references is not the fix, and is the one move to refuse.**
   It is what #1034 and #1044 both did, both wrongly, to what turned out to be an
   appearance-mode bug (the cautionary tale below). Here it is worse: the runner
@@ -84,9 +85,10 @@ timeout/witness design.
   maxΔ 142/197, the same glyphs sitting ~1 device pixel lower, i.e. a sub-point
   baseline landing on a different pixel phase. That editor and its two
   references were deleted by #1874, so the second population is now empty and
-  the 36 figure is historical: only the 34 icon-box failures remain reachable. The toolchain is measured NOT to
-  be the variable: all 15 Xcodes on `macos-latest`, including 26.3.0 build
-  17C529 which is bit-for-bit the reference Mac's, produce the same 36 failures,
+  the 36 figure is historical: only the 34 icon-box failures remain reachable.
+  The toolchain is measured NOT to be the variable: all 15 Xcodes on
+  `macos-latest`, including 26.3.0 build 17C529 which is bit-for-bit the
+  reference Mac's, produce the same 36 failures,
   while that Mac on that build produces none. **What nobody has established is
   WHY** — "the OS differs" is where the evidence stops, not a root cause, and
   accepting the containment does not make anything about `NSImage(data:)`'s SVG
@@ -98,7 +100,7 @@ timeout/witness design.
   it any more; it is recorded because a prediction that quietly stops being
   checkable should not read as one that was checked.
   **What the decision costs, stated here rather than discovered later: a
-  contributor without a Mac cannot run these 57 tests at all, and CI will not
+  contributor without a Mac cannot run these 55 tests at all, and CI will not
   run them either.** An outside contributor's image-snapshot change is ungraded
   until the maintainer next runs `tools/preflight.sh --only swift` or pushes
   through the pre-push hook — and CI is not merely silent about it, it is
@@ -107,7 +109,7 @@ timeout/witness design.
   touching five files in `platforms/macos/`. It touched no image-snapshot suite,
   so it is the shape rather than an instance, and no cheap mitigation is built
   here — the honest statement is that the local gate and the pre-push hook are
-  the whole of the coverage for those 57, and that a fork PR's green `swift-test`
+  the whole of the coverage for those 55, and that a fork PR's green `swift-test`
   check says nothing about them.
   **The pixels can still be collected, on demand.** `swift-snapshot-evidence`
   ran on every PR while the policy question was open and now runs on
