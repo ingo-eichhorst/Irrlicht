@@ -346,6 +346,7 @@
     Working int  // subagents currently executing
     Waiting int  // subagents blocked on user input
     Ready   int  // subagents that have finished their turn
+    Error   int  // subagents whose session machinery failed
 }</code></pre>
 
       <p>The parent session's state display incorporates subagent status. If the parent is <span class="badge badge-ready">ready</span> but a child subagent is <span class="badge badge-working">working</span>, the parent's effective state adjusts accordingly &mdash; the light reflects the most "active" state across the tree.</p>
@@ -368,6 +369,7 @@
         <li><code>mistral-vibe</code> &mdash; Mistral Vibe (JSONL transcripts + <code>meta.json</code> sidecar under <code>~/.vibe/logs/session</code>)</li>
         <li><code>copilot</code> &mdash; GitHub Copilot CLI (JSONL <code>events.jsonl</code> under <code>~/.copilot/session-state</code>, relocatable via <code>$COPILOT_HOME</code>)</li>
         <li><code>hermes</code> &mdash; Hermes Agent (no transcript files; one shared SQLite store at <code>~/.hermes/state.db</code>, relocatable via <code>$HERMES_HOME</code>)</li>
+        <li><code>junie</code> &mdash; JetBrains Junie (JSONL <code>events.jsonl</code> under <code>~/.junie/sessions</code>, plus process sidecars under <code>~/.junie/processes</code>)</li>
       </ul>
       <p>The adapter determines which transcript format is parsed and which process signatures are scanned. Frontends should look up adapter display name and icon via <code>GET /api/v1/agents</code> rather than hardcoding switches.</p>
 
@@ -414,7 +416,7 @@
 
       <!-- ─── Lifecycle Event Kinds ─── -->
       <h2>Lifecycle Event Kinds</h2>
-      <p>Underneath the state machine, the daemon records a lower-level stream of typed events for session recording and replay &mdash; not just transcript-derived state transitions but also process lifecycle, filesystem, debounce, and parent-child signals. Each event carries a <code>Kind</code> discriminant (<code>core/domain/lifecycle/event.go</code>); this table enumerates all 18 constants, grouped as the source file itself groups them.</p>
+      <p>Underneath the state machine, the daemon records a lower-level stream of typed events for session recording and replay &mdash; not just transcript-derived state transitions but also process lifecycle, filesystem, debounce, and parent-child signals. Each event carries a <code>Kind</code> discriminant (<code>core/domain/lifecycle/event.go</code>); this table enumerates all 22 constants, grouped as the source file itself groups them.</p>
 
       <table>
         <thead>
@@ -514,6 +516,26 @@
             <td><code>cache_bloat_detected</code></td>
             <td>Cache-creation regression</td>
             <td>Emitted once per (project, regressing version) pair within a daemon process lifetime, the first time a working session's median cache-creation per turn exceeds the project's p25 baseline &times; threshold (issue #374); consumed by the <code>ir:agent-releases</code> workflow.</td>
+          </tr>
+          <tr>
+            <td><code>hold_expired</code></td>
+            <td>Held signals</td>
+            <td>An out-of-band signal hold exceeds its wall-clock ceiling. The event records the signal kind, tier, elapsed milliseconds, and ceiling milliseconds.</td>
+          </tr>
+          <tr>
+            <td><code>hook_channel_silent</code></td>
+            <td>Hook health</td>
+            <td>An adapter has granted and successfully installed hooks but completes the configured number of turns without one hook receipt. The adapter falls back to transcript signals.</td>
+          </tr>
+          <tr>
+            <td><code>hook_channel_recovered</code></td>
+            <td>Hook health</td>
+            <td>A hook receipt arrives after the adapter was declared silent. The event proves that the hook channel recovered.</td>
+          </tr>
+          <tr>
+            <td><code>hook_hold_released</code></td>
+            <td>Hook health</td>
+            <td>A hook-tier hold is released because the hook channel was declared silent. This event identifies a channel failure. The <code>hold_expired</code> event identifies one hold that exceeded its time limit.</td>
           </tr>
         </tbody>
       </table>

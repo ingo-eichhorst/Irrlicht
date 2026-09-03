@@ -1,6 +1,6 @@
 ---
 name: "ir:agent-releases"
-description: "Check latest releases of coding agents monitored by irrlicht (Claude Code, OpenAI Codex, Pi, Gas Town, Aider, OpenCode, Gemini CLI, Kiro CLI, Antigravity, Mistral Vibe) and report new features that impact session monitoring. Use when user says 'agent releases', 'check releases', 'agent updates', '/ir:agent-releases', or wants to know if upstream agent changes affect irrlicht."
+description: "Check latest releases of coding agents monitored by irrlicht (Claude Code, OpenAI Codex, Pi, Gas Town, Aider, OpenCode, Gemini CLI, Kiro CLI, Antigravity, Mistral Vibe, GitHub Copilot, Hermes Agent, Junie) and report new features that impact session monitoring. Use when user says 'agent releases', 'check releases', 'agent updates', '/ir:agent-releases', or wants to know if upstream agent changes affect irrlicht."
 ---
 
 # Agent Release Monitor for Irrlicht

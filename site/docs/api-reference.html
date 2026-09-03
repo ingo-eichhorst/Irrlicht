@@ -301,6 +301,13 @@ curl "http://127.0.0.1:7837/api/v1/history?chart=state&granularity=24h" | jq</co
       <h3>POST /api/v1/permissions/answer</h3>
       <p>Submits wizard answers: <code>{"answers": [{"agent": "claude-code", "permission": "hooks", "grant": true}]}</code>. Grants are exercised immediately (hook install, watcher start); revokes actively undo (hook uninstall, watcher stop). Returns the updated snapshot. First answer wins when both surfaces have the wizard open &mdash; the daemon broadcasts <code>permissions_updated</code> so the other surface dismisses.</p>
 
+      <h3>POST /api/v1/permissions/reload</h3>
+      <p>Reloads <code>permissions.json</code> after another local process changes stored consent. The request has no body. The route is localhost-only, and it rejects cross-origin browser requests. The caller cannot supply a grant. The daemon only adopts the values in its own store and applies or removes their effects.</p>
+
+      <p>Responses: <code>200</code> with the updated permission snapshot &middot; <code>403</code> for a cross-origin browser request &middot; <code>500</code> when the store cannot be read. A read failure keeps the current in-memory state.</p>
+
+      <pre><code>curl -X POST http://127.0.0.1:7837/api/v1/permissions/reload | jq</code></pre>
+
       <h3>POST /api/v1/sessions/{id}/focus</h3>
 
       <p>Activates the host terminal or IDE window of the given session, bringing it to the foreground. This is what the <code>irrlicht-focus</code> CLI calls when you click a session row or notification. The session ID is taken from the path; the request has no body. The daemon broadcasts the focus request and the macOS app activates the launching window.</p>
@@ -562,7 +569,7 @@ curl -OJ http://127.0.0.1:7837/debug/bundle</code></pre>
           <tr>
             <td><code>adapter</code></td>
             <td>string</td>
-            <td>One of <code>claude-code</code>, <code>codex</code>, <code>pi</code>, <code>aider</code>, <code>opencode</code>, <code>kiro-cli</code>, <code>gemini-cli</code>, <code>antigravity</code>, <code>mistral-vibe</code>, <code>copilot</code>, or empty (legacy / unknown)</td>
+            <td>One of <code>claude-code</code>, <code>codex</code>, <code>pi</code>, <code>aider</code>, <code>opencode</code>, <code>kiro-cli</code>, <code>gemini-cli</code>, <code>antigravity</code>, <code>mistral-vibe</code>, <code>copilot</code>, <code>hermes</code>, <code>junie</code>, or empty (legacy / unknown)</td>
           </tr>
           <tr>
             <td><code>cwd</code></td>
@@ -572,7 +579,7 @@ curl -OJ http://127.0.0.1:7837/debug/bundle</code></pre>
           <tr>
             <td><code>transcript_path</code></td>
             <td>string</td>
-            <td>Absolute path to the JSONL transcript file</td>
+            <td>Absolute source path. SQLite-backed adapters append <code>?session=&lt;id&gt;</code> to a database or write-ahead-log path</td>
           </tr>
           <tr>
             <td><code>git_branch</code></td>
