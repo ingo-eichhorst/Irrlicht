@@ -13,14 +13,12 @@ import (
 // while three doc comments and a test assertion had already made the value
 // load-bearing ("half of 2s") — so the number was a contract that nothing named.
 //
-// Two sibling packages already name their own copy and one of them points here
-// for the justification: core/pkg/cliprobe's exported Timeout, and
-// core/adapters/outbound/control's execTimeout, whose doc reads "matching the
-// process observer's 2-second ceiling (process_darwin.go)" — a cross-reference
-// to a constant this package did not have. Naming it here does not merge those
-// (a consent-path version check and a window-targeting probe are entitled to
-// different ceilings, and control's is a different layer); it gives that
-// reference something to point AT.
+// A sibling package already names its own copy and points here for the
+// justification: core/pkg/cliprobe's exported Timeout. Naming it here does not
+// merge the two — a consent-path version check and a window-targeting probe
+// are entitled to different ceilings; it gives that reference something to
+// point AT. (A third copy lived in core/adapters/outbound/control until #1875
+// deleted that package.)
 //
 // The value is a compromise between two failures the shellouts sit between: a
 // probe that blocks session discovery, and a probe killed before it answers —

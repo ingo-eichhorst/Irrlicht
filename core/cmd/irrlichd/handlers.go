@@ -109,7 +109,7 @@ func (c *costAttachCache) put(now time.Time, byProject, byProvider map[string]ma
 // below, and any process that is not the daemon that served the hooks) — the
 // same nil-meaningful seam liveHookHealth already documents for the
 // diagnostics bundle.
-func handleGetSessions(repo outbound.SessionRepository, orchMonitor *services.OrchestratorMonitor, tracker outbound.CostTracker, controllable func(sessionID string) bool, hookHealth func() services.HookHealthSnapshot) http.HandlerFunc {
+func handleGetSessions(repo outbound.SessionRepository, orchMonitor *services.OrchestratorMonitor, tracker outbound.CostTracker, hookHealth func() services.HookHealthSnapshot) http.HandlerFunc {
 	cache := &costAttachCache{}
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessions, err := repo.ListAll()
@@ -125,7 +125,6 @@ func handleGetSessions(repo outbound.SessionRepository, orchMonitor *services.Or
 		// renders for the wrapper just like it does for the donor.
 		services.InheritRateLimits(sessions, "")
 		groups := session.BuildDashboard(sessions, orchMonitor.State("gastown"))
-		annotateControllable(groups, controllable)
 		resp := sessionsResponse{Groups: groups}
 		if hookHealth != nil {
 			resp.DaemonErrors = services.DaemonErrors(hookHealth())
@@ -138,36 +137,6 @@ func handleGetSessions(repo outbound.SessionRepository, orchMonitor *services.Or
 		w.Header().Set(headerContentType, contentTypeJSON)
 		json.NewEncoder(w).Encode(resp)
 	}
-}
-
-// annotateControllable walks the group tree and marks each agent (and nested
-// child) Controllable per the InputService gate. No-op when fn is nil (tests,
-// or before the backchannel feature is wired).
-func annotateControllable(groups []*session.AgentGroup, fn func(sessionID string) bool) {
-	if fn == nil {
-		return
-	}
-	var walkAgents func(agents []*session.Agent)
-	walkAgents = func(agents []*session.Agent) {
-		for _, a := range agents {
-			if a == nil || a.SessionState == nil {
-				continue
-			}
-			a.Controllable = fn(a.SessionID)
-			walkAgents(a.Children)
-		}
-	}
-	var walkGroups func(gs []*session.AgentGroup)
-	walkGroups = func(gs []*session.AgentGroup) {
-		for _, g := range gs {
-			if g == nil {
-				continue
-			}
-			walkAgents(g.Agents)
-			walkGroups(g.Groups)
-		}
-	}
-	walkGroups(groups)
 }
 
 // costMaps returns the per-project and per-provider trailing-window cost maps,
@@ -1482,28 +1451,18 @@ func handleGetVersion(version string) http.HandlerFunc {
 // frontends should treat ordering as informational only and key by `name`.
 func handleGetAgents(allAgents []agent.Agent) http.HandlerFunc {
 	type agentEntry struct {
-		Name         string   `json:"name"`
-		DisplayName  string   `json:"display_name"`
-		IconSVGLight string   `json:"icon_svg_light"`
-		IconSVGDark  string   `json:"icon_svg_dark"`
-		Presets      []string `json:"presets"`
+		Name         string `json:"name"`
+		DisplayName  string `json:"display_name"`
+		IconSVGLight string `json:"icon_svg_light"`
+		IconSVGDark  string `json:"icon_svg_dark"`
 	}
 	entries := make([]agentEntry, 0, len(allAgents))
 	for _, a := range allAgents {
-		// Supported backchannel presets (issue #754), sorted for a stable
-		// contract; always a slice (never null) so the macOS editor can iterate
-		// without a nil check.
-		presets := make([]string, 0, len(a.Control.Presets))
-		for p := range a.Control.Presets {
-			presets = append(presets, p)
-		}
-		sort.Strings(presets)
 		entries = append(entries, agentEntry{
 			Name:         a.Identity.Name,
 			DisplayName:  a.Identity.DisplayName,
 			IconSVGLight: a.Identity.IconSVGLight,
 			IconSVGDark:  a.Identity.IconSVGDark,
-			Presets:      presets,
 		})
 	}
 	return func(w http.ResponseWriter, r *http.Request) {

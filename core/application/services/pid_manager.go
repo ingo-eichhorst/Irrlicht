@@ -135,12 +135,12 @@ type PIDManager struct {
 	// onSessionSuperseded is called when a presession is retired because a
 	// real session was reconciled onto the same identity (same PID, or same
 	// adapter+project/CWD). Unlike onSessionDeleted, it carries BOTH ids, so
-	// a subsystem that keeps its own per-session state (e.g. TerminalObserver's
-	// dialog-edge cache, or a Waiting state SessionDetector already persisted
-	// onto the presession's own row via a live terminal-observer signal) can
-	// carry that state forward onto the new id instead of losing it — the
-	// presession row is about to be deleted outright, unlike onSessionDeleted's
-	// other callers which only need to forget the old id (issue #997).
+	// a subsystem that keeps its own per-session state can carry that state
+	// forward onto the new id instead of losing it — the presession row is
+	// about to be deleted outright, unlike onSessionDeleted's other callers
+	// which only need to forget the old id (issue #997). No subsystem
+	// registers a handler since #1875 retired terminal read-back; the seam is
+	// kept because every reconciliation path already reports through it.
 	onSessionSuperseded func(oldID, newID string)
 
 	// pendingPIDs stores PIDs discovered by background goroutines, to be
@@ -321,7 +321,7 @@ func (pm *PIDManager) captureLauncher(state *session.SessionState, pid int) {
 	// hostKnown is deliberately ignored: a first capture has no stored host to
 	// protect, and refusing the read over an unresolved one would leave the
 	// session with no Launcher at all — losing the herdr address, and with it
-	// backchannel routing, to buy nothing. The refresh paths, which do have
+	// herdr host resolution, to buy nothing. The refresh paths, which do have
 	// something to lose, are where it is honoured (#1485).
 	if l, _ := pm.launcherEnv(pid); l != nil {
 		state.Launcher = l

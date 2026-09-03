@@ -444,7 +444,7 @@ func (s *PermissionService) Start(ctx context.Context) {
 // block, and the kitty remote-control patch share — Kind==KindModify with a
 // declared Writes (a real, shared, user-owned file) — so an observe-kind
 // permission (transcript reading) or a modify permission that writes nothing
-// shared (agent.ControlPermission) is never scoped out: those don't repoint
+// shared is never scoped out: those don't repoint
 // anything at the recording daemon, and gating them would silence a
 // co-resident agent's own transcript/process visibility for no protective
 // gain (the "multiple-agents-same-workspace" scenario family this is

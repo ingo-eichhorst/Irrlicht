@@ -198,9 +198,9 @@ func (s *subagentSummary) Equal(o *subagentSummary) bool {
 // $KITTY_*, $VSCODE_PID — describes whatever environment the *server* was
 // started in, frozen at that moment and handed to every pane it will ever
 // spawn. Capturing them verbatim sent click-to-focus to an unrelated
-// application, and, for a server started inside tmux, made the backchannel
-// resolve to tmux and type into a foreign pane in a different window. This is
-// the rationale the capture and control paths refer back to (#1348).
+// application, and, for a server started inside tmux, made the pane address
+// resolve to a foreign pane in a different window. This is the rationale the
+// capture paths refer back to (#1348).
 //
 // The Tmux* fields are the same case, established by live measurement on tmux
 // 3.6a (#1486): tmux's server daemonizes at first use, is reparented to PID 1,
@@ -221,9 +221,9 @@ func (s *subagentSummary) Equal(o *subagentSummary) bool {
 //
 // Such a descendant's pane ADDRESS is dropped rather than stored, which is a
 // separate decision from the suppression above and was made later (#1582): the
-// two fields are what control.resolveBackend routes on, so keeping them sent
-// the user's input into a stranger's pane, in a window they were not looking
-// at, and interrupt and read-back went to the same one. It has to be
+// two fields are the session's pane address, so keeping them pointed every
+// consumer at a stranger's pane, in a window the user was not looking at. It
+// has to be
 // decided at capture, because these fields cannot carry their own provenance —
 // a genuine pane that adopted its client's identity and a descendant that
 // reported its own are the same struct. So a TmuxPane that reaches this type is
@@ -411,8 +411,7 @@ func (l *Launcher) AdoptHostIdentity(from *Launcher) bool {
 // all. Until then the only pane that adopted anything was a herdr one, so the
 // put-back could name Herdr* unconditionally. A tmux pane adopts too now, and
 // its address has to survive the copy for exactly the same reason:
-// TmuxPane/TmuxSocket are what the backchannel routes on
-// (control.resolveBackend) and what the macOS TmuxActivator selects with, and
+// TmuxPane/TmuxSocket are what the macOS TmuxActivator selects with, and
 // the attached client carries neither — it is a GUI terminal, not a pane.
 // Leaving them behind would resolve the window and lose the pane inside it,
 // which is a worse outcome than the nil it replaced: a click would raise the
@@ -421,8 +420,8 @@ func (l *Launcher) AdoptHostIdentity(from *Launcher) bool {
 //
 // Only the pane's OWN address is put back. A herdr client that is itself
 // running inside tmux contributes real TmuxPane/TmuxSocket fields — the client
-// really is in that pane — and those must pass through, which is what
-// control.resolveBackend's herdr-before-tmux ordering depends on.
+// really is in that pane — and those must pass through, which is what the
+// herdr-before-tmux ordering in pane() depends on.
 func (l *Launcher) putBackOwnPaneAddress(merged *Launcher) {
 	switch l.pane().kind {
 	case paneKindHerdr:

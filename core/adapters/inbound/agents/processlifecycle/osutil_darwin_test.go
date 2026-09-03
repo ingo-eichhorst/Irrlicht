@@ -461,13 +461,13 @@ func TestReadLauncherEnv_Herdr_ResolvesHostFromAttachedClient(t *testing.T) {
 		t.Errorf("ITermSessionID: want the client's window selector, got %q", l.ITermSessionID)
 	}
 	// The pane address must survive the merge — it is what the activator
-	// focuses, and what resolveBackend keys the control path on.
+	// focuses on.
 	if l.HerdrPaneID != "w1:p2" || l.HerdrSocketPath != socketPath {
 		t.Errorf("herdr address lost: pane=%q socket=%q", l.HerdrPaneID, l.HerdrSocketPath)
 	}
 	// The client's env carried no tmux, so the pane's inherited tmux identity
-	// must not reappear by this route — resolveBackend requires both herdr
-	// fields, and a surviving TmuxPane is the #1348 misroute.
+	// must not reappear by this route — session.Launcher.pane() prefers the
+	// herdr address, and a surviving TmuxPane is the #1348 misroute.
 	if l.TmuxPane != "" || l.TmuxSocket != "" {
 		t.Errorf("inherited tmux identity survived: pane=%q socket=%q", l.TmuxPane, l.TmuxSocket)
 	}

@@ -226,14 +226,3 @@ func TestAgent_Permissions_ConsentProseIsComplete(t *testing.T) {
 		}
 	}
 }
-
-// TestAgent_NoControlDeclared pins the deliberate omission: backchannel input
-// is not declared until the factory's control scenarios verify it live. A
-// Control block without a matching ControlPermission would advertise input the
-// daemon refuses to forward.
-func TestAgent_NoControlDeclared(t *testing.T) {
-	if Agent().Control.SupportsInput {
-		t.Error("SupportsInput is true but no ControlPermission is declared — " +
-			"add agent.ControlPermission() alongside it, and verify the presets live")
-	}
-}

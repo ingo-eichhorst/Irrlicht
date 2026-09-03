@@ -3,8 +3,14 @@
 The relay link lets an `irrlichd` daemon push its session events to a standalone
 `irrlichtrelay` server, which fans them out to macOS and web clients. The daemon
 pushes **out** to the relay, so it needs no inbound reachability (works behind
-NAT). Hub-mode inside `irrlichd` was rejected — the relay is always its own
-binary. See the [Relay-Server wiki](https://github.com/ingo-eichhorst/Irrlicht/wiki/Relay-Server).
+NAT). Traffic is **one-way**: session state flows daemon → relay → client, and
+nothing a client sends reaches a daemon. A `control` frame ran the other way
+until #1875 retired it with the rest of the remote-control path; a client's
+socket is now read and discarded, and the read serves only to notice the socket
+closing. (The relay still decodes every frame a *daemon* sends — that is the
+telemetry stream itself.) Hub-mode inside `irrlichd` was rejected — the relay
+is always its own binary. See the
+[Relay-Server wiki](https://github.com/ingo-eichhorst/Irrlicht/wiki/Relay-Server).
 
 This document covers **only what v0 builds**. Fields marked _reserved_ are named
 here so the shape is stable, but they are neither sent nor honored yet.
@@ -104,21 +110,6 @@ stamps `source` with the originating `daemon_id` (authoritative — it does not
 trust the daemon's stamp) and re-emits to every client. **Clients read `.msg`
 and process it exactly as a raw daemon frame.** `focus_requested` is filtered at
 the forwarder (host-local; meaningless cross-host, wiki §5.4).
-
-### `control` (client → relay → daemon, upstream)
-
-```jsonc
-{ "type": "control", "target_daemon": "uuid", "session_id": "proc-1234",
-  "action": "input" | "interrupt", "data": "…" }                    // input only
-```
-
-The first client→relay→daemon frame in an otherwise one-way protocol (issue
-#724): a client asks a specific daemon to inject input or an interrupt into
-one of its sessions. The relay routes the frame to the addressed daemon
-within the client's own token-derived workspace, then drops
-`target_daemon`; the daemon re-gates it through the same consent path
-(backchannel toggle, per-agent consent, controllability) as a local request
-before forwarding to its `InputService`.
 
 ## Client behavior
 

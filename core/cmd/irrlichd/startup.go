@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -27,11 +26,9 @@ import (
 	"irrlicht/core/adapters/inbound/agents/pi"
 	"irrlicht/core/adapters/inbound/agents/processlifecycle"
 	"irrlicht/core/adapters/inbound/agents/vibe"
-	backchannelhandler "irrlicht/core/adapters/inbound/backchannel"
 	gastownadapter "irrlicht/core/adapters/inbound/orchestrators/gastown"
 	permissionshandler "irrlicht/core/adapters/inbound/permissions"
 	sessionshandler "irrlicht/core/adapters/inbound/sessions"
-	"irrlicht/core/adapters/outbound/control"
 	"irrlicht/core/adapters/outbound/filesystem"
 	"irrlicht/core/adapters/outbound/git"
 	"irrlicht/core/adapters/outbound/mdns"
@@ -279,29 +276,17 @@ func startHistoryTracker(logger outbound.Logger) (*services.HistoryTracker, cont
 // sessions without needing inbound reachability (works behind NAT). The
 // PublishController owns the forwarder's lifecycle so the macOS app can
 // start/stop/reconfigure publishing live over the loopback PUT
-// /api/v1/relay/publish — no daemon relaunch. inputService is published once
-// the consent stack builds InputService (setupBackchannel); it's read
-// concurrently by the HTTP handlers and the relay forwarder, so it's an
-// atomic.Pointer rather than a plain field — those readers start before the
-// assignment.
+// /api/v1/relay/publish — no daemon relaunch.
 type relaySetup struct {
 	cancel            context.CancelFunc
 	publishController *relay.PublishController
-	controlStore      *filesystem.RelayControlStore
-	inputService      atomic.Pointer[services.InputService]
 }
 
 // setupRelay wires the PublishController (always constructed, so the
 // activation endpoint can turn publishing on later) and seeds it once from
 // IRRLICHT_RELAY_URL / IRRLICHT_RELAY_TOKEN so headless/standalone daemons
-// keep working as before.
-//
-// Remote control (#724): the relay-control toggle (default OFF, env opt-in
-// IRRLICHT_RELAY_CONTROL=on) gates whether the forwarder acts on inbound
-// control frames. relayControl binds to inputService once it's published;
-// a control frame that races startup is rejected, not panicked. Remote
-// stays doubly gated — this toggle plus the backchannel toggle + per-agent
-// consent re-checked inside InputService.
+// keep working as before. Publishing is strictly one-way: the relay carries
+// this daemon's telemetry outward and accepts nothing inbound (#1875).
 func setupRelay(logger outbound.Logger, push outbound.PushBroadcaster, cachedRepo outbound.SessionRepository, allAgents []agent.Agent) *relaySetup {
 	r := &relaySetup{}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -328,19 +313,9 @@ func setupRelay(logger outbound.Logger, push outbound.PushBroadcaster, cachedRep
 		}
 		return sessions, infos
 	}
-	r.controlStore = filesystem.NewRelayControlStore(dataDir(home))
-	controlEnabled := func() bool {
-		return r.controlStore.Enabled() || os.Getenv("IRRLICHT_RELAY_CONTROL") == "on"
-	}
 	// Bearer token for an auth-enabled relay: IRRLICHT_RELAY_TOKEN or
 	// <dataDir>/relay-token.json (mode 0600). Empty against a no-auth relay.
-	relayControl := lazyControl{resolve: func() relay.ControlHandler {
-		if s := r.inputService.Load(); s != nil {
-			return s
-		}
-		return nil
-	}}
-	r.publishController = relay.NewPublishController(ctx, identity, push, snapshot, relayControl, controlEnabled, logger)
+	r.publishController = relay.NewPublishController(ctx, identity, push, snapshot, logger)
 	if relayURL := os.Getenv("IRRLICHT_RELAY_URL"); relayURL != "" {
 		r.publishController.Apply(true, relayURL, relay.LoadDaemonToken(dataDir(home)))
 	}
@@ -579,14 +554,13 @@ func gastownEffects(orchCtx context.Context, orchMonitor *services.OrchestratorM
 
 // registerSessionRoutesDeps bundles registerSessionRoutes' dependencies.
 type registerSessionRoutesDeps struct {
-	CachedRepo   outbound.SessionRepository
-	OrchMonitor  *services.OrchestratorMonitor
-	CostTracker  outbound.CostTracker
-	InputService *atomic.Pointer[services.InputService]
-	SockPath     string
-	Push         outbound.PushBroadcaster
-	Logger       outbound.Logger
-	GitResolver  *git.Adapter
+	CachedRepo  outbound.SessionRepository
+	OrchMonitor *services.OrchestratorMonitor
+	CostTracker outbound.CostTracker
+	SockPath    string
+	Push        outbound.PushBroadcaster
+	Logger      outbound.Logger
+	GitResolver *git.Adapter
 	// HookHealth is the same live snapshot function the diagnostics bundle
 	// gets (liveHookHealth). #1801 gives its two client-invisible diagnoses —
 	// entries that went missing, channels that have gone silent — a second
@@ -598,17 +572,10 @@ type registerSessionRoutesDeps struct {
 }
 
 // registerSessionRoutes wires the sessions/history/focus endpoints. Kept
-// separate from registerCoreRoutes because it needs orchMonitor and the
-// not-yet-published inputService: a session only reports controllable once
-// setupBackchannel has run.
+// separate from registerCoreRoutes because it needs orchMonitor.
 func registerSessionRoutes(mux *http.ServeMux, deps registerSessionRoutesDeps) {
 	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(deps.CachedRepo, deps.OrchMonitor, deps.CostTracker,
-		func(sessionID string) bool {
-			if s := deps.InputService.Load(); s != nil {
-				return s.Controllable(sessionID)
-			}
-			return false
-		}, deps.HookHealth))
+		deps.HookHealth))
 
 	// History tab analytics (issue #369): trailing/calendar/custom-range cost
 	// series + linear forecast, computed from the cost snapshot files. #373 adds
@@ -866,85 +833,6 @@ func setupPermissionService(mux *http.ServeMux, deps setupPermissionServiceDeps)
 	return permService
 }
 
-// setupBackchannelDeps bundles setupBackchannel's dependencies.
-type setupBackchannelDeps struct {
-	CachedRepo        outbound.SessionRepository
-	Push              outbound.PushBroadcaster
-	PermService       *services.PermissionService
-	Detector          *services.SessionDetector
-	Logger            outbound.Logger
-	Home              string
-	InputService      *atomic.Pointer[services.InputService]
-	RelayControlStore *filesystem.RelayControlStore
-	AllAgents         []agent.Agent
-}
-
-// setupBackchannel wires control discovered agents by scripting their
-// terminal backend (issue #724). A default-OFF master toggle gates the whole
-// capability; the per-adapter "control" consent and a usable backend target
-// gate each write. InputService enforces the order (toggle → consent →
-// controllable) for both the manual HTTP path and the event→action rule
-// engine. Routes are localhostOnly + a Sec-Fetch-Site guard on the mutating
-// verbs, since injected input drives a live agent.
-func setupBackchannel(mux *http.ServeMux, deps setupBackchannelDeps) (*services.BackchannelEngine, *services.TerminalObserver) {
-	logger := deps.Logger
-	backchannelStore := filesystem.NewBackchannelStore(dataDir(deps.Home))
-	controlController := control.NewController(deps.CachedRepo, deps.Push, logger)
-	in := services.NewInputService(deps.CachedRepo, controlController, deps.PermService, backchannelStore.Enabled, logger)
-	deps.InputService.Store(in) // publish to the HTTP/forwarder readers
-	mux.HandleFunc("/api/v1/activation/backchannel",
-		localhostOnly(activationhandler.NewBackchannelHandler(backchannelStore, logger)))
-	// Remote-control toggle (#724): default OFF; gates whether the relay
-	// forwarder acts on inbound control frames (the outer remote gate).
-	mux.HandleFunc("/api/v1/activation/relay-control",
-		localhostOnly(activationhandler.NewToggleHandler(deps.RelayControlStore, "relay_control_enabled", logger)))
-	mux.HandleFunc("POST /api/v1/sessions/{id}/input",
-		localhostOnly(sessionshandler.NewInputHandler(in, logger)))
-	mux.HandleFunc("POST /api/v1/sessions/{id}/interrupt",
-		localhostOnly(sessionshandler.NewInterruptHandler(in, logger)))
-
-	// Backchannel rules (issue #724): event→action automations (e.g.
-	// context_pressure → /compact). The engine consumes the push stream and
-	// fires through inputService, so the same toggle+consent+controllable
-	// gates apply. Started under detectorCtx by startBackgroundLoops.
-	backchannelRules := filesystem.NewBackchannelRulesStore(dataDir(deps.Home))
-	backchannelEngine := services.NewBackchannelEngine(backchannelRules, in, agents.ControlPresets(deps.AllAgents), deps.Push, backchannelStore.Enabled, logger)
-	mux.HandleFunc("/api/v1/backchannel/rules",
-		localhostOnly(backchannelhandler.NewRulesHandler(backchannelRules, logger)))
-
-	// Backchannel read-back (issue #732, Phase 3): the read counterpart to the
-	// write path. The observer captures the rendered terminal of controllable
-	// sessions and folds transcript-invisible signals (today: the trust dialog)
-	// into the lifecycle via the detector's single writer. Same gate chain as
-	// inputService — master-toggle + per-adapter "control" consent — so a
-	// disabled backchannel reads nothing. Started under detectorCtx by
-	// startBackgroundLoops.
-	terminalReader := control.NewReader(deps.CachedRepo, logger)
-	terminalObserver := services.NewTerminalObserver(deps.CachedRepo, terminalReader, deps.PermService, backchannelStore.Enabled, deps.Detector, logger)
-
-	// Re-key the presession's backchannel bookkeeping onto the reconciled
-	// real session whenever any reconciliation path retires a presession
-	// (issue #997, extended by #1002): SessionDetector carries forward any
-	// Waiting state a live terminal-observer signal already persisted onto
-	// the presession's own row, TerminalObserver re-keys its own
-	// edge-detection cache so the next poll compares against the right
-	// session id, and BackchannelEngine re-keys its own edge-crossing
-	// baselines (prevState/prevUtil/prevTokens/lastFired) so a rule that
-	// already crossed its threshold on the presession fires against the
-	// reconciled id instead of the real session silently re-establishing a
-	// fresh "first sight" baseline (issue #1002). Bind the one long-lived
-	// reference this closure needs (detector) instead of closing over the
-	// whole setupBackchannelDeps struct.
-	detector := deps.Detector
-	detector.SetSessionSupersededHandler(func(oldID, newID string) {
-		detector.ReconcilePreSessionBackchannel(oldID, newID)
-		terminalObserver.RekeySession(oldID, newID)
-		backchannelEngine.RekeySession(oldID, newID)
-	})
-
-	return backchannelEngine, terminalObserver
-}
-
 // registerHookRoutes wires the hook receivers: Claude Code's PermissionRequest/
 // PostToolUse/Stop events (routed to the detector, which satisfies
 // claudecode.HookTarget) and the per-tick statusline JSON carrying rate_limits
@@ -1059,24 +947,22 @@ func sweepZombies(demoMode bool, detector *services.SessionDetector, logger outb
 }
 
 // startBackgroundLoops launches the detector's event loop and its
-// long-running companions (backchannel rule engine, yield sweeper,
-// terminal observer), then — outside demo mode — exercises granted
+// long-running companion (the yield sweeper), then — outside demo mode —
+// exercises granted
 // permissions (re-apply hook/statusline installs, start watchers) and
 // launches the detection poller. Effects run synchronously so a grant-all
 // daemon (demo/record/test) is fully monitoring before startup proceeds.
 // Returns the cancel func for the shared context; the caller defers it.
 // startBackgroundLoopsDeps bundles startBackgroundLoops' dependencies.
 type startBackgroundLoopsDeps struct {
-	Detector          *services.SessionDetector
-	BackchannelEngine *services.BackchannelEngine
-	CachedRepo        outbound.SessionRepository
-	GitResolver       *git.Adapter
-	TerminalObserver  *services.TerminalObserver
-	PermService       *services.PermissionService
-	HookVerifier      *services.HookEntryVerifier
-	Cfg               config.Config
-	DemoMode          bool
-	Logger            outbound.Logger
+	Detector     *services.SessionDetector
+	CachedRepo   outbound.SessionRepository
+	GitResolver  *git.Adapter
+	PermService  *services.PermissionService
+	HookVerifier *services.HookEntryVerifier
+	Cfg          config.Config
+	DemoMode     bool
+	Logger       outbound.Logger
 }
 
 func startBackgroundLoops(deps startBackgroundLoopsDeps) context.CancelFunc {
@@ -1088,19 +974,11 @@ func startBackgroundLoops(deps startBackgroundLoopsDeps) context.CancelFunc {
 		}
 	}()
 
-	go deps.BackchannelEngine.Run(detectorCtx)
-
 	// Yield sweep (issue #373): periodically correlates `git revert` commits
 	// back to the sessions that authored the reverted work, flipping their
 	// YieldState to reverted. Read-mostly and fault-tolerant, so it runs in
 	// every mode.
 	go services.NewYieldSweeper(deps.CachedRepo, deps.GitResolver, logger, deps.Cfg.YieldSweepInterval).Run(detectorCtx)
-
-	go func() {
-		if err := deps.TerminalObserver.Run(detectorCtx); err != nil && err != context.Canceled {
-			logger.LogError("terminal-observer", "", fmt.Sprintf("observer error: %v", err))
-		}
-	}()
 
 	if !deps.DemoMode {
 		deps.PermService.Start(detectorCtx)

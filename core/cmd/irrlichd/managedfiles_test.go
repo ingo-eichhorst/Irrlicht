@@ -389,9 +389,8 @@ func TestUninstallHookConfigsSurvivesOneFailingAdapter(t *testing.T) {
 //
 // A permission whose Apply writes nothing therefore has to be named here with
 // its reason, rather than falling out silently. Today there is exactly one:
-// gastown/state, whose Apply starts a filesystem watcher. agent.ControlPermission
-// is not in the list because its Apply is nil — it falls outside by
-// construction, which is the shape to prefer.
+// gastown/state, whose Apply starts a filesystem watcher. A permission whose
+// Apply is nil falls outside by construction, which is the shape to prefer.
 //
 // It runs over the FULL consent catalog — agents.All() PLUS the three
 // daemon-wide declarations — because that is what the wizard offers and

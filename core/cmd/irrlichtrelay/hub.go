@@ -106,10 +106,6 @@ type daemonState struct {
 	label string
 	since int64
 	conns int
-	// send is the newest live connection's outbound queue, used to route an
-	// upstream control frame (issue #724) down to the daemon. nil until the
-	// daemon's write pump registers it; replaced on reconnect.
-	send chan []byte
 }
 
 // clientConn is a connected client. send buffers outbound frames; done is
@@ -347,16 +343,12 @@ func (h *hub) serveDaemon(conn *websocket.Conn, hello relay.Hello, tokenID, work
 		return
 	}
 
-	// send carries control frames routed from a client (issue #724); the write
-	// pump below is the sole writer after the hello_ack, satisfying gorilla's
-	// one-concurrent-writer rule (pings + control sends share it).
-	send := make(chan []byte, 16)
-	h.daemonConnected(workspace, id, label, send)
-	defer h.daemonDisconnected(workspace, id, send)
+	h.daemonConnected(workspace, id, label)
+	defer h.daemonDisconnected(workspace, id)
 
 	done := make(chan struct{})
 	defer close(done)
-	go h.daemonWritePump(conn, done, tokenID, send)
+	go h.daemonWritePump(conn, done, tokenID)
 
 	conn.SetReadDeadline(time.Now().Add(pongTimeout))
 	conn.SetPongHandler(func(string) error {
@@ -445,7 +437,7 @@ func (h *hub) applyPush(workspace, daemonID string, p relay.Push) {
 	h.fanoutPush(workspace, daemonID, msg)
 }
 
-func (h *hub) daemonConnected(workspace, id, label string, send chan []byte) {
+func (h *hub) daemonConnected(workspace, id, label string) {
 	now := time.Now().Unix()
 	h.mu.Lock()
 	ws := h.wsLocked(workspace)
@@ -460,12 +452,11 @@ func (h *hub) daemonConnected(workspace, id, label string, send chan []byte) {
 		}
 	}
 	d.conns++
-	d.send = send // newest connection wins for control routing
 	h.mu.Unlock()
 	h.broadcastDaemonStatus(workspace, id, label, relay.StatusConnected, now)
 }
 
-func (h *hub) daemonDisconnected(workspace, id string, send chan []byte) {
+func (h *hub) daemonDisconnected(workspace, id string) {
 	now := time.Now().Unix()
 	h.mu.Lock()
 	ws := h.workspaces[workspace]
@@ -479,11 +470,6 @@ func (h *hub) daemonDisconnected(workspace, id string, send chan []byte) {
 		return
 	}
 	d.conns--
-	// Stop routing control to this connection's queue once it's gone; a newer
-	// connection may have already replaced it (don't clobber that).
-	if d.send == send {
-		d.send = nil
-	}
 	label := d.label
 	if d.conns > 0 {
 		h.mu.Unlock()
@@ -598,45 +584,13 @@ func (h *hub) clientReadPump(cc *clientConn) {
 		cc.conn.SetReadDeadline(time.Now().Add(pongTimeout))
 		return nil
 	})
+	// Read-and-discard: the relay accepts no inbound frame from a client
+	// (#1875 retired the one that existed), so the read exists only to drive
+	// the pong deadline and to notice the socket closing.
 	for {
-		_, data, err := cc.conn.ReadMessage()
-		if err != nil {
+		if _, _, err := cc.conn.ReadMessage(); err != nil {
 			return
 		}
-		if relay.FrameType(data) == relay.MsgControl {
-			h.routeControl(cc, data)
-		}
-	}
-}
-
-// routeControl forwards an upstream control frame from a client to the daemon
-// it addresses (issue #724). The target daemon is looked up ONLY within the
-// client's own token-derived workspace, so a token for workspace A can never
-// drive a daemon in workspace B. A revoked client, an unknown target, or a
-// daemon with no live write queue is silently dropped (best-effort, like
-// fan-out). The frame is relayed verbatim — the daemon re-gates it locally.
-func (h *hub) routeControl(cc *clientConn, data []byte) {
-	if h.revoked(cc.tokenID) {
-		return
-	}
-	var ctrl relay.Control
-	if json.Unmarshal(data, &ctrl) != nil || ctrl.TargetDaemon == "" {
-		return
-	}
-	h.mu.Lock()
-	var send chan []byte
-	if ws := h.workspaces[cc.workspace]; ws != nil {
-		if d := ws.daemons[ctrl.TargetDaemon]; d != nil {
-			send = d.send
-		}
-	}
-	h.mu.Unlock()
-	if send == nil {
-		return
-	}
-	select {
-	case send <- data:
-	default: // daemon's queue full — drop rather than block the read pump
 	}
 }
 
@@ -762,29 +716,22 @@ func (h *hub) buildAgents(workspace string) []relay.AgentInfo {
 	return out
 }
 
-// daemonWritePump is the daemon connection's sole writer (gorilla allows one):
-// it pings to keep an idle link alive and writes control frames routed from a
-// client (issue #724). Replaces the former ping-only loop.
-func (h *hub) daemonWritePump(conn *websocket.Conn, done <-chan struct{}, tokenID string, send <-chan []byte) {
+// daemonWritePump is the daemon connection's sole writer (gorilla allows one).
+// Since #1875 retired the routed control frame, the relay has nothing to say to
+// a daemon, so the pump only pings to keep an idle link alive — and re-checks
+// revocation on each tick, which is the half that was never about control.
+func (h *hub) daemonWritePump(conn *websocket.Conn, done <-chan struct{}, tokenID string) {
 	ticker := time.NewTicker(pingInterval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-done:
 			return
-		case data := <-send:
-			if h.closeIfRevoked(conn, tokenID) {
-				return
-			}
-			conn.SetWriteDeadline(time.Now().Add(writeTimeout))
-			if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
-				return
-			}
 		case <-ticker.C:
 			// An idle daemon sends no frames, so the read loop's per-frame revoke
-			// check never fires. Re-check here each tick (concurrent-safe with the
-			// sends above since this is the sole writer) so a revoked but quiet
-			// daemon is closed within one ping interval rather than lingering.
+			// check never fires. Re-check here each tick (this is the sole writer)
+			// so a revoked but quiet daemon is closed within one ping interval
+			// rather than lingering.
 			if h.closeIfRevoked(conn, tokenID) {
 				return
 			}

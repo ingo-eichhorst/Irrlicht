@@ -25,13 +25,11 @@ type PublishController struct {
 	// captured once at construction, and every forwarder Apply starts must be
 	// bounded by that lifetime — never by the short-lived HTTP request
 	// context of whichever PUT call happens to trigger the (re)configure.
-	parentCtx      context.Context
-	identity       Identity
-	push           outbound.PushBroadcaster
-	snapshot       SnapshotFunc
-	control        ControlHandler
-	controlEnabled func() bool
-	logger         outbound.Logger
+	parentCtx context.Context
+	identity  Identity
+	push      outbound.PushBroadcaster
+	snapshot  SnapshotFunc
+	logger    outbound.Logger
 
 	mu     sync.Mutex
 	fwd    *Forwarder         // non-nil only while publishing is enabled
@@ -44,17 +42,13 @@ type PublishController struct {
 // bounds every forwarder it starts, so cancelling it (on daemon shutdown)
 // stops publishing. identity, push, and snapshot are the forwarder
 // dependencies that never change across reconfigures; logger may be nil.
-// control + controlEnabled gate inbound remote control (issue #724) and flow to
-// every forwarder this controller starts; both may be nil to disable it.
-func NewPublishController(parentCtx context.Context, id Identity, push outbound.PushBroadcaster, snapshot SnapshotFunc, control ControlHandler, controlEnabled func() bool, logger outbound.Logger) *PublishController {
+func NewPublishController(parentCtx context.Context, id Identity, push outbound.PushBroadcaster, snapshot SnapshotFunc, logger outbound.Logger) *PublishController {
 	return &PublishController{
-		parentCtx:      parentCtx,
-		identity:       id,
-		push:           push,
-		snapshot:       snapshot,
-		control:        control,
-		controlEnabled: controlEnabled,
-		logger:         logger,
+		parentCtx: parentCtx,
+		identity:  id,
+		push:      push,
+		snapshot:  snapshot,
+		logger:    logger,
 	}
 }
 
@@ -94,12 +88,10 @@ func (c *PublishController) Apply(enabled bool, url, token string) {
 		c.cancel()
 	}
 	fwd := NewForwarder(url, c.identity, ForwarderDeps{
-		Token:          token,
-		Push:           c.push,
-		Snapshot:       c.snapshot,
-		Control:        c.control,
-		ControlEnabled: c.controlEnabled,
-		Logger:         c.logger,
+		Token:    token,
+		Push:     c.push,
+		Snapshot: c.snapshot,
+		Logger:   c.logger,
 	})
 	ctx, cancel := context.WithCancel(c.parentCtx)
 	c.fwd = fwd
