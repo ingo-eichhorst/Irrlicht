@@ -270,6 +270,17 @@ func TestSignalHolds_StaleIsCheckedOnTheFirstPass(t *testing.T) {
 //     sets. Reversed, the transcript fallback fires alongside the hook it is
 //     supposed to defer to.
 //
+//   - SignalTurnDone before SignalPermissionPrompt (#1861): the permission
+//     row's staleness reads the HookTurnDone that turn_done's apply sets —
+//     the same dependency the three rows above and below it have on that row.
+//     The permission row led the table until #1861 and was moved down for
+//     exactly this reason. Reversed, a Stop hook arriving alongside a held
+//     permission prompt is evaluated against metrics that do not yet know the
+//     turn ended, so the turn-end clearing edge never fires and a dialog with
+//     no tool behind it (claudecode's Notification/permission_prompt for
+//     managed_settings_security or auto_mode_setup_review, which produce no
+//     PostToolUse) rides to the 12-hour ceiling instead.
+//
 //   - SignalTurnDone before SignalSessionError (#1798): the error row's
 //     staleness reads HookTurnDone, which turn_done's apply sets on the same
 //     pass — the same dependency idle_prompt has, for the same reason.
@@ -286,8 +297,8 @@ func TestSignalHolds_StaleIsCheckedOnTheFirstPass(t *testing.T) {
 // changes it has to say why in the diff.
 func TestSignalPolicies_OrderIsPinned(t *testing.T) {
 	want := []SignalKind{
-		SignalPermissionPrompt,
 		SignalTurnDone,
+		SignalPermissionPrompt,
 		SignalIdlePrompt,
 		SignalCompactInProgress,
 		SignalSessionError,

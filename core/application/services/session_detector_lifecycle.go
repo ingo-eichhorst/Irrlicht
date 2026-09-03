@@ -327,16 +327,20 @@ func (d *SessionDetector) HandleStopHook(sessionID, transcriptPath, lastAssistan
 	d.dispatchHookActivity(sessionID, transcriptPath, session.HookStop)
 }
 
-// HandlePermissionPromptHook records gemini-cli's Notification/ToolPermission
-// hook (issue #1717): a tool confirmation prompt is genuinely open and the
-// user is blocked on it right now.
+// HandlePermissionPromptHook records a notification-shaped "a prompt is open
+// right now, and the user is blocked on it" signal. Two adapters call it:
+// gemini-cli's Notification/ToolPermission (issue #1717, the original caller)
+// and claudecode's Notification/permission_prompt (issue #1861, for the
+// blocking dialogs that carry no tool name and therefore raise no
+// PermissionRequest at any matcher width).
 //
 // A dedicated method rather than the generic name-keyed HandlePermissionHook,
-// and that is load-bearing rather than a style choice. gemini-cli's wire name
-// for this event is literally "Notification" — the SAME string Claude Code
-// uses for its own Notification hook, which session.HookSignal deliberately
-// has no row for (its gate is adapter-side: claudecode dispatches it to
-// HandleIdlePromptHook, never through the generic table). hookSignalEffects is
+// and that is load-bearing rather than a style choice — the two callers above
+// are the demonstration. Both adapters' wire name for this event is literally
+// "Notification", the SAME string copilot uses for its own, which
+// session.HookSignal deliberately has no row for (its gate is adapter-side:
+// claudecode dispatches idle_prompt to HandleIdlePromptHook and
+// permission_prompt to here, never through the generic table). hookSignalEffects is
 // one flat map with no adapter dimension, so adding a row keyed on
 // "Notification" to make THIS call hold SignalPermissionPrompt would also
 // change what claudecode's and copilot's OWN Notification dispatches do —
@@ -346,6 +350,21 @@ func (d *SessionDetector) HandleStopHook(sessionID, transcriptPath, lastAssistan
 // release would pin the session waiting for the 12-hour ceiling
 // (permissionPromptHoldTimeout). A shared-table row would silently reintroduce
 // that exact bug into copilot.
+//
+// NEITHER CALLER MAY HOLD WITHOUT A CLEARING EDGE, which is the obligation
+// that sentence describes and the reason each one is justified separately
+// below rather than by "gemini-cli already does it".
+//
+// claudecode (#1861) has three, and none of them is this event: the emitter is
+// a repeating 6s poll that is suppressed while the user keeps interacting, and
+// it emits nothing at all when the dialog closes (see handleNotificationHook
+// for the mechanism and what that does and does not guarantee). It holds the
+// same SignalPermissionPrompt
+// kind as the tool-keyed path precisely so it inherits that path's releases —
+// PostToolUse / PostToolUseFailure (broad since #1861 widened hookMatcher to
+// match-all, so every dialog raised during a tool call is covered), the
+// transcript's tool-denial marker, and the turn-end staleness rule #1861 added
+// to the policy row for the two dialogs that appear before any tool runs.
 //
 // gemini-cli is not in copilot's position: unlike copilot, its AfterAgent
 // event reliably fires after a cancelled confirmation too (a cancelled tool
