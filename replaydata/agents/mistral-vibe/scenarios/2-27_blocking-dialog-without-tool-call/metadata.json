@@ -1,0 +1,109 @@
+{
+  "scenario_id": "blocking-dialog-without-tool-call",
+  "metadata": {
+    "agent_supports": "partial",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.19.1",
+    "daemon_version": "0.6.1+220ff3e",
+    "confidence": 0.8,
+    "notes": "agent_supports: partial (vibe raises the scenario's trigger-2 dialog — the first-use workspace trust prompt — but only at launch, from run_cli BEFORE load_session, so no send can elicit it and no live session exists for the arc; sandbox and MCP-elicitation triggers are absent, and the only two mid-session blocking waits both belong to a tool call); daemon_capability: incapable (no session directory exists at dialog time, nothing is written, and the one installed hook fires at turn end); driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "blocking-dialog-without-tool-call",
+      "agent": "mistral-vibe",
+      "assessed_at": "2026-09-03T00:00:00Z",
+      "agent_supports": "partial",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: partial (Mistral Vibe 2.19.1 DOES raise a tool-less blocking dialog \u2014 the first-use workspace trust prompt, which is trigger #2 in the scenario's own list \u2014 plus a startup update prompt and two teardown y/N prompts. But EVERY one of them is a launch-time or exit-time gate raised outside the AgentLoop, so none can be elicited by a `send` and none can produce the `working \u2192 waiting` arc the row asserts. The other three triggers are absent outright.)\ndaemon_capability: incapable (at dialog time there is no session for the arc to attach to \u2014 the transcript directory is created lazily on the first save \u2014 and even when one exists from a prior run, nothing is written and the one installed hook fires at turn end)\ndriver_capability: ready (send/keys/wait_turn/sleep/restart are all in DRIVE_ELICITS; the missing piece is not a driver primitive)\n\n## Scenario signal\n\n2.27 asserts `ready \u2192 working \u2192 waiting` entered while a dialog with NO tool call in flight is on screen, `waiting \u2192 working \u2192 ready` after the user answers with nothing completing to carry the release, and a final `ready` surviving a >=15s trailing idle \u2014 the load-bearing phase, which catches a session left pinned at `waiting`.\n\n## Which triggers vibe has, and where they fire (agent_supports: partial)\n\nI checked all four of the scenario's triggers against the installed 2.19.1 package:\n\n1. **Sandbox / network-access confirmation \u2014 ABSENT.** A case-insensitive scan of the whole `vibe/` package for `sandbox` returns zero hits. Vibe has no sandbox to confirm out of.\n2. **First-use trust prompt for the workspace \u2014 PRESENT, but pre-session.** `TrustFolderDialog` (setup/trusted_folders/trust_folder_dialog.py) is a real modal with TRUST_REPO / TRUST_CWD / TRUST_SESSION / DECLINE options, built by `maybe_build_workspace_trust_prompt` (core/trusted_folders.py:118). It is raised from `check_and_resolve_trusted_folder` (cli/entrypoint.py:173), invoked as the `resolve_trusted_folder` callback in `run_cli` at cli/cli.py:458-460 \u2014 which is BEFORE `load_session` (:481) and before `_run_interactive_mode` (:485). At that moment no `AgentLoop`, no `SessionLogger` and no `~/.vibe/logs/session/<id>/` exist. There is no session, no turn, and no way for a `send` to reach it.\n3. **Server-driven MCP elicitation \u2014 ABSENT.** A case-insensitive scan for `elicit` across the package returns zero hits. Vibe's MCP surface (core/tools/mcp/{pool,registry,tools}.py, mcp_settings.py, mcp_sampling.py) has no elicitation handler. The MCP OAuth and connector-auth modals (cli/textual_ui/widgets/{mcp_oauth_app,connector_auth_app}.py) exist but are raised from `MCPApp` messages \u2014 i.e. the user's own `/mcp` slash command, from the idle input app, with no turn in flight.\n4. **Auto-mode / settings review \u2014 ABSENT in the blocking sense.** `_maybe_run_startup_update_prompt` (cli/cli.py:360-380, :457) is a blocking startup dialog, but it runs even earlier than (2), at :457. `cli/plan_offer/` is not a dialog at all: `plan_offer_cta` returns CTA text appended to a message body (app.py:3979-3983). The model / theme / thinking / config / proxy pickers are user-invoked slash commands. Two `input()` y/N prompts exist (entrypoint.py:223, :241 \u2014 worktree removal and branch deletion) and run AFTER `run_cli` returns, at teardown.\n\n**Mid-session, vibe has exactly two blocking waits, and both belong to a tool call.** The TUI holds precisely two futures: `_pending_approval`, awaited by `_approval_callback` (app.py:2008-2034) for a tool permission gate, and `_pending_question`, awaited by `_user_input_callback` (:2036-2050) for the `ask_user_question` / `exit_plan_mode` tools. Those are scenarios 2.19/2.26 and 2.17/2.18 respectively \u2014 exactly the substitution this row forbids. There is no third.\n\n`partial`, not `no`: the dialog class the row names does exist on vibe (trigger 2), so recording `no` would be false. `partial` records that it exists in a position where the row's arc is structurally unreachable.\n\n## Daemon cannot observe it (daemon_capability: incapable)\n\nTwo independent reasons, either sufficient:\n\n1. **There is usually no session at all.** vibe's Source is `FilesUnderRoot` over `~/.vibe/logs/session/<id>/messages.jsonl`, and that directory is created lazily inside `_save_interaction_sync` (core/session/session_logger.py:~255, `session_dir.mkdir(parents=True, exist_ok=True)`) \u2014 i.e. on the first save, which cannot happen before the AgentLoop exists. During the trust dialog the only thing the daemon can see is the transient `proc-<PID>` presession row the CommandPattern scanner mints from the running `vibe` process, born `ready`. The row's FIRST assertion (`working`) is unproducible, not just its `waiting` leg.\n2. **Even with a pre-existing session, nothing is written and no hook fires.** The one case worth naming, because a future assessor will try it: `vibe --continue` (or `--resume`) in an untrusted cwd, where the session directory already exists from a prior run so the daemon already holds a real session row. The trust dialog still blocks in `run_cli` before `load_session`; `messages.jsonl` is untouched; and the only hook irrlicht installs is `post_agent_turn` (core/adapters/inbound/agents/vibe/hooks.go), which fires at turn end. The session sits at `ready` for the whole dialog \u2014 coincidentally the right terminal state, which is precisely why a weakened spec asserting only \"final state ready\" would go green having observed nothing.\n\nNot a `bug`: no spec-required observable is mis-handled. The dialog is outside the read path in both time and place.\n\n## Driver is ready (driver_capability: ready)\n\n`replaydata/agents/mistral-vibe/driver-interactive.sh:218` declares `DRIVE_ELICITS=\"send slash sleep wait_turn exit_clean restart sigkill resume keys start_session session interrupt\"`. Answering a launch-time modal needs `keys` (present) after a `restart`/launch (present). The blocker is the daemon pillar, not a missing primitive \u2014 this cell must not be filed as a driver gap.\n\n## Route\n\nincapable daemon -> **frozen**. No recording is authored. Unfreezing requires an upstream change on the agent side first: vibe would have to raise a tool-less blocking dialog from INSIDE a live session (the way hermes' `_confirm_destructive_slash` does), and then irrlicht would need a channel that reports it \u2014 vibe's hook vocabulary is only `post_agent_turn` / `before_tool` / `after_tool` (core/hooks/models.py `HookType`), all three tool- or turn-scoped, so a new upstream hook type would be needed too.",
+      "caveats": [
+        "LOAD-BEARING ENVIRONMENT PRECONDITION, and the vacuous-pass answer for this row: the trust dialog is SELF-SUPPRESSING. maybe_build_workspace_trust_prompt (core/trusted_folders.py:118-135) returns None when cwd resolves to $HOME, when trusted_folders_manager.is_trusted(cwd) is True, when cwd is explicitly untrusted, or when the directory contains no trustable files (no AGENTS.md and no project config). Answering it once persists the decision to ~/.vibe/trusted_folders.json (add_trusted / add_untrusted, :183-189), and --trust / --worktree / --add-dir all call trust_for_session up front (cli/entrypoint.py:329, :342). So on any host where the recording cwd was ever trusted, the dialog never opens, the session never leaves ready, and a spec asserting only the terminal ready would pass having tested nothing. Any future recording must re-probe ~/.vibe/trusted_folders.json for the recording cwd and assert the dialog actually appeared.",
+        "The second vacuous-pass condition is the substitution the scenario itself forbids: vibe's tool-permission dialog (_approval_callback, app.py:2008) and its ask_user_question dialog (_user_input_callback, :2036) look identical from the daemon's side. A recipe that reached either would satisfy nothing this row claims \u2014 those are 2.19/2.26 and 2.17/2.18.",
+        "agent_supports=partial rather than no is a deliberate call: the scenario instructs 'if the agent cannot raise any dialog of this kind, mark agent_supports: no', and vibe CAN raise one (the workspace trust prompt, the scenario's own trigger 2). What it cannot do is raise one from inside a live session. A future assessor who reads only the route should not conclude the dialog class is absent.",
+        "Every claim here is a source-read of the installed 2.19.1 package plus the adapter source; no vibe process was launched and no recording was run (this verb runs neither). The two absence claims (sandbox, MCP elicitation) rest on case-insensitive package-wide scans returning zero hits, which is the evidence a negative can carry \u2014 not a live probe. Confidence 0.8 reflects that.",
+        "CORRECTION carried from the 2-26 sibling, because the committed 2-19 cell states the opposite and is read first: vibe DOES have an HTTP hook channel (post_agent_turn, #1718) and DOES declare agent.Control. Neither helps this row \u2014 post_agent_turn fires at turn end \u2014 but the reason recorded here is the narrow one, not the stale 'no hook channel' one.",
+        "The mid-session inventory is bounded, not sampled: app.py holds exactly two asyncio.Future handles (self._pending_approval at :513, self._pending_question at :514) and both are tool-bound. If a future vibe release adds a third, this cell's agent pillar changes."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "mistral-vibe 2.19.1: vibe/cli/cli.py:452-486 (run_cli)",
+          "note": "THE ORDERING THAT DECIDES THIS CELL. _maybe_run_startup_update_prompt (:457) and resolve_trusted_folder() (:458-460) both run BEFORE load_session (:481) and before _run_interactive_mode (:485). No AgentLoop, no SessionLogger and no session directory exist while either dialog is on screen."
+        },
+        {
+          "kind": "file",
+          "ref": "mistral-vibe 2.19.1: vibe/cli/entrypoint.py:173-203 (check_and_resolve_trusted_folder), :348-353, :223, :241",
+          "note": "The trust dialog is raised from the entrypoint's resolve_trusted_folder callback. The only other blocking input() prompts in the package (worktree removal :223, branch deletion :241) run after run_cli returns, at teardown."
+        },
+        {
+          "kind": "file",
+          "ref": "mistral-vibe 2.19.1: vibe/core/trusted_folders.py:118-190",
+          "note": "maybe_build_workspace_trust_prompt's suppression conditions ($HOME, already trusted, explicitly untrusted, no trustable files) and apply_workspace_trust_decision's persistence to TRUSTED_FOLDERS_FILE \u2014 the load-bearing precondition in the caveats."
+        },
+        {
+          "kind": "file",
+          "ref": "mistral-vibe 2.19.1: vibe/setup/trusted_folders/trust_folder_dialog.py",
+          "note": "The dialog itself: a Textual CenterMiddle widget with TRUST_REPO/TRUST_CWD/TRUST_SESSION/DECLINE options and a Decided message. This is the one tool-less blocking dialog vibe genuinely has \u2014 trigger 2 of the scenario's four."
+        },
+        {
+          "kind": "file",
+          "ref": "mistral-vibe 2.19.1: vibe/cli/textual_ui/app.py:513-514, :2008-2050",
+          "note": "The complete mid-session blocking inventory: exactly two futures, _pending_approval (tool permission gate, _approval_callback) and _pending_question (ask_user_question / exit_plan_mode, _user_input_callback). Both belong to a tool call, so both are the substitution this row forbids. No third exists."
+        },
+        {
+          "kind": "file",
+          "ref": "mistral-vibe 2.19.1: package-wide scans for 'sandbox' and 'elicit' (case-insensitive, excluding __pycache__)",
+          "note": "Both return ZERO hits. Triggers 1 (sandbox/network confirmation) and 3 (server-driven MCP elicitation) are absent from vibe 2.19.1. Cited so a future audit does not re-litigate the negative."
+        },
+        {
+          "kind": "file",
+          "ref": "mistral-vibe 2.19.1: vibe/cli/textual_ui/widgets/{mcp_oauth_app.py, connector_auth_app.py} + app.py:1522-1560",
+          "note": "The MCP-OAuth and connector-auth modals are raised from MCPApp.ConnectorAuthRequested / MCPOAuthRequested \u2014 the user's own /mcp slash command from the idle input app, never by the agent mid-turn. Same for the model/theme/thinking/config/proxy pickers (app.py:2654-2676)."
+        },
+        {
+          "kind": "file",
+          "ref": "mistral-vibe 2.19.1: vibe/cli/plan_offer/decide_plan_offer.py + app.py:3979-3983",
+          "note": "plan_offer is CTA TEXT appended to a message body, not a blocking dialog \u2014 ruling out the 'auto-mode or settings review' trigger on the surface where it would most plausibly live."
+        },
+        {
+          "kind": "file",
+          "ref": "mistral-vibe 2.19.1: vibe/core/session/session_logger.py:250-260 (_save_interaction_sync) and :306 (save_interaction)",
+          "note": "The session directory is created lazily inside the save, so during a launch-time dialog no ~/.vibe/logs/session/<id>/ exists for the daemon's FilesUnderRoot Source to see."
+        },
+        {
+          "kind": "file",
+          "ref": "mistral-vibe 2.19.1: vibe/core/hooks/models.py (HookType, HookSessionContext, BeforeToolInvocation, AfterToolInvocation)",
+          "note": "vibe's ENTIRE hook vocabulary is post_agent_turn / before_tool / after_tool \u2014 all three tool- or turn-scoped. There is no event any agent-side dialog outside a tool call could ever fire, which is why unfreezing needs an upstream change, not just an adapter change."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/hooks.go",
+          "note": "irrlicht installs exactly one of those three: post_agent_turn -> HandleStopHook, which fires at turn end. Nothing reports a dialog opening."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/vibe/agent.go",
+          "note": "Source = FilesUnderRoot over ~/.vibe/logs/session with a CommandPattern process matcher \u2014 the matcher is why a proc-<PID> presession row (born ready) is the only thing visible during a launch-time dialog."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/mistral-vibe/driver-interactive.sh:218",
+          "note": "DRIVE_ELICITS carries keys, restart, wait_turn and sleep \u2014 everything a launch-time modal recipe would need. driver=ready; the blocker is the daemon pillar."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/hermes/scenarios/2-27_blocking-dialog-without-tool-call/metadata.json",
+          "note": "Sibling precedent for the same row, and the contrast that sharpens this verdict: hermes raises its tool-less modals from INSIDE a live session (/clear, /reload-mcp, expensive /model switch) and still lands incapable on transport. vibe's are strictly launch-time, so it fails one pillar earlier."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "note": "Route is frozen on daemon=incapable \u2014 no recipe authored, and none could be written that satisfies the row today: vibe's only tool-less blocking dialogs (workspace trust, startup update prompt, teardown worktree y/N) all fire outside the AgentLoop, so no `send` can elicit one and no live session exists to move working -> waiting. Do NOT substitute vibe's tool-permission dialog or its ask_user_question dialog to make this cell recordable \u2014 the scenario forbids exactly that, and those belong to 2.19/2.26 and 2.17/2.18. Re-assess only if a future vibe release raises a tool-less blocking dialog from inside a live session AND exposes an event for it (its hook vocabulary today is only post_agent_turn / before_tool / after_tool). If that happens, any recipe must first re-probe ~/.vibe/trusted_folders.json for the recording cwd \u2014 a previously-trusted cwd suppresses the trust dialog entirely and would make the cell pass while observing nothing."
+    }
+  }
+}
