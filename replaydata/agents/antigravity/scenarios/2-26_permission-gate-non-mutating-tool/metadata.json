@@ -1,0 +1,121 @@
+{
+  "scenario_id": "permission-gate-non-mutating-tool",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "bug",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.1.18",
+    "daemon_version": "0.6.1+0c7e67c",
+    "confidence": 0.65,
+    "notes": "agy gates READ-ONLY access by file LOCATION (BLOCK_REASON_OUTSIDE_WORKSPACE / _GITIGNORED) and persists the request as an ask_permission tool call plus a 'Permission for read_file(<path>) was granted' result — so a trace DOES reach transcript.jsonl, but nothing turns it into waiting (ask_permission is in neither isUserBlockingTool nor isPermissionGatedEditTool, no permission hook is installed) → daemon=bug, record known_failing. This CORRECTS the sibling 2-19 cell's daemon=incapable, which was written before the ask_permission trace was found."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "permission-gate-non-mutating-tool",
+      "agent": "antigravity",
+      "agent_supports": "yes",
+      "daemon_capability": "bug",
+      "driver_capability": "ready",
+      "confidence": 0.65,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: bug\ndriver_capability: ready\n\nRoute: record-known-failing. The spec below asserts the CORRECT arc (two distinct waiting episodes, one per tool class) and is expected to fail until the daemon learns antigravity's permission trace.\n\n## What the scenario pins\n\n`ready → working → waiting → working → waiting → working → ready`, TWO distinct waiting episodes in one session — one raised by a mutating tool, one raised by a READ-ONLY tool — each user-visible, each beginning while its dialog is on screen, ≥2 tool calls, final state `ready`.\n\n## agent_supports: yes — agy gates read-only access, and by LOCATION rather than by mutation\n\nFour independent primary sources, three of them live artifacts on this machine:\n\n1. **A real gated read-only call.** CLI conversation `c5609139-74c5-4e4e-a62c-13094ca59487`, step 13 (2026-06-21T10:41:48Z) is a `MODEL/PLANNER_RESPONSE` whose `tool_calls` is `[{\"name\":\"ask_permission\",\"args\":{\"Action\":\"\\\"read_file\\\"\",\"Target\":\"\\\"/Users/ingo/.nvm\\\"\",\"Reason\":\"…\",\"toolAction\":\"\\\"Requesting permission to read ~/.nvm\\\"\"}}]`. Step 14 (10:41:55Z, +7s) is a `MODEL/GENERIC` result reading `Permission for read_file(/Users/ingo/.nvm) was granted.` A read-only action, behind a user dialog, resolved by the user.\n2. **The gate keys on file location, not on mutation.** The agy 1.1.18 binary carries `exa.cortex_pb.FilePermissionInteractionSpec{absolute_path_uri, is_directory, block_reason}` with `BlockReason ∈ {BLOCK_REASON_UNSPECIFIED, BLOCK_REASON_OUTSIDE_WORKSPACE, BLOCK_REASON_GITIGNORED}`. Nothing in that enum is about writing; reading a path outside the workspace (or a gitignored one) is the gated case by construction.\n3. **A read-only network fetch is separately confirmable.** The same descriptor carries `CascadeReadUrlContentInteractionSpec` with `CascadeReadUrlContentInteraction{confirm}`, sitting in the `RequestedInteraction` oneof next to `permission`, `file_permission`, `elicitation` and `ask_question`. The permission-rule action vocabulary in the same binary is `read_file`, `write_file(%s)`, `execute_url(*)`, `unsandboxed(*)`, applied through `PermissionGrantsConfig{allow, deny, ask}`.\n4. **The mutating half of the pair is equally real.** The sibling conversation store `conversations/4868a814-14ee-4289-867f-79ddf4a3ad60.db`, `steps` row idx 4 (`step_type` 21 = run_command, `status` 7 = `CORTEX_STEP_STATUS_ERROR`) carries `error_details`: *\"Permission prompt for action 'command' on target 'date' timed out waiting for user response\"*, with the stack `cortex/permissions.(*permissionManager).PromptUser → cortex/utils.RequestInteractionWithTimeout`. So one live session on this host raised a permission dialog for a mutating/exec call and another raised one for a read.\n\nThe gate is location-driven in practice, which is what makes the recipe below deterministic: in the recorded 2-11 cell the same `run_command echo hello` inside the TRUSTED recording cwd was auto-approved with no dialog, while `run_command date` with `Cwd: /tmp/agy-subtest` (outside any trusted workspace) blocked for 65s and timed out. Same tool, different location, different verdict.\n\n## daemon_capability: bug — the trace reaches the tailed file and nothing consumes it\n\nThe daemon tails `transcript.jsonl` (adapter.go's `sessionIDFromPath` accepts only that filename; `agent.FilesUnderRoot{Dir: cliBrainDir, ExtraDirs: [ideBrainDir]}`). Both edges of the read-only gate land in that file:\n\n- **Entry edge** — the `PLANNER_RESPONSE` carrying the `ask_permission` tool call. `parser.go parsePlannerResponse` emits `assistant_message` plus a synthesized `ToolUse{Name: \"ask_permission\"}` and sets `openToolID`.\n- **Release edge** — the `MODEL/GENERIC` result `Permission for <action>(<target>) was granted`. `parser.go parseToolResult` emits `function_call_output` and closes the open tool.\n\nSo the daemon holds an open, named, user-blocking tool for exactly the interval the dialog is on screen — and then does nothing with it. Every path that could route it to `waiting` misses:\n\n- `session.isUserBlockingTool` (core/domain/session/metrics.go:501-509) is `{AskUserQuestion, ExitPlanMode, question, ask_user_question, exit_plan_mode, ask_user}`. `ask_permission` is absent, so `NeedsUserAttention()` is false and the `user_blocking_tool` rule never fires. Its twin `tailer.isUserBlockingToolName` carries the same set.\n- `isPermissionGatedEditTool` (metrics.go:553) is `{edit, write, multiedit, notebookedit, write_file}`, so `SignalOpenToolStalled` cannot arm either — not for `ask_permission`, and not for antigravity's own write tools, which are `write_to_file` (20 calls) and `replace_file_content` (4 calls) across the 103 real CLI conversations on this host. `write_file` appears ZERO times, which makes that function's doc claim (\"write_file is the snake_case spelling emitted by vibe, gemini-cli and antigravity\") wrong for antigravity.\n- `parser.go` never sets `PermissionPending` or `TranscriptPermissionPending`, so neither the hook-tier nor the copilot-style transcript-tier permission rule can fire.\n- `hookinstaller.go:133` installs exactly `[]string{HookEventStop}`. `PreToolUse` — the one agy event whose result carries `decision: allow|deny|ask|force_ask` and which could bracket the interval — is deliberately NOT installed, on the #1719 hazard (an install whose result could answer a user's permission prompt). That is a standing product decision, not a defect, and it is why this cell must be fixed on the transcript side.\n\nNet: the session stays `working` for the whole dialog on both halves of the pair. That is precisely the #1861 shape this scenario was created for — a permission gate that reaches an integration only for a hand-written list of tools — and it is a `bug` rather than `incapable` because the evidence is IN the file the daemon already reads. The minimal fix is one line: add `ask_permission` to `session.isUserBlockingTool` AND its twin `tailer.isUserBlockingToolName` (the two are contract-tested against each other by `userblocking.AssertMatchesCanonical`). `ShouldSynthesizeCollapsedWaiting` then covers the case where request and resolution land in one fswatcher pass.\n\nThe direct-gate path (a gated tool with no `ask_permission` in front of it) is strictly worse and is the reason confidence is not higher: in `4868a814` the gated `run_command`'s RESULT step was never written to `transcript.jsonl` at all — `step_index` jumps 3 → 5 while the prompt was up for 65s, and only the SQLite store recorded the step. On that path the daemon sees an open tool that simply goes quiet, with no release edge at all.\n\n## driver_capability: ready\n\n`driver_step_types_from_file replaydata/agents/antigravity/driver-interactive.sh` reports `exit_clean interrupt keys reset_session restart resume send session sigkill slash sleep start_session wait_turn`, and `DRIVE_ELICITS=\"send slash wait_turn keys sleep interrupt exit_clean restart resume sigkill start_session session\"` — only `reset_session` is stubbed. This recipe needs `send`, `sleep`, `keys`, `wait_turn`; `step_keys` is a `tmux send-keys` against the live pane, which is what answers a TUI dialog. Nothing to port.\n\n## Why the recipe is INTERACTIVE and two-dialogs-in-one-turn\n\nHeadless is structurally excluded: agy 1.1.18 prints *\"the %s tool(s) required approval that headless mode cannot prompt for, so they were auto-denied. Settings allow-rules do not apply; re-run with --dangerously-skip-permissions to auto-approve all tools.\"* A print-mode run can never produce a waiting episode.\n\nOne prompt drives both calls because agy runs tools sequentially and the parser models a single open tool at a time (parser.go's header: \"Antigravity links neither tool call nor result by ID and runs tools sequentially, so the parser models a single open tool at a time\"). Two sequential dialogs inside one turn is therefore the canonical `ready→working→waiting→working→waiting→working→ready` arc the scenario asks for, with no risk of the two episodes merging.\n\nBoth halves are gated by the same location mechanism, which keeps the two dialogs symmetric: the mutating half writes to `/tmp` (outside the recording cwd → `write_file(/tmp/…)`), the read-only half reads `/etc/hosts` (outside the recording cwd → `read_file(/etc/hosts)`). The `keys` answers must land well inside agy's interaction timeout, which was measured at ~65s in `4868a814` (15:41:27 request → 15:42:32 timeout).",
+      "caveats": [
+        "EMISSION UNCONFIRMED (the observation-vs-emission rule). Nothing here proves that the ask_permission request line is FLUSHED to transcript.jsonl at request time rather than only once the dialog resolves — a frozen transcript cannot show when a line was appended. Two facts point at request-time flush: 8 steps across the 103 CLI conversations persist with status:\"RUNNING\" (so non-final steps DO land in the filtered transcript), and conversation 4868a814 persists a request whose result never arrived. But if the line in fact lands only on resolution, there is no live waiting window and the correct verdict is daemon=incapable, not bug. Only `record` settles this; confidence is held at 0.65 for exactly this reason.",
+        "VACUOUS PASS: this cell would go green while proving nothing if the recording host has a standing allow-grant covering the two targets — no dialog is raised, the transcript shows two ordinary auto-approved tool calls, the session never leaves working, and the result is indistinguishable from the bug. It would ALSO pass hollowly if the rig ever passed --dangerously-skip-permissions. Today this host carries no grants (73 files under ~/.gemini/config/projects/ hold only {id, name, projectResources}; ~/.gemini/antigravity-cli/settings.json holds only `model` and `trustedWorkspaces`) and the driver launches a bare `agy`, but that is a property of THIS machine on 2026-09-03, not of antigravity. `record` must assert the two permission dialogs actually appeared (an ask_permission tool call, or a `Permission for …` GENERIC step, or a tool call with no result step) rather than only that no waiting was seen.",
+        "The gate is LOCATION-driven, not mutation-driven: the same run_command is auto-approved inside the trusted recording cwd (the recorded 2-11 cell) and gated outside it (conversation 4868a814, Cwd /tmp/agy-subtest). The recipe therefore depends on /tmp and /etc/hosts being outside the recording cwd, which is a load-bearing precondition rather than incidental phrasing. If a future agy trusts /tmp by default, both halves degrade to auto-approve.",
+        "The DIRECT-gate path may carry no release edge at all. In 4868a814 the gated run_command's result step was never written to transcript.jsonl (step_index 3 → 5) even after the prompt resolved by timeout. If the recording's dialogs go down that path rather than through ask_permission, the daemon has an entry-shaped hole and no exit edge, and the second half of each episode is unobservable even after the isUserBlockingTool fix.",
+        "This cell's daemon=bug CONTRADICTS the sibling 2-19 (tool-gate-permission-prompt) cell, which is recorded as daemon=incapable on the claim that 'every line in BOTH transcript.jsonl and transcript_full.jsonl is status:DONE'. That claim is false as stated: across all 103 CLI conversations on this host, transcript.jsonl and transcript_full.jsonl each carry 944 DONE and 8 RUNNING steps, and one conversation carries a persisted ask_permission tool call with its granted result. 2-19 is not this cell's to change; it is flagged for re-assessment.",
+        "Antigravity has no cost or per-turn token data in the transcript (parser.go's header), so observations assert cost/tokens absent, as the 2-11 and 2-13 siblings do. `model` is left unpinned for `record` to fill."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "~/.gemini/antigravity-cli/brain/c5609139-74c5-4e4e-a62c-13094ca59487/.system_generated/logs/transcript.jsonl",
+          "note": "step 13 (10:41:48Z) PLANNER_RESPONSE tool_calls=[ask_permission{Action:\"read_file\", Target:\"/Users/ingo/.nvm\"}]; step 14 (10:41:55Z) MODEL/GENERIC 'Permission for read_file(/Users/ingo/.nvm) was granted.' — a READ-ONLY gate, both edges persisted in the file the daemon tails"
+        },
+        {
+          "kind": "file",
+          "ref": "~/.gemini/antigravity-cli/conversations/4868a814-14ee-4289-867f-79ddf4a3ad60.db",
+          "note": "steps row idx=4, step_type=21 (run_command), status=7 (CORTEX_STEP_STATUS_ERROR): error_details 'Permission prompt for action \\'command\\' on target \\'date\\' timed out waiting for user response', stack permissionManager.PromptUser → RequestInteractionWithTimeout. The matching transcript.jsonl has NO step 4 (3 → 5) — the direct-gate path writes no result edge"
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.local/bin/agy",
+          "note": "agy 1.1.18 proto descriptor: FilePermissionInteractionSpec{absolute_path_uri, is_directory, block_reason} with BLOCK_REASON_OUTSIDE_WORKSPACE / BLOCK_REASON_GITIGNORED; CascadeReadUrlContentInteractionSpec + CascadeReadUrlContentInteraction{confirm}; PermissionGrantsConfig{allow,deny,ask}; rule actions read_file / write_file(%s) / execute_url(*) / unsandboxed(*); and 'the %s tool(s) required approval that headless mode cannot prompt for, so they were auto-denied'"
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/metrics.go",
+          "note": "isUserBlockingTool (L501-509) omits ask_permission; isPermissionGatedEditTool (L553) is {edit,write,multiedit,notebookedit,write_file} and so cannot arm SignalOpenToolStalled for antigravity, whose write tools are write_to_file / replace_file_content (census: 20 + 4 calls, zero write_file, across 103 CLI conversations)"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/parser.go",
+          "note": "the only event types emitted are user_message / assistant_message / function_call_output / turn_done; no PermissionPending or TranscriptPermissionPending is ever set, and an ask_permission tool call is treated as an ordinary open tool"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/antigravity/hookinstaller.go",
+          "note": "installedHookEvents = []string{HookEventStop} (L133); PreToolUse — the only agy event carrying decision: allow|deny|ask|force_ask — is deliberately excluded on the #1719 hazard, so no hook-tier permission signal exists for this adapter"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/antigravity/driver-interactive.sh",
+          "note": "DRIVE_ELICITS lists send/slash/wait_turn/keys/sleep/interrupt/exit_clean/restart/resume/sigkill/start_session/session; only reset_session is not_implemented. step_keys is tmux send-keys — driver=ready for this recipe"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/antigravity/scenarios/2-11_auto-classified-permission/recordings/2026-06-20-13-41-55_irrlichd-0.5.2+b756a52/transcript.jsonl",
+          "note": "the SAME run_command inside the trusted recording cwd runs with no dialog (step 3 → step 4 result) — the control that establishes the gate is location-driven, and the reason the recipe targets /tmp and /etc/hosts"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "timeout_seconds": 240,
+      "settings": {},
+      "preconditions": [
+        "agy 1.1.18+ on PATH and authenticated. Antigravity's cached OAuth token on this host expires silently — re-probe before the run.",
+        "irrlichd is recording (run-cell.sh, or --attach against a daemon started with --record).",
+        "NO standing permission grant covers /tmp or /etc/hosts, and the rig does NOT pass --dangerously-skip-permissions. Re-probe at record time: ~/.gemini/antigravity-cli/settings.json must carry no allow rules and ~/.gemini/config/projects/<id>.json must hold only {id, name, projectResources}. This is the vacuous-pass lever — with a grant in place the cell goes green having raised no dialog at all.",
+        "The recording cwd is a FRESH directory (the driver's launch_repl answers agy's 'Do you trust the contents of this project?' gate), and /tmp and /etc/hosts are outside it — the gate is location-driven.",
+        "The two `keys` answers must land inside agy's interaction timeout, measured at ~65s in conversation 4868a814. The sleeps below are sized to ~12s."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Do exactly these two things, in this order, and nothing else. First, use your write_to_file tool to create the file /tmp/irr-2-26-mutating.txt containing the single line: probe. Second, use your view_file tool to read the file /etc/hosts. Then reply with exactly the word: done"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        },
+        {
+          "type": "keys",
+          "keys": "Enter"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        },
+        {
+          "type": "keys",
+          "keys": "Enter"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        }
+      ],
+      "verify": [
+        "The dialogs actually happened: transcript.jsonl carries TWO permission traces — an ask_permission tool call and/or a MODEL/GENERIC step matching 'Permission for <action>(<target>) was', and/or a PLANNER_RESPONSE tool call whose result step never lands. If neither appears, the run is HOLLOW (a standing grant auto-approved both calls) and must be re-run, not scored.",
+        "One of the two traces names a read-only action (read_file / view_file / /etc/hosts); the other names a mutating one (write_file / write_to_file / /tmp/irr-2-26-mutating.txt).",
+        "events.jsonl carries at least two tool_use events for the antigravity session.",
+        "KNOWN FAILING: the two state_transition-to-waiting phases are expected to fail until ask_permission joins session.isUserBlockingTool and its tailer twin."
+      ]
+    }
+  }
+}
