@@ -143,7 +143,7 @@
 
       <ul>
         <li><strong>Package:</strong> <code>core/adapters/inbound/agents/opencode/</code></li>
-        <li><strong>Watches:</strong> SQLite WAL at <code>~/.local/share/opencode/storage/opencode.db-wal</code> via fsnotify; polls <code>session</code>/<code>part</code> tables on writes</li>
+        <li><strong>Watches:</strong> SQLite WAL at <code>~/.local/share/opencode/opencode.db-wal</code> via fsnotify; polls <code>session</code>/<code>part</code> tables on writes</li>
         <li>First adapter on the SQLite-backed monitoring path: storage is a single WAL-mode database, not JSONL</li>
         <li>Bypasses the JSONL tailer via a <code>MetricsReader</code> on its <code>ProcessOwnedStore</code> source variant for cost + token snapshots</li>
         <li>Parent-child session linking via <code>parent_id</code> column &mdash; <code>EventNewSession</code> carries <code>ParentSessionID</code> directly, no path-based heuristics</li>
@@ -238,6 +238,19 @@
         <li><code>pre_approval_request</code> / <code>post_approval_response</code> are the reason the channel exists: Hermes holds a pending approval in process memory and <code>state.db</code> has no approval table, so <code>waiting</code> is not reachable from the store at any polling interval. <code>on_session_end</code> fires once per turn and carries <code>completed</code> / <code>interrupted</code></li>
         <li><strong>Adapter name:</strong> <code>"hermes"</code></li>
         <li>Stage: <strong>alpha</strong></li>
+      </ul>
+
+      <h3>Junie Adapter</h3>
+
+      <ul>
+        <li><strong>Package:</strong> <code>core/adapters/inbound/agents/junie/</code></li>
+        <li><strong>Watches:</strong> <code>events.jsonl</code> under <code>~/.junie/sessions/&lt;session-id&gt;/</code>; skips the root <code>index.jsonl</code>, sibling <code>state.json</code> and <code>transcript.md</code> files, and nested <code>task-*</code> directories</li>
+        <li>Derives the session ID from the parent directory because every transcript uses the same <code>events.jsonl</code> filename</li>
+        <li>Reads <code>~/.junie/processes/&lt;pid&gt;-&lt;session-id&gt;-&lt;hash&gt;.json</code> sidecars to bind the PID, session, and project. The newest <code>startedAt</code> sidecar owns a shared PID. The adapter checks process liveness and the Junie command line before it trusts a sidecar</li>
+        <li>Uses <code>TaskState</code> as the explicit turn boundary. Unknown event kinds are skipped because the Junie event schema is not versioned</li>
+        <li>Declares one read-only <code>transcripts</code> permission. Junie provides no hook or control path</li>
+        <li><strong>Adapter name:</strong> <code>"junie"</code></li>
+        <li>Stage: <strong>planned</strong> &mdash; the adapter exists, but recordings have not earned its maturity claims yet</li>
       </ul>
 
       <h3>Process Scanner</h3>

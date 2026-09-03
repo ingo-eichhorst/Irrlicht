@@ -239,6 +239,16 @@
         <li><strong>Adapter name:</strong> <code>hermes</code></li>
       </ul>
 
+      <h3>Junie</h3>
+
+      <ul>
+        <li><strong>Transcript location:</strong> <code>events.jsonl</code> under <code>~/.junie/sessions/&lt;session-id&gt;/</code></li>
+        <li>The session ID comes from the parent directory. The adapter skips Junie's root index, sibling snapshot and rendered transcript files, and nested task directories</li>
+        <li>Process sidecars under <code>~/.junie/processes/</code> provide the PID and project path. The adapter checks liveness, the command line, and newest-session ownership before it binds a PID</li>
+        <li><code>TaskState</code> is an explicit turn boundary. An <code>INPUT_REQUIRED</code> event state routes the session to <code>waiting</code></li>
+        <li><strong>Adapter name:</strong> <code>junie</code></li>
+      </ul>
+
       <h2>PID Discovery</h2>
 
       <table>
@@ -299,7 +309,7 @@
 
       <ul>
         <li><strong>File-based (UUID filename):</strong> UUID extracted from the filename (<code>&lt;uuid&gt;.jsonl</code>) &mdash; Claude Code, Codex, Kiro CLI</li>
-        <li><strong>File-based (path-derived):</strong> Antigravity's transcript filename is the constant <code>transcript.jsonl</code>, so its session id comes from the conversation directory path instead; Gemini CLI's filename is <code>session-&lt;timestamp&gt;-&lt;hash&gt;</code>, not a bare UUID</li>
+        <li><strong>File-based (path-derived):</strong> Antigravity's <code>transcript.jsonl</code> and Junie's <code>events.jsonl</code> use constant filenames, so their session IDs come from directory paths. Gemini CLI's filename is <code>session-&lt;timestamp&gt;-&lt;hash&gt;</code>, not a bare UUID</li>
         <li><strong>Process-based:</strong> <code>proc-&lt;pid&gt;</code> format, used for pre-sessions before a transcript file is found</li>
       </ul>
 

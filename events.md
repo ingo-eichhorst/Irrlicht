@@ -206,7 +206,7 @@ Subagent sessions run independent state machines with the same states.
 
 | Axis | Values |
 |------|--------|
-| **Adapter** | `claude-code` / `codex` / `pi` / `aider` / `opencode` / `kiro-cli` / `gemini-cli` / `antigravity` / `mistral-vibe` -- identifies source agent |
+| **Adapter** | `claude-code` / `codex` / `pi` / `aider` / `opencode` / `kiro-cli` / `gemini-cli` / `antigravity` / `mistral-vibe` / `copilot` / `hermes` / `junie` -- identifies source agent |
 | **PressureLevel** | `safe` / `caution` / `warning` / `critical` -- context window utilization |
 
 ---
@@ -231,3 +231,6 @@ Memory store merges disk on `ListAll` to pick up sessions created externally (e.
 | Gemini CLI | `~/.gemini/tmp/**/chats/*.jsonl` |
 | Antigravity | `~/.gemini/antigravity-cli/brain/**/transcript.jsonl` (CLI) and `~/.gemini/antigravity/brain/**/transcript.jsonl` (IDE) |
 | Mistral Vibe | `~/.vibe/logs/session/<session-id>/messages.jsonl` (plus a sibling `meta.json`) |
+| GitHub Copilot | `~/.copilot/session-state/<session-id>/events.jsonl` |
+| Hermes Agent | `~/.hermes/state.db` (SQLite, polled — no transcript files) |
+| Junie | `~/.junie/sessions/<session-id>/events.jsonl` (plus process sidecars under `~/.junie/processes/`) |
