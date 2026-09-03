@@ -294,7 +294,6 @@ jobs:
           log="$RUNNER_TEMP/swift-test.log"
           ( cd platforms/macos && swift_suite_run "$log" \
               swift test --skip LauncherTestHarness --skip LauncherHarnessTests \
-                         --skip BackchannelRulesViewSnapshotTests \
                          --skip DaemonErrorBannerRenderTests \
                          --skip GroupViewSnapshotTests \
                          --skip HistoryViewSnapshotTests \
@@ -440,7 +439,6 @@ jobs:
           mkdir -p "$SNAPSHOT_ARTIFACTS"
           ( cd platforms/macos && swift_suite_run "$log" \
               swift test --skip LauncherTestHarness --skip LauncherHarnessTests \
-                         --filter BackchannelRulesViewSnapshotTests \
                          --filter DaemonErrorBannerRenderTests \
                          --filter GroupViewSnapshotTests \
                          --filter HistoryViewSnapshotTests \

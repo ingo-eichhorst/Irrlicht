@@ -4,23 +4,34 @@ import SwiftUI
 ///
 /// ## Why this exists at all
 ///
-/// `TextField(_:value:format:)` **ignores `\.locale`**. That is measured, not
-/// assumed: rendering `BackchannelRulesView` inside an `NSHostingView` under
-/// `.environment(\.locale, Locale(identifier: "en_US"))` on a `de_DE` Mac
-/// leaves the threshold field reading `150.000`, while `@Environment(\.locale)`
-/// read from inside the very same subtree reports `en_US`. The environment
+/// `TextField(_:value:format:)` **ignores `\.locale`**. That was measured, not
+/// assumed: rendering the rule editor #1874 deleted inside an `NSHostingView`
+/// under `.environment(\.locale, Locale(identifier: "en_US"))` on a `de_DE` Mac
+/// left its threshold field reading `150.000`, while `@Environment(\.locale)`
+/// read from inside the very same subtree reported `en_US`. The environment
 /// arrives; the format style does not consult it. `format: .number` is
 /// `FloatingPointFormatStyle<Double>()`, whose `locale` property defaults to
 /// `Locale.autoupdatingCurrent` — the *process's* locale, which no view
 /// modifier can reach.
 ///
-/// The consequence was #1630: the committed reference PNG for
-/// `BackchannelRulesViewSnapshotTests.testBackchannelRuleContextTokens` is a
+/// The consequence was #1630: that view's committed reference PNG was a
 /// picture of the recording contributor's regional settings (`150.000`), and a
 /// `macos-latest` runner — or any contributor on a `,`-grouping locale —
-/// renders `150,000` and fails with a message that says nothing about why.
-/// There is no test-only fix for that, because there is nothing in the test's
-/// reach that the format style reads. This key is the seam.
+/// rendered `150,000` and failed with a message that said nothing about why.
+/// There was no test-only fix for it, because nothing in the test's reach is
+/// what the format style reads. This key is the seam.
+///
+/// ## What #1874 changed, and what it did not
+///
+/// #1874 removed that editor, and with it the only view in the app that
+/// rendered a `FormatStyle` — so **no committed reference is locale-dependent
+/// today, and the number path this key was built for is exercised by nothing.**
+/// The key stays because its surviving consumers read it and pass it
+/// explicitly (`SessionListView`, `QuotaResetFormat`, `HistoryView`), and
+/// because the AppKit fact above did not stop being true. What *is* gone is
+/// the lock: whoever next renders a number through a `FormatStyle` must
+/// re-establish one, or the picture-of-the-machine defect returns unobserved.
+/// `docs/swift-testing.md` carries that obligation in full.
 ///
 /// ## Why not `\.locale`
 ///
@@ -35,11 +46,12 @@ import SwiftUI
 ///
 /// This key's default is `Locale.autoupdatingCurrent`, so
 /// `.number.locale(formatLocale)` is *by construction* the same style a bare
-/// `.number` already is — asserted in
-/// `PinnedLocaleSnapshotTests.testDefaultIsIndistinguishableFromABareNumberStyle`,
-/// and evidenced more strongly by the fact that #1630 regenerated **no**
-/// reference PNG: every committed snapshot still matches byte-for-byte on the
-/// host that recorded it.
+/// `.number` already is. The evidence is that #1630 regenerated **no**
+/// reference PNG, and neither did #1874 for any reference it kept: every
+/// surviving committed snapshot still matches byte-for-byte on the host that
+/// recorded it. (`PinnedLocaleSnapshotTests` asserted the same thing directly
+/// until #1874; it drove the deleted rule editor, so it retired with it rather
+/// than being re-pointed at a view invented to keep it alive — #1390's lesson.)
 ///
 /// Making this view honour `\.locale` may well be the right localisation
 /// decision later. It is a separate decision, with a separate blast radius,

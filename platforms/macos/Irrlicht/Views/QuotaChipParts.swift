@@ -18,12 +18,14 @@ import SwiftUI
 /// So the clock read moves to the smallest view that owns the pixels it
 /// changes. `QuotaWindowRow` owns the pace marker's x position;
 /// `QuotaStaleDimmed` owns the chip's opacity. Neither adds or removes a
-/// modifier, and no committed reference renders either site (re-measured while
-/// writing this: `git grep -n "rateLimit" -- platforms/macos/Tests` matches
-/// only a doc comment, and the six directories under `Tests/__Snapshots__`
-/// belong to suites that render session rows, groups, history, the wizard and
-/// the backchannel editor — none the panel header), so the 53-PNG set is
-/// untouched by construction rather than by inspection.
+/// modifier, and no committed reference renders either site (re-measured on
+/// #1874: `git grep -n "rateLimit" -- platforms/macos/Tests` matches only a
+/// doc comment, and the directories under `Tests/__Snapshots__` —
+/// `find Tests/__Snapshots__ -mindepth 1 -type d | wc -l` → 6, holding
+/// `find Tests/__Snapshots__ -name '*.png' | wc -l` → 60 references — belong
+/// to suites that render session rows, groups, history, the wizard and the two
+/// banners, none the panel header), so that reference set is untouched by
+/// construction rather than by inspection.
 ///
 /// ## What each one is graded by
 ///

@@ -469,13 +469,6 @@ struct SessionRowView: View {
                     SessionActionButtons(session: session)
                 }
 
-                // Backchannel control affordance (#724): only when the daemon
-                // says this session is controllable (toggle on + consent + a
-                // usable terminal backend).
-                if session.controllable == true {
-                    SessionControlButton(session: session)
-                }
-
                 // Short model name + adapter icon — grouped so layoutPriority applies to both
                 HStack(spacing: 6) {
                     Text(session.shortModelName)
@@ -892,9 +885,15 @@ private struct TaskListView: View {
 // MARK: - Session Action Buttons
 
 /// Fixes `.popover(...)` rendering BEHIND this app's host panel (issue
-/// #1743). `SessionControlButton` below is the only native SwiftUI
-/// `.popover` in the app; everything else that needs a floating surface
-/// goes through the hand-rolled `TooltipWindowController` bridge in
+/// #1743). **No view applies this today**: its only caller was the
+/// per-session control button #1874 deleted, and the app now ships no native
+/// SwiftUI
+/// `.popover` at all. It is kept rather than deleted because the AppKit
+/// constraint it encodes is a property of the app's window structure, not
+/// of that button — the next `.popover` anyone adds hits the same wall, and
+/// `PopoverHostReorderTests` is where the measured behaviour is written
+/// down. Everything that needs a floating surface today goes through the
+/// hand-rolled `TooltipWindowController` bridge in
 /// `SessionListView.swift` instead, for the exact same underlying reason:
 /// this app's content is hosted inside a custom `NSPanel`
 /// (`IrrlichtPanel`, `App/MenuBarController.swift`) at an elevated
@@ -1007,60 +1006,6 @@ private struct PopoverHostReorderModifier: ViewModifier {
 extension View {
     func reparentPopoverAboveHost(isPresented: Bool) -> some View {
         modifier(PopoverHostReorderModifier(isPresented: isPresented))
-    }
-}
-
-/// Backchannel control affordance (#724): a keyboard button that opens a
-/// popover to send text or an interrupt into a controllable session. Shown only
-/// when `session.controllable`. The whole-row tap (focus) is unaffected —
-/// SwiftUI gives the button its own tap handling.
-struct SessionControlButton: View {
-    let session: SessionState
-    @EnvironmentObject var sessionManager: SessionManager
-    @State private var showPopover = false
-    @State private var draft = ""
-
-    var body: some View {
-        Button {
-            showPopover.toggle()
-        } label: {
-            Image(systemName: "keyboard")
-                .font(.system(size: 10))
-                .foregroundColor(.secondary)
-        }
-        .buttonStyle(.plain)
-        .tooltip("Send input to this session")
-        .accessibilityIdentifier("session-control-\(session.id)")
-        .popover(isPresented: $showPopover, arrowEdge: .bottom) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Send to session").font(.caption).foregroundColor(.secondary)
-                HStack(spacing: 6) {
-                    TextField("text or /command", text: $draft)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 220)
-                        .onSubmit(send)
-                    Button("Send", action: send).disabled(draft.isEmpty)
-                }
-                Button(role: .destructive) {
-                    Task { _ = await sessionManager.interruptSession(sessionId: session.id) }
-                    showPopover = false
-                } label: {
-                    Label("Interrupt (Ctrl-C)", systemImage: "stop.circle")
-                }
-                .buttonStyle(.borderless)
-            }
-            .padding(12)
-        }
-        .reparentPopoverAboveHost(isPresented: showPopover)
-    }
-
-    private func send() {
-        let text = draft
-        guard !text.isEmpty else { return }
-        // Append a return so the line submits (mirrors the tmux send-keys path).
-        Task { _ = await sessionManager.sendInput(sessionId: session.id, text: text + "\r") }
-        draft = ""
-        showPopover = false
     }
 }
 

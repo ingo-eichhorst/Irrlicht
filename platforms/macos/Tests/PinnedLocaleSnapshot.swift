@@ -8,16 +8,24 @@ import SwiftUI
 ///
 /// ## What went wrong
 ///
-/// `BackchannelRulesView`'s threshold field renders through `format: .number`,
-/// which resolves via `Locale.autoupdatingCurrent`. The reference host is
-/// `de_DE`, so
-/// `__Snapshots__/BackchannelRulesViewSnapshotTests/testBackchannelRuleContextTokens.1.png`
-/// reads `150.000`; a `macos-latest` runner is `en_US` and renders `150,000`.
-/// Every contributor whose Mac groups thousands differently fails that test
-/// locally, with a "Snapshot does not match reference." that names no cause.
-/// This is the locale sibling of what `PinnedScaleSnapshot` is for the backing
-/// scale: a value read from the MACHINE where the equivalent value was
-/// available from the INPUT.
+/// The rule editor #1874 deleted rendered its threshold field through
+/// `format: .number`, which resolves via `Locale.autoupdatingCurrent`. The
+/// reference host is `de_DE`, so its committed reference read `150.000`, while
+/// a `macos-latest` runner at `en_US` rendered `150,000`. Every contributor
+/// whose Mac groups thousands differently failed that test locally, with a
+/// "Snapshot does not match reference." that named no cause. This is the
+/// locale sibling of what `PinnedScaleSnapshot` is for the backing scale: a
+/// value read from the MACHINE where the equivalent value was available from
+/// the INPUT.
+///
+/// ## What is left of it after #1874
+///
+/// That view was the app's only `FormatStyle` render, and #1874 deleted it
+/// along with the rest of the feature it belonged to — so **no surviving
+/// reference is locale-dependent**, and a wrong value here would now redden
+/// nothing. The pin stays anyway: it is what keeps the next locale-sensitive
+/// render from silently photographing a machine, and `docs/swift-testing.md`
+/// records that whoever adds one owes the family a fresh lock.
 ///
 /// ## Why `de_DE` and not `en_US`
 ///
@@ -34,8 +42,15 @@ import SwiftUI
 /// with it.
 enum PinnedLocaleSnapshot {
     /// The locale every committed reference was recorded under. Measured:
-    /// `defaults read -g AppleLocale` on the reference Mac → `de_DE`, and the
-    /// tokens reference shows `150.000`, which is `de_DE` grouping.
+    /// `defaults read -g AppleLocale` on the reference Mac → `de_DE`.
+    ///
+    /// Anchored on the surviving set rather than on one PNG's visible
+    /// grouping, because #1874 deleted the only reference that had any: the
+    /// evidence is that all 60 references under `Tests/__Snapshots__`
+    /// (`find Tests/__Snapshots__ -name '*.png' | wc -l`) still match
+    /// byte-for-byte on that host with this pin applied — `git status
+    /// --porcelain platforms/macos/Tests/__Snapshots__` is the check, and it
+    /// was empty across #1630, #1659, #1662, #1663 and #1874.
     static let referenceLocale = Locale(identifier: "de_DE")
 
     /// A locale that groups thousands differently from `referenceLocale`.
@@ -165,9 +180,12 @@ extension View {
 /// `NSView`. A suite cannot hand it an unpinned hierarchy, because the only
 /// initializer applies the pin itself: forgetting is a compile error, not a
 /// reference PNG that quietly photographs someone's regional settings.
-/// `PinnedLocaleSnapshotTests` grades this object and not one it assembled
+/// `PinnedLocaleSnapshotTests` graded this object and not one it assembled
 /// itself, so "the host the suites use" and "the host the pin was proven on"
-/// cannot be two things that disagree.
+/// could not be two things that disagree. It retired with its only subject in
+/// #1874; `PinnedTimeZoneSnapshotTests` and `PinnedNowSnapshotTests` still
+/// grade this object the same way, and they read `referenceLocale` from here,
+/// so the constant is not unobserved — only its number-grouping arm is gone.
 ///
 /// #1659 moved the **time zone** pin here for the same reason, out of
 /// `HistoryViewSnapshotTests`' `setUp`. That one had a second problem a

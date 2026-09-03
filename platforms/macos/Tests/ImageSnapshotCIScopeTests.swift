@@ -52,7 +52,6 @@ final class ImageSnapshotCIScopeTests: XCTestCase {
     /// re-derived by hand every time one is added, and a stale entry there
     /// looks exactly like coverage.
     private static let imageSnapshotSuites: [String: Bool] = [
-        "BackchannelRulesViewSnapshotTests": true,      // 2/2 fail on a runner
         "GroupViewSnapshotTests": true,                 // 6/6
         "HistoryViewSnapshotTests": true,               // 2/14
         "SessionListUnappliedGrantsWiringTests": true,  // 2/2
@@ -309,7 +308,7 @@ final class ImageSnapshotCIScopeTests: XCTestCase {
     /// image snapshots, and the ratchet would be reset rather than read. It is
     /// printed instead, on every run of this test and by every run of the
     /// suite itself (`Executed N tests`).
-    private static let committedUngatedTestCount = 57
+    private static let committedUngatedTestCount = 55
 
     /// The module the gated test target's classes live in, read off this class
     /// rather than typed: a literal here that stopped naming the real target
