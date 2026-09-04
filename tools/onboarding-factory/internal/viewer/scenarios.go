@@ -67,13 +67,24 @@ func (s *Server) handleScenarioDetail(w http.ResponseWriter, r *http.Request) {
 
 	d := ScenarioDetail{Agent: agent, Subtree: subtree, ID: id}
 	populateLatestRecordingFields(&d, store, scenarioDir)
-	// Spec-grounded expected.jsonl validation (against the newest recording).
+	// Validate the same newest all-profile recording populated above. Viewer
+	// history stays all-profile; CLI verification has a separate profile API.
 	// Errors are swallowed so a malformed expected.jsonl doesn't 500 the response.
-	if rep, err := validate.ValidateExpected(scenarioDir); err == nil && rep != nil {
-		d.Expected = rep
+	if d.LatestRecording != "" {
+		recDir := filepath.Join(scenarioDir, "recordings", d.LatestRecording)
+		if rep, err := validateExpectedRecording(scenarioDir, recDir); err == nil && rep != nil {
+			d.Expected = rep
+		}
 	}
 	d.Assessment = loadAssessment(scenarioDir)
 	writeJSON(w, d)
+}
+
+func validateExpectedRecording(scenarioDir, recordingDir string) (*validate.ExpectedReport, error) {
+	return validate.ValidateExpectedAgainst(
+		filepath.Join(scenarioDir, "expected.jsonl"),
+		filepath.Join(recordingDir, eventsFileName),
+	)
 }
 
 // handleRecordingHistoryRoute serves the /recordings and /recordings/{name}
