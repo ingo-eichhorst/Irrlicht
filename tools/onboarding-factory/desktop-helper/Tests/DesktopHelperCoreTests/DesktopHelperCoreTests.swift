@@ -405,13 +405,14 @@ final class DesktopHelperCoreTests: XCTestCase {
 
     func testSetValueRunsCompleteInjectedActionPathInOrder() throws {
         let application = AXUIElementCreateSystemWide()
+        let targetElement = AXUIElementCreateApplication(41_001)
         let target = LiveElement(
             snapshot: ElementSnapshot(
                 path: [0],
                 role: "AXTextArea",
                 identifier: "prompt-input"
             ),
-            element: application
+            element: targetElement
         )
         var order: [String] = []
         var currentValue = "old"
@@ -424,12 +425,13 @@ final class DesktopHelperCoreTests: XCTestCase {
             },
             setValue: { value, element in
                 order.append("set")
-                XCTAssertTrue(CFEqual(element, application))
+                XCTAssertTrue(CFEqual(element, targetElement))
+                XCTAssertEqual(value, "new")
                 currentValue = value
             },
             valueAttribute: { element in
                 order.append("value")
-                XCTAssertTrue(CFEqual(element, application))
+                XCTAssertTrue(CFEqual(element, targetElement))
                 return currentValue
             }
         )
@@ -450,6 +452,7 @@ final class DesktopHelperCoreTests: XCTestCase {
 
     func testKeyboardRunsCompleteInjectedActionPathInOrder() throws {
         let application = AXUIElementCreateSystemWide()
+        let targetElement = AXUIElementCreateApplication(41_002)
         var order: [String] = []
         var enabled = true
         let dependencies = makeDependencies(
@@ -464,16 +467,16 @@ final class DesktopHelperCoreTests: XCTestCase {
                         identifier: "send-button",
                         enabled: enabled
                     ),
-                    element: application
+                    element: targetElement
                 )])
             },
             focus: { element in
                 order.append("focus")
-                XCTAssertTrue(CFEqual(element, application))
+                XCTAssertTrue(CFEqual(element, targetElement))
             },
             isFocused: { element in
                 order.append("focused")
-                XCTAssertTrue(CFEqual(element, application))
+                XCTAssertTrue(CFEqual(element, targetElement))
                 return true
             },
             postKeyboardEvent: { keyCode, modifiers in
@@ -505,6 +508,7 @@ final class DesktopHelperCoreTests: XCTestCase {
 
     func testPhysicalClickRunsCompleteInjectedActionPathWithFreshCenter() throws {
         let application = AXUIElementCreateSystemWide()
+        let targetElement = AXUIElementCreateApplication(41_003)
         let selector = ControlSelector(role: "AXButton", identifier: "session-menu")
         var order: [String] = []
         var visible = true
@@ -521,13 +525,13 @@ final class DesktopHelperCoreTests: XCTestCase {
                         identifier: "session-menu",
                         frame: Frame(x: 1, y: 2, width: 3, height: 4)
                     ),
-                    element: application
+                    element: targetElement
                 )] : []
                 return LiveTree(elements: elements)
             },
             snapshot: { element, path, hierarchy in
                 order.append("refresh")
-                XCTAssertTrue(CFEqual(element, application))
+                XCTAssertTrue(CFEqual(element, targetElement))
                 XCTAssertEqual(path, [0])
                 XCTAssertTrue(hierarchy.isEmpty)
                 return ElementSnapshot(
@@ -539,7 +543,7 @@ final class DesktopHelperCoreTests: XCTestCase {
             },
             requireHitTarget: { element, point in
                 order.append("hit")
-                XCTAssertTrue(CFEqual(element, application))
+                XCTAssertTrue(CFEqual(element, targetElement))
                 XCTAssertEqual(point, Point(x: 110, y: 220))
             },
             physicalClick: { point in
