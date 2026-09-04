@@ -42,6 +42,22 @@ func loadFixture(t *testing.T, name string, libNames ...string) (File, []File) {
 	return File{Path: path, Src: string(src)}, libs
 }
 
+// fixtureLibs is the single catalog of libraries handed to each fixture. Most
+// fixtures use the shared slot model. The exceptions either need no library or
+// define the name at argument two.
+func fixtureLibs(name string) []string {
+	switch name {
+	case "inv3_alloc_arg2_bad.sh", "inv3_alloc_arg2_good.sh":
+		return []string{"slots_pos2.sh"}
+	case "inv2_no_trap.sh", "inv2_trap_without_teardown.sh", "no_tmux_exempt.sh",
+		"vacuous_empty.sh", "vacuous_no_teardown.sh", "vacuous_unclosed_function.sh",
+		"vacuous_unnamed_session.sh", "vacuous_unterminated_quote.sh":
+		return nil
+	default:
+		return []string{"slots.sh"}
+	}
+}
+
 // TestCheckerGradesEveryFixture is the committed mutation evidence this
 // package owes under AGENTS.md.
 //
@@ -74,60 +90,63 @@ func loadFixture(t *testing.T, name string, libNames ...string) (File, []File) {
 func TestCheckerGradesEveryFixture(t *testing.T) {
 	cases := []struct {
 		fixture string
-		libs    []string
 		want    []string // one invariant name per expected finding, in order
 	}{
-		{fixture: "good_driver.sh", libs: []string{"slots.sh"}},
-		{fixture: "inv1_step_guard_ok.sh", libs: []string{"slots.sh"}},
-		{fixture: "inv3_alloc_arg2_good.sh", libs: []string{"slots_pos2.sh"}},
+		{fixture: "good_driver.sh"},
+		{fixture: "inv1_step_guard_ok.sh"},
+		{fixture: "inv3_alloc_arg2_good.sh"},
+		// $0 is positional index zero, not a named variable. RED before the
+		// empty-name guard: nameFlow linked both $0 assignments through vars[""]
+		// and graded NOT_A_SESSION's unrelated literal as a session name.
+		{fixture: "inv3_positional_zero_assignment_ok.sh"},
 		{fixture: "no_tmux_exempt.sh"},
-		{fixture: "inv4_renamed_sentinel_ok.sh", libs: []string{"slots.sh"}},
-		{fixture: "inv4_fail_closed_ok.sh", libs: []string{"slots.sh"}},
-		{fixture: "inv4_literal_verdict_ok.sh", libs: []string{"slots.sh"}},
+		{fixture: "inv4_renamed_sentinel_ok.sh"},
+		{fixture: "inv4_fail_closed_ok.sh"},
+		{fixture: "inv4_literal_verdict_ok.sh"},
 		// A multi-line `awk '…'` program: the join this package needs, and the
 		// thing a `#`-is-a-comment rule could end early. A LOCK — green before
 		// the shellsource.go fix and after it.
-		{fixture: "quote_multiline_awk_ok.sh", libs: []string{"slots.sh"}},
+		{fixture: "quote_multiline_awk_ok.sh"},
 		// copilot's top-level `while … case` dispatch, carrying kiro-cli's
 		// legitimate SES_ALIVE entry check. RED before the classification was
 		// narrowed: the arm was graded as "this end-of-run teardown".
-		{fixture: "inv1_step_dispatch_case_arm_ok.sh", libs: []string{"slots.sh"}},
+		{fixture: "inv1_step_dispatch_case_arm_ok.sh"},
 		// A driver with its OWN alloc_slot (name at argument 2), handed the
 		// shared slots.sh (name at argument 1) that it never sources. RED before
 		// nameFlow keyed positions on a definition instead of a bare name: the
 		// uuid at argument 1 was graded as a session name.
-		{fixture: "inv3_shadowed_alloc_slot_ok.sh", libs: []string{"slots.sh"}},
+		{fixture: "inv3_shadowed_alloc_slot_ok.sh"},
 
-		{fixture: "inv1_gated_trap.sh", libs: []string{"slots.sh"}, want: []string{"INV-1"}},
-		{fixture: "inv1_gated_final_sweep.sh", libs: []string{"slots.sh"}, want: []string{"INV-1"}},
+		{fixture: "inv1_gated_trap.sh", want: []string{"INV-1"}},
+		{fixture: "inv1_gated_final_sweep.sh", want: []string{"INV-1"}},
 		// A comment glued to code, whose apostrophe used to be read as an
 		// unterminated quote: everything below it was swallowed, INV-1 reported
 		// CLEAN, and `sites` stayed non-zero so the vacuity guard saw nothing.
-		{fixture: "inv1_comment_glued_to_code.sh", libs: []string{"slots.sh"}, want: []string{"INV-1"}},
+		{fixture: "inv1_comment_glued_to_code.sh", want: []string{"INV-1"}},
 		// A trailing `case "$EXIT_REASON" in` — a top-level `case` that no loop
 		// re-enters — is teardown, so the step-dispatch narrowing must not
 		// excuse it.
-		{fixture: "inv1_gated_case_at_exit.sh", libs: []string{"slots.sh"}, want: []string{"INV-1"}},
+		{fixture: "inv1_gated_case_at_exit.sh", want: []string{"INV-1"}},
 		{fixture: "inv2_no_trap.sh", want: []string{"INV-2"}},
 		{fixture: "inv2_trap_without_teardown.sh", want: []string{"INV-2"}},
-		{fixture: "inv3_no_pid.sh", libs: []string{"slots.sh"}, want: []string{"INV-3"}},
-		{fixture: "inv3_glued_pid.sh", libs: []string{"slots.sh"}, want: []string{"INV-3"}},
-		{fixture: "inv3_alloc_arg2_bad.sh", libs: []string{"slots_pos2.sh"}, want: []string{"INV-3"}},
+		{fixture: "inv3_no_pid.sh", want: []string{"INV-3"}},
+		{fixture: "inv3_glued_pid.sh", want: []string{"INV-3"}},
+		{fixture: "inv3_alloc_arg2_bad.sh", want: []string{"INV-3"}},
 		// The shadowed-alloc_slot driver with a genuinely PID-less name at
 		// argument 2. ONE finding: the fix must silence the contaminated
 		// position without silencing the real one, and this row is what tells
 		// those two apart. It reported TWO before the fix.
-		{fixture: "inv3_shadowed_alloc_slot_bad.sh", libs: []string{"slots.sh"}, want: []string{"INV-3"}},
-		{fixture: "inv4_unconditional_write.sh", libs: []string{"slots.sh"}, want: []string{"INV-4"}},
-		{fixture: "inv4_guard_consults_only_itself.sh", libs: []string{"slots.sh"}, want: []string{"INV-4"}},
-		{fixture: "inv4_sentinel_never_set.sh", libs: []string{"slots.sh"}, want: []string{"INV-4"}},
-		{fixture: "inv4_guard_reassigns_initial.sh", libs: []string{"slots.sh"}, want: []string{"INV-4"}},
-		{fixture: "inv4_case_arm_is_not_the_epilogue.sh", libs: []string{"slots.sh"}, want: []string{"INV-4"}},
+		{fixture: "inv3_shadowed_alloc_slot_bad.sh", want: []string{"INV-3"}},
+		{fixture: "inv4_unconditional_write.sh", want: []string{"INV-4"}},
+		{fixture: "inv4_guard_consults_only_itself.sh", want: []string{"INV-4"}},
+		{fixture: "inv4_sentinel_never_set.sh", want: []string{"INV-4"}},
+		{fixture: "inv4_guard_reassigns_initial.sh", want: []string{"INV-4"}},
+		{fixture: "inv4_case_arm_is_not_the_epilogue.sh", want: []string{"INV-4"}},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.fixture, func(t *testing.T) {
-			driver, libs := loadFixture(t, tc.fixture, tc.libs...)
+			driver, libs := loadFixture(t, tc.fixture, fixtureLibs(tc.fixture)...)
 			got, err := CheckDriver(driver, libs)
 			if err != nil {
 				t.Fatalf("checking %s: %v", tc.fixture, err)
@@ -152,14 +171,13 @@ func TestCheckerGradesEveryFixture(t *testing.T) {
 func TestCheckerRefusesRatherThanReportingClean(t *testing.T) {
 	cases := []struct {
 		fixture string
-		libs    []string
 		wantErr string // a fragment of the checker's own message
 	}{
 		{fixture: "vacuous_empty.sh", wantErr: "is empty"},
 		{fixture: "vacuous_no_teardown.sh", wantErr: "INV-1 graded nothing here"},
 		{fixture: "vacuous_unnamed_session.sh", wantErr: "with no `-s <name>`"},
 		{fixture: "vacuous_unclosed_function.sh", wantErr: "is never closed by a `}`"},
-		{fixture: "vacuous_uninitialised_verdict.sh", libs: []string{"slots.sh"},
+		{fixture: "vacuous_uninitialised_verdict.sh",
 			wantErr: "INV-4 has no initial value to compare against"},
 		// A quote still open at end of file: the joiner walks to EOF and the
 		// word scanner swallows every remaining statement into one quoted word.
@@ -169,13 +187,13 @@ func TestCheckerRefusesRatherThanReportingClean(t *testing.T) {
 			wantErr: "is never closed before the end of the file"},
 		// Refuses AND carries a finding. TestARefusalStillNamesTheFindingThatCausedIt
 		// is where that second half is graded; this row pins that it still refuses.
-		{fixture: "inv2_no_trap_no_sweep.sh", libs: []string{"slots.sh"},
+		{fixture: "inv2_no_trap_no_sweep.sh",
 			wantErr: "INV-1 graded nothing here"},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.fixture, func(t *testing.T) {
-			driver, libs := loadFixture(t, tc.fixture, tc.libs...)
+			driver, libs := loadFixture(t, tc.fixture, fixtureLibs(tc.fixture)...)
 			got, err := CheckDriver(driver, libs)
 			if err == nil {
 				t.Fatalf("%s returned no error (%d finding(s)) — this input could not be graded, "+
