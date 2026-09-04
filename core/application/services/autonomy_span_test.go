@@ -303,11 +303,11 @@ func TestAutonomyReasonLadderMatchesHistoryBar(t *testing.T) {
 	}
 	for i := 1; i < len(pairs); i++ {
 		prev, cur := pairs[i-1], pairs[i]
-		if !(prev.historyBar > cur.historyBar) {
+		if prev.historyBar <= cur.historyBar {
 			t.Fatalf("the history bar's ladder no longer ranks %q above %q — this test's premise is gone",
 				prev.state, cur.state)
 		}
-		if !(prev.autonomyBar > cur.autonomyBar) {
+		if prev.autonomyBar <= cur.autonomyBar {
 			t.Errorf("the autonomy strip ranks %q (%d) at or below %q (%d), but the history bar ranks it "+
 				"above — one error in a column must paint the whole column",
 				prev.state, prev.autonomyBar, cur.state, cur.autonomyBar)

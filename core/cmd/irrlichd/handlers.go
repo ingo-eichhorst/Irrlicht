@@ -693,6 +693,55 @@ type historyQuery struct {
 	seriesQuery outbound.SeriesQuery
 }
 
+// resolveHistoryWindow resolves a chart's [start, end) window and bucket width
+// from whichever window selector that chart owns, writing the 400 and returning
+// ok=false on an invalid one.
+//
+// THREE VOCABULARIES, and the split between them is the point (#1905):
+//
+//   - Autonomy's ?window= keys are WINDOW LENGTHS: "24h" IS one day.
+//   - chart=state's ?granularity= keys are BUCKET WIDTHS times a count, so
+//     "24h" there resolves to a THIRTY-DAY window.
+//   - everything else uses ?range=/?start=&end= plus a span-derived bucket.
+//
+// The first two look identical and mean different things, which is why they
+// resolve through separate tables rather than one shared map —
+// TestAutonomyWindows_AreNotHistoryGranularities is the tripwire that keeps a
+// later refactor from merging them.
+func resolveHistoryWindow(w http.ResponseWriter, q url.Values, chart string) (rangeKey string, start, end, bucketSeconds int64, ok bool) {
+	switch {
+	case isAutonomyChart(chart):
+		window := q.Get("window")
+		if window == "" {
+			window = autonomyDefaultWindow(chart)
+		}
+		bs, s, e, known := resolveAutonomyWindow(chart, window)
+		if !known {
+			http.Error(w, autonomyWindowError(chart), http.StatusBadRequest)
+			return "", 0, 0, 0, false
+		}
+		return window, s, e, bs, true
+	case chart == "state":
+		granularity := q.Get("granularity")
+		if granularity == "" {
+			granularity = "24h"
+		}
+		bs, s, e, known := resolveHistoryGranularity(granularity)
+		if !known {
+			http.Error(w, "invalid granularity: use 1m|10m|60m|8h|24h|7d|1mo|6mo|1y", http.StatusBadRequest)
+			return "", 0, 0, 0, false
+		}
+		return granularity, s, e, bs, true
+	default:
+		rk, s, e, valid := resolveHistoryRange(q)
+		if !valid {
+			http.Error(w, "invalid range: use range=day|week|month|year|this-month or start&end (unix seconds)", http.StatusBadRequest)
+			return "", 0, 0, 0, false
+		}
+		return rk, s, e, historyBucketSeconds(q, e-s), true
+	}
+}
+
 // resolveHistoryQuery parses and validates handleGetHistory's query params,
 // writing the appropriate 400 response and returning ok=false on the first
 // invalid one.
@@ -722,44 +771,9 @@ func resolveHistoryQuery(w http.ResponseWriter, q url.Values) (historyQuery, boo
 	scopeField, scopeValue := parseHistoryScope(q.Get("scope"))
 	scopeEcho := historyScopeEcho(scopeField, scopeValue)
 
-	// chart=state (#981) resolves its window from a named ?granularity=
-	// zoom-level instead of the usual ?range=/?bucket= pair — the granularity
-	// picks both the bucket width and the trailing window at once.
-	var rangeKey string
-	var start, end, bucketSeconds int64
-	if isAutonomyChart(chart) {
-		// Autonomy (#1905) resolves its window from ?window=, whose keys are
-		// WINDOW LENGTHS — not the bucket-width-times-count that the
-		// same-looking ?granularity= keys mean below.
-		window := q.Get("window")
-		if window == "" {
-			window = autonomyDefaultWindow(chart)
-		}
-		bs, s, e, wok := resolveAutonomyWindow(chart, window)
-		if !wok {
-			http.Error(w, autonomyWindowError(chart), http.StatusBadRequest)
-			return historyQuery{}, false
-		}
-		rangeKey, start, end, bucketSeconds = window, s, e, bs
-	} else if chart == "state" {
-		granularity := q.Get("granularity")
-		if granularity == "" {
-			granularity = "24h"
-		}
-		bs, s, e, gok := resolveHistoryGranularity(granularity)
-		if !gok {
-			http.Error(w, "invalid granularity: use 1m|10m|60m|8h|24h|7d|1mo|6mo|1y", http.StatusBadRequest)
-			return historyQuery{}, false
-		}
-		rangeKey, start, end, bucketSeconds = granularity, s, e, bs
-	} else {
-		rk, s, e, ok := resolveHistoryRange(q)
-		if !ok {
-			http.Error(w, "invalid range: use range=day|week|month|year|this-month or start&end (unix seconds)", http.StatusBadRequest)
-			return historyQuery{}, false
-		}
-		rangeKey, start, end = rk, s, e
-		bucketSeconds = historyBucketSeconds(q, end-start)
+	rangeKey, start, end, bucketSeconds, wok := resolveHistoryWindow(w, q, chart)
+	if !wok {
+		return historyQuery{}, false
 	}
 
 	seriesQuery := outbound.SeriesQuery{
@@ -783,6 +797,45 @@ func resolveHistoryQuery(w http.ResponseWriter, q url.Values) (historyQuery, boo
 	}, true
 }
 
+// historyChartDeps bundles the readers the non-cost charts need, so the
+// dispatcher below takes one value instead of four positional collaborators
+// (go:S107).
+type historyChartDeps struct {
+	sessions    historySessionLister
+	concurrency outbound.ConcurrencyReader
+	git         historyGitReader
+	autonomy    outbound.AutonomySpanStore
+}
+
+// serveNonCostHistoryChart answers every chart that is not a cost time series
+// and reports whether it did. Each of these reads a different store — completed
+// sessions, git, the lifecycle recordings, the autonomy span log — and none of
+// them touches the group/metric/scope machinery the cost path needs, which is
+// why they resolve here rather than downstream of it.
+func serveNonCostHistoryChart(w http.ResponseWriter, r *http.Request, hq historyQuery, deps historyChartDeps) bool {
+	switch hq.chart {
+	case chartAutonomyDuration:
+		// Autonomy (#1905) reads the always-on span log, never the opt-in
+		// recordings — see outbound.AutonomySpanStore for why that matters.
+		serveHistoryAutonomyDurationChart(w, deps.autonomy, hq.rangeKey, hq.seriesQuery.BucketSeconds, hq.start, hq.end)
+	case chartAutonomySpans:
+		serveHistoryAutonomySpansChart(w, deps.autonomy, hq.rangeKey, hq.start, hq.end)
+	case "yield":
+		// A per-project aggregate over completed sessions, not a time series (#373).
+		writeHistoryJSON(w, buildYieldResponse(hq.rangeKey, hq.group, hq.start, hq.end, deps.sessions))
+	case "dora":
+		// A per-project period summary computed from git on request (#951).
+		serveHistoryDoraChart(r.Context(), w, deps.git, deps.sessions, r.URL.Query().Get("project"), hq.rangeKey, hq.start, hq.end)
+	case "agents":
+		serveHistoryAgentsChart(w, deps.concurrency, hq.rangeKey, hq.scopeEcho, hq.seriesQuery)
+	case "state":
+		serveHistoryStateChart(w, deps.concurrency, hq.rangeKey, hq.scopeEcho, hq.seriesQuery)
+	default:
+		return false
+	}
+	return true
+}
+
 func handleGetHistory(tracker outbound.CostTracker, sessions historySessionLister, concurrency outbound.ConcurrencyReader, git historyGitReader, autonomy outbound.AutonomySpanStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
@@ -792,38 +845,12 @@ func handleGetHistory(tracker outbound.CostTracker, sessions historySessionListe
 			return
 		}
 
-		// Autonomy (#1905): both elements read the always-on span log and
-		// touch none of the group/metric/scope machinery below.
-		if hq.chart == chartAutonomyDuration {
-			serveHistoryAutonomyDurationChart(w, autonomy, hq.rangeKey, hq.seriesQuery.BucketSeconds, hq.start, hq.end)
-			return
-		}
-		if hq.chart == chartAutonomySpans {
-			serveHistoryAutonomySpansChart(w, autonomy, hq.rangeKey, hq.start, hq.end)
-			return
-		}
-
-		// Yield is a per-project aggregate over completed sessions, not a cost
-		// time series — handle it before the cost-tracker path (#373).
-		if hq.chart == "yield" {
-			writeHistoryJSON(w, buildYieldResponse(hq.rangeKey, hq.group, hq.start, hq.end, sessions))
-			return
-		}
-
-		// DORA metrics are a per-project period summary, not a cost time
-		// series — handle it before the cost-tracker path (#951).
-		if hq.chart == "dora" {
-			serveHistoryDoraChart(r.Context(), w, git, sessions, q.Get("project"), hq.rangeKey, hq.start, hq.end)
-			return
-		}
-
-		if hq.chart == "agents" {
-			serveHistoryAgentsChart(w, concurrency, hq.rangeKey, hq.scopeEcho, hq.seriesQuery)
-			return
-		}
-
-		if hq.chart == "state" {
-			serveHistoryStateChart(w, concurrency, hq.rangeKey, hq.scopeEcho, hq.seriesQuery)
+		// Every chart that is NOT a cost series answers here and returns; only
+		// the cost/tokens/co2/models/providers family falls through to the
+		// cost-tracker path below.
+		if serveNonCostHistoryChart(w, r, hq, historyChartDeps{
+			sessions: sessions, concurrency: concurrency, git: git, autonomy: autonomy,
+		}) {
 			return
 		}
 

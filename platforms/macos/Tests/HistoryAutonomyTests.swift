@@ -18,7 +18,8 @@ final class HistoryAutonomyTests: XCTestCase {
         let manager = SessionManager()
         let ordered = AutonomyEndReason.allCases.sorted { $0.priority > $1.priority }
         for i in 1..<ordered.count {
-            let higher = ordered[i - 1], lower = ordered[i]
+            let higher = ordered[i - 1]
+            let lower = ordered[i]
             XCTAssertGreaterThan(
                 manager.historyPriorityForState(higher.rawValue),
                 manager.historyPriorityForState(lower.rawValue),
@@ -40,9 +41,16 @@ final class HistoryAutonomyTests: XCTestCase {
         """)
     }
 
-    private func decodeRow(_ json: String) -> HistoryAutonomySpanRow {
-        // swiftlint:disable:next force_try
-        try! JSONDecoder().decode(HistoryAutonomySpanRow.self, from: Data(json.utf8))
+    /// Decoding a literal fixture cannot fail; a malformed one is a bug in the
+    /// test, so it reports as a test failure with the offending JSON rather
+    /// than as a crash (`try!`) with no context.
+    private func decodeRow(_ json: String, file: StaticString = #filePath, line: UInt = #line) -> HistoryAutonomySpanRow {
+        do {
+            return try JSONDecoder().decode(HistoryAutonomySpanRow.self, from: Data(json.utf8))
+        } catch {
+            XCTFail("fixture is not a decodable span row: \(error)\n\(json)", file: file, line: line)
+            return HistoryAutonomySpanRow(start: 0, end: 0, project: "", session: "", reason: nil)
+        }
     }
 
     /// Every span draws at a minimum of one column. At 12 months a 40-second

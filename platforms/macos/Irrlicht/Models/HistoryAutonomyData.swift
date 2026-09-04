@@ -130,17 +130,6 @@ struct HistoryAutonomyBucket: Codable, Identifiable {
         // `thin` is omitempty on the wire: absent means false.
         thin = try c.decodeIfPresent(Bool.self, forKey: .thin) ?? false
     }
-
-    init(ts: Int64, p95: Double, p50: Double, p5: Double, min: Double, max: Double, count: Int, thin: Bool) {
-        self.ts = ts
-        self.p95 = p95
-        self.p50 = p50
-        self.p5 = p5
-        self.min = min
-        self.max = max
-        self.count = count
-        self.thin = thin
-    }
 }
 
 /// The window-wide figure row under the chart. The true extremes stay FIGURES

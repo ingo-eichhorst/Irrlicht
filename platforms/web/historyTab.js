@@ -788,26 +788,32 @@ export function autonomyProvenanceLine(duration) {
 // because a run whose reason this build cannot name still HAPPENED: it holds
 // its column (drawn neutral) rather than reading as idle.
 export function collapseAutonomyStrip(spans, start, end, columns) {
-  if (!(columns > 0) || !(end > start)) return [];
+  if (columns <= 0 || end <= start) return [];
   const out = [];
   for (let i = 0; i < columns; i++) out.push({ occupied: false, reason: null });
-  const width = end - start;
-  for (const sp of (spans || [])) {
-    let first = Math.floor((sp.start - start) / width * columns);
-    let last = Math.floor((sp.end - start) / width * columns);
-    if (last < 0 || first > columns - 1) continue; // wholly outside the window
-    first = Math.max(0, first);
-    last = Math.min(columns - 1, last);
-    if (last < first) last = first; // the minimum-one-column rule
-    const rank = AUTONOMY_REASON_PRIORITY[sp.reason] || 0;
-    for (let i = first; i <= last; i++) {
-      // -1 for an untouched column, so even an unnamed reason (rank 0) claims it.
-      const existingRank = out[i].occupied ? (AUTONOMY_REASON_PRIORITY[out[i].reason] || 0) : -1;
-      out[i].occupied = true;
-      if (rank > existingRank) out[i].reason = AUTONOMY_REASON_PRIORITY[sp.reason] ? sp.reason : null;
-    }
-  }
+  for (const sp of (spans || [])) paintSpanColumns(out, sp, start, end, columns);
   return out;
+}
+
+// paintSpanColumns writes one span into the column array, applying both halves
+// of the rule: the span's column range (never empty — the minimum-one-column
+// rule) and the ladder that decides a shared column's color.
+function paintSpanColumns(out, sp, start, end, columns) {
+  const width = end - start;
+  let first = Math.floor((sp.start - start) / width * columns);
+  let last = Math.floor((sp.end - start) / width * columns);
+  if (last < 0 || first > columns - 1) return; // wholly outside the window
+  first = Math.max(0, first);
+  last = Math.min(columns - 1, last);
+  if (last < first) last = first; // the minimum-one-column rule
+  const reason = AUTONOMY_REASON_PRIORITY[sp.reason] ? sp.reason : null;
+  const rank = AUTONOMY_REASON_PRIORITY[sp.reason] || 0;
+  for (let i = first; i <= last; i++) {
+    // -1 for an untouched column, so even an unnamed reason (rank 0) claims it.
+    const existingRank = out[i].occupied ? (AUTONOMY_REASON_PRIORITY[out[i].reason] || 0) : -1;
+    out[i].occupied = true;
+    if (rank > existingRank) out[i].reason = reason;
+  }
 }
 
 // autonomyReasonColor maps an end reason onto the shared state palette. An
@@ -872,7 +878,18 @@ function paintAutonomyChart() {
     return padT + plotH * (1 - t);
   };
 
-  // Gridlines, labelled in the same duration units the summary uses.
+  drawAutonomyGridlines(ctx, { lo, hi, yAt, padL, padR, w, muted, gridColor });
+  for (const [key, cssVar, fallback] of AUTONOMY_SERIES) {
+    const color = (cs.getPropertyValue(cssVar) || fallback).trim();
+    drawAutonomySeries(ctx, { points, key, color, xAt, yAt });
+  }
+  drawAutonomyXLabels(ctx, { duration, xAt, muted, h, padB });
+}
+
+// drawAutonomyGridlines draws the log-scale Y gridlines, labelled in the same
+// duration units the summary row uses, so an axis tick and a headline figure
+// can never be read in different units.
+function drawAutonomyGridlines(ctx, { lo, hi, yAt, padL, padR, w, muted, gridColor }) {
   ctx.strokeStyle = gridColor;
   ctx.fillStyle = muted;
   ctx.font = '10px ui-monospace, monospace';
@@ -888,13 +905,9 @@ function paintAutonomyChart() {
     ctx.stroke();
     ctx.fillText(autonomyDuration(v), padL - 6, y);
   }
+}
 
-  for (const [key, cssVar, fallback] of AUTONOMY_SERIES) {
-    const color = (cs.getPropertyValue(cssVar) || fallback).trim();
-    drawAutonomySeries(ctx, { points, key, color, xAt, yAt });
-  }
-
-  // X labels.
+function drawAutonomyXLabels(ctx, { duration, xAt, muted, h, padB }) {
   ctx.fillStyle = muted;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
@@ -961,13 +974,7 @@ function renderAutonomyStrip() {
 
   const projects = spans?.projects || [];
   if (!projects.length) {
-    const empty = document.createElement('div');
-    empty.className = 'history-autonomy-empty';
-    empty.textContent = autonomyEverRecorded()
-      ? 'No runs in the last ' + (AUTONOMY_SPAN_LABELS[historyState.autonomySpan] || historyState.autonomySpan)
-        + '. ' + (spans?.total_recorded || 0) + ' runs are on record over a longer period.'
-      : 'No runs recorded yet — this strip fills in as sessions run.';
-    rowsEl.appendChild(empty);
+    rowsEl.appendChild(buildAutonomyStripEmpty(spans));
     return;
   }
 
@@ -975,20 +982,37 @@ function renderAutonomyStrip() {
   for (const project of projects) {
     rowsEl.appendChild(buildAutonomyStripRow(project, spans, cs));
   }
-  if (legendEl) {
-    for (const [reason, glyph, label] of AUTONOMY_REASON_LEGEND) {
-      const item = document.createElement('span');
-      item.className = 'history-autonomy-legend-item';
-      const swatch = document.createElement('i');
-      swatch.style.background = autonomyReasonColor(reason, cs);
-      item.appendChild(swatch);
-      item.appendChild(document.createTextNode(glyph + ' ' + label));
-      legendEl.appendChild(item);
-    }
-  }
+  if (legendEl) fillAutonomyLegend(legendEl, cs);
   if (noteEl && spans.truncated) {
     noteEl.textContent = 'This window holds more runs than one request returns; the strip shows the oldest part of it. '
       + 'Pick a shorter span for a complete picture.';
+  }
+}
+
+// buildAutonomyStripEmpty renders the strip's empty state. Two wordings, and
+// the distinction is the honesty rule: "no runs in this window" and "nothing
+// has ever been recorded" are different claims, and only the second one is
+// about the feature rather than about the user.
+function buildAutonomyStripEmpty(spans) {
+  const empty = document.createElement('div');
+  empty.className = 'history-autonomy-empty';
+  const label = AUTONOMY_SPAN_LABELS[historyState.autonomySpan] || historyState.autonomySpan;
+  empty.textContent = autonomyEverRecorded()
+    ? 'No runs in the last ' + label + '. ' + (spans?.total_recorded || 0)
+      + ' runs are on record over a longer period.'
+    : 'No runs recorded yet — this strip fills in as sessions run.';
+  return empty;
+}
+
+function fillAutonomyLegend(legendEl, cs) {
+  for (const [reason, glyph, label] of AUTONOMY_REASON_LEGEND) {
+    const item = document.createElement('span');
+    item.className = 'history-autonomy-legend-item';
+    const swatch = document.createElement('i');
+    swatch.style.background = autonomyReasonColor(reason, cs);
+    item.appendChild(swatch);
+    item.appendChild(document.createTextNode(glyph + ' ' + label));
+    legendEl.appendChild(item);
   }
 }
 
