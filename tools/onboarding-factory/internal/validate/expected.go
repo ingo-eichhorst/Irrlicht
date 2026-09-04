@@ -49,6 +49,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"irrlicht/tools/onboarding-factory/internal/matrix"
 )
 
 // ExpectedMeta is the first line of expected.jsonl — file-wide
@@ -224,28 +226,17 @@ func openTaintGuarded(path string) (*os.File, error) {
 	return os.Open(path)
 }
 
-// NewestRecordingDir returns the path to the newest recording under
-// scenarioDir/recordings/ — the lexicographically-greatest entry name, which
-// (recording names are timestamp-prefixed) is the most recent. ok is false
-// when there is no recordings/ dir or it holds no subdirectories.
+// NewestRecordingDir returns the newest recording across all profiles. Viewer
+// history keeps this legacy behavior; verification uses the profile-aware API.
 func NewestRecordingDir(scenarioDir string) (string, bool) {
 	if hasParentTraversal(scenarioDir) {
 		return "", false
 	}
-	entries, err := os.ReadDir(filepath.Join(scenarioDir, "recordings"))
-	if err != nil {
+	dirs := matrix.RecordingDirs(scenarioDir)
+	if len(dirs) == 0 {
 		return "", false
 	}
-	newest := ""
-	for _, e := range entries {
-		if e.IsDir() && e.Name() > newest {
-			newest = e.Name()
-		}
-	}
-	if newest == "" {
-		return "", false
-	}
-	return filepath.Join(scenarioDir, "recordings", newest), true
+	return dirs[0], true
 }
 
 // RecordingComplete reports problems with a single recording directory as a
@@ -293,15 +284,25 @@ func RecordingComplete(recDir string) []string {
 // Every recording lives under recordings/<name>/; the spec (expected.jsonl)
 // stays at the cell root and is validated against the newest recording.
 func ValidateExpected(scenarioDir string) (*ExpectedReport, error) {
+	return ValidateExpectedForProfile(scenarioDir, matrix.ProfileCLILocal)
+}
+
+// ValidateExpectedForProfile validates the newest recording within profile.
+// Profile selection happens before newest-recording selection.
+func ValidateExpectedForProfile(scenarioDir string, profile matrix.ExecutionProfile) (*ExpectedReport, error) {
 	if hasParentTraversal(scenarioDir) {
 		return nil, nil
 	}
 	expectedPath := filepath.Join(scenarioDir, "expected.jsonl")
-	recDir, ok := NewestRecordingDir(scenarioDir)
+	recording, ok, err := matrix.NewestRecording(scenarioDir, profile)
+	if err != nil {
+		return nil, err
+	}
 	if !ok {
 		// No recording captured — nothing to validate (same shape as no spec).
 		return nil, nil
 	}
+	recDir := recording.Dir
 	eventsPath := filepath.Join(recDir, "events.jsonl")
 	// HALF-recorded guard (#496 RC6) — scoped to the CELL path here, NOT to
 	// ValidateExpectedAgainst. A cell with expected.jsonl + a transcript but no

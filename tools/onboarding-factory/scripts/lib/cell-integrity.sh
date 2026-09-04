@@ -31,6 +31,8 @@
 
 # shellcheck source=shard-lib.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/shard-lib.sh"
+# shellcheck source=recording-profile.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/recording-profile.sh"
 
 # ci_recipe_dir_names <agent>
 #   → every legitimate on-disk folder name for the agent (each folder that holds
@@ -72,7 +74,7 @@ ci_is_recorded() {
 #     spec. Each recording must be self-complete (events + transcript + golden).
 ci_missing_artifacts() {
   local agent="$1" name="$2" dir="$3"
-  local problems=() r recname
+  local problems=() recname
 
   # recipe row — the folder must be a live cell (holds a metadata.json).
   if ! ci_recipe_dir_names "$agent" | grep -qxF "$name"; then
@@ -89,12 +91,12 @@ ci_missing_artifacts() {
   # The spec stays at the cell root.
   [[ -f "$dir/expected.jsonl" ]] || problems+=("expected.jsonl")
 
-  # The NEWEST recording (the canonical one) must carry a complete set. Older
-  # recordings are historical and may be partial — they're not gated (the
-  # byte-identity golden test independently pins every transcript-bearing one).
-  # Pathname globbing yields sorted-ascending names, so the last is the newest.
+  # The newest cli-local recording must carry a complete set. Desktop evidence
+  # does not replace the CLI gate.
   local newest=""
-  for r in "$dir"/recordings/*/; do [[ -d "$r" ]] && newest="$r"; done
+  if ! newest="$(newest_recording_for_profile "$dir" cli-local)"; then
+    problems+=("recording manifest execution_profile")
+  fi
   if [[ -n "$newest" ]]; then
     recname="$(basename "${newest%/}")"
     [[ -f "$newest/events.jsonl" ]] || problems+=("recordings/$recname/events.jsonl")

@@ -24,7 +24,8 @@
 # which sorts newest-first by name (the viewer's ordering).
 #
 # Usage:
-#   promote-recording.sh <staging-dir> <agent> <scenario-folder>
+#   promote-recording.sh [--execution-profile cli-local|desktop-local]
+#     [--desktop-app-version version] <staging-dir> <agent> <scenario-folder>
 #
 # <staging-dir> is the output of run-cell.sh
 #   (.build/refresh/<agent>/<folder>-<TS>/).
@@ -37,14 +38,49 @@
 
 set -euo pipefail
 
+EXECUTION_PROFILE="cli-local"
+DESKTOP_APP_VERSION=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --execution-profile)
+      [[ $# -ge 2 ]] || { echo "promote: --execution-profile needs a value" >&2; exit 2; }
+      EXECUTION_PROFILE="$2"
+      shift 2
+      ;;
+    --desktop-app-version)
+      [[ $# -ge 2 ]] || { echo "promote: --desktop-app-version needs a value" >&2; exit 2; }
+      DESKTOP_APP_VERSION="$2"
+      shift 2
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      echo "promote: unknown option $1" >&2
+      exit 2
+      ;;
+    *) break ;;
+  esac
+done
+
 if [[ $# -ne 3 ]]; then
-  echo "usage: promote-recording.sh <staging-dir> <agent> <scenario-folder>" >&2
+  echo "usage: promote-recording.sh [--execution-profile cli-local|desktop-local] [--desktop-app-version version] <staging-dir> <agent> <scenario-folder>" >&2
   exit 2
 fi
 
 STAGING="$1"
 AGENT="$2"
 SCENARIO="$3"
+
+case "$EXECUTION_PROFILE" in
+  cli-local | desktop-local) ;;
+  *) echo "promote: unknown execution profile $EXECUTION_PROFILE" >&2; exit 2 ;;
+esac
+if [[ "$EXECUTION_PROFILE" == "desktop-local" && "$AGENT" != "claudecode" ]]; then
+  echo "promote: desktop-local is only supported for claudecode" >&2
+  exit 2
+fi
 
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 [[ -n "$REPO_ROOT" ]] || { echo "not in a git repo" >&2; exit 1; }
@@ -144,6 +180,21 @@ if [[ -z "$AGENT_VER" ]]; then
   fi
 fi
 
+# BEGIN recording_identity
+# Claude Code stores the real entrypoint on transcript records. Keep that
+# value verbatim: CLI recordings normally say "cli" and Desktop-driven local
+# sessions can say "sdk-cli". Do not derive a new label from the profile.
+ENTRYPOINT=""
+if [[ "$AGENT" == "claudecode" && -f "$STAGED_DIR/transcript.jsonl" ]]; then
+  ENTRYPOINT="$(jq -r 'select((.entrypoint? | type) == "string" and .entrypoint != "") | .entrypoint' \
+    "$STAGED_DIR/transcript.jsonl" 2>/dev/null | head -n1 || true)"
+  [[ -n "$ENTRYPOINT" ]] || ENTRYPOINT="unknown"
+fi
+if [[ "$EXECUTION_PROFILE" == "desktop-local" && -z "$DESKTOP_APP_VERSION" ]]; then
+  DESKTOP_APP_VERSION="unknown"
+fi
+# END recording_identity
+
 # Repo provenance (#1333 / B7). Serialized recording is already the documented
 # contract, but nothing enforced it: a concurrent session committing in the same
 # worktree mid-recording leaves manifests whose daemon_version SHA belongs to
@@ -191,6 +242,7 @@ NEW_STARTED_AT="$NEW_TS"
 #    transcript.md covers markdown-transcript adapters (aider); transcript.json
 #    is the metadata sidecar of sidecar-reading adapters (kiro-cli, #599) which
 #    replay stages next to its scratch copy; -f guards no-op otherwise.
+# BEGIN recording_manifest_population
 populate_recording() {
   local dst="$1" f
   for f in events.jsonl transcript.jsonl transcript.md transcript.json; do
@@ -211,9 +263,13 @@ populate_recording() {
   # validator has spoken — it cannot be known before the candidate exists, so it
   # is stamped in a second pass below.
   jq -n \
+    --arg agent "$AGENT" \
     --arg promoted_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --arg daemon_version "$DAEMON_VER" \
     --arg agent_cli_version "$AGENT_VER" \
+    --arg execution_profile "$EXECUTION_PROFILE" \
+    --arg entrypoint "$ENTRYPOINT" \
+    --arg desktop_app_version "$DESKTOP_APP_VERSION" \
     --arg recipe_hash "$RECIPE_HASH" \
     --arg recording_started_at "$NEW_STARTED_AT" \
     --arg git_head_start "$GIT_HEAD_START" \
@@ -227,8 +283,16 @@ populate_recording() {
       recording_started_at: $recording_started_at,
       git_head_start: $git_head_start,
       git_head_end: $git_head_end
-    }' > "$dst/manifest.json"
+    }
+    + (if $agent == "claudecode" then {
+        execution_profile: $execution_profile,
+        entrypoint: $entrypoint
+      } else {} end)
+    + (if $execution_profile == "desktop-local" then {
+        desktop_app_version: $desktop_app_version
+      } else {} end)' > "$dst/manifest.json"
 }
+# END recording_manifest_population
 
 # 3. Validate the candidate against the cell's expected.jsonl. Echoes the pass
 #    rate; non-zero rejects. Run ONCE now, where it gates — the old flow ran

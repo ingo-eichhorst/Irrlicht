@@ -228,6 +228,49 @@ func TestVerifyCommand(t *testing.T) {
 	}
 }
 
+func TestVerifyKeepsStateAndObservationsWithinExecutionProfile(t *testing.T) {
+	root := mixedProfileRepo(t)
+	cellDir := filepath.Join(root, "replaydata", "agents", "claudecode", "scenarios", "1-1_session-start")
+	write(t, filepath.Join(cellDir, "expected.jsonl"),
+		`{"schema_version":1,"scenario_id":"session-start","observations":{"model":"desktop-model"}}`+"\n"+
+			`{"phase":"ready","expected_state":"ready","relative_to":"start","max_delay_ms":5000}`+"\n")
+
+	cliDir := filepath.Join(cellDir, "recordings", "r1")
+	write(t, filepath.Join(cliDir, "events.jsonl"),
+		`{"seq":1,"ts":"2026-05-01T00:00:00Z","kind":"transcript_new","session_id":"cli"}`+"\n")
+	write(t, filepath.Join(cliDir, "transcript.jsonl.replay.json.golden"),
+		`{"schema_version":1,"summary":{"model_name":"cli-model"}}`+"\n")
+
+	desktopDir := filepath.Join(cellDir, "recordings", "r2")
+	write(t, filepath.Join(desktopDir, "events.jsonl"),
+		`{"seq":1,"ts":"2026-05-01T00:00:00Z","kind":"transcript_new","session_id":"desktop"}`+"\n"+
+			`{"seq":2,"ts":"2026-05-01T00:00:01Z","kind":"state_transition","session_id":"desktop","new_state":"ready"}`+"\n")
+	write(t, filepath.Join(desktopDir, "transcript.jsonl.replay.json.golden"),
+		`{"schema_version":1,"summary":{"model_name":"desktop-model"}}`+"\n")
+
+	code, out, errs := runOf("verify", "--agent", "claudecode", "--scenario", "session-start", "--repo-root", root)
+	if code != exitFail {
+		t.Fatalf("default CLI verification mixed in newer Desktop evidence: exit=%d stderr=%s", code, errs)
+	}
+	if !strings.Contains(out, "state:        FAIL") {
+		t.Fatalf("default CLI state verification must fail:\n%s", out)
+	}
+	if !strings.Contains(out, "observations: FAIL") {
+		t.Fatalf("default CLI verification must fail from both CLI evidence streams:\n%s", out)
+	}
+	code, out, errs = runOf("verify", "--agent", "claudecode", "--scenario", "session-start",
+		"--profile", "desktop-local", "--repo-root", root)
+	if code != exitOK {
+		t.Fatalf("Desktop verification did not select Desktop evidence: exit=%d stderr=%s", code, errs)
+	}
+	if !strings.Contains(out, "state:        PASS") {
+		t.Fatalf("Desktop state verification must pass:\n%s", out)
+	}
+	if !strings.Contains(out, "observations: PASS") {
+		t.Fatalf("Desktop verification must use both Desktop evidence streams:\n%s", out)
+	}
+}
+
 // TestAgentUpdate covers the verb a `record` sweep uses to promote a
 // column-level finding (which tools the live CLI actually exposes, which auth
 // mode works) into the column's prerequisites, so later cells inherit it

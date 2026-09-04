@@ -78,8 +78,9 @@ func (a *agentSummary) add(displayState string) {
 }
 
 type summaryView struct {
-	Agents []agentSummary `json:"agents"`
-	Total  agentSummary   `json:"total"`
+	ExecutionProfile string         `json:"execution_profile"`
+	Agents           []agentSummary `json:"agents"`
+	Total            agentSummary   `json:"total"`
 }
 
 // buildSummaryView counts each agent's cells by display state. It folds the
@@ -88,7 +89,10 @@ type summaryView struct {
 // --agent / --scenario filters already applied to that view carry over for
 // free.
 func buildSummaryView(m *matrix.Matrix, view statusView) summaryView {
-	out := summaryView{Total: agentSummary{Agent: "total"}}
+	out := summaryView{
+		ExecutionProfile: string(m.ExecutionProfile()),
+		Total:            agentSummary{Agent: "total"},
+	}
 	rows := make(map[string]*agentSummary, len(view.Agents))
 	for _, a := range view.Agents {
 		rows[a] = &agentSummary{Agent: a}
@@ -129,8 +133,8 @@ func buildSummaryView(m *matrix.Matrix, view statusView) summaryView {
 const summaryRowFormat = "%-14s %9s %8s %8s %13s %6s %8s %6s %8s %8s %6s\n"
 
 func printSummaryText(stdout io.Writer, view summaryView) {
-	fmt.Fprintf(stdout, "per-agent cell counts — %s, %d cells\n\n",
-		plural(len(view.Agents), "agent"), view.Total.Total)
+	fmt.Fprintf(stdout, "per-agent cell counts — %s, %d cells (profile %s)\n\n",
+		plural(len(view.Agents), "agent"), view.Total.Total, view.ExecutionProfile)
 	// The not-applicable column header reads the SAME schema token `of status`
 	// prints per cell, so the two commands cannot drift apart again (#1367).
 	fmt.Fprintf(stdout, summaryRowFormat,
