@@ -8,7 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -142,12 +142,17 @@ func reachableWebAssets(t *testing.T, guard, webSrc string) []string {
 			names = append(names, line)
 		}
 	}
-	sort.Strings(names)
+	// The shell already emits this sorted; sorting again only pins an order
+	// this test does not depend on. Left unsorted deliberately.
+	//
 	// Inability to look must not read as success: an empty or near-empty
 	// closure would satisfy every 200 assertion by having nothing to assert.
-	// The dashboard has been over ten files since #820.
-	if len(names) < 10 {
-		t.Fatalf("cannot run: the import-graph walk found only %d asset(s) (%v) — it did not read the dashboard", len(names), names)
+	// The floor is the defect itself rather than a number picked here —
+	// v0.6.0-v0.6.2 shipped exactly index.html + irrlicht.css + irrlicht.js,
+	// so a closure that small is the bug wearing the test's clothes.
+	const shippedBroken = 3
+	if len(names) <= shippedBroken {
+		t.Fatalf("cannot run: the import-graph walk found only %d asset(s) (%v) — no more than the %d that shipped blank in #1900, so it did not read the dashboard", len(names), names, shippedBroken)
 	}
 	return names
 }
@@ -170,24 +175,24 @@ func httpGetAsset(t *testing.T, url string) (status int, contentType string, siz
 	return resp.StatusCode, resp.Header.Get("Content-Type"), len(body)
 }
 
-// repoRootFromWorkingDir walks up from the test's working directory to the
-// enclosing repo root (the directory holding tools/lib/stage-web.sh). It fails
-// the test rather than returning a guess, so a relocated package surfaces as
+// repoRootFromWorkingDir returns the repo root. This file's own location is
+// fixed at core/cmd/irrlichd/, so the root is three directories up — the
+// repo's established test idiom (see core/application/replayengine/engine_test.go),
+// rather than a search that could silently land somewhere else. It fails the
+// test rather than returning a guess, so a relocated package surfaces as
 // "cannot run" instead of as a silent skip.
 func repoRootFromWorkingDir(t *testing.T) string {
 	t.Helper()
-	dir, err := os.Getwd()
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("cannot run: runtime.Caller could not locate this test file")
+	}
+	root, err := filepath.Abs(filepath.Join(filepath.Dir(thisFile), "..", "..", ".."))
 	if err != nil {
 		t.Fatalf("cannot run: %v", err)
 	}
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "tools", "lib", "stage-web.sh")); err == nil {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			t.Fatalf("cannot run: no repo root with tools/lib/stage-web.sh above the working directory")
-		}
-		dir = parent
+	if _, err := os.Stat(filepath.Join(root, "tools", "lib", "stage-web.sh")); err != nil {
+		t.Fatalf("cannot run: %s is not the repo root (no tools/lib/stage-web.sh): %v", root, err)
 	}
+	return root
 }

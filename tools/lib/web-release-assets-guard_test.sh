@@ -52,23 +52,37 @@ rc=0
 fail() { echo "FAIL: $1" >&2; rc=1; }
 pass() { echo "  PASS: $1"; }
 
-# expect_refuse <label> <src-dir> <fragment> — the closure must REFUSE (2) and
-# say why. A guard that returned 0 with an empty closure would satisfy every
-# "nothing is missing" assertion in this file, so the status AND the reason
-# are both asserted.
-expect_refuse() {
-  local label="$1" dir="$2" want="$3" out st
+# has_line <haystack> <needle> — is <needle> one whole line of <haystack>?
+# The newline-fencing is fiddly enough to be worth writing once.
+has_line() {
+  case $'\n'"$1"$'\n' in *$'\n'"$2"$'\n'*) return 0 ;; esac
+  return 1
+}
+
+# expect_closure <want-status> <label> <src-dir> <fragment> — the closure must
+# exit with <want-status> AND say why. The status alone is not enough: a walk
+# that returned 0 with an empty closure would satisfy every "nothing is
+# missing" assertion in this file, and a walk that failed for an unrelated
+# reason (a shell error, a missing fixture) would read as success here.
+#
+# 2 is REFUSE ("I could not judge this tree") and 1 is FAIL ("I judged it and
+# it is broken"). Keeping them apart is the point — see the guard's exit table.
+expect_closure() {
+  local want="$1" label="$2" dir="$3" frag="$4" out st word
+  case "$want" in 2) word=REFUSE ;; 1) word=FAIL ;; *) word="status $want" ;; esac
   out=$(web_assets_closure "$dir" 2>&1)
   st=$?
-  if [[ "$st" -ne 2 ]]; then
-    fail "$label — expected REFUSE (2), got status $st with: $(echo "$out" | tr '\n' ' ')"
+  if [[ "$st" -ne "$want" ]]; then
+    fail "$label — expected $word ($want), got status $st with: $(echo "$out" | tr '\n' ' ')"
     return
   fi
   case "$out" in
-    *"$want"*) pass "$label" ;;
-    *) fail "$label — refused, but not for the stated reason (wanted: $want); got: $(echo "$out" | tr '\n' ' ')" ;;
+    *"$frag"*) pass "$label" ;;
+    *) fail "$label — exited $want, but not for the stated reason (wanted: $frag); got: $(echo "$out" | tr '\n' ' ')" ;;
   esac
 }
+expect_refuse() { expect_closure 2 "$@"; }
+expect_finding() { expect_closure 1 "$@"; }
 
 # ---------------------------------------------------------------------------
 # 1. The real repository.
@@ -98,10 +112,9 @@ else
     pass "the real closure has $n entries"
   fi
   for want in index.html irrlicht.css irrlicht.js collapsedSet.js; do
-    case $'\n'"$real_closure"$'\n' in
-      *$'\n'"$want"$'\n'*) pass "closure contains $want" ;;
-      *) fail "closure over the real tree is missing $want" ;;
-    esac
+    has_line "$real_closure" "$want" \
+      && pass "closure contains $want" \
+      || fail "closure over the real tree is missing $want"
   done
   # The load-bearing one, spelled out: collapsedSet.js is imported by
   # collapsedGroups.js and collapsedSummaries.js and by nothing else, so it is
@@ -150,15 +163,13 @@ printf "import { x } from './brandNew.js';\n" >"$NEW/app.js"
 printf 'export const x = 1;\n' >"$NEW/brandNew.js"
 : >"$NEW/app.css"
 new_list=$(stage_web_list "$NEW")
-case $'\n'"$new_list"$'\n' in
-  *$'\n'brandNew.js$'\n'*) pass "a module nobody listed is staged by the rule" ;;
-  *) fail "the staging rule dropped brandNew.js — it is a list again, not a rule" ;;
-esac
+has_line "$new_list" brandNew.js \
+  && pass "a module nobody listed is staged by the rule" \
+  || fail "the staging rule dropped brandNew.js — it is a list again, not a rule"
 new_closure=$(web_assets_closure "$NEW")
-case $'\n'"$new_closure"$'\n' in
-  *$'\n'brandNew.js$'\n'*) pass "the walk reaches a module through one hop" ;;
-  *) fail "the walk missed brandNew.js: $(echo "$new_closure" | tr '\n' ' ')" ;;
-esac
+has_line "$new_closure" brandNew.js \
+  && pass "the walk reaches a module through one hop" \
+  || fail "the walk missed brandNew.js: $(echo "$new_closure" | tr '\n' ' ')"
 
 echo "== dev-only tooling is excluded, and directories cannot be swept in =="
 mkdir -p "$NEW/node_modules" "$NEW/snapshots"
@@ -170,10 +181,9 @@ mkdir -p "$NEW/node_modules" "$NEW/snapshots"
 : >"$NEW/package.json"
 dev_list=$(stage_web_list "$NEW")
 for bad in app.test.js vitest.config.js vitest.setup.js package.json pkg.js serialize.js; do
-  case $'\n'"$dev_list"$'\n' in
-    *$'\n'"$bad"$'\n'*) fail "the staging rule would ship dev-only $bad" ;;
-    *) pass "excluded: $bad" ;;
-  esac
+  has_line "$dev_list" "$bad" \
+    && fail "the staging rule would ship dev-only $bad" \
+    || pass "excluded: $bad"
 done
 
 echo "== a module carrying a literal NUL byte is still scanned =="
@@ -202,41 +212,37 @@ nul_st=$?
 if [[ "$nul_st" -ne 0 ]]; then
   fail "the walk refused on a module containing a NUL byte (exit $nul_st): $(echo "$nul_closure" | tr '\n' ' ')"
 else
-  case $'\n'"$nul_closure"$'\n' in
-    *$'\n'dep.js$'\n'*) pass "an import inside a NUL-containing module is still found" ;;
-    *) fail "the walk missed dep.js in a NUL-containing module — the scan is reading it as binary: $(echo "$nul_closure" | tr '\n' ' ')" ;;
-  esac
+  has_line "$nul_closure" dep.js \
+    && pass "an import inside a NUL-containing module is still found" \
+    || fail "the walk missed dep.js in a NUL-containing module — the scan is reading it as binary: $(echo "$nul_closure" | tr '\n' ' ')"
 fi
 
 echo "== the walk terminates on a cyclic graph =="
 CYC="$TMP/cyclic"
 mkdir -p "$CYC"
-printf '<script type="module" src="a.js"></script>\n' >"$CYC/index.html"
-printf '<!doctype html>\n%s' "$(cat "$CYC/index.html")" >"$CYC/index.html.tmp" && mv "$CYC/index.html.tmp" "$CYC/index.html"
+printf '<!doctype html>\n<script type="module" src="a.js"></script>\n' >"$CYC/index.html"
 printf "import { b } from './b.js';\n" >"$CYC/a.js"
 printf "import { a } from './a.js';\nimport { c } from './c.js';\n" >"$CYC/b.js"
 printf "import { a } from './a.js';\n" >"$CYC/c.js"
-cyc=$( ( web_assets_closure "$CYC" ) & pid=$!
-  # A walk without a visited set does not terminate; bound it rather than
-  # hanging the suite, and report the timeout as the finding it is.
-  waited=0
-  while kill -0 "$pid" 2>/dev/null && [[ "$waited" -lt 100 ]]; do
-    sleep 0.1; waited=$((waited + 1))
+# A walk without a visited set does not terminate, so this is bounded rather
+# than allowed to hang the suite. budget_run is the repo's bounded runner
+# (tools/lib/gate-budget.sh) — `timeout(1)` is not on a stock macOS, and a
+# hand-rolled `kill -0` poll re-adopts the pitfall that file documents.
+# shellcheck source=gate-budget.sh
+. "$REPO_ROOT/tools/lib/gate-budget.sh"
+cyc=$(budget_run 10 bash -c '. "$1"; web_assets_closure "$2"' bash "$REPO_ROOT/$GUARD" "$CYC" 2>/dev/null)
+cyc_rc=$?
+if [[ "${BUDGET_LAST_TIMED_OUT:-0}" -eq 1 ]]; then
+  fail "the walk did not terminate on a cyclic graph within 10s — the visited set is gone"
+elif [[ "$cyc_rc" -ne 0 ]]; then
+  fail "the cyclic walk exited $cyc_rc: $(echo "$cyc" | tr '\n' ' ')"
+else
+  cyc_ok=1
+  for want in a.js b.js c.js; do
+    has_line "$cyc" "$want" || { fail "the cyclic walk missed $want: $(echo "$cyc" | tr '\n' ' ')"; cyc_ok=0; }
   done
-  if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null; echo "__TIMEOUT__"; fi
-  wait "$pid" 2>/dev/null )
-case "$cyc" in
-  *__TIMEOUT__*) fail "the walk did not terminate on a cyclic graph within 10s — the visited set is gone" ;;
-  *)
-    for want in a.js b.js c.js; do
-      case $'\n'"$cyc"$'\n' in
-        *$'\n'"$want"$'\n'*) ;;
-        *) fail "the cyclic walk missed $want: $(echo "$cyc" | tr '\n' ' ')" ;;
-      esac
-    done
-    pass "the walk terminates on a cyclic graph and reaches every node"
-    ;;
-esac
+  [[ "$cyc_ok" -eq 1 ]] && pass "the walk terminates on a cyclic graph and reaches every node"
+fi
 
 # ---------------------------------------------------------------------------
 # 3. Fail-loudly: inability to look never reads as success.
@@ -266,23 +272,6 @@ expect_refuse "a module graph with not one import edge" \
   "$TMP/noedge" "not one import edge"
 
 echo "== a defect IN the tree is a finding (1), not an inability to look (2) =="
-# expect_finding <label> <src-dir> <fragment> — the walk read the tree fine and
-# found something wrong with it. Reported as 1, so a caller can tell "your tree
-# is broken" from "I could not read your tree".
-expect_finding() {
-  local label="$1" dir="$2" want="$3" out st
-  out=$(web_assets_closure "$dir" 2>&1)
-  st=$?
-  if [[ "$st" -ne 1 ]]; then
-    fail "$label — expected FAIL (1), got status $st with: $(echo "$out" | tr '\n' ' ')"
-    return
-  fi
-  case "$out" in
-    *"$want"*) pass "$label" ;;
-    *) fail "$label — failed, but not for the stated reason (wanted: $want); got: $(echo "$out" | tr '\n' ' ')" ;;
-  esac
-}
-
 mkdir -p "$TMP/broken"
 printf '<script type="module" src="app.js"></script>\n' >"$TMP/broken/index.html"
 printf "import { x } from './gone.js';\n" >"$TMP/broken/app.js"
@@ -315,10 +304,9 @@ cmt_st=$?
 if [[ "$cmt_st" -ne 0 ]]; then
   fail "a commented-out import turned the walk red (exit $cmt_st): $(echo "$cmt_out" | tr '\n' ' ')"
 else
-  case $'\n'"$cmt_out"$'\n' in
-    *$'\n'real.js$'\n'*) pass "the live import is still found beside the commented-out ones" ;;
-    *) fail "the walk lost the live import while ignoring comments: $(echo "$cmt_out" | tr '\n' ' ')" ;;
-  esac
+  has_line "$cmt_out" real.js \
+    && pass "the live import is still found beside the commented-out ones" \
+    || fail "the walk lost the live import while ignoring comments: $(echo "$cmt_out" | tr '\n' ' ')"
 fi
 
 echo "== the scanner sees the edge forms it claims to =="
@@ -344,10 +332,7 @@ if [[ $? -ne 0 ]]; then
   fail "the walk refused on the edge-form fixture: $(echo "$forms_out" | tr '\n' ' ')"
 else
   for m in a b c d e f g h i; do
-    case $'\n'"$forms_out"$'\n' in
-      *$'\n'"$m.js"$'\n'*) ;;
-      *) fail "the scanner missed the edge to $m.js" ;;
-    esac
+    has_line "$forms_out" "$m.js" || fail "the scanner missed the edge to $m.js"
   done
   pass "default, namespace, multi-line, side-effect, re-export, export-*, dynamic, template-literal and new URL() edges are all seen"
 fi

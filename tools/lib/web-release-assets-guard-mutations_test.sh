@@ -7,28 +7,37 @@
 # the thing it protects is broken. This one is unusual in also having a real
 # "before the fix" — the defect was live on main, and the guard's closure run
 # against origin/main's own `cp` line names all ten missing modules — but that
-# red is a one-off nobody re-runs. These six mutations are the part that keeps
-# re-running, each breaking ONE property, because a single combined mutation
-# could go red while one of the properties was in fact unguarded:
+# red is a one-off nobody re-runs. The rows below are the part that keeps
+# re-running. Each breaks ONE property, because a single combined mutation
+# could go red while one of the properties was in fact unguarded. The
+# properties, not the row count — the count drifts, the list is the file:
 #
-#   1. THE WALK IS TRANSITIVE. collapsedSet.js is imported by
-#      collapsedGroups.js and collapsedSummaries.js and by nothing else, so a
-#      scan of irrlicht.js's DIRECT imports finds 9 of the 10 modules and
-#      reports completeness. Dropping collapsedSet.js from the staged set is
-#      the mutation that a direct-only scan would sail straight past.
-#   2. ...AND IT COVERS THE DIRECT EDGES TOO. Dropping formatters.js, a
-#      first-hop import, so 1's pass cannot be an accident of depth.
-#   3. THE DEV-ONLY HALF IS REAL. Without it, `cp -R platforms/web/` —
-#      node_modules and all — satisfies every "nothing is missing" assertion.
-#   4. THE SCAN CAN ACTUALLY READ THE TREE. irrlicht.js and sessionIdentity.js
-#      carry literal NUL bytes; a grep without `-a` answers "Binary file …
-#      matches" and yields no edges. This is the exact shape of vacuity the
-#      guard exists to refuse, so it is mutated rather than trusted.
-#   5. ...AND SAYS SO WHEN IT CANNOT. Disabling the zero-edge refusal, so an
-#      unreadable tree would report success instead.
-#   6. THE SHIPPING SCRIPT STAYS ATTACHED TO THE RULE. 1-5 all grade
-#      tools/lib/stage-web.sh; this one puts a hand-written `cp` back into
-#      tools/build-release.sh, which is what actually shipped the bug.
+#   THE WALK IS TRANSITIVE. collapsedSet.js is imported by collapsedGroups.js
+#     and collapsedSummaries.js and by nothing else, so a scan of irrlicht.js's
+#     DIRECT imports finds 9 of the 10 modules and reports completeness.
+#     Dropping collapsedSet.js is the mutation a direct-only scan sails past.
+#   ...AND IT COVERS THE DIRECT EDGES TOO. Dropping formatters.js, a first-hop
+#     import, so the transitive row's pass cannot be an accident of depth.
+#   THE DEV-ONLY HALF IS REAL. Without it, `cp -R platforms/web/` —
+#     node_modules and all — satisfies every "nothing is missing" assertion.
+#   THE SCAN CAN ACTUALLY READ THE TREE. irrlicht.js and sessionIdentity.js
+#     carry literal NUL bytes; a grep without `-a` answers "Binary file …
+#     matches" and yields no edges. That is the exact shape of vacuity the
+#     guard exists to refuse, so it is mutated rather than trusted — and the
+#     fixture's own NUL is mutated away too, because the first spelling of
+#     that check used `$'\000'`, which bash expands to the empty string.
+#   ...AND SAYS SO WHEN IT CANNOT. The zero-edge refusal disarmed, so an
+#     unreadable tree would report success instead.
+#   EVERY DISTRIBUTABLE STAYS ATTACHED TO THE RULE. Four separate sites:
+#     tools/build-release.sh, the release skill's manual fallback blocks,
+#     site/install.sh and examples/relay/Dockerfile. The last two were live
+#     misses found in review — the installer laid down 3 files out of a
+#     13-file tarball, so fixing only the producer would have left the Linux
+#     dashboard blank, which is the platform the issue is about.
+#   THE GATE KEEPS FIRING. `^platforms/web/` removed from either preflight
+#     trigger, so a diff that extracts a new module SKIPs the gate silently.
+#   CSS REFERENCES ARE REFUSED, NOT IGNORED. The walk follows HTML and JS, so
+#     a stylesheet that grows an @import must fail rather than pass unseen.
 #
 # Every row drives the real tools/mutate.sh, which owns the mechanics this file
 # must not re-improvise: the stale-anchor guard, the no-op replacement refusal,
@@ -84,7 +93,7 @@ fails=0
 
 DEV_ONLY_ANCHOR='        *.test.js|vitest.config.js|vitest.setup.js) return 0 ;;'
 
-# ── 1. The walk is transitive: collapsedSet.js specifically ─────────────────
+# ── The walk is transitive: collapsedSet.js specifically ─────────────────
 assert_mutation_is_red \
   "lock test catches the staging rule dropping collapsedSet.js — the module NO file imports directly" \
   "$STAGE_LIB" \
@@ -92,7 +101,7 @@ assert_mutation_is_red \
   '        *.test.js|vitest.config.js|vitest.setup.js|collapsedSet.js) return 0 ;;' \
   "'collapsedSet.js' is reachable from index.html but tools/build-release.sh would not stage it"
 
-# ── 2. ...and the direct edges are covered too ───────────────────────────────
+# ── ...and the direct edges are covered too ───────────────────────────────
 assert_mutation_is_red \
   "lock test catches the staging rule dropping formatters.js — a first-hop import" \
   "$STAGE_LIB" \
@@ -100,7 +109,7 @@ assert_mutation_is_red \
   '        *.test.js|vitest.config.js|vitest.setup.js|formatters.js) return 0 ;;' \
   "'formatters.js' is reachable from index.html but tools/build-release.sh would not stage it"
 
-# ── 3. The dev-only half is real ────────────────────────────────────────────
+# ── The dev-only half is real ────────────────────────────────────────────
 assert_mutation_is_red \
   "lock test catches the staging rule shipping *.test.js into the release tree" \
   "$STAGE_LIB" \
@@ -108,7 +117,7 @@ assert_mutation_is_red \
   '        vitest.config.js|vitest.setup.js) return 0 ;;' \
   "is dev-only tooling and must not ship in a release artifact"
 
-# ── 4. The scan can actually read a NUL-containing module ────────────────────
+# ── The scan can actually read a NUL-containing module ────────────────────
 #
 # Precondition, asserted rather than assumed: this machine's grep must treat a
 # NUL-containing file as binary, or removing `-a` changes nothing here and the
@@ -134,7 +143,7 @@ else
     "the walk refused on a module containing a NUL byte"
 fi
 
-# ── 5. ...and refuses out loud when it finds nothing ─────────────────────────
+# ── ...and refuses out loud when it finds nothing ─────────────────────────
 assert_mutation_is_red \
   "lock test catches the zero-import-edge refusal being disarmed, so an unreadable tree would pass" \
   "$GUARD" \
@@ -142,15 +151,36 @@ assert_mutation_is_red \
   '    if [[ "$edges" -lt 0 ]]; then' \
   "a module graph with not one import edge — expected REFUSE (2)"
 
-# ── 6. build-release.sh stays attached to the rule ──────────────────────────
+# ── Every distributable stays attached to the rule ───────────────────────
+#
+# Four sites, mutated separately, because the guard's first spelling named two
+# of them explicitly and the sweep that replaced it is what catches the other
+# two. site/install.sh and examples/relay/Dockerfile were BOTH live misses:
+# the installer laid down 3 files out of a 13-file tarball, so fixing only the
+# producer would have left the Linux dashboard blank — which is the platform
+# the issue is about.
 assert_mutation_is_red \
   "lock test catches tools/build-release.sh staging the web tree by hand again" \
   "$BUILD_RELEASE" \
   'stage_web platforms/web "$APP_CONTENTS/Resources/web"' \
   'cp platforms/web/index.html platforms/web/irrlicht.css platforms/web/irrlicht.js "$APP_CONTENTS/Resources/web/"' \
-  "touches platforms/web outside stage_web"
+  "tools/build-release.sh:"
 
-# ── 7. The gates keep firing on a platforms/web-only diff ───────────────────
+assert_mutation_is_red \
+  "lock test catches site/install.sh installing a hand-written file list again" \
+  "site/install.sh" \
+  '        install -m 644 "$web_asset" "$UI_DIR/$(basename "$web_asset")" ||' \
+  '        install -m 644 "$TMPDIR/extract/web/index.html" "$UI_DIR/index.html" ||' \
+  "site/install.sh:"
+
+assert_mutation_is_red \
+  "lock test catches examples/relay/Dockerfile baking a hand-written file list again" \
+  "examples/relay/Dockerfile" \
+  'COPY --from=build --chown=relay:relay /out/web/ /web/' \
+  'COPY --chown=relay:relay platforms/web/index.html platforms/web/irrlicht.css platforms/web/irrlicht.js /web/' \
+  "examples/relay/Dockerfile:"
+
+# ── The gates keep firing on a platforms/web-only diff ───────────────────
 #
 # The failure this pair pins is silence, not a wrong answer: drop
 # `^platforms/web/` from a trigger and preflight --changed reports SKIP —
@@ -170,7 +200,7 @@ assert_mutation_is_red \
   '^AGENTS\.md$|^\.claude/skills/ir:test-mac/' \
   "'tools/lib shell-lib tests' would be SKIPped by preflight --changed"
 
-# ── 9. The release PROCEDURE stays attached to the rule too ─────────────────
+# ── The release PROCEDURE stays attached to the rule too ─────────────────
 #
 # tools/build-release.sh is not the only thing that assembles a release: the
 # manual per-artifact blocks in .claude/skills/ir:release/SKILL.md are the
@@ -182,12 +212,12 @@ assert_mutation_is_red \
   "lock test catches the release skill copying the web tree by hand again" \
   "$RELEASE_SKILL" \
   '  stage_web platforms/web /tmp/irrlichd-tarball/web )' \
-  '  cp platforms/web/index.html /tmp/irrlichd-tarball/web/ )' \
-  "copies platforms/web by hand"
+  'cp platforms/web/index.html /tmp/irrlichd-tarball/web/ )' \
+  ".claude/skills/ir:release/SKILL.md:"
 
-# ── 10. The NUL fixture's own vacuity guard fires ───────────────────────────
+# ── The NUL fixture's own vacuity guard fires ───────────────────────────
 #
-# Row 4 above is only worth anything while its fixture really carries a NUL.
+# The NUL row is only worth anything while its fixture really carries a NUL.
 # The first spelling of this guard used `grep -q $'\000'`, which bash expands
 # to the empty string — it matched every file and could never fire. So the
 # guard on the fixture is itself mutated: take the NUL out of the fixture and
@@ -199,7 +229,7 @@ assert_mutation_is_red \
   $'printf \'const SEP = "";\\nimport { x } from \'\\\'\'./dep.js\'\\\'\';\\n\' >"$NUL/app.js"' \
   "the NUL fixture carries no NUL byte"
 
-# ── 11. A CSS reference the walker cannot follow is refused ─────────────────
+# ── A CSS reference the walker cannot follow is refused ─────────────────
 #
 # The walk follows HTML and JavaScript references, not CSS ones. That is safe
 # only while the stylesheet has none — so the stylesheet is checked, and this

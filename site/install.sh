@@ -397,9 +397,28 @@ if [ "$DAEMON_ONLY" -eq 1 ]; then
     mkdir -p "$(dirname "$DEST")"
     install -m 755 "$TMPDIR/extract/irrlichd" "$DEST"
     mkdir -p "$UI_DIR"
-    install -m 644 "$TMPDIR/extract/web/index.html" "$UI_DIR/index.html"
-    install -m 644 "$TMPDIR/extract/web/irrlicht.css" "$UI_DIR/irrlicht.css"
-    install -m 644 "$TMPDIR/extract/web/irrlicht.js"  "$UI_DIR/irrlicht.js"
+    # The dashboard is installed as a WHOLE TREE, never as a file list. The
+    # tarball's web/ dir is already exactly the runtime set — the build staged
+    # it by rule (tools/lib/stage-web.sh) — so anything this side re-lists can
+    # only go stale. It did: these three names were the entire dashboard when
+    # they were written, and after irrlicht.js became an ES module importing
+    # ten siblings they installed 3 of 13 files, so every import 404'd and the
+    # dashboard rendered blank on every Linux install, where it is the only UI
+    # there is (#1900).
+    web_installed=0
+    for web_asset in "$TMPDIR"/extract/web/*; do
+        [ -f "$web_asset" ] || continue
+        install -m 644 "$web_asset" "$UI_DIR/$(basename "$web_asset")" ||
+            fail "Could not install $(basename "$web_asset") into $UI_DIR"
+        web_installed=$((web_installed + 1))
+    done
+    # An empty web/ must not read like a successful install: the daemon would
+    # come up and serve the 503 "Dashboard UI not found" page, which is what
+    # this step exists to prevent.
+    [ "$web_installed" -gt 0 ] ||
+        fail "The downloaded archive carried no dashboard files — aborting"
+    [ -f "$UI_DIR/index.html" ] ||
+        fail "The downloaded archive carried no index.html — aborting"
     ok
 
     # On Linux, install a systemd user unit so the autostart command we print

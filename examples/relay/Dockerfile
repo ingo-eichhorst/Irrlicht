@@ -22,6 +22,16 @@ COPY core/ ./
 RUN go build -trimpath -ldflags "-X main.Version=${VERSION}" \
     -o /out/irrlichtrelay ./cmd/irrlichtrelay
 
+# Stage the dashboard by the SAME rule the release uses, never by a file list.
+# These COPYs sit after the go build so a web edit does not invalidate it.
+# tools/lib/stage-web.sh is the one definition of the runtime asset set; a
+# hand-written list here is exactly what shipped a blank dashboard to every
+# install for three releases (#1900), and it went stale the same way this
+# image's own "only the three runtime files" comment had.
+COPY tools/lib/stage-web.sh /stage-web.sh
+COPY platforms/web/ /src/webtree/
+RUN bash -c '. /stage-web.sh && stage_web /src/webtree /out/web'
+
 # ---- runtime: the binary + a baked-in dashboard snapshot ----
 FROM debian:bookworm-slim AS runtime
 # Run as a non-root user rather than the image's root default (docker:S6471)
@@ -30,8 +40,9 @@ RUN useradd --no-create-home --uid 10001 relay
 COPY --from=build /out/irrlichtrelay /usr/local/bin/irrlichtrelay
 # Bake the live dashboard so http://<host>:7839 serves it. NOTE: this is a
 # snapshot — unlike the daemon's live disk-serve, web edits need an image
-# rebuild. Only the three runtime files (no tests / node_modules).
-COPY --chown=relay:relay platforms/web/index.html platforms/web/irrlicht.css platforms/web/irrlicht.js /web/
+# rebuild. The tree comes from the build stage, already reduced to the runtime
+# set by stage_web (no tests, no vitest config, no node_modules, no snapshots).
+COPY --from=build --chown=relay:relay /out/web/ /web/
 ENV IRRLICHT_UI_DIR=/web
 USER relay
 EXPOSE 7839

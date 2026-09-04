@@ -72,17 +72,11 @@ _wrag_decomment() { LC_ALL=C sed -E -e 's,/\*.*\*/,,g' -e 's,(^|[[:space:]])//.*
 # and in-page references are not assets this tree stages, and are dropped.
 # <a href=…> is deliberately not read: index.html links out to irrlicht.io.
 web_assets_html_refs() {
-    local file="$1" refs
-    refs=$(_wrag_text_grep -oE '<(script|link)[[:space:]][^>]*>' "$file" |
+    local file="$1"
+    _wrag_text_grep -oE '<(script|link)[[:space:]][^>]*>' "$file" |
         _wrag_text_grep -oE '[[:space:]](src|href)[[:space:]]*=[[:space:]]*("[^"]*"|'\''[^'\'']*'\'')' |
-        _wrag_unquote)
-    printf '%s\n' "$refs" | while IFS= read -r r; do
-        [[ -n "$r" ]] || continue
-        case "$r" in
-            *"://"* | /* | \#* | data:* | mailto:*) continue ;;
-        esac
-        printf '%s\n' "$r"
-    done
+        _wrag_unquote |
+        LC_ALL=C command grep -vE '^$|://|^/|^#|^data:|^mailto:'
 }
 
 # web_assets_js_edges <file> — one module specifier per line, for every
@@ -125,6 +119,18 @@ web_assets_css_refuses_unfollowable() {
     echo "FAIL: $file carries a CSS reference this walker does not follow, so its target is not in the closure and could ship as a 404:" >&2
     printf '%s\n' "$hits" | sed 's/^/       /' >&2
     return 1
+}
+
+# _wrag_handwritten_pattern <src-dir> — the ERE matching a copy verb that names
+# a SPECIFIC dashboard asset. The asset names come from the staging rule's own
+# output, never from a list typed here, so the check cannot go stale the way
+# the thing it guards did. Returns 2 if the rule yields nothing to match on.
+_wrag_handwritten_pattern() {
+    local names alt
+    names=$(stage_web_list "$1") || return 2
+    alt=$(printf '%s' "$names" | tr '\n' '|' | sed 's/|$//; s/\./\\./g')
+    [[ -n "$alt" ]] || return 2
+    printf '(^|[;&|(]|&&|\\|\\|)[[:space:]]*(cp|rsync|ditto|install|COPY|ADD)[[:space:]].*(%s)([^A-Za-z0-9]|$)' "$alt"
 }
 
 # web_assets_closure <src-dir> — every file reachable from <src-dir>/index.html,
@@ -303,37 +309,49 @@ web_assets_guard() {
         echo "FAIL: tools/build-release.sh never calls stage_web — nothing stages the dashboard by rule" >&2
         rc=1
     fi
-    local handrolled
-    handrolled=$(_wrag_text_grep -nE 'platforms/web' "$brs" |
-        _wrag_text_grep -vE '^[0-9]+:[[:space:]]*#' |
-        _wrag_text_grep -vE '(^|[^[:alnum:]_])stage_web[[:space:]]' || :)
-    if [[ -n "$handrolled" ]]; then
-        echo "FAIL: tools/build-release.sh touches platforms/web outside stage_web — that is the hand-written list this guard exists to prevent:" >&2
-        printf '%s\n' "$handrolled" | sed 's/^/       tools\/build-release.sh:/' >&2
-        rc=1
-    fi
-
-    # (d) ...and neither does the procedure a release is actually DRIVEN from.
-    # .claude/skills/ir:release/SKILL.md carries manual per-artifact build
-    # blocks as a fallback, and every one of them used to `cp` the web tree by
-    # hand — two of them copying index.html alone, which is #1900 with one file
-    # instead of three. Fixing only build-release.sh would leave the defect
-    # sitting in the document the maintainer reads.
-    local skill="$root/.claude/skills/ir:release/SKILL.md"
-    if [[ ! -f "$skill" ]]; then
-        echo "REFUSE: .claude/skills/ir:release/SKILL.md is missing — cannot check the release procedure for a hand-written copy list" >&2
+    # (d) ...and NOTHING anywhere assembles a distributable from a hand-written
+    # list of dashboard files.
+    #
+    # This used to name build-release.sh and the release skill explicitly, and
+    # that was the same mistake one level up: a hand-written list of the places
+    # that must not keep a hand-written list. It missed two that were live —
+    # site/install.sh installed three files out of a thirteen-file tarball, so
+    # the Linux dashboard would have stayed blank after the producer was fixed,
+    # and examples/relay/Dockerfile baked "only the three runtime files" into
+    # an image. So the check sweeps instead: any copy verb naming a SPECIFIC
+    # dashboard asset, anywhere a distributable could be assembled, fails.
+    # Copying the tree, a directory, or a loop variable is untouched — the
+    # defect is naming the files, not copying them.
+    #
+    # The asset names are DERIVED from the staging rule's own output, so a
+    # module extracted tomorrow is covered without editing anything here.
+    local pat hits scoped
+    pat=$(_wrag_handwritten_pattern "$src") || {
+        echo "REFUSE: could not derive the hand-written-list pattern from the staging rule" >&2
+        return 2
+    }
+    # The sweep must be able to match the line that actually shipped #1900. If
+    # it cannot, a clean result means "I could not look", not "nothing to find".
+    if ! printf '%s\n' 'cp platforms/web/index.html platforms/web/irrlicht.css platforms/web/irrlicht.js "$staging/web/"' |
+        LC_ALL=C command grep -qE "$pat"; then
+        echo "REFUSE: the hand-written-list sweep no longer matches the very line that shipped #1900, so a clean sweep would prove nothing" >&2
         return 2
     fi
-    local skillcp
-    skillcp=$(_wrag_text_grep -nE '(^|[^[:alnum:]_])(cp|rsync|ditto)[[:space:]].*platforms/web' "$skill" || :)
-    if [[ -n "$skillcp" ]]; then
-        echo "FAIL: .claude/skills/ir:release/SKILL.md copies platforms/web by hand — the release procedure must call stage_web, like tools/build-release.sh does:" >&2
-        printf '%s\n' "$skillcp" | sed 's/^/       .claude\/skills\/ir:release\/SKILL.md:/' >&2
+    scoped=$(cd "$root" && git ls-files -- '*.sh' '*Dockerfile*' '.github/workflows/*.yml' '.claude/skills/**/*.md' 'Makefile*' '*.mk')
+    if [[ -z "$scoped" ]]; then
+        echo "REFUSE: the hand-written-list sweep found no files to scan" >&2
+        return 2
+    fi
+    hits=$(cd "$root" && printf '%s\n' "$scoped" | tr '\n' '\0' |
+        (export LC_ALL=C; xargs -0 grep -anE "$pat") || :)
+    if [[ -n "$hits" ]]; then
+        echo "FAIL: a distributable is assembled from a hand-written list of dashboard files. That list is complete the day it is written and silently incomplete the next time a module is extracted — it is exactly how #1900 shipped a blank dashboard to every install. Stage the tree by rule instead (tools/lib/stage-web.sh), or copy the whole staged directory:" >&2
+        printf '%s\n' "$hits" | sed 's/^/       /' >&2
         rc=1
     fi
 
     if [[ "$rc" -eq 0 ]]; then
-        echo "OK: web-release-assets-guard — $(printf '%s\n' "$closure" | _wrag_text_grep -c .) reachable asset(s) from index.html, all staged by tools/lib/stage-web.sh, no dev-only file in the release tree, no hand-written copy list in build-release.sh or the release skill"
+        echo "OK: web-release-assets-guard — $(printf '%s\n' "$closure" | _wrag_text_grep -c .) reachable asset(s) from index.html, all staged by tools/lib/stage-web.sh, no dev-only file in the release tree, and no hand-written dashboard file list in $(printf '%s\n' "$scoped" | _wrag_text_grep -c .) scanned files"
     fi
     return "$rc"
 }
