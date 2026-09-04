@@ -71,5 +71,14 @@
     "frame": {"x": 1130, "y": 20, "width": 36, "height": 36},
     "hierarchy": ["AXApplication", "AXWindow", "AXGroup"],
     "valueRedacted": false
+  },
+  {
+    "path": [0, 0, 7],
+    "role": "AXButton",
+    "identifier": "stop-button",
+    "enabled": true,
+    "frame": {"x": 984, "y": 740, "width": 44, "height": 44},
+    "hierarchy": ["AXApplication", "AXWindow", "AXGroup"],
+    "valueRedacted": false
   }
 ]

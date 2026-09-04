@@ -13,23 +13,8 @@ func emit(_ response: HelperResponse) {
     FileHandle.standardOutput.write(Data("\n".utf8))
 }
 
-do {
-    let input = FileHandle.standardInput.readDataToEndOfFile()
-    guard !input.isEmpty else {
-        throw HelperFailure(.invalidRequest, "Expected one JSON request on standard input.")
-    }
-    let request: HelperRequest
-    do {
-        request = try JSONDecoder().decode(HelperRequest.self, from: input)
-    } catch {
-        throw HelperFailure(.invalidRequest, "The JSON request is invalid.")
-    }
-    emit(try CommandRunner.run(request))
-} catch let failure as HelperFailure {
-    emit(HelperResponse(ok: false, error: ErrorPayload(failure)))
-    exit(failure.exitCode)
-} catch {
-    let failure = HelperFailure(.actionFailed, "The helper failed without a classified result.")
-    emit(HelperResponse(ok: false, error: ErrorPayload(failure)))
-    exit(failure.exitCode)
+let result = RequestProcessor.process(FileHandle.standardInput.readDataToEndOfFile())
+emit(result.response)
+if result.exitCode != 0 {
+    exit(result.exitCode)
 }

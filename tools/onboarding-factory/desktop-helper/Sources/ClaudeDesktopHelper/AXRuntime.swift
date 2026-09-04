@@ -29,7 +29,11 @@ enum AXRuntime {
         kAXSearchFieldSubrole as String,
     ]
 
-    static func readTree(application: AXUIElement, limits: TraversalLimits) throws -> LiveTree {
+    static func readTree(
+        application: AXUIElement,
+        limits: TraversalLimits,
+        childrenReader: (AXUIElement) throws -> [AXUIElement] = AXRuntime.children
+    ) throws -> LiveTree {
         struct Pending {
             let element: AXUIElement
             let path: [Int]
@@ -58,7 +62,7 @@ enum AXRuntime {
             )
             result.append(LiveElement(snapshot: snapshot, element: item.element))
 
-            let children = children(of: item.element)
+            let children = try childrenReader(item.element)
             if !children.isEmpty, item.depth >= limits.maxDepth {
                 throw HelperFailure(
                     .traversalLimit,
@@ -154,6 +158,10 @@ enum AXRuntime {
         stringAttribute(element, kAXValueAttribute)
     }
 
+    static func isFocused(_ element: AXUIElement) -> Bool {
+        boolAttribute(element, kAXFocusedAttribute) == true
+    }
+
     static func setValue(_ value: String, on element: AXUIElement) throws {
         let status = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, value as CFTypeRef)
         guard status == .success else {
@@ -231,11 +239,69 @@ enum AXRuntime {
         }
     }
 
-    private static func children(of element: AXUIElement) -> [AXUIElement] {
+    static func children(of element: AXUIElement) throws -> [AXUIElement] {
+        var names: CFArray?
+        let namesStatus = AXUIElementCopyAttributeNames(element, &names)
+        guard namesStatus == .success else {
+            throw HelperFailure(
+                .actionFailed,
+                "Accessibility could not list attributes before reading AXChildren (AX error \(namesStatus.rawValue))."
+            )
+        }
+        guard let names = names as? [String] else {
+            throw HelperFailure(
+                .actionFailed,
+                "Accessibility returned an invalid attribute-name list."
+            )
+        }
+        guard names.contains(kAXChildrenAttribute as String) else {
+            return []
+        }
+
         var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &value) == .success,
-              let children = value as? [AXUIElement]
-        else { return [] }
+        let status = AXUIElementCopyAttributeValue(
+            element,
+            kAXChildrenAttribute as CFString,
+            &value
+        )
+        return try decodeChildren(status: status, value: value)
+    }
+
+    static func decodeChildren(status: AXError, value: CFTypeRef?) throws -> [AXUIElement] {
+        if status == .attributeUnsupported {
+            return []
+        }
+        guard status == .success else {
+            throw HelperFailure(
+                .actionFailed,
+                "Accessibility could not read AXChildren (AX error \(status.rawValue))."
+            )
+        }
+        guard let value, CFGetTypeID(value) == CFArrayGetTypeID() else {
+            throw HelperFailure(
+                .actionFailed,
+                "Accessibility returned an invalid AXChildren value."
+            )
+        }
+        let array = value as! CFArray
+        var children: [AXUIElement] = []
+        children.reserveCapacity(CFArrayGetCount(array))
+        for index in 0 ..< CFArrayGetCount(array) {
+            guard let pointer = CFArrayGetValueAtIndex(array, index) else {
+                throw HelperFailure(
+                    .actionFailed,
+                    "Accessibility returned an invalid AXChildren value."
+                )
+            }
+            let childValue = Unmanaged<CFTypeRef>.fromOpaque(pointer).takeUnretainedValue()
+            guard CFGetTypeID(childValue) == AXUIElementGetTypeID() else {
+                throw HelperFailure(
+                    .actionFailed,
+                    "Accessibility returned an invalid AXChildren value."
+                )
+            }
+            children.append(childValue as! AXUIElement)
+        }
         return children
     }
 

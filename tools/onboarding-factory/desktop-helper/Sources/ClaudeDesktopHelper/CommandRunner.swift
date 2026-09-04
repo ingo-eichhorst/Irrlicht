@@ -1,10 +1,103 @@
 import DesktopHelperCore
 import Foundation
 
+struct CommandDependencies {
+    let loadContext: () throws -> ClaudeDesktopContext
+    let postKeyboardEvent: (UInt16, [String]) throws -> Void
+    let physicalClick: (Point) throws -> Void
+
+    static var live: CommandDependencies {
+        CommandDependencies(
+            loadContext: { try ClaudeDesktopContext.load() },
+            postKeyboardEvent: AXRuntime.postKeyboardEvent,
+            physicalClick: AXRuntime.physicalClick
+        )
+    }
+}
+
+enum ActionTransition {
+    static func perform(
+        condition: PostconditionKind,
+        observe: () throws -> Bool,
+        action: () throws -> Void,
+        verify: () throws -> Void
+    ) throws {
+        try requireUnsatisfied(try observe(), condition: condition)
+        try action()
+        try verify()
+    }
+
+    static func requireUnsatisfied(
+        _ isSatisfied: Bool,
+        condition: PostconditionKind
+    ) throws {
+        guard !isSatisfied else {
+            throw HelperFailure(
+                .postconditionFailed,
+                "The \(condition.rawValue) postcondition was already true before the action."
+            )
+        }
+    }
+}
+
+enum KeyboardEventBoundary {
+    static func emit(
+        requireFrontmost: () throws -> Void,
+        isTargetFocused: () -> Bool,
+        postEvent: () throws -> Void
+    ) throws {
+        try requireFrontmost()
+        guard isTargetFocused() else {
+            throw HelperFailure(
+                .actionFailed,
+                "The selected control lost focus before the keyboard event."
+            )
+        }
+        try postEvent()
+    }
+}
+
+enum PostconditionObserver {
+    static func holds(
+        _ postcondition: Postcondition,
+        in snapshots: [ElementSnapshot],
+        valueAtPath: ([Int]) -> String? = { _ in nil }
+    ) throws -> Bool {
+        let matches = try ControlFinder.all(
+            in: snapshots,
+            matching: postcondition.selector
+        )
+        if matches.count > 1 {
+            throw HelperFailure(
+                .controlAmbiguous,
+                "The postcondition selector matched \(matches.count) visible controls."
+            )
+        }
+        if postcondition.condition == .absent {
+            return matches.isEmpty
+        }
+        guard let match = matches.first else {
+            return false
+        }
+
+        switch postcondition.condition {
+        case .exists: return true
+        case .absent: return false
+        case .enabled: return match.enabled == true
+        case .disabled: return match.enabled == false
+        case .focused: return match.focused == true
+        case .valueEquals: return valueAtPath(match.path) == postcondition.value
+        }
+    }
+}
+
 enum CommandRunner {
-    static func run(_ request: HelperRequest) throws -> HelperResponse {
+    static func run(
+        _ request: HelperRequest,
+        dependencies: CommandDependencies = .live
+    ) throws -> HelperResponse {
         let limits = try RequestValidator.validate(request)
-        let context = try ClaudeDesktopContext.load()
+        let context = try dependencies.loadContext()
 
         switch request.command {
         case .preflight:
@@ -35,9 +128,19 @@ enum CommandRunner {
         case .setValue:
             return try setValue(request, context: context, limits: limits)
         case .keyboard:
-            return try keyboard(request, context: context, limits: limits)
+            return try keyboard(
+                request,
+                context: context,
+                limits: limits,
+                dependencies: dependencies
+            )
         case .physicalClick:
-            return try physicalClick(request, context: context, limits: limits)
+            return try physicalClick(
+                request,
+                context: context,
+                limits: limits,
+                dependencies: dependencies
+            )
         }
     }
 
@@ -54,13 +157,17 @@ enum CommandRunner {
         try AXRuntime.exposeElectronAccessibility(application: context.axApplication)
         let tree = try AXRuntime.readTree(application: context.axApplication, limits: limits)
         let target = try tree.unique(matching: selector)
-        try AXRuntime.setValue(value, on: target.element)
         let postcondition = Postcondition(
             selector: selector,
             condition: .valueEquals,
             value: value
         )
-        try awaitPostcondition(postcondition, context: context, limits: limits)
+        try performAction(
+            postcondition,
+            context: context,
+            limits: limits,
+            action: { try AXRuntime.setValue(value, on: target.element) }
+        )
         return HelperResponse(
             ok: true,
             command: request.command,
@@ -77,7 +184,8 @@ enum CommandRunner {
     private static func keyboard(
         _ request: HelperRequest,
         context: ClaudeDesktopContext,
-        limits: TraversalLimits
+        limits: TraversalLimits,
+        dependencies: CommandDependencies
     ) throws -> HelperResponse {
         let selector = try requiredSelector(request.selector)
         guard let keyCode = request.keyCode, keyCode <= 127 else {
@@ -89,8 +197,20 @@ enum CommandRunner {
         let tree = try AXRuntime.readTree(application: context.axApplication, limits: limits)
         let target = try tree.unique(matching: selector)
         try AXRuntime.focus(target.element)
-        try AXRuntime.postKeyboardEvent(keyCode: keyCode, modifiers: request.modifiers ?? [])
-        try awaitPostcondition(postcondition, context: context, limits: limits)
+        try performAction(
+            postcondition,
+            context: context,
+            limits: limits,
+            action: {
+                try KeyboardEventBoundary.emit(
+                    requireFrontmost: context.requireFrontmostForAction,
+                    isTargetFocused: { AXRuntime.isFocused(target.element) },
+                    postEvent: {
+                        try dependencies.postKeyboardEvent(keyCode, request.modifiers ?? [])
+                    }
+                )
+            }
+        )
         return HelperResponse(
             ok: true,
             command: request.command,
@@ -107,7 +227,8 @@ enum CommandRunner {
     private static func physicalClick(
         _ request: HelperRequest,
         context: ClaudeDesktopContext,
-        limits: TraversalLimits
+        limits: TraversalLimits,
+        dependencies: CommandDependencies
     ) throws -> HelperResponse {
         let selector = try requiredSelector(request.selector)
         let postcondition = try requiredPostcondition(request.postcondition)
@@ -115,21 +236,33 @@ enum CommandRunner {
         try AXRuntime.exposeElectronAccessibility(application: context.axApplication)
         let tree = try AXRuntime.readTree(application: context.axApplication, limits: limits)
         let target = try tree.unique(matching: selector)
-
-        // Re-read the selected AX object immediately before the click. The
-        // request cannot supply a point. A stale object or invalid frame fails.
-        let fresh = AXRuntime.snapshot(
-            target.element,
-            path: target.snapshot.path,
-            hierarchy: target.snapshot.hierarchy
+        try performAction(
+            postcondition,
+            context: context,
+            limits: limits,
+            action: {
+                // Re-read the selected AX object immediately before the click.
+                // The request cannot supply a point. A stale object or invalid
+                // frame fails.
+                let fresh = AXRuntime.snapshot(
+                    target.element,
+                    path: target.snapshot.path,
+                    hierarchy: target.snapshot.hierarchy
+                )
+                guard ControlFinder.matches(fresh, selector: selector),
+                      let frame = fresh.frame
+                else {
+                    throw HelperFailure(
+                        .staleControl,
+                        "The selected control became stale before the click."
+                    )
+                }
+                let plan = try ClickPlan(freshFrame: frame)
+                try AXRuntime.requireHitTarget(target.element, at: plan.point)
+                try context.requireFrontmostForAction()
+                try dependencies.physicalClick(plan.point)
+            }
         )
-        guard ControlFinder.matches(fresh, selector: selector), let frame = fresh.frame else {
-            throw HelperFailure(.staleControl, "The selected control became stale before the click.")
-        }
-        let plan = try ClickPlan(freshFrame: frame)
-        try AXRuntime.requireHitTarget(target.element, at: plan.point)
-        try AXRuntime.physicalClick(plan.point)
-        try awaitPostcondition(postcondition, context: context, limits: limits)
         return HelperResponse(
             ok: true,
             command: request.command,
@@ -175,20 +308,42 @@ enum CommandRunner {
         )
     }
 
-    private static func postconditionHolds(_ postcondition: Postcondition, in tree: LiveTree) throws -> Bool {
-        let matches = try ControlFinder.all(in: tree.snapshots, matching: postcondition.selector)
-        if postcondition.condition == .absent { return matches.isEmpty }
-        guard matches.count == 1,
-              let live = tree.elements.first(where: { $0.snapshot.path == matches[0].path })
-        else { return false }
+    private static func performAction(
+        _ postcondition: Postcondition,
+        context: ClaudeDesktopContext,
+        limits: TraversalLimits,
+        action: () throws -> Void
+    ) throws {
+        try ActionTransition.perform(
+            condition: postcondition.condition,
+            observe: {
+                let tree = try AXRuntime.readTree(
+                    application: context.axApplication,
+                    limits: limits
+                )
+                return try postconditionHolds(postcondition, in: tree)
+            },
+            action: action,
+            verify: {
+                try awaitPostcondition(
+                    postcondition,
+                    context: context,
+                    limits: limits
+                )
+            }
+        )
+    }
 
-        switch postcondition.condition {
-        case .exists: return true
-        case .absent: return false
-        case .enabled: return live.snapshot.enabled == true
-        case .disabled: return live.snapshot.enabled == false
-        case .focused: return live.snapshot.focused == true
-        case .valueEquals: return AXRuntime.valueAttribute(live.element) == postcondition.value
-        }
+    private static func postconditionHolds(_ postcondition: Postcondition, in tree: LiveTree) throws -> Bool {
+        try PostconditionObserver.holds(
+            postcondition,
+            in: tree.snapshots,
+            valueAtPath: { path in
+                guard let live = tree.elements.first(where: { $0.snapshot.path == path }) else {
+                    return nil
+                }
+                return AXRuntime.valueAttribute(live.element)
+            }
+        )
     }
 }

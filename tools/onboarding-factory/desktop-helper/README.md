@@ -68,7 +68,9 @@ the application exposes them. Do not use localized text as a primary selector.
 `set_value` verifies the resulting value. `keyboard` and `physical_click`
 require an explicit postcondition. The helper polls that postcondition to a
 bounded deadline. The helper derives each click point from a new read of the
-selected control frame.
+selected control frame. An action is refused when its postcondition is already
+true before the action. This false-to-true rule prevents an ineffective action
+from reporting success.
 
 The supported postconditions are `exists`, `absent`, `enabled`, `disabled`,
 `focused`, and `value_equals`. The helper never includes request values in a

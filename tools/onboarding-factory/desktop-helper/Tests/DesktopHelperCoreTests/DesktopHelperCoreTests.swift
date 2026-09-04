@@ -1,6 +1,8 @@
+import ApplicationServices
 import DesktopHelperCore
 import Foundation
 import XCTest
+@testable import ClaudeDesktopHelper
 
 final class DesktopHelperCoreTests: XCTestCase {
     private let fixtureDefinitions = [
@@ -24,6 +26,9 @@ final class DesktopHelperCoreTests: XCTestCase {
         ]),
         ProbeDefinition(name: "session_menu", selectors: [
             ControlSelector(role: "AXButton", identifier: "session-menu"),
+        ]),
+        ProbeDefinition(name: "stop_control", selectors: [
+            ControlSelector(role: "AXButton", identifier: "stop-button"),
         ]),
     ]
 
@@ -96,6 +101,8 @@ final class DesktopHelperCoreTests: XCTestCase {
             definitions: fixtureDefinitions
         )
         XCTAssertEqual(matches.count, fixtureDefinitions.count)
+        XCTAssertEqual(fixtureDefinitions.count, 8)
+        XCTAssertEqual(matches.last?.identifier, "stop-button")
         XCTAssertTrue(matches.allSatisfy(\.visible))
     }
 
@@ -214,6 +221,185 @@ final class DesktopHelperCoreTests: XCTestCase {
                 "macOS Accessibility access is not granted to claude-desktop-helper."
             )
         }
+    }
+
+    func testActionRequiresFalseToTruePostconditionTransition() throws {
+        var actionRan = false
+        var verifyRan = false
+        XCTAssertThrowsError(try ActionTransition.perform(
+            condition: .enabled,
+            observe: { true },
+            action: { actionRan = true },
+            verify: { verifyRan = true }
+        )) { error in
+            XCTAssertEqual((error as? HelperFailure)?.code, .postconditionFailed)
+        }
+        XCTAssertFalse(actionRan)
+        XCTAssertFalse(verifyRan)
+
+        var order: [String] = []
+        try ActionTransition.perform(
+            condition: .enabled,
+            observe: {
+                order.append("observe")
+                return false
+            },
+            action: { order.append("action") },
+            verify: { order.append("verify") }
+        )
+        XCTAssertEqual(order, ["observe", "action", "verify"])
+    }
+
+    func testKeyboardEventBoundaryChecksFrontmostAndFocusedImmediatelyBeforeEmission() throws {
+        var order: [String] = []
+        try KeyboardEventBoundary.emit(
+            requireFrontmost: { order.append("frontmost") },
+            isTargetFocused: {
+                order.append("focused")
+                return true
+            },
+            postEvent: { order.append("event") }
+        )
+        XCTAssertEqual(order, ["frontmost", "focused", "event"])
+
+        var eventRan = false
+        XCTAssertThrowsError(try KeyboardEventBoundary.emit(
+            requireFrontmost: {},
+            isTargetFocused: { false },
+            postEvent: { eventRan = true }
+        )) { error in
+            XCTAssertEqual((error as? HelperFailure)?.code, .actionFailed)
+        }
+        XCTAssertFalse(eventRan)
+    }
+
+    func testAmbiguousPostconditionFailsImmediately() {
+        let selector = ControlSelector(role: "AXButton", identifier: "result")
+        let postcondition = Postcondition(selector: selector, condition: .enabled)
+        let matches = [
+            ElementSnapshot(path: [0], role: "AXButton", identifier: "result", enabled: true),
+            ElementSnapshot(path: [1], role: "AXButton", identifier: "result", enabled: false),
+        ]
+        XCTAssertThrowsError(try PostconditionObserver.holds(
+            postcondition,
+            in: matches
+        )) { error in
+            XCTAssertEqual((error as? HelperFailure)?.code, .controlAmbiguous)
+        }
+    }
+
+    func testAXChildrenTreatsOnlyUnsupportedOrValidEmptyArrayAsLeaf() throws {
+        XCTAssertEqual(
+            try AXRuntime.decodeChildren(status: .attributeUnsupported, value: nil).count,
+            0
+        )
+        let emptyChildren: [AXUIElement] = []
+        XCTAssertEqual(
+            try AXRuntime.decodeChildren(status: .success, value: emptyChildren as CFArray).count,
+            0
+        )
+        XCTAssertThrowsError(try AXRuntime.decodeChildren(
+            status: .cannotComplete,
+            value: nil
+        )) { error in
+            XCTAssertEqual((error as? HelperFailure)?.code, .actionFailed)
+        }
+        XCTAssertThrowsError(try AXRuntime.decodeChildren(
+            status: .success,
+            value: ["not-an-element"] as CFArray
+        )) { error in
+            XCTAssertEqual((error as? HelperFailure)?.code, .actionFailed)
+        }
+
+        let injected = HelperFailure(.actionFailed, "injected AXChildren failure")
+        XCTAssertThrowsError(try AXRuntime.readTree(
+            application: AXUIElementCreateSystemWide(),
+            limits: TraversalLimits(maxDepth: 2, maxNodes: 2),
+            childrenReader: { _ in throw injected }
+        )) { error in
+            XCTAssertEqual(error as? HelperFailure, injected)
+        }
+    }
+
+    func testStrictDecoderRejectsUnknownAndCommandInapplicableFieldsBeforeRun() throws {
+        let unknownCoordinate = Data(
+            #"{"protocolVersion":1,"command":"preflight","x":42}"#.utf8
+        )
+        let inapplicableSelector = Data(
+            #"{"protocolVersion":1,"command":"preflight","selector":{"role":"AXButton"}}"#.utf8
+        )
+        let nestedUnknown = Data(
+            #"{"protocolVersion":1,"command":"inspect","limits":{"maxDepth":4,"maxNodes":20,"extra":true}}"#.utf8
+        )
+        for input in [unknownCoordinate, inapplicableSelector, nestedUnknown] {
+            var runnerCalled = false
+            let result = RequestProcessor.process(input) { request in
+                runnerCalled = true
+                return HelperResponse(ok: true, command: request.command)
+            }
+            XCTAssertFalse(runnerCalled)
+            XCTAssertEqual(result.exitCode, 2)
+            XCTAssertEqual(result.response.error?.code, .invalidRequest)
+        }
+
+        let valid = Data(#"{"protocolVersion":1,"command":"preflight"}"#.utf8)
+        let decoded = try StrictRequestDecoder.decode(valid)
+        XCTAssertEqual(decoded.command, .preflight)
+    }
+
+    func testInjectedDesktopProcessBoundaryClassifiesMissingStates() {
+        let notInstalled = DesktopEnvironment(
+            applicationURL: { nil },
+            runningApplications: { [] },
+            accessibilityTrusted: { true },
+            desktopVersion: { _ in XCTFail("version must not be read"); return nil },
+            bundledClaudeCodeVersion: {
+                XCTFail("bundled metadata must not be read")
+                return ""
+            }
+        )
+        XCTAssertThrowsError(try ClaudeDesktopContext.load(environment: notInstalled)) { error in
+            XCTAssertEqual((error as? HelperFailure)?.code, .appNotInstalled)
+        }
+
+        let notRunning = DesktopEnvironment(
+            applicationURL: { URL(fileURLWithPath: "/Applications/Claude.app") },
+            runningApplications: { [] },
+            accessibilityTrusted: { true },
+            desktopVersion: { _ in XCTFail("version must not be read"); return nil },
+            bundledClaudeCodeVersion: {
+                XCTFail("bundled metadata must not be read")
+                return ""
+            }
+        )
+        XCTAssertThrowsError(try ClaudeDesktopContext.load(environment: notRunning)) { error in
+            XCTAssertEqual((error as? HelperFailure)?.code, .appNotRunning)
+        }
+    }
+
+    func testInjectedFilesystemSelectsLatestVerifiedBundledMetadata() throws {
+        let support = URL(fileURLWithPath: "/virtual/Application Support", isDirectory: true)
+        let versions = ["2.1.9", "2.1.10", "9.9.9"].map {
+            support.appendingPathComponent("Claude/claude-code/\($0)", isDirectory: true)
+        }
+        let filesystem = ClaudeCodeFilesystem(
+            applicationSupportDirectory: { support },
+            directories: { _ in versions },
+            fileExists: { verified in
+                verified.deletingLastPathComponent().lastPathComponent != "9.9.9"
+            },
+            bundleMetadata: { app in
+                let version = app.deletingLastPathComponent().lastPathComponent
+                return BundleMetadata(
+                    bundleIdentifier: ClaudeDesktopContext.claudeCodeBundleIdentifier,
+                    version: version
+                )
+            }
+        )
+        XCTAssertEqual(
+            try ClaudeDesktopContext.latestBundledClaudeCodeVersion(filesystem: filesystem),
+            "2.1.10"
+        )
     }
 
     func testSemanticVersionOrdersNumericComponents() {

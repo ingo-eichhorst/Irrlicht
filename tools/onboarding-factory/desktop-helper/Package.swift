@@ -18,7 +18,7 @@ let package = Package(
         ),
         .testTarget(
             name: "DesktopHelperCoreTests",
-            dependencies: ["DesktopHelperCore"],
+            dependencies: ["DesktopHelperCore", "ClaudeDesktopHelper"],
             resources: [.copy("Fixtures")]
         ),
     ]
