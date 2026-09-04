@@ -35,6 +35,60 @@ address="$(desktop_choose_loopback_address)"
 desktop_require_free_loopback_address "$address"
 assert_eq "selected address is free loopback" 0 "$?"
 
+echo "== clone-wide lock covers setup in linked worktrees =="
+lock_repo="$TMP/lock-repo"
+linked_repo="$TMP/lock-linked"
+mkdir "$lock_repo"
+git -C "$lock_repo" init -b main >/dev/null
+git -C "$lock_repo" config user.email desktop-driver-test@example.invalid
+git -C "$lock_repo" config user.name "Desktop Driver Test"
+printf 'seed\n' > "$lock_repo/seed"
+git -C "$lock_repo" add seed
+git -C "$lock_repo" commit -m seed >/dev/null
+git -C "$lock_repo" worktree add --detach "$linked_repo" >/dev/null
+first_ready="$TMP/first-lock-ready"
+release_first="$TMP/release-first-lock"
+(
+  desktop_acquire_clone_lock "$lock_repo" || exit 1
+  : > "$first_ready"
+  for _ in $(seq 1 100); do
+    [[ -e "$release_first" ]] && exit 0
+    sleep 0.02
+  done
+  exit 2
+) &
+first_pid=$!
+for _ in $(seq 1 100); do
+  [[ -e "$first_ready" ]] && break
+  sleep 0.02
+done
+if [[ -e "$first_ready" ]]; then
+  pass "first worktree holds the lock"
+else
+  fail "first worktree holds the lock" "acquisition deadline expired"
+fi
+(
+  desktop_acquire_clone_lock "$linked_repo" || exit 1
+  : > "$TMP/second.snapshot"
+  : > "$TMP/second.daemon"
+) 2>"$TMP/second-lock.err"
+second_rc=$?
+assert_eq "second worktree is refused" "1" "$second_rc"
+[[ -e "$TMP/second.snapshot" || -e "$TMP/second.daemon" ]] && got="reached-setup" || got="blocked-before-setup"
+assert_eq "second worktree cannot reach snapshot or daemon" "blocked-before-setup" "$got"
+: > "$release_first"
+wait "$first_pid"
+assert_eq "first lock holder exits after release" "0" "$?"
+run_cell="$DIR/../run-cell.sh"
+lock_line="$(awk '/desktop_acquire_clone_lock/{print NR; exit}' "$run_cell")"
+spawn_line="$(awk '/spawn_record_daemon .*DAEMON/{print NR; exit}' "$run_cell")"
+if [[ -n "$lock_line" && -n "$spawn_line" && "$lock_line" -lt "$spawn_line" ]]; then
+  got="before-setup"
+else
+  got="missing-or-late"
+fi
+assert_eq "run-cell acquires the lock before daemon setup" "before-setup" "$got"
+
 echo "== identity-field and full-session evidence is staged and joined =="
 source_dir="$TMP/source"
 destination="$TMP/destination"

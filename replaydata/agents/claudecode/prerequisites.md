@@ -62,9 +62,14 @@ will fail again until the .ok file is re-touched.
   digest. Any difference fails cleanup instead of being treated as unchanged.
 - The recording daemon declares its writable configuration paths through
   `irrlichd --print-managed-files`. The runner snapshots those files before
-  hook installation. It seals the exact expected post-install bytes after the
-  hook-install wait. Cleanup restores the snapshot only if every managed path
-  still matches that seal. A later external edit causes a refusal and remains
-  in place. This check cannot attribute an edit made during hook installation,
-  so the exclusive-control prerequisite also applies to the agent config files
-  until the seal completes.
+  hook installation. Before the real daemon starts, the runner applies Claude
+  Code's declared hook, status-line, and instruction closures to the baseline
+  bytes in a disposable shadow home. The real post-install files must match
+  this expected state before the runner publishes the seal. Cleanup restores
+  the snapshot only if every managed path still matches the seal. A later
+  external edit causes a refusal and remains in place. The clone-wide lock
+  prevents another Desktop runner from entering this lifecycle. An unrelated
+  process does not honor that lock. Such a process can also write during an
+  installer's own read-and-rename window, before the expected-state comparison,
+  or between cleanup's last byte comparison and its atomic restore rename. The
+  exclusive-control prerequisite therefore still applies to these files.
