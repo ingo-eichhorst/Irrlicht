@@ -23,8 +23,8 @@
 # these under replaydata/agents/aider/ on a clean checkout). A blind
 # repo-wide scan would flag those on line one of this check's life. Passing
 # `git diff --name-only origin/main...HEAD` — the files THIS branch actually
-# touches, which Phase 5 already computes this exact list for its own
-# collision probe — keeps the check honest without special-casing aider's
+# touches, which ir:exec also uses for its collision probe — keeps the check
+# honest without special-casing aider's
 # format:
 #
 #   git diff --name-only -z origin/main...HEAD | \

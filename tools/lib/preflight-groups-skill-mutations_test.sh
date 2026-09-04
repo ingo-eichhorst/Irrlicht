@@ -89,8 +89,8 @@ fails=0
 assert_mutation_is_red \
   "lock test catches SKILL.md dropping a group from its chunk list" \
   ".claude/skills/ir:exec/SKILL.md" \
-  $'    tools/preflight.sh --only posix\n    tools/preflight.sh --only bash\n' \
-  $'    tools/preflight.sh --only posix\n' \
+  $'tools/preflight.sh --only posix\ntools/preflight.sh --only bash\n' \
+  $'tools/preflight.sh --only posix\n' \
   'only in VALID_GROUPS: bash'
 
 # ── 2. preflight.sh's VALID_GROUPS GAINS a group the skill never mentions ───

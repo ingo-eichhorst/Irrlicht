@@ -2,7 +2,7 @@
 # preflight-groups-skill_test.sh — hold ir:exec SKILL.md's preflight `--only`
 # chunk list against tools/preflight.sh's own VALID_GROUPS array (#1823).
 #
-# WHY THIS EXISTS. `.claude/skills/ir:exec/SKILL.md`'s Phase 4 step 11 tells
+# WHY THIS EXISTS. `.claude/skills/ir:exec/SKILL.md` tells
 # every agent chunking `tools/preflight.sh` by `--only <group>` which groups
 # to run. That list is hand-typed prose, not derived from anything — and it
 # drifted: it named seven groups and silently omitted `swift` and `bash`,
