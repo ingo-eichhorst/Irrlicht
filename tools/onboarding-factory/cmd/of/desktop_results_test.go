@@ -132,13 +132,13 @@ func writeExecutionResults(t *testing.T, cellDir string, results []any) {
 	write(t, filepath.Join(cellDir, desktopResultsFile), string(b)+"\n")
 }
 
-func requireDesktopFinding(t *testing.T, root, scenario, field string) {
+func requireDesktopFinding(t *testing.T, root, scenario string, fields ...string) {
 	t.Helper()
 	code, _, stderr := runOf("validate", "--repo-root", root)
 	if code != exitFail {
 		t.Fatalf("of validate accepted the Desktop evidence mutation; exit=%d stderr=%s", code, stderr)
 	}
-	for _, want := range []string{scenario, field} {
+	for _, want := range append([]string{scenario}, fields...) {
 		if !strings.Contains(stderr, want) {
 			t.Fatalf("finding must name %q; stderr:\n%s", want, stderr)
 		}
@@ -245,7 +245,7 @@ func TestValidateDesktopCompletenessMutations(t *testing.T) {
 		offPath := filepath.Join(fixture.root, "replaydata", "agents", "claudecode", "regressions", "copied-result")
 		write(t, filepath.Join(offPath, "metadata.json"), `{"scenario_id":"unobservable"}`+"\n")
 		write(t, filepath.Join(offPath, desktopResultsFile), string(body))
-		requireDesktopFinding(t, fixture.root, "unobservable", "missing desktop-local result")
+		requireDesktopFinding(t, fixture.root, "unobservable", "missing desktop-local result", "document location")
 	})
 }
 
