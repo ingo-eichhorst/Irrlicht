@@ -103,6 +103,41 @@ STAGED_DIR="$STAGING/replaydata/agents/$AGENT/scenarios/$SCENARIO"
 TARGET_DIR="$REPO_ROOT/replaydata/agents/$AGENT/scenarios/$SCENARIO"
 RECORDINGS_DIR="$TARGET_DIR/recordings"
 
+# The execution profile decides whether EVERY Desktop gate in this script runs
+# — the staged-evidence validator, the claude-desktop entrypoint check, the
+# desktop.versions.json reads, and the execution-results writer. It used to come
+# from a flag alone whose default is cli-local, so omitting the flag promoted a
+# Desktop tree with every one of those skipped, stamped it `cli-local`, and let
+# newest_recording_for_profile then pick it as the committed CLI baseline.
+#
+# Cross-check the flag against the two signals the staging tree already carries:
+# what run-cell.sh recorded, and whether Desktop evidence is actually present.
+# Disagreement is a stop, not a warning.
+# BEGIN recording_profile_crosscheck
+RUN_MANIFEST_PROFILE=""
+if [[ -f "$STAGING/run-manifest.json" ]]; then
+  RUN_MANIFEST_PROFILE="$(jq -r '.execution_profile // empty' \
+    "$STAGING/run-manifest.json" 2>/dev/null || true)"
+fi
+if [[ -n "$RUN_MANIFEST_PROFILE" && "$RUN_MANIFEST_PROFILE" != "$EXECUTION_PROFILE" ]]; then
+  echo "promote: promoting as $EXECUTION_PROFILE but $STAGING/run-manifest.json recorded $RUN_MANIFEST_PROFILE" >&2
+  exit 2
+fi
+STAGED_EVIDENCE_PROFILE=""
+for evidence_probe in desktop-registry.json desktop-environment.json irrlicht-session.json; do
+  if [[ -e "$STAGED_DIR/$evidence_probe" ]]; then
+    STAGED_EVIDENCE_PROFILE="desktop-local"
+    break
+  fi
+done
+if [[ "$STAGED_EVIDENCE_PROFILE" == "desktop-local" && "$EXECUTION_PROFILE" != "desktop-local" ]]; then
+  echo "promote: $STAGED_DIR carries Claude Desktop evidence ($evidence_probe) but the run" >&2
+  echo "  is being promoted as $EXECUTION_PROFILE, which skips every Desktop gate." >&2
+  echo "  Pass --execution-profile desktop-local." >&2
+  exit 2
+fi
+# END recording_profile_crosscheck
+
 if [[ ! -f "$STAGED_DIR/events.jsonl" ]]; then
   echo "promote: no staged events.jsonl at $STAGED_DIR" >&2
   exit 1
@@ -141,12 +176,14 @@ done
 # $STAGING/precheck.json; run-cell-multi.sh drives several into one staging tree
 # and writes $STAGING/<agent>/precheck.json. Check the per-adapter path first so
 # a multi run can't pick up a sibling adapter's version.
+# BEGIN recording_version_chain
 AGENT_VER=""
 if [[ "$EXECUTION_PROFILE" == "desktop-local" ]]; then
   AGENT_VER="$(jq -r '.claude_code // empty' "$STAGING/desktop.versions.json" 2>/dev/null || true)"
 fi
 [[ -n "$AGENT_VER" ]] || AGENT_VER="$(jq -r '.cli_version // empty' "$STAGING/$AGENT/precheck.json" 2>/dev/null || true)"
 [[ -n "$AGENT_VER" ]] || AGENT_VER="$(jq -r '.cli_version // empty' "$STAGING/precheck.json" 2>/dev/null || true)"
+# END recording_version_chain
 if [[ -z "$AGENT_VER" ]]; then
   # Fallback for a promote that didn't come through run-cell.sh. This table was
   # SIX entries long while precheck's was ten, which is the other half of the

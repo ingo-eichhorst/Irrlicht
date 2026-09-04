@@ -17,7 +17,8 @@
 #   cli_not_found, cli_too_old, auth_failed, daemon_dirty, daemon_not_ready,
 #   working_tree_dirty, transcript_missing, timeout, daemon_crashed,
 #   desktop_evidence_invalid, driver_session_leaked,
-#   driver_teardown_unverifiable, driver_pid_unrecorded, replay_failed, unknown
+#   driver_teardown_unverifiable, driver_pid_unrecorded, replay_failed,
+#   unknown, managed_file_restore_failed
 #
 # THE MANIFEST ARMS ARE KEPT IN SYNC MECHANICALLY (#1825). Every arm label in
 # the `case "$err_code"` block below is a string some OTHER script types into a
@@ -78,6 +79,7 @@ if [[ -f "$MANIFEST" ]]; then
     no_recording)                         emit "transcript_missing" "Daemon produced no recording for this run" "$err_code" ;;
     no_subagents_spawned)                 emit "transcript_missing" "Scenario requires subagents but none spawned" "$err_code" ;;
     desktop_evidence_invalid)             emit "desktop_evidence_invalid" "Desktop evidence failed its identity contract" "$err_code" ;;
+    managed_file_restore_failed)          emit "managed_file_restore_failed" "Teardown refused to restore the agent config; a recovery snapshot was kept" "$err_code" ;;
     daemon_socket_missing)                emit "daemon_not_ready"   "Recording daemon never opened its socket" "$err_code" ;;
     replay_failed)                        emit "replay_failed"      "Replay produced no report for a staged fixture" "$(jq -r '.failed_adapter // empty' "$MANIFEST" 2>/dev/null || echo "")" ;;
     # #1828: driver.pid never being written is a THIRD thing, and deliberately

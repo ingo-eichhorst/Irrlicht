@@ -223,10 +223,15 @@ EOF
 chmod +x "$REAL_DAEMON"
 "$REAL_DAEMON" &
 RECORD_DAEMON_PID=$!
-for _ in $(seq 1 100); do
-  [[ -e "$REAL_READY" ]] && break
+# Same rule: the ladder below grades a child that is actually running, so a
+# child that never got there must fail the case rather than silently change
+# what is being measured.
+ready=missing
+for _ in $(seq 1 500); do
+  [[ -e "$REAL_READY" ]] && { ready=present; break; }
   sleep 0.01
 done
+assert_eq "the real child signalled ready before the ladder" "present" "$ready"
 RECORD_DAEMON_POLL_TICK_S=0.01
 RECORD_DAEMON_INT_TICKS=2
 RECORD_DAEMON_TERM_TICKS=2
@@ -296,10 +301,17 @@ spawn_record_daemon "$FORK_DAEMON" "$STAGING" 127.0.0.1:7838 "" 2>/dev/null
 rc=$?
 eval "$original_after_fork"
 unset RECORD_DAEMON_START_GATE_TICKS RECORD_DAEMON_START_GATE_TICK_S
-for _ in $(seq 1 100); do
-  [[ -e "$STAGING/.daemon-start-aborted" ]] && break
+# Wait for the orphan wrapper to REACH its abort, and assert that it did.
+# Without this assertion the case concluded "never execed" from an absence it
+# had not established it could observe: a slower machine, or a larger
+# START_GATE_TICKS, leaves the wrapper still sleeping when the poll expires and
+# $FORK_MARKER is absent for that reason instead of the one under test.
+aborted=missing
+for _ in $(seq 1 500); do
+  [[ -e "$STAGING/.daemon-start-aborted" ]] && { aborted=present; break; }
   sleep 0.01
 done
+assert_eq "the orphan wrapper reached its abort" "present" "$aborted"
 assert_eq "simulated EXIT at fork boundary refuses spawn" "1" "$rc"
 [[ -e "$FORK_MARKER" ]] && got=execed || got=blocked
 assert_eq "orphan wrapper never execs daemon" "blocked" "$got"
@@ -456,6 +468,57 @@ else
   got="missing"
 fi
 assert_eq "desktop-local enables the built oracle" "wired" "$got"
+
+echo "== a failing teardown is recorded, not silently fatal =="
+# stop_record_daemon returns non-zero for two CORRECT refusals: unverified
+# daemon death, and a managed-file restore that refused. Both rigs run under
+# `set -e`, where a bare call aborts the script on the spot — so the one run
+# that leaves the operator's agent config modified would be the one run with no
+# run-manifest.json, which classify-failure.sh then grades `unknown`.
+#
+# First the mechanism, so the structural assertions below have something to
+# stand on: a bare failing call under errexit really does skip what follows.
+teardown_probe() {
+  local style="$1"
+  bash -c '
+    set -euo pipefail
+    stop_record_daemon() { return 1; }
+    write_error_manifest() { echo "manifest"; }
+    if [[ "$1" == bare ]]; then
+      stop_record_daemon
+    else
+      rc=0; stop_record_daemon || rc=$?
+      [[ "$rc" -ne 0 ]] && write_error_manifest
+    fi
+    exit 0
+  ' _ "$style" 2>/dev/null
+}
+assert_eq "a bare failing teardown writes no manifest" "" "$(teardown_probe bare)"
+assert_eq "a captured failing teardown writes one" "manifest" "$(teardown_probe capture)"
+
+# Now the rigs. A bare `stop_record_daemon` statement is the defect; the code
+# it must write is the one classify-failure.sh has an arm for.
+for rig in run-cell.sh run-cell-multi.sh; do
+  if grep -Eq '^[[:space:]]*stop_record_daemon([[:space:]]*#.*)?$' "$SCRIPTS_DIR/$rig"; then
+    got="bare"
+  else
+    got="captured"
+  fi
+  assert_eq "$rig captures the teardown status" "captured" "$got"
+  if grep -Fq 'stop_record_daemon || TEARDOWN_RC=$?' "$SCRIPTS_DIR/$rig" &&
+    grep -Fq 'write_error_manifest "managed_file_restore_failed"' "$SCRIPTS_DIR/$rig"; then
+    got="reported"
+  else
+    got="unreported"
+  fi
+  assert_eq "$rig reports a failed teardown in its manifest" "reported" "$got"
+done
+if grep -Fq 'managed_file_restore_failed)' "$SCRIPTS_DIR/lib/classify-failure.sh"; then
+  got="classified"
+else
+  got="unclassified"
+fi
+assert_eq "the failed-teardown code has a classifier arm" "classified" "$got"
 
 echo "== the daemon socket path must fit AF_UNIX's sun_path =="
 # MUTATION fixture for the guard added with the Desktop profile. macOS copies a

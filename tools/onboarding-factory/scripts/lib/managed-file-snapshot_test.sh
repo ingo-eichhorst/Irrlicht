@@ -200,6 +200,36 @@ MANAGED_FILE_ORACLE_REQUIRED=0
 # shellcheck disable=SC2034  # see above — a directive covers only the next line
 MANAGED_FILE_ORACLE_DIR=""
 
+echo "== restore hands back the original file MODE, not the umask's =="
+# The backup used a bare `cp`, so the saved copy's mode was the original's
+# masked by the process umask; the `cp -p` restore then handed that masked
+# mode back. A 0666 config returned as 0644 with byte-identical contents, so
+# every content assertion in this file stayed green.
+fresh_env mode_fidelity
+printf 'mode baseline\n' > "$HOME/.claude/settings.json"
+chmod 0666 "$HOME/.claude/settings.json"
+# The umask must be in force for the snapshot RESTORE will read, so set it in
+# this shell rather than a subshell, and put it back afterwards.
+saved_umask="$(umask)"
+umask 022
+snapshot_managed_files "$ROOT/backup" "$DAEMON"
+snap_rc=$?
+umask "$saved_umask"
+assert_eq "snapshot returns 0" "0" "$snap_rc"
+printf 'daemon edit\n' > "$HOME/.claude/settings.json"
+chmod 0644 "$HOME/.claude/settings.json"
+restore_managed_files
+assert_eq "restore returns 0" "0" "$?"
+assert_eq "restored bytes" "mode baseline" "$(cat "$HOME/.claude/settings.json")"
+mode="$(stat -f '%Lp' "$HOME/.claude/settings.json" 2>/dev/null ||
+  stat -c '%a' "$HOME/.claude/settings.json" 2>/dev/null)"
+if [[ -z "$mode" ]]; then
+  # No readable mode means this check cannot run, which is a failure.
+  fail "restored mode" "666" "stat produced nothing"
+else
+  assert_eq "restored mode" "666" "$mode"
+fi
+
 echo "== a managed path cannot be a baseline symlink =="
 # MUTATION fixture: the declared config path resolves to a different file.
 # Snapshot must reject it instead of arming a later restore through the link.

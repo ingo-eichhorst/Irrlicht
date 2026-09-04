@@ -35,6 +35,40 @@ address="$(desktop_choose_loopback_address)"
 desktop_require_free_loopback_address "$address"
 assert_eq "selected address is free loopback" 0 "$?"
 
+# A BUSY port must be refused. The check had no such fixture, so deleting it
+# entirely left this suite green.
+busy_port=""
+python3 - "$TMP/busy.port" <<'PYBUSY' &
+import socket, sys, time
+s = socket.socket(); s.bind(("127.0.0.1", 0)); s.listen(1)
+open(sys.argv[1], "w").write(str(s.getsockname()[1]))
+time.sleep(30)
+PYBUSY
+BUSY_PID=$!
+for _ in $(seq 1 200); do
+  [[ -s "$TMP/busy.port" ]] && break
+  sleep 0.01
+done
+busy_port="$(cat "$TMP/busy.port" 2>/dev/null || true)"
+if [[ "$busy_port" =~ ^[0-9]+$ ]]; then
+  desktop_require_free_loopback_address "127.0.0.1:$busy_port" 2>/dev/null
+  assert_eq "a busy loopback port is refused" 1 "$?"
+else
+  # Could not stand the listener up. That is a failure, not a pass.
+  fail "a busy loopback port is refused" "a bound port" "no listener came up"
+fi
+kill "$BUSY_PID" 2>/dev/null || true
+wait "$BUSY_PID" 2>/dev/null || true
+
+# A probe that cannot look must refuse, not report the port free. Shadow lsof
+# with a stub that answers nothing, exactly as a denied or missing lsof does.
+lsof() { return 1; }
+desktop_require_free_loopback_address "$address" 2>/dev/null
+assert_eq "a blind port probe refuses" 1 "$?"
+unset -f lsof
+desktop_require_free_loopback_address "$address"
+assert_eq "the real probe still accepts a free port" 0 "$?"
+
 echo "== clone-wide lock covers setup in linked worktrees =="
 lock_repo="$TMP/lock-repo"
 linked_repo="$TMP/lock-linked"

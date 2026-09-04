@@ -268,7 +268,12 @@ snapshot_managed_files() {
       # the backup path swallows the file as dir/<basename>). Either way the
       # backup is not where restore will look for it, and the pre-#1357 code
       # read that as "the file never existed" and deleted the user's config.
-      if ! cp "$p" "$backup_dir/$i" || [[ ! -f "$backup_dir/$i" ]]; then
+      # `-p`, matching the `cp -p` restore uses. Without it the backup's mode
+      # is the original's masked by this process's umask, and restore then hands
+      # back that masked mode: a 0666 config came back 0644. Ownership, ACLs and
+      # xattrs are still not carried — the contract this preserves is mode and
+      # timestamps, not the full inode.
+      if ! cp -p "$p" "$backup_dir/$i" || [[ ! -f "$backup_dir/$i" ]]; then
         echo "managed-file-snapshot: cannot back up $p to $backup_dir/$i" >&2
         rm -f "$manifest_tmp"
         return 1
