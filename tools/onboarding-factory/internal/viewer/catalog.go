@@ -42,7 +42,7 @@ func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 	if json.Unmarshal(b, &top) == nil {
 		top["execution_profile"] = string(profile)
 		annotateMeasurements(top, s.RepoRoot, profile)
-		annotatePipelineState(top, s.RepoRoot)
+		annotatePipelineState(top, s.RepoRoot, profile)
 		annotateDisplayState(top) // after measurements: the recording axis feeds the rollup
 		if out, mErr := json.Marshal(top); mErr == nil {
 			b = out
@@ -233,7 +233,9 @@ func annotateCellDisplayState(cell map[string]any) {
 
 // cellHasRecording reports whether the cell's `measurement` axis (set by
 // annotateMeasurements, which must run first) indicates a captured
-// recording rather than an absent/unspecced one.
+// recording rather than an absent/unspecced/unreadable one. "manifest_error"
+// is explicitly NOT a recording: the cell's manifests could not be read, so
+// claiming a recording exists would roll an unknown up as "observed".
 func cellHasRecording(cell map[string]any) bool {
 	meas, ok := cell["measurement"].(map[string]any)
 	if !ok {
@@ -243,7 +245,7 @@ func cellHasRecording(cell map[string]any) bool {
 	if !ok {
 		return false
 	}
-	return st != "" && st != "no_recording" && st != "no_expected"
+	return st != "" && st != "no_recording" && st != "no_expected" && st != "manifest_error"
 }
 
 // annotateMeasurements decorates each scenarios[].coverage[<agent>] cell
@@ -314,7 +316,12 @@ func annotateMeasurementCell(input measurementCell) {
 // never grade different recordings.
 func measureScenario(repoRoot, agent, folder string, profile matrix.ExecutionProfile) map[string]any {
 	scenarioDir := filepath.Join(repoRoot, "replaydata", "agents", agent, "scenarios", folder)
-	recDir, ok := newestRecordingDirForProfile(scenarioDir, profile)
+	recDir, ok, err := newestRecordingDirForProfile(scenarioDir, profile)
+	if err != nil {
+		// A cell whose manifests cannot be read is not a cell without
+		// recordings. Its own status keeps the two apart in the matrix.
+		return map[string]any{"status": "manifest_error", "summary": err.Error()}
+	}
 	if !ok {
 		return map[string]any{"status": "no_recording"}
 	}
@@ -345,7 +352,7 @@ func measureScenario(repoRoot, agent, folder string, profile matrix.ExecutionPro
 // object (recipe / spec / recordings status), mutating top in place. Reads
 // scenarios.json once and reuses the parsed map per cell. No-op when the
 // shape is unexpected.
-func annotatePipelineState(top map[string]any, repoRoot string) {
+func annotatePipelineState(top map[string]any, repoRoot string, profile matrix.ExecutionProfile) {
 	rawScenarios, ok := top["scenarios"].([]any)
 	if !ok {
 		return
@@ -369,7 +376,10 @@ func annotatePipelineState(top map[string]any, repoRoot string) {
 			if !ok {
 				continue
 			}
-			annotatePipelineCell(repoRoot, recipes, sid, agentSlug, cell)
+			annotatePipelineCell(measurementCell{
+				repoRoot: repoRoot, recipes: recipes, scenarioID: sid,
+				agent: agentSlug, profile: profile, cell: cell,
+			})
 		}
 	}
 }
@@ -378,20 +388,20 @@ func annotatePipelineState(top map[string]any, repoRoot string) {
 // folder is resolved from disk when available; a cell absent on disk still
 // gets a pipeline block (via a "" folder) so recipe-authored-but-unrecorded
 // cells still show their recipe/spec status.
-func annotatePipelineCell(repoRoot string, recipes recipeIndex, sid, agentSlug string, cell map[string]any) {
-	folder, ok := resolveScenarioFolderForAgent(recipes, agentSlug, sid)
+func annotatePipelineCell(input measurementCell) {
+	folder, ok := resolveScenarioFolderForAgent(input.recipes, input.agent, input.scenarioID)
 	if !ok {
 		// No cell on disk for this (agent, scenario) — genuinely absent.
 		folder = ""
 	}
-	cell["pipeline"] = pipelineForCell(repoRoot, agentSlug, sid, folder, recipes)
+	input.cell["pipeline"] = pipelineForCell(input, folder)
 }
 
 // pipelineForCell computes the recipe/spec/recordings status for one
 // (agent, scenario) cell.
-func pipelineForCell(repoRoot, agent, coverageID, folder string, recipes recipeIndex) map[string]any {
-	recipeAuthored, stepCount := recipeStats(recipes, agent, coverageID, folder)
-	specAuthored, phaseCount, recCount := specAndRecordingStats(repoRoot, agent, folder)
+func pipelineForCell(input measurementCell, folder string) map[string]any {
+	recipeAuthored, stepCount := recipeStats(input.recipes, input.agent, input.scenarioID, folder)
+	specAuthored, phaseCount, recCount := specAndRecordingStats(input, folder)
 	return map[string]any{
 		"recipe":     map[string]any{"authored": recipeAuthored, "step_count": stepCount},
 		"spec":       map[string]any{"authored": specAuthored, "phase_count": phaseCount},
@@ -427,14 +437,20 @@ func recipeStats(recipes recipeIndex, agent, coverageID, folder string) (authore
 // metadata.json for this agent/scenario): there is no spec or recording,
 // and joining an empty folder would stat the scenarios/ parent, so the
 // disk reads are skipped entirely.
-func specAndRecordingStats(repoRoot, agent, folder string) (authored bool, phaseCount, recCount int) {
+func specAndRecordingStats(input measurementCell, folder string) (authored bool, phaseCount, recCount int) {
 	if folder == "" {
 		return false, 0, 0
 	}
-	scenarioDir := filepath.Join(repoRoot, "replaydata", "agents", agent, "scenarios", folder)
-	// Every recording lives under recordings/<name>/; "latest" means at least
-	// one recording exists, "archive_count" is the total recording count.
-	recCount = len(RecordingStore{RepoRoot: repoRoot}.listArchiveDirs(scenarioDir))
+	scenarioDir := filepath.Join(input.repoRoot, "replaydata", "agents", input.agent, "scenarios", folder)
+	// Recordings live under recordings/<name>/, and the count is scoped to the
+	// SAME execution profile the measurement axis used (#1889). Counting both
+	// profiles here would let a cell's CLI recordings mark it "recorded" in a
+	// Desktop-scoped rollup while its measurement said no_recording.
+	recordings, err := matrix.RecordingsForProfile(scenarioDir, input.profile)
+	if err != nil {
+		logViewerError("specAndRecordingStats: %s in %s: %v", input.profile, scenarioDir, err)
+	}
+	recCount = len(recordings)
 	specBytes, err := os.ReadFile(filepath.Join(scenarioDir, "expected.jsonl"))
 	if err != nil {
 		return false, 0, recCount

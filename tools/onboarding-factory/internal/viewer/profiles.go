@@ -55,18 +55,26 @@ var profileLabels = map[matrix.ExecutionProfile]string{
 // selectable, and Desktop Local becomes selectable as soon as the cell has
 // either a desktop-local recording or an execution-results.json entry — so a
 // declared-but-unrecorded Desktop result is still reachable and readable.
+// An unreadable manifest is REPORTED on the option rather than counted as
+// zero recordings: matrix.RecordingsForProfile fails on the first bad manifest
+// under recordings/ and returns nothing, so "we could not read this cell" and
+// "this cell has nothing" would otherwise be the same answer.
 func profileOptions(scenarioDir string, result *DesktopResult) []ProfileOption {
 	out := make([]ProfileOption, 0, len(matrix.ExecutionProfiles()))
 	for _, profile := range matrix.ExecutionProfiles() {
 		recordings, err := matrix.RecordingsForProfile(scenarioDir, profile)
-		if err != nil {
-			logViewerError("profileOptions: %s in %s: %v", profile, scenarioDir, err)
-		}
 		option := ProfileOption{
 			ID:         string(profile),
 			Label:      profileLabels[profile],
 			Recordings: len(recordings),
 			Selectable: profile == defaultViewerProfile || len(recordings) > 0,
+		}
+		if err != nil {
+			logViewerError("profileOptions: %s in %s: %v", profile, scenarioDir, err)
+			option.Error = err.Error()
+			// A profile whose history cannot be read stays selectable, so the
+			// user can open it and see WHY rather than finding it hidden.
+			option.Selectable = true
 		}
 		if profile == matrix.ProfileDesktopLocal && result != nil {
 			option.HasResult = true
@@ -84,21 +92,40 @@ func profileOptions(scenarioDir string, result *DesktopResult) []ProfileOption {
 // back as a populated DesktopResult carrying Error, so an unreadable or
 // profile-less artifact is visible in the UI instead of swallowed.
 func desktopResultView(scenarioDir string) *DesktopResult {
-	path := filepath.Join(scenarioDir, desktopresults.FileName)
-	doc, err := desktopresults.Load(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return &DesktopResult{Error: fmt.Sprintf("cannot read %s: %v", desktopresults.FileName, err)}
+	doc, failure := loadDesktopDocument(scenarioDir)
+	if doc == nil {
+		return failure // nil,nil = no artifact; nil,failure = unreadable one
 	}
+	result, ok := desktopLocalResult(*doc)
+	if !ok {
+		return &DesktopResult{Error: fmt.Sprintf("%s carries no %s result", desktopresults.FileName, matrix.ProfileDesktopLocal)}
+	}
+	return buildDesktopResult(scenarioDir, result)
+}
+
+// loadDesktopDocument reads the cell's result artifact. (nil, nil) means the
+// cell simply has none; (nil, failure) means it has one that cannot be read,
+// which is a finding rather than an absence.
+func loadDesktopDocument(scenarioDir string) (*desktopresults.Document, *DesktopResult) {
+	doc, err := desktopresults.Load(filepath.Join(scenarioDir, desktopresults.FileName))
+	if err == nil {
+		return &doc, nil
+	}
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	return nil, &DesktopResult{Error: fmt.Sprintf("cannot read %s: %v", desktopresults.FileName, err)}
+}
+
+// desktopLocalResult picks the artifact's desktop-local entry. The contract
+// permits at most one (of validate rejects duplicates), so the first wins.
+func desktopLocalResult(doc desktopresults.Document) (desktopresults.Result, bool) {
 	for i := range doc.Results {
-		if doc.Results[i].ExecutionProfile != string(matrix.ProfileDesktopLocal) {
-			continue
+		if doc.Results[i].ExecutionProfile == string(matrix.ProfileDesktopLocal) {
+			return doc.Results[i], true
 		}
-		return buildDesktopResult(scenarioDir, doc.Results[i])
 	}
-	return &DesktopResult{Error: fmt.Sprintf("%s carries no %s result", desktopresults.FileName, matrix.ProfileDesktopLocal)}
+	return desktopresults.Result{}, false
 }
 
 // buildDesktopResult turns one typed result into the viewer's wire shape. A
@@ -121,8 +148,18 @@ func buildDesktopResult(scenarioDir string, result desktopresults.Result) *Deskt
 		view.Error = fmt.Sprintf("result names an unusable recording %q", result.Recording)
 		return view
 	}
-	bindDesktopRecording(view, scenarioDir, name, result)
+	bindDesktopRecording(view, desktopRecordingRef{
+		scenarioDir: scenarioDir, name: name, evidence: result.Evidence,
+	})
 	return view
+}
+
+// desktopRecordingRef is the recording a Desktop result points at, plus the
+// evidence files it claims live inside it.
+type desktopRecordingRef struct {
+	scenarioDir string
+	name        SafeArchiveName
+	evidence    *desktopresults.Evidence
 }
 
 // bindDesktopRecording is the isolation guard. It re-reads the named
@@ -130,27 +167,27 @@ func buildDesktopResult(scenarioDir string, result desktopresults.Result) *Deskt
 // binds the recording, its versions, and its raw evidence files to the view
 // ONLY when that manifest says desktop-local. A CLI recording named by a
 // Desktop result leaves Recording empty and Error set.
-func bindDesktopRecording(view *DesktopResult, scenarioDir string, name SafeArchiveName, result desktopresults.Result) {
-	recDir := filepath.Join(scenarioDir, "recordings", string(name))
+func bindDesktopRecording(view *DesktopResult, ref desktopRecordingRef) {
+	recDir := filepath.Join(ref.scenarioDir, "recordings", string(ref.name))
 	manifest, err := matrix.LoadRecordingManifest(filepath.Join(recDir, "manifest.json"))
 	if err != nil {
-		view.Error = fmt.Sprintf("cannot read the manifest of recording %q: %v", name, err)
+		view.Error = fmt.Sprintf("cannot read the manifest of recording %q: %v", ref.name, err)
 		return
 	}
 	view.RecordingProfile = string(manifest.ExecutionProfile)
 	if manifest.ExecutionProfile != matrix.ProfileDesktopLocal {
 		view.Error = fmt.Sprintf(
 			"recording %q is %s evidence, not %s — refusing to show it under a Desktop result",
-			name, manifest.ExecutionProfile, matrix.ProfileDesktopLocal)
+			ref.name, manifest.ExecutionProfile, matrix.ProfileDesktopLocal)
 		return
 	}
-	view.Recording = string(name)
+	view.Recording = string(ref.name)
 	view.Versions = &DesktopVersions{
 		DesktopApp: manifest.DesktopAppVersion,
 		AgentCLI:   manifest.AgentCLIVersion,
 		Irrlicht:   manifest.DaemonVersion,
 	}
-	view.Evidence = desktopEvidenceLinks(recDir, result.Evidence)
+	view.Evidence = desktopEvidenceLinks(recDir, ref.evidence)
 }
 
 // desktopEvidenceLinks resolves the six raw identity-evidence files a Desktop
@@ -171,17 +208,28 @@ func desktopEvidenceLinks(recDir string, evidence *desktopresults.Evidence) []De
 	}
 	out := make([]DesktopEvidenceLink, 0, len(named))
 	// RequiredRecordingFiles() fixes the order AND the allowlist: the viewer
-	// only ever serves these six names, so no result-supplied string reaches
-	// the filesystem as a path component.
+	// only ever SERVES these six names, so no result-supplied string reaches
+	// the filesystem as a path component of the raw-evidence route.
 	for _, canonical := range desktopresults.RequiredRecordingFiles() {
-		link := DesktopEvidenceLink{Field: canonical, File: named[canonical]}
-		if link.File == canonical {
-			_, err := os.Stat(filepath.Join(recDir, canonical))
-			link.Present = err == nil
-		}
-		out = append(out, link)
+		out = append(out, evidenceLink(recDir, canonical, named[canonical]))
 	}
 	return out
+}
+
+// evidenceLink describes one reference. Present is a real stat of the file the
+// result ACTUALLY referenced (not of the canonical name), and Canonical says
+// whether that reference is the one the contract requires. Keeping them apart
+// matters: a present file referenced under a non-canonical name is a contract
+// violation, not a missing file, and must not read as one.
+func evidenceLink(recDir, canonical, referenced string) DesktopEvidenceLink {
+	link := DesktopEvidenceLink{Field: canonical, File: referenced, Canonical: referenced == canonical}
+	safe, err := NewSafeArchiveName(referenced)
+	if err != nil {
+		return link // an unusable reference names nothing on disk
+	}
+	_, statErr := os.Stat(filepath.Join(recDir, string(safe)))
+	link.Present = statErr == nil
+	return link
 }
 
 // canonicalEvidenceFile is the closed allowlist behind the raw-evidence route.

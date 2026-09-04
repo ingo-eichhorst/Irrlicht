@@ -93,16 +93,16 @@ func (s *Server) handleScenarioDetail(w http.ResponseWriter, r *http.Request) {
 // reported and the cell degrades to "no recording for this profile" —
 // borrowing the other profile's newest recording would be exactly the merge
 // this endpoint exists to prevent.
-func newestRecordingDirForProfile(scenarioDir string, profile matrix.ExecutionProfile) (string, bool) {
+func newestRecordingDirForProfile(scenarioDir string, profile matrix.ExecutionProfile) (string, bool, error) {
 	recording, ok, err := matrix.NewestRecording(scenarioDir, profile)
 	if err != nil {
 		logViewerError("newestRecordingDirForProfile: %s in %s: %v", profile, scenarioDir, err)
-		return "", false
+		return "", false, err
 	}
 	if !ok {
-		return "", false
+		return "", false, nil
 	}
-	return recording.Dir, true
+	return recording.Dir, true, nil
 }
 
 func expectedReportForLatest(scenarioDir, recordingName string) *validate.ExpectedReport {
@@ -159,7 +159,11 @@ func (s *Server) handleRecordingHistoryRoute(w http.ResponseWriter, route record
 		})
 		return true
 	}
-	return false
+	// Anything else under /recordings/ is a URL this API does not serve. It is
+	// still HANDLED here: falling through would answer a truncated or
+	// over-long evidence URL with 200 and the unrelated cell-detail payload.
+	http.Error(w, "no such recording sub-resource", http.StatusNotFound)
+	return true
 }
 
 // populateLatestRecordingFields fills d's recording-derived fields (meta,
@@ -172,7 +176,13 @@ func (s *Server) handleRecordingHistoryRoute(w http.ResponseWriter, route record
 // them as separate parameters — both are already available on the values
 // the caller passes in.
 func populateLatestRecordingFields(d *ScenarioDetail, store RecordingStore, scenarioDir string, profile matrix.ExecutionProfile) {
-	recDir, hasRec := newestRecordingDirForProfile(scenarioDir, profile)
+	recDir, hasRec, err := newestRecordingDirForProfile(scenarioDir, profile)
+	if err != nil {
+		// Not "no recording": we could not read this cell's manifests at all.
+		// Saying so on the payload is what keeps this endpoint from
+		// contradicting the recordings endpoint, which 500s the same cause.
+		d.RecordingsError = err.Error()
+	}
 	if !hasRec {
 		d.Degraded = true
 		return

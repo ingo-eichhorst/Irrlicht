@@ -16,13 +16,14 @@ import (
 // Local and Desktop Local evidence never share a status, a recording history,
 // a set of versions, or a link.
 //
-// Three of the tests below are MUTATION FIXTURES. The guards they cover are
-// new, so there is no "before the fix" state to observe failing; instead each
-// one mutates the thing the guard protects — a result artifact repointed at
-// the other profile's recording, a recording relabelled into the other
-// profile — and asserts the guard fires. Each mutation is read back off disk
-// before it is exercised, so a mutation that silently failed to apply fails
-// the test instead of producing a green that proves nothing.
+// Several tests below are MUTATION FIXTURES (each says so in its own doc
+// comment). The guards they cover are new, so there is no "before the fix"
+// state to observe failing; instead each one mutates the thing the guard
+// protects — a result artifact repointed at the other profile's recording, a
+// recording relabelled into the other profile, a manifest made unparseable —
+// and asserts the guard fires. Each mutation is read back off disk before it
+// is exercised, so a mutation that silently failed to apply fails the test
+// instead of producing a green that proves nothing.
 
 const (
 	cliRecordingName     = "a-cli"
@@ -410,8 +411,13 @@ func TestProfileOptionsOfferDesktopWheneverThereIsSomethingToShow(t *testing.T) 
 		t.Fatalf("desktop-local option = %+v", desktop)
 	}
 
-	// A result with no recording keeps Desktop selectable — the reason IS the
-	// evidence, and hiding the profile would hide it.
+}
+
+// TestRecordinglessDesktopResultStaysSelectable — a not-applicable /
+// unobservable / not-runnable answer names no recording, and its reason IS the
+// evidence. Hiding the profile because it has zero recordings would hide it.
+func TestRecordinglessDesktopResultStaysSelectable(t *testing.T) {
+	fixture := desktopViewerFixture(t)
 	writeDesktopResults(t, fixture.cellDir, map[string]any{
 		"scenario_id":       "desktop-cell",
 		"execution_profile": "desktop-local",
@@ -420,6 +426,9 @@ func TestProfileOptionsOfferDesktopWheneverThereIsSomethingToShow(t *testing.T) 
 		"evidence_refs":     []string{"replaydata/agents/claudecode/scenarios/desktop-cell/execution-results.json"},
 	})
 	relabelRecordingProfile(t, fixture.cellDir, desktopRecordingName, matrix.ProfileCLILocal)
+	assertRecordingProfile(t, fixture.cellDir, desktopRecordingName, matrix.ProfileCLILocal)
+
+	var detail ScenarioDetail
 	getJSON(t, fixture.root, desktopCellPath, &detail)
 	for _, option := range detail.Profiles {
 		if option.ID != string(matrix.ProfileDesktopLocal) {
@@ -428,7 +437,9 @@ func TestProfileOptionsOfferDesktopWheneverThereIsSomethingToShow(t *testing.T) 
 		if !option.Selectable || option.Recordings != 0 || !option.HasResult {
 			t.Fatalf("desktop-local option with a recording-less result = %+v", option)
 		}
+		return
 	}
+	t.Fatalf("no desktop-local option in %+v", detail.Profiles)
 }
 
 // TestRawEvidenceEndpointIsAllowlistedAndProfileScoped — the route only ever
@@ -486,6 +497,85 @@ func TestLegacyRecordingWithoutManifestStaysCLILocal(t *testing.T) {
 	getJSON(t, root, "/api/scenarios/claudecode/scenarios/legacy/recordings", &archives)
 	if len(archives) != 1 || archives[0].ExecutionProfile != string(matrix.ProfileCLILocal) {
 		t.Fatalf("legacy recordings list = %+v", archives)
+	}
+}
+
+// TestUnreadableManifestIsReportedNotCountedAsNoRecordings — MUTATION FIXTURE.
+//
+// matrix.RecordingsForProfile fails on the FIRST unreadable manifest under
+// recordings/ and returns nothing, so one broken archive can erase a whole
+// cell's evidence. Every endpoint that reads that history must say it could
+// not look, rather than answering with the shape of an empty cell:
+//
+//	/recordings         → 500 naming the cause
+//	the detail payload  → recordings_error, not just degraded
+//	profiles[]          → an error on the option, not "0 recordings"
+//	the catalog cell    → manifest_error, not no_recording, and NOT a recording
+//
+// The mutation is a manifest that is not JSON; it is read back off disk first,
+// so a mutation that failed to write fails the test instead of leaving each
+// assertion with nothing to find.
+func TestUnreadableManifestIsReportedNotCountedAsNoRecordings(t *testing.T) {
+	fixture := desktopViewerFixture(t)
+	brokenPath := filepath.Join(fixture.cellDir, "recordings", desktopRecordingName, "manifest.json")
+	writeViewerProfileFile(t, brokenPath, "{ this is not json\n")
+	if _, err := matrix.LoadRecordingManifest(brokenPath); err == nil {
+		t.Fatal("mutation did not apply: the manifest still parses")
+	}
+	// The sibling cli-local recording is untouched and readable, so anything
+	// reported below is the guard firing, not an empty cell.
+	assertRecordingProfile(t, fixture.cellDir, cliRecordingName, matrix.ProfileCLILocal)
+
+	recorder := get(t, fixture.root, desktopCellPath+"/recordings")
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("recordings list: status=%d, want 500", recorder.Code)
+	}
+	if !strings.Contains(recorder.Body.String(), "manifest") {
+		t.Fatalf("recordings list 500 does not name the cause: %s", recorder.Body)
+	}
+
+	var detail ScenarioDetail
+	getJSON(t, fixture.root, desktopCellPath, &detail)
+	if detail.RecordingsError == "" {
+		t.Fatalf("detail payload reports no recordings_error; degraded=%t latest=%q — "+
+			"an unreadable history is indistinguishable from an empty one",
+			detail.Degraded, detail.LatestRecording)
+	}
+	var reported bool
+	for _, option := range detail.Profiles {
+		if option.Error != "" {
+			reported = true
+		}
+	}
+	if !reported {
+		t.Fatalf("no profile option reports the unreadable history: %+v", detail.Profiles)
+	}
+
+	measurement := measureScenario(fixture.root, "claudecode", "desktop-cell", matrix.ProfileCLILocal)
+	if measurement["status"] != "manifest_error" {
+		t.Fatalf("catalog measurement = %+v, want manifest_error", measurement)
+	}
+	// An unreadable cell must not roll up as if a recording had been observed.
+	if cellHasRecording(map[string]any{"measurement": measurement}) {
+		t.Fatal("a manifest_error cell counted as having a recording")
+	}
+}
+
+// TestUnknownRecordingSubPathIs404 — a truncated or over-long recording URL
+// must not fall through to the cell-detail payload, which would answer a
+// request for evidence with 200 and something else entirely.
+func TestUnknownRecordingSubPathIs404(t *testing.T) {
+	fixture := desktopViewerFixture(t)
+	base := desktopCellPath + "/recordings/" + desktopRecordingName
+	for _, url := range []string{
+		base + "/evidence",
+		base + "/evidence/transcript.jsonl/extra?profile=desktop-local",
+		base + "/unknown-sub-resource",
+	} {
+		recorder := get(t, fixture.root, url)
+		if recorder.Code != http.StatusNotFound {
+			t.Fatalf("GET %s: status=%d, want 404 (body=%s)", url, recorder.Code, recorder.Body)
+		}
 	}
 }
 

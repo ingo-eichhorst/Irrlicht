@@ -1539,6 +1539,39 @@ function renderScenariosMatrix(detail) {
 // falls back to latest if the archive doesn't exist for this cell).
 // `focus` is the optional ?focus=<key> from the URL — scrolls the
 // matching panel into view after render. Empty → no scroll.
+// fetchScenarioPayloads issues the three cell fetches under ONE execution
+// profile, so the detail, the recording history and the matrix measurement on
+// a page all describe the same product surface. The CLI Local default sends no
+// query at all, which is why pre-#1889 links keep hitting the exact request
+// they always did.
+//
+// The recordings fetch reports its own failure rather than collapsing to an
+// empty list: the server 500s a cell whose manifests it cannot read, and
+// "we could not look" must not render as "nothing was recorded".
+async function fetchScenarioPayloads(recordingPath, profile) {
+  const q = profile === DEFAULT_PROFILE ? "" : `?profile=${encodeURIComponent(profile)}`;
+  const [data, archivesResp, catalog] = await Promise.all([
+    fetch(`/api/scenarios/${recordingPath}${q}`).then(r => r.json()),
+    fetch(`/api/scenarios/${recordingPath}/recordings${q}`)
+      .then(async r => r.ok ? r.json() : {error: `${r.status} ${await r.text()}`})
+      .catch(e => ({error: String(e)})),
+    // Coverage catalog: lets us render a stub Assessment panel from
+    // the matrix verdict + notes when no assessment.json exists.
+    // Without this fallback the ⚙ / ◉ pipeline-strip jumps would
+    // land nowhere for most cells.
+    fetch(`/api/catalog${q}`).then(r => r.ok ? r.json() : null).catch(() => null),
+  ]);
+  const ok = Array.isArray(archivesResp);
+  // The detail payload's own recordings_error covers the same cause; keep
+  // whichever we have so the banner never renders blank.
+  return {
+    data,
+    archives: ok ? archivesResp : [],
+    archivesError: ok ? (data?.recordings_error || "") : (archivesResp?.error || "unknown error"),
+    catalog,
+  };
+}
+
 async function loadScenario(s, initialArchive, focus, profile) {
   document.querySelectorAll(".scn").forEach(e => e.classList.remove("active"));
   // Find the sidebar button by data-rec-key (set in init() when the
@@ -1583,27 +1616,11 @@ async function loadScenario(s, initialArchive, focus, profile) {
   // product surface. The CLI Local default sends no query at all, which is why
   // pre-#1889 links keep hitting the exact request they always did.
   const selectedProfile = profile || DEFAULT_PROFILE;
-  const profileQuery = selectedProfile === DEFAULT_PROFILE
-    ? "" : `?profile=${encodeURIComponent(selectedProfile)}`;
   // Recipe lookup uses recipesByCoverageId (populated once at init from
   // /api/recipes — see comment above), so no per-recording recipes fetch
   // is needed here.
-  // The recordings fetch reports its own failure rather than collapsing to an
-  // empty list: the server 500s a cell whose manifests it cannot read, and
-  // "we could not look" must not render as "nothing was recorded".
-  const [data, archivesResp, catalog] = await Promise.all([
-    fetch(`/api/scenarios/${recordingPath}${profileQuery}`).then(r => r.json()),
-    fetch(`/api/scenarios/${recordingPath}/recordings${profileQuery}`)
-      .then(async r => r.ok ? r.json() : {error: `${r.status} ${await r.text()}`})
-      .catch(e => ({error: String(e)})),
-    // Coverage catalog: lets us render a stub Assessment panel from
-    // the matrix verdict + notes when no assessment.json exists.
-    // Without this fallback the ⚙ / ◉ pipeline-strip jumps would
-    // land nowhere for most cells.
-    fetch(`/api/catalog${profileQuery}`).then(r => r.ok ? r.json() : null).catch(() => null),
-  ]);
-  const archives = Array.isArray(archivesResp) ? archivesResp : [];
-  const archivesError = Array.isArray(archivesResp) ? "" : (archivesResp?.error || "unknown error");
+  const {data, archives, archivesError, catalog} =
+    await fetchScenarioPayloads(recordingPath, selectedProfile);
   detail.innerHTML = "";
 
   // No daemon-recorded events.jsonl sidecar: the timeline shown here is

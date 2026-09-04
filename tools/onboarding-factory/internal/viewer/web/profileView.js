@@ -56,7 +56,13 @@ export function profileLabel(id) {
 // simply not drawing the control there.
 export function shouldRenderProfilePanel(detail) {
   const d = detail || {};
+  // A page reached under an explicit non-default profile ALWAYS says which
+  // profile it is. The profile is a shareable URL parameter, so a Desktop
+  // request that lands on an empty page must not be mistakable for the CLI
+  // page — that is a live mis-read, not a corner case.
+  if ((d.execution_profile || DEFAULT_PROFILE) !== DEFAULT_PROFILE) return true;
   if (d.desktop_result) return true;
+  if (d.recordings_error) return true;
   return (d.profiles || []).filter(p => p.selectable).length > 1;
 }
 
@@ -105,30 +111,43 @@ export function recordingHash({agent, subtree, id, recording = "", profile = DEF
 export function profileStatus(detail) {
   const d = detail || {};
   if ((d.execution_profile || DEFAULT_PROFILE) === DESKTOP_PROFILE) {
-    return desktopStatus(d.desktop_result);
+    return desktopStatus(d);
   }
   return recordedStatus(d);
 }
 
-function desktopStatus(result) {
-  if (!result) {
+function desktopStatus(detail) {
+  const result = detail.desktop_result;
+  if (result) {
+    if (result.error) {
+      return {label: "evidence rejected", kind: "error", detail: result.error};
+    }
     return {
-      label: "no Desktop result",
-      kind: "none",
-      detail: "This cell carries no execution-results.json, so no Claude Desktop Local answer has been recorded for it.",
+      label: result.outcome || "unknown",
+      kind: OUTCOME_KINDS[result.outcome] || "neutral",
+      detail: result.reason || "",
     };
   }
-  if (result.error) {
-    return {label: "evidence rejected", kind: "error", detail: result.error};
+  // No explicit result. A Desktop recording still has a validated outcome the
+  // server already computed, and reporting "no Desktop result" over the top of
+  // it would throw away real evidence — so fall through to it, and only say
+  // there is no result when there is genuinely nothing.
+  if (detail.latest_recording || detail.recordings_error) {
+    return recordedStatus(detail);
   }
   return {
-    label: result.outcome || "unknown",
-    kind: OUTCOME_KINDS[result.outcome] || "neutral",
-    detail: result.reason || "",
+    label: "no Desktop result",
+    kind: "none",
+    detail: "This cell carries no execution-results.json and no Claude Desktop Local recording, so no Desktop answer has been recorded for it.",
   };
 }
 
 function recordedStatus(detail) {
+  // An unreadable recording history is a finding, not an absence. It outranks
+  // everything below: without it "we could not look" renders as "nothing here".
+  if (detail.recordings_error) {
+    return {label: "history unreadable", kind: "error", detail: detail.recordings_error};
+  }
   if (!detail.latest_recording) {
     return {
       label: "no recording",
@@ -156,19 +175,15 @@ function recordedStatus(detail) {
 export function profileVersions(detail) {
   const d = detail || {};
   if (d.execution_profile === DESKTOP_PROFILE && d.desktop_result) {
-    const versions = d.desktop_result.versions || {};
-    return {
-      desktop_app: versions.desktop_app || "",
-      agent_cli: versions.agent_cli || "",
-      irrlicht: versions.irrlicht || "",
-    };
+    const v = d.desktop_result.versions || {};
+    return versionTriple(v.desktop_app, v.agent_cli, v.irrlicht);
   }
-  const manifest = d.latest_manifest || {};
-  return {
-    desktop_app: manifest.desktop_app_version || "",
-    agent_cli: manifest.agent_cli_version || "",
-    irrlicht: manifest.daemon_version || "",
-  };
+  const m = d.latest_manifest || {};
+  return versionTriple(m.desktop_app_version, m.agent_cli_version, m.daemon_version);
+}
+
+function versionTriple(desktopApp, agentCli, irrlicht) {
+  return {desktop_app: desktopApp || "", agent_cli: agentCli || "", irrlicht: irrlicht || ""};
 }
 
 // profileRecordingLink returns {name, hash} for the recording this profile's
@@ -198,6 +213,15 @@ export function evidenceHref(detail, recording, file) {
     `/evidence/${encodeURIComponent(file)}?profile=${encodeURIComponent(DESKTOP_PROFILE)}`;
 }
 
+// profileOptionSuffix describes one option's evidence. A profile whose history
+// could not be read says so instead of reporting "0 recordings", which would
+// be the same label a genuinely empty profile gets.
+function profileOptionSuffix(option) {
+  if (option.error) return "history unreadable";
+  const count = `${option.recordings} recording${option.recordings === 1 ? "" : "s"}`;
+  return option.has_result ? `${count}, explicit result` : count;
+}
+
 // buildProfileSelector renders the profile <select>. Only profiles the server
 // marked selectable are offered, and each option says how many recordings that
 // profile actually has, so "Desktop Local (0 recordings)" is legible rather
@@ -215,8 +239,7 @@ export function buildProfileSelector(detail, onChange) {
   for (const option of (d.profiles || []).filter(p => p.selectable)) {
     const el = document.createElement("option");
     el.value = option.id;
-    const count = `${option.recordings} recording${option.recordings === 1 ? "" : "s"}`;
-    el.textContent = `${profileLabel(option.id)} — ${count}${option.has_result ? ", explicit result" : ""}`;
+    el.textContent = `${profileLabel(option.id)} — ${profileOptionSuffix(option)}`;
     select.appendChild(el);
   }
   select.value = current;
@@ -352,20 +375,36 @@ function appendEvidenceRows(box, detail, result) {
   label.textContent = "Raw identity evidence: ";
   list.append(label);
   for (const link of result.evidence) {
-    if (!link.present) {
-      const missing = document.createElement("span");
-      missing.dataset.testid = "profile-evidence-missing";
-      missing.style.cssText = "margin-right: 8px; color: #8a0000;";
-      missing.textContent = `${link.field} (missing)`;
-      list.append(missing);
-      continue;
-    }
-    const a = document.createElement("a");
-    a.dataset.testid = "profile-evidence-link";
-    a.style.cssText = "margin-right: 8px;";
-    a.href = evidenceHref(detail, result.recording, link.field);
-    a.textContent = link.field;
-    list.append(a);
+    list.append(evidenceNode(detail, result.recording, link));
   }
   box.append(list);
+}
+
+// evidenceNode renders one reference. The three outcomes are distinct on
+// purpose: a link (present under its canonical name), a non-canonical
+// reference (the bytes exist, but the contract's name was not used — a
+// violation, not a missing file, and not servable through the allowlisted
+// route), and a genuinely missing file.
+function evidenceNode(detail, recording, link) {
+  if (!link.present) {
+    return evidenceNote("profile-evidence-missing", `${link.field} (missing)`, "#8a0000");
+  }
+  if (!link.canonical) {
+    return evidenceNote("profile-evidence-noncanonical",
+      `${link.field} (referenced as "${link.file}", not the contract name)`, "#8a4500");
+  }
+  const a = document.createElement("a");
+  a.dataset.testid = "profile-evidence-link";
+  a.style.cssText = "margin-right: 8px;";
+  a.href = evidenceHref(detail, recording, link.field);
+  a.textContent = link.field;
+  return a;
+}
+
+function evidenceNote(testid, text, color) {
+  const span = document.createElement("span");
+  span.dataset.testid = testid;
+  span.style.cssText = `margin-right: 8px; color: ${color};`;
+  span.textContent = text;
+  return span;
 }

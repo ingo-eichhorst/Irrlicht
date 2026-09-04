@@ -35,6 +35,7 @@ type ScenarioDetail struct {
 	ExecutionProfile string                   `json:"execution_profile"`          // the profile this payload describes
 	Profiles         []ProfileOption          `json:"profiles,omitempty"`         // every profile this cell can be viewed under
 	DesktopResult    *DesktopResult           `json:"desktop_result,omitempty"`   // execution-results.json's desktop-local entry, when the cell has one
+	RecordingsError  string                   `json:"recordings_error,omitempty"` // why this cell's recordings could not be read; Degraded alone would say "none captured"
 	Meta             json.RawMessage          `json:"meta,omitempty"`             // recording-meta.json or null
 	Degraded         bool                     `json:"degraded"`                   // true when there is no events.jsonl sidecar — the timeline is synthesized from the transcript via the shared classifier engine, not daemon-recorded
 	Expected         *validate.ExpectedReport `json:"expected,omitempty"`         // expected.jsonl validated against events.jsonl (if file present)
@@ -50,11 +51,12 @@ type ScenarioDetail struct {
 // recordings, so the UI can say "0 recordings" for a profile that exists on
 // paper but has never been captured.
 type ProfileOption struct {
-	ID         string `json:"id"`         // matrix.ExecutionProfile wire value
-	Label      string `json:"label"`      // human-readable name
-	Selectable bool   `json:"selectable"` // the UI offers this profile for this cell
-	Recordings int    `json:"recordings"` // recordings captured under this profile
-	HasResult  bool   `json:"has_result"` // execution-results.json carries an entry for it
+	ID         string `json:"id"`              // matrix.ExecutionProfile wire value
+	Label      string `json:"label"`           // human-readable name
+	Selectable bool   `json:"selectable"`      // the UI offers this profile for this cell
+	Recordings int    `json:"recordings"`      // recordings captured under this profile
+	HasResult  bool   `json:"has_result"`      // execution-results.json carries an entry for it
+	Error      string `json:"error,omitempty"` // why Recordings could not be counted — never folded into a 0
 }
 
 // DesktopResult is the viewer's read of the desktop-local entry in a cell's
@@ -90,10 +92,14 @@ type DesktopVersions struct {
 // recording. Field is the canonical file the contract requires; File is what
 // the result actually referenced; Present is an on-disk stat, so a reference
 // to a missing file reads as missing instead of as evidence.
+// Canonical says whether File is the name the contract requires; a present
+// file referenced under a wrong name is a contract violation, not a missing
+// file, and the UI must not render the two the same way.
 type DesktopEvidenceLink struct {
-	Field   string `json:"field"`
-	File    string `json:"file"`
-	Present bool   `json:"present"`
+	Field     string `json:"field"`
+	File      string `json:"file"`
+	Present   bool   `json:"present"`
+	Canonical bool   `json:"canonical"`
 }
 
 // AssessmentReport / AssessmentSource are the persisted artifact of one

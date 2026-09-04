@@ -54,8 +54,8 @@ const desktopDetail = {
     recording_profile: 'desktop-local',
     versions: { desktop_app: '1.44121.4', agent_cli: '2.1.258', irrlicht: '0.6.2' },
     evidence: [
-      { field: 'desktop-registry.json', file: 'desktop-registry.json', present: true },
-      { field: 'transcript.jsonl', file: 'transcript.jsonl', present: true },
+      { field: 'desktop-registry.json', file: 'desktop-registry.json', present: true, canonical: true },
+      { field: 'transcript.jsonl', file: 'transcript.jsonl', present: true, canonical: true },
     ],
   },
 }
@@ -262,12 +262,78 @@ describe('raw identity evidence links', () => {
       ...desktopDetail,
       desktop_result: {
         ...desktopDetail.desktop_result,
-        evidence: [{ field: 'hooks.jsonl', file: 'hooks.jsonl', present: false }],
+        evidence: [{ field: 'hooks.jsonl', file: 'hooks.jsonl', present: false, canonical: true }],
       },
     }
     const box = renderProfileEvidence(detail)
     expect(box.querySelector('[data-testid=profile-evidence-link]')).toBeNull()
     expect(box.querySelector('[data-testid=profile-evidence-missing]').textContent).toBe('hooks.jsonl (missing)')
+  })
+})
+
+// Review follow-ups: three ways the panel could have reported an inability to
+// look, or an unread recording, as an absence.
+describe('an inability to look never renders as an absence', () => {
+  test('a Desktop cell with a recording but no explicit result reports the recording, not "no result"', () => {
+    // profiles.go marks desktop-local selectable on recordings alone, so this
+    // payload is reachable. Answering "no Desktop result" over the top of a
+    // validated recording would throw away evidence the server already has.
+    const detail = {
+      ...desktopDetail,
+      desktop_result: undefined,
+      expected: { pass: false, summary: '2/4 phases' },
+    }
+    expect(profileStatus(detail)).toMatchObject({ label: 'fail', kind: 'fail', detail: '2/4 phases' })
+    expect(profileRecordingLink(detail).name).toBe('2026-06-02_desktop')
+  })
+
+  test('a Desktop cell with neither a result nor a recording says exactly that', () => {
+    const status = profileStatus({ ...CELL, execution_profile: 'desktop-local' })
+    expect(status.kind).toBe('none')
+    expect(status.label).toBe('no Desktop result')
+  })
+
+  test('an unreadable recording history outranks "no recording"', () => {
+    const detail = {
+      ...CELL,
+      execution_profile: 'cli-local',
+      recordings_error: 'cannot read recording manifests: invalid JSON',
+    }
+    const status = profileStatus(detail)
+    expect(status.kind).toBe('error')
+    expect(status.label).toBe('history unreadable')
+    expect(status.detail).toContain('invalid JSON')
+    // …and it is not the same answer a genuinely empty profile gets.
+    expect(profileStatus({ ...CELL, execution_profile: 'cli-local' }).label).toBe('no recording')
+  })
+
+  test('a profile whose history could not be counted says so instead of "0 recordings"', () => {
+    const detail = {
+      ...cliDetail,
+      profiles: [{
+        id: 'cli-local', label: 'Claude Code CLI Local', selectable: true,
+        recordings: 0, has_result: false, error: 'invalid JSON in manifest.json',
+      }],
+    }
+    const select = buildProfileSelector(detail).querySelector('[data-testid=profile-select]')
+    expect(select.options[0].textContent).toContain('history unreadable')
+    expect(select.options[0].textContent).not.toContain('0 recordings')
+  })
+
+  test('a present file referenced under a non-canonical name is not reported missing', () => {
+    const detail = {
+      ...desktopDetail,
+      desktop_result: {
+        ...desktopDetail.desktop_result,
+        evidence: [{ field: 'transcript.jsonl', file: 'transcript', present: true, canonical: false }],
+      },
+    }
+    const box = renderProfileEvidence(detail)
+    expect(box.querySelector('[data-testid=profile-evidence-missing]')).toBeNull()
+    // Not servable either — the raw-evidence route only accepts the contract name.
+    expect(box.querySelector('[data-testid=profile-evidence-link]')).toBeNull()
+    expect(box.querySelector('[data-testid=profile-evidence-noncanonical]').textContent)
+      .toContain('not the contract name')
   })
 })
 
@@ -293,6 +359,28 @@ describe('shouldRenderProfilePanel — non-Claude adapters keep their old page',
       execution_profile: 'desktop-local',
       profiles: [{ id: 'cli-local', selectable: true, recordings: 1, has_result: false }],
       desktop_result: { outcome: 'not-applicable', reason: 'outside Local Desktop' },
+    })).toBe(true)
+  })
+
+  test('an explicitly requested non-default profile ALWAYS draws it', () => {
+    // ?profile= is a shareable URL parameter. A Desktop request that lands on
+    // an empty page must say which profile it is showing, or it is
+    // indistinguishable from the CLI page for the same cell.
+    expect(shouldRenderProfilePanel({
+      execution_profile: 'desktop-local',
+      degraded: true,
+      profiles: [
+        { id: 'cli-local', selectable: true, recordings: 2, has_result: false },
+        { id: 'desktop-local', selectable: false, recordings: 0, has_result: false },
+      ],
+    })).toBe(true)
+  })
+
+  test('an unreadable history draws it even on a single-profile cell', () => {
+    expect(shouldRenderProfilePanel({
+      execution_profile: 'cli-local',
+      recordings_error: 'cannot read recording manifests',
+      profiles: [{ id: 'cli-local', selectable: true, recordings: 0, has_result: false }],
     })).toBe(true)
   })
 })
