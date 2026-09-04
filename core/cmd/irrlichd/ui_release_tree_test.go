@@ -52,10 +52,7 @@ func TestRegisterUIRoutesServesTheStagedReleaseTree(t *testing.T) {
 	staged := stageReleaseWebTree(t, repoRoot, t.TempDir())
 	reachable := reachableWebAssets(t, repoRoot)
 
-	t.Setenv(envUIDir, staged)
-	mux := http.NewServeMux()
-	registerUIRoutes(mux, e2eLog{})
-	srv := httptest.NewServer(mux)
+	srv := serveStagedTree(t, staged)
 	defer srv.Close()
 
 	for _, missing := range missingFromServer(t, srv.URL, reachable) {
@@ -91,11 +88,39 @@ func TestServedTreeCheckGoesRedOnTheShippedRegression(t *testing.T) {
 
 	// The three-file staging rule, verbatim, as v0.6.2 shipped it.
 	shippedBlank := []string{"index.html", "irrlicht.css", "irrlicht.js"}
+	want := assetsExcept(reachable, shippedBlank)
+	if len(want) == 0 {
+		t.Fatal("cannot run: the closure holds nothing beyond the three entry files, so the regression has nothing to remove")
+	}
+
+	srv := serveStagedTree(t, stageNamedFiles(t, repoRoot, shippedBlank))
+	defer srv.Close()
+
+	got := assetNames(missingFromServer(t, srv.URL, reachable))
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("the three-file staging must be reported as broken.\n got: %v\nwant: %v", got, want)
+	}
+}
+
+// serveStagedTree points registerUIRoutes at staged and returns the running
+// test server. The caller closes it.
+func serveStagedTree(t *testing.T, staged string) *httptest.Server {
+	t.Helper()
+	t.Setenv(envUIDir, staged)
+	mux := http.NewServeMux()
+	registerUIRoutes(mux, e2eLog{})
+	return httptest.NewServer(mux)
+}
+
+// stageNamedFiles copies exactly names out of platforms/web into a fresh temp
+// directory — the deliberately-wrong staging the fixture above drives.
+func stageNamedFiles(t *testing.T, repoRoot string, names []string) string {
+	t.Helper()
 	staged := filepath.Join(t.TempDir(), "web")
 	if err := os.MkdirAll(staged, 0o755); err != nil {
 		t.Fatalf("cannot run: %v", err)
 	}
-	for _, name := range shippedBlank {
+	for _, name := range names {
 		src := filepath.Join(repoRoot, "platforms", "web", name)
 		body, err := os.ReadFile(src)
 		if err != nil {
@@ -105,33 +130,33 @@ func TestServedTreeCheckGoesRedOnTheShippedRegression(t *testing.T) {
 			t.Fatalf("cannot run: %v", err)
 		}
 	}
+	return staged
+}
 
-	t.Setenv(envUIDir, staged)
-	mux := http.NewServeMux()
-	registerUIRoutes(mux, e2eLog{})
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-
-	var got []string
-	for _, m := range missingFromServer(t, srv.URL, reachable) {
-		got = append(got, m.name)
+// assetsExcept returns names minus drop, sorted.
+func assetsExcept(names, drop []string) []string {
+	skip := make(map[string]bool, len(drop))
+	for _, d := range drop {
+		skip[d] = true
 	}
-	sort.Strings(got)
-
-	var want []string
-	for _, name := range reachable {
-		if name != "index.html" && name != "irrlicht.css" && name != "irrlicht.js" {
-			want = append(want, name)
+	var out []string
+	for _, n := range names {
+		if !skip[n] {
+			out = append(out, n)
 		}
 	}
-	sort.Strings(want)
+	sort.Strings(out)
+	return out
+}
 
-	if len(want) == 0 {
-		t.Fatal("cannot run: the closure holds nothing beyond the three entry files, so the regression has nothing to remove")
+// assetNames reduces a missing-asset report to its sorted names.
+func assetNames(missing []missingAsset) []string {
+	var out []string
+	for _, m := range missing {
+		out = append(out, m.name)
 	}
-	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Errorf("the three-file staging must be reported as broken.\n got: %v\nwant: %v", got, want)
-	}
+	sort.Strings(out)
+	return out
 }
 
 // missingAsset names one asset the server failed to hand back, and why.
