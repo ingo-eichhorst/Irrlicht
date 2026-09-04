@@ -328,6 +328,115 @@ real_row .github/workflows/macos-swift.yml                'Test (bounded, stream
 real_row .github/workflows/macos-swift.yml                "Collect the skipped suites' pixels"          "$BASH"
 
 # ---------------------------------------------------------------------------
+# Obligation 7 — reading one header line out of the scan record can neither
+# corrupt the answer nor quietly decay into the default.
+#
+# Both halves are one CI failure, seen on the Linux runner of test.yml's
+# "Test the shared shell libs" step:
+#
+#   FAIL: .github/workflows/ars.yml :: Run ARS scan — expected [bash -e]
+#     got [status 0 :: tools/lib/workflow-step.sh: line 213:
+#          printf: write error: Broken pipe bash -e ]
+#
+# `_workflow_step_field` wrote the whole record into a pipe whose awk `exit`ed
+# at the first matching line. A reader that closes the pipe while the writer is
+# still inside write(2) is a SIGPIPE: where SIGPIPE is at SIG_DFL the writer is
+# killed silently, and where it is IGNORED bash reports the failed write on
+# STDERR instead. The runner's log is itself the evidence for which of the two
+# it was — bash only ever reaches that message on an EPIPE *return*, which a
+# process whose SIGPIPE is fatal cannot observe.
+#
+# And every harness here, like every caller in tools/lib/, captures a
+# derivation with `2>&1`. So the diagnostic became part of the VALUE: a string
+# still ending in `bash -e`, still carrying status 0 — an answer that happens
+# to contain the right substring. Hence two arms:
+#
+#   a. a successful derivation is SILENT, and survives a record far larger than
+#      a pipe will hold. Driven with SIGPIPE ignored, because that is the
+#      disposition under which the defect is visible rather than fatal — under
+#      SIG_DFL the writer dies without a word and this arm cannot see it.
+#   b. a record that cannot be read is a REFUSAL. This is the dangerous half:
+#      `bash -e` is exactly what an empty field read decays to, so a reader
+#      that fails quietly hands every harness the loosest invocation GitHub has
+#      and calls it a derivation — the "never fall back to a default" rule this
+#      library's own header is built on, broken from the inside.
+echo ""
+echo "== a header-line read cannot race its own writer =="
+
+# A body far past any pipe's capacity (64KiB on Linux, less on macOS), so the
+# writer MUST still be in write(2) when an early-exiting reader closes the pipe.
+# Generated rather than committed: the shape is what matters, not the bytes.
+BIG_WF="$TMP/oversized.yml"
+{
+  printf 'name: oversized\n'
+  printf 'jobs:\n  j:\n    runs-on: ubuntu-latest\n    steps:\n'
+  printf '      - name: Plain step\n        run: |\n'
+  awk 'BEGIN { for (i = 0; i < 8000; i++) printf "          echo %d aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n", i }'
+} >"$BIG_WF"
+big_bytes=$(wc -c <"$BIG_WF" | tr -d ' ')
+if [[ "${big_bytes:-0}" -lt 262144 ]]; then
+  fail "the oversized fixture really is oversized" ">= 262144 bytes" "${big_bytes:-0} bytes — the arms below would not have raced anything"
+else
+  pass "the oversized fixture is $big_bytes bytes (>= 262144)"
+
+  # The merged capture — byte for byte what real_row/want_shell above do, and
+  # what CI compared.
+  merged=$( ( trap '' PIPE; workflow_step_shell "$BIG_WF" 'Plain step' ) 2>&1 ); m_st=$?
+  if [[ "$m_st" -eq 0 && "$merged" == "$DEFAULT" ]]; then
+    pass "an oversized record derives \`$DEFAULT\` with nothing else in the value"
+  else
+    fail "an oversized record derives \`$DEFAULT\` and nothing else" "$DEFAULT" "status $m_st :: $(flat "$merged")"
+  fi
+
+  # ...and the same thing said as a property, so a future diagnostic on a
+  # SUCCESS path is caught whatever it says: stderr is empty when the answer is
+  # an answer.
+  s_err=$( ( trap '' PIPE; workflow_step_shell "$BIG_WF" 'Plain step' >/dev/null ) 2>&1 )
+  if [[ -z "$s_err" ]]; then
+    pass "...and wrote nothing to stderr while succeeding"
+  else
+    fail "a successful derivation writes nothing to stderr" "no stderr" "$(flat "$s_err")"
+  fi
+
+  b_err=$( ( trap '' PIPE; workflow_step_body "$BIG_WF" 'Plain step' >/dev/null ) 2>&1 ); b_st=$?
+  if [[ "$b_st" -eq 0 && -z "$b_err" ]]; then
+    pass "...and so does the body extraction on the same record"
+  else
+    fail "the body extraction is silent on success" "status 0 and no stderr" "status $b_st :: $(flat "$b_err")"
+  fi
+fi
+
+echo ""
+echo "== a record that cannot be read is a refusal, never the default =="
+# The mutation: the scan is replaced by one that returns a record cut short —
+# what a writer killed mid-record leaves behind. Both prefixes below are
+# READABLE as far as they go, which is the trap: `matches 1` parses, and an
+# empty `step_shell` is indistinguishable from "this step declares no shell".
+scan_saved=$(declare -f _workflow_step_scan)
+if [[ -z "$scan_saved" ]]; then
+  fail "the scan function could be captured for the mutation" "a definition" "declare -f produced nothing — the arms below could not run"
+else
+  pass "captured _workflow_step_scan for the mutation"
+
+  _workflow_step_scan() { printf 'matches 1\nstep_shell \n'; }
+  want_refusal "a record cut short mid-header" "could not be read" \
+    workflow_step_shell "$DATA/no-shell.yml" 'Plain step'
+  want_refusal "a record cut short mid-header (body)" "could not be read" \
+    workflow_step_body "$DATA/no-shell.yml" 'Plain step'
+
+  # ...and one cut at the boundary: every header key present, the `body` marker
+  # gone. Nothing above this line distinguishes it from a complete record.
+  _workflow_step_scan() { printf 'matches 1\nstep_shell \njob_shell \nwf_shell \nhas_run 1\n'; }
+  want_refusal "a record missing its \`body\` marker" "could not be read" \
+    workflow_step_shell "$DATA/no-shell.yml" 'Plain step'
+
+  eval "$scan_saved"
+  # The restore is asserted, not assumed: a mutation harness that leaves its
+  # stub in place grades every row after it against the stub (#1390).
+  want_shell no-shell.yml 'Plain step' "$DEFAULT"
+fi
+
+# ---------------------------------------------------------------------------
 # ...and preflight's `tools` gate has to FIRE on a diff touching this library,
 # its corpus, or any workflow it reads — or under --changed (the pre-push
 # hook's path) every assertion above is skipped on precisely the commit that
