@@ -23,41 +23,70 @@ func (*oracleLogger) LogError(string, string, string)                      {}
 func (*oracleLogger) LogProcessingTime(string, string, int64, int, string) {}
 func (*oracleLogger) Close() error                                         { return nil }
 
-func TestManagedFileOracleRunsRealClaudeCodeApplyClosuresInShadowHome(t *testing.T) {
+// oracleFixture is the shared setup for the real-Apply oracle cases: a
+// disposable real HOME, a two-file baseline, and the manifest naming them.
+type oracleFixture struct {
+	realHome     string
+	settingsPath string
+	memoryPath   string
+	output       string
+}
+
+func newOracleFixture(t *testing.T) oracleFixture {
+	t.Helper()
 	realHome := t.TempDir()
 	t.Setenv("HOME", realHome)
 	baseline := filepath.Join(t.TempDir(), "baseline")
 	if err := os.Mkdir(baseline, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	settingsPath := filepath.Join(realHome, ".claude", "settings.json")
-	memoryPath := filepath.Join(realHome, ".claude", "CLAUDE.md")
-	settingsBaseline := []byte(`{"userKey":"keep","statusLine":{"command":"user-status"}}` + "\n")
-	memoryBaseline := []byte("user prose\n")
-	if err := os.WriteFile(filepath.Join(baseline, "0"), settingsBaseline, 0o600); err != nil {
-		t.Fatal(err)
+	fixture := oracleFixture{
+		realHome:     realHome,
+		settingsPath: filepath.Join(realHome, ".claude", "settings.json"),
+		memoryPath:   filepath.Join(realHome, ".claude", "CLAUDE.md"),
+		output:       filepath.Join(baseline, "oracle"),
 	}
-	if err := os.WriteFile(filepath.Join(baseline, "1"), memoryBaseline, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	manifest := "saved\t0\t" + settingsPath + "\n" + "saved\t1\t" + memoryPath + "\n"
-	if err := os.WriteFile(filepath.Join(baseline, "manifest"), []byte(manifest), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	output := filepath.Join(baseline, "oracle")
+	writeFixtureFile(t, filepath.Join(baseline, "0"),
+		`{"userKey":"keep","statusLine":{"command":"user-status"}}`+"\n")
+	writeFixtureFile(t, filepath.Join(baseline, "1"), "user prose\n")
+	writeFixtureFile(t, filepath.Join(baseline, "manifest"),
+		"saved\t0\t"+fixture.settingsPath+"\n"+"saved\t1\t"+fixture.memoryPath+"\n")
 	if err := buildManagedFileOracle(managedFileOracleOptions{
-		baselineDir: baseline, outputDir: output, realHome: realHome, bindAddress: "127.0.0.1:41234",
+		baselineDir: baseline, outputDir: fixture.output,
+		realHome: realHome, bindAddress: "127.0.0.1:41234",
 	}); err != nil {
 		t.Fatalf("buildManagedFileOracle() error = %v", err)
 	}
-	settings, err := os.ReadFile(filepath.Join(output, "0"))
+	return fixture
+}
+
+func writeFixtureFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func readOracleJSON(t *testing.T, parts ...string) (map[string]any, []byte) {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(parts...))
 	if err != nil {
 		t.Fatal(err)
 	}
 	var decoded map[string]any
-	if err := json.Unmarshal(settings, &decoded); err != nil {
+	if err := json.Unmarshal(raw, &decoded); err != nil {
 		t.Fatal(err)
 	}
+	return decoded, raw
+}
+
+// The oracle must run the REAL Claude Code Apply closures, so its expected
+// state is whatever the daemon would actually write — not a hand-copied
+// imitation that drifts the moment an Apply changes.
+func TestManagedFileOracleRunsRealClaudeCodeApplyClosuresInShadowHome(t *testing.T) {
+	fixture := newOracleFixture(t)
+
+	decoded, settings := readOracleJSON(t, fixture.output, "0")
 	hooks, hooksOK := decoded["hooks"].(map[string]any)
 	statusLine, statusOK := decoded["statusLine"].(map[string]any)
 	statusCommand, commandOK := statusLine["command"].(string)
@@ -66,39 +95,44 @@ func TestManagedFileOracleRunsRealClaudeCodeApplyClosuresInShadowHome(t *testing
 		!strings.Contains(statusCommand, "localhost:41234/api/v1/hooks/claudecode/statusline") {
 		t.Fatalf("oracle settings do not contain baseline plus real Apply output: %s", settings)
 	}
-	memory, err := os.ReadFile(filepath.Join(output, "1"))
+	memory, err := os.ReadFile(filepath.Join(fixture.output, "1"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(memory), "user prose") || !strings.Contains(string(memory), "irrlicht") {
 		t.Fatalf("oracle memory does not contain baseline plus real Apply output: %s", memory)
 	}
-	if _, err := os.Stat(settingsPath); !os.IsNotExist(err) {
-		t.Fatalf("oracle changed the real settings path: %v", err)
+}
+
+// The shadow HOME is the whole point: building the oracle must not write the
+// paths the restore will later compare.
+func TestManagedFileOracleLeavesTheRealHomeUntouched(t *testing.T) {
+	fixture := newOracleFixture(t)
+	for _, path := range []string{fixture.settingsPath, fixture.memoryPath} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("oracle changed the real path %q: %v", path, err)
+		}
 	}
-	if _, err := os.Stat(memoryPath); !os.IsNotExist(err) {
-		t.Fatalf("oracle changed the real memory path: %v", err)
-	}
-	stateEntries, err := os.ReadDir(filepath.Join(output, "states"))
+}
+
+// Recovery has to work after one permission guard fails and later effects
+// still run, so every ordered subset of the three managed Apply closures is a
+// state the restore can match. State 5 is the middle-skipped one.
+func TestManagedFileOracleCoversEveryOrderedApplySubset(t *testing.T) {
+	fixture := newOracleFixture(t)
+	stateEntries, err := os.ReadDir(filepath.Join(fixture.output, "states"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(stateEntries) != 8 {
 		t.Fatalf("oracle state count = %d; want all 8 subsets", len(stateEntries))
 	}
-	middleSkipped, err := os.ReadFile(filepath.Join(output, "states", "5", "0"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var middleSettings map[string]any
-	if err := json.Unmarshal(middleSkipped, &middleSettings); err != nil {
-		t.Fatal(err)
-	}
+	middleSettings, middleSkipped := readOracleJSON(t, fixture.output, "states", "5", "0")
 	middleStatus, ok := middleSettings["statusLine"].(map[string]any)
 	if !ok || middleStatus["command"] != "user-status" || middleSettings["hooks"] == nil {
 		t.Fatalf("middle-skipped oracle state did not apply hooks then instructions only: %s", middleSkipped)
 	}
-	middleMemory, err := os.ReadFile(filepath.Join(output, "states", "5", "1"))
+	middleMemory, err := os.ReadFile(filepath.Join(fixture.output, "states", "5", "1"))
 	if err != nil || !strings.Contains(string(middleMemory), "irrlicht") {
 		t.Fatalf("later instruction effect is absent from middle-skipped state: %s (%v)", middleMemory, err)
 	}
