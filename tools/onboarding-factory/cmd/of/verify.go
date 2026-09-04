@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 
+	"irrlicht/tools/onboarding-factory/internal/matrix"
 	"irrlicht/tools/onboarding-factory/internal/shard"
 	"irrlicht/tools/onboarding-factory/internal/validate"
 )
@@ -16,6 +17,26 @@ import (
 // metric drifts are reported but never fail. (`of record verify` in P6 calls the
 // same engine after capturing a fresh recording.)
 func runVerify(args []string, stdout, stderr io.Writer) int {
+	request, err := parseVerifyRequest(args)
+	if err != nil {
+		writeCommandError(stderr, "of verify", err)
+		return exitUsage
+	}
+	cellDir, err := verifyCellDir(request)
+	if err != nil {
+		fmt.Fprintf(stderr, "of verify: %v\n", err)
+		return exitFail
+	}
+	return verifyCell(request, cellDir, stdout, stderr)
+}
+
+type verifyRequest struct {
+	Agent, Scenario, Folder, RepoRoot string
+	Profile                           matrix.ExecutionProfile
+	JSON                              bool
+}
+
+func parseVerifyRequest(args []string) (verifyRequest, error) {
 	fs := newFlagSet("of verify")
 	var (
 		agent    = fs.String("agent", "", "agent id")
@@ -23,34 +44,48 @@ func runVerify(args []string, stdout, stderr io.Writer) int {
 		folder   = fs.String("folder", "", "override on-disk folder (default: <dashed-id>_<name>)")
 		asJSON   = fs.Bool("json", false, "emit the combined report as JSON")
 		repoRoot = fs.String("repo-root", ".", "repository root")
+		profile  = fs.String("profile", string(matrix.ProfileCLILocal), "execution profile (cli-local or desktop-local)")
 	)
 	if err := fs.Parse(args); err != nil {
-		return exitUsage
+		return verifyRequest{}, flagParseError{cause: err}
 	}
-	if *agent == "" || *scenario == "" {
-		fmt.Fprintln(stderr, "of verify: --agent and --scenario are required")
-		return exitUsage
+	if *agent == "" {
+		return verifyRequest{}, fmt.Errorf("--agent and --scenario are required")
 	}
-	fold := *folder
-	if fold == "" {
-		if sh, ok := shard.Load(*repoRoot, *scenario); ok {
-			// Prefer the agent's existing folder (variant cells live under a
-			// non-canonical name), so verify reads the same folder of record/
-			// write land in — never a phantom canonical folder.
-			fold = shard.AgentFolderForScenario(*repoRoot, *agent, sh.Name)
-		} else {
-			fmt.Fprintf(stderr, "of verify: scenario %q not in the catalog\n", *scenario)
-			return exitFail
-		}
+	if *scenario == "" {
+		return verifyRequest{}, fmt.Errorf("--agent and --scenario are required")
 	}
-	cellDir := shard.AgentCellDir(*repoRoot, *agent, fold)
+	executionProfile, err := matrix.ParseExecutionProfile(*profile)
+	if err != nil {
+		return verifyRequest{}, err
+	}
+	return verifyRequest{
+		Agent: *agent, Scenario: *scenario, Folder: *folder, RepoRoot: *repoRoot,
+		Profile: executionProfile, JSON: *asJSON,
+	}, nil
+}
 
-	state, err := validate.ValidateExpected(cellDir)
+func verifyCellDir(request verifyRequest) (string, error) {
+	folder := request.Folder
+	if folder == "" {
+		sh, ok := shard.Load(request.RepoRoot, request.Scenario)
+		if !ok {
+			return "", fmt.Errorf("scenario %q not in the catalog", request.Scenario)
+		}
+		// Prefer the agent's existing folder, because variant cells can use a
+		// non-canonical name.
+		folder = shard.AgentFolderForScenario(request.RepoRoot, request.Agent, sh.Name)
+	}
+	return shard.AgentCellDir(request.RepoRoot, request.Agent, folder), nil
+}
+
+func verifyCell(request verifyRequest, cellDir string, stdout, stderr io.Writer) int {
+	state, err := validate.ValidateExpectedForProfile(cellDir, request.Profile)
 	if err != nil {
 		fmt.Fprintf(stderr, "of verify: state validation: %v\n", err)
 		return exitUsage
 	}
-	obs, err := validate.ValidateObservations(cellDir)
+	obs, err := validate.ValidateObservationsForProfile(cellDir, request.Profile)
 	if err != nil {
 		fmt.Fprintf(stderr, "of verify: observation validation: %v\n", err)
 		return exitUsage
@@ -59,14 +94,14 @@ func runVerify(args []string, stdout, stderr io.Writer) int {
 	stateOK := state == nil || state.Pass || state.Meta.KnownFailing
 	obsOK := obs == nil || obs.Pass
 
-	if *asJSON {
+	if request.JSON {
 		_ = writeJSON(stdout, map[string]any{
-			"agent": *agent, "scenario": *scenario,
+			"agent": request.Agent, "scenario": request.Scenario,
 			"state_pass": stateOK, "observations_pass": obsOK,
 			"state": state, "observations": obs,
 		})
 	} else {
-		printVerifyText(stdout, *agent, *scenario, state, obs)
+		printVerifyText(stdout, request.Agent, request.Scenario, state, obs)
 	}
 	if !stateOK || !obsOK {
 		return exitFail

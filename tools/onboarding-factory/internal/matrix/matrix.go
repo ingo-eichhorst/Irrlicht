@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"irrlicht/tools/onboarding-factory/internal/shard"
-	"irrlicht/tools/onboarding-factory/internal/validate"
 )
 
 // AssessmentReport is the persisted artifact of one Stage-1 assessment, one
@@ -48,8 +47,14 @@ type AssessmentSource struct {
 // CellState is the canonical per-cell value: everything the gates and viewer
 // reconstruct independently today, computed once.
 type CellState struct {
-	Agent      string `json:"agent"`
-	CoverageID string `json:"coverage_id"`
+	Agent             string           `json:"agent"`
+	CoverageID        string           `json:"coverage_id"`
+	ExecutionProfile  ExecutionProfile `json:"execution_profile"`
+	RecordingName     string           `json:"recording_name,omitempty"`
+	Entrypoint        string           `json:"entrypoint,omitempty"`
+	DaemonVersion     string           `json:"daemon_version,omitempty"`
+	AgentCLIVersion   string           `json:"agent_cli_version,omitempty"`
+	DesktopAppVersion string           `json:"desktop_app_version,omitempty"`
 	// Applicable is whether the coverage_id is in scope for the agent at all.
 	// Since the #510/#511 shard migration a cell exists iff its shard names the
 	// agent, so every present cell is applicable (the old requires-vs-capabilities
@@ -82,13 +87,15 @@ type CellState struct {
 // (.../replaydata/agents) is retained as the RepoRoot fallback for callers
 // that set it directly.
 type Config struct {
-	AgentsRoot string
-	RepoRoot   string
+	AgentsRoot       string
+	RepoRoot         string
+	ExecutionProfile ExecutionProfile
 }
 
 // Matrix is the loaded, normalized model. Construct via Load / LoadRepo.
 type Matrix struct {
 	repoRoot   string
+	profile    ExecutionProfile
 	catalog    []catalogEntry
 	agents     []string                                // sorted onboarded adapters (shard _meta.min_versions keys)
 	shards     map[string]shard.Shard                  // coverage_id (shard.Name) → shard (scenario-global spec only)
@@ -119,9 +126,16 @@ type shardRecipe struct {
 // LoadRepo loads the matrix from a repo root. Data comes from the per-scenario
 // shards under replaydata/agents/ (#510).
 func LoadRepo(repoRoot string) (*Matrix, error) {
+	return LoadRepoForProfile(repoRoot, ProfileCLILocal)
+}
+
+// LoadRepoForProfile loads the matrix for one execution profile. LoadRepo is
+// the backward-compatible cli-local API.
+func LoadRepoForProfile(repoRoot string, profile ExecutionProfile) (*Matrix, error) {
 	return Load(Config{
-		AgentsRoot: filepath.Join(repoRoot, "replaydata", "agents"),
-		RepoRoot:   repoRoot,
+		AgentsRoot:       filepath.Join(repoRoot, "replaydata", "agents"),
+		RepoRoot:         repoRoot,
+		ExecutionProfile: profile,
 	})
 }
 
@@ -141,8 +155,13 @@ func Load(cfg Config) (*Matrix, error) {
 		return nil, fmt.Errorf("no scenarios in %s", shard.File(repoRoot))
 	}
 
+	profile, err := ParseExecutionProfile(string(defaultExecutionProfile(cfg.ExecutionProfile)))
+	if err != nil {
+		return nil, err
+	}
 	m := &Matrix{
 		repoRoot:   repoRoot,
+		profile:    profile,
 		agents:     shard.Agents(repoRoot),
 		shards:     make(map[string]shard.Shard, len(shards)),
 		agentCells: map[string]map[string]*shard.ShardAgent{},
@@ -201,16 +220,41 @@ func Load(cfg Config) (*Matrix, error) {
 		m.catalog = append(m.catalog, catalogEntry{ID: sh.Name})
 	}
 
-	for _, agent := range m.agents {
-		m.cells[agent] = map[string]CellState{}
-		for _, sh := range shards {
-			if m.agentCells[agent] == nil || m.agentCells[agent][sh.Name] == nil {
-				continue // no cell for this (agent, scenario), and none derivable
-			}
-			m.cells[agent][sh.Name] = m.buildCell(agent, sh.Name)
-		}
+	if err := m.buildCells(shards); err != nil {
+		return nil, err
 	}
 	return m, nil
+}
+
+func (m *Matrix) buildCells(shards []shard.Shard) error {
+	for _, agent := range m.agents {
+		if err := m.buildAgentCells(agent, shards); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *Matrix) buildAgentCells(agent string, shards []shard.Shard) error {
+	m.cells[agent] = map[string]CellState{}
+	for _, sh := range shards {
+		if m.agentCells[agent][sh.Name] == nil {
+			continue
+		}
+		cell, err := m.buildCell(agent, sh.Name)
+		if err != nil {
+			return err
+		}
+		m.cells[agent][sh.Name] = cell
+	}
+	return nil
+}
+
+func defaultExecutionProfile(profile ExecutionProfile) ExecutionProfile {
+	if profile == "" {
+		return ProfileCLILocal
+	}
+	return profile
 }
 
 // inCatalog reports whether a shard id "<section>.<index>" denotes a real
@@ -239,16 +283,18 @@ func (m *Matrix) HasAgent(agent string) bool {
 // Agents returns the sorted list of onboarded agents.
 func (m *Matrix) Agents() []string { return append([]string(nil), m.agents...) }
 
+// ExecutionProfile returns the profile selected when the matrix was loaded.
+func (m *Matrix) ExecutionProfile() ExecutionProfile { return m.profile }
+
 // cellRecorded reports whether the cell has at least one captured recording.
 // The on-disk recordings/<name>/ tree is the single source of truth: a cell is
-// recorded iff validate.NewestRecordingDir finds a recording under its folder.
+// recorded iff NewestRecording finds a recording for the selected profile.
 // (c.Folder is populated by the shard loaders from the directory they scanned.)
-func (m *Matrix) cellRecorded(agent string, c *shard.ShardAgent) bool {
+func (m *Matrix) cellRecording(agent string, c *shard.ShardAgent) (Recording, bool, error) {
 	if c == nil || c.Folder == "" {
-		return false
+		return Recording{}, false, nil
 	}
-	_, ok := validate.NewestRecordingDir(shard.AgentCellDir(m.repoRoot, agent, c.Folder))
-	return ok
+	return NewestRecording(shard.AgentCellDir(m.repoRoot, agent, c.Folder), m.profile)
 }
 
 // cellAssessment parses the shard cell's Details.Assessment. hasAssessFile is
@@ -309,20 +355,31 @@ func repAxes(rep *AssessmentReport) (supports, daemon, driver string) {
 // buildCell assembles the full CellState for one (agent, coverage_id) cell that
 // the shard names. Axes come from the cell's assessment; recorded is a disk
 // check (recordings/ on disk); applicable is reconstructed from the cell's Recipe.
-func (m *Matrix) buildCell(agent, cid string) CellState {
+func (m *Matrix) buildCell(agent, cid string) (CellState, error) {
 	c := m.agentCells[agent][cid]
-	recorded := m.cellRecorded(agent, c)
+	recording, recorded, err := m.cellRecording(agent, c)
+	if err != nil {
+		return CellState{}, err
+	}
 	hasAssessFile, rep := cellAssessment(c)
 	appl := m.applicableState(agent, cid)
 
 	cs := CellState{
-		Agent:           agent,
-		CoverageID:      cid,
-		Applicable:      true,
-		ApplicableState: appl,
-		Recorded:        recorded,
-		Assessment:      rep,
-		Derived:         m.derived[agent+"\x00"+cid],
+		Agent:            agent,
+		CoverageID:       cid,
+		ExecutionProfile: m.profile,
+		Applicable:       true,
+		ApplicableState:  appl,
+		Recorded:         recorded,
+		Assessment:       rep,
+		Derived:          m.derived[agent+"\x00"+cid],
+	}
+	if recorded {
+		cs.RecordingName = recording.Name
+		cs.Entrypoint = recording.Manifest.Entrypoint
+		cs.DaemonVersion = recording.Manifest.DaemonVersion
+		cs.AgentCLIVersion = recording.Manifest.AgentCLIVersion
+		cs.DesktopAppVersion = recording.Manifest.DesktopAppVersion
 	}
 
 	// Disposition / Route use the parsed-assessment axes exactly as the legacy
@@ -352,7 +409,7 @@ func (m *Matrix) buildCell(agent, cid string) CellState {
 	// documented record_blocked) — never recorded here, so StateNotApplicable
 	// rather than pending-record.
 	cs.DisplayState = DeriveDisplayState(dsSupports, dsDaemon, dsDriver, recorded, appl != AppFalse)
-	return cs
+	return cs, nil
 }
 
 // disposition ports cg_disposition steps 1-8 (steps 1-2 already resolved into

@@ -393,7 +393,12 @@ func isAgentResumeOrigin(raw map[string]interface{}) bool {
 
 // handleTaskNotification captures subagent-completion signals from the parent
 // transcript's task-notification events. Returns true when the event was a
-// task-notification and the caller should skip it. See issue #134.
+// task-notification and the caller should skip its message content.
+//
+// OriginTaskNotification preserves the structural difference from the passive
+// queued_command attachment handled above. The tailer uses it only when the
+// notification terminates an entry in its background-process ledger; plain
+// subagent notifications remain passive. See issues #134 and #1899.
 func handleTaskNotification(raw map[string]interface{}, ev *tailer.ParsedEvent) bool {
 	if originKind(raw) != "task-notification" {
 		return false
@@ -415,6 +420,7 @@ func handleTaskNotification(raw map[string]interface{}, ev *tailer.ParsedEvent) 
 			}
 		}
 	}
+	ev.OriginTaskNotification = true
 	ev.Skip = true
 	return true
 }

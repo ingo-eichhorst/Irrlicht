@@ -15,6 +15,7 @@
 # Usage:
 #   tools/replay-fixtures.sh                         # default settings
 #   tools/replay-fixtures.sh --debounce 200ms        # tighter debounce window
+#   tools/replay-fixtures.sh --profile desktop-local # gate Desktop evidence
 #
 # The replay binary auto-detects the adapter from the fixture path (claude
 # code, codex, or pi).
@@ -22,10 +23,12 @@
 set -euo pipefail
 
 DEBOUNCE="2s"
+EXECUTION_PROFILE="cli-local"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --debounce)   DEBOUNCE="$2"; shift 2 ;;
+    --profile)    EXECUTION_PROFILE="$2"; shift 2 ;;
     -h|--help)
       sed -n '2,11p' "$0"
       exit 0
@@ -36,6 +39,10 @@ done
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
+
+# shellcheck source=onboarding-factory/scripts/lib/recording-profile.sh
+source "$REPO_ROOT/tools/onboarding-factory/scripts/lib/recording-profile.sh"
+validate_execution_profile "$EXECUTION_PROFILE"
 
 FIXTURES_ROOT="replaydata/agents"
 REPORTS_DIR="replaydata/agents/_reports"
@@ -334,14 +341,11 @@ while IFS= read -r expected_path; do
   scenario="$(basename "$cell_dir")"
   known_failing="$(head -n1 "$expected_path" | jq -r '.known_failing // false' 2>/dev/null || echo false)"
 
-  # The newest recording is the canonical one: it carries the half-record guard
-  # and GATES the suite. Older recordings are validated too (every recording is
-  # reported), but a spec mismatch on an older one is informational drift — it
-  # does NOT fail the build (the byte-identity golden test pins all of them).
+  # The newest recording WITHIN the selected profile gates the suite. Older
+  # recordings remain informational drift reports.
+  newest_dir="$(newest_recording_for_profile "$cell_dir" "$EXECUTION_PROFILE")"
   newest_rec=""
-  if newest_dir="$(ls -1d "$cell_dir"/recordings/*/ 2>/dev/null | sort | tail -n1)"; then
-    newest_rec="$(basename "${newest_dir%/}")"
-  fi
+  [[ -z "$newest_dir" ]] || newest_rec="$(basename "$newest_dir")"
   [[ -n "$newest_rec" ]] || continue   # no recording captured → nothing to validate
 
   for rec_dir in "$cell_dir"/recordings/*/; do
@@ -351,7 +355,7 @@ while IFS= read -r expected_path; do
     ev_rc=0
     if [[ "$recname" == "$newest_rec" ]]; then
       # Newest: half-record guard active (no recording-name arg → ValidateExpected).
-      go run ./tools/onboarding-factory/cmd/expected-validate "$cell_dir" > "$report_json" 2>&1 || ev_rc=$?
+      go run ./tools/onboarding-factory/cmd/expected-validate --profile "$EXECUTION_PROFILE" "$cell_dir" > "$report_json" 2>&1 || ev_rc=$?
     else
       # Older: validate this specific recording (drift signal, non-gating).
       go run ./tools/onboarding-factory/cmd/expected-validate "$cell_dir" "$recname" > "$report_json" 2>&1 || ev_rc=$?

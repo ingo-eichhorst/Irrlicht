@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"irrlicht/core/pkg/tailer"
@@ -292,36 +293,46 @@ func taskNotifAttachmentEvent(taskID, status string) map[string]interface{} {
 
 func TestParser_TaskNotification_TerminatesBackgroundProcess(t *testing.T) {
 	p := &Parser{}
-	// origin.kind shape, terminal → emits the bg task-id
-	done := p.ParseLine(taskNotifOriginEvent("bc1h56v8v", "completed"))
-	if len(done.TerminatedBackgroundTaskIDs) != 1 || done.TerminatedBackgroundTaskIDs[0] != "bc1h56v8v" {
-		t.Errorf("origin shape: TerminatedBackgroundTaskIDs = %v, want [bc1h56v8v]", done.TerminatedBackgroundTaskIDs)
+	type result struct {
+		Skip                   bool
+		OriginTaskNotification bool
+		TerminatedIDs          []string
 	}
-	// running → not terminal
-	running := p.ParseLine(taskNotifOriginEvent("bc1h56v8v", "running"))
-	if len(running.TerminatedBackgroundTaskIDs) != 0 {
-		t.Errorf("running status must not terminate, got %v", running.TerminatedBackgroundTaskIDs)
+	tests := []struct {
+		name  string
+		event map[string]interface{}
+		want  result
+	}{
+		{"terminal origin", taskNotifOriginEvent("bc1h56v8v", "completed"), result{true, true, []string{"bc1h56v8v"}}},
+		{"running origin", taskNotifOriginEvent("bc1h56v8v", "running"), result{true, true, nil}},
+		{"terminal attachment", taskNotifAttachmentEvent("bc1h56v8v", "completed"), result{true, false, []string{"bc1h56v8v"}}},
 	}
-	// queued_command attachment shape, terminal → emits the bg task-id
-	att := p.ParseLine(taskNotifAttachmentEvent("bc1h56v8v", "completed"))
-	if len(att.TerminatedBackgroundTaskIDs) != 1 || att.TerminatedBackgroundTaskIDs[0] != "bc1h56v8v" {
-		t.Errorf("attachment shape: TerminatedBackgroundTaskIDs = %v, want [bc1h56v8v]", att.TerminatedBackgroundTaskIDs)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ev := p.ParseLine(tc.event)
+			got := result{ev.Skip, ev.OriginTaskNotification, ev.TerminatedBackgroundTaskIDs}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("task-notification result = %+v, want %+v", got, tc.want)
+			}
+		})
 	}
 }
 
 func TestTailer_BackgroundProcessCount_ClearedByTaskNotification(t *testing.T) {
 	spawnResult := "Command running in background with ID: bc1h56v8v. Output is being written to: /tmp/x/tasks/bc1h56v8v.output. You will be notified when it completes. To check interim output, use Read on that file path."
 	for _, tc := range []struct {
-		name      string
-		completed map[string]interface{}
+		name          string
+		completed     map[string]interface{}
+		wantLastEvent string
 	}{
-		{"origin.kind shape", taskNotifOriginEvent("bc1h56v8v", "completed")},
-		{"queued_command attachment shape", taskNotifAttachmentEvent("bc1h56v8v", "completed")},
+		{"origin.kind shape", taskNotifOriginEvent("bc1h56v8v", "completed"), "agent_continuation"},
+		{"queued_command attachment shape", taskNotifAttachmentEvent("bc1h56v8v", "completed"), "turn_done"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := writeBgTranscript(t, []map[string]interface{}{
 				bashToolUse("toolu_1", "Bash", map[string]interface{}{"command": "sleep 100", "run_in_background": true}),
 				bgSpawnResult("toolu_1", "bc1h56v8v", spawnResult),
+				{"type": "system", "subtype": "turn_duration"},
 				tc.completed,
 			})
 			m, err := tailer.NewTranscriptTailer(path, &Parser{}, "claude-code").TailAndProcess()
@@ -331,6 +342,32 @@ func TestTailer_BackgroundProcessCount_ClearedByTaskNotification(t *testing.T) {
 			if m.BackgroundProcessCount != 0 {
 				t.Fatalf("BackgroundProcessCount = %d, want 0 after task-notification completion", m.BackgroundProcessCount)
 			}
+			if m.LastEventType != tc.wantLastEvent {
+				t.Errorf("LastEventType = %q, want %q", m.LastEventType, tc.wantLastEvent)
+			}
 		})
+	}
+}
+
+// A task-notification for a subagent has no matching Bash background-process
+// entry. It must preserve the preceding turn_done anchor. The background-agent
+// scenario ends with killed subagent notifications and no resumed assistant
+// event, so treating origin.kind alone as a continuation leaves it working
+// forever. This is a lock for the structural ledger-match discriminator in
+// issue #1899.
+func TestTailer_UnmatchedTaskNotification_RemainsPassive(t *testing.T) {
+	path := writeBgTranscript(t, []map[string]interface{}{
+		{"type": "system", "subtype": "turn_duration"},
+		taskNotifOriginEvent("subagent-aecb65d9", "killed"),
+	})
+	m, err := tailer.NewTranscriptTailer(path, &Parser{}, "claude-code").TailAndProcess()
+	if err != nil {
+		t.Fatalf("TailAndProcess: %v", err)
+	}
+	if m.LastEventType != "turn_done" {
+		t.Errorf("LastEventType = %q, want turn_done for unmatched subagent notification", m.LastEventType)
+	}
+	if len(m.SubagentCompletions) != 1 {
+		t.Fatalf("SubagentCompletions = %d, want 1", len(m.SubagentCompletions))
 	}
 }

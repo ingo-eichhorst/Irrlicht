@@ -40,10 +40,43 @@ func validRepo(t *testing.T) string {
 	return root
 }
 
+// mixedProfileRepo keeps the flat recordings layout and makes the Desktop
+// recording lexicographically newer. The default query must still select r1.
+func mixedProfileRepo(t *testing.T) string {
+	t.Helper()
+	root := validRepo(t)
+	base := filepath.Join(root, "replaydata", "agents", "claudecode", "scenarios", "1-1_session-start", "recordings")
+	write(t, filepath.Join(base, "r1", "manifest.json"), `{
+  "execution_profile": "cli-local",
+  "entrypoint": "cli",
+  "daemon_version": "0.6.2+cli",
+  "agent_cli_version": "2.1.143"
+}`+"\n")
+	recording(t, root, "claudecode", "1-1_session-start", "r2", false)
+	write(t, filepath.Join(base, "r2", "manifest.json"), `{
+  "execution_profile": "desktop-local",
+  "entrypoint": "sdk-cli",
+  "daemon_version": "0.6.2+desktop",
+  "agent_cli_version": "2.1.143",
+  "desktop_app_version": "1.0.10"
+}`+"\n")
+	return root
+}
+
 func runOf(args ...string) (int, string, string) {
 	var out, errb bytes.Buffer
 	code := run(args, &out, &errb)
 	return code, out.String(), errb.String()
+}
+
+func requireUsageError(t *testing.T, code int, text, wantText string) {
+	t.Helper()
+	if code != exitUsage {
+		t.Fatalf("exit=%d; want %d; output=%q", code, exitUsage, text)
+	}
+	if !strings.Contains(text, wantText) {
+		t.Fatalf("output=%q; want %q", text, wantText)
+	}
 }
 
 func TestStatusJSON(t *testing.T) {
@@ -98,6 +131,91 @@ func TestStatusAgentFilter(t *testing.T) {
 	}
 }
 
+func profileStatusView(t *testing.T, root string, profileArgs ...string) statusView {
+	t.Helper()
+	args := []string{"status", "--agent", "claudecode", "--scenario", "session-start"}
+	args = append(args, profileArgs...)
+	args = append(args, "--json", "--repo-root", root)
+	code, out, errs := runOf(args...)
+	if code != exitOK {
+		t.Fatalf("status: exit=%d stderr=%s", code, errs)
+	}
+	var view statusView
+	if err := json.Unmarshal([]byte(out), &view); err != nil {
+		t.Fatal(err)
+	}
+	return view
+}
+
+func TestStatusDefaultsToCLILocalProfile(t *testing.T) {
+	root := mixedProfileRepo(t)
+	cli := profileStatusView(t, root)
+	cliCell := cli.Scenarios[0].Cells["claudecode"]
+	if cli.ExecutionProfile != "cli-local" {
+		t.Fatalf("default view selected profile %q", cli.ExecutionProfile)
+	}
+	if cliCell.ExecutionProfile != "cli-local" {
+		t.Fatalf("default cell selected profile %q", cliCell.ExecutionProfile)
+	}
+	if cliCell.RecordingName != "r1" {
+		t.Fatalf("default cell selected recording %q", cliCell.RecordingName)
+	}
+	if cliCell.Entrypoint != "cli" {
+		t.Fatalf("default cell changed entrypoint to %q", cliCell.Entrypoint)
+	}
+}
+
+func TestStatusSelectsDesktopLocalProfile(t *testing.T) {
+	root := mixedProfileRepo(t)
+	desktop := profileStatusView(t, root, "--profile", "desktop-local")
+	desktopCell := desktop.Scenarios[0].Cells["claudecode"]
+	if desktop.ExecutionProfile != "desktop-local" {
+		t.Fatalf("Desktop view selected profile %q", desktop.ExecutionProfile)
+	}
+	if desktopCell.ExecutionProfile != "desktop-local" {
+		t.Fatalf("Desktop cell selected profile %q", desktopCell.ExecutionProfile)
+	}
+	if desktopCell.RecordingName != "r2" {
+		t.Fatalf("Desktop cell selected recording %q", desktopCell.RecordingName)
+	}
+	if desktopCell.Entrypoint != "sdk-cli" {
+		t.Fatalf("Desktop cell changed entrypoint to %q", desktopCell.Entrypoint)
+	}
+	if desktopCell.DesktopAppVersion != "1.0.10" {
+		t.Fatalf("Desktop app version=%q", desktopCell.DesktopAppVersion)
+	}
+}
+
+func TestStatusRejectsUnknownExecutionProfile(t *testing.T) {
+	code, _, errs := runOf("status", "--profile", "remote", "--repo-root", validRepo(t))
+	requireUsageError(t, code, errs, `unknown execution profile "remote"`)
+}
+
+func TestStatusRejectsEmptyExecutionProfile(t *testing.T) {
+	code, _, errs := runOf("status", "--profile", "", "--repo-root", validRepo(t))
+	requireUsageError(t, code, errs, `unknown execution profile ""`)
+}
+
+func TestStatusDoesNotRepeatMalformedFlagError(t *testing.T) {
+	code, _, repeated := runOf("status", "--definitely-invalid")
+	if code != exitUsage {
+		t.Fatalf("exit=%d; want %d", code, exitUsage)
+	}
+	if repeated != "" {
+		t.Fatalf("FlagSet already printed the error; command repeated %q", repeated)
+	}
+}
+
+func TestVerifyDoesNotRepeatMalformedFlagError(t *testing.T) {
+	code, _, repeated := runOf("verify", "--definitely-invalid")
+	if code != exitUsage {
+		t.Fatalf("exit=%d; want %d", code, exitUsage)
+	}
+	if repeated != "" {
+		t.Fatalf("FlagSet already printed the error; command repeated %q", repeated)
+	}
+}
+
 func TestStatusScenarioFilter(t *testing.T) {
 	root := validRepo(t)
 	code, out, _ := runOf("status", "--scenario", "basic-turn", "--json", "--repo-root", root)
@@ -128,6 +246,18 @@ func TestStatusRuns(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &recs); err != nil || len(recs) != 1 || recs[0].Outcome != "recorded" {
 		t.Fatalf("run-log not echoed: %v / %s", err, out)
 	}
+}
+
+func TestStatusRunsRejectsExplicitExecutionProfile(t *testing.T) {
+	root := validRepo(t)
+	for _, profile := range []string{"cli-local", "desktop-local"} {
+		t.Run(profile, func(t *testing.T) {
+			code, _, errs := runOf("status", "--runs", "--profile", profile, "--repo-root", root)
+			requireUsageError(t, code, errs, "--profile cannot be used with --runs")
+		})
+	}
+	code, _, errs := runOf("status", "--runs", "--profile", "remote", "--repo-root", root)
+	requireUsageError(t, code, errs, `unknown execution profile "remote"`)
 }
 
 func TestValidateClean(t *testing.T) {
@@ -189,6 +319,68 @@ func TestValidateCatchesViolations(t *testing.T) {
 			}
 			if !strings.Contains(errs, tc.want) {
 				t.Fatalf("want %q in stderr, got:\n%s", tc.want, errs)
+			}
+		})
+	}
+}
+
+func TestValidateScansOlderManifestsForUnknownProfiles(t *testing.T) {
+	root := validRepo(t)
+	recording(t, root, "claudecode", "1-1_session-start", "r0", false)
+	manifest := filepath.Join(root, "replaydata", "agents", "claudecode", "scenarios",
+		"1-1_session-start", "recordings", "r0", "manifest.json")
+	write(t, manifest, `{"execution_profile":"remote"}`+"\n")
+
+	code, _, errs := runOf("validate", "--repo-root", root)
+	if code != exitFail {
+		t.Fatalf("exit=%d; want validation failure", code)
+	}
+	if !strings.Contains(errs, "recordings/r0") || !strings.Contains(errs, `unknown execution profile "remote"`) {
+		t.Fatalf("finding must name the recording and profile value:\n%s", errs)
+	}
+}
+
+func TestValidateScansProfilesOutsideValidScenarioCells(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		path func(string) string
+	}{
+		{
+			name: "regression recording",
+			path: func(root string) string {
+				return filepath.Join(root, "replaydata", "agents", "codex", "regressions", "issue-1", "recordings", "r1", "manifest.json")
+			},
+		},
+		{
+			name: "orphan scenario recording",
+			path: func(root string) string {
+				return filepath.Join(root, "replaydata", "agents", "claudecode", "scenarios", "9-9_orphan", "recordings", "r1", "manifest.json")
+			},
+		},
+		{
+			name: "malformed metadata recording",
+			path: func(root string) string {
+				cell := filepath.Join(root, "replaydata", "agents", "claudecode", "scenarios", "2-1_basic-turn")
+				write(t, filepath.Join(cell, "metadata.json"), "{")
+				return filepath.Join(cell, "recordings", "r1", "manifest.json")
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := validRepo(t)
+			manifest := tc.path(root)
+			write(t, manifest, `{"execution_profile":"remote"}`+"\n")
+
+			code, _, errs := runOf("validate", "--repo-root", root)
+			if code != exitFail {
+				t.Fatalf("exit=%d stderr=%q; want validation failure", code, errs)
+			}
+			wantPath := filepath.ToSlash(strings.TrimPrefix(filepath.Dir(manifest), root+string(filepath.Separator)))
+			if !strings.Contains(errs, wantPath) {
+				t.Fatalf("stderr=%q; want recording path %q", errs, wantPath)
+			}
+			if !strings.Contains(errs, `unknown execution profile "remote"`) {
+				t.Fatalf("stderr=%q; want unknown profile value", errs)
 			}
 		})
 	}

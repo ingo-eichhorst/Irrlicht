@@ -15,6 +15,11 @@ import (
 	"irrlicht/core/pkg/capacity"
 )
 
+// eventTypeAgentContinuation is the lifecycle anchor written when an adapter
+// reports that a machine event started a new inference turn. It is not a user
+// event, so it cannot trigger genuine-user-turn cleanup. See issue #1899.
+const eventTypeAgentContinuation = "agent_continuation"
+
 // MessageEvent represents a single message event from transcript
 type MessageEvent struct {
 	Timestamp time.Time `json:"timestamp"`
@@ -792,14 +797,7 @@ func (t *TranscriptTailer) applySkippedEvent(parsed *ParsedEvent) bool {
 		t.metrics.SubagentCompletions = append(t.metrics.SubagentCompletions, parsed.SubagentCompletions...)
 		substantive = true
 	}
-	// Background-process completion arrives on a Skip=true task-notification
-	// (origin.kind or queued_command attachment) — drain it here so the count
-	// drops and the pass is substantive enough for the detector to
-	// re-classify and release the hold. See issue #445.
-	if len(parsed.TerminatedBackgroundTaskIDs) > 0 {
-		for _, id := range parsed.TerminatedBackgroundTaskIDs {
-			delete(t.openBackgroundProcs, id)
-		}
+	if t.applyBackgroundProcessTerminations(parsed) {
 		substantive = true
 	}
 	if parsed.TaskSnapshot != nil {
@@ -855,6 +853,20 @@ func (t *TranscriptTailer) applySkippedEvent(parsed *ParsedEvent) bool {
 	}
 	t.reconcileTaskSnapshot(parsed)
 	return substantive
+}
+
+// applyBackgroundProcessTerminations drains completed background commands.
+// An origin notification that matches an open process also starts Claude's
+// next inference turn. Subagent notifications do not match this ledger, and
+// attachment-form notifications do not carry OriginTaskNotification.
+func (t *TranscriptTailer) applyBackgroundProcessTerminations(parsed *ParsedEvent) bool {
+	for _, id := range parsed.TerminatedBackgroundTaskIDs {
+		if _, tracked := t.openBackgroundProcs[id]; tracked && parsed.OriginTaskNotification {
+			t.metrics.LastEventType = eventTypeAgentContinuation
+		}
+		delete(t.openBackgroundProcs, id)
+	}
+	return len(parsed.TerminatedBackgroundTaskIDs) > 0
 }
 
 // forceIdleFlushDuration is passed to IdleFlush from FlushIdle. Any

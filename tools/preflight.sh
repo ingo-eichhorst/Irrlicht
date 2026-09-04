@@ -644,6 +644,8 @@ if want go; then
   # is the one moment it must work (docs/elfdans-device-test.md Phase 5).
   run_gate_scoped '^tools/elfdans-drive/|^core/adapters/outbound/relay/|^core/domain/session/' \
                   "elfdans-drive builds"      go build ./tools/elfdans-drive/...
+  run_gate_scoped '^tools/onboarding-factory/desktop-helper/' \
+                  "Claude Desktop helper tests" tools/onboarding-factory/desktop-helper/test.sh
   run_gate_scoped '^replaydata/|^tools/onboarding-factory/' \
                   "replaydata validate"      go run ./tools/onboarding-factory/cmd/of validate
   # The rig's own tests guard two file families that live OUTSIDE

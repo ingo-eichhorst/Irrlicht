@@ -7,7 +7,7 @@
 //
 // Read-side commands (this phase):
 //
-//	of status   [--agent a] [--scenario s] [--runs] [--summary] [--json]  coverage / run status
+//	of status   [--agent a] [--scenario s] [--profile p] [--runs] [--summary] [--json]  coverage / run status
 //	of validate [--json]                                                  schema + referential integrity
 //	of coverage [--hooks] [--json]                                        derived rollup, or hook coverage
 //	of hookcheck --agent a --events e                                     one staged recording's hook coverage
@@ -21,6 +21,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -37,7 +38,7 @@ const (
 )
 
 const usage = `usage:
-  of status   [--agent a] [--scenario s] [--runs] [--summary] [--json] [--repo-root .]
+  of status   [--agent a] [--scenario s] [--profile cli-local|desktop-local] [--runs] [--summary] [--json] [--repo-root .]
   of validate [--json] [--repo-root .]
   of coverage [--hooks] [--json] [--repo-root .]
   of scenario add|update --name n [--id i] [--description d] [--process-file f] [--acceptance-file f]
@@ -123,13 +124,19 @@ func writeJSON(w io.Writer, v any) error {
 // cellView is the per-cell projection `of status` emits: the matrix display
 // state + the 3 pillars (agent / daemon / driver) the issue wants surfaced.
 type cellView struct {
-	DisplayState     string `json:"display_state"`
-	Recorded         bool   `json:"recorded"`
-	Route            string `json:"route"`
-	Disposition      string `json:"disposition"`
-	AgentSupports    string `json:"agent_supports,omitempty"`
-	DaemonCapability string `json:"daemon_capability,omitempty"`
-	DriverCapability string `json:"driver_capability,omitempty"`
+	DisplayState      string `json:"display_state"`
+	Recorded          bool   `json:"recorded"`
+	ExecutionProfile  string `json:"execution_profile"`
+	RecordingName     string `json:"recording_name,omitempty"`
+	Entrypoint        string `json:"entrypoint,omitempty"`
+	DaemonVersion     string `json:"daemon_version,omitempty"`
+	AgentCLIVersion   string `json:"agent_cli_version,omitempty"`
+	DesktopAppVersion string `json:"desktop_app_version,omitempty"`
+	Route             string `json:"route"`
+	Disposition       string `json:"disposition"`
+	AgentSupports     string `json:"agent_supports,omitempty"`
+	DaemonCapability  string `json:"daemon_capability,omitempty"`
+	DriverCapability  string `json:"driver_capability,omitempty"`
 	// Derived marks a cell synthesized from the capability model rather than
 	// read from a directory (#1369). Emitted here because a reader filtering
 	// a work-list needs to tell a modelled cell from a written one, and the
@@ -144,17 +151,24 @@ type scenarioView struct {
 }
 
 type statusView struct {
-	Agents    []string       `json:"agents"`
-	Scenarios []scenarioView `json:"scenarios"`
+	ExecutionProfile string         `json:"execution_profile"`
+	Agents           []string       `json:"agents"`
+	Scenarios        []scenarioView `json:"scenarios"`
 }
 
 func cellViewOf(cs matrix.CellState) cellView {
 	v := cellView{
-		DisplayState: cs.DisplayState,
-		Recorded:     cs.Recorded,
-		Route:        string(cs.Route),
-		Disposition:  string(cs.Disposition),
-		Derived:      cs.Derived,
+		DisplayState:      cs.DisplayState,
+		Recorded:          cs.Recorded,
+		ExecutionProfile:  string(cs.ExecutionProfile),
+		RecordingName:     cs.RecordingName,
+		Entrypoint:        cs.Entrypoint,
+		DaemonVersion:     cs.DaemonVersion,
+		AgentCLIVersion:   cs.AgentCLIVersion,
+		DesktopAppVersion: cs.DesktopAppVersion,
+		Route:             string(cs.Route),
+		Disposition:       string(cs.Disposition),
+		Derived:           cs.Derived,
 	}
 	if cs.Assessment != nil {
 		v.AgentSupports = cs.Assessment.AgentSupports
@@ -165,38 +179,82 @@ func cellViewOf(cs matrix.CellState) cellView {
 }
 
 func runStatus(args []string, stdout, stderr io.Writer) int {
+	request, err := parseStatusRequest(args)
+	if err != nil {
+		writeCommandError(stderr, "of status", err)
+		return exitUsage
+	}
+	if request.Runs {
+		return runStatusRuns(request.RepoRoot, request.JSON, stdout, stderr)
+	}
+	return runMatrixStatus(request, stdout, stderr)
+}
+
+type statusRequest struct {
+	Agent, Scenario, RepoRoot string
+	Profile                   matrix.ExecutionProfile
+	Runs, Summary, JSON       bool
+}
+
+func parseStatusRequest(args []string) (statusRequest, error) {
 	fs := newFlagSet("of status")
 	var (
 		agent    = fs.String("agent", "", "filter to one agent column")
 		scenario = fs.String("scenario", "", "filter to one scenario (by name or id)")
 		runs     = fs.Bool("runs", false, "show the factory run-log instead of coverage")
 		summary  = fs.Bool("summary", false, "per-agent cell counts instead of the full cell dump")
+		profile  = fs.String("profile", string(matrix.ProfileCLILocal), "execution profile (cli-local or desktop-local)")
 		asJSON   = fs.Bool("json", false, "emit JSON")
 		repoRoot = fs.String("repo-root", ".", "repository root")
 	)
 	if err := fs.Parse(args); err != nil {
-		return exitUsage
+		return statusRequest{}, flagParseError{cause: err}
 	}
 	*repoRoot = absRoot(*repoRoot)
 
-	if *runs {
-		return runStatusRuns(*repoRoot, *asJSON, stdout, stderr)
+	executionProfile, err := statusExecutionProfile(*profile, *runs, flagPassed(fs, "profile"))
+	if err != nil {
+		return statusRequest{}, err
 	}
+	return statusRequest{
+		Agent: *agent, Scenario: *scenario, RepoRoot: *repoRoot,
+		Profile: executionProfile, Runs: *runs, Summary: *summary, JSON: *asJSON,
+	}, nil
+}
 
-	m, err := matrix.LoadRepo(*repoRoot)
+type flagParseError struct{ cause error }
+
+func (e flagParseError) Error() string { return e.cause.Error() }
+
+func writeCommandError(stderr io.Writer, prefix string, err error) {
+	var alreadyWritten flagParseError
+	if errors.As(err, &alreadyWritten) {
+		return
+	}
+	fmt.Fprintf(stderr, "%s: %v\n", prefix, err)
+}
+
+func runMatrixStatus(request statusRequest, stdout, stderr io.Writer) int {
+	m, view, err := statusViewForRequest(request)
 	if err != nil {
 		fmt.Fprintf(stderr, "of status: %v\n", err)
 		return exitUsage
 	}
-	agents := m.Agents()
-	if *agent != "" {
-		if !m.HasAgent(*agent) {
-			fmt.Fprintf(stderr, "of status: %q is not an onboarded agent\n", *agent)
-			return exitUsage
-		}
-		agents = []string{*agent}
+	return emitStatus(m, view, request, statusOutput{stdout: stdout, stderr: stderr})
+}
+
+type statusOutput struct{ stdout, stderr io.Writer }
+
+func statusViewForRequest(request statusRequest) (*matrix.Matrix, statusView, error) {
+	m, err := matrix.LoadRepoForProfile(request.RepoRoot, request.Profile)
+	if err != nil {
+		return nil, statusView{}, err
 	}
-	view := buildStatusView(m, *repoRoot, agents, *scenario)
+	agents, err := statusAgents(m, request.Agent)
+	if err != nil {
+		return nil, statusView{}, err
+	}
+	view := buildStatusView(m, request.RepoRoot, agents, request.Scenario)
 
 	// Validate --scenario the way --agent is validated. An unmatched filter
 	// used to yield a visibly empty listing; under --summary it yields a full
@@ -205,33 +263,56 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	// catalog walk, so the guard and the filter are literally the same
 	// predicate — buildStatusView emits a row for every matching shard, so an
 	// empty result means nothing matched.
-	if *scenario != "" && len(view.Scenarios) == 0 {
-		fmt.Fprintf(stderr, "of status: %q is not a scenario (by name or id)\n", *scenario)
-		return exitUsage
+	if request.Scenario != "" && len(view.Scenarios) == 0 {
+		return nil, statusView{}, fmt.Errorf("%q is not a scenario (by name or id)", request.Scenario)
 	}
+	return m, view, nil
+}
 
+func statusAgents(m *matrix.Matrix, agent string) ([]string, error) {
+	if agent == "" {
+		return m.Agents(), nil
+	}
+	if !m.HasAgent(agent) {
+		return nil, fmt.Errorf("%q is not an onboarded agent", agent)
+	}
+	return []string{agent}, nil
+}
+
+func emitStatus(m *matrix.Matrix, view statusView, request statusRequest, output statusOutput) int {
 	// --summary folds the same view into per-agent counts. Folding the view
 	// (rather than re-reading the matrix) is what keeps the two renderings of
 	// `of status` arithmetically consistent.
-	if *summary {
-		return emitSummary(m, view, *asJSON, stdout, stderr)
+	if request.Summary {
+		return emitSummary(m, view, request.JSON, output.stdout, output.stderr)
 	}
 
-	if *asJSON {
-		if err := writeJSON(stdout, view); err != nil {
-			fmt.Fprintf(stderr, "of status: encode: %v\n", err)
+	if request.JSON {
+		if err := writeJSON(output.stdout, view); err != nil {
+			fmt.Fprintf(output.stderr, "of status: encode: %v\n", err)
 			return exitUsage
 		}
 		return exitOK
 	}
-	printStatusText(stdout, view)
+	printStatusText(output.stdout, view)
 	return exitOK
+}
+
+func statusExecutionProfile(value string, runs, explicit bool) (matrix.ExecutionProfile, error) {
+	profile, err := matrix.ParseExecutionProfile(value)
+	if err != nil {
+		return "", err
+	}
+	if runs && explicit {
+		return "", fmt.Errorf("--profile cannot be used with --runs because run-log records have no execution-profile identity")
+	}
+	return profile, nil
 }
 
 // buildStatusView projects the matrix + catalog shards (optionally filtered
 // to one scenario) into the per-cell view `of status` renders or encodes.
 func buildStatusView(m *matrix.Matrix, repoRoot string, agents []string, scenarioFilter string) statusView {
-	view := statusView{Agents: agents}
+	view := statusView{ExecutionProfile: string(m.ExecutionProfile()), Agents: agents}
 	for _, sh := range shard.LoadAll(repoRoot) {
 		if scenarioFilter != "" && sh.Name != scenarioFilter && sh.ID != scenarioFilter {
 			continue
@@ -248,7 +329,8 @@ func buildStatusView(m *matrix.Matrix, repoRoot string, agents []string, scenari
 }
 
 func printStatusText(stdout io.Writer, view statusView) {
-	fmt.Fprintf(stdout, "scenarios × agents — %d × %d (display state per cell)\n\n", len(view.Scenarios), len(view.Agents))
+	fmt.Fprintf(stdout, "scenarios × agents — %d × %d (profile %s; display state per cell)\n\n",
+		len(view.Scenarios), len(view.Agents), view.ExecutionProfile)
 	for _, sv := range view.Scenarios {
 		fmt.Fprintf(stdout, "%-6s %-34s", sv.ID, sv.Name)
 		for _, a := range view.Agents {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1460,8 +1461,8 @@ func TestTranscript_ExitPlanMode_SplitMessage_DetectedAsWaiting(t *testing.T) {
 // TestParser_TaskNotification_EmitsSubagentCompletion is the issue #134
 // regression: parent user line with origin.kind="task-notification" must
 // emit a single SubagentCompletion (parsed task-id, tool-use-id, status),
-// be marked Skip=true so it doesn't pollute LastEventType, and must NOT
-// set IsUserInterrupt or IsToolDenial.
+// preserve its origin marker without genuine-user resets, and must NOT set
+// IsUserInterrupt or IsToolDenial. See issue #1899.
 func TestParser_TaskNotification_EmitsSubagentCompletion(t *testing.T) {
 	p := &Parser{}
 	xmlPayload := "<task-notification>\n" +
@@ -1480,26 +1481,35 @@ func TestParser_TaskNotification_EmitsSubagentCompletion(t *testing.T) {
 	if ev == nil {
 		t.Fatal("expected non-nil event")
 	}
-	if !ev.Skip {
-		t.Error("task-notification line must be Skip=true so it doesn't feed LastEventType")
+	type result struct {
+		Skip                   bool
+		OriginTaskNotification bool
+		ClearToolNames         bool
+		StartsNewUserTurn      bool
+		IsUserInterrupt        bool
+		IsToolDenial           bool
+		SubagentCompletions    []tailer.SubagentCompletion
 	}
-	if ev.IsUserInterrupt {
-		t.Error("task-notification must not be classified as a user interrupt")
+	got := result{
+		Skip:                   ev.Skip,
+		OriginTaskNotification: ev.OriginTaskNotification,
+		ClearToolNames:         ev.ClearToolNames,
+		StartsNewUserTurn:      ev.StartsNewUserTurn(),
+		IsUserInterrupt:        ev.IsUserInterrupt,
+		IsToolDenial:           ev.IsToolDenial,
+		SubagentCompletions:    ev.SubagentCompletions,
 	}
-	if ev.IsToolDenial {
-		t.Error("task-notification must not be classified as a tool denial")
+	want := result{
+		Skip:                   true,
+		OriginTaskNotification: true,
+		SubagentCompletions: []tailer.SubagentCompletion{{
+			AgentID:   "af7bf8be5a1b511e4",
+			ToolUseID: "toolu_01WfKzuNdE9j8zVUsTE7twbF",
+			Status:    "completed",
+		}},
 	}
-	if len(ev.SubagentCompletions) != 1 {
-		t.Fatalf("expected 1 SubagentCompletion, got %d", len(ev.SubagentCompletions))
-	}
-	got := ev.SubagentCompletions[0]
-	want := tailer.SubagentCompletion{
-		AgentID:   "af7bf8be5a1b511e4",
-		ToolUseID: "toolu_01WfKzuNdE9j8zVUsTE7twbF",
-		Status:    "completed",
-	}
-	if got != want {
-		t.Errorf("SubagentCompletion = %+v, want %+v", got, want)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("task-notification result = %+v, want %+v", got, want)
 	}
 }
 

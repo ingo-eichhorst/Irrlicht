@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	iofs "io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -60,6 +61,7 @@ func runValidate(args []string, stdout, stderr io.Writer) int {
 	add := func(path, msg string) { findings = append(findings, finding{Path: path, Msg: msg}) }
 
 	names := validateCatalog(*repoRoot, add)
+	validateRecordingProfiles(*repoRoot, add)
 	validateCells(*repoRoot, names, add)
 	validateMaturityModel(*repoRoot, names, add)
 
@@ -88,6 +90,33 @@ func runValidate(args []string, stdout, stderr io.Writer) int {
 		return exitFail
 	}
 	return exitOK
+}
+
+// validateRecordingProfiles scans every recording directory independently of
+// catalog and metadata parsing. A malformed or orphan cell must not hide an
+// invalid profile manifest from repository validation.
+func validateRecordingProfiles(repoRoot string, add func(path, msg string)) {
+	agentsRoot := filepath.Join(repoRoot, "replaydata", "agents")
+	err := filepath.WalkDir(agentsRoot, func(path string, entry iofs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			rel, _ := filepath.Rel(repoRoot, path)
+			add(filepath.ToSlash(rel), "cannot scan recordings: "+walkErr.Error())
+			return nil
+		}
+		if !entry.IsDir() || filepath.Base(filepath.Dir(path)) != "recordings" {
+			return nil
+		}
+		rel, _ := filepath.Rel(repoRoot, path)
+		_, err := matrix.LoadRecordingManifest(filepath.Join(path, "manifest.json"))
+		if err != nil && !os.IsNotExist(err) {
+			add(filepath.ToSlash(rel), "invalid manifest.json: "+err.Error())
+		}
+		return filepath.SkipDir
+	})
+	if err != nil {
+		rel, _ := filepath.Rel(repoRoot, agentsRoot)
+		add(filepath.ToSlash(rel), "cannot scan recordings: "+err.Error())
+	}
 }
 
 // validateCatalog parses replaydata/agents/scenarios.json, enforces the 5-field
@@ -290,25 +319,58 @@ func validateCellFK(scenarioID string, loc cellLoc, names map[string]bool, add f
 	}
 }
 
-// validateCellRecording checks the cell's newest recording (if any) for
-// completeness. A cell is "recorded" iff NewestRecordingDir resolves one —
-// the SAME definition matrix.cellRecorded uses, so the two never disagree.
-// The newest recording is authoritative (it gates validation and the viewer
-// autoselects it); it must be complete. Older recordings are kept as drift
-// signals, so an incomplete newest recording is the hard error.
+// validateCellRecording checks the newest recording within each profile for
+// completeness. Repository-wide profile validation is independent of cell
+// metadata and lives in validateRecordingProfiles.
 func validateCellRecording(loc cellLoc, add func(path, msg string)) {
 	cellDir := loc.dir()
 	rel := loc.rel()
-	recDir, ok := validate.NewestRecordingDir(cellDir)
-	if !ok {
+	recDirs := validate.RecordingDirs(cellDir)
+	if len(recDirs) == 0 {
 		return
 	}
 	if !fileExists(filepath.Join(cellDir, "expected.jsonl")) {
 		add(rel, "recorded cell is missing expected.jsonl")
 	}
-	recRel := filepath.Join(rel, "recordings", filepath.Base(recDir))
-	for _, finding := range validate.RecordingComplete(recDir) {
-		add(recRel, "incomplete recording: "+finding)
+
+	for _, recDir := range recordingCompletenessTargets(recDirs) {
+		recRel := filepath.Join(rel, "recordings", filepath.Base(recDir))
+		addRecordingCompleteness(recDir, recRel, add)
+	}
+}
+
+// recordingCompletenessTargets returns the newest recording per valid profile
+// plus malformed recordings that still require structural checks.
+func recordingCompletenessTargets(recDirs []string) []string {
+	newest, malformed := indexCompletenessRecordings(recDirs)
+	targets := append([]string(nil), malformed...)
+	for _, profile := range matrix.ExecutionProfiles() {
+		if recDir := newest[profile]; recDir != "" {
+			targets = append(targets, recDir)
+		}
+	}
+	return targets
+}
+
+func indexCompletenessRecordings(recDirs []string) (map[matrix.ExecutionProfile]string, []string) {
+	newest := make(map[matrix.ExecutionProfile]string, len(matrix.ExecutionProfiles()))
+	var malformed []string
+	for _, recDir := range recDirs {
+		manifest, err := matrix.LoadRecordingManifestOrLegacy(filepath.Join(recDir, "manifest.json"))
+		if err != nil {
+			malformed = append(malformed, recDir)
+			continue
+		}
+		if newest[manifest.ExecutionProfile] == "" {
+			newest[manifest.ExecutionProfile] = recDir
+		}
+	}
+	return newest, malformed
+}
+
+func addRecordingCompleteness(recDir, recRel string, add func(path, msg string)) {
+	for _, message := range validate.RecordingComplete(recDir) {
+		add(recRel, "incomplete recording: "+message)
 	}
 }
 
