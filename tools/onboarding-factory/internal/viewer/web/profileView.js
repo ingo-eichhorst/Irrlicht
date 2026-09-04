@@ -48,6 +48,18 @@ export function profileLabel(id) {
   return PROFILE_LABELS[id] || id || "";
 }
 
+// shouldRenderProfilePanel keeps every adapter that has no second profile —
+// which today is every adapter but Claude Code, and every Claude Code cell
+// with no Desktop evidence yet — rendering exactly the page it rendered before
+// execution profiles existed. A one-option selector is not a choice, and the
+// issue's "keep all non-Claude adapters unchanged" is easiest to hold by
+// simply not drawing the control there.
+export function shouldRenderProfilePanel(detail) {
+  const d = detail || {};
+  if (d.desktop_result) return true;
+  return (d.profiles || []).filter(p => p.selectable).length > 1;
+}
+
 // profileFromHash reads ?profile= out of a viewer hash. An absent or
 // unrecognised value is the CLI Local default — the viewer must never guess
 // its way into showing the other profile's evidence.

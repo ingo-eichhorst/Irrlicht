@@ -15,7 +15,7 @@ import {
 } from './replayClient.js';
 import {
   DEFAULT_PROFILE, buildProfileSelector, focusFromHash, profileFromHash,
-  recordingHash, renderProfileEvidence,
+  recordingHash, renderProfileEvidence, shouldRenderProfilePanel,
 } from './profileView.js';
 
 const SPEED_PRESETS = [1, 2, 5, 10, 25, 100];
@@ -1588,15 +1588,22 @@ async function loadScenario(s, initialArchive, focus, profile) {
   // Recipe lookup uses recipesByCoverageId (populated once at init from
   // /api/recipes — see comment above), so no per-recording recipes fetch
   // is needed here.
-  const [data, archives, catalog] = await Promise.all([
+  // The recordings fetch reports its own failure rather than collapsing to an
+  // empty list: the server 500s a cell whose manifests it cannot read, and
+  // "we could not look" must not render as "nothing was recorded".
+  const [data, archivesResp, catalog] = await Promise.all([
     fetch(`/api/scenarios/${recordingPath}${profileQuery}`).then(r => r.json()),
-    fetch(`/api/scenarios/${recordingPath}/recordings${profileQuery}`).then(r => r.ok ? r.json() : []).catch(() => []),
+    fetch(`/api/scenarios/${recordingPath}/recordings${profileQuery}`)
+      .then(async r => r.ok ? r.json() : {error: `${r.status} ${await r.text()}`})
+      .catch(e => ({error: String(e)})),
     // Coverage catalog: lets us render a stub Assessment panel from
     // the matrix verdict + notes when no assessment.json exists.
     // Without this fallback the ⚙ / ◉ pipeline-strip jumps would
     // land nowhere for most cells.
     fetch(`/api/catalog${profileQuery}`).then(r => r.ok ? r.json() : null).catch(() => null),
   ]);
+  const archives = Array.isArray(archivesResp) ? archivesResp : [];
+  const archivesError = Array.isArray(archivesResp) ? "" : (archivesResp?.error || "unknown error");
   detail.innerHTML = "";
 
   // No daemon-recorded events.jsonl sidecar: the timeline shown here is
@@ -1653,15 +1660,20 @@ async function loadScenario(s, initialArchive, focus, profile) {
   // Order mirrors the pipeline strip left-to-right:
   //   Assessment (⚙ ◉) → Recipe (✎) → Recording (N) → Spec/Validation (§ ✓) → recording-specific panels.
   // The execution-profile panel sits above everything recording-derived: it
-  // decides WHICH body of evidence the rest of the page is about.
-  detail.appendChild(renderProfilePanel(s, data));
+  // decides WHICH body of evidence the rest of the page is about. It is drawn
+  // only where there is a second profile to choose — every other cell keeps
+  // the page it had before profiles existed.
+  if (shouldRenderProfilePanel(data)) {
+    detail.appendChild(renderProfilePanel(s, data));
+  }
   if (data.assessment) {
     detail.appendChild(renderAssessment(data.assessment));
   } else {
     detail.appendChild(renderAssessmentFallback(coverageEntry));
   }
   detail.appendChild(renderRecipePanel(recipeEntry));
-  detail.appendChild(renderRecordingHistory(s, data, archives, initialArchive || "", recipeEntry, coverageEntry, selectedProfile));
+  detail.appendChild(renderRecordingHistory(
+    s, data, archives, initialArchive || "", recipeEntry, coverageEntry, selectedProfile, archivesError));
   scrollFocusInto(focus || "");
 }
 
@@ -2211,7 +2223,7 @@ function fmtLabel(startedAt, daemonVer, passRate) {
   return `${ts}${ver}${pass}`;
 }
 
-function renderRecordingHistory(s, latestData, archives, initialArchive, recipeEntry, coverageEntry, profile) {
+function renderRecordingHistory(s, latestData, archives, initialArchive, recipeEntry, coverageEntry, profile, archivesError) {
   const wrap = document.createElement("div");
   // `archives` was already fetched scoped to this profile, so the dropdown
   // lists one profile's history; the per-archive fetch and the URL rewrite
@@ -2231,6 +2243,19 @@ function renderRecordingHistory(s, latestData, archives, initialArchive, recipeE
       ? ` <b>${recCount}</b> recording${pluralSuffix(recCount)} available.`
       : ` No recordings yet.`);
   selPanel.appendChild(intro);
+  if (archivesError) {
+    // The list below is EMPTY because the history could not be read, not
+    // because nothing was recorded. Say which.
+    const banner = document.createElement("div");
+    banner.dataset.testid = "recordings-error";
+    banner.style.cssText =
+      "margin-bottom: 8px; padding: 6px 9px; font-size: 11px; border-radius: 3px;" +
+      "background: #f8c8c8; color: #8a0000;";
+    const b = document.createElement("b");
+    b.textContent = "Recording history unavailable: ";
+    banner.append(b, sanitizeForLog(archivesError));
+    selPanel.appendChild(banner);
+  }
 
   const select = document.createElement("select");
   select.style.cssText = "padding: 4px 8px; font: inherit; font-size: 12px; border: 1px solid #c0bdb1; border-radius: 3px;";

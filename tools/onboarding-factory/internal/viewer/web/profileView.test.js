@@ -2,7 +2,7 @@ import { describe, test, expect } from 'vitest'
 import {
   DEFAULT_PROFILE, buildProfileSelector, evidenceHref, focusFromHash,
   profileFromHash, profileRecordingLink, profileStatus, profileVersions,
-  recordingHash, renderProfileEvidence,
+  recordingHash, renderProfileEvidence, shouldRenderProfilePanel,
 } from './profileView.js'
 
 // #1889: the viewer shows Claude Code CLI Local and Claude Desktop Local as
@@ -268,6 +268,32 @@ describe('raw identity evidence links', () => {
     const box = renderProfileEvidence(detail)
     expect(box.querySelector('[data-testid=profile-evidence-link]')).toBeNull()
     expect(box.querySelector('[data-testid=profile-evidence-missing]').textContent).toBe('hooks.jsonl (missing)')
+  })
+})
+
+describe('shouldRenderProfilePanel — non-Claude adapters keep their old page', () => {
+  test('a cell with only the CLI Local profile draws no control at all', () => {
+    // Every adapter but Claude Code, and every Claude Code cell with no
+    // Desktop evidence: a one-option dropdown is not a choice, and the issue
+    // requires non-Claude adapters to be unchanged.
+    expect(shouldRenderProfilePanel({
+      execution_profile: 'cli-local',
+      profiles: [
+        { id: 'cli-local', selectable: true, recordings: 2, has_result: false },
+        { id: 'desktop-local', selectable: false, recordings: 0, has_result: false },
+      ],
+    })).toBe(false)
+    expect(shouldRenderProfilePanel({})).toBe(false)
+    expect(shouldRenderProfilePanel(null)).toBe(false)
+  })
+
+  test('a second selectable profile, or any Desktop result, draws it', () => {
+    expect(shouldRenderProfilePanel(cliDetail)).toBe(true)
+    expect(shouldRenderProfilePanel({
+      execution_profile: 'desktop-local',
+      profiles: [{ id: 'cli-local', selectable: true, recordings: 1, has_result: false }],
+      desktop_result: { outcome: 'not-applicable', reason: 'outside Local Desktop' },
+    })).toBe(true)
   })
 })
 
