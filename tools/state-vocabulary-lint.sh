@@ -81,15 +81,27 @@
 # hook, which `git push --no-verify` disables.
 #
 # awk PORTABILITY. macOS runs BWK awk; the Linux CI runner's `awk` is mawk.
-# Measured on the current tree — BWK awk 20200816, gawk, and mawk 1.3.4 each
-# report the same 55 sites and the same 56 `--list` lines:
+# BWK awk 20200816, gawk and mawk 1.3.4 report the same sites. Run it rather
+# than trusting a count restated here — the previous revision of this comment
+# named one, and it had drifted by six before anyone re-ran the loop:
 #   for A in /usr/bin/awk "$(command -v gawk)" "$(command -v mawk)"; do
 #     D=$(mktemp -d); ln -s "$A" "$D/awk"
-#     PATH="$D:$PATH" tools/state-vocabulary-lint.sh --list | grep -c .
+#     PATH="$D:$PATH" tools/state-vocabulary-lint.sh --list | tail -1
 #   done
 # A divergence could not go quiet anyway: an awk that matched LESS would retire
 # waivers, and a waiver matching no site is itself an error here, so the
 # two-directional waiver check doubles as a cross-awk conformance check.
+#
+# THAT ARGUMENT HAS ONE HOLE, and #1837 was in it. It reasons about which SITES
+# each awk matches, and every site on this tree is NUL-free — so the loop above
+# was green while BWK awk was structurally unable to see past an embedded NUL
+# byte (see state_vocab_sites). Nothing retired a waiver, because the content
+# it could not read had never produced a site to waive. The scan pass now
+# normalises NUL away before awk sees it, and
+# tools/lib/testdata/state-vocabulary-lint/three-of-four-after-nul.md is the
+# fixture that fails if that stops happening: under the pre-#1837 scan it is
+# missed by BWK awk (exit 0) and caught by gawk (exit 1) — the local run being
+# the permissive one, which is the asymmetry this whole gate exists to prevent.
 #
 # Usage:
 #   tools/state-vocabulary-lint.sh                  # scan the repo
@@ -283,18 +295,94 @@ state_vocab_files() {
 # ("awk: newline in string"), and it does so on stderr while still exiting in a
 # way a careless caller reads as a clean scan. Measured here during
 # development — the run printed "0 site(s)" over a tree with dozens of them.
-# `xargs` propagates a non-zero status from the command it ran, so the caller
-# checks it (see state_vocab_lint) rather than trusting empty output.
+# The caller checks this function's status rather than trusting empty output
+# (see state_vocab_lint); awk is the last command in the pipeline below, so its
+# status is the function's.
+#
+# NUL BYTES REACH awk AS A TRUNCATION, NOT AS AN ERROR (#1837). The awk shipped
+# with macOS (BWK, "one true awk") stores a record as a NUL-terminated C
+# string, so everything after an embedded NUL on the SAME physical line is
+# invisible to index(), tolower(), substr() and regex match. Line splitting is
+# unaffected, which is what makes it quiet: the scan reads every line, matches
+# nothing on that one, and exits 0. gawk and mawk — the Linux CI runner's awk —
+# see the whole line. So the local run is the permissive one and the divergence
+# surfaces only in CI, the exact asymmetry the corpus-narrowing step above was
+# already fixed for.
+#
+# The fix is to normalise rather than to detect: every file is streamed through
+# `tr`, which maps NUL to \001 before awk ever sees it. Measured on this tree —
+# one file of 1041 carries a NUL (platforms/web/irrlicht.js, offset 67966), so
+# a detect-then-route design would pay a per-file probe to skip work for one
+# file. Normalising unconditionally is one code path and correct on every awk:
+#
+#   for A in /usr/bin/awk "$(command -v gawk)" "$(command -v mawk)"; do
+#     D=$(mktemp -d); ln -s "$A" "$D/awk"
+#     PATH="$D:$PATH" tools/state-vocabulary-lint.sh --list | tail -1
+#   done
+#
+# The cost of the stream is one `tr` per file, and it roughly DOUBLES this
+# gate's wall time. Both revisions over the same 1041-file corpus, warm:
+#   git show origin/main:tools/state-vocabulary-lint.sh > /tmp/before.sh
+#   chmod +x /tmp/before.sh
+#   for s in /tmp/before.sh tools/state-vocabulary-lint.sh; do
+#     for i in 1 2 3; do /usr/bin/time -p "$s" >/dev/null; done
+#   done
+# Still seconds, inside `tools/preflight.sh`'s `tools` group, where the `go`
+# group is minutes — that is the load-bearing claim, and unlike a pair of
+# timings it cannot drift.
+#
+# \001 rather than deletion, so byte offsets within the line do not shift, and
+# \002 for the filename marker so a converted NUL can never be mistaken for
+# one. FILENAME/FNR cannot survive a pipe, so the marker carries the path and
+# awk counts lines itself.
+#
+# THE MARKER PROTOCOL RESTS ON TWO MECHANISMS, and both are pinned by fixtures
+# in tools/lib/state-vocabulary-lint_test.sh rather than by this comment:
+#
+#   - the trailing `printf '\n'`, without which a file that does not end in a
+#     newline ABSORBS the next file's marker — ten files in this corpus lack
+#     one (golden JSON under core/, MockInstanceFiles under platforms/macos/),
+#     so sites in the following file would be reported under the wrong path
+#     with continuing line numbers, and the joined boundary record can hide a
+#     real site outright;
+#   - the END assertion that awk saw one marker RECORD per file, which is what
+#     detects both that absorption and its opposite, a content line that begins
+#     with the marker bytes.
+#
+# "Record", not "marker": a path containing a literal newline would split one
+# marker across two records and still count once. state_vocab_lint splits its
+# file list on newlines before it gets here, so such a path arrives as two
+# nonexistent ones and refuses via UNREAD — but the guard alone does not close
+# that shape, and saying "one marker per file" would claim it does.
 state_vocab_sites() {
   local vocab="$1"; shift
   [[ $# -gt 0 ]] || return 0
-  printf '%s\0' "$@" | xargs -0 -n 150 awk -v VOCAB="$vocab" -v MIN="$STATE_VOCAB_MIN_NAMED" '
+  local f
+  {
+    for f in "$@"; do
+      printf '\002FILE\002%s\n' "$f"
+      # An unreadable file must not read as a clean one: `tr` writes its own
+      # message to stderr, but the pipeline's status is awk's, so the failure
+      # is carried in-band as a marker awk refuses on.
+      LC_ALL=C tr '\000' '\001' < "$f" || printf '\002UNREAD\002%s\n' "$f"
+      # Terminate a file that does not end in a newline, so the next marker
+      # begins its own record. A file that DOES end in one gains a trailing
+      # empty record instead, which can never be flagged — an empty line names
+      # nothing — so real line numbers are unaffected either way.
+      printf '\n'
+    done
+  } | awk -v VOCAB="$vocab" -v MIN="$STATE_VOCAB_MIN_NAMED" -v NFILES="$#" '
     function cap(s) { return toupper(substr(s, 1, 1)) substr(s, 2) }
 
     BEGIN {
+      # Built with sprintf rather than written as a regex escape: \002 inside
+      # an ERE is implementation-defined, while %c is not, and index()==1 is an
+      # anchored compare that needs no escaping at all.
+      MFILE   = sprintf("%cFILE%c", 2, 2)
+      MUNREAD = sprintf("%cUNREAD%c", 2, 2)
       N = split(VOCAB, V, " ")
       while (N > 0 && V[N] == "") N--          # split() leaves a trailing empty field
-      if (N < 2) { print "state-vocabulary-lint: awk received an unusable vocabulary" > "/dev/stderr"; exit 2 }
+      if (N < 2) { print "state-vocabulary-lint: awk received an unusable vocabulary" > "/dev/stderr"; ABORTED = 1; exit 2 }
       ANY = "("
       for (i = 1; i <= N; i++) ANY = ANY (i > 1 ? "|" : "") V[i]
       ANY = ANY ")"
@@ -330,7 +418,18 @@ state_vocab_sites() {
       return 0
     }
 
+    # Markers first, before any content rule: FILENAME and FNR do not survive a
+    # pipe, so the stream carries the path and this counts the lines itself.
+    index($0, MFILE) == 1   { FN = substr($0, length(MFILE) + 1); LN = 0; SEEN++; next }
+    index($0, MUNREAD) == 1 {
+      printf "state-vocabulary-lint: could not read %s — no verdict was reached for it\n",
+        substr($0, length(MUNREAD) + 1) > "/dev/stderr"
+      UNREAD = 1
+      next
+    }
+
     {
+      LN++
       # Cheap gate first: a line cannot name MIN distinct values without
       # containing MIN of them as substrings, and index() is far cheaper than
       # the ~7 regexes per value below. Measured on this repo: 14.0s -> 1.6s.
@@ -350,7 +449,34 @@ state_vocab_sites() {
 
       c = 0
       for (i = 1; i <= N; i++) if (token($0, V[i]) || run($0, V[i])) c++
-      if (c >= MIN && c < N) printf "%s:%d:%s\n", FILENAME, FNR, $0
+      if (c >= MIN && c < N) printf "%s:%d:%s\n", FN, LN, $0
+    }
+
+    # Absence of a finding and inability to look must not produce the same
+    # output (AGENTS.md, Testing). Every refusal below is exit 2, which
+    # state_vocab_lint reports as "the scan itself failed; no verdict was
+    # reached" rather than as a clean tree.
+    END {
+      # awk runs END even after an `exit` from BEGIN, so without this the
+      # unusable-vocabulary refusal would pick up a second, invented
+      # explanation on its way out — SEEN is 0 there because no record was
+      # ever read, which is not a marker fault.
+      if (ABORTED) exit 2
+      if (UNREAD) exit 2
+      # The two directions have OPPOSITE causes, so they are reported
+      # separately: a stray marker is content that looks like one, a missing
+      # marker is one that was swallowed. Collapsing them sends the next reader
+      # hunting for a \002 that is not there.
+      if (SEEN > NFILES) {
+        printf "state-vocabulary-lint: the scan saw %d file marker(s) for %d file(s) — %d line(s) of content begin with the marker bytes, so sites after them would be attributed to the wrong file\n",
+          SEEN, NFILES, SEEN - NFILES > "/dev/stderr"
+        exit 2
+      }
+      if (SEEN < NFILES) {
+        printf "state-vocabulary-lint: the scan saw %d file marker(s) for %d file(s) — %d marker(s) never arrived, so those files went unscanned and their sites would be attributed to the file before them\n",
+          SEEN, NFILES, NFILES - SEEN > "/dev/stderr"
+        exit 2
+      }
     }
   '
 }

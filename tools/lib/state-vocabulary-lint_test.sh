@@ -189,6 +189,72 @@ assert_gate "a file the scanner cannot read is a REFUSAL, not a clean scan" \
   echo "  PASS: an exclusion that stopped excluding is a REFUSAL, and names its reason"
 ) || rc=1
 
+# --- NUL bytes: two independent passes, two independent failures ------------
+#
+# The corpus lock below decides which FILES are scanned. This one decides
+# whether the scan can SEE them, and #1837 is the gap between the two: the
+# narrowing was fixed while the flagging pass stayed blind.
+#
+# The awk shipped with macOS (BWK, "one true awk") stores a record as a
+# NUL-terminated C string, so everything after an embedded NUL on the SAME
+# physical line is invisible to index(), tolower(), substr() and regex match.
+# Line splitting is unaffected, which is what makes it quiet: the scan reads
+# every line, reports no finding, and exits 0. gawk and mawk — the Linux CI
+# runner's awk — see the whole line, so the local run is the permissive one
+# and the divergence only ever surfaces in CI. That is the exact asymmetry
+# this gate exists to prevent, reproduced inside the gate itself.
+#
+# This is a RED-FIRST defect test, not a lock: run against the pre-#1837
+# state_vocab_sites on macOS it reports exit 0 where 1 is required. The
+# fixture's NUL sits before its enumeration on line 7, so an implementation
+# that truncates there scores zero vocabulary words and never reaches the
+# threshold.
+#
+# `git` classifies the fixture as binary (a NUL inside the first 8000 bytes),
+# so it shows as "Binary files differ" in a diff — read it with `cat -v`. It
+# lives under tools/lib/testdata/, which STATE_VOCAB_EXCLUDE already drops
+# from the real corpus, so it can never trip the live gate.
+assert_gate "a site AFTER an embedded NUL on the same line is still flagged (#1837)" \
+  1 "$SRC" /dev/null "$FIXTURE_DIR/three-of-four-after-nul.md" "three-of-four-after-nul.md:7"
+
+# THE TWO MECHANISMS THE MARKER PROTOCOL RESTS ON. #1837 replaced awk's own
+# FILENAME/FNR — which a pipe cannot carry — with an in-band \002 marker, so
+# every file and line attribution now depends on these instead. Both get a
+# fixture, because the guard is what makes the protocol safe to refactor later
+# and neither mechanism is self-evident from reading the call site.
+#
+# Without the terminator, a file that does not end in a newline ABSORBS the
+# next file's marker: the following file's sites are reported under the wrong
+# path with continuing line numbers, and the joined boundary record can hide a
+# real site outright. Ten files in the live corpus lack a final newline, so the
+# real-repo census below happens to catch it today — but that is coverage by
+# coincidence, and it evaporates the moment those files gain one.
+(
+  out=$("$GATE" --source "$SRC" --waivers /dev/null -- \
+        "$FIXTURE_DIR/no-trailing-newline.md" "$FIXTURE_DIR/three-of-four.md" 2>&1)
+  got=$?
+  if [[ "$got" -ne 1 ]]; then
+    echo "FAIL: a no-EOL file followed by a site-bearing one: expected exit 1, got $got — $out" >&2
+    exit 1
+  fi
+  if [[ "$out" != *"three-of-four.md:7"* ]]; then
+    echo "FAIL: the site must still be reported at three-of-four.md:7 — got: $out" >&2
+    exit 1
+  fi
+  if [[ "$out" == *"no-trailing-newline.md:"* ]]; then
+    echo "FAIL: a site was attributed to the no-EOL file — its last line absorbed the next file's marker (#1837)" >&2
+    exit 1
+  fi
+  echo "  PASS: a file with no final newline does not absorb the next file's marker (#1837)"
+) || rc=1
+
+# The opposite direction: content that LOOKS like a marker. Left uncounted it
+# would re-attribute every site after it to a path that was never scanned —
+# a wrong answer reported as a clean one, which is the failure class this whole
+# gate exists to prevent.
+assert_gate "a content line beginning with the marker bytes is a REFUSAL, not a clean scan (#1837)" \
+  2 "$SRC" /dev/null "$FIXTURE_DIR/marker-collision.md" "begin with the marker bytes"
+
 # A file containing a NUL byte, but still text, must stay in the corpus.
 #
 # platforms/web/irrlicht.js holds a literal NUL at offset 67966 (a `'\0'`
