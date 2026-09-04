@@ -7,16 +7,32 @@ import (
 	"strings"
 )
 
-const supportedDesktopVersion = "1.46388.1"
+// The catalog is pinned to ONE Desktop build (live.go compares for exact
+// equality) because these are positional accessibility paths, and Claude
+// Desktop moves them between releases. Measured on 1.46388.2, the composer row
+// shifted by two against 1.46388.1: `prompt` and `send` left index 7 for 5,
+// `mode` left 8 for 6, and `model` left 12 for 10. Index 8 now holds an "Add"
+// popup and index 12 the usage popup, so a bare version bump without
+// re-deriving the paths would have driven the wrong controls.
+//
+// A version bump therefore needs a fresh `inspect` dump, not just a new
+// constant. testdata/composer-<version>.json holds the measured tree, and
+// TestComposerCatalogResolvesTheMeasuredDesktopTree fails when the paths here
+// no longer resolve against it.
+const supportedDesktopVersion = "1.46388.2"
 const supportedClaudeCodeVersion = "2.1.260"
+
+// composerTreeFixture names the measured dump the paths below were derived
+// from. It must stay in step with supportedDesktopVersion.
+const composerTreeFixture = "testdata/composer-1.46388.2.json"
 
 var composerPaths = map[string][]int{
 	"environment": {0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 1},
 	"project":     {0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 2},
-	"prompt":      {0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 7, 1, 0, 0},
-	"send":        {0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 7, 1, 1, 0},
-	"mode":        {0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 8},
-	"model":       {0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 12},
+	"prompt":      {0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 5, 1, 0, 0},
+	"send":        {0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 5, 1, 1, 0},
+	"mode":        {0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 6},
+	"model":       {0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 10},
 }
 
 var selectedSessionMenuPath = []int{0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 5, 4, 0, 6, 0, 1, 0}
