@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -63,41 +64,8 @@ func TestRegisterUIRoutesServesTheStagedReleaseTree(t *testing.T) {
 		}
 	}
 
-	staged := filepath.Join(t.TempDir(), "web")
-	cmd := exec.Command("bash", "-c",
-		`set -euo pipefail; . "$1"; stage_web "$2" "$3"`, "bash", stageLib, webSrc, staged)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("cannot run: stage_web refused to stage %s: %v\n%s", webSrc, err, out)
-	}
-
-	closureOut, err := exec.Command("bash", "-c",
-		`set -uo pipefail; . "$1"; web_assets_closure "$2"`, "bash", guard, webSrc).Output()
-	if err != nil {
-		t.Fatalf("cannot run: the import-graph walk refused on %s: %v", webSrc, err)
-	}
-	var names []string
-	for _, line := range strings.Split(strings.TrimSpace(string(closureOut)), "\n") {
-		if line = strings.TrimSpace(line); line != "" {
-			names = append(names, line)
-		}
-	}
-	sort.Strings(names)
-	// Inability to look must not read as success: an empty or near-empty
-	// closure would satisfy every 200 assertion below by having nothing to
-	// assert. The dashboard has been over ten files since #820.
-	if len(names) < 10 {
-		t.Fatalf("cannot run: the import-graph walk found only %d asset(s) (%v) — it did not read the dashboard", len(names), names)
-	}
-
-	if entries, derr := os.ReadDir(staged); derr != nil {
-		t.Fatalf("cannot run: staged tree unreadable: %v", derr)
-	} else {
-		for _, e := range entries {
-			if e.IsDir() {
-				t.Errorf("the staged release tree contains a directory (%s) — it must be flat", e.Name())
-			}
-		}
-	}
+	staged := stageReleaseWebTree(t, stageLib, webSrc)
+	reachable := reachableWebAssets(t, guard, webSrc)
 
 	t.Setenv(envUIDir, staged)
 	mux := http.NewServeMux()
@@ -105,18 +73,12 @@ func TestRegisterUIRoutesServesTheStagedReleaseTree(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	for _, name := range names {
-		resp, err := http.Get(srv.URL + "/" + name)
-		if err != nil {
-			t.Errorf("GET /%s: %v", name, err)
-			continue
-		}
-		body, _ := readAllAndClose(resp)
-		if resp.StatusCode != http.StatusOK {
-			t.Errorf("GET /%s = %d, want 200 — this is exactly the 404 every released dashboard served for its ES modules (#1900)", name, resp.StatusCode)
-			continue
-		}
-		if len(body) == 0 {
+	for _, name := range reachable {
+		status, _, size := httpGetAsset(t, srv.URL+"/"+name)
+		switch {
+		case status != http.StatusOK:
+			t.Errorf("GET /%s = %d, want 200 — this is exactly the 404 every released dashboard served for its ES modules (#1900)", name, status)
+		case size == 0:
 			t.Errorf("GET /%s returned 200 with an empty body", name)
 		}
 	}
@@ -128,17 +90,78 @@ func TestRegisterUIRoutesServesTheStagedReleaseTree(t *testing.T) {
 		"irrlicht.css": "text/css",
 		"irrlicht.js":  "application/javascript",
 	} {
-		resp, err := http.Get(srv.URL + "/" + name)
-		if err != nil {
-			t.Errorf("GET /%s: %v", name, err)
-			continue
-		}
-		got := resp.Header.Get("Content-Type")
-		_, _ = readAllAndClose(resp)
-		if !strings.HasPrefix(got, wantPrefix) {
+		if _, got, _ := httpGetAsset(t, srv.URL+"/"+name); !strings.HasPrefix(got, wantPrefix) {
 			t.Errorf("GET /%s Content-Type = %q, want prefix %q", name, got, wantPrefix)
 		}
 	}
+}
+
+// stageReleaseWebTree stages webSrc into a fresh temp dir by executing the
+// release's own tools/lib/stage-web.sh, and returns that directory. It also
+// asserts the staged tree is flat: a directory in there is how node_modules
+// ships by accident.
+func stageReleaseWebTree(t *testing.T, stageLib, webSrc string) string {
+	t.Helper()
+	staged := filepath.Join(t.TempDir(), "web")
+	cmd := exec.Command("bash", "-c",
+		`set -euo pipefail; . "$1"; stage_web "$2" "$3"`, "bash", stageLib, webSrc, staged)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("cannot run: stage_web refused to stage %s: %v\n%s", webSrc, err, out)
+	}
+	entries, err := os.ReadDir(staged)
+	if err != nil {
+		t.Fatalf("cannot run: staged tree unreadable: %v", err)
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			t.Errorf("the staged release tree contains a directory (%s) — it must be flat", e.Name())
+		}
+	}
+	return staged
+}
+
+// reachableWebAssets returns every asset the browser will fetch, by running the
+// packaging guard's own transitive walk of the import graph rooted at
+// webSrc/index.html.
+func reachableWebAssets(t *testing.T, guard, webSrc string) []string {
+	t.Helper()
+	out, err := exec.Command("bash", "-c",
+		`set -uo pipefail; . "$1"; web_assets_closure "$2"`, "bash", guard, webSrc).Output()
+	if err != nil {
+		t.Fatalf("cannot run: the import-graph walk refused on %s: %v", webSrc, err)
+	}
+	var names []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			names = append(names, line)
+		}
+	}
+	sort.Strings(names)
+	// Inability to look must not read as success: an empty or near-empty
+	// closure would satisfy every 200 assertion by having nothing to assert.
+	// The dashboard has been over ten files since #820.
+	if len(names) < 10 {
+		t.Fatalf("cannot run: the import-graph walk found only %d asset(s) (%v) — it did not read the dashboard", len(names), names)
+	}
+	return names
+}
+
+// httpGetAsset fetches url and reports its status, Content-Type and body size.
+// A transport error is reported and returns a zero status, which every caller
+// treats as a failure.
+func httpGetAsset(t *testing.T, url string) (status int, contentType string, size int) {
+	t.Helper()
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Errorf("GET %s: %v", url, err)
+		return 0, "", 0
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Errorf("GET %s: reading body: %v", url, err)
+	}
+	return resp.StatusCode, resp.Header.Get("Content-Type"), len(body)
 }
 
 // repoRootFromWorkingDir walks up from the test's working directory to the
@@ -160,21 +183,5 @@ func repoRootFromWorkingDir(t *testing.T) string {
 			t.Fatalf("cannot run: no repo root with tools/lib/stage-web.sh above the working directory")
 		}
 		dir = parent
-	}
-}
-
-func readAllAndClose(resp *http.Response) ([]byte, error) {
-	defer func() { _ = resp.Body.Close() }()
-	buf := make([]byte, 0, 512)
-	tmp := make([]byte, 512)
-	for {
-		n, err := resp.Body.Read(tmp)
-		buf = append(buf, tmp[:n]...)
-		if err != nil {
-			return buf, nil
-		}
-		if len(buf) > 4096 {
-			return buf, nil
-		}
 	}
 }
