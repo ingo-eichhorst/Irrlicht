@@ -19,7 +19,7 @@ import (
 func runVerify(args []string, stdout, stderr io.Writer) int {
 	request, err := parseVerifyRequest(args)
 	if err != nil {
-		fmt.Fprintf(stderr, "of verify: %v\n", err)
+		writeCommandError(stderr, "of verify", err)
 		return exitUsage
 	}
 	cellDir, err := verifyCellDir(request)
@@ -47,7 +47,7 @@ func parseVerifyRequest(args []string) (verifyRequest, error) {
 		profile  = fs.String("profile", string(matrix.ProfileCLILocal), "execution profile (cli-local or desktop-local)")
 	)
 	if err := fs.Parse(args); err != nil {
-		return verifyRequest{}, err
+		return verifyRequest{}, flagParseError{cause: err}
 	}
 	if *agent == "" {
 		return verifyRequest{}, fmt.Errorf("--agent and --scenario are required")

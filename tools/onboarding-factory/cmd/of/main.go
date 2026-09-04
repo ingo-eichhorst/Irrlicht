@@ -21,6 +21,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -180,7 +181,7 @@ func cellViewOf(cs matrix.CellState) cellView {
 func runStatus(args []string, stdout, stderr io.Writer) int {
 	request, err := parseStatusRequest(args)
 	if err != nil {
-		fmt.Fprintf(stderr, "of status: %v\n", err)
+		writeCommandError(stderr, "of status", err)
 		return exitUsage
 	}
 	if request.Runs {
@@ -207,7 +208,7 @@ func parseStatusRequest(args []string) (statusRequest, error) {
 		repoRoot = fs.String("repo-root", ".", "repository root")
 	)
 	if err := fs.Parse(args); err != nil {
-		return statusRequest{}, err
+		return statusRequest{}, flagParseError{cause: err}
 	}
 	*repoRoot = absRoot(*repoRoot)
 
@@ -219,6 +220,18 @@ func parseStatusRequest(args []string) (statusRequest, error) {
 		Agent: *agent, Scenario: *scenario, RepoRoot: *repoRoot,
 		Profile: executionProfile, Runs: *runs, Summary: *summary, JSON: *asJSON,
 	}, nil
+}
+
+type flagParseError struct{ cause error }
+
+func (e flagParseError) Error() string { return e.cause.Error() }
+
+func writeCommandError(stderr io.Writer, prefix string, err error) {
+	var alreadyWritten flagParseError
+	if errors.As(err, &alreadyWritten) {
+		return
+	}
+	fmt.Fprintf(stderr, "%s: %v\n", prefix, err)
 }
 
 func runMatrixStatus(request statusRequest, stdout, stderr io.Writer) int {

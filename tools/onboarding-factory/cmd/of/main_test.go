@@ -196,6 +196,26 @@ func TestStatusRejectsEmptyExecutionProfile(t *testing.T) {
 	requireUsageError(t, code, errs, `unknown execution profile ""`)
 }
 
+func TestStatusDoesNotRepeatMalformedFlagError(t *testing.T) {
+	code, _, repeated := runOf("status", "--definitely-invalid")
+	if code != exitUsage {
+		t.Fatalf("exit=%d; want %d", code, exitUsage)
+	}
+	if repeated != "" {
+		t.Fatalf("FlagSet already printed the error; command repeated %q", repeated)
+	}
+}
+
+func TestVerifyDoesNotRepeatMalformedFlagError(t *testing.T) {
+	code, _, repeated := runOf("verify", "--definitely-invalid")
+	if code != exitUsage {
+		t.Fatalf("exit=%d; want %d", code, exitUsage)
+	}
+	if repeated != "" {
+		t.Fatalf("FlagSet already printed the error; command repeated %q", repeated)
+	}
+}
+
 func TestStatusScenarioFilter(t *testing.T) {
 	root := validRepo(t)
 	code, out, _ := runOf("status", "--scenario", "basic-turn", "--json", "--repo-root", root)
