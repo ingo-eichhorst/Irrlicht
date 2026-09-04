@@ -384,9 +384,9 @@ func waitForComposerControls(
 }
 
 func (runtime *LiveRuntime) SetPrompt(ctx context.Context, prompt string) error {
-	selector, ok := runtime.controls["prompt"]
-	if !ok {
-		return errors.New("prompt selector was not verified")
+	selector, err := runtime.control(controlPrompt)
+	if err != nil {
+		return err
 	}
 	return runtime.helper.setValue(ctx, selector, prompt)
 }
@@ -401,16 +401,10 @@ func (runtime *LiveRuntime) Submit(ctx context.Context) error {
 	// composer out between the two, and re-using a selector resolved before
 	// that is exactly what fails with a stale control.
 	return retryTransientAX(ctx, "submit the Desktop prompt", func() error {
-		elements, err := runtime.helper.inspect(ctx)
-		if err != nil {
-			return err
-		}
-		controls, err := composerControls(elements, runtime.workspace, []string{"send"})
+		send, stop, err := runtime.sendAndStop(ctx)
 		if err != nil {
 			return fmt.Errorf("resolve the Desktop send button after the prompt was typed: %w", err)
 		}
-		send := controls["send"]
-		stop := helperSelector{Role: "AXButton", Description: "Stop", Hierarchy: send.Hierarchy}
 		return runtime.helper.click(ctx, send, helperPostcondition{
 			Selector: stop, Condition: "exists", TimeoutMilliseconds: 10_000,
 		})

@@ -100,14 +100,35 @@ var composerMatchers = map[string]composerMatcher{
 			return element.Role == "AXPopUpButton" && strings.HasPrefix(element.Description, "Model: ")
 		},
 	},
+	// `mode`'s label IS its value ("Auto" and the other mode names), so no fixed
+	// label identifies it, and the obvious widening — "any titled AXPopUpButton"
+	// — also matches `environment` and `project`. Its identity instead comes
+	// from a measurement of the composer row's OWN shape, not from any title:
+	// on the committed 1.46388.4 dump every AXPopUpButton the driver names
+	// carries a value in its DESCRIPTION ("Model: Opus 5", "Effort: Extra",
+	// "Usage: …") except three — environment, project, and mode — which carry
+	// theirs in the TITLE instead, with an empty description. Environment and
+	// project are already excluded by their own verified identity (titled
+	// "Local", titled the project), so "an AXPopUpButton with no description
+	// that is neither of those two" resolves to mode alone against the measured
+	// tree, and does so without ever reading — let alone guessing — a mode
+	// name. The one way this can misfire is a workspace folder actually named
+	// after the mode currently selected (e.g. a folder named "Auto"); that
+	// makes `project` itself ambiguous first, so composerControls refuses
+	// loudly rather than silently picking either the wrong element or this one.
+	"mode": {
+		role: "AXPopUpButton",
+		wants: func(project string) string {
+			return fmt.Sprintf("with no description, titled neither \"Local\" nor %q", project)
+		},
+		matches: func(element helperElement, project string) bool {
+			if element.Role != "AXPopUpButton" || element.Description != "" {
+				return false
+			}
+			return element.Title != "Local" && element.Title != project
+		},
+	},
 }
-
-// `mode` is deliberately absent. Its label IS its value ("Auto" and the other
-// mode names), so no fixed label identifies it, and the obvious widening —
-// "any titled AXPopUpButton" — also matches `environment` and `project`. A
-// matcher that can select the wrong control does not belong here. Nothing in a
-// basic turn drives mode; the recipe work (#1888) needs it and must derive a
-// real identity for it, from a measurement of the mode menu's own contents.
 
 // basicTurnControls are the controls that must exist BEFORE the driver types.
 //
@@ -145,34 +166,51 @@ func composerControls(
 	expectedProject := filepath.Base(filepath.Clean(workspace))
 	controls := make(map[string]helperSelector, len(names))
 	for _, name := range names {
-		matcher, known := composerMatchers[name]
-		if !known {
-			return nil, fmt.Errorf("Desktop control catalog has no %q control", name)
+		element, err := matchControl(elements, expectedProject, name)
+		if err != nil {
+			return nil, err
 		}
-		var found []helperElement
-		for _, element := range elements {
-			if matcher.matches(element, expectedProject) {
-				found = append(found, element)
-			}
-		}
-		if len(found) != 1 {
-			return nil, fmt.Errorf(
-				"Desktop %s control requires one %s %s; found %d. Visible %s controls: %s",
-				name,
-				matcher.role,
-				matcher.wants(expectedProject),
-				len(found),
-				matcher.role,
-				describeCandidates(elements, matcher.role),
-			)
-		}
-		element := found[0]
 		if len(element.Hierarchy) == 0 {
 			return nil, fmt.Errorf("Desktop %s control has no role hierarchy", name)
 		}
 		controls[name] = selectorFor(element)
 	}
 	return controls, nil
+}
+
+// matchControl resolves one control's live element by identity, against an
+// already-computed expected project title.
+func matchControl(elements []helperElement, expectedProject, name string) (helperElement, error) {
+	matcher, known := composerMatchers[name]
+	if !known {
+		return helperElement{}, fmt.Errorf("Desktop control catalog has no %q control", name)
+	}
+	var found []helperElement
+	for _, element := range elements {
+		if matcher.matches(element, expectedProject) {
+			found = append(found, element)
+		}
+	}
+	if len(found) != 1 {
+		return helperElement{}, fmt.Errorf(
+			"Desktop %s control requires one %s %s; found %d. Visible %s controls: %s",
+			name,
+			matcher.role,
+			matcher.wants(expectedProject),
+			len(found),
+			matcher.role,
+			describeCandidates(elements, matcher.role),
+		)
+	}
+	return found[0], nil
+}
+
+// matchedElement resolves one control's live element by identity, for a
+// caller that needs the element itself — its Title and Description — rather
+// than a stable selector. SelectMode/SelectModel use it to confirm what a
+// popup reports after selecting an entry.
+func matchedElement(elements []helperElement, workspace, name string) (helperElement, error) {
+	return matchControl(elements, filepath.Base(filepath.Clean(workspace)), name)
 }
 
 // selectedSessionMenu returns the "More options" menu of the conversation
