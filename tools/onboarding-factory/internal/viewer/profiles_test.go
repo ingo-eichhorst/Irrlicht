@@ -252,20 +252,24 @@ func TestDesktopResultLinksItsRecordingAndRawEvidence(t *testing.T) {
 	if *result.Versions != want {
 		t.Fatalf("versions = %+v, want %+v", *result.Versions, want)
 	}
+	assertEveryEvidenceFileIsServed(t, fixture, result)
+}
+
+// assertEveryEvidenceFileIsServed checks that all six raw identity files are
+// reported present AND actually come back with a body from the evidence route.
+func assertEveryEvidenceFileIsServed(t *testing.T, fixture desktopCellFixture, result *DesktopResult) {
+	t.Helper()
 	if len(result.Evidence) != 6 {
 		t.Fatalf("got %d evidence links, want the six canonical files: %+v", len(result.Evidence), result.Evidence)
 	}
 	for _, link := range result.Evidence {
-		if !link.Present {
-			t.Fatalf("evidence %q is not present in the linked recording", link.Field)
+		if !link.Present || !link.Canonical {
+			t.Fatalf("evidence %q: present=%t canonical=%t", link.Field, link.Present, link.Canonical)
 		}
 		url := desktopCellPath + "/recordings/" + desktopRecordingName + "/evidence/" + link.Field + "?profile=desktop-local"
 		recorder := get(t, fixture.root, url)
-		if recorder.Code != http.StatusOK {
-			t.Fatalf("GET %s: status=%d body=%s", url, recorder.Code, recorder.Body)
-		}
-		if recorder.Body.Len() == 0 {
-			t.Fatalf("GET %s served an empty body", url)
+		if recorder.Code != http.StatusOK || recorder.Body.Len() == 0 {
+			t.Fatalf("GET %s: status=%d len=%d body=%s", url, recorder.Code, recorder.Body.Len(), recorder.Body)
 		}
 	}
 }
@@ -541,15 +545,7 @@ func TestUnreadableManifestIsReportedNotCountedAsNoRecordings(t *testing.T) {
 			"an unreadable history is indistinguishable from an empty one",
 			detail.Degraded, detail.LatestRecording)
 	}
-	var reported bool
-	for _, option := range detail.Profiles {
-		if option.Error != "" {
-			reported = true
-		}
-	}
-	if !reported {
-		t.Fatalf("no profile option reports the unreadable history: %+v", detail.Profiles)
-	}
+	assertSomeProfileReportsTheError(t, detail.Profiles)
 
 	measurement := measureScenario(fixture.root, "claudecode", "desktop-cell", matrix.ProfileCLILocal)
 	if measurement["status"] != "manifest_error" {
@@ -577,6 +573,18 @@ func TestUnknownRecordingSubPathIs404(t *testing.T) {
 			t.Fatalf("GET %s: status=%d, want 404 (body=%s)", url, recorder.Code, recorder.Body)
 		}
 	}
+}
+
+// assertSomeProfileReportsTheError fails unless at least one profile option
+// carries the read failure, rather than reporting a bare "0 recordings".
+func assertSomeProfileReportsTheError(t *testing.T, options []ProfileOption) {
+	t.Helper()
+	for _, option := range options {
+		if option.Error != "" {
+			return
+		}
+	}
+	t.Fatalf("no profile option reports the unreadable history: %+v", options)
 }
 
 // --- mutation helpers -----------------------------------------------------

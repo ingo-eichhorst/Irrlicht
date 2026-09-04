@@ -10,6 +10,9 @@ import (
 	"irrlicht/tools/onboarding-factory/internal/validate"
 )
 
+// manifestFileName is the per-recording provenance file every archive carries.
+const manifestFileName = "manifest.json"
+
 // archiveRequest names one archived recording within one execution profile.
 type archiveRequest struct {
 	scenarioDir string
@@ -58,7 +61,7 @@ func (s *Server) handleRecordingsList(w http.ResponseWriter, scenarioDir string,
 // rendering profile-less.
 func (s *Server) archiveRow(scenarioDir string, rec matrix.Recording) RecordingArchive {
 	archive := RecordingArchive{Name: rec.Name}
-	if b, ok := s.store().readFile(filepath.Join(scenarioDir, "recordings", rec.Name, "manifest.json")); ok {
+	if b, ok := s.store().readFile(filepath.Join(scenarioDir, "recordings", rec.Name, manifestFileName)); ok {
 		if err := json.Unmarshal(b, &archive); err != nil {
 			logViewerError("archiveRow: malformed manifest.json in archive %q: %v", rec.Name, err)
 		}
@@ -88,7 +91,7 @@ func (s *Server) handleArchivedRecording(w http.ResponseWriter, req archiveReque
 	}
 	store := s.store()
 	d := ArchivedRecordingDetail{Name: string(name)}
-	if b, ok := store.readFile(store.archiveFilePath(req.scenarioDir, name, "manifest.json")); ok {
+	if b, ok := store.readFile(store.archiveFilePath(req.scenarioDir, name, manifestFileName)); ok {
 		if err := json.Unmarshal(b, &d.Manifest); err != nil {
 			logViewerError("handleArchivedRecording: malformed manifest.json in archive %q: %v", name, err)
 		}
@@ -124,7 +127,7 @@ func (s *Server) resolveProfileArchive(w http.ResponseWriter, req archiveRequest
 		http.Error(w, "archive not found", http.StatusNotFound)
 		return "", false
 	}
-	manifest, err := matrix.LoadRecordingManifestOrLegacy(store.archiveFilePath(req.scenarioDir, name, "manifest.json"))
+	manifest, err := matrix.LoadRecordingManifestOrLegacy(store.archiveFilePath(req.scenarioDir, name, manifestFileName))
 	if err != nil {
 		http.Error(w, "cannot read recording manifest: "+err.Error(), http.StatusInternalServerError)
 		return "", false

@@ -169,7 +169,7 @@ type desktopRecordingRef struct {
 // Desktop result leaves Recording empty and Error set.
 func bindDesktopRecording(view *DesktopResult, ref desktopRecordingRef) {
 	recDir := filepath.Join(ref.scenarioDir, "recordings", string(ref.name))
-	manifest, err := matrix.LoadRecordingManifest(filepath.Join(recDir, "manifest.json"))
+	manifest, err := matrix.LoadRecordingManifest(filepath.Join(recDir, manifestFileName))
 	if err != nil {
 		view.Error = fmt.Sprintf("cannot read the manifest of recording %q: %v", ref.name, err)
 		return
@@ -211,7 +211,9 @@ func desktopEvidenceLinks(recDir string, evidence *desktopresults.Evidence) []De
 	// only ever SERVES these six names, so no result-supplied string reaches
 	// the filesystem as a path component of the raw-evidence route.
 	for _, canonical := range desktopresults.RequiredRecordingFiles() {
-		out = append(out, evidenceLink(recDir, canonical, named[canonical]))
+		out = append(out, evidenceLink(evidenceReference{
+			recDir: recDir, canonical: canonical, referenced: named[canonical],
+		}))
 	}
 	return out
 }
@@ -221,15 +223,25 @@ func desktopEvidenceLinks(recDir string, evidence *desktopresults.Evidence) []De
 // whether that reference is the one the contract requires. Keeping them apart
 // matters: a present file referenced under a non-canonical name is a contract
 // violation, not a missing file, and must not read as one.
-func evidenceLink(recDir, canonical, referenced string) DesktopEvidenceLink {
-	link := DesktopEvidenceLink{Field: canonical, File: referenced, Canonical: referenced == canonical}
-	safe, err := NewSafeArchiveName(referenced)
+func evidenceLink(ref evidenceReference) DesktopEvidenceLink {
+	link := DesktopEvidenceLink{
+		Field: ref.canonical, File: ref.referenced, Canonical: ref.referenced == ref.canonical,
+	}
+	safe, err := NewSafeArchiveName(ref.referenced)
 	if err != nil {
 		return link // an unusable reference names nothing on disk
 	}
-	_, statErr := os.Stat(filepath.Join(recDir, string(safe)))
+	_, statErr := os.Stat(filepath.Join(ref.recDir, string(safe)))
 	link.Present = statErr == nil
 	return link
+}
+
+// evidenceReference is one evidence slot: where to look, the name the contract
+// requires, and the name the result actually used.
+type evidenceReference struct {
+	recDir     string
+	canonical  string
+	referenced string
 }
 
 // canonicalEvidenceFile is the closed allowlist behind the raw-evidence route.

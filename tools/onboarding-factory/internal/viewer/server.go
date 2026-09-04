@@ -46,7 +46,8 @@
 //   - profiles.go    — execution-profile selection + the Desktop result view
 //   - scenarios.go   — /api/scenarios list + detail and their helpers
 //   - recordings.go  — archived-recording browsing + raw Desktop evidence
-//   - catalog.go     — /api/catalog coverage matrix + annotation passes
+//   - catalog.go     — /api/catalog coverage matrix skeleton
+//   - catalog_annotate.go — its measurement / pipeline / display-state passes
 //   - recipe.go      — /api/recipes recipe catalog + coverage_id dedup
 //   - spec.go        — /api/scenario-spec markdown parsing
 package viewer

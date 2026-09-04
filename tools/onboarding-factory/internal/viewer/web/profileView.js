@@ -367,14 +367,15 @@ function appendReasonRows(box, result) {
 // exist for a result whose recording survived the server's profile check, so a
 // refused result renders its error and no links at all.
 function appendEvidenceRows(box, detail, result) {
-  if (!result.recording || !(result.evidence || []).length) return;
+  const links = result.recording ? (result.evidence || []) : [];
+  if (links.length === 0) return;
   const list = document.createElement("div");
   list.dataset.testid = "profile-raw-evidence";
   list.style.cssText = "margin-top: 8px;";
   const label = document.createElement("b");
   label.textContent = "Raw identity evidence: ";
   list.append(label);
-  for (const link of result.evidence) {
+  for (const link of links) {
     list.append(evidenceNode(detail, result.recording, link));
   }
   box.append(list);

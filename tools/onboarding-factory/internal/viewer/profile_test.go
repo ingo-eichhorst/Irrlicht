@@ -95,22 +95,30 @@ func TestViewerValidatesTheSameLatestRecordingItDisplays(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			detail := viewerScenarioDetail(t, root, tc.query)
-			if detail.ExecutionProfile != tc.profile {
-				t.Fatalf("execution_profile=%q, want %q", detail.ExecutionProfile, tc.profile)
-			}
-			if detail.LatestRecording != tc.wantRec {
-				t.Fatalf("latest recording=%q, want %q", detail.LatestRecording, tc.wantRec)
-			}
-			if detail.Expected == nil {
-				t.Fatal("latest recording has no expected-state report")
-			}
-			if detail.Expected.Pass != tc.wantPass {
-				t.Fatalf("expected.pass=%t, want %t: %+v", detail.Expected.Pass, tc.wantPass, detail.Expected)
-			}
+			assertDisplayedRecording(t, detail, tc.profile, tc.wantRec, tc.wantPass)
 			measurement := measureScenario(root, "claudecode", "mixed", profileOrFail(t, tc.profile))
 			if measurement["status"] != tc.wantStat {
 				t.Fatalf("catalog measurement graded a different recording: %+v", measurement)
 			}
 		})
+	}
+}
+
+// assertDisplayedRecording pins that the detail page names the expected
+// profile and recording, and that its expected-state report describes THAT
+// recording rather than the other profile's.
+func assertDisplayedRecording(t *testing.T, detail ScenarioDetail, profile, wantRec string, wantPass bool) {
+	t.Helper()
+	if detail.ExecutionProfile != profile {
+		t.Fatalf("execution_profile=%q, want %q", detail.ExecutionProfile, profile)
+	}
+	if detail.LatestRecording != wantRec {
+		t.Fatalf("latest recording=%q, want %q", detail.LatestRecording, wantRec)
+	}
+	if detail.Expected == nil {
+		t.Fatal("latest recording has no expected-state report")
+	}
+	if detail.Expected.Pass != wantPass {
+		t.Fatalf("expected.pass=%t, want %t: %+v", detail.Expected.Pass, wantPass, detail.Expected)
 	}
 }

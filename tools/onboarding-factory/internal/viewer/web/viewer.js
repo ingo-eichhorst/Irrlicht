@@ -1548,7 +1548,20 @@ function renderScenariosMatrix(detail) {
 // The recordings fetch reports its own failure rather than collapsing to an
 // empty list: the server 500s a cell whose manifests it cannot read, and
 // "we could not look" must not render as "nothing was recorded".
-async function fetchScenarioPayloads(recordingPath, profile) {
+async function fetchScenarioPayloads(s, profile) {
+  // s.agent/s.subtree/s.id come from the URL hash (sidebarActivePath /
+  // route()). Validate each segment against the same slug/subtree contract the
+  // backend's /api/scenarios handler enforces, then encode — belt-and-
+  // suspenders so a hash crafted with `/`, `?`, or `#` can't retarget the
+  // request (SonarQube jssecurity:S7044 / S8476). The check lives HERE, beside
+  // the fetches it guards, rather than in the caller: a barrier one function
+  // away is a barrier a reader (and a taint analyser) has to go looking for.
+  if (!RECORDING_SLUG_RE.test(s.agent) || !RECORDING_SLUG_RE.test(s.id) ||
+      (s.subtree !== "scenarios" && s.subtree !== "regressions")) {
+    return null;
+  }
+  const recordingPath =
+    `${encodeURIComponent(s.agent)}/${encodeURIComponent(s.subtree)}/${encodeURIComponent(s.id)}`;
   const q = profile === DEFAULT_PROFILE ? "" : `?profile=${encodeURIComponent(profile)}`;
   const [data, archivesResp, catalog] = await Promise.all([
     fetch(`/api/scenarios/${recordingPath}${q}`).then(r => r.json()),
@@ -1570,6 +1583,16 @@ async function fetchScenarioPayloads(recordingPath, profile) {
     archivesError: ok ? (data?.recordings_error || "") : (archivesResp?.error || "unknown error"),
     catalog,
   };
+}
+
+// catalogEntryFor finds one cell's coverage entry and its human-readable
+// feature label in the /api/catalog payload. Both are empty when the catalog
+// is absent or carries no row for this coverage_id.
+function catalogEntryFor(catalog, coverageId, agent) {
+  const rows = Array.isArray(catalog?.scenarios) ? catalog.scenarios : [];
+  const row = rows.find(sc => sc.id === coverageId);
+  if (!row) return {coverageEntry: null, coverageFeature: ""};
+  return {coverageEntry: row.coverage?.[agent] || null, coverageFeature: row.feature || ""};
 }
 
 async function loadScenario(s, initialArchive, focus, profile) {
@@ -1600,27 +1623,17 @@ async function loadScenario(s, initialArchive, focus, profile) {
   const detail = document.getElementById("detail");
   detail.innerHTML = `<p>Loading…</p>`;
 
-  // s.agent/s.subtree/s.id come from the URL hash (sidebarActivePath /
-  // route()). Validate each segment against the same slug/subtree
-  // contract the backend's /api/scenarios handler enforces, then encode —
-  // belt-and-suspenders so a hash crafted with `/`, `?`, or `#` can't
-  // retarget the request (SonarQube jssecurity:S7044 / S8476).
-  if (!RECORDING_SLUG_RE.test(s.agent) || !RECORDING_SLUG_RE.test(s.id) ||
-      (s.subtree !== "scenarios" && s.subtree !== "regressions")) {
+  // Recipe lookup uses recipesByCoverageId (populated once at init from
+  // /api/recipes — see comment above), so no per-recording recipes fetch
+  // is needed here. fetchScenarioPayloads validates the path segments and
+  // returns null for a hash that isn't a legal cell.
+  const selectedProfile = profile || DEFAULT_PROFILE;
+  const payloads = await fetchScenarioPayloads(s, selectedProfile);
+  if (!payloads) {
     detail.innerHTML = `<p>Invalid recording path.</p>`;
     return;
   }
-  const recordingPath = `${encodeURIComponent(s.agent)}/${encodeURIComponent(s.subtree)}/${encodeURIComponent(s.id)}`;
-  // Every fetch below carries the SAME execution profile, so the status, the
-  // recording history and the matrix measurement on this page all describe one
-  // product surface. The CLI Local default sends no query at all, which is why
-  // pre-#1889 links keep hitting the exact request they always did.
-  const selectedProfile = profile || DEFAULT_PROFILE;
-  // Recipe lookup uses recipesByCoverageId (populated once at init from
-  // /api/recipes — see comment above), so no per-recording recipes fetch
-  // is needed here.
-  const {data, archives, archivesError, catalog} =
-    await fetchScenarioPayloads(recordingPath, selectedProfile);
+  const {data, archives, archivesError, catalog} = payloads;
   detail.innerHTML = "";
 
   // No daemon-recorded events.jsonl sidecar: the timeline shown here is
@@ -1643,27 +1656,13 @@ async function loadScenario(s, initialArchive, focus, profile) {
   // Look up the per-cell recipe entry, joining on the resolved coverage_id
   // (coverageId, computed above via folderToCoverageId, already handles the
   // variant-folder cells) and this recording's adapter.
-  let recipeEntry = null;
-  const recipeRow = recipesByCoverageId.get(coverageId);
-  if (recipeRow) {
-    recipeEntry = recipeRow.by_adapter?.[s.agent];
-  }
+  const recipeEntry = recipesByCoverageId.get(coverageId)?.by_adapter?.[s.agent] || null;
   // Look up the per-cell coverage entry for the Assessment-fallback
   // panel. Used when no assessment.json exists on disk — the panel
   // still renders so the ⚙ / ◉ pipeline-strip anchors have a target.
   // coverageId was resolved synchronously above (before the await)
   // so the heading could render immediately.
-  let coverageEntry = null;
-  let coverageFeature = "";
-  if (catalog && Array.isArray(catalog.scenarios)) {
-    for (const sc of catalog.scenarios) {
-      if (sc.id === coverageId) {
-        coverageEntry = sc.coverage?.[s.agent];
-        coverageFeature = sc.feature || "";
-        break;
-      }
-    }
-  }
+  const {coverageEntry, coverageFeature} = catalogEntryFor(catalog, coverageId, s.agent);
   // Now that the catalog has resolved, enrich the breadcrumb with the
   // human-friendly feature label (mirrors the overview matrix row,
   // which stacks the coverage_id over the feature name).
@@ -1689,8 +1688,10 @@ async function loadScenario(s, initialArchive, focus, profile) {
     detail.appendChild(renderAssessmentFallback(coverageEntry));
   }
   detail.appendChild(renderRecipePanel(recipeEntry));
-  detail.appendChild(renderRecordingHistory(
-    s, data, archives, initialArchive || "", recipeEntry, coverageEntry, selectedProfile, archivesError));
+  detail.appendChild(renderRecordingHistory({
+    s, latestData: data, archives, initialArchive: initialArchive || "",
+    recipeEntry, coverageEntry, profile: selectedProfile, archivesError,
+  }));
   scrollFocusInto(focus || "");
 }
 
@@ -2240,7 +2241,34 @@ function fmtLabel(startedAt, daemonVer, passRate) {
   return `${ts}${ver}${pass}`;
 }
 
-function renderRecordingHistory(s, latestData, archives, initialArchive, recipeEntry, coverageEntry, profile, archivesError) {
+// recordingHistoryIntro is the explanatory line above the recording selector.
+function recordingHistoryIntro(recCount) {
+  const intro = document.createElement("div");
+  intro.style.cssText = "margin-bottom: 8px; font-size: 12px; color: #555;";
+  intro.innerHTML = `Select which recording to inspect — all live under <code>recordings/</code>, newest first. <b>expected.jsonl</b> is the constant benchmark across all of them; picking an older recording re-evaluates the current spec against its events (drift signal).` +
+    (recCount > 0
+      ? ` <b>${recCount}</b> recording${pluralSuffix(recCount)} available.`
+      : ` No recordings yet.`);
+  return intro;
+}
+
+// recordingHistoryErrorBanner says the list below is empty because the history
+// could not be READ, not because nothing was recorded. Without it those two
+// render identically — the server 500s a cell whose manifests it cannot parse.
+function recordingHistoryErrorBanner(message) {
+  const banner = document.createElement("div");
+  banner.dataset.testid = "recordings-error";
+  banner.style.cssText =
+    "margin-bottom: 8px; padding: 6px 9px; font-size: 11px; border-radius: 3px;" +
+    "background: #f8c8c8; color: #8a0000;";
+  const b = document.createElement("b");
+  b.textContent = "Recording history unavailable: ";
+  banner.append(b, sanitizeForLog(message));
+  return banner;
+}
+
+function renderRecordingHistory(opts) {
+  const {s, latestData, archives, initialArchive, recipeEntry, coverageEntry, profile, archivesError} = opts;
   const wrap = document.createElement("div");
   // `archives` was already fetched scoped to this profile, so the dropdown
   // lists one profile's history; the per-archive fetch and the URL rewrite
@@ -2252,26 +2280,9 @@ function renderRecordingHistory(s, latestData, archives, initialArchive, recipeE
   // 1. The selector panel (top, controls everything below).
   //    anchor "recordings" — pipeline-strip segment N jumps here.
   const selPanel = panel("Recording", "recordings");
-  const intro = document.createElement("div");
-  intro.style.cssText = "margin-bottom: 8px; font-size: 12px; color: #555;";
-  const recCount = (archives || []).length;
-  intro.innerHTML = `Select which recording to inspect — all live under <code>recordings/</code>, newest first. <b>expected.jsonl</b> is the constant benchmark across all of them; picking an older recording re-evaluates the current spec against its events (drift signal).` +
-    (recCount > 0
-      ? ` <b>${recCount}</b> recording${pluralSuffix(recCount)} available.`
-      : ` No recordings yet.`);
-  selPanel.appendChild(intro);
+  selPanel.appendChild(recordingHistoryIntro((archives || []).length));
   if (archivesError) {
-    // The list below is EMPTY because the history could not be read, not
-    // because nothing was recorded. Say which.
-    const banner = document.createElement("div");
-    banner.dataset.testid = "recordings-error";
-    banner.style.cssText =
-      "margin-bottom: 8px; padding: 6px 9px; font-size: 11px; border-radius: 3px;" +
-      "background: #f8c8c8; color: #8a0000;";
-    const b = document.createElement("b");
-    b.textContent = "Recording history unavailable: ";
-    banner.append(b, sanitizeForLog(archivesError));
-    selPanel.appendChild(banner);
+    selPanel.appendChild(recordingHistoryErrorBanner(archivesError));
   }
 
   const select = document.createElement("select");
