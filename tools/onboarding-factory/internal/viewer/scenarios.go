@@ -29,24 +29,23 @@ func (s *Server) handleScenariosList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, s.store().listScenarios())
 }
 
-// scenarioTarget is one validated cell request: the three URL segments, the
-// remaining path parts, and the execution profile the whole request is scoped
-// to.
-type scenarioTarget struct {
-	agent, subtree, id string
-	parts              []string
-	profile            matrix.ExecutionProfile
-}
-
-// parseScenarioTarget validates the URL segments and ?profile=, writing the
-// error response itself and reporting ok=false. Keeping every rejection in one
-// place is what lets the handler below read as the happy path.
-func parseScenarioTarget(w http.ResponseWriter, r *http.Request) (scenarioTarget, bool) {
+// handleScenarioDetail parses and validates the URL INLINE, deliberately.
+//
+// Extracting this preamble into its own function (to satisfy an advisory
+// "Complex Method" finding) put the filepath.Base sanitizer one call frame
+// away from the disk reads it guards, and CodeQL immediately raised a new high
+// go/path-injection alert against shard.go's os.ReadFile — reached through
+// loadAssessment, whose repoRoot is recovered from scenarioDir by repeated
+// filepath.Dir and so carries the taint the extraction stopped clearing. The
+// co-location is load-bearing; the advisory complexity finding is the accepted
+// cost of keeping it.
+func (s *Server) handleScenarioDetail(w http.ResponseWriter, r *http.Request) {
 	// URL form: /api/scenarios/{agent}/{subtree}/{id}[/recordings[/{name}]]
-	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/scenarios/"), "/")
+	rest := strings.TrimPrefix(r.URL.Path, "/api/scenarios/")
+	parts := strings.Split(rest, "/")
 	if len(parts) < 3 {
 		http.Error(w, "usage: /api/scenarios/{agent}/{subtree}/{id}", http.StatusBadRequest)
-		return scenarioTarget{}, false
+		return
 	}
 	// filepath.Base reduces agent/id to a single path segment before the
 	// ^[a-z0-9][a-z0-9_-]*$ slug check below — a no-op for any value that
@@ -55,16 +54,14 @@ func parseScenarioTarget(w http.ResponseWriter, r *http.Request) (scenarioTarget
 	// recognizes for the file reads several hops downstream (recDir,
 	// scenarioDir, ...), where a regex match alone doesn't visibly clear
 	// the taint (see shard.sanitizePathComponent for the same idiom).
-	target := scenarioTarget{
-		agent: filepath.Base(parts[0]), subtree: parts[1], id: filepath.Base(parts[2]), parts: parts,
-	}
-	if target.subtree != "scenarios" && target.subtree != "regressions" {
+	agent, subtree, id := filepath.Base(parts[0]), parts[1], filepath.Base(parts[2])
+	if subtree != "scenarios" && subtree != "regressions" {
 		http.Error(w, "subtree must be 'scenarios' or 'regressions'", http.StatusBadRequest)
-		return scenarioTarget{}, false
+		return
 	}
-	if !slugRE.MatchString(target.agent) || !slugRE.MatchString(target.id) {
+	if !slugRE.MatchString(agent) || !slugRE.MatchString(id) {
 		http.Error(w, "agent and id must match ^[a-z0-9][a-z0-9_-]*$", http.StatusBadRequest)
-		return scenarioTarget{}, false
+		return
 	}
 	// Execution profile (#1889). Absent ?profile= is the cli-local default, so
 	// every pre-existing viewer URL keeps its meaning; an unknown value is a
@@ -72,28 +69,8 @@ func parseScenarioTarget(w http.ResponseWriter, r *http.Request) (scenarioTarget
 	profile, err := profileFromRequest(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
-		return scenarioTarget{}, false
-	}
-	target.profile = profile
-	return target, true
-}
-
-func (s *Server) handleScenarioDetail(w http.ResponseWriter, r *http.Request) {
-	target, ok := parseScenarioTarget(w, r)
-	if !ok {
 		return
 	}
-	// Re-apply filepath.Base to the parsed segments. It is a no-op round trip
-	// for any value that already passed parseScenarioTarget's slug check —
-	// which forbids "/" and "." outright — but it puts the sanitizer CodeQL's
-	// go/path-injection query recognizes in the SAME function as the disk
-	// reads several hops downstream (scenarioDir, recDir, shard.LoadAgentCell).
-	// Moving the parsing into its own function is what made that barrier
-	// invisible and raised a new high alert on this PR; a barrier one function
-	// away is a barrier both a reader and a taint analyser must go looking for,
-	// which is the same lesson jssecurity:S8476 taught on the JS side.
-	agent, subtree, id := filepath.Base(target.agent), target.subtree, filepath.Base(target.id)
-	profile, parts := target.profile, target.parts
 	store := s.store()
 	scenarioDir := store.scenarioDir(agent, subtree, id)
 	if !store.exists(scenarioDir) {
