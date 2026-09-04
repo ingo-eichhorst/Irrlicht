@@ -69,7 +69,9 @@ func writeObservedDesktopResult(t *testing.T, fixture desktopFixture, scenario, 
 	write(t, filepath.Join(recDir, "desktop-registry.json"), `{"sessionId":"local_desktop-1","cliSessionId":"transcript-1","cwd":"/workspace"}`+"\n")
 	write(t, filepath.Join(recDir, "desktop-environment.json"), `{"selected_environment":"Local","requested_workspace":"/workspace"}`+"\n")
 	write(t, filepath.Join(recDir, "irrlicht-session.json"), `{"session_id":"transcript-1","cwd":"/workspace","pid":4242,"launcher":{"host_bundle_id":"com.anthropic.claudefordesktop"}}`+"\n")
-	write(t, filepath.Join(recDir, "hooks.jsonl"), `{"session_id":"transcript-1","hook_event_name":"Stop"}`+"\n")
+	// hooks.jsonl preserves the exact hook-receipt rows extracted from the
+	// recording's events.jsonl. It is not the raw inbound Claude hook payload.
+	write(t, filepath.Join(recDir, "hooks.jsonl"), `{"kind":"hook_received","session_id":"transcript-1","hook_name":"Stop"}`+"\n")
 	write(t, filepath.Join(recDir, "process.json"), `{"pid":4242,"command":"claude"}`+"\n")
 	writeExpectedOutcome(t, cellDir, scenario, outcome)
 
@@ -348,7 +350,7 @@ func TestValidateDesktopIdentityMutations(t *testing.T) {
 		{"Irrlicht bundle", "irrlicht_session.launcher.host_bundle_id", "irrlicht-session.json", `{"session_id":"transcript-1","cwd":"/workspace","pid":4242,"launcher":{"host_bundle_id":"com.apple.Terminal"}}` + "\n"},
 		{"Irrlicht session", "irrlicht_session.session_id", "irrlicht-session.json", `{"session_id":"other","cwd":"/workspace","pid":4242,"launcher":{"host_bundle_id":"com.anthropic.claudefordesktop"}}` + "\n"},
 		{"Irrlicht workspace", "irrlicht_session.cwd", "irrlicht-session.json", `{"session_id":"transcript-1","cwd":"/other","pid":4242,"launcher":{"host_bundle_id":"com.anthropic.claudefordesktop"}}` + "\n"},
-		{"hook session", "hooks.session_id", "hooks.jsonl", `{"session_id":"other","hook_event_name":"Stop"}` + "\n"},
+		{"hook session", "hooks.session_id", "hooks.jsonl", `{"kind":"hook_received","session_id":"other","hook_name":"Stop"}` + "\n"},
 		{"process PID", "process.pid", "process.json", `{"pid":9999,"command":"claude"}` + "\n"},
 	}
 	for _, tc := range cases {
@@ -362,14 +364,20 @@ func TestValidateDesktopIdentityMutations(t *testing.T) {
 	t.Run("mixed hook sessions", func(t *testing.T) {
 		fixture := desktopResultsRepo(t, false)
 		recDir := filepath.Join(fixture.cellDirs["observed-pass"], "recordings", fixture.record)
-		write(t, filepath.Join(recDir, "hooks.jsonl"), `{"session_id":"transcript-1"}`+"\n"+`{"session_id":"other"}`+"\n")
+		write(t, filepath.Join(recDir, "hooks.jsonl"), `{"kind":"hook_received","session_id":"transcript-1","hook_name":"Stop"}`+"\n"+`{"kind":"hook_received","session_id":"other","hook_name":"Stop"}`+"\n")
 		requireDesktopFinding(t, fixture.root, "observed-pass", "hooks.session_id")
 	})
-	t.Run("hook event name is required", func(t *testing.T) {
+	t.Run("session-only row is not a hook receipt", func(t *testing.T) {
 		fixture := desktopResultsRepo(t, false)
 		recDir := filepath.Join(fixture.cellDirs["observed-pass"], "recordings", fixture.record)
 		write(t, filepath.Join(recDir, "hooks.jsonl"), `{"session_id":"transcript-1"}`+"\n")
-		requireDesktopFinding(t, fixture.root, "observed-pass", "hooks.hook_event_name")
+		requireDesktopFinding(t, fixture.root, "observed-pass", "hooks.kind")
+	})
+	t.Run("hook name is required", func(t *testing.T) {
+		fixture := desktopResultsRepo(t, false)
+		recDir := filepath.Join(fixture.cellDirs["observed-pass"], "recordings", fixture.record)
+		write(t, filepath.Join(recDir, "hooks.jsonl"), `{"kind":"hook_received","session_id":"transcript-1"}`+"\n")
+		requireDesktopFinding(t, fixture.root, "observed-pass", "hooks.hook_name")
 	})
 }
 

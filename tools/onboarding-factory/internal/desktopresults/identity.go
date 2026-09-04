@@ -370,55 +370,66 @@ func (v *validation) readIrrlichtSession(rel, scenario, path string) (irrlichtSe
 }
 
 func (v *validation) validateHooks(rel, scenario, path, sessionID string) bool {
-	matched, consistent, named, err := scanHookSessions(path, sessionID)
+	matched, consistent, receipts, named, err := scanHookReceipts(path, sessionID)
 	if err != nil {
 		v.add(rel, scenario, "hooks", err.Error())
 		return false
 	}
 	if !matched {
-		v.add(rel, scenario, "hooks.session_id", "contains no raw hook for transcript.sessionId")
+		v.add(rel, scenario, "hooks.session_id", "contains no hook receipt for transcript.sessionId")
 	}
 	if !consistent {
-		v.add(rel, scenario, "hooks.session_id", "contains a hook from another session")
+		v.add(rel, scenario, "hooks.session_id", "contains a hook receipt from another session")
+	}
+	if !receipts {
+		v.add(rel, scenario, "hooks.kind", `must be "hook_received" on every row`)
 	}
 	if !named {
-		v.add(rel, scenario, "hooks.hook_event_name", "must be nonblank on every raw hook")
+		v.add(rel, scenario, "hooks.hook_name", "must be nonblank on every hook receipt")
 	}
-	return matched && consistent && named
+	return matched && consistent && receipts && named
 }
 
-func scanHookSessions(path, sessionID string) (bool, bool, bool, error) {
+// scanHookReceipts validates unmodified hook_received rows extracted from the
+// recording's events.jsonl. These rows are lifecycle receipts. They are not
+// the raw inbound Claude hook payload.
+func scanHookReceipts(path, sessionID string) (bool, bool, bool, bool, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return false, false, false, err
+		return false, false, false, false, err
 	}
 	defer f.Close()
 	decoder := json.NewDecoder(f)
 	matched := false
 	consistent := true
+	receipts := true
 	named := true
 	for {
 		var row struct {
-			SessionID     string `json:"session_id"`
-			HookEventName string `json:"hook_event_name"`
+			Kind      string `json:"kind"`
+			SessionID string `json:"session_id"`
+			HookName  string `json:"hook_name"`
 		}
 		err := decoder.Decode(&row)
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			return false, false, false, fmt.Errorf("invalid JSONL: %w", err)
+			return false, false, false, false, fmt.Errorf("invalid JSONL: %w", err)
 		}
-		if sessionID != "" && row.SessionID == sessionID {
+		if row.Kind != "hook_received" {
+			receipts = false
+		}
+		if row.Kind == "hook_received" && sessionID != "" && row.SessionID == sessionID {
 			matched = true
 		} else {
 			consistent = false
 		}
-		if strings.TrimSpace(row.HookEventName) == "" {
+		if strings.TrimSpace(row.HookName) == "" {
 			named = false
 		}
 	}
-	return matched, consistent, named, nil
+	return matched, consistent, receipts, named, nil
 }
 
 func (v *validation) readProcess(rel, scenario, path string) (processEvidence, bool) {
