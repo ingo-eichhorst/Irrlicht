@@ -1460,8 +1460,8 @@ func TestTranscript_ExitPlanMode_SplitMessage_DetectedAsWaiting(t *testing.T) {
 // TestParser_TaskNotification_EmitsSubagentCompletion is the issue #134
 // regression: parent user line with origin.kind="task-notification" must
 // emit a single SubagentCompletion (parsed task-id, tool-use-id, status),
-// be marked Skip=true so it doesn't pollute LastEventType, and must NOT
-// set IsUserInterrupt or IsToolDenial.
+// preserve its origin marker without genuine-user resets, and must NOT set
+// IsUserInterrupt or IsToolDenial. See issue #1899.
 func TestParser_TaskNotification_EmitsSubagentCompletion(t *testing.T) {
 	p := &Parser{}
 	xmlPayload := "<task-notification>\n" +
@@ -1481,7 +1481,13 @@ func TestParser_TaskNotification_EmitsSubagentCompletion(t *testing.T) {
 		t.Fatal("expected non-nil event")
 	}
 	if !ev.Skip {
-		t.Error("task-notification line must be Skip=true so it doesn't feed LastEventType")
+		t.Error("task-notification must stay out of message-event tracking")
+	}
+	if !ev.OriginTaskNotification {
+		t.Error("task-notification must preserve its origin shape for ledger matching")
+	}
+	if ev.ClearToolNames || ev.StartsNewUserTurn() {
+		t.Error("task-notification must not run genuine-user-turn resets")
 	}
 	if ev.IsUserInterrupt {
 		t.Error("task-notification must not be classified as a user interrupt")

@@ -294,6 +294,9 @@ func TestParser_TaskNotification_TerminatesBackgroundProcess(t *testing.T) {
 	p := &Parser{}
 	// origin.kind shape, terminal → emits the bg task-id
 	done := p.ParseLine(taskNotifOriginEvent("bc1h56v8v", "completed"))
+	if !done.OriginTaskNotification {
+		t.Error("origin shape must set OriginTaskNotification")
+	}
 	if len(done.TerminatedBackgroundTaskIDs) != 1 || done.TerminatedBackgroundTaskIDs[0] != "bc1h56v8v" {
 		t.Errorf("origin shape: TerminatedBackgroundTaskIDs = %v, want [bc1h56v8v]", done.TerminatedBackgroundTaskIDs)
 	}
@@ -304,6 +307,12 @@ func TestParser_TaskNotification_TerminatesBackgroundProcess(t *testing.T) {
 	}
 	// queued_command attachment shape, terminal → emits the bg task-id
 	att := p.ParseLine(taskNotifAttachmentEvent("bc1h56v8v", "completed"))
+	if !att.Skip {
+		t.Error("attachment shape must stay passive")
+	}
+	if att.OriginTaskNotification {
+		t.Error("attachment shape must not set OriginTaskNotification")
+	}
 	if len(att.TerminatedBackgroundTaskIDs) != 1 || att.TerminatedBackgroundTaskIDs[0] != "bc1h56v8v" {
 		t.Errorf("attachment shape: TerminatedBackgroundTaskIDs = %v, want [bc1h56v8v]", att.TerminatedBackgroundTaskIDs)
 	}
@@ -312,16 +321,18 @@ func TestParser_TaskNotification_TerminatesBackgroundProcess(t *testing.T) {
 func TestTailer_BackgroundProcessCount_ClearedByTaskNotification(t *testing.T) {
 	spawnResult := "Command running in background with ID: bc1h56v8v. Output is being written to: /tmp/x/tasks/bc1h56v8v.output. You will be notified when it completes. To check interim output, use Read on that file path."
 	for _, tc := range []struct {
-		name      string
-		completed map[string]interface{}
+		name          string
+		completed     map[string]interface{}
+		wantLastEvent string
 	}{
-		{"origin.kind shape", taskNotifOriginEvent("bc1h56v8v", "completed")},
-		{"queued_command attachment shape", taskNotifAttachmentEvent("bc1h56v8v", "completed")},
+		{"origin.kind shape", taskNotifOriginEvent("bc1h56v8v", "completed"), "agent_continuation"},
+		{"queued_command attachment shape", taskNotifAttachmentEvent("bc1h56v8v", "completed"), "turn_done"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := writeBgTranscript(t, []map[string]interface{}{
 				bashToolUse("toolu_1", "Bash", map[string]interface{}{"command": "sleep 100", "run_in_background": true}),
 				bgSpawnResult("toolu_1", "bc1h56v8v", spawnResult),
+				{"type": "system", "subtype": "turn_duration"},
 				tc.completed,
 			})
 			m, err := tailer.NewTranscriptTailer(path, &Parser{}, "claude-code").TailAndProcess()
@@ -331,6 +342,32 @@ func TestTailer_BackgroundProcessCount_ClearedByTaskNotification(t *testing.T) {
 			if m.BackgroundProcessCount != 0 {
 				t.Fatalf("BackgroundProcessCount = %d, want 0 after task-notification completion", m.BackgroundProcessCount)
 			}
+			if m.LastEventType != tc.wantLastEvent {
+				t.Errorf("LastEventType = %q, want %q", m.LastEventType, tc.wantLastEvent)
+			}
 		})
+	}
+}
+
+// A task-notification for a subagent has no matching Bash background-process
+// entry. It must preserve the preceding turn_done anchor. The background-agent
+// scenario ends with killed subagent notifications and no resumed assistant
+// event, so treating origin.kind alone as a continuation leaves it working
+// forever. This is a lock for the structural ledger-match discriminator in
+// issue #1899.
+func TestTailer_UnmatchedTaskNotification_RemainsPassive(t *testing.T) {
+	path := writeBgTranscript(t, []map[string]interface{}{
+		{"type": "system", "subtype": "turn_duration"},
+		taskNotifOriginEvent("subagent-aecb65d9", "killed"),
+	})
+	m, err := tailer.NewTranscriptTailer(path, &Parser{}, "claude-code").TailAndProcess()
+	if err != nil {
+		t.Fatalf("TailAndProcess: %v", err)
+	}
+	if m.LastEventType != "turn_done" {
+		t.Errorf("LastEventType = %q, want turn_done for unmatched subagent notification", m.LastEventType)
+	}
+	if len(m.SubagentCompletions) != 1 {
+		t.Fatalf("SubagentCompletions = %d, want 1", len(m.SubagentCompletions))
 	}
 }

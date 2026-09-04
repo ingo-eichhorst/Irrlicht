@@ -10,14 +10,14 @@
   "summary": {
     "total_events": 1194,
     "consumed_events": 1194,
-    "total_transitions": 39,
+    "total_transitions": 37,
     "first_event_time": "2026-04-07T19:57:20.99Z",
     "last_event_time": "2026-04-07T23:15:42.607Z",
     "wall_clock_session_duration": 11901617000000,
     "state_durations": {
-      "ready": 2869896000000,
+      "ready": 2857936000000,
       "waiting": 1482105000000,
-      "working": 7549616000000
+      "working": 7561576000000
     },
     "flicker_count": 1,
     "flickers_by_category": {
@@ -475,36 +475,6 @@
     },
     {
       "index": 30,
-      "event_index": 1026,
-      "virtual_time": "2026-04-07T22:56:08.058Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "working",
-      "new_state": "ready",
-      "reason": "agent finished turn → ready",
-      "last_event_type": "turn_done",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": false,
-      "last_assistant_text_head": "…ew flicker-prone sessions across all three adapters\nbash scripts/find-flicker…"
-    },
-    {
-      "index": 31,
-      "event_index": 1028,
-      "virtual_time": "2026-04-07T22:56:20.018Z",
-      "cause": "debounce_coalesce",
-      "prev_state": "ready",
-      "new_state": "working",
-      "reason": "force ready→working on first activity",
-      "last_event_type": "assistant",
-      "has_open_tool": false,
-      "is_agent_done": true,
-      "needs_user_attention": false,
-      "waiting_for_user_input": true,
-      "last_assistant_text_head": "…ow-up issue for the Codex stale-timer signal (14 flickers + 29 stale fires on…"
-    },
-    {
-      "index": 32,
       "event_index": 1028,
       "virtual_time": "2026-04-07T22:56:20.018Z",
       "cause": "debounce_coalesce",
@@ -519,7 +489,7 @@
       "last_assistant_text_head": "…ow-up issue for the Codex stale-timer signal (14 flickers + 29 stale fires on…"
     },
     {
-      "index": 33,
+      "index": 31,
       "event_index": 1029,
       "virtual_time": "2026-04-07T22:56:57.379Z",
       "cause": "event",
@@ -533,7 +503,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 34,
+      "index": 32,
       "event_index": 1050,
       "virtual_time": "2026-04-07T22:59:25.656Z",
       "cause": "debounce_coalesce",
@@ -548,7 +518,7 @@
       "last_assistant_text_head": "…y harness paid for itself on its first cross-adapter run.\n\nThe two \"suspiciou…"
     },
     {
-      "index": 35,
+      "index": 33,
       "event_index": 1052,
       "virtual_time": "2026-04-07T23:01:26.331Z",
       "cause": "debounce_coalesce",
@@ -562,7 +532,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 36,
+      "index": 34,
       "event_index": 1072,
       "virtual_time": "2026-04-07T23:02:57.351Z",
       "cause": "debounce_coalesce",
@@ -577,7 +547,7 @@
       "last_assistant_text_head": "…done with it.\n\nIssue **#102** is fully resolved, issue **#105** (Codex Bug A …"
     },
     {
-      "index": 37,
+      "index": 35,
       "event_index": 1075,
       "virtual_time": "2026-04-07T23:03:48.874Z",
       "cause": "debounce_coalesce",
@@ -591,7 +561,7 @@
       "waiting_for_user_input": false
     },
     {
-      "index": 38,
+      "index": 36,
       "event_index": 1192,
       "virtual_time": "2026-04-07T23:11:12.805Z",
       "cause": "debounce_coalesce",

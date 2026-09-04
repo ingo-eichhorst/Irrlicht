@@ -15,6 +15,11 @@ import (
 	"irrlicht/core/pkg/capacity"
 )
 
+// eventTypeAgentContinuation is the lifecycle anchor written when an adapter
+// reports that a machine event started a new inference turn. It is not a user
+// event, so it cannot trigger genuine-user-turn cleanup. See issue #1899.
+const eventTypeAgentContinuation = "agent_continuation"
+
 // MessageEvent represents a single message event from transcript
 type MessageEvent struct {
 	Timestamp time.Time `json:"timestamp"`
@@ -796,8 +801,17 @@ func (t *TranscriptTailer) applySkippedEvent(parsed *ParsedEvent) bool {
 	// (origin.kind or queued_command attachment) — drain it here so the count
 	// drops and the pass is substantive enough for the detector to
 	// re-classify and release the hold. See issue #445.
+	//
+	// An origin notification that matches an open process also starts Claude's
+	// next inference turn. Replace the stale turn_done lifecycle anchor only
+	// after the map lookup proves this is a background-command completion.
+	// Subagent notifications do not match this ledger, and attachment-form
+	// notifications do not carry OriginTaskNotification. See issue #1899.
 	if len(parsed.TerminatedBackgroundTaskIDs) > 0 {
 		for _, id := range parsed.TerminatedBackgroundTaskIDs {
+			if _, tracked := t.openBackgroundProcs[id]; tracked && parsed.OriginTaskNotification {
+				t.metrics.LastEventType = eventTypeAgentContinuation
+			}
 			delete(t.openBackgroundProcs, id)
 		}
 		substantive = true
