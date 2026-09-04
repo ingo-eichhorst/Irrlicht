@@ -94,10 +94,10 @@ else
   fail "CLI manifest keeps entrypoint and version identity" "writer output did not match the staged transcript"
 fi
 
-if check_manifest desktop-local sdk-cli 1.0.10; then
-  pass "Desktop manifest keeps sdk-cli, app version, and raw evidence"
+if check_manifest desktop-local claude-desktop 1.0.10; then
+  pass "Desktop manifest keeps claude-desktop, app version, and raw evidence"
 else
-  fail "Desktop manifest keeps sdk-cli, app version, and raw evidence" "writer output did not match the staged evidence"
+  fail "Desktop manifest keeps claude-desktop, app version, and raw evidence" "writer output did not match the staged evidence"
 fi
 
 echo ""

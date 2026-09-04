@@ -58,6 +58,20 @@ type processEvidence struct {
 	Command string `json:"command"`
 }
 
+type observedIdentity struct {
+	manifest      matrix.RecordingManifest
+	transcript    transcriptIdentity
+	registry      registryIdentity
+	environment   environmentReceipt
+	irrlicht      irrlichtSession
+	process       processEvidence
+	transcriptOK  bool
+	registryOK    bool
+	environmentOK bool
+	irrlichtOK    bool
+	processOK     bool
+}
+
 func (v *validation) validateObservedEvidence(rel, cellDir string, result *Result) {
 	recordingsRoot := filepath.Join(cellDir, "recordings")
 	recordingDir, err := resolveDirectory(recordingsRoot, result.Recording)
@@ -70,33 +84,53 @@ func (v *validation) validateObservedEvidence(rel, cellDir string, result *Resul
 	if !ok || !manifestOK {
 		return
 	}
+	identity := v.readObservedIdentity(rel, result.ScenarioID, files, manifest)
+	v.compareObservedIdentity(rel, result.ScenarioID, identity)
+}
 
-	transcript, transcriptOK := v.readTranscript(rel, result.ScenarioID, files.transcript)
-	registry, registryOK := v.readRegistry(rel, result.ScenarioID, files.registry)
-	environment, environmentOK := v.readEnvironment(rel, result.ScenarioID, files.environment)
-	irrlicht, irrlichtOK := v.readIrrlichtSession(rel, result.ScenarioID, files.irrlicht)
-	hooksOK := v.validateHooks(rel, result.ScenarioID, files.hooks, transcript.SessionID)
-	process, processOK := v.readProcess(rel, result.ScenarioID, files.process)
+func (v *validation) readObservedIdentity(rel, scenario string, files evidenceFiles, manifest matrix.RecordingManifest) observedIdentity {
+	identity := observedIdentity{manifest: manifest}
+	identity.transcript, identity.transcriptOK = v.readTranscript(rel, scenario, files.transcript)
+	identity.registry, identity.registryOK = v.readRegistry(rel, scenario, files.registry)
+	identity.environment, identity.environmentOK = v.readEnvironment(rel, scenario, files.environment)
+	identity.irrlicht, identity.irrlichtOK = v.readIrrlichtSession(rel, scenario, files.irrlicht)
+	identity.process, identity.processOK = v.readProcess(rel, scenario, files.process)
+	v.validateHooks(rel, scenario, files.hooks, identity.transcript.SessionID)
+	return identity
+}
 
-	if transcriptOK {
-		v.compareManifestTranscript(rel, result.ScenarioID, manifest, transcript)
+func (v *validation) compareObservedIdentity(rel, scenario string, identity observedIdentity) {
+	v.compareTranscriptIdentity(rel, scenario, identity)
+	v.compareEnvironmentIdentity(rel, scenario, identity)
+	v.compareProcessIdentity(rel, scenario, identity)
+}
+
+func (v *validation) compareTranscriptIdentity(rel, scenario string, identity observedIdentity) {
+	if !identity.transcriptOK {
+		return
 	}
-	if transcriptOK && registryOK && environmentOK {
-		v.compareWorkspaceIdentity(rel, result.ScenarioID, transcript, registry, environment)
+	v.compareManifestTranscript(rel, scenario, identity.manifest, identity.transcript)
+	if identity.registryOK {
+		v.compareSessionMapping(rel, scenario, identity.transcript, identity.registry)
 	}
-	if transcriptOK && registryOK {
-		v.compareSessionMapping(rel, result.ScenarioID, transcript, registry)
+	if identity.registryOK && identity.environmentOK {
+		v.compareWorkspaceIdentity(rel, scenario, identity.transcript, identity.registry, identity.environment)
 	}
-	if transcriptOK && irrlichtOK {
-		v.compareIrrlichtIdentity(rel, result.ScenarioID, transcript, irrlicht)
+	if identity.irrlichtOK {
+		v.compareIrrlichtIdentity(rel, scenario, identity.transcript, identity.irrlicht)
 	}
-	if environmentOK && irrlichtOK && !samePath(environment.RequestedWorkspace, irrlicht.CWD) {
-		v.add(rel, result.ScenarioID, "irrlicht_session.cwd", "does not match environment.requested_workspace")
+}
+
+func (v *validation) compareEnvironmentIdentity(rel, scenario string, identity observedIdentity) {
+	if identity.environmentOK && identity.irrlichtOK && !samePath(identity.environment.RequestedWorkspace, identity.irrlicht.CWD) {
+		v.add(rel, scenario, "irrlicht_session.cwd", "does not match environment.requested_workspace")
 	}
-	if processOK && irrlichtOK && process.PID != irrlicht.PID {
-		v.add(rel, result.ScenarioID, "process.pid", "does not match irrlicht_session.pid")
+}
+
+func (v *validation) compareProcessIdentity(rel, scenario string, identity observedIdentity) {
+	if identity.processOK && identity.irrlichtOK && identity.process.PID != identity.irrlicht.PID {
+		v.add(rel, scenario, "process.pid", "does not match irrlicht_session.pid")
 	}
-	_ = hooksOK // validation reports its own finding; no later join depends on it.
 }
 
 func (v *validation) resolveEvidenceFiles(rel, recordingDir string, result *Result) (evidenceFiles, bool) {
@@ -163,14 +197,27 @@ func (v *validation) validateManifest(rel, recordingDir, scenario string) (matri
 }
 
 func (v *validation) readTranscript(rel, scenario, path string) (transcriptIdentity, bool) {
-	f, err := os.Open(path)
+	identity, conflicts, err := scanTranscript(path)
 	if err != nil {
 		v.add(rel, scenario, "transcript", err.Error())
-		return transcriptIdentity{}, false
+		return identity, false
+	}
+	for _, field := range conflicts {
+		v.add(rel, scenario, "transcript."+field, "contains conflicting values")
+	}
+	ok := v.validateTranscriptFields(rel, scenario, identity)
+	return identity, ok && len(conflicts) == 0
+}
+
+func scanTranscript(path string) (transcriptIdentity, []string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return transcriptIdentity{}, nil, err
 	}
 	defer f.Close()
 	decoder := json.NewDecoder(f)
 	identity := transcriptIdentity{}
+	var conflicts []string
 	for {
 		var row struct {
 			SessionID  string `json:"sessionId"`
@@ -182,27 +229,36 @@ func (v *validation) readTranscript(rel, scenario, path string) (transcriptIdent
 			break
 		}
 		if err != nil {
-			v.add(rel, scenario, "transcript", "invalid JSONL: "+err.Error())
-			return identity, false
+			return identity, conflicts, fmt.Errorf("invalid JSONL: %w", err)
 		}
-		if !mergeIdentity(&identity.SessionID, row.SessionID) {
-			v.add(rel, scenario, "transcript.sessionId", "contains conflicting values")
-		}
-		if !mergeIdentity(&identity.CWD, row.CWD) {
-			v.add(rel, scenario, "transcript.cwd", "contains conflicting values")
-		}
-		if !mergeIdentity(&identity.Entrypoint, row.Entrypoint) {
-			v.add(rel, scenario, "transcript.entrypoint", "contains conflicting values")
-		}
+		conflicts = append(conflicts, mergeTranscriptRow(&identity, row.SessionID, row.CWD, row.Entrypoint)...)
 	}
+	return identity, conflicts, nil
+}
+
+func mergeTranscriptRow(identity *transcriptIdentity, sessionID, cwd, entrypoint string) []string {
+	var conflicts []string
+	if !mergeIdentity(&identity.SessionID, sessionID) {
+		conflicts = append(conflicts, "sessionId")
+	}
+	if !mergeIdentity(&identity.CWD, cwd) {
+		conflicts = append(conflicts, "cwd")
+	}
+	if !mergeIdentity(&identity.Entrypoint, entrypoint) {
+		conflicts = append(conflicts, "entrypoint")
+	}
+	return conflicts
+}
+
+func (v *validation) validateTranscriptFields(rel, scenario string, identity transcriptIdentity) bool {
 	ok := true
 	for field, value := range map[string]string{
-		"transcript.sessionId":  identity.SessionID,
-		"transcript.cwd":        identity.CWD,
-		"transcript.entrypoint": identity.Entrypoint,
+		"sessionId":  identity.SessionID,
+		"cwd":        identity.CWD,
+		"entrypoint": identity.Entrypoint,
 	} {
 		if strings.TrimSpace(value) == "" {
-			v.add(rel, scenario, field, "is absent from the raw transcript")
+			v.add(rel, scenario, "transcript."+field, "is absent from the raw transcript")
 			ok = false
 		}
 	}
@@ -210,7 +266,7 @@ func (v *validation) readTranscript(rel, scenario, path string) (transcriptIdent
 		v.add(rel, scenario, "transcript.entrypoint", fmt.Sprintf("got %q; want %q", identity.Entrypoint, desktopEntrypoint))
 		ok = false
 	}
-	return identity, ok
+	return ok
 }
 
 func (v *validation) readRegistry(rel, scenario, path string) (registryIdentity, bool) {
@@ -286,10 +342,24 @@ func (v *validation) readIrrlichtSession(rel, scenario, path string) (irrlichtSe
 }
 
 func (v *validation) validateHooks(rel, scenario, path, sessionID string) bool {
-	f, err := os.Open(path)
+	matched, consistent, err := scanHookSessions(path, sessionID)
 	if err != nil {
 		v.add(rel, scenario, "hooks", err.Error())
 		return false
+	}
+	if !matched {
+		v.add(rel, scenario, "hooks.session_id", "contains no raw hook for transcript.sessionId")
+	}
+	if !consistent {
+		v.add(rel, scenario, "hooks.session_id", "contains a hook from another session")
+	}
+	return matched && consistent
+}
+
+func scanHookSessions(path, sessionID string) (bool, bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return false, false, err
 	}
 	defer f.Close()
 	decoder := json.NewDecoder(f)
@@ -304,8 +374,7 @@ func (v *validation) validateHooks(rel, scenario, path, sessionID string) bool {
 			break
 		}
 		if err != nil {
-			v.add(rel, scenario, "hooks", "invalid JSONL: "+err.Error())
-			return false
+			return false, false, fmt.Errorf("invalid JSONL: %w", err)
 		}
 		if sessionID != "" && row.SessionID == sessionID {
 			matched = true
@@ -313,13 +382,7 @@ func (v *validation) validateHooks(rel, scenario, path, sessionID string) bool {
 			consistent = false
 		}
 	}
-	if !matched {
-		v.add(rel, scenario, "hooks.session_id", "contains no raw hook for transcript.sessionId")
-	}
-	if !consistent {
-		v.add(rel, scenario, "hooks.session_id", "contains a hook from another session")
-	}
-	return matched && consistent
+	return matched, consistent, nil
 }
 
 func (v *validation) readProcess(rel, scenario, path string) (processEvidence, bool) {

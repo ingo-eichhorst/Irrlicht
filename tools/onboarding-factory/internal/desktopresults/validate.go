@@ -277,6 +277,11 @@ func (v *validation) validateCanonicalEvidenceNames(rel string, result *Result) 
 }
 
 func (v *validation) validateNonObservedShape(rel string, result *Result) {
+	v.validateNonObservedEvidence(rel, result)
+	v.validateNonObservedExclusions(rel, result)
+}
+
+func (v *validation) validateNonObservedEvidence(rel string, result *Result) {
 	if strings.TrimSpace(result.Reason) == "" {
 		v.add(rel, result.ScenarioID, "reason", "must contain an evidence-based reason")
 	}
@@ -289,6 +294,9 @@ func (v *validation) validateNonObservedShape(rel string, result *Result) {
 			v.add(rel, result.ScenarioID, field, err.Error())
 		}
 	}
+}
+
+func (v *validation) validateNonObservedExclusions(rel string, result *Result) {
 	if result.Recording != "" {
 		v.add(rel, result.ScenarioID, "recording", "is only valid for an observed result")
 	}
@@ -338,12 +346,66 @@ func safeSegment(value string) bool {
 	return value != "" && value != "." && value != ".." && filepath.Base(value) == value
 }
 
+type resolvedPath struct {
+	path string
+	info os.FileInfo
+}
+
 // resolveFile accepts only an existing, non-empty regular file below root.
 // EvalSymlinks makes a repository-relative reference unable to escape through
 // a committed or locally-created symlink.
 func resolveFile(root, reference string) (string, error) {
+	resolved, err := resolveExisting(root, reference)
+	if err != nil {
+		return "", err
+	}
+	if !resolved.info.Mode().IsRegular() || resolved.info.Size() == 0 {
+		return "", fmt.Errorf("reference %q must name a non-empty regular file", reference)
+	}
+	return resolved.path, nil
+}
+
+func resolveDirectory(root, reference string) (string, error) {
+	if !safeSegment(reference) {
+		return "", fmt.Errorf("must be one safe directory name")
+	}
+	resolved, err := resolveExisting(root, reference)
+	if err != nil {
+		return "", fmt.Errorf("cannot resolve recording %q: %w", reference, err)
+	}
+	if !resolved.info.IsDir() {
+		return "", fmt.Errorf("recording %q must name a directory", reference)
+	}
+	return resolved.path, nil
+}
+
+func resolveExisting(root, reference string) (resolvedPath, error) {
+	clean, err := cleanReference(reference)
+	if err != nil {
+		return resolvedPath{}, err
+	}
+	rootResolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return resolvedPath{}, fmt.Errorf("cannot resolve evidence root: %w", err)
+	}
+	resolved, err := filepath.EvalSymlinks(filepath.Join(root, clean))
+	if err != nil {
+		return resolvedPath{}, fmt.Errorf("cannot read %q: %w", reference, err)
+	}
+	rel, err := filepath.Rel(rootResolved, resolved)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return resolvedPath{}, fmt.Errorf("reference %q escapes its evidence root", reference)
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return resolvedPath{}, fmt.Errorf("cannot read %q: %w", reference, err)
+	}
+	return resolvedPath{path: resolved, info: info}, nil
+}
+
+func cleanReference(reference string) (string, error) {
 	if reference == "" || filepath.IsAbs(reference) {
-		return "", fmt.Errorf("must be a non-empty relative file path")
+		return "", fmt.Errorf("must be a non-empty relative path")
 	}
 	native := filepath.FromSlash(reference)
 	clean := filepath.Clean(native)
@@ -353,48 +415,5 @@ func resolveFile(root, reference string) (string, error) {
 	if clean != native {
 		return "", fmt.Errorf("must not contain traversal or redundant path components")
 	}
-	rootResolved, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		return "", fmt.Errorf("cannot resolve evidence root: %w", err)
-	}
-	path := filepath.Join(root, clean)
-	resolved, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		return "", fmt.Errorf("cannot read %q: %w", reference, err)
-	}
-	rel, err := filepath.Rel(rootResolved, resolved)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("reference %q escapes its evidence root", reference)
-	}
-	info, err := os.Stat(resolved)
-	if err != nil {
-		return "", fmt.Errorf("cannot read %q: %w", reference, err)
-	}
-	if !info.Mode().IsRegular() || info.Size() == 0 {
-		return "", fmt.Errorf("reference %q must name a non-empty regular file", reference)
-	}
-	return resolved, nil
-}
-
-func resolveDirectory(root, reference string) (string, error) {
-	if !safeSegment(reference) {
-		return "", fmt.Errorf("must be one safe directory name")
-	}
-	rootResolved, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		return "", fmt.Errorf("cannot resolve recordings directory: %w", err)
-	}
-	resolved, err := filepath.EvalSymlinks(filepath.Join(root, reference))
-	if err != nil {
-		return "", fmt.Errorf("cannot read recording %q: %w", reference, err)
-	}
-	rel, err := filepath.Rel(rootResolved, resolved)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("recording %q escapes the recordings directory", reference)
-	}
-	info, err := os.Stat(resolved)
-	if err != nil || !info.IsDir() {
-		return "", fmt.Errorf("recording %q must name a directory", reference)
-	}
-	return resolved, nil
+	return clean, nil
 }
