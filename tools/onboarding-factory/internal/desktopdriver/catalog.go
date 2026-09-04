@@ -102,6 +102,41 @@ func selectedSessionMenu(elements []helperElement, expectedTitle string) (helper
 	return selectorFor(element), nil
 }
 
+// Claude Desktop refuses to render a composer for a folder it has not seen
+// before, and shows a modal trust prompt instead. The driver's staging
+// workspace is new on every run, so this prompt stands between every
+// desktop-local run and its first turn.
+const (
+	trustConfirmTitle = "Trust workspace"
+	trustCancelTitle  = "Cancel"
+)
+
+// trustPromptButton returns the confirm button of a Claude Desktop workspace
+// trust prompt, and false when no prompt is on screen.
+//
+// The prompt is identified by its exact two-button shape, and BOTH buttons must
+// be unique. That is deliberately strict: the accessibility tree does not carry
+// the folder the prompt is asking about — the helper reads role, title and
+// description, and the path lives in an AXStaticText value it does not emit —
+// so the driver cannot confirm from the prompt itself WHICH workspace it would
+// trust. Shape plus timing is the whole guarantee: this is only consulted while
+// waiting for the composer the driver just opened for its own scratch
+// workspace. Anything but that exact shape is left alone.
+func trustPromptButton(elements []helperElement) (helperSelector, bool) {
+	confirm, confirmErr := uniqueElement(elements, func(element helperElement) bool {
+		return element.Role == "AXButton" && element.Title == trustConfirmTitle
+	}, "Desktop trust prompt confirm")
+	if confirmErr != nil {
+		return helperSelector{}, false
+	}
+	if _, cancelErr := uniqueElement(elements, func(element helperElement) bool {
+		return element.Role == "AXButton" && element.Title == trustCancelTitle
+	}, "Desktop trust prompt cancel"); cancelErr != nil {
+		return helperSelector{}, false
+	}
+	return selectorFor(confirm), true
+}
+
 func uniqueElement(elements []helperElement, matches func(helperElement) bool, name string) (helperElement, error) {
 	var found []helperElement
 	for _, element := range elements {

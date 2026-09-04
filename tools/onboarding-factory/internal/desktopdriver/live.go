@@ -183,7 +183,8 @@ func openOfficialDesktopURL(ctx context.Context, deepLink string) error {
 }
 
 func (runtime *LiveRuntime) WaitComposer(ctx context.Context, workspace string) error {
-	controls, err := waitForComposerControls(ctx, workspace, runtime.helper.inspect, runtime.helper.probe)
+	controls, err := waitForComposerControls(
+		ctx, workspace, runtime.helper.inspect, runtime.helper.probe, runtime.helper.click, runtime.RecordStep)
 	if err == nil {
 		runtime.controls = controls
 	}
@@ -195,9 +196,12 @@ func waitForComposerControls(
 	workspace string,
 	inspect func(context.Context) ([]helperElement, error),
 	probe func(context.Context, map[string]helperSelector) error,
+	click func(context.Context, helperSelector, helperPostcondition) error,
+	recordStep func(string),
 ) (map[string]helperSelector, error) {
 	var controls map[string]helperSelector
 	var lastMismatch error
+	trusted := false
 	err := poll(ctx, "verified Desktop composer controls", func() (bool, error) {
 		elements, err := inspect(ctx)
 		if err != nil {
@@ -205,6 +209,27 @@ func waitForComposerControls(
 				return false, fatal
 			}
 			lastMismatch = err
+			return false, nil
+		}
+		// Claude Desktop holds a modal trust prompt in front of the composer
+		// for a workspace it has not seen, and the driver's staging workspace
+		// is new on every run. Answer it ONCE: a second prompt during one
+		// composer wait is not this run's own scratch folder being trusted, so
+		// it is a stop rather than another click.
+		if confirm, prompted := trustPromptButton(elements); prompted {
+			if trusted {
+				return false, fmt.Errorf(
+					"Claude Desktop raised a second workspace trust prompt while waiting for the composer for %q; refusing to answer it",
+					workspace)
+			}
+			trusted = true
+			recordStep("trust-workspace-prompt-answered")
+			if err := click(ctx, confirm, helperPostcondition{
+				Selector: confirm, Condition: "absent", TimeoutMilliseconds: 10_000,
+			}); err != nil {
+				return false, fmt.Errorf("answer Desktop workspace trust prompt: %w", err)
+			}
+			lastMismatch = errors.New("answered the Desktop workspace trust prompt; waiting for the composer")
 			return false, nil
 		}
 		controls, err = composerCatalog(elements, workspace)
