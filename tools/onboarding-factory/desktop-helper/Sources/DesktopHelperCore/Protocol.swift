@@ -86,69 +86,52 @@ public struct HelperRequest: Codable, Equatable, Sendable {
 
 public enum StrictRequestDecoder {
     public static func decode(_ data: Data) throws -> HelperRequest {
+        let (root, command) = try StrictJSONShape.rootAndCommand(from: data)
+        try StrictJSONShape.validate(root, for: command)
+        let request = try decodeRequest(data)
+        _ = try RequestValidator.validate(request)
+        return request
+    }
+
+    private static func decodeRequest(_ data: Data) throws -> HelperRequest {
+        do {
+            return try JSONDecoder().decode(HelperRequest.self, from: data)
+        } catch {
+            throw HelperFailure(.invalidRequest, "The JSON request is invalid.")
+        }
+    }
+}
+
+private enum StrictJSONShape {
+    static func rootAndCommand(
+        from data: Data
+    ) throws -> ([String: Any], HelperCommand) {
         let object: Any
         do {
             object = try JSONSerialization.jsonObject(with: data)
         } catch {
-            throw HelperFailure(.invalidRequest, "The JSON request is invalid.")
+            throw invalidJSON()
         }
         guard let root = object as? [String: Any],
               let commandName = root["command"] as? String,
               let command = HelperCommand(rawValue: commandName)
         else {
-            throw HelperFailure(.invalidRequest, "The JSON request is invalid.")
+            throw invalidJSON()
         }
+        return (root, command)
+    }
 
+    static func validate(
+        _ root: [String: Any],
+        for command: HelperCommand
+    ) throws {
         try requireOnlyKeys(root, allowed: allowedTopLevelKeys(for: command))
-        if let selector = root["selector"] {
-            try validateSelectorObject(selector)
+        try validateOptional(root["selector"], with: validateSelectorObject)
+        try validateOptional(root["limits"]) {
+            try requireObject($0, keys: ["maxDepth", "maxNodes"])
         }
-        if let limits = root["limits"] {
-            try requireObject(limits, keys: ["maxDepth", "maxNodes"])
-        }
-        if let postcondition = root["postcondition"] {
-            guard let object = postcondition as? [String: Any] else {
-                throw HelperFailure(.invalidRequest, "The JSON request is invalid.")
-            }
-            try requireOnlyKeys(
-                object,
-                allowed: ["selector", "condition", "value", "timeoutMilliseconds"]
-            )
-            if let selector = object["selector"] {
-                try validateSelectorObject(selector)
-            }
-        }
-        if let probes = root["probes"] {
-            guard let array = probes as? [Any] else {
-                throw HelperFailure(.invalidRequest, "The JSON request is invalid.")
-            }
-            for probe in array {
-                guard let object = probe as? [String: Any] else {
-                    throw HelperFailure(.invalidRequest, "The JSON request is invalid.")
-                }
-                try requireOnlyKeys(
-                    object,
-                    allowed: ["name", "selectors", "required", "requiresGeometry"]
-                )
-                if let selectors = object["selectors"] {
-                    guard let selectorArray = selectors as? [Any] else {
-                        throw HelperFailure(.invalidRequest, "The JSON request is invalid.")
-                    }
-                    for selector in selectorArray {
-                        try validateSelectorObject(selector)
-                    }
-                }
-            }
-        }
-
-        let request: HelperRequest
-        do {
-            request = try JSONDecoder().decode(HelperRequest.self, from: data)
-        } catch {
-            throw HelperFailure(.invalidRequest, "The JSON request is invalid.")
-        }
-        _ = try RequestValidator.validate(request)
-        return request
+        try validateOptional(root["postcondition"], with: validatePostconditionObject)
+        try validateOptional(root["probes"], with: validateProbeArray)
     }
 
     private static func allowedTopLevelKeys(for command: HelperCommand) -> Set<String> {
@@ -176,11 +159,49 @@ public enum StrictRequestDecoder {
         )
     }
 
+    private static func validatePostconditionObject(_ value: Any) throws {
+        let object = try object(value)
+        try requireOnlyKeys(
+            object,
+            allowed: ["selector", "condition", "value", "timeoutMilliseconds"]
+        )
+        try validateOptional(object["selector"], with: validateSelectorObject)
+    }
+
+    private static func validateProbeArray(_ value: Any) throws {
+        guard let probes = value as? [Any] else { throw invalidJSON() }
+        try probes.forEach(validateProbeObject)
+    }
+
+    private static func validateProbeObject(_ value: Any) throws {
+        let probe = try object(value)
+        try requireOnlyKeys(
+            probe,
+            allowed: ["name", "selectors", "required", "requiresGeometry"]
+        )
+        try validateOptional(probe["selectors"], with: validateSelectorArray)
+    }
+
+    private static func validateSelectorArray(_ value: Any) throws {
+        guard let selectors = value as? [Any] else { throw invalidJSON() }
+        try selectors.forEach(validateSelectorObject)
+    }
+
+    private static func validateOptional(
+        _ value: Any?,
+        with validator: (Any) throws -> Void
+    ) throws {
+        guard let value else { return }
+        try validator(value)
+    }
+
     private static func requireObject(_ value: Any, keys: Set<String>) throws {
-        guard let object = value as? [String: Any] else {
-            throw HelperFailure(.invalidRequest, "The JSON request is invalid.")
-        }
-        try requireOnlyKeys(object, allowed: keys)
+        try requireOnlyKeys(try object(value), allowed: keys)
+    }
+
+    private static func object(_ value: Any) throws -> [String: Any] {
+        guard let object = value as? [String: Any] else { throw invalidJSON() }
+        return object
     }
 
     private static func requireOnlyKeys(
@@ -194,124 +215,94 @@ public enum StrictRequestDecoder {
             )
         }
     }
+
+    private static func invalidJSON() -> HelperFailure {
+        HelperFailure(.invalidRequest, "The JSON request is invalid.")
+    }
 }
 
 public enum RequestValidator {
+    private enum Field: Hashable {
+        case selector
+        case value
+        case keyCode
+        case modifiers
+        case postcondition
+        case probes
+        case limits
+    }
+
     private static let keyboardModifiers: Set<String> = ["command", "control", "option", "shift"]
 
     @discardableResult
     public static func validate(_ request: HelperRequest) throws -> TraversalLimits {
-        guard request.protocolVersion == desktopHelperProtocolVersion else {
-            throw HelperFailure(
-                .unsupportedProtocol,
-                "Unsupported protocolVersion \(request.protocolVersion). Expected \(desktopHelperProtocolVersion)."
-            )
-        }
+        try validateProtocol(request.protocolVersion)
         let limits = try (request.limits ?? TraversalLimits()).validated()
+        try rejectInvalidFields(request)
         switch request.command {
-        case .preflight:
-            try rejectFields(
-                request,
-                selector: false,
-                value: false,
-                keyCode: false,
-                modifiers: false,
-                postcondition: false,
-                probes: false,
-                limits: false
-            )
-        case .inspect:
-            try rejectFields(
-                request,
-                selector: false,
-                value: false,
-                keyCode: false,
-                modifiers: false,
-                postcondition: false,
-                probes: false,
-                limits: true
-            )
+        case .preflight, .inspect:
+            break
         case .probe:
-            try rejectFields(
-                request,
-                selector: false,
-                value: false,
-                keyCode: false,
-                modifiers: false,
-                postcondition: false,
-                probes: true,
-                limits: true
-            )
-            guard let probes = request.probes, !probes.isEmpty else {
-                throw HelperFailure(.invalidRequest, "probe requires one or more named probe definitions.")
-            }
-            guard probes.allSatisfy({ !$0.name.isEmpty && !$0.selectors.isEmpty }) else {
-                throw HelperFailure(.invalidRequest, "Each probe requires a name and at least one selector.")
-            }
-            guard Set(probes.map(\.name)).count == probes.count else {
-                throw HelperFailure(.invalidRequest, "Probe names must be unique.")
-            }
-            for probe in probes {
-                guard probe.selectors.allSatisfy({ !$0.isEmpty }) else {
-                    throw HelperFailure(.invalidRequest, "A probe control selector cannot be empty.")
-                }
-            }
+            try validateProbes(request.probes)
         case .setValue:
-            try rejectFields(
-                request,
-                selector: true,
-                value: true,
-                keyCode: false,
-                modifiers: false,
-                postcondition: false,
-                probes: false,
-                limits: true
-            )
-            try validateSelector(request.selector)
-            guard request.value != nil else {
-                throw HelperFailure(.invalidRequest, "set_value requires value.")
-            }
+            try validateSetValue(request)
         case .keyboard:
-            try rejectFields(
-                request,
-                selector: true,
-                value: false,
-                keyCode: true,
-                modifiers: true,
-                postcondition: true,
-                probes: false,
-                limits: true
-            )
-            try validateSelector(request.selector)
-            guard let keyCode = request.keyCode, keyCode <= 127 else {
-                throw HelperFailure(.invalidRequest, "keyboard requires keyCode in 0...127.")
-            }
-            let unknown = Set(request.modifiers ?? []).subtracting(keyboardModifiers)
-            guard unknown.isEmpty else {
-                throw HelperFailure(.invalidRequest, "keyboard contains an unknown modifier.")
-            }
-            guard let postcondition = request.postcondition else {
-                throw HelperFailure(.invalidRequest, "This action requires a postcondition.")
-            }
-            _ = try postcondition.validated()
+            try validateKeyboard(request)
         case .physicalClick:
-            try rejectFields(
-                request,
-                selector: true,
-                value: false,
-                keyCode: false,
-                modifiers: false,
-                postcondition: true,
-                probes: false,
-                limits: true
-            )
             try validateSelector(request.selector)
-            guard let postcondition = request.postcondition else {
-                throw HelperFailure(.invalidRequest, "This action requires a postcondition.")
-            }
-            _ = try postcondition.validated()
+            try validatePostcondition(request.postcondition)
         }
         return limits
+    }
+
+    private static func validateProtocol(_ version: Int) throws {
+        guard version == desktopHelperProtocolVersion else {
+            throw HelperFailure(
+                .unsupportedProtocol,
+                "Unsupported protocolVersion \(version). Expected \(desktopHelperProtocolVersion)."
+            )
+        }
+    }
+
+    private static func validateProbes(_ probes: [ProbeDefinition]?) throws {
+        guard let probes, !probes.isEmpty else {
+            throw HelperFailure(.invalidRequest, "probe requires one or more named probe definitions.")
+        }
+        guard probes.allSatisfy({ !$0.name.isEmpty && !$0.selectors.isEmpty }) else {
+            throw HelperFailure(.invalidRequest, "Each probe requires a name and at least one selector.")
+        }
+        guard Set(probes.map(\.name)).count == probes.count else {
+            throw HelperFailure(.invalidRequest, "Probe names must be unique.")
+        }
+        guard probes.flatMap(\.selectors).allSatisfy({ !$0.isEmpty }) else {
+            throw HelperFailure(.invalidRequest, "A probe control selector cannot be empty.")
+        }
+    }
+
+    private static func validateSetValue(_ request: HelperRequest) throws {
+        try validateSelector(request.selector)
+        guard request.value != nil else {
+            throw HelperFailure(.invalidRequest, "set_value requires value.")
+        }
+    }
+
+    private static func validateKeyboard(_ request: HelperRequest) throws {
+        try validateSelector(request.selector)
+        guard let keyCode = request.keyCode, keyCode <= 127 else {
+            throw HelperFailure(.invalidRequest, "keyboard requires keyCode in 0...127.")
+        }
+        let unknown = Set(request.modifiers ?? []).subtracting(keyboardModifiers)
+        guard unknown.isEmpty else {
+            throw HelperFailure(.invalidRequest, "keyboard contains an unknown modifier.")
+        }
+        try validatePostcondition(request.postcondition)
+    }
+
+    private static func validatePostcondition(_ postcondition: Postcondition?) throws {
+        guard let postcondition else {
+            throw HelperFailure(.invalidRequest, "This action requires a postcondition.")
+        }
+        _ = try postcondition.validated()
     }
 
     private static func validateSelector(_ selector: ControlSelector?) throws {
@@ -320,28 +311,37 @@ public enum RequestValidator {
         }
     }
 
-    private static func rejectFields(
-        _ request: HelperRequest,
-        selector: Bool,
-        value: Bool,
-        keyCode: Bool,
-        modifiers: Bool,
-        postcondition: Bool,
-        probes: Bool,
-        limits: Bool
-    ) throws {
-        let invalid = (!selector && request.selector != nil)
-            || (!value && request.value != nil)
-            || (!keyCode && request.keyCode != nil)
-            || (!modifiers && request.modifiers != nil)
-            || (!postcondition && request.postcondition != nil)
-            || (!probes && request.probes != nil)
-            || (!limits && request.limits != nil)
-        guard !invalid else {
+    private static func rejectInvalidFields(_ request: HelperRequest) throws {
+        let invalid = presentFields(request).subtracting(allowedFields(request.command))
+        guard invalid.isEmpty else {
             throw HelperFailure(
                 .invalidRequest,
                 "\(request.command.rawValue) contains fields that are not valid for this command."
             )
+        }
+    }
+
+    private static func presentFields(_ request: HelperRequest) -> Set<Field> {
+        let fields: [(Field, Bool)] = [
+            (.selector, request.selector != nil),
+            (.value, request.value != nil),
+            (.keyCode, request.keyCode != nil),
+            (.modifiers, request.modifiers != nil),
+            (.postcondition, request.postcondition != nil),
+            (.probes, request.probes != nil),
+            (.limits, request.limits != nil),
+        ]
+        return Set(fields.compactMap { $0.1 ? $0.0 : nil })
+    }
+
+    private static func allowedFields(_ command: HelperCommand) -> Set<Field> {
+        switch command {
+        case .preflight: []
+        case .inspect: [.limits]
+        case .probe: [.probes, .limits]
+        case .setValue: [.selector, .value, .limits]
+        case .keyboard: [.selector, .keyCode, .modifiers, .postcondition, .limits]
+        case .physicalClick: [.selector, .postcondition, .limits]
         }
     }
 }

@@ -116,44 +116,61 @@ public enum ProbeValidator {
         elements: [ElementSnapshot],
         definitions: [ProbeDefinition]
     ) throws -> [ProbeMatch] {
-        var result: [ProbeMatch] = []
-        for definition in definitions {
-            var byPath: [[Int]: ElementSnapshot] = [:]
-            for selector in definition.selectors {
-                for match in try ControlFinder.all(in: elements, matching: selector) {
-                    byPath[match.path] = match
-                }
-            }
-            let matches = byPath.values.sorted { $0.path.lexicographicallyPrecedes($1.path) }
-            if matches.count > 1 {
-                throw HelperFailure(
-                    .controlAmbiguous,
-                    "The \(definition.name) probe matched \(matches.count) visible controls."
-                )
-            }
-            guard let match = matches.first else {
-                if definition.required {
-                    throw HelperFailure(
-                        .controlMissing,
-                        "The required \(definition.name) control is not visible."
-                    )
-                }
-                result.append(ProbeMatch(name: definition.name, element: nil))
-                continue
-            }
-            if definition.requiresGeometry {
-                do {
-                    _ = try ClickPlan(freshFrame: match.frame ?? Frame(x: .nan, y: .nan, width: 0, height: 0))
-                } catch {
-                    throw HelperFailure(
-                        .staleControl,
-                        "The \(definition.name) control has invalid current geometry."
-                    )
-                }
-            }
-            result.append(ProbeMatch(name: definition.name, element: match))
+        try definitions.map { definition in
+            let match = try uniqueMatch(for: definition, in: elements)
+            try requirePresent(match, for: definition)
+            try requireValidGeometry(match, for: definition)
+            return ProbeMatch(name: definition.name, element: match)
         }
-        return result
+    }
+
+    private static func uniqueMatch(
+        for definition: ProbeDefinition,
+        in elements: [ElementSnapshot]
+    ) throws -> ElementSnapshot? {
+        let allMatches = try definition.selectors.flatMap {
+            try ControlFinder.all(in: elements, matching: $0)
+        }
+        let byPath = Dictionary(allMatches.map { ($0.path, $0) }) { first, _ in first }
+        let matches = byPath.values.sorted {
+            $0.path.lexicographicallyPrecedes($1.path)
+        }
+        guard matches.count <= 1 else {
+            throw HelperFailure(
+                .controlAmbiguous,
+                "The \(definition.name) probe matched \(matches.count) visible controls."
+            )
+        }
+        return matches.first
+    }
+
+    private static func requirePresent(
+        _ match: ElementSnapshot?,
+        for definition: ProbeDefinition
+    ) throws {
+        guard match != nil || !definition.required else {
+            throw HelperFailure(
+                .controlMissing,
+                "The required \(definition.name) control is not visible."
+            )
+        }
+    }
+
+    private static func requireValidGeometry(
+        _ match: ElementSnapshot?,
+        for definition: ProbeDefinition
+    ) throws {
+        guard definition.requiresGeometry, let match else { return }
+        do {
+            _ = try ClickPlan(
+                freshFrame: match.frame ?? Frame(x: .nan, y: .nan, width: 0, height: 0)
+            )
+        } catch {
+            throw HelperFailure(
+                .staleControl,
+                "The \(definition.name) control has invalid current geometry."
+            )
+        }
     }
 }
 
