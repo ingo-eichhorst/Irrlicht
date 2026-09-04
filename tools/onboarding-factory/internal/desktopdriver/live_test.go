@@ -601,3 +601,59 @@ func TestComposerWaitFailsOnANonTransientTrustClickError(t *testing.T) {
 		t.Fatalf("waitForComposerControls() error = %v", err)
 	}
 }
+
+// Claude Desktop re-renders the composer right after the trust sheet closes,
+// and the helper's tree walk fails whole when a node goes away underneath it.
+// That is a reason to look again; the poll deadline is what still fails loudly.
+func TestComposerWaitRetriesAStaleAccessibilityRead(t *testing.T) {
+	reads := 0
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	controls, err := waitForComposerControls(
+		ctx,
+		"/repo/workspace",
+		func(context.Context) ([]helperElement, error) {
+			reads++
+			if reads == 1 {
+				return nil, errors.New(
+					"helper action_failed: Accessibility could not read AXRole (" + axInvalidUIElement + ").")
+			}
+			return archiveFixtureElements("workspace", "Owned"), nil
+		},
+		func(context.Context, map[string]helperSelector) error { return nil },
+		func(context.Context, helperSelector, helperPostcondition) error {
+			t.Fatal("no trust prompt is on screen; the wait must not click anything")
+			return nil
+		},
+		func(string) {},
+	)
+	if err != nil {
+		t.Fatalf("waitForComposerControls() error = %v", err)
+	}
+	if reads != 2 {
+		t.Fatalf("inspect calls = %d, want 2 (one stale, one settled)", reads)
+	}
+	if len(controls) == 0 {
+		t.Fatal("the composer was never verified after the stale read")
+	}
+}
+
+// A different action_failed is still a stop: only the vanished-element code is
+// a retry.
+func TestComposerWaitStopsOnANonStaleHelperFailure(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := waitForComposerControls(
+		ctx,
+		"/repo/workspace",
+		func(context.Context) ([]helperElement, error) {
+			return nil, errors.New("helper action_failed: Accessibility refused the text value update (AX error -25200).")
+		},
+		func(context.Context, map[string]helperSelector) error { return nil },
+		func(context.Context, helperSelector, helperPostcondition) error { return nil },
+		func(string) {},
+	)
+	if err == nil || !strings.Contains(err.Error(), "AX error -25200") {
+		t.Fatalf("waitForComposerControls() error = %v", err)
+	}
+}

@@ -336,9 +336,18 @@ func transientClickError(err error) error {
 	return transientHelperError(err)
 }
 
+// axInvalidUIElement is kAXErrorInvalidUIElement. The helper walks the tree
+// node by node, so an element that goes away mid-walk — which is what Claude
+// Desktop's renderer does while it swaps a view in — fails the whole read with
+// this code. It means "look again", not "the composer is wrong": the poll's own
+// deadline is what still fails loudly if the tree never settles.
+const axInvalidUIElement = "AX error -25202"
+
 func transientHelperError(err error) error {
 	message := err.Error()
-	if strings.Contains(message, "control_missing") || strings.Contains(message, "app_not_running") {
+	if strings.Contains(message, "control_missing") ||
+		strings.Contains(message, "app_not_running") ||
+		strings.Contains(message, axInvalidUIElement) {
 		return nil
 	}
 	return err
