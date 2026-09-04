@@ -83,7 +83,17 @@ func (s *Server) handleScenarioDetail(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	agent, subtree, id, profile, parts := target.agent, target.subtree, target.id, target.profile, target.parts
+	// Re-apply filepath.Base to the parsed segments. It is a no-op round trip
+	// for any value that already passed parseScenarioTarget's slug check —
+	// which forbids "/" and "." outright — but it puts the sanitizer CodeQL's
+	// go/path-injection query recognizes in the SAME function as the disk
+	// reads several hops downstream (scenarioDir, recDir, shard.LoadAgentCell).
+	// Moving the parsing into its own function is what made that barrier
+	// invisible and raised a new high alert on this PR; a barrier one function
+	// away is a barrier both a reader and a taint analyser must go looking for,
+	// which is the same lesson jssecurity:S8476 taught on the JS side.
+	agent, subtree, id := filepath.Base(target.agent), target.subtree, filepath.Base(target.id)
+	profile, parts := target.profile, target.parts
 	store := s.store()
 	scenarioDir := store.scenarioDir(agent, subtree, id)
 	if !store.exists(scenarioDir) {
