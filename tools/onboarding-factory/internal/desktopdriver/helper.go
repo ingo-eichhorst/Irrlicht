@@ -44,6 +44,8 @@ type helperRequest struct {
 	Command         string               `json:"command"`
 	Selector        *helperSelector      `json:"selector,omitempty"`
 	Value           *string              `json:"value,omitempty"`
+	KeyCode         *uint16              `json:"keyCode,omitempty"`
+	Modifiers       []string             `json:"modifiers,omitempty"`
 	Postcondition   *helperPostcondition `json:"postcondition,omitempty"`
 	Limits          map[string]int       `json:"limits,omitempty"`
 	Probes          []helperProbe        `json:"probes,omitempty"`
@@ -163,6 +165,27 @@ func (client helperClient) click(
 	_, err := client.call(ctx, helperRequest{
 		Command:       "physical_click",
 		Selector:      &selector,
+		Postcondition: &postcondition,
+		Limits:        map[string]int{"maxDepth": 64, "maxNodes": 5_000},
+	})
+	return err
+}
+
+// keyboard sends one virtual key to a resolved control. The helper REQUIRES a
+// postcondition and refuses an action whose postcondition already holds, so a
+// keystroke with no observable effect cannot report success here.
+func (client helperClient) keyboard(
+	ctx context.Context,
+	selector helperSelector,
+	keyCode uint16,
+	modifiers []string,
+	postcondition helperPostcondition,
+) error {
+	_, err := client.call(ctx, helperRequest{
+		Command:       "keyboard",
+		Selector:      &selector,
+		KeyCode:       &keyCode,
+		Modifiers:     modifiers,
 		Postcondition: &postcondition,
 		Limits:        map[string]int{"maxDepth": 64, "maxNodes": 5_000},
 	})

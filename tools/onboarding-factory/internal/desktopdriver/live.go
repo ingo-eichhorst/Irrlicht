@@ -299,19 +299,22 @@ func waitForComposerControls(
 }
 
 func (runtime *LiveRuntime) SetPrompt(ctx context.Context, prompt string) error {
-	selector, ok := runtime.controls["prompt"]
-	if !ok {
-		return errors.New("prompt selector was not verified")
+	selector, err := runtime.control(controlPrompt)
+	if err != nil {
+		return err
 	}
 	return runtime.helper.setValue(ctx, selector, prompt)
 }
 
 func (runtime *LiveRuntime) Submit(ctx context.Context) error {
-	send, ok := runtime.controls["send"]
-	if !ok {
-		return errors.New("Send selector was not verified")
+	send, err := runtime.control(controlSend)
+	if err != nil {
+		return err
 	}
-	stop := helperSelector{Role: "AXButton", Description: "Stop", Hierarchy: send.Hierarchy}
+	stop, err := runtime.stopSelector()
+	if err != nil {
+		return err
+	}
 	return runtime.helper.click(ctx, send, helperPostcondition{
 		Selector: stop, Condition: "exists", TimeoutMilliseconds: 10_000,
 	})
