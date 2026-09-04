@@ -605,8 +605,9 @@ func serveHistoryAgentsChart(w http.ResponseWriter, concurrency outbound.Concurr
 //
 // One bucket per canonical state, and the key set is DERIVED
 // (outbound.NewStateBuckets, below) rather than fixed at three: unlike the
-// history bar's 2-bit strip, this payload is a map with no encoding limit, so
-// it has carried `error` since #1801. A nil reader or an unresolved recordings dir yields an
+// history bar's strip — which had a fixed-width code per bucket, and until
+// #1805 widened it no spare code to spend — this payload is a map with no
+// encoding limit at all, so it has carried `error` since #1801. A nil reader or an unresolved recordings dir yields an
 // empty-but-valid payload rather than an error, mirroring
 // serveHistoryAgentsChart.
 func serveHistoryStateChart(w http.ResponseWriter, concurrency outbound.ConcurrencyReader, rangeKey, scopeEcho string, query outbound.SeriesQuery) {

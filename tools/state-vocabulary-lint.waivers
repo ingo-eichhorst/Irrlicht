@@ -17,31 +17,46 @@
 #   a waiver matching no flagged site  -> FAIL, the entry rotted
 #
 # ---------------------------------------------------------------------------
-# 1. THE HISTORY BAR'S 2-BIT STRIP — genuinely cannot carry a fourth state (#1805)
+# 1. THE HISTORY BAR'S STRIP — it carries all four states now (#1805 LANDED)
 #
-# The history bar packs each bucket's state into a 2-bit field whose four codes
-# are already spent (ready/working/waiting/no-data), so every producer,
-# consumer and test along THAT path is three-state by construction rather than
-# by oversight.  #1805 tracks widening the encoding, and when it lands these
-# are the sites it has to touch.
+# HISTORY, because this section was the checklist for exactly this change and a
+# reader needs to know it has been worked through rather than abandoned:
 #
-# #1807 has LANDED and did not widen anything: a state with no code now maps to
-# the no-data code instead of `ready`, and its verbatim string is preserved in
-# history.json rather than rewritten.  So an errored bucket paints blank, not
-# green — but the field is still 2 bits and these sites still enumerate exactly
-# the three states it can carry.  The waivers below therefore stand as written;
-# they are #1805's checklist alone now.
+#   The strip used to pack each bucket into a 2-bit field whose four codes were
+#   all spent (ready/working/waiting/no-data), so every producer, consumer and
+#   test along that path was three-state BY CONSTRUCTION. #1807 landed first and
+#   deliberately did not widen anything — it only stopped an unencodable state
+#   painting green. #1805 then replaced the packing with ONE BYTE per bucket,
+#   gave `error` code 3 and parked no-data at 255.
+#
+# So the conditional judgement this section recorded has now been discharged.
+# THREE entries were dropped because their files no longer name a proper subset
+# anywhere: `history_tracker.go` (statePriority gained the error arm),
+# `irrlicht.js` (HISTORY_CODE_TO_STATE lists all four) and `HistoryBarView.swift`
+# (its doc comment described the old three-code switch and was rewritten, since
+# a stale comment is a defect to fix rather than a subset to excuse). The lint
+# failing on those rotted waivers is exactly how this section got revisited.
+#
+# HistoryBarColorTests.swift keeps its waiver rather than following that rule,
+# and the difference is deliberate: its retained sentence NARRATES the old
+# three-code decode as history, in a doc comment whose subject is why the lock
+# gained a fourth bucket. HistoryBarView's sentence asserted the old shape in
+# the PRESENT TENSE about live code. One is a record, the other was wrong.
+#
+# What remains below is NOT encoding-limited any more. Each entry is a
+# deliberate proper subset for its own local reason, stated per line, and those
+# reasons are no longer conditional on the vocabulary — a fifth state would not
+# invalidate them the way it would have invalidated the 2-bit ones.
 #
 # Scope note, because the first draft of this section got it wrong and a wrong
 # dismissal is the one error class that stops anyone re-checking: this covers
 # the history BAR only.  The Activity Matrix is a different mechanism and is
 # NOT excused here — see section 1b.
 
-core/application/services/history_tracker.go        2-bit history-strip encoding; the four codes are spent (#1805)
-core/application/services/history_tracker_test.go   pins the 2-bit encoding above; moves with it (#1805)
-platforms/web/irrlicht.js                           HISTORY_PRIORITY_TO_STATE — the client half of the 2-bit decode (#1805)
-platforms/macos/Irrlicht/Views/HistoryBarView.swift decodes the same priority codes (#1805)
-platforms/macos/Tests/HistoryBarColorTests.swift    LOCK on those three canonical buckets — it must NOT silently gain a fourth
+core/application/services/history_tracker_test.go   fixtures that seal three specific buckets on purpose (#1805)
+core/application/services/history_wire_test.go      one comment naming the 4 buckets a byte-layout fixture seals, no-data among them — a specific fixture, not the vocabulary (#1805)
+platforms/macos/Tests/HistoryBarColorTests.swift    narrates the pre-#1805 three-code decode as history; the assertions themselves cover all four
+platforms/macos/Tests/HistoryWireFormatTests.swift  upgrade-merge test iterates the states error must OUTRANK, so naming error there would defeat it (#1805)
 
 # ---------------------------------------------------------------------------
 # 1b. THE ACTIVITY MATRIX — NOT encoding-limited, and macOS is genuinely behind

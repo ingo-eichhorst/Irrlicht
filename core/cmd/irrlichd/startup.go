@@ -237,7 +237,7 @@ func historyEventBroadcaster(push outbound.PushBroadcaster) func(services.Histor
 
 // historySnapshotProvider builds a connect-time hydration list for the
 // WebSocket hub. Each PushMessage carries the snapshot's per-granularity
-// tick generations alongside the bit-packed history so a client can dedupe
+// tick generations alongside the encoded history so a client can dedupe
 // any tick that fires between subscribe and the first message dispatch.
 func historySnapshotProvider(ht *services.HistoryTracker) wshub.ConnectSnapshots {
 	return func() []outbound.PushMessage {

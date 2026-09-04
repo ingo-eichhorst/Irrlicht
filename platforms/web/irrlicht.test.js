@@ -22,7 +22,6 @@ import {
   formatUsageCost,
   pressureClass,
   taskEtaPresentation,
-  historyPriorityForState,
   lastNotifiedPressure,
   relayFrameKind,
   seqGap,
@@ -281,18 +280,6 @@ describe('pressureClass', () => {
   })
 })
 
-describe('historyPriorityForState', () => {
-  test('waiting has highest priority (2)', () => {
-    expect(historyPriorityForState('waiting')).toBe(2)
-  })
-
-  test('working is 1, ready is 0, unknown is -1', () => {
-    expect(historyPriorityForState('working')).toBe(1)
-    expect(historyPriorityForState('ready')).toBe(0)
-    expect(historyPriorityForState('unknown')).toBe(-1)
-  })
-})
-
 describe('formatUsageCost', () => {
   // Windowed usage chip headline (#386). Zero renders "$0" (a windowed zero
   // is honest) to match the macOS chip, not "$0.00".
@@ -326,7 +313,7 @@ describe('relayFrameKind', () => {
 
   test('treats raw daemon frames (and junk) as raw', () => {
     expect(relayFrameKind({ type: 'session_updated', session: {} })).toBe('raw')
-    expect(relayFrameKind({ type: 'history_tick' })).toBe('raw')
+    expect(relayFrameKind({ type: 'history_tick_v2' })).toBe('raw')
     expect(relayFrameKind(null)).toBe('raw')
     expect(relayFrameKind({})).toBe('raw')
   })

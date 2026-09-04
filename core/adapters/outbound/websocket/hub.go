@@ -46,7 +46,7 @@ func loopbackCheckOrigin(r *http.Request) bool {
 
 // ConnectSnapshots returns the messages to deliver to a freshly-attached
 // WebSocket client before the live stream takes over. Typically this is one
-// history_snapshot per known session.
+// history snapshot per known session.
 type ConnectSnapshots func() []outbound.PushMessage
 
 // hub manages WebSocket connections and fans out session state updates.
@@ -81,7 +81,7 @@ func (h *hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 	ch := h.push.Subscribe()
 	defer h.push.Unsubscribe(ch)
 
-	// Hydrate the new client with one history_snapshot per known session
+	// Hydrate the new client with one history snapshot per known session
 	// before the live stream starts. Subscribe-then-snapshot order ensures
 	// no tick or upgrade emitted between these two operations is lost; per-
 	// session tick generations on snapshot/tick messages let the client
@@ -123,7 +123,7 @@ func (h *hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// sendSnapshots hydrates a freshly-attached client with one history_snapshot
+// sendSnapshots hydrates a freshly-attached client with one history snapshot
 // per known session (h.connectSnapshots may be nil, in which case there's
 // nothing to send). It returns false if a write failed and the caller should
 // abort the connection.
