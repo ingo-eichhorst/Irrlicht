@@ -138,24 +138,32 @@ case "$ADAPTER" in
   *) fail "unknown adapter: $ADAPTER" ;;
 esac
 
-command -v "$CLI_BIN" >/dev/null 2>&1 || fail "$CLI_BIN CLI not on PATH"
-# Merge stderr — `pi --version` writes to stderr, others to stdout.
-# Trailing punctuation is stripped because `copilot --version` prints
-# "GitHub Copilot CLI 1.0.77." — with a full stop that would otherwise ride
-# into the sort -V comparison below. No other adapter's version field ends in
-# punctuation, so this is a no-op for them.
-CLI_VER="$("$CLI_BIN" --version 2>&1 | awk -v f="$VER_FIELD" '{print $f}' | head -n1 | sed 's/[.,]$//')"
-# Strip a leading "v" (hermes prints "Hermes Agent v0.19.0 ..."). Without
-# this the floor check below silently passes ANY version: `sort -V` orders
-# a bare "0.19.0" ahead of a "v"-prefixed string whatever the numbers say,
-# so LOWEST always equals MIN_VERSION and the comparison proves nothing.
-# A no-op for the adapters whose --version has no prefix.
-CLI_VER="${CLI_VER#v}"
-[[ -n "$CLI_VER" ]] || fail "could not parse '$CLI_BIN --version' output"
+if [[ "${EXECUTION_PROFILE:-cli-local}" == "desktop-local" ]]; then
+  # The Desktop helper validates the bundled Claude Code version before any
+  # session action. Do not make a Desktop recording depend on, or invoke, the
+  # separate command-line installation.
+  CLI_BIN="Claude.app"
+  CLI_VER="verified-by-desktop-helper"
+else
+  command -v "$CLI_BIN" >/dev/null 2>&1 || fail "$CLI_BIN CLI not on PATH"
+  # Merge stderr — `pi --version` writes to stderr, others to stdout.
+  # Trailing punctuation is stripped because `copilot --version` prints
+  # "GitHub Copilot CLI 1.0.77." — with a full stop that would otherwise ride
+  # into the sort -V comparison below. No other adapter's version field ends in
+  # punctuation, so this is a no-op for them.
+  CLI_VER="$("$CLI_BIN" --version 2>&1 | awk -v f="$VER_FIELD" '{print $f}' | head -n1 | sed 's/[.,]$//')"
+  # Strip a leading "v" (hermes prints "Hermes Agent v0.19.0 ..."). Without
+  # this the floor check below silently passes ANY version: `sort -V` orders
+  # a bare "0.19.0" ahead of a "v"-prefixed string whatever the numbers say,
+  # so LOWEST always equals MIN_VERSION and the comparison proves nothing.
+  # A no-op for the adapters whose --version has no prefix.
+  CLI_VER="${CLI_VER#v}"
+  [[ -n "$CLI_VER" ]] || fail "could not parse '$CLI_BIN --version' output"
 
-if [[ -n "$MIN_VERSION" ]]; then
-  LOWEST="$(printf '%s\n%s\n' "$MIN_VERSION" "$CLI_VER" | sort -V | head -n1)"
-  [[ "$LOWEST" == "$MIN_VERSION" ]] || fail "$ADAPTER $CLI_VER is below pinned minimum $MIN_VERSION"
+  if [[ -n "$MIN_VERSION" ]]; then
+    LOWEST="$(printf '%s\n%s\n' "$MIN_VERSION" "$CLI_VER" | sort -V | head -n1)"
+    [[ "$LOWEST" == "$MIN_VERSION" ]] || fail "$ADAPTER $CLI_VER is below pinned minimum $MIN_VERSION"
+  fi
 fi
 
 # 5. Build irrlichd + replay from the current worktree so recordings
@@ -168,12 +176,17 @@ fi
 BIN_DIR="$REPO_ROOT/.build/refresh/bin"
 mkdir -p "$BIN_DIR"
 VERSION_STR="$("$REPO_ROOT/tools/version.sh" 2>/dev/null || echo dev)"
-for bin in irrlichd replay; do
+bins=(irrlichd replay)
+if [[ "${EXECUTION_PROFILE:-cli-local}" == "desktop-local" ]]; then
+  bins+=(desktop-driver)
+fi
+for bin in "${bins[@]}"; do
   # irrlichd lives in core; replay moved into the factory module (#523). go.work
   # resolves both from the repo root.
   case "$bin" in
     irrlichd) src="./core/cmd/irrlichd" ;;
     replay)   src="./tools/onboarding-factory/cmd/replay" ;;
+    desktop-driver) src="./tools/onboarding-factory/cmd/desktop-driver" ;;
     *) fail "unknown build target: $bin" ;;
   esac
   if ! (cd "$REPO_ROOT" && go build -ldflags "-X main.Version=$VERSION_STR" -o "$BIN_DIR/$bin" "$src") >/dev/null 2>&1; then

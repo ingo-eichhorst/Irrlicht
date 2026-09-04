@@ -50,6 +50,7 @@
 # things that can disagree about which files are protected is the defect this
 # lib is fixing, not a shape to reproduce in miniature.
 MANAGED_FILE_BACKUP_DIR=""
+MANAGED_FILE_SEAL_DIR=""
 
 # managed_file_paths <daemon-bin> prints one absolute agent config path per line,
 # as declared by the daemon's adapter registry.
@@ -214,6 +215,93 @@ snapshot_managed_files() {
   fi
 
   MANAGED_FILE_BACKUP_DIR="$backup_dir"
+  MANAGED_FILE_SEAL_DIR=""
+  return 0
+}
+
+# seal_managed_files records the exact post-install state that belongs to the
+# recording daemon. A strict caller invokes this after the hook-install wait.
+# Restore then distinguishes this expected change from an edit made by another
+# process during the live Desktop run. A mismatch stops before any old bytes
+# are copied back.
+seal_managed_files() {
+  [[ -n "$MANAGED_FILE_BACKUP_DIR" ]] || {
+    echo "managed-file-snapshot: cannot seal without an active snapshot" >&2
+    return 1
+  }
+  local manifest="$MANAGED_FILE_BACKUP_DIR/manifest"
+  [[ -f "$manifest" ]] || {
+    echo "managed-file-snapshot: cannot seal without $manifest" >&2
+    return 1
+  }
+  local seal="$MANAGED_FILE_BACKUP_DIR/expected" tmp="$MANAGED_FILE_BACKUP_DIR/expected.tmp"
+  rm -rf "$seal"
+  mkdir -p "$seal" || return 1
+  : > "$tmp" || return 1
+
+  local state slot path
+  while IFS=$'\t' read -r state slot path; do
+    case "$state" in
+      saved | absent)
+        if [[ -f "$path" ]]; then
+          cp "$path" "$seal/$slot" || {
+            echo "managed-file-snapshot: cannot seal expected bytes for $path" >&2
+            rm -f "$tmp"
+            return 1
+          }
+          printf 'file\t%s\t%s\n' "$slot" "$path" >> "$tmp"
+        elif [[ -e "$path" ]]; then
+          echo "managed-file-snapshot: cannot seal non-regular config path $path" >&2
+          rm -f "$tmp"
+          return 1
+        else
+          printf 'absent\t%s\t%s\n' "$slot" "$path" >> "$tmp"
+        fi
+        ;;
+      absentdir) ;;
+      *)
+        echo "managed-file-snapshot: cannot seal unknown manifest state '$state'" >&2
+        rm -f "$tmp"
+        return 1
+        ;;
+    esac
+  done < "$manifest"
+  mv "$tmp" "$seal/manifest" || return 1
+  MANAGED_FILE_SEAL_DIR="$seal"
+  return 0
+}
+
+# verify_managed_file_seal is a read-only all-files precondition. It returns
+# before restore changes any path if a daemon-owned config no longer matches
+# the post-install seal.
+verify_managed_file_seal() {
+  [[ -n "$MANAGED_FILE_SEAL_DIR" ]] || return 0
+  local manifest="$MANAGED_FILE_SEAL_DIR/manifest"
+  [[ -f "$manifest" ]] || {
+    echo "managed-file-snapshot: expected-state seal is missing at $manifest" >&2
+    return 1
+  }
+  local state slot path
+  while IFS=$'\t' read -r state slot path; do
+    case "$state" in
+      file)
+        if [[ ! -f "$path" ]] || ! cmp -s "$path" "$MANAGED_FILE_SEAL_DIR/$slot"; then
+          echo "managed-file-snapshot: refusing to overwrite concurrent change at $path" >&2
+          return 1
+        fi
+        ;;
+      absent)
+        if [[ -e "$path" ]]; then
+          echo "managed-file-snapshot: refusing to overwrite concurrent creation at $path" >&2
+          return 1
+        fi
+        ;;
+      *)
+        echo "managed-file-snapshot: invalid expected-state seal '$state' for $path" >&2
+        return 1
+        ;;
+    esac
+  done < "$manifest"
   return 0
 }
 
@@ -323,21 +411,26 @@ restore_managed_files() {
   local manifest="$MANAGED_FILE_BACKUP_DIR/manifest"
   if [[ ! -f "$manifest" ]]; then
     echo "managed-file-snapshot: no manifest at $manifest — leaving every agent config alone" >&2
-    return 0
+    return 1
   fi
 
+  verify_managed_file_seal || return 1
+
   local created_dir="$MANAGED_FILE_BACKUP_DIR/created"
-  local state slot path
+  local state slot path restore_rc=0
   while IFS=$'\t' read -r state slot path; do
     if [[ -n "$path" ]]; then
       case "$state" in
         saved)
           if [[ -f "$MANAGED_FILE_BACKUP_DIR/$slot" ]]; then
             preserve_replaced "$slot" "$path"
-            cp "$MANAGED_FILE_BACKUP_DIR/$slot" "$path" ||
+            if ! cp "$MANAGED_FILE_BACKUP_DIR/$slot" "$path"; then
               echo "managed-file-snapshot: could not restore $path" >&2
+              restore_rc=1
+            fi
           else
             echo "managed-file-snapshot: backup for $path is gone — leaving the file as it is" >&2
+            restore_rc=1
           fi
           ;;
         absent)
@@ -358,6 +451,7 @@ restore_managed_files() {
               echo "managed-file-snapshot: $path did not exist before the run; moved to $created_dir/$slot" >&2
             else
               echo "managed-file-snapshot: could not move $path aside" >&2
+              restore_rc=1
             fi
           fi
           ;;
@@ -373,6 +467,7 @@ restore_managed_files() {
           ;;
         *)
           echo "managed-file-snapshot: unrecognized manifest state '$state' for $path — leaving it alone" >&2
+          restore_rc=1
           ;;
       esac
     fi
@@ -381,5 +476,6 @@ restore_managed_files() {
   # The snapshot is spent: clear the shared state so a second restore is a
   # no-op and a caller that legitimately records again can take a fresh one.
   MANAGED_FILE_BACKUP_DIR=""
-  return 0
+  MANAGED_FILE_SEAL_DIR=""
+  return "$restore_rc"
 }

@@ -248,7 +248,8 @@ kill_record_daemon() {
 # as the trap itself, the disarm is a harmless no-op.
 stop_record_daemon() {
   kill_record_daemon
-  restore_managed_files
+  local restore_rc=0
+  restore_managed_files || restore_rc=$?
   trap - EXIT
-  return 0
+  return "$restore_rc"
 }
