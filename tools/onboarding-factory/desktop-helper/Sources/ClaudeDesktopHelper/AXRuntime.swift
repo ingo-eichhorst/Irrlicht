@@ -20,6 +20,8 @@ struct LiveTree {
     }
 }
 
+typealias AXAttributeReader = (AXUIElement, String) throws -> CFTypeRef?
+
 enum AXRuntime {
     private static let manualAccessibilityAttribute = "AXManualAccessibility"
     private static let domIdentifierAttribute = "AXDOMIdentifier"
@@ -32,7 +34,8 @@ enum AXRuntime {
     static func readTree(
         application: AXUIElement,
         limits: TraversalLimits,
-        childrenReader: (AXUIElement) throws -> [AXUIElement] = AXRuntime.children
+        childrenReader: (AXUIElement) throws -> [AXUIElement] = AXRuntime.children,
+        attributeReader: @escaping AXAttributeReader = AXRuntime.attributeValue
     ) throws -> LiveTree {
         struct Pending {
             let element: AXUIElement
@@ -55,10 +58,11 @@ enum AXRuntime {
             }
             let item = pending[cursor]
             cursor += 1
-            let snapshot = snapshot(
+            let snapshot = try snapshot(
                 item.element,
                 path: item.path,
-                hierarchy: item.hierarchy
+                hierarchy: item.hierarchy,
+                attributeReader: attributeReader
             )
             result.append(LiveElement(snapshot: snapshot, element: item.element))
 
@@ -102,28 +106,56 @@ enum AXRuntime {
     static func snapshot(
         _ element: AXUIElement,
         path: [Int],
-        hierarchy: [String]
-    ) -> ElementSnapshot {
-        let role = stringAttribute(element, kAXRoleAttribute) ?? "AXUnknown"
+        hierarchy: [String],
+        attributeReader: AXAttributeReader = AXRuntime.attributeValue
+    ) throws -> ElementSnapshot {
+        let role = try stringAttribute(
+            element,
+            kAXRoleAttribute,
+            reader: attributeReader
+        ) ?? "AXUnknown"
         return ElementSnapshot(
             path: path,
             role: role,
-            subrole: stringAttribute(element, kAXSubroleAttribute),
-            title: stringAttribute(element, kAXTitleAttribute),
-            description: stringAttribute(element, kAXDescriptionAttribute),
-            identifier: nonEmptyStringAttribute(element, kAXIdentifierAttribute)
-                ?? nonEmptyStringAttribute(element, domIdentifierAttribute),
-            enabled: boolAttribute(element, kAXEnabledAttribute),
-            focused: boolAttribute(element, kAXFocusedAttribute),
-            frame: frame(of: element),
+            subrole: try stringAttribute(element, kAXSubroleAttribute, reader: attributeReader),
+            title: try stringAttribute(element, kAXTitleAttribute, reader: attributeReader),
+            description: try stringAttribute(
+                element,
+                kAXDescriptionAttribute,
+                reader: attributeReader
+            ),
+            identifier: try nonEmptyStringAttribute(
+                element,
+                kAXIdentifierAttribute,
+                reader: attributeReader
+            ) ?? nonEmptyStringAttribute(
+                element,
+                domIdentifierAttribute,
+                reader: attributeReader
+            ),
+            enabled: try boolAttribute(element, kAXEnabledAttribute, reader: attributeReader),
+            focused: try boolAttribute(element, kAXFocusedAttribute, reader: attributeReader),
+            frame: try frame(of: element, reader: attributeReader),
             hierarchy: hierarchy,
             valueRedacted: editableRoles.contains(role)
         )
     }
 
-    static func frame(of element: AXUIElement) -> Frame? {
-        guard let position: CGPoint = axValueAttribute(element, kAXPositionAttribute, type: .cgPoint),
-              let size: CGSize = axValueAttribute(element, kAXSizeAttribute, type: .cgSize)
+    static func frame(
+        of element: AXUIElement,
+        reader: AXAttributeReader = AXRuntime.attributeValue
+    ) throws -> Frame? {
+        guard let position: CGPoint = try axValueAttribute(
+            element,
+            kAXPositionAttribute,
+            type: .cgPoint,
+            reader: reader
+        ), let size: CGSize = try axValueAttribute(
+            element,
+            kAXSizeAttribute,
+            type: .cgSize,
+            reader: reader
+        )
         else { return nil }
         return Frame(
             x: Double(position.x),
@@ -133,33 +165,47 @@ enum AXRuntime {
         )
     }
 
-    static func stringAttribute(_ element: AXUIElement, _ attribute: String) -> String? {
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else {
-            return nil
+    static func stringAttribute(
+        _ element: AXUIElement,
+        _ attribute: String,
+        reader: AXAttributeReader = AXRuntime.attributeValue
+    ) throws -> String? {
+        guard let value = try reader(element, attribute) else { return nil }
+        guard CFGetTypeID(value) == CFStringGetTypeID() else {
+            throw invalidAttributeValue(attribute)
         }
         return value as? String
     }
 
-    private static func nonEmptyStringAttribute(_ element: AXUIElement, _ attribute: String) -> String? {
-        guard let value = stringAttribute(element, attribute), !value.isEmpty else { return nil }
+    private static func nonEmptyStringAttribute(
+        _ element: AXUIElement,
+        _ attribute: String,
+        reader: AXAttributeReader
+    ) throws -> String? {
+        guard let value = try stringAttribute(element, attribute, reader: reader),
+              !value.isEmpty
+        else { return nil }
         return value
     }
 
-    static func boolAttribute(_ element: AXUIElement, _ attribute: String) -> Bool? {
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else {
-            return nil
+    static func boolAttribute(
+        _ element: AXUIElement,
+        _ attribute: String,
+        reader: AXAttributeReader = AXRuntime.attributeValue
+    ) throws -> Bool? {
+        guard let value = try reader(element, attribute) else { return nil }
+        guard CFGetTypeID(value) == CFBooleanGetTypeID() else {
+            throw invalidAttributeValue(attribute)
         }
         return value as? Bool
     }
 
-    static func valueAttribute(_ element: AXUIElement) -> String? {
-        stringAttribute(element, kAXValueAttribute)
+    static func valueAttribute(_ element: AXUIElement) throws -> String? {
+        try stringAttribute(element, kAXValueAttribute)
     }
 
-    static func isFocused(_ element: AXUIElement) -> Bool {
-        boolAttribute(element, kAXFocusedAttribute) == true
+    static func isFocused(_ element: AXUIElement) throws -> Bool {
+        try boolAttribute(element, kAXFocusedAttribute) == true
     }
 
     static func setValue(_ value: String, on element: AXUIElement) throws {
@@ -175,7 +221,9 @@ enum AXRuntime {
             kAXFocusedAttribute as CFString,
             kCFBooleanTrue
         )
-        guard status == .success, boolAttribute(element, kAXFocusedAttribute) == true else {
+        guard status == .success,
+              try boolAttribute(element, kAXFocusedAttribute) == true
+        else {
             throw HelperFailure(.actionFailed, "Accessibility could not focus the selected control.")
         }
     }
@@ -305,21 +353,68 @@ enum AXRuntime {
         return children
     }
 
+    static func attributeValue(
+        _ element: AXUIElement,
+        _ attribute: String
+    ) throws -> CFTypeRef? {
+        var value: CFTypeRef?
+        let status = AXUIElementCopyAttributeValue(
+            element,
+            attribute as CFString,
+            &value
+        )
+        return try decodeAttribute(status: status, value: value, attribute: attribute)
+    }
+
+    static func decodeAttribute(
+        status: AXError,
+        value: CFTypeRef?,
+        attribute: String
+    ) throws -> CFTypeRef? {
+        // AX reports noValue for a supported optional attribute that has no
+        // current value. That is data absence, not a failed read.
+        if status == .attributeUnsupported || status == .noValue {
+            return nil
+        }
+        guard status == .success else {
+            throw HelperFailure(
+                .actionFailed,
+                "Accessibility could not read \(attribute) (AX error \(status.rawValue))."
+            )
+        }
+        guard let value else {
+            throw invalidAttributeValue(attribute)
+        }
+        return value
+    }
+
     private static func axValueAttribute<T>(
         _ element: AXUIElement,
         _ attribute: String,
-        type: AXValueType
-    ) -> T? {
-        var raw: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &raw) == .success,
-              let raw,
-              CFGetTypeID(raw) == AXValueGetTypeID()
-        else { return nil }
+        type: AXValueType,
+        reader: AXAttributeReader
+    ) throws -> T? {
+        guard let raw = try reader(element, attribute) else { return nil }
+        guard CFGetTypeID(raw) == AXValueGetTypeID() else {
+            throw invalidAttributeValue(attribute)
+        }
         let value = raw as! AXValue
-        guard AXValueGetType(value) == type else { return nil }
+        guard AXValueGetType(value) == type else {
+            throw invalidAttributeValue(attribute)
+        }
         let pointer = UnsafeMutablePointer<T>.allocate(capacity: 1)
         defer { pointer.deallocate() }
-        return AXValueGetValue(value, type, pointer) ? pointer.pointee : nil
+        guard AXValueGetValue(value, type, pointer) else {
+            throw invalidAttributeValue(attribute)
+        }
+        return pointer.pointee
+    }
+
+    private static func invalidAttributeValue(_ attribute: String) -> HelperFailure {
+        HelperFailure(
+            .actionFailed,
+            "Accessibility returned an invalid \(attribute) value."
+        )
     }
 
     private static func isSameOrDescendant(_ candidate: AXUIElement, of target: AXUIElement) -> Bool {

@@ -321,6 +321,278 @@ final class DesktopHelperCoreTests: XCTestCase {
         }
     }
 
+    func testAXAttributeFailuresPropagateThroughSnapshotAndValueReaders() throws {
+        let element = AXUIElementCreateSystemWide()
+        let injected = HelperFailure(.actionFailed, "injected AX attribute failure")
+        XCTAssertNil(try AXRuntime.decodeAttribute(
+            status: .attributeUnsupported,
+            value: nil,
+            attribute: kAXTitleAttribute
+        ))
+        XCTAssertNil(try AXRuntime.decodeAttribute(
+            status: .noValue,
+            value: nil,
+            attribute: kAXTitleAttribute
+        ))
+        XCTAssertThrowsError(try AXRuntime.decodeAttribute(
+            status: .cannotComplete,
+            value: nil,
+            attribute: kAXTitleAttribute
+        )) { error in
+            XCTAssertEqual((error as? HelperFailure)?.code, .actionFailed)
+        }
+
+        let snapshotAttributes = [
+            kAXRoleAttribute,
+            kAXIdentifierAttribute,
+            kAXEnabledAttribute,
+            kAXFocusedAttribute,
+            kAXPositionAttribute,
+            kAXSizeAttribute,
+        ]
+        for failingAttribute in snapshotAttributes {
+            XCTAssertThrowsError(try AXRuntime.snapshot(
+                element,
+                path: [0],
+                hierarchy: [],
+                attributeReader: { _, attribute in
+                    if attribute == failingAttribute { throw injected }
+                    return self.validAXValue(for: attribute)
+                }
+            )) { error in
+                XCTAssertEqual(error as? HelperFailure, injected)
+            }
+        }
+
+        let valueCondition = Postcondition(
+            selector: ControlSelector(role: "AXTextArea", identifier: "prompt-input"),
+            condition: .valueEquals,
+            value: "expected"
+        )
+        XCTAssertThrowsError(try PostconditionObserver.holds(
+            valueCondition,
+            in: [ElementSnapshot(
+                path: [0],
+                role: "AXTextArea",
+                identifier: "prompt-input"
+            )],
+            valueAtPath: { _ in throw injected }
+        )) { error in
+            XCTAssertEqual(error as? HelperFailure, injected)
+        }
+    }
+
+    func testResponseEncodingFailureReturnsClassifiedJSONAndNonzeroExit() throws {
+        let response = HelperResponse(
+            ok: true,
+            command: .inspect,
+            elements: [ElementSnapshot(
+                path: [0],
+                role: "AXButton",
+                frame: Frame(x: .infinity, y: 0, width: 10, height: 10)
+            )]
+        )
+        let encoded = ResponseEncoder.encode(ProcessResult(response: response, exitCode: 0))
+        XCTAssertEqual(encoded.exitCode, HelperFailure(.actionFailed, "").exitCode)
+        let decoded = try JSONDecoder().decode(HelperResponse.self, from: encoded.data)
+        XCTAssertFalse(decoded.ok)
+        XCTAssertEqual(decoded.error?.code, .actionFailed)
+        XCTAssertEqual(
+            decoded.error?.message,
+            "The helper could not encode its JSON response."
+        )
+    }
+
+    func testSetValueRunsCompleteInjectedActionPathInOrder() throws {
+        let application = AXUIElementCreateSystemWide()
+        let target = LiveElement(
+            snapshot: ElementSnapshot(
+                path: [0],
+                role: "AXTextArea",
+                identifier: "prompt-input"
+            ),
+            element: application
+        )
+        var order: [String] = []
+        var currentValue = "old"
+        let dependencies = makeDependencies(
+            application: application,
+            record: { order.append($0) },
+            readTree: { _, _ in
+                order.append("read")
+                return LiveTree(elements: [target])
+            },
+            setValue: { value, element in
+                order.append("set")
+                XCTAssertTrue(CFEqual(element, application))
+                currentValue = value
+            },
+            valueAttribute: { element in
+                order.append("value")
+                XCTAssertTrue(CFEqual(element, application))
+                return currentValue
+            }
+        )
+        let response = try CommandRunner.run(HelperRequest(
+            protocolVersion: desktopHelperProtocolVersion,
+            command: .setValue,
+            selector: ControlSelector(role: "AXTextArea", identifier: "prompt-input"),
+            value: "new"
+        ), dependencies: dependencies)
+
+        XCTAssertTrue(response.ok)
+        XCTAssertEqual(response.action?.postcondition, .valueEquals)
+        XCTAssertEqual(
+            order,
+            ["load", "frontmost", "expose", "read", "read", "value", "set", "read", "value"]
+        )
+    }
+
+    func testKeyboardRunsCompleteInjectedActionPathInOrder() throws {
+        let application = AXUIElementCreateSystemWide()
+        var order: [String] = []
+        var enabled = true
+        let dependencies = makeDependencies(
+            application: application,
+            record: { order.append($0) },
+            readTree: { _, _ in
+                order.append("read")
+                return LiveTree(elements: [LiveElement(
+                    snapshot: ElementSnapshot(
+                        path: [0],
+                        role: "AXButton",
+                        identifier: "send-button",
+                        enabled: enabled
+                    ),
+                    element: application
+                )])
+            },
+            focus: { element in
+                order.append("focus")
+                XCTAssertTrue(CFEqual(element, application))
+            },
+            isFocused: { element in
+                order.append("focused")
+                XCTAssertTrue(CFEqual(element, application))
+                return true
+            },
+            postKeyboardEvent: { keyCode, modifiers in
+                order.append("keyboard")
+                XCTAssertEqual(keyCode, 36)
+                XCTAssertEqual(modifiers, ["command"])
+                enabled = false
+            }
+        )
+        let selector = ControlSelector(role: "AXButton", identifier: "send-button")
+        let response = try CommandRunner.run(HelperRequest(
+            protocolVersion: desktopHelperProtocolVersion,
+            command: .keyboard,
+            selector: selector,
+            keyCode: 36,
+            modifiers: ["command"],
+            postcondition: Postcondition(selector: selector, condition: .disabled)
+        ), dependencies: dependencies)
+
+        XCTAssertTrue(response.ok)
+        XCTAssertEqual(
+            order,
+            [
+                "load", "frontmost", "expose", "read", "focus", "read",
+                "frontmost", "focused", "keyboard", "read",
+            ]
+        )
+    }
+
+    func testPhysicalClickRunsCompleteInjectedActionPathWithFreshCenter() throws {
+        let application = AXUIElementCreateSystemWide()
+        let selector = ControlSelector(role: "AXButton", identifier: "session-menu")
+        var order: [String] = []
+        var visible = true
+        var clickedPoint: Point?
+        let dependencies = makeDependencies(
+            application: application,
+            record: { order.append($0) },
+            readTree: { _, _ in
+                order.append("read")
+                let elements = visible ? [LiveElement(
+                    snapshot: ElementSnapshot(
+                        path: [0],
+                        role: "AXButton",
+                        identifier: "session-menu",
+                        frame: Frame(x: 1, y: 2, width: 3, height: 4)
+                    ),
+                    element: application
+                )] : []
+                return LiveTree(elements: elements)
+            },
+            snapshot: { element, path, hierarchy in
+                order.append("refresh")
+                XCTAssertTrue(CFEqual(element, application))
+                XCTAssertEqual(path, [0])
+                XCTAssertTrue(hierarchy.isEmpty)
+                return ElementSnapshot(
+                    path: path,
+                    role: "AXButton",
+                    identifier: "session-menu",
+                    frame: Frame(x: 100, y: 200, width: 20, height: 40)
+                )
+            },
+            requireHitTarget: { element, point in
+                order.append("hit")
+                XCTAssertTrue(CFEqual(element, application))
+                XCTAssertEqual(point, Point(x: 110, y: 220))
+            },
+            physicalClick: { point in
+                order.append("click")
+                clickedPoint = point
+                visible = false
+            }
+        )
+        let response = try CommandRunner.run(HelperRequest(
+            protocolVersion: desktopHelperProtocolVersion,
+            command: .physicalClick,
+            selector: selector,
+            postcondition: Postcondition(selector: selector, condition: .absent)
+        ), dependencies: dependencies)
+
+        XCTAssertTrue(response.ok)
+        XCTAssertEqual(clickedPoint, Point(x: 110, y: 220))
+        XCTAssertEqual(
+            order,
+            [
+                "load", "frontmost", "expose", "read", "read", "refresh",
+                "hit", "frontmost", "click", "read",
+            ]
+        )
+    }
+
+    func testCommandRunnerPropagatesTreeReadFailureBeforeAction() {
+        let application = AXUIElementCreateSystemWide()
+        let injected = HelperFailure(.actionFailed, "injected tree read failure")
+        var order: [String] = []
+        var clicked = false
+        let dependencies = makeDependencies(
+            application: application,
+            record: { order.append($0) },
+            readTree: { _, _ in
+                order.append("read")
+                throw injected
+            },
+            physicalClick: { _ in clicked = true }
+        )
+        let selector = ControlSelector(role: "AXButton", identifier: "session-menu")
+        XCTAssertThrowsError(try CommandRunner.run(HelperRequest(
+            protocolVersion: desktopHelperProtocolVersion,
+            command: .physicalClick,
+            selector: selector,
+            postcondition: Postcondition(selector: selector, condition: .absent)
+        ), dependencies: dependencies)) { error in
+            XCTAssertEqual(error as? HelperFailure, injected)
+        }
+        XCTAssertFalse(clicked)
+        XCTAssertEqual(order, ["load", "frontmost", "expose", "read"])
+    }
+
     func testStrictDecoderRejectsUnknownAndCommandInapplicableFieldsBeforeRun() throws {
         let unknownCoordinate = Data(
             #"{"protocolVersion":1,"command":"preflight","x":42}"#.utf8
@@ -415,5 +687,86 @@ final class DesktopHelperCoreTests: XCTestCase {
             subdirectory: "Fixtures"
         ))
         return try JSONDecoder().decode([ElementSnapshot].self, from: Data(contentsOf: url))
+    }
+
+    private func validAXValue(for attribute: String) -> CFTypeRef? {
+        switch attribute {
+        case kAXRoleAttribute:
+            return kAXButtonRole as CFString
+        case kAXEnabledAttribute, kAXFocusedAttribute:
+            return kCFBooleanTrue
+        case kAXPositionAttribute:
+            var point = CGPoint(x: 1, y: 2)
+            return AXValueCreate(.cgPoint, &point)
+        case kAXSizeAttribute:
+            var size = CGSize(width: 3, height: 4)
+            return AXValueCreate(.cgSize, &size)
+        default:
+            return nil
+        }
+    }
+
+    private func makeDependencies(
+        application: AXUIElement,
+        record: @escaping (String) -> Void,
+        readTree: @escaping (AXUIElement, TraversalLimits) throws -> LiveTree,
+        setValue: @escaping (String, AXUIElement) throws -> Void = { _, _ in
+            XCTFail("Unexpected setValue boundary call.")
+        },
+        focus: @escaping (AXUIElement) throws -> Void = { _ in
+            XCTFail("Unexpected focus boundary call.")
+        },
+        isFocused: @escaping (AXUIElement) throws -> Bool = { _ in
+            XCTFail("Unexpected isFocused boundary call.")
+            return false
+        },
+        valueAttribute: @escaping (AXUIElement) throws -> String? = { _ in
+            XCTFail("Unexpected valueAttribute boundary call.")
+            return nil
+        },
+        snapshot: @escaping (AXUIElement, [Int], [String]) throws -> ElementSnapshot = { _, _, _ in
+            XCTFail("Unexpected snapshot boundary call.")
+            throw HelperFailure(.actionFailed, "Unexpected snapshot boundary call.")
+        },
+        requireHitTarget: @escaping (AXUIElement, Point) throws -> Void = { _, _ in
+            XCTFail("Unexpected requireHitTarget boundary call.")
+        },
+        postKeyboardEvent: @escaping (UInt16, [String]) throws -> Void = { _, _ in
+            XCTFail("Unexpected postKeyboardEvent boundary call.")
+        },
+        physicalClick: @escaping (Point) throws -> Void = { _ in
+            XCTFail("Unexpected physicalClick boundary call.")
+        }
+    ) -> CommandDependencies {
+        CommandDependencies(
+            loadContext: {
+                record("load")
+                return CommandContext(
+                    status: AppStatus(
+                        bundleIdentifier: "com.anthropic.claudefordesktop",
+                        installed: true,
+                        running: true,
+                        accessibilityTrusted: true,
+                        desktopVersion: "test",
+                        bundledClaudeCodeVersion: "test"
+                    ),
+                    application: application,
+                    requireFrontmost: { record("frontmost") }
+                )
+            },
+            exposeAccessibility: { element in
+                record("expose")
+                XCTAssertTrue(CFEqual(element, application))
+            },
+            readTree: readTree,
+            setValue: setValue,
+            focus: focus,
+            isFocused: isFocused,
+            valueAttribute: valueAttribute,
+            snapshot: snapshot,
+            requireHitTarget: requireHitTarget,
+            postKeyboardEvent: postKeyboardEvent,
+            physicalClick: physicalClick
+        )
     }
 }
