@@ -57,6 +57,13 @@
 #   - MORE than one step carries that name (which one was being graded?)
 #   - the step declares a `shell:` this library does not model
 #   - (body only) the step has no `run: |` block, or an empty one
+#   - the scan record itself could not be read — truncated, or missing a header
+#     key or the `body` marker. Added last and from the inside (see
+#     _workflow_step_field): every refusal above guards the SCAN, and none of
+#     them guarded the reading of what the scan produced, so a record that came
+#     back short was searched without complaint and its empty fields walked to
+#     `bash -e` at status 0 — this list's opening promise broken by the one
+#     code path that never appeared on it.
 #
 # Status 2 rather than 1 throughout, so a refusal is distinguishable from an
 # errexit abort in a caller — the same reason shell-lib-suite.sh separates them.
@@ -208,9 +215,103 @@ _workflow_step_scan() {
   ' "$1"
 }
 
-# _workflow_step_field <record> <key> — the value of one header line.
+# _workflow_step_field <record> <key> — the value of one header line on stdout,
+# 0 if it was read, 2 if the record could not be read at all.
+#
+# ---------------------------------------------------------------------------
+# Why this reads the record to EOF instead of stopping at the answer
+#
+# It used to be one line:
+#
+#     printf '%s\n' "$1" | awk -v k="$2" '$1 == k { …; print; exit } $1 == "body" { exit }'
+#
+# and both `exit`s are a reader closing a pipe while the writer is still inside
+# write(2). Whether that is survivable depends on a disposition NOBODY here
+# sets: with SIGPIPE at SIG_DFL the writer is killed without a word, and with
+# SIGPIPE ignored — inherited, unchanged, from any parent that ignores it —
+# write returns EPIPE and bash reports it. On stderr. In the middle of a
+# derivation that then succeeds.
+#
+# Which is how it surfaced: test.yml's "Test the shared shell libs" step on the
+# Linux runner, comparing a value its harness had captured with `2>&1` the way
+# every caller in tools/lib/ does:
+#
+#   expected [bash -e] got [status 0 :: tools/lib/workflow-step.sh: line 213:
+#                           printf: write error: Broken pipe bash -e ]
+#
+# A right answer with a diagnostic welded to the front of it, at status 0. The
+# record is a few hundred bytes for a real step, so this raced on scheduling
+# and passed everywhere it was run by hand.
+#
+# So the answer is no longer taken early: the whole record is consumed and the
+# value emitted from END. There is nothing to save by stopping — the record is
+# one step's header plus one step's body — and a reader that never closes early
+# cannot signal its writer at all.
+#
+# ---------------------------------------------------------------------------
+# ...and why a read that fails is a refusal rather than an empty string
+#
+# The second defect is the one that outlives the pipe. Every field read here
+# returned its value and NOTHING else — no status a caller could act on — so
+# "this step declares no `shell:`" and "the record could not be read" arrived
+# identically, as the empty string. workflow_step_shell then walked its three
+# empty fields to `WORKFLOW_STEP_SHELL_DEFAULT` and returned 0.
+#
+# That is `bash -e`: the loosest invocation GitHub has, no `-o pipefail`, handed
+# out as a derivation by a function that had just failed to read its input. It
+# is precisely the fallback this file's header opens by forbidding — arrived at
+# from the inside, past every refusal above, because the refusals all guard the
+# scan and none of them guarded the reading of what the scan produced.
+#
+# So the record is now VALIDATED, not merely searched: every header key the scan
+# emits must be present, ahead of a `body` marker that must be there. A prefix
+# of a record parses fine as far as it goes, and an empty `step_shell` in one is
+# indistinguishable from a step declaring nothing — the truncation has to be
+# caught structurally or not at all. awk exits 3 on any of it; any non-zero at
+# all (including awk being killed) is a refusal here.
+#
+# `|| st=$?` and not a bare assignment: under a caller's `-e` a command
+# substitution that exits non-zero aborts on that line, which would leak awk's
+# 3 out of a function this repo's shell-lib-errexit_test.sh requires to RETURN
+# its documented status. Measured — it caught exactly that here.
 _workflow_step_field() {
-  printf '%s\n' "$1" | awk -v k="$2" '$1 == k { $1 = ""; sub(/^ /, ""); print; exit } $1 == "body" { exit }'
+  local val st=0
+  val=$(printf '%s\n' "$1" | awk -v k="$2" '
+    !inbody && $1 == "body" && NF == 1 { inbody = 1; next }
+    inbody { next }
+    {
+      seen[$1] = 1
+      if (!found && $1 == k) { $1 = ""; sub(/^ /, ""); val = $0; found = 1 }
+    }
+    END {
+      if (!inbody) exit 3
+      n = split("matches step_shell job_shell wf_shell has_run", need, " ")
+      for (i = 1; i <= n; i++) { if (!(need[i] in seen)) exit 3 }
+      if (!found) exit 3
+      printf "%s\n", val
+    }
+  ') || st=$?
+  if [ "$st" -ne 0 ]; then
+    printf 'workflow-step: refusing — the scan record could not be read (field `%s`, reader exited %d). A truncated or unparseable record must not be answered from: an unreadable field is empty, and an empty field is how "this step declares no `shell:`" looks, so answering would return `%s` as a derivation.\n' \
+      "$2" "$st" "$WORKFLOW_STEP_SHELL_DEFAULT" >&2
+    return 2
+  fi
+  printf '%s\n' "$val"
+  return 0
+}
+
+# _workflow_step_field_of <record> <key> <workflow-file> <step-name> — the same
+# read, with the file and step named in the refusal. Reading a header line is
+# the one operation both public functions do repeatedly, and none of them may
+# carry on with an empty string when it fails.
+_workflow_step_field_of() {
+  local val
+  val=$(_workflow_step_field "$1" "$2") || {
+    printf 'workflow-step: refusing — %s: nothing about the "%s" step could be derived, because the scan record for it could not be read.\n' "$3" "$4" >&2
+    return 2
+  }
+  printf '%s\n' "$val"
+  return 0
 }
 
 # _workflow_step_record <workflow-file> <step-name> — the scan, with the two
@@ -225,7 +326,7 @@ _workflow_step_record() {
     printf 'workflow-step: refusing — the scan of %s failed, so nothing about the "%s" step could be derived.\n' "$wf" "$name" >&2
     return 2
   }
-  matches=$(_workflow_step_field "$rec" matches)
+  matches=$(_workflow_step_field_of "$rec" matches "$wf" "$name") || return 2
   if [ "${matches:-0}" -eq 0 ]; then
     printf 'workflow-step: refusing — %s has no step named "%s". A harness cannot grade a step that is not there, and falling back to a default would grade an empty body as a clean run.\n' "$wf" "$name" >&2
     return 2
@@ -252,12 +353,18 @@ workflow_step_shell() {
   local wf="${1:-}" name="${2:-}" rec want src
   rec=$(_workflow_step_record "$wf" "$name") || return 2
 
-  want=$(_workflow_step_field "$rec" step_shell); src="the step's own \`shell:\`"
+  # Each read is `|| return 2`, not a bare assignment: the fall-through below
+  # treats an empty value as "not declared at this level", so a read that FAILED
+  # would walk straight to WORKFLOW_STEP_SHELL_DEFAULT and return it at status 0.
+  want=$(_workflow_step_field_of "$rec" step_shell "$wf" "$name") || return 2
+  src="the step's own \`shell:\`"
   if [ -z "$want" ]; then
-    want=$(_workflow_step_field "$rec" job_shell); src="the job's \`defaults: run: shell:\`"
+    want=$(_workflow_step_field_of "$rec" job_shell "$wf" "$name") || return 2
+    src="the job's \`defaults: run: shell:\`"
   fi
   if [ -z "$want" ]; then
-    want=$(_workflow_step_field "$rec" wf_shell); src="the workflow's \`defaults: run: shell:\`"
+    want=$(_workflow_step_field_of "$rec" wf_shell "$wf" "$name") || return 2
+    src="the workflow's \`defaults: run: shell:\`"
   fi
 
   case "$want" in
@@ -277,10 +384,11 @@ workflow_step_shell() {
 # body exits 0 under every invocation and is indistinguishable from a step that
 # passes.
 workflow_step_body() {
-  local wf="${1:-}" name="${2:-}" rec body lines
+  local wf="${1:-}" name="${2:-}" rec body lines has_run
   rec=$(_workflow_step_record "$wf" "$name") || return 2
 
-  if [ "$(_workflow_step_field "$rec" has_run)" != "1" ]; then
+  has_run=$(_workflow_step_field_of "$rec" has_run "$wf" "$name") || return 2
+  if [ "$has_run" != "1" ]; then
     printf 'workflow-step: refusing — %s: step "%s" has no `run: |` block to extract (a `uses:` step, or a single-line `run:` this library does not model).\n' "$wf" "$name" >&2
     return 2
   fi
