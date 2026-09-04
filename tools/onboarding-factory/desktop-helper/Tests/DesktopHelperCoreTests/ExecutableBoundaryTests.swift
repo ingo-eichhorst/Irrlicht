@@ -109,4 +109,11 @@ final class ExecutableBoundaryTests: XCTestCase {
             SemanticVersion("2.1.260-rc.1")!
         )
     }
+
+    func testSemanticVersionRejectsInvalidBuildMetadata() {
+        XCTAssertNil(SemanticVersion("999.0.0+"))
+        XCTAssertNil(SemanticVersion("999.0.0+bad!"))
+        XCTAssertNil(SemanticVersion("999.0.0+bad..metadata"))
+        XCTAssertNotNil(SemanticVersion("2.1.260+arm64.verified-1"))
+    }
 }

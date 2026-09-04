@@ -205,7 +205,7 @@ public struct SemanticVersion: Comparable, Equatable, Sendable {
             }
         }
 
-        private static func isAllowed(_ scalar: Unicode.Scalar) -> Bool {
+        fileprivate static func isAllowed(_ scalar: Unicode.Scalar) -> Bool {
             isASCIIDigit(scalar)
                 || (65 ... 90).contains(scalar.value)
                 || (97 ... 122).contains(scalar.value)
@@ -227,11 +227,15 @@ public struct SemanticVersion: Comparable, Equatable, Sendable {
     public let rawValue: String
 
     public init?(_ rawValue: String) {
-        let version = rawValue.split(
+        let versionAndBuild = rawValue.split(
             separator: "+",
             maxSplits: 1,
             omittingEmptySubsequences: false
-        )[0]
+        )
+        guard versionAndBuild.count == 1
+            || Self.isValidBuild(versionAndBuild[1])
+        else { return nil }
+        let version = versionAndBuild[0]
         let coreAndPrerelease = version.split(
             separator: "-",
             maxSplits: 1,
@@ -277,6 +281,14 @@ public struct SemanticVersion: Comparable, Equatable, Sendable {
         let parts = prerelease.split(separator: ".", omittingEmptySubsequences: false)
         let parsed = parts.compactMap(PrereleaseIdentifier.init)
         return !parts.isEmpty && parsed.count == parts.count ? parsed : nil
+    }
+
+    private static func isValidBuild(_ build: Substring) -> Bool {
+        let identifiers = build.split(separator: ".", omittingEmptySubsequences: false)
+        return !identifiers.isEmpty && identifiers.allSatisfy { identifier in
+            !identifier.isEmpty
+                && identifier.unicodeScalars.allSatisfy(PrereleaseIdentifier.isAllowed)
+        }
     }
 
     private static func compareCore(_ lhs: [Int], _ rhs: [Int]) -> Bool? {
