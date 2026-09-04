@@ -308,3 +308,23 @@ func containsStep(steps []string, want string) bool {
 	}
 	return false
 }
+
+// A step that times out must still say what it last saw. Reporting the deadline
+// alone discarded the operation's own error, which is the only thing that
+// distinguishes a composer that never opened from one that opened wrong.
+func TestRunStepKeepsTheOperationErrorOnTimeout(t *testing.T) {
+	err := runStep(context.Background(), time.Millisecond, "composer controls",
+		func(step context.Context) error {
+			<-step.Done()
+			return errors.New("last Desktop composer observation: project chip said No folder")
+		})
+	if err == nil {
+		t.Fatal("runStep() returned nil for a timed-out step")
+	}
+	if !strings.Contains(err.Error(), "timed out after") {
+		t.Fatalf("error does not name the deadline: %v", err)
+	}
+	if !strings.Contains(err.Error(), "No folder") {
+		t.Fatalf("error discarded the last observation: %v", err)
+	}
+}

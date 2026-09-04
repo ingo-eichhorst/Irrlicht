@@ -284,7 +284,12 @@ func runStep(
 	defer cancel()
 	if err := operation(step); err != nil {
 		if errors.Is(step.Err(), context.DeadlineExceeded) {
-			return fmt.Errorf("wait for %s timed out after %s: %w", name, timeout, step.Err())
+			// Carry the operation's own error. It holds the last thing the step
+			// actually observed, and reporting the deadline alone threw that
+			// away — leaving "timed out" with no way to tell a composer that
+			// never opened from one whose project chip named another folder.
+			return fmt.Errorf("wait for %s timed out after %s: %w; last error: %v",
+				name, timeout, step.Err(), err)
 		}
 		return fmt.Errorf("wait for %s: %w", name, err)
 	}
