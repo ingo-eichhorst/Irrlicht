@@ -170,18 +170,35 @@
       position: sticky;
       top: 0;
       z-index: 10;
+      /* A COLUMN of rows, not one row. The quota strip is the second row (see
+         .quota-chips): it is the only header element whose width grows with
+         how many providers are signed in, and beside the controls it pushed
+         into them until the two painted on top of each other. Everything that
+         was the header's single row now lives in .header-row, which keeps the
+         old layout exactly. */
       display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 12px 20px;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 8px;
+      padding: 10px 20px;
       border-bottom: 1px solid var(--border-subtle);
       background: var(--header-bg);
       backdrop-filter: blur(12px);
       -webkit-backdrop-filter: blur(12px);
     }
 
-    .header-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
-    .header-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+    .header-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    /* min-width:0 on both halves so a long left side SHRINKS instead of
+       overflowing into the right one — a flex item's default min-width is its
+       content, which is what let the two overlap rather than clip. */
+    .header-left { display: flex; align-items: center; gap: 10px; min-width: 0; overflow: hidden; }
+    .header-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; min-width: 0; }
 
     /* App title — mirrors overlay's "Irrlicht v$VERSION" left of the state icons. */
     .app-title {
@@ -207,10 +224,17 @@
     .quota-chips {
       display: none;
       align-items: flex-start;
-      gap: 10px;
+      gap: 14px;
       font-family: var(--font-mono);
+      /* Its own full-width row under .header-row. More providers than fit
+         scroll sideways inside the strip rather than widening the header, so
+         the row can never push into anything. */
+      overflow-x: auto;
+      scrollbar-width: none;
     }
-    header.has-quota-chips .app-title { display: none; }
+    .quota-chips::-webkit-scrollbar { display: none; }
+    /* The strip no longer REPLACES the version line — it has its own row, so
+       both are visible at once. */
     header.has-quota-chips .quota-chips { display: flex; }
 
     .quota-chip {
@@ -1186,15 +1210,14 @@
     }
 
     @media (max-width: 420px) {
-      header { flex-wrap: wrap; gap: 8px; }
+      .header-row { flex-wrap: wrap; gap: 8px; }
       main { padding: 8px 10px; }
       .row-cost { display: none; }
       .app-state-icons { display: none; }
-      /* Two quota chips at ~108px each + gap + right-side header buttons
-         overflow narrow viewports. Mirror the .app-state-icons rule above:
-         hide the chip strip and restore the version title underneath. */
-      header.has-quota-chips .quota-chips { display: none; }
-      header.has-quota-chips .app-title { display: flex; }
+      /* The chip strip used to be hidden here, because two chips at ~108px
+         each plus the right-side buttons overflowed a narrow viewport. It has
+         had its own row since the overlap fix, so there is nothing left to
+         collide with and it stays visible — it scrolls sideways instead. */
     }
 
     @media (max-width: 360px) {
