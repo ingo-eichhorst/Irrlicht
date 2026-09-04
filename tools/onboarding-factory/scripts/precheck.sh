@@ -143,7 +143,14 @@ if [[ "${EXECUTION_PROFILE:-cli-local}" == "desktop-local" ]]; then
   # session action. Do not make a Desktop recording depend on, or invoke, the
   # separate command-line installation.
   CLI_BIN="Claude.app"
-  CLI_VER="verified-by-desktop-helper"
+  # Deliberately EMPTY, not a placeholder string. Nothing here measures the
+  # bundled Claude Code version — the Desktop helper does, and its answer lands
+  # in $STAGING/desktop.versions.json. A sentinel written into precheck.json's
+  # cli_version would be picked up by promote-recording.sh's version chain
+  # whenever desktop.versions.json is missing, and stamped into the committed
+  # manifest as a verified agent_cli_version. Empty falls through that chain to
+  # "unknown", which is what "could not look" must read as.
+  CLI_VER=""
 else
   command -v "$CLI_BIN" >/dev/null 2>&1 || fail "$CLI_BIN CLI not on PATH"
   # Merge stderr — `pi --version` writes to stderr, others to stdout.

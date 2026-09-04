@@ -357,7 +357,13 @@ func (runtime *LiveRuntime) WaitIrrlichtState(
 		}
 		process := ProcessEvidence{PID: candidate.PID, Command: command}
 		if previous, ok := runtime.processEvidence[owned.Registry.SessionID]; ok && previous != process {
-			return false, fmt.Errorf("owned Claude process identity changed from PID %d to PID %d", previous.PID, process.PID)
+			// Name both halves. The comparison is over the whole evidence
+			// struct, so a drifting command line with a stable PID is a real
+			// mismatch — and reporting only the PIDs printed the same number
+			// twice and sent the operator looking at the wrong field.
+			return false, fmt.Errorf(
+				"owned Claude process identity changed from PID %d (%s) to PID %d (%s)",
+				previous.PID, previous.Command, process.PID, process.Command)
 		}
 		runtime.processes[owned.Registry.SessionID] = candidate.PID
 		runtime.processEvidence[owned.Registry.SessionID] = process

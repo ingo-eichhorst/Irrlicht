@@ -105,7 +105,19 @@ desktop_require_free_loopback_address() {
     echo "desktop-local requires a numeric 127.0.0.1 loopback address (got $address)" >&2
     return 1
   }
-  if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
+  # lsof exits non-zero both for "found no listener" and for "could not look"
+  # (missing binary, denied permission), so a bare non-zero must never be read
+  # as "the port is free". Establish that the probe can see anything at all
+  # first, using this process's own descriptors as the positive control.
+  command -v lsof >/dev/null 2>&1 || {
+    echo "desktop-local cannot check port $port: lsof is not on PATH" >&2
+    return 1
+  }
+  if [[ -z "$(lsof -p "$$" 2>/dev/null)" ]]; then
+    echo "desktop-local cannot check port $port: lsof reports nothing for this process" >&2
+    return 1
+  fi
+  if [[ -n "$(lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null)" ]]; then
     echo "desktop-local selected loopback port $port but it is no longer free" >&2
     return 1
   fi

@@ -419,7 +419,14 @@ if [[ "$EXECUTION_PROFILE" == "desktop-local" ]]; then
   export IRRLICHT_DESKTOP_HELPER_BIN
   export IRRLICHT_DESKTOP_DRIVER_BIN="$REPO_ROOT/.build/refresh/bin/desktop-driver"
   export IRRLICHT_REPO_ROOT="$REPO_ROOT"
-  IRRLICHT_DAEMON_VERSION="$(jq -r '.daemon_version' "$STAGING/precheck.json" 2>/dev/null || "$DAEMON" --version | awk '{print $NF}')"
+  # `// empty`, not a bare `.daemon_version`: on a precheck.json that exists but
+  # lacks the key, `jq -r` prints the literal string "null" and exits 0, so the
+  # `||` fallback never fires and the recording is stamped daemon_version "null".
+  # The guard was live only for the case that cannot happen (unreadable file)
+  # and dead for the one that can.
+  IRRLICHT_DAEMON_VERSION="$(jq -r '.daemon_version // empty' "$STAGING/precheck.json" 2>/dev/null || true)"
+  [[ -n "$IRRLICHT_DAEMON_VERSION" ]] ||
+    IRRLICHT_DAEMON_VERSION="$("$DAEMON" --version | awk '{print $NF}')"
   export IRRLICHT_DAEMON_VERSION
 fi
 
@@ -866,7 +873,23 @@ if [[ "$ATTACH" == "1" ]]; then
   echo "attach: waiting 6s for recorder flush..."
   sleep 6
 else
-  stop_record_daemon
+  # Capture, never a bare call. stop_record_daemon returns non-zero when the
+  # daemon's death is unverified or when the managed-file restore refused —
+  # both correct fail-closed refusals. Under `set -e` a bare call would abort
+  # the script right here, so the ONE run that leaves the operator's agent
+  # config modified would be the one run with no manifest saying so, and
+  # classify-failure.sh would grade it `unknown`.
+  TEARDOWN_RC=0
+  stop_record_daemon || TEARDOWN_RC=$?
+  if [[ "$TEARDOWN_RC" -ne 0 ]]; then
+    write_error_manifest "managed_file_restore_failed" \
+      "$(jq -n --arg dir "${MANAGED_FILE_BACKUP_DIR:-}" '{managed_file_backup_dir: $dir}')"
+    echo "run-cell: teardown returned $TEARDOWN_RC — the agent config may still be modified" >&2
+    if [[ -n "${MANAGED_FILE_BACKUP_DIR:-}" ]]; then
+      echo "  recovery snapshot kept at: $MANAGED_FILE_BACKUP_DIR" >&2
+    fi
+    exit 1
+  fi
 fi
 
 # Multi-session: drivers that chain `restart` steps (e.g. claudecode's
@@ -1014,11 +1037,22 @@ fi
 
 if [[ "$EXECUTION_PROFILE" == "desktop-local" ]]; then
   DESKTOP_STAGED_DIR="$STAGING/replaydata/agents/$ADAPTER/scenarios/$FOLDER"
+  # The SAME spelling the driver handed Claude Desktop. cmd/desktop-driver
+  # resolves every staging path with filepath.EvalSymlinks before opening the
+  # composer, so the registry, transcript and Irrlicht rows all carry the
+  # resolved cwd. Comparing them against the unresolved $STAGING/cwd graded a
+  # perfectly good run `desktop_evidence_invalid` whenever any component of
+  # .build was a symlink.
+  DESKTOP_WORKSPACE="$(cd "$STAGING/cwd" && pwd -P)" || {
+    write_error_manifest "desktop_evidence_invalid" '{}'
+    echo "ERROR: cannot resolve the Desktop workspace at $STAGING/cwd" >&2
+    exit 1
+  }
   desktop_stage_evidence \
     "$STAGING/desktop-evidence" \
     "$DESKTOP_STAGED_DIR/events.jsonl" \
     "$ACTUAL_UUID" \
-    "$STAGING/cwd" \
+    "$DESKTOP_WORKSPACE" \
     "$DESKTOP_STAGED_DIR" || {
       write_error_manifest "desktop_evidence_invalid" '{}'
       echo "ERROR: Desktop evidence did not satisfy the identity-field contract" >&2
