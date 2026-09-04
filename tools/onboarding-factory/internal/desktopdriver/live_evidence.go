@@ -4,15 +4,12 @@ package desktopdriver
 // written to the staging tree.
 
 import (
-	"bufio"
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 )
 
@@ -33,21 +30,9 @@ func (runtime *LiveRuntime) CaptureEvidence(
 		return CapturedEvidence{}, err
 	}
 	owned.Registry = currentRegistry
-	elements, err := runtime.helper.inspect(ctx)
+	environment, err := runtime.captureEnvironment(ctx, owned.Registry.CWD)
 	if err != nil {
 		return CapturedEvidence{}, err
-	}
-	controls, err := composerCatalog(elements, owned.Registry.CWD)
-	if err != nil {
-		return CapturedEvidence{}, fmt.Errorf("verify Desktop environment for evidence: %w", err)
-	}
-	if err := runtime.helper.probe(ctx, controls); err != nil {
-		return CapturedEvidence{}, fmt.Errorf("re-probe Desktop environment for evidence: %w", err)
-	}
-	environment := EnvironmentEvidence{
-		SelectedEnvironment: controls["environment"].Title,
-		RequestedWorkspace:  owned.Registry.CWD,
-		Project:             controls["project"].Title,
 	}
 	transcriptPath, err := runtime.transcriptPath(owned.Transcript.SessionID)
 	if err != nil {
@@ -70,6 +55,31 @@ func (runtime *LiveRuntime) CaptureEvidence(
 		return CapturedEvidence{}, err
 	}
 	return evidence, nil
+}
+
+// captureEnvironment re-reads the composer at evidence time rather than reusing
+// what the run verified earlier: the environment recorded next to a recording
+// has to be the one on screen when the evidence was taken.
+func (runtime *LiveRuntime) captureEnvironment(
+	ctx context.Context,
+	workspace string,
+) (EnvironmentEvidence, error) {
+	elements, err := runtime.helper.inspect(ctx)
+	if err != nil {
+		return EnvironmentEvidence{}, err
+	}
+	controls, err := composerCatalog(elements, workspace)
+	if err != nil {
+		return EnvironmentEvidence{}, fmt.Errorf("verify Desktop environment for evidence: %w", err)
+	}
+	if err := runtime.helper.probe(ctx, controls); err != nil {
+		return EnvironmentEvidence{}, fmt.Errorf("re-probe Desktop environment for evidence: %w", err)
+	}
+	return EnvironmentEvidence{
+		SelectedEnvironment: controls["environment"].Title,
+		RequestedWorkspace:  workspace,
+		Project:             controls["project"].Title,
+	}, nil
 }
 
 func (runtime *LiveRuntime) writeEvidenceFiles(
@@ -175,87 +185,6 @@ func validateEnvironmentLink(owned OwnedSession, environment EnvironmentEvidence
 	return nil
 }
 
-func validateNoToolTranscript(path string) error {
-	found, err := jsonlContains(path, containsToolRecord)
-	if err != nil {
-		return err
-	}
-	if found {
-		return fmt.Errorf("Desktop transcript %q contains a tool call or tool result", path)
-	}
-	return nil
-}
-
-func containsToolRecord(value map[string]any) bool {
-	return containsToolValue(value)
-}
-
-func containsToolValue(value any) bool {
-	switch typed := value.(type) {
-	case []any:
-		for _, child := range typed {
-			if containsToolValue(child) {
-				return true
-			}
-		}
-	case map[string]any:
-		if kind, ok := typed["type"].(string); ok && (kind == "tool_use" || kind == "tool_result") {
-			return true
-		}
-		for _, child := range typed {
-			if containsToolValue(child) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func jsonlContains(path string, predicate func(map[string]any) bool) (bool, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return false, err
-	}
-	defer file.Close()
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
-	for scanner.Scan() {
-		var value map[string]any
-		if err := json.Unmarshal(scanner.Bytes(), &value); err != nil {
-			return false, fmt.Errorf("decode recording %q: %w", path, err)
-		}
-		if predicate(value) {
-			return true, nil
-		}
-	}
-	return false, scanner.Err()
-}
-
-func recordingHasStateSequence(directory, sessionID string, expected []string) (bool, error) {
-	files, err := filepath.Glob(filepath.Join(directory, "*.jsonl"))
-	if err != nil {
-		return false, err
-	}
-	sort.Strings(files)
-	matched := 0
-	for _, file := range files {
-		_, err := jsonlContains(file, func(value map[string]any) bool {
-			if matched < len(expected) && value["kind"] == "state_transition" &&
-				value["session_id"] == sessionID && value["new_state"] == expected[matched] {
-				matched++
-			}
-			return matched == len(expected)
-		})
-		if err != nil {
-			return false, err
-		}
-		if matched == len(expected) {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
 func (runtime *LiveRuntime) VerifyBaseline(_ context.Context, baseline Baseline, owned OwnedSession) error {
 	if err := VerifyTreeSnapshot(baseline.Config); err != nil {
 		return err
@@ -282,25 +211,4 @@ func (runtime *LiveRuntime) VerifyBaseline(_ context.Context, baseline Baseline,
 		}
 	}
 	return nil
-}
-
-func writeJSON(path string, value any) error {
-	data, err := json.MarshalIndent(value, "", "  ")
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
-	return os.WriteFile(path, data, 0o600)
-}
-
-func copyRegularFile(source, destination string) error {
-	info, err := os.Lstat(source)
-	if err != nil || !info.Mode().IsRegular() {
-		return fmt.Errorf("evidence source is not a regular file: %q", source)
-	}
-	data, err := os.ReadFile(source)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(destination, data, 0o600)
 }
