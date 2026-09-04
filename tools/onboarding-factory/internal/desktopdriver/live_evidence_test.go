@@ -1,0 +1,177 @@
+package desktopdriver
+
+// What a run records, and the identity join it must satisfy before any of it
+// reaches the staging tree.
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestNoToolTranscriptRejectsNestedToolUse(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	content := `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read"}]}}` + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateNoToolTranscript(path); err == nil || !strings.Contains(err.Error(), "contains a tool call") {
+		t.Fatalf("validateNoToolTranscript() error = %v", err)
+	}
+}
+
+func TestRecordedStateSequenceRequiresReadyWorkingReadyInOrder(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "recording.jsonl")
+	content := strings.Join([]string{
+		`{"kind":"state_transition","session_id":"other","new_state":"ready"}`,
+		`{"kind":"state_transition","session_id":"cli-1","new_state":"ready"}`,
+		`{"kind":"state_transition","session_id":"cli-1","new_state":"working"}`,
+		`{"kind":"state_transition","session_id":"cli-1","new_state":"ready"}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	found, err := recordingHasStateSequence(dir, "cli-1", []string{"ready", "working", "ready"})
+	if err != nil || !found {
+		t.Fatalf("recordingHasStateSequence() = %t, %v", found, err)
+	}
+	mutated, err := recordingHasStateSequence(dir, "cli-1", []string{"ready", "ready", "working"})
+	if err != nil || mutated {
+		t.Fatalf("out-of-order mutation = %t, %v", mutated, err)
+	}
+}
+
+func TestEvidencePreservesOmittedLocalScopeAndExactJoin(t *testing.T) {
+	dir := t.TempDir()
+	transcript := filepath.Join(dir, "source.jsonl")
+	if err := os.WriteFile(transcript, []byte(`{"sessionId":"cli-1","cwd":"/exact","entrypoint":"claude-desktop"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	owned := OwnedSession{
+		Registry: RegistrySession{
+			SessionID: "local_1", CLISessionID: "cli-1", CWD: "/exact",
+			Raw: map[string]any{"secret-setting": "must-not-leak"},
+		},
+		Transcript: TranscriptIdentity{SessionID: "cli-1", CWD: "/exact", Entrypoint: "claude-desktop"},
+	}
+	evidence := CapturedEvidence{
+		TranscriptPath: transcript,
+		IrrlichtSession: SessionObservation{
+			SessionID: "cli-1", CWD: "/exact", PID: 42,
+			Launcher: Launcher{HostBundleID: desktopBundleID},
+			Raw:      map[string]any{"private-field": "must-not-leak"},
+		},
+		Process: ProcessEvidence{PID: 42, Command: "/Applications/Claude.app/claude"},
+		Environment: EnvironmentEvidence{
+			SelectedEnvironment: "Local", RequestedWorkspace: "/exact", Project: "exact",
+		},
+	}
+	out := filepath.Join(dir, "evidence")
+	if err := os.Mkdir(out, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &LiveRuntime{}
+	if err := runtime.writeEvidenceFiles(out, owned, evidence); err != nil {
+		t.Fatalf("writeEvidenceFiles() error = %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(out, "desktop-registry.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var registry map[string]json.RawMessage
+	if err := json.Unmarshal(data, &registry); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := registry["envScopeId"]; present {
+		t.Fatalf("omitted Local envScopeId was invented: %s", data)
+	}
+	if string(registry["sessionId"]) != `"local_1"` || string(registry["cliSessionId"]) != `"cli-1"` {
+		t.Fatalf("registry evidence did not preserve identity: %s", data)
+	}
+	if _, present := registry["secret-setting"]; present {
+		t.Fatalf("registry evidence leaked an unrelated field: %s", data)
+	}
+	irrlichtData, err := os.ReadFile(filepath.Join(out, "irrlicht-session.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var irrlicht map[string]json.RawMessage
+	if err := json.Unmarshal(irrlichtData, &irrlicht); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := irrlicht["private-field"]; present {
+		t.Fatalf("Irrlicht evidence leaked an unrelated field: %s", irrlichtData)
+	}
+}
+
+func TestEvidenceRejectsIdentityChangesBeforeWriting(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*CapturedEvidence)
+	}{
+		{"session ID", func(e *CapturedEvidence) { e.IrrlichtSession.SessionID = "cli-other" }},
+		{"workspace", func(e *CapturedEvidence) { e.IrrlichtSession.CWD = "/other" }},
+		{"PID", func(e *CapturedEvidence) { e.Process.PID = 99 }},
+		{"bundle", func(e *CapturedEvidence) { e.IrrlichtSession.Launcher.HostBundleID = "other.bundle" }},
+		{"environment", func(e *CapturedEvidence) { e.Environment.SelectedEnvironment = "Remote" }},
+		{"project", func(e *CapturedEvidence) { e.Environment.Project = "other" }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			transcript := filepath.Join(dir, "source.jsonl")
+			if err := os.WriteFile(transcript, []byte(`{"sessionId":"cli-1","cwd":"/exact","entrypoint":"claude-desktop"}`+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			owned := OwnedSession{
+				Registry:   RegistrySession{SessionID: "local_1", CLISessionID: "cli-1", CWD: "/exact"},
+				Transcript: TranscriptIdentity{SessionID: "cli-1", CWD: "/exact", Entrypoint: "claude-desktop"},
+			}
+			evidence := CapturedEvidence{
+				TranscriptPath: transcript,
+				IrrlichtSession: SessionObservation{
+					SessionID: "cli-1", CWD: "/exact", PID: 42,
+					Launcher: Launcher{HostBundleID: desktopBundleID},
+				},
+				Process: ProcessEvidence{PID: 42, Command: "/Applications/Claude.app/claude"},
+				Environment: EnvironmentEvidence{
+					SelectedEnvironment: "Local", RequestedWorkspace: "/exact", Project: "exact",
+				},
+			}
+			test.mutate(&evidence)
+			if err := (&LiveRuntime{}).writeEvidenceFiles(dir, owned, evidence); err == nil {
+				t.Fatal("writeEvidenceFiles() accepted changed identity")
+			}
+		})
+	}
+}
+
+func TestRegistryIdentityMustStillMatchAtEvidenceCapture(t *testing.T) {
+	expected := RegistrySession{
+		SessionID: "local_1", CLISessionID: "cli-1", CWD: "/exact",
+	}
+	tests := []struct {
+		name   string
+		mutate func(*RegistrySession)
+	}{
+		{"session ID", func(r *RegistrySession) { r.SessionID = "local_other" }},
+		{"CLI ID", func(r *RegistrySession) { r.CLISessionID = "cli-other" }},
+		{"workspace", func(r *RegistrySession) { r.CWD = "/other" }},
+		{"scoped environment", func(r *RegistrySession) { value := "builtin_local"; r.EnvScopeID = &value }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			current := expected
+			test.mutate(&current)
+			if err := validateRegistryIdentity(expected, current); err == nil {
+				t.Fatal("validateRegistryIdentity() accepted changed identity")
+			}
+		})
+	}
+	if err := validateRegistryIdentity(expected, expected); err != nil {
+		t.Fatalf("validateRegistryIdentity() exact match error = %v", err)
+	}
+}
