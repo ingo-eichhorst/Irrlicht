@@ -52,11 +52,13 @@ func mixedProfileViewerFixture(t *testing.T) string {
 	return root
 }
 
-func viewerScenarioDetail(t *testing.T, root string) ScenarioDetail {
+// viewerScenarioDetail fetches the mixed fixture's detail page. query is
+// appended verbatim ("" for the profile-less, backward-compatible URL).
+func viewerScenarioDetail(t *testing.T, root, query string) ScenarioDetail {
 	t.Helper()
 	recorder := httptest.NewRecorder()
 	server := &Server{RepoRoot: root}
-	server.Handler().ServeHTTP(recorder, httptest.NewRequest("GET", "/api/scenarios/claudecode/scenarios/mixed", nil))
+	server.Handler().ServeHTTP(recorder, httptest.NewRequest("GET", "/api/scenarios/claudecode/scenarios/mixed"+query, nil))
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body)
 	}
@@ -67,20 +69,48 @@ func viewerScenarioDetail(t *testing.T, root string) ScenarioDetail {
 	return detail
 }
 
+// TestViewerValidatesTheSameLatestRecordingItDisplays is the invariant #1884
+// introduced, now carried per execution profile (#1889): whichever recording
+// the detail page names as latest is the one its expected-state report — and
+// the catalog matrix's measurement — is computed from. The fixture is
+// deliberately mixed AND ordered so the newest recording across both profiles
+// (r2, desktop-local) is NOT the newest within the default profile (r1,
+// cli-local): a viewer that reverted to an all-profile "newest" would grade a
+// Desktop recording under a CLI view and this test would catch it.
 func TestViewerValidatesTheSameLatestRecordingItDisplays(t *testing.T) {
 	root := mixedProfileViewerFixture(t)
-	detail := viewerScenarioDetail(t, root)
-	if detail.LatestRecording != "r2" {
-		t.Fatalf("latest recording=%q, want r2", detail.LatestRecording)
+	cases := []struct {
+		name     string
+		query    string
+		profile  string
+		wantRec  string
+		wantPass bool
+		wantStat string
+	}{
+		// No ?profile= — the pre-#1889 URL shape. It stays on CLI Local.
+		{"default URL is CLI Local", "", "cli-local", "r1", false, "fail"},
+		{"explicit cli-local", "?profile=cli-local", "cli-local", "r1", false, "fail"},
+		{"explicit desktop-local", "?profile=desktop-local", "desktop-local", "r2", true, "pass"},
 	}
-	if detail.Expected == nil {
-		t.Fatal("latest recording has no expected-state report")
-	}
-	if !detail.Expected.Pass {
-		t.Fatalf("latest Desktop recording must pass validation: %+v", detail.Expected)
-	}
-	measurement := measureScenario(root, "claudecode", "mixed")
-	if measurement["status"] != "pass" {
-		t.Fatalf("catalog measurement validated a different recording: %+v", measurement)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			detail := viewerScenarioDetail(t, root, tc.query)
+			if detail.ExecutionProfile != tc.profile {
+				t.Fatalf("execution_profile=%q, want %q", detail.ExecutionProfile, tc.profile)
+			}
+			if detail.LatestRecording != tc.wantRec {
+				t.Fatalf("latest recording=%q, want %q", detail.LatestRecording, tc.wantRec)
+			}
+			if detail.Expected == nil {
+				t.Fatal("latest recording has no expected-state report")
+			}
+			if detail.Expected.Pass != tc.wantPass {
+				t.Fatalf("expected.pass=%t, want %t: %+v", detail.Expected.Pass, tc.wantPass, detail.Expected)
+			}
+			measurement := measureScenario(root, "claudecode", "mixed", profileOrFail(t, tc.profile))
+			if measurement["status"] != tc.wantStat {
+				t.Fatalf("catalog measurement graded a different recording: %+v", measurement)
+			}
+		})
 	}
 }

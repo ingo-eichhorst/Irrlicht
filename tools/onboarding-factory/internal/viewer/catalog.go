@@ -11,7 +11,6 @@ import (
 	"irrlicht/core/adapters/inbound/agents"
 	"irrlicht/tools/onboarding-factory/internal/matrix"
 	"irrlicht/tools/onboarding-factory/internal/shard"
-	"irrlicht/tools/onboarding-factory/internal/validate"
 )
 
 // handleCatalog serves the scenario coverage catalog. The skeleton (scenarios
@@ -24,7 +23,16 @@ import (
 // directly in buildCatalogJSON — no separate annotateCatalogCodes pass. The
 // response is annotated in a single parse/marshal cycle: unmarshal once, run
 // the in-place passes (measurements → pipeline → display-state), marshal once.
+// The matrix is scoped to one execution profile too (#1889): ?profile= picks
+// which profile's recordings the measurement axis judges, defaulting to
+// cli-local so the pre-existing overview is unchanged. Measuring across both
+// profiles would let a Desktop recording decide a CLI cell's colour.
 func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
+	profile, err := profileFromRequest(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	b, sourceTag, err := s.buildCatalogJSON()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("build catalog: %v", err), http.StatusInternalServerError)
@@ -32,7 +40,8 @@ func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 	}
 	var top map[string]any
 	if json.Unmarshal(b, &top) == nil {
-		annotateMeasurements(top, s.RepoRoot)
+		top["execution_profile"] = string(profile)
+		annotateMeasurements(top, s.RepoRoot, profile)
 		annotatePipelineState(top, s.RepoRoot)
 		annotateDisplayState(top) // after measurements: the recording axis feeds the rollup
 		if out, mErr := json.Marshal(top); mErr == nil {
@@ -41,6 +50,7 @@ func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("X-Catalog-Source", sourceTag)
+	w.Header().Set("X-Execution-Profile", string(profile))
 	w.Write(b)
 }
 
@@ -241,7 +251,7 @@ func cellHasRecording(cell map[string]any) bool {
 // events.jsonl, mutating top in place. Lets the overview render BOTH the
 // maintainer's matrix verdict AND the measured execution state. No-op when
 // the shape is unexpected.
-func annotateMeasurements(top map[string]any, repoRoot string) {
+func annotateMeasurements(top map[string]any, repoRoot string, profile matrix.ExecutionProfile) {
 	rawScenarios, ok := top["scenarios"].([]any)
 	if !ok {
 		return
@@ -265,30 +275,46 @@ func annotateMeasurements(top map[string]any, repoRoot string) {
 			if !ok {
 				continue
 			}
-			annotateMeasurementCell(repoRoot, recipes, sid, agentSlug, cell)
+			annotateMeasurementCell(measurementCell{
+				repoRoot: repoRoot, recipes: recipes, scenarioID: sid,
+				agent: agentSlug, profile: profile, cell: cell,
+			})
 		}
 	}
+}
+
+// measurementCell is one cell's measurement inputs: where to look, which
+// (agent, scenario) pair it is, and which execution profile's recordings count.
+type measurementCell struct {
+	repoRoot   string
+	recipes    recipeIndex
+	scenarioID string
+	agent      string
+	profile    matrix.ExecutionProfile
+	cell       map[string]any
 }
 
 // annotateMeasurementCell sets the `measurement` field on one coverage
 // cell: "no_recording" when the (agent, scenario) has no cell on disk,
 // otherwise the result of probing its recording + expected.jsonl.
-func annotateMeasurementCell(repoRoot string, recipes recipeIndex, sid, agentSlug string, cell map[string]any) {
-	folder, ok := resolveScenarioFolderForAgent(recipes, agentSlug, sid)
+func annotateMeasurementCell(input measurementCell) {
+	folder, ok := resolveScenarioFolderForAgent(input.recipes, input.agent, input.scenarioID)
 	if !ok {
 		// No cell on disk for this (agent, scenario) — genuinely absent.
-		cell["measurement"] = map[string]any{"status": "no_recording"}
+		input.cell["measurement"] = map[string]any{"status": "no_recording"}
 		return
 	}
-	cell["measurement"] = measureScenario(repoRoot, agentSlug, folder)
+	input.cell["measurement"] = measureScenario(input.repoRoot, input.agent, folder, input.profile)
 }
 
 // measureScenario probes one (agent, scenario) cell: looks for a recording
-// (the newest under recordings/) + expected.jsonl, runs the validator, returns
-// a compact status summary.
-func measureScenario(repoRoot, agent, folder string) map[string]any {
+// (the newest under recordings/ WITHIN profile) + expected.jsonl, runs the
+// validator, returns a compact status summary. The profile scope is the same
+// one the scenario-detail endpoint uses, so the matrix and the detail page can
+// never grade different recordings.
+func measureScenario(repoRoot, agent, folder string, profile matrix.ExecutionProfile) map[string]any {
 	scenarioDir := filepath.Join(repoRoot, "replaydata", "agents", agent, "scenarios", folder)
-	recDir, ok := validate.NewestRecordingDir(scenarioDir)
+	recDir, ok := newestRecordingDirForProfile(scenarioDir, profile)
 	if !ok {
 		return map[string]any{"status": "no_recording"}
 	}

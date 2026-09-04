@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"irrlicht/tools/onboarding-factory/internal/matrix"
 	"irrlicht/tools/onboarding-factory/internal/shard"
 	"irrlicht/tools/onboarding-factory/internal/validate"
 )
@@ -52,6 +53,14 @@ func (s *Server) handleScenarioDetail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "agent and id must match ^[a-z0-9][a-z0-9_-]*$", http.StatusBadRequest)
 		return
 	}
+	// Execution profile (#1889). Absent ?profile= is the cli-local default, so
+	// every pre-existing viewer URL keeps its meaning; an unknown value is a
+	// 400 rather than a silent fallback to the other profile's evidence.
+	profile, err := profileFromRequest(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	store := s.store()
 	scenarioDir := store.scenarioDir(agent, subtree, id)
 	if !store.exists(scenarioDir) {
@@ -61,18 +70,39 @@ func (s *Server) handleScenarioDetail(w http.ResponseWriter, r *http.Request) {
 	// Recording history endpoints:
 	//   /api/scenarios/{a}/{s}/{id}/recordings        → list archived recordings
 	//   /api/scenarios/{a}/{s}/{id}/recordings/{name}  → one archive's detail
-	if s.handleRecordingHistoryRoute(w, scenarioDir, parts) {
+	//   /api/scenarios/{a}/{s}/{id}/recordings/{name}/evidence/{file} → raw Desktop evidence
+	if s.handleRecordingHistoryRoute(w, recordingRoute{scenarioDir: scenarioDir, parts: parts, profile: profile}) {
 		return
 	}
 
-	d := ScenarioDetail{Agent: agent, Subtree: subtree, ID: id}
-	populateLatestRecordingFields(&d, store, scenarioDir)
-	// Validate the same newest all-profile recording populated above. Viewer
-	// history stays all-profile; CLI verification has a separate profile API.
+	d := ScenarioDetail{Agent: agent, Subtree: subtree, ID: id, ExecutionProfile: string(profile)}
+	populateLatestRecordingFields(&d, store, scenarioDir, profile)
+	// Validate the same newest recording populated above — and only within this
+	// profile, so a Desktop status can never be computed from CLI events.
 	// Errors are swallowed so a malformed expected.jsonl doesn't 500 the response.
 	d.Expected = expectedReportForLatest(scenarioDir, d.LatestRecording)
 	d.Assessment = loadAssessment(scenarioDir)
+	d.DesktopResult = desktopResultView(scenarioDir)
+	d.Profiles = profileOptions(scenarioDir, d.DesktopResult)
 	writeJSON(w, d)
+}
+
+// newestRecordingDirForProfile is the profile-scoped replacement for
+// validate.NewestRecordingDir: the newest recording WITHIN one execution
+// profile, never the newest across both. A manifest that cannot be read is
+// reported and the cell degrades to "no recording for this profile" —
+// borrowing the other profile's newest recording would be exactly the merge
+// this endpoint exists to prevent.
+func newestRecordingDirForProfile(scenarioDir string, profile matrix.ExecutionProfile) (string, bool) {
+	recording, ok, err := matrix.NewestRecording(scenarioDir, profile)
+	if err != nil {
+		logViewerError("newestRecordingDirForProfile: %s in %s: %v", profile, scenarioDir, err)
+		return "", false
+	}
+	if !ok {
+		return "", false
+	}
+	return recording.Dir, true
 }
 
 func expectedReportForLatest(scenarioDir, recordingName string) *validate.ExpectedReport {
@@ -94,35 +124,55 @@ func validateExpectedRecording(scenarioDir, recordingDir string) (*validate.Expe
 	)
 }
 
-// handleRecordingHistoryRoute serves the /recordings and /recordings/{name}
-// sub-routes of /api/scenarios/{agent}/{subtree}/{id} — writing the response
-// itself when the URL matches one of them. Reports whether it handled the
-// request, so the caller returns instead of falling through to the plain
-// scenario-detail response.
-func (s *Server) handleRecordingHistoryRoute(w http.ResponseWriter, scenarioDir string, parts []string) bool {
+// recordingRoute carries what the recording sub-routes need: the cell's
+// directory, the remaining URL segments, and the execution profile the whole
+// request is scoped to.
+type recordingRoute struct {
+	scenarioDir string
+	parts       []string
+	profile     matrix.ExecutionProfile
+}
+
+// handleRecordingHistoryRoute serves the /recordings, /recordings/{name} and
+// /recordings/{name}/evidence/{file} sub-routes of
+// /api/scenarios/{agent}/{subtree}/{id} — writing the response itself when the
+// URL matches one of them. Reports whether it handled the request, so the
+// caller returns instead of falling through to the plain scenario-detail
+// response. Every sub-route is scoped to route.profile.
+func (s *Server) handleRecordingHistoryRoute(w http.ResponseWriter, route recordingRoute) bool {
+	parts := route.parts
 	if len(parts) < 4 || parts[3] != "recordings" {
 		return false
 	}
-	if len(parts) == 4 {
-		s.handleRecordingsList(w, scenarioDir)
+	switch {
+	case len(parts) == 4:
+		s.handleRecordingsList(w, route.scenarioDir, route.profile)
 		return true
-	}
-	if len(parts) == 5 {
-		s.handleArchivedRecording(w, scenarioDir, parts[4])
+	case len(parts) == 5:
+		s.handleArchivedRecording(w, archiveRequest{
+			scenarioDir: route.scenarioDir, rawName: parts[4], profile: route.profile,
+		})
+		return true
+	case len(parts) == 7 && parts[5] == "evidence":
+		s.handleDesktopEvidence(w, evidenceRequest{
+			scenarioDir: route.scenarioDir, rawName: parts[4], file: parts[6], profile: route.profile,
+		})
 		return true
 	}
 	return false
 }
 
 // populateLatestRecordingFields fills d's recording-derived fields (meta,
-// degraded flag, transitions, tools, manifest) from the NEWEST recording
-// under scenarioDir — the same recording the recordings list puts first —
-// or marks d degraded when no recording has been captured yet. Reads
+// degraded flag, transitions, tools, manifest) from the newest recording
+// under scenarioDir WITHIN profile — the same recording the profile-scoped
+// recordings list puts first — or marks d degraded when that profile has no
+// recording yet (which is the honest answer for a Desktop view of a
+// CLI-only cell, not a reason to fall back to the CLI recording). Reads
 // agent from d.Agent and repoRoot from store.RepoRoot rather than taking
 // them as separate parameters — both are already available on the values
 // the caller passes in.
-func populateLatestRecordingFields(d *ScenarioDetail, store RecordingStore, scenarioDir string) {
-	recDir, hasRec := validate.NewestRecordingDir(scenarioDir)
+func populateLatestRecordingFields(d *ScenarioDetail, store RecordingStore, scenarioDir string, profile matrix.ExecutionProfile) {
+	recDir, hasRec := newestRecordingDirForProfile(scenarioDir, profile)
 	if !hasRec {
 		d.Degraded = true
 		return
