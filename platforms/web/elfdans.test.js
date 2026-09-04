@@ -887,7 +887,7 @@ describe('sessionFromHash (R6, the cold-open route)', () => {
 })
 
 describe('mac-side minting (arc42 §6.1, §8.1)', () => {
-  test('mint renders the formatted code, the countdown, and this page URL', async () => {
+  test('mint renders the formatted code, the countdown, and an address a phone can use', async () => {
     const calls = relayFetch({
       'GET api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
       'POST api/v1/push/pairings': { status: 201, body: { code: 'ab12cd34', expires_in: 600 } },
@@ -905,7 +905,13 @@ describe('mac-side minting (arc42 §6.1, §8.1)', () => {
     expect(minted.opts.headers.Authorization).toBe('Bearer client-tok')
     expect(document.getElementById('elfdans-code').textContent).toBe('AB12-CD34')
     expect(document.getElementById('elfdans-code-expiry').textContent).toMatch(/expires in 10:00/)
-    expect(document.querySelector('.elfdans-code-url').textContent).toContain('and enter this code')
+    // jsdom serves this page from http://localhost — a loopback address, and
+    // therefore the exact case the hint must REFUSE to pass off as phone
+    // instructions rather than print verbatim. This assertion used to read
+    // `toContain('and enter this code')`, which pinned the defect: the row
+    // told the operator to open 127.0.0.1 on the phone. The https:// wording
+    // is graded by pairingHintText's own tests.
+    expect(document.querySelector('.elfdans-code-url').textContent).toMatch(/only this Mac/)
   })
 
   test('a 200 that is not JSON leaves a verdict, not "Minting code…" forever', async () => {

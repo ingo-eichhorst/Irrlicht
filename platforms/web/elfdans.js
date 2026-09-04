@@ -208,7 +208,7 @@ async function mintPairingCode(out, clientToken) {
   // P1 is paste/type only — no QR, no vendored encoder (arc42 risk 7: an
   // 8-char ambiguity-free code beats auditing vendored encoder code; QR is a
   // follow-up). So the thing to carry to the phone is spelled out here.
-  url.textContent = 'On the phone, open ' + location.origin + location.pathname + ' and enter this code.';
+  url.textContent = pairingHintText(location.origin, location.pathname);
   out.appendChild(codeEl);
   out.appendChild(expiry);
   out.appendChild(url);
@@ -272,8 +272,9 @@ async function pairThisPhone(phone, info, enteredCode, status) {
     status.textContent = 'Enter the code shown on the Mac.';
     return;
   }
-  if (!('serviceWorker' in navigator) || typeof Notification === 'undefined') {
-    status.textContent = 'This browser cannot receive push notifications — nothing to pair.';
+  const blocked = pairingBlockedReason();
+  if (blocked) {
+    status.textContent = blocked;
     return;
   }
   // Permission is asked FIRST, still inside the click's transient user
@@ -372,6 +373,44 @@ async function subscribeForPush(deviceToken, vapidPublicKey, status) {
     }
     return false;
   }
+}
+
+// pairingHintText renders the "where to type this code" line under a freshly
+// minted code. It is built from the address THIS page was opened at, which is
+// only the phone's address by coincidence: a dashboard on http://127.0.0.1:7839
+// used to instruct the operator to open http://127.0.0.1:7839 on the phone.
+//
+// The relay cannot know its own public origin — it binds loopback and sits
+// behind whatever proxy the operator chose — so this does not guess one. It
+// declines to pass off an address the phone provably cannot use, and says which
+// kind of problem it is. Exported for tests.
+export function pairingHintText(origin, pathname) {
+  const host = String(origin || '').replace(/^[a-z]+:\/\//i, '').replace(/:\d+$/, '');
+  if (host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host === '0.0.0.0') {
+    return 'This dashboard is open on a loopback address, which reaches only this Mac. Open the relay at its network address here, and that address is the one to use on the phone.';
+  }
+  if (/^http:\/\//i.test(String(origin || ''))) {
+    return 'A phone needs an https:// address — over plain http:// iOS grants no notification permission. Reach this relay over TLS, then pair from that address.';
+  }
+  return 'On the phone, open ' + origin + pathname + ' and enter this code.';
+}
+
+// pairingBlockedReason names why pairing cannot start here, or '' when it can.
+// Two failures the previous single message conflated, and the ORDER is the
+// point: on a plain-http:// origin the service worker is absent *because* the
+// context is insecure, so a serviceWorker-first guard reports "this browser
+// cannot receive push notifications" about a browser that can — and the reader
+// goes looking at Safari instead of at the scheme. `PushManager` and
+// `Notification` are still present there, so nothing else in the page notices.
+// Exported for tests.
+export function pairingBlockedReason() {
+  if (typeof window !== 'undefined' && window.isSecureContext === false) {
+    return 'This address needs HTTPS before a phone can receive notifications — a plain http:// origin gets no service worker. Reach the relay at its https:// address and pair from there.';
+  }
+  if (!('serviceWorker' in navigator) || typeof Notification === 'undefined') {
+    return 'This browser cannot receive push notifications — nothing to pair.';
+  }
+  return '';
 }
 
 // The ONLY registration call in the web tree (arc42 §5.2): lazy, reached from
