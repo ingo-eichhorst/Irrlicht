@@ -5,7 +5,7 @@
 # it does NOT do is distinguish "the script finished and EXIT_REASON is its
 # verdict" from "the script aborted before forming one", so an abort writes the
 # initialiser `ok` where, before any trap existed, it wrote nothing at all and
-# run-cell.sh:443 read the absence as `unknown`.
+# run-cell.sh's `DRIVER_REASON` assignment read the absence as `unknown`.
 _DRIVE_LIB="$(dirname "${BASH_SOURCE[0]}")/lib"
 source "$_DRIVE_LIB/slots.sh"
 
