@@ -245,7 +245,12 @@ NEW_STARTED_AT="$NEW_TS"
 # BEGIN recording_manifest_population
 populate_recording() {
   local dst="$1" f
-  for f in events.jsonl transcript.jsonl transcript.md transcript.json; do
+  # Desktop Local recordings preserve the raw identity chain that
+  # `of validate` reads. CLI staging does not create these files, so the same
+  # allow-list remains a no-op for every existing recording profile.
+  for f in events.jsonl transcript.jsonl transcript.md transcript.json \
+    desktop-registry.json desktop-environment.json hooks.jsonl process.json \
+    irrlicht-session.json; do
     if [[ -f "$STAGED_DIR/$f" ]]; then
       cp "$STAGED_DIR/$f" "$dst/$f"
     fi

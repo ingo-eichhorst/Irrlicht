@@ -50,6 +50,7 @@ import (
 	"strings"
 	"time"
 
+	"irrlicht/tools/onboarding-factory/internal/desktopresults"
 	"irrlicht/tools/onboarding-factory/internal/matrix"
 )
 
@@ -269,6 +270,14 @@ func RecordingComplete(recDir string) []string {
 	// replay test pins them); markdown-transcript adapters (aider) have none.
 	if hasJSONL && !exists("transcript.jsonl.replay.json.golden") {
 		findings = append(findings, "missing transcript.jsonl.replay.json.golden (required for a jsonl transcript)")
+	}
+	manifest, err := matrix.LoadRecordingManifest(filepath.Join(recDir, "manifest.json"))
+	if err == nil && manifest.ExecutionProfile == matrix.ProfileDesktopLocal {
+		for _, name := range desktopresults.RequiredRecordingFiles() {
+			if !exists(name) {
+				findings = append(findings, "missing "+name+" (required for desktop-local evidence)")
+			}
+		}
 	}
 	return findings
 }

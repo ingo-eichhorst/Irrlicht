@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"sort"
 
+	"irrlicht/tools/onboarding-factory/internal/desktopresults"
 	"irrlicht/tools/onboarding-factory/internal/matrix"
 	"irrlicht/tools/onboarding-factory/internal/shard"
 	"irrlicht/tools/onboarding-factory/internal/validate"
@@ -63,6 +64,9 @@ func runValidate(args []string, stdout, stderr io.Writer) int {
 	names := validateCatalog(*repoRoot, add)
 	validateRecordingProfiles(*repoRoot, add)
 	validateCells(*repoRoot, names, add)
+	for _, resultFinding := range desktopresults.ValidateRepo(*repoRoot) {
+		add(resultFinding.Path, resultFinding.Message)
+	}
 	validateMaturityModel(*repoRoot, names, add)
 
 	sort.Slice(findings, func(i, j int) bool {
