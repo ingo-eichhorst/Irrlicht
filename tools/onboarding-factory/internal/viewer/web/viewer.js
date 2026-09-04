@@ -2268,6 +2268,31 @@ function recordingHistoryErrorBanner(message) {
   return banner;
 }
 
+// buildRecordingSelect renders the recording dropdown: a spec-only sentinel
+// plus one option per recording in THIS profile's history, newest first and
+// marked. The initial selection is the URL's archive when it exists in this
+// profile, else the newest, else spec-only — a deep link naming the other
+// profile's recording simply does not match, which is the isolation rule
+// showing up in the control.
+function buildRecordingSelect(archives, newestName, initialArchive) {
+  const select = document.createElement("select");
+  select.style.cssText = "padding: 4px 8px; font: inherit; font-size: 12px; border: 1px solid #c0bdb1; border-radius: 3px;";
+  const noneOpt = document.createElement("option");
+  noneOpt.value = "__none__";
+  noneOpt.textContent = "— No recording (spec only) —";
+  select.appendChild(noneOpt);
+  for (const a of archives) {
+    const opt = document.createElement("option");
+    opt.value = a.name;
+    const label = fmtLabel(a.recording_started_at || a.name, a.daemon_version, a.expected_pass_rate);
+    opt.textContent = a.name === newestName ? `● ${label} (newest)` : label;
+    select.appendChild(opt);
+  }
+  const archMatch = initialArchive && archives.some(a => a.name === initialArchive);
+  select.value = archMatch ? initialArchive : (newestName || "__none__");
+  return select;
+}
+
 function renderRecordingHistory(opts) {
   const {s, latestData, archives, initialArchive, profile, archivesError} = opts;
   const wrap = document.createElement("div");
@@ -2285,30 +2310,11 @@ function renderRecordingHistory(opts) {
     selPanel.appendChild(recordingHistoryErrorBanner(archivesError));
   }
 
-  const select = document.createElement("select");
-  select.style.cssText = "padding: 4px 8px; font: inherit; font-size: 12px; border: 1px solid #c0bdb1; border-radius: 3px;";
-  const noneOpt = document.createElement("option");
-  noneOpt.value = "__none__";
-  noneOpt.textContent = "— No recording (spec only) —";
-  select.appendChild(noneOpt);
-
   // Every recording lives under recordings/<name>/ — there is no separate
   // "Latest" entry. The list is newest-first by name; the newest (the one the
   // ScenarioDetail's recording-derived fields describe) is latestData.latest_recording.
   const newestName = latestData.latest_recording || ((archives || [])[0] && archives[0].name) || "";
-  for (const a of (archives || [])) {
-    const opt = document.createElement("option");
-    opt.value = a.name;
-    let label = fmtLabel(a.recording_started_at || a.name, a.daemon_version, a.expected_pass_rate);
-    if (a.name === newestName) label = "● " + label + " (newest)";
-    opt.textContent = label;
-    select.appendChild(opt);
-  }
-  // Default = the newest recording. A URL deep-link (#/recording/.../.../<name>)
-  // that exists opens pre-pointed at it; otherwise the newest is autoselected.
-  // With no recordings at all, fall back to the spec-only view.
-  const archMatch = initialArchive && (archives || []).some(a => a.name === initialArchive);
-  select.value = archMatch ? initialArchive : (newestName || "__none__");
+  const select = buildRecordingSelect(archives || [], newestName, initialArchive);
   selPanel.appendChild(select);
 
   const manifestBox = document.createElement("div");
