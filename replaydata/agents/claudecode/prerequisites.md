@@ -39,6 +39,18 @@ will fail again until the .ok file is re-touched.
   runs one no-tool Local turn. The runner creates the workspace under
   repository-root `.build`, selects a free loopback recorder port, and archives
   only the new session that matches its registry and transcript identity.
+- A cell whose recipe carries a `script` is driven step by step (#1888). The
+  Desktop driver elicits `send`, `wait_turn`, `sleep`, `interrupt`, `keys`,
+  `mode`, `model`, `archive`, and `start_session`; every other step type is
+  refused BEFORE the run as `not runnable through Desktop`, naming the Desktop
+  control that is missing. The full per-recipe verdict is committed at
+  `tools/onboarding-factory/internal/desktopdriver/testdata/claudecode-desktop-recipe-census.txt`.
+  A `keys` step is limited to `Escape` and `Enter`: the helper requires a
+  false-to-true postcondition per keystroke, and no other key has one in the
+  composer.
+- The mode and model the driver selects are the COMPOSER's two popup menus,
+  chosen per session through the accessibility tree. They are not app-wide
+  configuration changes, which the next note still refuses.
 - Packaged Claude Desktop removes `CLAUDE_USER_DATA_DIR` unless an internal,
   signed E2E token validates it. The Desktop runner therefore uses the normal
   profile. It refuses app-wide settings, environment, mock, model, mode,
