@@ -227,6 +227,14 @@ type ParsedEvent struct {
 	// non-background id (e.g. a subagent's) is a harmless no-op. See issue #445.
 	TerminatedBackgroundTaskIDs []string
 
+	// OriginTaskNotification is true only for Claude Code's user-role
+	// origin.kind="task-notification" shape. The tailer combines this flag
+	// with a TerminatedBackgroundTaskID that matches its open-process ledger:
+	// that pair starts a new inference turn. A subagent notification has no
+	// matching process entry, and a queued_command attachment leaves this
+	// false, so both remain passive. See issue #1899.
+	OriginTaskNotification bool
+
 	// TaskSnapshot, when non-nil, is the authoritative list of tasks Claude
 	// Code is currently tracking, parsed from a task_reminder attachment.
 	// Pointer-to-slice so an empty list (legitimate "nothing active" signal)
