@@ -209,6 +209,13 @@ fi
 # routes it to a driver-extension task rather than degrading the cell.
 if [[ "$EXECUTION_PROFILE" == "desktop-local" ]]; then
   DRIVER="$REPO_ROOT/replaydata/agents/$ADAPTER/driver-desktop.sh"
+  # #1888: the Desktop driver elicits a SUBSET of the recipe grammar, and the
+  # steps it cannot drive are ones with no measured accessibility control. This
+  # refuses before precheck, before the managed-file snapshot and before any
+  # deep link — so `not runnable through Desktop` costs no live session and
+  # leaves the operator's agent configuration untouched. Exit 4 = the same
+  # semantic_gap class the cli-local path uses; exit 2 = the lint could not run.
+  desktop_report_recipe_gaps "$DRIVER" "$COVERAGE_ID" "$ADAPTER" "$SCENARIO" || exit $?
 elif [[ -n "$SCRIPT_JSON" ]]; then
   # shellcheck source=lib/recipe-lint.sh
   . "$SCRIPT_DIR/lib/recipe-lint.sh"
