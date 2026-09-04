@@ -27,8 +27,11 @@ const (
 	// It is the authoritative turn-done signal (issue #1161).
 	HookStop = "Stop"
 	// HookNotification fires for agent UI notifications, carrying a
-	// notification_type discriminator; the daemon acts only on idle_prompt
-	// (issue #1173).
+	// notification_type discriminator. The daemon acts on several of them —
+	// idle_prompt (issue #1173) and the blocking-dialog types (issue #1861) —
+	// and they drive DIFFERENT signals, so this bare name is not on its own a
+	// statement about what a notification means. See hookSignalEffects below
+	// for why that makes a row keyed on this name unsafe.
 	HookNotification = "Notification"
 	// HookAfterTool is gemini-cli's own wire name for its broad post-tool
 	// event (issue #1717) — fires after EVERY tool call, unlike claudecode's
@@ -106,16 +109,29 @@ type HookSignalEffect struct {
 //     reproduced from the transcript's own turn_done two seconds later — the
 //     same bytes as a transcript-produced ready, so a Stop-handling regression
 //     was invisible to every golden in the catalog (#1695, filed off #1388).
-//   - HookNotification and HookPreCompact are excluded only because their
-//     *gate* is adapter-side: the claudecode HTTP handler forwards Notification
-//     solely for notification_type "idle_prompt" and PreCompact solely for
-//     trigger "manual", so the decision is already made before the detector is
-//     called. Both holds themselves are payload-free. A consumer reading
-//     post-gate events (the replay harness — dispatchHookActivity is the only
-//     writer of lifecycle.KindHookReceived, and it runs downstream of those
-//     gates, so a recorded PreCompact means manual by construction) could act
-//     on the name alone. They are absent because no recording fires one yet;
-//     when one does, a row here is the right fix, not a bespoke branch.
+//   - HookPreCompact is excluded only because its *gate* is adapter-side: the
+//     claudecode HTTP handler forwards it solely for trigger "manual", so the
+//     decision is already made before the detector is called, and the hold is
+//     payload-free. A consumer reading post-gate events (the replay harness —
+//     dispatchHookActivity is the only writer of lifecycle.KindHookReceived,
+//     and it runs downstream of that gate, so a recorded PreCompact means
+//     manual by construction) could act on the name alone. It is absent because
+//     no recording fires one yet; when one does, a row here is the right fix.
+//   - HookNotification is excluded for a STRONGER reason, and one that a future
+//     recording must not be read as lifting (#1861). "Notification" is a name
+//     three adapters use for three different meanings, and since #1861 it means
+//     two different things WITHIN claudecode: idle_prompt holds
+//     SignalIdlePrompt, while the blocking-dialog types hold
+//     SignalPermissionPrompt. This table has no adapter dimension and no
+//     payload dimension, so any row keyed on the bare name would be wrong for
+//     at least one of them — for copilot in particular it would convert a
+//     deliberate no-hold into a 12-hour pin (see copilot/hooks_test.go, which
+//     says so at the point of use). claudecode therefore records a
+//     DISCRIMINATED wire name for the dialog branch
+//     ("Notification/permission_prompt" and friends, see handleNotificationHook)
+//     so a post-gate consumer can still tell the two apart; the bare
+//     "Notification" it records for idle_prompt is unchanged so existing
+//     recordings keep replaying identically.
 //
 // A caller that gets ok==false has learned "I may not act on this name alone",
 // not "this hook is unknown".

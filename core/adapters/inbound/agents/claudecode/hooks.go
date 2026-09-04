@@ -44,19 +44,68 @@ const (
 	// It is the authoritative turn-done signal for claudecode (issue #1161).
 	HookStop = session.HookStop
 	// HookNotification fires for Claude Code UI notifications, carrying a
-	// notification_type discriminator. The daemon acts only on the idle_prompt
-	// type — the agent finished its turn and is idle at the prompt waiting for
-	// the user — as an authoritative waiting signal (issue #1173).
+	// notification_type discriminator. The daemon acts on the types in
+	// notificationTypesDrivingState, each of which means a human is blocked:
+	// idle_prompt is the agent idle at the prompt after a finished turn (issue
+	// #1173), and the rest are blocking dialogs (issue #1861). Every other type
+	// is accepted and ignored.
 	HookNotification = session.HookNotification
 )
 
 // notificationTypeIdlePrompt is the Notification hook's notification_type value
-// for "the agent is idle at the prompt waiting for the user" — the only
-// notification the daemon acts on (issue #1173). Claude Code's Notification
-// matcher filters on notification_type; the handler re-checks it as
-// defense-in-depth so a broadened matcher can't dispatch other notification
-// types (auth_success, permission_prompt, …).
+// for "the agent is idle at the prompt waiting for the user" (issue #1173).
 const notificationTypeIdlePrompt = "idle_prompt"
+
+// The Notification notification_type values meaning "a human is blocked right
+// now" (issue #1861). Each is the only hook signal Claude Code emits for its
+// case: none of these dialogs carries a tool name, so none raises a
+// PermissionRequest at any matcher width.
+//
+// permission_prompt is also Claude Code's DEFAULT type for a dialog
+// notification that sets none of its own, so it covers the unnamed remainder;
+// the elicitation types set their own and would otherwise be missed.
+// hookMatcherNotification carries the full type vocabulary and the reasons the
+// remaining types are excluded — including agent_needs_input, which was here
+// until #1882 showed its payload names the watching session, not the blocked
+// one.
+const (
+	notificationTypePermissionPrompt = "permission_prompt"
+	notificationTypeElicitation      = "elicitation_dialog"
+	notificationTypeElicitationURL   = "elicitation_url_dialog"
+)
+
+// notificationRoute is where a state-driving notification_type is dispatched.
+// It is the map's VALUE rather than a predicate over its keys, so the
+// classification is data: adding a type means adding one row, and a type whose
+// route nobody chose cannot silently inherit another one's.
+type notificationRoute int
+
+const (
+	// routeIdlePrompt: the turn is over and the agent is waiting at the prompt.
+	routeIdlePrompt notificationRoute = iota
+	// routeBlockingDialog: a dialog is on screen and the user is blocked on it.
+	routeBlockingDialog
+)
+
+// notificationTypesDrivingState maps each notification_type the daemon acts on
+// to the route it takes. Claude Code's Notification matcher already filters on
+// notification_type; the handler re-checks against this map as
+// defense-in-depth, so a hand-broadened matcher in a user's settings.json can
+// only ever deliver types this code understands rather than dispatching
+// auth_success, agent_completed, push_notification or a type a future release
+// adds.
+//
+// The route is the split that matters: idle_prompt and the blocking dialogs are
+// NOT interchangeable. They hold different signals with different staleness
+// rules — SignalIdlePrompt is dropped the moment IsAgentDone goes false, which
+// is precisely the state a mid-turn dialog is already in, so routing a dialog
+// through the idle path would discard it on the next pass.
+var notificationTypesDrivingState = map[string]notificationRoute{
+	notificationTypeIdlePrompt:       routeIdlePrompt,
+	notificationTypePermissionPrompt: routeBlockingDialog,
+	notificationTypeElicitation:      routeBlockingDialog,
+	notificationTypeElicitationURL:   routeBlockingDialog,
+}
 
 // compactTriggerManual is the PreCompact trigger value for a user-invoked
 // /compact (as opposed to "auto"). Only manual compaction forces working — an
@@ -122,6 +171,19 @@ type HookTarget interface {
 	// (issue #1173). An authoritative waiting signal for the case the prose
 	// waiting-cue heuristic can't detect (a turn that ended on a plain statement).
 	HandleIdlePromptHook(sessionID, transcriptPath string)
+	// HandlePermissionPromptHook records the Notification/permission_prompt
+	// signal — a blocking dialog is on screen right now (issue #1861). The only
+	// hook signal for a dialog that carries no tool name, so it holds
+	// SignalPermissionPrompt directly rather than going through the tool-keyed
+	// PermissionRequest path. See handleNotificationHook for what retires it.
+	//
+	// hookName is the wire event name for the synthetic activity the detector
+	// dispatches ("Notification" here). The detector method predates this caller
+	// — it was added for gemini-cli's identically-named Notification hook
+	// (#1717), and the reason it is a dedicated method rather than a
+	// session.HookSignal row is precisely that "Notification" means different
+	// things per adapter, which a single flat table cannot express.
+	HandlePermissionPromptHook(sessionID, transcriptPath, hookName string)
 }
 
 // MarkerTarget is the narrow interface for hook-carried task-estimate
@@ -409,23 +471,74 @@ func handleStopHook(target HookTarget, log outbound.Logger, sessionID string, pa
 		session.ProseIndicatesWaiting(tailer.WaitingScanWindow(payload.LastAssistantMessage)))
 }
 
-// handleNotificationHook processes a Claude Code Notification hook. It acts only
-// on the idle_prompt type — the agent finished its turn and is idle at the
-// prompt waiting for the user (issue #1173) — forwarding it as an authoritative
-// waiting signal. Every other notification_type (permission_prompt is already
-// covered by the blocking PermissionRequest hook; auth_success and friends are
-// irrelevant to state) is accepted and ignored, mirroring handlePreToolUseHook's
-// defense-in-depth reject: the installer matches only idle_prompt, but the
-// handler re-checks so a broadened settings.json matcher can't dispatch others.
+// handleNotificationHook processes a Claude Code Notification hook, whose
+// notification_type discriminates two states worth acting on and a dozen that
+// are not. Anything outside notificationTypesDrivingState is accepted and
+// ignored, mirroring handlePreToolUseHook's defense-in-depth reject: the
+// installer's matcher already narrows the delivery, but the handler re-checks
+// so a hand-broadened settings.json matcher cannot dispatch a type this code
+// has never seen.
+//
+//   - idle_prompt → HandleIdlePromptHook. The agent finished its turn and is
+//     idle at the prompt waiting for the user (issue #1173).
+//   - every other type in notificationTypesDrivingState →
+//     HandlePermissionPromptHook. A dialog is open and the user is blocked on
+//     it (issue #1861). See that map for why the split is not cosmetic.
+//
+// WHY THESE ARE HANDLED HERE AT ALL, given PermissionRequest exists.
+// PermissionRequest is keyed on a tool name (WQn returns `e.tool_name` for it),
+// and Claude Code renders a whole class of blocking dialog that carries none —
+// sandbox network access, the auto-mode dialogs, managed-settings review, MCP
+// elicitation, a blocked sub-agent. No PermissionRequest fires for any of them
+// at any matcher width; this notification is their only hook signal.
+//
+// HOW RELIABLY IT ARRIVES — weaker than "it fires", and the limit is worth
+// knowing. The interactive emitter is not the SDK transport's one-shot
+// `setTimeout(…, 6000)` (that one belongs to the stream-json host and is not
+// the path an interactive session takes). It is `GUe`, which polls on a
+// REPEATING 6s chain and, on each tick, emits only if
+// `Date.now() - max(lastInteraction, mount) >= 6000`. So:
+//
+//   - it repeats while the dialog stays up, which is harmless here — a re-Hold
+//     only refreshes HeldSince on a hold that is already correct;
+//   - it is SUPPRESSED while the user keeps interacting. A user who arrows
+//     through a dialog every few seconds may never trigger it, and the session
+//     keeps reading `working`. That fails open — the same way it did before
+//     #1861 — so it bounds how much this fix delivers rather than breaking it;
+//   - nothing at all is emitted when the dialog CLOSES. There is no "dismissed"
+//     notification to release on, which is the whole reason the hold below
+//     needs a clearing edge from somewhere else.
+//
+// WHAT CLEARS THE HOLD IT PLACES. Deliberately the SAME SignalPermissionPrompt
+// kind as the tool-keyed path, so it inherits every clearing edge that path
+// already has: PostToolUse / PostToolUseFailure release it (and with hookMatcher
+// now match-all that fires for every tool, covering every dialog raised during a
+// tool call — the elicitation and sandbox-network cases included); a transcript
+// tool-denial marks it stale; the Stop hook retires it at a turn boundary with
+// no tool open (#1861); and permissionPromptHoldTimeout backstops the rest.
 func handleNotificationHook(target HookTarget, log outbound.Logger, sessionID string, payload hookPayload) {
-	if payload.NotificationType != notificationTypeIdlePrompt {
+	route, drivesState := notificationTypesDrivingState[payload.NotificationType]
+	if !drivesState {
 		log.LogInfo(logComponentHookReceiver, sessionID,
-			fmt.Sprintf("ignored Notification of type %q (only %s drives state)", payload.NotificationType, notificationTypeIdlePrompt))
+			fmt.Sprintf("ignored Notification of type %q (not one of the types that drive state)",
+				payload.NotificationType))
 		return
 	}
 	log.LogInfo(logComponentHookReceiver, sessionID,
 		fmt.Sprintf("received %s (type=%s)", payload.HookEventName, payload.NotificationType))
-	target.HandleIdlePromptHook(sessionID, payload.TranscriptPath)
+	switch route {
+	case routeBlockingDialog:
+		// Discriminated wire name, not a bare "Notification". Both routes
+		// record a lifecycle KindHookReceived, and they hold DIFFERENT signals,
+		// so a single shared name would make the two indistinguishable in the
+		// trace and in every recording — which is exactly the ambiguity
+		// hook_signal.go's "no HookNotification row" note depends on not
+		// existing.
+		target.HandlePermissionPromptHook(sessionID, payload.TranscriptPath,
+			payload.HookEventName+"/"+payload.NotificationType)
+	case routeIdlePrompt:
+		target.HandleIdlePromptHook(sessionID, payload.TranscriptPath)
+	}
 }
 
 // handlePreToolUseHook processes a PreToolUse hook event: scans the tool

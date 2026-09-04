@@ -940,12 +940,21 @@ func (r *sidecarReplayer) clusterBoundary(eventIdx int) int64 {
 // auto-detects only a sibling named <transcript>.events.jsonl while every
 // sidecar in replaydata/ is named plain events.jsonl. See issue #1326.
 //
-// Hooks absent from the table are still ignored here: Notification and
-// PreCompact could be rows, but no recording in replaydata/ fires one — add
-// each as a table row together with the first recording that does. Stop WAS
-// in that sentence until #1695; see hookSignalEffects for why a payload-free
-// row is a floor rather than a wrong answer, and TestStopHookIsGradedByTheCommittedCatalog
-// for the recording that now grades it.
+// Hooks absent from the table are still ignored here. PreCompact could be a
+// row, but no recording in replaydata/ fires one — add it as a table row
+// together with the first recording that does. Stop WAS in that sentence until
+// #1695; see hookSignalEffects for why a payload-free row is a floor rather
+// than a wrong answer, and TestStopHookIsGradedByTheCommittedCatalog for the
+// recording that now grades it.
+//
+// Notification is NOT in that "add a row when a recording fires one" set, and
+// #1861 is why: the bare name means different things in different adapters and,
+// within claudecode, two different signals depending on notification_type. A
+// recording that fires one does not license a row keyed on "Notification" —
+// read hookSignalEffects' own note before adding anything here. claudecode
+// records the dialog branch under a discriminated name
+// ("Notification/permission_prompt" and friends), so a future row can key on
+// that instead of on the ambiguous bare name.
 //
 // NoSubstantiveActivity is cleared before the overlay, and that one line is
 // what made the Stop channel reachable at all (#1695). The flag is PER PASS —

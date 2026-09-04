@@ -97,17 +97,24 @@ const compactHoldTimeout = 5 * time.Minute
 // only transcript-tier signal that can re-derive "a prompt is open" is #488's
 // SignalOpenToolStalled, and it fires solely for the five names
 // isPermissionGatedEditTool matches (edit/write/multiedit/notebookedit/
-// write_file). Against claudecode's installed matcher —
-// "Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|mcp__.*|AskUserQuestion|ExitPlanMode"
-// (hookinstaller.go, hookMatcher) — that covers four of nine alternatives:
+// write_file). Since #1861 claudecode's installed matcher is match-all
+// (hookinstaller.go, hookMatcher), so the partition is no longer four of nine
+// named alternatives — it is those five names against every other tool Claude
+// Code has:
 //
 //   - COVERED (expiry is soft): Write, Edit, MultiEdit, NotebookEdit. If the
 //     tool is still open, SignalOpenToolStalled ripens the moment
 //     PermissionPending stops being set and re-derives the same waiting, one
 //     tier down where anything can still correct it.
-//   - NOT COVERED (expiry is silent): Bash, WebFetch, mcp__.*, AskUserQuestion,
-//     ExitPlanMode. Nothing re-derives the prompt. The session simply stops
-//     reading waiting.
+//   - NOT COVERED (expiry is silent): every other tool — Bash, WebFetch,
+//     mcp__*, AskUserQuestion, ExitPlanMode, and since #1861 also Read, Grep,
+//     Glob, Task, Skill and the rest of the set the old allowlist never
+//     reached. Nothing re-derives the prompt. The session simply stops
+//     reading waiting. #1861 widened who can ARM this hold, so it widened
+//     this group too; what keeps that from being a net loss is that those
+//     prompts previously did not read waiting AT ALL, and that #1861 added a
+//     turn-end clearing edge (see the row's stale rule) so the ceiling is no
+//     longer the only end of life for a prompt PostToolUse never closes.
 //
 // The uncovered group is not the marginal one. hookMatcherPreToolUse is
 // exactly "AskUserQuestion|ExitPlanMode" — the #307 fast path, whose entire
@@ -435,33 +442,6 @@ type signalPolicy struct {
 // arrived on another goroutine.
 var signalPolicies = []signalPolicy{
 	{
-		kind: SignalPermissionPrompt,
-		tier: TierHook,
-		// Persistent: the prompt stays open until the agent acts on it, and
-		// the hold must survive every fswatcher re-evaluation in between.
-		// Cleared normally by PostToolUse/PostToolUseFailure via Release.
-		//
-		// Denial is the case that needs stale: Claude Code fires no
-		// PostToolUseFailure when the user rejects a prompt, so the only
-		// evidence the prompt closed is the transcript's own
-		// "[Request interrupted by user for tool use]" marker. A lower tier
-		// retiring a higher one reads backwards, but it is sound here — this
-		// is not the transcript overruling the hook's verdict, it is the
-		// transcript supplying the end-of-life notice the hook never sends.
-		//
-		// Both of those paths are things that must *happen*. Neither fires if
-		// the daemon never sees the POST — a crash, a restart, a port change,
-		// an uninstalled hook — or if the adapter stops writing the denial
-		// marker in the shape LastWasToolDenial matches. This row sits at the
-		// top of the authority ladder, so no lower-tier signal may correct it,
-		// and without the ceiling below a session pinned that way stayed
-		// pinned for the life of the process (#1360).
-		stale:   func(c holdContext) bool { return c.Metrics.LastWasToolDenial },
-		ceiling: permissionPromptHoldTimeout,
-		apply:   func(c holdContext) { c.Metrics.PermissionPending = true },
-	},
-
-	{
 		kind:        SignalTurnDone,
 		tier:        TierHook,
 		consumeOnce: true,
@@ -477,6 +457,131 @@ var signalPolicies = []signalPolicy{
 				c.Metrics.PendingWaitingCue = true
 			}
 		},
+	},
+
+	{
+		kind: SignalPermissionPrompt,
+		tier: TierHook,
+		// POSITION: after SignalTurnDone, whose apply sets the HookTurnDone
+		// this row's staleness now reads (#1861) — the same one-directional
+		// dependency SignalIdlePrompt, SignalSessionError and
+		// SignalProcessDeath already have on that row. This row led the table
+		// until #1861; the move is behaviourally inert on its own, because
+		// turn_done's apply reads nothing this row writes. It must still stay
+		// BEFORE SignalOpenToolStalled, whose ripe rule reads the
+		// PermissionPending this row's apply sets.
+		//
+		// Persistent: the prompt stays open until the agent acts on it, and
+		// the hold must survive every fswatcher re-evaluation in between.
+		// Cleared normally by PostToolUse/PostToolUseFailure via Release.
+		//
+		// Denial is the case that needs stale: Claude Code fires no
+		// PostToolUseFailure when the user rejects a prompt, so the only
+		// evidence the prompt closed is the transcript's own
+		// "[Request interrupted by user for tool use]" marker. A lower tier
+		// retiring a higher one reads backwards, but it is sound here — this
+		// is not the transcript overruling the hook's verdict, it is the
+		// transcript supplying the end-of-life notice the hook never sends.
+		//
+		// TURN END is the second stale case, and #1861 is why it exists. That
+		// issue added an asserter of this signal that is not keyed on a tool at
+		// all — claudecode's Notification/permission_prompt, the only hook
+		// signal for a blocking dialog carrying no tool name. Claude Code fires
+		// it once on a ~6s timer and emits nothing when the dialog closes, and
+		// a dialog with no tool behind it produces no PostToolUse either, so
+		// for the two dialogs that appear before any tool runs
+		// (managed_settings_security, auto_mode_setup_review) neither existing
+		// path fires and the ceiling below would have been the only end of
+		// life. A hold whose only clearing edge is a 12-hour backstop is the
+		// defect class #1088 shipped.
+		//
+		// The rule is HookTurnDone rather than IsAgentDone deliberately, in
+		// both halves:
+		//
+		//   - HookTurnDone, not IsAgentDone's transcript-tail fallback. Only
+		//     the Stop hook sets HookTurnDone, so the term is authoritative
+		//     hook-tier evidence retiring a hook-tier hold — no tier inversion,
+		//     and no exposure to the "last event was an assistant message"
+		//     heuristic, which can read true in the window between an
+		//     assistant message flushing and the tool_use that follows it. That
+		//     window is exactly where #307's PreToolUse fast path arms this
+		//     signal, so the heuristic half would let a Stop-less race retire
+		//     the fast path's hold.
+		//   - AND no open tool call. IsAgentDone's own doc records that a
+		//     turn-done signal can arrive while a tool is still outstanding (a
+		//     sub-agent spawned via the Agent tool). An open tool call is the
+		//     shape every tool-gated permission prompt has, #307's
+		//     AskUserQuestion / ExitPlanMode included, so releasing on a bare
+		//     HookTurnDone would drop precisely the holds that path places.
+		//     That guard is solid once the tool_use is flushed:
+		//     sweepOpenToolCallsOnTurnDone deliberately preserves Agent /
+		//     AskUserQuestion / ExitPlanMode across a turn_done, so
+		//     HasOpenToolCall stays true for exactly those tools.
+		//
+		// What remains true is the narrow, safe claim: Claude Code cannot end a
+		// turn while a blocking dialog is on screen, so an authoritative turn
+		// boundary with nothing outstanding is proof no dialog is open.
+		//
+		// THE RESIDUAL WINDOW, stated so a future change does not widen it
+		// unknowingly. "Only the Stop hook sets HookTurnDone" does not by
+		// itself close the race, because Hold runs on the HTTP handler
+		// goroutine while Overlay runs on the event loop: a Stop POST can hold
+		// SignalTurnDone and enqueue its synthetic event, a PreToolUse POST can
+		// then hold SignalPermissionPrompt, and the loop can drain the first
+		// afterwards — dropping a hold placed after the turn ended. Reaching it
+		// needs a human reply AND a model round trip inside one undrained
+		// debouncedEvents slot, which is far shorter than any human reply, so
+		// it is not reachable in practice. It would become reachable if the
+		// event loop were made to lag.
+		//
+		// WHO ELSE THIS AFFECTS. HookStop is name-keyed in hookSignalEffects,
+		// so every adapter routing "Stop" through HandleStopHook sets
+		// HookTurnDone, and this row is shared by all five asserters of
+		// SignalPermissionPrompt. The rule is safe for each, but for different
+		// reasons, so it is worth having them written down:
+		//   - claudecode, codex: a permission prompt is modelled as an open
+		//     tool call (codex's plan approval included — see codex's parser
+		//     tests, which pin HasOpenToolCall=true after proposed_plan), so
+		//     the !HasOpenToolCall guard holds.
+		//   - geminicli, opencode, hermes: each also calls
+		//     ReleasePermissionPromptHold around its own turn-end hook.
+		//
+		// ⚠ THOSE THREE CALLS ARE NOT MADE REDUNDANT BY THIS RULE — do not
+		// delete them as duplication. They are UNCONDITIONAL; this rule is
+		// guarded by !HasOpenToolCall, and the case they exist for is exactly
+		// the one the guard excludes: a turn torn down with an approval still
+		// pending never completes its tool call, so HasOpenToolCall is TRUE and
+		// this rule does not fire. Removing them would reinstate the 12-hour
+		// pin for the precise scenario they were written against. This rule
+		// generalises "a turn boundary retires a permission hold" for adapters
+		// that have no such call — it does not subsume the stronger one.
+		//
+		// THE EDGE IS ONE-SHOT, which bounds what it can promise. HookTurnDone
+		// is written only by SignalTurnDone's apply, and that row is
+		// consumeOnce, so this term can only fire on the single Overlay pass
+		// that consumes a Stop hook. If HasOpenToolCall is true on that pass
+		// the edge is spent and does not return. What remains for that case is
+		// the tool's own PostToolUse release (which is why hookMatcher going
+		// match-all matters) and, failing that, the ceiling. #1799 hit the same
+		// one-pass property for SignalSessionError and answered it with a
+		// DURABLE turn-boundary fact (IngestTurnBoundary) alongside the policy
+		// rule; the equivalent here — a turn-boundary timestamp on holdContext
+		// rather than a flag another row happens to write this pass — is filed
+		// rather than built, because it changes the hold mechanism itself.
+		//
+		// All three of those paths are things that must *happen*. None fires if
+		// the daemon never sees the POST — a crash, a restart, a port change,
+		// an uninstalled hook — or if the adapter stops writing the denial
+		// marker in the shape LastWasToolDenial matches. This row sits at the
+		// top of the authority ladder, so no lower-tier signal may correct it,
+		// and without the ceiling below a session pinned that way stayed
+		// pinned for the life of the process (#1360).
+		stale: func(c holdContext) bool {
+			return c.Metrics.LastWasToolDenial ||
+				(c.Metrics.HookTurnDone && !c.Metrics.HasOpenToolCall)
+		},
+		ceiling: permissionPromptHoldTimeout,
+		apply:   func(c holdContext) { c.Metrics.PermissionPending = true },
 	},
 
 	{

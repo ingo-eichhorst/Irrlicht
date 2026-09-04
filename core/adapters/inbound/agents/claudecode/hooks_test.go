@@ -13,13 +13,15 @@ import (
 )
 
 // mockTarget records calls to HandlePermissionHook, HandleCompactHook,
-// HandleStopHook and HandleIdlePromptHook for assertions.
+// HandleStopHook, HandleIdlePromptHook and HandlePermissionPromptHook for
+// assertions.
 type mockTarget struct {
-	mu              sync.Mutex
-	calls           []hookCall
-	compactCalls    []compactCall
-	stopCalls       []stopCall
-	idlePromptCalls []idlePromptCall
+	mu                    sync.Mutex
+	calls                 []hookCall
+	compactCalls          []compactCall
+	stopCalls             []stopCall
+	idlePromptCalls       []idlePromptCall
+	permissionPromptCalls []hookCall
 }
 
 type hookCall struct {
@@ -63,6 +65,25 @@ func (m *mockTarget) HandleIdlePromptHook(sessionID, transcriptPath string) {
 	m.idlePromptCalls = append(m.idlePromptCalls, idlePromptCall{sessionID, transcriptPath})
 }
 
+// HandlePermissionPromptHook records into a hookCall — the same three-field
+// shape as every other name-carrying dispatch, with hookEventName holding the
+// DISCRIMINATED wire name ("Notification/permission_prompt") this branch passes
+// so the lifecycle trace can tell it from the idle_prompt branch, which holds a
+// different signal. Recording that field rather than discarding it is what
+// stops a regression passing a bare "Notification" and staying green (#1861).
+func (m *mockTarget) HandlePermissionPromptHook(sessionID, transcriptPath, hookName string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.permissionPromptCalls = append(m.permissionPromptCalls,
+		hookCall{sessionID, transcriptPath, hookName})
+}
+
+func (m *mockTarget) getPermissionPromptCalls() []hookCall {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]hookCall{}, m.permissionPromptCalls...)
+}
+
 func (m *mockTarget) getCalls() []hookCall {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -75,6 +96,7 @@ func (m *mockTarget) reset() {
 	m.compactCalls = nil
 	m.stopCalls = nil
 	m.idlePromptCalls = nil
+	m.permissionPromptCalls = nil
 	m.mu.Unlock()
 }
 
@@ -399,11 +421,16 @@ func TestHookHandler_NotificationIdlePrompt(t *testing.T) {
 	}
 }
 
-// TestHookHandler_NotificationNonIdleType asserts the defense-in-depth reject:
-// only idle_prompt drives state, even though the installer already narrows the
-// matcher — a broadened settings.json matcher must not dispatch other types.
-func TestHookHandler_NotificationNonIdleType(t *testing.T) {
-	for _, ntype := range []string{"permission_prompt", "auth_success", "agent_completed", ""} {
+// TestHookHandler_NotificationInertType asserts the defense-in-depth reject:
+// only the notification types in notificationTypesDrivingState reach the
+// detector, even though the installer already narrows the matcher — a
+// hand-broadened settings.json matcher must not dispatch anything else.
+//
+// The corpus is deliberately types that say nothing about whether a human is
+// blocked. permission_prompt is NOT among them since #1861 — it has its own
+// dispatch and its own test (TestHookHandler_NotificationBlockingDialog).
+func TestHookHandler_NotificationInertType(t *testing.T) {
+	for _, ntype := range []string{"auth_success", "agent_completed", "push_notification", "computer_use_enter", ""} {
 		target := &mockTarget{}
 		handler := NewHookHandler(target, nil, nil, mockLogger{})
 
@@ -418,6 +445,9 @@ func TestHookHandler_NotificationNonIdleType(t *testing.T) {
 		}
 		if n := len(target.getIdlePromptCalls()); n != 0 {
 			t.Errorf("type %q: got %d HandleIdlePromptHook calls, want 0", ntype, n)
+		}
+		if n := len(target.getPermissionPromptCalls()); n != 0 {
+			t.Errorf("type %q: got %d HandlePermissionPromptHook calls, want 0", ntype, n)
 		}
 	}
 }
