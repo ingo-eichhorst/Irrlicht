@@ -153,7 +153,7 @@ observable from the couch with a locked phone.
 | Ready hold-down | Let a turn finish | Banner after ~7s, not instantly |
 | Hold-down cancel | Finish a turn, then send a new prompt within 7s | **No banner at all** |
 | Collapse | Two transitions on one session | The banner is *replaced*, never two stacked |
-| Burst | Four sessions into `waiting` inside 20s | One "N agents need attention", not four |
+| Burst | Four sessions into `waiting` inside 20s | Three single banners, then one "4 agents need attention" replacing nothing — §8.4 collapses only what is *beyond* the third inside the window (`> 3 pushes within 20 s`). Four singles is the failure; four banners is not |
 | Subagents | A session that spawns subagents | Only the parent notifies |
 | Watchdog | Kill the daemon, wait | "disconnected" banner after ~60s |
 | Watchdog cancel | Kill and restart the daemon within 60s | **Nothing** |
