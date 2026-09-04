@@ -22,6 +22,11 @@ import (
 
 const pollInterval = 100 * time.Millisecond
 
+const (
+	maxProcessCensusBytes = 4 * 1024 * 1024
+	maxProcessCensusRows  = 100_000
+)
+
 var errTranscriptPending = errors.New("Claude transcript has not appeared")
 
 type LiveOptions struct {
@@ -36,17 +41,21 @@ type LiveOptions struct {
 }
 
 type LiveRuntime struct {
-	options        LiveOptions
-	helper         helperClient
-	controls       map[string]helperSelector
-	processes      map[string]int
-	stepLog        string
-	httpClient     *http.Client
-	registryByID   map[string]RegistrySession
-	workingSeen    map[string]bool
-	deepLinkOpened bool
-	openDeepLink   func(context.Context, string) error
-	processExists  func(int) (bool, error)
+	options         LiveOptions
+	helper          helperClient
+	controls        map[string]helperSelector
+	processes       map[string]int
+	processEvidence map[string]ProcessEvidence
+	processBaseline map[int]struct{}
+	stepLog         string
+	httpClient      *http.Client
+	registryByID    map[string]RegistrySession
+	workingSeen     map[string]bool
+	deepLinkOpened  bool
+	openDeepLink    func(context.Context, string) error
+	processExists   func(int) (bool, error)
+	listProcesses   func(context.Context) (map[int]struct{}, error)
+	observeProcess  func(context.Context, int) (string, error)
 }
 
 func NewLiveRuntime(options LiveOptions, stepLog string) (*LiveRuntime, error) {
@@ -70,12 +79,14 @@ func NewLiveRuntime(options LiveOptions, stepLog string) (*LiveRuntime, error) {
 	}
 	return &LiveRuntime{
 		options: options, helper: helperClient{path: options.HelperPath},
-		processes: map[string]int{}, stepLog: stepLog,
-		httpClient:    &http.Client{Timeout: 2 * time.Second},
-		registryByID:  map[string]RegistrySession{},
-		workingSeen:   map[string]bool{},
-		openDeepLink:  openOfficialDesktopURL,
-		processExists: liveProcessExists,
+		processes: map[string]int{}, processEvidence: map[string]ProcessEvidence{}, stepLog: stepLog,
+		httpClient:     &http.Client{Timeout: 2 * time.Second},
+		registryByID:   map[string]RegistrySession{},
+		workingSeen:    map[string]bool{},
+		openDeepLink:   openOfficialDesktopURL,
+		processExists:  liveProcessExists,
+		listProcesses:  readProcessCensus,
+		observeProcess: processCommand,
 	}, nil
 }
 
@@ -131,7 +142,7 @@ func validateVersions(status helperStatus, irrlichtVersion string) (Versions, er
 	}, nil
 }
 
-func (runtime *LiveRuntime) CaptureBaseline(context.Context) (Baseline, error) {
+func (runtime *LiveRuntime) CaptureBaseline(ctx context.Context) (Baseline, error) {
 	sessions, files, err := runtime.readRegistry()
 	if err != nil {
 		return Baseline{}, err
@@ -140,11 +151,16 @@ func (runtime *LiveRuntime) CaptureBaseline(context.Context) (Baseline, error) {
 	if err != nil {
 		return Baseline{}, err
 	}
+	processes, err := runtime.listProcesses(ctx)
+	if err != nil {
+		return Baseline{}, fmt.Errorf("capture process baseline: %w", err)
+	}
+	runtime.processBaseline = processes
 	ids := make(map[string]struct{}, len(sessions))
 	for _, session := range sessions {
 		ids[session.SessionID] = struct{}{}
 	}
-	return Baseline{SessionIDs: ids, Files: files, Config: config}, nil
+	return Baseline{SessionIDs: ids, Files: files, Config: config, Processes: processes}, nil
 }
 
 func (runtime *LiveRuntime) OpenComposer(ctx context.Context, workspace string) error {
@@ -300,10 +316,19 @@ func (runtime *LiveRuntime) WaitIrrlichtState(
 				desktopBundleID,
 			)
 		}
-		if candidate.PID <= 0 {
-			return false, errors.New("Irrlicht session has no live PID")
+		if err := validateOwnedProcessBaseline(runtime.processBaseline, candidate); err != nil {
+			return false, err
+		}
+		command, err := runtime.observeProcess(ctx, candidate.PID)
+		if err != nil {
+			return false, err
+		}
+		process := ProcessEvidence{PID: candidate.PID, Command: command}
+		if previous, ok := runtime.processEvidence[owned.Registry.SessionID]; ok && previous != process {
+			return false, fmt.Errorf("owned Claude process identity changed from PID %d to PID %d", previous.PID, process.PID)
 		}
 		runtime.processes[owned.Registry.SessionID] = candidate.PID
+		runtime.processEvidence[owned.Registry.SessionID] = process
 		stateSeen, err := runtime.stateObserved(owned.Transcript.SessionID, candidate.State, state)
 		if err != nil {
 			return false, err
@@ -351,6 +376,18 @@ func selectIrrlichtSession(sessions []SessionObservation, sessionID string) (Ses
 	return matches[0], true, nil
 }
 
+// validateOwnedProcessBaseline is the process-identity guard used before an
+// Irrlicht observation can be attributed to the newly created Desktop session.
+func validateOwnedProcessBaseline(baseline map[int]struct{}, candidate SessionObservation) error {
+	if candidate.PID <= 0 {
+		return errors.New("Irrlicht session has no live PID")
+	}
+	if _, existed := baseline[candidate.PID]; existed {
+		return fmt.Errorf("Irrlicht session reused baseline process PID %d", candidate.PID)
+	}
+	return nil
+}
+
 func (runtime *LiveRuntime) WaitHook(ctx context.Context, owned OwnedSession) error {
 	return poll(ctx, "hook_received event", func() (bool, error) {
 		files, err := filepath.Glob(filepath.Join(runtime.options.RecordingDirectory, "*.jsonl"))
@@ -396,14 +433,14 @@ func (runtime *LiveRuntime) CaptureEvidence(
 	if err := validateNoToolTranscript(transcriptPath); err != nil {
 		return CapturedEvidence{}, err
 	}
-	command, err := processCommand(ctx, observation.PID)
-	if err != nil {
-		return CapturedEvidence{}, err
+	process, ok := runtime.processEvidence[owned.Registry.SessionID]
+	if !ok {
+		return CapturedEvidence{}, errors.New("owned Claude process evidence was not captured")
 	}
 	evidence := CapturedEvidence{
 		Registry: owned.Registry, TranscriptPath: transcriptPath,
 		IrrlichtSession: observation,
-		Process:         ProcessEvidence{PID: observation.PID, Command: command},
+		Process:         process,
 	}
 	if err := runtime.writeEvidenceFiles(evidenceDir, owned, evidence); err != nil {
 		return CapturedEvidence{}, err
@@ -412,26 +449,26 @@ func (runtime *LiveRuntime) CaptureEvidence(
 }
 
 func (runtime *LiveRuntime) ArchiveOwned(ctx context.Context, owned OwnedSession) error {
-	registry, err := runtime.registrySession(owned.Registry.SessionID)
+	sessions, _, err := runtime.readRegistry()
 	if err != nil {
 		return err
-	}
-	if registry.Archived {
-		return nil
-	}
-	if registry.Title == "" {
-		return fmt.Errorf("owned session %q has no title for the selected-session guard", registry.SessionID)
 	}
 	elements, err := runtime.helper.inspect(ctx)
 	if err != nil {
 		return err
 	}
-	menu, err := selectedSessionMenu(elements, registry.Title)
+	target, err := validateArchiveTarget(owned, sessions, elements)
 	if err != nil {
 		return err
 	}
+	if target.registry.Archived {
+		return nil
+	}
+	if err := runtime.helper.probeProject(ctx, target.project); err != nil {
+		return fmt.Errorf("re-probe owned Desktop project before archive: %w", err)
+	}
 	menuRole := helperSelector{Role: "AXMenu"}
-	if err := runtime.helper.click(ctx, menu, helperPostcondition{
+	if err := runtime.helper.click(ctx, target.menu, helperPostcondition{
 		Selector: menuRole, Condition: "exists", TimeoutMilliseconds: 2_000,
 	}); err != nil {
 		return fmt.Errorf("open owned-session menu: %w", err)
@@ -455,6 +492,62 @@ func (runtime *LiveRuntime) ArchiveOwned(ctx context.Context, owned OwnedSession
 		current, err := runtime.registrySession(owned.Registry.SessionID)
 		return err == nil && current.Archived, err
 	})
+}
+
+// validateArchiveTarget is the final pure ownership guard before any archive
+// click. LiveRuntime supplies a fresh registry and accessibility-tree reading.
+type archiveTarget struct {
+	registry RegistrySession
+	menu     helperSelector
+	project  helperSelector
+}
+
+func validateArchiveTarget(
+	owned OwnedSession,
+	sessions []RegistrySession,
+	elements []helperElement,
+) (archiveTarget, error) {
+	var matches []RegistrySession
+	for _, session := range sessions {
+		if session.SessionID == owned.Registry.SessionID {
+			matches = append(matches, session)
+		}
+	}
+	if len(matches) != 1 {
+		return archiveTarget{}, fmt.Errorf(
+			"Desktop registry session %q requires one row; found %d",
+			owned.Registry.SessionID,
+			len(matches),
+		)
+	}
+	registry := matches[0]
+	if err := validateRegistryIdentity(owned.Registry, registry); err != nil {
+		return archiveTarget{}, err
+	}
+	if registry.Archived {
+		return archiveTarget{registry: registry}, nil
+	}
+	if registry.Title == "" {
+		return archiveTarget{}, fmt.Errorf("owned session %q has no title for the selected-session guard", registry.SessionID)
+	}
+	titleMatches := 0
+	for _, session := range sessions {
+		if !session.Archived && session.Title == registry.Title {
+			titleMatches++
+		}
+	}
+	if titleMatches != 1 {
+		return archiveTarget{}, fmt.Errorf("owned active session title %q is not unique; found %d rows", registry.Title, titleMatches)
+	}
+	controls, err := composerCatalog(elements, registry.CWD)
+	if err != nil {
+		return archiveTarget{}, fmt.Errorf("validate owned Desktop composer before archive: %w", err)
+	}
+	menu, err := selectedSessionMenu(elements, registry.Title)
+	if err != nil {
+		return archiveTarget{}, err
+	}
+	return archiveTarget{registry: registry, menu: menu, project: controls["project"]}, nil
 }
 
 func (runtime *LiveRuntime) WaitProcessExit(ctx context.Context, owned OwnedSession) error {
@@ -843,6 +936,49 @@ func processCommand(ctx context.Context, pid int) (string, error) {
 		return "", fmt.Errorf("PID %d has an empty command", pid)
 	}
 	return command, nil
+}
+
+func readProcessCensus(ctx context.Context) (map[int]struct{}, error) {
+	command := exec.CommandContext(ctx, "/bin/ps", "-axo", "pid=")
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	if err := command.Start(); err != nil {
+		return nil, err
+	}
+	data, readErr := io.ReadAll(io.LimitReader(stdout, maxProcessCensusBytes+1))
+	if readErr != nil {
+		_ = command.Process.Kill()
+		_ = command.Wait()
+		return nil, fmt.Errorf("read process census: %w", readErr)
+	}
+	if len(data) > maxProcessCensusBytes {
+		_ = command.Process.Kill()
+		_ = command.Wait()
+		return nil, fmt.Errorf("process census exceeded %d bytes", maxProcessCensusBytes)
+	}
+	if err := command.Wait(); err != nil {
+		return nil, fmt.Errorf("run process census: %w (%s)", err, strings.TrimSpace(stderr.String()))
+	}
+	processes := map[int]struct{}{}
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	for scanner.Scan() {
+		if len(processes) >= maxProcessCensusRows {
+			return nil, fmt.Errorf("process census exceeded %d rows", maxProcessCensusRows)
+		}
+		pid, err := strconv.Atoi(strings.TrimSpace(scanner.Text()))
+		if err != nil || pid <= 0 {
+			return nil, fmt.Errorf("process census contains invalid PID %q", scanner.Text())
+		}
+		processes[pid] = struct{}{}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return processes, nil
 }
 
 func (runtime *LiveRuntime) writeEvidenceFiles(
