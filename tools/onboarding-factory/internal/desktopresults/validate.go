@@ -36,6 +36,7 @@ type validation struct {
 	repoRoot       string
 	catalog        map[string]bool
 	claudeCells    map[string]bool
+	canonicalCells map[string]string
 	resultCount    map[string]int
 	requireDesktop bool
 	findings       []Finding
@@ -46,10 +47,11 @@ type validation struct {
 // exactly one result for every current catalog scenario.
 func ValidateRepo(repoRoot string) []Finding {
 	v := &validation{
-		repoRoot:    repoRoot,
-		catalog:     map[string]bool{},
-		claudeCells: map[string]bool{},
-		resultCount: map[string]int{},
+		repoRoot:       repoRoot,
+		catalog:        map[string]bool{},
+		claudeCells:    map[string]bool{},
+		canonicalCells: map[string]string{},
+		resultCount:    map[string]int{},
 	}
 	v.loadCatalog()
 	v.scanResultFiles()
@@ -134,6 +136,7 @@ func (v *validation) validateRequiredProfileList(adapter string, profiles []stri
 
 func (v *validation) scanResultFiles() {
 	root := filepath.Join(v.repoRoot, "replaydata", "agents", claudeAdapter)
+	var resultFiles []string
 	err := filepath.WalkDir(root, func(path string, entry iofs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			v.add(v.rel(path), "unknown", "scan", walkErr.Error())
@@ -146,12 +149,15 @@ func (v *validation) scanResultFiles() {
 		case "metadata.json":
 			v.registerClaudeCell(root, path)
 		case FileName:
-			v.validateResultFile(path)
+			resultFiles = append(resultFiles, path)
 		}
 		return nil
 	})
 	if err != nil && !os.IsNotExist(err) {
 		v.add(v.rel(root), "unknown", "scan", err.Error())
+	}
+	for _, path := range resultFiles {
+		v.validateResultFile(path)
 	}
 }
 
@@ -167,39 +173,60 @@ func (v *validation) registerClaudeCell(root, path string) {
 	scenario := metadataScenarioID(filepath.Dir(path))
 	if v.catalog[scenario] {
 		v.claudeCells[scenario] = true
+		v.canonicalCells[filepath.Clean(filepath.Dir(path))] = scenario
 	}
 }
 
 func (v *validation) validateResultFile(path string) {
 	rel := v.rel(path)
-	expectedScenario := metadataScenarioID(filepath.Dir(path))
-	if _, err := resolveFile(v.repoRoot, rel); err != nil {
-		v.add(rel, expectedScenario, "document", err.Error())
+	cellDir := filepath.Clean(filepath.Dir(path))
+	expectedScenario := metadataScenarioID(cellDir)
+	canonicalScenario, canonical := v.canonicalCells[cellDir]
+	if !canonical {
+		v.add(rel, expectedScenario, "document location", "must be the direct child of a current Claude Code cell")
+	}
+	doc, ok := v.loadResultDocument(path, rel, expectedScenario)
+	if !ok {
 		return
+	}
+	v.validateResults(rel, cellDir, expectedScenario, canonicalScenario, canonical, doc.Results)
+}
+
+func (v *validation) loadResultDocument(path, rel, scenario string) (Document, bool) {
+	if _, err := resolveFile(v.repoRoot, rel); err != nil {
+		v.add(rel, scenario, "document", err.Error())
+		return Document{}, false
 	}
 	doc, err := Load(path)
 	if err != nil {
-		v.add(rel, expectedScenario, "document", "invalid or unknown field: "+err.Error())
-		return
+		v.add(rel, scenario, "document", "invalid or unknown field: "+err.Error())
+		return Document{}, false
 	}
 	if doc.SchemaVersion != SchemaVersion {
-		v.add(rel, expectedScenario, "schema_version", fmt.Sprintf("got %d; want %d", doc.SchemaVersion, SchemaVersion))
+		v.add(rel, scenario, "schema_version", fmt.Sprintf("got %d; want %d", doc.SchemaVersion, SchemaVersion))
 	}
 	if len(doc.Results) == 0 {
-		v.add(rel, expectedScenario, "results", "must contain at least one result")
-		return
+		v.add(rel, scenario, "results", "must contain at least one result")
+		return doc, false
 	}
+	return doc, true
+}
+
+func (v *validation) validateResults(rel, cellDir, expectedScenario, canonicalScenario string, canonical bool, results []Result) {
 	seenProfile := map[string]bool{}
-	for i := range doc.Results {
-		result := &doc.Results[i]
-		v.validateResult(rel, filepath.Dir(path), expectedScenario, result)
-		if result.ExecutionProfile == string(matrix.ProfileDesktopLocal) {
-			v.resultCount[result.ScenarioID]++
-			if seenProfile[result.ExecutionProfile] {
-				v.add(rel, result.ScenarioID, "results", "duplicate desktop-local result")
-			}
-			seenProfile[result.ExecutionProfile] = true
+	for i := range results {
+		result := &results[i]
+		v.validateResult(rel, cellDir, expectedScenario, result)
+		if result.ExecutionProfile != string(matrix.ProfileDesktopLocal) {
+			continue
 		}
+		if canonical && result.ScenarioID == canonicalScenario {
+			v.resultCount[result.ScenarioID]++
+		}
+		if seenProfile[result.ExecutionProfile] {
+			v.add(rel, result.ScenarioID, "results", "duplicate desktop-local result")
+		}
+		seenProfile[result.ExecutionProfile] = true
 	}
 }
 
@@ -325,15 +352,14 @@ func (v *validation) validateNonObservedEvidence(rel, cellDir string, result *Re
 
 // allowedNonObservedEvidence checks only a reference's stable scope. It does
 // not claim that prose proves the result. Campaign evidence must be the cell's
-// metadata, a file under its desktop-evidence directory, a repository doc, or
-// a shared raw probe under replaydata/agents/claudecode/desktop-evidence.
+// metadata, a file under its desktop-evidence directory, or a shared raw probe
+// under replaydata/agents/claudecode/desktop-evidence.
 func (v *validation) allowedNonObservedEvidence(cellDir, resolved string) bool {
 	if sameResolvedFile(resolved, filepath.Join(cellDir, "metadata.json")) {
 		return true
 	}
 	for _, root := range []string{
 		filepath.Join(cellDir, "desktop-evidence"),
-		filepath.Join(v.repoRoot, "docs"),
 		filepath.Join(v.repoRoot, "replaydata", "agents", claudeAdapter, "desktop-evidence"),
 	} {
 		if resolvedWithinExisting(root, resolved) {

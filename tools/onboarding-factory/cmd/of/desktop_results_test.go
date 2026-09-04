@@ -232,6 +232,21 @@ func TestValidateDesktopCompletenessMutations(t *testing.T) {
 		write(t, filepath.Join(variant, desktopResultsFile), string(body))
 		requireDesktopFinding(t, fixture.root, "not-applicable", "duplicate desktop-local result")
 	})
+	t.Run("off-path result cannot satisfy a canonical cell", func(t *testing.T) {
+		fixture := desktopResultsRepo(t, true)
+		canonical := filepath.Join(fixture.cellDirs["unobservable"], desktopResultsFile)
+		body, err := os.ReadFile(canonical)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(canonical); err != nil {
+			t.Fatal(err)
+		}
+		offPath := filepath.Join(fixture.root, "replaydata", "agents", "claudecode", "regressions", "copied-result")
+		write(t, filepath.Join(offPath, "metadata.json"), `{"scenario_id":"unobservable"}`+"\n")
+		write(t, filepath.Join(offPath, desktopResultsFile), string(body))
+		requireDesktopFinding(t, fixture.root, "unobservable", "missing desktop-local result")
+	})
 }
 
 func TestValidateDesktopResultShapeMutations(t *testing.T) {
@@ -461,6 +476,15 @@ func TestValidateDesktopEvidenceReferenceMutations(t *testing.T) {
 		write(t, filepath.Join(fixture.root, "unrelated.txt"), "not campaign evidence\n")
 		path := filepath.Join(fixture.cellDirs["unobservable"], desktopResultsFile)
 		mutateFirstResult(t, path, func(result map[string]any) { result["evidence_refs"] = []any{"unrelated.txt"} })
+		requireDesktopFinding(t, fixture.root, "unobservable", "evidence_refs[0]")
+	})
+	t.Run("unrelated repository doc is not Desktop evidence", func(t *testing.T) {
+		fixture := desktopResultsRepo(t, false)
+		write(t, filepath.Join(fixture.root, "docs", "testing-philosophy.md"), "general test guidance\n")
+		path := filepath.Join(fixture.cellDirs["unobservable"], desktopResultsFile)
+		mutateFirstResult(t, path, func(result map[string]any) {
+			result["evidence_refs"] = []any{"docs/testing-philosophy.md"}
+		})
 		requireDesktopFinding(t, fixture.root, "unobservable", "evidence_refs[0]")
 	})
 }
