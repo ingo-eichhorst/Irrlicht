@@ -38,12 +38,13 @@ This request returns a bounded Accessibility snapshot:
 {
   "protocolVersion": 1,
   "command": "inspect",
-  "limits": {"maxDepth": 14, "maxNodes": 5000}
+  "limits": {"maxDepth": 64, "maxNodes": 5000}
 }
 ```
 
 The snapshot includes role, subrole, title, description, identifier, hierarchy,
 state, path, and current frame. The snapshot does not include text-field values.
+The helper accepts a maximum depth of 128 and a maximum node count of 50,000.
 
 A `probe` request supplies named controls and one or more selectors for each
 control. A later driver can keep its version-specific control catalog separate

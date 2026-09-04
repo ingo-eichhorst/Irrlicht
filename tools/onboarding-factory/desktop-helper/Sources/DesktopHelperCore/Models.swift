@@ -142,16 +142,16 @@ public struct TraversalLimits: Codable, Equatable, Sendable {
     public let maxDepth: Int
     public let maxNodes: Int
 
-    public init(maxDepth: Int = 14, maxNodes: Int = 5_000) {
+    public init(maxDepth: Int = 64, maxNodes: Int = 5_000) {
         self.maxDepth = maxDepth
         self.maxNodes = maxNodes
     }
 
     public func validated() throws -> TraversalLimits {
-        guard (1 ... 32).contains(maxDepth), (1 ... 50_000).contains(maxNodes) else {
+        guard (1 ... 128).contains(maxDepth), (1 ... 50_000).contains(maxNodes) else {
             throw HelperFailure(
                 .invalidRequest,
-                "Traversal limits must use maxDepth 1...32 and maxNodes 1...50000."
+                "Traversal limits must use maxDepth 1...128 and maxNodes 1...50000."
             )
         }
         return self
