@@ -205,6 +205,31 @@ func validateOracleOptions(options managedFileOracleOptions) error {
 	return nil
 }
 
+// parseManagedFileRow validates one manifest row in isolation. keep is false
+// for a row this oracle does not model (an absent directory); every other
+// shape that is not a well-formed file row is an error, never a skip.
+func parseManagedFileRow(line string) (managedFileEntry, bool, error) {
+	parts := strings.SplitN(line, "\t", 3)
+	if len(parts) != 3 {
+		return managedFileEntry{}, false, fmt.Errorf("invalid managed-file manifest row %q", line)
+	}
+	entry := managedFileEntry{state: parts[0], slot: parts[1], path: parts[2]}
+	if entry.state == "absentdir" {
+		return managedFileEntry{}, false, nil
+	}
+	if entry.state != "saved" && entry.state != "absent" {
+		return managedFileEntry{}, false, fmt.Errorf("invalid managed-file state %q", entry.state)
+	}
+	slotNumber, slotErr := strconv.Atoi(entry.slot)
+	if slotErr != nil || slotNumber < 0 || strconv.Itoa(slotNumber) != entry.slot {
+		return managedFileEntry{}, false, fmt.Errorf("invalid managed-file slot %q", entry.slot)
+	}
+	if !filepath.IsAbs(entry.path) {
+		return managedFileEntry{}, false, fmt.Errorf("duplicate or invalid managed-file identity for %q", entry.path)
+	}
+	return entry, true, nil
+}
+
 func readManagedFileManifest(path string) ([]managedFileEntry, error) {
 	info, err := os.Lstat(path)
 	if err != nil || !info.Mode().IsRegular() {
@@ -221,22 +246,14 @@ func readManagedFileManifest(path string) ([]managedFileEntry, error) {
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	for scanner.Scan() {
-		parts := strings.SplitN(scanner.Text(), "\t", 3)
-		if len(parts) != 3 {
-			return nil, fmt.Errorf("invalid managed-file manifest row %q", scanner.Text())
+		entry, keep, err := parseManagedFileRow(scanner.Text())
+		if err != nil {
+			return nil, err
 		}
-		entry := managedFileEntry{state: parts[0], slot: parts[1], path: parts[2]}
-		if entry.state == "absentdir" {
+		if !keep {
 			continue
 		}
-		if entry.state != "saved" && entry.state != "absent" {
-			return nil, fmt.Errorf("invalid managed-file state %q", entry.state)
-		}
-		slotNumber, slotErr := strconv.Atoi(entry.slot)
-		if slotErr != nil || slotNumber < 0 || strconv.Itoa(slotNumber) != entry.slot {
-			return nil, fmt.Errorf("invalid managed-file slot %q", entry.slot)
-		}
-		if !filepath.IsAbs(entry.path) || seenSlots[entry.slot] || seenPaths[entry.path] {
+		if seenSlots[entry.slot] || seenPaths[entry.path] {
 			return nil, fmt.Errorf("duplicate or invalid managed-file identity for %q", entry.path)
 		}
 		seenSlots[entry.slot] = true
@@ -258,14 +275,27 @@ func declaredManagedPaths(declaration agent.Agent) ([]string, error) {
 		if declaredPermission.Kind != permission.KindModify || declaredPermission.Writes == nil {
 			continue
 		}
-		resolvers := append([]func() (string, error){declaredPermission.Writes.Path}, declaredPermission.Writes.Also...)
-		for _, resolve := range resolvers {
-			path, err := resolve()
-			if err != nil {
-				return nil, fmt.Errorf("resolve %s/%s managed path: %w", declaration.Identity.Name, declaredPermission.Key, err)
-			}
-			paths = append(paths, filepath.Clean(path))
+		resolved, err := resolveWrittenPaths(declaration.Identity.Name, declaredPermission)
+		if err != nil {
+			return nil, err
 		}
+		paths = append(paths, resolved...)
+	}
+	return paths, nil
+}
+
+// resolveWrittenPaths runs one Modify permission's own path resolvers. A
+// resolver that fails is an error, never a skipped path: a managed file this
+// oracle cannot name is one the restore would not compare.
+func resolveWrittenPaths(agentName string, declaredPermission agent.Permission) ([]string, error) {
+	resolvers := append([]func() (string, error){declaredPermission.Writes.Path}, declaredPermission.Writes.Also...)
+	paths := make([]string, 0, len(resolvers))
+	for _, resolve := range resolvers {
+		path, err := resolve()
+		if err != nil {
+			return nil, fmt.Errorf("resolve %s/%s managed path: %w", agentName, declaredPermission.Key, err)
+		}
+		paths = append(paths, filepath.Clean(path))
 	}
 	return paths, nil
 }
