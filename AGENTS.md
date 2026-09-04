@@ -151,6 +151,15 @@ Before marking a ticket done, run the full suite — every layer must pass:
   time, so a partition split across lines — a `switch` with two arms and a
   `default` — is invisible to it: it complements review rather than replacing
   it. `tools/lib/state-vocabulary-lint_test.sh` carries the mutation fixtures.
+- Release packaging: `tools/web-release-assets-guard.sh` (#1900) executes
+  `tools/lib/stage-web.sh` — the one definition of which `platforms/web/`
+  files a release ships — and asserts every asset reachable from
+  `index.html` is staged and nothing dev-only is. It walks the ES-module
+  import graph transitively and cycle-tolerantly, because the module that
+  broke was reachable only at depth 3. Both `tools/build-release.sh` and
+  `/ir:release`'s manual fallback blocks must stage via `stage_web`; a
+  hand-written `cp` list in either fails the gate. That list is how a blank
+  dashboard shipped to every install on macOS and Linux.
 - Skill files: `tools/skill-lint.sh` (`.claude/skills/**/*.md`). AGENTS.md's
   own 400-line budget (#1742 — this file is force-injected into every agent
   session via CLAUDE.md's `@AGENTS.md` import, so it never gets to just grow):

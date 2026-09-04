@@ -333,6 +333,34 @@ CI parity section (chunking, the budget, and what it makes visible).
   that needed killing. Nine recordings in one morning each leaked a live
   `claude` and its tmux session.
 
+- Release packaging: `tools/web-release-assets-guard.sh`, in the `tools` gate
+  (#1900). What a release ships out of `platforms/web/` is defined once, as a
+  rule, in `tools/lib/stage-web.sh` — every `*.html`/`*.css`/`*.js` directly in
+  the tree, minus `*.test.js` and `vitest.*`. The guard **executes that
+  library**, into a temp dir, rather than re-describing the rule: a guard that
+  reimplemented it would prove something about itself and nothing about the
+  script that ships. It then walks the ES-module import graph from
+  `index.html`, transitively and with a visited set, and asserts both
+  directions — everything reachable is staged, nothing dev-only is — plus that
+  neither `tools/build-release.sh` nor `/ir:release`'s manual fallback blocks
+  copy the tree by hand.
+
+  Three details are the incident, not decoration. The walk is **transitive**
+  because `collapsedSet.js` is reachable only through `collapsedGroups.js` /
+  `collapsedSummaries.js`, so a scan of `irrlicht.js`'s direct imports finds 9
+  of 10 modules and reports completeness. It is **cycle-tolerant** because
+  `permissionsWizard.js` and `quotaChips.js` import back from `irrlicht.js`.
+  And every read is `grep -a`, because `irrlicht.js` and `sessionIdentity.js`
+  carry literal NUL bytes and a binary-detecting grep answers `Binary file …
+  matches` — an empty closure that passes. A closure with zero import edges
+  therefore REFUSEs rather than reporting success. `#1900` is what all of that
+  is against: a hand-written three-file `cp` list, complete when written in
+  `#418`, silently incomplete after `#712`/`#820`, shipping a blank dashboard
+  to every install on macOS and Linux for three releases. Its `--changed`
+  trigger includes `^platforms/web/` — a commit that extracts a new module
+  touches nothing else, and is exactly the commit shape that caused this.
+  Mutations: `tools/lib/web-release-assets-guard-mutations_test.sh`.
+
 - Sourced shell libraries: not a contract family — a tripwire,
   `tools/lib/shell-lib-errexit_test.sh`, over every `tools/lib/*.sh` that is
   not a `*_test.sh`. Each function it can drive must, under a caller's

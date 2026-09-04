@@ -49,6 +49,7 @@ STAGE_LIB="tools/lib/stage-web.sh"
 GUARD="tools/web-release-assets-guard.sh"
 BUILD_RELEASE="tools/build-release.sh"
 PREFLIGHT="tools/preflight.sh"
+RELEASE_SKILL=".claude/skills/ir:release/SKILL.md"
 
 # shellcheck source=tools/lib/mutation-assert.sh
 . "$DIR/mutation-assert.sh"
@@ -168,6 +169,47 @@ assert_mutation_is_red \
   '^AGENTS\.md$|^platforms/web/|^\.claude/skills/ir:test-mac/' \
   '^AGENTS\.md$|^\.claude/skills/ir:test-mac/' \
   "'tools/lib shell-lib tests' would be SKIPped by preflight --changed"
+
+# ── 9. The release PROCEDURE stays attached to the rule too ─────────────────
+#
+# tools/build-release.sh is not the only thing that assembles a release: the
+# manual per-artifact blocks in .claude/skills/ir:release/SKILL.md are the
+# documented fallback, and every one of them used to `cp` the web tree by hand
+# — two of them copying index.html alone, which is this bug with one file
+# instead of three. Guarding only the script would leave the defect sitting in
+# the document a human reads.
+assert_mutation_is_red \
+  "lock test catches the release skill copying the web tree by hand again" \
+  "$RELEASE_SKILL" \
+  '  stage_web platforms/web /tmp/irrlichd-tarball/web )' \
+  '  cp platforms/web/index.html /tmp/irrlichd-tarball/web/ )' \
+  "copies platforms/web by hand"
+
+# ── 10. The NUL fixture's own vacuity guard fires ───────────────────────────
+#
+# Row 4 above is only worth anything while its fixture really carries a NUL.
+# The first spelling of this guard used `grep -q $'\000'`, which bash expands
+# to the empty string — it matched every file and could never fire. So the
+# guard on the fixture is itself mutated: take the NUL out of the fixture and
+# the lock test must say so.
+assert_mutation_is_red \
+  "lock test notices its own NUL fixture losing its NUL byte" \
+  "$LOCK_TEST" \
+  $'printf \'const SEP = "\\000";\\nimport { x } from \'\\\'\'./dep.js\'\\\'\';\\n\' >"$NUL/app.js"' \
+  $'printf \'const SEP = "";\\nimport { x } from \'\\\'\'./dep.js\'\\\'\';\\n\' >"$NUL/app.js"' \
+  "the NUL fixture carries no NUL byte"
+
+# ── 11. A CSS reference the walker cannot follow is refused ─────────────────
+#
+# The walk follows HTML and JavaScript references, not CSS ones. That is safe
+# only while the stylesheet has none — so the stylesheet is checked, and this
+# row proves the check is real rather than decorative.
+assert_mutation_is_red \
+  "lock test catches a CSS @import the walker does not follow" \
+  "platforms/web/irrlicht.css" \
+  '    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }' \
+  $'@import url(\'./theme/dark.css\');\n    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }' \
+  "carries a CSS reference this walker does not follow"
 
 if [[ $fails -gt 0 ]]; then
   echo "web-release-assets-guard-mutations: $fails FAILED"

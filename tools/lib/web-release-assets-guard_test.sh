@@ -188,10 +188,14 @@ mkdir -p "$NUL"
 printf '<script type="module" src="app.js"></script>\n' >"$NUL/index.html"
 printf 'const SEP = "\000";\nimport { x } from '\''./dep.js'\'';\n' >"$NUL/app.js"
 printf 'export const x = 1;\n' >"$NUL/dep.js"
-if ! LC_ALL=C grep -qU $'\000' "$NUL/app.js" 2>/dev/null && ! LC_ALL=C grep -qaP '\x00' "$NUL/app.js" 2>/dev/null; then
-  # Neither probe could confirm the byte survived the write, so the assertion
-  # below would be testing an ordinary text file and passing for free.
-  fail "the NUL fixture carries no NUL byte — this assertion is vacuous"
+# Probe by BYTES, never with a bash-quoted NUL: bash cannot hold NUL in a word,
+# so `grep -q $'\000' file` is `grep -q '' file`, which matches every non-empty
+# file and can therefore never fire. `tr -d -c` counts the NULs directly and
+# works identically on BSD and GNU.
+if [[ "$(LC_ALL=C tr -d -c '\000' <"$NUL/app.js" | wc -c | tr -d ' ')" -eq 0 ]]; then
+  # The byte did not survive the write, so the assertion below would be
+  # examining an ordinary text file and passing for free.
+  fail "the NUL fixture carries no NUL byte — the assertion below is vacuous"
 fi
 nul_closure=$(web_assets_closure "$NUL" 2>&1)
 nul_st=$?
@@ -261,18 +265,92 @@ printf 'export const x = 1;\n' >"$TMP/noedge/app.js"
 expect_refuse "a module graph with not one import edge" \
   "$TMP/noedge" "not one import edge"
 
+echo "== a defect IN the tree is a finding (1), not an inability to look (2) =="
+# expect_finding <label> <src-dir> <fragment> — the walk read the tree fine and
+# found something wrong with it. Reported as 1, so a caller can tell "your tree
+# is broken" from "I could not read your tree".
+expect_finding() {
+  local label="$1" dir="$2" want="$3" out st
+  out=$(web_assets_closure "$dir" 2>&1)
+  st=$?
+  if [[ "$st" -ne 1 ]]; then
+    fail "$label — expected FAIL (1), got status $st with: $(echo "$out" | tr '\n' ' ')"
+    return
+  fi
+  case "$out" in
+    *"$want"*) pass "$label" ;;
+    *) fail "$label — failed, but not for the stated reason (wanted: $want); got: $(echo "$out" | tr '\n' ' ')" ;;
+  esac
+}
+
 mkdir -p "$TMP/broken"
 printf '<script type="module" src="app.js"></script>\n' >"$TMP/broken/index.html"
 printf "import { x } from './gone.js';\n" >"$TMP/broken/app.js"
-expect_refuse "an import of a file that does not exist" \
+expect_finding "an import of a file that does not exist" \
   "$TMP/broken" "does not exist in"
 
 mkdir -p "$TMP/subdir/sub"
 printf '<script type="module" src="app.js"></script>\n' >"$TMP/subdir/index.html"
 printf "import { x } from './sub/deep.js';\n" >"$TMP/subdir/app.js"
 printf 'export const x = 1;\n' >"$TMP/subdir/sub/deep.js"
-expect_refuse "an import from a subdirectory the non-recursive rule cannot ship" \
+expect_finding "an import from a subdirectory the non-recursive rule cannot ship" \
   "$TMP/subdir" "non-recursive"
+
+echo "== a commented-out import is not read as a live edge =="
+# A doc comment naming a retired sibling is an ordinary thing to leave behind
+# during a refactor. Read as an edge it would turn the release gate red — on a
+# pre-push hook — with a message that reads like a real packaging defect.
+CMT="$TMP/commented"
+mkdir -p "$CMT"
+printf '<script type="module" src="app.js"></script>\n' >"$CMT/index.html"
+cat >"$CMT/app.js" <<'JS'
+import { y } from './real.js';
+// this used to import { z } from './retired.js'
+/* and briefly from './alsoRetired.js' too */
+const docs = 'https://example.invalid/from/nowhere';
+JS
+printf 'export const y = 1;\n' >"$CMT/real.js"
+cmt_out=$(web_assets_closure "$CMT" 2>&1)
+cmt_st=$?
+if [[ "$cmt_st" -ne 0 ]]; then
+  fail "a commented-out import turned the walk red (exit $cmt_st): $(echo "$cmt_out" | tr '\n' ' ')"
+else
+  case $'\n'"$cmt_out"$'\n' in
+    *$'\n'real.js$'\n'*) pass "the live import is still found beside the commented-out ones" ;;
+    *) fail "the walk lost the live import while ignoring comments: $(echo "$cmt_out" | tr '\n' ' ')" ;;
+  esac
+fi
+
+echo "== the scanner sees the edge forms it claims to =="
+FORMS="$TMP/forms"
+mkdir -p "$FORMS"
+printf '<script type="module" src="app.js"></script>\n' >"$FORMS/index.html"
+cat >"$FORMS/app.js" <<'JS'
+import defaultExport from './a.js';
+import * as ns from './b.js';
+import {
+  thing,
+} from './c.js';
+import './d.js';
+export { e } from './e.js';
+export * from './f.js';
+const lazy = () => import('./g.js');
+const tmpl = () => import(`./h.js`);
+const worker = new URL('./i.js', import.meta.url);
+JS
+for m in a b c d e f g h i; do printf 'export const x = 1;\n' >"$FORMS/$m.js"; done
+forms_out=$(web_assets_closure "$FORMS" 2>&1)
+if [[ $? -ne 0 ]]; then
+  fail "the walk refused on the edge-form fixture: $(echo "$forms_out" | tr '\n' ' ')"
+else
+  for m in a b c d e f g h i; do
+    case $'\n'"$forms_out"$'\n' in
+      *$'\n'"$m.js"$'\n'*) ;;
+      *) fail "the scanner missed the edge to $m.js" ;;
+    esac
+  done
+  pass "default, namespace, multi-line, side-effect, re-export, export-*, dynamic, template-literal and new URL() edges are all seen"
+fi
 
 echo "== stage_web refuses loudly rather than staging an empty tree =="
 out=$(stage_web "$TMP/absent" "$TMP/out" 2>&1); st=$?

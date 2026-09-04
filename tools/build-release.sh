@@ -8,10 +8,11 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT_DIR"
 
 # The dashboard's runtime asset set is defined ONCE, as a rule, in
-# tools/lib/stage-web.sh, and staged from there into all three release
-# artifacts below. It used to be a hand-written three-file `cp` list repeated
-# at each site, which stopped being the whole dashboard in #712/#820 and
-# shipped a blank page to every installed user (#1900).
+# tools/lib/stage-web.sh, and staged from there at the three call sites below
+# — which cover four artifacts, since the Linux one runs per-arch. It used to
+# be a hand-written three-file `cp` list repeated at each site, which stopped
+# being the whole dashboard in #712/#820 and shipped a blank page to every
+# installed user (#1900). tools/web-release-assets-guard.sh keeps it that way.
 # shellcheck source=lib/stage-web.sh
 . "$SCRIPT_DIR/lib/stage-web.sh"
 

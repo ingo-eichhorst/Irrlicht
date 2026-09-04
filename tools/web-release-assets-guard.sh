@@ -57,10 +57,15 @@ set -uo pipefail
 # function a sourcing caller may have.
 _wrag_text_grep() { LC_ALL=C command grep -a "$@"; }
 
-# _wrag_unquote — strip one layer of surrounding single or double quotes from
-# the LAST quoted run on the line, which is where a module specifier and an
-# HTML attribute value both sit.
-_wrag_unquote() { sed -E "s/^.*['\"]([^'\"]*)['\"][^'\"]*\$/\1/"; }
+# _wrag_unquote — strip one layer of surrounding single, double or back quotes
+# from the LAST quoted run on the line, which is where a module specifier and
+# an HTML attribute value both sit.
+_wrag_unquote() { sed -E "s/^.*['\"\`]([^'\"\`]*)['\"\`][^'\"\`]*\$/\1/"; }
+
+# _wrag_decomment — drop single-line /* */ blocks and // line comments. A `//`
+# only counts at the start of a line or after whitespace, so the `//` inside a
+# `https://…` string literal survives.
+_wrag_decomment() { LC_ALL=C sed -E -e 's,/\*.*\*/,,g' -e 's,(^|[[:space:]])//.*$,\1,'; }
 
 # web_assets_html_refs <index.html> — one local asset reference per line, from
 # <script … src=…> and <link … href=…>. External (`scheme://`), root-relative
@@ -81,24 +86,59 @@ web_assets_html_refs() {
 }
 
 # web_assets_js_edges <file> — one module specifier per line, for every
-# `from '…'`, `import '…'` and `import('…')` in <file>.
+# `from '…'`, `import '…'`, `import('…')` and `new URL('…', import.meta.url)`
+# in <file>. Single, double and back quotes are all read.
 #
 # The `from` anchor is the one that matters: 5 of this tree's 15 edges are
 # multi-line import lists whose `from` clause sits on its own line, so a
 # pattern anchored on `^import` would miss a third of the graph.
+#
+# Two stages, and the split is load-bearing in both directions. Stage 1 reads
+# the FILE with `-a`, so a module carrying a literal NUL still yields its lines
+# (property 3 in the header) — without it a NUL-containing module answers
+# "Binary file … matches" and contributes nothing. Stage 2 strips comments from
+# those few candidate lines before the specifier is extracted, so a
+# commented-out import — an ordinary thing to leave behind during a refactor —
+# is not read as a live edge and does not turn the release gate red for a file
+# nobody actually loads.
 web_assets_js_edges() {
     local file="$1"
-    _wrag_text_grep -oE "(^|[^[:alnum:]_$.])(from|import)[[:space:]]*\(?[[:space:]]*('[^']*'|\"[^\"]*\")" "$file" |
+    _wrag_text_grep -E "(^|[^[:alnum:]_\$.])(from|import|URL)[[:space:]]*\(?[[:space:]]*['\"\`]" "$file" |
+        LC_ALL=C tr -d '\000' |
+        _wrag_decomment |
+        LC_ALL=C command grep -oE "(^|[^[:alnum:]_\$.])(from|import|new[[:space:]]+URL)[[:space:]]*\(?[[:space:]]*('[^']*'|\"[^\"]*\"|\`[^\`]*\`)" |
         _wrag_unquote
+}
+
+# web_assets_css_refuses_unfollowable <file> — this walker follows HTML and
+# JavaScript references, not CSS ones. That is fine only while the dashboard's
+# stylesheet has none, so rather than ignoring CSS silently — which is how a
+# `@import './theme/dark.css'` would ship a 404 through a green gate — the one
+# stylesheet is checked for references the walker could not follow. `data:` and
+# external URLs are not references to anything this tree stages.
+# Returns 0 when there is nothing unfollowable, 1 when there is.
+web_assets_css_refuses_unfollowable() {
+    local file="$1" hits
+    hits=$(_wrag_text_grep -oE "(@import[[:space:]]*[^;]*|url\([^)]*\))" "$file" |
+        LC_ALL=C command grep -vE "url\([[:space:]]*['\"]?(data:|https?:|#)" || :)
+    [[ -z "$hits" ]] && return 0
+    echo "FAIL: $file carries a CSS reference this walker does not follow, so its target is not in the closure and could ship as a 404:" >&2
+    printf '%s\n' "$hits" | sed 's/^/       /' >&2
+    return 1
 }
 
 # web_assets_closure <src-dir> — every file reachable from <src-dir>/index.html,
 # one basename per line, sorted, index.html included.
 #
-# Returns 2 and prints a REFUSE: line rather than an empty or partial answer
-# when it cannot judge: no tree, no index.html, no entry point, a reference
-# that resolves to nothing, a reference the non-recursive staging rule could
-# never ship, or a JS graph with not one import edge in it.
+# Two non-zero statuses, matching the header's exit table rather than blurring
+# into it:
+#   1  FAIL   — the walk read the tree and found a defect in it: a reference
+#              that resolves to nothing, or a reference into a subdirectory /
+#              outside the tree that the non-recursive staging rule could never
+#              ship. The closure is not emitted, because it would be wrong.
+#   2  REFUSE — the walk could not judge: no tree, no index.html, no entry
+#              point, no module reached, or a JS graph with not one import edge
+#              in it (which is what an unreadable tree looks like).
 web_assets_closure() {
     local src="$1" seen="" queue="" cur spec base specs refs bad=0 edges=0 jsfiles=0
 
@@ -173,7 +213,9 @@ web_assets_closure() {
         echo "REFUSE: web asset closure — scanned $jsfiles module(s) and found not one import edge. The scan cannot read this tree (a NUL-containing module read as binary would look exactly like this), so an 'everything is staged' verdict would be vacuous." >&2
         return 2
     fi
-    [[ "$bad" -eq 0 ]] || return 2
+    # A dangling or unstageable reference is a FINDING about the tree, not an
+    # inability to look at it — and _wrag_enqueue already said `FAIL:`.
+    [[ "$bad" -eq 0 ]] || return 1
 
     base=${seen#$'\n'}
     printf '%s' "$base" | LC_ALL=C sort -u
@@ -191,9 +233,16 @@ web_assets_guard() {
     # shellcheck source=lib/stage-web.sh
     . "$root/tools/lib/stage-web.sh"
 
-    closure=$(web_assets_closure "$src") || return 2
+    closure=$(web_assets_closure "$src") || return $?
 
-    tmp=$(mktemp -d -t web-release-assets-guard) || {
+    # The one stylesheet is checked for references this walker cannot follow,
+    # rather than CSS being skipped in silence.
+    web_assets_css_refuses_unfollowable "$src/irrlicht.css" || rc=1
+
+    # An explicit template, not `-t <prefix>`: GNU mktemp requires at least
+    # three trailing X's and errors out on a bare prefix, so the `-t` spelling
+    # would take the REFUSE branch below on every Linux host.
+    tmp=$(mktemp -d "${TMPDIR:-/tmp}/web-release-assets-guard.XXXXXX") || {
         echo "REFUSE: could not create a staging directory" >&2
         return 2
     }
@@ -264,8 +313,27 @@ web_assets_guard() {
         rc=1
     fi
 
+    # (d) ...and neither does the procedure a release is actually DRIVEN from.
+    # .claude/skills/ir:release/SKILL.md carries manual per-artifact build
+    # blocks as a fallback, and every one of them used to `cp` the web tree by
+    # hand — two of them copying index.html alone, which is #1900 with one file
+    # instead of three. Fixing only build-release.sh would leave the defect
+    # sitting in the document the maintainer reads.
+    local skill="$root/.claude/skills/ir:release/SKILL.md"
+    if [[ ! -f "$skill" ]]; then
+        echo "REFUSE: .claude/skills/ir:release/SKILL.md is missing — cannot check the release procedure for a hand-written copy list" >&2
+        return 2
+    fi
+    local skillcp
+    skillcp=$(_wrag_text_grep -nE '(^|[^[:alnum:]_])(cp|rsync|ditto)[[:space:]].*platforms/web' "$skill" || :)
+    if [[ -n "$skillcp" ]]; then
+        echo "FAIL: .claude/skills/ir:release/SKILL.md copies platforms/web by hand — the release procedure must call stage_web, like tools/build-release.sh does:" >&2
+        printf '%s\n' "$skillcp" | sed 's/^/       .claude\/skills\/ir:release\/SKILL.md:/' >&2
+        rc=1
+    fi
+
     if [[ "$rc" -eq 0 ]]; then
-        echo "OK: web-release-assets-guard — $(printf '%s\n' "$closure" | _wrag_text_grep -c .) reachable asset(s) from index.html, all staged by tools/lib/stage-web.sh, no dev-only file in the release tree"
+        echo "OK: web-release-assets-guard — $(printf '%s\n' "$closure" | _wrag_text_grep -c .) reachable asset(s) from index.html, all staged by tools/lib/stage-web.sh, no dev-only file in the release tree, no hand-written copy list in build-release.sh or the release skill"
     fi
     return "$rc"
 }

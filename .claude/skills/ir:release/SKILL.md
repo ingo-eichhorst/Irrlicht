@@ -416,7 +416,9 @@ from `gh api`, the token is missing the `security_events` scope:
 > `killStaleDaemons` skip the pkill. The app's embedded daemon spawn can be
 > flaky under a bare exec; if so, validate the bundle's daemon directly:
 > `IRRLICHT_BIND_ADDR=127.0.0.1:7839 IRRLICHT_HOME=… .build/Irrlicht.app/Contents/MacOS/irrlichd`
-> then `curl 127.0.0.1:7839/ | grep '<title>'` (covers the v0.4.4 missing-web bug).
+> then `curl 127.0.0.1:7839/ | grep '<title>'` (covers the v0.4.4 missing-web
+> bug) **and** `curl -fsS 127.0.0.1:7839/irrlicht.js >/dev/null` plus one of its
+> sibling modules (covers #1900, which the `<title>` check alone cannot see).
 
 ### Go daemon (universal binary + tarball)
 The daemon reads `platforms/web/index.html` from disk at runtime; no embed.
@@ -432,7 +434,11 @@ lipo -create /tmp/irrlichd-arm64 /tmp/irrlichd-amd64 -output /tmp/irrlichd-darwi
 # Tarball for the curl --daemon-only installer
 rm -rf /tmp/irrlichd-tarball && mkdir -p /tmp/irrlichd-tarball/web
 cp /tmp/irrlichd-darwin-universal /tmp/irrlichd-tarball/irrlichd
-cp /Users/ingo/projects/irrlicht/platforms/web/index.html /tmp/irrlichd-tarball/web/index.html
+# The dashboard is staged BY RULE, never by a hand-written file list — see
+# tools/lib/stage-web.sh. #1900: a three-file list here shipped a blank
+# dashboard to every install once irrlicht.js grew sibling modules.
+( cd /Users/ingo/projects/irrlicht && . tools/lib/stage-web.sh &&
+  stage_web platforms/web /tmp/irrlichd-tarball/web )
 tar -czf /tmp/irrlichd-darwin-universal.tar.gz -C /tmp/irrlichd-tarball .
 ```
 
@@ -441,8 +447,9 @@ tar -czf /tmp/irrlichd-darwin-universal.tar.gz -C /tmp/irrlichd-tarball .
 These ship the Linux curl install path (`site/install.sh` auto-detects Linux
 and downloads `irrlichd-linux-<arch>.tar.gz`). Pure cross-compile from macOS,
 no cgo. **Required** — omitting them makes every Linux `curl … | sh` 404 on
-the asset. Each Linux tarball carries all three web files (index.html + css +
-js), because the Linux installer installs all three.
+the asset. Each Linux tarball carries the whole dashboard — `index.html`, the
+stylesheet and every ES module `irrlicht.js` imports — staged by
+`stage_web`, because on Linux the web dashboard is the only UI there is.
 
 ```bash
 cd /Users/ingo/projects/irrlicht/core
@@ -451,10 +458,8 @@ for arch in amd64 arm64; do
     -o "/tmp/irrlichd-linux-$arch" ./cmd/irrlichd
   rm -rf "/tmp/irrlichd-linux-tarball-$arch" && mkdir -p "/tmp/irrlichd-linux-tarball-$arch/web"
   cp "/tmp/irrlichd-linux-$arch" "/tmp/irrlichd-linux-tarball-$arch/irrlichd"
-  cp /Users/ingo/projects/irrlicht/platforms/web/index.html \
-     /Users/ingo/projects/irrlicht/platforms/web/irrlicht.css \
-     /Users/ingo/projects/irrlicht/platforms/web/irrlicht.js \
-     "/tmp/irrlichd-linux-tarball-$arch/web/"
+  ( cd /Users/ingo/projects/irrlicht && . tools/lib/stage-web.sh &&
+    stage_web platforms/web "/tmp/irrlichd-linux-tarball-$arch/web" )
   tar -czf "/tmp/irrlichd-linux-$arch.tar.gz" -C "/tmp/irrlichd-linux-tarball-$arch" .
 done
 ```
@@ -547,18 +552,23 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
 1. Copy Swift binary → `$APP_STAGING/Contents/MacOS/Irrlicht` (from path above).
 2. Copy universal daemon → `$APP_STAGING/Contents/MacOS/irrlichd`.
 3. Copy `AppIcon.icns` → `$APP_STAGING/Contents/Resources/AppIcon.icns`.
-4. **Copy the dashboard UI** → `$APP_STAGING/Contents/Resources/web/index.html`.
+4. **Stage the dashboard UI** → `$APP_STAGING/Contents/Resources/web/`.
    The daemon resolves it at runtime via `<exe>/../Resources/web/`
-   (`resolveUIDir` in `core/cmd/irrlichd/paths.go`). Without this copy,
+   (`resolveUIDir` in `core/cmd/irrlichd/paths.go`). Without it,
    `GET /` returns the 503 "Dashboard UI not found" fallback — every
-   v0.4.4 install shipped without this file and the dashboard at
+   v0.4.4 install shipped without `index.html` and the dashboard at
    `http://127.0.0.1:7837/` was unreachable until v0.4.5 re-spun the assets.
-   The smoke test at step 8 asserts the dashboard responds; do not skip it.
+   **`index.html` alone is not enough**, and this is not a hypothetical:
+   v0.6.0–v0.6.2 shipped `index.html` + css + js and nothing else, so every
+   ES-module import 404'd and the dashboard rendered a blank page on every
+   install (#1900). Stage by rule, never by a file list:
    ```bash
-   mkdir -p "$APP_STAGING/Contents/Resources/web"
-   cp /Users/ingo/projects/irrlicht/platforms/web/index.html \
-      "$APP_STAGING/Contents/Resources/web/index.html"
+   ( cd /Users/ingo/projects/irrlicht && . tools/lib/stage-web.sh &&
+     stage_web platforms/web "$APP_STAGING/Contents/Resources/web" )
    ```
+   The smoke test at step 8 asserts every one of those assets is served; do
+   not skip it, and do not weaken it back to a check on `index.html` alone —
+   that is the check both defects walked straight through.
 5. **Write a resolved `Info.plist`** to `$APP_STAGING/Contents/Info.plist`.
    This is a hand-written file, *not* a copy of `platforms/macos/Irrlicht/Resources/Info.plist`
    (which contains unresolved Xcode variables like `$(PRODUCT_NAME)`). Use
@@ -840,6 +850,32 @@ PKG, and ZIP land in `/tmp/` as before — only the *assembly* path moves.
      exit 1
    fi
    echo "OK dashboard served on $SMOKE_PORT"
+
+   # ...and every asset the page actually loads (#1900). The <title> check
+   # above passes on an index.html served entirely alone, which is precisely
+   # what v0.6.0-v0.6.2 shipped: the page returned 200, every ES-module import
+   # 404'd, and the dashboard rendered blank. The asset list is DERIVED from
+   # the import graph by the same walker the packaging gate uses, so a module
+   # added later is covered without editing this block.
+   ASSETS=$( cd /Users/ingo/projects/irrlicht &&
+             . tools/web-release-assets-guard.sh &&
+             web_assets_closure platforms/web )
+   if [ -z "$ASSETS" ]; then
+     echo "FAIL: could not derive the dashboard's asset list — DO NOT SHIP (this check cannot run, which is not the same as passing)"
+     pkill -f "$APP/Contents/MacOS/Irrlicht" 2>/dev/null
+     exit 1
+   fi
+   MISSING=0
+   for asset in $ASSETS; do
+     CODE=$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$SMOKE_PORT/$asset")
+     [ "$CODE" = 200 ] || { echo "FAIL: /$asset -> HTTP $CODE"; MISSING=$((MISSING + 1)); }
+   done
+   if [ "$MISSING" -ne 0 ]; then
+     echo "FAIL: $MISSING dashboard asset(s) not served — the bundle's web/ tree is incomplete. DO NOT SHIP"
+     pkill -f "$APP/Contents/MacOS/Irrlicht" 2>/dev/null
+     exit 1
+   fi
+   echo "OK all $(echo "$ASSETS" | wc -l | tr -d ' ') dashboard assets served on $SMOKE_PORT"
 
    pkill -f "$APP/Contents/MacOS/Irrlicht" 2>/dev/null; sleep 0.3
    ```
@@ -1279,6 +1315,15 @@ without `--push`; the verification will report a mismatch you can ignore.
      exit 1
    fi
    curl -fsS --max-time 3 http://127.0.0.1:7839/ | grep -q '<title>' && echo "OK canary dashboard on 7839"
+   # ...and one ES module, because index.html alone answered this check for
+   # all of v0.6.0-v0.6.2 while the dashboard rendered blank (#1900).
+   CANARY_MOD=$( cd /Users/ingo/projects/irrlicht &&
+                 . tools/web-release-assets-guard.sh &&
+                 web_assets_closure platforms/web | grep -m1 '\.js$' )
+   [ -n "$CANARY_MOD" ] || { echo "FAIL: could not derive a module to canary — this check cannot run"; exit 1; }
+   curl -fsS --max-time 3 "http://127.0.0.1:7839/$CANARY_MOD" >/dev/null \
+     || { echo "FAIL: canary /$CANARY_MOD did not load — the installed web/ tree is incomplete"; exit 1; }
+   echo "OK canary module /$CANARY_MOD served on 7839"
    pkill -f '/Applications/Irrlicht.app/Contents/MacOS/Irrlicht' 2>/dev/null; sleep 0.5
    lsof -ti tcp:7839 | xargs kill 2>/dev/null
    echo "OK canary: v$INSTALLED installed, spctl accepted, get-task-allow not true, runs"

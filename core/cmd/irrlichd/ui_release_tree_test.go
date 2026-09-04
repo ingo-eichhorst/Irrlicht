@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -125,10 +126,15 @@ func stageReleaseWebTree(t *testing.T, stageLib, webSrc string) string {
 // webSrc/index.html.
 func reachableWebAssets(t *testing.T, guard, webSrc string) []string {
 	t.Helper()
-	out, err := exec.Command("bash", "-c",
-		`set -uo pipefail; . "$1"; web_assets_closure "$2"`, "bash", guard, webSrc).Output()
+	cmd := exec.Command("bash", "-c",
+		`set -uo pipefail; . "$1"; web_assets_closure "$2"`, "bash", guard, webSrc)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
 	if err != nil {
-		t.Fatalf("cannot run: the import-graph walk refused on %s: %v", webSrc, err)
+		// The walk's whole design is that every refusal explains itself, so its
+		// explanation is reported rather than reduced to "exit status 2".
+		t.Fatalf("cannot run: the import-graph walk refused on %s: %v\n%s", webSrc, err, stderr.String())
 	}
 	var names []string
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
