@@ -9,14 +9,13 @@
 # separately because a single combined mutation could pass while one of them
 # was actually unguarded:
 #
-#   1. THE IDIOM LOSES A PIECE — step 11a's own text drops the
-#      never-mutate-a-dirty-tree sentence. An agent reading only this step
+#   1. THE IDIOM LOSES A PIECE — the verification text drops the
+#      never-mutate-a-dirty-tree sentence. An agent reading only this section
 #      would no longer be told the one rule that makes a restore
-#      unambiguous. Dropping this one piece stands in for any of the seven
-#      the lock test names individually.
+#      unambiguous. Dropping this piece stands in for any listed rule.
 #
-#   2. THE STEP HEADING MOVES — step 11a's own heading text changes, so the
-#      lock test's anchor no longer matches anything. This is the direction a
+#   2. THE SECTION HEADING MOVES, so the lock test's anchor no longer matches
+#      anything. This is the direction a
 #      plain substring search over the whole file cannot catch: the text
 #      could still be sitting in the file, correctly worded, just no longer
 #      reachable by the anchor the lock test uses to scope its search — and
@@ -35,9 +34,8 @@
 # The `assert_mutation_is_red` mechanics live in tools/lib/mutation-assert.sh,
 # shared with tools/lib/preflight-groups-skill-mutations_test.sh and
 # tools/lib/simplify-angle-guard-mutations_test.sh — reused here rather than
-# copied a third time. Convention for the rest follows
-# tools/lib/error-retention-mutations_test.sh: plain bash, a `fails` counter,
-# "ALL PASS" / "N FAILED" at the end.
+# copied a third time. Convention for the rest follows tools/lib/mutate_test.sh:
+# plain bash, a `fails` counter, "ALL PASS" / "N FAILED" at the end.
 
 set -uo pipefail
 
@@ -63,9 +61,10 @@ fi
 # mutate.sh refuses (exit 4) against an already-dirty tree, because its
 # post-restore emptiness check could prove nothing then.
 #
-# A DIRTY TREE MUST NOT SILENTLY PASS — see error-retention-mutations_test.sh
-# for the full reasoning; this file repeats the same guard rather than
-# sourcing it, matching the convention every fixture in this directory uses.
+# A DIRTY TREE MUST NOT SILENTLY PASS — see
+# tools/lib/preflight-groups-skill-mutations_test.sh for the full reasoning;
+# this file repeats the same guard rather than sourcing it, matching the
+# convention every fixture in this directory uses.
 if [[ -n "$(git -C "$REPO_ROOT" status --porcelain)" ]]; then
   echo "checkpoint-idiom-guard-mutations: CANNOT RUN — the worktree is dirty, and mutate.sh needs a" >&2
   echo "  clean tree for its post-restore check to mean anything. Commit or clean up, then:" >&2
@@ -83,18 +82,18 @@ fails=0
 
 # ── 1. The idiom loses a piece: the never-mutate-a-dirty-tree sentence ──────
 assert_mutation_is_red \
-  "lock test catches step 11a dropping the never-mutate-a-dirty-tree rule" \
+  "lock test catches the verification section dropping the never-mutate-a-dirty-tree rule" \
   "$SKILL_FILE" \
-  $'different command name). Never mutate a dirty tree either: commit or\n    clean up anything else sitting uncommitted before you checkpoint, so the' \
-  $'different command name). Proceed carefully with a dirty tree instead: commit or\n    clean up anything else sitting uncommitted before you checkpoint, so the' \
+  $'`reset --hard`, or any command of the same shape. Never mutate a dirty tree.\nNever keep the checkpoint in `/tmp` or a scratchpad instead of a commit.' \
+  $'`reset --hard`, or any command of the same shape. Proceed carefully with a dirty tree.\nNever keep the checkpoint in `/tmp` or a scratchpad instead of a commit.' \
   "no longer bans mutating a dirty tree"
 
 # ── 2. The step heading moves, so the lock test's own anchor goes stale ─────
 assert_mutation_is_red \
-  "lock test refuses loudly when step 11a's heading moves" \
+  "lock test refuses loudly when the verification heading moves" \
   "$SKILL_FILE" \
-  $'11a. **Prove red-first.** For every test asserting a claimed defect, run it' \
-  $'11a. **Prove tests fail first.** For every test asserting a claimed defect, run it' \
+  $'## 4. Prove and verify' \
+  $'## 4. Check results' \
   "Cannot verify anything"
 
 if [[ $fails -gt 0 ]]; then

@@ -137,3 +137,88 @@ func assertRetiredViaGracefulPromotion(t *testing.T, rec *mockRecorder, sessionI
 		t.Errorf("%s was retired via the crude same-PID cleanup path instead of graceful promotion", sessionID)
 	}
 }
+
+// TestSessionDetector_SetSessionSupersededHandler_FiresOnProjectMatch covers
+// the one reconciliation path SessionDetector.SetSessionSupersededHandler
+// exists for and PIDManager's own tests cannot reach.
+//
+// PIDManager owns three supersession paths and pid_manager_test.go registers
+// its handler straight onto the PIDManager to exercise them. The fourth lives
+// here: cleanupPreSessionsForProject deletes a matched pre-session's row
+// directly rather than through PIDManager, and reads the handler back off
+// pidMgr (retirePreSession). Registering through the SessionDetector wrapper
+// is the only way that path ever gets a handler, so without this test the
+// wrapper is a seam nothing re-runs — it lost its only production caller when
+// #1875 removed the remote-control re-key wiring.
+//
+// It also pins the ordering the re-key contract depends on: the handler is
+// invoked BEFORE the row is deleted (#997), so a handler's own Load(oldID)
+// still resolves.
+func TestSessionDetector_SetSessionSupersededHandler_FiresOnProjectMatch(t *testing.T) {
+	cwd := t.TempDir() // admitNewSession's cwdMissing gate rejects a nonexistent cwd
+	// cleanupPreSessionsForProject only runs for a transcript-backed arrival
+	// (session_detector_activity.go gates it on ev.TranscriptPath != ""), so
+	// the real session needs a transcript on disk or the path under test is
+	// never entered and the assertion below would fail for the wrong reason.
+	transcript := filepath.Join(t.TempDir(), "real.jsonl")
+	if err := os.WriteFile(transcript, []byte(`{"role":"user","content":"hi"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tw := newMockAgentWatcher().withIdentity(agent.Identity{Name: "claude-code"})
+	repo := newMockRepo()
+	det := services.NewSessionDetector([]inbound.Watcher{tw}, services.SessionDetectorDeps{
+		PW:      newMockProcessWatcher(),
+		Repo:    repo,
+		Log:     &mockLogger{},
+		Git:     gitadapter.New(),
+		Metrics: &mockMetrics{},
+		Version: "test",
+	})
+
+	type supersession struct {
+		oldID, newID string
+		oldRowLoaded bool
+	}
+	fired := make(chan supersession, 4)
+	det.SetSessionSupersededHandler(func(oldID, newID string) {
+		s, _ := repo.Load(oldID)
+		fired <- supersession{oldID: oldID, newID: newID, oldRowLoaded: s != nil}
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+	defer func() { cancel(); <-done }()
+	time.Sleep(20 * time.Millisecond)
+
+	const projectDir = "-Users-test-superseded-project"
+	tw.ch <- agent.Event{
+		Type:       agent.EventNewSession,
+		SessionID:  "proc-70051",
+		ProjectDir: projectDir,
+		CWD:        cwd,
+	}
+	waitForCondition(func() bool { s, _ := repo.Load("proc-70051"); return s != nil }, time.Second)
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventNewSession,
+		SessionID:      "session_real_superseded",
+		ProjectDir:     projectDir,
+		CWD:            cwd,
+		TranscriptPath: transcript,
+	}
+	waitForCondition(func() bool { s, _ := repo.Load("session_real_superseded"); return s != nil }, time.Second)
+
+	select {
+	case got := <-fired:
+		if got.oldID != "proc-70051" || got.newID != "session_real_superseded" {
+			t.Errorf("handler got (%q, %q), want (proc-70051, session_real_superseded)", got.oldID, got.newID)
+		}
+		if !got.oldRowLoaded {
+			t.Error("handler ran AFTER the pre-session row was deleted; a re-key handler's own Load(oldID) must still resolve (#997)")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("SetSessionSupersededHandler's callback never fired for the project-matched pre-session retirement")
+	}
+}

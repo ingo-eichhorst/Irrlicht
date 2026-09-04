@@ -8,16 +8,35 @@ import SwiftUI
 ///
 /// ## What went wrong
 ///
-/// `BackchannelRulesView`'s threshold field renders through `format: .number`,
-/// which resolves via `Locale.autoupdatingCurrent`. The reference host is
-/// `de_DE`, so
-/// `__Snapshots__/BackchannelRulesViewSnapshotTests/testBackchannelRuleContextTokens.1.png`
-/// reads `150.000`; a `macos-latest` runner is `en_US` and renders `150,000`.
-/// Every contributor whose Mac groups thousands differently fails that test
-/// locally, with a "Snapshot does not match reference." that names no cause.
-/// This is the locale sibling of what `PinnedScaleSnapshot` is for the backing
-/// scale: a value read from the MACHINE where the equivalent value was
-/// available from the INPUT.
+/// The rule editor #1874 deleted rendered its threshold field through
+/// `format: .number`, which resolves via `Locale.autoupdatingCurrent`. The
+/// reference host is `de_DE`, so its committed reference read `150.000`, while
+/// a `macos-latest` runner at `en_US` rendered `150,000`. Every contributor
+/// whose Mac groups thousands differently failed that test locally, with a
+/// "Snapshot does not match reference." that named no cause. This is the
+/// locale sibling of what `PinnedScaleSnapshot` is for the backing scale: a
+/// value read from the MACHINE where the equivalent value was available from
+/// the INPUT.
+///
+/// ## What is left of it after #1874
+///
+/// That view was the app's only `FormatStyle` render, and #1874 deleted it
+/// along with the rest of the feature it belonged to — so **no surviving
+/// reference PNG is locale-dependent**: flipping this constant regenerates
+/// nothing and reddens no image comparison (measured on #1874 under both
+/// `en_US` and `fr_FR`).
+///
+/// It does NOT follow that a wrong value here is unobserved, and the tempting
+/// short version of that sentence is false. `PinnedNowSnapshotTests` reads
+/// `referenceLocale` (its `de` helper) and asserts literal `de_DE` renderings,
+/// so flipping it to `en_US` reddens five of its tests and to `fr_FR` reddens
+/// two — measured, not assumed. What #1874 removed is the *image* half of the
+/// lock, not the constant's whole guard.
+///
+/// The pin stays for the same reason it was introduced: it is what keeps the
+/// next locale-sensitive render from silently photographing a machine, and
+/// `docs/swift-testing.md` records that whoever adds one owes the family a
+/// fresh both-locales lock over that real view.
 ///
 /// ## Why `de_DE` and not `en_US`
 ///
@@ -34,8 +53,20 @@ import SwiftUI
 /// with it.
 enum PinnedLocaleSnapshot {
     /// The locale every committed reference was recorded under. Measured:
-    /// `defaults read -g AppleLocale` on the reference Mac → `de_DE`, and the
-    /// tokens reference shows `150.000`, which is `de_DE` grouping.
+    /// `defaults read -g AppleLocale` on the reference Mac → `de_DE`.
+    ///
+    /// #1874 deleted the only reference PNG whose pixels showed this value, so
+    /// the per-PNG anchor is gone. **The reference set is no longer evidence
+    /// for it**: the 60 committed PNGs match byte-for-byte under `en_US` and
+    /// `fr_FR` too (measured), so "the snapshots still pass" is compatible with
+    /// any value here and proves nothing — exactly the vacuous green this
+    /// family exists to refuse.
+    ///
+    /// What DOES discriminate, and is what to re-check if this constant is ever
+    /// questioned: `defaults read -g AppleLocale` on the recording host, and
+    /// `PinnedNowSnapshotTests`, which reads this constant and asserts literal
+    /// `de_DE` output (`"09:00"`, `"Fr. 9:00"`). Five of its tests redden under
+    /// `en_US`, two under `fr_FR`.
     static let referenceLocale = Locale(identifier: "de_DE")
 
     /// A locale that groups thousands differently from `referenceLocale`.
@@ -165,9 +196,12 @@ extension View {
 /// `NSView`. A suite cannot hand it an unpinned hierarchy, because the only
 /// initializer applies the pin itself: forgetting is a compile error, not a
 /// reference PNG that quietly photographs someone's regional settings.
-/// `PinnedLocaleSnapshotTests` grades this object and not one it assembled
+/// `PinnedLocaleSnapshotTests` graded this object and not one it assembled
 /// itself, so "the host the suites use" and "the host the pin was proven on"
-/// cannot be two things that disagree.
+/// could not be two things that disagree. It retired with its only subject in
+/// #1874; `PinnedTimeZoneSnapshotTests` and `PinnedNowSnapshotTests` still
+/// grade this object the same way, and they read `referenceLocale` from here,
+/// so the constant is not unobserved — only its number-grouping arm is gone.
 ///
 /// #1659 moved the **time zone** pin here for the same reason, out of
 /// `HistoryViewSnapshotTests`' `setUp`. That one had a second problem a

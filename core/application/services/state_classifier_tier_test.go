@@ -93,100 +93,14 @@ func TestStateRules_LadderIsTierConsistent(t *testing.T) {
 	// this, deleting the error fixtures — or a future guard that makes them
 	// unreachable — would leave this test passing while the one rule whose
 	// placement is genuinely contentious went unchecked. It is asserted for
-	// this rule specifically rather than for all nine because the other eight
-	// predate the corpus and are covered by named tests of their own.
+	// this rule specifically; the others predate the corpus and are covered by
+	// named tests of their own. Deliberately no count — the population moves
+	// (#1860 removed a rule) and a hand-typed one goes stale silently.
 	if !won[string(session.SignalSessionError)] {
 		t.Errorf("no fixture reached the %q rule — the ladder-consistency sweep above therefore\n"+
 			"proved nothing about it. Restore the session-error fixtures in\n"+
 			"reachableMetricFixtures, or fix whatever now shadows the rule.",
 			session.SignalSessionError)
-	}
-
-	// The same assertion for #1800's process-death rule, and it carries more
-	// weight than the one above: process_death is the only rule in the ladder
-	// that decides on a tier no other rule uses, so it is the only one whose
-	// placement CANNOT be checked incidentally by a fixture aimed at something
-	// else. Without a fixture that reaches it, the sweep would report a clean
-	// ladder while the one genuinely new arbitration in this change went
-	// unexamined.
-	if !won[string(session.SignalProcessDeath)] {
-		t.Errorf("no fixture reached the %q rule — the ladder-consistency sweep above therefore\n"+
-			"proved nothing about it. Restore the process-death fixtures in\n"+
-			"reachableMetricFixtures, or fix whatever now shadows the rule.",
-			session.SignalProcessDeath)
-	}
-}
-
-// TestProcessDeath_OutranksAFrozenWaitingTranscript is the placement argument
-// made concrete, and it is the case a `tierOf` on the session_error rule would
-// have gotten wrong.
-//
-// A process killed while an AskUserQuestion was open leaves that tool call open
-// in the transcript FOREVER — nothing will ever write its result — so
-// user_blocking_tool keeps firing on every later pass. It is transcript tier;
-// the process evidence is process tier; the dead process must win.
-func TestProcessDeath_OutranksAFrozenWaitingTranscript(t *testing.T) {
-	m := &session.SessionMetrics{
-		// The frozen tail: a user-blocking tool still open at the moment of
-		// death. On its own this classifies to waiting.
-		LastEventType:     "assistant",
-		HasOpenToolCall:   true,
-		LastOpenToolNames: []string{"AskUserQuestion"},
-	}
-
-	// Precondition: without the process evidence this really is waiting, so
-	// the assertion below is about arbitration and not about a fixture that
-	// never reached the waiting rule at all.
-	if v := ClassifyStateTiered(session.StateWorking, m); v.State != session.StateWaiting {
-		t.Fatalf("precondition: a frozen open AskUserQuestion must classify waiting, got %q", v.State)
-	}
-
-	holds := session.NewSignalHolds()
-	holds.Hold("s", session.SignalProcessDeath, session.SignalPayload{
-		SessionError: &session.SessionError{
-			Phase: session.ErrorPhaseTerminal,
-			Class: session.ErrorClassProcessDeath,
-		},
-	}, holdT0)
-	holds.Overlay("s", m, holdT0)
-
-	v := ClassifyStateTiered(session.StateWorking, m)
-	if v.State != session.StateError {
-		t.Errorf("state = %q, want error — a dead process is not waiting for an answer "+
-			"nobody can deliver", v.State)
-	}
-	if v.Tier != session.TierProcess {
-		t.Errorf("tier = %v, want TierProcess — the evidence is the OS view of the "+
-			"process, not the transcript", v.Tier)
-	}
-	if v.Rule != string(session.SignalProcessDeath) {
-		t.Errorf("rule = %q, want %q — a crash and a provider refusal must stay "+
-			"distinguishable in a trace", v.Rule, session.SignalProcessDeath)
-	}
-}
-
-// The tier is a claim about the CHANNEL, so it must not be reachable from
-// content an adapter controls. A transcript-tier error that merely happens to
-// carry the process-death class must still decide as session_error.
-func TestProcessDeathClass_AloneDoesNotClaimProcessTier(t *testing.T) {
-	m := &session.SessionMetrics{
-		LastEventType: "assistant",
-		SessionError: &session.SessionError{
-			Phase: session.ErrorPhaseTerminal,
-			Class: session.ErrorClassProcessDeath, // the string, with no hold behind it
-		},
-	}
-
-	v := ClassifyStateTiered(session.StateWorking, m)
-	if v.State != session.StateError {
-		t.Fatalf("precondition: any session error routes to error, got %q", v.State)
-	}
-	if v.Tier != session.TierTranscript {
-		t.Errorf("tier = %v, want TierTranscript — only the SignalProcessDeath hold may "+
-			"claim process tier; a Class string is adapter-supplied content", v.Tier)
-	}
-	if v.Rule != string(session.SignalSessionError) {
-		t.Errorf("rule = %q, want %q", v.Rule, session.SignalSessionError)
 	}
 }
 
@@ -344,33 +258,10 @@ func reachableHoldSets() []holdSet {
 		{"session-error+turn-done", []session.SignalKind{
 			session.SignalSessionError, session.SignalTurnDone,
 		}},
-		// #1800's process-death hold, and the three crossings that earn their
-		// place. process_death is the only PROCESS-tier rule in the ladder and
-		// it sits ABOVE three transcript-tier rules and BELOW two hook-tier
-		// ones, so the pairs that could invert it are exactly these:
-		//
-		//   - bare, so it decides at all (crossed below with every transcript
-		//     shape, including the frozen open-tool ones its placement is for);
-		//   - with the Stop hook, which turns agent_done hook-tier;
-		//   - with idle_prompt, which IS hook-tier and sits below it.
-		//
-		// The last two are what the rule's !HookTurnDone / !IdlePromptPending
-		// guards exist for, and removing either guard fails this sweep.
-		{"process-death", []session.SignalKind{session.SignalProcessDeath}},
-		{"process-death+turn-done", []session.SignalKind{
-			session.SignalProcessDeath, session.SignalTurnDone,
-		}},
-		{"process-death+idle-prompt", []session.SignalKind{
-			session.SignalProcessDeath, session.SignalIdlePrompt,
-		}},
-		{"process-death+permission", []session.SignalKind{
-			session.SignalProcessDeath, session.SignalPermissionPrompt,
-		}},
 		{"all", []session.SignalKind{
 			session.SignalPermissionPrompt, session.SignalTurnDone,
 			session.SignalIdlePrompt, session.SignalCompactInProgress,
 			session.SignalOpenToolStalled, session.SignalSessionError,
-			session.SignalProcessDeath,
 		}},
 	}
 }
@@ -396,18 +287,6 @@ func payloadFor(kind session.SignalKind) session.SignalPayload {
 			SessionError: &session.SessionError{
 				Phase: session.ErrorPhaseTerminal,
 				Class: "provider",
-			},
-		}
-	case session.SignalProcessDeath:
-		// This one IS load-bearing, unlike the row above: the process_death
-		// rule requires SessionError != nil as well as the flag, so a hold
-		// with an empty payload would set ProcessDeath, fail the rule's
-		// predicate, and leave the coverage assertion failing with no hint
-		// why. It is also the honest shape — the producer always supplies one.
-		return session.SignalPayload{
-			SessionError: &session.SessionError{
-				Phase: session.ErrorPhaseTerminal,
-				Class: session.ErrorClassProcessDeath,
 			},
 		}
 	default:

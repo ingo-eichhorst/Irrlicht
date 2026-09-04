@@ -1,0 +1,172 @@
+{
+  "scenario_id": "permission-gate-non-mutating-tool",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.0.78",
+    "daemon_version": "0.6.1+cfb8d62",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes (copilot has a first-class READ permission kind and a URL permission kind, both raised through the same permission.requested line as the shell/write gate 2-19 already records); daemon_capability: full (parsePermissionRequested is KIND-AGNOSTIC — it reads only requestId — and openPermissions is a set, so two sequential gates produce two distinct waiting episodes); driver_capability: ready (send/sleep/keys/wait_turn all in DRIVE_ELICITS; COPILOT_NO_ALLOW_ALL already drops --allow-all AND disables wait_turn's auto-dismiss)"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "permission-gate-non-mutating-tool",
+      "agent": "copilot",
+      "assessed_at": "2026-09-03T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: **yes** — GitHub Copilot CLI gates READ-ONLY work as a first-class permission kind, not as a special case of the shell gate.\ndaemon_capability: **full** — and for a structural reason: irrlicht's copilot parser never looks at the permission KIND, so a read-only gate is indistinguishable from the mutating gate that `2-19 tool-gate-permission-prompt` already records green.\ndriver_capability: **ready** — the recipe needs `send`, `sleep`, `keys`, `wait_turn`, all four in `DRIVE_ELICITS`, and the one launch lever it depends on (`COPILOT_NO_ALLOW_ALL`) is already implemented.\n\n## Why Copilot is the right column for this row\n\nThe row exists because of #1861, where Claude Code's permission gate reached the daemon for nine named tools and for no others — the subscriber keyed on a tool-name allowlist. Copilot's shape is the opposite, and that is the whole finding here: **the tool name never enters the picture on either side.**\n\n### Agent — a read is its own permission kind, in the shipped schema\n\nThe CLI ships its own event schema, `schemas/session-events.schema.json` (584 KB, next to `app.js` in `@github/copilot-darwin-arm64`). `PermissionRequest` is an `anyOf` of ten members, and read-only work has three of them:\n\n| member | schema description |\n|---|---|\n| `PermissionRequestRead` (`kind:\"read\"`) | \"File or directory read permission request\" |\n| `PermissionRequestUrl` (`kind:\"url\"`) | \"URL access permission request\" |\n| `PermissionPromptRequestPath` (`kind:\"path\"`) | \"Path access permission prompt\", with `accessKind` an enum of exactly `read` \\| `shell` \\| `write` — `read` documented as \"Read access to a filesystem path.\" |\n\nAnd the product documents the boundary that raises them, in its own `--help`:\n\n> \"By default, file access is restricted to paths within the current working directory and its subdirectories, plus the system temporary directory. The `--allow-all-paths` flag disables this verification…\"\n\nThe TUI half is equally explicit. `app.js`'s path-permission component branches on the access kind — `let s = t===\"read\" ? \"read\" : t===\"write\" ? \"write\" : \"read or write\"` — and renders the dialog titled **\"Allow directory access\"** with the body *\"This action may read the following path outside your allowed directory list.\"* A dialog whose copy says **read** is not a mutating gate wearing a disguise.\n\nThe URL kind is the second read-only path and is unconditional: `web_fetch` is registered as\n\n    permissions.request({kind:\"url\", toolCallId, intention:\"Fetch web content\", url, …})\n\nand throws outright if permissions are disabled. `--allow-all-urls` (\"Allow access to all URLs without confirmation\") is the flag that suppresses it, which is the documented statement that without it, it prompts.\n\n### The emission chain — read at every seam, not inferred\n\nThe native core dispatches a prompt through one host effect, and all three branches land in the SAME emitter:\n\n    case \"permissions_request_prompt\": switch (n.promptKind) {\n      case \"tool\": return await this.requestToolPermissionFromUser(n.request, o);\n      case \"path\": return await this.requestPathPermissionFromUser(n.request, o);\n      case \"url\":  return await this.requestUrlPermissionFromUser(n.request, o);\n    }\n\nEach of the three calls `this.pendingRequests.requestPermissionPrompt(…)`, whose body is\n\n    async requestPermissionPrompt(e,n){ let r=this.nativeRequest(\"permissionPrompt\",{…}); … ; mg(this.emit, r.event); return o }\n\n`this.emit` — **not** `this.emitEphemeral`. That distinction is the load-bearing one in this whole package (see the sibling 2-27 cell, where every other blocking-request family takes the ephemeral branch and is therefore never written to disk), and the schema states the consequence in the type itself: `PermissionRequestedEvent.ephemeral` is a plain optional boolean, whereas `ElicitationRequestedEvent.ephemeral` is `\"const\": true` with the description *\"Always true for events that are transient and not persisted to the session event log on disk.\"*\n\nSo a read-only gate writes an ordinary `permission.requested` line into `~/.copilot/session-state/<id>/events.jsonl` while the CLI sits blocked — the exact property live-verified for the shell gate on 1.0.77 in `2-19`.\n\n### Daemon — the parser cannot tell the two classes apart, which is the point\n\n    func parsePermissionRequested(data map[string]any, ev *tailer.ParsedEvent) {\n        ev.EventType = \"permission_requested\"\n        if id := str(data, \"requestId\"); id != \"\" { ev.PermissionRequestIDs = []string{id} }\n    }\n\n(`core/adapters/inbound/agents/copilot/parser.go`.) It reads `requestId` and nothing else — no `kind`, no `toolName`, no allowlist. `parsePermissionCompleted` is its mirror. There is no tool-name set anywhere on this adapter's path, so the #1861 failure mode has no place to live.\n\nThe fold is a SET, which is what makes the row's *two distinct episodes* assertion fall out rather than needing anything new:\n\n    for _, id := range parsed.PermissionRequestIDs { t.openPermissions[id] = struct{}{} }\n    for _, id := range parsed.PermissionResolvedIDs { delete(t.openPermissions, id) }\n\n(`core/pkg/tailer/tailer.go`, `applyPermissionDeltas`.) Two sequential request/complete pairs open and close the set twice, so `TranscriptPermissionPending` (`tailer_metrics.go:656`) goes true → false → true → false, and the classifier's `transcript_permission_prompt` rule (`state_classifier.go:152`, TierTranscript → waiting) produces two separate waiting episodes. `MergeMetrics` carries the flag (`core/domain/session/metrics.go:686` — the #1256 live-path fix that `2-19`'s re-record proved), and `replayengine/metrics.go:176` carries it too, so this cell is reproducible OFFLINE like its sibling and unlike the hook-driven claudecode/codex ones.\n\nNo hook is involved in the verdict. Copilot's `notification` hook does fire for these — the native core's `permissions_notify_prompt_shown` effect calls `notifyPermissionPrompt(message)` → `fireNotificationHook(msg, \"permission_prompt\", \"Permission needed\")` for path and url prompts exactly as for shell — but irrlicht's receiver treats Notification as DISPATCH ONLY (`hooks.go`: no `session.HookSignal` row, so no hold), and it merely removes observation lag. The waiting verdict is transcript-borne end to end.\n\n### Driver\n\n`driver_step_types_from_file replaydata/agents/copilot/driver-interactive.sh` reports `send slash sleep wait_turn exit_clean sigkill interrupt keys restart start_session session reset_session resume`. The recipe uses four of them. Two driver facts make this cell recordable without any porting:\n\n- `COPILOT_NO_ALLOW_ALL=1` drops `--allow-all` from the launch line (`args+=(--allow-all)` is guarded on it), so neither `--allow-all-paths` nor `--allow-all-tools` is in effect.\n- The SAME lever disables `wait_turn`'s `dismiss_dialog_if_visible \"$SESSION\" 'Allow|Do you want to|trust the files'`. Without that guard the driver would silently answer both dialogs within ~1 s and collapse the two episodes the cell exists to distinguish — and note the regex would match the read dialog too (\"Allow directory access\" / \"Do you want to allow this?\").\n\nA `keys` step on this driver is spelled `{\"type\":\"keys\",\"text\":\"Enter\"}` (it reads `.text`, not `.keys` — `tmux send-keys -t \"$SESSION\" \"$(jq -r '.text' <<<\"$step\")\"`), which is why this recipe does not copy claudecode's `\"keys\":\"Enter\"` spelling verbatim.\n\n## What keeps this at 0.85 rather than higher\n\nEverything above about the DAEMON is read at the seam and is kind-agnostic, so it cannot be wrong for a read-only gate unless it is also wrong for the shell gate that records green today. What is provisional is EMISSION: no recording on this host has yet captured a `permission.requested` whose kind is anything but `shell` (census: 2 in `replaydata/agents/copilot/**/transcript.jsonl`, 1 in `~/.copilot/session-state/*/events.jsonl`, all `kind:\"shell\"`). That the read gate fires in practice rests on the shipped schema, the CLI's own help text and the TUI component — strong primary sources, but not a live capture. Per the observation-vs-emission rule this stays provisional until `record` promotes it.\n",
+      "caveats": [
+        "VACUOUS-PASS CONDITION (the reason this cell has a proof-of-gate step): the cell passes while proving nothing if the READ-ONLY half is never gated. A session in which the read target happens to sit inside the allowed directory list produces exactly ONE permission.requested and ONE waiting episode — which is byte-for-byte what 'the daemon merged or missed the second gate' would also produce, so the recording could not tell the two apart. The guard is POSITIVE and transcript-level, not an absence: the recorded events.jsonl must contain TWO permission.requested lines with DISTINCT requestIds, and the second must carry a read-only descriptor (permissionRequest.kind in {read, url}, or promptRequest.kind == path with accessKind in {read, shell}) with no write signal (no hasWriteFileRedirection:true, kind != write). One line, or two lines that are both write-class, means the run is INCONCLUSIVE — never a pass, and never evidence about the daemon.",
+        "LOAD-BEARING ENVIRONMENT PROPERTIES, to be RE-PROBED at record time and logged, never trusted: (1) COPILOT_NO_ALLOW_ALL=1 must be exported — with --allow-all (= --allow-all-tools --allow-all-paths --allow-all-urls) nothing prompts at all and the cell degrades into a duplicate of 2-2; (2) the read target must lie outside the run cwd AND outside the system temporary directory, because copilot --help states those two are allowed by default (a $STAGING under /tmp makes every /tmp path pre-approved — this is the trap, since staging usually IS under the system temp dir); (3) no --add-dir on the launch line; (4) the seeded COPILOT_HOME/config.json must carry no readonlyPaths / readwritePaths / allow-rule entry covering the read target, and the recorded transcript must show NO session.permissions_changed turning allowAllPermissions on.",
+        "COPILOT_AVAILABLE_TOOLS MUST NOT BE SET for this cell, and that is a recipe input rather than operator memory. The documented cost saver COPILOT_AVAILABLE_TOOLS=bash is forwarded by the driver as --available-tools=bash, which would remove the file-read tool (and web_fetch) from the roster outright — the read-only half could then only be attempted through bash, and the run would starve rather than fail loudly. The recipe therefore pays full input-token cost on purpose; record should log the exported environment.",
+        "AN INTERMEDIATE `ready` BETWEEN THE TWO GATES IS EXPECTED and is NOT a scenario violation. Copilot closes a turn after EVERY tool call (parser.go's evTurnStart comment; 2-11's caveat measured two assistant.turn_end per prompt when a tool is involved), so after gate 1 is approved the arc is waiting → working → (tool) → ready → working → waiting rather than the row's literal waiting → working → waiting. The row's acceptance criteria are about the two episodes being DISTINCT and each being its own, which this shape satisfies more strongly than a merged one would; the spec's phases are anchored so the extra ready cannot break them. If a recording instead shows ONE merged waiting episode, the scenario is explicit that it does NOT satisfy the row — re-drive as two separate turns (write in turn 1, read in turn 2) and say so.",
+        "DIALOG DEFAULT SELECTIONS (what a bare Enter does), read from app.js: the shell/tool dialog's item list is [{label:\"Yes\", value:{kind:\"approve-once\"}}, …] with no initialItem, so index 0 is preselected and Enter approves ONCE. The path dialog (title \"Allow directory access\") sets initialItem to \"Yes, and add these directories to the allowed list\" (approve-for-session), so Enter there approves the whole directory for the rest of the session. That is harmless for this recipe (one read), but a future cell that gates TWO reads under the same directory must move the selection to the plain \"Yes\" first, or the second read will not prompt.",
+        "PROVISIONAL ON EMISSION, per the observation-vs-emission rule: daemon=full is derived from a kind-agnostic parser plus a live-proven shell gate, but no recording anywhere on this host yet contains a permission.requested with kind read / url / path. A census of every copilot transcript in replaydata/ (2 hits) and every live ~/.copilot/session-state/*/events.jsonl (1 hit) found kind:\"shell\" only. record is what promotes this from provisional to settled; if the read gate turns out not to fire, that is an AGENT finding, not a daemon one, and the fallback below is the next thing to try.",
+        "FALLBACK READ-ONLY TRIGGER, if the outside-path read does not raise a prompt: a web_fetch of any URL, with --allow-all-urls absent. app.js registers web_fetch as permissions.request({kind:\"url\", intention:\"Fetch web content\", url}) and throws if permissions are disabled, so the gate is unconditional rather than allowlist-dependent; it needs no seeded fixture but does need network egress, and its dialog's default selection was not read out of the binary (press the explicit approve item rather than a bare Enter). A code search (the ripgrep bridge also routes through permissions.request) is the second fallback. Do NOT substitute a second mutating call — that is the one substitution this row forbids.",
+        "The MUTATING half deliberately reuses 2-19's live-proven shape (a shell command with a write redirection: kind:\"shell\", hasWriteFileRedirection:true, gated on 1.0.77 in two separate recordings) rather than varying it the way the claudecode sibling does. claudecode varied its mutating tool because its matcher is a tool-NAME allowlist and coverage differs per name; copilot's path is kind-agnostic, so varying the mutating half would buy nothing and would trade a proven trigger for an unproven one."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/parser.go",
+          "note": "parsePermissionRequested / parsePermissionCompleted read ONLY requestId — no kind, no tool name, no allowlist. This is why a read-only gate is observationally identical to the shell gate 2-19 records green, and why #1861's tool-name-allowlist failure mode has nowhere to live on this adapter."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer.go",
+          "note": "applyPermissionDeltas folds request ids into openPermissions (a SET) and deletes resolved ids. Two sequential request/complete pairs therefore open and close it twice — which is exactly the row's 'two distinct waiting episodes' assertion, with no new daemon behaviour required."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_metrics.go",
+          "note": "Line 656: TranscriptPermissionPending = len(t.openPermissions) > 0 — the derived metric the classifier reads."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/metrics.go",
+          "note": "Line 686: MergeMetrics copies TranscriptPermissionPending. This is the #1256 live-path fix; without it the live detector classified against a post-merge metrics struct where the flag was always false (replay was immune). 2-19's re-record is the live proof it holds."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "Line 152: rule transcript_permission_prompt, TierTranscript, when m.TranscriptPermissionPending → waiting. The single rung both waiting episodes come from."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/replayengine/metrics.go",
+          "note": "Line 176 carries TranscriptPermissionPending through the replay projection, so both waiting episodes are reconstructible offline from the frozen events.jsonl — unlike the hook-driven claudecode/codex siblings of this row."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@github/copilot/node_modules/@github/copilot-darwin-arm64/schemas/session-events.schema.json",
+          "note": "Copilot CLI 1.0.78's own shipped event schema. PermissionRequest is an anyOf including PermissionRequestRead ('File or directory read permission request') and PermissionRequestUrl ('URL access permission request'); PermissionPromptRequestPathAccessKind is enum [read, shell, write] with read = 'Read access to a filesystem path.'. Crucially PermissionRequestedEvent.ephemeral is a PLAIN optional boolean, while ElicitationRequestedEvent.ephemeral is const:true described as 'Always true for events that are transient and not persisted to the session event log on disk' — i.e. the schema itself states that permission.requested IS persisted."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@github/copilot/node_modules/@github/copilot-darwin-arm64/app.js",
+          "note": "CLI 1.0.78 bundle. (a) Native host effect 'permissions_request_prompt' routes promptKind tool|path|url into requestToolPermissionFromUser / requestPathPermissionFromUser / requestUrlPermissionFromUser. (b) All three call PendingRequests.requestPermissionPrompt, whose body ends `mg(this.emit, r.event)` — the NON-ephemeral emitter (contrast requestUserInput / requestElicitation / requestExitPlanMode, which all use mg(this.emitEphemeral, …)). (c) The path dialog component: `s = t===\"read\" ? \"read\" : t===\"write\" ? \"write\" : \"read or write\"`, title \"Allow directory access\", body \"This action may read the following path outside your allowed directory list.\", initialItem = 'Yes, and add these directories to the allowed list'. (d) web_fetch registers permissions.request({kind:\"url\", intention:\"Fetch web content\", url}) and throws when permissions are disabled. (e) permissions_notify_prompt_shown → notifyPermissionPrompt → fireNotificationHook(msg, \"permission_prompt\", \"Permission needed\"), so the notification hook fires for path/url prompts too."
+        },
+        {
+          "kind": "command",
+          "ref": "copilot --help (GitHub Copilot CLI 1.0.78)",
+          "note": "'Path Permissions: By default, file access is restricted to paths within the current working directory and its subdirectories, plus the system temporary directory. The --allow-all-paths flag disables this verification and allows access to any path on the filesystem.' Also --allow-all-urls ('Allow access to all URLs without confirmation') and --allow-all ('equivalent to --allow-all-tools --allow-all-paths --allow-all-urls'). This is the documented boundary the read-only half is driven across, and the documented reason --allow-all must be off."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/hooks.go",
+          "note": "handleNotificationHook accepts permission_prompt and elicitation_dialog but is DISPATCH ONLY — session.HookSignal has no Notification row, so no hold is taken and only a synthetic activity event is injected. Confirms the waiting verdict here is transcript-borne, and that a hook failure could at worst add latency, not remove an episode."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/driver-interactive.sh",
+          "note": "DRIVE_ELICITS lists send/slash/sleep/wait_turn/keys/... — every step this recipe needs. `[[ -z \"${COPILOT_NO_ALLOW_ALL:-}\" ]] && args+=(--allow-all)` is the launch lever, and the SAME variable guards wait_turn's dismiss_dialog_if_visible 'Allow|Do you want to|trust the files' — a regex that would otherwise auto-answer BOTH dialogs (it matches the read dialog's 'Allow directory access' / 'Do you want to allow this?' too). The keys arm reads .text, not .keys."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/scenarios/2-19_tool-gate-permission-prompt/metadata.json",
+          "note": "The mutating half, live-proven: CLI 1.0.77 sitting blocked with permission.requested {kind:\"shell\", hasWriteFileRedirection:true} already on disk, and the daemon emitting state_transition→waiting with decided_by_rule=transcript_permission_prompt after the MergeMetrics fix. This cell's first gate reuses that exact trigger."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/scenarios/2-11_auto-classified-permission/metadata.json",
+          "note": "The baseline this row is measured against: under COPILOT_NO_ALLOW_ALL, `cat data.txt` / `ls -la` inside the cwd auto-approve with NO permission.requested at all, while `echo written > out.txt` gates. That is what makes 'read-only inside the workspace' the wrong trigger for this row and 'read-only OUTSIDE the allowed directory list' the right one — and it is the source of the vacuous-pass discipline this cell copies."
+        },
+        {
+          "kind": "issue",
+          "ref": "ingo-eichhorst/Irrlicht#1861",
+          "note": "The report the row was written from (Claude Code: the permission gate reached the daemon for nine named tools and no others). Cited here as the row's provenance and as the contrast case — copilot's subscriber path names no tools at all."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "GitHub Copilot CLI 1.0.78+ on PATH and authenticated (credentials live in the OS keychain, so COPILOT_HOME isolation needs no re-login). Assessed against 1.0.78.",
+        "An active Copilot plan with AI credits — this recipe spends one multi-tool turn. Do NOT record over BYOK: totalNanoAiu is 0 and the BYOK model name falls outside irrlicht's priced alias map, so the cost observation would land at zero.",
+        "COPILOT_NO_ALLOW_ALL=1 MUST be exported. It drops --allow-all from the driver's launch line (so --allow-all-paths and --allow-all-tools are both off) AND disables wait_turn's dismiss_dialog_if_visible, which would otherwise answer both dialogs within ~1s and collapse the two episodes. The lever already exists in the driver; nothing needs porting.",
+        "COPILOT_AVAILABLE_TOOLS MUST NOT be set for this cell — the driver forwards it as --available-tools, which would remove the file-read tool and web_fetch from the roster and starve the read-only half. This cell deliberately pays full input-token cost.",
+        "RE-PROBE AT RECORD TIME, and log what was found: (a) the seeded read target is outside the run cwd and outside the system temporary directory (copilot --help: those two are allowed by default — if $STAGING is under /tmp, every /tmp path is pre-approved); (b) no --add-dir is on the launch line; (c) the seeded COPILOT_HOME/config.json carries no readonlyPaths / readwritePaths / allow-rule entry covering the target.",
+        "irrlicht's copilot `transcripts` permission granted (IRRLICHT_PERMISSION_MODE=grant-all for the recorder) — a fresh IRRLICHT_HOME leaves it pending and the daemon observes nothing.",
+        "No hook install and no :7837 pinning needed — the whole signal is transcript-borne, so the :7838 coexist recorder captures it. (The copilot notification hook, if installed, only removes observation lag; it takes no hold.)",
+        "tmux available (the interactive driver drives the REPL through it)."
+      ],
+      "setup": [
+        "The driver isolates state under $STAGING/copilot-home via COPILOT_HOME and seeds trustedFolders + askedSetupTerminals so neither first-run modal blocks the input box, then waits for the '/ commands' footer before typing. A fresh per-run cwd is created under $STAGING/cwd/.",
+        "SEED THE READ TARGET OUTSIDE THE ALLOWED LIST: create $HOME/.irrlicht-onboard/copilot-2-26/outside.txt containing the single line OUTSIDE-OK. $HOME is neither the run cwd nor the system temporary directory, which is what makes the read cross copilot's default path-verification boundary. Record the absolute path it used into the run log — the prompt below must name that exact absolute path.",
+        "ASSERT BEFORE DRIVING (fail loudly, do not proceed on a guess): the seeded path is not under the run cwd, not under $TMPDIR / /tmp / /private/tmp, and does not appear in $COPILOT_HOME/config.json. If any of those is false, the read half is pre-approved and the run would be vacuous.",
+        "Confirm out.txt does NOT already exist in the run cwd, so the write half is a real create.",
+        "The recipe answers BOTH dialogs deliberately with `keys` steps. wait_turn must not be used while either dialog is held — under COPILOT_NO_ALLOW_ALL it no longer auto-dismisses, but it would still return early on copilot's first assistant.turn_end."
+      ],
+      "script": [
+        {
+          "type": "sleep",
+          "seconds": 2
+        },
+        {
+          "type": "send",
+          "text": "Do exactly these two steps, in this order, one at a time. Wait for each step to finish completely before starting the next one. Do not use any tool other than the two named here.\nStep 1: use the bash tool to run exactly this command: echo written > out.txt\nStep 2: use your file-reading tool (not bash) to read the file at the absolute path <ABSOLUTE_OUTSIDE_PATH> and report the single line it contains.\nWhen both steps are done, reply with exactly one line containing only: BOTH-DONE"
+        },
+        {
+          "type": "sleep",
+          "seconds": 35
+        },
+        {
+          "type": "keys",
+          "text": "Enter"
+        },
+        {
+          "type": "sleep",
+          "seconds": 40
+        },
+        {
+          "type": "keys",
+          "text": "Enter"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 20
+        }
+      ],
+      "verify": [
+        "PROOF OF TWO GATES (must fail loudly; absence of a finding and inability to look must not produce the same output): the recorded transcript contains EXACTLY TWO permission.requested lines with DISTINCT requestId values, each followed by a permission.completed carrying the same requestId. Fewer than two means the run is INCONCLUSIVE — report it as such and do not grade the phases.",
+        "PROOF THE SECOND GATE IS READ-ONLY: the second permission.requested carries a read-only descriptor — permissionRequest.kind in {read, url}, or promptRequest.kind == \"path\" with accessKind in {read, shell} — and carries NO write signal (kind != write, hasWriteFileRedirection not true). Record the exact kind/accessKind observed into the cell's caveats: this is the first non-shell permission kind any copilot recording will have captured.",
+        "PROOF THE FIRST GATE IS MUTATING: the first permission.requested carries kind:\"shell\" with hasWriteFileRedirection:true and possiblePaths containing out.txt (the 2-19 shape).",
+        "PROOF THE LAUNCH CONFIG WAS HONOURED: the recorded transcript contains NO session.permissions_changed turning allowAllPermissions on. Its presence means COPILOT_NO_ALLOW_ALL was not honoured and the cell is vacuous whatever the pass rate says.",
+        "events.jsonl contains a presession_created (proc-<PID>) in ready shortly after launch, then a transcript_new for the real session (the ~/.copilot/session-state/<dir> name — a DIFFERENT id) born DIRECTLY into working, plus a pid_discovered bound to the real session.",
+        "THE ASSERTION UNDER TEST: events.jsonl shows TWO distinct state_transition→waiting for the real session with at least one state_transition→working between them — one bound to the shell write gate, one to the read gate. A single waiting episode does NOT satisfy this row.",
+        "The session is back at ready after the second approval and STILL ready across the >=10s trailing idle (no state_transition to waiting in that window).",
+        "The final assistant message contains the literal token BOTH-DONE and the transcript shows out.txt created, proving both gated calls actually executed after approval rather than being cancelled."
+      ],
+      "timeout_seconds": 300,
+      "settings": {}
+    }
+  }
+}

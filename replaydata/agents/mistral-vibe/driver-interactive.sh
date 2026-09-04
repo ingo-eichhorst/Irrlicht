@@ -492,9 +492,10 @@ launch_repl() {
 # already merges an identical mid-turn dialog dismiss into its own poll loop —
 # both now call the shared _lib/drive/dialogs.sh helper (#1009) so the
 # poll+dismiss mechanics live in one place; only the marker regex below stays
-# adapter-local. The marker text matches the daemon's own trustDialogMarkers
-# (core/domain/backchannel/uidetect.go) so the driver and the daemon agree on
-# what "the dialog is up" means.
+# adapter-local. The marker text used to be kept in step with the daemon's own
+# terminal-read dialog markers; that read-back path was removed in #1846, so the
+# regex below is now the only statement of what "the dialog is up" means and is
+# owned entirely by this driver.
 wait_turn() {
   resolve_transcript || {
     echo "[driver] wait_turn[s$ACTIVE]: vibe never created a session dir under $VIBE_SESSION_ROOT" >&2
@@ -620,12 +621,12 @@ slash_cmd() { # <text>
   echo "[driver] slash[s$ACTIVE]: $text (no turn expected)" >&2
 }
 
-# --- SEAM: interrupt (backchannel Ctrl-C) ------------------------------------
-# step_interrupt — cancel the in-flight vibe turn. Vibe declares
-# Interrupt: InterruptCtrlC (core/adapters/inbound/agents/vibe/agent.go), so the
-# daemon's Controller aborts a running turn by delivering an ETX (Ctrl-C) into
-# the terminal backend; the driver mirrors that exact keystroke to reproduce the
-# backchannel interrupt. A cancelled turn never lands a completed assistant line
+# --- SEAM: interrupt (Ctrl-C) ------------------------------------------------
+# step_interrupt — cancel the in-flight vibe turn. Vibe aborts a running turn on
+# an ETX (Ctrl-C) delivered to its terminal, so the driver sends that exact
+# keystroke to reproduce a user pressing it. (Until #1846 the daemon could
+# deliver the same ETX itself; that write-back path is gone, so this keystroke
+# is now only ever the user's.) A cancelled turn never lands a completed assistant line
 # in messages.jsonl (turn_count only counts role:"assistant" WITH content and NO
 # tool_calls), so decrement EXPECTED_TURNS for the send whose turn we just
 # aborted — mirroring codex/claudecode so a later wait_turn doesn't block on a

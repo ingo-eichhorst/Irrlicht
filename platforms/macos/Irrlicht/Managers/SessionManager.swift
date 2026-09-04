@@ -12,7 +12,7 @@ import SwiftUI
 //   SessionManager+Relay.swift            — Sources reconciliation + relay connection
 //   SessionManager+GroupComposition.swift — apiGroups tree (patch/prune/order)
 //   SessionManager+History.swift          — history-bar wire decoding
-//   SessionManager+Hydration.swift        — REST hydration, consent, backchannel actions
+//   SessionManager+Hydration.swift        — REST hydration + permission consent
 //   SessionManager+Notifications.swift    — context-pressure + state-transition notifications
 //   SessionManager+SessionOrdering.swift  — persisted session/duplicate ordering
 //   SessionManager+SessionActions.swift   — reset/delete session actions
@@ -203,8 +203,8 @@ class SessionManager: ObservableObject {
     /// `URLSession.shared` the same way a restarted local daemon could (#843),
     /// so the relay path gets its own recyclable instance too (#846).
     /// `URLSession.shared` stays in use elsewhere (ActivationClient,
-    /// BackchannelRulesClient, PublishClient, HistoryView) for one-off calls
-    /// unrelated to this reconnect loop.
+    /// PublishClient, HistoryView) for one-off calls unrelated to this
+    /// reconnect loop.
     var relayURLSession = URLSession(configuration: .ephemeral)
     /// Consecutive relay-connect cycles that never got a single frame back
     /// from the relay. Reset on any confirmed message.
@@ -289,7 +289,7 @@ class SessionManager: ObservableObject {
     /// `summaryDisplayMode`, `projectGroupOrder`, the Sources flags, the
     /// notification toggles and the `register(defaults:)` seed. Preferences
     /// read elsewhere (`MenuBarController`, `LoginItemManager`,
-    /// `ContextPressureThreshold.current`, `MenuBarStyle.current`) still
+    /// `ContextPressureThreshold.current`, `MenuBarAppearance.current`) still
     /// resolve `.standard`; the views' own `@AppStorage` reads are covered by
     /// `PinnedSnapshotHost`'s `defaultAppStorage` pin instead.
     let defaults: UserDefaults

@@ -169,8 +169,8 @@ func TestSharedConfigGate_UnresolvablePathFailsClosed(t *testing.T) {
 }
 
 // TestSharedConfigGate_PermissionWritingNothingIsNeverGated is a LOCK covering
-// the shape agent.ControlPermission and gastown/state have: an effect that
-// declares no ManagedUserFile because it writes no shared file. Gating those
+// the shape gastown/state has: an effect that declares no ManagedUserFile
+// because it writes no shared file. Gating those
 // would disable orchestration and watcher startup in every grant-all recording.
 func TestSharedConfigGate_PermissionWritingNothingIsNeverGated(t *testing.T) {
 	applied := false

@@ -18,7 +18,7 @@
 
 </div>
 
-> 🟣 working · 🟠 waiting · 🟢 ready — one ambient dot per session, multi-agent, one-click setup.
+> 🟣 working · 🟠 waiting · 🟢 ready · 🔴 error — one ambient dot per session, multi-agent, one-click setup.
 
 ## Install
 
@@ -53,7 +53,7 @@ curl -fsSL https://irrlicht.io/install.sh | sh
 
 Stages: `stable` production-ready · `beta` feature-complete, edge cases remain · `alpha` core detection works (state only, metrics not claimed) · `planned` on the roadmap.
 
-The **11 onboarded coding agents** below declare their stage in [`replaydata/agents/adapters.json`](replaydata/agents/adapters.json), and `of validate` fails if a stage claims more than a core set of 12 scenarios earns. Orchestrator, platform and `planned` rows are editorial — no adapter exists for them yet, so nothing checks them.
+The **12 onboarded coding agents** below declare their stage in [`replaydata/agents/adapters.json`](replaydata/agents/adapters.json), and `of validate` fails if a stage claims more than a core set of 12 scenarios earns. Junie has an adapter but remains `planned` until recordings earn its maturity claims. Other orchestrator, platform, and `planned` rows are editorial and have no adapter.
 
 **Coding agents**
 
@@ -70,6 +70,7 @@ The **11 onboarded coding agents** below declare their stage in [`replaydata/age
 | Mistral Vibe   | alpha   |
 | GitHub Copilot | alpha   |
 | Hermes Agent   | alpha   |
+| Junie          | planned |
 | Cursor Agent   | planned |
 | Amp            | planned |
 
@@ -95,6 +96,55 @@ The **11 onboarded coding agents** below declare their stage in [`replaydata/age
 
 → [Adapters reference](https://ingo-eichhorst.github.io/Irrlicht/docs/adapters.html#maturity-stages) for stage criteria, watch paths, model detection, and roadmap.
 
+## The menu bar icon is hidden
+
+macOS gives every app a slice of the menu bar and hands out what's left in
+launch order. On a 13" or 14" screen — or any screen with a crowded menu bar —
+Irrlicht's icon can end up behind the notch or behind the frontmost app's
+menus, where you can neither see nor click it. Four things to try, cheapest
+first:
+
+1. **Cmd-drag it somewhere you can see.** Hold ⌘ and drag the icon along the
+   menu bar. Irrlicht asks macOS to remember the spot, so it should still be
+   there after a quit and a relaunch.
+2. **Turn on Compact.** Settings → *Menu Bar Icon* → **Compact**. It is a
+   toggle on whichever style you already use, not a style of its own, so you
+   keep the content you picked and only change how densely it is drawn: every
+   project collapses into one dot with a session count, and on *Usage* the
+   quota bars switch to the narrow, label-less layout *Combined* already uses.
+   Its width then stops growing with your project count.
+
+   Measured in points, by `cd platforms/macos && swift test --filter
+   testMeasuredWidthOfEachStyle` (a committed test, not numbers typed by
+   hand) — `+C` is Compact on:
+
+   | projects | Lights | Lights+C | Usage | Usage+C | Combined | Combined+C |
+   |---|---|---|---|---|---|---|
+   | 1 | 10.00 | 18.50 | 50.00 | 20.80 | 36.80 | 45.30 |
+   | 2 | 26.00 | 18.50 | 50.00 | 20.80 | 52.80 | 45.30 |
+   | 3 | 42.00 | 18.50 | 50.00 | 20.80 | 68.80 | 45.30 |
+   | 5 | 74.00 | 18.50 | 50.00 | 20.80 | 100.80 | 45.30 |
+   | 6 | 90.00 | 18.50 | 50.00 | 20.80 | 116.80 | 45.30 |
+   | 8 | 90.00 | 18.50 | 50.00 | 20.80 | 116.80 | 45.30 |
+
+   Lights plateaus at 90.00 because only five dot-groups plus an overflow
+   marker are ever drawn. Compact costs width only in the trivial
+   one-project case (18.50 against 10.00) and wins from two projects on,
+   which is the crowded menu bar this section is about. With Compact **off**,
+   every style renders exactly what it always did.
+3. **Mind the notch.** On a notched Mac the menu bar has a dead zone in the
+   middle. macOS does not flow icons around it — an icon pushed into that
+   range is simply not drawn. Removing any other status item, or turning on
+   Compact, moves Irrlicht back out.
+4. **Use a menu bar manager** if you run a lot of status items:
+   [Ice](https://github.com/jordanbaird/Ice) (free, open source),
+   [Bartender](https://www.macbartender.com/), or
+   [Hidden Bar](https://github.com/dwarvesf/hidden). All three let you pin
+   Irrlicht to the always-visible section.
+
+If the icon is gone entirely and none of the above brings it back, Irrlicht is
+probably not running — relaunch it from `/Applications`.
+
 ## Posture
 
 Local-first · no telemetry · MIT · ~5 MB RAM · signed Homebrew cask · transcripts read-only.
@@ -105,7 +155,7 @@ Local-first · no telemetry · MIT · ~5 MB RAM · signed Homebrew cask · trans
 - **Observability stacks** ([Langfuse](https://langfuse.com/integrations/frameworks/claude-agent-sdk), [SigNoz](https://signoz.io/blog/claude-code-monitoring-with-opentelemetry/)) need SDK instrumentation and a dashboard tab.
 - **Single-agent monitors** ([Claude Status](https://github.com/gmr/claude-status), [Agent Sessions](https://github.com/jazzyalex/agent-sessions)) lock you to one CLI or one terminal.
 
-Irrlicht is ambient (menu bar, not a window), multi-agent (Claude / Codex / Pi / Aider / OpenCode / Kiro CLI / Gemini CLI / Antigravity / Mistral Vibe / GitHub Copilot / Hermes Agent, plus the Gas Town orchestrator, in one vocabulary), and transcript-driven — no SDK wrappers, no OpenTelemetry collectors, no dashboard tab to keep open.
+Irrlicht is ambient (menu bar, not a window), multi-agent (Claude / Codex / Pi / Aider / OpenCode / Kiro CLI / Gemini CLI / Antigravity / Mistral Vibe / GitHub Copilot / Hermes Agent / Junie, plus the Gas Town orchestrator, in one vocabulary), and transcript-driven — no SDK wrappers, no OpenTelemetry collectors, no dashboard tab to keep open.
 
 ## The problem (why this exists)
 

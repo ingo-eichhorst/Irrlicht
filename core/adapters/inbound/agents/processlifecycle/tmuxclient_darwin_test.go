@@ -535,9 +535,8 @@ func TestReadLauncherEnv_Tmux_UnreachableServerKeepsNothingAndKnowsNothing(t *te
 //
 // Since #1582 it carries a third, which is the one that was seen RED: the
 // inherited address is not recorded either. Until then the launcher kept it
-// beside the correct host, control.resolveBackend picked the tmux backend from
-// that field alone, and the backchannel typed into a pane in a window the user
-// was not looking at.
+// beside the correct host, and everything that routed on that field alone
+// addressed a pane in a window the user was not looking at.
 //
 // That third claim is why the hostKnown assertion below reads the other way
 // round from #1501's. The tri-state answers "was the host of the pane this
@@ -573,8 +572,8 @@ func TestReadLauncherEnv_Tmux_InheritedPaneKeepsItsOwnHost(t *testing.T) {
 		t.Errorf("a session that reported its own host must keep it: %+v", l)
 	}
 	if l.TmuxPane != "" || l.TmuxSocket != "" {
-		t.Errorf("an inherited pane address must not be recorded — control.resolveBackend routes on it "+
-			"and would send-keys into a pane in someone else's window (#1582): pane=%q socket=%q",
+		t.Errorf("an inherited pane address must not be recorded — consumers route on it "+
+			"and would reach a pane in someone else's window (#1582): pane=%q socket=%q",
 			l.TmuxPane, l.TmuxSocket)
 	}
 	if !hostKnown {

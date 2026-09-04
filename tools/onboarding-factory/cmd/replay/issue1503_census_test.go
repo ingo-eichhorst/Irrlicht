@@ -168,12 +168,26 @@ type catalogCensus struct {
 // divergent cells: a re-record that keeps its predecessor can only ever hold
 // that figure still. It would fall only when the older recording is retired
 // out of the catalog into regressions/, which is a separate, deliberate act.
+// #1860 moved Divergent and DivergentByCountsAndKinds up by exactly ONE
+// recording each, and it is the recording #1836 had just brought INTO
+// agreement: claudecode's 2-25_agent-process-crash-midturn, 2026-08-26. (The
+// values are deliberately not restated here — the machine-generated literal
+// below is the one copy, and TestNoCommentRestatesALiveCensusFigure enforces
+// that.)
+//
+// #1860 reverts #1800: a process exit deletes the row again, whatever state it
+// was in, so the replay no longer reconstructs the `working→error` that
+// recording's frozen sidecar holds. The 2026-08-25 recording beside it was
+// already divergent and stays divergent, so the figure moves by one and not by
+// two. This is the frozen-sidecar cost of REMOVING a behaviour, the mirror of
+// the #1798/#1800 entries above, and it resolves the same way — a re-record on
+// a post-#1860 daemon. The cell is marked known_failing in the meantime.
 var censusOfTheCommittedCatalog = catalogCensus{
 	Recordings:                320,
 	Zero:                      1,
 	Fabricated:                1,
-	Divergent:                 151,
-	DivergentByCountsAndKinds: 150,
+	Divergent:                 152,
+	DivergentByCountsAndKinds: 151,
 	UnpairedSidecars:          0,
 	PairedButUngraded:         87,
 }

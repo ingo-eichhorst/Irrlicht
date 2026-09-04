@@ -14,12 +14,12 @@ import (
 	"irrlicht/core/adapters/inbound/agents/copilot"
 	"irrlicht/core/adapters/inbound/agents/geminicli"
 	"irrlicht/core/adapters/inbound/agents/hermes"
+	"irrlicht/core/adapters/inbound/agents/junie"
 	"irrlicht/core/adapters/inbound/agents/kirocli"
 	"irrlicht/core/adapters/inbound/agents/opencode"
 	"irrlicht/core/adapters/inbound/agents/pi"
 	"irrlicht/core/adapters/inbound/agents/vibe"
 	"irrlicht/core/domain/agent"
-	"irrlicht/core/domain/backchannel"
 	"irrlicht/core/pkg/tailer"
 )
 
@@ -94,23 +94,6 @@ func TestSubagentCounters_onlyClaudecode(t *testing.T) {
 	}
 }
 
-func TestControlPresets_onlyClaudecodeMapsCompact(t *testing.T) {
-	m := agents.ControlPresets(testAgents())
-	cc, ok := m[claudecode.AdapterName]
-	if !ok {
-		t.Fatalf("ControlPresets missing %q", claudecode.AdapterName)
-	}
-	if cc[backchannel.PresetCompact] != "/compact" {
-		t.Errorf("claude-code compact preset = %q, want %q", cc[backchannel.PresetCompact], "/compact")
-	}
-	// Agents with no declared presets are absent so a preset rule degrades.
-	for _, name := range []string{codex.AdapterName, pi.AdapterName, aider.AdapterName, opencode.AdapterName} {
-		if _, ok := m[name]; ok {
-			t.Errorf("ControlPresets should not include %q (no presets declared)", name)
-		}
-	}
-}
-
 func TestMetricsProviders_onlyOpencode(t *testing.T) {
 	m := agents.MetricsProviders(testAgents())
 	if _, ok := m[opencode.AdapterName]; !ok {
@@ -149,7 +132,7 @@ func TestSourceCensus(t *testing.T) {
 			claudecode.AdapterName, codex.AdapterName, pi.AdapterName,
 			kirocli.AdapterName, geminicli.AdapterName,
 			antigravity.AdapterName, vibe.AdapterName,
-			copilot.AdapterName,
+			copilot.AdapterName, junie.AdapterName,
 		},
 		"FilesUnderCWD":     {aider.AdapterName},
 		"ProcessOwnedStore": {opencode.AdapterName, hermes.AdapterName},

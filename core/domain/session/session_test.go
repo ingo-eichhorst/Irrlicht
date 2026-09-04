@@ -195,9 +195,8 @@ func TestLauncher_AdoptHostIdentity_TTYlessAgentStaysTTYless(t *testing.T) {
 // and NO pane address — the client is a GUI terminal and carries none.
 //
 // Losing it is worse than the nil it replaced. TmuxPane/TmuxSocket are what
-// control.resolveBackend routes the backchannel on and what the macOS
-// TmuxActivator selects with, so the result would be a click that raises the
-// right window and selects nothing, and a control path that falls through to
+// the macOS TmuxActivator selects with, so the result would be a click that
+// raises the right window and selects nothing, and a lookup that falls through to
 // whatever backend the remaining fields happen to match.
 //
 // Seen RED against origin/main, where the put-back names only the herdr
@@ -221,7 +220,7 @@ func TestLauncher_AdoptHostIdentity_TmuxPaneKeepsItsAddress(t *testing.T) {
 		t.Errorf("host identity not adopted: %+v", pane)
 	}
 	if pane.TmuxPane != "%17" || pane.TmuxSocket != "/private/tmp/tmux-501/default" {
-		t.Errorf("the pane lost the address the backchannel routes on: %+v", pane)
+		t.Errorf("the pane lost the address TmuxActivator selects on: %+v", pane)
 	}
 	if pane.TTY != "/dev/ttys012" {
 		t.Errorf("TTY: want the client's tab, got %q", pane.TTY)
@@ -231,9 +230,9 @@ func TestLauncher_AdoptHostIdentity_TmuxPaneKeepsItsAddress(t *testing.T) {
 // TestLauncher_AdoptHostIdentity_HerdrPaneKeepsTheClientsTmuxAddress is the
 // lock the #1501 put-back had to not break. A herdr client can itself be
 // running inside a tmux pane, in which case its TmuxPane/TmuxSocket are its
-// OWN and describe the window displaying the herdr pane —
-// control.resolveBackend's herdr-before-tmux ordering exists precisely because
-// both addresses can be present and mean different things.
+// OWN and describe the window displaying the herdr pane — pane()'s
+// herdr-before-tmux ordering exists precisely because both addresses can be
+// present and mean different things.
 //
 // So the put-back is the pane's own address only, chosen by the same
 // herdr-then-tmux precedence processlifecycle.launcherFromEnv captures with. A

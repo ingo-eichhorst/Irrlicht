@@ -8,8 +8,9 @@ import XCTest
 /// machine happens to be in.
 ///
 /// The obvious test — "renders 09:00" — is the trap this whole family is
-/// written around (`PinnedScaleSnapshotTests`, `PinnedLocaleSnapshotTests`,
-/// `PinnedTimeZoneSnapshotTests` each say it in their own terms). Asserting one
+/// written around (`PinnedScaleSnapshotTests` and
+/// `PinnedTimeZoneSnapshotTests` each say it in their own terms, as
+/// `PinnedLocaleSnapshotTests` did until #1874 retired it). Asserting one
 /// rendering is green on the host that agrees with it whether the input reached
 /// the view or not. So every axis here drives **two** values through one view:
 /// whatever the machine is, at most one arm can agree with it.

@@ -22,10 +22,11 @@ import XCTest
 ///    `setUp`, one family later.
 /// 2. The pinned set was **smaller than the set the views read**. Measured on
 ///    this machine, that domain also carried `advancedSettingsExpanded`,
-///    `backchannelActivation`, `menuBarStyle`, `notificationsEnabled`,
-///    `notifyOnContextPressure`, `notifyOnReady`, `notifyOnWaiting`,
-///    `projectGroupOrder` and `taskEtaActivation` — nine keys nothing pinned,
-///    one of them holding the developer's real project names.
+///    `menuBarStyle`, `notificationsEnabled`, `notifyOnContextPressure`,
+///    `notifyOnReady`, `notifyOnWaiting`, `projectGroupOrder` and
+///    `taskEtaActivation`, plus one further toggle #1874 has since deleted —
+///    nine keys nothing pinned, one of them holding the developer's real
+///    project names.
 /// 3. A **`tearDown` is not a guarantee**. #1523 aborts the process mid-run,
 ///    `tools/lib/swift-suite.sh` kills the tree at 240s and `--budget` kills
 ///    the gate; none of those run a `tearDown`, so the pinned values stayed in
@@ -180,8 +181,8 @@ final class PinnedAppStorageSnapshotTests: XCTestCase {
         @AppStorage(ContextPressureThreshold.valueKey) private var thresholdValue: Double = ContextPressureThreshold.defaultValue
         @AppStorage(ContextPressureThreshold.unitKey) private var thresholdUnit: String = ContextPressureThreshold.defaultUnit.rawValue
         @AppStorage("advancedSettingsExpanded") private var advancedSettingsExpanded: Bool = false
-        @AppStorage("backchannelActivation") private var backchannelActivation: Bool = false
         @AppStorage(MenuBarStyle.storageKey) private var menuBarStyle: String = MenuBarStyle.lights.rawValue
+        @AppStorage(MenuBarAppearance.compactStorageKey) private var menuBarCompact: Bool = false
         @AppStorage(NotificationSettings.masterEnabledKey) private var notificationsEnabled: Bool = false
         @AppStorage(NotificationEvent.contextPressure.enabledKey) private var notifyOnContextPressure: Bool = false
         @AppStorage(NotificationEvent.ready.enabledKey) private var notifyOnReady: Bool = false
@@ -200,8 +201,8 @@ final class PinnedAppStorageSnapshotTests: XCTestCase {
                 ContextPressureThreshold.valueKey: String(thresholdValue),
                 ContextPressureThreshold.unitKey: thresholdUnit,
                 "advancedSettingsExpanded": String(advancedSettingsExpanded),
-                "backchannelActivation": String(backchannelActivation),
                 MenuBarStyle.storageKey: menuBarStyle,
+                MenuBarAppearance.compactStorageKey: String(menuBarCompact),
                 NotificationSettings.masterEnabledKey: String(notificationsEnabled),
                 NotificationEvent.contextPressure.enabledKey: String(notifyOnContextPressure),
                 NotificationEvent.ready.enabledKey: String(notifyOnReady),
@@ -226,8 +227,8 @@ final class PinnedAppStorageSnapshotTests: XCTestCase {
         ContextPressureThreshold.valueKey: 37.0,
         ContextPressureThreshold.unitKey: ContextPressureThreshold.Unit.tokens.rawValue,
         "advancedSettingsExpanded": true,
-        "backchannelActivation": true,
         MenuBarStyle.storageKey: MenuBarStyle.combined.rawValue,
+        MenuBarAppearance.compactStorageKey: true,
         NotificationSettings.masterEnabledKey: true,
         NotificationEvent.contextPressure.enabledKey: true,
         NotificationEvent.ready.enabledKey: true,
@@ -386,10 +387,9 @@ final class PinnedAppStorageSnapshotTests: XCTestCase {
     /// Scoped deliberately. Measured on this machine, a clean render writes
     /// exactly `["notificationsEnabled"]` — the key this test seeds itself — so
     /// a full-set equality would pass today. It is not asserted anyway:
-    /// `SettingsView`'s `.onAppear` reconciles `taskEtaActivation` and
-    /// `backchannelActivation` against the daemon (SettingsView.swift:413-452)
-    /// inside a `Task`, and those write `@AppStorage` keys whenever the daemon
-    /// answers before the assertion runs. Pinning the whole set would make this
+    /// `SettingsView`'s `.onAppear` reconciles `taskEtaActivation` against
+    /// the daemon inside a `Task`, and that writes its `@AppStorage` key
+    /// whenever the daemon answers before the assertion runs. Pinning the whole set would make this
     /// a timing assertion dressed as a preference one, and its failures would
     /// name a race rather than #1672. The general "no app code writes the
     /// process domain directly" claim is `PersistentDefaultsLintTests`' third

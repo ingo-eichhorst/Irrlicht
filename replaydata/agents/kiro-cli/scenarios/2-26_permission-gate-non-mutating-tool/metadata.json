@@ -1,0 +1,159 @@
+{
+  "scenario_id": "permission-gate-non-mutating-tool",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "bug",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.6.0",
+    "daemon_version": "0.6.1+220ff3e",
+    "confidence": 0.8,
+    "notes": "agent=yes — kiro-cli 2.6.0 gates read-only tools (read/grep/glob/code) with the SAME picker it uses for write/shell, and `/tools untrust <tool>` forces any tool to per-request confirmation (shipped help: 'Usage: /tools untrust <tool_name> [tool_name...]', success path 'set to per-request confirmation'). daemon=bug — kiro reaches waiting through exactly ONE classifier rung, open_tool_stalled (#488), armed by isPermissionGatedEditTool (core/domain/session/metrics.go:553) which matches only edit|write|multiedit|notebookedit|write_file; kiro's mutating `write` matches (#588/PR #612) but `read`/`grep`/`glob` match nothing, and kiro installs NO permission hook (hooks.go installs only stop + postToolUse; preToolUse deliberately omitted per #1716), so the read-only half of the arc never leaves `working`. Records known_failing on the second waiting episode. driver=ready — keys and slash are both in DRIVE_ELICITS (driver-interactive.sh:218)."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "permission-gate-non-mutating-tool",
+      "agent": "kiro-cli",
+      "assessed_at": "2026-09-03T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "bug",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: bug\ndriver_capability: ready\n\n## Reasoning\n\n**Agent — kiro-cli gates read-only tools with the same dialog it uses for mutating ones, and ships an explicit command to force it.**\n\nkiro-cli 2.6.0's tool roster comes straight off the shipped agent-config schema error string in `kiro-cli-chat`, which enumerates every accepted tool name and alias: `fs_read`/`read`, `fs_write`/`write`, `execute_bash`/`shell`/`execute_cmd`, `use_aws`/`aws`, `glob`, `grep`, `use_subagent`/`subagent`, `code`. Four of those are read-only — `read`, `grep`, `glob`, `code` — plus the read-only subset of `aws`.\n\nThree independent mechanisms gate them, and the first is deterministic rather than a default that can drift:\n\n1. **`/tools untrust <tool_name> [tool_name...]`** sets ANY tool to per-request confirmation. The binary carries the usage string verbatim (`Usage: /tools untrust <tool_name> [tool_name...]`) alongside the command grammar `/tools [trust-all|trust <name>|untrust <name>|reset]`, the success text `set to per-request confirmation`, and the reset text `Tool trust has been reset to default permission levels.` (Rust source path in the same string table: `crates/chat-cli-v2/src/agent/acp/commands/tools.rs`).\n2. **Default path trust already gates reads outside the workspace.** The bundled changelog in the launcher binary carries \"Reduced default fs_read trust permission to current working directory only - [#2824]\" and \"Code tool now requires approval to read files outside the workspace\".\n3. **`toolsSettings`** carries per-tool `allowedPaths` / `deniedPaths` / `allowReadOnly` for `fsRead`, `fsWrite`, `shell`, `glob`, `useAws` (the agent-config struct definition in the binary's schema string table).\n\nThe decisive point for THIS row is that the dialog is the same component for both tool classes. kiro renders one picker from `permissionOptions` + `trustOptions`, with the option map `{allow_once:\"Yes, single permission\", allow_always:\"Trust, always allow in this session\", allow_all_session:\"Trust, allow all for this session\", reject_once:\"No\", reject_always:\"Never\"}`, sorted so `allow_once` sits first. Nothing in kiro's UI, config schema, or command surface distinguishes a read gate from a write gate. `agent=yes`.\n\n**Daemon — this is the defect the row exists to catch, and for kiro it is sharper than for claudecode.**\n\nkiro-cli can reach `waiting` for a held permission prompt through exactly ONE rung of `ClassifyState`'s ladder, and that rung is gated on a five-name EDIT-tool list. Walking the ladder in `core/application/services/state_classifier.go` for an open `read` with the picker on screen:\n\n- `permission_prompt` (rule 0, `PermissionPending`) — **unreachable for every kiro tool**. kiro-cli installs only two hook events, `stop` and `postToolUse` (`core/adapters/inbound/agents/kirocli/hooks.go`, `installedHookEvents` in hookinstaller.go). `preToolUse` is DELIBERATELY not installed: the #1716 audit found it fires for every tool call with no discriminator, in the payload or the transcript, separating \"waiting for approval\" from \"running now\", and that issue never calibrated a duration threshold for it. So kiro has no permission hook at all — read-only or mutating.\n- `transcript_permission_prompt` (`TranscriptPermissionPending`) — kirocli's parser never sets it. That signal is copilot's `permission.requested`/`permission.completed` pair (#1256); `git grep PermissionPending -- core/adapters/inbound/agents/kirocli/` returns only permission-*consent* hits (agent.go / hookinstaller.go), no metric write.\n- `user_blocking_tool` — `isUserBlockingTool` (core/domain/session/metrics.go:501) is exactly `AskUserQuestion|ExitPlanMode|question|ask_user_question|exit_plan_mode|ask_user`. No kiro tool is in it.\n- `open_tool_stalled` (#488) — **the only rung kiro can reach.** Armed by `HasOpenEditPermissionTool` → `isPermissionGatedEditTool` (core/domain/session/metrics.go:553), which case-insensitively matches exactly `edit|write|multiedit|notebookedit|write_file`. kiro's mutating `write` DOES match — that is #588 / PR #612, and 2-11's live re-recording observed it (events.jsonl, reason `stalled edit tool → likely permission prompt → waiting`). kiro's `read`, `grep`, `glob`, `code` and `aws` match NOTHING. The function's own doc comment states the exclusion is deliberate: \"Bash/WebFetch/MCP are deliberately excluded: they can run for minutes, so no fixed duration distinguishes 'blocked' from 'executing' for them (they rely on the hook).\" For kiro there is no hook to rely on.\n- `idle_prompt` / `agent_done` — a turn with an open tool call is not done.\n- default `transcript_activity` → **working**.\n\nSo the recording will show ONE waiting episode (the `write` half) where the row requires two, and the session reads `working` for the entire time the user is looking at the read picker. The tool-name asymmetry IS the finding: irrlicht's only kiro-reachable waiting rung is defined by an EDIT-tool list, so kiro's permission-gate coverage is exactly \"mutating file writes, nothing else\" — a read gate, a grep gate, a glob gate and a shell gate all read `working`.\n\n`daemon=bug`, not `incapable`: the trace exists locally. While the picker is pending, kiro's JSONL already holds the AssistantMessage with the open `read` toolUse and no toolResult until the user answers, and the parser maps AssistantMessage-with-toolUse to an open ToolUse with the raw tool name passed through (confirmed on the wire in 2-2's 2026-08-22 recording: `{\"toolUseId\":\"tooluse_…\",\"name\":\"shell\",…}` — kiro writes the SHORT alias, so the read half will land as `read`, not `fs_read`). Nothing but the allowlist/hook gap throws it away. The cell records `known_failing` and the spec asserts the correct two-episode arc unweakened.\n\n**Driver — ready.** `driver_step_types_from_file replaydata/agents/kiro-cli/driver-interactive.sh` reports `exit_clean interrupt keys reset_session restart resume rewind_fork send session sigkill slash sleep start_session wait_turn`, and `DRIVE_ELICITS` (line 218) lists both `keys` and `slash`. The recipe needs `slash`, `send`, `sleep`, `keys`, `wait_turn` — all present. No gap; the `keys` port and the `settings.trust_all_tools=false` honouring in `boot_session` both landed for 2-19/2-11.\n\n## What the recording must do\n\nLaunch plain `kiro-cli chat` WITHOUT `--trust-all-tools`. Run `/tools reset` then `/tools untrust read write` so BOTH classes are per-request and neither sits in a pre-approved allowlist. Send one prompt with a real data dependency (write a file, then read it back) and an explicit \"one at a time\" instruction so kiro serialises the two calls instead of batching them. Hold each picker open for 40s — past `stalledEditToolThreshold` (30s) — then answer each with a bare `Enter`, which selects `allow_once` (\"Yes, single permission\") because the picker sorts that option first. Answering with \"Trust, always allow in this session\" would suppress the second gate and hollow the cell out.\n\n## Observations\n\nkiro's JSONL carries no model/token/cost; model + context utilization live only in the `<uuid>.json` sidecar, which the parser reads at turn_done for model/context but not for metering. Matching every recorded kiro-cli cell, `model` is omitted and cost/tokens are asserted false.",
+      "caveats": [
+        "VACUOUS-PASS CONDITION: this cell passes while proving nothing if the READ-ONLY picker never opens. A session in which `read` is pre-approved produces exactly ONE waiting episode — byte-for-byte what the bug also produces — so events.jsonl alone cannot tell 'the daemon missed the second gate' from 'there was no second gate'. Two guards, both load-bearing: (1) the recipe makes the gate EXPLICIT with `/tools reset` + `/tools untrust read write` rather than relying on ambient default trust; (2) record MUST capture the tmux pane while each picker is open and assert the literal option text 'Yes, single permission' is present TWICE before grading any phase. A run in which the read picker never painted is INCONCLUSIVE — never a pass, and never a confirmation of the bug.",
+        "LOAD-BEARING ENVIRONMENT PROPERTIES, to be re-probed at record time and not trusted from this assessment: (i) `~/.kiro/settings/cli.json` on this host currently carries `chat.disableTrustAllConfirmation: true`; the driver must launch WITHOUT `--trust-all-tools` (settings.trust_all_tools=false) and the dispatcher must flip that key to false for the run and restore it afterwards, exactly as 2-11's precondition already requires. (ii) The active agent config — `~/.kiro/agents/<name>.json`, currently `irrlicht` per `chat.defaultAgent` — must have `allowedTools: []` and empty `toolsSettings`; verified `[]` today, but any entry there pre-approves a half and silently degrades this cell into a duplicate of 2-19. (iii) `chat.disableGranularTrust` must be unset, or the picker loses its trustOptions half and the `keys` sequence selects a different option.",
+        "THE 30s STALL THRESHOLD IS THE TIMING THAT DECIDES THE MUTATING HALF, and the sibling cells' sleeps are now stale against it. `stalledEditToolThreshold` is 30s (core/domain/session/signal_hold.go:218), raised from 5s in #1130 because legitimate 14-16s edits were being mislabelled. The only kiro recording that ever observed this transition (2-11, 2026-06-05, irrlichd 0.4.8) went working→waiting 10.04s after working — under the OLD threshold. So 2-11's and 2-19's current `sleep 14` before `keys` would NOT reach waiting on today's daemon. This cell holds each picker 40s. Flagged for the maintainer: 2-11 and 2-19 need the same correction before their next re-record. No issue filed.",
+        "THE TWO GATES MUST LAND AS TWO SEPARATE PICKERS. The prompt creates a real data dependency (read back what step 1 wrote) and says 'one at a time' explicitly, which is what serialises them. The scenario is explicit that one merged waiting episode does NOT satisfy this row, because it cannot tell the two tool classes apart. If a recording shows a merged episode, record should re-drive as two turns (write in turn 1, read in turn 2) and note the extra `ready` in the middle of the arc.",
+        "PROVISIONAL ON EMISSION: the daemon verdict is code-derived plus one 2026-06-05 live recording of the MUTATING half only. No recording has ever exercised a kiro READ picker, so 'the open `read` toolUse lands in the JSONL before the answer, with no toolResult' is inferred from the parser and from the observed `write` behaviour, not observed directly. record promotes this from provisional to settled.",
+        "kiro-cli is presession-shaped: 2-11's events.jsonl shows a `proc-<PID>` row created ~1.4s before the real UUID session. Every recorded kiro-cli spec nonetheless anchors a single `session_birth` to `start` (2-2 verifies that way), so this spec follows the sibling shape rather than the two-phase presession form. If the matcher latches the proc-row, record should re-anchor to presession_birth/session_birth rather than weakening any phase.",
+        "Answering with a bare `Enter` selects `allow_once` because the picker sorts `{allow_once:0, allow_always:1, allow_all_session:2, reject_always:3, reject_once:4}`. 'Trust, always allow in this session' or 'Trust, allow all for this session' would suppress the second gate entirely."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Applications/Kiro CLI.app/Contents/MacOS/kiro-cli-chat",
+          "note": "strings(1) on kiro-cli 2.6.0's chat binary. Tool roster + aliases from the agent-config schema error string ('available fields: … fs_read read fs_write write execute_bash shell execute_cmd use_aws aws glob grep use_subagent subagent code'). Command grammar '/tools [trust-all|trust <name>|untrust <name>|reset]' and 'Usage: /tools untrust <tool_name> [tool_name...]'; success/reset texts 'set to per-request confirmation' and 'Tool trust has been reset to default permission levels.' (source path crates/chat-cli-v2/src/agent/acp/commands/tools.rs). The single permission picker component with permissionOptions/trustOptions and the option map {allow_once:'Yes, single permission', allow_always:'Trust, always allow in this session', allow_all_session:'Trust, allow all for this session', reject_once:'No', reject_always:'Never'} sorted allow_once-first. toolsSettings struct with allowedPaths/deniedPaths/allowReadOnly over fsRead/fsWrite/shell/glob/useAws."
+        },
+        {
+          "kind": "file",
+          "ref": "/Applications/Kiro CLI.app/Contents/MacOS/kiro-cli",
+          "note": "Bundled changelog in the launcher binary: 'Reduced default fs_read trust permission to current working directory only - [#2824]' and 'Code tool now requires approval to read files outside the workspace' — the read-only tool classes kiro gates by default, independent of /tools untrust."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/metrics.go",
+          "note": "isPermissionGatedEditTool (line 553) matches case-insensitively on exactly edit|write|multiedit|notebookedit|write_file — kiro's `write` matches, `read`/`grep`/`glob`/`code`/`aws` do not, so HasOpenEditPermissionTool never arms for the read-only half. isUserBlockingTool (line 501) is AskUserQuestion|ExitPlanMode|question|ask_user_question|exit_plan_mode|ask_user — no kiro tool. TranscriptPermissionPending (line 250) is documented as copilot's transcript-derived signal."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/kirocli/hooks.go",
+          "note": "The file header states only `stop` and `postToolUse` are installed, and that `preToolUse` is DELIBERATELY not installed because the #1716 audit found it fires for every tool call with no discriminator separating 'waiting for approval' from 'running now'. So metrics.PermissionPending is never set for kiro and classifier rule 0 can never fire — for read-only OR mutating tools."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "The stateRules ladder: permission_prompt (PermissionPending), transcript_permission_prompt (TranscriptPermissionPending), user_blocking_tool (NeedsUserAttention), open_tool_stalled (OpenToolStalled). For kiro only open_tool_stalled is reachable, and only for `write`; every other rung falls through to the transcript_activity default → working."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/signal_hold.go",
+          "note": "stalledEditToolThreshold = 30 * time.Second (line 218), raised from 5s in #1130. Measured from the hold's HeldSince. The doc comment at lines 95-110 states SignalOpenToolStalled 'fires solely for the five names isPermissionGatedEditTool matches' — the source's own statement that every other gated tool has no fallback at all."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/kiro-cli/scenarios/2-11_auto-classified-permission/recordings/2026-06-05-15-25-34_irrlichd-0.4.8+6334244.dirty/events.jsonl",
+          "note": "The only live proof of kiro reaching waiting on a permission picker: proc-98652 presession ready at 15:25:34.47, real session 4ee402eb ready at :35.86, working at :38.82, then waiting at :48.86 with reason 'stalled edit tool → likely permission prompt → waiting' — 10.04s, i.e. under the pre-#1130 5s-era threshold, not today's 30s. Confirms both the MUTATING half's mechanism and the presession shape."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/kiro-cli/scenarios/2-2_auto-executed-tool-call/recordings/2026-08-22-03-52-01_irrlichd-0.5.10+1f26512/transcript.jsonl",
+          "note": "kiro-cli 2.6.0 on the wire: the toolUse block is {\"toolUseId\":\"tooluse_ugruPoC676BPub6bllIw4o\",\"name\":\"shell\",\"input\":{...}} — kiro writes the SHORT alias, not execute_bash. So the read-only half will appear as `read` (not `fs_read`), and neither spelling is in isPermissionGatedEditTool."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/kiro-cli/driver-interactive.sh",
+          "note": "driver_step_types_from_file reports exit_clean interrupt keys reset_session restart resume rewind_fork send session sigkill slash sleep start_session wait_turn; DRIVE_ELICITS (line 218) lists keys and slash. The dispatch table at line 884 maps {\"type\":\"slash\",\"text\":\"…\"} to send_slash and keys to send_keys. Every step this recipe needs is implemented — driver=ready."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.kiro/agents/irrlicht.json",
+          "note": "The active agent config on this host (selected by chat.defaultAgent): tools ['*'], allowedTools [] (nothing pre-approved), toolsSettings {}. This is the environment property the vacuous-pass caveat depends on, and it must be re-probed at record time."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "kiro-cli 2.6.0 on PATH and authenticated (subscription auth).",
+        "irrlichd is recording (--attach against a daemon started with --record, or isolated mode), with the kiro-cli hook installer already run.",
+        "Launch plain `kiro-cli chat` WITHOUT --trust-all-tools so the pickers appear (driver honours settings.trust_all_tools=false).",
+        "RE-PROBE AT RECORD TIME, do not trust this list: `chat.disableTrustAllConfirmation` in ~/.kiro/settings/cli.json MUST be false for this run (it is true on this host today) and restored afterwards; the active agent config (~/.kiro/agents/<chat.defaultAgent>.json) MUST have allowedTools: [] and empty toolsSettings; chat.disableGranularTrust MUST be unset.",
+        "POSITIVE PROOF OF GATE, required before grading: record captures the tmux pane while each picker is open and asserts the literal text 'Yes, single permission' appears TWICE across the run. A run where the read picker never painted is INCONCLUSIVE, not a pass and not a confirmation of the bug."
+      ],
+      "setup": [
+        "Driver launches kiro-cli chat (no --trust-all-tools) under tmux in a fresh empty cwd under <staging>/cwd/.",
+        "The two slash steps make the gate explicit rather than ambient: /tools reset clears any stale runtime trust, then /tools untrust read write puts BOTH the read-only and the mutating tool into per-request confirmation.",
+        "The prompt carries a real data dependency (read back what step 1 wrote) plus an explicit 'one at a time' instruction, so kiro serialises the two calls into two separate pickers instead of batching them."
+      ],
+      "script": [
+        {
+          "type": "slash",
+          "text": "/tools reset"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "slash",
+          "text": "/tools untrust read write"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "send",
+          "text": "Do exactly these two steps, one at a time. Wait for each step to finish completely before starting the next one; do NOT issue them as parallel tool calls, and do not use any tool other than the two named here.\nStep 1: use the write tool to create a file named gate.txt in the current directory whose entire contents are the single line GATE-OK\nStep 2: use the read tool to read gate.txt back.\nWhen both steps are done, reply with exactly one line containing only the text GATE-OK"
+        },
+        {
+          "type": "sleep",
+          "seconds": 40
+        },
+        {
+          "type": "keys",
+          "keys": "Enter"
+        },
+        {
+          "type": "sleep",
+          "seconds": 40
+        },
+        {
+          "type": "keys",
+          "keys": "Enter"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the kiro session entering ready, then ready→working on the prompt",
+        "events.jsonl shows a FIRST working→waiting while the `write` picker is pending (reason 'stalled edit tool → likely permission prompt → waiting'); this half is expected to pass",
+        "events.jsonl shows a SECOND working→waiting while the `read` picker is pending (KNOWN FAILING: no rung of the classifier ladder can reach waiting for a non-edit tool name in kiro — no permission hook, and isPermissionGatedEditTool does not match `read`)",
+        "the pane capture contains the literal picker text 'Yes, single permission' TWICE — the cell's own proof both gates actually opened",
+        "after both pickers are answered, events.jsonl shows working then working→ready at turn end",
+        "final session state is ready and stays ready across the trailing idle",
+        "transcript.jsonl contains BOTH a `write` toolUse and a `read` toolUse, each with its toolResult after approval"
+      ],
+      "settings": {
+        "trust_all_tools": false
+      },
+      "timeout_seconds": 300
+    }
+  }
+}

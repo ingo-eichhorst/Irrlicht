@@ -162,11 +162,11 @@
       <h2>State Transitions</h2>
       <p>Once a session is active, it moves between four states: <span class="badge badge-working">working</span>, <span class="badge badge-waiting">waiting</span>, <span class="badge badge-ready">ready</span>, and <span class="badge badge-error">error</span>. Each maps to one light color in the menu bar.</p>
 
-      <p><span class="badge badge-error">error</span> means the session's own machinery failed &mdash; the provider refused or failed the call, credentials were rejected, the agent process died mid-turn, or Irrlicht could not read the session. It is <em>not</em> a tool failure: a <code>grep</code> that matched nothing and a build that broke are the agent working normally.</p>
+      <p><span class="badge badge-error">error</span> means the session's own machinery failed &mdash; the provider refused or failed the call, credentials were rejected, or Irrlicht could not read the session. It is <em>not</em> a tool failure: a <code>grep</code> that matched nothing and a build that broke are the agent working normally.</p>
 
       <p>Two things clear it, on different conditions. Your next message clears it <em>immediately</em>, before the new turn's outcome is known &mdash; someone who has typed again has moved on, and holding the old failure against the new turn would pin the session red for the rest of its life. A completed turn also clears it, but only when the failure was a <em>retrying</em> one; a terminal failure is not retired by a turn boundary. Neither edge is a timeout and neither has a minimum hold.</p>
 
-      <p>A process that died mid-turn is always recorded as terminal &mdash; a process that exited will not try again &mdash; so neither of those applies to it. Its row is kept in <span class="badge badge-error">error</span> for 12 hours and then reaped, so a crash at 22:00 is still visible at 08:00.</p>
+      <p>Every producer of <span class="badge badge-error">error</span> reads a transcript. A crashed agent is <em>not</em> one of them, and that is a deliberate call: Irrlicht is not the agent&rsquo;s parent process, so it gets no exit status on any platform &mdash; a segfault, an OOM kill, a <code>kill -9</code> and a clean exit are the same observation. A version that guessed a crash from what the session looked like when the PID went away painted ordinary endings red (an ESC interrupt, a denied tool prompt), so the guess was removed. A process exit deletes the session row, whatever state the row was in &mdash; which means a genuine mid-turn crash disappears silently too. That is the accepted cost of never showing a false one.</p>
 
       <table>
         <thead>
@@ -223,11 +223,6 @@
             <td><span class="badge badge-error">error</span></td>
           </tr>
           <tr>
-            <td>Agent process died mid-turn (the session row is kept, not deleted)</td>
-            <td><span class="badge badge-working">working</span></td>
-            <td><span class="badge badge-error">error</span></td>
-          </tr>
-          <tr>
             <td>User sends the next message after a failure (clears it outright)</td>
             <td><span class="badge badge-error">error</span></td>
             <td><span class="badge badge-working">working</span></td>
@@ -242,9 +237,8 @@
 
       <p>Note that the last two rows clear the failure on different conditions:
       your next message clears it outright, while a completed turn clears it only
-      when the failure was a retrying one. A process death is terminal, so it
-      leaves <span class="badge badge-error">error</span> by neither &mdash; it
-      ages out of the list instead.</p>
+      when the failure was a retrying one. A terminal failure on a session nobody
+      returns to is cleared by neither &mdash; it ages out of the list instead.</p>
 
       <div class="diagram">                  +-----------+
   user sends  |           |  end_turn / ESC
@@ -353,6 +347,7 @@
     Working int  // subagents currently executing
     Waiting int  // subagents blocked on user input
     Ready   int  // subagents that have finished their turn
+    Error   int  // subagents whose session machinery failed
 }</code></pre>
 
       <p>The parent session's state display incorporates subagent status. If the parent is <span class="badge badge-ready">ready</span> but a child subagent is <span class="badge badge-working">working</span>, the parent's effective state adjusts accordingly &mdash; the light reflects the most "active" state across the tree.</p>
@@ -375,6 +370,7 @@
         <li><code>mistral-vibe</code> &mdash; Mistral Vibe (JSONL transcripts + <code>meta.json</code> sidecar under <code>~/.vibe/logs/session</code>)</li>
         <li><code>copilot</code> &mdash; GitHub Copilot CLI (JSONL <code>events.jsonl</code> under <code>~/.copilot/session-state</code>, relocatable via <code>$COPILOT_HOME</code>)</li>
         <li><code>hermes</code> &mdash; Hermes Agent (no transcript files; one shared SQLite store at <code>~/.hermes/state.db</code>, relocatable via <code>$HERMES_HOME</code>)</li>
+        <li><code>junie</code> &mdash; JetBrains Junie (JSONL <code>events.jsonl</code> under <code>~/.junie/sessions</code>, plus process sidecars under <code>~/.junie/processes</code>)</li>
       </ul>
       <p>The adapter determines which transcript format is parsed and which process signatures are scanned. Frontends should look up adapter display name and icon via <code>GET /api/v1/agents</code> rather than hardcoding switches.</p>
 
@@ -421,7 +417,7 @@
 
       <!-- ─── Lifecycle Event Kinds ─── -->
       <h2>Lifecycle Event Kinds</h2>
-      <p>Underneath the state machine, the daemon records a lower-level stream of typed events for session recording and replay &mdash; not just transcript-derived state transitions but also process lifecycle, filesystem, debounce, and parent-child signals. Each event carries a <code>Kind</code> discriminant (<code>core/domain/lifecycle/event.go</code>); this table enumerates all 18 constants, grouped as the source file itself groups them.</p>
+      <p>Underneath the state machine, the daemon records a lower-level stream of typed events for session recording and replay &mdash; not just transcript-derived state transitions but also process lifecycle, filesystem, debounce, and parent-child signals. Each event carries a <code>Kind</code> discriminant (<code>core/domain/lifecycle/event.go</code>); this table enumerates all 22 constants, grouped as the source file itself groups them.</p>
 
       <table>
         <thead>
@@ -460,12 +456,7 @@
           <tr>
             <td><code>process_exited</code></td>
             <td>Process lifecycle</td>
-            <td>A tracked agent process exits (kqueue <code>NOTE_EXIT</code>) <em>and its session row is deleted</em>. This kind means teardown: every consumer removes the session on it. An exit that caught a turn still open is recorded as <code>process_died_midturn</code> instead.</td>
-          </tr>
-          <tr>
-            <td><code>process_died_midturn</code></td>
-            <td>Process lifecycle</td>
-            <td>The other outcome of an exit: the PID went away while a turn was still open, so the session is converted to <code>error</code> and <em>kept</em> rather than deleted. Carries the PID and the exit reason. Recorded once per session, on the conversion edge.</td>
+            <td>A tracked agent process exits (kqueue <code>NOTE_EXIT</code>) <em>and its session row is deleted</em>. This kind means teardown: every consumer removes the session on it, whatever state the row was in &mdash; including a turn that was still open.</td>
           </tr>
           <tr>
             <td><code>file_event</code></td>
@@ -526,6 +517,26 @@
             <td><code>cache_bloat_detected</code></td>
             <td>Cache-creation regression</td>
             <td>Emitted once per (project, regressing version) pair within a daemon process lifetime, the first time a working session's median cache-creation per turn exceeds the project's p25 baseline &times; threshold (issue #374); consumed by the <code>ir:agent-releases</code> workflow.</td>
+          </tr>
+          <tr>
+            <td><code>hold_expired</code></td>
+            <td>Held signals</td>
+            <td>An out-of-band signal hold exceeds its wall-clock ceiling. The event records the signal kind, tier, elapsed milliseconds, and ceiling milliseconds.</td>
+          </tr>
+          <tr>
+            <td><code>hook_channel_silent</code></td>
+            <td>Hook health</td>
+            <td>An adapter has granted and successfully installed hooks but completes the configured number of turns without one hook receipt. The adapter falls back to transcript signals.</td>
+          </tr>
+          <tr>
+            <td><code>hook_channel_recovered</code></td>
+            <td>Hook health</td>
+            <td>A hook receipt arrives after the adapter was declared silent. The event proves that the hook channel recovered.</td>
+          </tr>
+          <tr>
+            <td><code>hook_hold_released</code></td>
+            <td>Hook health</td>
+            <td>A hook-tier hold is released because the hook channel was declared silent. This event identifies a channel failure. The <code>hold_expired</code> event identifies one hold that exceeded its time limit.</td>
           </tr>
         </tbody>
       </table>

@@ -28,10 +28,8 @@
 # The `assert_mutation_is_red` mechanics live in tools/lib/mutation-assert.sh,
 # shared with tools/lib/simplify-angle-guard-mutations_test.sh (#1823 review:
 # the two were originally byte-identical copies in this diff). Convention for
-# the rest follows tools/lib/error-retention-mutations_test.sh: plain bash, a
-# `fails` counter, "ALL PASS" / "N FAILED" at the end — that file keeps its
-# own DIFFERENT 6-arg `go test -run` variant rather than being folded in here,
-# since its shape genuinely differs, not just its wording.
+# the rest follows tools/lib/mutate_test.sh: plain bash, a `fails` counter,
+# "ALL PASS" / "N FAILED" at the end.
 
 set -uo pipefail
 
@@ -91,8 +89,8 @@ fails=0
 assert_mutation_is_red \
   "lock test catches SKILL.md dropping a group from its chunk list" \
   ".claude/skills/ir:exec/SKILL.md" \
-  $'    tools/preflight.sh --only posix\n    tools/preflight.sh --only bash\n' \
-  $'    tools/preflight.sh --only posix\n' \
+  $'tools/preflight.sh --only posix\ntools/preflight.sh --only bash\n' \
+  $'tools/preflight.sh --only posix\n' \
   'only in VALID_GROUPS: bash'
 
 # ── 2. preflight.sh's VALID_GROUPS GAINS a group the skill never mentions ───

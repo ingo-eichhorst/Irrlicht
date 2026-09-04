@@ -1,11 +1,10 @@
 import Foundation
 
-// MARK: - REST hydration, consent, and backchannel actions
+// MARK: - REST hydration and consent
 //
 // Split out of SessionManager.swift (#807): everything that talks to the
 // local daemon over plain HTTP rather than the WebSocket — the periodic full
-// snapshot, agent branding, permission consent, and the backchannel input/
-// interrupt actions.
+// snapshot, agent branding, and permission consent.
 
 extension SessionManager {
     /// Agents the auto wizard should show: detected, with at least one
@@ -71,37 +70,6 @@ extension SessionManager {
             return true
         } catch {
             print("🔐 Permissions answer failed: \(error.localizedDescription)")
-            return false
-        }
-    }
-
-    /// Sends text into a controllable session's terminal (backchannel, #724).
-    /// Returns true on 200. Gated daemon-side by toggle + consent + backend.
-    func sendInput(sessionId: String, text: String) async -> Bool {
-        guard let url = URL(string: "\(DaemonEndpoint.httpBase)/api/v1/sessions/\(sessionId)/input") else { return false }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        do {
-            request.httpBody = try JSONEncoder().encode(["data": text])
-            let (_, response) = try await localURLSession.data(for: request)
-            return (response as? HTTPURLResponse)?.statusCode == 200
-        } catch {
-            print("⌨️ sendInput failed: \(error.localizedDescription)")
-            return false
-        }
-    }
-
-    /// Delivers an interrupt (Ctrl-C) to a controllable session (#724).
-    func interruptSession(sessionId: String) async -> Bool {
-        guard let url = URL(string: "\(DaemonEndpoint.httpBase)/api/v1/sessions/\(sessionId)/interrupt") else { return false }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        do {
-            let (_, response) = try await localURLSession.data(for: request)
-            return (response as? HTTPURLResponse)?.statusCode == 200
-        } catch {
-            print("⌨️ interrupt failed: \(error.localizedDescription)")
             return false
         }
     }

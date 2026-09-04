@@ -335,6 +335,69 @@ func TestParser_IsMeta_Skip(t *testing.T) {
 	if ev == nil || !ev.Skip {
 		t.Error("expected isMeta user event to be skipped")
 	}
+	// A bare isMeta with no origin at all is the "19 <none> true" shape from
+	// #1858's census (Stop-hook feedback, local-command caveats, tool
+	// results) — it must NOT be read as an agent resume, or a standing
+	// terminal error would clear on the wrong event.
+	if ev.IsAgentResume {
+		t.Error("a bare isMeta event with no origin must not set IsAgentResume")
+	}
+}
+
+// TestParser_IsMeta_ResumeOrigin_SetsAgentResume is the #1858 regression,
+// covering both origin.kind shapes Claude Code uses to resume a stalled or
+// failed session — still Skip=true (neither must enter the message-content
+// pipeline as if the user had typed it), but now flagged IsAgentResume so
+// clearSessionErrorOnRecovery can see either as the turn-start that retires a
+// standing terminal error:
+//
+//   - "auto-continuation" — the resume prompt Claude Code writes itself once
+//     a usage-limit resets (the top-level session's own recovery).
+//   - "human" — the subagent half of the regression: Claude Code resumes a
+//     stalled subagent through the same "user sent a new message while you
+//     were working" wrapper it uses for a genuine mid-turn interjection,
+//     rather than a dedicated auto-continuation kind. See the tailer's
+//     ClearedByAgentResume for why this is gated on a TERMINAL error only.
+func TestParser_IsMeta_ResumeOrigin_SetsAgentResume(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		kind    string
+		content string
+	}{
+		{
+			name:    "auto-continuation (top-level session resume)",
+			kind:    "auto-continuation",
+			content: "Your claude.ai usage limit has reset. Continue the task you were working on when the limit was reached; do not repeat work that is already complete.",
+		},
+		{
+			name:    "human (subagent resume)",
+			kind:    "human",
+			content: "The user sent a new message while you were working:\ncontinue",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &Parser{}
+			ev := p.ParseLine(map[string]interface{}{
+				"type":      "user",
+				"isMeta":    true,
+				"origin":    map[string]interface{}{"kind": tc.kind},
+				"timestamp": "2026-08-28T18:01:53.464Z",
+				"message": map[string]interface{}{
+					"role":    "user",
+					"content": tc.content,
+				},
+			})
+			if ev == nil {
+				t.Fatal("expected non-nil event")
+			}
+			if !ev.Skip {
+				t.Error("the resume wrapper must stay Skip=true — it is not a user-typed prompt")
+			}
+			if !ev.IsAgentResume {
+				t.Errorf("expected IsAgentResume=true for an isMeta origin.kind=%s event", tc.kind)
+			}
+		})
+	}
 }
 
 func TestParser_CompactSummary_Skip(t *testing.T) {

@@ -12,6 +12,61 @@ beyond), see the [Roadmap](https://irrlicht.io/docs/roadmap.html).
 
 ## [Unreleased]
 
+### Removed
+
+- **The backchannel is gone — Irrlicht observes your agents and no longer types into them.** The write-back path that let the daemon send input, interrupts and event→action rules into a discovered session's terminal (tmux, kitty, herdr) is removed in full, along with its master toggle, the per-agent `control` permission, the relay's remote-control frames, the macOS Backchannel Rules editor, and the `POST /api/v1/sessions/{id}/input` and `/interrupt` endpoints. Two onboarding scenarios (`backchannel-control`, `backchannel-observe`) leave the fixture matrix with them: 13 cells are retired outright and mistral-vibe's two recorded cells move to `replaydata/agents/mistral-vibe/regressions/1846-retired-terminal-*`, where their three replay goldens keep exercising the transcript tailer with no live cell behind them. **What this gives up:** the folder-trust prompt at launch — Claude Code's "Do you trust the files in this folder?" — was visible only by reading the rendered terminal back, and it blocks before any hook event exists, so a session held at it now reads `ready` instead of `waiting`. The per-tool half of that signal is unaffected: `Notification/permission_prompt` became authoritative in #1861, and the lost path was already default-off and additionally gated on `control` consent plus a tmux or kitty backend. **What is unchanged:** click-to-focus and the whole Launcher stack, herdr host resolution, `irrlicht-focus`, relay telemetry and the relay token model, and every read-only observation Irrlicht makes. (#1846, phases #1874/#1875/#1876)
+
+## [0.6.2] — 2026-09-03
+
+### Compact menu bar controls keep crowded screens usable, with early Junie support and stricter error recovery
+
+### Highlights
+
+#### Compact control for every menu bar style
+![The macOS Menu Bar Icon settings with Lights, Usage, and Combined styles and the Compact toggle enabled](assets/releases/v0.6.2/compact-menu-bar.png)
+
+The new Compact toggle works with Lights, Usage, and Combined. It collapses project dots and narrows Usage quota bars, so the icon stops growing with the project count while the selected style keeps the same content.
+
+Irrlicht also gives the status item a stable macOS identity. A Cmd-drag position now survives app restarts, and existing positions migrate without a jump.
+
+**Why it matters:** Irrlicht stays visible and clickable on a crowded or notched menu bar.
+
+(#1845, #1849, #1852, #1853)
+
+### Also in this release
+
+**Added**
+- **Initial Junie adapter support** (#1851) — Irrlicht can discover Junie processes and parse Junie session data; the published maturity stays `planned` until replay recordings establish the claimed behavior.
+
+**Fixed**
+- **Claude Code usage-limit errors clear when the agent resumes** (#1858, #1859) — an automatic resume now removes the terminal error at the resume event instead of leaving the session red through later completed turns.
+- **Terminal errors stay red through an idle prompt** (#1871, #1872) — `idle_prompt` is not treated as recovery from an HTTP 429 or another terminal provider failure.
+- **Exited processes no longer leave false crash rows** (#1860, #1865) — a process exit deletes the row because Irrlicht cannot distinguish a crash from a deliberate quit without an exit status.
+- **Usage style stays quota-only when a session errors** (#1862, #1863, #1866) — an error no longer restores every project dot and widens the icon; the no-quota fallback still shows dots so active work does not look idle.
+- **The Settings panel keeps its margin when Notifications expands** (#1854, #1856) — notification labels can compress when a legacy scroll bar reduces the available width.
+
+**Changed / Docs / Distribution**
+- **`ir:triage` reports agent time and human gates separately** (#1850).
+- **`ir:test-mac` now runs through one executable script** (#1855, #1857) — its ports and socket paths stay in one shell scope, and mutation checks cover the release-signing seams.
+- **Agent guidance now requires maintainer approval before a new issue is filed** (#1868).
+- **Long inline code references now wrap on narrow documentation pages**, so the changelog stays inside a 360-pixel mobile viewport.
+
+### Technical appendix
+
+- **Compact menu bar foundation.** `MenuBarAppearance` controls the aggregate-dot and narrow-quota render paths, while `MenuBarStatusItemIdentity` migrates AppKit's generated position key to a stable `IrrlichtStatusItem` key. Measured widths come from `MenuBarImageBuilder.iconImage`, the same composition the app ships. (#1845, #1849)
+- **Compact becomes a modifier.** The first implementation used a fourth menu bar style. It is now an orthogonal toggle across the three existing styles, so density never changes which content the selected style shows. The compact-off render remains byte-identical for existing users. (#1852, #1853)
+- **Triage estimates.** `ir:triage` adds an `Estimate` field with an agent-active range plus separately named human gates. The readiness verdict remains independent from elapsed calendar time. (#1850)
+- **Terminal error recovery.** Claude Code `isMeta` resume events now set `ParsedEvent.IsAgentResume`; the tailer clears only a standing terminal error and marks that skipped metadata event substantive so classification changes at the resume timestamp. Two contiguous live recordings move from permanent red to recovery at the recorded prompts. (#1858, #1859)
+- **One macOS test driver.** `.claude/skills/ir:test-mac/test-mac.sh` replaces nine separate shell blocks. Its focused mutation cases fail on stale anchors, vacuous stubs, dropped variables, unsafe signature matching, and incomplete restore coverage. (#1855, #1857)
+- **Settings width.** `NotificationEventRow` opts into a compressible `LeadingToggle` label. The fix keeps the 16-point panel inset when a legacy AppKit scroller removes 15–17 points from the content box, while all other toggles keep their fixed labels. (#1854, #1856)
+- **Junie adapter.** The new inbound adapter adds process discovery, sidecar CWD resolution, JSONL parsing, state and metric extraction, icons, Git metadata wiring, site entries, and contract coverage. Its Linux PID fixture polls through the fork-to-`execve` window instead of assuming `cmd.Start()` means `/proc/<pid>/cmdline` is ready. (#1851)
+- **Usage style error behavior.** `shouldShowDotsInUsageStyle` now answers only whether a quota image exists. A session error does not override the chosen content style and restore the whole dot bank. (#1862, #1863)
+- **Usage style locks.** Tests cross both compact densities and separately pin the no-renderable-quota fallback. These are behavior locks, and distinct mutations prove each check fails when its protected branch changes. (#1866)
+- **Issue creation policy.** `AGENTS.md` states that filing an issue is an outward action. Findings stay in the current final answer, pull request, or issue comment unless the maintainer asks for a new ticket. (#1868)
+- **Classifier priority.** The `idle_prompt` rule excludes a standing terminal `SessionError`, so the higher-priority `session_error` rule remains active until a real recovery event arrives. The rule uses the cross-adapter terminal phase rather than a Claude-specific error class. (#1871, #1872)
+- **Process exits.** The process-death inference, its 12-hour retention path, the replay event, and the reaper exemptions are removed. Every process exit records `process_exited` and deletes the row. A real crash can now disappear silently, but an ESC interrupt or denied tool prompt can no longer leave a false red row. Transcript-derived failures for a still-running process remain red and survive daemon restart. (#1860, #1865; withdraws #1800, #1815, #1817)
+- **Mobile documentation width.** The shared documentation stylesheet permits long inline code identifiers and other unbroken tokens to wrap, while preformatted blocks keep their own horizontal scrolling. The measured changelog width at a 360-pixel viewport fell from 819 pixels to 360 pixels.
+
 ## [0.6.1] — 2026-08-26
 
 ### A session that fails now reads red — `error` is the fourth session state, and it reaches the menu bar, the dashboard and the wire
@@ -1766,7 +1821,8 @@ Four distinct bugs caused long-running Claude Code sessions to bounce between
 - First bundled macOS installer `Irrlicht-0.2.0-mac-installer.pkg` containing
   the daemon, menu bar app, and auto-start LaunchAgent.
 
-[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.6.2...HEAD
+[0.6.2]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.6.2
 [0.6.1]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.6.1
 [0.6.0]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.6.0
 [0.5.10]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.5.10

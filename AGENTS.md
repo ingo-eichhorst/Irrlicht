@@ -2,9 +2,8 @@
 
 ## Short Cuts
 
-- Issue execution is handled entirely by the `ir:exec` skill:
-  `/ir:exec [mode] <N>` (mode defaults to `auto`) — see its "Modes" section
-  (`.claude/skills/ir:exec/SKILL.md`) for what each mode does.
+- Triage and plan an issue with `/ir:triage #<N>`. Execute the approved plan
+  with `/ir:exec <N>`. The execution skill produces a ready PR and never merges.
 - NEVER RUN: the Workflow tool (multi-agent orchestration) if not explicitly requested (too expensive)
 
 ## Process Rules
@@ -63,8 +62,8 @@ Use `./.build` for build artifacts.
 history in [docs/testing-philosophy.md](docs/testing-philosophy.md):
 - A defect test earns its place only by having been seen to fail before the
   fix existed; a green that was never red is a claim, not evidence.
-  `ir:exec` Phase 4 step 11a enforces this mechanically; it binds outside
-  `ir:exec` too. Locks (tests pinning behavior that must *not* change) pass
+  `ir:exec`'s "Prove and verify" section enforces this mechanically; it binds
+  outside `ir:exec` too. Locks (tests pinning behavior that must *not* change) pass
   by construction — say which ones those are rather than presenting their
   green as red-first proof.
 - Anything a change *adds* (a guard, a static architecture rule, a linter or
@@ -80,8 +79,8 @@ history in [docs/testing-philosophy.md](docs/testing-philosophy.md):
   of a finding and inability to look must never produce the same output —
   wherever a check greps, matches, mutates, shells out, or waits on a
   readiness signal, assert that the operation actually happened, not merely
-  that it reported nothing (`ir:exec` Phase 4 step 11 has the e2e form of
-  this rule).
+  that it reported nothing (`ir:exec`'s "Prove and verify" section has the
+  e2e form of this rule).
 - A fixture that waits by sleeping hasn't observed what it waits for — poll
   the condition to a deadline and fail with the elapsed time instead. And a
   fixture must observe the SUBJECT, never a side effect the subject produces
@@ -132,7 +131,7 @@ Before marking a ticket done, run the full suite — every layer must pass:
 - macOS app (only when touching `platforms/macos/`): `cd platforms/macos &&
   swift build && swift test --skip LauncherTestHarness --skip
   LauncherHarnessTests`, also run by `tools/preflight.sh --only swift` and
-  CI's `macos-swift.yml`. Seven image-snapshot suites are gated on the
+  CI's `macos-swift.yml`. Six image-snapshot suites are gated on the
   reference host only, permanently, and never in CI. Full write-up (why,
   and the pinned-scale/locale/timezone/`@AppStorage`/now environment seams
   that make the rest host-independent):
@@ -199,8 +198,7 @@ invocation — every gate still runs; chunking only changes how many
 invocations it takes. **Never background the unscoped run to make it fit**:
 a subagent is not woken by its own background job, so the run stalls
 silently with the work committed but never pushed (`.claude/skills/ir:exec/SKILL.md`
-Phase 4 step 11 carries the same recipe and the incident it was written
-against). The same shape recurs for any subagent driving an interactive
+carries the same recipe). The same shape recurs for any subagent driving an interactive
 process, not just preflight — one Bash call per step, every wait a bounded
 polling loop, `timeout N` on anything that can hang.
 
@@ -236,8 +234,14 @@ Linux-only bugs unless you pass `--linux`.
 
 ## Task Management
 - Use github issues to track tickets
+- **Never open an issue nobody asked for.** Filing into the tracker is an
+  outward-facing action, and the maintainer decides what gets tracked. A
+  finding worth recording goes in the final answer, the PR body, or a comment
+  on the issue already in play — name it there and ask before filing. This
+  binds transitively: never put "open a follow-up issue" in a subagent brief
+  unless that issue was requested, or it lands in the tracker without the
+  maintainer ever seeing the instruction that created it.
 - Break down larger tasks into tasks using a task tool (e.g. todowrite in opencode or TaskCreate in claude code)
 - An agent picking up an issue should self-assign before starting work
   (`gh issue edit <N> --add-assignee @me`), so others can see it's actively
-  being worked — `ir:exec` does this automatically at the start of its
-  implement phase
+  being worked — `ir:exec` does this after it validates the triage plan

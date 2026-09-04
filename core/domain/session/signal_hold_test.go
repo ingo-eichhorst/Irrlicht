@@ -270,6 +270,17 @@ func TestSignalHolds_StaleIsCheckedOnTheFirstPass(t *testing.T) {
 //     sets. Reversed, the transcript fallback fires alongside the hook it is
 //     supposed to defer to.
 //
+//   - SignalTurnDone before SignalPermissionPrompt (#1861): the permission
+//     row's staleness reads the HookTurnDone that turn_done's apply sets —
+//     the same dependency the three rows above and below it have on that row.
+//     The permission row led the table until #1861 and was moved down for
+//     exactly this reason. Reversed, a Stop hook arriving alongside a held
+//     permission prompt is evaluated against metrics that do not yet know the
+//     turn ended, so the turn-end clearing edge never fires and a dialog with
+//     no tool behind it (claudecode's Notification/permission_prompt for
+//     managed_settings_security or auto_mode_setup_review, which produce no
+//     PostToolUse) rides to the 12-hour ceiling instead.
+//
 //   - SignalTurnDone before SignalSessionError (#1798): the error row's
 //     staleness reads HookTurnDone, which turn_done's apply sets on the same
 //     pass — the same dependency idle_prompt has, for the same reason.
@@ -277,28 +288,20 @@ func TestSignalHolds_StaleIsCheckedOnTheFirstPass(t *testing.T) {
 //     against metrics that do not yet know the turn ended, so a failure
 //     survives a turn that actually completed and the session stays red.
 //
-//   - SignalTurnDone before SignalProcessDeath (#1800): the same dependency
-//     again — the process-death row's staleness also reads HookTurnDone.
-//
-// SignalSessionError and SignalProcessDeath sit before SignalOpenToolStalled
-// only because that row must stay last; nothing reads what either error row
-// writes, so their positions are otherwise free — including relative to each
-// other. Both apply SessionError into an EMPTY slot only, so neither can
-// overwrite the other and their relative order changes no outcome. The
-// process-death row additionally writes ProcessDeath unconditionally, which no
-// other row reads or writes.
+// SignalSessionError sits before SignalOpenToolStalled only because that row
+// must stay last; nothing reads what the error row writes, so its position is
+// otherwise free.
 //
 // Pinned as the exact full sequence rather than as two pairwise checks so that
 // adding a row is a deliberate act — the test names the position, and whoever
 // changes it has to say why in the diff.
 func TestSignalPolicies_OrderIsPinned(t *testing.T) {
 	want := []SignalKind{
-		SignalPermissionPrompt,
 		SignalTurnDone,
+		SignalPermissionPrompt,
 		SignalIdlePrompt,
 		SignalCompactInProgress,
 		SignalSessionError,
-		SignalProcessDeath,
 		SignalOpenToolStalled,
 	}
 

@@ -78,7 +78,7 @@ func maturityRepo(t *testing.T) string {
 	}
 	// A structurally dead pair with a directory, to exercise the agreement
 	// check in its "cell exists" form.
-	cell(t, root, "codex", "backchannel-control", "no", "n/a", "ready")
+	cell(t, root, "codex", "foreground-subagent", "no", "n/a", "ready")
 
 	writeCapModel(t, root, map[string]any{
 		"schema_version": 1,
@@ -87,10 +87,10 @@ func maturityRepo(t *testing.T) string {
 			"codex": map[string]any{
 				"maturity": "alpha",
 				"capabilities": map[string]string{
-					"backchannel_control": matrix.CapabilityAbsent,
-					// No directory for the observe scenario: declaring it is what
+					"subagent_foreground": matrix.CapabilityAbsent,
+					// No directory for the background scenario: declaring it is what
 					// makes the matrix synthesize the cell (#1369).
-					"backchannel_observe": matrix.CapabilityAbsent,
+					"subagent_background": matrix.CapabilityAbsent,
 				},
 			},
 		},
@@ -183,10 +183,10 @@ func TestMaturityGateRejectsAClaimBeyondTheEvidence(t *testing.T) {
 			"codex": map[string]any{
 				"maturity": "beta",
 				"capabilities": map[string]string{
-					"backchannel_control": matrix.CapabilityAbsent,
-					// No directory for the observe scenario: declaring it is what
+					"subagent_foreground": matrix.CapabilityAbsent,
+					// No directory for the background scenario: declaring it is what
 					// makes the matrix synthesize the cell (#1369).
-					"backchannel_observe": matrix.CapabilityAbsent,
+					"subagent_background": matrix.CapabilityAbsent,
 				},
 			},
 		},
@@ -207,10 +207,10 @@ func TestMaturityGateAllowsClaimingLessThanEarned(t *testing.T) {
 			"codex": map[string]any{
 				"maturity": "planned",
 				"capabilities": map[string]string{
-					"backchannel_control": matrix.CapabilityAbsent,
-					// No directory for the observe scenario: declaring it is what
+					"subagent_foreground": matrix.CapabilityAbsent,
+					// No directory for the background scenario: declaring it is what
 					// makes the matrix synthesize the cell (#1369).
-					"backchannel_observe": matrix.CapabilityAbsent,
+					"subagent_background": matrix.CapabilityAbsent,
 				},
 			},
 		},
@@ -241,7 +241,7 @@ func TestAlphaDoesNotRequireMetrics(t *testing.T) {
 // --- gate 2: the capability derivation --------------------------------------
 
 func TestCapModelGateCatchesADeclarationContradictingItsCell(t *testing.T) {
-	// codex's backchannel-control cell is n/a (supports=no). Declaring the
+	// codex's foreground-subagent cell is n/a (supports=no). Declaring the
 	// trait `untraced` derives `unobservable` instead — the forward direction.
 	root := maturityRepo(t)
 	writeCapModel(t, root, map[string]any{
@@ -250,12 +250,12 @@ func TestCapModelGateCatchesADeclarationContradictingItsCell(t *testing.T) {
 			"claudecode": map[string]any{"maturity": "stable"},
 			"codex": map[string]any{
 				"maturity":     "alpha",
-				"capabilities": map[string]string{"backchannel_control": matrix.CapabilityUntraced},
+				"capabilities": map[string]string{"subagent_foreground": matrix.CapabilityUntraced},
 			},
 		},
 	})
 	assertFindingContains(t, validateFindings(t, root),
-		"adapters.codex.capabilities.backchannel_control", `derives "unobservable"`, `the cell is "n/a"`)
+		"adapters.codex.capabilities.subagent_foreground", `derives "unobservable"`, `the cell is "n/a"`)
 }
 
 func TestCapModelGateCatchesADeadCellTheModelDoesNotExplain(t *testing.T) {
@@ -270,7 +270,7 @@ func TestCapModelGateCatchesADeadCellTheModelDoesNotExplain(t *testing.T) {
 		},
 	})
 	assertFindingContains(t, validateFindings(t, root),
-		`scenario "backchannel-control" is "n/a" for adapter codex`, `is "traced"`)
+		`scenario "foreground-subagent" is "n/a" for adapter codex`, `is "traced"`)
 }
 
 func TestCapModelGateExemptsADocumentedRecordBlockedDeferral(t *testing.T) {
@@ -312,8 +312,8 @@ func TestCapModelGateRejectsOffVocabularyDeclarations(t *testing.T) {
 			"codex": map[string]any{
 				"maturity": "gamma",
 				"capabilities": map[string]string{
-					"backchannel_control": matrix.CapabilityAbsent,
-					"backchannel_observe": matrix.CapabilityAbsent,
+					"subagent_foreground": matrix.CapabilityAbsent,
+					"subagent_background": matrix.CapabilityAbsent,
 					"telepathy":           matrix.CapabilityAbsent,
 					"interrupt":           "sortof",
 				},
@@ -349,16 +349,16 @@ func TestCapModelGateFailsWhenTheModelIsMissing(t *testing.T) {
 // --- the synthesis mechanism ------------------------------------------------
 
 func TestDeclaredDeadPairNeedsNoCellDirectory(t *testing.T) {
-	// This is the onboarding saving: codex declares `backchannel: absent` once
-	// and BOTH backchannel scenarios become cells, though only one has a
+	// This is the onboarding saving: codex declares both subagent traits absent
+	// and BOTH subagent scenarios become cells, though only one has a
 	// directory on disk. Without synthesis the second is a hole in the matrix.
 	m, err := matrix.LoadRepo(maturityRepo(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, ok := m.Cell("codex", "backchannel-observe")
+	c, ok := m.Cell("codex", "background-subagent")
 	if !ok {
-		t.Fatal("backchannel-observe was not synthesized for codex")
+		t.Fatal("background-subagent was not synthesized for codex")
 	}
 	if c.DisplayState != matrix.StateNotApplicable || !c.Derived {
 		t.Fatalf("synthesized cell = {%q, derived=%v}, want {%q, derived=true}",
@@ -369,7 +369,7 @@ func TestDeclaredDeadPairNeedsNoCellDirectory(t *testing.T) {
 	}
 	// A cell that exists on disk is NOT marked derived, so a reader can tell
 	// a modelled cell from a written one.
-	if w, _ := m.Cell("codex", "backchannel-control"); w.Derived {
+	if w, _ := m.Cell("codex", "foreground-subagent"); w.Derived {
 		t.Error("an on-disk cell must not be reported as derived")
 	}
 }

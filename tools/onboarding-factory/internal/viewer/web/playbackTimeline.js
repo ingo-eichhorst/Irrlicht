@@ -63,12 +63,6 @@ export function eventStyle(ev) {
         : {color: "#64748b", size: 14, opacity: 1, label: "Session ended — transcript closed"};
     case "process_exited":
       return {color: "#64748b", size: 14, opacity: 1, label: "Process exited"};
-    case "process_died_midturn":
-      // Red and full-size, like the other fault kinds: this is the ONE event
-      // that says the agent stopped without finishing. Falling through to the
-      // default would render the key event of a crash recording as a small
-      // grey bookkeeping dot labelled with its raw kind string.
-      return {color: "#ef4444", size: 14, opacity: 1, label: "Process died mid-turn — session kept as an error"};
     case "process_spawned":
       return {color: "#22c55e", size: 14, opacity: 1, label: "Process spawned"};
     case "pid_discovered":

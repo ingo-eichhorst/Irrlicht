@@ -91,6 +91,68 @@
       <h1>Changelog</h1>
       <p class="page-subtitle">All notable changes to Irrlicht, following Keep a Changelog conventions.</p>
 
+      <h2 id="v0-6-2">v0.6.2 <small>(2026-09-03)</small></h2>
+
+      <h3>Compact menu bar controls keep crowded screens usable, with early Junie support and stricter error recovery</h3>
+
+      <h3>Highlights</h3>
+
+      <h4>Compact control for every menu bar style</h4>
+
+      <figure style="margin: 0.5rem 0 1rem;">
+        <picture>
+          <source srcset="../assets/releases/v0.6.2/compact-menu-bar.webp" type="image/webp">
+          <img src="../assets/releases/v0.6.2/compact-menu-bar.png" alt="The macOS Menu Bar Icon settings with Lights, Usage, and Combined styles and the Compact toggle enabled" style="display:block; width:100%; height:auto; border-radius:6px; border:1px solid var(--border);">
+        </picture>
+      </figure>
+
+      <p>The new Compact toggle works with Lights, Usage, and Combined. It collapses project dots and narrows Usage quota bars, so the icon stops growing with the project count while the selected style keeps the same content.</p>
+
+      <p>Irrlicht also gives the status item a stable macOS identity. A Cmd-drag position now survives app restarts, and existing positions migrate without a jump.</p>
+
+      <p><strong>Why it matters:</strong> Irrlicht stays visible and clickable on a crowded or notched menu bar. (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1845" target="_blank" rel="noopener">#1845</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1849" target="_blank" rel="noopener">#1849</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1852" target="_blank" rel="noopener">#1852</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1853" target="_blank" rel="noopener">#1853</a>)</p>
+
+      <h3>Also in this release</h3>
+
+      <h4>Added</h4>
+      <ul>
+        <li><strong>Initial Junie adapter support</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1851" target="_blank" rel="noopener">#1851</a>) &mdash; Irrlicht can discover Junie processes and parse Junie session data; the published maturity stays <code>planned</code> until replay recordings establish the claimed behavior.</li>
+      </ul>
+
+      <h4>Fixed</h4>
+      <ul>
+        <li><strong>Claude Code usage-limit errors clear when the agent resumes</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1858" target="_blank" rel="noopener">#1858</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1859" target="_blank" rel="noopener">#1859</a>) &mdash; an automatic resume now removes the terminal error at the resume event instead of leaving the session red through later completed turns.</li>
+        <li><strong>Terminal errors stay red through an idle prompt</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1871" target="_blank" rel="noopener">#1871</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1872" target="_blank" rel="noopener">#1872</a>) &mdash; <code>idle_prompt</code> is not treated as recovery from an HTTP 429 or another terminal provider failure.</li>
+        <li><strong>Exited processes no longer leave false crash rows</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1860" target="_blank" rel="noopener">#1860</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1865" target="_blank" rel="noopener">#1865</a>) &mdash; a process exit deletes the row because Irrlicht cannot distinguish a crash from a deliberate quit without an exit status.</li>
+        <li><strong>Usage style stays quota-only when a session errors</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1862" target="_blank" rel="noopener">#1862</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1863" target="_blank" rel="noopener">#1863</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1866" target="_blank" rel="noopener">#1866</a>) &mdash; an error no longer restores every project dot and widens the icon; the no-quota fallback still shows dots so active work does not look idle.</li>
+        <li><strong>The Settings panel keeps its margin when Notifications expands</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1854" target="_blank" rel="noopener">#1854</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1856" target="_blank" rel="noopener">#1856</a>) &mdash; notification labels can compress when a legacy scroll bar reduces the available width.</li>
+      </ul>
+
+      <h4>Changed / Docs / Distribution</h4>
+      <ul>
+        <li><strong><code>ir:triage</code> reports agent time and human gates separately</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1850" target="_blank" rel="noopener">#1850</a>).</li>
+        <li><strong><code>ir:test-mac</code> now runs through one executable script</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1855" target="_blank" rel="noopener">#1855</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1857" target="_blank" rel="noopener">#1857</a>) &mdash; its ports and socket paths stay in one shell scope, and mutation checks cover the release-signing seams.</li>
+        <li><strong>Agent guidance now requires maintainer approval before a new issue is filed</strong> (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1868" target="_blank" rel="noopener">#1868</a>).</li>
+        <li><strong>Long inline code references now wrap on narrow documentation pages</strong>, so the changelog stays inside a 360-pixel mobile viewport.</li>
+      </ul>
+
+      <h3>Technical appendix</h3>
+      <ul>
+        <li><strong>Compact menu bar foundation.</strong> <code>MenuBarAppearance</code> controls the aggregate-dot and narrow-quota render paths, while <code>MenuBarStatusItemIdentity</code> migrates AppKit&rsquo;s generated position key to a stable <code>IrrlichtStatusItem</code> key. Measured widths come from <code>MenuBarImageBuilder.iconImage</code>, the same composition the app ships. (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1845" target="_blank" rel="noopener">#1845</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1849" target="_blank" rel="noopener">#1849</a>)</li>
+        <li><strong>Compact becomes a modifier.</strong> The first implementation used a fourth menu bar style. It is now an orthogonal toggle across the three existing styles, so density never changes which content the selected style shows. The compact-off render remains byte-identical for existing users. (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1852" target="_blank" rel="noopener">#1852</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1853" target="_blank" rel="noopener">#1853</a>)</li>
+        <li><strong>Triage estimates.</strong> <code>ir:triage</code> adds an <code>Estimate</code> field with an agent-active range plus separately named human gates. The readiness verdict remains independent from elapsed calendar time. (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1850" target="_blank" rel="noopener">#1850</a>)</li>
+        <li><strong>Terminal error recovery.</strong> Claude Code <code>isMeta</code> resume events now set <code>ParsedEvent.IsAgentResume</code>; the tailer clears only a standing terminal error and marks that skipped metadata event substantive so classification changes at the resume timestamp. Two contiguous live recordings move from permanent red to recovery at the recorded prompts. (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1858" target="_blank" rel="noopener">#1858</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1859" target="_blank" rel="noopener">#1859</a>)</li>
+        <li><strong>One macOS test driver.</strong> <code>.claude/skills/ir:test-mac/test-mac.sh</code> replaces nine separate shell blocks. Its focused mutation cases fail on stale anchors, vacuous stubs, dropped variables, unsafe signature matching, and incomplete restore coverage. (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1855" target="_blank" rel="noopener">#1855</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1857" target="_blank" rel="noopener">#1857</a>)</li>
+        <li><strong>Settings width.</strong> <code>NotificationEventRow</code> opts into a compressible <code>LeadingToggle</code> label. The fix keeps the 16-point panel inset when a legacy AppKit scroller removes 15&ndash;17 points from the content box, while all other toggles keep their fixed labels. (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1854" target="_blank" rel="noopener">#1854</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1856" target="_blank" rel="noopener">#1856</a>)</li>
+        <li><strong>Junie adapter.</strong> The new inbound adapter adds process discovery, sidecar CWD resolution, JSONL parsing, state and metric extraction, icons, Git metadata wiring, site entries, and contract coverage. Its Linux PID fixture polls through the fork-to-<code>execve</code> window instead of assuming <code>cmd.Start()</code> means <code>/proc/&lt;pid&gt;/cmdline</code> is ready. (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1851" target="_blank" rel="noopener">#1851</a>)</li>
+        <li><strong>Usage style error behavior.</strong> <code>shouldShowDotsInUsageStyle</code> now answers only whether a quota image exists. A session error does not override the chosen content style and restore the whole dot bank. (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1862" target="_blank" rel="noopener">#1862</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1863" target="_blank" rel="noopener">#1863</a>)</li>
+        <li><strong>Usage style locks.</strong> Tests cross both compact densities and separately pin the no-renderable-quota fallback. These are behavior locks, and distinct mutations prove each check fails when its protected branch changes. (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1866" target="_blank" rel="noopener">#1866</a>)</li>
+        <li><strong>Issue creation policy.</strong> <code>AGENTS.md</code> states that filing an issue is an outward action. Findings stay in the current final answer, pull request, or issue comment unless the maintainer asks for a new ticket. (<a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1868" target="_blank" rel="noopener">#1868</a>)</li>
+        <li><strong>Classifier priority.</strong> The <code>idle_prompt</code> rule excludes a standing terminal <code>SessionError</code>, so the higher-priority <code>session_error</code> rule remains active until a real recovery event arrives. The rule uses the cross-adapter terminal phase rather than a Claude-specific error class. (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1871" target="_blank" rel="noopener">#1871</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1872" target="_blank" rel="noopener">#1872</a>)</li>
+        <li><strong>Process exits.</strong> The process-death inference, its 12-hour retention path, the replay event, and the reaper exemptions are removed. Every process exit records <code>process_exited</code> and deletes the row. A real crash can now disappear silently, but an ESC interrupt or denied tool prompt can no longer leave a false red row. Transcript-derived failures for a still-running process remain red and survive daemon restart. (<a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1860" target="_blank" rel="noopener">#1860</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/pull/1865" target="_blank" rel="noopener">#1865</a>; withdraws <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1800" target="_blank" rel="noopener">#1800</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1815" target="_blank" rel="noopener">#1815</a>, <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/1817" target="_blank" rel="noopener">#1817</a>)</li>
+        <li><strong>Mobile documentation width.</strong> The shared documentation stylesheet permits long inline code identifiers and other unbroken tokens to wrap, while preformatted blocks keep their own horizontal scrolling. The measured changelog width at a 360-pixel viewport fell from 819 pixels to 360 pixels.</li>
+      </ul>
+
       <h2 id="v0-6-1">v0.6.1 <small>(2026-08-26)</small></h2>
 
       <h3>A session that fails now reads red &mdash; <code>error</code> is the fourth session state, and it reaches the menu bar, the dashboard and the wire</h3>

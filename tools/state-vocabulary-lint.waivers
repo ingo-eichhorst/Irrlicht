@@ -104,7 +104,6 @@ events.md                      the Impossible Transitions bullet — reconciled 
 # ---------------------------------------------------------------------------
 # 5. A DIFFERENT ENUM THAT HAPPENS TO SHARE WORDS
 
-site/docs/api-reference.html   notification-rule `trigger.event` — waiting/ready/working plus context_pressure*, not the state vocabulary
 platforms/web/sessionError.test.js  a not-error control group: three real states plus a deliberate junk value
 platforms/macos/Tests/SessionErrorStateTests.swift  three sites enumerate domain states plus the CLIENT-SIDE `.unknown` fallback (#1797), which is not a state; a fourth is a legacy-payload fixture asserting a `subagents` object with no `error` key still decodes
 platforms/macos/Tests/SessionManagerTests.swift     same, for `dominant(in:)`

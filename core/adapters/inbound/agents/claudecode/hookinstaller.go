@@ -64,11 +64,79 @@ func hookEndpointURL() string {
 const hookTimeoutSeconds = 5
 
 // hookMatcher is the matcher used by PermissionRequest, PostToolUse, and
-// PostToolUseFailure. AskUserQuestion / ExitPlanMode are included so the
-// PostToolUse clearing edge fires for user-input overlays too (issue #307).
-// PermissionRequest only fires for tools that actually need permission, so
-// the extra alternatives are no-ops there.
-const hookMatcher = "Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|mcp__.*|AskUserQuestion|ExitPlanMode"
+// PostToolUseFailure. It matches every tool.
+//
+// THE SPELLING IS "*", NOT ".*", and that is a measured choice rather than a
+// stylistic one. Claude Code decides delivery in bCt(query, matcher, …), read
+// in the 2.1.259 bundle:
+//
+//	if(!n||n==="*")return!0;                       // literal short-circuit
+//	let y=Wcr(n,r,o); …                            // exact-name list, only if
+//	                                               // n matches /^[a-zA-Z0-9_|, -]+$/
+//	try{ let C=new RegExp(n); if(C.test(e))… }     // otherwise: compile + test
+//
+// Only "" and "*" short-circuit. ".*" contains characters Wcr's class rejects,
+// so it falls through to `new RegExp(".*")` — correct, but it compiles and
+// tests a regexp on every hook evaluation, which since this matcher went
+// match-all means every tool call. "*" skips both.
+//
+// (Do NOT justify this from `matcherIsMatchAll = !m || m==="*" || m===".*"`,
+// which also exists in the bundle and looks authoritative. It is read in
+// exactly two places, both `s("tengu_run_hook", {numMatchAllMatchers, …})`
+// analytics calls, and decides no delivery at all. An earlier revision of this
+// comment cited it and was wrong.)
+//
+// WHY NOT AN ALLOWLIST (#1861). Until #1861 this was a nine-alternative list of
+// tool names — Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|mcp__.*|
+// AskUserQuestion|ExitPlanMode. Claude Code matches it against the TOOL NAME
+// (executePermissionRequestHooks passes matchQuery: <tool name>), so a
+// permission modal on any other tool delivered no hook at all and the session
+// kept reading `working` behind an overlay the user was blocked on. Its tool
+// set also carries Read, Glob, Grep, LS, WebSearch, KillShell, PowerShell,
+// Tmux, Monitor, REPL, Skill, Task and SlashCommand, and it grows every
+// release — so the list was not merely missing entries, it was the wrong shape.
+// The issue's own reproduction is a `permissions.ask` rule on Read.
+//
+// WHY A BROAD MATCH IS SAFE HERE, WHICH IT IS NOT FOR PreToolUse.
+// matcherForEvent hands this one constant to all three events, so the ARMING
+// edge (PermissionRequest holds SignalPermissionPrompt) and the CLEARING edges
+// (PostToolUse / PostToolUseFailure release it) widen together by construction
+// rather than by anyone remembering to. That symmetry is the whole safety
+// argument: a tool that can arm a hold nothing can clear pins the session at
+// waiting until permissionPromptHoldTimeout's 12-hour ceiling. PermissionRequest
+// is not a per-tool-call event — Claude Code raises it only when a permission
+// decision is actually needed — so a match-all ASSERT here does not hold
+// `waiting` on every tool call, which is exactly why hookMatcherPreToolUse below
+// must stay narrow.
+//
+// WHAT THE BROAD RELEASE COSTS, measured rather than waved past. The Release
+// itself is genuinely free — releasing an unheld signal is a no-op
+// (session.SignalHolds.Release), the same argument gemini-cli's
+// fires-on-every-tool AfterTool row records in hook_signal.go. The DELIVERIES
+// it justifies are not free: PostToolUse now arrives for every tool rather than
+// for nine names, and each POST costs one path confine (two
+// filepath.EvalSymlinks, ~12µs), one log line (~9µs under the logger's global
+// mutex), and one forced classify pass that bypasses the 2s activity debounce
+// and unconditionally rewrites the session ledger (~450µs). Call it ~0.5ms per
+// tool call, dominated by the ledger write. Figures are from scratch benchmarks
+// on the maintainer's machine (warm), not a committed benchmark — treat them as
+// an order of magnitude, not a contract.
+//
+// That is judged worth it, because the alternative is asymmetry: arming wider
+// than clearing is what pins a session at `waiting`. The ledger rewrite is
+// unconditional even on a zero-byte pass and is the obvious thing to make
+// conditional; it is filed rather than fixed here because it lives in another
+// package and already fires this way for gemini-cli's AfterTool.
+//
+// ONE TOOL IS WORTH CALLING OUT: Task. Its PostToolUse — the release — does not
+// fire until the SUB-AGENT finishes, which is minutes, so an `ask` rule on Task
+// leaves the session reading `waiting` from the user's approval until the
+// sub-agent returns. That is the same shape a long-running Bash approval
+// already had before #1861 (Bash was in the old allowlist), so it is not new in
+// kind; it is newly reachable for the longest-running tool in the set, and
+// claudecode has no transcript-tier re-derivation to correct it —
+// SignalOpenToolStalled covers only the five edit/write names.
+const hookMatcher = "*"
 
 // hookMatcherPreToolUse is the narrow matcher for the PreToolUse event. We
 // only want to flip working→waiting on the user-input tools — matching every
@@ -85,11 +153,83 @@ const hookMatcherPreCompact = "manual"
 
 // hookMatcherNotification is the matcher for the Notification event. Like
 // PreCompact (whose matcher is the compaction trigger), Claude Code's
-// Notification matcher matches the notification_type rather than a tool name.
-// We install "idle_prompt" so the hook fires only when the agent goes idle at
-// the prompt (issue #1173) — permission_prompt is already covered by the
-// blocking PermissionRequest hook, and the other types don't affect state.
-const hookMatcherNotification = "idle_prompt"
+// Notification matcher matches the notification_type
+// (`case"Notification":return e.notification_type` in the bundle's WQn), not a
+// tool name. It stays an explicit list rather than going match-all like
+// hookMatcher above: an unlisted type is a POST the handler exists only to
+// drop, and the list is short.
+//
+// THE AUTHORITATIVE SET OF TYPES is the bundle's own `odr` array, which is what
+// this list must be diffed against when Claude Code updates — not a list of
+// dialog names, which is a different vocabulary and the mistake #1861's first
+// revision made (it listed `mcp_elicitation` / `mcp_url_elicitation`, which are
+// DIALOG kinds; the notification types they emit are `elicitation_dialog` and
+// `elicitation_url_dialog`, and neither was installed). As of 2.1.259:
+//
+//	permission_prompt, idle_prompt, auth_success, elicitation_dialog,
+//	agent_needs_input, agent_completed, elicitation_url_dialog,
+//	worker_permission_prompt, push_notification, computer_use_enter,
+//	computer_use_exit, quota_auto_resume_{fired,stale,disabled}
+//
+// INSTALLED, because each means a human is blocked:
+//
+//   - idle_prompt: the turn ended and the agent is idle at the prompt (#1173).
+//   - permission_prompt: a blocking dialog is on screen (#1861). It is also the
+//     DEFAULT for any dialog notification that sets no type of its own
+//     (`GUe(n.text, n.type ?? "permission_prompt", …)`), which is what makes it
+//     cover the dialogs that carry no tool name and so raise no
+//     PermissionRequest at any matcher width — sandbox network access, the
+//     auto-mode dialogs, managed-settings review.
+//   - elicitation_dialog / elicitation_url_dialog: an MCP server is waiting on
+//     the user (`{waitingFor:"input needed", notification: … type:
+//     Qwo(w)?"elicitation_url_dialog":"elicitation_dialog"}`). These set their
+//     own type, so permission_prompt does NOT cover them.
+//
+// DELIBERATELY NOT INSTALLED:
+//
+//   - worker_permission_prompt ("<worker> needs permission for <tool>",
+//     "<worker> needs network access to <host>"): emitted by the lead's
+//     InboxPoller, so the hook would arrive stamped with the LEAD's session id
+//     while the session actually blocked is the worker's. Holding the lead at
+//     `waiting` would mislabel a session that is genuinely working. Wiring it
+//     needs the worker→session mapping this adapter does not have; filed rather
+//     than guessed.
+//
+//   - agent_needs_input ("<label> needs your input"): the SAME defect, which is
+//     why it sits here and not four lines up — it was installed once, and #1882
+//     took it back out. FleetView's renderer builds it in `Uy`, which pushes
+//     `{message, notificationType}` and puts the blocked agent's own id on a
+//     separate array that `Rg` drains only into analytics
+//     (`tengu_bg_agent_notification`, id redacted through `Re()`). The
+//     notification renders through `Gv(A, bC(), …)`, and `bC()` is the CURRENT
+//     session — so the hook arrives stamped with the WATCHER's id and nothing on
+//     the payload names the session that is actually blocked. Routing it would
+//     pin an orchestrator at `waiting` while it is genuinely working, and the
+//     clearing edge does not save it: a session watching agents BETWEEN turns
+//     has no turn end coming.
+//
+//     THE COST, recorded because it is a trade and not a free removal: this
+//     type has a second emitter that IS correctly attributed. The dialog
+//     registry's `LOe` entry — the teammate iTerm2-integration prompt,
+//     `{waitingFor:"input needed", notification:{text:"Teammate setup needs
+//     your input", type:"agent_needs_input"}}` — reaches `r5` → `GUe(n.text,
+//     n.type ?? "permission_prompt", …)`, which resolves `bC()` for a dialog on
+//     its OWN session. Its explicit type overrides the permission_prompt
+//     default that would otherwise have covered it, so dropping the type drops
+//     that dialog's only state-driving signal. Accepted: the two emitters are
+//     indistinguishable on the wire except by their user-facing English message
+//     text, and matching on that would let a UI copy edit silently change
+//     daemon state. The wrong case is also the common one — an orchestrator
+//     watching background agents is exactly the session an operator most needs
+//     reported honestly.
+//
+//   - auth_success, agent_completed, push_notification, computer_use_*,
+//     quota_auto_resume_*: none of them means a human is blocked right now.
+//
+// This matcher takes bCt's exact-name path rather than hookMatcher's
+// short-circuit: it matches Wcr's /^[a-zA-Z0-9_|, -]+$/ class, so Claude Code
+// splits it on | and compares names — no regexp is compiled.
+const hookMatcherNotification = "elicitation_dialog|elicitation_url_dialog|idle_prompt|permission_prompt"
 
 // minCLIVersion is the lowest Claude Code version this install may be written
 // into (issue #1365). Declared here, enforced generically by PermissionService
@@ -157,12 +297,16 @@ var installedHookEvents = []string{
 	HookNotification,
 }
 
-// matcherForEvent returns the matcher we install for the given event. For most
-// events this is a tool-name regex; for PreCompact it is the compaction trigger
-// ("manual"); for Notification it is the notification_type ("idle_prompt"); for
-// Stop it is empty — Claude Code's Stop hook takes no matcher (it fires at every
-// turn end) and rejects settings.json that gives it one, so hookjson omits the
-// matcher key entirely for an empty matcher.
+// matcherForEvent returns the matcher we install for the given event. What the
+// matcher is compared AGAINST is per-event and decided by Claude Code's WQn:
+// for the tool events it is the tool name (match-all since #1861); for
+// PreCompact it is the compaction trigger ("manual"); for Notification it is
+// the notification_type (an explicit name list — read hookMatcherNotification
+// for its current membership rather than trusting a count restated here, and do
+// not assume it is still idle_prompt-only); for Stop it is empty — Claude
+// Code's Stop hook takes no matcher (it fires at every turn end) and rejects
+// settings.json that gives it one, so hookjson omits the matcher key entirely
+// for an empty matcher.
 func matcherForEvent(event string) string {
 	switch event {
 	case HookPreToolUse:

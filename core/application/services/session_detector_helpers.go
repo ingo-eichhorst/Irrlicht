@@ -98,23 +98,6 @@ func (d *SessionDetector) forgetSessionScopedState(sessionID string) {
 	d.idleMu.Lock()
 	delete(d.idleProjectRetryAttempts, sessionID)
 	d.idleMu.Unlock()
-
-	// The #1800 process-death verdict registry — added here by #1815, which is
-	// where this function's own doc said the previous map belonged and where it
-	// was missed anyway.
-	//
-	// A STALE ENTRY IS NOT INERT, it is actively wrong. retainAsProcessDeath
-	// keys on presence first: an expired entry takes the EXPIRY branch and
-	// returns false, so the first mid-turn death under a recycled session id
-	// (`claude --resume <uuid>` after the old row aged out) is DELETED instead
-	// of converted to `error` — precisely the signal that map exists to
-	// preserve. It does not self-heal in time either: forgetProcessDeathVerdict
-	// runs only on that same branch, so the entry is dropped only after it has
-	// already eaten one death.
-	//
-	// #1815 made it materially likelier by registering an entry at every seed
-	// for every errored row, where before only a live mid-turn death made one.
-	d.forgetProcessDeathVerdict(sessionID)
 }
 
 // broadcast sends a push notification if a broadcaster is configured. For
@@ -154,9 +137,9 @@ func (d *SessionDetector) broadcast(msgType string, state *session.SessionState)
 // arrived. Returns whether at least one pre-session was actually retired —
 // callers feed this into ShouldSynthesizeCatchUpTurn (state_classifier.go)
 // as its "was this daemon already live-tracking the process" signal.
-// newSessionID (the real session's id) lets it fire onSessionSuperseded so
-// TerminalObserver/SessionDetector can carry per-session backchannel state
-// forward before the pre-session row is deleted (issue #997).
+// newSessionID (the real session's id) lets it fire onSessionSuperseded so a
+// subsystem holding per-session state can carry it forward before the
+// pre-session row is deleted (issue #997).
 func (d *SessionDetector) cleanupPreSessionsForProject(projectDir, realCWD, adapter, newSessionID string) bool {
 	// Collect candidates under the lock; defer I/O (repo.Load) to outside.
 	d.mu.Lock()

@@ -62,46 +62,22 @@ const (
 	//
 	// TierTranscript, because the only producer this phase can have reads the
 	// failure out of the transcript: claudecode's `system`/`api_error` and its
-	// terminal `isApiErrorMessage` event, copilot's `session.error`. #1800
-	// adds process death, whose evidence is the OS view of the agent process
-	// rather than anything written down, and which therefore belongs at
-	// TierProcess.
+	// terminal `isApiErrorMessage` event, copilot's `session.error`.
 	//
-	// A policy row declares exactly one tier, so that arrives as its own kind
-	// rather than by widening this one. The classifier's session_error rule
-	// reads SessionError directly, so its PREDICATE already covers a
-	// process-death producer — but its TIER resolves through this row via
-	// TierOf, so routing #1800's evidence through it would record TierProcess
-	// evidence as TierTranscript. Understating a tier never trips the ladder
-	// invariant, so nothing would catch it. #1800 adds a second rule row (or a
-	// `tierOf` override) rather than reusing this one.
+	// A POSSIBLE SECOND CHANNEL, AND WHY IT IS NOT HERE. #1800 added process
+	// death — the agent's process vanishing mid-turn — as a second failure
+	// producer at TierProcess, deliberately as its own kind rather than by
+	// widening this one: a policy row declares exactly one tier, and routing
+	// process evidence through this row would have recorded TierProcess evidence
+	// as TierTranscript, which understates a tier and so never trips the ladder
+	// invariant. #1860 removed that producer entirely (the daemon is not the
+	// agent's parent, so a crash and a deliberate quit are one observation), and
+	// the reasoning is kept because it is what any future non-transcript failure
+	// channel has to answer: it arrives as its own kind, not as this one.
 	//
 	// Named for the condition rather than the producer, matching the two rows
 	// above it, so the string is also the classifier rule id.
 	SignalSessionError SignalKind = "session_error"
-
-	// SignalProcessDeath is #1800's answer to the tier problem SignalSessionError
-	// names above: the agent process went away while a turn was still open, so
-	// the session failed and the evidence is the OS view of the process rather
-	// than anything the agent wrote down.
-	//
-	// TierProcess (3), and it is the FIRST signal in the system to sit there —
-	// the tier was declared by #1288 and reserved until now.
-	//
-	// WHY A SECOND KIND RATHER THAN WIDENING SignalSessionError. A policy row
-	// declares exactly one tier, and these two carry the same VERDICT on
-	// genuinely different channels. Routing process evidence through the
-	// transcript row would record it as TierTranscript, and understating a tier
-	// never trips the ladder invariant (which only fires when a LOWER rule
-	// outranks the winner), so the misattribution would be silent in every
-	// recorded trace. Two kinds also mean the classifier can place the two
-	// verdicts at different rungs, which it must — see the process_death rule
-	// in state_classifier.go for why a dead process has to outrank the
-	// transcript-tier waiting rules that a frozen transcript keeps reporting.
-	//
-	// Named for the condition rather than the producer, like every row above,
-	// so the string is also the classifier rule id.
-	SignalProcessDeath SignalKind = "process_death"
 )
 
 // compactHoldTimeout bounds the SignalCompactInProgress hold (#657). Normally
@@ -121,17 +97,24 @@ const compactHoldTimeout = 5 * time.Minute
 // only transcript-tier signal that can re-derive "a prompt is open" is #488's
 // SignalOpenToolStalled, and it fires solely for the five names
 // isPermissionGatedEditTool matches (edit/write/multiedit/notebookedit/
-// write_file). Against claudecode's installed matcher —
-// "Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|mcp__.*|AskUserQuestion|ExitPlanMode"
-// (hookinstaller.go, hookMatcher) — that covers four of nine alternatives:
+// write_file). Since #1861 claudecode's installed matcher is match-all
+// (hookinstaller.go, hookMatcher), so the partition is no longer four of nine
+// named alternatives — it is those five names against every other tool Claude
+// Code has:
 //
 //   - COVERED (expiry is soft): Write, Edit, MultiEdit, NotebookEdit. If the
 //     tool is still open, SignalOpenToolStalled ripens the moment
 //     PermissionPending stops being set and re-derives the same waiting, one
 //     tier down where anything can still correct it.
-//   - NOT COVERED (expiry is silent): Bash, WebFetch, mcp__.*, AskUserQuestion,
-//     ExitPlanMode. Nothing re-derives the prompt. The session simply stops
-//     reading waiting.
+//   - NOT COVERED (expiry is silent): every other tool — Bash, WebFetch,
+//     mcp__*, AskUserQuestion, ExitPlanMode, and since #1861 also Read, Grep,
+//     Glob, Task, Skill and the rest of the set the old allowlist never
+//     reached. Nothing re-derives the prompt. The session simply stops
+//     reading waiting. #1861 widened who can ARM this hold, so it widened
+//     this group too; what keeps that from being a net loss is that those
+//     prompts previously did not read waiting AT ALL, and that #1861 added a
+//     turn-end clearing edge (see the row's stale rule) so the ceiling is no
+//     longer the only end of life for a prompt PostToolUse never closes.
 //
 // The uncovered group is not the marginal one. hookMatcherPreToolUse is
 // exactly "AskUserQuestion|ExitPlanMode" — the #307 fast path, whose entire
@@ -459,33 +442,6 @@ type signalPolicy struct {
 // arrived on another goroutine.
 var signalPolicies = []signalPolicy{
 	{
-		kind: SignalPermissionPrompt,
-		tier: TierHook,
-		// Persistent: the prompt stays open until the agent acts on it, and
-		// the hold must survive every fswatcher re-evaluation in between.
-		// Cleared normally by PostToolUse/PostToolUseFailure via Release.
-		//
-		// Denial is the case that needs stale: Claude Code fires no
-		// PostToolUseFailure when the user rejects a prompt, so the only
-		// evidence the prompt closed is the transcript's own
-		// "[Request interrupted by user for tool use]" marker. A lower tier
-		// retiring a higher one reads backwards, but it is sound here — this
-		// is not the transcript overruling the hook's verdict, it is the
-		// transcript supplying the end-of-life notice the hook never sends.
-		//
-		// Both of those paths are things that must *happen*. Neither fires if
-		// the daemon never sees the POST — a crash, a restart, a port change,
-		// an uninstalled hook — or if the adapter stops writing the denial
-		// marker in the shape LastWasToolDenial matches. This row sits at the
-		// top of the authority ladder, so no lower-tier signal may correct it,
-		// and without the ceiling below a session pinned that way stayed
-		// pinned for the life of the process (#1360).
-		stale:   func(c holdContext) bool { return c.Metrics.LastWasToolDenial },
-		ceiling: permissionPromptHoldTimeout,
-		apply:   func(c holdContext) { c.Metrics.PermissionPending = true },
-	},
-
-	{
 		kind:        SignalTurnDone,
 		tier:        TierHook,
 		consumeOnce: true,
@@ -501,6 +457,131 @@ var signalPolicies = []signalPolicy{
 				c.Metrics.PendingWaitingCue = true
 			}
 		},
+	},
+
+	{
+		kind: SignalPermissionPrompt,
+		tier: TierHook,
+		// POSITION: after SignalTurnDone, whose apply sets the HookTurnDone
+		// this row's staleness now reads (#1861) — the same one-directional
+		// dependency SignalIdlePrompt, SignalSessionError and
+		// SignalProcessDeath already have on that row. This row led the table
+		// until #1861; the move is behaviourally inert on its own, because
+		// turn_done's apply reads nothing this row writes. It must still stay
+		// BEFORE SignalOpenToolStalled, whose ripe rule reads the
+		// PermissionPending this row's apply sets.
+		//
+		// Persistent: the prompt stays open until the agent acts on it, and
+		// the hold must survive every fswatcher re-evaluation in between.
+		// Cleared normally by PostToolUse/PostToolUseFailure via Release.
+		//
+		// Denial is the case that needs stale: Claude Code fires no
+		// PostToolUseFailure when the user rejects a prompt, so the only
+		// evidence the prompt closed is the transcript's own
+		// "[Request interrupted by user for tool use]" marker. A lower tier
+		// retiring a higher one reads backwards, but it is sound here — this
+		// is not the transcript overruling the hook's verdict, it is the
+		// transcript supplying the end-of-life notice the hook never sends.
+		//
+		// TURN END is the second stale case, and #1861 is why it exists. That
+		// issue added an asserter of this signal that is not keyed on a tool at
+		// all — claudecode's Notification/permission_prompt, the only hook
+		// signal for a blocking dialog carrying no tool name. Claude Code fires
+		// it once on a ~6s timer and emits nothing when the dialog closes, and
+		// a dialog with no tool behind it produces no PostToolUse either, so
+		// for the two dialogs that appear before any tool runs
+		// (managed_settings_security, auto_mode_setup_review) neither existing
+		// path fires and the ceiling below would have been the only end of
+		// life. A hold whose only clearing edge is a 12-hour backstop is the
+		// defect class #1088 shipped.
+		//
+		// The rule is HookTurnDone rather than IsAgentDone deliberately, in
+		// both halves:
+		//
+		//   - HookTurnDone, not IsAgentDone's transcript-tail fallback. Only
+		//     the Stop hook sets HookTurnDone, so the term is authoritative
+		//     hook-tier evidence retiring a hook-tier hold — no tier inversion,
+		//     and no exposure to the "last event was an assistant message"
+		//     heuristic, which can read true in the window between an
+		//     assistant message flushing and the tool_use that follows it. That
+		//     window is exactly where #307's PreToolUse fast path arms this
+		//     signal, so the heuristic half would let a Stop-less race retire
+		//     the fast path's hold.
+		//   - AND no open tool call. IsAgentDone's own doc records that a
+		//     turn-done signal can arrive while a tool is still outstanding (a
+		//     sub-agent spawned via the Agent tool). An open tool call is the
+		//     shape every tool-gated permission prompt has, #307's
+		//     AskUserQuestion / ExitPlanMode included, so releasing on a bare
+		//     HookTurnDone would drop precisely the holds that path places.
+		//     That guard is solid once the tool_use is flushed:
+		//     sweepOpenToolCallsOnTurnDone deliberately preserves Agent /
+		//     AskUserQuestion / ExitPlanMode across a turn_done, so
+		//     HasOpenToolCall stays true for exactly those tools.
+		//
+		// What remains true is the narrow, safe claim: Claude Code cannot end a
+		// turn while a blocking dialog is on screen, so an authoritative turn
+		// boundary with nothing outstanding is proof no dialog is open.
+		//
+		// THE RESIDUAL WINDOW, stated so a future change does not widen it
+		// unknowingly. "Only the Stop hook sets HookTurnDone" does not by
+		// itself close the race, because Hold runs on the HTTP handler
+		// goroutine while Overlay runs on the event loop: a Stop POST can hold
+		// SignalTurnDone and enqueue its synthetic event, a PreToolUse POST can
+		// then hold SignalPermissionPrompt, and the loop can drain the first
+		// afterwards — dropping a hold placed after the turn ended. Reaching it
+		// needs a human reply AND a model round trip inside one undrained
+		// debouncedEvents slot, which is far shorter than any human reply, so
+		// it is not reachable in practice. It would become reachable if the
+		// event loop were made to lag.
+		//
+		// WHO ELSE THIS AFFECTS. HookStop is name-keyed in hookSignalEffects,
+		// so every adapter routing "Stop" through HandleStopHook sets
+		// HookTurnDone, and this row is shared by all five asserters of
+		// SignalPermissionPrompt. The rule is safe for each, but for different
+		// reasons, so it is worth having them written down:
+		//   - claudecode, codex: a permission prompt is modelled as an open
+		//     tool call (codex's plan approval included — see codex's parser
+		//     tests, which pin HasOpenToolCall=true after proposed_plan), so
+		//     the !HasOpenToolCall guard holds.
+		//   - geminicli, opencode, hermes: each also calls
+		//     ReleasePermissionPromptHold around its own turn-end hook.
+		//
+		// ⚠ THOSE THREE CALLS ARE NOT MADE REDUNDANT BY THIS RULE — do not
+		// delete them as duplication. They are UNCONDITIONAL; this rule is
+		// guarded by !HasOpenToolCall, and the case they exist for is exactly
+		// the one the guard excludes: a turn torn down with an approval still
+		// pending never completes its tool call, so HasOpenToolCall is TRUE and
+		// this rule does not fire. Removing them would reinstate the 12-hour
+		// pin for the precise scenario they were written against. This rule
+		// generalises "a turn boundary retires a permission hold" for adapters
+		// that have no such call — it does not subsume the stronger one.
+		//
+		// THE EDGE IS ONE-SHOT, which bounds what it can promise. HookTurnDone
+		// is written only by SignalTurnDone's apply, and that row is
+		// consumeOnce, so this term can only fire on the single Overlay pass
+		// that consumes a Stop hook. If HasOpenToolCall is true on that pass
+		// the edge is spent and does not return. What remains for that case is
+		// the tool's own PostToolUse release (which is why hookMatcher going
+		// match-all matters) and, failing that, the ceiling. #1799 hit the same
+		// one-pass property for SignalSessionError and answered it with a
+		// DURABLE turn-boundary fact (IngestTurnBoundary) alongside the policy
+		// rule; the equivalent here — a turn-boundary timestamp on holdContext
+		// rather than a flag another row happens to write this pass — is filed
+		// rather than built, because it changes the hold mechanism itself.
+		//
+		// All three of those paths are things that must *happen*. None fires if
+		// the daemon never sees the POST — a crash, a restart, a port change,
+		// an uninstalled hook — or if the adapter stops writing the denial
+		// marker in the shape LastWasToolDenial matches. This row sits at the
+		// top of the authority ladder, so no lower-tier signal may correct it,
+		// and without the ceiling below a session pinned that way stayed
+		// pinned for the life of the process (#1360).
+		stale: func(c holdContext) bool {
+			return c.Metrics.LastWasToolDenial ||
+				(c.Metrics.HookTurnDone && !c.Metrics.HasOpenToolCall)
+		},
+		ceiling: permissionPromptHoldTimeout,
+		apply:   func(c holdContext) { c.Metrics.PermissionPending = true },
 	},
 
 	{
@@ -592,89 +673,13 @@ var signalPolicies = []signalPolicy{
 		// winner decided by call order rather than by anything declared. The
 		// transcript is the fresher observation (it was just re-read this
 		// pass), so it keeps the slot; a hold fills in only when the
-		// transcript reports nothing, which is exactly the process-death case
-		// #1800 adds it for.
+		// transcript reports nothing. No production code places a hold of this
+		// kind today — the row exists to give the classifier's session_error
+		// rule its tier through TierOf — so this apply states the rule a future
+		// out-of-band producer must satisfy rather than describing a live case.
+		// #1800's process death was such a producer and had its own kind; #1860
+		// removed it.
 		apply: func(c holdContext) {
-			if c.Metrics.SessionError == nil && c.Payload.SessionError != nil {
-				c.Metrics.SessionError = c.Payload.SessionError
-			}
-		},
-	},
-
-	{
-		kind: SignalProcessDeath,
-		tier: TierProcess,
-		// Persistent, and more absolutely so than any other row: a dead
-		// process produces no further evidence of any kind. Every poll after
-		// the exit re-derives metrics from a transcript frozen at the moment
-		// of death, so without the hold the verdict would survive exactly one
-		// classify pass.
-		//
-		// POSITION: after SignalTurnDone for the same one-directional reason
-		// SignalSessionError and SignalIdlePrompt sit there — its staleness
-		// calls IsAgentDone, which consults the HookTurnDone that row's apply
-		// writes on the same pass. Before SignalOpenToolStalled, which must
-		// stay last.
-		//
-		// STALE = IsAgentDone, and this row is where the whole producer's
-		// correctness actually lives — it is not the afterthought the
-		// equivalent line is on the two rows above.
-		//
-		// The producer cannot tell a crash from a clean exit at the moment the
-		// process dies, and neither can anything else: irrlicht is not the
-		// agent's parent, so no exit status is available on any platform (see
-		// DiedMidTurn). What it CAN do is ask again a moment later, against a
-		// transcript that is now final — a headless agent writes its
-		// turn-ending line and exits microseconds later, so on the exit edge
-		// the daemon has usually not read that line yet, and EVERY clean
-		// headless run would otherwise be reported as a crash. That is not an
-		// edge case; it is the ordinary shape of `claude -p`, `codex exec` and
-		// `opencode run`.
-		//
-		// So the exit edge places the hold provisionally, and this rule is the
-		// verdict: on the next classify pass the metrics have been rebuilt
-		// from the finished transcript, and IsAgentDone answers the question
-		// the exit edge could not. A turn that had in fact completed drops the
-		// hold unapplied, the session settles through agent_done exactly as it
-		// always did, and the next liveness sweep reaps it. A turn that was
-		// genuinely open keeps the hold and the session reads `error`.
-		//
-		// IsAgentDone rather than HookTurnDone (which is what the two rows
-		// above use) precisely because most of the adapters this matters for
-		// have no hooks at all: HookTurnDone would answer "no" for a clean
-		// gemini-cli or pi exit and pin a false crash. IsAgentDone consults
-		// the hook first and falls back to the transcript tail, which is the
-		// only signal seven of the nine adapters ever produce.
-		stale: func(c holdContext) bool { return c.Metrics.IsAgentDone() },
-		// NO CEILING, deliberately, and it is the one row in this table without
-		// one. The other persistent rows need a ceiling because they can pin a
-		// LIVE session forever when their end-of-life notice never arrives
-		// (#1360). This row cannot: its subject is a process that is provably
-		// gone, its lifetime is bounded by the session ROW's, and the row is
-		// reaped by the very function that placed the hold — see
-		// SessionDetector.retainAsProcessDeath, which owns the retention window
-		// and explains why a ceiling HERE actively caused a bug (the hold
-		// expiring let the session re-classify to `working` off a frozen
-		// transcript and be re-converted on the next sweep, forever).
-		// HandlePIDAssigned releases it if the process ever comes back.
-		//
-		// Two writes, and the asymmetry between them is the point.
-		//
-		// ProcessDeath is written UNCONDITIONALLY: it is a fact about the OS,
-		// not a competing opinion about the failure, and nothing else in the
-		// system can set it. It is what the classifier's process_death rule
-		// reads, so the rule's tier claim rests on this channel alone and can
-		// never be reached by an adapter-supplied Class string.
-		//
-		// SessionError is written only into an EMPTY slot, matching
-		// SignalSessionError for the reason stated there: the transcript was
-		// re-read this pass and is the fresher observation, so it keeps the
-		// slot. Concretely — an agent that logged a provider failure and THEN
-		// died keeps the provider's own message, which says more than "the
-		// process went away", while still being routed by the process-tier
-		// rule.
-		apply: func(c holdContext) {
-			c.Metrics.ProcessDeath = true
 			if c.Metrics.SessionError == nil && c.Payload.SessionError != nil {
 				c.Metrics.SessionError = c.Payload.SessionError
 			}

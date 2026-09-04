@@ -131,6 +131,7 @@ replaydata/agents/_reports/
 .pi
 .specs
 .aider*
+.junie
 # OpenCode session metadata (auto-created by the daemon)
 opencode.json
 /expected-validate

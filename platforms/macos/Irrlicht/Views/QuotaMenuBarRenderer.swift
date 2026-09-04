@@ -9,15 +9,18 @@ import Foundation
 enum QuotaMenuBarRenderer {
     private static let height: CGFloat = 18
     private static let rowHeight: CGFloat = height / 2
-    private static let labelWidth: CGFloat = 15
-    private static let barWidth: CGFloat = 32
+    // labelWidth / barWidth / gap / compactBarWidthFactor are non-private so
+    // a test can state the icon's measured width budget by READING them
+    // rather than restating their values, which drift silently (#1845).
+    static let labelWidth: CGFloat = 15
+    static let barWidth: CGFloat = 32
     private static let barHeight: CGFloat = 5
     private static let fontSize: CGFloat = 8
-    private static let gap: CGFloat = 3
+    static let gap: CGFloat = 3
     /// Bars style is narrowed by this factor (35% narrower) in Combined
     /// style specifically, where the icon's width budget is shared with the
     /// dots — see `rowSVG`'s `compact` handling.
-    private static let compactBarWidthFactor: CGFloat = 0.65
+    static let compactBarWidthFactor: CGFloat = 0.65
 
     /// Picks the freshest renderable rate-limit snapshot for `providerKey`
     /// across `sessions` and renders it. `providerKey` nil means "whatever

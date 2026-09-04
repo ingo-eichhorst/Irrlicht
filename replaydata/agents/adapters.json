@@ -39,8 +39,6 @@
       "maturity": "alpha",
       "capabilities": {
         "architect_editor": "untraced",
-        "backchannel_control": "absent",
-        "backchannel_observe": "absent",
         "background_process": "untraced",
         "burndown_progression": "untraced",
         "checkpoint_rewind": "absent",
@@ -112,8 +110,6 @@
       "maturity": "alpha",
       "capabilities": {
         "auth_refusal": "untraced",
-        "backchannel_control": "untraced",
-        "backchannel_observe": "untraced",
         "burndown_progression": "untraced",
         "cloud_agent": "untraced",
         "file_transcript": "absent",
@@ -125,6 +121,34 @@
         "quota_exhaustion": "untraced",
         "subagent_foreground": "absent",
         "subscription_signal": "untraced"
+      }
+    },
+    "junie": {
+      "maturity": "planned",
+      "capabilities": {
+        "architect_editor": "absent",
+        "auth_refusal": "untraced",
+        "autonomous_loop": "absent",
+        "background_process": "untraced",
+        "burndown_progression": "untraced",
+        "checkpoint_rewind": "absent",
+        "cloud_agent": "absent",
+        "context_compaction": "untraced",
+        "iteration_limit": "absent",
+        "message_queue": "untraced",
+        "overload_retry": "untraced",
+        "overload_terminal": "untraced",
+        "permission_classifier": "untraced",
+        "permission_prompt": "untraced",
+        "provider_failover": "untraced",
+        "quota_exhaustion": "untraced",
+        "session_reset": "absent",
+        "subagent_background": "absent",
+        "subagent_foreground": "absent",
+        "subagent_orphan": "absent",
+        "subscription_signal": "untraced",
+        "task_list": "untraced",
+        "workflow_fanout": "absent"
       }
     },
     "kiro-cli": {
@@ -175,8 +199,6 @@
     "opencode": {
       "maturity": "alpha",
       "capabilities": {
-        "backchannel_control": "absent",
-        "backchannel_observe": "absent",
         "background_process": "absent",
         "cloud_agent": "absent",
         "file_transcript": "absent",

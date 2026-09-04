@@ -30,9 +30,6 @@ struct SettingsView: View {
     @AppStorage("showQuotaForecast") private var showQuotaForecast: Bool = true
     @AppStorage("launchAtLogin") private var launchAtLogin: Bool = true
     @AppStorage("taskEtaActivation") private var taskEtaActivation: Bool = false
-    // Backchannel master toggle (issue #724): gates input injection + the
-    // event→action rule editor. Default OFF; daemon is the source of truth.
-    @AppStorage("backchannelActivation") private var backchannelActivation: Bool = false
     // Advanced Settings disclosure state (#694) — collapsed by default; the
     // power-user / still-maturing controls (debug, task-eta, sources, CLI tool)
     // live under it.
@@ -42,6 +39,10 @@ struct SettingsView: View {
     // Menu bar icon content (issue #909): dots / quota bars / both. Default
     // .lights keeps today's icon unchanged for existing users.
     @AppStorage(MenuBarStyle.storageKey) private var menuBarStyle: String = MenuBarStyle.lights.rawValue
+    // How densely that content is drawn (issue #1852) — orthogonal to the
+    // style above, so all six combinations are reachable. Defaults to false,
+    // which is byte-identical to what each style rendered before it existed.
+    @AppStorage(MenuBarAppearance.compactStorageKey) private var menuBarCompact: Bool = false
     @AppStorage(MenuBarQuotaProvider.storageKey) private var menuBarQuotaProvider: String = ""
     @AppStorage(QuotaVisualStyle.storageKey) private var menuBarQuotaVisual: String = QuotaVisualStyle.bars.rawValue
     // Master gate (issue #940): collapses the whole Notifications section
@@ -90,8 +91,6 @@ struct SettingsView: View {
     // Set just before a programmatic reconcile of taskEtaActivation so the
     // .onChange it triggers is swallowed instead of re-POSTing to the daemon.
     @State private var taskEtaReconciling = false
-    // Same reconcile guard for the backchannel toggle.
-    @State private var backchannelReconciling = false
     // Relay bearer token lives in the Keychain (not @AppStorage); this draft
     // mirrors it for the field, loaded on appear and written on change.
     @State private var relayTokenDraft: String = ""
@@ -156,7 +155,7 @@ struct SettingsView: View {
                         // A real Picker(pickerStyle: .segmented) only centers
                         // within extra width instead of stretching into it —
                         // EqualWidthSegmentedControl bridges to NSSegmentedControl
-                        // so the three segments split the full row edge to edge
+                        // so the segments split the full row edge to edge
                         // (issue #940), tinted with the app's accent instead of
                         // the system default blue.
                         EqualWidthSegmentedControl(
@@ -167,7 +166,23 @@ struct SettingsView: View {
                         )
                         .frame(maxWidth: .infinity, minHeight: 22)
 
-                        if menuBarStyle != MenuBarStyle.lights.rawValue {
+                        // Compact is a modifier on whichever style is
+                        // selected, not a style of its own (#1852) — that is
+                        // what makes "quota bars AND a narrow icon" reachable,
+                        // which #1845's fourth enum case could not express.
+                        LeadingToggle(
+                            isOn: $menuBarCompact,
+                            label: "Compact",
+                            info: "Collapses every project into one dot with a session count, so the icon's width stops growing with your project count. On Usage it also switches to the narrower, label-less quota bars. For a crowded menu bar."
+                        )
+
+                        // Ask the appearance whether it renders quota bars at
+                        // all, rather than testing "is not Lights" — a `!=`
+                        // here would offer two settings to a style that
+                        // ignores them (#1845). Parsed from the @AppStorage
+                        // values, never from MenuBarAppearance.current, so
+                        // this stays readable under a pinned store.
+                        if menuBarAppearance.showsQuotaBars {
                             HStack(spacing: 6) {
                                 Text("Quota provider")
                                     .font(.caption)
@@ -446,39 +461,6 @@ struct SettingsView: View {
                                 }
                             }
 
-                            // Backchannel (issue #724): control discovered agents via
-                            // their terminal backend. Default OFF; the daemon is the
-                            // source of truth (mirrors the task-eta reconcile pattern).
-                            // The rule editor appears only while this is on.
-                            LeadingToggle(
-                                isOn: $backchannelActivation,
-                                label: "Backchannel (control sessions)",
-                                info: "Let Irrlicht send input/interrupts into a running session via its terminal backend (tmux, kitty, …), and run event→action rules. Off by default; each agent still needs the \"control\" permission granted.",
-                                beta: true
-                            )
-                            .onChange(of: backchannelActivation) { newValue in
-                                if backchannelReconciling { backchannelReconciling = false; return }
-                                Task {
-                                    if let actual = await BackchannelActivationClient.set(enabled: newValue), actual != newValue {
-                                        backchannelReconciling = true
-                                        backchannelActivation = actual
-                                    }
-                                }
-                            }
-                            .onAppear {
-                                Task {
-                                    if let actual = await BackchannelActivationClient.status(), actual != backchannelActivation {
-                                        backchannelReconciling = true
-                                        backchannelActivation = actual
-                                    }
-                                }
-                            }
-
-                            if backchannelActivation {
-                                BackchannelRulesView()
-                                    .padding(.leading, IrrSpacing.sp4)
-                            }
-
                             VStack(alignment: .leading, spacing: IrrSpacing.sp2) {
                                 HStack(spacing: 6) {
                                     Text("Sources")
@@ -649,6 +631,23 @@ struct SettingsView: View {
             .fixedSize()
             Spacer()
         }
+    }
+
+    /// The menu bar appearance this view is currently editing, assembled from
+    /// the two `@AppStorage` values rather than read through
+    /// `MenuBarAppearance.current` (#1852).
+    ///
+    /// That distinction is load-bearing, not stylistic: `current` reads
+    /// `UserDefaults.standard`, which a pinned-store test cannot reach, and
+    /// `PersistentDefaultsLintTests` forbids a `UserDefaults.standard`
+    /// receiver anywhere under `Irrlicht/Views/` for exactly that reason.
+    /// Going through the property wrappers keeps the Settings UI readable
+    /// under `.defaultAppStorage`.
+    private var menuBarAppearance: MenuBarAppearance {
+        MenuBarAppearance(
+            style: MenuBarStyle(rawValue: menuBarStyle) ?? .lights,
+            isCompact: menuBarCompact
+        )
     }
 
     /// Provider keys with a rate_limit-carrying session right now, for the
@@ -930,7 +929,11 @@ private struct ContextThresholdRow: View {
 
 /// One row in the Settings notifications section: enable toggle, sound
 /// picker, and a ▶ preview button.
-private struct NotificationEventRow: View {
+///
+/// Internal (not private): `SettingsViewTests` hosts this row directly to
+/// measure its minimum width (#1854) — see the `body` comment for why hosting
+/// the whole panel cannot show it.
+struct NotificationEventRow: View {
     let event: NotificationEvent
     @Binding var enabled: Bool
     let sampleText: String
@@ -1020,12 +1023,24 @@ private struct NotificationEventRow: View {
 
     var body: some View {
         // One row (issue #940): toggle + label + sound picker + preview all
-        // share a line — LeadingToggle's trailing Spacer absorbs the gap
-        // between the label and the fixed-width picker/button, so this
-        // stays a single line regardless of how long `event.displayName` is.
+        // share a line — LeadingToggle absorbs the gap between the label and
+        // the fixed-width picker/button, so this stays a single line
+        // regardless of how long `event.displayName` is.
+        //
+        // `compressibleLabel` is what keeps that promise without a second one
+        // it cannot keep (#1854). The picker's 112pt and the preview button
+        // are fixed, so with a fixed-size label too this row's minimum width
+        // was a constant, and that constant saturated the panel's padded
+        // content box exactly — see `LeadingToggle.compressibleLabel` for what
+        // an overflowing row then does to the margin, and
+        // `testTheWidestRowFitsTheContentBoxUntruncated` for the measurement.
+        //
+        // It is also why the test hosts this row rather than the whole panel:
+        // `SettingsView` pins itself to `panelWidth`, where the row still
+        // fits, so the overflow only appears once something takes width away.
         VStack(alignment: .leading, spacing: IrrSpacing.sp1) {
             HStack(spacing: IrrSpacing.sp2) {
-                LeadingToggle(isOn: $enabled, label: event.displayName)
+                LeadingToggle(isOn: $enabled, label: event.displayName, compressibleLabel: true)
 
                 Picker("", selection: soundBinding) {
                     ForEach(SoundChoice.builtIns, id: \.self) { choice in
@@ -1123,11 +1138,42 @@ struct LeadingToggle: View {
     var info: String? = nil
     /// Flags a still-maturing feature with a "BETA" pill after the label (#694).
     var beta: Bool = false
+    /// Lets the label give width back — truncating — instead of forcing the
+    /// row wider than the box it was handed (#1854).
+    ///
+    /// Off by default, and that default is the behaviour every other caller
+    /// already had. `.fixedSize()` means "never narrower than ideal", so a
+    /// toggle carrying it cannot participate in compression at all; in a row
+    /// whose other parts are fixed too, the row's minimum is a constant, and a
+    /// container narrower than that constant does not clip it — SwiftUI centres
+    /// the overflow, which slides the content sideways and eats the panel's
+    /// horizontal margin. Only `NotificationEventRow` sits that close to the
+    /// edge, so only it opts in.
+    var compressibleLabel: Bool = false
 
     var body: some View {
         HStack(spacing: 6) {
-            Toggle(isOn: $isOn) { Text(label) }
-                .fixedSize()
+            Toggle(isOn: $isOn) {
+                // Scoped to the compressible path rather than applied
+                // unconditionally, so a caller keeping the default gets a
+                // byte-identical render by CONSTRUCTION and not by audit.
+                // "`.fixedSize()` makes a Text one line anyway" is not true:
+                // `.fixedSize()` proposes nil, and a label carrying a newline
+                // answers with two lines, which an unconditional
+                // `.lineLimit(1)` would silently collapse — measured at
+                // (106, 32) -> (87, 18) for "Two\nline label". Every literal
+                // label here is single-line, so nothing observable changed;
+                // `PermissionWizardView` passes a daemon-supplied title, which
+                // is exactly the caller that should not depend on that staying
+                // true.
+                //
+                // No `.truncationMode`: `.tail` is already SwiftUI's default,
+                // so spelling it would be a line that does nothing on either
+                // path.
+                Text(label)
+                    .lineLimit(compressibleLabel ? 1 : nil)
+            }
+            .fixedSize(horizontal: !compressibleLabel, vertical: true)
             if let info {
                 InfoIcon(text: info)
             }

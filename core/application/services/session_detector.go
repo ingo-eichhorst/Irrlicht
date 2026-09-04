@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"irrlicht/core/domain/agent"
-	"irrlicht/core/domain/backchannel"
 	"irrlicht/core/domain/lifecycle"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/ports/inbound"
@@ -60,10 +59,10 @@ const (
 	// initial-scan seeding pass, distinct from steady-state handling.
 	logComponentSessionDetectorSeed = "session-detector-seed"
 
-	// logComponentProcessExit tags the process-exit path's own log lines,
-	// including #1800's mid-turn conversion. Named rather than repeated
-	// inline: pid_manager.go and session_detector_lifecycle.go both write
-	// under it, so a typo in one would split the stream in two silently.
+	// logComponentProcessExit tags the process-exit path's own log lines.
+	// Named rather than repeated inline so the two call sites in
+	// pid_manager.go cannot drift apart on a typo and split the stream in
+	// two silently.
 	logComponentProcessExit = "process-exit"
 )
 
@@ -176,29 +175,6 @@ type SessionDetector struct {
 	// and never overlap for the same session.
 	debouncedEvents chan agent.Event
 
-	// processDeathVerdicts records, per session id, WHEN a mid-turn process
-	// exit was converted into a retained StateError row (#1800). It is what
-	// makes that retention terminal: a session already in the map is kept
-	// until its window closes and then released to the reaper, never
-	// re-converted. Without it the sweep re-converted the same dead session
-	// forever. Guarded by processDeathMu — HandleProcessExit reaches it from
-	// both the process-watcher callback and the liveness sweep.
-	//
-	// In-memory, but REPOPULATED AT SEED since #1815 — this comment used to say
-	// the map did not need to survive a restart "because the rows it describes
-	// do not either", and both halves are now false. The rows survive
-	// (retainedErrorAcrossRestart), and seedRestoreErrorVerdict re-registers an
-	// entry here for each one whose hold re-applied, stamped with the PERSISTED
-	// timestamp rather than with the restart, so the window continues instead of
-	// starting over.
-	processDeathVerdicts map[string]time.Time
-	processDeathMu       sync.Mutex
-
-	// processDeathRetention is processDeathRetention, overridable by tests
-	// through SetProcessDeathRetention so a twelve-hour window can be
-	// exercised without a twelve-hour test.
-	processDeathRetention time.Duration
-
 	// deletedCooldown is the minimum time after deletion before a session
 	// can be re-created from transcript activity (e.g. --continue). Prevents
 	// ghost sessions from late-arriving writes of a dying process.
@@ -281,20 +257,6 @@ type SessionDetector struct {
 	// tests and replay tooling that construct detectors directly are not
 	// consent-managed.
 	consentGate func(adapter string) bool
-
-	// uiSignals carries edge-triggered terminal read-back signals from
-	// TerminalObserver's ticker goroutine into the event loop, so the
-	// resulting state mutation runs on the single writer (like debouncedEvents)
-	// and never races processActivity. Non-blocking sender; a dropped signal is
-	// re-sent on the observer's next poll (issue #732).
-	uiSignals chan terminalUISignal
-}
-
-// terminalUISignal is an edge in a session's rendered-terminal UI state,
-// produced by TerminalObserver and applied on the event-loop goroutine.
-type terminalUISignal struct {
-	sessionID string
-	ui        backchannel.UIKind
 }
 
 // SessionDetectorDeps bundles NewSessionDetector's dependencies beyond the
@@ -324,11 +286,11 @@ type SessionDetectorDeps struct {
 //     writer, several frames from the literal that caused it: the reproduced
 //     stack for a bare literal bottoms out at removeFromProjectSessions, which
 //     tells you nothing about where the detector was built.
-//   - The three channels. A nil channel never panics, which is worse. The two
-//     senders that carry a `default` arm (debouncedEvents, uiSignals) drop
-//     every event silently and forever, and Run's receive on a nil `merged`
-//     parks for the life of the process, so the detector processes nothing and
-//     reports no error.
+//   - The two channels. A nil channel never panics, which is worse. The
+//     sender that carries a `default` arm (debouncedEvents) drops every event
+//     silently and forever, and Run's receive on a nil `merged` parks for the
+//     life of the process, so the detector processes nothing and reports no
+//     error.
 //   - Five fields that are neither. deletedCooldown at zero disables the
 //     ghost-session guard it exists to be; a nil signals is dereferenced
 //     without a guard (session.SignalHolds has no nil-receiver arms); dwell,
@@ -346,8 +308,6 @@ func newSessionDetector() *SessionDetector {
 		debounce:                 make(map[string]*debounceEntry),
 		debouncedEvents:          make(chan agent.Event, 64),
 		deletedCooldown:          10 * time.Second,
-		processDeathRetention:    processDeathRetention,
-		processDeathVerdicts:     make(map[string]time.Time),
 		signals:                  session.NewSignalHolds(),
 		dwell:                    session.NewStateDwell(),
 		idleProjectRetryAttempts: make(map[string]int),
@@ -356,7 +316,6 @@ func newSessionDetector() *SessionDetector {
 		bgLive:                   make(map[string]bool),
 		bgProbing:                make(map[string]bool),
 		bgInconclusive:           make(map[string]int),
-		uiSignals:                make(chan terminalUISignal, 64),
 	}
 }
 
@@ -393,47 +352,9 @@ func NewSessionDetector(watchers []inbound.Watcher, deps SessionDetectorDeps) *S
 		LiveCWDs:         deps.LiveCWDs,
 		OnSessionDeleted: det.removeFromProjectSessions,
 		OnSessionRemoved: det.cacheDeletedSnapshot,
-
-		// #1800. The decision lives on the detector rather than in PIDManager
-		// because it places a signal hold, and SignalHolds is the detector's:
-		// PIDManager owns PID plumbing, not classification policy — the same
-		// split that keeps holdParentWorkingForNewChild here and
-		// parentProcessLive there.
-		OnProcessDiedMidTurn: det.retainAsProcessDeath,
 	})
 	det.pidMgr.SetChildDeletedHandler(det.reevaluateParent)
 	return det
-}
-
-// HandleProcessExitRetainedForTest drives the real process-exit path once and
-// reports whether the session SURVIVED it — i.e. was retained as a
-// process-death error rather than deleted.
-//
-// It reads the answer back from the repo rather than returning
-// retainAsProcessDeath's own boolean, because calling that decision directly
-// AND then the exit path would evaluate it twice: the second evaluation sees a
-// registry entry the first one just removed, judges the frozen mid-turn
-// transcript on its merits again, and re-converts — reproducing the very loop
-// this helper exists to test against. Reading the row is unambiguous and has no
-// second call.
-func (d *SessionDetector) HandleProcessExitRetainedForTest(pid int, sessionID, reason string) bool {
-	d.HandleProcessExit(pid, sessionID, reason)
-	state, err := d.repo.Load(sessionID)
-	return err == nil && state != nil
-}
-
-// SetProcessDeathRetention overrides how long a session that died mid-turn is
-// kept in `error` before the reaper takes it (#1800). Intended for tests, which
-// otherwise could not reach the expiry branch at all.
-func (d *SessionDetector) SetProcessDeathRetention(dur time.Duration) {
-	d.processDeathRetention = dur
-	// Forwarded so the startup sweeps' #1815 exemption measures the SAME window
-	// this one does. They are described throughout as "the same twelve hours";
-	// a knob that moved only one of them would make that false in exactly the
-	// tests written to check it.
-	if d.pidMgr != nil {
-		d.pidMgr.SetErrorRetention(dur)
-	}
 }
 
 // SetDeletedCooldown overrides the deleted-session cooldown.
@@ -774,118 +695,10 @@ func (d *SessionDetector) Run(ctx context.Context) error {
 			// Coalesced events from debounce timers — process in the event
 			// loop goroutine so processActivity never runs concurrently.
 			d.processActivityWithoutIdentity(ev)
-		case sig := <-d.uiSignals:
-			// Terminal read-back edges (issue #732) — applied here so the
-			// state mutation shares the single writer with processActivity.
-			d.handleTerminalUISignal(sig)
 		case <-refreshTicker.C:
 			d.refreshStaleSessions()
 		}
 	}
-}
-
-// Terminal read-back reasons stamped on the state transitions a UI signal
-// drives (issue #732). The transition history surfaces these verbatim.
-const (
-	TerminalUIDetectedReason = "trust dialog detected (terminal read-back)"
-	TerminalUIClearedReason  = "trust dialog cleared (terminal read-back)"
-)
-
-// EnqueueTerminalUISignal hands an edge-triggered terminal read-back signal to
-// the event loop. Non-blocking: if the buffer is full the signal is dropped and
-// re-sent on the observer's next poll, so a momentary backlog never blocks the
-// observer's ticker. Implements TerminalObserver's sink.
-func (d *SessionDetector) EnqueueTerminalUISignal(sessionID string, ui backchannel.UIKind) {
-	select {
-	case d.uiSignals <- terminalUISignal{sessionID: sessionID, ui: ui}:
-	default:
-	}
-}
-
-// terminalUITransition computes the state/reason/uiReason for a terminal UI
-// edge. ok is false when the edge is a no-op the caller should skip without
-// recording: the rising edge finding the session already waiting (e.g. the
-// claudecode hook beat us to it), the clearing edge finding a waiting state
-// we're not responsible for, or the clearing edge's re-classification
-// independently landing back on waiting.
-func terminalUITransition(state *session.SessionState, ui backchannel.UIKind) (newState, reason, uiReason string, ok bool) {
-	if ui == backchannel.UIKindTrustDialog {
-		// Rising edge. Already waiting means nothing to do — no double-count.
-		if state.State == session.StateWaiting {
-			return "", "", "", false
-		}
-		return session.StateWaiting, TerminalUIDetectedReason, TerminalUIDetectedReason, true
-	}
-
-	// Clearing edge. Only undo a waiting we are responsible for.
-	if state.State != session.StateWaiting {
-		return "", "", "", false
-	}
-	// Re-classify from a WORKING base, not from the current waiting state:
-	// ClassifyState is a no-op when called with currentState == waiting and
-	// nil/ambiguous metrics, which would strand the session in waiting forever
-	// once the dialog we forced is gone. From a working base it re-derives
-	// ready/working from the metrics, while a genuine transcript reason to
-	// keep waiting (an open user-blocking tool, a question cue) still routes
-	// back to waiting — in which case newState == waiting and the caller
-	// leaves it untouched.
-	newState, reason = ClassifyState(session.StateWorking, state.Metrics)
-	if newState == state.State {
-		return "", "", "", false // transcript independently keeps it waiting — leave it
-	}
-	if reason == "" {
-		reason = TerminalUIClearedReason
-	}
-	return newState, reason, TerminalUIClearedReason, true
-}
-
-// handleTerminalUISignal folds a rendered-terminal UI edge into the session
-// lifecycle. It runs on the event-loop goroutine, but the load-modify-save runs
-// under WithSessionStateLock — the same lock processActivity and the async
-// PID-discovery path (assignPIDLocked) take — so a concurrent PID assignment
-// can't clobber the transition (or vice versa). A trust dialog on screen forces
-// waiting (a state the transcript never records, and that needs no hook); when
-// it clears, the session re-classifies — the transcript/process observers
-// remain authoritative for everything else.
-func (d *SessionDetector) handleTerminalUISignal(sig terminalUISignal) {
-	d.pidMgr.WithSessionStateLock(func() {
-		state, err := d.repo.Load(sig.sessionID)
-		if err != nil {
-			return // session gone since the signal was queued
-		}
-
-		newState, reason, uiReason, ok := terminalUITransition(state, sig.ui)
-		if !ok {
-			return
-		}
-
-		// Record only once we are actually acting, so a no-op edge never inflates
-		// the lifecycle log (the rising edge returns above without recording too).
-		d.record(lifecycle.Event{
-			Kind: lifecycle.KindUIDetected, SessionID: sig.sessionID,
-			Adapter: state.Adapter, UIKind: string(sig.ui), Reason: uiReason,
-		})
-
-		now := d.nowFn().Unix()
-		d.record(lifecycle.Event{
-			Kind: lifecycle.KindStateTransition, SessionID: sig.sessionID,
-			PrevState: state.State, NewState: newState, Reason: reason,
-		})
-		state.State = newState
-		state.UpdatedAt = now
-		switch newState {
-		case session.StateWaiting:
-			state.WaitingStartTime = &now
-		case session.StateWorking:
-			state.WaitingStartTime = nil
-		}
-		if err := d.repo.Save(state); err != nil {
-			d.log.LogError(logComponentSessionDetector, sig.sessionID,
-				fmt.Sprintf("failed to save terminal-UI update: %v", err))
-			return
-		}
-		d.broadcast(outbound.PushTypeUpdated, state)
-	})
 }
 
 // handleTranscriptEvent dispatches a transcript event to the appropriate handler.

@@ -2,9 +2,9 @@
 
 Irrlicht is a daemon that monitors coding agent sessions. It watches transcript files and processes to classify sessions into the states declared by `session.CanonicalStates()` (`core/domain/session/session.go`) — currently **working**, **waiting**, **ready**, **error**. Any upstream agent change that alters the items below can break detection.
 
-This file exists to brief a release-sweep analysis (`/ir:agent-releases`) on what it should actually look for. It covers all twelve sections irrlicht ships: the **eleven agent adapters** in `core/adapters/inbound/agents/` (`all.go`'s `All()` — claude-code, codex, pi, aider, opencode, kiro-cli, gemini-cli, antigravity, mistral-vibe, copilot, hermes) **plus the Gas Town orchestrator**, which is a different layer entirely (`core/adapters/inbound/orchestrators/gastown` — it polls a CLI, has no `Source` variant, and so is absent from the discovery table below).
+This file exists to brief a release-sweep analysis (`/ir:agent-releases`) on what it should actually look for. `core/adapters/inbound/agents/` ships **twelve agent adapters** (`all.go`'s `All()` — claude-code, codex, pi, aider, opencode, kiro-cli, gemini-cli, antigravity, mistral-vibe, copilot, hermes, junie), and this file has **eleven numbered sections**: ten of those twelve adapters **plus the Gas Town orchestrator**, which is a different layer entirely (`core/adapters/inbound/orchestrators/gastown` — it polls a CLI, has no `Source` variant, and so is absent from the discovery table below). **Copilot and Hermes have no section of their own yet** — they appear only in the inline tables below, so a release sweep must not treat "no section" as "not monitored".
 
-*(#1090's title says "4 of 10 agent adapters" and its body lists nine names "+ the gastown orchestrator". At that time: nine adapters + one orchestrator = ten sections; there were not ten agent adapters. Copilot (#1256) makes it ten adapters + one orchestrator = eleven sections. Noted because the miscount is exactly the kind of thing this file is supposed to stop.)*
+*(#1090's title says "4 of 10 agent adapters" and its body lists nine names "+ the gastown orchestrator". At that time: nine adapters + one orchestrator = ten sections; there were not ten agent adapters. Noted because the miscount is exactly the kind of thing this file is supposed to stop — and it recurred. Per `git log -p` on this file, the count was right at "ten sections / nine adapters"; copilot (#1256) and hermes (#1325) then each incremented it **without adding a section**, and junie inherited that accumulated drift (it did add `### 11`), leaving a claim of thirteen against a file holding eleven. Count with `grep -cE '^### [0-9]+\.'` on this file instead of incrementing the previous number.)*
 
 ## How to use this file
 
@@ -29,7 +29,7 @@ An adapter's `Source` variant determines how sessions are found at all. This is 
 
 | Variant | Adapters | How sessions are discovered |
 |---|---|---|
-| `agent.FilesUnderRoot` | claude-code, codex, pi, gemini-cli, mistral-vibe, kiro-cli, antigravity, copilot | fswatcher over a `$HOME`-relative root |
+| `agent.FilesUnderRoot` | claude-code, codex, pi, gemini-cli, mistral-vibe, kiro-cli, antigravity, copilot, junie | fswatcher over a `$HOME`-relative root |
 | `agent.FilesUnderCWD` | aider | **No watcher at all** — the process scanner stat-polls `<pid's CWD>/<filename>` |
 | `agent.ProcessOwnedStore` | opencode, hermes | Dedicated SQLite watcher; full tailer bypass |
 
@@ -48,7 +48,7 @@ An adapter's `Source` variant determines how sessions are found at all. This is 
 
 | Tier | Adapters | Meaning |
 |---|---|---|
-| **(a)** Tailer only | claude-code, codex, pi, gemini-cli, aider, copilot | No second file feeds the parser. (claude-code is still not *purely* transcript-driven — its hooks deliver `PermissionPending`/`CompactInProgress` out-of-band, and `settings.json` supplies the model fallback.) |
+| **(a)** Tailer only | claude-code, codex, pi, gemini-cli, aider, copilot, junie | No second file feeds the parser. (claude-code is still not *purely* transcript-driven — its hooks deliver `PermissionPending`/`CompactInProgress` out-of-band, and `settings.json` supplies the model fallback.) |
 | **(b)** Tailer + sibling side-read | antigravity, kiro-cli, mistral-vibe | Parser reads a sibling store for data the transcript lacks, via the `TranscriptPathAware` seam |
 | **(c)** Full bypass | **opencode** | `MetricsProvider` short-circuits before a tailer is ever constructed (`core/adapters/outbound/metrics/adapter.go:110-112`) |
 
@@ -173,7 +173,7 @@ That fallback is **not universal**, and two adapters depend on its absence:
 
 ### `turn_done`: marker vs. heuristic
 
-The single highest-value thing to know per adapter. **Four adapters get an explicit signal from upstream; the rest infer it**, and every inference has the same two failure modes: a trailing text-only message mid-turn fires a **premature ready**, and a turn ending on a tool call **sticks in `working` forever**.
+The single highest-value thing to know per adapter. **Six adapters get an explicit signal from upstream; the rest infer it**, and every inference has the same two failure modes: a trailing text-only message mid-turn fires a **premature ready**, and a turn ending on a tool call **sticks in `working` forever**.
 
 | Adapter | `turn_done` source |
 |---|---|
@@ -187,8 +187,9 @@ The single highest-value thing to know per adapter. **Four adapters get an expli
 | gemini-cli | *heuristic* — non-empty content **and** zero tool calls |
 | copilot | **explicit** — `assistant.turn_end`. Note copilot closes the turn after *every* tool call and immediately opens a continuation, so a turn_end is only terminal when no `assistant.turn_start` follows without an intervening `user.message` |
 | aider | *synthesized* — `idleFlusher` after 1500ms idle; the only adapter |
+| junie | **explicit** — `TaskState`, written once when the task finalizes (after failures too — state `COMPLETED` follows `AgentTaskFailedEvent`), so it is the turn boundary, not a success verdict |
 
-**There is no inactivity sweep on `working`** for the heuristic adapters (except aider's idle flush) — a session that never emits its terminal line stays `working` indefinitely. That is why the heuristic adapters are the ones to scrutinize on any upstream turn-shape change: the five explicit adapters degrade loudly, the rest degrade silently.
+**There is no inactivity sweep on `working`** for the heuristic adapters (except aider's idle flush) — a session that never emits its terminal line stays `working` indefinitely. That is why the heuristic adapters are the ones to scrutinize on any upstream turn-shape change: the explicit adapters degrade loudly, the rest degrade silently.
 
 ---
 
@@ -208,7 +209,7 @@ The single highest-value thing to know per adapter. **Four adapters get an expli
 #### Transcript parsing dependencies
 - **JSONL event structure**: each line is a JSON object with role/type fields
 - **Event types recognized**: `user`, `assistant`, `tool_use`, `tool_result`, `turn_done`
-- **`turn_done` event**: primary signal that agent finished its turn — one of only four adapters with an explicit upstream marker (see the marker-vs-heuristic table above)
+- **`turn_done` event**: primary signal that agent finished its turn — one of the six adapters with an explicit upstream marker (see the marker-vs-heuristic table above)
 - **Tool call structure**: `tool_use` blocks with `name` field; matched against `tool_result`
 - **User-blocking tools**: `AskUserQuestion`, `ExitPlanMode` — trigger immediate waiting state
 - **`is_error` on tool_result**: indicates ESC/rejection (maps to ready state)
@@ -216,7 +217,7 @@ The single highest-value thing to know per adapter. **Four adapters get an expli
 - **Assistant text**: last assistant message checked for trailing `?` (waiting heuristic)
 - **Token/cost fields**: `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_creation_tokens`
 - **Model name field**: normalized (e.g., `sonnet` -> `claude-sonnet-4-6`)
-- **Hooks**: the hook matcher (`hookinstaller.go:34`) hardcodes `Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|mcp__.*|AskUserQuestion|ExitPlanMode`. Since #1178 the hook endpoint follows the daemon's own `IRRLICHT_BIND_ADDR`, so hook-delivered observations *can* be recorded against a dev daemon on an alt port.
+- **Hooks**: the `PermissionRequest`/`PostToolUse`/`PostToolUseFailure` matcher (`hookinstaller.go`, `hookMatcher`) is match-all since #1861 — it used to be a nine-entry tool allowlist, which silently dropped a permission prompt on any tool outside it, so **a new tool name is a non-event now and was a regression before**. The `Notification` matcher (`hookMatcherNotification`) is an explicit `notification_type` allowlist, so **a new type meaning "a human is blocked" IS an event and needs adding there** — diff it against the bundle's own type list, not against dialog names, which are a different vocabulary. Read both current values from the constants rather than from this line: they are pinned by tests (`TestHookMatcher_TakesClaudeCodesLiteralShortCircuit`, `TestNotificationTypesDrivingState_MatchesTheInstalledMatcher`) and a value copied into prose here drifts silently. Since #1178 the hook endpoint follows the daemon's own `IRRLICHT_BIND_ADDR`, so hook-delivered observations *can* be recorded against a dev daemon on an alt port.
 
 #### Process-level dependencies
 - Binary named `claude` found via `pgrep -x claude`
@@ -539,6 +540,22 @@ grant the hooks permission).
 > about the native SEA binary possibly becoming default (which would break `DiscoverPID`
 > and the heap-bump exclusion), closed as completed with the verdict "No impact today; no
 > code change required".
+
+### 11. JetBrains Junie (`junie`)
+
+- **Transcript path**: `~/.junie/sessions/<session-id>/events.jsonl`. The basename is constant, so **session ID = the parent `session-*` directory**, via `SessionIDFromPath` (`core/adapters/inbound/agents/junie/adapter.go`); the root's `index.jsonl`, sibling `state.json`/`transcript.md`, and any `events.jsonl` inside a `task-*` subdirectory all return `""` and are skipped — exactly one session per session directory.
+- **Env override: none.** `$JUNIE_DATA` exists upstream but points at the version/install store under `~/.local/share/junie`, **not** at the session root (verified against a live install, 2026-08) — the root is a plain `$HOME` join. If Junie ships a real session-root override, that's the silent-blackout category below.
+- **`turn_done` is an explicit marker**: `TaskState`, written once when the task finalizes — **after failures too** (state `COMPLETED` follows `AgentTaskFailedEvent`), so it is the turn boundary, not a success verdict. `TaskStartedEvent` → `turn_start` (copilot precedent, #1256): a resumed task can start with **no** `UserPromptEvent`, so it's the only signal the agent is working again.
+- **Waiting**: no hooks — `INPUT_REQUIRED` in the `event.state` field of `SessionA2uxEvent` lines opens `PermissionRequestIDs` keyed on `stepId` (the copilot pattern); `UserAsyncResponseEvent`/`UserResponseEvent`/`CancelAgentEvent`/`TaskState` drain every open id as a safety net.
+- **Schema is unversioned and reverse-engineered** from live captures (`parser.go` doc comment); unknown `kind`s are skipped, never fatal.
+- **CWD**: `CurrentDirectoryUpdatedEvent` is the only in-transcript source (no top-level `cwd` field). A session that never started a task emits none — `ExtractCWDFromJunieSidecar` (`core/pkg/transcript/junie_cwd.go`) then falls back to the `~/.junie/processes/<pid>-<session-id>-<hash>.json` sidecar, accepting a file only when its JSON `sessionId` field matches.
+- **PID**: the same process sidecars give a direct session→PID binding (`pid.go`) — stronger than the CWD scan sibling adapters need — but sidecars can outlive their process, so a PID is liveness- and command-pattern-checked (`(^|/)junie( |$)`) before being trusted.
+
+#### What breaks it
+- Renaming `events.jsonl`, or moving sessions out of `~/.junie/sessions/`, or changing the `session-` directory prefix → zero sessions, silently.
+- A new session-root env override (see above) → silent blackout for users who set it.
+- Renaming `TaskState`/`TaskStartedEvent` → turn lifecycle never opens/closes; renaming `INPUT_REQUIRED` or dropping `stepId` → no `waiting` episodes.
+- Sidecar filename/JSON shape changes (`sessionId`/`projectPath`) → CWD fallback and PID binding degrade (sessions land in "unknown" project at PID=0).
 
 ---
 

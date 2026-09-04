@@ -1,0 +1,104 @@
+{
+  "scenario_id": "blocking-dialog-without-tool-call",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.153.0",
+    "daemon_version": "0.6.1+cfb8d62",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes, narrowly -- of the row's four triggers, codex's sandbox/network confirmation and its request_permissions prompt are tool-carried, its two trust prompts are startup-only (no working->waiting edge), and it has no auto-mode/settings review; the one that fits is a server-driven MCP elicitation, which needs a purpose-built server to raise with nothing open\ndaemon_capability: incapable -- no hook (run_permission_request_hooks fires only from ApprovalAction, all of which are tool-carried; codex has no Notification/elicitation hook event) and no transcript trace (EventMsg::ElicitationRequest is `// Transient, non-durable` in rollout/src/policy.rs), so neither edge of the episode reaches any Source irrlicht reads\ndriver_capability: ready -- send/keys/wait_turn/sleep all present; the blocker is transport, not tooling"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "blocking-dialog-without-tool-call",
+      "agent": "codex",
+      "assessed_at": "2026-09-03T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: **yes**, narrowly \u2014 codex has exactly ONE dialog class that fits the row (a server-driven MCP elicitation), and it needs a purpose-built server to raise with no tool call open.\ndaemon_capability: **incapable** \u2014 codex emits no trace of ANY blocking dialog outside its approval path. Elicitations fire no hook and are explicitly non-durable in the rollout, so neither edge of the episode reaches any Source irrlicht reads.\ndriver_capability: **ready** \u2014 send / keys / wait_turn / sleep are all implemented by replaydata/agents/codex/driver-interactive.sh. The blocker is transport, not tooling.\n\nRoute: **frozen**.\n\n## Agent \u2014 all four triggers checked\n\n**1. Sandbox / network-access confirmation \u2014 PRESENT but tool-carried.**\n`ApprovalAction::NetworkAccess { id, turn_id, environment_id, target, host,\nprotocol, port, trigger, hook_command, hook_run_id, command, cwd }`\n(`core/src/tools/approvals.rs`) is codex's \"Do you want to approve network\naccess to ...\" overlay. It carries the exec `command` and `cwd` because it is\nraised by the network proxy / execve interceptor *while that exec tool call is\nopen* \u2014 the tool call both opens the episode and completes to end it. Same for\n`ApprovalAction::Execve` and `ApprovalAction::WriteStdin`. The row's acceptance\ncriterion (\"no tool call is in flight when the episode begins, and none\ncompletes to end it\") disqualifies all three.\n\n**2. First-use trust prompt \u2014 PRESENT but at the wrong lifecycle position.**\ncodex has two: the workspace-trust question (`tui/src/cwd_prompt.rs`; answered\ninto `~/.codex/config.toml`'s `[projects.\"<path>\"] trust_level`, 20+ entries on\nthis host) and the hook-trust menu (`tui/src/startup_hooks_review.rs`;\n\"1. Review hooks / 2. Trust all and continue / 3. Continue without trusting\").\nBoth are startup gates raised before the thread takes a turn, so the session is\nnever `working` when they open \u2014 there is no `working \u2192 waiting` edge to\nobserve, only a delayed birth. (Both are also answered by the driver's boot\ngates, per `replaydata/agents/codex/boot-gates.sh` and the 2-19 cell.)\n\n**3. Server-driven MCP elicitation \u2014 PRESENT, and the only trigger that fits.**\ncodex implements the MCP client side generically:\n`rmcp-client/src/elicitation_client_service.rs` handles inbound\n`elicitation/create` and `openai/elicitation/create` as an ordinary server\nREQUEST (not as part of a tool-call future), `codex-mcp/src/elicitation.rs`\nturns it into `EventMsg::ElicitationRequest`, and the TUI blocks on\n`tui/src/bottom_pane/mcp_server_elicitation.rs`. Both feature flags are\n`Stage::Stable, default_enabled: true` (`features/src/lib.rs`:\n`tool_call_mcp_elicitation`, `auth_elicitation`) \u2014 this is shipped, on-by-default\nbehaviour, not an experiment. Under `-a untrusted` elicitations are not\nauto-approved (`codex-mcp/src/elicitation.rs`: `AskForApproval::UnlessTrusted =>\nfalse`), so they do surface.\n\nBut codex's own two PRODUCERS of an elicitation are both tool-bound:\n`tool_call_mcp_elicitation` fires during a tool call by name, and\n`auth_elicitation` is built from a connector's failing tool RESULT\n(`connector_auth_failure_from_tool_result`, driven from\n`core/src/mcp_tool_call.rs`; its own copy reads \"Authentication for X was\nrequested and accepted. Retry this tool call now.\"). To satisfy this row a\nrecording would need a purpose-built MCP server that sends `elicitation/create`\noff a background timer, so it lands while codex is mid-turn with nothing open.\nThat is possible \u2014 the codex repo ships exactly such a fixture in\n`scripts/mcp_conformance/server.py` \u2014 which is why the verdict is `yes` and not\n`no`.\n\n**4. Auto-mode / settings review \u2014 ABSENT.** codex has no product-raised\nsettings-review dialog. The nearest thing, `PermissionsRequestApproval`\n(\"Would you like to grant these permissions?\"), is raised by the built-in\n`request_permissions` TOOL (`core/src/tools/handlers/request_permissions.rs`,\n`shell_spec.rs: create_request_permissions_tool`) \u2014 a tool call, so it belongs\nto 2-19 / 2-26, not here. `AskForApproval::Granular { sandbox_approval, rules,\nskill_approval, request_permissions, mcp_elicitations }` is configuration, not a\nreview prompt.\n\n## Daemon \u2014 why `incapable` rather than `bug`\n\nirrlicht has exactly two channels into a codex session: the rollout JSONL under\n`~/.codex/sessions` (`Source` = FilesUnderRoot) and the three hook events it\ninstalls into `~/.codex/hooks.json`. A tool-free blocking dialog reaches\nneither.\n\n**No hook.** Every PermissionRequest hook codex can fire comes from one\nfunction, `run_permission_request_hooks` (`core/src/hook_runtime.rs:246`), whose\nonly caller is `core/src/tools/approvals.rs`. Its input struct\n`PermissionRequestRequest` carries a mandatory `tool_name`, populated from\n`ApprovalAction::permission_request_payload()`. An elicitation is not an\n`ApprovalAction` and never enters that path. codex's full hook event set \u2014\n`PreToolUse, PermissionRequest, PostToolUse, PreCompact, PostCompact,\nSessionStart, SessionEnd, UserPromptSubmit, SubagentStart, SubagentStop, Stop,\nInterrupt` (verified in the 0.153.0 binary's strings and in\n`app-server-protocol/schema/typescript/v2/HookEventName.ts`) has **no\nNotification event and no elicitation event**, so unlike claudecode there is no\nmatcher irrlicht could widen. The legacy `notify` program is not a way round it\neither: `hooks/src/legacy_notify.rs`'s payload enum has a single variant,\n`AgentTurnComplete`.\n\n**No transcript trace.** `codex-rs/rollout/src/policy.rs` classifies\n`EventMsg::ElicitationRequest` \u2014 together with `ExecApprovalRequest`,\n`ApplyPatchApprovalRequest`, `RequestPermissions` and `RequestUserInput` \u2014 under\nthe comment `// Transient, non-durable events.`, i.e. never persisted to the\nrollout JSONL. This is the same fact the 2-19 assessment records from the other\nside (\"the approval prompt is a live TUI overlay, NOT written to the rollout\nJSONL\"); there, the hook made up for it. Here nothing does.\n\nSo both edges the row asserts \u2014 the entry into `waiting` and the release back\nout \u2014 are unobservable, and the trailing-idle phase has nothing to catch: the\nsession simply reads `working` (or `ready`, if the rollout tail already looks\nturn-done) for the whole time the modal blocks. That is \"no trace exists\",\nwhich is `incapable`, not `bug`.\n\n## What would unblock it\n\nAny one of: (a) codex gaining a hook event for elicitations/interactions, or\nrouting them through `ApprovalAction` so the existing `.*` PermissionRequest\nmatcher picks them up; (b) codex moving `EventMsg::ElicitationRequest` out of\nthe non-durable list in `rollout/src/policy.rs` so the rollout carries it \u2014 at\nwhich point this becomes an ordinary parser change and the cell is\n`record`-able against the spec the claudecode/antigravity siblings already\nstate; or (c) irrlicht gaining a codex Source over the app-server protocol\nstream, which is a new transport rather than a rule change.",
+      "caveats": [
+        "agent_supports=yes rests on ONE trigger, and it is the least stock of the four: a purpose-built MCP server sending elicitation/create off a background timer so it lands mid-turn with no tool call open. codex's own two elicitation producers (tool_call_mcp_elicitation, auth_elicitation) are both tool-bound, so nothing in codex raises a qualifying dialog on its own. If a re-assessor decides that stretches the row, agent_supports=no is defensible \u2014 the route is frozen either way.",
+        "NOT VERIFIED LIVE, and marked assumed rather than dismissed: that a spontaneous (no-tool-call) elicitation actually paints a blocking modal in the codex TUI rather than being deferred or dropped. The evidence is structural \u2014 ElicitationClientService handles it as a server request rather than inside a tool-call future, and codex-mcp/src/elicitation.rs emits EventMsg::ElicitationRequest which the TUI renders in bottom_pane/mcp_server_elicitation.rs. This verb makes no model calls and drives no CLI, so it was not exercised. It does not change the route: the daemon verdict is independent of it.",
+        "This is a source-of-truth split worth naming: the codex facts here were read from openai/codex at HEAD via the GitHub API, while the installed binary is codex-cli 0.153.0. Every load-bearing claim was cross-checked against strings in the 0.153.0 rust binary (the hook event set, the ServerRequest variant list including McpServerElicitationRequest and PermissionsRequestApproval, the GranularApprovalConfig fields, the approval overlay option labels). The line numbers cited are HEAD's.",
+        "VACUOUS-PASS CONDITION (why no spec phases are written): on codex, a recording of this row cannot distinguish 'the dialog never painted' from 'the dialog painted and the daemon saw nothing' -- both produce an events.jsonl with no waiting episode. Any waiting a codex recording DID show here would necessarily come from something else (the rollout's turn-done/waiting-cue path, or a stray approval), i.e. would be positive evidence of a DIFFERENT signal, not of this one. A future re-assessment that records this cell must carry independent proof the modal was on screen (a tmux pane capture asserting the elicitation text) before grading anything.",
+        "The 2-19 sibling's transport is the near miss: codex's PermissionRequest hook IS installed with matcher \".*\", so if codex ever routed elicitations through ApprovalAction the daemon would receive them with no irrlicht change at all. That is why the unblock condition is stated as a codex-side change first.",
+        "The sandbox/network-access confirmation was checked carefully rather than assumed absent, because it is the row's own first-listed trigger and codex genuinely has one. ApprovalAction::NetworkAccess carries the exec `command`, `cwd` and `hook_command` fields precisely because it is raised from an exec that is already running -- it is a tool-carried episode and belongs to 2-19 / 2-26."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/src/tools/approvals.rs (openai/codex, read via gh api at HEAD)",
+          "note": "The complete ApprovalAction enum -- ExecCommand, WriteStdin, Execve, ApplyPatch, McpToolCall, NetworkAccess, RequestPermissions -- and permission_request_payload(), which stamps each with a hook tool_name. This is the ONLY caller of run_permission_request_hooks, and every variant is carried by a tool call, which is the load-bearing fact for daemon=incapable."
+        },
+        {
+          "kind": "file",
+          "ref": "core/src/hook_runtime.rs (openai/codex)",
+          "note": "run_permission_request_hooks at line 246, alongside run_pre_tool_use_hooks / run_post_tool_use_hooks / run_turn_stop_hooks / run_session_end_hooks / run_turn_interrupt_hooks / run_pre_compact_hooks / run_post_compact_hooks. The full firing-site list: there is no elicitation or notification hook to install."
+        },
+        {
+          "kind": "file",
+          "ref": "codex-rs/rollout/src/policy.rs (openai/codex)",
+          "note": "EventMsg::ElicitationRequest, ExecApprovalRequest, ApplyPatchApprovalRequest, RequestPermissions and RequestUserInput all sit under the comment `// Transient, non-durable events.` -- they are never written to the rollout JSONL that irrlicht's FilesUnderRoot Source tails. The single most decisive citation for daemon=incapable."
+        },
+        {
+          "kind": "file",
+          "ref": "codex-rs/rmcp-client/src/elicitation_client_service.rs (openai/codex)",
+          "note": "Handles inbound elicitation/create and openai/elicitation/create as an ordinary MCP server request, not inside a tool-call future -- the structural basis for 'codex can block on a dialog with no tool call in flight'."
+        },
+        {
+          "kind": "file",
+          "ref": "codex-rs/codex-mcp/src/elicitation.rs and codex-rs/codex-mcp/src/auth_elicitation.rs (openai/codex)",
+          "note": "elicitation.rs emits EventMsg::ElicitationRequest and, under AskForApproval::UnlessTrusted, does not auto-approve. auth_elicitation.rs builds its plan from connector_auth_failure_from_tool_result -- i.e. from a failing MCP tool RESULT, which is why that flavour is tool-bound."
+        },
+        {
+          "kind": "file",
+          "ref": "codex-rs/features/src/lib.rs (openai/codex)",
+          "note": "tool_call_mcp_elicitation and auth_elicitation are both Stage::Stable, default_enabled: true. Checked because 'experimental flag' would have been an easy wrong dismissal -- they are shipped and on."
+        },
+        {
+          "kind": "file",
+          "ref": "codex-rs/core/src/tools/handlers/request_permissions.rs + shell_spec.rs (openai/codex)",
+          "note": "request_permissions is a built-in TOOL (create_request_permissions_tool / RequestPermissionsHandler), so codex's 'Would you like to grant these permissions?' dialog is tool-carried and is not the auto-mode/settings-review shape this row asks for."
+        },
+        {
+          "kind": "file",
+          "ref": "codex-rs/hooks/src/legacy_notify.rs (openai/codex)",
+          "note": "The legacy `notify` program's payload enum has exactly one variant, AgentTurnComplete (HookEvent::AfterAgent). Checked so that 'codex has a notify hook' could not be mistaken for a second channel that might carry a dialog."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex",
+          "note": "Binary strings scan, codex-cli 0.153.0 (`version: 0.153.0`). Confirms against the installed build: the hook event set (PreToolUse|PermissionRequest|PostToolUse|PreCompact|PostCompact|SessionStart|SessionEnd|UserPromptSubmit|SubagentStart|SubagentStop|Stop|Interrupt -- NO Notification, NO elicitation event); the ServerRequest variants (CommandExecutionRequestApproval, ApplyPatchApproval, ExecCommandApproval, FileChangeRequestApproval, PermissionsRequestApproval, McpServerElicitationRequest, ToolRequestUserInput, DynamicToolCall, CurrentTimeRead, ChatgptAuthTokensRefresh, AttestationGenerate); GranularApprovalConfig{sandbox_approval, rules, skill_approval, request_permissions, mcp_elicitations}; tui/src/bottom_pane/mcp_server_elicitation.rs, tui/src/cwd_prompt.rs, tui/src/startup_hooks_review.rs; and the approval overlay option labels."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/codex/hooks.go + hookinstaller.go",
+          "note": "irrlicht's whole codex push channel: installedHookEvents = [PermissionRequest, PostToolUse, Stop] with hookMatcher \".*\", dispatched to HandlePermissionHook / HandleStopHook. Nothing here can receive an event codex does not fire, and codex fires none for a tool-free dialog."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/2-19_tool-gate-permission-prompt/metadata.json",
+          "note": "The contrast case, RECORDED: a TOOL-carried codex approval overlay does reach waiting via the hook, and that cell notes from the other side that the overlay itself is never written to the rollout JSONL. 2-19 works because the hook makes up for the missing transcript trace; this row has no hook to make up for it."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/antigravity/scenarios/2-27_blocking-dialog-without-tool-call/expected.jsonl",
+          "note": "Sibling frozen cell; source of the 'FROZEN -- no phases' meta-only spec shape used here."
+        },
+        {
+          "kind": "issue",
+          "ref": "ingo-eichhorst/Irrlicht#1861",
+          "note": "The report this row was created from. Its class-2 (tool-free) finding is claudecode-specific -- a Notification/permission_prompt on a 6s timer that irrlicht's idle_prompt-only matcher discards. codex has no Notification hook at all, so the codex column fails one layer earlier: there is nothing to discard."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "applicable: false (frozen). Not a driver gap -- driver-interactive.sh implements send/keys/wait_turn/sleep, every step a recipe would need. codex has one dialog class that fits the row (a server-driven MCP elicitation raised with no tool call in flight), and it is invisible to irrlicht on BOTH of the daemon's channels: it fires no hook (run_permission_request_hooks is called only from tools/approvals.rs, and every ApprovalAction variant is tool-carried; codex's hook event set has no Notification and no elicitation event), and EventMsg::ElicitationRequest is listed under `// Transient, non-durable events.` in rollout/src/policy.rs so it is never written to the rollout JSONL the adapter tails. Neither edge of the waiting episode is observable, so no recording could grade the row. WHAT A RECIPE WOULD LOOK LIKE once that changes: configure an MCP server in ~/.codex/config.toml that sends elicitation/create off a background timer (openai/codex ships scripts/mcp_conformance/server.py as a fixture of this shape); turn 1 calls one of its tools to arm the timer; turn 2 is a long tool-free generation that keeps the session working while the elicitation lands; answer with `keys`; wait_turn; hold a >=15s trailing idle. Re-assess when codex routes elicitations through ApprovalAction (the existing \".*\" PermissionRequest matcher would then pick them up with no irrlicht change), or persists them to the rollout, or when the adapter gains a Source over the app-server protocol stream."
+    }
+  }
+}

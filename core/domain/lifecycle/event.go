@@ -19,41 +19,6 @@ const (
 	KindPIDDiscovered  Kind = "pid_discovered"
 	KindProcessSpawned Kind = "process_spawned"
 	KindProcessExited  Kind = "process_exited"
-	// KindProcessDiedMidTurn is the OTHER outcome of a process exit: the pid
-	// went away while a turn was still open, so #1800 converted the session to
-	// `error` and KEPT the row instead of deleting it.
-	//
-	// It is a separate Kind rather than a flag on KindProcessExited because in
-	// this codebase that Kind means the session went AWAY. Six sites read it,
-	// and they do not all delete — listing them because the short version
-	// ("every consumer deletes on it") is false for three:
-	//
-	//	internal/replay/state_machine.go  delete the row
-	//	cmd/replay/ghosts.go              the ghost's removal edge
-	//	cmd/replay/replay_sidecar.go      reset the lifetime to ready
-	//	core/adapters/outbound/filesystem/concurrency_tracker.go  end the span
-	//	internal/viewer/web/playbackTimeline.js  aliveUntil
-	//	tools/linux-parity-check.sh       the "removed" token
-	//
-	// What they share is that none of them expects the row to survive, and
-	// every process_exited event in the committed corpus was written by the
-	// teardown path. Overloading the Kind would silently reinterpret all of
-	// them; #1817 measured that as 16 goldens fabricating a `working→error`
-	// the recording's own daemon never produced. THIS COMMENT IS THAT FIGURE'S
-	// ONE HOME — cite it from elsewhere rather than restating it. The
-	// population, with the command that measures it, since the scope is
-	// load-bearing (it counts sidecar files, not every match in the tree):
-	//
-	//	find replaydata -name events.jsonl | xargs grep -h '"process_exited"' | wc -l   # 317
-	//
-	// Only three of those six can be guarded at compile time (the Go switches);
-	// the JS and shell copies compare raw strings and must be updated by hand.
-	//
-	// Recorded on the CONVERSION edge only, not on every retained sweep tick —
-	// see SessionDetector.retainAsProcessDeath, whose verdict registry is what
-	// makes that edge one-shot. Carries the pid and the exit reason; the row it
-	// describes survives, so nothing may treat this as a deletion.
-	KindProcessDiedMidTurn Kind = "process_died_midturn"
 
 	// File-system events on the agent's working directory. Debounced.
 	// Reserved by .specs/onboard-agent/07-10-recorder-fidelity.md (WS08);
@@ -83,13 +48,12 @@ const (
 	// assertable observable in onboarding fixtures.
 	KindTaskDelta Kind = "task_delta"
 
-	// Terminal-backend read-back (issue #732, Phase 3 of #724). KindUIDetected
-	// records a transcript-invisible UI state read off the rendered terminal
-	// (today: the trust/permission dialog) — the read counterpart to the
-	// backchannel write path. KindTerminalFrame is reserved for raw frame
-	// capture (pipe-pane + a screen-buffer parser) and is not emitted yet.
-	KindUIDetected    Kind = "ui_detected"
-	KindTerminalFrame Kind = "terminal_frame"
+	// Terminal-backend read-back (issue #732). KindUIDetected records a
+	// transcript-invisible UI state read off the rendered terminal (the
+	// trust/permission dialog). No daemon path emits it since #1875 retired
+	// terminal read-back; the kind is retained because frozen recordings
+	// under replaydata/ carry it and must stay readable.
+	KindUIDetected Kind = "ui_detected"
 
 	// Cache-creation regression (issue #374). Emitted once per
 	// (project, regressing_version) pair within a daemon process lifetime when
@@ -189,8 +153,11 @@ type Event struct {
 	TaskSubject string `json:"task_subject,omitempty"` // create only
 	TaskStatus  string `json:"task_status,omitempty"`  // pending | in_progress | completed
 
-	// Terminal-backend read-back (KindUIDetected). The UI state read off the
-	// rendered terminal screen, e.g. "trust_dialog". Empty on the clearing edge.
+	// Terminal-backend read-back (KindUIDetected). The UI state that was read
+	// off the rendered terminal screen, e.g. "trust_dialog"; empty on the
+	// clearing edge. Like the kind itself, nothing writes this since #1875
+	// retired terminal read-back — it is retained so frozen recordings under
+	// replaydata/ stay decodable.
 	UIKind string `json:"ui_kind,omitempty"`
 
 	// Held-signal ceiling expiry (KindHoldExpired, issue #1360). HeldForMS is

@@ -2,7 +2,6 @@ package outbound
 
 import (
 	"context"
-	"errors"
 	"time"
 
 	"irrlicht/core/domain/lifecycle"
@@ -503,55 +502,3 @@ type ProcessObserver interface {
 	// empty/nil map (not an error) when the env is unreadable.
 	EnvOf(pid int) (map[string]string, error)
 }
-
-// AgentController writes back to a discovered, externally-launched agent
-// session through whatever terminal backend owns its pty (tmux, kitty,
-// iTerm2/Terminal.app, …). It is the write counterpart to the read-only
-// observation seams: the daemon never owns the agent process, it scripts the
-// backend that does, keyed off the session's already-captured session.Launcher
-// (issue #724, the "backchannel"). The concrete implementation lives in
-// adapters/outbound/control. Consent and the backchannel master-toggle are
-// enforced upstream by InputService — implementations just inject.
-type AgentController interface {
-	// SendInput injects data into the session's terminal as if typed.
-	// Returns a non-nil error when the backend command fails; callers that
-	// want a "not controllable" verdict consult Controllable first.
-	SendInput(sessionID string, data []byte) error
-	// SendCommand injects a command and submits it. Unlike SendInput, the
-	// submit sequence is owned by the backend: tmux/kitty get a trailing CR
-	// appended; AppleScript hosts auto-submit the bare command. Used for
-	// backchannel actions — both preset (issue #754) and custom.
-	SendCommand(sessionID, command string) error
-	// Interrupt delivers an interrupt (e.g. Ctrl-C) to the session.
-	Interrupt(sessionID string) error
-	// Controllable reports whether the session has a usable backend target
-	// for a supported terminal backend. It does not consider consent or the
-	// master-toggle — those are InputService's concern.
-	Controllable(sessionID string) bool
-}
-
-// TerminalReader reads the rendered terminal screen of a discovered agent
-// session back from whatever multiplexer/kitty backend owns its pty — the read
-// counterpart to AgentController (issue #732, Phase 3 of #724). It surfaces
-// signals that are structurally absent from the transcript (today: the
-// interactive trust/permission dialog) without replacing the transcript/process
-// observers.
-//
-// Snapshot-only and multiplexer/kitty-only: tmux capture-pane and kitty get-text
-// render the screen for us, so the daemon needs no terminal emulator; plain
-// iTerm2/Terminal.app have no daemon-reachable read path and report
-// not-readable. Consent and the backchannel master-toggle are enforced upstream
-// by TerminalObserver — implementations just capture.
-type TerminalReader interface {
-	// CaptureScreen returns the session's rendered terminal screen. Returns a
-	// non-nil error wrapping ErrNotReadable when no readable backend hosts the
-	// session, so callers can skip such sessions with errors.Is — it does not
-	// consider consent or the master-toggle.
-	CaptureScreen(sessionID string) ([]byte, error)
-}
-
-// ErrNotReadable is returned (wrapped) by TerminalReader.CaptureScreen when the
-// session has no backend that supports read-back — read-back is
-// multiplexer/kitty-only, so plain iTerm2/Terminal.app sessions are not
-// readable (issue #732).
-var ErrNotReadable = errors.New("session terminal is not readable")

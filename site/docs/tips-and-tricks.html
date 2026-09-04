@@ -4,16 +4,16 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Tips &amp; Tricks — Irrlicht Docs</title>
-<meta name="description" content="Practical, easy-to-miss ways to get more out of Irrlicht — menu bar icon styles, quota forecasts, spoken alerts, click-to-jump, usage exports, and backchannel rules.">
+<meta name="description" content="Practical, easy-to-miss ways to get more out of Irrlicht — menu bar icon styles, quota forecasts, spoken alerts, click-to-jump, and usage exports.">
 <link rel="canonical" href="https://irrlicht.io/docs/tips-and-tricks.html">
 <meta property="og:type" content="article">
 <meta property="og:title" content="Tips &amp; Tricks — Irrlicht Docs">
-<meta property="og:description" content="Practical, easy-to-miss ways to get more out of Irrlicht — menu bar icon styles, quota forecasts, spoken alerts, click-to-jump, usage exports, and backchannel rules.">
+<meta property="og:description" content="Practical, easy-to-miss ways to get more out of Irrlicht — menu bar icon styles, quota forecasts, spoken alerts, click-to-jump, and usage exports.">
 <meta property="og:url" content="https://irrlicht.io/docs/tips-and-tricks.html">
 <meta property="og:site_name" content="Irrlicht">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="Tips &amp; Tricks — Irrlicht Docs">
-<meta name="twitter:description" content="Practical, easy-to-miss ways to get more out of Irrlicht — menu bar icon styles, quota forecasts, spoken alerts, click-to-jump, usage exports, and backchannel rules.">
+<meta name="twitter:description" content="Practical, easy-to-miss ways to get more out of Irrlicht — menu bar icon styles, quota forecasts, spoken alerts, click-to-jump, and usage exports.">
 
 <link rel="icon" type="image/svg+xml" href="../assets/favicon.svg">
 <link rel="icon" type="image/png" sizes="32x32" href="../assets/favicon-32x32.png">
@@ -202,25 +202,6 @@
       <p><strong>macOS and web.</strong> A session that is <span class="badge badge-waiting">waiting</span> shows the question it is blocked on inline, so you can answer the right agent without opening every window. When four agents ask at once that is a lot of text, so both surfaces let you collapse them: on macOS the summary display control switches between collapsed and question-showing, and on the web dashboard the header has a <strong>Collapse all pending questions</strong> button.</p>
 
       <p>Sessions that are <span class="badge badge-working">working</span> or <span class="badge badge-ready">ready</span> deliberately show no question pill &mdash; the text only appears when there is something to answer.</p>
-
-      <!-- ── Backchannel ── -->
-      <h2>Answer for Yourself &mdash; Automatically</h2>
-
-      <p><strong>macOS.</strong> <strong>Settings &rarr; Advanced Settings &rarr; Backchannel (control sessions)</strong> &mdash; marked <strong>beta</strong> in the app &mdash; lets Irrlicht send input and interrupts <em>into</em> a running session through its terminal backend (tmux, kitty, herdr, …), instead of you switching to that window. It is off by default, and each agent additionally needs the <strong>control</strong> permission granted &mdash; consent-first, like everything else Irrlicht touches.</p>
-
-      <p>Turning it on reveals a <strong>Rules</strong> editor: an event (<strong>Waiting</strong>, <strong>Ready</strong>, <strong>Working</strong>, <strong>Context (%)</strong>, <strong>Context (tokens)</strong>), an optional agent filter, and an action (<strong>Send</strong> a response, or <strong>Interrupt</strong>). The classic rule is the one below &mdash; compact automatically at 85% context, so a long-running agent never stalls waiting for you to notice.</p>
-
-      <figure style="margin: 0.5rem 0 1rem; max-width: 420px;">
-        <picture>
-          <source srcset="../assets/releases/v0.5.4/backchannel-rules.webp" type="image/webp">
-          <img loading="lazy" src="../assets/releases/v0.5.4/backchannel-rules.png" alt="The Backchannel Rules editor with a rule named Auto-compact: when Context (%) is greater than or equal to 85, for any agent, send the response Compact." style="display:block; width:100%; height:auto; border-radius:6px; border:1px solid var(--border);">
-        </picture>
-      </figure>
-
-      <div class="callout callout-warning">
-        <strong>It really does type for you</strong>
-        A rule sends real input to a real session. Start with one narrow rule, watch it fire once, and only then add more. Backchannel has no web dashboard equivalent.
-      </div>
 
       <!-- ── Scripting ── -->
       <h2>Script It</h2>

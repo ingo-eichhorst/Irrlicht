@@ -1,0 +1,166 @@
+{
+  "scenario_id": "permission-gate-non-mutating-tool",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.14.50",
+    "daemon_version": "0.6.1+44b99a40",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes (opencode's PermissionConfig makes read/glob/grep/list/webfetch/websearch/lsp first-class gate keys, and each read-only tool's execute calls Permission.ask before it does anything)\ndaemon_capability: full (the opencode hook channel, #1719/epic #1355, carries permission.asked/permission.replied with NO tool name on the path, so a read-only gate and a mutating gate are indistinguishable to the daemon) — REVERSES the sibling 2-19 cell's 2026-05-29 `incapable`, which predates the hook channel\ndriver_capability: ready (driver-interactive.sh now has live + keys; opencode's overlay initialises at selected:\"once\", so a bare Enter replies \"once\")"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "permission-gate-non-mutating-tool",
+      "agent": "opencode",
+      "assessed_at": "2026-09-03T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full (REVERSES the sibling 2-19 verdict — see below)\ndriver_capability: ready\n\n## Agent — a read-only gate is a first-class, shipped configuration (agent_supports: yes)\n\nopencode 1.14.50's `PermissionConfig` schema enumerates its gateable keys verbatim, and read-only tools are not a special case in it:\n\n    read, edit, glob, grep, list, bash, task, external_directory, todowrite,\n    question, webfetch, websearch, repo_clone, repo_overview, lsp, doom_loop, skill\n\n(the same list is repeated in opencode's own config-help prose inside the bundle, which additionally notes that `todowrite, question, webfetch, websearch, doom_loop` accept only a flat action while the rest accept per-pattern objects).\n\nEvery read-only tool asks BEFORE it does anything, with the same call shape the mutating tools use — read verbatim from the bundle:\n\n  - read:      `yield*d.ask({permission:\"read\",patterns:[rs.relative(Y.worktree,$)],always:[\"*\"],metadata:{}})`\n  - glob:      `yield*n.ask({permission:\"glob\",patterns:[r.pattern],always:[\"*\"],…})`\n  - grep:      `yield*n.ask({permission:\"grep\",patterns:[r.pattern],always:[\"*\"],…})`\n  - webfetch:  `yield*r.ask({permission:\"webfetch\",patterns:[s.url],always:[\"*\"],…})`\n  - websearch: `yield*c.ask({permission:\"websearch\",patterns:[o.query],always:[\"*\"],…})`\n  - lsp:       `yield*r.ask({permission:\"lsp\",patterns:[\"*\"],always:[\"*\"],…})`\n\nagainst the mutating side's `ask({permission:\"edit\",…})` (write / edit / patch all normalise to the `edit` key — `var HR=[\"edit\",\"write\",\"apply_patch\"]`) and `ask({permission:<bash ToolID>,…})`.\n\nStronger still: opencode SHIPS a read-only ask in its default `build` agent ruleset, with no user config at all —\n`read:{\"*\":\"allow\",\"*.env\":\"ask\",\"*.env.*\":\"ask\",\"*.env.example\":\"allow\"}` — so \"a permission dialog raised by a tool that only reads\" is a path opencode takes out of the box, not a contrived configuration.\n\n## Daemon — full, and this REVERSES the sibling cell's verdict\n\nThe sibling `2-19 tool-gate-permission-prompt` records `daemon_capability: incapable`, assessed 2026-05-29 with a live probe. That verdict was correct WHEN IT WAS WRITTEN and is now stale: it predates the opencode hook channel (issue #1719, epic #1355). Its two load-bearing claims — \"the watcher reads only session/message/part\" and \"none of the three waiting-classifier rules can fire for opencode\" — are both still true of the STORE path, and both are now beside the point, because the signal no longer arrives on the store path.\n\nThe channel, end to end:\n\n1. `core/adapters/inbound/agents/opencode/hookinstaller.go` installs irrlicht's own plugin at `~/.config/opencode/plugin/irrlicht.js` (opencode auto-discovers `{plugin,plugins}/*.{ts,js}` from the config dir, globally, for every session) and subscribes to exactly three bus events: `permission.asked`, `permission.replied`, `session.idle`.\n2. `plugin.js` registers ONLY the read-only `event` bus tap (never the `permission.ask` HOOK, whose `output.status` is writable) and forwards `{hook_event_name, session_id}` to the beacon.\n3. `hooks.go` dispatches `permission.asked` → `HandlePermissionPromptHook`, `permission.replied` → `ReleasePermissionPromptHold`, `session.idle` → `ReleasePermissionPromptHold` + `HandleStopHook`.\n4. `session_detector_lifecycle.go:413` holds `session.SignalPermissionPrompt` and dispatches a synthetic activity; `state_classifier.go:106-118` rule 0 turns `m.PermissionPending` into `waiting`. `:443` releases.\n\n**Why this row in particular is safe on opencode.** #1861 is a tool-NAME-allowlist defect: Claude Code's gate reached the daemon for nine named tools and no others. opencode has no such surface to fail on. The hook payload is `{hook_event_name, session_id}` — `openCodeHookPayload` has no tool field at all — and rule 0's predicate is `m.PermissionPending`, a bare bool. There is no point on the opencode path where a tool name is read, so the daemon cannot distinguish a `read` gate from an `edit` gate, and a read-only gate produces the identical `waiting` episode by construction.\n\n**The narrowness that makes the assert honest** (read from opencode's own `Permission.ask`): for each requested pattern it evaluates the merged ruleset; `deny` throws `PermissionDeniedError`, `allow` continues, and — decisively — `if(!D)return;` returns EARLY, publishing nothing, when every pattern already resolved to allow. `permission.asked` therefore fires only when the user is genuinely being asked. It is not a fires-on-every-tool event, so holding `waiting` on it is a real blocked-on-user assert.\n\n**The release edge really arrives, including on deny.** `Permission.reply` publishes `Replied` for EVERY reply — `once`, `always` and `reject` — and cascades a rejection to that session's other pending requests, publishing one `Replied` per request. opencode is therefore not in copilot's position (nothing emitted on denial, hold pinned to the 12-hour ceiling).\n\n**The one asymmetry, kept as a caveat rather than a downgrade.** `ReleasePermissionPromptHold` drops the hold but dispatches NO synthetic activity (unlike the assert side, which does). So on opencode the `waiting → working` edge is carried by the next store poll — the approved tool's `part` row moving on — not by the hook itself. The edge arrives; its LATENCY is poll-bound. That is why the two `*_answered` phases below pin no `max_delay_ms`.\n\n## Driver — ready\n\n`replaydata/agents/opencode/driver-interactive.sh` now exposes `live, keys, send, mid_turn_send, wait_turn, reset_session, interrupt, restart, sigkill, slash, sleep, session, start_session` (via `driver_step_types_from_file`). The prior `gap:permission-approval` recorded on 2-19 is closed: `oc_keys` sends raw tmux key events with no implicit Enter, which is exactly the primitive that assessment said was missing.\n\nWhat a single Enter does, read from the overlay's own state machine: `Ag(requestID)` initialises it as `{stage:\"permission\", selected:\"once\", …}`, the option list for that stage is `[\"once\",\"always\",\"reject\"]`, and `f0` returns `{state, reply: Ig(y,\"once\")}` for any submit that is not `always`/`reject`. So Enter on a freshly-opened overlay replies `once` immediately — no arrow navigation, no second stage.\n\nThe cell MUST run the live-TUI (tmux) path, not headless `opencode run`: a permission set to `ask` in headless/server mode hangs forever (the awaiting-input Promise never resolves — anomalyco/opencode #14473, #16367), so the answer half is unreachable there. The `{\"type\":\"live\"}` marker step forces `run_live`.\n\n## Confidence\n\n0.8. The agent half is read directly out of the installed binary's bundle (permission schema, per-tool `ask` call sites, default build ruleset, `Permission.ask`/`Permission.reply` bodies, the overlay state machine), and the daemon half directly out of the adapter and classifier source. Not higher because the daemon half is PROVISIONAL on emission in the sense the assess skill names: opencode has never yet been recorded reaching `waiting` at all — the hook channel is new since the sibling cell was assessed, and `record` is the only thing that can promote this from a source reading to a settled fact.",
+      "caveats": [
+        "VACUOUS-PASS CONDITION (the answer to 'when would this pass while proving nothing?'): expected.jsonl's phase schema has NO tool-name field, so a recipe that drove both gates through the SAME tool — two bash commands, one that writes and one that only reads — would produce a byte-identical arc and pass 100% while testing nothing about tool class. The recipe therefore pins `permission: {edit: …, read: …}` and forbids bash in the prompt, so the mutating gate can only come from the write tool (permission key `edit`) and the read-only gate only from the read tool (permission key `read`). A RE-RECORD MUST CONFIRM THE TWO GATES CAME FROM TWO DIFFERENT TOOLS from the recording itself — the two gated `part` rows in the opencode store carry different `tool` values (`write` vs `read`), and the overlay titles differ ('Call tool edit' vs 'Call tool read') — because the spec cannot.",
+        "LOAD-BEARING ENVIRONMENT PRECONDITION: the whole daemon verdict rests on irrlicht's opencode plugin being installed at ~/.config/opencode/plugin/irrlicht.js. It is ABSENT on this host as of this assessment (checked: the ~/.config/opencode/plugin directory does not exist), so the recording daemon must run with the opencode `hooks` AND `database` permissions granted (both are checked in serveHookRequest before dispatch) and must have written the plugin before opencode launches. Without it there is no permission.asked, no hold, and NO waiting at all — the cell fails red rather than passing hollow, which is the safe direction, but it is still a precondition to state rather than assume.",
+        "daemon_capability:full REVERSES this cell's own sibling. replaydata/agents/opencode/scenarios/2-19_tool-gate-permission-prompt/metadata.json records daemon_capability:incapable, assessed 2026-05-29 with a live probe that inspected opencode.db while an overlay was held. That probe's finding is still true — a held gate leaves no distinguishable trace in the STORE (the gated part sits at state.status=\"running\", and the `permission` table holds only APPROVED patterns, never the pending request; hooks.go's header measures the same thing: 'that pending request is held in a plain in-memory Map'). What changed is that the signal no longer has to come from the store: #1719/#1355 gave opencode a hook channel. 2-19 should be re-assessed on the same evidence.",
+        "The waiting→working edge is poll-bound, not hook-driven: ReleasePermissionPromptHold releases the hold WITHOUT dispatching a synthetic activity (contrast HandlePermissionPromptHook, which does), so the exit from waiting lands on the next opencode store poll that sees the approved tool's part move. The two *_answered phases deliberately pin no max_delay_ms for this reason; a re-record should measure the real latency and only then consider a ceiling.",
+        "MODEL RISK, not an adapter risk: the configured default is the local lmstudio/gemma-4-e2b-it-uncensored (~/.config/opencode/opencode.json). A small model may collapse the two steps into one tool call, use bash despite the prompt forbidding it, or emit no tool call at all. Any of those makes the cell unrecordable for a MODEL reason — it does not re-open the agent or daemon pillar. If it recurs, split the two calls into two turns (the scenario explicitly permits it) and re-anchor the phases, accepting a `ready` between the two episodes.",
+        "Extra gates are possible mid-turn if the model reads a file other than gate.txt: the recipe scopes both rules to gate.txt (`{\"*\":\"allow\",\"gate.txt\":\"ask\",\"**/gate.txt\":\"ask\"}`; opencode's matcher is last-rule-wins — `findLast` in Permission's rule resolver — so the narrow ask rules must stay AFTER the broad allow). An unanswered extra overlay would hang the turn to the wait_turn deadline rather than corrupt the arc.",
+        "opencode is a PRESESSION adapter: a transient proc-<PID> row appears first and never goes working, then the SQLite-keyed ses_… session is minted on the first prompt with a DIFFERENT session_id. The spec models the birth as two phases and anchors every later phase to the real ses_… session, per the sibling 1-5 cell's shape."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/hooks.go",
+          "note": "the channel that makes daemon=full: permission.asked → HandlePermissionPromptHook (line ~200), permission.replied → ReleasePermissionPromptHold, session.idle → Release + HandleStopHook. openCodeHookPayload carries ONLY {hook_event_name, session_id} — no tool name anywhere on the path, which is why a read-only gate and a mutating gate are indistinguishable to the daemon and #1861's named-tool-allowlist shape cannot occur here. Its header also records the measurement that opencode's pending request lives in a plain in-memory Map, so only the hook can see it."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/hookinstaller.go",
+          "note": "installedHookEvents = permission.asked / permission.replied / session.idle; minOpenCodeVersion = 1.14.50 (the installed CLI's exact version, so the floor is met). Documents why permission.ask (the HOOK) and tool.execute.before/after are deliberately NOT installed — a per-tool-call event would hold waiting on every tool call, the exact hazard #1719 warned about."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/opencode/plugin.js",
+          "note": "the installed artifact: registers exactly one `event` bus tap, forwards {hook_event_name, session_id} for the three named events and nothing else. Installed to ~/.config/opencode/plugin/irrlicht.js — ABSENT on this host today, hence the recording precondition."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "rule 0 (lines 106-118): id=permission_prompt, when = m.PermissionPending, decide = waiting. A bare bool with no tool-name dimension — the structural reason this row cannot fail on opencode the way it failed on claudecode."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector_lifecycle.go",
+          "note": "HandlePermissionPromptHook (line 413) holds SignalPermissionPrompt and dispatches a synthetic activity; ReleasePermissionPromptHold (line 443) releases it WITHOUT dispatching one — the asymmetry that makes the exit from waiting poll-bound on opencode."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/driver-interactive.sh",
+          "note": "driver_step_types_from_file reports live/keys/send/mid_turn_send/wait_turn/reset_session/interrupt/restart/sigkill/slash/sleep/session/start_session. oc_keys (lines 488-507) sends raw tmux key events with no implicit Enter; the `live` marker step (line 634) forces the long-lived run_live TUI path; the settings blob is seeded as RUN_CWD/opencode.json (lines 127-141), which opencode loads BEFORE the global config. Closes 2-19's gap:permission-approval."
+        },
+        {
+          "kind": "probe",
+          "ref": "strings(1) over the installed opencode 1.14.50 bundle (/Users/ingo/.opencode/bin/opencode, 106 MB, bun-compiled)",
+          "note": "PermissionConfig schema key list (read/edit/glob/grep/list/bash/task/external_directory/todowrite/question/webfetch/websearch/repo_clone/repo_overview/lsp/doom_loop/skill) and the identical list in opencode's own config-help prose; the per-tool ask({permission:\"read\"|\"glob\"|\"grep\"|\"webfetch\"|\"websearch\"|\"lsp\"}) call sites; the default build ruleset read:{\"*\":\"allow\",\"*.env\":\"ask\",…}; HR=[\"edit\",\"write\",\"apply_patch\"] (write normalises to the edit key); Permission.ask's early `if(!D)return;` (publishes nothing when every pattern allows) and Permission.reply publishing Replied for once/always/reject with rejection cascade; the overlay state machine Ag()={stage:\"permission\",selected:\"once\"} with Og(\"permission\")=[\"once\",\"always\",\"reject\"] and f0() replying \"once\" on a bare submit; and the rule resolver's findLast (last matching rule wins) with a default of {action:\"ask\"}."
+        },
+        {
+          "kind": "url",
+          "ref": "https://github.com/anomalyco/opencode/issues/14473",
+          "note": "why the recipe must use the live TUI path: a permission set to \"ask\" hangs forever in headless/server mode — the tool call sits at status=running and the awaiting-input Promise never resolves. Corroborated by #16367 for opencode serve+attach."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/opencode/scenarios/2-19_tool-gate-permission-prompt/metadata.json",
+          "note": "the sibling whose daemon=incapable this cell reverses. Its live probe (2026-05-29) is not contradicted — it measured the STORE, and the store still shows nothing. The hook channel (#1719/#1355) post-dates it."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/2-26_permission-gate-non-mutating-tool/metadata.json",
+          "note": "sibling row for the same scenario, used as the template for the recipe shape (send → sleep → keys Enter → sleep → keys Enter → wait_turn → trailing sleep) and for the spec's phase naming."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "timeout_seconds": 600,
+      "preconditions": [
+        "opencode >= 1.14.50 on PATH and configured (assessed against exactly 1.14.50 — `opencode --version`). The daemon's hook floor is 1.14.50, so an older CLI installs no plugin and the cell cannot produce waiting.",
+        "IRRLICHT'S OPENCODE PLUGIN MUST BE INSTALLED before opencode launches: ~/.config/opencode/plugin/irrlicht.js, written by the daemon once the opencode `hooks` permission is granted. It is ABSENT on this host as of assessment — verify it exists (and that its embedded beacon command points at the RECORDING daemon's binary) as the first step of the run. Both `hooks` and `database` consent must be granted; serveHookRequest checks them in that order before it will dispatch.",
+        "tmux on PATH: this is a live-TUI cell. Headless `opencode run` cannot answer a gate at all (opencode #14473/#16367 — an `ask` rule hangs forever), so the `live` marker step is load-bearing, not decorative.",
+        "RE-PROBE AT RECORD TIME: confirm <run cwd>/gate.txt does NOT already exist. The read half must read what the write half just created — a leftover file lets the model skip the write and collapse the cell into a single gate.",
+        "RE-PROBE AT RECORD TIME: read the effective merged ruleset, not just the seeded file. ~/.config/opencode/opencode.json (global) is loaded after the seeded project config, and opencode resolves a rule with findLast — a global `read: \"allow\"` or `edit: \"allow\"` added later would sit AFTER the project rules in some merge orders and silently un-gate one half, which is indistinguishable in events.jsonl from the daemon missing the episode.",
+        "The configured default model must emit tool calls. This host's default is lmstudio/gemma-4-e2b-it-uncensored (LM Studio must be up on 127.0.0.1:1234); the driver passes no --model."
+      ],
+      "setup": [
+        "The recipe `settings` blob is seeded by driver-interactive.sh as a project-local opencode.json in the per-run cwd BEFORE launch (opencode loads project config before ~/.config/opencode/opencode.json). It pins `edit` and `read` to `ask` for gate.txt ONLY, leaving everything else allowed, so the run produces exactly two gates — one from a tool that CHANGES the workspace and one from a tool that only READS.",
+        "The two rules are deliberately on two DIFFERENT permission keys. `edit` is the key the write tool asks under (opencode normalises edit/write/apply_patch to `edit`); `read` is the key the read tool asks under. This is what stops the cell from degenerating into the same-tool shape the phase schema cannot detect.",
+        "The prompt forbids bash explicitly: a shell `echo >` plus `cat` would produce the same arc through ONE tool and prove nothing about tool class.",
+        "Each gate is answered with a bare Enter. opencode's overlay opens at stage=permission with `once` preselected, and a submit that is neither `always` nor `reject` replies `once` immediately — no navigation needed. The 30s sleeps before each Enter are sized for the slow local model; a stray Enter arriving before an overlay opens lands on an empty composer and is a no-op.",
+        "The final token is a literal (STEPS-DONE) rather than prose, so the turn cannot end on a sentence the daemon's imperative-cue heuristic reads as a question and flips to waiting after the settle."
+      ],
+      "script": [
+        {
+          "type": "live"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "send",
+          "text": "Do exactly two steps, in this order, and nothing else. Step 1 (this one CHANGES a file): use your write tool to create a file named gate.txt in the current directory whose entire contents are the single line GATE-OK. Step 2 (this one only READS): use your read tool to read gate.txt back. Do not use bash, and do not run any shell command, for either step. Wait for step 1 to finish before starting step 2. After step 2 has finished, reply with exactly one line containing only the token STEPS-DONE"
+        },
+        {
+          "type": "sleep",
+          "seconds": 30
+        },
+        {
+          "type": "keys",
+          "keys": "Enter"
+        },
+        {
+          "type": "sleep",
+          "seconds": 30
+        },
+        {
+          "type": "keys",
+          "keys": "Enter"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        }
+      ],
+      "settings": {
+        "permission": {
+          "edit": {
+            "*": "allow",
+            "gate.txt": "ask",
+            "**/gate.txt": "ask"
+          },
+          "read": {
+            "*": "allow",
+            "gate.txt": "ask",
+            "**/gate.txt": "ask"
+          }
+        }
+      },
+      "verify": [
+        "events.jsonl contains a transient proc-<PID> presession in ready, then a DISTINCT ses_… session born ready once the first prompt lands; every later assertion is on the ses_… session",
+        "events.jsonl contains a pid_discovered bound to the ses_… session",
+        "events.jsonl contains state_transition→working on the ses_… session when the prompt is sent",
+        "events.jsonl contains a state_transition→waiting for the MUTATING gate (write tool → permission key `edit`), then →working after the first Enter",
+        "events.jsonl contains a SECOND, distinct state_transition→waiting for the READ-ONLY gate (read tool → permission key `read`), then →working after the second Enter — not skipped, and not merged into the first episode",
+        "the daemon log shows two `received permission.asked` lines and two `received permission.replied` lines for the ses_… session (the hook channel actually delivered; absence here and 'the daemon missed it' must not look the same)",
+        "the opencode store / transcript.jsonl shows the two gated tool parts carry DIFFERENT tool values (write vs read) — the tool-class claim the phase schema cannot make",
+        "events.jsonl contains state_transition→ready after the last gate (session.idle → HandleStopHook)",
+        "final state is ready and stays ready for the full ≥10s trailing idle — no fall back to waiting"
+      ]
+    }
+  }
+}

@@ -1,0 +1,139 @@
+{
+  "scenario_id": "blocking-dialog-without-tool-call",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "bug",
+    "driver_capability": "ready",
+    "agent_cli_version": "2.1.259",
+    "daemon_version": "0.6.1+0e9d3bb1",
+    "confidence": 0.75,
+    "notes": "agent_supports: yes\ndaemon_capability: bug (#1861 — the only signal for a tool-free blocking dialog is Notification/permission_prompt on a 6000 ms timer; the daemon installs the Notification matcher as idle_prompt only AND its handler drops every other type); driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "blocking-dialog-without-tool-call",
+      "agent": "claudecode",
+      "assessed_at": "2026-09-03T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "bug",
+      "driver_capability": "ready",
+      "confidence": 0.75,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: bug; driver_capability: ready\n\n## Reasoning\n\n**Agent \u2014 the dialog class exists and the product itself names it.** Claude Code\n2.1.259 carries a dialog registry (minified `var nb = {...}`) mapping each\ndialog *kind* to `{waitingFor, needs, notification}`. Six of its entries are\nblocking dialogs attached to no tool call at all, all six present as literal\nstrings in the shipped binary:\n\n| kind | registry entry (verbatim) |\n|---|---|\n| `sandbox_network_access` | `{waitingFor:\"sandbox request\", notification:{text:\"A sandboxed command needs network access\"}}` |\n| `managed_settings_security` | `{waitingFor:\"dialog open\", notification:{text:\"Managed settings need your review before they apply\"}}` |\n| `auto_mode_setup_review` | `{notification:{text:\"Auto-mode setup proposal is ready for review\"}}` |\n| `auto_mode_flagged_allow` | `{notification:{text:\"Auto-mode setup flagged some permission rules for review\"}}` |\n| `mcp_elicitation` | `{waitingFor:\"input needed\", notification:(w)=>({text:\"Claude Code needs your input\", type: url ? \"elicitation_url_dialog\" : \"elicitation_dialog\"}), layout:\"bottom\"}` |\n| `mcp_url_elicitation` | `{waitingFor:\"input needed\", needs:\"MCP input: open link\", notification:{text:\"An MCP server needs your input\", type:\"elicitation_url_dialog\"}}` |\n\nThe binary even keeps its own set of the non-user-invoked ones \u2014\n`ARo = new Set([\"managed_settings_security\",\"sandbox_network_access\",\"mcp_url_elicitation\"])`,\nconsulted as `open.some(d => d.userInvoked !== true && ARo.has(d.kind))` \u2014 so\n\"a blocking dialog the user did not ask for\" is a first-class concept in the\nproduct, not an inference of ours. `agent=yes`.\n\n**How these reach a subscriber, and the one number that decides this cell.**\nNone of them raises `PermissionRequest`: that event carries a `tool_name` and\nthese dialogs have no tool. Their only hook signal is `Notification`, dispatched\non a timer:\n\n    No(() => { ... Gv({message: w, notificationType: I}, ...) }, ye ? null : sKe)\n    var Td=600000, jXe=30000, sKe=6000, ...\n\n`sKe = 6000` \u2014 six seconds, matching the ~6.1 s to `waiting` measured live in\n#1861 (a class-1, tool-named dialog reached `waiting` in 0.0 s by comparison).\nThe `notificationType` comes from the registry entry, and the dispatcher applies\na default the table above makes load-bearing:\n\n    function r5(n, onReveal) { GUe(n.text, n.type ?? \"permission_prompt\", onReveal) }\n\nFour of the six entries (`sandbox_network_access`, `managed_settings_security`,\n`auto_mode_setup_review`, `auto_mode_flagged_allow`) carry NO `type`, so they\npublish `notification_type: \"permission_prompt\"`. The two MCP ones publish\n`elicitation_dialog` / `elicitation_url_dialog`. And the matcher is matched\nagainst that value \u2014 `uA()` builds `{hook_event_name:\"Notification\",\nnotification_type: v}` and passes `matchQuery: v`.\n\n**Daemon \u2014 blocked twice over on `main`.** irrlicht installs the Notification\nhook with\n\n    hookMatcherNotification = \"idle_prompt\"\n    (core/adapters/inbound/agents/claudecode/hookinstaller.go)\n\nso none of `permission_prompt`, `elicitation_dialog`, `elicitation_url_dialog`\nis ever delivered. Even if the matcher were widened by hand, the receiver drops\nthem a second time:\n\n    if payload.NotificationType != notificationTypeIdlePrompt { log \"ignored\"; return }\n    (core/adapters/inbound/agents/claudecode/hooks.go, handleNotificationHook)\n\n\u2014 written as deliberate defense-in-depth \"so a broadened settings.json matcher\ncan't dispatch other notification types\". Both layers must move together.\n\nWith nothing delivered, walk the ladder in `state_classifier.go` while a class-2\ndialog is on screen: `PermissionPending` unset; `TranscriptPermissionPending` is\ncopilot's signal, not claudecode's; `NeedsUserAttention` needs an open\n`AskUserQuestion`/`ExitPlanMode`; `OpenToolStalled` needs an open\nedit/write/multiedit/notebookedit tool; `IdlePromptPending` unset. No rung\nclaims it. The session reads `working` (or `ready`, if the transcript tail\nalready looks turn-done) for the entire time the modal blocks the agent, and\nBOTH edges the scenario asserts \u2014 the entry into `waiting` and the release out\nof it \u2014 are missing.\n\nA census of every existing claudecode recording in `replaydata/` found **no\n`Notification` hook event of any type** (40 `PostToolUse`, 6\n`PermissionRequest`, 2 `PreToolUse`, 2 `PostToolUseFailure`, 1 `Stop`) \u2014 which\nis consistent with a matcher that only ever admits `idle_prompt`, and means this\nrow has no prior art to template from. That census is a claim inherited from the\n#1861 investigation and is the one figure here I did not re-derive; treat it as\nreported, not re-verified.\n\n`daemon=bug` rather than `incapable`: the trace exists, Claude Code emits it,\nand the 3-state model represents it perfectly well (it is an ordinary `waiting`\nepisode). Only irrlicht's matcher plus its handler guard discard it. **PR #1867\n(open, not merged; this worktree is `main` without it) widens the matcher to\n`agent_needs_input|elicitation_dialog|elicitation_url_dialog|idle_prompt|permission_prompt`\nand is the fix.** The spec asserts the CORRECT arc and is flagged\n`known_failing`.\n\n**Driver.** `send`, `slash`, `keys`, `wait_turn` and `sleep` are all implemented\nby `replaydata/agents/claudecode/driver-interactive.sh` (verified with\n`driver_step_types_from_file`). `driver=ready`.\n\n## Why this trigger, and why not the obvious ones\n\nThe row's acceptance criteria require that **no tool call is in flight** when the\nepisode begins. That disqualifies two triggers that otherwise look convenient:\n\n- `sandbox_network_access` fires while a sandboxed `Bash` call is open, so the\n  `waiting` episode IS carried by a tool call (and its `tool_result` ends it).\n- an MCP elicitation fires while the server's `mcp__*` tool call is open, for\n  the same reason.\n\nBoth are the scenario's own text (\"a server-driven elicitation from a configured\nMCP server\") read loosely; the acceptance criterion is the stricter of the two\nand is what the recipe is built against. That leaves the settings-review family,\nwhich is raised by the product on its own clock with nothing open.\n\nThe primary trigger is `managed_settings_security`, driven through Claude Code's\nown override seam: `CLAUDE_CODE_REMOTE_SETTINGS_PATH` (binary log line: *\"Remote\nsettings: Using override file ${n} (CLAUDE_CODE_REMOTE_SETTINGS_PATH), skipping\nAPI fetch\"*) plus `CLAUDE_CODE_REMOTE_SETTINGS_POLL_MS`. Changing the file\nmid-session makes the poll pick up a security-relevant delta and raise the\nreview dialog with no tool call anywhere near it, and costs no extra model call.\nThe driver has no step that writes a file, so the agent arms the change in turn\n1 via `Bash cp` (pre-allowed so that turn is itself ungated), and turn 2 is a\nlong, tool-free generation that keeps the session `working` while the poll\nfires.\n",
+      "caveats": [
+        "PR #1867 is the open fix (Notification matcher widened to agent_needs_input|elicitation_dialog|elicitation_url_dialog|idle_prompt|permission_prompt). It is NOT merged and this worktree is main without it, so the cell is assessed against main and records known_failing. Note that the matcher is only half: handleNotificationHook in hooks.go also drops every non-idle_prompt type as defense-in-depth, so a matcher-only change would still deliver nothing \u2014 record should confirm both halves moved before re-recording as passing.",
+        "VACUOUS-PASS CONDITION: this cell passes while proving nothing if no class-2 dialog ever painted. Absence of a waiting episode and inability to raise the dialog look identical in events.jsonl, and on main both are the expected output. So the recording must carry POSITIVE proof the modal was on screen: record captures the pane (tmux capture-pane) after the arming poll and asserts the literal review text is present before grading any phase. A run in which the dialog never appeared is INCONCLUSIVE, never a pass and never a confirmation of the bug.",
+        "LOAD-BEARING ENVIRONMENT PROPERTY: CLAUDE_CODE_DISABLE_PERMISSION_PROMPT_NOTIFY_HOOKS must be UNSET. It is checked first in the notification scheduler (`if (a.CLAUDE_CODE_DISABLE_PERMISSION_PROMPT_NOTIFY_HOOKS) return () => {}`), so with it set the 6000 ms timer never arms and the one signal this cell is about never exists \u2014 a green-looking recording with the behaviour removed. Re-probe the exported environment at record time and record what was exported.",
+        "UNVERIFIED, AND THE MAIN RISK IN THIS CELL: the remote-settings override path is entered only after an internal gate (`if (!FA()) return {settings:null, fetchSucceeded:true}` precedes the CLAUDE_CODE_REMOTE_SETTINGS_PATH branch), whose condition I could not resolve from the binary and did not exercise (this verb makes no model calls and drives no CLI). If that gate is off on the recording host, the managed_settings_security dialog will not raise and the recipe must fall back \u2014 see the fallback precondition. Marked assumed rather than dismissed.",
+        "FALLBACK TRIGGER, in preference order, if the primary does not raise: (1) `/auto-mode-setup` as a `slash` step \u2014 it runs a background environment scan and then requests the auto_mode_setup_review dialog (`M(zje, {...proposal, mode}, {place:\"under\"})`) with no tool call in flight, which fits the row exactly; its cost is one extra side-model scan and its risk is that the interactive variant is gated behind an `envOnboarding` experiment flag (`nvt() = evt() && Eh()?.envOnboarding === true`). (2) A configured MCP server's elicitation \u2014 but only with the acceptance criterion consciously relaxed, since that dialog IS carried by an open mcp__* tool call. Do not silently substitute a tool-permission dialog: the scenario is explicit that this belongs to 2-19 / 2-26.",
+        "The recipe spends one arming turn before the turn under test, so the arc carries an extra ready in the middle (session_birth -> arm_turn_start -> arm_turn_end -> turn_start -> dialog_waiting -> ...). The scenario's arc is asserted on the SECOND turn, which is the turn the dialog interrupts. This is a consequence of the driver having no file-writing step; a `write_file` or `shell` driver primitive would let the recipe assert the scenario's arc unmodified, and is worth adding if more agents' 2.27 cells need the same shape.",
+        "The 6000 ms Notification timer means the daemon's waiting edge, once #1867 lands, will trail the modal by ~6 s. Any future spec that pins a max_delay_ms on dialog_waiting must budget for it; this spec deliberately pins no ceiling there."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/hookinstaller.go",
+          "note": "hookMatcherNotification = \"idle_prompt\" \u2014 the sole Notification type installed. permission_prompt / elicitation_dialog / elicitation_url_dialog are never delivered to the daemon."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/hooks.go",
+          "note": "handleNotificationHook: `if payload.NotificationType != notificationTypeIdlePrompt { log ignored; return }` \u2014 the second, independent block. Widening the matcher alone changes nothing."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "The ladder. With no Notification delivered, no rung fires for a tool-free dialog: permission_prompt/idle_prompt unset, transcript_permission_prompt is copilot's, user_blocking_tool and open_tool_stalled both require an open tool call. Neither edge of the waiting episode is observable."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.local/share/claude/versions/2.1.259",
+          "note": "Binary strings scan (claude 2.1.259). Dialog registry `var nb={...}` with the six tool-free kinds and their notification descriptors; `lv={text:\"Claude needs your permission\"}` (no type); `r5(n,f){GUe(n.text, n.type ?? \"permission_prompt\", f)}` \u2014 the default that routes four of the six to permission_prompt; `var Td=600000,jXe=30000,sKe=6000` with the notification scheduled at `sKe`; `uA(...)` building `{hook_event_name:\"Notification\", notification_type:v}` with `matchQuery:v`; `ARo=new Set([\"managed_settings_security\",\"sandbox_network_access\",\"mcp_url_elicitation\"])`; `CLAUDE_CODE_DISABLE_PERMISSION_PROMPT_NOTIFY_HOOKS` guarding the timer; `CLAUDE_CODE_REMOTE_SETTINGS_PATH` / `CLAUDE_CODE_REMOTE_SETTINGS_POLL_MS` and the log line \"Remote settings: Using override file ${n} (CLAUDE_CODE_REMOTE_SETTINGS_PATH), skipping API fetch\"; the `/auto-mode-setup` command descriptor and its `requestDialog(zje, ...)` review step."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/driver-interactive.sh",
+          "note": "driver_step_types_from_file reports send/slash/keys/wait_turn/sleep \u2014 every primitive both the primary and the fallback recipe need. It has NO file-writing or shell step, which is why the change is armed by the agent rather than by the driver."
+        },
+        {
+          "kind": "issue",
+          "ref": "ingo-eichhorst/Irrlicht#1861",
+          "note": "The report. Live run against claude 2.1.259: a class-2 dialog reached waiting 6.1 s after the modal painted (matching the 6000 ms timer); a class-1 dialog reached waiting in 0.0 s. Also the source of the recording census: no Notification hook event of any type across every existing claudecode recording."
+        },
+        {
+          "kind": "issue",
+          "ref": "ingo-eichhorst/Irrlicht#1867",
+          "note": "The open, unmerged fix \u2014 widens the Notification matcher. Not in this worktree; hence known_failing rather than record."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "claude CLI on PATH and authenticated; version >= 2.1.122. Assessed against 2.1.259.",
+        "irrlichd is recording (--attach against a daemon started with --record, or isolated mode), with the claudecode hook installer already run.",
+        "CLAUDE_CODE_DISABLE_PERMISSION_PROMPT_NOTIFY_HOOKS must be UNSET in the environment exported to claude \u2014 it disarms the 6000 ms Notification timer outright. Record must assert this and log what it exported.",
+        "CLAUDE_CODE_REMOTE_SETTINGS_PATH=<cwd>/remote-settings.json and CLAUDE_CODE_REMOTE_SETTINGS_POLL_MS=3000 exported into the claude process.",
+        "RE-PROBE AT RECORD TIME: that the managed_settings_security dialog actually raises on this host. The override branch sits behind an internal gate I could not resolve statically. If it does not raise, fall back to `/auto-mode-setup` as a slash step (see the assessment's caveats) \u2014 do NOT substitute a tool-permission dialog.",
+        "no other claudecode session uses the same UUID"
+      ],
+      "setup": [
+        "Generate a fresh lowercased session UUID",
+        "Create a fresh cwd under <staging>/cwd/",
+        "Seed <cwd>/remote-settings.json with a benign baseline: {}",
+        "Stage <cwd>/arm/remote-settings-v2.json carrying a SECURITY-RELEVANT delta from that baseline (a permissions.allow entry and a hooks entry) \u2014 that is what makes the poll require a review rather than apply silently.",
+        "Write the recipe settings blob as the project-local .claude/settings.json so the arming `cp` in turn 1 is itself ungated; a permission modal there would inject a class-1 waiting episode and muddy the cell.",
+        "Export CLAUDE_CODE_REMOTE_SETTINGS_PATH=<cwd>/remote-settings.json and CLAUDE_CODE_REMOTE_SETTINGS_POLL_MS=3000 into the claude process, and confirm CLAUDE_CODE_DISABLE_PERMISSION_PROMPT_NOTIFY_HOOKS is unset."
+      ],
+      "script": [
+        {
+          "type": "sleep",
+          "seconds": 2
+        },
+        {
+          "type": "send",
+          "text": "Use the Bash tool to run exactly this one command, and nothing else:\ncp arm/remote-settings-v2.json \"$CLAUDE_CODE_REMOTE_SETTINGS_PATH\"\nThen reply with exactly one line containing only: ARMED"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "send",
+          "text": "Print the word TICK on its own line, 300 times, and nothing else. Use no tools."
+        },
+        {
+          "type": "sleep",
+          "seconds": 25
+        },
+        {
+          "type": "keys",
+          "keys": "Enter"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 20
+        }
+      ],
+      "verify": [
+        "PROOF OF DIALOG (must fail loudly; absence of a finding and inability to look must not produce the same output): a pane capture taken between the 25 s sleep and the keys step contains the literal review text \"Managed settings need your review before they apply\" (or, on the fallback path, \"Auto-mode setup proposal is ready for review\"). If it does not, the run is INCONCLUSIVE \u2014 report it as such and do not grade the phases.",
+        "PROOF OF NO TOOL IN FLIGHT: at the moment the dialog painted, transcript.jsonl has no assistant tool_use without a matching tool_result for the UUID session. The second turn is prompted to use no tools, so the whole turn should contain zero tool_use lines.",
+        "events.jsonl contains a presession_created for proc-<PID> within 1000 ms and a transcript_new for the UUID session within 500 ms of the first send.",
+        "the arming turn completes cleanly: the first turn's final assistant message is exactly ARMED, and events.jsonl shows ready->working->ready for it with NO waiting (a waiting there means the cp was gated and the settings blob did not take).",
+        "ASSERTION UNDER TEST (expected to FAIL on main, #1861): during the second turn, events.jsonl shows a state_transition to waiting for the UUID while no tool call is open, and a state_transition back to working after the keys step.",
+        "final state is ready, and STILL ready across the >=15 s trailing idle (no state_transition to waiting in that window) \u2014 this is the half that catches a session left pinned at waiting by something no later event retires."
+      ],
+      "settings": {
+        "permissions": {
+          "defaultMode": "default",
+          "allow": [
+            "Bash(cp:*)"
+          ]
+        }
+      },
+      "timeout_seconds": 300
+    }
+  }
+}

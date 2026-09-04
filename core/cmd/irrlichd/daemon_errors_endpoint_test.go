@@ -37,7 +37,7 @@ func serveSessionsWithHookHealth(t *testing.T, hookHealth func() services.HookHe
 	push := services.NewPushService()
 	orchMonitor := services.NewOrchestratorMonitor(nil, push, nil)
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(repo, orchMonitor, nil, nil, hookHealth))
+	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(repo, orchMonitor, nil, hookHealth))
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 

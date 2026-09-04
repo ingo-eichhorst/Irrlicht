@@ -1,0 +1,5 @@
+{"kind":"UserPromptEvent","requestId":"prompt-260824-172944-kgus","prompt":"test","presentablePrompt":"test","requiresConfirmation":true,"timestampMs":1787585384496}
+{"kind":"TaskStartedEvent","taskId":"task-260824-172944-5ien","timestampMs":1787585384504}
+{"kind":"SessionA2uxEvent","event":{"state":"FAILED","agentEvent":{"kind":"AgentFailureEvent","agent":{"kind":"MainAgent","id":"main","name":"main","type":"LINEAR"},"message":"Junie: {\"type\":\"NO_LICENSE\",\"message\":\"No active JetBrains AI subscription found.\\nTo use Junie, you need an active JetBrains AI or JetBrains AI Pro subscription.\\nPlease visit https://account.jetbrains.com to check your subscription status\\nor purchase a plan.\\nIf you believe this is an error, make sure you are logged in with the correct\\nJetBrains Account.\",\"additionalInfo\":null}","errorCode":"AuthorizationFailed"}},"taskId":"task-260824-172944-5ien","timestampMs":1787585385930}
+{"kind":"AgentTaskFailedEvent","timestampMs":1787585385934}
+{"kind":"TaskState","state":"COMPLETED","timestampMs":1787585385935}

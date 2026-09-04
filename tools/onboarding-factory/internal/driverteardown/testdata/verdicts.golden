@@ -1,0 +1,200 @@
+=== fixture/good_driver.sh ===
+CLEAN
+
+=== fixture/inv1_comment_glued_to_code.sh ===
+INV-1 testdata/inv1_comment_glued_to_code.sh:51: this top-level teardown is gated on a liveness flag. That flag is a driver INTENT, not an observation — nothing anywhere re-derives it from `tmux has-session` — so a step that asked the TUI to exit and was not obeyed clears it, teardown skips the kill, and the pane plus the agent process survive the run while driver.exit-reason still says ok. Gate on session-name PRESENCE instead: `[[ -n "${SES_SESSION[$i]:-}" ]]`, the shape scripts/templates/drive-interactive.sh.tmpl already ships.
+    tmux kill-session -t "$SESSION" 2>/dev/null || true
+
+=== fixture/inv1_gated_case_at_exit.sh ===
+INV-1 testdata/inv1_gated_case_at_exit.sh:44: this top-level teardown is gated on a liveness flag. That flag is a driver INTENT, not an observation — nothing anywhere re-derives it from `tmux has-session` — so a step that asked the TUI to exit and was not obeyed clears it, teardown skips the kill, and the pane plus the agent process survive the run while driver.exit-reason still says ok. Gate on session-name PRESENCE instead: `[[ -n "${SES_SESSION[$i]:-}" ]]`, the shape scripts/templates/drive-interactive.sh.tmpl already ships.
+    tmux kill-session -t "$SESSION" 2>/dev/null || true
+
+=== fixture/inv1_gated_final_sweep.sh ===
+INV-1 testdata/inv1_gated_final_sweep.sh:51: this top-level teardown is gated on a liveness flag. That flag is a driver INTENT, not an observation — nothing anywhere re-derives it from `tmux has-session` — so a step that asked the TUI to exit and was not obeyed clears it, teardown skips the kill, and the pane plus the agent process survive the run while driver.exit-reason still says ok. Gate on session-name PRESENCE instead: `[[ -n "${SES_SESSION[$i]:-}" ]]`, the shape scripts/templates/drive-interactive.sh.tmpl already ships.
+    tmux kill-session -t "${SES_SESSION[$i]}" 2>/dev/null || true
+
+=== fixture/inv1_gated_trap.sh ===
+INV-1 testdata/inv1_gated_trap.sh:29: this teardown inside the EXIT-trap handler cleanup() is gated on a liveness flag. That flag is a driver INTENT, not an observation — nothing anywhere re-derives it from `tmux has-session` — so a step that asked the TUI to exit and was not obeyed clears it, teardown skips the kill, and the pane plus the agent process survive the run while driver.exit-reason still says ok. Gate on session-name PRESENCE instead: `[[ -n "${SES_SESSION[$i]:-}" ]]`, the shape scripts/templates/drive-interactive.sh.tmpl already ships.
+    [[ "${SES_ALIVE[$i]:-0}" == "1" ]] && tmux kill-session -t "${SES_SESSION[$i]}" 2>/dev/null || true
+
+=== fixture/inv1_step_dispatch_case_arm_ok.sh ===
+CLEAN
+
+=== fixture/inv1_step_guard_ok.sh ===
+CLEAN
+
+=== fixture/inv2_no_trap.sh ===
+INV-2 testdata/inv2_no_trap.sh: this driver launches the agent under tmux but installs no `trap … EXIT` that tears the session down. Any exit path that does not reach the end of the script — a `set -e` abort mid-launch, a failed jq, an `exit` from a step — then leaves the pane and the agent process alive. See scripts/templates/drive-interactive.sh.tmpl's `cleanup`.
+
+=== fixture/inv2_no_trap_no_sweep.sh ===
+INV-2 testdata/inv2_no_trap_no_sweep.sh: this driver launches the agent under tmux but installs no `trap … EXIT` that tears the session down. Any exit path that does not reach the end of the script — a `set -e` abort mid-launch, a failed jq, an `exit` from a step — then leaves the pane and the agent process alive. See scripts/templates/drive-interactive.sh.tmpl's `cleanup`.
+REFUSED: testdata/inv2_no_trap_no_sweep.sh launches the agent under tmux but has no `tmux kill-session` in its EXIT trap or at top level — INV-1 graded nothing here, and a check that cannot run must say so
+
+  …and this driver was ALREADY in violation before that refusal. The refusal is downstream of what follows, which is the defect to fix:
+  INV-2 testdata/inv2_no_trap_no_sweep.sh: this driver launches the agent under tmux but installs no `trap … EXIT` that tears the session down. Any exit path that does not reach the end of the script — a `set -e` abort mid-launch, a failed jq, an `exit` from a step — then leaves the pane and the agent process alive. See scripts/templates/drive-interactive.sh.tmpl's `cleanup`.
+
+=== fixture/inv2_trap_without_teardown.sh ===
+INV-2 testdata/inv2_trap_without_teardown.sh:21: this driver's `trap … EXIT` handler contains no `tmux kill-session`, so an abort mid-run leaves the pane and the agent process alive. See scripts/templates/drive-interactive.sh.tmpl's `cleanup`.
+
+=== fixture/inv3_alloc_arg2_bad.sh ===
+INV-3 testdata/inv3_alloc_arg2_bad.sh:28: this tmux session name does not carry `$$` as a `-`-delimited field. run-cell.sh keeps no record of the names a driver chose — no staging-contract file carries them, and the driver is backgrounded only so its PID can be captured — so the driver PID embedded in the name is the ONLY join from a run to the sessions it owns, and the post-run leak assertion has nothing to match on without it. A `$$` glued to another token does not count: `-` is the delimiter the assertion splits on, and a glued PID lets a DIFFERENT pid whose digits merely share a prefix match instead.
+    fixture-onboard-$(date +%s)
+
+=== fixture/inv3_alloc_arg2_good.sh ===
+CLEAN
+
+=== fixture/inv3_glued_pid.sh ===
+INV-3 testdata/inv3_glued_pid.sh:28: this tmux session name does not carry `$$` as a `-`-delimited field. run-cell.sh keeps no record of the names a driver chose — no staging-contract file carries them, and the driver is backgrounded only so its PID can be captured — so the driver PID embedded in the name is the ONLY join from a run to the sessions it owns, and the post-run leak assertion has nothing to match on without it. A `$$` glued to another token does not count: `-` is the delimiter the assertion splits on, and a glued PID lets a DIFFERENT pid whose digits merely share a prefix match instead.
+    fixture-onboard$$-$(date +%s)
+
+=== fixture/inv3_no_pid.sh ===
+INV-3 testdata/inv3_no_pid.sh:26: this tmux session name does not carry `$$` as a `-`-delimited field. run-cell.sh keeps no record of the names a driver chose — no staging-contract file carries them, and the driver is backgrounded only so its PID can be captured — so the driver PID embedded in the name is the ONLY join from a run to the sessions it owns, and the post-run leak assertion has nothing to match on without it. A `$$` glued to another token does not count: `-` is the delimiter the assertion splits on, and a glued PID lets a DIFFERENT pid whose digits merely share a prefix match instead.
+    fixture-onboard-$(date +%s)
+
+=== fixture/inv3_positional_zero_assignment_ok.sh ===
+CLEAN
+
+=== fixture/inv3_shadowed_alloc_slot_bad.sh ===
+INV-3 testdata/inv3_shadowed_alloc_slot_bad.sh:56: this tmux session name does not carry `$$` as a `-`-delimited field. run-cell.sh keeps no record of the names a driver chose — no staging-contract file carries them, and the driver is backgrounded only so its PID can be captured — so the driver PID embedded in the name is the ONLY join from a run to the sessions it owns, and the post-run leak assertion has nothing to match on without it. A `$$` glued to another token does not count: `-` is the delimiter the assertion splits on, and a glued PID lets a DIFFERENT pid whose digits merely share a prefix match instead.
+    fixture-onboard-$(date +%s)-r${ACTIVE}
+
+=== fixture/inv3_shadowed_alloc_slot_ok.sh ===
+CLEAN
+
+=== fixture/inv4_case_arm_is_not_the_epilogue.sh ===
+INV-4 testdata/inv4_case_arm_is_not_the_epilogue.sh:35: this EXIT-trap handler can write driver.exit-reason with $EXIT_REASON still at its initial value "ok": the handler writes $EXIT_REASON unconditionally, and nothing between the trap arming and the write can change it. Before an EXIT trap existed, an abort wrote NO driver.exit-reason and run-cell.sh's `DRIVER_REASON` reader read the absence as `unknown`; a handler that writes the initialiser turns that into a verdict the run never formed — on a ticket whose subject is a driver claiming success while leaking. Either guard the write on a sentinel the epilogue sets unconditionally at top level (aider's `REACHED_EPILOGUE`), or start $EXIT_REASON at a fault and promote it on the success path.
+    cleanup() {
+  local i
+  for (( i = 1; i <= N_SLOTS; i++ )); do
+    [[ -n "${SES_SESSION[$i]:-}" ]] && tmux kill-session -t "${SES_SESSION[$i]}" 2>/dev/null || true
+  done
+  echo "$EXIT_REASON" > "$STAGING/driver.exit-reason"
+}
+
+=== fixture/inv4_fail_closed_ok.sh ===
+CLEAN
+
+=== fixture/inv4_guard_consults_only_itself.sh ===
+INV-4 testdata/inv4_guard_consults_only_itself.sh:34: this EXIT-trap handler can write driver.exit-reason with $EXIT_REASON still at its initial value "ok": the only re-assignment of $EXIT_REASON before the write is guarded by nothing but $EXIT_REASON itself, which is equally true on a run that completed. Before an EXIT trap existed, an abort wrote NO driver.exit-reason and run-cell.sh's `DRIVER_REASON` reader read the absence as `unknown`; a handler that writes the initialiser turns that into a verdict the run never formed — on a ticket whose subject is a driver claiming success while leaking. Either guard the write on a sentinel the epilogue sets unconditionally at top level (aider's `REACHED_EPILOGUE`), or start $EXIT_REASON at a fault and promote it on the success path.
+    cleanup() {
+  # The epilogue sets REACHED_EPILOGUE immediately before the final exit, so a
+  # handler that sees it unset knows the script aborted before forming a
+  # verdict and must not write EXIT_REASON's initialiser as one (INV-4).
+  if [[ "$EXIT_REASON" == "ok" ]]; then
+    EXIT_REASON="nonzero(2)"
+  fi
+  local i
+  for (( i = 1; i <= N_SLOTS; i++ )); do
+    [[ -n "${SES_SESSION[$i]:-}" ]] && tmux kill-session -t "${SES_SESSION[$i]}" 2>/dev/null || true
+  done
+  echo "$EXIT_REASON" > "$STAGING/driver.exit-reason"
+}
+
+=== fixture/inv4_guard_reassigns_initial.sh ===
+INV-4 testdata/inv4_guard_reassigns_initial.sh:33: this EXIT-trap handler can write driver.exit-reason with $EXIT_REASON still at its initial value "ok": the guard on the write assigns $EXIT_REASON its own initial value "ok", so it changes nothing. Before an EXIT trap existed, an abort wrote NO driver.exit-reason and run-cell.sh's `DRIVER_REASON` reader read the absence as `unknown`; a handler that writes the initialiser turns that into a verdict the run never formed — on a ticket whose subject is a driver claiming success while leaking. Either guard the write on a sentinel the epilogue sets unconditionally at top level (aider's `REACHED_EPILOGUE`), or start $EXIT_REASON at a fault and promote it on the success path.
+    cleanup() {
+  # The epilogue sets REACHED_EPILOGUE immediately before the final exit, so a
+  # handler that sees it unset knows the script aborted before forming a
+  # verdict and must not write EXIT_REASON's initialiser as one (INV-4).
+  if [[ "$REACHED_EPILOGUE" != "1" && "$EXIT_REASON" == "ok" ]]; then
+    EXIT_REASON="ok"
+  fi
+  local i
+  for (( i = 1; i <= N_SLOTS; i++ )); do
+    [[ -n "${SES_SESSION[$i]:-}" ]] && tmux kill-session -t "${SES_SESSION[$i]}" 2>/dev/null || true
+  done
+  echo "$EXIT_REASON" > "$STAGING/driver.exit-reason"
+}
+
+=== fixture/inv4_literal_verdict_ok.sh ===
+CLEAN
+
+=== fixture/inv4_renamed_sentinel_ok.sh ===
+CLEAN
+
+=== fixture/inv4_sentinel_never_set.sh ===
+INV-4 testdata/inv4_sentinel_never_set.sh:34: this EXIT-trap handler can write driver.exit-reason with $EXIT_REASON still at its initial value "ok": the guard on the write consults $REACHED_EPILOGUE, and nothing assigns any of them unconditionally at top level after the trap is armed and after the last `tmux new-session` — so no amount of progress through the run can change what the handler writes. Before an EXIT trap existed, an abort wrote NO driver.exit-reason and run-cell.sh's `DRIVER_REASON` reader read the absence as `unknown`; a handler that writes the initialiser turns that into a verdict the run never formed — on a ticket whose subject is a driver claiming success while leaking. Either guard the write on a sentinel the epilogue sets unconditionally at top level (aider's `REACHED_EPILOGUE`), or start $EXIT_REASON at a fault and promote it on the success path.
+    cleanup() {
+  # The epilogue sets REACHED_EPILOGUE immediately before the final exit, so a
+  # handler that sees it unset knows the script aborted before forming a
+  # verdict and must not write EXIT_REASON's initialiser as one (INV-4).
+  if [[ "$REACHED_EPILOGUE" != "1" && "$EXIT_REASON" == "ok" ]]; then
+    EXIT_REASON="nonzero(2)"
+  fi
+  local i
+  for (( i = 1; i <= N_SLOTS; i++ )); do
+    [[ -n "${SES_SESSION[$i]:-}" ]] && tmux kill-session -t "${SES_SESSION[$i]}" 2>/dev/null || true
+  done
+  echo "$EXIT_REASON" > "$STAGING/driver.exit-reason"
+}
+
+=== fixture/inv4_unconditional_write.sh ===
+INV-4 testdata/inv4_unconditional_write.sh:28: this EXIT-trap handler can write driver.exit-reason with $EXIT_REASON still at its initial value "ok": the handler writes $EXIT_REASON unconditionally, and nothing between the trap arming and the write can change it. Before an EXIT trap existed, an abort wrote NO driver.exit-reason and run-cell.sh's `DRIVER_REASON` reader read the absence as `unknown`; a handler that writes the initialiser turns that into a verdict the run never formed — on a ticket whose subject is a driver claiming success while leaking. Either guard the write on a sentinel the epilogue sets unconditionally at top level (aider's `REACHED_EPILOGUE`), or start $EXIT_REASON at a fault and promote it on the success path.
+    cleanup() {
+  local i
+  for (( i = 1; i <= N_SLOTS; i++ )); do
+    [[ -n "${SES_SESSION[$i]:-}" ]] && tmux kill-session -t "${SES_SESSION[$i]}" 2>/dev/null || true
+  done
+  echo "$EXIT_REASON" > "$STAGING/driver.exit-reason"
+}
+
+=== fixture/no_tmux_exempt.sh ===
+CLEAN
+
+=== fixture/quote_multiline_awk_ok.sh ===
+CLEAN
+
+=== fixture/vacuous_empty.sh ===
+REFUSED: testdata/vacuous_empty.sh is empty — a driver that cannot be read graded nothing, and a check that cannot run must say so
+
+=== fixture/vacuous_no_teardown.sh ===
+INV-2 testdata/vacuous_no_teardown.sh: this driver launches the agent under tmux but installs no `trap … EXIT` that tears the session down. Any exit path that does not reach the end of the script — a `set -e` abort mid-launch, a failed jq, an `exit` from a step — then leaves the pane and the agent process alive. See scripts/templates/drive-interactive.sh.tmpl's `cleanup`.
+REFUSED: testdata/vacuous_no_teardown.sh launches the agent under tmux but has no `tmux kill-session` in its EXIT trap or at top level — INV-1 graded nothing here, and a check that cannot run must say so
+
+  …and this driver was ALREADY in violation before that refusal. The refusal is downstream of what follows, which is the defect to fix:
+  INV-2 testdata/vacuous_no_teardown.sh: this driver launches the agent under tmux but installs no `trap … EXIT` that tears the session down. Any exit path that does not reach the end of the script — a `set -e` abort mid-launch, a failed jq, an `exit` from a step — then leaves the pane and the agent process alive. See scripts/templates/drive-interactive.sh.tmpl's `cleanup`.
+
+=== fixture/vacuous_unclosed_function.sh ===
+REFUSED: testdata/vacuous_unclosed_function.sh:9: function cleanup() is never closed by a `}` at column 0 — this file's structure cannot be read, and a check that cannot run must say so
+
+=== fixture/vacuous_uninitialised_verdict.sh ===
+REFUSED: testdata/vacuous_uninitialised_verdict.sh:22: the EXIT-trap handler writes $EXIT_REASON to driver.exit-reason, but EXIT_REASON is never assigned unconditionally at top level before the trap is armed — INV-4 has no initial value to compare against and graded nothing, and a check that cannot run must say so
+
+=== fixture/vacuous_unnamed_session.sh ===
+REFUSED: testdata/vacuous_unnamed_session.sh:14: `tmux new-session` with no `-s <name>` — tmux would name the session itself, so it could not carry the driver's PID and no post-run assertion could attribute it
+
+=== fixture/vacuous_unterminated_quote.sh ===
+REFUSED: testdata/vacuous_unterminated_quote.sh:13: a ' quote opened on this line is never closed before the end of the file, so every statement after it is swallowed into one quoted word — this file cannot be read, and a check that cannot run must say so
+
+=== driver/aider ===
+CLEAN
+
+=== driver/antigravity ===
+CLEAN
+
+=== driver/claudecode ===
+CLEAN
+
+=== driver/codex ===
+CLEAN
+
+=== driver/copilot ===
+CLEAN
+
+=== driver/gemini-cli ===
+CLEAN
+
+=== driver/hermes ===
+CLEAN
+
+=== driver/kiro-cli ===
+CLEAN
+
+=== driver/mistral-vibe ===
+CLEAN
+
+=== driver/opencode ===
+CLEAN
+
+=== driver/pi ===
+CLEAN

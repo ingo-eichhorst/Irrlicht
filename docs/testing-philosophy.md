@@ -3,8 +3,8 @@
 Referenced from [AGENTS.md](../AGENTS.md)'s Testing section. These are the
 repo's general rules for what makes a test (or any other verification
 mechanism) trustworthy — they apply everywhere, not just to one gate or one
-package. The `ir:exec` skill (`.claude/skills/ir:exec/SKILL.md`, Phase 4 step
-11a) enforces the red-first and mutation rules mechanically; this file is
+package. The `ir:exec` skill (`.claude/skills/ir:exec/SKILL.md`, "Prove and
+verify") enforces the red-first and mutation rules mechanically; this file is
 where the full rationale and incident history live.
 
 **A test earns its place by having been seen fail.** A green that was never red is a
@@ -15,7 +15,7 @@ exists, confirm it fails, paste the failure. A test that passes on `main` means 
 the diagnosis is wrong or the test doesn't reach the defect (a stub blind to the
 asserted field is the classic) — stop and report rather than shipping the green. Locks
 — tests pinning behavior that must *not* change — pass by construction; say which ones
-those are. `ir:exec` enforces this at Phase 4 step 11a; it binds outside `ir:exec` too.
+those are. `ir:exec` enforces this in "Prove and verify"; it binds outside `ir:exec` too.
 
 **Anything a change *adds* has no "before the fix" to run against, and owes a
 deliberate mutation instead.** A new guard, a static `architecture_test.go` rule, a
@@ -56,7 +56,7 @@ over an installer carrying a deliberate `[[ ]]` (below); a mutation harness asse
 its mutation changed the file, which then caught two more stale mutations (#1390); and
 an e2e test waiting on a signal narrower than "the daemon published its addr file",
 which fires *before* the consent effects under test run, so a deliberately-broken
-binary came back green (#1449; `ir:exec` Phase 4 step 11 carries the recipe). Two more
+binary came back green (#1449; `ir:exec`'s "Prove and verify" section carries the recipe). Two more
 were added before they could catch anything and carry the weaker evidence that they
 *can* fire: the architecture corpus asserting every case still contains the construct
 it plants (below), and the harness built on #1390's lesson from the start, carrying a
@@ -171,4 +171,3 @@ does it — count what was actually produced and fail when it drops, the same wa
 other mechanism must fail loudly when it cannot run: `assertArrayAxisWasExercised`
 (`core/adapters/inbound/agents/hooktoml/property_test.go`) prints the census on every
 run and is itself seen red by disabling the four call sites.
-

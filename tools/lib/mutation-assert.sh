@@ -3,10 +3,7 @@
 # tools/mutate.sh-based mutation-fixture tests whose lock test reports its
 # failures as `^FAIL: ` lines containing a specific message (#1823 review
 # finding: this exact ~40-line function was copy-pasted byte-for-byte into
-# two new fixture files added by the same diff; a third pre-existing fixture,
-# tools/lib/error-retention-mutations_test.sh, hand-rolls a DIFFERENT 6-arg
-# variant built around `go test -run <name>` rather than a lock-test script,
-# so it is left as-is here rather than forced into this shape).
+# two new fixture files added by the same diff).
 #
 # Sourced, not executed:
 #

@@ -3,9 +3,15 @@ import XCTest
 
 /// Issue #1743: a native SwiftUI `.popover(...)` renders BEHIND this app's
 /// own host panel (`IrrlichtPanel`, `App/MenuBarController.swift`) instead of
-/// in front of it. `SessionControlButton` (`SessionRowView.swift`) is the
-/// only `.popover` in the app, and `PopoverHostReorder` is the fix — the
-/// full root-cause writeup lives on that type's doc comment.
+/// in front of it. `PopoverHostReorder` (`SessionRowView.swift`) is the fix —
+/// the full root-cause writeup lives on that type's doc comment.
+///
+/// **Nothing applies it today.** Its only caller was the per-session control
+/// button #1874 deleted, and the app now ships no native SwiftUI `.popover` at
+/// all. This suite is kept because what it pins is AppKit behaviour and a
+/// property of this app's window structure, not of that button: the next
+/// `.popover` anyone adds hits the same wall, and these are the measurements
+/// that say how it is crossed. Delete both together, or neither.
 ///
 /// A true image-snapshot proof isn't practically achievable here: this app's
 /// existing `.pinnedImage` snapshot suites rasterise a single, window-less
@@ -241,8 +247,8 @@ final class PopoverHostReorderTests: XCTestCase {
     /// `reorderIfNeeded()` is the two-line live glue over the two tested
     /// primitives above — this locks that it actually performs the attach
     /// end to end, from `NSApp.orderedWindows` state, and returns the
-    /// window it attached (which `SessionControlButton` retains so it can
-    /// `detach` on dismiss). Not covered: the timing (SwiftUI's own
+    /// window it attached (which a caller retains so it can `detach` on
+    /// dismiss). Not covered: the timing (SwiftUI's own
     /// deferred presentation), which is glass-box AppKit behavior no test
     /// in this file drives from the SwiftUI side.
     func testReorderIfNeededAttachesFromLiveWindowState() {
@@ -298,7 +304,7 @@ final class PopoverHostReorderTests: XCTestCase {
         XCTAssertFalse(host.childWindows?.contains(popover) ?? false)
     }
 
-    /// A no-op on a window that was never attached — `SessionControlButton`
+    /// A no-op on a window that was never attached — `PopoverHostReorderModifier`
     /// calls this unconditionally whenever it holds a stored reference, not
     /// only when it knows attach succeeded.
     func testDetachOnAnUnattachedWindowIsHarmless() {

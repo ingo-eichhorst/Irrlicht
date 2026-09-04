@@ -33,15 +33,6 @@ func Source() agent.Source {
 // events.jsonl. The ExactName matcher binds the native `copilot` binary for
 // liveness — the npm distribution spawns it from a node loader, and pgrep -x
 // matches the child's accounting name rather than the parent's.
-//
-// Control is deliberately NOT declared yet. Copilot runs an interactive TUI
-// that reads terminal input, so backchannel forwarding is plausibly feasible
-// (the same shape as mistral-vibe and kiro-cli), but nothing here has been
-// verified live against a driven session — which slash-command presets exist,
-// and whether Ctrl-C interrupts a turn without killing the REPL. Declaring
-// SupportsInput on an unverified assumption would advertise a capability the
-// daemon might not be able to deliver; the onboarding factory's backchannel
-// scenarios are the mechanism that settles it with evidence.
 func Agent() agent.Agent {
 	return agent.Agent{
 		Identity: agent.Identity{

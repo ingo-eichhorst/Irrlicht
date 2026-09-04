@@ -9,8 +9,8 @@
 # separately because a single combined mutation could pass while one of them
 # was actually unguarded:
 #
-#   1. AN ANGLE NAME IS DROPPED from step 14's own text — an agent reading
-#      only this step would no longer know that angle exists to check for.
+#   1. AN ANGLE NAME IS DROPPED from the review text — an agent reading
+#      only this section would no longer know that angle exists to check for.
 #      Dropping `altitude` stands in for any of the four.
 #
 #   2. THE LOUD-FAILURE INSTRUCTION IS SOFTENED — "surface it and pause"
@@ -29,8 +29,8 @@
 # The `assert_mutation_is_red` mechanics live in tools/lib/mutation-assert.sh,
 # shared with tools/lib/preflight-groups-skill-mutations_test.sh (#1823
 # review: the two were originally byte-identical copies in this diff).
-# Convention for the rest follows tools/lib/error-retention-mutations_test.sh:
-# plain bash, a `fails` counter, "ALL PASS" / "N FAILED" at the end.
+# Convention for the rest follows tools/lib/mutate_test.sh: plain bash, a
+# `fails` counter, "ALL PASS" / "N FAILED" at the end.
 
 set -uo pipefail
 
@@ -56,9 +56,10 @@ fi
 # mutate.sh refuses (exit 4) against an already-dirty tree, because its
 # post-restore emptiness check could prove nothing then.
 #
-# A DIRTY TREE MUST NOT SILENTLY PASS — see error-retention-mutations_test.sh
-# for the full reasoning; this file repeats the same guard rather than
-# sourcing it, matching the convention every fixture in this directory uses.
+# A DIRTY TREE MUST NOT SILENTLY PASS — see
+# tools/lib/preflight-groups-skill-mutations_test.sh for the full reasoning;
+# this file repeats the same guard rather than sourcing it, matching the
+# convention every fixture in this directory uses.
 if [[ -n "$(git -C "$REPO_ROOT" status --porcelain)" ]]; then
   echo "simplify-angle-guard-mutations: CANNOT RUN — the worktree is dirty, and mutate.sh needs a" >&2
   echo "  clean tree for its post-restore check to mean anything. Commit or clean up, then:" >&2
@@ -74,20 +75,20 @@ fi
 
 fails=0
 
-# ── 1. An angle name is dropped from step 14's own text ─────────────────────
+# ── 1. An angle name is dropped from the review text ────────────────────────
 assert_mutation_is_red \
-  "lock test catches step 14 dropping the 'altitude' angle" \
+  "lock test catches the review section dropping the 'altitude' angle" \
   "$SKILL_FILE" \
-  $'discipline apply: reuse, simplification, efficiency, altitude.** Before' \
-  $'discipline apply: reuse, simplification, efficiency.** Before' \
+  $'each by name: reuse, simplification, efficiency, altitude. If one angle is' \
+  $'each by name: reuse, simplification, efficiency. If one angle is' \
   "no longer enumerates all four angles"
 
 # ── 2. The loud-failure instruction is softened ──────────────────────────────
 assert_mutation_is_red \
-  "lock test catches step 14 softening 'surface it and pause' into a caveat" \
+  "lock test catches the review section softening 'surface it and pause' into a caveat" \
   "$SKILL_FILE" \
-  $'    reviewer — **surface it and pause** rather than pushing on. An aggregate\n    "no findings"/"done", or a vague "looked simple", does not stand in for' \
-  $'    reviewer — proceed carefully rather than pushing on. An aggregate\n    "no findings"/"done", or a vague "looked simple", does not stand in for' \
+  $'If one angle is\nsilent, surface it and pause. Commit and push any cleanup.' \
+  $'If one angle is\nsilent, proceed carefully. Commit and push any cleanup.' \
   "no longer pairs the four-angle check with a 'surface it and pause' instruction"
 
 if [[ $fails -gt 0 ]]; then

@@ -21,7 +21,6 @@ import (
 	"irrlicht/core/adapters/outbound/git"
 	"irrlicht/core/adapters/outbound/gtbin"
 	"irrlicht/core/adapters/outbound/logging"
-	"irrlicht/core/adapters/outbound/relay"
 	"irrlicht/core/application/services"
 	"irrlicht/core/domain/config"
 	"irrlicht/core/domain/permission"
@@ -33,26 +32,6 @@ import (
 
 // Version is injected at build time via -ldflags "-X main.Version=x.y.z".
 var Version = "dev"
-
-// lazyControl adapts the daemon's InputService to relay.ControlHandler with a
-// late binding: the publish controller is constructed during relay setup, which
-// precedes the consent stack that builds InputService. resolve returns nil
-// until then; a control frame that races startup is rejected, not panicked.
-type lazyControl struct{ resolve func() relay.ControlHandler }
-
-func (l lazyControl) SendInput(id string, d []byte) error {
-	if h := l.resolve(); h != nil {
-		return h.SendInput(id, d)
-	}
-	return fmt.Errorf("relay control: input service not ready")
-}
-
-func (l lazyControl) Interrupt(id string) error {
-	if h := l.resolve(); h != nil {
-		return h.Interrupt(id)
-	}
-	return fmt.Errorf("relay control: input service not ready")
-}
 
 // The daemon's bind address and default port live in core/pkg/daemonaddr, so
 // the agent hook installers resolve the same endpoint the daemon actually
@@ -581,7 +560,7 @@ func loadConfig(logger outbound.Logger) config.Config {
 }
 
 // runDaemon brings up the full daemon: config, core services, HTTP routes,
-// the consent-gated detection/permission/backchannel stack, then serves
+// the consent-gated detection and permission stack, then serves
 // until SIGTERM/SIGINT and shuts down gracefully. Each phase is wired by a
 // dedicated setup function (see startup.go); this is the sequencing.
 func runDaemon() {
@@ -629,8 +608,9 @@ func runDaemon() {
 	// during replay without duplicating the construction.
 	allAgents := agents.All()
 
-	// Outbound relay publishing (#722) + remote control (#724) — see
-	// setupRelay's doc comment for the full rationale.
+	// Outbound relay publishing (#722) — see setupRelay's doc comment for the
+	// full rationale. One-way since #1875: the daemon publishes telemetry and
+	// accepts no instruction back.
 	rel := setupRelay(logger, push, cachedRepo, allAgents)
 	defer rel.cancel()
 
@@ -730,19 +710,15 @@ func runDaemon() {
 	defer orchCancel()
 	startGastown, stopGastown := gastownEffects(orchCtx, orchMonitor, gtResolver.Path(), cachedRepo, logger)
 
-	// Register API endpoints that need orchMonitor. inputService is
-	// resolved at request time via rel.inputService (published once
-	// setupBackchannel runs), so a session reports controllable only once
-	// that wiring completes.
+	// Register API endpoints that need orchMonitor.
 	registerSessionRoutes(mux, registerSessionRoutesDeps{
-		CachedRepo:   cachedRepo,
-		OrchMonitor:  orchMonitor,
-		CostTracker:  costTracker,
-		InputService: &rel.inputService,
-		SockPath:     sockPath,
-		Push:         push,
-		Logger:       logger,
-		GitResolver:  gitResolver,
+		CachedRepo:  cachedRepo,
+		OrchMonitor: orchMonitor,
+		CostTracker: costTracker,
+		SockPath:    sockPath,
+		Push:        push,
+		Logger:      logger,
+		GitResolver: gitResolver,
 		// Same live snapshot registerCoreRoutes hands the diagnostics bundle
 		// (#1801) — one source, two outlets, so the banner and hooks.json can
 		// never disagree about whether hooks are healthy.
@@ -791,18 +767,6 @@ func runDaemon() {
 	// gets no write path of its own, only the right to ask (#1372/#570).
 	hookVerifier.SetConsent(permService.Granted, permService.RepairGrantedHookInstall)
 
-	backchannelEngine, terminalObserver := setupBackchannel(mux, setupBackchannelDeps{
-		CachedRepo:        cachedRepo,
-		Push:              push,
-		PermService:       permService,
-		Detector:          detector,
-		Logger:            logger,
-		Home:              home,
-		InputService:      &rel.inputService,
-		RelayControlStore: rel.controlStore,
-		AllAgents:         allAgents,
-	})
-
 	registerHookRoutes(mux, detector, metricsCollector, permService, logger)
 
 	// Registered before publishAddrFile: once the addr file exists, every
@@ -835,16 +799,14 @@ func runDaemon() {
 	sweepZombies(demoMode, detector, logger)
 
 	defer startBackgroundLoops(startBackgroundLoopsDeps{
-		Detector:          detector,
-		BackchannelEngine: backchannelEngine,
-		CachedRepo:        cachedRepo,
-		GitResolver:       gitResolver,
-		TerminalObserver:  terminalObserver,
-		PermService:       permService,
-		HookVerifier:      hookVerifier,
-		Cfg:               cfg,
-		DemoMode:          demoMode,
-		Logger:            logger,
+		Detector:     detector,
+		CachedRepo:   cachedRepo,
+		GitResolver:  gitResolver,
+		PermService:  permService,
+		HookVerifier: hookVerifier,
+		Cfg:          cfg,
+		DemoMode:     demoMode,
+		Logger:       logger,
 	})()
 
 	logger.LogInfo("startup", "", fmt.Sprintf("irrlichd %s listening on unix:%s and tcp:%s", Version, sockPath, resolvedAddr))
