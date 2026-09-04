@@ -1,0 +1,84 @@
+[
+  {
+    "path": [0],
+    "role": "AXWindow",
+    "title": "Workspace",
+    "enabled": true,
+    "frame": {"x": 0, "y": 0, "width": 1200, "height": 800},
+    "hierarchy": ["AXApplication"],
+    "valueRedacted": false
+  },
+  {
+    "path": [0, 0, 0],
+    "role": "AXButton",
+    "identifier": "environment-selector",
+    "enabled": true,
+    "frame": {"x": 20, "y": 700, "width": 120, "height": 32},
+    "hierarchy": ["AXApplication", "AXWindow", "AXGroup"],
+    "valueRedacted": false
+  },
+  {
+    "path": [0, 0, 1],
+    "role": "AXButton",
+    "identifier": "project-selector",
+    "enabled": true,
+    "frame": {"x": 150, "y": 700, "width": 160, "height": 32},
+    "hierarchy": ["AXApplication", "AXWindow", "AXGroup"],
+    "valueRedacted": false
+  },
+  {
+    "path": [0, 0, 2],
+    "role": "AXTextArea",
+    "identifier": "prompt-input",
+    "enabled": true,
+    "focused": true,
+    "frame": {"x": 20, "y": 740, "width": 900, "height": 44},
+    "hierarchy": ["AXApplication", "AXWindow", "AXGroup"],
+    "valueRedacted": true
+  },
+  {
+    "path": [0, 0, 3],
+    "role": "AXButton",
+    "identifier": "send-button",
+    "enabled": true,
+    "frame": {"x": 930, "y": 740, "width": 44, "height": 44},
+    "hierarchy": ["AXApplication", "AXWindow", "AXGroup"],
+    "valueRedacted": false
+  },
+  {
+    "path": [0, 0, 4],
+    "role": "AXButton",
+    "identifier": "model-selector",
+    "enabled": true,
+    "frame": {"x": 320, "y": 700, "width": 140, "height": 32},
+    "hierarchy": ["AXApplication", "AXWindow", "AXGroup"],
+    "valueRedacted": false
+  },
+  {
+    "path": [0, 0, 5],
+    "role": "AXButton",
+    "identifier": "mode-selector",
+    "enabled": true,
+    "frame": {"x": 470, "y": 700, "width": 140, "height": 32},
+    "hierarchy": ["AXApplication", "AXWindow", "AXGroup"],
+    "valueRedacted": false
+  },
+  {
+    "path": [0, 0, 6],
+    "role": "AXButton",
+    "identifier": "session-menu",
+    "enabled": true,
+    "frame": {"x": 1130, "y": 20, "width": 36, "height": 36},
+    "hierarchy": ["AXApplication", "AXWindow", "AXGroup"],
+    "valueRedacted": false
+  },
+  {
+    "path": [0, 0, 7],
+    "role": "AXButton",
+    "identifier": "stop-button",
+    "enabled": true,
+    "frame": {"x": 984, "y": 740, "width": 44, "height": 44},
+    "hierarchy": ["AXApplication", "AXWindow", "AXGroup"],
+    "valueRedacted": false
+  }
+]

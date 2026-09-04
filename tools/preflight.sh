@@ -638,6 +638,8 @@ if want go; then
                   "go vet (onboarding-factory)" go vet ./tools/onboarding-factory/...
   run_gate_scoped '^tools/onboarding-factory/.*\.go$' \
                   "onboarding-factory tests" go test ./tools/onboarding-factory/... -count=1
+  run_gate_scoped '^tools/onboarding-factory/desktop-helper/' \
+                  "Claude Desktop helper tests" tools/onboarding-factory/desktop-helper/test.sh
   run_gate_scoped '^replaydata/|^tools/onboarding-factory/' \
                   "replaydata validate"      go run ./tools/onboarding-factory/cmd/of validate
   # The rig's own tests guard two file families that live OUTSIDE

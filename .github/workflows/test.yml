@@ -70,6 +70,12 @@ jobs:
       - name: Test onboarding-factory module
         run: go test ./tools/onboarding-factory/... -count=1
 
+      # The Desktop helper is a separate macOS-only Swift package. Its script
+      # owns the Swift commands and build location. Local preflight calls the
+      # same script, so CI and local checks cannot use different procedures.
+      - name: Test Claude Desktop helper
+        run: tools/onboarding-factory/desktop-helper/test.sh
+
       # `of validate` is the factory's schema + referential-integrity gate over
       # replaydata/ (the catalog's 5-field scenarios, every cell metadata.json,
       # expected.jsonl presence, recording ownership). It is the single sanctioned
