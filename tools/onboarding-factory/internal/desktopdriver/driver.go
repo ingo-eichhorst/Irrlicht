@@ -48,6 +48,7 @@ type Baseline struct {
 	SessionIDs map[string]struct{}
 	Files      map[string][]byte
 	Config     TreeSnapshot
+	Processes  map[int]struct{}
 }
 
 type RunRequest struct {

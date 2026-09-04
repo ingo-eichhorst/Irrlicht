@@ -116,6 +116,51 @@ func TestIrrlichtSessionSelectionRejectsDuplicateIdentity(t *testing.T) {
 	}
 }
 
+func TestOwnedProcessCannotReuseBaselinePID(t *testing.T) {
+	baseline := map[int]struct{}{42: {}}
+	candidate := SessionObservation{PID: 42}
+	if err := validateOwnedProcessBaseline(baseline, candidate); err == nil {
+		t.Fatal("validateOwnedProcessBaseline() accepted a baseline PID")
+	}
+}
+
+func TestArchiveTargetRejectsDuplicateActiveTitle(t *testing.T) {
+	owned := OwnedSession{Registry: RegistrySession{SessionID: "local_owned", CWD: "/repo/workspace"}}
+	sessions := []RegistrySession{
+		{SessionID: "local_owned", CWD: "/repo/workspace", Title: "Same title"},
+		{SessionID: "local_user", CWD: "/repo/other", Title: "Same title"},
+	}
+	elements := archiveFixtureElements("workspace", "Same title")
+	if _, err := validateArchiveTarget(owned, sessions, elements); err == nil {
+		t.Fatal("validateArchiveTarget() accepted a duplicate active title")
+	}
+}
+
+func TestArchiveTargetRejectsSelectedProjectDrift(t *testing.T) {
+	owned := OwnedSession{Registry: RegistrySession{SessionID: "local_owned", CWD: "/repo/workspace"}}
+	sessions := []RegistrySession{{SessionID: "local_owned", CWD: "/repo/workspace", Title: "Owned title"}}
+	elements := archiveFixtureElements("other-project", "Owned title")
+	if _, err := validateArchiveTarget(owned, sessions, elements); err == nil {
+		t.Fatal("validateArchiveTarget() accepted selected-project drift")
+	}
+}
+
+func archiveFixtureElements(project, title string) []helperElement {
+	elements := []helperElement{
+		fixtureElement("environment", "AXPopUpButton", "Local", ""),
+		fixtureElement("project", "AXPopUpButton", project, ""),
+		fixtureElement("prompt", "AXTextArea", "", "Prompt"),
+		fixtureElement("send", "AXButton", "", "Send"),
+		fixtureElement("mode", "AXPopUpButton", "Auto", ""),
+		fixtureElement("model", "AXPopUpButton", "", "Model: Opus 5"),
+	}
+	return append(elements, helperElement{
+		Path: selectedSessionMenuPath, Role: "AXPopUpButton",
+		Description: "More options for " + title,
+		Hierarchy:   []string{"AXApplication", "AXWindow", "AXGroup", "AXPopUpButton"},
+	})
+}
+
 func TestIrrlichtDecoderRejectsMalformedSessionFields(t *testing.T) {
 	var sessions []SessionObservation
 	value := map[string]any{"session_id": "cli-1", "pid": "not-a-number"}
