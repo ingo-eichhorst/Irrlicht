@@ -190,21 +190,53 @@ func openOfficialDesktopURL(ctx context.Context, deepLink string) error {
 }
 
 func (runtime *LiveRuntime) WaitComposer(ctx context.Context, workspace string) error {
-	return poll(ctx, "verified Desktop composer controls", func() (bool, error) {
-		elements, err := runtime.helper.inspect(ctx)
+	controls, err := waitForComposerControls(ctx, workspace, runtime.helper.inspect, runtime.helper.probe)
+	if err == nil {
+		runtime.controls = controls
+	}
+	return err
+}
+
+func waitForComposerControls(
+	ctx context.Context,
+	workspace string,
+	inspect func(context.Context) ([]helperElement, error),
+	probe func(context.Context, map[string]helperSelector) error,
+) (map[string]helperSelector, error) {
+	var controls map[string]helperSelector
+	var lastMismatch error
+	err := poll(ctx, "verified Desktop composer controls", func() (bool, error) {
+		elements, err := inspect(ctx)
 		if err != nil {
-			return false, transientHelperError(err)
-		}
-		controls, err := composerCatalog(elements, workspace)
-		if err != nil {
+			if fatal := transientHelperError(err); fatal != nil {
+				return false, fatal
+			}
+			lastMismatch = err
 			return false, nil
 		}
-		if err := runtime.helper.probe(ctx, controls); err != nil {
-			return false, transientHelperError(err)
+		controls, err = composerCatalog(elements, workspace)
+		if err != nil {
+			lastMismatch = err
+			return false, nil
 		}
-		runtime.controls = controls
+		if err := probe(ctx, controls); err != nil {
+			if fatal := transientHelperError(err); fatal != nil {
+				return false, fatal
+			}
+			lastMismatch = err
+			return false, nil
+		}
 		return true, nil
 	})
+	if err != nil && lastMismatch != nil {
+		return controls, fmt.Errorf(
+			"%w; last Desktop composer observation for workspace %q: %v",
+			err,
+			workspace,
+			lastMismatch,
+		)
+	}
+	return controls, err
 }
 
 func (runtime *LiveRuntime) WaitOwnedSession(
@@ -426,6 +458,22 @@ func (runtime *LiveRuntime) CaptureEvidence(
 		return CapturedEvidence{}, err
 	}
 	owned.Registry = currentRegistry
+	elements, err := runtime.helper.inspect(ctx)
+	if err != nil {
+		return CapturedEvidence{}, err
+	}
+	controls, err := composerCatalog(elements, owned.Registry.CWD)
+	if err != nil {
+		return CapturedEvidence{}, fmt.Errorf("verify Desktop environment for evidence: %w", err)
+	}
+	if err := runtime.helper.probe(ctx, controls); err != nil {
+		return CapturedEvidence{}, fmt.Errorf("re-probe Desktop environment for evidence: %w", err)
+	}
+	environment := EnvironmentEvidence{
+		SelectedEnvironment: controls["environment"].Title,
+		RequestedWorkspace:  owned.Registry.CWD,
+		Project:             controls["project"].Title,
+	}
 	transcriptPath, err := runtime.transcriptPath(owned.Transcript.SessionID)
 	if err != nil {
 		return CapturedEvidence{}, err
@@ -441,6 +489,7 @@ func (runtime *LiveRuntime) CaptureEvidence(
 		Registry: owned.Registry, TranscriptPath: transcriptPath,
 		IrrlichtSession: observation,
 		Process:         process,
+		Environment:     environment,
 	}
 	if err := runtime.writeEvidenceFiles(evidenceDir, owned, evidence); err != nil {
 		return CapturedEvidence{}, err
@@ -996,10 +1045,6 @@ func (runtime *LiveRuntime) writeEvidenceFiles(
 	if owned.Registry.EnvScopePresent {
 		registry["envScopeId"] = owned.Registry.EnvScopeID
 	}
-	environment := struct {
-		SelectedEnvironment string `json:"selected_environment"`
-		RequestedWorkspace  string `json:"requested_workspace"`
-	}{"Local", owned.Registry.CWD}
 	irrlicht := struct {
 		SessionID string   `json:"session_id"`
 		CWD       string   `json:"cwd"`
@@ -1013,7 +1058,7 @@ func (runtime *LiveRuntime) writeEvidenceFiles(
 	}
 	for name, value := range map[string]any{
 		"desktop-registry.json":    registry,
-		"desktop-environment.json": environment,
+		"desktop-environment.json": evidence.Environment,
 		"process.json":             evidence.Process,
 		"irrlicht-session.json":    irrlicht,
 	} {
@@ -1049,6 +1094,12 @@ func validateEvidenceIdentity(owned OwnedSession, evidence CapturedEvidence) err
 	}
 	if evidence.Process.PID != observation.PID || strings.TrimSpace(evidence.Process.Command) == "" {
 		return errors.New("process evidence does not match the owned Irrlicht session")
+	}
+	environment := evidence.Environment
+	if environment.SelectedEnvironment != "Local" ||
+		!sameWorkspace(environment.RequestedWorkspace, owned.Registry.CWD) ||
+		environment.Project != filepath.Base(filepath.Clean(owned.Registry.CWD)) {
+		return errors.New("Desktop environment evidence does not match the verified Local project")
 	}
 	return nil
 }

@@ -51,6 +51,9 @@
 # lib is fixing, not a shape to reproduce in miniature.
 MANAGED_FILE_BACKUP_DIR=""
 MANAGED_FILE_SEAL_DIR=""
+# Desktop Local sets this before daemon startup. Legacy recording callers keep
+# the historical unsealed restore path until they opt in.
+MANAGED_FILE_STRICT_SEAL="${MANAGED_FILE_STRICT_SEAL:-0}"
 
 # managed_file_paths <daemon-bin> prints one absolute agent config path per line,
 # as declared by the daemon's adapter registry.
@@ -235,6 +238,9 @@ seal_managed_files() {
     return 1
   }
   local seal="$MANAGED_FILE_BACKUP_DIR/expected" tmp="$MANAGED_FILE_BACKUP_DIR/expected.tmp"
+  # Publish the fail-closed handle before the first operation can fail. An
+  # incomplete seal has no final manifest, so cleanup refuses before writing.
+  MANAGED_FILE_SEAL_DIR="$seal"
   rm -rf "$seal"
   mkdir -p "$seal" || return 1
   : > "$tmp" || return 1
@@ -267,7 +273,6 @@ seal_managed_files() {
     esac
   done < "$manifest"
   mv "$tmp" "$seal/manifest" || return 1
-  MANAGED_FILE_SEAL_DIR="$seal"
   return 0
 }
 
@@ -275,7 +280,17 @@ seal_managed_files() {
 # before restore changes any path if a daemon-owned config no longer matches
 # the post-install seal.
 verify_managed_file_seal() {
-  [[ -n "$MANAGED_FILE_SEAL_DIR" ]] || return 0
+  if [[ -z "$MANAGED_FILE_SEAL_DIR" ]]; then
+    if [[ "$MANAGED_FILE_STRICT_SEAL" == "1" ]]; then
+      echo "managed-file-snapshot: strict restore has no post-install seal — leaving every agent config alone" >&2
+      return 1
+    fi
+    [[ "$MANAGED_FILE_STRICT_SEAL" == "0" ]] || {
+      echo "managed-file-snapshot: invalid strict-seal mode '$MANAGED_FILE_STRICT_SEAL'" >&2
+      return 1
+    }
+    return 0
+  fi
   local manifest="$MANAGED_FILE_SEAL_DIR/manifest"
   [[ -f "$manifest" ]] || {
     echo "managed-file-snapshot: expected-state seal is missing at $manifest" >&2
@@ -477,5 +492,6 @@ restore_managed_files() {
   # no-op and a caller that legitimately records again can take a fresh one.
   MANAGED_FILE_BACKUP_DIR=""
   MANAGED_FILE_SEAL_DIR=""
+  MANAGED_FILE_STRICT_SEAL=0
   return "$restore_rc"
 }

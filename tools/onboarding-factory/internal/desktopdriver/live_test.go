@@ -63,6 +63,22 @@ func TestOpenComposerArmsCleanupBeforeTheExternalRouteCanFail(t *testing.T) {
 	}
 }
 
+func TestComposerDeadlineNamesObservedNoFolderWorkspaceMismatch(t *testing.T) {
+	elements := archiveFixtureElements("No folder", "Unused")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+	_, err := waitForComposerControls(
+		ctx,
+		"/repo/exact-workspace",
+		func(context.Context) ([]helperElement, error) { return elements, nil },
+		func(context.Context, map[string]helperSelector) error { return nil },
+	)
+	if err == nil || !strings.Contains(err.Error(), "No folder") ||
+		!strings.Contains(err.Error(), "project") || !strings.Contains(err.Error(), "/repo/exact-workspace") {
+		t.Fatalf("waitForComposerControls() error = %v", err)
+	}
+}
+
 func TestWaitProcessExitObservesTheExactCapturedPID(t *testing.T) {
 	observations := 0
 	runtime := &LiveRuntime{
@@ -223,6 +239,9 @@ func TestEvidencePreservesOmittedLocalScopeAndExactJoin(t *testing.T) {
 			Raw:      map[string]any{"private-field": "must-not-leak"},
 		},
 		Process: ProcessEvidence{PID: 42, Command: "/Applications/Claude.app/claude"},
+		Environment: EnvironmentEvidence{
+			SelectedEnvironment: "Local", RequestedWorkspace: "/exact", Project: "exact",
+		},
 	}
 	out := filepath.Join(dir, "evidence")
 	if err := os.Mkdir(out, 0o700); err != nil {
@@ -271,6 +290,8 @@ func TestEvidenceRejectsIdentityChangesBeforeWriting(t *testing.T) {
 		{"workspace", func(e *CapturedEvidence) { e.IrrlichtSession.CWD = "/other" }},
 		{"PID", func(e *CapturedEvidence) { e.Process.PID = 99 }},
 		{"bundle", func(e *CapturedEvidence) { e.IrrlichtSession.Launcher.HostBundleID = "other.bundle" }},
+		{"environment", func(e *CapturedEvidence) { e.Environment.SelectedEnvironment = "Remote" }},
+		{"project", func(e *CapturedEvidence) { e.Environment.Project = "other" }},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -290,6 +311,9 @@ func TestEvidenceRejectsIdentityChangesBeforeWriting(t *testing.T) {
 					Launcher: Launcher{HostBundleID: desktopBundleID},
 				},
 				Process: ProcessEvidence{PID: 42, Command: "/Applications/Claude.app/claude"},
+				Environment: EnvironmentEvidence{
+					SelectedEnvironment: "Local", RequestedWorkspace: "/exact", Project: "exact",
+				},
 			}
 			test.mutate(&evidence)
 			if err := (&LiveRuntime{}).writeEvidenceFiles(dir, owned, evidence); err == nil {

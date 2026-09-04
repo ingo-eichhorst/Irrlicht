@@ -42,6 +42,15 @@ type CapturedEvidence struct {
 	TranscriptPath  string
 	IrrlichtSession SessionObservation
 	Process         ProcessEvidence
+	Environment     EnvironmentEvidence
+}
+
+// EnvironmentEvidence records only the verified Local/project identity. The
+// project title is used for validation and is not written into replaydata.
+type EnvironmentEvidence struct {
+	SelectedEnvironment string `json:"selected_environment"`
+	RequestedWorkspace  string `json:"requested_workspace"`
+	Project             string `json:"-"`
 }
 
 type Baseline struct {

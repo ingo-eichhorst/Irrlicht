@@ -23,6 +23,9 @@ will fail again until the .ok file is re-touched.
 - [ ] For `desktop-local`: Claude Desktop 1.46388.1 is installed, running, and signed in.
 - [ ] For `desktop-local`: the caller has macOS Accessibility access.
 - [ ] For `desktop-local`: no other user or process controls Claude Desktop during the run.
+- [ ] For `desktop-local`: no other process edits the daemon-declared agent
+      config files from recorder startup until the runner reports that its
+      post-install seal is complete.
 
 ## Notes
 

@@ -558,6 +558,11 @@ else
   # #1769).
   if [[ "$EXECUTION_PROFILE" == "desktop-local" ]]; then
     desktop_require_free_loopback_address "$ONBOARD_BIND" || exit 1
+    # A Desktop run cannot restore an unsealed daemon hook edit. The snapshot
+    # library keeps legacy callers compatible, but this path fails closed if
+    # sealing is missing, partial, or unsuccessful.
+    # shellcheck disable=SC2034  # shared state read by managed-file-snapshot.sh
+    MANAGED_FILE_STRICT_SEAL=1
   fi
   spawn_record_daemon "$DAEMON" "$STAGING" "$ONBOARD_BIND" "$ONBOARD_HOME" "$ADAPTER" || exit 1
 fi
@@ -990,7 +995,7 @@ if [[ "$EXECUTION_PROFILE" == "desktop-local" ]]; then
   DESKTOP_STAGED_DIR="$STAGING/replaydata/agents/$ADAPTER/scenarios/$FOLDER"
   desktop_stage_evidence \
     "$STAGING/desktop-evidence" \
-    "$RECORDING" \
+    "$DESKTOP_STAGED_DIR/events.jsonl" \
     "$ACTUAL_UUID" \
     "$STAGING/cwd" \
     "$DESKTOP_STAGED_DIR" || {
