@@ -70,14 +70,21 @@ func (s *Server) handleScenarioDetail(w http.ResponseWriter, r *http.Request) {
 	// Validate the same newest all-profile recording populated above. Viewer
 	// history stays all-profile; CLI verification has a separate profile API.
 	// Errors are swallowed so a malformed expected.jsonl doesn't 500 the response.
-	if d.LatestRecording != "" {
-		recDir := filepath.Join(scenarioDir, "recordings", d.LatestRecording)
-		if rep, err := validateExpectedRecording(scenarioDir, recDir); err == nil && rep != nil {
-			d.Expected = rep
-		}
-	}
+	d.Expected = expectedReportForLatest(scenarioDir, d.LatestRecording)
 	d.Assessment = loadAssessment(scenarioDir)
 	writeJSON(w, d)
+}
+
+func expectedReportForLatest(scenarioDir, recordingName string) *validate.ExpectedReport {
+	if recordingName == "" {
+		return nil
+	}
+	recDir := filepath.Join(scenarioDir, "recordings", recordingName)
+	report, err := validateExpectedRecording(scenarioDir, recDir)
+	if err != nil {
+		return nil
+	}
+	return report
 }
 
 func validateExpectedRecording(scenarioDir, recordingDir string) (*validate.ExpectedReport, error) {

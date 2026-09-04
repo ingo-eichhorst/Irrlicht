@@ -69,10 +69,10 @@ func runOf(args ...string) (int, string, string) {
 	return code, out.String(), errb.String()
 }
 
-func requireCodeAndText(t *testing.T, code, wantCode int, text, wantText string) {
+func requireUsageError(t *testing.T, code int, text, wantText string) {
 	t.Helper()
-	if code != wantCode {
-		t.Fatalf("exit=%d; want %d; output=%q", code, wantCode, text)
+	if code != exitUsage {
+		t.Fatalf("exit=%d; want %d; output=%q", code, exitUsage, text)
 	}
 	if !strings.Contains(text, wantText) {
 		t.Fatalf("output=%q; want %q", text, wantText)
@@ -131,54 +131,69 @@ func TestStatusAgentFilter(t *testing.T) {
 	}
 }
 
-func TestStatusSelectsAndReportsExecutionProfile(t *testing.T) {
-	root := mixedProfileRepo(t)
-
-	code, out, errs := runOf("status", "--agent", "claudecode", "--scenario", "session-start", "--json", "--repo-root", root)
+func profileStatusView(t *testing.T, root string, profileArgs ...string) statusView {
+	t.Helper()
+	args := []string{"status", "--agent", "claudecode", "--scenario", "session-start"}
+	args = append(args, profileArgs...)
+	args = append(args, "--json", "--repo-root", root)
+	code, out, errs := runOf(args...)
 	if code != exitOK {
-		t.Fatalf("default status: exit=%d stderr=%s", code, errs)
+		t.Fatalf("status: exit=%d stderr=%s", code, errs)
 	}
-	var cli statusView
-	if err := json.Unmarshal([]byte(out), &cli); err != nil {
+	var view statusView
+	if err := json.Unmarshal([]byte(out), &view); err != nil {
 		t.Fatal(err)
 	}
+	return view
+}
+
+func TestStatusDefaultsToCLILocalProfile(t *testing.T) {
+	root := mixedProfileRepo(t)
+	cli := profileStatusView(t, root)
 	cliCell := cli.Scenarios[0].Cells["claudecode"]
 	if cli.ExecutionProfile != "cli-local" {
 		t.Fatalf("default view selected profile %q", cli.ExecutionProfile)
 	}
-	if cliCell.ExecutionProfile != "cli-local" || cliCell.RecordingName != "r1" || cliCell.Entrypoint != "cli" {
-		t.Fatalf("default status selected wrong profile identity: view=%+v cell=%+v", cli, cliCell)
+	if cliCell.ExecutionProfile != "cli-local" {
+		t.Fatalf("default cell selected profile %q", cliCell.ExecutionProfile)
 	}
+	if cliCell.RecordingName != "r1" {
+		t.Fatalf("default cell selected recording %q", cliCell.RecordingName)
+	}
+	if cliCell.Entrypoint != "cli" {
+		t.Fatalf("default cell changed entrypoint to %q", cliCell.Entrypoint)
+	}
+}
 
-	code, out, errs = runOf("status", "--agent", "claudecode", "--scenario", "session-start",
-		"--profile", "desktop-local", "--json", "--repo-root", root)
-	if code != exitOK {
-		t.Fatalf("Desktop status: exit=%d stderr=%s", code, errs)
-	}
-	var desktop statusView
-	if err := json.Unmarshal([]byte(out), &desktop); err != nil {
-		t.Fatal(err)
-	}
+func TestStatusSelectsDesktopLocalProfile(t *testing.T) {
+	root := mixedProfileRepo(t)
+	desktop := profileStatusView(t, root, "--profile", "desktop-local")
 	desktopCell := desktop.Scenarios[0].Cells["claudecode"]
 	if desktop.ExecutionProfile != "desktop-local" {
 		t.Fatalf("Desktop view selected profile %q", desktop.ExecutionProfile)
 	}
-	if desktopCell.ExecutionProfile != "desktop-local" || desktopCell.RecordingName != "r2" {
-		t.Fatalf("Desktop status selected wrong recording: %+v", desktopCell)
+	if desktopCell.ExecutionProfile != "desktop-local" {
+		t.Fatalf("Desktop cell selected profile %q", desktopCell.ExecutionProfile)
 	}
-	if desktopCell.Entrypoint != "sdk-cli" || desktopCell.DesktopAppVersion != "1.0.10" {
-		t.Fatalf("Desktop status selected wrong profile identity: view=%+v cell=%+v", desktop, desktopCell)
+	if desktopCell.RecordingName != "r2" {
+		t.Fatalf("Desktop cell selected recording %q", desktopCell.RecordingName)
+	}
+	if desktopCell.Entrypoint != "sdk-cli" {
+		t.Fatalf("Desktop cell changed entrypoint to %q", desktopCell.Entrypoint)
+	}
+	if desktopCell.DesktopAppVersion != "1.0.10" {
+		t.Fatalf("Desktop app version=%q", desktopCell.DesktopAppVersion)
 	}
 }
 
 func TestStatusRejectsUnknownExecutionProfile(t *testing.T) {
 	code, _, errs := runOf("status", "--profile", "remote", "--repo-root", validRepo(t))
-	requireCodeAndText(t, code, exitUsage, errs, `unknown execution profile "remote"`)
+	requireUsageError(t, code, errs, `unknown execution profile "remote"`)
 }
 
 func TestStatusRejectsEmptyExecutionProfile(t *testing.T) {
 	code, _, errs := runOf("status", "--profile", "", "--repo-root", validRepo(t))
-	requireCodeAndText(t, code, exitUsage, errs, `unknown execution profile ""`)
+	requireUsageError(t, code, errs, `unknown execution profile ""`)
 }
 
 func TestStatusScenarioFilter(t *testing.T) {
@@ -218,11 +233,11 @@ func TestStatusRunsRejectsExplicitExecutionProfile(t *testing.T) {
 	for _, profile := range []string{"cli-local", "desktop-local"} {
 		t.Run(profile, func(t *testing.T) {
 			code, _, errs := runOf("status", "--runs", "--profile", profile, "--repo-root", root)
-			requireCodeAndText(t, code, exitUsage, errs, "--profile cannot be used with --runs")
+			requireUsageError(t, code, errs, "--profile cannot be used with --runs")
 		})
 	}
 	code, _, errs := runOf("status", "--runs", "--profile", "remote", "--repo-root", root)
-	requireCodeAndText(t, code, exitUsage, errs, `unknown execution profile "remote"`)
+	requireUsageError(t, code, errs, `unknown execution profile "remote"`)
 }
 
 func TestValidateClean(t *testing.T) {

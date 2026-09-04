@@ -93,6 +93,17 @@ func LoadRecordingManifest(path string) (RecordingManifest, error) {
 	}, nil
 }
 
+// LoadRecordingManifestOrLegacy loads a manifest and maps a missing manifest
+// to the legacy CLI profile. Present manifests remain strict.
+func LoadRecordingManifestOrLegacy(path string) (RecordingManifest, error) {
+	manifest, err := LoadRecordingManifest(path)
+	if os.IsNotExist(err) {
+		manifest.ExecutionProfile = ProfileCLILocal
+		return manifest, nil
+	}
+	return manifest, err
+}
+
 // RecordingDirs returns recording directories newest-first. It is the single
 // enumerator shared by matrix selection and verification.
 func RecordingDirs(scenarioDir string) []string {
@@ -127,12 +138,9 @@ func RecordingsForProfile(scenarioDir string, profile ExecutionProfile) ([]Recor
 	var recordings []Recording
 	for _, dir := range RecordingDirs(scenarioDir) {
 		manifestPath := filepath.Join(dir, "manifest.json")
-		manifest, err := LoadRecordingManifest(manifestPath)
+		manifest, err := LoadRecordingManifestOrLegacy(manifestPath)
 		if err != nil {
-			if !os.IsNotExist(err) {
-				return nil, fmt.Errorf("%s: %w", manifestPath, err)
-			}
-			manifest.ExecutionProfile = ProfileCLILocal
+			return nil, fmt.Errorf("%s: %w", manifestPath, err)
 		}
 		if manifest.ExecutionProfile == profile {
 			recordings = append(recordings, Recording{

@@ -178,6 +178,24 @@ func cellViewOf(cs matrix.CellState) cellView {
 }
 
 func runStatus(args []string, stdout, stderr io.Writer) int {
+	request, err := parseStatusRequest(args)
+	if err != nil {
+		fmt.Fprintf(stderr, "of status: %v\n", err)
+		return exitUsage
+	}
+	if request.Runs {
+		return runStatusRuns(request.RepoRoot, request.JSON, stdout, stderr)
+	}
+	return runMatrixStatus(request, stdout, stderr)
+}
+
+type statusRequest struct {
+	Agent, Scenario, RepoRoot string
+	Profile                   matrix.ExecutionProfile
+	Runs, Summary, JSON       bool
+}
+
+func parseStatusRequest(args []string) (statusRequest, error) {
 	fs := newFlagSet("of status")
 	var (
 		agent    = fs.String("agent", "", "filter to one agent column")
@@ -189,33 +207,41 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 		repoRoot = fs.String("repo-root", ".", "repository root")
 	)
 	if err := fs.Parse(args); err != nil {
-		return exitUsage
+		return statusRequest{}, err
 	}
 	*repoRoot = absRoot(*repoRoot)
 
 	executionProfile, err := statusExecutionProfile(*profile, *runs, flagPassed(fs, "profile"))
 	if err != nil {
-		fmt.Fprintf(stderr, "of status: %v\n", err)
-		return exitUsage
+		return statusRequest{}, err
 	}
-	if *runs {
-		return runStatusRuns(*repoRoot, *asJSON, stdout, stderr)
-	}
+	return statusRequest{
+		Agent: *agent, Scenario: *scenario, RepoRoot: *repoRoot,
+		Profile: executionProfile, Runs: *runs, Summary: *summary, JSON: *asJSON,
+	}, nil
+}
 
-	m, err := matrix.LoadRepoForProfile(*repoRoot, executionProfile)
+func runMatrixStatus(request statusRequest, stdout, stderr io.Writer) int {
+	m, view, err := statusViewForRequest(request)
 	if err != nil {
 		fmt.Fprintf(stderr, "of status: %v\n", err)
 		return exitUsage
 	}
-	agents := m.Agents()
-	if *agent != "" {
-		if !m.HasAgent(*agent) {
-			fmt.Fprintf(stderr, "of status: %q is not an onboarded agent\n", *agent)
-			return exitUsage
-		}
-		agents = []string{*agent}
+	return emitStatus(m, view, request, statusOutput{stdout: stdout, stderr: stderr})
+}
+
+type statusOutput struct{ stdout, stderr io.Writer }
+
+func statusViewForRequest(request statusRequest) (*matrix.Matrix, statusView, error) {
+	m, err := matrix.LoadRepoForProfile(request.RepoRoot, request.Profile)
+	if err != nil {
+		return nil, statusView{}, err
 	}
-	view := buildStatusView(m, *repoRoot, agents, *scenario)
+	agents, err := statusAgents(m, request.Agent)
+	if err != nil {
+		return nil, statusView{}, err
+	}
+	view := buildStatusView(m, request.RepoRoot, agents, request.Scenario)
 
 	// Validate --scenario the way --agent is validated. An unmatched filter
 	// used to yield a visibly empty listing; under --summary it yields a full
@@ -224,26 +250,38 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	// catalog walk, so the guard and the filter are literally the same
 	// predicate — buildStatusView emits a row for every matching shard, so an
 	// empty result means nothing matched.
-	if *scenario != "" && len(view.Scenarios) == 0 {
-		fmt.Fprintf(stderr, "of status: %q is not a scenario (by name or id)\n", *scenario)
-		return exitUsage
+	if request.Scenario != "" && len(view.Scenarios) == 0 {
+		return nil, statusView{}, fmt.Errorf("%q is not a scenario (by name or id)", request.Scenario)
 	}
+	return m, view, nil
+}
 
+func statusAgents(m *matrix.Matrix, agent string) ([]string, error) {
+	if agent == "" {
+		return m.Agents(), nil
+	}
+	if !m.HasAgent(agent) {
+		return nil, fmt.Errorf("%q is not an onboarded agent", agent)
+	}
+	return []string{agent}, nil
+}
+
+func emitStatus(m *matrix.Matrix, view statusView, request statusRequest, output statusOutput) int {
 	// --summary folds the same view into per-agent counts. Folding the view
 	// (rather than re-reading the matrix) is what keeps the two renderings of
 	// `of status` arithmetically consistent.
-	if *summary {
-		return emitSummary(m, view, *asJSON, stdout, stderr)
+	if request.Summary {
+		return emitSummary(m, view, request.JSON, output.stdout, output.stderr)
 	}
 
-	if *asJSON {
-		if err := writeJSON(stdout, view); err != nil {
-			fmt.Fprintf(stderr, "of status: encode: %v\n", err)
+	if request.JSON {
+		if err := writeJSON(output.stdout, view); err != nil {
+			fmt.Fprintf(output.stderr, "of status: encode: %v\n", err)
 			return exitUsage
 		}
 		return exitOK
 	}
-	printStatusText(stdout, view)
+	printStatusText(output.stdout, view)
 	return exitOK
 }
 

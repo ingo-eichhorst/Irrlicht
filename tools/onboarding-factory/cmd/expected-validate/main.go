@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -22,52 +23,78 @@ import (
 	"irrlicht/tools/onboarding-factory/internal/validate"
 )
 
-func main() {
-	flags := flag.NewFlagSet("expected-validate", flag.ContinueOnError)
-	profileValue := flags.String("profile", string(matrix.ProfileCLILocal), "execution profile")
-	if err := flags.Parse(os.Args[1:]); err != nil {
-		os.Exit(2)
+type expectedValidationRequest struct {
+	ScenarioDir   string
+	RecordingName string
+	Profile       matrix.ExecutionProfile
+}
+
+func main() { os.Exit(runExpectedValidate(os.Args[1:], os.Stdout, os.Stderr)) }
+
+func runExpectedValidate(args []string, stdout, stderr io.Writer) int {
+	request, err := parseExpectedValidationRequest(args, stderr)
+	if err != nil {
+		return 2
 	}
-	if flags.NArg() != 1 && flags.NArg() != 2 {
-		fmt.Fprintln(os.Stderr, "usage: expected-validate [--profile cli-local|desktop-local] <cell-dir> [recording-name]")
-		os.Exit(2)
+	report, err := validateExpectedRequest(request)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: %v\n", err)
+		return 2
+	}
+	return writeExpectedReport(stdout, report)
+}
+
+func parseExpectedValidationRequest(args []string, stderr io.Writer) (expectedValidationRequest, error) {
+	flags := flag.NewFlagSet("expected-validate", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	profileValue := flags.String("profile", string(matrix.ProfileCLILocal), "execution profile")
+	if err := flags.Parse(args); err != nil {
+		return expectedValidationRequest{}, err
+	}
+	switch flags.NArg() {
+	case 1, 2:
+	default:
+		fmt.Fprintln(stderr, "usage: expected-validate [--profile cli-local|desktop-local] <cell-dir> [recording-name]")
+		return expectedValidationRequest{}, fmt.Errorf("invalid argument count")
 	}
 	profile, err := matrix.ParseExecutionProfile(*profileValue)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(2)
+		fmt.Fprintf(stderr, "error: %v\n", err)
+		return expectedValidationRequest{}, err
 	}
-	scenarioDir := flags.Arg(0)
-	var report *validate.ExpectedReport
+	request := expectedValidationRequest{ScenarioDir: flags.Arg(0), Profile: profile}
 	if flags.NArg() == 2 {
-		// Validate ONE explicit recording against the cell's current spec.
-		recDir := filepath.Join(scenarioDir, "recordings", flags.Arg(1))
-		report, err = validate.ValidateExpectedAgainst(
-			filepath.Join(scenarioDir, "expected.jsonl"),
-			filepath.Join(recDir, "events.jsonl"),
-		)
-	} else {
-		// Validate the cell's newest recording within the selected profile.
-		report, err = validate.ValidateExpectedForProfile(scenarioDir, profile)
+		request.RecordingName = flags.Arg(1)
 	}
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(2)
+	return request, nil
+}
+
+func validateExpectedRequest(request expectedValidationRequest) (*validate.ExpectedReport, error) {
+	if request.RecordingName == "" {
+		return validate.ValidateExpectedForProfile(request.ScenarioDir, request.Profile)
 	}
+	recDir := filepath.Join(request.ScenarioDir, "recordings", request.RecordingName)
+	return validate.ValidateExpectedAgainst(
+		filepath.Join(request.ScenarioDir, "expected.jsonl"),
+		filepath.Join(recDir, "events.jsonl"),
+	)
+}
+
+func writeExpectedReport(stdout io.Writer, report *validate.ExpectedReport) int {
 	if report == nil {
 		// Nothing to validate — either expected.jsonl is missing (no
 		// spec declared yet) or there is no recording at all (neither
 		// events.jsonl nor a transcript — an applicable:false cell whose
 		// recording cannot be captured today). A transcript-without-events
 		// cell is NOT skipped here; it returns an error above (#496 RC6).
-		fmt.Println(`{"pass": true, "skipped": "nothing to validate (no expected.jsonl, or no recording at all)"}`)
-		os.Exit(0)
+		fmt.Fprintln(stdout, `{"pass": true, "skipped": "nothing to validate (no expected.jsonl, or no recording at all)"}`)
+		return 0
 	}
-	enc := json.NewEncoder(os.Stdout)
+	enc := json.NewEncoder(stdout)
 	enc.SetIndent("", "  ")
 	_ = enc.Encode(report)
 	if !report.Pass {
-		os.Exit(1)
+		return 1
 	}
-	os.Exit(0)
+	return 0
 }

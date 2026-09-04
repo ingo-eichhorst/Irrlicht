@@ -342,30 +342,30 @@ func validateCellRecording(loc cellLoc, add func(path, msg string)) {
 // recordingCompletenessTargets returns the newest recording per valid profile
 // plus malformed recordings that still require structural checks.
 func recordingCompletenessTargets(recDirs []string) []string {
-	newest := map[matrix.ExecutionProfile]string{}
+	newest, malformed := indexCompletenessRecordings(recDirs)
+	targets := append([]string(nil), malformed...)
+	for _, profile := range matrix.ExecutionProfiles() {
+		if recDir := newest[profile]; recDir != "" {
+			targets = append(targets, recDir)
+		}
+	}
+	return targets
+}
+
+func indexCompletenessRecordings(recDirs []string) (map[matrix.ExecutionProfile]string, []string) {
+	newest := make(map[matrix.ExecutionProfile]string, len(matrix.ExecutionProfiles()))
 	var malformed []string
 	for _, recDir := range recDirs {
-		manifest, err := matrix.LoadRecordingManifest(filepath.Join(recDir, "manifest.json"))
+		manifest, err := matrix.LoadRecordingManifestOrLegacy(filepath.Join(recDir, "manifest.json"))
 		if err != nil {
-			if os.IsNotExist(err) {
-				if newest[matrix.ProfileCLILocal] == "" {
-					newest[matrix.ProfileCLILocal] = recDir
-				}
-			} else {
-				malformed = append(malformed, recDir)
-			}
+			malformed = append(malformed, recDir)
 			continue
 		}
 		if newest[manifest.ExecutionProfile] == "" {
 			newest[manifest.ExecutionProfile] = recDir
 		}
 	}
-	for _, profile := range matrix.ExecutionProfiles() {
-		if recDir := newest[profile]; recDir != "" {
-			malformed = append(malformed, recDir)
-		}
-	}
-	return malformed
+	return newest, malformed
 }
 
 func addRecordingCompleteness(recDir, recRel string, add func(path, msg string)) {

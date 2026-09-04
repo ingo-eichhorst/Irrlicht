@@ -220,20 +220,34 @@ func Load(cfg Config) (*Matrix, error) {
 		m.catalog = append(m.catalog, catalogEntry{ID: sh.Name})
 	}
 
-	for _, agent := range m.agents {
-		m.cells[agent] = map[string]CellState{}
-		for _, sh := range shards {
-			if m.agentCells[agent] == nil || m.agentCells[agent][sh.Name] == nil {
-				continue // no cell for this (agent, scenario), and none derivable
-			}
-			cell, err := m.buildCell(agent, sh.Name)
-			if err != nil {
-				return nil, err
-			}
-			m.cells[agent][sh.Name] = cell
-		}
+	if err := m.buildCells(shards); err != nil {
+		return nil, err
 	}
 	return m, nil
+}
+
+func (m *Matrix) buildCells(shards []shard.Shard) error {
+	for _, agent := range m.agents {
+		if err := m.buildAgentCells(agent, shards); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *Matrix) buildAgentCells(agent string, shards []shard.Shard) error {
+	m.cells[agent] = map[string]CellState{}
+	for _, sh := range shards {
+		if m.agentCells[agent][sh.Name] == nil {
+			continue
+		}
+		cell, err := m.buildCell(agent, sh.Name)
+		if err != nil {
+			return err
+		}
+		m.cells[agent][sh.Name] = cell
+	}
+	return nil
 }
 
 func defaultExecutionProfile(profile ExecutionProfile) ExecutionProfile {
