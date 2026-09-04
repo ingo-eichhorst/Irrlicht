@@ -90,4 +90,23 @@ final class ExecutableBoundaryTests: XCTestCase {
         XCTAssertLessThan(SemanticVersion("2.1.260")!, SemanticVersion("2.2.0")!)
         XCTAssertNil(SemanticVersion("latest"))
     }
+
+    func testSemanticVersionRejectsOverflowWithoutTrapping() {
+        XCTAssertNil(SemanticVersion("999999999999999999999999999999.1.1"))
+    }
+
+    func testSemanticVersionOrdersPrereleaseBeforeStableRelease() {
+        let prerelease = SemanticVersion("2.1.260-beta")!
+        let stable = SemanticVersion("2.1.260")!
+        XCTAssertLessThan(prerelease, stable)
+        XCTAssertEqual([stable, prerelease].max(), stable)
+        XCTAssertLessThan(
+            SemanticVersion("2.1.260-beta.2")!,
+            SemanticVersion("2.1.260-beta.11")!
+        )
+        XCTAssertLessThan(
+            SemanticVersion("2.1.260-beta.11")!,
+            SemanticVersion("2.1.260-rc.1")!
+        )
+    }
 }

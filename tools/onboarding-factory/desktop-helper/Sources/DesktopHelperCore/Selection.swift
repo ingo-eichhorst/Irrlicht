@@ -175,26 +175,136 @@ public enum ProbeValidator {
 }
 
 public struct SemanticVersion: Comparable, Equatable, Sendable {
+    private enum PrereleaseIdentifier: Equatable, Sendable {
+        case numeric(String)
+        case text(String)
+
+        init?(_ value: Substring) {
+            guard !value.isEmpty, value.unicodeScalars.allSatisfy(Self.isAllowed) else {
+                return nil
+            }
+            if value.allSatisfy(Self.isASCIIDigit) {
+                guard value == "0" || !value.hasPrefix("0") else { return nil }
+                self = .numeric(String(value))
+            } else {
+                self = .text(String(value))
+            }
+        }
+
+        static func < (lhs: PrereleaseIdentifier, rhs: PrereleaseIdentifier) -> Bool {
+            switch (lhs, rhs) {
+            case let (.numeric(left), .numeric(right)):
+                if left.count != right.count { return left.count < right.count }
+                return left < right
+            case (.numeric, .text):
+                return true
+            case (.text, .numeric):
+                return false
+            case let (.text(left), .text(right)):
+                return left < right
+            }
+        }
+
+        private static func isAllowed(_ scalar: Unicode.Scalar) -> Bool {
+            isASCIIDigit(scalar)
+                || (65 ... 90).contains(scalar.value)
+                || (97 ... 122).contains(scalar.value)
+                || scalar.value == 45
+        }
+
+        fileprivate static func isASCIIDigit(_ character: Character) -> Bool {
+            character.unicodeScalars.count == 1
+                && character.unicodeScalars.first.map(isASCIIDigit) == true
+        }
+
+        private static func isASCIIDigit(_ scalar: Unicode.Scalar) -> Bool {
+            (48 ... 57).contains(scalar.value)
+        }
+    }
+
     private let components: [Int]
+    private let prerelease: [PrereleaseIdentifier]?
     public let rawValue: String
 
     public init?(_ rawValue: String) {
-        let main = rawValue.split(separator: "-", maxSplits: 1)[0]
-        let parts = main.split(separator: ".", omittingEmptySubsequences: false)
-        guard parts.count >= 3,
-              parts.allSatisfy({ !$0.isEmpty && $0.allSatisfy(\.isNumber) })
-        else { return nil }
-        components = parts.map { Int($0)! }
+        let version = rawValue.split(
+            separator: "+",
+            maxSplits: 1,
+            omittingEmptySubsequences: false
+        )[0]
+        let coreAndPrerelease = version.split(
+            separator: "-",
+            maxSplits: 1,
+            omittingEmptySubsequences: false
+        )
+        guard let components = Self.parseCore(coreAndPrerelease[0]) else { return nil }
+        let prerelease: [PrereleaseIdentifier]?
+        if coreAndPrerelease.count == 2 {
+            guard let parsed = Self.parsePrerelease(coreAndPrerelease[1]) else { return nil }
+            prerelease = parsed
+        } else {
+            prerelease = nil
+        }
+        self.components = components
+        self.prerelease = prerelease
         self.rawValue = rawValue
     }
 
     public static func < (lhs: SemanticVersion, rhs: SemanticVersion) -> Bool {
-        let count = max(lhs.components.count, rhs.components.count)
+        if let order = compareCore(lhs.components, rhs.components) { return order }
+        if let order = comparePrerelease(lhs.prerelease, rhs.prerelease) { return order }
+        return lhs.rawValue < rhs.rawValue
+    }
+
+    private static func parseCore(_ core: Substring) -> [Int]? {
+        let parts = core.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count >= 3 else { return nil }
+        var result: [Int] = []
+        result.reserveCapacity(parts.count)
+        for part in parts {
+            guard !part.isEmpty,
+                  part.allSatisfy(PrereleaseIdentifier.isASCIIDigit),
+                  let component = Int(part)
+            else { return nil }
+            result.append(component)
+        }
+        return result
+    }
+
+    private static func parsePrerelease(
+        _ prerelease: Substring
+    ) -> [PrereleaseIdentifier]? {
+        let parts = prerelease.split(separator: ".", omittingEmptySubsequences: false)
+        let parsed = parts.compactMap(PrereleaseIdentifier.init)
+        return !parts.isEmpty && parsed.count == parts.count ? parsed : nil
+    }
+
+    private static func compareCore(_ lhs: [Int], _ rhs: [Int]) -> Bool? {
+        let count = max(lhs.count, rhs.count)
         for index in 0 ..< count {
-            let left = index < lhs.components.count ? lhs.components[index] : 0
-            let right = index < rhs.components.count ? rhs.components[index] : 0
+            let left = index < lhs.count ? lhs[index] : 0
+            let right = index < rhs.count ? rhs[index] : 0
             if left != right { return left < right }
         }
-        return lhs.rawValue < rhs.rawValue
+        return nil
+    }
+
+    private static func comparePrerelease(
+        _ lhs: [PrereleaseIdentifier]?,
+        _ rhs: [PrereleaseIdentifier]?
+    ) -> Bool? {
+        switch (lhs, rhs) {
+        case (nil, nil):
+            return nil
+        case (nil, .some):
+            return false
+        case (.some, nil):
+            return true
+        case let (.some(left), .some(right)):
+            for (leftPart, rightPart) in zip(left, right) where leftPart != rightPart {
+                return leftPart < rightPart
+            }
+            return left.count == right.count ? nil : left.count < right.count
+        }
     }
 }
