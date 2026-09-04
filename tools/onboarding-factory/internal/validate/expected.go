@@ -270,6 +270,21 @@ func RecordingComplete(recDir string) []string {
 	if hasJSONL && !exists("transcript.jsonl.replay.json.golden") {
 		findings = append(findings, "missing transcript.jsonl.replay.json.golden (required for a jsonl transcript)")
 	}
+	findings = append(findings, desktopEvidenceCompleteness(recDir, exists)...)
+	return findings
+}
+
+func desktopEvidenceCompleteness(recDir string, exists func(string) bool) []string {
+	manifest, err := matrix.LoadRecordingManifest(filepath.Join(recDir, "manifest.json"))
+	if err != nil || manifest.ExecutionProfile != matrix.ProfileDesktopLocal {
+		return nil
+	}
+	var findings []string
+	for _, name := range matrix.DesktopEvidenceFiles() {
+		if !exists(name) {
+			findings = append(findings, "missing "+name+" (required for desktop-local evidence)")
+		}
+	}
 	return findings
 }
 

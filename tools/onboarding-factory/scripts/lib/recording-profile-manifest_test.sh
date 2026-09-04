@@ -43,6 +43,11 @@ check_manifest() (
   mkdir -p "$staged" "$dst"
   printf '%s\n' '{"seq":1,"ts":"2026-09-04T00:00:00Z"}' > "$staged/events.jsonl"
   printf '{"entrypoint":"%s"}\n' "$transcript_entrypoint" > "$staged/transcript.jsonl"
+  if [[ "$profile" == "desktop-local" ]]; then
+    for evidence_file in desktop-registry.json desktop-environment.json hooks.jsonl process.json irrlicht-session.json; do
+      printf 'raw %s\n' "$evidence_file" > "$staged/$evidence_file"
+    done
+  fi
 
   # Export because the extracted production blocks read these values through
   # eval. The export also makes that indirect use visible to shellcheck.
@@ -75,6 +80,9 @@ check_manifest() (
   fi
   if [[ "$profile" == "desktop-local" ]]; then
     [[ "$(jq -r '.desktop_app_version' "$dst/manifest.json")" == "$desktop_version" ]] || exit 13
+    for evidence_file in desktop-registry.json desktop-environment.json hooks.jsonl process.json irrlicht-session.json; do
+      cmp -s "$staged/$evidence_file" "$dst/$evidence_file" || exit 15
+    done
   elif jq -e 'has("desktop_app_version")' "$dst/manifest.json" >/dev/null; then
     exit 14
   fi
@@ -86,10 +94,10 @@ else
   fail "CLI manifest keeps entrypoint and version identity" "writer output did not match the staged transcript"
 fi
 
-if check_manifest desktop-local sdk-cli 1.0.10; then
-  pass "Desktop manifest keeps sdk-cli and adds the app version"
+if check_manifest desktop-local claude-desktop 1.0.10; then
+  pass "Desktop manifest keeps claude-desktop, app version, and raw evidence"
 else
-  fail "Desktop manifest keeps sdk-cli and adds the app version" "writer output did not match the staged transcript"
+  fail "Desktop manifest keeps claude-desktop, app version, and raw evidence" "writer output did not match the staged evidence"
 fi
 
 echo ""

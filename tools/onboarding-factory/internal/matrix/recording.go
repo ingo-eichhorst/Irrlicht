@@ -18,7 +18,28 @@ type ExecutionProfile string
 const (
 	ProfileCLILocal     ExecutionProfile = "cli-local"
 	ProfileDesktopLocal ExecutionProfile = "desktop-local"
+
+	DesktopRegistryFile        = "desktop-registry.json"
+	DesktopEnvironmentFile     = "desktop-environment.json"
+	DesktopHooksFile           = "hooks.jsonl"
+	DesktopProcessFile         = "process.json"
+	DesktopIrrlichtSessionFile = "irrlicht-session.json"
+	DesktopTranscriptFile      = "transcript.jsonl"
 )
+
+// DesktopEvidenceFiles returns the raw evidence files required in each
+// Desktop Local recording. This lower recording-layer list is shared by the
+// general completeness check and the Desktop result validator.
+func DesktopEvidenceFiles() []string {
+	return []string{
+		DesktopRegistryFile,
+		DesktopEnvironmentFile,
+		DesktopHooksFile,
+		DesktopProcessFile,
+		DesktopIrrlichtSessionFile,
+		DesktopTranscriptFile,
+	}
+}
 
 // ExecutionProfiles returns every accepted manifest value in stable order.
 func ExecutionProfiles() []ExecutionProfile {
