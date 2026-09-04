@@ -1755,6 +1755,44 @@
     .history-co2-info:hover { color: var(--text-bright); background: var(--working); }
     .history-co2-info[hidden] { display: none; }
 
+    /* Autonomy run strip (#1905), element 2 of the Autonomy section. A
+       full-width block UNDER the chart card rather than inside it: it is a
+       second element, not another rendering of the first, and it grows a row
+       per project instead of living in a fixed-height card. */
+    .history-autonomy { margin-top: 18px; }
+    .history-autonomy[hidden] { display: none; }
+    .history-autonomy-title {
+      font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em;
+      text-transform: uppercase; color: var(--muted); margin-bottom: 8px;
+    }
+    .history-autonomy-row {
+      display: grid; grid-template-columns: 140px 1fr 56px;
+      align-items: center; gap: 10px; margin-bottom: 6px;
+    }
+    .history-autonomy-label {
+      font-size: 12px; color: var(--text); overflow: hidden;
+      text-overflow: ellipsis; white-space: nowrap;
+    }
+    .history-autonomy-canvas {
+      width: 100%; height: 14px; display: block;
+      background: var(--surface); border: 1px solid var(--border); border-radius: 3px;
+    }
+    .history-autonomy-val {
+      font-family: var(--font-mono); font-size: 11px; color: var(--muted); text-align: right;
+    }
+    .history-autonomy-empty, .history-autonomy-note {
+      font-size: 12px; color: var(--muted); padding: 8px 0; line-height: 1.5;
+    }
+    .history-autonomy-note { color: var(--waiting); }
+    .history-autonomy-legend {
+      display: flex; flex-wrap: wrap; gap: 14px; margin-top: 8px;
+      font-size: 11px; color: var(--muted);
+    }
+    .history-autonomy-legend-item { display: inline-flex; align-items: center; gap: 5px; }
+    .history-autonomy-legend-item i {
+      display: inline-block; width: 10px; height: 8px; border-radius: 1px;
+    }
+
     /* Activity matrix (chart=state, issue #981): projects × time buckets,
        each cell a stacked working/waiting/ready mini bar. Replaces the
        canvas inside the same .history-chart-wrap card (see

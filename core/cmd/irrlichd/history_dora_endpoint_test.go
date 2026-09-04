@@ -53,7 +53,7 @@ func TestHandleGetHistory_DoraEndpoint(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/history?chart=dora&project=alpha&start=0&end="+strconv.Itoa(14*86400+1), nil)
 	rec := httptest.NewRecorder()
-	handleGetHistory(nil, lister, nil, git)(rec, req)
+	handleGetHistory(nil, lister, nil, git, nil)(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
@@ -77,7 +77,7 @@ func TestHandleGetHistory_DoraEndpoint(t *testing.T) {
 func TestHandleGetHistory_DoraEndpoint_MissingProject(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/history?chart=dora", nil)
 	rec := httptest.NewRecorder()
-	handleGetHistory(nil, fakeYieldLister{}, nil, fakeDoraGit{})(rec, req)
+	handleGetHistory(nil, fakeYieldLister{}, nil, fakeDoraGit{}, nil)(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d: %s", rec.Code, rec.Body.String())
@@ -87,7 +87,7 @@ func TestHandleGetHistory_DoraEndpoint_MissingProject(t *testing.T) {
 func TestHandleGetHistory_DoraEndpoint_MultiProjectRejected(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/history?chart=dora&project=a,b", nil)
 	rec := httptest.NewRecorder()
-	handleGetHistory(nil, fakeYieldLister{}, nil, fakeDoraGit{})(rec, req)
+	handleGetHistory(nil, fakeYieldLister{}, nil, fakeDoraGit{}, nil)(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d: %s", rec.Code, rec.Body.String())
@@ -97,7 +97,7 @@ func TestHandleGetHistory_DoraEndpoint_MultiProjectRejected(t *testing.T) {
 func TestHandleGetHistory_DoraEndpoint_ProjectNotFound(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/history?chart=dora&project=nope", nil)
 	rec := httptest.NewRecorder()
-	handleGetHistory(nil, fakeYieldLister{}, nil, fakeDoraGit{})(rec, req)
+	handleGetHistory(nil, fakeYieldLister{}, nil, fakeDoraGit{}, nil)(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200 (well-formed request, nothing to compute), got %d: %s", rec.Code, rec.Body.String())

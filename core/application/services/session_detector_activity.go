@@ -1267,6 +1267,15 @@ func (d *SessionDetector) applyStateTransition(state *session.SessionState, ev a
 	state.State = newState
 	state.UpdatedAt = now
 
+	// Autonomy spans (#1905) open and close on this same edge, and read the
+	// state BEFORE the per-target-state switch below rewrites it — see
+	// applyAutonomySpanTransition. Deliberately not folded into that switch:
+	// its `default` arm carries meaning (any state that is not working or
+	// ready ends a span under its own name), while the switch below is an
+	// exhaustive per-state audit with nothing to say about the states it does
+	// not name.
+	d.applyAutonomySpanTransition(state, newState, now)
+
 	switch newState {
 	case session.StateWaiting:
 		state.WaitingStartTime = &now
@@ -1828,6 +1837,15 @@ func (d *SessionDetector) refreshStaleSessions() {
 	}
 	now := d.nowFn()
 	for _, state := range sessions {
+		// An autonomy span held open by the flicker grace (#1905) settles
+		// here: this ticker is the only thing that revisits a session which
+		// finished its turn and then did nothing, which is the most common way
+		// a span ends.
+		if d.flushExpiredAutonomySpan(state, now.Unix()) {
+			if err := d.repo.Save(state); err != nil {
+				d.log.LogError(logComponentAutonomySpans, state.SessionID, err.Error())
+			}
+		}
 		switch state.State {
 		case session.StateWorking:
 			d.reclassifyFromTranscript(state, now)

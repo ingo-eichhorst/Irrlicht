@@ -507,6 +507,9 @@ func historyChartKnown(w http.ResponseWriter, chart string) bool {
 	case "state":
 		// implemented (#981, the "Activity Matrix" — time-in-state, the
 		// optional second half of #751) — handled after range resolution below
+	case chartAutonomyDuration, chartAutonomySpans:
+		// implemented (#1905, the Autonomy section's two elements) — each
+		// brings its OWN ?window= vocabulary, resolved in resolveHistoryQuery
 	default:
 		http.Error(w, "unknown chart: "+chart, http.StatusBadRequest)
 		return false
@@ -724,7 +727,21 @@ func resolveHistoryQuery(w http.ResponseWriter, q url.Values) (historyQuery, boo
 	// picks both the bucket width and the trailing window at once.
 	var rangeKey string
 	var start, end, bucketSeconds int64
-	if chart == "state" {
+	if isAutonomyChart(chart) {
+		// Autonomy (#1905) resolves its window from ?window=, whose keys are
+		// WINDOW LENGTHS — not the bucket-width-times-count that the
+		// same-looking ?granularity= keys mean below.
+		window := q.Get("window")
+		if window == "" {
+			window = autonomyDefaultWindow(chart)
+		}
+		bs, s, e, wok := resolveAutonomyWindow(chart, window)
+		if !wok {
+			http.Error(w, autonomyWindowError(chart), http.StatusBadRequest)
+			return historyQuery{}, false
+		}
+		rangeKey, start, end, bucketSeconds = window, s, e, bs
+	} else if chart == "state" {
 		granularity := q.Get("granularity")
 		if granularity == "" {
 			granularity = "24h"
@@ -766,12 +783,23 @@ func resolveHistoryQuery(w http.ResponseWriter, q url.Values) (historyQuery, boo
 	}, true
 }
 
-func handleGetHistory(tracker outbound.CostTracker, sessions historySessionLister, concurrency outbound.ConcurrencyReader, git historyGitReader) http.HandlerFunc {
+func handleGetHistory(tracker outbound.CostTracker, sessions historySessionLister, concurrency outbound.ConcurrencyReader, git historyGitReader, autonomy outbound.AutonomySpanStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 
 		hq, ok := resolveHistoryQuery(w, q)
 		if !ok {
+			return
+		}
+
+		// Autonomy (#1905): both elements read the always-on span log and
+		// touch none of the group/metric/scope machinery below.
+		if hq.chart == chartAutonomyDuration {
+			serveHistoryAutonomyDurationChart(w, autonomy, hq.rangeKey, hq.seriesQuery.BucketSeconds, hq.start, hq.end)
+			return
+		}
+		if hq.chart == chartAutonomySpans {
+			serveHistoryAutonomySpansChart(w, autonomy, hq.rangeKey, hq.start, hq.end)
 			return
 		}
 

@@ -64,7 +64,7 @@ func TestHandleGetHistory_DoraHonoursTheRequestContext(t *testing.T) {
 	cancel()
 	req := httptest.NewRequest(http.MethodGet, url, nil).WithContext(gone)
 	rec := httptest.NewRecorder()
-	handleGetHistory(nil, lister, nil, git)(rec, req)
+	handleGetHistory(nil, lister, nil, git, nil)(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200 (an unreadable panel is a well-formed answer, not an error), got %d: %s", rec.Code, rec.Body.String())
@@ -82,7 +82,7 @@ func TestHandleGetHistory_DoraHonoursTheRequestContext(t *testing.T) {
 	// Vacuity guard: the same fixture on a live request MUST produce a panel,
 	// or the assertion above holds for a handler that never computes anything.
 	live := httptest.NewRecorder()
-	handleGetHistory(nil, lister, nil, git)(live, httptest.NewRequest(http.MethodGet, url, nil))
+	handleGetHistory(nil, lister, nil, git, nil)(live, httptest.NewRequest(http.MethodGet, url, nil))
 	var ok historyDoraResponse
 	if err := json.Unmarshal(live.Body.Bytes(), &ok); err != nil {
 		t.Fatalf("decode %q: %v", live.Body.String(), err)

@@ -30,7 +30,7 @@ func TestHandleGetHistory_StateChart(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/history?chart=state&granularity=24h", nil)
 	rec := httptest.NewRecorder()
-	handleGetHistory(nil, nil, conc, nil)(rec, req)
+	handleGetHistory(nil, nil, conc, nil, nil)(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("chart=state: want 200, got %d (%s)", rec.Code, rec.Body.String())
 	}
@@ -78,7 +78,7 @@ func TestHandleGetHistory_StateChartEmpty(t *testing.T) {
 	conc := filesystem.NewConcurrencyTrackerWithDir(filepath.Join(t.TempDir(), "recordings"), nil)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/history?chart=state", nil)
 	rec := httptest.NewRecorder()
-	handleGetHistory(nil, nil, conc, nil)(rec, req)
+	handleGetHistory(nil, nil, conc, nil, nil)(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("empty state chart: want 200, got %d", rec.Code)
 	}
@@ -103,7 +103,7 @@ func TestHandleGetHistory_StateChartBadGranularity(t *testing.T) {
 	conc := filesystem.NewConcurrencyTrackerWithDir(filepath.Join(t.TempDir(), "recordings"), nil)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/history?chart=state&granularity=fortnight", nil)
 	rec := httptest.NewRecorder()
-	handleGetHistory(nil, nil, conc, nil)(rec, req)
+	handleGetHistory(nil, nil, conc, nil, nil)(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("bad granularity: want 400, got %d", rec.Code)
 	}
@@ -120,7 +120,7 @@ func TestHandleGetHistory_StateChartGranularitySteps(t *testing.T) {
 	for granularity, bucketSeconds := range want {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/history?chart=state&granularity="+granularity, nil)
 		rec := httptest.NewRecorder()
-		handleGetHistory(nil, nil, conc, nil)(rec, req)
+		handleGetHistory(nil, nil, conc, nil, nil)(rec, req)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("granularity=%s: want 200, got %d", granularity, rec.Code)
 		}

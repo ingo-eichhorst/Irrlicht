@@ -644,6 +644,12 @@ if want go; then
   # is the one moment it must work (docs/elfdans-device-test.md Phase 5).
   run_gate_scoped '^tools/elfdans-drive/|^core/adapters/outbound/relay/|^core/domain/session/' \
                   "elfdans-drive builds"      go build ./tools/elfdans-drive/...
+  # seed-autonomy-spans (#1905) writes a synthetic span log for QA. Its guard —
+  # refuse a span directory this tool did not create — has no "before the fix"
+  # to run red, so the mutation fixture in its own tests is the only thing that
+  # proves it works, and a test nothing runs proves nothing.
+  run_gate_scoped '^tools/seed-autonomy-spans/|^core/adapters/outbound/filesystem/autonomy_tracker\.go$' \
+                  "seed-autonomy-spans tests" go test ./tools/seed-autonomy-spans/... -count=1
   run_gate_scoped '^tools/onboarding-factory/desktop-helper/' \
                   "Claude Desktop helper tests" tools/onboarding-factory/desktop-helper/test.sh
   run_gate_scoped '^replaydata/|^tools/onboarding-factory/' \

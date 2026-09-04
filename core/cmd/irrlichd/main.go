@@ -590,6 +590,7 @@ func runDaemon() {
 
 	fsRepo, cachedRepo := initSessionStorage(logger, cfg)
 	costTracker := initCostTracker(logger, fsRepo)
+	autonomySpans := initAutonomySpanStore(logger)
 	historyTracker, historyCancel := startHistoryTracker(logger)
 	defer historyCancel()
 
@@ -717,13 +718,14 @@ func runDaemon() {
 
 	// Register API endpoints that need orchMonitor.
 	registerSessionRoutes(mux, registerSessionRoutesDeps{
-		CachedRepo:  cachedRepo,
-		OrchMonitor: orchMonitor,
-		CostTracker: costTracker,
-		SockPath:    sockPath,
-		Push:        push,
-		Logger:      logger,
-		GitResolver: gitResolver,
+		CachedRepo:    cachedRepo,
+		OrchMonitor:   orchMonitor,
+		CostTracker:   costTracker,
+		AutonomySpans: autonomySpans,
+		SockPath:      sockPath,
+		Push:          push,
+		Logger:        logger,
+		GitResolver:   gitResolver,
 		// Same live snapshot registerCoreRoutes hands the diagnostics bundle
 		// (#1801) — one source, two outlets, so the banner and hooks.json can
 		// never disagree about whether hooks are healthy.
@@ -743,6 +745,7 @@ func runDaemon() {
 		Cfg:              cfg,
 		AllAgents:        allAgents,
 		CostTracker:      costTracker,
+		AutonomySpans:    autonomySpans,
 		HistoryTracker:   historyTracker,
 	})
 

@@ -11,7 +11,35 @@ const HISTORY_COLORS = [
   '#5E5CE6', '#FFD60A', '#30D158', '#BF5AF2', '#64D2FF',
 ];
 const RANGE_LABELS = { day: 'Day', week: 'Week', month: 'Month', year: 'Year', 'this-month': 'This Month', custom: 'Custom' };
-export const CHART_LABELS = { cost: 'Cost', tokens: 'Tokens', co2: 'CO2', models: 'Models', providers: 'Providers', agents: 'Agents', state: 'Activity', yield: 'Yield', dora: 'DORA' };
+export const CHART_LABELS = { cost: 'Cost', tokens: 'Tokens', co2: 'CO2', models: 'Models', providers: 'Providers', agents: 'Agents', state: 'Activity', yield: 'Yield', dora: 'DORA', autonomy: 'Autonomy' };
+// Autonomy (#1905). `autonomy` is a CLIENT-SIDE pseudo-chart: selecting it
+// fans out into the daemon's two real charts, chart=autonomy_duration (the
+// percentile lines) and chart=autonomy_spans (the run strip), because the
+// section shows both elements at once.
+//
+// WINDOW LENGTHS, not bucket widths. These keys overlap GRANULARITY_LABELS'
+// textually and mean something else entirely: there a key names a bucket width
+// that is multiplied by a count (so '24h' resolves to a THIRTY-DAY window),
+// here a key IS the window. The two tables must never be merged — see
+// autonomy window vocabularies in irrlicht.history.autonomy.test.js.
+export const AUTONOMY_RANGE_LABELS = { '30d': '30 days', '1y': 'Year' };
+export const AUTONOMY_SPAN_LABELS = { '8h': '8h', '24h': '24h', '7d': '7d', '30d': '30d', '12mo': '12mo' };
+// The strip's pixel-collapse ladder: when one device-pixel column holds
+// several runs, the column paints the highest-ranked reason in it. Same order
+// as the session-history strip's ladder (#1805) — one error in a column paints
+// the whole column. One state per line, because a single line naming three of
+// the four canonical states is what tools/state-vocabulary-lint.sh refuses.
+export const AUTONOMY_REASON_PRIORITY = {
+  error: 3,
+  waiting: 2,
+  ready: 1,
+};
+// Legend glyphs + wording, matching the issue's sketch and the macOS legend.
+export const AUTONOMY_REASON_LEGEND = [
+  ['error', '\u2717', 'error'],
+  ['waiting', '?', 'it asked'],
+  ['ready', '\u2713', 'turn finished'],
+];
 // Granularity steps for chart=state's activity matrix (issue #981) — each
 // picks both the server's bucket width and the matrix's visible column
 // count at once (see historyGranularitySpecs on the daemon side).
@@ -50,6 +78,11 @@ const historyState = {
   // granularity is chart=state's own zoom-level axis (#981) — independent of
   // range, which every other chart uses instead.
   granularity: '24h',
+  // Autonomy (#1905): one window per element, neither of them `range`.
+  // autonomyData holds BOTH responses, since the section renders both at once.
+  autonomyRange: '30d',
+  autonomySpan: '24h',
+  autonomyData: null,
   filters: { provider: [], token_type: [], project: [] },
   known: { provider: [], project: [] },
   // DORA (#951) is inherently repo-scoped — needs exactly one project,
@@ -230,6 +263,21 @@ function setHistoryFilterParams(p, state) {
   }
 }
 
+// autonomyQuery builds one of the two Autonomy requests. `element` picks
+// which daemon chart and therefore which window vocabulary applies — they are
+// different sets, and neither endpoint accepts the other's keys.
+export function autonomyQuery(element, state = historyState) {
+  const p = new URLSearchParams();
+  if (element === 'spans') {
+    p.set('chart', 'autonomy_spans');
+    p.set('window', state.autonomySpan);
+  } else {
+    p.set('chart', 'autonomy_duration');
+    p.set('window', state.autonomyRange);
+  }
+  return p.toString();
+}
+
 export function historyQuery(state = historyState) {
   const p = new URLSearchParams();
   p.set('chart', state.chart);
@@ -244,7 +292,24 @@ export function historyQuery(state = historyState) {
   return p.toString();
 }
 
+// fetchAutonomy fetches BOTH Autonomy elements. Either failing marks the whole
+// section unavailable rather than leaving one element beside a spinner that
+// never resolves.
+function fetchAutonomy() {
+  const seq = ++historyFetchSeq;
+  const get = (element) => fetch('/api/v1/history?' + autonomyQuery(element))
+    .then(r => (r.ok ? r.json() : null))
+    .catch(() => null);
+  return Promise.all([get('duration'), get('spans')]).then(([duration, spans]) => {
+    if (seq !== historyFetchSeq) return; // superseded by a newer request
+    historyState.autonomyData = (duration && spans) ? { duration, spans } : null;
+    historyState.data = historyState.autonomyData ? duration : null;
+    renderHistory();
+  });
+}
+
 function fetchHistory() {
+  if (historyState.chart === 'autonomy') return fetchAutonomy();
   // DORA needs exactly one project — with none selected, there's nothing
   // to fetch at all (a distinct empty state, not a load failure or a
   // spinner; see renderDoraPanel).
@@ -292,6 +357,11 @@ function historyEmptyCaption() {
     case 'agents':
     case 'state':
       return 'no recordings in this range yet';
+    case 'autonomy':
+      // Never "no runs": this feature collects from the day it ships, so an
+      // empty view has to say which of the two it is (#1905). The full
+      // sentence lives in the side panel; this is the canvas overlay.
+      return autonomyEverRecorded() ? 'no runs in this range' : 'not collecting yet — runs appear as sessions run';
     default:
       return 'no cost data in this range yet';
   }
@@ -320,6 +390,11 @@ function paintActiveHistoryChart() {
       renderStateMatrix();
       renderStatePanel();
       break;
+    case 'autonomy':
+      paintAutonomyChart();
+      renderAutonomyStrip();
+      renderAutonomyPanel();
+      break;
     default:
       paintHistoryChart();
       renderHistoryPanel();
@@ -336,6 +411,7 @@ function renderHistory() {
   // The activity matrix is a grid, not a time-series line — it replaces the
   // shared canvas with its own scrollable DOM grid (see history-matrix-scroll).
   syncHistoryMatrixVisibility(historyState.chart === 'state');
+  syncAutonomyRows(historyState.chart === 'autonomy');
   const emptyEl = document.getElementById('history-chart-empty');
   if (emptyEl) emptyEl.textContent = historyEmptyCaption();
   if (!historyState.data) {
@@ -361,7 +437,24 @@ function syncHistoryMatrixVisibility(isState) {
 // instead, so the range buttons would be visible but silently inert.
 function syncHistoryRangeRow() {
   const row = document.getElementById('history-range-row');
-  if (row) row.hidden = historyState.chart === 'state';
+  // Autonomy joins chart=state here: it resolves both its windows from
+  // ?window=, so the Day/Week/Month buttons would be visible but inert.
+  if (row) row.hidden = historyState.chart === 'state' || historyState.chart === 'autonomy';
+}
+
+// syncAutonomyRows shows the Autonomy pickers and the run strip only while the
+// section is active, mirroring syncGranularityRow's per-chart row toggle.
+function syncAutonomyRows(isAutonomy) {
+  const ctl = document.getElementById('history-autonomy-row');
+  if (ctl) ctl.hidden = !isAutonomy;
+  const strip = document.getElementById('history-autonomy-strip');
+  if (strip) strip.hidden = !isAutonomy;
+  const groupRow = document.getElementById('history-group-sel')?.closest('.history-ctl-row');
+  // Group and the cross-filters do not apply to spans — the section has no
+  // stacking axis at all.
+  if (groupRow) groupRow.hidden = isAutonomy;
+  const filterRow = document.getElementById('history-filter-row');
+  if (filterRow) filterRow.hidden = isAutonomy;
 }
 
 // syncGranularityRow shows the granularity zoom-level control only while
@@ -627,6 +720,380 @@ function paintHistoryChart() {
 
   // X axis time labels.
   drawHistoryXAxisLabels(geo, { buckets, B, bucketSeconds: data.bucket_seconds, muted, h, padB });
+}
+
+// --- Autonomy (#1905) ---
+//
+// Two elements over the always-on span log: a percentile line chart of
+// autonomous run duration over time (drawn on the shared canvas, like every
+// other time series here), and a per-project run strip (its own DOM section,
+// one canvas per project row).
+//
+// An autonomy span is one unbroken stretch of `working`; the state the session
+// left `working` FOR is the signal both elements carry.
+
+// autonomyEverRecorded reports whether the span log holds anything at all,
+// anywhere — the fact that separates "no runs in this range" from "this
+// feature has not collected anything yet". Both are empty views; only one of
+// them means the user did nothing.
+export function autonomyEverRecorded(state = historyState) {
+  const d = state.autonomyData;
+  if (!d) return false;
+  return (d.duration?.total_recorded || 0) > 0 || (d.spans?.total_recorded || 0) > 0;
+}
+
+// autonomyDuration formats a run length: "41s", "11m", "1h58m", "2d3h".
+export function autonomyDuration(seconds) {
+  const s = Math.round(Number(seconds) || 0);
+  if (s < 60) return s + 's';
+  if (s < 3600) {
+    const m = Math.floor(s / 60), rem = s % 60;
+    return rem === 0 ? m + 'm' : m + 'm' + rem + 's';
+  }
+  if (s < 86400) {
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+    return m === 0 ? h + 'h' : h + 'h' + m + 'm';
+  }
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600);
+  return h === 0 ? d + 'd' : d + 'd' + h + 'h';
+}
+
+// autonomyProvenanceLine states when collection started, so an empty or short
+// history is never read as "you did nothing" (#1905). This sentence is part of
+// the feature, not decoration.
+export function autonomyProvenanceLine(duration) {
+  const earliest = Number(duration?.earliest_span) || 0;
+  const total = Number(duration?.total_recorded) || 0;
+  if (!earliest) {
+    return 'No autonomous runs recorded yet. Irrlicht began measuring them with this update — '
+      + 'an empty chart means "nothing recorded", not "nothing happened".';
+  }
+  const since = new Date(earliest * 1000).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  return 'Collecting since ' + since + ' · ' + total + ' runs recorded.';
+}
+
+// collapseAutonomyStrip is the strip's pixel-collapse rule (#1905 design
+// decision 4), as a pure function so it can be tested without a canvas — and
+// so this and the macOS AutonomyStripLayout draw the same strip.
+//
+// TWO HALVES, both load-bearing:
+//   - Every span draws at a minimum of ONE column. At 12mo a 40-second run is
+//     far under one device pixel; rounding it away would erase exactly the
+//     short runs the p5 line is about.
+//   - A column holding several spans takes the HIGHEST-priority end reason
+//     (AUTONOMY_REASON_PRIORITY). One error in a column paints the whole
+//     column, because what is worth seeing at a glance is that something broke.
+//
+// Returns one {occupied, reason} per column. occupied and reason are separate
+// because a run whose reason this build cannot name still HAPPENED: it holds
+// its column (drawn neutral) rather than reading as idle.
+export function collapseAutonomyStrip(spans, start, end, columns) {
+  if (!(columns > 0) || !(end > start)) return [];
+  const out = [];
+  for (let i = 0; i < columns; i++) out.push({ occupied: false, reason: null });
+  const width = end - start;
+  for (const sp of (spans || [])) {
+    let first = Math.floor((sp.start - start) / width * columns);
+    let last = Math.floor((sp.end - start) / width * columns);
+    if (last < 0 || first > columns - 1) continue; // wholly outside the window
+    first = Math.max(0, first);
+    last = Math.min(columns - 1, last);
+    if (last < first) last = first; // the minimum-one-column rule
+    const rank = AUTONOMY_REASON_PRIORITY[sp.reason] || 0;
+    for (let i = first; i <= last; i++) {
+      // -1 for an untouched column, so even an unnamed reason (rank 0) claims it.
+      const existingRank = out[i].occupied ? (AUTONOMY_REASON_PRIORITY[out[i].reason] || 0) : -1;
+      out[i].occupied = true;
+      if (rank > existingRank) out[i].reason = AUTONOMY_REASON_PRIORITY[sp.reason] ? sp.reason : null;
+    }
+  }
+  return out;
+}
+
+// autonomyReasonColor maps an end reason onto the shared state palette. An
+// unnamed reason draws neutral — the run happened, this build just cannot say
+// how it ended.
+function autonomyReasonColor(reason, cs) {
+  const pick = (name, fallback) => (cs.getPropertyValue(name) || fallback).trim();
+  if (reason === 'error') return pick('--pressure-high', '#FF3B30');
+  if (reason === 'waiting') return pick('--waiting', '#FF9500');
+  if (reason === 'ready') return pick('--ready', '#34C759');
+  return pick('--muted', '#888');
+}
+
+// autonomyChartPoints turns the sparse bucket list into per-series point lists
+// aligned to bucket_starts, with a null for every bucket the daemon OMITTED.
+//
+// The null is the honesty rule, not a convenience: an empty bucket is a GAP,
+// and a day with no runs must not pull the line down to the axis. The painter
+// below breaks the stroke at a null instead of interpolating through it.
+export function autonomyChartPoints(duration) {
+  const starts = duration?.bucket_starts || [];
+  const byTs = new Map();
+  for (const b of (duration?.buckets || [])) byTs.set(b.ts, b);
+  return starts.map(ts => byTs.get(ts) || null);
+}
+
+const AUTONOMY_SERIES = [
+  ['p95', '--ready', '#34C759'],
+  ['p50', '--working', '#8B5CF6'],
+  ['p5', '--waiting', '#FF9500'],
+];
+
+function paintAutonomyChart() {
+  const canvas = document.getElementById('history-chart');
+  const wrap = document.getElementById('history-chart-wrap');
+  if (!canvas || !wrap) return;
+  const duration = historyState.autonomyData?.duration;
+  const { ctx, w, h } = setupHistoryCanvas(canvas, wrap);
+  const points = autonomyChartPoints(duration);
+  const drawn = points.filter(Boolean);
+  const hasData = drawn.length > 0;
+  wrap.classList.toggle('empty', !hasData);
+  if (!hasData) return;
+
+  const cs = getComputedStyle(document.documentElement);
+  const muted = (cs.getPropertyValue('--muted') || '#888').trim();
+  const gridColor = 'rgba(128,140,170,0.18)';
+
+  // Log Y: the interesting range is seconds to hours, so a linear axis spends
+  // its whole height on the longest run. Floored at 1s — a log scale cannot
+  // plot 0, and a sub-second span is not a run.
+  const lo = Math.max(1, Math.min(...drawn.map(b => Math.max(1, b.p5))) * 0.8);
+  const hi = Math.max(lo * 2, Math.max(...drawn.map(b => Math.max(1, b.p95))) * 1.25);
+  const padL = 52, padR = 12, padT = 12, padB = 22;
+  const plotW = Math.max(1, w - padL - padR);
+  const plotH = Math.max(1, h - padT - padB);
+  const n = Math.max(1, points.length);
+  const xAt = (i) => (n <= 1 ? padL : padL + plotW * (i / (n - 1)));
+  const yAt = (v) => {
+    const clamped = Math.min(hi, Math.max(lo, Math.max(1, v)));
+    const t = (Math.log(clamped) - Math.log(lo)) / (Math.log(hi) - Math.log(lo));
+    return padT + plotH * (1 - t);
+  };
+
+  // Gridlines, labelled in the same duration units the summary uses.
+  ctx.strokeStyle = gridColor;
+  ctx.fillStyle = muted;
+  ctx.font = '10px ui-monospace, monospace';
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
+  const decades = 4;
+  for (let i = 0; i <= decades; i++) {
+    const v = Math.exp(Math.log(lo) + (Math.log(hi) - Math.log(lo)) * (i / decades));
+    const y = yAt(v);
+    ctx.beginPath();
+    ctx.moveTo(padL, y);
+    ctx.lineTo(w - padR, y);
+    ctx.stroke();
+    ctx.fillText(autonomyDuration(v), padL - 6, y);
+  }
+
+  for (const [key, cssVar, fallback] of AUTONOMY_SERIES) {
+    const color = (cs.getPropertyValue(cssVar) || fallback).trim();
+    drawAutonomySeries(ctx, { points, key, color, xAt, yAt });
+  }
+
+  // X labels.
+  ctx.fillStyle = muted;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  const starts = duration.bucket_starts || [];
+  const labels = Math.min(5, starts.length);
+  for (let i = 0; i < labels; i++) {
+    const c = Math.round(i * (starts.length - 1) / Math.max(1, labels - 1));
+    ctx.fillText(histAxisLabel(starts[c], duration.bucket_seconds), xAt(c), h - padB + 5);
+  }
+}
+
+// drawAutonomySeries strokes one percentile line, breaking at every omitted
+// bucket and DASHING any segment that touches a thin bucket — so a bucket
+// under the sample floor is visibly different rather than hidden or smoothed.
+function drawAutonomySeries(ctx, { points, key, color, xAt, yAt }) {
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.6;
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1], b = points[i];
+    if (!a || !b) continue; // a gap is a gap: never interpolate across it
+    ctx.save();
+    ctx.setLineDash(a.thin || b.thin ? [3, 3] : []);
+    ctx.globalAlpha = (a.thin || b.thin) ? 0.55 : 1;
+    ctx.beginPath();
+    ctx.moveTo(xAt(i - 1), yAt(a[key]));
+    ctx.lineTo(xAt(i), yAt(b[key]));
+    ctx.stroke();
+    ctx.restore();
+  }
+  // Hollow markers on thin buckets, and a solid dot on an isolated bucket that
+  // has no neighbour to draw a segment to (which would otherwise vanish).
+  for (let i = 0; i < points.length; i++) {
+    const b = points[i];
+    if (!b) continue;
+    const isolated = !points[i - 1] && !points[i + 1];
+    if (!b.thin && !isolated) continue;
+    ctx.beginPath();
+    ctx.arc(xAt(i), yAt(b[key]), 2.5, 0, Math.PI * 2);
+    if (b.thin) {
+      ctx.strokeStyle = color;
+      ctx.globalAlpha = 0.7;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    } else {
+      ctx.fillStyle = color;
+      ctx.fill();
+    }
+  }
+}
+
+// renderAutonomyStrip draws element 2: one row per project, ordered by the
+// daemon (busiest first), each a canvas of collapsed columns.
+function renderAutonomyStrip() {
+  const rowsEl = document.getElementById('history-autonomy-rows');
+  const titleEl = document.getElementById('history-autonomy-strip-title');
+  const legendEl = document.getElementById('history-autonomy-legend');
+  const noteEl = document.getElementById('history-autonomy-note');
+  const spans = historyState.autonomyData?.spans;
+  if (titleEl) titleEl.textContent = 'Runs · last ' + (AUTONOMY_SPAN_LABELS[historyState.autonomySpan] || historyState.autonomySpan);
+  if (!rowsEl) return;
+  rowsEl.innerHTML = '';
+  if (legendEl) legendEl.innerHTML = '';
+  if (noteEl) noteEl.textContent = '';
+
+  const projects = spans?.projects || [];
+  if (!projects.length) {
+    const empty = document.createElement('div');
+    empty.className = 'history-autonomy-empty';
+    empty.textContent = autonomyEverRecorded()
+      ? 'No runs in the last ' + (AUTONOMY_SPAN_LABELS[historyState.autonomySpan] || historyState.autonomySpan)
+        + '. ' + (spans?.total_recorded || 0) + ' runs are on record over a longer period.'
+      : 'No runs recorded yet — this strip fills in as sessions run.';
+    rowsEl.appendChild(empty);
+    return;
+  }
+
+  const cs = getComputedStyle(document.documentElement);
+  for (const project of projects) {
+    rowsEl.appendChild(buildAutonomyStripRow(project, spans, cs));
+  }
+  if (legendEl) {
+    for (const [reason, glyph, label] of AUTONOMY_REASON_LEGEND) {
+      const item = document.createElement('span');
+      item.className = 'history-autonomy-legend-item';
+      const swatch = document.createElement('i');
+      swatch.style.background = autonomyReasonColor(reason, cs);
+      item.appendChild(swatch);
+      item.appendChild(document.createTextNode(glyph + ' ' + label));
+      legendEl.appendChild(item);
+    }
+  }
+  if (noteEl && spans.truncated) {
+    noteEl.textContent = 'This window holds more runs than one request returns; the strip shows the oldest part of it. '
+      + 'Pick a shorter span for a complete picture.';
+  }
+}
+
+function buildAutonomyStripRow(project, spans, cs) {
+  const row = document.createElement('div');
+  row.className = 'history-autonomy-row';
+
+  const label = document.createElement('span');
+  label.className = 'history-autonomy-label';
+  label.textContent = project;
+  row.appendChild(label);
+
+  const mine = (spans.spans || []).filter(sp => sp.project === project);
+  const longest = mine.reduce((m, sp) => Math.max(m, (sp.end || 0) - (sp.start || 0)), 0);
+
+  const canvas = document.createElement('canvas');
+  canvas.className = 'history-autonomy-canvas';
+  canvas.setAttribute('role', 'img');
+  canvas.setAttribute('aria-label', project + ': ' + mine.length + ' runs, longest ' + autonomyDuration(longest));
+  row.appendChild(canvas);
+
+  const val = document.createElement('span');
+  val.className = 'history-autonomy-val';
+  val.textContent = autonomyDuration(longest);
+  row.appendChild(val);
+
+  // Painted on the next frame: the canvas has no layout width until it is in
+  // the document, and a zero-width canvas would collapse every span into
+  // nothing — the exact failure the minimum-one-column rule exists to prevent.
+  requestAnimationFrame(() => paintAutonomyStripRow(canvas, mine, spans, cs));
+  return row;
+}
+
+function paintAutonomyStripRow(canvas, mine, spans, cs) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.offsetWidth || 300;
+  const h = canvas.offsetHeight || 14;
+  const pxW = Math.max(1, Math.round(w * dpr)), pxH = Math.max(1, Math.round(h * dpr));
+  if (canvas.width !== pxW || canvas.height !== pxH) { canvas.width = pxW; canvas.height = pxH; }
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  ctx.setTransform(1, 0, 0, 1, 0, 0); // draw in DEVICE pixels: one column = one pixel
+  ctx.clearRect(0, 0, pxW, pxH);
+  const cells = collapseAutonomyStrip(mine, spans.start, spans.end, pxW);
+  for (let i = 0; i < cells.length; i++) {
+    if (!cells[i].occupied) continue;
+    ctx.fillStyle = autonomyReasonColor(cells[i].reason, cs);
+    ctx.fillRect(i, 0, 1, pxH);
+  }
+}
+
+// renderAutonomyPanel fills the shared side panel with element 1's figures.
+// The true extremes are FIGURES here and deliberately not lines on the chart:
+// one overnight run would otherwise redraw the whole Y scale.
+function renderAutonomyPanel() {
+  const titleEl = document.getElementById('history-panel-title');
+  const totalEl = document.getElementById('history-total');
+  const fcEl = document.getElementById('history-forecast-line');
+  const listEl = document.getElementById('history-contrib');
+  const duration = historyState.autonomyData?.duration;
+  if (titleEl) titleEl.textContent = 'Autonomy · ' + (AUTONOMY_RANGE_LABELS[historyState.autonomyRange] || historyState.autonomyRange);
+  const s = duration?.summary || {};
+  if (totalEl) totalEl.textContent = (s.count || 0) > 0 ? autonomyDuration(s.p50) : '—';
+  if (fcEl) fcEl.textContent = (s.count || 0) > 0 ? 'median run · ' + s.count + ' runs' : '';
+  if (!listEl) return;
+  listEl.innerHTML = '';
+  if (!(s.count > 0)) {
+    appendHistoryEmpty(listEl, autonomyEverRecorded()
+      ? 'no runs in this range'
+      : 'nothing recorded yet');
+  } else {
+    const rows = [
+      ['p95 (good runs)', autonomyDuration(s.p95)],
+      ['p50 (typical run)', autonomyDuration(s.p50)],
+      ['p5 (bad runs)', autonomyDuration(s.p5)],
+      ['longest', autonomyDuration(s.max)],
+      ['shortest', autonomyDuration(s.min)],
+      ['runs', String(s.count)],
+    ];
+    for (const [label, value] of rows) {
+      const li = document.createElement('li');
+      const dot = document.createElement('span');
+      dot.className = 'dot';
+      dot.style.background = 'transparent';
+      const lbl = document.createElement('span');
+      lbl.className = 'label';
+      lbl.textContent = label;
+      const val = document.createElement('span');
+      val.className = 'val';
+      val.textContent = value;
+      li.appendChild(dot);
+      li.appendChild(lbl);
+      li.appendChild(val);
+      listEl.appendChild(li);
+    }
+    const thin = (duration.buckets || []).filter(b => b.thin).length;
+    if (thin > 0) {
+      appendHistoryEmpty(listEl, thin + ' of ' + duration.buckets.length + ' buckets hold fewer than '
+        + duration.sample_floor + ' runs (dashed, hollow): there p95 is that bucket’s longest run '
+        + 'and p5 its shortest — not percentiles.');
+    }
+  }
+  // The provenance line is part of the feature: "no data" must never read as
+  // "you did nothing".
+  appendHistoryEmpty(listEl, autonomyProvenanceLine(duration));
 }
 
 // --- Activity matrix (chart=state, issue #981) ---
@@ -1115,6 +1582,8 @@ function syncHistorySelectors() {
   if (chartSeg) for (const b of chartSeg.querySelectorAll('button')) b.classList.toggle('active', b.dataset.chart === historyState.chart);
   const metricsSeg = document.getElementById('history-metrics-sel');
   if (metricsSeg) for (const b of metricsSeg.querySelectorAll('button')) b.classList.toggle('active', b.dataset.chart === historyState.chart);
+  const autonomySeg = document.getElementById('history-autonomy-sel');
+  if (autonomySeg) for (const b of autonomySeg.querySelectorAll('button')) b.classList.toggle('active', b.dataset.chart === historyState.chart);
   const groupSeg = document.getElementById('history-group-sel');
   if (groupSeg) for (const b of groupSeg.querySelectorAll('button')) b.classList.toggle('active', b.dataset.group === historyState.group);
 }
@@ -1376,10 +1845,27 @@ function seriesCsvLines(d) {
   return lines;
 }
 
+// autonomyCsvLines exports the spans themselves — the raw rows both elements
+// are derived from, so a spreadsheet can re-derive either.
+function autonomyCsvLines() {
+  const spans = historyState.autonomyData?.spans?.spans || [];
+  const lines = ['start,end,duration_seconds,project,session,reason'];
+  for (const sp of spans) {
+    lines.push([
+      new Date(sp.start * 1000).toISOString(), new Date(sp.end * 1000).toISOString(),
+      String(Math.max(0, (sp.end || 0) - (sp.start || 0))),
+      historyCsvCell(sp.project || ''), historyCsvCell(sp.session || ''),
+      historyCsvCell(sp.reason || ''),
+    ].join(','));
+  }
+  return lines;
+}
+
 const HISTORY_CSV_BUILDERS = {
   yield: yieldCsvLines,
   state: stateCsvLines,
   dora: doraCsvLines,
+  autonomy: autonomyCsvLines,
 };
 
 function exportHistoryCSV() {
@@ -1389,7 +1875,8 @@ function exportHistoryCSV() {
   historyDownload('irrlicht-history-' + historyState.range + '-' + historyState.chart + '.csv', 'text/csv;charset=utf-8', build(d).join('\n') + '\n');
 }
 function exportHistoryJSON() {
-  const d = historyState.data;
+  // Autonomy exports BOTH payloads: either alone is a partial answer.
+  const d = historyState.chart === 'autonomy' ? historyState.autonomyData : historyState.data;
   if (!d) return;
   historyDownload('irrlicht-history-' + historyState.range + '-' + historyState.chart + '.json', 'application/json', JSON.stringify(d, null, 2));
 }
@@ -1444,6 +1931,7 @@ export function initHistoryTab() {
     if (c === 'models') historyState.group = 'model';
     else if (c === 'providers') historyState.group = 'provider';
     else if (c === 'agents' || c === 'state') historyState.group = 'project'; // recordings carry no other axis
+    else if (c === 'autonomy') historyState.group = 'project'; // spans carry no other axis
     else if (c !== 'tokens' && historyState.group === 'token_type') historyState.group = 'project'; // token_type needs the tokens metric
     historyState.scope = null; // a new metric resets any drilldown
     syncHistorySelectors();
@@ -1453,6 +1941,24 @@ export function initHistoryTab() {
   if (histChartSeg) histChartSeg.addEventListener('click', handleChartClick);
   const histMetricsSeg = document.getElementById('history-metrics-sel');
   if (histMetricsSeg) histMetricsSeg.addEventListener('click', handleChartClick);
+  const histAutonomySeg = document.getElementById('history-autonomy-sel');
+  if (histAutonomySeg) histAutonomySeg.addEventListener('click', handleChartClick);
+
+  // The two Autonomy pickers. Each re-fetches only because the section shows
+  // both elements together; the daemon serves them as two independent charts.
+  const wireAutonomyPicker = (id, attr, key) => {
+    const seg = document.getElementById(id);
+    if (!seg) return;
+    seg.addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-' + attr + ']');
+      if (!b) return;
+      for (const x of seg.querySelectorAll('button')) x.classList.toggle('active', x === b);
+      historyState[key] = b.dataset[attr === 'autonomy-range' ? 'autonomyRange' : 'autonomySpan'];
+      fetchHistory();
+    });
+  };
+  wireAutonomyPicker('history-autonomy-range-sel', 'autonomy-range', 'autonomyRange');
+  wireAutonomyPicker('history-autonomy-span-sel', 'autonomy-span', 'autonomySpan');
 
   const histDoraProjectSel = document.getElementById('history-dora-project');
   if (histDoraProjectSel) histDoraProjectSel.addEventListener('change', () => {

@@ -5,6 +5,7 @@ use (
 	./tools/elfdans-drive
 	./tools/eta-research
 	./tools/onboarding-factory
+	./tools/seed-autonomy-spans
 	./tools/seed-demo-sessions
 	./tools/wsload
 )
