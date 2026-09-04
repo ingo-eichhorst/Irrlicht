@@ -93,8 +93,20 @@ func TestSelectOwnedSessionRejectsConcurrentNewSession(t *testing.T) {
 		map[string]TranscriptIdentity{"cli-new": transcript},
 		"/repo/workspace",
 	)
-	if err == nil || !strings.Contains(err.Error(), "provisional ownership is ambiguous") {
+	if err == nil || !strings.Contains(err.Error(), "concurrent") {
 		t.Fatalf("error = %v; want concurrent session refusal", err)
+	}
+}
+
+func TestSelectProvisionalSessionRefusesAnyConcurrentNewSession(t *testing.T) {
+	registry, _ := validOwnedSession()
+	other := RegistrySession{SessionID: "local_other", CWD: "/repo/other"}
+	if _, err := SelectProvisionalSession(
+		map[string]struct{}{},
+		[]RegistrySession{registry, other},
+		"/repo/workspace",
+	); err == nil || !strings.Contains(err.Error(), "concurrent") {
+		t.Fatalf("SelectProvisionalSession() concurrent error = %v", err)
 	}
 }
 

@@ -97,6 +97,7 @@ fresh_env() {
   # shellcheck disable=SC2034  # read by the sourced lib's restore_managed_files
   MANAGED_FILE_BACKUP_DIR=""
   MANAGED_FILE_SEAL_DIR=""
+  MANAGED_FILE_STRICT_SEAL=0
   return 0
 }
 
@@ -141,6 +142,36 @@ assert_eq "refusal names the conflict" "yes" "$got"
 MANAGED_FILE_BACKUP_DIR=""
 # shellcheck disable=SC2034  # shared state read by the sourced snapshot library
 MANAGED_FILE_SEAL_DIR=""
+
+echo "== a failed strict seal cannot fall back to an unchecked restore =="
+# MUTATION fixture: the second managed path becomes a directory after the
+# daemon edits the first path. This forces a failure after sealing started.
+# Cleanup must leave the first path unchanged and retain the recovery snapshot.
+fresh_env failed_seal
+MANAGED_FILE_STRICT_SEAL=1
+printf 'user baseline\n' > "$HOME/.claude/settings.json"
+snapshot_managed_files "$ROOT/backup" "$DAEMON"
+printf 'expected daemon hook\n' > "$HOME/.claude/settings.json"
+mkdir "$CODEX_HOME/hooks.json"
+if seal_managed_files 2>/dev/null; then
+  fail "mid-seal failure is observed" "non-zero" "seal unexpectedly passed"
+else
+  pass "mid-seal failure is observed"
+fi
+if restore_managed_files 2>/dev/null; then
+  fail "failed strict seal blocks restore" "non-zero" "restore fell back to unchecked bytes"
+else
+  pass "failed strict seal blocks restore"
+fi
+assert_eq "failed seal leaves current bytes" "expected daemon hook" \
+  "$(cat "$HOME/.claude/settings.json")"
+[[ -n "$MANAGED_FILE_BACKUP_DIR" ]] && got=active || got=cleared
+assert_eq "failed seal keeps recovery snapshot active" "active" "$got"
+MANAGED_FILE_BACKUP_DIR=""
+# shellcheck disable=SC2034  # shared state read by the sourced snapshot library
+MANAGED_FILE_SEAL_DIR=""
+# shellcheck disable=SC2034  # shared state read by the sourced snapshot library
+MANAGED_FILE_STRICT_SEAL=0
 
 echo "== a config the daemon created from nothing is removed =="
 fresh_env created

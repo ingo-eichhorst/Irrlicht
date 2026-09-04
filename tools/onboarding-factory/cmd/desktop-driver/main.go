@@ -145,16 +145,46 @@ func parseOptions(args []string) (options, error) {
 	if value.daemonAddress == "" || value.irrlichtVersion == "" || value.timeout <= 0 {
 		return options{}, errors.New("daemon address, Irrlicht version, and a positive timeout are required")
 	}
-	buildRoot := filepath.Join(filepath.Clean(value.repoRoot), ".build")
-	for name, path := range map[string]string{
-		"staging": value.staging, "workspace": value.workspace, "prompt file": value.promptFile,
-		"recordings": value.recordings,
+	realRepo, err := filepath.EvalSymlinks(filepath.Clean(value.repoRoot))
+	if err != nil {
+		return options{}, fmt.Errorf("resolve repository root: %w", err)
+	}
+	realBuild, err := filepath.EvalSymlinks(filepath.Join(realRepo, ".build"))
+	if err != nil {
+		return options{}, fmt.Errorf("resolve repository .build: %w", err)
+	}
+	realStaging, err := resolveWithin("staging", value.staging, realBuild)
+	if err != nil {
+		return options{}, err
+	}
+	value.repoRoot = realRepo
+	value.staging = realStaging
+	for name, path := range map[string]*string{
+		"workspace": &value.workspace, "prompt file": &value.promptFile,
+		"recordings": &value.recordings,
 	} {
-		if !pathWithin(path, buildRoot) {
-			return options{}, fmt.Errorf("%s must stay under repository .build", name)
+		resolved, err := resolveWithin(name, *path, realStaging)
+		if err != nil {
+			return options{}, err
 		}
+		*path = resolved
+	}
+	value.helper, err = resolveWithin("helper", value.helper, realBuild)
+	if err != nil {
+		return options{}, err
 	}
 	return value, nil
+}
+
+func resolveWithin(name, path, root string) (string, error) {
+	resolved, err := filepath.EvalSymlinks(filepath.Clean(path))
+	if err != nil {
+		return "", fmt.Errorf("%s must resolve under %q: %w", name, root, err)
+	}
+	if !pathWithin(resolved, root) {
+		return "", fmt.Errorf("%s must resolve under %q", name, root)
+	}
+	return resolved, nil
 }
 
 func pathWithin(path, root string) bool {

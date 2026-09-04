@@ -104,15 +104,14 @@ func SelectProvisionalSession(
 			candidates = append(candidates, session)
 		}
 	}
+	if len(postBaseline) > 1 {
+		return OwnedSession{}, fmt.Errorf(
+			"desktop provisional ownership refuses %d concurrent post-baseline sessions",
+			len(postBaseline),
+		)
+	}
 	if len(candidates) == 1 {
 		return OwnedSession{Registry: candidates[0]}, nil
-	}
-	if len(candidates) > 1 {
-		return OwnedSession{}, fmt.Errorf(
-			"desktop provisional ownership is ambiguous: %d post-baseline Local sessions match workspace %q",
-			len(candidates),
-			requestedWorkspace,
-		)
 	}
 	if len(postBaseline) == 1 {
 		observed := postBaseline[0]

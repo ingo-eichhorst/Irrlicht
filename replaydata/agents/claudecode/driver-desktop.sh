@@ -51,8 +51,6 @@ set -e
 
 case "$EXIT_CODE" in
   0) EXIT_REASON="ok" ;;
-  130) EXIT_REASON="interrupted" ;;
-  143) EXIT_REASON="terminated" ;;
   *) EXIT_REASON="nonzero($EXIT_CODE)" ;;
 esac
 printf '%s\n' "$EXIT_REASON" > "$STAGING/driver.exit-reason"
