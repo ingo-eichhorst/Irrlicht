@@ -409,9 +409,14 @@ func registerCoreRoutes(mux *http.ServeMux, deps registerCoreRoutesDeps) {
 	mux.HandleFunc("GET /debug/bundle", localhostOnly(handleDiagnosticsBundle(diagSvc)))
 }
 
-// registerUIRoutes serves the dashboard's static assets (index.html,
-// irrlicht.css, irrlicht.js) from disk, or a plain-text explainer if the UI
-// directory can't be found. Ensures web assets are served with the correct
+// registerUIRoutes serves the dashboard's static assets from disk with one
+// blanket http.FileServer, or a plain-text explainer if the UI directory
+// can't be found. It serves whatever the directory holds and asserts nothing
+// about its contents, which is why an incomplete release staging showed up
+// here as a page that loaded and then did nothing (#1900): the dashboard's
+// ES-module imports 404ed one by one. What the directory must contain is
+// pinned by TestRegisterUIRoutesServesTheStagedReleaseTree, not here.
+// Ensures web assets are served with the correct
 // Content-Type regardless of the host OS mime.types database (absent on
 // stripped Linux images — Go's content-sniffing fallback returns text/plain
 // for CSS, which has no magic bytes).

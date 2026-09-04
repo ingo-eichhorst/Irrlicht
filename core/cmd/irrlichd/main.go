@@ -684,9 +684,14 @@ func runDaemon() {
 		HookVerifier:      hookVerifier,
 	})
 
-	// Static web UI: served from disk so the dashboard ships as three files
-	// (index.html, irrlicht.css, irrlicht.js) under platforms/web/. API routes
-	// registered above take precedence over the catch-all "/".
+	// Static web UI: served from disk out of platforms/web/. The dashboard is
+	// an ES-module graph, not a fixed handful of files — every module
+	// irrlicht.js imports has to be in the served directory or the browser
+	// 404s the graph and renders nothing (#1900). tools/build-release.sh's
+	// WEB_FILES is the list that ships; what it must contain is derived and
+	// checked by platforms/web/release-files.test.js, and that the routes
+	// then serve it by TestRegisterUIRoutesServesTheStagedReleaseTree. API
+	// routes registered above take precedence over the catch-all "/".
 	registerUIRoutes(mux, logger)
 
 	srv := newHTTPServer(mux)
