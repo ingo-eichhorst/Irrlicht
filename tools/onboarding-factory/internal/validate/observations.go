@@ -6,7 +6,8 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"sort"
+
+	"irrlicht/tools/onboarding-factory/internal/matrix"
 )
 
 // defaultTolerancePct is the soft-diff band for cost/token drift vs the prior
@@ -65,11 +66,8 @@ type ObservationReport struct {
 	Drifts  []ObsDrift  `json:"drifts,omitempty"`
 }
 
-// RecordingDirs returns the cell's recording dirs newest-first (names are
-// timestamp-prefixed, so reverse-lexical == reverse-chronological). Exported
-// as the single enumerator for "every recording of this cell": callers that
-// need the whole set (e.g. hook coverage) use it instead of a second
-// os.ReadDir, the way callers needing only the latest use NewestRecordingDir.
+// RecordingDirs returns the cell's recording dirs newest-first. Callers that
+// need the whole history, such as hook coverage, use this all-profile API.
 // Returns nil when the cell has no recordings/ dir.
 //
 // Guarded the same way NewestRecordingDir is: every exported reader in this
@@ -80,22 +78,7 @@ func RecordingDirs(scenarioDir string) []string {
 	if hasParentTraversal(scenarioDir) {
 		return nil
 	}
-	entries, err := os.ReadDir(filepath.Join(scenarioDir, "recordings"))
-	if err != nil {
-		return nil
-	}
-	var names []string
-	for _, e := range entries {
-		if e.IsDir() {
-			names = append(names, e.Name())
-		}
-	}
-	sort.Sort(sort.Reverse(sort.StringSlice(names)))
-	out := make([]string, len(names))
-	for i, n := range names {
-		out[i] = filepath.Join(scenarioDir, "recordings", n)
-	}
-	return out
+	return matrix.RecordingDirs(scenarioDir)
 }
 
 // readGoldenSummary reads the `summary` block of the *.replay.json.golden in a
@@ -145,13 +128,22 @@ func loadObservationSpec(scenarioDir string) *ObservationSpec {
 // token regression is surfaced even for a scenario whose spec doesn't assert
 // that field. No newest golden → Skipped (Pass=true).
 func ValidateObservations(scenarioDir string) (*ObservationReport, error) {
+	return ValidateObservationsForProfile(scenarioDir, matrix.ProfileCLILocal)
+}
+
+// ValidateObservationsForProfile reads current and prior evidence only from
+// profile, so a Desktop recording cannot replace CLI verification evidence.
+func ValidateObservationsForProfile(scenarioDir string, profile matrix.ExecutionProfile) (*ObservationReport, error) {
 	rep := &ObservationReport{Pass: true}
-	dirs := RecordingDirs(scenarioDir)
-	if len(dirs) == 0 {
+	recordings, err := matrix.RecordingsForProfile(scenarioDir, profile)
+	if err != nil {
+		return nil, err
+	}
+	if len(recordings) == 0 {
 		rep.Skipped, rep.Note = true, "no recordings"
 		return rep, nil
 	}
-	cur, ok := readGoldenSummary(dirs[0])
+	cur, ok := readGoldenSummary(recordings[0].Dir)
 	if !ok {
 		rep.Skipped, rep.Note = true, "newest recording has no replay golden"
 		return rep, nil
@@ -165,8 +157,8 @@ func ValidateObservations(scenarioDir string) (*ObservationReport, error) {
 	if spec != nil && spec.TolerancePct > 0 {
 		tol = spec.TolerancePct
 	}
-	if len(dirs) > 1 {
-		if prior, ok := readGoldenSummary(dirs[1]); ok {
+	if len(recordings) > 1 {
+		if prior, ok := readGoldenSummary(recordings[1].Dir); ok {
 			applySoftDiff(rep, prior, cur, tol)
 		}
 	}

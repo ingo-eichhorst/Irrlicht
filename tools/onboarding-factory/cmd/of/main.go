@@ -193,7 +193,7 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	}
 	*repoRoot = absRoot(*repoRoot)
 
-	executionProfile, err := matrix.ParseExecutionProfile(*profile)
+	executionProfile, err := statusExecutionProfile(*profile, *runs, flagPassed(fs, "profile"))
 	if err != nil {
 		fmt.Fprintf(stderr, "of status: %v\n", err)
 		return exitUsage
@@ -245,6 +245,17 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	}
 	printStatusText(stdout, view)
 	return exitOK
+}
+
+func statusExecutionProfile(value string, runs, explicit bool) (matrix.ExecutionProfile, error) {
+	profile, err := matrix.ParseExecutionProfile(value)
+	if err != nil {
+		return "", err
+	}
+	if runs && explicit {
+		return "", fmt.Errorf("--profile cannot be used with --runs because run-log records have no execution-profile identity")
+	}
+	return profile, nil
 }
 
 // buildStatusView projects the matrix + catalog shards (optionally filtered

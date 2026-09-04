@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 
+	"irrlicht/tools/onboarding-factory/internal/matrix"
 	"irrlicht/tools/onboarding-factory/internal/shard"
 	"irrlicht/tools/onboarding-factory/internal/validate"
 )
@@ -23,12 +24,18 @@ func runVerify(args []string, stdout, stderr io.Writer) int {
 		folder   = fs.String("folder", "", "override on-disk folder (default: <dashed-id>_<name>)")
 		asJSON   = fs.Bool("json", false, "emit the combined report as JSON")
 		repoRoot = fs.String("repo-root", ".", "repository root")
+		profile  = fs.String("profile", string(matrix.ProfileCLILocal), "execution profile (cli-local or desktop-local)")
 	)
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
 	if *agent == "" || *scenario == "" {
 		fmt.Fprintln(stderr, "of verify: --agent and --scenario are required")
+		return exitUsage
+	}
+	executionProfile, err := matrix.ParseExecutionProfile(*profile)
+	if err != nil {
+		fmt.Fprintf(stderr, "of verify: %v\n", err)
 		return exitUsage
 	}
 	fold := *folder
@@ -45,12 +52,12 @@ func runVerify(args []string, stdout, stderr io.Writer) int {
 	}
 	cellDir := shard.AgentCellDir(*repoRoot, *agent, fold)
 
-	state, err := validate.ValidateExpected(cellDir)
+	state, err := validate.ValidateExpectedForProfile(cellDir, executionProfile)
 	if err != nil {
 		fmt.Fprintf(stderr, "of verify: state validation: %v\n", err)
 		return exitUsage
 	}
-	obs, err := validate.ValidateObservations(cellDir)
+	obs, err := validate.ValidateObservationsForProfile(cellDir, executionProfile)
 	if err != nil {
 		fmt.Fprintf(stderr, "of verify: observation validation: %v\n", err)
 		return exitUsage

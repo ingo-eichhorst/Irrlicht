@@ -13,31 +13,42 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
 
+	"irrlicht/tools/onboarding-factory/internal/matrix"
 	"irrlicht/tools/onboarding-factory/internal/validate"
 )
 
 func main() {
-	if len(os.Args) != 2 && len(os.Args) != 3 {
-		fmt.Fprintln(os.Stderr, "usage: expected-validate <cell-dir> [recording-name]")
+	flags := flag.NewFlagSet("expected-validate", flag.ContinueOnError)
+	profileValue := flags.String("profile", string(matrix.ProfileCLILocal), "execution profile")
+	if err := flags.Parse(os.Args[1:]); err != nil {
 		os.Exit(2)
 	}
-	scenarioDir := os.Args[1]
+	if flags.NArg() != 1 && flags.NArg() != 2 {
+		fmt.Fprintln(os.Stderr, "usage: expected-validate [--profile cli-local|desktop-local] <cell-dir> [recording-name]")
+		os.Exit(2)
+	}
+	profile, err := matrix.ParseExecutionProfile(*profileValue)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(2)
+	}
+	scenarioDir := flags.Arg(0)
 	var report *validate.ExpectedReport
-	var err error
-	if len(os.Args) == 3 {
+	if flags.NArg() == 2 {
 		// Validate ONE explicit recording against the cell's current spec.
-		recDir := filepath.Join(scenarioDir, "recordings", os.Args[2])
+		recDir := filepath.Join(scenarioDir, "recordings", flags.Arg(1))
 		report, err = validate.ValidateExpectedAgainst(
 			filepath.Join(scenarioDir, "expected.jsonl"),
 			filepath.Join(recDir, "events.jsonl"),
 		)
 	} else {
-		// Validate the cell's NEWEST recording.
-		report, err = validate.ValidateExpected(scenarioDir)
+		// Validate the cell's newest recording within the selected profile.
+		report, err = validate.ValidateExpectedForProfile(scenarioDir, profile)
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

@@ -51,8 +51,11 @@ func TestMatrixSelectsProfileBeforeNewestRecording(t *testing.T) {
 	if !ok || !cliCell.Recorded {
 		t.Fatalf("default CLI cell not recorded: ok=%v cell=%+v", ok, cliCell)
 	}
-	if cliCell.RecordingName != "r1" || cliCell.ExecutionProfile != ProfileCLILocal || cliCell.Entrypoint != "cli" {
+	if cliCell.RecordingName != "r1" || cliCell.ExecutionProfile != ProfileCLILocal {
 		t.Fatalf("default selected the wrong recording: %+v", cliCell)
+	}
+	if cliCell.Entrypoint != "cli" {
+		t.Fatalf("default changed the transcript entrypoint: %+v", cliCell)
 	}
 
 	desktop, err := LoadRepoForProfile(root, ProfileDesktopLocal)
@@ -63,8 +66,10 @@ func TestMatrixSelectsProfileBeforeNewestRecording(t *testing.T) {
 	if !ok || !desktopCell.Recorded {
 		t.Fatalf("Desktop cell not recorded: ok=%v cell=%+v", ok, desktopCell)
 	}
-	if desktopCell.RecordingName != "r2" || desktopCell.ExecutionProfile != ProfileDesktopLocal ||
-		desktopCell.Entrypoint != "sdk-cli" || desktopCell.DesktopAppVersion != "1.0.10" {
+	if desktopCell.RecordingName != "r2" || desktopCell.ExecutionProfile != ProfileDesktopLocal {
+		t.Fatalf("Desktop selected the wrong recording: %+v", desktopCell)
+	}
+	if desktopCell.Entrypoint != "sdk-cli" || desktopCell.DesktopAppVersion != "1.0.10" {
 		t.Fatalf("Desktop selected the wrong recording identity: %+v", desktopCell)
 	}
 }
@@ -77,5 +82,28 @@ func TestLoadRecordingManifestRejectsUnknownProfile(t *testing.T) {
 	_, err := LoadRecordingManifest(path)
 	if err == nil || !strings.Contains(err.Error(), `unknown execution profile "remote"`) {
 		t.Fatalf("error = %v; want unknown profile and value", err)
+	}
+}
+
+func TestLoadRecordingManifestRejectsPresentEmptyOrNullProfile(t *testing.T) {
+	for _, body := range []string{
+		`{"execution_profile":""}`,
+		`{"execution_profile":null}`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "manifest.json")
+			if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := LoadRecordingManifest(path); err == nil {
+				t.Fatalf("LoadRecordingManifest(%s) succeeded; present empty/null profile must fail", body)
+			}
+		})
+	}
+}
+
+func TestParseExecutionProfileRejectsEmptyInput(t *testing.T) {
+	if _, err := ParseExecutionProfile(""); err == nil {
+		t.Fatal("empty explicit profile must fail")
 	}
 }

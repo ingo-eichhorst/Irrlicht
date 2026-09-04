@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-
-	"irrlicht/tools/onboarding-factory/internal/validate"
+	"sort"
+	"strings"
 )
 
 // ExecutionProfile identifies the product entry surface that produced a
@@ -25,12 +25,9 @@ func ExecutionProfiles() []ExecutionProfile {
 	return []ExecutionProfile{ProfileCLILocal, ProfileDesktopLocal}
 }
 
-// ParseExecutionProfile validates one profile value. An empty value is the
-// legacy manifest form and means cli-local.
+// ParseExecutionProfile validates one explicit profile value. Legacy manifests
+// are defaulted by LoadRecordingManifest only when the field is absent.
 func ParseExecutionProfile(value string) (ExecutionProfile, error) {
-	if value == "" {
-		return ProfileCLILocal, nil
-	}
 	p := ExecutionProfile(value)
 	for _, allowed := range ExecutionProfiles() {
 		if p == allowed {
@@ -55,6 +52,7 @@ type RecordingManifest struct {
 // Recording identifies the selected recording and its manifest.
 type Recording struct {
 	Name     string
+	Dir      string
 	Manifest RecordingManifest
 }
 
@@ -66,18 +64,25 @@ func LoadRecordingManifest(path string) (RecordingManifest, error) {
 		return RecordingManifest{}, err
 	}
 	var raw struct {
-		ExecutionProfile  string `json:"execution_profile"`
-		Entrypoint        string `json:"entrypoint"`
-		DaemonVersion     string `json:"daemon_version"`
-		AgentCLIVersion   string `json:"agent_cli_version"`
-		DesktopAppVersion string `json:"desktop_app_version"`
+		ExecutionProfile  json.RawMessage `json:"execution_profile"`
+		Entrypoint        string          `json:"entrypoint"`
+		DaemonVersion     string          `json:"daemon_version"`
+		AgentCLIVersion   string          `json:"agent_cli_version"`
+		DesktopAppVersion string          `json:"desktop_app_version"`
 	}
 	if err := json.Unmarshal(b, &raw); err != nil {
 		return RecordingManifest{}, fmt.Errorf("invalid JSON: %w", err)
 	}
-	profile, err := ParseExecutionProfile(raw.ExecutionProfile)
-	if err != nil {
-		return RecordingManifest{}, err
+	profile := ProfileCLILocal
+	if len(raw.ExecutionProfile) > 0 {
+		var value string
+		if err := json.Unmarshal(raw.ExecutionProfile, &value); err != nil {
+			return RecordingManifest{}, fmt.Errorf("invalid execution_profile: %w", err)
+		}
+		profile, err = ParseExecutionProfile(value)
+		if err != nil {
+			return RecordingManifest{}, err
+		}
 	}
 	return RecordingManifest{
 		ExecutionProfile:  profile,
@@ -88,27 +93,67 @@ func LoadRecordingManifest(path string) (RecordingManifest, error) {
 	}, nil
 }
 
+// RecordingDirs returns recording directories newest-first. It is the single
+// enumerator shared by matrix selection and verification.
+func RecordingDirs(scenarioDir string) []string {
+	if strings.Contains(scenarioDir, "..") {
+		return nil
+	}
+	entries, err := os.ReadDir(filepath.Join(scenarioDir, "recordings"))
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			names = append(names, entry.Name())
+		}
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(names)))
+	dirs := make([]string, len(names))
+	for i, name := range names {
+		dirs[i] = filepath.Join(scenarioDir, "recordings", name)
+	}
+	return dirs
+}
+
+// RecordingsForProfile returns all recordings for profile, newest-first.
+// Missing manifests remain legacy cli-local for selection compatibility.
+func RecordingsForProfile(scenarioDir string, profile ExecutionProfile) ([]Recording, error) {
+	profile, err := ParseExecutionProfile(string(profile))
+	if err != nil {
+		return nil, err
+	}
+	var recordings []Recording
+	for _, dir := range RecordingDirs(scenarioDir) {
+		manifestPath := filepath.Join(dir, "manifest.json")
+		manifest, err := LoadRecordingManifest(manifestPath)
+		if err != nil {
+			if !os.IsNotExist(err) {
+				return nil, fmt.Errorf("%s: %w", manifestPath, err)
+			}
+			manifest.ExecutionProfile = ProfileCLILocal
+		}
+		if manifest.ExecutionProfile == profile {
+			recordings = append(recordings, Recording{
+				Name: filepath.Base(dir), Dir: dir, Manifest: manifest,
+			})
+		}
+	}
+	return recordings, nil
+}
+
 // NewestRecording selects the newest recording within profile. The profile
 // filter is applied before the lexicographic newest-recording rule. A missing
 // manifest is treated as legacy cli-local for matrix compatibility; `of
 // validate` reports the missing manifest as an incomplete recording.
 func NewestRecording(scenarioDir string, profile ExecutionProfile) (Recording, bool, error) {
-	profile, err := ParseExecutionProfile(string(profile))
+	recordings, err := RecordingsForProfile(scenarioDir, profile)
 	if err != nil {
 		return Recording{}, false, err
 	}
-	for _, dir := range validate.RecordingDirs(scenarioDir) {
-		manifest, err := LoadRecordingManifest(filepath.Join(dir, "manifest.json"))
-		if err != nil {
-			if os.IsNotExist(err) {
-				manifest.ExecutionProfile = ProfileCLILocal
-			} else {
-				return Recording{}, false, fmt.Errorf("%s: %w", filepath.Join(dir, "manifest.json"), err)
-			}
-		}
-		if manifest.ExecutionProfile == profile {
-			return Recording{Name: filepath.Base(dir), Manifest: manifest}, true, nil
-		}
+	if len(recordings) == 0 {
+		return Recording{}, false, nil
 	}
-	return Recording{}, false, nil
+	return recordings[0], true, nil
 }

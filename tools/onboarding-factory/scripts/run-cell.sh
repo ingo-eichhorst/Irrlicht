@@ -51,6 +51,10 @@ source "$SCRIPT_DIR/lib/spawn-record-daemon.sh"
 # (#1333 / B6) — the old inline fallback curated whatever ran last.
 # shellcheck source=lib/pick-recording.sh
 source "$SCRIPT_DIR/lib/pick-recording.sh"
+# Profile-aware committed recording selection. This CLI runner produces and
+# compares cli-local evidence.
+# shellcheck source=lib/recording-profile.sh
+source "$SCRIPT_DIR/lib/recording-profile.sh"
 # "Did this run actually finish?" — shared with run-cell-multi.sh for the same
 # reason the daemon lifecycle is (#1214).
 # shellcheck source=lib/completeness-check.sh
@@ -955,15 +959,14 @@ replay_one() {
 
 replay_one "$STAGED_TRANSCRIPT" "$STAGING/reports/staged.json" || exit 1
 
-# The committed recording lives under recordings/<newest>/ (no "latest" at the
-# cell root). Compare the staged transcript against the newest committed one.
+# Compare the staged CLI transcript against the newest committed CLI recording.
 COMMITTED_CELL="$REPO_ROOT/replaydata/agents/$ADAPTER/scenarios/$FOLDER"
 # A never-recorded cell has no recordings/ dir, so the glob matches nothing
 # and `ls` exits non-zero — under `set -euo pipefail` that would abort the
 # whole run right after a successful capture. Tolerate the empty match; the
 # `[[ -n "$NEWEST_REC" ... ]]` guard below already handles "no committed
 # recording yet" (COMMITTED_PRESENT=false).
-NEWEST_REC="$(ls -1d "$COMMITTED_CELL"/recordings/*/ 2>/dev/null | sort | tail -n1 || true)"
+NEWEST_REC="$(newest_recording_for_profile "$COMMITTED_CELL" cli-local)"
 COMMITTED_TRANSCRIPT="${NEWEST_REC%/}/transcript.$TRANSCRIPT_EXT"
 if [[ -n "$NEWEST_REC" && -f "$COMMITTED_TRANSCRIPT" ]]; then
   replay_one "$COMMITTED_TRANSCRIPT" "$STAGING/reports/committed.json" || exit 1

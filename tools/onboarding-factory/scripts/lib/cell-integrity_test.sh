@@ -60,6 +60,18 @@ touchf "$S/5-4_orphan/expected.jsonl"
 recf 5-4_orphan events.jsonl
 recf 5-4_orphan transcript.jsonl
 recf 5-4_orphan transcript.jsonl.replay.json.golden
+# 5-5_mixed — the older CLI recording is incomplete. A newer complete Desktop
+# recording must not make the default CLI integrity gate pass.
+cell_meta 5-5_mixed mixed
+touchf "$S/5-5_mixed/expected.jsonl"
+mkdir -p "$S/5-5_mixed/recordings/r1" "$S/5-5_mixed/recordings/r2"
+printf '%s\n' '{"execution_profile":"cli-local"}' > "$S/5-5_mixed/recordings/r1/manifest.json"
+touchf "$S/5-5_mixed/recordings/r1/transcript.jsonl"
+touchf "$S/5-5_mixed/recordings/r1/transcript.jsonl.replay.json.golden"
+printf '%s\n' '{"execution_profile":"desktop-local"}' > "$S/5-5_mixed/recordings/r2/manifest.json"
+touchf "$S/5-5_mixed/recordings/r2/events.jsonl"
+touchf "$S/5-5_mixed/recordings/r2/transcript.jsonl"
+touchf "$S/5-5_mixed/recordings/r2/transcript.jsonl.replay.json.golden"
 
 fails=0
 pass() { echo "  PASS: $1"; }
@@ -68,7 +80,7 @@ assert_eq() { [[ "$2" == "$3" ]] && pass "$1" || fail "$1" "$2" "$3"; }
 
 echo "== ci_recipe_dir_names: folders that hold a metadata.json =="
 assert_eq "fake recipe dirs (orphan excluded — no metadata.json)" \
-  "$(printf '5-1_cov\n5-2_md\n5-3_half')" \
+  "$(printf '5-1_cov\n5-2_md\n5-3_half\n5-5_mixed')" \
   "$(ci_recipe_dir_names fake)"
 
 echo "== ci_coverage_id_for_dir =="
@@ -92,12 +104,15 @@ assert_eq "half cell → flags the recording's events.jsonl" "recordings/$REC/ev
 probs="$(ci_missing_artifacts fake 5-4_orphan "$S/5-4_orphan" "$S")"; rc=$?
 assert_eq "orphan recording → rc 1" 1 "$rc"
 [[ "$probs" == recipe-row* ]] && pass "orphan → flags recipe-row" || fail "orphan → flags recipe-row" "recipe-row*" "$probs"
+probs="$(ci_missing_artifacts fake 5-5_mixed "$S/5-5_mixed" "$S")"; rc=$?
+assert_eq "newer Desktop does not hide incomplete CLI → rc 1" 1 "$rc"
+assert_eq "mixed profile → flags CLI events" "recordings/r1/events.jsonl" "$probs"
 
 echo "== CLI exit code =="
 bash "$DIR/cell-integrity.sh" fake "$TMP/replaydata" >/dev/null 2>&1
 assert_eq "half + orphan present → exit 1" 1 "$?"
 # Remove the two bad cells; the gate should pass.
-rm -rf "$S/5-3_half" "$S/5-4_orphan"
+rm -rf "$S/5-3_half" "$S/5-4_orphan" "$S/5-5_mixed"
 bash "$DIR/cell-integrity.sh" fake "$TMP/replaydata" >/dev/null 2>&1
 assert_eq "all recorded cells complete → exit 0" 0 "$?"
 

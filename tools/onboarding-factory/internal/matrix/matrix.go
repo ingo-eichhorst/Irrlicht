@@ -155,7 +155,7 @@ func Load(cfg Config) (*Matrix, error) {
 		return nil, fmt.Errorf("no scenarios in %s", shard.File(repoRoot))
 	}
 
-	profile, err := ParseExecutionProfile(string(cfg.ExecutionProfile))
+	profile, err := ParseExecutionProfile(string(defaultExecutionProfile(cfg.ExecutionProfile)))
 	if err != nil {
 		return nil, err
 	}
@@ -234,6 +234,13 @@ func Load(cfg Config) (*Matrix, error) {
 		}
 	}
 	return m, nil
+}
+
+func defaultExecutionProfile(profile ExecutionProfile) ExecutionProfile {
+	if profile == "" {
+		return ProfileCLILocal
+	}
+	return profile
 }
 
 // inCatalog reports whether a shard id "<section>.<index>" denotes a real
