@@ -50,7 +50,6 @@ import (
 	"strings"
 	"time"
 
-	"irrlicht/tools/onboarding-factory/internal/desktopresults"
 	"irrlicht/tools/onboarding-factory/internal/matrix"
 )
 
@@ -281,7 +280,7 @@ func desktopEvidenceCompleteness(recDir string, exists func(string) bool) []stri
 		return nil
 	}
 	var findings []string
-	for _, name := range desktopresults.RequiredRecordingFiles() {
+	for _, name := range matrix.DesktopEvidenceFiles() {
 		if !exists(name) {
 			findings = append(findings, "missing "+name+" (required for desktop-local evidence)")
 		}

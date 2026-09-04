@@ -65,11 +65,13 @@ func writeObservedDesktopResult(t *testing.T, fixture desktopFixture, scenario, 
   "desktop_app_version":"1.44121.4"
 }`)
 	write(t, filepath.Join(recDir, "transcript.jsonl"), `{"type":"user","sessionId":"transcript-1","cwd":"/workspace","entrypoint":"claude-desktop"}`+"\n")
-	write(t, filepath.Join(recDir, "desktop-registry.json"), `{"sessionId":"local_desktop-1","cliSessionId":"transcript-1","cwd":"/workspace","envScopeId":null}`+"\n")
+	// A measured project-local Claude Desktop registry row omits envScopeId.
+	write(t, filepath.Join(recDir, "desktop-registry.json"), `{"sessionId":"local_desktop-1","cliSessionId":"transcript-1","cwd":"/workspace"}`+"\n")
 	write(t, filepath.Join(recDir, "desktop-environment.json"), `{"selected_environment":"Local","requested_workspace":"/workspace"}`+"\n")
 	write(t, filepath.Join(recDir, "irrlicht-session.json"), `{"session_id":"transcript-1","cwd":"/workspace","pid":4242,"launcher":{"host_bundle_id":"com.anthropic.claudefordesktop"}}`+"\n")
 	write(t, filepath.Join(recDir, "hooks.jsonl"), `{"session_id":"transcript-1","hook_event_name":"Stop"}`+"\n")
 	write(t, filepath.Join(recDir, "process.json"), `{"pid":4242,"command":"claude"}`+"\n")
+	writeExpectedOutcome(t, cellDir, scenario, outcome)
 
 	result := map[string]any{
 		"scenario_id":       scenario,
@@ -94,19 +96,31 @@ func writeObservedDesktopResult(t *testing.T, fixture desktopFixture, scenario, 
 func writeNonObservedDesktopResult(t *testing.T, fixture desktopFixture, scenario, outcome, reason, missingControl string) {
 	t.Helper()
 	cellDir := fixture.cellDirs[scenario]
+	evidencePath := filepath.Join(cellDir, "desktop-evidence", scenario+".md")
+	write(t, evidencePath, "Desktop campaign evidence for "+scenario+".\n")
 	result := map[string]any{
 		"scenario_id":       scenario,
 		"execution_profile": "desktop-local",
 		"outcome":           outcome,
 		"reason":            reason,
 		"evidence_refs": []string{
-			filepath.ToSlash(strings.TrimPrefix(filepath.Join(cellDir, "metadata.json"), fixture.root+string(filepath.Separator))),
+			filepath.ToSlash(strings.TrimPrefix(evidencePath, fixture.root+string(filepath.Separator))),
 		},
 	}
 	if missingControl != "" {
 		result["missing_control"] = missingControl
 	}
 	writeExecutionResults(t, cellDir, []any{result})
+}
+
+func writeExpectedOutcome(t *testing.T, cellDir, scenario, outcome string) {
+	t.Helper()
+	phase := `{"phase":"birth","kind":"transcript_new","relative_to":"start","max_delay_ms":1000,"text":"the recording contains a transcript"}`
+	if outcome == "observed-failure" {
+		phase = `{"phase":"failure","expected_state":"error","relative_to":"start","max_delay_ms":1000,"text":"the expected failure is visible"}`
+	}
+	write(t, filepath.Join(cellDir, "expected.jsonl"),
+		`{"schema_version":1,"scenario_id":"`+scenario+`","source":"desktop fixture"}`+"\n"+phase+"\n")
 }
 
 func writeExecutionResults(t *testing.T, cellDir string, results []any) {
@@ -170,7 +184,7 @@ func TestValidateDesktopCompletenessMutations(t *testing.T) {
 		}
 		requireDesktopFinding(t, fixture.root, "unobservable", "missing desktop-local result")
 	})
-	t.Run("catalog addition is required dynamically", func(t *testing.T) {
+	t.Run("Claude Code cell addition is required dynamically", func(t *testing.T) {
 		fixture := desktopResultsRepo(t, true)
 		path := filepath.Join(fixture.root, "replaydata", "agents", "scenarios.json")
 		var catalog map[string]any
@@ -179,7 +193,22 @@ func TestValidateDesktopCompletenessMutations(t *testing.T) {
 			"id": "1.6", "name": "new-current-cell", "description": "d", "process": "p", "acceptance_criteria": "a",
 		})
 		writeJSONFixture(t, path, catalog)
+		cell(t, fixture.root, "claudecode", "1-6_new-current-cell", "yes", "full", "ready")
 		requireDesktopFinding(t, fixture.root, "new-current-cell", "missing desktop-local result")
+	})
+	t.Run("other adapter scenario does not create a Claude Code requirement", func(t *testing.T) {
+		fixture := desktopResultsRepo(t, true)
+		path := filepath.Join(fixture.root, "replaydata", "agents", "scenarios.json")
+		var catalog map[string]any
+		mustReadJSON(t, path, &catalog)
+		catalog["scenarios"] = append(catalog["scenarios"].([]any), map[string]any{
+			"id": "1.6", "name": "other-adapter-only", "description": "d", "process": "p", "acceptance_criteria": "a",
+		})
+		writeJSONFixture(t, path, catalog)
+		cell(t, fixture.root, "aider", "1-6_other-adapter-only", "yes", "full", "ready")
+		if code, _, stderr := runOf("validate", "--repo-root", fixture.root); code != exitOK {
+			t.Fatalf("other-adapter-only scenario created a Claude Desktop requirement: exit=%d stderr=%s", code, stderr)
+		}
 	})
 	t.Run("duplicate", func(t *testing.T) {
 		fixture := desktopResultsRepo(t, true)
@@ -294,10 +323,10 @@ func TestValidateDesktopIdentityMutations(t *testing.T) {
 		body  string
 	}{
 		{"CLI transcript entrypoint", "transcript.entrypoint", "transcript.jsonl", `{"type":"user","sessionId":"transcript-1","cwd":"/workspace","entrypoint":"cli"}` + "\n"},
-		{"registry mapping", "desktop_registry.cliSessionId", "desktop-registry.json", `{"sessionId":"local_desktop-1","cliSessionId":"other","cwd":"/workspace","envScopeId":null}` + "\n"},
-		{"registry Desktop ID", "desktop_registry.sessionId", "desktop-registry.json", `{"sessionId":"remote_desktop-1","cliSessionId":"transcript-1","cwd":"/workspace","envScopeId":null}` + "\n"},
-		{"registry workspace", "desktop_registry.cwd", "desktop-registry.json", `{"sessionId":"local_desktop-1","cliSessionId":"transcript-1","cwd":"/other","envScopeId":null}` + "\n"},
-		{"non-Local registry", "desktop_registry.envScopeId", "desktop-registry.json", `{"sessionId":"local_desktop-1","cliSessionId":"transcript-1","cwd":"/workspace","envScopeId":"remote"}` + "\n"},
+		{"registry mapping", "desktop_registry.cliSessionId", "desktop-registry.json", `{"sessionId":"local_desktop-1","cliSessionId":"other","cwd":"/workspace"}` + "\n"},
+		{"registry Desktop ID", "desktop_registry.sessionId", "desktop-registry.json", `{"sessionId":"remote_desktop-1","cliSessionId":"transcript-1","cwd":"/workspace"}` + "\n"},
+		{"registry workspace", "desktop_registry.cwd", "desktop-registry.json", `{"sessionId":"local_desktop-1","cliSessionId":"transcript-1","cwd":"/other"}` + "\n"},
+		{"built-in Local registry scope", "desktop_registry.envScopeId", "desktop-registry.json", `{"sessionId":"local_desktop-1","cliSessionId":"transcript-1","cwd":"/workspace","envScopeId":"builtin_local"}` + "\n"},
 		{"transcript workspace", "transcript.cwd", "transcript.jsonl", `{"type":"user","sessionId":"transcript-1","cwd":"/other","entrypoint":"claude-desktop"}` + "\n"},
 		{"selected environment", "environment.selected_environment", "desktop-environment.json", `{"selected_environment":"Remote","requested_workspace":"/workspace"}` + "\n"},
 		{"requested workspace", "environment.requested_workspace", "desktop-environment.json", `{"selected_environment":"Local","requested_workspace":"/other"}` + "\n"},
@@ -321,6 +350,52 @@ func TestValidateDesktopIdentityMutations(t *testing.T) {
 		write(t, filepath.Join(recDir, "hooks.jsonl"), `{"session_id":"transcript-1"}`+"\n"+`{"session_id":"other"}`+"\n")
 		requireDesktopFinding(t, fixture.root, "observed-pass", "hooks.session_id")
 	})
+	t.Run("hook event name is required", func(t *testing.T) {
+		fixture := desktopResultsRepo(t, false)
+		recDir := filepath.Join(fixture.cellDirs["observed-pass"], "recordings", fixture.record)
+		write(t, filepath.Join(recDir, "hooks.jsonl"), `{"session_id":"transcript-1"}`+"\n")
+		requireDesktopFinding(t, fixture.root, "observed-pass", "hooks.hook_event_name")
+	})
+}
+
+func TestValidateDesktopObservedOutcomeMutations(t *testing.T) {
+	t.Run("passing recording cannot be labelled failure", func(t *testing.T) {
+		fixture := desktopResultsRepo(t, false)
+		path := filepath.Join(fixture.cellDirs["observed-pass"], desktopResultsFile)
+		mutateFirstResult(t, path, func(result map[string]any) {
+			result["outcome"] = "observed-failure"
+			result["reason"] = "Synthetic failure label."
+		})
+		requireDesktopFinding(t, fixture.root, "observed-pass", "outcome")
+	})
+	t.Run("failing recording cannot be labelled passing", func(t *testing.T) {
+		fixture := desktopResultsRepo(t, false)
+		path := filepath.Join(fixture.cellDirs["observed-failure"], desktopResultsFile)
+		mutateFirstResult(t, path, func(result map[string]any) { result["outcome"] = "observed-passing" })
+		requireDesktopFinding(t, fixture.root, "observed-failure", "outcome")
+	})
+	t.Run("expected report is required", func(t *testing.T) {
+		fixture := desktopResultsRepo(t, false)
+		if err := os.Remove(filepath.Join(fixture.cellDirs["observed-pass"], "expected.jsonl")); err != nil {
+			t.Fatal(err)
+		}
+		requireDesktopFinding(t, fixture.root, "observed-pass", "outcome")
+	})
+}
+
+func TestValidateDesktopExactRecordingCompletenessMutation(t *testing.T) {
+	fixture := desktopResultsRepo(t, false)
+	cellDir := fixture.cellDirs["observed-pass"]
+	oldRecording := filepath.Join(cellDir, "recordings", fixture.record)
+	if err := os.Remove(filepath.Join(oldRecording, "events.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+	newer := fixture
+	newer.record = "desktop-r2"
+	writeObservedDesktopResult(t, newer, "observed-pass", "observed-passing", "")
+	path := filepath.Join(cellDir, desktopResultsFile)
+	mutateFirstResult(t, path, func(result map[string]any) { result["recording"] = fixture.record })
+	requireDesktopFinding(t, fixture.root, "observed-pass", "recording completeness")
 }
 
 func TestValidateDesktopEvidenceReferenceMutations(t *testing.T) {
@@ -372,6 +447,21 @@ func TestValidateDesktopEvidenceReferenceMutations(t *testing.T) {
 		manifest := filepath.Join(fixture.cellDirs["observed-pass"], "recordings", fixture.record, "manifest.json")
 		write(t, manifest, `{"execution_profile":"desktop-local","entrypoint":"cli","daemon_version":"0.6.2","agent_cli_version":"2.1.258","desktop_app_version":"1.44121.4"}`+"\n")
 		requireDesktopFinding(t, fixture.root, "observed-pass", "manifest.entrypoint")
+	})
+	t.Run("non-observed circular reference", func(t *testing.T) {
+		fixture := desktopResultsRepo(t, false)
+		path := filepath.Join(fixture.cellDirs["unobservable"], desktopResultsFile)
+		mutateFirstResult(t, path, func(result map[string]any) {
+			result["evidence_refs"] = []any{filepath.ToSlash(strings.TrimPrefix(path, fixture.root+string(filepath.Separator)))}
+		})
+		requireDesktopFinding(t, fixture.root, "unobservable", "evidence_refs[0]")
+	})
+	t.Run("non-observed reference outside allowed evidence scope", func(t *testing.T) {
+		fixture := desktopResultsRepo(t, false)
+		write(t, filepath.Join(fixture.root, "unrelated.txt"), "not campaign evidence\n")
+		path := filepath.Join(fixture.cellDirs["unobservable"], desktopResultsFile)
+		mutateFirstResult(t, path, func(result map[string]any) { result["evidence_refs"] = []any{"unrelated.txt"} })
+		requireDesktopFinding(t, fixture.root, "unobservable", "evidence_refs[0]")
 	})
 }
 

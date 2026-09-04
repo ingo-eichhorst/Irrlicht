@@ -35,6 +35,7 @@ type catalogDocument struct {
 type validation struct {
 	repoRoot       string
 	catalog        map[string]bool
+	claudeCells    map[string]bool
 	resultCount    map[string]int
 	requireDesktop bool
 	findings       []Finding
@@ -47,6 +48,7 @@ func ValidateRepo(repoRoot string) []Finding {
 	v := &validation{
 		repoRoot:    repoRoot,
 		catalog:     map[string]bool{},
+		claudeCells: map[string]bool{},
 		resultCount: map[string]int{},
 	}
 	v.loadCatalog()
@@ -137,14 +139,34 @@ func (v *validation) scanResultFiles() {
 			v.add(v.rel(path), "unknown", "scan", walkErr.Error())
 			return nil
 		}
-		if entry.IsDir() || entry.Name() != FileName {
+		if entry.IsDir() {
 			return nil
 		}
-		v.validateResultFile(path)
+		switch entry.Name() {
+		case "metadata.json":
+			v.registerClaudeCell(root, path)
+		case FileName:
+			v.validateResultFile(path)
+		}
 		return nil
 	})
 	if err != nil && !os.IsNotExist(err) {
 		v.add(v.rel(root), "unknown", "scan", err.Error())
+	}
+}
+
+func (v *validation) registerClaudeCell(root, path string) {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return
+	}
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	if len(parts) != 3 || parts[0] != "scenarios" || parts[2] != "metadata.json" {
+		return
+	}
+	scenario := metadataScenarioID(filepath.Dir(path))
+	if v.catalog[scenario] {
+		v.claudeCells[scenario] = true
 	}
 }
 
@@ -212,7 +234,7 @@ func (v *validation) validateResult(rel, cellDir, expectedScenario string, resul
 		v.validateObservedShape(rel, cellDir, result)
 		return
 	}
-	v.validateNonObservedShape(rel, result)
+	v.validateNonObservedShape(rel, cellDir, result)
 }
 
 func (v *validation) validateScenario(rel, expected, actual string) {
@@ -276,12 +298,12 @@ func (v *validation) validateCanonicalEvidenceNames(rel string, result *Result) 
 	}
 }
 
-func (v *validation) validateNonObservedShape(rel string, result *Result) {
-	v.validateNonObservedEvidence(rel, result)
+func (v *validation) validateNonObservedShape(rel, cellDir string, result *Result) {
+	v.validateNonObservedEvidence(rel, cellDir, result)
 	v.validateNonObservedExclusions(rel, result)
 }
 
-func (v *validation) validateNonObservedEvidence(rel string, result *Result) {
+func (v *validation) validateNonObservedEvidence(rel, cellDir string, result *Result) {
 	if strings.TrimSpace(result.Reason) == "" {
 		v.add(rel, result.ScenarioID, "reason", "must contain an evidence-based reason")
 	}
@@ -290,10 +312,35 @@ func (v *validation) validateNonObservedEvidence(rel string, result *Result) {
 	}
 	for i, ref := range result.EvidenceRefs {
 		field := fmt.Sprintf("evidence_refs[%d]", i)
-		if _, err := resolveFile(v.repoRoot, ref); err != nil {
+		resolved, err := resolveFile(v.repoRoot, ref)
+		if err != nil {
 			v.add(rel, result.ScenarioID, field, err.Error())
+			continue
+		}
+		if !v.allowedNonObservedEvidence(cellDir, resolved) {
+			v.add(rel, result.ScenarioID, field, "must name same-cell Desktop evidence or an explicit repository Desktop evidence source")
 		}
 	}
+}
+
+// allowedNonObservedEvidence checks only a reference's stable scope. It does
+// not claim that prose proves the result. Campaign evidence must be the cell's
+// metadata, a file under its desktop-evidence directory, a repository doc, or
+// a shared raw probe under replaydata/agents/claudecode/desktop-evidence.
+func (v *validation) allowedNonObservedEvidence(cellDir, resolved string) bool {
+	if sameResolvedFile(resolved, filepath.Join(cellDir, "metadata.json")) {
+		return true
+	}
+	for _, root := range []string{
+		filepath.Join(cellDir, "desktop-evidence"),
+		filepath.Join(v.repoRoot, "docs"),
+		filepath.Join(v.repoRoot, "replaydata", "agents", claudeAdapter, "desktop-evidence"),
+	} {
+		if resolvedWithinExisting(root, resolved) {
+			return true
+		}
+	}
+	return false
 }
 
 func (v *validation) validateNonObservedExclusions(rel string, result *Result) {
@@ -322,7 +369,7 @@ func (v *validation) validateCompleteness() {
 	if !v.requireDesktop {
 		return
 	}
-	for scenario := range v.catalog {
+	for scenario := range v.claudeCells {
 		count := v.resultCount[scenario]
 		if count == 1 {
 			continue
@@ -332,6 +379,20 @@ func (v *validation) validateCompleteness() {
 			v.add(path, scenario, "completeness", "missing desktop-local result")
 		}
 	}
+}
+
+func sameResolvedFile(left, right string) bool {
+	resolved, err := filepath.EvalSymlinks(right)
+	return err == nil && resolved == left
+}
+
+func resolvedWithinExisting(root, path string) bool {
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(resolvedRoot, path)
+	return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func (v *validation) rel(path string) string {

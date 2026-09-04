@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"irrlicht/tools/onboarding-factory/internal/matrix"
+	expectedvalidate "irrlicht/tools/onboarding-factory/internal/validate"
 )
 
 const (
@@ -79,6 +80,8 @@ func (v *validation) validateObservedEvidence(rel, cellDir string, result *Resul
 		v.add(rel, result.ScenarioID, "recording", err.Error())
 		return
 	}
+	v.validateRecordingCompleteness(rel, result.ScenarioID, recordingDir)
+	v.validateObservedOutcome(rel, cellDir, recordingDir, result)
 	files, ok := v.resolveEvidenceFiles(rel, recordingDir, result)
 	manifest, manifestOK := v.validateManifest(rel, recordingDir, result.ScenarioID)
 	if !ok || !manifestOK {
@@ -86,6 +89,31 @@ func (v *validation) validateObservedEvidence(rel, cellDir string, result *Resul
 	}
 	identity := v.readObservedIdentity(rel, result.ScenarioID, files, manifest)
 	v.compareObservedIdentity(rel, result.ScenarioID, identity)
+}
+
+func (v *validation) validateRecordingCompleteness(rel, scenario, recordingDir string) {
+	for _, finding := range expectedvalidate.RecordingComplete(recordingDir) {
+		v.add(rel, scenario, "recording completeness", finding)
+	}
+}
+
+func (v *validation) validateObservedOutcome(rel, cellDir, recordingDir string, result *Result) {
+	report, err := expectedvalidate.ValidateExpectedAgainst(
+		filepath.Join(cellDir, "expected.jsonl"),
+		filepath.Join(recordingDir, "events.jsonl"),
+	)
+	if err != nil {
+		v.add(rel, result.ScenarioID, "outcome", "cannot validate the exact recording: "+err.Error())
+		return
+	}
+	if report == nil {
+		v.add(rel, result.ScenarioID, "outcome", "exact recording has no expected-result report")
+		return
+	}
+	wantPass := result.Outcome == OutcomeObservedPassing
+	if report.Pass != wantPass {
+		v.add(rel, result.ScenarioID, "outcome", fmt.Sprintf("got %q for an expected-result pass value of %t", result.Outcome, report.Pass))
+	}
 }
 
 func (v *validation) readObservedIdentity(rel, scenario string, files evidenceFiles, manifest matrix.RecordingManifest) observedIdentity {
@@ -290,8 +318,8 @@ func (v *validation) readRegistry(rel, scenario, path string) (registryIdentity,
 		v.add(rel, scenario, "desktop_registry.sessionId", "must start with local_")
 		ok = false
 	}
-	if string(registry.EnvScopeID) != "null" {
-		v.add(rel, scenario, "desktop_registry.envScopeId", "must be explicit null for the Local environment")
+	if len(registry.EnvScopeID) > 0 && string(registry.EnvScopeID) != "null" {
+		v.add(rel, scenario, "desktop_registry.envScopeId", "must be absent or null for the project-local environment")
 		ok = false
 	}
 	return registry, ok
@@ -342,7 +370,7 @@ func (v *validation) readIrrlichtSession(rel, scenario, path string) (irrlichtSe
 }
 
 func (v *validation) validateHooks(rel, scenario, path, sessionID string) bool {
-	matched, consistent, err := scanHookSessions(path, sessionID)
+	matched, consistent, named, err := scanHookSessions(path, sessionID)
 	if err != nil {
 		v.add(rel, scenario, "hooks", err.Error())
 		return false
@@ -353,36 +381,44 @@ func (v *validation) validateHooks(rel, scenario, path, sessionID string) bool {
 	if !consistent {
 		v.add(rel, scenario, "hooks.session_id", "contains a hook from another session")
 	}
-	return matched && consistent
+	if !named {
+		v.add(rel, scenario, "hooks.hook_event_name", "must be nonblank on every raw hook")
+	}
+	return matched && consistent && named
 }
 
-func scanHookSessions(path, sessionID string) (bool, bool, error) {
+func scanHookSessions(path, sessionID string) (bool, bool, bool, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return false, false, err
+		return false, false, false, err
 	}
 	defer f.Close()
 	decoder := json.NewDecoder(f)
 	matched := false
 	consistent := true
+	named := true
 	for {
 		var row struct {
-			SessionID string `json:"session_id"`
+			SessionID     string `json:"session_id"`
+			HookEventName string `json:"hook_event_name"`
 		}
 		err := decoder.Decode(&row)
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			return false, false, fmt.Errorf("invalid JSONL: %w", err)
+			return false, false, false, fmt.Errorf("invalid JSONL: %w", err)
 		}
 		if sessionID != "" && row.SessionID == sessionID {
 			matched = true
 		} else {
 			consistent = false
 		}
+		if strings.TrimSpace(row.HookEventName) == "" {
+			named = false
+		}
 	}
-	return matched, consistent, nil
+	return matched, consistent, named, nil
 }
 
 func (v *validation) readProcess(rel, scenario, path string) (processEvidence, bool) {

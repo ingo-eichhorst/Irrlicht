@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"irrlicht/tools/onboarding-factory/internal/matrix"
 )
 
 const (
@@ -16,25 +18,18 @@ const (
 	// SchemaVersion is the only accepted result artifact version.
 	SchemaVersion = 1
 
-	DesktopRegistryFile = "desktop-registry.json"
-	EnvironmentFile     = "desktop-environment.json"
-	HooksFile           = "hooks.jsonl"
-	ProcessFile         = "process.json"
-	IrrlichtSessionFile = "irrlicht-session.json"
-	TranscriptFile      = "transcript.jsonl"
+	DesktopRegistryFile = matrix.DesktopRegistryFile
+	EnvironmentFile     = matrix.DesktopEnvironmentFile
+	HooksFile           = matrix.DesktopHooksFile
+	ProcessFile         = matrix.DesktopProcessFile
+	IrrlichtSessionFile = matrix.DesktopIrrlichtSessionFile
+	TranscriptFile      = matrix.DesktopTranscriptFile
 )
 
 // RequiredRecordingFiles returns the raw evidence files every Desktop Local
 // recording must preserve, in stable order.
 func RequiredRecordingFiles() []string {
-	return []string{
-		DesktopRegistryFile,
-		EnvironmentFile,
-		HooksFile,
-		ProcessFile,
-		IrrlichtSessionFile,
-		TranscriptFile,
-	}
+	return matrix.DesktopEvidenceFiles()
 }
 
 type Outcome string
