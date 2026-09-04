@@ -169,8 +169,8 @@ extension SessionManager {
         let sessionID: String?
         let history: [String: String]?
         let granularitySec: Int?
-        let buckets: [String: Int8]?
-        let priority: Int8?
+        let buckets: [String: UInt8]?
+        let priority: UInt8?
         // Tick generations: keyed by granularity for snapshots, by session_id
         // for ticks (parallel to `buckets`). Optional so older daemons still
         // decode.
@@ -254,15 +254,15 @@ extension SessionManager {
                         SessionLauncher.jump(session)
                     }
                 }
-            case "history_snapshot":
+            case "history_snapshot_v2":
                 if let sid = envelope.sessionID, let hist = envelope.history {
                     applyHistorySnapshot(sessionID: sid, history: hist, generations: envelope.generations)
                 }
-            case "history_tick":
+            case "history_tick_v2":
                 if let gran = envelope.granularitySec, let bks = envelope.buckets {
                     applyHistoryTick(granularitySec: gran, buckets: bks, bucketGenerations: envelope.bucketGenerations)
                 }
-            case "history_upgrade":
+            case "history_upgrade_v2":
                 if let sid = envelope.sessionID, let prio = envelope.priority {
                     applyHistoryUpgrade(sessionID: sid, priority: prio)
                 }

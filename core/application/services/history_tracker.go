@@ -19,22 +19,43 @@ const (
 	// session. At 1s granularity this is 60 s; at 60s it is 1 h.
 	HistoryBucketCount = 60
 
+	// The priority ladder, low to high. A wire code IS its priority here, which
+	// keeps encodePriorities free of a translation table.
+	//
+	// It does NOT follow that the ladder is self-consistent across the wire.
+	// Neither client merges over raw codes: both decode to a state NAME and then
+	// re-derive a priority from their own table (historyPriorityForState, in
+	// SessionManager+History.swift and irrlicht.js). So this order is held by
+	// three hand-written tables plus one assertion per platform, not by
+	// construction — HistoryWireFormatTests' upgrade-merge tests and
+	// irrlicht.history.test.js are where the agreement is actually checked.
+	//
+	// `error` sits on top (#1805): one error in a bucket paints the whole
+	// bucket red. That matches the macOS sort order, where .error already ranks
+	// first as "the only state that needs you now" (SessionState.swift).
 	statePriorityReady   = 0
 	statePriorityWorking = 1
 	statePriorityWaiting = 2
-	// statePriorityNoData encodes empty/unfilled buckets on the wire. Stored
-	// in-memory as int8(bucketNoData); only surfaces when bit-packing for
-	// transport.
-	statePriorityNoData = 3
+	statePriorityError   = 3
 
 	// bucketNoData is the IN-MEMORY sentinel for a bucket with no renderable
 	// state — an unfilled slot, or a state this build cannot encode (see
-	// statePriority). Deliberately negative rather than reusing the wire code
-	// 3: a negative value loses every max-merge in upgrade(), so an
-	// unencodable transition can never overwrite activity the bucket already
-	// observed, whereas 3 would outrank waiting and blank it.
+	// statePriority). Deliberately negative rather than reusing wireCodeNoData:
+	// a negative value loses every max-merge in upgrade(), so an unencodable
+	// transition can never overwrite activity the bucket already observed.
 	bucketNoData = -1
 )
+
+// wireCodeNoData encodes empty/unfilled buckets on the wire. Stored in-memory
+// as int8(bucketNoData); it only surfaces when encoding for transport.
+//
+// 255, not 4, and the gap is the point (#1805). The old 2-bit format spent its
+// last code (3) on no-data, which put "absent" INSIDE the ladder and is why
+// bucketNoData had to exist as a separate negative sentinel — otherwise no-data
+// outranked waiting and blanked it. Parking absent at the top of the byte
+// leaves 4..254 free for a fifth state to extend the ladder in order, without
+// that trap reappearing.
+const wireCodeNoData uint8 = 255
 
 var validGranularities = []int{1, 10, 60}
 
@@ -47,67 +68,31 @@ func validGranularity(sec int) bool {
 	return false
 }
 
-// statePriority maps a lifecycle state onto the 2-bit code the history bar
-// transports. Anything without a code becomes bucketNoData — a blank slot on
+// statePriority maps a lifecycle state onto the wire code the history bar
+// transports. It returns int8 because a priority IS one — the ring stores int8,
+// wireCode takes int8, and returning `int` only forced a narrowing conversion at
+// every call site (each one a gosec G115 that had to be read and dismissed). Anything without a code becomes bucketNoData — a blank slot on
 // both clients, never green (#1807).
 //
-// The cases below are the ENCODABLE set, which is deliberately NOT
-// session.CanonicalStates(): they differ by exactly session.StateError, which
-// is canonical (#1798) yet has no code, because all four slots of the 2-bit
-// field are spent (ready/working/waiting/no-data). Widening the field is a
-// wire-format change across Go, Swift and JS and belongs to #1805; this
-// function must therefore not be rewritten as a session.IsCanonicalState
-// check, which would classify `error` as encodable and hand a 5th value to
-// packPriorities' 2-bit mask. A canonical state added later lands on
-// bucketNoData too, which is the safe direction: blank, not a wrong colour.
+// The encodable set is now exactly session.CanonicalStates(). #1805 widened the
+// field from 2 bits to a whole byte, so `error` — canonical since #1798 —
+// finally has a code of its own, and the interim behaviour #1807 documented
+// (an errored bucket blanks, because every 2-bit code was spent) is over.
 //
-// #1807 — THE DECISION, AND ITS WIRE CONSEQUENCE.
+// It stays an explicit switch rather than a session.IsCanonicalState check, and
+// the reason changed: it is no longer that `error` must be excluded, but that
+// each state needs a DISTINCT ORDERED rung, and CanonicalStates() is a set, not
+// a ladder. A canonical state added later still lands on bucketNoData until
+// someone gives it a rung here — the safe direction: blank, not a wrong colour.
 //
-// Before this, the default arm returned statePriorityReady, so `error` and any
-// name written by a newer daemon both painted GREEN, and save() then rewrote
-// history.json with the coerced value — the same destroy-the-user's-data shape
-// #1797/#1806 removed from the session-file reader, one file over.
-//
-// The choice made here is PRESERVE, not downgrade: an unencodable bucket keeps
-// its verbatim state string in ringBuffer.unencodable, so snapshot() — and
-// therefore save() — writes back exactly what was read. Only the RENDERED
-// value degrades. Consequences, stated because they are the part a reader
-// needs and #1815 exists for the case that was neither handled nor mentioned:
-//
-//   - The wire format is UNCHANGED: still 60 buckets × 2 bits = 15 bytes = 20
-//     base64 chars, still four codes. No client decoder moves, and neither
-//     does the length assertion in SessionManager+History.swift, irrlicht.js
-//     or decodeHistoryString. An unencodable bucket ships as
-//     statePriorityNoData, which Swift's historyPriorityToState and the web's
-//     HISTORY_PRIORITY_TO_STATE already map to "" and both render as a blank
-//     slot rather than a colour.
-//   - history.json can therefore now contain a state string this build cannot
-//     render. That is intentional — it is what makes a downgrade
-//     non-destructive, and #1805 will be able to display those buckets once
-//     the encoding widens. A build OLDER than this fix reads such a bucket as
-//     ready/green, exactly as it already did with the value it wrote itself,
-//     so nothing regresses for it.
-//   - Aggregation is unaffected — the activity already recorded in the open
-//     bucket survives, which is #1805's documented interim behaviour ("the
-//     strip shows what the session was doing, not that it errored"). See
-//     upgrade()'s merge comment for the mechanism. Making an unencodable state
-//     WIN that merge instead would need the clients to accept a downgrade,
-//     which their priority-based merge cannot express — i.e. a client change,
-//     which is precisely what this fix is scoped to avoid.
-//   - WHAT A USER SEES, stated because it is a real change and the only
-//     alternatives are lies: that carry-forward protection covers the single
-//     open bucket, not the strip. tick() seals each new bucket from lastState,
-//     so a session that STAYS unencodable blanks its whole strip within one
-//     ring (60 buckets: 60 s at 1 s, 1 h at 60 s) and both clients then render
-//     an empty track, having trimmed the leading no-data slots away. Since
-//     #1812/#1813 put real sessions into `error`, that is the common case, not
-//     a corner. It is still the right trade: the 2-bit field's only other
-//     codes are ready/working/waiting, so anything but no-data would paint a
-//     colour the session is not in — which is the bug being fixed. The row's
-//     state icon beside the strip is red throughout, so the user is not
-//     misled, and #1805 is what makes the strip itself say `error`.
-func statePriority(s string) int {
+// The preserve-don't-downgrade machinery #1807 built around this function stays
+// (see ringBuffer.unencodable). `error` no longer needs it, but a state written
+// by a NEWER daemon and read back by this build still does, and that is what
+// keeps a downgrade from destroying the user's history.
+func statePriority(s string) int8 {
 	switch s {
+	case session.StateError:
+		return statePriorityError
 	case session.StateWaiting:
 		return statePriorityWaiting
 	case session.StateWorking:
@@ -119,27 +104,37 @@ func statePriority(s string) int {
 	}
 }
 
-// wireCode maps an in-memory bucket priority onto the 2-bit code clients
-// decode, so nothing outside this file ever sees the negative sentinel.
+// wireCode maps an in-memory bucket priority onto the code clients decode, so
+// nothing outside this file ever sees the negative sentinel.
+//
+// The SIGNATURE is the invariant (#1805): a signed in-memory priority in, an
+// UNSIGNED wire code out, so "no negative reaches the wire" is enforced by the
+// compiler. Before this both sides were int8, and neither the hub nor
+// json.Marshal would have objected to a -1 going out — only
+// TestHistoryTracker_NoNegativePriorityReachesTheWire stood in the way. That
+// test still runs, now as a check on the whole path rather than the sole guard.
 //
 // A sign test rather than `== bucketNoData` on purpose: the wire contract is
-// "0..3 and nothing else", so any negative belongs on the no-data code,
-// including one a later sentinel might add. That is the whole invariant —
-// TestHistoryTracker_NoNegativePriorityReachesTheWire pins it end to end,
-// because PushMessage.Buckets/.Priority are plain int8 and neither the hub nor
-// json.Marshal would object to a -1 going out.
-func wireCode(p int8) int8 {
+// "a ladder rung or wireCodeNoData, and nothing else", so any negative belongs
+// on the no-data code, including one a later sentinel might add.
+//
+// Worth stating because it defeats the obvious mutation test: wireCodeNoData
+// (255) is exactly uint8(int8(-1)), so DELETING this branch changes nothing for
+// the only negative that exists today, and every suite stays green. The branch
+// is real for any OTHER negative — uint8(-2) is 254, not 255 — which is what
+// TestHistoryTracker_WireCodeMapsEveryNegativeToNoData exercises.
+func wireCode(p int8) uint8 {
 	if p < 0 {
-		return statePriorityNoData
+		return wireCodeNoData
 	}
-	return p
+	return uint8(p)
 }
 
 // ringBuffer is a fixed-size circular buffer of state strings.
 type ringBuffer struct {
 	buckets [HistoryBucketCount]int8
 	// unencodable holds the verbatim state string for those buckets whose
-	// priority is bucketNoData BECAUSE the state has no 2-bit code — keyed by
+	// priority is bucketNoData BECAUSE the state has no wire code — keyed by
 	// bucket index, nil until one appears (#1807). It is what lets save()
 	// write back a value this build cannot render instead of erasing it.
 	// Genuinely empty slots are absent from the map, not stored as "".
@@ -160,11 +155,11 @@ func newRingBuffer(granularitySec int) *ringBuffer {
 }
 
 // setBucket writes bucket i from a state string, keeping the verbatim value
-// when the state has no 2-bit code. Every write to buckets[] goes through here
+// when the state has no wire code. Every write to buckets[] goes through here
 // so buckets and unencodable cannot drift apart.
 func (rb *ringBuffer) setBucket(i int, state string) {
 	p := statePriority(state)
-	rb.buckets[i] = int8(p)
+	rb.buckets[i] = p
 	if p == bucketNoData && state != "" {
 		if rb.unencodable == nil {
 			rb.unencodable = make(map[int]string, 1)
@@ -190,7 +185,7 @@ func (rb *ringBuffer) current() int {
 }
 
 func (rb *ringBuffer) upgrade(newState string) {
-	p := int8(statePriority(newState))
+	p := statePriority(newState)
 	if rb.size == 0 {
 		rb.setBucket(rb.head, newState)
 		rb.head = (rb.head + 1) % HistoryBucketCount
@@ -216,7 +211,7 @@ func (rb *ringBuffer) upgrade(newState string) {
 // tick advances the ring by one granularity-second when its accumulator
 // reaches the threshold. Returns (rolled, priority) so callers can build
 // per-granularity Tick events without re-reading the ring.
-func (rb *ringBuffer) tick() (bool, int8) {
+func (rb *ringBuffer) tick() (bool, uint8) {
 	rb.tickAcc++
 	if rb.tickAcc < rb.tickMod {
 		return false, 0
@@ -261,14 +256,25 @@ func (rb *ringBuffer) snapshot() []string {
 	return out
 }
 
-// encodePriorities returns the buffer's 60 buckets oldest→newest as a slice of
-// 2-bit priority codes (0/1/2 = ready/working/waiting, 3 = no-data). Unfilled
-// slots in a partially-filled ring pad the front so the newest bucket is always
-// at index 59.
+// encodePriorities returns the buffer's 60 buckets oldest→newest as one wire
+// code per bucket (0/1/2/3 = ready/working/waiting/error, wireCodeNoData =
+// no-data). Unfilled slots in a partially-filled ring pad the front so the
+// newest bucket is always at index 59.
+//
+// The result is already the wire payload — one byte per bucket since #1805 —
+// so Encode base64s it directly and no packing step stands between the two.
+// One granularity is therefore HistoryBucketCount bytes, which base64-std
+// encodes to 80 chars with no padding (60 % 3 == 0).
+//
+// The 2-bit packing this replaced only ever paid off here: a tick sends one raw
+// code per session and was never packed, and a snapshot goes out on connect and
+// session-create only. So a packer plus two hand-written client decoders existed
+// to save 45 bytes on a rare message, and each decoder was a place the three
+// independent implementations could drift apart.
 func (rb *ringBuffer) encodePriorities() [HistoryBucketCount]uint8 {
 	var out [HistoryBucketCount]uint8
 	for i := range out {
-		out[i] = statePriorityNoData
+		out[i] = wireCodeNoData
 	}
 	if rb.size == 0 {
 		return out
@@ -276,7 +282,7 @@ func (rb *ringBuffer) encodePriorities() [HistoryBucketCount]uint8 {
 	start := (rb.head - rb.size + HistoryBucketCount) % HistoryBucketCount
 	dst := HistoryBucketCount - rb.size
 	for i := 0; i < rb.size; i++ {
-		out[dst+i] = uint8(wireCode(rb.buckets[(start+i)%HistoryBucketCount]))
+		out[dst+i] = wireCode(rb.buckets[(start+i)%HistoryBucketCount])
 	}
 	return out
 }
@@ -303,11 +309,11 @@ func (rb *ringBuffer) restore(states []string) {
 }
 
 // priorityToState is snapshot()'s half of the pair: it names the state a
-// bucket's 2-bit code stands for, and is used only to build the []string that
+// bucket's wire code stands for, and is used only to build the []string that
 // save() persists and Snapshot() returns — never to decode the wire, which the
 // Swift and JS clients do themselves.
 //
-// Everything that is not one of the three encodable codes — an unfilled slot,
+// Everything that is not one of the four encodable codes — an unfilled slot,
 // or a bucket whose unencodable string has already been consumed by snapshot()
 // — yields "" (no data). It must NOT fall back to session.StateReady: that is
 // the mirror half of #1807's bug, where a blank bucket was persisted as `ready`
@@ -315,6 +321,8 @@ func (rb *ringBuffer) restore(states []string) {
 // client decoders already use.
 func priorityToState(p int8) string {
 	switch p {
+	case statePriorityError:
+		return session.StateError
 	case statePriorityWaiting:
 		return session.StateWaiting
 	case statePriorityWorking:
@@ -362,7 +370,7 @@ func granularityIndex(sec int) int {
 type HistoryEventKind int
 
 const (
-	// HistoryEventSnapshot carries the bit-packed history for one session.
+	// HistoryEventSnapshot carries the encoded history for one session.
 	// Emitted on demand when a session is created or a client connects.
 	HistoryEventSnapshot HistoryEventKind = iota
 	// HistoryEventTick is a bulk per-granularity message: one map entry per
@@ -384,10 +392,10 @@ type HistoryEvent struct {
 	Generations map[string]uint64 // granularity → tick generation that produced History
 	// Tick
 	GranularitySec    int
-	Buckets           map[string]int8   // sessionID → priority of the bucket that just rolled
+	Buckets           map[string]uint8  // sessionID → wire code of the bucket that just rolled
 	BucketGenerations map[string]uint64 // sessionID → tick generation after this roll
 	// Upgrade
-	Priority int8
+	Priority uint8
 }
 
 // HistoryTracker maintains per-session rolling state buffers in memory.
@@ -426,7 +434,7 @@ func (h *HistoryTracker) SetEmitFunc(fn func(HistoryEvent)) {
 	h.mu.Unlock()
 }
 
-// EmitSnapshot ships the current bit-packed history for one session through
+// EmitSnapshot ships the current encoded history for one session through
 // the emit callback. Lazy-creates an empty session entry on first call so a
 // brand-new session yields an all-no-data snapshot instead of being silently
 // skipped — call alongside session_created broadcasts so newly-attached
@@ -474,45 +482,36 @@ func (h *HistoryTracker) OnTransition(sessionID, newState string, _ time.Time) {
 	// only ever be discarded — and the ring above kept whatever it held, for
 	// the same reason (see upgrade()). Sending nothing keeps client and server
 	// in step without putting a value on the wire that means "downgrade this
-	// bucket", which the 2-bit contract has no way to say (#1807).
+	// bucket", which the wire contract has no way to say (#1807).
+	//
+	// The guard is a SIGN test and the conversion goes through wireCode, so this
+	// site obeys the same contract as tick(). It previously compared against
+	// bucketNoData by equality and converted with a bare uint8(), which made it
+	// the one emit path wireCode's "no negative reaches the wire" promise did not
+	// actually cover: a SECOND negative sentinel — the case wireCode's own
+	// comment anticipates — would have wrapped to 254 and shipped as a code that
+	// is neither a ladder rung nor no-data. Unreachable today; free to close.
 	p := statePriority(newState)
-	if emit != nil && p != bucketNoData {
+	if emit != nil && p >= 0 {
 		emit(HistoryEvent{
 			Kind:      HistoryEventUpgrade,
 			SessionID: sessionID,
-			Priority:  int8(p),
+			Priority:  wireCode(p),
 		})
 	}
 }
 
-// historyEncodedBytes is the byte length of one bit-packed granularity:
-// 60 buckets × 2 bits = 120 bits = 15 bytes. Base64-std encodes this to 20
-// chars (no padding since 15 % 3 == 0).
-const historyEncodedBytes = (HistoryBucketCount*2 + 7) / 8
-
-// packPriorities bit-packs 60 2-bit priority codes into 15 bytes, MSB-first
-// within each byte (oldest bucket in the high-order bits of byte 0).
-func packPriorities(priorities [HistoryBucketCount]uint8) [historyEncodedBytes]byte {
-	var out [historyEncodedBytes]byte
-	for i, p := range priorities {
-		byteIdx := i / 4
-		shift := uint((3 - i%4) * 2)
-		out[byteIdx] |= (p & 0x3) << shift
-	}
-	return out
-}
-
-// EncodedHistory is one session's bit-packed history together with the
+// EncodedHistory is one session's encoded history together with the
 // per-granularity tick generations that produced it. Both are read under the
 // session's lock so a client receiving a snapshot+tick pair can dedupe by
 // generation: see SessionManager.swift / index.html for the apply-or-skip
 // logic.
 type EncodedHistory struct {
-	History     map[string]string // granularity ("1"/"10"/"60") → 20-char base64
+	History     map[string]string // granularity ("1"/"10"/"60") → 80-char base64
 	Generations map[string]uint64 // same keys as History
 }
 
-// Encode bit-packs the session's three rolling buffers and captures the
+// Encode encodes the session's three rolling buffers and captures the
 // matching tick generations atomically under the session lock. Returns false
 // if the session is unknown.
 func (h *HistoryTracker) Encode(sessionID string) (EncodedHistory, bool) {
@@ -530,15 +529,15 @@ func (h *HistoryTracker) Encode(sessionID string) (EncodedHistory, bool) {
 	}
 	for _, g := range validGranularities {
 		gi := granularityIndex(g)
-		bytes := packPriorities(sb.bufs[gi].encodePriorities())
+		codes := sb.bufs[gi].encodePriorities()
 		key := strconv.Itoa(g)
-		out.History[key] = base64.StdEncoding.EncodeToString(bytes[:])
+		out.History[key] = base64.StdEncoding.EncodeToString(codes[:])
 		out.Generations[key] = sb.tickGen[gi]
 	}
 	return out, true
 }
 
-// EncodeAll returns the bit-packed history for every known session.
+// EncodeAll returns the encoded history for every known session.
 func (h *HistoryTracker) EncodeAll() map[string]EncodedHistory {
 	h.mu.Lock()
 	sids := make([]string, 0, len(h.sessions))
@@ -615,7 +614,7 @@ func (h *HistoryTracker) tick() {
 	// same critical section that mutates the ring, so a concurrent Encode
 	// either observes pre-tick (gen=N-1, pre-mutated buckets) or post-tick
 	// (gen=N, post-mutated buckets) — never a mismatched pair.
-	var rolled [3]map[string]int8
+	var rolled [3]map[string]uint8
 	var rolledGens [3]map[string]uint64
 	for _, e := range entries {
 		e.sb.mu.Lock()
@@ -626,7 +625,7 @@ func (h *HistoryTracker) tick() {
 			}
 			e.sb.tickGen[gi]++
 			if rolled[gi] == nil {
-				rolled[gi] = make(map[string]int8)
+				rolled[gi] = make(map[string]uint8)
 				rolledGens[gi] = make(map[string]uint64)
 			}
 			rolled[gi][e.sid] = p

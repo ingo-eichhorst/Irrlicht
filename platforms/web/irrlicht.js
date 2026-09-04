@@ -245,14 +245,15 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       render();
     }
 
-    // --- Timeline / history state (WebSocket-streamed, see history_snapshot/tick/upgrade) ---
+    // --- Timeline / history state (WebSocket-streamed, see HISTORY_MSG below) ---
     let timelineHistory = new Map(); // session_id -> {label, states: string[]} for the active granularity
     // Derived from the display-mode cycle (`currentMode().granularity`); see
     // applyDisplayMode → applyGranularity below.
     let currentGranularity = 1;
     let currentBucketCount = 60;
     // historyByGranularity[g][sessionID] is a 60-element oldest→newest array of state names
-    // (or "" for no-data buckets). Mirrored from the daemon's bit-packed wire format.
+    // (or "" for no-data buckets). Mirrored from the daemon's wire format: one
+    // byte per bucket since #1805.
     // Inner dicts are null-prototype so server-supplied keys can never reach Object.prototype.
     const historyByGranularity = {1: Object.create(null), 10: Object.create(null), 60: Object.create(null)};
     // lastTickGen[sessionID][granularity] = highest applied tick generation. Lets us drop
@@ -272,28 +273,48 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       return key === '__proto__' || key === 'constructor' || key === 'prototype';
     }
 
-    const HISTORY_PRIORITY_TO_STATE = ['ready', 'working', 'waiting', ''];
+    // The three history message types, named ONCE (#1805). They are matched in
+    // two places — dispatchRawFrame, and normalizeSourcedFrame's relay id-folding
+    // — and the rename that gave them their `_v2` suffix updated only the first,
+    // silently killing history strips for every relay-connected session. Literals
+    // in two places is what allowed that; a shared constant is what prevents the
+    // next rename from repeating it.
+    const HISTORY_MSG = {
+      snapshot: 'history_snapshot_v2',
+      tick:     'history_tick_v2',
+      upgrade:  'history_upgrade_v2',
+    };
+
+    // The wire ladder, low to high (#1805). Index IS the code, so this array
+    // doubles as the priority order the upgrade merge compares against.
+    const HISTORY_CODE_TO_STATE = ['ready', 'working', 'waiting', 'error'];
+
+    // Any code off the ladder — the daemon's 255 no-data sentinel, or a state a
+    // newer daemon knows and this build does not — becomes '' and paints
+    // nothing. NEVER mask the code into range: `code & 0x3` is what used to
+    // fold an unknown value onto `ready` and paint a finished session green
+    // (#1807), and after #1805 it would also alias an older daemon's no-data
+    // (3) onto `error` and invent a failure that never happened.
+    function historyStateForCode(code) {
+      return HISTORY_CODE_TO_STATE[code] ?? '';
+    }
+    // The array's inverse, derived rather than retyped: indexOf yields the same
+    // 0/1/2/3 and the same -1 for '' or an unrecognised name, so a fifth state
+    // is one array edit instead of two tables to keep in step.
     function historyPriorityForState(s) {
-      switch (s) {
-        case 'waiting': return 2;
-        case 'working': return 1;
-        case 'ready':   return 0;
-        default:        return -1;
-      }
+      return HISTORY_CODE_TO_STATE.indexOf(s);
     }
     function decodeHistoryBuckets(b64) {
-      // Daemon ships 60 buckets × 2 bits MSB-first = 15 bytes = 20 base64 chars.
+      // Daemon ships 60 buckets, one byte each = 60 bytes = 80 base64 chars.
       let raw;
       try { raw = atob(b64); } catch (e) { console.debug('irrlicht: failed to decode history buckets', e); return null; }
-      if (raw.length !== 15) return null;
+      // HARD length check. A wrong size is exactly how an older daemon's
+      // 15-byte packing arrives here; dropping the whole message leaves the
+      // strip blank, whereas a partial decode would invent buckets. Never
+      // relax this into a prefix read.
+      if (raw.length !== 60) return null;
       const out = new Array(60);
-      for (let i = 0; i < 15; i++) {
-        const byte = raw.codePointAt(i);
-        out[i * 4 + 0] = HISTORY_PRIORITY_TO_STATE[(byte >> 6) & 0x3];
-        out[i * 4 + 1] = HISTORY_PRIORITY_TO_STATE[(byte >> 4) & 0x3];
-        out[i * 4 + 2] = HISTORY_PRIORITY_TO_STATE[(byte >> 2) & 0x3];
-        out[i * 4 + 3] = HISTORY_PRIORITY_TO_STATE[byte & 0x3];
-      }
+      for (let i = 0; i < 60; i++) out[i] = historyStateForCode(raw.codePointAt(i));
       return out;
     }
 
@@ -362,7 +383,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       let arr = dict[sid];
       if (!arr) arr = new Array(60).fill('');
       arr.shift();
-      arr.push(HISTORY_PRIORITY_TO_STATE[buckets[sid] & 0x3]);
+      arr.push(historyStateForCode(buckets[sid]));
       while (arr.length < 60) arr.unshift('');
       dict[sid] = arr;
       return true;
@@ -380,7 +401,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
 
     function applyHistoryUpgrade(sessionID, priority) {
       if (isDangerousKey(sessionID)) return;
-      const newState = HISTORY_PRIORITY_TO_STATE[priority & 0x3];
+      const newState = historyStateForCode(priority);
       const newPrio = historyPriorityForState(newState);
       let changedActive = false;
       for (const gran of [1, 10, 60]) {
@@ -1610,29 +1631,24 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     // paint via paintRowHistory(). State→color is local so we don't depend on
     // CSS vars at canvas-paint time.
     //
-    // NO `error` ENTRY, AND THAT IS DELIBERATE (#1801) — this is the one place
-    // the fourth state deliberately stops, so it is written down here rather
-    // than left to be discovered as a bug.
+    // All four lifecycle states paint here since #1805 widened the wire format
+    // to one byte per bucket. Before that the strip could not carry `error` at
+    // all — every 2-bit code was spent — so an errored session blanked its whole
+    // strip within one ring while the row icon beside it was red.
     //
-    // The strip's wire format is 2 bits per bucket and all four codes are
-    // taken: HISTORY_PRIORITY_TO_STATE above maps 0=ready, 1=working,
-    // 2=waiting, 3=no-data. There is no fifth value to spend, so `error` cannot
-    // be carried without widening the daemon's packing — deferred to #1805,
-    // which owns the strip's encoding.
+    // `error` is #FF3B30, the same value as --error in irrlicht.css and
+    // IrrHex.error in the macOS theme, so the three surfaces agree.
     //
-    // What that costs today, stated plainly: #1807 stopped the daemon coercing
-    // `error` to the ready priority, so an errored bucket no longer paints
-    // GREEN — it decodes to 3 (no-data) and falls through the `if (!color)
-    // continue` guard in paintRowHistory, painting nothing. A session that
-    // STAYS errored therefore blanks its whole strip within one ring while the
-    // row's state icon beside it is red. That is the honest reading of a field
-    // with no code to spare, not the end state: adding a key to this map still
-    // does nothing, because no bucket can decode to 'error' until #1805 widens
-    // the packing.
+    // Hardcoded rather than read from CSS vars, deliberately: paintRowHistory
+    // runs at canvas-paint time and must not depend on computed styles. A state
+    // missing from this map falls through the `if (!color) continue` guard and
+    // paints nothing, which is the right failure for a code this build cannot
+    // name.
     const HISTORY_BAR_COLORS = {
       working: '#8B5CF6',
       waiting: '#FF9500',
       ready:   '#34C759',
+      error:   '#FF3B30',
     };
 
     function paintRowHistory(canvas, sessionID) {
@@ -2148,17 +2164,23 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       if (inner.session) {
         if (inner.session.session_id) inner.session.session_id = compoundSessionId(source, inner.session.session_id);
         if (inner.session.parent_session_id) inner.session.parent_session_id = compoundSessionId(source, inner.session.parent_session_id);
-      } else if (inner.type === 'history_snapshot' || inner.type === 'history_upgrade') {
+      } else {
+        // Folded by SHAPE, not by type name. The #1805 rename updated
+        // dispatchRawFrame's list of history types and missed this one, which
+        // silently un-folded every relayed history frame; matching on the
+        // fields that need folding cannot go stale that way. session_id,
+        // buckets and bucket_generations are history-only fields on
+        // outbound.PushMessage (ports.go), and the `inner.session` branch above
+        // already claimed every session-carrying frame.
         if (inner.session_id) inner.session_id = compoundSessionId(source, inner.session_id);
-      } else if (inner.type === 'history_tick') {
-        inner.buckets = remapSourcedKeys(source, inner.buckets);
-        inner.bucket_generations = remapSourcedKeys(source, inner.bucket_generations);
+        if (inner.buckets) inner.buckets = remapSourcedKeys(source, inner.buckets);
+        if (inner.bucket_generations) inner.bucket_generations = remapSourcedKeys(source, inner.bucket_generations);
       }
       return inner;
     }
 
     // remapSourcedKeys returns a fresh object with each session_id key folded
-    // with the daemon source. history_tick keys its bucket maps by session_id.
+    // with the daemon source. A history tick keys its bucket maps by session_id.
     function remapSourcedKeys(source, obj) {
       if (!obj || typeof obj !== 'object') return obj;
       const out = {};
@@ -2178,17 +2200,17 @@ import { reconcile, paintRowNum } from './domReconcile.js';
         refreshPermissions();
         return;
       }
-      if (msg.type === 'history_snapshot' && msg.session_id && msg.history) {
+      if (msg.type === HISTORY_MSG.snapshot && msg.session_id && msg.history) {
         applyHistorySnapshot(msg.session_id, msg.history, msg.generations);
         repaintHistory();
         return;
       }
-      if (msg.type === 'history_tick' && typeof msg.granularity_sec === 'number' && msg.buckets) {
+      if (msg.type === HISTORY_MSG.tick && typeof msg.granularity_sec === 'number' && msg.buckets) {
         applyHistoryTick(msg.granularity_sec, msg.buckets, msg.bucket_generations);
         if (msg.granularity_sec === currentGranularity) repaintHistory();
         return;
       }
-      if (msg.type === 'history_upgrade' && msg.session_id && typeof msg.priority === 'number') {
+      if (msg.type === HISTORY_MSG.upgrade && msg.session_id && typeof msg.priority === 'number') {
         applyHistoryUpgrade(msg.session_id, msg.priority);
         repaintHistory();
         return;
@@ -2439,6 +2461,19 @@ export {
   // the branch left 247/247 green.
   rehydratePoll,
   formatCost, costCellDisplay, pressureClass, historyPriorityForState,
+  // #1805: the history strip's decode path had NO test coverage at all — not
+  // the decoder, not the code table, not the dispatch that guards it — while
+  // hardcoding the byte width, the bucket count and a `& 0x3` mask in three
+  // places. A wire-format change would have passed CI green and rendered
+  // garbage. These four are exported so that path can be driven end to end:
+  // dispatchRawFrame is the one that matters, because ignoring an unknown
+  // message type is the whole compatibility mechanism, and historyByGranularity
+  // is how a test reads back what a frame actually did.
+  decodeHistoryBuckets, historyStateForCode, dispatchRawFrame, historyByGranularity,
+  HISTORY_BAR_COLORS,
+  // normalizeSourcedFrame had NO test, which is exactly why the #1805 rename
+  // broke relay history strips without a single gate going red.
+  normalizeSourcedFrame, HISTORY_MSG,
   taskEtaPresentation,
   lastNotifiedPressure,
   relayFrameKind, aggregateConnState, relayWsUrl, seqGap,

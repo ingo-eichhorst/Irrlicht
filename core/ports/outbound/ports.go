@@ -32,13 +32,13 @@ type PushMessage struct {
 
 	// History-message fields. SessionID identifies the target row for
 	// snapshot/upgrade messages; tick messages use the per-session entries
-	// in Buckets instead. History maps granularity ("1"/"10"/"60") → 20-char
-	// base64 of 60 bit-packed buckets.
+	// in Buckets instead. History maps granularity ("1"/"10"/"60") → 80-char
+	// base64 of 60 buckets, one byte each (#1805).
 	SessionID      string            `json:"session_id,omitempty"`
 	History        map[string]string `json:"history,omitempty"`
 	GranularitySec int               `json:"granularity_sec,omitempty"`
-	Buckets        map[string]int8   `json:"buckets,omitempty"`
-	Priority       *int8             `json:"priority,omitempty"`
+	Buckets        map[string]uint8  `json:"buckets,omitempty"`
+	Priority       *uint8            `json:"priority,omitempty"`
 
 	// Tick generations let the client dedupe a tick that's already
 	// reflected in its snapshot. Captured under the session lock together
@@ -74,18 +74,39 @@ const (
 	// (iTerm2/Terminal.app via AppleScript). Carries Session + Input.
 	PushTypeInputRequested = "input_requested"
 
-	// PushTypeHistorySnapshot delivers the bit-packed 60-bucket history
+	// The three history types carry a "_v2" suffix, and the suffix is the
+	// entire compatibility mechanism (#1805). It is not decoration: renaming
+	// them is what lets the wire format change at all.
+	//
+	// #1805 widened a bucket from 2 bits to a byte and gave `error` code 3 —
+	// but 3 is what a PRE-#1805 daemon sends for NO-DATA, and it sends it
+	// continuously (tick() maps its negative sentinel through wireCode for
+	// every unfilled bucket). So a new client reading an old daemon would read
+	// "nothing happened" as "the session failed" and paint a red bucket for an
+	// error that never occurred. Moving `error` to 4 instead only swaps which
+	// side breaks: an old web client masked incoming codes with `& 0x3`, so 4
+	// arrived as 0 = ready = GREEN, which is the bug #1807 removed. EVERY code
+	// assignment breaks one direction while the names stay put.
+	//
+	// A rename removes the collision instead of dodging it. Both clients ignore
+	// an unknown message type — the web dashboard through its `msg.type ===`
+	// chain, the macOS app through `default: break` — so an old client and a
+	// new daemon, or a new client and an old daemon, each render a blank strip
+	// and neither invents a colour. The blank self-heals within one ring (60 s
+	// at 1 s granularity, 1 h at 60 s), or immediately on a browser reload.
+	//
+	// PushTypeHistorySnapshot delivers the encoded 60-bucket history
 	// for one session across all three granularities. Sent on WebSocket
 	// connect, on session creation, and after a client reconnects.
-	PushTypeHistorySnapshot = "history_snapshot"
+	PushTypeHistorySnapshot = "history_snapshot_v2"
 	// PushTypeHistoryTick is a bulk per-granularity delta: one entry per
-	// session with the priority of the bucket that just rolled. Emitted
+	// session with the wire code of the bucket that just rolled. Emitted
 	// once per granularity-second by the daemon.
-	PushTypeHistoryTick = "history_tick"
+	PushTypeHistoryTick = "history_tick_v2"
 	// PushTypeHistoryUpgrade fires on a state transition mid-bucket. The
-	// client merges the priority into the current bucket of all three
+	// client merges the code into the current bucket of all three
 	// rings using max-priority aggregation.
-	PushTypeHistoryUpgrade = "history_upgrade"
+	PushTypeHistoryUpgrade = "history_upgrade_v2"
 
 	// PushTypePermissionsUpdated signals that consent state changed
 	// (agent detected, answer applied, or new permission declared). The
@@ -451,7 +472,7 @@ type HistoryTracker interface {
 	OnTransition(sessionID, newState string, ts time.Time)
 	// Remove drops all buffers for a session.
 	Remove(sessionID string)
-	// EmitSnapshot ships the current bit-packed history for one session
+	// EmitSnapshot ships the current encoded history for one session
 	// through the configured emit callback. Used to hydrate newly-created
 	// sessions on the WebSocket without waiting for the next tick.
 	EmitSnapshot(sessionID string)

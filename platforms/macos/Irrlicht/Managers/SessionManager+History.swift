@@ -5,12 +5,17 @@ import Foundation
 // Split out of SessionManager.swift (#807): the wire format for the
 // menu-bar's per-session state-history strip. All three granularities (1s,
 // 10s, 60s) arrive continuously over the WebSocket; this just decodes the
-// compact 2-bit-per-bucket wire encoding and maintains the ring buffers, so
+// one-byte-per-bucket wire encoding and maintains the ring buffers, so
 // `setHistoryGranularity` is a constant-time mirror rather than a re-fetch.
 //
 // State names here are plain `String` (not `SessionState.State`) because the
-// wire format needs a fourth value — `""` for "no data yet" — that isn't a
-// real session state.
+// wire format needs a value — `""` for "no data yet" — that isn't a real
+// session state.
+//
+// #1805 replaced the original 2-bit packing with one byte per bucket, which is
+// what let `error` join ready/working/waiting. Codes are UInt8, not Int8: the
+// no-data sentinel is 255, and the daemon's own encoder returns an unsigned
+// type so a negative can no longer reach the wire at all.
 
 extension SessionManager {
     /// Selects which granularity the history bar renders (1, 10, or 60 s).
@@ -35,19 +40,27 @@ extension SessionManager {
         return Array(buckets[i...])
     }
 
-    /// Maps the wire 2-bit priority code back to its state name.
+    /// Maps a wire code back to its state name.
     /// `""` represents no-data; HistoryBarView treats it as a blank slot.
-    func historyPriorityToState(_ p: Int8) -> String {
+    ///
+    /// Anything off the ladder — the 255 no-data sentinel, or a code from a
+    /// newer daemon — falls to `""` and paints nothing. It must never fall to a
+    /// real state: painting an unknown code as `ready` is the green-error bug
+    /// #1807 removed, and blank is the honest reading of a code this build
+    /// cannot name.
+    func historyPriorityToState(_ p: UInt8) -> String {
         switch p {
         case 0: return "ready"
         case 1: return "working"
         case 2: return "waiting"
+        case 3: return "error"
         default: return ""
         }
     }
 
     func historyPriorityForState(_ s: String) -> Int {
         switch s {
+        case "error":   return 3
         case "waiting": return 2
         case "working": return 1
         case "ready":   return 0
@@ -55,20 +68,17 @@ extension SessionManager {
         }
     }
 
-    /// Decodes a 20-char base64 (15 bytes, MSB-first 2-bit codes) into a
+    /// Decodes an 80-char base64 (60 bytes, one code per bucket) into a
     /// 60-element oldest→newest state-name array. Returns nil on malformed
     /// input so the caller can drop the message rather than corrupt the ring.
+    ///
+    /// The length check stays HARD. A payload of the wrong size is exactly how
+    /// an older daemon's 15-byte packing arrives here, and dropping the whole
+    /// message leaves the strip blank; to decode it partially would invent
+    /// buckets. Never relax this into a prefix read.
     func decodeHistoryBuckets(_ encoded: String) -> [String]? {
-        guard let raw = Data(base64Encoded: encoded), raw.count == 15 else { return nil }
-        var out: [String] = []
-        out.reserveCapacity(60)
-        for byte in raw {
-            for shift in stride(from: 6, through: 0, by: -2) {
-                let code = Int8((byte >> UInt8(shift)) & 0x3)
-                out.append(historyPriorityToState(code))
-            }
-        }
-        return out
+        guard let raw = Data(base64Encoded: encoded), raw.count == 60 else { return nil }
+        return raw.map { historyPriorityToState($0) }
     }
 
     func applyHistorySnapshot(sessionID: String, history: [String: String], generations: [String: UInt64]?) {
@@ -92,7 +102,7 @@ extension SessionManager {
         refreshActiveStateHistory()
     }
 
-    func applyHistoryTick(granularitySec: Int, buckets: [String: Int8], bucketGenerations: [String: UInt64]?) {
+    func applyHistoryTick(granularitySec: Int, buckets: [String: UInt8], bucketGenerations: [String: UInt64]?) {
         guard [1, 10, 60].contains(granularitySec) else { return }
         var dict = historyByGranularity[granularitySec] ?? [:]
         var changedActive = false
@@ -119,7 +129,7 @@ extension SessionManager {
         }
     }
 
-    func applyHistoryUpgrade(sessionID: String, priority: Int8) {
+    func applyHistoryUpgrade(sessionID: String, priority: UInt8) {
         let newState = historyPriorityToState(priority)
         let newPrio = historyPriorityForState(newState)
         var changedActive = false

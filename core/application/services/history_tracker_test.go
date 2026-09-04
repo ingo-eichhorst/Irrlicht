@@ -236,22 +236,20 @@ func TestHistoryTracker_NoSaveWithoutDir(t *testing.T) {
 	ht.save() // must not panic, must not create any file
 }
 
-// decodeHistoryString unpacks a 20-char base64 string back into 60 priority
-// codes. Mirrors the on-the-wire format the Swift client decodes.
+// decodeHistoryString unpacks an 80-char base64 string back into 60 wire
+// codes. Mirrors the on-the-wire format both clients decode — one byte per
+// bucket since #1805.
 func decodeHistoryString(t *testing.T, s string) [HistoryBucketCount]uint8 {
 	t.Helper()
 	raw, err := base64.StdEncoding.DecodeString(s)
 	if err != nil {
 		t.Fatalf("base64 decode: %v", err)
 	}
-	if len(raw) != historyEncodedBytes {
-		t.Fatalf("decoded length = %d, want %d", len(raw), historyEncodedBytes)
+	if len(raw) != HistoryBucketCount {
+		t.Fatalf("decoded length = %d, want %d", len(raw), HistoryBucketCount)
 	}
 	var out [HistoryBucketCount]uint8
-	for i := 0; i < HistoryBucketCount; i++ {
-		shift := uint((3 - i%4) * 2)
-		out[i] = (raw[i/4] >> shift) & 0x3
-	}
+	copy(out[:], raw)
 	return out
 }
 
@@ -277,13 +275,13 @@ func TestHistoryTracker_EncodeEmptyBuffer(t *testing.T) {
 		if !ok {
 			t.Fatalf("missing granularity %s", g)
 		}
-		if len(s) != 20 {
-			t.Errorf("granularity %s: encoded length = %d, want 20", g, len(s))
+		if len(s) != 80 {
+			t.Errorf("granularity %s: encoded length = %d, want 80", g, len(s))
 		}
 		buckets := decodeHistoryString(t, s)
 		for i, p := range buckets {
-			if p != statePriorityNoData {
-				t.Errorf("granularity %s: bucket[%d] = %d, want %d (no-data)", g, i, p, statePriorityNoData)
+			if p != wireCodeNoData {
+				t.Errorf("granularity %s: bucket[%d] = %d, want %d (no-data)", g, i, p, wireCodeNoData)
 			}
 		}
 	}
@@ -308,7 +306,7 @@ func TestHistoryTracker_EncodePartialFillPadsFront(t *testing.T) {
 	// Last 4 buckets: ready, working, waiting, waiting (carry-forward open
 	// bucket inherits "waiting"). Front 56 are padding (no-data).
 	for i := 0; i < HistoryBucketCount-4; i++ {
-		if buckets[i] != statePriorityNoData {
+		if buckets[i] != wireCodeNoData {
 			t.Errorf("front padding[%d] = %d, want no-data", i, buckets[i])
 		}
 	}
@@ -358,43 +356,6 @@ func TestHistoryTracker_EncodeAll(t *testing.T) {
 			if _, ok := enc.History[g]; !ok {
 				t.Errorf("session %q: missing granularity %s", sid, g)
 			}
-		}
-	}
-}
-
-func TestHistoryTracker_EncodeBitOrder(t *testing.T) {
-	// Hand-craft a buffer with 4 sealed buckets {ready, working, waiting, no-data}
-	// so we can assert MSB-first byte layout of the trailing byte that holds them.
-	ht := NewHistoryTracker()
-	sid := "bitorder"
-	ht.sessions[sid] = newSessionBuffers()
-	rb := ht.sessions[sid].bufs[0]
-	for i := range rb.buckets {
-		rb.buckets[i] = -1
-	}
-	rb.buckets[0] = 0 // ready
-	rb.buckets[1] = 1 // working
-	rb.buckets[2] = 2 // waiting
-	rb.buckets[3] = -1
-	rb.head = 4
-	rb.size = 4
-	rb.lastState = "waiting"
-
-	enc, ok := ht.Encode(sid)
-	if !ok {
-		t.Fatal("Encode failed")
-	}
-	raw, _ := base64.StdEncoding.DecodeString(enc.History["1"])
-	// encodePriorities front-pads, so these 4 buckets land at output indices
-	// 56..59 = byte 14. MSB-first: (0<<6)|(1<<4)|(2<<2)|(3) = 0b00_01_10_11 = 0x1B.
-	const want = byte(0x1B)
-	if raw[14] != want {
-		t.Errorf("trailing byte = %#x, want %#x", raw[14], want)
-	}
-	// Front padding bytes must be all-no-data: 4 × 0b11 = 0xFF.
-	for i := 0; i < 14; i++ {
-		if raw[i] != 0xFF {
-			t.Errorf("padding byte[%d] = %#x, want 0xFF", i, raw[i])
 		}
 	}
 }
@@ -570,19 +531,24 @@ func TestHistoryTracker_EmitSnapshot(t *testing.T) {
 	}
 	buckets := decodeHistoryString(t, events[0].History["1"])
 	for i, p := range buckets {
-		if p != statePriorityNoData {
+		if p != wireCodeNoData {
 			t.Errorf("fresh snapshot bucket[%d] = %d, want no-data", i, p)
 		}
 	}
 }
 
-// --- #1807: states the 2-bit history strip cannot encode --------------------
+// --- #1807: states the history strip cannot encode ---------------------------
 
-// unencodableStates are the two shapes that reach statePriority without a
-// 2-bit code. `error` is canonical (#1798) but has no slot left (#1805);
+// unencodableStates are the shapes that reach statePriority without a wire
+// code. `error` USED to be one of them — it was canonical (#1798) with no slot
+// left in the 2-bit field — but #1805 widened a bucket to a whole byte and gave
+// it code 3, so it left this list and gained TestHistoryTracker_ErrorIsEncodable
+// below. What remains is the case that can never be designed away:
 // "quarantined" stands in for a state a NEWER daemon wrote into history.json
-// that this build has never heard of — the downgrade/mixed-version path.
-var unencodableStates = []string{"error", "quarantined"}
+// that this build has never heard of — the downgrade/mixed-version path. That
+// is why #1807's preserve-don't-coerce machinery outlives the encoding that
+// prompted it.
+var unencodableStates = []string{"quarantined"}
 
 func readHistoryFile(t *testing.T, dir string) string {
 	t.Helper()
@@ -629,9 +595,9 @@ func TestHistoryTracker_LoadUnencodableStateIsNotReady(t *testing.T) {
 				t.Fatal("Encode failed")
 			}
 			buckets := decodeHistoryString(t, enc.History["1"])
-			if got := buckets[HistoryBucketCount-2]; got != statePriorityNoData {
+			if got := buckets[HistoryBucketCount-2]; got != wireCodeNoData {
 				t.Errorf("wire bucket = %d, want %d (no-data); %d is ready/green",
-					got, statePriorityNoData, statePriorityReady)
+					got, wireCodeNoData, statePriorityReady)
 			}
 
 			// ...and save() must write the original value back, not a coerced one.
@@ -644,7 +610,7 @@ func TestHistoryTracker_LoadUnencodableStateIsNotReady(t *testing.T) {
 }
 
 // assertNoUpgradeEmitted fails if any event is an upgrade — an unencodable
-// state has no 2-bit code, so there is nothing a client could merge.
+// state has no wire code at all, so there is nothing a client could merge.
 func assertNoUpgradeEmitted(t *testing.T, events []HistoryEvent) {
 	t.Helper()
 	for _, ev := range events {
@@ -664,9 +630,9 @@ func assertWireBucketsNoData(t *testing.T, ht *HistoryTracker, sid string, idx .
 	}
 	buckets := decodeHistoryString(t, enc.History["1"])
 	for _, i := range idx {
-		if buckets[i] != statePriorityNoData {
+		if buckets[i] != wireCodeNoData {
 			t.Errorf("wire bucket[%d] = %d, want %d (no-data); %d is ready/green",
-				i, buckets[i], statePriorityNoData, statePriorityReady)
+				i, buckets[i], wireCodeNoData, statePriorityReady)
 		}
 	}
 }
@@ -686,8 +652,8 @@ func assertTickBucketNoData(t *testing.T, events []HistoryEvent, sid string) {
 			continue
 		}
 		saw = true
-		if p != statePriorityNoData {
-			t.Errorf("tick bucket = %d, want %d (no-data)", p, statePriorityNoData)
+		if p != wireCodeNoData {
+			t.Errorf("tick bucket = %d, want %d (no-data)", p, wireCodeNoData)
 		}
 	}
 	if !saw {
@@ -703,13 +669,13 @@ func TestHistoryTracker_UnencodableTransitionNeverSealsReady(t *testing.T) {
 	ht := NewHistoryTracker()
 	var events []HistoryEvent
 	ht.SetEmitFunc(func(ev HistoryEvent) { events = append(events, ev) })
-	sid := "errored"
+	sid := "unencodable"
 
-	ht.OnTransition(sid, "error", epoch)
+	ht.OnTransition(sid, "quarantined", epoch)
 	assertNoUpgradeEmitted(t, events)
 
 	events = nil
-	ht.tick() // seals a bucket carrying lastState == "error"
+	ht.tick() // seals a bucket carrying lastState == "quarantined"
 
 	assertWireBucketsNoData(t, ht, sid, HistoryBucketCount-2, HistoryBucketCount-1)
 	assertTickBucketNoData(t, events, sid)
@@ -722,7 +688,7 @@ func TestHistoryTracker_UnencodableTransitionNeverSealsReady(t *testing.T) {
 func TestHistoryTracker_UnencodableIsPurgedWhenItsBucketIsReused(t *testing.T) {
 	ht := NewHistoryTracker()
 	sid := "reuse"
-	ht.OnTransition(sid, "error", epoch)
+	ht.OnTransition(sid, "quarantined", epoch)
 	ht.OnTransition(sid, "waiting", epoch) // outranks no-data, takes the bucket
 
 	rb := ht.sessions[sid].bufs[0]
@@ -738,7 +704,7 @@ func TestHistoryTracker_UnencodableIsPurgedWhenItsBucketIsReused(t *testing.T) {
 	}
 
 	// A full wrap must drain the map rather than accumulate one entry per slot.
-	ht.OnTransition(sid, "error", epoch)
+	ht.OnTransition(sid, "quarantined", epoch)
 	for i := 0; i < HistoryBucketCount; i++ {
 		ht.tick()
 	}
@@ -761,26 +727,31 @@ func TestHistoryTracker_UnencodableSurvivesOntoABlankOpenBucket(t *testing.T) {
 	sid := "blank-open"
 	ht.EmitSnapshot(sid) // creates the session with no reported state
 	ht.tick()            // seals a blank bucket (lastState is still "")
-	ht.OnTransition(sid, "error", epoch)
+	ht.OnTransition(sid, "quarantined", epoch)
 
 	snap, ok := ht.Snapshot(sid, 1)
 	if !ok {
 		t.Fatal("snapshot missing")
 	}
-	if got := snap[len(snap)-1]; got != "error" {
-		t.Errorf("open bucket = %q, want %q preserved onto an otherwise blank bucket", got, "error")
+	if got := snap[len(snap)-1]; got != "quarantined" {
+		t.Errorf("open bucket = %q, want %q preserved onto an otherwise blank bucket", got, "quarantined")
 	}
 	// Rendering is unchanged: preserved, still not painted.
 	assertWireBucketsNoData(t, ht, sid, HistoryBucketCount-1)
 }
 
-// TestHistoryTracker_NoNegativePriorityReachesTheWire pins the one invariant
-// nothing downstream re-checks: PushMessage.Buckets/.Priority are plain int8
-// and historyEventBroadcaster copies them field-for-field into json.Marshal,
-// so a leaked bucketNoData (-1) would serialize as literal -1 to clients that
-// expect a 2-bit code. wireCode() in tick() and OnTransition's encodability
-// gate are the only two things standing between the sentinel and the socket;
-// break either and this goes red.
+// TestHistoryTracker_NoNegativePriorityReachesTheWire pins the invariant
+// nothing downstream re-checks: historyEventBroadcaster copies Buckets and
+// Priority field-for-field into json.Marshal, so a leaked in-memory sentinel
+// would go straight out to clients.
+//
+// #1805 moved HALF of this invariant into the type system — the wire fields are
+// uint8 now, so a negative can no longer be represented, and wireCode's
+// signature enforces the conversion. The name is kept because the OTHER half is
+// still only checked here: a wire value must be a ladder rung or the no-data
+// sentinel, never some third thing. A vacuous bound (every uint8 is >= 0) would
+// have made this test pass while checking nothing, so it asserts membership of
+// the contract rather than a numeric range.
 func TestHistoryTracker_NoNegativePriorityReachesTheWire(t *testing.T) {
 	ht := NewHistoryTracker()
 	var events []HistoryEvent
@@ -803,9 +774,17 @@ func TestHistoryTracker_NoNegativePriorityReachesTheWire(t *testing.T) {
 	}
 }
 
-// assertTickCodesInRange checks every bucket a tick event carries is a valid
-// 2-bit code, returning how many it checked. Non-tick events check nothing and
-// return 0. (Snapshot events carry base64, already masked by packPriorities.)
+// isWireCode reports whether c is something the wire contract allows at all:
+// a ladder rung, or the no-data sentinel. Anything else — a stray sentinel, a
+// value from a future rung nobody taught the clients — is a protocol break.
+func isWireCode(c uint8) bool {
+	return c <= statePriorityError || c == wireCodeNoData
+}
+
+// assertTickCodesInRange checks every bucket a tick event carries is a legal
+// wire code, returning how many it checked. Non-tick events check nothing and
+// return 0. (Snapshot events carry base64, built from the same encodePriorities
+// path.)
 func assertTickCodesInRange(t *testing.T, ev HistoryEvent) int {
 	t.Helper()
 	if ev.Kind != HistoryEventTick {
@@ -814,23 +793,24 @@ func assertTickCodesInRange(t *testing.T, ev HistoryEvent) int {
 	n := 0
 	for sid, p := range ev.Buckets {
 		n++
-		if p < 0 || p > statePriorityNoData {
-			t.Fatalf("tick bucket for %q = %d, outside the 2-bit contract 0..%d", sid, p, statePriorityNoData)
+		if !isWireCode(p) {
+			t.Fatalf("tick bucket for %q = %d, which is neither a ladder rung (0..%d) nor no-data (%d)",
+				sid, p, statePriorityError, wireCodeNoData)
 		}
 	}
 	return n
 }
 
 // assertUpgradeCodeInRange checks an upgrade event's priority is one of the
-// three encodable codes, returning 1 if it checked and 0 otherwise. No-data is
+// four encodable codes, returning 1 if it checked and 0 otherwise. No-data is
 // out of range here on purpose: an upgrade to no-data is never emitted.
 func assertUpgradeCodeInRange(t *testing.T, ev HistoryEvent) int {
 	t.Helper()
 	if ev.Kind != HistoryEventUpgrade {
 		return 0
 	}
-	if ev.Priority < 0 || ev.Priority > statePriorityWaiting {
-		t.Fatalf("upgrade priority = %d, outside 0..%d", ev.Priority, statePriorityWaiting)
+	if ev.Priority > statePriorityError {
+		t.Fatalf("upgrade priority = %d, outside 0..%d", ev.Priority, statePriorityError)
 	}
 	return 1
 }
@@ -845,7 +825,7 @@ func TestHistoryTracker_UnencodableDoesNotClobberObservedActivity(t *testing.T) 
 	ht := NewHistoryTracker()
 	sid := "merge"
 	ht.OnTransition(sid, "working", epoch)
-	ht.OnTransition(sid, "error", epoch)
+	ht.OnTransition(sid, "quarantined", epoch)
 
 	snap, ok := ht.Snapshot(sid, 1)
 	if !ok {

@@ -18,20 +18,43 @@ import XCTest
 ///     bucket, inventing a finished session out of missing data. The web twin
 ///     has always been right here (`irrlicht.js`: `if (!color) continue`), so
 ///     before this fix the two platforms rendered the same ring differently.
-///   - any other unrecognised name — DEFENSIVE ONLY, and marked as such rather
-///     than asserted: every string reaching `states` comes from
-///     `historyPriorityToState`, a 4-way switch over a 2-bit code returning only
-///     ready/working/waiting/"", so a newer daemon's state arrives as a priority
-///     CODE and this branch cannot fire in production today. It is pinned
-///     anyway because the epic will widen that encoding (#1807), and because the
-///     row's state ICON already renders neutral grey — a green bar beside it
-///     would make one row tell two stories.
+///   - any other unrecognised name — pinned when this was written as DEFENSIVE
+///     ONLY, on the reasoning that `historyPriorityToState` was a 4-way switch
+///     over a 2-bit code returning only ready/working/waiting/"". #1805 widened
+///     the code to a whole byte, so that switch now also returns "error", and
+///     the branch stays unreachable for the same structural reason: a name this
+///     build cannot map still arrives as a CODE, and an unknown code decodes to
+///     "". The row's state ICON renders neutral grey for it, so a green bar
+///     beside it would make one row tell two stories.
+///
+/// #1805 — WHY THIS FILE GAINED A FOURTH BUCKET, DELIBERATELY.
+///
+/// The waiver in `tools/state-vocabulary-lint.waivers` described this suite as
+/// "a LOCK on those three canonical buckets — it must NOT silently gain a
+/// fourth". The operative word was *silently*. `error` had no wire code to
+/// arrive on, so a fourth assertion here would have pinned a colour no bucket
+/// could ever decode to — green paint on a door that opened onto a wall. #1805
+/// gave it code 3, so the fourth bucket is now reachable and asserting it is
+/// the point rather than a loosening. The decode half it depends on lives in
+/// `HistoryWireFormatTests`.
 final class HistoryBarColorTests: XCTestCase {
     func testKnownStatesKeepTheirOwnColors() {
-        // LOCK: the three canonical buckets must not move.
+        // LOCK: the canonical buckets must not move. `error` joined them in
+        // #1805 — see the type comment for why that is a deliberate change to
+        // this lock and not an erosion of it.
         XCTAssertEqual(HistoryBarView.barColor(for: "working"), IrrColors.working)
         XCTAssertEqual(HistoryBarView.barColor(for: "waiting"), IrrColors.waiting)
         XCTAssertEqual(HistoryBarView.barColor(for: "ready"), IrrColors.ready)
+        XCTAssertEqual(HistoryBarView.barColor(for: "error"), IrrColors.error)
+    }
+
+    /// The strip and the row's state icon are the same red. `barColor` derives
+    /// from `SessionState.State`, so this holds by construction — which is
+    /// exactly why the macOS side needed no colour-table edit for #1805, while
+    /// the web side did (`irrlicht.js` hardcodes its palette to stay off
+    /// computed styles at canvas-paint time).
+    func testErrorBarAgreesWithTheRowsStateIcon() {
+        XCTAssertEqual(HistoryBarView.barColor(for: "error"), SessionState.State.error.color)
     }
 
     func testNoDataBucketPaintsNothingRatherThanGreen() {
