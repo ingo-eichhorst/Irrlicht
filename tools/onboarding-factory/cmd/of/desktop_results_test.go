@@ -19,6 +19,19 @@ type desktopFixture struct {
 	record   string
 }
 
+type observedResultFixture struct {
+	scenario string
+	outcome  string
+	reason   string
+}
+
+type nonObservedResultFixture struct {
+	scenario       string
+	outcome        string
+	reason         string
+	missingControl string
+}
+
 // desktopResultsRepo is the positive fixture for the full result vocabulary.
 // It deliberately uses five different cells so completeness, uniqueness, and
 // each outcome are proven together instead of by disconnected partial trees.
@@ -47,17 +60,17 @@ func desktopResultsRepo(t *testing.T, enforce bool) desktopFixture {
 		fixture.cellDirs[scenario] = filepath.Join(root, "replaydata", "agents", "claudecode", "scenarios", folder)
 	}
 
-	writeObservedDesktopResult(t, fixture, "observed-pass", "observed-passing", "")
-	writeObservedDesktopResult(t, fixture, "observed-failure", "observed-failure", "Irrlicht reported the observed failure.")
-	writeNonObservedDesktopResult(t, fixture, "not-applicable", "not-applicable", "The scenario is outside Local Desktop.", "")
-	writeNonObservedDesktopResult(t, fixture, "unobservable", "unobservable", "The local runtime leaves no observable trace.", "")
-	writeNonObservedDesktopResult(t, fixture, "not-runnable", "not-runnable", "The Desktop driver cannot perform this recipe.", "model selector")
+	writeObservedDesktopResult(t, fixture, observedResultFixture{scenario: "observed-pass", outcome: "observed-passing"})
+	writeObservedDesktopResult(t, fixture, observedResultFixture{scenario: "observed-failure", outcome: "observed-failure", reason: "Irrlicht reported the observed failure."})
+	writeNonObservedDesktopResult(t, fixture, nonObservedResultFixture{scenario: "not-applicable", outcome: "not-applicable", reason: "The scenario is outside Local Desktop."})
+	writeNonObservedDesktopResult(t, fixture, nonObservedResultFixture{scenario: "unobservable", outcome: "unobservable", reason: "The local runtime leaves no observable trace."})
+	writeNonObservedDesktopResult(t, fixture, nonObservedResultFixture{scenario: "not-runnable", outcome: "not-runnable", reason: "The Desktop driver cannot perform this recipe.", missingControl: "model selector"})
 	return fixture
 }
 
-func writeObservedDesktopResult(t *testing.T, fixture desktopFixture, scenario, outcome, reason string) {
+func writeObservedDesktopResult(t *testing.T, fixture desktopFixture, spec observedResultFixture) {
 	t.Helper()
-	cellDir := fixture.cellDirs[scenario]
+	cellDir := fixture.cellDirs[spec.scenario]
 	recDir := filepath.Join(cellDir, "recordings", fixture.record)
 	recording(t, fixture.root, "claudecode", filepath.Base(cellDir), fixture.record, true)
 	write(t, filepath.Join(recDir, "manifest.json"), `{
@@ -79,12 +92,12 @@ func writeObservedDesktopResult(t *testing.T, fixture desktopFixture, scenario, 
 			desktopHookReceipt+"\n")
 	write(t, filepath.Join(recDir, "hooks.jsonl"), desktopHookReceipt+"\n")
 	write(t, filepath.Join(recDir, "process.json"), `{"pid":4242,"command":"claude"}`+"\n")
-	writeExpectedOutcome(t, cellDir, scenario, outcome)
+	writeExpectedOutcome(t, cellDir, spec.scenario, spec.outcome)
 
 	result := map[string]any{
-		"scenario_id":       scenario,
+		"scenario_id":       spec.scenario,
 		"execution_profile": "desktop-local",
-		"outcome":           outcome,
+		"outcome":           spec.outcome,
 		"recording":         fixture.record,
 		"evidence": map[string]string{
 			"desktop_registry": "desktop-registry.json",
@@ -95,28 +108,28 @@ func writeObservedDesktopResult(t *testing.T, fixture desktopFixture, scenario, 
 			"environment":      "desktop-environment.json",
 		},
 	}
-	if reason != "" {
-		result["reason"] = reason
+	if spec.reason != "" {
+		result["reason"] = spec.reason
 	}
 	writeExecutionResults(t, cellDir, []any{result})
 }
 
-func writeNonObservedDesktopResult(t *testing.T, fixture desktopFixture, scenario, outcome, reason, missingControl string) {
+func writeNonObservedDesktopResult(t *testing.T, fixture desktopFixture, spec nonObservedResultFixture) {
 	t.Helper()
-	cellDir := fixture.cellDirs[scenario]
-	evidencePath := filepath.Join(cellDir, "desktop-evidence", scenario+".md")
-	write(t, evidencePath, "Desktop campaign evidence for "+scenario+".\n")
+	cellDir := fixture.cellDirs[spec.scenario]
+	evidencePath := filepath.Join(cellDir, "desktop-evidence", spec.scenario+".md")
+	write(t, evidencePath, "Desktop campaign evidence for "+spec.scenario+".\n")
 	result := map[string]any{
-		"scenario_id":       scenario,
+		"scenario_id":       spec.scenario,
 		"execution_profile": "desktop-local",
-		"outcome":           outcome,
-		"reason":            reason,
+		"outcome":           spec.outcome,
+		"reason":            spec.reason,
 		"evidence_refs": []string{
 			filepath.ToSlash(strings.TrimPrefix(evidencePath, fixture.root+string(filepath.Separator))),
 		},
 	}
-	if missingControl != "" {
-		result["missing_control"] = missingControl
+	if spec.missingControl != "" {
+		result["missing_control"] = spec.missingControl
 	}
 	writeExecutionResults(t, cellDir, []any{result})
 }
@@ -441,7 +454,7 @@ func TestValidateDesktopExactRecordingCompletenessMutation(t *testing.T) {
 	}
 	newer := fixture
 	newer.record = "desktop-r2"
-	writeObservedDesktopResult(t, newer, "observed-pass", "observed-passing", "")
+	writeObservedDesktopResult(t, newer, observedResultFixture{scenario: "observed-pass", outcome: "observed-passing"})
 	path := filepath.Join(cellDir, desktopResultsFile)
 	mutateFirstResult(t, path, func(result map[string]any) { result["recording"] = fixture.record })
 	requireDesktopFinding(t, fixture.root, "observed-pass", "recording completeness")

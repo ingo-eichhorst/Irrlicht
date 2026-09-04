@@ -13,9 +13,13 @@ import (
 )
 
 const (
-	desktopEntrypoint = "claude-desktop"
-	desktopBundleID   = "com.anthropic.claudefordesktop"
-	localEnvironment  = "Local"
+	desktopEntrypoint       = "claude-desktop"
+	desktopBundleID         = "com.anthropic.claudefordesktop"
+	localEnvironment        = "Local"
+	fieldIrrlichtCWD        = "irrlicht_session.cwd"
+	fieldDesktopRegistryCWD = "desktop_registry.cwd"
+	mustNotBeBlank          = "must not be blank"
+	mismatchEnvironmentCWD  = "does not match environment.requested_workspace"
 )
 
 type evidenceFiles struct {
@@ -40,6 +44,14 @@ type hookReceipt struct {
 	Kind      string `json:"kind"`
 	SessionID string `json:"session_id"`
 	HookName  string `json:"hook_name"`
+}
+
+type hookValidation struct {
+	rel        string
+	scenario   string
+	path       string
+	eventsPath string
+	sessionID  string
 }
 
 func (scan hookReceiptScan) valid() bool {
@@ -142,7 +154,13 @@ func (v *validation) readObservedIdentity(rel, scenario string, files evidenceFi
 	identity.environment, identity.environmentOK = v.readEnvironment(rel, scenario, files.environment)
 	identity.irrlicht, identity.irrlichtOK = v.readIrrlichtSession(rel, scenario, files.irrlicht)
 	identity.process, identity.processOK = v.readProcess(rel, scenario, files.process)
-	v.validateHooks(rel, scenario, files.hooks, files.events, identity.transcript.SessionID)
+	v.validateHooks(hookValidation{
+		rel:        rel,
+		scenario:   scenario,
+		path:       files.hooks,
+		eventsPath: files.events,
+		sessionID:  identity.transcript.SessionID,
+	})
 	return identity
 }
 
@@ -161,7 +179,7 @@ func (v *validation) compareTranscriptIdentity(rel, scenario string, identity ob
 		v.compareSessionMapping(rel, scenario, identity.transcript, identity.registry)
 	}
 	if identity.registryOK && identity.environmentOK {
-		v.compareWorkspaceIdentity(rel, scenario, identity.transcript, identity.registry, identity.environment)
+		v.compareWorkspaceIdentity(rel, scenario, identity)
 	}
 	if identity.irrlichtOK {
 		v.compareIrrlichtIdentity(rel, scenario, identity.transcript, identity.irrlicht)
@@ -169,13 +187,19 @@ func (v *validation) compareTranscriptIdentity(rel, scenario string, identity ob
 }
 
 func (v *validation) compareEnvironmentIdentity(rel, scenario string, identity observedIdentity) {
-	if identity.environmentOK && identity.irrlichtOK && !samePath(identity.environment.RequestedWorkspace, identity.irrlicht.CWD) {
-		v.add(rel, scenario, "irrlicht_session.cwd", "does not match environment.requested_workspace")
+	if !identity.environmentOK || !identity.irrlichtOK {
+		return
+	}
+	if !samePath(identity.environment.RequestedWorkspace, identity.irrlicht.CWD) {
+		v.add(rel, scenario, fieldIrrlichtCWD, mismatchEnvironmentCWD)
 	}
 }
 
 func (v *validation) compareProcessIdentity(rel, scenario string, identity observedIdentity) {
-	if identity.processOK && identity.irrlichtOK && identity.process.PID != identity.irrlicht.PID {
+	if !identity.processOK || !identity.irrlichtOK {
+		return
+	}
+	if identity.process.PID != identity.irrlicht.PID {
 		v.add(rel, scenario, "process.pid", "does not match irrlicht_session.pid")
 	}
 }
@@ -333,10 +357,10 @@ func (v *validation) readRegistry(rel, scenario, path string) (registryIdentity,
 	for field, value := range map[string]string{
 		"desktop_registry.sessionId":    registry.SessionID,
 		"desktop_registry.cliSessionId": registry.CLISessionID,
-		"desktop_registry.cwd":          registry.CWD,
+		fieldDesktopRegistryCWD:         registry.CWD,
 	} {
 		if strings.TrimSpace(value) == "" {
-			v.add(rel, scenario, field, "must not be blank")
+			v.add(rel, scenario, field, mustNotBeBlank)
 			ok = false
 		}
 	}
@@ -363,7 +387,7 @@ func (v *validation) readEnvironment(rel, scenario, path string) (environmentRec
 		ok = false
 	}
 	if strings.TrimSpace(receipt.RequestedWorkspace) == "" {
-		v.add(rel, scenario, "environment.requested_workspace", "must not be blank")
+		v.add(rel, scenario, "environment.requested_workspace", mustNotBeBlank)
 		ok = false
 	}
 	return receipt, ok
@@ -377,11 +401,11 @@ func (v *validation) readIrrlichtSession(rel, scenario, path string) (irrlichtSe
 	}
 	ok := true
 	if strings.TrimSpace(state.SessionID) == "" {
-		v.add(rel, scenario, "irrlicht_session.session_id", "must not be blank")
+		v.add(rel, scenario, "irrlicht_session.session_id", mustNotBeBlank)
 		ok = false
 	}
 	if strings.TrimSpace(state.CWD) == "" {
-		v.add(rel, scenario, "irrlicht_session.cwd", "must not be blank")
+		v.add(rel, scenario, fieldIrrlichtCWD, mustNotBeBlank)
 		ok = false
 	}
 	if state.PID <= 0 {
@@ -395,13 +419,13 @@ func (v *validation) readIrrlichtSession(rel, scenario, path string) (irrlichtSe
 	return state, ok
 }
 
-func (v *validation) validateHooks(rel, scenario, path, eventsPath, sessionID string) bool {
-	scan, err := scanHookReceipts(path, eventsPath, sessionID)
+func (v *validation) validateHooks(input hookValidation) bool {
+	scan, err := scanHookReceipts(input.path, input.eventsPath, input.sessionID)
 	if err != nil {
-		v.add(rel, scenario, "hooks", err.Error())
+		v.add(input.rel, input.scenario, "hooks", err.Error())
 		return false
 	}
-	v.reportHookReceiptFindings(rel, scenario, scan)
+	v.reportHookReceiptFindings(input.rel, input.scenario, scan)
 	return scan.valid()
 }
 
@@ -509,7 +533,7 @@ func (v *validation) readProcess(rel, scenario, path string) (processEvidence, b
 		ok = false
 	}
 	if strings.TrimSpace(process.Command) == "" {
-		v.add(rel, scenario, "process.command", "must not be blank")
+		v.add(rel, scenario, "process.command", mustNotBeBlank)
 		ok = false
 	}
 	return process, ok
@@ -521,15 +545,15 @@ func (v *validation) compareManifestTranscript(rel, scenario string, manifest ma
 	}
 }
 
-func (v *validation) compareWorkspaceIdentity(rel, scenario string, transcript transcriptIdentity, registry registryIdentity, environment environmentReceipt) {
-	if !samePath(registry.CWD, transcript.CWD) {
-		v.add(rel, scenario, "desktop_registry.cwd", "does not match transcript.cwd")
+func (v *validation) compareWorkspaceIdentity(rel, scenario string, identity observedIdentity) {
+	if !samePath(identity.registry.CWD, identity.transcript.CWD) {
+		v.add(rel, scenario, fieldDesktopRegistryCWD, "does not match transcript.cwd")
 	}
-	if !samePath(registry.CWD, environment.RequestedWorkspace) {
-		v.add(rel, scenario, "desktop_registry.cwd", "does not match environment.requested_workspace")
+	if !samePath(identity.registry.CWD, identity.environment.RequestedWorkspace) {
+		v.add(rel, scenario, fieldDesktopRegistryCWD, mismatchEnvironmentCWD)
 	}
-	if !samePath(transcript.CWD, environment.RequestedWorkspace) {
-		v.add(rel, scenario, "transcript.cwd", "does not match environment.requested_workspace")
+	if !samePath(identity.transcript.CWD, identity.environment.RequestedWorkspace) {
+		v.add(rel, scenario, "transcript.cwd", mismatchEnvironmentCWD)
 	}
 }
 
@@ -544,7 +568,7 @@ func (v *validation) compareIrrlichtIdentity(rel, scenario string, transcript tr
 		v.add(rel, scenario, "irrlicht_session.session_id", "does not match transcript.sessionId")
 	}
 	if !samePath(state.CWD, transcript.CWD) {
-		v.add(rel, scenario, "irrlicht_session.cwd", "does not match transcript.cwd")
+		v.add(rel, scenario, fieldIrrlichtCWD, "does not match transcript.cwd")
 	}
 }
 

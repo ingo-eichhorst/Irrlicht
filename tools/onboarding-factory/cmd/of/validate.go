@@ -64,9 +64,7 @@ func runValidate(args []string, stdout, stderr io.Writer) int {
 	names := validateCatalog(*repoRoot, add)
 	validateRecordingProfiles(*repoRoot, add)
 	validateCells(*repoRoot, names, add)
-	for _, resultFinding := range desktopresults.ValidateRepo(*repoRoot) {
-		add(resultFinding.Path, resultFinding.Message)
-	}
+	validateDesktopResults(*repoRoot, add)
 	validateMaturityModel(*repoRoot, names, add)
 
 	sort.Slice(findings, func(i, j int) bool {
@@ -94,6 +92,12 @@ func runValidate(args []string, stdout, stderr io.Writer) int {
 		return exitFail
 	}
 	return exitOK
+}
+
+func validateDesktopResults(repoRoot string, add func(path, msg string)) {
+	for _, resultFinding := range desktopresults.ValidateRepo(repoRoot) {
+		add(resultFinding.Path, resultFinding.Message)
+	}
 }
 
 // validateRecordingProfiles scans every recording directory independently of

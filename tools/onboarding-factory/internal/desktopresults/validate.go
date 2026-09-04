@@ -15,6 +15,7 @@ import (
 const (
 	claudeAdapter = "claudecode"
 	resultsSwitch = "required_execution_profiles_by_agent"
+	metadataFile  = "metadata.json"
 )
 
 // Finding locates one invalid result or one broken evidence edge.
@@ -30,6 +31,30 @@ type catalogScenario struct {
 type catalogDocument struct {
 	Meta      map[string]json.RawMessage `json:"meta"`
 	Scenarios []catalogScenario          `json:"scenarios"`
+}
+
+type requiredProfilesInput struct {
+	raw  json.RawMessage
+	path string
+}
+
+type requiredProfileList struct {
+	adapter  string
+	profiles []string
+	path     string
+}
+
+type cellCandidate struct {
+	root string
+	path string
+}
+
+type resultFileContext struct {
+	rel               string
+	cellDir           string
+	expectedScenario  string
+	canonicalScenario string
+	canonical         bool
 }
 
 type validation struct {
@@ -87,46 +112,60 @@ func (v *validation) loadCatalog() {
 			v.catalog[scenario.Name] = true
 		}
 	}
-	v.validateRequiredProfiles(catalog.Meta[resultsSwitch], path)
+	v.validateRequiredProfiles(requiredProfilesInput{raw: catalog.Meta[resultsSwitch], path: path})
 }
 
-func (v *validation) validateRequiredProfiles(raw json.RawMessage, path string) {
-	if len(raw) == 0 {
+func (v *validation) validateRequiredProfiles(input requiredProfilesInput) {
+	if len(input.raw) == 0 {
 		return // absence is the legacy CLI-only compatibility contract.
 	}
-	var required map[string][]string
-	if string(raw) == "null" || json.Unmarshal(raw, &required) != nil || len(required) == 0 {
-		v.add(v.rel(path), "catalog", "meta."+resultsSwitch, "must be a non-empty object")
+	required, err := decodeRequiredProfiles(input.raw)
+	if err != nil {
+		v.add(v.rel(input.path), "catalog", "meta."+resultsSwitch, err.Error())
 		return
 	}
 	for adapter, profiles := range required {
-		v.validateRequiredProfileList(adapter, profiles, path)
+		v.validateRequiredProfileList(requiredProfileList{adapter: adapter, profiles: profiles, path: input.path})
 	}
 }
 
-func (v *validation) validateRequiredProfileList(adapter string, profiles []string, path string) {
-	field := "meta." + resultsSwitch + "." + adapter
-	if adapter != claudeAdapter {
-		v.add(v.rel(path), "catalog", field, "Desktop result completeness is only supported for claudecode")
+func decodeRequiredProfiles(raw json.RawMessage) (map[string][]string, error) {
+	if string(raw) == "null" {
+		return nil, fmt.Errorf("must be a non-empty object")
+	}
+	var required map[string][]string
+	if err := json.Unmarshal(raw, &required); err != nil {
+		return nil, fmt.Errorf("must be a non-empty object")
+	}
+	if len(required) == 0 {
+		return nil, fmt.Errorf("must be a non-empty object")
+	}
+	return required, nil
+}
+
+func (v *validation) validateRequiredProfileList(input requiredProfileList) {
+	field := "meta." + resultsSwitch + "." + input.adapter
+	if input.adapter != claudeAdapter {
+		v.add(v.rel(input.path), "catalog", field, "Desktop result completeness is only supported for claudecode")
 		return
 	}
-	if len(profiles) == 0 {
-		v.add(v.rel(path), "catalog", field, "must contain at least one profile")
+	if len(input.profiles) == 0 {
+		v.add(v.rel(input.path), "catalog", field, "must contain at least one profile")
 		return
 	}
 	seen := map[matrix.ExecutionProfile]bool{}
-	for _, value := range profiles {
+	for _, value := range input.profiles {
 		profile, err := matrix.ParseExecutionProfile(value)
 		if err != nil {
-			v.add(v.rel(path), "catalog", field, err.Error())
+			v.add(v.rel(input.path), "catalog", field, err.Error())
 			continue
 		}
 		if profile != matrix.ProfileDesktopLocal {
-			v.add(v.rel(path), "catalog", field, "only desktop-local can be required by this result contract")
+			v.add(v.rel(input.path), "catalog", field, "only desktop-local can be required by this result contract")
 			continue
 		}
 		if seen[profile] {
-			v.add(v.rel(path), "catalog", field, "contains duplicate desktop-local")
+			v.add(v.rel(input.path), "catalog", field, "contains duplicate desktop-local")
 			continue
 		}
 		seen[profile] = true
@@ -146,8 +185,8 @@ func (v *validation) scanResultFiles() {
 			return nil
 		}
 		switch entry.Name() {
-		case "metadata.json":
-			v.registerClaudeCell(root, path)
+		case metadataFile:
+			v.registerClaudeCell(cellCandidate{root: root, path: path})
 		case FileName:
 			resultFiles = append(resultFiles, path)
 		}
@@ -161,20 +200,30 @@ func (v *validation) scanResultFiles() {
 	}
 }
 
-func (v *validation) registerClaudeCell(root, path string) {
-	rel, err := filepath.Rel(root, path)
+func (v *validation) registerClaudeCell(candidate cellCandidate) {
+	rel, err := filepath.Rel(candidate.root, candidate.path)
 	if err != nil {
 		return
 	}
 	parts := strings.Split(filepath.ToSlash(rel), "/")
-	if len(parts) != 3 || parts[0] != "scenarios" || parts[2] != "metadata.json" {
+	if !isCanonicalCellMetadata(parts) {
 		return
 	}
-	scenario := metadataScenarioID(filepath.Dir(path))
+	scenario := metadataScenarioID(filepath.Dir(candidate.path))
 	if v.catalog[scenario] {
 		v.claudeCells[scenario] = true
-		v.canonicalCells[filepath.Clean(filepath.Dir(path))] = scenario
+		v.canonicalCells[filepath.Clean(filepath.Dir(candidate.path))] = scenario
 	}
+}
+
+func isCanonicalCellMetadata(parts []string) bool {
+	if len(parts) != 3 {
+		return false
+	}
+	if parts[0] != "scenarios" {
+		return false
+	}
+	return parts[2] == metadataFile
 }
 
 func (v *validation) validateResultFile(path string) {
@@ -189,7 +238,14 @@ func (v *validation) validateResultFile(path string) {
 	if !ok {
 		return
 	}
-	v.validateResults(rel, cellDir, expectedScenario, canonicalScenario, canonical, doc.Results)
+	context := resultFileContext{
+		rel:               rel,
+		cellDir:           cellDir,
+		expectedScenario:  expectedScenario,
+		canonicalScenario: canonicalScenario,
+		canonical:         canonical,
+	}
+	v.validateResults(context, doc.Results)
 }
 
 func (v *validation) loadResultDocument(path, rel, scenario string) (Document, bool) {
@@ -212,26 +268,26 @@ func (v *validation) loadResultDocument(path, rel, scenario string) (Document, b
 	return doc, true
 }
 
-func (v *validation) validateResults(rel, cellDir, expectedScenario, canonicalScenario string, canonical bool, results []Result) {
+func (v *validation) validateResults(context resultFileContext, results []Result) {
 	seenProfile := map[string]bool{}
 	for i := range results {
 		result := &results[i]
-		v.validateResult(rel, cellDir, expectedScenario, result)
+		v.validateResult(context, result)
 		if result.ExecutionProfile != string(matrix.ProfileDesktopLocal) {
 			continue
 		}
-		if canonical && result.ScenarioID == canonicalScenario {
+		if context.canonical && result.ScenarioID == context.canonicalScenario {
 			v.resultCount[result.ScenarioID]++
 		}
 		if seenProfile[result.ExecutionProfile] {
-			v.add(rel, result.ScenarioID, "results", "duplicate desktop-local result")
+			v.add(context.rel, result.ScenarioID, "results", "duplicate desktop-local result")
 		}
 		seenProfile[result.ExecutionProfile] = true
 	}
 }
 
 func metadataScenarioID(cellDir string) string {
-	b, err := os.ReadFile(filepath.Join(cellDir, "metadata.json"))
+	b, err := os.ReadFile(filepath.Join(cellDir, metadataFile))
 	if err != nil {
 		return ""
 	}
@@ -244,24 +300,24 @@ func metadataScenarioID(cellDir string) string {
 	return metadata.ScenarioID
 }
 
-func (v *validation) validateResult(rel, cellDir, expectedScenario string, result *Result) {
+func (v *validation) validateResult(context resultFileContext, result *Result) {
 	scenario := result.ScenarioID
-	v.validateScenario(rel, expectedScenario, scenario)
+	v.validateScenario(context.rel, context.expectedScenario, scenario)
 	profile, err := matrix.ParseExecutionProfile(result.ExecutionProfile)
 	if err != nil {
-		v.add(rel, scenario, "execution_profile", err.Error())
+		v.add(context.rel, scenario, "execution_profile", err.Error())
 	} else if profile != matrix.ProfileDesktopLocal {
-		v.add(rel, scenario, "execution_profile", "result files support only desktop-local")
+		v.add(context.rel, scenario, "execution_profile", "result files support only desktop-local")
 	}
 	if !knownOutcome(result.Outcome) {
-		v.add(rel, scenario, "outcome", fmt.Sprintf("unknown outcome %q", result.Outcome))
+		v.add(context.rel, scenario, "outcome", fmt.Sprintf("unknown outcome %q", result.Outcome))
 		return
 	}
 	if observedOutcome(result.Outcome) {
-		v.validateObservedShape(rel, cellDir, result)
+		v.validateObservedShape(context.rel, context.cellDir, result)
 		return
 	}
-	v.validateNonObservedShape(rel, cellDir, result)
+	v.validateNonObservedShape(context.rel, context.cellDir, result)
 }
 
 func (v *validation) validateScenario(rel, expected, actual string) {
@@ -355,7 +411,7 @@ func (v *validation) validateNonObservedEvidence(rel, cellDir string, result *Re
 // metadata, a file under its desktop-evidence directory, or a shared raw probe
 // under replaydata/agents/claudecode/desktop-evidence.
 func (v *validation) allowedNonObservedEvidence(cellDir, resolved string) bool {
-	if sameResolvedFile(resolved, filepath.Join(cellDir, "metadata.json")) {
+	if sameResolvedFile(resolved, filepath.Join(cellDir, metadataFile)) {
 		return true
 	}
 	for _, root := range []string{
@@ -386,25 +442,31 @@ func (v *validation) validateNonObservedExclusions(rel string, result *Result) {
 }
 
 func (v *validation) validateCompleteness() {
+	v.validateDuplicateResults()
+	if v.requireDesktop {
+		v.validateRequiredResults()
+	}
+}
+
+func (v *validation) validateDuplicateResults() {
 	for scenario, count := range v.resultCount {
 		if count > 1 {
-			path := filepath.Join("replaydata", "agents", claudeAdapter, "scenarios")
-			v.add(path, scenario, "completeness", fmt.Sprintf("duplicate desktop-local result: found %d entries", count))
+			v.add(resultCellsPath(), scenario, "completeness", fmt.Sprintf("duplicate desktop-local result: found %d entries", count))
 		}
 	}
-	if !v.requireDesktop {
-		return
-	}
+}
+
+func (v *validation) validateRequiredResults() {
 	for scenario := range v.claudeCells {
 		count := v.resultCount[scenario]
-		if count == 1 {
-			continue
-		}
-		path := filepath.Join("replaydata", "agents", claudeAdapter, "scenarios")
 		if count == 0 {
-			v.add(path, scenario, "completeness", "missing desktop-local result")
+			v.add(resultCellsPath(), scenario, "completeness", "missing desktop-local result")
 		}
 	}
+}
+
+func resultCellsPath() string {
+	return filepath.Join("replaydata", "agents", claudeAdapter, "scenarios")
 }
 
 func sameResolvedFile(left, right string) bool {
@@ -480,7 +542,10 @@ func resolveExisting(root, reference string) (resolvedPath, error) {
 		return resolvedPath{}, fmt.Errorf("cannot read %q: %w", reference, err)
 	}
 	rel, err := filepath.Rel(rootResolved, resolved)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	if err != nil {
+		return resolvedPath{}, fmt.Errorf("cannot compare evidence root and reference: %w", err)
+	}
+	if escapesRoot(rel) {
 		return resolvedPath{}, fmt.Errorf("reference %q escapes its evidence root", reference)
 	}
 	info, err := os.Stat(resolved)
@@ -490,13 +555,26 @@ func resolveExisting(root, reference string) (resolvedPath, error) {
 	return resolvedPath{path: resolved, info: info}, nil
 }
 
+func escapesRoot(rel string) bool {
+	if rel == ".." {
+		return true
+	}
+	return strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
 func cleanReference(reference string) (string, error) {
-	if reference == "" || filepath.IsAbs(reference) {
+	if reference == "" {
+		return "", fmt.Errorf("must be a non-empty relative path")
+	}
+	if filepath.IsAbs(reference) {
 		return "", fmt.Errorf("must be a non-empty relative path")
 	}
 	native := filepath.FromSlash(reference)
 	clean := filepath.Clean(native)
-	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+	if clean == "." {
+		return "", fmt.Errorf("must not traverse outside its evidence root")
+	}
+	if escapesRoot(clean) {
 		return "", fmt.Errorf("must not traverse outside its evidence root")
 	}
 	if clean != native {
