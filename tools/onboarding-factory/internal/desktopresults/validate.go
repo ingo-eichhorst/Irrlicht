@@ -49,12 +49,49 @@ type cellCandidate struct {
 	path string
 }
 
+type findingTarget struct {
+	path     string
+	scenario string
+}
+
 type resultFileContext struct {
-	rel               string
+	target            findingTarget
 	cellDir           string
 	expectedScenario  string
 	canonicalScenario string
 	canonical         bool
+}
+
+type resultValidationContext struct {
+	target  findingTarget
+	cellDir string
+	result  *Result
+}
+
+type resultDocumentLocation struct {
+	path   string
+	target findingTarget
+}
+
+type scenarioValidation struct {
+	target   findingTarget
+	expected string
+	actual   string
+}
+
+type evidenceBoundary struct {
+	cellDir  string
+	resolved string
+}
+
+type pathReference struct {
+	root      string
+	reference string
+}
+
+type pathPair struct {
+	left  string
+	right string
 }
 
 type validation struct {
@@ -90,13 +127,13 @@ func ValidateRepo(repoRoot string) []Finding {
 	return v.findings
 }
 
-func (v *validation) add(path, scenario, field, message string) {
-	if scenario == "" {
-		scenario = "unknown"
+func (v *validation) add(target findingTarget, field, message string) {
+	if target.scenario == "" {
+		target.scenario = "unknown"
 	}
 	v.findings = append(v.findings, Finding{
-		Path:    filepath.ToSlash(path),
-		Message: fmt.Sprintf("scenario_id %q: %s: %s", scenario, field, message),
+		Path:    filepath.ToSlash(target.path),
+		Message: fmt.Sprintf("scenario_id %q: %s: %s", target.scenario, field, message),
 	})
 }
 
@@ -121,7 +158,7 @@ func (v *validation) validateRequiredProfiles(input requiredProfilesInput) {
 	}
 	required, err := decodeRequiredProfiles(input.raw)
 	if err != nil {
-		v.add(v.rel(input.path), "catalog", "meta."+resultsSwitch, err.Error())
+		v.add(findingTarget{path: v.rel(input.path), scenario: "catalog"}, "meta."+resultsSwitch, err.Error())
 		return
 	}
 	for adapter, profiles := range required {
@@ -145,27 +182,28 @@ func decodeRequiredProfiles(raw json.RawMessage) (map[string][]string, error) {
 
 func (v *validation) validateRequiredProfileList(input requiredProfileList) {
 	field := "meta." + resultsSwitch + "." + input.adapter
+	target := findingTarget{path: v.rel(input.path), scenario: "catalog"}
 	if input.adapter != claudeAdapter {
-		v.add(v.rel(input.path), "catalog", field, "Desktop result completeness is only supported for claudecode")
+		v.add(target, field, "Desktop result completeness is only supported for claudecode")
 		return
 	}
 	if len(input.profiles) == 0 {
-		v.add(v.rel(input.path), "catalog", field, "must contain at least one profile")
+		v.add(target, field, "must contain at least one profile")
 		return
 	}
 	seen := map[matrix.ExecutionProfile]bool{}
 	for _, value := range input.profiles {
 		profile, err := matrix.ParseExecutionProfile(value)
 		if err != nil {
-			v.add(v.rel(input.path), "catalog", field, err.Error())
+			v.add(target, field, err.Error())
 			continue
 		}
 		if profile != matrix.ProfileDesktopLocal {
-			v.add(v.rel(input.path), "catalog", field, "only desktop-local can be required by this result contract")
+			v.add(target, field, "only desktop-local can be required by this result contract")
 			continue
 		}
 		if seen[profile] {
-			v.add(v.rel(input.path), "catalog", field, "contains duplicate desktop-local")
+			v.add(target, field, "contains duplicate desktop-local")
 			continue
 		}
 		seen[profile] = true
@@ -178,7 +216,7 @@ func (v *validation) scanResultFiles() {
 	var resultFiles []string
 	err := filepath.WalkDir(root, func(path string, entry iofs.DirEntry, walkErr error) error {
 		if walkErr != nil {
-			v.add(v.rel(path), "unknown", "scan", walkErr.Error())
+			v.add(findingTarget{path: v.rel(path), scenario: "unknown"}, "scan", walkErr.Error())
 			return nil
 		}
 		if entry.IsDir() {
@@ -193,7 +231,7 @@ func (v *validation) scanResultFiles() {
 		return nil
 	})
 	if err != nil && !os.IsNotExist(err) {
-		v.add(v.rel(root), "unknown", "scan", err.Error())
+		v.add(findingTarget{path: v.rel(root), scenario: "unknown"}, "scan", err.Error())
 	}
 	for _, path := range resultFiles {
 		v.validateResultFile(path)
@@ -230,16 +268,17 @@ func (v *validation) validateResultFile(path string) {
 	rel := v.rel(path)
 	cellDir := filepath.Clean(filepath.Dir(path))
 	expectedScenario := metadataScenarioID(cellDir)
+	target := findingTarget{path: rel, scenario: expectedScenario}
 	canonicalScenario, canonical := v.canonicalCells[cellDir]
 	if !canonical {
-		v.add(rel, expectedScenario, "document location", "must be the direct child of a current Claude Code cell")
+		v.add(target, "document location", "must be the direct child of a current Claude Code cell")
 	}
-	doc, ok := v.loadResultDocument(path, rel, expectedScenario)
+	doc, ok := v.loadResultDocument(resultDocumentLocation{path: path, target: target})
 	if !ok {
 		return
 	}
 	context := resultFileContext{
-		rel:               rel,
+		target:            target,
 		cellDir:           cellDir,
 		expectedScenario:  expectedScenario,
 		canonicalScenario: canonicalScenario,
@@ -248,21 +287,21 @@ func (v *validation) validateResultFile(path string) {
 	v.validateResults(context, doc.Results)
 }
 
-func (v *validation) loadResultDocument(path, rel, scenario string) (Document, bool) {
-	if _, err := resolveFile(v.repoRoot, rel); err != nil {
-		v.add(rel, scenario, "document", err.Error())
+func (v *validation) loadResultDocument(location resultDocumentLocation) (Document, bool) {
+	if _, err := resolveFile(pathReference{root: v.repoRoot, reference: location.target.path}); err != nil {
+		v.add(location.target, "document", err.Error())
 		return Document{}, false
 	}
-	doc, err := Load(path)
+	doc, err := Load(location.path)
 	if err != nil {
-		v.add(rel, scenario, "document", "invalid or unknown field: "+err.Error())
+		v.add(location.target, "document", "invalid or unknown field: "+err.Error())
 		return Document{}, false
 	}
 	if doc.SchemaVersion != SchemaVersion {
-		v.add(rel, scenario, "schema_version", fmt.Sprintf("got %d; want %d", doc.SchemaVersion, SchemaVersion))
+		v.add(location.target, "schema_version", fmt.Sprintf("got %d; want %d", doc.SchemaVersion, SchemaVersion))
 	}
 	if len(doc.Results) == 0 {
-		v.add(rel, scenario, "results", "must contain at least one result")
+		v.add(location.target, "results", "must contain at least one result")
 		return doc, false
 	}
 	return doc, true
@@ -280,7 +319,9 @@ func (v *validation) validateResults(context resultFileContext, results []Result
 			v.resultCount[result.ScenarioID]++
 		}
 		if seenProfile[result.ExecutionProfile] {
-			v.add(context.rel, result.ScenarioID, "results", "duplicate desktop-local result")
+			target := context.target
+			target.scenario = result.ScenarioID
+			v.add(target, "results", "duplicate desktop-local result")
 		}
 		seenProfile[result.ExecutionProfile] = true
 	}
@@ -302,62 +343,68 @@ func metadataScenarioID(cellDir string) string {
 
 func (v *validation) validateResult(context resultFileContext, result *Result) {
 	scenario := result.ScenarioID
-	v.validateScenario(context.rel, context.expectedScenario, scenario)
+	target := context.target
+	target.scenario = scenario
+	resultContext := resultValidationContext{target: target, cellDir: context.cellDir, result: result}
+	v.validateScenario(scenarioValidation{target: target, expected: context.expectedScenario, actual: scenario})
 	profile, err := matrix.ParseExecutionProfile(result.ExecutionProfile)
 	if err != nil {
-		v.add(context.rel, scenario, "execution_profile", err.Error())
+		v.add(target, "execution_profile", err.Error())
 	} else if profile != matrix.ProfileDesktopLocal {
-		v.add(context.rel, scenario, "execution_profile", "result files support only desktop-local")
+		v.add(target, "execution_profile", "result files support only desktop-local")
 	}
 	if !knownOutcome(result.Outcome) {
-		v.add(context.rel, scenario, "outcome", fmt.Sprintf("unknown outcome %q", result.Outcome))
+		v.add(target, "outcome", fmt.Sprintf("unknown outcome %q", result.Outcome))
 		return
 	}
 	if observedOutcome(result.Outcome) {
-		v.validateObservedShape(context.rel, context.cellDir, result)
+		v.validateObservedShape(resultContext)
 		return
 	}
-	v.validateNonObservedShape(context.rel, context.cellDir, result)
+	v.validateNonObservedShape(resultContext)
 }
 
-func (v *validation) validateScenario(rel, expected, actual string) {
-	if strings.TrimSpace(actual) == "" {
-		v.add(rel, expected, "scenario_id", "must not be blank")
+func (v *validation) validateScenario(input scenarioValidation) {
+	if strings.TrimSpace(input.actual) == "" {
+		input.target.scenario = input.expected
+		v.add(input.target, "scenario_id", "must not be blank")
 		return
 	}
-	if !v.catalog[actual] {
-		v.add(rel, actual, "scenario_id", "does not name a current catalog scenario")
+	if !v.catalog[input.actual] {
+		v.add(input.target, "scenario_id", "does not name a current catalog scenario")
 	}
-	if expected == "" {
-		v.add(rel, actual, "scenario_id", "cannot match result to a valid sibling metadata.json")
-	} else if actual != expected {
-		v.add(rel, actual, "scenario_id", fmt.Sprintf("does not match cell metadata scenario_id %q", expected))
+	if input.expected == "" {
+		v.add(input.target, "scenario_id", "cannot match result to a valid sibling metadata.json")
+	} else if input.actual != input.expected {
+		v.add(input.target, "scenario_id", fmt.Sprintf("does not match cell metadata scenario_id %q", input.expected))
 	}
 }
 
-func (v *validation) validateObservedShape(rel, cellDir string, result *Result) {
+func (v *validation) validateObservedShape(context resultValidationContext) {
+	result := context.result
 	if !safeSegment(result.Recording) {
-		v.add(rel, result.ScenarioID, "recording", "must be one safe recording directory name")
+		v.add(context.target, "recording", "must be one safe recording directory name")
 		return
 	}
 	if result.Evidence == nil {
-		v.add(rel, result.ScenarioID, "evidence", "is required for an observed result")
+		v.add(context.target, "evidence", "is required for an observed result")
 		return
 	}
-	v.validateCanonicalEvidenceNames(rel, result)
+	v.validateCanonicalEvidenceNames(context)
 	if len(result.EvidenceRefs) > 0 {
-		v.add(rel, result.ScenarioID, "evidence_refs", "is only valid for a non-observed result")
+		v.add(context.target, "evidence_refs", "is only valid for a non-observed result")
 	}
 	if strings.TrimSpace(result.MissingControl) != "" {
-		v.add(rel, result.ScenarioID, "missing_control", "is only valid for not-runnable")
+		v.add(context.target, "missing_control", "is only valid for not-runnable")
 	}
 	if result.Outcome == OutcomeObservedFailure && strings.TrimSpace(result.Reason) == "" {
-		v.add(rel, result.ScenarioID, "reason", "is required for observed-failure")
+		v.add(context.target, "reason", "is required for observed-failure")
 	}
-	v.validateObservedEvidence(rel, cellDir, result)
+	v.validateObservedEvidence(context)
 }
 
-func (v *validation) validateCanonicalEvidenceNames(rel string, result *Result) {
+func (v *validation) validateCanonicalEvidenceNames(context resultValidationContext) {
+	result := context.result
 	actual := map[string]string{
 		"desktop_registry": result.Evidence.DesktopRegistry,
 		"transcript":       result.Evidence.Transcript,
@@ -376,32 +423,33 @@ func (v *validation) validateCanonicalEvidenceNames(rel string, result *Result) 
 	}
 	for field, want := range expected {
 		if actual[field] != want {
-			v.add(rel, result.ScenarioID, "evidence."+field, fmt.Sprintf("got %q; want canonical %q", actual[field], want))
+			v.add(context.target, "evidence."+field, fmt.Sprintf("got %q; want canonical %q", actual[field], want))
 		}
 	}
 }
 
-func (v *validation) validateNonObservedShape(rel, cellDir string, result *Result) {
-	v.validateNonObservedEvidence(rel, cellDir, result)
-	v.validateNonObservedExclusions(rel, result)
+func (v *validation) validateNonObservedShape(context resultValidationContext) {
+	v.validateNonObservedEvidence(context)
+	v.validateNonObservedExclusions(context)
 }
 
-func (v *validation) validateNonObservedEvidence(rel, cellDir string, result *Result) {
+func (v *validation) validateNonObservedEvidence(context resultValidationContext) {
+	result := context.result
 	if strings.TrimSpace(result.Reason) == "" {
-		v.add(rel, result.ScenarioID, "reason", "must contain an evidence-based reason")
+		v.add(context.target, "reason", "must contain an evidence-based reason")
 	}
 	if len(result.EvidenceRefs) == 0 {
-		v.add(rel, result.ScenarioID, "evidence_refs", "must contain at least one repository evidence reference")
+		v.add(context.target, "evidence_refs", "must contain at least one repository evidence reference")
 	}
 	for i, ref := range result.EvidenceRefs {
 		field := fmt.Sprintf("evidence_refs[%d]", i)
-		resolved, err := resolveFile(v.repoRoot, ref)
+		resolved, err := resolveFile(pathReference{root: v.repoRoot, reference: ref})
 		if err != nil {
-			v.add(rel, result.ScenarioID, field, err.Error())
+			v.add(context.target, field, err.Error())
 			continue
 		}
-		if !v.allowedNonObservedEvidence(cellDir, resolved) {
-			v.add(rel, result.ScenarioID, field, "must name same-cell Desktop evidence or an explicit repository Desktop evidence source")
+		if !v.allowedNonObservedEvidence(evidenceBoundary{cellDir: context.cellDir, resolved: resolved}) {
+			v.add(context.target, field, "must name same-cell Desktop evidence or an explicit repository Desktop evidence source")
 		}
 	}
 }
@@ -410,34 +458,35 @@ func (v *validation) validateNonObservedEvidence(rel, cellDir string, result *Re
 // not claim that prose proves the result. Campaign evidence must be the cell's
 // metadata, a file under its desktop-evidence directory, or a shared raw probe
 // under replaydata/agents/claudecode/desktop-evidence.
-func (v *validation) allowedNonObservedEvidence(cellDir, resolved string) bool {
-	if sameResolvedFile(resolved, filepath.Join(cellDir, metadataFile)) {
+func (v *validation) allowedNonObservedEvidence(boundary evidenceBoundary) bool {
+	if sameResolvedFile(pathPair{left: boundary.resolved, right: filepath.Join(boundary.cellDir, metadataFile)}) {
 		return true
 	}
 	for _, root := range []string{
-		filepath.Join(cellDir, "desktop-evidence"),
+		filepath.Join(boundary.cellDir, "desktop-evidence"),
 		filepath.Join(v.repoRoot, "replaydata", "agents", claudeAdapter, "desktop-evidence"),
 	} {
-		if resolvedWithinExisting(root, resolved) {
+		if resolvedWithinExisting(pathPair{left: root, right: boundary.resolved}) {
 			return true
 		}
 	}
 	return false
 }
 
-func (v *validation) validateNonObservedExclusions(rel string, result *Result) {
+func (v *validation) validateNonObservedExclusions(context resultValidationContext) {
+	result := context.result
 	if result.Recording != "" {
-		v.add(rel, result.ScenarioID, "recording", "is only valid for an observed result")
+		v.add(context.target, "recording", "is only valid for an observed result")
 	}
 	if result.Evidence != nil {
-		v.add(rel, result.ScenarioID, "evidence", "is only valid for an observed result")
+		v.add(context.target, "evidence", "is only valid for an observed result")
 	}
 	missing := strings.TrimSpace(result.MissingControl)
 	if result.Outcome == OutcomeNotRunnable && missing == "" {
-		v.add(rel, result.ScenarioID, "missing_control", "must name the unavailable Desktop control")
+		v.add(context.target, "missing_control", "must name the unavailable Desktop control")
 	}
 	if result.Outcome != OutcomeNotRunnable && missing != "" {
-		v.add(rel, result.ScenarioID, "missing_control", "is only valid for not-runnable")
+		v.add(context.target, "missing_control", "is only valid for not-runnable")
 	}
 }
 
@@ -451,7 +500,7 @@ func (v *validation) validateCompleteness() {
 func (v *validation) validateDuplicateResults() {
 	for scenario, count := range v.resultCount {
 		if count > 1 {
-			v.add(resultCellsPath(), scenario, "completeness", fmt.Sprintf("duplicate desktop-local result: found %d entries", count))
+			v.add(findingTarget{path: resultCellsPath(), scenario: scenario}, "completeness", fmt.Sprintf("duplicate desktop-local result: found %d entries", count))
 		}
 	}
 }
@@ -460,7 +509,7 @@ func (v *validation) validateRequiredResults() {
 	for scenario := range v.claudeCells {
 		count := v.resultCount[scenario]
 		if count == 0 {
-			v.add(resultCellsPath(), scenario, "completeness", "missing desktop-local result")
+			v.add(findingTarget{path: resultCellsPath(), scenario: scenario}, "completeness", "missing desktop-local result")
 		}
 	}
 }
@@ -469,17 +518,17 @@ func resultCellsPath() string {
 	return filepath.Join("replaydata", "agents", claudeAdapter, "scenarios")
 }
 
-func sameResolvedFile(left, right string) bool {
-	resolved, err := filepath.EvalSymlinks(right)
-	return err == nil && resolved == left
+func sameResolvedFile(paths pathPair) bool {
+	resolved, err := filepath.EvalSymlinks(paths.right)
+	return err == nil && resolved == paths.left
 }
 
-func resolvedWithinExisting(root, path string) bool {
-	resolvedRoot, err := filepath.EvalSymlinks(root)
+func resolvedWithinExisting(paths pathPair) bool {
+	resolvedRoot, err := filepath.EvalSymlinks(paths.left)
 	if err != nil {
 		return false
 	}
-	rel, err := filepath.Rel(resolvedRoot, path)
+	rel, err := filepath.Rel(resolvedRoot, paths.right)
 	return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
@@ -503,54 +552,54 @@ type resolvedPath struct {
 // resolveFile accepts only an existing, non-empty regular file below root.
 // EvalSymlinks makes a repository-relative reference unable to escape through
 // a committed or locally-created symlink.
-func resolveFile(root, reference string) (string, error) {
-	resolved, err := resolveExisting(root, reference)
+func resolveFile(input pathReference) (string, error) {
+	resolved, err := resolveExisting(input)
 	if err != nil {
 		return "", err
 	}
 	if !resolved.info.Mode().IsRegular() || resolved.info.Size() == 0 {
-		return "", fmt.Errorf("reference %q must name a non-empty regular file", reference)
+		return "", fmt.Errorf("reference %q must name a non-empty regular file", input.reference)
 	}
 	return resolved.path, nil
 }
 
-func resolveDirectory(root, reference string) (string, error) {
-	if !safeSegment(reference) {
+func resolveDirectory(input pathReference) (string, error) {
+	if !safeSegment(input.reference) {
 		return "", fmt.Errorf("must be one safe directory name")
 	}
-	resolved, err := resolveExisting(root, reference)
+	resolved, err := resolveExisting(input)
 	if err != nil {
-		return "", fmt.Errorf("cannot resolve recording %q: %w", reference, err)
+		return "", fmt.Errorf("cannot resolve recording %q: %w", input.reference, err)
 	}
 	if !resolved.info.IsDir() {
-		return "", fmt.Errorf("recording %q must name a directory", reference)
+		return "", fmt.Errorf("recording %q must name a directory", input.reference)
 	}
 	return resolved.path, nil
 }
 
-func resolveExisting(root, reference string) (resolvedPath, error) {
-	clean, err := cleanReference(reference)
+func resolveExisting(input pathReference) (resolvedPath, error) {
+	clean, err := cleanReference(input.reference)
 	if err != nil {
 		return resolvedPath{}, err
 	}
-	rootResolved, err := filepath.EvalSymlinks(root)
+	rootResolved, err := filepath.EvalSymlinks(input.root)
 	if err != nil {
 		return resolvedPath{}, fmt.Errorf("cannot resolve evidence root: %w", err)
 	}
-	resolved, err := filepath.EvalSymlinks(filepath.Join(root, clean))
+	resolved, err := filepath.EvalSymlinks(filepath.Join(input.root, clean))
 	if err != nil {
-		return resolvedPath{}, fmt.Errorf("cannot read %q: %w", reference, err)
+		return resolvedPath{}, fmt.Errorf("cannot read %q: %w", input.reference, err)
 	}
 	rel, err := filepath.Rel(rootResolved, resolved)
 	if err != nil {
 		return resolvedPath{}, fmt.Errorf("cannot compare evidence root and reference: %w", err)
 	}
 	if escapesRoot(rel) {
-		return resolvedPath{}, fmt.Errorf("reference %q escapes its evidence root", reference)
+		return resolvedPath{}, fmt.Errorf("reference %q escapes its evidence root", input.reference)
 	}
 	info, err := os.Stat(resolved)
 	if err != nil {
-		return resolvedPath{}, fmt.Errorf("cannot read %q: %w", reference, err)
+		return resolvedPath{}, fmt.Errorf("cannot read %q: %w", input.reference, err)
 	}
 	return resolvedPath{path: resolved, info: info}, nil
 }

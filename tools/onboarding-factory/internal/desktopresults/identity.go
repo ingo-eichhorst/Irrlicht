@@ -47,11 +47,66 @@ type hookReceipt struct {
 }
 
 type hookValidation struct {
-	rel        string
-	scenario   string
+	target     findingTarget
 	path       string
 	eventsPath string
 	sessionID  string
+}
+
+type recordingValidationContext struct {
+	target       findingTarget
+	cellDir      string
+	recordingDir string
+	result       *Result
+}
+
+type identityValidation struct {
+	target   findingTarget
+	identity observedIdentity
+}
+
+type evidenceRead struct {
+	target findingTarget
+	path   string
+}
+
+type transcriptRow struct {
+	SessionID  string `json:"sessionId"`
+	CWD        string `json:"cwd"`
+	Entrypoint string `json:"entrypoint"`
+}
+
+type hookScanInput struct {
+	path       string
+	eventsPath string
+	sessionID  string
+}
+
+type hookReceiptInput struct {
+	scan      *hookReceiptScan
+	line      string
+	sessionID string
+	remaining map[string]int
+}
+
+type hookSessionCheck struct {
+	row       hookReceipt
+	sessionID string
+}
+
+type lineClaim struct {
+	remaining map[string]int
+	line      string
+}
+
+type jsonRead struct {
+	path  string
+	value any
+}
+
+type identityMerge struct {
+	current *string
+	next    string
 }
 
 func (scan hookReceiptScan) valid() bool {
@@ -104,59 +159,64 @@ type observedIdentity struct {
 	processOK     bool
 }
 
-func (v *validation) validateObservedEvidence(rel, cellDir string, result *Result) {
-	recordingsRoot := filepath.Join(cellDir, "recordings")
-	recordingDir, err := resolveDirectory(recordingsRoot, result.Recording)
+func (v *validation) validateObservedEvidence(context resultValidationContext) {
+	recordingsRoot := filepath.Join(context.cellDir, "recordings")
+	recordingDir, err := resolveDirectory(pathReference{root: recordingsRoot, reference: context.result.Recording})
 	if err != nil {
-		v.add(rel, result.ScenarioID, "recording", err.Error())
+		v.add(context.target, "recording", err.Error())
 		return
 	}
-	v.validateRecordingCompleteness(rel, result.ScenarioID, recordingDir)
-	v.validateObservedOutcome(rel, cellDir, recordingDir, result)
-	files, ok := v.resolveEvidenceFiles(rel, recordingDir, result)
-	manifest, manifestOK := v.validateManifest(rel, recordingDir, result.ScenarioID)
+	recording := recordingValidationContext{
+		target:       context.target,
+		cellDir:      context.cellDir,
+		recordingDir: recordingDir,
+		result:       context.result,
+	}
+	v.validateRecordingCompleteness(recording)
+	v.validateObservedOutcome(recording)
+	files, ok := v.resolveEvidenceFiles(recording)
+	manifest, manifestOK := v.validateManifest(recording)
 	if !ok || !manifestOK {
 		return
 	}
-	identity := v.readObservedIdentity(rel, result.ScenarioID, files, manifest)
-	v.compareObservedIdentity(rel, result.ScenarioID, identity)
+	identity := v.readObservedIdentity(context.target, files, manifest)
+	v.compareObservedIdentity(identityValidation{target: context.target, identity: identity})
 }
 
-func (v *validation) validateRecordingCompleteness(rel, scenario, recordingDir string) {
-	for _, finding := range expectedvalidate.RecordingComplete(recordingDir) {
-		v.add(rel, scenario, "recording completeness", finding)
+func (v *validation) validateRecordingCompleteness(context recordingValidationContext) {
+	for _, finding := range expectedvalidate.RecordingComplete(context.recordingDir) {
+		v.add(context.target, "recording completeness", finding)
 	}
 }
 
-func (v *validation) validateObservedOutcome(rel, cellDir, recordingDir string, result *Result) {
+func (v *validation) validateObservedOutcome(context recordingValidationContext) {
 	report, err := expectedvalidate.ValidateExpectedAgainst(
-		filepath.Join(cellDir, "expected.jsonl"),
-		filepath.Join(recordingDir, "events.jsonl"),
+		filepath.Join(context.cellDir, "expected.jsonl"),
+		filepath.Join(context.recordingDir, "events.jsonl"),
 	)
 	if err != nil {
-		v.add(rel, result.ScenarioID, "outcome", "cannot validate the exact recording: "+err.Error())
+		v.add(context.target, "outcome", "cannot validate the exact recording: "+err.Error())
 		return
 	}
 	if report == nil {
-		v.add(rel, result.ScenarioID, "outcome", "exact recording has no expected-result report")
+		v.add(context.target, "outcome", "exact recording has no expected-result report")
 		return
 	}
-	wantPass := result.Outcome == OutcomeObservedPassing
+	wantPass := context.result.Outcome == OutcomeObservedPassing
 	if report.Pass != wantPass {
-		v.add(rel, result.ScenarioID, "outcome", fmt.Sprintf("got %q for an expected-result pass value of %t", result.Outcome, report.Pass))
+		v.add(context.target, "outcome", fmt.Sprintf("got %q for an expected-result pass value of %t", context.result.Outcome, report.Pass))
 	}
 }
 
-func (v *validation) readObservedIdentity(rel, scenario string, files evidenceFiles, manifest matrix.RecordingManifest) observedIdentity {
+func (v *validation) readObservedIdentity(target findingTarget, files evidenceFiles, manifest matrix.RecordingManifest) observedIdentity {
 	identity := observedIdentity{manifest: manifest}
-	identity.transcript, identity.transcriptOK = v.readTranscript(rel, scenario, files.transcript)
-	identity.registry, identity.registryOK = v.readRegistry(rel, scenario, files.registry)
-	identity.environment, identity.environmentOK = v.readEnvironment(rel, scenario, files.environment)
-	identity.irrlicht, identity.irrlichtOK = v.readIrrlichtSession(rel, scenario, files.irrlicht)
-	identity.process, identity.processOK = v.readProcess(rel, scenario, files.process)
+	identity.transcript, identity.transcriptOK = v.readTranscript(evidenceRead{target: target, path: files.transcript})
+	identity.registry, identity.registryOK = v.readRegistry(evidenceRead{target: target, path: files.registry})
+	identity.environment, identity.environmentOK = v.readEnvironment(evidenceRead{target: target, path: files.environment})
+	identity.irrlicht, identity.irrlichtOK = v.readIrrlichtSession(evidenceRead{target: target, path: files.irrlicht})
+	identity.process, identity.processOK = v.readProcess(evidenceRead{target: target, path: files.process})
 	v.validateHooks(hookValidation{
-		rel:        rel,
-		scenario:   scenario,
+		target:     target,
 		path:       files.hooks,
 		eventsPath: files.events,
 		sessionID:  identity.transcript.SessionID,
@@ -164,48 +224,51 @@ func (v *validation) readObservedIdentity(rel, scenario string, files evidenceFi
 	return identity
 }
 
-func (v *validation) compareObservedIdentity(rel, scenario string, identity observedIdentity) {
-	v.compareTranscriptIdentity(rel, scenario, identity)
-	v.compareEnvironmentIdentity(rel, scenario, identity)
-	v.compareProcessIdentity(rel, scenario, identity)
+func (v *validation) compareObservedIdentity(context identityValidation) {
+	v.compareTranscriptIdentity(context)
+	v.compareEnvironmentIdentity(context)
+	v.compareProcessIdentity(context)
 }
 
-func (v *validation) compareTranscriptIdentity(rel, scenario string, identity observedIdentity) {
+func (v *validation) compareTranscriptIdentity(context identityValidation) {
+	identity := context.identity
 	if !identity.transcriptOK {
 		return
 	}
-	v.compareManifestTranscript(rel, scenario, identity.manifest, identity.transcript)
+	v.compareManifestTranscript(context)
 	if identity.registryOK {
-		v.compareSessionMapping(rel, scenario, identity.transcript, identity.registry)
+		v.compareSessionMapping(context)
 	}
 	if identity.registryOK && identity.environmentOK {
-		v.compareWorkspaceIdentity(rel, scenario, identity)
+		v.compareWorkspaceIdentity(context)
 	}
 	if identity.irrlichtOK {
-		v.compareIrrlichtIdentity(rel, scenario, identity.transcript, identity.irrlicht)
+		v.compareIrrlichtIdentity(context)
 	}
 }
 
-func (v *validation) compareEnvironmentIdentity(rel, scenario string, identity observedIdentity) {
+func (v *validation) compareEnvironmentIdentity(context identityValidation) {
+	identity := context.identity
 	if !identity.environmentOK || !identity.irrlichtOK {
 		return
 	}
 	if !samePath(identity.environment.RequestedWorkspace, identity.irrlicht.CWD) {
-		v.add(rel, scenario, fieldIrrlichtCWD, mismatchEnvironmentCWD)
+		v.add(context.target, fieldIrrlichtCWD, mismatchEnvironmentCWD)
 	}
 }
 
-func (v *validation) compareProcessIdentity(rel, scenario string, identity observedIdentity) {
+func (v *validation) compareProcessIdentity(context identityValidation) {
+	identity := context.identity
 	if !identity.processOK || !identity.irrlichtOK {
 		return
 	}
 	if identity.process.PID != identity.irrlicht.PID {
-		v.add(rel, scenario, "process.pid", "does not match irrlicht_session.pid")
+		v.add(context.target, "process.pid", "does not match irrlicht_session.pid")
 	}
 }
 
-func (v *validation) resolveEvidenceFiles(rel, recordingDir string, result *Result) (evidenceFiles, bool) {
-	evidence := result.Evidence
+func (v *validation) resolveEvidenceFiles(context recordingValidationContext) (evidenceFiles, bool) {
+	evidence := context.result.Evidence
 	refs := []struct {
 		field string
 		ref   string
@@ -227,17 +290,17 @@ func (v *validation) resolveEvidenceFiles(rel, recordingDir string, result *Resu
 	refs[5].dst = &files.environment
 	ok := true
 	for _, item := range refs {
-		resolved, err := resolveFile(recordingDir, item.ref)
+		resolved, err := resolveFile(pathReference{root: context.recordingDir, reference: item.ref})
 		if err != nil {
-			v.add(rel, result.ScenarioID, "evidence."+item.field, err.Error())
+			v.add(context.target, "evidence."+item.field, err.Error())
 			ok = false
 			continue
 		}
 		*item.dst = resolved
 	}
-	eventsPath, eventsErr := resolveFile(recordingDir, "events.jsonl")
+	eventsPath, eventsErr := resolveFile(pathReference{root: context.recordingDir, reference: "events.jsonl"})
 	if eventsErr != nil {
-		v.add(rel, result.ScenarioID, "events", eventsErr.Error())
+		v.add(context.target, "events", eventsErr.Error())
 		ok = false
 	} else {
 		files.events = eventsPath
@@ -245,22 +308,22 @@ func (v *validation) resolveEvidenceFiles(rel, recordingDir string, result *Resu
 	return files, ok
 }
 
-func (v *validation) validateManifest(rel, recordingDir, scenario string) (matrix.RecordingManifest, bool) {
-	manifestPath, err := resolveFile(recordingDir, "manifest.json")
+func (v *validation) validateManifest(context recordingValidationContext) (matrix.RecordingManifest, bool) {
+	manifestPath, err := resolveFile(pathReference{root: context.recordingDir, reference: "manifest.json"})
 	if err != nil {
-		v.add(rel, scenario, "manifest", err.Error())
+		v.add(context.target, "manifest", err.Error())
 		return matrix.RecordingManifest{}, false
 	}
 	manifest, err := matrix.LoadRecordingManifest(manifestPath)
 	if err != nil {
-		v.add(rel, scenario, "manifest", err.Error())
+		v.add(context.target, "manifest", err.Error())
 		return manifest, false
 	}
 	if manifest.ExecutionProfile != matrix.ProfileDesktopLocal {
-		v.add(rel, scenario, "manifest.execution_profile", fmt.Sprintf("got %q; want %q", manifest.ExecutionProfile, matrix.ProfileDesktopLocal))
+		v.add(context.target, "manifest.execution_profile", fmt.Sprintf("got %q; want %q", manifest.ExecutionProfile, matrix.ProfileDesktopLocal))
 	}
 	if manifest.Entrypoint != desktopEntrypoint {
-		v.add(rel, scenario, "manifest.entrypoint", fmt.Sprintf("got %q; want %q", manifest.Entrypoint, desktopEntrypoint))
+		v.add(context.target, "manifest.entrypoint", fmt.Sprintf("got %q; want %q", manifest.Entrypoint, desktopEntrypoint))
 	}
 	for field, value := range map[string]string{
 		"manifest.daemon_version":      manifest.DaemonVersion,
@@ -268,22 +331,22 @@ func (v *validation) validateManifest(rel, recordingDir, scenario string) (matri
 		"manifest.desktop_app_version": manifest.DesktopAppVersion,
 	} {
 		if blankOrUnknown(value) {
-			v.add(rel, scenario, field, "must contain the measured version")
+			v.add(context.target, field, "must contain the measured version")
 		}
 	}
 	return manifest, true
 }
 
-func (v *validation) readTranscript(rel, scenario, path string) (transcriptIdentity, bool) {
-	identity, conflicts, err := scanTranscript(path)
+func (v *validation) readTranscript(input evidenceRead) (transcriptIdentity, bool) {
+	identity, conflicts, err := scanTranscript(input.path)
 	if err != nil {
-		v.add(rel, scenario, "transcript", err.Error())
+		v.add(input.target, "transcript", err.Error())
 		return identity, false
 	}
 	for _, field := range conflicts {
-		v.add(rel, scenario, "transcript."+field, "contains conflicting values")
+		v.add(input.target, "transcript."+field, "contains conflicting values")
 	}
-	ok := v.validateTranscriptFields(rel, scenario, identity)
+	ok := v.validateTranscriptFields(identityValidation{target: input.target, identity: observedIdentity{transcript: identity}})
 	return identity, ok && len(conflicts) == 0
 }
 
@@ -297,11 +360,7 @@ func scanTranscript(path string) (transcriptIdentity, []string, error) {
 	identity := transcriptIdentity{}
 	var conflicts []string
 	for {
-		var row struct {
-			SessionID  string `json:"sessionId"`
-			CWD        string `json:"cwd"`
-			Entrypoint string `json:"entrypoint"`
-		}
+		var row transcriptRow
 		err := decoder.Decode(&row)
 		if err == io.EOF {
 			break
@@ -309,26 +368,27 @@ func scanTranscript(path string) (transcriptIdentity, []string, error) {
 		if err != nil {
 			return identity, conflicts, fmt.Errorf("invalid JSONL: %w", err)
 		}
-		conflicts = append(conflicts, mergeTranscriptRow(&identity, row.SessionID, row.CWD, row.Entrypoint)...)
+		conflicts = append(conflicts, mergeTranscriptRow(&identity, row)...)
 	}
 	return identity, conflicts, nil
 }
 
-func mergeTranscriptRow(identity *transcriptIdentity, sessionID, cwd, entrypoint string) []string {
+func mergeTranscriptRow(identity *transcriptIdentity, row transcriptRow) []string {
 	var conflicts []string
-	if !mergeIdentity(&identity.SessionID, sessionID) {
+	if !mergeIdentity(identityMerge{current: &identity.SessionID, next: row.SessionID}) {
 		conflicts = append(conflicts, "sessionId")
 	}
-	if !mergeIdentity(&identity.CWD, cwd) {
+	if !mergeIdentity(identityMerge{current: &identity.CWD, next: row.CWD}) {
 		conflicts = append(conflicts, "cwd")
 	}
-	if !mergeIdentity(&identity.Entrypoint, entrypoint) {
+	if !mergeIdentity(identityMerge{current: &identity.Entrypoint, next: row.Entrypoint}) {
 		conflicts = append(conflicts, "entrypoint")
 	}
 	return conflicts
 }
 
-func (v *validation) validateTranscriptFields(rel, scenario string, identity transcriptIdentity) bool {
+func (v *validation) validateTranscriptFields(context identityValidation) bool {
+	identity := context.identity.transcript
 	ok := true
 	for field, value := range map[string]string{
 		"sessionId":  identity.SessionID,
@@ -336,21 +396,21 @@ func (v *validation) validateTranscriptFields(rel, scenario string, identity tra
 		"entrypoint": identity.Entrypoint,
 	} {
 		if strings.TrimSpace(value) == "" {
-			v.add(rel, scenario, "transcript."+field, "is absent from the raw transcript")
+			v.add(context.target, "transcript."+field, "is absent from the raw transcript")
 			ok = false
 		}
 	}
 	if identity.Entrypoint != "" && identity.Entrypoint != desktopEntrypoint {
-		v.add(rel, scenario, "transcript.entrypoint", fmt.Sprintf("got %q; want %q", identity.Entrypoint, desktopEntrypoint))
+		v.add(context.target, "transcript.entrypoint", fmt.Sprintf("got %q; want %q", identity.Entrypoint, desktopEntrypoint))
 		ok = false
 	}
 	return ok
 }
 
-func (v *validation) readRegistry(rel, scenario, path string) (registryIdentity, bool) {
+func (v *validation) readRegistry(input evidenceRead) (registryIdentity, bool) {
 	var registry registryIdentity
-	if err := readJSON(path, &registry); err != nil {
-		v.add(rel, scenario, "desktop_registry", err.Error())
+	if err := readJSON(jsonRead{path: input.path, value: &registry}); err != nil {
+		v.add(input.target, "desktop_registry", err.Error())
 		return registry, false
 	}
 	ok := true
@@ -360,109 +420,109 @@ func (v *validation) readRegistry(rel, scenario, path string) (registryIdentity,
 		fieldDesktopRegistryCWD:         registry.CWD,
 	} {
 		if strings.TrimSpace(value) == "" {
-			v.add(rel, scenario, field, mustNotBeBlank)
+			v.add(input.target, field, mustNotBeBlank)
 			ok = false
 		}
 	}
 	if registry.SessionID != "" && !strings.HasPrefix(registry.SessionID, "local_") {
-		v.add(rel, scenario, "desktop_registry.sessionId", "must start with local_")
+		v.add(input.target, "desktop_registry.sessionId", "must start with local_")
 		ok = false
 	}
 	if len(registry.EnvScopeID) > 0 && string(registry.EnvScopeID) != "null" {
-		v.add(rel, scenario, "desktop_registry.envScopeId", "must be absent or null for the project-local environment")
+		v.add(input.target, "desktop_registry.envScopeId", "must be absent or null for the project-local environment")
 		ok = false
 	}
 	return registry, ok
 }
 
-func (v *validation) readEnvironment(rel, scenario, path string) (environmentReceipt, bool) {
+func (v *validation) readEnvironment(input evidenceRead) (environmentReceipt, bool) {
 	var receipt environmentReceipt
-	if err := decodeStrict(path, &receipt); err != nil {
-		v.add(rel, scenario, "environment", "invalid or unknown field: "+err.Error())
+	if err := decodeStrict(input.path, &receipt); err != nil {
+		v.add(input.target, "environment", "invalid or unknown field: "+err.Error())
 		return receipt, false
 	}
 	ok := true
 	if receipt.SelectedEnvironment != localEnvironment {
-		v.add(rel, scenario, "environment.selected_environment", fmt.Sprintf("got %q; want %q", receipt.SelectedEnvironment, localEnvironment))
+		v.add(input.target, "environment.selected_environment", fmt.Sprintf("got %q; want %q", receipt.SelectedEnvironment, localEnvironment))
 		ok = false
 	}
 	if strings.TrimSpace(receipt.RequestedWorkspace) == "" {
-		v.add(rel, scenario, "environment.requested_workspace", mustNotBeBlank)
+		v.add(input.target, "environment.requested_workspace", mustNotBeBlank)
 		ok = false
 	}
 	return receipt, ok
 }
 
-func (v *validation) readIrrlichtSession(rel, scenario, path string) (irrlichtSession, bool) {
+func (v *validation) readIrrlichtSession(input evidenceRead) (irrlichtSession, bool) {
 	var state irrlichtSession
-	if err := readJSON(path, &state); err != nil {
-		v.add(rel, scenario, "irrlicht_session", err.Error())
+	if err := readJSON(jsonRead{path: input.path, value: &state}); err != nil {
+		v.add(input.target, "irrlicht_session", err.Error())
 		return state, false
 	}
 	ok := true
 	if strings.TrimSpace(state.SessionID) == "" {
-		v.add(rel, scenario, "irrlicht_session.session_id", mustNotBeBlank)
+		v.add(input.target, "irrlicht_session.session_id", mustNotBeBlank)
 		ok = false
 	}
 	if strings.TrimSpace(state.CWD) == "" {
-		v.add(rel, scenario, fieldIrrlichtCWD, mustNotBeBlank)
+		v.add(input.target, fieldIrrlichtCWD, mustNotBeBlank)
 		ok = false
 	}
 	if state.PID <= 0 {
-		v.add(rel, scenario, "irrlicht_session.pid", "must be positive")
+		v.add(input.target, "irrlicht_session.pid", "must be positive")
 		ok = false
 	}
 	if state.Launcher.HostBundleID != desktopBundleID {
-		v.add(rel, scenario, "irrlicht_session.launcher.host_bundle_id", fmt.Sprintf("got %q; want %q", state.Launcher.HostBundleID, desktopBundleID))
+		v.add(input.target, "irrlicht_session.launcher.host_bundle_id", fmt.Sprintf("got %q; want %q", state.Launcher.HostBundleID, desktopBundleID))
 		ok = false
 	}
 	return state, ok
 }
 
 func (v *validation) validateHooks(input hookValidation) bool {
-	scan, err := scanHookReceipts(input.path, input.eventsPath, input.sessionID)
+	scan, err := scanHookReceipts(hookScanInput{path: input.path, eventsPath: input.eventsPath, sessionID: input.sessionID})
 	if err != nil {
-		v.add(input.rel, input.scenario, "hooks", err.Error())
+		v.add(input.target, "hooks", err.Error())
 		return false
 	}
-	v.reportHookReceiptFindings(input.rel, input.scenario, scan)
+	v.reportHookReceiptFindings(input.target, scan)
 	return scan.valid()
 }
 
-func (v *validation) reportHookReceiptFindings(rel, scenario string, scan hookReceiptScan) {
+func (v *validation) reportHookReceiptFindings(target findingTarget, scan hookReceiptScan) {
 	if !scan.matchedSession {
-		v.add(rel, scenario, "hooks.session_id", "contains no hook receipt for transcript.sessionId")
+		v.add(target, "hooks.session_id", "contains no hook receipt for transcript.sessionId")
 	}
 	if !scan.consistentSessions {
-		v.add(rel, scenario, "hooks.session_id", "contains a hook receipt from another session")
+		v.add(target, "hooks.session_id", "contains a hook receipt from another session")
 	}
 	if !scan.correctKinds {
-		v.add(rel, scenario, "hooks.kind", `must be "hook_received" on every row`)
+		v.add(target, "hooks.kind", `must be "hook_received" on every row`)
 	}
 	if !scan.named {
-		v.add(rel, scenario, "hooks.hook_name", "must be nonblank on every hook receipt")
+		v.add(target, "hooks.hook_name", "must be nonblank on every hook receipt")
 	}
 	if !scan.preserved {
-		v.add(rel, scenario, "hooks.events_jsonl", "each row must occur byte-for-byte in this recording's events.jsonl")
+		v.add(target, "hooks.events_jsonl", "each row must occur byte-for-byte in this recording's events.jsonl")
 	}
 }
 
 // scanHookReceipts validates unmodified hook_received rows extracted from the
 // recording's events.jsonl. These rows are lifecycle receipts. They are not
 // the raw inbound Claude hook payload.
-func scanHookReceipts(path, eventsPath, sessionID string) (hookReceiptScan, error) {
-	eventLines, err := readJSONLLines(eventsPath)
+func scanHookReceipts(input hookScanInput) (hookReceiptScan, error) {
+	eventLines, err := readJSONLLines(input.eventsPath)
 	if err != nil {
 		return hookReceiptScan{}, fmt.Errorf("read events.jsonl: %w", err)
 	}
-	hookLines, err := readJSONLLines(path)
+	hookLines, err := readJSONLLines(input.path)
 	if err != nil {
 		return hookReceiptScan{}, err
 	}
 	remaining := countLines(eventLines)
 	scan := hookReceiptScan{consistentSessions: true, correctKinds: true, named: true, preserved: true}
 	for _, line := range hookLines {
-		if err := applyHookReceipt(&scan, line, sessionID, remaining); err != nil {
+		if err := applyHookReceipt(hookReceiptInput{scan: &scan, line: line, sessionID: input.sessionID, remaining: remaining}); err != nil {
 			return hookReceiptScan{}, fmt.Errorf("invalid JSONL: %w", err)
 		}
 	}
@@ -477,30 +537,30 @@ func countLines(lines []string) map[string]int {
 	return counts
 }
 
-func applyHookReceipt(scan *hookReceiptScan, line, sessionID string, remaining map[string]int) error {
+func applyHookReceipt(input hookReceiptInput) error {
 	var row hookReceipt
-	if err := json.Unmarshal([]byte(line), &row); err != nil {
+	if err := json.Unmarshal([]byte(input.line), &row); err != nil {
 		return err
 	}
 	correctKind := row.Kind == "hook_received"
-	sessionMatches := hookSessionMatches(row, sessionID)
-	scan.correctKinds = scan.correctKinds && correctKind
-	scan.matchedSession = scan.matchedSession || sessionMatches
-	scan.consistentSessions = scan.consistentSessions && sessionMatches
-	scan.named = scan.named && strings.TrimSpace(row.HookName) != ""
-	scan.preserved = scan.preserved && claimLine(remaining, line)
+	sessionMatches := hookSessionMatches(hookSessionCheck{row: row, sessionID: input.sessionID})
+	input.scan.correctKinds = input.scan.correctKinds && correctKind
+	input.scan.matchedSession = input.scan.matchedSession || sessionMatches
+	input.scan.consistentSessions = input.scan.consistentSessions && sessionMatches
+	input.scan.named = input.scan.named && strings.TrimSpace(row.HookName) != ""
+	input.scan.preserved = input.scan.preserved && claimLine(lineClaim{remaining: input.remaining, line: input.line})
 	return nil
 }
 
-func hookSessionMatches(row hookReceipt, sessionID string) bool {
-	return row.Kind == "hook_received" && sessionID != "" && row.SessionID == sessionID
+func hookSessionMatches(input hookSessionCheck) bool {
+	return input.row.Kind == "hook_received" && input.sessionID != "" && input.row.SessionID == input.sessionID
 }
 
-func claimLine(remaining map[string]int, line string) bool {
-	if remaining[line] == 0 {
+func claimLine(input lineClaim) bool {
+	if input.remaining[input.line] == 0 {
 		return false
 	}
-	remaining[line]--
+	input.remaining[input.line]--
 	return true
 }
 
@@ -521,77 +581,78 @@ func readJSONLLines(path string) ([]string, error) {
 	return lines, nil
 }
 
-func (v *validation) readProcess(rel, scenario, path string) (processEvidence, bool) {
+func (v *validation) readProcess(input evidenceRead) (processEvidence, bool) {
 	var process processEvidence
-	if err := readJSON(path, &process); err != nil {
-		v.add(rel, scenario, "process", err.Error())
+	if err := readJSON(jsonRead{path: input.path, value: &process}); err != nil {
+		v.add(input.target, "process", err.Error())
 		return process, false
 	}
 	ok := true
 	if process.PID <= 0 {
-		v.add(rel, scenario, "process.pid", "must be positive")
+		v.add(input.target, "process.pid", "must be positive")
 		ok = false
 	}
 	if strings.TrimSpace(process.Command) == "" {
-		v.add(rel, scenario, "process.command", mustNotBeBlank)
+		v.add(input.target, "process.command", mustNotBeBlank)
 		ok = false
 	}
 	return process, ok
 }
 
-func (v *validation) compareManifestTranscript(rel, scenario string, manifest matrix.RecordingManifest, transcript transcriptIdentity) {
-	if manifest.Entrypoint != transcript.Entrypoint {
-		v.add(rel, scenario, "manifest.entrypoint", "does not match transcript.entrypoint")
+func (v *validation) compareManifestTranscript(context identityValidation) {
+	if context.identity.manifest.Entrypoint != context.identity.transcript.Entrypoint {
+		v.add(context.target, "manifest.entrypoint", "does not match transcript.entrypoint")
 	}
 }
 
-func (v *validation) compareWorkspaceIdentity(rel, scenario string, identity observedIdentity) {
+func (v *validation) compareWorkspaceIdentity(context identityValidation) {
+	identity := context.identity
 	if !samePath(identity.registry.CWD, identity.transcript.CWD) {
-		v.add(rel, scenario, fieldDesktopRegistryCWD, "does not match transcript.cwd")
+		v.add(context.target, fieldDesktopRegistryCWD, "does not match transcript.cwd")
 	}
 	if !samePath(identity.registry.CWD, identity.environment.RequestedWorkspace) {
-		v.add(rel, scenario, fieldDesktopRegistryCWD, mismatchEnvironmentCWD)
+		v.add(context.target, fieldDesktopRegistryCWD, mismatchEnvironmentCWD)
 	}
 	if !samePath(identity.transcript.CWD, identity.environment.RequestedWorkspace) {
-		v.add(rel, scenario, "transcript.cwd", mismatchEnvironmentCWD)
+		v.add(context.target, "transcript.cwd", mismatchEnvironmentCWD)
 	}
 }
 
-func (v *validation) compareSessionMapping(rel, scenario string, transcript transcriptIdentity, registry registryIdentity) {
-	if registry.CLISessionID != transcript.SessionID {
-		v.add(rel, scenario, "desktop_registry.cliSessionId", "does not match transcript.sessionId")
+func (v *validation) compareSessionMapping(context identityValidation) {
+	if context.identity.registry.CLISessionID != context.identity.transcript.SessionID {
+		v.add(context.target, "desktop_registry.cliSessionId", "does not match transcript.sessionId")
 	}
 }
 
-func (v *validation) compareIrrlichtIdentity(rel, scenario string, transcript transcriptIdentity, state irrlichtSession) {
-	if state.SessionID != transcript.SessionID {
-		v.add(rel, scenario, "irrlicht_session.session_id", "does not match transcript.sessionId")
+func (v *validation) compareIrrlichtIdentity(context identityValidation) {
+	if context.identity.irrlicht.SessionID != context.identity.transcript.SessionID {
+		v.add(context.target, "irrlicht_session.session_id", "does not match transcript.sessionId")
 	}
-	if !samePath(state.CWD, transcript.CWD) {
-		v.add(rel, scenario, fieldIrrlichtCWD, "does not match transcript.cwd")
+	if !samePath(context.identity.irrlicht.CWD, context.identity.transcript.CWD) {
+		v.add(context.target, fieldIrrlichtCWD, "does not match transcript.cwd")
 	}
 }
 
-func readJSON(path string, value any) error {
-	b, err := os.ReadFile(path)
+func readJSON(input jsonRead) error {
+	b, err := os.ReadFile(input.path)
 	if err != nil {
 		return err
 	}
-	if err := json.Unmarshal(b, value); err != nil {
+	if err := json.Unmarshal(b, input.value); err != nil {
 		return fmt.Errorf("invalid JSON: %w", err)
 	}
 	return nil
 }
 
-func mergeIdentity(current *string, next string) bool {
-	if next == "" {
+func mergeIdentity(input identityMerge) bool {
+	if input.next == "" {
 		return true
 	}
-	if *current == "" {
-		*current = next
+	if *input.current == "" {
+		*input.current = input.next
 		return true
 	}
-	return *current == next
+	return *input.current == input.next
 }
 
 func samePath(left, right string) bool {
