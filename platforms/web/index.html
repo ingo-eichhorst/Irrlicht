@@ -25,31 +25,39 @@
 </head>
 <body>
   <header>
-    <div class="header-left">
-      <div class="app-title">
-        <span class="app-name">Irrlicht</span>
-        <span class="app-version" id="app-version"></span>
-        <span class="app-sep">—</span>
+    <div class="header-row">
+      <div class="header-left">
+        <div class="app-title">
+          <span class="app-name">Irrlicht</span>
+          <span class="app-version" id="app-version"></span>
+          <span class="app-sep">—</span>
+        </div>
+        <div class="app-state-icons" id="app-state-icons" aria-label="Active sessions"></div>
       </div>
-      <div class="quota-chips" id="quota-chips" aria-label="Provider quota"></div>
-      <div class="app-state-icons" id="app-state-icons" aria-label="Active sessions"></div>
+      <div class="header-right">
+        <button class="view-mode-cycle" id="history-tab-toggle" type="button"
+                title="Show historical cost analytics">History</button>
+        <button class="view-mode-cycle" id="view-mode-cycle" type="button"
+                title="Cycle Context / 1 Min / 10 Min / 60 Min">Context</button>
+        <button class="theme-toggle" id="summary-collapse-all" type="button"
+                title="Collapse all pending questions" aria-label="Collapse all pending questions">⊟</button>
+        <button class="theme-toggle" id="theme-toggle" type="button"
+                title="Toggle light/dark theme" aria-label="Toggle theme">☾</button>
+        <button class="theme-toggle" id="settings-toggle" type="button"
+                title="Settings" aria-label="Settings">⚙</button>
+        <output class="ws-status" aria-live="polite">
+          <span class="ws-dot connecting" id="ws-dot"></span>
+          <span id="ws-label">connecting</span>
+        </output>
+      </div>
     </div>
-    <div class="header-right">
-      <button class="view-mode-cycle" id="history-tab-toggle" type="button"
-              title="Show historical cost analytics">History</button>
-      <button class="view-mode-cycle" id="view-mode-cycle" type="button"
-              title="Cycle Context / 1 Min / 10 Min / 60 Min">Context</button>
-      <button class="theme-toggle" id="summary-collapse-all" type="button"
-              title="Collapse all pending questions" aria-label="Collapse all pending questions">⊟</button>
-      <button class="theme-toggle" id="theme-toggle" type="button"
-              title="Toggle light/dark theme" aria-label="Toggle theme">☾</button>
-      <button class="theme-toggle" id="settings-toggle" type="button"
-              title="Settings" aria-label="Settings">⚙</button>
-      <output class="ws-status" aria-live="polite">
-        <span class="ws-dot connecting" id="ws-dot"></span>
-        <span id="ws-label">connecting</span>
-      </output>
-    </div>
+    <!-- Provider quota strip. Its own row UNDER the title/controls row, not
+         beside them: the chips are the one header element whose width grows
+         with the number of providers signed in, so on the same row they push
+         into the right-hand controls and the two paint on top of each other
+         (reported against v0.6.2 at ~870px). A row of its own has the whole
+         width to itself and cannot collide with anything. -->
+    <div class="quota-chips" id="quota-chips" aria-label="Provider quota"></div>
   </header>
 
   <dialog class="settings-modal-backdrop" id="settings-backdrop" aria-modal="true" aria-label="Settings">
