@@ -21,6 +21,33 @@ desktop_shared_lock_path() {
   printf '%s\n' "$build_root/claude-desktop-driver.lock"
 }
 
+# desktop_daemon_home <repo-root> prints the recording daemon's IRRLICHT_HOME
+# for a desktop-local run. It is deliberately SHORT and outside the clone.
+#
+# The daemon binds $IRRLICHT_HOME/irrlichd.sock, and macOS refuses an AF_UNIX
+# path over 103 bytes (spawn-record-daemon.sh's RECORD_DAEMON_SOCK_MAX carries
+# the measurement). A staging-relative home measures 114 bytes in a bare clone
+# and 158 in a linked worktree, so every desktop-local run used to die inside
+# setupUnixSocket before the driver ever ran.
+#
+# The suffix keys on the clone, so two checkouts never share one home and the
+# path stays stable across runs of the same clone — a crashed run's stale
+# socket is cleared by the next one rather than accumulating scratch dirs.
+desktop_daemon_home() {
+  local repo_root="$1" common_dir clone_root key
+  common_dir="$(git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || {
+    echo "desktop-local cannot resolve the shared Git directory" >&2
+    return 1
+  }
+  clone_root="$(cd "$(dirname "$common_dir")" && pwd -P)" || return 1
+  key="$(printf '%s' "$clone_root" | cksum | cut -d' ' -f1)" || return 1
+  [[ "$key" =~ ^[0-9]+$ ]] || {
+    echo "desktop-local could not derive a daemon-home key for $clone_root" >&2
+    return 1
+  }
+  printf '/tmp/irr-onb-%s\n' "$key"
+}
+
 # desktop_acquire_clone_lock keeps descriptor 9 open in the calling shell.
 # The BSD lock therefore spans all later setup, Desktop control, and EXIT-trap
 # cleanup. All linked worktrees resolve the same main-worktree .build path.

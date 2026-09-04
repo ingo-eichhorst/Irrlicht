@@ -25,7 +25,11 @@ SCRIPTS_DIR="$(cd "$DIR/.." && pwd)"
 # shellcheck source=spawn-record-daemon.sh
 source "$DIR/spawn-record-daemon.sh"
 
-TMP="$(mktemp -d)"
+# A SHORT scratch root, deliberately. $HOME feeds record_daemon_sock's
+# production branch, and the daemon binds that path: mktemp's default root on
+# macOS is long enough that every case would trip the AF_UNIX length guard
+# below instead of reaching the behaviour it grades.
+TMP="$(mktemp -d /tmp/irr-srd.XXXXXX)"
 trap 'rm -rf "$TMP"' EXIT
 
 # Floor under every case: $HOME feeds record_daemon_sock's production branch and
@@ -452,6 +456,60 @@ else
   got="missing"
 fi
 assert_eq "desktop-local enables the built oracle" "wired" "$got"
+
+echo "== the daemon socket path must fit AF_UNIX's sun_path =="
+# MUTATION fixture for the guard added with the Desktop profile. macOS copies a
+# bind path into a 104-byte sun_path INCLUDING the terminator, so 103 binds and
+# 104 does not (measured). Over the limit irrlichd exit(1)s inside
+# setupUnixSocket, which used to reach this script only as the generic
+# "daemon socket never appeared" ten seconds later, with the managed-file
+# snapshot already taken. Disconnect the guard and these four go red.
+home_for_sock_len() {
+  local want="$1" suffix="/irrlichd.sock" base="$TMP/L" pad
+  pad=$(( want - ${#base} - ${#suffix} ))
+  (( pad >= 0 )) || return 1
+  printf '%s%s\n' "$base" "$(printf 'x%.0s' $(seq 1 "$pad"))"
+}
+if fitting_home="$(home_for_sock_len "$RECORD_DAEMON_SOCK_MAX")"; then
+  record_daemon_require_bindable_sock "$(record_daemon_sock "$fitting_home")"
+  assert_eq "a socket path at the limit is accepted" "0" "$?"
+else
+  # The check cannot run from this $TMP. That is a failure, not a pass.
+  fail "a socket path at the limit is accepted" "a buildable path" "TMP too long: $TMP"
+fi
+over_home="$(home_for_sock_len $(( RECORD_DAEMON_SOCK_MAX + 1 )))"
+record_daemon_require_bindable_sock "$(record_daemon_sock "$over_home")" 2>/dev/null
+assert_eq "one byte over the limit refuses" "1" "$?"
+
+fresh_staging sockguard
+rc=0
+spawn_record_daemon "$TMP/never-executed" "$STAGING" 127.0.0.1:7838 "$over_home" \
+  2>"$TMP/sockguard.err" || rc=$?
+assert_eq "an unbindable socket path refuses the spawn" "1" "$rc"
+[[ -e "$STAGING/managed-file-backup" ]] && got=touched || got=untouched
+assert_eq "the refusal lands before the managed-file snapshot" "untouched" "$got"
+if grep -q "over the $RECORD_DAEMON_SOCK_MAX-byte AF_UNIX limit" "$TMP/sockguard.err"; then
+  got=named
+else
+  got=silent
+fi
+assert_eq "the refusal names the limit" "named" "$got"
+
+# The desktop-local profile is the caller that used to trip this. Its daemon
+# home must be short enough to bind on any clone, including a linked worktree.
+# shellcheck source=desktop-profile.sh
+source "$DIR/desktop-profile.sh"
+desktop_home="$(desktop_daemon_home "$SCRIPTS_DIR/../../..")"
+desktop_sock="$(record_daemon_sock "$desktop_home")"
+record_daemon_require_bindable_sock "$desktop_sock"
+assert_eq "desktop-local's own daemon home binds ($desktop_sock)" "0" "$?"
+if grep -Fq 'desktop_daemon_home "$REPO_ROOT"' "$SCRIPTS_DIR/run-cell.sh" &&
+  ! grep -Fq 'IRRLICHT_ONBOARD_HOME="$STAGING/irrlicht-home"' "$SCRIPTS_DIR/run-cell.sh"; then
+  got="short"
+else
+  got="clone-relative"
+fi
+assert_eq "run-cell.sh uses the short desktop daemon home" "short" "$got"
 
 echo ""
 if [[ "$fails" -eq 0 ]]; then
