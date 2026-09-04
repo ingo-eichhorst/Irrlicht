@@ -64,6 +64,31 @@ record_daemon_sock() {
   return 0
 }
 
+# The kernel copies a bind address into sockaddr_un.sun_path, which is 104
+# bytes on macOS INCLUDING the terminator, so 103 is the longest path that
+# binds. Over that, irrlichd exits(1) inside setupUnixSocket before it opens
+# anything else, and this script sees only wait_for_record_daemon's generic
+# "daemon socket never appeared" ten seconds later. Refuse by name instead,
+# BEFORE the managed-file snapshot: a daemon that cannot bind must not reach
+# the user's agent config at all.
+RECORD_DAEMON_SOCK_MAX=103
+
+record_daemon_require_bindable_sock() {
+  local sock="$1"
+  [[ -n "$sock" ]] || {
+    echo "spawn-record-daemon: empty daemon socket path" >&2
+    return 1
+  }
+  if (( ${#sock} > RECORD_DAEMON_SOCK_MAX )); then
+    echo "spawn-record-daemon: daemon socket path is ${#sock} bytes, over the" \
+      "${RECORD_DAEMON_SOCK_MAX}-byte AF_UNIX limit, so the daemon cannot bind it:" >&2
+    echo "  $sock" >&2
+    echo "  point IRRLICHT_ONBOARD_HOME at a shorter directory (e.g. /tmp/irr-onb)" >&2
+    return 1
+  fi
+  return 0
+}
+
 # record_daemon_env <recordings-dir> <bind-addr> [<irrlicht-home>] prints the
 # daemon's environment, one NAME=VALUE per line, for `env` to apply. One per
 # line (rather than an array) so it can be asserted directly by the unit tests;
@@ -167,6 +192,7 @@ spawn_record_daemon() {
 
   RECORD_DAEMON_STAGING="$staging"
   RECORD_DAEMON_SOCK="$(record_daemon_sock "$home")"
+  record_daemon_require_bindable_sock "$RECORD_DAEMON_SOCK" || return 1
 
   # Save the shared agent config the daemon is about to rewrite (see
   # lib/managed-file-snapshot.sh); the shutdown hands it back. WHICH files those

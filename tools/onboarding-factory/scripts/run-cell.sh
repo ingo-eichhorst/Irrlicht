@@ -359,7 +359,13 @@ if [[ "$EXECUTION_PROFILE" == "desktop-local" ]]; then
   DESKTOP_BIND="$(desktop_choose_loopback_address)" || { rm -f "$PRECHECK_JSON_TMP"; exit 1; }
   desktop_require_free_loopback_address "$DESKTOP_BIND" || { rm -f "$PRECHECK_JSON_TMP"; exit 1; }
   export IRRLICHT_ONBOARD_BIND_ADDR="$DESKTOP_BIND"
-  export IRRLICHT_ONBOARD_HOME="$REPO_ROOT/.build/refresh/desktop-precheck-home"
+  # One short daemon home for the whole run — precheck and the recording daemon
+  # both read it. It cannot live under $STAGING: see desktop_daemon_home for the
+  # AF_UNIX path budget that ruled every clone-relative home out.
+  DESKTOP_DAEMON_HOME="$(desktop_daemon_home "$REPO_ROOT")" || {
+    rm -f "$PRECHECK_JSON_TMP"; exit 1
+  }
+  export IRRLICHT_ONBOARD_HOME="$DESKTOP_DAEMON_HOME"
 fi
 if ! ATTACH="$ATTACH" EXECUTION_PROFILE="$EXECUTION_PROFILE" PRECHECK_JSON_OUT="$PRECHECK_JSON_TMP" "$SCRIPT_DIR/precheck.sh" "$ADAPTER"; then
   rm -f "$PRECHECK_JSON_TMP"
@@ -377,7 +383,10 @@ STAGING="$REPO_ROOT/.build/refresh/$ADAPTER/$FOLDER-$TS"
 mkdir -p "$STAGING/recordings" "$STAGING/replaydata/agents/$ADAPTER/scenarios/$FOLDER" "$STAGING/reports"
 if [[ "$EXECUTION_PROFILE" == "desktop-local" ]]; then
   mkdir -p "$STAGING/cwd"
-  export IRRLICHT_ONBOARD_HOME="$STAGING/irrlicht-home"
+  # A previous run of THIS clone owned the same home. Clear it so a stale
+  # socket or addr file cannot make this daemon look already-up.
+  rm -rf "${DESKTOP_DAEMON_HOME:?}"
+  mkdir -p "$DESKTOP_DAEMON_HOME"
 fi
 
 # precheck's machine-readable output now has somewhere to live (#1333 / B3).
