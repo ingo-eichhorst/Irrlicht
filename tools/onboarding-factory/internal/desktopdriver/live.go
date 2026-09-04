@@ -222,13 +222,23 @@ func waitForComposerControls(
 					"Claude Desktop raised a second workspace trust prompt while waiting for the composer for %q; refusing to answer it",
 					workspace)
 			}
-			trusted = true
-			recordStep("trust-workspace-prompt-answered")
 			if err := click(ctx, confirm, helperPostcondition{
 				Selector: confirm, Condition: "absent", TimeoutMilliseconds: 10_000,
 			}); err != nil {
-				return false, fmt.Errorf("answer Desktop workspace trust prompt: %w", err)
+				// The sheet animates in, so the helper's hit test can land off
+				// the button on the first attempt. That is a reason to look
+				// again on the next tick, not to fail the run — and it is not
+				// an answer, so the once-only guard below stays unspent.
+				if fatal := transientClickError(err); fatal != nil {
+					return false, fmt.Errorf("answer Desktop workspace trust prompt: %w", fatal)
+				}
+				lastMismatch = err
+				return false, nil
 			}
+			// Counted only on a CONFIRMED dismissal: "answer at most once" is
+			// about grants that actually happened, not attempts.
+			trusted = true
+			recordStep("trust-workspace-prompt-answered")
 			lastMismatch = errors.New("answered the Desktop workspace trust prompt; waiting for the composer")
 			return false, nil
 		}
@@ -313,6 +323,17 @@ func poll(ctx context.Context, name string, observe func() (bool, error)) error 
 		case <-ticker.C:
 		}
 	}
+}
+
+// transientClickError returns nil for a click failure worth retrying on the
+// next poll tick. stale_control means the helper's hit test did not land on the
+// control it resolved — its own guard against clicking the wrong thing — which
+// is what a sheet still animating into place produces.
+func transientClickError(err error) error {
+	if strings.Contains(err.Error(), "stale_control") {
+		return nil
+	}
+	return transientHelperError(err)
 }
 
 func transientHelperError(err error) error {

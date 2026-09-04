@@ -3,6 +3,7 @@ package desktopdriver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -537,5 +538,66 @@ func TestTrustPromptRequiresBothButtons(t *testing.T) {
 	}
 	if _, prompted := trustPromptButton(trustPromptElements(trustConfirmTitle, trustCancelTitle, false)); !prompted {
 		t.Fatal("the exact trust-prompt shape was not recognised")
+	}
+}
+
+// The trust sheet animates in, so the helper's own hit test can refuse the
+// first click. That must be retried, and must not spend the once-only guard.
+func TestComposerWaitRetriesATrustClickThatMissedTheAnimatingSheet(t *testing.T) {
+	attempts := 0
+	var steps []string
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	controls, err := waitForComposerControls(
+		ctx,
+		"/repo/workspace",
+		func(context.Context) ([]helperElement, error) {
+			if attempts < 2 {
+				return trustPromptElements(trustConfirmTitle, trustCancelTitle, false), nil
+			}
+			return archiveFixtureElements("workspace", "Owned"), nil
+		},
+		func(context.Context, map[string]helperSelector) error { return nil },
+		func(context.Context, helperSelector, helperPostcondition) error {
+			attempts++
+			if attempts == 1 {
+				return errors.New("helper stale_control: The current click point does not hit the selected control.")
+			}
+			return nil
+		},
+		func(step string) { steps = append(steps, step) },
+	)
+	if err != nil {
+		t.Fatalf("waitForComposerControls() error = %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("click attempts = %d, want 2 (one missed, one landed)", attempts)
+	}
+	if len(controls) == 0 {
+		t.Fatal("the composer was never verified after the retried trust click")
+	}
+	if len(steps) != 1 {
+		t.Fatalf("steps = %v; only the CONFIRMED grant may be recorded", steps)
+	}
+}
+
+// A click failure that is not the animation race is a stop.
+func TestComposerWaitFailsOnANonTransientTrustClickError(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := waitForComposerControls(
+		ctx,
+		"/repo/workspace",
+		func(context.Context) ([]helperElement, error) {
+			return trustPromptElements(trustConfirmTitle, trustCancelTitle, false), nil
+		},
+		func(context.Context, map[string]helperSelector) error { return nil },
+		func(context.Context, helperSelector, helperPostcondition) error {
+			return errors.New("helper permission_denied: Accessibility is not trusted")
+		},
+		func(string) {},
+	)
+	if err == nil || !strings.Contains(err.Error(), "answer Desktop workspace trust prompt") {
+		t.Fatalf("waitForComposerControls() error = %v", err)
 	}
 }
