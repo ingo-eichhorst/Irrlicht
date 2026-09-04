@@ -13,6 +13,10 @@ import {
 import {
   startReplay, replayStatus, setReplaySpeed, pauseReplay, resumeReplay, stopReplay, seekReplay,
 } from './replayClient.js';
+import {
+  DEFAULT_PROFILE, buildProfileSelector, focusFromHash, profileFromHash,
+  recordingHash, renderProfileEvidence,
+} from './profileView.js';
 
 const SPEED_PRESETS = [1, 2, 5, 10, 25, 100];
 
@@ -349,18 +353,25 @@ function navigate(hash) {
 //   "#/recording/<agent>/<subtree>/<id>"               → recording playback (latest)
 //   "#/recording/<agent>/<subtree>/<id>/<archive>"     → recording playback (specific archive)
 //
-// Any recording URL may carry a "?focus=<key>" suffix where key is a
-// section anchor (supports, observes, recipe, spec, recordings,
-// validation). Used by the pipeline-strip segments to scroll the
-// matching panel into view on entry.
+// Any recording URL may carry a query suffix with either or both of:
+//   "?focus=<key>"      a section anchor (supports, observes, recipe, spec,
+//                       recordings, validation) the pipeline-strip segments
+//                       use to scroll the matching panel into view on entry.
+//   "?profile=<id>"     the execution profile (cli-local | desktop-local).
+//                       Absent means cli-local, so every link written before
+//                       profiles existed names the same page (#1889). This
+//                       hash shape — built by profileView.recordingHash — is
+//                       the viewer's stable link target.
 //
 // Unknown hashes fall back to overview.
 function route() {
   const hash = location.hash || "#/";
-  // Peel off the optional ?focus=<key> suffix before path matching.
-  const focusMatch = /\?focus=([a-z]+)$/.exec(hash);
-  const focus = focusMatch ? focusMatch[1] : "";
-  const pathPart = focus ? hash.slice(0, hash.lastIndexOf("?")) : hash;
+  // Peel the query suffix off before path matching; focus and profile may
+  // appear together and in either order.
+  const focus = focusFromHash(hash);
+  const profile = profileFromHash(hash);
+  const queryAt = hash.indexOf("?");
+  const pathPart = queryAt >= 0 ? hash.slice(0, queryAt) : hash;
 
   let m = /^#\/scenario\/([^/]+)\/?$/.exec(pathPart);
   if (m) {
@@ -379,7 +390,7 @@ function route() {
       navigate("#/");
       return;
     }
-    loadScenario(rec, archive, focus);
+    loadScenario(rec, archive, focus, profile);
     return;
   }
   // Default: overview. Strip any unknown hash content from the title.
@@ -1528,7 +1539,7 @@ function renderScenariosMatrix(detail) {
 // falls back to latest if the archive doesn't exist for this cell).
 // `focus` is the optional ?focus=<key> from the URL — scrolls the
 // matching panel into view after render. Empty → no scroll.
-async function loadScenario(s, initialArchive, focus) {
+async function loadScenario(s, initialArchive, focus, profile) {
   document.querySelectorAll(".scn").forEach(e => e.classList.remove("active"));
   // Find the sidebar button by data-rec-key (set in init() when the
   // button was created). Deep links come through route() without a
@@ -1567,17 +1578,24 @@ async function loadScenario(s, initialArchive, focus) {
     return;
   }
   const recordingPath = `${encodeURIComponent(s.agent)}/${encodeURIComponent(s.subtree)}/${encodeURIComponent(s.id)}`;
+  // Every fetch below carries the SAME execution profile, so the status, the
+  // recording history and the matrix measurement on this page all describe one
+  // product surface. The CLI Local default sends no query at all, which is why
+  // pre-#1889 links keep hitting the exact request they always did.
+  const selectedProfile = profile || DEFAULT_PROFILE;
+  const profileQuery = selectedProfile === DEFAULT_PROFILE
+    ? "" : `?profile=${encodeURIComponent(selectedProfile)}`;
   // Recipe lookup uses recipesByCoverageId (populated once at init from
   // /api/recipes — see comment above), so no per-recording recipes fetch
   // is needed here.
   const [data, archives, catalog] = await Promise.all([
-    fetch(`/api/scenarios/${recordingPath}`).then(r => r.json()),
-    fetch(`/api/scenarios/${recordingPath}/recordings`).then(r => r.ok ? r.json() : []).catch(() => []),
+    fetch(`/api/scenarios/${recordingPath}${profileQuery}`).then(r => r.json()),
+    fetch(`/api/scenarios/${recordingPath}/recordings${profileQuery}`).then(r => r.ok ? r.json() : []).catch(() => []),
     // Coverage catalog: lets us render a stub Assessment panel from
     // the matrix verdict + notes when no assessment.json exists.
     // Without this fallback the ⚙ / ◉ pipeline-strip jumps would
     // land nowhere for most cells.
-    fetch(`/api/catalog`).then(r => r.ok ? r.json() : null).catch(() => null),
+    fetch(`/api/catalog${profileQuery}`).then(r => r.ok ? r.json() : null).catch(() => null),
   ]);
   detail.innerHTML = "";
 
@@ -1634,14 +1652,38 @@ async function loadScenario(s, initialArchive, focus) {
   // selected recording so they don't blink on dropdown changes.
   // Order mirrors the pipeline strip left-to-right:
   //   Assessment (⚙ ◉) → Recipe (✎) → Recording (N) → Spec/Validation (§ ✓) → recording-specific panels.
+  // The execution-profile panel sits above everything recording-derived: it
+  // decides WHICH body of evidence the rest of the page is about.
+  detail.appendChild(renderProfilePanel(s, data));
   if (data.assessment) {
     detail.appendChild(renderAssessment(data.assessment));
   } else {
     detail.appendChild(renderAssessmentFallback(coverageEntry));
   }
   detail.appendChild(renderRecipePanel(recipeEntry));
-  detail.appendChild(renderRecordingHistory(s, data, archives, initialArchive || "", recipeEntry, coverageEntry));
+  detail.appendChild(renderRecordingHistory(s, data, archives, initialArchive || "", recipeEntry, coverageEntry, selectedProfile));
   scrollFocusInto(focus || "");
+}
+
+// renderProfilePanel is the execution-profile control (#1889): the selector,
+// plus this profile's status, versions, recording link and — under Desktop
+// Local — the explicit result's reason and raw identity evidence. Switching
+// the profile navigates to the same cell's stable per-profile hash, which
+// drops any archive selection: a recording name belongs to one profile only.
+function renderProfilePanel(s, data) {
+  const p = panel("Execution profile", "profile");
+  const intro = document.createElement("div");
+  intro.style.cssText = "margin-bottom: 8px; font-size: 12px; color: #555;";
+  intro.textContent =
+    "Claude Code CLI Local and Claude Desktop Local are separate bodies of evidence — status, " +
+    "versions, recording history and raw identity files never cross between them. CLI Local is " +
+    "the default, so links written before execution profiles existed still mean what they said.";
+  p.appendChild(intro);
+  p.appendChild(buildProfileSelector(data, next => {
+    navigate(recordingHash({agent: s.agent, subtree: s.subtree, id: s.id, profile: next}));
+  }));
+  p.appendChild(renderProfileEvidence(data));
+  return p;
 }
 
 // degradedBanner is shown on scenario detail pages that have no
@@ -2169,8 +2211,14 @@ function fmtLabel(startedAt, daemonVer, passRate) {
   return `${ts}${ver}${pass}`;
 }
 
-function renderRecordingHistory(s, latestData, archives, initialArchive, recipeEntry, coverageEntry) {
+function renderRecordingHistory(s, latestData, archives, initialArchive, recipeEntry, coverageEntry, profile) {
   const wrap = document.createElement("div");
+  // `archives` was already fetched scoped to this profile, so the dropdown
+  // lists one profile's history; the per-archive fetch and the URL rewrite
+  // below carry the same scope so a selection can never cross over.
+  const selectedProfile = profile || DEFAULT_PROFILE;
+  const profileQuery = selectedProfile === DEFAULT_PROFILE
+    ? "" : `?profile=${encodeURIComponent(selectedProfile)}`;
 
   // 1. The selector panel (top, controls everything below).
   //    anchor "recordings" — pipeline-strip segment N jumps here.
@@ -2273,7 +2321,7 @@ function renderRecordingHistory(s, latestData, archives, initialArchive, recipeE
     // encode each segment before it lands in a fetch path (SonarQube
     // jssecurity:S7044 / S8476).
     const archDetail = await fetch(
-      `/api/scenarios/${encodeURIComponent(s.agent)}/${encodeURIComponent(s.subtree)}/${encodeURIComponent(s.id)}/recordings/${encodeURIComponent(value)}`
+      `/api/scenarios/${encodeURIComponent(s.agent)}/${encodeURIComponent(s.subtree)}/${encodeURIComponent(s.id)}/recordings/${encodeURIComponent(value)}${profileQuery}`
     ).then(r => r.json());
     const archData = {
       ...latestData,
@@ -2337,8 +2385,11 @@ function renderRecordingHistory(s, latestData, archives, initialArchive, recipeE
     // history.replaceState rather than navigate() to avoid spamming
     // browser history with every dropdown click.
     const v = select.value;
-    const base = `#/recording/${s.agent}/${s.subtree}/${s.id}`;
-    const next = (v && v !== "__none__") ? `${base}/${encodeURIComponent(v)}` : base;
+    const next = recordingHash({
+      agent: s.agent, subtree: s.subtree, id: s.id,
+      recording: (v && v !== "__none__") ? v : "",
+      profile: selectedProfile,
+    });
     if (location.hash !== next) {
       history.replaceState(null, "", next);
     }
