@@ -199,6 +199,23 @@ else
 fi
 assert_eq "run-cell acquires the lock before daemon setup" "before-setup" "$got"
 
+# #1888: the recipe refusal is worth nothing if run-cell.sh calls it after the
+# managed-file snapshot or the daemon. Read the ORDER out of run-cell.sh, the
+# same way the lock assertion above does — and fail when either line is absent
+# rather than reporting an order it could not read.
+lint_line="$(awk '/desktop_report_recipe_gaps/{print NR; exit}' "$run_cell")"
+precheck_line="$(awk '/precheck\.sh" "\$ADAPTER"/{print NR; exit}' "$run_cell")"
+if [[ -z "$lint_line" ]]; then
+  fail "run-cell lints the Desktop recipe before anything runs" "run-cell.sh never calls desktop_report_recipe_gaps"
+elif [[ -z "$precheck_line" ]]; then
+  fail "run-cell lints the Desktop recipe before anything runs" "could not find run-cell.sh's precheck call — this check cannot run"
+elif [[ "$lint_line" -lt "$precheck_line" ]]; then
+  pass "run-cell lints the Desktop recipe before anything runs"
+else
+  fail "run-cell lints the Desktop recipe before anything runs" \
+    "lint at line $lint_line runs after precheck at line $precheck_line"
+fi
+
 echo "== identity-field and full-session evidence is staged and joined =="
 source_dir="$TMP/source"
 destination="$TMP/destination"
