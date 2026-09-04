@@ -204,7 +204,6 @@ func stageReleaseWebTree(t *testing.T, repoRoot, tmp string) string {
 	if err != nil {
 		t.Fatalf("cannot run: %s is unreadable (%v) — the release tooling this test executes is gone", script, err)
 	}
-
 	fragment, ok := cutWebStagingRegion(string(source))
 	if !ok {
 		t.Fatalf("cannot run: could not cut the WEB_FILES / copy_web_files region out of %s — the release script's shape changed and this test is no longer executing it", script)
@@ -214,18 +213,33 @@ func stageReleaseWebTree(t *testing.T, repoRoot, tmp string) string {
 	if err := os.MkdirAll(staged, 0o755); err != nil {
 		t.Fatalf("cannot run: %v", err)
 	}
-	cmd := exec.Command("bash", "-c", `
-set -euo pipefail
-cd "$1"
-`+fragment+`
+	runReleaseStaging(t, repoRoot, fragment, staged)
+	assertStagedTreeIsFlat(t, staged)
+	return staged
+}
+
+// runReleaseStaging evaluates the cut fragment and calls copy_web_files. The
+// fragment is asserted to define what it is supposed to define: a cut that
+// silently produced nothing would stage an empty tree, which every 200
+// assertion would then fail for the wrong reason.
+func runReleaseStaging(t *testing.T, repoRoot, fragment, staged string) {
+	t.Helper()
+	const preamble = "set -euo pipefail\ncd \"$1\"\n"
+	const epilogue = `
 declare -F copy_web_files >/dev/null || { echo "the cut region did not define copy_web_files" >&2; exit 2; }
 [ "${#WEB_FILES[@]}" -gt 0 ] || { echo "the cut region defined an empty WEB_FILES" >&2; exit 2; }
 copy_web_files "$2"
-`, "bash", repoRoot, staged)
+`
+	cmd := exec.Command("bash", "-c", preamble+fragment+epilogue, "bash", repoRoot, staged)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("cannot run: the release staging refused: %v\n%s", err, out)
 	}
+}
 
+// assertStagedTreeIsFlat rejects an empty staged tree and any directory in it —
+// node_modules ships by accident exactly that way.
+func assertStagedTreeIsFlat(t *testing.T, staged string) {
+	t.Helper()
 	entries, err := os.ReadDir(staged)
 	if err != nil {
 		t.Fatalf("cannot run: staged tree unreadable: %v", err)
@@ -235,11 +249,9 @@ copy_web_files "$2"
 	}
 	for _, e := range entries {
 		if e.IsDir() {
-			// node_modules ships by accident exactly this way.
 			t.Errorf("the staged release tree contains a directory (%s) — it must be flat", e.Name())
 		}
 	}
-	return staged
 }
 
 // cutWebStagingRegion returns the WEB_FILES array plus the copy_web_files
@@ -247,26 +259,31 @@ copy_web_files "$2"
 // column zero. Reports false when either end is absent.
 func cutWebStagingRegion(source string) (string, bool) {
 	lines := strings.Split(source, "\n")
-	start := -1
-	for i, l := range lines {
-		if strings.HasPrefix(l, "WEB_FILES=(") {
-			start = i
-			break
-		}
-	}
+	start := lineIndex(lines, func(l string) bool { return strings.HasPrefix(l, "WEB_FILES=(") })
 	if start < 0 {
 		return "", false
 	}
-	sawHelper := false
-	for i := start; i < len(lines); i++ {
-		if strings.HasPrefix(lines[i], "copy_web_files()") {
-			sawHelper = true
-		}
-		if sawHelper && lines[i] == "}" {
-			return strings.Join(lines[start:i+1], "\n"), true
+	rest := lines[start:]
+	helper := lineIndex(rest, func(l string) bool { return strings.HasPrefix(l, "copy_web_files()") })
+	if helper < 0 {
+		return "", false
+	}
+	// The helper's body ends at the first closing brace in column zero.
+	end := lineIndex(rest[helper:], func(l string) bool { return l == "}" })
+	if end < 0 {
+		return "", false
+	}
+	return strings.Join(rest[:helper+end+1], "\n"), true
+}
+
+// lineIndex returns the first index in lines whose value satisfies match, or -1.
+func lineIndex(lines []string, match func(string) bool) int {
+	for i, l := range lines {
+		if match(l) {
+			return i
 		}
 	}
-	return "", false
+	return -1
 }
 
 // reachableWebAssets returns every asset the browser will fetch, by running
