@@ -5,6 +5,23 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Irrlicht</title>
   <link rel="stylesheet" href="irrlicht.css">
+  <!-- Irrlicht Elfdans PWA manifest (docs/mobile-notifications-arc42.md ADR-2/
+       ADR-3). Inert on the daemon-served dashboard — installability without
+       pairing is harmless; push only ever follows the explicit pairing flow. -->
+  <link rel="manifest" href="elfdans.webmanifest">
+  <!-- The manifest's theme_color is a single value, so the installed app would
+       wear the dark chrome on a light phone. These two override it per scheme,
+       for the surface the CSS tokens cannot reach: the OS paints the browser
+       chrome before the stylesheet exists. Values match --bg in each palette
+       (irrlicht.css).
+       What they do NOT reach is the manifest's background_color — the splash
+       the OS paints at launch. The Web App Manifest format has one value per
+       key and no media-query form, so that surface stays on the dark palette
+       and a light-mode phone gets a dark frame before the first paint. Stated
+       rather than fixed: there is nowhere to put the second value.
+       platforms/web/release-files.test.js pins all three to the same palette. -->
+  <meta name="theme-color" content="#f4f5f7" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#080c16" media="(prefers-color-scheme: dark)">
 </head>
 <body>
   <header>
@@ -87,6 +104,12 @@
           <span class="settings-hint">Heads-up when a session approaches its context limit.</span>
         </span>
       </label>
+
+      <!-- Irrlicht Elfdans (phone notifications) — populated by elfdans.js only
+           when this origin answers /api/v1/push/info with enabled:true
+           (docs/mobile-notifications-arc42.md §5.2 additivity contract: the
+           daemon-served dashboard and old relays show nothing here). -->
+      <div id="elfdans-section" hidden></div>
 
       <details class="settings-advanced" id="settings-advanced">
         <summary>

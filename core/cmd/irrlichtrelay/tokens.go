@@ -62,17 +62,37 @@ func loadTokens(path string) ([]TokenRecord, error) {
 	return recs, nil
 }
 
-// saveTokens writes the hashed token store atomically-ish at mode 0600 (it
-// holds credential hashes), creating the data dir if needed.
+// saveTokens writes the hashed token store at mode 0600 (it holds credential
+// hashes) via a same-directory temp file and rename, creating the data dir if
+// needed. Atomic because the file has concurrent readers by design — the
+// serving relay's authStore reload and any CLI process — and a truncating
+// write would hand them half a JSON document.
 func saveTokens(path string, recs []TokenRecord) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(recs, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o600)
+	tmp, err := os.CreateTemp(dir, tokensFilename+".tmp*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name()) // no-op after a successful rename
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 // issueToken mints a new 256-bit token bound to workspace, appends its hash to
@@ -137,17 +157,44 @@ type tokenIdentity struct {
 type authStore struct {
 	path string
 
+	// writeMu serializes every in-process writer of the tokens file (today:
+	// the pair handler issuing device tokens). issueToken alone is a
+	// load-append-save with no lock — safe for the single-shot CLI, but two
+	// concurrent HTTP handlers drop each other's records, and the losing
+	// phone holds a 200-returned token whose hash never persisted. A CLI
+	// process racing a serving relay stays unserialized (cross-process
+	// locking is deliberately out of scope); the atomic saveTokens at least
+	// keeps every reader off truncated JSON.
+	writeMu sync.Mutex
+
 	mu     sync.RWMutex
 	hashes map[string]tokenIdentity // token hash → identity
-	byID   map[string]struct{}
+	byID   map[string]tokenIdentity // token id → identity
 	mtime  time.Time
+}
+
+// issue mints a token through the store, serializing in-process writers and
+// reloading synchronously before returning — the caller may use the token
+// immediately (the pairing flow's phone subscribes with it on its very next
+// request, well inside the watch tick).
+func (a *authStore) issue(label, workspace string) (id, plaintext string, err error) {
+	a.writeMu.Lock()
+	defer a.writeMu.Unlock()
+	id, plaintext, err = issueToken(a.path, label, workspace)
+	if err != nil {
+		return "", "", err
+	}
+	if err := a.reload(); err != nil {
+		return "", "", err
+	}
+	return id, plaintext, nil
 }
 
 // newAuthStore builds a store bound to path and loads it once. A load error is
 // returned so `serve` refuses to start with an unreadable tokens file rather
 // than silently accepting no one.
 func newAuthStore(path string) (*authStore, error) {
-	a := &authStore{path: path, hashes: map[string]tokenIdentity{}, byID: map[string]struct{}{}}
+	a := &authStore{path: path, hashes: map[string]tokenIdentity{}, byID: map[string]tokenIdentity{}}
 	if err := a.reload(); err != nil {
 		return nil, err
 	}
@@ -156,19 +203,26 @@ func newAuthStore(path string) (*authStore, error) {
 
 // reload re-reads the tokens file and swaps in the new hashed set.
 func (a *authStore) reload() error {
+	// Stat BEFORE read: with read-then-stat, a write landing between the two
+	// stamps old content with the new mtime, and reloadIfChanged then reports
+	// "unchanged" until the file next changes — pinning a stale token set (a
+	// fresh device token invalid, a revoked one alive) indefinitely.
+	// Stat-first errs the cheap way: at worst the stored mtime predates the
+	// content and the next tick reloads once more than needed.
+	var mtime time.Time
+	if fi, err := os.Stat(a.path); err == nil {
+		mtime = fi.ModTime()
+	}
 	recs, err := loadTokens(a.path)
 	if err != nil {
 		return err
 	}
 	hashes := make(map[string]tokenIdentity, len(recs))
-	byID := make(map[string]struct{}, len(recs))
+	byID := make(map[string]tokenIdentity, len(recs))
 	for _, r := range recs {
-		hashes[r.Hash] = tokenIdentity{id: r.ID, workspace: r.Workspace}
-		byID[r.ID] = struct{}{}
-	}
-	var mtime time.Time
-	if fi, err := os.Stat(a.path); err == nil {
-		mtime = fi.ModTime()
+		ident := tokenIdentity{id: r.ID, workspace: r.Workspace}
+		hashes[r.Hash] = ident
+		byID[r.ID] = ident
 	}
 	a.mu.Lock()
 	a.hashes = hashes
@@ -233,6 +287,18 @@ func (a *authStore) valid(id string) bool {
 	defer a.mu.RUnlock()
 	_, ok := a.byID[id]
 	return ok
+}
+
+// identityOf resolves a token id to its identity. The push dispatch path and
+// the subscription orphan prune resolve a subscription's workspace LIVE
+// through this — the registry persists no workspace copy, so the token store
+// stays the single source of truth and a revoked token has no workspace at
+// all (docs/mobile-notifications-arc42.md §8.1).
+func (a *authStore) identityOf(id string) (tokenIdentity, bool) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	ident, ok := a.byID[id]
+	return ident, ok
 }
 
 // sortedRecords returns the on-disk records sorted by creation time for stable

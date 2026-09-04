@@ -24,6 +24,10 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"irrlicht/core/cmd/irrlichtrelay/push"
+	"irrlicht/core/domain/notify"
+	"irrlicht/core/pkg/webpush"
 )
 
 // Version is injected at build time via -ldflags "-X main.Version=x.y.z".
@@ -34,7 +38,19 @@ const (
 	envMaxMsgBytes   = "IRRLICHT_RELAY_MAX_MSG_BYTES"
 	envMaxConns      = "IRRLICHT_RELAY_MAX_CONNS"
 	envMaxConnsPerIP = "IRRLICHT_RELAY_MAX_CONNS_PER_IP"
+	envVAPIDSubject  = "IRRLICHT_RELAY_VAPID_SUBJECT"
 )
+
+// defaultVAPIDSubject is the RFC 8292 §2.1 `sub` claim used when the
+// operator names none. The claim is mandatory in practice — Apple Web Push
+// and Mozilla autopush reject a JWT without it — so the choice is between a
+// default and refusing to serve push at all, and a relay that will not start
+// because nobody typed a contact address is a worse failure than one that
+// identifies the software instead of its operator. It is a real https: URI
+// that describes what is pushing, which is what a push service reaching for
+// `sub` is looking for; an operator who wants to be reachable personally
+// sets --vapid-subject to their own mailto:.
+const defaultVAPIDSubject = "https://github.com/ingo-eichhorst/Irrlicht"
 
 // envInt64 returns the int64 value of env var name, or def when unset/unparseable.
 func envInt64(name string, def int64) int64 {
@@ -108,6 +124,7 @@ type serveConfig struct {
 	auth            string
 	originAllowlist string
 	dataDirFlag     string
+	vapidSubject    string
 	lim             limits
 }
 
@@ -124,6 +141,7 @@ func parseServeFlags(args []string) serveConfig {
 	auth := fs.String("auth", "off", "authentication: 'off' (trusted LAN, accept any hello) or 'tokens-file[:PATH]' (verify a hashed bearer token; PATH defaults to <data-dir>/tokens.json)")
 	originAllowlist := fs.String("origin-allowlist", "", "comma-separated Origin hosts allowed for browser WS clients (empty = allow all, loopback-safe)")
 	dataDirFlag := fs.String("data-dir", "", "state directory for the tokens file (default: $IRRLICHT_HOME or ~/.local/share/irrlicht)")
+	vapidSubject := fs.String("vapid-subject", os.Getenv(envVAPIDSubject), "contact `uri` signed into every push JWT as the VAPID sub claim: mailto: or https: (RFC 8292 §2.1); empty uses "+defaultVAPIDSubject)
 	def := defaultLimits()
 	maxMsgBytes := fs.Int64("max-msg-bytes", envInt64(envMaxMsgBytes, def.maxMsgBytes), "max inbound WebSocket message size in bytes (0 disables)")
 	maxConns := fs.Int("max-conns", envInt(envMaxConns, def.maxConns), "max total concurrent connections (0 disables)")
@@ -139,6 +157,7 @@ func parseServeFlags(args []string) serveConfig {
 		auth:            *auth,
 		originAllowlist: *originAllowlist,
 		dataDirFlag:     *dataDirFlag,
+		vapidSubject:    *vapidSubject,
 		lim:             limits{maxMsgBytes: *maxMsgBytes, maxConns: *maxConns, maxConnsPerIP: *maxConnsPerIP},
 	}
 }
@@ -199,9 +218,11 @@ func warnIfExposedWithoutAuth(addr string, store *authStore) {
 }
 
 // buildMux registers the relay's HTTP routes: the WS stream, the read-only
-// API mirrors (bearer-gated when auth is on), and the dashboard UI (or a 503
-// placeholder when it can't be found).
-func buildMux(h *hub, store *authStore) *http.ServeMux {
+// API mirrors (bearer-gated when auth is on), the push surface (pushSvc is
+// nil with --auth off — see registerPushRoutes), and the dashboard UI (or a
+// 503 placeholder when it can't be found). notifier is the dispatcher the
+// test-notification endpoint sends through, non-nil exactly when pushSvc is.
+func buildMux(h *hub, store *authStore, pushSvc *push.Service, notifier testNotifier) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/sessions/stream", h.ServeWS)
 	// The data endpoints carry the same session content as the WS stream, so
@@ -211,6 +232,7 @@ func buildMux(h *hub, store *authStore) *http.ServeMux {
 	mux.HandleFunc("GET /api/v1/sessions", requireToken(store, handleSessions(h)))
 	mux.HandleFunc("GET /api/v1/agents", requireToken(store, handleAgents(h)))
 	mux.HandleFunc("GET /api/v1/version", handleVersion(Version))
+	registerPushRoutes(mux, store, pushSvc, notifier)
 
 	if uiDir := resolveUIDir(); uiDir != "" {
 		log.Printf("serving dashboard from %s", uiDir)
@@ -255,15 +277,55 @@ func startListening(srv *http.Server, p listenParams) {
 	}()
 }
 
+// resolveVAPIDSubject validates the operator's --vapid-subject (or
+// IRRLICHT_RELAY_VAPID_SUBJECT), falling back to defaultVAPIDSubject when
+// it is empty. An unset subject is therefore never a failure; a SET one that
+// is neither a mailto: nor an https: URI is, because RFC 8292 §2.1 admits
+// only those two and a push service rejecting the JWT reports it as a 4xx
+// per push, on the device, where nobody is looking. runServe checks it
+// before it knows whether push is even enabled, so a bad value is refused
+// under --auth off too: a flag that is quietly ignored is how an operator
+// finds out at the wrong moment.
+func resolveVAPIDSubject(v string) (string, error) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return defaultVAPIDSubject, nil
+	}
+	if !strings.HasPrefix(v, "mailto:") && !strings.HasPrefix(v, "https://") {
+		return "", fmt.Errorf("--vapid-subject %q must be a mailto: or https: URI (RFC 8292 §2.1)", v)
+	}
+	return v, nil
+}
+
+// newRelayPushSender builds the dispatcher's production delivery seam: the
+// relay's own VAPID identity, which signs every POST (RFC 8292), together
+// with the `sub` contact claim that RFC requires and Apple Web Push and
+// Mozilla autopush enforce. An empty subject falls back here as well as in
+// resolveVAPIDSubject: webpush.Sender omits the claim entirely for one, so
+// a second construction site that forgot to resolve would ship exactly the
+// JWT iOS refuses, and there is no value of subject worth that.
+func newRelayPushSender(svc *push.Service, subject string) *webpush.Sender {
+	if subject == "" {
+		subject = defaultVAPIDSubject
+	}
+	return &webpush.Sender{Key: svc.VAPIDKey(), Subject: subject}
+}
+
 // runServe parses the serve flags and runs the relay until SIGINT/SIGTERM.
 func runServe(args []string) {
 	cfg := parseServeFlags(args)
 	mustValidTLSPair(cfg.tlsCert, cfg.tlsKey)
 	tlsEnabled := cfg.tlsCert != ""
 
+	vapidSubject, err := resolveVAPIDSubject(cfg.vapidSubject)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	ddir := resolveDataDir(cfg.dataDirFlag)
 	store := buildAuthStore(cfg.auth, ddir)
 	warnIfExposedWithoutAuth(cfg.addr, store)
+	pushSvc := buildPushService(store, ddir)
 
 	// Serve web assets with correct Content-Type regardless of the host OS
 	// mime database (matches irrlichd).
@@ -271,11 +333,34 @@ func runServe(args []string) {
 	_ = mime.AddExtensionType(".css", "text/css")
 
 	h := newHubWithAuth(store, splitCSV(cfg.originAllowlist), cfg.lim)
-	mux := buildMux(h, store)
+
+	// One observer, built before the mux and handed to both: it is the hub's
+	// push hook AND the test endpoint's send path, so the diagnostic and the
+	// notifications it diagnoses share a sender by construction rather than
+	// by two call sites agreeing (docs/mobile-notifications-arc42.md §8.3).
+	// Nil exactly when push is off, which is what registerPushRoutes checks.
+	var obs *pushObserver
+	if pushSvc != nil {
+		obs = newPushObserver(pushSvc, store, newRelayPushSender(pushSvc, vapidSubject), notify.Config{}, nil)
+	}
+	mux := buildMux(h, store, pushSvc, obs)
 
 	stop := make(chan struct{})
 	if store != nil {
 		go store.watch(stop, tokenReloadInterval)
+		// The subscription orphan prune rides the same cadence as the token
+		// watch: a revoked device token loses its delivery address within
+		// the same tick its WS access dies
+		// (docs/mobile-notifications-arc42.md §8.1).
+		go pushSvc.PruneLoop(stop, tokenReloadInterval, store.valid)
+	}
+	if obs != nil {
+		// The transition observer bridges the hub's event flow to phones
+		// (docs/mobile-notifications-arc42.md §5.1). Hooked before serving
+		// and stopped with the serve lifecycle; with push disabled the hook
+		// stays nil and the hub's behavior is unchanged.
+		h.setPushHook(obs)
+		go obs.run(stop)
 	}
 
 	// WS connections are hijacked by gorilla after the upgrade, so the only
@@ -386,19 +471,20 @@ func runToken(args []string) {
 // unchanged. With auth on, the request must carry a valid token in either an
 // `Authorization: Bearer <t>` header or a `?token=<t>` query param (the WS
 // endpoint authenticates via the hello frame instead and is not wrapped). The
-// token's workspace is attached to the request context so the handler reads
-// only that tenant's sessions.
+// token's identity (id + workspace) is attached to the request context so the
+// handler reads only that tenant's sessions, and the push handlers key the
+// subscription registry by the authenticated token.
 func requireToken(store *authStore, next http.HandlerFunc) http.HandlerFunc {
 	if store == nil {
 		return next
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		_, workspace, ok := store.validate(bearerToken(r))
+		id, workspace, ok := store.validate(bearerToken(r))
 		if !ok {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		next(w, r.WithContext(withWorkspace(r.Context(), workspace)))
+		next(w, r.WithContext(withIdentity(r.Context(), tokenIdentity{id: id, workspace: workspace})))
 	}
 }
 

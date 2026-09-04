@@ -26,10 +26,13 @@ irrlichd ──(daemon role)──▶ irrlichtrelay ◀──(client role)──
 - A client may connect to the local daemon **and/or** a relay at once and merges
   the sessions into one list. The daemon speaks **raw** `PushMessage` frames (no
   handshake); the relay speaks the **envelope** below.
-- v0 is deliberately thin: **no persistence, single node, one relay per
+- v0 is deliberately thin: **no session persistence, single node, one relay per
   daemon.** Auth and TLS are supported but off by default (see
   [Auth, TLS, and origins](#auth-tls-and-origins)). Relay state is in-memory
-  and rebuilt from each daemon's reconnect `daemon_snapshot`.
+  and rebuilt from each daemon's reconnect `daemon_snapshot`. The relay does
+  write a few small files — hashed tokens, and the push identity/registry once
+  a phone is paired ([Push endpoints](#push-endpoints-elfdans)) — but **no
+  session content is ever at rest on the relay host.**
 
 ## Versioning
 
@@ -156,6 +159,37 @@ different port is cross-origin). `serve --origin-allowlist host1,host2`
 restricts which browser `Origin`s may open the socket; non-browser peers send
 no `Origin` and are always admitted, with auth still gating them.
 
+### Push endpoints (Elfdans)
+
+Phone notifications add **no frames to the protocol above** — the daemon is
+unchanged and needs no upgrade. Everything is relay-local REST plus outbound
+HTTPS to Apple/Google, so an old daemon and a push-capable relay interoperate
+exactly as before (architecture:
+[`docs/mobile-notifications-arc42.md`](./mobile-notifications-arc42.md);
+operator guide: [`examples/relay/DEPLOY.md`](../examples/relay/DEPLOY.md)).
+
+| Endpoint | Credential | Body / response |
+| --- | --- | --- |
+| `GET /api/v1/push/info` | none | `{"enabled":false,"reason":"…"}` or `{"enabled":true,"vapid_public_key":"…"}`. Feature detection: clients render the pairing UI only where this answers `enabled:true`, so an old relay (404) and an anonymous one hide it. |
+| `POST /api/v1/push/pairings` | client token | `201 {"code":"XXXX-XXXX","expires_in":600}` — a single-use code in **the caller's own workspace**. `429` past 32 outstanding codes. |
+| `POST /api/v1/push/pair` | **the code** | `{"code":"…","label":"…"}` → `200 {"token":"…","token_id":"…","vapid_public_key":"…"}`. The device token is an ordinary `TokenRecord` in the code's workspace. `401` for unknown, expired and already-used codes alike — the endpoint is no oracle for which codes exist — and `429` once failures saturate. |
+| `POST /api/v1/push/subscriptions` | device token | The browser's `PushSubscription.toJSON()` → `204`. Stored under the **authenticated** token's id, replacing any previous address (a subscription is only an address; the OS may reissue it, and re-registering is how a phone self-heals). `400` names the offending field. |
+| `DELETE /api/v1/push/subscriptions` | device token | `204`, idempotent — the phone's own un-pair. |
+| `GET /api/v1/push/subscriptions` | device token | `200 {"registered":…,"created":…,"endpoint_host":…,"last_delivery":{"at":…,"ok":…,"detail":…}}` — the caller's **own** delivery health, and the phone's answer to "am I still wired up?". `endpoint_host` is the host and nothing more: the endpoint's path is the subscription's capability secret (RFC 8030 §8.3) and never leaves the relay, not even to the phone that owns it. `last_delivery` is `null` when no send has been attempted since the relay started — health is in memory only, so "unknown since restart" is the honest answer rather than a stale success. |
+| `POST /api/v1/push/test` | device token | Sends one diagnostic notification to the caller's **own** registered address and answers **synchronously** with what happened: `200 {"delivered":true,"endpoint_host":…,"at":…}`, or `502 {"delivered":false,"error":…}` carrying what the push service said (endpoint path redacted, as above). `409` when this device has no address registered — reopening the app re-subscribes — and `429` with `Retry-After` inside the per-device window. `subscription_gone:true` marks the 404/410 case, where the address has just been pruned. It travels the production send path (VAPID, RFC 8291, headers, padding) and bypasses the notification policy engine, so it proves delivery and says nothing about observation. |
+
+**Push requires `--auth`.** Under `--auth off` the push service is never
+constructed (no VAPID key material is generated for a mode that cannot use
+it), `info` reports why, and every other push route answers `403` naming the
+fix. A push-capable relay is by definition reachable, and each of these doors
+is an abuse without an identity.
+
+Workspaces carry through unchanged: the minting client's token decides the
+code's workspace, the code decides the device token's, and dispatch resolves
+each subscription's workspace **live** from the token store — so
+`token revoke <device>` drops both stream access and the delivery address,
+with no stale copy to disagree.
+
 ## Auth, TLS, and origins
 
 The relay is safe to expose once these are in place.
@@ -240,7 +274,7 @@ connection-status tooltip lists the connected daemon(s).
 - `seq` (per-source sequence numbers) and `resume` (reconnect cursor) for
   gap-free reconnection.
 - `/api/v1/tokens` REST management (POST/DELETE); token management is CLI-only.
-- Multiple relays per daemon; multi-node relays; persistence.
+- Multiple relays per daemon; multi-node relays; session persistence.
 - Row-level source badges and "fade, don't delete" on daemon-offline (v0 deletes
   a disconnected daemon's rows).
 - History re-hydration of late-joining relay clients (bars fill from live ticks;

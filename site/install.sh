@@ -396,10 +396,23 @@ if [ "$DAEMON_ONLY" -eq 1 ]; then
     step "Installing to $DEST"
     mkdir -p "$(dirname "$DEST")"
     install -m 755 "$TMPDIR/extract/irrlichd" "$DEST"
+    # Install the whole extracted web/ rather than naming files. The three
+    # names this replaced were already short by fourteen: irrlicht.js
+    # statically imports ten siblings and the Elfdans PWA adds four more, so the
+    # installed dashboard 404'd its own module graph. The tarball's payload
+    # (tools/build-release.sh WEB_FILES) is the source of truth for what ships;
+    # repeating a subset of it here is a second list nobody watches
+    # (docs/mobile-notifications-arc42.md §8.7, risk 6).
     mkdir -p "$UI_DIR"
-    install -m 644 "$TMPDIR/extract/web/index.html" "$UI_DIR/index.html"
-    install -m 644 "$TMPDIR/extract/web/irrlicht.css" "$UI_DIR/irrlicht.css"
-    install -m 644 "$TMPDIR/extract/web/irrlicht.js"  "$UI_DIR/irrlicht.js"
+    _web_count=0
+    for _web_file in "$TMPDIR"/extract/web/*; do
+        [ -f "$_web_file" ] || continue
+        install -m 644 "$_web_file" "$UI_DIR/"
+        _web_count=$((_web_count + 1))
+    done
+    # An unmatched glob leaves the loop body unrun, which would install a
+    # daemon with no dashboard and say nothing about it. Refuse instead.
+    [ "$_web_count" -gt 0 ] || fail "Tarball carried no web/ files — refusing to install a dashboard-less daemon"
     ok
 
     # On Linux, install a systemd user unit so the autostart command we print

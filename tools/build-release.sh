@@ -23,6 +23,46 @@ DMG_NAME="Irrlicht-${VERSION}.dmg"
 echo "Building Irrlicht v$VERSION"
 echo "============================================="
 
+# ── Web payload (single source of truth for all three copy sites) ─────
+# Every file the dashboard + Elfdans PWA need at runtime, copied into the
+# darwin tarball, the linux tarballs, and the app bundle Resources alike.
+# irrlicht.js statically imports its sibling modules, so a list holding only
+# the entry files serves a dashboard that 404s its own module graph and
+# cannot boot; sw.js and elfdans-icon.svg are referenced by nothing statically
+# (runtime registration / manifest JSON), so forgetting them ships a silently
+# push-less PWA (docs/mobile-notifications-arc42.md §8.7, risk 6). Kept
+# complete by platforms/web/release-files.test.js, which derives the required
+# set from index.html + the import graph and fails when this list falls
+# behind.
+WEB_FILES=(
+    index.html
+    irrlicht.css
+    irrlicht.js
+    elfdans-icon.svg
+    elfdans.js
+    elfdansDashboard.js
+    elfdans.webmanifest
+    collapsedGroups.js
+    collapsedSet.js
+    collapsedSummaries.js
+    connectionProtocol.js
+    domReconcile.js
+    formatters.js
+    historyTab.js
+    permissionsWizard.js
+    quotaChips.js
+    sessionIdentity.js
+    sw.js
+)
+
+copy_web_files() {
+    local dest="$1"
+    local f
+    for f in "${WEB_FILES[@]}"; do
+        cp "platforms/web/$f" "$dest/"
+    done
+}
+
 # Clean build directory
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
@@ -62,7 +102,7 @@ TARBALL_STAGING="$BUILD_DIR/tarball-staging"
 rm -rf "$TARBALL_STAGING"
 mkdir -p "$TARBALL_STAGING/web"
 cp "$BUILD_DIR/${DAEMON_NAME}-darwin-universal" "$TARBALL_STAGING/${DAEMON_NAME}"
-cp platforms/web/index.html platforms/web/irrlicht.css platforms/web/irrlicht.js "$TARBALL_STAGING/web/"
+copy_web_files "$TARBALL_STAGING/web"
 tar -czf "$BUILD_DIR/${DAEMON_NAME}-darwin-universal.tar.gz" -C "$TARBALL_STAGING" .
 rm -rf "$TARBALL_STAGING"
 echo "  Created $BUILD_DIR/${DAEMON_NAME}-darwin-universal.tar.gz"
@@ -84,13 +124,58 @@ build_linux_tarball() {
     rm -rf "$staging"
     mkdir -p "$staging/web"
     cp "$BUILD_DIR/${DAEMON_NAME}-linux-${arch}" "$staging/${DAEMON_NAME}"
-    cp platforms/web/index.html platforms/web/irrlicht.css platforms/web/irrlicht.js "$staging/web/"
+    copy_web_files "$staging/web"
     tar -czf "$BUILD_DIR/${DAEMON_NAME}-linux-${arch}.tar.gz" -C "$staging" .
     rm -rf "$staging"
     echo "  Created $BUILD_DIR/${DAEMON_NAME}-linux-${arch}.tar.gz"
 }
 build_linux_tarball amd64
 build_linux_tarball arm64
+
+# ── 1d. Linux relay tarballs ──────────────────────────────────────────
+# The standalone relay hub, published so operators stop having to build from
+# source. Both arches are first-class: the deployment target's free tier is
+# Ampere A1 (aarch64), with an amd64 shape operators land on when A1 capacity
+# is unavailable (docs/mobile-notifications-arc42.md §7).
+#
+# Two things here differ from the daemon tarballs above and neither is
+# cosmetic:
+#
+#   · CGO_ENABLED=0 is set EXPLICITLY rather than inherited from what a
+#     darwin→linux cross-compile happens to imply, because the relay is meant
+#     to run on musl and distroless bases where a dynamically linked binary
+#     dies at exec time with no useful message.
+#
+#   · The layout is {bin/, Resources/web/}, NOT the daemon's flat
+#     {irrlichd, web/}. The relay resolves its UI through the same search
+#     order the daemon uses, whose only exe-relative branch is
+#     <exedir>/../Resources/web (core/cmd/irrlichtrelay/main.go
+#     resolveUIDirFor). Measured: staged flat, the relay logs "dashboard UI
+#     not found" and answers 503 on /; staged this way it logs "serving
+#     dashboard from …/Resources/web" with no environment set at all.
+#
+# The web payload comes from copy_web_files so the relay inherits WEB_FILES
+# rather than growing a fourth copy of the list.
+echo ""
+echo "Creating Linux relay tarballs..."
+RELAY_NAME="irrlichtrelay"
+build_relay_linux_tarball() {
+    local arch="$1"
+    echo "  Building ${RELAY_NAME}-linux-${arch}..."
+    ( cd core && CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath \
+        -ldflags "-X main.Version=$VERSION" \
+        -o "../$BUILD_DIR/${RELAY_NAME}-linux-${arch}" ./cmd/irrlichtrelay/ )
+    local staging="$BUILD_DIR/tarball-staging-relay-${arch}"
+    rm -rf "$staging"
+    mkdir -p "$staging/bin" "$staging/Resources/web"
+    cp "$BUILD_DIR/${RELAY_NAME}-linux-${arch}" "$staging/bin/${RELAY_NAME}"
+    copy_web_files "$staging/Resources/web"
+    tar -czf "$BUILD_DIR/${RELAY_NAME}-linux-${arch}.tar.gz" -C "$staging" .
+    rm -rf "$staging"
+    echo "  Created $BUILD_DIR/${RELAY_NAME}-linux-${arch}.tar.gz"
+}
+build_relay_linux_tarball amd64
+build_relay_linux_tarball arm64
 
 # ── 3. Build Swift macOS app (.app bundle) ─────────────────────────────
 echo ""
@@ -121,7 +206,7 @@ cp "$SWIFT_BIN" "$APP_CONTENTS/MacOS/${APP_NAME}"
 
 # Web UI lives next to the daemon — resolved by irrlichd at runtime via
 # <exe>/../Resources/web (see resolveUIDir in core/cmd/irrlichd/main.go).
-cp platforms/web/index.html platforms/web/irrlicht.css platforms/web/irrlicht.js "$APP_CONTENTS/Resources/web/"
+copy_web_files "$APP_CONTENTS/Resources/web"
 
 # AppIcon — required for menu bar / Finder display.
 cp platforms/macos/Irrlicht/Resources/AppIcon.icns "$APP_CONTENTS/Resources/AppIcon.icns"
@@ -432,10 +517,15 @@ echo "  Created $BUILD_DIR/$PKG_NAME"
 echo ""
 echo "Calculating checksums..."
 cd "$BUILD_DIR"
+# site/install.sh's sha256_verify greps this file for the asset it just
+# downloaded, so an asset missing here cannot be verified and the install
+# aborts — every published tarball has to be listed.
 shasum -a 256 "$DMG_NAME" "$PKG_NAME" \
     ${DAEMON_NAME}-darwin-universal.tar.gz \
     ${DAEMON_NAME}-linux-amd64.tar.gz \
-    ${DAEMON_NAME}-linux-arm64.tar.gz > checksums.sha256
+    ${DAEMON_NAME}-linux-arm64.tar.gz \
+    ${RELAY_NAME}-linux-amd64.tar.gz \
+    ${RELAY_NAME}-linux-arm64.tar.gz > checksums.sha256
 cd ..
 
 # ── 8. Summary ─────────────────────────────────────────────────────────
@@ -453,6 +543,10 @@ echo ""
 echo "Linux daemon (daemon-only, web UI at 127.0.0.1:7837):"
 echo "  amd64:      $BUILD_DIR/${DAEMON_NAME}-linux-amd64.tar.gz"
 echo "  arm64:      $BUILD_DIR/${DAEMON_NAME}-linux-arm64.tar.gz"
+echo ""
+echo "Linux relay hub (extract anywhere; bin/ + Resources/web/ travel together):"
+echo "  amd64:      $BUILD_DIR/${RELAY_NAME}-linux-amd64.tar.gz"
+echo "  arm64:      $BUILD_DIR/${RELAY_NAME}-linux-arm64.tar.gz"
 echo ""
 echo "Optional:"
 echo "  LaunchAgent: $BUILD_DIR/${BUNDLE_ID}.daemon.plist"

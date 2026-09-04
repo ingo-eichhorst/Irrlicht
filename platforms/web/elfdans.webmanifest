@@ -1,0 +1,12 @@
+{
+  "name": "Irrlicht Elfdans",
+  "short_name": "Elfdans",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "theme_color": "#080c16",
+  "background_color": "#080c16",
+  "icons": [
+    { "src": "elfdans-icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}

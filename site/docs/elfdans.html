@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Phone Notifications — Irrlicht Docs</title>
+<meta name="description" content="Get a banner on your phone when an agent needs input, finishes, or hits an error. Set up a relay, pair a phone with Irrlicht Elfdans, and see exactly what buzzes, what Apple and Google can see, and what to do when it stops.">
+<link rel="canonical" href="https://irrlicht.io/docs/elfdans.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Phone Notifications — Irrlicht Docs">
+<meta property="og:description" content="Get a banner on your phone when an agent needs input, finishes, or hits an error. Set up a relay, pair a phone with Irrlicht Elfdans, and see exactly what buzzes, what Apple and Google can see, and what to do when it stops.">
+<meta property="og:url" content="https://irrlicht.io/docs/elfdans.html">
+<meta property="og:site_name" content="Irrlicht">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Phone Notifications — Irrlicht Docs">
+<meta name="twitter:description" content="Get a banner on your phone when an agent needs input, finishes, or hits an error. Set up a relay, pair a phone with Irrlicht Elfdans, and see exactly what buzzes, what Apple and Google can see, and what to do when it stops.">
+
+<link rel="icon" type="image/svg+xml" href="../assets/favicon.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="../assets/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="../assets/favicon-16x16.png">
+<link rel="apple-touch-icon" sizes="180x180" href="../assets/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdn.counter.dev">
+<link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Mono:wght@300;400;500&family=Outfit:wght@200;300;400;500;600&display=swap">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Mono:wght@300;400;500&family=Outfit:wght@200;300;400;500;600&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+<noscript><link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Mono:wght@300;400;500&family=Outfit:wght@200;300;400;500;600&display=swap" rel="stylesheet"></noscript>
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<div class="docs-layout">
+
+  <!-- ─── Sidebar ─── -->
+  <nav class="sidebar" aria-label="Documentation sections">
+    <a href="../index.html" class="sidebar-logo">
+      <span class="dot"></span>
+      <span>Irrlicht</span>
+      <small>docs</small>
+    </a>
+
+    <div class="sidebar-section">
+      <h4>Getting Started</h4>
+      <a href="index.html">Overview</a>
+      <a href="installation.html">Installation</a>
+      <a href="quickstart.html">Quick Start</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Core Concepts</h4>
+      <a href="story.html">The Story</a>
+      <a href="light-system.html">The Light System</a>
+      <a href="state-machine.html">State Machine</a>
+      <a href="session-detection.html">Session Detection</a>
+      <a href="co2-methodology.html">CO2 Methodology</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Usage</h4>
+      <a href="configuration.html">Configuration</a>
+      <a href="macos-setup.html">macOS Setup</a>
+      <a href="elfdans.html" class="active">Phone Notifications</a>
+      <a href="tips-and-tricks.html">Tips &amp; Tricks</a>
+      <a href="cli-tools.html">CLI Tools</a>
+      <a href="api-reference.html">API Reference</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Architecture</h4>
+      <a href="architecture.html">System Design</a>
+      <a href="adapters.html">Adapters</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Project</h4>
+      <a href="roadmap.html">Roadmap</a>
+      <a href="changelog.html">Changelog</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Community</h4>
+      <a href="contributing.html">Contributing</a>
+      <a href="code-of-conduct.html">Code of Conduct</a>
+    </div>
+  </nav>
+
+  <!-- ─── Main ─── -->
+  <main class="docs-main">
+    <div class="docs-content">
+
+      <h1>Phone Notifications</h1>
+      <p class="page-subtitle">A banner on your phone when an agent needs input, finishes, or hits an error &mdash; the menu-bar flame, for the hours you are not at the desk.</p>
+
+      <p>At the Mac, the flame answers the question for you: something is <span class="badge badge-waiting">waiting</span>, something went <span class="badge badge-ready">ready</span>, something hit an <span class="badge badge-error">error</span>, everything else is still <span class="badge badge-working">working</span>. Away from it, that signal is in another room. <strong>Irrlicht Elfdans</strong> is the phone half of it &mdash; a lock-screen banner on the three transitions that want a human, and nothing else.</p>
+
+      <p>Elfdans is not a second dashboard. It is a web app your own relay serves, which you add to your home screen: no App Store listing, no account, no Irrlicht-operated server anywhere in the path. And it is off until you deliberately pair a phone &mdash; a Mac with no relay configured behaves exactly as it did before, with no subscription, no service worker installed, and no relay traffic at all.</p>
+
+      <p>Tapping a banner takes you to the session it was about &mdash; focusing Elfdans if it is already open, or launching it on that session if it is not.</p>
+
+      <div class="callout">
+        <strong>What the test button does not prove</strong>
+        The &ldquo;send a test notification&rdquo; button proves half the path, not all of it: it sends a real, signed, encrypted push to this phone and reports what the push service answered, but it does not run through the rules that decide when a session change becomes a banner. A real transition is still what proves that half.
+      </div>
+
+      <!-- ── Prerequisites ── -->
+      <h2 id="what-you-need">What you need first</h2>
+
+      <p>This is the part that surprises people: phone notifications need a <strong>relay</strong>. <code>irrlichtrelay</code> is the standalone fan-out server a daemon can push its session events to &mdash; the same one that already lets the macOS app and the web dashboard watch a Mac from somewhere else. Browser push subscriptions and the installed web app are both bound to the origin that served them, so the relay needs one <strong>stable HTTPS hostname</strong>.</p>
+
+      <p>There is no project-run service to sign up for. You host the relay, in one of two shapes.</p>
+
+      <table>
+        <thead>
+          <tr><th>Shape</th><th>Pick this if&hellip;</th><th>The origin</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>A small VPS.</strong> The reference deployment is Oracle Cloud&rsquo;s Always Free tier &mdash; whose free compute is ARM, so match the binary to <code>uname -m</code></td>
+            <td>&hellip;you want the relay to outlive the Mac. It stays connected while the Mac sleeps, which is what makes the &ldquo;Mac disconnected&rdquo; watchdog banner meaningful</td>
+            <td>Your own domain, TLS from Caddy or nginx</td>
+          </tr>
+          <tr>
+            <td><strong>The Mac itself, behind Tailscale.</strong> No extra hardware; you build <code>irrlichtrelay</code> from a checkout and give it its own <code>IRRLICHT_HOME</code>, separate from the daemon&rsquo;s</td>
+            <td>&hellip;you want zero extra infrastructure and accept that when the Mac is off the relay is too &mdash; with the daemon down there are no transitions to report anyway</td>
+            <td>A <code>*.ts.net</code> name via <code>tailscale serve</code> (tailnet-only) or <code>tailscale funnel</code> (public), identical on every network the Mac joins</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout callout-warning">
+        <strong>Renaming the origin re-pairs every phone</strong>
+        A push subscription and an installed home-screen app are both bound to the hostname that served them. Moving to a different domain, a different tailnet name, or a rebuilt VPS that came back on a new address means every paired phone has to be paired again. It is the one irreversible choice here &mdash; make it before you pair anything.
+      </div>
+
+      <div class="callout callout-warning">
+        <strong>Push requires <code>--auth</code></strong>
+        A relay that can push is by definition reachable from the internet, and every push endpoint is an abuse without an identity &mdash; so under <code>--auth off</code> the relay never builds its push service at all. No signing key is generated, <code>GET /api/v1/push/info</code> answers <code>{"enabled":false}</code> with the reason, every other push route answers <code>403</code> naming the fix, and the pairing UI stays hidden. Run the relay with <code>--auth tokens-file</code>. This holds on a tailnet too, where the network already gates access: one security model, not two.
+      </div>
+
+      <!-- ── Relay setup ── -->
+      <h2 id="relay-setup">Setting up the relay</h2>
+
+      <ol class="steps">
+        <li>
+          <strong>Get the binary</strong>
+          <p>Building from a checkout works everywhere and needs only Go:</p>
+          <pre><code>cd core
+go build -o /usr/local/bin/irrlichtrelay ./cmd/irrlichtrelay</code></pre>
+          <p>The release build also produces Linux tarballs, <code>irrlichtrelay-linux-amd64.tar.gz</code> and <code>irrlichtrelay-linux-arm64.tar.gz</code>; check the <a href="https://github.com/ingo-eichhorst/Irrlicht/releases/latest">latest release</a> for the version you want and build from source if it is not there yet. If you use a tarball, keep its <code>bin/</code> and <code>Resources/web/</code> directories together &mdash; the relay finds the dashboard it serves at <code>../Resources/web</code> relative to the binary, and a lone binary answers <code>503</code> on <code>/</code>. A from-source build installs no dashboard at all, so point <code>IRRLICHT_UI_DIR</code> at a copy of <code>platforms/web/</code>; the operator guide below has the details.</p>
+        </li>
+        <li>
+          <strong>Serve it over TLS, with auth on</strong>
+          <p>The usual shape is the relay on loopback behind a TLS-terminating reverse proxy:</p>
+          <pre><code>irrlichtrelay serve --addr 127.0.0.1:7839 --auth tokens-file</code></pre>
+          <p>The relay can also terminate TLS itself with <code>--tls-cert</code> and <code>--tls-key</code> (both flags are required together).</p>
+        </li>
+        <li>
+          <strong>Issue tokens</strong>
+          <p>One for the daemon, one for the browser you will pair from. Each secret is printed once:</p>
+          <pre><code>irrlichtrelay token issue --label "laptop-daemon"
+irrlichtrelay token issue --label "my-browser"</code></pre>
+          <p>Run the <code>token</code> subcommand as the same user and <code>IRRLICHT_HOME</code> the relay runs under, so both read one file. A serving relay re-reads it on change, so issuing and revoking need no restart.</p>
+        </li>
+        <li>
+          <strong>Point the daemon at it</strong>
+          <p>Either set <code>IRRLICHT_RELAY_URL</code> and <code>IRRLICHT_RELAY_TOKEN</code> (see <a href="configuration.html">Configuration</a>), or enter the URL and token under <strong>Settings &rarr; Sources</strong> in the macOS app or the dashboard. The daemon dials <em>out</em>, so it needs no inbound port and works behind NAT.</p>
+        </li>
+        <li>
+          <strong>Open the dashboard the relay serves</strong>
+          <p>Browse to the relay&rsquo;s own HTTPS address and enter the browser token under <strong>Settings &rarr; Sources</strong> there. This matters: the pairing endpoints are same-origin, so the Elfdans section appears on the page <em>the relay served</em> &mdash; not on the daemon&rsquo;s local dashboard at <code>127.0.0.1:7837</code>, which has no push endpoints to offer.</p>
+        </li>
+      </ol>
+
+      <p>This page stops where the operational detail starts. Reverse-proxy configs, the systemd unit, the launchd agent for a relay on the Mac, and the Oracle Cloud specifics &mdash; its firewall is two gates and the console shows you one; it reclaims idle instances, and a relay is the idle profile by construction &mdash; all live in the operator guide, <a href="https://github.com/ingo-eichhorst/Irrlicht/blob/main/examples/relay/DEPLOY.md"><code>examples/relay/DEPLOY.md</code></a>. The wire protocol and the push REST surface are in <a href="https://github.com/ingo-eichhorst/Irrlicht/blob/main/docs/relay-protocol.md"><code>docs/relay-protocol.md</code></a>.</p>
+
+      <!-- ── Pairing ── -->
+      <h2 id="pairing">Pairing a phone</h2>
+
+      <p>Pairing happens once per phone. After it, daily use needs no gestures at all.</p>
+
+      <ol class="steps">
+        <li>
+          <strong>On the Mac: mint a code</strong>
+          <p>In the dashboard the relay serves, open <strong>Settings</strong> and find <strong>Irrlicht Elfdans</strong>, then press <strong>Pair a phone&hellip;</strong>. You get an eight-character code shown as <code>XXXX-XXXX</code>, with a countdown beside it. Its alphabet leaves out the characters that misread when they are typed from a screen &mdash; no <code>I</code>, <code>L</code>, <code>O</code>, <code>U</code>, <code>0</code> or <code>1</code> &mdash; so there is nothing to guess at.</p>
+          <p>If the section offers a code box but no button to mint one, the relay token is not entered under <strong>Settings &rarr; Sources</strong> on that page &mdash; minting needs an authenticated client, because the code inherits its workspace from that token.</p>
+        </li>
+        <li>
+          <strong>On the phone: open the same URL</strong>
+          <p>Type the relay&rsquo;s address into the phone&rsquo;s browser. There is no QR code yet &mdash; the URL and the eight characters are what you carry across.</p>
+        </li>
+        <li>
+          <strong>Add to Home Screen, then open it from there</strong>
+          <p>Use the browser&rsquo;s share menu to add the page to the home screen, close the tab, and launch Elfdans from the new icon.</p>
+        </li>
+        <li>
+          <strong>Inside the installed app: type the code</strong>
+          <p>Open <strong>Settings &rarr; Irrlicht Elfdans</strong> again &mdash; this time it offers a code field &mdash; enter the code, press <strong>Pair this phone</strong>, and allow notifications when the phone asks.</p>
+        </li>
+      </ol>
+
+      <div class="callout callout-warning">
+        <strong>The two steps people get wrong</strong>
+        <strong>Pair inside the installed app, not in the browser tab.</strong> iOS keeps browser-tab storage and installed-app storage apart, so a pairing completed in Safari simply is not there when you launch the home-screen icon &mdash; which is the whole reason a one-time code exists rather than a link that does everything.<br>
+        <strong>One code, one attempt.</strong> It expires after ten minutes and works exactly once. Wrong, expired and already-used codes all get the same answer on purpose, so a mistyped code is not distinguishable from a stale one &mdash; mint a fresh one either way. Ten failed attempts inside a minute refuse every further attempt, correct ones included, until that minute drains.
+      </div>
+
+      <p>Declining the notification prompt does not spend the code: Elfdans asks the phone before it asks the relay, so you can turn notifications on in the phone&rsquo;s settings and press <strong>Pair this phone</strong> again with the same code.</p>
+
+      <p>Redeeming a code issues an ordinary bearer token for that phone, which is why un-pairing needs no separate machinery &mdash; the phone shows up in <code>irrlichtrelay token list</code> like any other client. Once paired, the Elfdans section on the phone turns into a delivery-health line and an <strong>Unpair</strong> button.</p>
+
+      <!-- ── Policy ── -->
+      <h2 id="what-buzzes">What actually buzzes</h2>
+
+      <p>Elfdans is deliberately quiet: ten agents flapping for a minute must not mean ten buzzes. The relay decides what to send, with these defaults.</p>
+
+      <table>
+        <thead>
+          <tr><th>What happened</th><th>What the phone does</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>A session enters <span class="badge badge-waiting">waiting</span></td><td>Banner as soon as the relay sees it &mdash; latency is the whole feature</td></tr>
+          <tr><td>A session goes <span class="badge badge-working">working</span> &rarr; <span class="badge badge-ready">ready</span></td><td>Banner after a 7-second hold-down. If the session starts working again inside those seconds, nothing is sent at all</td></tr>
+          <tr><td>Anything &rarr; <span class="badge badge-working">working</span></td><td>Never. Starting work is not news</td></tr>
+          <tr><td>A subagent transitions</td><td>Never &mdash; the parent session&rsquo;s own transitions cover it</td></tr>
+          <tr><td>The same session again</td><td>One banner per session: a newer one replaces the older instead of stacking. At most one per session per edge per 60 seconds</td></tr>
+          <tr><td>More than three banners inside 20 seconds</td><td>They collapse into a single &ldquo;N agents need attention&rdquo;, which refreshes silently while the burst lasts</td></tr>
+          <tr><td>A session Irrlicht has just learned about &mdash; first sighting, or a snapshot after the Mac reconnected</td><td>Silent. Roaming onto a new network does not replay the day; only a genuine state change since the last snapshot notifies</td></tr>
+          <tr><td>A session disappears</td><td>Nothing, and any pending hold-down is cancelled with it</td></tr>
+          <tr><td>The Mac&rsquo;s daemon disconnects</td><td>After a 60-second grace &mdash; reconnects while roaming take seconds &mdash; one &ldquo;Mac <em>name</em> disconnected&rdquo;. When it returns, that same banner is replaced by &ldquo;Mac <em>name</em> reconnected&rdquo; without a second buzz. This is the one notification the Mac can never send about itself</td></tr>
+        </tbody>
+      </table>
+
+      <p>Each notification also carries a lifetime, which bounds how long the push service holds it for a phone that is off: an hour for <span class="badge badge-waiting">waiting</span>, ten minutes for <span class="badge badge-ready">ready</span> and for the daemon banners. A question that was asked an hour ago is still a question; a <span class="badge badge-ready">ready</span> from an hour ago is noise.</p>
+
+      <p>Every phone paired through the same relay workspace &mdash; the isolation unit a token belongs to &mdash; receives the same notifications. Filtering per phone or per project, &ldquo;this phone only wants project X&rdquo;, does not exist yet.</p>
+
+      <!-- ── Privacy ── -->
+      <h2 id="privacy">What Apple and Google can see</h2>
+
+      <p>The accurate line is: <strong>nothing readable leaves your infrastructure.</strong> Not &ldquo;nothing leaves your machine&rdquo; &mdash; the relay is part of the path, and it is yours.</p>
+
+      <table>
+        <thead>
+          <tr><th>Who</th><th>What they see</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Your Mac</td><td>Everything, exactly as before &mdash; the daemon is unchanged by any of this</td></tr>
+          <tr><td>Your relay</td><td>Full session state, which is already true of any relay you run: it caches what your daemon forwards so clients can render it. It also composes the payloads it pushes</td></tr>
+          <tr><td>Apple / Google&rsquo;s push service</td><td>The delivery endpoint, the <strong>timing</strong> of each message, and 2 KiB of ciphertext. Payload encryption is mandatory and terminates on the device, and every payload is padded to that same fixed size &mdash; so the length says nothing either</td></tr>
+          <tr><td>Your phone</td><td>The structured payload: ids, labels, states. Never prose &mdash; the sentence you read on the lock screen is composed on the phone itself</td></tr>
+        </tbody>
+      </table>
+
+      <p>Timing is a named, accepted leak. Whoever carries the pushes learns <em>when</em> your agents need you, which is a work-rhythm signal. Batching would hide it and ruin the feature, so it is weighed and accepted rather than mitigated &mdash; it belongs on this page rather than in a footnote nobody reads.</p>
+
+      <p>One more, for the same reason: an attacker who reads the relay&rsquo;s data directory gets no session content and no usable bearer tokens, which are stored hashed. What they do get is the signing key and the subscription registry, and those two together let them send arbitrary notifications to your paired phones until you pair them again.</p>
+
+      <!-- ── Troubleshooting ── -->
+      <h2 id="when-it-breaks">When it breaks</h2>
+
+      <p><strong>Start with the health line.</strong> Open Elfdans on the phone: the Irrlicht Elfdans section reads something like <em>&ldquo;Push registered via web.push.apple.com &mdash; last delivery at 14:32 succeeded&rdquo;</em>, or names the failure instead. Delivery health lives only in the relay&rsquo;s memory, so shortly after a relay restart it says <em>&ldquo;no delivery attempted since the relay started&rdquo;</em> &mdash; that is honesty about not knowing, not a report that something failed.</p>
+
+      <p><strong>It repairs itself where it can.</strong> Opening the app re-subscribes when the phone&rsquo;s subscription has died (iOS invalidates them silently after long idle periods) and re-registers when the relay lost its record of this phone. The token issued at pairing is the durable identity; the subscription is only a delivery address, which is why re-registering is enough.</p>
+
+      <p><strong>Un-pairing, from either end.</strong> The <strong>Unpair</strong> button removes the delivery address on the relay, drops the subscription on the phone, and forgets the token locally &mdash; the token record itself stays in <code>token list</code> until you revoke it. From the relay side, <code>irrlichtrelay token revoke &lt;id&gt;</code> is the whole story: the phone&rsquo;s stream access closes with WebSocket code <code>4401</code>, and its stored subscription resolves to no workspace, so it receives nothing further. The app then says it is no longer paired and offers to pair again.</p>
+
+      <p><strong>Nothing arrives at all.</strong> Check, in this order:</p>
+
+      <ul>
+        <li><strong>Send a test notification</strong>, from the button under the health line. It sends one push down the same path a real notification takes and tells you what came back, so it splits the problem in two: a banner means delivery is fine and the fault is between your agents and the relay, while a named failure (&ldquo;the push service answered 403&rdquo;, &ldquo;this phone&rsquo;s subscription no longer exists&rdquo;) is the answer itself. If it arrives, the checks below are where to look next; if it does not, the sentence it prints is already the diagnosis.</li>
+        <li><code>curl https://&lt;your-relay&gt;/api/v1/push/info</code> &mdash; it should answer <code>{"enabled":true,…}</code>. An <code>enabled:false</code> names its own reason, and the usual reason is a relay running with <code>--auth off</code>.</li>
+        <li>The connection-status tooltip in the dashboard &mdash; if the daemon is not connected to the relay, there are no transitions to notify about. A daemon that was connected and then dropped becomes a banner of its own after 60 seconds; one that never connected is simply absent, and nothing will arrive.</li>
+        <li>What the sessions actually did. A session that never left <span class="badge badge-working">working</span> is not a missed notification.</li>
+      </ul>
+
+      <p><strong>Keep the relay&rsquo;s four files.</strong> The relay&rsquo;s data directory holds <code>tokens.json</code>, <code>vapid-keys.json</code>, <code>push-subscriptions.json</code> and <code>daemon-roster.json</code>, all mode <code>0600</code>. Copy those and keep the hostname, and every paired phone survives a host rebuild untouched. No session content is ever written to the relay host &mdash; before this feature or after it.</p>
+
+      <div class="callout callout-tip">
+        <strong>Back up <code>vapid-keys.json</code> in particular</strong>
+        It is the relay&rsquo;s signing identity, and every phone&rsquo;s subscription is bound to it. If the file is lost the relay mints a new identity on its next start, and phones paired against the old one have to be paired again &mdash; the self-heal above covers a lost <em>subscription</em>, not a lost signing key. A file that exists but does not parse is refused at startup rather than quietly replaced: the error names the file and your two options, because minting a fresh identity behind your back would orphan every paired phone.
+      </div>
+
+      <!-- ── Bottom nav ── -->
+      <nav class="docs-nav-bottom" aria-label="Previous and next page">
+        <a href="macos-setup.html">
+          <span class="label">Previous</span>
+          macOS Setup
+        </a>
+        <a href="tips-and-tricks.html" style="text-align:right">
+          <span class="label">Next</span>
+          Tips &amp; Tricks &rarr;
+        </a>
+      </nav>
+
+    </div>
+  </main>
+
+</div>
+
+<script async src="https://cdn.counter.dev/script.js" data-id="2d845c2a-ed61-4410-8850-e6339766176f" data-utcoffset="1"></script>
+</body>
+</html>

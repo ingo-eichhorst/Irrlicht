@@ -638,6 +638,12 @@ if want go; then
                   "go vet (onboarding-factory)" go vet ./tools/onboarding-factory/...
   run_gate_scoped '^tools/onboarding-factory/.*\.go$' \
                   "onboarding-factory tests" go test ./tools/onboarding-factory/... -count=1
+  # elfdans-drive imports core's relay envelope and forwarder, so a core
+  # refactor can break it — and nothing else compiles it. Without this gate a
+  # plain compile error is green until the device test reaches for it, which
+  # is the one moment it must work (docs/elfdans-device-test.md Phase 5).
+  run_gate_scoped '^tools/elfdans-drive/|^core/adapters/outbound/relay/|^core/domain/session/' \
+                  "elfdans-drive builds"      go build ./tools/elfdans-drive/...
   run_gate_scoped '^tools/onboarding-factory/desktop-helper/' \
                   "Claude Desktop helper tests" tools/onboarding-factory/desktop-helper/test.sh
   run_gate_scoped '^replaydata/|^tools/onboarding-factory/' \
@@ -661,7 +667,13 @@ fi
 # ---- web group (mirrors web-test.yml) -----------------------------------
 if want web; then
   CURRENT_GROUP=web
-  run_gate_scoped '^platforms/web/' \
+  # The two core/ paths are not a mistake. sw-contract.test.js pins the
+  # diagnostic push's collapse key across languages — testPushTopic in
+  # push_observer.go against sw.js's `test`-branch tag, plus the topic space it
+  # derives from engine.go — so a push that edits ONLY those Go files is exactly
+  # the change that tripwire exists to catch, and a gate scoped to
+  # '^platforms/web/' would skip it under --changed (the pre-push hook).
+  run_gate_scoped '^platforms/web/|^core/cmd/irrlichtrelay/push_observer\.go$|^core/domain/notify/engine\.go$' \
                   "web: platforms/web"             web_tree platforms/web
   run_gate_scoped '^tools/onboarding-factory/internal/viewer/web/' \
                   "web: onboarding-factory viewer" web_tree tools/onboarding-factory/internal/viewer/web

@@ -584,6 +584,15 @@
     /* Rig worker rows nested under a Gas Town rig header. */
     .session-row.nested { padding-left: 26px; }
 
+    /* The row a Elfdans notification tap landed on (docs/
+       mobile-notifications-arc42.md R6). Stronger than :hover on purpose —
+       a tap that scrolls somewhere without saying where is the same silence
+       as a tap that does nothing. */
+    .session-row.elfdans-focus {
+      background: var(--surface-hover);
+      box-shadow: inset 2px 0 0 var(--waiting);
+    }
+
     .row-state-icon {
       width: 12px;
       height: 12px;
@@ -1070,6 +1079,25 @@
     #permission-apply-banner[hidden] {
       display: none;
     }
+
+    /* Elfdans deep-link notice (docs/mobile-notifications-arc42.md §8.5, R6) —
+       what a notification tap says when its session is not in the list this
+       device is watching. Created by irrlicht.js only when there is something
+       to report and removed when there is not, so it has no hidden state and
+       no [hidden] rule; clicking it dismisses it. Borrows the calm warning
+       palette of the banner above rather than the error one: nothing is
+       broken, the session is simply elsewhere. */
+    #elfdans-notice {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      padding: 6px 10px;
+      margin-bottom: 8px;
+      border-radius: 4px;
+      background: var(--waiting-dim);
+      border: 1px solid rgba(255, 149, 0, 0.4);
+      color: var(--waiting);
+      cursor: pointer;
+    }
     .perm-unapplied-list {
       margin: 4px 0 6px;
       padding-left: 16px;
@@ -1388,6 +1416,42 @@
       flex-shrink: 0;
     }
     .settings-modal .settings-action-btn:hover { border-color: var(--working); }
+
+    /* Irrlicht Elfdans (phone notifications) — settings section rendered by
+       elfdans.js only on push-capable relay origins (docs/
+       mobile-notifications-arc42.md §5.2). Reuses the settings-modal chrome;
+       only the code display and pair row are Elfdans-specific. */
+    .settings-modal .elfdans-code {
+      font-family: var(--font-mono);
+      font-size: 22px;
+      letter-spacing: 3px;
+      color: var(--text-bright);
+      padding: 8px 4px 2px;
+    }
+    .settings-modal .elfdans-code-expiry {
+      font-size: 11px;
+      color: var(--waiting);
+      padding: 0 4px;
+    }
+    .settings-modal .elfdans-code-url,
+    .settings-modal .elfdans-hint,
+    .settings-modal .elfdans-status,
+    .settings-modal .elfdans-health {
+      font-size: 11px;
+      color: var(--muted);
+      padding: 4px 4px 0;
+    }
+    .settings-modal .elfdans-pair-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 4px;
+    }
+    .settings-modal .elfdans-code-input {
+      width: 130px;
+      font-family: var(--font-mono);
+      text-transform: uppercase;
+    }
 
     /* Permission wizard (issue #570) — shares the settings modal chrome. */
     .permissions-modal .permissions-intro {

@@ -16,6 +16,7 @@ If the user invokes this skill without any other guidance, ask them what they wa
 - `preview/` — small specimen cards for every token cluster
 - `ui_kits/dashboard/` — the dense data view (session list, Gas Town, pressure alerts)
 - `ui_kits/landing/` — the marketing surface (serif hero, three lights, install pill)
+- `ui_kits/elfdans/` — Irrlicht Elfdans, the phone-facing PWA (pairing on Mac and phone, the paired-phone ledger, lock-screen notifications, app icon)
 - `assets/` — logos and icon sources
 
 ## Non-negotiables

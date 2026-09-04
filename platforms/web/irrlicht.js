@@ -8,13 +8,15 @@ import {
 import {
   compoundSessionId, displaySessionId, sessionOrigin, sourceIdOf, localBareIds, isShadowedRemote, daemonSessionIds,
 } from './sessionIdentity.js';
-import { relayFrameKind, seqGap, aggregateConnState, relayWsUrl } from './connectionProtocol.js';
+import { relayFrameKind, seqGap, aggregateConnState, disconnectedBannerText, relayWsUrl } from './connectionProtocol.js';
 import {
   stateIcon, shortModel, formatCost, costCellDisplay, fmtDuration, formatElapsed,
   taskEtaPresentation, shortID, pressureClass, pressureColor, formatTokens, esc, activeSubagentCount,
   cacheBloatBadgeText,
 } from './formatters.js';
 import { reconcile, paintRowNum } from './domReconcile.js';
+import { initElfdans } from './elfdans.js';
+import { createElfdansDashboard } from './elfdansDashboard.js';
 
     // --- State ---
     let dashboardGroups = [];
@@ -141,6 +143,29 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     // Settings keys that change the live source connections (vs. display-only
     // toggles), so the change handler knows to reconnect.
     const SOURCE_SETTING_KEYS = new Set(['enableLocalSource', 'enableRelaySource', 'relayUrl', 'relayToken']);
+    // The seam Elfdans pairing configures the phone's own live view through
+    // (docs/mobile-notifications-arc42.md §6.2, ADR-9). It is deliberately the
+    // dashboard's own mechanism — this `settings` object, persistSettings(),
+    // and the same rebuildSources() the Settings → Sources change handler
+    // runs — rather than localStorage keys written by hand from elfdans.js,
+    // which a later change to how settings are stored would silently orphan.
+    // The Settings form re-reads on open (syncSettingsForm), so nothing there
+    // goes stale.
+    function readSourceSettings() {
+      const out = {};
+      for (const key of SOURCE_SETTING_KEYS) out[key] = settings[key];
+      return out;
+    }
+    function writeSourceSettings(next) {
+      for (const key of Object.keys(next || {})) {
+        // A key outside the source set would be persisted into the same object
+        // and never reconnected — a silent half-write. Refuse it instead.
+        if (!SOURCE_SETTING_KEYS.has(key)) throw new Error('not a source setting: ' + key);
+      }
+      Object.assign(settings, next);
+      persistSettings();
+      rebuildSources();
+    }
     function loadSettings() {
       try {
         const raw = localStorage.getItem(SETTINGS_KEY);
@@ -1288,6 +1313,11 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       updateSummary(all, topLevel);
       renderHeaderTitle();
       refreshSummaryCollapseAllBtn();
+      // Elfdans (arc42 §8.5, R6): reconcile has just rewritten every row's
+      // className, so the notification selection is repainted from state; a tap
+      // still waiting on its session gets another look at the fresh list; and
+      // the phone's ledger is told what the dashboard can now see.
+      elfdansDash.onRender();
     }
 
     // Keep the header summary-mode button's glyph/label in sync with the
@@ -1815,6 +1845,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
 
     function ingestInitialSessions(resp) {
       if (!resp) return;
+      elfdansDash.noteLiveData();
       dashboardGroups = Array.isArray(resp) ? resp : (resp.groups || []);
       normalizeGroupAgents(dashboardGroups);
       dashboardProviderCosts = (resp && !Array.isArray(resp) && resp.provider_costs) || {};
@@ -2052,6 +2083,9 @@ import { reconcile, paintRowNum } from './domReconcile.js';
         if (src.kind === 'relay' && settings.relayToken) hello.token = settings.relayToken;
         try { ws.send(JSON.stringify(hello)); } catch (e) { console.debug('irrlicht: failed to send hello frame', e); }
         updateWsStatus();
+        // The ledger publishes on the CONNECT edge too, not only from
+        // render() — elfdansDashboard.js carries why.
+        elfdansDash.noteSourceConnected();
         // Re-read consent on every (re)connect, mirroring the macOS app's
         // connect() (#1385). A daemon restart re-runs every granted effect
         // at boot, and a failure there is broadcast by nobody: Start emits
@@ -2076,6 +2110,12 @@ import { reconcile, paintRowNum } from './domReconcile.js';
         // stop reconnecting (until settings change) instead of a tight loop.
         if (ev?.code === 4401) { src.state = 'unauthorized'; updateWsStatus(); return; }
         src.state = 'disconnected';
+        // Forget what we published: the worker's ledger does NOT stand still
+        // while the page is away — sw.js's push fold keeps writing it. On
+        // reconnect an unchanged live set would otherwise be suppressed as
+        // "already published", leaving the push fold's `waiting` row and its
+        // badge in place with nothing left to correct them.
+        elfdansDash.noteSourceDisconnected();
         updateWsStatus();
         scheduleReconnect(src);
       };
@@ -2216,6 +2256,9 @@ import { reconcile, paintRowNum } from './domReconcile.js';
         return;
       }
       if (!msg.session) return;
+      // A session frame landed, from any source — so "the session is not in
+      // the list" has stopped being a race and can be reported (arc42 R6).
+      elfdansDash.noteLiveData();
       const s = msg.session;
       if (msg.type === 'session_deleted') {
         applySessionDelete(s.session_id);
@@ -2229,8 +2272,31 @@ import { reconcile, paintRowNum } from './domReconcile.js';
       render();
     }
 
+    // Irrlicht Elfdans's dashboard half — the notification deep link (R6) and
+    // the live ledger fold (§8.5) — lives in elfdansDashboard.js. What stays
+    // here is this construction and the five calls it hands back: the
+    // dashboard holds no Elfdans state and takes no Elfdans branch, so the
+    // feature can be dropped, or shipped as its own artifact, without being
+    // unpicked from this file.
+    const elfdansDash = createElfdansDashboard({
+      sessionIds: () => sessionIndex.keys(),
+      groupOf: (sessionId) => sessionIndex.get(sessionId)?.group || null,
+      groups: () => dashboardGroups,
+      render,
+      anySourceConnected: () => [...sources.values()].some(s => s.state === 'connected'),
+    });
+
+    // Kept as a named export because it IS the dashboard's entry point for a
+    // notification tap — irrlicht.elfdans.test.js drives it as one.
+    export function focusSessionFromNotification(bareId) {
+      elfdansDash.focusSessionFromNotification(bareId);
+    }
+
     // --- Connection status (header dot + banner + tooltip) ---
-    function setDotLabel(status) {
+    // `states` is the raw per-source list, not just the aggregate: the banner
+    // distinguishes a source that rejected our token from one nobody can
+    // reach, and aggregateConnState folds both to 'disconnected'.
+    function setDotLabel(status, states) {
       const dot = document.getElementById('ws-dot');
       const label = document.getElementById('ws-label');
       if (dot) dot.className = 'ws-dot ' + status;
@@ -2247,7 +2313,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
           banner.textContent = 'Reconnecting…';
         } else if (status === 'disconnected') {
           banner.className = 'disconnected';
-          banner.textContent = 'Disconnected — no configured source is reachable. Check that the daemon (or relay) is running.';
+          banner.textContent = disconnectedBannerText(states);
         } else {
           banner.className = '';
           banner.textContent = '';
@@ -2274,7 +2340,7 @@ import { reconcile, paintRowNum } from './domReconcile.js';
 
     function updateWsStatus() {
       const states = [...sources.values()].map(s => s.state);
-      setDotLabel(aggregateConnState(states));
+      setDotLabel(aggregateConnState(states), states);
       const wrap = document.querySelector('.ws-status');
       if (wrap) wrap.title = sourceTooltipLines().join('\n');
     }
@@ -2408,6 +2474,13 @@ import { reconcile, paintRowNum } from './domReconcile.js';
         refreshPermNote();
         // Source toggles/URL reconnect live, no page reload.
         if (SOURCE_SETTING_KEYS.has(key)) rebuildSources();
+        // …and so does the Elfdans panel, whose mint row exists only when a
+        // client token does (arc42 §8.1). Built once at wiring time it stayed
+        // absent after the token was entered, so the one action that needs the
+        // token — minting a pairing code — was unreachable until a reload.
+        // Scoped to relayToken alone: re-rendering on every source change would
+        // wipe a pairing code the user is part-way through typing.
+        if (key === 'relayToken') renderElfdansPanel();
         // Hiding the Activity button isn't enough if it's the chart on screen
         // right now — back out of it too (#1075).
         if (key === 'enableActivityChart' && !settings[key]) leaveActivityChartIfSelected();
@@ -2446,6 +2519,25 @@ import { reconcile, paintRowNum } from './domReconcile.js';
     // the inline code used to run.
     initHistoryTab();
 
+    // Irrlicht Elfdans (docs/mobile-notifications-arc42.md) — safe to call
+    // unconditionally: everything it does is feature-detected against this
+    // origin's /api/v1/push/info (§5.2), so daemon-served dashboards and old
+    // relays render nothing new and install no service worker. The two seams
+    // below are equally inert there: `liveView` is only written by a successful
+    // pairing (§6.2, ADR-9), and `openSession` only fires for a phone a
+    // notification tap sent here (R6).
+    // A function declaration, not a call site: the settings handler above runs
+    // earlier in this scope and needs to re-render the panel, and hoisting is
+    // what lets both reach the one definition.
+    function renderElfdansPanel() {
+      return initElfdans({
+        relayToken: () => settings.relayToken,
+        liveView: { read: readSourceSettings, write: writeSourceSettings },
+        openSession: focusSessionFromNotification,
+      });
+    }
+    renderElfdansPanel();
+
 export {
   resolvedTheme, rowLabel, maybeNotifyOnUpdate,
   // #1801: stateColor and the session-error helpers are exported so they can
@@ -2477,10 +2569,15 @@ export {
   taskEtaPresentation,
   lastNotifiedPressure,
   relayFrameKind, aggregateConnState, relayWsUrl, seqGap,
+  // disconnectedBannerText and setDotLabel are exported for their WIRING:
+  // the pure helper can be right while the banner still renders the old
+  // string, which is exactly the shape the defect had.
+  disconnectedBannerText, setDotLabel,
   compoundSessionId, displaySessionId,
   sessionOrigin, sourceIdOf, localBareIds, isShadowedRemote,
   daemonSessionIds, structureSignature,
 };
+export { missingSessionText } from './elfdansDashboard.js';
 export { formatUsageCost } from './quotaChips.js';
 export { pendingWizardAgents, buildPermissionAnswers, stillPendingForAgents } from './permissionsWizard.js';
 export {
