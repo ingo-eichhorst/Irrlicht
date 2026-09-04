@@ -193,17 +193,36 @@ func (runtime *LiveRuntime) VerifyBaseline(_ context.Context, baseline Baseline,
 	if err != nil {
 		return err
 	}
-	for path, expected := range baseline.Files {
-		actual, ok := files[path]
-		if !ok || !bytes.Equal(expected, actual) {
+	if err := verifyBaselineFiles(baseline.Files, files); err != nil {
+		return err
+	}
+	return verifyPostBaselineSessions(sessions, baseline.SessionIDs, owned.Registry.SessionID)
+}
+
+// verifyBaselineFiles proves the run left every registry file it did not own
+// byte-for-byte as it found it.
+func verifyBaselineFiles(expected, actual map[string][]byte) error {
+	for path, want := range expected {
+		got, ok := actual[path]
+		if !ok || !bytes.Equal(want, got) {
 			return fmt.Errorf("pre-existing Desktop session changed at %q", path)
 		}
 	}
+	return nil
+}
+
+// verifyPostBaselineSessions proves the only session that appeared during the
+// run is the one this driver created, and that it was archived.
+func verifyPostBaselineSessions(
+	sessions []RegistrySession,
+	baselineIDs map[string]struct{},
+	ownedID string,
+) error {
 	for _, session := range sessions {
-		if _, existed := baseline.SessionIDs[session.SessionID]; existed {
+		if _, existed := baselineIDs[session.SessionID]; existed {
 			continue
 		}
-		if session.SessionID != owned.Registry.SessionID {
+		if session.SessionID != ownedID {
 			return fmt.Errorf("unowned post-baseline Desktop session %q exists", session.SessionID)
 		}
 		if !session.Archived {
