@@ -409,12 +409,22 @@ func registerCoreRoutes(mux *http.ServeMux, deps registerCoreRoutesDeps) {
 	mux.HandleFunc("GET /debug/bundle", localhostOnly(handleDiagnosticsBundle(diagSvc)))
 }
 
-// registerUIRoutes serves the dashboard's static assets (index.html,
-// irrlicht.css, irrlicht.js) from disk, or a plain-text explainer if the UI
-// directory can't be found. Ensures web assets are served with the correct
-// Content-Type regardless of the host OS mime.types database (absent on
-// stripped Linux images — Go's content-sniffing fallback returns text/plain
-// for CSS, which has no magic bytes).
+// registerUIRoutes serves the dashboard's static assets from disk, or a
+// plain-text explainer if the UI directory can't be found. Ensures web assets
+// are served with the correct Content-Type regardless of the host OS
+// mime.types database (absent on stripped Linux images — Go's
+// content-sniffing fallback returns text/plain for CSS, which has no magic
+// bytes).
+//
+// It serves WHATEVER resolveUIDir returns, as one http.FileServer — it does
+// not enumerate files, and no file count belongs in this comment. The
+// enumeration that used to sit here ("index.html, irrlicht.css, irrlicht.js")
+// was the recorded form of the assumption that broke in #1900: the same three
+// names were a hand-written copy list in tools/build-release.sh, and once
+// irrlicht.js became an ES module importing ten siblings, every release
+// artifact shipped a tree whose imports 404'd here. What ships is now decided
+// by a rule (tools/lib/stage-web.sh) and gated by
+// tools/web-release-assets-guard.sh.
 func registerUIRoutes(mux *http.ServeMux, logger outbound.Logger) {
 	_ = mime.AddExtensionType(".js", "application/javascript")
 	_ = mime.AddExtensionType(".css", "text/css")

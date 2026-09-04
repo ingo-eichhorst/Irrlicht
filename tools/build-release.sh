@@ -7,6 +7,14 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT_DIR"
 
+# The dashboard's runtime asset set is defined ONCE, as a rule, in
+# tools/lib/stage-web.sh, and staged from there into all three release
+# artifacts below. It used to be a hand-written three-file `cp` list repeated
+# at each site, which stopped being the whole dashboard in #712/#820 and
+# shipped a blank page to every installed user (#1900).
+# shellcheck source=lib/stage-web.sh
+. "$SCRIPT_DIR/lib/stage-web.sh"
+
 # Read version from version.json (single source of truth). build-release.sh
 # always uses the BARE base version — release artifacts must not carry git
 # sha or .dirty markers in the binary's --version output, since the tagged
@@ -62,7 +70,7 @@ TARBALL_STAGING="$BUILD_DIR/tarball-staging"
 rm -rf "$TARBALL_STAGING"
 mkdir -p "$TARBALL_STAGING/web"
 cp "$BUILD_DIR/${DAEMON_NAME}-darwin-universal" "$TARBALL_STAGING/${DAEMON_NAME}"
-cp platforms/web/index.html platforms/web/irrlicht.css platforms/web/irrlicht.js "$TARBALL_STAGING/web/"
+stage_web platforms/web "$TARBALL_STAGING/web"
 tar -czf "$BUILD_DIR/${DAEMON_NAME}-darwin-universal.tar.gz" -C "$TARBALL_STAGING" .
 rm -rf "$TARBALL_STAGING"
 echo "  Created $BUILD_DIR/${DAEMON_NAME}-darwin-universal.tar.gz"
@@ -84,7 +92,7 @@ build_linux_tarball() {
     rm -rf "$staging"
     mkdir -p "$staging/web"
     cp "$BUILD_DIR/${DAEMON_NAME}-linux-${arch}" "$staging/${DAEMON_NAME}"
-    cp platforms/web/index.html platforms/web/irrlicht.css platforms/web/irrlicht.js "$staging/web/"
+    stage_web platforms/web "$staging/web"
     tar -czf "$BUILD_DIR/${DAEMON_NAME}-linux-${arch}.tar.gz" -C "$staging" .
     rm -rf "$staging"
     echo "  Created $BUILD_DIR/${DAEMON_NAME}-linux-${arch}.tar.gz"
@@ -120,8 +128,8 @@ mkdir -p "$APP_CONTENTS/Resources/web"
 cp "$SWIFT_BIN" "$APP_CONTENTS/MacOS/${APP_NAME}"
 
 # Web UI lives next to the daemon — resolved by irrlichd at runtime via
-# <exe>/../Resources/web (see resolveUIDir in core/cmd/irrlichd/main.go).
-cp platforms/web/index.html platforms/web/irrlicht.css platforms/web/irrlicht.js "$APP_CONTENTS/Resources/web/"
+# <exe>/../Resources/web (see resolveUIDir in core/cmd/irrlichd/paths.go).
+stage_web platforms/web "$APP_CONTENTS/Resources/web"
 
 # AppIcon — required for menu bar / Finder display.
 cp platforms/macos/Irrlicht/Resources/AppIcon.icns "$APP_CONTENTS/Resources/AppIcon.icns"

@@ -407,6 +407,32 @@ row 'rebase-conflict-check.sh::rebase_conflict_check' 'rebase_conflict_check (re
     '. tools/lib/rebase-conflict-check.sh' \
     'rebase_conflict_check 2>/dev/null'
 
+# stage-web.sh is sourced by tools/build-release.sh, which runs under `set -e`
+# from its first line — so a refusal that aborted the caller instead of
+# returning would take down a release build mid-flight rather than reporting
+# which asset tree it could not read. Its distinctive statuses are 2 (bad
+# arguments / unreadable tree) and 3 (the rule matched nothing); the success
+# path is driven against the real dashboard tree, which is what
+# build-release.sh actually passes it.
+row 'stage-web.sh::stage_web_is_dev_only' 'stage_web_is_dev_only (a runtime asset)' 1 \
+    '. tools/lib/stage-web.sh' \
+    'stage_web_is_dev_only irrlicht.js'
+row 'stage-web.sh::stage_web_list' 'stage_web_list (the real dashboard tree)' 0 \
+    '. tools/lib/stage-web.sh' \
+    'stage_web_list platforms/web >/dev/null'
+row 'stage-web.sh::stage_web_list' 'stage_web_list (refuses a tree that is not there)' 2 \
+    '. tools/lib/stage-web.sh' \
+    'stage_web_list "$TW_TMP/stage-web-absent" 2>/dev/null'
+row 'stage-web.sh::stage_web_list' 'stage_web_list (refuses a tree with no runtime asset)' 3 \
+    '. tools/lib/stage-web.sh; mkdir -p "$TW_TMP/stage-web-empty"' \
+    'stage_web_list "$TW_TMP/stage-web-empty" 2>/dev/null'
+row 'stage-web.sh::stage_web' 'stage_web (stages the real dashboard tree)' 0 \
+    '. tools/lib/stage-web.sh' \
+    'stage_web platforms/web "$TW_TMP/stage-web-out"'
+row 'stage-web.sh::stage_web' 'stage_web (refuses without a destination)' 2 \
+    '. tools/lib/stage-web.sh' \
+    'stage_web platforms/web "" 2>/dev/null'
+
 # Driven against a THROWAWAY corpus, never against tools/lib itself: this
 # function runs every `*_test.sh` it finds, and this file is one of them, so
 # pointing it at the real directory would re-enter the whole suite (and this

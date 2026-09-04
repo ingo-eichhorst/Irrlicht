@@ -575,8 +575,30 @@ if want tools; then
   # backup that was never refreshed, a bundle overwritten while its process was
   # still alive). Same story, eighth entry: a commit editing only that script,
   # or only restore-prod.sh beside it, is exactly the one that breaks them.
-  run_gate_scoped '^tools/lib/|^tools/[^/]*\.sh$|^tools/git-hooks/|^go\.work$|^\.github/dependabot\.yml$|^site/install\.sh$|^AGENTS\.md$|^\.claude/skills/ir:test-mac/|^\.github/workflows/(ars|codescene-badge|coverage|macos-swift|replaydata-deletion-guard|test)\.yml$' \
+  # platforms/web/ joins the trigger for a ninth reason (#1900), and it is the
+  # one entry here whose absence had already shipped. Every release artifact
+  # staged the dashboard from a hand-written three-file `cp` list; the list was
+  # complete when it was written and stopped being complete the moment
+  # irrlicht.js became an ES module importing ten siblings, so the released
+  # dashboard rendered a blank page on macOS and Linux. web-release-assets-guard_test.sh
+  # walks that import graph out of platforms/web/ and asserts the staging rule
+  # covers all of it — so a commit that EXTRACTS A NEW MODULE, precisely the
+  # commit shape that caused this twice, has to select this gate. Without the
+  # entry, a diff touching only platforms/web/ matches nothing in this regex
+  # and the one gate that would catch it is SKIPped: the #1209 failure mode,
+  # arrived at from the other side.
+  run_gate_scoped '^tools/lib/|^tools/[^/]*\.sh$|^tools/git-hooks/|^go\.work$|^\.github/dependabot\.yml$|^site/install\.sh$|^AGENTS\.md$|^platforms/web/|^\.claude/skills/ir:test-mac/|^\.github/workflows/(ars|codescene-badge|coverage|macos-swift|replaydata-deletion-guard|test)\.yml$' \
                   "tools/lib shell-lib tests" shell_lib_tests
+
+  # The release-packaging guard (#1900). Same corpus as the trigger above minus
+  # the workflow files: the web tree it walks, the rule it executes
+  # (tools/lib/stage-web.sh) and the script it holds to that rule
+  # (tools/build-release.sh). Scoped rather than unscoped because that corpus
+  # really is nameable — but it must include ^platforms/web/, for the reason
+  # spelled out above.
+  run_gate_scoped '^platforms/web/|^tools/lib/stage-web\.sh$|^tools/web-release-assets-guard\.sh$|^tools/build-release\.sh$' \
+                  "web release assets (every module index.html reaches is staged)" \
+                  tools/web-release-assets-guard.sh
 
   # UNSCOPED, deliberately, and the only gate in this group that is (#1804).
   #
