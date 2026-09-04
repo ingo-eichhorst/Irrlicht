@@ -82,6 +82,40 @@ port_free_or_die() {
     fi
 }
 
+# `tailscale serve --bg` does NOT fail when Serve is disabled for the tailnet.
+# It prints an enable link and then POLLS until somebody clicks it — so under
+# `up --serve`, whose output the caller usually pipes, the operator sees a
+# command that never returns and no reason why. Bound it, and put the link in
+# front of them.
+#
+# The wait is a poll on the child's own liveness to a deadline, reporting the
+# elapsed time, rather than a fixed sleep: a serve that returns in two seconds
+# must not cost twenty-five.
+SERVE_HTTPS_PORT=443            # `tailscale serve --bg <localport>` publishes on 443
+SERVE_WAIT_SECONDS="${ELFDANS_SERVE_WAIT:-25}"
+
+serve_over_tailscale() {
+    local out="$RIG_DIR/tailscale-serve.log" pid rc waited=0
+    : > "$out"
+    tailscale serve --bg "$PORT" >"$out" 2>&1 &
+    pid=$!
+    while kill -0 "$pid" 2>/dev/null; do
+        if (( waited >= SERVE_WAIT_SECONDS * 4 )); then
+            kill "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+            printf '\n'
+            cat "$out"
+            die "tailscale serve did not return within ${SERVE_WAIT_SECONDS}s. The output above is the reason — most often Serve is not enabled for this tailnet and the command was waiting for someone to open that link. Enable it, then re-run 'up --serve'."
+        fi
+        sleep 0.25
+        waited=$(( waited + 1 ))
+    done
+    wait "$pid"; rc=$?
+    cat "$out"
+    [[ "$rc" -eq 0 ]] || die "tailscale serve failed (exit $rc) — see the output above"
+    tailscale serve status || true
+}
+
 # ── up ───────────────────────────────────────────────────────────────
 cmd_up() {
     local serve=0
@@ -110,8 +144,7 @@ cmd_up() {
     if [[ "$serve" = "1" ]]; then
         require_tools tailscale
         info "publishing over Tailscale"
-        tailscale serve --bg "$PORT" || die "tailscale serve failed"
-        tailscale serve status || true
+        serve_over_tailscale
     fi
 
     cat <<EOF
@@ -330,7 +363,10 @@ cmd_down() {
         wait "$(cat "$PID_FILE")" 2>/dev/null || true
     fi
     rm -f "$PID_FILE"
-    command -v tailscale >/dev/null 2>&1 && tailscale serve --https="$PORT" off >/dev/null 2>&1 || true
+    # 443, not $PORT: `serve --bg <localport>` publishes on the default HTTPS
+    # port, so `--https=$PORT off` matched no handler and silently left the
+    # tailnet publication up after `down`.
+    command -v tailscale >/dev/null 2>&1 && tailscale serve --https="$SERVE_HTTPS_PORT" off >/dev/null 2>&1 || true
     if [[ "${1:-}" = "--wipe" ]]; then
         rm -rf "$RIG_DIR"
         echo "rig stopped and state wiped"
