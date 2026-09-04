@@ -95,6 +95,9 @@ source "$REPO_ROOT/tools/onboarding-factory/scripts/lib/atomic-promote.sh"
 # hooks-declaring adapter's hook-free recording becomes committed truth.
 # shellcheck source=onboarding-factory/scripts/lib/promote-hookcheck.sh
 source "$REPO_ROOT/tools/onboarding-factory/scripts/lib/promote-hookcheck.sh"
+# Desktop evidence validator and execution-results writer (#1887).
+# shellcheck source=onboarding-factory/scripts/lib/desktop-profile.sh
+source "$REPO_ROOT/tools/onboarding-factory/scripts/lib/desktop-profile.sh"
 
 STAGED_DIR="$STAGING/replaydata/agents/$AGENT/scenarios/$SCENARIO"
 TARGET_DIR="$REPO_ROOT/replaydata/agents/$AGENT/scenarios/$SCENARIO"
@@ -103,6 +106,15 @@ RECORDINGS_DIR="$TARGET_DIR/recordings"
 if [[ ! -f "$STAGED_DIR/events.jsonl" ]]; then
   echo "promote: no staged events.jsonl at $STAGED_DIR" >&2
   exit 1
+fi
+if [[ "$EXECUTION_PROFILE" == "desktop-local" ]]; then
+  DESKTOP_SESSION_ID="$(jq -r '.cliSessionId // empty' "$STAGED_DIR/desktop-registry.json" 2>/dev/null || true)"
+  DESKTOP_WORKSPACE="$(jq -r '.cwd // empty' "$STAGED_DIR/desktop-registry.json" 2>/dev/null || true)"
+  if [[ -z "$DESKTOP_SESSION_ID" || -z "$DESKTOP_WORKSPACE" ]] ||
+     ! desktop_validate_staged_evidence "$STAGED_DIR" "$DESKTOP_SESSION_ID" "$DESKTOP_WORKSPACE"; then
+    echo "promote: desktop-local identity and session evidence is missing or inconsistent" >&2
+    exit 1
+  fi
 fi
 
 # A hooks-declaring adapter's recording with no hook_received event attributed
@@ -129,7 +141,11 @@ done
 # $STAGING/precheck.json; run-cell-multi.sh drives several into one staging tree
 # and writes $STAGING/<agent>/precheck.json. Check the per-adapter path first so
 # a multi run can't pick up a sibling adapter's version.
-AGENT_VER="$(jq -r '.cli_version // empty' "$STAGING/$AGENT/precheck.json" 2>/dev/null || true)"
+AGENT_VER=""
+if [[ "$EXECUTION_PROFILE" == "desktop-local" ]]; then
+  AGENT_VER="$(jq -r '.claude_code // empty' "$STAGING/desktop.versions.json" 2>/dev/null || true)"
+fi
+[[ -n "$AGENT_VER" ]] || AGENT_VER="$(jq -r '.cli_version // empty' "$STAGING/$AGENT/precheck.json" 2>/dev/null || true)"
 [[ -n "$AGENT_VER" ]] || AGENT_VER="$(jq -r '.cli_version // empty' "$STAGING/precheck.json" 2>/dev/null || true)"
 if [[ -z "$AGENT_VER" ]]; then
   # Fallback for a promote that didn't come through run-cell.sh. This table was
@@ -183,7 +199,7 @@ fi
 # BEGIN recording_identity
 # Claude Code stores the real entrypoint on transcript records. Keep that
 # value verbatim: CLI recordings normally say "cli" and Desktop-driven local
-# sessions can say "sdk-cli". Do not derive a new label from the profile.
+# sessions say "claude-desktop". Do not derive a new label from the profile.
 ENTRYPOINT=""
 if [[ "$AGENT" == "claudecode" && -f "$STAGED_DIR/transcript.jsonl" ]]; then
   ENTRYPOINT="$(jq -r 'select((.entrypoint? | type) == "string" and .entrypoint != "") | .entrypoint' \
@@ -191,7 +207,12 @@ if [[ "$AGENT" == "claudecode" && -f "$STAGED_DIR/transcript.jsonl" ]]; then
   [[ -n "$ENTRYPOINT" ]] || ENTRYPOINT="unknown"
 fi
 if [[ "$EXECUTION_PROFILE" == "desktop-local" && -z "$DESKTOP_APP_VERSION" ]]; then
-  DESKTOP_APP_VERSION="unknown"
+  DESKTOP_APP_VERSION="$(jq -r '.desktop_app // empty' "$STAGING/desktop.versions.json" 2>/dev/null || true)"
+  [[ -n "$DESKTOP_APP_VERSION" ]] || DESKTOP_APP_VERSION="unknown"
+fi
+if [[ "$EXECUTION_PROFILE" == "desktop-local" && "$ENTRYPOINT" != "claude-desktop" ]]; then
+  echo "promote: desktop-local transcript entrypoint is '$ENTRYPOINT', want 'claude-desktop'" >&2
+  exit 1
 fi
 # END recording_identity
 
@@ -347,6 +368,19 @@ else
 fi
 echo "wrote recording $REC_DIR" >&2
 echo "wrote $REC_DIR/manifest.json ($NEW_PASS_RATE)" >&2
+
+if [[ "$EXECUTION_PROFILE" == "desktop-local" ]]; then
+  EXECUTION_RESULTS_TMP="$(mktemp -t irr-desktop-results.XXXXXX)"
+  RESULT_SCENARIO="$(shard_coverage_for_dir "$SCENARIO" "$AGENT")"
+  if desktop_write_execution_results "$EXECUTION_RESULTS_TMP" "$RESULT_SCENARIO" "$REC_NAME" observed-passing; then
+    mv "$EXECUTION_RESULTS_TMP" "$TARGET_DIR/execution-results.json"
+  else
+    rm -f "$EXECUTION_RESULTS_TMP"
+    echo "promote: could not write Desktop execution-results.json" >&2
+    exit 1
+  fi
+  echo "wrote $TARGET_DIR/execution-results.json" >&2
+fi
 
 # 5. metadata.json is NOT touched. The on-disk recordings/<name>/ tree is the
 #    single source of truth: whether a cell is recorded, which recording is

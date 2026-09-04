@@ -237,6 +237,33 @@ assert_eq "EXIT trap disarmed" "" "$(trap -p EXIT)"
 trap 'rm -rf "$TMP"' EXIT
 HOME="$TMP/nohome"
 
+echo "== teardown refuses to overwrite a post-install concurrent change =="
+fresh_staging concurrent_restore
+mkdir -p "$TMP/concurrent-home/.claude"
+HOME="$TMP/concurrent-home"
+CODEX_HOME="$TMP/concurrent-codex"
+mkdir -p "$CODEX_HOME"
+printf '{"hooks":{"Stop":"before"}}\n' > "$HOME/.claude/settings.json"
+FAKE_DAEMON="$STAGING/irrlichd"
+printf '%s\n%s\n' "$HOME/.claude/settings.json" "$CODEX_HOME/hooks.json" > "$STAGING/managed-files"
+printf '#!/usr/bin/env bash\ncat %q\n' "$STAGING/managed-files" > "$FAKE_DAEMON"
+chmod +x "$FAKE_DAEMON"
+snapshot_managed_files "$STAGING/managed-file-backup" "$FAKE_DAEMON"
+printf '{"hooks":{"Stop":"expected-daemon"}}\n' > "$HOME/.claude/settings.json"
+seal_managed_files
+printf '{"hooks":{"Stop":"external-edit"}}\n' > "$HOME/.claude/settings.json"
+restore_err="$(stop_record_daemon 2>&1)"
+restore_rc=$?
+assert_eq "stop returns the restore refusal" "1" "$restore_rc"
+assert_eq "external bytes stay in place" '{"hooks":{"Stop":"external-edit"}}' "$(cat "$HOME/.claude/settings.json")"
+case "$restore_err" in
+  *"refusing to overwrite concurrent change"*) got=yes ;;
+  *) got=no ;;
+esac
+assert_eq "the refusal names the concurrent change" "yes" "$got"
+trap 'rm -rf "$TMP"' EXIT
+HOME="$TMP/nohome"
+
 echo "== an unwritable backup dir refuses to start the daemon =="
 # A snapshot that cannot save the user's config must stop the run before the
 # grant-all daemon has rewritten anything — there would be nothing to hand back.

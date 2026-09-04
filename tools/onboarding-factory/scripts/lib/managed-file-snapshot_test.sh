@@ -96,6 +96,7 @@ fresh_env() {
   fake_managed_file_daemon "$DAEMON" "$HOME/.claude/settings.json" "$CODEX_HOME/hooks.json"
   # shellcheck disable=SC2034  # read by the sourced lib's restore_managed_files
   MANAGED_FILE_BACKUP_DIR=""
+  MANAGED_FILE_SEAL_DIR=""
   return 0
 }
 
@@ -106,6 +107,40 @@ snapshot_managed_files "$ROOT/backup" "$DAEMON"
 printf '{"hooks":{"Stop":"localhost:7838"}}\n' > "$HOME/.claude/settings.json"   # daemon repoints it
 restore_managed_files
 assert_eq "settings.json restored" '{"hooks":{"Stop":"localhost:7837"}}' "$(cat "$HOME/.claude/settings.json")"
+
+echo "== a strict seal restores the expected daemon hook edit =="
+fresh_env sealed
+printf '{"hooks":{"Stop":"localhost:7837"}}\n' > "$HOME/.claude/settings.json"
+snapshot_managed_files "$ROOT/backup" "$DAEMON"
+printf '{"hooks":{"Stop":"localhost:7838"}}\n' > "$HOME/.claude/settings.json"
+seal_managed_files
+restore_managed_files
+assert_eq "sealed daemon edit is restored" '{"hooks":{"Stop":"localhost:7837"}}' \
+  "$(cat "$HOME/.claude/settings.json")"
+
+echo "== a strict seal refuses to overwrite a concurrent external edit =="
+# MUTATION fixture: the first edit is the expected daemon hook install. The
+# second edit simulates another process changing the same config after the
+# driver sealed that expected state. Restore must fail before copying anything.
+fresh_env concurrent_edit
+printf 'user baseline\n' > "$HOME/.claude/settings.json"
+snapshot_managed_files "$ROOT/backup" "$DAEMON"
+printf 'expected daemon hook\n' > "$HOME/.claude/settings.json"
+seal_managed_files
+printf 'concurrent external edit\n' > "$HOME/.claude/settings.json"
+err="$(restore_managed_files 2>&1)"
+rc=$?
+assert_eq "concurrent edit refuses restore" "1" "$rc"
+assert_eq "concurrent bytes are not overwritten" "concurrent external edit" \
+  "$(cat "$HOME/.claude/settings.json")"
+[[ "$err" == *"refusing to overwrite concurrent change"* ]] && got=yes || got=no
+assert_eq "refusal names the conflict" "yes" "$got"
+# Clear the still-active snapshot handle. The refusal deliberately keeps it for
+# manual recovery, but this test owns the disposable tree.
+# shellcheck disable=SC2034  # shared state read by the sourced snapshot library
+MANAGED_FILE_BACKUP_DIR=""
+# shellcheck disable=SC2034  # shared state read by the sourced snapshot library
+MANAGED_FILE_SEAL_DIR=""
 
 echo "== a config the daemon created from nothing is removed =="
 fresh_env created
