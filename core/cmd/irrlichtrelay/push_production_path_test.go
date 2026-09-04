@@ -201,11 +201,10 @@ func TestPushReachesThePhoneThroughTheHubAndTheObserversOwnTimer(t *testing.T) {
 
 	// 3. The daemon seams: connect persists the roster (only handle does
 	//    that), and the disconnect grace fires off the same timer.
-	daemonSend := make(chan []byte, 1)
-	p.hub.daemonConnected(workspace, daemonID, "laptop", daemonSend)
+	p.hub.daemonConnected(workspace, daemonID, "laptop")
 	p.awaitRoster(daemonID)
 
-	p.hub.daemonDisconnected(workspace, daemonID, daemonSend)
+	p.hub.daemonDisconnected(workspace, daemonID)
 	sends = p.awaitSends(3, "the §6.4 watchdog firing off the observer's own timer")
 	if got := sends[2].opts.Topic; got != "daemon:"+daemonID {
 		t.Fatalf("third send Topic = %q, want daemon:%s", got, daemonID)
