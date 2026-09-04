@@ -8,7 +8,10 @@ import (
 	"testing"
 )
 
-const desktopResultsFile = "execution-results.json"
+const (
+	desktopResultsFile = "execution-results.json"
+	desktopHookReceipt = `{"seq":2,"ts":"2026-05-01T00:00:01Z","kind":"hook_received","session_id":"transcript-1","hook_name":"Stop"}`
+)
 
 type desktopFixture struct {
 	root     string
@@ -71,7 +74,10 @@ func writeObservedDesktopResult(t *testing.T, fixture desktopFixture, scenario, 
 	write(t, filepath.Join(recDir, "irrlicht-session.json"), `{"session_id":"transcript-1","cwd":"/workspace","pid":4242,"launcher":{"host_bundle_id":"com.anthropic.claudefordesktop"}}`+"\n")
 	// hooks.jsonl preserves the exact hook-receipt rows extracted from the
 	// recording's events.jsonl. It is not the raw inbound Claude hook payload.
-	write(t, filepath.Join(recDir, "hooks.jsonl"), `{"kind":"hook_received","session_id":"transcript-1","hook_name":"Stop"}`+"\n")
+	write(t, filepath.Join(recDir, "events.jsonl"),
+		`{"seq":1,"ts":"2026-05-01T00:00:00Z","kind":"transcript_new","session_id":"transcript-1","adapter":"claudecode"}`+"\n"+
+			desktopHookReceipt+"\n")
+	write(t, filepath.Join(recDir, "hooks.jsonl"), desktopHookReceipt+"\n")
 	write(t, filepath.Join(recDir, "process.json"), `{"pid":4242,"command":"claude"}`+"\n")
 	writeExpectedOutcome(t, cellDir, scenario, outcome)
 
@@ -379,6 +385,26 @@ func TestValidateDesktopIdentityMutations(t *testing.T) {
 		write(t, filepath.Join(recDir, "hooks.jsonl"), `{"kind":"hook_received","session_id":"transcript-1"}`+"\n")
 		requireDesktopFinding(t, fixture.root, "observed-pass", "hooks.hook_name")
 	})
+}
+
+func TestValidateDesktopHookReceiptProvenanceMutations(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"changed hook name", strings.Replace(desktopHookReceipt, `"hook_name":"Stop"`, `"hook_name":"PostToolUse"`, 1) + "\n"},
+		{"changed session", strings.Replace(desktopHookReceipt, `"session_id":"transcript-1"`, `"session_id":"other"`, 1) + "\n"},
+		{"invented extra field", strings.TrimSuffix(desktopHookReceipt, "}") + `,"source":"invented"}` + "\n"},
+		{"invented duplicate", desktopHookReceipt + "\n" + desktopHookReceipt + "\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := desktopResultsRepo(t, false)
+			recDir := filepath.Join(fixture.cellDirs["observed-pass"], "recordings", fixture.record)
+			write(t, filepath.Join(recDir, "hooks.jsonl"), tc.body)
+			requireDesktopFinding(t, fixture.root, "observed-pass", "hooks.events_jsonl")
+		})
+	}
 }
 
 func TestValidateDesktopObservedOutcomeMutations(t *testing.T) {

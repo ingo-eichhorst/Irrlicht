@@ -22,9 +22,28 @@ type evidenceFiles struct {
 	registry    string
 	transcript  string
 	hooks       string
+	events      string
 	process     string
 	irrlicht    string
 	environment string
+}
+
+type hookReceiptScan struct {
+	matchedSession     bool
+	consistentSessions bool
+	correctKinds       bool
+	named              bool
+	preserved          bool
+}
+
+type hookReceipt struct {
+	Kind      string `json:"kind"`
+	SessionID string `json:"session_id"`
+	HookName  string `json:"hook_name"`
+}
+
+func (scan hookReceiptScan) valid() bool {
+	return scan.matchedSession && scan.consistentSessions && scan.correctKinds && scan.named && scan.preserved
 }
 
 type transcriptIdentity struct {
@@ -123,7 +142,7 @@ func (v *validation) readObservedIdentity(rel, scenario string, files evidenceFi
 	identity.environment, identity.environmentOK = v.readEnvironment(rel, scenario, files.environment)
 	identity.irrlicht, identity.irrlichtOK = v.readIrrlichtSession(rel, scenario, files.irrlicht)
 	identity.process, identity.processOK = v.readProcess(rel, scenario, files.process)
-	v.validateHooks(rel, scenario, files.hooks, identity.transcript.SessionID)
+	v.validateHooks(rel, scenario, files.hooks, files.events, identity.transcript.SessionID)
 	return identity
 }
 
@@ -191,6 +210,13 @@ func (v *validation) resolveEvidenceFiles(rel, recordingDir string, result *Resu
 			continue
 		}
 		*item.dst = resolved
+	}
+	eventsPath, eventsErr := resolveFile(recordingDir, "events.jsonl")
+	if eventsErr != nil {
+		v.add(rel, result.ScenarioID, "events", eventsErr.Error())
+		ok = false
+	} else {
+		files.events = eventsPath
 	}
 	return files, ok
 }
@@ -369,67 +395,106 @@ func (v *validation) readIrrlichtSession(rel, scenario, path string) (irrlichtSe
 	return state, ok
 }
 
-func (v *validation) validateHooks(rel, scenario, path, sessionID string) bool {
-	matched, consistent, receipts, named, err := scanHookReceipts(path, sessionID)
+func (v *validation) validateHooks(rel, scenario, path, eventsPath, sessionID string) bool {
+	scan, err := scanHookReceipts(path, eventsPath, sessionID)
 	if err != nil {
 		v.add(rel, scenario, "hooks", err.Error())
 		return false
 	}
-	if !matched {
+	v.reportHookReceiptFindings(rel, scenario, scan)
+	return scan.valid()
+}
+
+func (v *validation) reportHookReceiptFindings(rel, scenario string, scan hookReceiptScan) {
+	if !scan.matchedSession {
 		v.add(rel, scenario, "hooks.session_id", "contains no hook receipt for transcript.sessionId")
 	}
-	if !consistent {
+	if !scan.consistentSessions {
 		v.add(rel, scenario, "hooks.session_id", "contains a hook receipt from another session")
 	}
-	if !receipts {
+	if !scan.correctKinds {
 		v.add(rel, scenario, "hooks.kind", `must be "hook_received" on every row`)
 	}
-	if !named {
+	if !scan.named {
 		v.add(rel, scenario, "hooks.hook_name", "must be nonblank on every hook receipt")
 	}
-	return matched && consistent && receipts && named
+	if !scan.preserved {
+		v.add(rel, scenario, "hooks.events_jsonl", "each row must occur byte-for-byte in this recording's events.jsonl")
+	}
 }
 
 // scanHookReceipts validates unmodified hook_received rows extracted from the
 // recording's events.jsonl. These rows are lifecycle receipts. They are not
 // the raw inbound Claude hook payload.
-func scanHookReceipts(path, sessionID string) (bool, bool, bool, bool, error) {
-	f, err := os.Open(path)
+func scanHookReceipts(path, eventsPath, sessionID string) (hookReceiptScan, error) {
+	eventLines, err := readJSONLLines(eventsPath)
 	if err != nil {
-		return false, false, false, false, err
+		return hookReceiptScan{}, fmt.Errorf("read events.jsonl: %w", err)
 	}
-	defer f.Close()
-	decoder := json.NewDecoder(f)
-	matched := false
-	consistent := true
-	receipts := true
-	named := true
-	for {
-		var row struct {
-			Kind      string `json:"kind"`
-			SessionID string `json:"session_id"`
-			HookName  string `json:"hook_name"`
-		}
-		err := decoder.Decode(&row)
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return false, false, false, false, fmt.Errorf("invalid JSONL: %w", err)
-		}
-		if row.Kind != "hook_received" {
-			receipts = false
-		}
-		if row.Kind == "hook_received" && sessionID != "" && row.SessionID == sessionID {
-			matched = true
-		} else {
-			consistent = false
-		}
-		if strings.TrimSpace(row.HookName) == "" {
-			named = false
+	hookLines, err := readJSONLLines(path)
+	if err != nil {
+		return hookReceiptScan{}, err
+	}
+	remaining := countLines(eventLines)
+	scan := hookReceiptScan{consistentSessions: true, correctKinds: true, named: true, preserved: true}
+	for _, line := range hookLines {
+		if err := applyHookReceipt(&scan, line, sessionID, remaining); err != nil {
+			return hookReceiptScan{}, fmt.Errorf("invalid JSONL: %w", err)
 		}
 	}
-	return matched, consistent, receipts, named, nil
+	return scan, nil
+}
+
+func countLines(lines []string) map[string]int {
+	counts := make(map[string]int, len(lines))
+	for _, line := range lines {
+		counts[line]++
+	}
+	return counts
+}
+
+func applyHookReceipt(scan *hookReceiptScan, line, sessionID string, remaining map[string]int) error {
+	var row hookReceipt
+	if err := json.Unmarshal([]byte(line), &row); err != nil {
+		return err
+	}
+	correctKind := row.Kind == "hook_received"
+	sessionMatches := hookSessionMatches(row, sessionID)
+	scan.correctKinds = scan.correctKinds && correctKind
+	scan.matchedSession = scan.matchedSession || sessionMatches
+	scan.consistentSessions = scan.consistentSessions && sessionMatches
+	scan.named = scan.named && strings.TrimSpace(row.HookName) != ""
+	scan.preserved = scan.preserved && claimLine(remaining, line)
+	return nil
+}
+
+func hookSessionMatches(row hookReceipt, sessionID string) bool {
+	return row.Kind == "hook_received" && sessionID != "" && row.SessionID == sessionID
+}
+
+func claimLine(remaining map[string]int, line string) bool {
+	if remaining[line] == 0 {
+		return false
+	}
+	remaining[line]--
+	return true
+}
+
+func readJSONLLines(path string) ([]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	lines := strings.Split(string(data), "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			return nil, fmt.Errorf("invalid JSONL: blank row")
+		}
+	}
+	return lines, nil
 }
 
 func (v *validation) readProcess(rel, scenario, path string) (processEvidence, bool) {
