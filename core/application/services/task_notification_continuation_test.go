@@ -13,56 +13,71 @@ import (
 	"irrlicht/core/pkg/tailer"
 )
 
-// TestClassifyState_TaskNotificationStartsAgentContinuation is the issue #1899
-// regression. Claude Code writes the completed background command as a
-// user-role task-notification, then starts a new inference turn. The
-// notification must replace the preceding turn_done lifecycle anchor while it
-// removes the completed process from the background ledger. Otherwise the
-// classifier sees the stale turn_done and emits a false ready transition.
-func TestClassifyState_TaskNotificationStartsAgentContinuation(t *testing.T) {
+type taskNotificationContinuationFixture struct {
+	t    *testing.T
+	path string
+	tail *tailer.TranscriptTailer
+}
+
+func newTaskNotificationContinuationFixture(t *testing.T) *taskNotificationContinuationFixture {
+	t.Helper()
 	path := filepath.Join(t.TempDir(), "transcript.jsonl")
 	if err := os.WriteFile(path, nil, 0o644); err != nil {
 		t.Fatalf("create transcript: %v", err)
 	}
+	return &taskNotificationContinuationFixture{
+		t:    t,
+		path: path,
+		tail: tailer.NewTranscriptTailer(path, &claudecode.Parser{}, "claude-code"),
+	}
+}
 
-	tail := tailer.NewTranscriptTailer(path, &claudecode.Parser{}, "claude-code")
-	appendEvents := func(events ...map[string]interface{}) {
-		t.Helper()
-		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-		if err != nil {
-			t.Fatalf("open transcript: %v", err)
-		}
-		defer f.Close()
-		enc := json.NewEncoder(f)
-		for _, event := range events {
-			if err := enc.Encode(event); err != nil {
-				t.Fatalf("append transcript event: %v", err)
-			}
+func (f *taskNotificationContinuationFixture) append(events ...map[string]interface{}) {
+	f.t.Helper()
+	file, err := os.OpenFile(f.path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		f.t.Fatalf("open transcript: %v", err)
+	}
+	defer file.Close()
+	encoder := json.NewEncoder(file)
+	for _, event := range events {
+		if err := encoder.Encode(event); err != nil {
+			f.t.Fatalf("append transcript event: %v", err)
 		}
 	}
-	readMetrics := func() *session.SessionMetrics {
-		t.Helper()
-		m, err := tail.TailAndProcess()
-		if err != nil {
-			t.Fatalf("TailAndProcess: %v", err)
-		}
-		return replayengine.TailerToDomain(m)
-	}
-	classify := func(m *session.SessionMetrics, want string) {
-		t.Helper()
-		got, _ := services.ClassifyState(session.StateWorking, m)
-		if got != want {
-			t.Fatalf("ClassifyState() = %q, want %q (last event %q, background count %d)",
-				got, want, m.LastEventType, m.BackgroundProcessCount)
-		}
-	}
+}
 
-	const (
-		bashID    = "bkymfen4l"
-		toolUseID = "toolu_background"
-	)
-	appendEvents(
-		map[string]interface{}{
+func (f *taskNotificationContinuationFixture) metrics() *session.SessionMetrics {
+	f.t.Helper()
+	metrics, err := f.tail.TailAndProcess()
+	if err != nil {
+		f.t.Fatalf("TailAndProcess: %v", err)
+	}
+	return replayengine.TailerToDomain(metrics)
+}
+
+func assertTaskNotificationState(t *testing.T, metrics *session.SessionMetrics, want string) {
+	t.Helper()
+	got, _ := services.ClassifyState(session.StateWorking, metrics)
+	if got != want {
+		t.Fatalf("ClassifyState() = %q, want %q (last event %q, background count %d)",
+			got, want, metrics.LastEventType, metrics.BackgroundProcessCount)
+	}
+}
+
+func assertTaskNotificationCounts(t *testing.T, metrics *session.SessionMetrics, wantBackground, wantCompletions int) {
+	t.Helper()
+	if metrics.BackgroundProcessCount != wantBackground {
+		t.Errorf("background count = %d, want %d", metrics.BackgroundProcessCount, wantBackground)
+	}
+	if len(metrics.SubagentCompletions) != wantCompletions {
+		t.Errorf("completion count = %d, want %d", len(metrics.SubagentCompletions), wantCompletions)
+	}
+}
+
+func backgroundCommandEvents(bashID, toolUseID string) []map[string]interface{} {
+	return []map[string]interface{}{
+		{
 			"type": "assistant",
 			"message": map[string]interface{}{
 				"stop_reason": "tool_use",
@@ -72,7 +87,7 @@ func TestClassifyState_TaskNotificationStartsAgentContinuation(t *testing.T) {
 				}},
 			},
 		},
-		map[string]interface{}{
+		{
 			"type":          "user",
 			"toolUseResult": map[string]interface{}{"backgroundTaskId": bashID},
 			"message": map[string]interface{}{
@@ -82,18 +97,11 @@ func TestClassifyState_TaskNotificationStartsAgentContinuation(t *testing.T) {
 				}},
 			},
 		},
-	)
-	spawned := readMetrics()
-	if spawned.BackgroundProcessCount != 1 {
-		t.Fatalf("spawn pass background count = %d, want 1", spawned.BackgroundProcessCount)
 	}
+}
 
-	appendEvents(map[string]interface{}{"type": "system", "subtype": "turn_duration"})
-	priorTurnDone := readMetrics()
-	priorTurnDone.HasLiveBackgroundProcess = true // the detector's liveness-probe overlay
-	classify(priorTurnDone, session.StateWorking)
-
-	appendEvents(map[string]interface{}{
+func taskNotificationEvent(bashID, toolUseID string) map[string]interface{} {
+	return map[string]interface{}{
 		"type":   "user",
 		"origin": map[string]interface{}{"kind": "task-notification"},
 		"message": map[string]interface{}{
@@ -101,17 +109,11 @@ func TestClassifyState_TaskNotificationStartsAgentContinuation(t *testing.T) {
 			"content": "<task-notification><task-id>" + bashID + "</task-id>" +
 				"<tool-use-id>" + toolUseID + "</tool-use-id><status>completed</status></task-notification>",
 		},
-	})
-	continued := readMetrics()
-	if continued.BackgroundProcessCount != 0 {
-		t.Fatalf("notification pass background count = %d, want 0", continued.BackgroundProcessCount)
 	}
-	if len(continued.SubagentCompletions) != 1 {
-		t.Fatalf("notification pass completions = %d, want 1", len(continued.SubagentCompletions))
-	}
-	classify(continued, session.StateWorking)
+}
 
-	appendEvents(map[string]interface{}{
+func assistantToolUseEvent() map[string]interface{} {
+	return map[string]interface{}{
 		"type": "assistant",
 		"message": map[string]interface{}{
 			"stop_reason": "tool_use",
@@ -120,19 +122,52 @@ func TestClassifyState_TaskNotificationStartsAgentContinuation(t *testing.T) {
 				"input": map[string]interface{}{"command": "git status --short"},
 			}},
 		},
-	})
-	classify(readMetrics(), session.StateWorking)
+	}
+}
 
-	appendEvents(map[string]interface{}{
+func toolResultEvent() map[string]interface{} {
+	return map[string]interface{}{
 		"type": "user",
 		"message": map[string]interface{}{
 			"content": []interface{}{map[string]interface{}{
 				"type": "tool_result", "tool_use_id": "toolu_resumed", "content": "clean",
 			}},
 		},
-	})
-	classify(readMetrics(), session.StateWorking)
+	}
+}
 
-	appendEvents(map[string]interface{}{"type": "system", "subtype": "turn_duration"})
-	classify(readMetrics(), session.StateReady)
+// TestClassifyState_TaskNotificationStartsAgentContinuation is the issue #1899
+// regression. Claude Code writes the completed background command as a
+// user-role task-notification, then starts a new inference turn. The
+// notification must replace the preceding turn_done lifecycle anchor while it
+// removes the completed process from the background ledger. Otherwise the
+// classifier sees the stale turn_done and emits a false ready transition.
+func TestClassifyState_TaskNotificationStartsAgentContinuation(t *testing.T) {
+	const (
+		bashID    = "bkymfen4l"
+		toolUseID = "toolu_background"
+	)
+	fixture := newTaskNotificationContinuationFixture(t)
+	fixture.append(backgroundCommandEvents(bashID, toolUseID)...)
+	spawned := fixture.metrics()
+	assertTaskNotificationCounts(t, spawned, 1, 0)
+
+	fixture.append(map[string]interface{}{"type": "system", "subtype": "turn_duration"})
+	priorTurnDone := fixture.metrics()
+	priorTurnDone.HasLiveBackgroundProcess = true // the detector's liveness-probe overlay
+	assertTaskNotificationState(t, priorTurnDone, session.StateWorking)
+
+	fixture.append(taskNotificationEvent(bashID, toolUseID))
+	continued := fixture.metrics()
+	assertTaskNotificationCounts(t, continued, 0, 1)
+	assertTaskNotificationState(t, continued, session.StateWorking)
+
+	fixture.append(assistantToolUseEvent())
+	assertTaskNotificationState(t, fixture.metrics(), session.StateWorking)
+
+	fixture.append(toolResultEvent())
+	assertTaskNotificationState(t, fixture.metrics(), session.StateWorking)
+
+	fixture.append(map[string]interface{}{"type": "system", "subtype": "turn_duration"})
+	assertTaskNotificationState(t, fixture.metrics(), session.StateReady)
 }

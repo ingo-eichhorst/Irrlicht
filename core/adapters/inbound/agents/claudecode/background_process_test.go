@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"irrlicht/core/pkg/tailer"
@@ -292,29 +293,28 @@ func taskNotifAttachmentEvent(taskID, status string) map[string]interface{} {
 
 func TestParser_TaskNotification_TerminatesBackgroundProcess(t *testing.T) {
 	p := &Parser{}
-	// origin.kind shape, terminal → emits the bg task-id
-	done := p.ParseLine(taskNotifOriginEvent("bc1h56v8v", "completed"))
-	if !done.OriginTaskNotification {
-		t.Error("origin shape must set OriginTaskNotification")
+	type result struct {
+		Skip                   bool
+		OriginTaskNotification bool
+		TerminatedIDs          []string
 	}
-	if len(done.TerminatedBackgroundTaskIDs) != 1 || done.TerminatedBackgroundTaskIDs[0] != "bc1h56v8v" {
-		t.Errorf("origin shape: TerminatedBackgroundTaskIDs = %v, want [bc1h56v8v]", done.TerminatedBackgroundTaskIDs)
+	tests := []struct {
+		name  string
+		event map[string]interface{}
+		want  result
+	}{
+		{"terminal origin", taskNotifOriginEvent("bc1h56v8v", "completed"), result{true, true, []string{"bc1h56v8v"}}},
+		{"running origin", taskNotifOriginEvent("bc1h56v8v", "running"), result{true, true, nil}},
+		{"terminal attachment", taskNotifAttachmentEvent("bc1h56v8v", "completed"), result{true, false, []string{"bc1h56v8v"}}},
 	}
-	// running → not terminal
-	running := p.ParseLine(taskNotifOriginEvent("bc1h56v8v", "running"))
-	if len(running.TerminatedBackgroundTaskIDs) != 0 {
-		t.Errorf("running status must not terminate, got %v", running.TerminatedBackgroundTaskIDs)
-	}
-	// queued_command attachment shape, terminal → emits the bg task-id
-	att := p.ParseLine(taskNotifAttachmentEvent("bc1h56v8v", "completed"))
-	if !att.Skip {
-		t.Error("attachment shape must stay passive")
-	}
-	if att.OriginTaskNotification {
-		t.Error("attachment shape must not set OriginTaskNotification")
-	}
-	if len(att.TerminatedBackgroundTaskIDs) != 1 || att.TerminatedBackgroundTaskIDs[0] != "bc1h56v8v" {
-		t.Errorf("attachment shape: TerminatedBackgroundTaskIDs = %v, want [bc1h56v8v]", att.TerminatedBackgroundTaskIDs)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ev := p.ParseLine(tc.event)
+			got := result{ev.Skip, ev.OriginTaskNotification, ev.TerminatedBackgroundTaskIDs}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("task-notification result = %+v, want %+v", got, tc.want)
+			}
+		})
 	}
 }
 
