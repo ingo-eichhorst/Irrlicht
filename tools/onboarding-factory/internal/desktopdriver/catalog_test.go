@@ -3,6 +3,8 @@ package desktopdriver
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -101,5 +103,29 @@ func TestComposerCatalogResolvesTheMeasuredDesktopTree(t *testing.T) {
 		if _, ok := catalog[name]; !ok {
 			t.Fatalf("catalog has no %s control", name)
 		}
+	}
+}
+
+// The operator-facing prerequisite names the Desktop build a recording needs,
+// and the driver refuses any other one. Those two numbers are the same fact
+// typed in two places, so this pins them together: prerequisites.md said
+// 1.46388.1 for a whole branch after the catalog moved to 1.46388.2, which is
+// the drift AGENTS.md warns a hand-copied figure produces.
+func TestPrerequisiteNamesTheSupportedDesktopVersion(t *testing.T) {
+	path := filepath.Join("..", "..", "..", "..",
+		"replaydata", "agents", "claudecode", "prerequisites.md")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("cannot read the operator prerequisites: %v", err)
+	}
+	line := regexp.MustCompile(`(?m)^.*Claude Desktop ([0-9]+(?:\.[0-9]+)*) is installed.*$`)
+	match := line.FindSubmatch(raw)
+	if match == nil {
+		t.Fatalf("no Desktop version prerequisite found in %s — this check cannot run, "+
+			"which is a failure, not a pass", path)
+	}
+	if got := string(match[1]); got != supportedDesktopVersion {
+		t.Fatalf("prerequisites.md asks for Claude Desktop %q but the driver refuses "+
+			"anything but %q", got, supportedDesktopVersion)
 	}
 }
