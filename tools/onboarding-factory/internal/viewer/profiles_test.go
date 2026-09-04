@@ -348,47 +348,62 @@ func TestRelabelledDesktopRecordingLeavesTheDesktopView(t *testing.T) {
 // not-runnable, the missing Desktop control) plus their repository evidence
 // references are the whole answer and must all reach the viewer.
 func TestNonObservedDesktopResultCarriesItsEvidenceBasedReason(t *testing.T) {
-	for _, tc := range []struct {
-		outcome, reason, missingControl string
-	}{
+	for _, tc := range []nonObservedCase{
 		{"not-applicable", "The scenario is outside Local Desktop.", ""},
 		{"unobservable", "The local runtime leaves no observable trace.", ""},
 		{"not-runnable", "The Desktop driver cannot perform this recipe.", "model selector"},
 	} {
 		t.Run(tc.outcome, func(t *testing.T) {
 			fixture := desktopViewerFixture(t)
-			evidenceRef := "replaydata/agents/claudecode/scenarios/desktop-cell/desktop-evidence/" + tc.outcome + ".md"
-			mkdirAllOrFail(t, filepath.Join(fixture.cellDir, "desktop-evidence"))
-			writeViewerProfileFile(t, filepath.Join(fixture.root, filepath.FromSlash(evidenceRef)),
-				"Desktop campaign evidence for "+tc.outcome+".\n")
-			result := map[string]any{
-				"scenario_id":       "desktop-cell",
-				"execution_profile": "desktop-local",
-				"outcome":           tc.outcome,
-				"reason":            tc.reason,
-				"evidence_refs":     []string{evidenceRef},
-			}
-			if tc.missingControl != "" {
-				result["missing_control"] = tc.missingControl
-			}
-			writeDesktopResults(t, fixture.cellDir, result)
-
+			evidenceRef := writeNonObservedResult(t, fixture, tc)
 			var detail ScenarioDetail
 			getJSON(t, fixture.root, desktopCellPath+"?profile=desktop-local", &detail)
-			got := detail.DesktopResult
-			if got == nil {
-				t.Fatal("no desktop_result")
-			}
-			if got.Outcome != tc.outcome || got.Reason != tc.reason || got.MissingControl != tc.missingControl {
-				t.Fatalf("result = %+v", got)
-			}
-			if len(got.EvidenceRefs) != 1 || got.EvidenceRefs[0] != evidenceRef {
-				t.Fatalf("evidence_refs = %+v, want %q", got.EvidenceRefs, evidenceRef)
-			}
-			if got.Recording != "" || got.Versions != nil {
-				t.Fatalf("a non-observed result must name no recording: %+v", got)
-			}
+			assertNonObservedResult(t, detail.DesktopResult, tc, evidenceRef)
 		})
+	}
+}
+
+// nonObservedCase is one (outcome, reason, missing control) triple.
+type nonObservedCase struct {
+	outcome, reason, missingControl string
+}
+
+// writeNonObservedResult replaces the fixture's result artifact with one
+// non-observed answer plus its repository evidence file, returning the
+// repo-relative reference the result names.
+func writeNonObservedResult(t *testing.T, fixture desktopCellFixture, tc nonObservedCase) string {
+	t.Helper()
+	evidenceRef := "replaydata/agents/claudecode/scenarios/desktop-cell/desktop-evidence/" + tc.outcome + ".md"
+	mkdirAllOrFail(t, filepath.Join(fixture.cellDir, "desktop-evidence"))
+	writeViewerProfileFile(t, filepath.Join(fixture.root, filepath.FromSlash(evidenceRef)),
+		"Desktop campaign evidence for "+tc.outcome+".\n")
+	result := map[string]any{
+		"scenario_id":       "desktop-cell",
+		"execution_profile": "desktop-local",
+		"outcome":           tc.outcome,
+		"reason":            tc.reason,
+		"evidence_refs":     []string{evidenceRef},
+	}
+	if tc.missingControl != "" {
+		result["missing_control"] = tc.missingControl
+	}
+	writeDesktopResults(t, fixture.cellDir, result)
+	return evidenceRef
+}
+
+func assertNonObservedResult(t *testing.T, got *DesktopResult, tc nonObservedCase, evidenceRef string) {
+	t.Helper()
+	if got == nil {
+		t.Fatal("no desktop_result")
+	}
+	if got.Outcome != tc.outcome || got.Reason != tc.reason || got.MissingControl != tc.missingControl {
+		t.Fatalf("result = %+v", got)
+	}
+	if len(got.EvidenceRefs) != 1 || got.EvidenceRefs[0] != evidenceRef {
+		t.Fatalf("evidence_refs = %+v, want %q", got.EvidenceRefs, evidenceRef)
+	}
+	if got.Recording != "" || got.Versions != nil {
+		t.Fatalf("a non-observed result must name no recording: %+v", got)
 	}
 }
 

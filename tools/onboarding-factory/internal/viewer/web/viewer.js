@@ -15,7 +15,7 @@ import {
 } from './replayClient.js';
 import {
   DEFAULT_PROFILE, buildProfileSelector, focusFromHash, profileFromHash,
-  recordingHash, renderProfileEvidence, shouldRenderProfilePanel,
+  profileQuerySuffix, recordingHash, renderProfileEvidence, shouldRenderProfilePanel,
 } from './profileView.js';
 
 const SPEED_PRESETS = [1, 2, 5, 10, 25, 100];
@@ -1556,13 +1556,14 @@ async function fetchScenarioPayloads(s, profile) {
   // request (SonarQube jssecurity:S7044 / S8476). The check lives HERE, beside
   // the fetches it guards, rather than in the caller: a barrier one function
   // away is a barrier a reader (and a taint analyser) has to go looking for.
-  if (!RECORDING_SLUG_RE.test(s.agent) || !RECORDING_SLUG_RE.test(s.id) ||
-      (s.subtree !== "scenarios" && s.subtree !== "regressions")) {
+  const agent = s.agent, subtree = s.subtree, id = s.id;
+  if (!RECORDING_SLUG_RE.test(agent) || !RECORDING_SLUG_RE.test(id) ||
+      (subtree !== "scenarios" && subtree !== "regressions")) {
     return null;
   }
   const recordingPath =
-    `${encodeURIComponent(s.agent)}/${encodeURIComponent(s.subtree)}/${encodeURIComponent(s.id)}`;
-  const q = profile === DEFAULT_PROFILE ? "" : `?profile=${encodeURIComponent(profile)}`;
+    `${encodeURIComponent(agent)}/${encodeURIComponent(subtree)}/${encodeURIComponent(id)}`;
+  const q = profileQuerySuffix(profile);
   const [data, archivesResp, catalog] = await Promise.all([
     fetch(`/api/scenarios/${recordingPath}${q}`).then(r => r.json()),
     fetch(`/api/scenarios/${recordingPath}/recordings${q}`)
@@ -1690,7 +1691,7 @@ async function loadScenario(s, initialArchive, focus, profile) {
   detail.appendChild(renderRecipePanel(recipeEntry));
   detail.appendChild(renderRecordingHistory({
     s, latestData: data, archives, initialArchive: initialArchive || "",
-    recipeEntry, coverageEntry, profile: selectedProfile, archivesError,
+    profile: selectedProfile, archivesError,
   }));
   scrollFocusInto(focus || "");
 }
@@ -2268,14 +2269,13 @@ function recordingHistoryErrorBanner(message) {
 }
 
 function renderRecordingHistory(opts) {
-  const {s, latestData, archives, initialArchive, recipeEntry, coverageEntry, profile, archivesError} = opts;
+  const {s, latestData, archives, initialArchive, profile, archivesError} = opts;
   const wrap = document.createElement("div");
   // `archives` was already fetched scoped to this profile, so the dropdown
   // lists one profile's history; the per-archive fetch and the URL rewrite
   // below carry the same scope so a selection can never cross over.
   const selectedProfile = profile || DEFAULT_PROFILE;
-  const profileQuery = selectedProfile === DEFAULT_PROFILE
-    ? "" : `?profile=${encodeURIComponent(selectedProfile)}`;
+  const profileQuery = profileQuerySuffix(selectedProfile);
 
   // 1. The selector panel (top, controls everything below).
   //    anchor "recordings" — pipeline-strip segment N jumps here.

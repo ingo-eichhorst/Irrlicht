@@ -73,7 +73,28 @@ export function profileFromHash(hash) {
   const q = String(hash || "").indexOf("?");
   if (q < 0) return DEFAULT_PROFILE;
   const value = new URLSearchParams(String(hash).slice(q + 1)).get("profile");
-  return PROFILE_IDS.includes(value) ? value : DEFAULT_PROFILE;
+  // Return the module CONSTANT that matches, never the parsed string itself.
+  // The value ends up in request URLs, and echoing a caller-supplied string —
+  // even one just compared against an allowlist — leaves it caller-supplied to
+  // a reader and to a taint analyser (SonarQube jssecurity:S8476). This is the
+  // same idiom as canonicalEvidenceFile on the Go side.
+  for (const id of PROFILE_IDS) {
+    if (id === value) return id;
+  }
+  return DEFAULT_PROFILE;
+}
+
+// profileQuerySuffix is the ONLY way a profile reaches a request URL. It emits
+// a literal built from PROFILE_IDS, so no caller-derived string is ever
+// interpolated into a fetch path; the CLI Local default emits nothing at all,
+// which is what keeps pre-#1889 requests byte-identical.
+export function profileQuerySuffix(profile) {
+  for (const id of PROFILE_IDS) {
+    if (id === profile) {
+      return id === DEFAULT_PROFILE ? "" : `?profile=${id}`;
+    }
+  }
+  return "";
 }
 
 // focusFromHash reads the pipeline strip's ?focus=<key> out of a viewer hash,
