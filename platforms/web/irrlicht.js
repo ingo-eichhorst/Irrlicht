@@ -8,7 +8,7 @@ import {
 import {
   compoundSessionId, displaySessionId, sessionOrigin, sourceIdOf, localBareIds, isShadowedRemote, daemonSessionIds,
 } from './sessionIdentity.js';
-import { relayFrameKind, seqGap, aggregateConnState, relayWsUrl } from './connectionProtocol.js';
+import { relayFrameKind, seqGap, aggregateConnState, disconnectedBannerText, relayWsUrl } from './connectionProtocol.js';
 import {
   stateIcon, shortModel, formatCost, costCellDisplay, fmtDuration, formatElapsed,
   taskEtaPresentation, shortID, pressureClass, pressureColor, formatTokens, esc, activeSubagentCount,
@@ -2271,7 +2271,10 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
     }
 
     // --- Connection status (header dot + banner + tooltip) ---
-    function setDotLabel(status) {
+    // `states` is the raw per-source list, not just the aggregate: the banner
+    // distinguishes a source that rejected our token from one nobody can
+    // reach, and aggregateConnState folds both to 'disconnected'.
+    function setDotLabel(status, states) {
       const dot = document.getElementById('ws-dot');
       const label = document.getElementById('ws-label');
       if (dot) dot.className = 'ws-dot ' + status;
@@ -2288,7 +2291,7 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
           banner.textContent = 'Reconnecting…';
         } else if (status === 'disconnected') {
           banner.className = 'disconnected';
-          banner.textContent = 'Disconnected — no configured source is reachable. Check that the daemon (or relay) is running.';
+          banner.textContent = disconnectedBannerText(states);
         } else {
           banner.className = '';
           banner.textContent = '';
@@ -2315,7 +2318,7 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
 
     function updateWsStatus() {
       const states = [...sources.values()].map(s => s.state);
-      setDotLabel(aggregateConnState(states));
+      setDotLabel(aggregateConnState(states), states);
       const wrap = document.querySelector('.ws-status');
       if (wrap) wrap.title = sourceTooltipLines().join('\n');
     }
@@ -2449,6 +2452,13 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
         refreshPermNote();
         // Source toggles/URL reconnect live, no page reload.
         if (SOURCE_SETTING_KEYS.has(key)) rebuildSources();
+        // …and so does the Elfdans panel, whose mint row exists only when a
+        // client token does (arc42 §8.1). Built once at wiring time it stayed
+        // absent after the token was entered, so the one action that needs the
+        // token — minting a pairing code — was unreachable until a reload.
+        // Scoped to relayToken alone: re-rendering on every source change would
+        // wipe a pairing code the user is part-way through typing.
+        if (key === 'relayToken') renderElfdansPanel();
         // Hiding the Activity button isn't enough if it's the chart on screen
         // right now — back out of it too (#1075).
         if (key === 'enableActivityChart' && !settings[key]) leaveActivityChartIfSelected();
@@ -2494,11 +2504,17 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
     // below are equally inert there: `liveView` is only written by a successful
     // pairing (§6.2, ADR-9), and `openSession` only fires for a phone a
     // notification tap sent here (R6).
-    initElfdans({
-      relayToken: () => settings.relayToken,
-      liveView: { read: readSourceSettings, write: writeSourceSettings },
-      openSession: focusSessionFromNotification,
-    });
+    // A function declaration, not a call site: the settings handler above runs
+    // earlier in this scope and needs to re-render the panel, and hoisting is
+    // what lets both reach the one definition.
+    function renderElfdansPanel() {
+      return initElfdans({
+        relayToken: () => settings.relayToken,
+        liveView: { read: readSourceSettings, write: writeSourceSettings },
+        openSession: focusSessionFromNotification,
+      });
+    }
+    renderElfdansPanel();
 
 export {
   resolvedTheme, rowLabel, maybeNotifyOnUpdate,
@@ -2518,6 +2534,10 @@ export {
   taskEtaPresentation,
   lastNotifiedPressure,
   relayFrameKind, aggregateConnState, relayWsUrl, seqGap,
+  // disconnectedBannerText and setDotLabel are exported for their WIRING:
+  // the pure helper can be right while the banner still renders the old
+  // string, which is exactly the shape the defect had.
+  disconnectedBannerText, setDotLabel,
   compoundSessionId, displaySessionId,
   sessionOrigin, sourceIdOf, localBareIds, isShadowedRemote,
   daemonSessionIds, structureSignature,
