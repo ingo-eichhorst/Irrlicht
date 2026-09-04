@@ -3,6 +3,8 @@ package desktopdriver
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -140,6 +142,38 @@ func TestOwnedProcessCannotReuseBaselinePID(t *testing.T) {
 	}
 }
 
+func TestWaitIrrlichtStateInvokesBaselinePIDGuard(t *testing.T) {
+	candidate := SessionObservation{
+		SessionID: "cli-1", CWD: "/repo/workspace", PID: 42, State: "ready",
+		Launcher: Launcher{HostBundleID: desktopBundleID},
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		if err := json.NewEncoder(writer).Encode([]SessionObservation{candidate}); err != nil {
+			t.Errorf("encode session response: %v", err)
+		}
+	}))
+	defer server.Close()
+	runtime := &LiveRuntime{
+		options:         LiveOptions{DaemonAddress: strings.TrimPrefix(server.URL, "http://")},
+		httpClient:      server.Client(),
+		processBaseline: map[int]struct{}{42: {}},
+		processes:       map[string]int{},
+		processEvidence: map[string]ProcessEvidence{},
+		workingSeen:     map[string]bool{},
+		observeProcess: func(context.Context, int) (string, error) {
+			return "/Applications/Claude.app/claude", nil
+		},
+	}
+	owned := OwnedSession{
+		Registry:   RegistrySession{SessionID: "local_1", CWD: "/repo/workspace"},
+		Transcript: TranscriptIdentity{SessionID: "cli-1", CWD: "/repo/workspace"},
+	}
+	_, err := runtime.WaitIrrlichtState(context.Background(), owned, "ready")
+	if err == nil || !strings.Contains(err.Error(), "reused baseline process PID 42") {
+		t.Fatalf("WaitIrrlichtState() baseline PID error = %v", err)
+	}
+}
+
 func TestArchiveTargetRejectsDuplicateActiveTitle(t *testing.T) {
 	owned := OwnedSession{Registry: RegistrySession{SessionID: "local_owned", CWD: "/repo/workspace"}}
 	sessions := []RegistrySession{
@@ -158,6 +192,50 @@ func TestArchiveTargetRejectsSelectedProjectDrift(t *testing.T) {
 	elements := archiveFixtureElements("other-project", "Owned title")
 	if _, err := validateArchiveTarget(owned, sessions, elements); err == nil {
 		t.Fatal("validateArchiveTarget() accepted selected-project drift")
+	}
+}
+
+func TestArchiveOwnedInvokesDuplicateTitleGuard(t *testing.T) {
+	root := t.TempDir()
+	workspace := "/repo/workspace"
+	registryRoot := filepath.Join(root, "claude-code-sessions", "account", "profile")
+	if err := os.MkdirAll(registryRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, session := range []RegistrySession{
+		{SessionID: "local_owned", CLISessionID: "cli-owned", CWD: workspace, Title: "Same title"},
+		{SessionID: "local_user", CLISessionID: "cli-user", CWD: "/repo/other", Title: "Same title"},
+	} {
+		data, err := json.Marshal(session)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(registryRoot, session.SessionID+".json"), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	response, err := json.Marshal(helperResponse{OK: true, Elements: archiveFixtureElements("workspace", "Same title")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	helper := filepath.Join(root, "helper")
+	script := "#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' '" + string(response) + "'\n"
+	if err := os.WriteFile(helper, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := NewLiveRuntime(LiveOptions{
+		Home: root, HelperPath: helper, DaemonAddress: "127.0.0.1:1",
+		RecordingDirectory: filepath.Join(root, "recordings"), DesktopSupportRoot: root,
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	owned := OwnedSession{Registry: RegistrySession{
+		SessionID: "local_owned", CLISessionID: "cli-owned", CWD: workspace,
+	}}
+	err = runtime.ArchiveOwned(context.Background(), owned)
+	if err == nil || !strings.Contains(err.Error(), "active session title") || !strings.Contains(err.Error(), "not unique") {
+		t.Fatalf("ArchiveOwned() duplicate-title error = %v", err)
 	}
 }
 

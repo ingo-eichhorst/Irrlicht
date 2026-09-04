@@ -1,6 +1,42 @@
 #!/usr/bin/env bash
 # Claude Desktop Local profile guards and evidence staging.
 
+desktop_shared_lock_path() {
+  local repo_root="$1" common_dir clone_root build_root
+  common_dir="$(git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || {
+    echo "desktop-local cannot resolve the shared Git directory" >&2
+    return 1
+  }
+  [[ "$(basename "$common_dir")" == ".git" && -d "$common_dir" && ! -L "$common_dir" ]] || {
+    echo "desktop-local shared Git directory is invalid: $common_dir" >&2
+    return 1
+  }
+  clone_root="$(cd "$(dirname "$common_dir")" && pwd -P)" || return 1
+  build_root="$clone_root/.build"
+  mkdir -p "$build_root" || return 1
+  [[ ! -L "$build_root" && "$(cd "$build_root" && pwd -P)" == "$build_root" ]] || {
+    echo "desktop-local shared .build must not be a symlink: $build_root" >&2
+    return 1
+  }
+  printf '%s\n' "$build_root/claude-desktop-driver.lock"
+}
+
+# desktop_acquire_clone_lock keeps descriptor 9 open in the calling shell.
+# The BSD lock therefore spans all later setup, Desktop control, and EXIT-trap
+# cleanup. All linked worktrees resolve the same main-worktree .build path.
+desktop_acquire_clone_lock() {
+  local repo_root="$1"
+  local lock_path
+  lock_path="$(desktop_shared_lock_path "$repo_root")" || return 1
+  exec 9>"$lock_path" || return 1
+  if ! /usr/bin/lockf -s -t 0 9; then
+    exec 9>&-
+    echo "desktop-local another run holds the clone-wide Desktop lock: $lock_path" >&2
+    return 1
+  fi
+  return 0
+}
+
 desktop_profile_validate_cell() {
   local profile="$1" adapter="$2" attach="$3" cell_json="$4"
   [[ "$profile" == "desktop-local" ]] || return 0

@@ -42,15 +42,13 @@ func main() {
 }
 
 func run(ctx context.Context, args []string) error {
+	if len(args) > 0 && args[0] == "managed-file-oracle" {
+		return runManagedFileOracle(args[1:])
+	}
 	options, err := parseOptions(args)
 	if err != nil {
 		return err
 	}
-	lock, err := acquireRunLock(options.repoRoot)
-	if err != nil {
-		return err
-	}
-	defer releaseRunLock(lock)
 	prompt, err := os.ReadFile(options.promptFile)
 	if err != nil {
 		return fmt.Errorf("read prompt file: %w", err)
@@ -84,27 +82,6 @@ func run(ctx context.Context, args []string) error {
 		return err
 	}
 	return nil
-}
-
-func acquireRunLock(repoRoot string) (*os.File, error) {
-	path := filepath.Join(repoRoot, ".build", "claude-desktop-driver.lock")
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return nil, fmt.Errorf("open Desktop exclusivity lock: %w", err)
-	}
-	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		file.Close()
-		return nil, fmt.Errorf("another Desktop driver holds %q: %w", path, err)
-	}
-	return file, nil
-}
-
-func releaseRunLock(file *os.File) {
-	if file == nil {
-		return
-	}
-	_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
-	_ = file.Close()
 }
 
 func parseOptions(args []string) (options, error) {

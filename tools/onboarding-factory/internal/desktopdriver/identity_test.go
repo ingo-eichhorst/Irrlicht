@@ -19,7 +19,7 @@ func validOwnedSession() (RegistrySession, TranscriptIdentity) {
 	return registry, transcript
 }
 
-func TestSelectOwnedSessionRejectsNestedWorkspaceOpenedAsNoFolder(t *testing.T) {
+func TestSelectOwnedSessionRejectsRegistryWorkspaceOpenedAsNoFolder(t *testing.T) {
 	requested := "/repo/.build/refresh/claudecode/basic/cwd"
 	scratch := "/Users/test/Library/Application Support/Claude/scratch-workspaces/account/profile/scratch-2026-09-04"
 	registry := RegistrySession{
@@ -29,7 +29,7 @@ func TestSelectOwnedSessionRejectsNestedWorkspaceOpenedAsNoFolder(t *testing.T) 
 	}
 	transcript := TranscriptIdentity{
 		SessionID:  "cli-new",
-		CWD:        scratch,
+		CWD:        requested,
 		Entrypoint: "claude-desktop",
 	}
 
@@ -46,6 +46,25 @@ func TestSelectOwnedSessionRejectsNestedWorkspaceOpenedAsNoFolder(t *testing.T) 
 		!strings.Contains(err.Error(), requested) ||
 		!strings.Contains(err.Error(), scratch) {
 		t.Fatalf("error = %q; want workspace mismatch with requested and observed paths", err)
+	}
+}
+
+func TestSelectOwnedSessionRejectsTranscriptWorkspaceOpenedAsNoFolder(t *testing.T) {
+	requested := "/repo/.build/refresh/claudecode/basic/cwd"
+	scratch := "/Users/test/Library/Application Support/Claude/scratch-workspaces/account/profile/scratch-2026-09-04"
+	registry, transcript := validOwnedSession()
+	registry.CWD = requested
+	transcript.CWD = scratch
+
+	_, err := SelectOwnedSession(
+		map[string]struct{}{},
+		[]RegistrySession{registry},
+		map[string]TranscriptIdentity{"cli-new": transcript},
+		requested,
+	)
+	if err == nil || !strings.Contains(err.Error(), "transcript workspace mismatch") ||
+		!strings.Contains(err.Error(), requested) || !strings.Contains(err.Error(), scratch) {
+		t.Fatalf("error = %q; want transcript workspace mismatch with requested and observed paths", err)
 	}
 }
 

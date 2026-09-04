@@ -178,6 +178,12 @@ if [[ -z "$PROMPT" && -z "$SCRIPT_JSON" ]]; then
   exit 1
 fi
 desktop_profile_validate_cell "$EXECUTION_PROFILE" "$ADAPTER" "$ATTACH" "$CELL_JSON" || exit 5
+if [[ "$EXECUTION_PROFILE" == "desktop-local" ]]; then
+  # Descriptor 9 stays open through this shell's EXIT trap. No second linked
+  # worktree can reach config snapshot, oracle, daemon startup, or Desktop UI
+  # control until teardown has restored the first run's files.
+  desktop_acquire_clone_lock "$REPO_ROOT" || exit 75
+fi
 
 # --- Recipe ↔ driver lint (#476) ----------------------------------------
 # Static backstop: refuse a recipe that needs a step type the agent's
@@ -563,6 +569,12 @@ else
     # sealing is missing, partial, or unsuccessful.
     # shellcheck disable=SC2034  # shared state read by managed-file-snapshot.sh
     MANAGED_FILE_STRICT_SEAL=1
+    # The same built binary runs Claude Code's real Apply closures in a shadow
+    # HOME before the recording daemon can touch the user's config.
+    # shellcheck disable=SC2034  # shared state read by spawn-record-daemon.sh
+    MANAGED_FILE_ORACLE_REQUIRED=1
+    # shellcheck disable=SC2034  # shared state read by spawn-record-daemon.sh
+    MANAGED_FILE_ORACLE_BIN="$IRRLICHT_DESKTOP_DRIVER_BIN"
   fi
   spawn_record_daemon "$DAEMON" "$STAGING" "$ONBOARD_BIND" "$ONBOARD_HOME" "$ADAPTER" || exit 1
 fi

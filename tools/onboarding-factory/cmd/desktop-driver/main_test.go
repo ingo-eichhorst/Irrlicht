@@ -74,20 +74,3 @@ func TestParseOptionsRejectsBuildSymlinkEscape(t *testing.T) {
 		t.Fatalf("parseOptions() symlink escape error = %v", err)
 	}
 }
-
-func TestRunLockRefusesAConcurrentDesktopDriver(t *testing.T) {
-	repo := t.TempDir()
-	if err := os.Mkdir(filepath.Join(repo, ".build"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	first, err := acquireRunLock(repo)
-	if err != nil {
-		t.Fatalf("first acquireRunLock() error = %v", err)
-	}
-	defer releaseRunLock(first)
-	second, err := acquireRunLock(repo)
-	if err == nil || !strings.Contains(err.Error(), "another Desktop driver holds") {
-		releaseRunLock(second)
-		t.Fatalf("second acquireRunLock() error = %v", err)
-	}
-}
