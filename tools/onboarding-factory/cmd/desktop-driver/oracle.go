@@ -408,6 +408,34 @@ func copyOracleState(sourceDir, outputDir string, entries []managedFileEntry) er
 	return nil
 }
 
+// oracleEntrySource picks the bytes one manifest entry contributes to the
+// expected state: what the Apply closures wrote in the shadow HOME when the
+// path is one they touch, the baseline copy when it is not, and "" when the
+// expected state is that the path is absent.
+func oracleEntrySource(
+	baselineDir string,
+	entry managedFileEntry,
+	pairs map[string]string,
+) (string, error) {
+	shadowPath, touched := pairs[entry.path]
+	if !touched {
+		if entry.state == "saved" {
+			return filepath.Join(baselineDir, entry.slot), nil
+		}
+		return "", nil
+	}
+	info, err := os.Lstat(shadowPath)
+	switch {
+	case os.IsNotExist(err):
+		return "", nil
+	case err != nil:
+		return "", err
+	case !info.Mode().IsRegular():
+		return "", fmt.Errorf("oracle Apply produced a non-regular path: %q", shadowPath)
+	}
+	return shadowPath, nil
+}
+
 func writeOracleState(
 	baselineDir, outputDir string,
 	entries []managedFileEntry,
@@ -425,26 +453,12 @@ func writeOracleState(
 		}
 	}()
 	for _, entry := range entries {
-		source := ""
-		state := entry.state
-		if shadowPath, ok := pairs[entry.path]; ok {
-			info, statErr := os.Lstat(shadowPath)
-			switch {
-			case os.IsNotExist(statErr):
-				state = "absent"
-			case statErr != nil:
-				return statErr
-			case !info.Mode().IsRegular():
-				return fmt.Errorf("oracle Apply produced a non-regular path: %q", shadowPath)
-			default:
-				state = "saved"
-				source = shadowPath
-			}
-		} else if state == "saved" {
-			source = filepath.Join(baselineDir, entry.slot)
+		source, err := oracleEntrySource(baselineDir, entry, pairs)
+		if err != nil {
+			return err
 		}
 		oracleState := "absent"
-		if state == "saved" {
+		if source != "" {
 			data, mode, err := readBoundedRegularFile(source)
 			if err != nil {
 				return err
