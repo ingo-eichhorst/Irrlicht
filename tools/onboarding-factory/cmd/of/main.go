@@ -7,7 +7,7 @@
 //
 // Read-side commands (this phase):
 //
-//	of status   [--agent a] [--scenario s] [--runs] [--summary] [--json]  coverage / run status
+//	of status   [--agent a] [--scenario s] [--profile p] [--runs] [--summary] [--json]  coverage / run status
 //	of validate [--json]                                                  schema + referential integrity
 //	of coverage [--hooks] [--json]                                        derived rollup, or hook coverage
 //	of hookcheck --agent a --events e                                     one staged recording's hook coverage
@@ -37,7 +37,7 @@ const (
 )
 
 const usage = `usage:
-  of status   [--agent a] [--scenario s] [--runs] [--summary] [--json] [--repo-root .]
+  of status   [--agent a] [--scenario s] [--profile cli-local|desktop-local] [--runs] [--summary] [--json] [--repo-root .]
   of validate [--json] [--repo-root .]
   of coverage [--hooks] [--json] [--repo-root .]
   of scenario add|update --name n [--id i] [--description d] [--process-file f] [--acceptance-file f]
@@ -123,13 +123,19 @@ func writeJSON(w io.Writer, v any) error {
 // cellView is the per-cell projection `of status` emits: the matrix display
 // state + the 3 pillars (agent / daemon / driver) the issue wants surfaced.
 type cellView struct {
-	DisplayState     string `json:"display_state"`
-	Recorded         bool   `json:"recorded"`
-	Route            string `json:"route"`
-	Disposition      string `json:"disposition"`
-	AgentSupports    string `json:"agent_supports,omitempty"`
-	DaemonCapability string `json:"daemon_capability,omitempty"`
-	DriverCapability string `json:"driver_capability,omitempty"`
+	DisplayState      string `json:"display_state"`
+	Recorded          bool   `json:"recorded"`
+	ExecutionProfile  string `json:"execution_profile"`
+	RecordingName     string `json:"recording_name,omitempty"`
+	Entrypoint        string `json:"entrypoint,omitempty"`
+	DaemonVersion     string `json:"daemon_version,omitempty"`
+	AgentCLIVersion   string `json:"agent_cli_version,omitempty"`
+	DesktopAppVersion string `json:"desktop_app_version,omitempty"`
+	Route             string `json:"route"`
+	Disposition       string `json:"disposition"`
+	AgentSupports     string `json:"agent_supports,omitempty"`
+	DaemonCapability  string `json:"daemon_capability,omitempty"`
+	DriverCapability  string `json:"driver_capability,omitempty"`
 	// Derived marks a cell synthesized from the capability model rather than
 	// read from a directory (#1369). Emitted here because a reader filtering
 	// a work-list needs to tell a modelled cell from a written one, and the
@@ -144,17 +150,24 @@ type scenarioView struct {
 }
 
 type statusView struct {
-	Agents    []string       `json:"agents"`
-	Scenarios []scenarioView `json:"scenarios"`
+	ExecutionProfile string         `json:"execution_profile"`
+	Agents           []string       `json:"agents"`
+	Scenarios        []scenarioView `json:"scenarios"`
 }
 
 func cellViewOf(cs matrix.CellState) cellView {
 	v := cellView{
-		DisplayState: cs.DisplayState,
-		Recorded:     cs.Recorded,
-		Route:        string(cs.Route),
-		Disposition:  string(cs.Disposition),
-		Derived:      cs.Derived,
+		DisplayState:      cs.DisplayState,
+		Recorded:          cs.Recorded,
+		ExecutionProfile:  string(cs.ExecutionProfile),
+		RecordingName:     cs.RecordingName,
+		Entrypoint:        cs.Entrypoint,
+		DaemonVersion:     cs.DaemonVersion,
+		AgentCLIVersion:   cs.AgentCLIVersion,
+		DesktopAppVersion: cs.DesktopAppVersion,
+		Route:             string(cs.Route),
+		Disposition:       string(cs.Disposition),
+		Derived:           cs.Derived,
 	}
 	if cs.Assessment != nil {
 		v.AgentSupports = cs.Assessment.AgentSupports
@@ -171,6 +184,7 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 		scenario = fs.String("scenario", "", "filter to one scenario (by name or id)")
 		runs     = fs.Bool("runs", false, "show the factory run-log instead of coverage")
 		summary  = fs.Bool("summary", false, "per-agent cell counts instead of the full cell dump")
+		profile  = fs.String("profile", string(matrix.ProfileCLILocal), "execution profile (cli-local or desktop-local)")
 		asJSON   = fs.Bool("json", false, "emit JSON")
 		repoRoot = fs.String("repo-root", ".", "repository root")
 	)
@@ -179,11 +193,16 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	}
 	*repoRoot = absRoot(*repoRoot)
 
+	executionProfile, err := matrix.ParseExecutionProfile(*profile)
+	if err != nil {
+		fmt.Fprintf(stderr, "of status: %v\n", err)
+		return exitUsage
+	}
 	if *runs {
 		return runStatusRuns(*repoRoot, *asJSON, stdout, stderr)
 	}
 
-	m, err := matrix.LoadRepo(*repoRoot)
+	m, err := matrix.LoadRepoForProfile(*repoRoot, executionProfile)
 	if err != nil {
 		fmt.Fprintf(stderr, "of status: %v\n", err)
 		return exitUsage
@@ -231,7 +250,7 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 // buildStatusView projects the matrix + catalog shards (optionally filtered
 // to one scenario) into the per-cell view `of status` renders or encodes.
 func buildStatusView(m *matrix.Matrix, repoRoot string, agents []string, scenarioFilter string) statusView {
-	view := statusView{Agents: agents}
+	view := statusView{ExecutionProfile: string(m.ExecutionProfile()), Agents: agents}
 	for _, sh := range shard.LoadAll(repoRoot) {
 		if scenarioFilter != "" && sh.Name != scenarioFilter && sh.ID != scenarioFilter {
 			continue
@@ -248,7 +267,8 @@ func buildStatusView(m *matrix.Matrix, repoRoot string, agents []string, scenari
 }
 
 func printStatusText(stdout io.Writer, view statusView) {
-	fmt.Fprintf(stdout, "scenarios × agents — %d × %d (display state per cell)\n\n", len(view.Scenarios), len(view.Agents))
+	fmt.Fprintf(stdout, "scenarios × agents — %d × %d (profile %s; display state per cell)\n\n",
+		len(view.Scenarios), len(view.Agents), view.ExecutionProfile)
 	for _, sv := range view.Scenarios {
 		fmt.Fprintf(stdout, "%-6s %-34s", sv.ID, sv.Name)
 		for _, a := range view.Agents {

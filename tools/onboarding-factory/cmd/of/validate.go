@@ -290,25 +290,58 @@ func validateCellFK(scenarioID string, loc cellLoc, names map[string]bool, add f
 	}
 }
 
-// validateCellRecording checks the cell's newest recording (if any) for
-// completeness. A cell is "recorded" iff NewestRecordingDir resolves one —
-// the SAME definition matrix.cellRecorded uses, so the two never disagree.
-// The newest recording is authoritative (it gates validation and the viewer
-// autoselects it); it must be complete. Older recordings are kept as drift
-// signals, so an incomplete newest recording is the hard error.
+// validateCellRecording scans every manifest for a valid execution profile,
+// then checks the newest recording within each profile for completeness. The
+// scan is intentionally broader than profile selection: an unknown value in
+// an older recording must fail validation instead of disappearing behind a
+// newer valid recording.
 func validateCellRecording(loc cellLoc, add func(path, msg string)) {
 	cellDir := loc.dir()
 	rel := loc.rel()
-	recDir, ok := validate.NewestRecordingDir(cellDir)
-	if !ok {
+	recDirs := validate.RecordingDirs(cellDir)
+	if len(recDirs) == 0 {
 		return
 	}
 	if !fileExists(filepath.Join(cellDir, "expected.jsonl")) {
 		add(rel, "recorded cell is missing expected.jsonl")
 	}
-	recRel := filepath.Join(rel, "recordings", filepath.Base(recDir))
-	for _, finding := range validate.RecordingComplete(recDir) {
-		add(recRel, "incomplete recording: "+finding)
+
+	newest := map[matrix.ExecutionProfile]string{}
+	for _, recDir := range recDirs { // RecordingDirs is newest-first.
+		recRel := filepath.Join(rel, "recordings", filepath.Base(recDir))
+		manifest, err := matrix.LoadRecordingManifest(filepath.Join(recDir, "manifest.json"))
+		if err != nil {
+			add(recRel, "invalid manifest.json: "+err.Error())
+			// Missing manifests predate the profile field just as an empty
+			// profile does for selection. Keep checking the same newest CLI
+			// recording that the matrix selects, while the finding above makes
+			// the absent manifest fail loudly.
+			if os.IsNotExist(err) {
+				if newest[matrix.ProfileCLILocal] == "" {
+					newest[matrix.ProfileCLILocal] = recDir
+				}
+			} else {
+				// A manifest that cannot be parsed must not disable the structural
+				// checks for that recording.
+				addRecordingCompleteness(recDir, recRel, add)
+			}
+			continue
+		}
+		if newest[manifest.ExecutionProfile] == "" {
+			newest[manifest.ExecutionProfile] = recDir
+		}
+	}
+	for _, profile := range matrix.ExecutionProfiles() {
+		if recDir := newest[profile]; recDir != "" {
+			recRel := filepath.Join(rel, "recordings", filepath.Base(recDir))
+			addRecordingCompleteness(recDir, recRel, add)
+		}
+	}
+}
+
+func addRecordingCompleteness(recDir, recRel string, add func(path, msg string)) {
+	for _, message := range validate.RecordingComplete(recDir) {
+		add(recRel, "incomplete recording: "+message)
 	}
 }
 
