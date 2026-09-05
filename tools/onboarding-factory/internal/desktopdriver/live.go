@@ -46,6 +46,7 @@ type LiveRuntime struct {
 	workingSeen     map[string]bool
 	deepLinkOpened  bool
 	openDeepLink    func(context.Context, string) error
+	frontDesktop    func(context.Context) error
 	processExists   func(int) (bool, error)
 	listProcesses   func(context.Context) (map[int]struct{}, error)
 	observeProcess  func(context.Context, int) (string, error)
@@ -77,6 +78,7 @@ func NewLiveRuntime(options LiveOptions, stepLog string) (*LiveRuntime, error) {
 		registryByID:   map[string]RegistrySession{},
 		workingSeen:    map[string]bool{},
 		openDeepLink:   openOfficialDesktopURL,
+		frontDesktop:   activateDesktop,
 		processExists:  liveProcessExists,
 		listProcesses:  readProcessCensus,
 		observeProcess: processCommand,
@@ -173,6 +175,33 @@ func (runtime *LiveRuntime) OpenComposer(ctx context.Context, workspace string) 
 	return nil
 }
 
+// front brings Claude Desktop forward through the runtime's own seam, so a
+// test can observe the call without launching anything.
+func (runtime *LiveRuntime) front(ctx context.Context) error {
+	if runtime.frontDesktop == nil {
+		return nil
+	}
+	return runtime.frontDesktop(ctx)
+}
+
+// activateDesktop brings Claude Desktop to the front.
+//
+// This is not cosmetic. Measured on 1.46388.4: with Desktop frontmost the
+// composer is present continuously from t=9s to t=35s; the moment focus moves
+// to another app it leaves the accessibility tree and does not come back on its
+// own. Every composer timeout on this branch was that — the wait polling an app
+// that had been backgrounded, reporting "control is missing at stable path"
+// for a composer that was no longer being exposed. The helper also refuses to
+// click unless Desktop is frontmost, so the trust prompt needs this too.
+func activateDesktop(ctx context.Context) error {
+	command := exec.CommandContext(ctx, "/usr/bin/open", "-a", "Claude")
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("bring Claude Desktop to the front: %w (%s)", err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
 func openOfficialDesktopURL(ctx context.Context, deepLink string) error {
 	command := exec.CommandContext(ctx, "/usr/bin/open", deepLink)
 	output, err := command.CombinedOutput()
@@ -184,7 +213,8 @@ func openOfficialDesktopURL(ctx context.Context, deepLink string) error {
 
 func (runtime *LiveRuntime) WaitComposer(ctx context.Context, workspace string) error {
 	controls, err := waitForComposerControls(
-		ctx, workspace, runtime.helper.inspect, runtime.helper.probe, runtime.helper.click, runtime.RecordStep)
+		ctx, workspace, runtime.helper.inspect, runtime.helper.probe, runtime.helper.click,
+		runtime.RecordStep, runtime.front)
 	if err == nil {
 		runtime.controls = controls
 	}
@@ -198,12 +228,20 @@ func waitForComposerControls(
 	probe func(context.Context, map[string]helperSelector) error,
 	click func(context.Context, helperSelector, helperPostcondition) error,
 	recordStep func(string),
+	activate func(context.Context) error,
 ) (map[string]helperSelector, error) {
 	var controls map[string]helperSelector
 	var lastMismatch error
 	trusted := false
 	sawNoPrompt := false
 	err := poll(ctx, "verified Desktop composer controls", func() (bool, error) {
+		// Front FIRST, every tick. Desktop stops exposing the composer when it
+		// is backgrounded, and anything on the operator's machine can take
+		// focus mid-run — an editor reacting to a file write is enough.
+		if activateErr := activate(ctx); activateErr != nil {
+			lastMismatch = activateErr
+			return false, nil
+		}
 		elements, err := inspect(ctx)
 		if err != nil {
 			if fatal := transientHelperError(err); fatal != nil {

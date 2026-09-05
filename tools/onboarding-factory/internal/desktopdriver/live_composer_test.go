@@ -64,6 +64,7 @@ func TestComposerDeadlineNamesObservedNoFolderWorkspaceMismatch(t *testing.T) {
 			return nil
 		},
 		func(string) {},
+		func(context.Context) error { return nil },
 	)
 	if err == nil || !strings.Contains(err.Error(), "No folder") ||
 		!strings.Contains(err.Error(), "project") || !strings.Contains(err.Error(), "/repo/exact-workspace") {
@@ -115,6 +116,7 @@ func TestComposerWaitAnswersTheWorkspaceTrustPrompt(t *testing.T) {
 			return nil
 		},
 		func(step string) { steps = append(steps, step) },
+		func(context.Context) error { return nil },
 	)
 	if err != nil {
 		t.Fatalf("waitForComposerControls() error = %v", err)
@@ -146,6 +148,7 @@ func TestComposerWaitRefusesASecondTrustPrompt(t *testing.T) {
 		func(context.Context, map[string]helperSelector) error { return nil },
 		func(context.Context, helperSelector, helperPostcondition) error { clicks++; return nil },
 		func(string) {},
+		func(context.Context) error { return nil },
 	)
 	if err == nil || !strings.Contains(err.Error(), "second workspace trust prompt") {
 		t.Fatalf("waitForComposerControls() error = %v", err)
@@ -203,6 +206,7 @@ func TestComposerWaitRetriesATrustClickThatMissedTheAnimatingSheet(t *testing.T)
 			return nil
 		},
 		func(step string) { steps = append(steps, step) },
+		func(context.Context) error { return nil },
 	)
 	if err != nil {
 		t.Fatalf("waitForComposerControls() error = %v", err)
@@ -236,6 +240,7 @@ func TestComposerWaitRetriesEveryTrustClickFailure(t *testing.T) {
 			return errors.New("helper permission_denied: Accessibility is not trusted")
 		},
 		func(string) {},
+		func(context.Context) error { return nil },
 	)
 	// It fails at the DEADLINE, and the deadline carries the click error as its
 	// last observation rather than discarding it.
@@ -270,6 +275,7 @@ func TestComposerWaitSurvivesTheMeasuredTrustClickSequence(t *testing.T) {
 		func(step string) {
 			t.Fatalf("no grant was confirmed, so none may be recorded; got %q", step)
 		},
+		func(context.Context) error { return nil },
 	)
 	if err != nil {
 		t.Fatalf("waitForComposerControls() error = %v", err)
@@ -306,6 +312,7 @@ func TestComposerWaitRetriesAStaleAccessibilityRead(t *testing.T) {
 			return nil
 		},
 		func(string) {},
+		func(context.Context) error { return nil },
 	)
 	if err != nil {
 		t.Fatalf("waitForComposerControls() error = %v", err)
@@ -332,6 +339,7 @@ func TestComposerWaitStopsOnANonStaleHelperFailure(t *testing.T) {
 		func(context.Context, map[string]helperSelector) error { return nil },
 		func(context.Context, helperSelector, helperPostcondition) error { return nil },
 		func(string) {},
+		func(context.Context) error { return nil },
 	)
 	if err == nil || !strings.Contains(err.Error(), "AX error -25200") {
 		t.Fatalf("waitForComposerControls() error = %v", err)
@@ -365,6 +373,7 @@ func TestComposerWaitGrantsTrustAtMostOnceEvenWhenConfirmationFails(t *testing.T
 			return errors.New("helper postcondition_failed: still present")
 		},
 		func(string) {},
+		func(context.Context) error { return nil },
 	)
 	if err == nil {
 		t.Fatal("the wait reported success after answering a trust prompt it could not confirm")
@@ -417,11 +426,75 @@ func TestComposerWaitRefusesATrustPromptThatPredatesTheRun(t *testing.T) {
 			return nil
 		},
 		func(string) {},
+		func(context.Context) error { return nil },
 	)
 	if clicks != 0 {
 		t.Fatalf("clicked a prompt this run did not raise (%d times)", clicks)
 	}
 	if err == nil || !strings.Contains(err.Error(), "already open before this run") {
 		t.Fatalf("the refusal must name the pre-existing prompt; got %v", err)
+	}
+}
+
+// Claude Desktop stops exposing the composer when it is backgrounded, and it
+// does not come back on its own. Measured on 1.46388.4: frontmost, the composer
+// is present continuously from t=9s to t=35s; once focus moves away it leaves
+// the tree. Anything on the operator's machine can take focus mid-run — an
+// editor reacting to a file write is enough — so the wait must re-front on
+// EVERY tick, not once at the start.
+func TestComposerWaitKeepsDesktopFrontOnEveryTick(t *testing.T) {
+	fronted := 0
+	looks := 0
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := waitForComposerControls(
+		ctx,
+		"/repo/workspace",
+		func(context.Context) ([]helperElement, error) {
+			looks++
+			if looks < 3 {
+				// Backgrounded: the composer is simply not in the tree.
+				return nil, nil
+			}
+			return archiveFixtureElements("workspace", "Owned"), nil
+		},
+		func(context.Context, map[string]helperSelector) error { return nil },
+		func(context.Context, helperSelector, helperPostcondition) error { return nil },
+		func(string) {},
+		func(context.Context) error { fronted++; return nil },
+	)
+	if err != nil {
+		t.Fatalf("waitForComposerControls() error = %v", err)
+	}
+	if fronted != looks {
+		t.Fatalf("fronted %d times for %d looks; Desktop must be raised before every observation",
+			fronted, looks)
+	}
+}
+
+// A failure to raise Desktop is not a reason to read a backgrounded tree and
+// report what is missing from it: that produced "control is missing at stable
+// path" for a composer that was simply not being exposed.
+func TestComposerWaitDoesNotObserveABackgroundedDesktop(t *testing.T) {
+	looks := 0
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err := waitForComposerControls(
+		ctx,
+		"/repo/workspace",
+		func(context.Context) ([]helperElement, error) {
+			looks++
+			return archiveFixtureElements("workspace", "Owned"), nil
+		},
+		func(context.Context, map[string]helperSelector) error { return nil },
+		func(context.Context, helperSelector, helperPostcondition) error { return nil },
+		func(string) {},
+		func(context.Context) error { return errors.New("bring Claude Desktop to the front: boom") },
+	)
+	if looks != 0 {
+		t.Fatalf("observed the tree %d times while Desktop could not be raised", looks)
+	}
+	if err == nil || !strings.Contains(err.Error(), "bring Claude Desktop to the front") {
+		t.Fatalf("the deadline must name the activation failure; got %v", err)
 	}
 }
