@@ -232,6 +232,9 @@ func (runtime *LiveRuntime) VerifyBaseline(_ context.Context, baseline Baseline,
 	if err := runtime.verifyUserConfig(baseline); err != nil {
 		return err
 	}
+	if err := runtime.verifyDesktopConfig(baseline); err != nil {
+		return err
+	}
 	sessions, files, err := runtime.readRegistry()
 	if err != nil {
 		return err
@@ -285,5 +288,22 @@ func (runtime *LiveRuntime) verifyUserConfig(baseline Baseline) error {
 	if err != nil {
 		return fmt.Errorf("re-read the Claude Code configuration: %w", err)
 	}
+	if err := verifyNoKeyLosses(baseline.UserConfig, current, "Claude Code configuration"); err != nil {
+		return err
+	}
 	return verifyUserProjectEntries(baseline.UserConfig, current, runtime.workspace)
+}
+
+// verifyDesktopConfig applies the same structural guard to Claude Desktop's own
+// config.json, which churns for reasons the driver does not cause.
+func (runtime *LiveRuntime) verifyDesktopConfig(baseline Baseline) error {
+	if len(baseline.DesktopConfig) == 0 {
+		return nil
+	}
+	path := filepath.Join(runtime.options.DesktopSupportRoot, "config.json")
+	current, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("re-read the Desktop configuration: %w", err)
+	}
+	return verifyNoKeyLosses(baseline.DesktopConfig, current, "Desktop configuration")
 }

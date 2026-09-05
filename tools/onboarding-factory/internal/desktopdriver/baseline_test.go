@@ -133,3 +133,28 @@ func TestUserConfigGuardAllowsForeignChurnButNotLosses(t *testing.T) {
 		t.Fatal("the guard accepted a baseline it could not parse")
 	}
 }
+
+// Claude Desktop's own config.json holds token caches, allowlist timestamps and
+// window layout, all of which the app rewrites on its own schedule. Live run 22
+// failed on it for the same reason run 21 failed on ~/.claude.json.
+//
+// The guard that survives churn and still catches a driver that wrecks the file
+// is: no key may disappear.
+func TestSharedConfigGuardCatchesLossesThroughChurn(t *testing.T) {
+	before := []byte(`{"oauth:tokenCache":"abc","scale":0,"bootFrameLayout":{"w":1}}`)
+
+	churn := []byte(`{"oauth:tokenCache":"abc","scale":0,"bootFrameLayout":{"w":2},"newKey":1}`)
+	if err := verifyNoKeyLosses(before, churn, "Desktop configuration"); err != nil {
+		t.Fatalf("the guard refused ordinary Desktop churn: %v", err)
+	}
+
+	truncated := []byte(`{"scale":0}`)
+	err := verifyNoKeyLosses(before, truncated, "Desktop configuration")
+	if err == nil || !strings.Contains(err.Error(), "oauth:tokenCache") {
+		t.Fatalf("a lost key was accepted: %v", err)
+	}
+
+	if err := verifyNoKeyLosses(before, []byte(`{oops`), "Desktop configuration"); err == nil {
+		t.Fatal("the guard accepted a file it could not parse")
+	}
+}

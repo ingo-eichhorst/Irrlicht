@@ -97,7 +97,9 @@ func NewLiveRuntime(options LiveOptions, stepLog string) (*LiveRuntime, error) {
 func defaultConfigurationRoots(home, desktopRoot string) []string {
 	return []string{
 		filepath.Join(desktopRoot, "claude_desktop_config.json"),
-		filepath.Join(desktopRoot, "config.json"),
+		// config.json is guarded by verifyNoKeyLosses, not by digest: it holds
+		// token caches, allowlist timestamps and window layout that Claude
+		// Desktop rewrites on its own schedule.
 		filepath.Join(desktopRoot, "cowork-enabled-cli-ops.json"),
 		filepath.Join(desktopRoot, "extensions-blocklist.json"),
 		// ~/.claude.json is deliberately NOT here. It belongs to the Claude
@@ -164,6 +166,10 @@ func (runtime *LiveRuntime) CaptureBaseline(ctx context.Context) (Baseline, erro
 	if err != nil && !os.IsNotExist(err) {
 		return Baseline{}, fmt.Errorf("read the Claude Code configuration baseline: %w", err)
 	}
+	desktopConfig, err := os.ReadFile(filepath.Join(runtime.options.DesktopSupportRoot, "config.json"))
+	if err != nil && !os.IsNotExist(err) {
+		return Baseline{}, fmt.Errorf("read the Desktop configuration baseline: %w", err)
+	}
 	processes, err := runtime.listProcesses(ctx)
 	if err != nil {
 		return Baseline{}, fmt.Errorf("capture process baseline: %w", err)
@@ -186,6 +192,7 @@ func (runtime *LiveRuntime) CaptureBaseline(ctx context.Context) (Baseline, erro
 	return Baseline{
 		SessionIDs: ids, Files: files, Config: config, Processes: processes,
 		UserConfig: userConfig, UserConfigPath: userConfigPath,
+		DesktopConfig: desktopConfig,
 	}, nil
 }
 
@@ -484,7 +491,12 @@ func isPreClickAXFailure(err error) bool {
 	message := err.Error()
 	return strings.Contains(message, "stale_control") ||
 		strings.Contains(message, "control_missing") ||
-		strings.Contains(message, axInvalidUIElement)
+		strings.Contains(message, axInvalidUIElement) ||
+		// "found 0" is this package's own resolution failure, and it means the
+		// control is not on screen YET. Live run 22 typed a prompt and looked
+		// for Send before Claude Desktop had re-rendered it. "found 2" is NOT
+		// here: a genuine ambiguity does not resolve itself by waiting.
+		strings.Contains(message, "found 0")
 }
 
 // retryTransientAX re-runs an action that resolves AND drives a control. The

@@ -230,3 +230,44 @@ func userProjectEntries(data []byte, which string) (map[string]json.RawMessage, 
 	}
 	return document.Projects, nil
 }
+
+// verifyNoKeyLosses is the guard for a shared JSON configuration file the
+// driver must not damage but cannot hold still.
+//
+// Claude Desktop's config.json carries token caches, allowlist timestamps and
+// window layout; ~/.claude.json carries the CLI's caches and counters. Both are
+// rewritten by their owners while a run is in progress, so byte equality
+// reports a change on every run and proves nothing. A key that DISAPPEARS is
+// different: no ordinary churn removes one, and a driver that truncated or
+// rewrote the file would.
+func verifyNoKeyLosses(before, after []byte, what string) error {
+	baseline, err := topLevelKeys(before, "baseline "+what)
+	if err != nil {
+		return err
+	}
+	current, err := topLevelKeys(after, "current "+what)
+	if err != nil {
+		return err
+	}
+	var lost []string
+	for key := range baseline {
+		if _, kept := current[key]; !kept {
+			lost = append(lost, key)
+		}
+	}
+	if len(lost) > 0 {
+		// Sorted, so the message is the same every time it is produced.
+		sort.Strings(lost)
+		return fmt.Errorf("the run removed %d key(s) from the %s: %s",
+			len(lost), what, strings.Join(lost, ", "))
+	}
+	return nil
+}
+
+func topLevelKeys(data []byte, which string) (map[string]json.RawMessage, error) {
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(data, &document); err != nil {
+		return nil, fmt.Errorf("read the %s: %w", which, err)
+	}
+	return document, nil
+}

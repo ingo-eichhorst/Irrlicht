@@ -64,6 +64,9 @@ type Baseline struct {
 	// not cause. See verifyUserProjectEntries.
 	UserConfig     []byte
 	UserConfigPath string
+	// DesktopConfig is Claude Desktop's own config.json, kept whole for the
+	// same structural reason as UserConfig.
+	DesktopConfig []byte
 }
 
 type RunRequest struct {
