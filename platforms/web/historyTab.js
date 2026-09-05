@@ -40,6 +40,15 @@ export const AUTONOMY_REASON_LEGEND = [
   ['waiting', '?', 'it asked'],
   ['ready', '\u2713', 'turn finished'],
 ];
+// The neutral fourth entry, appended only when the window actually holds a run
+// whose end reason nothing can name (#1905 back-fill). Two ways a run gets
+// here and both draw the same neutral column: a span reconstructed from the
+// cost log, which records that a session was working and never why it stopped,
+// and an old row written by a build that could not name the state.
+//
+// CONDITIONAL, because a legend entry for a colour the strip is not drawing is
+// noise \u2014 see autonomyLegendEntries.
+export const AUTONOMY_UNKNOWN_LEGEND = ['unknown', '\u00b7', 'end reason unknown'];
 // Granularity steps for chart=state's activity matrix (issue #981) — each
 // picks both the server's bucket width and the matrix's visible column
 // count at once (see historyGranularitySpecs on the daemon side).
@@ -758,6 +767,14 @@ export function autonomyDuration(seconds) {
   return h === 0 ? d + 'd' : d + 'd' + h + 'h';
 }
 
+// autonomyDateLabel formats a day for the two provenance sentences below. One
+// helper, so "collecting since <date>" and "everything before <date>" can
+// never render the same instant two different ways.
+function autonomyDateLabel(ts) {
+  return new Date((Number(ts) || 0) * 1000)
+    .toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
 // autonomyProvenanceLine states when collection started, so an empty or short
 // history is never read as "you did nothing" (#1905). This sentence is part of
 // the feature, not decoration.
@@ -768,8 +785,56 @@ export function autonomyProvenanceLine(duration) {
     return 'No autonomous runs recorded yet. Irrlicht began measuring them with this update — '
       + 'an empty chart means "nothing recorded", not "nothing happened".';
   }
-  const since = new Date(earliest * 1000).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-  return 'Collecting since ' + since + ' · ' + total + ' runs recorded.';
+  return 'Collecting since ' + autonomyDateLabel(earliest) + ' · ' + total + ' runs recorded.';
+}
+
+// autonomyReconstructionNote marks a view that is showing back-filled history
+// (#1905). '' when every run in view was measured as it happened, so a normal
+// install — which is every install but the one the back-fill was run on — says
+// nothing at all.
+//
+// Three facts, in the register the empty state already uses, because each
+// answers a question the reader would otherwise answer wrongly:
+//
+//   - HOW MANY of the runs in view are reconstructed, so the figures above can
+//     be weighed;
+//   - the date BEFORE WHICH everything is reconstructed, which is the boundary
+//     between a measured trend and a rebuilt one;
+//   - whether any of it came from a source that cannot say how a run ended, so
+//     an `unknown` column in the strip reads as a limit of the source rather
+//     than as a bug.
+export function autonomyReconstructionNote(duration) {
+  const p = duration?.provenance || {};
+  const reconstructed = Number(p.reconstructed) || 0;
+  if (reconstructed <= 0) return '';
+  const inView = Number(duration?.summary?.count) || reconstructed;
+  const costDerived = Number(p.cost_derived) || 0;
+  const liveSince = Number(p.live_since) || 0;
+  const parts = [
+    reconstructed + ' of ' + inView + ' runs in view were reconstructed from logs this machine already had, '
+      + 'not measured as they happened.',
+    liveSince
+      ? 'Everything before ' + autonomyDateLabel(liveSince) + ' is reconstructed.'
+      : 'Nothing here was measured live — every run on record is reconstructed.',
+  ];
+  if (costDerived > 0) {
+    parts.push(costDerived + ' of them come from the cost log, which records when a session was working and '
+      + 'never why it stopped, so their end reason is unknown — not assumed.');
+  }
+  return parts.join(' ');
+}
+
+// autonomyLegendEntries is the strip legend for one window: the three measured
+// reasons, plus the neutral `unknown` entry ONLY when the window actually
+// holds a run whose reason nothing can name.
+//
+// Conditional on the data rather than always shown, because the legend
+// explains the colours in front of the reader. A permanent fourth swatch for a
+// colour the strip is not drawing invites the opposite mistake — reading the
+// absence of neutral columns as an absence of runs.
+export function autonomyLegendEntries(spans) {
+  const hasUnnamed = (spans?.spans || []).some(sp => !AUTONOMY_REASON_PRIORITY[sp.reason]);
+  return hasUnnamed ? AUTONOMY_REASON_LEGEND.concat([AUTONOMY_UNKNOWN_LEGEND]) : AUTONOMY_REASON_LEGEND;
 }
 
 // collapseAutonomyStrip is the strip's pixel-collapse rule (#1905 design
@@ -1018,7 +1083,7 @@ function renderAutonomyStrip() {
   // strip is worth, but "from when to when" is the difference between a
   // timeline and a texture.
   rowsEl.appendChild(buildAutonomyStripAxis(spans));
-  if (legendEl) fillAutonomyLegend(legendEl, cs);
+  if (legendEl) fillAutonomyLegend(legendEl, cs, spans);
   if (noteEl && spans.truncated) {
     noteEl.textContent = 'This window holds more runs than one request returns; the strip shows the oldest part of it. '
       + 'Pick a shorter span for a complete picture.';
@@ -1040,8 +1105,8 @@ function buildAutonomyStripEmpty(spans) {
   return empty;
 }
 
-function fillAutonomyLegend(legendEl, cs) {
-  for (const [reason, glyph, label] of AUTONOMY_REASON_LEGEND) {
+function fillAutonomyLegend(legendEl, cs, spans) {
+  for (const [reason, glyph, label] of autonomyLegendEntries(spans)) {
     const item = document.createElement('span');
     item.className = 'history-autonomy-legend-item';
     const swatch = document.createElement('i');
@@ -1231,6 +1296,11 @@ function renderAutonomyPanel() {
   // The provenance line is part of the feature: "no data" must never read as
   // "you did nothing".
   appendHistoryEmpty(listEl, autonomyProvenanceLine(duration));
+  // …and a back-filled view says so, for the same reason: a reconstructed
+  // figure rendered as a measured one is the wrong number with nothing on
+  // screen saying it is wrong. Silent when nothing in view was reconstructed.
+  const reconstruction = autonomyReconstructionNote(duration);
+  if (reconstruction) appendHistoryEmpty(listEl, reconstruction);
 }
 
 // --- Activity matrix (chart=state, issue #981) ---

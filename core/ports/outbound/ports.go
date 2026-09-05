@@ -475,6 +475,16 @@ type AutonomySpan struct {
 	Adapter string
 	Model   string
 	Reason  string
+
+	// Source is empty for a span the daemon MEASURED live, and one of
+	// session.AutonomySources() for a span reconstructed after the fact by
+	// tools/autonomy-backfill. Absence is the live case, so every row written
+	// before the back-fill existed keeps its meaning without being rewritten.
+	//
+	// A span with Source == session.AutonomySourceCost carries
+	// session.AutonomyReasonUnknown, because its source records when a
+	// session was working and never why it stopped.
+	Source string
 }
 
 // Duration is the span's length in seconds, floored at 0 so a clock that
@@ -518,6 +528,34 @@ type AutonomySpanResult struct {
 
 	// Truncated reports that Limit clipped the result.
 	Truncated bool
+
+	// Provenance says how much of THIS window was reconstructed rather than
+	// measured — the fact both clients need to mark a back-filled view.
+	Provenance AutonomySpanProvenance
+}
+
+// AutonomySpanProvenance summarizes how much of one window read came from
+// tools/autonomy-backfill rather than from live measurement (#1905).
+//
+// It is computed on the same pass that reads the window, because the
+// alternative — a client counting sources itself — cannot work for the
+// duration chart, whose payload deliberately carries no individual spans.
+type AutonomySpanProvenance struct {
+	// Reconstructed is how many of the window's spans carry any source at
+	// all (session.IsAutonomyReconstructed).
+	Reconstructed int
+
+	// CostDerived is the subset of Reconstructed whose source is
+	// session.AutonomySourceCost — the spans whose end reason is unknown and
+	// can never become known.
+	CostDerived int
+
+	// LiveSince is the earliest start of a MEASURED span across the WHOLE
+	// log, not just this window: the date before which everything on record
+	// is reconstructed. 0 when the log holds no measured span at all, which
+	// is a different claim from "0 means the beginning of time" and is why
+	// the clients test it for zero before printing a date.
+	LiveSince int64
 }
 
 // AutonomySpanStore persists closed autonomy spans and reads them back over a

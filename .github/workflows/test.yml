@@ -77,6 +77,15 @@ jobs:
       - name: Test seed-autonomy-spans module
         run: go test ./tools/seed-autonomy-spans/... -count=1
 
+      # tools/autonomy-backfill reconstructs pre-#1905 Autonomy spans from the
+      # daemon's own logs and MARKS them as reconstructed. It is a manual,
+      # local, one-off tool the daemon never runs, so its log parsers, its
+      # restart/orphan drop rules and its refuse-a-second-run guard are only
+      # ever exercised by its own tests — including the one that refuses to let
+      # the daemon import or exec it.
+      - name: Test autonomy-backfill module
+        run: go test ./tools/autonomy-backfill/... -count=1
+
       # The Desktop helper is a separate macOS-only Swift package. Its script
       # owns the Swift commands and build location. Local preflight calls the
       # same script, so CI and local checks cannot use different procedures.

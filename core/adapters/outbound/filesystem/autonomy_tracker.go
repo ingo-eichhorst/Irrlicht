@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"irrlicht/core/domain/session"
 	"irrlicht/core/ports/outbound"
 )
 
@@ -54,7 +55,17 @@ type spanRow struct {
 	// left `working` FOR. "" in a row written by a build that could not name
 	// the state; such a row still carries a real duration, so it is kept and
 	// simply ranks lowest on the strip's collapse ladder.
+	//
+	// session.AutonomyReasonUnknown appears here too, on a row the back-fill
+	// reconstructed from a source that records activity but not outcome. It
+	// is NOT a session state and never becomes one.
 	Reason string `json:"reason,omitempty"`
+
+	// Source is empty on every row the daemon wrote — absence IS the
+	// live-measured case, which is what lets the back-fill append into an
+	// existing log without rewriting a single row already in it. Set only by
+	// tools/autonomy-backfill, to one of session.AutonomySources().
+	Source string `json:"source,omitempty"`
 }
 
 // AutonomySpanTracker persists closed autonomy spans in append-only JSONL
@@ -128,6 +139,7 @@ func (t *AutonomySpanTracker) RecordSpan(span outbound.AutonomySpan) error {
 		Adapter: span.Adapter,
 		Model:   span.Model,
 		Reason:  span.Reason,
+		Source:  span.Source,
 	}
 	data, err := json.Marshal(row)
 	if err != nil {
@@ -191,7 +203,31 @@ func (t *AutonomySpanTracker) SpansInWindow(q outbound.AutonomySpanQuery) (*outb
 		res.Spans = res.Spans[:q.Limit]
 		res.Truncated = true
 	}
+	// Counted AFTER the limit clips the result, and that order is the point:
+	// these two numbers are what the clients print as "N of the runs in view
+	// are reconstructed", so they have to describe the spans actually
+	// returned. Counted during the fold instead, a clipped window would
+	// report reconstructions the caller never received.
+	countSpanProvenance(res)
 	return res, nil
+}
+
+// countSpanProvenance fills the window-scoped half of the provenance block
+// from the spans the query is actually returning. LiveSince is NOT computed
+// here: it is log-wide by definition and is accumulated over every row during
+// the fold, including rows outside the window.
+func countSpanProvenance(res *outbound.AutonomySpanResult) {
+	res.Provenance.Reconstructed = 0
+	res.Provenance.CostDerived = 0
+	for _, s := range res.Spans {
+		if !session.IsAutonomyReconstructed(s.Source) {
+			continue
+		}
+		res.Provenance.Reconstructed++
+		if s.Source == session.AutonomySourceCost {
+			res.Provenance.CostDerived++
+		}
+	}
 }
 
 // foldSpanRow folds one parsed row into the running result: it always counts
@@ -201,6 +237,14 @@ func foldSpanRow(r spanRow, fallback string, q outbound.AutonomySpanQuery, res *
 	res.TotalRecorded++
 	if r.Start > 0 && (res.EarliestStart == 0 || r.Start < res.EarliestStart) {
 		res.EarliestStart = r.Start
+	}
+	// LiveSince is log-wide, exactly like EarliestStart and for the same
+	// reason: "everything before this date is reconstructed" is a claim about
+	// the whole log, and a window that happens to hold no measured span
+	// cannot be allowed to answer it.
+	if r.Start > 0 && !session.IsAutonomyReconstructed(r.Source) &&
+		(res.Provenance.LiveSince == 0 || r.Start < res.Provenance.LiveSince) {
+		res.Provenance.LiveSince = r.Start
 	}
 	if r.End < q.Start || r.End >= q.End {
 		return
@@ -217,6 +261,7 @@ func foldSpanRow(r spanRow, fallback string, q outbound.AutonomySpanQuery, res *
 		Adapter: r.Adapter,
 		Model:   r.Model,
 		Reason:  r.Reason,
+		Source:  r.Source,
 	})
 }
 

@@ -41,6 +41,55 @@ func IsAutonomyEndReason(reason string) bool {
 	return IsCanonicalState(reason) && reason != StateWorking
 }
 
+// Autonomy span PROVENANCE (#1905 back-fill).
+//
+// A span the daemon measured live carries NO source at all: absence is the
+// live case. That is deliberate and not a shortcut — every row already on
+// disk was measured, so nothing has to be rewritten and there is no migration
+// to get wrong. A span RECONSTRUCTED after the fact from a log that happened
+// to already be on disk carries the name of the log it came from, and that
+// name is the only thing between a reconstructed number and a measured one.
+const (
+	// AutonomySourceLog marks a span reconstructed from the daemon's own
+	// event log, whose `session-detector` entries record the transition that
+	// actually happened. Such a span's end reason is REAL — measured at the
+	// time, read back later — so it keeps a normal end reason.
+	AutonomySourceLog = "log"
+
+	// AutonomySourceCost marks a span reconstructed from the cost log, which
+	// records WHEN a session was consuming tokens and never WHY the run
+	// stopped. Its end reason is AutonomyReasonUnknown, always: assuming
+	// `ready` would paint months of the strip green with a "the turn
+	// finished" claim nobody ever measured.
+	AutonomySourceCost = "cost"
+)
+
+// AutonomyReasonUnknown is the end reason of a span whose source cannot say
+// how the run ended.
+//
+// NOT A SESSION STATE, and that is the whole point: it is deliberately absent
+// from canonicalStates, so IsCanonicalState and IsAutonomyEndReason both
+// refuse it, AutonomyEndReasons() never yields it, and nothing derived from
+// the canonical vocabulary can start treating it as a fifth state. It ranks
+// at autonomyPriorityUnknown on the collapse ladder — below every measured
+// reason — and both clients draw it in the neutral colour they already use
+// for a reason they cannot name.
+const AutonomyReasonUnknown = "unknown"
+
+// AutonomySources returns the reconstruction sources, in the order the
+// back-fill applies them (event log first, cost log for everything older).
+func AutonomySources() []string {
+	return []string{AutonomySourceLog, AutonomySourceCost}
+}
+
+// IsAutonomyReconstructed reports whether a span's source field marks it as
+// reconstructed rather than measured live.
+//
+// ANY non-empty source counts, including one this build does not recognize: a
+// row written by a newer back-fill must never read back as live just because
+// its source is unfamiliar. Absence — and only absence — means measured.
+func IsAutonomyReconstructed(source string) bool { return source != "" }
+
 // Autonomy end-reason priorities for the run strip's pixel-collapse rule
 // (#1905, design decision 4). When one device-pixel column of the strip holds
 // several spans, the column paints the HIGHEST-priority reason in it.

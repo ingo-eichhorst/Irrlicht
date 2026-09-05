@@ -172,6 +172,42 @@ type historyAutonomyDurationResponse struct {
 	// chart to be read as "you did nothing" (#1905).
 	EarliestSpan  int64 `json:"earliest_span"`
 	TotalRecorded int   `json:"total_recorded"`
+	// Provenance marks how much of THIS window was reconstructed rather than
+	// measured (#1905 back-fill). Always present, zero-valued when the whole
+	// window was measured live.
+	Provenance historyAutonomyProvenance `json:"provenance"`
+}
+
+// historyAutonomyProvenance is the wire shape of
+// outbound.AutonomySpanProvenance, carried by BOTH autonomy payloads.
+//
+// It ships even though the back-fill tool never does: the tool is a one-off
+// the maintainer runs by hand on one machine, but the rows it writes are read
+// by every daemon and both clients afterwards, and a reconstructed number
+// rendered as a measured one is precisely the "wrong figure with nothing on
+// screen saying so" this feature was built to avoid.
+type historyAutonomyProvenance struct {
+	// Reconstructed is how many of the runs in this window were rebuilt from
+	// a log rather than measured as they happened.
+	Reconstructed int `json:"reconstructed"`
+	// CostDerived is the subset of those whose end reason is unknown and
+	// cannot be recovered — the source records activity, not outcome.
+	CostDerived int `json:"cost_derived"`
+	// LiveSince is the earliest MEASURED span across the whole log: the
+	// instant before which everything on record is reconstructed. 0 when
+	// nothing has ever been measured live.
+	LiveSince int64 `json:"live_since"`
+}
+
+// autonomyProvenanceFrom converts the store's provenance block to the wire
+// shape. One converter, used by both payloads, so the two elements of one
+// section can never disagree about how much of it was reconstructed.
+func autonomyProvenanceFrom(p outbound.AutonomySpanProvenance) historyAutonomyProvenance {
+	return historyAutonomyProvenance{
+		Reconstructed: p.Reconstructed,
+		CostDerived:   p.CostDerived,
+		LiveSince:     p.LiveSince,
+	}
 }
 
 // historyAutonomySpanRow is one span on the wire for element 2.
@@ -199,6 +235,9 @@ type historyAutonomySpansResponse struct {
 	EarliestSpan  int64    `json:"earliest_span"`
 	TotalRecorded int      `json:"total_recorded"`
 	Truncated     bool     `json:"truncated"`
+	// Provenance marks how much of THIS window was reconstructed. Counted
+	// after the limit clips the spans, so it describes the rows above it.
+	Provenance historyAutonomyProvenance `json:"provenance"`
 }
 
 // serveHistoryAutonomyDurationChart serves chart=autonomy_duration. A nil
@@ -295,6 +334,7 @@ func buildAutonomyDurationResponse(window string, bucketSeconds, start, end int6
 		SampleFloor:   autonomySampleFloor,
 		EarliestSpan:  res.EarliestStart,
 		TotalRecorded: res.TotalRecorded,
+		Provenance:    autonomyProvenanceFrom(res.Provenance),
 	}
 }
 
@@ -365,5 +405,6 @@ func buildAutonomySpansResponse(window string, start, end int64, res *outbound.A
 		EarliestSpan:  res.EarliestStart,
 		TotalRecorded: res.TotalRecorded,
 		Truncated:     res.Truncated,
+		Provenance:    autonomyProvenanceFrom(res.Provenance),
 	}
 }

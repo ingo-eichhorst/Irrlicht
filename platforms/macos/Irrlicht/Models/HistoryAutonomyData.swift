@@ -96,6 +96,73 @@ enum AutonomyEndReason: String, CaseIterable, Identifiable {
     }
 }
 
+/// How much of one window was RECONSTRUCTED rather than measured (#1905
+/// back-fill), carried by both Autonomy payloads.
+///
+/// `tools/autonomy-backfill` rebuilds pre-feature runs from logs a machine
+/// already had, and marks every row it writes. The daemon never runs it — it
+/// is a one-off the maintainer runs by hand — but it serves what it wrote, and
+/// a reconstructed figure rendered as a measured one is precisely the "wrong
+/// number with nothing on screen saying so" this section was built to avoid.
+struct HistoryAutonomyProvenance: Codable, Equatable {
+    /// Runs in THIS window that were reconstructed.
+    let reconstructed: Int
+    /// The subset of those whose end reason is unknown and cannot be
+    /// recovered: their source records activity, never outcome.
+    let costDerived: Int
+    /// The earliest MEASURED span across the whole log — the instant before
+    /// which everything on record is reconstructed. 0 when nothing has ever
+    /// been measured live, which is a different claim from "since the epoch"
+    /// and is why every reader tests it for zero before formatting a date.
+    let liveSince: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case reconstructed
+        case costDerived = "cost_derived"
+        case liveSince = "live_since"
+    }
+
+    /// What a daemon that predates the field, or a window measured end to end,
+    /// amounts to. Both mean "say nothing".
+    static let none = HistoryAutonomyProvenance(reconstructed: 0, costDerived: 0, liveSince: 0)
+
+    var isReconstructed: Bool { reconstructed > 0 }
+}
+
+/// One entry of the run strip's legend.
+///
+/// `reason` is optional because the neutral entry stands for every run whose
+/// end reason nothing can name — a cost-derived span carrying `unknown`, and
+/// an old row written before the reason was recorded. Both draw the same
+/// neutral column, so one entry has to cover both or one of them is a colour
+/// with no key.
+struct AutonomyLegendEntry: Identifiable, Equatable {
+    let reason: AutonomyEndReason?
+    let glyph: String
+    let label: String
+
+    var id: String { reason?.rawValue ?? "unknown" }
+}
+
+enum AutonomyLegend {
+    static let unknown = AutonomyLegendEntry(reason: nil, glyph: "·", label: "end reason unknown")
+
+    /// The legend for one window: the measured reasons, plus the neutral entry
+    /// ONLY when the window actually holds a run with no nameable reason.
+    ///
+    /// Conditional on the data rather than always shown, because a legend
+    /// explains the colours in front of the reader. A permanent fourth swatch
+    /// for a colour the strip is not drawing invites the opposite mistake —
+    /// reading the absence of neutral columns as an absence of runs.
+    static func entries(for spans: [HistoryAutonomySpanRow]) -> [AutonomyLegendEntry] {
+        var out = AutonomyEndReason.allCases.map {
+            AutonomyLegendEntry(reason: $0, glyph: $0.glyph, label: $0.label)
+        }
+        if spans.contains(where: { $0.endReason == nil }) { out.append(unknown) }
+        return out
+    }
+}
+
 /// One bucket of element 1. The daemon OMITS empty buckets, so every bucket
 /// present here has `count >= 1` — a day with no runs is a gap in the line,
 /// never a point on the axis.
@@ -159,9 +226,13 @@ struct HistoryAutonomyDurationResponse: Codable {
     /// instead of being read as "you did nothing".
     let earliestSpan: Int64
     let totalRecorded: Int
+    /// Optional so a payload from a daemon that predates the field decodes
+    /// rather than failing outright — `provenanceOrNone` collapses the two
+    /// "say nothing" cases into one.
+    let provenance: HistoryAutonomyProvenance?
 
     enum CodingKeys: String, CodingKey {
-        case window, chart, start, end, buckets, summary
+        case window, chart, start, end, buckets, summary, provenance
         case bucketSeconds = "bucket_seconds"
         case bucketStarts = "bucket_starts"
         case sampleFloor = "sample_floor"
@@ -170,6 +241,7 @@ struct HistoryAutonomyDurationResponse: Codable {
     }
 
     var hasData: Bool { !buckets.isEmpty }
+    var provenanceOrNone: HistoryAutonomyProvenance { provenance ?? .none }
 }
 
 struct HistoryAutonomySpanRow: Codable, Identifiable {
@@ -197,14 +269,16 @@ struct HistoryAutonomySpansResponse: Codable {
     let earliestSpan: Int64
     let totalRecorded: Int
     let truncated: Bool
+    let provenance: HistoryAutonomyProvenance?
 
     enum CodingKeys: String, CodingKey {
-        case window, chart, start, end, spans, projects, truncated
+        case window, chart, start, end, spans, projects, truncated, provenance
         case earliestSpan = "earliest_span"
         case totalRecorded = "total_recorded"
     }
 
     var hasData: Bool { !spans.isEmpty }
+    var provenanceOrNone: HistoryAutonomyProvenance { provenance ?? .none }
 
     func spans(for project: String) -> [HistoryAutonomySpanRow] {
         spans.filter { $0.project == project }

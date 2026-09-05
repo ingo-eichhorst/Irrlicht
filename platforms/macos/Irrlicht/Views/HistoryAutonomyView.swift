@@ -159,14 +159,17 @@ struct HistoryAutonomyContentView: View {
         .foregroundColor(.secondary)
     }
 
+    /// The measured reasons, plus a neutral `unknown` entry when — and only
+    /// when — this window actually holds a run whose end reason nothing can
+    /// name (#1905 back-fill).
     private var stripLegend: some View {
         HStack(spacing: IrrSpacing.sp3) {
-            ForEach(AutonomyEndReason.allCases) { reason in
+            ForEach(AutonomyLegend.entries(for: spans.spans)) { entry in
                 HStack(spacing: IrrSpacing.sp1) {
                     RoundedRectangle(cornerRadius: 1)
-                        .fill(AutonomyPalette.color(for: reason))
+                        .fill(AutonomyPalette.color(for: entry.reason))
                         .frame(width: 10, height: 8)
-                    Text("\(reason.glyph) \(reason.label)")
+                    Text("\(entry.glyph) \(entry.label)")
                 }
             }
             Spacer(minLength: 0)
@@ -197,14 +200,22 @@ struct HistoryAutonomyContentView: View {
     // MARK: Provenance
 
     /// States when collection started, so an empty or short history is never
-    /// read as "you did nothing" (#1905).
+    /// read as "you did nothing" (#1905) — and, when any of the view was
+    /// back-filled, says that too.
     private var collectionProvenance: some View {
-        Text(AutonomyFormat.provenance(earliest: duration.earliestSpan,
-                                       total: duration.totalRecorded,
-                                       timeZone: formatTimeZone))
-            .font(.caption2)
-            .foregroundColor(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
+        VStack(alignment: .leading, spacing: IrrSpacing.sp1) {
+            Text(AutonomyFormat.provenance(earliest: duration.earliestSpan,
+                                           total: duration.totalRecorded,
+                                           timeZone: formatTimeZone))
+            if let note = AutonomyFormat.reconstructionNote(duration.provenanceOrNone,
+                                                            inView: duration.summary.count,
+                                                            timeZone: formatTimeZone) {
+                Text(note)
+            }
+        }
+        .font(.caption2)
+        .foregroundColor(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -447,5 +458,44 @@ enum AutonomyFormat {
         f.dateFormat = "MMM d, yyyy"
         let since = f.string(from: Date(timeIntervalSince1970: TimeInterval(earliest)))
         return "Collecting since \(since) · \(total) runs recorded."
+    }
+
+    /// Marks a view that is showing back-filled history (#1905). `nil` when
+    /// every run in view was measured as it happened — which is every install
+    /// but the one `tools/autonomy-backfill` was run on, so a normal machine
+    /// says nothing at all here.
+    ///
+    /// Three facts, in the register the empty state already uses, because each
+    /// answers a question the reader would otherwise answer wrongly: HOW MANY
+    /// of the runs in view are reconstructed, the date BEFORE WHICH everything
+    /// is reconstructed, and whether any of it came from a source that cannot
+    /// say how a run ended — so an `unknown` column in the strip reads as a
+    /// limit of the source rather than as a bug.
+    static func reconstructionNote(_ p: HistoryAutonomyProvenance,
+                                   inView: Int,
+                                   timeZone: TimeZone) -> String? {
+        guard p.isReconstructed else { return nil }
+        let total = inView > 0 ? inView : p.reconstructed
+        var out = "\(p.reconstructed) of \(total) runs in view were reconstructed from logs this Mac "
+            + "already had, not measured as they happened. "
+        if p.liveSince > 0 {
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.timeZone = timeZone
+            f.dateFormat = "MMM d, yyyy"
+            out += "Everything before \(f.string(from: Date(timeIntervalSince1970: TimeInterval(p.liveSince)))) "
+                + "is reconstructed."
+        } else {
+            // liveSince == 0 is "nothing has ever been measured live", which is
+            // a different claim from "measured since the epoch". Printing Jan 1
+            // 1970 would be a fabricated date — the exact failure this whole
+            // marking exists to prevent.
+            out += "Nothing here was measured live — every run on record is reconstructed."
+        }
+        if p.costDerived > 0 {
+            out += " \(p.costDerived) of them come from the cost log, which records when a session was "
+                + "working and never why it stopped, so their end reason is unknown — not assumed."
+        }
+        return out
     }
 }
