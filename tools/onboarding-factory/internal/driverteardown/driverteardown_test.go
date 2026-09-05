@@ -501,6 +501,18 @@ func joinFindings(fs []Finding) string {
 	return b.String()
 }
 
+// sortedKeys is the set-to-stable-slice both slot-vocabulary tests below need.
+// Extracted so neither has to nest a collection loop inside a failure branch —
+// a failure message is where the reader is already working hardest.
+func sortedKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // TestAliveGateMatchesTheSharedOwnershipFlag binds aliveGate to the name the
 // shared slot library actually declares.
 //
@@ -532,17 +544,13 @@ func TestAliveGateMatchesTheSharedOwnershipFlag(t *testing.T) {
 	}
 
 	var matched []string
-	for n := range names {
+	for _, n := range sortedKeys(names) {
 		if aliveGate.MatchString(n) {
 			matched = append(matched, n)
 		}
 	}
 	if len(matched) == 0 {
-		sorted := make([]string, 0, len(names))
-		for n := range names {
-			sorted = append(sorted, n)
-		}
-		sort.Strings(sorted)
+		sorted := sortedKeys(names)
 		t.Fatalf("aliveGate (%s) matches NONE of the %d arrays slots.sh declares (%s).\n"+
 			"INV-1 is therefore blind to a driver gating its teardown on the fleet's own "+
 			"ownership flag — the anti-pattern this checker exists to catch — and every "+
@@ -589,12 +597,7 @@ func TestTemplateDeclaresExactlyTheSharedSlotArrays(t *testing.T) {
 			t.Fatalf("found no %s — the extraction stopped matching, which reads "+
 				"identically to two files that agree", what)
 		}
-		out := make([]string, 0, len(seen))
-		for n := range seen {
-			out = append(out, n)
-		}
-		sort.Strings(out)
-		return out
+		return sortedKeys(seen)
 	}
 
 	declared := set(read("tools", "onboarding-factory", "scripts", "templates", "drive-interactive.sh.tmpl"),
