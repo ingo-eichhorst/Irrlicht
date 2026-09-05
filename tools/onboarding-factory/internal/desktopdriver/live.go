@@ -253,7 +253,14 @@ func waitForComposerControls(
 		// is backgrounded, and anything on the operator's machine can take
 		// focus mid-run — an editor reacting to a file write is enough.
 		if activateErr := activate(ctx); activateErr != nil {
-			lastMismatch = activateErr
+			// Do NOT overwrite a composer observation with this. At the
+			// deadline the step context kills the activation, so the last thing
+			// recorded became "bring Claude Desktop to the front: signal:
+			// killed" — masking the control mismatch that actually explains the
+			// failure. Keep it only when nothing better has been seen.
+			if lastMismatch == nil {
+				lastMismatch = activateErr
+			}
 			return false, nil
 		}
 		elements, err := inspect(ctx)

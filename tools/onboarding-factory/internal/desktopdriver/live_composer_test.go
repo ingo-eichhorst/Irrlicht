@@ -510,3 +510,37 @@ func TestComposerWaitDoesNotObserveABackgroundedDesktop(t *testing.T) {
 		t.Fatalf("the deadline must name the activation failure; got %v", err)
 	}
 }
+
+// An activation that fails at the very end — the step context kills it — must
+// not overwrite the composer observation that explains the failure. That
+// masking turned a control mismatch into "signal: killed" on a live run.
+func TestComposerWaitKeepsTheControlMismatchOverALateActivationFailure(t *testing.T) {
+	looks := 0
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err := waitForComposerControls(
+		ctx,
+		"/repo/workspace",
+		func(context.Context) ([]helperElement, error) {
+			looks++
+			// A composer whose project chip names the wrong folder.
+			return archiveFixtureElements("another-folder", "Owned"), nil
+		},
+		func(context.Context, map[string]helperSelector) error { return nil },
+		func(context.Context, helperSelector, helperPostcondition) error { return nil },
+		func(string) {},
+		func(context.Context) error {
+			if looks == 0 {
+				return nil
+			}
+			return errors.New("bring Claude Desktop to the front: signal: killed")
+		},
+		false,
+	)
+	if err == nil {
+		t.Fatal("waitForComposerControls() returned nil")
+	}
+	if !strings.Contains(err.Error(), "project") {
+		t.Fatalf("the control mismatch was masked by the late activation failure: %v", err)
+	}
+}
