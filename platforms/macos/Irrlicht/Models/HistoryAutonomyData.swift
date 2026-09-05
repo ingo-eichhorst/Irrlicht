@@ -300,6 +300,115 @@ struct HistoryAutonomyDurationResponse: Codable {
         guard let first = bucketStarts.first, let last = bucketStarts.last, last > first else { return [] }
         return provenanceOrNone.boundaryList.filter { $0.ts > first && $0.ts < last }
     }
+
+    /// Where in the DRAWN domain a boundary sits, 0…1 — the macOS twin of the
+    /// web's `autonomyVisibleBoundaries().fraction`. 0 for a boundary that is
+    /// not in view, which `visibleBoundaries` has already excluded.
+    func domainFraction(of boundary: HistoryAutonomyBoundary) -> Double {
+        guard let first = bucketStarts.first, let last = bucketStarts.last, last > first else { return 0 }
+        return Double(boundary.ts - first) / Double(last - first)
+    }
+
+    /// The buckets aligned to `bucket_starts`, with `nil` for every bucket the
+    /// daemon OMITTED — the macOS twin of the web's `autonomyChartPoints`.
+    ///
+    /// The null is the honesty rule, not a convenience: an empty bucket is a
+    /// GAP, and a day with no runs must not pull a line down to the axis or
+    /// let a filled band close over it. Reading `buckets` directly — which is
+    /// what this section did before the band existed — hands Swift Charts a
+    /// dense list in which the gap is simply not there, and it connects
+    /// straight across.
+    var alignedBuckets: [HistoryAutonomyBucket?] {
+        var byTS: [Int64: HistoryAutonomyBucket] = [:]
+        for b in buckets { byTS[b.ts] = b }
+        return bucketStarts.map { byTS[$0] }
+    }
+}
+
+/// Where a source-boundary caption sits relative to the rule it describes.
+///
+/// The caption is a fixed string ("← cost log · 60s resolution") that can be
+/// most of the plot wide at 9 pt, and it used to be pinned to the rule's LEFT
+/// unconditionally. A rule in the left third of the chart therefore had less
+/// room than the caption needed, SwiftUI clamped the annotation to the chart's
+/// leading edge, and the caption ended up detached from the rule with its
+/// arrow pointing off-chart at nothing — which is worse than no caption, since
+/// it reads as a rendering fault rather than as an annotation.
+///
+/// Putting it on whichever side of the rule has more room cannot be clamped
+/// unless the caption is wider than HALF the plot, and the arrow keeps its
+/// meaning either way: it points across the rule, at the era to its left.
+enum AutonomyBoundaryCaption {
+    enum Side: Equatable { case left, right }
+
+    static func side(fraction: Double) -> Side { fraction >= 0.5 ? .left : .right }
+}
+
+/// The p5–p95 band's geometry (#1905 redesign), as a pure function so both the
+/// gap rule and the thin-bucket rule are testable without a chart — and so
+/// this and the web's `autonomyBandSegments` fill the same shape.
+///
+/// TWO RULES, both of them honesty rules a smooth fill would otherwise erase:
+///
+///   - **A filled area wants to close across a gap.** The daemon omits empty
+///     buckets; a polygon spanning one paints a plane over days that hold no
+///     runs at all, a stronger false claim than the interpolated line #1905
+///     already refuses. A segment never crosses a `nil`.
+///   - **A thin bucket is not a percentile.** Under `sample_floor`, p95 is
+///     that bucket's longest run and p5 its shortest. The stroke already
+///     dashes across such a bucket; the fill splits at the same place so the
+///     thin stretch can be painted in its own fainter plane.
+enum AutonomyBandLayout {
+    /// One fillable stretch: inclusive indices into the aligned point list,
+    /// and whether it is thin. Adjacent segments SHARE their boundary index,
+    /// so a thin→solid handover leaves no seam. `from == to` is an isolated
+    /// bucket — it has no neighbour to make an area with, and the chart draws
+    /// its spread as a whisker rather than leaving it the one bucket with no
+    /// visible range at all.
+    struct Segment: Equatable, Identifiable {
+        let from: Int
+        let to: Int
+        let thin: Bool
+
+        var id: String { "\(from)-\(to)-\(thin)" }
+        var isIsolated: Bool { from == to }
+    }
+
+    static func segments(points: [HistoryAutonomyBucket?]) -> [Segment] {
+        var out: [Segment] = []
+        var i = 0
+        while i < points.count {
+            guard points[i] != nil else { i += 1; continue }
+            var last = i
+            while last + 1 < points.count, points[last + 1] != nil { last += 1 }
+            if last == i {
+                out.append(Segment(from: i, to: i, thin: points[i]?.thin ?? false))
+                i = last + 1
+                continue
+            }
+            // Thinness belongs to the INTERVAL, not the bucket — matching the
+            // stroke, which dashes a segment either of whose ends is thin.
+            var start = i
+            var thin = isThin(points, i) || isThin(points, i + 1)
+            var j = i + 1
+            while j < last {
+                let next = isThin(points, j) || isThin(points, j + 1)
+                if next != thin {
+                    out.append(Segment(from: start, to: j, thin: thin))
+                    start = j
+                    thin = next
+                }
+                j += 1
+            }
+            out.append(Segment(from: start, to: last, thin: thin))
+            i = last + 1
+        }
+        return out
+    }
+
+    private static func isThin(_ points: [HistoryAutonomyBucket?], _ i: Int) -> Bool {
+        points[i]?.thin ?? false
+    }
 }
 
 struct HistoryAutonomySpanRow: Codable, Identifiable {

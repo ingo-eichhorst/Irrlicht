@@ -280,19 +280,16 @@
             <option value="">Select a project…</option>
           </select>
         </div>
-        <div class="history-ctl-row" id="history-autonomy-row" hidden>
+        <!-- Range governs the duration chart below and nothing else. Span,
+             which governs the run strip, used to sit on this same row — one
+             row of controls above two elements, with nothing saying which
+             control moved which. Each now sits directly above the thing it
+             changes; Span lives in the strip's own header. -->
+        <div class="history-ctl-row" id="history-autonomy-range-row" hidden>
           <span class="history-ctl-label">Range</span>
           <fieldset class="history-seg" id="history-autonomy-range-sel" aria-label="Autonomy chart range">
             <button type="button" data-autonomy-range="30d" class="active">30 days</button>
             <button type="button" data-autonomy-range="1y">Year</button>
-          </fieldset>
-          <span class="history-ctl-label">Span</span>
-          <fieldset class="history-seg" id="history-autonomy-span-sel" aria-label="Autonomy strip span">
-            <button type="button" data-autonomy-span="8h">8h</button>
-            <button type="button" data-autonomy-span="24h" class="active">24h</button>
-            <button type="button" data-autonomy-span="7d">7d</button>
-            <button type="button" data-autonomy-span="30d">30d</button>
-            <button type="button" data-autonomy-span="12mo">12mo</button>
           </fieldset>
         </div>
         <div class="history-ctl-row" id="history-granularity-row" hidden>
@@ -365,7 +362,21 @@
            Full width under the chart because it is a SECOND element, not
            another rendering of the first. -->
       <section class="history-autonomy" id="history-autonomy-strip" hidden aria-label="Autonomous runs">
-        <div class="history-autonomy-title" id="history-autonomy-strip-title">Runs</div>
+        <!-- The strip's own header row: its title and the Span picker that
+             changes it, together. Span is NOT the chart's Range — the two
+             elements answer different questions over different windows, and
+             a shared control row above both said otherwise. -->
+        <div class="history-autonomy-header">
+          <div class="history-autonomy-title" id="history-autonomy-strip-title">Runs</div>
+          <span class="history-ctl-label">Span</span>
+          <fieldset class="history-seg" id="history-autonomy-span-sel" aria-label="Autonomy strip span">
+            <button type="button" data-autonomy-span="8h">8h</button>
+            <button type="button" data-autonomy-span="24h" class="active">24h</button>
+            <button type="button" data-autonomy-span="7d">7d</button>
+            <button type="button" data-autonomy-span="30d">30d</button>
+            <button type="button" data-autonomy-span="12mo">12mo</button>
+          </fieldset>
+        </div>
         <div class="history-autonomy-rows" id="history-autonomy-rows"></div>
         <div class="history-autonomy-legend" id="history-autonomy-legend"></div>
         <div class="history-autonomy-note" id="history-autonomy-note"></div>

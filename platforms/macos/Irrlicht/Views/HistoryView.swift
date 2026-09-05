@@ -318,21 +318,24 @@ struct HistoryView: View {
         .font(.caption)
     }
 
-    /// Autonomy tab (#1905): one picker per element — Range for the duration
-    /// chart, Span for the run strip. Neither is the shared `range`: the two
-    /// elements answer different questions over different windows, and the
-    /// section uses no Group or drilldown at all.
+    /// Autonomy tab (#1905): Range, and only Range. It governs the duration
+    /// chart, which is the first thing under this row.
+    ///
+    /// Span — the run strip's window — used to sit here beside it, one control
+    /// row above BOTH elements, with nothing on screen saying which control
+    /// moved which; the two vocabularies even overlap textually (`30d` is a
+    /// Range value AND a Span value), so the row read as a single zoom control
+    /// with an odd set of steps. Span now lives in the strip's own section
+    /// header, in HistoryAutonomyContentView.
+    ///
+    /// Neither is the shared `range`: the two elements answer different
+    /// questions over different windows, and the section uses no Group or
+    /// drilldown at all.
     @ViewBuilder private var autonomyControls: some View {
         HStack(spacing: IrrSpacing.sp3) {
             Text("Range").foregroundColor(.secondary)
             Picker("Range", selection: $autonomyRange) {
                 ForEach(HistoryAutonomyRange.allCases) { Text($0.label).tag($0) }
-            }
-            .labelsHidden()
-            .fixedSize()
-            Text("Span").foregroundColor(.secondary)
-            Picker("Span", selection: $autonomySpanWindow) {
-                ForEach(HistoryAutonomySpanWindow.allCases) { Text($0.label).tag($0) }
             }
             .labelsHidden()
             .fixedSize()
@@ -476,7 +479,7 @@ struct HistoryView: View {
     @ViewBuilder private var autonomyContent: some View {
         if let d = autonomyDuration, let s = autonomySpans {
             HistoryAutonomyContentView(duration: d, spans: s,
-                                       range: autonomyRange, spanWindow: autonomySpanWindow)
+                                       range: autonomyRange, spanWindow: $autonomySpanWindow)
         } else if loadFailed {
             loadFailedText
         } else {
