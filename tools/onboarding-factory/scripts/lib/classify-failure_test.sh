@@ -124,6 +124,22 @@ LEAK_EVIDENCE="$(bash "$SCRIPT" "$LEAK_DIR" | jq -r '.evidence')"
   && pass "the leak's evidence names the session to kill" \
   || fail "the leak's evidence names the session to kill" "*95883*" "$LEAK_EVIDENCE"
 
+echo "== driver.pid never written classifies distinctly from an unreadable tmux check (#1828) =="
+# The whole point of the split: a pid-write failure must not read as "go look
+# at tmux" (driver_teardown_unverifiable) — it gets its own code with its own
+# first move (check $STAGING and whether the driver ever started).
+PIDUNREC_DIR="$(manifest_dir pidunrec \
+  '{"error":"driver_pid_unrecorded","tmux_teardown":"pid_unrecorded","tmux_teardown_detail":"driver.pid was never written at /staging/driver.pid — the pid wrapper exited before it could exec the driver"}')"
+assert_code "driver.pid never written -> driver_pid_unrecorded" \
+  "driver_pid_unrecorded" "$PIDUNREC_DIR"
+PIDUNREC_SUMMARY="$(bash "$SCRIPT" "$PIDUNREC_DIR" | jq -r '.summary')"
+[[ "$PIDUNREC_SUMMARY" == *"$PIDUNREC_DIR"*"writable"* ]] \
+  && pass "the summary gives the first move (check that \$STAGING is writable)" \
+  || fail "the summary gives the first move" "*$PIDUNREC_DIR*writable*" "$PIDUNREC_SUMMARY"
+[[ "$PIDUNREC_SUMMARY" != *"tmux-teardown"* ]] \
+  && pass "the summary does not send the operator to tmux" \
+  || fail "the summary does not send the operator to tmux" "no tmux-teardown mention" "$PIDUNREC_SUMMARY"
+
 echo "== run-cell-multi.sh's codes classify too (its driver logs are one dir down) =="
 assert_code "daemon_socket_missing -> daemon_not_ready" "daemon_not_ready" \
   "$(manifest_dir sock '{"error":"daemon_socket_missing"}')"

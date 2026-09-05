@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # MUTATION of good_driver.sh — the committed proof that INV-1 goes red at the
 # OTHER teardown site. ONE line differs: the top-level end-of-run sweep gates
-# on SES_ALIVE instead of on session-name presence. This is claudecode's,
+# on SES_OWNED instead of on session-name presence. This is claudecode's,
 # codex's, pi's and gemini-cli's pre-#1825 shape.
 _DRIVE_LIB="$(dirname "${BASH_SOURCE[0]}")/lib"
 source "$_DRIVE_LIB/slots.sh"
@@ -9,7 +9,7 @@ source "$_DRIVE_LIB/slots.sh"
 SESSION=""
 SES_SESSION=()
 SES_CWD=()
-SES_ALIVE=()
+SES_OWNED=()
 N_SLOTS=0
 ACTIVE=0
 EXIT_REASON="ok"
@@ -39,7 +39,7 @@ launch_repl() {
 
 step_exit_clean() {
   tmux send-keys -t "$SESSION" C-d
-  SES_ALIVE[$ACTIVE]=0
+  SES_OWNED[$ACTIVE]=0
 }
 
 launch_repl
@@ -47,7 +47,7 @@ step_exit_clean
 
 # Tear down every session this run created.
 for (( i = 1; i <= N_SLOTS; i++ )); do
-  if [[ "${SES_ALIVE[$i]}" == "1" ]]; then
+  if [[ "${SES_OWNED[$i]}" == "1" ]]; then
     tmux kill-session -t "${SES_SESSION[$i]}" 2>/dev/null || true
   fi
 done

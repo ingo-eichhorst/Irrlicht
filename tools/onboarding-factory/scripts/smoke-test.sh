@@ -8,7 +8,9 @@
 # Hard gates (fail the run):
 #   1. bash -n syntax check on every *.sh under scripts/ (incl. lib/)
 #   2. every lib/*_test.sh, discovered (not listed) via shell_lib_suite_run
-#   3. the driver-lib and adapter-local suites under replaydata/
+#   3. the driver-lib and adapter-local suites under replaydata/, hand-run via
+#      shell_lib_suite_exec so a duplicate of (2) cannot silently run twice
+#      (#1828)
 #
 # No advisory tier. There used to be one — "shellcheck -S warning, if
 # installed" — and #1684 deleted it precisely because it could not fail: see
@@ -59,11 +61,17 @@ shell_lib_suite_run "$SCRIPT_DIR/lib" || rc2=$?
 
 echo ""
 echo "== unit tests (replaydata/_lib/drive/drive-lib_test.sh) =="
-bash "$SCRIPT_DIR/../../../replaydata/_lib/drive/drive-lib_test.sh" || rc=1
+# shell_lib_suite_exec, not a bare `bash … || rc=1`: these three files live
+# OUTSIDE scripts/lib/ and are legitimately hand-run rather than discovered by
+# the glob above, but hand-run is exactly the shape #1827's reintroduced
+# duplicate took — going through the shared ledger means a future re-add of
+# one of THESE lines, or a copy of one of them, is refused rather than a
+# silent second pass (#1828).
+shell_lib_suite_exec "$SCRIPT_DIR/../../../replaydata/_lib/drive/drive-lib_test.sh" || rc=1
 
 echo ""
 echo "== unit tests (replaydata/_lib/drive/turn-count_test.sh) =="
-bash "$SCRIPT_DIR/../../../replaydata/_lib/drive/turn-count_test.sh" || rc=1
+shell_lib_suite_exec "$SCRIPT_DIR/../../../replaydata/_lib/drive/turn-count_test.sh" || rc=1
 
 # Adapter-local driver libs. codex's boot gates are the only ones with a corpus
 # today (#1388) — the strings its interactive driver must recognize before codex
@@ -72,7 +80,7 @@ bash "$SCRIPT_DIR/../../../replaydata/_lib/drive/turn-count_test.sh" || rc=1
 # into it, and the run records a healthy-looking fixture that fires zero hooks.
 echo ""
 echo "== unit tests (replaydata/agents/codex/boot-gates_test.sh) =="
-bash "$SCRIPT_DIR/../../../replaydata/agents/codex/boot-gates_test.sh" || rc=1
+shell_lib_suite_exec "$SCRIPT_DIR/../../../replaydata/agents/codex/boot-gates_test.sh" || rc=1
 
 echo ""
 # The advisory shellcheck pass that used to live here is gone (#1684). It was

@@ -10,6 +10,12 @@
 #   shell_lib_suite_run tools/lib posix-lint_test.sh || rc=$?
 #   exit "$rc"
 #
+# A caller that also needs to hand-run a file OUTSIDE the globbed directory
+# (smoke-test.sh's three replaydata/ suites are the reason this exists) goes
+# through `shell_lib_suite_exec <file>` instead of a bare `bash "$file"`, so
+# that file joins the same run-scoped ledger `shell_lib_suite_run` populates —
+# see shell_lib_suite_exec's own header below for why (#1828).
+#
 # Shell options, both directions, because the convention above depends on them
 # and every other library here now says so (#1633, #1635):
 #
@@ -89,16 +95,120 @@
 #   1  at least one file FAILED — and every other file still ran, which is the
 #      whole point
 #   2  the run could not be judged at all: no directory, no corpus, a skip that
-#      matches nothing, or a census that does not add up. Distinct from 1
-#      because "nine tests, one red" and "nothing was checked" are different
-#      answers, and 2 is also what makes this function drivable by
-#      shell-lib-errexit_test.sh, whose recipes need a status a bare errexit
-#      abort (always 1) cannot forge.
+#      matches nothing, a census that does not add up, or the same file asked
+#      to run twice in this process (#1828 — see shell_lib_suite_exec below).
+#      Distinct from 1 because "nine tests, one red" and "nothing was checked"
+#      are different answers, and 2 is also what makes this function drivable
+#      by shell-lib-errexit_test.sh, whose recipes need a status a bare
+#      errexit abort (always 1) cannot forge.
 
 # The glob is a variable so the census message can name it, not so callers can
 # change it — nothing passes one, and `*_test.sh` is the convention every
 # caller and every test file in tools/lib/ already follows.
 SHELL_LIB_SUITE_GLOB='*_test.sh'
+
+# ---------------------------------------------------------------------------
+# The once-per-process ledger (#1828)
+#
+# PR #1827's own defect: `shell_lib_suite_run "$SCRIPT_DIR/lib"` already runs
+# every file the glob finds, and a few lines below that call smoke-test.sh
+# used to carry hand-written `bash "$SCRIPT_DIR/lib/<name>_test.sh" || rc=1`
+# lines for two of the SAME files — re-added after #1803's cleanup removed
+# them once already. Both suites ran twice for a full PR cycle: two
+# `shell-lib-suite:` census lines, two `ALL PASS`, and nothing in the log said
+# "this file already ran" — a reviewer caught it by counting PASS lines by
+# hand. `shell_lib_suite_run` already refuses an empty corpus, a skip that
+# matches nothing, and a census that does not add up; none of those catch a
+# file that runs a second time as a SEPARATE statement outside the loop, so
+# this ledger is what does.
+#
+# It is a plain `\n`-delimited string, not an associative array, for the same
+# reason the skip list a few lines below is one: this file is sourced under
+# whatever bash the caller has, and `declare -A` needs bash 4+, which macOS's
+# stock /bin/bash (3.2.57) is not — the same constraint tools/lib/gate-budget.sh's
+# header states, and every caller of THIS file runs under that shell at least
+# once (test.yml's step declaring no `shell:`, and any developer's
+# `tools/preflight.sh`).
+#
+# It lives at FILE scope, not inside a function, so it is run-scoped rather
+# than call-scoped: it survives across multiple `shell_lib_suite_run` calls
+# and hand `shell_lib_suite_exec` calls in the same process, which is exactly
+# the shape smoke-test.sh needs — one globbed suite under lib/, plus three
+# hand-run files that live outside it and must never be flagged as duplicates
+# of one another or of anything the glob found.
+SHELL_LIB_SUITE_LEDGER=$'\n'
+
+# Whether the LAST shell_lib_suite_exec call refused structurally, as opposed
+# to running a file that then failed. It exists because exit status alone
+# cannot carry both answers: exec returns what `bash "$file"` returned, and a
+# test file is free to exit 2 itself. Reading 2 as "the ledger refused" made a
+# single such file abort the whole run before its census line — a truncated
+# run that reads exactly like a clean one, which is the defect this file was
+# written to remove. The flag is set ONLY on the refusal paths, so the caller
+# asks the right question instead of inferring it from a shared number.
+SHELL_LIB_SUITE_EXEC_REFUSED=0
+
+# shell_lib_suite_exec <file> — run ONE test file, recording it into the
+# process-wide ledger above and refusing a second execution of the same
+# (canonicalized) file rather than silently running it twice. Returns what
+# `bash "$file"` returns (0 or non-zero) on a first run, or 2 on a structural
+# refusal (an empty name, a path that cannot be canonicalized, or a repeat) —
+# the same "2 means this could not be judged, not that it failed" convention
+# `shell_lib_suite_run` uses.
+#
+# `shell_lib_suite_run`'s own loop calls this for every file it globs, so a
+# file discovered by the glob and ALSO hand-run a few lines below the call
+# (#1827's exact shape) is caught the moment the hand-run line executes —
+# whether that line comes before or after the `shell_lib_suite_run` call in
+# the caller's script, since the ledger does not care about order, only about
+# whether a canonical path has been seen before in this process.
+#
+# Canonicalization is done HERE, inline, rather than through a separate
+# helper: `$SCRIPT_DIR/lib/x_test.sh` and `$SCRIPT_DIR/../scripts/lib/x_test.sh`
+# must compare equal in the ledger above, and doing that needs an absolute,
+# symlink-resolved path — deliberately NOT `realpath` or `readlink -f`, since
+# the stock macOS `/bin/readlink` has no `-f`, `realpath` is not guaranteed to
+# be on PATH, and a canonicalizer that refuses on a bare macOS box would make
+# the ledger unusable on the exact machine most of this file's own header
+# incidents were measured on. `cd … && pwd -P` resolves symlinks and relative
+# components using nothing but a builtin and a POSIX utility.
+#
+# A path whose DIRECTORY cannot be entered (renamed, never existed, a typo)
+# is refused rather than answered with the un-resolved string: two different
+# spellings of a directory that does not exist would canonicalize to two
+# different bogus strings and the ledger would never catch the duplicate it
+# exists to catch. Per AGENTS.md — a verification mechanism must fail loudly
+# when it cannot run — silently falling back here would be indistinguishable
+# from "this file never ran before", which is the one answer that must never
+# be given by mistake.
+shell_lib_suite_exec() {
+  local file="${1:-}" raw_dir dir base canon
+  SHELL_LIB_SUITE_EXEC_REFUSED=0
+  if [ -z "$file" ]; then
+    SHELL_LIB_SUITE_EXEC_REFUSED=1
+    printf 'shell-lib-suite: refusing — exec was asked to run an empty file name.\n' >&2
+    return 2
+  fi
+  raw_dir=$(dirname "$file")
+  base=${file##*/}
+  if ! dir=$(cd "$raw_dir" 2>/dev/null && pwd -P); then
+    printf 'shell-lib-suite: refusing — %s could not be canonicalized: %s does not exist or cannot be entered, so the ledger cannot tell whether this file already ran.\n' \
+      "$file" "$raw_dir" >&2
+    SHELL_LIB_SUITE_EXEC_REFUSED=1
+    return 2
+  fi
+  canon="$dir/$base"
+  case "$SHELL_LIB_SUITE_LEDGER" in
+    *$'\n'"$canon"$'\n'*)
+      printf 'shell-lib-suite: refusing — %s already ran once in this process (resolved to %s). A file run twice and a file run once must not both read as one clean pass — the second run means a duplicate was re-added somewhere, not that there is a second data point.\n' \
+        "$file" "$canon" >&2
+      SHELL_LIB_SUITE_EXEC_REFUSED=1
+      return 2
+      ;;
+  esac
+  SHELL_LIB_SUITE_LEDGER="$SHELL_LIB_SUITE_LEDGER$canon"$'\n'
+  bash "$file"
+}
 
 # shell_lib_suite_run <dir> [skip-basename ...]
 shell_lib_suite_run() {
@@ -173,12 +283,25 @@ shell_lib_suite_run() {
       continue
     fi
     printf '== %s ==\n' "$f"
-    # `if bash …` and not a bare call: errexit is suppressed for a command in
-    # an `if` condition, so this is what lets a failing file be RECORDED
-    # instead of aborting a caller that has `-e` on.
-    if bash "$f"; then
+    # `if shell_lib_suite_exec …` and not a bare call, for the same errexit
+    # reason the old `if bash "$f"` comment gave. Going through
+    # shell_lib_suite_exec (rather than calling `bash "$f"` here directly) is
+    # what makes a hand-run duplicate of THIS file, added anywhere else in the
+    # same process, a refusal instead of a silent second pass (#1828).
+    if shell_lib_suite_exec "$f"; then
       :
     else
+      if [ "$SHELL_LIB_SUITE_EXEC_REFUSED" -eq 1 ]; then
+        # A structural refusal from the ledger or the canonicalizer, not a
+        # test failure — shell_lib_suite_exec already said why, to stderr.
+        # Gated on the flag and NOT on exec_rc: a test file may exit 2 on its
+        # own, and reading that as a refusal aborted the run before its
+        # census (#1828).
+        # Returned immediately, before the census: a run that could not be
+        # judged does not get to print one, same as the empty-corpus and
+        # skip-list refusals above.
+        return 2
+      fi
       rc=1
       failed=$((failed + 1))
       failed_names="$failed_names $base"

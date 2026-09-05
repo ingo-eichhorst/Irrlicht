@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # MUTATION of good_driver.sh — the committed proof that INV-1 goes red.
 # ONE line differs from the good fixture: the EXIT trap's kill-session gates on
-# SES_ALIVE instead of on session-name presence. This is kiro-cli's pre-#1825
+# SES_OWNED instead of on session-name presence. This is kiro-cli's pre-#1825
 # shape, and it is the leak: a step that asks the TUI to exit clears the flag
 # whether or not the TUI obeyed, so the trap then skips the kill.
 _DRIVE_LIB="$(dirname "${BASH_SOURCE[0]}")/lib"
@@ -10,7 +10,7 @@ source "$_DRIVE_LIB/slots.sh"
 SESSION=""
 SES_SESSION=()
 SES_CWD=()
-SES_ALIVE=()
+SES_OWNED=()
 N_SLOTS=0
 ACTIVE=0
 EXIT_REASON="ok"
@@ -26,7 +26,7 @@ cleanup() {
   fi
   local i
   for (( i = 1; i <= N_SLOTS; i++ )); do
-    [[ "${SES_ALIVE[$i]:-0}" == "1" ]] && tmux kill-session -t "${SES_SESSION[$i]}" 2>/dev/null || true
+    [[ "${SES_OWNED[$i]:-0}" == "1" ]] && tmux kill-session -t "${SES_SESSION[$i]}" 2>/dev/null || true
   done
   echo "$EXIT_REASON" > "$STAGING/driver.exit-reason"
 }
@@ -40,7 +40,7 @@ launch_repl() {
 
 step_exit_clean() {
   tmux send-keys -t "$SESSION" C-d
-  SES_ALIVE[$ACTIVE]=0
+  SES_OWNED[$ACTIVE]=0
 }
 
 launch_repl

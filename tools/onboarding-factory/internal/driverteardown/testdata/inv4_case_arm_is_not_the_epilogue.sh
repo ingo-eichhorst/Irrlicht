@@ -19,7 +19,7 @@ source "$_DRIVE_LIB/slots.sh"
 SESSION=""
 SES_SESSION=()
 SES_CWD=()
-SES_ALIVE=()
+SES_OWNED=()
 N_SLOTS=0
 ACTIVE=0
 EXIT_REASON="ok"
@@ -42,7 +42,7 @@ launch_repl() {
 
 step_exit_clean() {
   tmux send-keys -t "$SESSION" C-d
-  SES_ALIVE[$ACTIVE]=0
+  SES_OWNED[$ACTIVE]=0
 }
 
 launch_repl

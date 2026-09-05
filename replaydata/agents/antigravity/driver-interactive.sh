@@ -114,7 +114,7 @@ SES_EXPECTED=()
 # shellcheck disable=SC2034  # driver-owned slot array; the sourced replaydata/_lib/drive/slots.sh reads it (save_active/load_slot/alloc_slot)
 SES_MARKER=()
 SES_CWD=()
-SES_ALIVE=()
+SES_OWNED=()
 
 # recipe-lint contract (#508 #4): the step types this driver genuinely ELICITS,
 # read directly by recipe-lint (no separate manifest). Start with ONLY the seams
@@ -466,7 +466,7 @@ step_exit_clean() {
   resolve_transcript || true
   tmux send-keys -t "$SESSION" C-d
   # STRICT poll (#1825): the old best-effort wait_tmux_session_gone returns 0
-  # even when the cap expires with the session still up, and SES_ALIVE=0 was set
+  # even when the cap expires with the session still up, and SES_OWNED=0 was set
   # regardless — so an exit key that stopped working (as claude's did) read
   # exactly like one that worked, and the run still reported exit-reason=ok.
   # Cap: DRIVE_EXIT_CLEAN_CAP_S (_lib/drive/teardown.sh). This site passed 2s
@@ -476,14 +476,14 @@ step_exit_clean() {
   # fleet-uniform generous bound, and that constant carries how the number was
   # arrived at: it is a bound, not a measurement.
   if require_tmux_session_gone "$SESSION" "$DRIVE_EXIT_CLEAN_CAP_S"; then
-    SES_ALIVE[$ACTIVE]=0
+    SES_OWNED[$ACTIVE]=0
     echo "[driver] exit_clean[s$ACTIVE]: sent Ctrl-D to $SESSION (session gone)" >&2
   else
     echo "[driver] exit_clean[s$ACTIVE]: FAILED — $SESSION still alive ${DRIVE_EXIT_CLEAN_CAP_S}s after Ctrl-D;" \
          "killing it explicitly. agy did NOT shut down gracefully, so this" \
          "recording has no real clean-exit process_exited." >&2
     tmux kill-session -t "$SESSION" 2>/dev/null || true
-    SES_ALIVE[$ACTIVE]=0
+    SES_OWNED[$ACTIVE]=0
     EXIT_REASON="$NONZERO_2"
   fi
 }
@@ -499,7 +499,7 @@ step_sigkill() {
     echo "[driver] sigkill[s$ACTIVE]: no agy PID found (cwd=${SES_CWD[$ACTIVE]}, session=$SESSION)" >&2
   fi
   sigkill_and_wait "$pid" 1
-  SES_ALIVE[$ACTIVE]=0
+  SES_OWNED[$ACTIVE]=0
 }
 
 # --- AGENT-SPECIFIC SEAM: restart — end this session, start a FRESH one -------
@@ -512,7 +512,7 @@ step_sigkill() {
 step_restart() {
   resolve_transcript || true
   save_active
-  SES_ALIVE[$ACTIVE]=0
+  SES_OWNED[$ACTIVE]=0
   tmux kill-session -t "$SESSION" 2>/dev/null || true
   sleep 1
   local idx=$(( N_SLOTS + 1 ))
@@ -534,7 +534,7 @@ step_restart() {
 step_resume() {
   resolve_transcript || true
   # If exit_clean didn't precede this, end the running agy cleanly first.
-  if [[ "${SES_ALIVE[$ACTIVE]}" == "1" ]]; then
+  if [[ "${SES_OWNED[$ACTIVE]}" == "1" ]]; then
     tmux send-keys -t "$SESSION" C-d
     wait_tmux_session_gone "$SESSION" 2
   fi
@@ -542,7 +542,7 @@ step_resume() {
   sleep 1
   SESSION="antigravitydrv-$$-$(date +%s)-r${ACTIVE}"
   SES_SESSION[$ACTIVE]="$SESSION"
-  SES_ALIVE[$ACTIVE]=1
+  SES_OWNED[$ACTIVE]=1
   # Keep the SAME transcript cached across the relaunch: agy appends to it rather
   # than minting a new file, so resolve_transcript must NOT run again (clearing +
   # re-finding could race the new process / claim a sibling). TRANSCRIPT/UUID/

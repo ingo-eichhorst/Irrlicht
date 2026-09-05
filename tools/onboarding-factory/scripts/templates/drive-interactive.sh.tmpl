@@ -112,8 +112,8 @@ SES_EXPECTED=()
 # shellcheck disable=SC2034  # driver-owned slot array; the sourced replaydata/_lib/drive/slots.sh reads it (save_active/load_slot/alloc_slot)
 SES_MARKER=()
 SES_CWD=()
-# shellcheck disable=SC2034  # driver-owned slot array written by the sourced replaydata/_lib/drive/slots.sh:64 (alloc_slot); kept current here for the shared slot model
-SES_ALIVE=()
+# shellcheck disable=SC2034  # driver-owned slot array written by the sourced replaydata/_lib/drive/slots.sh:66 (alloc_slot); kept current here for the shared slot model. Named for OWNERSHIP, not liveness (#1828): nothing re-derives it from `tmux has-session`, so teardown gates on session-name presence and never on this.
+SES_OWNED=()
 
 # recipe-lint contract (#508 #4): the step types this driver genuinely ELICITS,
 # read directly by recipe-lint (no separate manifest). Start with ONLY the seams

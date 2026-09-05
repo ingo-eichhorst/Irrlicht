@@ -124,7 +124,7 @@ RETIRED_TRANSCRIPTS=()
 # shellcheck disable=SC2034  # driver-owned slot array; the sourced replaydata/_lib/drive/slots.sh reads it (save_active/load_slot/alloc_slot)
 SES_MARKER=()
 SES_CWD=()
-SES_ALIVE=()
+SES_OWNED=()
 
 # recipe-lint contract (#508 #4): the step types this driver genuinely ELICITS,
 # read directly by recipe-lint (no separate manifest). Start with ONLY the seams
@@ -514,10 +514,10 @@ while IFS= read -r step; do
                      wait_tmux_session_gone "$SESSION" 15 || true
                      launch_repl ;;
     sigkill)         sigkill_and_wait "$(active_pid)" 15 || true
-                     SES_ALIVE[$ACTIVE]=0 ;;
+                     SES_OWNED[$ACTIVE]=0 ;;
     # Copilot exits on /exit; Ctrl-D is not a documented quit path here.
     # STRICT poll (#1825): wait_tmux_session_gone returns 0 even when the cap
-    # expires with the session still up, and SES_ALIVE=0 was set regardless — so
+    # expires with the session still up, and SES_OWNED=0 was set regardless — so
     # a /exit that stopped working would read exactly like one that worked and
     # the run would still report exit-reason=ok.
     exit_clean)      slash_cmd "/exit"
@@ -533,7 +533,7 @@ while IFS= read -r step; do
                        EXIT_REASON="nonzero(2)"
                      fi
                      # shellcheck disable=SC2034  # part of the shared slot model replaydata/_lib/drive/slots.sh:64 (alloc_slot) initialises; this driver keeps it current but has no branch that reads it, while sibling drivers do (e.g. antigravity's exit summary)
-                     SES_ALIVE[$ACTIVE]=0 ;;
+                     SES_OWNED[$ACTIVE]=0 ;;
     start_session)   save_active
                      launch_repl ;;
     session)         save_active; load_slot "$(jq -r '.session // 1' <<<"$step")" ;;

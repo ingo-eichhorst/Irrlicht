@@ -34,6 +34,17 @@
 #      passes by construction until something breaks the thing it protects.
 #   6. both call sites really do go through the shared runner, so the two
 #      implementations cannot come back.
+#   7. a run-scoped ledger refuses a SECOND execution of the same
+#      (canonicalized) file in one process — #1827's own defect, one level
+#      down: `shell_lib_suite_run` already ran every file a glob found, and a
+#      hand-written `bash "$dir/x_test.sh" || rc=1` line a few lines below the
+#      call re-ran two of them for a full PR cycle with every gate green. The
+#      guard must ALSO stay silent on the legitimate shape — two different
+#      directories, and hand-run files that live outside either of them — or
+#      it would just be a check that fires unconditionally. And it must refuse
+#      rather than silently allow when a path cannot be canonicalized at all
+#      (AGENTS.md: absence of a finding and inability to look must not read
+#      the same).
 #
 # The fixtures are built in a tempdir rather than committed under testdata/
 # because they must be EXECUTED, and a corpus of deliberately-failing
@@ -136,6 +147,22 @@ rc=0
 shell_lib_suite_run "$SLS_ARGS_DIR" $SLS_ARGS_SKIPS || rc=$?
 exit "$rc"
 RUNNER
+  OUT=$("${STEP_ARGV[@]}" "$script" 2>&1); ST=$?
+  return 0
+}
+
+# run_ledger <script-body> — like run_suite, but for a script that calls
+# `shell_lib_suite_run` and/or `shell_lib_suite_exec` MORE THAN ONCE against
+# the one sourced library, in one process. That is exactly the shape the
+# ledger has to hold state across (obligation 7): a source line and a chain of
+# calls is emitted verbatim, run once under the same derived invocation as
+# every other obligation here, and $OUT/$ST report the LAST call's exit
+# status via the caller's own `|| rc=$?` chain — the body string is
+# responsible for that, the same convention this file's own header documents
+# for real callers.
+run_ledger() {
+  local body="$1" script="$TMP/run-ledger.sh"
+  printf '%s\n' '. tools/lib/shell-lib-suite.sh' "$body" >"$script"
   OUT=$("${STEP_ARGV[@]}" "$script" 2>&1); ST=$?
   return 0
 }
@@ -399,6 +426,148 @@ else
   fi
 fi
 
+# --- obligation 7: the once-per-process ledger -------------------------------
+#
+# #1827's own defect, one level down from obligation 1: `shell_lib_suite_run`
+# already runs every file its glob found, and a hand-written
+# `bash "$dir/x_test.sh" || rc=1` line a few lines below the call re-ran two of
+# them for a full PR cycle with every gate green — a reviewer caught it by
+# counting `ALL PASS` lines by hand. `shell_lib_suite_exec` is the guard: every
+# file it runs is recorded into a process-wide ledger, keyed on a
+# canonicalized path, and a second execution of the same file refuses instead
+# of silently running twice.
+echo ""
+echo "== the once-per-process ledger refuses a second execution of the same file =="
+
+mkcorpus "$TMP/ledger-dup" a_test.sh:0 b_test.sh:0
+run_ledger 'rc=0
+shell_lib_suite_run "'"$TMP"'/ledger-dup" || rc=$?
+shell_lib_suite_exec "'"$TMP"'/ledger-dup/a_test.sh" || rc=$?
+exit "$rc"'
+want_status "a file already run by shell_lib_suite_run, then hand-run again" 2 "$ST" "$OUT"
+want_contains "...the refusal names the file" "a_test.sh" "$OUT"
+want_contains "...and says why silence would be worse" "already ran once in this process" "$OUT"
+ran_count=$(printf '%s\n' "$OUT" | grep -c '^RAN a_test\.sh$')
+if [[ "$ran_count" -eq 1 ]]; then
+  pass "...and the file's BODY executed exactly once, not twice"
+else
+  fail "the file's body executed exactly once" 1 "$ran_count occurrence(s) of RAN a_test.sh — a silent double-run would print 2"
+fi
+
+# --- the vacuity guard for obligation 7: the legitimate shape ---------------
+# Two DIFFERENT directories run through shell_lib_suite_run, plus three
+# hand-run files living OUTSIDE either of them (the exact shape smoke-test.sh
+# needs: one globbed suite, three out-of-tree suites). None of this may be
+# flagged as a duplicate of anything else, or the guard above would be
+# satisfied by a ledger that refuses unconditionally.
+mkcorpus "$TMP/ledger-a" a_test.sh:0
+mkcorpus "$TMP/ledger-b" b_test.sh:0
+mkdir -p "$TMP/ledger-out"
+printf '#!/usr/bin/env bash\necho "RAN out1_test.sh"\nexit 0\n' >"$TMP/ledger-out/out1_test.sh"
+printf '#!/usr/bin/env bash\necho "RAN out2_test.sh"\nexit 0\n' >"$TMP/ledger-out/out2_test.sh"
+printf '#!/usr/bin/env bash\necho "RAN out3_test.sh"\nexit 0\n' >"$TMP/ledger-out/out3_test.sh"
+run_ledger 'rc=0
+shell_lib_suite_run "'"$TMP"'/ledger-a" || rc=$?
+shell_lib_suite_run "'"$TMP"'/ledger-b" || rc=$?
+shell_lib_suite_exec "'"$TMP"'/ledger-out/out1_test.sh" || rc=$?
+shell_lib_suite_exec "'"$TMP"'/ledger-out/out2_test.sh" || rc=$?
+shell_lib_suite_exec "'"$TMP"'/ledger-out/out3_test.sh" || rc=$?
+exit "$rc"'
+want_status "two different globbed dirs plus three out-of-tree hand-run files" 0 "$ST" "$OUT"
+want_contains "...every file really ran (a)" "RAN a_test.sh" "$OUT"
+want_contains "...every file really ran (b)" "RAN b_test.sh" "$OUT"
+want_contains "...every file really ran (out1)" "RAN out1_test.sh" "$OUT"
+want_contains "...every file really ran (out2)" "RAN out2_test.sh" "$OUT"
+want_contains "...every file really ran (out3)" "RAN out3_test.sh" "$OUT"
+want_absent "...and none of it is flagged as a duplicate" "already ran once in this process" "$OUT"
+
+# --- canonicalization: two spellings of the same file are still one file ---
+mkcorpus "$TMP/ledger-canon" x_test.sh:0
+run_ledger 'rc=0
+shell_lib_suite_exec "'"$TMP"'/ledger-canon/x_test.sh" || rc=$?
+shell_lib_suite_exec "'"$TMP"'/ledger-canon/../ledger-canon/x_test.sh" || rc=$?
+exit "$rc"'
+want_status "the same file reached by two different (but equivalent) spellings" 2 "$ST" "$OUT"
+want_contains "...the refusal still names it" "x_test.sh" "$OUT"
+canon_ran=$(printf '%s\n' "$OUT" | grep -c '^RAN x_test\.sh$')
+if [[ "$canon_ran" -eq 1 ]]; then
+  pass "...canonicalization means the second (differently-spelled) call never executed the body"
+else
+  fail "canonicalization collapses the two spellings to one execution" 1 "$canon_ran occurrence(s) of RAN x_test.sh"
+fi
+
+# --- the guard must fail loudly when it cannot canonicalize at all ---------
+# AGENTS.md: a verification mechanism must fail loudly when it cannot run.
+# Silently falling back to the un-resolved string here would be
+# indistinguishable from "this file never ran before" — the one answer the
+# ledger must never give by mistake.
+run_ledger 'rc=0
+shell_lib_suite_exec "'"$TMP"'/ledger-no-such-dir/x_test.sh" || rc=$?
+exit "$rc"'
+want_status "a file whose directory does not exist cannot be canonicalized" 2 "$ST" "$OUT"
+want_contains "...refuses rather than silently allowing" "could not be canonicalized" "$OUT"
+
+run_ledger 'rc=0
+shell_lib_suite_exec "" || rc=$?
+exit "$rc"'
+want_status "shell_lib_suite_exec refuses an empty file name" 2 "$ST" "$OUT"
+want_contains "...names the problem" "empty file name" "$OUT"
+
+# --- mutation evidence for obligation 7 (AGENTS.md) -------------------------
+#
+# The ledger is something this change ADDS, so it passes by construction and
+# owes a deliberate mutation rather than a "before the fix" story that cannot
+# exist for it (AGENTS.md). The mutation is committed here, not just
+# described in a PR body nothing re-runs: a copy of the real library with the
+# ledger's OWN recording line turned into a no-op — the exact shape of a
+# future edit that "resolves a merge conflict" by dropping the one line that
+# makes the ledger remember a file ran. The real file is never touched, and
+# the pattern is matched rather than a hard-coded line number so a comment
+# added above it cannot silently stop the splice from applying — the
+# `grep -q` right after it is the vacuity guard for that.
+echo ""
+echo "== mutation evidence: a ledger that never records is a silent double-run =="
+mutdir2="$TMP/mutlib-ledger"
+mkdir -p "$mutdir2"
+# shellcheck disable=SC2016
+sed 's|^  SHELL_LIB_SUITE_LEDGER="\$SHELL_LIB_SUITE_LEDGER\$canon"\$.\\n.$|  SHELL_LIB_SUITE_LEDGER="\$SHELL_LIB_SUITE_LEDGER"  # mutated: never records|' \
+  "$LIB" >"$mutdir2/shell-lib-suite.sh"
+if ! grep -q 'mutated: never records' "$mutdir2/shell-lib-suite.sh"; then
+  fail "the ledger-recording mutation was applied" "a spliced no-op assignment" "the splice matched nothing — the mutation harness is stale, not the library clean"
+else
+  pass "the ledger-recording mutation was applied to the copy"
+  mkcorpus "$TMP/ledger-mut" m_test.sh:0
+  export SLS_MUT="$mutdir2/shell-lib-suite.sh" SLS_MUT_DIR="$TMP/ledger-mut" SLS_MUT_FILE="$TMP/ledger-mut/m_test.sh"
+  cat >"$TMP/run-mut-ledger.sh" <<'MUTLEDGER'
+rc=0
+. "$SLS_MUT"
+shell_lib_suite_run "$SLS_MUT_DIR" || rc=$?
+shell_lib_suite_exec "$SLS_MUT_FILE" || rc=$?
+exit "$rc"
+MUTLEDGER
+  mut_ledger_out=$("${STEP_ARGV[@]}" "$TMP/run-mut-ledger.sh" 2>&1); mut_ledger_st=$?
+  want_status "a ledger that never records lets the same file run through twice" 0 "$mut_ledger_st" "$mut_ledger_out"
+  mut_ran=$(printf '%s\n' "$mut_ledger_out" | grep -c '^RAN m_test\.sh$')
+  if [[ "$mut_ran" -eq 2 ]]; then
+    pass "...and its body really did run twice — the exact silent double-run #1827 shipped, mechanically reproduced"
+  else
+    fail "the mutated library runs the file's body twice" 2 "$mut_ran occurrence(s) of RAN m_test.sh"
+  fi
+fi
+# ...and the unmutated library over the same corpus and file must refuse, or
+# the case above would be satisfied by a fixture that always reports a double
+# run regardless of what the library does. This is the same file and the same
+# corpus shape as the very first obligation-7 case above, so this line is the
+# vacuity guard for BOTH the mutation and that case.
+run_ledger 'rc=0
+shell_lib_suite_run "'"$TMP"'/ledger-mut" || rc=$?
+shell_lib_suite_exec "'"$TMP"'/ledger-mut/m_test.sh" || rc=$?
+exit "$rc"'
+want_status "...while the real library over the same corpus refuses" 2 "$ST" "$OUT"
+real_ran=$(printf '%s\n' "$OUT" | grep -c '^RAN m_test\.sh$')
+[[ "$real_ran" -eq 1 ]] && pass "...running the body exactly once" \
+                        || fail "the real library runs the body exactly once" 1 "$real_ran occurrence(s)"
+
 # EVERY skip CI passes has to name a file that is really there. The library
 # refuses at runtime if one does not — this is the same assertion one push
 # earlier, on the machine that can act on it.
@@ -429,6 +598,26 @@ else
     done <<< "$skips"
   fi
 fi
+
+# --- obligation 7b: a test file that exits 2 is a FAILURE, not a refusal ------
+#
+# The ledger's refusal and a test file's own exit status share one channel:
+# shell_lib_suite_exec returns whatever `bash "$file"` returned, and 2 is a
+# status a test file is free to use. When the loop read that 2 as "the ledger
+# refused", ONE such file aborted the whole run before its census line — every
+# file behind it silently unrun, and a truncated run reading exactly like a
+# clean one. That is the defect this whole file exists to remove, so it is
+# pinned here: the refusal now travels out-of-band in
+# SHELL_LIB_SUITE_EXEC_REFUSED, and the status channel carries only the test's
+# own answer.
+echo "== a test file exiting 2 fails the run without truncating it =="
+mkcorpus "$TMP/exit2" aaa_test.sh:2 zzz_test.sh:0
+run_suite "$TMP/exit2"
+want_status "the run reports a FAILURE (1), not a refusal (2)" 1 "$ST" "$OUT"
+want_contains "...the file behind it still ran" "RAN zzz_test.sh" "$OUT"
+want_contains "...and the census was printed" "found 2, skipped 0 (none), ran 2, failed 1" "$OUT"
+want_contains "...naming the failure" "FAILED: aaa_test.sh" "$OUT"
+want_absent "...and nothing claimed a refusal" "refusing" "$OUT"
 
 echo ""
 if [[ "$rc" -eq 0 ]]; then

@@ -87,16 +87,26 @@ import (
 // "optimistic flag" detector. It matches the substring `alive`, case
 // insensitively, anywhere in the gate. A driver that invented a differently
 // named liveness flag — `SES_RUNNING`, say — would gate its teardown on it and
-// pass. The reason to accept that is that the flag is not per-driver: SES_ALIVE
-// is declared and maintained by the SHARED replaydata/_lib/drive/slots.sh that
-// every slot-model driver sources, and claudecode's private slot scheme uses
-// the same name. Matching the name that exists keeps the rule readable and
-// keeps its false-POSITIVE rate at zero, which matters more here: a finding
-// against a driver that is correct is the kind that gets a rule ignored rather
-// than fixed. The general form of the rule — "teardown must gate on session
-// presence" — is stated in the finding text so the next reader knows what the
-// substring is standing in for.
-var aliveGate = regexp.MustCompile(`(?i)alive`)
+// pass. The reason this was accepted is that the flag was not per-driver: it
+// was declared and maintained by the SHARED replaydata/_lib/drive/slots.sh that
+// every slot-model driver sources, and claudecode's private slot scheme used
+// the same name (SES_ALIVE). Matching the name that existed kept the rule
+// readable and kept its false-POSITIVE rate at zero, which matters more here: a
+// finding against a driver that is correct is the kind that gets a rule ignored
+// rather than fixed. The general form of the rule — "teardown must gate on
+// session presence" — is stated in the finding text so the next reader knows
+// what the substring is standing in for.
+//
+// BOUND TO THE SHARED FLAG'S ACTUAL NAME (#1828). The #1828 rename
+// (SES_ALIVE -> SES_OWNED) removed the substring `alive` from the fleet's flag
+// and left this regex matching nothing real: the check went BLIND to the exact
+// anti-pattern it exists to catch, and every fixture stayed green while it did.
+// Nothing failed, because a name-coupled matcher has no way to notice that the
+// name moved. The pattern therefore covers both spellings, and
+// TestAliveGateMatchesTheSharedOwnershipFlag now reads the array names
+// replaydata/_lib/drive/slots.sh actually declares and fails loudly when none
+// of them matches — so the next rename breaks a test instead of a guarantee.
+var aliveGate = regexp.MustCompile(`(?i)alive|owned`)
 
 // pidField is the `$$` a minted session name must carry as its own
 // `-`-delimited field.
@@ -110,7 +120,7 @@ const pidField = "$$"
 //	git grep -n 'DRIVER_REASON=.*driver\.exit-reason.*echo "unknown"' -- tools/onboarding-factory/scripts/run-cell.sh
 //
 // It is a filename, not a variable name, and that is what makes matching it
-// legitimate where matching `SES_ALIVE` was a named-anti-pattern compromise: it
+// legitimate where matching `SES_OWNED` was a named-anti-pattern compromise: it
 // is a contract between two files, so a rename has to touch run-cell.sh too.
 // TestVerdictFilenameIsTheOneRunCellReads asserts that it still does.
 const exitReasonFile = "driver.exit-reason"
@@ -451,12 +461,12 @@ func checkTrapExists(driver File, traps []exitTrap) []Finding {
 // end-of-run sweep. isStepDispatchArm is where that difference now lives.
 //
 // kiro-cli is the case that forces this. Its `step_exit_clean` and
-// `step_sigkill` open with `if [[ "${SES_ALIVE[$ACTIVE]:-0}" != "1" ]]; then
+// `step_sigkill` open with `if [[ "${SES_OWNED[$ACTIVE]:-0}" != "1" ]]; then
 // return 0; fi`, and those guards are CORRECT: reset_session gives a new slot
 // the SAME tmux pane as an old one, so an already-retired slot number can alias
 // a pane a different, still-live slot now owns, and a recipe re-targeting the
 // old number must not tear the live session down. A textual rule keyed on
-// "SES_ALIVE near a kill-session" would fail those, and a finding against a
+// "SES_OWNED near a kill-session" would fail those, and a finding against a
 // driver that is right is the kind that gets a rule ignored rather than fixed.
 //
 // The cost of the structural rule is the mirror image: a driver that moved its
@@ -554,7 +564,7 @@ func teardownSite(st Statement, handlerFuncs map[string]bool) (string, bool) {
 // (Line numbers are deliberately not quoted: the drivers are edited often
 // enough that three of them moved while this comment was being written.) They
 // are ungated today, so nothing
-// fired — but the kiro-cli-shaped `SES_ALIVE` entry check this package
+// fired — but the kiro-cli-shaped `SES_OWNED` entry check this package
 // deliberately ACCEPTS at step level (correct there, because reset_session
 // aliases a retired slot number onto a pane a live slot now owns) would have
 // been a FALSE POSITIVE the moment copilot, hermes, mistral-vibe or antigravity
@@ -608,7 +618,8 @@ func inv1Detail(where string) string {
 
 func gatedOnLiveness(st Statement) bool {
 	if aliveGate.MatchString(st.Prefix) {
-		return true // `[[ "${SES_ALIVE[$i]}" == 1 ]] && tmux kill-session …`
+		return true // e.g. `[[ "${SES_RUNNING[$i]}" == 1 ]] && tmux kill-session …` —
+		// NOT the fleet's actual SES_OWNED; see aliveGate's note above.
 	}
 	for _, c := range st.Conds {
 		if aliveGate.MatchString(c) {
@@ -635,7 +646,7 @@ func gatedOnLiveness(st Statement) bool {
 //
 // HOW IT IS STATED SO IT IS NOT TRIVIALLY SATISFIABLE. No variable name is
 // matched — not the verdict variable's, and above all not the sentinel's, which
-// has no shared-library declaration to anchor it the way SES_ALIVE has. The rule
+// has no shared-library declaration to anchor it the way SES_OWNED has. The rule
 // is built from one structural primitive instead:
 //
 //	an UNCONDITIONAL TOP-LEVEL assignment, placed after the trap is armed AND

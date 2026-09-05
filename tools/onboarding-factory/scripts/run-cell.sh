@@ -616,50 +616,57 @@ TMUX_GATE_DETAIL="headless cell — no interactive driver ran, and no driver.sh 
 if [[ -n "$SCRIPT_JSON" ]]; then
   # Before tmux is asked anything: is there a run identity to ask ABOUT? The pid
   # comes from a file the driver's own process wrote (the driver_pid_capture
-  # block above), and the two ways it can be unusable have different first moves
-  # for the operator, so they
-  # get different sentences:
+  # block above), and the three ways it can be unusable are not the same
+  # problem, so they get different sentences AND (#1828) different STATUSES:
   #
   #   no file at all      → the `bash -c` wrapper exited 1 on its own `printf >`
   #                         before it could `exec` the driver — that write is
   #                         the only thing between it and the exec, and an
   #                         unwritable $STAGING is what makes it fail. So the
   #                         driver almost certainly never ran, and there is
-  #                         nothing of this run's for tmux to be holding.
-  #   a file with garbage → the wrapper DID run, so the driver started, and its
+  #                         nothing of this run's for tmux to be holding. This
+  #                         case gets its OWN status, pid_unrecorded, rather
+  #                         than folding into "unreadable": the operator's
+  #                         first move is to check that $STAGING is writable
+  #                         and that the driver process ever started, not to go
+  #                         look at tmux (classify-failure.sh's
+  #                         driver_pid_unrecorded arm says exactly that).
+  #   empty / non-numeric  → the wrapper DID run, so the driver started, and its
   #                         sessions may well be out there under a name no pid
-  #                         of ours can match.
+  #                         of ours can match. This pair STAYS "unreadable":
+  #                         a live agent may genuinely be out there, which is
+  #                         exactly what driver_teardown_unverifiable already
+  #                         says, so collapsing it into pid_unrecorded would
+  #                         lose that distinction rather than sharpen it.
   #
-  # Both are `unreadable` — "could not look" is never "it is gone" — but they
-  # are not the same problem. check_tmux_teardown's own refusal names only the
-  # value ("the driver pid must be a whole number, got ''"), and an operator who
-  # reads that under a heading with the word tmux in it goes and looks at tmux.
+  # check_tmux_teardown's own refusal names only the value ("the driver pid must
+  # be a whole number, got ''"), and an operator who read that under a heading
+  # with the word tmux in it would go and look at tmux — for the missing-file
+  # case that is the wrong first move, which is the whole reason for the split.
   DRIVER_PID_PROBLEM=""
+  DRIVER_PID_UNRECORDED=0
   if [[ ! -f "$DRIVER_PID_FILE" ]]; then
     DRIVER_PID_PROBLEM="driver.pid was never written at $DRIVER_PID_FILE — the pid wrapper exited before it could exec the driver, so the driver almost certainly never ran. This is a staging-writability problem, NOT a tmux one: tmux was not asked anything"
+    DRIVER_PID_UNRECORDED=1
   elif [[ -z "$DRIVER_PID" ]]; then
     DRIVER_PID_PROBLEM="driver.pid at $DRIVER_PID_FILE is empty or unreadable — the wrapper ran, so the driver DID start and may have left sessions behind under a name this run can no longer match. Not a tmux problem: tmux was not asked anything"
   elif [[ -n "${DRIVER_PID//[0-9]/}" ]]; then
     DRIVER_PID_PROBLEM="driver.pid at $DRIVER_PID_FILE holds '$DRIVER_PID', which is not a whole number — the wrapper ran, so the driver DID start and may have left sessions behind under a name this run can no longer match. Not a tmux problem: tmux was not asked anything"
   fi
 
-  if [[ -n "$DRIVER_PID_PROBLEM" ]]; then
+  if [[ "$DRIVER_PID_UNRECORDED" -eq 1 ]]; then
+    TMUX_GATE_STATUS="pid_unrecorded"
+    TMUX_GATE_DETAIL="$DRIVER_PID_PROBLEM"
+  elif [[ -n "$DRIVER_PID_PROBLEM" ]]; then
     TMUX_GATE_STATUS="unreadable"
     TMUX_GATE_DETAIL="$DRIVER_PID_PROBLEM"
   else
-    # The pair await_gone_bound checks (see the lib header's rule 3). The
-    # lifetime is the cell's own driver timeout — the upper bound on how long the
-    # session could have lived; the grace is a tenth of it, capped at 5s so a
-    # 900s cell does not buy a 90s wait for a session that should already be gone,
-    # and floored at 1s so the arithmetic can never produce the "look exactly
-    # once" deadline await_gone_bound refuses. A cell whose timeout is under 10s
-    # therefore fails the bound and is reported LOUDLY as unreadable, which is the
-    # honest answer: at that ratio the check would assert nothing. (Every
-    # applicable cell today declares 60s or more.)
+    # The pair await_gone_bound checks (see the lib header's rule 3). Computed
+    # by tmux_teardown_deadline_for — shared with run-cell-multi.sh (#1828) so
+    # the two rigs cannot drift apart on the arithmetic; see that function's
+    # header for why a tenth, capped at 5, floored at 1.
     TEARDOWN_LIFETIME_S="$TIMEOUT_S"
-    TEARDOWN_DEADLINE_S=$(( TEARDOWN_LIFETIME_S / 10 ))
-    if [[ "$TEARDOWN_DEADLINE_S" -gt 5 ]]; then TEARDOWN_DEADLINE_S=5; fi
-    if [[ "$TEARDOWN_DEADLINE_S" -lt 1 ]]; then TEARDOWN_DEADLINE_S=1; fi
+    TEARDOWN_DEADLINE_S="$(tmux_teardown_deadline_for "$TEARDOWN_LIFETIME_S")"
 
     TMUX_GATE_RC=0
     check_tmux_teardown "$DRIVER_PID" "$TEARDOWN_DEADLINE_S" "$TEARDOWN_LIFETIME_S" \
@@ -758,6 +765,8 @@ case "$TMUX_GATE_STATUS" in
   *)
     if [[ "$TMUX_GATE_STATUS" == "leaked" ]]; then
       TMUX_GATE_ERROR="driver_tmux_session_survived"
+    elif [[ "$TMUX_GATE_STATUS" == "pid_unrecorded" ]]; then
+      TMUX_GATE_ERROR="driver_pid_unrecorded"
     else
       TMUX_GATE_ERROR="driver_tmux_teardown_unreadable"
     fi
@@ -767,9 +776,16 @@ case "$TMUX_GATE_STATUS" in
           --arg tmux_teardown_detail "$TMUX_GATE_DETAIL" \
           --arg driver_pid "$DRIVER_PID" \
           '{tmux_teardown: $tmux_teardown, tmux_teardown_detail: $tmux_teardown_detail, driver_pid: $driver_pid}')"
-    echo "ERROR: driver tmux teardown $TMUX_GATE_STATUS (driver pid ${DRIVER_PID:-<unrecorded>}): $TMUX_GATE_DETAIL" >&2
-    if [[ "$TMUX_GATE_STATUS" == "leaked" ]]; then
-      echo "  kill the survivor(s) with: tmux kill-session -t <name>" >&2
+    if [[ "$TMUX_GATE_STATUS" == "pid_unrecorded" ]]; then
+      # #1828: no "tmux teardown" in this heading — tmux was never asked
+      # anything, and a heading naming it is exactly what used to send an
+      # operator to go look at tmux for a staging-writability problem.
+      echo "ERROR: $TMUX_GATE_DETAIL" >&2
+    else
+      echo "ERROR: driver tmux teardown $TMUX_GATE_STATUS (driver pid ${DRIVER_PID:-<unrecorded>}): $TMUX_GATE_DETAIL" >&2
+      if [[ "$TMUX_GATE_STATUS" == "leaked" ]]; then
+        echo "  kill the survivor(s) with: tmux kill-session -t <name>" >&2
+      fi
     fi
     exit 1
     ;;
