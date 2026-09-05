@@ -1961,7 +1961,29 @@
       border-top: 1px solid currentColor; border-bottom: 1px solid currentColor;
     }
     .history-contrib .label { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .history-contrib .val { margin-left: auto; color: var(--text-bright); }
+    /* A figure is never split across two lines: "6s – 23m46s" broken after
+       the dash reads as two separate numbers rather than as one span. The
+       label shrinks and ellipsises instead, which is the right priority —
+       the figure is the thing being reported. */
+    .history-contrib .val { margin-left: auto; color: var(--text-bright); white-space: nowrap; }
+    /* The two Autonomy key rows are the only rows here carrying BOTH a
+       sentence and a two-ended figure, and one 228px line cannot hold them:
+       the label wants 180px and the value another 79px against a 196px
+       budget once the swatch and gaps are out (the arithmetic is in
+       autonomyLayout.test.js, computed from this stylesheet). Shipped as one
+       flex line it ellipsised the very label whose job is to explain the
+       band, and wrapped the range mid-figure.
+       So the value takes a line of its own, right-aligned in the same column
+       the figures below use, and the label is allowed to WRAP rather than
+       ellipsise: a truncated explanation is unreadable, a wrapped one is
+       merely taller. Both key rows lay out the same way even though `p50`
+       alone would fit — they are a matched pair and must read as one. */
+    .history-contrib li.autonomy-key { flex-wrap: wrap; }
+    .history-contrib li.autonomy-key .label {
+      white-space: normal; overflow: visible; text-overflow: clip;
+      flex: 1 1 auto; min-width: 0;
+    }
+    .history-contrib li.autonomy-key .val { flex: 0 0 100%; margin-left: 0; text-align: right; }
     /* Drilldown affordance: contributors you can click to scope into. */
     .history-contrib li.drillable { cursor: pointer; border-radius: 4px; margin: 0 -6px; padding: 2px 6px; }
     .history-contrib li.drillable:hover { background: var(--surface-hover); }

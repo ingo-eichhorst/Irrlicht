@@ -656,12 +656,20 @@ enum AutonomyPalette {
     ///
     /// Named for a reader who has never seen a percentile — the register the
     /// section already used ("the typical run") — with the p-labels kept in
-    /// front for a reader who has. Same two strings as the web's panel key.
+    /// front for a reader who has. Two noun phrases that read as a pair: the
+    /// chart draws one line and one plane, and these name them as one thing
+    /// and its spread rather than as two measurements.
+    ///
+    /// SAME TWO STRINGS AS THE WEB's panel key (AUTONOMY_KEY in
+    /// platforms/web/historyTab.js), and pinned against it by `the two
+    /// surfaces name the key the same way` — two clients must not explain one
+    /// chart differently. This popover has room the web's 260 pt side panel
+    /// does not, so the length that fits THERE is the length both carry.
     static var keyEntries: [AutonomyKeyEntry] {
         [
             AutonomyKeyEntry(kind: .line, from: "p50", label: "p50 · the typical run",
                              color: seriesColors["p50"] ?? .gray, fill: nil),
-            AutonomyKeyEntry(kind: .band, from: "p95", label: "p5–p95 · where most runs land",
+            AutonomyKeyEntry(kind: .band, from: "p95", label: "p5–p95 · the usual spread",
                              color: edge, fill: band),
         ]
     }

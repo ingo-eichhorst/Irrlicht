@@ -1034,10 +1034,24 @@ const AUTONOMY_ROLE_STYLE = {
 //
 // Named for a reader who has never seen a percentile — the register the panel
 // already used ("the typical run") — with the p-labels kept in front for a
-// reader who has.
+// reader who has. Two noun phrases that read as a pair, which is the point:
+// the chart draws one line and one plane, and these name them as one thing
+// and its spread rather than as two measurements.
+//
+// LENGTH IS A CONSTRAINT HERE, not a style preference. This panel is
+// `flex: 0 0 260px` with 16px padding, so a key row's label gets 204px once
+// its swatch and gap are taken out — about 28 monospace characters at 12px.
+// The band row first shipped as "p5–p95 · where most runs land" (29), which
+// ellipsised in the real panel: the one row whose job is to explain the band
+// cut off its own explanation. `autonomyLayout.test.js` computes that budget
+// from the stylesheet and fails a label that will not fit.
+//
+// Both strings are duplicated in AutonomyPalette.keyEntries on macOS, and
+// `the two surfaces name the key the same way` reads this table against that
+// one — two clients must not explain one chart differently.
 const AUTONOMY_KEY = [
   ['line', 'p50', 'p50 · the typical run'],
-  ['band', 'p95', 'p5–p95 · where most runs land'],
+  ['band', 'p95', 'p5–p95 · the usual spread'],
 ];
 
 // autonomySeriesColor resolves one line's colour against the live theme,
@@ -1594,6 +1608,10 @@ function renderAutonomyPanel() {
   } else {
     for (const row of autonomyPanelRows(s, getComputedStyle(document.documentElement))) {
       const li = document.createElement('li');
+      // The key rows lay out differently from the figure rows below them:
+      // they carry a sentence AND a two-ended figure, which do not fit one
+      // 228px line together. See .history-contrib li.autonomy-key.
+      if (row.kind) li.className = 'autonomy-key';
       const dot = document.createElement('span');
       // The two key swatches take the SHAPE of what they stand for — a rule
       // for the line, a bounded plane for the band. A pair of identical dots

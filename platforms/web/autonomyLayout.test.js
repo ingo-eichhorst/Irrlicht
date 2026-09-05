@@ -24,6 +24,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { JSDOM } from 'jsdom';
 import { WEB_DIR } from './shippedFiles.testutil.js';
+import { autonomyPanelRows, autonomyDuration } from './historyTab.js';
 
 function read(name) {
   const body = readFileSync(join(WEB_DIR, name), 'utf8');
@@ -150,5 +151,170 @@ describe('each Autonomy control sits with the element it changes', () => {
   test('a document missing a picker fails loudly instead of passing', () => {
     const empty = new JSDOM('<div></div>').window.document;
     expect(() => pickersAreSeparated(empty)).toThrow(/fail-loud/);
+  });
+});
+
+// The one px value in this file, and it is an ESTIMATE, stated as one: the
+// advance of a monospace glyph as a fraction of its font-size. 0.6em is the
+// figure for SF Mono, Menlo, Consolas and Cascadia Code — every family in
+// --font-mono — and jsdom cannot measure text, so nothing here can produce a
+// real metric. It is used only to show a label CLEARS its column with room to
+// spare, so a face a few percent wider than the estimate still fits.
+const MONO_ADVANCE_EM = 0.6;
+
+// One declaration out of a rule body, as a number of px. Throws rather than
+// returning a default: a property this cannot find is one whose value nothing
+// below can be trusted to have computed.
+function px(body, property, selector) {
+  const m = new RegExp('(?:^|[;{\\s])' + property + '\\s*:\\s*([^;]+)').exec(body);
+  if (!m) {
+    throw new Error(`fail-loud: \`${selector}\` declares no ${property} — the width budget cannot be computed`);
+  }
+  const value = /(-?\d+(?:\.\d+)?)px/.exec(m[1]);
+  if (!value) {
+    throw new Error(`fail-loud: \`${selector}\`'s ${property} is "${m[1].trim()}", which is not a px length`);
+  }
+  return Number(value[1]);
+}
+
+// The panel's geometry, read from the stylesheet rather than typed here — so
+// narrowing the panel, fattening the swatch or widening the gap fails this
+// test instead of silently re-truncating the label.
+function panelGeometry() {
+  const panel = ruleBody('.history-panel');
+  const flex = /flex:\s*\d+\s+\d+\s+(\d+(?:\.\d+)?)px/.exec(panel);
+  if (!flex) {
+    throw new Error('fail-loud: .history-panel has no fixed px flex-basis — the width budget cannot be computed');
+  }
+  const content = Number(flex[1]) - 2 * px(panel, 'padding', '.history-panel');
+  const row = ruleBody('.history-contrib li');
+  const swatch = px(ruleBody('.history-contrib .dot.autonomy-band'), 'width', '.history-contrib .dot.autonomy-band');
+  const gap = px(row, 'gap', '.history-contrib li');
+  return {
+    content,
+    fontSize: px(row, 'font-size', '.history-contrib li'),
+    // A key row's label shares its line with the swatch and one gap; its
+    // value has a line to itself, so the value gets the whole content width.
+    labelLine: content - swatch - gap,
+  };
+}
+
+describe('the key rows fit the panel they are rendered in', () => {
+  // THE DEFECT: at the shipped width the band row rendered as
+  // `p5–p95 · where most runs…` with an ellipsis, and its value broke across
+  // two lines as `6s –` / `23m46s`. So the one row whose whole job is to
+  // explain the band cut off its own explanation, and a single span read as
+  // two numbers. jsdom has no layout engine, so this asserts the two things
+  // that CAUSE that geometry — the width budget, and the CSS that decides
+  // what happens when something exceeds it.
+  const geometry = panelGeometry();
+  const width = (text) => text.length * geometry.fontSize * MONO_ADVANCE_EM;
+  const unstyled = { getPropertyValue: () => '' };
+  const keyRows = () => autonomyPanelRows(
+    { p95: 1426, p50: 210, p5: 6, min: 4, max: 8040, count: 312 }, unstyled,
+  ).filter((r) => r.kind);
+
+  test('the panel is wide enough for every key label on one line', () => {
+    expect(keyRows()).toHaveLength(2);
+    for (const row of keyRows()) {
+      expect(width(row.label), `"${row.label}" (${row.label.length} chars) overruns the `
+        + `${geometry.labelLine}px a key row's label gets`).toBeLessThan(geometry.labelLine);
+    }
+  });
+
+  // The QA case verbatim: p5 6s, p95 23m46s. It is the value that broke, and
+  // it breaks again the moment a label is allowed to crowd it.
+  test('the reported row fits: label and value each clear their line', () => {
+    const band = keyRows()[1];
+    expect(band.value).toBe('6s – 23m46s');
+    expect(width(band.label)).toBeLessThan(geometry.labelLine);
+    expect(width(band.value)).toBeLessThan(geometry.content);
+  });
+
+  // …and the widest figure this formatter can ever produce, so the check is
+  // not pinned to one lucky data set. autonomyDuration's longest output is a
+  // six-character `NNdNNh`, twice, with the separator between.
+  test('even the widest range this formatter can emit fits its line', () => {
+    const widest = autonomyDuration(12 * 86400 + 23 * 3600) + ' – ' + autonomyDuration(12 * 86400 + 23 * 3600);
+    expect(widest).toBe('12d23h – 12d23h');
+    expect(width(widest)).toBeLessThan(geometry.content);
+  });
+
+  // THE COMMITTED MUTATION: the label as it shipped. It is one character over
+  // the column, which is exactly why nobody caught it by eye — and it is the
+  // string the check has to reject, or the check is decoration.
+  test('the check rejects the label that shipped truncated', () => {
+    expect(width('p5–p95 · where most runs land')).toBeGreaterThan(geometry.labelLine);
+    // …while the one that replaced it clears the column with room to spare,
+    // so a mono face a little wider than the estimate still fits.
+    expect(width('p5–p95 · the usual spread')).toBeLessThan(geometry.labelLine * 0.95);
+  });
+
+  test('a stylesheet the budget cannot be read from fails loudly', () => {
+    expect(() => px('color: red;', 'width', '.nope')).toThrow(/fail-loud/);
+    expect(() => px('width: 50%;', 'width', '.nope')).toThrow(/fail-loud/);
+    expect(() => ruleBody('.history-contrib li.no-such-key')).toThrow(/fail-loud/);
+  });
+});
+
+describe('nothing in the panel truncates a key label or splits a figure', () => {
+  // The width budget above says the label FITS. These say what happens if it
+  // ever stops fitting — it wraps, and the reader still gets the whole
+  // sentence. A truncated explanation is unreadable; a wrapped one is merely
+  // taller, and this row explains the largest area of ink on the chart.
+  test('a key row’s label wraps rather than ellipsising', () => {
+    const body = ruleBody('.history-contrib li.autonomy-key .label');
+    expect(body).toMatch(/white-space:\s*normal/);
+    expect(body).toMatch(/overflow:\s*visible/);
+    expect(body).not.toMatch(/text-overflow:\s*ellipsis/);
+  });
+
+  test('no figure in the panel is ever split across lines', () => {
+    expect(ruleBody('.history-contrib .val')).toMatch(/white-space:\s*nowrap/);
+  });
+
+  // The value gets a line of its own — which is what makes the label's line
+  // 204px rather than the 196px it would have to share.
+  test('a key row’s value takes a line of its own, right-aligned', () => {
+    expect(ruleBody('.history-contrib li.autonomy-key')).toMatch(/flex-wrap:\s*wrap/);
+    const val = ruleBody('.history-contrib li.autonomy-key .val');
+    expect(val).toMatch(/flex:\s*0\s+0\s+100%/);
+    expect(val).toMatch(/text-align:\s*right/);
+  });
+
+  // The rows have to CARRY the class the rules above are written against, or
+  // every one of them is asserting about markup nothing renders.
+  test('the panel actually marks its key rows', () => {
+    const list = new JSDOM('<ul id="l"></ul>').window.document.getElementById('l');
+    for (const row of autonomyPanelRows({ p95: 60, p50: 30, p5: 10, min: 1, max: 99, count: 5 },
+      { getPropertyValue: () => '' })) {
+      const li = list.ownerDocument.createElement('li');
+      if (row.kind) li.className = 'autonomy-key';
+      list.appendChild(li);
+    }
+    // Two key rows, three unswatched figures — the same split renderAutonomyPanel makes.
+    expect(list.querySelectorAll('li.autonomy-key')).toHaveLength(2);
+    expect(js).toMatch(/li\.className\s*=\s*'autonomy-key'/);
+  });
+});
+
+describe('the two surfaces name the key the same way', () => {
+  // Two clients must not explain one chart differently. Reads the Swift
+  // source rather than comparing against a hand-typed literal — the same
+  // technique sessionError.test.js uses for Tokens.swift, and the twin of
+  // macOS's own testBoundaryLabelsMatchTheWebs.
+  const swift = readFileSync(
+    join(WEB_DIR, '..', 'macos', 'Irrlicht', 'Views', 'HistoryAutonomyView.swift'), 'utf8',
+  );
+
+  test('AutonomyPalette.keyEntries carries the web’s two labels verbatim', () => {
+    const entries = /static var keyEntries: \[AutonomyKeyEntry\] \{([\s\S]*?)\n    \}/.exec(swift);
+    expect(entries, 'fail-loud: no AutonomyPalette.keyEntries found in HistoryAutonomyView.swift').not.toBeNull();
+    const labels = [...entries[1].matchAll(/label: "([^"]+)"/g)].map((m) => m[1]);
+    expect(labels, 'fail-loud: parsed no labels out of keyEntries').toHaveLength(2);
+    const web = autonomyPanelRows(undefined, { getPropertyValue: () => '' })
+      .filter((r) => r.kind)
+      .map((r) => r.label);
+    expect(labels).toEqual(web);
   });
 });

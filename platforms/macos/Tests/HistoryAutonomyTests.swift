@@ -266,7 +266,7 @@ final class HistoryAutonomyTests: XCTestCase {
     func testTheKeyExplainsItselfInWords() {
         let entries = AutonomyPalette.keyEntries
         XCTAssertEqual(entries[0].label, "p50 · the typical run")
-        XCTAssertEqual(entries[1].label, "p5–p95 · where most runs land")
+        XCTAssertEqual(entries[1].label, "p5–p95 · the usual spread")
     }
 
     /// The band is a WEIGHT of the line's hue, not a fourth colour. Were it an
