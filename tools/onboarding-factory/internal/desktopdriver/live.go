@@ -202,6 +202,7 @@ func waitForComposerControls(
 	var controls map[string]helperSelector
 	var lastMismatch error
 	trusted := false
+	sawNoPrompt := false
 	err := poll(ctx, "verified Desktop composer controls", func() (bool, error) {
 		elements, err := inspect(ctx)
 		if err != nil {
@@ -216,33 +217,58 @@ func waitForComposerControls(
 		// is new on every run. Answer it ONCE: a second prompt during one
 		// composer wait is not this run's own scratch folder being trusted, so
 		// it is a stop rather than another click.
-		if confirm, prompted := trustPromptButton(elements); prompted {
+		confirm, prompted := trustPromptButton(elements)
+		if !prompted {
+			// The wait has now seen the app with no trust sheet up. Only a
+			// prompt that appears AFTER this can be the one the driver's own
+			// deep link raised.
+			sawNoPrompt = true
+		}
+		if prompted {
+			if !sawNoPrompt {
+				// A sheet that was already up when this wait began is not ours.
+				// The tree does not name the folder it asks about, so clicking
+				// it would grant persistent trust to a workspace someone else
+				// opened — a grant nothing here restores, VerifyBaseline cannot
+				// see, and the evidence does not record. Refuse by name.
+				return false, fmt.Errorf(
+					"a Claude Desktop workspace trust prompt was already open before this run "+
+						"asked for %q; refusing to answer a prompt this driver did not raise",
+					workspace)
+			}
 			if trusted {
 				return false, fmt.Errorf(
 					"Claude Desktop raised a second workspace trust prompt while waiting for the composer for %q; refusing to answer it",
 					workspace)
 			}
-			if err := click(ctx, confirm, helperPostcondition{
+			err := click(ctx, confirm, helperPostcondition{
 				Selector: confirm, Condition: "absent", TimeoutMilliseconds: 10_000,
-			}); err != nil {
-				// A failed click is never fatal here. Measured against a live
-				// 1.46388.4 sheet, one grant produced this in sequence:
-				// stale_control (the hit test landed off an animating button),
-				// then action_failed (the sheet was dismissing under the
-				// click), then control_missing (it was gone). Classifying those
-				// codes is guesswork; the next tick simply looks again, and
-				// either the prompt is still there — retry — or it is not, and
-				// the composer check proceeds. The poll's own deadline is what
-				// fails loudly, naming this error as its last observation.
-				//
-				// The once-only guard stays unspent: it counts confirmed
-				// dismissals, and this was not one.
+			})
+			// The guard counts clicks that may have LANDED, not confirmed
+			// dismissals. The helper posts the mouse event and only then
+			// verifies its postcondition, so on this side "the click failed"
+			// and "the click worked but a second queued sheet kept the button
+			// present" are the same error. Counting confirmations under-counts
+			// exactly the case this guard exists for, and the driver went on to
+			// grant trust to a second, different folder and report success.
+			//
+			// stale_control is the one provably pre-click failure: the helper's
+			// hit test refuses before it posts anything (its own guard against
+			// clicking the wrong control), and a live 1.46388.4 sheet produces
+			// it while animating in. That one is retried; everything else
+			// spends the guard.
+			if err != nil && isPreClickRefusal(err) {
 				lastMismatch = fmt.Errorf("answer Desktop workspace trust prompt: %w", err)
 				return false, nil
 			}
-			// Counted only on a CONFIRMED dismissal: "answer at most once" is
-			// about grants that actually happened, not attempts.
 			trusted = true
+			if err != nil {
+				// It may have landed. Stop clicking, keep looking: the prompt
+				// either clears and the composer check proceeds, or it does not
+				// and the branch above refuses the next one by name.
+				lastMismatch = fmt.Errorf("answer Desktop workspace trust prompt: %w", err)
+				return false, nil
+			}
 			recordStep("trust-workspace-prompt-answered")
 			lastMismatch = errors.New("answered the Desktop workspace trust prompt; waiting for the composer")
 			return false, nil
@@ -328,6 +354,14 @@ func poll(ctx context.Context, name string, observe func() (bool, error)) error 
 		case <-ticker.C:
 		}
 	}
+}
+
+// isPreClickRefusal reports whether a click failed BEFORE the helper posted the
+// mouse event, so nothing can have happened in the app. Only stale_control
+// qualifies: the helper resolves the control, hit-tests the click point, and
+// refuses when the point does not land on it — all before the click.
+func isPreClickRefusal(err error) bool {
+	return strings.Contains(err.Error(), "stale_control")
 }
 
 // axInvalidUIElement is kAXErrorInvalidUIElement. The helper walks the tree
