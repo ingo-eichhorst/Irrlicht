@@ -16,9 +16,9 @@
 # Codes:
 #   cli_not_found, cli_too_old, auth_failed, daemon_dirty, daemon_not_ready,
 #   working_tree_dirty, transcript_missing, timeout, daemon_crashed,
-#   desktop_evidence_invalid, driver_session_leaked,
-#   driver_teardown_unverifiable, driver_pid_unrecorded, replay_failed,
-#   unknown, managed_file_restore_failed
+#   desktop_evidence_invalid, managed_file_restore_failed,
+#   driver_session_leaked, driver_teardown_unverifiable,
+#   driver_pid_unrecorded, replay_failed, unknown
 #
 # THE MANIFEST ARMS ARE KEPT IN SYNC MECHANICALLY (#1825). Every arm label in
 # the `case "$err_code"` block below is a string some OTHER script types into a
