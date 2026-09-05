@@ -6,8 +6,10 @@ import XCTest
 ///
 /// Two kinds, and they are two different limits:
 ///
-///   - STILL RUNNING — the run has not ended, so its length is unknowable.
-///     Shown on the strip, deliberately absent from the percentiles.
+///   - STILL RUNNING — the run has not ended, so its length is how long it has
+///     lasted SO FAR. It COUNTS towards the longest run (the section reports a
+///     maximum, and "already lasted 3h" is true) and is marked "still going"
+///     rather than presented as final.
 ///   - STARTED BEFORE IRRLICHT WAS WATCHING — the run has finished, but its
 ///     start is where Irrlicht began watching. Those ARE samples; dropping them
 ///     is what left 5 of a day's 35 runs on the record.
@@ -18,29 +20,27 @@ final class HistoryAutonomyMeasurementTests: XCTestCase {
 
     // MARK: Decoding
 
-    func testMeasurementAndRowMarksDecode() throws {
+    func testMeasurementAndPanelMarksDecode() throws {
         let json = """
-        {"window":"24h","chart":"autonomy_spans","start":0,"end":100,
-         "spans":[{"start":1,"end":9,"project":"a","session":"done","reason":"ready","kind":"top"},
-                  {"start":20,"end":100,"project":"a","session":"live","kind":"top","running":true},
-                  {"start":30,"end":60,"project":"a","session":"partial","reason":"unknown",
-                   "kind":"top","start_lower_bound":true}],
-         "projects":["a"],"earliest_span":1,"total_recorded":3,"truncated":false,
+        {"window":"30d","chart":"autonomy_projects","start":0,"end":100,"bucket_seconds":86400,
+         "bucket_starts":[0],
+         "panels":[{"project":"a","longest":10800,"longest_running":true,"total_seconds":10860,
+                    "runs":2,"peak":1,
+                    "buckets":[{"ts":0,"longest":10800,"running":true,"peak":1}]}],
+         "panel_limit":5,"more_projects":0,
+         "summary":{"longest":10800,"longest_running":true,"longest_project":"a","runs":2,"projects":1},
+         "earliest_span":1,"total_recorded":3,
          "measurement":{"running":1,"start_lower_bound":1}}
         """
-        let s = try JSONDecoder().decode(HistoryAutonomySpansResponse.self, from: Data(json.utf8))
-        XCTAssertEqual(s.measurementOrNone.running, 1)
-        XCTAssertEqual(s.measurementOrNone.lowerBoundStart, 1)
-
-        // A finished, fully measured row claims neither.
-        XCTAssertFalse(s.spans[0].isRunning)
-        XCTAssertFalse(s.spans[0].hasLowerBoundStart)
-        // The in-progress row is marked, and only as running.
-        XCTAssertTrue(s.spans[1].isRunning)
-        XCTAssertFalse(s.spans[1].hasLowerBoundStart)
-        // The unmeasured-start row is marked, and only as that.
-        XCTAssertTrue(s.spans[2].hasLowerBoundStart)
-        XCTAssertFalse(s.spans[2].isRunning)
+        let d = try JSONDecoder().decode(HistoryAutonomyProjectsResponse.self, from: Data(json.utf8))
+        XCTAssertEqual(d.measurementOrNone.running, 1)
+        XCTAssertEqual(d.measurementOrNone.lowerBoundStart, 1)
+        // A run in progress IS the longest run, and it is marked — on the panel
+        // and on the bucket the line draws it at.
+        XCTAssertTrue(d.panels[0].longestRunning)
+        XCTAssertTrue(d.panels[0].buckets[0].running)
+        XCTAssertTrue(d.summary.longestRunning)
+        XCTAssertTrue(d.panels[0].headline.contains("still going"), d.panels[0].headline)
     }
 
     /// A payload from a daemon that predates the field decodes, and reads as
@@ -48,12 +48,12 @@ final class HistoryAutonomyMeasurementTests: XCTestCase {
     /// could not record a run in progress never wrote one.
     func testAnAbsentMeasurementBlockReadsAsNothingMarked() throws {
         let json = """
-        {"window":"30d","chart":"autonomy_duration","start":1,"end":2,"bucket_seconds":86400,
-         "bucket_starts":[1],"buckets":[],
-         "summary":{"p95":100,"p50":40,"p5":5,"min":1,"max":100,"count":33},
-         "sample_floor":20,"earliest_span":1700000000,"total_recorded":33}
+        {"window":"30d","chart":"autonomy_projects","start":1,"end":2,"bucket_seconds":86400,
+         "bucket_starts":[1],"panels":[],"panel_limit":5,"more_projects":0,
+         "summary":{"longest":0,"runs":33,"projects":2},
+         "earliest_span":1700000000,"total_recorded":33}
         """
-        let d = try JSONDecoder().decode(HistoryAutonomyDurationResponse.self, from: Data(json.utf8))
+        let d = try JSONDecoder().decode(HistoryAutonomyProjectsResponse.self, from: Data(json.utf8))
         XCTAssertNil(d.measurement)
         XCTAssertEqual(d.measurementOrNone, .none)
         XCTAssertFalse(d.measurementOrNone.any)
@@ -72,14 +72,18 @@ final class HistoryAutonomyMeasurementTests: XCTestCase {
         XCTAssertNil(AutonomyFormat.measurementLine(measurement()))
     }
 
-    /// A running run is SHOWN and left OUT of the percentiles, and the sentence
-    /// has to say both — otherwise a reader who can see a 3-hour run on the
-    /// strip is left wondering why the median did not move.
-    func testARunningRunIsNamedAsGoingAndAsAbsentFromThePercentiles() throws {
+    /// A running run COUNTS towards the longest and is MARKED, and the
+    /// sentence has to say both — otherwise a reader who can see "longest 3h"
+    /// beside a project is left unsure whether that figure is finished.
+    func testARunningRunIsNamedAsGoingAndAsCounted() throws {
         let line = try XCTUnwrap(AutonomyFormat.measurementLine(measurement(running: 1)))
         XCTAssertTrue(line.contains("1 run is still going"), line)
         XCTAssertTrue(line.contains("SO FAR"), line)
-        XCTAssertTrue(line.contains("left out of the percentiles"), line)
+        XCTAssertTrue(line.contains("counts towards the longest run"), line)
+        // The percentile-era wording must be gone with the percentiles: a
+        // sentence claiming an exclusion that no longer happens is an alibi for
+        // a wrong number.
+        XCTAssertFalse(line.contains("percentile"), line)
     }
 
     func testAnUnmeasuredStartSaysWhichEndIsTheEstimate() throws {

@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"net/http/httptest"
 	"reflect"
 	"testing"
 	"time"
@@ -19,29 +18,10 @@ import (
 // is exactly the "wrong number with nothing on screen saying so" this feature
 // exists to avoid.
 
-func decodeAutonomyDuration(t *testing.T, rec *httptest.ResponseRecorder) historyAutonomyDurationResponse {
-	t.Helper()
-	var resp historyAutonomyDurationResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode duration payload: %v", err)
-	}
-	return resp
-}
-
-func decodeAutonomySpans(t *testing.T, rec *httptest.ResponseRecorder) historyAutonomySpansResponse {
-	t.Helper()
-	var resp historyAutonomySpansResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode spans payload: %v", err)
-	}
-	return resp
-}
-
-// Both Autonomy payloads must carry the provenance block, and the SAME one:
-// the section draws two elements over one data source, and a strip claiming
-// "9 reconstructed" under a chart claiming something else is worse than
-// neither claiming anything.
-func TestAutonomyProvenance_IsEchoedByBothElements(t *testing.T) {
+// The panels payload carries the provenance block verbatim: the section draws
+// five panels over one data source, and a figure whose provenance is stated
+// once for the whole stack cannot disagree with itself panel by panel.
+func TestAutonomyProvenance_IsEchoedOnTheWire(t *testing.T) {
 	now := time.Now().Unix()
 	store := &fakeAutonomyStore{
 		spans:    []outbound.AutonomySpan{spanEndingAt(now-3600, 300, "proj", session.StateReady)},
@@ -54,17 +34,12 @@ func TestAutonomyProvenance_IsEchoedByBothElements(t *testing.T) {
 		},
 	}
 
-	duration := decodeAutonomyDuration(t, getAutonomy(t, store, "chart=autonomy_duration&window=30d"))
-	spans := decodeAutonomySpans(t, getAutonomy(t, store, "chart=autonomy_spans&window=24h"))
-
-	if !reflect.DeepEqual(duration.Provenance, spans.Provenance) {
-		t.Fatalf("the two elements disagree about provenance: %+v vs %+v", duration.Provenance, spans.Provenance)
+	got := decodeAutonomy(t, store, "chart=autonomy_projects&window=30d")
+	if got.Provenance.Reconstructed != 9 || got.Provenance.CostDerived != 4 {
+		t.Fatalf("provenance = %+v, want the store's counts echoed unchanged", got.Provenance)
 	}
-	if duration.Provenance.Reconstructed != 9 || duration.Provenance.CostDerived != 4 {
-		t.Fatalf("provenance = %+v, want the store's counts echoed unchanged", duration.Provenance)
-	}
-	if duration.Provenance.LiveSince != now-7200 {
-		t.Fatalf("LiveSince = %d, want %d", duration.Provenance.LiveSince, now-7200)
+	if got.Provenance.LiveSince != now-7200 {
+		t.Fatalf("LiveSince = %d, want %d", got.Provenance.LiveSince, now-7200)
 	}
 }
 
@@ -81,7 +56,7 @@ func TestAutonomyProvenance_AllLiveWindowReportsZeroAndSaysSo(t *testing.T) {
 		earliest: now - 86400,
 		total:    1,
 	}
-	rec := getAutonomy(t, store, "chart=autonomy_duration&window=30d")
+	rec := getAutonomy(t, store, "chart=autonomy_projects&window=30d")
 
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
@@ -90,30 +65,43 @@ func TestAutonomyProvenance_AllLiveWindowReportsZeroAndSaysSo(t *testing.T) {
 	if _, ok := raw["provenance"]; !ok {
 		t.Fatal("the payload omits `provenance` entirely — an absent block and a zero one must not look alike")
 	}
-	duration := decodeAutonomyDuration(t, rec)
-	if duration.Provenance.Reconstructed != 0 || duration.Provenance.CostDerived != 0 {
-		t.Fatalf("provenance = %+v, want zeroes on an all-live window", duration.Provenance)
+	got := decodeAutonomy(t, store, "chart=autonomy_projects&window=30d")
+	if got.Provenance.Reconstructed != 0 || got.Provenance.CostDerived != 0 {
+		t.Fatalf("provenance = %+v, want zeroes on an all-live window", got.Provenance)
 	}
 }
 
-// A span reconstructed from the cost log reaches the strip carrying `unknown`,
-// and `unknown` must survive the trip unchanged — neither normalized into a
-// real end reason on the way out, nor blanked (which would make it
-// indistinguishable from an old row whose reason was never recorded).
-func TestAutonomySpans_UnknownReasonSurvivesTheWire(t *testing.T) {
+// `reason` STAYS A RECORDED FIELD even though nothing renders it any more
+// (#1905 redesign). It is the only fact about a run that cannot be recovered
+// after the event, so the section keeps recording it — and `unknown` in
+// particular must survive unchanged, neither normalized into a real end reason
+// nor blanked, which would make a cost-derived span indistinguishable from an
+// old row whose reason was never recorded at all.
+func TestAutonomyReason_IsStillCarriedByEveryStoredSpan(t *testing.T) {
 	now := time.Now().Unix()
+	spans := []outbound.AutonomySpan{
+		spanEndingAt(now-3600, 300, "proj", session.AutonomyReasonUnknown),
+		spanEndingAt(now-1800, 300, "proj", session.StateWaiting),
+	}
 	store := &fakeAutonomyStore{
-		spans:      []outbound.AutonomySpan{spanEndingAt(now-3600, 300, "proj", session.AutonomyReasonUnknown)},
-		total:      1,
+		spans:      spans,
+		total:      2,
 		provenance: outbound.AutonomySpanProvenance{Reconstructed: 1, CostDerived: 1},
 	}
-	spans := decodeAutonomySpans(t, getAutonomy(t, store, "chart=autonomy_spans&window=24h"))
-
-	if len(spans.Spans) != 1 {
-		t.Fatalf("spans = %d, want 1", len(spans.Spans))
+	// The panels payload deliberately carries no per-run rows, so what is pinned
+	// here is that the field reaches the handler intact and is neither rewritten
+	// nor required by it.
+	got := decodeAutonomy(t, store, "chart=autonomy_projects&window=30d")
+	if panelFor(t, got, "proj").Runs != 2 {
+		t.Fatalf("a span carrying %q was dropped — the section counts every run whatever ended it",
+			session.AutonomyReasonUnknown)
 	}
-	if spans.Spans[0].Reason != session.AutonomyReasonUnknown {
-		t.Fatalf("reason = %q, want %q", spans.Spans[0].Reason, session.AutonomyReasonUnknown)
+	if store.spans[0].Reason != session.AutonomyReasonUnknown {
+		t.Fatalf("reason = %q, want %q — the handler must not rewrite what the store holds",
+			store.spans[0].Reason, session.AutonomyReasonUnknown)
+	}
+	if session.IsAutonomyEndReason(session.AutonomyReasonUnknown) {
+		t.Fatal("`unknown` reads back as a real end reason")
 	}
 }
 
@@ -234,16 +222,16 @@ func TestAutonomyBoundaries_ReachTheWire(t *testing.T) {
 			},
 		},
 	}
-	duration := decodeAutonomyDuration(t, getAutonomy(t, store, "chart=autonomy_duration&window=30d"))
-	if len(duration.Provenance.Boundaries) != 2 {
-		t.Fatalf("boundaries = %+v, want 2", duration.Provenance.Boundaries)
+	got := decodeAutonomy(t, store, "chart=autonomy_projects&window=30d")
+	if len(got.Provenance.Boundaries) != 2 {
+		t.Fatalf("boundaries = %+v, want 2", got.Provenance.Boundaries)
 	}
-	if duration.Provenance.Boundaries[1].To != autonomyEraLive {
+	if got.Provenance.Boundaries[1].To != autonomyEraLive {
 		t.Fatalf("the measured era is named %q on the wire, want %q",
-			duration.Provenance.Boundaries[1].To, autonomyEraLive)
+			got.Provenance.Boundaries[1].To, autonomyEraLive)
 	}
-	if duration.Provenance.LiveSince != now-100000 {
-		t.Fatalf("LiveSince = %d, want the measured era's start", duration.Provenance.LiveSince)
+	if got.Provenance.LiveSince != now-100000 {
+		t.Fatalf("LiveSince = %d, want the measured era's start", got.Provenance.LiveSince)
 	}
 	// `live` must never be a row's source, or a measured row would read back
 	// as reconstructed.
@@ -268,7 +256,7 @@ func TestAutonomyBoundaries_EmptyListIsPresentOnTheWire(t *testing.T) {
 		provenance: outbound.AutonomySpanProvenance{EraStarts: map[string]int64{"": now - 100000}},
 	}
 	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(getAutonomy(t, store, "chart=autonomy_spans&window=24h").Body.Bytes(), &raw); err != nil {
+	if err := json.Unmarshal(getAutonomy(t, store, "chart=autonomy_projects&window=30d").Body.Bytes(), &raw); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	var prov map[string]json.RawMessage
@@ -277,25 +265,5 @@ func TestAutonomyBoundaries_EmptyListIsPresentOnTheWire(t *testing.T) {
 	}
 	if _, ok := prov["boundaries"]; !ok {
 		t.Fatal("the payload omits `boundaries` entirely")
-	}
-}
-
-// `unknown` ranks below every MEASURED reason on the strip's collapse ladder,
-// so one reconstructed span can never grey out a column that also holds a real
-// error. It is deliberately not a session state, so this falls out of
-// AutonomyReasonPriority's unrecognized-reason branch rather than needing a
-// case of its own — and that is what is being pinned.
-func TestAutonomyUnknown_RanksBelowEveryMeasuredReason(t *testing.T) {
-	reasons := session.AutonomyEndReasons()
-	if len(reasons) == 0 {
-		t.Fatal("session.AutonomyEndReasons() is empty — cannot verify anything")
-	}
-	for _, r := range reasons {
-		if session.AutonomyReasonPriority(session.AutonomyReasonUnknown) >= session.AutonomyReasonPriority(r) {
-			t.Fatalf("`unknown` outranks or ties %q on the collapse ladder", r)
-		}
-	}
-	if session.IsAutonomyEndReason(session.AutonomyReasonUnknown) {
-		t.Fatal("`unknown` reads back as a real end reason")
 	}
 }

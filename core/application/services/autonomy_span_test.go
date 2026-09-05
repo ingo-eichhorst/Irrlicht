@@ -295,38 +295,6 @@ func TestAutonomySpan_NoStoreStillClearsTheOpenSpan(t *testing.T) {
 	}
 }
 
-// TestAutonomyReasonLadderMatchesHistoryBar pins the strip's collapse ladder
-// against the session-history strip's (#1805), which is where the order came
-// from. Two hand-written ladders in one repo is one too many; this is what
-// stops them drifting.
-func TestAutonomyReasonLadderMatchesHistoryBar(t *testing.T) {
-	pairs := []struct {
-		state       string
-		historyBar  int8
-		autonomyBar int
-	}{
-		{session.StateError, statePriorityError, session.AutonomyReasonPriority(session.StateError)},
-		{session.StateWaiting, statePriorityWaiting, session.AutonomyReasonPriority(session.StateWaiting)},
-		{session.StateReady, statePriorityReady, session.AutonomyReasonPriority(session.StateReady)},
-	}
-	for i := 1; i < len(pairs); i++ {
-		prev, cur := pairs[i-1], pairs[i]
-		if prev.historyBar <= cur.historyBar {
-			t.Fatalf("the history bar's ladder no longer ranks %q above %q — this test's premise is gone",
-				prev.state, cur.state)
-		}
-		if prev.autonomyBar <= cur.autonomyBar {
-			t.Errorf("the autonomy strip ranks %q (%d) at or below %q (%d), but the history bar ranks it "+
-				"above — one error in a column must paint the whole column",
-				prev.state, prev.autonomyBar, cur.state, cur.autonomyBar)
-		}
-	}
-	if session.AutonomyReasonPriority("nonsense") >= session.AutonomyReasonPriority(session.StateReady) {
-		t.Error("an unrecognized reason must rank below every real one, or a build that cannot name a " +
-			"state outranks activity it can")
-	}
-}
-
 func TestAutonomyEndReasons_DerivedFromTheVocabulary(t *testing.T) {
 	reasons := session.AutonomyEndReasons()
 	if len(reasons) != len(session.CanonicalStates())-1 {

@@ -507,8 +507,8 @@ func historyChartKnown(w http.ResponseWriter, chart string) bool {
 	case "state":
 		// implemented (#981, the "Activity Matrix" — time-in-state, the
 		// optional second half of #751) — handled after range resolution below
-	case chartAutonomyDuration, chartAutonomySpans:
-		// implemented (#1905, the Autonomy section's two elements) — each
+	case chartAutonomyProjects:
+		// implemented (#1905, the Autonomy section's per-project panels) — it
 		// brings its OWN ?window= vocabulary, resolved in resolveHistoryQuery
 	default:
 		http.Error(w, "unknown chart: "+chart, http.StatusBadRequest)
@@ -713,11 +713,11 @@ func resolveHistoryWindow(w http.ResponseWriter, q url.Values, chart string) (ra
 	case isAutonomyChart(chart):
 		window := q.Get("window")
 		if window == "" {
-			window = autonomyDefaultWindow(chart)
+			window = autonomyDefaultWindow()
 		}
-		bs, s, e, known := resolveAutonomyWindow(chart, window)
+		bs, s, e, known := resolveAutonomyWindow(window)
 		if !known {
-			http.Error(w, autonomyWindowError(chart), http.StatusBadRequest)
+			http.Error(w, autonomyWindowError(), http.StatusBadRequest)
 			return "", 0, 0, 0, false
 		}
 		return window, s, e, bs, true
@@ -823,12 +823,12 @@ type historyChartDeps struct {
 // why they resolve here rather than downstream of it.
 func serveNonCostHistoryChart(w http.ResponseWriter, r *http.Request, hq historyQuery, deps historyChartDeps) bool {
 	switch hq.chart {
-	case chartAutonomyDuration:
+	case chartAutonomyProjects:
 		// Autonomy (#1905) reads the always-on span log, never the opt-in
-		// recordings — see outbound.AutonomySpanStore for why that matters.
-		serveHistoryAutonomyDurationChart(w, deps.autonomy, hq.rangeKey, hq.seriesQuery.BucketSeconds, hq.start, hq.end)
-	case chartAutonomySpans:
-		serveHistoryAutonomySpansChart(w, deps.autonomy, hq.rangeKey, hq.start, hq.end)
+		// recordings — see outbound.AutonomySpanStore for why that matters, and
+		// history_autonomy_concurrency.go for why the concurrency figure is
+		// derived from those same spans rather than from ConcurrencyReader.
+		serveHistoryAutonomyProjectsChart(w, deps.autonomy, hq.rangeKey, hq.seriesQuery.BucketSeconds, hq.start, hq.end)
 	case "yield":
 		// A per-project aggregate over completed sessions, not a time series (#373).
 		writeHistoryJSON(w, buildYieldResponse(hq.rangeKey, hq.group, hq.start, hq.end, deps.sessions))

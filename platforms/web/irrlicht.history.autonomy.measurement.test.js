@@ -7,8 +7,10 @@ import { autonomyMeasurementNote } from './historyTab.js'
 //
 // Two kinds, and they are two different limits:
 //
-//   - STILL RUNNING — the run has not ended, so its length is unknowable. Shown
-//     on the strip, deliberately absent from the percentiles.
+//   - STILL RUNNING — the run has not ended, so its length is how long it has
+//     lasted SO FAR. It COUNTS towards the longest run (the section reports a
+//     maximum, and "already lasted 3h" is true) and is marked "still going"
+//     rather than presented as final.
 //   - STARTED BEFORE IRRLICHT WAS WATCHING — the run has finished, but its
 //     start is where Irrlicht began watching. Those ARE samples; dropping them
 //     is what left 5 of a day's 35 runs on the record.
@@ -28,14 +30,18 @@ describe('autonomyMeasurementNote', () => {
     expect(autonomyMeasurementNote(undefined)).toBe('')
   })
 
-  // A running run is SHOWN and left OUT of the percentiles, and the sentence
-  // has to say both — otherwise a reader who can see a 3-hour run on the strip
-  // is left wondering why the median did not move.
-  test('a running run is named as still going AND as absent from the percentiles', () => {
+  // A running run COUNTS towards the longest and is MARKED, and the sentence
+  // has to say both — otherwise a reader who can see "longest 3h" beside a
+  // project is left unsure whether that figure is finished.
+  test('a running run is named as still going AND as counted', () => {
     const line = autonomyMeasurementNote(payload({ running: 1 }))
     expect(line).toContain('1 run is still going')
     expect(line).toContain('SO FAR')
-    expect(line).toContain('left out of the percentiles')
+    expect(line).toContain('counts towards the longest run')
+    expect(line).toContain('still going')
+    // The percentile-era wording must be gone with the percentiles: a sentence
+    // claiming an exclusion that no longer happens is a wrong number's alibi.
+    expect(line).not.toContain('percentile')
   })
 
   test('an unmeasured start says which end of the run is the estimate', () => {
@@ -44,8 +50,8 @@ describe('autonomyMeasurementNote', () => {
     expect(line).toContain('not when the run began')
     expect(line).toContain('minimums')
     // It must NOT claim those runs were dropped from the figures: they are
-    // finished runs and they are samples.
-    expect(line).not.toContain('left out of the percentiles')
+    // finished runs and they are counted.
+    expect(line).not.toContain('counts towards the longest run')
   })
 
   test('both at once read as two separate facts', () => {

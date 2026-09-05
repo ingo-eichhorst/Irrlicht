@@ -3,26 +3,24 @@ import SwiftUI
 
 // MARK: - Autonomy section (#1905)
 //
-// Two elements over the always-on span log, rendered together because they
-// answer two halves of one question: element 1 is "is this getting better?"
-// (p95/p50/p5 of autonomous run duration over time), element 2 is "who ran
-// long, who kept stopping, and were the stops questions or errors?".
+// FIVE PER-PROJECT PANELS, one per project, stacked. Each carries a LINE — the
+// longest run in each time bucket — and, under it, a low HISTOGRAM of how many
+// runs were working at the same time in that bucket.
 //
-// Pure inputs (the two decoded responses), so a snapshot test can host this
-// view directly with fixture data.
+// HOW FIVE PANELS FIT A 380 pt POPOVER. The tab's content is already inside a
+// ScrollView (HistoryView.content), so the stack scrolls rather than compresses:
+// a 58 pt panel (14 pt header + 44 pt plot) times five is 290 pt, and the
+// header, the "+N more" line, the axis, the key and the provenance paragraph
+// follow it. Compressing instead would leave a histogram two points tall — a
+// smear that cannot be read — and the paragraphs that explain the figures are
+// the last thing that may be clipped.
+//
+// Pure inputs (the decoded response), so a snapshot test can host this view
+// directly with fixture data.
 
 struct HistoryAutonomyContentView: View {
-    let duration: HistoryAutonomyDurationResponse
-    let spans: HistoryAutonomySpansResponse
+    let data: HistoryAutonomyProjectsResponse
     let range: HistoryAutonomyRange
-    /// A BINDING, unlike `range`: the Span picker lives in this view now,
-    /// in the strip's own section header. Range still belongs to the tab's
-    /// control row because the chart is the first thing under it; Span sat up
-    /// there too, one row of controls above two elements, with nothing saying
-    /// which control moved which — and the two vocabularies overlap textually
-    /// (`30d` is a Range value AND a Span value), so the row read as one zoom
-    /// control with an odd set of steps.
-    @Binding var spanWindow: HistoryAutonomySpanWindow
 
     /// #1659 — every date this view renders takes its zone as an INPUT rather
     /// than reading `NSTimeZone.default`.
@@ -30,9 +28,7 @@ struct HistoryAutonomyContentView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: IrrSpacing.sp4) {
-            durationSection
-            Divider()
-            stripSection
+            panelStack
             Divider()
             collectionProvenance
         }
@@ -40,139 +36,44 @@ struct HistoryAutonomyContentView: View {
         .padding(.vertical, IrrSpacing.sp3)
     }
 
-    // MARK: Element 1 — duration over time
+    // MARK: The stack
 
-    @ViewBuilder private var durationSection: some View {
+    @ViewBuilder private var panelStack: some View {
         VStack(alignment: .leading, spacing: IrrSpacing.sp2) {
             HStack {
-                Text("Autonomous run duration · \(range.label)")
+                Text("Longest autonomous run · \(range.label)")
                     .font(.caption)
                     .foregroundColor(.secondary)
                 Spacer()
-                Text("log scale")
+                Text("log scale, shared")
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }
-            if duration.hasData {
-                AutonomyDurationChart(data: duration, timeZone: formatTimeZone)
-                    .frame(height: 190)
+            if data.hasData {
+                ForEach(data.stackRows) { row in
+                    switch row {
+                    case let .panel(panel, index):
+                        AutonomyPanelView(panel: panel,
+                                          data: data,
+                                          panelIndex: index,
+                                          timeZone: formatTimeZone)
+                    case let .more(label):
+                        overflow(label)
+                    }
+                }
+                stackAxis
                 AutonomyKeyView()
+                concurrencyCaveat
                 summaryRow
-                if thinCount > 0 { thinNote }
             } else {
-                emptyDurationText
+                emptyText
             }
         }
     }
 
-    /// "p95 1h58m · p50 11m · p5 41s · longest 2h14m · shortest 22s · 312 runs"
-    /// — the true extremes are figures here, deliberately not lines on the
-    /// chart (see HistoryAutonomySummary).
-    private var summaryRow: some View {
-        let s = duration.summary
-        return Text(
-            "p95 \(AutonomyFormat.duration(s.p95)) · p50 \(AutonomyFormat.duration(s.p50)) · "
-            + "p5 \(AutonomyFormat.duration(s.p5)) · longest \(AutonomyFormat.duration(s.max)) · "
-            + "shortest \(AutonomyFormat.duration(s.min)) · \(s.count) runs"
-        )
-        .font(.caption)
-        .monospacedDigit()
-        .foregroundColor(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
-    }
-
-    private var thinCount: Int { duration.buckets.filter(\.thin).count }
-
-    /// Thin buckets are MARKED, never hidden and never smoothed — and the
-    /// marking is explained in words, because a fainter plane means nothing on
-    /// its own. Three signals, since a distinction is easy to lose inside a
-    /// smooth band: the plane itself, the edges bounding it, and the points.
-    private var thinNote: some View {
-        Text("\(thinCount) of \(duration.buckets.count) buckets hold fewer than \(duration.sampleFloor) runs "
-             + "(fainter band, dashed edges, hollow points): there, p95 is that bucket's longest run and "
-             + "p5 its shortest — not percentiles.")
-            .font(.caption2)
-            .foregroundColor(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-    }
-
-    /// An empty chart with axes drawn is not acceptable (#1905): the empty
-    /// state says, in words, that the feature collects from the day it ships.
-    private var emptyDurationText: some View {
-        Text(duration.totalRecorded == 0
-             ? "No autonomous runs recorded yet. Irrlicht starts measuring them the first time a session runs after this update — an empty chart here means \"nothing recorded\", not \"nothing happened\"."
-             : "No runs in this range. \(duration.totalRecorded) runs are on record outside it.")
-            .font(.callout)
-            .foregroundColor(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, minHeight: 150, alignment: .center)
-            .multilineTextAlignment(.center)
-    }
-
-    // MARK: Element 2 — the run strip
-
-    @ViewBuilder private var stripSection: some View {
-        VStack(alignment: .leading, spacing: IrrSpacing.sp2) {
-            // The strip's own header: its title and the picker that changes
-            // it, together — the whole point of moving Span down here.
-            HStack(spacing: IrrSpacing.sp2) {
-                Text("Runs · last \(spanWindow.label)")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Spacer(minLength: IrrSpacing.sp2)
-                Picker("Span", selection: $spanWindow) {
-                    ForEach(HistoryAutonomySpanWindow.allCases) { Text($0.label).tag($0) }
-                }
-                .labelsHidden()
-                .fixedSize()
-                .pickerStyle(.menu)
-                .controlSize(.small)
-                .font(.caption)
-            }
-            if spans.hasData {
-                // A header over the value column: the figure at the end of
-                // each row was a bare duration with nothing saying what it
-                // measured.
-                stripHeader
-                // Capped at the busiest few: unbounded, a back-filled 12mo
-                // window draws 95 rows into a 380 pt popover and buries the
-                // projects worth looking at (#1905 back-fill, QA-1).
-                ForEach(spans.visibleProjects, id: \.self) { project in
-                    AutonomyStripRow(project: project,
-                                     spans: spans.spans(for: project),
-                                     start: spans.start,
-                                     end: spans.end)
-                }
-                if let overflow = spans.overflowLabel { stripOverflow(overflow) }
-                // …and the window's bounds under it, so a mark can be placed
-                // in time. Two labels, not a tick axis: at 12mo a full axis is
-                // more furniture than the strip is worth, but "from when to
-                // when" is the difference between a timeline and a texture.
-                stripAxis
-                stripLegend
-                if spans.truncated { truncationNote }
-            } else {
-                emptyStripText
-            }
-        }
-    }
-
-    /// Column header for the per-row "longest" figure. Right-aligned by the
-    /// same Spacer the rows use, so it sits over the values it names.
-    private var stripHeader: some View {
-        HStack(spacing: IrrSpacing.sp2) {
-            Text("project")
-            Spacer(minLength: IrrSpacing.sp2)
-            Text("longest")
-        }
-        .font(.caption2)
-        .foregroundColor(.secondary)
-        .accessibilityHidden(true) // each row's own label already says "longest"
-    }
-
-    /// "+N more projects" — quieter than a row and clearly not one: it is a
-    /// statement about the strip, not another line of it.
-    private func stripOverflow(_ text: String) -> some View {
+    /// "+N more projects" — quieter than a panel and clearly not one: it is a
+    /// statement about the stack, not another entry in it.
+    private func overflow(_ text: String) -> some View {
         Text(text)
             .font(.caption2)
             .foregroundColor(.secondary)
@@ -181,56 +82,55 @@ struct HistoryAutonomyContentView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// The strip's window bounds: where it starts on the left, `now` on the
-    /// right. The start label coarsens with the window (a time of day at 8h, a
-    /// month at 12mo) — see AutonomyFormat.axisBound.
-    private var stripAxis: some View {
+    /// The window's bounds, ONCE under the whole stack: the five panels share
+    /// one x domain, so five copies would be five statements of one fact. The
+    /// start label coarsens with the window — see AutonomyFormat.axisBound.
+    private var stackAxis: some View {
         HStack(spacing: IrrSpacing.sp2) {
-            Text(AutonomyFormat.axisBound(Date(timeIntervalSince1970: TimeInterval(spans.start)),
-                                          windowSeconds: spans.end - spans.start,
+            Text(AutonomyFormat.axisBound(Date(timeIntervalSince1970: TimeInterval(data.start)),
+                                          windowSeconds: data.end - data.start,
                                           timeZone: formatTimeZone))
             Spacer(minLength: IrrSpacing.sp2)
             Text("now")
         }
         .font(.caption2)
         .foregroundColor(.secondary)
+        .padding(.leading, AutonomyPanelMetrics.labelGutter)
     }
 
-    /// The measured reasons, plus a neutral `unknown` entry when — and only
-    /// when — this window actually holds a run whose end reason nothing can
-    /// name (#1905 back-fill).
-    private var stripLegend: some View {
-        HStack(spacing: IrrSpacing.sp3) {
-            ForEach(AutonomyLegend.entries(for: spans.spans)) { entry in
-                HStack(spacing: IrrSpacing.sp1) {
-                    RoundedRectangle(cornerRadius: 1)
-                        .fill(AutonomyPalette.color(for: entry.reason))
-                        .frame(width: 10, height: 8)
-                    Text("\(entry.glyph) \(entry.label)")
-                }
-            }
-            Spacer(minLength: 0)
-        }
-        .font(.caption2)
-        .foregroundColor(.secondary)
-    }
-
-    private var truncationNote: some View {
-        Text("This window holds more runs than one request returns; the strip shows the oldest part of it. "
-             + "Pick a shorter span for a complete picture.")
+    /// The sentence beside the `at once` figure, and it is not optional:
+    /// without it the number is read as "N independent agents" and it is not
+    /// that. A parent is held `working` while its subagents run.
+    private var concurrencyCaveat: some View {
+        Text(AutonomyFormat.concurrencyCaveat)
             .font(.caption2)
-            .foregroundColor(IrrColors.waiting)
+            .foregroundColor(.secondary)
             .fixedSize(horizontal: false, vertical: true)
     }
 
-    private var emptyStripText: some View {
-        Text(spans.totalRecorded == 0
-             ? "No runs recorded yet — this strip fills in as sessions run."
-             : "No runs in the last \(spanWindow.label). \(spans.totalRecorded) runs are on record over a longer period.")
+    /// "longest 11h39m in irrlicht · most at once 5 · 312 runs across 12 projects"
+    private var summaryRow: some View {
+        let s = data.summary
+        var longest = "longest \(AutonomyFormat.duration(s.longest))"
+        if !s.longestProject.isEmpty { longest += " in \(s.longestProject)" }
+        if s.longestRunning { longest += " (still going)" }
+        return Text("\(longest) · most at once \(s.peak) · \(s.runs) runs across \(s.projects) projects")
+            .font(.caption)
+            .monospacedDigit()
+            .foregroundColor(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// An empty stack with axes drawn is not acceptable (#1905): the empty
+    /// state says, in words, that the feature collects from the day it ships.
+    private var emptyText: some View {
+        Text(data.totalRecorded == 0
+             ? "No autonomous runs recorded yet. Irrlicht starts measuring them the first time a session runs after this update — an empty section here means \"nothing recorded\", not \"nothing happened\"."
+             : "No runs in this range. \(data.totalRecorded) runs are on record outside it.")
             .font(.callout)
             .foregroundColor(.secondary)
             .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, minHeight: 90, alignment: .center)
+            .frame(maxWidth: .infinity, minHeight: 150, alignment: .center)
             .multilineTextAlignment(.center)
     }
 
@@ -243,22 +143,24 @@ struct HistoryAutonomyContentView: View {
         VStack(alignment: .leading, spacing: IrrSpacing.sp1) {
             // What these figures counted (#1905 subagents). Above the
             // provenance line because it qualifies every number in the section,
-            // where provenance qualifies where they came from.
-            if let counting = AutonomyFormat.countingLine(duration.kinds) {
+            // where provenance qualifies where they came from — and because its
+            // `unknown` clause is why a panel's `at once` figure sometimes
+            // carries no split.
+            if let counting = AutonomyFormat.countingLine(data.kinds) {
                 Text(counting)
             }
             // …and which of them are floors rather than measurements (#1905
             // recording). Same register, same reason: a lower bound rendered as
             // a measurement is a wrong number with nothing on screen saying it
             // is wrong. Silent when every run in view is finished and measured.
-            if let measurement = AutonomyFormat.measurementLine(duration.measurementOrNone) {
+            if let measurement = AutonomyFormat.measurementLine(data.measurementOrNone) {
                 Text(measurement)
             }
-            Text(AutonomyFormat.provenance(earliest: duration.earliestSpan,
-                                           total: duration.totalRecorded,
+            Text(AutonomyFormat.provenance(earliest: data.earliestSpan,
+                                           total: data.totalRecorded,
                                            timeZone: formatTimeZone))
-            if let note = AutonomyFormat.reconstructionNote(duration.provenanceOrNone,
-                                                            inView: duration.summary.count,
+            if let note = AutonomyFormat.reconstructionNote(data.provenanceOrNone,
+                                                            inView: data.summary.runs,
                                                             timeZone: formatTimeZone) {
                 Text(note)
             }
@@ -269,149 +171,74 @@ struct HistoryAutonomyContentView: View {
     }
 }
 
-// MARK: - The percentile chart
+// MARK: - Panel geometry
 
-private struct AutonomyDurationChart: View {
-    let data: HistoryAutonomyDurationResponse
+/// The panel's fixed geometry, in points. Named rather than spread across the
+/// views so the stack's total height is arithmetic a reader can do: five times
+/// (`headerHeight` + `plotHeight` + `barsHeight`) plus the spacing between them.
+enum AutonomyPanelMetrics {
+    static let plotHeight: CGFloat = 32
+    static let barsHeight: CGFloat = 10
+    /// The width reserved for the shared axis's duration labels. The stack's
+    /// own x axis is indented by the same amount so its two bounds sit under
+    /// the plot rather than under the labels.
+    static let labelGutter: CGFloat = 46
+}
+
+// MARK: - One project's panel
+
+private struct AutonomyPanelView: View {
+    let panel: HistoryAutonomyPanel
+    let data: HistoryAutonomyProjectsResponse
+    /// Which panel of the stack this is — the caption rule reads it, and
+    /// nothing else does.
+    let panelIndex: Int
     let timeZone: TimeZone
 
-    /// One drawn point.
-    ///
-    /// `series` names which of the three lines it belongs to and is what the
-    /// colour scale reads. `run` is a different key on purpose: it names the
-    /// CONTIGUOUS STRETCH the point belongs to, and Swift Charts connects
-    /// points that share it. Without that second key a line is drawn through
-    /// every bucket the daemon sent — which silently bridges the omitted ones,
-    /// exactly the interpolation `alignedBuckets` exists to refuse.
-    private struct Datum: Identifiable {
-        let id: String
-        let date: Date
-        let series: String
-        let run: String
-        let value: Double
-        let thin: Bool
-    }
-
-    /// One stretch of the band: the plane between p5 and p95 over a run of
-    /// consecutive buckets, or (when `isolated`) a single bucket's spread.
-    private struct BandDatum: Identifiable {
-        let id: String
-        let date: Date
-        let run: String
-        let low: Double
-        let high: Double
-        let thin: Bool
-    }
-
-    /// Log scales cannot plot 0, and a span shorter than a second is not a
-    /// run — clamp to one second so a degenerate value cannot blank the chart.
-    private func plottable(_ v: Double) -> Double { Swift.max(1, v) }
-
-    private func date(at index: Int) -> Date {
-        Date(timeIntervalSince1970: TimeInterval(data.bucketStarts[index]))
-    }
-
-    private var points: [HistoryAutonomyBucket?] { data.alignedBuckets }
-    private var segments: [AutonomyBandLayout.Segment] {
-        AutonomyBandLayout.segments(points: points)
-    }
-
-    /// The three lines, split into one series per contiguous stretch so the
-    /// stroke BREAKS at every omitted bucket instead of being drawn through it.
-    private func lineData(_ segments: [AutonomyBandLayout.Segment]) -> [Datum] {
-        var out: [Datum] = []
-        for segment in segments where !segment.isIsolated {
-            for i in segment.from...segment.to {
-                guard let b = points[i] else { continue }
-                for key in AutonomyPalette.seriesOrder {
-                    let v: Double
-                    switch key {
-                    case "p95": v = b.p95
-                    case "p5": v = b.p5
-                    default: v = b.p50
-                    }
-                    out.append(Datum(id: "\(key)-\(segment.id)-\(b.ts)",
-                                     date: date(at: i),
-                                     series: key,
-                                     run: "\(key)#\(segment.id)",
-                                     value: plottable(v),
-                                     thin: segment.thin))
-                }
-            }
-        }
-        return out
-    }
-
-    private func bandData(_ segments: [AutonomyBandLayout.Segment]) -> [BandDatum] {
-        var out: [BandDatum] = []
-        for segment in segments where !segment.isIsolated {
-            for i in segment.from...segment.to {
-                guard let b = points[i] else { continue }
-                out.append(BandDatum(id: "band-\(segment.id)-\(b.ts)",
-                                     date: date(at: i),
-                                     run: segment.id,
-                                     low: plottable(b.p5),
-                                     high: plottable(b.p95),
-                                     thin: segment.thin))
-            }
-        }
-        return out
-    }
-
-    /// Buckets with no neighbour to make an area with. Drawn as a whisker
-    /// rather than dropped: a lone bucket is exactly where a reader most needs
-    /// to see how wide the range was, and it would otherwise be the only one
-    /// whose spread is invisible.
-    private func whiskerData(_ segments: [AutonomyBandLayout.Segment]) -> [BandDatum] {
-        segments.filter(\.isIsolated).compactMap { segment in
-            guard let b = points[segment.from] else { return nil }
-            return BandDatum(id: "whisker-\(segment.id)", date: date(at: segment.from), run: segment.id,
-                             low: plottable(b.p5), high: plottable(b.p95), thin: segment.thin)
-        }
-    }
-
-    /// Y domain with a little headroom, floored so a single short run still
-    /// draws inside a readable range.
-    private var yDomain: ClosedRange<Double> {
-        let values = data.buckets.flatMap { [plottable($0.p5), plottable($0.p95)] }
-        let lo = Swift.max(1, (values.min() ?? 1) * 0.8)
-        let hi = Swift.max(lo * 2, (values.max() ?? 60) * 1.25)
-        return lo...hi
-    }
+    private var points: [HistoryAutonomyPanelBucket?] { panel.alignedBuckets(data.bucketStarts) }
 
     var body: some View {
-        let segments = self.segments
-        let lines = lineData(segments)
+        VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: IrrSpacing.sp2) {
+                Text(panel.project)
+                    .font(.caption2)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: IrrSpacing.sp2)
+                // The panel's OWN figures, so the exact longest never depends
+                // on reading a shared axis, and the concurrency split is
+                // legible rather than buried.
+                Text(panel.headline)
+                    .font(.caption2)
+                    .monospacedDigit()
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+            }
+            longestRunChart
+            concurrencyBars
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(panel.project): \(panel.headline), \(panel.runs) runs")
+    }
+
+    /// The longest-run line, on the SHARED log domain.
+    ///
+    /// `run` is the series key on purpose: it names the CONTIGUOUS STRETCH a
+    /// point belongs to, and Swift Charts connects points that share it. Without
+    /// that key the line is drawn through every bucket the daemon sent — which
+    /// silently bridges the omitted ones, exactly the interpolation
+    /// `alignedBuckets` exists to refuse.
+    @ViewBuilder private var longestRunChart: some View {
+        let domain = data.sharedYDomain ?? 1...60
         Chart {
-            // FIRST in the builder, so the plane and the rules sit UNDER the
-            // lines. The band is context; the p50 line is the headline, and it
-            // is the last ink down so nothing crosses over it.
-            ForEach(bandData(segments)) { d in
-                AreaMark(
-                    x: .value("Date", d.date),
-                    yStart: .value("p5", d.low),
-                    yEnd: .value("p95", d.high),
-                    series: .value("Band", d.run)
-                )
-                .foregroundStyle(d.thin ? AutonomyPalette.bandThin : AutonomyPalette.band)
-                .interpolationMethod(.monotone)
-            }
-            ForEach(whiskerData(segments)) { d in
-                RuleMark(
-                    x: .value("Date", d.date),
-                    yStart: .value("p5", d.low),
-                    yEnd: .value("p95", d.high)
-                )
-                .lineStyle(StrokeStyle(lineWidth: 1, dash: d.thin ? [3, 3] : []))
-                .foregroundStyle(AutonomyPalette.edge)
-            }
-            // The source-change markers: the marker explains the data, it is
-            // not part of it, so it sits under the curves too.
+            // The source-change markers first, so they sit UNDER the line: the
+            // marker explains the data, it is not part of it.
             //
-            // A LONG-DASHED 1.5 pt rule, deliberately unlike the axis
-            // gridlines below (solid hairlines): before, both were thin dashes
-            // in a muted colour and the one line on the chart that carries an
-            // explanation was indistinguishable from furniture.
+            // A LONG-DASHED 1.5 pt rule, deliberately unlike the axis gridlines
+            // (solid hairlines): before, both were thin dashes in a muted colour
+            // and the one line carrying an explanation was indistinguishable
+            // from furniture. It is drawn on EVERY panel; only the top one is
+            // captioned (AutonomyBoundaryCaption).
             ForEach(data.visibleBoundaries) { boundary in
                 RuleMark(x: .value("Source change", boundary.date))
                     .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [6, 3]))
@@ -419,73 +246,140 @@ private struct AutonomyDurationChart: View {
                     .annotation(position: .top,
                                 alignment: captionAlignment(for: boundary),
                                 spacing: 2) {
-                        Text(boundary.label)
-                            .font(.system(size: 9))
-                            .foregroundColor(.secondary)
-                            .opacity(0.9)
-                            .fixedSize()
+                        if AutonomyBoundaryCaption.isShown(panelIndex: panelIndex) {
+                            Text(boundary.label)
+                                .font(.system(size: 9))
+                                .foregroundColor(.secondary)
+                                .opacity(0.9)
+                                .fixedSize()
+                        }
                     }
             }
-            ForEach(lines) { d in
+            ForEach(lineData()) { d in
                 LineMark(
                     x: .value("Date", d.date),
-                    y: .value("Duration", d.value),
+                    y: .value("Longest", d.value),
                     series: .value("Run", d.run)
                 )
-                .foregroundStyle(by: .value("Series", d.series))
+                .foregroundStyle(AutonomyPalette.lineColor)
+                .lineStyle(StrokeStyle(lineWidth: 1.6))
                 .interpolationMethod(.monotone)
-                .lineStyle(StrokeStyle(lineWidth: AutonomyPalette.lineWidth(AutonomyPalette.role(of: d.series)),
-                                       dash: d.thin ? [3, 3] : []))
-                .opacity(AutonomyPalette.opacity(AutonomyPalette.role(of: d.series), thin: d.thin))
             }
-            // Thin buckets are marked rather than hidden: a hollow point on
-            // every line at that bucket, so a low-sample day is visibly
-            // different from a well-sampled one without being dropped. Inside
-            // a smooth band this is the third signal, alongside the fainter
-            // plane and the dashed edges.
-            ForEach(lines.filter(\.thin)) { d in
-                PointMark(
-                    x: .value("Date", d.date),
-                    y: .value("Duration", d.value)
-                )
-                .symbol(.circle)
-                .symbolSize(28)
-                .foregroundStyle(by: .value("Series", d.series))
-                .opacity(0.45)
+            // An isolated bucket has no neighbour to draw a segment to, and
+            // would otherwise be the one bucket that vanishes.
+            ForEach(lineData().filter(\.isolated)) { d in
+                PointMark(x: .value("Date", d.date), y: .value("Longest", d.value))
+                    .symbolSize(14)
+                    .foregroundStyle(AutonomyPalette.lineColor)
+            }
+            // A bucket whose longest run has not ended is hollow: its length is
+            // a floor, and the header says "still going" beside it.
+            ForEach(lineData().filter(\.running)) { d in
+                PointMark(x: .value("Date", d.date), y: .value("Longest", d.value))
+                    .symbol(.circle)
+                    .symbolSize(30)
+                    .foregroundStyle(AutonomyPalette.lineColor.opacity(0.5))
             }
         }
-        // One table for the three lines, read by the scale AND by
-        // AutonomyPalette.keyEntries — the web's twin of this is
-        // AUTONOMY_SERIES, and both surfaces must name the lines the same way.
-        .chartForegroundStyleScale(domain: AutonomyPalette.seriesOrder,
-                                   range: AutonomyPalette.seriesRange)
-        // …and the legend Swift Charts derives from that scale is hidden,
-        // because with one hue it would be three identical swatches naming
-        // three percentiles. AutonomyKeyView draws the two entries that
-        // actually correspond to marks on the chart.
-        .chartLegend(.hidden)
-        .chartYScale(domain: yDomain, type: .log)
+        .chartYScale(domain: domain, type: .log)
+        .chartXScale(domain: xDomain)
         .chartYAxis {
-            AxisMarks { value in
+            AxisMarks(values: .automatic(desiredCount: 3)) { value in
                 AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
                 AxisValueLabel {
                     if let v = value.as(Double.self) {
-                        Text(AutonomyFormat.duration(v))
+                        Text(AutonomyFormat.duration(v)).font(.system(size: 9))
                     }
                 }
             }
         }
-        .chartXAxis {
-            AxisMarks(values: .automatic(desiredCount: 4)) { value in
-                // Solid hairlines. Dashed x gridlines read as several source
-                // markers and made the real one impossible to find.
-                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
-                AxisValueLabel {
-                    if let d = value.as(Date.self) {
-                        Text(AutonomyFormat.axisDate(d, timeZone: timeZone))
-                    }
-                }
+        .chartXAxis(.hidden)
+        .frame(height: AutonomyPanelMetrics.plotHeight)
+    }
+
+    /// The concurrency histogram: one low bar per bucket, scaled against the
+    /// stack's SHARED peak so the five panels are comparable.
+    ///
+    /// A BUCKET WITH NO ONE WORKING DRAWS NOTHING — not a zero-height bar, and
+    /// not a hairline on the baseline. A mark on the axis reads as a measured
+    /// zero, which is a different and false claim from "no runs here".
+    @ViewBuilder private var concurrencyBars: some View {
+        let scale = data.sharedPeakScale
+        Chart {
+            ForEach(barData()) { d in
+                BarMark(
+                    x: .value("Date", d.date),
+                    y: .value("At once", d.peak)
+                )
+                .foregroundStyle(AutonomyPalette.bars)
             }
+        }
+        .chartYScale(domain: 0...Double(Swift.max(1, scale)))
+        .chartXScale(domain: xDomain)
+        .chartXAxis(.hidden)
+        .chartYAxis {
+            // The gutter is kept — an empty label of the same width — so the
+            // bars line up under the plot above rather than starting further
+            // left, which would put the histogram out of register with the line
+            // it belongs to.
+            AxisMarks(values: [0]) { _ in AxisValueLabel { Text("     ").font(.system(size: 9)) } }
+        }
+        .frame(height: AutonomyPanelMetrics.barsHeight)
+    }
+
+    /// Both charts share one x domain, so the line, the bars and the boundary
+    /// rule stay in register down the whole stack.
+    private var xDomain: ClosedRange<Date> {
+        let first = data.bucketStarts.first ?? data.start
+        let last = data.bucketStarts.last ?? data.end
+        let lo = Date(timeIntervalSince1970: TimeInterval(first))
+        let hi = Date(timeIntervalSince1970: TimeInterval(Swift.max(last, first + 1)))
+        return lo...hi
+    }
+
+    private struct Datum: Identifiable {
+        let id: String
+        let date: Date
+        let run: String
+        let value: Double
+        let running: Bool
+        let isolated: Bool
+    }
+
+    private struct BarDatum: Identifiable {
+        let id: String
+        let date: Date
+        let peak: Int
+    }
+
+    private func date(at index: Int) -> Date {
+        Date(timeIntervalSince1970: TimeInterval(data.bucketStarts[index]))
+    }
+
+    /// The line, split into one series per contiguous stretch so the stroke
+    /// BREAKS at every gap instead of being drawn through it.
+    private func lineData() -> [Datum] {
+        var out: [Datum] = []
+        for segment in AutonomyLineLayout.segments(points: points) {
+            for i in segment.from...segment.to {
+                guard let b = points[i], b.hasLine, i < data.bucketStarts.count else { continue }
+                out.append(Datum(id: "\(panel.project)-\(b.ts)",
+                                 date: date(at: i),
+                                 run: "\(panel.project)#\(segment.id)",
+                                 // A log scale cannot plot 0, and a span shorter
+                                 // than a second is not a run.
+                                 value: Swift.max(1, b.longest),
+                                 running: b.running,
+                                 isolated: segment.isIsolated))
+            }
+        }
+        return out
+    }
+
+    private func barData() -> [BarDatum] {
+        points.enumerated().compactMap { i, b in
+            guard let b, b.hasBar, i < data.bucketStarts.count else { return nil }
+            return BarDatum(id: "bar-\(panel.project)-\(b.ts)", date: date(at: i), peak: b.peak)
         }
     }
 
@@ -500,10 +394,10 @@ private struct AutonomyDurationChart: View {
     }
 }
 
-// MARK: - The chart's key
+// MARK: - The stack's key
 
-/// Two entries, because the chart draws two things: a line and a plane. Each
-/// swatch takes the SHAPE of what it stands for — a pair of identically
+/// Two entries, because a panel draws two things: a line and a row of bars.
+/// Each swatch takes the SHAPE of what it stands for — a pair of identically
 /// coloured dots would be a key that says the same thing twice.
 private struct AutonomyKeyView: View {
     var body: some View {
@@ -526,182 +420,56 @@ private struct AutonomyKeyView: View {
             Capsule()
                 .fill(entry.color)
                 .frame(width: 16, height: 2)
-        case .band:
-            (entry.fill ?? Color.clear)
-                .frame(width: 16, height: 9)
-                .overlay(alignment: .top) { entry.color.frame(height: 1) }
-                .overlay(alignment: .bottom) { entry.color.frame(height: 1) }
-                .clipShape(RoundedRectangle(cornerRadius: 1))
-        }
-    }
-}
-
-// MARK: - One strip row
-
-private struct AutonomyStripRow: View {
-    let project: String
-    let spans: [HistoryAutonomySpanRow]
-    let start: Int64
-    let end: Int64
-
-    private static let rowHeight: CGFloat = 14
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            HStack(spacing: IrrSpacing.sp2) {
-                Text(project)
-                    .font(.caption2)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer(minLength: IrrSpacing.sp2)
-                Text(AutonomyFormat.duration(Double(longest)))
-                    .font(.caption2)
-                    .monospacedDigit()
-                    .foregroundColor(.secondary)
+        case .bars:
+            HStack(alignment: .bottom, spacing: 2) {
+                entry.color.frame(width: 3, height: 4)
+                entry.color.frame(width: 3, height: 9)
+                entry.color.frame(width: 3, height: 6)
             }
-            Canvas { context, size in
-                // One column per point of width. The collapse rule (minimum
-                // one column per span, highest-priority reason wins a shared
-                // column) lives in AutonomyStripLayout so it is testable
-                // without a view — and so the web draws the same strip.
-                let columns = Swift.max(1, Int(size.width.rounded(.down)))
-                let cells = AutonomyStripLayout.collapse(spans: spans, start: start, end: end, columns: columns)
-                let colWidth = size.width / CGFloat(columns)
-                for (i, cell) in cells.enumerated() where cell.occupied {
-                    let rect = CGRect(x: CGFloat(i) * colWidth, y: 0,
-                                      width: Swift.max(colWidth, 1), height: size.height)
-                    context.fill(Path(rect), with: .color(AutonomyPalette.color(for: cell.reason)))
-                }
-            }
-            .frame(height: Self.rowHeight)
-            .background(Color.secondary.opacity(0.08))
-            .clipShape(RoundedRectangle(cornerRadius: 2))
-            .accessibilityLabel(accessibilityText)
+            .frame(width: 16, height: 9, alignment: .bottom)
         }
-    }
-
-    private var longest: Int64 { spans.map(\.duration).max() ?? 0 }
-
-    private var accessibilityText: String {
-        "\(project): \(spans.count) runs, longest \(AutonomyFormat.duration(Double(longest)))"
     }
 }
 
 // MARK: - Palette + formatting
 
-/// One entry of the chart's key. `from` names the `AutonomyPalette.seriesOrder`
-/// row the entry takes its colour from, so a key entry cannot be given a
-/// colour the chart does not draw.
+/// One entry of the stack's key. `kind` names the MARK it stands for, so a key
+/// entry cannot be given a colour for something the panels do not draw.
 struct AutonomyKeyEntry: Identifiable, Equatable {
-    enum Kind: String { case line, band }
+    enum Kind: String { case line, bars }
 
     let kind: Kind
-    let from: String
     let label: String
     let color: Color
-    /// The plane's fill. `nil` for the line entry — a line has no area, and a
-    /// swatch with a fill would claim one.
-    let fill: Color?
 
     var id: String { kind.rawValue }
 }
 
 enum AutonomyPalette {
-    /// The three drawn lines, in draw order, and their colours — ONE table,
-    /// read by the chart's style scale AND by the two key entries below, so
-    /// the key and the curves cannot disagree. Mirrors the web's
-    /// AUTONOMY_SERIES, which carries the same property.
+    /// ONE HUE, TWO WEIGHTS. The longest-run line is `working` at full
+    /// strength; the concurrency histogram under it is the same hue, quieter,
+    /// because the bars are a second reading of the same activity and not a
+    /// second subject. `barsAreTheLineHue` in the tests pins that.
     ///
-    /// ONE HUE, THREE WEIGHTS. The first round drew p95 green, p50 purple and
-    /// p5 orange — three equally loud curves and a legend that had to be
-    /// decoded before the chart said anything. It says one thing now: here is
-    /// the typical run (the solid `line`), and here is the spread around it
-    /// (the plane between the two quiet `edge`s). A hue per percentile made
-    /// p95 and p5 read as two independent measurements rather than as the
-    /// boundary of one range.
-    static let seriesOrder = ["p95", "p50", "p5"]
-    static let seriesColors: [String: Color] = [
-        "p95": IrrColors.working,
-        "p50": IrrColors.working,
-        "p5": IrrColors.working,
-    ]
+    /// What went: a colour per percentile. The first round drew p95 green, p50
+    /// purple and p5 orange — three equally loud curves and a legend that had to
+    /// be decoded before the chart said anything.
+    static var lineColor: Color { IrrColors.working }
+    static var bars: Color { IrrColors.autonomyBar }
 
-    /// What each line is FOR. The colours no longer separate them, so the
-    /// roles do — and the chart reads its stroke weights from here rather than
-    /// from a literal beside each mark.
-    enum Role { case line, edge }
-    static let seriesRoles: [String: Role] = [
-        "p95": .edge,
-        "p50": .line,
-        "p5": .edge,
-    ]
-
-    static func role(of key: String) -> Role { seriesRoles[key] ?? .line }
-
-    /// The headline line's colour: the one every reader is meant to follow.
-    static var lineColor: Color { seriesColors["p50"] ?? .gray }
-
-    /// The band's own three weights — the plane, the fainter plane a thin
-    /// stretch gets, and the weight its two edges are stroked at. A second
-    /// TABLE, not a second palette: every one of them is the `working` hue at
-    /// a lower alpha (`bandIsTheLineHue` in the tests pins that), and both the
-    /// chart and the key read these same entries.
-    static var band: Color { IrrColors.autonomyBand }
-    static var bandThin: Color { IrrColors.autonomyBandThin }
-    static var edge: Color { IrrColors.autonomyEdge }
-
-    /// Stroke weight per role. The line carries the chart; the edges are
-    /// present enough to bound the plane and quiet enough not to compete.
-    static func lineWidth(_ role: Role) -> CGFloat { role == .line ? 1.8 : 1 }
-    static func opacity(_ role: Role, thin: Bool) -> Double {
-        switch (role, thin) {
-        case (.line, false): return 1
-        case (.line, true): return 0.6
-        case (.edge, false): return 0.5
-        case (.edge, true): return 0.32
-        }
-    }
-
-    /// The chart's key: exactly two entries, because the chart draws exactly
-    /// two things. Three percentile swatches in one hue would promise a
-    /// distinction the chart stopped making — which is why the Swift Charts
-    /// legend derived from `seriesOrder` is hidden and this is drawn instead.
+    /// The stack's key: exactly two entries, because a panel draws exactly two
+    /// things.
     ///
-    /// Named for a reader who has never seen a percentile — the register the
-    /// section already used ("the typical run") — with the p-labels kept in
-    /// front for a reader who has. Two noun phrases that read as a pair: the
-    /// chart draws one line and one plane, and these name them as one thing
-    /// and its spread rather than as two measurements.
-    ///
-    /// SAME TWO STRINGS AS THE WEB's panel key (AUTONOMY_KEY in
-    /// platforms/web/historyTab.js), and pinned against it by `the two
-    /// surfaces name the key the same way` — two clients must not explain one
-    /// chart differently. This popover has room the web's 260 pt side panel
-    /// does not, so the length that fits THERE is the length both carry.
+    /// SAME TWO STRINGS AS THE WEB's side-panel key (AUTONOMY_KEY in
+    /// platforms/web/historyTab.js), and pinned against it by `the two surfaces
+    /// name the key the same way` — two clients must not explain one chart
+    /// differently. That panel is 260 pt where this popover is 380, so the
+    /// length that fits THERE is the length both carry.
     static var keyEntries: [AutonomyKeyEntry] {
         [
-            AutonomyKeyEntry(kind: .line, from: "p50", label: "p50 · the typical run",
-                             color: seriesColors["p50"] ?? .gray, fill: nil),
-            AutonomyKeyEntry(kind: .band, from: "p95", label: "p5–p95 · the usual spread",
-                             color: edge, fill: band),
+            AutonomyKeyEntry(kind: .line, label: "longest run in a bucket", color: lineColor),
+            AutonomyKeyEntry(kind: .bars, label: "working at once (peak)", color: bars),
         ]
-    }
-
-    /// The scale's range in `seriesOrder`. A key with no colour would be a
-    /// line drawn in the fallback grey rather than silently undrawn, which is
-    /// why this cannot crash on a bad key — but `seriesColorsCoverEveryLine`
-    /// in the tests refuses one.
-    static var seriesRange: [Color] { seriesOrder.map { seriesColors[$0] ?? .gray } }
-
-    /// A column's fill. An unnamed reason is drawn neutral rather than
-    /// skipped: the run happened, this build just cannot say how it ended.
-    static func color(for reason: AutonomyEndReason?) -> Color {
-        switch reason {
-        case .some(.error): return IrrColors.error
-        case .some(.waiting): return IrrColors.waiting
-        case .some(.ready): return IrrColors.ready
-        case .none: return Color.secondary.opacity(0.55)
-        }
     }
 }
 
@@ -725,10 +493,39 @@ enum AutonomyFormat {
         return h == 0 ? "\(d)d" : "\(d)d\(h)h"
     }
 
-    /// The run strip's left bound, coarsening with the window the way the
-    /// activity matrix's column headers do: an 8h strip needs a time of day, a
-    /// 12mo strip needs a month. In the caller's zone (#1659), never the
-    /// machine's.
+    /// One "at once" figure, with its split only when the daemon says the split
+    /// is derivable.
+    ///
+    /// NO SPLIT IS SHOWN OVER DATA THAT CANNOT SUPPORT ONE. Most rows written
+    /// before 18 Aug 2026 carry `kind: unknown` — they predate the
+    /// classification, or the back-fill rebuilt them from a source with no
+    /// parent information — and there is no way to recover which they were. The
+    /// total alone is the honest answer there; "5 (5 + 0 sub)" would be an
+    /// invented one.
+    static func concurrency(peak: Int, top: Int, sub: Int, splitKnown: Bool) -> String {
+        guard peak > 0 else { return "" }
+        guard splitKnown else { return "\(peak) at once" }
+        return "\(peak) at once (\(top) + \(sub) sub)"
+    }
+
+    /// The caveat beside the `at once` figure, and it is not optional: without
+    /// it the number is read as "N independent agents" and it is not that.
+    ///
+    /// The daemon deliberately holds a PARENT session in `working` while its
+    /// subagents run, so one agent with three subagents overlaps as four. Four
+    /// things really were working — the figure is not wrong — but a reader who
+    /// takes it for four independent agents has been misled by a true number,
+    /// which is the exact failure this section keeps writing sentences to avoid.
+    ///
+    /// SAME WORDING AS THE WEB's AUTONOMY_CONCURRENCY_CAVEAT.
+    static let concurrencyCaveat =
+        "A parent is held working while its subagents run, so one agent with three subagents counts as "
+        + "four at once. Four things really were working — but not four independent agents. That is what "
+        + "the “N + M sub” split separates, and it is shown wherever every run at the peak said which it was."
+
+    /// The stack's left bound, coarsening with the window the way the activity
+    /// matrix's column headers do: a 30-day stack needs a date, a year-long one
+    /// a month. In the caller's zone (#1659), never the machine's.
     static func axisBound(_ date: Date, windowSeconds: Int64, timeZone: TimeZone) -> String {
         if windowSeconds <= 36 * 3600 { return formatted(date, "HH:mm", timeZone) }
         if windowSeconds <= 60 * 86400 { return formatted(date, "MMM d", timeZone) }
@@ -757,7 +554,7 @@ enum AutonomyFormat {
     static func provenance(earliest: Int64, total: Int, timeZone: TimeZone) -> String {
         guard earliest > 0 else {
             return "No autonomous runs recorded yet. Irrlicht began measuring them with this update; "
-                + "the charts above fill in as sessions run."
+                + "the panels above fill in as sessions run."
         }
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
@@ -772,15 +569,16 @@ enum AutonomyFormat {
     /// census — absence there means "this response never said", which is not
     /// the same claim as "there were none".
     ///
-    /// THERE IS NO MODE ANY MORE. Every run counts, subagent runs included,
-    /// because Irrlicht recorded them — so no excluded count is reported and
-    /// there is no control whose position a reader has to remember. What the
-    /// sentence still does is describe the window's MAKEUP.
+    /// THERE IS NO MODE. Every run counts, subagent runs included, because
+    /// Irrlicht recorded them — so no excluded count is reported and there is no
+    /// control whose position a reader has to remember. What the sentence still
+    /// does is describe the window's MAKEUP.
     ///
-    /// THE UNKNOWN CLAUSE STAYS LOAD-BEARING. A row written before Irrlicht
-    /// told the two apart carries no classification, and it is counted like the
-    /// rest — but counting it in silence would let the panel imply a
-    /// classification nobody made. So it says how many.
+    /// THE UNKNOWN CLAUSE STAYS LOAD-BEARING, and now carries its consequence
+    /// for the concurrency figure: a row written before Irrlicht told the two
+    /// apart is counted like the rest, but a peak one of them was alive for
+    /// cannot be split, and the sentence says so rather than leaving a missing
+    /// split to read as a bug.
     static func countingLine(_ k: HistoryAutonomyKinds?) -> String? {
         guard let k else { return nil }
         var out = k.subagent > 0
@@ -790,7 +588,7 @@ enum AutonomyFormat {
         if k.unknown > 0 {
             out += " \(k.unknown) run\(k.unknown == 1 ? " was" : "s were") recorded before Irrlicht told "
                 + "top-level and subagent runs apart, so which they were is unknown — those are counted "
-                + "either way."
+                + "either way, and a peak one of them was alive for is shown as a total with no split."
         }
         return out
     }
@@ -801,17 +599,16 @@ enum AutonomyFormat {
     /// up all day.
     ///
     /// Two kinds, two sentences, because they are two different limits and a
-    /// reader who merged them would misread the chart in opposite directions:
+    /// reader who merged them would misread the panels in opposite directions:
     ///
-    ///   - STILL RUNNING. The run has not ended, so its length is unknowable.
-    ///     It is shown, and deliberately kept out of the percentiles — folding
-    ///     a floor into a p95 as though it were final always shortens, and
-    ///     shortens the longest runs hardest. Both halves are said, so a reader
-    ///     who can see a 3-hour run on the strip is not left wondering why the
-    ///     median did not move.
+    ///   - STILL RUNNING. The run has not ended, so its length is how long it
+    ///     has lasted SO FAR. It COUNTS towards the longest — the section
+    ///     reports a maximum, and "already lasted 3h" is true — and the panel
+    ///     that shows it says "still going" rather than presenting a floor as
+    ///     final.
     ///   - STARTED BEFORE IRRLICHT WAS WATCHING. The run has finished, but its
-    ///     start is where the watching began. Those ARE samples; dropping them
-    ///     is what left 5 of a day's 35 runs on the record.
+    ///     start is where the watching began. Dropping those is what left 5 of a
+    ///     day's 35 runs on the record.
     static func measurementLine(_ m: HistoryAutonomyMeasurement) -> String? {
         guard m.any else { return nil }
         var parts: [String] = []
@@ -819,7 +616,8 @@ enum AutonomyFormat {
             let one = m.running == 1
             parts.append("\(m.running) run\(one ? " is" : "s are") still going: "
                 + "\(one ? "its length is" : "their lengths are") how long \(one ? "it has" : "they have") "
-                + "lasted SO FAR, so \(one ? "it is" : "they are") shown but left out of the percentiles.")
+                + "lasted SO FAR. \(one ? "It counts" : "They count") towards the longest run, marked "
+                + "\"still going\".")
         }
         if m.lowerBoundStart > 0 {
             let one = m.lowerBoundStart == 1
@@ -839,8 +637,7 @@ enum AutonomyFormat {
     /// answers a question the reader would otherwise answer wrongly: HOW MANY
     /// of the runs in view are reconstructed, the date BEFORE WHICH everything
     /// is reconstructed, and whether any of it came from a source that cannot
-    /// say how a run ended — so an `unknown` column in the strip reads as a
-    /// limit of the source rather than as a bug.
+    /// say how a run ended.
     static func reconstructionNote(_ p: HistoryAutonomyProvenance,
                                    inView: Int,
                                    timeZone: TimeZone) -> String? {
