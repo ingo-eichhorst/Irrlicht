@@ -65,6 +65,7 @@ func TestComposerDeadlineNamesObservedNoFolderWorkspaceMismatch(t *testing.T) {
 		},
 		func(string) {},
 		func(context.Context) error { return nil },
+		false,
 	)
 	if err == nil || !strings.Contains(err.Error(), "No folder") ||
 		!strings.Contains(err.Error(), "project") || !strings.Contains(err.Error(), "/repo/exact-workspace") {
@@ -117,6 +118,7 @@ func TestComposerWaitAnswersTheWorkspaceTrustPrompt(t *testing.T) {
 		},
 		func(step string) { steps = append(steps, step) },
 		func(context.Context) error { return nil },
+		false,
 	)
 	if err != nil {
 		t.Fatalf("waitForComposerControls() error = %v", err)
@@ -149,6 +151,7 @@ func TestComposerWaitRefusesASecondTrustPrompt(t *testing.T) {
 		func(context.Context, helperSelector, helperPostcondition) error { clicks++; return nil },
 		func(string) {},
 		func(context.Context) error { return nil },
+		false,
 	)
 	if err == nil || !strings.Contains(err.Error(), "second workspace trust prompt") {
 		t.Fatalf("waitForComposerControls() error = %v", err)
@@ -207,6 +210,7 @@ func TestComposerWaitRetriesATrustClickThatMissedTheAnimatingSheet(t *testing.T)
 		},
 		func(step string) { steps = append(steps, step) },
 		func(context.Context) error { return nil },
+		false,
 	)
 	if err != nil {
 		t.Fatalf("waitForComposerControls() error = %v", err)
@@ -241,6 +245,7 @@ func TestComposerWaitRetriesEveryTrustClickFailure(t *testing.T) {
 		},
 		func(string) {},
 		func(context.Context) error { return nil },
+		false,
 	)
 	// It fails at the DEADLINE, and the deadline carries the click error as its
 	// last observation rather than discarding it.
@@ -276,6 +281,7 @@ func TestComposerWaitSurvivesTheMeasuredTrustClickSequence(t *testing.T) {
 			t.Fatalf("no grant was confirmed, so none may be recorded; got %q", step)
 		},
 		func(context.Context) error { return nil },
+		false,
 	)
 	if err != nil {
 		t.Fatalf("waitForComposerControls() error = %v", err)
@@ -313,6 +319,7 @@ func TestComposerWaitRetriesAStaleAccessibilityRead(t *testing.T) {
 		},
 		func(string) {},
 		func(context.Context) error { return nil },
+		false,
 	)
 	if err != nil {
 		t.Fatalf("waitForComposerControls() error = %v", err)
@@ -340,6 +347,7 @@ func TestComposerWaitStopsOnANonStaleHelperFailure(t *testing.T) {
 		func(context.Context, helperSelector, helperPostcondition) error { return nil },
 		func(string) {},
 		func(context.Context) error { return nil },
+		false,
 	)
 	if err == nil || !strings.Contains(err.Error(), "AX error -25200") {
 		t.Fatalf("waitForComposerControls() error = %v", err)
@@ -374,6 +382,7 @@ func TestComposerWaitGrantsTrustAtMostOnceEvenWhenConfirmationFails(t *testing.T
 		},
 		func(string) {},
 		func(context.Context) error { return nil },
+		false,
 	)
 	if err == nil {
 		t.Fatal("the wait reported success after answering a trust prompt it could not confirm")
@@ -427,11 +436,12 @@ func TestComposerWaitRefusesATrustPromptThatPredatesTheRun(t *testing.T) {
 		},
 		func(string) {},
 		func(context.Context) error { return nil },
+		true, // a sheet was already up when the baseline was captured
 	)
 	if clicks != 0 {
 		t.Fatalf("clicked a prompt this run did not raise (%d times)", clicks)
 	}
-	if err == nil || !strings.Contains(err.Error(), "already open before this run") {
+	if err == nil || !strings.Contains(err.Error(), "already open when this run") {
 		t.Fatalf("the refusal must name the pre-existing prompt; got %v", err)
 	}
 }
@@ -462,6 +472,7 @@ func TestComposerWaitKeepsDesktopFrontOnEveryTick(t *testing.T) {
 		func(context.Context, helperSelector, helperPostcondition) error { return nil },
 		func(string) {},
 		func(context.Context) error { fronted++; return nil },
+		false,
 	)
 	if err != nil {
 		t.Fatalf("waitForComposerControls() error = %v", err)
@@ -490,6 +501,7 @@ func TestComposerWaitDoesNotObserveABackgroundedDesktop(t *testing.T) {
 		func(context.Context, helperSelector, helperPostcondition) error { return nil },
 		func(string) {},
 		func(context.Context) error { return errors.New("bring Claude Desktop to the front: boom") },
+		false,
 	)
 	if looks != 0 {
 		t.Fatalf("observed the tree %d times while Desktop could not be raised", looks)
