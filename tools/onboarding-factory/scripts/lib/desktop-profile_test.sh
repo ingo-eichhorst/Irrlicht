@@ -199,7 +199,7 @@ echo "== the Desktop driver gets a scaled timeout, the manifest keeps the scenar
 # composer step got 20s — and a measured idle composer on 1.46388.4 needs ~8s,
 # more under a recording daemon. The scenario's own number must NOT change: it
 # is what cli-local is measured against and what the manifest records.
-scale_block="$(awk '/^DESKTOP_TIMEOUT_FACTOR=/{f=1} f{print} /^fi$/{if(f)exit}' \
+scale_block="$(awk '/^# BEGIN desktop_driver_timeout$/{f=1;next} /^# END desktop_driver_timeout$/{f=0} f' \
   "$SCRIPTS_DIR/run-cell.sh")"
 if [[ -z "$scale_block" ]]; then
   fail "the desktop timeout scaling was found" "a DESKTOP_TIMEOUT_FACTOR block" "nothing matched"
