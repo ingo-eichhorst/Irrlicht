@@ -26,6 +26,14 @@ func (r *recordingSpanStore) SpansInWindow(outbound.AutonomySpanQuery) (*outboun
 }
 func (r *recordingSpanStore) Prune(int) error { return nil }
 
+// The open-run journal (#1905 recording). Deliberately inert here: these tests
+// are about the transition rules that CLOSE a span, and a store that remembered
+// open runs would let one test's leftovers reach the next. journalSpanStore, in
+// autonomy_span_recording_test.go, is the one that keeps them.
+func (r *recordingSpanStore) RecordOpenSpan(outbound.AutonomySpan) error  { return nil }
+func (r *recordingSpanStore) SyncOpenSpans([]outbound.AutonomySpan) error { return nil }
+func (r *recordingSpanStore) OpenSpans() ([]outbound.AutonomySpan, error) { return nil, nil }
+
 // spanFixture builds a detector wired to a recording store, plus a session to
 // drive transitions on. Struct-literal detector: the span code touches only
 // the store and the logger.

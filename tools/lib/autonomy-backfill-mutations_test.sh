@@ -223,17 +223,17 @@ assert_go_test_goes_red \
 # whole third state exists for:
 #
 #   7. ABSENCE READS AS TOP-LEVEL. There are 10k rows on the maintainer's disk
-#      written before a run carried a kind. If a blank resolved to "top", the
-#      default view would claim to exclude subagent runs while including every
-#      historical one, and nothing on screen would say so.
+#      written before a run carried a kind. A blank resolving to "top" is a
+#      claim about a row nothing classified, made on the writer's behalf.
 #
-#   8. THE DEFAULT VIEW STOPS EXCLUDING. Subagent runs rejoin the headline, and
-#      every nested stretch is counted twice — the double-count this section is
-#      about, in its live form rather than the back-fill's.
+#   8. A SUBAGENT FILTER COMES BACK. Retargeted (#1905 recording): the
+#      maintainer's decision is that every run counts, subagent runs included,
+#      because Irrlicht recorded them. Reinstating a filter silently drops the
+#      nested runs from every window again.
 #
-#   9. THE EXCLUSION STOPS BEING COUNTED. The runs are left out but the census
-#      does not say how many, so the panel's sentence has no number and a
-#      silently smaller figure is indistinguishable from a quieter week.
+#   9. THE CENSUS STOPS COUNTING A KIND. The three counts are what a client
+#      says out loud about a window's makeup, so a kind that stops being
+#      counted is a kind nobody can see was there.
 #
 #  10. THE LIVE PATH STOPS STAMPING THE KIND. Every span the daemon measures
 #      from now on lands unclassified, and the session state that knew the
@@ -270,25 +270,33 @@ assert_go_test_goes_red \
   "TestAutonomyKindOrUnknown_AbsenceIsNeverTopLevel|TestAutonomySpanTracker_LegacyRowIsNeverSilentlyClassified" \
   "absence must never resolve to a claim"
 
-# ── 8. The default view stops excluding subagent runs ───────────────────────
+# ── 8. A subagent filter comes back ─────────────────────────────────────────
+#
+# RETARGETED (#1905 recording). The maintainer's decision is that subagent runs
+# are ALWAYS counted — they are runs Irrlicht recorded — so what used to be the
+# default behaviour is now the mutation: this reinstates a filter and the window
+# read stops returning the two nested runs.
 assert_go_test_goes_red \
-  "the default view leaves subagent runs out" \
+  "every run is returned, subagent runs included" \
   "core/adapters/outbound/filesystem/autonomy_tracker.go" \
-  $'\tif kind == session.AutonomyKindSubagent && !q.IncludeSubagents {\n\t\treturn\n\t}' \
-  $'\tif kind == session.AutonomyKindSubagent && !q.IncludeSubagents && false {\n\t\treturn\n\t}' \
+  $'\tkind := session.AutonomyKindOrUnknown(r.Kind)\n\tcountSpanKind(kind, res)' \
+  $'\tkind := session.AutonomyKindOrUnknown(r.Kind)\n\tcountSpanKind(kind, res)\n\tif kind == session.AutonomyKindSubagent {\n\t\treturn\n\t}' \
   "./core/adapters/outbound/filesystem/..." \
-  "TestAutonomySpanTracker_DefaultExcludesSubagentsButStillCountsThem" \
-  "want 2 (the top-level one and the unknown one)"
+  "TestAutonomySpanTracker_ReturnsEveryRunIncludingSubagents" \
+  "nothing is dropped for its kind"
 
-# ── 9. The exclusion stops being counted ────────────────────────────────────
+# ── 9. The census stops counting a kind ─────────────────────────────────────
+#
+# The three counts are what a client says out loud about a window's makeup. A
+# kind that stops being counted is a kind nobody can see was there.
 assert_go_test_goes_red \
-  "what the mode left out is counted before the filter drops it" \
+  "the window census counts every kind it holds" \
   "core/adapters/outbound/filesystem/autonomy_tracker.go" \
   $'\tcase session.AutonomyKindSubagent:\n\t\tres.Kinds.Subagent++' \
-  $'\tcase session.AutonomyKindSubagent:\n\t\tif q.IncludeSubagents {\n\t\t\tres.Kinds.Subagent++\n\t\t}' \
+  $'\tcase session.AutonomyKindSubagent:\n\t\t_ = res' \
   "./core/adapters/outbound/filesystem/..." \
-  "TestAutonomySpanTracker_DefaultExcludesSubagentsButStillCountsThem" \
-  "the census counts the"
+  "TestAutonomySpanTracker_ReturnsEveryRunIncludingSubagents" \
+  "want {TopLevel:1 Subagent:2 Unknown:1}"
 
 # ── 10. The live path stops stamping the kind ───────────────────────────────
 assert_go_test_goes_red \

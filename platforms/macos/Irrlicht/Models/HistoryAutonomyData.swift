@@ -49,63 +49,60 @@ enum HistoryAutonomySpanWindow: String, CaseIterable, Identifiable {
     }
 }
 
-/// Which runs the section counts (#1905 subagents) — the section-wide control,
-/// unlike Range and Span, which each drive one element.
+/// There is NO run-scope control any more (#1905 recording). The section counts
+/// every run, subagent runs included, because Irrlicht recorded them — so there
+/// is nothing to pick, and no mode a reader has to remember before reading a
+/// figure. Each row still carries its `kind` and `parent`, which is what keeps
+/// a subagent's run identifiable; what went is the choice, not the
+/// classification.
+
+/// What one Autonomy payload is made of, by run kind (#1905 subagents).
 ///
-/// `topLevel` is the default because a subagent's run is a NESTED INTERVAL
-/// inside its parent's: the daemon deliberately holds a parent `working` while
-/// its children run, so counting both counts one stretch of wall clock twice
-/// and drags the headline median down with short nested runs.
-enum HistoryAutonomyRunScope: String, CaseIterable, Identifiable {
-    case topLevel = "top"
-    case all
-
-    var id: String { rawValue }
-
-    var label: String {
-        switch self {
-        case .topLevel: return "Top-level"
-        case .all: return "+ subagents"
-        }
-    }
-
-    /// What to send as `?include_subagents=`. Only the affirmative case sends
-    /// anything: the daemon's default is top-level runs, so the default view
-    /// asks for nothing extra and an older daemon behaves the same way rather
-    /// than silently including runs the panel says it excluded.
-    var includeSubagentsParam: String? { self == .all ? "true" : nil }
-}
-
-/// What one Autonomy payload counted, and what it left out (#1905 subagents).
-///
-/// The three counts describe the WINDOW, not the returned rows: `subagent` is
-/// how many subagent runs the window holds whether or not they were returned,
-/// which is exactly the number the panel prints as "N excluded". The mode
-/// travels with them so a panel drawn from a response that predates the last
-/// toggle still labels that response correctly.
+/// The three counts describe the window, and — nothing being dropped for its
+/// kind — the returned rows with it. They are still worth carrying: "42 runs"
+/// reads differently once you know how many of them happened inside another.
 struct HistoryAutonomyKinds: Codable, Equatable {
-    /// `"top_level"` or `"all"` — mirrors the daemon's autonomyModeName.
-    let mode: String
     let topLevel: Int
     let subagent: Int
     /// Runs whose kind nothing established: rows written before the
     /// classification existed, and rows the back-fill rebuilt from a source
-    /// carrying no parent information. ALWAYS counted in the figures, and
-    /// always named in the panel — a view that folded them silently into
-    /// either of the other two would report a number nobody could check.
+    /// carrying no parent information. Counted like the rest, and always named
+    /// in the panel — a view that folded them silently into either of the other
+    /// two would report a number nobody could check.
     let unknown: Int
 
     enum CodingKeys: String, CodingKey {
-        case mode, subagent, unknown
+        case subagent, unknown
         case topLevel = "top_level"
     }
+}
 
-    var includesSubagents: Bool { mode == "all" }
+/// How many of the runs in one payload have a duration that is a FLOOR rather
+/// than a measurement (#1905 recording).
+///
+/// Two kinds, kept apart because they are two different limits and a reader who
+/// merged them would misread the chart in opposite directions:
+///
+///   - `running` — the run has not ended, so its length is unknowable. Shown on
+///     the strip, and deliberately absent from the percentiles.
+///   - `lowerBoundStart` — the run has FINISHED, but Irrlicht met it already in
+///     progress, so its start is where the watching began. Those are samples;
+///     dropping them is what left 5 of a day's 35 runs on the record.
+struct HistoryAutonomyMeasurement: Codable, Equatable {
+    let running: Int
+    let lowerBoundStart: Int
 
-    /// What a daemon that predates the field amounts to: nothing known, so
-    /// nothing claimed. `AutonomyFormat.modeLine` returns nil for it rather
-    /// than asserting a mode this payload never stated.
-    static let unavailable = HistoryAutonomyKinds(mode: "", topLevel: 0, subagent: 0, unknown: 0)
+    enum CodingKeys: String, CodingKey {
+        case running
+        case lowerBoundStart = "start_lower_bound"
+    }
+
+    /// What a daemon that predates the field amounts to: nothing marked.
+    static let none = HistoryAutonomyMeasurement(running: 0, lowerBoundStart: 0)
+
+    /// Whether anything in view is a floor — the single condition under which
+    /// the panel has something extra to say.
+    var any: Bool { running > 0 || lowerBoundStart > 0 }
 }
 
 /// How a span ended — the state the session left `working` for. Raw values
@@ -335,14 +332,17 @@ struct HistoryAutonomyDurationResponse: Codable {
     /// rather than failing outright — `provenanceOrNone` collapses the two
     /// "say nothing" cases into one.
     let provenance: HistoryAutonomyProvenance?
-    /// What this payload counted (#1905 subagents). Optional for the same
-    /// reason as `provenance`, and absent means SAY NOTHING — never "it counted
-    /// top-level runs", which is a claim a daemon that predates the field
-    /// cannot make.
+    /// What this payload is made of, by run kind (#1905 subagents). Optional
+    /// for the same reason as `provenance`, and absent means SAY NOTHING —
+    /// which is not the same claim as "there were none".
     let kinds: HistoryAutonomyKinds?
+    /// How many of the runs in view are floors rather than measurements
+    /// (#1905 recording). Optional for the same reason; absent means nothing
+    /// was marked.
+    let measurement: HistoryAutonomyMeasurement?
 
     enum CodingKeys: String, CodingKey {
-        case window, chart, start, end, buckets, summary, provenance, kinds
+        case window, chart, start, end, buckets, summary, provenance, kinds, measurement
         case bucketSeconds = "bucket_seconds"
         case bucketStarts = "bucket_starts"
         case sampleFloor = "sample_floor"
@@ -352,7 +352,7 @@ struct HistoryAutonomyDurationResponse: Codable {
 
     var hasData: Bool { !buckets.isEmpty }
     var provenanceOrNone: HistoryAutonomyProvenance { provenance ?? .none }
-    var kindsOrUnavailable: HistoryAutonomyKinds { kinds ?? .unavailable }
+    var measurementOrNone: HistoryAutonomyMeasurement { measurement ?? .none }
 
     /// The source boundaries that fall inside the DRAWN domain, so the chart
     /// marks only what the reader can actually see.
@@ -487,14 +487,27 @@ struct HistoryAutonomySpanRow: Codable, Identifiable {
     let kind: String?
     /// The parent session id of a subagent run; absent otherwise.
     let parent: String?
+    /// Whether this run has NOT ended (#1905 recording): `end` is where it had
+    /// got to when the window was taken, so its length is a floor. Absent on
+    /// every finished row and on a payload that predates the field.
+    let running: Bool?
+    /// Whether Irrlicht met this run already in progress, so `start` is when it
+    /// began WATCHING rather than when the run began.
+    let startLowerBound: Bool?
 
-    /// Spelled out rather than left to the synthesized memberwise init, so
-    /// `kind` and `parent` can default — the same reason
+    enum CodingKeys: String, CodingKey {
+        case start, end, project, session, reason, kind, parent, running
+        case startLowerBound = "start_lower_bound"
+    }
+
+    /// Spelled out rather than left to the synthesized memberwise init, so the
+    /// trailing fields can default — the same reason
     /// `HistoryAutonomyProvenance` spells its own out. A call site that says
     /// nothing about the kind means exactly what a row that says nothing means:
     /// nobody established it.
     init(start: Int64, end: Int64, project: String, session: String,
-         reason: String?, kind: String? = nil, parent: String? = nil) {
+         reason: String?, kind: String? = nil, parent: String? = nil,
+         running: Bool? = nil, startLowerBound: Bool? = nil) {
         self.start = start
         self.end = end
         self.project = project
@@ -502,16 +515,27 @@ struct HistoryAutonomySpanRow: Codable, Identifiable {
         self.reason = reason
         self.kind = kind
         self.parent = parent
+        self.running = running
+        self.startLowerBound = startLowerBound
     }
+
+    /// Whether the run is still going. Absent reads as finished, which is the
+    /// only thing it can mean: a build that could not record a run in progress
+    /// never wrote one.
+    var isRunning: Bool { running == true }
+
+    /// Whether the run's start is an estimate. Absent reads as measured, for
+    /// the same reason.
+    var hasLowerBoundStart: Bool { startLowerBound == true }
 
     var id: String { "\(project)|\(session)|\(start)|\(end)" }
 
     var endReason: AutonomyEndReason? { reason.flatMap(AutonomyEndReason.init(rawValue:)) }
     var duration: Int64 { Swift.max(0, end - start) }
     /// Whether this run belonged to a subagent. FALSE for a row that never said
-    /// — which is "nothing established it", not "it was top-level"; the strip
-    /// draws such a row either way, and the panel's mode line is where the
-    /// unknown count is stated.
+    /// — which is "nothing established it", not "it was top-level". Every run
+    /// is drawn either way (#1905 recording); this is what makes a nested run
+    /// identifiable, not what excludes it.
     var isSubagentRun: Bool { kind == "sub" }
 }
 
@@ -529,16 +553,17 @@ struct HistoryAutonomySpansResponse: Codable {
     let truncated: Bool
     let provenance: HistoryAutonomyProvenance?
     let kinds: HistoryAutonomyKinds?
+    let measurement: HistoryAutonomyMeasurement?
 
     enum CodingKeys: String, CodingKey {
-        case window, chart, start, end, spans, projects, truncated, provenance, kinds
+        case window, chart, start, end, spans, projects, truncated, provenance, kinds, measurement
         case earliestSpan = "earliest_span"
         case totalRecorded = "total_recorded"
     }
 
     var hasData: Bool { !spans.isEmpty }
     var provenanceOrNone: HistoryAutonomyProvenance { provenance ?? .none }
-    var kindsOrUnavailable: HistoryAutonomyKinds { kinds ?? .unavailable }
+    var measurementOrNone: HistoryAutonomyMeasurement { measurement ?? .none }
 
     func spans(for project: String) -> [HistoryAutonomySpanRow] {
         spans.filter { $0.project == project }

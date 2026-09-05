@@ -8,77 +8,80 @@ import (
 	"irrlicht/core/ports/outbound"
 )
 
-// The API half of the run-kind classification (#1905 subagents).
+// The API half of the run-kind classification (#1905 subagents), retargeted at
+// the FIELD after the filter was removed (#1905 recording).
 //
-// Two things have to be true of every Autonomy payload: the store was asked for
-// the mode the caller wanted, and the payload says which mode produced it. The
-// second is what keeps "42 runs" from meaning two different things depending on
-// a control the reader may have moved after the request went out.
+// The classification is still real data and every row still carries it. What no
+// longer exists is a mode: subagent runs are always counted, so a payload has
+// nothing to declare about which runs it chose, and there is no request the
+// caller can make that changes the answer.
 
-// THE DEFAULT IS TOP-LEVEL RUNS. Absent means false, and so does anything that
-// is not an affirmative — guessing "true" would drag the headline median down
-// with short nested runs that were already counted inside their parents'.
-func TestAutonomyIncludeSubagents_DefaultsToTopLevelRunsOnly(t *testing.T) {
-	cases := []struct {
-		query string
-		want  bool
-	}{
-		{"chart=autonomy_duration&window=30d", false},
-		{"chart=autonomy_duration&window=30d&include_subagents=false", false},
-		{"chart=autonomy_duration&window=30d&include_subagents=", false},
-		{"chart=autonomy_duration&window=30d&include_subagents=maybe", false},
-		{"chart=autonomy_duration&window=30d&include_subagents=true", true},
-		{"chart=autonomy_duration&window=30d&include_subagents=1", true},
-		{"chart=autonomy_spans&window=24h&include_subagents=true", true},
-		{"chart=autonomy_spans&window=24h", false},
+// The section counts every run, whatever the request says. An old client still
+// sending ?include_subagents= gets the same payload as one that does not —
+// answered, never rejected, because a parameter that no longer exists is not a
+// bad request.
+func TestAutonomy_CountsEveryRunWhateverTheQueryAsksFor(t *testing.T) {
+	queries := []string{
+		"chart=autonomy_duration&window=30d",
+		"chart=autonomy_duration&window=30d&include_subagents=false",
+		"chart=autonomy_duration&window=30d&include_subagents=true",
+		"chart=autonomy_spans&window=24h",
+		"chart=autonomy_spans&window=24h&include_subagents=false",
+		"chart=autonomy_spans&window=24h&include_subagents=true",
 	}
-	for _, tc := range cases {
-		t.Run(tc.query, func(t *testing.T) {
-			store := &fakeAutonomyStore{}
-			if rec := getAutonomy(t, store, tc.query); rec.Code != 200 {
+	for _, q := range queries {
+		t.Run(q, func(t *testing.T) {
+			store := &fakeAutonomyStore{
+				spans: []outbound.AutonomySpan{
+					{Start: 100, End: 200, Project: "p", Session: "child",
+						Kind: session.AutonomyKindSubagent, Parent: "top-1"},
+				},
+				kinds: outbound.AutonomySpanKinds{Subagent: 1},
+			}
+			rec := getAutonomy(t, store, q)
+			if rec.Code != 200 {
 				t.Fatalf("status = %d, want 200", rec.Code)
 			}
-			if store.lastQuery.IncludeSubagents != tc.want {
-				t.Fatalf("IncludeSubagents = %v, want %v — the store, not the client, is what filters",
-					store.lastQuery.IncludeSubagents, tc.want)
+			// The mutation this pins: reintroducing any per-request subagent
+			// filter would have to reach the store as a query field, and the
+			// query the handler builds carries none.
+			if store.lastQuery != (outbound.AutonomySpanQuery{
+				Start: store.lastQuery.Start,
+				End:   store.lastQuery.End,
+				Limit: store.lastQuery.Limit,
+			}) {
+				t.Fatalf("query = %+v — it carries something beyond the window and the limit, "+
+					"which is how a per-request filter would come back", store.lastQuery)
 			}
 		})
 	}
 }
 
-// The payload STATES the mode and the window's census, on both elements, so a
-// client can say what it counted and what it left out without recomputing
-// either from rows it does not have.
-func TestAutonomyPayloadsCarryTheModeAndTheCensus(t *testing.T) {
+// The payload STATES the window's census on both elements, so a client can say
+// how much of a window was subagent work without recomputing it from rows it
+// does not have (the duration chart carries no rows at all).
+func TestAutonomyPayloadsCarryTheCensus(t *testing.T) {
 	kinds := outbound.AutonomySpanKinds{TopLevel: 7, Subagent: 5, Unknown: 3}
 
-	t.Run("duration, default mode", func(t *testing.T) {
+	t.Run("duration", func(t *testing.T) {
 		store := &fakeAutonomyStore{kinds: kinds}
 		rec := getAutonomy(t, store, "chart=autonomy_duration&window=30d")
 		var got historyAutonomyDurationResponse
 		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 			t.Fatalf("decode: %v", err)
 		}
-		if got.Kinds.Mode != autonomyModeTopLevel {
-			t.Fatalf("mode = %q, want %q", got.Kinds.Mode, autonomyModeTopLevel)
-		}
 		if got.Kinds.Subagent != 5 || got.Kinds.Unknown != 3 || got.Kinds.TopLevel != 7 {
 			t.Fatalf("kinds = %+v, want the store's census verbatim", got.Kinds)
 		}
 	})
 
-	t.Run("spans, include mode", func(t *testing.T) {
+	t.Run("spans", func(t *testing.T) {
 		store := &fakeAutonomyStore{kinds: kinds}
-		rec := getAutonomy(t, store, "chart=autonomy_spans&window=24h&include_subagents=true")
+		rec := getAutonomy(t, store, "chart=autonomy_spans&window=24h")
 		var got historyAutonomySpansResponse
 		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 			t.Fatalf("decode: %v", err)
 		}
-		if got.Kinds.Mode != autonomyModeAll {
-			t.Fatalf("mode = %q, want %q", got.Kinds.Mode, autonomyModeAll)
-		}
-		// The census does NOT change with the mode: the same window holds the
-		// same runs whichever ones were asked for.
 		if got.Kinds.Subagent != 5 {
 			t.Fatalf("subagent count = %d, want 5", got.Kinds.Subagent)
 		}
@@ -99,7 +102,7 @@ func TestAutonomySpanRowsCarryAResolvedKind(t *testing.T) {
 				Kind: session.AutonomyKindTopLevel},
 		},
 	}
-	rec := getAutonomy(t, store, "chart=autonomy_spans&window=24h&include_subagents=true")
+	rec := getAutonomy(t, store, "chart=autonomy_spans&window=24h")
 	var got historyAutonomySpansResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode: %v", err)

@@ -177,9 +177,13 @@ type historyAutonomyDurationResponse struct {
 	// measured (#1905 back-fill). Always present, zero-valued when the whole
 	// window was measured live.
 	Provenance historyAutonomyProvenance `json:"provenance"`
-	// Kinds says what this payload counted and what it left out (#1905
-	// subagents). Always present.
+	// Kinds says what this payload is made of, by run kind (#1905 subagents).
+	// Always present.
 	Kinds historyAutonomyKinds `json:"kinds"`
+	// Measurement says how many of the runs in view have a duration that is a
+	// floor rather than a measurement (#1905 recording). Always present,
+	// zero-valued when every run in view is finished and fully measured.
+	Measurement historyAutonomyMeasurement `json:"measurement"`
 }
 
 // historyAutonomyProvenance is the wire shape of
@@ -298,55 +302,63 @@ func autonomyEraName(source string) string {
 	return source
 }
 
-// historyAutonomyKinds is the wire shape of outbound.AutonomySpanKinds plus the
-// MODE that produced the response (#1905 subagents).
+// historyAutonomyKinds is the wire shape of outbound.AutonomySpanKinds: what
+// the window is made of, by run kind (#1905 subagents).
 //
-// The mode ships with the counts rather than being left for the client to
-// remember it asked for, because the two together are what makes a figure
-// unambiguous: "42 runs" means different things under each mode, and a client
-// that redrew from a cached payload after the toggle moved would otherwise
-// label the old number with the new mode.
+// THERE IS NO MODE ANY MORE (#1905 recording). Subagent runs are always
+// counted — they are runs Irrlicht itself recorded — so "42 runs" means one
+// thing and a client has nothing to remember it asked for. The three counts
+// stay because they still say something a reader wants: how much of a window
+// was subagent work, and how much of it predates the classification.
 type historyAutonomyKinds struct {
-	// Mode is autonomyModeTopLevel or autonomyModeAll — what the spans and
-	// every figure derived from them actually counted.
-	Mode string `json:"mode"`
-	// TopLevel, Subagent and Unknown count the WINDOW, not the response: they
-	// are taken before the subagent filter runs, so `Subagent` is the number a
-	// client prints as "N subagent runs excluded" under the default mode.
+	// TopLevel, Subagent and Unknown count the window, and — nothing being
+	// dropped for its kind — the rows returned with them.
 	TopLevel int `json:"top_level"`
 	Subagent int `json:"subagent"`
 	Unknown  int `json:"unknown"`
 }
 
-// The two mode names on the wire. Spelled here and nowhere else so the two
-// clients cannot disagree about what a payload counted.
-const (
-	// autonomyModeTopLevel is the default: subagent runs are left out, because
-	// a subagent's span is a nested interval inside its parent's and counting
-	// both counts one stretch twice.
-	autonomyModeTopLevel = "top_level"
-
-	// autonomyModeAll counts every run, subagent runs included.
-	autonomyModeAll = "all"
-)
-
-// autonomyModeName names the mode a query ran under.
-func autonomyModeName(includeSubagents bool) string {
-	if includeSubagents {
-		return autonomyModeAll
-	}
-	return autonomyModeTopLevel
-}
-
-// autonomyKindsFrom converts the store's kind census to the wire shape,
-// stamping the mode it was read under. One converter for both payloads, so the
-// two elements of one section can never disagree about what they counted.
-func autonomyKindsFrom(k outbound.AutonomySpanKinds, includeSubagents bool) historyAutonomyKinds {
+// autonomyKindsFrom converts the store's kind census to the wire shape. One
+// converter for both payloads, so the two elements of one section can never
+// disagree about what they counted.
+func autonomyKindsFrom(k outbound.AutonomySpanKinds) historyAutonomyKinds {
 	return historyAutonomyKinds{
-		Mode:     autonomyModeName(includeSubagents),
 		TopLevel: k.TopLevel,
 		Subagent: k.Subagent,
 		Unknown:  k.Unknown,
+	}
+}
+
+// historyAutonomyMeasurement is the wire shape of
+// outbound.AutonomySpanMeasurement: how many of the runs in view have a
+// duration that is a LOWER BOUND rather than a measurement (#1905 recording).
+//
+// It ships beside Provenance and answers a different question. Provenance asks
+// where a number came from; this asks whether the number is finished. A run
+// still going, and a run Irrlicht met already in progress, are both real runs
+// with real durations — floors, not measurements. Both are counted, returned
+// and named on screen rather than quietly dropped, because dropping them is
+// what left 5 of a day's 35 runs on the record.
+type historyAutonomyMeasurement struct {
+	// Running is how many of the runs in view have not ended.
+	//
+	// They are NOT samples for the percentiles — see
+	// buildAutonomyDurationResponse, where that decision is made and stated —
+	// so this is also the gap between the runs the section shows and the runs
+	// its percentiles were computed from.
+	Running int `json:"running"`
+
+	// LowerBoundStart is how many began before Irrlicht was watching, so their
+	// recorded start is when it started watching and not when the run began.
+	LowerBoundStart int `json:"start_lower_bound"`
+}
+
+// autonomyMeasurementFrom converts the store's measurement census to the wire
+// shape. One converter for both payloads, same reason as the kinds census.
+func autonomyMeasurementFrom(m outbound.AutonomySpanMeasurement) historyAutonomyMeasurement {
+	return historyAutonomyMeasurement{
+		Running:         m.Running,
+		LowerBoundStart: m.LowerBoundStart,
 	}
 }
 
@@ -365,6 +377,13 @@ type historyAutonomySpanRow struct {
 	Kind string `json:"kind"`
 	// Parent is the parent session id of a subagent run, "" otherwise.
 	Parent string `json:"parent,omitempty"`
+	// Running marks a run that has not ended: End is where it had got to when
+	// the window was taken, so its length is a floor (#1905 recording). A row
+	// carrying it must never be drawn as a finished run.
+	Running bool `json:"running,omitempty"`
+	// StartLowerBound marks a run Irrlicht met already in progress, so Start
+	// is when it began WATCHING. Its length is a floor for the other reason.
+	StartLowerBound bool `json:"start_lower_bound,omitempty"`
 }
 
 // historyAutonomySpansResponse is the chart=autonomy_spans payload: the spans
@@ -384,30 +403,31 @@ type historyAutonomySpansResponse struct {
 	// Provenance marks how much of THIS window was reconstructed. Counted
 	// after the limit clips the spans, so it describes the rows above it.
 	Provenance historyAutonomyProvenance `json:"provenance"`
-	// Kinds says what this payload counted and what it left out (#1905
-	// subagents). Unlike Provenance these counts describe the WINDOW, not the
-	// returned rows — the excluded runs are the whole point of the number.
+	// Kinds says what this payload is made of, by run kind (#1905 subagents).
 	Kinds historyAutonomyKinds `json:"kinds"`
+	// Measurement says how many of the returned runs have a duration that is a
+	// floor rather than a measurement (#1905 recording).
+	Measurement historyAutonomyMeasurement `json:"measurement"`
 }
 
 // serveHistoryAutonomyDurationChart serves chart=autonomy_duration. A nil
 // store yields an empty-but-valid payload rather than an error, mirroring
 // serveHistoryAgentsChart.
-func serveHistoryAutonomyDurationChart(w http.ResponseWriter, store outbound.AutonomySpanStore, window string, bucketSeconds, start, end int64, includeSubagents bool) {
-	res, ok := readAutonomySpans(w, store, outbound.AutonomySpanQuery{Start: start, End: end, IncludeSubagents: includeSubagents})
+func serveHistoryAutonomyDurationChart(w http.ResponseWriter, store outbound.AutonomySpanStore, window string, bucketSeconds, start, end int64) {
+	res, ok := readAutonomySpans(w, store, outbound.AutonomySpanQuery{Start: start, End: end})
 	if !ok {
 		return
 	}
-	writeHistoryJSON(w, buildAutonomyDurationResponse(window, bucketSeconds, start, end, res, includeSubagents))
+	writeHistoryJSON(w, buildAutonomyDurationResponse(window, bucketSeconds, start, end, res))
 }
 
 // serveHistoryAutonomySpansChart serves chart=autonomy_spans.
-func serveHistoryAutonomySpansChart(w http.ResponseWriter, store outbound.AutonomySpanStore, window string, start, end int64, includeSubagents bool) {
-	res, ok := readAutonomySpans(w, store, outbound.AutonomySpanQuery{Start: start, End: end, Limit: autonomySpanLimit, IncludeSubagents: includeSubagents})
+func serveHistoryAutonomySpansChart(w http.ResponseWriter, store outbound.AutonomySpanStore, window string, start, end int64) {
+	res, ok := readAutonomySpans(w, store, outbound.AutonomySpanQuery{Start: start, End: end, Limit: autonomySpanLimit})
 	if !ok {
 		return
 	}
-	writeHistoryJSON(w, buildAutonomySpansResponse(window, start, end, res, includeSubagents))
+	writeHistoryJSON(w, buildAutonomySpansResponse(window, start, end, res))
 }
 
 // readAutonomySpans performs the store read shared by both elements,
@@ -435,7 +455,29 @@ func readAutonomySpans(w http.ResponseWriter, store outbound.AutonomySpanStore, 
 // named in stats.Percentile — not because the clients could not divide, but
 // because "the p95" is ambiguous enough that two independent implementations
 // draw two different lines from the same data (#1905 design decision 5).
-func buildAutonomyDurationResponse(window string, bucketSeconds, start, end int64, res *outbound.AutonomySpanResult, includeSubagents bool) historyAutonomyDurationResponse {
+// A RUN STILL IN PROGRESS IS NOT A SAMPLE. This is where that is decided
+// (#1905 recording), and it is a decision rather than an omission.
+//
+// A run that is three hours in and continuing has a duration of "at least three
+// hours". Folding that into a percentile treats a floor as a measurement, and
+// the error is not random: it always shortens, and it shortens the longest runs
+// hardest, which is the exact bias this whole fix exists to remove. A p95 that
+// counted it would say the top 5% of runs were shorter than they were.
+//
+// So a running run is COUNTED, RETURNED, DRAWN and NAMED — response.Measurement
+// carries how many there are, and both clients say so — but the percentile
+// envelope, the summary row and the min/max extremes are computed from finished
+// runs only. Removing it from the chart instead was the other option and is
+// worse in the same direction as the original defect: it makes the longest run
+// on the machine the one thing the section cannot show.
+//
+// A LOWER-BOUND START is treated differently, and the asymmetry is the point. A
+// run Irrlicht met already in progress has FINISHED: its length is known to
+// within however long it had been going when Irrlicht started watching, which
+// is bounded by the daemon's own uptime. It is a sample, and it is marked.
+// Dropping those would re-create the under-count exactly — every long run that
+// crosses a restart is one of them.
+func buildAutonomyDurationResponse(window string, bucketSeconds, start, end int64, res *outbound.AutonomySpanResult) historyAutonomyDurationResponse {
 	n := 0
 	if bucketSeconds > 0 && end > start {
 		n = int((end - start + bucketSeconds - 1) / bucketSeconds)
@@ -448,6 +490,9 @@ func buildAutonomyDurationResponse(window string, bucketSeconds, start, end int6
 	byBucket := make([][]float64, n)
 	all := make([]float64, 0, len(res.Spans))
 	for _, s := range res.Spans {
+		if s.Running {
+			continue
+		}
 		d := float64(s.Duration())
 		if d <= 0 {
 			continue
@@ -485,7 +530,8 @@ func buildAutonomyDurationResponse(window string, bucketSeconds, start, end int6
 		EarliestSpan:  res.EarliestStart,
 		TotalRecorded: res.TotalRecorded,
 		Provenance:    autonomyProvenanceFrom(res.Provenance),
-		Kinds:         autonomyKindsFrom(res.Kinds, includeSubagents),
+		Kinds:         autonomyKindsFrom(res.Kinds),
+		Measurement:   autonomyMeasurementFrom(res.Measurement),
 	}
 }
 
@@ -523,19 +569,25 @@ func autonomySummaryFrom(samples []float64) historyAutonomySummary {
 
 // buildAutonomySpansResponse renders the window's spans plus the strip's row
 // order (most autonomous seconds first, then name for a stable tie-break).
-func buildAutonomySpansResponse(window string, start, end int64, res *outbound.AutonomySpanResult, includeSubagents bool) historyAutonomySpansResponse {
+func buildAutonomySpansResponse(window string, start, end int64, res *outbound.AutonomySpanResult) historyAutonomySpansResponse {
 	rows := make([]historyAutonomySpanRow, 0, len(res.Spans))
 	totals := map[string]int64{}
 	for _, s := range res.Spans {
 		rows = append(rows, historyAutonomySpanRow{
-			Start:   s.Start,
-			End:     s.End,
-			Project: s.Project,
-			Session: s.Session,
-			Reason:  s.Reason,
-			Kind:    session.AutonomyKindOrUnknown(s.Kind),
-			Parent:  s.Parent,
+			Start:           s.Start,
+			End:             s.End,
+			Project:         s.Project,
+			Session:         s.Session,
+			Reason:          s.Reason,
+			Kind:            session.AutonomyKindOrUnknown(s.Kind),
+			Parent:          s.Parent,
+			Running:         s.Running,
+			StartLowerBound: s.StartLowerBound,
 		})
+		// A running run's seconds-so-far DO count towards its project's rank.
+		// The row order is "which projects had the most autonomous time", and
+		// a three-hour run still going is three hours of it — leaving it out
+		// would rank the busiest project below one that merely finished first.
 		totals[s.Project] += s.Duration()
 	}
 	projects := make([]string, 0, len(totals))
@@ -559,6 +611,7 @@ func buildAutonomySpansResponse(window string, start, end int64, res *outbound.A
 		TotalRecorded: res.TotalRecorded,
 		Truncated:     res.Truncated,
 		Provenance:    autonomyProvenanceFrom(res.Provenance),
-		Kinds:         autonomyKindsFrom(res.Kinds, includeSubagents),
+		Kinds:         autonomyKindsFrom(res.Kinds),
+		Measurement:   autonomyMeasurementFrom(res.Measurement),
 	}
 }

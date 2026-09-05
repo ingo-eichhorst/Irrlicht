@@ -134,6 +134,29 @@ type SessionDetector struct {
 	mu              sync.Mutex
 	projectSessions map[string]string // sessionID → projectDir
 
+	// autonomyRecovered holds the open autonomy runs a PREVIOUS daemon left in
+	// the span store's journal, keyed by session id, waiting to be adopted by
+	// the session they belong to as it is rediscovered (#1905 recording).
+	//
+	// An entry is removed when it is adopted, and settled — closed where the
+	// previous daemon last saw it alive — when autonomyRecoveryDeadline passes
+	// without adoption. That deadline is what stops recovery from becoming
+	// resurrection: a session that finished or went away while the daemon was
+	// down is never rediscovered, so its run closes at the last instant anyone
+	// measured rather than being credited with the downtime.
+	//
+	// Guarded by mu, like projectSessions beside it: written on the event-loop
+	// goroutine and read by the refresh ticker's.
+	autonomyRecovered        map[string]outbound.AutonomySpan
+	autonomyRecoveryDeadline int64
+
+	// autonomyOpenSyncAt and autonomyOpenSyncKey throttle the open-run journal
+	// rewrite on the refresh ticker: it happens when the set of open runs
+	// CHANGED, or once every autonomyOpenSyncInterval to move their last-seen
+	// instant forward. Also under mu.
+	autonomyOpenSyncAt  int64
+	autonomyOpenSyncKey string
+
 	// deletedSessions tracks session IDs that were explicitly deleted (process
 	// exit, /clear cleanup) with their deletion timestamp. Prevents late-
 	// arriving transcript activity from re-creating a session that was
@@ -312,6 +335,7 @@ func newSessionDetector() *SessionDetector {
 		signals:                  session.NewSignalHolds(),
 		dwell:                    session.NewStateDwell(),
 		idleProjectRetryAttempts: make(map[string]int),
+		autonomyRecovered:        make(map[string]outbound.AutonomySpan),
 		bgLiveProbe:              anyLiveOutputWriter,
 		bgPIDProbe:               anyLivePID,
 		bgLive:                   make(map[string]bool),
@@ -474,8 +498,15 @@ func (d *SessionDetector) SetCostTracker(c outbound.CostTracker) {
 // autonomy spans are appended to it as sessions leave `working`. Pass nil to
 // disable — the open-span bookkeeping on the session still runs, so a daemon
 // without a store never accumulates a stale "open since".
+//
+// It also loads the store's OPEN-RUN JOURNAL, which is what makes a run survive
+// the daemon that was measuring it (#1905 recording). Done here rather than in
+// startup.go because this is the single wiring point every daemon and every
+// test goes through, and a recovery that only ran on one of those paths would
+// be a recovery nothing exercises.
 func (d *SessionDetector) SetAutonomySpanStore(s outbound.AutonomySpanStore) {
 	d.autonomySpans = s
+	d.loadRecoverableAutonomySpans()
 }
 
 // SetHistoryTracker wires an optional HistoryTracker that records per-session

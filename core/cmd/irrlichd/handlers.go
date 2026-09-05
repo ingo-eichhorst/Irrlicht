@@ -691,12 +691,6 @@ type historyQuery struct {
 	rangeKey    string
 	start, end  int64
 	seriesQuery outbound.SeriesQuery
-	// includeSubagents is Autonomy's own selector (#1905 subagents): whether
-	// runs of child sessions join the ones of top-level sessions. Every other
-	// chart ignores it — a subagent's cost is its own, but a subagent's RUN is
-	// a nested interval inside its parent's, which is what makes this one
-	// section need the distinction.
-	includeSubagents bool
 }
 
 // resolveHistoryWindow resolves a chart's [start, end) window and bucket width
@@ -792,33 +786,25 @@ func resolveHistoryQuery(w http.ResponseWriter, q url.Values) (historyQuery, boo
 	}
 
 	return historyQuery{
-		chart:            chart,
-		group:            group,
-		metric:           metric,
-		scopeEcho:        scopeEcho,
-		rangeKey:         rangeKey,
-		start:            start,
-		end:              end,
-		seriesQuery:      seriesQuery,
-		includeSubagents: autonomyIncludeSubagents(q),
+		chart:       chart,
+		group:       group,
+		metric:      metric,
+		scopeEcho:   scopeEcho,
+		rangeKey:    rangeKey,
+		start:       start,
+		end:         end,
+		seriesQuery: seriesQuery,
 	}, true
 }
 
-// autonomyIncludeSubagents reads ?include_subagents= (#1905 subagents).
-//
-// ABSENT MEANS FALSE — top-level runs only — and so does any value that is not
-// an affirmative one. That direction is deliberate: the failure mode of
-// guessing "true" is a headline p50 dragged down by short nested runs that were
-// already counted inside their parents', which is a wrong number nothing on
-// screen would explain. The failure mode of guessing "false" is a control that
-// looks like it did nothing, which the reader can see.
-func autonomyIncludeSubagents(q url.Values) bool {
-	switch q.Get("include_subagents") {
-	case "1", "true", "yes":
-		return true
-	}
-	return false
-}
+// There is no ?include_subagents= any more (#1905 recording). Autonomy counts
+// every run, subagent runs included: they are runs Irrlicht recorded, and which
+// ones a window holds stopped being a per-request choice. An old client still
+// sending the parameter is answered with every run, which is what its
+// affirmative setting asked for and a superset of what its default did — never
+// an error, because a query parameter that no longer exists is not a bad
+// request. The `kind` and `parent` fields on each row are what still tell a
+// subagent's run from a top-level one.
 
 // historyChartDeps bundles the readers the non-cost charts need, so the
 // dispatcher below takes one value instead of four positional collaborators
@@ -840,9 +826,9 @@ func serveNonCostHistoryChart(w http.ResponseWriter, r *http.Request, hq history
 	case chartAutonomyDuration:
 		// Autonomy (#1905) reads the always-on span log, never the opt-in
 		// recordings — see outbound.AutonomySpanStore for why that matters.
-		serveHistoryAutonomyDurationChart(w, deps.autonomy, hq.rangeKey, hq.seriesQuery.BucketSeconds, hq.start, hq.end, hq.includeSubagents)
+		serveHistoryAutonomyDurationChart(w, deps.autonomy, hq.rangeKey, hq.seriesQuery.BucketSeconds, hq.start, hq.end)
 	case chartAutonomySpans:
-		serveHistoryAutonomySpansChart(w, deps.autonomy, hq.rangeKey, hq.start, hq.end, hq.includeSubagents)
+		serveHistoryAutonomySpansChart(w, deps.autonomy, hq.rangeKey, hq.start, hq.end)
 	case "yield":
 		// A per-project aggregate over completed sessions, not a time series (#373).
 		writeHistoryJSON(w, buildYieldResponse(hq.rangeKey, hq.group, hq.start, hq.end, deps.sessions))

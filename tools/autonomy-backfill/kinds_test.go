@@ -80,7 +80,7 @@ func readBackfilled(t *testing.T, dir string) map[string]outbound.AutonomySpan {
 	t.Helper()
 	tracker := filesystem.NewAutonomySpanTrackerWithDir(filepath.Join(dir, autonomyDirName))
 	res, err := tracker.SpansInWindow(outbound.AutonomySpanQuery{
-		Start: 0, End: math.MaxInt64, IncludeSubagents: true,
+		Start: 0, End: math.MaxInt64,
 	})
 	if err != nil {
 		t.Fatalf("SpansInWindow: %v", err)
@@ -132,10 +132,16 @@ func TestBackfillClassifiesEachReconstructedRun(t *testing.T) {
 	}
 }
 
-// THE DEFAULT VIEW, over the rows the back-fill actually wrote. Reading the log
-// back the way the daemon serves it must leave the subagent's run out and still
-// report that it was left out.
-func TestBackfilledSubagentRunIsExcludedFromTheDefaultView(t *testing.T) {
+// THE SERVED VIEW, over the rows the back-fill actually wrote. Retargeted at
+// the FIELD (#1905 recording): reading the log back the way the daemon serves
+// it returns the reconstructed subagent's run like any other, CARRYING its
+// classification and its parent, and the census names it.
+//
+// What the back-fill has to get right is unchanged — it is the only producer
+// that can genuinely fail to classify a run, because the cost log carries no
+// parentage at all. What changed is that its verdict is no longer a reason to
+// drop a row.
+func TestBackfilledSubagentRunIsServedWithItsClassification(t *testing.T) {
 	dir := writeSubagentFixtureDataDir(t)
 	runBackfill(t, options{dataDir: dir, gapSeconds: costGapSeconds, apply: true})
 
@@ -144,13 +150,21 @@ func TestBackfilledSubagentRunIsExcludedFromTheDefaultView(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SpansInWindow: %v", err)
 	}
-	for _, s := range res.Spans {
-		if s.Session == "kid" {
-			t.Fatalf("the default view returned the subagent's run: %+v", s)
+	var kid *outbound.AutonomySpan
+	for i := range res.Spans {
+		if res.Spans[i].Session == "kid" {
+			kid = &res.Spans[i]
 		}
 	}
+	if kid == nil {
+		t.Fatalf("the subagent's reconstructed run is missing: %+v", res.Spans)
+	}
+	if kid.Kind != session.AutonomyKindSubagent || kid.Parent != "boss" {
+		t.Fatalf("the subagent's run lost its classification on the way back: kind=%q parent=%q",
+			kid.Kind, kid.Parent)
+	}
 	if res.Kinds.Subagent != 1 {
-		t.Fatalf("Kinds.Subagent = %d, want 1 — an exclusion nothing counts cannot be stated on screen",
+		t.Fatalf("Kinds.Subagent = %d, want 1 — a kind nothing counts cannot be stated on screen",
 			res.Kinds.Subagent)
 	}
 	if res.Kinds.Unknown < 1 {
@@ -175,7 +189,7 @@ func TestBackfillReplaceReclassifiesInsteadOfDoubling(t *testing.T) {
 	}
 
 	runBackfill(t, options{dataDir: dir, gapSeconds: costGapSeconds, apply: true})
-	first, err := tracker.SpansInWindow(outbound.AutonomySpanQuery{Start: 0, End: math.MaxInt64, IncludeSubagents: true})
+	first, err := tracker.SpansInWindow(outbound.AutonomySpanQuery{Start: 0, End: math.MaxInt64})
 	if err != nil {
 		t.Fatalf("SpansInWindow: %v", err)
 	}
@@ -187,7 +201,7 @@ func TestBackfillReplaceReclassifiesInsteadOfDoubling(t *testing.T) {
 	}
 
 	runBackfill(t, options{dataDir: dir, gapSeconds: costGapSeconds, apply: true, replace: true})
-	second, err := tracker.SpansInWindow(outbound.AutonomySpanQuery{Start: 0, End: math.MaxInt64, IncludeSubagents: true})
+	second, err := tracker.SpansInWindow(outbound.AutonomySpanQuery{Start: 0, End: math.MaxInt64})
 	if err != nil {
 		t.Fatalf("SpansInWindow: %v", err)
 	}

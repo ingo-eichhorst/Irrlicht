@@ -241,12 +241,18 @@ struct HistoryAutonomyContentView: View {
     /// back-filled, says that too.
     private var collectionProvenance: some View {
         VStack(alignment: .leading, spacing: IrrSpacing.sp1) {
-            // What these figures counted, and what the active mode left out
-            // (#1905 subagents). Above the provenance line because it qualifies
-            // every number in the section, where provenance qualifies where
-            // they came from.
-            if let mode = AutonomyFormat.modeLine(duration.kindsOrUnavailable) {
-                Text(mode)
+            // What these figures counted (#1905 subagents). Above the
+            // provenance line because it qualifies every number in the section,
+            // where provenance qualifies where they came from.
+            if let counting = AutonomyFormat.countingLine(duration.kinds) {
+                Text(counting)
+            }
+            // …and which of them are floors rather than measurements (#1905
+            // recording). Same register, same reason: a lower bound rendered as
+            // a measurement is a wrong number with nothing on screen saying it
+            // is wrong. Silent when every run in view is finished and measured.
+            if let measurement = AutonomyFormat.measurementLine(duration.measurementOrNone) {
+                Text(measurement)
             }
             Text(AutonomyFormat.provenance(earliest: duration.earliestSpan,
                                            total: duration.totalRecorded,
@@ -761,38 +767,67 @@ enum AutonomyFormat {
         return "Collecting since \(since) · \(total) runs recorded."
     }
 
-    /// States WHICH RUNS the figures counted and how many the active mode left
-    /// out (#1905 subagents). `nil` only for a payload from a daemon that
-    /// predates the field — absence there means "this response never said",
-    /// which is not the same claim as "it counted top-level runs".
+    /// States WHAT the figures counted (#1905 subagents, retargeted by #1905
+    /// recording). `nil` only for a payload from a daemon that predates the
+    /// census — absence there means "this response never said", which is not
+    /// the same claim as "there were none".
     ///
-    /// THE UNKNOWN CLAUSE IS THE LOAD-BEARING PART. A row written before
-    /// Irrlicht told the two apart carries no classification, and such a row is
-    /// COUNTED — excluding it would delete most of a back-filled history on a
-    /// guess. Counting it in silence is the failure this section exists to
-    /// prevent: the view would claim to exclude subagent runs while including
-    /// every historical one, with nothing on screen saying so. So it says how
-    /// many.
-    static func modeLine(_ k: HistoryAutonomyKinds) -> String? {
-        guard !k.mode.isEmpty else { return nil }
-        var out: String
-        if k.includesSubagents {
-            out = k.subagent > 0
-                ? "Counting every run, including \(k.subagent) subagent run\(k.subagent == 1 ? "" : "s") "
-                    + "— each of which happened inside its parent's run."
-                : "Counting every run, subagent runs included. This window holds none."
-        } else {
-            out = k.subagent > 0
-                ? "Counting top-level runs only · \(k.subagent) subagent run\(k.subagent == 1 ? "" : "s") "
-                    + "excluded, because each already happened inside its parent's run."
-                : "Counting top-level runs only. This window holds no subagent runs."
-        }
+    /// THERE IS NO MODE ANY MORE. Every run counts, subagent runs included,
+    /// because Irrlicht recorded them — so no excluded count is reported and
+    /// there is no control whose position a reader has to remember. What the
+    /// sentence still does is describe the window's MAKEUP.
+    ///
+    /// THE UNKNOWN CLAUSE STAYS LOAD-BEARING. A row written before Irrlicht
+    /// told the two apart carries no classification, and it is counted like the
+    /// rest — but counting it in silence would let the panel imply a
+    /// classification nobody made. So it says how many.
+    static func countingLine(_ k: HistoryAutonomyKinds?) -> String? {
+        guard let k else { return nil }
+        var out = k.subagent > 0
+            ? "Counting every run, including \(k.subagent) subagent run\(k.subagent == 1 ? "" : "s") "
+                + "— each of which happened inside its parent's run."
+            : "Counting every run, subagent runs included. This window holds none."
         if k.unknown > 0 {
             out += " \(k.unknown) run\(k.unknown == 1 ? " was" : "s were") recorded before Irrlicht told "
                 + "top-level and subagent runs apart, so which they were is unknown — those are counted "
                 + "either way."
         }
         return out
+    }
+
+    /// Marks the runs in view whose duration is a FLOOR rather than a
+    /// measurement (#1905 recording). `nil` when every run in view is finished
+    /// and fully measured — the quiet case on a machine whose daemon has been
+    /// up all day.
+    ///
+    /// Two kinds, two sentences, because they are two different limits and a
+    /// reader who merged them would misread the chart in opposite directions:
+    ///
+    ///   - STILL RUNNING. The run has not ended, so its length is unknowable.
+    ///     It is shown, and deliberately kept out of the percentiles — folding
+    ///     a floor into a p95 as though it were final always shortens, and
+    ///     shortens the longest runs hardest. Both halves are said, so a reader
+    ///     who can see a 3-hour run on the strip is not left wondering why the
+    ///     median did not move.
+    ///   - STARTED BEFORE IRRLICHT WAS WATCHING. The run has finished, but its
+    ///     start is where the watching began. Those ARE samples; dropping them
+    ///     is what left 5 of a day's 35 runs on the record.
+    static func measurementLine(_ m: HistoryAutonomyMeasurement) -> String? {
+        guard m.any else { return nil }
+        var parts: [String] = []
+        if m.running > 0 {
+            let one = m.running == 1
+            parts.append("\(m.running) run\(one ? " is" : "s are") still going: "
+                + "\(one ? "its length is" : "their lengths are") how long \(one ? "it has" : "they have") "
+                + "lasted SO FAR, so \(one ? "it is" : "they are") shown but left out of the percentiles.")
+        }
+        if m.lowerBoundStart > 0 {
+            let one = m.lowerBoundStart == 1
+            parts.append("\(m.lowerBoundStart) run\(one ? "" : "s") already going when Irrlicht started "
+                + "watching — \(one ? "its" : "their") start is when it started watching, not when the run "
+                + "began, so \(one ? "that length is a minimum" : "those lengths are minimums").")
+        }
+        return parts.joined(separator: " ")
     }
 
     /// Marks a view that is showing back-filled history (#1905). `nil` when
