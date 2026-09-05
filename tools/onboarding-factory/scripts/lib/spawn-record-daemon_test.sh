@@ -25,7 +25,11 @@ SCRIPTS_DIR="$(cd "$DIR/.." && pwd)"
 # shellcheck source=spawn-record-daemon.sh
 source "$DIR/spawn-record-daemon.sh"
 
-TMP="$(mktemp -d)"
+# A SHORT scratch root, deliberately. $HOME feeds record_daemon_sock's
+# production branch, and the daemon binds that path: mktemp's default root on
+# macOS is long enough that every case would trip the AF_UNIX length guard
+# below instead of reaching the behaviour it grades.
+TMP="$(mktemp -d /tmp/irr-srd.XXXXXX)"
 trap 'rm -rf "$TMP"' EXIT
 
 # Floor under every case: $HOME feeds record_daemon_sock's production branch and
@@ -205,6 +209,52 @@ kill_record_daemon
 assert_eq "$SHUTDOWN_REASON" "sigkill" "$(cat "$STAGING/daemon.shutdown")"
 assert_eq "escalation order" "INT,TERM,KILL" "$SIGNALS_SENT"
 
+echo "== SIGKILL death and reaping are observed on a real child =="
+fresh_staging real_sigkill
+unset -f kill
+REAL_DAEMON="$STAGING/ignore-int-term"
+REAL_READY="$STAGING/ready"
+cat > "$REAL_DAEMON" <<EOF
+#!/usr/bin/env bash
+trap '' INT TERM
+: > "$REAL_READY"
+while :; do sleep 0.05; done
+EOF
+chmod +x "$REAL_DAEMON"
+"$REAL_DAEMON" &
+RECORD_DAEMON_PID=$!
+# Same rule: the ladder below grades a child that is actually running, so a
+# child that never got there must fail the case rather than silently change
+# what is being measured.
+ready=missing
+for _ in $(seq 1 500); do
+  [[ -e "$REAL_READY" ]] && { ready=present; break; }
+  sleep 0.01
+done
+assert_eq "the real child signalled ready before the ladder" "present" "$ready"
+RECORD_DAEMON_POLL_TICK_S=0.01
+RECORD_DAEMON_INT_TICKS=2
+RECORD_DAEMON_TERM_TICKS=2
+# shellcheck disable=SC2034  # not read by this file: the SOURCED kill_record_daemon
+#                               reads the KILL grace budget.
+RECORD_DAEMON_KILL_TICKS=20
+kill_record_daemon
+rc=$?
+assert_eq "real child shutdown succeeds" "0" "$rc"
+assert_eq "$SHUTDOWN_REASON" "sigkill" "$(cat "$STAGING/daemon.shutdown")"
+if kill -0 "$RECORD_DAEMON_PID" 2>/dev/null; then got=alive; else got=dead; fi
+assert_eq "real child is dead after the observed KILL" "dead" "$got"
+if jobs -pr | grep -qx "$RECORD_DAEMON_PID"; then got=unreaped; else got=reaped; fi
+assert_eq "real child is reaped" "reaped" "$got"
+# shellcheck disable=SC2034  # not read by this file: these restore the SOURCED
+#                               spawn-record-daemon.sh timing state after the real-child fixture.
+RECORD_DAEMON_POLL_TICK_S=0
+# shellcheck disable=SC2034  # see above — a directive covers only the next line
+RECORD_DAEMON_INT_TICKS=3
+# shellcheck disable=SC2034  # see above
+RECORD_DAEMON_TERM_TICKS=3
+unset RECORD_DAEMON_KILL_TICKS
+
 echo "== a daemon that never started records 'unknown' and still returns 0 =="
 fresh_staging nodaemon
 unset -f kill    # back to the real builtin: there is no fake process to probe
@@ -212,6 +262,62 @@ kill_record_daemon
 rc=$?
 assert_eq "returns 0" "0" "$rc"
 assert_eq "$SHUTDOWN_REASON" "unknown" "$(cat "$STAGING/daemon.shutdown")"
+
+echo "== a child cannot exec before the parent stores its exact PID =="
+fresh_staging fork_boundary
+unset -f kill
+HOME="$TMP/fork-boundary-home"
+CODEX_HOME="$TMP/fork-boundary-codex"
+mkdir -p "$HOME/.claude" "$CODEX_HOME"
+printf 'baseline\n' > "$HOME/.claude/settings.json"
+FORK_DAEMON="$STAGING/irrlichd"
+FORK_MARKER="$STAGING/daemon-execed"
+cat > "$FORK_DAEMON" <<EOF
+#!/usr/bin/env bash
+case "\${1:-}" in
+  --print-managed-files)
+    printf '%s\n' "$HOME/.claude/settings.json" "$CODEX_HOME/hooks.json"
+    exit 0
+    ;;
+  --print-advisory-files)
+    exit 0
+    ;;
+esac
+: > "$FORK_MARKER"
+exit 0
+EOF
+chmod +x "$FORK_DAEMON"
+original_after_fork="$(declare -f record_daemon_after_fork)"
+record_daemon_after_fork() {
+  stop_record_daemon
+  return 1
+}
+# shellcheck disable=SC2034  # not read by this file: the SOURCED spawn_record_daemon
+#                               reads the start-gate budget.
+RECORD_DAEMON_START_GATE_TICKS=3
+# shellcheck disable=SC2034  # see above — a directive covers only the next line
+RECORD_DAEMON_START_GATE_TICK_S=0.01
+spawn_record_daemon "$FORK_DAEMON" "$STAGING" 127.0.0.1:7838 "" 2>/dev/null
+rc=$?
+eval "$original_after_fork"
+unset RECORD_DAEMON_START_GATE_TICKS RECORD_DAEMON_START_GATE_TICK_S
+# Wait for the orphan wrapper to REACH its abort, and assert that it did.
+# Without this assertion the case concluded "never execed" from an absence it
+# had not established it could observe: a slower machine, or a larger
+# START_GATE_TICKS, leaves the wrapper still sleeping when the poll expires and
+# $FORK_MARKER is absent for that reason instead of the one under test.
+aborted=missing
+for _ in $(seq 1 500); do
+  [[ -e "$STAGING/.daemon-start-aborted" ]] && { aborted=present; break; }
+  sleep 0.01
+done
+assert_eq "the orphan wrapper reached its abort" "present" "$aborted"
+assert_eq "simulated EXIT at fork boundary refuses spawn" "1" "$rc"
+[[ -e "$FORK_MARKER" ]] && got=execed || got=blocked
+assert_eq "orphan wrapper never execs daemon" "blocked" "$got"
+assert_eq "empty-PID cleanup restores safely" "baseline" "$(cat "$HOME/.claude/settings.json")"
+trap 'rm -rf "$TMP"' EXIT
+HOME="$TMP/nohome"
 
 echo "== the teardown hands the shared agent config back =="
 fresh_staging restore
@@ -234,6 +340,33 @@ assert_eq "settings.json restored" '{"hooks":{"Stop":"localhost:7837"}}' "$(cat 
 # never write `trap` themselves. That also clears this file's own EXIT trap —
 # re-arm it so $TMP is still cleaned up.
 assert_eq "EXIT trap disarmed" "" "$(trap -p EXIT)"
+trap 'rm -rf "$TMP"' EXIT
+HOME="$TMP/nohome"
+
+echo "== teardown refuses to overwrite a post-install concurrent change =="
+fresh_staging concurrent_restore
+mkdir -p "$TMP/concurrent-home/.claude"
+HOME="$TMP/concurrent-home"
+CODEX_HOME="$TMP/concurrent-codex"
+mkdir -p "$CODEX_HOME"
+printf '{"hooks":{"Stop":"before"}}\n' > "$HOME/.claude/settings.json"
+FAKE_DAEMON="$STAGING/irrlichd"
+printf '%s\n%s\n' "$HOME/.claude/settings.json" "$CODEX_HOME/hooks.json" > "$STAGING/managed-files"
+printf '#!/usr/bin/env bash\ncat %q\n' "$STAGING/managed-files" > "$FAKE_DAEMON"
+chmod +x "$FAKE_DAEMON"
+snapshot_managed_files "$STAGING/managed-file-backup" "$FAKE_DAEMON"
+printf '{"hooks":{"Stop":"expected-daemon"}}\n' > "$HOME/.claude/settings.json"
+seal_managed_files
+printf '{"hooks":{"Stop":"external-edit"}}\n' > "$HOME/.claude/settings.json"
+restore_err="$(stop_record_daemon 2>&1)"
+restore_rc=$?
+assert_eq "stop returns the restore refusal" "1" "$restore_rc"
+assert_eq "external bytes stay in place" '{"hooks":{"Stop":"external-edit"}}' "$(cat "$HOME/.claude/settings.json")"
+case "$restore_err" in
+  *"refusing to overwrite concurrent change"*) got=yes ;;
+  *) got=no ;;
+esac
+assert_eq "the refusal names the concurrent change" "yes" "$got"
 trap 'rm -rf "$TMP"' EXIT
 HOME="$TMP/nohome"
 
@@ -312,6 +445,134 @@ for script in run-cell.sh run-cell-multi.sh; do
   assert_eq "$script assembles no daemon env of its own" "0" \
     "$(grep -c 'IRRLICHT_RECORDINGS_DIR=' "$path" | tr -d ' ')"
 done
+
+echo "== strict Desktop oracle runs between snapshot and daemon spawn =="
+# MUTATION fixture: all three operations must stay in this order. Moving the
+# oracle after the real daemon starts recreates the pre-seal ownership gap.
+spawn_body="$(declare -f spawn_record_daemon)"
+snapshot_line="$(awk '/if ! snapshot_managed_files/{print NR; exit}' <<<"$spawn_body")"
+oracle_line="$(awk '/prepare_managed_file_oracle/{print NR; exit}' <<<"$spawn_body")"
+daemon_line="$(awk '/env .*daemon_bin.*--record/{print NR; exit}' <<<"$spawn_body")"
+trap_line="$(awk '/trap stop_record_daemon EXIT/{print NR; exit}' <<<"$spawn_body")"
+if [[ -n "$snapshot_line" && -n "$oracle_line" && -n "$trap_line" && -n "$daemon_line" &&
+  "$snapshot_line" -lt "$oracle_line" && "$oracle_line" -lt "$trap_line" && "$trap_line" -lt "$daemon_line" ]]; then
+  got="ordered"
+else
+  got="missing-or-reordered"
+fi
+assert_eq "snapshot -> oracle -> cleanup trap -> daemon" "ordered" "$got"
+if grep -Fq 'MANAGED_FILE_ORACLE_REQUIRED=1' "$SCRIPTS_DIR/run-cell.sh" &&
+  grep -Fq 'MANAGED_FILE_ORACLE_BIN="$IRRLICHT_DESKTOP_DRIVER_BIN"' "$SCRIPTS_DIR/run-cell.sh"; then
+  got="wired"
+else
+  got="missing"
+fi
+assert_eq "desktop-local enables the built oracle" "wired" "$got"
+
+echo "== a failing teardown is recorded, not silently fatal =="
+# stop_record_daemon returns non-zero for two CORRECT refusals: unverified
+# daemon death, and a managed-file restore that refused. Both rigs run under
+# `set -e`, where a bare call aborts the script on the spot — so the one run
+# that leaves the operator's agent config modified would be the one run with no
+# run-manifest.json, which classify-failure.sh then grades `unknown`.
+#
+# First the mechanism, so the structural assertions below have something to
+# stand on: a bare failing call under errexit really does skip what follows.
+teardown_probe() {
+  local style="$1"
+  bash -c '
+    set -euo pipefail
+    stop_record_daemon() { return 1; }
+    write_error_manifest() { echo "manifest"; }
+    if [[ "$1" == bare ]]; then
+      stop_record_daemon
+    else
+      rc=0; stop_record_daemon || rc=$?
+      [[ "$rc" -ne 0 ]] && write_error_manifest
+    fi
+    exit 0
+  ' _ "$style" 2>/dev/null
+}
+assert_eq "a bare failing teardown writes no manifest" "" "$(teardown_probe bare)"
+assert_eq "a captured failing teardown writes one" "manifest" "$(teardown_probe capture)"
+
+# Now the rigs. A bare `stop_record_daemon` statement is the defect; the code
+# it must write is the one classify-failure.sh has an arm for.
+for rig in run-cell.sh run-cell-multi.sh; do
+  if grep -Eq '^[[:space:]]*stop_record_daemon([[:space:]]*#.*)?$' "$SCRIPTS_DIR/$rig"; then
+    got="bare"
+  else
+    got="captured"
+  fi
+  assert_eq "$rig captures the teardown status" "captured" "$got"
+  if grep -Fq 'stop_record_daemon || TEARDOWN_RC=$?' "$SCRIPTS_DIR/$rig" &&
+    grep -Fq 'write_error_manifest "managed_file_restore_failed"' "$SCRIPTS_DIR/$rig"; then
+    got="reported"
+  else
+    got="unreported"
+  fi
+  assert_eq "$rig reports a failed teardown in its manifest" "reported" "$got"
+done
+if grep -Fq 'managed_file_restore_failed)' "$SCRIPTS_DIR/lib/classify-failure.sh"; then
+  got="classified"
+else
+  got="unclassified"
+fi
+assert_eq "the failed-teardown code has a classifier arm" "classified" "$got"
+
+echo "== the daemon socket path must fit AF_UNIX's sun_path =="
+# MUTATION fixture for the guard added with the Desktop profile. macOS copies a
+# bind path into a 104-byte sun_path INCLUDING the terminator, so 103 binds and
+# 104 does not (measured). Over the limit irrlichd exit(1)s inside
+# setupUnixSocket, which used to reach this script only as the generic
+# "daemon socket never appeared" ten seconds later, with the managed-file
+# snapshot already taken. Disconnect the guard and these four go red.
+home_for_sock_len() {
+  local want="$1" suffix="/irrlichd.sock" base="$TMP/L" pad
+  pad=$(( want - ${#base} - ${#suffix} ))
+  (( pad >= 0 )) || return 1
+  printf '%s%s\n' "$base" "$(printf 'x%.0s' $(seq 1 "$pad"))"
+}
+if fitting_home="$(home_for_sock_len "$RECORD_DAEMON_SOCK_MAX")"; then
+  record_daemon_require_bindable_sock "$(record_daemon_sock "$fitting_home")"
+  assert_eq "a socket path at the limit is accepted" "0" "$?"
+else
+  # The check cannot run from this $TMP. That is a failure, not a pass.
+  fail "a socket path at the limit is accepted" "a buildable path" "TMP too long: $TMP"
+fi
+over_home="$(home_for_sock_len $(( RECORD_DAEMON_SOCK_MAX + 1 )))"
+record_daemon_require_bindable_sock "$(record_daemon_sock "$over_home")" 2>/dev/null
+assert_eq "one byte over the limit refuses" "1" "$?"
+
+fresh_staging sockguard
+rc=0
+spawn_record_daemon "$TMP/never-executed" "$STAGING" 127.0.0.1:7838 "$over_home" \
+  2>"$TMP/sockguard.err" || rc=$?
+assert_eq "an unbindable socket path refuses the spawn" "1" "$rc"
+[[ -e "$STAGING/managed-file-backup" ]] && got=touched || got=untouched
+assert_eq "the refusal lands before the managed-file snapshot" "untouched" "$got"
+if grep -q "over the $RECORD_DAEMON_SOCK_MAX-byte AF_UNIX limit" "$TMP/sockguard.err"; then
+  got=named
+else
+  got=silent
+fi
+assert_eq "the refusal names the limit" "named" "$got"
+
+# The desktop-local profile is the caller that used to trip this. Its daemon
+# home must be short enough to bind on any clone, including a linked worktree.
+# shellcheck source=desktop-profile.sh
+source "$DIR/desktop-profile.sh"
+desktop_home="$(desktop_daemon_home "$SCRIPTS_DIR/../../..")"
+desktop_sock="$(record_daemon_sock "$desktop_home")"
+record_daemon_require_bindable_sock "$desktop_sock"
+assert_eq "desktop-local's own daemon home binds ($desktop_sock)" "0" "$?"
+if grep -Fq 'desktop_daemon_home "$REPO_ROOT"' "$SCRIPTS_DIR/run-cell.sh" &&
+  ! grep -Fq 'IRRLICHT_ONBOARD_HOME="$STAGING/irrlicht-home"' "$SCRIPTS_DIR/run-cell.sh"; then
+  got="short"
+else
+  got="clone-relative"
+fi
+assert_eq "run-cell.sh uses the short desktop daemon home" "short" "$got"
 
 echo ""
 if [[ "$fails" -eq 0 ]]; then

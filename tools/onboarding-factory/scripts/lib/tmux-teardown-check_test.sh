@@ -412,6 +412,12 @@ run_gate() {
     echo 'UUID=00000000-0000-0000-0000-000000000000'
     echo 'DRIVER_INPUT=hello'
     echo 'TIMEOUT_S=10'
+    # The driver invocation this harness extracts reads DRIVER_TIMEOUT_S. Derive
+    # it with run-cell.sh's OWN scaling block rather than inventing a value, so
+    # a change to that block cannot pass here while breaking the real run.
+    echo 'EXECUTION_PROFILE=cli-local'
+    awk '/^# BEGIN desktop_driver_timeout$/{f=1;next} /^# END desktop_driver_timeout$/{f=0} f' \
+      "$DIR/../run-cell.sh"
     echo 'SCRIPT_JSON='"'"'[{"send":"hi"}]'"'"''
     echo 'CELL_JSON='"'"'{}'"'"''
     echo 'MOCK_ADDR='

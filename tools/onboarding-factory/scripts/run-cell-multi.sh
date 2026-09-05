@@ -466,7 +466,19 @@ for i in "${!DRV_PIDS[@]}"; do
 done
 
 # --- Drain the daemon ---------------------------------------------------
-stop_record_daemon   # also disarms the EXIT trap it armed
+# Capture, never a bare call — see run-cell.sh's teardown for why: a bare
+# call under `set -e` aborts before write_error_manifest, so the run that
+# leaves the agent config modified is the one with no manifest saying so.
+TEARDOWN_RC=0
+stop_record_daemon || TEARDOWN_RC=$?   # also disarms the EXIT trap it armed
+if [[ "$TEARDOWN_RC" -ne 0 ]]; then
+  write_error_manifest "managed_file_restore_failed"
+  echo "run-cell-multi: teardown returned $TEARDOWN_RC — the agent config may still be modified" >&2
+  if [[ -n "${MANAGED_FILE_BACKUP_DIR:-}" ]]; then
+    echo "  recovery snapshot kept at: $MANAGED_FILE_BACKUP_DIR" >&2
+  fi
+  exit 1
+fi
 DAEMON_SHUTDOWN="$(cat "$STAGING/daemon.shutdown" 2>/dev/null || echo unknown)"
 
 # The teardown VERDICT, taken here rather than in the wait loop: this is the

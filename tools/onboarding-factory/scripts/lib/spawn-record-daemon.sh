@@ -36,6 +36,11 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/managed-file-snapshot.sh"
 RECORD_DAEMON_PID=""
 RECORD_DAEMON_SOCK=""
 RECORD_DAEMON_STAGING=""
+RECORD_DAEMON_START_GATE=""
+
+# Test boundary called after fork and before the parent stores $!. Production
+# does nothing. A test overrides it to simulate EXIT at that exact boundary.
+record_daemon_after_fork() { return 0; }
 
 # Poll knobs, read at call time. The defaults ARE the production timings; they
 # are overridable only so the unit tests can drive the ladder without spending
@@ -55,6 +60,31 @@ record_daemon_sock() {
     printf '%s\n' "$home/irrlichd.sock"
   else
     printf '%s\n' "$HOME/.local/share/irrlicht/irrlichd.sock"
+  fi
+  return 0
+}
+
+# The kernel copies a bind address into sockaddr_un.sun_path, which is 104
+# bytes on macOS INCLUDING the terminator, so 103 is the longest path that
+# binds. Over that, irrlichd exits(1) inside setupUnixSocket before it opens
+# anything else, and this script sees only wait_for_record_daemon's generic
+# "daemon socket never appeared" ten seconds later. Refuse by name instead,
+# BEFORE the managed-file snapshot: a daemon that cannot bind must not reach
+# the user's agent config at all.
+RECORD_DAEMON_SOCK_MAX=103
+
+record_daemon_require_bindable_sock() {
+  local sock="$1"
+  [[ -n "$sock" ]] || {
+    echo "spawn-record-daemon: empty daemon socket path" >&2
+    return 1
+  }
+  if (( ${#sock} > RECORD_DAEMON_SOCK_MAX )); then
+    echo "spawn-record-daemon: daemon socket path is ${#sock} bytes, over the" \
+      "${RECORD_DAEMON_SOCK_MAX}-byte AF_UNIX limit, so the daemon cannot bind it:" >&2
+    echo "  $sock" >&2
+    echo "  point IRRLICHT_ONBOARD_HOME at a shorter directory (e.g. /tmp/irr-onb)" >&2
+    return 1
   fi
   return 0
 }
@@ -162,6 +192,7 @@ spawn_record_daemon() {
 
   RECORD_DAEMON_STAGING="$staging"
   RECORD_DAEMON_SOCK="$(record_daemon_sock "$home")"
+  record_daemon_require_bindable_sock "$RECORD_DAEMON_SOCK" || return 1
 
   # Save the shared agent config the daemon is about to rewrite (see
   # lib/managed-file-snapshot.sh); the shutdown hands it back. WHICH files those
@@ -173,6 +204,18 @@ spawn_record_daemon() {
   if ! snapshot_managed_files "$staging/managed-file-backup" "$daemon_bin"; then
     echo "cannot snapshot the shared agent config; refusing to spawn the recording daemon" >&2
     return 1
+  fi
+
+  # Desktop Local requires a post-install state derived from the same Apply
+  # closures as the real daemon. Build it from the baseline before the daemon
+  # can write the user's files. A failed oracle leaves the snapshot active and
+  # strict cleanup fails closed.
+  if [[ "${MANAGED_FILE_ORACLE_REQUIRED:-0}" == "1" ]]; then
+    if [[ ! -x "${MANAGED_FILE_ORACLE_BIN:-}" ]]; then
+      echo "managed-file-snapshot: strict Desktop oracle binary is not executable" >&2
+      return 1
+    fi
+    prepare_managed_file_oracle "$MANAGED_FILE_ORACLE_BIN" "$bind" "$adapters" || return 1
   fi
 
   # Report-only, never gating (issue #1748): an agent CLI's own store that an
@@ -187,11 +230,31 @@ spawn_record_daemon() {
   while IFS= read -r kv; do daemon_env+=("$kv"); done \
     < <(record_daemon_env "$staging/recordings" "$bind" "$home" "$adapters")
 
-  env "${daemon_env[@]}" "$daemon_bin" --record >"$staging/daemon.log" 2>&1 &
-  RECORD_DAEMON_PID=$!
-  echo "daemon started (pid $RECORD_DAEMON_PID, bind=$bind${home:+, home=$home})"
-
+  # Arm cleanup before fork. The child waits on a private start gate and cannot
+  # exec the daemon until the parent stores its exact $!. If the parent exits
+  # in that gap, the orphan wrapper reaches its bounded deadline and exits
+  # without touching shared config.
   trap stop_record_daemon EXIT
+  RECORD_DAEMON_START_GATE="$staging/.daemon-start-gate"
+  rm -f "$RECORD_DAEMON_START_GATE" "$staging/.daemon-start-aborted"
+  (
+    local _
+    for _ in $(seq 1 "${RECORD_DAEMON_START_GATE_TICKS:-80}"); do
+      if [[ -e "$RECORD_DAEMON_START_GATE" ]]; then
+        exec env "${daemon_env[@]}" "$daemon_bin" --record
+      fi
+      sleep "${RECORD_DAEMON_START_GATE_TICK_S:-0.025}"
+    done
+    : > "$staging/.daemon-start-aborted"
+    echo "daemon start gate deadline expired before parent ownership" >&2
+    exit 70
+  ) >"$staging/daemon.log" 2>&1 &
+  if ! record_daemon_after_fork; then
+    return 1
+  fi
+  RECORD_DAEMON_PID=$!
+  : > "$RECORD_DAEMON_START_GATE" || return 1
+  echo "daemon started (pid $RECORD_DAEMON_PID, bind=$bind${home:+, home=$home})"
 
   wait_for_record_daemon
 }
@@ -226,7 +289,7 @@ signal_record_daemon() {
 # matching what the pre-extraction scripts wrote.
 kill_record_daemon() {
   [[ -n "$RECORD_DAEMON_STAGING" ]] || return 0
-  local reason="unknown"
+  local reason="unknown" kill_rc=0
   if [[ -n "$RECORD_DAEMON_PID" ]] && kill -0 "$RECORD_DAEMON_PID" 2>/dev/null; then
     if signal_record_daemon INT "${RECORD_DAEMON_INT_TICKS:-12}"; then
       reason="sigint"
@@ -234,10 +297,17 @@ kill_record_daemon() {
       reason="sigterm"
     else
       reason="sigkill"
-      kill -KILL "$RECORD_DAEMON_PID" 2>/dev/null || true
+      if ! signal_record_daemon KILL "${RECORD_DAEMON_KILL_TICKS:-6}"; then
+        echo "recording daemon PID $RECORD_DAEMON_PID survived the SIGKILL observation deadline" >&2
+        kill_rc=1
+      fi
     fi
   fi
+  if [[ "$kill_rc" -eq 0 && -n "$RECORD_DAEMON_PID" ]]; then
+    wait "$RECORD_DAEMON_PID" 2>/dev/null || true
+  fi
   echo "$reason" > "$RECORD_DAEMON_STAGING/daemon.shutdown"
+  return "$kill_rc"
 }
 
 # stop_record_daemon is the whole teardown: drain the daemon, hand the user's
@@ -247,8 +317,15 @@ kill_record_daemon() {
 # shape of duplication this lib exists to remove. Callers just call it; running
 # as the trap itself, the disarm is a harmless no-op.
 stop_record_daemon() {
-  kill_record_daemon
-  restore_managed_files
+  if ! kill_record_daemon; then
+    echo "recording daemon death is unverified; refusing managed-file restore" >&2
+    trap - EXIT
+    return 1
+  fi
+  [[ -n "$RECORD_DAEMON_START_GATE" ]] && rm -f "$RECORD_DAEMON_START_GATE"
+  local restore_rc=0
+  restore_managed_files || restore_rc=$?
+  RECORD_DAEMON_START_GATE=""
   trap - EXIT
-  return 0
+  return "$restore_rc"
 }

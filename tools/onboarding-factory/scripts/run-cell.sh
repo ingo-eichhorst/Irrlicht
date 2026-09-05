@@ -55,6 +55,9 @@ source "$SCRIPT_DIR/lib/pick-recording.sh"
 # compares cli-local evidence.
 # shellcheck source=lib/recording-profile.sh
 source "$SCRIPT_DIR/lib/recording-profile.sh"
+# Desktop Local profile guards and evidence staging (#1887).
+# shellcheck source=lib/desktop-profile.sh
+source "$SCRIPT_DIR/lib/desktop-profile.sh"
 # "Did this run actually finish?" — shared with run-cell-multi.sh for the same
 # reason the daemon lifecycle is (#1214).
 # shellcheck source=lib/completeness-check.sh
@@ -89,6 +92,7 @@ source "$SCRIPT_DIR/lib/tmux-teardown-check.sh"
 
 RECORDER="off"
 ATTACH=0
+EXECUTION_PROFILE="cli-local"
 positional=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -97,19 +101,24 @@ while [[ $# -gt 0 ]]; do
     --recorder)
       echo "use --recorder=on or --recorder=off (no separate value)" >&2; exit 2 ;;
     --attach|-a) ATTACH=1; shift ;;
+    --execution-profile=*) EXECUTION_PROFILE="${1#*=}"; shift ;;
+    --execution-profile)
+      [[ $# -ge 2 ]] || { echo "--execution-profile needs a value" >&2; exit 2; }
+      EXECUTION_PROFILE="$2"; shift 2 ;;
     -h|--help)
-      echo "usage: run-cell.sh [--recorder=on|off] [--attach] <adapter> <scenario-name>" >&2; exit 0 ;;
+      echo "usage: run-cell.sh [--recorder=on|off] [--attach] [--execution-profile cli-local|desktop-local] <adapter> <scenario-name>" >&2; exit 0 ;;
     --) shift; positional+=("$@"); break ;;
     -*) echo "unknown flag: $1" >&2; exit 2 ;;
     *)  positional+=("$1"); shift ;;
   esac
 done
 if [[ ${#positional[@]} -ne 2 ]]; then
-  echo "usage: run-cell.sh [--recorder=on|off] [--attach] <adapter> <scenario-name>" >&2
+  echo "usage: run-cell.sh [--recorder=on|off] [--attach] [--execution-profile cli-local|desktop-local] <adapter> <scenario-name>" >&2
   exit 2
 fi
 ADAPTER="${positional[0]}"
 SCENARIO="${positional[1]}"
+validate_execution_profile "$EXECUTION_PROFILE" || exit 2
 
 # Resolve the shard that owns this cell. SCENARIO may be given as the coverage_id
 # (shard name) OR a variant recording-folder name; both resolve to the same
@@ -162,11 +171,33 @@ if [[ -n "$PARTNER_ADAPTER" ]]; then
 fi
 
 TIMEOUT_S="$(jq -r '.timeout_seconds // 120' <<<"$CELL_JSON")"   # default when a recipe omits it (else drivers get the literal "null")
+
+# A scenario's timeout is profile-neutral and was budgeted for a headless CLI
+# turn. Desktop Local has to open a GUI composer first, and the driver gives
+# each step a third of this value: 2-1_basic-turn declares 60s, so the composer
+# step got 20s. Measured on 1.46388.4, an idle composer needs ~8s to render its
+# controls, and under a recording daemon it did not finish inside 20s. Scale the
+# value the DESKTOP driver receives — the scenario keeps its own number, which
+# is the one cli-local is measured against and the one the manifest records.
+# BEGIN desktop_driver_timeout
+DESKTOP_TIMEOUT_FACTOR=4
+DRIVER_TIMEOUT_S="$TIMEOUT_S"
+if [[ "$EXECUTION_PROFILE" == "desktop-local" ]]; then
+  DRIVER_TIMEOUT_S=$(( TIMEOUT_S * DESKTOP_TIMEOUT_FACTOR ))
+fi
+# END desktop_driver_timeout
 PROMPT="$(jq -r '.prompt // ""' <<<"$CELL_JSON")"
 SCRIPT_JSON="$(jq -c '.script // empty' <<<"$CELL_JSON")"
 if [[ -z "$PROMPT" && -z "$SCRIPT_JSON" ]]; then
   echo "cell has neither prompt nor script: scenario=$SCENARIO adapter=$ADAPTER" >&2
   exit 1
+fi
+desktop_profile_validate_cell "$EXECUTION_PROFILE" "$ADAPTER" "$ATTACH" "$CELL_JSON" || exit 5
+if [[ "$EXECUTION_PROFILE" == "desktop-local" ]]; then
+  # Descriptor 9 stays open through this shell's EXIT trap. No second linked
+  # worktree can reach config snapshot, oracle, daemon startup, or Desktop UI
+  # control until teardown has restored the first run's files.
+  desktop_acquire_clone_lock "$REPO_ROOT" || exit 75
 fi
 
 # --- Recipe ↔ driver lint (#476) ----------------------------------------
@@ -176,7 +207,9 @@ fi
 # Headless `prompt` cells have no script and skip this. Exit 3 = driver_gap
 # (distinct from exit 2 = applicable:false / cross-adapter), so the caller
 # routes it to a driver-extension task rather than degrading the cell.
-if [[ -n "$SCRIPT_JSON" ]]; then
+if [[ "$EXECUTION_PROFILE" == "desktop-local" ]]; then
+  DRIVER="$REPO_ROOT/replaydata/agents/$ADAPTER/driver-desktop.sh"
+elif [[ -n "$SCRIPT_JSON" ]]; then
   # shellcheck source=lib/recipe-lint.sh
   . "$SCRIPT_DIR/lib/recipe-lint.sh"
   LINT_DRIVER="$REPO_ROOT/replaydata/agents/$ADAPTER/driver-interactive.sh"
@@ -211,7 +244,9 @@ fi
 #
 # Resolved here rather than at the drive block below because the refusal is
 # about the driver's declared capabilities, and both branches need the path.
-if [[ -n "$SCRIPT_JSON" ]]; then
+if [[ "$EXECUTION_PROFILE" == "desktop-local" ]]; then
+  DRIVER="$REPO_ROOT/replaydata/agents/$ADAPTER/driver-desktop.sh"
+elif [[ -n "$SCRIPT_JSON" ]]; then
   DRIVER="$REPO_ROOT/replaydata/agents/$ADAPTER/driver-interactive.sh"
 else
   DRIVER="$REPO_ROOT/replaydata/agents/$ADAPTER/driver.sh"
@@ -335,7 +370,19 @@ write_driver_env() {
 # likely thing on this path to fail (CLI missing, version floor, port busy), so
 # the failure branch is the one that matters.
 PRECHECK_JSON_TMP="$(mktemp -t irr-precheck.XXXXXX)"
-if ! ATTACH="$ATTACH" PRECHECK_JSON_OUT="$PRECHECK_JSON_TMP" "$SCRIPT_DIR/precheck.sh" "$ADAPTER"; then
+if [[ "$EXECUTION_PROFILE" == "desktop-local" ]]; then
+  DESKTOP_BIND="$(desktop_choose_loopback_address)" || { rm -f "$PRECHECK_JSON_TMP"; exit 1; }
+  desktop_require_free_loopback_address "$DESKTOP_BIND" || { rm -f "$PRECHECK_JSON_TMP"; exit 1; }
+  export IRRLICHT_ONBOARD_BIND_ADDR="$DESKTOP_BIND"
+  # One short daemon home for the whole run — precheck and the recording daemon
+  # both read it. It cannot live under $STAGING: see desktop_daemon_home for the
+  # AF_UNIX path budget that ruled every clone-relative home out.
+  DESKTOP_DAEMON_HOME="$(desktop_daemon_home "$REPO_ROOT")" || {
+    rm -f "$PRECHECK_JSON_TMP"; exit 1
+  }
+  export IRRLICHT_ONBOARD_HOME="$DESKTOP_DAEMON_HOME"
+fi
+if ! ATTACH="$ATTACH" EXECUTION_PROFILE="$EXECUTION_PROFILE" PRECHECK_JSON_OUT="$PRECHECK_JSON_TMP" "$SCRIPT_DIR/precheck.sh" "$ADAPTER"; then
   rm -f "$PRECHECK_JSON_TMP"
   exit 1
 fi
@@ -349,6 +396,13 @@ STAGING="$REPO_ROOT/.build/refresh/$ADAPTER/$FOLDER-$TS"
 # shellcheck source=lib/assert-staging-path.sh
 . "$REPO_ROOT/replaydata/_lib/assert-staging-path.sh"
 mkdir -p "$STAGING/recordings" "$STAGING/replaydata/agents/$ADAPTER/scenarios/$FOLDER" "$STAGING/reports"
+if [[ "$EXECUTION_PROFILE" == "desktop-local" ]]; then
+  mkdir -p "$STAGING/cwd"
+  # A previous run of THIS clone owned the same home. Clear it so a stale
+  # socket or addr file cannot make this daemon look already-up.
+  rm -rf "${DESKTOP_DAEMON_HOME:?}"
+  mkdir -p "$DESKTOP_DAEMON_HOME"
+fi
 
 # precheck's machine-readable output now has somewhere to live (#1333 / B3).
 if [[ -s "$PRECHECK_JSON_TMP" ]]; then
@@ -371,6 +425,25 @@ UUID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
 
 DAEMON="$REPO_ROOT/.build/refresh/bin/irrlichd"
 REPLAY_BIN="$REPO_ROOT/.build/refresh/bin/replay"
+if [[ "$EXECUTION_PROFILE" == "desktop-local" ]]; then
+  "$REPO_ROOT/tools/onboarding-factory/desktop-helper/test.sh"
+  IRRLICHT_DESKTOP_HELPER_BIN="$(swift build \
+    --package-path "$REPO_ROOT/tools/onboarding-factory/desktop-helper" \
+    --scratch-path "$REPO_ROOT/.build/claude-desktop-helper" \
+    --show-bin-path)/claude-desktop-helper"
+  export IRRLICHT_DESKTOP_HELPER_BIN
+  export IRRLICHT_DESKTOP_DRIVER_BIN="$REPO_ROOT/.build/refresh/bin/desktop-driver"
+  export IRRLICHT_REPO_ROOT="$REPO_ROOT"
+  # `// empty`, not a bare `.daemon_version`: on a precheck.json that exists but
+  # lacks the key, `jq -r` prints the literal string "null" and exits 0, so the
+  # `||` fallback never fires and the recording is stamped daemon_version "null".
+  # The guard was live only for the case that cannot happen (unreadable file)
+  # and dead for the one that can.
+  IRRLICHT_DAEMON_VERSION="$(jq -r '.daemon_version // empty' "$STAGING/precheck.json" 2>/dev/null || true)"
+  [[ -n "$IRRLICHT_DAEMON_VERSION" ]] ||
+    IRRLICHT_DAEMON_VERSION="$("$DAEMON" --version | awk '{print $NF}')"
+  export IRRLICHT_DAEMON_VERSION
+fi
 
 # Isolation knobs (default = production layout). Set IRRLICHT_ONBOARD_HOME
 # to a scratch dir to spawn the recording daemon with its OWN
@@ -520,6 +593,20 @@ else
   # cell recording e.g. mistral-vibe no longer auto-grants — and never Applies
   # — every OTHER adapter's hook installer too (claudecode chief among them:
   # #1769).
+  if [[ "$EXECUTION_PROFILE" == "desktop-local" ]]; then
+    desktop_require_free_loopback_address "$ONBOARD_BIND" || exit 1
+    # A Desktop run cannot restore an unsealed daemon hook edit. The snapshot
+    # library keeps legacy callers compatible, but this path fails closed if
+    # sealing is missing, partial, or unsuccessful.
+    # shellcheck disable=SC2034  # shared state read by managed-file-snapshot.sh
+    MANAGED_FILE_STRICT_SEAL=1
+    # The same built binary runs Claude Code's real Apply closures in a shadow
+    # HOME before the recording daemon can touch the user's config.
+    # shellcheck disable=SC2034  # shared state read by spawn-record-daemon.sh
+    MANAGED_FILE_ORACLE_REQUIRED=1
+    # shellcheck disable=SC2034  # shared state read by spawn-record-daemon.sh
+    MANAGED_FILE_ORACLE_BIN="$IRRLICHT_DESKTOP_DRIVER_BIN"
+  fi
   spawn_record_daemon "$DAEMON" "$STAGING" "$ONBOARD_BIND" "$ONBOARD_HOME" "$ADAPTER" || exit 1
 fi
 
@@ -541,6 +628,12 @@ if [[ "$ATTACH" != "1" ]]; then
   # but polls a clean reading out to a deadline before believing it.
   wait_for_unapplied_grants_clear "$ONBOARD_BIND" "$ADAPTER" || exit 1
   wait_for_hook_install "$ADAPTER" "$STAGING" "$ONBOARD_BIND" || exit 1
+  if [[ "$EXECUTION_PROFILE" == "desktop-local" ]]; then
+    seal_managed_files || {
+      echo "desktop-local could not seal the expected daemon hook state" >&2
+      exit 1
+    }
+  fi
 fi
 
 # --- Drive the agent ----------------------------------------------------
@@ -586,7 +679,7 @@ DRIVER_PID_FILE="$STAGING/driver.pid"
 set +e
 bash -c 'printf "%s\n" "$$" > "$1" || exit 1; shift; exec "$@"' \
   bash "$DRIVER_PID_FILE" \
-  "$DRIVER" "$STAGING" "$UUID" "$TIMEOUT_S" "$STAGING/settings.json" "$DRIVER_INPUT"
+  "$DRIVER" "$STAGING" "$UUID" "$DRIVER_TIMEOUT_S" "$STAGING/settings.json" "$DRIVER_INPUT"
 set -e
 DRIVER_REASON="$(cat "$STAGING/driver.exit-reason" 2>/dev/null || echo "unknown")"
 DRIVER_PID="$(tr -d '[:space:]' < "$DRIVER_PID_FILE" 2>/dev/null || true)"
@@ -724,6 +817,7 @@ write_error_manifest() {
     --arg driver_exit_reason "$DRIVER_REASON" \
     --arg daemon_shutdown "$(daemon_shutdown_state)" \
     --arg staging "$STAGING" \
+    --arg execution_profile "${EXECUTION_PROFILE:-cli-local}" \
     --argjson extras "$extras_json" \
     '{adapter: $adapter,
       scenario: $scenario,
@@ -732,7 +826,8 @@ write_error_manifest() {
       error: $error,
       driver_exit_reason: $driver_exit_reason,
       daemon_shutdown: $daemon_shutdown,
-      staging: $staging} + $extras' \
+      staging: $staging,
+      execution_profile: $execution_profile} + $extras' \
     > "$MANIFEST"
 }
 
@@ -793,7 +888,23 @@ if [[ "$ATTACH" == "1" ]]; then
   echo "attach: waiting 6s for recorder flush..."
   sleep 6
 else
-  stop_record_daemon
+  # Capture, never a bare call. stop_record_daemon returns non-zero when the
+  # daemon's death is unverified or when the managed-file restore refused —
+  # both correct fail-closed refusals. Under `set -e` a bare call would abort
+  # the script right here, so the ONE run that leaves the operator's agent
+  # config modified would be the one run with no manifest saying so, and
+  # classify-failure.sh would grade it `unknown`.
+  TEARDOWN_RC=0
+  stop_record_daemon || TEARDOWN_RC=$?
+  if [[ "$TEARDOWN_RC" -ne 0 ]]; then
+    write_error_manifest "managed_file_restore_failed" \
+      "$(jq -n --arg dir "${MANAGED_FILE_BACKUP_DIR:-}" '{managed_file_backup_dir: $dir}')"
+    echo "run-cell: teardown returned $TEARDOWN_RC — the agent config may still be modified" >&2
+    if [[ -n "${MANAGED_FILE_BACKUP_DIR:-}" ]]; then
+      echo "  recovery snapshot kept at: $MANAGED_FILE_BACKUP_DIR" >&2
+    fi
+    exit 1
+  fi
 fi
 
 # Multi-session: drivers that chain `restart` steps (e.g. claudecode's
@@ -939,6 +1050,33 @@ fi
   -d "$STAGING/replaydata/agents" \
   "$RECORDING" "$ACTUAL_UUID" "$TRANSCRIPT" "$ADAPTER" "$FOLDER"
 
+if [[ "$EXECUTION_PROFILE" == "desktop-local" ]]; then
+  DESKTOP_STAGED_DIR="$STAGING/replaydata/agents/$ADAPTER/scenarios/$FOLDER"
+  # The SAME spelling the driver handed Claude Desktop. cmd/desktop-driver
+  # resolves every staging path with filepath.EvalSymlinks before opening the
+  # composer, so the registry, transcript and Irrlicht rows all carry the
+  # resolved cwd. Comparing them against the unresolved $STAGING/cwd graded a
+  # perfectly good run `desktop_evidence_invalid` whenever any component of
+  # .build was a symlink.
+  DESKTOP_WORKSPACE="$(cd "$STAGING/cwd" && pwd -P)" || {
+    write_error_manifest "desktop_evidence_invalid" '{}'
+    echo "ERROR: cannot resolve the Desktop workspace at $STAGING/cwd" >&2
+    exit 1
+  }
+  desktop_stage_evidence \
+    "$STAGING/desktop-evidence" \
+    "$DESKTOP_STAGED_DIR/events.jsonl" \
+    "$ACTUAL_UUID" \
+    "$DESKTOP_WORKSPACE" \
+    "$DESKTOP_STAGED_DIR" || {
+      write_error_manifest "desktop_evidence_invalid" '{}'
+      echo "ERROR: Desktop evidence did not satisfy the identity-field contract" >&2
+      exit 1
+    }
+  desktop_write_execution_results \
+    "$STAGING/execution-results.json" "$COVERAGE_ID" staged observed-passing
+fi
+
 # Adapter declares its curated transcript extension in _meta.json (#511; was
 # the per-adapter capabilities.json). Default "jsonl".
 TRANSCRIPT_EXT="$(meta_transcript_ext "$ADAPTER")"
@@ -966,7 +1104,7 @@ COMMITTED_CELL="$REPO_ROOT/replaydata/agents/$ADAPTER/scenarios/$FOLDER"
 # whole run right after a successful capture. Tolerate the empty match; the
 # `[[ -n "$NEWEST_REC" ... ]]` guard below already handles "no committed
 # recording yet" (COMMITTED_PRESENT=false).
-NEWEST_REC="$(newest_recording_for_profile "$COMMITTED_CELL" cli-local)"
+NEWEST_REC="$(newest_recording_for_profile "$COMMITTED_CELL" "$EXECUTION_PROFILE")"
 COMMITTED_TRANSCRIPT="${NEWEST_REC%/}/transcript.$TRANSCRIPT_EXT"
 if [[ -n "$NEWEST_REC" && -f "$COMMITTED_TRANSCRIPT" ]]; then
   replay_one "$COMMITTED_TRANSCRIPT" "$STAGING/reports/committed.json" || exit 1
@@ -1009,6 +1147,9 @@ jq -n \
   --arg driver_exit_reason "$DRIVER_REASON" \
   --arg daemon_shutdown "$(daemon_shutdown_state)" \
   --argjson timeout_seconds "$TIMEOUT_S" \
+  --arg execution_profile "$EXECUTION_PROFILE" \
+  --arg desktop_versions "$STAGING/desktop.versions.json" \
+  --arg execution_results "$STAGING/execution-results.json" \
   '{adapter: $adapter,
     scenario: $scenario,
     session_uuid: $session_uuid,
@@ -1026,7 +1167,12 @@ jq -n \
     git_head_start: $git_head_start,
     git_head_end: $git_head_end,
     daemon_shutdown: $daemon_shutdown,
-    timeout_seconds: $timeout_seconds}' \
+    timeout_seconds: $timeout_seconds,
+    execution_profile: $execution_profile}
+    + (if $execution_profile == "desktop-local" then {
+        desktop_versions: $desktop_versions,
+        execution_results: $execution_results
+      } else {} end)' \
   > "$MANIFEST"
 
 echo "staged: $STAGED_TRANSCRIPT"
