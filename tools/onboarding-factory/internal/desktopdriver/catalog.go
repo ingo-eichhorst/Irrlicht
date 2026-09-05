@@ -10,21 +10,26 @@ import (
 // The catalog is pinned to ONE Desktop build (live.go compares for exact
 // equality) because these are positional accessibility paths, and Claude
 // Desktop moves them between releases. Measured on 1.46388.2, the composer row
-// shifted by two against 1.46388.1: `prompt` and `send` left index 7 for 5,
-// `mode` left 8 for 6, and `model` left 12 for 10. Index 8 now holds an "Add"
-// popup and index 12 the usage popup, so a bare version bump without
-// re-deriving the paths would have driven the wrong controls.
+// had shifted by two against 1.46388.1: `prompt` and `send` left index 7 for 5,
+// `mode` left 8 for 6, and `model` left 12 for 10. Index 8 holds an "Add" popup
+// and index 12 the usage popup, so a bare version bump without re-deriving the
+// paths would have driven the wrong controls.
+//
+// 1.46388.4 was then measured and carries the SAME layout as 1.46388.2. The pin
+// still moved, because it compares for exact equality: the app updated twice in
+// two days, and "the layout happens to be unchanged" is a measurement, not
+// something a version comparison can assume.
 //
 // A version bump therefore needs a fresh `inspect` dump, not just a new
 // constant. testdata/composer-<version>.json holds the measured tree, and
 // TestComposerCatalogResolvesTheMeasuredDesktopTree fails when the paths here
 // no longer resolve against it.
-const supportedDesktopVersion = "1.46388.2"
+const supportedDesktopVersion = "1.46388.4"
 const supportedClaudeCodeVersion = "2.1.260"
 
 // composerTreeFixture names the measured dump the paths below were derived
 // from. It must stay in step with supportedDesktopVersion.
-const composerTreeFixture = "testdata/composer-1.46388.2.json"
+const composerTreeFixture = "testdata/composer-1.46388.4.json"
 
 var composerPaths = map[string][]int{
 	"environment": {0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 1},

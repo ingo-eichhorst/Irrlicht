@@ -20,7 +20,7 @@ will fail again until the .ok file is re-touched.
 - [ ] Optional: API key set if you want to exercise scenarios that bypass the subscription path.
 - [ ] tmux installed and on PATH (`tmux -V` works) — required for pane / pipepane sensors.
 - [ ] lsof installed — required for net sensor. Pre-installed on macOS; `apt install lsof` on Debian/Ubuntu.
-- [ ] For `desktop-local`: Claude Desktop 1.46388.2 is installed, running, and signed in.
+- [ ] For `desktop-local`: Claude Desktop 1.46388.4 is installed, running, and signed in.
 - [ ] For `desktop-local`: the caller has macOS Accessibility access.
 - [ ] For `desktop-local`: no other user or process controls Claude Desktop during the run.
 - [ ] For `desktop-local`: no other process edits the daemon-declared agent

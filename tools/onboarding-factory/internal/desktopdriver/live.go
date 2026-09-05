@@ -225,14 +225,19 @@ func waitForComposerControls(
 			if err := click(ctx, confirm, helperPostcondition{
 				Selector: confirm, Condition: "absent", TimeoutMilliseconds: 10_000,
 			}); err != nil {
-				// The sheet animates in, so the helper's hit test can land off
-				// the button on the first attempt. That is a reason to look
-				// again on the next tick, not to fail the run — and it is not
-				// an answer, so the once-only guard below stays unspent.
-				if fatal := transientClickError(err); fatal != nil {
-					return false, fmt.Errorf("answer Desktop workspace trust prompt: %w", fatal)
-				}
-				lastMismatch = err
+				// A failed click is never fatal here. Measured against a live
+				// 1.46388.4 sheet, one grant produced this in sequence:
+				// stale_control (the hit test landed off an animating button),
+				// then action_failed (the sheet was dismissing under the
+				// click), then control_missing (it was gone). Classifying those
+				// codes is guesswork; the next tick simply looks again, and
+				// either the prompt is still there — retry — or it is not, and
+				// the composer check proceeds. The poll's own deadline is what
+				// fails loudly, naming this error as its last observation.
+				//
+				// The once-only guard stays unspent: it counts confirmed
+				// dismissals, and this was not one.
+				lastMismatch = fmt.Errorf("answer Desktop workspace trust prompt: %w", err)
 				return false, nil
 			}
 			// Counted only on a CONFIRMED dismissal: "answer at most once" is
@@ -323,17 +328,6 @@ func poll(ctx context.Context, name string, observe func() (bool, error)) error 
 		case <-ticker.C:
 		}
 	}
-}
-
-// transientClickError returns nil for a click failure worth retrying on the
-// next poll tick. stale_control means the helper's hit test did not land on the
-// control it resolved — its own guard against clicking the wrong thing — which
-// is what a sheet still animating into place produces.
-func transientClickError(err error) error {
-	if strings.Contains(err.Error(), "stale_control") {
-		return nil
-	}
-	return transientHelperError(err)
 }
 
 // axInvalidUIElement is kAXErrorInvalidUIElement. The helper walks the tree
