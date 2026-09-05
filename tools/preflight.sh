@@ -650,6 +650,15 @@ if want go; then
   # proves it works, and a test nothing runs proves nothing.
   run_gate_scoped '^tools/seed-autonomy-spans/|^core/adapters/outbound/filesystem/autonomy_tracker\.go$' \
                   "seed-autonomy-spans tests" go test ./tools/seed-autonomy-spans/... -count=1
+  # autonomy-backfill (#1905) reconstructs pre-feature Autonomy spans from the
+  # daemon's own logs, MARKED as reconstructed. Nothing else compiles it, and
+  # its parsers, its restart/orphan drop rules and the guard that refuses a
+  # second run over its own output live only in its own tests — a check nothing
+  # runs proves nothing. Scoped to include the domain and adapter files it
+  # derives its vocabulary and its storage format from, so a change to either
+  # is caught here rather than the next time someone runs the tool by hand.
+  run_gate_scoped '^tools/autonomy-backfill/|^core/domain/session/autonomy\.go$|^core/adapters/outbound/filesystem/autonomy_tracker\.go$|^core/application/services/autonomy_span\.go$' \
+                  "autonomy-backfill tests"  go test ./tools/autonomy-backfill/... -count=1
   run_gate_scoped '^tools/onboarding-factory/desktop-helper/' \
                   "Claude Desktop helper tests" tools/onboarding-factory/desktop-helper/test.sh
   run_gate_scoped '^replaydata/|^tools/onboarding-factory/' \

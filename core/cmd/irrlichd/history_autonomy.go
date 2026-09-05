@@ -172,6 +172,126 @@ type historyAutonomyDurationResponse struct {
 	// chart to be read as "you did nothing" (#1905).
 	EarliestSpan  int64 `json:"earliest_span"`
 	TotalRecorded int   `json:"total_recorded"`
+	// Provenance marks how much of THIS window was reconstructed rather than
+	// measured (#1905 back-fill). Always present, zero-valued when the whole
+	// window was measured live.
+	Provenance historyAutonomyProvenance `json:"provenance"`
+}
+
+// historyAutonomyProvenance is the wire shape of
+// outbound.AutonomySpanProvenance, carried by BOTH autonomy payloads.
+//
+// It ships even though the back-fill tool never does: the tool is a one-off
+// the maintainer runs by hand on one machine, but the rows it writes are read
+// by every daemon and both clients afterwards, and a reconstructed number
+// rendered as a measured one is precisely the "wrong figure with nothing on
+// screen saying so" this feature was built to avoid.
+type historyAutonomyProvenance struct {
+	// Reconstructed is how many of the runs in this window were rebuilt from
+	// a log rather than measured as they happened.
+	Reconstructed int `json:"reconstructed"`
+	// CostDerived is the subset of those whose end reason is unknown and
+	// cannot be recovered — the source records activity, not outcome.
+	CostDerived int `json:"cost_derived"`
+	// LiveSince is the earliest MEASURED span across the whole log: the
+	// instant before which everything on record is reconstructed. 0 when
+	// nothing has ever been measured live.
+	LiveSince int64 `json:"live_since"`
+	// Boundaries are the instants where the PROVENANCE of the data changes,
+	// oldest first. Empty when everything on record came from one source.
+	Boundaries []historyAutonomyBoundary `json:"boundaries"`
+}
+
+// autonomyEraLive is the wire name for the measured era, whose rows carry no
+// `source` at all. It exists only on the wire and in a label — nothing writes
+// it to a row, and it is deliberately absent from session.AutonomySources() so
+// it can never be mistaken for one.
+const autonomyEraLive = "live"
+
+// historyAutonomyBoundary is one instant where the data's provenance changes —
+// a run drawn to the left of it came from `from`, one to the right from `to`.
+//
+// It exists because the provenance PARAGRAPH cannot fix what the eye reads off
+// the CURVE (#1905 back-fill, QA-2). The cost log cannot see a run shorter than
+// its 60 s write interval; the event log records one-second runs. So the p5
+// line steps at the source boundary and a reader takes a change of instrument
+// for a change of behaviour. The marker puts the explanation where the artefact
+// is.
+//
+// TS is the earliest start of the NEWER era. The rules that build the rows
+// guarantee the older source stops there — the cost era ends at the event log's
+// first transition, and the reconstruction refuses to write into the era the
+// daemon has already measured — so one instant separates them rather than an
+// overlap that would have no single boundary to draw.
+type historyAutonomyBoundary struct {
+	TS   int64  `json:"ts"`
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+// autonomyProvenanceFrom converts the store's provenance block to the wire
+// shape. One converter, used by both payloads, so the two elements of one
+// section can never disagree about how much of it was reconstructed.
+func autonomyProvenanceFrom(p outbound.AutonomySpanProvenance) historyAutonomyProvenance {
+	return historyAutonomyProvenance{
+		Reconstructed: p.Reconstructed,
+		CostDerived:   p.CostDerived,
+		LiveSince:     p.LiveSince(),
+		Boundaries:    autonomyBoundariesFrom(p.EraStarts),
+	}
+}
+
+// autonomyBoundariesFrom turns the log's per-source era starts into the
+// instants where one era hands over to the next.
+//
+// ONE MECHANISM, not a case per pair. Today there are two handovers on a
+// back-filled machine — cost→log and log→live — but nothing here names either:
+// the eras are sorted by when they start and a boundary is emitted between
+// each adjacent pair. A third source, or a machine that only ever had two of
+// them, falls out without another branch.
+//
+// A single era yields no boundary, which is the normal install: nothing to
+// mark, so nothing is drawn.
+func autonomyBoundariesFrom(eraStarts map[string]int64) []historyAutonomyBoundary {
+	type era struct {
+		source string
+		start  int64
+	}
+	eras := make([]era, 0, len(eraStarts))
+	for source, start := range eraStarts {
+		if start <= 0 {
+			continue
+		}
+		eras = append(eras, era{source: source, start: start})
+	}
+	// Sorted by start; the source name breaks a tie, so two eras that begin in
+	// the same second still order the same way on every request rather than
+	// following map iteration order.
+	sort.Slice(eras, func(i, j int) bool {
+		if eras[i].start != eras[j].start {
+			return eras[i].start < eras[j].start
+		}
+		return eras[i].source < eras[j].source
+	})
+
+	out := make([]historyAutonomyBoundary, 0, max(0, len(eras)-1))
+	for i := 1; i < len(eras); i++ {
+		out = append(out, historyAutonomyBoundary{
+			TS:   eras[i].start,
+			From: autonomyEraName(eras[i-1].source),
+			To:   autonomyEraName(eras[i].source),
+		})
+	}
+	return out
+}
+
+// autonomyEraName is a row's `source` as the wire spells it: "" — the absence
+// that means measured — becomes "live".
+func autonomyEraName(source string) string {
+	if source == "" {
+		return autonomyEraLive
+	}
+	return source
 }
 
 // historyAutonomySpanRow is one span on the wire for element 2.
@@ -199,6 +319,9 @@ type historyAutonomySpansResponse struct {
 	EarliestSpan  int64    `json:"earliest_span"`
 	TotalRecorded int      `json:"total_recorded"`
 	Truncated     bool     `json:"truncated"`
+	// Provenance marks how much of THIS window was reconstructed. Counted
+	// after the limit clips the spans, so it describes the rows above it.
+	Provenance historyAutonomyProvenance `json:"provenance"`
 }
 
 // serveHistoryAutonomyDurationChart serves chart=autonomy_duration. A nil
@@ -295,6 +418,7 @@ func buildAutonomyDurationResponse(window string, bucketSeconds, start, end int6
 		SampleFloor:   autonomySampleFloor,
 		EarliestSpan:  res.EarliestStart,
 		TotalRecorded: res.TotalRecorded,
+		Provenance:    autonomyProvenanceFrom(res.Provenance),
 	}
 }
 
@@ -365,5 +489,6 @@ func buildAutonomySpansResponse(window string, start, end int64, res *outbound.A
 		EarliestSpan:  res.EarliestStart,
 		TotalRecorded: res.TotalRecorded,
 		Truncated:     res.Truncated,
+		Provenance:    autonomyProvenanceFrom(res.Provenance),
 	}
 }

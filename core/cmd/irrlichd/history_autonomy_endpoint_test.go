@@ -16,12 +16,13 @@ import (
 // handler's bucketing, not the store's filtering, is what these tests are
 // about.
 type fakeAutonomyStore struct {
-	spans     []outbound.AutonomySpan
-	earliest  int64
-	total     int
-	truncated bool
-	err       error
-	lastQuery outbound.AutonomySpanQuery
+	spans      []outbound.AutonomySpan
+	earliest   int64
+	total      int
+	truncated  bool
+	provenance outbound.AutonomySpanProvenance
+	err        error
+	lastQuery  outbound.AutonomySpanQuery
 }
 
 func (f *fakeAutonomyStore) RecordSpan(outbound.AutonomySpan) error { return nil }
@@ -36,6 +37,7 @@ func (f *fakeAutonomyStore) SpansInWindow(q outbound.AutonomySpanQuery) (*outbou
 		EarliestStart: f.earliest,
 		TotalRecorded: f.total,
 		Truncated:     f.truncated,
+		Provenance:    f.provenance,
 	}, nil
 }
 

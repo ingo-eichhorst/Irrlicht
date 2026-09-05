@@ -57,6 +57,7 @@ updates:
   - package-ecosystem: gomod
     directories:
       - /core
+      - /tools/autonomy-backfill
       - /tools/elfdans-drive
       - /tools/eta-research
       - /tools/onboarding-factory
@@ -65,7 +66,7 @@ updates:
       - /tools/wsload
     schedule:
       interval: weekly
-    # Above the directory count (7 today), not at dependabot's default of 5:
+    # Above the directory count (8 today), not at dependabot's default of 5:
     # the limit is a cap on concurrently-open PRs, so a catch-up week that
     # wants one grouped PR per module would silently withhold the last one.
     open-pull-requests-limit: 10
