@@ -1,7 +1,7 @@
 {
-  "measured_desktop_version": "1.46388.2",
+  "measured_desktop_version": "1.46388.4",
   "measured_claude_code_version": "2.1.260",
-  "note": "Curated from a live `inspect` dump. Only the composer rows the catalog reads are kept; the project title is neutralised to `workspace` and the usage popup: numbers are neutralised. Every PATH is exactly as measured.",
+  "note": "Curated from a live `inspect` dump taken after the workspace trust grant. Only the composer rows the catalog reads are kept; the project title is neutralised to `workspace` and the usage figures are neutralised. Every PATH is exactly as measured. The layout is byte-for-byte the same as 1.46388.2 — the pin moved because it compares for exact equality, not because a control moved.",
   "elements": [
     {
       "path": [

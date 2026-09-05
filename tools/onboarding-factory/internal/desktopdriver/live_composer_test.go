@@ -218,8 +218,11 @@ func TestComposerWaitRetriesATrustClickThatMissedTheAnimatingSheet(t *testing.T)
 	}
 }
 
-// A click failure that is not the animation race is a stop.
-func TestComposerWaitFailsOnANonTransientTrustClickError(t *testing.T) {
+// No trust-click failure is a stop. Measured live, one grant produced
+// stale_control, then action_failed, then control_missing in sequence, so a
+// code taxonomy would have aborted a run that was in fact succeeding. The wait
+// looks again instead, and its own deadline is what fails.
+func TestComposerWaitRetriesEveryTrustClickFailure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_, err := waitForComposerControls(
@@ -234,8 +237,48 @@ func TestComposerWaitFailsOnANonTransientTrustClickError(t *testing.T) {
 		},
 		func(string) {},
 	)
-	if err == nil || !strings.Contains(err.Error(), "answer Desktop workspace trust prompt") {
+	// It fails at the DEADLINE, and the deadline carries the click error as its
+	// last observation rather than discarding it.
+	if err == nil || !strings.Contains(err.Error(), "answer Desktop workspace trust prompt") ||
+		!strings.Contains(err.Error(), "permission_denied") {
 		t.Fatalf("waitForComposerControls() error = %v", err)
+	}
+}
+
+// The measured live sequence: the hit test misses, then the sheet dismisses
+// under the click, then the button is gone — and the composer is there.
+func TestComposerWaitSurvivesTheMeasuredTrustClickSequence(t *testing.T) {
+	codes := []string{"stale_control", "action_failed"}
+	attempts := 0
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	controls, err := waitForComposerControls(
+		ctx,
+		"/repo/workspace",
+		func(context.Context) ([]helperElement, error) {
+			if attempts < len(codes) {
+				return trustPromptElements(trustConfirmTitle, trustCancelTitle, false), nil
+			}
+			return archiveFixtureElements("workspace", "Owned"), nil
+		},
+		func(context.Context, map[string]helperSelector) error { return nil },
+		func(context.Context, helperSelector, helperPostcondition) error {
+			code := codes[attempts]
+			attempts++
+			return errors.New("helper " + code + ": measured")
+		},
+		func(step string) {
+			t.Fatalf("no grant was confirmed, so none may be recorded; got %q", step)
+		},
+	)
+	if err != nil {
+		t.Fatalf("waitForComposerControls() error = %v", err)
+	}
+	if attempts != len(codes) {
+		t.Fatalf("click attempts = %d, want %d", attempts, len(codes))
+	}
+	if len(controls) == 0 {
+		t.Fatal("the composer was never verified after the trust sequence")
 	}
 }
 
