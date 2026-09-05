@@ -246,8 +246,10 @@ func TestArchiveWatchesForTheArchiveItemNotAnyMenu(t *testing.T) {
 		SessionID: "local_owned", CLISessionID: "cli-owned", CWD: workspace,
 	}}
 	// The fake never reports the session archived, so this ends in a timeout.
-	// The requests it recorded on the way are what this test is about.
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	// The requests it recorded on the way are what this test is about. The
+	// budget has to outlast several helper SUBPROCESS launches under -race,
+	// which a few hundred milliseconds does not.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = runtime.ArchiveOwned(ctx, owned)
 
