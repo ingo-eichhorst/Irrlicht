@@ -144,3 +144,11 @@ opencode.json
 # Stray dev binary: `go build ./tools/elfdans-drive/...` from the repo root
 # drops it here. The rig builds it into .build/elfdans-rig instead.
 /elfdans-drive
+
+# Stray dev binary: `go build ./tools/autonomy-backfill/` from the repo root
+# drops it here, and a 5.7 MB one was committed by accident in #1914 (removed
+# here). It matters more than the usual stray artefact: it is a FROZEN COPY of
+# the very tool the maintainer re-runs by hand, so running it reconstructs
+# history the way the tool worked whenever that binary was built — silently.
+# Run it as `go run ./tools/autonomy-backfill` instead.
+/autonomy-backfill

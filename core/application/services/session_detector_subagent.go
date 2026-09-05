@@ -11,6 +11,29 @@ import (
 	"irrlicht/core/ports/outbound"
 )
 
+// The event-log wordings that identify a session as a CHILD after the fact.
+//
+// EXPORTED, and that is the point (#1905 subagents). The daemon's event log is
+// the only record on disk that says which sessions were subagents, and
+// tools/autonomy-backfill reads it back to classify reconstructed runs. Left as
+// inline literals, the two copies could drift and the tool would quietly
+// reconstruct fewer subagent runs — an undercount indistinguishable from a
+// month with fewer subagents. Derived from here, a reworded message changes the
+// pattern the tool matches with, and `TestSubagentLogFormatsAreDerivable` in
+// this package fails the build if a format stops having the placeholders the
+// tool's parser needs.
+//
+// Both carry two %s: the state the child left, then the parent's session id.
+const (
+	// SubagentOrphanedInfoFormat is logged (against the CHILD's session id)
+	// when a child is fast-forwarded to ready because its parent's turn ended.
+	SubagentOrphanedInfoFormat = "finished orphaned subagent (%s → ready) — parent %s turn done"
+
+	// SubagentCompletedInfoFormat is logged (against the CHILD's session id)
+	// when the parent's own task-notification says the subagent finished.
+	SubagentCompletedInfoFormat = "subagent completed via parent task-notification (%s → ready, parent %s)"
+)
+
 func (d *SessionDetector) refreshSubagentSummary(state *session.SessionState) {
 	if state == nil {
 		return
@@ -130,7 +153,7 @@ func (d *SessionDetector) promoteOrphanedChild(s *session.SessionState, parentID
 	d.promoteChildToReady(s, parentID, now, childReadyMessages{
 		Reason:      "subagent orphaned (parent turn done, no open tools)",
 		ErrorFormat: "failed to finish orphaned child: %v",
-		InfoFormat:  "finished orphaned subagent (%s → ready) — parent %s turn done",
+		InfoFormat:  SubagentOrphanedInfoFormat,
 	})
 }
 
@@ -188,7 +211,7 @@ func (d *SessionDetector) applyOneSubagentCompletion(s *session.SessionState, pa
 	d.promoteChildToReady(s, parentID, now, childReadyMessages{
 		Reason:      "subagent completed (parent task-notification)",
 		ErrorFormat: "failed to apply subagent completion: %v",
-		InfoFormat:  "subagent completed via parent task-notification (%s → ready, parent %s)",
+		InfoFormat:  SubagentCompletedInfoFormat,
 	})
 }
 

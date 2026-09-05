@@ -5,6 +5,7 @@ import (
 	"sort"
 	"time"
 
+	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/stats"
 	"irrlicht/core/ports/outbound"
 )
@@ -176,6 +177,9 @@ type historyAutonomyDurationResponse struct {
 	// measured (#1905 back-fill). Always present, zero-valued when the whole
 	// window was measured live.
 	Provenance historyAutonomyProvenance `json:"provenance"`
+	// Kinds says what this payload counted and what it left out (#1905
+	// subagents). Always present.
+	Kinds historyAutonomyKinds `json:"kinds"`
 }
 
 // historyAutonomyProvenance is the wire shape of
@@ -294,6 +298,58 @@ func autonomyEraName(source string) string {
 	return source
 }
 
+// historyAutonomyKinds is the wire shape of outbound.AutonomySpanKinds plus the
+// MODE that produced the response (#1905 subagents).
+//
+// The mode ships with the counts rather than being left for the client to
+// remember it asked for, because the two together are what makes a figure
+// unambiguous: "42 runs" means different things under each mode, and a client
+// that redrew from a cached payload after the toggle moved would otherwise
+// label the old number with the new mode.
+type historyAutonomyKinds struct {
+	// Mode is autonomyModeTopLevel or autonomyModeAll — what the spans and
+	// every figure derived from them actually counted.
+	Mode string `json:"mode"`
+	// TopLevel, Subagent and Unknown count the WINDOW, not the response: they
+	// are taken before the subagent filter runs, so `Subagent` is the number a
+	// client prints as "N subagent runs excluded" under the default mode.
+	TopLevel int `json:"top_level"`
+	Subagent int `json:"subagent"`
+	Unknown  int `json:"unknown"`
+}
+
+// The two mode names on the wire. Spelled here and nowhere else so the two
+// clients cannot disagree about what a payload counted.
+const (
+	// autonomyModeTopLevel is the default: subagent runs are left out, because
+	// a subagent's span is a nested interval inside its parent's and counting
+	// both counts one stretch twice.
+	autonomyModeTopLevel = "top_level"
+
+	// autonomyModeAll counts every run, subagent runs included.
+	autonomyModeAll = "all"
+)
+
+// autonomyModeName names the mode a query ran under.
+func autonomyModeName(includeSubagents bool) string {
+	if includeSubagents {
+		return autonomyModeAll
+	}
+	return autonomyModeTopLevel
+}
+
+// autonomyKindsFrom converts the store's kind census to the wire shape,
+// stamping the mode it was read under. One converter for both payloads, so the
+// two elements of one section can never disagree about what they counted.
+func autonomyKindsFrom(k outbound.AutonomySpanKinds, includeSubagents bool) historyAutonomyKinds {
+	return historyAutonomyKinds{
+		Mode:     autonomyModeName(includeSubagents),
+		TopLevel: k.TopLevel,
+		Subagent: k.Subagent,
+		Unknown:  k.Unknown,
+	}
+}
+
 // historyAutonomySpanRow is one span on the wire for element 2.
 type historyAutonomySpanRow struct {
 	Start   int64  `json:"start"`
@@ -303,6 +359,12 @@ type historyAutonomySpanRow struct {
 	// Reason is one of session.AutonomyEndReasons(); "" for a span recorded
 	// by a build that could not name it.
 	Reason string `json:"reason,omitempty"`
+	// Kind is one of session.AutonomyKinds(), always resolved — the store
+	// normalizes a blank row to session.AutonomyKindUnknown, so a client never
+	// has to decide what an absent field means.
+	Kind string `json:"kind"`
+	// Parent is the parent session id of a subagent run, "" otherwise.
+	Parent string `json:"parent,omitempty"`
 }
 
 // historyAutonomySpansResponse is the chart=autonomy_spans payload: the spans
@@ -322,26 +384,30 @@ type historyAutonomySpansResponse struct {
 	// Provenance marks how much of THIS window was reconstructed. Counted
 	// after the limit clips the spans, so it describes the rows above it.
 	Provenance historyAutonomyProvenance `json:"provenance"`
+	// Kinds says what this payload counted and what it left out (#1905
+	// subagents). Unlike Provenance these counts describe the WINDOW, not the
+	// returned rows — the excluded runs are the whole point of the number.
+	Kinds historyAutonomyKinds `json:"kinds"`
 }
 
 // serveHistoryAutonomyDurationChart serves chart=autonomy_duration. A nil
 // store yields an empty-but-valid payload rather than an error, mirroring
 // serveHistoryAgentsChart.
-func serveHistoryAutonomyDurationChart(w http.ResponseWriter, store outbound.AutonomySpanStore, window string, bucketSeconds, start, end int64) {
-	res, ok := readAutonomySpans(w, store, outbound.AutonomySpanQuery{Start: start, End: end})
+func serveHistoryAutonomyDurationChart(w http.ResponseWriter, store outbound.AutonomySpanStore, window string, bucketSeconds, start, end int64, includeSubagents bool) {
+	res, ok := readAutonomySpans(w, store, outbound.AutonomySpanQuery{Start: start, End: end, IncludeSubagents: includeSubagents})
 	if !ok {
 		return
 	}
-	writeHistoryJSON(w, buildAutonomyDurationResponse(window, bucketSeconds, start, end, res))
+	writeHistoryJSON(w, buildAutonomyDurationResponse(window, bucketSeconds, start, end, res, includeSubagents))
 }
 
 // serveHistoryAutonomySpansChart serves chart=autonomy_spans.
-func serveHistoryAutonomySpansChart(w http.ResponseWriter, store outbound.AutonomySpanStore, window string, start, end int64) {
-	res, ok := readAutonomySpans(w, store, outbound.AutonomySpanQuery{Start: start, End: end, Limit: autonomySpanLimit})
+func serveHistoryAutonomySpansChart(w http.ResponseWriter, store outbound.AutonomySpanStore, window string, start, end int64, includeSubagents bool) {
+	res, ok := readAutonomySpans(w, store, outbound.AutonomySpanQuery{Start: start, End: end, Limit: autonomySpanLimit, IncludeSubagents: includeSubagents})
 	if !ok {
 		return
 	}
-	writeHistoryJSON(w, buildAutonomySpansResponse(window, start, end, res))
+	writeHistoryJSON(w, buildAutonomySpansResponse(window, start, end, res, includeSubagents))
 }
 
 // readAutonomySpans performs the store read shared by both elements,
@@ -369,7 +435,7 @@ func readAutonomySpans(w http.ResponseWriter, store outbound.AutonomySpanStore, 
 // named in stats.Percentile — not because the clients could not divide, but
 // because "the p95" is ambiguous enough that two independent implementations
 // draw two different lines from the same data (#1905 design decision 5).
-func buildAutonomyDurationResponse(window string, bucketSeconds, start, end int64, res *outbound.AutonomySpanResult) historyAutonomyDurationResponse {
+func buildAutonomyDurationResponse(window string, bucketSeconds, start, end int64, res *outbound.AutonomySpanResult, includeSubagents bool) historyAutonomyDurationResponse {
 	n := 0
 	if bucketSeconds > 0 && end > start {
 		n = int((end - start + bucketSeconds - 1) / bucketSeconds)
@@ -419,6 +485,7 @@ func buildAutonomyDurationResponse(window string, bucketSeconds, start, end int6
 		EarliestSpan:  res.EarliestStart,
 		TotalRecorded: res.TotalRecorded,
 		Provenance:    autonomyProvenanceFrom(res.Provenance),
+		Kinds:         autonomyKindsFrom(res.Kinds, includeSubagents),
 	}
 }
 
@@ -456,7 +523,7 @@ func autonomySummaryFrom(samples []float64) historyAutonomySummary {
 
 // buildAutonomySpansResponse renders the window's spans plus the strip's row
 // order (most autonomous seconds first, then name for a stable tie-break).
-func buildAutonomySpansResponse(window string, start, end int64, res *outbound.AutonomySpanResult) historyAutonomySpansResponse {
+func buildAutonomySpansResponse(window string, start, end int64, res *outbound.AutonomySpanResult, includeSubagents bool) historyAutonomySpansResponse {
 	rows := make([]historyAutonomySpanRow, 0, len(res.Spans))
 	totals := map[string]int64{}
 	for _, s := range res.Spans {
@@ -466,6 +533,8 @@ func buildAutonomySpansResponse(window string, start, end int64, res *outbound.A
 			Project: s.Project,
 			Session: s.Session,
 			Reason:  s.Reason,
+			Kind:    session.AutonomyKindOrUnknown(s.Kind),
+			Parent:  s.Parent,
 		})
 		totals[s.Project] += s.Duration()
 	}
@@ -490,5 +559,6 @@ func buildAutonomySpansResponse(window string, start, end int64, res *outbound.A
 		TotalRecorded: res.TotalRecorded,
 		Truncated:     res.Truncated,
 		Provenance:    autonomyProvenanceFrom(res.Provenance),
+		Kinds:         autonomyKindsFrom(res.Kinds, includeSubagents),
 	}
 }

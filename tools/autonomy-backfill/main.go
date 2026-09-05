@@ -71,6 +71,10 @@ type options struct {
 	since          int64
 	force          bool
 	allowMalformed bool
+	// replace drops every previously RECONSTRUCTED row before writing, so a
+	// re-run reclassifies history instead of appending a second copy of it.
+	// See guardAlreadyBackfilled for why appending is the trap.
+	replace bool
 }
 
 func main() {
@@ -93,10 +97,12 @@ func parseFlags(argv []string) (options, error) {
 	force := fs.Bool("force", false, "write even though the span log already holds reconstructed rows")
 	allowMalformed := fs.Bool("allow-malformed", false,
 		fmt.Sprintf("write even though a source's unreadable share exceeds %.1f%%", malformedLimit*100))
+	replace := fs.Bool("replace", false,
+		"drop the previous reconstruction first, so a re-run REPLACES it instead of appending (measured rows are never touched)")
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "autonomy-backfill <data-dir> [--apply] [--gap-seconds N] [--since YYYY-MM-DD] [--force]")
+		fmt.Fprintln(fs.Output(), "autonomy-backfill <data-dir> [--apply] [--replace] [--gap-seconds N] [--since YYYY-MM-DD] [--force]")
 		fmt.Fprintln(fs.Output(), "  Reconstruct pre-#1905 Autonomy spans from this machine's own logs, MARKED as reconstructed.")
-		fmt.Fprintln(fs.Output(), "  Dry runs by default; --apply is what writes.")
+		fmt.Fprintln(fs.Output(), "  Dry runs by default; --apply is what writes. --replace makes a re-run reclassify history.")
 		fs.PrintDefaults()
 	}
 	positionals, err := parseInterleaved(fs, argv)
@@ -116,6 +122,7 @@ func parseFlags(argv []string) (options, error) {
 		gapSeconds:     *gap,
 		force:          *force,
 		allowMalformed: *allowMalformed,
+		replace:        *replace,
 	}
 	if *since != "" {
 		t, err := time.ParseInLocation("2006-01-02", *since, time.Local)
@@ -233,7 +240,7 @@ func reconstruct(evt *eventLog, cost *costLog, opts options, liveFloor, now int6
 	if opts.since > 0 {
 		logSpans = dropBefore(logSpans, opts.since)
 	}
-	costSpans, costLoss := reconstructCostSpans(cost, opts.gapSeconds, boundary, opts.since)
+	costSpans, costLoss := reconstructCostSpans(cost, evt.Subagents, opts.gapSeconds, boundary, opts.since)
 	// The event log keeps being written after the feature ships, so its era
 	// overlaps the live span log's. Whatever the daemon measured wins.
 	logSpans, logOverlap := dropOverlappingLive(logSpans, liveFloor)
@@ -288,7 +295,18 @@ func guardMalformed(res result, opts options) error {
 func apply(out *os.File, res result, opts options) error {
 	spanDir := filepath.Join(opts.dataDir, autonomyDirName)
 	tracker := filesystem.NewAutonomySpanTrackerWithDir(spanDir)
-	if err := guardAlreadyBackfilled(tracker, opts.force); err != nil {
+	if opts.replace {
+		// The re-run path. Dropping the previous reconstruction is what makes
+		// running the tool again RECLASSIFY history rather than double it —
+		// and it is safe precisely because of the live floor: nothing
+		// reconstructed reaches the era the daemon measured, so the rows this
+		// removes are exactly the rows about to be recomputed.
+		dropped, err := tracker.DropReconstructed()
+		if err != nil {
+			return fmt.Errorf("drop the previous reconstruction: %w", err)
+		}
+		fmt.Fprintf(out, "\nREPLACING — dropped %d previously reconstructed span(s); measured rows untouched.\n", dropped)
+	} else if err := guardAlreadyBackfilled(tracker, opts.force); err != nil {
 		return err
 	}
 	written := 0
@@ -326,7 +344,8 @@ func guardAlreadyBackfilled(store outbound.AutonomySpanStore, force bool) error 
 	}
 	return fmt.Errorf("refusing to write: the span log already holds %d reconstructed span(s), "+
 		"and appending a second reconstruction would double every figure in the section with no way "+
-		"to tell afterwards. Delete the reconstructed rows first, or pass --force",
+		"to tell afterwards. Re-run with --replace to REPLACE that reconstruction (measured rows are "+
+		"never touched), or pass --force to append anyway",
 		res.Provenance.Reconstructed)
 }
 
@@ -349,6 +368,8 @@ func report(out *os.File, res result, opts options) {
 		"end reason `"+session.AutonomyReasonUnknown+"` — the source records activity, never outcome")
 	fmt.Fprintf(out, "  %-6s %6d spans\n\n", "TOTAL", len(res.All()))
 
+	reportKinds(out, res)
+
 	fmt.Fprintln(out, "DELIBERATELY DROPPED (an undercount, and the safe direction)")
 	fmt.Fprintf(out, "  %6d  daemon restarts in the event log (clustered from its `startup` entries)\n", res.LogLoss.Restarts)
 	fmt.Fprintf(out, "  %6d  log spans straddling a restart — several runs merged, dropped not split\n", res.LogLoss.RestartStraddlers)
@@ -362,6 +383,28 @@ func report(out *os.File, res result, opts options) {
 	fmt.Fprintf(out, "  %6d  cost stretches at or after the boundary (the event log speaks for that era)\n", res.CostLoss.BoundaryStraddlers)
 	fmt.Fprintf(out, "  %6d  cost stretches of a single row — an instant, with no duration to measure\n", res.CostLoss.NonPositive)
 	fmt.Fprintf(out, "  %6d  log spans whose end did not follow their start\n", res.LogLoss.NonPositive)
+}
+
+// reportKinds prints how the reconstruction classified each run — top-level,
+// subagent, or explicitly unknown (#1905 subagents).
+//
+// The unknown line is the one that has to be there. It is not a shortfall to be
+// apologised for: the cost log carries no parent information at all, so every
+// run older than the retained event log genuinely IS of unknown kind, and a
+// report that quietly folded those into "top-level" would describe a
+// classification the tool never made.
+func reportKinds(out *os.File, res result) {
+	all := res.All()
+	spans := make([]spanWithKind, 0, len(all))
+	for _, s := range all {
+		spans = append(spans, spanWithKind{Kind: s.Kind, Parent: s.Parent})
+	}
+	c := censusOf(spans)
+	fmt.Fprintln(out, "CLASSIFIED (whose run was it — the default view counts top-level runs only)")
+	fmt.Fprintf(out, "  %6d  top-level runs — the event log recorded the session's birth outside a subagent directory\n", c.TopLevel)
+	fmt.Fprintf(out, "  %6d  subagent runs  — %d of them with the parent named; a subagent's span is nested inside its parent's\n",
+		c.Subagent, c.ParentNamed)
+	fmt.Fprintf(out, "  %6d  unknown        — no birth line in the retained event log, so neither kind was established\n\n", c.Unknown)
 }
 
 // reportSource prints one source's line: count, period, and reason mix.
@@ -412,7 +455,12 @@ func printSensitivity(out *os.File, cost *costLog, boundary, since int64) {
 	fmt.Fprintln(out, "\nCOST-LOG GAP SENSITIVITY (only source=cost spans are affected)")
 	fmt.Fprintf(out, "  %-10s %8s %10s %10s\n", "gap", "spans", "p50", "p95")
 	for _, gap := range sensitivityThresholds {
-		spans, _ := reconstructCostSpans(cost, gap, boundary, since)
+		// The kind index is irrelevant here — this table reports span COUNTS
+		// and durations at three thresholds, and no threshold changes who a
+		// run belonged to. An empty index keeps the table honest about that by
+		// leaving every classification unknown rather than implying the mix
+		// varies with the gap.
+		spans, _ := reconstructCostSpans(cost, newSubagentIndex(), gap, boundary, since)
 		d := make([]float64, 0, len(spans))
 		for _, s := range spans {
 			d = append(d, float64(s.Duration()))

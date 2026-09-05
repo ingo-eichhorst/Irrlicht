@@ -231,6 +231,15 @@ func (b *spanBuilder) finish(now int64) {
 // projects maps a session id to the project it belongs to; the event log does
 // not carry one, so it is joined in from the cost log (see sessionProjects).
 func reconstructEventSpans(log *eventLog, projects map[string]string, now int64) ([]outbound.AutonomySpan, lossReport) {
+	if log.Subagents == nil {
+		// Unreachable on the production path — readEventLog always builds one.
+		// Panicking rather than substituting an empty index is deliberate: an
+		// empty index classifies EVERY run as unknown, which is exactly what a
+		// machine whose log carried no parentage looks like, so the wiring bug
+		// would be invisible in the output (AGENTS.md: inability to look must
+		// never read the same as finding nothing).
+		panic("reconstructEventSpans: event log has no subagent index")
+	}
 	b := newSpanBuilder(graceSeconds)
 	for _, t := range log.Transitions {
 		b.apply(t)
@@ -251,6 +260,7 @@ func reconstructEventSpans(log *eventLog, projects map[string]string, now int64)
 			loss.NoProject++
 			continue
 		}
+		kind, parent := log.Subagents.classify(s.Session)
 		kept = append(kept, outbound.AutonomySpan{
 			Start:   s.Start,
 			End:     s.End,
@@ -258,6 +268,8 @@ func reconstructEventSpans(log *eventLog, projects map[string]string, now int64)
 			Session: s.Session,
 			Reason:  s.Reason,
 			Source:  session.AutonomySourceLog,
+			Kind:    kind,
+			Parent:  parent,
 		})
 	}
 	sortSpans(kept)
@@ -291,7 +303,14 @@ func straddlesRestart(s rawSpan, restarts []int64) bool {
 // than clipped, because the event log is the better witness wherever it
 // reaches and one run must not be described by both sources. since, when
 // non-zero, drops everything starting before it.
-func reconstructCostSpans(cl *costLog, gap, until, since int64) ([]outbound.AutonomySpan, lossReport) {
+// ix classifies each stretch's session as a top-level or subagent run where the
+// event log can say — which, for most of this era, it cannot: the cost log
+// reaches back months further than the retained event log, so a session that
+// ended before the oldest retained file was written has no birth line to read
+// and comes back session.AutonomyKindUnknown. That is the honest answer and the
+// reason the kind has a third state; assuming "top" here would put months of
+// runs into the default view under a claim nothing measured.
+func reconstructCostSpans(cl *costLog, ix *subagentIndex, gap, until, since int64) ([]outbound.AutonomySpan, lossReport) {
 	var loss lossReport
 	out := []outbound.AutonomySpan{}
 	keys := make([]sessionKey, 0, len(cl.Series))
@@ -315,6 +334,7 @@ func reconstructCostSpans(cl *costLog, gap, until, since int64) ([]outbound.Auto
 				// Deliberately not counted as loss: an explicit --since floor
 				// is the caller asking for less, not the data failing.
 			default:
+				kind, parent := ix.classify(k.Session)
 				out = append(out, outbound.AutonomySpan{
 					Start:   st.Start,
 					End:     st.End,
@@ -322,6 +342,8 @@ func reconstructCostSpans(cl *costLog, gap, until, since int64) ([]outbound.Auto
 					Session: k.Session,
 					Reason:  session.AutonomyReasonUnknown,
 					Source:  session.AutonomySourceCost,
+					Kind:    kind,
+					Parent:  parent,
 				})
 			}
 		}

@@ -46,10 +46,21 @@ func (d *SessionDetector) handleTranscriptEvent(id agent.Identity, ev agent.Even
 	}
 }
 
+// NewSessionInfoFormat is the birth line every session gets in the event log:
+// the directory its transcript appeared in, and the adapter that owns it.
+//
+// EXPORTED for the same reason as SubagentOrphanedInfoFormat — the directory is
+// what tells tools/autonomy-backfill a Claude Code session was a SUBAGENT (its
+// transcript lives under SubagentDirName), and a reworded line would otherwise
+// leave the tool silently classifying every child as top-level.
+//
+// Two %s: the project directory, then the adapter name.
+const NewSessionInfoFormat = "new session detected in %s (adapter=%s)"
+
 // onNewSession handles a new transcript file appearing.
 func (d *SessionDetector) onNewSession(id agent.Identity, ev agent.Event) {
 	d.log.LogInfo(logComponentSessionDetector, ev.SessionID,
-		fmt.Sprintf("new session detected in %s (adapter=%s)", ev.ProjectDir, id.Name))
+		fmt.Sprintf(NewSessionInfoFormat, ev.ProjectDir, id.Name))
 
 	// Track project directory for parent derivation.
 	d.mu.Lock()

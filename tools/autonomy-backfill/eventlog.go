@@ -89,6 +89,13 @@ type eventLog struct {
 	// a restart count four times too high is a figure that documents nothing.
 	Restarts []int64
 
+	// Subagents is what the log knows about parentage: which sessions were
+	// children, and which parent each one reported to where a message named it
+	// (#1905 subagents). Built on the same single pass as Transitions — the log
+	// is 180k lines and reading it twice to answer two questions about the same
+	// entries would double the tool's slowest step.
+	Subagents *subagentIndex
+
 	// Stats is the parse census. It exists so an unreadable log fails LOUDLY
 	// rather than yielding fewer spans (AGENTS.md: absence of a finding and
 	// inability to look must never produce the same output).
@@ -140,7 +147,7 @@ func readEventLog(dataDir string) (*eventLog, error) {
 	}
 	sort.Strings(paths)
 
-	out := &eventLog{Stats: parseStats{Files: len(paths)}}
+	out := &eventLog{Subagents: newSubagentIndex(), Stats: parseStats{Files: len(paths)}}
 	var startups []int64
 	for _, p := range paths {
 		if err := scanEventLogFile(p, out, &startups); err != nil {
@@ -208,12 +215,23 @@ func scanEventLogFile(path string, out *eventLog, startups *[]int64) error {
 			*startups = append(*startups, ts)
 			out.Stats.Relevant++
 		case detectorEventType:
+			// Parentage first, and independently of the transition parse: the
+			// line that says a session was a subagent is usually NOT a
+			// transition line (a birth line names no state at all), so an
+			// early exit on "no arrow here" must not skip it.
+			used := out.Subagents.observe(e.SessionID, e.Message)
 			state, ok := destinationState(e.Message)
-			if !ok || e.SessionID == "" {
-				continue
+			if ok && e.SessionID != "" {
+				out.Transitions = append(out.Transitions, transition{TS: ts, Session: e.SessionID, State: state})
+				used = true
 			}
-			out.Transitions = append(out.Transitions, transition{TS: ts, Session: e.SessionID, State: state})
-			out.Stats.Relevant++
+			// Counted ONCE per line however many questions it answered: the two
+			// subagent-completion messages are both a parentage marker and a
+			// transition, and a census that counted them twice would report
+			// more used lines than the file holds.
+			if used {
+				out.Stats.Relevant++
+			}
 		}
 	}
 	if err := sc.Err(); err != nil {

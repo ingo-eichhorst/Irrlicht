@@ -253,6 +253,16 @@ func geminiSiblingParentStem(chatsDir, tag string) string {
 	return strings.TrimSuffix(match, jsonlExt)
 }
 
+// SubagentDirName is the directory Claude Code writes a subagent's transcript
+// under, and therefore the ProjectDir that session's birth line reports.
+//
+// EXPORTED so tools/autonomy-backfill can recognise a child in the event log
+// without retyping the word (#1905 subagents): a session whose
+// NewSessionInfoFormat line names this directory is a subagent, and that is the
+// only evidence the retained log carries for the many children that never emit
+// a parent-naming message.
+const SubagentDirName = "subagents"
+
 // deriveParentSessionID extracts a parent session ID from a subagent transcript path.
 // Claude Code subagent transcripts live at .../<parent-session-id>/subagents/<agent-id>.jsonl;
 // Workflow-tool agents one level deeper, at
@@ -260,7 +270,7 @@ func geminiSiblingParentStem(chatsDir, tag string) string {
 // Returns "" if the path doesn't match either pattern.
 func deriveParentSessionID(transcriptPath string) string {
 	dir := filepath.Dir(transcriptPath) // .../subagents or .../subagents/workflows/<run-id>
-	if filepath.Base(dir) == "subagents" {
+	if filepath.Base(dir) == SubagentDirName {
 		return filepath.Base(filepath.Dir(dir)) // parent session ID
 	}
 	if wfRoot := workflowRunRoot(dir); wfRoot != "" {
@@ -278,7 +288,7 @@ func workflowRunRoot(dir string) string {
 		return ""
 	}
 	subagents := filepath.Dir(workflows) // .../<parent-session-id>/subagents
-	if filepath.Base(subagents) != "subagents" {
+	if filepath.Base(subagents) != SubagentDirName {
 		return ""
 	}
 	return filepath.Dir(subagents)
