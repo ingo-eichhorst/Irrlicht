@@ -29,13 +29,29 @@ func TestComposerCatalogPinsRoleLabelAndFullHierarchy(t *testing.T) {
 	}
 }
 
-func TestComposerCatalogRejectsGeneratedPathDrift(t *testing.T) {
-	element := fixtureElement("prompt", "AXTextArea", "", "Prompt")
-	element.Path = append([]int(nil), element.Path...)
-	element.Path[len(element.Path)-1]++
-	_, err := composerCatalog([]helperElement{element}, "/repo/workspace")
-	if err == nil || !strings.Contains(err.Error(), "stable path") {
-		t.Fatalf("composerCatalog() error = %v", err)
+// Identity addressing trades one failure mode for another: a matcher that
+// selects two elements would silently drive whichever came first. It must
+// refuse instead. A driver that clicks the wrong control is worse than one
+// that stops.
+func TestComposerControlsRefuseAnAmbiguousMatch(t *testing.T) {
+	elements := []helperElement{
+		fixtureElement("prompt", "AXTextArea", "", "Prompt"),
+		fixtureElement("prompt-twin", "AXTextArea", "", "Prompt"),
+	}
+	_, err := composerControls(elements, "/repo/workspace", []string{"prompt"})
+	if err == nil || !strings.Contains(err.Error(), "found 2") {
+		t.Fatalf("composerControls() accepted an ambiguous tree: err = %v", err)
+	}
+}
+
+// A control that is simply not on screen must say so, and must not resolve to
+// some other element that happens to be nearby.
+func TestComposerControlsRefuseAMissingControl(t *testing.T) {
+	_, err := composerControls([]helperElement{
+		fixtureElement("environment", "AXPopUpButton", "Local", ""),
+	}, "/repo/workspace", []string{"prompt"})
+	if err == nil || !strings.Contains(err.Error(), "found 0") {
+		t.Fatalf("composerControls() error = %v", err)
 	}
 }
 
@@ -56,9 +72,13 @@ func TestSelectedSessionMenuUsesDynamicOwnedTitle(t *testing.T) {
 	}
 }
 
+// fixtureElement builds a composer element. Its path is synthetic and
+// deliberately arbitrary: the catalog addresses controls by identity, so a
+// fixture that derived its paths from the catalog would only prove the catalog
+// agrees with itself.
 func fixtureElement(name, role, title, description string) helperElement {
 	return helperElement{
-		Path: append([]int(nil), composerPaths[name]...), Role: role, Title: title,
+		Path: []int{len(name), len(role)}, Role: role, Title: title,
 		Description: description, Hierarchy: []string{"AXApplication", "AXWindow", "AXGroup", role},
 	}
 }
@@ -99,7 +119,7 @@ func TestComposerCatalogResolvesTheMeasuredDesktopTree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the catalog does not resolve against the measured Desktop tree: %v", err)
 	}
-	for _, name := range []string{"environment", "project", "prompt", "send", "mode", "model"} {
+	for _, name := range []string{"environment", "project", "prompt", "send", "model"} {
 		if _, ok := catalog[name]; !ok {
 			t.Fatalf("catalog has no %s control", name)
 		}
@@ -137,7 +157,7 @@ func TestPrerequisiteNamesTheSupportedDesktopVersion(t *testing.T) {
 // resolve.
 func TestBasicTurnDoesNotRequireRecipeOnlyControls(t *testing.T) {
 	for _, name := range basicTurnControls() {
-		if _, known := composerPaths[name]; !known {
+		if _, known := composerMatchers[name]; !known {
 			t.Fatalf("basic turn requires %q, which the catalog does not carry", name)
 		}
 	}
@@ -178,4 +198,74 @@ func TestComposerControlsRefusesAnUnknownName(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "no \"nonesuch\" control") {
 		t.Fatalf("composerControls() error = %v", err)
 	}
+}
+
+// TestComposerControlsSurviveASiblingShift is the regression gate for the
+// defect that cost issue #1887 fifteen live runs.
+//
+// The catalog used to address every control by its ABSOLUTE child index. One
+// extra or missing element in the window chrome shifts every later sibling by
+// one, and the lookup then points at a different control or at nothing. The
+// driver reported "prompt control is missing at stable path […]" while the
+// composer was open and correct on screen.
+//
+// Measured on the live 1.46388.4 app on 2026-09-05: the prompt text area sat at
+// composer index 2,4,1,0,0 where the committed tree has it at 3,5,1,0,0 — the
+// same control, two indices moved. Its identity did not move: it stayed the one
+// AXTextArea described "Prompt" among 663 elements.
+//
+// This test shifts the measured tree the same way. It fails against an
+// index-addressed catalog and passes against an identity-addressed one.
+func TestComposerControlsSurviveASiblingShift(t *testing.T) {
+	elements := shiftComposerRow(t, loadMeasuredComposerTree(t))
+	controls, err := composerControls(elements, "/repo/workspace", basicTurnControls())
+	if err != nil {
+		t.Fatalf("the catalog does not survive a one-sibling shift: %v", err)
+	}
+	for _, name := range basicTurnControls() {
+		if controls[name].Role == "" {
+			t.Fatalf("control %s did not resolve after the shift", name)
+		}
+	}
+}
+
+// shiftComposerRow moves the composer one sibling earlier, the way a missing
+// piece of window chrome does on the live app.
+const composerRowIndex = 26
+
+func shiftComposerRow(t *testing.T, elements []helperElement) []helperElement {
+	t.Helper()
+	shifted := make([]helperElement, 0, len(elements))
+	moved := 0
+	for _, element := range elements {
+		if len(element.Path) > composerRowIndex {
+			path := append([]int(nil), element.Path...)
+			path[composerRowIndex]--
+			element.Path = path
+			moved++
+		}
+		shifted = append(shifted, element)
+	}
+	if moved == 0 {
+		t.Fatal("no element sits on the composer row; this mutation cannot run, which is a failure")
+	}
+	return shifted
+}
+
+func loadMeasuredComposerTree(t *testing.T) []helperElement {
+	t.Helper()
+	raw, err := os.ReadFile(composerTreeFixture)
+	if err != nil {
+		t.Fatalf("no measured Desktop tree: %v", err)
+	}
+	var dump struct {
+		Elements []helperElement `json:"elements"`
+	}
+	if err := json.Unmarshal(raw, &dump); err != nil {
+		t.Fatal(err)
+	}
+	if len(dump.Elements) == 0 {
+		t.Fatal("the measured tree is empty; this check cannot run, which is a failure")
+	}
+	return dump.Elements
 }

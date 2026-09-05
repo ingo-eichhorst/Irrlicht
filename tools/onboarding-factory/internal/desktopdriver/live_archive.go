@@ -91,7 +91,7 @@ func validateArchiveTarget(
 	if titleMatches != 1 {
 		return archiveTarget{}, fmt.Errorf("owned active session title %q is not unique; found %d rows", registry.Title, titleMatches)
 	}
-	controls, err := composerCatalog(elements, registry.CWD)
+	controls, err := composerControls(elements, registry.CWD, []string{"project"})
 	if err != nil {
 		return archiveTarget{}, fmt.Errorf("validate owned Desktop composer before archive: %w", err)
 	}
