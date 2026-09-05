@@ -63,20 +63,25 @@ func (runtime *LiveRuntime) WaitIrrlichtState(
 		if !stateSeen {
 			return false, nil
 		}
-		if state == "working" {
-			runtime.workingSeen[owned.Transcript.SessionID] = true
-		}
 		observation = candidate
 		return true, nil
 	})
 	return observation, err
 }
 
+// stateObserved reads the run's own recording rather than the live state.
+//
+// A Desktop session is created BY its first turn, so its sequence starts at
+// working — there is no pre-turn ready, because the registry row and the Claude
+// Code session do not exist until the prompt is sent. Demanding a leading ready
+// made every Desktop turn unobservable.
+//
+// The recording is also the only race-free source. Live run 17 went from
+// working to ready in 2.7 seconds; a poll for the CURRENT state has no
+// guarantee of landing inside a window that short, while the transition it is
+// looking for is durably in the recording.
 func (runtime *LiveRuntime) stateObserved(sessionID, currentState, wantedState string) (bool, error) {
-	if wantedState == "ready" && !runtime.workingSeen[sessionID] {
-		return currentState == "ready", nil
-	}
-	expected := []string{"ready", "working"}
+	expected := []string{"working"}
 	if wantedState == "ready" {
 		expected = append(expected, "ready")
 	}

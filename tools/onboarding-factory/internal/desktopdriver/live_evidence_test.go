@@ -175,3 +175,51 @@ func TestRegistryIdentityMustStillMatchAtEvidenceCapture(t *testing.T) {
 		t.Fatalf("validateRegistryIdentity() exact match error = %v", err)
 	}
 }
+
+// A Desktop session is created BY its first turn, so its recorded state
+// sequence starts at working. There is no pre-turn ready to observe: the
+// registry row and the Claude Code session do not exist until the prompt is
+// sent.
+//
+// Live run 17 (2026-09-05, Desktop 1.46388.4) recorded exactly this for session
+// 941db969: state_transition→working "new session created" at 22:17:16.392,
+// hook_received at :19.088, state_transition→ready "agent finished turn" at
+// :19.092. The driver still demanded a leading ready and timed out after 1m20s
+// against a recording that already held the whole turn.
+//
+// Reading the sequence from the recording also removes a race the live state
+// cannot win: that turn was ready 2.7 seconds after it started.
+func TestDesktopStateSequenceStartsAtWorking(t *testing.T) {
+	dir := t.TempDir()
+	content := strings.Join([]string{
+		`{"kind":"state_transition","session_id":"941db969","new_state":"working","reason":"new session created"}`,
+		`{"kind":"hook_received","session_id":"941db969"}`,
+		`{"kind":"state_transition","session_id":"941db969","new_state":"ready","reason":"agent finished turn → ready"}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "recording.jsonl"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &LiveRuntime{options: LiveOptions{RecordingDirectory: dir}}
+
+	// The turn is already finished when the driver first looks. Both waits must
+	// still be satisfied, from the recording.
+	working, err := runtime.stateObserved("941db969", "ready", "working")
+	if err != nil || !working {
+		t.Fatalf("working not observed in a finished Desktop turn: %t, %v", working, err)
+	}
+	ready, err := runtime.stateObserved("941db969", "ready", "ready")
+	if err != nil || !ready {
+		t.Fatalf("ready not observed in a finished Desktop turn: %t, %v", ready, err)
+	}
+
+	// A session that never worked must not read as ready.
+	quiet := t.TempDir()
+	if err := os.WriteFile(filepath.Join(quiet, "recording.jsonl"),
+		[]byte(`{"kind":"state_transition","session_id":"941db969","new_state":"ready"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	idle := &LiveRuntime{options: LiveOptions{RecordingDirectory: quiet}}
+	if observed, err := idle.stateObserved("941db969", "ready", "ready"); err != nil || observed {
+		t.Fatalf("a session that never worked read as a finished turn: %t, %v", observed, err)
+	}
+}

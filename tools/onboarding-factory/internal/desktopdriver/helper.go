@@ -140,12 +140,12 @@ func (client helperClient) probe(ctx context.Context, controls map[string]helper
 	return err
 }
 
-func (client helperClient) probeProject(ctx context.Context, selector helperSelector) error {
+func (client helperClient) probeSelector(ctx context.Context, name string, selector helperSelector) error {
 	_, err := client.call(ctx, helperRequest{
 		Command: "probe",
 		Limits:  map[string]int{"maxDepth": 64, "maxNodes": 5_000},
 		Probes: []helperProbe{{
-			Name: "project", Selectors: []helperSelector{selector},
+			Name: name, Selectors: []helperSelector{selector},
 			Required: true, RequiresGeometry: true,
 		}},
 	})
