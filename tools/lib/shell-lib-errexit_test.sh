@@ -446,9 +446,24 @@ row 'workflow-step.sh::_workflow_step_record' '_workflow_step_record (refuses an
 row 'workflow-step.sh::_workflow_step_scan' '_workflow_step_scan' 0 \
     ". tools/lib/workflow-step.sh" \
     "_workflow_step_scan $WS_DATA/no-shell.yml 'Plain step' >/dev/null"
+# The field readers are driven off a REAL record — `_workflow_step_scan`'s own
+# output — because a hand-written prefix like `matches 1` is exactly what they
+# now refuse: a record cut short reads fine as far as it goes, and its empty
+# fields are indistinguishable from a step that declares no `shell:`. So the
+# refusal rows below drive that prefix deliberately.
+WS_REC=". tools/lib/workflow-step.sh; WSREC=\$(_workflow_step_scan $WS_DATA/no-shell.yml 'Plain step')"
 row 'workflow-step.sh::_workflow_step_field' '_workflow_step_field' 0 \
+    "$WS_REC" \
+    '_workflow_step_field "$WSREC" matches >/dev/null'
+row 'workflow-step.sh::_workflow_step_field' '_workflow_step_field (refuses a truncated record)' 2 \
     '. tools/lib/workflow-step.sh' \
-    '_workflow_step_field "matches 1" matches >/dev/null'
+    '_workflow_step_field "matches 1" matches >/dev/null 2>&1'
+row 'workflow-step.sh::_workflow_step_field_of' '_workflow_step_field_of' 0 \
+    "$WS_REC" \
+    "_workflow_step_field_of \"\$WSREC\" matches $WS_DATA/no-shell.yml 'Plain step' >/dev/null"
+row 'workflow-step.sh::_workflow_step_field_of' '_workflow_step_field_of (refuses a truncated record)' 2 \
+    '. tools/lib/workflow-step.sh' \
+    "_workflow_step_field_of 'matches 1' matches $WS_DATA/no-shell.yml 'Plain step' >/dev/null 2>&1"
 
 row 'swift-suite.sh::swift_suite_completed' 'swift_suite_completed' 0 \
     '. tools/lib/swift-suite.sh' \
