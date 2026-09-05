@@ -57,7 +57,7 @@ func TestComposerControlsRefuseAMissingControl(t *testing.T) {
 
 func TestSelectedSessionMenuUsesDynamicOwnedTitle(t *testing.T) {
 	element := helperElement{
-		Path: selectedSessionMenuPath, Role: "AXPopUpButton",
+		Path: []int{9, 9}, Role: "AXPopUpButton",
 		Description: "More options for Driver basic turn", Hierarchy: []string{"AXApplication", "AXWindow", "AXGroup"},
 	}
 	selector, err := selectedSessionMenu([]helperElement{element}, "Driver basic turn")
@@ -268,4 +268,75 @@ func loadMeasuredComposerTree(t *testing.T) []helperElement {
 		t.Fatal("the measured tree is empty; this check cannot run, which is a failure")
 	}
 	return dump.Elements
+}
+
+// sessionMenuElement builds a "More options for X" control at a given nesting
+// depth. Depth is what separates the two kinds on the real app.
+func sessionMenuElement(title string, depth int) helperElement {
+	hierarchy := make([]string, depth)
+	for i := range hierarchy {
+		hierarchy[i] = "AXGroup"
+	}
+	return helperElement{
+		Path: []int{depth, len(title)}, Role: "AXPopUpButton",
+		Description: "More options for " + title, Hierarchy: hierarchy,
+	}
+}
+
+// TestSelectedSessionMenuPrefersTheOpenConversation is the regression gate for
+// the cleanup blocker.
+//
+// Claude Desktop renders "More options for <title>" twice over: once per row of
+// the sidebar session list, and once for the conversation currently OPEN. The
+// driver addressed it by an absolute path into the sidebar, which points at
+// whichever session happens to occupy that row.
+//
+// Measured live on 1.46388.4 on 2026-09-06 with ten such controls on screen:
+// nine sidebar rows carried a 21-deep hierarchy, and exactly one — the open
+// conversation's own menu — carried a 29-deep one. Three of the ten shared the
+// title "Confirmation response", because Desktop names a session after its
+// content and this scenario always sends the same prompt.
+//
+// The open conversation is the session the driver just drove. Selecting it is a
+// stronger ownership argument than any title match, and it holds even when other
+// sessions share the title.
+func TestSelectedSessionMenuPrefersTheOpenConversation(t *testing.T) {
+	elements := []helperElement{
+		sessionMenuElement("Someone else's work", 21),
+		sessionMenuElement("Confirmation response", 21),
+		sessionMenuElement("Confirmation response", 21),
+		sessionMenuElement("Confirmation response", 29), // the open conversation
+	}
+	selector, err := selectedSessionMenu(elements, "Confirmation response")
+	if err != nil {
+		t.Fatalf("selectedSessionMenu() with duplicate titles on screen: %v", err)
+	}
+	if len(selector.Hierarchy) != 29 {
+		t.Fatalf("selected the sidebar row, not the open conversation: depth=%d", len(selector.Hierarchy))
+	}
+
+	// A menu naming a different session must never be selected.
+	if _, err := selectedSessionMenu(elements, "Someone else's work"); err == nil {
+		t.Fatal("selectedSessionMenu() selected a session that is not open")
+	}
+
+	// Two equally deep matches are a genuine ambiguity and must refuse.
+	tie := []helperElement{
+		sessionMenuElement("Confirmation response", 29),
+		sessionMenuElement("Confirmation response", 29),
+	}
+	if _, err := selectedSessionMenu(tie, "Confirmation response"); err == nil {
+		t.Fatal("selectedSessionMenu() accepted two equally nested menus")
+	}
+}
+
+// openConversationHierarchy is the nesting the OPEN conversation's menu carries
+// on the real app: deeper than any sidebar row. Fixtures use it so they select
+// the same control the driver selects live.
+func openConversationHierarchy() []string {
+	hierarchy := make([]string, 29)
+	for i := range hierarchy {
+		hierarchy[i] = "AXGroup"
+	}
+	return hierarchy
 }

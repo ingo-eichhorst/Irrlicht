@@ -84,15 +84,18 @@ func validateArchiveTarget(
 	if registry.Title == "" {
 		return archiveTarget{}, fmt.Errorf("owned session %q has no title for the selected-session guard", registry.SessionID)
 	}
-	titleMatches := 0
-	for _, session := range sessions {
-		if !session.Archived && session.Title == registry.Title {
-			titleMatches++
-		}
-	}
-	if titleMatches != 1 {
-		return archiveTarget{}, fmt.Errorf("owned active session title %q is not unique; found %d rows", registry.Title, titleMatches)
-	}
+	// The owned title does NOT have to be unique among active sessions.
+	// It used to, because the menu was found by title alone, and that made
+	// every repeat run of one scenario unable to clean up after itself:
+	// Desktop names a session after its content, so the same prompt earns the
+	// same name every time. Three sessions on the development machine were
+	// called "Confirmation response" before this was noticed.
+	//
+	// selectedSessionMenu now identifies the conversation that is OPEN, by its
+	// nesting rather than its name, and then checks that it is this one. That
+	// is the guarantee the uniqueness check was standing in for, and it is the
+	// stronger of the two: the open conversation is the session the driver just
+	// drove.
 	// The composer is gone by now: after a turn Claude Desktop shows the
 	// session, not a fresh composer. The ownership binding that survives is the
 	// selected-session menu, which names the owned title verified unique above.

@@ -1,6 +1,7 @@
 package desktopdriver
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -108,8 +109,6 @@ var composerMatchers = map[string]composerMatcher{
 // basic turn drives mode; the recipe work (#1888) needs it and must derive a
 // real identity for it, from a measurement of the mode menu's own contents.
 
-var selectedSessionMenuPath = []int{0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 5, 4, 0, 6, 0, 1, 0}
-
 // basicTurnControls are the controls that must exist BEFORE the driver types.
 //
 // `send` is not among them, and that is the point. The send button shares its
@@ -176,21 +175,76 @@ func composerControls(
 	return controls, nil
 }
 
+// selectedSessionMenu returns the "More options" menu of the conversation
+// currently OPEN, which is the session the driver just drove.
+//
+// Claude Desktop renders that control twice over: once per row of the sidebar
+// session list, and once for the open conversation itself. Measured live on
+// 1.46388.4 on 2026-09-06 with ten on screen, the nine sidebar rows carried a
+// 21-deep hierarchy and the open conversation's carried a 29-deep one. Three of
+// the ten shared a title, because Desktop names a session after its content and
+// a scenario that always sends the same prompt always earns the same name.
+//
+// So depth is the discriminator, and it is read relatively — the deepest match
+// wins, and a tie refuses — rather than against a pinned number. Addressing
+// this by absolute path, as it was, points at whichever session happens to
+// occupy one row of a list the driver does not control.
+const sessionMenuPrefix = "More options for "
+
 func selectedSessionMenu(elements []helperElement, expectedTitle string) (helperSelector, error) {
-	element, ok := elementAtPath(elements, selectedSessionMenuPath)
-	if !ok {
-		return helperSelector{}, fmt.Errorf("selected-session menu is missing at stable path %v", selectedSessionMenuPath)
+	open, err := openConversationMenu(elements)
+	if err != nil {
+		return helperSelector{}, err
 	}
-	expectedDescription := "More options for " + expectedTitle
-	if element.Role != "AXPopUpButton" || element.Description != expectedDescription {
+	if open.Description != sessionMenuPrefix+expectedTitle {
 		return helperSelector{}, fmt.Errorf(
-			"selected-session menu does not identify the owned session: role=%q description=%q, want %q",
-			element.Role,
-			element.Description,
-			expectedDescription,
-		)
+			"the open Claude Desktop conversation is %q, but this run owns %q",
+			strings.TrimPrefix(open.Description, sessionMenuPrefix), expectedTitle)
 	}
-	return selectorFor(element), nil
+	if len(open.Hierarchy) == 0 {
+		return helperSelector{}, errors.New("Desktop session menu has no role hierarchy")
+	}
+	return selectorFor(open), nil
+}
+
+// openConversationMenu returns the "More options" menu of the conversation
+// currently OPEN, chosen without reference to any title.
+//
+// Claude Desktop renders that control twice over: once per row of the sidebar
+// session list, and once for the open conversation itself. The open one is
+// nested deeper, because it lives inside the conversation view rather than in a
+// flat list. Measured live on 1.46388.4 on 2026-09-06 with ten on screen: nine
+// sidebar rows at hierarchy depth 21, and exactly one at depth 29.
+//
+// Depth is read RELATIVELY — deepest wins, a tie refuses — never against a
+// pinned number. Titles play no part in the choice, which is why this works
+// when several sessions share one: Desktop names a session after its content,
+// and a scenario that always sends the same prompt always earns the same name.
+// Three of those ten were called "Confirmation response".
+func openConversationMenu(elements []helperElement) (helperElement, error) {
+	var deepest []helperElement
+	for _, element := range elements {
+		if element.Role != "AXPopUpButton" || !strings.HasPrefix(element.Description, sessionMenuPrefix) {
+			continue
+		}
+		switch {
+		case len(deepest) == 0 || len(element.Hierarchy) > len(deepest[0].Hierarchy):
+			deepest = []helperElement{element}
+		case len(element.Hierarchy) == len(deepest[0].Hierarchy):
+			deepest = append(deepest, element)
+		}
+	}
+	if len(deepest) == 0 {
+		return helperElement{}, fmt.Errorf(
+			"no Claude Desktop conversation menu is on screen. AXPopUpButton controls: %s",
+			describeCandidates(elements, "AXPopUpButton"))
+	}
+	if len(deepest) > 1 {
+		return helperElement{}, fmt.Errorf(
+			"%d Desktop conversation menus are equally nested; none can be proven to be the open one",
+			len(deepest))
+	}
+	return deepest[0], nil
 }
 
 // Claude Desktop refuses to render a composer for a folder it has not seen

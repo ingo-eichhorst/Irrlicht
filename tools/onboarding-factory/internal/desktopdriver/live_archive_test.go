@@ -22,21 +22,37 @@ func archiveFixtureElements(project, title string) []helperElement {
 		fixtureElement("model", "AXPopUpButton", "", "Model: Opus 5"),
 	}
 	return append(elements, helperElement{
-		Path: selectedSessionMenuPath, Role: "AXPopUpButton",
+		Path: []int{9, 9}, Role: "AXPopUpButton",
 		Description: "More options for " + title,
-		Hierarchy:   []string{"AXApplication", "AXWindow", "AXGroup", "AXPopUpButton"},
+		Hierarchy:   openConversationHierarchy(),
 	})
 }
 
-func TestArchiveTargetRejectsDuplicateActiveTitle(t *testing.T) {
+// This used to assert that a duplicate active title is refused. It is not any
+// more, and deliberately so — see TestArchiveTargetResolvesWhenOtherSessionsShareTheTitle
+// for why that rule made a repeatable scenario unable to clean up after itself.
+//
+// What replaces it is the check below, which is what the title rule was only
+// ever standing in for: the conversation on screen must be the owned one.
+func TestArchiveTargetRequiresTheOwnedConversationToBeOpen(t *testing.T) {
 	owned := OwnedSession{Registry: RegistrySession{SessionID: "local_owned", CWD: "/repo/workspace"}}
 	sessions := []RegistrySession{
 		{SessionID: "local_owned", CWD: "/repo/workspace", Title: "Same title"},
 		{SessionID: "local_user", CWD: "/repo/other", Title: "Same title"},
 	}
-	elements := archiveFixtureElements("workspace", "Same title")
-	if _, err := validateArchiveTarget(owned, sessions, elements); err == nil {
-		t.Fatal("validateArchiveTarget() accepted a duplicate active title")
+	// The owned session's own conversation is open: allowed, despite the duplicate.
+	if _, err := validateArchiveTarget(owned, sessions, []helperElement{
+		sessionMenuElement("Same title", 21),
+		sessionMenuElement("Same title", 29),
+	}); err != nil {
+		t.Fatalf("validateArchiveTarget() refused the open owned conversation: %v", err)
+	}
+	// Somebody else's conversation is open: refused.
+	if _, err := validateArchiveTarget(owned, sessions, []helperElement{
+		sessionMenuElement("Same title", 21),
+		sessionMenuElement("A different session", 29),
+	}); err == nil {
+		t.Fatal("validateArchiveTarget() accepted a foreign open conversation")
 	}
 }
 
@@ -53,16 +69,19 @@ func TestArchiveTargetRejectsAnotherSessionsMenu(t *testing.T) {
 	owned := OwnedSession{Registry: RegistrySession{SessionID: "local_owned", CWD: "/repo/workspace"}}
 	sessions := []RegistrySession{{SessionID: "local_owned", CWD: "/repo/workspace", Title: "Owned title"}}
 	elements := []helperElement{{
-		Path: selectedSessionMenuPath, Role: "AXPopUpButton",
+		Path: []int{9, 9}, Role: "AXPopUpButton",
 		Description: "More options for Someone else's session",
-		Hierarchy:   []string{"AXApplication", "AXWindow", "AXGroup", "AXPopUpButton"},
+		Hierarchy:   openConversationHierarchy(),
 	}}
 	if _, err := validateArchiveTarget(owned, sessions, elements); err == nil {
 		t.Fatal("validateArchiveTarget() accepted another session's menu")
 	}
 }
 
-func TestArchiveOwnedInvokesDuplicateTitleGuard(t *testing.T) {
+// ArchiveOwned must surface the open-conversation guard, not merely have it
+// available: the guard is what stops a cleanup from archiving a session this
+// run does not own.
+func TestArchiveOwnedRefusesAForeignOpenConversation(t *testing.T) {
 	root := t.TempDir()
 	workspace := "/repo/workspace"
 	registryRoot := filepath.Join(root, "claude-code-sessions", "account", "profile")
@@ -81,7 +100,10 @@ func TestArchiveOwnedInvokesDuplicateTitleGuard(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	response, err := json.Marshal(helperResponse{OK: true, Elements: archiveFixtureElements("workspace", "Same title")})
+	response, err := json.Marshal(helperResponse{OK: true, Elements: []helperElement{
+		sessionMenuElement("Same title", 21),
+		sessionMenuElement("A different session", 29),
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,8 +123,8 @@ func TestArchiveOwnedInvokesDuplicateTitleGuard(t *testing.T) {
 		SessionID: "local_owned", CLISessionID: "cli-owned", CWD: workspace,
 	}}
 	err = runtime.ArchiveOwned(context.Background(), owned)
-	if err == nil || !strings.Contains(err.Error(), "active session title") || !strings.Contains(err.Error(), "not unique") {
-		t.Fatalf("ArchiveOwned() duplicate-title error = %v", err)
+	if err == nil || !strings.Contains(err.Error(), "the open Claude Desktop conversation is") {
+		t.Fatalf("ArchiveOwned() open-conversation error = %v", err)
 	}
 }
 
@@ -123,9 +145,9 @@ func TestArchiveTargetResolvesOnAPostTurnTree(t *testing.T) {
 	owned := OwnedSession{Registry: RegistrySession{SessionID: "local_owned", CWD: "/repo/workspace"}}
 	sessions := []RegistrySession{{SessionID: "local_owned", CWD: "/repo/workspace", Title: "Echo hi"}}
 	postTurn := []helperElement{{
-		Path: selectedSessionMenuPath, Role: "AXPopUpButton",
+		Path: []int{9, 9}, Role: "AXPopUpButton",
 		Description: "More options for Echo hi",
-		Hierarchy:   []string{"AXApplication", "AXWindow", "AXGroup", "AXPopUpButton"},
+		Hierarchy:   openConversationHierarchy(),
 	}}
 	target, err := validateArchiveTarget(owned, sessions, postTurn)
 	if err != nil {
@@ -133,5 +155,43 @@ func TestArchiveTargetResolvesOnAPostTurnTree(t *testing.T) {
 	}
 	if target.menu.Description != "More options for Echo hi" {
 		t.Fatalf("archive target does not name the owned session: %+v", target.menu)
+	}
+}
+
+// Desktop names a session after its content, so a scenario that always sends
+// the same prompt always earns the same name. Three sessions on this machine
+// were called "Confirmation response" by 2026-09-06, and the run that created
+// each of them could not clean up after itself: the guard demanded that the
+// owned title be unique among active sessions, and every repeat run broke it.
+//
+// Uniqueness of the TITLE was only ever a proxy for the thing that matters —
+// that the control the driver clicks belongs to the session it owns. The open
+// conversation's own menu establishes that directly, and it stays unambiguous
+// however many sidebar rows share a name.
+func TestArchiveTargetResolvesWhenOtherSessionsShareTheTitle(t *testing.T) {
+	owned := OwnedSession{Registry: RegistrySession{SessionID: "local_owned", CWD: "/repo/workspace"}}
+	sessions := []RegistrySession{
+		{SessionID: "local_owned", CWD: "/repo/workspace", Title: "Confirmation response"},
+		{SessionID: "local_stray_a", CWD: "/repo/older", Title: "Confirmation response"},
+		{SessionID: "local_stray_b", CWD: "/repo/older-still", Title: "Confirmation response"},
+	}
+	elements := []helperElement{
+		sessionMenuElement("Confirmation response", 21),
+		sessionMenuElement("Confirmation response", 21),
+		sessionMenuElement("Confirmation response", 29),
+	}
+	target, err := validateArchiveTarget(owned, sessions, elements)
+	if err != nil {
+		t.Fatalf("validateArchiveTarget() with duplicate titles: %v", err)
+	}
+	if len(target.menu.Hierarchy) != 29 {
+		t.Fatalf("archive target is a sidebar row, not the open conversation: %+v", target.menu)
+	}
+
+	// The open conversation must still be the owned one. A run whose session is
+	// no longer on screen must refuse rather than archive whatever is.
+	foreign := []helperElement{sessionMenuElement("Someone else's session", 29)}
+	if _, err := validateArchiveTarget(owned, sessions, foreign); err == nil {
+		t.Fatal("validateArchiveTarget() accepted a foreign open conversation")
 	}
 }
