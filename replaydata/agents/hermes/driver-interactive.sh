@@ -111,7 +111,7 @@ SES_EXPECTED=()
 SES_MARKER=()
 SES_CWD=()
 # shellcheck disable=SC2034  # driver-owned slot array written by the sourced replaydata/_lib/drive/slots.sh:64 (alloc_slot); kept current here for the shared slot model
-SES_ALIVE=()
+SES_OWNED=()
 SES_LAUNCH_TS=()
 
 # recipe-lint contract (#508 #4): the step types this driver genuinely ELICITS,

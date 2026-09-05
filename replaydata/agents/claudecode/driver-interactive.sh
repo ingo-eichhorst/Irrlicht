@@ -125,23 +125,24 @@ TRANSCRIPT=""
 EXPECTED_TURNS=0
 
 # Per-slot state (1-based; index 0 unused). Each slot is one session
-# lifetime. SES_ALIVE[i]=1 while its tmux session is still running.
+# lifetime. SES_OWNED[i]=1 while this driver still owns (has not retired) the
+# slot's tmux session.
 SES_UUID=()
 SES_TMUX=()
 SES_CWD=()
 SES_TRANSCRIPT=()
 SES_EXPECTED=()
-SES_ALIVE=()
+SES_OWNED=()
 N_SLOTS=0
 ACTIVE=0
 
 # Always honor the staging contract: write driver.exit-reason on ANY exit
 # (including a `set -e` abort mid-launch) and tear down EVERY tmux session this
-# run allocated. Gated on session-name PRESENCE, never on SES_ALIVE (#1825):
-# SES_ALIVE is the driver's INTENT — nothing re-derives it from `tmux
-# has-session` — so a step that wrongly believed it killed a session would
-# otherwise take the last net down with it. kill-session on an already-dead
-# name is a harmless no-op, which is exactly why presence is the right gate.
+# run allocated. Gated on session-name PRESENCE, never on SES_OWNED (#1825):
+# nothing re-derives that array from `tmux has-session`, so a step that wrongly
+# believed it killed a session would otherwise take the last net down with it.
+# kill-session on an already-dead name is a harmless no-op, which is exactly
+# why presence is the right gate.
 # Same shape as scripts/templates/drive-interactive.sh.tmpl:147-154.
 #
 # SINGLE WRITER, deliberately: the straight-line epilogue below no longer
@@ -195,7 +196,7 @@ alloc_slot() {
   SES_CWD[$N_SLOTS]="$3"
   SES_TRANSCRIPT[$N_SLOTS]=""
   SES_EXPECTED[$N_SLOTS]=0
-  SES_ALIVE[$N_SLOTS]=1
+  SES_OWNED[$N_SLOTS]=1
   ACTIVE=$N_SLOTS
   CURRENT_UUID="$1"
   CURRENT_TMUX="$2"
@@ -499,7 +500,7 @@ step_restart() {
   # uuid + transcript; we just retire it (kill its tmux) and allocate a
   # new slot for the next session.
   save_active
-  SES_ALIVE[$ACTIVE]=0
+  SES_OWNED[$ACTIVE]=0
   tmux kill-session -t "$CURRENT_TMUX" 2>/dev/null || true
   sleep 1
   # Mint new identifiers. A FRESH cwd matters: claude caches "trust this
@@ -521,7 +522,7 @@ step_resume() {
   # SAME UUID-keyed session row across the new PID lifetime. Passing
   # --session-id twice would conflict — claude exits immediately.
   save_active
-  SES_ALIVE[$ACTIVE]=0
+  SES_OWNED[$ACTIVE]=0
   local prev_uuid="$CURRENT_UUID" prev_cwd="$CURRENT_CWD"
   tmux kill-session -t "$CURRENT_TMUX" 2>/dev/null || true
   sleep 1
@@ -545,7 +546,7 @@ step_sigkill() {
   else
     echo "[driver] sigkill: no claude PID found for $CURRENT_UUID" >&2
   fi
-  SES_ALIVE[$ACTIVE]=0
+  SES_OWNED[$ACTIVE]=0
   # Don't tmux kill-session — the dead-process pane stays so a later
   # restart cleans it. The kill alone produces process_exited.
   sleep 1
@@ -575,7 +576,7 @@ step_exit_clean() {
   tmux send-keys -t "$CURRENT_TMUX" C-u
   tmux send-keys -t "$CURRENT_TMUX" C-d C-d
   # Observe the death rather than asserting it. The old `sleep 1` + unconditional
-  # SES_ALIVE=0 is the whole of #1825: nine runs recorded the slot as dead and
+  # SES_OWNED=0 is the whole of #1825: nine runs retired the slot on paper and
   # leaked a live claude plus its tmux session while reporting exit-reason=ok.
   # Cap: DRIVE_EXIT_CLEAN_CAP_S (_lib/drive/teardown.sh). This site passed 2s
   # until the #1825 review. That 2 was the pre-#1018 SETTLE budget, where
@@ -584,14 +585,14 @@ step_exit_clean() {
   # fleet-uniform generous bound, and that constant carries how the number was
   # arrived at: it is a bound, not a measurement.
   if require_tmux_session_gone "$CURRENT_TMUX" "$DRIVE_EXIT_CLEAN_CAP_S"; then
-    SES_ALIVE[$ACTIVE]=0
+    SES_OWNED[$ACTIVE]=0
     echo "[driver] exit_clean: sent Ctrl-D to $CURRENT_TMUX (session gone)" >&2
   else
     echo "[driver] exit_clean: FAILED — $CURRENT_TMUX still alive ${DRIVE_EXIT_CLEAN_CAP_S}s after Ctrl-D Ctrl-D;" \
          "killing it explicitly. The graceful-exit path did NOT work — this recording" \
          "does not contain a real process_exited from a clean shutdown." >&2
     tmux kill-session -t "$CURRENT_TMUX" 2>/dev/null || true
-    SES_ALIVE[$ACTIVE]=0
+    SES_OWNED[$ACTIVE]=0
     EXIT_REASON="nonzero(2)"
   fi
 }
@@ -613,8 +614,8 @@ step_reset_session() {
   # Retire the old slot (its uuid is no longer being written) but keep
   # it in the slot list so the epilogue flushes it.
   save_active
-  # shellcheck disable=SC2034  # SES_ALIVE is deliberately write-only in this file since #1825 — both teardown nets (cleanup() and the end-of-run loop) now gate on session-name PRESENCE, because gating them on this flag is exactly what leaked a live claude + tmux session per exit_clean run. It stays as the fleet's shared slot vocabulary (replaydata/_lib/drive/slots.sh:66 sets it; kiro-cli's driver-interactive.sh:552 exit_clean entry guard and antigravity's :505 resume branch do branch on their own copies) and as the per-step record of what the driver BELIEVES about each slot.
-  SES_ALIVE[$ACTIVE]=0
+  # shellcheck disable=SC2034  # SES_OWNED is write-only here since #1825 — teardown now gates on session-name PRESENCE instead of this flag, which is exactly what leaked a live claude + tmux session per exit_clean run. kiro-cli:567 and antigravity:537 legitimately branch on their own copies (a retired-slot guard).
+  SES_OWNED[$ACTIVE]=0
   sleep 2
 
   # Find the new transcript: same slug dir, different UUID, non-empty.
@@ -763,9 +764,10 @@ done
 sleep 0.5
 
 # Tear down every session this run allocated — gated on session-name PRESENCE,
-# not on SES_ALIVE (#1825). SES_ALIVE is what the driver BELIEVES; the whole
-# defect was a step clearing that flag for a session that was still running, at
-# which point this loop skipped the one kill that would have caught it.
+# not on SES_OWNED (#1825). SES_OWNED records what the driver believes it still
+# owns; the whole defect was a step clearing ownership for a session that was
+# still running, at which point this loop skipped the one kill that would have
+# caught it.
 for (( i = 1; i <= N_SLOTS; i++ )); do
   if [[ -n "${SES_TMUX[$i]:-}" ]]; then
     tmux kill-session -t "${SES_TMUX[$i]}" 2>/dev/null || true

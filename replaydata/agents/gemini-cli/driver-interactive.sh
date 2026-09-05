@@ -105,7 +105,7 @@ SES_EXPECTED=()
 # shellcheck disable=SC2034  # driver-owned slot array; the sourced replaydata/_lib/drive/slots.sh reads it (save_active/load_slot/alloc_slot)
 SES_MARKER=()
 SES_CWD=()
-SES_ALIVE=()
+SES_OWNED=()
 SES_PANE_PID=()   # pane_pid per slot; teardown SIGKILLs its whole tree (see kill_tree)
 N_SLOTS=0
 ACTIVE=0
@@ -381,7 +381,7 @@ step_exit_clean() {
   # process_exited.
   tmux send-keys -t "$SESSION" C-d
   # STRICT poll (#1825): the old best-effort wait_tmux_session_gone returns 0
-  # even when the cap expires with the session still up, and SES_ALIVE=0 was set
+  # even when the cap expires with the session still up, and SES_OWNED=0 was set
   # regardless — so an exit key that stopped working (as claude's did) read
   # exactly like one that worked, and the run still reported exit-reason=ok.
   # Cap: DRIVE_EXIT_CLEAN_CAP_S (_lib/drive/teardown.sh). This site passed 2s
@@ -391,7 +391,7 @@ step_exit_clean() {
   # fleet-uniform generous bound, and that constant carries how the number was
   # arrived at: it is a bound, not a measurement.
   if require_tmux_session_gone "$SESSION" "$DRIVE_EXIT_CLEAN_CAP_S"; then
-    SES_ALIVE[$ACTIVE]=0
+    SES_OWNED[$ACTIVE]=0
     echo "[driver] exit_clean[s$ACTIVE]: sent Ctrl-D to $SESSION (session gone)" >&2
   else
     echo "[driver] exit_clean[s$ACTIVE]: FAILED — $SESSION still alive ${DRIVE_EXIT_CLEAN_CAP_S}s after Ctrl-D;" \
@@ -403,7 +403,7 @@ step_exit_clean() {
     # (kill_tree is defined further down; bash resolves it at call time.)
     kill_tree "${SES_PANE_PID[$ACTIVE]:-}"
     tmux kill-session -t "$SESSION" 2>/dev/null || true
-    SES_ALIVE[$ACTIVE]=0
+    SES_OWNED[$ACTIVE]=0
     EXIT_REASON="$NONZERO_2"
   fi
 }
@@ -448,7 +448,7 @@ step_sigkill() {
     echo "[driver] sigkill[s$ACTIVE]: no gemini PID found (cwd=${SES_CWD[$ACTIVE]}, session=$SESSION)" >&2
   fi
   sigkill_and_wait "$pid" 1
-  SES_ALIVE[$ACTIVE]=0
+  SES_OWNED[$ACTIVE]=0
 }
 
 step_restart() {
@@ -461,7 +461,7 @@ step_restart() {
   # file cleanly separated and gives it its own trust state.
   resolve_transcript || true
   save_active
-  SES_ALIVE[$ACTIVE]=0
+  SES_OWNED[$ACTIVE]=0
   tmux kill-session -t "$SESSION" 2>/dev/null || true
   sleep 1
   local idx=$(( N_SLOTS + 1 ))
@@ -519,7 +519,7 @@ step_reset_session() {
   # The old session is frozen; retire the slot but keep it in the list so the
   # epilogue flushes its session_id. The process keeps running (the new slot
   # reuses its tmux), so it is killed exactly once at teardown.
-  SES_ALIVE[$ACTIVE]=0
+  SES_OWNED[$ACTIVE]=0
   echo "[driver] reset_session: recorded old session sid=$(daemon_sid "$TRANSCRIPT")" >&2
 
   tmux send-keys -t "$old_tmux" -l -- "/clear"
@@ -531,8 +531,8 @@ step_reset_session() {
   # (1s granularity), then re-touch to be safe.
   sleep 1
   alloc_slot "$old_tmux" "$old_cwd"
-  # shellcheck disable=SC2034  # SES_ALIVE is deliberately write-only in this file since #1825 — both teardown nets (cleanup() and the end-of-run loop) now gate on session-name PRESENCE, because gating them on this flag is exactly what leaked a live agent + tmux session per exit_clean run. It stays as the fleet's shared slot vocabulary (the sourced replaydata/_lib/drive/slots.sh:66 sets it; kiro-cli's driver-interactive.sh:552 exit_clean entry guard and antigravity's :505 resume branch do branch on their own copies) and as the per-step record of what the driver BELIEVES about each slot.
-  SES_ALIVE[$ACTIVE]=1
+  # shellcheck disable=SC2034  # SES_OWNED is write-only here since #1825 — teardown now gates on session-name PRESENCE instead of this flag, which is exactly what leaked a live agent + tmux session per exit_clean run. kiro-cli:567 and antigravity:537 legitimately branch on their own copies (a retired-slot guard).
+  SES_OWNED[$ACTIVE]=1
   touch "$MARKER"
   echo "[driver] reset_session: new slot #${ACTIVE}, marker bumped, awaiting new chats file" >&2
   sleep 1
@@ -649,12 +649,12 @@ sleep 0.5
 
 # Tear down every session this run allocated (kill the process tree, not just
 # the tmux session — see kill_tree). Gated on session-name PRESENCE, not on
-# SES_ALIVE (#1825). gemini-cli did not leak even before this — cleanup() at the
+# SES_OWNED (#1825). gemini-cli did not leak even before this — cleanup() at the
 # trap below is ungated and does the same kill_tree + kill-session per slot — but
 # the invariant is stated flat across every adapter ("no end-of-run teardown kill
-# is gated on SES_ALIVE") rather than as "gated is fine IF an ungated trap sits
+# is gated on SES_OWNED") rather than as "gated is fine IF an ungated trap sits
 # behind it", because the second form is harder to state than to violate. Both
-# nets now gate the same way, and SES_ALIVE stays the driver's INTENT only.
+# nets now gate the same way, and nothing here reads SES_OWNED back for teardown.
 for (( i = 1; i <= N_SLOTS; i++ )); do
   if [[ -n "${SES_SESSION[$i]:-}" ]]; then
     kill_tree "${SES_PANE_PID[$i]:-}"

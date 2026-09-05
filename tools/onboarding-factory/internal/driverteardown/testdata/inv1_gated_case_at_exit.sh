@@ -13,7 +13,7 @@ source "$_DRIVE_LIB/slots.sh"
 SESSION=""
 SES_SESSION=()
 SES_CWD=()
-SES_ALIVE=()
+SES_OWNED=()
 N_SLOTS=0
 ACTIVE=0
 EXIT_REASON="ok"
@@ -40,7 +40,7 @@ launch_repl() {
 launch_repl
 
 case "$EXIT_REASON" in
-  ok)  if [[ "${SES_ALIVE[$ACTIVE]:-0}" == "1" ]]; then
+  ok)  if [[ "${SES_OWNED[$ACTIVE]:-0}" == "1" ]]; then
          tmux kill-session -t "$SESSION" 2>/dev/null || true
        fi ;;
   *)   tmux kill-session -t "$SESSION" 2>/dev/null || true ;;

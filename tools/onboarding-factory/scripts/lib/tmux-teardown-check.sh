@@ -19,7 +19,8 @@
 # #1825: every recording whose recipe ended in `exit_clean` left a live agent
 # process and its detached tmux session behind, for months, because the only
 # thing that ever claimed the session was gone was the driver ASSERTING it —
-# `sleep 1; SES_ALIVE=0`. run-cell.sh then wrote a `complete` manifest over the
+# `sleep 1; SES_OWNED=0` (the flag was called SES_ALIVE until #1828 renamed it
+# for saying "alive" about something nobody observed). run-cell.sh then wrote a `complete` manifest over the
 # top. Nothing in the rig ever asked tmux.
 #
 # So this is the same treatment #1333 gave `driver.exit-reason`: the driver's
@@ -179,6 +180,74 @@ tmux_teardown_look() {
   # command, and this half of the pair is the one carrying the survivors.
   AWAIT_GONE_ALIVE="$survivors"
   return 0
+}
+
+# tmux_teardown_deadline_for <lifetime-s> — the deadline/lifetime pair
+# await_gone_bound checks (rule 3 above), computed in ONE place so run-cell.sh
+# and run-cell-multi.sh cannot drift apart on the arithmetic. Both used to
+# inline this clamp themselves (#1828); the deadline this produces is what a
+# caller then hands to check_tmux_teardown below as ITS second argument.
+#
+# <lifetime-s> is the cell's own driver timeout — the upper bound on how long
+# the session being asked about could have lived. The result is a TENTH of
+# that, CAPPED at 5s so a 900s cell does not buy a 90s wait for a session that
+# should already be gone, and FLOORED at 1s so the arithmetic can never
+# produce the "look exactly once" deadline await_gone_bound refuses. A cell
+# whose timeout is under 10s therefore fails the bound and is reported LOUDLY
+# as unreadable, which is the honest answer: at that ratio the check would
+# assert nothing. (Every applicable cell today declares 60s or more.)
+#
+# Prints the deadline to stdout; callers capture it with command substitution.
+tmux_teardown_deadline_for() {
+  local lifetime="${1:-0}" deadline
+  deadline=$(( lifetime / 10 ))
+  if [[ "$deadline" -gt 5 ]]; then deadline=5; fi
+  if [[ "$deadline" -lt 1 ]]; then deadline=1; fi
+  printf '%s\n' "$deadline"
+}
+
+# teardown_timings_json <file> — fold a driver's teardown-timings TSV into one
+# JSON object for the run manifest (#1828 item 5).
+#
+# The rows come from replaydata/_lib/drive/teardown.sh's
+# require_tmux_session_gone, one per exit_clean teardown:
+# `<epoch>\t<session>\t<seconds>\t<observed|capped>`.
+#
+# THREE OUTCOMES, KEPT APART ON PURPOSE. "no rows" is a legitimate answer — a
+# recipe with no exit_clean step tears nothing down — and it must not read the
+# same as "the file never appeared", which means the rig failed to set the path
+# or the staging dir was unwritable. A single "0 rows" for both would quietly
+# report an instrumentation outage as a clean run with nothing to measure, which
+# is the shape AGENTS.md forbids. The caller pre-creates the file, so absent
+# really does mean something went wrong.
+#
+#   unrecorded    the file is not there, or could not be read
+#   no_exit_clean the file is there and empty — this recipe tore nothing down
+#   recorded      rows, with the max and the capped count
+#
+# `capped` is reported separately from `max_s` because a capped row is a
+# CENSORED observation: the session was still alive when the deadline fired, so
+# its true teardown time is unknown and greater than the cap. Averaging it in
+# as if it were a measurement is how a fitted table ends up tighter than the
+# behaviour it claims to describe.
+teardown_timings_json() { # <file>
+  local f="${1:-}" rows capped max
+  if [ -z "$f" ] || [ ! -f "$f" ]; then
+    jq -nc '{status: "unrecorded", rows: 0, capped: 0, max_s: null}'
+    return 0
+  fi
+  if ! rows=$(awk 'END{print NR}' "$f" 2>/dev/null); then
+    jq -nc '{status: "unrecorded", rows: 0, capped: 0, max_s: null}'
+    return 0
+  fi
+  if [ "$rows" -eq 0 ]; then
+    jq -nc '{status: "no_exit_clean", rows: 0, capped: 0, max_s: null}'
+    return 0
+  fi
+  capped=$(awk -F'\t' '$4 == "capped" {n++} END{print n+0}' "$f")
+  max=$(awk -F'\t' '{if ($3+0 > m) m = $3+0} END{printf "%.1f", m}' "$f")
+  jq -nc --argjson rows "$rows" --argjson capped "$capped" --argjson max "$max" \
+    '{status: "recorded", rows: $rows, capped: $capped, max_s: $max}'
 }
 
 # check_tmux_teardown <driver-pid> <deadline-s> <lifetime-s> [what-the-lifetime-is]

@@ -4,6 +4,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -71,7 +73,7 @@ func fixtureLibs(name string) []string {
 //
 // The want-clean rows carry as much weight as the want-red ones.
 // inv1_step_guard_ok.sh is the one this package would be worst without: it is
-// kiro-cli's legitimate step-level SES_ALIVE guard, and a checker that failed
+// kiro-cli's legitimate step-level SES_OWNED guard, and a checker that failed
 // it would be a checker nobody keeps.
 //
 // HOW A TEARDOWN SITE IS TOLD APART FROM A STEP-LEVEL GUARD — and what that
@@ -108,7 +110,7 @@ func TestCheckerGradesEveryFixture(t *testing.T) {
 		// the shellsource.go fix and after it.
 		{fixture: "quote_multiline_awk_ok.sh"},
 		// copilot's top-level `while … case` dispatch, carrying kiro-cli's
-		// legitimate SES_ALIVE entry check. RED before the classification was
+		// legitimate SES_OWNED entry check. RED before the classification was
 		// narrowed: the arm was graded as "this end-of-run teardown".
 		{fixture: "inv1_step_dispatch_case_arm_ok.sh"},
 		// A driver with its OWN alloc_slot (name at argument 2), handed the
@@ -497,4 +499,140 @@ func joinFindings(fs []Finding) string {
 		b.WriteString("  " + f.String() + "\n")
 	}
 	return b.String()
+}
+
+// sortedKeys is the set-to-stable-slice both slot-vocabulary tests below need.
+// Extracted so neither has to nest a collection loop inside a failure branch —
+// a failure message is where the reader is already working hardest.
+func sortedKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// sharedSlotArrayNames reads slots.sh and collects every SES_* array name the
+// fleet declares. Extracted out of TestAliveGateMatchesTheSharedOwnershipFlag
+// so that test reads as one flat sequence — read names, find matches, assert —
+// instead of nesting a file-read failure branch inside the test body. Per
+// AGENTS.md it fails loudly when it cannot look at all: a slots.sh it cannot
+// read, or one that declares no arrays, is a failure and never a silent pass.
+func sharedSlotArrayNames(t *testing.T, path string) map[string]bool {
+	t.Helper()
+	src, err := os.ReadFile(path) // #nosec G304 -- built from the repo root
+	if err != nil {
+		t.Fatalf("read %s: %v — the shared slot library is what this test binds "+
+			"aliveGate to, so being unable to read it is a failure, not a skip", path, err)
+	}
+
+	names := map[string]bool{}
+	for _, m := range regexp.MustCompile(`SES_[A-Z_]+`).FindAllString(string(src), -1) {
+		names[m] = true
+	}
+	if len(names) == 0 {
+		t.Fatalf("%s declares no SES_* arrays — either the slot model was rewritten or "+
+			"the extraction stopped matching. Both look identical to a clean run from "+
+			"here, so this refuses instead of passing", path)
+	}
+	return names
+}
+
+// namesMatchingAliveGate is the companion extraction: it walks the declared
+// names and returns the ones aliveGate matches, keeping the collection loop
+// out of TestAliveGateMatchesTheSharedOwnershipFlag's body for the same reason
+// sortedKeys above does — the failure branch is where the reader is already
+// working hardest.
+func namesMatchingAliveGate(names map[string]bool) []string {
+	var matched []string
+	for _, n := range sortedKeys(names) {
+		if aliveGate.MatchString(n) {
+			matched = append(matched, n)
+		}
+	}
+	return matched
+}
+
+// TestAliveGateMatchesTheSharedOwnershipFlag binds aliveGate to the name the
+// shared slot library actually declares.
+//
+// INV-1 identifies the forbidden gate by NAME, which is a deliberate tradeoff
+// (see aliveGate's own note). The cost of that tradeoff is that a rename of the
+// shared flag silently un-wires the check: #1828 renamed SES_ALIVE to SES_OWNED
+// and every fixture stayed green while the checker went blind. A name-coupled
+// matcher cannot notice on its own that the name moved, so this test notices
+// for it. It reads slots.sh, collects every SES_* array the fleet declares, and
+// requires at least one to match. Per AGENTS.md, it fails loudly when it cannot
+// look at all: a slots.sh it cannot read, or one that declares no arrays, is a
+// failure and never a silent pass.
+func TestAliveGateMatchesTheSharedOwnershipFlag(t *testing.T) {
+	path := filepath.Join(repoRoot(t), "replaydata", "_lib", "drive", "slots.sh")
+	names := sharedSlotArrayNames(t, path)
+	matched := namesMatchingAliveGate(names)
+	if len(matched) == 0 {
+		sorted := sortedKeys(names)
+		t.Fatalf("aliveGate (%s) matches NONE of the %d arrays slots.sh declares (%s).\n"+
+			"INV-1 is therefore blind to a driver gating its teardown on the fleet's own "+
+			"ownership flag — the anti-pattern this checker exists to catch — and every "+
+			"fixture will stay green while it is.\n"+
+			"The flag was almost certainly renamed. Widen aliveGate to include the new "+
+			"name in the SAME commit as the rename.",
+			aliveGate, len(sorted), strings.Join(sorted, ", "))
+	}
+	t.Logf("aliveGate is wired to %s", strings.Join(matched, ", "))
+}
+
+// TestTemplateDeclaresExactlyTheSharedSlotArrays pins the generator template to
+// the shared slot library.
+//
+// scripts/templates/drive-interactive.sh.tmpl is what every NEW adapter's
+// driver starts life as, and it declares the slot arrays locally while
+// replaydata/_lib/drive/slots.sh is what writes them. The two names have to
+// agree, and nothing made them: the #1828 rename moved slots.sh to SES_OWNED
+// and left the template declaring SES_ALIVE, so the next adapter generated from
+// it would have carried a dead array and no declaration for the live one. Both
+// files lint clean either way and no fixture covers a not-yet-generated driver,
+// so this drift is invisible until an adapter misbehaves in a recording.
+//
+// The sets must be EQUAL, not merely overlapping: a template array slots.sh
+// does not write is as wrong as a slots.sh array the template never declares.
+func TestTemplateDeclaresExactlyTheSharedSlotArrays(t *testing.T) {
+	root := repoRoot(t)
+	read := func(rel ...string) string {
+		p := filepath.Join(append([]string{root}, rel...)...)
+		src, err := os.ReadFile(p) // #nosec G304 -- built from the repo root
+		if err != nil {
+			t.Fatalf("read %s: %v — being unable to read either side is a failure, "+
+				"not a skip: it looks exactly like agreement from here", p, err)
+		}
+		return string(src)
+	}
+
+	set := func(src string, re *regexp.Regexp, what string) []string {
+		seen := map[string]bool{}
+		for _, m := range re.FindAllStringSubmatch(src, -1) {
+			seen[m[1]] = true
+		}
+		if len(seen) == 0 {
+			t.Fatalf("found no %s — the extraction stopped matching, which reads "+
+				"identically to two files that agree", what)
+		}
+		return sortedKeys(seen)
+	}
+
+	declared := set(read("tools", "onboarding-factory", "scripts", "templates", "drive-interactive.sh.tmpl"),
+		regexp.MustCompile(`(?m)^(SES_[A-Z_]+)=\(\)`), "array declarations in the template")
+	written := set(read("replaydata", "_lib", "drive", "slots.sh"),
+		regexp.MustCompile(`(SES_[A-Z_]+)\[`), "array assignments in slots.sh")
+
+	if strings.Join(declared, ",") != strings.Join(written, ",") {
+		t.Fatalf("the generator template and the shared slot library disagree.\n"+
+			"  template declares: %s\n"+
+			"  slots.sh writes:   %s\n"+
+			"Every new adapter is generated from that template, so a name only one "+
+			"side knows about ships as a dead array in a real driver. Rename both in "+
+			"the same commit.",
+			strings.Join(declared, ", "), strings.Join(written, ", "))
+	}
 }

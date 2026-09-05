@@ -328,7 +328,17 @@ for a in "${ADAPTERS[@]}"; do
   driver="$REPO_ROOT/replaydata/agents/$a/driver-interactive.sh"
   [[ -x "$driver" ]] || { echo "driver missing: $driver" >&2; exit 1; }
   echo "launching $a driver (shared cwd=$SHARED_CWD, timeout=${timeout_s}s)"
+  # Teardown timings (#1828 item 5), per adapter — same contract as
+  # run-cell.sh's: pre-created so absent means the rig failed, never that this
+  # recipe tore nothing down. This rig is where a loaded host actually happens,
+  # since it drives several agents at once, so its rows carry the tail the cap
+  # was chosen to cover.
+  if ! : >"$sub/teardown-timings.tsv" 2>/dev/null; then
+    echo "WARNING: could not create $sub/teardown-timings.tsv — $a contributes" \
+         "no teardown timing this run (#1828)." >&2
+  fi
   IRRLICHT_ONBOARD_CWD="$SHARED_CWD" \
+    DRIVE_TEARDOWN_TIMINGS="$sub/teardown-timings.tsv" \
     "$driver" "$sub" "$uuid" "$timeout_s" "$sub/settings.json" "$script_json" \
     >"$sub/driver.out" 2>&1 &
   # `$!` is the RUN IDENTITY the teardown gate matches session names against,
@@ -367,16 +377,12 @@ TMUX_UNREADABLE=""        # space-joined adapters whose check could not be made
 record_driver_teardown() {
   local a="$1" pid="$2" lifetime="$3"
   local deadline status detail rc=0
-  # The deadline/lifetime pair await_gone_bound checks, computed exactly as
-  # run-cell.sh:469-472 computes it (a tenth of the driver timeout, capped at 5s
-  # so a long cell does not buy a long wait for a session that should already be
-  # gone, floored at 1s so it can never become the "look exactly once" deadline
-  # await_gone_bound refuses). Duplicated rather than shared because the pair is
-  # the CALLER's policy, not the library's — but see the note in the report:
-  # a tmux_teardown_deadline_for helper in the lib would be the better home.
-  deadline=$(( lifetime / 10 ))
-  if [[ "$deadline" -gt 5 ]]; then deadline=5; fi
-  if [[ "$deadline" -lt 1 ]]; then deadline=1; fi
+  # The deadline/lifetime pair await_gone_bound checks (rule 3 in
+  # lib/tmux-teardown-check.sh's header). Computed by tmux_teardown_deadline_for
+  # — shared with run-cell.sh (#1828) so the two rigs cannot drift apart on the
+  # arithmetic; see that function's header for why a tenth, capped at 5, floored
+  # at 1.
+  deadline="$(tmux_teardown_deadline_for "$lifetime")"
 
   check_tmux_teardown "$pid" "$deadline" "$lifetime" "the cell's own driver timeout" || rc=$?
   case "$rc" in

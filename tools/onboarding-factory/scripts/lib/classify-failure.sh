@@ -16,7 +16,8 @@
 # Codes:
 #   cli_not_found, cli_too_old, auth_failed, daemon_dirty, daemon_not_ready,
 #   working_tree_dirty, transcript_missing, timeout, daemon_crashed,
-#   driver_session_leaked, driver_teardown_unverifiable, replay_failed, unknown
+#   driver_session_leaked, driver_teardown_unverifiable, driver_pid_unrecorded,
+#   replay_failed, unknown
 #
 # THE MANIFEST ARMS ARE KEPT IN SYNC MECHANICALLY (#1825). Every arm label in
 # the `case "$err_code"` block below is a string some OTHER script types into a
@@ -78,6 +79,22 @@ if [[ -f "$MANIFEST" ]]; then
     no_subagents_spawned)                 emit "transcript_missing" "Scenario requires subagents but none spawned" "$err_code" ;;
     daemon_socket_missing)                emit "daemon_not_ready"   "Recording daemon never opened its socket" "$err_code" ;;
     replay_failed)                        emit "replay_failed"      "Replay produced no report for a staged fixture" "$(jq -r '.failed_adapter // empty' "$MANIFEST" 2>/dev/null || echo "")" ;;
+    # #1828: driver.pid never being written is a THIRD thing, and deliberately
+    # NOT folded into either teardown verdict below. It fires before
+    # check_tmux_teardown is ever asked anything (run-cell.sh's
+    # DRIVER_PID_PROBLEM comment has the detail): the pid-wrapper died before
+    # it could exec the driver, almost certainly because $STAGING was not
+    # writable, so there is no run identity and nothing of this run's for tmux
+    # to be holding. Folding it into driver_teardown_unverifiable would send
+    # the operator to look at tmux for a problem tmux was never asked about —
+    # the very conflation #1825 fixed one layer up. The other two driver.pid
+    # failures (empty, non-numeric) DO mean the driver started, so they stay
+    # driver_teardown_unverifiable: a live agent may genuinely be out there
+    # under a name this run can no longer match, which is exactly what that
+    # code already says.
+    driver_pid_unrecorded) emit "driver_pid_unrecorded" \
+      "driver.pid was never written — check that $STAGING is writable and that the driver process ever started; tmux was not asked anything" \
+      "$(jq -r '.tmux_teardown_detail // empty' "$MANIFEST" 2>/dev/null || echo "")" ;;
     # #1825 / AC4. Two codes, two classifications, deliberately NOT collapsed:
     # a leaked session means a live agent process is still on this host and the
     # operator has a `tmux kill-session` to run before retrying, while an

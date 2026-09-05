@@ -202,7 +202,7 @@ SES_EXPECTED=()
 # shellcheck disable=SC2034  # driver-owned slot array; the sourced replaydata/_lib/drive/slots.sh reads it (save_active/load_slot/alloc_slot)
 SES_MARKER=()
 SES_CWD=()
-SES_ALIVE=()
+SES_OWNED=()
 
 # recipe-lint contract (#508 #4): the step types this driver genuinely ELICITS,
 # read directly by recipe-lint (no separate manifest). Start with ONLY the seams
@@ -596,11 +596,11 @@ slash_cmd() { # <text>
     resolve_transcript || true
     local old_tmux="$SESSION" old_cwd="${SES_CWD[$ACTIVE]}"
     save_active
-    SES_ALIVE[$ACTIVE]=0
+    SES_OWNED[$ACTIVE]=0
     PRE_LAUNCH_DIRS="$(find "$VIBE_SESSION_ROOT" -maxdepth 1 -type d -name "$VIBE_SESSION_GLOB" 2>/dev/null | sort)"
     type_enter "$text"
     alloc_slot "$old_tmux" "$old_cwd"
-    SES_ALIVE[$ACTIVE]=1
+    SES_OWNED[$ACTIVE]=1
     echo "[driver] slash[s$ACTIVE]: $text → FORK; original frozen (sid=$(daemon_sid "${SES_TRANSCRIPT[$((ACTIVE-1))]}")), new slot awaits forked dir" >&2
     return 0
   fi
@@ -649,7 +649,7 @@ step_exit_clean() {
   resolve_transcript || true
   type_enter "/exit"
   # STRICT poll (#1825): the old best-effort wait_tmux_session_gone returns 0
-  # even when the cap expires with the session still up, and SES_ALIVE=0 was set
+  # even when the cap expires with the session still up, and SES_OWNED=0 was set
   # regardless — so the log line below claimed "process exited" on the strength
   # of nothing. Vibe's teardown is the slowest in the fleet.
   # Cap: DRIVE_EXIT_CLEAN_CAP_S (_lib/drive/teardown.sh) — still 15s, unchanged.
@@ -657,14 +657,14 @@ step_exit_clean() {
   # and the six drivers that passed 2s were raised to it. That constant carries
   # how the number was arrived at.
   if require_tmux_session_gone "$SESSION" "$DRIVE_EXIT_CLEAN_CAP_S"; then
-    SES_ALIVE[$ACTIVE]=0
+    SES_OWNED[$ACTIVE]=0
     echo "[driver] exit_clean[s$ACTIVE]: sent /exit; process exited (sid=$(daemon_sid "$TRANSCRIPT"))" >&2
   else
     echo "[driver] exit_clean[s$ACTIVE]: FAILED — $SESSION still alive ${DRIVE_EXIT_CLEAN_CAP_S}s after /exit;" \
          "killing it explicitly. vibe did NOT shut down gracefully, so this" \
          "recording has no real clean-exit process_exited." >&2
     tmux kill-session -t "$SESSION" 2>/dev/null || true
-    SES_ALIVE[$ACTIVE]=0
+    SES_OWNED[$ACTIVE]=0
     EXIT_REASON="$EXIT_DRIVER_FAULT"
   fi
 }
@@ -678,7 +678,7 @@ step_exit_clean() {
 step_restart() {
   resolve_transcript || true
   save_active
-  SES_ALIVE[$ACTIVE]=0
+  SES_OWNED[$ACTIVE]=0
   tmux kill-session -t "$SESSION" 2>/dev/null || true
   sleep 1
   local idx=$(( N_SLOTS + 1 ))
@@ -703,7 +703,7 @@ step_sigkill() {
     echo "[driver] sigkill[s$ACTIVE]: no vibe PID found (session=$SESSION)" >&2
   fi
   sigkill_and_wait "$pid" 1
-  SES_ALIVE[$ACTIVE]=0
+  SES_OWNED[$ACTIVE]=0
 }
 
 # step_resume — relaunch the SAME session in a new process lifetime. The
@@ -730,7 +730,7 @@ step_resume() {
   SESSION="mistral-vibedrv-$$-$(date +%s)-resume${ACTIVE}"
   SES_SESSION[$ACTIVE]="$SESSION"
   # shellcheck disable=SC2034  # part of the shared slot model replaydata/_lib/drive/slots.sh:64 (alloc_slot) initialises; this driver keeps it current but has no branch that reads it, while sibling drivers do (e.g. antigravity's exit summary)
-  SES_ALIVE[$ACTIVE]=1
+  SES_OWNED[$ACTIVE]=1
   echo "[driver] resume[s$ACTIVE]: relaunch vibe --resume $resume_id (same dir=$(daemon_sid "$TRANSCRIPT"))" >&2
   boot_vibe_active "" "$resume_id"
 }

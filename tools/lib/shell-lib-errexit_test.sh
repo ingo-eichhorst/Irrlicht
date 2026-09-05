@@ -419,6 +419,16 @@ row 'shell-lib-suite.sh::shell_lib_suite_run' 'shell_lib_suite_run (refuses an e
     '. tools/lib/shell-lib-suite.sh; mkdir -p "$TW_TMP/suite-empty"' \
     'shell_lib_suite_run "$TW_TMP/suite-empty" >/dev/null 2>&1'
 
+# The same throwaway-corpus rule applies to exec, which is what the loop above
+# now runs every file through. Statuses stay distinctive: 0 for a file that
+# passed, 2 for the ledger refusing a repeat.
+row 'shell-lib-suite.sh::shell_lib_suite_exec' 'shell_lib_suite_exec (a file that passes)' 0 \
+    '. tools/lib/shell-lib-suite.sh; mkdir -p "$TW_TMP/exec-ok"; printf "exit 0\n" >"$TW_TMP/exec-ok/a_test.sh"' \
+    'shell_lib_suite_exec "$TW_TMP/exec-ok/a_test.sh" >/dev/null'
+row 'shell-lib-suite.sh::shell_lib_suite_exec' 'shell_lib_suite_exec (refuses a repeat)' 2 \
+    '. tools/lib/shell-lib-suite.sh; mkdir -p "$TW_TMP/exec-dup"; printf "exit 0\n" >"$TW_TMP/exec-dup/a_test.sh"; shell_lib_suite_exec "$TW_TMP/exec-dup/a_test.sh" >/dev/null' \
+    'shell_lib_suite_exec "$TW_TMP/exec-dup/a_test.sh" >/dev/null 2>&1'
+
 # Driven against the committed fixture corpus rather than against a real
 # workflow: these rows grade what the functions do to their CALLER under -e,
 # and a fixture cannot be edited out from under them by an unrelated workflow

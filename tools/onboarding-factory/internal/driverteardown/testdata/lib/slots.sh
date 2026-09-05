@@ -9,7 +9,7 @@ alloc_slot() {
   N_SLOTS=$((N_SLOTS + 1))
   SES_SESSION[$N_SLOTS]="$sess"
   SES_CWD[$N_SLOTS]="$cwd"
-  SES_ALIVE[$N_SLOTS]=1
+  SES_OWNED[$N_SLOTS]=1
   ACTIVE=$N_SLOTS
   SESSION="$sess"
 }
