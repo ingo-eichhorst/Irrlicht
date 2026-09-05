@@ -39,7 +39,11 @@ type LiveRuntime struct {
 	controls map[string]helperSelector
 	// workspace is the composer WaitComposer verified. Submit re-resolves
 	// against it rather than against a caller-supplied value.
-	workspace       string
+	workspace string
+	// environment is what the composer showed when WaitComposer verified it.
+	// It is captured then because it cannot be read later: a Desktop turn
+	// replaces its own composer with the session it created.
+	environment     EnvironmentEvidence
 	processes       map[string]int
 	processEvidence map[string]ProcessEvidence
 	processBaseline map[int]struct{}
@@ -233,6 +237,12 @@ func (runtime *LiveRuntime) WaitComposer(ctx context.Context, workspace string) 
 	if err == nil {
 		runtime.controls = controls
 		runtime.workspace = workspace
+		// Read the environment now. It is unreadable after the turn.
+		runtime.environment = EnvironmentEvidence{
+			SelectedEnvironment: controls["environment"].Title,
+			RequestedWorkspace:  workspace,
+			Project:             controls["project"].Title,
+		}
 	}
 	return err
 }

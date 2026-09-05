@@ -4,6 +4,7 @@ package desktopdriver
 // reaches the staging tree.
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -221,5 +222,45 @@ func TestDesktopStateSequenceStartsAtWorking(t *testing.T) {
 	idle := &LiveRuntime{options: LiveOptions{RecordingDirectory: quiet}}
 	if observed, err := idle.stateObserved("941db969", "ready", "ready"); err != nil || observed {
 		t.Fatalf("a session that never worked read as a finished turn: %t, %v", observed, err)
+	}
+}
+
+// The environment recorded beside a Desktop recording must be the one the turn
+// was SENT in, and it can only be read then. After a turn Claude Desktop shows
+// the session, not a composer, so a re-read at evidence time finds nothing.
+//
+// Live run 18 (2026-09-05) drove a complete turn — composer, trust, prompt,
+// submit, ownership, working, ready, hook — and then failed at the last step
+// with `Desktop environment control requires one AXPopUpButton titled "Local";
+// found 0`.
+//
+// The helper path here does not exist, so any attempt to re-read the live tree
+// fails. The verified environment must still come back.
+func TestCapturedEnvironmentComesFromTheVerifiedComposer(t *testing.T) {
+	runtime := &LiveRuntime{
+		helper: helperClient{path: filepath.Join(t.TempDir(), "no-such-helper")},
+		environment: EnvironmentEvidence{
+			SelectedEnvironment: "Local",
+			RequestedWorkspace:  "/repo/workspace",
+			Project:             "workspace",
+		},
+	}
+	environment, err := runtime.captureEnvironment(context.Background(), "/repo/workspace")
+	if err != nil {
+		t.Fatalf("captureEnvironment() on a post-turn tree: %v", err)
+	}
+	if environment.SelectedEnvironment != "Local" || environment.Project != "workspace" {
+		t.Fatalf("captured environment = %+v", environment)
+	}
+
+	// A run that never verified a composer must not invent one.
+	empty := &LiveRuntime{helper: runtime.helper}
+	if _, err := empty.captureEnvironment(context.Background(), "/repo/workspace"); err == nil {
+		t.Fatal("captureEnvironment() invented an environment no composer verified")
+	}
+
+	// Evidence must belong to the workspace the registry recorded.
+	if _, err := runtime.captureEnvironment(context.Background(), "/repo/elsewhere"); err == nil {
+		t.Fatal("captureEnvironment() accepted a foreign workspace")
 	}
 }
