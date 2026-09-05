@@ -24,8 +24,10 @@ func (runtime *LiveRuntime) ArchiveOwned(ctx context.Context, owned OwnedSession
 	if target.registry.Archived {
 		return nil
 	}
-	if err := runtime.helper.probeProject(ctx, target.project); err != nil {
-		return fmt.Errorf("re-probe owned Desktop project before archive: %w", err)
+	// Re-probe the control about to be clicked, not a neighbour of it: a
+	// freshness check on anything else proves nothing about this click.
+	if err := runtime.helper.probeSelector(ctx, "owned-session menu", target.menu); err != nil {
+		return fmt.Errorf("re-probe owned-session menu before archive: %w", err)
 	}
 	menuRole := helperSelector{Role: "AXMenu"}
 	if err := runtime.helper.click(ctx, target.menu, helperPostcondition{
@@ -91,13 +93,12 @@ func validateArchiveTarget(
 	if titleMatches != 1 {
 		return archiveTarget{}, fmt.Errorf("owned active session title %q is not unique; found %d rows", registry.Title, titleMatches)
 	}
-	controls, err := composerControls(elements, registry.CWD, []string{"project"})
-	if err != nil {
-		return archiveTarget{}, fmt.Errorf("validate owned Desktop composer before archive: %w", err)
-	}
+	// The composer is gone by now: after a turn Claude Desktop shows the
+	// session, not a fresh composer. The ownership binding that survives is the
+	// selected-session menu, which names the owned title verified unique above.
 	menu, err := selectedSessionMenu(elements, registry.Title)
 	if err != nil {
 		return archiveTarget{}, err
 	}
-	return archiveTarget{registry: registry, menu: menu, project: controls["project"]}, nil
+	return archiveTarget{registry: registry, menu: menu}, nil
 }

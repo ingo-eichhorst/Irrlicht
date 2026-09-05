@@ -70,7 +70,6 @@ func TestWaitIrrlichtStateInvokesBaselinePIDGuard(t *testing.T) {
 		processBaseline: map[int]struct{}{42: {}},
 		processes:       map[string]int{},
 		processEvidence: map[string]ProcessEvidence{},
-		workingSeen:     map[string]bool{},
 		observeProcess: func(context.Context, int) (string, error) {
 			return "/Applications/Claude.app/claude", nil
 		},

@@ -46,7 +46,6 @@ type LiveRuntime struct {
 	stepLog         string
 	httpClient      *http.Client
 	registryByID    map[string]RegistrySession
-	workingSeen     map[string]bool
 	deepLinkOpened  bool
 	openDeepLink    func(context.Context, string) error
 	frontDesktop    func(context.Context) error
@@ -83,7 +82,6 @@ func NewLiveRuntime(options LiveOptions, stepLog string) (*LiveRuntime, error) {
 		processes: map[string]int{}, processEvidence: map[string]ProcessEvidence{}, stepLog: stepLog,
 		httpClient:     &http.Client{Timeout: 2 * time.Second},
 		registryByID:   map[string]RegistrySession{},
-		workingSeen:    map[string]bool{},
 		openDeepLink:   openOfficialDesktopURL,
 		frontDesktop:   activateDesktop,
 		processExists:  liveProcessExists,

@@ -40,12 +40,25 @@ func TestArchiveTargetRejectsDuplicateActiveTitle(t *testing.T) {
 	}
 }
 
-func TestArchiveTargetRejectsSelectedProjectDrift(t *testing.T) {
+// The archive must never fire on a session this run does not own. The guard
+// that carries that is the selected-session menu: it names a title, and the
+// title is proven unique among active sessions.
+//
+// This used to be enforced by ALSO demanding a visible composer whose project
+// popup named the owned workspace. That check could not survive a turn — the
+// window shows the session afterwards, not a composer — and it refused live run
+// 17's cleanup, leaving the session unarchived. Its replacement is below: a
+// tree that offers only another session's menu is still refused.
+func TestArchiveTargetRejectsAnotherSessionsMenu(t *testing.T) {
 	owned := OwnedSession{Registry: RegistrySession{SessionID: "local_owned", CWD: "/repo/workspace"}}
 	sessions := []RegistrySession{{SessionID: "local_owned", CWD: "/repo/workspace", Title: "Owned title"}}
-	elements := archiveFixtureElements("other-project", "Owned title")
+	elements := []helperElement{{
+		Path: selectedSessionMenuPath, Role: "AXPopUpButton",
+		Description: "More options for Someone else's session",
+		Hierarchy:   []string{"AXApplication", "AXWindow", "AXGroup", "AXPopUpButton"},
+	}}
 	if _, err := validateArchiveTarget(owned, sessions, elements); err == nil {
-		t.Fatal("validateArchiveTarget() accepted selected-project drift")
+		t.Fatal("validateArchiveTarget() accepted another session's menu")
 	}
 }
 
@@ -90,5 +103,35 @@ func TestArchiveOwnedInvokesDuplicateTitleGuard(t *testing.T) {
 	err = runtime.ArchiveOwned(context.Background(), owned)
 	if err == nil || !strings.Contains(err.Error(), "active session title") || !strings.Contains(err.Error(), "not unique") {
 		t.Fatalf("ArchiveOwned() duplicate-title error = %v", err)
+	}
+}
+
+// After a turn, Claude Desktop shows the session, not a fresh composer, so the
+// project popup the archive guard demanded is gone.
+//
+// Live run 17 (2026-09-05) failed cleanup with: `Desktop project control
+// requires one AXPopUpButton titled "cwd"; found 0. Visible AXPopUpButton
+// controls: … described "More options for Echo hi" …`. The owned session was
+// left unarchived in the user's Desktop — cleanup failing is a worse outcome
+// than the check was ever worth.
+//
+// The binding that matters survives: the selected-session menu names the owned
+// session's title, and that title is proven unique among active sessions. The
+// freshness re-probe now targets the menu the driver is about to click, rather
+// than a neighbouring control it never touches.
+func TestArchiveTargetResolvesOnAPostTurnTree(t *testing.T) {
+	owned := OwnedSession{Registry: RegistrySession{SessionID: "local_owned", CWD: "/repo/workspace"}}
+	sessions := []RegistrySession{{SessionID: "local_owned", CWD: "/repo/workspace", Title: "Echo hi"}}
+	postTurn := []helperElement{{
+		Path: selectedSessionMenuPath, Role: "AXPopUpButton",
+		Description: "More options for Echo hi",
+		Hierarchy:   []string{"AXApplication", "AXWindow", "AXGroup", "AXPopUpButton"},
+	}}
+	target, err := validateArchiveTarget(owned, sessions, postTurn)
+	if err != nil {
+		t.Fatalf("validateArchiveTarget() on a post-turn tree: %v", err)
+	}
+	if target.menu.Description != "More options for Echo hi" {
+		t.Fatalf("archive target does not name the owned session: %+v", target.menu)
 	}
 }
