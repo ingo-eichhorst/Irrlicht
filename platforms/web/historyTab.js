@@ -451,10 +451,14 @@ function syncHistoryRangeRow() {
   if (row) row.hidden = historyState.chart === 'state' || historyState.chart === 'autonomy';
 }
 
-// syncAutonomyRows shows the Autonomy pickers and the run strip only while the
-// section is active, mirroring syncGranularityRow's per-chart row toggle.
+// syncAutonomyRows shows the Autonomy controls and the run strip only while
+// the section is active, mirroring syncGranularityRow's per-chart row toggle.
+//
+// One row, not two: Range is the only Autonomy control up here now, because
+// Span moved into the strip's own header (which this same function shows and
+// hides, so the picker cannot outlive the element it drives).
 function syncAutonomyRows(isAutonomy) {
-  const ctl = document.getElementById('history-autonomy-row');
+  const ctl = document.getElementById('history-autonomy-range-row');
   if (ctl) ctl.hidden = !isAutonomy;
   const strip = document.getElementById('history-autonomy-strip');
   if (strip) strip.hidden = !isAutonomy;
@@ -980,28 +984,75 @@ export function autonomyChartPoints(duration) {
   return starts.map(ts => byTs.get(ts) || null);
 }
 
-// The three drawn lines, in draw order: series key, the CSS custom property
-// that colours it, and the fallback for a stylesheet that has not loaded.
+// The three drawn lines, in draw order: series key, the ROLE it plays in the
+// chart, the CSS custom property that colours it, and the fallback for a
+// stylesheet that has not loaded.
 //
-// EXPORTED, and read by both the canvas painter and the side panel's key
-// swatches. The web shipped its first round with three unlabelled curves and a
-// panel that explicitly blanked its dots, so a reader had to infer which line
-// was which from vertical order. A key drawn from a SECOND colour table would
-// be worse than none — it can disagree with the chart — so there is one table
-// and one resolver.
+// ONE HUE, THREE WEIGHTS. The first round drew p95 green, p50 purple and p5
+// orange — three equally loud curves that a reader had to decode before the
+// chart said anything. It says one thing now: here is the typical run (the
+// solid `line`), and here is the spread around it (the translucent plane
+// between the two quiet `edge`s). Three hues cannot say that; a hue per
+// percentile makes p95 and p5 read as two independent measurements rather
+// than as the boundary of one range.
+//
+// EXPORTED, and read by both the canvas painter and the side panel's key. The
+// web also shipped a panel that explicitly blanked its dots, so a reader had
+// to infer which line was which from vertical order. A key drawn from a SECOND
+// colour table would be worse than none — it can disagree with the chart — so
+// there is one table and one resolver.
 export const AUTONOMY_SERIES = [
-  ['p95', '--ready', '#34C759'],
-  ['p50', '--working', '#8B5CF6'],
-  ['p5', '--waiting', '#FF9500'],
+  ['p95', 'edge', '--working', '#8B5CF6'],
+  ['p50', 'line', '--working', '#8B5CF6'],
+  ['p5', 'edge', '--working', '#8B5CF6'],
 ];
 
-// Panel labels for the three lines. Split from the colour table only because
-// the canvas has no use for them.
-const AUTONOMY_SERIES_LABELS = {
-  p95: 'p95 · how long the good runs go',
-  p50: 'p50 · the typical run',
-  p5: 'p5 · how short the bad runs are',
+// The band's own colours — the fill between p5 and p95, the fainter fill a
+// thin bucket gets, and the weight its two edge lines are stroked at.
+//
+// A SECOND TABLE, not a second PALETTE: every entry is the --working hue at a
+// lower alpha (`the band is the p50 hue, not a fourth colour` pins that), and
+// both the canvas and the panel's band swatch read these same three entries,
+// so the key cannot show a plane the chart does not draw.
+export const AUTONOMY_BAND_TOKENS = {
+  fill: ['--autonomy-band', 'rgba(139, 92, 246, 0.20)'],
+  fillThin: ['--autonomy-band-thin', 'rgba(139, 92, 246, 0.08)'],
+  edge: ['--autonomy-edge', 'rgba(139, 92, 246, 0.45)'],
 };
+
+// Per-role stroke weights. The p50 line carries the chart: full alpha, the
+// heavier stroke. The two edges are present enough to bound the plane and
+// quiet enough not to compete with it.
+const AUTONOMY_ROLE_STYLE = {
+  line: { width: 1.8, alpha: 1, thinAlpha: 0.6, marker: 2.6 },
+  edge: { width: 1, alpha: 0.5, thinAlpha: 0.32, marker: 2 },
+};
+
+// The two key entries, in panel order. `from` names the AUTONOMY_SERIES row
+// each one takes its colour from, so neither can be given a colour the chart
+// does not stroke.
+//
+// Named for a reader who has never seen a percentile — the register the panel
+// already used ("the typical run") — with the p-labels kept in front for a
+// reader who has. Two noun phrases that read as a pair, which is the point:
+// the chart draws one line and one plane, and these name them as one thing
+// and its spread rather than as two measurements.
+//
+// LENGTH IS A CONSTRAINT HERE, not a style preference. This panel is
+// `flex: 0 0 260px` with 16px padding, so a key row's label gets 204px once
+// its swatch and gap are taken out — about 28 monospace characters at 12px.
+// The band row first shipped as "p5–p95 · where most runs land" (29), which
+// ellipsised in the real panel: the one row whose job is to explain the band
+// cut off its own explanation. `autonomyLayout.test.js` computes that budget
+// from the stylesheet and fails a label that will not fit.
+//
+// Both strings are duplicated in AutonomyPalette.keyEntries on macOS, and
+// `the two surfaces name the key the same way` reads this table against that
+// one — two clients must not explain one chart differently.
+const AUTONOMY_KEY = [
+  ['line', 'p50', 'p50 · the typical run'],
+  ['band', 'p95', 'p5–p95 · the usual spread'],
+];
 
 // autonomySeriesColor resolves one line's colour against the live theme,
 // falling back to the literal when the custom property is unset (an
@@ -1011,8 +1062,92 @@ const AUTONOMY_SERIES_LABELS = {
 export function autonomySeriesColor(key, cs) {
   const row = AUTONOMY_SERIES.find(([k]) => k === key);
   if (!row) return '';
-  const [, cssVar, fallback] = row;
+  const [, , cssVar, fallback] = row;
   return ((cs && cs.getPropertyValue(cssVar)) || fallback).trim();
+}
+
+// autonomySeriesRole reports whether a key is the headline `line` or one of
+// the band's `edge`s. '' for anything the chart does not draw.
+export function autonomySeriesRole(key) {
+  const row = AUTONOMY_SERIES.find(([k]) => k === key);
+  return row ? row[1] : '';
+}
+
+// autonomyBandColor resolves one of the band's three tokens, same fallback
+// rule as autonomySeriesColor. '' for a name the band has no token for.
+export function autonomyBandColor(name, cs) {
+  const token = AUTONOMY_BAND_TOKENS[name];
+  if (!token) return '';
+  const [cssVar, fallback] = token;
+  return ((cs && cs.getPropertyValue(cssVar)) || fallback).trim();
+}
+
+// autonomyKeyEntries is the chart's key: exactly two entries, because the
+// chart draws exactly two things — a line and a plane.
+//
+// Every colour here is resolved through autonomySeriesColor / autonomyBandColor
+// — the same calls the canvas makes — so a swatch cannot disagree with the ink
+// beside it. `fill` is '' for the line entry: a line has no area.
+export function autonomyKeyEntries(cs) {
+  return AUTONOMY_KEY.map(([kind, from, label]) => ({
+    kind,
+    from,
+    label,
+    color: kind === 'band' ? autonomyBandColor('edge', cs) : autonomySeriesColor(from, cs),
+    fill: kind === 'band' ? autonomyBandColor('fill', cs) : '',
+  }));
+}
+
+// autonomyBandSegments splits the gap-aligned point list into the areas the
+// band may actually be filled over.
+//
+// TWO RULES, both of them honesty rules the smooth shape would otherwise
+// erase, and both of them the reason this is a pure function rather than a
+// loop inside the painter:
+//
+//   - A FILLED AREA WANTS TO CLOSE ACROSS A GAP. The daemon omits empty
+//     buckets and the line breaks there (autonomyChartPoints); a polygon
+//     spanning the gap would draw a plane over days that hold no runs at all,
+//     which is a stronger false claim than the interpolated line #1905 already
+//     refuses. A segment therefore never crosses a null.
+//   - A THIN BUCKET IS NOT A PERCENTILE. Under sample_floor, p95 is that
+//     bucket's longest run and p5 its shortest. The stroke already dashes
+//     across such a bucket; the fill splits at the same place so the thin
+//     stretch can be painted in its own fainter plane.
+//
+// Returns index ranges into `points`, inclusive at both ends. Adjacent
+// segments SHARE their boundary index, so a thin→solid handover has no seam.
+// `from === to` is an isolated bucket: it has no neighbour to make an area
+// with, and the painter draws its spread as a whisker instead.
+export function autonomyBandSegments(points) {
+  const out = [];
+  const n = (points || []).length;
+  let i = 0;
+  while (i < n) {
+    if (!points[i]) { i++; continue; }
+    let last = i;
+    while (last + 1 < n && points[last + 1]) last++;
+    if (last === i) {
+      out.push({ from: i, to: i, thin: !!points[i].thin });
+      i = last + 1;
+      continue;
+    }
+    // Thinness belongs to the INTERVAL, not the bucket — matching
+    // drawAutonomySeries, which dashes a segment either of whose ends is thin.
+    let start = i;
+    let thin = !!(points[i].thin || points[i + 1].thin);
+    for (let j = i + 1; j < last; j++) {
+      const next = !!(points[j].thin || points[j + 1].thin);
+      if (next !== thin) {
+        out.push({ from: start, to: j, thin });
+        start = j;
+        thin = next;
+      }
+    }
+    out.push({ from: start, to: last, thin });
+    i = last + 1;
+  }
+  return out;
 }
 
 function paintAutonomyChart() {
@@ -1047,15 +1182,77 @@ function paintAutonomyChart() {
     return padT + plotH * (1 - t);
   };
 
+  // Draw order IS the visual hierarchy, cheapest thing first:
+  //
+  //   gridlines → band → boundary rules → edges → p50 → axis labels
+  //
+  // The band goes over the gridlines rather than under them. A gridline is
+  // furniture; drawn on top of the plane it would cut the band into slices
+  // that read as structure in the data, which is the one thing a soft fill
+  // must never do. Over it, the fill's own translucency dims each gridline
+  // where it crosses — the line stays legible, and stays furniture.
   drawAutonomyGridlines(ctx, { lo, hi, yAt, padL, padR, w, muted, gridColor });
+  drawAutonomyBand(ctx, {
+    points,
+    segments: autonomyBandSegments(points),
+    xAt,
+    yAt,
+    fill: autonomyBandColor('fill', cs),
+    fillThin: autonomyBandColor('fillThin', cs),
+    edge: autonomyBandColor('edge', cs),
+  });
   // Under the lines, deliberately: the marker explains the data, it is not
   // part of it, and a rule drawn over a curve competes with the thing it is
   // annotating.
   drawAutonomyBoundaries(ctx, { duration, padL, plotW, padT, plotH, muted });
-  for (const [key] of AUTONOMY_SERIES) {
-    drawAutonomySeries(ctx, { points, key, color: autonomySeriesColor(key, cs), xAt, yAt });
+  // Edges before the line, whatever order the table lists them in: the
+  // headline curve is the last ink down, so nothing crosses over it.
+  for (const role of ['edge', 'line']) {
+    for (const [key, seriesRole] of AUTONOMY_SERIES) {
+      if (seriesRole !== role) continue;
+      drawAutonomySeries(ctx, { points, key, role, color: autonomySeriesColor(key, cs), xAt, yAt });
+    }
   }
   drawAutonomyXLabels(ctx, { duration, xAt, muted, h, padB });
+}
+
+// drawAutonomyBand fills the plane between p5 and p95 — the spread around the
+// typical run — one polygon per autonomyBandSegments entry.
+//
+// It fills SEGMENT BY SEGMENT rather than as one path so the two rules that
+// function encodes survive the paint: a gap leaves real empty canvas (no
+// plane over days with no runs), and a thin stretch is filled from the
+// fainter token, so a range that is not a percentile spread does not look
+// like one.
+function drawAutonomyBand(ctx, { points, segments, xAt, yAt, fill, fillThin, edge }) {
+  ctx.save();
+  for (const seg of segments) {
+    if (seg.from === seg.to) {
+      // An isolated bucket has no neighbour to make an area with. Drawn as a
+      // whisker rather than dropped, or it would be the one bucket whose
+      // spread is invisible — and a lone bucket is exactly where the reader
+      // most needs to see how wide the range was.
+      const only = points[seg.from];
+      ctx.setLineDash(seg.thin ? [3, 3] : []);
+      ctx.strokeStyle = edge;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(xAt(seg.from), yAt(only.p95));
+      ctx.lineTo(xAt(seg.from), yAt(only.p5));
+      ctx.stroke();
+      continue;
+    }
+    ctx.beginPath();
+    for (let i = seg.from; i <= seg.to; i++) {
+      const x = xAt(i), y = yAt(points[i].p95);
+      if (i === seg.from) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    for (let i = seg.to; i >= seg.from; i--) ctx.lineTo(xAt(i), yAt(points[i].p5));
+    ctx.closePath();
+    ctx.fillStyle = seg.thin ? fillThin : fill;
+    ctx.fill();
+  }
+  ctx.restore();
 }
 
 // drawAutonomyBoundaries marks each instant where the data's source changes: a
@@ -1131,15 +1328,21 @@ function drawAutonomyXLabels(ctx, { duration, xAt, muted, h, padB }) {
 // drawAutonomySeries strokes one percentile line, breaking at every omitted
 // bucket and DASHING any segment that touches a thin bucket — so a bucket
 // under the sample floor is visibly different rather than hidden or smoothed.
-function drawAutonomySeries(ctx, { points, key, color, xAt, yAt }) {
+//
+// `role` decides the weight, not the colour: all three lines are one hue, and
+// what separates the headline p50 from the band's two edges is stroke width
+// and alpha (AUTONOMY_ROLE_STYLE).
+function drawAutonomySeries(ctx, { points, key, role, color, xAt, yAt }) {
+  const style = AUTONOMY_ROLE_STYLE[role] || AUTONOMY_ROLE_STYLE.line;
   ctx.strokeStyle = color;
-  ctx.lineWidth = 1.6;
+  ctx.lineWidth = style.width;
   for (let i = 1; i < points.length; i++) {
     const a = points[i - 1], b = points[i];
     if (!a || !b) continue; // a gap is a gap: never interpolate across it
+    const thin = a.thin || b.thin;
     ctx.save();
-    ctx.setLineDash(a.thin || b.thin ? [3, 3] : []);
-    ctx.globalAlpha = (a.thin || b.thin) ? 0.55 : 1;
+    ctx.setLineDash(thin ? [3, 3] : []);
+    ctx.globalAlpha = thin ? style.thinAlpha : style.alpha;
     ctx.beginPath();
     ctx.moveTo(xAt(i - 1), yAt(a[key]));
     ctx.lineTo(xAt(i), yAt(b[key]));
@@ -1153,17 +1356,19 @@ function drawAutonomySeries(ctx, { points, key, color, xAt, yAt }) {
     if (!b) continue;
     const isolated = !points[i - 1] && !points[i + 1];
     if (!b.thin && !isolated) continue;
+    ctx.save();
     ctx.beginPath();
-    ctx.arc(xAt(i), yAt(b[key]), 2.5, 0, Math.PI * 2);
+    ctx.arc(xAt(i), yAt(b[key]), style.marker, 0, Math.PI * 2);
     if (b.thin) {
       ctx.strokeStyle = color;
-      ctx.globalAlpha = 0.7;
+      ctx.globalAlpha = style.alpha * 0.8;
       ctx.stroke();
-      ctx.globalAlpha = 1;
     } else {
       ctx.fillStyle = color;
+      ctx.globalAlpha = style.alpha;
       ctx.fill();
     }
+    ctx.restore();
   }
 }
 
@@ -1351,25 +1556,30 @@ function paintAutonomyStripRow(canvas, mine, spans, cs) {
 // key at all. As a value it is testable; as a `style.background =` buried in a
 // render loop it was not.
 //
-// The first three rows ARE the chart's lines, so they carry the chart's own
-// colours (from AUTONOMY_SERIES, the same table the canvas strokes from) and
-// double as its key — the macOS surface says the same thing through Swift
-// Charts' legend. longest/shortest/runs are FIGURES, not lines, and stay
-// unswatched on purpose: a swatch would claim a curve the chart deliberately
-// does not draw.
+// The first TWO rows are the key, and they are the key because they are what
+// the chart draws: one line and one plane. Three swatches for three
+// percentiles distinguished nothing once the three curves became one hue —
+// worse, they promised a distinction the chart had stopped making. The
+// numbers did not collapse with the colours: p50 is the line row's value and
+// p5/p95 are the band row's, so all three figures are still on screen.
+//
+// longest/shortest/runs are FIGURES, not marks, and stay unswatched on
+// purpose: a swatch would claim ink the chart deliberately does not lay down.
 export function autonomyPanelRows(summary, cs) {
   const s = summary || {};
-  const line = (key, value) => ({
-    series: key,
-    label: AUTONOMY_SERIES_LABELS[key],
-    value,
-    swatch: autonomySeriesColor(key, cs),
-  });
-  const figure = (label, value) => ({ series: null, label, value, swatch: 'transparent' });
+  const [lineKey, bandKey] = autonomyKeyEntries(cs);
+  const figure = (label, value) => ({ kind: null, label, value, swatch: 'transparent', fill: '' });
   return [
-    line('p95', autonomyDuration(s.p95)),
-    line('p50', autonomyDuration(s.p50)),
-    line('p5', autonomyDuration(s.p5)),
+    { kind: lineKey.kind, label: lineKey.label, value: autonomyDuration(s.p50), swatch: lineKey.color, fill: lineKey.fill },
+    {
+      kind: bandKey.kind,
+      label: bandKey.label,
+      // Both ends of the band, in the order they read on the chart: bottom
+      // edge to top edge. One row, three figures still visible.
+      value: autonomyDuration(s.p5) + ' – ' + autonomyDuration(s.p95),
+      swatch: bandKey.color,
+      fill: bandKey.fill,
+    },
     figure('longest', autonomyDuration(s.max)),
     figure('shortest', autonomyDuration(s.min)),
     figure('runs', String(s.count || 0)),
@@ -1398,9 +1608,23 @@ function renderAutonomyPanel() {
   } else {
     for (const row of autonomyPanelRows(s, getComputedStyle(document.documentElement))) {
       const li = document.createElement('li');
+      // The key rows lay out differently from the figure rows below them:
+      // they carry a sentence AND a two-ended figure, which do not fit one
+      // 228px line together. See .history-contrib li.autonomy-key.
+      if (row.kind) li.className = 'autonomy-key';
       const dot = document.createElement('span');
-      dot.className = 'dot';
-      dot.style.background = row.swatch;
+      // The two key swatches take the SHAPE of what they stand for — a rule
+      // for the line, a bounded plane for the band. A pair of identical dots
+      // in one hue would be a key that says nothing twice.
+      dot.className = row.kind ? 'dot autonomy-' + row.kind : 'dot';
+      if (row.kind === 'band') {
+        dot.style.background = row.fill;
+        dot.style.borderColor = row.swatch;
+      } else if (row.kind === 'line') {
+        dot.style.borderColor = row.swatch;
+      } else {
+        dot.style.background = row.swatch;
+      }
       const lbl = document.createElement('span');
       lbl.className = 'label';
       lbl.textContent = row.label;
@@ -1415,8 +1639,8 @@ function renderAutonomyPanel() {
     const thin = (duration.buckets || []).filter(b => b.thin).length;
     if (thin > 0) {
       appendHistoryEmpty(listEl, thin + ' of ' + duration.buckets.length + ' buckets hold fewer than '
-        + duration.sample_floor + ' runs (dashed, hollow): there p95 is that bucket’s longest run '
-        + 'and p5 its shortest — not percentiles.');
+        + duration.sample_floor + ' runs (fainter band, dashed edges, hollow points): there p95 is '
+        + 'that bucket’s longest run and p5 its shortest — not percentiles.');
     }
   }
   // The provenance line is part of the feature: "no data" must never read as

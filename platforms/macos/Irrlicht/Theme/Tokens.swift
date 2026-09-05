@@ -67,6 +67,25 @@ enum IrrColors {
     static let readyDim   = ready.opacity(0.12)
     static let errorDim   = error.opacity(0.12)
 
+    // Autonomy chart (#1905) — ONE hue, three weights. The p50 line is
+    // `working` at full strength; the p5–p95 band is the same hue as a
+    // translucent plane, and its two edges the same hue again, quiet enough to
+    // bound the plane without competing with the line inside it.
+    //
+    // `adaptive` rather than `working.opacity(…)` because the alpha itself has
+    // to differ per appearance, and a single opacity cannot have two values:
+    // on a dark window a violet wash has to LIGHTEN the surface to register at
+    // all, while on a light one the same alpha reads as a solid lavender slab
+    // louder than the line it sits behind. Hex is `#AARRGGBB`, so the alpha
+    // rides in the token. Web twin: --autonomy-band / --autonomy-band-thin /
+    // --autonomy-edge in platforms/web/irrlicht.css, same alphas.
+    static let autonomyBand     = Color.adaptive(light: "#1C8B5CF6", dark: "#338B5CF6")
+    // Buckets under `sample_floor` keep their own, fainter plane: there p95 IS
+    // the maximum and p5 IS the minimum, so the area is a range rather than a
+    // percentile spread and must not read as one.
+    static let autonomyBandThin = Color.adaptive(light: "#0D8B5CF6", dark: "#148B5CF6")
+    static let autonomyEdge     = Color.adaptive(light: "#618B5CF6", dark: "#738B5CF6")
+
     // Glow halos (--working-glow 0.25, --waiting-glow / --ready-glow 0.20).
     static let workingGlow = working.opacity(0.25)
     static let waitingGlow = waiting.opacity(0.20)

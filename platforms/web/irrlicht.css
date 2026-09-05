@@ -46,6 +46,24 @@
          differs per theme AND from the macOS side). Like --cancelled, it is
          defined once: a mid-grey that reads on both light and dark surfaces. */
       --unknown: #8E8E93;
+      /* Autonomy chart (#1905) — ONE hue, three weights. The p50 line is
+         --working at full strength; the p5–p95 band is the same hue as a
+         translucent plane, and its two edges the same hue again, quiet enough
+         to read as the band's boundary rather than as two more curves.
+         Tokens rather than an rgba typed into the canvas painter, because the
+         two grounds need different alphas and a literal cannot have two
+         values: on #0f1628 a violet wash has to LIGHTEN the surface to show
+         at all, while on #ffffff the same alpha reads as a solid lavender
+         block that shouts louder than the line it surrounds. Measured by eye
+         against .history-chart-wrap's --surface in both themes.
+         All three are the --working RGB triple; `the band is the p50 hue, not
+         a fourth colour` in irrlicht.history.autonomy.test.js pins that. */
+      --autonomy-band: rgba(139, 92, 246, 0.20);
+      /* Thin buckets (under sample_floor) keep their own, fainter plane: there
+         p95 IS the maximum and p5 IS the minimum, so the area is a range, not
+         a percentile spread, and must not read as one. */
+      --autonomy-band-thin: rgba(139, 92, 246, 0.08);
+      --autonomy-edge: rgba(139, 92, 246, 0.45);
       /* Pressure-bar colors — mirror overlay's ContextBarColor / pressure_level mapping:
          safe → low, caution → medium, warning → high, critical → critical. */
       --pressure-low: #34C759;
@@ -90,6 +108,15 @@
         --waiting-dim: rgba(136, 79, 0, 0.12);
         --ready: #207936;
         --ready-dim: rgba(32, 121, 54, 0.12);
+        /* Autonomy band, re-tuned for the light ground (see the dark block).
+           Two things change at once and both push the alpha DOWN: the hue is
+           the darker light-theme --working (#6526F3), and the surface under it
+           is #ffffff rather than #0f1628, so the same 0.20 that reads as a
+           faint haze on the dark card reads as a solid lavender slab here —
+           louder than the p50 line it is supposed to sit behind. */
+        --autonomy-band: rgba(101, 38, 243, 0.11);
+        --autonomy-band-thin: rgba(101, 38, 243, 0.05);
+        --autonomy-edge: rgba(101, 38, 243, 0.38);
         /* #1801, same rule as the three above and measured the same way. The
            dark --error (#FF3B30) reads 3.01:1 against its own 12% wash on
            --surface #ffffff — under the 4.5:1 minimum, and the worst possible
@@ -126,6 +153,10 @@
       --waiting-dim: rgba(136, 79, 0, 0.12);
       --ready: #207936;
       --ready-dim: rgba(32, 121, 54, 0.12);
+      /* See the matching comment in the media-query block above. */
+      --autonomy-band: rgba(101, 38, 243, 0.11);
+      --autonomy-band-thin: rgba(101, 38, 243, 0.05);
+      --autonomy-edge: rgba(101, 38, 243, 0.38);
       --error: #CC0C00;
       --error-dim: rgba(204, 12, 0, 0.12);
     }
@@ -1765,6 +1796,15 @@
       font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em;
       text-transform: uppercase; color: var(--muted); margin-bottom: 8px;
     }
+    /* The strip's header: its title and the Span picker that changes it, on
+       one row. Span used to sit above BOTH elements next to the chart's
+       Range, which said the two controls governed the same thing. Wraps
+       rather than compressing, so a narrow window stacks the picker under the
+       title instead of squeezing the segmented buttons. */
+    .history-autonomy-header {
+      display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; margin-bottom: 8px;
+    }
+    .history-autonomy-header .history-autonomy-title { margin-bottom: 0; margin-right: auto; }
     .history-autonomy-row {
       display: grid; grid-template-columns: 140px 1fr 56px;
       align-items: center; gap: 10px; margin-bottom: 6px;
@@ -1907,8 +1947,43 @@
     }
     .history-contrib li { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 12px; }
     .history-contrib .dot { width: 9px; height: 9px; border-radius: 2px; flex-shrink: 0; }
+    /* The Autonomy key's two swatches (#1905 redesign). The chart draws one
+       line and one plane in a single hue, so the key has to distinguish them
+       by SHAPE — two identically-coloured dots would be a key that says the
+       same thing twice. Colours come from the JS resolvers (the same calls the
+       canvas painter makes), never from here. */
+    .history-contrib .dot.autonomy-line {
+      width: 16px; height: 0; border-radius: 0; background: none;
+      border-top: 2px solid currentColor;
+    }
+    .history-contrib .dot.autonomy-band {
+      width: 16px; height: 10px; border-radius: 1px;
+      border-top: 1px solid currentColor; border-bottom: 1px solid currentColor;
+    }
     .history-contrib .label { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .history-contrib .val { margin-left: auto; color: var(--text-bright); }
+    /* A figure is never split across two lines: "6s – 23m46s" broken after
+       the dash reads as two separate numbers rather than as one span. The
+       label shrinks and ellipsises instead, which is the right priority —
+       the figure is the thing being reported. */
+    .history-contrib .val { margin-left: auto; color: var(--text-bright); white-space: nowrap; }
+    /* The two Autonomy key rows are the only rows here carrying BOTH a
+       sentence and a two-ended figure, and one 228px line cannot hold them:
+       the label wants 180px and the value another 79px against a 196px
+       budget once the swatch and gaps are out (the arithmetic is in
+       autonomyLayout.test.js, computed from this stylesheet). Shipped as one
+       flex line it ellipsised the very label whose job is to explain the
+       band, and wrapped the range mid-figure.
+       So the value takes a line of its own, right-aligned in the same column
+       the figures below use, and the label is allowed to WRAP rather than
+       ellipsise: a truncated explanation is unreadable, a wrapped one is
+       merely taller. Both key rows lay out the same way even though `p50`
+       alone would fit — they are a matched pair and must read as one. */
+    .history-contrib li.autonomy-key { flex-wrap: wrap; }
+    .history-contrib li.autonomy-key .label {
+      white-space: normal; overflow: visible; text-overflow: clip;
+      flex: 1 1 auto; min-width: 0;
+    }
+    .history-contrib li.autonomy-key .val { flex: 0 0 100%; margin-left: 0; text-align: right; }
     /* Drilldown affordance: contributors you can click to scope into. */
     .history-contrib li.drillable { cursor: pointer; border-radius: 4px; margin: 0 -6px; padding: 2px 6px; }
     .history-contrib li.drillable:hover { background: var(--surface-hover); }

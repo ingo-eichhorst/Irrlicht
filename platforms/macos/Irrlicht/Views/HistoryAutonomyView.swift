@@ -15,7 +15,14 @@ struct HistoryAutonomyContentView: View {
     let duration: HistoryAutonomyDurationResponse
     let spans: HistoryAutonomySpansResponse
     let range: HistoryAutonomyRange
-    let spanWindow: HistoryAutonomySpanWindow
+    /// A BINDING, unlike `range`: the Span picker lives in this view now,
+    /// in the strip's own section header. Range still belongs to the tab's
+    /// control row because the chart is the first thing under it; Span sat up
+    /// there too, one row of controls above two elements, with nothing saying
+    /// which control moved which — and the two vocabularies overlap textually
+    /// (`30d` is a Range value AND a Span value), so the row read as one zoom
+    /// control with an odd set of steps.
+    @Binding var spanWindow: HistoryAutonomySpanWindow
 
     /// #1659 — every date this view renders takes its zone as an INPUT rather
     /// than reading `NSTimeZone.default`.
@@ -49,6 +56,7 @@ struct HistoryAutonomyContentView: View {
             if duration.hasData {
                 AutonomyDurationChart(data: duration, timeZone: formatTimeZone)
                     .frame(height: 190)
+                AutonomyKeyView()
                 summaryRow
                 if thinCount > 0 { thinNote }
             } else {
@@ -76,12 +84,13 @@ struct HistoryAutonomyContentView: View {
     private var thinCount: Int { duration.buckets.filter(\.thin).count }
 
     /// Thin buckets are MARKED, never hidden and never smoothed — and the
-    /// marking is explained in words, because a hollow dot means nothing on
-    /// its own.
+    /// marking is explained in words, because a fainter plane means nothing on
+    /// its own. Three signals, since a distinction is easy to lose inside a
+    /// smooth band: the plane itself, the edges bounding it, and the points.
     private var thinNote: some View {
         Text("\(thinCount) of \(duration.buckets.count) buckets hold fewer than \(duration.sampleFloor) runs "
-             + "(hollow points, dashed): there, p95 is that bucket's longest run and p5 its shortest — "
-             + "not percentiles.")
+             + "(fainter band, dashed edges, hollow points): there, p95 is that bucket's longest run and "
+             + "p5 its shortest — not percentiles.")
             .font(.caption2)
             .foregroundColor(.secondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -104,9 +113,22 @@ struct HistoryAutonomyContentView: View {
 
     @ViewBuilder private var stripSection: some View {
         VStack(alignment: .leading, spacing: IrrSpacing.sp2) {
-            Text("Runs · last \(spanWindow.label)")
+            // The strip's own header: its title and the picker that changes
+            // it, together — the whole point of moving Span down here.
+            HStack(spacing: IrrSpacing.sp2) {
+                Text("Runs · last \(spanWindow.label)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Spacer(minLength: IrrSpacing.sp2)
+                Picker("Span", selection: $spanWindow) {
+                    ForEach(HistoryAutonomySpanWindow.allCases) { Text($0.label).tag($0) }
+                }
+                .labelsHidden()
+                .fixedSize()
+                .pickerStyle(.menu)
+                .controlSize(.small)
                 .font(.caption)
-                .foregroundColor(.secondary)
+            }
             if spans.hasData {
                 // A header over the value column: the figure at the end of
                 // each row was a bare duration with nothing saying what it
@@ -240,12 +262,31 @@ private struct AutonomyDurationChart: View {
     let data: HistoryAutonomyDurationResponse
     let timeZone: TimeZone
 
-    /// One drawn point. `series` names which of the three lines it belongs to.
+    /// One drawn point.
+    ///
+    /// `series` names which of the three lines it belongs to and is what the
+    /// colour scale reads. `run` is a different key on purpose: it names the
+    /// CONTIGUOUS STRETCH the point belongs to, and Swift Charts connects
+    /// points that share it. Without that second key a line is drawn through
+    /// every bucket the daemon sent — which silently bridges the omitted ones,
+    /// exactly the interpolation `alignedBuckets` exists to refuse.
     private struct Datum: Identifiable {
         let id: String
         let date: Date
         let series: String
+        let run: String
         let value: Double
+        let thin: Bool
+    }
+
+    /// One stretch of the band: the plane between p5 and p95 over a run of
+    /// consecutive buckets, or (when `isolated`) a single bucket's spread.
+    private struct BandDatum: Identifiable {
+        let id: String
+        let date: Date
+        let run: String
+        let low: Double
+        let high: Double
         let thin: Bool
     }
 
@@ -253,15 +294,67 @@ private struct AutonomyDurationChart: View {
     /// run — clamp to one second so a degenerate value cannot blank the chart.
     private func plottable(_ v: Double) -> Double { Swift.max(1, v) }
 
-    private var data3: [Datum] {
+    private func date(at index: Int) -> Date {
+        Date(timeIntervalSince1970: TimeInterval(data.bucketStarts[index]))
+    }
+
+    private var points: [HistoryAutonomyBucket?] { data.alignedBuckets }
+    private var segments: [AutonomyBandLayout.Segment] {
+        AutonomyBandLayout.segments(points: points)
+    }
+
+    /// The three lines, split into one series per contiguous stretch so the
+    /// stroke BREAKS at every omitted bucket instead of being drawn through it.
+    private func lineData(_ segments: [AutonomyBandLayout.Segment]) -> [Datum] {
         var out: [Datum] = []
-        for b in data.buckets {
-            let date = Date(timeIntervalSince1970: TimeInterval(b.ts))
-            out.append(Datum(id: "p95-\(b.ts)", date: date, series: "p95", value: plottable(b.p95), thin: b.thin))
-            out.append(Datum(id: "p50-\(b.ts)", date: date, series: "p50", value: plottable(b.p50), thin: b.thin))
-            out.append(Datum(id: "p5-\(b.ts)", date: date, series: "p5", value: plottable(b.p5), thin: b.thin))
+        for segment in segments where !segment.isIsolated {
+            for i in segment.from...segment.to {
+                guard let b = points[i] else { continue }
+                for key in AutonomyPalette.seriesOrder {
+                    let v: Double
+                    switch key {
+                    case "p95": v = b.p95
+                    case "p5": v = b.p5
+                    default: v = b.p50
+                    }
+                    out.append(Datum(id: "\(key)-\(segment.id)-\(b.ts)",
+                                     date: date(at: i),
+                                     series: key,
+                                     run: "\(key)#\(segment.id)",
+                                     value: plottable(v),
+                                     thin: segment.thin))
+                }
+            }
         }
         return out
+    }
+
+    private func bandData(_ segments: [AutonomyBandLayout.Segment]) -> [BandDatum] {
+        var out: [BandDatum] = []
+        for segment in segments where !segment.isIsolated {
+            for i in segment.from...segment.to {
+                guard let b = points[i] else { continue }
+                out.append(BandDatum(id: "band-\(segment.id)-\(b.ts)",
+                                     date: date(at: i),
+                                     run: segment.id,
+                                     low: plottable(b.p5),
+                                     high: plottable(b.p95),
+                                     thin: segment.thin))
+            }
+        }
+        return out
+    }
+
+    /// Buckets with no neighbour to make an area with. Drawn as a whisker
+    /// rather than dropped: a lone bucket is exactly where a reader most needs
+    /// to see how wide the range was, and it would otherwise be the only one
+    /// whose spread is invisible.
+    private func whiskerData(_ segments: [AutonomyBandLayout.Segment]) -> [BandDatum] {
+        segments.filter(\.isIsolated).compactMap { segment in
+            guard let b = points[segment.from] else { return nil }
+            return BandDatum(id: "whisker-\(segment.id)", date: date(at: segment.from), run: segment.id,
+                             low: plottable(b.p5), high: plottable(b.p95), thin: segment.thin)
+        }
     }
 
     /// Y domain with a little headroom, floored so a single short run still
@@ -274,39 +367,70 @@ private struct AutonomyDurationChart: View {
     }
 
     var body: some View {
-        let points = data3
+        let segments = self.segments
+        let lines = lineData(segments)
         Chart {
-            // FIRST in the builder, so the rules sit UNDER the lines: the
-            // marker explains the data, it is not part of it, and a rule drawn
-            // over a curve competes with the thing it annotates.
+            // FIRST in the builder, so the plane and the rules sit UNDER the
+            // lines. The band is context; the p50 line is the headline, and it
+            // is the last ink down so nothing crosses over it.
+            ForEach(bandData(segments)) { d in
+                AreaMark(
+                    x: .value("Date", d.date),
+                    yStart: .value("p5", d.low),
+                    yEnd: .value("p95", d.high),
+                    series: .value("Band", d.run)
+                )
+                .foregroundStyle(d.thin ? AutonomyPalette.bandThin : AutonomyPalette.band)
+                .interpolationMethod(.monotone)
+            }
+            ForEach(whiskerData(segments)) { d in
+                RuleMark(
+                    x: .value("Date", d.date),
+                    yStart: .value("p5", d.low),
+                    yEnd: .value("p95", d.high)
+                )
+                .lineStyle(StrokeStyle(lineWidth: 1, dash: d.thin ? [3, 3] : []))
+                .foregroundStyle(AutonomyPalette.edge)
+            }
+            // The source-change markers: the marker explains the data, it is
+            // not part of it, so it sits under the curves too.
             //
-            // A hairline at low opacity, in `.secondary` so both themes resolve
-            // it themselves — findable when looked for, invisible when not.
+            // A LONG-DASHED 1.5 pt rule, deliberately unlike the axis
+            // gridlines below (solid hairlines): before, both were thin dashes
+            // in a muted colour and the one line on the chart that carries an
+            // explanation was indistinguishable from furniture.
             ForEach(data.visibleBoundaries) { boundary in
                 RuleMark(x: .value("Source change", boundary.date))
-                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [2, 3]))
-                    .foregroundStyle(Color.secondary.opacity(0.45))
-                    .annotation(position: .top, alignment: .trailing, spacing: 1) {
+                    .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [6, 3]))
+                    .foregroundStyle(Color.secondary.opacity(0.75))
+                    .annotation(position: .top,
+                                alignment: captionAlignment(for: boundary),
+                                spacing: 2) {
                         Text(boundary.label)
                             .font(.system(size: 9))
                             .foregroundColor(.secondary)
-                            .opacity(0.8)
+                            .opacity(0.9)
                             .fixedSize()
                     }
             }
-            ForEach(points) { d in
+            ForEach(lines) { d in
                 LineMark(
                     x: .value("Date", d.date),
                     y: .value("Duration", d.value),
-                    series: .value("Series", d.series)
+                    series: .value("Run", d.run)
                 )
                 .foregroundStyle(by: .value("Series", d.series))
                 .interpolationMethod(.monotone)
+                .lineStyle(StrokeStyle(lineWidth: AutonomyPalette.lineWidth(AutonomyPalette.role(of: d.series)),
+                                       dash: d.thin ? [3, 3] : []))
+                .opacity(AutonomyPalette.opacity(AutonomyPalette.role(of: d.series), thin: d.thin))
             }
             // Thin buckets are marked rather than hidden: a hollow point on
             // every line at that bucket, so a low-sample day is visibly
-            // different from a well-sampled one without being dropped.
-            ForEach(points.filter(\.thin)) { d in
+            // different from a well-sampled one without being dropped. Inside
+            // a smooth band this is the third signal, alongside the fainter
+            // plane and the dashed edges.
+            ForEach(lines.filter(\.thin)) { d in
                 PointMark(
                     x: .value("Date", d.date),
                     y: .value("Duration", d.value)
@@ -317,15 +441,20 @@ private struct AutonomyDurationChart: View {
                 .opacity(0.45)
             }
         }
-        // One table for the three lines, read by the scale AND by the legend
-        // Swift Charts derives from it — the web's twin of this is
+        // One table for the three lines, read by the scale AND by
+        // AutonomyPalette.keyEntries — the web's twin of this is
         // AUTONOMY_SERIES, and both surfaces must name the lines the same way.
         .chartForegroundStyleScale(domain: AutonomyPalette.seriesOrder,
                                    range: AutonomyPalette.seriesRange)
+        // …and the legend Swift Charts derives from that scale is hidden,
+        // because with one hue it would be three identical swatches naming
+        // three percentiles. AutonomyKeyView draws the two entries that
+        // actually correspond to marks on the chart.
+        .chartLegend(.hidden)
         .chartYScale(domain: yDomain, type: .log)
         .chartYAxis {
             AxisMarks { value in
-                AxisGridLine()
+                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
                 AxisValueLabel {
                     if let v = value.as(Double.self) {
                         Text(AutonomyFormat.duration(v))
@@ -335,7 +464,9 @@ private struct AutonomyDurationChart: View {
         }
         .chartXAxis {
             AxisMarks(values: .automatic(desiredCount: 4)) { value in
-                AxisGridLine()
+                // Solid hairlines. Dashed x gridlines read as several source
+                // markers and made the real one impossible to find.
+                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
                 AxisValueLabel {
                     if let d = value.as(Date.self) {
                         Text(AutonomyFormat.axisDate(d, timeZone: timeZone))
@@ -343,7 +474,52 @@ private struct AutonomyDurationChart: View {
                 }
             }
         }
-        .chartLegend(position: .bottom, spacing: 4)
+    }
+
+    /// Which side of its rule a boundary caption hangs off — see
+    /// `AutonomyBoundaryCaption`. `.trailing` puts the caption's trailing edge
+    /// on the rule (text extends left), `.leading` its leading edge (text
+    /// extends right).
+    private func captionAlignment(for boundary: HistoryAutonomyBoundary) -> Alignment {
+        AutonomyBoundaryCaption.side(fraction: data.domainFraction(of: boundary)) == .left
+            ? .trailing
+            : .leading
+    }
+}
+
+// MARK: - The chart's key
+
+/// Two entries, because the chart draws two things: a line and a plane. Each
+/// swatch takes the SHAPE of what it stands for — a pair of identically
+/// coloured dots would be a key that says the same thing twice.
+private struct AutonomyKeyView: View {
+    var body: some View {
+        HStack(spacing: IrrSpacing.sp3) {
+            ForEach(AutonomyPalette.keyEntries) { entry in
+                HStack(spacing: IrrSpacing.sp1) {
+                    swatch(entry)
+                    Text(entry.label)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .font(.caption2)
+        .foregroundColor(.secondary)
+    }
+
+    @ViewBuilder private func swatch(_ entry: AutonomyKeyEntry) -> some View {
+        switch entry.kind {
+        case .line:
+            Capsule()
+                .fill(entry.color)
+                .frame(width: 16, height: 2)
+        case .band:
+            (entry.fill ?? Color.clear)
+                .frame(width: 16, height: 9)
+                .overlay(alignment: .top) { entry.color.frame(height: 1) }
+                .overlay(alignment: .bottom) { entry.color.frame(height: 1) }
+                .clipShape(RoundedRectangle(cornerRadius: 1))
+        }
     }
 }
 
@@ -400,18 +576,103 @@ private struct AutonomyStripRow: View {
 
 // MARK: - Palette + formatting
 
+/// One entry of the chart's key. `from` names the `AutonomyPalette.seriesOrder`
+/// row the entry takes its colour from, so a key entry cannot be given a
+/// colour the chart does not draw.
+struct AutonomyKeyEntry: Identifiable, Equatable {
+    enum Kind: String { case line, band }
+
+    let kind: Kind
+    let from: String
+    let label: String
+    let color: Color
+    /// The plane's fill. `nil` for the line entry — a line has no area, and a
+    /// swatch with a fill would claim one.
+    let fill: Color?
+
+    var id: String { kind.rawValue }
+}
+
 enum AutonomyPalette {
     /// The three drawn lines, in draw order, and their colours — ONE table,
-    /// read by the chart's style scale and therefore by the legend Swift
-    /// Charts derives from it, so the key and the curves cannot disagree.
-    /// Mirrors the web's AUTONOMY_SERIES, which had to gain the same property
-    /// when QA found three unlabelled curves there.
+    /// read by the chart's style scale AND by the two key entries below, so
+    /// the key and the curves cannot disagree. Mirrors the web's
+    /// AUTONOMY_SERIES, which carries the same property.
+    ///
+    /// ONE HUE, THREE WEIGHTS. The first round drew p95 green, p50 purple and
+    /// p5 orange — three equally loud curves and a legend that had to be
+    /// decoded before the chart said anything. It says one thing now: here is
+    /// the typical run (the solid `line`), and here is the spread around it
+    /// (the plane between the two quiet `edge`s). A hue per percentile made
+    /// p95 and p5 read as two independent measurements rather than as the
+    /// boundary of one range.
     static let seriesOrder = ["p95", "p50", "p5"]
     static let seriesColors: [String: Color] = [
-        "p95": IrrColors.ready,
+        "p95": IrrColors.working,
         "p50": IrrColors.working,
-        "p5": IrrColors.waiting,
+        "p5": IrrColors.working,
     ]
+
+    /// What each line is FOR. The colours no longer separate them, so the
+    /// roles do — and the chart reads its stroke weights from here rather than
+    /// from a literal beside each mark.
+    enum Role { case line, edge }
+    static let seriesRoles: [String: Role] = [
+        "p95": .edge,
+        "p50": .line,
+        "p5": .edge,
+    ]
+
+    static func role(of key: String) -> Role { seriesRoles[key] ?? .line }
+
+    /// The headline line's colour: the one every reader is meant to follow.
+    static var lineColor: Color { seriesColors["p50"] ?? .gray }
+
+    /// The band's own three weights — the plane, the fainter plane a thin
+    /// stretch gets, and the weight its two edges are stroked at. A second
+    /// TABLE, not a second palette: every one of them is the `working` hue at
+    /// a lower alpha (`bandIsTheLineHue` in the tests pins that), and both the
+    /// chart and the key read these same entries.
+    static var band: Color { IrrColors.autonomyBand }
+    static var bandThin: Color { IrrColors.autonomyBandThin }
+    static var edge: Color { IrrColors.autonomyEdge }
+
+    /// Stroke weight per role. The line carries the chart; the edges are
+    /// present enough to bound the plane and quiet enough not to compete.
+    static func lineWidth(_ role: Role) -> CGFloat { role == .line ? 1.8 : 1 }
+    static func opacity(_ role: Role, thin: Bool) -> Double {
+        switch (role, thin) {
+        case (.line, false): return 1
+        case (.line, true): return 0.6
+        case (.edge, false): return 0.5
+        case (.edge, true): return 0.32
+        }
+    }
+
+    /// The chart's key: exactly two entries, because the chart draws exactly
+    /// two things. Three percentile swatches in one hue would promise a
+    /// distinction the chart stopped making — which is why the Swift Charts
+    /// legend derived from `seriesOrder` is hidden and this is drawn instead.
+    ///
+    /// Named for a reader who has never seen a percentile — the register the
+    /// section already used ("the typical run") — with the p-labels kept in
+    /// front for a reader who has. Two noun phrases that read as a pair: the
+    /// chart draws one line and one plane, and these name them as one thing
+    /// and its spread rather than as two measurements.
+    ///
+    /// SAME TWO STRINGS AS THE WEB's panel key (AUTONOMY_KEY in
+    /// platforms/web/historyTab.js), and pinned against it by `the two
+    /// surfaces name the key the same way` — two clients must not explain one
+    /// chart differently. This popover has room the web's 260 pt side panel
+    /// does not, so the length that fits THERE is the length both carry.
+    static var keyEntries: [AutonomyKeyEntry] {
+        [
+            AutonomyKeyEntry(kind: .line, from: "p50", label: "p50 · the typical run",
+                             color: seriesColors["p50"] ?? .gray, fill: nil),
+            AutonomyKeyEntry(kind: .band, from: "p95", label: "p5–p95 · the usual spread",
+                             color: edge, fill: band),
+        ]
+    }
 
     /// The scale's range in `seriesOrder`. A key with no colour would be a
     /// line drawn in the fallback grey rather than silently undrawn, which is
