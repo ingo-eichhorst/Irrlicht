@@ -22,28 +22,21 @@ func (runtime *LiveRuntime) CaptureEvidence(
 	if err := os.MkdirAll(evidenceDir, 0o755); err != nil {
 		return CapturedEvidence{}, err
 	}
-	currentRegistry, err := runtime.registrySession(owned.Registry.SessionID)
+	owned, err := runtime.refreshOwnedRegistry(owned)
 	if err != nil {
 		return CapturedEvidence{}, err
 	}
-	if err := validateRegistryIdentity(owned.Registry, currentRegistry); err != nil {
-		return CapturedEvidence{}, err
-	}
-	owned.Registry = currentRegistry
 	environment, err := runtime.captureEnvironment(ctx, owned.Registry.CWD)
 	if err != nil {
 		return CapturedEvidence{}, err
 	}
-	transcriptPath, err := runtime.transcriptPath(owned.Transcript.SessionID)
+	transcriptPath, err := runtime.verifiedTranscriptPath(owned.Transcript.SessionID)
 	if err != nil {
 		return CapturedEvidence{}, err
 	}
-	if err := validateNoToolTranscript(transcriptPath); err != nil {
+	process, err := runtime.ownedProcessEvidence(owned.Registry.SessionID)
+	if err != nil {
 		return CapturedEvidence{}, err
-	}
-	process, ok := runtime.processEvidence[owned.Registry.SessionID]
-	if !ok {
-		return CapturedEvidence{}, errors.New("owned Claude process evidence was not captured")
 	}
 	evidence := CapturedEvidence{
 		Registry: owned.Registry, TranscriptPath: transcriptPath,
@@ -55,6 +48,47 @@ func (runtime *LiveRuntime) CaptureEvidence(
 		return CapturedEvidence{}, err
 	}
 	return evidence, nil
+}
+
+// refreshOwnedRegistry re-reads the Desktop registry row for the owned
+// session and confirms its identity has not drifted since it was captured,
+// returning owned with the freshly-read row in place.
+func (runtime *LiveRuntime) refreshOwnedRegistry(owned OwnedSession) (OwnedSession, error) {
+	currentRegistry, err := runtime.registrySession(owned.Registry.SessionID)
+	if err != nil {
+		return OwnedSession{}, err
+	}
+	if err := validateRegistryIdentity(owned.Registry, currentRegistry); err != nil {
+		return OwnedSession{}, err
+	}
+	owned.Registry = currentRegistry
+	return owned, nil
+}
+
+// verifiedTranscriptPath resolves the transcript path for a session and
+// rejects it outright if it contains a tool call: this driver's turns must
+// be tool-free, and evidence built from one that is not would misrepresent
+// what ran.
+func (runtime *LiveRuntime) verifiedTranscriptPath(sessionID string) (string, error) {
+	transcriptPath, err := runtime.transcriptPath(sessionID)
+	if err != nil {
+		return "", err
+	}
+	if err := validateNoToolTranscript(transcriptPath); err != nil {
+		return "", err
+	}
+	return transcriptPath, nil
+}
+
+// ownedProcessEvidence looks up the process evidence captured for the owned
+// session's PID watch. Its absence means the watch never fired, which is an
+// error, not an empty result.
+func (runtime *LiveRuntime) ownedProcessEvidence(sessionID string) (ProcessEvidence, error) {
+	process, ok := runtime.processEvidence[sessionID]
+	if !ok {
+		return ProcessEvidence{}, errors.New("owned Claude process evidence was not captured")
+	}
+	return process, nil
 }
 
 // captureEnvironment returns what the composer showed when WaitComposer

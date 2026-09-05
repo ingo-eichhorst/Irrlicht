@@ -166,7 +166,32 @@ func buildOracleVariant(
 	return writeOracleState(baselineDir, stateDir, entries, pairs)
 }
 
+// validateOracleOptions checks the oracle's flags in the same order the
+// caller needs to reason about them: which paths must be absolute, that the
+// baseline exists, where the output must land, that this process really is
+// the real recorder's HOME, that the output does not already exist, and that
+// the bind address names a loopback port. Each check is its own function so a
+// failure names exactly one thing, and no check is skipped or reordered.
 func validateOracleOptions(options managedFileOracleOptions) error {
+	if err := validateOracleAbsolutePaths(options); err != nil {
+		return err
+	}
+	if err := validateOracleBaselineDirectory(options.baselineDir); err != nil {
+		return err
+	}
+	if err := validateOracleOutputPath(options); err != nil {
+		return err
+	}
+	if err := validateOracleRealHome(options.realHome); err != nil {
+		return err
+	}
+	if err := validateOracleOutputAbsent(options.outputDir); err != nil {
+		return err
+	}
+	return validateOracleBindAddress(options.bindAddress)
+}
+
+func validateOracleAbsolutePaths(options managedFileOracleOptions) error {
 	paths := []struct {
 		name  string
 		value string
@@ -180,23 +205,43 @@ func validateOracleOptions(options managedFileOracleOptions) error {
 			return fmt.Errorf("%s must be absolute", path.name)
 		}
 	}
-	baselineInfo, err := os.Lstat(options.baselineDir)
+	return nil
+}
+
+func validateOracleBaselineDirectory(baselineDir string) error {
+	baselineInfo, err := os.Lstat(baselineDir)
 	if err != nil || !baselineInfo.IsDir() || baselineInfo.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("baseline directory must be an existing non-symlink directory: %q", options.baselineDir)
+		return fmt.Errorf("baseline directory must be an existing non-symlink directory: %q", baselineDir)
 	}
+	return nil
+}
+
+func validateOracleOutputPath(options managedFileOracleOptions) error {
 	if filepath.Clean(options.outputDir) != filepath.Join(filepath.Clean(options.baselineDir), "oracle") {
 		return errors.New("oracle output must be the new oracle directory inside the baseline")
 	}
+	return nil
+}
+
+func validateOracleRealHome(realHome string) error {
 	currentHome, err := os.UserHomeDir()
-	if err != nil || filepath.Clean(currentHome) != filepath.Clean(options.realHome) {
-		return fmt.Errorf("real home %q does not match the process HOME %q", options.realHome, currentHome)
+	if err != nil || filepath.Clean(currentHome) != filepath.Clean(realHome) {
+		return fmt.Errorf("real home %q does not match the process HOME %q", realHome, currentHome)
 	}
-	if _, err := os.Lstat(options.outputDir); !os.IsNotExist(err) {
+	return nil
+}
+
+func validateOracleOutputAbsent(outputDir string) error {
+	if _, err := os.Lstat(outputDir); !os.IsNotExist(err) {
 		return errors.New("oracle output must not exist")
 	}
-	host, port, err := net.SplitHostPort(options.bindAddress)
+	return nil
+}
+
+func validateOracleBindAddress(bindAddress string) error {
+	host, port, err := net.SplitHostPort(bindAddress)
 	if err != nil || host != "127.0.0.1" {
-		return fmt.Errorf("oracle bind address must be numeric IPv4 loopback: %q", options.bindAddress)
+		return fmt.Errorf("oracle bind address must be numeric IPv4 loopback: %q", bindAddress)
 	}
 	numericPort, err := strconv.Atoi(port)
 	if err != nil || numericPort < 1 || numericPort > 65535 {
@@ -453,22 +498,7 @@ func writeOracleState(
 		}
 	}()
 	for _, entry := range entries {
-		source, err := oracleEntrySource(baselineDir, entry, pairs)
-		if err != nil {
-			return err
-		}
-		oracleState := "absent"
-		if source != "" {
-			data, mode, err := readBoundedRegularFile(source)
-			if err != nil {
-				return err
-			}
-			if err := os.WriteFile(filepath.Join(outputDir, entry.slot), data, mode.Perm()); err != nil {
-				return err
-			}
-			oracleState = "file"
-		}
-		if _, err := fmt.Fprintf(manifest, "%s\t%s\t%s\n", oracleState, entry.slot, entry.path); err != nil {
+		if err := writeOracleManifestEntry(baselineDir, outputDir, entry, pairs, manifest); err != nil {
 			return err
 		}
 	}
@@ -480,6 +510,34 @@ func writeOracleState(
 	}
 	manifestComplete = true
 	return nil
+}
+
+// writeOracleManifestEntry resolves the bytes one manifest entry contributes
+// to the expected state, writes them to the entry's output slot when the
+// state is not absent, and appends the resulting manifest row.
+func writeOracleManifestEntry(
+	baselineDir, outputDir string,
+	entry managedFileEntry,
+	pairs map[string]string,
+	manifest io.Writer,
+) error {
+	source, err := oracleEntrySource(baselineDir, entry, pairs)
+	if err != nil {
+		return err
+	}
+	oracleState := "absent"
+	if source != "" {
+		data, mode, err := readBoundedRegularFile(source)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(outputDir, entry.slot), data, mode.Perm()); err != nil {
+			return err
+		}
+		oracleState = "file"
+	}
+	_, err = fmt.Fprintf(manifest, "%s\t%s\t%s\n", oracleState, entry.slot, entry.path)
+	return err
 }
 
 func readBoundedRegularFile(path string) ([]byte, os.FileMode, error) {
