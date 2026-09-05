@@ -648,6 +648,38 @@ assert_eq "…and the duplication tripwire catches the re-inlined clamp" "yes" \
   "$(clamp_inlined "$MUT_REINLINED")"
 
 echo ""
+
+echo "== teardown_timings_json: absent, empty and populated are THREE answers (#1828) =="
+# The whole point of the pre-created file. "This recipe tore nothing down" is a
+# legitimate, common answer, and it must not read the same as "the rig never
+# set the path" or "the staging dir was unwritable". If those collapse, an
+# instrumentation outage reports as a clean run with nothing to measure — the
+# shape AGENTS.md forbids, and the shape a naive `rows == 0` check produces.
+TJ_DIR="$(mktemp -d)"
+trap 'rm -rf "$TJ_DIR"' EXIT
+
+assert_eq "an absent file is unrecorded, not empty" "unrecorded" \
+  "$(teardown_timings_json "$TJ_DIR/never-created.tsv" | jq -r '.status')"
+assert_eq "no path at all is unrecorded too" "unrecorded" \
+  "$(teardown_timings_json "" | jq -r '.status')"
+
+: >"$TJ_DIR/empty.tsv"
+assert_eq "an empty file means the recipe tore nothing down" "no_exit_clean" \
+  "$(teardown_timings_json "$TJ_DIR/empty.tsv" | jq -r '.status')"
+assert_eq "...and reports no maximum rather than a zero one" "null" \
+  "$(teardown_timings_json "$TJ_DIR/empty.tsv" | jq -r '.max_s')"
+
+printf '1\tsA\t0.4\tobserved\n1\tsB\t15.0\tcapped\n1\tsC\t2.6\tobserved\n' >"$TJ_DIR/rows.tsv"
+TJ="$(teardown_timings_json "$TJ_DIR/rows.tsv")"
+assert_eq "rows are recorded"        "recorded" "$(jq -r '.status' <<<"$TJ")"
+assert_eq "...counted"               "3"        "$(jq -r '.rows'   <<<"$TJ")"
+assert_eq "...with the maximum"      "15.0"     "$(jq -r '.max_s'  <<<"$TJ")"
+# Reported SEPARATELY, never folded into max_s as if it were a measurement: a
+# capped row is censored — the session was still alive when the deadline fired,
+# so its true teardown time is unknown and GREATER than the cap. A table fitted
+# without that distinction comes out tighter than the behaviour it describes.
+assert_eq "...and the censored rows counted apart" "1" "$(jq -r '.capped' <<<"$TJ")"
+
 if [[ "$fails" -eq 0 ]]; then
   echo "tmux-teardown-check_test: ALL PASS"
   exit 0

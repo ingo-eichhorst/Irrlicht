@@ -218,6 +218,66 @@ assert_eq "never gone: same sleep budget as the best-effort poll" 5 "$SLEEP_CALL
 # verdict is a fresh has-session answer, never inferred from the tick counter.
 assert_eq "never gone: verdict comes from an observation, not the counter" 6 "$HAS_SESSION_CALLS"
 
+echo "== require_tmux_session_gone records the elapsed it always counted (#1828) =="
+# DRIVE_EXIT_CLEAN_CAP_S is a stated BOUND, and its comment says a fitted table
+# would need "wall-clock from the exit key to has-session failing ... over
+# enough runs to see the tail". That wall-clock was never out of reach: the poll
+# counts it in its own tick variable and used to discard it on every run the rig
+# had ever done. These cases pin that it is now published and appended, on BOTH
+# the observed and the capped path — the capped one especially, since a run
+# truncated at the deadline is the censored observation a fitted table must not
+# quietly average in as if it were a measurement.
+TIMINGS="$TMP/teardown-timings.tsv"
+: >"$TIMINGS"
+# shellcheck disable=SC2034  # read by the SOURCED teardown.sh (_drive_record_teardown_timing), which shellcheck does not follow.
+DRIVE_TEARDOWN_TIMINGS="$TIMINGS"
+
+HAS_SESSION_TRUE_COUNT=0; HAS_SESSION_CALLS=0; SLEEP_CALLS=0
+require_tmux_session_gone "sess-a" 2
+assert_eq "already gone: elapsed is 0.0" "0.0" "$TMUX_SESSION_GONE_ELAPSED_S"
+
+HAS_SESSION_TRUE_COUNT=3; HAS_SESSION_CALLS=0; SLEEP_CALLS=0
+require_tmux_session_gone "sess-b" 2
+assert_eq "gone after 3 ticks: elapsed is 0.6s (3 x 0.2)" "0.6" "$TMUX_SESSION_GONE_ELAPSED_S"
+
+HAS_SESSION_TRUE_COUNT=999; HAS_SESSION_CALLS=0; SLEEP_CALLS=0
+require_tmux_session_gone "sess-c" 1 || true
+assert_eq "capped at 1s: elapsed is 1.0" "1.0" "$TMUX_SESSION_GONE_ELAPSED_S"
+
+assert_eq "one row per teardown" 3 "$(awk 'END{print NR}' "$TIMINGS")"
+assert_eq "the capped run is marked capped, not observed" \
+  "capped" "$(awk -F'\t' '$2 == "sess-c" {print $4}' "$TIMINGS")"
+assert_eq "the observed runs are marked observed" \
+  "observed observed" "$(awk -F'\t' '$4 == "observed" {printf "%s%s", sep, $4; sep=" "}' "$TIMINGS")"
+assert_eq "each row carries its session" \
+  "sess-a sess-b sess-c" "$(awk -F'\t' '{printf "%s%s", sep, $2; sep=" "}' "$TIMINGS")"
+
+# Nothing set the path: the poll must behave exactly as it did before #1828.
+# A driver run outside the rig is the normal case for this, not an error.
+unset DRIVE_TEARDOWN_TIMINGS
+HAS_SESSION_TRUE_COUNT=0; HAS_SESSION_CALLS=0; SLEEP_CALLS=0
+require_tmux_session_gone "sess-d" 2; rc=$?
+assert_eq "no path set: the verdict is unchanged" 0 "$rc"
+assert_eq "no path set: still publishes the elapsed" "0.0" "$TMUX_SESSION_GONE_ELAPSED_S"
+assert_eq "no path set: writes nothing" 3 "$(awk 'END{print NR}' "$TIMINGS")"
+
+# AGENTS.md — a mechanism that cannot run must say so. An unwritable path warns
+# on stderr and still returns the teardown's own verdict: this is instrumentation
+# beside the teardown, and a recording is not worth losing over a timings file.
+mkdir -p "$TMP/timings-is-a-dir"
+# shellcheck disable=SC2034  # read by the SOURCED teardown.sh (_drive_record_teardown_timing), which shellcheck does not follow.
+DRIVE_TEARDOWN_TIMINGS="$TMP/timings-is-a-dir"
+HAS_SESSION_TRUE_COUNT=0; HAS_SESSION_CALLS=0; SLEEP_CALLS=0
+WARN="$(require_tmux_session_gone "sess-e" 2 2>&1 >/dev/null)"; rc=$?
+assert_eq "unwritable path: the teardown verdict is unchanged" 0 "$rc"
+case "$WARN" in
+  *"could not append a teardown timing"*)
+    pass "unwritable path: warns loudly instead of returning quietly" ;;
+  *) fail "unwritable path: warns loudly instead of returning quietly" \
+          "a warning naming the timings file" "${WARN:-<silence>}" ;;
+esac
+unset DRIVE_TEARDOWN_TIMINGS
+
 unset -f tmux sleep
 
 echo "== wait_pid_gone: polls until kill -0 fails, capped at max_wait; no-op on empty pid =="

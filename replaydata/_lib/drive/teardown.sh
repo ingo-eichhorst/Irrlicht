@@ -77,12 +77,67 @@ require_tmux_session_gone() { # <session> [max_wait_secs]
   local ticks=$(( max_wait * 5 )) w=0
   while tmux has-session -t "$session" 2>/dev/null; do
     if [[ $w -ge $ticks ]]; then
+      _drive_record_teardown_timing "$session" "$w" capped
       return 1   # cap expired and the session is STILL there — a real failure
     fi
     sleep 0.2
     w=$((w + 1))
   done
+  _drive_record_teardown_timing "$session" "$w" observed
   return 0       # has-session failed: the session is OBSERVED gone
+}
+
+# TMUX_SESSION_GONE_ELAPSED_S — how long the poll above actually waited, in
+# seconds to one decimal. Set by every require_tmux_session_gone call, on both
+# the observed and the capped path.
+#
+# WHY THIS EXISTS (#1828 item 5). DRIVE_EXIT_CLEAN_CAP_S below is a stated
+# BOUND, not a measurement, and its own comment says what a real number would
+# take: "per adapter, wall-clock from the exit key to `tmux has-session`
+# failing, on a loaded host, over enough runs to see the tail". That reads like
+# a recording campaign nobody has time for. It is not — the loop above already
+# counts exactly that wall-clock in `w`, and threw the number away on every run
+# the rig has ever done. Recording it costs nothing and makes the measurement a
+# by-product of ordinary recording rather than a campaign of its own.
+TMUX_SESSION_GONE_ELAPSED_S=0
+
+# _drive_record_teardown_timing <session> <ticks> <observed|capped>
+#
+# Publishes the elapsed time, and appends one row to $DRIVE_TEARDOWN_TIMINGS
+# when the rig set that path. Deliberately env-driven rather than a per-driver
+# call: nine drivers already hand this cap to require_tmux_session_gone, and a
+# per-driver recording line is the duplication #1828 item 4 existed to remove.
+# run-cell.sh exports the path, so every adapter is instrumented by sourcing
+# this file — including adapters added later, which is the point.
+#
+# A row is `<epoch>\t<session>\t<seconds>\t<outcome>`. `capped` rows matter
+# MORE than `observed` ones: they are the runs where the deadline truncated a
+# TUI mid-flush, and a table fitted without them would be fitted on exactly the
+# cases the cap is supposed to bound.
+#
+# An append that FAILS says so on stderr rather than returning quietly. Per
+# AGENTS.md a mechanism that cannot run must not read like one that found
+# nothing — and "no rows" is a legitimate answer here (a recipe with no
+# exit_clean step), so silence would be indistinguishable from an unwritable
+# staging dir. It never fails the run: this is instrumentation beside the
+# teardown, and a recording is not worth losing over a timings file.
+_drive_record_teardown_timing() { # <session> <ticks> <outcome>
+  local session="$1" ticks="$2" outcome="$3"
+  # Integer arithmetic only: each tick is 0.2s, so ticks/5 seconds and
+  # (ticks%5)*2 tenths. bash 3.2 (the recording host's /bin/bash) has no
+  # floating point, and shelling out to bc or awk per teardown would be a real
+  # cost on a poll that otherwise costs one has-session call.
+  TMUX_SESSION_GONE_ELAPSED_S="$(( ticks / 5 )).$(( (ticks % 5) * 2 ))"
+  [ -n "${DRIVE_TEARDOWN_TIMINGS:-}" ] || return 0
+  if ! printf '%s\t%s\t%s\t%s\n' \
+       "$(date +%s)" "$session" "$TMUX_SESSION_GONE_ELAPSED_S" "$outcome" \
+       >>"$DRIVE_TEARDOWN_TIMINGS" 2>/dev/null; then
+    echo "[driver] WARNING: could not append a teardown timing to" \
+         "$DRIVE_TEARDOWN_TIMINGS — this run contributes no data point for the" \
+         "DRIVE_EXIT_CLEAN_CAP_S measurement (#1828). The teardown itself was" \
+         "unaffected: the session was $outcome after ${TMUX_SESSION_GONE_ELAPSED_S}s." >&2
+  fi
+  return 0
 }
 
 # DRIVE_EXIT_CLEAN_CAP_S — the cap every driver's step_exit_clean hands to
@@ -125,9 +180,24 @@ require_tmux_session_gone() { # <session> [max_wait_secs]
 # the outcome it prevents is a truncated transcript plus a spurious driver fault
 # on an agent that was still flushing.
 #
-# Lowering it again needs the measurement this comment could not take: per
+# Lowering it again needs a measurement this comment could not take: per
 # adapter, wall-clock from the exit key to `tmux has-session` failing, on a
 # loaded host, over enough runs to see the tail.
+#
+# THAT DATA IS NOW BEING COLLECTED (#1828 item 5). The number was never out of
+# reach — require_tmux_session_gone above always counted it and always discarded
+# it. It now publishes TMUX_SESSION_GONE_ELAPSED_S and appends a row per
+# teardown to $DRIVE_TEARDOWN_TIMINGS, which run-cell.sh and run-cell-multi.sh
+# both set and fold into the run manifest. So every ordinary recording run
+# contributes a data point, and fitting a per-adapter table becomes a question
+# of reading manifests rather than of mounting a campaign.
+#
+# What is still open, stated so nobody reads the collection as the conclusion:
+# nothing has been fitted yet, this host contributes no gemini-cli rows at all
+# (its account is tier-ineligible), and gemini-cli is one of the two Ink/node
+# TUIs whose teardown is the latency actually being bounded. Until there are
+# rows across adapters AND a tail worth looking at, 15 stays what it says it
+# is: a generous bound, not a fitted one.
 # shellcheck disable=SC2034  # read by the DRIVERS that source this lib (each
 # step_exit_clean), never by this file.
 DRIVE_EXIT_CLEAN_CAP_S=15

@@ -328,7 +328,17 @@ for a in "${ADAPTERS[@]}"; do
   driver="$REPO_ROOT/replaydata/agents/$a/driver-interactive.sh"
   [[ -x "$driver" ]] || { echo "driver missing: $driver" >&2; exit 1; }
   echo "launching $a driver (shared cwd=$SHARED_CWD, timeout=${timeout_s}s)"
+  # Teardown timings (#1828 item 5), per adapter — same contract as
+  # run-cell.sh's: pre-created so absent means the rig failed, never that this
+  # recipe tore nothing down. This rig is where a loaded host actually happens,
+  # since it drives several agents at once, so its rows carry the tail the cap
+  # was chosen to cover.
+  if ! : >"$sub/teardown-timings.tsv" 2>/dev/null; then
+    echo "WARNING: could not create $sub/teardown-timings.tsv — $a contributes" \
+         "no teardown timing this run (#1828)." >&2
+  fi
   IRRLICHT_ONBOARD_CWD="$SHARED_CWD" \
+    DRIVE_TEARDOWN_TIMINGS="$sub/teardown-timings.tsv" \
     "$driver" "$sub" "$uuid" "$timeout_s" "$sub/settings.json" "$script_json" \
     >"$sub/driver.out" 2>&1 &
   # `$!` is the RUN IDENTITY the teardown gate matches session names against,
