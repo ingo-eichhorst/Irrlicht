@@ -236,12 +236,24 @@ func ParseRecipe(data []byte) ([]Step, error) {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("decode Desktop recipe script: %w", err)
 	}
+	if missing := unknownRecipeFields(raw); len(missing) > 0 {
+		return nil, &NotRunnableError{Missing: missing}
+	}
+	var steps []Step
+	if err := json.Unmarshal(data, &steps); err != nil {
+		return nil, fmt.Errorf("decode Desktop recipe script: %w", err)
+	}
+	return steps, nil
+}
+
+// unknownRecipeFields names every step field outside the grammar, one
+// MissingControl per field, sorted by step position then control name so a
+// recording operator sees them in script order rather than map iteration
+// order.
+func unknownRecipeFields(raw []map[string]json.RawMessage) []MissingControl {
 	var missing []MissingControl
 	for index, object := range raw {
-		var stepType string
-		if encoded, ok := object["type"]; ok {
-			_ = json.Unmarshal(encoded, &stepType)
-		}
+		stepType := recipeStepType(object)
 		for field := range object {
 			if _, known := recipeStepFields[field]; known {
 				continue
@@ -252,20 +264,25 @@ func ParseRecipe(data []byte) ([]Step, error) {
 			})
 		}
 	}
-	if len(missing) > 0 {
-		sort.Slice(missing, func(left, right int) bool {
-			if missing[left].Index != missing[right].Index {
-				return missing[left].Index < missing[right].Index
-			}
-			return missing[left].Control < missing[right].Control
-		})
-		return nil, &NotRunnableError{Missing: missing}
+	sort.Slice(missing, func(left, right int) bool {
+		if missing[left].Index != missing[right].Index {
+			return missing[left].Index < missing[right].Index
+		}
+		return missing[left].Control < missing[right].Control
+	})
+	return missing
+}
+
+// recipeStepType reads a step object's `type` field without failing the whole
+// decode: an unrecognised field is reported by name below, and the step type
+// it names is best-effort context for that report, not something this pass
+// validates itself.
+func recipeStepType(object map[string]json.RawMessage) string {
+	var stepType string
+	if encoded, ok := object["type"]; ok {
+		_ = json.Unmarshal(encoded, &stepType)
 	}
-	var steps []Step
-	if err := json.Unmarshal(data, &steps); err != nil {
-		return nil, fmt.Errorf("decode Desktop recipe script: %w", err)
-	}
-	return steps, nil
+	return stepType
 }
 
 // Plan decides whether the Desktop driver can drive this recipe, and returns a

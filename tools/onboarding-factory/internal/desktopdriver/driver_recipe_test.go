@@ -81,8 +81,11 @@ func TestRunDrivesEveryElicitedStepThroughItsControl(t *testing.T) {
 	// recipe asked for, and a driver that reordered steps would still contain
 	// them all.
 	want := []string{
-		"preflight", "baseline", "cleanup_armed", "open", "composer", "owned",
-		"state_ready", "set_prompt", "submit", "state_working",
+		// The first send binds ownership AFTER Submit, and opens with no
+		// readiness wait: Claude Desktop writes no registry row until a message
+		// is sent, so a slot that has never sent has no session yet to be ready.
+		"preflight", "baseline", "cleanup_armed", "open", "composer",
+		"set_prompt", "submit", "owned", "state_working",
 		"hook", "state_ready",
 		"sleep_2s",
 		"state_ready", "set_prompt", "submit", "state_working",
@@ -199,10 +202,20 @@ func TestMultiSessionRunKeepsEveryIdentityApartAndArchivesBoth(t *testing.T) {
 // A run that fails AFTER starting its second session must still archive both.
 // The teardown list grows as sessions are adopted, so this is the case that
 // proves it is not pinned to the first.
+//
+// Both sessions must actually SEND before the injected failure: a Desktop
+// composer that has never been typed into and submitted owns no session at
+// all — Claude Desktop writes no registry row until the first message is
+// sent — so a start_session with no send after it has nothing for teardown to
+// archive.
 func TestFailureAfterStartSessionStillArchivesEverySessionThisRunCreated(t *testing.T) {
 	runtime := &fakeRuntime{failAt: "mode_Plan"}
 	request := recipeRunRequest([]Step{
+		{Type: StepSend, Text: "alpha"},
+		{Type: StepWaitTurn},
 		{Type: StepStartSession},
+		{Type: StepSend, Text: "bravo"},
+		{Type: StepWaitTurn},
 		{Type: StepMode, Value: "Plan"},
 	})
 	_, err := Run(context.Background(), runtime, request)
@@ -218,9 +231,16 @@ func TestFailureAfterStartSessionStillArchivesEverySessionThisRunCreated(t *test
 // Adopting one Desktop identity twice would make teardown archive it twice and
 // the identity table claim two sessions ran. A second composer that resolves to
 // the SAME registry row is a refusal, not a second slot.
+//
+// Both slots must actually send: ownership is bound by a slot's first `send`
+// (see sendFirst), not by start_session itself, so the duplicate is only
+// discoverable once the second slot's own send tries to adopt it.
 func TestAdoptingTheSameDesktopSessionTwiceIsRefused(t *testing.T) {
 	runtime := &duplicateSessionRuntime{}
-	_, err := Run(context.Background(), runtime, recipeRunRequest([]Step{{Type: StepStartSession}}))
+	_, err := Run(context.Background(), runtime, recipeRunRequest([]Step{
+		{Type: StepSend, Text: "alpha"}, {Type: StepWaitTurn},
+		{Type: StepStartSession}, {Type: StepSend, Text: "bravo"},
+	}))
 	if err == nil || !strings.Contains(err.Error(), "cannot own one session twice") {
 		t.Fatalf("Run() error = %v; want a duplicate-adoption refusal", err)
 	}
@@ -245,10 +265,15 @@ func (runtime *duplicateSessionRuntime) WaitOwnedSession(
 // Ownership selection refuses more than one post-baseline session, so a second
 // start_session only works if the first one's ID has been folded into the
 // baseline the selector is handed. Mutating that fold out is what this pins.
+//
+// The second slot needs its own send too: WaitOwnedSession only runs when a
+// slot's first send binds it (see sendFirst), so a start_session with nothing
+// sent into it never calls ownership selection at all.
 func TestStartSessionHandsOwnershipSelectionTheGrownBaseline(t *testing.T) {
 	runtime := &baselineRecordingRuntime{}
 	request := recipeRunRequest([]Step{
-		{Type: StepSend, Text: "alpha"}, {Type: StepWaitTurn}, {Type: StepStartSession},
+		{Type: StepSend, Text: "alpha"}, {Type: StepWaitTurn},
+		{Type: StepStartSession}, {Type: StepSend, Text: "bravo"},
 	})
 	if _, err := Run(context.Background(), runtime, request); err != nil {
 		t.Fatalf("Run() error = %v", err)

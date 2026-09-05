@@ -96,14 +96,20 @@ func planVerdict(script []byte) string {
 	return "not-runnable: " + strings.Join(controls, ", ")
 }
 
-func TestDesktopRecipeCensusCoversEveryClaudecodeRecipe(t *testing.T) {
-	scripts := loadClaudecodeRecipes(t)
+// buildCensusRows plans every recipe and sorts the results by scenario name,
+// so the golden's ordering is deterministic regardless of map iteration order.
+func buildCensusRows(scripts map[string][]byte) []censusRow {
 	rows := make([]censusRow, 0, len(scripts))
 	for scenario, script := range scripts {
 		rows = append(rows, censusRow{scenario: scenario, verdict: planVerdict(script)})
 	}
 	sort.Slice(rows, func(left, right int) bool { return rows[left].scenario < rows[right].scenario })
+	return rows
+}
 
+// renderCensus writes the golden file's exact text: the header, one line per
+// scenario, and the runnable/total summary.
+func renderCensus(rows []censusRow) string {
 	var builder strings.Builder
 	builder.WriteString(censusHeader)
 	runnable := 0
@@ -115,7 +121,12 @@ func TestDesktopRecipeCensusCoversEveryClaudecodeRecipe(t *testing.T) {
 	}
 	fmt.Fprintf(&builder, "#\n# %d of %d scripted claudecode recipes are runnable through Claude Desktop.\n",
 		runnable, len(rows))
-	got := builder.String()
+	return builder.String()
+}
+
+func TestDesktopRecipeCensusCoversEveryClaudecodeRecipe(t *testing.T) {
+	scripts := loadClaudecodeRecipes(t)
+	got := renderCensus(buildCensusRows(scripts))
 
 	if os.Getenv("UPDATE_DESKTOP_CENSUS") == "1" {
 		if err := os.WriteFile(censusGolden, []byte(got), 0o644); err != nil {

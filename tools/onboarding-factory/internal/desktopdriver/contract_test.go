@@ -102,35 +102,49 @@ func TestDeclarationGuardGoesRedOnEveryCommittedMutation(t *testing.T) {
 		"slash-allowed-in-send.sh":           "DRIVE_SLASH_REQUIRES_STEP_TYPE is",
 	}
 	dir := filepath.Join("testdata", "driver-declaration-mutations")
+	requireFixtureCountMatches(t, dir, len(fixtures))
+	for name, want := range fixtures {
+		t.Run(name, func(t *testing.T) {
+			assertDeclarationGuardRefusesFixture(t, dir, name, want)
+		})
+	}
+}
+
+// requireFixtureCountMatches counts the ".sh" fixtures on disk against the
+// table's own count. A fixture added without a table entry would otherwise
+// never run, and this test would keep passing.
+func requireFixtureCountMatches(t *testing.T, dir string, want int) {
+	t.Helper()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatalf("read mutation fixtures: %v", err)
 	}
-	// Count the fixtures on disk against the table. A fixture added without a
-	// table entry would otherwise never run, and this test would keep passing.
 	found := 0
 	for _, entry := range entries {
 		if strings.HasSuffix(entry.Name(), ".sh") {
 			found++
 		}
 	}
-	if found != len(fixtures) {
-		t.Fatalf("found %d mutation fixtures in %s, expected %d", found, dir, len(fixtures))
+	if found != want {
+		t.Fatalf("found %d mutation fixtures in %s, expected %d", found, dir, want)
 	}
-	for name, want := range fixtures {
-		t.Run(name, func(t *testing.T) {
-			raw, err := os.ReadFile(filepath.Join(dir, name))
-			if err != nil {
-				t.Fatalf("read mutation fixture: %v", err)
-			}
-			err = checkDesktopDeclarations(string(raw))
-			if err == nil {
-				t.Fatal("the declaration guard accepted a mutated driver declaration")
-			}
-			if !strings.Contains(err.Error(), want) {
-				t.Fatalf("guard error = %v; want it to name %q", err, want)
-			}
-		})
+}
+
+// assertDeclarationGuardRefusesFixture proves the guard goes red on one
+// committed mutation, and that its error names the reason the mutation was
+// chosen to prove.
+func assertDeclarationGuardRefusesFixture(t *testing.T, dir, name, want string) {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(dir, name))
+	if err != nil {
+		t.Fatalf("read mutation fixture: %v", err)
+	}
+	err = checkDesktopDeclarations(string(raw))
+	if err == nil {
+		t.Fatal("the declaration guard accepted a mutated driver declaration")
+	}
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("guard error = %v; want it to name %q", err, want)
 	}
 }
 

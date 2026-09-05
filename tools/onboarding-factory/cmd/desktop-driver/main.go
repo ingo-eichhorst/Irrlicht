@@ -189,8 +189,18 @@ func parseOptions(args []string) (options, error) {
 	if flags.NArg() != 0 {
 		return options{}, errors.New("desktop-driver accepts flags only")
 	}
+	if err := validateOptionShape(value); err != nil {
+		return options{}, err
+	}
+	return resolveOptionPaths(value)
+}
+
+// validateOptionShape checks the flag set's own constraints, before anything
+// touches the filesystem: exactly one input form, every path flag absolute,
+// and the non-path flags present.
+func validateOptionShape(value options) error {
 	if (value.promptFile == "") == (value.scriptFile == "") {
-		return options{}, errors.New("exactly one of --prompt-file and --script-file is required")
+		return errors.New("exactly one of --prompt-file and --script-file is required")
 	}
 	inputName, inputPath := "prompt file", value.promptFile
 	if value.scriptFile != "" {
@@ -209,12 +219,20 @@ func parseOptions(args []string) (options, error) {
 	}
 	for _, path := range paths {
 		if !filepath.IsAbs(path.value) {
-			return options{}, fmt.Errorf("%s must be absolute", path.name)
+			return fmt.Errorf("%s must be absolute", path.name)
 		}
 	}
 	if value.daemonAddress == "" || value.irrlichtVersion == "" || value.timeout <= 0 {
-		return options{}, errors.New("daemon address, Irrlicht version, and a positive timeout are required")
+		return errors.New("daemon address, Irrlicht version, and a positive timeout are required")
 	}
+	return nil
+}
+
+// resolveOptionPaths resolves every path flag to its real, symlink-free form
+// and proves each one resolves under the repository's own .build tree — the
+// sandbox this command may read and write. validateOptionShape has already
+// proven every flag here is absolute and that exactly one input form is set.
+func resolveOptionPaths(value options) (options, error) {
 	realRepo, err := filepath.EvalSymlinks(filepath.Clean(value.repoRoot))
 	if err != nil {
 		return options{}, fmt.Errorf("resolve repository root: %w", err)
