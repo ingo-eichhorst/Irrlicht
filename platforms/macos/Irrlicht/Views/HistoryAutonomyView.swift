@@ -108,18 +108,55 @@ struct HistoryAutonomyContentView: View {
                 .font(.caption)
                 .foregroundColor(.secondary)
             if spans.hasData {
+                // A header over the value column: the figure at the end of
+                // each row was a bare duration with nothing saying what it
+                // measured.
+                stripHeader
                 ForEach(spans.projects, id: \.self) { project in
                     AutonomyStripRow(project: project,
                                      spans: spans.spans(for: project),
                                      start: spans.start,
                                      end: spans.end)
                 }
+                // …and the window's bounds under it, so a mark can be placed
+                // in time. Two labels, not a tick axis: at 12mo a full axis is
+                // more furniture than the strip is worth, but "from when to
+                // when" is the difference between a timeline and a texture.
+                stripAxis
                 stripLegend
                 if spans.truncated { truncationNote }
             } else {
                 emptyStripText
             }
         }
+    }
+
+    /// Column header for the per-row "longest" figure. Right-aligned by the
+    /// same Spacer the rows use, so it sits over the values it names.
+    private var stripHeader: some View {
+        HStack(spacing: IrrSpacing.sp2) {
+            Text("project")
+            Spacer(minLength: IrrSpacing.sp2)
+            Text("longest")
+        }
+        .font(.caption2)
+        .foregroundColor(.secondary)
+        .accessibilityHidden(true) // each row's own label already says "longest"
+    }
+
+    /// The strip's window bounds: where it starts on the left, `now` on the
+    /// right. The start label coarsens with the window (a time of day at 8h, a
+    /// month at 12mo) — see AutonomyFormat.axisBound.
+    private var stripAxis: some View {
+        HStack(spacing: IrrSpacing.sp2) {
+            Text(AutonomyFormat.axisBound(Date(timeIntervalSince1970: TimeInterval(spans.start)),
+                                          windowSeconds: spans.end - spans.start,
+                                          timeZone: formatTimeZone))
+            Spacer(minLength: IrrSpacing.sp2)
+            Text("now")
+        }
+        .font(.caption2)
+        .foregroundColor(.secondary)
     }
 
     private var stripLegend: some View {
@@ -236,11 +273,11 @@ private struct AutonomyDurationChart: View {
                 .opacity(0.45)
             }
         }
-        .chartForegroundStyleScale([
-            "p95": IrrColors.ready,
-            "p50": IrrColors.working,
-            "p5": IrrColors.waiting,
-        ])
+        // One table for the three lines, read by the scale AND by the legend
+        // Swift Charts derives from it — the web's twin of this is
+        // AUTONOMY_SERIES, and both surfaces must name the lines the same way.
+        .chartForegroundStyleScale(domain: AutonomyPalette.seriesOrder,
+                                   range: AutonomyPalette.seriesRange)
         .chartYScale(domain: yDomain, type: .log)
         .chartYAxis {
             AxisMarks { value in
@@ -320,6 +357,24 @@ private struct AutonomyStripRow: View {
 // MARK: - Palette + formatting
 
 enum AutonomyPalette {
+    /// The three drawn lines, in draw order, and their colours — ONE table,
+    /// read by the chart's style scale and therefore by the legend Swift
+    /// Charts derives from it, so the key and the curves cannot disagree.
+    /// Mirrors the web's AUTONOMY_SERIES, which had to gain the same property
+    /// when QA found three unlabelled curves there.
+    static let seriesOrder = ["p95", "p50", "p5"]
+    static let seriesColors: [String: Color] = [
+        "p95": IrrColors.ready,
+        "p50": IrrColors.working,
+        "p5": IrrColors.waiting,
+    ]
+
+    /// The scale's range in `seriesOrder`. A key with no colour would be a
+    /// line drawn in the fallback grey rather than silently undrawn, which is
+    /// why this cannot crash on a bad key — but `seriesColorsCoverEveryLine`
+    /// in the tests refuses one.
+    static var seriesRange: [Color] { seriesOrder.map { seriesColors[$0] ?? .gray } }
+
     /// A column's fill. An unnamed reason is drawn neutral rather than
     /// skipped: the run happened, this build just cannot say how it ended.
     static func color(for reason: AutonomyEndReason?) -> Color {
@@ -352,12 +407,30 @@ enum AutonomyFormat {
         return h == 0 ? "\(d)d" : "\(d)d\(h)h"
     }
 
+    /// The run strip's left bound, coarsening with the window the way the
+    /// activity matrix's column headers do: an 8h strip needs a time of day, a
+    /// 12mo strip needs a month. In the caller's zone (#1659), never the
+    /// machine's.
+    static func axisBound(_ date: Date, windowSeconds: Int64, timeZone: TimeZone) -> String {
+        if windowSeconds <= 36 * 3600 { return formatted(date, "HH:mm", timeZone) }
+        if windowSeconds <= 60 * 86400 { return formatted(date, "MMM d", timeZone) }
+        return formatted(date, "MMM yyyy", timeZone)
+    }
+
     /// X-axis tick label, in the caller's zone (#1659 — never the machine's).
     static func axisDate(_ date: Date, timeZone: TimeZone) -> String {
+        formatted(date, "MMM d", timeZone)
+    }
+
+    /// POSIX-locale formatter for one pattern in one zone. `locale` is assigned
+    /// before `dateFormat` on purpose: `dateFormat` is interpreted against the
+    /// formatter's current locale, so the reverse order silently re-interprets
+    /// the pattern (the same note HistoryFormat.posix carries).
+    private static func formatted(_ date: Date, _ pattern: String, _ timeZone: TimeZone) -> String {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
         f.timeZone = timeZone
-        f.dateFormat = "MMM d"
+        f.dateFormat = pattern
         return f.string(from: date)
     }
 

@@ -4,10 +4,16 @@ import {
   AUTONOMY_RANGE_LABELS,
   AUTONOMY_SPAN_LABELS,
   AUTONOMY_REASON_PRIORITY,
+  AUTONOMY_SERIES,
   autonomyQuery,
   autonomyChartPoints,
   autonomyDuration,
   autonomyProvenanceLine,
+  autonomyAxisLabel,
+  autonomySeriesColor,
+  autonomyPanelRows,
+  buildAutonomyStripHeader,
+  buildAutonomyStripAxis,
   collapseAutonomyStrip,
 } from './historyTab.js'
 import { historyPriorityForState } from './irrlicht.js'
@@ -168,6 +174,128 @@ describe('“no data” never reads as “you did nothing”', () => {
     const line = autonomyProvenanceLine({ earliest_span: 1_700_000_000, total_recorded: 312 })
     expect(line).toMatch(/Collecting since/)
     expect(line).toMatch(/312 runs recorded/)
+  })
+})
+
+describe('the chart names its three lines', () => {
+  // QA found three unlabelled curves on the web: the panel built p95/p50/p5
+  // rows and then blanked every swatch (`background = 'transparent'`), so the
+  // only way to tell the lines apart was vertical order. These pin the key.
+  //
+  // `cs` here returns '' for every custom property, which is what an unstyled
+  // document (and jsdom) gives — so this exercises the fallback branch, the
+  // one a stylesheet-less render actually takes.
+  const unstyled = { getPropertyValue: () => '' }
+
+  test('every drawn line resolves to a non-empty colour', () => {
+    for (const [key] of AUTONOMY_SERIES) {
+      expect(autonomySeriesColor(key, unstyled)).toBeTruthy()
+    }
+  })
+
+  test('the three line colours are distinct', () => {
+    const colors = AUTONOMY_SERIES.map(([key]) => autonomySeriesColor(key, unstyled))
+    expect(new Set(colors).size).toBe(AUTONOMY_SERIES.length)
+  })
+
+  test('the series table covers exactly the three drawn lines', () => {
+    expect(AUTONOMY_SERIES.map(([key]) => key)).toEqual(['p95', 'p50', 'p5'])
+  })
+
+  test('a key that is not a drawn line gets no colour', () => {
+    // longest/shortest/runs are FIGURES, not lines. A swatch for one of them
+    // would claim a curve the chart deliberately does not draw.
+    expect(autonomySeriesColor('longest', unstyled)).toBe('')
+    expect(autonomySeriesColor('p90', unstyled)).toBe('')
+  })
+
+  test('a themed document wins over the fallback', () => {
+    const themed = { getPropertyValue: (name) => (name === '--ready' ? ' #123456 ' : '') }
+    expect(autonomySeriesColor('p95', themed)).toBe('#123456')
+    expect(autonomySeriesColor('p50', themed)).toBe('#8B5CF6')
+  })
+
+  // THE DEFECT ITSELF. The panel used to build these rows and then set every
+  // dot to `transparent`, so the key existed in the markup and said nothing.
+  // Asserting on the resolver alone would not have caught that; these assert
+  // on the rows the panel actually renders.
+  const summary = { p95: 3600, p50: 600, p5: 30, min: 8, max: 7200, count: 312 }
+  const unstyledCS = { getPropertyValue: () => '' }
+
+  test('the three line rows carry non-empty, distinct swatches', () => {
+    const rows = autonomyPanelRows(summary, unstyledCS)
+    const lines = rows.filter(r => r.series)
+    expect(lines.map(r => r.series)).toEqual(['p95', 'p50', 'p5'])
+    for (const row of lines) {
+      expect(row.swatch).toBeTruthy()
+      expect(row.swatch).not.toBe('transparent')
+    }
+    expect(new Set(lines.map(r => r.swatch)).size).toBe(3)
+  })
+
+  test('the figures stay unswatched — they are not lines', () => {
+    const figures = autonomyPanelRows(summary, unstyledCS).filter(r => !r.series)
+    expect(figures.map(r => r.label)).toEqual(['longest', 'shortest', 'runs'])
+    for (const row of figures) expect(row.swatch).toBe('transparent')
+  })
+
+  test('every line row names its percentile in words', () => {
+    for (const row of autonomyPanelRows(summary, unstyledCS).filter(r => r.series)) {
+      expect(row.label).toContain(row.series)
+      expect(row.label.length).toBeGreaterThan(row.series.length)
+    }
+  })
+
+  test('an empty summary still produces the full key', () => {
+    const rows = autonomyPanelRows(undefined, unstyledCS)
+    expect(rows).toHaveLength(6)
+    expect(rows[5].value).toBe('0')
+  })
+})
+
+describe('the strip labels its value column and its window', () => {
+  test('the header names the value column', () => {
+    const head = buildAutonomyStripHeader()
+    expect(head.textContent).toContain('longest')
+    // Same grid as a data row, so the header lands over the column it names.
+    expect(head.className).toContain('history-autonomy-row')
+    expect(head.children).toHaveLength(3)
+  })
+
+  test('the axis states where the window starts and that it ends now', () => {
+    const now = Math.floor(Date.UTC(2026, 0, 9) / 1000)
+    const start = now - 7 * 86400
+    const axis = buildAutonomyStripAxis({ start, end: now })
+    const bounds = axis.querySelector('.history-autonomy-axis-bounds')
+    expect(bounds).toBeTruthy()
+    expect(bounds.children).toHaveLength(2)
+    expect(bounds.children[1].textContent).toBe('now')
+    // The left bound must be a HUMAN label, not the raw epoch seconds — the
+    // whole point is that a mark can be placed in time by reading it.
+    expect(bounds.children[0].textContent).toBe(autonomyAxisLabel(start, now - start))
+    expect(bounds.children[0].textContent).not.toContain(String(start))
+  })
+})
+
+describe('the strip states its own time bounds', () => {
+  // Without them the strip is texture: at 30d and 12mo a mark cannot be
+  // placed in time at all.
+  const jan2 = Date.UTC(2026, 0, 2, 15, 30) / 1000
+
+  test('a short window labels a time of day, a long one a date', () => {
+    expect(autonomyAxisLabel(jan2, 8 * 3600)).toMatch(/\d/)
+    expect(autonomyAxisLabel(jan2, 8 * 3600)).not.toMatch(/Jan/)
+    expect(autonomyAxisLabel(jan2, 7 * 86400)).toMatch(/Jan/)
+  })
+
+  test('a year-long window coarsens to a month, not a day', () => {
+    const label = autonomyAxisLabel(jan2, 365 * 86400)
+    expect(label).toMatch(/Jan/)
+    expect(label).toMatch(/2026/)
+  })
+
+  test('a missing timestamp still renders something', () => {
+    expect(autonomyAxisLabel(undefined, 86400)).toBeTruthy()
   })
 })
 

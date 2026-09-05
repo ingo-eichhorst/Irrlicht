@@ -840,11 +840,40 @@ export function autonomyChartPoints(duration) {
   return starts.map(ts => byTs.get(ts) || null);
 }
 
-const AUTONOMY_SERIES = [
+// The three drawn lines, in draw order: series key, the CSS custom property
+// that colours it, and the fallback for a stylesheet that has not loaded.
+//
+// EXPORTED, and read by both the canvas painter and the side panel's key
+// swatches. The web shipped its first round with three unlabelled curves and a
+// panel that explicitly blanked its dots, so a reader had to infer which line
+// was which from vertical order. A key drawn from a SECOND colour table would
+// be worse than none — it can disagree with the chart — so there is one table
+// and one resolver.
+export const AUTONOMY_SERIES = [
   ['p95', '--ready', '#34C759'],
   ['p50', '--working', '#8B5CF6'],
   ['p5', '--waiting', '#FF9500'],
 ];
+
+// Panel labels for the three lines. Split from the colour table only because
+// the canvas has no use for them.
+const AUTONOMY_SERIES_LABELS = {
+  p95: 'p95 · how long the good runs go',
+  p50: 'p50 · the typical run',
+  p5: 'p5 · how short the bad runs are',
+};
+
+// autonomySeriesColor resolves one line's colour against the live theme,
+// falling back to the literal when the custom property is unset (an
+// unstyled document, or a test's stub). Returns '' for a key that is not a
+// drawn line, so a caller cannot silently paint a swatch for something the
+// chart never drew.
+export function autonomySeriesColor(key, cs) {
+  const row = AUTONOMY_SERIES.find(([k]) => k === key);
+  if (!row) return '';
+  const [, cssVar, fallback] = row;
+  return ((cs && cs.getPropertyValue(cssVar)) || fallback).trim();
+}
 
 function paintAutonomyChart() {
   const canvas = document.getElementById('history-chart');
@@ -879,9 +908,8 @@ function paintAutonomyChart() {
   };
 
   drawAutonomyGridlines(ctx, { lo, hi, yAt, padL, padR, w, muted, gridColor });
-  for (const [key, cssVar, fallback] of AUTONOMY_SERIES) {
-    const color = (cs.getPropertyValue(cssVar) || fallback).trim();
-    drawAutonomySeries(ctx, { points, key, color, xAt, yAt });
+  for (const [key] of AUTONOMY_SERIES) {
+    drawAutonomySeries(ctx, { points, key, color: autonomySeriesColor(key, cs), xAt, yAt });
   }
   drawAutonomyXLabels(ctx, { duration, xAt, muted, h, padB });
 }
@@ -979,9 +1007,17 @@ function renderAutonomyStrip() {
   }
 
   const cs = getComputedStyle(document.documentElement);
+  // A header over the value column: the figure at the end of each row was a
+  // bare duration with nothing saying what it measured.
+  rowsEl.appendChild(buildAutonomyStripHeader());
   for (const project of projects) {
     rowsEl.appendChild(buildAutonomyStripRow(project, spans, cs));
   }
+  // …and the window's bounds under it, so a mark can be placed in time. Two
+  // labels, not a tick axis: at 12mo a full axis is more furniture than the
+  // strip is worth, but "from when to when" is the difference between a
+  // timeline and a texture.
+  rowsEl.appendChild(buildAutonomyStripAxis(spans));
   if (legendEl) fillAutonomyLegend(legendEl, cs);
   if (noteEl && spans.truncated) {
     noteEl.textContent = 'This window holds more runs than one request returns; the strip shows the oldest part of it. '
@@ -1014,6 +1050,57 @@ function fillAutonomyLegend(legendEl, cs) {
     item.appendChild(document.createTextNode(glyph + ' ' + label));
     legendEl.appendChild(item);
   }
+}
+
+// buildAutonomyStripHeader labels the value column. It reuses the row grid so
+// the header sits exactly over the values it names.
+export function buildAutonomyStripHeader() {
+  const head = document.createElement('div');
+  head.className = 'history-autonomy-row history-autonomy-head';
+  head.setAttribute('aria-hidden', 'true'); // each row's aria-label already says "longest"
+  const label = document.createElement('span');
+  label.className = 'history-autonomy-label';
+  label.textContent = 'project';
+  const spacer = document.createElement('span');
+  const val = document.createElement('span');
+  val.className = 'history-autonomy-val';
+  val.textContent = 'longest';
+  head.appendChild(label);
+  head.appendChild(spacer);
+  head.appendChild(val);
+  return head;
+}
+
+// buildAutonomyStripAxis puts the window's start on the left and "now" on the
+// right, under the strip, on the same grid so both land under the canvas
+// column rather than under the labels.
+export function buildAutonomyStripAxis(spans) {
+  const axis = document.createElement('div');
+  axis.className = 'history-autonomy-row history-autonomy-axis';
+  const label = document.createElement('span');
+  const bounds = document.createElement('span');
+  bounds.className = 'history-autonomy-axis-bounds';
+  const from = document.createElement('i');
+  from.textContent = autonomyAxisLabel(spans.start, (spans.end || 0) - (spans.start || 0));
+  const to = document.createElement('i');
+  to.textContent = 'now';
+  bounds.appendChild(from);
+  bounds.appendChild(to);
+  const tail = document.createElement('span');
+  axis.appendChild(label);
+  axis.appendChild(bounds);
+  axis.appendChild(tail);
+  return axis;
+}
+
+// autonomyAxisLabel formats the strip's left bound, coarsening with the window
+// the way stateBucketLabel does for the activity matrix: an 8h strip needs a
+// time of day, a 12mo strip needs a month.
+export function autonomyAxisLabel(ts, windowSeconds) {
+  const d = new Date((Number(ts) || 0) * 1000);
+  if (windowSeconds <= 36 * 3600) return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  if (windowSeconds <= 60 * 86400) return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  return d.toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
 }
 
 function buildAutonomyStripRow(project, spans, cs) {
@@ -1064,6 +1151,40 @@ function paintAutonomyStripRow(canvas, mine, spans, cs) {
   }
 }
 
+// autonomyPanelRows builds the side panel's rows, INCLUDING each row's swatch
+// colour, as a pure function.
+//
+// The swatch belongs here rather than at the DOM call site because that is
+// exactly where the defect was: the panel used to build the p95/p50/p5 rows and
+// then blank every dot, leaving three unlabelled curves on the canvas with no
+// key at all. As a value it is testable; as a `style.background =` buried in a
+// render loop it was not.
+//
+// The first three rows ARE the chart's lines, so they carry the chart's own
+// colours (from AUTONOMY_SERIES, the same table the canvas strokes from) and
+// double as its key — the macOS surface says the same thing through Swift
+// Charts' legend. longest/shortest/runs are FIGURES, not lines, and stay
+// unswatched on purpose: a swatch would claim a curve the chart deliberately
+// does not draw.
+export function autonomyPanelRows(summary, cs) {
+  const s = summary || {};
+  const line = (key, value) => ({
+    series: key,
+    label: AUTONOMY_SERIES_LABELS[key],
+    value,
+    swatch: autonomySeriesColor(key, cs),
+  });
+  const figure = (label, value) => ({ series: null, label, value, swatch: 'transparent' });
+  return [
+    line('p95', autonomyDuration(s.p95)),
+    line('p50', autonomyDuration(s.p50)),
+    line('p5', autonomyDuration(s.p5)),
+    figure('longest', autonomyDuration(s.max)),
+    figure('shortest', autonomyDuration(s.min)),
+    figure('runs', String(s.count || 0)),
+  ];
+}
+
 // renderAutonomyPanel fills the shared side panel with element 1's figures.
 // The true extremes are FIGURES here and deliberately not lines on the chart:
 // one overnight run would otherwise redraw the whole Y scale.
@@ -1084,25 +1205,17 @@ function renderAutonomyPanel() {
       ? 'no runs in this range'
       : 'nothing recorded yet');
   } else {
-    const rows = [
-      ['p95 (good runs)', autonomyDuration(s.p95)],
-      ['p50 (typical run)', autonomyDuration(s.p50)],
-      ['p5 (bad runs)', autonomyDuration(s.p5)],
-      ['longest', autonomyDuration(s.max)],
-      ['shortest', autonomyDuration(s.min)],
-      ['runs', String(s.count)],
-    ];
-    for (const [label, value] of rows) {
+    for (const row of autonomyPanelRows(s, getComputedStyle(document.documentElement))) {
       const li = document.createElement('li');
       const dot = document.createElement('span');
       dot.className = 'dot';
-      dot.style.background = 'transparent';
+      dot.style.background = row.swatch;
       const lbl = document.createElement('span');
       lbl.className = 'label';
-      lbl.textContent = label;
+      lbl.textContent = row.label;
       const val = document.createElement('span');
       val.className = 'val';
-      val.textContent = value;
+      val.textContent = row.value;
       li.appendChild(dot);
       li.appendChild(lbl);
       li.appendChild(val);

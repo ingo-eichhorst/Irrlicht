@@ -200,6 +200,43 @@ final class HistoryAutonomyTests: XCTestCase {
         XCTAssertEqual(Set(HistoryAutonomyRange.allCases.map(\.rawValue)), ["30d", "1y"])
     }
 
+    // MARK: The chart's key, and the strip's bounds
+
+    /// The chart's colour scale is what Swift Charts builds its legend from, so
+    /// a line with no colour is a line the key cannot name. The web twin of
+    /// this check is `the three line colours are distinct`.
+    func testSeriesColorsCoverEveryLineAndAreDistinct() {
+        XCTAssertEqual(AutonomyPalette.seriesOrder, ["p95", "p50", "p5"])
+        for key in AutonomyPalette.seriesOrder {
+            XCTAssertNotNil(AutonomyPalette.seriesColors[key],
+                            "\(key) is drawn but has no colour, so the legend cannot name it")
+        }
+        let range = AutonomyPalette.seriesRange
+        XCTAssertEqual(range.count, AutonomyPalette.seriesOrder.count)
+        XCTAssertEqual(Set(range.map { String(describing: $0) }).count, range.count,
+                       "two of the three lines share a colour — the key would be ambiguous")
+    }
+
+    /// The strip's bounds coarsen with the window, so an 8h strip reads as a
+    /// time of day and a 12mo strip as a month.
+    func testAxisBoundCoarsensWithTheWindow() {
+        let utc = TimeZone(identifier: "UTC")!
+        // 2026-01-02T15:30:00Z
+        let d = Date(timeIntervalSince1970: 1_767_367_800)
+        XCTAssertEqual(AutonomyFormat.axisBound(d, windowSeconds: 8 * 3600, timeZone: utc), "15:30")
+        XCTAssertEqual(AutonomyFormat.axisBound(d, windowSeconds: 7 * 86400, timeZone: utc), "Jan 2")
+        XCTAssertEqual(AutonomyFormat.axisBound(d, windowSeconds: 365 * 86400, timeZone: utc), "Jan 2026")
+    }
+
+    /// #1659: every date this section renders takes its zone as an input.
+    func testAxisBoundHonorsTheCallersZone() {
+        let d = Date(timeIntervalSince1970: 1_767_367_800)
+        let utc = AutonomyFormat.axisBound(d, windowSeconds: 8 * 3600, timeZone: TimeZone(identifier: "UTC")!)
+        let tokyo = AutonomyFormat.axisBound(d, windowSeconds: 8 * 3600,
+                                             timeZone: TimeZone(identifier: "Asia/Tokyo")!)
+        XCTAssertNotEqual(utc, tokyo, "the bound must follow the zone it is given, never the machine's")
+    }
+
     // MARK: Formatting + provenance
 
     func testDurationFormatting() {

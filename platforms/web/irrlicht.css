@@ -1780,6 +1780,20 @@
     .history-autonomy-val {
       font-family: var(--font-mono); font-size: 11px; color: var(--muted); text-align: right;
     }
+    /* Column header over the per-row "longest" figure, and the window's own
+       bounds under the strip — both reuse .history-autonomy-row's grid so they
+       line up with the column they describe. */
+    .history-autonomy-head .history-autonomy-label,
+    .history-autonomy-head .history-autonomy-val {
+      font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.06em;
+      text-transform: uppercase; color: var(--muted);
+    }
+    .history-autonomy-axis { margin-top: 2px; }
+    .history-autonomy-axis-bounds {
+      display: flex; justify-content: space-between;
+      font-family: var(--font-mono); font-size: 10px; color: var(--muted);
+    }
+    .history-autonomy-axis-bounds i { font-style: normal; }
     .history-autonomy-empty, .history-autonomy-note {
       font-size: 12px; color: var(--muted); padding: 8px 0; line-height: 1.5;
     }
