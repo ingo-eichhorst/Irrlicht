@@ -1,0 +1,54 @@
+# Every claudecode recipe, planned against the Claude Desktop driver.
+#
+# Produced by: go test ./tools/onboarding-factory/internal/desktopdriver/ -run TestDesktopRecipeCensus
+# Regenerate with: UPDATE_DESKTOP_CENSUS=1 go test ./tools/onboarding-factory/internal/desktopdriver/ -run TestDesktopRecipeCensus -count=1
+#
+# A "not-runnable" line lists the Desktop controls the recipe would need and the
+# driver cannot elicit, deduplicated and sorted. It is a statement about the
+# CONTROLS, not about the scenario: the cell stays valid for the cli-local
+# profile, which is where it is recorded today.
+agent-process-crash-midturn	not-runnable: agent-process-kill
+architect-editor-pair	not-runnable: keyboard-key:"1"
+auth-credentials-rejected	not-runnable: session-exit
+auto-classified-permission	not-runnable: keyboard-key:"S-Tab"
+auto-executed-tool-call	runnable
+autonomous-loop	not-runnable: slash-command-entry
+autonomous-loop-iteration-limit	not-runnable: slash-command-entry
+background-process	runnable
+background-subagent	runnable
+blocking-dialog-without-tool-call	runnable
+checkpoint-rewind	not-runnable: keyboard-key:"Down", slash-command-entry
+context-compaction	not-runnable: slash-command-entry
+foreground-subagent	runnable
+long-agentic-session-stress	runnable
+long-idle-live-session	runnable
+mid-turn-message-queued	not-runnable: keyboard-key:"f o l l o w u p Space q u e u e d Enter"
+model-context-display	runnable
+model-identification	runnable
+model-switch-midsession	not-runnable: keyboard-key:"1", slash-command-entry
+multiple-agents-same-workspace	runnable
+multiple-sessions-same-cwd	not-runnable: session-list-row
+oversized-transcript-line	runnable
+permission-gate-non-mutating-tool	runnable
+provider-overloaded-retry	not-runnable: session-exit
+provider-overloaded-terminal	not-runnable: session-exit
+self-correction-iteration	runnable
+session-end	not-runnable: agent-process-kill, session-exit, session-restart
+session-reset	not-runnable: session-reset
+session-resume	not-runnable: session-exit, session-resume
+session-start	runnable
+shell-escape-command	not-runnable: keyboard-key:"! e c h o Space h e l l o Enter"
+streaming-partial-writes	runnable
+subagent-orphan-cleanup	not-runnable: agent-process-kill
+subscription-detection	runnable
+synchronous-slash-command	not-runnable: keyboard-key:"/ c o s t Enter", keyboard-key:"/ h e l p Enter"
+task-estimate-marker	runnable
+token-accounting	runnable
+tool-gate-permission-prompt	runnable
+turn-end-terminal-text	runnable
+user-blocking-plan-mode-approval	runnable
+user-blocking-question	runnable
+user-esc-interrupt	runnable
+workflow-fanout	runnable
+#
+# 24 of 43 scripted claudecode recipes are runnable through Claude Desktop.

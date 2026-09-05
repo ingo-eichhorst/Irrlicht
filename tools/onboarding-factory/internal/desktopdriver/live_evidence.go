@@ -185,7 +185,7 @@ func validateEnvironmentLink(owned OwnedSession, environment EnvironmentEvidence
 	return nil
 }
 
-func (runtime *LiveRuntime) VerifyBaseline(_ context.Context, baseline Baseline, owned OwnedSession) error {
+func (runtime *LiveRuntime) VerifyBaseline(_ context.Context, baseline Baseline, owned []OwnedSession) error {
 	if err := VerifyTreeSnapshot(baseline.Config); err != nil {
 		return err
 	}
@@ -196,7 +196,13 @@ func (runtime *LiveRuntime) VerifyBaseline(_ context.Context, baseline Baseline,
 	if err := verifyBaselineFiles(baseline.Files, files); err != nil {
 		return err
 	}
-	return verifyPostBaselineSessions(sessions, baseline.SessionIDs, owned.Registry.SessionID)
+	ownedIDs := make(map[string]struct{}, len(owned))
+	for _, session := range owned {
+		if session.Registry.SessionID != "" {
+			ownedIDs[session.Registry.SessionID] = struct{}{}
+		}
+	}
+	return verifyPostBaselineSessions(sessions, baseline.SessionIDs, ownedIDs)
 }
 
 // verifyBaselineFiles proves the run left every registry file it did not own
@@ -211,18 +217,20 @@ func verifyBaselineFiles(expected, actual map[string][]byte) error {
 	return nil
 }
 
-// verifyPostBaselineSessions proves the only session that appeared during the
-// run is the one this driver created, and that it was archived.
+// verifyPostBaselineSessions proves every session that appeared during the run
+// is one this driver created, and that each was archived. A multi-session
+// recipe owns several; a session that appeared and is in none of them is
+// somebody else's, and the run must not have left it behind or touched it.
 func verifyPostBaselineSessions(
 	sessions []RegistrySession,
 	baselineIDs map[string]struct{},
-	ownedID string,
+	ownedIDs map[string]struct{},
 ) error {
 	for _, session := range sessions {
 		if _, existed := baselineIDs[session.SessionID]; existed {
 			continue
 		}
-		if session.SessionID != ownedID {
+		if _, owned := ownedIDs[session.SessionID]; !owned {
 			return fmt.Errorf("unowned post-baseline Desktop session %q exists", session.SessionID)
 		}
 		if !session.Archived {

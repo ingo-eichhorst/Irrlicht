@@ -16,10 +16,11 @@ assert_eq() { [[ "$2" == "$3" ]] && pass "$1" || fail "$1" "expected [$2], got [
 echo "== Desktop cells stay inside the basic prompt boundary =="
 desktop_profile_validate_cell desktop-local claudecode 0 '{"prompt":"ok","settings":{}}'
 assert_eq "basic Claude Code cell passes" 0 "$?"
+desktop_profile_validate_cell desktop-local claudecode 0 '{"script":[{"type":"send","text":"ok"}],"settings":{}}'
+assert_eq "a recipe cell reaches the recipe lint (#1888)" 0 "$?"
 for mutation in \
   'codex|0|{"prompt":"ok"}' \
   'claudecode|1|{"prompt":"ok"}' \
-  'claudecode|0|{"script":[{"type":"send-text"}]}' \
   'claudecode|0|{"prompt":"ok","settings":{"model":"x"}}' \
   'claudecode|0|{"prompt":"ok","env":{"TOKEN":"x"}}' \
   'claudecode|0|{"prompt":"ok","mock":{"package":"./x"}}'; do
@@ -30,6 +31,80 @@ for mutation in \
     pass "unsafe cell is refused ($adapter)"
   fi
 done
+
+echo "== recipe → Desktop control lint (#1888) =="
+# The lint reads the cell's recipe through shard-lib and the driver's scraped
+# declaration. Point both at fixtures so this suite never depends on what the
+# real claudecode recipes happen to say today.
+export IR_SCENARIOS_FILE="$TMP/replaydata/scenarios.json"
+export IR_AGENTS_DIR="$TMP/replaydata/agents"
+mkdir -p "$(dirname "$IR_SCENARIOS_FILE")"
+printf '{"meta":{},"scenarios":[]}\n' > "$IR_SCENARIOS_FILE"
+desktop_shard() {
+  local name="$1" recipe="$2"
+  local cell="$IR_AGENTS_DIR/claudecode/scenarios/$name"
+  mkdir -p "$cell"
+  printf '{"scenario_id":"%s","details":{"recipe":%s}}\n' "$name" "$recipe" > "$cell/metadata.json"
+}
+desktop_shard runnable-cell  '{"script":[{"type":"send","text":"hi"},{"type":"wait_turn"},{"type":"sleep","seconds":2}]}'
+desktop_shard gap-cell       '{"script":[{"type":"send","text":"hi"},{"type":"reset_session"},{"type":"session","session":1}]}'
+desktop_shard prompt-cell    '{"prompt":"hi"}'
+desktop_shard two-session    '{"script":[{"type":"send","text":"hi"},{"type":"start_session"}]}'
+
+REAL_DESKTOP_DRIVER="$(cd "$DIR/../../../.." && pwd)/replaydata/agents/claudecode/driver-desktop.sh"
+[[ -f "$REAL_DESKTOP_DRIVER" ]] ||
+  fail "the real driver-desktop.sh is readable" "not found at $REAL_DESKTOP_DRIVER"
+
+desktop_recipe_gaps "$REAL_DESKTOP_DRIVER" runnable-cell claudecode >/dev/null
+assert_eq "a recipe inside the Desktop grammar passes" 0 "$?"
+desktop_recipe_gaps "$REAL_DESKTOP_DRIVER" prompt-cell claudecode >/dev/null
+assert_eq "a prompt cell has nothing to lint" 0 "$?"
+
+GAPS="$(desktop_recipe_gaps "$REAL_DESKTOP_DRIVER" gap-cell claudecode)"
+assert_eq "an undrivable recipe is refused" 1 "$?"
+case "$GAPS" in
+  *"reset_session"*"session-reset"*) pass "the refusal names reset_session's missing control" ;;
+  *) fail "the refusal names reset_session's missing control" "got [$GAPS]" ;;
+esac
+case "$GAPS" in
+  *"session"*"session-list-row"*) pass "the refusal names session's missing control" ;;
+  *) fail "the refusal names session's missing control" "got [$GAPS]" ;;
+esac
+
+REPORT="$(desktop_report_recipe_gaps "$REAL_DESKTOP_DRIVER" gap-cell claudecode gap-cell 2>&1)"
+assert_eq "the reported verdict exits 4" 4 "$?"
+case "$REPORT" in
+  *"not runnable through Desktop"*) pass "the verdict carries the #1888 phrase" ;;
+  *) fail "the verdict carries the #1888 phrase" "got [$REPORT]" ;;
+esac
+
+# Mutation: a driver that declares no DRIVE_ELICITS scrapes to an empty set.
+# "I could not look" must never read as "nothing disagreed".
+printf '#!/usr/bin/env bash\necho hi\n' > "$TMP/no-declaration.sh"
+desktop_recipe_gaps "$TMP/no-declaration.sh" runnable-cell claudecode >/dev/null 2>&1
+assert_eq "a driver with no declaration refuses loudly" 2 "$?"
+desktop_recipe_gaps "$TMP/does-not-exist.sh" runnable-cell claudecode >/dev/null 2>&1
+assert_eq "a missing driver refuses loudly" 2 "$?"
+
+# Mutation: DRIVE_ELICITS widened to accept a step the Go driver cannot drive.
+# The lint would then wave a slash recipe through to a live Desktop run.
+sed 's/^DRIVE_ELICITS=.*/DRIVE_ELICITS="archive interrupt keys mode model send session sleep slash start_session wait_turn reset_session"/' \
+  "$REAL_DESKTOP_DRIVER" > "$TMP/widened-driver.sh"
+desktop_recipe_gaps "$TMP/widened-driver.sh" gap-cell claudecode >/dev/null 2>&1
+assert_eq "a widened declaration stops refusing (mutation is detected by contract_test.go)" 0 "$?"
+
+# The rig stages one session's evidence; a recipe asking for two is refused
+# with its own reason rather than half-recorded.
+assert_eq "session count includes the implicit first session" 2 \
+  "$(desktop_recipe_sessions two-session claudecode)"
+desktop_recipe_rig_gaps two-session claudecode 2>/dev/null
+assert_eq "a two-session recipe exceeds this rig" 1 "$?"
+desktop_recipe_rig_gaps runnable-cell claudecode
+assert_eq "a one-session recipe fits this rig" 0 "$?"
+desktop_report_recipe_gaps "$REAL_DESKTOP_DRIVER" two-session claudecode two-session >/dev/null 2>&1
+assert_eq "the two-session verdict exits 4" 4 "$?"
+
+unset IR_SCENARIOS_FILE IR_AGENTS_DIR
 
 echo "== loopback allocation is dynamic and checked =="
 address="$(desktop_choose_loopback_address)"
@@ -123,6 +198,23 @@ else
   got="missing-or-late"
 fi
 assert_eq "run-cell acquires the lock before daemon setup" "before-setup" "$got"
+
+# #1888: the recipe refusal is worth nothing if run-cell.sh calls it after the
+# managed-file snapshot or the daemon. Read the ORDER out of run-cell.sh, the
+# same way the lock assertion above does — and fail when either line is absent
+# rather than reporting an order it could not read.
+lint_line="$(awk '/desktop_report_recipe_gaps/{print NR; exit}' "$run_cell")"
+precheck_line="$(awk '/precheck\.sh" "\$ADAPTER"/{print NR; exit}' "$run_cell")"
+if [[ -z "$lint_line" ]]; then
+  fail "run-cell lints the Desktop recipe before anything runs" "run-cell.sh never calls desktop_report_recipe_gaps"
+elif [[ -z "$precheck_line" ]]; then
+  fail "run-cell lints the Desktop recipe before anything runs" "could not find run-cell.sh's precheck call — this check cannot run"
+elif [[ "$lint_line" -lt "$precheck_line" ]]; then
+  pass "run-cell lints the Desktop recipe before anything runs"
+else
+  fail "run-cell lints the Desktop recipe before anything runs" \
+    "lint at line $lint_line runs after precheck at line $precheck_line"
+fi
 
 echo "== identity-field and full-session evidence is staged and joined =="
 source_dir="$TMP/source"
