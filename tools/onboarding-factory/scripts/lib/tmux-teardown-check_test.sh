@@ -526,7 +526,11 @@ assert_contains "…and the tripwire SEES it (so its green is not vacuous)" \
 # saying "the driver pid must be a whole number, got ''" — under a heading with
 # the word tmux in it, so the operator goes and looks at tmux. The three ways
 # the pid can be unusable are three different first moves, so they get three
-# different sentences. Each fixture drives the SHIPPED wrapper.
+# different sentences — and (#1828) the "never written" one now gets its OWN
+# error code, driver_pid_unrecorded, rather than sharing
+# driver_tmux_teardown_unreadable with the other two: it is the one case where
+# the driver almost certainly never ran at all, so tmux was never the right
+# place to look. Each fixture drives the SHIPPED wrapper.
 
 echo "== MUTATION — the pid wrapper cannot write driver.pid: the driver never runs =="
 # The injected failure: driver.pid is a DIRECTORY, so the wrapper's redirect
@@ -538,13 +542,18 @@ CASE_TMUX="leak"
 run_gate pidfile_unwritable "$GATE_BLOCK"
 assert_eq "the driver never ran" "no" "$GATE_DRIVER_RAN"
 assert_eq "the cell fails" "1" "$GATE_RC"
-assert_eq "as an unreadable teardown, never as a pass" "driver_tmux_teardown_unreadable" \
+assert_eq "under its OWN code (#1828), not the tmux-unreadable one" "driver_pid_unrecorded" \
   "$(manifest_field .error)"
 PIDFILE_DETAIL="$(manifest_field .tmux_teardown_detail)"
 assert_contains "the detail names driver.pid" "driver.pid was never written" "$PIDFILE_DETAIL"
 assert_contains "…and says it is not a tmux problem" "NOT a tmux one" "$PIDFILE_DETAIL"
 assert_eq "…and does NOT hand the operator the old tmux-flavoured sentence" "no" \
   "$(contains "$PIDFILE_DETAIL" "must be a whole number")"
+assert_eq "…and the ERROR line does not frame it as a 'driver tmux teardown' problem" "no" \
+  "$(contains "$GATE_OUT" "ERROR: driver tmux teardown")"
+assert_contains "…the ERROR line is just the detail itself" "ERROR: driver.pid was never written" "$GATE_OUT"
+assert_eq "…and it does NOT get the 'kill the survivor' hint (nothing to kill)" "no" \
+  "$(contains "$GATE_OUT" "tmux kill-session")"
 
 echo "== MUTATION — driver.pid exists but is EMPTY: a different sentence =="
 # The wrapper ran, so the driver DID start; its sessions may be out there under
@@ -584,6 +593,59 @@ assert_eq "a leak with a good pid is still a LEAK, not an unreadable check" \
   "driver_tmux_session_survived" "$(manifest_field .error)"
 assert_eq "and the pid recorded in the manifest is a whole number" "yes" \
   "$(is_whole_number "$(manifest_field .driver_pid)")"
+
+# ---------------------------------------------------------------------------
+# ITEM 4 (#1828): the deadline clamp lives in ONE place
+# ---------------------------------------------------------------------------
+# clamp(lifetime/10, 1, 5) used to be computed twice — once here in run-cell.sh
+# (around line 660), once in run-cell-multi.sh's record_driver_teardown (around
+# line 377) — and tmux_teardown_deadline_for is now the only place it happens.
+
+echo "== tmux_teardown_deadline_for: the clamp itself =="
+assert_eq "floored at 1 (a 5s lifetime: 5/10=0)" "1" "$(tmux_teardown_deadline_for 5)"
+assert_eq "floored at 1 (a 9s lifetime: 9/10=0)" "1" "$(tmux_teardown_deadline_for 9)"
+assert_eq "the floor's own boundary (a 10s lifetime: 10/10=1)" "1" "$(tmux_teardown_deadline_for 10)"
+assert_eq "exactly a tenth, no clamp needed (a 20s lifetime)" "2" "$(tmux_teardown_deadline_for 20)"
+assert_eq "capped at 5 (a 60s lifetime: 60/10=6)" "5" "$(tmux_teardown_deadline_for 60)"
+assert_eq "capped at 5 (a 900s lifetime)" "5" "$(tmux_teardown_deadline_for 900)"
+
+echo "== both callers use the shared helper, and neither recomputes it =="
+# A duplication tripwire, not a runtime assertion — proven the way every other
+# check in this file is: mutate a COPY with the arithmetic re-inlined and show
+# it goes RED. This is a narrow textual pattern (three greps over one file),
+# not a general duplication detector — see the report for what that leaves
+# uncovered (a THIRD call site computing the clamp under different variable
+# names would not be caught by clamp_inlined's own literal "/ 10 ))" match, and
+# nothing outside this suite runs it — this file is the only mechanical check).
+RUN_CELL_MULTI="$SCRIPTS_DIR/run-cell-multi.sh"
+
+clamp_inlined() {   # <file> → yes if the raw clamp arithmetic appears in it
+  grep -qE '/ 10 \)\)' "$1" && grep -qE -- '-gt 5' "$1" && grep -qE -- '-lt 1' "$1" \
+    && echo yes || echo no
+}
+
+assert_eq "run-cell.sh calls the shared helper" "yes" \
+  "$(wired "$RUN_CELL" 'tmux_teardown_deadline_for')"
+assert_eq "run-cell.sh does not inline the clamp itself" "no" "$(clamp_inlined "$RUN_CELL")"
+assert_eq "run-cell-multi.sh calls the shared helper" "yes" \
+  "$(wired "$RUN_CELL_MULTI" 'tmux_teardown_deadline_for')"
+assert_eq "run-cell-multi.sh does not inline the clamp itself" "no" "$(clamp_inlined "$RUN_CELL_MULTI")"
+
+echo "== MUTATION — a clamp re-inlined at a call site is caught =="
+MUT_REINLINED="$TMP/run-cell-multi-with-reinlined-clamp.sh"
+awk '
+  /tmux_teardown_deadline_for "\$lifetime"/ {
+    print "  deadline=$(( lifetime / 10 ))"
+    print "  if [[ \"$deadline\" -gt 5 ]]; then deadline=5; fi"
+    print "  if [[ \"$deadline\" -lt 1 ]]; then deadline=1; fi"
+    next
+  }
+  { print }
+' "$RUN_CELL_MULTI" > "$MUT_REINLINED"
+assert_eq "the mutant really differs from the shipped file" "yes" \
+  "$(cmp -s "$RUN_CELL_MULTI" "$MUT_REINLINED" && echo no || echo yes)"
+assert_eq "…and the duplication tripwire catches the re-inlined clamp" "yes" \
+  "$(clamp_inlined "$MUT_REINLINED")"
 
 echo ""
 if [[ "$fails" -eq 0 ]]; then

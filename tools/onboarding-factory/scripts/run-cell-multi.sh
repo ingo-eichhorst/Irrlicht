@@ -367,16 +367,12 @@ TMUX_UNREADABLE=""        # space-joined adapters whose check could not be made
 record_driver_teardown() {
   local a="$1" pid="$2" lifetime="$3"
   local deadline status detail rc=0
-  # The deadline/lifetime pair await_gone_bound checks, computed exactly as
-  # run-cell.sh:469-472 computes it (a tenth of the driver timeout, capped at 5s
-  # so a long cell does not buy a long wait for a session that should already be
-  # gone, floored at 1s so it can never become the "look exactly once" deadline
-  # await_gone_bound refuses). Duplicated rather than shared because the pair is
-  # the CALLER's policy, not the library's — but see the note in the report:
-  # a tmux_teardown_deadline_for helper in the lib would be the better home.
-  deadline=$(( lifetime / 10 ))
-  if [[ "$deadline" -gt 5 ]]; then deadline=5; fi
-  if [[ "$deadline" -lt 1 ]]; then deadline=1; fi
+  # The deadline/lifetime pair await_gone_bound checks (rule 3 in
+  # lib/tmux-teardown-check.sh's header). Computed by tmux_teardown_deadline_for
+  # — shared with run-cell.sh (#1828) so the two rigs cannot drift apart on the
+  # arithmetic; see that function's header for why a tenth, capped at 5, floored
+  # at 1.
+  deadline="$(tmux_teardown_deadline_for "$lifetime")"
 
   check_tmux_teardown "$pid" "$deadline" "$lifetime" "the cell's own driver timeout" || rc=$?
   case "$rc" in

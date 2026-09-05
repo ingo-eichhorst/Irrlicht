@@ -181,6 +181,30 @@ tmux_teardown_look() {
   return 0
 }
 
+# tmux_teardown_deadline_for <lifetime-s> — the deadline/lifetime pair
+# await_gone_bound checks (rule 3 above), computed in ONE place so run-cell.sh
+# and run-cell-multi.sh cannot drift apart on the arithmetic. Both used to
+# inline this clamp themselves (#1828); the deadline this produces is what a
+# caller then hands to check_tmux_teardown below as ITS second argument.
+#
+# <lifetime-s> is the cell's own driver timeout — the upper bound on how long
+# the session being asked about could have lived. The result is a TENTH of
+# that, CAPPED at 5s so a 900s cell does not buy a 90s wait for a session that
+# should already be gone, and FLOORED at 1s so the arithmetic can never
+# produce the "look exactly once" deadline await_gone_bound refuses. A cell
+# whose timeout is under 10s therefore fails the bound and is reported LOUDLY
+# as unreadable, which is the honest answer: at that ratio the check would
+# assert nothing. (Every applicable cell today declares 60s or more.)
+#
+# Prints the deadline to stdout; callers capture it with command substitution.
+tmux_teardown_deadline_for() {
+  local lifetime="${1:-0}" deadline
+  deadline=$(( lifetime / 10 ))
+  if [[ "$deadline" -gt 5 ]]; then deadline=5; fi
+  if [[ "$deadline" -lt 1 ]]; then deadline=1; fi
+  printf '%s\n' "$deadline"
+}
+
 # check_tmux_teardown <driver-pid> <deadline-s> <lifetime-s> [what-the-lifetime-is]
 #
 #   0  no tmux session carrying <driver-pid> survives. TMUX_TEARDOWN_ELAPSED

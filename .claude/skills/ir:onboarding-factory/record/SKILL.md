@@ -259,6 +259,13 @@ the check could not look at all (no `tmux` binary, an unreadable session list).
 Return `status: infra_fail` and fix the host rather than promoting the staging
 dir. `daemon_not_ready` and `replay_failed` are `infra_fail` too.
 
+**`driver_pid_unrecorded` means the driver never started (#1828)** — the pid
+wrapper died before it could exec the driver, and an unwritable `$STAGING` is
+what makes that write fail. Nothing of this run is holding a tmux session, so
+unlike `driver_session_leaked` there is no survivor to kill first. Check that
+the staging dir is writable, then retry. Do not read it as a teardown verdict:
+tmux was never asked anything.
+
 When unsure of the failure class, classify the staging dir:
 
 ```bash
