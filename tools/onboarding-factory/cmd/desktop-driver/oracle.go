@@ -36,11 +36,6 @@ type managedFileEntry struct {
 	path  string
 }
 
-type managedPathPair struct {
-	real   string
-	shadow string
-}
-
 func runManagedFileOracle(args []string) error {
 	var value managedFileOracleOptions
 	flags := flag.NewFlagSet("managed-file-oracle", flag.ContinueOnError)

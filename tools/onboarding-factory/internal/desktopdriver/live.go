@@ -398,7 +398,6 @@ func (runtime *LiveRuntime) Submit(ctx context.Context) error {
 type archiveTarget struct {
 	registry RegistrySession
 	menu     helperSelector
-	project  helperSelector
 }
 
 func (runtime *LiveRuntime) RecordStep(step string) {
