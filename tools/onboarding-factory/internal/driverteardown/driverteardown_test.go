@@ -513,20 +513,14 @@ func sortedKeys(m map[string]bool) []string {
 	return out
 }
 
-// TestAliveGateMatchesTheSharedOwnershipFlag binds aliveGate to the name the
-// shared slot library actually declares.
-//
-// INV-1 identifies the forbidden gate by NAME, which is a deliberate tradeoff
-// (see aliveGate's own note). The cost of that tradeoff is that a rename of the
-// shared flag silently un-wires the check: #1828 renamed SES_ALIVE to SES_OWNED
-// and every fixture stayed green while the checker went blind. A name-coupled
-// matcher cannot notice on its own that the name moved, so this test notices
-// for it. It reads slots.sh, collects every SES_* array the fleet declares, and
-// requires at least one to match. Per AGENTS.md, it fails loudly when it cannot
-// look at all: a slots.sh it cannot read, or one that declares no arrays, is a
-// failure and never a silent pass.
-func TestAliveGateMatchesTheSharedOwnershipFlag(t *testing.T) {
-	path := filepath.Join(repoRoot(t), "replaydata", "_lib", "drive", "slots.sh")
+// sharedSlotArrayNames reads slots.sh and collects every SES_* array name the
+// fleet declares. Extracted out of TestAliveGateMatchesTheSharedOwnershipFlag
+// so that test reads as one flat sequence — read names, find matches, assert —
+// instead of nesting a file-read failure branch inside the test body. Per
+// AGENTS.md it fails loudly when it cannot look at all: a slots.sh it cannot
+// read, or one that declares no arrays, is a failure and never a silent pass.
+func sharedSlotArrayNames(t *testing.T, path string) map[string]bool {
+	t.Helper()
 	src, err := os.ReadFile(path) // #nosec G304 -- built from the repo root
 	if err != nil {
 		t.Fatalf("read %s: %v — the shared slot library is what this test binds "+
@@ -542,13 +536,40 @@ func TestAliveGateMatchesTheSharedOwnershipFlag(t *testing.T) {
 			"the extraction stopped matching. Both look identical to a clean run from "+
 			"here, so this refuses instead of passing", path)
 	}
+	return names
+}
 
+// namesMatchingAliveGate is the companion extraction: it walks the declared
+// names and returns the ones aliveGate matches, keeping the collection loop
+// out of TestAliveGateMatchesTheSharedOwnershipFlag's body for the same reason
+// sortedKeys above does — the failure branch is where the reader is already
+// working hardest.
+func namesMatchingAliveGate(names map[string]bool) []string {
 	var matched []string
 	for _, n := range sortedKeys(names) {
 		if aliveGate.MatchString(n) {
 			matched = append(matched, n)
 		}
 	}
+	return matched
+}
+
+// TestAliveGateMatchesTheSharedOwnershipFlag binds aliveGate to the name the
+// shared slot library actually declares.
+//
+// INV-1 identifies the forbidden gate by NAME, which is a deliberate tradeoff
+// (see aliveGate's own note). The cost of that tradeoff is that a rename of the
+// shared flag silently un-wires the check: #1828 renamed SES_ALIVE to SES_OWNED
+// and every fixture stayed green while the checker went blind. A name-coupled
+// matcher cannot notice on its own that the name moved, so this test notices
+// for it. It reads slots.sh, collects every SES_* array the fleet declares, and
+// requires at least one to match. Per AGENTS.md, it fails loudly when it cannot
+// look at all: a slots.sh it cannot read, or one that declares no arrays, is a
+// failure and never a silent pass.
+func TestAliveGateMatchesTheSharedOwnershipFlag(t *testing.T) {
+	path := filepath.Join(repoRoot(t), "replaydata", "_lib", "drive", "slots.sh")
+	names := sharedSlotArrayNames(t, path)
+	matched := namesMatchingAliveGate(names)
 	if len(matched) == 0 {
 		sorted := sortedKeys(names)
 		t.Fatalf("aliveGate (%s) matches NONE of the %d arrays slots.sh declares (%s).\n"+
