@@ -57,32 +57,35 @@ func (runtime *LiveRuntime) CaptureEvidence(
 	return evidence, nil
 }
 
-// captureEnvironment re-reads the composer at evidence time rather than reusing
-// what the run verified earlier: the environment recorded next to a recording
-// has to be the one on screen when the evidence was taken.
+// captureEnvironment returns what the composer showed when WaitComposer
+// verified it, immediately before the prompt was typed.
+//
+// It used to re-read the live tree here, on the principle that the environment
+// recorded beside a recording should be the one on screen when the evidence was
+// taken. On Claude Desktop that principle cannot hold: a turn replaces its own
+// composer with the session it creates, so at evidence time there is no
+// environment control to read. Live run 18 drove a complete turn and then
+// failed with `Desktop environment control requires one AXPopUpButton titled
+// "Local"; found 0`.
+//
+// The verified reading is also the more truthful one: it is the environment the
+// turn was actually SENT in. What is still checked here is that it belongs to
+// the workspace the registry recorded.
 func (runtime *LiveRuntime) captureEnvironment(
-	ctx context.Context,
+	_ context.Context,
 	workspace string,
 ) (EnvironmentEvidence, error) {
-	elements, err := runtime.helper.inspect(ctx)
-	if err != nil {
-		return EnvironmentEvidence{}, err
+	environment := runtime.environment
+	if environment.SelectedEnvironment == "" || environment.RequestedWorkspace == "" {
+		return EnvironmentEvidence{}, errors.New(
+			"no Desktop composer environment was verified before the turn")
 	}
-	// Ask for exactly the two controls this evidence reports. The full catalog
-	// carries state-dependent controls (`send` is absent on a settled composer)
-	// and a caller that demands them fails on controls it never reads.
-	controls, err := composerControls(elements, workspace, []string{"environment", "project"})
-	if err != nil {
-		return EnvironmentEvidence{}, fmt.Errorf("verify Desktop environment for evidence: %w", err)
+	if !sameWorkspace(environment.RequestedWorkspace, workspace) {
+		return EnvironmentEvidence{}, fmt.Errorf(
+			"verified Desktop environment is for workspace %q, but the registry recorded %q",
+			environment.RequestedWorkspace, workspace)
 	}
-	if err := runtime.helper.probe(ctx, controls); err != nil {
-		return EnvironmentEvidence{}, fmt.Errorf("re-probe Desktop environment for evidence: %w", err)
-	}
-	return EnvironmentEvidence{
-		SelectedEnvironment: controls["environment"].Title,
-		RequestedWorkspace:  workspace,
-		Project:             controls["project"].Title,
-	}, nil
+	return environment, nil
 }
 
 func (runtime *LiveRuntime) writeEvidenceFiles(
