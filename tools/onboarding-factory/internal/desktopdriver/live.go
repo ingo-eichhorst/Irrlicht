@@ -100,7 +100,11 @@ func defaultConfigurationRoots(home, desktopRoot string) []string {
 		filepath.Join(desktopRoot, "config.json"),
 		filepath.Join(desktopRoot, "cowork-enabled-cli-ops.json"),
 		filepath.Join(desktopRoot, "extensions-blocklist.json"),
-		filepath.Join(home, ".claude.json"),
+		// ~/.claude.json is deliberately NOT here. It belongs to the Claude
+		// Code CLI, which rewrites caches, counters and per-project entries
+		// whenever any session on the machine acts — and a recording machine
+		// has one running by definition. verifyUserProjectEntries guards it
+		// structurally instead, for the losses the driver could actually cause.
 		filepath.Join(home, ".claude", "plugins"),
 		filepath.Join(home, ".claude", "skills"),
 	}
@@ -155,6 +159,11 @@ func (runtime *LiveRuntime) CaptureBaseline(ctx context.Context) (Baseline, erro
 	if err != nil {
 		return Baseline{}, err
 	}
+	userConfigPath := filepath.Join(runtime.options.Home, ".claude.json")
+	userConfig, err := os.ReadFile(userConfigPath)
+	if err != nil && !os.IsNotExist(err) {
+		return Baseline{}, fmt.Errorf("read the Claude Code configuration baseline: %w", err)
+	}
 	processes, err := runtime.listProcesses(ctx)
 	if err != nil {
 		return Baseline{}, fmt.Errorf("capture process baseline: %w", err)
@@ -174,7 +183,10 @@ func (runtime *LiveRuntime) CaptureBaseline(ctx context.Context) (Baseline, erro
 	for _, session := range sessions {
 		ids[session.SessionID] = struct{}{}
 	}
-	return Baseline{SessionIDs: ids, Files: files, Config: config, Processes: processes}, nil
+	return Baseline{
+		SessionIDs: ids, Files: files, Config: config, Processes: processes,
+		UserConfig: userConfig, UserConfigPath: userConfigPath,
+	}, nil
 }
 
 func (runtime *LiveRuntime) OpenComposer(ctx context.Context, workspace string) error {

@@ -58,6 +58,12 @@ type Baseline struct {
 	Files      map[string][]byte
 	Config     TreeSnapshot
 	Processes  map[int]struct{}
+	// UserConfig is ~/.claude.json as it stood before the run. It is kept
+	// whole, not hashed, because the guard over it is structural: that file
+	// belongs to the Claude Code CLI and churns for reasons the driver does
+	// not cause. See verifyUserProjectEntries.
+	UserConfig     []byte
+	UserConfigPath string
 }
 
 type RunRequest struct {

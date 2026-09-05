@@ -3,6 +3,7 @@ package desktopdriver
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -177,4 +178,55 @@ func firstSnapshotDifference(expected, actual TreeSnapshot) string {
 		}
 	}
 	return "unknown difference"
+}
+
+// verifyUserProjectEntries is the app-wide guard for ~/.claude.json.
+//
+// That file cannot be held byte-exact across a run. It belongs to the Claude
+// Code CLI, which rewrites caches, counters and per-project entries whenever
+// any session on the machine does anything — and a recording machine has one
+// running by definition. Holding it exact failed every run for a reason that
+// was never the driver's doing.
+//
+// So this asserts the two things the driver IS answerable for: it took no
+// project entry away, and every entry that appeared names its own scratch
+// workspace. Foreign churn passes; a loss does not.
+func verifyUserProjectEntries(before, after []byte, workspace string) error {
+	baseline, err := userProjectEntries(before, "baseline")
+	if err != nil {
+		return err
+	}
+	current, err := userProjectEntries(after, "current")
+	if err != nil {
+		return err
+	}
+	for path := range baseline {
+		if _, kept := current[path]; !kept {
+			return fmt.Errorf("the run removed the Claude Code project entry for %q", path)
+		}
+	}
+	for path := range current {
+		if _, existed := baseline[path]; existed {
+			continue
+		}
+		if path != workspace && !isWithin(path, workspace) {
+			return fmt.Errorf(
+				"the run added a Claude Code project entry for %q, which is not its workspace %q",
+				path, workspace)
+		}
+	}
+	return nil
+}
+
+// userProjectEntries reads the "projects" object. An unreadable file is an
+// error: a guard that cannot look must never report what a guard that looked
+// and found nothing reports.
+func userProjectEntries(data []byte, which string) (map[string]json.RawMessage, error) {
+	var document struct {
+		Projects map[string]json.RawMessage `json:"projects"`
+	}
+	if err := json.Unmarshal(data, &document); err != nil {
+		return nil, fmt.Errorf("read the %s Claude Code configuration: %w", which, err)
+	}
+	return document.Projects, nil
 }

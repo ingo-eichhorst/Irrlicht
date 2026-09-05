@@ -229,6 +229,9 @@ func (runtime *LiveRuntime) VerifyBaseline(_ context.Context, baseline Baseline,
 	if err := VerifyTreeSnapshot(baseline.Config); err != nil {
 		return err
 	}
+	if err := runtime.verifyUserConfig(baseline); err != nil {
+		return err
+	}
 	sessions, files, err := runtime.readRegistry()
 	if err != nil {
 		return err
@@ -270,4 +273,17 @@ func verifyPostBaselineSessions(
 		}
 	}
 	return nil
+}
+
+// verifyUserConfig checks ~/.claude.json for the losses the driver could cause,
+// and tolerates the churn it cannot prevent. See verifyUserProjectEntries.
+func (runtime *LiveRuntime) verifyUserConfig(baseline Baseline) error {
+	if baseline.UserConfigPath == "" || len(baseline.UserConfig) == 0 {
+		return nil
+	}
+	current, err := os.ReadFile(baseline.UserConfigPath)
+	if err != nil {
+		return fmt.Errorf("re-read the Claude Code configuration: %w", err)
+	}
+	return verifyUserProjectEntries(baseline.UserConfig, current, runtime.workspace)
 }
