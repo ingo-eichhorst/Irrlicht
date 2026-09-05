@@ -34,9 +34,12 @@ type LiveOptions struct {
 }
 
 type LiveRuntime struct {
-	options         LiveOptions
-	helper          helperClient
-	controls        map[string]helperSelector
+	options  LiveOptions
+	helper   helperClient
+	controls map[string]helperSelector
+	// workspace is the composer WaitComposer verified. Submit re-resolves
+	// against it rather than against a caller-supplied value.
+	workspace       string
 	processes       map[string]int
 	processEvidence map[string]ProcessEvidence
 	processBaseline map[int]struct{}
@@ -231,6 +234,7 @@ func (runtime *LiveRuntime) WaitComposer(ctx context.Context, workspace string) 
 		runtime.RecordStep, runtime.front, runtime.foreignTrustPrompt)
 	if err == nil {
 		runtime.controls = controls
+		runtime.workspace = workspace
 	}
 	return err
 }
@@ -360,11 +364,21 @@ func (runtime *LiveRuntime) SetPrompt(ctx context.Context, prompt string) error 
 	return runtime.helper.setValue(ctx, selector, prompt)
 }
 
+// Submit resolves the send button from a FRESH reading rather than from the
+// controls verified before the turn was typed. The send slot only carries the
+// "Send" label once the composer holds text; before that the same slot reads
+// "Stop" or nothing at all. Resolving it up front made an empty composer look
+// like a missing composer.
 func (runtime *LiveRuntime) Submit(ctx context.Context) error {
-	send, ok := runtime.controls["send"]
-	if !ok {
-		return errors.New("Send selector was not verified")
+	elements, err := runtime.helper.inspect(ctx)
+	if err != nil {
+		return err
 	}
+	controls, err := composerControls(elements, runtime.workspace, []string{"send"})
+	if err != nil {
+		return fmt.Errorf("resolve the Desktop send button after the prompt was typed: %w", err)
+	}
+	send := controls["send"]
 	stop := helperSelector{Role: "AXButton", Description: "Stop", Hierarchy: send.Hierarchy}
 	return runtime.helper.click(ctx, send, helperPostcondition{
 		Selector: stop, Condition: "exists", TimeoutMilliseconds: 10_000,

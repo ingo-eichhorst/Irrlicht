@@ -68,7 +68,10 @@ func (runtime *LiveRuntime) captureEnvironment(
 	if err != nil {
 		return EnvironmentEvidence{}, err
 	}
-	controls, err := composerCatalog(elements, workspace)
+	// Ask for exactly the two controls this evidence reports. The full catalog
+	// carries state-dependent controls (`send` is absent on a settled composer)
+	// and a caller that demands them fails on controls it never reads.
+	controls, err := composerControls(elements, workspace, []string{"environment", "project"})
 	if err != nil {
 		return EnvironmentEvidence{}, fmt.Errorf("verify Desktop environment for evidence: %w", err)
 	}
