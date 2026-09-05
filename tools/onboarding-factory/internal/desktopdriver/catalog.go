@@ -42,10 +42,44 @@ var composerPaths = map[string][]int{
 
 var selectedSessionMenuPath = []int{0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 5, 4, 0, 6, 0, 1, 0}
 
+// basicTurnControls are the controls a basic turn actually drives: the two the
+// driver types into and clicks, plus the two that prove the composer is the
+// Local session for the requested workspace.
+//
+// `mode` and `model` are deliberately NOT here. Nothing in a basic turn touches
+// them — they are recipe controls — and they are state-dependent: measured on
+// 1.46388.4, index 6 is an AXPopUpButton titled "Auto" on a settled composer
+// and a plain AXGroup on one that has just been trusted, while prompt, send,
+// environment and project all resolve. Gating a turn on a control it never
+// uses turned that into "the composer never appeared".
+func basicTurnControls() []string {
+	return []string{"environment", "project", "prompt", "send"}
+}
+
+// composerCatalog resolves the FULL catalog. Callers that only need a subset
+// pass it to composerControls.
 func composerCatalog(elements []helperElement, workspace string) (map[string]helperSelector, error) {
+	names := make([]string, 0, len(composerPaths))
+	for name := range composerPaths {
+		names = append(names, name)
+	}
+	return composerControls(elements, workspace, names)
+}
+
+// composerControls resolves exactly the named controls, and refuses a name the
+// catalog does not carry rather than silently resolving fewer than asked.
+func composerControls(
+	elements []helperElement,
+	workspace string,
+	names []string,
+) (map[string]helperSelector, error) {
 	expectedProject := filepath.Base(filepath.Clean(workspace))
-	controls := make(map[string]helperSelector, len(composerPaths))
-	for name, path := range composerPaths {
+	controls := make(map[string]helperSelector, len(names))
+	for _, name := range names {
+		path, known := composerPaths[name]
+		if !known {
+			return nil, fmt.Errorf("Desktop control catalog has no %q control", name)
+		}
 		element, ok := elementAtPath(elements, path)
 		if !ok {
 			return nil, fmt.Errorf("Desktop %s control is missing at stable path %v", name, path)

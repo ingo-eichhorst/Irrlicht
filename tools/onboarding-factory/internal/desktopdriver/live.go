@@ -327,7 +327,7 @@ func waitForComposerControls(
 			lastMismatch = errors.New("answered the Desktop workspace trust prompt; waiting for the composer")
 			return false, nil
 		}
-		controls, err = composerCatalog(elements, workspace)
+		controls, err = composerControls(elements, workspace, basicTurnControls())
 		if err != nil {
 			lastMismatch = err
 			return false, nil
