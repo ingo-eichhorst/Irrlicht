@@ -363,6 +363,17 @@ func (d *SessionDetector) buildNewSessionState(id agent.Identity, ev agent.Event
 			state.State = newState
 		}
 	}
+
+	// A session born `working` is a RUN ALREADY UNDER WAY, and its autonomy
+	// span opens here (#1905 recording).
+	//
+	// It cannot open in applyStateTransition, which is where every other span
+	// opens: the block above assigns state.State directly and by design — the
+	// session does not yet exist for anything to transition. That is precisely
+	// why the run went unrecorded, and why the fix has to be at the birth site
+	// rather than folded into the transition path. See openAutonomySpanAtBirth
+	// for the start it picks and what it marks.
+	d.openAutonomySpanAtBirth(state, now)
 	return state
 }
 
@@ -1847,6 +1858,14 @@ func (d *SessionDetector) refreshStaleSessions() {
 		return
 	}
 	now := d.nowFn()
+
+	// Autonomy runs left open by a previous daemon that nobody rediscovered
+	// are closed here, once their adoption window has passed (#1905
+	// recording). Ahead of the per-session loop, because it is about sessions
+	// this loop will never see: they are the ones that ended while the daemon
+	// was down.
+	d.settleUnadoptedAutonomySpans(now.Unix())
+
 	for _, state := range sessions {
 		// An autonomy span held open by the flicker grace (#1905) settles
 		// here: this ticker is the only thing that revisits a session which
@@ -1883,6 +1902,14 @@ func (d *SessionDetector) refreshStaleSessions() {
 			}
 		}
 	}
+
+	// The open-run journal is reconciled LAST, against the sessions as this
+	// tick leaves them (#1905 recording) — so a run that just closed above is
+	// already gone from the set rather than being written out as running and
+	// removed a tick later. It also drops entries for sessions that are simply
+	// no longer in the repo, which is what keeps the journal from accumulating
+	// runs nothing will ever close.
+	d.syncOpenAutonomySpans(sessions, now.Unix())
 }
 
 // shouldRevisitIdleSession reports whether the ticker has a reason to run a

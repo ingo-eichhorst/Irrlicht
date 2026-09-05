@@ -98,10 +98,9 @@ struct HistoryView: View {
     // stateGranularity's same-looking keys, which are bucket widths).
     @State private var autonomyRange: HistoryAutonomyRange = .days30
     @State private var autonomySpanWindow: HistoryAutonomySpanWindow = .hours24
-    // …and one SECTION-WIDE control: which runs both elements count (#1905
-    // subagents). Top-level only by default — a subagent's run happens inside
-    // its parent's, so counting both counts one stretch twice.
-    @State private var autonomyRunScope: HistoryAutonomyRunScope = .topLevel
+    // There is no section-wide run-scope state any more (#1905 recording): the
+    // section counts every run, subagent runs included, so there is nothing to
+    // hold and nothing for the query key below to vary on.
 
     // Activity is opt-in (#1075): the matrix is reconstructed from recordings,
     // and a bucket that was never recorded looks exactly like an idle one, so
@@ -129,7 +128,7 @@ struct HistoryView: View {
     /// This is the macOS equivalent of the web's manual `historyFetchSeq`
     /// dedup — `.task(id:)` cancels the in-flight request when the key changes.
     private var queryKey: String {
-        let dims = "\(tab.rawValue)-\(fetchChart.rawValue)-\(effectiveGroup.rawValue)-\(scope?.query ?? "")-\(doraProject ?? "")-\(stateGranularity.rawValue)-\(autonomyRange.rawValue)-\(autonomySpanWindow.rawValue)-\(autonomyRunScope.rawValue)"
+        let dims = "\(tab.rawValue)-\(fetchChart.rawValue)-\(effectiveGroup.rawValue)-\(scope?.query ?? "")-\(doraProject ?? "")-\(stateGranularity.rawValue)-\(autonomyRange.rawValue)-\(autonomySpanWindow.rawValue)"
         if range == .custom {
             return "custom-\(appliedCustomStart ?? 0)-\(appliedCustomEnd ?? 0)-\(dims)"
         }
@@ -343,16 +342,11 @@ struct HistoryView: View {
             }
             .labelsHidden()
             .fixedSize()
-            // Which runs BOTH elements count. It belongs on the section's own
-            // control row rather than in either element's header precisely
-            // because it changes both at once — the distinction Span was moved
-            // out of this row to make.
-            Text("Runs").foregroundColor(.secondary)
-            Picker("Runs", selection: $autonomyRunScope) {
-                ForEach(HistoryAutonomyRunScope.allCases) { Text($0.label).tag($0) }
-            }
-            .labelsHidden()
-            .fixedSize()
+            // There is no Runs picker (#1905 recording). The section counts
+            // every run, subagent runs included, because Irrlicht recorded
+            // them — so there is no choice to offer, and no mode a reader has
+            // to remember before reading a figure. The panel says how much of a
+            // window was subagent work.
             Spacer(minLength: 0)
         }
         .pickerStyle(.menu)
@@ -655,18 +649,14 @@ struct HistoryView: View {
     /// what an incomplete pair means, rather than each half guessing.
     private func fetchAutonomyPart<T: Decodable>(chart: String, window: String) async -> T? {
         var comps = URLComponents(string: "\(DaemonEndpoint.httpBase)/api/v1/history")
-        var items = [
+        // The chart and its window, and nothing else (#1905 recording). Every
+        // run counts, so there is nothing to ask for — and sending the retired
+        // run-scope parameter would leave an OLD daemon serving a filtered
+        // payload while this panel's sentence said it counted everything.
+        comps?.queryItems = [
             URLQueryItem(name: "chart", value: chart),
             URLQueryItem(name: "window", value: window),
         ]
-        // Sent only when it is ON: the daemon's default is top-level runs, so
-        // the default view asks for nothing extra and an older daemon behaves
-        // exactly as this one does rather than silently including subagent runs
-        // the panel says it excluded.
-        if let include = autonomyRunScope.includeSubagentsParam {
-            items.append(URLQueryItem(name: "include_subagents", value: include))
-        }
-        comps?.queryItems = items
         guard let url = comps?.url else { return nil }
         do {
             let (data, resp) = try await URLSession.shared.data(from: url)

@@ -21,17 +21,26 @@ type fakeAutonomyStore struct {
 	total      int
 	truncated  bool
 	provenance outbound.AutonomySpanProvenance
-	// kinds is the window's run-kind census (#1905 subagents). The real store
-	// counts it BEFORE the subagent filter, which is why it is a field here
-	// rather than derived from `spans`: the number under test is precisely the
-	// one that describes runs the response does not carry.
-	kinds     outbound.AutonomySpanKinds
-	err       error
-	lastQuery outbound.AutonomySpanQuery
+	// kinds is the window's run-kind census (#1905 subagents). A field rather
+	// than something derived from `spans`, because the handler's job is to
+	// carry the store's census onto the wire, not to recompute it.
+	kinds outbound.AutonomySpanKinds
+	// measurement is the window's lower-bound census (#1905 recording): how
+	// many of the runs are still going, and how many started before Irrlicht
+	// was watching. A field for the same reason `kinds` is one — the handler's
+	// job is to carry it onto the wire, not to recompute it.
+	measurement outbound.AutonomySpanMeasurement
+	err         error
+	lastQuery   outbound.AutonomySpanQuery
 }
 
-func (f *fakeAutonomyStore) RecordSpan(outbound.AutonomySpan) error { return nil }
-func (f *fakeAutonomyStore) Prune(int) error                        { return nil }
+func (f *fakeAutonomyStore) RecordSpan(outbound.AutonomySpan) error     { return nil }
+func (f *fakeAutonomyStore) RecordOpenSpan(outbound.AutonomySpan) error { return nil }
+func (f *fakeAutonomyStore) SyncOpenSpans([]outbound.AutonomySpan) error {
+	return nil
+}
+func (f *fakeAutonomyStore) OpenSpans() ([]outbound.AutonomySpan, error) { return nil, nil }
+func (f *fakeAutonomyStore) Prune(int) error                             { return nil }
 func (f *fakeAutonomyStore) SpansInWindow(q outbound.AutonomySpanQuery) (*outbound.AutonomySpanResult, error) {
 	f.lastQuery = q
 	if f.err != nil {
@@ -44,6 +53,7 @@ func (f *fakeAutonomyStore) SpansInWindow(q outbound.AutonomySpanQuery) (*outbou
 		Truncated:     f.truncated,
 		Provenance:    f.provenance,
 		Kinds:         f.kinds,
+		Measurement:   f.measurement,
 	}, nil
 }
 

@@ -82,6 +82,13 @@ type spanRow struct {
 	// Parent is the parent session id of a subagent run. Empty on a top-level
 	// run, and on a subagent run whose source never named the parent.
 	Parent string `json:"parent,omitempty"`
+
+	// StartLowerBound marks a run whose start Irrlicht did not measure — it
+	// met the session already working (#1905 recording). Absent on every row
+	// written before that case was recorded at all, which reads back as
+	// false: those rows are the MEASURED case, because a build that could not
+	// open a span for such a run never wrote one.
+	StartLowerBound bool `json:"start_lower_bound,omitempty"`
 }
 
 // AutonomySpanTracker persists closed autonomy spans in append-only JSONL
@@ -99,6 +106,12 @@ type AutonomySpanTracker struct {
 	// mu guards fileMus.
 	mu      sync.Mutex
 	fileMus map[string]*sync.Mutex // sanitized project name → per-file write mutex
+
+	// openMu guards the single open-run journal (autonomy_open.go). Its own
+	// lock rather than a fileMus entry: the journal is not a project's log, it
+	// is read-modify-written whole, and a project's append must never wait on
+	// it.
+	openMu sync.Mutex
 }
 
 // NewAutonomySpanTracker returns a tracker rooted at the user's Application
@@ -142,7 +155,15 @@ func (t *AutonomySpanTracker) fileMu(project string) *sync.Mutex {
 // duration: a span with nothing to file it under cannot be drawn on a
 // per-project strip, and a zero-length span is a transition artefact, not a
 // run. Matches RecordSnapshot's "nothing useful to store" rule.
+//
+// The session's OPEN-RUN entry is cleared first and unconditionally, ahead of
+// that no-op rule (#1905 recording). The run is over whether or not it was
+// worth filing, and an entry left behind would keep reporting a finished run as
+// still going — and would be adopted, as a run, by the next daemon to start.
 func (t *AutonomySpanTracker) RecordSpan(span outbound.AutonomySpan) error {
+	if err := t.clearOpenSpan(span.Session); err != nil {
+		return err
+	}
 	project := projectKey(span.Project)
 	if project == "" || span.Duration() <= 0 {
 		return nil
@@ -161,8 +182,9 @@ func (t *AutonomySpanTracker) RecordSpan(span outbound.AutonomySpan) error {
 		// reader has to guess about. That is what "written explicitly on every
 		// new row" means in practice — the only blank `kind` on disk belongs to
 		// a build that predates the field.
-		Kind:   session.AutonomyKindOrUnknown(span.Kind),
-		Parent: span.Parent,
+		Kind:            session.AutonomyKindOrUnknown(span.Kind),
+		Parent:          span.Parent,
+		StartLowerBound: span.StartLowerBound,
 	}
 	data, err := json.Marshal(row)
 	if err != nil {
@@ -222,6 +244,20 @@ func (t *AutonomySpanTracker) SpansInWindow(q outbound.AutonomySpanQuery) (*outb
 			return nil, err
 		}
 	}
+	// The runs still in progress join the same list (#1905 recording). Folded
+	// AFTER the closed log and before the sort, so an open run sorts into place
+	// by its start like any other — a client that draws the strip in order does
+	// not need to know which rows came from which store.
+	//
+	// A journal read failure is NOT fatal here, unlike a closed-log one: the
+	// closed log is the answer, while the journal is the extra half, and
+	// failing the whole request would replace "the run in progress is missing"
+	// with "the section is broken".
+	if open, err := t.OpenSpans(); err == nil {
+		for _, s := range open {
+			foldOpenRun(s, q, res)
+		}
+	}
 	sort.Slice(res.Spans, func(i, j int) bool {
 		if res.Spans[i].Start != res.Spans[j].Start {
 			return res.Spans[i].Start < res.Spans[j].Start
@@ -242,13 +278,21 @@ func (t *AutonomySpanTracker) SpansInWindow(q outbound.AutonomySpanQuery) (*outb
 }
 
 // countSpanProvenance fills the window-scoped half of the provenance block
-// from the spans the query is actually returning. LiveSince is NOT computed
-// here: it is log-wide by definition and is accumulated over every row during
-// the fold, including rows outside the window.
+// from the spans the query is actually returning, plus the measurement block
+// beside it. LiveSince is NOT computed here: it is log-wide by definition and
+// is accumulated over every row during the fold, including rows outside the
+// window.
 func countSpanProvenance(res *outbound.AutonomySpanResult) {
 	res.Provenance.Reconstructed = 0
 	res.Provenance.CostDerived = 0
+	res.Measurement = outbound.AutonomySpanMeasurement{}
 	for _, s := range res.Spans {
+		if s.Running {
+			res.Measurement.Running++
+		}
+		if s.StartLowerBound {
+			res.Measurement.LowerBoundStart++
+		}
 		if !session.IsAutonomyReconstructed(s.Source) {
 			continue
 		}
@@ -256,6 +300,20 @@ func countSpanProvenance(res *outbound.AutonomySpanResult) {
 		if s.Source == session.AutonomySourceCost {
 			res.Provenance.CostDerived++
 		}
+	}
+}
+
+// countSpanKind folds one span's resolved kind into the window census. Shared
+// by the closed log's fold and the open-run journal's, so a run counts the same
+// whether it has finished or not.
+func countSpanKind(kind string, res *outbound.AutonomySpanResult) {
+	switch kind {
+	case session.AutonomyKindSubagent:
+		res.Kinds.Subagent++
+	case session.AutonomyKindTopLevel:
+		res.Kinds.TopLevel++
+	default:
+		res.Kinds.Unknown++
 	}
 }
 
@@ -283,40 +341,29 @@ func foldSpanRow(r spanRow, fallback string, q outbound.AutonomySpanQuery, res *
 	if r.End < q.Start || r.End >= q.End {
 		return
 	}
-	// The kind census counts EVERY span in the window, ahead of the filter
-	// below. A client's sentence is "N subagent runs excluded", and N cannot be
-	// counted off a list those runs have already been dropped from.
+	// The census counts every span in the window, and every span in the window
+	// is returned: NOTHING IS DROPPED FOR ITS KIND (#1905 recording). Subagent
+	// runs are runs Irrlicht recorded, so they are counted like the rest; the
+	// `kind` and `parent` fields on the row are what still tell them apart, for
+	// a client that wants to say so.
 	kind := session.AutonomyKindOrUnknown(r.Kind)
-	switch kind {
-	case session.AutonomyKindSubagent:
-		res.Kinds.Subagent++
-	case session.AutonomyKindTopLevel:
-		res.Kinds.TopLevel++
-	default:
-		res.Kinds.Unknown++
-	}
-	// A subagent's span is a nested interval inside its parent's, so the
-	// default view leaves it out. A run of UNKNOWN kind is kept: nothing
-	// established it was a subagent's, and dropping it would delete history to
-	// make a figure look tidy.
-	if kind == session.AutonomyKindSubagent && !q.IncludeSubagents {
-		return
-	}
+	countSpanKind(kind, res)
 	project := r.Project
 	if project == "" {
 		project = fallback
 	}
 	res.Spans = append(res.Spans, outbound.AutonomySpan{
-		Start:   r.Start,
-		End:     r.End,
-		Project: project,
-		Session: r.Session,
-		Adapter: r.Adapter,
-		Model:   r.Model,
-		Reason:  r.Reason,
-		Source:  r.Source,
-		Kind:    kind,
-		Parent:  r.Parent,
+		Start:           r.Start,
+		End:             r.End,
+		Project:         project,
+		Session:         r.Session,
+		Adapter:         r.Adapter,
+		Model:           r.Model,
+		Reason:          r.Reason,
+		Source:          r.Source,
+		Kind:            kind,
+		Parent:          r.Parent,
+		StartLowerBound: r.StartLowerBound,
 	})
 }
 

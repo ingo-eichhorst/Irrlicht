@@ -512,6 +512,15 @@ type SessionState struct {
 	// so the row is not written until the grace has passed. Nil whenever
 	// AutonomySpanStart is nil.
 	AutonomySpanPendingEnd *int64 `json:"autonomy_span_pending_end,omitempty"`
+
+	// AutonomySpanStartLowerBound marks an open span whose start Irrlicht did
+	// not measure: the session was ALREADY working when it was discovered, so
+	// the run began at or before AutonomySpanStart (#1905 recording).
+	//
+	// It rides on the session next to the start it qualifies, rather than
+	// being recomputed at close time, because by then the only thing that
+	// remembers how the span opened is the span itself. Cleared with the span.
+	AutonomySpanStartLowerBound bool `json:"autonomy_span_start_lower_bound,omitempty"`
 }
 
 // IsStale reports whether the session's last update is older than maxAge.

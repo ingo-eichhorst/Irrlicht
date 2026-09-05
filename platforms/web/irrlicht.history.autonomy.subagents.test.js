@@ -3,152 +3,138 @@ import { join } from 'node:path'
 import { describe, test, expect } from 'vitest'
 
 import { WEB_DIR } from './shippedFiles.testutil.js'
-import { autonomyModeLine, autonomyQuery } from './historyTab.js'
+import { autonomyCountingLine, autonomyQuery } from './historyTab.js'
 
-// Which runs the Autonomy section counts (#1905 subagents).
+// What the Autonomy section counts (#1905 subagents), retargeted at the FIELD
+// after the control was removed (#1905 recording).
 //
-// The daemon holds a parent `working` while its children run, so a subagent's
-// span is a NESTED INTERVAL inside its parent's. Counting both counts one
-// stretch of wall clock twice and — because subagent runs are short and
-// numerous — drags the headline median down. Top-level runs only is therefore
-// the default, and the panel has to SAY which mode produced the numbers above
-// it, because "42 runs" means two different things under the two modes.
+// The maintainer's decision: every run counts, subagent runs included, because
+// Irrlicht recorded them. So there is no mode, no control, and no excluded
+// count. The classification survives on every row, and the panel still
+// describes a window's MAKEUP — "42 runs" reads differently once you know how
+// many of them were nested inside another.
 
 const state = (over = {}) => ({
   autonomyRange: '30d',
   autonomySpan: '24h',
-  autonomyRuns: 'top',
   ...over,
 })
 
-const kinds = (over = {}) => ({ mode: 'top_level', top_level: 10, subagent: 0, unknown: 0, ...over })
+const kinds = (over = {}) => ({ top_level: 10, subagent: 0, unknown: 0, ...over })
 
-describe('autonomyQuery — the mode reaches the daemon', () => {
-  // The daemon's own default is top-level runs, so the default view sends
-  // NOTHING extra. That is what makes an older daemon serving a newer dashboard
-  // behave identically instead of silently including runs the panel says it
-  // excluded.
-  test('the default mode adds no parameter at all', () => {
+describe('autonomyQuery — no run-scope parameter reaches the daemon', () => {
+  // Sending the old parameter would leave an OLD daemon serving a filtered
+  // payload while this panel's sentence said it counted everything — the exact
+  // "wrong number with nothing on screen saying so" the section exists to
+  // avoid. So the query is exactly the chart and its window, and nothing else.
+  test('the query is the chart and its window, and nothing else', () => {
     expect(autonomyQuery('duration', state())).toBe('chart=autonomy_duration&window=30d')
     expect(autonomyQuery('spans', state())).toBe('chart=autonomy_spans&window=24h')
   })
 
-  test('including subagents is sent on BOTH elements', () => {
+  test('no leftover state key can revive the parameter', () => {
+    // The mutation this catches: a stale `autonomyRuns` left in local state (a
+    // stored preference, a resumed session) silently re-filtering the view.
     const s = state({ autonomyRuns: 'all' })
-    expect(autonomyQuery('duration', s)).toContain('include_subagents=true')
-    expect(autonomyQuery('spans', s)).toContain('include_subagents=true')
-    // …and neither element loses its own window doing it: the two vocabularies
-    // are different sets and neither endpoint accepts the other's keys.
+    expect(autonomyQuery('duration', s)).not.toContain('include_subagents')
+    expect(autonomyQuery('spans', s)).not.toContain('include_subagents')
+    // …and neither element loses its own window: the two vocabularies are
+    // different sets and neither endpoint accepts the other's keys.
     expect(autonomyQuery('duration', s)).toContain('window=30d')
     expect(autonomyQuery('spans', s)).toContain('window=24h')
   })
 })
 
-// The control has to exist in the markup AND be read by the wiring. Those are
-// two files, and a rename in either one produces a control that looks right and
-// does nothing — which is indistinguishable, on screen, from a window that
-// genuinely holds no subagent runs.
-describe('the control and the wiring name the same thing', () => {
+// The control is GONE from both files. Two files, and a leftover in either one
+// is its own failure: markup without wiring is a control that does nothing,
+// wiring without markup is a listener attached to a state key no request reads.
+describe('the Runs control is gone from the markup and the wiring', () => {
   const html = readFileSync(join(WEB_DIR, 'index.html'), 'utf8')
   const js = readFileSync(join(WEB_DIR, 'historyTab.js'), 'utf8')
 
-  test('the markup was actually read', () => {
+  test('the files were actually read', () => {
     // A file that failed to load would make every assertion below vacuous —
     // absence of a finding and inability to look must not read the same.
     expect(html.length).toBeGreaterThan(1000)
     expect(js.length).toBeGreaterThan(1000)
+    // A positive control: the row the Runs picker used to sit in is still
+    // there, so "not found" below means removed rather than mis-pathed.
     expect(html).toContain('history-autonomy-range-row')
+    expect(js).toContain("wireAutonomyPicker('history-autonomy-range-sel'")
   })
 
-  test('both modes are offered, with top-level pre-selected', () => {
-    expect(html).toContain('id="history-autonomy-runs-sel"')
-    expect(html).toContain('data-autonomy-runs="top"')
-    expect(html).toContain('data-autonomy-runs="all"')
-    // The default has to be the pre-selected button too, or the panel would
-    // say "top-level only" beside a control showing the other choice.
-    expect(html).toMatch(/data-autonomy-runs="top"[^>]*class="active"/)
-  })
-
-  test('the wiring reads that exact attribute into that exact state key', () => {
-    expect(js).toContain("wireAutonomyPicker('history-autonomy-runs-sel', 'autonomy-runs', 'autonomyRuns', 'autonomyRuns')")
+  test('no Runs fieldset, buttons or wiring survive', () => {
+    expect(html).not.toContain('history-autonomy-runs-sel')
+    expect(html).not.toContain('data-autonomy-runs')
+    expect(js).not.toContain('history-autonomy-runs-sel')
+    expect(js).not.toContain('autonomyRuns')
+    expect(js).not.toContain('include_subagents')
   })
 })
 
-describe('autonomyModeLine — the panel states what it counted', () => {
-  test('says nothing when the payload never stated a mode', () => {
-    // An older daemon. Absence is not "it counted top-level runs" — that is a
-    // claim this payload cannot make.
-    expect(autonomyModeLine({})).toBe('')
-    expect(autonomyModeLine(null)).toBe('')
-    expect(autonomyModeLine(undefined)).toBe('')
+describe('autonomyCountingLine — the panel states what it counted', () => {
+  test('says nothing when the payload carries no census', () => {
+    // An older daemon. Absence is "this response never said", which is not the
+    // same claim as "there were none".
+    expect(autonomyCountingLine({})).toBe('')
+    expect(autonomyCountingLine(null)).toBe('')
+    expect(autonomyCountingLine(undefined)).toBe('')
   })
 
-  test('the default mode names itself even when nothing was excluded', () => {
-    const line = autonomyModeLine({ kinds: kinds() })
-    expect(line).toContain('top-level runs only')
-    expect(line).toContain('no subagent runs')
-  })
-
-  test('the default mode says HOW MANY runs it left out', () => {
-    const line = autonomyModeLine({ kinds: kinds({ subagent: 37 }) })
-    expect(line).toContain('37 subagent runs')
-    expect(line).toContain('excluded')
-  })
-
-  test('singular and plural both read as English', () => {
-    expect(autonomyModeLine({ kinds: kinds({ subagent: 1 }) })).toContain('1 subagent run excluded')
-    expect(autonomyModeLine({ kinds: kinds({ subagent: 2 }) })).toContain('2 subagent runs excluded')
-  })
-
-  test('the including mode says what it added', () => {
-    const line = autonomyModeLine({ kinds: kinds({ mode: 'all', subagent: 37 }) })
+  test('a window with no subagent runs says so', () => {
+    const line = autonomyCountingLine({ kinds: kinds() })
     expect(line).toContain('Counting every run')
+    expect(line).toContain('holds none')
+  })
+
+  test('it says how many of the runs were subagents', () => {
+    const line = autonomyCountingLine({ kinds: kinds({ subagent: 37 }) })
     expect(line).toContain('37 subagent runs')
+    expect(line).toContain('inside its parent')
+    // The word that has to be gone: nothing is excluded any more, and a
+    // sentence still claiming so would describe a filter that no longer exists.
     expect(line).not.toContain('excluded')
   })
 
-  // THE TRAP THIS SENTENCE EXISTS FOR. A row written before Irrlicht told the
-  // two apart carries no classification. It is COUNTED — excluding it would
-  // delete most of a back-filled history on a guess — and counting it in
-  // SILENCE is the failure #1905 exists to prevent: the view would claim to
-  // exclude subagent runs while including every historical one.
-  test('unknown-kind runs are named, in both modes', () => {
-    for (const mode of ['top_level', 'all']) {
-      const line = autonomyModeLine({ kinds: kinds({ mode, subagent: 3, unknown: 8148 }) })
-      expect(line).toContain('8148 runs were recorded before Irrlicht told')
-      expect(line).toContain('counted either way')
-    }
+  test('singular and plural both read as English', () => {
+    expect(autonomyCountingLine({ kinds: kinds({ subagent: 1 }) })).toContain('1 subagent run —')
+    expect(autonomyCountingLine({ kinds: kinds({ subagent: 2 }) })).toContain('2 subagent runs —')
+  })
+
+  // THE TRAP THIS CLAUSE EXISTS FOR. A row written before Irrlicht told the two
+  // apart carries no classification. It is counted like the rest — and counting
+  // it in SILENCE would let the panel imply a classification nobody made.
+  test('unknown-kind runs are named', () => {
+    const line = autonomyCountingLine({ kinds: kinds({ subagent: 3, unknown: 8148 }) })
+    expect(line).toContain('8148 runs were recorded before Irrlicht told')
+    expect(line).toContain('counted either way')
   })
 
   test('a window with no unknown runs says nothing about them', () => {
-    expect(autonomyModeLine({ kinds: kinds({ subagent: 3 }) })).not.toContain('unknown')
+    expect(autonomyCountingLine({ kinds: kinds({ subagent: 3 }) })).not.toContain('unknown')
   })
 
   test('one unknown run reads as singular', () => {
-    expect(autonomyModeLine({ kinds: kinds({ unknown: 1 }) })).toContain('1 run was recorded before')
+    expect(autonomyCountingLine({ kinds: kinds({ unknown: 1 }) })).toContain('1 run was recorded before')
   })
 
-  // COMMITTED IN-LANGUAGE MUTANTS. Each of these is a plausible way to get the
-  // sentence wrong, and each passes at least one of the assertions above on its
-  // own — so the suite has to be shown to tell them apart from production.
-  test('production tells the modes and the unknown case apart', () => {
-    const topOnly = { kinds: kinds({ subagent: 5, unknown: 9 }) }
-    const withSubs = { kinds: kinds({ mode: 'all', subagent: 5, unknown: 9 }) }
+  // COMMITTED IN-LANGUAGE MUTANTS. Each is a plausible way to get the sentence
+  // wrong and each passes at least one assertion above on its own, so the suite
+  // has to be shown to tell them apart from production.
+  test('production tells the census cases apart', () => {
+    const withSubs = { kinds: kinds({ subagent: 5, unknown: 9 }) }
+    const noSubs = { kinds: kinds({ subagent: 0, unknown: 9 }) }
     const noUnknown = { kinds: kinds({ subagent: 5, unknown: 0 }) }
 
-    // A mutant that ignores the mode: both modes read identically, so a reader
-    // could not tell which produced the figures.
-    const modeBlind = (p) => `${p.kinds.subagent} subagent runs.`
-    expect(modeBlind(topOnly)).toBe(modeBlind(withSubs))
-    expect(autonomyModeLine(topOnly)).not.toBe(autonomyModeLine(withSubs))
+    // A mutant blind to the subagent count: a window full of nested runs reads
+    // exactly like one with none.
+    const subBlind = () => 'Counting every run.'
+    expect(subBlind(withSubs)).toBe(subBlind(noSubs))
+    expect(autonomyCountingLine(withSubs)).not.toBe(autonomyCountingLine(noSubs))
 
-    // A mutant that drops the unknown clause: the silent inclusion.
-    const unknownBlind = (p) => `Counting top-level runs only · ${p.kinds.subagent} excluded.`
-    expect(unknownBlind(topOnly)).toBe(unknownBlind(noUnknown))
-    expect(autonomyModeLine(topOnly)).not.toBe(autonomyModeLine(noUnknown))
-
-    // A mutant that always speaks the same sentence.
-    const constant = () => 'Counting runs.'
-    expect(constant(topOnly)).toBe(constant(withSubs))
+    // A mutant that drops the unknown clause: the silent classification.
+    const unknownBlind = (p) => `Counting every run, including ${p.kinds.subagent}.`
+    expect(unknownBlind(withSubs)).toBe(unknownBlind(noUnknown))
+    expect(autonomyCountingLine(withSubs)).not.toBe(autonomyCountingLine(noUnknown))
   })
 })

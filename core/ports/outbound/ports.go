@@ -502,6 +502,31 @@ type AutonomySpan struct {
 	// it. Empty on a subagent run whose source knew it was a child but never
 	// named the parent.
 	Parent string
+
+	// Running marks a run that HAS NOT ENDED. End is then the instant the run
+	// was last observed still going, so Duration() is how long it has lasted
+	// SO FAR — a lower bound on its own length, not a measurement of it.
+	//
+	// Recording only finished runs is how the feature lost the long ones
+	// (#1905 recording): a three-hour run that is still going contributes
+	// nothing at all, and it is exactly the run the section exists to report.
+	// So it is carried, marked, and kept OUT of every percentile — see
+	// buildAutonomyDurationResponse, where that choice is made and stated.
+	Running bool
+
+	// StartLowerBound marks a run whose START was not measured: Irrlicht began
+	// watching a session that was already working, so the run began at or
+	// BEFORE the recorded Start and Duration() is a lower bound.
+	//
+	// The alternative to carrying such runs is dropping them, and dropping
+	// them is what produced the under-count this field exists to end: a
+	// restart re-discovers every live session as "already working", so on a
+	// day with ten restarts nearly every long run is one of these.
+	//
+	// Never set on a run whose opening transition the daemon actually saw, and
+	// never set on a run recovered from the open-run journal — that start was
+	// measured by the daemon that died, which is why the journal exists.
+	StartLowerBound bool
 }
 
 // Duration is the span's length in seconds, floored at 0 so a clock that
@@ -525,16 +550,13 @@ type AutonomySpanQuery struct {
 	// instead of quietly drawing a partial window as if it were whole.
 	Limit int
 
-	// IncludeSubagents adds runs classified session.AutonomyKindSubagent to the
-	// result. FALSE IS THE DEFAULT, and the default is the point (#1905
-	// subagents): the daemon holds a parent `working` while its children run,
-	// so a subagent's span is a nested interval inside its parent's and
-	// counting both counts one stretch twice.
-	//
-	// It never excludes a run of UNKNOWN kind. Excluding those would delete
-	// most of a back-filled history on a guess; they are counted, and the
-	// result says how many there are so a client can say so on screen.
-	IncludeSubagents bool
+	// There is deliberately NO subagent filter here (#1905 recording). Every
+	// run is counted, subagent runs included, because they are recorded by
+	// Irrlicht itself and are part of what it did. The `Kind` and `Parent`
+	// fields stay on every row — a subagent run is still identifiable as one,
+	// and can still be shown against the run that contains it — but which runs
+	// a window HOLDS is no longer a question the caller gets to answer
+	// differently from one request to the next.
 }
 
 // AutonomySpanResult carries one window read plus the two facts the "no data"
@@ -561,12 +583,35 @@ type AutonomySpanResult struct {
 	// measured — the fact both clients need to mark a back-filled view.
 	Provenance AutonomySpanProvenance
 
-	// Kinds counts the window by run kind, BEFORE the subagent filter drops
-	// anything. That order is the whole point: the number a client prints is
-	// "N subagent runs excluded", which cannot be counted off a result those
-	// runs have already been removed from.
+	// Kinds counts the window by run kind. Nothing is dropped for its kind any
+	// more (#1905 recording), so these three now add up to the returned rows —
+	// they say what the window is MADE OF rather than what was left out of it.
 	Kinds AutonomySpanKinds
+
+	// Measurement says how much of this window is not a finished, fully
+	// measured run — the two facts a percentile cannot carry on its own.
+	Measurement AutonomySpanMeasurement
 }
+
+// AutonomySpanMeasurement counts the runs in one window whose duration is a
+// LOWER BOUND rather than a measurement (#1905 recording).
+//
+// Both kinds are returned, always: dropping them is what produced the
+// under-count. What they must never do is pass as measured, which is why they
+// are counted separately and said out loud by both clients.
+type AutonomySpanMeasurement struct {
+	// Running is how many of the returned runs have not ended yet.
+	Running int
+
+	// LowerBoundStart is how many of the returned runs began before Irrlicht
+	// was watching, so their recorded start is the moment it started watching
+	// and not the moment the run began.
+	LowerBoundStart int
+}
+
+// Any reports whether the window holds a run whose duration is a lower bound —
+// the single condition under which a client has something extra to say.
+func (m AutonomySpanMeasurement) Any() bool { return m.Running > 0 || m.LowerBoundStart > 0 }
 
 // AutonomySpanKinds is one window's census by run kind (#1905 subagents).
 //
@@ -577,8 +622,9 @@ type AutonomySpanKinds struct {
 	// TopLevel is runs of sessions with no parent.
 	TopLevel int
 
-	// Subagent is runs of child sessions — excluded from Spans unless the
-	// query set IncludeSubagents.
+	// Subagent is runs of child sessions. Always counted and always returned
+	// (#1905 recording) — they are runs Irrlicht recorded, and which ones a
+	// window holds is not a per-request choice.
 	Subagent int
 
 	// Unknown is runs whose kind nothing established: rows written before the
@@ -638,13 +684,43 @@ func (p AutonomySpanProvenance) LiveSince() int64 { return p.EraStarts[""] }
 // a normal user nothing while looking exactly like a chart of "you did
 // nothing". This store follows the cost log instead — written unconditionally,
 // pruned on the same schedule (#1905).
+// It also keeps the OPEN-RUN JOURNAL — the runs that have started and not
+// finished. That journal is not a convenience: it is the only thing that
+// survives the daemon process, and a run's whole life is inside one daemon's
+// process lifetime only for the short runs. A restart used to end every open
+// run silently, so the longer a run was, the likelier it was never recorded at
+// all (#1905 recording).
 type AutonomySpanStore interface {
-	// RecordSpan appends one closed span. Implementations may no-op on a span
-	// with no project or a non-positive duration.
+	// RecordSpan appends one closed span, and clears whatever open-run entry
+	// that session had. Implementations may no-op on a span with no project or
+	// a non-positive duration — but the open-run entry is cleared either way,
+	// because the run is over whether or not it was worth filing.
 	RecordSpan(span AutonomySpan) error
 
-	// SpansInWindow returns the spans that ended inside the query window,
-	// plus the log-wide earliest start and total count.
+	// RecordOpenSpan records (or refreshes) ONE run that is currently under
+	// way, keyed by its session. Called the instant a run opens, so a daemon
+	// that dies seconds later still leaves the run recoverable.
+	//
+	// span.End is the instant the run was last observed alive; it moves
+	// forward on every refresh and is where an unrecovered run is finally
+	// closed.
+	RecordOpenSpan(span AutonomySpan) error
+
+	// SyncOpenSpans replaces the whole journal with exactly these runs.
+	//
+	// The authoritative reconciliation, run on the detector's refresh ticker:
+	// it refreshes every live run's last-seen instant AND drops entries for
+	// sessions that no longer exist, in one write, so the journal cannot
+	// accumulate runs nothing will ever close.
+	SyncOpenSpans(spans []AutonomySpan) error
+
+	// OpenSpans returns every run in the journal, each with Running set and
+	// End at the instant it was last observed alive.
+	OpenSpans() ([]AutonomySpan, error)
+
+	// SpansInWindow returns the spans that ended inside the query window —
+	// plus the runs still in progress that overlap it — with the log-wide
+	// earliest start and total count.
 	SpansInWindow(q AutonomySpanQuery) (*AutonomySpanResult, error)
 
 	// Prune drops span rows older than the given number of days.

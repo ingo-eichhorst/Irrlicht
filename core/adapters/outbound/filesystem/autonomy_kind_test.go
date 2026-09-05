@@ -12,12 +12,14 @@ import (
 	"irrlicht/core/ports/outbound"
 )
 
-// Autonomy run KIND (#1905 subagents) — the storage half.
+// Autonomy run KIND (#1905 subagents) — the storage half, retargeted at the
+// FIELD after the filter was removed (#1905 recording).
 //
-// A subagent's span is a NESTED INTERVAL inside its parent's: the daemon holds
-// a parent `working` while its children run. So the store has to know which
-// kind a row is, exclude subagent rows by default, and — this is the part with
-// teeth — never let a row that never said read as one of the two answers.
+// The store still has to know which kind a row is, still has to count the
+// window by kind, and — the part with teeth — must never let a row that never
+// said read as one of the two answers. What it no longer does is DROP anything
+// for its kind: a subagent's run is a run Irrlicht recorded, so every window
+// read returns it.
 
 func kindedSpan(start, end int64, sessionID, kind, parent string) outbound.AutonomySpan {
 	s := span(start, end, "proj", session.StateReady)
@@ -46,11 +48,9 @@ func writeRawSpanRow(t *testing.T, dir, project, line string) {
 	}
 }
 
-func allSpans(t *testing.T, tr *AutonomySpanTracker, includeSubagents bool) *outbound.AutonomySpanResult {
+func allSpans(t *testing.T, tr *AutonomySpanTracker) *outbound.AutonomySpanResult {
 	t.Helper()
-	res, err := tr.SpansInWindow(outbound.AutonomySpanQuery{
-		Start: 0, End: math.MaxInt64, IncludeSubagents: includeSubagents,
-	})
+	res, err := tr.SpansInWindow(outbound.AutonomySpanQuery{Start: 0, End: math.MaxInt64})
 	if err != nil {
 		t.Fatalf("SpansInWindow: %v", err)
 	}
@@ -112,8 +112,8 @@ func TestAutonomySpanTracker_WritesAnExplicitKindOnEveryRow(t *testing.T) {
 }
 
 // THE LEGACY ROW. A row with no `kind` key at all — the shape every row on the
-// maintainer's disk had before this change — must read back as UNKNOWN, be
-// COUNTED as unknown, and be RETURNED under the default query.
+// maintainer's disk had before the classification existed — must read back as
+// UNKNOWN, be COUNTED as unknown, and be RETURNED.
 //
 // Each third of that is a separate way to get it wrong: resolving it to
 // top-level is the silent claim; counting it as top-level hides it from the
@@ -124,9 +124,9 @@ func TestAutonomySpanTracker_LegacyRowIsNeverSilentlyClassified(t *testing.T) {
 	writeRawSpanRow(t, dir, "proj",
 		`{"start":1000,"end":1100,"project":"proj","session":"legacy","reason":"ready"}`)
 
-	res := allSpans(t, tr, false)
+	res := allSpans(t, tr)
 	if len(res.Spans) != 1 {
-		t.Fatalf("returned %d spans, want 1 — a legacy row must not be dropped by the default view", len(res.Spans))
+		t.Fatalf("returned %d spans, want 1 — a legacy row must not be dropped", len(res.Spans))
 	}
 	if got := res.Spans[0].Kind; got != session.AutonomyKindUnknown {
 		t.Fatalf("legacy row Kind = %q, want %q — absence must never resolve to a claim",
@@ -140,10 +140,15 @@ func TestAutonomySpanTracker_LegacyRowIsNeverSilentlyClassified(t *testing.T) {
 	}
 }
 
-// THE DEFAULT VIEW. Subagent rows are left out, and the count of what was left
-// out survives the filter — because "N subagent runs excluded" is exactly the
-// number a client cannot compute from a list those runs are missing from.
-func TestAutonomySpanTracker_DefaultExcludesSubagentsButStillCountsThem(t *testing.T) {
+// EVERY RUN IS RETURNED, subagent runs included (#1905 recording). The
+// classification survives — each row still says which kind it is, and the
+// census still counts the window by kind — but nothing is dropped for it.
+//
+// This is the retargeted form of the test that used to pin the default view's
+// exclusion. The mutation it now catches is a subagent filter coming back in
+// any shape: reinstating one drops `sub-a` and `sub-b` and the count falls to
+// two.
+func TestAutonomySpanTracker_ReturnsEveryRunIncludingSubagents(t *testing.T) {
 	dir := t.TempDir()
 	tr := NewAutonomySpanTrackerWithDir(dir)
 	for _, s := range []outbound.AutonomySpan{
@@ -157,39 +162,28 @@ func TestAutonomySpanTracker_DefaultExcludesSubagentsButStillCountsThem(t *testi
 		}
 	}
 
-	def := allSpans(t, tr, false)
-	if len(def.Spans) != 2 {
-		t.Fatalf("default view returned %d spans, want 2 (the top-level one and the unknown one): %+v",
-			len(def.Spans), def.Spans)
+	res := allSpans(t, tr)
+	if len(res.Spans) != 4 {
+		t.Fatalf("returned %d spans, want 4 — a subagent's run is a run Irrlicht recorded, "+
+			"and nothing is dropped for its kind: %+v", len(res.Spans), res.Spans)
 	}
-	for _, s := range def.Spans {
-		if s.Kind == session.AutonomyKindSubagent {
-			t.Fatalf("the default view returned a subagent run: %+v", s)
-		}
+	if res.Kinds != (outbound.AutonomySpanKinds{TopLevel: 1, Subagent: 2, Unknown: 1}) {
+		t.Fatalf("Kinds = %+v, want {TopLevel:1 Subagent:2 Unknown:1}", res.Kinds)
 	}
-	if def.Kinds != (outbound.AutonomySpanKinds{TopLevel: 1, Subagent: 2, Unknown: 1}) {
-		t.Fatalf("default Kinds = %+v, want {TopLevel:1 Subagent:2 Unknown:1} — the census counts the "+
-			"WINDOW, not the rows that survived the filter", def.Kinds)
-	}
-
-	all := allSpans(t, tr, true)
-	if len(all.Spans) != 4 {
-		t.Fatalf("include-subagents view returned %d spans, want 4", len(all.Spans))
-	}
-	if all.Kinds != def.Kinds {
-		t.Fatalf("the census changed with the mode: %+v vs %+v — the same window holds the same runs "+
-			"whichever ones were asked for", all.Kinds, def.Kinds)
+	if res.Kinds.Total() != len(res.Spans) {
+		t.Fatalf("census total %d != rows returned %d — with no filter left, the two must agree",
+			res.Kinds.Total(), len(res.Spans))
 	}
 	// The parent link survives the round trip: it is what lets a nested run be
-	// attributed to the run that contains it, not merely excluded from it.
+	// attributed to the run that contains it.
 	var sub *outbound.AutonomySpan
-	for i := range all.Spans {
-		if all.Spans[i].Session == "sub-a" {
-			sub = &all.Spans[i]
+	for i := range res.Spans {
+		if res.Spans[i].Session == "sub-a" {
+			sub = &res.Spans[i]
 		}
 	}
 	if sub == nil {
-		t.Fatal("the subagent run is missing from the include-subagents view")
+		t.Fatal("the subagent run is missing")
 	}
 	if sub.Parent != "top-a" {
 		t.Fatalf("subagent run Parent = %q, want %q", sub.Parent, "top-a")
@@ -225,7 +219,7 @@ func TestAutonomySpanTracker_DropReconstructedKeepsMeasuredRows(t *testing.T) {
 	if dropped != 3 {
 		t.Fatalf("dropped %d rows, want 3", dropped)
 	}
-	res := allSpans(t, tr, true)
+	res := allSpans(t, tr)
 	if len(res.Spans) != 1 {
 		t.Fatalf("kept %d spans, want 1: %+v", len(res.Spans), res.Spans)
 	}

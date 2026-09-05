@@ -85,6 +85,57 @@ func (d *SessionDetector) openOrResumeAutonomySpan(state *session.SessionState, 
 	start := now
 	state.AutonomySpanStart = &start
 	state.AutonomySpanPendingEnd = nil
+	// This edge was OBSERVED — the session was seen entering `working` — so the
+	// start is measured and the run is not a lower bound. Set explicitly rather
+	// than left alone: the same session may have carried a lower-bound span
+	// earlier in its life, and a stale true here would mark a fully measured
+	// run as an estimate.
+	state.AutonomySpanStartLowerBound = false
+	d.journalOpenAutonomySpan(state, now)
+}
+
+// openAutonomySpanAtBirth opens the span for a session that was ALREADY
+// `working` when Irrlicht first saw it (#1905 recording).
+//
+// This is the fix for the largest of the three losses. shouldClassifyAtBirth
+// births such a session `working` by assigning state.State directly, which
+// bypasses applyStateTransition — and applyStateTransition's single call to
+// applyAutonomySpanTransition was the only place a span could open. Every run
+// already under way at discovery therefore recorded nothing, and after a daemon
+// restart EVERY live session is a session already under way.
+//
+// THE START IS AN EVIDENCE LADDER, and which rung fired is carried on the span:
+//
+//  1. The open-run journal a previous daemon left behind. That start was
+//     MEASURED, by the daemon that died holding it, so the run keeps it and is
+//     not marked as a bound. This is what makes a run that outlives its daemon
+//     one run rather than none.
+//  2. Discovery time, MARKED AS A LOWER BOUND. Nothing in the daemon's own
+//     state says when a run it did not see start began, and the transcript
+//     signals it does hold cannot answer it either: SessionMetrics carries no
+//     turn-start instant, and the two session-scope times that exist
+//     (ElapsedSeconds' session start, CompletedTurns) would date the run to the
+//     start of the whole SESSION — hours early on a session that has taken
+//     twenty turns. Overstating is the one direction that turns a missing
+//     number into a wrong one, so the run is dated from the moment Irrlicht
+//     began watching and says that its duration is a floor.
+//
+// Dropping such runs instead is what produced the 5-recorded-of-35 under-count
+// this fix exists to end, so rung 2 records rather than declines.
+func (d *SessionDetector) openAutonomySpanAtBirth(state *session.SessionState, now int64) {
+	if state == nil || state.State != session.StateWorking {
+		return
+	}
+	start := now
+	lowerBound := true
+	if recovered, ok := d.adoptRecoveredAutonomySpan(state.SessionID); ok {
+		start = recovered.Start
+		lowerBound = recovered.StartLowerBound
+	}
+	state.AutonomySpanStart = &start
+	state.AutonomySpanPendingEnd = nil
+	state.AutonomySpanStartLowerBound = lowerBound
+	d.journalOpenAutonomySpan(state, now)
 }
 
 // settleAutonomySpanOnLeave closes the span for a transition into a state that
@@ -122,16 +173,27 @@ func (d *SessionDetector) flushExpiredAutonomySpan(state *session.SessionState, 
 	return true
 }
 
-// settleAutonomySpanOnTeardown finalizes a still-pending span for a session
-// that is going away. A deleted session can never return to `working`, so the
-// grace has nothing left to decide and the pending close is written
-// immediately rather than waiting for a ticker that will never see this
-// session again.
+// settleAutonomySpanOnTeardown finalizes a still-open span for a session that
+// is going away. A deleted session can never return to `working`, so the grace
+// has nothing left to decide and the close is written immediately rather than
+// waiting for a ticker that will never see this session again.
+//
+// TWO CASES, and the second one was a leak (#1905 recording). A session with a
+// PENDING end closes there — it finished its turn and then vanished, and the
+// turn is where the run ended. A session torn down while still WORKING — the
+// agent's process exited mid-run, which is how most sessions actually end —
+// used to close nowhere at all: its run was simply lost. It now closes at the
+// last instant the daemon saw it, with an end reason of unknown, because
+// nothing observed why it stopped and `ready` would claim it finished its turn.
 func (d *SessionDetector) settleAutonomySpanOnTeardown(state *session.SessionState) {
-	if state == nil || state.AutonomySpanPendingEnd == nil {
+	if state == nil || state.AutonomySpanStart == nil {
 		return
 	}
-	d.closeAutonomySpan(state, *state.AutonomySpanPendingEnd, session.StateReady)
+	if state.AutonomySpanPendingEnd != nil {
+		d.closeAutonomySpan(state, *state.AutonomySpanPendingEnd, session.StateReady)
+		return
+	}
+	d.closeAutonomySpan(state, d.nowFn().Unix(), session.AutonomyReasonUnknown)
 }
 
 // closeAutonomySpan clears the open span off the session and appends the
@@ -150,8 +212,10 @@ func (d *SessionDetector) settleAutonomySpanOnTeardown(state *session.SessionSta
 // `error`); nothing could make the second case legible after the fact.
 func (d *SessionDetector) closeAutonomySpan(state *session.SessionState, end int64, reason string) {
 	start := state.AutonomySpanStart
+	lowerBound := state.AutonomySpanStartLowerBound
 	state.AutonomySpanStart = nil
 	state.AutonomySpanPendingEnd = nil
+	state.AutonomySpanStartLowerBound = false
 	if start == nil || d.autonomySpans == nil {
 		return
 	}
@@ -163,6 +227,10 @@ func (d *SessionDetector) closeAutonomySpan(state *session.SessionState, end int
 		Adapter: state.Adapter,
 		Model:   autonomySpanModel(state),
 		Reason:  reason,
+		// Carried onto the closed row, not recomputed: by the time a run ends,
+		// the only thing that still remembers whether its start was measured is
+		// the run itself.
+		StartLowerBound: lowerBound,
 		// The live path always knows which it is: it is holding the session
 		// state, where an empty ParentSessionID means "no parent", not "nobody
 		// looked". So it writes `top` or `sub` and never `unknown` — the

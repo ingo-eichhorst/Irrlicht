@@ -91,12 +91,10 @@ const historyState = {
   // autonomyData holds BOTH responses, since the section renders both at once.
   autonomyRange: '30d',
   autonomySpan: '24h',
-  // Which runs the section counts (#1905 subagents). 'top' — top-level runs
-  // only — is the default because a subagent's run is a NESTED INTERVAL inside
-  // its parent's: the daemon deliberately holds a parent `working` while its
-  // children run, so counting both counts one stretch of wall clock twice and
-  // pulls the headline median down with short nested runs.
-  autonomyRuns: 'top',
+  // There is no run-scope key here any more (#1905 recording): the section
+  // counts every run, subagent runs included, because Irrlicht recorded them.
+  // Each row still carries its `kind` and `parent`, so a subagent's run stays
+  // identifiable — what went is the choice, not the classification.
   autonomyData: null,
   filters: { provider: [], token_type: [], project: [] },
   known: { provider: [], project: [] },
@@ -290,11 +288,11 @@ export function autonomyQuery(element, state = historyState) {
     p.set('chart', 'autonomy_duration');
     p.set('window', state.autonomyRange);
   }
-  // Sent on BOTH elements, and only when it is on: the daemon's default is
-  // top-level runs, so the default view sends nothing extra and an older
-  // daemon serving a newer dashboard behaves exactly as this one does rather
-  // than silently including subagent runs the panel says it excluded.
-  if (state.autonomyRuns === 'all') p.set('include_subagents', 'true');
+  // No run-scope parameter (#1905 recording). Every run counts, so there is
+  // nothing to ask for — and sending the retired one would leave an OLD daemon
+  // serving a filtered payload while this panel's sentence said otherwise,
+  // which is the exact "wrong number, nothing on screen saying so" the section
+  // is built to avoid.
   return p.toString();
 }
 
@@ -839,41 +837,73 @@ export function autonomyReconstructionNote(duration) {
   return parts.join(' ');
 }
 
-// autonomyModeLine states, in words, WHICH RUNS the figures above it counted
-// and how many the active mode left out (#1905 subagents).
+// autonomyCountingLine states, in words, WHAT the figures above it counted
+// (#1905 subagents, retargeted by #1905 recording).
 //
-// It is never blank, and that is the rule: the number "42 runs" means two
-// different things under the two modes, and a reader cannot tell which by
-// looking. The mode ships in the payload rather than being read off local
-// state, so a panel drawn from a response that predates the last toggle still
-// labels that response correctly.
+// THERE IS NO MODE ANY MORE. Every run counts, subagent runs included, because
+// Irrlicht recorded them — so the sentence no longer reports an excluded count,
+// and there is no control whose position a reader has to remember. What it
+// still does is describe the window's MAKEUP, because "42 runs" reads
+// differently once you know how many of them were nested inside another.
 //
-// THE UNKNOWN CLAUSE IS THE LOAD-BEARING PART. A row written before Irrlicht
-// told the two apart carries no classification, and such a row is COUNTED here
-// — excluding it would delete most of a back-filled history on a guess. But
-// counting it silently is the exact failure this section exists to prevent: the
-// view would claim to exclude subagent runs while including every historical
-// one, with nothing on screen saying so. So the sentence says how many.
-export function autonomyModeLine(payload) {
+// THE UNKNOWN CLAUSE STAYS LOAD-BEARING. A row written before Irrlicht told the
+// two apart carries no classification, and such a row is counted like the rest
+// — but counting it silently would let the panel imply a classification nobody
+// made. So the sentence says how many.
+//
+// '' only for a payload that carries no census at all, which is a daemon older
+// than the field: absence there means "this response never said", which is not
+// the same claim as "there were none".
+export function autonomyCountingLine(payload) {
   const k = payload?.kinds;
   if (!k) return '';
   const sub = Number(k.subagent) || 0;
   const unknown = Number(k.unknown) || 0;
-  const parts = [];
-  if (k.mode === 'all') {
-    parts.push(sub > 0
-      ? 'Counting every run, including ' + sub + ' subagent run' + (sub === 1 ? '' : 's')
-        + ' — each of which happened inside its parent’s run.'
-      : 'Counting every run, subagent runs included. This window holds none.');
-  } else {
-    parts.push(sub > 0
-      ? 'Counting top-level runs only · ' + sub + ' subagent run' + (sub === 1 ? '' : 's')
-        + ' excluded, because each already happened inside its parent’s run.'
-      : 'Counting top-level runs only. This window holds no subagent runs.');
-  }
+  const parts = [sub > 0
+    ? 'Counting every run, including ' + sub + ' subagent run' + (sub === 1 ? '' : 's')
+      + ' — each of which happened inside its parent’s run.'
+    : 'Counting every run, subagent runs included. This window holds none.'];
   if (unknown > 0) {
     parts.push(unknown + ' run' + (unknown === 1 ? ' was' : 's were') + ' recorded before Irrlicht told '
       + 'top-level and subagent runs apart, so which they were is unknown — those are counted either way.');
+  }
+  return parts.join(' ');
+}
+
+// autonomyMeasurementNote marks the runs in view whose duration is a FLOOR
+// rather than a measurement (#1905 recording). '' when every run in view is
+// finished and fully measured, which is the quiet case on a machine whose
+// daemon has been up all day.
+//
+// Two kinds, two sentences, because they are two different limits and a reader
+// who conflated them would misread the chart in opposite directions:
+//
+//   - STILL RUNNING. The run has not ended, so its length is unknowable — it is
+//     shown, and deliberately left out of the percentiles, because folding a
+//     floor into a p95 as though it were final always shortens, and shortens
+//     the longest runs hardest. The sentence says both halves, so a reader who
+//     can see a 3-hour run on the strip is not left wondering why the median
+//     did not move.
+//   - STARTED BEFORE IRRLICHT WAS WATCHING. The run has finished, but its start
+//     is where Irrlicht began watching rather than where the run began — a
+//     restart re-discovers every live session this way. Those ARE samples;
+//     dropping them is what left 5 of a day's 35 runs on the record.
+export function autonomyMeasurementNote(payload) {
+  const m = payload?.measurement || {};
+  const running = Number(m.running) || 0;
+  const lowerBound = Number(m.start_lower_bound) || 0;
+  const parts = [];
+  if (running > 0) {
+    parts.push(running + ' run' + (running === 1 ? ' is' : 's are') + ' still going: '
+      + (running === 1 ? 'its length is' : 'their lengths are') + ' how long '
+      + (running === 1 ? 'it has' : 'they have') + ' lasted SO FAR, so '
+      + (running === 1 ? 'it is' : 'they are') + ' shown but left out of the percentiles.');
+  }
+  if (lowerBound > 0) {
+    parts.push(lowerBound + ' run' + (lowerBound === 1 ? '' : 's') + ' already going when Irrlicht '
+      + 'started watching — ' + (lowerBound === 1 ? 'its' : 'their') + ' start is when it started '
+      + 'watching, not when the run began, so ' + (lowerBound === 1 ? 'that length is a' : 'those lengths are')
+      + ' minimum' + (lowerBound === 1 ? '' : 's') + '.');
   }
   return parts.join(' ');
 }
@@ -1693,11 +1723,17 @@ function renderAutonomyPanel() {
         + 'that bucket’s longest run and p5 its shortest — not percentiles.');
     }
   }
-  // What these figures counted, and what the active mode left out (#1905
-  // subagents). Above the provenance line because it qualifies every number in
-  // the panel, where provenance qualifies where they came from.
-  const modeLine = autonomyModeLine(duration);
-  if (modeLine) appendHistoryEmpty(listEl, modeLine);
+  // What these figures counted (#1905 subagents). Above the provenance line
+  // because it qualifies every number in the panel, where provenance qualifies
+  // where they came from.
+  const countingLine = autonomyCountingLine(duration);
+  if (countingLine) appendHistoryEmpty(listEl, countingLine);
+  // …and which of them are floors rather than measurements (#1905 recording).
+  // Same register, and the same reason: a lower bound rendered as a measurement
+  // is a wrong number with nothing on screen saying it is wrong. Silent when
+  // every run in view is finished and fully measured.
+  const measurement = autonomyMeasurementNote(duration);
+  if (measurement) appendHistoryEmpty(listEl, measurement);
   // The provenance line is part of the feature: "no data" must never read as
   // "you did nothing".
   appendHistoryEmpty(listEl, autonomyProvenanceLine(duration));
@@ -2574,7 +2610,6 @@ export function initHistoryTab() {
   };
   wireAutonomyPicker('history-autonomy-range-sel', 'autonomy-range', 'autonomyRange', 'autonomyRange');
   wireAutonomyPicker('history-autonomy-span-sel', 'autonomy-span', 'autonomySpan', 'autonomySpan');
-  wireAutonomyPicker('history-autonomy-runs-sel', 'autonomy-runs', 'autonomyRuns', 'autonomyRuns');
 
   const histDoraProjectSel = document.getElementById('history-dora-project');
   if (histDoraProjectSel) histDoraProjectSel.addEventListener('change', () => {
