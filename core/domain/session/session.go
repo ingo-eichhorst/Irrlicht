@@ -497,6 +497,21 @@ type SessionState struct {
 	// Transcript monitoring for waiting-state recovery.
 	LastTranscriptSize int64  `json:"last_transcript_size,omitempty"`
 	WaitingStartTime   *int64 `json:"waiting_start_time,omitempty"`
+
+	// AutonomySpanStart is when the session's current unbroken stretch of
+	// `working` began — the OPEN autonomy span (#1905). Nil when no span is
+	// open. Follows WaitingStartTime's precedent exactly: a "when did this
+	// begin" clock lives on the session, and only the CLOSED span is
+	// persisted to the span log.
+	AutonomySpanStart *int64 `json:"autonomy_span_start,omitempty"`
+
+	// AutonomySpanPendingEnd is when an open span provisionally ended by
+	// reaching `ready`, held back by the flicker grace (#1905, design
+	// decision 1). A `ready` that is followed by `working` again within
+	// services.AutonomySpanGrace is tool-call flicker, not the end of a run,
+	// so the row is not written until the grace has passed. Nil whenever
+	// AutonomySpanStart is nil.
+	AutonomySpanPendingEnd *int64 `json:"autonomy_span_pending_end,omitempty"`
 }
 
 // IsStale reports whether the session's last update is older than maxAge.

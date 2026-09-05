@@ -15,9 +15,11 @@ import SwiftUI
 /// needs: Usage (cost/token time series), Activity (the projects × time
 /// grid of working/waiting/ready counts, #981/#1028), Metrics (a growing set
 /// of derived analytics — Yield's productive-vs-reverted plus DORA, #951),
-/// and Quota (live per-provider subscription rate-limit forecast).
+/// Quota (live per-provider subscription rate-limit forecast), and Autonomy
+/// (how long runs went without needing a human, #1905 — two elements over the
+/// span log, neither of which uses Range, Group, or the drilldown filters).
 enum HistoryTab: String, CaseIterable, Identifiable {
-    case usage, activity, metrics, quota
+    case usage, activity, metrics, quota, autonomy
 
     var id: String { rawValue }
 
@@ -27,6 +29,7 @@ enum HistoryTab: String, CaseIterable, Identifiable {
         case .activity: return "Activity"
         case .metrics: return "Metrics"
         case .quota: return "Quota"
+        case .autonomy: return "Autonomy"
         }
     }
 
@@ -89,6 +92,13 @@ struct HistoryView: View {
     // daemon's own chart=="state" special-case in resolveHistoryQuery).
     @State private var stateGranularity: HistoryGranularity = .hr24
 
+    // Autonomy (#1905) — TWO pickers, because the tab holds two elements with
+    // different windows: a Range for the percentile chart and a Span for the
+    // run strip. Both send ?window=, whose keys are window LENGTHS (unlike
+    // stateGranularity's same-looking keys, which are bucket widths).
+    @State private var autonomyRange: HistoryAutonomyRange = .days30
+    @State private var autonomySpanWindow: HistoryAutonomySpanWindow = .hours24
+
     // Activity is opt-in (#1075): the matrix is reconstructed from recordings,
     // and a bucket that was never recorded looks exactly like an idle one, so
     // without recordings enabled it reads as a grid of misleading blanks.
@@ -100,6 +110,10 @@ struct HistoryView: View {
     @State private var yieldResponse: HistoryYieldResponse?
     @State private var doraResponse: HistoryDoraResponse?
     @State private var stateResponse: HistoryStateResponse?
+    // Autonomy fetches BOTH elements for one tab render, so it keeps two
+    // responses rather than sharing the single-chart slot above.
+    @State private var autonomyDuration: HistoryAutonomyDurationResponse?
+    @State private var autonomySpans: HistoryAutonomySpansResponse?
     @State private var loadFailed = false
 
     init(onClose: @escaping () -> Void, initialTab: HistoryTab = .usage) {
@@ -111,7 +125,7 @@ struct HistoryView: View {
     /// This is the macOS equivalent of the web's manual `historyFetchSeq`
     /// dedup — `.task(id:)` cancels the in-flight request when the key changes.
     private var queryKey: String {
-        let dims = "\(tab.rawValue)-\(fetchChart.rawValue)-\(effectiveGroup.rawValue)-\(scope?.query ?? "")-\(doraProject ?? "")-\(stateGranularity.rawValue)"
+        let dims = "\(tab.rawValue)-\(fetchChart.rawValue)-\(effectiveGroup.rawValue)-\(scope?.query ?? "")-\(doraProject ?? "")-\(stateGranularity.rawValue)-\(autonomyRange.rawValue)-\(autonomySpanWindow.rawValue)"
         if range == .custom {
             return "custom-\(appliedCustomStart ?? 0)-\(appliedCustomEnd ?? 0)-\(dims)"
         }
@@ -227,6 +241,7 @@ struct HistoryView: View {
             case .activity: activityControls
             case .metrics: metricsControls
             case .quota: EmptyView()
+            case .autonomy: autonomyControls
             }
         }
         .padding(.horizontal, IrrSpacing.sp4)
@@ -293,6 +308,31 @@ struct HistoryView: View {
         HStack(spacing: IrrSpacing.sp3) {
             Picker("Granularity", selection: $stateGranularity) {
                 ForEach(HistoryGranularity.allCases) { Text($0.label).tag($0) }
+            }
+            .labelsHidden()
+            .fixedSize()
+            Spacer(minLength: 0)
+        }
+        .pickerStyle(.menu)
+        .controlSize(.small)
+        .font(.caption)
+    }
+
+    /// Autonomy tab (#1905): one picker per element — Range for the duration
+    /// chart, Span for the run strip. Neither is the shared `range`: the two
+    /// elements answer different questions over different windows, and the
+    /// section uses no Group or drilldown at all.
+    @ViewBuilder private var autonomyControls: some View {
+        HStack(spacing: IrrSpacing.sp3) {
+            Text("Range").foregroundColor(.secondary)
+            Picker("Range", selection: $autonomyRange) {
+                ForEach(HistoryAutonomyRange.allCases) { Text($0.label).tag($0) }
+            }
+            .labelsHidden()
+            .fixedSize()
+            Text("Span").foregroundColor(.secondary)
+            Picker("Span", selection: $autonomySpanWindow) {
+                ForEach(HistoryAutonomySpanWindow.allCases) { Text($0.label).tag($0) }
             }
             .labelsHidden()
             .fixedSize()
@@ -385,6 +425,7 @@ struct HistoryView: View {
                 case .activity: activityContent
                 case .metrics: metricsContent
                 case .quota: quotaContent
+                case .autonomy: autonomyContent
                 }
             }
         }
@@ -422,6 +463,20 @@ struct HistoryView: View {
                 onExportCSV: { save(ext: "csv", text: HistoryExport.csvState(s)) },
                 onExportJSON: { save(ext: "json", text: HistoryExport.jsonState(s)) }
             )
+        } else if loadFailed {
+            loadFailedText
+        } else {
+            ProgressView()
+                .frame(maxWidth: .infinity, minHeight: 220)
+        }
+    }
+
+    /// Autonomy tab (#1905): both elements, always together — the percentile
+    /// chart above, the run strip below.
+    @ViewBuilder private var autonomyContent: some View {
+        if let d = autonomyDuration, let s = autonomySpans {
+            HistoryAutonomyContentView(duration: d, spans: s,
+                                       range: autonomyRange, spanWindow: autonomySpanWindow)
         } else if loadFailed {
             loadFailedText
         } else {
@@ -498,6 +553,10 @@ struct HistoryView: View {
 
     private func fetch() async {
         guard tab != .quota else { return }  // quota reads the live snapshot, no fetch
+        if tab == .autonomy {
+            await fetchAutonomy()
+            return
+        }
         // DORA needs exactly one project — with none selected, there's
         // nothing to fetch at all (a distinct empty state, not a load
         // failure or a spinner; see doraContent).
@@ -555,6 +614,44 @@ struct HistoryView: View {
         }
     }
 
+    /// Autonomy (#1905) fetches BOTH elements — the tab shows them together,
+    /// and each has its own window, so neither can be folded into the shared
+    /// single-chart fetch above. A failure in either marks the tab failed
+    /// rather than showing one element beside a spinner that never resolves.
+    private func fetchAutonomy() async {
+        loadFailed = false
+        async let duration: HistoryAutonomyDurationResponse? =
+            fetchAutonomyPart(chart: "autonomy_duration", window: autonomyRange.rawValue)
+        async let spans: HistoryAutonomySpansResponse? =
+            fetchAutonomyPart(chart: "autonomy_spans", window: autonomySpanWindow.rawValue)
+        let (d, s) = await (duration, spans)
+        if Task.isCancelled { return }
+        guard let d, let s else {
+            loadFailed = true
+            return
+        }
+        autonomyDuration = d
+        autonomySpans = s
+    }
+
+    /// One Autonomy request. Returns nil on any failure — the caller decides
+    /// what an incomplete pair means, rather than each half guessing.
+    private func fetchAutonomyPart<T: Decodable>(chart: String, window: String) async -> T? {
+        var comps = URLComponents(string: "\(DaemonEndpoint.httpBase)/api/v1/history")
+        comps?.queryItems = [
+            URLQueryItem(name: "chart", value: chart),
+            URLQueryItem(name: "window", value: window),
+        ]
+        guard let url = comps?.url else { return nil }
+        do {
+            let (data, resp) = try await URLSession.shared.data(from: url)
+            guard (resp as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+            return try JSONDecoder().decode(T.self, from: data)
+        } catch {
+            return nil
+        }
+    }
+
     /// Merges a response's contributor labels into an accumulated project
     /// list, dropping the synthetic "unknown" bucket and keeping it sorted
     /// (#951 — DORA's project picker; #750's broader multi-dimension
@@ -570,9 +667,13 @@ struct HistoryView: View {
         // Activity's range/chart aren't meaningful (granularity replaces
         // range entirely) — name the file after granularity instead rather
         // than embedding a stale range/chart pair.
-        panel.nameFieldStringValue = tab == .activity
-            ? "irrlicht-history-activity-\(stateGranularity.rawValue).\(ext)"
-            : "irrlicht-history-\(range.rawValue)-\(chart.rawValue).\(ext)"
+        if tab == .activity {
+            panel.nameFieldStringValue = "irrlicht-history-activity-\(stateGranularity.rawValue).\(ext)"
+        } else if tab == .autonomy {
+            panel.nameFieldStringValue = "irrlicht-history-autonomy-\(autonomyRange.rawValue).\(ext)"
+        } else {
+            panel.nameFieldStringValue = "irrlicht-history-\(range.rawValue)-\(chart.rawValue).\(ext)"
+        }
         panel.begin { resp in
             guard resp == .OK, let url = panel.url else { return }
             try? text.write(to: url, atomically: true, encoding: .utf8)

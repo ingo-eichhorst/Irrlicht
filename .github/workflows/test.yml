@@ -70,6 +70,13 @@ jobs:
       - name: Test onboarding-factory module
         run: go test ./tools/onboarding-factory/... -count=1
 
+      # tools/seed-autonomy-spans writes the synthetic autonomy span log QA
+      # screenshots the Autonomy section against (#1905). Its refuse-to-
+      # clobber guard is only ever exercised by its own tests, so they run
+      # here rather than living where nothing invokes them.
+      - name: Test seed-autonomy-spans module
+        run: go test ./tools/seed-autonomy-spans/... -count=1
+
       # The Desktop helper is a separate macOS-only Swift package. Its script
       # owns the Swift commands and build location. Local preflight calls the
       # same script, so CI and local checks cannot use different procedures.

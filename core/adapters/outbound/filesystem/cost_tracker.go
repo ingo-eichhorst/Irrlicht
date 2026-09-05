@@ -1101,43 +1101,16 @@ func (t *CostTracker) pruneFile(path, project string, cutoff int64, survivors ma
 	fm.Lock()
 	defer fm.Unlock()
 
-	in, err := os.Open(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
+	// The read-transform-atomic-rename mechanics live in pruneJSONLFile, which
+	// the autonomy span log (#1905) shares — this store keeps only the part
+	// that is its own: which rows survive, and recording their session IDs.
+	return pruneJSONLFile(path, func(line []byte) bool {
+		keep, sid := filterPruneLine(line, cutoff)
+		if keep && sid != "" {
+			survivors[sid] = struct{}{}
 		}
-		return err
-	}
-	defer in.Close()
-
-	tmpPath := fmt.Sprintf("%s.tmp.%d.%d", path, os.Getpid(), time.Now().UnixNano())
-	out, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
-	if err != nil {
-		return err
-	}
-	w := bufio.NewWriter(out)
-	scanner := bufio.NewScanner(in)
-	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	kept, err := pruneLines(scanner, w, cutoff, survivors)
-	if err != nil {
-		out.Close()
-		os.Remove(tmpPath)
-		return err
-	}
-	if err := w.Flush(); err != nil {
-		out.Close()
-		os.Remove(tmpPath)
-		return err
-	}
-	if err := out.Close(); err != nil {
-		os.Remove(tmpPath)
-		return err
-	}
-	if kept == 0 {
-		os.Remove(tmpPath)
-		return os.Remove(path)
-	}
-	return os.Rename(tmpPath, path)
+		return keep
+	})
 }
 
 // filterPruneLine reports whether a row survives pruning (parses and is at or
@@ -1151,36 +1124,6 @@ func filterPruneLine(line []byte, cutoff int64) (keep bool, sessionID string) {
 		return false, ""
 	}
 	return true, r.Session
-}
-
-// pruneLines streams scanner, writing surviving rows (at or after cutoff) to
-// w and recording each survivor's session ID, returning the count kept.
-// Factored out of pruneFile so the caller's cleanup-on-error handling stays
-// flat; a write error here is reported to the caller exactly like the
-// post-loop scanner.Err() check, so both cases funnel through the same
-// cleanup path.
-func pruneLines(scanner *bufio.Scanner, w *bufio.Writer, cutoff int64, survivors map[string]struct{}) (kept int, err error) {
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-		keep, sid := filterPruneLine(line, cutoff)
-		if !keep {
-			continue
-		}
-		if _, err := w.Write(line); err != nil {
-			return kept, err
-		}
-		if err := w.WriteByte('\n'); err != nil {
-			return kept, err
-		}
-		if sid != "" {
-			survivors[sid] = struct{}{}
-		}
-		kept++
-	}
-	return kept, scanner.Err()
 }
 
 func (t *CostTracker) filePath(project string) string {

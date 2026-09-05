@@ -52,6 +52,10 @@ func (d *SessionDetector) cacheDeletedSnapshot(state *session.SessionState) {
 	if state == nil {
 		return
 	}
+	// Last chance to file a still-pending autonomy span (#1905): a deleted
+	// session never returns to `working`, so the flicker grace has nothing
+	// left to decide, and the 5s ticker will never see this session again.
+	d.settleAutonomySpanOnTeardown(state)
 	d.mu.Lock()
 	d.deletedStates[state.SessionID] = state
 	d.mu.Unlock()

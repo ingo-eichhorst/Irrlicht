@@ -189,7 +189,7 @@ func initCostTracker(logger outbound.Logger, fsRepo *filesystem.SessionRepositor
 	costTracker.SetProviderResolver(func(s *session.SessionState) string {
 		return services.ProviderForSession(s, "")
 	})
-	if err := costTracker.Prune(400); err != nil {
+	if err := costTracker.Prune(costRetentionDays); err != nil {
 		logger.LogError("startup", "", fmt.Sprintf("cost tracker prune failed: %v", err))
 	}
 	allSessions, err := fsRepo.ListAll()
@@ -203,6 +203,40 @@ func initCostTracker(logger outbound.Logger, fsRepo *filesystem.SessionRepositor
 	}
 	return costTracker
 }
+
+// initAutonomySpanStore opens the append-only per-project autonomy span JSONL
+// store and prunes rows older than 400 days.
+//
+// Same directory model, same 400 days, and deliberately the same call site as
+// initCostTracker above (#1905): the two logs are the daemon's only unconditional
+// append-only histories, and the one thing that must never drift between them is
+// how long they keep data — a chart whose store prunes on a different schedule
+// than the chart's own longest range silently truncates its own longest view.
+func initAutonomySpanStore(logger outbound.Logger) outbound.AutonomySpanStore {
+	var store *filesystem.AutonomySpanTracker
+	if dir := stateStoreDir(autonomyStateDir); dir != "" {
+		store = filesystem.NewAutonomySpanTrackerWithDir(dir)
+	} else {
+		var err error
+		store, err = filesystem.NewAutonomySpanTracker()
+		if err != nil {
+			logger.LogError("startup", "", fmt.Sprintf("failed to init autonomy span store: %v", err))
+			return nil
+		}
+	}
+	if err := store.Prune(costRetentionDays); err != nil {
+		logger.LogError("startup", "", fmt.Sprintf("autonomy span prune failed: %v", err))
+	}
+	return store
+}
+
+// autonomyStateDir is the span log's subdirectory under the data dir; it
+// mirrors the cost log's "cost".
+const autonomyStateDir = "autonomy"
+
+// costRetentionDays is how long both append-only logs keep rows. 400 days
+// covers the longest range either chart offers (12 months) with room to spare.
+const costRetentionDays = 400
 
 // historyEventBroadcaster maps HistoryEvent (the in-memory tagged union the
 // tracker emits) onto PushMessage envelopes the WebSocket hub already knows
@@ -562,10 +596,13 @@ type registerSessionRoutesDeps struct {
 	CachedRepo  outbound.SessionRepository
 	OrchMonitor *services.OrchestratorMonitor
 	CostTracker outbound.CostTracker
-	SockPath    string
-	Push        outbound.PushBroadcaster
-	Logger      outbound.Logger
-	GitResolver *git.Adapter
+	// AutonomySpans backs the History view's Autonomy section (#1905). nil is
+	// valid and yields empty-but-valid payloads.
+	AutonomySpans outbound.AutonomySpanStore
+	SockPath      string
+	Push          outbound.PushBroadcaster
+	Logger        outbound.Logger
+	GitResolver   *git.Adapter
 	// HookHealth is the same live snapshot function the diagnostics bundle
 	// gets (liveHookHealth). #1801 gives its two client-invisible diagnoses —
 	// entries that went missing, channels that have gone silent — a second
@@ -591,7 +628,9 @@ func registerSessionRoutes(mux *http.ServeMux, deps registerSessionRoutesDeps) {
 	// persistence, no background sweep. The tracker also reuses GitResolver to
 	// fold worktree sessions into their real repo's project name (#1046).
 	concurrencyTracker := filesystem.NewConcurrencyTrackerWithDir(resolveRecordingsDir(deps.SockPath), deps.GitResolver)
-	mux.HandleFunc("GET /api/v1/history", handleGetHistory(deps.CostTracker, deps.CachedRepo, concurrencyTracker, deps.GitResolver))
+	// #1905 adds chart=autonomy_duration / chart=autonomy_spans, served from
+	// the always-on span log rather than the opt-in recordings.
+	mux.HandleFunc("GET /api/v1/history", handleGetHistory(deps.CostTracker, deps.CachedRepo, concurrencyTracker, deps.GitResolver, deps.AutonomySpans))
 
 	focusService := services.NewFocusService(deps.CachedRepo, deps.Push, deps.Logger)
 	mux.HandleFunc("POST /api/v1/sessions/{id}/focus", sessionshandler.NewFocusHandler(focusService, deps.Logger))
@@ -610,6 +649,7 @@ type buildDetectorDeps struct {
 	Cfg              config.Config
 	AllAgents        []agent.Agent
 	CostTracker      outbound.CostTracker
+	AutonomySpans    outbound.AutonomySpanStore
 	HistoryTracker   *services.HistoryTracker
 }
 
@@ -663,6 +703,9 @@ func buildDetector(deps buildDetectorDeps) (*services.SessionDetector, map[strin
 	})
 	if deps.CostTracker != nil {
 		detector.SetCostTracker(deps.CostTracker)
+	}
+	if deps.AutonomySpans != nil {
+		detector.SetAutonomySpanStore(deps.AutonomySpans)
 	}
 	detector.SetHistoryTracker(deps.HistoryTracker)
 

@@ -123,10 +123,11 @@ type SessionDetector struct {
 
 	enricher       *metadataEnricher
 	pidMgr         *PIDManager
-	costTracker    outbound.CostTracker    // optional; nil = disabled
-	historyTracker outbound.HistoryTracker // optional; nil = disabled
-	cacheBloat     *CacheBloatDetector     // optional; nil = disabled (#374)
-	hookLiveness   *HookLivenessWatchdog   // optional; nil = disabled (#1368)
+	costTracker    outbound.CostTracker       // optional; nil = disabled
+	autonomySpans  outbound.AutonomySpanStore // optional; nil = disabled (#1905)
+	historyTracker outbound.HistoryTracker    // optional; nil = disabled
+	cacheBloat     *CacheBloatDetector        // optional; nil = disabled (#374)
+	hookLiveness   *HookLivenessWatchdog      // optional; nil = disabled (#1368)
 	metrics        outbound.MetricsCollector
 
 	// projectSessions tracks sessionID → projectDir for pre-session cleanup.
@@ -467,6 +468,14 @@ func (d *SessionDetector) SetRecorder(r outbound.EventRecorder) {
 // queries. Pass nil to disable.
 func (d *SessionDetector) SetCostTracker(c outbound.CostTracker) {
 	d.costTracker = c
+}
+
+// SetAutonomySpanStore wires an optional AutonomySpanStore (#1905); closed
+// autonomy spans are appended to it as sessions leave `working`. Pass nil to
+// disable — the open-span bookkeeping on the session still runs, so a daemon
+// without a store never accumulates a stale "open since".
+func (d *SessionDetector) SetAutonomySpanStore(s outbound.AutonomySpanStore) {
+	d.autonomySpans = s
 }
 
 // SetHistoryTracker wires an optional HistoryTracker that records per-session

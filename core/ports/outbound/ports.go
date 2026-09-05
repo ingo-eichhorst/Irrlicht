@@ -463,6 +463,86 @@ type CostTracker interface {
 	Prune(olderThanDays int) error
 }
 
+// AutonomySpan is one CLOSED autonomy span (#1905): an unbroken stretch of
+// `working` for one session, plus the state it left `working` for.
+//
+// Start/End are unix seconds. Reason is one of session.AutonomyEndReasons().
+type AutonomySpan struct {
+	Start   int64
+	End     int64
+	Project string
+	Session string
+	Adapter string
+	Model   string
+	Reason  string
+}
+
+// Duration is the span's length in seconds, floored at 0 so a clock that
+// stepped backwards can never contribute a negative sample to a percentile.
+func (s AutonomySpan) Duration() int64 {
+	if s.End <= s.Start {
+		return 0
+	}
+	return s.End - s.Start
+}
+
+// AutonomySpanQuery is a trailing-window read over the span log.
+type AutonomySpanQuery struct {
+	// Start/End bound the returned spans (unix seconds). A span is included
+	// when it ENDED inside [Start, End) — a span is only recorded once it has
+	// ended, so its end is the only timestamp guaranteed to exist.
+	Start, End int64
+
+	// Limit caps how many spans are returned (0 = no cap). The result's
+	// Truncated flag says whether the cap bit, so a clipped strip can say so
+	// instead of quietly drawing a partial window as if it were whole.
+	Limit int
+}
+
+// AutonomySpanResult carries one window read plus the two facts the "no data"
+// states need: how far back the log actually goes, and whether the read was
+// clipped.
+type AutonomySpanResult struct {
+	// Spans are the matching spans, ordered by Start ascending.
+	Spans []AutonomySpan
+
+	// EarliestStart is the earliest start over EVERY recorded span, not just
+	// the ones in the window — 0 when the log is empty. It answers "this
+	// feature started collecting on <date>", which is what keeps an empty
+	// 12-month view from reading as "you did nothing" (#1905).
+	EarliestStart int64
+
+	// TotalRecorded is how many spans the log holds in total, across every
+	// project and every date.
+	TotalRecorded int
+
+	// Truncated reports that Limit clipped the result.
+	Truncated bool
+}
+
+// AutonomySpanStore persists closed autonomy spans and reads them back over a
+// trailing window. Implementations must be safe for concurrent use.
+//
+// Deliberately NOT served by the lifecycle recordings that back
+// ConcurrencyReader: those are opt-in (--record / IRRLICHT_RECORD=1) and the
+// packaged app runs without them, so a recordings-derived autonomy chart shows
+// a normal user nothing while looking exactly like a chart of "you did
+// nothing". This store follows the cost log instead — written unconditionally,
+// pruned on the same schedule (#1905).
+type AutonomySpanStore interface {
+	// RecordSpan appends one closed span. Implementations may no-op on a span
+	// with no project or a non-positive duration.
+	RecordSpan(span AutonomySpan) error
+
+	// SpansInWindow returns the spans that ended inside the query window,
+	// plus the log-wide earliest start and total count.
+	SpansInWindow(q AutonomySpanQuery) (*AutonomySpanResult, error)
+
+	// Prune drops span rows older than the given number of days.
+	// Safe to call periodically (e.g. daemon startup).
+	Prune(olderThanDays int) error
+}
+
 // HistoryTracker maintains per-session rolling state buffers for three
 // granularities (1s, 10s, 60s), using priority aggregation waiting>working>ready.
 // Implementations must be safe for concurrent use.

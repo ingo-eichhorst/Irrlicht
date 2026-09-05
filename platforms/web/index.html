@@ -265,12 +265,35 @@
             <button type="button" data-chart="yield" title="Metrics: productive vs reverted spend per project">Yield</button>
             <button type="button" data-chart="dora" title="Metrics: DORA deployment metrics per project">DORA</button>
           </fieldset>
+          <!-- Autonomy (#1905) is its own top-level section, not another chart
+               type: it holds TWO elements over the span log and uses neither
+               Range, Group, nor the drilldown filters. On macOS it is a fifth
+               HistoryTab; here, where there is no tab strip, a third segmented
+               group is the equivalent. -->
+          <fieldset class="history-seg" id="history-autonomy-sel" aria-label="Autonomy">
+            <button type="button" data-chart="autonomy" title="How long sessions ran without needing a human">Autonomy</button>
+          </fieldset>
         </div>
         <div class="history-ctl-row" id="history-dora-row" hidden>
           <span class="history-ctl-label">Project</span>
           <select id="history-dora-project" aria-label="DORA project">
             <option value="">Select a project…</option>
           </select>
+        </div>
+        <div class="history-ctl-row" id="history-autonomy-row" hidden>
+          <span class="history-ctl-label">Range</span>
+          <fieldset class="history-seg" id="history-autonomy-range-sel" aria-label="Autonomy chart range">
+            <button type="button" data-autonomy-range="30d" class="active">30 days</button>
+            <button type="button" data-autonomy-range="1y">Year</button>
+          </fieldset>
+          <span class="history-ctl-label">Span</span>
+          <fieldset class="history-seg" id="history-autonomy-span-sel" aria-label="Autonomy strip span">
+            <button type="button" data-autonomy-span="8h">8h</button>
+            <button type="button" data-autonomy-span="24h" class="active">24h</button>
+            <button type="button" data-autonomy-span="7d">7d</button>
+            <button type="button" data-autonomy-span="30d">30d</button>
+            <button type="button" data-autonomy-span="12mo">12mo</button>
+          </fieldset>
         </div>
         <div class="history-ctl-row" id="history-granularity-row" hidden>
           <span class="history-ctl-label">Granularity</span>
@@ -336,6 +359,17 @@
           </div>
         </aside>
       </div>
+
+      <!-- Element 2 of the Autonomy section (#1905): one row per project,
+           each span drawn at its true length and colored by what ended it.
+           Full width under the chart because it is a SECOND element, not
+           another rendering of the first. -->
+      <section class="history-autonomy" id="history-autonomy-strip" hidden aria-label="Autonomous runs">
+        <div class="history-autonomy-title" id="history-autonomy-strip-title">Runs</div>
+        <div class="history-autonomy-rows" id="history-autonomy-rows"></div>
+        <div class="history-autonomy-legend" id="history-autonomy-legend"></div>
+        <div class="history-autonomy-note" id="history-autonomy-note"></div>
+      </section>
     </section>
   </main>
 

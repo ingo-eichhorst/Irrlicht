@@ -7,11 +7,11 @@ import XCTest
 /// developer's real UserDefaults.
 final class HistoryTabVisibilityTests: XCTestCase {
     func testActivityIsHiddenByDefault() {
-        XCTAssertEqual(HistoryTab.visible(activityEnabled: false), [.usage, .metrics, .quota])
+        XCTAssertEqual(HistoryTab.visible(activityEnabled: false), [.usage, .metrics, .quota, .autonomy])
     }
 
     func testActivityAppearsWhenEnabled() {
-        XCTAssertEqual(HistoryTab.visible(activityEnabled: true), [.usage, .activity, .metrics, .quota])
+        XCTAssertEqual(HistoryTab.visible(activityEnabled: true), [.usage, .activity, .metrics, .quota, .autonomy])
     }
 
     func testGatingOnlyAffectsActivity() {
