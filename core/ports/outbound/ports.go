@@ -485,6 +485,23 @@ type AutonomySpan struct {
 	// session.AutonomyReasonUnknown, because its source records when a
 	// session was working and never why it stopped.
 	Source string
+
+	// Kind is one of session.AutonomyKinds(): whether this run belonged to a
+	// top-level session or to a subagent, or that its producer could not say.
+	//
+	// WRITTEN EXPLICITLY, including session.AutonomyKindUnknown — never left
+	// blank to be inferred. Blank still RESOLVES to unknown
+	// (session.AutonomyKindOrUnknown), because rows written before this field
+	// existed have to mean something, and "top-level" is the one thing they
+	// must not silently mean.
+	Kind string
+
+	// Parent is the parent session's id for a subagent run, and "" otherwise.
+	// It is what makes a nested interval attributable rather than merely
+	// excludable — a subagent run can be shown against the run that contains
+	// it. Empty on a subagent run whose source knew it was a child but never
+	// named the parent.
+	Parent string
 }
 
 // Duration is the span's length in seconds, floored at 0 so a clock that
@@ -507,6 +524,17 @@ type AutonomySpanQuery struct {
 	// Truncated flag says whether the cap bit, so a clipped strip can say so
 	// instead of quietly drawing a partial window as if it were whole.
 	Limit int
+
+	// IncludeSubagents adds runs classified session.AutonomyKindSubagent to the
+	// result. FALSE IS THE DEFAULT, and the default is the point (#1905
+	// subagents): the daemon holds a parent `working` while its children run,
+	// so a subagent's span is a nested interval inside its parent's and
+	// counting both counts one stretch twice.
+	//
+	// It never excludes a run of UNKNOWN kind. Excluding those would delete
+	// most of a back-filled history on a guess; they are counted, and the
+	// result says how many there are so a client can say so on screen.
+	IncludeSubagents bool
 }
 
 // AutonomySpanResult carries one window read plus the two facts the "no data"
@@ -532,7 +560,37 @@ type AutonomySpanResult struct {
 	// Provenance says how much of THIS window was reconstructed rather than
 	// measured — the fact both clients need to mark a back-filled view.
 	Provenance AutonomySpanProvenance
+
+	// Kinds counts the window by run kind, BEFORE the subagent filter drops
+	// anything. That order is the whole point: the number a client prints is
+	// "N subagent runs excluded", which cannot be counted off a result those
+	// runs have already been removed from.
+	Kinds AutonomySpanKinds
 }
+
+// AutonomySpanKinds is one window's census by run kind (#1905 subagents).
+//
+// Counted over every span whose end falls in the window, whatever the query
+// asked for — so the same three numbers describe the window under either mode
+// and a client can state what the active one leaves out.
+type AutonomySpanKinds struct {
+	// TopLevel is runs of sessions with no parent.
+	TopLevel int
+
+	// Subagent is runs of child sessions — excluded from Spans unless the
+	// query set IncludeSubagents.
+	Subagent int
+
+	// Unknown is runs whose kind nothing established: rows written before the
+	// classification existed, and rows the back-fill rebuilt from a source
+	// carrying no parent information. ALWAYS included in Spans, and always
+	// worth saying out loud, because a view that quietly folded them into
+	// either of the other two would report a number nobody could check.
+	Unknown int
+}
+
+// Total is every run the window holds, of any kind.
+func (k AutonomySpanKinds) Total() int { return k.TopLevel + k.Subagent + k.Unknown }
 
 // AutonomySpanProvenance summarizes how much of one window read came from
 // tools/autonomy-backfill rather than from live measurement (#1905).

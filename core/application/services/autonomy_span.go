@@ -163,6 +163,13 @@ func (d *SessionDetector) closeAutonomySpan(state *session.SessionState, end int
 		Adapter: state.Adapter,
 		Model:   autonomySpanModel(state),
 		Reason:  reason,
+		// The live path always knows which it is: it is holding the session
+		// state, where an empty ParentSessionID means "no parent", not "nobody
+		// looked". So it writes `top` or `sub` and never `unknown` — the
+		// unknown bucket belongs to rows nothing classified, not to rows this
+		// code declined to.
+		Kind:   session.AutonomyKindForParent(state.ParentSessionID),
+		Parent: state.ParentSessionID,
 	}
 	if err := d.autonomySpans.RecordSpan(span); err != nil {
 		d.log.LogError(logComponentAutonomySpans, state.SessionID, err.Error())

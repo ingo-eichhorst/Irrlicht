@@ -210,6 +210,133 @@ assert_go_test_goes_red \
   "TestAutonomyBoundaries" \
   "want 2"
 
+# ═══════════════════════════════════════════════════════════════════════════
+# THE RUN-KIND CLASSIFICATION (#1905 subagents)
+#
+# The daemon deliberately holds a parent `working` while its children run, so a
+# subagent's span is a NESTED INTERVAL inside its parent's. Counting both counts
+# one stretch of wall clock twice, inflates the run count, and — because
+# subagent runs are short and numerous — drags the headline p50 down.
+#
+# Everything the classification adds is, again, a check with no "before the fix"
+# to run red. Seven more independent breakages, and the first is the one the
+# whole third state exists for:
+#
+#   7. ABSENCE READS AS TOP-LEVEL. There are 10k rows on the maintainer's disk
+#      written before a run carried a kind. If a blank resolved to "top", the
+#      default view would claim to exclude subagent runs while including every
+#      historical one, and nothing on screen would say so.
+#
+#   8. THE DEFAULT VIEW STOPS EXCLUDING. Subagent runs rejoin the headline, and
+#      every nested stretch is counted twice — the double-count this section is
+#      about, in its live form rather than the back-fill's.
+#
+#   9. THE EXCLUSION STOPS BEING COUNTED. The runs are left out but the census
+#      does not say how many, so the panel's sentence has no number and a
+#      silently smaller figure is indistinguishable from a quieter week.
+#
+#  10. THE LIVE PATH STOPS STAMPING THE KIND. Every span the daemon measures
+#      from now on lands unclassified, and the session state that knew the
+#      answer is deleted the moment the session ends — so nothing can recover
+#      it afterwards.
+#
+#  11. THE BACK-FILL ASSUMES TOP-LEVEL FOR WHAT IT CANNOT SEE. The cost log
+#      carries no parentage at all and reaches back months further than the
+#      event log; guessing "top" there puts months of runs into the default
+#      view under a claim nothing measured.
+#
+#  12. THE PATTERNS STOP BEING DERIVED FROM THE DAEMON'S OWN WORDING. A
+#      reworded log message then leaves the tool matching nothing and
+#      classifying every child as top-level — silently, because fewer subagent
+#      runs and a machine that ran fewer subagents produce identical output.
+#
+#  13. THE RE-RUN STOPS REPLACING. `--replace` appends instead of replacing, so
+#      reclassifying history doubles every figure in the section with no way to
+#      tell afterwards.
+#
+# The panel-sentence checks — "state the active mode, and say how many runs it
+# left out, including the ones nothing classified" — are proven by COMMITTED
+# IN-LANGUAGE MUTANTS in platforms/web/irrlicht.history.autonomy.subagents.test.js
+# and platforms/macos/Tests/HistoryAutonomySubagentTests.swift, following the
+# same reasoning as the provenance sentence above it.
+
+# ── 7. Absence reads as top-level ───────────────────────────────────────────
+assert_go_test_goes_red \
+  "a row that never stated a kind is UNKNOWN, never top-level" \
+  "core/domain/session/autonomy.go" \
+  $'\tswitch kind {\n\tcase AutonomyKindTopLevel, AutonomyKindSubagent:\n\t\treturn kind\n\t}\n\treturn AutonomyKindUnknown' \
+  $'\tswitch kind {\n\tcase AutonomyKindSubagent:\n\t\treturn kind\n\t}\n\treturn AutonomyKindTopLevel' \
+  "./core/domain/session/... ./core/adapters/outbound/filesystem/..." \
+  "TestAutonomyKindOrUnknown_AbsenceIsNeverTopLevel|TestAutonomySpanTracker_LegacyRowIsNeverSilentlyClassified" \
+  "absence must never resolve to a claim"
+
+# ── 8. The default view stops excluding subagent runs ───────────────────────
+assert_go_test_goes_red \
+  "the default view leaves subagent runs out" \
+  "core/adapters/outbound/filesystem/autonomy_tracker.go" \
+  $'\tif kind == session.AutonomyKindSubagent && !q.IncludeSubagents {\n\t\treturn\n\t}' \
+  $'\tif kind == session.AutonomyKindSubagent && !q.IncludeSubagents && false {\n\t\treturn\n\t}' \
+  "./core/adapters/outbound/filesystem/..." \
+  "TestAutonomySpanTracker_DefaultExcludesSubagentsButStillCountsThem" \
+  "want 2 (the top-level one and the unknown one)"
+
+# ── 9. The exclusion stops being counted ────────────────────────────────────
+assert_go_test_goes_red \
+  "what the mode left out is counted before the filter drops it" \
+  "core/adapters/outbound/filesystem/autonomy_tracker.go" \
+  $'\tcase session.AutonomyKindSubagent:\n\t\tres.Kinds.Subagent++' \
+  $'\tcase session.AutonomyKindSubagent:\n\t\tif q.IncludeSubagents {\n\t\t\tres.Kinds.Subagent++\n\t\t}' \
+  "./core/adapters/outbound/filesystem/..." \
+  "TestAutonomySpanTracker_DefaultExcludesSubagentsButStillCountsThem" \
+  "the census counts the"
+
+# ── 10. The live path stops stamping the kind ───────────────────────────────
+assert_go_test_goes_red \
+  "a span the daemon measures records whose run it was" \
+  "core/domain/session/autonomy.go" \
+  $'func AutonomyKindForParent(parentSessionID string) string {\n\tif parentSessionID != "" {\n\t\treturn AutonomyKindSubagent\n\t}\n\treturn AutonomyKindTopLevel\n}' \
+  $'func AutonomyKindForParent(parentSessionID string) string {\n\t_ = parentSessionID\n\treturn AutonomyKindTopLevel\n}' \
+  "./core/application/services/... ./core/domain/session/..." \
+  "TestAutonomySpan_ChildSessionIsStampedAsASubagentRun|TestAutonomyKindForParent_NeverUnknown" \
+  "a child's run must be excludable from the headline"
+
+# ── 11. The back-fill assumes top-level for what it cannot see ──────────────
+assert_go_test_goes_red \
+  "a session the retained log never saw start is UNKNOWN" \
+  "tools/autonomy-backfill/subagents.go" \
+  $'\treturn session.AutonomyKindUnknown, ""\n}' \
+  $'\treturn session.AutonomyKindTopLevel, ""\n}' \
+  "./tools/autonomy-backfill/..." \
+  "TestSubagentIndex_ClassifiesThreeWays|TestBackfillClassifiesEachReconstructedRun" \
+  "neither kind was established"
+
+# ── 12. The patterns stop being derived from the daemon's own wording ───────
+#
+# The mutation is a HAND-TYPED COPY THAT HAS DRIFTED — the state every retyped
+# constant reaches one rewording later. Rewording the daemon's own format would
+# prove nothing, because a derived pattern moves with it by construction (which
+# is the whole point of deriving it); what has to be caught is a pattern that no
+# longer matches what the daemon writes. Under it the tool matches nothing on
+# that line and the child's parent is never recovered.
+assert_go_test_goes_red \
+  "the subagent patterns are derived from the daemon's own log wording" \
+  "tools/autonomy-backfill/subagents.go" \
+  $'\tcompletedPattern = patternFromFormat(services.SubagentCompletedInfoFormat, anyTextPattern, sessionIDPattern)' \
+  $'\tcompletedPattern = patternFromFormat("subagent completed (%s → ready, parent %s)", anyTextPattern, sessionIDPattern)' \
+  "./tools/autonomy-backfill/..." \
+  "TestSubagentPatternsMatchTheDaemonsOwnMessages|TestBackfillClassifiesEachReconstructedRun" \
+  "does not match the daemon's own message"
+
+# ── 13. The re-run stops replacing ──────────────────────────────────────────
+assert_go_test_goes_red \
+  "a --replace re-run reclassifies history instead of doubling it" \
+  "core/adapters/outbound/filesystem/autonomy_tracker.go" \
+  $'\t\t\tif session.IsAutonomyReconstructed(r.Source) {\n\t\t\t\tdropped++\n\t\t\t\treturn false\n\t\t\t}\n\t\t\treturn true' \
+  $'\t\t\t_ = r\n\t\t\treturn true' \
+  "./tools/autonomy-backfill/... ./core/adapters/outbound/filesystem/..." \
+  "TestBackfillReplaceReclassifiesInsteadOfDoubling|TestAutonomySpanTracker_DropReconstructedKeepsMeasuredRows" \
+  "want the same"
+
 if [[ $fails -gt 0 ]]; then
   echo "autonomy-backfill-mutations: $fails FAILED"
   exit 1

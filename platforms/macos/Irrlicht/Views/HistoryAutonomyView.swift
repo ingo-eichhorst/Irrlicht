@@ -241,6 +241,13 @@ struct HistoryAutonomyContentView: View {
     /// back-filled, says that too.
     private var collectionProvenance: some View {
         VStack(alignment: .leading, spacing: IrrSpacing.sp1) {
+            // What these figures counted, and what the active mode left out
+            // (#1905 subagents). Above the provenance line because it qualifies
+            // every number in the section, where provenance qualifies where
+            // they came from.
+            if let mode = AutonomyFormat.modeLine(duration.kindsOrUnavailable) {
+                Text(mode)
+            }
             Text(AutonomyFormat.provenance(earliest: duration.earliestSpan,
                                            total: duration.totalRecorded,
                                            timeZone: formatTimeZone))
@@ -752,6 +759,40 @@ enum AutonomyFormat {
         f.dateFormat = "MMM d, yyyy"
         let since = f.string(from: Date(timeIntervalSince1970: TimeInterval(earliest)))
         return "Collecting since \(since) · \(total) runs recorded."
+    }
+
+    /// States WHICH RUNS the figures counted and how many the active mode left
+    /// out (#1905 subagents). `nil` only for a payload from a daemon that
+    /// predates the field — absence there means "this response never said",
+    /// which is not the same claim as "it counted top-level runs".
+    ///
+    /// THE UNKNOWN CLAUSE IS THE LOAD-BEARING PART. A row written before
+    /// Irrlicht told the two apart carries no classification, and such a row is
+    /// COUNTED — excluding it would delete most of a back-filled history on a
+    /// guess. Counting it in silence is the failure this section exists to
+    /// prevent: the view would claim to exclude subagent runs while including
+    /// every historical one, with nothing on screen saying so. So it says how
+    /// many.
+    static func modeLine(_ k: HistoryAutonomyKinds) -> String? {
+        guard !k.mode.isEmpty else { return nil }
+        var out: String
+        if k.includesSubagents {
+            out = k.subagent > 0
+                ? "Counting every run, including \(k.subagent) subagent run\(k.subagent == 1 ? "" : "s") "
+                    + "— each of which happened inside its parent's run."
+                : "Counting every run, subagent runs included. This window holds none."
+        } else {
+            out = k.subagent > 0
+                ? "Counting top-level runs only · \(k.subagent) subagent run\(k.subagent == 1 ? "" : "s") "
+                    + "excluded, because each already happened inside its parent's run."
+                : "Counting top-level runs only. This window holds no subagent runs."
+        }
+        if k.unknown > 0 {
+            out += " \(k.unknown) run\(k.unknown == 1 ? " was" : "s were") recorded before Irrlicht told "
+                + "top-level and subagent runs apart, so which they were is unknown — those are counted "
+                + "either way."
+        }
+        return out
     }
 
     /// Marks a view that is showing back-filled history (#1905). `nil` when

@@ -657,7 +657,14 @@ if want go; then
   # runs proves nothing. Scoped to include the domain and adapter files it
   # derives its vocabulary and its storage format from, so a change to either
   # is caught here rather than the next time someone runs the tool by hand.
-  run_gate_scoped '^tools/autonomy-backfill/|^core/domain/session/autonomy\.go$|^core/adapters/outbound/filesystem/autonomy_tracker\.go$|^core/application/services/autonomy_span\.go$' \
+  #
+  # Since #1905's subagent work the tool also derives the LOG WORDINGS it
+  # matches on — services.NewSessionInfoFormat, SubagentDirName and the two
+  # subagent-completion formats — so the two detector files that own them are
+  # in the trigger set as well. Without them, rewording one of those messages
+  # would leave the tool matching nothing and classifying every subagent run as
+  # top-level, with the tripwire that catches it never run.
+  run_gate_scoped '^tools/autonomy-backfill/|^core/domain/session/autonomy\.go$|^core/adapters/outbound/filesystem/autonomy_tracker\.go$|^core/application/services/autonomy_span\.go$|^core/application/services/session_detector_subagent\.go$|^core/application/services/session_detector_activity\.go$|^core/application/services/helpers\.go$' \
                   "autonomy-backfill tests"  go test ./tools/autonomy-backfill/... -count=1
   run_gate_scoped '^tools/onboarding-factory/desktop-helper/' \
                   "Claude Desktop helper tests" tools/onboarding-factory/desktop-helper/test.sh

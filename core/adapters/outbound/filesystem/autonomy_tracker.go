@@ -66,6 +66,22 @@ type spanRow struct {
 	// existing log without rewriting a single row already in it. Set only by
 	// tools/autonomy-backfill, to one of session.AutonomySources().
 	Source string `json:"source,omitempty"`
+
+	// Kind is one of session.AutonomyKinds(): a top-level run, a subagent run,
+	// or explicitly unknown.
+	//
+	// UNLIKE Source, absence here is NOT a meaning a writer may lean on. Every
+	// row written since #1905's subagent work carries an explicit value —
+	// RecordSpan normalizes through session.AutonomyKindOrUnknown, which never
+	// returns "" — so a blank `kind` identifies exactly one thing: a row from
+	// a build that predates the classification. It reads back as
+	// session.AutonomyKindUnknown, never as top-level, and both clients say so
+	// when any such row is in view.
+	Kind string `json:"kind,omitempty"`
+
+	// Parent is the parent session id of a subagent run. Empty on a top-level
+	// run, and on a subagent run whose source never named the parent.
+	Parent string `json:"parent,omitempty"`
 }
 
 // AutonomySpanTracker persists closed autonomy spans in append-only JSONL
@@ -140,6 +156,13 @@ func (t *AutonomySpanTracker) RecordSpan(span outbound.AutonomySpan) error {
 		Model:   span.Model,
 		Reason:  span.Reason,
 		Source:  span.Source,
+		// Normalized, never passed through: a caller that left Kind blank gets
+		// the explicit word "unknown" on disk rather than a field a later
+		// reader has to guess about. That is what "written explicitly on every
+		// new row" means in practice — the only blank `kind` on disk belongs to
+		// a build that predates the field.
+		Kind:   session.AutonomyKindOrUnknown(span.Kind),
+		Parent: span.Parent,
 	}
 	data, err := json.Marshal(row)
 	if err != nil {
@@ -260,6 +283,25 @@ func foldSpanRow(r spanRow, fallback string, q outbound.AutonomySpanQuery, res *
 	if r.End < q.Start || r.End >= q.End {
 		return
 	}
+	// The kind census counts EVERY span in the window, ahead of the filter
+	// below. A client's sentence is "N subagent runs excluded", and N cannot be
+	// counted off a list those runs have already been dropped from.
+	kind := session.AutonomyKindOrUnknown(r.Kind)
+	switch kind {
+	case session.AutonomyKindSubagent:
+		res.Kinds.Subagent++
+	case session.AutonomyKindTopLevel:
+		res.Kinds.TopLevel++
+	default:
+		res.Kinds.Unknown++
+	}
+	// A subagent's span is a nested interval inside its parent's, so the
+	// default view leaves it out. A run of UNKNOWN kind is kept: nothing
+	// established it was a subagent's, and dropping it would delete history to
+	// make a figure look tidy.
+	if kind == session.AutonomyKindSubagent && !q.IncludeSubagents {
+		return
+	}
 	project := r.Project
 	if project == "" {
 		project = fallback
@@ -273,6 +315,8 @@ func foldSpanRow(r spanRow, fallback string, q outbound.AutonomySpanQuery, res *
 		Model:   r.Model,
 		Reason:  r.Reason,
 		Source:  r.Source,
+		Kind:    kind,
+		Parent:  r.Parent,
 	})
 }
 
@@ -346,6 +390,61 @@ func (t *AutonomySpanTracker) Prune(olderThanDays int) error {
 		}
 	}
 	return nil
+}
+
+// DropReconstructed removes every RECONSTRUCTED row from the log — every row
+// carrying a `source` (session.IsAutonomyReconstructed) — and returns how many
+// it removed. Rows the daemon MEASURED are untouched, whatever else changes.
+//
+// It exists so tools/autonomy-backfill can be re-run: a reconstruction improves
+// when the tool learns to read something new out of the same logs (#1905
+// subagents taught it to classify a run's kind), and the only honest way to
+// apply that to history already on disk is to replace the reconstruction rather
+// than append a second one on top of it. Appending is the trap this guards —
+// two rows for one run inflate every figure in the section and look exactly
+// like a busier month.
+//
+// The measured floor is why replacing is safe: the back-fill refuses to write
+// at or after the earliest measured span, so the rows this drops are exactly
+// the rows the next run recomputes, and nothing measured is in that set.
+func (t *AutonomySpanTracker) DropReconstructed() (int, error) {
+	entries, err := os.ReadDir(t.dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	dropped := 0
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), autonomyFileExt) {
+			continue
+		}
+		project := strings.TrimSuffix(e.Name(), autonomyFileExt)
+		fm := t.fileMu(project)
+		fm.Lock()
+		err := pruneJSONLFile(filepath.Join(t.dir, e.Name()), func(line []byte) bool {
+			var r spanRow
+			if err := json.Unmarshal(line, &r); err != nil {
+				// An unparseable line carries no source to read, so it cannot
+				// be shown to be reconstructed. Kept, matching scanSpanFile's
+				// rule that one bad line never destroys what surrounds it —
+				// and deleting on "I could not read it" is the one direction
+				// that loses measured data.
+				return true
+			}
+			if session.IsAutonomyReconstructed(r.Source) {
+				dropped++
+				return false
+			}
+			return true
+		})
+		fm.Unlock()
+		if err != nil {
+			return dropped, err
+		}
+	}
+	return dropped, nil
 }
 
 func (t *AutonomySpanTracker) filePath(project string) string {

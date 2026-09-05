@@ -91,6 +91,12 @@ const historyState = {
   // autonomyData holds BOTH responses, since the section renders both at once.
   autonomyRange: '30d',
   autonomySpan: '24h',
+  // Which runs the section counts (#1905 subagents). 'top' — top-level runs
+  // only — is the default because a subagent's run is a NESTED INTERVAL inside
+  // its parent's: the daemon deliberately holds a parent `working` while its
+  // children run, so counting both counts one stretch of wall clock twice and
+  // pulls the headline median down with short nested runs.
+  autonomyRuns: 'top',
   autonomyData: null,
   filters: { provider: [], token_type: [], project: [] },
   known: { provider: [], project: [] },
@@ -284,6 +290,11 @@ export function autonomyQuery(element, state = historyState) {
     p.set('chart', 'autonomy_duration');
     p.set('window', state.autonomyRange);
   }
+  // Sent on BOTH elements, and only when it is on: the daemon's default is
+  // top-level runs, so the default view sends nothing extra and an older
+  // daemon serving a newer dashboard behaves exactly as this one does rather
+  // than silently including subagent runs the panel says it excluded.
+  if (state.autonomyRuns === 'all') p.set('include_subagents', 'true');
   return p.toString();
 }
 
@@ -824,6 +835,45 @@ export function autonomyReconstructionNote(duration) {
   if (costDerived > 0) {
     parts.push(costDerived + ' of them come from the cost log, which records when a session was working and '
       + 'never why it stopped, so their end reason is unknown — not assumed.');
+  }
+  return parts.join(' ');
+}
+
+// autonomyModeLine states, in words, WHICH RUNS the figures above it counted
+// and how many the active mode left out (#1905 subagents).
+//
+// It is never blank, and that is the rule: the number "42 runs" means two
+// different things under the two modes, and a reader cannot tell which by
+// looking. The mode ships in the payload rather than being read off local
+// state, so a panel drawn from a response that predates the last toggle still
+// labels that response correctly.
+//
+// THE UNKNOWN CLAUSE IS THE LOAD-BEARING PART. A row written before Irrlicht
+// told the two apart carries no classification, and such a row is COUNTED here
+// — excluding it would delete most of a back-filled history on a guess. But
+// counting it silently is the exact failure this section exists to prevent: the
+// view would claim to exclude subagent runs while including every historical
+// one, with nothing on screen saying so. So the sentence says how many.
+export function autonomyModeLine(payload) {
+  const k = payload?.kinds;
+  if (!k) return '';
+  const sub = Number(k.subagent) || 0;
+  const unknown = Number(k.unknown) || 0;
+  const parts = [];
+  if (k.mode === 'all') {
+    parts.push(sub > 0
+      ? 'Counting every run, including ' + sub + ' subagent run' + (sub === 1 ? '' : 's')
+        + ' — each of which happened inside its parent’s run.'
+      : 'Counting every run, subagent runs included. This window holds none.');
+  } else {
+    parts.push(sub > 0
+      ? 'Counting top-level runs only · ' + sub + ' subagent run' + (sub === 1 ? '' : 's')
+        + ' excluded, because each already happened inside its parent’s run.'
+      : 'Counting top-level runs only. This window holds no subagent runs.');
+  }
+  if (unknown > 0) {
+    parts.push(unknown + ' run' + (unknown === 1 ? ' was' : 's were') + ' recorded before Irrlicht told '
+      + 'top-level and subagent runs apart, so which they were is unknown — those are counted either way.');
   }
   return parts.join(' ');
 }
@@ -1643,6 +1693,11 @@ function renderAutonomyPanel() {
         + 'that bucket’s longest run and p5 its shortest — not percentiles.');
     }
   }
+  // What these figures counted, and what the active mode left out (#1905
+  // subagents). Above the provenance line because it qualifies every number in
+  // the panel, where provenance qualifies where they came from.
+  const modeLine = autonomyModeLine(duration);
+  if (modeLine) appendHistoryEmpty(listEl, modeLine);
   // The provenance line is part of the feature: "no data" must never read as
   // "you did nothing".
   appendHistoryEmpty(listEl, autonomyProvenanceLine(duration));
@@ -2501,21 +2556,25 @@ export function initHistoryTab() {
   const histAutonomySeg = document.getElementById('history-autonomy-sel');
   if (histAutonomySeg) histAutonomySeg.addEventListener('click', handleChartClick);
 
-  // The two Autonomy pickers. Each re-fetches only because the section shows
-  // both elements together; the daemon serves them as two independent charts.
-  const wireAutonomyPicker = (id, attr, key) => {
+  // The Autonomy segmented controls. Each re-fetches only because the section
+  // shows both elements together; the daemon serves them as two independent
+  // charts. `dataKey` is passed rather than derived from `attr`, so adding a
+  // third control is one more line instead of another branch in a ternary that
+  // silently defaulted every unrecognised attribute to the span picker.
+  const wireAutonomyPicker = (id, attr, dataKey, stateKey) => {
     const seg = document.getElementById(id);
     if (!seg) return;
     seg.addEventListener('click', (e) => {
       const b = e.target.closest('button[data-' + attr + ']');
       if (!b) return;
       for (const x of seg.querySelectorAll('button')) x.classList.toggle('active', x === b);
-      historyState[key] = b.dataset[attr === 'autonomy-range' ? 'autonomyRange' : 'autonomySpan'];
+      historyState[stateKey] = b.dataset[dataKey];
       fetchHistory();
     });
   };
-  wireAutonomyPicker('history-autonomy-range-sel', 'autonomy-range', 'autonomyRange');
-  wireAutonomyPicker('history-autonomy-span-sel', 'autonomy-span', 'autonomySpan');
+  wireAutonomyPicker('history-autonomy-range-sel', 'autonomy-range', 'autonomyRange', 'autonomyRange');
+  wireAutonomyPicker('history-autonomy-span-sel', 'autonomy-span', 'autonomySpan', 'autonomySpan');
+  wireAutonomyPicker('history-autonomy-runs-sel', 'autonomy-runs', 'autonomyRuns', 'autonomyRuns');
 
   const histDoraProjectSel = document.getElementById('history-dora-project');
   if (histDoraProjectSel) histDoraProjectSel.addEventListener('change', () => {

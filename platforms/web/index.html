@@ -291,6 +291,23 @@
             <button type="button" data-autonomy-range="30d" class="active">30 days</button>
             <button type="button" data-autonomy-range="1y">Year</button>
           </fieldset>
+          <!-- Which runs the section counts (#1905 subagents). Section-wide, so
+               it sits on the section's own control row rather than in either
+               element's header: it changes the chart AND the strip at once,
+               unlike Range and Span, which each drive one element.
+
+               Default is top-level only. A subagent's run happens INSIDE its
+               parent's — the daemon holds a parent `working` while its children
+               run — so counting both counts one stretch twice and drags the
+               median down with short nested runs. The panel states which mode
+               is active and how many runs it left out. -->
+          <span class="history-ctl-label">Runs</span>
+          <fieldset class="history-seg" id="history-autonomy-runs-sel" aria-label="Which runs the Autonomy figures count">
+            <button type="button" data-autonomy-runs="top" class="active"
+                    title="Count only runs of sessions that report to you">Top-level</button>
+            <button type="button" data-autonomy-runs="all"
+                    title="Also count subagent runs, which happen inside their parent's run">+ subagents</button>
+          </fieldset>
         </div>
         <div class="history-ctl-row" id="history-granularity-row" hidden>
           <span class="history-ctl-label">Granularity</span>

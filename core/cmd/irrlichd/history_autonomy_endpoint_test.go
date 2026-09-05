@@ -21,8 +21,13 @@ type fakeAutonomyStore struct {
 	total      int
 	truncated  bool
 	provenance outbound.AutonomySpanProvenance
-	err        error
-	lastQuery  outbound.AutonomySpanQuery
+	// kinds is the window's run-kind census (#1905 subagents). The real store
+	// counts it BEFORE the subagent filter, which is why it is a field here
+	// rather than derived from `spans`: the number under test is precisely the
+	// one that describes runs the response does not carry.
+	kinds     outbound.AutonomySpanKinds
+	err       error
+	lastQuery outbound.AutonomySpanQuery
 }
 
 func (f *fakeAutonomyStore) RecordSpan(outbound.AutonomySpan) error { return nil }
@@ -38,6 +43,7 @@ func (f *fakeAutonomyStore) SpansInWindow(q outbound.AutonomySpanQuery) (*outbou
 		TotalRecorded: f.total,
 		Truncated:     f.truncated,
 		Provenance:    f.provenance,
+		Kinds:         f.kinds,
 	}, nil
 }
 

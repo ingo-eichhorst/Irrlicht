@@ -176,6 +176,7 @@ func TestStraddlesRestart(t *testing.T) {
 // boundaries the log does not contain.
 func TestRestartStraddlingSpanIsDropped(t *testing.T) {
 	log := &eventLog{
+		Subagents: newSubagentIndex(),
 		Transitions: []transition{
 			tr(100, "s", session.StateWorking), tr(200, "s", session.StateWaiting), // clean
 			tr(300, "s", session.StateWorking), tr(900, "s", session.StateWaiting), // straddles the restart at 500
@@ -204,7 +205,7 @@ func TestRestartStraddlingSpanIsDropped(t *testing.T) {
 // Every span from the event log is marked source=log and keeps the REAL end
 // reason the transition recorded.
 func TestEventSpansAreMarkedAndKeepTheirRealReason(t *testing.T) {
-	log := &eventLog{Transitions: []transition{
+	log := &eventLog{Subagents: newSubagentIndex(), Transitions: []transition{
 		tr(100, "s", session.StateWorking), tr(200, "s", session.StateWaiting),
 	}}
 	spans, _ := reconstructEventSpans(log, projectsFor("s"), 1_000_000)
@@ -225,7 +226,7 @@ func TestEventSpansAreMarkedAndKeepTheirRealReason(t *testing.T) {
 // A span with no project cannot be drawn on a per-project strip, and the span
 // store no-ops on it anyway. Dropped and counted, never written.
 func TestSpanWithNoProjectIsDropped(t *testing.T) {
-	log := &eventLog{Transitions: []transition{
+	log := &eventLog{Subagents: newSubagentIndex(), Transitions: []transition{
 		tr(100, "s", session.StateWorking), tr(200, "s", session.StateWaiting),
 	}}
 	spans, loss := reconstructEventSpans(log, map[string]string{}, 1_000_000)
@@ -247,7 +248,7 @@ func TestCostSpansCarryUnknownAndNeverAGuessedReason(t *testing.T) {
 		{Project: "proj", Session: "s1"}: {100, 160, 220},
 		{Project: "proj", Session: "s2"}: {1000, 1060},
 	}}
-	spans, _ := reconstructCostSpans(cl, costGapSeconds, 0, 0)
+	spans, _ := reconstructCostSpans(cl, newSubagentIndex(), costGapSeconds, 0, 0)
 	if len(spans) != 2 {
 		t.Fatalf("spans = %d, want 2", len(spans))
 	}
@@ -297,7 +298,7 @@ func TestCostSpansStopAtTheEventLogBoundary(t *testing.T) {
 		{Project: "proj", Session: "straddle"}: {900, 1000, 1100},
 		{Project: "proj", Session: "new"}:      {2000, 2060},
 	}}
-	spans, loss := reconstructCostSpans(cl, costGapSeconds, 1000, 0)
+	spans, loss := reconstructCostSpans(cl, newSubagentIndex(), costGapSeconds, 1000, 0)
 	if len(spans) != 1 || spans[0].Session != "old" {
 		t.Fatalf("spans = %+v, want only the pre-boundary one", spans)
 	}
@@ -313,7 +314,7 @@ func TestCostSpansHonourTheSinceFloor(t *testing.T) {
 		{Project: "proj", Session: "s1"}: {100, 160},
 		{Project: "proj", Session: "s2"}: {5000, 5060},
 	}}
-	spans, _ := reconstructCostSpans(cl, costGapSeconds, 0, 1000)
+	spans, _ := reconstructCostSpans(cl, newSubagentIndex(), costGapSeconds, 0, 1000)
 	if len(spans) != 1 || spans[0].Session != "s2" {
 		t.Fatalf("spans = %+v, want only the one starting after the floor", spans)
 	}

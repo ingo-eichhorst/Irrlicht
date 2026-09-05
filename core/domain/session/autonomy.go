@@ -90,6 +90,94 @@ func AutonomySources() []string {
 // its source is unfamiliar. Absence — and only absence — means measured.
 func IsAutonomyReconstructed(source string) bool { return source != "" }
 
+// Autonomy run KIND (#1905 subagents).
+//
+// A run is a stretch of `working` for ONE session, and sessions come in two
+// shapes: a top-level session, which reports to a human, and a child session —
+// a subagent or background agent — which reports to its parent. The daemon
+// deliberately holds a parent in `working` while its children run, so a child's
+// span is a NESTED INTERVAL inside its parent's. Counting both therefore counts
+// the same wall-clock stretch twice, inflates the run count, and — because
+// subagent runs are short and numerous — drags the headline p50 down.
+//
+// The kind is written EXPLICITLY on every row a producer writes, including the
+// rows it cannot classify. It is never inferred from an empty field: see
+// AutonomyKindOrUnknown.
+const (
+	// AutonomyKindTopLevel is a run of a session with no parent — the runs the
+	// headline figure is about, because "how long did it carry on before it
+	// needed you" is a question only a session that can need you can answer.
+	AutonomyKindTopLevel = "top"
+
+	// AutonomyKindSubagent is a run of a child session. A subagent never needs
+	// the human; it reports to its parent, whose own span already covers this
+	// stretch. Its work is a COMPONENT of a run, not a run.
+	AutonomyKindSubagent = "sub"
+
+	// AutonomyKindUnknown is the third state, and it is a real one: a row whose
+	// producer could not say which of the two it was. Every row written before
+	// this classification existed is in it, and so is every row the back-fill
+	// rebuilt from a source that carries no parent information at all.
+	//
+	// It is NOT a synonym for top-level. Reading absence as top-level is the
+	// one failure this vocabulary exists to prevent: a default view would then
+	// claim to exclude subagent runs while silently including every historical
+	// one, with nothing on screen saying so.
+	AutonomyKindUnknown = "unknown"
+)
+
+// AutonomyKinds returns the run-kind vocabulary, in report order.
+//
+// Written out rather than derived from the canonical session states, because it
+// is NOT that vocabulary: it partitions sessions by whether they have a parent,
+// which is orthogonal to what state they are in. `unknown` is a member here —
+// unlike AutonomyReasonUnknown, which is deliberately outside its vocabulary —
+// because a row genuinely IS of unknown kind and every consumer has to be able
+// to name that third bucket rather than fold it into one of the other two.
+func AutonomyKinds() []string {
+	return []string{AutonomyKindTopLevel, AutonomyKindSubagent, AutonomyKindUnknown}
+}
+
+// AutonomyKindOrUnknown maps a row's raw `kind` field onto the vocabulary.
+//
+// THE ABSENT CASE IS UNKNOWN, never top-level. There are rows on disk written
+// before the field existed, and a build that resolved their blank to "top"
+// would report them as top-level runs the user could never distinguish from
+// measured ones. A kind this build does not recognize resolves the same way,
+// for the same reason: an unfamiliar classification is not a claim this build
+// gets to make on the writer's behalf.
+func AutonomyKindOrUnknown(kind string) string {
+	switch kind {
+	case AutonomyKindTopLevel, AutonomyKindSubagent:
+		return kind
+	}
+	return AutonomyKindUnknown
+}
+
+// IsAutonomySubagentRun reports whether a row's kind marks it as a subagent
+// run — the only kind the default view excludes.
+//
+// Deliberately a positive test on the resolved kind rather than "not top":
+// an unknown row is not excluded, because nothing established it was a
+// subagent's, and dropping it would delete history to make a number look tidy.
+func IsAutonomySubagentRun(kind string) bool {
+	return AutonomyKindOrUnknown(kind) == AutonomyKindSubagent
+}
+
+// AutonomyKindForParent classifies a run from the session's ParentSessionID —
+// the daemon's own parent-child link (AGENTS.md: "Child sessions (subagents and
+// background agents) use ParentSessionID for parent-child linking").
+//
+// The LIVE producer always knows, so it never yields unknown: it is looking at
+// the session state itself, where an empty ParentSessionID means "this session
+// has no parent", not "nobody looked".
+func AutonomyKindForParent(parentSessionID string) string {
+	if parentSessionID != "" {
+		return AutonomyKindSubagent
+	}
+	return AutonomyKindTopLevel
+}
+
 // Autonomy end-reason priorities for the run strip's pixel-collapse rule
 // (#1905, design decision 4). When one device-pixel column of the strip holds
 // several spans, the column paints the HIGHEST-priority reason in it.
