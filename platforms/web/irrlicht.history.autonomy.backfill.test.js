@@ -1,17 +1,14 @@
-import { describe, test, expect } from 'vitest'
-
 import {
-  AUTONOMY_REASON_LEGEND,
-  AUTONOMY_REASON_PRIORITY,
-  AUTONOMY_STRIP_MAX_ROWS,
-  AUTONOMY_UNKNOWN_LEGEND,
+  autonomyBoundaryCaptionShown,
   autonomyBoundaryLabel,
-  autonomyLegendEntries,
+  autonomyMoreProjectsLabel,
   autonomyReconstructionNote,
-  autonomyStripOverflowLabel,
+  autonomyStackRows,
   autonomyVisibleBoundaries,
-  collapseAutonomyStrip,
 } from './historyTab.js'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { WEB_DIR } from './shippedFiles.testutil.js'
 
 // The back-fill's marking (#1905). tools/autonomy-backfill reconstructs runs
 // from logs a machine already had; the daemon serves them like any other row,
@@ -19,12 +16,10 @@ import {
 // reconstructed figure rendered as a measured one is the wrong number with
 // nothing on screen admitting it.
 
-const span = (start, end, reason, project = 'p') => ({ start, end, reason, project, session: 's' + start })
-
-// A duration payload with an arbitrary provenance block.
+// A panels payload with an arbitrary provenance block.
 const durationWith = (provenance, count = 100) => ({
-  summary: { p95: 60, p50: 30, p5: 10, min: 5, max: 90, count },
-  buckets: [],
+  panels: [],
+  summary: { longest: 90, peak: 2, runs: count, projects: 1 },
   earliest_span: 1_700_000_000,
   total_recorded: count,
   provenance,
@@ -40,7 +35,7 @@ describe('autonomyReconstructionNote — the panel marks a back-filled view', ()
 
   test('says nothing when the payload carries no provenance at all', () => {
     // An older daemon, or a client reading a response it did not expect.
-    expect(autonomyReconstructionNote({ summary: { count: 12 } })).toBe('')
+    expect(autonomyReconstructionNote({ summary: { runs: 12 } })).toBe('')
     expect(autonomyReconstructionNote(null)).toBe('')
     expect(autonomyReconstructionNote(undefined)).toBe('')
   })
@@ -109,128 +104,97 @@ describe('autonomyReconstructionNote — the panel marks a back-filled view', ()
   })
 })
 
-describe('the strip legend gains a neutral entry only when it needs one', () => {
-  test('three measured reasons and nothing more, when every reason is named', () => {
-    // One reason per line: a single line naming three of the four canonical
-    // states is what tools/state-vocabulary-lint.sh refuses, and rightly.
-    const spans = { spans: [
-      span(0, 10, 'ready'),
-      span(20, 30, 'waiting'),
-      span(40, 50, 'error'),
-    ] }
-    expect(autonomyLegendEntries(spans)).toEqual(AUTONOMY_REASON_LEGEND)
+// The percentile band and the run strip were REMOVED, not hidden (#1905
+// redesign). Dead code that still parses is the thing a later reader restores
+// by accident, so their identifiers are checked out of the shipped files.
+describe('the percentile band and the run strip are gone from the shipped files', () => {
+  const js = readFileSync(join(WEB_DIR, 'historyTab.js'), 'utf8')
+  const css = readFileSync(join(WEB_DIR, 'irrlicht.css'), 'utf8')
+  const html = readFileSync(join(WEB_DIR, 'index.html'), 'utf8')
+
+  test('the files were actually read', () => {
+    // Absence of a finding and inability to look must not read the same. A
+    // positive control per file, so "not found" below means removed rather
+    // than mis-pathed.
+    expect(js).toContain('autonomyPanelHeadline')
+    expect(css).toContain('.history-autonomy-panel')
+    expect(html).toContain('history-autonomy-panels')
   })
 
-  test('a fourth neutral entry once a run has an unknown end reason', () => {
-    const spans = { spans: [span(0, 10, 'ready'), span(20, 30, 'unknown')] }
-    const entries = autonomyLegendEntries(spans)
-    expect(entries).toHaveLength(AUTONOMY_REASON_LEGEND.length + 1)
-    expect(entries[entries.length - 1]).toEqual(AUTONOMY_UNKNOWN_LEGEND)
+  test('no p5/p50/p95 apparatus survives', () => {
+    for (const gone of ['AUTONOMY_SERIES', 'AUTONOMY_BAND_TOKENS', 'autonomyBandSegments',
+      'autonomyBandColor', 'autonomySeriesColor', 'sample_floor', 'autonomyChartPoints']) {
+      expect(js).not.toContain(gone)
+    }
+    expect(css).not.toContain('--autonomy-band')
+    expect(css).not.toContain('--autonomy-edge')
   })
 
-  // Two different rows draw the same neutral column: a cost-derived span
-  // (reason `unknown`) and an old row written before the reason was recorded
-  // (reason absent). One legend entry has to cover both, or one of them is a
-  // colour with no key.
-  test('an old row with no reason at all also earns the neutral entry', () => {
-    const spans = { spans: [span(0, 10, 'ready'), { start: 20, end: 30, project: 'p', session: 's' }] }
-    expect(autonomyLegendEntries(spans)).toHaveLength(AUTONOMY_REASON_LEGEND.length + 1)
-  })
-
-  test('an empty or absent window does not invent a legend entry', () => {
-    expect(autonomyLegendEntries({ spans: [] })).toEqual(AUTONOMY_REASON_LEGEND)
-    expect(autonomyLegendEntries(null)).toEqual(AUTONOMY_REASON_LEGEND)
-  })
-
-  // The neutral entry must not be given a rank, or one reconstructed span
-  // would grey out a strip column that also holds a real error.
-  test('`unknown` has no rank on the collapse ladder', () => {
-    expect(AUTONOMY_REASON_PRIORITY.unknown).toBeUndefined()
-    const cells = collapseAutonomyStrip(
-      [span(1_000, 1_100, 'unknown'), span(1_200, 1_300, 'error')], 0, 100_000, 10)
-    expect(cells[0].reason).toBe('error')
-  })
-
-  // …and a column holding ONLY unknown runs is still occupied, drawn neutral.
-  // The run happened; nothing can say how it ended.
-  test('an unknown-only column is occupied and neutral, never idle', () => {
-    const cells = collapseAutonomyStrip([span(1_000, 1_100, 'unknown')], 0, 100_000, 10)
-    expect(cells[0].occupied).toBe(true)
-    expect(cells[0].reason).toBe(null)
+  test('no run strip, end-reason colours, glyphs or legend survive', () => {
+    for (const gone of ['collapseAutonomyStrip', 'AUTONOMY_REASON_PRIORITY', 'AUTONOMY_REASON_LEGEND',
+      'AUTONOMY_UNKNOWN_LEGEND', 'autonomyLegendEntries', 'autonomyReasonColor',
+      'AUTONOMY_STRIP_MAX_ROWS']) {
+      expect(js).not.toContain(gone)
+    }
+    expect(css).not.toContain('history-autonomy-legend')
+    expect(html).not.toContain('history-autonomy-strip')
   })
 })
 
-// The run strip had no row cap at all, which nobody could see until the
-// back-fill gave it history to draw: a 12mo window over a back-filled log
-// renders 95 project rows (QA-1). The daemon ranks `projects` by TOTAL
-// AUTONOMOUS SECONDS, so the cap keeps the rows that matter, and the omission
-// is stated rather than silent.
-describe('the run strip caps its project rows', () => {
-  const projects = (n) => Array.from({ length: n }, (_, i) => 'p' + i)
-
-  test('nothing is said when every project fits', () => {
-    expect(autonomyStripOverflowLabel(projects(AUTONOMY_STRIP_MAX_ROWS))).toBe('')
-    expect(autonomyStripOverflowLabel([])).toBe('')
-    expect(autonomyStripOverflowLabel(null)).toBe('')
+// The section is a per-project view of the FIVE most important projects. The
+// daemon computes the five and says how many it left out; the client renders
+// what it was sent and names the rest.
+describe('the stack draws the panels it was sent and names the rest', () => {
+  const stack = (panelCount, more) => ({
+    panels: Array.from({ length: panelCount }, (_, i) => ({ project: 'p' + i, buckets: [] })),
+    more_projects: more,
+    panel_limit: 5,
   })
 
-  test('the overflow line names how many rows were left out', () => {
-    const label = autonomyStripOverflowLabel(projects(AUTONOMY_STRIP_MAX_ROWS + 83))
-    expect(label).toContain('+83 more projects')
-    // …and WHY they are the missing ones, so the cap does not read as an
-    // arbitrary slice of an unknown ordering.
-    expect(label).toContain('less autonomous time')
+  test('five panels and one overflow line, in that order', () => {
+    const rows = autonomyStackRows(stack(5, 7))
+    expect(rows.filter(r => r.kind === 'panel')).toHaveLength(5)
+    expect(rows[rows.length - 1]).toEqual({ kind: 'more', label: '+7 more projects, each with less autonomous time' })
+    expect(rows).toHaveLength(6)
+  })
+
+  test('nothing is said when every project already has a panel', () => {
+    const rows = autonomyStackRows(stack(3, 0))
+    expect(rows.map(r => r.kind)).toEqual(['panel', 'panel', 'panel'])
+  })
+
+  test('the overflow line says WHY those are the projects missing', () => {
+    // Ranked by total autonomous time, so the tail is what went — not an
+    // arbitrary slice, and not the projects with the shortest single run.
+    expect(autonomyMoreProjectsLabel({ more_projects: 90 }))
+      .toContain('each with less autonomous time')
   })
 
   test('one hidden project is singular', () => {
-    expect(autonomyStripOverflowLabel(projects(AUTONOMY_STRIP_MAX_ROWS + 1)))
-      .toContain('+1 more project,')
+    expect(autonomyStackRows(stack(5, 1)).at(-1).label).toMatch(/^\+1 more project,/)
   })
 
-  // The measured case from QA: 95 projects in a 12mo window.
-  test('a 95-project window draws exactly the cap and accounts for the rest', () => {
-    const all = projects(95)
-    const drawn = all.slice(0, AUTONOMY_STRIP_MAX_ROWS)
-    expect(drawn).toHaveLength(AUTONOMY_STRIP_MAX_ROWS)
-    // A PREFIX of the daemon's ranking — the cap must never reorder, or the two
-    // clients would disagree about which projects are the busiest.
-    expect(drawn).toEqual(all.slice(0, drawn.length))
-    expect(autonomyStripOverflowLabel(all))
-      .toContain('+' + (95 - AUTONOMY_STRIP_MAX_ROWS) + ' more projects')
+  // The committed mutation: a client that re-decides the panel count itself.
+  // Two surfaces doing that is exactly how the run strip ended up drawing
+  // twelve rows on the web against six on macOS from one ranked list.
+  test('the client renders what it was sent, never its own count', () => {
+    const clientCap = (data) => data.panels.slice(0, 3)
+    const data = stack(5, 7)
+    expect(clientCap(data)).toHaveLength(3)
+    expect(autonomyStackRows(data).filter(r => r.kind === 'panel')).toHaveLength(data.panels.length)
   })
 
-  test('the cap is a fixed number, not something a caller can talk out of', () => {
-    expect(AUTONOMY_STRIP_MAX_ROWS).toBeGreaterThan(0)
-    expect(Number.isInteger(AUTONOMY_STRIP_MAX_ROWS)).toBe(true)
-  })
-
-  // The committed mutation, in the idiom this suite already uses. An
-  // always-silent build (the one shipped before QA-1) and an always-speaking
-  // one both answer identically for the two fixtures; production must not.
-  test('production tells a capped strip from an uncapped one', () => {
-    const fits = projects(AUTONOMY_STRIP_MAX_ROWS)
-    const overflows = projects(AUTONOMY_STRIP_MAX_ROWS + 1)
-
-    const neverSpeaks = () => ''
-    const alwaysSpeaks = () => '+N more projects'
-    expect(neverSpeaks(fits)).toBe(neverSpeaks(overflows))
-    expect(alwaysSpeaks(fits)).toBe(alwaysSpeaks(overflows))
-
-    expect(autonomyStripOverflowLabel(fits)).not.toBe(autonomyStripOverflowLabel(overflows))
-    expect(autonomyStripOverflowLabel(fits)).toBe('')
-    expect(autonomyStripOverflowLabel(overflows)).not.toBe('')
+  test('an empty window draws no panels and claims no overflow', () => {
+    expect(autonomyStackRows({ panels: [], more_projects: 0 })).toEqual([])
+    expect(autonomyStackRows(null)).toEqual([])
   })
 })
 
-// The p5 line steps by two orders of magnitude at the cost→log boundary,
-// because the cost log cannot see a run shorter than its 60s write interval
-// while the event log records one-second runs (QA-2). A reader takes that for a
-// change in behaviour. The marker puts the explanation where the artefact is.
-describe('source boundaries are marked on the chart', () => {
+describe('source boundaries are marked across the panel stack', () => {
   const durationOver = (starts, boundaries) => ({
     bucket_starts: starts,
-    buckets: [],
-    summary: { count: 0 },
+    panels: [],
+    summary: { runs: 0 },
     provenance: { reconstructed: 0, cost_derived: 0, live_since: 0, boundaries },
   })
 
@@ -309,5 +273,30 @@ describe('source boundaries are marked on the chart', () => {
 
     expect(autonomyVisibleBoundaries(straddles)).toHaveLength(1)
     expect(autonomyVisibleBoundaries(misses)).toHaveLength(0)
+  })
+})
+
+// WITH FIVE PANELS THE RULE HAS TO READ ONCE. Every panel's line steps at the
+// same instant — they share one x domain — so the rule is drawn through all of
+// them, and the caption is drawn on exactly one. Five stacked copies of
+// "← cost log · 60s resolution" are five competing captions where the reader
+// needs one, and at 9px they collide with four project names.
+describe('the boundary caption is written once, not once per panel', () => {
+  test('exactly one of five panels carries it', () => {
+    const carrying = [0, 1, 2, 3, 4].filter(autonomyBoundaryCaptionShown)
+    expect(carrying).toHaveLength(1)
+  })
+
+  test('it is the top panel, so the caption sits above the whole stack', () => {
+    expect(autonomyBoundaryCaptionShown(0)).toBe(true)
+    expect(autonomyBoundaryCaptionShown(4)).toBe(false)
+  })
+
+  // The committed mutation: captioning every panel. It passes "a caption is
+  // drawn" and fails the thing that matters, which is that there is one.
+  test('production tells one caption from five', () => {
+    const captionEverywhere = () => true
+    expect([0, 1, 2, 3, 4].filter(captionEverywhere)).toHaveLength(5)
+    expect([0, 1, 2, 3, 4].filter(autonomyBoundaryCaptionShown)).toHaveLength(1)
   })
 })

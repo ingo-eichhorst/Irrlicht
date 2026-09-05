@@ -31,27 +31,6 @@ func TestAutonomyReasonUnknownIsNotASessionState(t *testing.T) {
 	}
 }
 
-// It ranks below every measured reason on the strip's collapse ladder, so one
-// reconstructed span can never grey out a column that also holds a real error.
-func TestAutonomyReasonUnknownRanksLowest(t *testing.T) {
-	reasons := AutonomyEndReasons()
-	if len(reasons) == 0 {
-		t.Fatal("AutonomyEndReasons() is empty — cannot verify anything")
-	}
-	unknown := AutonomyReasonPriority(AutonomyReasonUnknown)
-	for _, r := range reasons {
-		if unknown >= AutonomyReasonPriority(r) {
-			t.Fatalf("`unknown` (%d) outranks or ties %q (%d)", unknown, r, AutonomyReasonPriority(r))
-		}
-	}
-	// And it ranks the same as any other reason this build cannot name: the
-	// neutral column both clients already draw.
-	if unknown != AutonomyReasonPriority("") {
-		t.Fatalf("`unknown` (%d) ranks differently from an unnamed reason (%d); the clients draw both "+
-			"in the same neutral colour and the ladder must agree", unknown, AutonomyReasonPriority(""))
-	}
-}
-
 func TestIsAutonomyReconstructed(t *testing.T) {
 	cases := []struct {
 		name   string

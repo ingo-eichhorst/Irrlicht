@@ -70,10 +70,7 @@ const (
 // NOT A SESSION STATE, and that is the whole point: it is deliberately absent
 // from canonicalStates, so IsCanonicalState and IsAutonomyEndReason both
 // refuse it, AutonomyEndReasons() never yields it, and nothing derived from
-// the canonical vocabulary can start treating it as a fifth state. It ranks
-// at autonomyPriorityUnknown on the collapse ladder — below every measured
-// reason — and both clients draw it in the neutral colour they already use
-// for a reason they cannot name.
+// the canonical vocabulary can start treating it as a fifth state.
 const AutonomyReasonUnknown = "unknown"
 
 // AutonomySources returns the reconstruction sources, in the order the
@@ -178,38 +175,17 @@ func AutonomyKindForParent(parentSessionID string) string {
 	return AutonomyKindTopLevel
 }
 
-// Autonomy end-reason priorities for the run strip's pixel-collapse rule
-// (#1905, design decision 4). When one device-pixel column of the strip holds
-// several spans, the column paints the HIGHEST-priority reason in it.
+// The end-reason COLLAPSE LADDER used to live here (#1905, design decision 4):
+// a rank per reason, so that when one device-pixel column of the per-project run
+// strip held several spans, the column painted the highest-ranked reason in it.
 //
-// The order is the session-history strip's own (services.statePriority*,
-// #1805), where one error in a bucket paints the whole bucket red: the failure
-// state outranks the needs-a-human state, which outranks the finished-cleanly
-// state. `TestAutonomyReasonLadderMatchesHistoryBar` in the services package
-// pins the two ladders together so they cannot drift.
+// It went with the strip. The Autonomy section reports the LONGEST RUN and how
+// many ran at once — only `working` matters to it — so nothing renders an end
+// reason any more, and a ladder with no consumer is an ordering nobody applies.
 //
-// Declared one value per line rather than as an ordered slice: the ladder is
-// NOT the canonical order (canonical puts `ready` after `waiting`; the ladder
-// puts it below), so it cannot be derived from CanonicalStates and has to be
-// stated. One state per line keeps it out of the vocabulary linter's sights.
-const (
-	autonomyPriorityUnknown = 0
-	autonomyPriorityReady   = 1
-	autonomyPriorityWaiting = 2
-	autonomyPriorityError   = 3
-)
-
-// AutonomyReasonPriority returns a span end reason's rank on the collapse
-// ladder. An unrecognized reason ranks below every real one, so a build that
-// cannot name a reason never outranks activity it can.
-func AutonomyReasonPriority(reason string) int {
-	switch reason {
-	case StateError:
-		return autonomyPriorityError
-	case StateWaiting:
-		return autonomyPriorityWaiting
-	case StateReady:
-		return autonomyPriorityReady
-	}
-	return autonomyPriorityUnknown
-}
+// The `reason` FIELD stays, on every row and on the wire: it costs one string,
+// it is the only fact about a run that cannot be recovered after the event, and
+// the day something wants to draw it again the data will be there. Should that
+// day come, the order to restore is the session-history strip's own
+// (services.statePriority*, #1805) — error over waiting over ready — which is
+// where this ladder's order came from in the first place.

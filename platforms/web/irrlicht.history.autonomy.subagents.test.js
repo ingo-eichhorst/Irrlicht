@@ -16,7 +16,6 @@ import { autonomyCountingLine, autonomyQuery } from './historyTab.js'
 
 const state = (over = {}) => ({
   autonomyRange: '30d',
-  autonomySpan: '24h',
   ...over,
 })
 
@@ -28,20 +27,17 @@ describe('autonomyQuery — no run-scope parameter reaches the daemon', () => {
   // "wrong number with nothing on screen saying so" the section exists to
   // avoid. So the query is exactly the chart and its window, and nothing else.
   test('the query is the chart and its window, and nothing else', () => {
-    expect(autonomyQuery('duration', state())).toBe('chart=autonomy_duration&window=30d')
-    expect(autonomyQuery('spans', state())).toBe('chart=autonomy_spans&window=24h')
+    expect(autonomyQuery(state())).toBe('chart=autonomy_projects&window=30d')
   })
 
   test('no leftover state key can revive the parameter', () => {
     // The mutation this catches: a stale `autonomyRuns` left in local state (a
     // stored preference, a resumed session) silently re-filtering the view.
     const s = state({ autonomyRuns: 'all' })
-    expect(autonomyQuery('duration', s)).not.toContain('include_subagents')
-    expect(autonomyQuery('spans', s)).not.toContain('include_subagents')
-    // …and neither element loses its own window: the two vocabularies are
-    // different sets and neither endpoint accepts the other's keys.
-    expect(autonomyQuery('duration', s)).toContain('window=30d')
-    expect(autonomyQuery('spans', s)).toContain('window=24h')
+    expect(autonomyQuery(s)).not.toContain('include_subagents')
+    // …and the window survives: the section has one, and it is not one of
+    // chart=state's same-looking granularity keys.
+    expect(autonomyQuery(s)).toContain('window=30d')
   })
 })
 
@@ -69,6 +65,17 @@ describe('the Runs control is gone from the markup and the wiring', () => {
     expect(js).not.toContain('history-autonomy-runs-sel')
     expect(js).not.toContain('autonomyRuns')
     expect(js).not.toContain('include_subagents')
+  })
+
+  // The Span picker went with the run strip it governed (#1905 redesign). Same
+  // two-file rule: markup without wiring is a control that does nothing, and
+  // wiring without markup is a listener on a state key no request reads.
+  test('no Span fieldset, buttons or wiring survive either', () => {
+    expect(html).not.toContain('history-autonomy-span-sel')
+    expect(html).not.toContain('data-autonomy-span')
+    expect(js).not.toContain('history-autonomy-span-sel')
+    expect(js).not.toContain('autonomySpan')
+    expect(js).not.toContain('AUTONOMY_SPAN_LABELS')
   })
 })
 
@@ -108,6 +115,9 @@ describe('autonomyCountingLine — the panel states what it counted', () => {
     const line = autonomyCountingLine({ kinds: kinds({ subagent: 3, unknown: 8148 }) })
     expect(line).toContain('8148 runs were recorded before Irrlicht told')
     expect(line).toContain('counted either way')
+    // …and the clause now carries its consequence for the concurrency figure:
+    // a peak one of those runs was alive for cannot be split.
+    expect(line).toContain('no split')
   })
 
   test('a window with no unknown runs says nothing about them', () => {

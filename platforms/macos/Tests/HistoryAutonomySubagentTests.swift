@@ -13,55 +13,42 @@ final class HistoryAutonomySubagentTests: XCTestCase {
 
     // MARK: Decoding
 
-    func testKindsDecodeFromBothPayloads() throws {
-        let durationJSON = """
-        {"window":"30d","chart":"autonomy_duration","start":1,"end":2,"bucket_seconds":86400,
-         "bucket_starts":[1],"buckets":[],
-         "summary":{"p95":100,"p50":40,"p5":5,"min":1,"max":100,"count":33},
-         "sample_floor":20,"earliest_span":1700000000,"total_recorded":33,
-         "kinds":{"top_level":20,"subagent":9,"unknown":4}}
+    func testKindsDecode() throws {
+        let json = """
+        {"window":"30d","chart":"autonomy_projects","start":1,"end":2,"bucket_seconds":86400,
+         "bucket_starts":[1],"panels":[],"panel_limit":5,"more_projects":0,
+         "summary":{"longest":0,"runs":15,"projects":1},
+         "earliest_span":1700000000,"total_recorded":15,
+         "kinds":{"top_level":7,"subagent":5,"unknown":3}}
         """
-        let d = try JSONDecoder().decode(HistoryAutonomyDurationResponse.self, from: Data(durationJSON.utf8))
-        let dk = try XCTUnwrap(d.kinds)
-        XCTAssertEqual(dk.topLevel, 20)
-        XCTAssertEqual(dk.subagent, 9)
-        XCTAssertEqual(dk.unknown, 4)
-
-        let spansJSON = """
-        {"window":"24h","chart":"autonomy_spans","start":0,"end":100,
-         "spans":[{"start":1,"end":9,"project":"a","session":"kid","reason":"ready",
-                   "kind":"sub","parent":"boss"},
-                  {"start":20,"end":30,"project":"a","session":"boss","reason":"ready","kind":"top"},
-                  {"start":40,"end":50,"project":"a","session":"old","reason":"ready","kind":"unknown"}],
-         "projects":["a"],"earliest_span":1,"total_recorded":3,"truncated":false,
-         "kinds":{"top_level":1,"subagent":1,"unknown":1}}
-        """
-        let s = try JSONDecoder().decode(HistoryAutonomySpansResponse.self, from: Data(spansJSON.utf8))
-        // The subagent's run is RETURNED, and it says so about itself.
-        XCTAssertEqual(s.spans.count, 3)
-        XCTAssertTrue(s.spans[0].isSubagentRun)
-        XCTAssertEqual(s.spans[0].parent, "boss")
-        XCTAssertFalse(s.spans[1].isSubagentRun)
-        // An `unknown` row is not a subagent run: nothing established it was.
-        XCTAssertFalse(s.spans[2].isSubagentRun)
+        let d = try JSONDecoder().decode(HistoryAutonomyProjectsResponse.self, from: Data(json.utf8))
+        XCTAssertEqual(d.kinds?.topLevel, 7)
+        XCTAssertEqual(d.kinds?.subagent, 5)
+        XCTAssertEqual(d.kinds?.unknown, 3)
     }
 
-    /// A payload from a daemon that predates the field must still decode, and
-    /// a row with no `kind` at all must NOT read as a subagent run — absence is
-    /// "nothing established it", never one of the two answers.
-    func testAnAbsentKindsBlockDecodesAsSayingNothing() throws {
+    /// The classification's one visible consequence now that the run strip is
+    /// gone: a concurrency peak splits only when every run alive at it said
+    /// which kind it was. Rows written before the classification carry
+    /// `unknown`, and there is no way to recover which they were.
+    func testTheSplitIsShownOnlyWhereTheDaemonSaysItIsDerivable() throws {
         let json = """
-        {"window":"24h","chart":"autonomy_spans","start":0,"end":100,
-         "spans":[{"start":1,"end":9,"project":"a","session":"legacy","reason":"ready"}],
-         "projects":["a"],"earliest_span":1,"total_recorded":1,"truncated":false}
+        {"window":"30d","chart":"autonomy_projects","start":0,"end":100,"bucket_seconds":86400,
+         "bucket_starts":[0,86400],
+         "panels":[{"project":"known","longest":60,"runs":5,"peak":5,"peak_top":3,"peak_sub":2,
+                    "peak_split":true,"buckets":[]},
+                   {"project":"legacy","longest":60,"runs":5,"peak":5,"peak_top":0,"peak_sub":0,
+                    "buckets":[]}],
+         "panel_limit":5,"more_projects":0,
+         "summary":{"longest":60,"runs":10,"projects":2},
+         "earliest_span":1,"total_recorded":10,
+         "kinds":{"top_level":3,"subagent":2,"unknown":5}}
         """
-        let s = try JSONDecoder().decode(HistoryAutonomySpansResponse.self, from: Data(json.utf8))
-        XCTAssertNil(s.kinds)
-        XCTAssertNil(s.spans[0].kind)
-        XCTAssertFalse(s.spans[0].isSubagentRun)
-        // …and the panel says nothing rather than asserting a census this
-        // response never carried.
-        XCTAssertNil(AutonomyFormat.countingLine(s.kinds))
+        let d = try JSONDecoder().decode(HistoryAutonomyProjectsResponse.self, from: Data(json.utf8))
+        XCTAssertTrue(d.panels[0].headline.contains("5 at once (3 + 2 sub)"), d.panels[0].headline)
+        XCTAssertTrue(d.panels[1].headline.contains("5 at once"), d.panels[1].headline)
+        XCTAssertFalse(d.panels[1].headline.contains("sub"),
+                       "a peak an unclassified run was alive for must show the total alone, never a guess")
     }
 
     // MARK: The sentence
@@ -102,6 +89,9 @@ final class HistoryAutonomySubagentTests: XCTestCase {
         let line = try XCTUnwrap(AutonomyFormat.countingLine(kinds(subagent: 3, unknown: 8148)))
         XCTAssertTrue(line.contains("8148 runs were recorded before Irrlicht told"), line)
         XCTAssertTrue(line.contains("counted either way"), line)
+        // …and the clause now carries its consequence for the concurrency
+        // figure: a peak one of those runs was alive for cannot be split.
+        XCTAssertTrue(line.contains("no split"), line)
     }
 
     func testAWindowWithNoUnknownRunsSaysNothingAboutThem() throws {

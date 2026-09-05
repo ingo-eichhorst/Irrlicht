@@ -5,205 +5,261 @@ import (
 	"sort"
 	"time"
 
-	"irrlicht/core/domain/session"
-	"irrlicht/core/pkg/stats"
 	"irrlicht/core/ports/outbound"
 )
 
-// Autonomy (#1905) — the History view's own top-level section, two elements
-// over one data source: a percentile line chart of autonomous run duration
-// over time, and a per-project run strip.
+// Autonomy (#1905) — the History view's own top-level section: FIVE PER-PROJECT
+// PANELS, one per project, stacked, each carrying the same two things.
 //
-// Both are served from the always-on span log (outbound.AutonomySpanStore),
-// never from the opt-in lifecycle recordings that back chart=agents/state.
-
-const (
-	// chartAutonomyDuration is element 1: one entry per time bucket carrying
-	// p95/p50/p5 plus the true min/max and the sample count.
-	chartAutonomyDuration = "autonomy_duration"
-
-	// chartAutonomySpans is element 2: the individual spans in a trailing
-	// window, for the per-project run strip.
-	chartAutonomySpans = "autonomy_spans"
-)
-
-// autonomySampleFloor is the minimum number of spans a bucket needs before its
-// p95 and p5 are percentiles rather than restatements of its own max and min.
+//	A LINE — the longest run in each time bucket. Only `working` matters here;
+//	how a run ended is recorded but no longer drawn.
+//	A HISTOGRAM under it — how many runs were working AT THE SAME TIME in that
+//	bucket, derived from the span log by overlap.
 //
-// It bites harder than a p90 would, which is why it exists at all: at n < 20
-// the R-7 p95 of a bucket interpolates within its top pair and the p5 within
-// its bottom pair, so the two outer lines collapse onto the min/max envelope
-// element 1 explicitly rejected — three lines drawn from what are really two
-// points. A bucket under the floor is MARKED (see historyAutonomyBucket.Thin)
-// and drawn differently by both clients, never hidden and never smoothed:
-// hiding it would turn a low-activity day into a gap, which reads as "no
-// runs", which is a different and false claim.
-const autonomySampleFloor = 20
+// WHAT THIS REPLACED, and why the replacement is smaller rather than richer:
+//
+//   - The p5–p95 band and the p50 line are gone. The section reports the
+//     LONGEST run now, so a percentile envelope has nothing left to describe.
+//   - The per-project run strip, its end-reason colours and its legend are
+//     gone with them: the strip's whole subject was how a run ENDED.
+//   - The sample floor and the thin-bucket marking went with the percentiles.
+//     They existed because a p95 over four samples is not a percentile — it is
+//     that bucket's maximum wearing a percentile's name. A MAXIMUM over one run
+//     is simply that run, so there is nothing left for a floor to protect, and
+//     carrying it over as decoration would mark buckets whose figure is exact.
+//
+// `Reason` stays on the wire and in the store. Nothing renders it today; it
+// costs one string per row and it is the one field that cannot be recovered
+// after the fact, so it keeps being recorded.
+//
+// Everything is served from the always-on span log (outbound.AutonomySpanStore),
+// never from the opt-in lifecycle recordings that back chart=agents/state — the
+// concurrency figure included. That is not a preference: on a machine with no
+// `recordings` directory the lifecycle-derived Agents chart is blank while the
+// span log is complete, so a concurrency number taken from recordings would be
+// missing exactly where this one is not.
+const chartAutonomyProjects = "autonomy_projects"
 
-// autonomySpanLimit caps how many spans one strip request returns. A year of
-// heavy use is tens of thousands of spans, and the strip cannot draw more than
-// its own pixel width anyway; the cap keeps the payload bounded. When it bites
-// the response says so (Truncated), because a strip silently drawn from part
-// of its window is exactly the "wrong number with nothing on screen saying so"
-// this feature is supposed to avoid.
-const autonomySpanLimit = 20000
+// autonomyPanelCount is how many project panels the section draws.
+//
+// FIVE, and the number is the design rather than a cap bolted onto an unbounded
+// list: the section is a per-project view of the five most important projects,
+// so the daemon computes five panels and says how many projects it left out.
+// Both clients draw what they are sent, which is why they cannot disagree about
+// how many panels a stack has (the run strip they replaced shipped twelve rows
+// on the web against six on macOS).
+//
+// "MOST IMPORTANT" IS GREATEST TOTAL AUTONOMOUS TIME IN THE WINDOW, never
+// longest single run: one lucky overnight run would otherwise promote a project
+// nobody has touched in a month over the one that has been working all week.
+// The rank is stated on the wire (historyAutonomyPanel.TotalSeconds) so it can
+// be checked rather than trusted.
+const autonomyPanelCount = 5
 
-// autonomyDurationSpec pairs one Range's bucket width with its bucket count.
+// autonomyWindowSpec pairs one Range's bucket width with its bucket count.
 //
 // SEPARATE FROM historyGranularitySpecs ON PURPOSE, and the separation is
 // load-bearing (#1905). The keys look alike and mean opposite things: there, a
 // key names a BUCKET WIDTH which is then multiplied by a count, so "24h"
-// resolves to a THIRTY-DAY window. Here and in autonomySpanWindowSeconds a key
-// names the WINDOW ITSELF. Merging the two tables in a later refactor would
-// silently redefine what a user's "24h" means;
-// TestAutonomyWindows_AreNotHistoryGranularities is the tripwire.
-type autonomyDurationSpec struct {
+// resolves to a THIRTY-DAY window. Here a key names the WINDOW ITSELF. Merging
+// the two tables in a later refactor would silently redefine what a user's
+// "24h" means; TestAutonomyWindows_AreNotHistoryGranularities is the tripwire.
+type autonomyWindowSpec struct {
 	bucketSeconds int64
 	buckets       int64
 }
 
-// autonomyDurationSpecs is element 1's Range vocabulary. Two ranges, and 30
-// days is the floor: anything shorter has too few spans per bucket for a
-// percentile to mean anything.
-var autonomyDurationSpecs = map[string]autonomyDurationSpec{
+// autonomyWindowSpecs is the section's Range vocabulary. Two ranges — the
+// section's only control now that the run strip's Span has gone with the strip.
+var autonomyWindowSpecs = map[string]autonomyWindowSpec{
 	"30d": {86400, 30},     // 30 daily buckets
 	"1y":  {7 * 86400, 52}, // 52 weekly buckets
 }
 
-// autonomySpanWindowSeconds is element 2's Span vocabulary — WINDOW LENGTHS,
-// each the whole trailing period the strip draws.
-var autonomySpanWindowSeconds = map[string]int64{
-	"8h":   8 * 3600,
-	"24h":  24 * 3600,
-	"7d":   7 * 86400,
-	"30d":  30 * 86400,
-	"12mo": 365 * 86400,
-}
-
-// isAutonomyChart reports whether a ?chart= value is one of the two autonomy
-// elements — both of which resolve their window from ?window= instead of the
-// usual ?range=/?bucket= pair.
-func isAutonomyChart(chart string) bool {
-	return chart == chartAutonomyDuration || chart == chartAutonomySpans
-}
+// isAutonomyChart reports whether a ?chart= value is the Autonomy section's,
+// which resolves its window from ?window= instead of the usual ?range=/?bucket=
+// pair.
+func isAutonomyChart(chart string) bool { return chart == chartAutonomyProjects }
 
 // autonomyDefaultWindow is the ?window= value assumed when the client sends
-// none, per chart.
-func autonomyDefaultWindow(chart string) string {
-	if chart == chartAutonomySpans {
-		return "24h"
-	}
-	return "30d"
-}
+// none.
+func autonomyDefaultWindow() string { return "30d" }
 
-// resolveAutonomyWindow resolves a chart's ?window= into a trailing
-// [start, end) window plus, for the duration chart, its bucket width. ok is
-// false for a window the chart does not offer — the two charts have different
-// vocabularies and neither accepts the other's keys.
-func resolveAutonomyWindow(chart, window string) (bucketSeconds, start, end int64, ok bool) {
-	end = time.Now().Unix()
-	if chart == chartAutonomySpans {
-		secs, known := autonomySpanWindowSeconds[window]
-		if !known {
-			return 0, 0, 0, false
-		}
-		return 0, end - secs, end, true
-	}
-	spec, known := autonomyDurationSpecs[window]
+// resolveAutonomyWindow resolves ?window= into a trailing [start, end) window
+// plus its bucket width. ok is false for a window the section does not offer.
+func resolveAutonomyWindow(window string) (bucketSeconds, start, end int64, ok bool) {
+	spec, known := autonomyWindowSpecs[window]
 	if !known {
 		return 0, 0, 0, false
 	}
+	end = time.Now().Unix()
 	return spec.bucketSeconds, end - spec.bucketSeconds*spec.buckets, end, true
 }
 
-// autonomyWindowError is the 400 body for an unrecognized ?window=, naming the
-// vocabulary the requested chart actually has.
-func autonomyWindowError(chart string) string {
-	if chart == chartAutonomySpans {
-		return "invalid window for chart=autonomy_spans: use 8h|24h|7d|30d|12mo"
-	}
-	return "invalid window for chart=autonomy_duration: use 30d|1y"
+// autonomyWindowError is the 400 body for an unrecognized ?window=.
+func autonomyWindowError() string {
+	return "invalid window for chart=autonomy_projects: use 30d|1y"
 }
 
-// historyAutonomyBucket is one time bucket of element 1. Buckets with no spans
-// are OMITTED from the response entirely rather than sent with zeros — a day
-// with no runs is a gap, not a run of length zero, and a zero would pull the
-// line to the axis (the same rule appendSparsePoints applies to the cost
-// series). Count is therefore always ≥ 1 on a bucket that is present.
-type historyAutonomyBucket struct {
-	TS    int64   `json:"ts"`
-	P95   float64 `json:"p95"`
-	P50   float64 `json:"p50"`
-	P5    float64 `json:"p5"`
-	Min   float64 `json:"min"`
-	Max   float64 `json:"max"`
-	Count int     `json:"count"`
-	// Thin marks a bucket below autonomySampleFloor, whose p95/p5 are its own
-	// max/min. Both clients render such buckets visibly differently.
-	Thin bool `json:"thin,omitempty"`
+// historyAutonomyPanelBucket is one time bucket of one project's panel.
+//
+// A BUCKET WITH NOTHING IN IT IS OMITTED, never emitted with zeros — a day with
+// no runs is a gap, not a run of length zero next to nobody working. The line
+// breaks there and the histogram draws nothing, because a zero bar sitting on
+// the axis looks measured and a zero point pulls the line down to it. So a
+// bucket that is PRESENT has Longest > 0 or Peak > 0.
+type historyAutonomyPanelBucket struct {
+	TS int64 `json:"ts"`
+
+	// Longest is the length in seconds of the longest run that ENDED in this
+	// bucket, and 0 when no run ended here.
+	//
+	// BY END, matching the store's own window semantics (a span is selected by
+	// where it ended, since that is the only timestamp every row is guaranteed
+	// to have). The consequence is worth stating: a run that merely passed
+	// THROUGH a bucket raises that bucket's concurrency without putting a point
+	// on its line, so a bucket can carry a bar and no line point. That is the
+	// honest pair of facts — something was working, nothing finished — and the
+	// alternative, crediting a run to every bucket it touched, would draw one
+	// 11-hour run as two 11-hour days.
+	Longest float64 `json:"longest"`
+
+	// Running marks a bucket whose longest run HAS NOT ENDED: its length is how
+	// long it has lasted so far, a floor rather than a measurement. It is still
+	// the longest — "already lasted 3h" is a true statement about the longest
+	// run — and it is marked so nobody reads a floor as final.
+	Running bool `json:"running,omitempty"`
+
+	// Peak is the greatest number of runs working AT THE SAME INSTANT anywhere
+	// in this bucket. PEAK, not average: peak answers "how wide did I go", where
+	// an average over a day is dominated by the hours nothing ran.
+	Peak int `json:"peak"`
+
+	// PeakTop and PeakSub split Peak at the instant it was reached. Meaningful
+	// only when PeakSplit is true.
+	PeakTop int `json:"peak_top"`
+	PeakSub int `json:"peak_sub"`
+
+	// PeakSplit reports that every run alive at the peak instant said which kind
+	// it was, so PeakTop + PeakSub is a derivation rather than a guess.
+	//
+	// False is the normal case for old data: rows written before #1916, and rows
+	// the back-fill rebuilt from a source with no parent information, carry
+	// session.AutonomyKindUnknown. A client shows the total alone there — never
+	// a split with an invented denominator.
+	PeakSplit bool `json:"peak_split,omitempty"`
 }
 
-// historyAutonomySummary is the window-wide figure row under the chart: the
-// drawn envelope's percentiles plus the true extremes, which are figures and
-// deliberately NOT lines (one overnight run would otherwise redraw the whole
-// Y scale and flatten every other bucket onto the floor).
+// historyAutonomyPanel is one project's panel: its two window-wide figures and
+// its per-bucket series.
+type historyAutonomyPanel struct {
+	Project string `json:"project"`
+
+	// Longest is the longest run in the whole window, in seconds, and
+	// LongestRunning marks it as one that has not ended.
+	//
+	// A STILL-RUNNING RUN COUNTS TOWARDS IT, unlike its old effect on a
+	// percentile. "The longest run already lasted 3h" is true and useful; a p95
+	// that folded the same floor in would have claimed the top 5% of runs were
+	// shorter than they were.
+	Longest        float64 `json:"longest"`
+	LongestRunning bool    `json:"longest_running,omitempty"`
+
+	// TotalSeconds is the sum of every run's length — the figure the panels are
+	// RANKED by. On the wire so the ranking can be checked against the panels
+	// rather than taken on trust.
+	TotalSeconds float64 `json:"total_seconds"`
+
+	// Runs is how many runs the window holds for this project, of every kind.
+	Runs int `json:"runs"`
+
+	// Peak is the most runs this project had working at once anywhere in the
+	// window, split the same way a bucket's is when the split is derivable.
+	Peak      int  `json:"peak"`
+	PeakTop   int  `json:"peak_top"`
+	PeakSub   int  `json:"peak_sub"`
+	PeakSplit bool `json:"peak_split,omitempty"`
+
+	Buckets []historyAutonomyPanelBucket `json:"buckets"`
+}
+
+// historyAutonomySummary is the window-wide figure row: the section's two
+// headline numbers across EVERY project, not just the five drawn.
 type historyAutonomySummary struct {
-	P95   float64 `json:"p95"`
-	P50   float64 `json:"p50"`
-	P5    float64 `json:"p5"`
-	Min   float64 `json:"min"`
-	Max   float64 `json:"max"`
-	Count int     `json:"count"`
+	// Longest is the longest run anywhere in the window, and LongestProject
+	// names where it happened.
+	Longest        float64 `json:"longest"`
+	LongestRunning bool    `json:"longest_running,omitempty"`
+	LongestProject string  `json:"longest_project,omitempty"`
+
+	// Peak is the highest per-project concurrency in the window — the widest any
+	// ONE project went, never a sum across projects, which would be a different
+	// and much larger number.
+	Peak        int    `json:"peak"`
+	PeakProject string `json:"peak_project,omitempty"`
+
+	// Runs and Projects count the window.
+	Runs     int `json:"runs"`
+	Projects int `json:"projects"`
 }
 
-// historyAutonomyDurationResponse is the chart=autonomy_duration payload.
-type historyAutonomyDurationResponse struct {
-	Window        string                  `json:"window"`
-	Chart         string                  `json:"chart"`
-	Start         int64                   `json:"start"`
-	End           int64                   `json:"end"`
-	BucketSeconds int64                   `json:"bucket_seconds"`
-	BucketStarts  []int64                 `json:"bucket_starts"`
-	Buckets       []historyAutonomyBucket `json:"buckets"`
-	Summary       historyAutonomySummary  `json:"summary"`
-	SampleFloor   int                     `json:"sample_floor"`
-	// EarliestSpan is the earliest span on record across the WHOLE log, not
-	// this window — 0 when nothing has ever been recorded. It is what lets
-	// both clients say "collecting since <date>" instead of leaving an empty
-	// chart to be read as "you did nothing" (#1905).
+// historyAutonomyProjectsResponse is the chart=autonomy_projects payload.
+type historyAutonomyProjectsResponse struct {
+	Window        string  `json:"window"`
+	Chart         string  `json:"chart"`
+	Start         int64   `json:"start"`
+	End           int64   `json:"end"`
+	BucketSeconds int64   `json:"bucket_seconds"`
+	BucketStarts  []int64 `json:"bucket_starts"`
+
+	// Panels are the five most important projects, most autonomous time first.
+	Panels []historyAutonomyPanel `json:"panels"`
+	// PanelLimit is how many panels the daemon draws — on the wire so a client
+	// renders what it was sent rather than re-deciding the number itself.
+	PanelLimit int `json:"panel_limit"`
+	// MoreProjects is how many projects the window holds beyond the panels, all
+	// of them with less autonomous time than every panel above.
+	MoreProjects int `json:"more_projects"`
+
+	Summary historyAutonomySummary `json:"summary"`
+
+	// EarliestSpan is the earliest span on record across the WHOLE log, not this
+	// window — 0 when nothing has ever been recorded. It is what lets both
+	// clients say "collecting since <date>" instead of leaving an empty section
+	// to be read as "you did nothing" (#1905).
 	EarliestSpan  int64 `json:"earliest_span"`
 	TotalRecorded int   `json:"total_recorded"`
+
 	// Provenance marks how much of THIS window was reconstructed rather than
-	// measured (#1905 back-fill). Always present, zero-valued when the whole
-	// window was measured live.
+	// measured (#1905 back-fill), and carries the source boundaries the panels
+	// draw a rule at. Always present, zero-valued when the whole window was
+	// measured live.
 	Provenance historyAutonomyProvenance `json:"provenance"`
 	// Kinds says what this payload is made of, by run kind (#1905 subagents).
-	// Always present.
 	Kinds historyAutonomyKinds `json:"kinds"`
 	// Measurement says how many of the runs in view have a duration that is a
-	// floor rather than a measurement (#1905 recording). Always present,
-	// zero-valued when every run in view is finished and fully measured.
+	// floor rather than a measurement (#1905 recording).
 	Measurement historyAutonomyMeasurement `json:"measurement"`
 }
 
 // historyAutonomyProvenance is the wire shape of
-// outbound.AutonomySpanProvenance, carried by BOTH autonomy payloads.
+// outbound.AutonomySpanProvenance.
 //
-// It ships even though the back-fill tool never does: the tool is a one-off
-// the maintainer runs by hand on one machine, but the rows it writes are read
-// by every daemon and both clients afterwards, and a reconstructed number
-// rendered as a measured one is precisely the "wrong figure with nothing on
-// screen saying so" this feature was built to avoid.
+// It ships even though the back-fill tool never does: the tool is a one-off the
+// maintainer runs by hand on one machine, but the rows it writes are read by
+// every daemon and both clients afterwards, and a reconstructed number rendered
+// as a measured one is precisely the "wrong figure with nothing on screen saying
+// so" this feature was built to avoid.
 type historyAutonomyProvenance struct {
-	// Reconstructed is how many of the runs in this window were rebuilt from
-	// a log rather than measured as they happened.
+	// Reconstructed is how many of the runs in this window were rebuilt from a
+	// log rather than measured as they happened.
 	Reconstructed int `json:"reconstructed"`
-	// CostDerived is the subset of those whose end reason is unknown and
-	// cannot be recovered — the source records activity, not outcome.
+	// CostDerived is the subset of those whose end reason is unknown and cannot
+	// be recovered — the source records activity, not outcome.
 	CostDerived int `json:"cost_derived"`
-	// LiveSince is the earliest MEASURED span across the whole log: the
-	// instant before which everything on record is reconstructed. 0 when
-	// nothing has ever been measured live.
+	// LiveSince is the earliest MEASURED span across the whole log: the instant
+	// before which everything on record is reconstructed. 0 when nothing has
+	// ever been measured live.
 	LiveSince int64 `json:"live_since"`
 	// Boundaries are the instants where the PROVENANCE of the data changes,
 	// oldest first. Empty when everything on record came from one source.
@@ -211,20 +267,25 @@ type historyAutonomyProvenance struct {
 }
 
 // autonomyEraLive is the wire name for the measured era, whose rows carry no
-// `source` at all. It exists only on the wire and in a label — nothing writes
-// it to a row, and it is deliberately absent from session.AutonomySources() so
-// it can never be mistaken for one.
+// `source` at all. It exists only on the wire and in a label — nothing writes it
+// to a row, and it is deliberately absent from session.AutonomySources() so it
+// can never be mistaken for one.
 const autonomyEraLive = "live"
 
 // historyAutonomyBoundary is one instant where the data's provenance changes —
 // a run drawn to the left of it came from `from`, one to the right from `to`.
 //
 // It exists because the provenance PARAGRAPH cannot fix what the eye reads off
-// the CURVE (#1905 back-fill, QA-2). The cost log cannot see a run shorter than
-// its 60 s write interval; the event log records one-second runs. So the p5
-// line steps at the source boundary and a reader takes a change of instrument
-// for a change of behaviour. The marker puts the explanation where the artefact
-// is.
+// the LINE (#1905 back-fill, QA-2). The cost log cannot see a run shorter than
+// its 60 s write interval; the event log records one-second runs. So the line
+// steps at the source boundary and a reader takes a change of instrument for a
+// change of behaviour. The marker puts the explanation where the artefact is.
+//
+// It survives the redesign for the same reason it was built, and the redesign
+// makes it MORE necessary rather than less: five stacked panels sharing one x
+// axis all step at the same instant, which looks like five findings and is one
+// instrument change. Both clients draw the rule through every panel and caption
+// it once (see the caption rules in each client).
 //
 // TS is the earliest start of the NEWER era. The rules that build the rows
 // guarantee the older source stops there — the cost era ends at the event log's
@@ -238,8 +299,7 @@ type historyAutonomyBoundary struct {
 }
 
 // autonomyProvenanceFrom converts the store's provenance block to the wire
-// shape. One converter, used by both payloads, so the two elements of one
-// section can never disagree about how much of it was reconstructed.
+// shape.
 func autonomyProvenanceFrom(p outbound.AutonomySpanProvenance) historyAutonomyProvenance {
 	return historyAutonomyProvenance{
 		Reconstructed: p.Reconstructed,
@@ -249,17 +309,17 @@ func autonomyProvenanceFrom(p outbound.AutonomySpanProvenance) historyAutonomyPr
 	}
 }
 
-// autonomyBoundariesFrom turns the log's per-source era starts into the
-// instants where one era hands over to the next.
+// autonomyBoundariesFrom turns the log's per-source era starts into the instants
+// where one era hands over to the next.
 //
 // ONE MECHANISM, not a case per pair. Today there are two handovers on a
 // back-filled machine — cost→log and log→live — but nothing here names either:
-// the eras are sorted by when they start and a boundary is emitted between
-// each adjacent pair. A third source, or a machine that only ever had two of
-// them, falls out without another branch.
+// the eras are sorted by when they start and a boundary is emitted between each
+// adjacent pair. A third source, or a machine that only ever had two of them,
+// falls out without another branch.
 //
-// A single era yields no boundary, which is the normal install: nothing to
-// mark, so nothing is drawn.
+// A single era yields no boundary, which is the normal install: nothing to mark,
+// so nothing is drawn.
 func autonomyBoundariesFrom(eraStarts map[string]int64) []historyAutonomyBoundary {
 	type era struct {
 		source string
@@ -302,14 +362,16 @@ func autonomyEraName(source string) string {
 	return source
 }
 
-// historyAutonomyKinds is the wire shape of outbound.AutonomySpanKinds: what
-// the window is made of, by run kind (#1905 subagents).
+// historyAutonomyKinds is the wire shape of outbound.AutonomySpanKinds: what the
+// window is made of, by run kind (#1905 subagents).
 //
-// THERE IS NO MODE ANY MORE (#1905 recording). Subagent runs are always
-// counted — they are runs Irrlicht itself recorded — so "42 runs" means one
-// thing and a client has nothing to remember it asked for. The three counts
-// stay because they still say something a reader wants: how much of a window
-// was subagent work, and how much of it predates the classification.
+// THERE IS NO MODE ANY MORE (#1905 recording). Subagent runs are always counted
+// — they are runs Irrlicht itself recorded — so "42 runs" means one thing and a
+// client has nothing to remember it asked for. The three counts stay because
+// they still say something a reader wants: how much of a window was subagent
+// work, and how much of it predates the classification. The concurrency figure
+// leans on the same field, and the Unknown count is what tells a reader why a
+// panel's `at once` figure sometimes carries no split.
 type historyAutonomyKinds struct {
 	// TopLevel, Subagent and Unknown count the window, and — nothing being
 	// dropped for its kind — the rows returned with them.
@@ -318,9 +380,7 @@ type historyAutonomyKinds struct {
 	Unknown  int `json:"unknown"`
 }
 
-// autonomyKindsFrom converts the store's kind census to the wire shape. One
-// converter for both payloads, so the two elements of one section can never
-// disagree about what they counted.
+// autonomyKindsFrom converts the store's kind census to the wire shape.
 func autonomyKindsFrom(k outbound.AutonomySpanKinds) historyAutonomyKinds {
 	return historyAutonomyKinds{
 		TopLevel: k.TopLevel,
@@ -330,22 +390,21 @@ func autonomyKindsFrom(k outbound.AutonomySpanKinds) historyAutonomyKinds {
 }
 
 // historyAutonomyMeasurement is the wire shape of
-// outbound.AutonomySpanMeasurement: how many of the runs in view have a
-// duration that is a LOWER BOUND rather than a measurement (#1905 recording).
+// outbound.AutonomySpanMeasurement: how many of the runs in view have a duration
+// that is a LOWER BOUND rather than a measurement (#1905 recording).
 //
 // It ships beside Provenance and answers a different question. Provenance asks
 // where a number came from; this asks whether the number is finished. A run
 // still going, and a run Irrlicht met already in progress, are both real runs
-// with real durations — floors, not measurements. Both are counted, returned
-// and named on screen rather than quietly dropped, because dropping them is
-// what left 5 of a day's 35 runs on the record.
+// with real durations — floors, not measurements. Both are counted, returned and
+// named on screen rather than quietly dropped, because dropping them is what
+// left 5 of a day's 35 runs on the record.
 type historyAutonomyMeasurement struct {
 	// Running is how many of the runs in view have not ended.
 	//
-	// They are NOT samples for the percentiles — see
-	// buildAutonomyDurationResponse, where that decision is made and stated —
-	// so this is also the gap between the runs the section shows and the runs
-	// its percentiles were computed from.
+	// They ARE counted towards the longest run now — see historyAutonomyPanel.
+	// What they must never do is pass as finished, which is why they are counted
+	// separately and marked wherever one is the figure being shown.
 	Running int `json:"running"`
 
 	// LowerBoundStart is how many began before Irrlicht was watching, so their
@@ -354,7 +413,7 @@ type historyAutonomyMeasurement struct {
 }
 
 // autonomyMeasurementFrom converts the store's measurement census to the wire
-// shape. One converter for both payloads, same reason as the kinds census.
+// shape.
 func autonomyMeasurementFrom(m outbound.AutonomySpanMeasurement) historyAutonomyMeasurement {
 	return historyAutonomyMeasurement{
 		Running:         m.Running,
@@ -362,77 +421,26 @@ func autonomyMeasurementFrom(m outbound.AutonomySpanMeasurement) historyAutonomy
 	}
 }
 
-// historyAutonomySpanRow is one span on the wire for element 2.
-type historyAutonomySpanRow struct {
-	Start   int64  `json:"start"`
-	End     int64  `json:"end"`
-	Project string `json:"project"`
-	Session string `json:"session"`
-	// Reason is one of session.AutonomyEndReasons(); "" for a span recorded
-	// by a build that could not name it.
-	Reason string `json:"reason,omitempty"`
-	// Kind is one of session.AutonomyKinds(), always resolved — the store
-	// normalizes a blank row to session.AutonomyKindUnknown, so a client never
-	// has to decide what an absent field means.
-	Kind string `json:"kind"`
-	// Parent is the parent session id of a subagent run, "" otherwise.
-	Parent string `json:"parent,omitempty"`
-	// Running marks a run that has not ended: End is where it had got to when
-	// the window was taken, so its length is a floor (#1905 recording). A row
-	// carrying it must never be drawn as a finished run.
-	Running bool `json:"running,omitempty"`
-	// StartLowerBound marks a run Irrlicht met already in progress, so Start
-	// is when it began WATCHING. Its length is a floor for the other reason.
-	StartLowerBound bool `json:"start_lower_bound,omitempty"`
-}
-
-// historyAutonomySpansResponse is the chart=autonomy_spans payload: the spans
-// themselves plus the row order the strip draws them in.
-type historyAutonomySpansResponse struct {
-	Window string                   `json:"window"`
-	Chart  string                   `json:"chart"`
-	Start  int64                    `json:"start"`
-	End    int64                    `json:"end"`
-	Spans  []historyAutonomySpanRow `json:"spans"`
-	// Projects is strip row order — most autonomous seconds first — computed
-	// once here so the two clients cannot order the same strip differently.
-	Projects      []string `json:"projects"`
-	EarliestSpan  int64    `json:"earliest_span"`
-	TotalRecorded int      `json:"total_recorded"`
-	Truncated     bool     `json:"truncated"`
-	// Provenance marks how much of THIS window was reconstructed. Counted
-	// after the limit clips the spans, so it describes the rows above it.
-	Provenance historyAutonomyProvenance `json:"provenance"`
-	// Kinds says what this payload is made of, by run kind (#1905 subagents).
-	Kinds historyAutonomyKinds `json:"kinds"`
-	// Measurement says how many of the returned runs have a duration that is a
-	// floor rather than a measurement (#1905 recording).
-	Measurement historyAutonomyMeasurement `json:"measurement"`
-}
-
-// serveHistoryAutonomyDurationChart serves chart=autonomy_duration. A nil
-// store yields an empty-but-valid payload rather than an error, mirroring
+// serveHistoryAutonomyProjectsChart serves chart=autonomy_projects. A nil store
+// yields an empty-but-valid payload rather than an error, mirroring
 // serveHistoryAgentsChart.
-func serveHistoryAutonomyDurationChart(w http.ResponseWriter, store outbound.AutonomySpanStore, window string, bucketSeconds, start, end int64) {
+func serveHistoryAutonomyProjectsChart(w http.ResponseWriter, store outbound.AutonomySpanStore, window string, bucketSeconds, start, end int64) {
 	res, ok := readAutonomySpans(w, store, outbound.AutonomySpanQuery{Start: start, End: end})
 	if !ok {
 		return
 	}
-	writeHistoryJSON(w, buildAutonomyDurationResponse(window, bucketSeconds, start, end, res))
+	writeHistoryJSON(w, buildAutonomyProjectsResponse(window, bucketSeconds, start, end, res))
 }
 
-// serveHistoryAutonomySpansChart serves chart=autonomy_spans.
-func serveHistoryAutonomySpansChart(w http.ResponseWriter, store outbound.AutonomySpanStore, window string, start, end int64) {
-	res, ok := readAutonomySpans(w, store, outbound.AutonomySpanQuery{Start: start, End: end, Limit: autonomySpanLimit})
-	if !ok {
-		return
-	}
-	writeHistoryJSON(w, buildAutonomySpansResponse(window, start, end, res))
-}
-
-// readAutonomySpans performs the store read shared by both elements,
-// substituting an empty result for a nil store and writing a 500 on error.
-// ok is false once it has written a response.
+// readAutonomySpans performs the store read, substituting an empty result for a
+// nil store and writing a 500 on error. ok is false once it has written a
+// response.
+//
+// DELIBERATELY UNLIMITED. The run strip capped its read at 20 000 rows because
+// it drew one column per run and could not draw more than its own pixel width;
+// the panels reduce every run to two per-bucket figures, and a concurrency peak
+// computed from a clipped span list is simply wrong — silently, and always
+// downwards. A cap here would be a number nobody could check.
 func readAutonomySpans(w http.ResponseWriter, store outbound.AutonomySpanStore, q outbound.AutonomySpanQuery) (*outbound.AutonomySpanResult, bool) {
 	if store == nil {
 		return &outbound.AutonomySpanResult{Spans: []outbound.AutonomySpan{}}, true
@@ -448,36 +456,20 @@ func readAutonomySpans(w http.ResponseWriter, store outbound.AutonomySpanStore, 
 	return res, true
 }
 
-// buildAutonomyDurationResponse buckets the window's spans by the bucket their
-// END falls in, and reduces each bucket to its percentile envelope.
-//
-// Every percentile here is computed ONCE, server-side, with the R-7 convention
-// named in stats.Percentile — not because the clients could not divide, but
-// because "the p95" is ambiguous enough that two independent implementations
-// draw two different lines from the same data (#1905 design decision 5).
-// A RUN STILL IN PROGRESS IS NOT A SAMPLE. This is where that is decided
-// (#1905 recording), and it is a decision rather than an omission.
-//
-// A run that is three hours in and continuing has a duration of "at least three
-// hours". Folding that into a percentile treats a floor as a measurement, and
-// the error is not random: it always shortens, and it shortens the longest runs
-// hardest, which is the exact bias this whole fix exists to remove. A p95 that
-// counted it would say the top 5% of runs were shorter than they were.
-//
-// So a running run is COUNTED, RETURNED, DRAWN and NAMED — response.Measurement
-// carries how many there are, and both clients say so — but the percentile
-// envelope, the summary row and the min/max extremes are computed from finished
-// runs only. Removing it from the chart instead was the other option and is
-// worse in the same direction as the original defect: it makes the longest run
-// on the machine the one thing the section cannot show.
-//
-// A LOWER-BOUND START is treated differently, and the asymmetry is the point. A
-// run Irrlicht met already in progress has FINISHED: its length is known to
-// within however long it had been going when Irrlicht started watching, which
-// is bounded by the daemon's own uptime. It is a sample, and it is marked.
-// Dropping those would re-create the under-count exactly — every long run that
-// crosses a restart is one of them.
-func buildAutonomyDurationResponse(window string, bucketSeconds, start, end int64, res *outbound.AutonomySpanResult) historyAutonomyDurationResponse {
+// autonomyProjectTotals is one project's window-wide roll-up, accumulated in the
+// single pass that groups the window's spans.
+type autonomyProjectTotals struct {
+	spans          []outbound.AutonomySpan
+	totalSeconds   float64
+	longest        float64
+	longestRunning bool
+	runs           int
+}
+
+// buildAutonomyProjectsResponse groups the window's spans by project, ranks the
+// projects by total autonomous time, and reduces the top autonomyPanelCount of
+// them to a panel each.
+func buildAutonomyProjectsResponse(window string, bucketSeconds, start, end int64, res *outbound.AutonomySpanResult) historyAutonomyProjectsResponse {
 	n := 0
 	if bucketSeconds > 0 && end > start {
 		n = int((end - start + bucketSeconds - 1) / bucketSeconds)
@@ -487,46 +479,25 @@ func buildAutonomyDurationResponse(window string, bucketSeconds, start, end int6
 		bucketStarts[i] = start + int64(i)*bucketSeconds
 	}
 
-	byBucket := make([][]float64, n)
-	all := make([]float64, 0, len(res.Spans))
-	for _, s := range res.Spans {
-		if s.Running {
-			continue
-		}
-		d := float64(s.Duration())
-		if d <= 0 {
-			continue
-		}
-		all = append(all, d)
-		if n == 0 {
-			continue
-		}
-		idx := int((s.End - start) / bucketSeconds)
-		if idx < 0 || idx >= n {
-			continue
-		}
-		byBucket[idx] = append(byBucket[idx], d)
+	byProject := groupAutonomySpans(res.Spans)
+	ranked := rankAutonomyProjects(byProject)
+
+	panels := make([]historyAutonomyPanel, 0, min(autonomyPanelCount, len(ranked)))
+	for _, project := range ranked[:min(autonomyPanelCount, len(ranked))] {
+		panels = append(panels, buildAutonomyPanel(project, byProject[project], start, bucketSeconds, n))
 	}
 
-	buckets := make([]historyAutonomyBucket, 0, n)
-	for i, samples := range byBucket {
-		// A bucket with no spans is a GAP: omitted, never emitted as a zero.
-		if len(samples) == 0 {
-			continue
-		}
-		buckets = append(buckets, autonomyBucketFrom(bucketStarts[i], samples))
-	}
-
-	return historyAutonomyDurationResponse{
+	return historyAutonomyProjectsResponse{
 		Window:        window,
-		Chart:         chartAutonomyDuration,
+		Chart:         chartAutonomyProjects,
 		Start:         start,
 		End:           end,
 		BucketSeconds: bucketSeconds,
 		BucketStarts:  bucketStarts,
-		Buckets:       buckets,
-		Summary:       autonomySummaryFrom(all),
-		SampleFloor:   autonomySampleFloor,
+		Panels:        panels,
+		PanelLimit:    autonomyPanelCount,
+		MoreProjects:  max(0, len(ranked)-autonomyPanelCount),
+		Summary:       autonomySummaryFrom(ranked, byProject, start, end),
 		EarliestSpan:  res.EarliestStart,
 		TotalRecorded: res.TotalRecorded,
 		Provenance:    autonomyProvenanceFrom(res.Provenance),
@@ -535,83 +506,147 @@ func buildAutonomyDurationResponse(window string, bucketSeconds, start, end int6
 	}
 }
 
-// autonomyBucketFrom reduces one bucket's samples to its envelope. samples is
-// sorted in place, then read five times — one sort per bucket, not per line.
-func autonomyBucketFrom(ts int64, samples []float64) historyAutonomyBucket {
-	sort.Float64s(samples)
-	return historyAutonomyBucket{
-		TS:    ts,
-		P95:   stats.PercentileSorted(samples, 0.95),
-		P50:   stats.PercentileSorted(samples, 0.50),
-		P5:    stats.PercentileSorted(samples, 0.05),
-		Min:   samples[0],
-		Max:   samples[len(samples)-1],
-		Count: len(samples),
-		Thin:  len(samples) < autonomySampleFloor,
-	}
-}
-
-// autonomySummaryFrom reduces the whole window's samples to the figure row.
-func autonomySummaryFrom(samples []float64) historyAutonomySummary {
-	if len(samples) == 0 {
-		return historyAutonomySummary{}
-	}
-	sort.Float64s(samples)
-	return historyAutonomySummary{
-		P95:   stats.PercentileSorted(samples, 0.95),
-		P50:   stats.PercentileSorted(samples, 0.50),
-		P5:    stats.PercentileSorted(samples, 0.05),
-		Min:   samples[0],
-		Max:   samples[len(samples)-1],
-		Count: len(samples),
-	}
-}
-
-// buildAutonomySpansResponse renders the window's spans plus the strip's row
-// order (most autonomous seconds first, then name for a stable tie-break).
-func buildAutonomySpansResponse(window string, start, end int64, res *outbound.AutonomySpanResult) historyAutonomySpansResponse {
-	rows := make([]historyAutonomySpanRow, 0, len(res.Spans))
-	totals := map[string]int64{}
-	for _, s := range res.Spans {
-		rows = append(rows, historyAutonomySpanRow{
-			Start:           s.Start,
-			End:             s.End,
-			Project:         s.Project,
-			Session:         s.Session,
-			Reason:          s.Reason,
-			Kind:            session.AutonomyKindOrUnknown(s.Kind),
-			Parent:          s.Parent,
-			Running:         s.Running,
-			StartLowerBound: s.StartLowerBound,
-		})
-		// A running run's seconds-so-far DO count towards its project's rank.
-		// The row order is "which projects had the most autonomous time", and
-		// a three-hour run still going is three hours of it — leaving it out
-		// would rank the busiest project below one that merely finished first.
-		totals[s.Project] += s.Duration()
-	}
-	projects := make([]string, 0, len(totals))
-	for p := range totals {
-		projects = append(projects, p)
-	}
-	sort.Slice(projects, func(i, j int) bool {
-		if totals[projects[i]] != totals[projects[j]] {
-			return totals[projects[i]] > totals[projects[j]]
+// groupAutonomySpans buckets the window's spans by project and accumulates each
+// project's window-wide roll-up in the same pass.
+//
+// A RUNNING RUN'S SECONDS SO FAR COUNT towards its project's total, and towards
+// its longest. The rank is "which projects had the most autonomous time", and
+// three hours still going is three hours of it; leaving it out would rank the
+// busiest project below one that merely finished first.
+func groupAutonomySpans(spans []outbound.AutonomySpan) map[string]*autonomyProjectTotals {
+	out := map[string]*autonomyProjectTotals{}
+	for _, s := range spans {
+		t := out[s.Project]
+		if t == nil {
+			t = &autonomyProjectTotals{}
+			out[s.Project] = t
 		}
-		return projects[i] < projects[j]
-	})
-	return historyAutonomySpansResponse{
-		Window:        window,
-		Chart:         chartAutonomySpans,
-		Start:         start,
-		End:           end,
-		Spans:         rows,
-		Projects:      projects,
-		EarliestSpan:  res.EarliestStart,
-		TotalRecorded: res.TotalRecorded,
-		Truncated:     res.Truncated,
-		Provenance:    autonomyProvenanceFrom(res.Provenance),
-		Kinds:         autonomyKindsFrom(res.Kinds),
-		Measurement:   autonomyMeasurementFrom(res.Measurement),
+		t.spans = append(t.spans, s)
+		t.runs++
+		d := float64(s.Duration())
+		t.totalSeconds += d
+		if d > t.longest {
+			t.longest = d
+			t.longestRunning = s.Running
+		}
 	}
+	return out
+}
+
+// rankAutonomyProjects orders projects by TOTAL AUTONOMOUS SECONDS, most first,
+// with the project name breaking a tie so the same window ranks the same way on
+// every request rather than following map iteration order.
+//
+// Not by longest run, and the difference is the whole point of ranking at all:
+// a project with one lucky overnight run and nothing else would outrank a
+// project that worked every day of the window.
+func rankAutonomyProjects(byProject map[string]*autonomyProjectTotals) []string {
+	out := make([]string, 0, len(byProject))
+	for project := range byProject {
+		out = append(out, project)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		a, b := byProject[out[i]], byProject[out[j]]
+		if a.totalSeconds != b.totalSeconds {
+			return a.totalSeconds > b.totalSeconds
+		}
+		return out[i] < out[j]
+	})
+	return out
+}
+
+// buildAutonomyPanel reduces one project's spans to its panel.
+func buildAutonomyPanel(project string, t *autonomyProjectTotals, start, bucketSeconds int64, n int) historyAutonomyPanel {
+	longest, running := autonomyBucketLongest(t.spans, start, bucketSeconds, n)
+	peaks := autonomyPeaks(t.spans, start, bucketSeconds, n)
+	windowPeak := autonomyWindowPeak(t.spans, start, start+bucketSeconds*int64(n))
+
+	buckets := make([]historyAutonomyPanelBucket, 0, n)
+	for i := 0; i < n; i++ {
+		// The gap rule: nothing finished here AND nothing was working here, so
+		// the bucket is omitted rather than sent as a pair of measured zeros.
+		if longest[i] <= 0 && peaks[i].peak <= 0 {
+			continue
+		}
+		buckets = append(buckets, historyAutonomyPanelBucket{
+			TS:        start + int64(i)*bucketSeconds,
+			Longest:   longest[i],
+			Running:   running[i],
+			Peak:      peaks[i].peak,
+			PeakTop:   peaks[i].topLevel,
+			PeakSub:   peaks[i].subagent,
+			PeakSplit: peaks[i].splitKnown,
+		})
+	}
+
+	return historyAutonomyPanel{
+		Project:        project,
+		Longest:        t.longest,
+		LongestRunning: t.longestRunning,
+		TotalSeconds:   t.totalSeconds,
+		Runs:           t.runs,
+		Peak:           windowPeak.peak,
+		PeakTop:        windowPeak.topLevel,
+		PeakSub:        windowPeak.subagent,
+		PeakSplit:      windowPeak.splitKnown,
+		Buckets:        buckets,
+	}
+}
+
+// autonomyBucketLongest returns, per bucket, the length of the longest run that
+// ENDED in it and whether that run was still going.
+//
+// A run's bucket is the one its END falls in — the store selects spans by their
+// end for the same reason (it is the only timestamp every row is guaranteed to
+// have). A run whose end lands exactly on the window's closing instant is
+// credited to the last bucket rather than dropped: the buckets tile [start, end)
+// so `end` itself is out of range by construction, and a run that finished this
+// very second is not a run that did not happen.
+func autonomyBucketLongest(spans []outbound.AutonomySpan, start, bucketSeconds int64, n int) (longest []float64, running []bool) {
+	longest = make([]float64, n)
+	running = make([]bool, n)
+	if n == 0 || bucketSeconds <= 0 {
+		return longest, running
+	}
+	for _, s := range spans {
+		d := float64(s.Duration())
+		if d <= 0 {
+			continue
+		}
+		idx := int((s.End - start) / bucketSeconds)
+		if idx < 0 {
+			continue
+		}
+		if idx >= n {
+			idx = n - 1
+		}
+		if d > longest[idx] {
+			longest[idx] = d
+			running[idx] = s.Running
+		}
+	}
+	return longest, running
+}
+
+// autonomySummaryFrom reduces every project in the window — not just the five
+// drawn — to the section's two headline figures.
+func autonomySummaryFrom(ranked []string, byProject map[string]*autonomyProjectTotals, start, end int64) historyAutonomySummary {
+	out := historyAutonomySummary{Projects: len(ranked)}
+	for _, project := range ranked {
+		t := byProject[project]
+		out.Runs += t.runs
+		if t.longest > out.Longest {
+			out.Longest = t.longest
+			out.LongestRunning = t.longestRunning
+			out.LongestProject = project
+		}
+		// One sweep per project, over the whole window as a single bucket: the
+		// figure is "the widest any ONE project went", never a sum across
+		// projects, which would be a different and much larger number.
+		if peak := autonomyWindowPeak(t.spans, start, end); peak.peak > out.Peak {
+			out.Peak = peak.peak
+			out.PeakProject = project
+		}
+	}
+	return out
 }

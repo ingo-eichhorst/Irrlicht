@@ -280,13 +280,11 @@ func TestUnknownIsNotASessionState(t *testing.T) {
 			t.Fatal("AutonomyEndReasons() yields `unknown`")
 		}
 	}
-	// It also has to rank below every measured reason on the strip's collapse
-	// ladder, or one unknown span would grey out a column holding a real error.
-	for _, r := range session.AutonomyEndReasons() {
-		if session.AutonomyReasonPriority(session.AutonomyReasonUnknown) >= session.AutonomyReasonPriority(r) {
-			t.Fatalf("`unknown` outranks or ties %q on the collapse ladder", r)
-		}
-	}
+	// The rank it used to carry on the run strip's collapse ladder went with
+	// the strip (#1905 redesign): nothing renders an end reason any more, so
+	// there is no ordering left to check. What still has to hold — and is
+	// checked above — is that `unknown` stays OUTSIDE the vocabulary, so no
+	// consumer derived from it can start treating it as a fifth state.
 }
 
 // The cost era stops where the event log begins. The two sources must never
