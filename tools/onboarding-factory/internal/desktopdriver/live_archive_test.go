@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func archiveFixtureElements(project, title string) []helperElement {
@@ -193,5 +194,88 @@ func TestArchiveTargetResolvesWhenOtherSessionsShareTheTitle(t *testing.T) {
 	foreign := []helperElement{sessionMenuElement("Someone else's session", 29)}
 	if _, err := validateArchiveTarget(owned, sessions, foreign); err == nil {
 		t.Fatal("validateArchiveTarget() accepted a foreign open conversation")
+	}
+}
+
+// The postcondition of a click must name the ONE control that proves the click
+// worked. Live run 19 archived nothing because it watched for a bare `AXMenu`:
+// `helper control_ambiguous: The postcondition selector matched 16 visible
+// controls`. Claude Desktop has a menu bar, so "some menu appeared" is never a
+// unique observation.
+//
+// What the driver actually needs to see is the Archive item it is about to
+// click. This test reads the request the driver sends the helper.
+func TestArchiveWatchesForTheArchiveItemNotAnyMenu(t *testing.T) {
+	root := t.TempDir()
+	workspace := "/repo/workspace"
+	registryRoot := filepath.Join(root, "claude-code-sessions", "account", "profile")
+	if err := os.MkdirAll(registryRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	session := RegistrySession{
+		SessionID: "local_owned", CLISessionID: "cli-owned", CWD: workspace, Title: "Same title",
+	}
+	data, err := json.Marshal(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(registryRoot, "local_owned.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	response, err := json.Marshal(helperResponse{OK: true, Elements: []helperElement{
+		sessionMenuElement("Same title", 29),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requests := filepath.Join(root, "requests.jsonl")
+	helper := filepath.Join(root, "helper")
+	script := "#!/bin/sh\ncat >> '" + requests + "'\nprintf '\\n' >> '" + requests +
+		"'\nprintf '%s\\n' '" + string(response) + "'\n"
+	if err := os.WriteFile(helper, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := NewLiveRuntime(LiveOptions{
+		Home: root, HelperPath: helper, DaemonAddress: "127.0.0.1:1",
+		RecordingDirectory: filepath.Join(root, "recordings"), DesktopSupportRoot: root,
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	owned := OwnedSession{Registry: RegistrySession{
+		SessionID: "local_owned", CLISessionID: "cli-owned", CWD: workspace,
+	}}
+	// The fake never reports the session archived, so this ends in a timeout.
+	// The requests it recorded on the way are what this test is about.
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	_ = runtime.ArchiveOwned(ctx, owned)
+
+	raw, err := os.ReadFile(requests)
+	if err != nil {
+		t.Fatalf("the driver sent the helper nothing; this check cannot run, which is a failure: %v", err)
+	}
+	var clicks int
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var request helperRequest
+		if err := json.Unmarshal([]byte(line), &request); err != nil {
+			continue
+		}
+		if request.Command != "physical_click" || request.Postcondition == nil {
+			continue
+		}
+		clicks++
+		if request.Postcondition.Selector.Role == "AXMenu" &&
+			request.Postcondition.Selector.Title == "" &&
+			request.Postcondition.Selector.Description == "" {
+			t.Fatalf("click %d watches for any menu, which Desktop's menu bar makes ambiguous: %+v",
+				clicks, request.Postcondition.Selector)
+		}
+	}
+	if clicks == 0 {
+		t.Fatal("the driver issued no click; this check cannot run, which is a failure")
 	}
 }

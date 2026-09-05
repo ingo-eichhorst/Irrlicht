@@ -8,6 +8,8 @@ import (
 	"fmt"
 )
 
+const archiveMenuItemTitle = "Archive"
+
 func (runtime *LiveRuntime) ArchiveOwned(ctx context.Context, owned OwnedSession) error {
 	sessions, _, err := runtime.readRegistry()
 	if err != nil {
@@ -29,9 +31,13 @@ func (runtime *LiveRuntime) ArchiveOwned(ctx context.Context, owned OwnedSession
 	if err := runtime.helper.probeSelector(ctx, "owned-session menu", target.menu); err != nil {
 		return fmt.Errorf("re-probe owned-session menu before archive: %w", err)
 	}
-	menuRole := helperSelector{Role: "AXMenu"}
+	// Watch for the Archive item itself, not for "a menu". Claude Desktop has a
+	// menu bar, so `AXMenu` is never unique — live run 19 archived nothing and
+	// reported `The postcondition selector matched 16 visible controls`. The
+	// item this click exists to reveal is both unique and the thing needed next.
+	archiveItem := helperSelector{Role: "AXMenuItem", Title: archiveMenuItemTitle}
 	if err := runtime.helper.click(ctx, target.menu, helperPostcondition{
-		Selector: menuRole, Condition: "exists", TimeoutMilliseconds: 2_000,
+		Selector: archiveItem, Condition: "exists", TimeoutMilliseconds: 5_000,
 	}); err != nil {
 		return fmt.Errorf("open owned-session menu: %w", err)
 	}
@@ -40,13 +46,14 @@ func (runtime *LiveRuntime) ArchiveOwned(ctx context.Context, owned OwnedSession
 		return err
 	}
 	archive, err := uniqueElement(elements, func(element helperElement) bool {
-		return element.Role == "AXMenuItem" && element.Title == "Archive"
+		return element.Role == "AXMenuItem" && element.Title == archiveMenuItemTitle
 	}, "Archive menu item")
 	if err != nil {
 		return err
 	}
+	// And watch for that same item to go away, for the same reason.
 	if err := runtime.helper.click(ctx, selectorFor(archive), helperPostcondition{
-		Selector: menuRole, Condition: "absent", TimeoutMilliseconds: 10_000,
+		Selector: archiveItem, Condition: "absent", TimeoutMilliseconds: 10_000,
 	}); err != nil {
 		return fmt.Errorf("archive owned session: %w", err)
 	}
