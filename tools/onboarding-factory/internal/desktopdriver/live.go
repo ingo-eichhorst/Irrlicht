@@ -43,7 +43,14 @@ type LiveRuntime struct {
 	// environment is what the composer showed when WaitComposer verified it.
 	// It is captured then because it cannot be read later: a Desktop turn
 	// replaces its own composer with the session it created.
-	environment     EnvironmentEvidence
+	environment EnvironmentEvidence
+	// turn counts how many turns Submit has actually sent. recordingHasStateSequence
+	// rescans the whole recording from the start on every call and has no cursor of
+	// its own, so stateObserved uses this to build a CUMULATIVE expectation — turn
+	// N's wait requires N-1 complete working->ready cycles before it — so a later
+	// turn's wait can only be satisfied by matching strictly further into the
+	// recording than any earlier turn's own transitions. See stateObserved.
+	turn            int
 	processes       map[string]int
 	processEvidence map[string]ProcessEvidence
 	processBaseline map[int]struct{}
@@ -400,7 +407,7 @@ func (runtime *LiveRuntime) Submit(ctx context.Context) error {
 	// Resolve and click inside the retry. Desktop's renderer can swap the
 	// composer out between the two, and re-using a selector resolved before
 	// that is exactly what fails with a stale control.
-	return retryTransientAX(ctx, "submit the Desktop prompt", func() error {
+	if err := retryTransientAX(ctx, "submit the Desktop prompt", func() error {
 		send, stop, err := runtime.sendAndStop(ctx)
 		if err != nil {
 			return fmt.Errorf("resolve the Desktop send button after the prompt was typed: %w", err)
@@ -408,7 +415,15 @@ func (runtime *LiveRuntime) Submit(ctx context.Context) error {
 		return runtime.helper.click(ctx, send, helperPostcondition{
 			Selector: stop, Condition: "exists", TimeoutMilliseconds: 10_000,
 		})
-	})
+	}); err != nil {
+		return err
+	}
+	// Counted here, where the turn is actually sent, so stateObserved's
+	// cumulative expectation always matches how many working->ready cycles
+	// this run has genuinely asked Desktop for. See the `turn` field comment.
+	// Once per Submit call regardless of how many internal retries it took.
+	runtime.turn++
+	return nil
 }
 
 // validateArchiveTarget is the final pure ownership guard before any archive
