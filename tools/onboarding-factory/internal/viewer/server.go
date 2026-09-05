@@ -9,6 +9,8 @@
 //	GET  /api/scenarios/{agent}/{subtree}/{id}              — recording detail
 //	GET  /api/scenarios/{agent}/{subtree}/{id}/recordings   — archived recordings
 //	GET  /api/scenarios/{agent}/{subtree}/{id}/recordings/{name} — one archive
+//	GET  /api/scenarios/{agent}/{subtree}/{id}/recordings/{name}/evidence/{file}
+//	                                                        — one raw Desktop identity-evidence file
 //	GET  /api/catalog                                       — coverage matrix
 //	GET  /api/recipes                                       — recipe catalog
 //	GET  /api/scenario-spec/{id}                            — parsed spec
@@ -16,13 +18,36 @@
 // `subtree` is "scenarios" or "regressions"; recordings live at
 // replaydata/agents/<agent>/<subtree>/<id>/.
 //
+// # Execution profiles (#1889)
+//
+// Claude Code CLI Local and Claude Desktop Local both produce claudecode
+// transcripts, so every recording-derived endpoint above is scoped to ONE
+// execution profile by an optional `?profile=` parameter:
+//
+//	?profile=cli-local      the default — what a URL with no parameter means,
+//	                        and what every pre-#1889 link keeps meaning
+//	?profile=desktop-local  Claude Desktop Local evidence
+//
+// Anything else is a 400, never a fallback. The two profiles never share a
+// status, a recording history, a set of versions, or a link: an archive from
+// the other profile is a 404 that names the archive's real profile, and a
+// Desktop result that points at a CLI recording comes back with no recording
+// and a populated `error`. See profiles.go.
+//
+// The SPA's stable link target — the shape the public support page points at —
+// is built by web/profileView.js's recordingHash():
+//
+//	#/recording/<agent>/<subtree>/<id>[/<recording>][?profile=<p>[&focus=<k>]]
+//
 // The handlers are split across cohesive files in this package:
 //   - server.go      — HTTP plumbing (this file): routing, static UI, JSON
 //   - store.go       — RecordingStore: the replaydata filesystem repository
 //   - models.go      — the response DTOs
+//   - profiles.go    — execution-profile selection + the Desktop result view
 //   - scenarios.go   — /api/scenarios list + detail and their helpers
-//   - recordings.go  — archived-recording browsing
-//   - catalog.go     — /api/catalog coverage matrix + annotation passes
+//   - recordings.go  — archived-recording browsing + raw Desktop evidence
+//   - catalog.go     — /api/catalog coverage matrix skeleton
+//   - catalog_annotate.go — its measurement / pipeline / display-state passes
 //   - recipe.go      — /api/recipes recipe catalog + coverage_id dedup
 //   - spec.go        — /api/scenario-spec markdown parsing
 package viewer

@@ -13,6 +13,10 @@ import {
 import {
   startReplay, replayStatus, setReplaySpeed, pauseReplay, resumeReplay, stopReplay, seekReplay,
 } from './replayClient.js';
+import {
+  DEFAULT_PROFILE, buildProfileSelector, focusFromHash, profileFromHash,
+  profileQuerySuffix, recordingHash, renderProfileEvidence, shouldRenderProfilePanel,
+} from './profileView.js';
 
 const SPEED_PRESETS = [1, 2, 5, 10, 25, 100];
 
@@ -349,18 +353,25 @@ function navigate(hash) {
 //   "#/recording/<agent>/<subtree>/<id>"               → recording playback (latest)
 //   "#/recording/<agent>/<subtree>/<id>/<archive>"     → recording playback (specific archive)
 //
-// Any recording URL may carry a "?focus=<key>" suffix where key is a
-// section anchor (supports, observes, recipe, spec, recordings,
-// validation). Used by the pipeline-strip segments to scroll the
-// matching panel into view on entry.
+// Any recording URL may carry a query suffix with either or both of:
+//   "?focus=<key>"      a section anchor (supports, observes, recipe, spec,
+//                       recordings, validation) the pipeline-strip segments
+//                       use to scroll the matching panel into view on entry.
+//   "?profile=<id>"     the execution profile (cli-local | desktop-local).
+//                       Absent means cli-local, so every link written before
+//                       profiles existed names the same page (#1889). This
+//                       hash shape — built by profileView.recordingHash — is
+//                       the viewer's stable link target.
 //
 // Unknown hashes fall back to overview.
 function route() {
   const hash = location.hash || "#/";
-  // Peel off the optional ?focus=<key> suffix before path matching.
-  const focusMatch = /\?focus=([a-z]+)$/.exec(hash);
-  const focus = focusMatch ? focusMatch[1] : "";
-  const pathPart = focus ? hash.slice(0, hash.lastIndexOf("?")) : hash;
+  // Peel the query suffix off before path matching; focus and profile may
+  // appear together and in either order.
+  const focus = focusFromHash(hash);
+  const profile = profileFromHash(hash);
+  const queryAt = hash.indexOf("?");
+  const pathPart = queryAt >= 0 ? hash.slice(0, queryAt) : hash;
 
   let m = /^#\/scenario\/([^/]+)\/?$/.exec(pathPart);
   if (m) {
@@ -379,7 +390,7 @@ function route() {
       navigate("#/");
       return;
     }
-    loadScenario(rec, archive, focus);
+    loadScenario(rec, archive, focus, profile);
     return;
   }
   // Default: overview. Strip any unknown hash content from the title.
@@ -1528,7 +1539,64 @@ function renderScenariosMatrix(detail) {
 // falls back to latest if the archive doesn't exist for this cell).
 // `focus` is the optional ?focus=<key> from the URL — scrolls the
 // matching panel into view after render. Empty → no scroll.
-async function loadScenario(s, initialArchive, focus) {
+// fetchScenarioPayloads issues the three cell fetches under ONE execution
+// profile, so the detail, the recording history and the matrix measurement on
+// a page all describe the same product surface. The CLI Local default sends no
+// query at all, which is why pre-#1889 links keep hitting the exact request
+// they always did.
+//
+// The recordings fetch reports its own failure rather than collapsing to an
+// empty list: the server 500s a cell whose manifests it cannot read, and
+// "we could not look" must not render as "nothing was recorded".
+async function fetchScenarioPayloads(s, profile) {
+  // s.agent/s.subtree/s.id come from the URL hash (sidebarActivePath /
+  // route()). Validate each segment against the same slug/subtree contract the
+  // backend's /api/scenarios handler enforces, then encode — belt-and-
+  // suspenders so a hash crafted with `/`, `?`, or `#` can't retarget the
+  // request (SonarQube jssecurity:S7044 / S8476). The check lives HERE, beside
+  // the fetches it guards, rather than in the caller: a barrier one function
+  // away is a barrier a reader (and a taint analyser) has to go looking for.
+  const agent = s.agent, subtree = s.subtree, id = s.id;
+  if (!RECORDING_SLUG_RE.test(agent) || !RECORDING_SLUG_RE.test(id) ||
+      (subtree !== "scenarios" && subtree !== "regressions")) {
+    return null;
+  }
+  const recordingPath =
+    `${encodeURIComponent(agent)}/${encodeURIComponent(subtree)}/${encodeURIComponent(id)}`;
+  const q = profileQuerySuffix(profile);
+  const [data, archivesResp, catalog] = await Promise.all([
+    fetch(`/api/scenarios/${recordingPath}${q}`).then(r => r.json()),
+    fetch(`/api/scenarios/${recordingPath}/recordings${q}`)
+      .then(async r => r.ok ? r.json() : {error: `${r.status} ${await r.text()}`})
+      .catch(e => ({error: String(e)})),
+    // Coverage catalog: lets us render a stub Assessment panel from
+    // the matrix verdict + notes when no assessment.json exists.
+    // Without this fallback the ⚙ / ◉ pipeline-strip jumps would
+    // land nowhere for most cells.
+    fetch(`/api/catalog${q}`).then(r => r.ok ? r.json() : null).catch(() => null),
+  ]);
+  const ok = Array.isArray(archivesResp);
+  // The detail payload's own recordings_error covers the same cause; keep
+  // whichever we have so the banner never renders blank.
+  return {
+    data,
+    archives: ok ? archivesResp : [],
+    archivesError: ok ? (data?.recordings_error || "") : (archivesResp?.error || "unknown error"),
+    catalog,
+  };
+}
+
+// catalogEntryFor finds one cell's coverage entry and its human-readable
+// feature label in the /api/catalog payload. Both are empty when the catalog
+// is absent or carries no row for this coverage_id.
+function catalogEntryFor(catalog, coverageId, agent) {
+  const rows = Array.isArray(catalog?.scenarios) ? catalog.scenarios : [];
+  const row = rows.find(sc => sc.id === coverageId);
+  if (!row) return {coverageEntry: null, coverageFeature: ""};
+  return {coverageEntry: row.coverage?.[agent] || null, coverageFeature: row.feature || ""};
+}
+
+async function loadScenario(s, initialArchive, focus, profile) {
   document.querySelectorAll(".scn").forEach(e => e.classList.remove("active"));
   // Find the sidebar button by data-rec-key (set in init() when the
   // button was created). Deep links come through route() without a
@@ -1556,29 +1624,17 @@ async function loadScenario(s, initialArchive, focus) {
   const detail = document.getElementById("detail");
   detail.innerHTML = `<p>Loading…</p>`;
 
-  // s.agent/s.subtree/s.id come from the URL hash (sidebarActivePath /
-  // route()). Validate each segment against the same slug/subtree
-  // contract the backend's /api/scenarios handler enforces, then encode —
-  // belt-and-suspenders so a hash crafted with `/`, `?`, or `#` can't
-  // retarget the request (SonarQube jssecurity:S7044 / S8476).
-  if (!RECORDING_SLUG_RE.test(s.agent) || !RECORDING_SLUG_RE.test(s.id) ||
-      (s.subtree !== "scenarios" && s.subtree !== "regressions")) {
+  // Recipe lookup uses recipesByCoverageId (populated once at init from
+  // /api/recipes — see comment above), so no per-recording recipes fetch
+  // is needed here. fetchScenarioPayloads validates the path segments and
+  // returns null for a hash that isn't a legal cell.
+  const selectedProfile = profile || DEFAULT_PROFILE;
+  const payloads = await fetchScenarioPayloads(s, selectedProfile);
+  if (!payloads) {
     detail.innerHTML = `<p>Invalid recording path.</p>`;
     return;
   }
-  const recordingPath = `${encodeURIComponent(s.agent)}/${encodeURIComponent(s.subtree)}/${encodeURIComponent(s.id)}`;
-  // Recipe lookup uses recipesByCoverageId (populated once at init from
-  // /api/recipes — see comment above), so no per-recording recipes fetch
-  // is needed here.
-  const [data, archives, catalog] = await Promise.all([
-    fetch(`/api/scenarios/${recordingPath}`).then(r => r.json()),
-    fetch(`/api/scenarios/${recordingPath}/recordings`).then(r => r.ok ? r.json() : []).catch(() => []),
-    // Coverage catalog: lets us render a stub Assessment panel from
-    // the matrix verdict + notes when no assessment.json exists.
-    // Without this fallback the ⚙ / ◉ pipeline-strip jumps would
-    // land nowhere for most cells.
-    fetch(`/api/catalog`).then(r => r.ok ? r.json() : null).catch(() => null),
-  ]);
+  const {data, archives, archivesError, catalog} = payloads;
   detail.innerHTML = "";
 
   // No daemon-recorded events.jsonl sidecar: the timeline shown here is
@@ -1601,27 +1657,13 @@ async function loadScenario(s, initialArchive, focus) {
   // Look up the per-cell recipe entry, joining on the resolved coverage_id
   // (coverageId, computed above via folderToCoverageId, already handles the
   // variant-folder cells) and this recording's adapter.
-  let recipeEntry = null;
-  const recipeRow = recipesByCoverageId.get(coverageId);
-  if (recipeRow) {
-    recipeEntry = recipeRow.by_adapter?.[s.agent];
-  }
+  const recipeEntry = recipesByCoverageId.get(coverageId)?.by_adapter?.[s.agent] || null;
   // Look up the per-cell coverage entry for the Assessment-fallback
   // panel. Used when no assessment.json exists on disk — the panel
   // still renders so the ⚙ / ◉ pipeline-strip anchors have a target.
   // coverageId was resolved synchronously above (before the await)
   // so the heading could render immediately.
-  let coverageEntry = null;
-  let coverageFeature = "";
-  if (catalog && Array.isArray(catalog.scenarios)) {
-    for (const sc of catalog.scenarios) {
-      if (sc.id === coverageId) {
-        coverageEntry = sc.coverage?.[s.agent];
-        coverageFeature = sc.feature || "";
-        break;
-      }
-    }
-  }
+  const {coverageEntry, coverageFeature} = catalogEntryFor(catalog, coverageId, s.agent);
   // Now that the catalog has resolved, enrich the breadcrumb with the
   // human-friendly feature label (mirrors the overview matrix row,
   // which stacks the coverage_id over the feature name).
@@ -1634,14 +1676,45 @@ async function loadScenario(s, initialArchive, focus) {
   // selected recording so they don't blink on dropdown changes.
   // Order mirrors the pipeline strip left-to-right:
   //   Assessment (⚙ ◉) → Recipe (✎) → Recording (N) → Spec/Validation (§ ✓) → recording-specific panels.
+  // The execution-profile panel sits above everything recording-derived: it
+  // decides WHICH body of evidence the rest of the page is about. It is drawn
+  // only where there is a second profile to choose — every other cell keeps
+  // the page it had before profiles existed.
+  if (shouldRenderProfilePanel(data)) {
+    detail.appendChild(renderProfilePanel(s, data));
+  }
   if (data.assessment) {
     detail.appendChild(renderAssessment(data.assessment));
   } else {
     detail.appendChild(renderAssessmentFallback(coverageEntry));
   }
   detail.appendChild(renderRecipePanel(recipeEntry));
-  detail.appendChild(renderRecordingHistory(s, data, archives, initialArchive || "", recipeEntry, coverageEntry));
+  detail.appendChild(renderRecordingHistory({
+    s, latestData: data, archives, initialArchive: initialArchive || "",
+    profile: selectedProfile, archivesError,
+  }));
   scrollFocusInto(focus || "");
+}
+
+// renderProfilePanel is the execution-profile control (#1889): the selector,
+// plus this profile's status, versions, recording link and — under Desktop
+// Local — the explicit result's reason and raw identity evidence. Switching
+// the profile navigates to the same cell's stable per-profile hash, which
+// drops any archive selection: a recording name belongs to one profile only.
+function renderProfilePanel(s, data) {
+  const p = panel("Execution profile", "profile");
+  const intro = document.createElement("div");
+  intro.style.cssText = "margin-bottom: 8px; font-size: 12px; color: #555;";
+  intro.textContent =
+    "Claude Code CLI Local and Claude Desktop Local are separate bodies of evidence — status, " +
+    "versions, recording history and raw identity files never cross between them. CLI Local is " +
+    "the default, so links written before execution profiles existed still mean what they said.";
+  p.appendChild(intro);
+  p.appendChild(buildProfileSelector(data, next => {
+    navigate(recordingHash({agent: s.agent, subtree: s.subtree, id: s.id, profile: next}));
+  }));
+  p.appendChild(renderProfileEvidence(data));
+  return p;
 }
 
 // degradedBanner is shown on scenario detail pages that have no
@@ -2169,45 +2242,79 @@ function fmtLabel(startedAt, daemonVer, passRate) {
   return `${ts}${ver}${pass}`;
 }
 
-function renderRecordingHistory(s, latestData, archives, initialArchive, recipeEntry, coverageEntry) {
-  const wrap = document.createElement("div");
-
-  // 1. The selector panel (top, controls everything below).
-  //    anchor "recordings" — pipeline-strip segment N jumps here.
-  const selPanel = panel("Recording", "recordings");
+// recordingHistoryIntro is the explanatory line above the recording selector.
+function recordingHistoryIntro(recCount) {
   const intro = document.createElement("div");
   intro.style.cssText = "margin-bottom: 8px; font-size: 12px; color: #555;";
-  const recCount = (archives || []).length;
   intro.innerHTML = `Select which recording to inspect — all live under <code>recordings/</code>, newest first. <b>expected.jsonl</b> is the constant benchmark across all of them; picking an older recording re-evaluates the current spec against its events (drift signal).` +
     (recCount > 0
       ? ` <b>${recCount}</b> recording${pluralSuffix(recCount)} available.`
       : ` No recordings yet.`);
-  selPanel.appendChild(intro);
+  return intro;
+}
 
+// recordingHistoryErrorBanner says the list below is empty because the history
+// could not be READ, not because nothing was recorded. Without it those two
+// render identically — the server 500s a cell whose manifests it cannot parse.
+function recordingHistoryErrorBanner(message) {
+  const banner = document.createElement("div");
+  banner.dataset.testid = "recordings-error";
+  banner.style.cssText =
+    "margin-bottom: 8px; padding: 6px 9px; font-size: 11px; border-radius: 3px;" +
+    "background: #f8c8c8; color: #8a0000;";
+  const b = document.createElement("b");
+  b.textContent = "Recording history unavailable: ";
+  banner.append(b, sanitizeForLog(message));
+  return banner;
+}
+
+// buildRecordingSelect renders the recording dropdown: a spec-only sentinel
+// plus one option per recording in THIS profile's history, newest first and
+// marked. The initial selection is the URL's archive when it exists in this
+// profile, else the newest, else spec-only — a deep link naming the other
+// profile's recording simply does not match, which is the isolation rule
+// showing up in the control.
+function buildRecordingSelect(archives, newestName, initialArchive) {
   const select = document.createElement("select");
   select.style.cssText = "padding: 4px 8px; font: inherit; font-size: 12px; border: 1px solid #c0bdb1; border-radius: 3px;";
   const noneOpt = document.createElement("option");
   noneOpt.value = "__none__";
   noneOpt.textContent = "— No recording (spec only) —";
   select.appendChild(noneOpt);
+  for (const a of archives) {
+    const opt = document.createElement("option");
+    opt.value = a.name;
+    const label = fmtLabel(a.recording_started_at || a.name, a.daemon_version, a.expected_pass_rate);
+    opt.textContent = a.name === newestName ? `● ${label} (newest)` : label;
+    select.appendChild(opt);
+  }
+  const archMatch = initialArchive && archives.some(a => a.name === initialArchive);
+  select.value = archMatch ? initialArchive : (newestName || "__none__");
+  return select;
+}
+
+function renderRecordingHistory(opts) {
+  const {s, latestData, archives, initialArchive, profile, archivesError} = opts;
+  const wrap = document.createElement("div");
+  // `archives` was already fetched scoped to this profile, so the dropdown
+  // lists one profile's history; the per-archive fetch and the URL rewrite
+  // below carry the same scope so a selection can never cross over.
+  const selectedProfile = profile || DEFAULT_PROFILE;
+  const profileQuery = profileQuerySuffix(selectedProfile);
+
+  // 1. The selector panel (top, controls everything below).
+  //    anchor "recordings" — pipeline-strip segment N jumps here.
+  const selPanel = panel("Recording", "recordings");
+  selPanel.appendChild(recordingHistoryIntro((archives || []).length));
+  if (archivesError) {
+    selPanel.appendChild(recordingHistoryErrorBanner(archivesError));
+  }
 
   // Every recording lives under recordings/<name>/ — there is no separate
   // "Latest" entry. The list is newest-first by name; the newest (the one the
   // ScenarioDetail's recording-derived fields describe) is latestData.latest_recording.
   const newestName = latestData.latest_recording || ((archives || [])[0] && archives[0].name) || "";
-  for (const a of (archives || [])) {
-    const opt = document.createElement("option");
-    opt.value = a.name;
-    let label = fmtLabel(a.recording_started_at || a.name, a.daemon_version, a.expected_pass_rate);
-    if (a.name === newestName) label = "● " + label + " (newest)";
-    opt.textContent = label;
-    select.appendChild(opt);
-  }
-  // Default = the newest recording. A URL deep-link (#/recording/.../.../<name>)
-  // that exists opens pre-pointed at it; otherwise the newest is autoselected.
-  // With no recordings at all, fall back to the spec-only view.
-  const archMatch = initialArchive && (archives || []).some(a => a.name === initialArchive);
-  select.value = archMatch ? initialArchive : (newestName || "__none__");
+  const select = buildRecordingSelect(archives || [], newestName, initialArchive);
   selPanel.appendChild(select);
 
   const manifestBox = document.createElement("div");
@@ -2273,7 +2380,7 @@ function renderRecordingHistory(s, latestData, archives, initialArchive, recipeE
     // encode each segment before it lands in a fetch path (SonarQube
     // jssecurity:S7044 / S8476).
     const archDetail = await fetch(
-      `/api/scenarios/${encodeURIComponent(s.agent)}/${encodeURIComponent(s.subtree)}/${encodeURIComponent(s.id)}/recordings/${encodeURIComponent(value)}`
+      `/api/scenarios/${encodeURIComponent(s.agent)}/${encodeURIComponent(s.subtree)}/${encodeURIComponent(s.id)}/recordings/${encodeURIComponent(value)}${profileQuery}`
     ).then(r => r.json());
     const archData = {
       ...latestData,
@@ -2337,8 +2444,11 @@ function renderRecordingHistory(s, latestData, archives, initialArchive, recipeE
     // history.replaceState rather than navigate() to avoid spamming
     // browser history with every dropdown click.
     const v = select.value;
-    const base = `#/recording/${s.agent}/${s.subtree}/${s.id}`;
-    const next = (v && v !== "__none__") ? `${base}/${encodeURIComponent(v)}` : base;
+    const next = recordingHash({
+      agent: s.agent, subtree: s.subtree, id: s.id,
+      recording: (v && v !== "__none__") ? v : "",
+      profile: selectedProfile,
+    });
     if (location.hash !== next) {
       history.replaceState(null, "", next);
     }

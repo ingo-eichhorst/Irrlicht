@@ -90,7 +90,9 @@ func TestHandleArchivedRecording(t *testing.T) {
 	scenarioDir := s.store().scenarioDir("claudecode", "scenarios", "test")
 	for _, bad := range []string{"..", "../../etc/passwd", "sub/dir"} {
 		rr = httptest.NewRecorder()
-		s.handleArchivedRecording(rr, scenarioDir, bad)
+		s.handleArchivedRecording(rr, archiveRequest{
+			scenarioDir: scenarioDir, rawName: bad, profile: defaultViewerProfile,
+		})
 		if rr.Code != http.StatusBadRequest {
 			t.Errorf("archive name %q not rejected: status=%d body=%s", bad, rr.Code, rr.Body)
 		}
