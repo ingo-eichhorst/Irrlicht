@@ -141,17 +141,31 @@ func driveTurn(
 		return OwnedSession{}, CapturedEvidence{}, err
 	}
 
+	// The turn is typed and sent BEFORE ownership is bound, because Claude
+	// Desktop writes no claude-code-sessions registry row until the first
+	// message is sent. Measured live on 1.46388.4 on 2026-09-05: an open,
+	// trusted composer showing the right Local project produced no row for 36
+	// seconds. The previous order waited here for a row only the later Submit
+	// could create, so it could never proceed.
+	//
+	// What is given up is the pre-turn "ready" observation: there is no session
+	// to observe yet. What replaces it as the ownership guarantee is the
+	// composer identity WaitComposer just verified — environment "Local" and a
+	// project naming this run's own workspace — together with the baseline of
+	// pre-existing session IDs. A row that appears after this Submit, for this
+	// workspace, and was not in the baseline, is this driver's.
+	if err := runtime.SetPrompt(ctx, request.Prompt); err != nil {
+		return OwnedSession{}, CapturedEvidence{}, fmt.Errorf("set Desktop prompt: %w", err)
+	}
+	if err := runtime.Submit(ctx); err != nil {
+		return OwnedSession{}, CapturedEvidence{}, fmt.Errorf("submit Desktop prompt: %w", err)
+	}
+
 	owned, err := waitForOwned(ctx, runtime, request, baseline)
 	if err != nil {
 		return OwnedSession{}, CapturedEvidence{}, err
 	}
-	if _, err := waitForState(ctx, runtime, request.StepTimeout, owned, "ready"); err != nil {
-		return owned, CapturedEvidence{}, err
-	}
-	if err := runtime.SetPrompt(ctx, request.Prompt); err != nil {
-		return owned, CapturedEvidence{}, fmt.Errorf("set Desktop prompt: %w", err)
-	}
-	if err := waitForReadyAndSubmit(ctx, runtime, request, owned); err != nil {
+	if err := waitForWorkingAndHook(ctx, runtime, request, owned); err != nil {
 		return owned, CapturedEvidence{}, err
 	}
 	ready, err := waitForCompletion(ctx, runtime, request, owned)
@@ -180,15 +194,12 @@ func waitForOwned(
 	return owned, err
 }
 
-func waitForReadyAndSubmit(
+func waitForWorkingAndHook(
 	ctx context.Context,
 	runtime Runtime,
 	request RunRequest,
 	owned OwnedSession,
 ) error {
-	if err := runtime.Submit(ctx); err != nil {
-		return fmt.Errorf("submit Desktop prompt: %w", err)
-	}
 	if _, err := waitForState(ctx, runtime, request.StepTimeout, owned, "working"); err != nil {
 		return err
 	}
