@@ -36,24 +36,30 @@ func (runtime *LiveRuntime) ArchiveOwned(ctx context.Context, owned OwnedSession
 	// reported `The postcondition selector matched 16 visible controls`. The
 	// item this click exists to reveal is both unique and the thing needed next.
 	archiveItem := helperSelector{Role: "AXMenuItem", Title: archiveMenuItemTitle}
-	if err := runtime.helper.click(ctx, target.menu, helperPostcondition{
-		Selector: archiveItem, Condition: "exists", TimeoutMilliseconds: 5_000,
+	if err := retryTransientAX(ctx, "open the owned-session menu", func() error {
+		return runtime.helper.click(ctx, target.menu, helperPostcondition{
+			Selector: archiveItem, Condition: "exists", TimeoutMilliseconds: 5_000,
+		})
 	}); err != nil {
 		return fmt.Errorf("open owned-session menu: %w", err)
 	}
-	elements, err = runtime.helper.inspect(ctx)
-	if err != nil {
-		return err
-	}
-	archive, err := uniqueElement(elements, func(element helperElement) bool {
-		return element.Role == "AXMenuItem" && element.Title == archiveMenuItemTitle
-	}, "Archive menu item")
-	if err != nil {
-		return err
-	}
-	// And watch for that same item to go away, for the same reason.
-	if err := runtime.helper.click(ctx, selectorFor(archive), helperPostcondition{
-		Selector: archiveItem, Condition: "absent", TimeoutMilliseconds: 10_000,
+	// Re-read the menu and click inside the retry: the item animates in, and a
+	// selector resolved before it settled is what refuses the click.
+	if err := retryTransientAX(ctx, "archive the owned Desktop session", func() error {
+		elements, err := runtime.helper.inspect(ctx)
+		if err != nil {
+			return err
+		}
+		archive, err := uniqueElement(elements, func(element helperElement) bool {
+			return element.Role == "AXMenuItem" && element.Title == archiveMenuItemTitle
+		}, "Archive menu item")
+		if err != nil {
+			return err
+		}
+		// And watch for that same item to go away, for the same reason.
+		return runtime.helper.click(ctx, selectorFor(archive), helperPostcondition{
+			Selector: archiveItem, Condition: "absent", TimeoutMilliseconds: 10_000,
+		})
 	}); err != nil {
 		return fmt.Errorf("archive owned session: %w", err)
 	}

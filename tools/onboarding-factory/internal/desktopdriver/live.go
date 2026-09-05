@@ -378,18 +378,23 @@ func (runtime *LiveRuntime) SetPrompt(ctx context.Context, prompt string) error 
 // "Stop" or nothing at all. Resolving it up front made an empty composer look
 // like a missing composer.
 func (runtime *LiveRuntime) Submit(ctx context.Context) error {
-	elements, err := runtime.helper.inspect(ctx)
-	if err != nil {
-		return err
-	}
-	controls, err := composerControls(elements, runtime.workspace, []string{"send"})
-	if err != nil {
-		return fmt.Errorf("resolve the Desktop send button after the prompt was typed: %w", err)
-	}
-	send := controls["send"]
-	stop := helperSelector{Role: "AXButton", Description: "Stop", Hierarchy: send.Hierarchy}
-	return runtime.helper.click(ctx, send, helperPostcondition{
-		Selector: stop, Condition: "exists", TimeoutMilliseconds: 10_000,
+	// Resolve and click inside the retry. Desktop's renderer can swap the
+	// composer out between the two, and re-using a selector resolved before
+	// that is exactly what fails with a stale control.
+	return retryTransientAX(ctx, "submit the Desktop prompt", func() error {
+		elements, err := runtime.helper.inspect(ctx)
+		if err != nil {
+			return err
+		}
+		controls, err := composerControls(elements, runtime.workspace, []string{"send"})
+		if err != nil {
+			return fmt.Errorf("resolve the Desktop send button after the prompt was typed: %w", err)
+		}
+		send := controls["send"]
+		stop := helperSelector{Role: "AXButton", Description: "Stop", Hierarchy: send.Hierarchy}
+		return runtime.helper.click(ctx, send, helperPostcondition{
+			Selector: stop, Condition: "exists", TimeoutMilliseconds: 10_000,
+		})
 	})
 }
 
@@ -445,6 +450,51 @@ func isPreClickRefusal(err error) bool {
 // this code. It means "look again", not "the composer is wrong": the poll's own
 // deadline is what still fails loudly if the tree never settles.
 const axInvalidUIElement = "AX error -25202"
+
+// transientAXAttempts bounds how long the driver waits for Claude Desktop's
+// renderer to settle. The tree moves while a view swaps in; it does not move
+// for ever, and a run that never settles must fail rather than hang.
+const transientAXAttempts = 5
+
+const transientAXBackoff = 400 * time.Millisecond
+
+// isPreClickAXFailure reports whether a helper error is one the driver may
+// safely retry. Every message listed here is raised BEFORE the helper posts a
+// mouse event:
+//
+//   - stale_control — the helper hit-tests the click point and refuses;
+//   - control_missing — nothing matched, so nothing was driven;
+//   - AX error -25202 — a READ of the tree failed part way through.
+//
+// Nothing that might have landed belongs here. Retrying a click that already
+// took effect would be a worse bug than the one this exists to fix.
+func isPreClickAXFailure(err error) bool {
+	message := err.Error()
+	return strings.Contains(message, "stale_control") ||
+		strings.Contains(message, "control_missing") ||
+		strings.Contains(message, axInvalidUIElement)
+}
+
+// retryTransientAX re-runs an action that resolves AND drives a control. The
+// action must re-resolve from a fresh reading each time: the whole reason the
+// last attempt failed is that the tree moved.
+func retryTransientAX(ctx context.Context, what string, action func() error) error {
+	var err error
+	for attempt := 1; attempt <= transientAXAttempts; attempt++ {
+		err = action()
+		if err == nil || !isPreClickAXFailure(err) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("%s: %w; last accessibility failure: %v", what, ctx.Err(), err)
+		case <-time.After(transientAXBackoff):
+		}
+	}
+	return fmt.Errorf(
+		"%s: Claude Desktop's accessibility tree kept moving across %d attempts; last failure: %w",
+		what, transientAXAttempts, err)
+}
 
 func transientHelperError(err error) error {
 	message := err.Error()
