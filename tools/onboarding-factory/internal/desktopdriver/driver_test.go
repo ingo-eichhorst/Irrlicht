@@ -14,6 +14,7 @@ type fakeRuntime struct {
 	omitRestore    bool
 	provisional    string
 	sessionCreated bool
+	submitted      bool
 	sessionActive  bool
 	configChanged  bool
 	removalID      string
@@ -47,9 +48,20 @@ func (runtime *fakeRuntime) WaitComposer(context.Context, string) error {
 	return runtime.step("composer")
 }
 
+// WaitOwnedSession models what Claude Desktop actually does. Measured live on
+// 1.46388.4 on 2026-09-05: an open, trusted composer showing the right Local
+// project produced NO claude-code-sessions registry row for 36 seconds. Desktop
+// writes that row when the first message is sent, not when the composer opens.
+//
+// The fake used to create the session in OpenComposer. That false model is why
+// no unit test caught a step order in which the driver waited for a row that
+// only its own later Submit could create.
 func (runtime *fakeRuntime) WaitOwnedSession(context.Context, Baseline, string) (OwnedSession, error) {
 	if err := runtime.step("owned"); err != nil {
 		return OwnedSession{}, err
+	}
+	if !runtime.submitted {
+		return OwnedSession{}, errors.New("registry and transcript identity was not observed before its deadline")
 	}
 	return fakeOwnedSession(), nil
 }
@@ -73,7 +85,10 @@ func (runtime *fakeRuntime) SetPrompt(context.Context, string) error {
 	return runtime.step("set_prompt")
 }
 
-func (runtime *fakeRuntime) Submit(context.Context) error { return runtime.step("submit") }
+func (runtime *fakeRuntime) Submit(context.Context) error {
+	runtime.submitted = true
+	return runtime.step("submit")
+}
 
 func (runtime *fakeRuntime) WaitIrrlichtState(_ context.Context, _ OwnedSession, state string) (SessionObservation, error) {
 	if err := runtime.step("state_" + state); err != nil {
@@ -159,7 +174,10 @@ func validRunRequest() RunRequest {
 	}
 }
 
-func TestRunDrivesReadyWorkingReadyAndCleansOwnedSession(t *testing.T) {
+// The turn observes working then ready. There is no pre-turn "ready": Desktop
+// creates no session until the prompt is sent, so the first observable state of
+// an owned Desktop session is the one its own first turn produces.
+func TestRunDrivesWorkingReadyAndCleansOwnedSession(t *testing.T) {
 	runtime := &fakeRuntime{}
 	result, err := Run(context.Background(), runtime, validRunRequest())
 	if err != nil {
@@ -169,8 +187,8 @@ func TestRunDrivesReadyWorkingReadyAndCleansOwnedSession(t *testing.T) {
 		t.Fatalf("owned session = %+v", result.Owned)
 	}
 	wantOrder := []string{
-		"preflight", "baseline", "cleanup_armed", "open", "composer", "owned",
-		"state_ready", "set_prompt", "submit", "state_working", "hook",
+		"preflight", "baseline", "cleanup_armed", "open", "composer",
+		"set_prompt", "submit", "owned", "state_working", "hook",
 		"state_ready", "evidence", "cleanup_started", "archive_local_new",
 		"process_gone", "irrlicht_removed", "verify_baseline", "cleanup_finished",
 	}
