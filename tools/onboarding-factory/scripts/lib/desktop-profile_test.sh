@@ -2,6 +2,7 @@
 set -uo pipefail
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPTS_DIR="$(cd "$DIR/.." && pwd)"
 # shellcheck source=desktop-profile.sh
 source "$DIR/desktop-profile.sh"
 
@@ -191,6 +192,41 @@ else
   pass "hook target symlink is refused"
 fi
 assert_eq "hook target bytes stay unchanged" "outside bytes" "$(cat "$outside/hooks.jsonl")"
+
+echo "== the Desktop driver gets a scaled timeout, the manifest keeps the scenario's =="
+# A scenario's timeout_seconds was budgeted for a headless CLI turn, and the Go
+# driver gives each step a third of it. 2-1_basic-turn declares 60s, so the
+# composer step got 20s — and a measured idle composer on 1.46388.4 needs ~8s,
+# more under a recording daemon. The scenario's own number must NOT change: it
+# is what cli-local is measured against and what the manifest records.
+scale_block="$(awk '/^DESKTOP_TIMEOUT_FACTOR=/{f=1} f{print} /^fi$/{if(f)exit}' \
+  "$SCRIPTS_DIR/run-cell.sh")"
+if [[ -z "$scale_block" ]]; then
+  fail "the desktop timeout scaling was found" "a DESKTOP_TIMEOUT_FACTOR block" "nothing matched"
+else
+  pass "the desktop timeout scaling was found"
+  for profile in cli-local desktop-local; do
+    got="$(TIMEOUT_S=60 EXECUTION_PROFILE="$profile" bash -c \
+      'set -u; '"$scale_block"'; printf "%s" "$DRIVER_TIMEOUT_S"')"
+    case "$profile" in
+      cli-local)     assert_eq "cli-local keeps the scenario timeout" "60" "$got" ;;
+      desktop-local) assert_eq "desktop-local scales it" "240" "$got" ;;
+    esac
+  done
+fi
+# The driver must receive the SCALED value and the manifest the scenario's own.
+if grep -Fq '"$DRIVER" "$STAGING" "$UUID" "$DRIVER_TIMEOUT_S"' "$SCRIPTS_DIR/run-cell.sh"; then
+  got=scaled
+else
+  got=unscaled
+fi
+assert_eq "the driver is invoked with the scaled timeout" "scaled" "$got"
+if grep -Fq -- '--argjson timeout_seconds "$TIMEOUT_S"' "$SCRIPTS_DIR/run-cell.sh"; then
+  got=scenario
+else
+  got=drifted
+fi
+assert_eq "the manifest still records the scenario's own timeout" "scenario" "$got"
 
 echo "== execution-results uses the fixed #1886 schema =="
 desktop_write_execution_results "$TMP/execution-results.json" basic-turn rec-1 observed-passing

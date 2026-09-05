@@ -171,6 +171,19 @@ if [[ -n "$PARTNER_ADAPTER" ]]; then
 fi
 
 TIMEOUT_S="$(jq -r '.timeout_seconds // 120' <<<"$CELL_JSON")"   # default when a recipe omits it (else drivers get the literal "null")
+
+# A scenario's timeout is profile-neutral and was budgeted for a headless CLI
+# turn. Desktop Local has to open a GUI composer first, and the driver gives
+# each step a third of this value: 2-1_basic-turn declares 60s, so the composer
+# step got 20s. Measured on 1.46388.4, an idle composer needs ~8s to render its
+# controls, and under a recording daemon it did not finish inside 20s. Scale the
+# value the DESKTOP driver receives — the scenario keeps its own number, which
+# is the one cli-local is measured against and the one the manifest records.
+DESKTOP_TIMEOUT_FACTOR=4
+DRIVER_TIMEOUT_S="$TIMEOUT_S"
+if [[ "$EXECUTION_PROFILE" == "desktop-local" ]]; then
+  DRIVER_TIMEOUT_S=$(( TIMEOUT_S * DESKTOP_TIMEOUT_FACTOR ))
+fi
 PROMPT="$(jq -r '.prompt // ""' <<<"$CELL_JSON")"
 SCRIPT_JSON="$(jq -c '.script // empty' <<<"$CELL_JSON")"
 if [[ -z "$PROMPT" && -z "$SCRIPT_JSON" ]]; then
@@ -664,7 +677,7 @@ DRIVER_PID_FILE="$STAGING/driver.pid"
 set +e
 bash -c 'printf "%s\n" "$$" > "$1" || exit 1; shift; exec "$@"' \
   bash "$DRIVER_PID_FILE" \
-  "$DRIVER" "$STAGING" "$UUID" "$TIMEOUT_S" "$STAGING/settings.json" "$DRIVER_INPUT"
+  "$DRIVER" "$STAGING" "$UUID" "$DRIVER_TIMEOUT_S" "$STAGING/settings.json" "$DRIVER_INPUT"
 set -e
 DRIVER_REASON="$(cat "$STAGING/driver.exit-reason" 2>/dev/null || echo "unknown")"
 DRIVER_PID="$(tr -d '[:space:]' < "$DRIVER_PID_FILE" 2>/dev/null || true)"
