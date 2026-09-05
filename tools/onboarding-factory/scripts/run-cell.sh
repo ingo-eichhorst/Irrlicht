@@ -179,11 +179,13 @@ TIMEOUT_S="$(jq -r '.timeout_seconds // 120' <<<"$CELL_JSON")"   # default when 
 # controls, and under a recording daemon it did not finish inside 20s. Scale the
 # value the DESKTOP driver receives — the scenario keeps its own number, which
 # is the one cli-local is measured against and the one the manifest records.
+# BEGIN desktop_driver_timeout
 DESKTOP_TIMEOUT_FACTOR=4
 DRIVER_TIMEOUT_S="$TIMEOUT_S"
 if [[ "$EXECUTION_PROFILE" == "desktop-local" ]]; then
   DRIVER_TIMEOUT_S=$(( TIMEOUT_S * DESKTOP_TIMEOUT_FACTOR ))
 fi
+# END desktop_driver_timeout
 PROMPT="$(jq -r '.prompt // ""' <<<"$CELL_JSON")"
 SCRIPT_JSON="$(jq -c '.script // empty' <<<"$CELL_JSON")"
 if [[ -z "$PROMPT" && -z "$SCRIPT_JSON" ]]; then
