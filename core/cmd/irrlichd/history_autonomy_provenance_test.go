@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
 
@@ -49,14 +50,14 @@ func TestAutonomyProvenance_IsEchoedByBothElements(t *testing.T) {
 		provenance: outbound.AutonomySpanProvenance{
 			Reconstructed: 9,
 			CostDerived:   4,
-			LiveSince:     now - 7200,
+			EraStarts:     map[string]int64{"": now - 7200},
 		},
 	}
 
 	duration := decodeAutonomyDuration(t, getAutonomy(t, store, "chart=autonomy_duration&window=30d"))
 	spans := decodeAutonomySpans(t, getAutonomy(t, store, "chart=autonomy_spans&window=24h"))
 
-	if duration.Provenance != spans.Provenance {
+	if !reflect.DeepEqual(duration.Provenance, spans.Provenance) {
 		t.Fatalf("the two elements disagree about provenance: %+v vs %+v", duration.Provenance, spans.Provenance)
 	}
 	if duration.Provenance.Reconstructed != 9 || duration.Provenance.CostDerived != 4 {
@@ -113,6 +114,169 @@ func TestAutonomySpans_UnknownReasonSurvivesTheWire(t *testing.T) {
 	}
 	if spans.Spans[0].Reason != session.AutonomyReasonUnknown {
 		t.Fatalf("reason = %q, want %q", spans.Spans[0].Reason, session.AutonomyReasonUnknown)
+	}
+}
+
+// --- Source boundaries (QA-2) -----------------------------------------------
+
+// The boundaries are derived from the per-source era starts by ONE mechanism —
+// sort the eras, emit a handover between each adjacent pair — rather than by a
+// case per pair. Today a back-filled machine has two (cost→log, log→live), but
+// nothing here names either.
+func TestAutonomyBoundaries_OneMechanismForEveryHandover(t *testing.T) {
+	cases := []struct {
+		name  string
+		eras  map[string]int64
+		want  []historyAutonomyBoundary
+		about string
+	}{
+		{
+			name:  "a machine that was never back-filled has no boundary",
+			eras:  map[string]int64{"": 5000},
+			want:  nil,
+			about: "one era cannot hand over to anything",
+		},
+		{
+			name: "a back-filled machine still collecting",
+			eras: map[string]int64{
+				session.AutonomySourceCost: 1000,
+				session.AutonomySourceLog:  2000,
+				"":                         3000,
+			},
+			want: []historyAutonomyBoundary{
+				{TS: 2000, From: session.AutonomySourceCost, To: session.AutonomySourceLog},
+				{TS: 3000, From: session.AutonomySourceLog, To: autonomyEraLive},
+			},
+		},
+		{
+			name: "back-filled but the daemon has measured nothing yet",
+			eras: map[string]int64{
+				session.AutonomySourceCost: 1000,
+				session.AutonomySourceLog:  2000,
+			},
+			want: []historyAutonomyBoundary{
+				{TS: 2000, From: session.AutonomySourceCost, To: session.AutonomySourceLog},
+			},
+		},
+		{
+			// The mechanism has to carry a source it has never heard of, or
+			// "one mechanism" is a claim rather than a property.
+			name: "a source this build does not know still gets its handover",
+			eras: map[string]int64{
+				"some-future-source": 1000,
+				"":                   2000,
+			},
+			want: []historyAutonomyBoundary{
+				{TS: 2000, From: "some-future-source", To: autonomyEraLive},
+			},
+		},
+		{
+			name:  "an era with no start on record is not an era",
+			eras:  map[string]int64{session.AutonomySourceCost: 0, "": 3000},
+			want:  nil,
+			about: "a zero start means no span of that provenance exists",
+		},
+		{name: "an empty log has no boundary", eras: map[string]int64{}, want: nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := autonomyBoundariesFrom(tc.eras)
+			if len(got) != len(tc.want) {
+				t.Fatalf("boundaries = %+v, want %+v (%s)", got, tc.want, tc.about)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("boundary %d = %+v, want %+v", i, got[i], tc.want[i])
+				}
+			}
+		})
+	}
+}
+
+// Map iteration order must not reach the wire: two requests against one log
+// have to describe the same history.
+func TestAutonomyBoundaries_AreDeterministic(t *testing.T) {
+	eras := map[string]int64{
+		session.AutonomySourceCost: 1000,
+		session.AutonomySourceLog:  2000,
+		"":                         3000,
+		"another":                  2000, // ties with `log`, broken by name
+	}
+	first := autonomyBoundariesFrom(eras)
+	for i := 0; i < 20; i++ {
+		if !reflect.DeepEqual(autonomyBoundariesFrom(eras), first) {
+			t.Fatalf("autonomyBoundariesFrom is order-dependent: %+v vs %+v", autonomyBoundariesFrom(eras), first)
+		}
+	}
+	// …and they come out oldest first, which is what lets a client draw them
+	// without re-sorting.
+	for i := 1; i < len(first); i++ {
+		if first[i].TS < first[i-1].TS {
+			t.Fatalf("boundaries are not ordered oldest first: %+v", first)
+		}
+	}
+}
+
+// The boundaries reach both payloads, and `live` is the wire's name for a
+// measured row's absent source — a row never carries it.
+func TestAutonomyBoundaries_ReachTheWire(t *testing.T) {
+	now := time.Now().Unix()
+	store := &fakeAutonomyStore{
+		spans: []outbound.AutonomySpan{spanEndingAt(now-3600, 300, "proj", session.StateReady)},
+		total: 3,
+		provenance: outbound.AutonomySpanProvenance{
+			Reconstructed: 2,
+			CostDerived:   1,
+			EraStarts: map[string]int64{
+				session.AutonomySourceCost: now - 300000,
+				session.AutonomySourceLog:  now - 200000,
+				"":                         now - 100000,
+			},
+		},
+	}
+	duration := decodeAutonomyDuration(t, getAutonomy(t, store, "chart=autonomy_duration&window=30d"))
+	if len(duration.Provenance.Boundaries) != 2 {
+		t.Fatalf("boundaries = %+v, want 2", duration.Provenance.Boundaries)
+	}
+	if duration.Provenance.Boundaries[1].To != autonomyEraLive {
+		t.Fatalf("the measured era is named %q on the wire, want %q",
+			duration.Provenance.Boundaries[1].To, autonomyEraLive)
+	}
+	if duration.Provenance.LiveSince != now-100000 {
+		t.Fatalf("LiveSince = %d, want the measured era's start", duration.Provenance.LiveSince)
+	}
+	// `live` must never be a row's source, or a measured row would read back
+	// as reconstructed.
+	for _, s := range session.AutonomySources() {
+		if s == autonomyEraLive {
+			t.Fatalf("%q is a writable row source; it is only ever a wire label", autonomyEraLive)
+		}
+	}
+	if !session.IsAutonomyReconstructed(autonomyEraLive) {
+		t.Fatalf("guard assumption broken: %q would read as measured if written to a row", autonomyEraLive)
+	}
+}
+
+// A single-era log emits an empty list rather than omitting the field: a client
+// must be able to tell "no handovers" from "this daemon does not know about
+// them".
+func TestAutonomyBoundaries_EmptyListIsPresentOnTheWire(t *testing.T) {
+	now := time.Now().Unix()
+	store := &fakeAutonomyStore{
+		spans:      []outbound.AutonomySpan{spanEndingAt(now-3600, 300, "proj", session.StateReady)},
+		total:      1,
+		provenance: outbound.AutonomySpanProvenance{EraStarts: map[string]int64{"": now - 100000}},
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(getAutonomy(t, store, "chart=autonomy_spans&window=24h").Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	var prov map[string]json.RawMessage
+	if err := json.Unmarshal(raw["provenance"], &prov); err != nil {
+		t.Fatalf("decode provenance: %v", err)
+	}
+	if _, ok := prov["boundaries"]; !ok {
+		t.Fatal("the payload omits `boundaries` entirely")
 	}
 }
 

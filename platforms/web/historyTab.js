@@ -824,6 +824,81 @@ export function autonomyReconstructionNote(duration) {
   return parts.join(' ');
 }
 
+// AUTONOMY_ERA_LABELS describes what lies to the LEFT of a source boundary —
+// the era the data before the line came from, and at what resolution.
+//
+// Resolution is the whole point (#1905 back-fill, QA-2). The cost log writes at
+// most every 60s and only when a value changed, so it cannot see a run shorter
+// than that; the event log records one-second runs. Across that boundary the p5
+// line steps by two orders of magnitude and a reader takes a change of
+// INSTRUMENT for a change of BEHAVIOUR. The provenance paragraph cannot fix it,
+// because the paragraph explains the data set while the eye reads the curve.
+const AUTONOMY_ERA_LABELS = {
+  cost: 'cost log · 60s resolution',
+  log: 'event log · rebuilt',
+  live: 'measured',
+};
+
+// autonomyBoundaryLabel is one marker's caption. The arrow is load-bearing: it
+// is what makes the label describe the data BEFORE the line rather than the
+// line itself.
+export function autonomyBoundaryLabel(boundary) {
+  const from = boundary?.from || '';
+  return '← ' + (AUTONOMY_ERA_LABELS[from] || from || 'a different source');
+}
+
+// autonomyVisibleBoundaries returns the source boundaries that fall inside the
+// chart's drawn domain, each with the x fraction (0..1) it sits at.
+//
+// STRICTLY inside: a boundary at the very first or very last bucket would draw
+// a rule on the axis itself, marking nothing and reading as a chart border. A
+// range that does not straddle a boundary gets none — which is every range on
+// a machine that was never back-filled, and most ranges on one that was.
+//
+// Pure, so both halves of the rule — draws one when it should, draws nothing
+// when it should not — are testable without a canvas.
+export function autonomyVisibleBoundaries(duration) {
+  const starts = duration?.bucket_starts || [];
+  if (starts.length < 2) return [];
+  const first = starts[0];
+  const last = starts[starts.length - 1];
+  if (!(last > first)) return [];
+  const out = [];
+  for (const b of (duration?.provenance?.boundaries || [])) {
+    const ts = Number(b?.ts) || 0;
+    if (ts <= first || ts >= last) continue;
+    out.push({ ts, from: b.from, to: b.to, fraction: (ts - first) / (last - first) });
+  }
+  return out;
+}
+
+// AUTONOMY_STRIP_MAX_ROWS caps how many project rows the run strip draws.
+//
+// The strip had no cap at all, which was invisible until there was history to
+// draw: a 12mo window over a back-filled log renders 95 rows and ~1900px of
+// strip, and the projects worth looking at are lost in the wall (#1905
+// back-fill, QA-1). Twelve is what this surface can show at once — at ~20px a
+// row it is a block you can take in without scrolling past the chart above it.
+//
+// The daemon already ranks `projects` by TOTAL AUTONOMOUS SECONDS, not by run
+// count, so the cap keeps the rows that matter: one four-hour run outranks
+// forty three-second ones. Taking a prefix of that ranking is also why the two
+// clients can cap differently without disagreeing — each shows a prefix of the
+// same order, neither invents one.
+export const AUTONOMY_STRIP_MAX_ROWS = 12;
+
+// autonomyStripOverflowLabel names what the cap left out, or '' when nothing
+// was left out.
+//
+// It says WHY those rows are the ones missing — they have less autonomous time
+// — so the reader knows the cap took the tail rather than an arbitrary slice.
+export function autonomyStripOverflowLabel(projects, cap = AUTONOMY_STRIP_MAX_ROWS) {
+  const hidden = (projects?.length || 0) - cap;
+  if (hidden <= 0) return '';
+  return '+' + hidden + ' more project' + (hidden === 1 ? '' : 's')
+    + ', each with less autonomous time than the rows above';
+}
+
 // autonomyLegendEntries is the strip legend for one window: the three measured
 // reasons, plus the neutral `unknown` entry ONLY when the window actually
 // holds a run whose reason nothing can name.
@@ -973,10 +1048,51 @@ function paintAutonomyChart() {
   };
 
   drawAutonomyGridlines(ctx, { lo, hi, yAt, padL, padR, w, muted, gridColor });
+  // Under the lines, deliberately: the marker explains the data, it is not
+  // part of it, and a rule drawn over a curve competes with the thing it is
+  // annotating.
+  drawAutonomyBoundaries(ctx, { duration, padL, plotW, padT, plotH, muted });
   for (const [key] of AUTONOMY_SERIES) {
     drawAutonomySeries(ctx, { points, key, color: autonomySeriesColor(key, cs), xAt, yAt });
   }
   drawAutonomyXLabels(ctx, { duration, xAt, muted, h, padB });
+}
+
+// drawAutonomyBoundaries marks each instant where the data's source changes: a
+// dashed hairline down the plot, captioned with what lies to its left.
+//
+// A HAIRLINE AND A SMALL LABEL, at low alpha, in the muted colour both themes
+// already resolve — it has to be findable when looked for and invisible when
+// not. The caption sits right of the rule and is dropped when it would spill
+// past the plot, because a label clipped by the canvas edge is worse than no
+// label: it reads as a rendering fault rather than as an annotation.
+function drawAutonomyBoundaries(ctx, { duration, padL, plotW, padT, plotH, muted }) {
+  const boundaries = autonomyVisibleBoundaries(duration);
+  if (!boundaries.length) return;
+  ctx.save();
+  ctx.font = '9px ui-monospace, monospace';
+  ctx.textBaseline = 'top';
+  ctx.textAlign = 'left';
+  for (const b of boundaries) {
+    const x = padL + plotW * b.fraction;
+    ctx.globalAlpha = 0.45;
+    ctx.strokeStyle = muted;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([2, 3]);
+    ctx.beginPath();
+    ctx.moveTo(x, padT);
+    ctx.lineTo(x, padT + plotH);
+    ctx.stroke();
+    const label = autonomyBoundaryLabel(b);
+    if (x - 4 - ctx.measureText(label).width >= padL) {
+      ctx.globalAlpha = 0.7;
+      ctx.fillStyle = muted;
+      ctx.textAlign = 'right';
+      ctx.fillText(label, x - 4, padT + 1);
+      ctx.textAlign = 'left';
+    }
+  }
+  ctx.restore();
 }
 
 // drawAutonomyGridlines draws the log-scale Y gridlines, labelled in the same
@@ -1075,8 +1191,18 @@ function renderAutonomyStrip() {
   // A header over the value column: the figure at the end of each row was a
   // bare duration with nothing saying what it measured.
   rowsEl.appendChild(buildAutonomyStripHeader());
-  for (const project of projects) {
+  for (const project of projects.slice(0, AUTONOMY_STRIP_MAX_ROWS)) {
     rowsEl.appendChild(buildAutonomyStripRow(project, spans, cs));
+  }
+  // Everything the cap left out, named as a count rather than dropped in
+  // silence — an omission nothing mentions is indistinguishable from a
+  // project that never ran.
+  const overflow = autonomyStripOverflowLabel(projects);
+  if (overflow) {
+    const more = document.createElement('div');
+    more.className = 'history-autonomy-more';
+    more.textContent = overflow;
+    rowsEl.appendChild(more);
   }
   // …and the window's bounds under it, so a mark can be placed in time. Two
   // labels, not a tick axis: at 12mo a full axis is more furniture than the

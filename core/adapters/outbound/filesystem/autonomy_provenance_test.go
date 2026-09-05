@@ -108,9 +108,9 @@ func TestAutonomySpanTracker_LiveSinceIsLogWideNotWindowScoped(t *testing.T) {
 	if len(res.Spans) != 2 {
 		t.Fatalf("window returned %d spans, want the 2 reconstructed ones", len(res.Spans))
 	}
-	if res.Provenance.LiveSince != 9000 {
+	if res.Provenance.LiveSince() != 9000 {
 		t.Fatalf("LiveSince = %d, want 9000 — the earliest measured start ACROSS THE LOG, not this window",
-			res.Provenance.LiveSince)
+			res.Provenance.LiveSince())
 	}
 	if res.Provenance.Reconstructed != 2 {
 		t.Fatalf("Reconstructed = %d, want 2 (window-scoped)", res.Provenance.Reconstructed)
@@ -131,8 +131,8 @@ func TestAutonomySpanTracker_LiveSinceIsZeroWithNothingMeasured(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SpansInWindow: %v", err)
 	}
-	if res.Provenance.LiveSince != 0 {
-		t.Fatalf("LiveSince = %d, want 0 on a log holding nothing measured", res.Provenance.LiveSince)
+	if res.Provenance.LiveSince() != 0 {
+		t.Fatalf("LiveSince = %d, want 0 on a log holding nothing measured", res.Provenance.LiveSince())
 	}
 }
 
@@ -170,8 +170,60 @@ func TestAutonomySpanTracker_ProvenanceIsCountedAfterTruncation(t *testing.T) {
 			res.Provenance)
 	}
 	// LiveSince stays log-wide even under a limit.
-	if res.Provenance.LiveSince != 1000 {
-		t.Fatalf("LiveSince = %d, want 1000", res.Provenance.LiveSince)
+	if res.Provenance.LiveSince() != 1000 {
+		t.Fatalf("LiveSince = %d, want 1000", res.Provenance.LiveSince())
+	}
+}
+
+// EraStarts is keyed by the row's OWN source field, so a source this build has
+// never heard of gets its own era instead of being folded into someone else's —
+// which is what lets the daemon derive a handover for it without a case.
+func TestAutonomySpanTracker_EraStartsAreKeyedByTheRawSource(t *testing.T) {
+	dir := t.TempDir()
+	tr := NewAutonomySpanTrackerWithDir(dir)
+	for _, s := range []outbound.AutonomySpan{
+		sourcedSpan(1000, 1100, "proj", session.AutonomyReasonUnknown, session.AutonomySourceCost),
+		sourcedSpan(1200, 1300, "proj", session.AutonomyReasonUnknown, session.AutonomySourceCost), // later, ignored
+		sourcedSpan(2000, 2100, "proj", session.StateWaiting, session.AutonomySourceLog),
+		span(3000, 3100, "proj", session.StateReady),
+	} {
+		if err := tr.RecordSpan(s); err != nil {
+			t.Fatalf("RecordSpan: %v", err)
+		}
+	}
+	res, err := tr.SpansInWindow(outbound.AutonomySpanQuery{Start: 0, End: math.MaxInt64})
+	if err != nil {
+		t.Fatalf("SpansInWindow: %v", err)
+	}
+	want := map[string]int64{
+		session.AutonomySourceCost: 1000,
+		session.AutonomySourceLog:  2000,
+		"":                         3000,
+	}
+	for source, start := range want {
+		if got := res.Provenance.EraStarts[source]; got != start {
+			t.Errorf("EraStarts[%q] = %d, want %d (the EARLIEST start of that provenance)", source, got, start)
+		}
+	}
+	if len(res.Provenance.EraStarts) != len(want) {
+		t.Errorf("EraStarts = %v, want exactly %v", res.Provenance.EraStarts, want)
+	}
+}
+
+// A window read over a missing log still hands back a usable (non-nil) era map:
+// "the log does not exist yet" is the most common path here, and a caller that
+// writes into a nil map panics.
+func TestAutonomySpanTracker_EraStartsAreNeverNil(t *testing.T) {
+	res, err := NewAutonomySpanTrackerWithDir(filepath.Join(t.TempDir(), "absent")).
+		SpansInWindow(outbound.AutonomySpanQuery{Start: 0, End: math.MaxInt64})
+	if err != nil {
+		t.Fatalf("SpansInWindow: %v", err)
+	}
+	if res.Provenance.EraStarts == nil {
+		t.Fatal("EraStarts is nil on a missing log")
+	}
+	if res.Provenance.LiveSince() != 0 {
+		t.Fatalf("LiveSince() = %d on an empty log, want 0", res.Provenance.LiveSince())
 	}
 }
 
@@ -197,8 +249,8 @@ func TestAutonomySpanTracker_UnknownSourceStillCountsAsReconstructed(t *testing.
 	if res.Provenance.CostDerived != 0 {
 		t.Fatalf("CostDerived = %d, want 0 — an unrecognized source is not the cost log", res.Provenance.CostDerived)
 	}
-	if res.Provenance.LiveSince != 0 {
+	if res.Provenance.LiveSince() != 0 {
 		t.Fatalf("LiveSince = %d, want 0 — an unrecognized source must not be counted as measured",
-			res.Provenance.LiveSince)
+			res.Provenance.LiveSince())
 	}
 }

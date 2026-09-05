@@ -223,7 +223,7 @@ func readLiveFloor(dataDir string) (int64, error) {
 	if res == nil {
 		return 0, nil
 	}
-	return res.Provenance.LiveSince, nil
+	return res.Provenance.LiveSince(), nil
 }
 
 // reconstruct runs both sources against one set of options.

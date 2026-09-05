@@ -550,13 +550,26 @@ type AutonomySpanProvenance struct {
 	// can never become known.
 	CostDerived int
 
-	// LiveSince is the earliest start of a MEASURED span across the WHOLE
-	// log, not just this window: the date before which everything on record
-	// is reconstructed. 0 when the log holds no measured span at all, which
-	// is a different claim from "0 means the beginning of time" and is why
-	// the clients test it for zero before printing a date.
-	LiveSince int64
+	// EraStarts is the earliest start on record for each PROVENANCE, keyed by
+	// the row's own `source` value — so "" is the measured era, and
+	// session.AutonomySources() name the reconstructed ones. Computed over the
+	// WHOLE log, not the window: "everything before this date came from a
+	// different source" is a claim about the log.
+	//
+	// Keyed by the raw field rather than by a translated label so a source
+	// this build has never heard of still gets an era, and so nothing has to
+	// be special-cased per source (#1905 back-fill). A source with no span on
+	// record simply has no key; the map is never nil.
+	EraStarts map[string]int64
 }
+
+// LiveSince is the earliest start of a MEASURED span across the whole log: the
+// date before which everything on record is reconstructed.
+//
+// 0 when the log holds no measured span at all — a different claim from "the
+// beginning of time", which is why every reader tests it for zero before
+// formatting a date.
+func (p AutonomySpanProvenance) LiveSince() int64 { return p.EraStarts[""] }
 
 // AutonomySpanStore persists closed autonomy spans and reads them back over a
 // trailing window. Implementations must be safe for concurrent use.

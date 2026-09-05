@@ -112,12 +112,16 @@ struct HistoryAutonomyContentView: View {
                 // each row was a bare duration with nothing saying what it
                 // measured.
                 stripHeader
-                ForEach(spans.projects, id: \.self) { project in
+                // Capped at the busiest few: unbounded, a back-filled 12mo
+                // window draws 95 rows into a 380 pt popover and buries the
+                // projects worth looking at (#1905 back-fill, QA-1).
+                ForEach(spans.visibleProjects, id: \.self) { project in
                     AutonomyStripRow(project: project,
                                      spans: spans.spans(for: project),
                                      start: spans.start,
                                      end: spans.end)
                 }
+                if let overflow = spans.overflowLabel { stripOverflow(overflow) }
                 // …and the window's bounds under it, so a mark can be placed
                 // in time. Two labels, not a tick axis: at 12mo a full axis is
                 // more furniture than the strip is worth, but "from when to
@@ -142,6 +146,17 @@ struct HistoryAutonomyContentView: View {
         .font(.caption2)
         .foregroundColor(.secondary)
         .accessibilityHidden(true) // each row's own label already says "longest"
+    }
+
+    /// "+N more projects" — quieter than a row and clearly not one: it is a
+    /// statement about the strip, not another line of it.
+    private func stripOverflow(_ text: String) -> some View {
+        Text(text)
+            .font(.caption2)
+            .foregroundColor(.secondary)
+            .opacity(0.85)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// The strip's window bounds: where it starts on the left, `now` on the
@@ -261,6 +276,24 @@ private struct AutonomyDurationChart: View {
     var body: some View {
         let points = data3
         Chart {
+            // FIRST in the builder, so the rules sit UNDER the lines: the
+            // marker explains the data, it is not part of it, and a rule drawn
+            // over a curve competes with the thing it annotates.
+            //
+            // A hairline at low opacity, in `.secondary` so both themes resolve
+            // it themselves — findable when looked for, invisible when not.
+            ForEach(data.visibleBoundaries) { boundary in
+                RuleMark(x: .value("Source change", boundary.date))
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [2, 3]))
+                    .foregroundStyle(Color.secondary.opacity(0.45))
+                    .annotation(position: .top, alignment: .trailing, spacing: 1) {
+                        Text(boundary.label)
+                            .font(.system(size: 9))
+                            .foregroundColor(.secondary)
+                            .opacity(0.8)
+                            .fixedSize()
+                    }
+            }
             ForEach(points) { d in
                 LineMark(
                     x: .value("Date", d.date),

@@ -180,7 +180,196 @@ final class HistoryAutonomyBackfillTests: XCTestCase {
         XCTAssertEqual(shared[0].reason, .error, "one unknown run must not grey out a column holding a real error")
     }
 
+    // MARK: The strip's row cap (QA-1)
+
+    /// The strip had no row cap at all, which nobody could see until the
+    /// back-fill gave it history to draw: a 12mo window over a back-filled log
+    /// renders 95 project rows into a 380 pt popover. The daemon ranks
+    /// `projects` by TOTAL AUTONOMOUS SECONDS, so the cap keeps the rows that
+    /// matter and the omission is stated rather than silent.
+    func testStripDrawsExactlyTheCapAndAccountsForTheRest() throws {
+        let spans = try spansResponse(projectCount: 95)
+        XCTAssertEqual(spans.visibleProjects.count, HistoryAutonomySpansResponse.maxStripRows)
+        // A PREFIX of the daemon's ranking — the cap must never reorder, or the
+        // two clients would disagree about which projects are the busiest.
+        XCTAssertEqual(spans.visibleProjects,
+                       Array(spans.projects.prefix(HistoryAutonomySpansResponse.maxStripRows)))
+        XCTAssertEqual(spans.hiddenProjectCount, 95 - HistoryAutonomySpansResponse.maxStripRows)
+        let overflow = try XCTUnwrap(spans.overflowLabel)
+        XCTAssertTrue(overflow.contains("+\(95 - HistoryAutonomySpansResponse.maxStripRows) more projects"),
+                      "got: \(overflow)")
+        // …and WHY they are the missing ones, so the cap does not read as an
+        // arbitrary slice of an unknown ordering.
+        XCTAssertTrue(overflow.contains("less autonomous time"), "got: \(overflow)")
+    }
+
+    func testStripSaysNothingWhenEveryProjectFits() throws {
+        let spans = try spansResponse(projectCount: HistoryAutonomySpansResponse.maxStripRows)
+        XCTAssertEqual(spans.visibleProjects.count, HistoryAutonomySpansResponse.maxStripRows)
+        XCTAssertEqual(spans.hiddenProjectCount, 0)
+        XCTAssertNil(spans.overflowLabel)
+    }
+
+    func testStripOverflowIsSingularForOneHiddenProject() throws {
+        let spans = try spansResponse(projectCount: HistoryAutonomySpansResponse.maxStripRows + 1)
+        let overflow = try XCTUnwrap(spans.overflowLabel)
+        XCTAssertTrue(overflow.contains("+1 more project,"), "got: \(overflow)")
+    }
+
+    /// This surface caps lower than the web's twelve, and that is not a
+    /// disagreement: both show a prefix of one shared ranking. What must hold
+    /// is that the popover's cap is the smaller one — it has 380 pt to work in.
+    func testStripCapFitsThisSurface() {
+        XCTAssertGreaterThan(HistoryAutonomySpansResponse.maxStripRows, 0)
+        XCTAssertLessThanOrEqual(HistoryAutonomySpansResponse.maxStripRows, 8,
+                                 "more rows than a 380 pt popover can show under a 190 pt chart")
+    }
+
+    // MARK: Source boundaries on the chart (QA-2)
+
+    func testARangeStraddlingABoundaryMarksIt() throws {
+        let d = try durationResponse(bucketStarts: [0, 100, 200, 300, 400],
+                                     boundaries: [(100, "cost", "log")])
+        XCTAssertEqual(d.visibleBoundaries.map(\.ts), [100])
+    }
+
+    func testARangeThatDoesNotStraddleABoundaryMarksNothing() throws {
+        let before = try durationResponse(bucketStarts: [1000, 1100, 1200],
+                                          boundaries: [(100, "cost", "log")])
+        XCTAssertTrue(before.visibleBoundaries.isEmpty)
+        let after = try durationResponse(bucketStarts: [0, 100, 200],
+                                         boundaries: [(9999, "log", "live")])
+        XCTAssertTrue(after.visibleBoundaries.isEmpty)
+    }
+
+    /// A rule exactly on the axis marks nothing and reads as a chart border.
+    func testABoundaryOnEitherEdgeIsNotDrawn() throws {
+        let atStart = try durationResponse(bucketStarts: [100, 200, 300],
+                                           boundaries: [(100, "cost", "log")])
+        XCTAssertTrue(atStart.visibleBoundaries.isEmpty)
+        let atEnd = try durationResponse(bucketStarts: [100, 200, 300],
+                                         boundaries: [(300, "log", "live")])
+        XCTAssertTrue(atEnd.visibleBoundaries.isEmpty)
+    }
+
+    func testBothHandoversAreDrawnByTheOneMechanism() throws {
+        let d = try durationResponse(bucketStarts: [0, 100, 200, 300, 400],
+                                     boundaries: [(100, "cost", "log"), (300, "log", "live")])
+        XCTAssertEqual(d.visibleBoundaries.map(\.ts), [100, 300])
+    }
+
+    func testAMachineThatWasNeverBackfilledDrawsNoBoundary() throws {
+        let empty = try durationResponse(bucketStarts: [0, 100, 200], boundaries: [])
+        XCTAssertTrue(empty.visibleBoundaries.isEmpty)
+        // …and a payload from a daemon that predates the field.
+        let json = """
+        {"window":"30d","chart":"autonomy_duration","start":1,"end":2,"bucket_seconds":86400,
+         "bucket_starts":[0,100,200],"buckets":[],
+         "summary":{"p95":0,"p50":0,"p5":0,"min":0,"max":0,"count":0},
+         "sample_floor":20,"earliest_span":0,"total_recorded":0}
+        """
+        let old = try JSONDecoder().decode(HistoryAutonomyDurationResponse.self, from: Data(json.utf8))
+        XCTAssertTrue(old.visibleBoundaries.isEmpty)
+    }
+
+    func testADegenerateDomainDrawsNoBoundary() throws {
+        let single = try durationResponse(bucketStarts: [100], boundaries: [(100, "cost", "log")])
+        XCTAssertTrue(single.visibleBoundaries.isEmpty)
+        let flat = try durationResponse(bucketStarts: [100, 100], boundaries: [(100, "cost", "log")])
+        XCTAssertTrue(flat.visibleBoundaries.isEmpty)
+    }
+
+    /// The label has to say the data BEFORE the line is the coarser one, and
+    /// name the resolution — which is the whole reason the marker exists.
+    func testBoundaryLabelDescribesWhatLiesToTheLeft() {
+        XCTAssertEqual(HistoryAutonomyBoundary(ts: 1, from: "cost", to: "log").label,
+                       "← cost log · 60s resolution")
+        XCTAssertEqual(HistoryAutonomyBoundary(ts: 1, from: "log", to: "live").label,
+                       "← event log · rebuilt")
+    }
+
+    func testAnUnknownEraStillGetsALabel() {
+        XCTAssertEqual(HistoryAutonomyBoundary(ts: 1, from: "some-future-source", to: "live").label,
+                       "← some-future-source")
+        XCTAssertEqual(HistoryAutonomyBoundary(ts: 1, from: "", to: "live").label,
+                       "← a different source")
+    }
+
+    /// Both surfaces must caption a boundary the same way, or one section reads
+    /// two different explanations of one artefact. The web's twin table is
+    /// AUTONOMY_ERA_LABELS in platforms/web/historyTab.js.
+    func testBoundaryLabelsMatchTheWebs() {
+        let expected = [
+            "cost": "← cost log · 60s resolution",
+            "log": "← event log · rebuilt",
+            "live": "← measured",
+        ]
+        for (era, want) in expected {
+            XCTAssertEqual(HistoryAutonomyBoundary(ts: 1, from: era, to: "live").label, want)
+        }
+    }
+
+    /// The committed mutations for both QA fixes, in the idiom the sibling
+    /// suites already use. A build that never speaks (the one shipped before
+    /// QA-1/QA-2) and one that speaks unconditionally both answer identically
+    /// for the two fixtures of each pair; production must not, or each
+    /// direction could pass against a build that never looked at the data.
+    func testProductionTellsTheCappedAndStraddlingFixturesApart() throws {
+        let fits = try spansResponse(projectCount: HistoryAutonomySpansResponse.maxStripRows)
+        let overflows = try spansResponse(projectCount: HistoryAutonomySpansResponse.maxStripRows + 1)
+        let neverSpeaks: (HistoryAutonomySpansResponse) -> String? = { _ in nil }
+        let alwaysSpeaks: (HistoryAutonomySpansResponse) -> String? = { _ in "+N more projects" }
+        XCTAssertEqual(neverSpeaks(fits), neverSpeaks(overflows))
+        XCTAssertEqual(alwaysSpeaks(fits), alwaysSpeaks(overflows))
+        XCTAssertNil(fits.overflowLabel)
+        XCTAssertNotNil(overflows.overflowLabel)
+
+        let straddles = try durationResponse(bucketStarts: [0, 100, 200, 300],
+                                             boundaries: [(150, "cost", "log")])
+        let misses = try durationResponse(bucketStarts: [0, 100, 200, 300],
+                                          boundaries: [(9999, "cost", "log")])
+        let neverMarks: (HistoryAutonomyDurationResponse) -> Int = { _ in 0 }
+        let alwaysMarks: (HistoryAutonomyDurationResponse) -> Int = { _ in 1 }
+        XCTAssertEqual(neverMarks(straddles), neverMarks(misses))
+        XCTAssertEqual(alwaysMarks(straddles), alwaysMarks(misses))
+        XCTAssertEqual(straddles.visibleBoundaries.count, 1)
+        XCTAssertEqual(misses.visibleBoundaries.count, 0)
+    }
+
+    // MARK: Fixtures
+
     private func row(start: Int64 = 1, end: Int64 = 9, reason: String?) -> HistoryAutonomySpanRow {
         HistoryAutonomySpanRow(start: start, end: end, project: "p", session: "s", reason: reason)
+    }
+
+    /// Decodes a spans payload carrying `projectCount` projects, so the cap is
+    /// exercised through the real decode path rather than a hand-built struct.
+    private func spansResponse(projectCount: Int) throws -> HistoryAutonomySpansResponse {
+        let projects = (0..<projectCount).map { "\"p\($0)\"" }.joined(separator: ",")
+        let spans = (0..<projectCount)
+            .map { "{\"start\":1,\"end\":9,\"project\":\"p\($0)\",\"session\":\"s\($0)\",\"reason\":\"ready\"}" }
+            .joined(separator: ",")
+        let json = """
+        {"window":"12mo","chart":"autonomy_spans","start":0,"end":100,
+         "spans":[\(spans)],"projects":[\(projects)],
+         "earliest_span":1,"total_recorded":\(projectCount),"truncated":false}
+        """
+        return try JSONDecoder().decode(HistoryAutonomySpansResponse.self, from: Data(json.utf8))
+    }
+
+    private func durationResponse(bucketStarts: [Int64],
+                                  boundaries: [(Int64, String, String)]) throws -> HistoryAutonomyDurationResponse {
+        let starts = bucketStarts.map(String.init).joined(separator: ",")
+        let bounds = boundaries
+            .map { "{\"ts\":\($0.0),\"from\":\"\($0.1)\",\"to\":\"\($0.2)\"}" }
+            .joined(separator: ",")
+        let json = """
+        {"window":"1y","chart":"autonomy_duration","start":1,"end":2,"bucket_seconds":604800,
+         "bucket_starts":[\(starts)],"buckets":[],
+         "summary":{"p95":0,"p50":0,"p5":0,"min":0,"max":0,"count":0},
+         "sample_floor":20,"earliest_span":0,"total_recorded":0,
+         "provenance":{"reconstructed":0,"cost_derived":0,"live_since":0,"boundaries":[\(bounds)]}}
+        """
+        return try JSONDecoder().decode(HistoryAutonomyDurationResponse.self, from: Data(json.utf8))
     }
 }

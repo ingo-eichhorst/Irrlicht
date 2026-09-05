@@ -8,7 +8,7 @@
 # AGENTS.md and docs/testing-philosophy.md, such a check earns its place only
 # by being seen to fail when the thing it protects is broken.
 #
-# Five independent breakages, proven separately, because one combined mutation
+# Six independent breakages, proven separately, because one combined mutation
 # could pass while any single one of them was actually unguarded:
 #
 #   1. THE MARKING GOES AWAY. session.IsAutonomyReconstructed always answers
@@ -36,6 +36,12 @@
 #      ships, so its era overlaps the live span log's — and a run present in
 #      both is counted twice, which is the one error a back-fill can make that
 #      looks like productivity rather than like a bug.
+#
+#   6. THE SOURCE HANDOVER STOPS BEING REPORTED. No boundary reaches either
+#      client, so neither can mark the chart. The p5 line still steps by two
+#      orders of magnitude where the cost log hands over to the event log — the
+#      cost log cannot see a run shorter than its 60 s write interval — and a
+#      reader takes that change of INSTRUMENT for a change of BEHAVIOUR (QA-2).
 #
 # The panel-provenance check — "state it when any span in view is
 # reconstructed, say nothing when none is" — is proven by COMMITTED IN-LANGUAGE
@@ -193,6 +199,16 @@ assert_go_test_goes_red \
   "./tools/autonomy-backfill/..." \
   "TestSpansReachingIntoTheMeasuredEraAreDropped|TestApplyNeverWritesIntoTheMeasuredEra" \
   "reaches into the measured era"
+
+# ── 6. The source boundary stops being derived ──────────────────────────────
+assert_go_test_goes_red \
+  "a handover between two sources is reported" \
+  "core/cmd/irrlichd/history_autonomy.go" \
+  $'\tfor i := 1; i < len(eras); i++ {' \
+  $'\tfor i := 1; i < 1 && i < len(eras); i++ {' \
+  "./core/cmd/irrlichd/..." \
+  "TestAutonomyBoundaries" \
+  "want 2"
 
 if [[ $fails -gt 0 ]]; then
   echo "autonomy-backfill-mutations: $fails FAILED"

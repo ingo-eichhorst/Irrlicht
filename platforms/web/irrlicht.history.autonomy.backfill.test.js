@@ -3,9 +3,13 @@ import { describe, test, expect } from 'vitest'
 import {
   AUTONOMY_REASON_LEGEND,
   AUTONOMY_REASON_PRIORITY,
+  AUTONOMY_STRIP_MAX_ROWS,
   AUTONOMY_UNKNOWN_LEGEND,
+  autonomyBoundaryLabel,
   autonomyLegendEntries,
   autonomyReconstructionNote,
+  autonomyStripOverflowLabel,
+  autonomyVisibleBoundaries,
   collapseAutonomyStrip,
 } from './historyTab.js'
 
@@ -153,5 +157,157 @@ describe('the strip legend gains a neutral entry only when it needs one', () => 
     const cells = collapseAutonomyStrip([span(1_000, 1_100, 'unknown')], 0, 100_000, 10)
     expect(cells[0].occupied).toBe(true)
     expect(cells[0].reason).toBe(null)
+  })
+})
+
+// The run strip had no row cap at all, which nobody could see until the
+// back-fill gave it history to draw: a 12mo window over a back-filled log
+// renders 95 project rows (QA-1). The daemon ranks `projects` by TOTAL
+// AUTONOMOUS SECONDS, so the cap keeps the rows that matter, and the omission
+// is stated rather than silent.
+describe('the run strip caps its project rows', () => {
+  const projects = (n) => Array.from({ length: n }, (_, i) => 'p' + i)
+
+  test('nothing is said when every project fits', () => {
+    expect(autonomyStripOverflowLabel(projects(AUTONOMY_STRIP_MAX_ROWS))).toBe('')
+    expect(autonomyStripOverflowLabel([])).toBe('')
+    expect(autonomyStripOverflowLabel(null)).toBe('')
+  })
+
+  test('the overflow line names how many rows were left out', () => {
+    const label = autonomyStripOverflowLabel(projects(AUTONOMY_STRIP_MAX_ROWS + 83))
+    expect(label).toContain('+83 more projects')
+    // …and WHY they are the missing ones, so the cap does not read as an
+    // arbitrary slice of an unknown ordering.
+    expect(label).toContain('less autonomous time')
+  })
+
+  test('one hidden project is singular', () => {
+    expect(autonomyStripOverflowLabel(projects(AUTONOMY_STRIP_MAX_ROWS + 1)))
+      .toContain('+1 more project,')
+  })
+
+  // The measured case from QA: 95 projects in a 12mo window.
+  test('a 95-project window draws exactly the cap and accounts for the rest', () => {
+    const all = projects(95)
+    const drawn = all.slice(0, AUTONOMY_STRIP_MAX_ROWS)
+    expect(drawn).toHaveLength(AUTONOMY_STRIP_MAX_ROWS)
+    // A PREFIX of the daemon's ranking — the cap must never reorder, or the two
+    // clients would disagree about which projects are the busiest.
+    expect(drawn).toEqual(all.slice(0, drawn.length))
+    expect(autonomyStripOverflowLabel(all))
+      .toContain('+' + (95 - AUTONOMY_STRIP_MAX_ROWS) + ' more projects')
+  })
+
+  test('the cap is a fixed number, not something a caller can talk out of', () => {
+    expect(AUTONOMY_STRIP_MAX_ROWS).toBeGreaterThan(0)
+    expect(Number.isInteger(AUTONOMY_STRIP_MAX_ROWS)).toBe(true)
+  })
+
+  // The committed mutation, in the idiom this suite already uses. An
+  // always-silent build (the one shipped before QA-1) and an always-speaking
+  // one both answer identically for the two fixtures; production must not.
+  test('production tells a capped strip from an uncapped one', () => {
+    const fits = projects(AUTONOMY_STRIP_MAX_ROWS)
+    const overflows = projects(AUTONOMY_STRIP_MAX_ROWS + 1)
+
+    const neverSpeaks = () => ''
+    const alwaysSpeaks = () => '+N more projects'
+    expect(neverSpeaks(fits)).toBe(neverSpeaks(overflows))
+    expect(alwaysSpeaks(fits)).toBe(alwaysSpeaks(overflows))
+
+    expect(autonomyStripOverflowLabel(fits)).not.toBe(autonomyStripOverflowLabel(overflows))
+    expect(autonomyStripOverflowLabel(fits)).toBe('')
+    expect(autonomyStripOverflowLabel(overflows)).not.toBe('')
+  })
+})
+
+// The p5 line steps by two orders of magnitude at the cost→log boundary,
+// because the cost log cannot see a run shorter than its 60s write interval
+// while the event log records one-second runs (QA-2). A reader takes that for a
+// change in behaviour. The marker puts the explanation where the artefact is.
+describe('source boundaries are marked on the chart', () => {
+  const durationOver = (starts, boundaries) => ({
+    bucket_starts: starts,
+    buckets: [],
+    summary: { count: 0 },
+    provenance: { reconstructed: 0, cost_derived: 0, live_since: 0, boundaries },
+  })
+
+  test('a range that straddles a boundary marks it, at the right fraction', () => {
+    const got = autonomyVisibleBoundaries(
+      durationOver([0, 100, 200, 300, 400], [{ ts: 100, from: 'cost', to: 'log' }]))
+    expect(got).toHaveLength(1)
+    expect(got[0].ts).toBe(100)
+    expect(got[0].fraction).toBeCloseTo(0.25)
+  })
+
+  test('a range that does not reach the boundary marks nothing', () => {
+    expect(autonomyVisibleBoundaries(
+      durationOver([1000, 1100, 1200], [{ ts: 100, from: 'cost', to: 'log' }]))).toEqual([])
+    expect(autonomyVisibleBoundaries(
+      durationOver([0, 100, 200], [{ ts: 9999, from: 'log', to: 'live' }]))).toEqual([])
+  })
+
+  // A rule exactly on the axis marks nothing and reads as a chart border.
+  test('a boundary on either edge of the drawn domain is not drawn', () => {
+    expect(autonomyVisibleBoundaries(
+      durationOver([100, 200, 300], [{ ts: 100, from: 'cost', to: 'log' }]))).toEqual([])
+    expect(autonomyVisibleBoundaries(
+      durationOver([100, 200, 300], [{ ts: 300, from: 'log', to: 'live' }]))).toEqual([])
+  })
+
+  test('both handovers are drawn by the one mechanism', () => {
+    const got = autonomyVisibleBoundaries(durationOver([0, 100, 200, 300, 400], [
+      { ts: 100, from: 'cost', to: 'log' },
+      { ts: 300, from: 'log', to: 'live' },
+    ]))
+    expect(got.map(b => b.ts)).toEqual([100, 300])
+  })
+
+  test('a machine that was never back-filled draws nothing at all', () => {
+    expect(autonomyVisibleBoundaries(durationOver([0, 100, 200], []))).toEqual([])
+    expect(autonomyVisibleBoundaries(durationOver([0, 100, 200], undefined))).toEqual([])
+    expect(autonomyVisibleBoundaries({ bucket_starts: [0, 100, 200] })).toEqual([])
+    expect(autonomyVisibleBoundaries(null)).toEqual([])
+  })
+
+  test('a degenerate domain cannot produce a divide-by-zero fraction', () => {
+    expect(autonomyVisibleBoundaries(
+      durationOver([100], [{ ts: 100, from: 'cost', to: 'log' }]))).toEqual([])
+    expect(autonomyVisibleBoundaries(
+      durationOver([100, 100], [{ ts: 100, from: 'cost', to: 'log' }]))).toEqual([])
+  })
+
+  // The label has to say the data BEFORE the line is the coarser one, and name
+  // the resolution — which is the whole reason the marker exists.
+  test('the label describes what lies to the left, with its resolution', () => {
+    expect(autonomyBoundaryLabel({ from: 'cost', to: 'log' })).toBe('← cost log · 60s resolution')
+    expect(autonomyBoundaryLabel({ from: 'log', to: 'live' })).toBe('← event log · rebuilt')
+  })
+
+  test('an era this build does not know still gets a label, never a blank one', () => {
+    expect(autonomyBoundaryLabel({ from: 'some-future-source', to: 'live' }))
+      .toBe('← some-future-source')
+    expect(autonomyBoundaryLabel({})).toBe('← a different source')
+    expect(autonomyBoundaryLabel(null)).toBe('← a different source')
+  })
+
+  // The committed mutation. A build that never marks (the one shipped before
+  // QA-2) and one that marks unconditionally both answer identically for the
+  // two fixtures; production must not, or "draws it when it should" and "draws
+  // nothing when it should not" could each pass against a build that never
+  // looked at the range.
+  test('production tells a straddling range from one that misses the boundary', () => {
+    const straddles = durationOver([0, 100, 200, 300], [{ ts: 150, from: 'cost', to: 'log' }])
+    const misses = durationOver([0, 100, 200, 300], [{ ts: 9999, from: 'cost', to: 'log' }])
+
+    const neverMarks = () => []
+    const alwaysMarks = () => [{ ts: 150 }]
+    expect(neverMarks(straddles)).toEqual(neverMarks(misses))
+    expect(alwaysMarks(straddles)).toEqual(alwaysMarks(misses))
+
+    expect(autonomyVisibleBoundaries(straddles)).toHaveLength(1)
+    expect(autonomyVisibleBoundaries(misses)).toHaveLength(0)
   })
 })

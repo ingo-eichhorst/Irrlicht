@@ -174,7 +174,13 @@ func (t *AutonomySpanTracker) RecordSpan(span outbound.AutonomySpan) error {
 // feature had not shipped yet"), and only the earliest recorded span
 // disambiguates it (#1905).
 func (t *AutonomySpanTracker) SpansInWindow(q outbound.AutonomySpanQuery) (*outbound.AutonomySpanResult, error) {
-	res := &outbound.AutonomySpanResult{Spans: []outbound.AutonomySpan{}}
+	res := &outbound.AutonomySpanResult{
+		Spans: []outbound.AutonomySpan{},
+		// Never nil, even on a missing log: a caller reading an era out of a
+		// nil map gets a zero either way, but a caller WRITING one would panic,
+		// and "the log does not exist yet" is the most common path here.
+		Provenance: outbound.AutonomySpanProvenance{EraStarts: map[string]int64{}},
+	}
 	entries, err := os.ReadDir(t.dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -238,13 +244,18 @@ func foldSpanRow(r spanRow, fallback string, q outbound.AutonomySpanQuery, res *
 	if r.Start > 0 && (res.EarliestStart == 0 || r.Start < res.EarliestStart) {
 		res.EarliestStart = r.Start
 	}
-	// LiveSince is log-wide, exactly like EarliestStart and for the same
-	// reason: "everything before this date is reconstructed" is a claim about
-	// the whole log, and a window that happens to hold no measured span
+	// Era starts are log-wide, exactly like EarliestStart and for the same
+	// reason: "everything before this date came from a different source" is a
+	// claim about the whole log, and a window that happens to hold one source
 	// cannot be allowed to answer it.
-	if r.Start > 0 && !session.IsAutonomyReconstructed(r.Source) &&
-		(res.Provenance.LiveSince == 0 || r.Start < res.Provenance.LiveSince) {
-		res.Provenance.LiveSince = r.Start
+	//
+	// Keyed by the row's own Source, including "" for a measured row, so a
+	// source this build does not recognize still gets an era instead of being
+	// folded into someone else's.
+	if r.Start > 0 {
+		if cur, ok := res.Provenance.EraStarts[r.Source]; !ok || r.Start < cur {
+			res.Provenance.EraStarts[r.Source] = r.Start
+		}
 	}
 	if r.End < q.Start || r.End >= q.End {
 		return

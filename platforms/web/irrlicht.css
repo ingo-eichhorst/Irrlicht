@@ -1794,6 +1794,13 @@
       font-family: var(--font-mono); font-size: 10px; color: var(--muted);
     }
     .history-autonomy-axis-bounds i { font-style: normal; }
+    /* "+N more projects" — what the row cap left out (#1905 back-fill, QA-1).
+       Quieter than a row and clearly not one: it is a statement about the
+       strip, not another line of it. */
+    .history-autonomy-more {
+      font-family: var(--font-mono); font-size: 10px; color: var(--muted);
+      opacity: 0.85; padding: 4px 0 0;
+    }
     .history-autonomy-empty, .history-autonomy-note {
       font-size: 12px; color: var(--muted); padding: 8px 0; line-height: 1.5;
     }

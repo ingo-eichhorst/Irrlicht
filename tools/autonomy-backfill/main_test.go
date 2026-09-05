@@ -61,8 +61,8 @@ func TestReconstructedSpansAreMarkedAndLiveOnesAreNot(t *testing.T) {
 	if res.Provenance.CostDerived != 1 {
 		t.Errorf("Provenance.CostDerived = %d, want 1", res.Provenance.CostDerived)
 	}
-	if res.Provenance.LiveSince != 5000 {
-		t.Errorf("Provenance.LiveSince = %d, want 5000 — the earliest MEASURED start", res.Provenance.LiveSince)
+	if res.Provenance.LiveSince() != 5000 {
+		t.Errorf("Provenance.LiveSince = %d, want 5000 — the earliest MEASURED start", res.Provenance.LiveSince())
 	}
 }
 

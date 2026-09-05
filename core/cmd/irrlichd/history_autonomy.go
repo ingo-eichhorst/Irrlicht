@@ -197,6 +197,36 @@ type historyAutonomyProvenance struct {
 	// instant before which everything on record is reconstructed. 0 when
 	// nothing has ever been measured live.
 	LiveSince int64 `json:"live_since"`
+	// Boundaries are the instants where the PROVENANCE of the data changes,
+	// oldest first. Empty when everything on record came from one source.
+	Boundaries []historyAutonomyBoundary `json:"boundaries"`
+}
+
+// autonomyEraLive is the wire name for the measured era, whose rows carry no
+// `source` at all. It exists only on the wire and in a label — nothing writes
+// it to a row, and it is deliberately absent from session.AutonomySources() so
+// it can never be mistaken for one.
+const autonomyEraLive = "live"
+
+// historyAutonomyBoundary is one instant where the data's provenance changes —
+// a run drawn to the left of it came from `from`, one to the right from `to`.
+//
+// It exists because the provenance PARAGRAPH cannot fix what the eye reads off
+// the CURVE (#1905 back-fill, QA-2). The cost log cannot see a run shorter than
+// its 60 s write interval; the event log records one-second runs. So the p5
+// line steps at the source boundary and a reader takes a change of instrument
+// for a change of behaviour. The marker puts the explanation where the artefact
+// is.
+//
+// TS is the earliest start of the NEWER era. The rules that build the rows
+// guarantee the older source stops there — the cost era ends at the event log's
+// first transition, and the reconstruction refuses to write into the era the
+// daemon has already measured — so one instant separates them rather than an
+// overlap that would have no single boundary to draw.
+type historyAutonomyBoundary struct {
+	TS   int64  `json:"ts"`
+	From string `json:"from"`
+	To   string `json:"to"`
 }
 
 // autonomyProvenanceFrom converts the store's provenance block to the wire
@@ -206,8 +236,62 @@ func autonomyProvenanceFrom(p outbound.AutonomySpanProvenance) historyAutonomyPr
 	return historyAutonomyProvenance{
 		Reconstructed: p.Reconstructed,
 		CostDerived:   p.CostDerived,
-		LiveSince:     p.LiveSince,
+		LiveSince:     p.LiveSince(),
+		Boundaries:    autonomyBoundariesFrom(p.EraStarts),
 	}
+}
+
+// autonomyBoundariesFrom turns the log's per-source era starts into the
+// instants where one era hands over to the next.
+//
+// ONE MECHANISM, not a case per pair. Today there are two handovers on a
+// back-filled machine — cost→log and log→live — but nothing here names either:
+// the eras are sorted by when they start and a boundary is emitted between
+// each adjacent pair. A third source, or a machine that only ever had two of
+// them, falls out without another branch.
+//
+// A single era yields no boundary, which is the normal install: nothing to
+// mark, so nothing is drawn.
+func autonomyBoundariesFrom(eraStarts map[string]int64) []historyAutonomyBoundary {
+	type era struct {
+		source string
+		start  int64
+	}
+	eras := make([]era, 0, len(eraStarts))
+	for source, start := range eraStarts {
+		if start <= 0 {
+			continue
+		}
+		eras = append(eras, era{source: source, start: start})
+	}
+	// Sorted by start; the source name breaks a tie, so two eras that begin in
+	// the same second still order the same way on every request rather than
+	// following map iteration order.
+	sort.Slice(eras, func(i, j int) bool {
+		if eras[i].start != eras[j].start {
+			return eras[i].start < eras[j].start
+		}
+		return eras[i].source < eras[j].source
+	})
+
+	out := make([]historyAutonomyBoundary, 0, max(0, len(eras)-1))
+	for i := 1; i < len(eras); i++ {
+		out = append(out, historyAutonomyBoundary{
+			TS:   eras[i].start,
+			From: autonomyEraName(eras[i-1].source),
+			To:   autonomyEraName(eras[i].source),
+		})
+	}
+	return out
+}
+
+// autonomyEraName is a row's `source` as the wire spells it: "" — the absence
+// that means measured — becomes "live".
+func autonomyEraName(source string) string {
+	if source == "" {
+		return autonomyEraLive
+	}
+	return source
 }
 
 // historyAutonomySpanRow is one span on the wire for element 2.

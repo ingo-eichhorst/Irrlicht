@@ -117,16 +117,62 @@ struct HistoryAutonomyProvenance: Codable, Equatable {
     let liveSince: Int64
 
     enum CodingKeys: String, CodingKey {
-        case reconstructed
+        case reconstructed, boundaries
         case costDerived = "cost_derived"
         case liveSince = "live_since"
     }
 
+    /// Spelled out rather than left to the synthesized memberwise init so
+    /// `boundaries` can default: a provenance with no source handover is the
+    /// normal case (every machine that was never back-filled), and every call
+    /// site that predates boundaries means exactly that.
+    init(reconstructed: Int, costDerived: Int, liveSince: Int64, boundaries: [HistoryAutonomyBoundary]? = []) {
+        self.reconstructed = reconstructed
+        self.costDerived = costDerived
+        self.liveSince = liveSince
+        self.boundaries = boundaries
+    }
+
+    /// Instants where the PROVENANCE of the data changes, oldest first. Empty
+    /// when everything on record came from one source.
+    let boundaries: [HistoryAutonomyBoundary]?
+
     /// What a daemon that predates the field, or a window measured end to end,
     /// amounts to. Both mean "say nothing".
-    static let none = HistoryAutonomyProvenance(reconstructed: 0, costDerived: 0, liveSince: 0)
+    static let none = HistoryAutonomyProvenance(reconstructed: 0, costDerived: 0, liveSince: 0, boundaries: [])
 
     var isReconstructed: Bool { reconstructed > 0 }
+    var boundaryList: [HistoryAutonomyBoundary] { boundaries ?? [] }
+}
+
+/// One instant where the data's provenance changes — a run drawn to the LEFT
+/// of it came from `from`, one to the right from `to`.
+///
+/// It exists because the provenance PARAGRAPH cannot fix what the eye reads off
+/// the CURVE (#1905 back-fill, QA-2). The cost log cannot see a run shorter
+/// than its 60 s write interval; the event log records one-second runs. Across
+/// that boundary the p5 line steps by two orders of magnitude, and a reader
+/// takes a change of instrument for a change of behaviour. The marker puts the
+/// explanation where the artefact is.
+struct HistoryAutonomyBoundary: Codable, Equatable, Identifiable {
+    let ts: Int64
+    let from: String
+    let to: String
+
+    var id: Int64 { ts }
+
+    var date: Date { Date(timeIntervalSince1970: TimeInterval(ts)) }
+
+    /// What lies to the LEFT of this line, and at what resolution — the arrow
+    /// is load-bearing, since it is what makes the caption describe the data
+    /// before the marker rather than the marker itself.
+    var label: String { "← " + Self.eraLabels[from, default: from.isEmpty ? "a different source" : from] }
+
+    private static let eraLabels = [
+        "cost": "cost log · 60s resolution",
+        "log": "event log · rebuilt",
+        "live": "measured",
+    ]
 }
 
 /// One entry of the run strip's legend.
@@ -242,6 +288,18 @@ struct HistoryAutonomyDurationResponse: Codable {
 
     var hasData: Bool { !buckets.isEmpty }
     var provenanceOrNone: HistoryAutonomyProvenance { provenance ?? .none }
+
+    /// The source boundaries that fall inside the DRAWN domain, so the chart
+    /// marks only what the reader can actually see.
+    ///
+    /// STRICTLY inside: a boundary at the very first or very last bucket would
+    /// draw a rule on the axis itself, marking nothing and reading as a chart
+    /// border. A range that does not straddle a boundary gets none — which is
+    /// every range on a machine that was never back-filled.
+    var visibleBoundaries: [HistoryAutonomyBoundary] {
+        guard let first = bucketStarts.first, let last = bucketStarts.last, last > first else { return [] }
+        return provenanceOrNone.boundaryList.filter { $0.ts > first && $0.ts < last }
+    }
 }
 
 struct HistoryAutonomySpanRow: Codable, Identifiable {
@@ -282,6 +340,37 @@ struct HistoryAutonomySpansResponse: Codable {
 
     func spans(for project: String) -> [HistoryAutonomySpanRow] {
         spans.filter { $0.project == project }
+    }
+
+    /// How many project rows the run strip draws.
+    ///
+    /// The strip had no cap at all, which was invisible until there was
+    /// history to draw: a 12mo window over a back-filled log renders 95 rows
+    /// (#1905 back-fill, QA-1), and this surface is a 380 pt popover. Six is
+    /// what fits under a 190 pt chart and its summary without pushing the
+    /// legend and the provenance line — the two things that explain the strip
+    /// — off the bottom.
+    ///
+    /// Lower than the web's twelve ON PURPOSE, and that is not a disagreement:
+    /// the daemon ranks `projects` by TOTAL AUTONOMOUS SECONDS, so each surface
+    /// shows a PREFIX of one shared order. Neither invents an ordering, and one
+    /// four-hour run still outranks forty three-second ones on both.
+    static let maxStripRows = 6
+
+    /// The rows actually drawn — the busiest `maxStripRows` projects.
+    var visibleProjects: [String] { Array(projects.prefix(Self.maxStripRows)) }
+
+    /// How many projects the cap left out. 0 when it did not bite.
+    var hiddenProjectCount: Int { Swift.max(0, projects.count - Self.maxStripRows) }
+
+    /// What the cap left out, named as a count rather than dropped in silence
+    /// — an omission nothing mentions is indistinguishable from a project that
+    /// never ran. It says WHY those rows are the missing ones, so the reader
+    /// knows the cap took the tail rather than an arbitrary slice.
+    var overflowLabel: String? {
+        let hidden = hiddenProjectCount
+        guard hidden > 0 else { return nil }
+        return "+\(hidden) more project\(hidden == 1 ? "" : "s"), each with less autonomous time than the rows above"
     }
 }
 
