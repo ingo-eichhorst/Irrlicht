@@ -12,7 +12,7 @@ source "$_DRIVE_LIB/slots.sh"
 SESSION=""
 SES_SESSION=()
 SES_CWD=()
-SES_ALIVE=()
+SES_OWNED=()
 N_SLOTS=0
 ACTIVE=0
 RUN_CWD="$STAGING/cwd"

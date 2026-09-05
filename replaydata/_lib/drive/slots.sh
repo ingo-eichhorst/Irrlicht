@@ -8,7 +8,7 @@
 # The sourcing driver owns these globals — this lib only reads/writes them:
 #   View vars  : SESSION TRANSCRIPT UUID EXPECTED_TURNS MARKER ACTIVE
 #   Slot arrays: SES_SESSION SES_TRANSCRIPT SES_UUID SES_EXPECTED SES_MARKER
-#                SES_CWD SES_ALIVE   (1-based; index 0 unused)
+#                SES_CWD SES_OWNED   (1-based; index 0 unused)
 #   Counter    : N_SLOTS
 #   Paths      : STAGING, plus DRIVE_MARKER_PREFIX (per-slot marker path stem;
 #                defaults to "$STAGING/.start-marker" when unset)
@@ -62,8 +62,8 @@ alloc_slot() {
   SES_MARKER[$N_SLOTS]="$marker"
   # shellcheck disable=SC2034  # written here for the DRIVERS that read it — the slot's cwd is used to launch and to locate the agent process (e.g. replaydata/agents/antigravity/driver-interactive.sh's tmux -c and claudecode's per-cwd slot lookup)
   SES_CWD[$N_SLOTS]="$cwd"
-  # shellcheck disable=SC2034  # written here for the DRIVERS that read it — the teardown/summary arms branch on it (e.g. replaydata/agents/antigravity, claudecode, codex, gemini-cli, kiro-cli driver-interactive.sh)
-  SES_ALIVE[$N_SLOTS]=1
+  # shellcheck disable=SC2034  # written here for the DRIVERS that read it — kiro-cli and antigravity legitimately branch on it as a retired-slot guard (reset_session/resume can alias a retired slot's tmux pane to a different, still-live slot); every other driver keeps it write-only since #1825 (teardown gates on session-name presence instead)
+  SES_OWNED[$N_SLOTS]=1
   ACTIVE=$N_SLOTS
   SESSION="$sess"
   TRANSCRIPT=""

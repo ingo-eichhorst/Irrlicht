@@ -19,7 +19,8 @@
 # #1825: every recording whose recipe ended in `exit_clean` left a live agent
 # process and its detached tmux session behind, for months, because the only
 # thing that ever claimed the session was gone was the driver ASSERTING it —
-# `sleep 1; SES_ALIVE=0`. run-cell.sh then wrote a `complete` manifest over the
+# `sleep 1; SES_OWNED=0` (the flag was called SES_ALIVE until #1828 renamed it
+# for saying "alive" about something nobody observed). run-cell.sh then wrote a `complete` manifest over the
 # top. Nothing in the rig ever asked tmux.
 #
 # So this is the same treatment #1333 gave `driver.exit-reason`: the driver's

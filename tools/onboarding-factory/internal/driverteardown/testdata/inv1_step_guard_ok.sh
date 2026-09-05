@@ -2,14 +2,14 @@
 # MUST NOT BE FLAGGED — kiro-cli's shape, and the reason INV-1 is structural
 # rather than textual.
 #
-# step_exit_clean and step_sigkill open with an SES_ALIVE guard AND kill a
+# step_exit_clean and step_sigkill open with an SES_OWNED guard AND kill a
 # session inside it. Those guards are CORRECT: reset_session hands a new slot
 # the SAME tmux pane as an old one, so an already-retired slot NUMBER can alias
 # a pane a different, still-live slot now owns, and a recipe re-targeting the
 # old number must not tear the live session down.
 #
 # Teardown itself — the trap handler and the end-of-run sweep — is ungated, so
-# the file is clean. A rule keyed on "SES_ALIVE near a kill-session" would fail
+# the file is clean. A rule keyed on "SES_OWNED near a kill-session" would fail
 # this driver, and a finding against a driver that is right is the kind that
 # gets a rule ignored rather than fixed.
 set -euo pipefail
@@ -19,7 +19,7 @@ source "$_DRIVE_LIB/slots.sh"
 SESSION=""
 SES_SESSION=()
 SES_CWD=()
-SES_ALIVE=()
+SES_OWNED=()
 N_SLOTS=0
 ACTIVE=0
 EXIT_REASON="ok"
@@ -47,18 +47,18 @@ launch_repl() {
 }
 
 step_exit_clean() {
-  if [[ "${SES_ALIVE[$ACTIVE]:-0}" != "1" ]]; then
+  if [[ "${SES_OWNED[$ACTIVE]:-0}" != "1" ]]; then
     echo "[driver] exit_clean[s$ACTIVE]: slot already retired -- refusing" >&2
     return 0
   fi
   tmux send-keys -t "$SESSION" C-d
-  SES_ALIVE[$ACTIVE]=0
+  SES_OWNED[$ACTIVE]=0
 }
 
 step_sigkill() {
-  if [[ "${SES_ALIVE[$ACTIVE]:-0}" == "1" ]]; then
+  if [[ "${SES_OWNED[$ACTIVE]:-0}" == "1" ]]; then
     tmux kill-session -t "$SESSION" 2>/dev/null || true
-    SES_ALIVE[$ACTIVE]=0
+    SES_OWNED[$ACTIVE]=0
   fi
 }
 

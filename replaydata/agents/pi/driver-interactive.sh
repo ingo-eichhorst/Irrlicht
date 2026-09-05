@@ -136,7 +136,8 @@ EXPECTED_TURNS=0
 MARKER=""
 
 # Per-slot state (1-based; index 0 unused). Each slot is one session
-# lifetime. SES_ALIVE[i]=1 while its tmux session is still running.
+# lifetime. SES_OWNED[i]=1 while this driver still owns (has not retired) the
+# slot's tmux session.
 SES_SESSION=()
 SES_TRANSCRIPT=()
 SES_UUID=()
@@ -145,7 +146,7 @@ SES_EXPECTED=()
 # shellcheck disable=SC2034  # driver-owned slot array; the sourced replaydata/_lib/drive/slots.sh reads it (save_active/load_slot/alloc_slot)
 SES_MARKER=()
 SES_CWD=()
-SES_ALIVE=()
+SES_OWNED=()
 N_SLOTS=0
 ACTIVE=0
 
@@ -164,11 +165,11 @@ source "$_DRIVE_LIB/teardown.sh"
 
 # Always honor the staging contract: write driver.exit-reason on ANY exit
 # (including a `set -e` abort mid-launch) and tear down EVERY tmux session this
-# run allocated. Gated on session-name PRESENCE, never on SES_ALIVE (#1825):
-# SES_ALIVE is the driver's INTENT — nothing re-derives it from `tmux
-# has-session` — so a step that wrongly believed it killed a session would
-# otherwise take the last net down with it. kill-session on an already-dead
-# name is a harmless no-op, which is exactly why presence is the right gate.
+# run allocated. Gated on session-name PRESENCE, never on SES_OWNED (#1825):
+# nothing re-derives that array from `tmux has-session`, so a step that wrongly
+# believed it killed a session would otherwise take the last net down with it.
+# kill-session on an already-dead name is a harmless no-op, which is exactly
+# why presence is the right gate.
 # Same shape as scripts/templates/drive-interactive.sh.tmpl:147-154.
 #
 # emit_session_contract (contracts.sh) ALSO writes driver.exit-reason on the
@@ -362,7 +363,7 @@ step_exit_clean() {
   # first press, so it can't be used here.)
   tmux send-keys -t "$SESSION" C-d
   # STRICT poll (#1825): the old best-effort wait_tmux_session_gone returns 0
-  # even when the cap expires with the session still up, and SES_ALIVE=0 was set
+  # even when the cap expires with the session still up, and SES_OWNED=0 was set
   # regardless — so an exit key that stopped working (as claude's did) read
   # exactly like one that worked, and the run still reported exit-reason=ok.
   # Cap: DRIVE_EXIT_CLEAN_CAP_S (_lib/drive/teardown.sh). This site passed 2s
@@ -372,14 +373,14 @@ step_exit_clean() {
   # fleet-uniform generous bound, and that constant carries how the number was
   # arrived at: it is a bound, not a measurement.
   if require_tmux_session_gone "$SESSION" "$DRIVE_EXIT_CLEAN_CAP_S"; then
-    SES_ALIVE[$ACTIVE]=0
+    SES_OWNED[$ACTIVE]=0
     echo "[driver] exit_clean[s$ACTIVE]: sent Ctrl-D to $SESSION (session gone)" >&2
   else
     echo "[driver] exit_clean[s$ACTIVE]: FAILED — $SESSION still alive ${DRIVE_EXIT_CLEAN_CAP_S}s after Ctrl-D;" \
          "killing it explicitly. pi did NOT shut down gracefully, so this" \
          "recording has no real clean-exit process_exited." >&2
     tmux kill-session -t "$SESSION" 2>/dev/null || true
-    SES_ALIVE[$ACTIVE]=0
+    SES_OWNED[$ACTIVE]=0
     EXIT_REASON="nonzero(2)"
   fi
 }
@@ -450,7 +451,7 @@ swap_after_slash() {
   # the epilogue flushes its session_id. The process keeps running (the
   # new slot reuses its tmux), so its tmux is killed exactly once at
   # teardown.
-  SES_ALIVE[$ACTIVE]=0
+  SES_OWNED[$ACTIVE]=0
   echo "[driver] swap ($slash): recorded old session sid=$(daemon_sid "$TRANSCRIPT")" >&2
 
   tmux send-keys -t "$old_tmux" -l -- "$slash"
@@ -464,8 +465,8 @@ swap_after_slash() {
   # wait_turn pair counts turns in the UUID-2 file from scratch.
   sleep 1
   alloc_slot "$old_tmux" "$old_cwd"
-  # shellcheck disable=SC2034  # SES_ALIVE is deliberately write-only in this file since #1825 — both teardown nets (cleanup() and the end-of-run loop) now gate on session-name PRESENCE, because gating them on this flag is exactly what leaked a live agent + tmux session per exit_clean run. It stays as the fleet's shared slot vocabulary (the sourced replaydata/_lib/drive/slots.sh:66 sets it; kiro-cli's driver-interactive.sh:552 exit_clean entry guard and antigravity's :505 resume branch do branch on their own copies) and as the per-step record of what the driver BELIEVES about each slot.
-  SES_ALIVE[$ACTIVE]=1
+  # shellcheck disable=SC2034  # SES_OWNED is write-only here since #1825 — teardown now gates on session-name PRESENCE instead of this flag, which is exactly what leaked a live agent + tmux session per exit_clean run. kiro-cli:567 and antigravity:537 legitimately branch on their own copies (a retired-slot guard).
+  SES_OWNED[$ACTIVE]=1
   touch "$MARKER"
   echo "[driver] swap ($slash): new slot #${ACTIVE}, marker bumped, awaiting new rollout" >&2
   sleep 1
@@ -600,9 +601,10 @@ sleep 0.5
 # session path — successful scripts end on wait_turn (or interrupt+turn-
 # done, or exit_clean) so there's nothing in-flight to interrupt; sending
 # /exit or Ctrl-C here would just leave extra noise in the captured pane.
-# Gated on session-name PRESENCE, not on SES_ALIVE (#1825): SES_ALIVE is what
-# the driver BELIEVES, and a step that cleared it for a session still running
-# made this loop skip the one kill that would have caught the leak.
+# Gated on session-name PRESENCE, not on SES_OWNED (#1825): SES_OWNED records
+# what the driver believes it still owns, and a step that cleared ownership for
+# a session still running made this loop skip the one kill that would have
+# caught the leak.
 for (( i = 1; i <= N_SLOTS; i++ )); do
   if [[ -n "${SES_SESSION[$i]:-}" ]]; then
     tmux kill-session -t "${SES_SESSION[$i]}" 2>/dev/null || true

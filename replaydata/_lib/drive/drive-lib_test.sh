@@ -48,7 +48,7 @@ SES_MARKER=()
 # shellcheck disable=SC2034  # driver-owned slot array written by the sourced replaydata/_lib/drive/slots.sh:63 (alloc_slot); kept current here for the shared slot model
 SES_CWD=()
 # shellcheck disable=SC2034  # driver-owned slot array written by the sourced replaydata/_lib/drive/slots.sh:64 (alloc_slot); kept current here for the shared slot model
-SES_ALIVE=()
+SES_OWNED=()
 N_SLOTS=0; ACTIVE=0
 SESSION=""; TRANSCRIPT=""; UUID=""; EXPECTED_TURNS=0; MARKER=""
 

@@ -15,7 +15,7 @@ INV-1 testdata/inv1_gated_final_sweep.sh:51: this top-level teardown is gated on
 
 === fixture/inv1_gated_trap.sh ===
 INV-1 testdata/inv1_gated_trap.sh:29: this teardown inside the EXIT-trap handler cleanup() is gated on a liveness flag. That flag is a driver INTENT, not an observation — nothing anywhere re-derives it from `tmux has-session` — so a step that asked the TUI to exit and was not obeyed clears it, teardown skips the kill, and the pane plus the agent process survive the run while driver.exit-reason still says ok. Gate on session-name PRESENCE instead: `[[ -n "${SES_SESSION[$i]:-}" ]]`, the shape scripts/templates/drive-interactive.sh.tmpl already ships.
-    [[ "${SES_ALIVE[$i]:-0}" == "1" ]] && tmux kill-session -t "${SES_SESSION[$i]}" 2>/dev/null || true
+    [[ "${SES_OWNED[$i]:-0}" == "1" ]] && tmux kill-session -t "${SES_SESSION[$i]}" 2>/dev/null || true
 
 === fixture/inv1_step_dispatch_case_arm_ok.sh ===
 CLEAN

@@ -5,7 +5,7 @@
 # copilot's step dispatch is a TOP-LEVEL `while … case`, not a function, so its
 # per-step kills sit at Func == "" and a rule reading "top level" as "the
 # end-of-run sweep" graded them as teardown. They are ungated in copilot today
-# so nothing fired — but the kiro-cli-shaped SES_ALIVE entry check that this
+# so nothing fired — but the kiro-cli-shaped SES_OWNED entry check that this
 # package deliberately ACCEPTS at step level (correct there, because
 # reset_session aliases a retired slot onto a live pane) would have been a false
 # positive the moment copilot, hermes, mistral-vibe or antigravity needed one.
@@ -21,7 +21,7 @@ source "$_DRIVE_LIB/slots.sh"
 SESSION=""
 SES_SESSION=()
 SES_CWD=()
-SES_ALIVE=()
+SES_OWNED=()
 N_SLOTS=0
 ACTIVE=0
 EXIT_REASON="ok"
@@ -49,7 +49,7 @@ launch_repl
 while IFS= read -r step; do
   type="$(jq -r '.type' <<<"$step")"
   case "$type" in
-    restart)     if [[ "${SES_ALIVE[$ACTIVE]:-0}" == "1" ]]; then
+    restart)     if [[ "${SES_OWNED[$ACTIVE]:-0}" == "1" ]]; then
                    tmux kill-session -t "$SESSION" 2>/dev/null || true
                  fi
                  launch_repl ;;

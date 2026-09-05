@@ -179,14 +179,15 @@ EXPECTED_TURNS=0
 MARKER=""
 
 # Per-slot state (1-based; index 0 unused). Each slot is one session lifetime.
-# SES_ALIVE[i]=1 while its tmux session is still running.
+# SES_OWNED[i]=1 while this driver still owns (has not retired) the slot's tmux
+# session.
 SES_SESSION=()
 SES_TRANSCRIPT=()
 SES_UUID=()
 SES_EXPECTED=()
 SES_MARKER=()
 SES_CWD=()
-SES_ALIVE=()
+SES_OWNED=()
 N_SLOTS=0
 ACTIVE=0
 
@@ -233,13 +234,13 @@ not_implemented() { # <step-type>
 # run allocated. Set EXIT_REASON before a failing `exit` so the reason is
 # accurate.
 #
-# Gated on session-name PRESENCE, never on SES_ALIVE (#1825). This trap used to
+# Gated on session-name PRESENCE, never on SES_OWNED (#1825). This trap used to
 # gate on the same optimistic flag as the end-of-run loop below, so kiro-cli had
 # two teardown nets and BOTH were switched off by whichever step wrongly cleared
-# it — the leak claudecode shipped. SES_ALIVE is the driver's INTENT; nothing
-# re-derives it from `tmux has-session`. kill-session on an already-dead name
-# (including the name a reset_session slot shares with its successor) is a
-# harmless no-op, which is exactly why presence is the right gate. Same shape as
+# it — the leak claudecode shipped. Nothing re-derives SES_OWNED from `tmux
+# has-session`. kill-session on an already-dead name (including the name a
+# reset_session slot shares with its successor) is a harmless no-op, which is
+# exactly why presence is the right gate. Same shape as
 # scripts/templates/drive-interactive.sh.tmpl:147-154.
 # BEGIN cleanup
 cleanup() {
@@ -498,7 +499,7 @@ step_rewind_fork() {
       # shellcheck disable=SC2034  # driver-owned slot array; the sourced replaydata/_lib/drive/slots.sh reads it (save_active/load_slot/alloc_slot)
       SES_MARKER[$N_SLOTS]="$MARKER"
       SES_CWD[$N_SLOTS]="${SES_CWD[$ACTIVE]}"
-      SES_ALIVE[$N_SLOTS]=1
+      SES_OWNED[$N_SLOTS]=1
       ACTIVE=$N_SLOTS
       TRANSCRIPT="${SES_TRANSCRIPT[$ACTIVE]}"
       UUID="$child_uuid"
@@ -557,13 +558,13 @@ step_interrupt() {
 # before the next step. Unlike claudecode/codex (Ctrl-D), kiro binds the exit to
 # the /quit command, not to Ctrl-D — though Ctrl-D also works.
 #
-# Guard: refuse a slot already marked retired (SES_ALIVE=0). reset_session
+# Guard: refuse a slot already marked retired (SES_OWNED=0). reset_session
 # reuses the SAME tmux/process for its new slot, so an already-retired slot
 # number can alias the tmux pane a DIFFERENT, still-live slot now owns — a
 # recipe mistakenly re-targeting the old slot number for teardown must not
 # be allowed to /quit the live post-reset session out from under it.
 step_exit_clean() {
-  if [[ "${SES_ALIVE[$ACTIVE]:-0}" != "1" ]]; then
+  if [[ "${SES_OWNED[$ACTIVE]:-0}" != "1" ]]; then
     echo "[driver] exit_clean[s$ACTIVE]: slot already retired -- refusing (its tmux/process may be owned by another live slot)" >&2
     return 0
   fi
@@ -572,7 +573,7 @@ step_exit_clean() {
   sleep 0.3
   tmux send-keys -t "$SESSION" Enter
   # STRICT poll (#1825): the old best-effort wait_tmux_session_gone returns 0
-  # even when the cap expires with the session still up, and SES_ALIVE=0 was set
+  # even when the cap expires with the session still up, and SES_OWNED=0 was set
   # regardless — so a /quit that stopped working would read exactly like one
   # that worked, and the run would still report exit-reason=ok.
   # Cap: DRIVE_EXIT_CLEAN_CAP_S (_lib/drive/teardown.sh). This site passed 2s
@@ -582,14 +583,14 @@ step_exit_clean() {
   # fleet-uniform generous bound, and that constant carries how the number was
   # arrived at: it is a bound, not a measurement.
   if require_tmux_session_gone "$SESSION" "$DRIVE_EXIT_CLEAN_CAP_S"; then
-    SES_ALIVE[$ACTIVE]=0
+    SES_OWNED[$ACTIVE]=0
     echo "[driver] exit_clean[s$ACTIVE]: sent /quit to $SESSION (uuid=$UUID, session gone)" >&2
   else
     echo "[driver] exit_clean[s$ACTIVE]: FAILED — $SESSION still alive ${DRIVE_EXIT_CLEAN_CAP_S}s after /quit;" \
          "killing it explicitly. kiro-cli did NOT shut down gracefully, so this" \
          "recording has no real clean-exit process_exited." >&2
     tmux kill-session -t "$SESSION" 2>/dev/null || true
-    SES_ALIVE[$ACTIVE]=0
+    SES_OWNED[$ACTIVE]=0
     EXIT_REASON="$NONZERO_2"
   fi
 }
@@ -608,11 +609,11 @@ step_exit_clean() {
 # We then narrow to THIS slot's cwd via lsof, so a concurrent kiro-cli in a
 # different cwd (another recording, a user REPL) is never touched.
 #
-# Guard: refuse a slot already marked retired (SES_ALIVE=0) — see the
+# Guard: refuse a slot already marked retired (SES_OWNED=0) — see the
 # identical guard + rationale on step_exit_clean above (reset_session aliases
 # an old slot number to a live slot's tmux/process).
 step_sigkill() {
-  if [[ "${SES_ALIVE[$ACTIVE]:-0}" != "1" ]]; then
+  if [[ "${SES_OWNED[$ACTIVE]:-0}" != "1" ]]; then
     echo "[driver] sigkill[s$ACTIVE]: slot already retired -- refusing (its tmux/process may be owned by another live slot)" >&2
     return 0
   fi
@@ -644,7 +645,7 @@ step_sigkill() {
     echo "[driver] sigkill[s$ACTIVE]: no kiro-cli PID found for cwd=$slot_cwd (uuid=$UUID)" >&2
   fi
   sigkill_and_wait "$pid" 1
-  SES_ALIVE[$ACTIVE]=0
+  SES_OWNED[$ACTIVE]=0
 }
 
 # --- TEARDOWN SEAM C: restart ------------------------------------------------
@@ -660,7 +661,7 @@ step_sigkill() {
 step_restart() {
   resolve_transcript || true
   save_active
-  SES_ALIVE[$ACTIVE]=0
+  SES_OWNED[$ACTIVE]=0
   tmux kill-session -t "$SESSION" 2>/dev/null || true
   sleep 1
   local idx=$(( N_SLOTS + 1 ))
@@ -688,7 +689,7 @@ step_resume() {
   local resume_uuid="$UUID"
   local saved_transcript="$TRANSCRIPT"
 
-  if [[ "${SES_ALIVE[$ACTIVE]:-0}" == "1" ]]; then
+  if [[ "${SES_OWNED[$ACTIVE]:-0}" == "1" ]]; then
     tmux send-keys -t "$SESSION" -l -- "/quit"
     sleep 0.3
     tmux send-keys -t "$SESSION" Enter
@@ -702,7 +703,7 @@ step_resume() {
   # (re-finding could race the new PID before it re-opens the .jsonl).
   SESSION="kiro-clidrv-$$-$(date +%s)-r${ACTIVE}"
   SES_SESSION[$ACTIVE]="$SESSION"
-  SES_ALIVE[$ACTIVE]=1
+  SES_OWNED[$ACTIVE]=1
 
   if [[ -n "$resume_uuid" ]]; then
     echo "[driver] resume[s$ACTIVE]: relaunch kiro-cli --resume-id $resume_uuid (same .jsonl=$saved_transcript)" >&2
@@ -710,7 +711,7 @@ step_resume() {
   else
     echo "[driver] resume[s$ACTIVE]: UUID unknown — cannot resume; aborting" >&2
     EXIT_REASON="nonzero(3)"
-    SES_ALIVE[$ACTIVE]=0
+    SES_OWNED[$ACTIVE]=0
     return 3
   fi
 }
@@ -739,8 +740,8 @@ step_resume() {
 #      `-newer "$MARKER"` filter would then never match it. So the new slot
 #      (and its marker) is allocated FIRST, with a settle sleep, THEN the
 #      slash is sent.
-#   2. The OLD slot is not marked dead (SES_ALIVE=0) until the swap is
-#      fully durable (new slot allocated+alive+resolved). If `tmux send-keys`
+#   2. The OLD slot is not marked retired (SES_OWNED=0) until the swap is
+#      fully durable (new slot allocated+owned+resolved). If `tmux send-keys`
 #      or anything else aborts the script mid-swap, the old slot's tmux
 #      session is the ONLY live resource and must still be reachable by
 #      `cleanup`'s EXIT-trap sweep — retiring it early (before the new slot
@@ -775,7 +776,7 @@ step_reset_session() {
   # BEFORE the new .jsonl's (1s mtime granularity: a same-second tie would
   # make `-newer "$MARKER"` never match).
   alloc_slot "$old_tmux" "$old_cwd"
-  SES_ALIVE[$ACTIVE]=1
+  SES_OWNED[$ACTIVE]=1
   sleep 1
 
   # Rewire this pane's tmux pipe-pane capture to the NEW slot's stdout file.
@@ -795,7 +796,7 @@ step_reset_session() {
   # Only now retire the old slot number — the new slot is fully live and
   # owns the shared tmux/process, so an abort from here on still tears down
   # via the (still-tracked) new slot's entry.
-  SES_ALIVE[$old_slot]=0
+  SES_OWNED[$old_slot]=0
 
   # allow-empty: the new .jsonl is created EMPTY the instant /chat new runs
   # and only gains content once a turn completes (kiro's own timing, not a
@@ -915,7 +916,7 @@ done
 sleep 0.5
 
 # Tear down every session this run allocated — gated on session-name PRESENCE,
-# not on SES_ALIVE (#1825), for the same reason cleanup() above is. This is the
+# not on SES_OWNED (#1825), for the same reason cleanup() above is. This is the
 # second of the two nets; before #1825 both gated on the same optimistic flag.
 for (( i = 1; i <= N_SLOTS; i++ )); do
   if [[ -n "${SES_SESSION[$i]:-}" ]]; then
