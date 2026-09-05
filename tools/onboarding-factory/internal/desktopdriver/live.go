@@ -47,9 +47,13 @@ type LiveRuntime struct {
 	deepLinkOpened  bool
 	openDeepLink    func(context.Context, string) error
 	frontDesktop    func(context.Context) error
-	processExists   func(int) (bool, error)
-	listProcesses   func(context.Context) (map[int]struct{}, error)
-	observeProcess  func(context.Context, int) (string, error)
+	// foreignTrustPrompt records that a workspace trust sheet was ALREADY open
+	// when CaptureBaseline ran, before this driver opened anything. Only such a
+	// prompt is someone else's; one that appears afterwards is the driver's own.
+	foreignTrustPrompt bool
+	processExists      func(int) (bool, error)
+	listProcesses      func(context.Context) (map[int]struct{}, error)
+	observeProcess     func(context.Context, int) (string, error)
 }
 
 func NewLiveRuntime(options LiveOptions, stepLog string) (*LiveRuntime, error) {
@@ -151,6 +155,16 @@ func (runtime *LiveRuntime) CaptureBaseline(ctx context.Context) (Baseline, erro
 		return Baseline{}, fmt.Errorf("capture process baseline: %w", err)
 	}
 	runtime.processBaseline = processes
+	// Is a workspace trust sheet already up? The accessibility tree never names
+	// the folder it asks about, so this is the only moment the driver can tell
+	// a foreign prompt from the one its own deep link is about to raise.
+	// An unreadable tree here must not read as "no prompt": that is the
+	// permissive answer, so it is an error.
+	elements, inspectErr := runtime.helper.inspect(ctx)
+	if inspectErr != nil {
+		return Baseline{}, fmt.Errorf("capture Desktop trust-prompt baseline: %w", inspectErr)
+	}
+	_, runtime.foreignTrustPrompt = trustPromptButton(elements)
 	ids := make(map[string]struct{}, len(sessions))
 	for _, session := range sessions {
 		ids[session.SessionID] = struct{}{}
@@ -214,7 +228,7 @@ func openOfficialDesktopURL(ctx context.Context, deepLink string) error {
 func (runtime *LiveRuntime) WaitComposer(ctx context.Context, workspace string) error {
 	controls, err := waitForComposerControls(
 		ctx, workspace, runtime.helper.inspect, runtime.helper.probe, runtime.helper.click,
-		runtime.RecordStep, runtime.front)
+		runtime.RecordStep, runtime.front, runtime.foreignTrustPrompt)
 	if err == nil {
 		runtime.controls = controls
 	}
@@ -229,11 +243,11 @@ func waitForComposerControls(
 	click func(context.Context, helperSelector, helperPostcondition) error,
 	recordStep func(string),
 	activate func(context.Context) error,
+	foreignPrompt bool,
 ) (map[string]helperSelector, error) {
 	var controls map[string]helperSelector
 	var lastMismatch error
 	trusted := false
-	sawNoPrompt := false
 	err := poll(ctx, "verified Desktop composer controls", func() (bool, error) {
 		// Front FIRST, every tick. Desktop stops exposing the composer when it
 		// is backgrounded, and anything on the operator's machine can take
@@ -256,22 +270,17 @@ func waitForComposerControls(
 		// composer wait is not this run's own scratch folder being trusted, so
 		// it is a stop rather than another click.
 		confirm, prompted := trustPromptButton(elements)
-		if !prompted {
-			// The wait has now seen the app with no trust sheet up. Only a
-			// prompt that appears AFTER this can be the one the driver's own
-			// deep link raised.
-			sawNoPrompt = true
-		}
 		if prompted {
-			if !sawNoPrompt {
+			if foreignPrompt {
 				// A sheet that was already up when this wait began is not ours.
 				// The tree does not name the folder it asks about, so clicking
 				// it would grant persistent trust to a workspace someone else
 				// opened — a grant nothing here restores, VerifyBaseline cannot
 				// see, and the evidence does not record. Refuse by name.
 				return false, fmt.Errorf(
-					"a Claude Desktop workspace trust prompt was already open before this run "+
-						"asked for %q; refusing to answer a prompt this driver did not raise",
+					"a Claude Desktop workspace trust prompt was already open when this run "+
+						"captured its baseline, before it asked for %q; refusing to answer a "+
+						"prompt this driver did not raise",
 					workspace)
 			}
 			if trusted {
