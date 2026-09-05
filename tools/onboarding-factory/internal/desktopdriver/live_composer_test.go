@@ -96,13 +96,13 @@ func TestComposerWaitAnswersTheWorkspaceTrustPrompt(t *testing.T) {
 	controls, err := waitForComposerControls(
 		ctx,
 		"/repo/workspace",
-		func(context.Context) ([]helperElement, error) {
+		afterAPromptFreeLook(func(context.Context) ([]helperElement, error) {
 			inspections++
 			if answered == 0 {
 				return trustPromptElements(trustConfirmTitle, trustCancelTitle, false), nil
 			}
 			return archiveFixtureElements("workspace", "Owned"), nil
-		},
+		}),
 		func(context.Context, map[string]helperSelector) error { return nil },
 		func(_ context.Context, selector helperSelector, post helperPostcondition) error {
 			if selector.Title != trustConfirmTitle {
@@ -140,9 +140,9 @@ func TestComposerWaitRefusesASecondTrustPrompt(t *testing.T) {
 	_, err := waitForComposerControls(
 		ctx,
 		"/repo/workspace",
-		func(context.Context) ([]helperElement, error) {
+		afterAPromptFreeLook(func(context.Context) ([]helperElement, error) {
 			return trustPromptElements(trustConfirmTitle, trustCancelTitle, false), nil
-		},
+		}),
 		func(context.Context, map[string]helperSelector) error { return nil },
 		func(context.Context, helperSelector, helperPostcondition) error { clicks++; return nil },
 		func(string) {},
@@ -188,12 +188,12 @@ func TestComposerWaitRetriesATrustClickThatMissedTheAnimatingSheet(t *testing.T)
 	controls, err := waitForComposerControls(
 		ctx,
 		"/repo/workspace",
-		func(context.Context) ([]helperElement, error) {
+		afterAPromptFreeLook(func(context.Context) ([]helperElement, error) {
 			if attempts < 2 {
 				return trustPromptElements(trustConfirmTitle, trustCancelTitle, false), nil
 			}
 			return archiveFixtureElements("workspace", "Owned"), nil
-		},
+		}),
 		func(context.Context, map[string]helperSelector) error { return nil },
 		func(context.Context, helperSelector, helperPostcondition) error {
 			attempts++
@@ -228,9 +228,9 @@ func TestComposerWaitRetriesEveryTrustClickFailure(t *testing.T) {
 	_, err := waitForComposerControls(
 		ctx,
 		"/repo/workspace",
-		func(context.Context) ([]helperElement, error) {
+		afterAPromptFreeLook(func(context.Context) ([]helperElement, error) {
 			return trustPromptElements(trustConfirmTitle, trustCancelTitle, false), nil
-		},
+		}),
 		func(context.Context, map[string]helperSelector) error { return nil },
 		func(context.Context, helperSelector, helperPostcondition) error {
 			return errors.New("helper permission_denied: Accessibility is not trusted")
@@ -255,12 +255,12 @@ func TestComposerWaitSurvivesTheMeasuredTrustClickSequence(t *testing.T) {
 	controls, err := waitForComposerControls(
 		ctx,
 		"/repo/workspace",
-		func(context.Context) ([]helperElement, error) {
+		afterAPromptFreeLook(func(context.Context) ([]helperElement, error) {
 			if attempts < len(codes) {
 				return trustPromptElements(trustConfirmTitle, trustCancelTitle, false), nil
 			}
 			return archiveFixtureElements("workspace", "Owned"), nil
-		},
+		}),
 		func(context.Context, map[string]helperSelector) error { return nil },
 		func(context.Context, helperSelector, helperPostcondition) error {
 			code := codes[attempts]
@@ -335,5 +335,93 @@ func TestComposerWaitStopsOnANonStaleHelperFailure(t *testing.T) {
 	)
 	if err == nil || !strings.Contains(err.Error(), "AX error -25200") {
 		t.Fatalf("waitForComposerControls() error = %v", err)
+	}
+}
+
+// A click that LANDS but whose confirmation fails is indistinguishable, on the
+// Go side, from a click that never landed: the helper posts the mouse event and
+// only then verifies the postcondition. Counting confirmed dismissals therefore
+// under-counts exactly the case the once-only guard exists for — and the driver
+// went on to grant trust to a SECOND, different prompt and report success.
+//
+// Only stale_control is provably pre-click: the helper's hit test refuses
+// before it posts anything. Every other failure must spend the guard.
+func TestComposerWaitGrantsTrustAtMostOnceEvenWhenConfirmationFails(t *testing.T) {
+	clicks := 0
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_, err := waitForComposerControls(
+		ctx,
+		"/repo/workspace",
+		afterAPromptFreeLook(func(context.Context) ([]helperElement, error) {
+			// A second sheet is still queued behind the first, so the prompt
+			// shape never goes away on its own.
+			return trustPromptElements(trustConfirmTitle, trustCancelTitle, false), nil
+		}),
+		func(context.Context, map[string]helperSelector) error { return nil },
+		func(context.Context, helperSelector, helperPostcondition) error {
+			clicks++
+			// The click landed; the queued sheet keeps `absent` false.
+			return errors.New("helper postcondition_failed: still present")
+		},
+		func(string) {},
+	)
+	if err == nil {
+		t.Fatal("the wait reported success after answering a trust prompt it could not confirm")
+	}
+	if clicks != 1 {
+		t.Fatalf("granted trust %d times; a click that may have landed must spend the "+
+			"once-only guard, so exactly 1 is allowed", clicks)
+	}
+	if !strings.Contains(err.Error(), "second workspace trust prompt") {
+		t.Fatalf("the refusal must name the second prompt; got %v", err)
+	}
+}
+
+// afterAPromptFreeLook wraps an inspect function so the FIRST observation shows
+// the app with no trust sheet up. That is what a real run sees: `open` returns
+// as soon as LaunchServices accepts the deep link, and Desktop raises its trust
+// sheet a moment later. The wait refuses a prompt that was already up, so a
+// fixture that shows one from the very first look is testing the refusal, not
+// the grant.
+func afterAPromptFreeLook(
+	inspect func(context.Context) ([]helperElement, error),
+) func(context.Context) ([]helperElement, error) {
+	looked := false
+	return func(ctx context.Context) ([]helperElement, error) {
+		if !looked {
+			looked = true
+			return nil, nil
+		}
+		return inspect(ctx)
+	}
+}
+
+// A trust sheet that was already open when the run began is not this driver's.
+// The accessibility tree does not name the folder it asks about, so answering
+// it would grant persistent trust to a workspace someone else opened — a grant
+// nothing restores and VerifyBaseline cannot see.
+func TestComposerWaitRefusesATrustPromptThatPredatesTheRun(t *testing.T) {
+	clicks := 0
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_, err := waitForComposerControls(
+		ctx,
+		"/repo/workspace",
+		func(context.Context) ([]helperElement, error) {
+			return trustPromptElements(trustConfirmTitle, trustCancelTitle, false), nil
+		},
+		func(context.Context, map[string]helperSelector) error { return nil },
+		func(context.Context, helperSelector, helperPostcondition) error {
+			clicks++
+			return nil
+		},
+		func(string) {},
+	)
+	if clicks != 0 {
+		t.Fatalf("clicked a prompt this run did not raise (%d times)", clicks)
+	}
+	if err == nil || !strings.Contains(err.Error(), "already open before this run") {
+		t.Fatalf("the refusal must name the pre-existing prompt; got %v", err)
 	}
 }
