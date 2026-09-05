@@ -58,6 +58,20 @@ func runManagedFileOracle(args []string) error {
 	return buildManagedFileOracle(value)
 }
 
+// oracleBuild is what a managed-file oracle build resolves once and then
+// reuses for every subset of Apply closures: the caller's options, the
+// parsed baseline manifest, the Claude Code agent's declaration, the managed
+// paths it declares (read while HOME is still the real recorder's HOME, so
+// they name the real paths, not a shadow), and the Modify permissions whose
+// Apply closures the oracle exercises.
+type oracleBuild struct {
+	options          managedFileOracleOptions
+	entries          []managedFileEntry
+	declaration      agent.Agent
+	realPaths        []string
+	applyPermissions []agent.Permission
+}
+
 func buildManagedFileOracle(options managedFileOracleOptions) error {
 	if err := validateOracleOptions(options); err != nil {
 		return err
@@ -75,16 +89,7 @@ func buildManagedFileOracle(options managedFileOracleOptions) error {
 			_ = os.RemoveAll(options.outputDir)
 		}
 	}()
-	declaration := claudecode.Agent()
-	applyPermissions := managedApplyPermissions(declaration)
-	if len(applyPermissions) == 0 || len(applyPermissions) > maxOracleApplyPermissions {
-		return fmt.Errorf(
-			"Claude Code declares %d managed Apply closures; expected 1..%d",
-			len(applyPermissions),
-			maxOracleApplyPermissions,
-		)
-	}
-	realPaths, err := declaredManagedPaths(declaration)
+	build, err := newOracleBuild(options, entries)
 	if err != nil {
 		return err
 	}
@@ -95,50 +100,68 @@ func buildManagedFileOracle(options managedFileOracleOptions) error {
 	if err := os.Setenv(daemonaddr.EnvBindAddr, options.bindAddress); err != nil {
 		return err
 	}
-	statesDir := filepath.Join(options.outputDir, "states")
-	if err := os.Mkdir(statesDir, 0o700); err != nil {
-		return fmt.Errorf("create oracle states directory: %w", err)
-	}
-	allMask := (1 << len(applyPermissions)) - 1
-	for mask := 0; mask <= allMask; mask++ {
-		stateDir := filepath.Join(statesDir, strconv.Itoa(mask))
-		shadowHome := filepath.Join(options.outputDir, ".shadow-"+strconv.Itoa(mask))
-		if err := buildOracleVariant(
-			options.baselineDir,
-			stateDir,
-			options.realHome,
-			shadowHome,
-			declaration,
-			entries,
-			realPaths,
-			applyPermissions,
-			mask,
-		); err != nil {
-			return fmt.Errorf("build oracle state %d: %w", mask, err)
-		}
-	}
-	if err := copyOracleState(
-		filepath.Join(statesDir, strconv.Itoa(allMask)),
-		options.outputDir,
-		entries,
-	); err != nil {
+	if err := build.writeEveryApplySubset(); err != nil {
 		return err
 	}
 	complete = true
 	return nil
 }
 
-func buildOracleVariant(
-	baselineDir string,
-	stateDir string,
-	realHome string,
-	shadowHome string,
-	declaration agent.Agent,
-	entries []managedFileEntry,
-	realPaths []string,
-	applyPermissions []agent.Permission,
-	mask int,
-) error {
+// newOracleBuild resolves the agent declaration this oracle exercises: the
+// Modify permissions that carry an Apply closure (rejecting a count outside
+// 1..maxOracleApplyPermissions, since the mask below assumes it fits an int),
+// and the real-HOME paths those permissions declare.
+func newOracleBuild(options managedFileOracleOptions, entries []managedFileEntry) (*oracleBuild, error) {
+	declaration := claudecode.Agent()
+	applyPermissions := managedApplyPermissions(declaration)
+	if len(applyPermissions) == 0 || len(applyPermissions) > maxOracleApplyPermissions {
+		return nil, fmt.Errorf(
+			"Claude Code declares %d managed Apply closures; expected 1..%d",
+			len(applyPermissions),
+			maxOracleApplyPermissions,
+		)
+	}
+	realPaths, err := declaredManagedPaths(declaration)
+	if err != nil {
+		return nil, err
+	}
+	return &oracleBuild{
+		options:          options,
+		entries:          entries,
+		declaration:      declaration,
+		realPaths:        realPaths,
+		applyPermissions: applyPermissions,
+	}, nil
+}
+
+// writeEveryApplySubset builds one oracle state per ordered subset of the
+// Apply closures — the mask enumerates which of them ran, so recovery from a
+// permission denied partway through matches a state this oracle modeled —
+// then copies the all-applied state to the oracle's own root as the default
+// expected state.
+func (build *oracleBuild) writeEveryApplySubset() error {
+	statesDir := filepath.Join(build.options.outputDir, "states")
+	if err := os.Mkdir(statesDir, 0o700); err != nil {
+		return fmt.Errorf("create oracle states directory: %w", err)
+	}
+	allMask := (1 << len(build.applyPermissions)) - 1
+	for mask := 0; mask <= allMask; mask++ {
+		stateDir := filepath.Join(statesDir, strconv.Itoa(mask))
+		shadowHome := filepath.Join(build.options.outputDir, ".shadow-"+strconv.Itoa(mask))
+		if err := build.writeApplySubset(stateDir, shadowHome, mask); err != nil {
+			return fmt.Errorf("build oracle state %d: %w", mask, err)
+		}
+	}
+	return copyOracleState(
+		filepath.Join(statesDir, strconv.Itoa(allMask)),
+		build.options.outputDir,
+		build.entries,
+	)
+}
+
+// writeApplySubset runs the Apply closures named by mask in a fresh shadow
+// HOME and records the resulting managed-file state under stateDir.
+func (build *oracleBuild) writeApplySubset(stateDir, shadowHome string, mask int) error {
 	if err := os.Mkdir(stateDir, 0o700); err != nil {
 		return err
 	}
@@ -149,21 +172,21 @@ func buildOracleVariant(
 	if err := os.Setenv("HOME", shadowHome); err != nil {
 		return err
 	}
-	shadowPaths, err := declaredManagedPaths(declaration)
+	shadowPaths, err := declaredManagedPaths(build.declaration)
 	if err != nil {
 		return err
 	}
-	pairs, err := pairManagedPaths(realHome, shadowHome, realPaths, shadowPaths)
+	pairs, err := pairManagedPaths(build.options.realHome, shadowHome, build.realPaths, shadowPaths)
 	if err != nil {
 		return err
 	}
-	if err := materializeShadowBaseline(baselineDir, entries, pairs); err != nil {
+	if err := materializeShadowBaseline(build.options.baselineDir, build.entries, pairs); err != nil {
 		return err
 	}
-	if err := applyManagedPermissions(applyPermissions, mask); err != nil {
+	if err := applyManagedPermissions(build.applyPermissions, mask); err != nil {
 		return err
 	}
-	return writeOracleState(baselineDir, stateDir, entries, pairs)
+	return writeOracleState(build.options.baselineDir, stateDir, build.entries, pairs)
 }
 
 // validateOracleOptions checks the oracle's flags in the same order the
