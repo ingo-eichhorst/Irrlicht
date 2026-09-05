@@ -129,3 +129,53 @@ func TestPrerequisiteNamesTheSupportedDesktopVersion(t *testing.T) {
 			"anything but %q", got, supportedDesktopVersion)
 	}
 }
+
+// A basic turn drives four controls. Gating it on the two it never touches
+// made a state-dependent control decide whether the turn could start at all:
+// measured on 1.46388.4, index 6 is an AXPopUpButton "Auto" on a settled
+// composer and a plain AXGroup on one just trusted, while the four below all
+// resolve.
+func TestBasicTurnDoesNotRequireRecipeOnlyControls(t *testing.T) {
+	for _, name := range basicTurnControls() {
+		if _, known := composerPaths[name]; !known {
+			t.Fatalf("basic turn requires %q, which the catalog does not carry", name)
+		}
+	}
+	for _, recipeOnly := range []string{"mode", "model"} {
+		for _, required := range basicTurnControls() {
+			if required == recipeOnly {
+				t.Fatalf("%q is a recipe control; a basic turn must not be gated on it", recipeOnly)
+			}
+		}
+	}
+
+	// A composer whose mode row has not settled still starts a basic turn.
+	elements := []helperElement{
+		fixtureElement("environment", "AXPopUpButton", "Local", ""),
+		fixtureElement("project", "AXPopUpButton", "workspace", ""),
+		fixtureElement("prompt", "AXTextArea", "", "Prompt"),
+		fixtureElement("send", "AXButton", "", "Send"),
+		fixtureElement("mode", "AXGroup", "", ""),
+	}
+	controls, err := composerControls(elements, "/repo/workspace", basicTurnControls())
+	if err != nil {
+		t.Fatalf("composerControls() error = %v", err)
+	}
+	if len(controls) != len(basicTurnControls()) {
+		t.Fatalf("resolved %d controls, want %d", len(controls), len(basicTurnControls()))
+	}
+	// The full catalog still refuses that same tree, so nothing was weakened
+	// for the callers that do need every control.
+	if _, err := composerCatalog(elements, "/repo/workspace"); err == nil {
+		t.Fatal("the full catalog accepted an unsettled mode row")
+	}
+}
+
+// A name the catalog does not carry must refuse, not resolve fewer controls
+// than asked for.
+func TestComposerControlsRefusesAnUnknownName(t *testing.T) {
+	_, err := composerControls(nil, "/repo/workspace", []string{"nonesuch"})
+	if err == nil || !strings.Contains(err.Error(), "no \"nonesuch\" control") {
+		t.Fatalf("composerControls() error = %v", err)
+	}
+}

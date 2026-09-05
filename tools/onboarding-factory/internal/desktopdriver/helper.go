@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"sort"
 	"strings"
 )
 
@@ -114,7 +115,13 @@ func (client helperClient) inspect(ctx context.Context) ([]helperElement, error)
 }
 
 func (client helperClient) probe(ctx context.Context, controls map[string]helperSelector) error {
-	names := []string{"environment", "project", "prompt", "send", "mode", "model"}
+	// Probe exactly what the caller resolved. Probing a control the caller did
+	// not ask for reintroduces the coupling composerControls exists to remove.
+	names := make([]string, 0, len(controls))
+	for name := range controls {
+		names = append(names, name)
+	}
+	sort.Strings(names)
 	probes := make([]helperProbe, 0, len(names))
 	for _, name := range names {
 		selector, ok := controls[name]
