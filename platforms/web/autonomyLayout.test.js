@@ -30,7 +30,18 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { JSDOM } from 'jsdom';
 import { WEB_DIR } from './shippedFiles.testutil.js';
-import { autonomyPanelRows, autonomyDuration } from './historyTab.js';
+import {
+  autonomyPanelRows,
+  autonomyDuration,
+  autonomyYDomain,
+  autonomyTickValues,
+  autonomyTickPlacement,
+  autonomyBarRect,
+  autonomyBaselineY,
+  AUTONOMY_PANEL,
+  AUTONOMY_PANEL_CANVAS_H,
+  AUTONOMY_BAR_MIN_H,
+} from './historyTab.js';
 
 function read(name) {
   const body = readFileSync(join(WEB_DIR, name), 'utf8');
@@ -107,15 +118,6 @@ describe('the Autonomy section offers exactly one window control', () => {
     expect(wrap, 'index.html must hold the chart card').not.toBeNull();
     expect(wrap.contains(panels)).toBe(true);
     expect(d.querySelector('.history-panel'), 'the side panel keeps its place').not.toBeNull();
-  });
-
-  test('the stack scrolls rather than clipping its explanation', () => {
-    // Five panels plus the "+N more" line and the axis run a little past a
-    // 360px card. Clipping is the one option that silently removes the row
-    // that says what was left out.
-    const body = ruleBody('.history-autonomy-panels');
-    expect(body).toMatch(/overflow:\s*auto/);
-    expect(body).toMatch(/position:\s*absolute/);
   });
 
   // The markup and the code that shows/hides it are two files, and a rename in
@@ -314,5 +316,233 @@ describe('the two surfaces name the key the same way', () => {
       .filter((r) => r.kind)
       .map((r) => r.label);
     expect(labels).toEqual(web);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// QA of the shipped web build against the maintainer's real data found three
+// layout defects the macOS build does not have. These pin the fixes, and each
+// carries the shipped-before geometry as a committed mutation — a check that
+// could not tell the two apart would pass against the very layout it replaced.
+// ---------------------------------------------------------------------------
+
+describe('QA-1: a panel header and the topmost y tick never share a line', () => {
+  // THE DEFECT: tick labels sat in a gutter on the LEFT, drawn centred on their
+  // gridline. The top gridline is the plot's own top edge, so half of "14h34m"
+  // fell outside the canvas — sliced by the panel above, and landing on that
+  // panel's header line, where it overprinted "longest 11h39m · 15 at once".
+  //
+  // TWO INDEPENDENT HALVES OF THE FIX, and both are needed: the labels moved to
+  // the RIGHT gutter (which frees the header row's column), and the canvas
+  // gained a top inset (which keeps the topmost label inside the canvas).
+  const width = 420;
+  const domain = autonomyYDomain([
+    { buckets: [{ ts: 0, longest: 52_440, peak: 3 }, { ts: 1, longest: 120, peak: 1 }] },
+  ]);
+
+  test('every tick label is drawn in a gutter to the right of the plot', () => {
+    // Two claims, and the second is the one that distinguishes a real gutter
+    // from a nominal one: the label starts right of the plot AND fits in the
+    // room left for it. The widest figure autonomyDuration can emit is a
+    // six-character `NNdNNh`, at MONO_ADVANCE_EM per character.
+    const widest = autonomyDuration(12 * 86400 + 23 * 3600).length
+      * AUTONOMY_PANEL.tickFont * MONO_ADVANCE_EM;
+    expect(autonomyTickValues(domain)).toHaveLength(3);
+    for (const v of autonomyTickValues(domain)) {
+      const at = autonomyTickPlacement(v, domain, width);
+      expect(at.x, `${autonomyDuration(v)} is drawn at x=${at.x}, inside the plot`)
+        .toBeGreaterThanOrEqual(at.plotRight);
+      expect(at.x + widest, `the right gutter is only ${AUTONOMY_PANEL.padR}px — a tick label `
+        + `needs ${Math.ceil(widest + AUTONOMY_PANEL.tickGap)}px and would be clipped`)
+        .toBeLessThanOrEqual(width);
+    }
+  });
+
+  test('the topmost label is wholly inside the canvas, not sliced by the panel above', () => {
+    const highest = autonomyTickValues(domain).at(-1);
+    const at = autonomyTickPlacement(highest, domain, width);
+    expect(at.top, 'the top tick label spills above the canvas and lands on the header row')
+      .toBeGreaterThanOrEqual(0);
+  });
+
+  test('the lowest label is wholly inside the canvas too', () => {
+    const lowest = autonomyTickValues(domain)[0];
+    const at = autonomyTickPlacement(lowest, domain, width);
+    expect(at.bottom).toBeLessThanOrEqual(AUTONOMY_PANEL_CANVAS_H);
+  });
+
+  test('the header is a block of its own, above the canvas, not laid over it', () => {
+    // A header positioned over the plot would put the two back on one line
+    // whatever the tick geometry says.
+    const head = ruleBody('.history-autonomy-panel-head');
+    expect(head).not.toMatch(/position:\s*absolute/);
+    expect(head).toMatch(/line-height:\s*\d/);
+    expect(ruleBody('.history-autonomy-panel-canvas')).toMatch(/display:\s*block/);
+  });
+
+  // THE COMMITTED MUTATION: the shipped-before geometry — labels on the left,
+  // no top inset. Both assertions above have to reject it, or neither is
+  // measuring the defect.
+  test('the checks go red against the geometry that shipped', () => {
+    const before = { ...AUTONOMY_PANEL, padL: 46, padR: 6, padT: 0, lineH: 32 };
+    const highest = autonomyTickValues(domain).at(-1);
+    const mutated = autonomyTickPlacement(highest, domain, width, before);
+    expect(mutated.top, 'the shipped geometry drew the top label half outside the canvas')
+      .toBeLessThan(0);
+    // …and its label column was the LEFT one, under the header's project name.
+    expect(before.padL).toBeGreaterThan(before.padR);
+    expect(AUTONOMY_PANEL.padR).toBeGreaterThan(AUTONOMY_PANEL.padL);
+  });
+
+  test('the inset is derived from the tick font, not a lucky constant', () => {
+    // Half a glyph is what has to clear the edge; a smaller inset re-creates
+    // the defect for any larger tick font.
+    expect(AUTONOMY_PANEL.padT * 2).toBeGreaterThanOrEqual(AUTONOMY_PANEL.tickFont);
+  });
+});
+
+describe('QA-2: the axis and the “+N more” line are inside the rendered card', () => {
+  // THE DEFECT: the stack sat in a fixed-height card with its own scrollbar, so
+  // five panels were compressed AND clipped at once — the x axis was cut off at
+  // the bottom edge — while ~250px of page sat empty below the card.
+  const PANELS = 5;
+
+  // The stack's intrinsic height, from the same stylesheet and constants the
+  // renderer uses. Throws rather than defaulting: a rule this cannot read is
+  // one whose value nothing below can be trusted to have computed.
+  function stackHeight() {
+    const panel = ruleBody('.history-autonomy-panel');
+    const head = ruleBody('.history-autonomy-panel-head');
+    const perPanel = AUTONOMY_PANEL_CANVAS_H
+      + px(head, 'line-height', '.history-autonomy-panel-head')
+      + px(panel, 'margin-bottom', '.history-autonomy-panel');
+    const axis = px(ruleBody('.history-autonomy-axis'), 'font-size', '.history-autonomy-axis');
+    const more = px(ruleBody('.history-autonomy-more'), 'font-size', '.history-autonomy-more');
+    return PANELS * perPanel + axis + more;
+  }
+
+  test('the card releases its fixed height for this chart', () => {
+    const body = ruleBody('.history-chart-wrap.autonomy');
+    expect(body).toMatch(/height:\s*auto/);
+    // A min-height is a FLOOR (it keeps the empty state's overlay a sensible
+    // size). A max-height would be a ceiling, and a ceiling is what clipped the
+    // axis in the first place.
+    expect(body).not.toMatch(/max-height/);
+  });
+
+  test('the stack does not scroll inside the card', () => {
+    const body = ruleBody('.history-autonomy-panels');
+    expect(body).not.toMatch(/overflow:\s*auto/);
+    expect(body).not.toMatch(/overflow:\s*scroll/);
+    // …and it is in the flow rather than pinned to the card's box, which is
+    // what made the card's height a clip rectangle.
+    expect(body).toMatch(/position:\s*static/);
+    expect(body).not.toMatch(/inset:/);
+  });
+
+  test('the toggle that grows the card is actually wired', () => {
+    // A stylesheet rule nothing applies is a fix that never ships.
+    expect(js).toMatch(/classList\.toggle\('autonomy', isAutonomy\)/);
+  });
+
+  // THE COMMITTED MUTATION: the fixed-height card. The stack is taller than it,
+  // which is the whole reason the height had to go — and the two rows a
+  // scrollbar cut off first are the last two in the stack.
+  test('the stack is taller than the fixed card it used to be clipped by', () => {
+    const fixedCard = px(ruleBody('.history-chart-wrap'), 'height', '.history-chart-wrap')
+      - 2 * px(ruleBody('.history-chart-wrap'), 'padding', '.history-chart-wrap');
+    expect(stackHeight(), `five panels need ${stackHeight()}px; the fixed card offered ${fixedCard}px`)
+      .toBeGreaterThan(fixedCard);
+  });
+
+  test('the min-height floor cannot clip the stack', () => {
+    const floor = px(ruleBody('.history-chart-wrap.autonomy'), 'min-height', '.history-chart-wrap.autonomy');
+    expect(floor).toBeLessThan(stackHeight());
+  });
+
+  test('the axis is the last thing in the stack, so nothing can hide behind it', () => {
+    // Order matters for the clipping claim: the axis and the "+N more" line are
+    // appended after every panel, so a ceiling takes them first.
+    const render = /function renderAutonomyPanels\(\)[\s\S]*?\n}/.exec(js);
+    expect(render, 'fail-loud: renderAutonomyPanels not found in historyTab.js').not.toBeNull();
+    expect(render[0].indexOf('history-autonomy-more'))
+      .toBeLessThan(render[0].indexOf('buildAutonomyAxis(data)'));
+  });
+});
+
+describe('QA-3: the concurrency bars share a baseline', () => {
+  // THE DEFECT: two- or three-pixel bars with nothing to stand on scanned as
+  // dashes scattered under the line rather than as a distribution, and the
+  // tallest and the shortest looked nearly identical.
+  test('every bar stands on the same baseline', () => {
+    const heights = [1, 2, 7, 15];
+    const bottoms = new Set(heights.map((n) => autonomyBarRect(n, 15).bottom));
+    expect(bottoms.size, 'the bars do not share a foot').toBe(1);
+    expect([...bottoms][0]).toBe(autonomyBaselineY());
+  });
+
+  test('the baseline sits directly beneath the plot, at the foot of the panel', () => {
+    expect(autonomyBaselineY()).toBe(AUTONOMY_PANEL_CANVAS_H);
+    // …and immediately under the line plot, not floating below it.
+    expect(autonomyBaselineY() - AUTONOMY_PANEL.barsH)
+      .toBe(AUTONOMY_PANEL.padT + AUTONOMY_PANEL.lineH + AUTONOMY_PANEL.gap);
+  });
+
+  test('a bar of 1 and a bar of 15 are visibly different heights', () => {
+    const smallest = autonomyBarRect(1, 15).height;
+    const biggest = autonomyBarRect(15, 15).height;
+    expect(biggest - smallest,
+      `1 draws ${smallest}px and 15 draws ${biggest}px — indistinguishable at a glance`)
+      .toBeGreaterThanOrEqual(12);
+    expect(biggest).toBe(AUTONOMY_PANEL.barsH);
+  });
+
+  test('the smallest real reading is still visible', () => {
+    expect(autonomyBarRect(1, 15).height).toBeGreaterThanOrEqual(AUTONOMY_BAR_MIN_H);
+    expect(AUTONOMY_BAR_MIN_H).toBeGreaterThan(1);
+  });
+
+  // The honesty rule survives the fix: a bucket where nobody worked draws
+  // NOTHING. The floor applies only to a bar that is drawn at all.
+  test('a bucket with nobody working still draws no bar', () => {
+    expect(autonomyBarRect(0, 15)).toBeNull();
+    expect(autonomyBarRect(undefined, 15)).toBeNull();
+    expect(autonomyBarRect(3, 0)).toBeNull();
+  });
+
+  test('the drawn baseline is furniture, not a measurement', () => {
+    // It is stroked in the gridline colour across the whole plot, exactly like
+    // the y gridlines — never in the bar colour, which would make it read as a
+    // row of zero-height bars.
+    const draw = /function drawAutonomyBars\([\s\S]*?\n}/.exec(js);
+    expect(draw, 'fail-loud: drawAutonomyBars not found in historyTab.js').not.toBeNull();
+    expect(draw[0]).toMatch(/strokeStyle = gridColor/);
+    expect(draw[0]).not.toMatch(/strokeStyle = color/);
+  });
+
+  // THE COMMITTED MUTATION: the shipped-before band height. At 10px a bar of 1
+  // and a bar of 15 differed by under 10px and both read as grit.
+  test('the check goes red against the band height that shipped', () => {
+    const before = { ...AUTONOMY_PANEL, barsH: 10 };
+    const spread = autonomyBarRect(15, 15, before).height - autonomyBarRect(1, 15, before).height;
+    expect(spread, 'the shipped band spread 1..15 over only ' + spread + 'px').toBeLessThan(12);
+    const now = autonomyBarRect(15, 15).height - autonomyBarRect(1, 15).height;
+    expect(now).toBeGreaterThanOrEqual(12);
+  });
+});
+
+describe('the stylesheet and the painter agree on the canvas height', () => {
+  // The painter sizes its backing store from AUTONOMY_PANEL_CANVAS_H and lays
+  // out against it; a stylesheet that disagreed would scale every panel and put
+  // the baseline somewhere other than the foot of the box.
+  test('.history-autonomy-panel-canvas is exactly AUTONOMY_PANEL_CANVAS_H tall', () => {
+    const css = px(ruleBody('.history-autonomy-panel-canvas'), 'height', '.history-autonomy-panel-canvas');
+    expect(css).toBe(AUTONOMY_PANEL_CANVAS_H);
+  });
+
+  test('the x-axis bounds sit under the plot, not under the tick gutter', () => {
+    const axis = ruleBody('.history-autonomy-axis');
+    expect(px(axis, 'padding-left', '.history-autonomy-axis')).toBe(AUTONOMY_PANEL.padL);
+    expect(px(axis, 'padding-right', '.history-autonomy-axis')).toBe(AUTONOMY_PANEL.padR);
   });
 });

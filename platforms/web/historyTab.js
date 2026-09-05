@@ -423,6 +423,13 @@ function syncHistoryMatrixVisibility(isState) {
   if (matrixScroll) matrixScroll.hidden = !isState;
   const panels = document.getElementById('history-autonomy-panels');
   if (panels) panels.hidden = !isAutonomy;
+  // The card GROWS for the panel stack rather than scrolling inside its own
+  // fixed height (QA-2). Five panels do not fit 360px at a readable height, and
+  // the two things an inner scrollbar cut off first were the x axis and the
+  // "+N more" line — the row that says what the view left out. The class is
+  // scoped to this chart, so every other chart keeps its fixed-height card.
+  const wrap = document.getElementById('history-chart-wrap');
+  if (wrap) wrap.classList.toggle('autonomy', isAutonomy);
 }
 
 // syncHistoryRangeRow hides the Day/Week/Month/… range selector for
@@ -1148,13 +1155,37 @@ export function autonomyKeyEntries(cs) {
 // Panel geometry, in CSS pixels. The line plot and the histogram share one
 // canvas per panel so their x axes cannot drift apart and one boundary rule can
 // run through both.
-const AUTONOMY_PANEL = {
-  padL: 46, padR: 6,
-  lineH: 32,   // the longest-run plot
-  gap: 2,
-  barsH: 10,   // the concurrency histogram, deliberately low
+//
+// TICK LABELS ON THE RIGHT, and the top inset that goes with them. Both are
+// QA fixes and both are copied from macOS, so the two surfaces read as one
+// design (QA-1):
+//
+//   - On the LEFT, the y-axis gutter sat directly under the panel header's
+//     project name, and the header row and the axis column were one column of
+//     text doing two jobs. On the right the header row is free.
+//   - `padT` is what stops the TOPMOST label being sliced. A label is drawn
+//     centred on its gridline; the top gridline is at the plot's own top edge,
+//     so without an inset half the glyph falls outside the canvas and reads as
+//     text cut off by the panel above. The inset has to be at least half the
+//     tick font — `autonomyTickPlacement` computes that and a test asserts it.
+export const AUTONOMY_PANEL = {
+  padL: 4,      // a hair of left margin; the labels are on the RIGHT now
+  padR: 46,     // the shared y axis's label gutter
+  padT: 6,      // clearance for the topmost tick label's upper half
+  lineH: 40,    // the longest-run plot
+  gap: 3,
+  barsH: 18,    // the concurrency histogram
+  tickFont: 9,  // px, the y-axis tick label
+  tickGap: 5,   // px between the plot's right edge and its labels
 };
-const AUTONOMY_PANEL_CANVAS_H = AUTONOMY_PANEL.lineH + AUTONOMY_PANEL.gap + AUTONOMY_PANEL.barsH;
+export const AUTONOMY_PANEL_CANVAS_H =
+  AUTONOMY_PANEL.padT + AUTONOMY_PANEL.lineH + AUTONOMY_PANEL.gap + AUTONOMY_PANEL.barsH;
+
+// AUTONOMY_BAR_MIN_H is the floor on a drawn bar (QA-3). A bucket where one
+// agent worked is a real reading and must be visible; at `barsH * 1/15` it was
+// a single device pixel and read as grit. The floor applies only to a bar that
+// is drawn at all — a bucket with nobody working still draws NOTHING.
+export const AUTONOMY_BAR_MIN_H = 2;
 
 // renderAutonomyPanels draws the stack: five project panels, the "+N more" line
 // and the window's own bounds under them.
@@ -1247,7 +1278,7 @@ function paintAutonomyPanel(canvas, panel, opts) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
 
-  const { padL, padR, lineH, gap, barsH } = AUTONOMY_PANEL;
+  const { padL, padR, padT, lineH } = AUTONOMY_PANEL;
   const plotW = Math.max(1, w - padL - padR);
   const points = autonomyPanelPoints(panel, opts.bucketStarts);
   const n = Math.max(1, points.length);
@@ -1255,39 +1286,73 @@ function paintAutonomyPanel(canvas, panel, opts) {
 
   const cs = opts.cs;
   const muted = (cs.getPropertyValue('--muted') || '#888').trim();
+  const gridColor = 'rgba(128,140,170,0.18)';
   const lineColor = autonomyKeyColor('line', cs);
   const barColor = autonomyKeyColor('bars', cs);
 
-  drawAutonomyGridlines(ctx, { domain: opts.domain, padL, w, padR, lineH, muted });
+  drawAutonomyGridlines(ctx, { domain: opts.domain, padL, padR, padT, lineH, w, muted, gridColor });
   // Under the marks, deliberately: a boundary explains the data, it is not part
   // of it, and a rule drawn over a line competes with what it annotates.
   drawAutonomyBoundaries(ctx, { boundaries: opts.boundaries, padL, plotW, h, muted, index: opts.index });
-  drawAutonomyBars(ctx, { points, xAt, plotW, n, top: lineH + gap, barsH, peakMax: opts.peakMax, color: barColor });
-  drawAutonomyLine(ctx, { points, xAt, domain: opts.domain, lineH, color: lineColor });
+  drawAutonomyBars(ctx, { points, xAt, plotW, n, peakMax: opts.peakMax, color: barColor, gridColor, padL, padR, w });
+  drawAutonomyLine(ctx, { points, xAt, domain: opts.domain, padT, lineH, color: lineColor });
 }
 
 // drawAutonomyGridlines draws the SHARED log Y gridlines, labelled in the same
 // duration units the panel headers use, so an axis tick and a headline figure
 // can never be read in different units.
-function drawAutonomyGridlines(ctx, { domain, padL, w, padR, lineH, muted }) {
+//
+// LABELS TO THE RIGHT OF THE PLOT (QA-1). On the left they shared a column with
+// the panel header's project name, and the topmost one was drawn half outside
+// the canvas — a figure sliced by the panel above, sitting on the same line as
+// that panel's own figures. `autonomyTickPlacement` is where the position is
+// decided, so both halves of the fix are testable without a canvas.
+function drawAutonomyGridlines(ctx, { domain, padL, padR, padT, lineH, w, muted, gridColor }) {
   if (!domain) return;
   ctx.save();
-  ctx.strokeStyle = 'rgba(128,140,170,0.18)';
+  ctx.strokeStyle = gridColor;
   ctx.fillStyle = muted;
-  ctx.font = '9px ui-monospace, monospace';
-  ctx.textAlign = 'right';
+  ctx.font = AUTONOMY_PANEL.tickFont + 'px ui-monospace, monospace';
+  ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
-  const steps = 2;
-  for (let i = 0; i <= steps; i++) {
-    const v = Math.exp(Math.log(domain.lo) + (Math.log(domain.hi) - Math.log(domain.lo)) * (i / steps));
-    const y = autonomyYAt(v, domain, lineH);
+  for (const v of autonomyTickValues(domain)) {
+    const at = autonomyTickPlacement(v, domain, w);
     ctx.beginPath();
-    ctx.moveTo(padL, y);
-    ctx.lineTo(w - padR, y);
+    ctx.moveTo(padL, at.y);
+    ctx.lineTo(w - padR, at.y);
     ctx.stroke();
-    ctx.fillText(autonomyDuration(v), padL - 5, y);
+    ctx.fillText(autonomyDuration(v), at.x, at.y);
   }
   ctx.restore();
+}
+
+// autonomyTickValues returns the durations the shared axis is labelled at,
+// evenly spaced on the log scale, lowest first.
+export function autonomyTickValues(domain, steps = 2) {
+  if (!domain) return [];
+  const out = [];
+  for (let i = 0; i <= steps; i++) {
+    out.push(Math.exp(Math.log(domain.lo) + (Math.log(domain.hi) - Math.log(domain.lo)) * (i / steps)));
+  }
+  return out;
+}
+
+// autonomyTickPlacement is where one tick's label is drawn, as a value.
+//
+// It carries the two properties QA-1 was about, so both can be asserted without
+// a canvas: the label sits in the gutter to the RIGHT of the plot (so the panel
+// header's row is free), and its upper edge is inside the canvas (so the
+// topmost figure is not sliced by the panel above). `top`/`bottom` are the
+// label's own extent, since it is drawn centred on its gridline.
+export function autonomyTickPlacement(v, domain, width, panel = AUTONOMY_PANEL) {
+  const y = panel.padT + autonomyYAt(v, domain, panel.lineH);
+  return {
+    y,
+    x: width - panel.padR + panel.tickGap,
+    top: y - panel.tickFont / 2,
+    bottom: y + panel.tickFont / 2,
+    plotRight: width - panel.padR,
+  };
 }
 
 // autonomyYAt maps a duration onto the shared log axis. Exported so a test can
@@ -1303,8 +1368,9 @@ export function autonomyYAt(v, domain, lineH) {
 // drawAutonomyLine strokes the longest-run line, BREAKING at every gap rather
 // than interpolating across it (autonomyLineSegments), and marking an isolated
 // bucket with a dot so the one bucket with no neighbour is not invisible.
-function drawAutonomyLine(ctx, { points, xAt, domain, lineH, color }) {
+function drawAutonomyLine(ctx, { points, xAt, domain, padT, lineH, color }) {
   if (!domain) return;
+  const yAt = (v) => padT + autonomyYAt(v, domain, lineH);
   ctx.save();
   ctx.strokeStyle = color;
   ctx.fillStyle = color;
@@ -1313,13 +1379,13 @@ function drawAutonomyLine(ctx, { points, xAt, domain, lineH, color }) {
   for (const seg of autonomyLineSegments(points)) {
     if (seg.from === seg.to) {
       ctx.beginPath();
-      ctx.arc(xAt(seg.from), autonomyYAt(points[seg.from].longest, domain, lineH), 1.8, 0, Math.PI * 2);
+      ctx.arc(xAt(seg.from), yAt(points[seg.from].longest), 1.8, 0, Math.PI * 2);
       ctx.fill();
       continue;
     }
     ctx.beginPath();
     for (let i = seg.from; i <= seg.to; i++) {
-      const x = xAt(i), y = autonomyYAt(points[i].longest, domain, lineH);
+      const x = xAt(i), y = yAt(points[i].longest);
       if (i === seg.from) ctx.moveTo(x, y); else ctx.lineTo(x, y);
     }
     ctx.stroke();
@@ -1330,29 +1396,60 @@ function drawAutonomyLine(ctx, { points, xAt, domain, lineH, color }) {
     const p = points[i];
     if (!p || !(Number(p.longest) > 0) || !p.running) continue;
     ctx.beginPath();
-    ctx.arc(xAt(i), autonomyYAt(p.longest, domain, lineH), 2.4, 0, Math.PI * 2);
+    ctx.arc(xAt(i), yAt(p.longest), 2.4, 0, Math.PI * 2);
     ctx.stroke();
   }
   ctx.restore();
 }
 
-// drawAutonomyBars draws the concurrency histogram: one low bar per bucket,
-// scaled against the stack's shared peak.
+// autonomyBaselineY is the histogram's foot: the line every bar stands on, at
+// the very bottom of the panel canvas and directly beneath the plot.
+export function autonomyBaselineY(panel = AUTONOMY_PANEL) {
+  return panel.padT + panel.lineH + panel.gap + panel.barsH;
+}
+
+// autonomyBarRect is one bar's vertical extent, as a value (QA-3). null for a
+// bucket that draws no bar at all.
 //
-// A BUCKET WITH NO ONE WORKING DRAWS NOTHING — not a zero-height bar, and not a
-// hairline on the baseline. A mark on the axis reads as a measured zero, which
-// is a different and false claim from "no runs here".
-function drawAutonomyBars(ctx, { points, xAt, plotW, n, top, barsH, peakMax, color }) {
-  if (!(peakMax > 0)) return;
-  const barW = Math.max(1, Math.min(6, plotW / Math.max(1, n) - 1));
+// EVERY BAR STANDS ON autonomyBaselineY. They always did arithmetically, but at
+// two or three pixels with nothing to stand on they scanned as dashes scattered
+// under the line rather than as a distribution — so the baseline is now DRAWN,
+// and the band is tall enough that a bar of 1 and a bar of 15 are visibly
+// different heights rather than both being a smudge.
+export function autonomyBarRect(peak, peakMax, panel = AUTONOMY_PANEL) {
+  const n = Number(peak) || 0;
+  const max = Number(peakMax) || 0;
+  if (n <= 0 || max <= 0) return null;
+  const height = Math.max(AUTONOMY_BAR_MIN_H, panel.barsH * (n / max));
+  const bottom = autonomyBaselineY(panel);
+  return { top: bottom - height, bottom, height };
+}
+
+// drawAutonomyBars draws the concurrency histogram: one bar per bucket, scaled
+// against the stack's shared peak, all of them standing on one drawn baseline.
+//
+// A BUCKET WITH NO ONE WORKING DRAWS NOTHING — no bar, however short. The
+// BASELINE is not a mark on that rule: it is drawn uniformly across the whole
+// plot in the gridline colour, exactly like the y gridlines above it, so it
+// reads as furniture rather than as a per-bucket measurement of zero.
+function drawAutonomyBars(ctx, { points, xAt, plotW, n, peakMax, color, gridColor, padL, padR, w }) {
+  const baseline = autonomyBaselineY();
   ctx.save();
-  ctx.fillStyle = color;
-  for (let i = 0; i < points.length; i++) {
-    const p = points[i];
-    const peak = p ? (Number(p.peak) || 0) : 0;
-    if (peak <= 0) continue;
-    const hgt = Math.max(1, barsH * (peak / peakMax));
-    ctx.fillRect(xAt(i) - barW / 2, top + (barsH - hgt), barW, hgt);
+  // The foot first, so a bar sits ON it rather than the rule cutting across.
+  ctx.strokeStyle = gridColor;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(padL, baseline + 0.5);
+  ctx.lineTo(w - padR, baseline + 0.5);
+  ctx.stroke();
+  if (peakMax > 0) {
+    const barW = Math.max(1.5, Math.min(6, plotW / Math.max(1, n) - 1));
+    ctx.fillStyle = color;
+    for (let i = 0; i < points.length; i++) {
+      const rect = autonomyBarRect(points[i]?.peak, peakMax);
+      if (!rect) continue;
+      ctx.fillRect(xAt(i) - barW / 2, rect.top, barW, rect.height);
+    }
   }
   ctx.restore();
 }
