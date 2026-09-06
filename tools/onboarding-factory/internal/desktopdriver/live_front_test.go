@@ -81,89 +81,151 @@ func TestEveryDriveSiteBringsDesktopForward(t *testing.T) {
 // tripwire for a site nobody has written yet: every retry loop in the live
 // runtime drives a control, and each one must front Desktop before it looks.
 func TestEveryLiveRetryLoopFrontsDesktopFirst(t *testing.T) {
-	const window = 6 // lines of closure body to search after the retry call
-	retryCalls := []string{"retryTransientAX(", "retryTransientAXFor(", "retryIdempotentAXFor("}
 	files := []string{"live.go", "live_controls.go", "live_archive.go"}
-
-	checked, waived := 0, 0
+	census := retryFrontCensus{}
 	for _, name := range files {
-		fileSet := token.NewFileSet()
-		parsed, err := parser.ParseFile(fileSet, name, nil, parser.ParseComments)
-		if err != nil {
-			t.Fatalf("parse %s: %v; this check cannot run, which is a failure", name, err)
-		}
-		source := readSourceLines(t, name)
-		// The retry helpers call one another. Their own bodies drive nothing, so
-		// skip what is declared inside them rather than flagging the mechanism
-		// for not using itself.
-		type span struct{ from, to int }
-		var helpers []span
-		for _, decl := range parsed.Decls {
-			function, ok := decl.(*ast.FuncDecl)
-			if !ok {
-				continue
-			}
-			switch function.Name.Name {
-			case "retryTransientAX", "retryTransientAXFor", "retryIdempotentAXFor", "retryIdempotentAX":
-				helpers = append(helpers, span{
-					from: fileSet.Position(function.Pos()).Line,
-					to:   fileSet.Position(function.End()).Line,
-				})
-			}
-		}
-		insideHelper := func(line int) bool {
-			for _, helper := range helpers {
-				if line >= helper.from && line <= helper.to {
-					return true
-				}
-			}
-			return false
-		}
-		ast.Inspect(parsed, func(node ast.Node) bool {
-			call, ok := node.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			line := fileSet.Position(call.Pos()).Line
-			text := source[line-1]
-			named := false
-			for _, retry := range retryCalls {
-				if strings.Contains(text, retry) {
-					named = true
-				}
-			}
-			if !named || insideHelper(line) {
-				return true
-			}
-			checked++
-			body := strings.Join(source[line:min(line+window, len(source))], "\n")
-			// A site may opt out, but only in writing. `// nofront: <reason>`
-			// inside the loop's first lines is the waiver, and a bare marker
-			// with no reason does not count — the point is that skipping this
-			// is a decision somebody made on purpose and can be read back.
-			if waiver := strings.Index(body, "nofront:"); waiver >= 0 {
-				reason := strings.TrimSpace(body[waiver+len("nofront:"):])
-				if reason == "" {
-					t.Errorf("%s:%d — nofront waiver carries no reason", name, line)
-				}
-				waived++
-				return true
-			}
-			if !strings.Contains(body, "activate(ctx)") && !strings.Contains(body, "runtime.front(ctx)") {
-				t.Errorf("%s:%d — this retry loop drives a control but does not bring Desktop "+
-					"forward in its first lines; a backgrounded Desktop exposes no composer:\n%s",
-					name, line, body)
-			}
-			return true
-		})
+		census.inspect(t, parseRetryFrontFile(t, name))
 	}
-	if checked == 0 {
+	census.assertUseful(t)
+}
+
+const retryFrontWindow = 6
+
+var retryFunctionCalls = []string{
+	"retryTransientAX(",
+	"retryTransientAXFor(",
+	"retryIdempotentAXFor(",
+}
+
+type sourceSpan struct{ from, to int }
+
+type retryFrontFile struct {
+	name    string
+	fileSet *token.FileSet
+	parsed  *ast.File
+	source  []string
+	helpers []sourceSpan
+}
+
+type retryFrontCensus struct {
+	checked int
+	waived  int
+}
+
+func parseRetryFrontFile(t *testing.T, name string) retryFrontFile {
+	t.Helper()
+	fileSet := token.NewFileSet()
+	parsed, err := parser.ParseFile(fileSet, name, nil, parser.ParseComments)
+	if err != nil {
+		t.Fatalf("parse %s: %v; this check cannot run, which is a failure", name, err)
+	}
+	return retryFrontFile{
+		name:    name,
+		fileSet: fileSet,
+		parsed:  parsed,
+		source:  readSourceLines(t, name),
+		helpers: retryHelperSpans(fileSet, parsed),
+	}
+}
+
+func retryHelperSpans(fileSet *token.FileSet, parsed *ast.File) []sourceSpan {
+	var helpers []sourceSpan
+	for _, decl := range parsed.Decls {
+		function, ok := decl.(*ast.FuncDecl)
+		if ok && isRetryHelper(function.Name.Name) {
+			helpers = append(helpers, sourceSpan{
+				from: fileSet.Position(function.Pos()).Line,
+				to:   fileSet.Position(function.End()).Line,
+			})
+		}
+	}
+	return helpers
+}
+
+func isRetryHelper(name string) bool {
+	switch name {
+	case "retryTransientAX", "retryTransientAXFor", "retryIdempotentAXFor", "retryIdempotentAX":
+		return true
+	default:
+		return false
+	}
+}
+
+func (file retryFrontFile) insideHelper(line int) bool {
+	for _, helper := range file.helpers {
+		if line >= helper.from && line <= helper.to {
+			return true
+		}
+	}
+	return false
+}
+
+func (file retryFrontFile) retryLine(node ast.Node) (int, bool) {
+	call, ok := node.(*ast.CallExpr)
+	if !ok {
+		return 0, false
+	}
+	line := file.fileSet.Position(call.Pos()).Line
+	return line, containsRetryCall(file.source[line-1]) && !file.insideHelper(line)
+}
+
+func containsRetryCall(line string) bool {
+	for _, retry := range retryFunctionCalls {
+		if strings.Contains(line, retry) {
+			return true
+		}
+	}
+	return false
+}
+
+func (census *retryFrontCensus) inspect(t *testing.T, file retryFrontFile) {
+	t.Helper()
+	ast.Inspect(file.parsed, func(node ast.Node) bool {
+		line, isRetry := file.retryLine(node)
+		if isRetry {
+			census.inspectRetry(t, file, line)
+		}
+		return true
+	})
+}
+
+func (census *retryFrontCensus) inspectRetry(t *testing.T, file retryFrontFile, line int) {
+	t.Helper()
+	census.checked++
+	body := strings.Join(file.source[line:min(line+retryFrontWindow, len(file.source))], "\n")
+	if census.acceptWaiver(t, file.name, line, body) {
+		return
+	}
+	if !strings.Contains(body, "activate(ctx)") && !strings.Contains(body, "runtime.front(ctx)") {
+		t.Errorf("%s:%d — this retry loop drives a control but does not bring Desktop "+
+			"forward in its first lines; a backgrounded Desktop exposes no composer:\n%s",
+			file.name, line, body)
+	}
+}
+
+func (census *retryFrontCensus) acceptWaiver(t *testing.T, name string, line int, body string) bool {
+	t.Helper()
+	waiver := strings.Index(body, "nofront:")
+	if waiver < 0 {
+		return false
+	}
+	reason := strings.TrimSpace(body[waiver+len("nofront:"):])
+	if reason == "" {
+		t.Errorf("%s:%d — nofront waiver carries no reason", name, line)
+	}
+	census.waived++
+	return true
+}
+
+func (census retryFrontCensus) assertUseful(t *testing.T) {
+	t.Helper()
+	if census.checked == 0 {
 		t.Fatal("no retry loops were found in the live runtime; this check cannot run, which is a failure")
 	}
-	if waived == checked {
-		t.Fatalf("all %d retry loops are waived; the rule would be checking nothing", checked)
+	if census.waived == census.checked {
+		t.Fatalf("all %d retry loops are waived; the rule would be checking nothing", census.checked)
 	}
-	t.Logf("checked %d live retry loops (%d waived in writing)", checked, waived)
+	t.Logf("checked %d live retry loops (%d waived in writing)", census.checked, census.waived)
 }
 
 func readSourceLines(t *testing.T, name string) []string {
