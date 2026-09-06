@@ -645,6 +645,15 @@ if [[ "$ATTACH" != "1" ]]; then
   fi
   # END desktop_hook_install_gate
   wait_for_hook_install "$ADAPTER" "$STAGING" "$ONBOARD_BIND" || exit 1
+  # BEGIN desktop_hook_target_check
+  # Waiting proves the file exists, not that it names THIS daemon. The
+  # managed-file installer refuses to overwrite a file another process changed,
+  # and without this the run drove Desktop with a previous run's port and
+  # blamed Desktop 80 seconds later.
+  if [[ "$EXECUTION_PROFILE" == "desktop-local" ]]; then
+    desktop_require_hooks_point_here "$HOME/.claude/settings.json" "$ONBOARD_BIND" || exit 1
+  fi
+  # END desktop_hook_target_check
   if [[ "$EXECUTION_PROFILE" == "desktop-local" ]]; then
     seal_managed_files || {
       echo "desktop-local could not seal the expected daemon hook state" >&2
