@@ -383,3 +383,38 @@ func TestToolsAreRefusedForABarePromptAndAllowedForARecipe(t *testing.T) {
 		t.Fatal("a transcript that could not be read was accepted")
 	}
 }
+
+// The recorded `ready` is the LAST event a turn writes, so it is the one most
+// likely not to be on disk when the driver looks. Cells 2-3, 3-1 and 2-16 all
+// timed out at `wait for Irrlicht state ready` on turns that had finished.
+//
+// What the gate needs to establish is that this turn ran and is over. The
+// recorded `working` for this turn establishes the first; the live state
+// establishes the second. Requiring the recorded `ready` as well adds nothing
+// the other two do not already say, and costs runs.
+//
+// The recording is still validated in full at promotion time, by
+// expected-validate against expected.jsonl. This gate is not that check.
+func TestReadyIsSatisfiedByALiveIdleSessionThatHasWorked(t *testing.T) {
+	dir := t.TempDir()
+	worked := `{"kind":"state_transition","session_id":"cli-1","new_state":"working"}` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "recording.jsonl"), []byte(worked), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &LiveRuntime{options: LiveOptions{RecordingDirectory: dir}}
+	observed, err := runtime.stateObserved("cli-1", "ready", "ready")
+	if err != nil || !observed {
+		t.Fatalf("a finished turn whose ready is not flushed yet blocked the run: %t, %v", observed, err)
+	}
+
+	// Still working: not finished, must wait.
+	if observed, err := runtime.stateObserved("cli-1", "working", "ready"); err != nil || observed {
+		t.Fatalf("a turn still in flight read as finished: %t, %v", observed, err)
+	}
+
+	// Never worked: there is no turn to be finished with.
+	empty := &LiveRuntime{options: LiveOptions{RecordingDirectory: t.TempDir()}}
+	if observed, err := empty.stateObserved("cli-1", "ready", "ready"); err != nil || observed {
+		t.Fatalf("a session that never worked read as a completed turn: %t, %v", observed, err)
+	}
+}

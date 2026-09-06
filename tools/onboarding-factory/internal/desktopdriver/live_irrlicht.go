@@ -99,7 +99,24 @@ func (runtime *LiveRuntime) stateObserved(sessionID, currentState, wantedState s
 		return false, err
 	}
 	if wantedState == "ready" {
-		return currentState == "ready" && recorded, nil
+		if currentState != "ready" {
+			return false, nil
+		}
+		if recorded {
+			return true, nil
+		}
+		// The recorded `ready` is the LAST event a turn writes and the one most
+		// likely still unflushed. What this gate needs to know is that the turn
+		// ran and is over: the recorded `working` for this turn says the first,
+		// the live idle state says the second. Requiring the recorded `ready`
+		// too adds nothing and cost cells 2-3, 3-1 and 2-16 their runs.
+		//
+		// The recording is still checked in full at promotion, by
+		// expected-validate against expected.jsonl. This is not that check.
+		worked, err := recordingHasStateSequence(
+			runtime.options.RecordingDirectory, sessionID,
+			cumulativeExpectedStates(runtime.turn, "working"))
+		return worked, err
 	}
 	// The recording is written by the daemon and can lag its own HTTP API. Cell
 	// 1-1 timed out after 1m30s waiting for a `working` that the recording, read
