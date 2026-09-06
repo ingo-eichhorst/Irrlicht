@@ -1,0 +1,2 @@
+{"seq":253,"ts":"2026-09-06T16:23:08.610739+02:00","kind":"hook_received","session_id":"af05c66d-d975-4216-835f-86e6e775c8bf","hook_name":"PermissionRequest"}
+{"seq":255,"ts":"2026-09-06T16:23:14.629941+02:00","kind":"hook_received","session_id":"af05c66d-d975-4216-835f-86e6e775c8bf","hook_name":"Notification/permission_prompt"}

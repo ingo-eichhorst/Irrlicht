@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "results": [
+    {
+      "scenario_id": "token-quota-exhausted",
+      "execution_profile": "desktop-local",
+      "outcome": "not-runnable",
+      "reason": "The cell does not use the shared driver. Its recipe names a bespoke recorder that builds a mock, launches it, and drives claude under --bare, with a precondition that the mock listens on localhost:18765. Claude Desktop has no --bare launch shape and no env path — it authenticates through its own OAuth — so the agent cannot be pointed at the mock. desktop_profile_validate_cell independently refuses env, mock and bare_mode for this profile, so the cell is refused before the driver starts. The cited note carries the commands.",
+      "missing_control": "bare-mode CLI launch with a mock endpoint (claude --bare plus an env-injected base URL)",
+      "evidence_refs": [
+        "replaydata/agents/claudecode/desktop-evidence/harness-gaps.md",
+        "replaydata/agents/claudecode/scenarios/2-9_token-quota-exhausted/metadata.json"
+      ]
+    }
+  ]
+}
