@@ -80,6 +80,17 @@ func (runtime *LiveRuntime) findOwnedIrrlichtSession(
 		return SessionObservation{}, false, fmt.Errorf(
 			"Irrlicht workspace mismatch: registry %q, Irrlicht %q", owned.Registry.CWD, candidate.CWD)
 	}
+	// An EMPTY host bundle ID is not a wrong one. The daemon attributes a
+	// session's launcher after it first reports the session, so the first
+	// observation of a real Desktop session can legitimately carry no
+	// attribution yet — cell 2-3 died on `Irrlicht host bundle ID is "", want
+	// "com.anthropic.claudefordesktop"` on 2026-09-07, at step 1, against a
+	// session Desktop had just created. Absence of a finding and a contrary
+	// finding must not produce the same outcome: keep waiting for the first,
+	// fail loudly on the second.
+	if candidate.Launcher.HostBundleID == "" {
+		return SessionObservation{}, false, nil
+	}
 	if candidate.Launcher.HostBundleID != desktopBundleID {
 		return SessionObservation{}, false, fmt.Errorf(
 			"Irrlicht host bundle ID is %q, want %q", candidate.Launcher.HostBundleID, desktopBundleID)

@@ -84,10 +84,17 @@ var composerMatchers = map[string]composerMatcher{
 			return element.Role == "AXTextArea" && element.Description == "Prompt"
 		},
 	},
-	// The send slot is state dependent: the SAME slot reads "Stop" while a turn
-	// runs (measured live on 1.46388.4). Resolve it when the driver is about to
-	// click it, never as a precondition for a composer that has not been typed
-	// into yet — see basicTurnControls.
+	// The send slot was believed to be state dependent — the same slot reading
+	// "Stop" while a turn runs. On 1.46388.4 it is NOT. Measured on 2026-09-07,
+	// ten seconds into a streaming turn, across all 767 controls on screen:
+	// the composer still showed "Send" and nothing anywhere was described or
+	// titled "Stop". The tree is kept at
+	// replaydata/agents/claudecode/desktop-evidence/, and it is why cell 2-20's
+	// interrupt step has no control to drive.
+	//
+	// Resolve it when the driver is about to click it all the same: an empty
+	// composer is not a reliable place to find it, and a fresh reading costs
+	// nothing. See basicTurnControls.
 	"send": {
 		role:  "AXButton",
 		wants: func(string) string { return `described "Send"` },

@@ -140,7 +140,10 @@ type desktopKey struct {
 }
 
 var desktopKeys = map[string]desktopKey{
-	// kVK_Escape. Cancels the in-flight turn: Stop goes away, Send returns.
+	// kVK_Escape. Believed to cancel the in-flight turn, with Stop giving way to
+	// Send. On 1.46388.4 there is no Stop button at any point in a turn (see
+	// composerMatchers' "send" entry), so this postcondition cannot become true
+	// on that build and no cell has driven it.
 	"Escape": {code: 53, effect: "the composer returns from Stop to Send"},
 	// kVK_Return. Submits the composed prompt: Send is replaced by Stop.
 	"Enter": {code: 36, effect: "the composer replaces Send with Stop"},

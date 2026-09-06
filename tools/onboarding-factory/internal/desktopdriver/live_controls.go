@@ -138,12 +138,18 @@ func stopSelectorFor(send helperSelector) helperSelector {
 
 // turnInFlight reports whether Claude Desktop is running a turn right now.
 //
-// Measured on 1.46388.4 on 2026-09-06 against the live app: an idle window
-// exposes one AXButton described "Send" and NO button described "Stop" — and
-// that held with another session shown as "Running" in the sidebar, which
-// contributes a row TITLE and no button of its own. So a Stop button is the
-// composer's in-flight face and nothing else's, which is what lets Submit read
-// it as proof that a click of its own already landed.
+// CORRECTION, 2026-09-07. This was written believing Claude Desktop swaps Send
+// for a Stop button while a turn runs. It does not, on 1.46388.4: a tree
+// captured ten seconds into a streaming turn carried "Send" and no "Stop"
+// anywhere among 767 controls. So on this build turnInFlight can never be true,
+// and the guard below is dead — kept deliberately, because it costs one
+// comparison, it is correct if a later build brings Stop back, and removing it
+// would leave Submit's retry loop able to click Send twice again.
+//
+// What still holds is the measurement it was built on: no Stop button appears
+// anywhere, including with another session shown as "Running" in the sidebar.
+// So a Stop button, if one ever appears, is the composer's in-flight face and
+// nothing else's.
 func turnInFlight(elements []helperElement) bool {
 	for _, element := range elements {
 		if element.Role == "AXButton" && element.Description == stopButtonDescription {
