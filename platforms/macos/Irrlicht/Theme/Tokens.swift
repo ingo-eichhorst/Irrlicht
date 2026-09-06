@@ -78,8 +78,16 @@ enum IrrColors {
     /// only the alpha is shared.
     static func noticeWash(_ tint: Color) -> Color { tint.opacity(noticeWashAlpha) }
 
-    // Soft state backgrounds at the notice alpha
-    // (--working-dim / --waiting-dim / --ready-dim).
+    // Soft state grounds at the notice alpha, the twins of the web's
+    // --working-dim / --waiting-dim / --ready-dim. They are kept as a complete
+    // palette rather than a use-driven list — `readyDim` has had no call site
+    // since before #1814 — because their job is to be the macOS spelling of a
+    // CSS variable that does exist.
+    //
+    // These are FINISHED grounds: the alpha is already in them. Pass one to
+    // `.background(…)` directly; never to a `hue:` parameter on the notice
+    // family, which applies `noticeWash` itself and would composite the alpha
+    // twice (0.12 × 0.12 ≈ 1.4%, a wash you cannot see).
     static let workingDim = noticeWash(working)
     static let waitingDim = noticeWash(waiting)
     static let readyDim   = noticeWash(ready)

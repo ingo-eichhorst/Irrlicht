@@ -40,16 +40,21 @@ final class NoticeWashLintTests: XCTestCase {
 
     // MARK: - The rule, as a pure function
 
-    /// Assembled from pieces so this file's own source never contains a
-    /// contiguous match — the corpus fixtures below are built the same way.
-    /// Without that the live scan would flag its own test data, and the fix for
-    /// *that* is an exclusion, which is a hole in the rule rather than a
-    /// property of it.
+    /// Assembled from pieces so this file's own source never produces a match —
+    /// the corpus fixtures below are built the same way. Without that the live
+    /// scan would flag its own test data, and the fix for *that* is an
+    /// exclusion, which is a hole in the rule rather than a property of it.
+    /// `testThisFileIsCleanUnderItsOwnRule` asserts the claim rather than
+    /// leaving it as prose.
     enum Needle {
         /// The one alpha every notice ground is drawn at.
         static let washAlpha = "0." + "12"
         static let opacity = ".opa" + "city("
-        static let background = ".back" + "ground("
+        /// Matched WITHOUT its opening paren: SwiftUI also spells a ground as
+        /// `.background { … }` and `.background(alignment:) { … }`, and a rule
+        /// that only knew the parenthesised form would let the whole defect
+        /// class back in through a trailing closure.
+        static let background = ".back" + "ground"
         /// `TokenContrastTests` composites the wash by hand; its alpha argument
         /// is the second place the number has to stay in step with the view.
         static let alphaArgument = "alpha" + ":"
@@ -79,38 +84,69 @@ final class NoticeWashLintTests: XCTestCase {
     /// Both limits are pinned in the corpus.
     static func offendingOccurrences(in source: String,
                                      rules: Set<Rule> = Set(Rule.allCases)) -> [String] {
-        let code = commentsBlanked(source)
-        let text = code as NSString
+        let text = commentsBlanked(source) as NSString
         var found: [String] = []
-
-        if rules.contains(.backgroundAlpha) {
-            for start in occurrences(of: Needle.background, in: text) {
-                let line = lineNumber(of: start, in: text)
-                guard let argument = balancedArgument(in: text, from: start + Needle.background.utf16.count) else {
-                    found.append("\(line):background-unparsable")
-                    continue
-                }
-                if argument.contains(Needle.opacity) {
-                    found.append("\(line):background-alpha")
-                }
-            }
-        }
-
-        if rules.contains(.washAlpha) {
-            for needle in [Needle.opacity + Needle.washAlpha + ")",
-                           Needle.alphaArgument + " " + Needle.washAlpha] {
-                for start in occurrences(of: needle, in: text) {
-                    found.append("\(lineNumber(of: start, in: text)):wash-alpha")
-                }
-            }
-        }
-
+        if rules.contains(.backgroundAlpha) { found += groundsComposingTheirOwnAlpha(in: text) }
+        if rules.contains(.washAlpha) { found += theAlphaSpelledOutAgain(in: text) }
         return found.sorted()
     }
 
     enum Rule: CaseIterable {
         case backgroundAlpha
         case washAlpha
+    }
+
+    /// Every `.background` whose ground builds its own alpha — in either of the
+    /// spellings SwiftUI offers, `(…)` and a trailing `{ … }`, since the two
+    /// render the same thing and a rule that saw only one would be evadable by
+    /// typing the other. A `.background` whose delimiters never close is
+    /// REPORTED (`background-unparsable`), never skipped.
+    private static func groundsComposingTheirOwnAlpha(in text: NSString) -> [String] {
+        occurrences(of: Needle.background, in: text).compactMap { start in
+            let line = lineNumber(of: start, in: text)
+            guard let ground = groundExpression(in: text, after: start + Needle.background.utf16.count) else {
+                return "\(line):background-unparsable"
+            }
+            return ground.contains(Needle.opacity) ? "\(line):background-alpha" : nil
+        }
+    }
+
+    /// The wash alpha written out anywhere other than its one definition —
+    /// either as an `.opacity(…)` call or as a hand-composited measurement's
+    /// `alpha:` argument, with or without the space.
+    private static func theAlphaSpelledOutAgain(in text: NSString) -> [String] {
+        [Needle.opacity + Needle.washAlpha + ")",
+         Needle.alphaArgument + " " + Needle.washAlpha,
+         Needle.alphaArgument + Needle.washAlpha]
+            .flatMap { occurrences(of: $0, in: text) }
+            .map { "\(lineNumber(of: $0, in: text)):wash-alpha" }
+    }
+
+    /// Everything a `.background` is handed: its parenthesised argument, its
+    /// trailing closure body, or both. `nil` when a delimiter it opened never
+    /// closes, and `""` when it is a bare mention with neither — prose that
+    /// survived comment-blanking inside a string literal, which is not a call
+    /// and cannot carry an alpha.
+    private static func groundExpression(in text: NSString, after start: Int) -> String? {
+        let openParen: unichar = 40, openBrace: unichar = 123
+        var index = start
+        var parts: [String] = []
+        while index < text.length, text.character(at: index) == 32 || text.character(at: index) == 10 {
+            index += 1
+        }
+        if index < text.length, text.character(at: index) == openParen {
+            guard let argument = balancedRun(in: text, from: index + 1, opener: openParen) else { return nil }
+            parts.append(argument)
+            index += 1 + argument.utf16.count + 1
+            while index < text.length, text.character(at: index) == 32 || text.character(at: index) == 10 {
+                index += 1
+            }
+        }
+        if index < text.length, text.character(at: index) == openBrace {
+            guard let body = balancedRun(in: text, from: index + 1, opener: openBrace) else { return nil }
+            parts.append(body)
+        }
+        return parts.joined(separator: "\n")
     }
 
     /// UTF-16 offsets of every occurrence of `needle`.
@@ -128,38 +164,47 @@ final class NoticeWashLintTests: XCTestCase {
         return found
     }
 
-    /// The text between a `(` at `start - 1` and its matching `)`, or `nil`
-    /// when the parentheses never balance. Quotes are tracked so a `(` inside a
-    /// string literal cannot unbalance the walk.
-    private static func balancedArgument(in text: NSString, from start: Int) -> String? {
-        let open: unichar = 40, close: unichar = 41, quote: unichar = 34, backslash: unichar = 92
+    /// The text from `start` up to the `)` or `}` closing the delimiter that
+    /// opened at `start - 1`, or `nil` when it never closes. String literals are
+    /// tracked so a delimiter inside one cannot unbalance the walk.
+    private static func balancedRun(in text: NSString, from start: Int, opener: unichar) -> String? {
+        let closer: unichar = opener == 40 ? 41 : 125
         var depth = 1
-        var index = start
-        var inString = false
-        var escaped = false
-        while index < text.length {
+        var literal = StringLiteral()
+        for index in start..<text.length {
             let char = text.character(at: index)
-            if inString {
-                if escaped {
-                    escaped = false
-                } else if char == backslash {
-                    escaped = true
-                } else if char == quote {
-                    inString = false
-                }
-            } else if char == quote {
-                inString = true
-            } else if char == open {
+            guard literal.isCode(char) else { continue }
+            if char == opener {
                 depth += 1
-            } else if char == close {
+            } else if char == closer {
                 depth -= 1
                 if depth == 0 {
                     return text.substring(with: NSRange(location: start, length: index - start))
                 }
             }
-            index += 1
         }
         return nil
+    }
+
+    /// Whether the walk is inside a `"…"` literal. Factored out so both the
+    /// delimiter walk and the comment blanking read the same rule for what
+    /// counts as code — they disagreed once, and the disagreement was a silent
+    /// false negative (a `://` in a literal blanked the code after it).
+    private struct StringLiteral {
+        private var open = false
+        private var escaped = false
+
+        /// Consumes `char` and reports whether it is structural code rather
+        /// than literal text.
+        mutating func isCode(_ char: unichar) -> Bool {
+            let quote: unichar = 34, backslash: unichar = 92
+            guard open else {
+                if char == quote { open = true; return false }
+                return true
+            }
+            if escaped { escaped = false } else if char == backslash { escaped = true } else if char == quote { open = false }
+            return false
+        }
     }
 
     private static func lineNumber(of offset: Int, in text: NSString) -> Int {
@@ -168,12 +213,28 @@ final class NoticeWashLintTests: XCTestCase {
 
     /// Replaces each line comment with spaces of the same UTF-16 width, so the
     /// scan sees no comment and every match offset still maps to its line.
+    ///
+    /// A `//` inside a string literal is not a comment — this tree is full of
+    /// `"ws://…"` and `"http://…"` — so the blanking tracks literals rather
+    /// than taking the first `//` on the line. Getting that wrong blanks real
+    /// code and fails SILENTLY, which is the one direction this rule must not
+    /// fail in.
     private static func commentsBlanked(_ source: String) -> String {
         source.split(separator: "\n", omittingEmptySubsequences: false).map { line -> String in
-            guard let comment = line.range(of: "//") else { return String(line) }
-            let code = line[..<comment.lowerBound]
-            let blanked = String(repeating: " ", count: line[comment.lowerBound...].utf16.count)
-            return String(code) + blanked
+            let text = String(line) as NSString
+            var literal = StringLiteral()
+            var previousWasSlash = false
+            for index in 0..<text.length {
+                let char = text.character(at: index)
+                guard literal.isCode(char) else { previousWasSlash = false; continue }
+                let slash: unichar = 47
+                if char == slash && previousWasSlash {
+                    let head = text.substring(to: index - 1)
+                    return head + String(repeating: " ", count: text.length - (index - 1))
+                }
+                previousWasSlash = char == slash
+            }
+            return String(line)
         }.joined(separator: "\n")
     }
 
@@ -186,61 +247,106 @@ final class NoticeWashLintTests: XCTestCase {
     private static let corpus: [(name: String, source: String, want: [String])] = [
         (
             "a ground reading the shared token is the point of the rule",
-            "\(Needle.background)IrrColors.noticeWash(wash))",
+            "\(Fixture.call)IrrColors.noticeWash(hue))",
             []
         ),
         (
             "a ground reading a token derived from it is fine too",
-            "\(Needle.background)IrrColors.workingDim)",
+            "\(Fixture.call)IrrColors.workingDim)",
             []
         ),
         (
             "a ground composing its own alpha is flagged, and the alpha is flagged again",
-            "\(Needle.background)wash\(Needle.opacity)\(Needle.washAlpha)))",
+            "\(Fixture.call)hue\(Fixture.opacity)\(Fixture.washAlpha)))",
             ["1:background-alpha", "1:wash-alpha"]
         ),
         (
             "a DIFFERENT alpha is flagged just the same — divergence is the defect, not the number",
-            "\(Needle.background)IrrColors.pressureHigh\(Needle.opacity)0.08))",
+            "\(Fixture.call)IrrColors.pressureHigh\(Fixture.opacity)0.08))",
             ["1:background-alpha"]
         ),
         (
-            "a ground broken across lines is flagged: the scan follows the parentheses, not the line",
-            "\(Needle.background)\n    Color.orange\(Needle.opacity)0.1)\n)",
+            "a ground broken across lines is flagged: the scan follows the delimiters, not the line",
+            "\(Fixture.call)\n    Color.orange\(Fixture.opacity)0.1)\n)",
             ["1:background-alpha"]
         ),
         (
-            "a glow is not a ground — only `.background(…)` arguments are the rule's business",
-            "static let workingGlow = working\(Needle.opacity)0.25)",
+            "the trailing-closure spelling is the same ground and is flagged the same",
+            "\(Fixture.background) { hue\(Fixture.opacity)0.08) }",
+            ["1:background-alpha"]
+        ),
+        (
+            "…and so is the spelling that takes an argument AND a trailing closure",
+            "\(Fixture.call)alignment: .topLeading) { hue\(Fixture.opacity)0.08) }",
+            ["1:background-alpha"]
+        ),
+        (
+            "a URL in a string literal does not blank the code after it — `//` there is not a comment",
+            "Text(\"ws://host\")\(Fixture.call)hue\(Fixture.opacity)0.08))",
+            ["1:background-alpha"]
+        ),
+        (
+            "even reading the alpha from its token is flagged: the canonical spelling is noticeWash",
+            "\(Fixture.call)hue\(Fixture.opacity)IrrColors.noticeWashAlpha))",
+            ["1:background-alpha"]
+        ),
+        (
+            "a bare mention with no call carries no ground and is not flagged",
+            "Text(\"the \(Fixture.background) modifier\")",
+            []
+        ),
+        (
+            "a glow is not a ground — only what a background is handed is the rule's business",
+            "static let workingGlow = working\(Fixture.opacity)0.25)",
             []
         ),
         (
             "the contrast test's hand-composited alpha is the second place the number must not drift",
-            "composite(srgb(IrrColors.error), \(Needle.alphaArgument) \(Needle.washAlpha),",
+            "composite(srgb(IrrColors.error), \(Fixture.alphaArgument) \(Fixture.washAlpha),",
+            ["1:wash-alpha"]
+        ),
+        (
+            "…with or without the space after the label",
+            "composite(srgb(IrrColors.error), \(Fixture.alphaArgument)\(Fixture.washAlpha),",
             ["1:wash-alpha"]
         ),
         (
             "the alpha's own definition is not a second spelling of it",
-            "static let noticeWashAlpha: Double = \(Needle.washAlpha)",
+            "static let noticeWashAlpha: Double = \(Fixture.washAlpha)",
             []
         ),
         (
             "prose about the alpha is not code — line comments are blanked before the scan",
-            "// the ground is drawn at \(Needle.washAlpha) via \(Needle.opacity)\(Needle.washAlpha))",
+            "// the ground is drawn at \(Fixture.washAlpha) via \(Fixture.opacity)\(Fixture.washAlpha))",
             []
         ),
         (
             "LIMIT: an unbalanced ground is REPORTED, never skipped — a scan that cannot parse "
             + "its input checks more, not less",
-            "\(Needle.background)Color.red\(Needle.opacity)0.2)",
+            "\(Fixture.call)Color.red\(Fixture.opacity)0.2)",
             ["1:background-unparsable"]
         ),
         (
             "LIMIT: a block comment is not blanked, so code quoted inside one is flagged",
-            "/* \(Needle.background)wash\(Needle.opacity)0.5)) */",
+            "/* \(Fixture.call)hue\(Fixture.opacity)0.5)) */",
             ["1:background-alpha"]
         ),
     ]
+
+    /// The literal Swift spellings the corpus is written in.
+    ///
+    /// Assembled independently of `Needle` ON PURPOSE, even though the pieces
+    /// look the same. Derived from it, every fixture would move whenever the
+    /// rule moved, and a corpus that follows the scanner cannot catch the
+    /// scanner losing a spelling — which is exactly what it is for. These
+    /// constants are the language; `Needle` is one reading of it.
+    private enum Fixture {
+        static let background = ".back" + "ground"
+        static let call = background + "("
+        static let opacity = ".opa" + "city("
+        static let washAlpha = "0." + "12"
+        static let alphaArgument = "alpha" + ":"
+    }
 
     func testTheScannerReturnsThePinnedVerdictForEverySpelling() {
         for row in Self.corpus {
@@ -291,22 +397,32 @@ final class NoticeWashLintTests: XCTestCase {
             offenders.append(contentsOf: Self.offendingOccurrences(in: source, rules: rules)
                 .map { "\(relative):\($0)" })
         }
+        // Per directory, not summed over all of them: a directory that still
+        // exists but has stopped holding the sources it is meant to hold is
+        // invisible in an aggregate that the other three keep in the hundreds.
+        XCTAssertGreaterThan(filesScanned, 0, "no Swift files under \(directory) — that walk checked nothing")
         return (offenders, filesScanned)
+    }
+
+    /// The scan reads this file too, and the `Needle` doc claims it can never
+    /// match its own corpus. Asserted rather than left as prose: if it ever did
+    /// match, the tempting fix is to exclude this file, and an exclusion is the
+    /// hole the rule spends a paragraph refusing.
+    func testThisFileIsCleanUnderItsOwnRule() throws {
+        let source = try String(contentsOfFile: #filePath, encoding: .utf8)
+        XCTAssertEqual(Self.offendingOccurrences(in: source), [],
+                       "the lint's own source matches the lint — assemble the new spelling from `Needle`")
     }
 
     func testEveryNoticeGroundReadsTheOneWashToken() throws {
         var offenders: [String] = []
-        var filesScanned = 0
         for (directories, rules) in [(Self.backgroundRuleDirectories, Set<Rule>([.backgroundAlpha])),
                                      (Self.washRuleDirectories, Set<Rule>([.washAlpha]))] {
             for directory in directories {
-                let found = try walk(directory, rules: rules)
-                offenders.append(contentsOf: found.offenders)
-                filesScanned += found.filesScanned
+                offenders.append(contentsOf: try walk(directory, rules: rules).offenders)
             }
         }
 
-        XCTAssertGreaterThan(filesScanned, 0, "the scan read no Swift files — it checked nothing")
         XCTAssertEqual(
             offenders.sorted(), [],
             """

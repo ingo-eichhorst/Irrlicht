@@ -1256,7 +1256,7 @@ struct SessionListView: View {
 
             Spacer()
         }
-        .noticeGround(wash: .orange)
+        .noticeGround(hue: .orange)
     }
 }
 

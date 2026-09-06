@@ -36,7 +36,7 @@ struct UnappliedGrantsBanner: View {
             // same wash the question pill does, where the brand hue measures
             // ~2:1 and fails WCAG AA (#984).
             tint: IrrColors.waitingPillText,
-            wash: IrrColors.waiting,
+            hue: IrrColors.waiting,
             headline: summary.text,
             rows: summary.items.map {
                 BannerRow(id: $0.id, lead: "\($0.agentDisplayName) — \($0.title)", reason: $0.reason)

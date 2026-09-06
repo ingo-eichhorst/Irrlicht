@@ -124,7 +124,7 @@ struct SessionRowView: View {
         let showQuestion = (questionLine?.isEmpty == false) && !summaryCollapsed
         if showQuestion, let q = questionLine {
             Text(q)
-                .pill(color: IrrColors.waitingPillText, wash: IrrColors.waiting, lineLimit: 3)
+                .pill(color: IrrColors.waitingPillText, hue: IrrColors.waiting, lineLimit: 3)
                 // Surface the full prompt on hover.
                 .tooltip(questionFull ?? q)
                 .padding(.top, 2)
@@ -190,7 +190,7 @@ struct SessionRowView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            .alertStrip(wash: IrrColors.error)
+            .alertStrip(hue: IrrColors.error)
             // The row truncates at two lines; the tooltip carries the agent's
             // full wording, which for a provider error is often the only thing
             // that says what to actually do about it. `.tooltip`, never
@@ -454,7 +454,7 @@ struct SessionRowView: View {
                         .foregroundColor(alertColor)
                     Spacer()
                 }
-                .alertStrip(wash: alertColor)
+                .alertStrip(hue: alertColor)
                 .tooltip("Context window nearing limit")
             }
 

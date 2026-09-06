@@ -192,7 +192,7 @@ struct PermissionWizardView: View {
                 .disabled(submitting)
                 .tooltip("Run this permission's effect again without changing your decision")
         }
-        .alertStrip(wash: IrrColors.pressureHigh)
+        .alertStrip(hue: IrrColors.pressureHigh)
         .padding(.leading, 38)
         // `alertStrip` already contributes 2pt of the gap above.
         .padding(.top, 2)

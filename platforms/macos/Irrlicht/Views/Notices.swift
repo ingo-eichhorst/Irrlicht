@@ -5,13 +5,13 @@ import SwiftUI
 // Everything this app uses to say "something needs your attention" lives here:
 // three grounds, one alpha, two composed surfaces.
 //
-//   - `noticeGround(wash:)` — the panel-width, full-bleed ground. Used by
+//   - `noticeGround(hue:)` — the panel-width, full-bleed ground. Used by
 //     `BannerStrip` and by `SessionListView.errorView`, which sit in the same
 //     slot of the panel and had independently grown the same geometry.
-//   - `alertStrip(wash:)` — the inset, rounded strip drawn INSIDE a row or a
+//   - `alertStrip(hue:)` — the inset, rounded strip drawn INSIDE a row or a
 //     wizard entry: an icon plus text, tighter than a banner because it is
 //     subordinate to the thing it annotates.
-//   - `pill(color:wash:…)` — the text-only badge, no icon, single line by
+//   - `pill(color:hue:…)` — the text-only badge, no icon, single line by
 //     default.
 //
 // They differ in geometry and in nothing else. Every one of them draws its
@@ -35,20 +35,22 @@ import SwiftUI
 /// across the panel rather than as a card inside it — these notices are
 /// separated from the list by a `Divider()`, not by a margin.
 struct NoticeGround: ViewModifier {
-    /// The notice's plain brand hue. The alpha comes from the shared token.
-    let wash: Color
+    /// The notice's plain brand hue, NOT a pre-dimmed token — the alpha comes
+    /// from `IrrColors.noticeWash`, so handing it one of the `*Dim` grounds
+    /// would composite the alpha twice and render a wash of about 1.4%.
+    let hue: Color
 
     func body(content: Content) -> some View {
         content
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, IrrSpacing.sp3)
             .padding(.vertical, 6)
-            .background(IrrColors.noticeWash(wash))
+            .background(IrrColors.noticeWash(hue))
     }
 }
 
 extension View {
-    func noticeGround(wash: Color) -> some View { modifier(NoticeGround(wash: wash)) }
+    func noticeGround(hue: Color) -> some View { modifier(NoticeGround(hue: hue)) }
 }
 
 /// Shared chrome for the inline ALERT strips — an icon plus text on a tinted
@@ -64,28 +66,29 @@ extension View {
 /// separates the strip from whatever it annotates, so a caller that wants a
 /// larger gap adds to it rather than replacing it.
 struct AlertStrip: ViewModifier {
-    let wash: Color
+    /// The notice's plain brand hue — see `NoticeGround.hue`.
+    let hue: Color
 
     func body(content: Content) -> some View {
         content
             .padding(.horizontal, 4)
             .padding(.vertical, 2)
-            .background(IrrColors.noticeWash(wash))
+            .background(IrrColors.noticeWash(hue))
             .cornerRadius(IrrRadius.sm)
             .padding(.top, 2)
     }
 }
 
 extension View {
-    func alertStrip(wash: Color) -> some View { modifier(AlertStrip(wash: wash)) }
+    func alertStrip(hue: Color) -> some View { modifier(AlertStrip(hue: hue)) }
 }
 
 /// Shared shape for the row's single-line notice pills (pending question,
 /// cache-bloat badge): tinted text on a dim background, full-width,
 /// truncating rather than wrapping.
 ///
-/// `color` and `wash` are separate (issue #984): `wash` (defaulting to
-/// `color`) tints the background, kept at the plain brand hue so dots/glows
+/// `color` and `hue` are separate (issue #984): `hue` (defaulting to `color`)
+/// tints the background and is kept at the plain brand colour so dots/glows
 /// elsewhere stay visually consistent; `color` draws the text and can be a
 /// different, per-appearance-tuned value where the brand hue itself doesn't
 /// clear WCAG AA against that wash (see `IrrColors.waitingPillText`).
@@ -95,7 +98,7 @@ extension View {
 /// a single-line-sized cut.
 struct PillText: ViewModifier {
     let color: Color
-    let wash: Color
+    let hue: Color
     var font: Font = .system(size: 10)
     var lineLimit: Int = 1
 
@@ -108,14 +111,14 @@ struct PillText: ViewModifier {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 5)
             .padding(.vertical, 3)
-            .background(IrrColors.noticeWash(wash))
+            .background(IrrColors.noticeWash(hue))
             .cornerRadius(IrrRadius.sm)
     }
 }
 
 extension View {
-    func pill(color: Color, wash: Color? = nil, font: Font = .system(size: 10), lineLimit: Int = 1) -> some View {
-        modifier(PillText(color: color, wash: wash ?? color, font: font, lineLimit: lineLimit))
+    func pill(color: Color, hue: Color? = nil, font: Font = .system(size: 10), lineLimit: Int = 1) -> some View {
+        modifier(PillText(color: color, hue: hue ?? color, font: font, lineLimit: lineLimit))
     }
 }
 
@@ -168,9 +171,10 @@ struct BannerStrip<Trailing: View>: View {
     /// brand hue — the hue measures under AA against the wash it sits on
     /// (#984 found this for the question pill; it holds for every tint here).
     let tint: Color
-    /// The ground's plain brand hue. Kept raw so dots and glows elsewhere stay
-    /// visually consistent; `noticeGround` supplies the shared alpha.
-    let wash: Color
+    /// The ground's plain brand hue — see `NoticeGround.hue`. Kept raw so dots
+    /// and glows elsewhere stay visually consistent; `noticeGround` supplies
+    /// the shared alpha.
+    let hue: Color
     let headline: String
     let rows: [BannerRow]
     @ViewBuilder let trailing: () -> Trailing
@@ -195,7 +199,7 @@ struct BannerStrip<Trailing: View>: View {
             }
             trailing()
         }
-        .noticeGround(wash: wash)
+        .noticeGround(hue: hue)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(headline)
     }
@@ -203,7 +207,7 @@ struct BannerStrip<Trailing: View>: View {
 
 extension BannerStrip where Trailing == EmptyView {
     /// A banner with no action affordance.
-    init(icon: String, tint: Color, wash: Color, headline: String, rows: [BannerRow]) {
-        self.init(icon: icon, tint: tint, wash: wash, headline: headline, rows: rows) { EmptyView() }
+    init(icon: String, tint: Color, hue: Color, headline: String, rows: [BannerRow]) {
+        self.init(icon: icon, tint: tint, hue: hue, headline: headline, rows: rows) { EmptyView() }
     }
 }
