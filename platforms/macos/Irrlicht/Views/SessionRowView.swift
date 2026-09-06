@@ -3,75 +3,6 @@ import SwiftUI
 
 // MARK: - Session Row View
 
-/// Shared shape for the row's single-line notice pills (pending question,
-/// cache-bloat badge): tinted text on a dim background, full-width,
-/// truncating rather than wrapping.
-///
-/// `color` and `wash` are separate (issue #984): `wash` (defaulting to
-/// `color`) tints the 12%-alpha background, kept at the plain brand hue so
-/// dots/glows elsewhere stay visually consistent; `color` draws the text and
-/// can be a different, per-appearance-tuned value where the brand hue itself
-/// doesn't clear WCAG AA against that wash (see `IrrColors.waitingPillText`).
-///
-/// `lineLimit` defaults to 1 (the cache-bloat badge); the question pill
-/// requests more (issue #979) since the daemon no longer pre-truncates it to
-/// a single-line-sized cut.
-private struct PillText: ViewModifier {
-    let color: Color
-    let wash: Color
-    var font: Font = .system(size: 10)
-    var lineLimit: Int = 1
-
-    func body(content: Content) -> some View {
-        content
-            .font(font)
-            .foregroundColor(color)
-            .lineLimit(lineLimit)
-            .truncationMode(.tail)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 5)
-            .padding(.vertical, 3)
-            .background(wash.opacity(0.12))
-            .cornerRadius(IrrRadius.sm)
-    }
-}
-
-extension View {
-    fileprivate func pill(color: Color, wash: Color? = nil, font: Font = .system(size: 10), lineLimit: Int = 1) -> some View {
-        modifier(PillText(color: color, wash: wash ?? color, font: font, lineLimit: lineLimit))
-    }
-}
-
-/// Shared chrome for the row's full-width ALERT strips — an icon plus text on
-/// a tinted wash, as opposed to `PillText`'s text-only pill.
-///
-/// Two users, and they had drifted: the context-pressure alert (#689) and the
-/// session error line (#1802) hand-rolled the same five modifiers with
-/// different constants. One copy now, so a future third strip cannot introduce
-/// a fourth set.
-///
-/// The wash is 0.12, matching `PillText` and every other tinted notice in this
-/// app — the strips previously used 0.08. That is a deliberate, visible
-/// change: `TokenContrastTests` measures WCAG contrast against a 0.12 wash, so
-/// while the strips shipped 0.08 the test was bounding the rendered value
-/// rather than measuring it. Now it measures what ships.
-private struct AlertStrip: ViewModifier {
-    let wash: Color
-
-    func body(content: Content) -> some View {
-        content
-            .padding(.horizontal, 4)
-            .padding(.vertical, 2)
-            .background(wash.opacity(0.12))
-            .cornerRadius(IrrRadius.sm)
-            .padding(.top, 2)
-    }
-}
-
-extension View {
-    fileprivate func alertStrip(wash: Color) -> some View { modifier(AlertStrip(wash: wash)) }
-}
-
 struct ContextBar: View {
     let utilization: Double
     let pressureColor: Color
@@ -212,8 +143,9 @@ struct SessionRowView: View {
     /// nothing under it — the silent case this whole feature exists to end —
     /// so a missing detail falls back to `displayMessage`'s bare statement.
     ///
-    /// Shape copied from the context-pressure alert below rather than invented:
-    /// `exclamationmark.triangle` + text on an 8% wash at `IrrRadius.sm`. It is
+    /// Shape shared with the context-pressure alert below rather than
+    /// invented: `exclamationmark.triangle` + text on the notice wash at
+    /// `IrrRadius.sm`, via `alertStrip` (`Views/Notices.swift`). It is
     /// NOT subject to the collapse-all toggle, for the same reason
     /// `cacheBloatBlock` is not — a fault is not optional context.
     ///

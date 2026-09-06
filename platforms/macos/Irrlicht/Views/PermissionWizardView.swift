@@ -166,8 +166,11 @@ struct PermissionWizardView: View {
     }
 
     /// "Granted, but not applied" — the consent stands and the effect did
-    /// not land (#1362). Red in-content alert chrome, matching
-    /// SessionRowView's inline warning strip.
+    /// not land (#1362). Red in-content alert chrome, drawn with the shared
+    /// `alertStrip` (`Views/Notices.swift`) rather than a hand-rolled copy of
+    /// it: this row's comment claimed to match SessionRowView's inline warning
+    /// strip while rendering a different wash and different padding, which is
+    /// the drift #1814 removes.
     private func effectNoticeRow(agent: AgentPermissions, perm: PermissionItem,
                                  notice: EffectNotice) -> some View {
         HStack(alignment: .top, spacing: 6) {
@@ -189,11 +192,10 @@ struct PermissionWizardView: View {
                 .disabled(submitting)
                 .tooltip("Run this permission's effect again without changing your decision")
         }
-        .padding(6)
-        .background(IrrColors.pressureHigh.opacity(0.08))
-        .cornerRadius(IrrRadius.sm)
+        .alertStrip(wash: IrrColors.pressureHigh)
         .padding(.leading, 38)
-        .padding(.top, 4)
+        // `alertStrip` already contributes 2pt of the gap above.
+        .padding(.top, 2)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(perm.title): \(notice.label). \(notice.reason)")
     }

@@ -33,10 +33,10 @@ struct UnappliedGrantsBanner: View {
         BannerStrip(
             icon: "exclamationmark.triangle",
             // waitingPillText, not the raw `waiting` hue: this text sits on the
-            // same 12% wash the question pill does, where the brand hue
-            // measures ~2:1 and fails WCAG AA (#984).
+            // same wash the question pill does, where the brand hue measures
+            // ~2:1 and fails WCAG AA (#984).
             tint: IrrColors.waitingPillText,
-            wash: IrrColors.waitingDim,
+            wash: IrrColors.waiting,
             headline: summary.text,
             rows: summary.items.map {
                 BannerRow(id: $0.id, lead: "\($0.agentDisplayName) — \($0.title)", reason: $0.reason)

@@ -47,7 +47,7 @@ struct DaemonErrorBanner: View {
         BannerStrip(
             icon: "exclamationmark.triangle.fill",
             tint: IrrColors.errorPillText,
-            wash: IrrColors.errorDim,
+            wash: IrrColors.error,
             headline: summary.text,
             rows: summary.items.map {
                 BannerRow(id: $0.id, lead: $0.title, reason: $0.reason)
