@@ -95,10 +95,24 @@ func (runtime *LiveRuntime) WaitIrrlichtState(
 func (runtime *LiveRuntime) stateObserved(sessionID, currentState, wantedState string) (bool, error) {
 	expected := cumulativeExpectedStates(runtime.turn, wantedState)
 	recorded, err := recordingHasStateSequence(runtime.options.RecordingDirectory, sessionID, expected)
-	if wantedState == "ready" {
-		return currentState == "ready" && recorded, err
+	if err != nil {
+		return false, err
 	}
-	return recorded, err
+	if wantedState == "ready" {
+		return currentState == "ready" && recorded, nil
+	}
+	// The recording is written by the daemon and can lag its own HTTP API. Cell
+	// 1-1 timed out after 1m30s waiting for a `working` that the recording, read
+	// moments later, already held. On the FIRST turn the live state settles it:
+	// if the daemon says this session is working, it is.
+	//
+	// A later turn cannot use that shortcut. A live "working" does not say which
+	// turn it belongs to, and the whole point of the cumulative sequence is that
+	// turn two must not be satisfied by turn one's transition.
+	if runtime.turn <= 1 && currentState == "working" {
+		return true, nil
+	}
+	return recorded, nil
 }
 
 // cumulativeExpectedStates returns the full state sequence a recording must

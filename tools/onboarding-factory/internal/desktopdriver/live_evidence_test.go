@@ -311,3 +311,37 @@ func TestCapturedEnvironmentComesFromTheVerifiedComposer(t *testing.T) {
 		t.Fatal("captureEnvironment() accepted a foreign workspace")
 	}
 }
+
+// The recording is written by the daemon; the live state comes from its HTTP
+// API. The file can lag, and when it does the driver waits for a transition
+// that has already happened.
+//
+// Measured 2026-09-06 on cell 1-1: the run failed with `wait for Irrlicht state
+// working timed out after 1m30s`, and the recording read afterwards held
+// `ready (new session created)`, `working (force ready→working on first
+// activity)`, `ready (agent finished turn)` for that very session. Nothing was
+// missing; it simply was not on disk yet.
+//
+// For the FIRST turn the live state settles that: if the daemon says the
+// session is working, it is. For a later turn it cannot, because a live
+// "working" does not say WHICH turn it belongs to — only the cumulative
+// recorded sequence does. So the shortcut is confined to turn one.
+func TestWorkingIsAcceptedFromTheLiveStateOnTheFirstTurn(t *testing.T) {
+	empty := t.TempDir() // no recording flushed yet
+	runtime := &LiveRuntime{options: LiveOptions{RecordingDirectory: empty}}
+
+	observed, err := runtime.stateObserved("cli-1", "working", "working")
+	if err != nil || !observed {
+		t.Fatalf("a live working state was not accepted on turn one: %t, %v", observed, err)
+	}
+	if observed, err := runtime.stateObserved("cli-1", "ready", "working"); err != nil || observed {
+		t.Fatalf("a session that is not working read as working: %t, %v", observed, err)
+	}
+
+	// On a later turn the live state cannot say which turn it belongs to, so
+	// only the recorded sequence counts.
+	later := &LiveRuntime{options: LiveOptions{RecordingDirectory: empty}, turn: 2}
+	if observed, err := later.stateObserved("cli-1", "working", "working"); err != nil || observed {
+		t.Fatalf("turn two accepted a live working state with no recorded history: %t, %v", observed, err)
+	}
+}
