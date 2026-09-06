@@ -1,9 +1,9 @@
 # Testing Philosophy — House Style for What Counts as Evidence
 
 Referenced from [AGENTS.md](../AGENTS.md)'s Testing section. These are the
-repo's general rules for what makes a test (or any other verification
-mechanism) trustworthy — they apply everywhere, not just to one gate or one
-package. The `ir:exec` skill (`.claude/skills/ir:exec/SKILL.md`, "Prove and
+repo's general rules for what makes a test, any other verification mechanism,
+or a claim written *about* one trustworthy — they apply everywhere, not just to
+one gate or one package. The `ir:exec` skill (`.claude/skills/ir:exec/SKILL.md`, "Prove and
 verify") enforces the red-first and mutation rules mechanically; this file is
 where the full rationale and incident history live.
 
@@ -83,6 +83,48 @@ five. Neither figure had a command behind it — both were typed from memory
 under the same pressure the rule exists to catch. The fix is the same shape
 either way: derive the number in code and print the literal, or say in the
 same sentence that the figure is an estimate and how it was arrived at.
+
+**A comment that asserts a mechanism carries the same evidence as any other
+claim.** The rule above is a *number* drifting away from what it once measured; this
+is the same failure in prose. A comment naming a tier, a guard, an ordering, an
+invariant, "X cannot happen" or "this is enforced by Y" tells the next reader the
+question is settled — it is a dismissal in [AGENTS.md](../AGENTS.md)'s sense and
+gets that rule's bar: state what was run or read to confirm it, or write it as an
+intention rather than as a fact. Wrong, it is worse than absent, because it is the
+one kind of error that stops anyone from checking: PR #1809's `session_error` comment
+said a defect was "unreachable in this phase", and two later agents each had to
+re-derive whether that was still true. **And a comment describing a mutation is
+written from the mutation as RUN, not as planned** — the gap the "prefer committing
+that mutation" paragraph above leaves open, since a committed fixture and the
+sentence describing it can still disagree. PR #1806 shipped two comments claiming
+mutations its tests had actually survived.
+
+Epic #1796 is where the rate was measured, and it is a house-style problem rather
+than one agent's slip — every agent whose epic PRs were reviewed for it shipped
+some. Counted from those agents' own hand-back reports and the high-effort review of
+#1813, **a floor for wrong comments *found*, not an independently re-verified
+total**: 13 across four PRs (#1806 two, #1809 four, #1813 six, #1810 at least one).
+Two of #1813's contradicted themselves inside one comment block — one said
+"everything below this point is transcript tier" directly above a paragraph
+correctly describing two hook-tier rules below it; another said the guards "are
+restated where the invariant can see them" while lines above in the same block said
+they had been removed. All three have since been corrected — #1813's two before
+merge, #1809's by #1811 — which is why the total cannot be recomputed from `main` and stays
+a floor. Note what that costs: quoting a wrong comment to write it up puts the
+phrase back in the tree, so the grep that would answer "does this still exist in
+code?" now hits this paragraph. Scope it past the write-up — `git grep -F
+"<phrase>" -- ':!docs/'` returns nothing for all three, while the same grep for
+`transcript tier` returns 7 files, so the empty result is a real absence and not a
+broken command.
+
+**Every one was found by RUNNING or GREPPING what the comment described, never by
+reading it.** Reading a load-bearing comment is how it earns trust; going to look is
+the only way to withdraw that trust. The coordinator caught more the same way,
+by checking `consumeOnce: true` (`core/domain/session/signal_hold.go`) and the
+`ClearedByTurnBoundary` call sites rather than the prose around them. The cheapest
+mechanical version — a lint asserting that every identifier a comment names
+resolves — is deliberately **not** part of this rule; #1822 files it as separate,
+larger work, so until it exists the check is a person or an agent running the grep.
 
 **A fixture that waits by SLEEPING has not observed what it waits for, and the
 assertion after the sleep is not evidence that it has.** Poll the condition to a

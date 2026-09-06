@@ -104,6 +104,14 @@ Defects first — this skill hunts bugs. Quality cleanups are secondary here
   review pass is where three of the four incidents behind that rule were
   caught, each time by a mutation nobody had asked for — AGENTS.md's Testing
   section has the rule and the categories.)
+- **Comment claims** — a comment asserting a mechanism (a tier, a guard, an
+  ordering, an invariant, "X cannot happen", "this is enforced by Y") is a
+  claim, not commentary. Check it by running or grepping what it names, never
+  by reading it, and flag one that cites no evidence and is not phrased as an
+  intention. Check a comment describing a mutation against the mutation as run.
+  Epic #1796 shipped at least 13 wrong ones (a floor for the ones *found*,
+  counted from the agents' hand-back reports and the review of #1813), every one
+  caught this way.
 - **Efficiency** — needless O(n²) over a hot path, repeated work in a loop,
   redundant I/O or process scans.
 - **Simplification / altitude** — only when the diff reimplements something
