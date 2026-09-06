@@ -91,29 +91,35 @@ invariant, "X cannot happen" or "this is enforced by Y" tells the next reader th
 question is settled — it is a dismissal in [AGENTS.md](../AGENTS.md)'s sense and
 gets that rule's bar: state what was run or read to confirm it, or write it as an
 intention rather than as a fact. Wrong, it is worse than absent, because it is the
-one kind of error that stops anyone from checking: #1798's `session_error` comment
+one kind of error that stops anyone from checking: PR #1809's `session_error` comment
 said a defect was "unreachable in this phase", and two later agents each had to
 re-derive whether that was still true. **And a comment describing a mutation is
 written from the mutation as RUN, not as planned** — the gap the "prefer committing
 that mutation" paragraph above leaves open, since a committed fixture and the
-sentence describing it can still disagree. #1797 shipped two comments claiming
+sentence describing it can still disagree. PR #1806 shipped two comments claiming
 mutations its tests had actually survived.
 
 Epic #1796 is where the rate was measured, and it is a house-style problem rather
-than one agent's slip — every agent working that epic shipped some. Counted from the
-agents' own hand-back reports and the high-effort review of #1813, **a floor for
-wrong comments *found*, not an independently re-verified total**: 13 across four PRs
-(#1806 two, #1809 four, #1813 six, #1810 at least one). Two of #1813's contradicted
-themselves inside one comment block — one said "everything below this point is
-transcript tier" directly above a paragraph correctly describing two hook-tier rules
-below it; another said the guards "are restated where the invariant can see them"
-while lines above in the same block said they had been removed. All were corrected
-before merge, which is why the total cannot be recomputed from `main` and stays a
-floor: `git grep` finds none of those three phrases in the tree today.
+than one agent's slip — every agent whose epic PRs were reviewed for it shipped
+some. Counted from those agents' own hand-back reports and the high-effort review of
+#1813, **a floor for wrong comments *found*, not an independently re-verified
+total**: 13 across four PRs (#1806 two, #1809 four, #1813 six, #1810 at least one).
+Two of #1813's contradicted themselves inside one comment block — one said
+"everything below this point is transcript tier" directly above a paragraph
+correctly describing two hook-tier rules below it; another said the guards "are
+restated where the invariant can see them" while lines above in the same block said
+they had been removed. All three have since been corrected — #1813's two before
+merge, #1809's by #1811 — which is why the total cannot be recomputed from `main` and stays
+a floor. Note what that costs: quoting a wrong comment to write it up puts the
+phrase back in the tree, so the grep that would answer "does this still exist in
+code?" now hits this paragraph. Scope it past the write-up — `git grep -F
+"<phrase>" -- ':!docs/'` returns nothing for all three, while the same grep for
+`transcript tier` returns 7 files, so the empty result is a real absence and not a
+broken command.
 
 **Every one was found by RUNNING or GREPPING what the comment described, never by
 reading it.** Reading a load-bearing comment is how it earns trust; going to look is
-the only way to withdraw that trust. The coordinator caught two more the same way,
+the only way to withdraw that trust. The coordinator caught more the same way,
 by checking `consumeOnce: true` (`core/domain/session/signal_hold.go`) and the
 `ClearedByTurnBoundary` call sites rather than the prose around them. The cheapest
 mechanical version — a lint asserting that every identifier a comment names

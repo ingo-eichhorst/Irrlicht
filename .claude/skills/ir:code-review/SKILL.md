@@ -110,7 +110,8 @@ Defects first — this skill hunts bugs. Quality cleanups are secondary here
   by reading it, and flag one that cites no evidence and is not phrased as an
   intention. Check a comment describing a mutation against the mutation as run.
   Epic #1796 shipped at least 13 wrong ones (a floor for the ones *found*,
-  counted from the agents' own hand-back reports), every one caught this way.
+  counted from the agents' hand-back reports and the review of #1813), every one
+  caught this way.
 - **Efficiency** — needless O(n²) over a hot path, repeated work in a loop,
   redundant I/O or process scans.
 - **Simplification / altitude** — only when the diff reimplements something
