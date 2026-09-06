@@ -406,7 +406,7 @@ func (runtime *LiveRuntime) Submit(ctx context.Context) error {
 	// Resolve and click inside the retry. Desktop's renderer can swap the
 	// composer out between the two, and re-using a selector resolved before
 	// that is exactly what fails with a stale control.
-	return retryTransientAX(ctx, "submit the Desktop prompt", func() error {
+	return retryTransientAXFor(ctx, "submit the Desktop prompt", submitAttempts, func() error {
 		// Front on EVERY attempt. Looking again without doing so is what made
 		// live run 25 spend all five retries reading a backgrounded window that
 		// carried a sidebar and no composer.
@@ -489,6 +489,11 @@ const transientAXAttempts = 5
 
 const transientAXBackoff = 400 * time.Millisecond
 
+// submitAttempts is deliberately far larger. Everything else here waits out a
+// re-render; this one waits out Claude Desktop taking the whole composer away
+// and bringing it back, which is measured in seconds.
+const submitAttempts = 40
+
 // isPreClickAXFailure reports whether a helper error is one the driver may
 // safely retry. Every message listed here is raised BEFORE the helper posts a
 // mouse event:
@@ -515,8 +520,17 @@ func isPreClickAXFailure(err error) bool {
 // action must re-resolve from a fresh reading each time: the whole reason the
 // last attempt failed is that the tree moved.
 func retryTransientAX(ctx context.Context, what string, action func() error) error {
+	return retryTransientAXFor(ctx, what, transientAXAttempts, action)
+}
+
+// retryTransientAXFor is retryTransientAX with an explicit budget, for steps
+// that must outlast a view swap rather than a re-render. Claude Desktop can
+// take the composer away for seconds at a time after a workspace is trusted;
+// runs 23, 24, 27 and 28 all recovered, while 25, 26 and 29 gave up after two
+// seconds and failed with a sidebar and no composer in it.
+func retryTransientAXFor(ctx context.Context, what string, attempts int, action func() error) error {
 	var err error
-	for attempt := 1; attempt <= transientAXAttempts; attempt++ {
+	for attempt := 1; attempt <= attempts; attempt++ {
 		err = action()
 		if err == nil || !isPreClickAXFailure(err) {
 			return err
@@ -529,7 +543,7 @@ func retryTransientAX(ctx context.Context, what string, action func() error) err
 	}
 	return fmt.Errorf(
 		"%s: Claude Desktop's accessibility tree kept moving across %d attempts; last failure: %w",
-		what, transientAXAttempts, err)
+		what, attempts, err)
 }
 
 func transientHelperError(err error) error {
