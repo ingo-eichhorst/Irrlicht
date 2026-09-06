@@ -334,8 +334,15 @@ func TestWorkingIsAcceptedFromTheLiveStateOnTheFirstTurn(t *testing.T) {
 	if err != nil || !observed {
 		t.Fatalf("a live working state was not accepted on turn one: %t, %v", observed, err)
 	}
-	if observed, err := runtime.stateObserved("cli-1", "ready", "working"); err != nil || observed {
-		t.Fatalf("a session that is not working read as working: %t, %v", observed, err)
+	// A short turn is already ready before any poll can see it working, and the
+	// recording that proves it worked has not been flushed. Moving on is right:
+	// waitForCompletion still demands the recorded working→ready sequence.
+	if observed, err := runtime.stateObserved("cli-1", "ready", "working"); err != nil || !observed {
+		t.Fatalf("a turn that finished before the first poll blocked the run: %t, %v", observed, err)
+	}
+	// A session that has not started at all must still wait.
+	if observed, err := runtime.stateObserved("cli-1", "error", "working"); err != nil || observed {
+		t.Fatalf("a session in error read as a turn that ran: %t, %v", observed, err)
 	}
 
 	// On a later turn the live state cannot say which turn it belongs to, so

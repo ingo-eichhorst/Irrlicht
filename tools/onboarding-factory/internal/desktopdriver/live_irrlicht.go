@@ -109,7 +109,16 @@ func (runtime *LiveRuntime) stateObserved(sessionID, currentState, wantedState s
 	// A later turn cannot use that shortcut. A live "working" does not say which
 	// turn it belongs to, and the whole point of the cumulative sequence is that
 	// turn two must not be satisfied by turn one's transition.
-	if runtime.turn <= 1 && currentState == "working" {
+	if runtime.turn <= 1 && (currentState == "working" || currentState == "ready") {
+		// "ready" counts here too, and deliberately. A short turn reaches ready
+		// before any poll can catch it working, and the recording that proves it
+		// worked has not been flushed yet — so neither source can show working,
+		// for a turn that ran perfectly. Cell 2-13 failed exactly that way.
+		//
+		// Nothing is given up by moving on. waitForCompletion still demands the
+		// recorded sequence working→ready for this session, by which time the
+		// daemon has flushed it. That is the evidence; this wait is only a gate
+		// on the way to it.
 		return true, nil
 	}
 	return recorded, nil
