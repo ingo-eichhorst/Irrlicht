@@ -99,7 +99,32 @@ func (runtime *LiveRuntime) stateObserved(sessionID, currentState, wantedState s
 		return false, err
 	}
 	if wantedState == "ready" {
-		return currentState == "ready" && recorded, nil
+		if currentState != "ready" {
+			return false, nil
+		}
+		if recorded {
+			return true, nil
+		}
+		// The recorded `ready` is the LAST event a turn writes and the one most
+		// likely still unflushed. On the FIRST turn, the recorded `working`
+		// plus a live idle state say everything this gate needs: the turn ran,
+		// and it is over. Cells 2-3, 3-1 and 2-16 lost runs to waiting for a
+		// `ready` that was on its way to disk.
+		//
+		// A later turn cannot use that. Turn two's `working` is in the
+		// recording as soon as turn two STARTS, so accepting it as proof of
+		// completion would let a turn report finished the moment it began —
+		// which is the multi-turn defect this file already fixed once.
+		//
+		// The recording is still validated in full at promotion, by
+		// expected-validate against expected.jsonl. This is not that check.
+		if runtime.turn > 1 {
+			return false, nil
+		}
+		worked, err := recordingHasStateSequence(
+			runtime.options.RecordingDirectory, sessionID,
+			cumulativeExpectedStates(runtime.turn, "working"))
+		return worked, err
 	}
 	// The recording is written by the daemon and can lag its own HTTP API. Cell
 	// 1-1 timed out after 1m30s waiting for a `working` that the recording, read
