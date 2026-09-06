@@ -88,7 +88,11 @@ func TestRunDrivesEveryElicitedStepThroughItsControl(t *testing.T) {
 		"set_prompt", "submit", "owned", "state_working",
 		"hook", "state_turn_end",
 		"sleep_2s",
-		"state_ready", "set_prompt", "submit", "state_working",
+		// A later send waits for EITHER completed-turn state, not `ready`
+		// alone: a turn that ended by asking the user something ends `waiting`,
+		// and the composer takes a new prompt in both. Cell 2-27 hung its whole
+		// 20-minute budget on the old `ready`-only wait.
+		"state_turn_end", "set_prompt", "submit", "state_working",
 		"interrupt", "state_ready",
 		"key_Escape",
 		"mode_Plan", "model_Opus 5",

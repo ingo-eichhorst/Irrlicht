@@ -422,7 +422,14 @@ func (runner *scriptRunner) send(ctx context.Context, text string) error {
 	if slot.owned.Registry.SessionID == "" {
 		return runner.sendFirst(ctx, slot, text)
 	}
-	if _, err := runner.waitState(ctx, session.StateReady); err != nil {
+	// Either completed-turn state, not `ready` alone. A turn that ended by
+	// asking the user something ends `waiting`, and the composer takes a new
+	// prompt in both — waiting IS the session waiting for this. Cell 2-27
+	// hung its whole 20-minute budget here on 2026-09-07: its first turn ended
+	// `waiting` at a blocking dialog, and its second send waited for a `ready`
+	// that was never coming. wait_turn already accepts both (WaitIrrlichtTurnEnd);
+	// this was the one place left that did not.
+	if _, err := runner.waitTurnEnd(ctx); err != nil {
 		return err
 	}
 	if err := runner.runtime.SetPrompt(ctx, slot.owned, text); err != nil {
@@ -482,19 +489,32 @@ func (runner *scriptRunner) waitTurn(ctx context.Context) error {
 		}
 		slot.hookSeen = true
 	}
+	_, err = runner.waitTurnEnd(ctx)
+	return err
+}
+
+// waitTurnEnd waits for the active slot to reach EITHER completed-turn state. A
+// normal turn ends ready; a turn that ends by asking the user something ends
+// waiting. Both mean the same thing to a caller: the turn is over and the
+// composer will take a new prompt.
+func (runner *scriptRunner) waitTurnEnd(ctx context.Context) (SessionObservation, error) {
+	slot, err := runner.current()
+	if err != nil {
+		return SessionObservation{}, err
+	}
 	var observation SessionObservation
 	if err := runStep(ctx, runner.request.TurnTimeout, "Irrlicht completed-turn state", func(step context.Context) error {
 		var err error
 		observation, err = runner.runtime.WaitIrrlichtTurnEnd(step, slot.owned)
 		return err
 	}); err != nil {
-		return err
+		return SessionObservation{}, err
 	}
 	if observation.State != session.StateReady && observation.State != session.StateWaiting {
-		return fmt.Errorf("Irrlicht turn ended in non-terminal state %q", observation.State)
+		return SessionObservation{}, fmt.Errorf("Irrlicht turn ended in non-terminal state %q", observation.State)
 	}
 	slot.observation = observation
-	return nil
+	return observation, nil
 }
 
 func (runner *scriptRunner) interrupt(ctx context.Context) error {
