@@ -34,9 +34,8 @@ type LiveOptions struct {
 }
 
 type LiveRuntime struct {
-	options  LiveOptions
-	helper   helperClient
-	controls map[string]helperSelector
+	options LiveOptions
+	helper  helperClient
 	// workspace is the composer WaitComposer verified. Submit re-resolves
 	// against it rather than against a caller-supplied value.
 	workspace string
@@ -265,7 +264,6 @@ func (runtime *LiveRuntime) WaitComposer(ctx context.Context, workspace string) 
 		ctx, workspace, runtime.helper.inspect, runtime.helper.probe, runtime.helper.click,
 		runtime.RecordStep, runtime.front, runtime.foreignTrustPrompt)
 	if err == nil {
-		runtime.controls = controls
 		runtime.workspace = workspace
 		// Read the environment now. It is unreadable after the turn.
 		runtime.environment = EnvironmentEvidence{
@@ -394,18 +392,46 @@ func waitForComposerControls(
 	return controls, err
 }
 
-func (runtime *LiveRuntime) SetPrompt(ctx context.Context, prompt string) error {
-	selector, err := runtime.control(controlPrompt)
-	if err != nil {
-		return err
-	}
-	// Front Desktop first: the composer is not in the accessibility tree at all
-	// while the app is in the background, and focus can move between the wait
-	// that verified this selector and now.
-	if err := runtime.front(ctx); err != nil {
-		return err
-	}
-	return runtime.helper.setValue(ctx, selector, prompt)
+func (runtime *LiveRuntime) SetPrompt(ctx context.Context, owned OwnedSession, prompt string) error {
+	return setPrompt(ctx, runtime.workspace, owned, prompt, runtime.front,
+		runtime.helper.inspect, runtime.helper.setValue)
+}
+
+// setPrompt re-resolves the prompt on every attempt. Setting a text value is
+// idempotent, so a failed value_equals postcondition is safe to retry.
+// A later turn also proves that the conversation on screen belongs to the
+// session that the run owns before it changes any text.
+func setPrompt(
+	ctx context.Context,
+	workspace string,
+	owned OwnedSession,
+	prompt string,
+	activate func(context.Context) error,
+	inspect func(context.Context) ([]helperElement, error),
+	setValue func(context.Context, helperSelector, string) error,
+) error {
+	return retryIdempotentAXFor(ctx, "set the Desktop prompt", submitAttempts, func() error {
+		if err := activate(ctx); err != nil {
+			return err
+		}
+		elements, err := inspect(ctx)
+		if err != nil {
+			return err
+		}
+		if owned.Registry.SessionID != "" {
+			if strings.TrimSpace(owned.Registry.Title) == "" {
+				return errors.New("the owned Desktop session has no title for the open-conversation guard")
+			}
+			if _, err := selectedSessionMenu(elements, owned.Registry.Title); err != nil {
+				return fmt.Errorf("prove the owned Desktop conversation is open: %w", err)
+			}
+		}
+		controls, err := composerControls(elements, workspace, []string{controlPrompt})
+		if err != nil {
+			return err
+		}
+		return setValue(ctx, controls[controlPrompt], prompt)
+	})
 }
 
 // Submit resolves the send button from a FRESH reading rather than from the
@@ -615,6 +641,27 @@ func retryTransientAXFor(ctx context.Context, what string, attempts int, action 
 	}
 	return fmt.Errorf(
 		"%s: Claude Desktop's accessibility tree kept moving across %d attempts; last failure: %w",
+		what, attempts, err)
+}
+
+// retryIdempotentAXFor also retries a missed postcondition. This is valid only
+// for actions such as setting a text value, where repeating the same action
+// cannot duplicate a turn or approve a second dialog.
+func retryIdempotentAXFor(ctx context.Context, what string, attempts int, action func() error) error {
+	var err error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		err = action()
+		if err == nil || (!isPreClickAXFailure(err) && !isMissedPostcondition(err)) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("%s: %w; last accessibility failure: %v", what, ctx.Err(), err)
+		case <-time.After(transientAXBackoff):
+		}
+	}
+	return fmt.Errorf(
+		"%s: Claude Desktop's accessibility tree did not settle across %d attempts; last failure: %w",
 		what, attempts, err)
 }
 

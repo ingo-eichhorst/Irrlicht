@@ -51,6 +51,13 @@ func (probe *budgetProbe) WaitIrrlichtState(
 	return probe.fakeRuntime.WaitIrrlichtState(ctx, owned, state)
 }
 
+func (probe *budgetProbe) WaitIrrlichtTurnEnd(
+	ctx context.Context, owned OwnedSession,
+) (SessionObservation, error) {
+	probe.record("turn-end", ctx)
+	return probe.fakeRuntime.WaitIrrlichtTurnEnd(ctx, owned)
+}
+
 // RED-FIRST: every wait below used StepTimeout, so the two subagent cells 3-1
 // and 3-2 both died on 2026-09-06 with `wait for Irrlicht state ready timed out
 // after 1m30s` while the turn each was recording was still running correctly.
@@ -70,7 +77,7 @@ func TestTurnWaitsUseTheTurnBudgetAndInterfaceWaitsUseTheStepBudget(t *testing.T
 	}
 
 	interfaceWaits := []string{"composer", "owned"}
-	turnWaits := []string{"hook", "state:working", "state:ready"}
+	turnWaits := []string{"hook", "state:working", "turn-end"}
 	for _, name := range append(append([]string{}, interfaceWaits...), turnWaits...) {
 		if _, seen := probe.budgets[name]; !seen {
 			t.Fatalf("the %q wait never ran; this check cannot compare a budget it never saw", name)

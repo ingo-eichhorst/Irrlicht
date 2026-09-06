@@ -26,7 +26,10 @@ func controlsComposerElements(project string) []helperElement {
 }
 
 func TestInterruptClicksStopAndWaitsForSendToExist(t *testing.T) {
-	elements := controlsComposerElements("workspace")
+	// A running turn exposes Stop in the composer slot. It does not expose
+	// Send. The old fixture supplied Send and let the implementation invent a
+	// Stop selector from it, so it did not reproduce the live interrupt state.
+	elements := inFlightComposerElements("workspace")
 	inspect := func(context.Context) ([]helperElement, error) { return elements, nil }
 	var clicked helperSelector
 	var postcondition helperPostcondition
@@ -64,8 +67,6 @@ func TestInterruptFailsLoudlyWhenSendCannotBeResolved(t *testing.T) {
 // Escape cancels an in-flight turn (Stop gives way to Send); Enter submits
 // (Send gives way to Stop). Both press the SAME prompt control.
 func TestPressKeyEscapeWaitsForSendAndEnterWaitsForStop(t *testing.T) {
-	elements := controlsComposerElements("workspace")
-	inspect := func(context.Context) ([]helperElement, error) { return elements, nil }
 	tests := []struct {
 		key       string
 		wantAfter string
@@ -75,6 +76,11 @@ func TestPressKeyEscapeWaitsForSendAndEnterWaitsForStop(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.key, func(t *testing.T) {
+			elements := controlsComposerElements("workspace")
+			if test.key == "Escape" {
+				elements = inFlightComposerElements("workspace")
+			}
+			inspect := func(context.Context) ([]helperElement, error) { return elements, nil }
 			var pressed helperSelector
 			var keyCode uint16
 			var postcondition helperPostcondition

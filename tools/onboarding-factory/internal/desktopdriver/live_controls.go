@@ -37,19 +37,8 @@ const (
 	popupCloseTimeout = 10_000
 )
 
-func (runtime *LiveRuntime) control(name string) (helperSelector, error) {
-	selector, ok := runtime.controls[name]
-	if !ok {
-		return helperSelector{}, fmt.Errorf("Desktop %s control was not verified", name)
-	}
-	return selector, nil
-}
-
 // freshControls re-inspects the live Desktop tree and resolves exactly the
-// named controls by identity. It exists because WaitComposer only ever caches
-// basicTurnControls (environment, project, prompt) into runtime.controls — see
-// its comment in catalog.go — so `send`, `mode`, and `model` are never in that
-// cache and must resolve themselves fresh on every use.
+// named controls by identity.
 func freshControls(
 	ctx context.Context,
 	workspace string,
@@ -82,6 +71,36 @@ func freshSendAndStop(
 	send = controls[controlSend]
 	stop = stopSelectorFor(send)
 	return send, stop, nil
+}
+
+// freshStopAndSend resolves the state that exists while a turn is running.
+// It cannot start from Send because Desktop removes Send when Stop appears.
+func freshStopAndSend(
+	ctx context.Context,
+	workspace string,
+	inspect func(context.Context) ([]helperElement, error),
+) (stop, send helperSelector, err error) {
+	elements, err := inspect(ctx)
+	if err != nil {
+		return helperSelector{}, helperSelector{}, err
+	}
+	if _, err := composerControls(elements, workspace, basicTurnControls()); err != nil {
+		return helperSelector{}, helperSelector{}, err
+	}
+	var stops []helperElement
+	for _, element := range elements {
+		if element.Role == "AXButton" && element.Description == stopButtonDescription {
+			stops = append(stops, element)
+		}
+	}
+	if len(stops) != 1 {
+		return helperSelector{}, helperSelector{}, fmt.Errorf(
+			"Desktop stop control requires one AXButton described %q; found %d",
+			stopButtonDescription, len(stops))
+	}
+	stop = selectorFor(stops[0])
+	send = helperSelector{Role: "AXButton", Description: "Send", Hierarchy: stop.Hierarchy}
+	return stop, send, nil
 }
 
 // stopButtonDescription is the label Claude Desktop puts on the send slot while
@@ -123,7 +142,7 @@ func interruptTurn(
 	click func(context.Context, helperSelector, helperPostcondition) error,
 ) error {
 	return retryTransientAX(ctx, "interrupt the in-flight Desktop turn", func() error {
-		send, stop, err := freshSendAndStop(ctx, workspace, inspect)
+		stop, send, err := freshStopAndSend(ctx, workspace, inspect)
 		if err != nil {
 			return err
 		}
@@ -154,13 +173,27 @@ func pressKey(
 			key, strings.Join(SupportedKeys(), ", "))
 	}
 	return retryTransientAX(ctx, fmt.Sprintf("press %s", key), func() error {
-		controls, err := freshControls(ctx, workspace, []string{controlSend, controlPrompt}, inspect)
-		if err != nil {
-			return err
+		var send, stop, prompt helperSelector
+		if key == "Escape" {
+			var err error
+			stop, send, err = freshStopAndSend(ctx, workspace, inspect)
+			if err != nil {
+				return err
+			}
+			controls, err := freshControls(ctx, workspace, []string{controlPrompt}, inspect)
+			if err != nil {
+				return err
+			}
+			prompt = controls[controlPrompt]
+		} else {
+			controls, err := freshControls(ctx, workspace, []string{controlSend, controlPrompt}, inspect)
+			if err != nil {
+				return err
+			}
+			send = controls[controlSend]
+			stop = stopSelectorFor(send)
+			prompt = controls[controlPrompt]
 		}
-		send := controls[controlSend]
-		stop := helperSelector{Role: "AXButton", Description: "Stop", Hierarchy: send.Hierarchy}
-		prompt := controls[controlPrompt]
 		// Escape cancels an in-flight turn: Stop must give way to Send.
 		// Enter submits: Send must give way to Stop.
 		after := helperPostcondition{

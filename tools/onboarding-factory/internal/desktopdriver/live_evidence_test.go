@@ -418,3 +418,27 @@ func TestReadyIsSatisfiedByALiveIdleSessionThatHasWorked(t *testing.T) {
 		t.Fatalf("a session that never worked read as a completed turn: %t, %v", observed, err)
 	}
 }
+
+// A blocking user question ends the agent turn in waiting, not ready. The
+// driver must require the recorded working->waiting transition. A live waiting
+// state with only working recorded is not enough, because the recording is the
+// evidence that the waiting transition belongs to this turn.
+func TestWaitingRequiresItsOwnRecordedTransition(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "recording.jsonl")
+	working := `{"kind":"state_transition","session_id":"cli-1","new_state":"working"}`
+	waiting := `{"kind":"state_transition","session_id":"cli-1","new_state":"waiting"}`
+	if err := os.WriteFile(path, []byte(working+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &LiveRuntime{options: LiveOptions{RecordingDirectory: dir}}
+	if observed, err := runtime.stateObserved("cli-1", "waiting", "waiting"); err != nil || observed {
+		t.Fatalf("waiting was accepted before its recorded transition: observed=%t err=%v", observed, err)
+	}
+	if err := os.WriteFile(path, []byte(strings.Join([]string{working, waiting}, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if observed, err := runtime.stateObserved("cli-1", "waiting", "waiting"); err != nil || !observed {
+		t.Fatalf("recorded waiting was not accepted: observed=%t err=%v", observed, err)
+	}
+}

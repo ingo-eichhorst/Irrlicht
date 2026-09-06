@@ -10,6 +10,9 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
+	"strings"
+
+	"irrlicht/core/domain/session"
 )
 
 func (runtime *LiveRuntime) WaitIrrlichtState(
@@ -17,8 +20,23 @@ func (runtime *LiveRuntime) WaitIrrlichtState(
 	owned OwnedSession,
 	state string,
 ) (SessionObservation, error) {
+	return runtime.waitIrrlichtStates(ctx, owned, []string{state})
+}
+
+func (runtime *LiveRuntime) WaitIrrlichtTurnEnd(
+	ctx context.Context,
+	owned OwnedSession,
+) (SessionObservation, error) {
+	return runtime.waitIrrlichtStates(ctx, owned, []string{session.StateReady, session.StateWaiting})
+}
+
+func (runtime *LiveRuntime) waitIrrlichtStates(
+	ctx context.Context,
+	owned OwnedSession,
+	states []string,
+) (SessionObservation, error) {
 	var observation SessionObservation
-	err := poll(ctx, "Irrlicht session state "+state, func() (bool, error) {
+	err := poll(ctx, "Irrlicht session state "+strings.Join(states, " or "), func() (bool, error) {
 		sessions, err := runtime.fetchIrrlichtSessions(ctx)
 		if err != nil {
 			return false, err
@@ -56,15 +74,17 @@ func (runtime *LiveRuntime) WaitIrrlichtState(
 		}
 		runtime.processes[owned.Registry.SessionID] = candidate.PID
 		runtime.processEvidence[owned.Registry.SessionID] = process
-		stateSeen, err := runtime.stateObserved(owned.Transcript.SessionID, candidate.State, state)
-		if err != nil {
-			return false, err
+		for _, state := range states {
+			stateSeen, err := runtime.stateObserved(owned.Transcript.SessionID, candidate.State, state)
+			if err != nil {
+				return false, err
+			}
+			if stateSeen {
+				observation = candidate
+				return true, nil
+			}
 		}
-		if !stateSeen {
-			return false, nil
-		}
-		observation = candidate
-		return true, nil
+		return false, nil
 	})
 	return observation, err
 }
@@ -98,12 +118,15 @@ func (runtime *LiveRuntime) stateObserved(sessionID, currentState, wantedState s
 	if err != nil {
 		return false, err
 	}
-	if wantedState == "ready" {
-		if currentState != "ready" {
+	if wantedState == session.StateReady || wantedState == session.StateWaiting {
+		if currentState != wantedState {
 			return false, nil
 		}
 		if recorded {
 			return true, nil
+		}
+		if wantedState == session.StateWaiting {
+			return false, nil
 		}
 		// The recorded `ready` is the LAST event a turn writes and the one most
 		// likely still unflushed. On the FIRST turn, the recorded `working`
@@ -123,7 +146,7 @@ func (runtime *LiveRuntime) stateObserved(sessionID, currentState, wantedState s
 		}
 		worked, err := recordingHasStateSequence(
 			runtime.options.RecordingDirectory, sessionID,
-			cumulativeExpectedStates(runtime.turn, "working"))
+			cumulativeExpectedStates(runtime.turn, session.StateWorking))
 		return worked, err
 	}
 	// The recording is written by the daemon and can lag its own HTTP API. Cell
@@ -134,7 +157,7 @@ func (runtime *LiveRuntime) stateObserved(sessionID, currentState, wantedState s
 	// A later turn cannot use that shortcut. A live "working" does not say which
 	// turn it belongs to, and the whole point of the cumulative sequence is that
 	// turn two must not be satisfied by turn one's transition.
-	if runtime.turn <= 1 && (currentState == "working" || currentState == "ready") {
+	if runtime.turn <= 1 && (currentState == session.StateWorking || currentState == session.StateReady) {
 		// "ready" counts here too, and deliberately. A short turn reaches ready
 		// before any poll can catch it working, and the recording that proves it
 		// worked has not been flushed yet — so neither source can show working,
@@ -157,11 +180,11 @@ func (runtime *LiveRuntime) stateObserved(sessionID, currentState, wantedState s
 func cumulativeExpectedStates(turn int, wantedState string) []string {
 	expected := make([]string, 0, 2*turn)
 	for i := 1; i < turn; i++ {
-		expected = append(expected, "working", "ready")
+		expected = append(expected, session.StateWorking, session.StateReady)
 	}
-	expected = append(expected, "working")
-	if wantedState == "ready" {
-		expected = append(expected, "ready")
+	expected = append(expected, session.StateWorking)
+	if wantedState == session.StateReady || wantedState == session.StateWaiting {
+		expected = append(expected, wantedState)
 	}
 	return expected
 }
