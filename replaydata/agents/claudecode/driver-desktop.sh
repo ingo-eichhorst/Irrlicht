@@ -40,6 +40,10 @@ DRIVE_SLASH_REQUIRES_STEP_TYPE=true
 
 STAGING="$1"
 TIMEOUT_S="$3"
+# Argument 4 is the cell settings blob. It was accepted and DROPPED until
+# #1888 follow-up: Desktop takes no --settings launch flag, so the Go driver
+# writes it into the workspace as .claude/settings.json instead.
+SETTINGS_PATH="$4"
 DRIVER_INPUT="$5"
 DRIVER_LOG="$STAGING/driver.log"
 PROMPT_FILE="$STAGING/desktop-prompt.txt"
@@ -71,6 +75,7 @@ set +e
   --repo-root "$IRRLICHT_REPO_ROOT" \
   --staging "$STAGING" \
   --workspace "$STAGING/cwd" \
+  --settings "$SETTINGS_PATH" \
   "${INPUT_FLAG[@]}" \
   --helper "$IRRLICHT_DESKTOP_HELPER_BIN" \
   --daemon-address "$IRRLICHT_BIND_ADDR" \

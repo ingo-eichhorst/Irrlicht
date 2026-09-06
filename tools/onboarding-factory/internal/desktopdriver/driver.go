@@ -1,9 +1,13 @@
 package desktopdriver
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -71,6 +75,10 @@ type Baseline struct {
 
 type RunRequest struct {
 	Workspace string
+	// WorkspaceSettings is the cell's `settings` block, written into the
+	// workspace as .claude/settings.json before Desktop is pointed at it.
+	// Empty means the cell declared none.
+	WorkspaceSettings []byte
 	// Prompt drives the one-turn form. Exactly one of Prompt and Script is set.
 	Prompt string
 	// Script drives the recipe form. Its grammar is recipe.go's.
@@ -156,6 +164,12 @@ func Run(ctx context.Context, runtime Runtime, request RunRequest) (result RunRe
 	// the cell asked for. A bare prompt keeps the no-tool safety boundary.
 	if teller, ok := runtime.(interface{ ExpectTools(bool) }); ok {
 		teller.ExpectTools(len(request.Script) > 0)
+	}
+	// Before anything opens the workspace. Claude Code reads project settings
+	// when the session starts, so a write after the deep link is the same as
+	// no write at all.
+	if err := writeWorkspaceSettings(request); err != nil {
+		return result, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, request.OverallTimeout)
 	defer cancel()
@@ -604,6 +618,47 @@ func runStep(
 				name, timeout, step.Err(), err)
 		}
 		return fmt.Errorf("wait for %s: %w", name, err)
+	}
+	return nil
+}
+
+// writeWorkspaceSettings puts the cell's `settings` block into the run's own
+// workspace as .claude/settings.json.
+//
+// This is the Desktop equivalent of the CLI driver's `claude --settings
+// <path>`. Desktop launches its own session and takes no such flag, but it
+// DOES read project-scoped settings — measured live on 2026-09-06: a
+// PreToolUse hook placed this way fired, and permissions.defaultMode "plan"
+// held a turn back from writing a file it was explicitly told to write.
+//
+// The write is confined to the workspace the run created and throws away. It
+// never touches ~/.claude/settings.json, which the Desktop profile depends on
+// for its hook wiring and which desktop_profile_validate_cell still refuses to
+// let a cell modify.
+//
+// An empty block is ABSENT, not empty: run-cell.sh produces the four-byte
+// literal `null` for a cell that declares no settings, and writing that would
+// hand Claude Code a project config the cell never asked for. A block that is
+// not a JSON object is an authoring error and stops the run, because handing
+// it over unread would surface as an unexplained session failure instead.
+func writeWorkspaceSettings(request RunRequest) error {
+	blob := bytes.TrimSpace(request.WorkspaceSettings)
+	if len(blob) == 0 || string(blob) == "null" {
+		return nil
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(blob, &fields); err != nil {
+		return fmt.Errorf("cell settings are not a JSON object: %w", err)
+	}
+	if len(fields) == 0 {
+		return nil
+	}
+	dir := filepath.Join(request.Workspace, ".claude")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create the workspace .claude directory: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), blob, 0o644); err != nil {
+		return fmt.Errorf("write the workspace settings: %w", err)
 	}
 	return nil
 }
