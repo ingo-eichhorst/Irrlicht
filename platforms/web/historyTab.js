@@ -12,21 +12,25 @@ const HISTORY_COLORS = [
 ];
 const RANGE_LABELS = { day: 'Day', week: 'Week', month: 'Month', year: 'Year', 'this-month': 'This Month', custom: 'Custom' };
 export const CHART_LABELS = { cost: 'Cost', tokens: 'Tokens', co2: 'CO2', models: 'Models', providers: 'Providers', agents: 'Agents', state: 'Activity', yield: 'Yield', dora: 'DORA', autonomy: 'Autonomy' };
-// Autonomy (#1905). `autonomy` is a CLIENT-SIDE pseudo-chart name for the
-// daemon's chart=autonomy_projects: FIVE PER-PROJECT PANELS, one per project,
-// stacked, each carrying a longest-run line and a concurrency histogram under
-// it. One request, one payload — the section used to fan out into two charts
-// (a percentile band and a per-project run strip) and both are gone.
+// Autonomy (#1905). `autonomy` is a CLIENT-SIDE pseudo-chart name that fans out
+// into the daemon's TWO real charts, both over the same window:
+//
+//   chart=autonomy_duration - the AGGREGATE percentile chart across every
+//   project (p95/p50/p5, with the plane between p95 and p5 filled), drawn on
+//   the shared canvas.
+//   chart=autonomy_projects - the per-project panels, of which exactly ONE is
+//   drawn at a time, picked from a dropdown in its own header row.
+//
+// ONE Range control moves both, because they are read together: two windows
+// would let the chart show a month while the panel under it showed a year, with
+// nothing on screen saying they disagreed. The run strip's separate Span picker
+// was exactly that and went with the strip (chart=autonomy_spans stays deleted).
 //
 // WINDOW LENGTHS, not bucket widths. These keys overlap GRANULARITY_LABELS'
 // textually and mean something else entirely: there a key names a bucket width
 // that is multiplied by a count (so '24h' resolves to a THIRTY-DAY window),
 // here a key IS the window. The two tables must never be merged - see
 // autonomy window vocabularies in irrlicht.history.autonomy.test.js.
-//
-// There is no Span control any more. It governed the run strip's own window,
-// and it went with the strip: one window, one control, and no pair of
-// textually-overlapping vocabularies for a reader to keep apart.
 export const AUTONOMY_RANGE_LABELS = { '30d': '30 days', '1y': 'Year' };
 // Granularity steps for chart=state's activity matrix (issue #981) — each
 // picks both the server's bucket width and the matrix's visible column
@@ -66,13 +70,21 @@ const historyState = {
   // granularity is chart=state's own zoom-level axis (#981) — independent of
   // range, which every other chart uses instead.
   granularity: '24h',
-  // Autonomy (#1905): its own window, which is not `range`. One key now, not
-  // two - the run strip's Span went with the strip.
+  // Autonomy (#1905): its own window, which is not `range`. ONE key, shared by
+  // both of the section's elements.
   autonomyRange: '30d',
+  // Which project the single panel draws. null means "whatever the daemon ranks
+  // first", so a fresh tab needs no stored name; once the reader picks one, the
+  // NAME is held rather than the rank, and it SURVIVES a Range change. Holding
+  // a rank instead would silently swap the project under the reader whenever a
+  // longer window reordered the ranking.
+  autonomyProject: null,
   // There is no run-scope key here (#1905 recording): the section counts every
   // run, subagent runs included, because Irrlicht recorded them. What each run
   // WAS still matters - the `kind` field is what splits a concurrency peak into
   // sessions and subagents - but which runs are counted is not a choice.
+  //
+  // Holds BOTH payloads: { duration, projects }.
   autonomyData: null,
   filters: { provider: [], token_type: [], project: [] },
   known: { provider: [], project: [] },
@@ -254,10 +266,12 @@ function setHistoryFilterParams(p, state) {
   }
 }
 
-// autonomyQuery builds the Autonomy request: one chart, one window.
-export function autonomyQuery(state = historyState) {
+// autonomyQuery builds one of the two Autonomy requests. `element` picks which
+// chart; both send the SAME window, which is what makes one Range control
+// honest.
+export function autonomyQuery(element, state = historyState) {
   const p = new URLSearchParams();
-  p.set('chart', 'autonomy_projects');
+  p.set('chart', element === 'projects' ? 'autonomy_projects' : 'autonomy_duration');
   p.set('window', state.autonomyRange);
   // No run-scope parameter (#1905 recording). Every run counts, so there is
   // nothing to ask for - and sending the retired one would leave an OLD daemon
@@ -281,18 +295,23 @@ export function historyQuery(state = historyState) {
   return p.toString();
 }
 
-// fetchAutonomy fetches the section's single payload.
+// fetchAutonomy fetches BOTH elements. Either failing marks the whole section
+// unloaded rather than drawing one chart beside an empty frame that never
+// resolves - the two are read together, so half of them is not a partial answer
+// but a misleading one.
 function fetchAutonomy() {
   const seq = ++historyFetchSeq;
-  return fetch('/api/v1/history?' + autonomyQuery())
+  const get = (element) => fetch('/api/v1/history?' + autonomyQuery(element))
     .then(r => (r.ok ? r.json() : null))
-    .catch(() => null)
-    .then(data => {
-      if (seq !== historyFetchSeq) return; // superseded by a newer request
-      historyState.autonomyData = data || null;
-      historyState.data = historyState.autonomyData;
-      renderHistory();
-    });
+    .catch(() => null);
+  return Promise.all([get('duration'), get('projects')]).then(([duration, projects]) => {
+    if (seq !== historyFetchSeq) return; // superseded by a newer request
+    historyState.autonomyData = (duration && projects) ? { duration, projects } : null;
+    // `data` drives the shared empty/export paths, and the aggregate chart is
+    // what the shared canvas draws, so it is the one that goes there.
+    historyState.data = historyState.autonomyData ? duration : null;
+    renderHistory();
+  });
 }
 
 function fetchHistory() {
@@ -378,7 +397,8 @@ function paintActiveHistoryChart() {
       renderStatePanel();
       break;
     case 'autonomy':
-      renderAutonomyPanels();
+      paintAutonomyChart();
+      renderAutonomyPanel();
       renderAutonomySidePanel();
       break;
     default:
@@ -415,19 +435,19 @@ function syncHistoryMatrixVisibility(isState) {
   const canvas = document.getElementById('history-chart');
   const matrixScroll = document.getElementById('history-matrix-scroll');
   const isAutonomy = historyState.chart === 'autonomy';
-  // Autonomy joins chart=state in replacing the shared canvas with its own DOM
-  // block inside the SAME card, rather than taking a full-width strip below it:
-  // the section is now one element, so it belongs where every other chart is
-  // drawn, with the side panel keeping its place beside it.
-  if (canvas) canvas.hidden = isState || isAutonomy;
+  // Autonomy KEEPS the shared canvas — that is where its aggregate percentile
+  // chart is drawn — and adds its project panel underneath, inside the same
+  // card. Only chart=state replaces the canvas outright.
+  if (canvas) canvas.hidden = isState;
   if (matrixScroll) matrixScroll.hidden = !isState;
   const panels = document.getElementById('history-autonomy-panels');
   if (panels) panels.hidden = !isAutonomy;
-  // The card GROWS for the panel stack rather than scrolling inside its own
-  // fixed height (QA-2). Five panels do not fit 360px at a readable height, and
-  // the two things an inner scrollbar cut off first were the x axis and the
-  // "+N more" line — the row that says what the view left out. The class is
-  // scoped to this chart, so every other chart keeps its fixed-height card.
+  // The card GROWS for the two elements rather than scrolling inside its own
+  // fixed height (QA-2, #1919). The rows an inner scrollbar cut off first were
+  // the x axis and the "+N more" line — the row that says what the view left
+  // out. The class is scoped to this chart, so every other chart keeps its
+  // fixed-height card; it also gives the canvas an explicit height, which a
+  // percentage cannot supply inside an auto-height parent.
   const wrap = document.getElementById('history-chart-wrap');
   if (wrap) wrap.classList.toggle('autonomy', isAutonomy);
 }
@@ -725,33 +745,44 @@ function paintHistoryChart() {
 
 // --- Autonomy (#1905) ---
 //
-// FIVE PER-PROJECT PANELS over the always-on span log, stacked inside the
-// shared chart card. Every panel carries the same two things:
+// TWO ELEMENTS over the always-on span log, one above the other inside the
+// shared chart card, sharing one Range control:
 //
-//   A LINE — the longest run in each time bucket. Only `working` matters to
-//   this section now, so how a run ended is recorded and never drawn.
-//   A HISTOGRAM under it — how many runs were working AT THE SAME TIME in that
-//   bucket, derived by the daemon from the spans by overlap.
+//   THE AGGREGATE CHART, on the shared canvas — p95/p50/p5 of run duration
+//   across EVERY project, with the plane between p95 and p5 filled as a band.
+//   "Is autonomy getting better across the machine."
+//   ONE PROJECT PANEL below it — the longest run in each time bucket as a line,
+//   and how many runs were working at the same time under it as a histogram.
+//   "What did THIS project do." The project is picked from a dropdown in the
+//   panel's own header row.
 //
-// WHAT THIS REPLACED. The section used to be two elements: a p5–p95 band with a
-// p50 line, and a per-project run strip coloured by end reason. Both are gone,
-// along with the strip's legend and glyphs, the Span picker that governed its
-// window, and the sample floor that marked buckets whose p95 was really their
-// maximum. A maximum over one run IS that run, so the floor has nothing left to
-// protect and is not carried over as decoration.
+// WHY BOTH. A maximum over one project is that project's story; a maximum
+// charted across every project is a chart of whoever ran longest that day. A
+// percentile over the whole population is a trend; a percentile over one
+// project's four runs is not a percentile. Neither figure can stand in for the
+// other, which is why #1919's five-panels-only build lost something real and
+// this restores it.
 //
-// SHARED LOG Y ACROSS THE FIVE PANELS. Shared, because comparing the projects is
-// the point of picking five; log, because a project whose best day is two
-// minutes would otherwise be a flat line under one whose best is eleven hours.
-// Each panel states its own longest as a NUMBER in its header, so the exact
-// figure never depends on reading the axis.
+// WHY ONE PANEL AND NOT FIVE. Five panels squeezed each plot to 40px, and the
+// reader could still only compare the five the daemon happened to rank highest.
+// One panel gets 110px for its line and 44px for its bars, and the dropdown
+// reaches EVERY project the window holds.
+//
+// LINEAR Y ON BOTH, and the cost is stated where each domain is chosen
+// (autonomyYDomain, autonomyAggregateDomain) rather than left for the next
+// reader to rediscover.
+//
+// The panel's scales are THAT PROJECT'S OWN. They were shared across the five
+// so the five were comparable; with one panel drawn there is nothing to share
+// with, and a domain stretched to fit projects that are not on screen would
+// flatten the one that is.
 
 // autonomyEverRecorded reports whether the span log holds anything at all,
 // anywhere — the fact that separates "no runs in this range" from "this
 // feature has not collected anything yet". Both are empty views; only one of
 // them means the user did nothing.
 export function autonomyEverRecorded(state = historyState) {
-  return (Number(state.autonomyData?.total_recorded) || 0) > 0;
+  return (Number(state.autonomyData?.projects?.total_recorded) || 0) > 0;
 }
 
 // autonomyDuration formats a run length: "41s", "11m", "1h58m", "2d3h".
@@ -882,9 +913,9 @@ export const AUTONOMY_CONCURRENCY_CAVEAT =
 //
 // Resolution is the whole point (#1905 back-fill, QA-2). The cost log writes at
 // most every 60s and only when a value changed, so it cannot see a run shorter
-// than that; the event log records one-second runs. Across that boundary every
-// panel's line steps at the same instant, and five simultaneous steps read as
-// five findings when they are one change of INSTRUMENT.
+// than that; the event log records one-second runs. Across that boundary both
+// elements step at the same instant, and two simultaneous steps read as two
+// findings when they are one change of INSTRUMENT.
 const AUTONOMY_ERA_LABELS = {
   cost: 'cost log · 60s resolution',
   log: 'event log · rebuilt',
@@ -908,7 +939,8 @@ export function autonomyBoundaryLabel(boundary) {
 // a machine that was never back-filled, and most ranges on one that was.
 //
 // Pure, so both halves of the rule — draws one when it should, draws nothing
-// when it should not — are testable without a canvas.
+// when it should not — are testable without a canvas. Both elements read it,
+// and both share a window, so the rule lands at the same instant in each.
 export function autonomyVisibleBoundaries(data) {
   const starts = data?.bucket_starts || [];
   if (starts.length < 2) return [];
@@ -924,47 +956,82 @@ export function autonomyVisibleBoundaries(data) {
   return out;
 }
 
-// autonomyBoundaryCaptionShown decides which panel carries a boundary's words.
+// AUTONOMY_BOUNDARY_CAPTION_ON names which of the section's two elements writes
+// a boundary's words.
 //
-// THE RULE READS ONCE ACROSS THE STACK. The dashed rule is drawn through EVERY
-// panel — it has to be, or it would annotate one project's line and leave the
-// four below it stepping for no stated reason — but the caption is drawn on the
-// TOP panel only. Five copies of "← cost log · 60s resolution" stacked down one
-// x position is five competing captions where the reader needs one, and at 9px
-// they would collide with four project names.
-export const AUTONOMY_BOUNDARY_CAPTION_PANEL = 0;
-export function autonomyBoundaryCaptionShown(panelIndex) {
-  return panelIndex === AUTONOMY_BOUNDARY_CAPTION_PANEL;
+// THE RULE READS ONCE ACROSS THE SECTION. The dashed rule is drawn on BOTH
+// elements — it has to be, or it would annotate the aggregate line and leave the
+// panel below it stepping for no stated reason — but the caption is drawn on the
+// AGGREGATE chart only, which is the top one. Two copies of "← cost log · 60s
+// resolution" down one x position are two competing captions where the reader
+// needs one, and at 9px the lower one would collide with the panel's header.
+export const AUTONOMY_BOUNDARY_CAPTION_ON = 'aggregate';
+export function autonomyBoundaryCaptionShown(element) {
+  return element === AUTONOMY_BOUNDARY_CAPTION_ON;
 }
 
-// autonomyMoreProjectsLabel names what the five panels left out, or '' when
-// nothing was left out.
+// autonomyMoreProjectsLabel names what the daemon's safety cap left out, or ''
+// when nothing was left out — which is every machine seen so far, since the cap
+// is 200 and the busiest one on record holds 93 projects in a year.
 //
 // It says WHY those projects are the ones missing — they have less autonomous
-// time — so the reader knows the section took the tail rather than an arbitrary
+// time — so the reader knows the payload took the tail rather than an arbitrary
 // slice. An omission nothing mentions is indistinguishable from a project that
 // never ran.
 export function autonomyMoreProjectsLabel(data) {
   const more = Number(data?.more_projects) || 0;
   if (more <= 0) return '';
-  return '+' + more + ' more project' + (more === 1 ? '' : 's') + ', each with less autonomous time';
+  return '+' + more + ' more project' + (more === 1 ? '' : 's') + ' past the payload cap, '
+    + 'each with less autonomous time';
 }
 
-// autonomyStackRows is what the stack renders, in order: one entry per panel
-// the daemon sent, and — when the window holds more projects than those — a
-// final `more` entry naming the rest.
+// autonomyPanelChoice resolves which project the single panel draws.
 //
-// PURE, and the render loop's only source of truth about what appears, so
-// "exactly the panels the daemon sent, and the overflow line beside them" is
-// one assertion rather than a DOM crawl. The client never re-decides how many
-// panels there are: the daemon computes five and says how many it left out, so
-// the two surfaces cannot disagree the way the run strip's twelve-versus-six
-// row caps did.
-export function autonomyStackRows(data) {
-  const rows = (data?.panels || []).map(panel => ({ kind: 'panel', panel }));
-  const more = autonomyMoreProjectsLabel(data);
-  if (more) rows.push({ kind: 'more', label: more });
-  return rows;
+// THREE OUTCOMES, and the third is the one that has to be written down rather
+// than fallen into:
+//
+//   - nothing selected → rank 1, the project with the most autonomous time in
+//     the window. A fresh tab needs no stored name.
+//   - the selection is in this range → that panel.
+//   - the selection is NOT in this range → `missing`, and the selection is
+//     KEPT. Silently falling back to rank 1 would answer a question the reader
+//     did not ask, and would make a Range change look like a click they never
+//     made; the panel says "no runs for <project> in this range" instead, and
+//     the dropdown still carries the name so one Range change back restores it.
+export function autonomyPanelChoice(data, selected) {
+  const panels = data?.panels || [];
+  if (!selected) {
+    return { panel: panels[0] || null, project: panels[0]?.project || '', missing: false };
+  }
+  const found = panels.find(p => p.project === selected);
+  if (found) return { panel: found, project: selected, missing: false };
+  return { panel: null, project: selected, missing: true };
+}
+
+// autonomyProjectOptions is the dropdown's contents: every project the window
+// holds, ranked, plus the selected one when this range does not hold it.
+//
+// The absent project goes LAST and says so, which is the same rule the rest of
+// the list follows rather than an exception to it: the order is most autonomous
+// time first, and a project with no runs in this range has none of it. Its label
+// carries the reason, so a reader who opens the dropdown is not left wondering
+// why one entry draws nothing.
+export function autonomyProjectOptions(data, selected) {
+  const out = (data?.panels || []).map(p => ({ value: p.project, label: p.project, missing: false }));
+  if (selected && !out.some(o => o.value === selected)) {
+    out.push({ value: selected, label: selected + ' — no runs in this range', missing: true });
+  }
+  return out;
+}
+
+// autonomyEmptyProjectNote is what the panel draws instead of an empty frame
+// when the selected project has nothing in this range.
+//
+// A SENTENCE, not a blank plot. An empty plot with axes on it is the same
+// picture a broken request would draw, and the reader cannot tell which they are
+// looking at.
+export function autonomyEmptyProjectNote(project) {
+  return 'no runs for ' + (project || 'this project') + ' in this range';
 }
 
 // autonomyConcurrencyLabel renders one "at once" figure, with its split only
@@ -1007,6 +1074,17 @@ export function autonomyPanelPoints(panel, bucketStarts) {
   return (bucketStarts || []).map(ts => byTs.get(ts) || null);
 }
 
+// autonomyChartPoints does the same for the AGGREGATE chart's buckets. Same
+// rule, same reason, a different payload — one helper each rather than one
+// helper branching on shape, so neither can silently start reading the other's
+// fields.
+export function autonomyChartPoints(duration) {
+  const starts = duration?.bucket_starts || [];
+  const byTs = new Map();
+  for (const b of (duration?.buckets || [])) byTs.set(b.ts, b);
+  return starts.map(ts => byTs.get(ts) || null);
+}
+
 // autonomyLineSegments returns the index ranges the line may be stroked over.
 //
 // TWO KINDS OF GAP, and they are not the same gap. A bucket can be absent
@@ -1030,40 +1108,52 @@ export function autonomyLineSegments(points) {
   return out;
 }
 
-// autonomyYDomain is the log Y domain SHARED by all five panels. null when
-// nothing in the window has a length to plot, which is the empty state.
+// autonomyYDomain is the panel's LINEAR Y domain — that project's own, since
+// exactly one panel is drawn. null when nothing in the window has a length to
+// plot, which is the empty state.
 //
-// Shared, so the panels are comparable — that is the point of picking five.
-// Floored at 1s: a log scale cannot plot 0, and a sub-second span is not a run.
-export function autonomyYDomain(panels) {
-  const values = [];
-  for (const panel of (panels || [])) {
-    for (const b of (panel?.buckets || [])) {
-      const v = Number(b.longest) || 0;
-      if (v > 0) values.push(v);
-    }
-  }
+// LINEAR, AND WHAT THAT COSTS. This is the maintainer's explicit call (#1905),
+// recorded here so the next reader knows it was a decision and not an oversight.
+// On a linear axis one 11-hour run sets the whole domain, and the typical
+// 10-minute runs beneath it collapse into the bottom 1.5% of the plot — visually
+// indistinguishable from the floor. A log axis kept them apart, at the cost of
+// making a doubling look like a small step wherever the eye landed. The panel
+// header states the exact longest as a NUMBER for exactly this reason, so the
+// figure never depends on reading the axis.
+//
+// ZERO IS THE FLOOR, which the log axis could not offer: a linear axis whose
+// origin is not zero exaggerates every difference above it, and there is no
+// longer any "a log scale cannot plot 0" reason to lift it.
+export function autonomyYDomain(panel) {
+  const values = (panel?.buckets || []).map(b => Number(b.longest) || 0).filter(v => v > 0);
   if (!values.length) return null;
-  const lo = Math.max(1, Math.min(...values) * 0.8);
-  const hi = Math.max(lo * 2, Math.max(...values) * 1.25);
-  return { lo, hi };
+  return { lo: 0, hi: Math.max(...values) * 1.1 };
 }
 
-// autonomyPeakScale is the histogram's SHARED full-height value: the highest
-// peak any panel reaches. 0 when nothing overlapped anywhere, in which case no
-// bar is drawn at all rather than every bar being drawn full height.
-export function autonomyPeakScale(panels) {
+// autonomyAggregateDomain is the aggregate chart's LINEAR Y domain, taken from
+// the drawn p95s. Same decision and the same cost as autonomyYDomain above; the
+// summary row under the chart carries p95/p50/p5 and the true extremes as
+// FIGURES, which is what keeps them readable when the band flattens.
+export function autonomyAggregateDomain(points) {
+  const drawn = (points || []).filter(Boolean);
+  if (!drawn.length) return null;
+  const hi = Math.max(...drawn.map(b => Math.max(Number(b.p95) || 0, Number(b.max) || 0, 1)));
+  return { lo: 0, hi: hi * 1.1 };
+}
+
+// autonomyPeakScale is the histogram's full-height value: the panel's own
+// highest peak. 0 when nothing overlapped anywhere in it, in which case no bar
+// is drawn at all rather than every bar being drawn full height.
+export function autonomyPeakScale(panel) {
   let max = 0;
-  for (const panel of (panels || [])) {
-    for (const b of (panel?.buckets || [])) {
-      const v = Number(b.peak) || 0;
-      if (v > max) max = v;
-    }
+  for (const b of (panel?.buckets || [])) {
+    const v = Number(b.peak) || 0;
+    if (v > max) max = v;
   }
   return max;
 }
 
-// autonomyAxisLabel formats one of the stack's two x bounds, coarsening with
+// autonomyAxisLabel formats one of the section's x bounds, coarsening with
 // the window the way stateBucketLabel does for the activity matrix.
 export function autonomyAxisLabel(ts, windowSeconds) {
   const d = new Date((Number(ts) || 0) * 1000);
@@ -1078,12 +1168,13 @@ export function autonomyAxisLabel(ts, windowSeconds) {
 // daemon has been up all day.
 //
 // Two kinds, two sentences, because they are two different limits and a reader
-// who conflated them would misread the panels in opposite directions:
+// who conflated them would misread the section in opposite directions:
 //
 //   - STILL RUNNING. The run has not ended, so its length is how long it has
-//     lasted SO FAR. It COUNTS towards the longest — the section reports a
-//     maximum, and "already lasted 3h" is true — and the panel that shows it
-//     says "still going" rather than presenting a floor as final.
+//     lasted SO FAR. It COUNTS towards the panel's longest — that figure is a
+//     maximum, and "already lasted 3h" is true — and is deliberately NOT a
+//     sample for the aggregate chart's percentiles, where a floor always
+//     shortens and shortens the longest runs hardest.
 //   - STARTED BEFORE IRRLICHT WAS WATCHING. The run has finished, but its start
 //     is where Irrlicht began watching rather than where the run began; a
 //     restart re-discovers every live session this way. Dropping those is what
@@ -1097,7 +1188,8 @@ export function autonomyMeasurementNote(payload) {
     parts.push(running + ' run' + (running === 1 ? ' is' : 's are') + ' still going: '
       + (running === 1 ? 'its length is' : 'their lengths are') + ' how long '
       + (running === 1 ? 'it has' : 'they have') + ' lasted SO FAR. '
-      + (running === 1 ? 'It counts' : 'They count') + ' towards the longest run, marked "still going".');
+      + (running === 1 ? 'It counts' : 'They count') + ' towards the longest run, marked "still going", '
+      + 'and ' + (running === 1 ? 'is' : 'are') + ' left out of the percentiles above.');
   }
   if (lowerBound > 0) {
     parts.push(lowerBound + ' run' + (lowerBound === 1 ? '' : 's') + ' already going when Irrlicht '
@@ -1108,8 +1200,21 @@ export function autonomyMeasurementNote(payload) {
   return parts.join(' ');
 }
 
-// The side panel's key: exactly two entries, because a panel draws exactly two
-// things — a line and a row of bars.
+// autonomyThinNote explains the aggregate chart's thin-bucket marking, in
+// words, because a fainter plane means nothing on its own. '' when every bucket
+// in view clears the floor.
+export function autonomyThinNote(duration) {
+  const buckets = duration?.buckets || [];
+  const thin = buckets.filter(b => b?.thin).length;
+  if (thin <= 0) return '';
+  return thin + ' of ' + buckets.length + ' buckets hold fewer than ' + (Number(duration?.sample_floor) || 0)
+    + ' runs (fainter band, dashed edges, hollow points): there p95 is that bucket’s longest run and '
+    + 'p5 its shortest — not percentiles.';
+}
+
+// The side panel's key: FOUR entries, because the section draws four marks —
+// the aggregate chart's p50 line and p5–p95 plane, and the panel's longest-run
+// line and concurrency bars.
 //
 // LENGTH IS A CONSTRAINT HERE, not a style preference. This panel is
 // `flex: 0 0 260px` with 16px padding, so a key row's label gets 204px once its
@@ -1118,17 +1223,19 @@ export function autonomyMeasurementNote(payload) {
 // `autonomyLayout.test.js` computes that budget from the stylesheet and fails
 // one that is too long.
 //
-// Both strings are duplicated in AutonomyPalette.keyEntries on macOS, and `the
-// two surfaces name the key the same way` reads this table against that one —
-// two clients must not explain one chart differently.
+// All four strings are duplicated in AutonomyPalette.keyEntries on macOS, and
+// `the two surfaces name the key the same way` reads this table against that one
+// — two clients must not explain one chart differently.
 const AUTONOMY_KEY = [
+  ['p50', 'p50 · the typical run'],
+  ['band', 'p5–p95 · the usual spread'],
   ['line', 'longest run in a bucket'],
   ['bars', 'working at once (peak)'],
 ];
 
-// autonomyKeyColor resolves one key entry's colour against the live theme,
+// autonomyKeyColor resolves one mark's colour against the live theme,
 // falling back to the literal when the custom property is unset (an unstyled
-// document, or a test's stub). '' for a name the key has no mark for.
+// document, or a test's stub). '' for a name the section has no mark for.
 export function autonomyKeyColor(kind, cs) {
   const token = AUTONOMY_MARK_TOKENS[kind];
   if (!token) return '';
@@ -1136,29 +1243,298 @@ export function autonomyKeyColor(kind, cs) {
   return ((cs && cs.getPropertyValue(cssVar)) || fallback).trim();
 }
 
-// The two marks' colours. ONE HUE: the bars are the line's hue at a lower
-// alpha, because they are a second reading of the same activity and not a
-// second subject. `the bars are the line hue, not a second colour` pins that.
+// Every mark's colour. ONE HUE throughout: the band, its edges and the bars are
+// all the line's hue at lower alphas, because they are further readings of the
+// same activity and not further subjects. `the marks are one hue, not four
+// colours` pins that.
 export const AUTONOMY_MARK_TOKENS = {
+  p50: ['--working', '#8B5CF6'],
+  band: ['--autonomy-band', 'rgba(139, 92, 246, 0.20)'],
+  bandThin: ['--autonomy-band-thin', 'rgba(139, 92, 246, 0.08)'],
+  edge: ['--autonomy-edge', 'rgba(139, 92, 246, 0.45)'],
   line: ['--working', '#8B5CF6'],
   bars: ['--autonomy-bar', 'rgba(139, 92, 246, 0.45)'],
 };
 
 // autonomyKeyEntries is the key the side panel draws, resolved through the same
-// call the canvas painter makes so a swatch cannot disagree with the ink.
+// calls the canvas painters make so a swatch cannot disagree with the ink.
+// `fill` is '' for everything but the band: a line has no area.
 export function autonomyKeyEntries(cs) {
-  return AUTONOMY_KEY.map(([kind, label]) => ({ kind, label, color: autonomyKeyColor(kind, cs) }));
+  return AUTONOMY_KEY.map(([kind, label]) => ({
+    kind,
+    label,
+    color: autonomyKeyColor(kind === 'band' ? 'edge' : kind, cs),
+    fill: kind === 'band' ? autonomyKeyColor('band', cs) : '',
+  }));
 }
 
-// --- Rendering --------------------------------------------------------------
+// Per-role stroke weights for the aggregate chart. The p50 line carries the
+// chart: full alpha, the heavier stroke. The two edges are present enough to
+// bound the plane and quiet enough not to compete with it.
+const AUTONOMY_ROLE_STYLE = {
+  line: { width: 1.8, alpha: 1, thinAlpha: 0.6, marker: 2.6 },
+  edge: { width: 1, alpha: 0.5, thinAlpha: 0.32, marker: 2 },
+};
+
+// The three drawn percentile lines, in draw order: series key, then the ROLE it
+// plays. ONE HUE, THREE WEIGHTS — the chart says one thing (here is the typical
+// run, here is the spread around it), and a hue per percentile would make p95
+// and p5 read as two independent measurements rather than the boundary of one
+// range.
+export const AUTONOMY_SERIES = [
+  ['p95', 'edge'],
+  ['p50', 'line'],
+  ['p5', 'edge'],
+];
+
+// autonomySeriesRole reports whether a key is the headline `line` or one of the
+// band's `edge`s. '' for anything the chart does not draw.
+export function autonomySeriesRole(key) {
+  const row = AUTONOMY_SERIES.find(([k]) => k === key);
+  return row ? row[1] : '';
+}
+
+// autonomyBandSegments splits the gap-aligned point list into the areas the
+// band may actually be filled over.
+//
+// TWO RULES, both of them honesty rules the smooth shape would otherwise
+// erase, and both of them the reason this is a pure function rather than a
+// loop inside the painter:
+//
+//   - A FILLED AREA WANTS TO CLOSE ACROSS A GAP. The daemon omits empty
+//     buckets and the line breaks there (autonomyChartPoints); a polygon
+//     spanning the gap would draw a plane over days that hold no runs at all,
+//     which is a stronger false claim than the interpolated line #1905 already
+//     refuses. A segment therefore never crosses a null.
+//   - A THIN BUCKET IS NOT A PERCENTILE. Under sample_floor, p95 is that
+//     bucket's longest run and p5 its shortest. The stroke already dashes
+//     across such a bucket; the fill splits at the same place so the thin
+//     stretch can be painted in its own fainter plane.
+//
+// Returns index ranges into `points`, inclusive at both ends. Adjacent
+// segments SHARE their boundary index, so a thin→solid handover has no seam.
+// `from === to` is an isolated bucket: it has no neighbour to make an area
+// with, and the painter draws its spread as a whisker instead.
+export function autonomyBandSegments(points) {
+  const out = [];
+  const n = (points || []).length;
+  let i = 0;
+  while (i < n) {
+    if (!points[i]) { i++; continue; }
+    let last = i;
+    while (last + 1 < n && points[last + 1]) last++;
+    if (last === i) {
+      out.push({ from: i, to: i, thin: !!points[i].thin });
+      i = last + 1;
+      continue;
+    }
+    // Thinness belongs to the INTERVAL, not the bucket — matching
+    // drawAutonomySeries, which dashes a segment either of whose ends is thin.
+    let start = i;
+    let thin = !!(points[i].thin || points[i + 1].thin);
+    for (let j = i + 1; j < last; j++) {
+      const next = !!(points[j].thin || points[j + 1].thin);
+      if (next !== thin) {
+        out.push({ from: start, to: j, thin });
+        start = j;
+        thin = next;
+      }
+    }
+    out.push({ from: start, to: last, thin });
+    i = last + 1;
+  }
+  return out;
+}
+
+// --- Rendering: the aggregate chart -----------------------------------------
+
+// AUTONOMY_CHART is the aggregate chart's plot inset, in CSS pixels.
+export const AUTONOMY_CHART = { padL: 52, padR: 12, padT: 12, padB: 22 };
+
+function paintAutonomyChart() {
+  const canvas = document.getElementById('history-chart');
+  const wrap = document.getElementById('history-chart-wrap');
+  if (!canvas || !wrap) return;
+  const duration = historyState.autonomyData?.duration;
+  const { ctx, w, h } = setupHistoryCanvas(canvas, wrap);
+  const points = autonomyChartPoints(duration);
+  const domain = autonomyAggregateDomain(points);
+  wrap.classList.toggle('empty', !domain);
+  if (!domain) return;
+
+  const cs = getComputedStyle(document.documentElement);
+  const muted = (cs.getPropertyValue('--muted') || '#888').trim();
+  const gridColor = 'rgba(128,140,170,0.18)';
+
+  const { padL, padR, padT, padB } = AUTONOMY_CHART;
+  const plotW = Math.max(1, w - padL - padR);
+  const plotH = Math.max(1, h - padT - padB);
+  const n = Math.max(1, points.length);
+  const xAt = (i) => (n <= 1 ? padL : padL + plotW * (i / (n - 1)));
+  const yAt = (v) => padT + autonomyLinearY(v, domain, plotH);
+
+  // Draw order IS the visual hierarchy, cheapest thing first:
+  //
+  //   gridlines → band → boundary rules → edges → p50 → axis labels
+  //
+  // The band goes over the gridlines rather than under them. A gridline is
+  // furniture; drawn on top of the plane it would cut the band into slices
+  // that read as structure in the data, which is the one thing a soft fill
+  // must never do. Over it, the fill's own translucency dims each gridline
+  // where it crosses — the line stays legible, and stays furniture.
+  drawAutonomyChartGridlines(ctx, { domain, yAt, padL, padR, w, muted, gridColor });
+  drawAutonomyBand(ctx, {
+    points,
+    segments: autonomyBandSegments(points),
+    xAt,
+    yAt,
+    fill: autonomyKeyColor('band', cs),
+    fillThin: autonomyKeyColor('bandThin', cs),
+    edge: autonomyKeyColor('edge', cs),
+  });
+  // Under the lines, deliberately: the marker explains the data, it is not
+  // part of it, and a rule drawn over a curve competes with what it annotates.
+  drawAutonomyBoundaries(ctx, {
+    boundaries: autonomyVisibleBoundaries(duration),
+    padL, plotW, top: padT, height: plotH, muted, element: 'aggregate',
+  });
+  // Edges before the line, whatever order the table lists them in: the
+  // headline curve is the last ink down, so nothing crosses over it.
+  for (const role of ['edge', 'line']) {
+    for (const [key, seriesRole] of AUTONOMY_SERIES) {
+      if (seriesRole !== role) continue;
+      drawAutonomySeries(ctx, { points, key, role, color: autonomyKeyColor('p50', cs), xAt, yAt });
+    }
+  }
+  drawAutonomyXLabels(ctx, { duration, xAt, muted, h, padB });
+}
+
+// drawAutonomyBand fills the plane between p5 and p95 — the spread around the
+// typical run — one polygon per autonomyBandSegments entry.
+//
+// It fills SEGMENT BY SEGMENT rather than as one path so the two rules that
+// function encodes survive the paint: a gap leaves real empty canvas (no
+// plane over days with no runs), and a thin stretch is filled from the
+// fainter token, so a range that is not a percentile spread does not look
+// like one.
+function drawAutonomyBand(ctx, { points, segments, xAt, yAt, fill, fillThin, edge }) {
+  ctx.save();
+  for (const seg of segments) {
+    if (seg.from === seg.to) {
+      // An isolated bucket has no neighbour to make an area with. Drawn as a
+      // whisker rather than dropped, or it would be the one bucket whose
+      // spread is invisible — and a lone bucket is exactly where the reader
+      // most needs to see how wide the range was.
+      const only = points[seg.from];
+      ctx.setLineDash(seg.thin ? [3, 3] : []);
+      ctx.strokeStyle = edge;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(xAt(seg.from), yAt(only.p95));
+      ctx.lineTo(xAt(seg.from), yAt(only.p5));
+      ctx.stroke();
+      continue;
+    }
+    ctx.beginPath();
+    for (let i = seg.from; i <= seg.to; i++) {
+      const x = xAt(i), y = yAt(points[i].p95);
+      if (i === seg.from) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    for (let i = seg.to; i >= seg.from; i--) ctx.lineTo(xAt(i), yAt(points[i].p5));
+    ctx.closePath();
+    ctx.fillStyle = seg.thin ? fillThin : fill;
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+// drawAutonomySeries strokes one percentile line, breaking at every omitted
+// bucket and DASHING any segment that touches a thin bucket — so a bucket
+// under the sample floor is visibly different rather than hidden or smoothed.
+//
+// `role` decides the weight, not the colour: all three lines are one hue, and
+// what separates the headline p50 from the band's two edges is stroke width
+// and alpha (AUTONOMY_ROLE_STYLE).
+function drawAutonomySeries(ctx, { points, key, role, color, xAt, yAt }) {
+  const style = AUTONOMY_ROLE_STYLE[role] || AUTONOMY_ROLE_STYLE.line;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = style.width;
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1], b = points[i];
+    if (!a || !b) continue; // a gap is a gap: never interpolate across it
+    const thin = a.thin || b.thin;
+    ctx.save();
+    ctx.setLineDash(thin ? [3, 3] : []);
+    ctx.globalAlpha = thin ? style.thinAlpha : style.alpha;
+    ctx.beginPath();
+    ctx.moveTo(xAt(i - 1), yAt(a[key]));
+    ctx.lineTo(xAt(i), yAt(b[key]));
+    ctx.stroke();
+    ctx.restore();
+  }
+  // Hollow markers on thin buckets, and a solid dot on an isolated bucket that
+  // has no neighbour to draw a segment to (which would otherwise vanish).
+  for (let i = 0; i < points.length; i++) {
+    const b = points[i];
+    if (!b) continue;
+    const isolated = !points[i - 1] && !points[i + 1];
+    if (!b.thin && !isolated) continue;
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(xAt(i), yAt(b[key]), style.marker, 0, Math.PI * 2);
+    if (b.thin) {
+      ctx.strokeStyle = color;
+      ctx.globalAlpha = style.alpha * 0.8;
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = color;
+      ctx.globalAlpha = style.alpha;
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+}
+
+// drawAutonomyChartGridlines draws the aggregate chart's linear Y gridlines,
+// labelled in the same duration units the summary row uses, so an axis tick and
+// a headline figure can never be read in different units.
+function drawAutonomyChartGridlines(ctx, { domain, yAt, padL, padR, w, muted, gridColor }) {
+  ctx.strokeStyle = gridColor;
+  ctx.fillStyle = muted;
+  ctx.font = '10px ui-monospace, monospace';
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
+  for (const v of autonomyTickValues(domain, 4)) {
+    const y = yAt(v);
+    ctx.beginPath();
+    ctx.moveTo(padL, y);
+    ctx.lineTo(w - padR, y);
+    ctx.stroke();
+    ctx.fillText(autonomyDuration(v), padL - 6, y);
+  }
+}
+
+function drawAutonomyXLabels(ctx, { duration, xAt, muted, h, padB }) {
+  ctx.fillStyle = muted;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  const starts = duration?.bucket_starts || [];
+  if (!starts.length) return;
+  const labels = Math.min(5, starts.length);
+  for (let i = 0; i < labels; i++) {
+    const c = Math.round(i * (starts.length - 1) / Math.max(1, labels - 1));
+    ctx.fillText(histAxisLabel(starts[c], duration.bucket_seconds), xAt(c), h - padB + 5);
+  }
+}
+
+// --- Rendering: the project panel -------------------------------------------
 
 // Panel geometry, in CSS pixels. The line plot and the histogram share one
-// canvas per panel so their x axes cannot drift apart and one boundary rule can
-// run through both.
+// canvas so their x axes cannot drift apart and one boundary rule can run
+// through both.
 //
-// TICK LABELS ON THE RIGHT, and the top inset that goes with them. Both are
-// QA fixes and both are copied from macOS, so the two surfaces read as one
-// design (QA-1):
+// TICK LABELS ON THE RIGHT, and the insets that go with them. Both are QA fixes
+// carried over from #1919 (QA-1):
 //
 //   - On the LEFT, the y-axis gutter sat directly under the panel header's
 //     project name, and the header row and the axis column were one column of
@@ -1166,65 +1542,75 @@ export function autonomyKeyEntries(cs) {
 //   - `padT` is what stops the TOPMOST label being sliced. A label is drawn
 //     centred on its gridline; the top gridline is at the plot's own top edge,
 //     so without an inset half the glyph falls outside the canvas and reads as
-//     text cut off by the panel above. The inset has to be at least half the
+//     text cut off by the element above. The inset has to be at least half the
 //     tick font — `autonomyTickPlacement` computes that and a test asserts it.
+//   - `padB` is the same rule at the other end, and it is NEW: the histogram
+//     labels its own baseline `0` now, drawn centred on the baseline, so
+//     without an inset half of that glyph would fall off the bottom.
+//   - `gap` is the same rule a THIRD time, and it is what QA caught: the line
+//     axis's lowest label sits at the foot of the line plot, and the histogram's
+//     peak label at the head of the bar band. Both are in the same right-hand
+//     gutter, both drawn centred on their own line. At the 3px gap the
+//     five-panel stack used — where the bar band carried NO labels at all —
+//     "0s" and "15" overprinted into an unreadable smudge. The gap has to clear
+//     one whole tick font, and `autonomyGutterLabels` is where that is asserted.
+//
+// The plot is TALLER than the 40px five stacked panels could afford, because
+// only one is drawn: 110px for the line, 44px for the bars.
 export const AUTONOMY_PANEL = {
-  padL: 4,      // a hair of left margin; the labels are on the RIGHT now
-  padR: 46,     // the shared y axis's label gutter
+  padL: 4,      // a hair of left margin; the labels are on the RIGHT
+  padR: 46,     // the y axes' label gutter, shared by the line and the bars
   padT: 6,      // clearance for the topmost tick label's upper half
-  lineH: 40,    // the longest-run plot
-  gap: 3,
-  barsH: 18,    // the concurrency histogram
-  tickFont: 9,  // px, the y-axis tick label
+  lineH: 110,   // the longest-run plot
+  gap: 14,      // clearance between the two axes' innermost labels
+  barsH: 44,    // the concurrency histogram
+  padB: 5,      // clearance for the baseline label's lower half
+  tickFont: 9,  // px, the y-axis tick label — the SAME font on both axes
   tickGap: 5,   // px between the plot's right edge and its labels
 };
 export const AUTONOMY_PANEL_CANVAS_H =
-  AUTONOMY_PANEL.padT + AUTONOMY_PANEL.lineH + AUTONOMY_PANEL.gap + AUTONOMY_PANEL.barsH;
+  AUTONOMY_PANEL.padT + AUTONOMY_PANEL.lineH + AUTONOMY_PANEL.gap
+  + AUTONOMY_PANEL.barsH + AUTONOMY_PANEL.padB;
 
 // AUTONOMY_BAR_MIN_H is the floor on a drawn bar (QA-3). A bucket where one
-// agent worked is a real reading and must be visible; at `barsH * 1/15` it was
-// a single device pixel and read as grit. The floor applies only to a bar that
-// is drawn at all — a bucket with nobody working still draws NOTHING.
+// agent worked is a real reading and must be visible; at a fraction of the band
+// it was a single device pixel and read as grit. The floor applies only to a bar
+// that is drawn at all — a bucket with nobody working still draws NOTHING.
 export const AUTONOMY_BAR_MIN_H = 2;
 
-// renderAutonomyPanels draws the stack: five project panels, the "+N more" line
-// and the window's own bounds under them.
-function renderAutonomyPanels() {
+// renderAutonomyPanel draws the single project panel: its header row (the
+// project dropdown and that project's figures), its canvas, the "+N more" line
+// when the daemon's cap bit, and the window's own bounds under it.
+function renderAutonomyPanel() {
   const host = document.getElementById('history-autonomy-panels');
-  const wrap = document.getElementById('history-chart-wrap');
   if (!host) return;
-  const data = historyState.autonomyData;
+  const data = historyState.autonomyData?.projects;
   host.innerHTML = '';
   const panels = data?.panels || [];
-  if (wrap) wrap.classList.toggle('empty', panels.length === 0);
   if (!panels.length) return;
 
+  const choice = autonomyPanelChoice(data, historyState.autonomyProject);
   const cs = getComputedStyle(document.documentElement);
-  const opts = {
-    domain: autonomyYDomain(panels),
-    peakMax: autonomyPeakScale(panels),
+  host.appendChild(buildAutonomyPanel(choice, data, {
+    domain: autonomyYDomain(choice.panel),
+    peakMax: autonomyPeakScale(choice.panel),
     boundaries: autonomyVisibleBoundaries(data),
     bucketStarts: data.bucket_starts || [],
+    windowSeconds: (data.end || 0) - (data.start || 0),
     cs,
-  };
-  let panelIndex = 0;
-  for (const row of autonomyStackRows(data)) {
-    if (row.kind === 'panel') {
-      host.appendChild(buildAutonomyPanel(row.panel, { ...opts, index: panelIndex }));
-      panelIndex++;
-      continue;
-    }
+  }));
+  const more = autonomyMoreProjectsLabel(data);
+  if (more) {
     const el = document.createElement('div');
     el.className = 'history-autonomy-more';
-    el.textContent = row.label;
+    el.textContent = more;
     host.appendChild(el);
   }
   host.appendChild(buildAutonomyAxis(data));
 }
 
 // buildAutonomyAxis puts the window's start on the left and "now" on the right,
-// once under the whole stack — the five panels share one x domain, so five
-// copies would be five statements of one fact.
+// once under the panel.
 export function buildAutonomyAxis(data) {
   const axis = document.createElement('div');
   axis.className = 'history-autonomy-axis';
@@ -1237,22 +1623,57 @@ export function buildAutonomyAxis(data) {
   return axis;
 }
 
-function buildAutonomyPanel(panel, opts) {
+// buildAutonomyProjectSelect is the picker, in the panel's OWN header row —
+// beside the figures it changes, not up in the tab's control row with Range.
+// Range moves both elements; this moves one of them, and a control's place is
+// what says which.
+function buildAutonomyProjectSelect(data, choice) {
+  const sel = document.createElement('select');
+  sel.className = 'history-autonomy-project';
+  sel.id = 'history-autonomy-project';
+  sel.setAttribute('aria-label', 'Project');
+  for (const opt of autonomyProjectOptions(data, historyState.autonomyProject)) {
+    const o = document.createElement('option');
+    o.value = opt.value;
+    o.textContent = opt.label;
+    if (opt.missing) o.dataset.missing = 'true';
+    sel.appendChild(o);
+  }
+  sel.value = choice.project;
+  sel.addEventListener('change', () => {
+    // The NAME is held, not the rank — see historyState.autonomyProject. No
+    // refetch: the payload already carries every project, so switching is a
+    // repaint rather than a round trip.
+    historyState.autonomyProject = sel.value || null;
+    renderAutonomyPanel();
+  });
+  return sel;
+}
+
+function buildAutonomyPanel(choice, data, opts) {
   const el = document.createElement('div');
   el.className = 'history-autonomy-panel';
 
   const head = document.createElement('div');
   head.className = 'history-autonomy-panel-head';
-  const name = document.createElement('span');
-  name.className = 'history-autonomy-panel-name';
-  name.textContent = panel.project;
+  head.appendChild(buildAutonomyProjectSelect(data, choice));
   const figs = document.createElement('span');
   figs.className = 'history-autonomy-panel-figs';
-  figs.textContent = autonomyPanelHeadline(panel);
-  head.appendChild(name);
+  figs.textContent = choice.panel ? autonomyPanelHeadline(choice.panel) : '';
   head.appendChild(figs);
   el.appendChild(head);
 
+  if (!choice.panel) {
+    // A SENTENCE, not an empty frame: an empty plot with axes on it is the same
+    // picture a broken request draws, and the reader cannot tell them apart.
+    const note = document.createElement('div');
+    note.className = 'history-autonomy-panel-empty';
+    note.textContent = autonomyEmptyProjectNote(choice.project);
+    el.appendChild(note);
+    return el;
+  }
+
+  const panel = choice.panel;
   const canvas = document.createElement('canvas');
   canvas.className = 'history-autonomy-panel-canvas';
   canvas.setAttribute('role', 'img');
@@ -1260,11 +1681,77 @@ function buildAutonomyPanel(panel, opts) {
     + ', ' + (Number(panel.runs) || 0) + ' runs');
   el.appendChild(canvas);
 
+  const tip = document.createElement('div');
+  tip.className = 'history-autonomy-tip';
+  tip.hidden = true;
+  el.appendChild(tip);
+  wireAutonomyPanelTooltip(canvas, tip, panel, opts);
+
   // Painted on the next frame: the canvas has no layout width until it is in
   // the document, and a zero-width canvas would collapse every bucket into
   // nothing.
   requestAnimationFrame(() => paintAutonomyPanel(canvas, panel, opts));
   return el;
+}
+
+// autonomyBucketAtX is the tooltip's hit test: which bucket index the pointer is
+// over, as a value.
+//
+// IT IS THE INVERSE OF THE PAINTER'S OWN `xAt`, and that is the whole point —
+// derived from the same padL/plotW/n, so the tooltip cannot name a different
+// bucket from the one drawn under the pointer. A hit test built from its own
+// arithmetic drifts the moment either inset changes, and a tooltip that points
+// at the wrong bucket is worse than none: it is a wrong figure with nothing on
+// screen saying so.
+//
+// null outside the plot, so the gutters do not report the end buckets.
+export function autonomyBucketAtX(x, { padL, plotW, n }) {
+  if (!(n > 0) || !(plotW > 0)) return null;
+  if (x < padL || x > padL + plotW) return null;
+  if (n === 1) return 0;
+  const i = Math.round(((x - padL) / plotW) * (n - 1));
+  return Math.min(n - 1, Math.max(0, i));
+}
+
+// autonomyPanelTooltip is what the tooltip says about one bucket. '' for a
+// bucket the daemon omitted, which draws nothing and therefore says nothing.
+export function autonomyPanelTooltip(point, ts, windowSeconds) {
+  if (!point) return '';
+  const parts = [autonomyAxisLabel(ts, windowSeconds)];
+  const longest = Number(point.longest) || 0;
+  // A bucket a long run merely crossed carries a bar and no line point. Saying
+  // "longest 0s" there would claim a run of no length; the honest reading is
+  // that something was working and nothing finished.
+  parts.push(longest > 0
+    ? 'longest ' + autonomyDuration(longest) + (point.running ? ' (still going)' : '')
+    : 'nothing finished');
+  const atOnce = autonomyConcurrencyLabel(point.peak, point.peak_top, point.peak_sub, point.peak_split);
+  if (atOnce) parts.push(atOnce);
+  return parts.join(' · ');
+}
+
+// wireAutonomyPanelTooltip makes the concurrency figure readable per bucket.
+// The header states the window's peak; without this the individual bars are the
+// one number on the panel a reader cannot get at.
+function wireAutonomyPanelTooltip(canvas, tip, panel, opts) {
+  const points = autonomyPanelPoints(panel, opts.bucketStarts);
+  const hide = () => { tip.hidden = true; };
+  canvas.addEventListener('mouseleave', hide);
+  canvas.addEventListener('mousemove', (ev) => {
+    const rect = canvas.getBoundingClientRect();
+    const w = rect.width || canvas.offsetWidth || 0;
+    const { padL, padR } = AUTONOMY_PANEL;
+    const geo = { padL, plotW: Math.max(1, w - padL - padR), n: Math.max(1, points.length) };
+    const i = autonomyBucketAtX(ev.clientX - rect.left, geo);
+    const text = i == null ? '' : autonomyPanelTooltip(points[i], opts.bucketStarts[i], opts.windowSeconds);
+    if (!text) { hide(); return; }
+    tip.textContent = text;
+    tip.hidden = false;
+    // Clamped to the panel so the tip cannot hang off either edge, where it
+    // would read as a rendering fault rather than as an annotation.
+    const half = (tip.offsetWidth || 0) / 2;
+    tip.style.left = Math.max(half, Math.min(w - half, ev.clientX - rect.left)) + 'px';
+  });
 }
 
 function paintAutonomyPanel(canvas, panel, opts) {
@@ -1293,20 +1780,24 @@ function paintAutonomyPanel(canvas, panel, opts) {
   drawAutonomyGridlines(ctx, { domain: opts.domain, padL, padR, padT, lineH, w, muted, gridColor });
   // Under the marks, deliberately: a boundary explains the data, it is not part
   // of it, and a rule drawn over a line competes with what it annotates.
-  drawAutonomyBoundaries(ctx, { boundaries: opts.boundaries, padL, plotW, h, muted, index: opts.index });
-  drawAutonomyBars(ctx, { points, xAt, plotW, n, peakMax: opts.peakMax, color: barColor, gridColor, padL, padR, w });
+  drawAutonomyBoundaries(ctx, {
+    boundaries: opts.boundaries, padL, plotW, top: 0, height: h, muted, element: 'panel',
+  });
+  drawAutonomyBars(ctx, {
+    points, xAt, plotW, n, peakMax: opts.peakMax,
+    color: barColor, gridColor, muted, padL, padR, w,
+  });
   drawAutonomyLine(ctx, { points, xAt, domain: opts.domain, padT, lineH, color: lineColor });
 }
 
-// drawAutonomyGridlines draws the SHARED log Y gridlines, labelled in the same
-// duration units the panel headers use, so an axis tick and a headline figure
-// can never be read in different units.
+// drawAutonomyGridlines draws the line plot's linear Y gridlines, labelled in
+// the same duration units the panel header uses, so an axis tick and a headline
+// figure can never be read in different units.
 //
 // LABELS TO THE RIGHT OF THE PLOT (QA-1). On the left they shared a column with
-// the panel header's project name, and the topmost one was drawn half outside
-// the canvas — a figure sliced by the panel above, sitting on the same line as
-// that panel's own figures. `autonomyTickPlacement` is where the position is
-// decided, so both halves of the fix are testable without a canvas.
+// the panel header, and the topmost one was drawn half outside the canvas.
+// `autonomyTickPlacement` is where the position is decided, so both halves of
+// the fix are testable without a canvas.
 function drawAutonomyGridlines(ctx, { domain, padL, padR, padT, lineH, w, muted, gridColor }) {
   if (!domain) return;
   ctx.save();
@@ -1326,13 +1817,14 @@ function drawAutonomyGridlines(ctx, { domain, padL, padR, padT, lineH, w, muted,
   ctx.restore();
 }
 
-// autonomyTickValues returns the durations the shared axis is labelled at,
-// evenly spaced on the log scale, lowest first.
+// autonomyTickValues returns the durations an axis is labelled at, EVENLY
+// SPACED — which on a linear scale means evenly spaced in value too, where on
+// the log scale this replaced it meant evenly spaced in ratio.
 export function autonomyTickValues(domain, steps = 2) {
   if (!domain) return [];
   const out = [];
   for (let i = 0; i <= steps; i++) {
-    out.push(Math.exp(Math.log(domain.lo) + (Math.log(domain.hi) - Math.log(domain.lo)) * (i / steps)));
+    out.push(domain.lo + (domain.hi - domain.lo) * (i / steps));
   }
   return out;
 }
@@ -1342,7 +1834,7 @@ export function autonomyTickValues(domain, steps = 2) {
 // It carries the two properties QA-1 was about, so both can be asserted without
 // a canvas: the label sits in the gutter to the RIGHT of the plot (so the panel
 // header's row is free), and its upper edge is inside the canvas (so the
-// topmost figure is not sliced by the panel above). `top`/`bottom` are the
+// topmost figure is not sliced by the element above). `top`/`bottom` are the
 // label's own extent, since it is drawn centred on its gridline.
 export function autonomyTickPlacement(v, domain, width, panel = AUTONOMY_PANEL) {
   const y = panel.padT + autonomyYAt(v, domain, panel.lineH);
@@ -1355,14 +1847,22 @@ export function autonomyTickPlacement(v, domain, width, panel = AUTONOMY_PANEL) 
   };
 }
 
-// autonomyYAt maps a duration onto the shared log axis. Exported so a test can
-// assert two panels place the same duration at the same height — which is what
-// "shared" has to mean if the five panels are to be comparable at all.
+// autonomyLinearY maps a value onto a LINEAR axis of the given height, top
+// down. One helper for both elements, so the aggregate chart and the panel
+// cannot end up on different mappings.
+//
+// See autonomyYDomain for what linear costs and why it was chosen anyway.
+export function autonomyLinearY(v, domain, height) {
+  if (!domain) return height;
+  const span = domain.hi - domain.lo;
+  if (!(span > 0)) return height;
+  const clamped = Math.min(domain.hi, Math.max(domain.lo, Number(v) || 0));
+  return height * (1 - (clamped - domain.lo) / span);
+}
+
+// autonomyYAt maps a duration onto the panel's line axis.
 export function autonomyYAt(v, domain, lineH) {
-  if (!domain) return lineH;
-  const clamped = Math.min(domain.hi, Math.max(domain.lo, Math.max(1, Number(v) || 1)));
-  const t = (Math.log(clamped) - Math.log(domain.lo)) / (Math.log(domain.hi) - Math.log(domain.lo));
-  return lineH * (1 - t);
+  return autonomyLinearY(v, domain, lineH);
 }
 
 // drawAutonomyLine strokes the longest-run line, BREAKING at every gap rather
@@ -1402,8 +1902,9 @@ function drawAutonomyLine(ctx, { points, xAt, domain, padT, lineH, color }) {
   ctx.restore();
 }
 
-// autonomyBaselineY is the histogram's foot: the line every bar stands on, at
-// the very bottom of the panel canvas and directly beneath the plot.
+// autonomyBaselineY is the histogram's foot: the line every bar stands on,
+// directly beneath the plot and clear of the canvas's own bottom edge by padB,
+// which is what leaves room for the `0` label drawn centred on it.
 export function autonomyBaselineY(panel = AUTONOMY_PANEL) {
   return panel.padT + panel.lineH + panel.gap + panel.barsH;
 }
@@ -1413,9 +1914,9 @@ export function autonomyBaselineY(panel = AUTONOMY_PANEL) {
 //
 // EVERY BAR STANDS ON autonomyBaselineY. They always did arithmetically, but at
 // two or three pixels with nothing to stand on they scanned as dashes scattered
-// under the line rather than as a distribution — so the baseline is now DRAWN,
-// and the band is tall enough that a bar of 1 and a bar of 15 are visibly
-// different heights rather than both being a smudge.
+// under the line rather than as a distribution — so the baseline is DRAWN, and
+// the band is tall enough that a bar of 1 and a bar of 15 are visibly different
+// heights rather than both being a smudge.
 export function autonomyBarRect(peak, peakMax, panel = AUTONOMY_PANEL) {
   const n = Number(peak) || 0;
   const max = Number(peakMax) || 0;
@@ -1425,14 +1926,67 @@ export function autonomyBarRect(peak, peakMax, panel = AUTONOMY_PANEL) {
   return { top: bottom - height, bottom, height };
 }
 
+// autonomyBarAxisLabels is the histogram's OWN y axis, as values.
+//
+// TWO LABELS: the band's full-height value at the top, and `0` at the baseline.
+// Two is what the axis actually means — a bar's height is its peak as a fraction
+// of the highest peak, so the top and the floor are the only two readings that
+// are exact — and a ladder of intermediate ticks in a 44px band would be four
+// numbers 10px apart.
+//
+// Before this the gutter beside the bars was deliberately BLANK on both
+// surfaces, which is what "the number of agents running in parallel is not
+// visible" was about: the bars carried the only figure on the panel with no
+// scale of any kind. They share the line chart's gutter (padR) and tick font, so
+// the two axes read as one column rather than as two competing ones.
+//
+// [] when nothing overlapped anywhere in the panel: with no bar drawn, an axis
+// labelled 0 to 0 would be furniture claiming a measurement.
+export function autonomyBarAxisLabels(peakMax, panel = AUTONOMY_PANEL) {
+  const max = Math.round(Number(peakMax) || 0);
+  if (max <= 0) return [];
+  const baseline = autonomyBaselineY(panel);
+  return [
+    { value: max, text: String(max), y: baseline - panel.barsH },
+    { value: 0, text: '0', y: baseline },
+  ];
+}
+
+// autonomyGutterLabels is EVERY label drawn in the panel's right-hand gutter —
+// the line axis's ticks and the histogram's two — each with the vertical extent
+// it occupies, top to bottom.
+//
+// It exists because the two axes share one gutter and neither knows about the
+// other. QA of the shipped build caught the consequence: at the 3px gap the
+// five-panel stack used (where the bar band carried no labels at all) the line
+// axis's floor tick "0s" and the histogram's peak "15" were drawn 3px apart and
+// overprinted into an unreadable smudge — a wrong figure with nothing on screen
+// saying so, in the very gutter this change added to make the concurrency
+// figure legible.
+//
+// As a value, so "no two labels overlap" is one assertion over the real
+// geometry rather than a constant somebody has to keep in their head.
+export function autonomyGutterLabels(domain, peakMax, width, panel = AUTONOMY_PANEL) {
+  const half = panel.tickFont / 2;
+  const out = autonomyTickValues(domain).map((v) => {
+    const at = autonomyTickPlacement(v, domain, width, panel);
+    return { axis: 'line', text: autonomyDuration(v), y: at.y, top: at.top, bottom: at.bottom };
+  });
+  for (const label of autonomyBarAxisLabels(peakMax, panel)) {
+    out.push({ axis: 'bars', text: label.text, y: label.y, top: label.y - half, bottom: label.y + half });
+  }
+  return out.sort((a, b) => a.y - b.y);
+}
+
 // drawAutonomyBars draws the concurrency histogram: one bar per bucket, scaled
-// against the stack's shared peak, all of them standing on one drawn baseline.
+// against this panel's own peak, all of them standing on one drawn baseline,
+// with the band's own y axis labelled in the right-hand gutter.
 //
 // A BUCKET WITH NO ONE WORKING DRAWS NOTHING — no bar, however short. The
 // BASELINE is not a mark on that rule: it is drawn uniformly across the whole
 // plot in the gridline colour, exactly like the y gridlines above it, so it
 // reads as furniture rather than as a per-bucket measurement of zero.
-function drawAutonomyBars(ctx, { points, xAt, plotW, n, peakMax, color, gridColor, padL, padR, w }) {
+function drawAutonomyBars(ctx, { points, xAt, plotW, n, peakMax, color, gridColor, muted, padL, padR, w }) {
   const baseline = autonomyBaselineY();
   ctx.save();
   // The foot first, so a bar sits ON it rather than the rule cutting across.
@@ -1451,14 +2005,22 @@ function drawAutonomyBars(ctx, { points, xAt, plotW, n, peakMax, color, gridColo
       ctx.fillRect(xAt(i) - barW / 2, rect.top, barW, rect.height);
     }
   }
+  // …and the band's own scale, in the line chart's gutter and font.
+  ctx.fillStyle = muted;
+  ctx.font = AUTONOMY_PANEL.tickFont + 'px ui-monospace, monospace';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  for (const label of autonomyBarAxisLabels(peakMax)) {
+    ctx.fillText(label.text, w - padR + AUTONOMY_PANEL.tickGap, label.y);
+  }
   ctx.restore();
 }
 
 // drawAutonomyBoundaries marks each instant where the data's source changes: a
-// dashed hairline down the WHOLE panel — line plot and histogram both — so the
-// rule reads as one vertical through the stack rather than as five annotations.
-// The caption is drawn on the top panel only (autonomyBoundaryCaptionShown).
-function drawAutonomyBoundaries(ctx, { boundaries, padL, plotW, h, muted, index }) {
+// dashed hairline down the whole plot, so the rule reads as one vertical through
+// the section. The caption is written by the aggregate chart only
+// (autonomyBoundaryCaptionShown).
+function drawAutonomyBoundaries(ctx, { boundaries, padL, plotW, top, height, muted, element }) {
   if (!boundaries?.length) return;
   ctx.save();
   ctx.font = '9px ui-monospace, monospace';
@@ -1470,17 +2032,17 @@ function drawAutonomyBoundaries(ctx, { boundaries, padL, plotW, h, muted, index 
     ctx.lineWidth = 1;
     ctx.setLineDash([2, 3]);
     ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, h);
+    ctx.moveTo(x, top);
+    ctx.lineTo(x, top + height);
     ctx.stroke();
-    if (!autonomyBoundaryCaptionShown(index)) continue;
+    if (!autonomyBoundaryCaptionShown(element)) continue;
     const label = autonomyBoundaryLabel(b);
     ctx.setLineDash([]);
     if (x - 4 - ctx.measureText(label).width >= padL) {
       ctx.globalAlpha = 0.7;
       ctx.fillStyle = muted;
       ctx.textAlign = 'right';
-      ctx.fillText(label, x - 4, 1);
+      ctx.fillText(label, x - 4, top + 1);
       ctx.textAlign = 'left';
     }
   }
@@ -1496,25 +2058,28 @@ function drawAutonomyBoundaries(ctx, { boundaries, padL, plotW, h, muted, index 
 // value it is testable; as a `style.background =` buried in a render loop it
 // was not.
 //
-// The first TWO rows are the key, and they are the key because they are what a
-// panel draws: one line and one row of bars. runs/projects are FIGURES and stay
-// unswatched on purpose — a swatch would claim ink nothing lays down.
-export function autonomyPanelRows(summary, cs) {
-  const s = summary || {};
-  const [lineKey, barsKey] = autonomyKeyEntries(cs);
-  const figure = (label, value) => ({ kind: null, label, value, swatch: 'transparent' });
-  let longest = autonomyDuration(s.longest);
-  if (s.longest_running) longest += ' · still going';
+// The first FOUR rows are the key, and they are the key because they are what
+// the section draws: two lines, one plane and one row of bars. The two elements'
+// rows sit in the order they appear on screen — the aggregate chart's p50 and
+// band first, then the panel's longest and peak. runs/projects are FIGURES and
+// stay unswatched on purpose: a swatch would claim ink nothing lays down.
+export function autonomyPanelRows(data, cs) {
+  const d = data?.duration?.summary || {};
+  const p = data?.projects?.summary || {};
+  const [p50Key, bandKey, lineKey, barsKey] = autonomyKeyEntries(cs);
+  const key = (entry, value) => ({ kind: entry.kind, label: entry.label, value, swatch: entry.color, fill: entry.fill });
+  const figure = (label, value) => ({ kind: null, label, value, swatch: 'transparent', fill: '' });
+  let longest = autonomyDuration(p.longest);
+  if (p.longest_running) longest += ' · still going';
   return [
-    { kind: lineKey.kind, label: lineKey.label, value: longest, swatch: lineKey.color },
-    {
-      kind: barsKey.kind,
-      label: barsKey.label,
-      value: String(Number(s.peak) || 0),
-      swatch: barsKey.color,
-    },
-    figure('runs', String(Number(s.runs) || 0)),
-    figure('projects', String(Number(s.projects) || 0)),
+    key(p50Key, autonomyDuration(d.p50)),
+    // Both ends of the band, in the order they read on the chart: bottom edge
+    // to top edge. One row, two figures still visible.
+    key(bandKey, autonomyDuration(d.p5) + ' – ' + autonomyDuration(d.p95)),
+    key(lineKey, longest),
+    key(barsKey, String(Number(p.peak) || 0)),
+    figure('runs', String(Number(p.runs) || 0)),
+    figure('projects', String(Number(p.projects) || 0)),
   ];
 }
 
@@ -1526,13 +2091,17 @@ function renderAutonomySidePanel() {
   const fcEl = document.getElementById('history-forecast-line');
   const listEl = document.getElementById('history-contrib');
   const data = historyState.autonomyData;
+  const projects = data?.projects;
+  const duration = data?.duration;
   if (titleEl) titleEl.textContent = 'Autonomy · ' + (AUTONOMY_RANGE_LABELS[historyState.autonomyRange] || historyState.autonomyRange);
-  const s = data?.summary || {};
+  const s = projects?.summary || {};
   const runs = Number(s.runs) || 0;
-  if (totalEl) totalEl.textContent = runs > 0 ? autonomyDuration(s.longest) : '—';
+  // The headline is the TYPICAL run, which is the aggregate chart's subject and
+  // the first thing on screen; the longest is a key row below it.
+  if (totalEl) totalEl.textContent = runs > 0 ? autonomyDuration(duration?.summary?.p50) : '—';
   if (fcEl) {
     fcEl.textContent = runs > 0
-      ? 'longest run' + (s.longest_project ? ' · ' + s.longest_project : '') + ' · ' + runs + ' runs'
+      ? 'median run · ' + runs + ' runs across ' + (Number(s.projects) || 0) + ' projects'
       : '';
   }
   if (!listEl) return;
@@ -1540,17 +2109,25 @@ function renderAutonomySidePanel() {
   if (!(runs > 0)) {
     appendHistoryEmpty(listEl, autonomyEverRecorded() ? 'no runs in this range' : 'nothing recorded yet');
   } else {
-    for (const row of autonomyPanelRows(s, getComputedStyle(document.documentElement))) {
+    for (const row of autonomyPanelRows(data, getComputedStyle(document.documentElement))) {
       const li = document.createElement('li');
       // The key rows lay out differently from the figure rows below them: they
       // carry a sentence AND a figure, which do not fit one 228px line.
       if (row.kind) li.className = 'autonomy-key';
       const dot = document.createElement('span');
-      // The two key swatches take the SHAPE of what they stand for — a rule for
-      // the line, a pair of bars for the histogram. Two identical dots in one
-      // hue would be a key that says the same thing twice.
+      // Each key swatch takes the SHAPE of what it stands for — a rule for a
+      // line, a bounded plane for the band, a pair of bars for the histogram.
+      // Four identical dots in one hue would be a key that says the same thing
+      // four times.
       dot.className = row.kind ? 'dot autonomy-' + row.kind : 'dot';
-      if (row.kind) dot.style.color = row.swatch; else dot.style.background = row.swatch;
+      if (row.kind === 'band') {
+        dot.style.background = row.fill;
+        dot.style.borderColor = row.swatch;
+      } else if (row.kind) {
+        dot.style.color = row.swatch;
+      } else {
+        dot.style.background = row.swatch;
+      }
       const lbl = document.createElement('span');
       lbl.className = 'label';
       lbl.textContent = row.label;
@@ -1565,22 +2142,26 @@ function renderAutonomySidePanel() {
     // The caveat belongs beside the number it qualifies, not in a tooltip: the
     // `at once` figure is otherwise read as "N independent agents".
     appendHistoryEmpty(listEl, AUTONOMY_CONCURRENCY_CAVEAT);
+    // …and the thin-bucket marking is explained in words, because a fainter
+    // plane means nothing on its own.
+    const thin = autonomyThinNote(duration);
+    if (thin) appendHistoryEmpty(listEl, thin);
   }
   // What these figures counted (#1905 subagents). Above the provenance line
   // because it qualifies every number in the panel, where provenance qualifies
   // where they came from.
-  const countingLine = autonomyCountingLine(data);
+  const countingLine = autonomyCountingLine(projects);
   if (countingLine) appendHistoryEmpty(listEl, countingLine);
   // …and which of them are floors rather than measurements (#1905 recording).
-  const measurement = autonomyMeasurementNote(data);
+  const measurement = autonomyMeasurementNote(projects);
   if (measurement) appendHistoryEmpty(listEl, measurement);
   // The provenance line is part of the feature: "no data" must never read as
   // "you did nothing".
-  appendHistoryEmpty(listEl, autonomyProvenanceLine(data));
+  appendHistoryEmpty(listEl, autonomyProvenanceLine(projects));
   // …and a back-filled view says so, for the same reason: a reconstructed
   // figure rendered as a measured one is the wrong number with nothing on
   // screen saying it is wrong. Silent when nothing in view was reconstructed.
-  const reconstruction = autonomyReconstructionNote(data);
+  const reconstruction = autonomyReconstructionNote(projects);
   if (reconstruction) appendHistoryEmpty(listEl, reconstruction);
 }
 
@@ -2333,18 +2914,26 @@ function seriesCsvLines(d) {
   return lines;
 }
 
-// autonomyCsvLines exports the spans themselves — the raw rows both elements
-// are derived from, so a spreadsheet can re-derive either.
+// autonomyCsvLines exports EVERY project's per-bucket row, not just the panel
+// on screen — the dropdown shows one project at a time, and a CSV that carried
+// only the visible one would silently be a per-project export wearing a
+// section-wide name.
+//
+// The aggregate chart's own percentiles are not repeated here: they are
+// derivable from nothing in this file, so the JSON export (which carries BOTH
+// payloads) is the place that answers for them.
 function autonomyCsvLines() {
-  const spans = historyState.autonomyData?.spans?.spans || [];
-  const lines = ['start,end,duration_seconds,project,session,reason'];
-  for (const sp of spans) {
-    lines.push([
-      new Date(sp.start * 1000).toISOString(), new Date(sp.end * 1000).toISOString(),
-      String(Math.max(0, (sp.end || 0) - (sp.start || 0))),
-      historyCsvCell(sp.project || ''), historyCsvCell(sp.session || ''),
-      historyCsvCell(sp.reason || ''),
-    ].join(','));
+  const data = historyState.autonomyData?.projects;
+  const lines = ['bucket_start,project,longest_seconds,running,peak,peak_top,peak_sub,peak_split'];
+  for (const panel of (data?.panels || [])) {
+    for (const b of (panel.buckets || [])) {
+      lines.push([
+        new Date((b.ts || 0) * 1000).toISOString(), historyCsvCell(panel.project || ''),
+        String(Number(b.longest) || 0), String(!!b.running),
+        String(Number(b.peak) || 0), String(Number(b.peak_top) || 0),
+        String(Number(b.peak_sub) || 0), String(!!b.peak_split),
+      ].join(','));
+    }
   }
   return lines;
 }
@@ -2498,10 +3087,12 @@ export function initHistoryTab() {
   window.addEventListener('resize', () => {
     if (!historyTabOn() || !historyState.data) return;
     if (historyResizeRAF) cancelAnimationFrame(historyResizeRAF);
-    // Autonomy repaints its own stack: each panel is its own width-dependent
-    // canvas, so the shared painter would leave five stale plots at the old
-    // width while redrawing a canvas that is hidden.
-    const repaint = historyState.chart === 'autonomy' ? renderAutonomyPanels : paintHistoryChart;
+    // Autonomy repaints BOTH of its elements: the panel is its own
+    // width-dependent canvas, so the shared painter alone would leave a stale
+    // plot at the old width under a freshly redrawn aggregate chart.
+    const repaint = historyState.chart === 'autonomy'
+      ? () => { paintAutonomyChart(); renderAutonomyPanel(); }
+      : paintHistoryChart;
     historyResizeRAF = requestAnimationFrame(repaint);
   });
 

@@ -2,8 +2,9 @@ import {
   autonomyBoundaryCaptionShown,
   autonomyBoundaryLabel,
   autonomyMoreProjectsLabel,
+  autonomyPanelChoice,
+  autonomyProjectOptions,
   autonomyReconstructionNote,
-  autonomyStackRows,
   autonomyVisibleBoundaries,
 } from './historyTab.js'
 import { readFileSync } from 'node:fs'
@@ -104,10 +105,12 @@ describe('autonomyReconstructionNote — the panel marks a back-filled view', ()
   })
 })
 
-// The percentile band and the run strip were REMOVED, not hidden (#1905
-// redesign). Dead code that still parses is the thing a later reader restores
-// by accident, so their identifiers are checked out of the shipped files.
-describe('the percentile band and the run strip are gone from the shipped files', () => {
+// The run strip was REMOVED, not hidden (#1905 redesign), and it STAYS removed
+// through the #1905 restore that brought the percentile band back. Dead code
+// that still parses is the thing a later reader restores by accident, so its
+// identifiers are checked out of the shipped files — and the band's are checked
+// back IN, so a half-finished restore cannot pass as a whole one.
+describe('the run strip is gone from the shipped files, and the band is back', () => {
   const js = readFileSync(join(WEB_DIR, 'historyTab.js'), 'utf8')
   const css = readFileSync(join(WEB_DIR, 'irrlicht.css'), 'utf8')
   const html = readFileSync(join(WEB_DIR, 'index.html'), 'utf8')
@@ -121,13 +124,26 @@ describe('the percentile band and the run strip are gone from the shipped files'
     expect(html).toContain('history-autonomy-panels')
   })
 
-  test('no p5/p50/p95 apparatus survives', () => {
-    for (const gone of ['AUTONOMY_SERIES', 'AUTONOMY_BAND_TOKENS', 'autonomyBandSegments',
-      'autonomyBandColor', 'autonomySeriesColor', 'sample_floor', 'autonomyChartPoints']) {
-      expect(js).not.toContain(gone)
+  test('the p5–p95 band and its three tokens are back in the shipped files', () => {
+    for (const back of ['AUTONOMY_SERIES', 'autonomyBandSegments', 'autonomyChartPoints',
+      'sample_floor', 'autonomyAggregateDomain']) {
+      expect(js).toContain(back)
     }
-    expect(css).not.toContain('--autonomy-band')
-    expect(css).not.toContain('--autonomy-edge')
+    for (const token of ['--autonomy-band', '--autonomy-band-thin', '--autonomy-edge']) {
+      expect(css).toContain(token)
+    }
+  })
+
+  test('no log-scale mapping survives on either axis', () => {
+    // The maintainer's explicit call (#1905): linear, and no log path kept
+    // alive behind a flag. `Math.log` anywhere in the Autonomy code would be
+    // one, so it is checked out of the file rather than merely unused.
+    const section = js.slice(js.indexOf('// --- Autonomy (#1905) ---'),
+      js.indexOf('// --- Activity matrix'))
+    expect(section.length).toBeGreaterThan(1000) // the slice actually found the section
+    expect(section).not.toContain('Math.log')
+    expect(section).not.toContain('Math.exp')
+    expect(section).toContain('autonomyLinearY')
   })
 
   test('no run strip, end-reason colours, glyphs or legend survive', () => {
@@ -141,26 +157,18 @@ describe('the percentile band and the run strip are gone from the shipped files'
   })
 })
 
-// The section is a per-project view of the FIVE most important projects. The
-// daemon computes the five and says how many it left out; the client renders
-// what it was sent and names the rest.
-describe('the stack draws the panels it was sent and names the rest', () => {
+// The dropdown offers EVERY project the daemon sent. The daemon sends every
+// project in the window up to a high safety cap and says how many it left out;
+// the client offers what it was sent and names the rest.
+describe('the dropdown offers the projects it was sent, and names the rest', () => {
   const stack = (panelCount, more) => ({
     panels: Array.from({ length: panelCount }, (_, i) => ({ project: 'p' + i, buckets: [] })),
     more_projects: more,
-    panel_limit: 5,
+    panel_limit: 200,
   })
 
-  test('five panels and one overflow line, in that order', () => {
-    const rows = autonomyStackRows(stack(5, 7))
-    expect(rows.filter(r => r.kind === 'panel')).toHaveLength(5)
-    expect(rows[rows.length - 1]).toEqual({ kind: 'more', label: '+7 more projects, each with less autonomous time' })
-    expect(rows).toHaveLength(6)
-  })
-
-  test('nothing is said when every project already has a panel', () => {
-    const rows = autonomyStackRows(stack(3, 0))
-    expect(rows.map(r => r.kind)).toEqual(['panel', 'panel', 'panel'])
+  test('every project sent is offered, however many there are', () => {
+    expect(autonomyProjectOptions(stack(93, 0), null)).toHaveLength(93)
   })
 
   test('the overflow line says WHY those are the projects missing', () => {
@@ -170,23 +178,25 @@ describe('the stack draws the panels it was sent and names the rest', () => {
       .toContain('each with less autonomous time')
   })
 
-  test('one hidden project is singular', () => {
-    expect(autonomyStackRows(stack(5, 1)).at(-1).label).toMatch(/^\+1 more project,/)
+  test('nothing is said when the cap left nothing out', () => {
+    expect(autonomyMoreProjectsLabel(stack(93, 0))).toBe('')
   })
 
-  // The committed mutation: a client that re-decides the panel count itself.
-  // Two surfaces doing that is exactly how the run strip ended up drawing
-  // twelve rows on the web against six on macOS from one ranked list.
-  test('the client renders what it was sent, never its own count', () => {
-    const clientCap = (data) => data.panels.slice(0, 3)
-    const data = stack(5, 7)
-    expect(clientCap(data)).toHaveLength(3)
-    expect(autonomyStackRows(data).filter(r => r.kind === 'panel')).toHaveLength(data.panels.length)
+  // The committed mutation: a client that re-decides the list itself. Two
+  // surfaces doing that is exactly how the run strip ended up drawing twelve
+  // rows on the web against six on macOS from one ranked list — and a picker
+  // that caps its own list drops projects the summary beside it still counts.
+  test('the client offers what it was sent, never its own slice', () => {
+    const clientCap = (data) => data.panels.slice(0, 5)
+    const data = stack(93, 0)
+    expect(clientCap(data)).toHaveLength(5)
+    expect(autonomyProjectOptions(data, null)).toHaveLength(data.panels.length)
   })
 
-  test('an empty window draws no panels and claims no overflow', () => {
-    expect(autonomyStackRows({ panels: [], more_projects: 0 })).toEqual([])
-    expect(autonomyStackRows(null)).toEqual([])
+  test('an empty window offers nothing and claims no overflow', () => {
+    expect(autonomyProjectOptions({ panels: [], more_projects: 0 }, null)).toEqual([])
+    expect(autonomyProjectOptions(null, null)).toEqual([])
+    expect(autonomyPanelChoice(null, null).panel).toBeNull()
   })
 })
 
@@ -276,27 +286,27 @@ describe('source boundaries are marked across the panel stack', () => {
   })
 })
 
-// WITH FIVE PANELS THE RULE HAS TO READ ONCE. Every panel's line steps at the
-// same instant — they share one x domain — so the rule is drawn through all of
-// them, and the caption is drawn on exactly one. Five stacked copies of
-// "← cost log · 60s resolution" are five competing captions where the reader
-// needs one, and at 9px they collide with four project names.
-describe('the boundary caption is written once, not once per panel', () => {
-  test('exactly one of five panels carries it', () => {
-    const carrying = [0, 1, 2, 3, 4].filter(autonomyBoundaryCaptionShown)
+// WITH TWO ELEMENTS THE RULE HAS TO READ ONCE. Both step at the same instant —
+// they share one window — so the rule is drawn on both, and the caption is
+// written by exactly one. Two stacked copies of "← cost log · 60s resolution"
+// are two competing captions where the reader needs one, and at 9px the lower
+// one collides with the panel's own header row.
+describe('the boundary caption is written once, not once per element', () => {
+  test('exactly one of the two elements carries it', () => {
+    const carrying = ['aggregate', 'panel'].filter(autonomyBoundaryCaptionShown)
     expect(carrying).toHaveLength(1)
   })
 
-  test('it is the top panel, so the caption sits above the whole stack', () => {
-    expect(autonomyBoundaryCaptionShown(0)).toBe(true)
-    expect(autonomyBoundaryCaptionShown(4)).toBe(false)
+  test('it is the aggregate chart, which is the top element', () => {
+    expect(autonomyBoundaryCaptionShown('aggregate')).toBe(true)
+    expect(autonomyBoundaryCaptionShown('panel')).toBe(false)
   })
 
-  // The committed mutation: captioning every panel. It passes "a caption is
+  // The committed mutation: captioning every element. It passes "a caption is
   // drawn" and fails the thing that matters, which is that there is one.
-  test('production tells one caption from five', () => {
+  test('production tells one caption from two', () => {
     const captionEverywhere = () => true
-    expect([0, 1, 2, 3, 4].filter(captionEverywhere)).toHaveLength(5)
-    expect([0, 1, 2, 3, 4].filter(autonomyBoundaryCaptionShown)).toHaveLength(1)
+    expect(['aggregate', 'panel'].filter(captionEverywhere)).toHaveLength(2)
+    expect(['aggregate', 'panel'].filter(autonomyBoundaryCaptionShown)).toHaveLength(1)
   })
 })

@@ -39,9 +39,12 @@ describe('autonomyMeasurementNote', () => {
     expect(line).toContain('SO FAR')
     expect(line).toContain('counts towards the longest run')
     expect(line).toContain('still going')
-    // The percentile-era wording must be gone with the percentiles: a sentence
-    // claiming an exclusion that no longer happens is a wrong number's alibi.
-    expect(line).not.toContain('percentile')
+    // BOTH halves of the asymmetry, because the section now draws both figures
+    // (#1905 restore): a running run IS the panel's longest, and is NOT a
+    // sample for the aggregate chart's percentiles. A sentence that named only
+    // one of the two would be an alibi for whichever number the reader was
+    // looking at.
+    expect(line).toContain('left out of the percentiles')
   })
 
   test('an unmeasured start says which end of the run is the estimate', () => {

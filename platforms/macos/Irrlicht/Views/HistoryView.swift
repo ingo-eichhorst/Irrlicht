@@ -92,11 +92,17 @@ struct HistoryView: View {
     // daemon's own chart=="state" special-case in resolveHistoryQuery).
     @State private var stateGranularity: HistoryGranularity = .hr24
 
-    // Autonomy (#1905) — ONE picker. The tab is a single element now (five
-    // per-project panels), so it has a single window: Range, sent as ?window=,
-    // whose keys are window LENGTHS (unlike stateGranularity's same-looking
-    // keys, which are bucket widths). The strip's Span went with the strip.
+    // Autonomy (#1905) — ONE window picker for BOTH elements. Range is sent as
+    // ?window= by each of the two requests, and its keys are window LENGTHS
+    // (unlike stateGranularity's same-looking keys, which are bucket widths).
+    // The strip's Span went with the strip.
     @State private var autonomyRange: HistoryAutonomyRange = .days30
+    // …and which project the single panel draws. nil = "no choice made yet" →
+    // rank 1. It is NOT part of queryKey: the payload already carries every
+    // project, so changing it is a repaint rather than a refetch — and holding
+    // the NAME rather than the rank is what makes the choice survive a Range
+    // change instead of silently swapping projects when the ranking reorders.
+    @State private var autonomyProject: String?
     // There is no section-wide run-scope state any more (#1905 recording): the
     // section counts every run, subagent runs included, so there is nothing to
     // hold and nothing for the query key below to vary on.
@@ -112,8 +118,9 @@ struct HistoryView: View {
     @State private var yieldResponse: HistoryYieldResponse?
     @State private var doraResponse: HistoryDoraResponse?
     @State private var stateResponse: HistoryStateResponse?
-    // Autonomy has its own payload shape and its own window, so it keeps its
-    // own slot rather than sharing the single-chart one above.
+    // Autonomy fetches BOTH elements for one tab render, so it keeps two
+    // responses rather than sharing the single-chart slot above.
+    @State private var autonomyDuration: HistoryAutonomyDurationResponse?
     @State private var autonomyProjects: HistoryAutonomyProjectsResponse?
     @State private var loadFailed = false
 
@@ -319,13 +326,17 @@ struct HistoryView: View {
         .font(.caption)
     }
 
-    /// Autonomy tab (#1905): Range, and only Range. It governs all five
-    /// panels, which are the first thing under this row.
+    /// Autonomy tab (#1905): Range, and only Range. It governs BOTH elements,
+    /// which are the first thing under this row.
     ///
     /// Span — the run strip's window — used to sit here beside it, two controls
     /// above two elements with nothing on screen saying which moved which, and
     /// two vocabularies that overlap textually (`30d` was a Range value AND a
     /// Span value). The strip is gone and Span went with it.
+    ///
+    /// The project picker is NOT here either, for the same reason spelled the
+    /// other way round: it moves ONE element, so it lives in that element's own
+    /// header row. A control's place is what says what it moves.
     ///
     /// It is not the shared `range`: the section answers a different question
     /// over a different window, and uses no Group or drilldown at all.
@@ -477,10 +488,12 @@ struct HistoryView: View {
         }
     }
 
-    /// Autonomy tab (#1905): the five per-project panels.
+    /// Autonomy tab (#1905): both elements, always together — the aggregate
+    /// percentile chart above, one project panel below.
     @ViewBuilder private var autonomyContent: some View {
-        if let d = autonomyProjects {
-            HistoryAutonomyContentView(data: d, range: autonomyRange)
+        if let duration = autonomyDuration, let d = autonomyProjects {
+            HistoryAutonomyContentView(duration: duration, data: d, range: autonomyRange,
+                                       selectedProject: $autonomyProject)
         } else if loadFailed {
             loadFailedText
         } else {
@@ -618,22 +631,28 @@ struct HistoryView: View {
         }
     }
 
-    /// Autonomy (#1905) has its own window and its own payload shape, so it
-    /// cannot be folded into the shared single-chart fetch above.
+    /// Autonomy (#1905) fetches BOTH elements — the tab shows them together
+    /// over the same window, and neither can be folded into the shared
+    /// single-chart fetch above. A failure in either marks the tab failed
+    /// rather than showing one element beside a frame that never resolves.
     private func fetchAutonomy() async {
         loadFailed = false
-        let d: HistoryAutonomyProjectsResponse? =
-            await fetchAutonomyPart(chart: "autonomy_projects", window: autonomyRange.rawValue)
+        async let duration: HistoryAutonomyDurationResponse? =
+            fetchAutonomyPart(chart: "autonomy_duration", window: autonomyRange.rawValue)
+        async let projects: HistoryAutonomyProjectsResponse? =
+            fetchAutonomyPart(chart: "autonomy_projects", window: autonomyRange.rawValue)
+        let (dur, d) = await (duration, projects)
         if Task.isCancelled { return }
-        guard let d else {
+        guard let dur, let d else {
             loadFailed = true
             return
         }
+        autonomyDuration = dur
         autonomyProjects = d
     }
 
-    /// The Autonomy request. Returns nil on any failure — the caller decides
-    /// what that means rather than the fetch guessing.
+    /// One Autonomy request. Returns nil on any failure — the caller decides
+    /// what an incomplete pair means, rather than each half guessing.
     private func fetchAutonomyPart<T: Decodable>(chart: String, window: String) async -> T? {
         var comps = URLComponents(string: "\(DaemonEndpoint.httpBase)/api/v1/history")
         // The chart and its window, and nothing else (#1905 recording). Every

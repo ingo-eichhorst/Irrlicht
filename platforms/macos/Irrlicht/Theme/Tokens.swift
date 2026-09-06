@@ -67,23 +67,28 @@ enum IrrColors {
     static let readyDim   = ready.opacity(0.12)
     static let errorDim   = error.opacity(0.12)
 
-    // Autonomy panels (#1905) — ONE hue, two weights. The longest-run line is
-    // `working` at full strength; the concurrency histogram under it is the
-    // same hue, quieter, because the bars are a second reading of the same
-    // activity and not a second subject.
+    // Autonomy (#1905) — ONE hue, four weights, across both of the section's
+    // elements. The lines are `working` at full strength; the concurrency
+    // histogram, the p5–p95 plane and its edges are the same hue, quieter,
+    // because they are further readings of the same activity and not further
+    // subjects.
     //
     // `adaptive` rather than `working.opacity(…)` because the alpha itself has
     // to differ per appearance, and a single opacity cannot have two values:
-    // on a dark window a violet bar has to LIGHTEN the surface to register at
+    // on a dark window a violet wash has to LIGHTEN the surface to register at
     // all, while on a light one the same alpha reads as a solid lavender slab
-    // louder than the line above it. Hex is `#AARRGGBB`, so the alpha rides in
-    // the token. Web twin: --autonomy-bar in platforms/web/irrlicht.css, same
-    // alphas.
-    //
-    // The p5–p95 band's three tokens went with the band (#1905 redesign): the
-    // section reports the LONGEST run now, so there is no plane to fill and no
-    // thin-bucket variant to distinguish.
+    // louder than the line it sits behind. Hex is `#AARRGGBB`, so the alpha
+    // rides in the token. Web twins: --autonomy-bar / --autonomy-band /
+    // --autonomy-band-thin / --autonomy-edge in platforms/web/irrlicht.css,
+    // same alphas.
     static let autonomyBar      = Color.adaptive(light: "#618B5CF6", dark: "#738B5CF6")
+    // The band came back with the aggregate percentile chart (#1905 restore).
+    static let autonomyBand     = Color.adaptive(light: "#1C8B5CF6", dark: "#338B5CF6")
+    // Buckets under `sample_floor` keep their own, fainter plane: there p95 IS
+    // the maximum and p5 IS the minimum, so the area is a range rather than a
+    // percentile spread and must not read as one.
+    static let autonomyBandThin = Color.adaptive(light: "#0D8B5CF6", dark: "#148B5CF6")
+    static let autonomyEdge     = Color.adaptive(light: "#618B5CF6", dark: "#738B5CF6")
 
     // Glow halos (--working-glow 0.25, --waiting-glow / --ready-glow 0.20).
     static let workingGlow = working.opacity(0.25)

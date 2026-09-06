@@ -348,15 +348,13 @@
           <div class="history-matrix-scroll" id="history-matrix-scroll" hidden>
             <div class="history-matrix" id="history-matrix"></div>
           </div>
-          <!-- Autonomy (#1905): five per-project panels, stacked, replacing the
-               shared canvas inside this same card the way the activity matrix
-               does. Inside the card rather than in a full-width block below it
-               because the section is ONE element now — the run strip that used
-               to be the second one is gone — so it belongs where every other
-               chart is drawn, with the side panel keeping its place beside it.
-               Scrolls: five panels plus the "+N more" line and the axis run a
-               little past a 360px card, and clipping the explanation would be
-               worse than a scrollbar. -->
+          <!-- Autonomy (#1905): ONE project panel — a longest-run line over a
+               concurrency histogram, for whichever project the dropdown in its
+               own header row selects. It sits UNDER the canvas above rather
+               than replacing it (unlike the activity matrix), because the
+               canvas is where the section's other element is drawn: the
+               aggregate p95/p50/p5 chart over every project. Two elements, one
+               Range control, one card that grows to hold both. -->
           <div class="history-autonomy-panels" id="history-autonomy-panels" hidden></div>
           <div class="history-chart-empty" id="history-chart-empty">no cost data in this range yet</div>
           <a id="history-co2-info" class="history-co2-info" href="https://irrlicht.io/docs/co2-methodology.html" target="_blank" rel="noopener" title="How the CO2e estimate and its equivalents are calculated" hidden>How is this calculated?</a>

@@ -139,53 +139,116 @@ final class HistoryAutonomyTests: XCTestCase {
         XCTAssertTrue(segments[0].isIsolated, "it has no neighbour to draw a segment to, so it is drawn as a point")
     }
 
-    // MARK: The shared log axis
+    // MARK: The panel's own LINEAR axis
 
-    /// Shared, so the projects are comparable — that is the point of picking
-    /// five. Log, because a project whose best is two minutes would otherwise
-    /// be a flat line under one whose best is eleven hours.
-    func testTheYDomainSpansEveryPanel() throws {
+    /// ITS OWN, because exactly one panel is drawn: there is nothing left to be
+    /// comparable WITH, and a domain stretched to fit projects that are not on
+    /// screen would flatten the one that is.
+    ///
+    /// The committed mutation is `sharedUpper` — the shared domain the
+    /// five-panel stack used. Under it `small`'s 120s is plotted against
+    /// `big`'s 11h39m and is a flat line on the floor.
+    func testTheYDomainIsTheDrawnPanelsOwn() throws {
         let d = try response(bucketStarts: [0],
                              panels: [("big", [(0, 41_940.0, 5)]), ("small", [(0, 120.0, 1)])])
-        let domain = try XCTUnwrap(d.sharedYDomain)
-        XCTAssertLessThanOrEqual(domain.lowerBound, 120)
-        XCTAssertGreaterThanOrEqual(domain.upperBound, 41_940)
+        let own = try XCTUnwrap(d.panels[1].yDomain)
+        XCTAssertEqual(own.upperBound, 120 * 1.1, accuracy: 0.001)
+
+        let sharedUpper = d.panels.compactMap { $0.buckets.map(\.longest).max() }.max() ?? 0
+        XCTAssertGreaterThan(sharedUpper, own.upperBound,
+                             "a shared domain would put the small project's whole plot on the floor")
     }
 
-    /// The committed mutation: a per-panel domain. Under it `small`'s own 120s
-    /// would sit at the top of its plot while `big`'s 120s sat near the bottom,
-    /// and the five panels would not be comparable at all.
-    func testProductionTellsASharedDomainFromAPerPanelOne() throws {
-        // `small` FIRST on purpose: a mutation that reads only the first panel
-        // would then produce the per-panel domain here, and this goes red too
-        // rather than leaving one assertion to carry the whole rule.
-        let d = try response(bucketStarts: [0],
-                             panels: [("small", [(0, 120.0, 1)]), ("big", [(0, 41_940.0, 5)])])
-        let shared = try XCTUnwrap(d.sharedYDomain)
-        let onlySmall = try response(bucketStarts: [0], panels: [("small", [(0, 120.0, 1)])])
-        let perPanel = try XCTUnwrap(onlySmall.sharedYDomain)
-        XCTAssertNotEqual(shared.upperBound, perPanel.upperBound,
-                          "a per-panel domain would put the small project's own maximum at the top of " +
-                          "its plot, and the five panels would not be comparable")
-        XCTAssertGreaterThan(shared.upperBound, perPanel.upperBound)
+    /// LINEAR, not logarithmic. The maintainer's explicit call (#1905), and the
+    /// committed mutation is the log mapping that shipped before: halfway up a
+    /// LINEAR plot is half the domain, where on a log plot it is the geometric
+    /// mean.
+    func testTheAxisIsLinearAndStartsAtZero() throws {
+        let d = try response(bucketStarts: [0], panels: [("p", [(0, 100.0, 1)])])
+        let domain = try XCTUnwrap(d.panels[0].yDomain)
+        XCTAssertEqual(domain.lowerBound, 0,
+                       "a linear axis whose origin is not zero exaggerates every difference above it")
+        XCTAssertEqual(domain.upperBound, 110, accuracy: 0.001)
+
+        // The MUTATION: the log domain, floored at 1s because a log scale
+        // cannot plot 0. Its lower bound is not zero, which is the difference.
+        let logLower = Swift.max(1, 100.0 * 0.8)
+        XCTAssertNotEqual(logLower, domain.lowerBound)
     }
 
-    func testAnEmptyWindowHasNoDomainRatherThanAFabricatedOne() throws {
+    /// What linear COSTS, recorded rather than hidden: a project whose longest
+    /// day is 11h39m plots its typical 10m runs in the bottom ~1.5% of the plot.
+    /// The panel header states the exact longest as a NUMBER for this reason.
+    func testTheCostOfALinearAxisIsRecorded() throws {
+        let d = try response(bucketStarts: [0], panels: [("big", [(0, 41_940.0, 5)])])
+        let domain = try XCTUnwrap(d.panels[0].yDomain)
+        let fraction = 600 / domain.upperBound
+        XCTAssertLessThan(fraction, 0.02, "10m of an 11h39m domain is under 2% of the plot height")
+    }
+
+    func testAnEmptyPanelHasNoDomainRatherThanAFabricatedOne() throws {
         let none = try response(bucketStarts: [0], panels: [])
-        XCTAssertNil(none.sharedYDomain)
-        // …and a window whose only bucket has a bar but no finished run.
+        XCTAssertTrue(none.panels.isEmpty)
+        // …and a panel whose only bucket has a bar but no finished run.
         let barsOnly = try response(bucketStarts: [0], panels: [("p", [(0, 0.0, 2)])])
-        XCTAssertNil(barsOnly.sharedYDomain)
-        XCTAssertEqual(barsOnly.sharedPeakScale, 2)
+        XCTAssertNil(barsOnly.panels[0].yDomain)
+        XCTAssertEqual(barsOnly.panels[0].peakScale, 2)
     }
 
-    func testThePeakScaleIsSharedToo() throws {
+    func testThePeakScaleIsThePanelsOwn() throws {
         let d = try response(bucketStarts: [0],
                              panels: [("a", [(0, 60.0, 5)]), ("b", [(0, 60.0, 2)])])
-        XCTAssertEqual(d.sharedPeakScale, 5)
+        XCTAssertEqual(d.panels[0].peakScale, 5)
+        XCTAssertEqual(d.panels[1].peakScale, 2, "the drawn panel's own peak, not the other's")
         let flat = try response(bucketStarts: [0], panels: [("a", [(0, 60.0, 0)])])
-        XCTAssertEqual(flat.sharedPeakScale, 0,
+        XCTAssertEqual(flat.panels[0].peakScale, 0,
                        "nothing overlapped anywhere, so no bar is drawn rather than every bar full height")
+    }
+
+    // MARK: The histogram labels its own y axis (#1905)
+
+    /// "On the bar chart below the number of agents running in parallel is not
+    /// visible." The gutter beside the bars was deliberately BLANK — an
+    /// `AxisMarks(values: [0])` carrying a spacer string, kept only so the bars
+    /// stayed in register with the plot above.
+    ///
+    /// The committed mutation is `blankGutter` below: what shipped.
+    func testTheHistogramAxisIsLabelledAtItsPeakAndZero() {
+        XCTAssertEqual(AutonomyBarAxis.values(peak: 15), [0, 15])
+        XCTAssertEqual(AutonomyBarAxis.label(15), "15")
+        XCTAssertEqual(AutonomyBarAxis.label(0), "0")
+
+        let blankGutter: [Int] = []
+        XCTAssertNotEqual(AutonomyBarAxis.values(peak: 15), blankGutter,
+                          "the shipped gutter carried no scale at all, which is the defect")
+    }
+
+    /// An axis labelled 0 to 0 would be furniture claiming a measurement.
+    func testAPanelNobodyOverlappedInGetsNoHistogramAxis() {
+        XCTAssertEqual(AutonomyBarAxis.values(peak: 0), [])
+        XCTAssertEqual(AutonomyBarAxis.values(peak: -1), [])
+    }
+
+    /// QA-4 (#1905). Both axes are labelled in the SAME right-hand gutter now,
+    /// and neither knows about the other: the line axis's lowest label sits at
+    /// the foot of its plot and the histogram's peak label at the head of the
+    /// bar band. The web build showed the consequence in a browser — "0s" and
+    /// "15" overprinted into a smudge at the 3 pt gap the five-panel stack used,
+    /// where the bar band carried no labels at all.
+    ///
+    /// The committed mutation is `beforeTheGap` below: butted together, the two
+    /// labels' 9 pt boxes intersect.
+    func testTheTwoAxesClearEachOtherInTheSharedGutter() {
+        let font = AutonomyPanelMetrics.tickFontSize
+        let gap = AutonomyPanelMetrics.chartGap
+        // Each label is drawn centred on its own line, so half a glyph hangs
+        // off each side; clearing one whole font is what keeps them apart.
+        XCTAssertGreaterThanOrEqual(gap, font,
+                                    "the line axis's floor label and the histogram's peak label overprint")
+
+        let beforeTheGap: CGFloat = 1
+        XCTAssertLessThan(beforeTheGap, font,
+                          "the shipped spacing did not overprint, so this check cannot show the fix")
     }
 
     // MARK: The concurrency figure, and the split it may not invent
@@ -235,65 +298,117 @@ final class HistoryAutonomyTests: XCTestCase {
         XCTAssertEqual(HistoryAutonomyPanel(project: "p", longest: 600).headline, "longest 10m")
     }
 
-    // MARK: The stack, and what it left out
+    // MARK: One panel at a time, and the picker that chooses it (#1905)
 
-    func testTheStackDrawsThePanelsItWasSentAndNamesTheRest() throws {
+    func testNothingSelectedDrawsRankOne() throws {
         let d = try response(bucketStarts: [0],
-                             panels: (0..<5).map { ("p\($0)", [(Int64(0), 60.0, 1)]) },
-                             moreProjects: 7)
-        let rows = d.stackRows
-        XCTAssertEqual(rows.count, 6)
-        guard case let .more(label) = rows[5] else {
-            return XCTFail("the last stack row must be the overflow line, got \(rows[5])")
-        }
-        XCTAssertEqual(label, "+7 more projects, each with less autonomous time")
+                             panels: [("irrlicht", [(0, 600.0, 2)]), ("articles", [(0, 300.0, 1)])])
+        let choice = d.choice(selected: nil)
+        XCTAssertEqual(choice.project, "irrlicht")
+        XCTAssertEqual(choice.panel?.project, "irrlicht")
+        XCTAssertFalse(choice.isMissing)
     }
 
-    func testTheStackSaysNothingWhenEveryProjectHasAPanel() throws {
+    func testASelectionThisRangeHoldsDrawsThatProject() throws {
+        let d = try response(bucketStarts: [0],
+                             panels: [("irrlicht", [(0, 600.0, 2)]), ("articles", [(0, 300.0, 1)])])
+        let choice = d.choice(selected: "articles")
+        XCTAssertEqual(choice.panel?.project, "articles")
+        XCTAssertFalse(choice.isMissing)
+    }
+
+    /// The committed mutation is `silentFallback` — `first(where:) ?? first`,
+    /// the silent fall back to rank 1. Under it a Range change looks like a
+    /// click the reader never made, and the project they were looking at is
+    /// gone with nothing on screen saying where it went.
+    func testASelectionThisRangeDoesNotHoldIsKeptAndMarked() throws {
+        let d = try response(bucketStarts: [0],
+                             panels: [("irrlicht", [(0, 600.0, 2)]), ("articles", [(0, 300.0, 1)])])
+        let silentFallback = d.panels.first { $0.project == "besenkammer" } ?? d.panels[0]
+        XCTAssertEqual(silentFallback.project, "irrlicht")
+
+        let choice = d.choice(selected: "besenkammer")
+        XCTAssertEqual(choice.project, "besenkammer")
+        XCTAssertNil(choice.panel)
+        XCTAssertTrue(choice.isMissing)
+        XCTAssertEqual(AutonomyFormat.emptyProjectNote("besenkammer"),
+                       "no runs for besenkammer in this range")
+    }
+
+    func testAnEmptyWindowChoosesNothingRatherThanInventingAProject() throws {
+        let d = try response(bucketStarts: [0], panels: [])
+        XCTAssertNil(d.choice(selected: nil).panel)
+        XCTAssertEqual(d.choice(selected: nil).project, "")
+        XCTAssertTrue(d.projectOptions(selected: nil).isEmpty)
+    }
+
+    /// The committed mutation: a client that re-decides the list itself. Two
+    /// surfaces doing that is exactly how the run strip ended up drawing twelve
+    /// rows on the web against six here, from one ranked list — and a picker
+    /// that caps its own list drops projects the summary beside it still counts.
+    func testThePickerOffersWhatItWasSentNeverItsOwnSlice() throws {
+        let d = try response(bucketStarts: [0],
+                             panels: (0..<40).map { ("p\($0)", [(Int64(0), 60.0, 1)]) },
+                             moreProjects: 0)
+        let clientCap = Array(d.panels.prefix(5))
+        XCTAssertEqual(clientCap.count, 5)
+        XCTAssertEqual(d.projectOptions(selected: nil).count, d.panels.count)
+        XCTAssertEqual(d.projectOptions(selected: nil).count, 40)
+    }
+
+    /// Last by the SAME rule the rest follow — the order is most autonomous
+    /// time first, and a project with no runs in this range has none of it.
+    func testAnAbsentSelectionStaysInThePickerLastAndLabelled() throws {
+        let d = try response(bucketStarts: [0],
+                             panels: [("irrlicht", [(0, 600.0, 2)]), ("articles", [(0, 300.0, 1)])])
+        let options = d.projectOptions(selected: "besenkammer")
+        XCTAssertEqual(options.map(\.project), ["irrlicht", "articles", "besenkammer"])
+        XCTAssertTrue(options[2].isMissing)
+        XCTAssertTrue(options[2].label.contains("no runs in this range"), "got: \(options[2].label)")
+        XCTAssertEqual(options[0].label, "irrlicht", "a present project is named plainly")
+    }
+
+    // MARK: What the payload cap left out
+
+    func testTheOverflowLineNamesWhatTheCapLeftOut() throws {
+        let d = try response(bucketStarts: [0], panels: [("a", [(0, 60.0, 1)])], moreProjects: 7)
+        let label = try XCTUnwrap(d.overflowLabel)
+        XCTAssertTrue(label.hasPrefix("+7 more projects past the payload cap"), "got: \(label)")
+        XCTAssertTrue(label.contains("less autonomous time"), "got: \(label)")
+    }
+
+    func testNothingIsSaidWhenTheCapLeftNothingOut() throws {
         let d = try response(bucketStarts: [0], panels: [("a", [(0, 60.0, 1)])], moreProjects: 0)
         XCTAssertNil(d.overflowLabel)
-        XCTAssertEqual(d.stackRows.count, 1)
     }
 
     func testOneHiddenProjectIsSingular() throws {
         let d = try response(bucketStarts: [0], panels: [("a", [(0, 60.0, 1)])], moreProjects: 1)
-        XCTAssertEqual(try XCTUnwrap(d.overflowLabel),
-                       "+1 more project, each with less autonomous time")
+        XCTAssertTrue(try XCTUnwrap(d.overflowLabel).hasPrefix("+1 more project past"))
     }
 
-    /// The committed mutation: a client that re-decides the panel count itself.
-    /// Two surfaces doing that is exactly how the run strip ended up drawing
-    /// twelve rows on the web against six here, from one ranked list.
-    func testTheClientRendersWhatItWasSentNeverItsOwnCount() throws {
-        let d = try response(bucketStarts: [0],
-                             panels: (0..<5).map { ("p\($0)", [(Int64(0), 60.0, 1)]) },
-                             moreProjects: 7)
-        let clientCap = Array(d.panels.prefix(3))
-        XCTAssertEqual(clientCap.count, 3)
-        let drawn = d.stackRows.filter { if case .panel = $0 { return true } else { return false } }
-        XCTAssertEqual(drawn.count, d.panels.count)
-        XCTAssertEqual(drawn.count, 5)
-    }
+    // MARK: The boundary caption reads once across the section
 
-    // MARK: The boundary caption reads once across the stack
-
-    /// The rule runs through all five panels — it has to, or it annotates one
-    /// project's line and leaves the four below it stepping for no stated
-    /// reason — but the caption is drawn on exactly one.
-    func testTheCaptionIsWrittenOnceNotOncePerPanel() {
-        let carrying = (0..<5).filter { AutonomyBoundaryCaption.isShown(panelIndex: $0) }
+    /// The rule is drawn on BOTH elements — it has to be, or it annotates the
+    /// aggregate line and leaves the panel below it stepping for no stated
+    /// reason — but the caption is written by exactly one.
+    func testTheCaptionIsWrittenOnceNotOncePerElement() {
+        let carrying = AutonomyBoundaryCaption.Element.allCases
+            .filter { AutonomyBoundaryCaption.isShown(element: $0) }
         XCTAssertEqual(carrying.count, 1)
-        XCTAssertEqual(carrying, [AutonomyBoundaryCaption.panelIndex])
-        XCTAssertTrue(AutonomyBoundaryCaption.isShown(panelIndex: 0))
-        XCTAssertFalse(AutonomyBoundaryCaption.isShown(panelIndex: 4))
+        XCTAssertEqual(carrying, [AutonomyBoundaryCaption.captionedBy])
+        XCTAssertTrue(AutonomyBoundaryCaption.isShown(element: .aggregate),
+                      "the top element carries the words")
+        XCTAssertFalse(AutonomyBoundaryCaption.isShown(element: .panel))
     }
 
-    /// The committed mutation: captioning every panel. It passes "a caption is
-    /// drawn" and fails the thing that matters, which is that there is one.
-    func testProductionTellsOneCaptionFromFive() {
-        let captionEverywhere: (Int) -> Bool = { _ in true }
-        XCTAssertEqual((0..<5).filter(captionEverywhere).count, 5)
-        XCTAssertEqual((0..<5).filter { AutonomyBoundaryCaption.isShown(panelIndex: $0) }.count, 1)
+    /// The committed mutation: captioning every element. It passes "a caption
+    /// is drawn" and fails the thing that matters, which is that there is one.
+    func testProductionTellsOneCaptionFromTwo() {
+        let captionEverywhere: (AutonomyBoundaryCaption.Element) -> Bool = { _ in true }
+        XCTAssertEqual(AutonomyBoundaryCaption.Element.allCases.filter(captionEverywhere).count, 2)
+        XCTAssertEqual(AutonomyBoundaryCaption.Element.allCases
+            .filter { AutonomyBoundaryCaption.isShown(element: $0) }.count, 1)
     }
 
     /// The caption hangs off whichever side of its rule has room. Pinned to the
@@ -331,37 +446,55 @@ final class HistoryAutonomyTests: XCTestCase {
 
     // MARK: The palette and the key
 
-    /// ONE HUE, TWO WEIGHTS: the bars are the line's hue, quieter. What went is
-    /// a colour per percentile — three equally loud curves and a legend that
-    /// had to be decoded before the chart said anything.
+    /// ONE HUE, FOUR WEIGHTS: every quieter mark is the line's hue at a lower
+    /// alpha. What never came back is a colour per percentile — three equally
+    /// loud curves and a legend that had to be decoded before the chart said
+    /// anything.
     @MainActor
-    func testBarsAreTheLineHue() {
+    func testMarksAreOneHue() {
         for appearance in [NSAppearance(named: .aqua)!, NSAppearance(named: .darkAqua)!] {
             let line = rgb(AutonomyPalette.lineColor, appearance)
-            let bars = rgb(AutonomyPalette.bars, appearance)
-            XCTAssertEqual(line.r, bars.r, accuracy: 0.02, "\(appearance.name.rawValue): red")
-            XCTAssertEqual(line.g, bars.g, accuracy: 0.02, "\(appearance.name.rawValue): green")
-            XCTAssertEqual(line.b, bars.b, accuracy: 0.02, "\(appearance.name.rawValue): blue")
-            XCTAssertLessThan(bars.a, line.a,
-                              "\(appearance.name.rawValue): a histogram at the line's full strength " +
-                              "competes with the line above it")
+            for (name, color) in [("bars", AutonomyPalette.bars),
+                                  ("band", AutonomyPalette.band),
+                                  ("bandThin", AutonomyPalette.bandThin),
+                                  ("edge", AutonomyPalette.edge)] {
+                let mark = rgb(color, appearance)
+                let where_ = "\(appearance.name.rawValue)/\(name)"
+                XCTAssertEqual(line.r, mark.r, accuracy: 0.02, "\(where_): red")
+                XCTAssertEqual(line.g, mark.g, accuracy: 0.02, "\(where_): green")
+                XCTAssertEqual(line.b, mark.b, accuracy: 0.02, "\(where_): blue")
+                XCTAssertLessThan(mark.a, line.a,
+                                  "\(where_): a second reading at the line's full strength competes " +
+                                  "with the line it belongs to")
+            }
         }
     }
 
-    func testTheKeyHasTwoEntriesOnePerMark() {
-        let entries = AutonomyPalette.keyEntries
-        XCTAssertEqual(entries.map(\.kind), [.line, .bars])
-        XCTAssertEqual(entries.map(\.id), ["line", "bars"])
+    /// The thin plane must be FAINTER than the ordinary one, or the marking
+    /// that says "these are not percentiles" says nothing at all.
+    @MainActor
+    func testTheThinPlaneIsFainterThanTheOrdinaryOne() {
+        for appearance in [NSAppearance(named: .aqua)!, NSAppearance(named: .darkAqua)!] {
+            XCTAssertLessThan(rgb(AutonomyPalette.bandThin, appearance).a,
+                              rgb(AutonomyPalette.band, appearance).a,
+                              "\(appearance.name.rawValue): a thin bucket's plane is not distinguishable")
+        }
     }
 
-    /// The p50/band key went with the percentiles: a key naming something the
-    /// panels do not draw would promise a distinction that no longer exists.
-    func testTheKeyExplainsItselfInWordsAndNamesNoPercentile() {
+    func testTheKeyHasFourEntriesOnePerMark() {
+        let entries = AutonomyPalette.keyEntries
+        XCTAssertEqual(entries.map(\.kind), [.p50, .band, .line, .bars])
+        XCTAssertEqual(entries.map(\.id), ["p50", "band", "line", "bars"])
+        // Only the band has an area; every other mark is a stroke.
+        XCTAssertEqual(entries.filter { $0.fill != nil }.map(\.kind), [.band])
+    }
+
+    /// Both elements' marks are named. A key that covered only one of them
+    /// would leave half the section's ink unexplained.
+    func testTheKeyExplainsBothElementsInWords() {
         let labels = AutonomyPalette.keyEntries.map(\.label).joined(separator: " ")
-        XCTAssertTrue(labels.contains("longest run"), "got: \(labels)")
-        XCTAssertTrue(labels.contains("at once"), "got: \(labels)")
-        for gone in ["p50", "p95", "spread", "typical"] {
-            XCTAssertFalse(labels.contains(gone), "\(gone) survives in the key: \(labels)")
+        for named in ["p50", "p5–p95", "spread", "longest run", "at once"] {
+            XCTAssertTrue(labels.contains(named), "\(named) is missing from the key: \(labels)")
         }
     }
 

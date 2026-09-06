@@ -26,18 +26,21 @@ describe('autonomyQuery — no run-scope parameter reaches the daemon', () => {
   // payload while this panel's sentence said it counted everything — the exact
   // "wrong number with nothing on screen saying so" the section exists to
   // avoid. So the query is exactly the chart and its window, and nothing else.
-  test('the query is the chart and its window, and nothing else', () => {
-    expect(autonomyQuery(state())).toBe('chart=autonomy_projects&window=30d')
+  test('each element sends its chart and its window, and nothing else', () => {
+    expect(autonomyQuery('projects', state())).toBe('chart=autonomy_projects&window=30d')
+    expect(autonomyQuery('duration', state())).toBe('chart=autonomy_duration&window=30d')
   })
 
   test('no leftover state key can revive the parameter', () => {
     // The mutation this catches: a stale `autonomyRuns` left in local state (a
     // stored preference, a resumed session) silently re-filtering the view.
     const s = state({ autonomyRuns: 'all' })
-    expect(autonomyQuery(s)).not.toContain('include_subagents')
-    // …and the window survives: the section has one, and it is not one of
-    // chart=state's same-looking granularity keys.
-    expect(autonomyQuery(s)).toContain('window=30d')
+    for (const element of ['projects', 'duration']) {
+      expect(autonomyQuery(element, s)).not.toContain('include_subagents')
+      // …and the window survives: the section has one, and it is not one of
+      // chart=state's same-looking granularity keys.
+      expect(autonomyQuery(element, s)).toContain('window=30d')
+    }
   })
 })
 
