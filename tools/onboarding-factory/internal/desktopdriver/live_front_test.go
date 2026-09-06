@@ -6,6 +6,7 @@ package desktopdriver
 
 import (
 	"context"
+	"encoding/json"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -238,3 +239,37 @@ func readSourceLines(t *testing.T, name string) []string {
 }
 
 func readFileForTest(name string) ([]byte, error) { return os.ReadFile(name) }
+
+// A failure dump exists to answer one question: where was the control, and what
+// else was there? It cannot answer it if the decoder drops the geometry.
+//
+// RED-FIRST: before helperElement carried a Frame, this decoded to nil and the
+// first archive-failure tree written on 2026-09-07 had `frame: null` on every
+// one of its 513 controls.
+func TestHelperElementsCarryGeometryForFailureDumps(t *testing.T) {
+	const response = `{"ok":true,"elements":[{"path":[0],"role":"AXPopUpButton",
+	  "description":"More options for X","hierarchy":["AXApplication","AXWindow"],
+	  "frame":{"x":1815,"y":-175,"width":20,"height":20}}]}`
+	var decoded helperResponse
+	if err := json.Unmarshal([]byte(response), &decoded); err != nil {
+		t.Fatalf("decode: %v; this check cannot run, which is a failure", err)
+	}
+	if len(decoded.Elements) != 1 {
+		t.Fatalf("decoded %d elements, want 1", len(decoded.Elements))
+	}
+	frame := decoded.Elements[0].Frame
+	if frame == nil {
+		t.Fatal("the element carries no frame; a failure dump cannot say where the control was")
+	}
+	if frame.X != 1815 || frame.Y != -175 || frame.Width != 20 || frame.Height != 20 {
+		t.Errorf("frame = %+v, want the measured geometry verbatim", *frame)
+	}
+	// And it must survive the round trip a dump makes.
+	data, err := json.Marshal(decoded.Elements)
+	if err != nil {
+		t.Fatalf("re-encode: %v", err)
+	}
+	if !strings.Contains(string(data), `"frame"`) {
+		t.Errorf("the dump dropped the frame on the way out: %s", data)
+	}
+}
