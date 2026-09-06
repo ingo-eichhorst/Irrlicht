@@ -236,6 +236,7 @@ func validRunRequest() RunRequest {
 		EvidenceDir:    "/repo/evidence",
 		OverallTimeout: time.Second,
 		StepTimeout:    100 * time.Millisecond,
+		TurnTimeout:    100 * time.Millisecond,
 		CleanupTimeout: 100 * time.Millisecond,
 	}
 }
@@ -300,6 +301,7 @@ func TestRunRestoresAfterTimeoutAndInterruption(t *testing.T) {
 		t.Run(tests[index].name, func(t *testing.T) {
 			request := validRunRequest()
 			request.StepTimeout = time.Millisecond
+			request.TurnTimeout = time.Millisecond
 			_, err := Run(context.Background(), tests[index].runtime, request)
 			if err == nil {
 				t.Fatal("Run() returned nil error")

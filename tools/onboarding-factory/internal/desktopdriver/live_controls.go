@@ -80,12 +80,33 @@ func freshSendAndStop(
 		return helperSelector{}, helperSelector{}, err
 	}
 	send = controls[controlSend]
-	stop = helperSelector{Role: "AXButton", Description: "Stop", Hierarchy: send.Hierarchy}
+	stop = stopSelectorFor(send)
 	return send, stop, nil
 }
 
-func (runtime *LiveRuntime) sendAndStop(ctx context.Context) (send, stop helperSelector, err error) {
-	return freshSendAndStop(ctx, runtime.workspace, runtime.helper.inspect)
+// stopButtonDescription is the label Claude Desktop puts on the send slot while
+// a turn is in flight.
+const stopButtonDescription = "Stop"
+
+func stopSelectorFor(send helperSelector) helperSelector {
+	return helperSelector{Role: "AXButton", Description: stopButtonDescription, Hierarchy: send.Hierarchy}
+}
+
+// turnInFlight reports whether Claude Desktop is running a turn right now.
+//
+// Measured on 1.46388.4 on 2026-09-06 against the live app: an idle window
+// exposes one AXButton described "Send" and NO button described "Stop" — and
+// that held with another session shown as "Running" in the sidebar, which
+// contributes a row TITLE and no button of its own. So a Stop button is the
+// composer's in-flight face and nothing else's, which is what lets Submit read
+// it as proof that a click of its own already landed.
+func turnInFlight(elements []helperElement) bool {
+	for _, element := range elements {
+		if element.Role == "AXButton" && element.Description == stopButtonDescription {
+			return true
+		}
+	}
+	return false
 }
 
 // Interrupt clicks the composer's Stop button and proves the click landed by

@@ -85,7 +85,22 @@ type RunRequest struct {
 	Script         []Step
 	EvidenceDir    string
 	OverallTimeout time.Duration
-	StepTimeout    time.Duration
+	// StepTimeout bounds a wait for something the USER INTERFACE owes the
+	// driver now: a composer that should already be on screen, a registry row
+	// Desktop writes the moment a message is sent. It exists to fail fast.
+	StepTimeout time.Duration
+	// TurnTimeout bounds a wait whose length the AGENT sets, not the interface:
+	// the Irrlicht state a turn produces, and the Claude Code hook, which a Stop
+	// hook does not fire until that turn ends.
+	//
+	// It is separate because a third of the run budget is the wrong number for
+	// these, and capping it at 90 seconds is a statement about how long a turn
+	// may take that nothing measured. Cells 3-1 and 3-2 both died on `wait for
+	// Irrlicht state ready timed out after 1m30s` on 2026-09-06 while the
+	// subagent turn each was recording was still running correctly. A turn has
+	// no interface deadline to offer; the cell's own timeout is the operator's
+	// statement of how long it may take, so that is what bounds it.
+	TurnTimeout    time.Duration
 	CleanupTimeout time.Duration
 }
 
@@ -223,7 +238,8 @@ func validateRunRequest(request RunRequest) error {
 	if (request.Prompt == "") == (len(request.Script) == 0) {
 		return errors.New("exactly one of prompt and recipe script is required")
 	}
-	if request.OverallTimeout <= 0 || request.StepTimeout <= 0 || request.CleanupTimeout <= 0 {
+	if request.OverallTimeout <= 0 || request.StepTimeout <= 0 ||
+		request.TurnTimeout <= 0 || request.CleanupTimeout <= 0 {
 		return errors.New("all Desktop driver deadlines must be positive")
 	}
 	return nil
@@ -448,7 +464,9 @@ func (runner *scriptRunner) waitTurn(ctx context.Context) error {
 	// The hook proves Claude Code reached this daemon at all. It is a
 	// once-per-session fact, so a later turn does not re-wait for it.
 	if !slot.hookSeen {
-		if err := runStep(ctx, runner.request.StepTimeout, "Claude Code hook", func(step context.Context) error {
+		// The turn budget, not the step budget: the hook this waits for is a
+		// Stop hook, which Claude Code does not fire until the turn ends.
+		if err := runStep(ctx, runner.request.TurnTimeout, "Claude Code hook", func(step context.Context) error {
 			return runner.runtime.WaitHook(step, slot.owned)
 		}); err != nil {
 			return err
@@ -491,7 +509,7 @@ func (runner *scriptRunner) waitState(ctx context.Context, state string) (Sessio
 	if err != nil {
 		return SessionObservation{}, err
 	}
-	observation, err := waitForState(ctx, runner.runtime, runner.request.StepTimeout, slot.owned, state)
+	observation, err := waitForState(ctx, runner.runtime, runner.request.TurnTimeout, slot.owned, state)
 	if err == nil {
 		slot.observation = observation
 	}

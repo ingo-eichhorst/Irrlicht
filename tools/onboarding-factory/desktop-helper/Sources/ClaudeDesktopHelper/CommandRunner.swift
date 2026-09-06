@@ -337,15 +337,45 @@ enum CommandRunner {
     ) throws {
         let postcondition = try postcondition.validated()
         let deadline = Date().addingTimeInterval(Double(postcondition.timeoutMilliseconds) / 1_000)
+        // Every read below happens AFTER the action posted its event. A read
+        // that throws here must therefore never escape as a bare accessibility
+        // error: the caller cannot tell such an error from one raised before
+        // the click, and it retried the click. Measured on 1.46388.4, that is
+        // exactly what a click on Send produces — the composer is swapped for
+        // the in-flight view while this loop reads it, and the read fails with
+        // kAXErrorInvalidUIElement. Cells 2-19 and 2-26 then spent forty
+        // attempts hunting a Send button their own landed click had replaced.
+        //
+        // The loop already exists to wait for the tree to settle, so a failed
+        // read is a reason to look again, not a reason to give up. Only the
+        // deadline ends it, and the two ways it can end say different things.
+        var lastReadFailure: Error?
         repeat {
-            let tree = try dependencies.readTree(context.application, limits)
-            if try postconditionHolds(
-                postcondition,
-                in: tree,
-                dependencies: dependencies
-            ) { return }
+            do {
+                let tree = try dependencies.readTree(context.application, limits)
+                lastReadFailure = nil
+                if try postconditionHolds(
+                    postcondition,
+                    in: tree,
+                    dependencies: dependencies
+                ) { return }
+            } catch {
+                lastReadFailure = error
+            }
             RunLoop.current.run(until: Date().addingTimeInterval(0.05))
         } while Date() < deadline
+        if let lastReadFailure {
+            // Inability to look is not absence of the postcondition. Say so:
+            // the code is still postconditionFailed, because the action DID
+            // land and must never be repeated, but the message must not claim
+            // an observation this never made.
+            throw HelperFailure(
+                .postconditionFailed,
+                "The required \(postcondition.condition.rawValue) postcondition could not be verified: "
+                    + "the accessibility tree could not be read before the deadline "
+                    + "(last read failure: \(lastReadFailure))."
+            )
+        }
         throw HelperFailure(
             .postconditionFailed,
             "The required \(postcondition.condition.rawValue) postcondition did not become true."

@@ -326,15 +326,15 @@ func TestRunValidatesTheRequestShape(t *testing.T) {
 		{"both forms", RunRequest{
 			Workspace: "/w", Prompt: "hi", Script: []Step{{Type: StepWaitTurn}},
 			EvidenceDir: "/e", OverallTimeout: time.Second,
-			StepTimeout: time.Second, CleanupTimeout: time.Second,
+			StepTimeout: time.Second, TurnTimeout: time.Second, CleanupTimeout: time.Second,
 		}, "exactly one of prompt and recipe script"},
 		{"neither form", RunRequest{
 			Workspace: "/w", EvidenceDir: "/e", OverallTimeout: time.Second,
-			StepTimeout: time.Second, CleanupTimeout: time.Second,
+			StepTimeout: time.Second, TurnTimeout: time.Second, CleanupTimeout: time.Second,
 		}, "exactly one of prompt and recipe script"},
 		{"no workspace", RunRequest{
 			Prompt: "hi", EvidenceDir: "/e", OverallTimeout: time.Second,
-			StepTimeout: time.Second, CleanupTimeout: time.Second,
+			StepTimeout: time.Second, TurnTimeout: time.Second, CleanupTimeout: time.Second,
 		}, "workspace and evidence directory are required"},
 	}
 	for _, test := range tests {

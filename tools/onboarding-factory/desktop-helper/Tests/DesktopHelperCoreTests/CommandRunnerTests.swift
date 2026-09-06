@@ -171,6 +171,131 @@ final class CommandRunnerTests: XCTestCase {
         )
     }
 
+    // A read that fails AFTER the click is not the same as one that fails
+    // before it, and the two must never leave the helper looking alike.
+    //
+    // RED-FIRST: before awaitPostcondition retried its own reads, the first
+    // post-click read threw straight out of the command, and the Go driver —
+    // which classifies a bare `AX error -25202` as a PRE-click refusal — went
+    // on to click Send a second time. Measured live on 1.46388.4: clicking
+    // Send swaps the composer for the in-flight view, and that is precisely
+    // when a tree read fails this way.
+    func testClickPostconditionSurvivesATransientReadFailure() throws {
+        let application = AXUIElementCreateSystemWide()
+        let targetElement = AXUIElementCreateApplication(41_004)
+        let selector = ControlSelector(role: "AXButton", identifier: "send")
+        var clicks = 0
+        var readsAfterClick = 0
+        let dependencies = makeCommandDependencies(
+            application: application,
+            record: { _ in },
+            readTree: { _, _ in
+                guard clicks > 0 else {
+                    return LiveTree(elements: [LiveElement(
+                        snapshot: ElementSnapshot(
+                            path: [0],
+                            role: "AXButton",
+                            identifier: "send",
+                            frame: Frame(x: 0, y: 0, width: 10, height: 10)
+                        ),
+                        element: targetElement
+                    )])
+                }
+                readsAfterClick += 1
+                // The renderer is mid-swap on the first look, settled after.
+                if readsAfterClick == 1 {
+                    throw HelperFailure(.actionFailed, "AX error -25202")
+                }
+                return LiveTree(elements: [])
+            },
+            snapshot: { element, path, _ in
+                ElementSnapshot(
+                    path: path,
+                    role: "AXButton",
+                    identifier: "send",
+                    frame: Frame(x: 0, y: 0, width: 10, height: 10)
+                )
+                    .self
+            },
+            requireHitTarget: { _, _ in },
+            physicalClick: { _ in clicks += 1 }
+        )
+        let response = try CommandRunner.run(HelperRequest(
+            protocolVersion: desktopHelperProtocolVersion,
+            command: .physicalClick,
+            selector: selector,
+            postcondition: Postcondition(selector: selector, condition: .absent)
+        ), dependencies: dependencies)
+
+        XCTAssertTrue(response.ok)
+        XCTAssertEqual(clicks, 1, "the click must be posted exactly once")
+        XCTAssertGreaterThan(readsAfterClick, 1, "the failed read must be retried, not propagated")
+    }
+
+    // And when the tree can never be read, absence of a finding and inability
+    // to look must not produce the same message.
+    //
+    // RED-FIRST: this used to throw the injected accessibility error itself,
+    // which the driver reads as "nothing happened" and retries.
+    func testClickReportsAnUnverifiablePostconditionRatherThanTheReadFailure() {
+        let application = AXUIElementCreateSystemWide()
+        let targetElement = AXUIElementCreateApplication(41_005)
+        let selector = ControlSelector(role: "AXButton", identifier: "send")
+        var clicks = 0
+        let dependencies = makeCommandDependencies(
+            application: application,
+            record: { _ in },
+            readTree: { _, _ in
+                guard clicks > 0 else {
+                    return LiveTree(elements: [LiveElement(
+                        snapshot: ElementSnapshot(
+                            path: [0],
+                            role: "AXButton",
+                            identifier: "send",
+                            frame: Frame(x: 0, y: 0, width: 10, height: 10)
+                        ),
+                        element: targetElement
+                    )])
+                }
+                throw HelperFailure(.actionFailed, "AX error -25202")
+            },
+            snapshot: { element, path, _ in
+                ElementSnapshot(
+                    path: path,
+                    role: "AXButton",
+                    identifier: "send",
+                    frame: Frame(x: 0, y: 0, width: 10, height: 10)
+                )
+            },
+            requireHitTarget: { _, _ in },
+            physicalClick: { _ in clicks += 1 }
+        )
+        XCTAssertThrowsError(try CommandRunner.run(HelperRequest(
+            protocolVersion: desktopHelperProtocolVersion,
+            command: .physicalClick,
+            selector: selector,
+            postcondition: Postcondition(
+                selector: selector,
+                condition: .absent,
+                timeoutMilliseconds: 100
+            )
+        ), dependencies: dependencies)) { error in
+            guard let failure = error as? HelperFailure else {
+                return XCTFail("error = \(error), want a HelperFailure")
+            }
+            XCTAssertEqual(failure.code, .postconditionFailed)
+            XCTAssertTrue(
+                failure.message.contains("could not be verified"),
+                "message = \(failure.message)"
+            )
+            XCTAssertTrue(
+                failure.message.contains("-25202"),
+                "the message must name what stopped it: \(failure.message)"
+            )
+        }
+        XCTAssertEqual(clicks, 1, "the click must be posted exactly once")
+    }
+
     func testCommandRunnerPropagatesTreeReadFailureBeforeAction() {
         let application = AXUIElementCreateSystemWide()
         let injected = HelperFailure(.actionFailed, "injected tree read failure")

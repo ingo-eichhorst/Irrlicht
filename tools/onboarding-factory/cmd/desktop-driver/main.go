@@ -102,7 +102,12 @@ func driveRequest(options options) (desktopdriver.RunRequest, error) {
 		EvidenceDir:       filepath.Join(options.staging, "desktop-evidence"),
 		OverallTimeout:    options.timeout,
 		StepTimeout:       min(options.timeout/3, 90*time.Second),
-		CleanupTimeout:    45 * time.Second,
+		// A turn is bounded by the cell's own budget, not by a fraction of it.
+		// See RunRequest.TurnTimeout: the 90-second cap that suits an interface
+		// control is a claim about agent speed that nothing measured, and it
+		// failed both subagent cells on 2026-09-06.
+		TurnTimeout:    options.timeout,
+		CleanupTimeout: 45 * time.Second,
 	}
 	if options.scriptFile != "" {
 		steps, err := readRecipe(options.scriptFile)
