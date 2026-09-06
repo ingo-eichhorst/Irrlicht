@@ -14,6 +14,13 @@ package desktopdriver
 // waitForComposerControls (live.go) already uses for the composer wait — so
 // each one is testable against a fake accessibility tree without a live
 // helper subprocess. live_controls_test.go exercises all four this way.
+//
+// Every action here RESOLVES a control and then DRIVES it — exactly the shape
+// live.go's retryTransientAX exists for: Desktop's renderer can swap the
+// composer out between the resolve and the click, and re-using a selector
+// resolved before that is what fails with a stale control. Each resolve+drive
+// step below runs inside its own retryTransientAX call, re-resolving fresh on
+// every attempt, the same way Submit and ArchiveOwned already do.
 
 import (
 	"context"
@@ -94,12 +101,14 @@ func interruptTurn(
 	inspect func(context.Context) ([]helperElement, error),
 	click func(context.Context, helperSelector, helperPostcondition) error,
 ) error {
-	send, stop, err := freshSendAndStop(ctx, workspace, inspect)
-	if err != nil {
-		return err
-	}
-	return click(ctx, stop, helperPostcondition{
-		Selector: send, Condition: "exists", TimeoutMilliseconds: popupCloseTimeout,
+	return retryTransientAX(ctx, "interrupt the in-flight Desktop turn", func() error {
+		send, stop, err := freshSendAndStop(ctx, workspace, inspect)
+		if err != nil {
+			return err
+		}
+		return click(ctx, stop, helperPostcondition{
+			Selector: send, Condition: "exists", TimeoutMilliseconds: popupCloseTimeout,
+		})
 	})
 }
 
@@ -123,27 +132,29 @@ func pressKey(
 		return fmt.Errorf("key %q has no observable Desktop postcondition; supported keys are %s",
 			key, strings.Join(SupportedKeys(), ", "))
 	}
-	controls, err := freshControls(ctx, workspace, []string{controlSend, controlPrompt}, inspect)
-	if err != nil {
-		return err
-	}
-	send := controls[controlSend]
-	stop := helperSelector{Role: "AXButton", Description: "Stop", Hierarchy: send.Hierarchy}
-	prompt := controls[controlPrompt]
-	// Escape cancels an in-flight turn: Stop must give way to Send.
-	// Enter submits: Send must give way to Stop.
-	after := helperPostcondition{
-		Selector: send, Condition: "exists", TimeoutMilliseconds: popupCloseTimeout,
-	}
-	if key == "Enter" {
-		after = helperPostcondition{
-			Selector: stop, Condition: "exists", TimeoutMilliseconds: popupCloseTimeout,
+	return retryTransientAX(ctx, fmt.Sprintf("press %s", key), func() error {
+		controls, err := freshControls(ctx, workspace, []string{controlSend, controlPrompt}, inspect)
+		if err != nil {
+			return err
 		}
-	}
-	if err := keyboard(ctx, prompt, definition.code, nil, after); err != nil {
-		return fmt.Errorf("press %s (expected %s): %w", key, definition.effect, err)
-	}
-	return nil
+		send := controls[controlSend]
+		stop := helperSelector{Role: "AXButton", Description: "Stop", Hierarchy: send.Hierarchy}
+		prompt := controls[controlPrompt]
+		// Escape cancels an in-flight turn: Stop must give way to Send.
+		// Enter submits: Send must give way to Stop.
+		after := helperPostcondition{
+			Selector: send, Condition: "exists", TimeoutMilliseconds: popupCloseTimeout,
+		}
+		if key == "Enter" {
+			after = helperPostcondition{
+				Selector: stop, Condition: "exists", TimeoutMilliseconds: popupCloseTimeout,
+			}
+		}
+		if err := keyboard(ctx, prompt, definition.code, nil, after); err != nil {
+			return fmt.Errorf("press %s (expected %s): %w", key, definition.effect, err)
+		}
+		return nil
+	})
 }
 
 // SelectMode and SelectModel drive the two composer popup menus. Both use the
@@ -190,29 +201,35 @@ func selectFromPopup(
 	if strings.TrimSpace(value) == "" {
 		return fmt.Errorf("Desktop %s selection needs a menu entry name", control)
 	}
-	controls, err := freshControls(ctx, workspace, []string{control}, inspect)
-	if err != nil {
-		return err
-	}
-	popup := controls[control]
 	menuRole := helperSelector{Role: "AXMenu"}
-	if err := click(ctx, popup, helperPostcondition{
-		Selector: menuRole, Condition: "exists", TimeoutMilliseconds: popupOpenTimeout,
+	if err := retryTransientAX(ctx, fmt.Sprintf("open Desktop %s popup", control), func() error {
+		controls, err := freshControls(ctx, workspace, []string{control}, inspect)
+		if err != nil {
+			return err
+		}
+		return click(ctx, controls[control], helperPostcondition{
+			Selector: menuRole, Condition: "exists", TimeoutMilliseconds: popupOpenTimeout,
+		})
 	}); err != nil {
 		return fmt.Errorf("open Desktop %s popup: %w", control, err)
 	}
-	elements, err := inspect(ctx)
-	if err != nil {
-		return fmt.Errorf("read Desktop %s menu: %w", control, err)
-	}
-	entry, err := uniqueElement(elements, func(element helperElement) bool {
-		return element.Role == "AXMenuItem" && strings.EqualFold(strings.TrimSpace(element.Title), strings.TrimSpace(value))
-	}, fmt.Sprintf("Desktop %s menu entry %q", control, value))
-	if err != nil {
-		return err
-	}
-	if err := click(ctx, selectorFor(entry), helperPostcondition{
-		Selector: menuRole, Condition: "absent", TimeoutMilliseconds: popupCloseTimeout,
+	// Re-read the menu and click inside the retry: the item animates in, and a
+	// selector resolved before it settled is what refuses the click — the same
+	// shape ArchiveOwned already retries for its own menu item.
+	if err := retryTransientAX(ctx, fmt.Sprintf("select Desktop %s entry %q", control, value), func() error {
+		elements, err := inspect(ctx)
+		if err != nil {
+			return err
+		}
+		entry, err := uniqueElement(elements, func(element helperElement) bool {
+			return element.Role == "AXMenuItem" && strings.EqualFold(strings.TrimSpace(element.Title), strings.TrimSpace(value))
+		}, fmt.Sprintf("Desktop %s menu entry %q", control, value))
+		if err != nil {
+			return err
+		}
+		return click(ctx, selectorFor(entry), helperPostcondition{
+			Selector: menuRole, Condition: "absent", TimeoutMilliseconds: popupCloseTimeout,
+		})
 	}); err != nil {
 		return fmt.Errorf("select Desktop %s entry %q: %w", control, value, err)
 	}
