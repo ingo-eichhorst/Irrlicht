@@ -168,7 +168,7 @@ func measureScenario(repoRoot, agent, folder string, profile matrix.ExecutionPro
 	if _, err := os.Stat(filepath.Join(scenarioDir, "expected.jsonl")); err != nil {
 		return map[string]any{"status": "no_expected"}
 	}
-	rep, err := validateExpectedRecording(scenarioDir, recDir)
+	rep, err := validateExpectedRecording(scenarioDir, recDir, profile)
 	if err != nil || rep == nil {
 		return map[string]any{"status": "validator_error"}
 	}
