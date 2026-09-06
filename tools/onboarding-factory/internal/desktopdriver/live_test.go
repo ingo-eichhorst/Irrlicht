@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestVersionGatePinsTheVerifiedDesktopAndBundledCodePair(t *testing.T) {
@@ -106,5 +107,37 @@ func TestTransientAccessibilityFailuresAreRetriedNotSurfaced(t *testing.T) {
 	}
 	if attempts < 2 {
 		t.Fatalf("an unsettled tree was tried only %d times", attempts)
+	}
+}
+
+// The composer leaves the accessibility tree when Claude Desktop is not
+// frontmost. waitForComposerControls fronts Desktop before every observation
+// for that reason, and the steps that follow it must do the same: focus can
+// move at any moment, and a run of 25 live turns lost one to exactly that.
+//
+// Live run 25 failed with `Desktop send control requires one AXButton described
+// "Send"; found 0. Visible AXButton controls: unlabelled, unlabelled,
+// unlabelled, described "Hide sidebar", described "Back" …` — a sidebar with no
+// composer in it at all, after five retries that each looked again without ever
+// bringing the window back.
+func TestTypingAndSubmittingBringDesktopToTheFront(t *testing.T) {
+	for _, step := range []string{"set prompt", "submit"} {
+		fronted := 0
+		runtime := &LiveRuntime{
+			controls:     map[string]helperSelector{"prompt": {Role: "AXTextArea", Description: "Prompt"}},
+			frontDesktop: func(context.Context) error { fronted++; return nil },
+			helper:       helperClient{path: filepath.Join(t.TempDir(), "absent-helper")},
+		}
+		switch step {
+		case "set prompt":
+			_ = runtime.SetPrompt(context.Background(), "hello")
+		case "submit":
+			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			_ = runtime.Submit(ctx)
+			cancel()
+		}
+		if fronted == 0 {
+			t.Fatalf("%s never brought Claude Desktop to the front", step)
+		}
 	}
 }

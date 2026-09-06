@@ -388,6 +388,12 @@ func (runtime *LiveRuntime) SetPrompt(ctx context.Context, prompt string) error 
 	if !ok {
 		return errors.New("prompt selector was not verified")
 	}
+	// Front Desktop first: the composer is not in the accessibility tree at all
+	// while the app is in the background, and focus can move between the wait
+	// that verified this selector and now.
+	if err := runtime.front(ctx); err != nil {
+		return err
+	}
 	return runtime.helper.setValue(ctx, selector, prompt)
 }
 
@@ -401,6 +407,12 @@ func (runtime *LiveRuntime) Submit(ctx context.Context) error {
 	// composer out between the two, and re-using a selector resolved before
 	// that is exactly what fails with a stale control.
 	return retryTransientAX(ctx, "submit the Desktop prompt", func() error {
+		// Front on EVERY attempt. Looking again without doing so is what made
+		// live run 25 spend all five retries reading a backgrounded window that
+		// carried a sidebar and no composer.
+		if err := runtime.front(ctx); err != nil {
+			return err
+		}
 		elements, err := runtime.helper.inspect(ctx)
 		if err != nil {
 			return err
