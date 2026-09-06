@@ -84,8 +84,17 @@ func freshStopAndSend(
 	if err != nil {
 		return helperSelector{}, helperSelector{}, err
 	}
-	if _, err := composerControls(elements, workspace, basicTurnControls()); err != nil {
-		return helperSelector{}, helperSelector{}, err
+	stop, send, _, err = inFlightKeyControls(elements, workspace)
+	return stop, send, err
+}
+
+func inFlightKeyControls(
+	elements []helperElement,
+	workspace string,
+) (stop, send, prompt helperSelector, err error) {
+	controls, err := composerControls(elements, workspace, basicTurnControls())
+	if err != nil {
+		return helperSelector{}, helperSelector{}, helperSelector{}, err
 	}
 	var stops []helperElement
 	for _, element := range elements {
@@ -94,13 +103,14 @@ func freshStopAndSend(
 		}
 	}
 	if len(stops) != 1 {
-		return helperSelector{}, helperSelector{}, fmt.Errorf(
+		return helperSelector{}, helperSelector{}, helperSelector{}, fmt.Errorf(
 			"Desktop stop control requires one AXButton described %q; found %d",
 			stopButtonDescription, len(stops))
 	}
 	stop = selectorFor(stops[0])
 	send = helperSelector{Role: "AXButton", Description: "Send", Hierarchy: stop.Hierarchy}
-	return stop, send, nil
+	prompt = controls[controlPrompt]
+	return stop, send, prompt, nil
 }
 
 // stopButtonDescription is the label Claude Desktop puts on the send slot while
@@ -173,42 +183,64 @@ func pressKey(
 			key, strings.Join(SupportedKeys(), ", "))
 	}
 	return retryTransientAX(ctx, fmt.Sprintf("press %s", key), func() error {
-		var send, stop, prompt helperSelector
-		if key == "Escape" {
-			var err error
-			stop, send, err = freshStopAndSend(ctx, workspace, inspect)
-			if err != nil {
-				return err
-			}
-			controls, err := freshControls(ctx, workspace, []string{controlPrompt}, inspect)
-			if err != nil {
-				return err
-			}
-			prompt = controls[controlPrompt]
-		} else {
-			controls, err := freshControls(ctx, workspace, []string{controlSend, controlPrompt}, inspect)
-			if err != nil {
-				return err
-			}
-			send = controls[controlSend]
-			stop = stopSelectorFor(send)
-			prompt = controls[controlPrompt]
+		target, after, err := resolveKeyPress(ctx, key, workspace, inspect)
+		if err != nil {
+			return err
 		}
-		// Escape cancels an in-flight turn: Stop must give way to Send.
-		// Enter submits: Send must give way to Stop.
-		after := helperPostcondition{
-			Selector: send, Condition: "exists", TimeoutMilliseconds: popupCloseTimeout,
-		}
-		if key == "Enter" {
-			after = helperPostcondition{
-				Selector: stop, Condition: "exists", TimeoutMilliseconds: popupCloseTimeout,
-			}
-		}
-		if err := keyboard(ctx, prompt, definition.code, nil, after); err != nil {
+		if err := keyboard(ctx, target, definition.code, nil, after); err != nil {
 			return fmt.Errorf("press %s (expected %s): %w", key, definition.effect, err)
 		}
 		return nil
 	})
+}
+
+func resolveKeyPress(
+	ctx context.Context,
+	key string,
+	workspace string,
+	inspect func(context.Context) ([]helperElement, error),
+) (helperSelector, helperPostcondition, error) {
+	switch key {
+	case "Escape":
+		return resolveEscapeKeyPress(ctx, workspace, inspect)
+	case "Enter":
+		return resolveEnterKeyPress(ctx, workspace, inspect)
+	default:
+		return helperSelector{}, helperPostcondition{}, fmt.Errorf("unsupported Desktop key %q", key)
+	}
+}
+
+func resolveEscapeKeyPress(
+	ctx context.Context,
+	workspace string,
+	inspect func(context.Context) ([]helperElement, error),
+) (helperSelector, helperPostcondition, error) {
+	elements, err := inspect(ctx)
+	if err != nil {
+		return helperSelector{}, helperPostcondition{}, err
+	}
+	_, send, prompt, err := inFlightKeyControls(elements, workspace)
+	if err != nil {
+		return helperSelector{}, helperPostcondition{}, err
+	}
+	return prompt, helperPostcondition{
+		Selector: send, Condition: "exists", TimeoutMilliseconds: popupCloseTimeout,
+	}, nil
+}
+
+func resolveEnterKeyPress(
+	ctx context.Context,
+	workspace string,
+	inspect func(context.Context) ([]helperElement, error),
+) (helperSelector, helperPostcondition, error) {
+	controls, err := freshControls(ctx, workspace, []string{controlSend, controlPrompt}, inspect)
+	if err != nil {
+		return helperSelector{}, helperPostcondition{}, err
+	}
+	send := controls[controlSend]
+	return controls[controlPrompt], helperPostcondition{
+		Selector: stopSelectorFor(send), Condition: "exists", TimeoutMilliseconds: popupCloseTimeout,
+	}, nil
 }
 
 // SelectMode and SelectModel drive the two composer popup menus. Both use the

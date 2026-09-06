@@ -59,6 +59,12 @@ func captureRoot(snapshot TreeSnapshot, root string) error {
 		if walkErr != nil {
 			return fmt.Errorf("walk configuration path %q: %w", path, walkErr)
 		}
+		if isDerivedConfigCache(path) {
+			if entry.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
 		if len(snapshot) >= maxBaselineEntries {
 			return fmt.Errorf("configuration baseline exceeded %d entries", maxBaselineEntries)
 		}
@@ -73,6 +79,46 @@ func captureRoot(snapshot TreeSnapshot, root string) error {
 		snapshot[path] = value
 		return nil
 	})
+}
+
+// derivedConfigCachePaths are the parts of a guarded configuration root that
+// the Claude Code CLI rewrites on its own schedule, for reasons no Desktop run
+// causes. They are exempt from the digest for exactly the reason ~/.claude.json
+// is not a root at all (see defaultConfigurationRoots): a recording machine has
+// a Claude Code session running by definition, and a guard that fails on
+// somebody else's cache sweep reports a change the driver did not make.
+//
+// Measured on 2026-09-06: cell 2-17 drove its turn, captured a 400 KB
+// transcript and every piece of evidence, and was then failed by
+// `app-wide Desktop configuration changed: unexpected path
+// ".../.claude/plugins/cache/claude-plugins-official/frontend-design/
+// 85cce0381e78/.orphaned_at"` — a marker the CLI's own in-use sweep drops on a
+// cache entry it has orphaned. That subtree held 3984 entries at the time.
+//
+// The exemption is deliberately narrow: it names derived cache and nothing
+// else. The plugin SET — config.json, installed_plugins.json,
+// known_marketplaces.json, blocklist.json, marketplaces/, repos/, data/ — stays
+// guarded, and that is what a run installing or removing a plugin would move.
+var derivedConfigCachePaths = []string{
+	// The plugin content cache. Populated, swept and orphan-marked by the CLI.
+	filepath.Join(".claude", "plugins", "cache"),
+	// The timestamp of the last in-use sweep. Its whole content is a clock read.
+	filepath.Join(".claude", "plugins", ".last_inuse_sweep"),
+	// A cache of the marketplace catalog, refetched on the CLI's own schedule.
+	filepath.Join(".claude", "plugins", "plugin-catalog-cache.json"),
+}
+
+// isDerivedConfigCache matches a full path SUFFIX, never a bare directory name:
+// "cache" alone would exempt any directory anywhere that happened to be called
+// that, which is how a narrow exemption turns into a hole.
+func isDerivedConfigCache(path string) bool {
+	clean := filepath.Clean(path)
+	for _, suffix := range derivedConfigCachePaths {
+		if strings.HasSuffix(clean, string(filepath.Separator)+suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 func snapshotEntry(path string, info fs.FileInfo) (SnapshotEntry, error) {

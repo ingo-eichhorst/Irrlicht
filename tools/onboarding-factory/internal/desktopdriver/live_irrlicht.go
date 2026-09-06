@@ -118,37 +118,49 @@ func (runtime *LiveRuntime) stateObserved(sessionID, currentState, wantedState s
 	if err != nil {
 		return false, err
 	}
-	if wantedState == session.StateReady || wantedState == session.StateWaiting {
-		if currentState != wantedState {
-			return false, nil
-		}
-		if recorded {
-			return true, nil
-		}
-		if wantedState == session.StateWaiting {
-			return false, nil
-		}
-		// The recorded `ready` is the LAST event a turn writes and the one most
-		// likely still unflushed. On the FIRST turn, the recorded `working`
-		// plus a live idle state say everything this gate needs: the turn ran,
-		// and it is over. Cells 2-3, 3-1 and 2-16 lost runs to waiting for a
-		// `ready` that was on its way to disk.
-		//
-		// A later turn cannot use that. Turn two's `working` is in the
-		// recording as soon as turn two STARTS, so accepting it as proof of
-		// completion would let a turn report finished the moment it began —
-		// which is the multi-turn defect this file already fixed once.
-		//
-		// The recording is still validated in full at promotion, by
-		// expected-validate against expected.jsonl. This is not that check.
-		if runtime.turn > 1 {
-			return false, nil
-		}
-		worked, err := recordingHasStateSequence(
-			runtime.options.RecordingDirectory, sessionID,
-			cumulativeExpectedStates(runtime.turn, session.StateWorking))
-		return worked, err
+	if isCompletedTurnState(wantedState) {
+		return runtime.completedTurnStateObserved(sessionID, currentState, wantedState, recorded)
 	}
+	return runtime.workingStateObserved(currentState, recorded), nil
+}
+
+func isCompletedTurnState(state string) bool {
+	return state == session.StateReady || state == session.StateWaiting
+}
+
+func (runtime *LiveRuntime) completedTurnStateObserved(
+	sessionID string,
+	currentState string,
+	wantedState string,
+	recorded bool,
+) (bool, error) {
+	if currentState != wantedState {
+		return false, nil
+	}
+	if recorded {
+		return true, nil
+	}
+	// Waiting must be durable before the driver continues. Unlike ready, it has
+	// no safe first-turn fallback. A live waiting state alone does not prove that
+	// this run recorded the working -> waiting transition.
+	if wantedState == session.StateWaiting {
+		return false, nil
+	}
+	// The recorded `ready` is the LAST event a turn writes and the one most
+	// likely still unflushed. On the FIRST turn, the recorded `working` plus a
+	// live idle state prove that the turn ran and ended. Later turns cannot use
+	// this fallback because their `working` event appears when they start.
+	if runtime.turn > 1 {
+		return false, nil
+	}
+	return recordingHasStateSequence(
+		runtime.options.RecordingDirectory,
+		sessionID,
+		cumulativeExpectedStates(runtime.turn, session.StateWorking),
+	)
+}
+
+func (runtime *LiveRuntime) workingStateObserved(currentState string, recorded bool) bool {
 	// The recording is written by the daemon and can lag its own HTTP API. Cell
 	// 1-1 timed out after 1m30s waiting for a `working` that the recording, read
 	// moments later, already held. On the FIRST turn the live state settles it:
@@ -169,7 +181,7 @@ func (runtime *LiveRuntime) stateObserved(sessionID, currentState, wantedState s
 		// on the way to it.
 		return true, nil
 	}
-	return recorded, nil
+	return recorded
 }
 
 // cumulativeExpectedStates returns the full state sequence a recording must

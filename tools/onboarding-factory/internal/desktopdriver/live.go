@@ -651,7 +651,7 @@ func retryIdempotentAXFor(ctx context.Context, what string, attempts int, action
 	var err error
 	for attempt := 1; attempt <= attempts; attempt++ {
 		err = action()
-		if err == nil || (!isPreClickAXFailure(err) && !isMissedPostcondition(err)) {
+		if err == nil || !isIdempotentAXFailure(err) {
 			return err
 		}
 		select {
@@ -663,6 +663,10 @@ func retryIdempotentAXFor(ctx context.Context, what string, attempts int, action
 	return fmt.Errorf(
 		"%s: Claude Desktop's accessibility tree did not settle across %d attempts; last failure: %w",
 		what, attempts, err)
+}
+
+func isIdempotentAXFailure(err error) bool {
+	return isPreClickAXFailure(err) || isMissedPostcondition(err)
 }
 
 func transientHelperError(err error) error {

@@ -243,11 +243,15 @@ func validateRunRequest(request RunRequest) error {
 	if (request.Prompt == "") == (len(request.Script) == 0) {
 		return errors.New("exactly one of prompt and recipe script is required")
 	}
-	if request.OverallTimeout <= 0 || request.StepTimeout <= 0 ||
-		request.TurnTimeout <= 0 || request.CleanupTimeout <= 0 {
+	if !hasPositiveDeadlines(request) {
 		return errors.New("all Desktop driver deadlines must be positive")
 	}
 	return nil
+}
+
+func hasPositiveDeadlines(request RunRequest) bool {
+	return request.OverallTimeout > 0 && request.StepTimeout > 0 &&
+		request.TurnTimeout > 0 && request.CleanupTimeout > 0
 }
 
 // ownedSlot is one live session the run created, plus the per-session facts the

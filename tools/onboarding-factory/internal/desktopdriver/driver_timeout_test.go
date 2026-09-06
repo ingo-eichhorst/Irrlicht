@@ -78,25 +78,51 @@ func TestTurnWaitsUseTheTurnBudgetAndInterfaceWaitsUseTheStepBudget(t *testing.T
 
 	interfaceWaits := []string{"composer", "owned"}
 	turnWaits := []string{"hook", "state:working", "turn-end"}
-	for _, name := range append(append([]string{}, interfaceWaits...), turnWaits...) {
+	assertWaitsRan(t, probe, append(append([]string{}, interfaceWaits...), turnWaits...))
+	assertInterfaceWaitBudgets(t, probe, interfaceWaits, request.StepTimeout)
+	assertTurnWaitBudgets(t, probe, turnWaits, request.StepTimeout, request.TurnTimeout)
+}
+
+func assertWaitsRan(t *testing.T, probe *budgetProbe, names []string) {
+	t.Helper()
+	for _, name := range names {
 		if _, seen := probe.budgets[name]; !seen {
 			t.Fatalf("the %q wait never ran; this check cannot compare a budget it never saw", name)
 		}
 	}
-	for _, name := range interfaceWaits {
-		if budget := probe.budgets[name]; budget > request.StepTimeout {
+}
+
+func assertInterfaceWaitBudgets(
+	t *testing.T,
+	probe *budgetProbe,
+	names []string,
+	stepTimeout time.Duration,
+) {
+	t.Helper()
+	for _, name := range names {
+		if budget := probe.budgets[name]; budget > stepTimeout {
 			t.Errorf("%q was given %s; an interface wait keeps the %s step budget",
-				name, budget, request.StepTimeout)
+				name, budget, stepTimeout)
 		}
 	}
-	for _, name := range turnWaits {
+}
+
+func assertTurnWaitBudgets(
+	t *testing.T,
+	probe *budgetProbe,
+	names []string,
+	stepTimeout time.Duration,
+	turnTimeout time.Duration,
+) {
+	t.Helper()
+	for _, name := range names {
 		budget := probe.budgets[name]
-		if budget <= request.StepTimeout {
+		if budget <= stepTimeout {
 			t.Errorf("%q was given %s, which is the %s step budget; a turn takes as long as the agent takes",
-				name, budget, request.StepTimeout)
+				name, budget, stepTimeout)
 		}
-		if budget > request.TurnTimeout {
-			t.Errorf("%q was given %s, more than the %s turn budget", name, budget, request.TurnTimeout)
+		if budget > turnTimeout {
+			t.Errorf("%q was given %s, more than the %s turn budget", name, budget, turnTimeout)
 		}
 	}
 }

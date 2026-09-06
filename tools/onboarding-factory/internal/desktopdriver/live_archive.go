@@ -15,6 +15,22 @@ func (runtime *LiveRuntime) ArchiveOwned(ctx context.Context, owned OwnedSession
 	if err != nil || archived {
 		return err
 	}
+	if err := runtime.openOwnedSessionArchiveMenu(ctx, owned); err != nil {
+		return fmt.Errorf("open owned-session menu: %w", err)
+	}
+	if archived, err := runtime.ownedSessionAlreadyArchived(owned); err != nil || archived {
+		return err
+	}
+	if err := runtime.clickOwnedSessionArchiveItem(ctx); err != nil {
+		return fmt.Errorf("archive owned session: %w", err)
+	}
+	return runtime.waitForOwnedSessionArchive(ctx, owned.Registry.SessionID)
+}
+
+func (runtime *LiveRuntime) openOwnedSessionArchiveMenu(
+	ctx context.Context,
+	owned OwnedSession,
+) error {
 	// Watch for the Archive item itself, not for "a menu". Claude Desktop has a
 	// menu bar, so `AXMenu` is never unique — live run 19 archived nothing and
 	// reported `The postcondition selector matched 16 visible controls`. The
@@ -28,7 +44,7 @@ func (runtime *LiveRuntime) ArchiveOwned(ctx context.Context, owned OwnedSession
 	// move cannot succeed, however many times it is tried. Cleanup also runs
 	// after the recipe is over, when anything on the machine can have taken
 	// focus, and this path never brought Desktop forward at all.
-	if err := retryTransientAX(ctx, "open the owned-session menu", func() error {
+	return retryTransientAX(ctx, "open the owned-session menu", func() error {
 		if err := runtime.front(ctx); err != nil {
 			return err
 		}
@@ -44,15 +60,14 @@ func (runtime *LiveRuntime) ArchiveOwned(ctx context.Context, owned OwnedSession
 		return runtime.helper.click(ctx, menu, helperPostcondition{
 			Selector: archiveItem, Condition: "exists", TimeoutMilliseconds: 5_000,
 		})
-	}); err != nil {
-		return fmt.Errorf("open owned-session menu: %w", err)
-	}
-	if archived, err := runtime.ownedSessionAlreadyArchived(owned); err != nil || archived {
-		return err
-	}
+	})
+}
+
+func (runtime *LiveRuntime) clickOwnedSessionArchiveItem(ctx context.Context) error {
+	archiveItem := helperSelector{Role: "AXMenuItem", Title: archiveMenuItemTitle}
 	// Re-read the menu and click inside the retry: the item animates in, and a
 	// selector resolved before it settled is what refuses the click.
-	if err := retryTransientAX(ctx, "archive the owned Desktop session", func() error {
+	return retryTransientAX(ctx, "archive the owned Desktop session", func() error {
 		elements, err := runtime.helper.inspect(ctx)
 		if err != nil {
 			return err
@@ -67,11 +82,12 @@ func (runtime *LiveRuntime) ArchiveOwned(ctx context.Context, owned OwnedSession
 		return runtime.helper.click(ctx, selectorFor(archive), helperPostcondition{
 			Selector: archiveItem, Condition: "absent", TimeoutMilliseconds: 10_000,
 		})
-	}); err != nil {
-		return fmt.Errorf("archive owned session: %w", err)
-	}
+	})
+}
+
+func (runtime *LiveRuntime) waitForOwnedSessionArchive(ctx context.Context, sessionID string) error {
 	return poll(ctx, "owned registry archive flag", func() (bool, error) {
-		current, err := runtime.registrySession(owned.Registry.SessionID)
+		current, err := runtime.registrySession(sessionID)
 		return err == nil && current.Archived, err
 	})
 }
