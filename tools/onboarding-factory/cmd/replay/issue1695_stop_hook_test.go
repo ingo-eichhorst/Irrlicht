@@ -83,8 +83,43 @@ type stopRecording struct {
 //
 // Regenerate by pasting the literal the test prints.
 var stopHookCensus = map[string]stopRecording{
+	"claudecode/scenarios/1-1_session-start/recordings/2026-09-06-03-08-46_irrlichd-0.6.2+e19d325/transcript.jsonl": {
+		Stops: 1, Reproduced: 1,
+	},
+	"claudecode/scenarios/1-3_long-idle-live-session/recordings/2026-09-06-05-20-24_irrlichd-0.6.2+e19d325/transcript.jsonl": {
+		Stops: 2, Reproduced: 0,
+		Why: "the sidecar could not drive this replay: sidecar cannot drive a replay: no transcript_new event names a real session",
+	},
+	"claudecode/scenarios/1-8_model-context-display/recordings/2026-09-06-05-17-35_irrlichd-0.6.2+e19d325/transcript.jsonl": {
+		Stops: 1, Reproduced: 1,
+	},
 	"claudecode/scenarios/2-13_turn-end-terminal-text/recordings/2026-08-19-19-59-30_irrlichd-0.5.10+ae85182/transcript.jsonl": {
 		Stops: 1, Reproduced: 1,
+	},
+	"claudecode/scenarios/2-13_turn-end-terminal-text/recordings/2026-09-06-04-31-05_irrlichd-0.6.2+e19d325/transcript.jsonl": {
+		Stops: 1, Reproduced: 1,
+	},
+	"claudecode/scenarios/2-1_basic-turn/recordings/2026-09-06-03-09-52_irrlichd-0.6.2+e19d325/transcript.jsonl": {
+		Stops: 1, Reproduced: 1,
+	},
+	"claudecode/scenarios/2-21_streaming-partial-writes/recordings/2026-09-06-03-38-24_irrlichd-0.6.2+e19d325/transcript.jsonl": {
+		Stops: 1, Reproduced: 1,
+	},
+	"claudecode/scenarios/2-2_auto-executed-tool-call/recordings/2026-09-06-05-16-45_irrlichd-0.6.2+e19d325/transcript.jsonl": {
+		Stops: 1, Reproduced: 1,
+	},
+	"claudecode/scenarios/2-4_self-correction-iteration/recordings/2026-09-06-05-15-59_irrlichd-0.6.2+e19d325/transcript.jsonl": {
+		Stops: 1, Reproduced: 0,
+		Why: "every Stop names a session the replay does not drive",
+	},
+	"claudecode/scenarios/3-3_background-process/recordings/2026-09-06-03-50-56_irrlichd-0.6.2+e19d325/transcript.jsonl": {
+		Stops: 1, Reproduced: 1,
+	},
+	"claudecode/scenarios/5-2_model-identification/recordings/2026-09-06-04-31-52_irrlichd-0.6.2+e19d325/transcript.jsonl": {
+		Stops: 1, Reproduced: 1,
+	},
+	"claudecode/scenarios/5-6_subscription-detection/recordings/2026-09-06-05-10-46_irrlichd-0.6.2+e19d325/transcript.jsonl": {
+		Stops: 2, Reproduced: 2,
 	},
 	"codex/scenarios/2-13_turn-end-terminal-text/recordings/2026-08-18-00-42-27_irrlichd-0.5.10+1869727/transcript.jsonl": {
 		Stops: 1, Reproduced: 1,

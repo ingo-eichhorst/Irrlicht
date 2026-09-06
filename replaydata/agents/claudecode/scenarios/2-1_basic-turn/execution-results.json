@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "results": [
+    {
+      "scenario_id": "basic-turn",
+      "execution_profile": "desktop-local",
+      "outcome": "observed-passing",
+      "recording": "2026-09-06-03-09-52_irrlichd-0.6.2+e19d325",
+      "evidence": {
+        "desktop_registry": "desktop-registry.json",
+        "transcript": "transcript.jsonl",
+        "hooks": "hooks.jsonl",
+        "process": "process.json",
+        "irrlicht_session": "irrlicht-session.json",
+        "environment": "desktop-environment.json"
+      }
+    }
+  ]
+}

@@ -183,13 +183,13 @@ type catalogCensus struct {
 // the #1798/#1800 entries above, and it resolves the same way — a re-record on
 // a post-#1860 daemon. The cell is marked known_failing in the meantime.
 var censusOfTheCommittedCatalog = catalogCensus{
-	Recordings:                320,
+	Recordings:                330,
 	Zero:                      1,
 	Fabricated:                1,
-	Divergent:                 152,
-	DivergentByCountsAndKinds: 151,
+	Divergent:                 162,
+	DivergentByCountsAndKinds: 161,
 	UnpairedSidecars:          0,
-	PairedButUngraded:         87,
+	PairedButUngraded:         88,
 }
 
 // literal renders the census as the Go source to paste over the declaration

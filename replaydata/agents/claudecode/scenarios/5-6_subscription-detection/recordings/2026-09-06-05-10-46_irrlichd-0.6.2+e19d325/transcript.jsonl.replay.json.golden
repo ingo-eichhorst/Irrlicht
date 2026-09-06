@@ -1,0 +1,248 @@
+{
+  "schema_version": 1,
+  "source_transcript": "",
+  "generated_at": "0001-01-01T00:00:00Z",
+  "settings": {
+    "adapter": "claude-code",
+    "debounce_window": 2000000000,
+    "flicker_max_duration": 10000000000
+  },
+  "summary": {
+    "total_events": 12,
+    "consumed_events": 12,
+    "total_transitions": 9,
+    "first_event_time": "2026-09-06T05:10:46.223887+02:00",
+    "last_event_time": "2026-09-06T05:11:26.589678+02:00",
+    "wall_clock_session_duration": 40365791000,
+    "state_durations": {
+      "ready": 36220155000,
+      "working": 4145636000
+    },
+    "flicker_count": 4,
+    "flickers_by_category": {
+      "ready_between_working": 2,
+      "working_between_ready": 2
+    },
+    "flickers_by_reason": {
+      "agent finished turn → ready": 2,
+      "force ready→working on first activity": 2
+    },
+    "cum_input_tokens": 4,
+    "cum_output_tokens": 15,
+    "cum_cache_read_tokens": 132886,
+    "cum_cache_creation_tokens": 24740,
+    "model_name": "claude-sonnet-5"
+  },
+  "transitions": [
+    {
+      "index": 0,
+      "event_index": -1,
+      "virtual_time": "2026-09-06T05:10:46.223887+02:00",
+      "cause": "init",
+      "prev_state": "",
+      "new_state": "ready",
+      "reason": "initial state",
+      "last_event_type": "",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 1,
+      "event_index": 0,
+      "virtual_time": "2026-09-06T05:10:46.223887+02:00",
+      "cause": "event",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "user",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 2,
+      "event_index": -1,
+      "virtual_time": "2026-09-06T05:10:49.603662+02:00",
+      "cause": "hook",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "user",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 3,
+      "event_index": 5,
+      "virtual_time": "2026-09-06T05:10:50.445655+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "assistant",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "2\n3\n5\n7\n11"
+    },
+    {
+      "index": 4,
+      "event_index": 5,
+      "virtual_time": "2026-09-06T05:10:50.445655+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "assistant",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "2\n3\n5\n7\n11"
+    },
+    {
+      "index": 5,
+      "event_index": 8,
+      "virtual_time": "2026-09-06T05:11:02.347473+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "user",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 6,
+      "event_index": -1,
+      "virtual_time": "2026-09-06T05:11:03.113334+02:00",
+      "cause": "hook",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "user",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 7,
+      "event_index": 9,
+      "virtual_time": "2026-09-06T05:11:03.307371+02:00",
+      "cause": "event",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "assistant",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "ok"
+    },
+    {
+      "index": 8,
+      "event_index": 9,
+      "virtual_time": "2026-09-06T05:11:03.307371+02:00",
+      "cause": "event",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "assistant",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "ok"
+    }
+  ],
+  "sessions": [
+    {
+      "session_id": "8cf629da-e227-4cd5-a208-dadd192839fe",
+      "adapter": "claude-code",
+      "first_seen": "2026-09-06T05:10:46.169066+02:00",
+      "last_seen": "2026-09-06T05:11:27.238915+02:00",
+      "duration_ms": 41069,
+      "event_count": 33,
+      "state_changes": 6,
+      "final_state": "ready",
+      "pid": 37178,
+      "pid_discovery_lag_ms": 58,
+      "debounce_coalesced_events": 8,
+      "state_durations_ms": {
+        "ready": 37632,
+        "working": 3383
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 5,
+    "replayed_transition_count": 8,
+    "ordered_matches": 0,
+    "ordered_mismatches": [
+      {
+        "index": 0,
+        "kind": "state_differs",
+        "recorded": "working→ready",
+        "replayed": "ready→working"
+      },
+      {
+        "index": 1,
+        "kind": "state_differs",
+        "recorded": "ready→working",
+        "replayed": "working→ready"
+      },
+      {
+        "index": 2,
+        "kind": "state_differs",
+        "recorded": "working→ready",
+        "replayed": "ready→working"
+      },
+      {
+        "index": 3,
+        "kind": "state_differs",
+        "recorded": "ready→working",
+        "replayed": "working→ready"
+      },
+      {
+        "index": 4,
+        "kind": "state_differs",
+        "recorded": "working→ready",
+        "replayed": "ready→working"
+      },
+      {
+        "index": 5,
+        "kind": "extra_in_replay",
+        "replayed": "working→ready"
+      },
+      {
+        "index": 6,
+        "kind": "extra_in_replay",
+        "replayed": "ready→working"
+      },
+      {
+        "index": 7,
+        "kind": "extra_in_replay",
+        "replayed": "working→ready"
+      }
+    ],
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ]
+  }
+}

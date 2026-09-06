@@ -121,13 +121,23 @@ var coincidentalCensusFigures = []censusFigureExemption{
 	// #1388 behaviour the paragraph below records, seen from the other
 	// direction: there a figure moved ONTO new rows, here it moved OFF old
 	// ones. The tables themselves are unchanged and still historical.
+	// PairedButUngraded rose by one when the first eleven Claude Desktop
+	// recordings were promoted. That took the figure OFF timing_drift.go's
+	// "10-100ms" bucket count — whose entry this check then reported as
+	// suppressing nothing, so it is deleted here rather than left to rot — and
+	// ONTO the row below. Both directions of the #1388 behaviour in one commit.
+	// (Stating neither the old nor the new value on purpose: this check treats
+	// a hand-written copy of a live figure as the defect, in a comment about
+	// that very rule most of all.)
 	{
-		File:   "timing_drift.go",
-		Marker: "10-100ms",
-		Reason: "a bucket count in #1480's measured |delta| distribution, which " +
-			"the prose above it says is 'deliberately NOT refreshed as the catalog " +
-			"grows' and is quoted 'as of that measurement, not as a current count'. " +
-			"It coincides with PairedButUngraded.",
+		File:   "replay_sidecar.go",
+		Marker: "117 -> 88",
+		Reason: "the >5s half of #1478's second calibration table, a HISTORICAL " +
+			"measurement of what widening the absorb window did to the catalog at " +
+			"that time. The sentence quotes a before/after pair (171 -> 146, " +
+			"117 -> 88); refreshing either half to a current count would destroy " +
+			"the comparison the sentence exists to make. It coincides with " +
+			"PairedButUngraded.",
 	},
 }
 

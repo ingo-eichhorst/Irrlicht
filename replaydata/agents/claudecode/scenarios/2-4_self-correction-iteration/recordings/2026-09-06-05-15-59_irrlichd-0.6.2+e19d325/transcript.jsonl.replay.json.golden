@@ -1,0 +1,123 @@
+{
+  "schema_version": 1,
+  "source_transcript": "",
+  "generated_at": "0001-01-01T00:00:00Z",
+  "settings": {
+    "adapter": "claude-code",
+    "debounce_window": 2000000000,
+    "flicker_max_duration": 10000000000
+  },
+  "summary": {
+    "total_events": 12,
+    "consumed_events": 12,
+    "total_transitions": 3,
+    "first_event_time": "2026-09-06T05:15:59.388412+02:00",
+    "last_event_time": "2026-09-06T05:16:17.305751+02:00",
+    "wall_clock_session_duration": 17917339000,
+    "state_durations": {
+      "ready": 7552819000,
+      "working": 10364520000
+    },
+    "flicker_count": 0,
+    "flickers_by_category": {},
+    "flickers_by_reason": {},
+    "cum_input_tokens": 6,
+    "cum_output_tokens": 289,
+    "cum_cache_read_tokens": 212030,
+    "cum_cache_creation_tokens": 25132,
+    "model_name": "claude-sonnet-5"
+  },
+  "transitions": [
+    {
+      "index": 0,
+      "event_index": -1,
+      "virtual_time": "2026-09-06T05:15:59.388412+02:00",
+      "cause": "init",
+      "prev_state": "",
+      "new_state": "ready",
+      "reason": "initial state",
+      "last_event_type": "",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 1,
+      "event_index": 0,
+      "virtual_time": "2026-09-06T05:15:59.388412+02:00",
+      "cause": "event",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "user",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 2,
+      "event_index": 9,
+      "virtual_time": "2026-09-06T05:16:09.752932+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "assistant",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "done"
+    }
+  ],
+  "sessions": [
+    {
+      "session_id": "d68cdc02-6e31-4642-b372-04515ab54489",
+      "adapter": "claude-code",
+      "first_seen": "2026-09-06T05:15:59.329069+02:00",
+      "last_seen": "2026-09-06T05:16:17.305752+02:00",
+      "duration_ms": 17976,
+      "event_count": 30,
+      "state_changes": 2,
+      "final_state": "ready",
+      "pid": 45886,
+      "pid_discovery_lag_ms": 61,
+      "debounce_coalesced_events": 8,
+      "state_durations_ms": {
+        "ready": 8404,
+        "working": 9513
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 1,
+    "replayed_transition_count": 2,
+    "ordered_matches": 0,
+    "ordered_mismatches": [
+      {
+        "index": 0,
+        "kind": "state_differs",
+        "recorded": "working→ready",
+        "replayed": "ready→working"
+      },
+      {
+        "index": 1,
+        "kind": "extra_in_replay",
+        "replayed": "working→ready"
+      }
+    ],
+    "recorded_unique_kinds": [
+      "working→ready"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "extra_kinds": [
+      "ready→working"
+    ]
+  }
+}
