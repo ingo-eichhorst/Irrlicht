@@ -787,15 +787,30 @@ struct HistoryAutonomyDurationResponse: Codable {
         return bucketStarts.map { byTS[$0] }
     }
 
-    /// The chart's LINEAR Y domain, over the drawn p95s and the true extremes.
+    /// The chart's LINEAR Y domain: the highest p95 it DRAWS, plus a tenth of
+    /// headroom, from zero.
     ///
-    /// Same decision and the same cost as `HistoryAutonomyPanel.yDomain` — see
-    /// there. The summary row under the chart carries p95/p50/p5 and the true
-    /// extremes as FIGURES, which is what keeps them readable when the band
-    /// flattens toward the floor.
+    /// THE DOMAIN FITS WHAT IS DRAWN, and `max` is not drawn. The chart draws
+    /// p95, p50, p5 and the plane between p95 and p5; a bucket's true maximum is
+    /// a FIGURE in the summary row, and it is a figure precisely so it cannot
+    /// redraw the axis — "one four-hour run left going overnight would otherwise
+    /// redraw the whole Y scale and flatten every other bucket into the floor"
+    /// (#1905). Folding it back into the domain re-created exactly that, and the
+    /// first round of this restore shipped it.
+    ///
+    /// MEASURED on the reference machine's live span log (30-day window, 27 of
+    /// 30 buckets with data, 2735 runs): highest p95 1h37m against a highest max
+    /// of 11h39m — a 7.19x inflation that put the tallest p50 at 0.92% of the
+    /// plot height and the median p50 at 0.46%, with 87.4% of the plot empty
+    /// above the band. `testTheDomainFitsWhatIsDrawnNotAnUndrawnOutlier` pins it.
+    ///
+    /// Linear still costs what `HistoryAutonomyPanel.yDomain` says it costs — a
+    /// long p95 flattens the short buckets under it — but that is a cost paid to
+    /// a line the reader can SEE. Paying it to one the chart never draws buys
+    /// nothing.
     var yDomain: ClosedRange<Double> {
-        let values = buckets.flatMap { [$0.p95, $0.max] }.filter { $0 > 0 }
-        let hi = Swift.max(1, values.max() ?? 60)
+        let drawn = buckets.map(\.p95).filter { $0 > 0 }
+        let hi = Swift.max(1, drawn.max() ?? 60)
         return 0...(hi * 1.1)
     }
 }

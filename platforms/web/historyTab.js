@@ -1130,14 +1130,35 @@ export function autonomyYDomain(panel) {
   return { lo: 0, hi: Math.max(...values) * 1.1 };
 }
 
-// autonomyAggregateDomain is the aggregate chart's LINEAR Y domain, taken from
-// the drawn p95s. Same decision and the same cost as autonomyYDomain above; the
-// summary row under the chart carries p95/p50/p5 and the true extremes as
-// FIGURES, which is what keeps them readable when the band flattens.
+// autonomyAggregateDomain is the aggregate chart's LINEAR Y domain: the highest
+// p95 it DRAWS, plus a tenth of headroom, from zero.
+//
+// THE DOMAIN FITS WHAT IS DRAWN, and `max` is not drawn. The chart draws p95,
+// p50, p5 and the plane between p95 and p5; a bucket's true maximum is a FIGURE
+// in the summary row, and it is a figure precisely so it cannot redraw the axis
+// — "one four-hour run left going overnight would otherwise redraw the whole Y
+// scale and flatten every other bucket into the floor" (#1905). Folding it back
+// into the domain re-created exactly that, and the first round of this restore
+// shipped it.
+//
+// MEASURED on the reference machine's live span log (30-day window, 27 of 30
+// buckets with data, 2735 runs, reduced the way the daemon buckets them):
+//
+//     highest p95 across buckets : 1h37m
+//     highest max across buckets : 11h39m
+//     domain inflation           : 7.19x
+//     tallest p50, domain to p95 : 6.60% of plot height
+//     tallest p50, domain to max : 0.92%
+//     median  p50, domain to max : 0.46%   (i.e. on the axis)
+//     empty plot above the band  : 87.4%
+//
+// Linear still costs what autonomyYDomain says it costs — a long p95 flattens
+// the short buckets under it — but that is a cost paid to a line the reader can
+// SEE. Paying it to one the chart never draws buys nothing.
 export function autonomyAggregateDomain(points) {
   const drawn = (points || []).filter(Boolean);
   if (!drawn.length) return null;
-  const hi = Math.max(...drawn.map(b => Math.max(Number(b.p95) || 0, Number(b.max) || 0, 1)));
+  const hi = Math.max(1, ...drawn.map(b => Number(b.p95) || 0));
   return { lo: 0, hi: hi * 1.1 };
 }
 

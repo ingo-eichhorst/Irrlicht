@@ -83,34 +83,88 @@ final class HistoryAutonomyDurationTests: XCTestCase {
                           "the log domain's 1s floor has no reason to exist on a linear axis")
     }
 
-    /// The domain covers the TRUE max as well as the drawn p95, so the figure
-    /// row's "longest" is never a number above the top of its own chart.
-    func testTheDomainCoversTheTrueExtreme() throws {
+    /// THE DEFECT: the domain was `max(p95, max)`, and `max` is a value the
+    /// chart does not draw. It draws p95, p50, p5 and the plane between p95 and
+    /// p5; the true extremes are FIGURES in the summary row, which is the whole
+    /// reason #1905 made them figures — "one four-hour run left going overnight
+    /// would otherwise redraw the whole Y scale and flatten every other bucket
+    /// into the floor".
+    ///
+    /// Measured on the reference machine's live span log (30-day window, 27 of
+    /// 30 buckets with data, 2735 runs): highest p95 1h37m against a highest max
+    /// of 11h39m — a 7.19x inflation that put the tallest p50 at 0.92% of the
+    /// plot height and the median p50 at 0.46%, i.e. on the axis, with 87.4% of
+    /// the plot empty above the band.
+    ///
+    /// The committed mutation is `scaledToMax` below: the domain that shipped.
+    func testTheDomainFitsWhatIsDrawnNotAnUndrawnOutlier() throws {
+        let json = """
+        {"window":"30d","chart":"autonomy_duration","start":1,"end":2,"bucket_seconds":86400,
+         "bucket_starts":[1,2],
+         "buckets":[{"ts":1,"p95":5820,"p50":424,"p5":60,"min":60,"max":41940,"count":300},
+                    {"ts":2,"p95":3000,"p50":210,"p5":30,"min":30,"max":4000,"count":120}],
+         "summary":{"p95":5820,"p50":424,"p5":60,"min":30,"max":41940,"count":420},
+         "sample_floor":20,"earliest_span":0,"total_recorded":420}
+        """
+        let d = try JSONDecoder().decode(HistoryAutonomyDurationResponse.self, from: Data(json.utf8))
+
+        // The top tracks the highest DRAWN p95.
+        XCTAssertEqual(d.yDomain.upperBound, 5820 * 1.1, accuracy: 0.001)
+
+        // …and the p50 line stays legible rather than collapsing onto the axis.
+        let tallestP50 = d.buckets.map(\.p50).max() ?? 0
+        XCTAssertGreaterThan(tallestP50 / d.yDomain.upperBound, 0.05)
+
+        // THE MUTATION: the shipped domain, scaled to the undrawn max.
+        let scaledToMax = (d.buckets.flatMap { [$0.p95, $0.max] }.max() ?? 0) * 1.1
+        XCTAssertGreaterThan(scaledToMax, d.yDomain.upperBound * 5,
+                             "the mutation is indistinguishable from production on this fixture")
+        XCTAssertLessThan(tallestP50 / scaledToMax, 0.01)
+    }
+
+    /// Dropping `max` from the AXIS must not drop it from the section: the
+    /// figure row under the chart still states the true extremes, which is
+    /// where the ticket wanted them.
+    func testTheExtremesKeepTheirPlaceAsFigures() throws {
         let json = """
         {"window":"30d","chart":"autonomy_duration","start":1,"end":2,"bucket_seconds":86400,
          "bucket_starts":[1],
-         "buckets":[{"ts":1,"p95":100,"p50":50,"p5":10,"min":10,"max":41940,"count":30}],
-         "summary":{"p95":100,"p50":50,"p5":10,"min":10,"max":41940,"count":30},
-         "sample_floor":20,"earliest_span":0,"total_recorded":30}
+         "buckets":[{"ts":1,"p95":5820,"p50":424,"p5":60,"min":60,"max":41940,"count":300}],
+         "summary":{"p95":5820,"p50":424,"p5":60,"min":6,"max":41940,"count":420},
+         "sample_floor":20,"earliest_span":0,"total_recorded":420}
         """
         let d = try JSONDecoder().decode(HistoryAutonomyDurationResponse.self, from: Data(json.utf8))
-        XCTAssertGreaterThanOrEqual(d.yDomain.upperBound, 41_940)
+        XCTAssertEqual(d.summary.max, 41_940, "the outlier is still reported, as a number")
+        XCTAssertEqual(d.summary.min, 6)
+        XCTAssertEqual(AutonomyFormat.duration(d.summary.max), "11h39m")
+        XCTAssertGreaterThan(d.summary.max, d.yDomain.upperBound,
+                             "a figure above the top of its own chart is exactly the point: it is a "
+                             + "number, not a line")
     }
 
-    /// What linear COSTS, recorded rather than hidden: with one 11h39m run in
-    /// the window, a typical 10m run sits in the bottom ~1.5% of the plot. The
-    /// figure row under the chart carries p95/p50/p5 and the extremes as
-    /// NUMBERS for exactly this reason.
+    /// What linear COSTS, recorded rather than hidden: one day whose p95 really
+    /// was 11h39m sets the domain, and a typical day's 10m p50 then sits in the
+    /// bottom ~1.5% of the plot. The figure row under the chart carries
+    /// p95/p50/p5 and the extremes as NUMBERS for exactly this reason.
+    ///
+    /// The long value here is a p95, not a `max`, because the axis reads only
+    /// what it draws — see `testTheDomainFitsWhatIsDrawnNotAnUndrawnOutlier`.
+    /// The cost is real either way; what changed is that it is now paid to a
+    /// line the reader can see.
     func testTheCostOfALinearAxisIsRecorded() throws {
         let json = """
         {"window":"30d","chart":"autonomy_duration","start":1,"end":2,"bucket_seconds":86400,
-         "bucket_starts":[1],
-         "buckets":[{"ts":1,"p95":1200,"p50":600,"p5":60,"min":60,"max":41940,"count":30}],
-         "summary":{"p95":1200,"p50":600,"p5":60,"min":60,"max":41940,"count":30},
-         "sample_floor":20,"earliest_span":0,"total_recorded":30}
+         "bucket_starts":[1,2],
+         "buckets":[{"ts":1,"p95":41940,"p50":9000,"p5":600,"min":600,"max":43000,"count":30},
+                    {"ts":2,"p95":1200,"p50":600,"p5":60,"min":60,"max":1500,"count":30}],
+         "summary":{"p95":41940,"p50":600,"p5":60,"min":60,"max":43000,"count":60},
+         "sample_floor":20,"earliest_span":0,"total_recorded":60}
         """
         let d = try JSONDecoder().decode(HistoryAutonomyDurationResponse.self, from: Data(json.utf8))
-        XCTAssertLessThan(600 / d.yDomain.upperBound, 0.02)
+        XCTAssertEqual(d.yDomain.upperBound, 41_940 * 1.1, accuracy: 0.001)
+        XCTAssertLessThan(600 / d.yDomain.upperBound, 0.02,
+                          "the quiet day's typical run is flattened toward the floor — the cost of a "
+                          + "linear axis, paid to a p95 the chart actually draws")
     }
 
     func testAnEmptyWindowStillHasAPlottableDomain() throws {

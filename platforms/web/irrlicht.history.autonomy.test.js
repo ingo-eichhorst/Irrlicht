@@ -165,18 +165,75 @@ describe('the panel\u2019s Y axis is that project\u2019s own, and LINEAR', () =>
   })
 })
 
-describe('the aggregate chart\u2019s Y axis is linear too', () => {
+describe('the aggregate chart’s Y axis is linear too', () => {
   const pts = [{ ts: 1, p95: 1200, p50: 200, p5: 60, min: 60, max: 1500, count: 30 }]
 
-  test('the domain covers the drawn p95s and the true max, from zero', () => {
+  test('the domain fits the drawn p95s, from zero', () => {
     const domain = autonomyAggregateDomain(pts)
     expect(domain.lo).toBe(0)
-    expect(domain.hi).toBeGreaterThanOrEqual(1500)
+    expect(domain.hi).toBeCloseTo(1200 * 1.1)
   })
 
   test('a window with nothing drawn has no domain', () => {
     expect(autonomyAggregateDomain([])).toBeNull()
     expect(autonomyAggregateDomain([null, null])).toBeNull()
+  })
+})
+
+describe('the aggregate domain fits what is DRAWN, never an undrawn outlier', () => {
+  // THE DEFECT: the domain was `max(p95, max)`, and `max` is a value the chart
+  // does not draw. It draws p95, p50, p5 and the plane between p95 and p5; the
+  // true extremes are FIGURES in the summary row, which is the whole reason
+  // #1905 made them figures — "one four-hour run left going overnight would
+  // otherwise redraw the whole Y scale and flatten every other bucket into the
+  // floor".
+  //
+  // Measured on the reference machine's live span log (30-day window, 27 of 30
+  // buckets with data, 2735 runs): highest p95 1h37m against a highest max of
+  // 11h39m — a 7.19x inflation that put the tallest p50 at 0.92% of the plot
+  // height and the median p50 at 0.46%, i.e. on the axis, with 87.4% of the
+  // plot empty above the band.
+  const outlier = [
+    { ts: 1, p95: 5820, p50: 424, p5: 60, min: 60, max: 41_940, count: 300 },
+    { ts: 2, p95: 3000, p50: 210, p5: 30, min: 30, max: 4000, count: 120 },
+  ]
+
+  test('the top tracks the highest drawn p95', () => {
+    expect(autonomyAggregateDomain(outlier).hi).toBeCloseTo(5820 * 1.1)
+  })
+
+  test('an 11h39m outlier nothing plots does not move the axis', () => {
+    // The SAME buckets with the outlier removed from `max` alone. A domain
+    // that reads only what it draws cannot tell the two apart.
+    const withoutOutlier = outlier.map(b => ({ ...b, max: b.p95 }))
+    expect(autonomyAggregateDomain(outlier).hi)
+      .toBeCloseTo(autonomyAggregateDomain(withoutOutlier).hi)
+  })
+
+  test('the p50 line stays legible instead of collapsing onto the axis', () => {
+    // The measured consequence, as an executable claim. Fitting p95 puts the
+    // tallest p50 at ~6.6% of the plot; fitting max put it at ~0.9%.
+    const hi = autonomyAggregateDomain(outlier).hi
+    const tallestP50 = Math.max(...outlier.map(b => b.p50))
+    expect(tallestP50 / hi).toBeGreaterThan(0.05)
+
+    // THE COMMITTED MUTATION: the domain that shipped, scaled to the undrawn
+    // max. It has to be distinguishable here, or this fixture proves nothing.
+    const scaledToMax = Math.max(...outlier.map(b => Math.max(b.p95, b.max))) * 1.1
+    expect(scaledToMax).toBeGreaterThan(hi * 5)
+    expect(tallestP50 / scaledToMax).toBeLessThan(0.01)
+  })
+
+  test('the extremes keep their place as FIGURES, which is where they belong', () => {
+    // Not a claim about the domain: a claim that dropping `max` from the axis
+    // does not drop it from the panel. The side panel's band row still carries
+    // p5–p95, and the longest run is still stated as a number.
+    const rows = autonomyPanelRows({
+      duration: { summary: { p95: 5820, p50: 424, p5: 60, min: 6, max: 41_940, count: 420 } },
+      projects: { summary: { longest: 41_940, peak: 5, runs: 420, projects: 3 } },
+    }, { getPropertyValue: () => '' })
+    expect(rows[1].value).toBe('1m – 1h37m')
+    expect(rows[2].value).toBe('11h39m')
   })
 })
 

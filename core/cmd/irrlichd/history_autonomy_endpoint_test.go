@@ -665,3 +665,62 @@ func TestAutonomy_ReadIsUnlimited(t *testing.T) {
 			store.lastQuery.End-store.lastQuery.Start, 52*7*86400)
 	}
 }
+
+// --- A stated figure must be reachable on the axis that states it -----------
+
+// TestAutonomy_PanelLongestIsAlwaysOnItsOwnAxis pins the property whose absence
+// was the aggregate chart's Y-domain defect (#1905): a figure the header states
+// must be a value the plot beside it can actually reach.
+//
+// The panel's line domain is built from its BUCKET longests, and its header
+// states the WINDOW longest. Those are two different reductions of the same
+// spans, and they agree only because every returned span is bucketed: the store
+// selects on `End < q.Start || End >= q.End` (foldSpanRow), so every span it
+// returns has an end inside the window and therefore an index inside [0, n).
+// A span counted towards the header but dropped from every bucket would put the
+// header's figure above the top of its own plot.
+//
+// A LOCK: it passes by construction against the code as written, and it is
+// here so a later change to either reduction — a filter on one side, a clamp on
+// the other — cannot silently break the pair. The mutation below is what such a
+// change looks like.
+func TestAutonomy_PanelLongestIsAlwaysOnItsOwnAxis(t *testing.T) {
+	now := time.Now().Unix()
+	spans := []outbound.AutonomySpan{
+		spanEndingAt(now-100, 600, "irrlicht", "ready"),
+		spanEndingAt(now-20*86400, 41_940, "irrlicht", "ready"), // the long one, 20 days back
+		spanEndingAt(now-5*86400, 900, "irrlicht", "ready"),
+	}
+	resp := decodeAutonomy(t, &fakeAutonomyStore{spans: spans, total: len(spans), earliest: now - 30*86400},
+		"chart=autonomy_projects&window=30d")
+	panel := panelFor(t, resp, "irrlicht")
+
+	var acrossBuckets float64
+	for _, b := range panel.Buckets {
+		if b.Longest > acrossBuckets {
+			acrossBuckets = b.Longest
+		}
+	}
+	if acrossBuckets <= 0 {
+		t.Fatal("no bucket carries a longest run, so this check cannot observe the pair it guards")
+	}
+	if panel.Longest != acrossBuckets {
+		t.Errorf("header states longest %v but the highest bucket is %v — the header's figure is not "+
+			"reachable on the plot beside it, which is the aggregate chart's Y-domain defect in the "+
+			"other direction", panel.Longest, acrossBuckets)
+	}
+
+	// The MUTATION: a bucketing pass that drops what falls outside the window
+	// instead of clamping it, while the header keeps counting it. It has to
+	// differ from production here, or this fixture proves nothing.
+	dropped := 0.0
+	for _, s := range spans {
+		if s.End >= now-10*86400 && float64(s.Duration()) > dropped {
+			dropped = float64(s.Duration())
+		}
+	}
+	if dropped == panel.Longest {
+		t.Fatal("the dropping mutation agrees with production on this fixture — it cannot show that " +
+			"every counted run is also bucketed")
+	}
+}
