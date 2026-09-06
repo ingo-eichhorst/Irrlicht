@@ -241,3 +241,22 @@ desktop_write_execution_results() {
         }
       } + (if $reason == "" then {} else {reason: $reason} end)]}' > "$path"
 }
+
+# desktop_default_hook_wait_paths names the file a desktop-local run must wait
+# for before it drives Claude Desktop.
+#
+# The CLI profile can skip this: it spawns a fresh `claude` per run, so the
+# hook config is read after the install by construction. Claude Desktop cannot.
+# Its engine is already running and reads hook config when it CREATES a
+# session, so a run that starts driving before the install has landed sends its
+# hooks to whichever daemon the config named before — in practice the
+# production one on 7837, which this run is not reading.
+#
+# The symptom is not a hook error. It is `wait for Claude Code hook timed out`
+# against a turn that ran perfectly, because the observations went somewhere
+# else. Runs 40 and 44 of 2026-09-06 failed exactly that way, each with
+# `hook-install-wait: NOT waiting` in its own log.
+desktop_default_hook_wait_paths() {
+  local home="${1:-$HOME}"
+  printf '%s\n' "$home/.claude/settings.json"
+}

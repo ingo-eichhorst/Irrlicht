@@ -241,6 +241,23 @@ fi
 
 echo ""
 if [[ "$fails" -eq 0 ]]; then
+echo "== A desktop-local run is gated on its hook config landing =="
+# Claude Desktop's engine is long-lived and reads hook config when it creates a
+# session, so a run that starts driving before the install has landed sends its
+# hooks to whichever daemon the config named BEFORE — the production one.
+#
+# Measured: runs 40 and 44 of 2026-09-06 failed with `wait for Claude Code hook
+# timed out after 1m20s`, while each run's own log said `hook-install-wait: NOT
+# waiting; if the CLI reads its hook config at startup, this run can race the
+# install`.
+assert_eq "hook wait path is defaulted for desktop-local" \
+  "/home/someone/.claude/settings.json" "$(desktop_default_hook_wait_paths /home/someone)"
+# hook-install-wait refuses a relative path outright, so this must be absolute.
+case "$(desktop_default_hook_wait_paths /home/someone)" in
+  /*) pass "the defaulted hook wait path is absolute" ;;
+  *) fail "the defaulted hook wait path is absolute" "it is relative" ;;
+esac
+
   echo "desktop-profile_test: ALL PASS"
 else
   echo "desktop-profile_test: $fails FAILURE(S)" >&2
