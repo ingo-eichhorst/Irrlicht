@@ -21,7 +21,12 @@ import (
 	"irrlicht/tools/onboarding-factory/internal/shard"
 )
 
-const censusGolden = "testdata/claudecode-desktop-recipe-census.txt"
+// censusGolden lives under replaydata rather than in this package's testdata
+// because the per-cell Desktop result artifacts CITE it as their evidence,
+// and desktopresults only accepts evidence_refs that resolve inside a cell's
+// own desktop-evidence directory or this shared one. Keeping a second copy
+// there would let the cited file drift away from the one this test verifies.
+const censusGolden = "../../../../replaydata/agents/claudecode/desktop-evidence/recipe-census.txt"
 
 const censusHeader = `# Every claudecode recipe, planned against the Claude Desktop driver.
 #
