@@ -4,18 +4,18 @@ import XCTest
 /// The panel's marking for runs whose duration is a FLOOR rather than a
 /// measurement (#1905 recording).
 ///
-/// Two kinds, and they are two different limits:
+/// A run that has not ended has no length yet — only how long it has lasted SO
+/// FAR. That floor COUNTS towards the longest run (the section reports a
+/// maximum, and "already lasted 3h" is true), the panel drawing it says "still
+/// going", and it is deliberately not a sample for the aggregate chart's
+/// percentiles.
 ///
-///   - STILL RUNNING — the run has not ended, so its length is how long it has
-///     lasted SO FAR. It COUNTS towards the longest run (the section reports a
-///     maximum, and "already lasted 3h" is true) and is marked "still going"
-///     rather than presented as final.
-///   - STARTED BEFORE IRRLICHT WAS WATCHING — the run has finished, but its
-///     start is where Irrlicht began watching. Those ARE samples; dropping them
-///     is what left 5 of a day's 35 runs on the record.
-///
-/// A reader who conflated the two would misread the chart in opposite
-/// directions, which is why the sentence never merges them.
+/// THE SECOND SENTENCE WENT (#1905 prose cut). It named the runs already going
+/// when Irrlicht started watching, whose start is a lower bound rather than a
+/// beginning. That is a real limit, but it is a restart artefact a reader can
+/// do nothing with — and `start_lower_bound` still ships on the wire, so
+/// nothing about what the daemon measures changed. The tests that pinned that
+/// sentence are retargeted below onto the fact that it no longer speaks.
 final class HistoryAutonomyMeasurementTests: XCTestCase {
 
     // MARK: Decoding
@@ -66,71 +66,55 @@ final class HistoryAutonomyMeasurementTests: XCTestCase {
         HistoryAutonomyMeasurement(running: running, lowerBoundStart: lowerBound)
     }
 
-    /// The quiet case, and the one that must stay quiet: a machine whose daemon
-    /// has been up all day, every run in view finished and fully measured.
-    func testSaysNothingWhenEveryRunIsFinishedAndMeasured() {
+    /// The quiet case, and the one that must stay quiet: a machine between
+    /// sessions, with nothing running.
+    func testSaysNothingWhenNoRunIsStillGoing() {
         XCTAssertNil(AutonomyFormat.measurementLine(measurement()))
     }
 
-    /// A running run COUNTS towards the longest and is MARKED, and the
-    /// sentence has to say both — otherwise a reader who can see "longest 3h"
-    /// beside a project is left unsure whether that figure is finished.
-    func testARunningRunIsNamedAsGoingAndAsCounted() throws {
+    /// A running run's figure is a floor, and the sentence has to say so —
+    /// otherwise a reader who can see "longest 3h" beside a project is left
+    /// unsure whether that figure is finished.
+    /// SAME WORDING AS THE WEB's `autonomyMeasurementNote`.
+    func testARunningRunIsNamedAndItsLengthCalledASoFar() throws {
         let line = try XCTUnwrap(AutonomyFormat.measurementLine(measurement(running: 1)))
-        XCTAssertTrue(line.contains("1 run is still going"), line)
-        XCTAssertTrue(line.contains("SO FAR"), line)
-        XCTAssertTrue(line.contains("counts towards the longest run"), line)
-        // The percentile-era wording must be gone with the percentiles: a
-        // sentence claiming an exclusion that no longer happens is an alibi for
-        // a wrong number.
-        XCTAssertFalse(line.contains("percentile"), line)
+        XCTAssertEqual(line, "1 run still going — length so far.")
     }
 
-    func testAnUnmeasuredStartSaysWhichEndIsTheEstimate() throws {
-        let line = try XCTUnwrap(AutonomyFormat.measurementLine(measurement(lowerBound: 4)))
-        XCTAssertTrue(line.contains("4 runs already going when Irrlicht started watching"), line)
-        XCTAssertTrue(line.contains("not when the run began"), line)
-        XCTAssertTrue(line.contains("minimums"), line)
-        // It must NOT claim those runs were dropped from the figures: they are
-        // finished runs, and they are samples.
-        XCTAssertFalse(line.contains("left out of the percentiles"), line)
-    }
-
-    func testBothAtOnceReadAsTwoSeparateFacts() throws {
-        let line = try XCTUnwrap(AutonomyFormat.measurementLine(measurement(running: 2, lowerBound: 3)))
-        XCTAssertTrue(line.contains("2 runs are still going"), line)
-        XCTAssertTrue(line.contains("3 runs already going when Irrlicht started watching"), line)
+    /// `start_lower_bound` still arrives; it just no longer produces prose. A
+    /// payload carrying ONLY that is silent, and one carrying both says exactly
+    /// what the running-only payload says — which is the check that would fail
+    /// if half the old sentence survived.
+    func testTheLowerBoundSentenceIsGoneAndTakesNoOtherLineWithIt() throws {
+        XCTAssertNil(AutonomyFormat.measurementLine(measurement(lowerBound: 4)))
+        XCTAssertEqual(AutonomyFormat.measurementLine(measurement(running: 2, lowerBound: 3)),
+                       AutonomyFormat.measurementLine(measurement(running: 2)))
+        let both = try XCTUnwrap(AutonomyFormat.measurementLine(measurement(running: 2, lowerBound: 3)))
+        XCTAssertFalse(both.contains("minimum"), both)
+        XCTAssertFalse(both.contains("watching"), both)
     }
 
     func testSingularAndPluralBothReadAsEnglish() throws {
         let one = try XCTUnwrap(AutonomyFormat.measurementLine(measurement(running: 1)))
-        XCTAssertTrue(one.contains("1 run is still going"), one)
+        XCTAssertEqual(one, "1 run still going — length so far.")
         let two = try XCTUnwrap(AutonomyFormat.measurementLine(measurement(running: 2)))
-        XCTAssertTrue(two.contains("2 runs are still going"), two)
-        let oneBound = try XCTUnwrap(AutonomyFormat.measurementLine(measurement(lowerBound: 1)))
-        XCTAssertTrue(oneBound.contains("that length is a minimum"), oneBound)
-        let twoBound = try XCTUnwrap(AutonomyFormat.measurementLine(measurement(lowerBound: 2)))
-        XCTAssertTrue(twoBound.contains("those lengths are minimums"), twoBound)
+        XCTAssertEqual(two, "2 runs still going — lengths so far.")
     }
 
     /// COMMITTED IN-LANGUAGE MUTANTS. Each is a plausible way to get this
     /// wrong, and each passes at least one assertion above on its own.
-    func testProductionTellsTheTwoLimitsApartAndBothFromSilence() {
+    func testProductionTellsARunningWindowFromAStillOneAndCountsIt() {
         let running = measurement(running: 3)
-        let bounded = measurement(lowerBound: 3)
+        let one = measurement(running: 1)
         let clean = measurement()
 
-        // Merged: a run still going and a run whose start was guessed read
-        // identically, so the reader cannot tell which figure to distrust.
-        let merged: (HistoryAutonomyMeasurement) -> String = {
-            "\($0.running + $0.lowerBoundStart) runs are approximate."
-        }
-        XCTAssertEqual(merged(running), merged(bounded))
-        XCTAssertNotEqual(AutonomyFormat.measurementLine(running),
-                          AutonomyFormat.measurementLine(bounded))
+        // Count-blind: one long-running session reads exactly like a fleet.
+        let countBlind: (HistoryAutonomyMeasurement) -> String = { _ in "Some runs are still going." }
+        XCTAssertEqual(countBlind(running), countBlind(one))
+        XCTAssertNotEqual(AutonomyFormat.measurementLine(running), AutonomyFormat.measurementLine(one))
 
-        // Never-silent: a fully measured window carries a caveat it does not
-        // need, and the caveat stops meaning anything.
+        // Never-silent: a window with nothing running carries a caveat it does
+        // not need, and the caveat stops meaning anything.
         let always: (HistoryAutonomyMeasurement) -> String = { _ in "Some runs are approximate." }
         XCTAssertEqual(always(clean), always(running))
         XCTAssertNil(AutonomyFormat.measurementLine(clean))

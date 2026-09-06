@@ -6,9 +6,16 @@ import XCTest
 ///
 /// The maintainer's decision: every run counts, subagent runs included, because
 /// Irrlicht recorded them. So there is no mode, no picker and no excluded
-/// count. The classification survives on every row — a subagent's run is still
-/// identifiable, and still attributable to the run that contains it — and the
-/// panel still describes a window's MAKEUP.
+/// count. The classification survives on every row and on the wire — a
+/// subagent's run is still identifiable, and still attributable to the run that
+/// contains it.
+///
+/// THE SENTENCE THAT REPORTED THE CENSUS IS GONE (#1905 prose cut). "Counting
+/// every run, including 259 subagent runs" is reassurance rather than a caveat,
+/// and its `unknown` clause described legacy rows a machine installing Irrlicht
+/// today will never hold. What a reader still needs from the nesting is the one
+/// place it changes how a NUMBER reads — the concurrency figure — and that is
+/// the caveat beside it, pinned below and in HistoryAutonomyTests.
 final class HistoryAutonomySubagentTests: XCTestCase {
 
     // MARK: Decoding
@@ -51,74 +58,44 @@ final class HistoryAutonomySubagentTests: XCTestCase {
                        "a peak an unclassified run was alive for must show the total alone, never a guess")
     }
 
-    // MARK: The sentence
+    // MARK: What survives of the sentence
 
-    private func kinds(topLevel: Int = 10,
-                       subagent: Int = 0,
-                       unknown: Int = 0) -> HistoryAutonomyKinds {
-        HistoryAutonomyKinds(topLevel: topLevel, subagent: subagent, unknown: unknown)
+    /// The census sentence is gone. The one consequence of nesting that changes
+    /// how a figure READS stays, because the `at once` number is otherwise
+    /// taken for a count of independent agents: a parent is held `working`
+    /// while its subagents run, so one agent with three subagents overlaps as
+    /// four. SAME WORDING AS THE WEB's AUTONOMY_CONCURRENCY_CAVEAT.
+    func testTheCaveatIsWhatSurvivesOfTheNestingProse() {
+        let caveat = AutonomyFormat.concurrencyCaveat
+        XCTAssertTrue(caveat.contains("parent"), caveat)
+        XCTAssertTrue(caveat.contains("subagents"), caveat)
+        XCTAssertTrue(caveat.contains("working"), caveat)
+        // The census wording itself must NOT be back: it is the paragraph the
+        // cut removed, and a sentence reporting a count is not a caveat.
+        XCTAssertFalse(caveat.contains("subagent run"), caveat)
+        XCTAssertFalse(caveat.contains("Counting every run"), caveat)
+        XCTAssertFalse(caveat.contains("unknown"), caveat)
     }
 
-    func testAWindowWithNoSubagentRunsSaysSo() throws {
-        let line = try XCTUnwrap(AutonomyFormat.countingLine(kinds()))
-        XCTAssertTrue(line.contains("Counting every run"), line)
-        XCTAssertTrue(line.contains("holds none"), line)
-    }
-
-    /// The word that has to be GONE. Nothing is excluded any more, and a
-    /// sentence still claiming so would describe a filter that no longer exists.
-    func testItSaysHowManyRunsWereSubagentsAndExcludesNothing() throws {
-        let line = try XCTUnwrap(AutonomyFormat.countingLine(kinds(subagent: 37)))
-        XCTAssertTrue(line.contains("37 subagent runs"), line)
-        XCTAssertTrue(line.contains("inside its parent"), line)
-        XCTAssertFalse(line.contains("excluded"), line)
-    }
-
-    func testSingularAndPluralBothReadAsEnglish() throws {
-        let one = try XCTUnwrap(AutonomyFormat.countingLine(kinds(subagent: 1)))
-        XCTAssertTrue(one.contains("1 subagent run —"), one)
-        let two = try XCTUnwrap(AutonomyFormat.countingLine(kinds(subagent: 2)))
-        XCTAssertTrue(two.contains("2 subagent runs —"), two)
-    }
-
-    /// THE TRAP THIS CLAUSE EXISTS FOR. A row written before Irrlicht told the
-    /// two apart carries no classification. It is counted like the rest — and
-    /// counting it in SILENCE would let the panel imply a classification nobody
-    /// made.
-    func testUnknownKindRunsAreNamed() throws {
-        let line = try XCTUnwrap(AutonomyFormat.countingLine(kinds(subagent: 3, unknown: 8148)))
-        XCTAssertTrue(line.contains("8148 runs were recorded before Irrlicht told"), line)
-        XCTAssertTrue(line.contains("counted either way"), line)
-        // …and the clause now carries its consequence for the concurrency
-        // figure: a peak one of those runs was alive for cannot be split.
-        XCTAssertTrue(line.contains("no split"), line)
-    }
-
-    func testAWindowWithNoUnknownRunsSaysNothingAboutThem() throws {
-        let line = try XCTUnwrap(AutonomyFormat.countingLine(kinds(subagent: 3)))
-        XCTAssertFalse(line.contains("unknown"), line)
-    }
-
-    /// COMMITTED IN-LANGUAGE MUTANTS, the idiom this suite already uses. Each
-    /// is a plausible way to get the sentence wrong and each passes at least one
-    /// assertion above on its own, so production has to be shown to tell the
-    /// fixtures apart rather than merely to produce a string.
-    func testProductionTellsTheCensusCasesApart() throws {
-        let withSubs = kinds(subagent: 5, unknown: 9)
-        let noSubs = kinds(subagent: 0, unknown: 9)
-        let noUnknown = kinds(subagent: 5, unknown: 0)
-
-        // Subagent-blind: a window full of nested runs reads exactly like one
-        // with none.
-        let subBlind: (HistoryAutonomyKinds) -> String = { _ in "Counting every run." }
-        XCTAssertEqual(subBlind(withSubs), subBlind(noSubs))
-        XCTAssertNotEqual(AutonomyFormat.countingLine(withSubs), AutonomyFormat.countingLine(noSubs))
-
-        // Unknown-blind: the silent classification.
-        let unknownBlind: (HistoryAutonomyKinds) -> String = {
-            "Counting every run, including \($0.subagent)."
-        }
-        XCTAssertEqual(unknownBlind(withSubs), unknownBlind(noUnknown))
-        XCTAssertNotEqual(AutonomyFormat.countingLine(withSubs), AutonomyFormat.countingLine(noUnknown))
+    /// The classification is still DECODED and still drives the split beside
+    /// the peak (`testKindsDecode` and the panel test above) — what went is only
+    /// the prose. This pins that the two facts are independent: kinds arrive,
+    /// and no sentence reports them.
+    func testKindsStillArriveWithNoSentenceReportingThem() throws {
+        let json = """
+        {"window":"30d","chart":"autonomy_projects","start":1,"end":2,"bucket_seconds":86400,
+         "bucket_starts":[1],"panels":[],"panel_limit":5,"more_projects":0,
+         "summary":{"longest":0,"runs":15,"projects":1},
+         "earliest_span":1700000000,"total_recorded":15,
+         "kinds":{"top_level":7,"subagent":5,"unknown":3}}
+        """
+        let d = try JSONDecoder().decode(HistoryAutonomyProjectsResponse.self, from: Data(json.utf8))
+        XCTAssertEqual(d.kinds?.subagent, 5)
+        // The provenance block below the charts names the total and the
+        // back-fill, and says nothing about the census.
+        let line = AutonomyFormat.provenance(earliest: d.earliestSpan, total: d.totalRecorded,
+                                             reconstructed: 0, timeZone: TimeZone(identifier: "UTC")!)
+        XCTAssertTrue(line.contains("15 runs recorded"), line)
+        XCTAssertFalse(line.contains("subagent"), line)
     }
 }

@@ -272,11 +272,16 @@ final class HistoryAutonomyTests: XCTestCase {
 
     /// The number is otherwise misread: a parent is held `working` while its
     /// subagents run, so one agent with three subagents reads as four at once.
-    func testTheCaveatSaysWhatTheNumberIsNot() {
+    /// The caveat has to name all three of those — the parent, the subagents,
+    /// and the state the parent is held in — or it never says why the figure is
+    /// bigger than the number of agents. #1905's prose cut took the "not four
+    /// independent agents" gloss with the paragraph it lived in; the mechanism
+    /// is the part a reader needs, and it is what is asserted here.
+    func testTheCaveatNamesWhatMakesTheNumberOverlap() {
         let caveat = AutonomyFormat.concurrencyCaveat
         XCTAssertTrue(caveat.contains("parent"), "got: \(caveat)")
         XCTAssertTrue(caveat.contains("subagents"), "got: \(caveat)")
-        XCTAssertTrue(caveat.contains("not four independent agents"), "got: \(caveat)")
+        XCTAssertTrue(caveat.contains("working"), "got: \(caveat)")
     }
 
     // MARK: A panel states its own two figures
@@ -528,11 +533,18 @@ final class HistoryAutonomyTests: XCTestCase {
     }
 
     func testProvenanceLineSaysWhenCollectionStarted() {
-        let empty = AutonomyFormat.provenance(earliest: 0, total: 0, timeZone: utc)
+        let empty = AutonomyFormat.provenance(earliest: 0, total: 0, reconstructed: 0, timeZone: utc)
         XCTAssertTrue(empty.contains("began measuring"), "got: \(empty)")
-        let seeded = AutonomyFormat.provenance(earliest: 1_755_000_000, total: 312, timeZone: utc)
+        let seeded = AutonomyFormat.provenance(earliest: 1_755_000_000, total: 312,
+                                               reconstructed: 0, timeZone: utc)
         XCTAssertTrue(seeded.contains("Collecting since Aug 12, 2025"), "got: \(seeded)")
         XCTAssertTrue(seeded.contains("312 runs recorded"), "got: \(seeded)")
+    }
+
+    func testOneRecordedRunIsSingular() {
+        let one = AutonomyFormat.provenance(earliest: 1_755_000_000, total: 1,
+                                            reconstructed: 0, timeZone: utc)
+        XCTAssertTrue(one.contains("1 run recorded"), "got: \(one)")
     }
 
     // MARK: Fixtures

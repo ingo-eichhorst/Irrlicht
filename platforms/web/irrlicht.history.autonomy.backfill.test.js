@@ -4,7 +4,7 @@ import {
   autonomyMoreProjectsLabel,
   autonomyPanelChoice,
   autonomyProjectOptions,
-  autonomyReconstructionNote,
+  autonomyProvenanceLine,
   autonomyVisibleBoundaries,
 } from './historyTab.js'
 import { readFileSync } from 'node:fs'
@@ -26,61 +26,51 @@ const durationWith = (provenance, count = 100) => ({
   provenance,
 })
 
-describe('autonomyReconstructionNote — the panel marks a back-filled view', () => {
-  // The silent case is the one every other install gets. A note about nothing
-  // would train people to skip the one that matters.
-  test('says nothing when every run in view was measured', () => {
-    expect(autonomyReconstructionNote(durationWith({ reconstructed: 0, cost_derived: 0, live_since: 1_700_000_000 })))
-      .toBe('')
+describe('the provenance line marks a back-filled view', () => {
+  // #1905's prose cut deleted the three-sentence reconstruction paragraph and
+  // kept its count as a suffix on the line that was already there. What had to
+  // survive is the CLAIM, not the paragraph: a machine whose figures were
+  // rebuilt from old logs must not read as one that measured them.
+  //
+  // Two of the paragraph's three facts moved rather than went. The boundary
+  // DATE is still on screen — it is the rule and caption the charts draw, which
+  // `autonomyBoundaryLabel` and `autonomyVisibleBoundaries` below still pin.
+  // The cost-log sentence is the one that is simply gone: it explained why a
+  // run's END REASON was unknown, and #1919 deleted the run strip, which was the
+  // only thing that ever drew an end reason.
+
+  // The silent case is the one every other install gets — the reader this cut
+  // was made for. A caveat about nothing would train people to skip the one
+  // that matters, and here it costs that reader zero characters.
+  test('says nothing about reconstruction when every run in view was measured', () => {
+    const line = autonomyProvenanceLine(
+      durationWith({ reconstructed: 0, cost_derived: 0, live_since: 1_700_000_000 }))
+    expect(line).not.toContain('reconstructed')
+    expect(line).toContain('100 runs recorded')
   })
 
-  test('says nothing when the payload carries no provenance at all', () => {
+  test('says nothing about reconstruction when the payload carries no provenance at all', () => {
     // An older daemon, or a client reading a response it did not expect.
-    expect(autonomyReconstructionNote({ summary: { runs: 12 } })).toBe('')
-    expect(autonomyReconstructionNote(null)).toBe('')
-    expect(autonomyReconstructionNote(undefined)).toBe('')
+    expect(autonomyProvenanceLine({ earliest_span: 1_700_000_000, total_recorded: 12 }))
+      .not.toContain('reconstructed')
   })
 
   test('states how many of the runs in view are reconstructed', () => {
-    const note = autonomyReconstructionNote(
+    const line = autonomyProvenanceLine(
       durationWith({ reconstructed: 40, cost_derived: 0, live_since: 1_755_000_000 }, 100))
-    expect(note).toContain('40 of 100 runs in view')
-    expect(note).toContain('not measured as they happened')
+    expect(line).toContain('40 in view reconstructed')
+    // …on the SAME line as the total it qualifies, not a second line below it.
+    expect(line).toContain('100 runs recorded · 40 in view reconstructed.')
+    expect(line.split('\n')).toHaveLength(1)
   })
 
-  test('states the date before which everything is reconstructed', () => {
-    const liveSince = 1_755_000_000
-    const note = autonomyReconstructionNote(durationWith({ reconstructed: 40, cost_derived: 0, live_since: liveSince }))
-    const label = new Date(liveSince * 1000)
-      .toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
-    expect(note).toContain('Everything before ' + label + ' is reconstructed.')
-  })
-
-  // live_since 0 is "nothing has ever been measured live", which is a
-  // different claim from "measured since the epoch" — and printing Jan 1 1970
-  // would be a fabricated date, which is the exact failure mode this whole
-  // change exists to avoid.
-  test('never prints an epoch date when nothing was measured live', () => {
-    const note = autonomyReconstructionNote(durationWith({ reconstructed: 40, cost_derived: 0, live_since: 0 }))
-    expect(note).toContain('Nothing here was measured live')
-    expect(note).not.toContain('1970')
-  })
-
-  // The honesty rule for the cost era, in words: those runs' end reason is
-  // unknown, and the note says it is not assumed.
-  test('names the cost-derived runs and calls their end reason unknown', () => {
-    const note = autonomyReconstructionNote(
-      durationWith({ reconstructed: 90, cost_derived: 55, live_since: 1_755_000_000 }))
-    expect(note).toContain('55 of them come from the cost log')
-    expect(note).toContain('unknown')
-    expect(note).toContain('not assumed')
-  })
-
-  test('leaves the cost sentence out when no cost-derived run is in range', () => {
-    const note = autonomyReconstructionNote(
-      durationWith({ reconstructed: 40, cost_derived: 0, live_since: 1_755_000_000 }))
-    expect(note).not.toContain('cost log')
-    expect(note).toContain('40 of 100 runs in view')
+  // liveSince is no longer formatted into this sentence at all, which is the
+  // strongest possible form of "never prints an epoch date": there is no date
+  // in the clause to get wrong.
+  test('the reconstruction clause carries no date of its own', () => {
+    const line = autonomyProvenanceLine(durationWith({ reconstructed: 40, cost_derived: 40, live_since: 0 }))
+    expect(line).toContain('40 in view reconstructed')
+    expect(line).not.toContain('1970')
   })
 
   // The committed mutation for this check, in the idiom this suite already
@@ -99,9 +89,9 @@ describe('autonomyReconstructionNote — the panel marks a back-filled view', ()
     expect(alwaysSpeaks(allLive)).toBe(alwaysSpeaks(backfilled))
     expect(neverSpeaks(allLive)).toBe(neverSpeaks(backfilled))
 
-    expect(autonomyReconstructionNote(allLive)).not.toBe(autonomyReconstructionNote(backfilled))
-    expect(autonomyReconstructionNote(allLive)).toBe('')
-    expect(autonomyReconstructionNote(backfilled)).not.toBe('')
+    expect(autonomyProvenanceLine(allLive)).not.toBe(autonomyProvenanceLine(backfilled))
+    expect(autonomyProvenanceLine(allLive)).not.toContain('reconstructed')
+    expect(autonomyProvenanceLine(backfilled)).toContain('5 in view reconstructed')
   })
 })
 
@@ -144,6 +134,21 @@ describe('the run strip is gone from the shipped files, and the band is back', (
     expect(section).not.toContain('Math.log')
     expect(section).not.toContain('Math.exp')
     expect(section).toContain('autonomyLinearY')
+  })
+
+  // The prose #1905's cut deleted, checked out of the file for the same reason
+  // the strip's identifiers are: a helper that still parses is the one a later
+  // reader wires back up by accident, and these two produced four of the five
+  // paragraphs the cut was made to remove.
+  test('the deleted prose helpers are gone, not merely unwired', () => {
+    for (const gone of ['autonomyCountingLine', 'autonomyReconstructionNote']) {
+      expect(js).not.toContain(gone)
+    }
+    // …and the surviving four lines are all still generated somewhere.
+    for (const kept of ['AUTONOMY_CONCURRENCY_CAVEAT', 'autonomyThinNote',
+      'autonomyMeasurementNote', 'autonomyProvenanceLine']) {
+      expect(js).toContain(kept)
+    }
   })
 
   test('no run strip, end-reason colours, glyphs or legend survive', () => {
