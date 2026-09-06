@@ -107,6 +107,13 @@ For a new guard, linter, schema rule, migration, rewriter, or contract check,
 mutate what it protects and require the check to fail. Commit reusable mutation
 fixtures when practical.
 
+Write every comment that asserts a mechanism from what you ran or read. A
+comment naming a tier, a guard, an ordering, an invariant, or "X cannot happen"
+states the check behind it, or reads as an intention rather than a fact. Write a
+comment describing a mutation from the mutation as run, not as planned. Verify
+each such comment by grepping or running what it names, not by reading it. Do
+this before the commit.
+
 If the fix already exists, commit before mutating with
 `git add -A && git commit -m wip`. Capture the checkpoint SHA and confirm
 `git status --porcelain` is empty right after the commit. Restore *only* by

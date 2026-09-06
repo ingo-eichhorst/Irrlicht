@@ -75,6 +75,15 @@ history in [docs/testing-philosophy.md](docs/testing-philosophy.md):
 - A figure that documents behaviour states the command that produces it, or
   says plainly that it's an estimate and how it was arrived at — a number
   typed once and repeated by hand drifts silently away from what it measured.
+- A comment asserting a mechanism (a tier, a guard, an ordering, an invariant,
+  "X cannot happen", "this is enforced by Y") is a *dismissal* in the sense
+  above — it tells the next reader the question is settled — so it states what
+  was run or read to confirm it, or is written as an intention rather than a
+  fact. A comment describing a mutation is written from the mutation as **run**,
+  not as planned. These are found by running or grepping what the comment
+  describes, never by reading it: epic #1796 shipped at least 13 wrong ones
+  across four PRs (a floor for the ones *found*; `ir:exec`'s "Prove and verify"
+  section carries the execution-time form).
 - **A verification mechanism must fail loudly when it cannot run.** Absence
   of a finding and inability to look must never produce the same output —
   wherever a check greps, matches, mutates, shells out, or waits on a

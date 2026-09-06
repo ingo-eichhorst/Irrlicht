@@ -114,8 +114,9 @@ than retyping it.
 Keep SwiftUI views small and composable; use previews for visual tests.
 
 **General.** Don't add abstractions ahead of need. Delete unused code rather
-than commenting it out. Comments explain *why*, not *what*. Prefer editing
-existing files over creating new ones.
+than commenting it out. Comments explain *why*, not *what*, and one that
+asserts a mechanism carries evidence for it — see AGENTS.md's Testing section.
+Prefer editing existing files over creating new ones.
 
 ## Reporting bugs
 
