@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "results": [
+    {
+      "scenario_id": "auto-classified-permission",
+      "execution_profile": "desktop-local",
+      "outcome": "not-runnable",
+      "reason": "The recipe needs Desktop controls the driver cannot elicit: keyboard-key:\"S-Tab\". Planned against the driver's own declared grammar by TestDesktopRecipeCensusCoversEveryClaudecodeRecipe, which pins the cited census row and fails on any drift. This is a statement about the CONTROLS, not about the scenario: the cell stays valid for cli-local, where it is recorded today.",
+      "missing_control": "keyboard-key:\"S-Tab\"",
+      "evidence_refs": [
+        "replaydata/agents/claudecode/desktop-evidence/recipe-census.txt",
+        "replaydata/agents/claudecode/scenarios/2-11_auto-classified-permission/metadata.json"
+      ]
+    }
+  ]
+}

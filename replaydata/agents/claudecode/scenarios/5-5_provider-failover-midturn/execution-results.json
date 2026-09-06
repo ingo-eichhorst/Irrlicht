@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "results": [
+    {
+      "scenario_id": "provider-failover-midturn",
+      "execution_profile": "desktop-local",
+      "outcome": "unobservable",
+      "reason": "Provider routing is transport-layer: it never changes message.model and writes no transcript field, and lifecycle.Event has no provider or route field to carry one. Claude Desktop reads the identical JSONL, so it supplies no new signal. This is a fixture-format limit affecting EVERY execution profile, not a Desktop control gap — cli-local cannot record it either. Verified against core/domain/lifecycle/event.go; the cited note carries the commands.",
+      "evidence_refs": [
+        "replaydata/agents/claudecode/desktop-evidence/unobservable-metrics.md",
+        "replaydata/agents/claudecode/scenarios/5-5_provider-failover-midturn/metadata.json"
+      ]
+    }
+  ]
+}

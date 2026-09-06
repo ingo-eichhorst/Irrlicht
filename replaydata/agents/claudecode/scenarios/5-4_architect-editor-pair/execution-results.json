@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "results": [
+    {
+      "scenario_id": "architect-editor-pair",
+      "execution_profile": "desktop-local",
+      "outcome": "not-runnable",
+      "reason": "The recipe needs Desktop controls the driver cannot elicit: keyboard-key:\"1\". Planned against the driver's own declared grammar by TestDesktopRecipeCensusCoversEveryClaudecodeRecipe, which pins the cited census row and fails on any drift. This is a statement about the CONTROLS, not about the scenario: the cell stays valid for cli-local, where it is recorded today.",
+      "missing_control": "keyboard-key:\"1\"",
+      "evidence_refs": [
+        "replaydata/agents/claudecode/desktop-evidence/recipe-census.txt",
+        "replaydata/agents/claudecode/scenarios/5-4_architect-editor-pair/metadata.json"
+      ]
+    }
+  ]
+}

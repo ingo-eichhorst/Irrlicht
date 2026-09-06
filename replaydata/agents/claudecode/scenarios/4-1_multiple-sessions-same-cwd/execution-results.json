@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "results": [
+    {
+      "scenario_id": "multiple-sessions-same-cwd",
+      "execution_profile": "desktop-local",
+      "outcome": "not-runnable",
+      "reason": "The recipe needs Desktop controls the driver cannot elicit: session-list-row. Planned against the driver's own declared grammar by TestDesktopRecipeCensusCoversEveryClaudecodeRecipe, which pins the cited census row and fails on any drift. This is a statement about the CONTROLS, not about the scenario: the cell stays valid for cli-local, where it is recorded today.",
+      "missing_control": "session-list-row",
+      "evidence_refs": [
+        "replaydata/agents/claudecode/desktop-evidence/recipe-census.txt",
+        "replaydata/agents/claudecode/scenarios/4-1_multiple-sessions-same-cwd/metadata.json"
+      ]
+    }
+  ]
+}

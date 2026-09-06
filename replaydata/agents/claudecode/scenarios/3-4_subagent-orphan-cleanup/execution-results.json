@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "results": [
+    {
+      "scenario_id": "subagent-orphan-cleanup",
+      "execution_profile": "desktop-local",
+      "outcome": "not-runnable",
+      "reason": "The recipe needs Desktop controls the driver cannot elicit: agent-process-kill. Planned against the driver's own declared grammar by TestDesktopRecipeCensusCoversEveryClaudecodeRecipe, which pins the cited census row and fails on any drift. This is a statement about the CONTROLS, not about the scenario: the cell stays valid for cli-local, where it is recorded today.",
+      "missing_control": "agent-process-kill",
+      "evidence_refs": [
+        "replaydata/agents/claudecode/desktop-evidence/recipe-census.txt",
+        "replaydata/agents/claudecode/scenarios/3-4_subagent-orphan-cleanup/metadata.json"
+      ]
+    }
+  ]
+}

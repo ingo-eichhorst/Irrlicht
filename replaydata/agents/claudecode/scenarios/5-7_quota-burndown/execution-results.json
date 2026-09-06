@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "results": [
+    {
+      "scenario_id": "quota-burndown",
+      "execution_profile": "desktop-local",
+      "outcome": "unobservable",
+      "reason": "lifecycle.Event has no rate-limit field, and the fixture format cannot carry the statusline snapshot holding the counters — for any front end. Unlike cost and tokens, which are derived from transcript counts, quota is a subscription counter taken from the agent and never reconstructed by us. Making it observable needs a recordable lifecycle event with rate-limit fields, or a live-metrics probe spec the format does not have. Verified against core/domain/lifecycle/event.go; the cited note carries the commands.",
+      "evidence_refs": [
+        "replaydata/agents/claudecode/desktop-evidence/unobservable-metrics.md",
+        "replaydata/agents/claudecode/scenarios/5-7_quota-burndown/metadata.json"
+      ]
+    }
+  ]
+}
