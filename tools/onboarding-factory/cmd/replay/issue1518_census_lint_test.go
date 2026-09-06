@@ -129,6 +129,19 @@ var coincidentalCensusFigures = []censusFigureExemption{
 	// (Stating neither the old nor the new value on purpose: this check treats
 	// a hand-written copy of a live figure as the defect, in a comment about
 	// that very rule most of all.)
+	// Recordings rose to a value that landed on timing_drift.go's "1-10ms"
+	// bucket count when the Claude Desktop recordings of #1887 were promoted —
+	// the same collision the "10-100ms" bucket had, from the other direction.
+	// Stating neither value here on purpose, for the reason above.
+	{
+		File:   "timing_drift.go",
+		Marker: "├ 74.4% under 100ms",
+		Reason: "the 1-10ms row of #1517's committed latency histogram, a " +
+			"HISTORICAL measurement of transition-delta distribution. Its " +
+			"columns must sum to that table's own population, so refreshing " +
+			"one row to a current count would make the table contradict its " +
+			"own percentages. It coincides with Recordings.",
+	},
 	{
 		File:   "replay_sidecar.go",
 		Marker: "117 -> 88",

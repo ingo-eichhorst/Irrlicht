@@ -123,6 +123,10 @@ var stopHookCensus = map[string]stopRecording{
 		Stops: 1, Reproduced: 0,
 		Why: "every Stop names a session the replay does not drive",
 	},
+	"claudecode/scenarios/3-2_background-subagent/recordings/2026-09-07-01-18-12_irrlichd-0.6.2+31a628a/transcript.jsonl": {
+		Stops: 4, Reproduced: 0,
+		Why: "every Stop names a session the replay does not drive",
+	},
 	"claudecode/scenarios/3-3_background-process/recordings/2026-09-06-03-50-56_irrlichd-0.6.2+e19d325/transcript.jsonl": {
 		Stops: 1, Reproduced: 1,
 	},
