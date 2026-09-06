@@ -47,8 +47,8 @@ assert_eq "unknown requested profile" 2 "$?"
 echo "== current-recording consumers use the shared selector =="
 assert_file_contains "replay gate selects by profile" \
   'newest_recording_for_profile "$cell_dir" "$EXECUTION_PROFILE"' "$DIR/../../../replay-fixtures.sh"
-assert_file_contains "CLI runner selects CLI evidence" \
-  'newest_recording_for_profile "$COMMITTED_CELL" cli-local' "$DIR/../run-cell.sh"
+assert_file_contains "runner selects evidence for its requested profile" \
+  'newest_recording_for_profile "$COMMITTED_CELL" "$EXECUTION_PROFILE"' "$DIR/../run-cell.sh"
 assert_file_contains "integrity gate selects CLI evidence" \
   'newest_recording_for_profile "$dir" cli-local' "$DIR/cell-integrity.sh"
 

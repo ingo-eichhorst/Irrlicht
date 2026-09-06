@@ -96,6 +96,10 @@ fresh_env() {
   fake_managed_file_daemon "$DAEMON" "$HOME/.claude/settings.json" "$CODEX_HOME/hooks.json"
   # shellcheck disable=SC2034  # read by the sourced lib's restore_managed_files
   MANAGED_FILE_BACKUP_DIR=""
+  MANAGED_FILE_SEAL_DIR=""
+  MANAGED_FILE_STRICT_SEAL=0
+  MANAGED_FILE_ORACLE_REQUIRED=0
+  MANAGED_FILE_ORACLE_DIR=""
   return 0
 }
 
@@ -106,6 +110,404 @@ snapshot_managed_files "$ROOT/backup" "$DAEMON"
 printf '{"hooks":{"Stop":"localhost:7838"}}\n' > "$HOME/.claude/settings.json"   # daemon repoints it
 restore_managed_files
 assert_eq "settings.json restored" '{"hooks":{"Stop":"localhost:7837"}}' "$(cat "$HOME/.claude/settings.json")"
+
+echo "== a strict seal restores the expected daemon hook edit =="
+fresh_env sealed
+printf '{"hooks":{"Stop":"localhost:7837"}}\n' > "$HOME/.claude/settings.json"
+snapshot_managed_files "$ROOT/backup" "$DAEMON"
+printf '{"hooks":{"Stop":"localhost:7838"}}\n' > "$HOME/.claude/settings.json"
+seal_managed_files
+restore_managed_files
+assert_eq "sealed daemon edit is restored" '{"hooks":{"Stop":"localhost:7837"}}' \
+  "$(cat "$HOME/.claude/settings.json")"
+
+echo "== an oracle rejects an unrelated edit made before sealing =="
+# MUTATION fixture: the daemon's expected output does not contain the unrelated
+# line. A seal that only snapshots current bytes accepts this edit and later
+# destroys it. Oracle-backed sealing must refuse it and keep recovery active.
+fresh_env oracle_mismatch
+MANAGED_FILE_STRICT_SEAL=1
+# shellcheck disable=SC2034  # read by the sourced seal implementation
+MANAGED_FILE_ORACLE_REQUIRED=1
+printf 'user baseline\n' > "$HOME/.claude/settings.json"
+snapshot_managed_files "$ROOT/backup" "$DAEMON"
+mkdir "$ROOT/oracle"
+printf 'expected daemon hook\n' > "$ROOT/oracle/0"
+printf 'file\t0\t%s\nabsent\t1\t%s\n' \
+  "$HOME/.claude/settings.json" "$CODEX_HOME/hooks.json" > "$ROOT/oracle/manifest"
+# shellcheck disable=SC2034  # read by the sourced seal implementation
+MANAGED_FILE_ORACLE_DIR="$ROOT/oracle"
+printf 'expected daemon hook\nunrelated edit\n' > "$HOME/.claude/settings.json"
+seal_managed_files 2>/dev/null
+rc=$?
+assert_eq "pre-seal unrelated edit refuses seal" "1" "$rc"
+[[ -n "$MANAGED_FILE_BACKUP_DIR" ]] && got=active || got=cleared
+assert_eq "oracle refusal keeps recovery snapshot" "active" "$got"
+MANAGED_FILE_BACKUP_DIR=""
+MANAGED_FILE_SEAL_DIR=""
+MANAGED_FILE_STRICT_SEAL=0
+
+echo "== pre-seal cleanup accepts only one complete Apply-state variant =="
+# MUTATION fixture: this models a middle permission whose service guard failed
+# while a later permission still applied. No final seal exists. After daemon
+# shutdown, cleanup may restore only because the complete tree matches one
+# state produced by that ordered subset of the real Apply closures.
+fresh_env preseal_variant
+MANAGED_FILE_STRICT_SEAL=1
+MANAGED_FILE_ORACLE_REQUIRED=1
+printf 'settings baseline\n' > "$HOME/.claude/settings.json"
+snapshot_managed_files "$ROOT/backup" "$DAEMON"
+mkdir -p "$ROOT/oracle/states/5"
+printf 'settings first effect\n' > "$ROOT/oracle/states/5/0"
+printf 'later effect\n' > "$ROOT/oracle/states/5/1"
+printf 'file\t0\t%s\nfile\t1\t%s\n' \
+  "$HOME/.claude/settings.json" "$CODEX_HOME/hooks.json" > "$ROOT/oracle/states/5/manifest"
+MANAGED_FILE_ORACLE_DIR="$ROOT/oracle"
+printf 'settings first effect\n' > "$HOME/.claude/settings.json"
+printf 'later effect\n' > "$CODEX_HOME/hooks.json"
+restore_managed_files 2>/dev/null
+rc=$?
+assert_eq "matching pre-seal variant restores" "0" "$rc"
+assert_eq "matching variant restores baseline bytes" "settings baseline" "$(cat "$HOME/.claude/settings.json")"
+[[ -e "$CODEX_HOME/hooks.json" ]] && got=present || got=absent
+assert_eq "matching variant restores baseline absence" "absent" "$got"
+[[ -z "$MANAGED_FILE_BACKUP_DIR" && -z "$MANAGED_FILE_SEAL_DIR" ]] && got=cleared || got=active
+assert_eq "successful recovered restore clears state" "cleared" "$got"
+
+fresh_env preseal_no_match
+MANAGED_FILE_STRICT_SEAL=1
+MANAGED_FILE_ORACLE_REQUIRED=1
+printf 'settings baseline\n' > "$HOME/.claude/settings.json"
+snapshot_managed_files "$ROOT/backup" "$DAEMON"
+mkdir -p "$ROOT/oracle/states/5"
+printf 'expected effect\n' > "$ROOT/oracle/states/5/0"
+printf 'absent\t1\t%s\nfile\t0\t%s\n' \
+  "$CODEX_HOME/hooks.json" "$HOME/.claude/settings.json" > "$ROOT/oracle/states/5/manifest"
+MANAGED_FILE_ORACLE_DIR="$ROOT/oracle"
+printf 'unrelated external bytes\n' > "$HOME/.claude/settings.json"
+restore_managed_files 2>/dev/null
+rc=$?
+assert_eq "unmatched pre-seal tree refuses restore" "1" "$rc"
+assert_eq "unmatched bytes survive" "unrelated external bytes" "$(cat "$HOME/.claude/settings.json")"
+[[ -n "$MANAGED_FILE_BACKUP_DIR" ]] && got=active || got=cleared
+assert_eq "unmatched pre-seal tree keeps recovery state" "active" "$got"
+MANAGED_FILE_BACKUP_DIR=""
+MANAGED_FILE_SEAL_DIR=""
+MANAGED_FILE_STRICT_SEAL=0
+# shellcheck disable=SC2034  # not read by this file: these reset the SOURCED
+#                               managed-file-snapshot.sh oracle state after the fixture.
+MANAGED_FILE_ORACLE_REQUIRED=0
+# shellcheck disable=SC2034  # see above — a directive covers only the next line
+MANAGED_FILE_ORACLE_DIR=""
+
+echo "== restore hands back the original file MODE, not the umask's =="
+# The backup used a bare `cp`, so the saved copy's mode was the original's
+# masked by the process umask; the `cp -p` restore then handed that masked
+# mode back. A 0666 config returned as 0644 with byte-identical contents, so
+# every content assertion in this file stayed green.
+fresh_env mode_fidelity
+printf 'mode baseline\n' > "$HOME/.claude/settings.json"
+chmod 0666 "$HOME/.claude/settings.json"
+# The umask must be in force for the snapshot RESTORE will read, so set it in
+# this shell rather than a subshell, and put it back afterwards.
+saved_umask="$(umask)"
+umask 022
+snapshot_managed_files "$ROOT/backup" "$DAEMON"
+snap_rc=$?
+umask "$saved_umask"
+assert_eq "snapshot returns 0" "0" "$snap_rc"
+printf 'daemon edit\n' > "$HOME/.claude/settings.json"
+chmod 0644 "$HOME/.claude/settings.json"
+restore_managed_files
+assert_eq "restore returns 0" "0" "$?"
+assert_eq "restored bytes" "mode baseline" "$(cat "$HOME/.claude/settings.json")"
+mode="$(stat -f '%Lp' "$HOME/.claude/settings.json" 2>/dev/null ||
+  stat -c '%a' "$HOME/.claude/settings.json" 2>/dev/null)"
+if [[ -z "$mode" ]]; then
+  # No readable mode means this check cannot run, which is a failure.
+  fail "restored mode" "666" "stat produced nothing"
+else
+  assert_eq "restored mode" "666" "$mode"
+fi
+
+echo "== a managed path cannot be a baseline symlink =="
+# MUTATION fixture: the declared config path resolves to a different file.
+# Snapshot must reject it instead of arming a later restore through the link.
+fresh_env baseline_symlink
+printf 'external baseline\n' > "$ROOT/external"
+ln -s "$ROOT/external" "$HOME/.claude/settings.json"
+snapshot_managed_files "$ROOT/backup" "$DAEMON" 2>/dev/null
+rc=$?
+assert_eq "baseline symlink refuses snapshot" "1" "$rc"
+assert_eq "baseline symlink target survives" "external baseline" "$(cat "$ROOT/external")"
+
+fresh_env baseline_dangling_symlink
+ln -s "$ROOT/missing-target" "$HOME/.claude/settings.json"
+snapshot_managed_files "$ROOT/backup" "$DAEMON" 2>/dev/null
+rc=$?
+assert_eq "dangling baseline symlink refuses snapshot" "1" "$rc"
+[[ -L "$HOME/.claude/settings.json" ]] && got="link" || got="changed"
+assert_eq "dangling baseline symlink survives" "link" "$got"
+
+echo "== a managed path cannot become a symlink while sealing =="
+# MUTATION fixture: a replacement link points at bytes that look exactly like
+# the daemon edit. Seal must use path type, not the followed target contents.
+fresh_env seal_symlink
+MANAGED_FILE_STRICT_SEAL=1
+printf 'user baseline\n' > "$HOME/.claude/settings.json"
+snapshot_managed_files "$ROOT/backup" "$DAEMON"
+printf 'expected daemon hook\n' > "$ROOT/external"
+rm "$HOME/.claude/settings.json"
+ln -s "$ROOT/external" "$HOME/.claude/settings.json"
+seal_managed_files 2>/dev/null
+rc=$?
+assert_eq "seal-time symlink refuses seal" "1" "$rc"
+restore_managed_files 2>/dev/null
+restore_rc=$?
+assert_eq "failed symlink seal blocks restore" "1" "$restore_rc"
+assert_eq "seal-time symlink target survives" "expected daemon hook" "$(cat "$ROOT/external")"
+MANAGED_FILE_BACKUP_DIR=""
+MANAGED_FILE_SEAL_DIR=""
+MANAGED_FILE_STRICT_SEAL=0
+
+fresh_env seal_dangling_symlink
+MANAGED_FILE_STRICT_SEAL=1
+printf 'user baseline\n' > "$HOME/.claude/settings.json"
+snapshot_managed_files "$ROOT/backup" "$DAEMON"
+rm "$HOME/.claude/settings.json"
+ln -s "$ROOT/missing-target" "$HOME/.claude/settings.json"
+seal_managed_files 2>/dev/null
+rc=$?
+assert_eq "dangling seal-time symlink refuses seal" "1" "$rc"
+MANAGED_FILE_BACKUP_DIR=""
+MANAGED_FILE_SEAL_DIR=""
+MANAGED_FILE_STRICT_SEAL=0
+
+echo "== a managed path cannot become a symlink after sealing =="
+# MUTATION fixture: matching target bytes would make cmp pass if it followed
+# the replacement link. Strict restore must refuse before any path is written.
+fresh_env restore_symlink
+MANAGED_FILE_STRICT_SEAL=1
+printf 'user baseline\n' > "$HOME/.claude/settings.json"
+snapshot_managed_files "$ROOT/backup" "$DAEMON"
+printf 'expected daemon hook\n' > "$HOME/.claude/settings.json"
+seal_managed_files
+printf 'expected daemon hook\n' > "$ROOT/external"
+rm "$HOME/.claude/settings.json"
+ln -s "$ROOT/external" "$HOME/.claude/settings.json"
+restore_managed_files 2>/dev/null
+rc=$?
+assert_eq "post-seal symlink refuses restore" "1" "$rc"
+assert_eq "post-seal symlink target survives" "expected daemon hook" "$(cat "$ROOT/external")"
+MANAGED_FILE_BACKUP_DIR=""
+MANAGED_FILE_SEAL_DIR=""
+MANAGED_FILE_STRICT_SEAL=0
+
+echo "== a managed path cannot traverse a retargeted parent symlink =="
+fresh_env parent_symlink
+MANAGED_FILE_STRICT_SEAL=1
+tree_a="$ROOT/tree-a"
+tree_b="$ROOT/tree-b"
+mkdir -p "$tree_a" "$tree_b"
+rm -rf "$HOME/.claude"
+ln -s "$tree_a" "$HOME/.claude"
+printf 'user baseline\n' > "$tree_a/settings.json"
+printf 'expected daemon hook\n' > "$tree_b/settings.json"
+snapshot_managed_files "$ROOT/backup" "$DAEMON" 2>/dev/null
+snapshot_rc=$?
+if [[ "$snapshot_rc" -eq 0 ]]; then
+  printf 'expected daemon hook\n' > "$tree_a/settings.json"
+  seal_managed_files 2>/dev/null
+  seal_rc=$?
+  rm "$HOME/.claude"
+  ln -s "$tree_b" "$HOME/.claude"
+  restore_managed_files 2>/dev/null
+  restore_rc=$?
+else
+  seal_rc=1
+  restore_rc=1
+fi
+assert_eq "parent symlink is refused before snapshot" "1" "$snapshot_rc"
+assert_eq "parent symlink cannot be sealed" "1" "$seal_rc"
+assert_eq "retargeted parent symlink refuses restore" "1" "$restore_rc"
+assert_eq "retargeted tree is not overwritten" "expected daemon hook" "$(cat "$tree_b/settings.json")"
+MANAGED_FILE_BACKUP_DIR=""
+MANAGED_FILE_SEAL_DIR=""
+MANAGED_FILE_STRICT_SEAL=0
+
+echo "== restore rejects a replaced or escaping snapshot manifest =="
+fresh_env manifest_symlink
+printf 'user baseline\n' > "$HOME/.claude/settings.json"
+snapshot_managed_files "$ROOT/backup" "$DAEMON"
+printf 'daemon bytes\n' > "$HOME/.claude/settings.json"
+mv "$ROOT/backup/manifest" "$ROOT/manifest-real"
+ln -s "$ROOT/manifest-real" "$ROOT/backup/manifest"
+restore_managed_files 2>/dev/null
+rc=$?
+assert_eq "snapshot manifest symlink refuses restore" "1" "$rc"
+assert_eq "manifest-link refusal preserves current bytes" "daemon bytes" "$(cat "$HOME/.claude/settings.json")"
+MANAGED_FILE_BACKUP_DIR=""
+
+fresh_env manifest_escape
+printf 'user baseline\n' > "$HOME/.claude/settings.json"
+snapshot_managed_files "$ROOT/backup" "$DAEMON"
+printf 'daemon bytes\n' > "$HOME/.claude/settings.json"
+sed 's/^saved\t0\t/saved\t..\/escaped\t/' "$ROOT/backup/manifest" > "$ROOT/manifest-mutated"
+mv "$ROOT/manifest-mutated" "$ROOT/backup/manifest"
+restore_managed_files 2>/dev/null
+rc=$?
+assert_eq "escaping snapshot slot refuses restore" "1" "$rc"
+assert_eq "escaping-slot refusal preserves current bytes" "daemon bytes" "$(cat "$HOME/.claude/settings.json")"
+MANAGED_FILE_BACKUP_DIR=""
+
+fresh_env restore_dangling_symlink
+MANAGED_FILE_STRICT_SEAL=1
+snapshot_managed_files "$ROOT/backup" "$DAEMON"
+seal_managed_files
+ln -s "$ROOT/missing-target" "$HOME/.claude/settings.json"
+restore_managed_files 2>/dev/null
+rc=$?
+assert_eq "dangling post-seal symlink refuses restore" "1" "$rc"
+[[ -L "$HOME/.claude/settings.json" ]] && got="link" || got="changed"
+assert_eq "dangling post-seal symlink survives" "link" "$got"
+MANAGED_FILE_BACKUP_DIR=""
+MANAGED_FILE_SEAL_DIR=""
+MANAGED_FILE_STRICT_SEAL=0
+
+echo "== a strict seal refuses to overwrite a concurrent external edit =="
+# MUTATION fixture: the first edit is the expected daemon hook install. The
+# second edit simulates another process changing the same config after the
+# driver sealed that expected state. Restore must fail before copying anything.
+fresh_env concurrent_edit
+printf 'user baseline\n' > "$HOME/.claude/settings.json"
+snapshot_managed_files "$ROOT/backup" "$DAEMON"
+printf 'expected daemon hook\n' > "$HOME/.claude/settings.json"
+seal_managed_files
+printf 'concurrent external edit\n' > "$HOME/.claude/settings.json"
+err="$(restore_managed_files 2>&1)"
+rc=$?
+assert_eq "concurrent edit refuses restore" "1" "$rc"
+assert_eq "concurrent bytes are not overwritten" "concurrent external edit" \
+  "$(cat "$HOME/.claude/settings.json")"
+[[ "$err" == *"refusing to overwrite concurrent change"* ]] && got=yes || got=no
+assert_eq "refusal names the conflict" "yes" "$got"
+# Clear the still-active snapshot handle. The refusal deliberately keeps it for
+# manual recovery, but this test owns the disposable tree.
+# shellcheck disable=SC2034  # shared state read by the sourced snapshot library
+MANAGED_FILE_BACKUP_DIR=""
+# shellcheck disable=SC2034  # shared state read by the sourced snapshot library
+MANAGED_FILE_SEAL_DIR=""
+
+echo "== each sealed path is rechecked immediately before restore =="
+# MUTATION fixture: preserve_replaced runs after the all-files precheck. Its
+# temporary override changes the later path at that exact boundary. The later
+# restore must compare that path with its seal again and keep recovery active.
+fresh_env per_entry_recheck
+MANAGED_FILE_STRICT_SEAL=1
+printf 'settings baseline\n' > "$HOME/.claude/settings.json"
+printf 'hooks baseline\n' > "$CODEX_HOME/hooks.json"
+snapshot_managed_files "$ROOT/backup" "$DAEMON"
+printf 'settings daemon\n' > "$HOME/.claude/settings.json"
+printf 'hooks daemon\n' > "$CODEX_HOME/hooks.json"
+seal_managed_files
+original_preserve="$(declare -f preserve_replaced)"
+preserve_replaced() {
+  if [[ "$2" == "$HOME/.claude/settings.json" ]]; then
+    printf 'hooks concurrent edit\n' > "$CODEX_HOME/hooks.json"
+  fi
+  return 0
+}
+restore_managed_files 2>/dev/null
+rc=$?
+eval "$original_preserve"
+assert_eq "per-entry changed bytes refuse restore" "1" "$rc"
+assert_eq "later concurrent bytes survive" "hooks concurrent edit" "$(cat "$CODEX_HOME/hooks.json")"
+[[ -n "$MANAGED_FILE_BACKUP_DIR" && -n "$MANAGED_FILE_SEAL_DIR" ]] && got=active || got=cleared
+assert_eq "per-entry refusal keeps recovery state" "active" "$got"
+MANAGED_FILE_BACKUP_DIR=""
+MANAGED_FILE_SEAL_DIR=""
+MANAGED_FILE_STRICT_SEAL=0
+
+fresh_env per_entry_delete
+MANAGED_FILE_STRICT_SEAL=1
+printf 'settings baseline\n' > "$HOME/.claude/settings.json"
+printf 'hooks baseline\n' > "$CODEX_HOME/hooks.json"
+snapshot_managed_files "$ROOT/backup" "$DAEMON"
+printf 'settings daemon\n' > "$HOME/.claude/settings.json"
+printf 'hooks daemon\n' > "$CODEX_HOME/hooks.json"
+seal_managed_files
+original_preserve="$(declare -f preserve_replaced)"
+preserve_replaced() {
+  if [[ "$2" == "$HOME/.claude/settings.json" ]]; then
+    rm "$CODEX_HOME/hooks.json"
+  fi
+  return 0
+}
+restore_managed_files 2>/dev/null
+rc=$?
+eval "$original_preserve"
+assert_eq "per-entry deletion refuses restore" "1" "$rc"
+[[ -e "$CODEX_HOME/hooks.json" ]] && got=restored || got=absent
+assert_eq "deleted later path is not recreated" "absent" "$got"
+[[ -n "$MANAGED_FILE_BACKUP_DIR" && -n "$MANAGED_FILE_SEAL_DIR" ]] && got=active || got=cleared
+assert_eq "per-entry deletion keeps recovery state" "active" "$got"
+MANAGED_FILE_BACKUP_DIR=""
+MANAGED_FILE_SEAL_DIR=""
+MANAGED_FILE_STRICT_SEAL=0
+
+fresh_env per_entry_absent_creation
+MANAGED_FILE_STRICT_SEAL=1
+printf 'settings baseline\n' > "$HOME/.claude/settings.json"
+snapshot_managed_files "$ROOT/backup" "$DAEMON"
+printf 'settings daemon\n' > "$HOME/.claude/settings.json"
+seal_managed_files
+original_preserve="$(declare -f preserve_replaced)"
+preserve_replaced() {
+  if [[ "$2" == "$HOME/.claude/settings.json" ]]; then
+    printf 'concurrent creation\n' > "$CODEX_HOME/hooks.json"
+  fi
+  return 0
+}
+restore_managed_files 2>/dev/null
+rc=$?
+eval "$original_preserve"
+assert_eq "per-entry expected-absent creation refuses restore" "1" "$rc"
+assert_eq "concurrent expected-absent bytes survive" "concurrent creation" "$(cat "$CODEX_HOME/hooks.json")"
+[[ -n "$MANAGED_FILE_BACKUP_DIR" && -n "$MANAGED_FILE_SEAL_DIR" ]] && got=active || got=cleared
+assert_eq "expected-absent refusal keeps recovery state" "active" "$got"
+MANAGED_FILE_BACKUP_DIR=""
+MANAGED_FILE_SEAL_DIR=""
+MANAGED_FILE_STRICT_SEAL=0
+
+echo "== a failed strict seal cannot fall back to an unchecked restore =="
+# MUTATION fixture: the second managed path becomes a directory after the
+# daemon edits the first path. This forces a failure after sealing started.
+# Cleanup must leave the first path unchanged and retain the recovery snapshot.
+fresh_env failed_seal
+MANAGED_FILE_STRICT_SEAL=1
+printf 'user baseline\n' > "$HOME/.claude/settings.json"
+snapshot_managed_files "$ROOT/backup" "$DAEMON"
+printf 'expected daemon hook\n' > "$HOME/.claude/settings.json"
+mkdir "$CODEX_HOME/hooks.json"
+if seal_managed_files 2>/dev/null; then
+  fail "mid-seal failure is observed" "non-zero" "seal unexpectedly passed"
+else
+  pass "mid-seal failure is observed"
+fi
+if restore_managed_files 2>/dev/null; then
+  fail "failed strict seal blocks restore" "non-zero" "restore fell back to unchecked bytes"
+else
+  pass "failed strict seal blocks restore"
+fi
+assert_eq "failed seal leaves current bytes" "expected daemon hook" \
+  "$(cat "$HOME/.claude/settings.json")"
+[[ -n "$MANAGED_FILE_BACKUP_DIR" ]] && got=active || got=cleared
+assert_eq "failed seal keeps recovery snapshot active" "active" "$got"
+MANAGED_FILE_BACKUP_DIR=""
+# shellcheck disable=SC2034  # shared state read by the sourced snapshot library
+MANAGED_FILE_SEAL_DIR=""
+# shellcheck disable=SC2034  # shared state read by the sourced snapshot library
+MANAGED_FILE_STRICT_SEAL=0
 
 echo "== a config the daemon created from nothing is removed =="
 fresh_env created
