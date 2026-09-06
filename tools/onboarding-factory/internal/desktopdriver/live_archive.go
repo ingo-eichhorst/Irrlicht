@@ -207,6 +207,14 @@ func validateArchiveTargetRegistry(
 // tree it was refused against.
 const archiveFailureTreeFile = "archive-failure-tree.json"
 
+// keyFailureTreeFile is the same diagnostic for a key press that could not be
+// resolved. Cells 2-26 and 2-27 press Enter to answer a blocking permission
+// dialog, and the driver has no model of that dialog — it resolves Enter only
+// as "submit the composer", which needs a Send button an in-flight turn does
+// not show. The tree at the moment of refusal is what a model would be built
+// from, so keep it rather than discovering the same gap again.
+const keyFailureTreeFile = "key-failure-tree.json"
+
 // withArchiveTree writes the live accessibility tree beside the run's evidence
 // and names the file in the returned error.
 //
@@ -220,6 +228,12 @@ const archiveFailureTreeFile = "archive-failure-tree.json"
 // A dump that cannot be written must not silently turn into no dump at all, so
 // the failure to write is reported in the error too.
 func (runtime *LiveRuntime) withArchiveTree(ctx context.Context, cause error) error {
+	return runtime.withFailureTree(ctx, archiveFailureTreeFile, cause)
+}
+
+// withFailureTree writes the live accessibility tree beside the run's evidence
+// under the given name, and says in the error where it went.
+func (runtime *LiveRuntime) withFailureTree(ctx context.Context, name string, cause error) error {
 	if runtime.evidenceDir == "" {
 		return cause
 	}
@@ -227,7 +241,7 @@ func (runtime *LiveRuntime) withArchiveTree(ctx context.Context, cause error) er
 	if inspectErr != nil {
 		return fmt.Errorf("%w (the accessibility tree could not be read either: %v)", cause, inspectErr)
 	}
-	path := filepath.Join(runtime.evidenceDir, archiveFailureTreeFile)
+	path := filepath.Join(runtime.evidenceDir, name)
 	data, marshalErr := json.MarshalIndent(elements, "", "  ")
 	if marshalErr != nil {
 		return fmt.Errorf("%w (the accessibility tree could not be encoded: %v)", cause, marshalErr)

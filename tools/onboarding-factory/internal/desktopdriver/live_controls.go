@@ -171,7 +171,11 @@ func interruptTurn(
 // postcondition is refused by Plan long before this runs; the check is repeated
 // here because this is the last place that can still refuse.
 func (runtime *LiveRuntime) PressKey(ctx context.Context, key string) error {
-	return pressKey(ctx, key, runtime.workspace, runtime.front, runtime.helper.inspect, runtime.helper.keyboard)
+	err := pressKey(ctx, key, runtime.workspace, runtime.front, runtime.helper.inspect, runtime.helper.keyboard)
+	if err != nil {
+		return runtime.withFailureTree(ctx, keyFailureTreeFile, err)
+	}
+	return nil
 }
 
 func pressKey(
