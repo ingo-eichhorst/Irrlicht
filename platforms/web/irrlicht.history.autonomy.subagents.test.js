@@ -3,23 +3,26 @@ import { join } from 'node:path'
 import { describe, test, expect } from 'vitest'
 
 import { WEB_DIR } from './shippedFiles.testutil.js'
-import { autonomyCountingLine, autonomyQuery } from './historyTab.js'
+import { AUTONOMY_CONCURRENCY_CAVEAT, autonomyQuery } from './historyTab.js'
 
 // What the Autonomy section counts (#1905 subagents), retargeted at the FIELD
 // after the control was removed (#1905 recording).
 //
 // The maintainer's decision: every run counts, subagent runs included, because
 // Irrlicht recorded them. So there is no mode, no control, and no excluded
-// count. The classification survives on every row, and the panel still
-// describes a window's MAKEUP — "42 runs" reads differently once you know how
-// many of them were nested inside another.
+// count. The classification survives on every row and on the wire.
+//
+// THE SENTENCE THAT REPORTED THE CENSUS IS GONE (#1905 prose cut). "Every run
+// counts, including 259 subagent runs" is reassurance rather than a caveat, and
+// its `unknown` clause described legacy rows a machine installing Irrlicht
+// today will never hold. What a reader still needs from the nesting is the one
+// place it changes how a NUMBER reads — the concurrency figure — and that is
+// the caveat beside it, pinned below.
 
 const state = (over = {}) => ({
   autonomyRange: '30d',
   ...over,
 })
-
-const kinds = (over = {}) => ({ top_level: 10, subagent: 0, unknown: 0, ...over })
 
 describe('autonomyQuery — no run-scope parameter reaches the daemon', () => {
   // Sending the old parameter would leave an OLD daemon serving a filtered
@@ -82,72 +85,30 @@ describe('the Runs control is gone from the markup and the wiring', () => {
   })
 })
 
-describe('autonomyCountingLine — the panel states what it counted', () => {
-  test('says nothing when the payload carries no census', () => {
-    // An older daemon. Absence is "this response never said", which is not the
-    // same claim as "there were none".
-    expect(autonomyCountingLine({})).toBe('')
-    expect(autonomyCountingLine(null)).toBe('')
-    expect(autonomyCountingLine(undefined)).toBe('')
+describe('what a reader still needs from the nesting is the concurrency caveat', () => {
+  // The census sentence is gone. The one consequence of nesting that changes
+  // how a figure READS stays, because the `at once` number is otherwise taken
+  // for a count of independent agents: a parent is held `working` while its
+  // subagents run, so one agent with three subagents overlaps as four.
+  test('the caveat names the parent, the subagents and the state', () => {
+    expect(AUTONOMY_CONCURRENCY_CAVEAT).toMatch(/parent/i)
+    expect(AUTONOMY_CONCURRENCY_CAVEAT).toMatch(/subagents/i)
+    expect(AUTONOMY_CONCURRENCY_CAVEAT).toMatch(/working/i)
   })
 
-  test('a window with no subagent runs says so', () => {
-    const line = autonomyCountingLine({ kinds: kinds() })
-    expect(line).toContain('Counting every run')
-    expect(line).toContain('holds none')
-  })
-
-  test('it says how many of the runs were subagents', () => {
-    const line = autonomyCountingLine({ kinds: kinds({ subagent: 37 }) })
-    expect(line).toContain('37 subagent runs')
-    expect(line).toContain('inside its parent')
-    // The word that has to be gone: nothing is excluded any more, and a
-    // sentence still claiming so would describe a filter that no longer exists.
-    expect(line).not.toContain('excluded')
-  })
-
-  test('singular and plural both read as English', () => {
-    expect(autonomyCountingLine({ kinds: kinds({ subagent: 1 }) })).toContain('1 subagent run —')
-    expect(autonomyCountingLine({ kinds: kinds({ subagent: 2 }) })).toContain('2 subagent runs —')
-  })
-
-  // THE TRAP THIS CLAUSE EXISTS FOR. A row written before Irrlicht told the two
-  // apart carries no classification. It is counted like the rest — and counting
-  // it in SILENCE would let the panel imply a classification nobody made.
-  test('unknown-kind runs are named', () => {
-    const line = autonomyCountingLine({ kinds: kinds({ subagent: 3, unknown: 8148 }) })
-    expect(line).toContain('8148 runs were recorded before Irrlicht told')
-    expect(line).toContain('counted either way')
-    // …and the clause now carries its consequence for the concurrency figure:
-    // a peak one of those runs was alive for cannot be split.
-    expect(line).toContain('no split')
-  })
-
-  test('a window with no unknown runs says nothing about them', () => {
-    expect(autonomyCountingLine({ kinds: kinds({ subagent: 3 }) })).not.toContain('unknown')
-  })
-
-  test('one unknown run reads as singular', () => {
-    expect(autonomyCountingLine({ kinds: kinds({ unknown: 1 }) })).toContain('1 run was recorded before')
-  })
-
-  // COMMITTED IN-LANGUAGE MUTANTS. Each is a plausible way to get the sentence
-  // wrong and each passes at least one assertion above on its own, so the suite
-  // has to be shown to tell them apart from production.
-  test('production tells the census cases apart', () => {
-    const withSubs = { kinds: kinds({ subagent: 5, unknown: 9 }) }
-    const noSubs = { kinds: kinds({ subagent: 0, unknown: 9 }) }
-    const noUnknown = { kinds: kinds({ subagent: 5, unknown: 0 }) }
-
-    // A mutant blind to the subagent count: a window full of nested runs reads
-    // exactly like one with none.
-    const subBlind = () => 'Counting every run.'
-    expect(subBlind(withSubs)).toBe(subBlind(noSubs))
-    expect(autonomyCountingLine(withSubs)).not.toBe(autonomyCountingLine(noSubs))
-
-    // A mutant that drops the unknown clause: the silent classification.
-    const unknownBlind = (p) => `Counting every run, including ${p.kinds.subagent}.`
-    expect(unknownBlind(withSubs)).toBe(unknownBlind(noUnknown))
-    expect(autonomyCountingLine(withSubs)).not.toBe(autonomyCountingLine(noUnknown))
+  // The committed mutation: the census sentence back in the shipped file under
+  // any name. A helper that still parses is the one a later reader wires back
+  // up, so it is checked out of the file rather than merely left uncalled.
+  test('no census sentence survives in the shipped file', () => {
+    const js = readFileSync(join(WEB_DIR, 'historyTab.js'), 'utf8')
+    expect(js).toContain('AUTONOMY_CONCURRENCY_CAVEAT') // the file was actually read
+    expect(js).not.toContain('autonomyCountingLine')
+    // Fragments only ever emitted as PROSE, so a code comment restating the
+    // decision ("the section counts every run, subagent runs included") does
+    // not trip this — only the sentence itself coming back would.
+    for (const gone of ['This window holds none', 'top/sub split',
+      'happened inside its parent', 'recorded before Irrlicht told']) {
+      expect(js).not.toContain(gone)
+    }
   })
 })

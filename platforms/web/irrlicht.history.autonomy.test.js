@@ -33,6 +33,7 @@ import {
   autonomyVisibleBoundaries,
   autonomyDuration,
   autonomyProvenanceLine,
+  autonomyThinNote,
   autonomyAxisLabel,
   autonomyKeyColor,
   autonomyKeyEntries,
@@ -263,12 +264,17 @@ describe('the concurrency figure, and the split it may not invent', () => {
     expect(autonomyConcurrencyLabel(0, 0, 0, true)).toBe('')
   })
 
-  test('the caveat is on screen, and says what the number is not', () => {
+  test('the caveat is on screen, and names what makes the number overlap', () => {
     // The number is otherwise misread: a parent is held `working` while its
     // subagents run, so one agent with three subagents reads as four at once.
+    // The caveat has to name all three of those — the parent, the subagents,
+    // and the state the parent is held in — or it never says why the figure is
+    // bigger than the number of agents. #1905's prose cut took the "not four
+    // independent agents" gloss away with the paragraph it lived in; what is
+    // asserted here is the mechanism, which is the part a reader needs.
     expect(AUTONOMY_CONCURRENCY_CAVEAT).toMatch(/parent/i)
     expect(AUTONOMY_CONCURRENCY_CAVEAT).toMatch(/subagents/i)
-    expect(AUTONOMY_CONCURRENCY_CAVEAT).toMatch(/not four independent agents/i)
+    expect(AUTONOMY_CONCURRENCY_CAVEAT).toMatch(/working/i)
   })
 })
 
@@ -382,6 +388,45 @@ describe('the window vocabulary stays distinct from chart=state’s', () => {
   })
 })
 
+describe('a thin bucket is marked, and the marking is explained in words', () => {
+  // A fainter plane means nothing on its own, and the note has to say what p95
+  // and p5 ARE in a thin bucket rather than only that the bucket is thin: with
+  // two samples they are the longest and the shortest run, and a reader who
+  // takes them for percentiles reads a two-run week as a spread.
+  const withThin = (thinCount, total, floor = 5) => ({
+    sample_floor: floor,
+    buckets: Array.from({ length: total }, (_, i) => ({ ts: i, thin: i < thinCount })),
+  })
+
+  test('says nothing when every bucket in view clears the floor', () => {
+    expect(autonomyThinNote(withThin(0, 12))).toBe('')
+    expect(autonomyThinNote({ buckets: [] })).toBe('')
+    expect(autonomyThinNote(null)).toBe('')
+    expect(autonomyThinNote(undefined)).toBe('')
+  })
+
+  test('names the count, the total, the floor, and what the two marks become', () => {
+    expect(autonomyThinNote(withThin(3, 12)))
+      .toBe('3 of 12 buckets have under 5 runs (drawn fainter): '
+        + 'p95 and p5 there are just the longest and shortest.')
+  })
+
+  test('singular and plural both read as English', () => {
+    expect(autonomyThinNote(withThin(1, 12))).toContain('1 of 12 buckets has under 5 runs')
+    expect(autonomyThinNote(withThin(1, 1))).toContain('1 of 1 bucket has under 5 runs')
+    expect(autonomyThinNote(withThin(1, 4, 1))).toContain('under 1 run (')
+  })
+
+  // The committed mutation: a note that always speaks. It passes "explains the
+  // marking" and fails the thing that matters, which is that a chart with no
+  // thin bucket carries no caveat at all.
+  test('production tells a thin window from a dense one', () => {
+    const always = () => 'some buckets here are thin'
+    expect(always(withThin(0, 12))).toBe(always(withThin(3, 12)))
+    expect(autonomyThinNote(withThin(0, 12))).not.toBe(autonomyThinNote(withThin(3, 12)))
+  })
+})
+
 describe('“no data” never reads as “you did nothing”', () => {
   test('an empty log says collection just started', () => {
     const line = autonomyProvenanceLine({ earliest_span: 0, total_recorded: 0 })
@@ -393,6 +438,11 @@ describe('“no data” never reads as “you did nothing”', () => {
     const line = autonomyProvenanceLine({ earliest_span: 1_700_000_000, total_recorded: 312 })
     expect(line).toMatch(/Collecting since/)
     expect(line).toMatch(/312 runs recorded/)
+  })
+
+  test('one recorded run is singular', () => {
+    expect(autonomyProvenanceLine({ earliest_span: 1_700_000_000, total_recorded: 1 }))
+      .toMatch(/1 run recorded/)
   })
 })
 

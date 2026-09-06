@@ -6,6 +6,15 @@ import XCTest
 /// any other row, and this surface has to say so — a reconstructed figure
 /// rendered as a measured one is the wrong number with nothing on screen
 /// admitting it.
+///
+/// #1905's prose cut deleted the three-sentence reconstruction paragraph and
+/// kept its COUNT as a suffix on the provenance line that was already there.
+/// What had to survive is the claim, not the paragraph. Two of the paragraph's
+/// three facts moved rather than went: the boundary DATE is still on screen as
+/// the rule and caption the charts draw (pinned further down this file), and
+/// the cost-log sentence is the one that is simply gone — it explained why a
+/// run's END REASON was unknown, and #1919 deleted the run strip, which was the
+/// only thing that ever drew an end reason.
 final class HistoryAutonomyBackfillTests: XCTestCase {
 
     private let utc = TimeZone(identifier: "UTC")!
@@ -38,55 +47,68 @@ final class HistoryAutonomyBackfillTests: XCTestCase {
         let d = try JSONDecoder().decode(HistoryAutonomyProjectsResponse.self, from: Data(json.utf8))
         XCTAssertEqual(d.provenanceOrNone, .none)
         XCTAssertFalse(d.provenanceOrNone.isReconstructed)
-        XCTAssertNil(AutonomyFormat.reconstructionNote(d.provenanceOrNone, inView: 0, timeZone: utc))
+        XCTAssertFalse(AutonomyFormat.provenance(earliest: 1_755_000_000, total: 12,
+                                                 reconstructed: d.provenanceOrNone.reconstructed,
+                                                 timeZone: utc).contains("reconstructed"))
     }
 
-    // MARK: The note
+    // MARK: The surviving clause
 
-    func testNoNoteWhenEveryRunInViewWasMeasured() {
+    private func line(_ p: HistoryAutonomyProvenance, total: Int = 100) -> String {
+        AutonomyFormat.provenance(earliest: 1_755_000_000, total: total,
+                                  reconstructed: p.reconstructed, timeZone: utc)
+    }
+
+    /// The silent case is the one every install but the maintainer's own gets —
+    /// the reader this cut was made for. Here the clause costs them zero
+    /// characters, which is why it could be kept at all.
+    func testNoClauseWhenEveryRunInViewWasMeasured() {
         let p = HistoryAutonomyProvenance(reconstructed: 0, costDerived: 0, liveSince: 1_755_000_000)
-        XCTAssertNil(AutonomyFormat.reconstructionNote(p, inView: 100, timeZone: utc))
+        let out = line(p)
+        XCTAssertFalse(out.contains("reconstructed"), "got: \(out)")
+        XCTAssertTrue(out.contains("100 runs recorded"), "got: \(out)")
     }
 
-    func testNoteStatesHowManyAndTheBoundaryDate() throws {
-        // 1755000000 = 2025-08-12T12:00:00Z
+    func testTheClauseStatesHowManyOfTheRunsInViewAreReconstructed() {
         let p = HistoryAutonomyProvenance(reconstructed: 40, costDerived: 0, liveSince: 1_755_000_000)
-        let note = try XCTUnwrap(AutonomyFormat.reconstructionNote(p, inView: 100, timeZone: utc))
-        XCTAssertTrue(note.contains("40 of 100 runs in view"), "got: \(note)")
-        XCTAssertTrue(note.contains("not measured as they happened"), "got: \(note)")
-        XCTAssertTrue(note.contains("Everything before Aug 12, 2025 is reconstructed."), "got: \(note)")
-        XCTAssertFalse(note.contains("cost log"), "no cost-derived run is in range; the sentence must be absent")
+        let out = line(p)
+        // On the SAME line as the total it qualifies, not a second line below.
+        XCTAssertEqual(out, "Collecting since Aug 12, 2025 · 100 runs recorded · 40 in view reconstructed.")
     }
 
-    func testNoteNamesTheCostDerivedRunsAndCallsTheirReasonUnknown() throws {
+    /// The cost-log sentence is gone, and with it every word about a run's end
+    /// reason: #1919 removed the only thing that ever drew one.
+    func testNoCostLogOrEndReasonSentenceSurvives() {
         let p = HistoryAutonomyProvenance(reconstructed: 90, costDerived: 55, liveSince: 1_755_000_000)
-        let note = try XCTUnwrap(AutonomyFormat.reconstructionNote(p, inView: 120, timeZone: utc))
-        XCTAssertTrue(note.contains("55 of them come from the cost log"), "got: \(note)")
-        XCTAssertTrue(note.contains("unknown"), "got: \(note)")
-        XCTAssertTrue(note.contains("not assumed"), "got: \(note)")
+        let out = line(p, total: 120)
+        XCTAssertFalse(out.contains("cost log"), "got: \(out)")
+        XCTAssertFalse(out.contains("end reason"), "got: \(out)")
+        XCTAssertFalse(out.contains("not assumed"), "got: \(out)")
+        // …and the count itself still speaks: `costDerived` changes nothing.
+        XCTAssertTrue(out.contains("90 in view reconstructed"), "got: \(out)")
     }
 
-    /// `liveSince == 0` means "nothing has ever been measured live", which is a
-    /// different claim from "measured since the epoch". Printing Jan 1 1970
-    /// would be a fabricated date — exactly the failure this marking exists to
-    /// prevent.
-    func testNoteNeverPrintsAnEpochDate() throws {
+    /// `liveSince` is no longer formatted into this sentence at all, which is
+    /// the strongest possible form of "never prints an epoch date": there is no
+    /// date in the clause to get wrong.
+    func testTheClauseCarriesNoDateOfItsOwn() {
         let p = HistoryAutonomyProvenance(reconstructed: 40, costDerived: 40, liveSince: 0)
-        let note = try XCTUnwrap(AutonomyFormat.reconstructionNote(p, inView: 40, timeZone: utc))
-        XCTAssertTrue(note.contains("Nothing here was measured live"), "got: \(note)")
-        XCTAssertFalse(note.contains("1970"), "got: \(note)")
+        let out = line(p, total: 40)
+        XCTAssertTrue(out.contains("40 in view reconstructed"), "got: \(out)")
+        XCTAssertFalse(out.contains("1970"), "got: \(out)")
     }
 
-    /// The note takes its zone as an input (#1659), never `NSTimeZone.default`.
-    func testNoteHonoursTheCallersZone() throws {
+    /// The provenance line still takes its zone as an input (#1659), never
+    /// `NSTimeZone.default` — the date it names is the collection start.
+    func testTheLineHonoursTheCallersZone() {
         // 1755014400 = 2025-08-12T16:00:00Z — still Aug 12 in UTC, already
-        // Aug 13 in Tokyo (UTC+9). A date that reads the same in both zones
-        // would make this test pass against a formatter that ignored the
-        // parameter entirely.
-        let p = HistoryAutonomyProvenance(reconstructed: 1, costDerived: 0, liveSince: 1_755_014_400)
+        // Aug 13 in Tokyo (UTC+9). A date that read the same in both zones
+        // would make this pass against a formatter that ignored the parameter.
         let tokyo = TimeZone(identifier: "Asia/Tokyo")!
-        let inUTC = try XCTUnwrap(AutonomyFormat.reconstructionNote(p, inView: 1, timeZone: utc))
-        let inTokyo = try XCTUnwrap(AutonomyFormat.reconstructionNote(p, inView: 1, timeZone: tokyo))
+        let inUTC = AutonomyFormat.provenance(earliest: 1_755_014_400, total: 1,
+                                              reconstructed: 1, timeZone: utc)
+        let inTokyo = AutonomyFormat.provenance(earliest: 1_755_014_400, total: 1,
+                                                reconstructed: 1, timeZone: tokyo)
         XCTAssertTrue(inUTC.contains("Aug 12, 2025"), "got: \(inUTC)")
         XCTAssertTrue(inTokyo.contains("Aug 13, 2025"), "got: \(inTokyo)")
     }
@@ -101,13 +123,14 @@ final class HistoryAutonomyBackfillTests: XCTestCase {
         let allLive = HistoryAutonomyProvenance(reconstructed: 0, costDerived: 0, liveSince: 1_755_000_000)
         let backfilled = HistoryAutonomyProvenance(reconstructed: 5, costDerived: 2, liveSince: 1_755_000_000)
 
-        let alwaysSpeaks: (HistoryAutonomyProvenance) -> String? = { _ in "some runs here were reconstructed" }
-        let neverSpeaks: (HistoryAutonomyProvenance) -> String? = { _ in nil }
+        let alwaysSpeaks: (HistoryAutonomyProvenance) -> String = { _ in "some runs here were reconstructed" }
+        let neverSpeaks: (HistoryAutonomyProvenance) -> String = { _ in "" }
         XCTAssertEqual(alwaysSpeaks(allLive), alwaysSpeaks(backfilled))
         XCTAssertEqual(neverSpeaks(allLive), neverSpeaks(backfilled))
 
-        XCTAssertNil(AutonomyFormat.reconstructionNote(allLive, inView: 100, timeZone: utc))
-        XCTAssertNotNil(AutonomyFormat.reconstructionNote(backfilled, inView: 100, timeZone: utc))
+        XCTAssertNotEqual(line(allLive), line(backfilled))
+        XCTAssertFalse(line(allLive).contains("reconstructed"))
+        XCTAssertTrue(line(backfilled).contains("5 in view reconstructed"))
     }
 
     // MARK: Source boundaries across the panel stack (QA-2)

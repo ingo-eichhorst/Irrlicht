@@ -801,9 +801,8 @@ export function autonomyDuration(seconds) {
   return h === 0 ? d + 'd' : d + 'd' + h + 'h';
 }
 
-// autonomyDateLabel formats a day for the two provenance sentences below. One
-// helper, so "collecting since <date>" and "everything before <date>" can
-// never render the same instant two different ways.
+// autonomyDateLabel formats the day the provenance line names. A helper of its
+// own so a caller can never render the same instant two different ways.
 function autonomyDateLabel(ts) {
   return new Date((Number(ts) || 0) * 1000)
     .toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
@@ -811,7 +810,18 @@ function autonomyDateLabel(ts) {
 
 // autonomyProvenanceLine states when collection started, so an empty or short
 // history is never read as "you did nothing" (#1905). This sentence is part of
-// the feature, not decoration.
+// the feature, not decoration — which is why it is the one line here that is
+// always drawn.
+//
+// THE RECONSTRUCTED SUFFIX IS THE LAST SURVIVOR of a three-sentence paragraph
+// (#1905 prose cut). `tools/autonomy-backfill` rebuilds pre-feature runs from
+// logs a machine already had, and a reconstructed figure rendered as a measured
+// one is exactly the "wrong number with nothing on screen saying so" this
+// section was built to prevent — so the count cannot go. What it costs the
+// reader it is written for is nothing: a machine that was never back-filled
+// sends `reconstructed: 0` and the clause never appears at all. Four words is
+// the smallest thing that still says it, and it hangs off the line that was
+// already there rather than earning a line of its own.
 export function autonomyProvenanceLine(data) {
   const earliest = Number(data?.earliest_span) || 0;
   const total = Number(data?.total_recorded) || 0;
@@ -819,94 +829,24 @@ export function autonomyProvenanceLine(data) {
     return 'No autonomous runs recorded yet. Irrlicht began measuring them with this update — '
       + 'an empty chart means "nothing recorded", not "nothing happened".';
   }
-  return 'Collecting since ' + autonomyDateLabel(earliest) + ' · ' + total + ' runs recorded.';
-}
-
-// autonomyReconstructionNote marks a view that is showing back-filled history
-// (#1905). '' when every run in view was measured as it happened, so a normal
-// install — which is every install but the one the back-fill was run on — says
-// nothing at all.
-//
-// Three facts, in the register the empty state already uses, because each
-// answers a question the reader would otherwise answer wrongly:
-//
-//   - HOW MANY of the runs in view are reconstructed, so the figures above can
-//     be weighed;
-//   - the date BEFORE WHICH everything is reconstructed, which is the boundary
-//     between a measured trend and a rebuilt one;
-//   - whether any of it came from a source that cannot say how a run ended, so
-//     a missing concurrency split reads as a limit of the source rather than as
-//     a bug.
-export function autonomyReconstructionNote(data) {
-  const p = data?.provenance || {};
-  const reconstructed = Number(p.reconstructed) || 0;
-  if (reconstructed <= 0) return '';
-  const inView = Number(data?.summary?.runs) || reconstructed;
-  const costDerived = Number(p.cost_derived) || 0;
-  const liveSince = Number(p.live_since) || 0;
-  const parts = [
-    reconstructed + ' of ' + inView + ' runs in view were reconstructed from logs this machine already had, '
-      + 'not measured as they happened.',
-    liveSince
-      ? 'Everything before ' + autonomyDateLabel(liveSince) + ' is reconstructed.'
-      : 'Nothing here was measured live — every run on record is reconstructed.',
-  ];
-  if (costDerived > 0) {
-    parts.push(costDerived + ' of them come from the cost log, which records when a session was working and '
-      + 'never why it stopped, so their end reason is unknown — not assumed.');
-  }
-  return parts.join(' ');
-}
-
-// autonomyCountingLine states, in words, WHAT the figures above it counted
-// (#1905 subagents, retargeted by #1905 recording).
-//
-// THERE IS NO MODE. Every run counts, subagent runs included, because Irrlicht
-// recorded them — so the sentence no longer reports an excluded count, and
-// there is no control whose position a reader has to remember. What it still
-// does is describe the window's MAKEUP, because "42 runs" reads differently
-// once you know how many of them were nested inside another — and because the
-// same nesting is what the concurrency figure's caveat is about.
-//
-// THE UNKNOWN CLAUSE STAYS LOAD-BEARING. A row written before Irrlicht told the
-// two apart carries no classification, and such a row is counted like the rest
-// — but counting it silently would let the panel imply a classification nobody
-// made, and it is also the reason a panel's `at once` figure sometimes carries
-// no split. So the sentence says how many.
-//
-// '' only for a payload that carries no census at all, which is a daemon older
-// than the field: absence there means "this response never said", which is not
-// the same claim as "there were none".
-export function autonomyCountingLine(payload) {
-  const k = payload?.kinds;
-  if (!k) return '';
-  const sub = Number(k.subagent) || 0;
-  const unknown = Number(k.unknown) || 0;
-  const parts = [sub > 0
-    ? 'Counting every run, including ' + sub + ' subagent run' + (sub === 1 ? '' : 's')
-      + ' — each of which happened inside its parent’s run.'
-    : 'Counting every run, subagent runs included. This window holds none.'];
-  if (unknown > 0) {
-    parts.push(unknown + ' run' + (unknown === 1 ? ' was' : 's were') + ' recorded before Irrlicht told '
-      + 'top-level and subagent runs apart, so which they were is unknown — those are counted either way, '
-      + 'and a peak one of them was alive for is shown as a total with no split.');
-  }
-  return parts.join(' ');
+  const reconstructed = Number(data?.provenance?.reconstructed) || 0;
+  return 'Collecting since ' + autonomyDateLabel(earliest)
+    + ' · ' + total + ' run' + (total === 1 ? '' : 's') + ' recorded'
+    + (reconstructed > 0 ? ' · ' + reconstructed + ' in view reconstructed' : '')
+    + '.';
 }
 
 // AUTONOMY_CONCURRENCY_CAVEAT is the sentence beside the `at once` figure, and
-// it is not optional: without it the number is read as "four independent
-// agents" and it is not that.
+// it is not optional: without it the number is read as "N independent agents"
+// and it is not that.
 //
 // The daemon deliberately holds a PARENT session in `working` while its
 // subagents run, so one agent with three subagents overlaps as four. Four things
 // really were working — the figure is not wrong — but a reader who takes it for
 // four independent agents has been misled by a true number, which is the exact
-// failure mode this section keeps writing sentences to avoid.
+// failure mode this sentence exists to prevent.
 export const AUTONOMY_CONCURRENCY_CAVEAT =
-  'A parent is held working while its subagents run, so one agent with three subagents counts as four at '
-  + 'once. Four things really were working — but not four independent agents. That is what the '
-  + '“N + M sub” split separates, and it is shown wherever every run at the peak said which it was.';
+  'A parent counts as working while its subagents run.';
 
 // AUTONOMY_ERA_LABELS describes what lies to the LEFT of a source boundary —
 // the era the data before the line came from, and at what resolution.
@@ -1205,53 +1145,42 @@ export function autonomyAxisLabel(ts, windowSeconds) {
 }
 
 // autonomyMeasurementNote marks the runs in view whose duration is a FLOOR
-// rather than a measurement (#1905 recording). '' when every run in view is
-// finished and fully measured, which is the quiet case on a machine whose
-// daemon has been up all day.
+// rather than a measurement (#1905 recording). '' when nothing is running,
+// which is the quiet case on a machine between sessions.
 //
-// Two kinds, two sentences, because they are two different limits and a reader
-// who conflated them would misread the section in opposite directions:
+// A run that has not ended has no length yet — only how long it has lasted SO
+// FAR. That floor still COUNTS towards the panel's longest (that figure is a
+// maximum, and "already lasted 3h" is true), and is deliberately not a sample
+// for the aggregate chart's percentiles, where a floor shortens the longest
+// runs hardest. Both halves are in the four words after the dash.
 //
-//   - STILL RUNNING. The run has not ended, so its length is how long it has
-//     lasted SO FAR. It COUNTS towards the panel's longest — that figure is a
-//     maximum, and "already lasted 3h" is true — and is deliberately NOT a
-//     sample for the aggregate chart's percentiles, where a floor always
-//     shortens and shortens the longest runs hardest.
-//   - STARTED BEFORE IRRLICHT WAS WATCHING. The run has finished, but its start
-//     is where Irrlicht began watching rather than where the run began; a
-//     restart re-discovers every live session this way. Dropping those is what
-//     left 5 of a day's 35 runs on the record.
+// THE SECOND SENTENCE WENT (#1905 prose cut). It named the runs already going
+// when Irrlicht started watching, whose start is a lower bound rather than a
+// beginning. That is a real limit, but it is a restart artefact a reader can do
+// nothing with, and it was the longest sentence in the section.
+// `measurement.start_lower_bound` stays on the wire; only the sentence went.
 export function autonomyMeasurementNote(payload) {
-  const m = payload?.measurement || {};
-  const running = Number(m.running) || 0;
-  const lowerBound = Number(m.start_lower_bound) || 0;
-  const parts = [];
-  if (running > 0) {
-    parts.push(running + ' run' + (running === 1 ? ' is' : 's are') + ' still going: '
-      + (running === 1 ? 'its length is' : 'their lengths are') + ' how long '
-      + (running === 1 ? 'it has' : 'they have') + ' lasted SO FAR. '
-      + (running === 1 ? 'It counts' : 'They count') + ' towards the longest run, marked "still going", '
-      + 'and ' + (running === 1 ? 'is' : 'are') + ' left out of the percentiles above.');
-  }
-  if (lowerBound > 0) {
-    parts.push(lowerBound + ' run' + (lowerBound === 1 ? '' : 's') + ' already going when Irrlicht '
-      + 'started watching — ' + (lowerBound === 1 ? 'its' : 'their') + ' start is when it started '
-      + 'watching, not when the run began, so ' + (lowerBound === 1 ? 'that length is a' : 'those lengths are')
-      + ' minimum' + (lowerBound === 1 ? '' : 's') + '.');
-  }
-  return parts.join(' ');
+  const running = Number(payload?.measurement?.running) || 0;
+  if (running <= 0) return '';
+  return running + ' run' + (running === 1 ? '' : 's') + ' still going — '
+    + (running === 1 ? 'length' : 'lengths') + ' so far.';
 }
 
 // autonomyThinNote explains the aggregate chart's thin-bucket marking, in
 // words, because a fainter plane means nothing on its own. '' when every bucket
 // in view clears the floor.
+//
+// It has to say what p95 and p5 ARE in a thin bucket, not merely that the
+// bucket is thin: with two samples they are the longest and the shortest run,
+// and a reader who takes them for percentiles reads a two-run week as a spread.
 export function autonomyThinNote(duration) {
   const buckets = duration?.buckets || [];
   const thin = buckets.filter(b => b?.thin).length;
   if (thin <= 0) return '';
-  return thin + ' of ' + buckets.length + ' buckets hold fewer than ' + (Number(duration?.sample_floor) || 0)
-    + ' runs (fainter band, dashed edges, hollow points): there p95 is that bucket’s longest run and '
-    + 'p5 its shortest — not percentiles.';
+  const floor = Number(duration?.sample_floor) || 0;
+  return thin + ' of ' + buckets.length + ' bucket' + (buckets.length === 1 ? '' : 's')
+    + (thin === 1 ? ' has' : ' have') + ' under ' + floor + ' run' + (floor === 1 ? '' : 's')
+    + ' (drawn fainter): p95 and p5 there are just the longest and shortest.';
 }
 
 // The side panel's key: FOUR entries, because the section draws four marks —
@@ -2242,22 +2171,16 @@ function renderAutonomySidePanel() {
     const thin = autonomyThinNote(duration);
     if (thin) appendHistoryEmpty(listEl, thin);
   }
-  // What these figures counted (#1905 subagents). Above the provenance line
-  // because it qualifies every number in the panel, where provenance qualifies
-  // where they came from.
-  const countingLine = autonomyCountingLine(projects);
-  if (countingLine) appendHistoryEmpty(listEl, countingLine);
-  // …and which of them are floors rather than measurements (#1905 recording).
+  // Which of the figures are floors rather than measurements (#1905 recording).
+  // Silent when nothing is running, which is most of the time.
   const measurement = autonomyMeasurementNote(projects);
   if (measurement) appendHistoryEmpty(listEl, measurement);
   // The provenance line is part of the feature: "no data" must never read as
-  // "you did nothing".
+  // "you did nothing" — and it carries the back-fill count, so a reconstructed
+  // figure is never rendered as a measured one. Always drawn; the two lines it
+  // replaced (the run census and the reconstruction paragraph) are gone (#1905
+  // prose cut).
   appendHistoryEmpty(listEl, autonomyProvenanceLine(projects));
-  // …and a back-filled view says so, for the same reason: a reconstructed
-  // figure rendered as a measured one is the wrong number with nothing on
-  // screen saying it is wrong. Silent when nothing in view was reconstructed.
-  const reconstruction = autonomyReconstructionNote(projects);
-  if (reconstruction) appendHistoryEmpty(listEl, reconstruction);
 }
 
 // --- Activity matrix (chart=state, issue #981) ---

@@ -98,12 +98,18 @@ struct HistoryAutonomyContentView: View {
 
     /// Thin buckets are MARKED, never hidden and never smoothed — and the
     /// marking is explained in words, because a fainter plane means nothing on
-    /// its own. Three signals, since a distinction is easy to lose inside a
-    /// smooth band: the plane itself, the edges bounding it, and the points.
+    /// its own.
+    ///
+    /// It has to say what p95 and p5 ARE in a thin bucket, not merely that the
+    /// bucket is thin: with two samples they are the longest and the shortest
+    /// run, and a reader who takes them for percentiles reads a two-run week as
+    /// a spread. SAME WORDING AS THE WEB's `autonomyThinNote`.
     private var thinNote: some View {
-        Text("\(duration.thinCount) of \(duration.buckets.count) buckets hold fewer than "
-             + "\(duration.sampleFloor) runs (fainter band, dashed edges, hollow points): there, p95 is "
-             + "that bucket's longest run and p5 its shortest — not percentiles.")
+        Text("\(duration.thinCount) of \(duration.buckets.count) "
+             + "bucket\(duration.buckets.count == 1 ? "" : "s") "
+             + "\(duration.thinCount == 1 ? "has" : "have") under \(duration.sampleFloor) "
+             + "run\(duration.sampleFloor == 1 ? "" : "s") (drawn fainter): p95 and p5 there are just "
+             + "the longest and shortest.")
             .font(.caption2)
             .foregroundColor(.secondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -211,31 +217,24 @@ struct HistoryAutonomyContentView: View {
     /// States when collection started, so an empty or short history is never
     /// read as "you did nothing" (#1905) — and, when any of the view was
     /// back-filled, says that too.
+    ///
+    /// TWO LINES, one of them conditional. The run census (`countingLine`) and
+    /// the three-sentence reconstruction paragraph were both deleted by #1905's
+    /// prose cut: the first was reassurance rather than a caveat, and the
+    /// second's count now hangs off the provenance line as four words.
     private var collectionProvenance: some View {
         VStack(alignment: .leading, spacing: IrrSpacing.sp1) {
-            // What these figures counted (#1905 subagents). Above the
-            // provenance line because it qualifies every number in the section,
-            // where provenance qualifies where they came from — and because its
-            // `unknown` clause is why a panel's `at once` figure sometimes
-            // carries no split.
-            if let counting = AutonomyFormat.countingLine(data.kinds) {
-                Text(counting)
-            }
-            // …and which of them are floors rather than measurements (#1905
-            // recording). Same register, same reason: a lower bound rendered as
-            // a measurement is a wrong number with nothing on screen saying it
-            // is wrong. Silent when every run in view is finished and measured.
+            // Which of the figures are floors rather than measurements (#1905
+            // recording): a lower bound rendered as a measurement is a wrong
+            // number with nothing on screen saying it is wrong. Silent when
+            // nothing is running, which is most of the time.
             if let measurement = AutonomyFormat.measurementLine(data.measurementOrNone) {
                 Text(measurement)
             }
             Text(AutonomyFormat.provenance(earliest: data.earliestSpan,
                                            total: data.totalRecorded,
+                                           reconstructed: data.provenanceOrNone.reconstructed,
                                            timeZone: formatTimeZone))
-            if let note = AutonomyFormat.reconstructionNote(data.provenanceOrNone,
-                                                            inView: data.summary.runs,
-                                                            timeZone: formatTimeZone) {
-                Text(note)
-            }
         }
         .font(.caption2)
         .foregroundColor(.secondary)
@@ -961,10 +960,7 @@ enum AutonomyFormat {
     /// which is the exact failure this section keeps writing sentences to avoid.
     ///
     /// SAME WORDING AS THE WEB's AUTONOMY_CONCURRENCY_CAVEAT.
-    static let concurrencyCaveat =
-        "A parent is held working while its subagents run, so one agent with three subagents counts as "
-        + "four at once. Four things really were working — but not four independent agents. That is what "
-        + "the “N + M sub” split separates, and it is shown wherever every run at the peak said which it was."
+    static let concurrencyCaveat = "A parent counts as working while its subagents run."
 
     /// The stack's left bound, coarsening with the window the way the activity
     /// matrix's column headers do: a 30-day stack needs a date, a year-long one
@@ -994,7 +990,18 @@ enum AutonomyFormat {
 
     /// The provenance line. Says when collection started — the sentence that
     /// keeps an empty view from reading as "you did nothing".
-    static func provenance(earliest: Int64, total: Int, timeZone: TimeZone) -> String {
+    ///
+    /// THE RECONSTRUCTED SUFFIX IS THE LAST SURVIVOR of the three-sentence
+    /// reconstruction paragraph #1905's prose cut deleted.
+    /// `tools/autonomy-backfill` rebuilds pre-feature runs from logs a machine
+    /// already had, and a reconstructed figure rendered as a measured one is
+    /// exactly the "wrong number with nothing on screen saying so" this section
+    /// was built to prevent — so the count cannot go. It costs the reader it is
+    /// written for nothing: a machine that was never back-filled reports 0 and
+    /// the clause never appears. SAME WORDING AS THE WEB's
+    /// `autonomyProvenanceLine`.
+    static func provenance(earliest: Int64, total: Int, reconstructed: Int,
+                           timeZone: TimeZone) -> String {
         guard earliest > 0 else {
             return "No autonomous runs recorded yet. Irrlicht began measuring them with this update; "
                 + "the panels above fill in as sessions run."
@@ -1004,108 +1011,29 @@ enum AutonomyFormat {
         f.timeZone = timeZone
         f.dateFormat = "MMM d, yyyy"
         let since = f.string(from: Date(timeIntervalSince1970: TimeInterval(earliest)))
-        return "Collecting since \(since) · \(total) runs recorded."
-    }
-
-    /// States WHAT the figures counted (#1905 subagents, retargeted by #1905
-    /// recording). `nil` only for a payload from a daemon that predates the
-    /// census — absence there means "this response never said", which is not
-    /// the same claim as "there were none".
-    ///
-    /// THERE IS NO MODE. Every run counts, subagent runs included, because
-    /// Irrlicht recorded them — so no excluded count is reported and there is no
-    /// control whose position a reader has to remember. What the sentence still
-    /// does is describe the window's MAKEUP.
-    ///
-    /// THE UNKNOWN CLAUSE STAYS LOAD-BEARING, and now carries its consequence
-    /// for the concurrency figure: a row written before Irrlicht told the two
-    /// apart is counted like the rest, but a peak one of them was alive for
-    /// cannot be split, and the sentence says so rather than leaving a missing
-    /// split to read as a bug.
-    static func countingLine(_ k: HistoryAutonomyKinds?) -> String? {
-        guard let k else { return nil }
-        var out = k.subagent > 0
-            ? "Counting every run, including \(k.subagent) subagent run\(k.subagent == 1 ? "" : "s") "
-                + "— each of which happened inside its parent's run."
-            : "Counting every run, subagent runs included. This window holds none."
-        if k.unknown > 0 {
-            out += " \(k.unknown) run\(k.unknown == 1 ? " was" : "s were") recorded before Irrlicht told "
-                + "top-level and subagent runs apart, so which they were is unknown — those are counted "
-                + "either way, and a peak one of them was alive for is shown as a total with no split."
-        }
-        return out
+        let backfill = reconstructed > 0 ? " · \(reconstructed) in view reconstructed" : ""
+        return "Collecting since \(since) · \(total) run\(total == 1 ? "" : "s") recorded\(backfill)."
     }
 
     /// Marks the runs in view whose duration is a FLOOR rather than a
-    /// measurement (#1905 recording). `nil` when every run in view is finished
-    /// and fully measured — the quiet case on a machine whose daemon has been
-    /// up all day.
+    /// measurement (#1905 recording). `nil` when nothing is running — the quiet
+    /// case on a machine between sessions.
     ///
-    /// Two kinds, two sentences, because they are two different limits and a
-    /// reader who merged them would misread the panels in opposite directions:
+    /// A run that has not ended has no length yet, only how long it has lasted
+    /// SO FAR. That floor still COUNTS towards the longest (the section reports
+    /// a maximum, and "already lasted 3h" is true) and is deliberately not a
+    /// sample for the aggregate chart's percentiles, where a floor shortens the
+    /// longest runs hardest.
     ///
-    ///   - STILL RUNNING. The run has not ended, so its length is how long it
-    ///     has lasted SO FAR. It COUNTS towards the longest — the section
-    ///     reports a maximum, and "already lasted 3h" is true — and the panel
-    ///     that shows it says "still going" rather than presenting a floor as
-    ///     final.
-    ///   - STARTED BEFORE IRRLICHT WAS WATCHING. The run has finished, but its
-    ///     start is where the watching began. Dropping those is what left 5 of a
-    ///     day's 35 runs on the record.
+    /// THE SECOND SENTENCE WENT (#1905 prose cut). It named the runs already
+    /// going when Irrlicht started watching, whose start is a lower bound
+    /// rather than a beginning — a real limit, but a restart artefact a reader
+    /// can do nothing with, and the longest sentence in the section.
+    /// `measurement.start_lower_bound` stays on the wire; only the sentence
+    /// went. SAME WORDING AS THE WEB's `autonomyMeasurementNote`.
     static func measurementLine(_ m: HistoryAutonomyMeasurement) -> String? {
-        guard m.any else { return nil }
-        var parts: [String] = []
-        if m.running > 0 {
-            let one = m.running == 1
-            parts.append("\(m.running) run\(one ? " is" : "s are") still going: "
-                + "\(one ? "its length is" : "their lengths are") how long \(one ? "it has" : "they have") "
-                + "lasted SO FAR. \(one ? "It counts" : "They count") towards the longest run, marked "
-                + "\"still going\".")
-        }
-        if m.lowerBoundStart > 0 {
-            let one = m.lowerBoundStart == 1
-            parts.append("\(m.lowerBoundStart) run\(one ? "" : "s") already going when Irrlicht started "
-                + "watching — \(one ? "its" : "their") start is when it started watching, not when the run "
-                + "began, so \(one ? "that length is a minimum" : "those lengths are minimums").")
-        }
-        return parts.joined(separator: " ")
-    }
-
-    /// Marks a view that is showing back-filled history (#1905). `nil` when
-    /// every run in view was measured as it happened — which is every install
-    /// but the one `tools/autonomy-backfill` was run on, so a normal machine
-    /// says nothing at all here.
-    ///
-    /// Three facts, in the register the empty state already uses, because each
-    /// answers a question the reader would otherwise answer wrongly: HOW MANY
-    /// of the runs in view are reconstructed, the date BEFORE WHICH everything
-    /// is reconstructed, and whether any of it came from a source that cannot
-    /// say how a run ended.
-    static func reconstructionNote(_ p: HistoryAutonomyProvenance,
-                                   inView: Int,
-                                   timeZone: TimeZone) -> String? {
-        guard p.isReconstructed else { return nil }
-        let total = inView > 0 ? inView : p.reconstructed
-        var out = "\(p.reconstructed) of \(total) runs in view were reconstructed from logs this Mac "
-            + "already had, not measured as they happened. "
-        if p.liveSince > 0 {
-            let f = DateFormatter()
-            f.locale = Locale(identifier: "en_US_POSIX")
-            f.timeZone = timeZone
-            f.dateFormat = "MMM d, yyyy"
-            out += "Everything before \(f.string(from: Date(timeIntervalSince1970: TimeInterval(p.liveSince)))) "
-                + "is reconstructed."
-        } else {
-            // liveSince == 0 is "nothing has ever been measured live", which is
-            // a different claim from "measured since the epoch". Printing Jan 1
-            // 1970 would be a fabricated date — the exact failure this whole
-            // marking exists to prevent.
-            out += "Nothing here was measured live — every run on record is reconstructed."
-        }
-        if p.costDerived > 0 {
-            out += " \(p.costDerived) of them come from the cost log, which records when a session was "
-                + "working and never why it stopped, so their end reason is unknown — not assumed."
-        }
-        return out
+        guard m.running > 0 else { return nil }
+        let one = m.running == 1
+        return "\(m.running) run\(one ? "" : "s") still going — \(one ? "length" : "lengths") so far."
     }
 }
