@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "results": [
+    {
+      "scenario_id": "user-blocking-plan-mode-approval",
+      "execution_profile": "desktop-local",
+      "outcome": "not-runnable",
+      "reason": "The turn drives and every piece of evidence is captured \u2014 transcript, registry, session, process and environment \u2014 but the run cannot discharge its ownership obligation, so it can never end cleanly. Archiving the owned session needs the conversation's `More options` menu, and on this machine that control cannot be clicked. Measured on 1.46388.4 on 2026-09-07 from the tree at desktop-evidence/, saved by the driver at the moment of refusal: the menu sits at (2161,-373,26x26) and a window-management affordance, an AXButton described `Move`, sits over it at (2165,-376,44x16). Seven candidate points inside the menu's own frame were hit-tested across five attempts a run, over four runs; every one returned something other than the menu or a descendant of it. The sidebar carries the same menu per row, away from the window chrome, but it cannot identify this session: five unarchived sessions share the title, because Desktop names a session after its content and every repeat of this scenario earns the same name. Re-check by re-running the cell and reading the tree the failure leaves behind.",
+      "missing_control": "a clickable owned-session menu \u2014 the control exists but no point inside it hit-tests to it",
+      "evidence_refs": [
+        "replaydata/agents/claudecode/desktop-evidence/frontend-gaps.md",
+        "replaydata/agents/claudecode/scenarios/2-18_user-blocking-plan-mode-approval/metadata.json"
+      ]
+    }
+  ]
+}
