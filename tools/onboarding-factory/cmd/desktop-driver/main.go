@@ -78,6 +78,7 @@ func run(ctx context.Context, args []string) error {
 		DaemonAddress:      options.daemonAddress,
 		RecordingDirectory: options.recordings,
 		IrrlichtVersion:    options.irrlichtVersion,
+		EvidenceDir:        filepath.Join(options.staging, "desktop-evidence"),
 	}, filepath.Join(options.staging, "desktop-driver.steps"))
 	if err != nil {
 		return err

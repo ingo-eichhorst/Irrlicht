@@ -31,6 +31,9 @@ type LiveOptions struct {
 	DesktopSupportRoot string
 	ClaudeProjectsRoot string
 	ConfigurationRoots []string
+	// EvidenceDir is where a failure may leave a diagnostic behind. It is the
+	// same directory RunRequest.EvidenceDir names; empty means "write nothing".
+	EvidenceDir string
 }
 
 type LiveRuntime struct {
@@ -39,6 +42,8 @@ type LiveRuntime struct {
 	// workspace is the composer WaitComposer verified. Submit re-resolves
 	// against it rather than against a caller-supplied value.
 	workspace string
+	// evidenceDir is where a refused archive leaves the accessibility tree.
+	evidenceDir string
 	// toolsExpected records that this run drives a RECIPE, whose steps are
 	// declared, rather than a bare prompt. It relaxes the no-tool evidence rule
 	// to the form that rule was written for. See validateTranscriptToolUse.
@@ -93,7 +98,8 @@ func NewLiveRuntime(options LiveOptions, stepLog string) (*LiveRuntime, error) {
 	}
 	return &LiveRuntime{
 		options: options, helper: helperClient{path: options.HelperPath},
-		processes: map[string]int{}, processEvidence: map[string]ProcessEvidence{}, stepLog: stepLog,
+		evidenceDir: options.EvidenceDir,
+		processes:   map[string]int{}, processEvidence: map[string]ProcessEvidence{}, stepLog: stepLog,
 		httpClient:     &http.Client{Timeout: 2 * time.Second},
 		registryByID:   map[string]RegistrySession{},
 		openDeepLink:   openOfficialDesktopURL,

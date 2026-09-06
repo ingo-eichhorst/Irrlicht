@@ -5,7 +5,10 @@ package desktopdriver
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 )
 
 const archiveMenuItemTitle = "Archive"
@@ -16,13 +19,13 @@ func (runtime *LiveRuntime) ArchiveOwned(ctx context.Context, owned OwnedSession
 		return err
 	}
 	if err := runtime.openOwnedSessionArchiveMenu(ctx, owned); err != nil {
-		return fmt.Errorf("open owned-session menu: %w", err)
+		return fmt.Errorf("open owned-session menu: %w", runtime.withArchiveTree(ctx, err))
 	}
 	if archived, err := runtime.ownedSessionAlreadyArchived(owned); err != nil || archived {
 		return err
 	}
 	if err := runtime.clickOwnedSessionArchiveItem(ctx); err != nil {
-		return fmt.Errorf("archive owned session: %w", err)
+		return fmt.Errorf("archive owned session: %w", runtime.withArchiveTree(ctx, err))
 	}
 	return runtime.waitForOwnedSessionArchive(ctx, owned.Registry.SessionID)
 }
@@ -198,4 +201,42 @@ func validateArchiveTargetRegistry(
 		return RegistrySession{}, err
 	}
 	return registry, nil
+}
+
+// archiveFailureTreeFile is where a refused archive leaves the accessibility
+// tree it was refused against.
+const archiveFailureTreeFile = "archive-failure-tree.json"
+
+// withArchiveTree writes the live accessibility tree beside the run's evidence
+// and names the file in the returned error.
+//
+// `stale_control: The current click point does not hit the selected control` is
+// the helper hit-testing the point it is about to click and finding something
+// else there. That "something else" is the whole diagnosis, and the message
+// does not carry it — cell 2-18 reported the same sentence five times on
+// 2026-09-06 and left nothing behind to say what was covering the menu. The
+// tree does say.
+//
+// A dump that cannot be written must not silently turn into no dump at all, so
+// the failure to write is reported in the error too.
+func (runtime *LiveRuntime) withArchiveTree(ctx context.Context, cause error) error {
+	if runtime.evidenceDir == "" {
+		return cause
+	}
+	elements, inspectErr := runtime.helper.inspect(ctx)
+	if inspectErr != nil {
+		return fmt.Errorf("%w (the accessibility tree could not be read either: %v)", cause, inspectErr)
+	}
+	path := filepath.Join(runtime.evidenceDir, archiveFailureTreeFile)
+	data, marshalErr := json.MarshalIndent(elements, "", "  ")
+	if marshalErr != nil {
+		return fmt.Errorf("%w (the accessibility tree could not be encoded: %v)", cause, marshalErr)
+	}
+	if err := os.MkdirAll(runtime.evidenceDir, 0o700); err != nil {
+		return fmt.Errorf("%w (the accessibility tree could not be saved: %v)", cause, err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return fmt.Errorf("%w (the accessibility tree could not be saved: %v)", cause, err)
+	}
+	return fmt.Errorf("%w (%d controls on screen; tree written to %s)", cause, len(elements), path)
 }

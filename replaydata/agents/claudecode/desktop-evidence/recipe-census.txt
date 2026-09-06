@@ -43,6 +43,7 @@ subagent-orphan-cleanup	not-runnable: agent-process-kill
 subscription-detection	runnable
 synchronous-slash-command	not-runnable: keyboard-key:"/ c o s t Enter", keyboard-key:"/ h e l p Enter"
 task-estimate-marker	runnable
+task-list	runnable
 token-accounting	runnable
 tool-gate-permission-prompt	runnable
 turn-end-terminal-text	runnable
@@ -51,4 +52,4 @@ user-blocking-question	runnable
 user-esc-interrupt	runnable
 workflow-fanout	runnable
 #
-# 24 of 43 scripted claudecode recipes are runnable through Claude Desktop.
+# 25 of 44 scripted claudecode recipes are runnable through Claude Desktop.
