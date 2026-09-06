@@ -686,6 +686,46 @@ assert_eq "...with the maximum"      "15.0"     "$(jq -r '.max_s'  <<<"$TJ")"
 # without that distinction comes out tighter than the behaviour it describes.
 assert_eq "...and the censored rows counted apart" "1" "$(jq -r '.capped' <<<"$TJ")"
 
+
+echo "== both rigs actually SET the timings path and fold it in (#1828) =="
+# WHY THIS EXISTS, stated plainly: it was written after the hole it closes.
+# teardown_timings_json and require_tmux_session_gone were both covered above,
+# in isolation, and both passed — while run-cell.sh carried NO wiring at all.
+# A failed edit had left the rig untouched; `bash -n` passed, `git add` added an
+# unchanged file without complaint, and a live recording produced a manifest
+# with `teardown_timings: null` and no TSV. Every unit test was green over a
+# half-missing feature, because nothing asserted that the RIG holds up its end.
+#
+# This is a TEXTUAL check, and that is a real limit worth naming: it proves the
+# lines are present, not that they run. It would not catch a path set inside a
+# branch that never executes. What it does catch is the failure that actually
+# happened — the wiring silently absent — and that one is worth a grep.
+RIG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The pre-creation reads differently in the two rigs — run-cell.sh has one
+# staging dir and exports the variable, run-cell-multi.sh creates one file per
+# adapter under $sub — so each carries its own needle rather than a loose
+# pattern that would match either by accident.
+for spec in \
+  'run-cell.sh|: >"$DRIVE_TEARDOWN_TIMINGS"' \
+  'run-cell-multi.sh|: >"$sub/teardown-timings.tsv"'
+do
+  rig="${spec%%|*}"; needle="${spec#*|}"
+  f="$RIG_DIR/$rig"
+  if [[ ! -r "$f" ]]; then
+    fail "$rig is readable" "a readable rig script at $f" \
+         "missing or unreadable — being unable to look must not read as agreement"
+    continue
+  fi
+  src="$(cat "$f")"
+  assert_contains "$rig sets DRIVE_TEARDOWN_TIMINGS" "DRIVE_TEARDOWN_TIMINGS=" "$src"
+  assert_contains "$rig pre-creates the file, so absent means the rig failed" \
+    "$needle" "$src"
+done
+# Only run-cell.sh writes the summary manifest the table will be read from.
+RC="$(cat "$RIG_DIR/run-cell.sh")"
+assert_contains "run-cell.sh folds the timings into its manifest" \
+  'teardown_timings_json "$DRIVE_TEARDOWN_TIMINGS"' "$RC"
+assert_contains "...under a manifest key of its own" "teardown_timings: \$teardown_timings" "$RC"
 if [[ "$fails" -eq 0 ]]; then
   echo "tmux-teardown-check_test: ALL PASS"
   exit 0
