@@ -370,12 +370,7 @@ final class SessionErrorStateTests: XCTestCase {
 /// from.
 ///
 /// The alpha is READ from `IrrColors.noticeWashAlpha`, never restated here
-/// (#1814). When this test was written the feature drew two different washes
-/// and this file named the larger of them by hand, so for the strip that
-/// shipped 0.08 the proof was bounding a wash nothing rendered. Every notice
-/// ground is now that one token, and taking the alpha from it is what keeps
-/// the measurement and the render the same number rather than two numbers
-/// that agree today.
+/// (#1814) — see that token for what happened while it was restated.
 @MainActor
 final class TokenContrastTests: XCTestCase {
     private func srgb(_ color: Color, in appearance: NSAppearance.Name) -> (r: Double, g: Double, b: Double) {

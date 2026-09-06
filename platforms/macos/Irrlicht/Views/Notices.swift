@@ -3,7 +3,7 @@ import SwiftUI
 // MARK: - The notice family (#1814)
 //
 // Everything this app uses to say "something needs your attention" lives here:
-// three grounds, one alpha, two composed surfaces.
+// three grounds and the banner composed on top of one of them.
 //
 //   - `noticeGround(hue:)` — the panel-width, full-bleed ground. Used by
 //     `BannerStrip` and by `SessionListView.errorView`, which sit in the same
@@ -14,17 +14,10 @@ import SwiftUI
 //   - `pill(color:hue:…)` — the text-only badge, no icon, single line by
 //     default.
 //
-// They differ in geometry and in nothing else. Every one of them draws its
-// ground with `IrrColors.noticeWash(_:)`, which is the whole point: the alpha
-// is declared once, at `IrrColors.noticeWashAlpha`, and
+// They differ in geometry and in nothing else: every one draws its ground with
+// `IrrColors.noticeWash(_:)`. Why that has to be one number, and what it cost
+// when it was not, is recorded at `IrrColors.noticeWashAlpha`;
 // `NoticeWashLintTests` fails the build on a second spelling of it.
-//
-// That rule exists because the divergence it prevents had already happened.
-// Five sites spelled the alpha by hand and three values shipped — 0.12 in the
-// row, 0.08 in the permission wizard, 0.10 in the panel's error strip — while
-// `TokenContrastTests` proved WCAG AA against 0.12 for all of them. For the
-// two that were not 0.12 the proof was measuring a wash nothing rendered
-// (#1802).
 
 // MARK: - Grounds
 
@@ -34,7 +27,7 @@ import SwiftUI
 /// Square corners and edge-to-edge width are what make this read as a band
 /// across the panel rather than as a card inside it — these notices are
 /// separated from the list by a `Divider()`, not by a margin.
-struct NoticeGround: ViewModifier {
+private struct NoticeGround: ViewModifier {
     /// The notice's plain brand hue, NOT a pre-dimmed token — the alpha comes
     /// from `IrrColors.noticeWash`, so handing it one of the `*Dim` grounds
     /// would composite the alpha twice and render a wash of about 1.4%.
@@ -62,10 +55,10 @@ extension View {
 /// constants — the last of them under a comment claiming it matched the first.
 /// One copy now, so a future fourth strip cannot introduce a fourth set.
 ///
-/// The trailing `.padding(.top, 2)` is an outward gap, not inner padding: it
-/// separates the strip from whatever it annotates, so a caller that wants a
-/// larger gap adds to it rather than replacing it.
-struct AlertStrip: ViewModifier {
+/// It paints the surface and nothing outside it: the gap that separates a
+/// strip from the thing it annotates is the caller's, stated once at the call
+/// site as the value it wants rather than as a delta from a baked-in 2pt.
+private struct AlertStrip: ViewModifier {
     /// The notice's plain brand hue — see `NoticeGround.hue`.
     let hue: Color
 
@@ -75,7 +68,6 @@ struct AlertStrip: ViewModifier {
             .padding(.vertical, 2)
             .background(IrrColors.noticeWash(hue))
             .cornerRadius(IrrRadius.sm)
-            .padding(.top, 2)
     }
 }
 
@@ -96,11 +88,11 @@ extension View {
 /// `lineLimit` defaults to 1 (the cache-bloat badge); the question pill
 /// requests more (issue #979) since the daemon no longer pre-truncates it to
 /// a single-line-sized cut.
-struct PillText: ViewModifier {
+private struct PillText: ViewModifier {
     let color: Color
     let hue: Color
-    var font: Font = .system(size: 10)
-    var lineLimit: Int = 1
+    let font: Font
+    let lineLimit: Int
 
     func body(content: Content) -> some View {
         content

@@ -191,6 +191,7 @@ struct SessionRowView: View {
                 }
             }
             .alertStrip(hue: IrrColors.error)
+            .padding(.top, 2)
             // The row truncates at two lines; the tooltip carries the agent's
             // full wording, which for a provider error is often the only thing
             // that says what to actually do about it. `.tooltip`, never
@@ -455,6 +456,7 @@ struct SessionRowView: View {
                     Spacer()
                 }
                 .alertStrip(hue: alertColor)
+                .padding(.top, 2)
                 .tooltip("Context window nearing limit")
             }
 

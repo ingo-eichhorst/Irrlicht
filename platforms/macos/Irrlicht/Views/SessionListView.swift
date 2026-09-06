@@ -1235,13 +1235,15 @@ struct SessionListView: View {
     /// geometry independently, down to the padding, at its own third alpha.
     ///
     /// It is NOT a `BannerStrip`, and that is deliberate rather than
-    /// unfinished. A banner paints its headline in the notice tint; this one's
+    /// unfinished. The part the two genuinely shared — the ground — is now
+    /// shared. What is left is a different surface: no rows, no lead/reason
+    /// pairs, and native warning chrome rather than brand notice chrome. Its
     /// copy is `.secondary` on purpose, because system orange on an orange
     /// wash measures ~2:1 in light mode (#984, the finding behind
-    /// `waitingPillText`), and it caps at two lines where a banner wraps in
-    /// full. Folding it in would mean a headline-colour knob and a line-limit
-    /// knob on `BannerStrip` — the generic-plus-strategy trade #1814 rules out
-    /// for the two summary types, for the same reason.
+    /// `waitingPillText`), and a banner paints its headline in the tint.
+    /// Absorbing a rows-less degenerate case would cost `BannerStrip` a second
+    /// generic parameter and an explicit accessibility label at both existing
+    /// banners, to save six lines here.
     private func errorView(_ error: String) -> some View {
         // System .orange (not IrrColors.waiting) — this is generic warning
         // chrome, not the agent-waiting surface.

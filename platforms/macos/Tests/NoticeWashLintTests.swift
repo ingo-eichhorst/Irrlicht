@@ -1,41 +1,44 @@
 import XCTest
+@testable import Irrlicht
 
-/// The structural half of #1814.
+/// The structural half of #1814. Why the alpha is one number, and what it cost
+/// when it was not, is recorded once at `IrrColors.noticeWashAlpha`; this file
+/// is the rule that keeps it that way.
 ///
-/// Every notice surface in this app — the panel-width banners, the inline alert
-/// strips, the row pills — sits on the same tinted ground: the notice's hue at
-/// one shared alpha. That alpha was spelled independently at five sites written
-/// at five different times, and it had already drifted to three values
-/// (`0.12` in `SessionRowView`, `0.08` in `PermissionWizardView`, `0.10` in
-/// `SessionListView.errorView`).
-///
-/// The drift is not cosmetic. `TokenContrastTests` proves the error text clears
-/// WCAG AA *against a 12% wash*; while the row's error strip shipped 8% the
-/// test was bounding a value nothing rendered rather than measuring one that
-/// did (#1802, recorded in `AlertStrip`'s own doc comment). A sixth site
-/// written tomorrow would reopen exactly that gap, and the only thing that
-/// closes it for good is a rule: the alpha is spelled once, and every ground
-/// reads it.
-///
-/// So this fails the build on both halves of the defect:
+/// It fails the build on both halves of the defect:
 ///
 ///   - **`background-alpha`** — a `.background(…)` whose argument composes its
 ///     own alpha. Grounds read `IrrColors.noticeWash(_:)` or a token derived
 ///     from it, never `hue.opacity(<literal>)`.
-///   - **`wash-alpha`** — the wash alpha written out anywhere other than its
-///     one definition, whether as an `.opacity(…)` call or as an argument to a
+///   - **`wash-alpha`** — the alpha written out anywhere other than its one
+///     definition, whether as an `.opacity(…)` call or as an argument to a
 ///     contrast measurement. This is the half that keeps the *test* and the
 ///     *view* reading the same number.
 ///
-/// # Why there are no exemptions
+/// # What it covers, and what it does not
 ///
-/// Every ground in the tree reads a token after #1814, including the two that
-/// are not notices at all (`IrrColors.surfaceHover`, `IrrColors.chipFill`), so
-/// the noise floor is zero rather than "low" and an exemption list would be a
-/// hole rather than a property. `testTheCorpusPinsBothVerdicts` is the vacuity
-/// guard in its place: with no offenders left in the tree, "the rule found
-/// nothing" and "the rule stopped matching anything" are otherwise the same
-/// output.
+/// The rule reads what a `.background(…)` is handed, in both of SwiftUI's
+/// spellings. A ground painted some other way — `RoundedRectangle().fill(…)`
+/// under a `ZStack`, say — is NOT seen; `QuotaChipParts` and `HistoryView`
+/// paint neutral surfaces that way today. Closing that would widen the rule to
+/// every painted surface in the app, notice or not, so it is left open
+/// deliberately and stated here rather than discovered later.
+///
+/// Within that scope there are no exemptions: every `.background(…)` in the
+/// tree reads a token, including the two that are not notices at all
+/// (`IrrColors.surfaceHover`, `IrrColors.chipFill`), so the noise floor is zero
+/// rather than "low" and an exemption list would be a hole rather than a
+/// property. `testTheCorpusPinsEveryVerdict` is the vacuity guard in its place:
+/// with no offenders left in the tree, "the rule found nothing" and "the rule
+/// stopped matching anything" are otherwise the same output.
+///
+/// Three sibling lints scan these same sources with their own private copies of
+/// this plumbing — `RealHomePathLintTests`, `PersistentDefaultsLintTests` and
+/// `ViewTooltipsLintTests`. Sharing one walker would be a real improvement and
+/// is deliberately NOT done here: this file's comment-blanking is the only one
+/// that understands string literals, so adopting it in the others makes them
+/// scan text they currently blank, which is a behaviour change to three suites
+/// that has nothing to do with #1814.
 final class NoticeWashLintTests: XCTestCase {
 
     // MARK: - The rule, as a pure function
@@ -47,7 +50,12 @@ final class NoticeWashLintTests: XCTestCase {
     /// `testThisFileIsCleanUnderItsOwnRule` asserts the claim rather than
     /// leaving it as prose.
     enum Needle {
-        /// The one alpha every notice ground is drawn at.
+        /// The one alpha every notice ground is drawn at, rendered from the
+        /// token itself — see `testTheNeedlesAreDerivedFromTheToken`. Written
+        /// out here rather than interpolated because a scanner that read
+        /// `IrrColors.noticeWashAlpha` at match time would agree with the token
+        /// by construction and could never disagree with a hand-typed copy of
+        /// it, which is the entire defect.
         static let washAlpha = "0." + "12"
         static let opacity = ".opa" + "city("
         /// Matched WITHOUT its opening paren: SwiftUI also spells a ground as
@@ -60,15 +68,18 @@ final class NoticeWashLintTests: XCTestCase {
         static let alphaArgument = "alpha" + ":"
     }
 
-    /// Directories walked for each rule, relative to `platforms/macos/`.
+    /// What each directory is scanned for, relative to `platforms/macos/`.
     ///
     /// `background-alpha` is a rule about *product* chrome, so it reads the app
     /// target only — a test may host a fixture on any ground it likes.
     /// `wash-alpha` reads the tests too, because the whole point of the second
     /// rule is that the number the contrast test measures and the number the
     /// view renders cannot drift apart again.
-    private static let backgroundRuleDirectories = ["Irrlicht"]
-    private static let washRuleDirectories = ["Irrlicht", "Tests", "TestsHarness"]
+    private static let scan: [(directory: String, rules: Set<Rule>)] = [
+        ("Irrlicht", Set(Rule.allCases)),
+        ("Tests", [.washAlpha]),
+        ("TestsHarness", [.washAlpha]),
+    ]
 
     /// `"<line>:<verdict>"` for every offending occurrence in `source`, sorted
     /// so the verdict is stable.
@@ -103,11 +114,11 @@ final class NoticeWashLintTests: XCTestCase {
     /// REPORTED (`background-unparsable`), never skipped.
     private static func groundsComposingTheirOwnAlpha(in text: NSString) -> [String] {
         occurrences(of: Needle.background, in: text).compactMap { start in
-            let line = lineNumber(of: start, in: text)
             guard let ground = groundExpression(in: text, after: start + Needle.background.utf16.count) else {
-                return "\(line):background-unparsable"
+                return "\(lineNumber(of: start, in: text)):background-unparsable"
             }
-            return ground.contains(Needle.opacity) ? "\(line):background-alpha" : nil
+            guard ground.contains(Needle.opacity) else { return nil }
+            return "\(lineNumber(of: start, in: text)):background-alpha"
         }
     }
 
@@ -128,25 +139,36 @@ final class NoticeWashLintTests: XCTestCase {
     /// survived comment-blanking inside a string literal, which is not a call
     /// and cannot carry an alpha.
     private static func groundExpression(in text: NSString, after start: Int) -> String? {
-        let openParen: unichar = 40, openBrace: unichar = 123
         var index = start
         var parts: [String] = []
-        while index < text.length, text.character(at: index) == 32 || text.character(at: index) == 10 {
-            index += 1
-        }
-        if index < text.length, text.character(at: index) == openParen {
-            guard let argument = balancedRun(in: text, from: index + 1, opener: openParen) else { return nil }
-            parts.append(argument)
-            index += 1 + argument.utf16.count + 1
-            while index < text.length, text.character(at: index) == 32 || text.character(at: index) == 10 {
-                index += 1
-            }
-        }
-        if index < text.length, text.character(at: index) == openBrace {
-            guard let body = balancedRun(in: text, from: index + 1, opener: openBrace) else { return nil }
-            parts.append(body)
+        for delimiter in [Delimiter.parentheses, .braces] {
+            index = skippingBlanks(in: text, from: index)
+            guard index < text.length, text.character(at: index) == delimiter.open else { continue }
+            guard let run = balancedRun(in: text, from: index + 1, delimiter: delimiter) else { return nil }
+            parts.append(run.body)
+            index = run.end
         }
         return parts.joined(separator: "\n")
+    }
+
+    /// The first offset at or after `start` that is neither a space nor a
+    /// newline — SwiftUI puts either between `.background` and what follows.
+    private static func skippingBlanks(in text: NSString, from start: Int) -> Int {
+        let space: unichar = 32, newline: unichar = 10
+        var index = start
+        while index < text.length, text.character(at: index) == space || text.character(at: index) == newline {
+            index += 1
+        }
+        return index
+    }
+
+    /// A delimiter pair, named once so the walker never has to infer a closer
+    /// from an opener's code point.
+    private enum Delimiter {
+        case parentheses, braces
+
+        var open: unichar { self == .parentheses ? 40 : 123 }
+        var close: unichar { self == .parentheses ? 41 : 125 }
     }
 
     /// UTF-16 offsets of every occurrence of `needle`.
@@ -164,22 +186,24 @@ final class NoticeWashLintTests: XCTestCase {
         return found
     }
 
-    /// The text from `start` up to the `)` or `}` closing the delimiter that
-    /// opened at `start - 1`, or `nil` when it never closes. String literals are
-    /// tracked so a delimiter inside one cannot unbalance the walk.
-    private static func balancedRun(in text: NSString, from start: Int, opener: unichar) -> String? {
-        let closer: unichar = opener == 40 ? 41 : 125
+    /// The text from `start` up to the delimiter closing the one that opened at
+    /// `start - 1`, plus the offset just past that closer — returned rather than
+    /// recomputed by the caller, so the one piece of offset arithmetic in this
+    /// file cannot drift. `nil` when the delimiter never closes. String literals
+    /// are tracked so a delimiter inside one cannot unbalance the walk.
+    private static func balancedRun(in text: NSString, from start: Int,
+                                    delimiter: Delimiter) -> (body: String, end: Int)? {
         var depth = 1
         var literal = StringLiteral()
         for index in start..<text.length {
             let char = text.character(at: index)
             guard literal.isCode(char) else { continue }
-            if char == opener {
+            if char == delimiter.open {
                 depth += 1
-            } else if char == closer {
+            } else if char == delimiter.close {
                 depth -= 1
                 if depth == 0 {
-                    return text.substring(with: NSRange(location: start, length: index - start))
+                    return (text.substring(with: NSRange(location: start, length: index - start)), index + 1)
                 }
             }
         }
@@ -221,6 +245,10 @@ final class NoticeWashLintTests: XCTestCase {
     /// fail in.
     private static func commentsBlanked(_ source: String) -> String {
         source.split(separator: "\n", omittingEmptySubsequences: false).map { line -> String in
+            // 69% of the lines in this tree hold no `//` at all, and the walk
+            // below can only alter a line that does. Skipping them is the
+            // difference between 148ms and 79ms over the 1.7MB it reads.
+            guard line.contains("//") else { return String(line) }
             let text = String(line) as NSString
             var literal = StringLiteral()
             var previousWasSlash = false
@@ -348,6 +376,21 @@ final class NoticeWashLintTests: XCTestCase {
         static let alphaArgument = "alpha" + ":"
     }
 
+    /// The rule forbids restating the alpha, and both `Needle` and `Fixture`
+    /// restate it — assembled out of pieces so the scan cannot see them. That is
+    /// what lets the file scan itself, and it is also the one way this guard
+    /// could rot silently: change `noticeWashAlpha` to 0.14 and `wash-alpha`
+    /// would keep hunting 0.12, so a hand-typed `alpha: 0.14` in
+    /// `TokenContrastTests` would stop being flagged and every test here would
+    /// stay green. #1814's own defect, reproduced inside #1814's guard.
+    func testTheNeedlesAreDerivedFromTheToken() {
+        let alpha = "\(IrrColors.noticeWashAlpha)"
+        XCTAssertEqual(Needle.washAlpha, alpha,
+                       "the scanner hunts an alpha the app no longer draws — update Needle.washAlpha")
+        XCTAssertEqual(Fixture.washAlpha, alpha,
+                       "the corpus pins an alpha the app no longer draws — update Fixture.washAlpha")
+    }
+
     func testTheScannerReturnsThePinnedVerdictForEverySpelling() {
         for row in Self.corpus {
             XCTAssertEqual(
@@ -360,7 +403,7 @@ final class NoticeWashLintTests: XCTestCase {
     /// The corpus is the vacuity guard for the live scan below: once the tree
     /// holds no offenders, a scanner that had silently stopped matching would
     /// produce the same empty verdict as a clean tree.
-    func testTheCorpusPinsBothVerdicts() {
+    func testTheCorpusPinsEveryVerdict() {
         XCTAssertFalse(Self.corpus.filter { $0.want.isEmpty }.isEmpty,
                        "no must-not-flag rows — the rule could be flagging everything")
         for verdict in ["background-alpha", "wash-alpha", "background-unparsable"] {
@@ -376,17 +419,17 @@ final class NoticeWashLintTests: XCTestCase {
     /// What one directory's walk found. A walk over a directory that is not
     /// there finds nothing and is indistinguishable from a clean tree, so both
     /// unreachable cases `XCTFail` rather than returning an empty result.
-    private func walk(_ directory: String, rules: Set<Rule>) throws -> (offenders: [String], filesScanned: Int) {
+    private func walk(_ directory: String, rules: Set<Rule>) throws -> [String] {
         let root = Self.macosRoot.appendingPathComponent(directory)
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isDirectory),
               isDirectory.boolValue else {
             XCTFail("scanned directory \(directory) is missing at \(root.path)")
-            return ([], 0)
+            return []
         }
         guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) else {
             XCTFail("could not enumerate \(root.path)")
-            return ([], 0)
+            return []
         }
         var offenders: [String] = []
         var filesScanned = 0
@@ -401,7 +444,7 @@ final class NoticeWashLintTests: XCTestCase {
         // exists but has stopped holding the sources it is meant to hold is
         // invisible in an aggregate that the other three keep in the hundreds.
         XCTAssertGreaterThan(filesScanned, 0, "no Swift files under \(directory) — that walk checked nothing")
-        return (offenders, filesScanned)
+        return offenders
     }
 
     /// The scan reads this file too, and the `Needle` doc claims it can never
@@ -416,11 +459,8 @@ final class NoticeWashLintTests: XCTestCase {
 
     func testEveryNoticeGroundReadsTheOneWashToken() throws {
         var offenders: [String] = []
-        for (directories, rules) in [(Self.backgroundRuleDirectories, Set<Rule>([.backgroundAlpha])),
-                                     (Self.washRuleDirectories, Set<Rule>([.washAlpha]))] {
-            for directory in directories {
-                offenders.append(contentsOf: try walk(directory, rules: rules).offenders)
-            }
+        for (directory, rules) in Self.scan {
+            offenders.append(contentsOf: try walk(directory, rules: rules))
         }
 
         XCTAssertEqual(

@@ -194,8 +194,7 @@ struct PermissionWizardView: View {
         }
         .alertStrip(hue: IrrColors.pressureHigh)
         .padding(.leading, 38)
-        // `alertStrip` already contributes 2pt of the gap above.
-        .padding(.top, 2)
+        .padding(.top, 4)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(perm.title): \(notice.label). \(notice.reason)")
     }
