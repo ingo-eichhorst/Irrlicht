@@ -90,7 +90,7 @@ func TestPressKeyEscapeWaitsForSendAndEnterWaitsForStop(t *testing.T) {
 				postcondition = condition
 				return nil
 			}
-			if err := pressKey(context.Background(), test.key, "/repo/workspace", noFront, inspect, keyboard); err != nil {
+			if err := pressKey(context.Background(), test.key, "/repo/workspace", noFront, inspect, keyboard, nil); err != nil {
 				t.Fatalf("pressKey(%q) error = %v", test.key, err)
 			}
 			if pressed.Description != "Prompt" {
@@ -117,7 +117,7 @@ func TestPressKeyRefusesAnUnsupportedKeyWithoutTouchingDesktop(t *testing.T) {
 		t.Fatal("an unsupported key must never reach the keyboard helper")
 		return nil
 	}
-	err := pressKey(context.Background(), "F13", "/repo/workspace", noFront, inspect, keyboard)
+	err := pressKey(context.Background(), "F13", "/repo/workspace", noFront, inspect, keyboard, nil)
 	if err == nil || !strings.Contains(err.Error(), "no observable Desktop postcondition") {
 		t.Fatalf("pressKey() error = %v", err)
 	}

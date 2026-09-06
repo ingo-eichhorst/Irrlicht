@@ -54,7 +54,7 @@ func TestEveryDriveSiteBringsDesktopForward(t *testing.T) {
 			keyboard := func(context.Context, helperSelector, uint16, []string, helperPostcondition) error {
 				return nil
 			}
-			return pressKey(context.Background(), "Enter", workspace, activate, settled, keyboard)
+			return pressKey(context.Background(), "Enter", workspace, activate, settled, keyboard, nil)
 		},
 		"submit": func(activate func(context.Context) error) error {
 			return submitPrompt(context.Background(), workspace, activate, settled, noClick)

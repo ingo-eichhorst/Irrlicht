@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -283,6 +285,77 @@ func openConversationMenu(elements []helperElement) (helperElement, error) {
 			len(deepest))
 	}
 	return deepest[0], nil
+}
+
+// Claude Desktop's permission dialog, measured on 1.46388.4 on 2026-09-07 from
+// the tree cell 2-26 was refused against.
+//
+// It renders as plain AXButtons — there is no AXSheet, no AXDialog and no
+// subrole to key on. Each choice carries its own keyboard number in the title:
+//
+//	AXButton titled "Allow Claude to write gate.txt?"   (the question)
+//	AXButton titled "Deny 1"
+//	AXButton titled "Allow once 2"
+//
+// So the choices are identified by that shape: a title that begins with Allow
+// or Deny and ends in its number. The question button is deliberately NOT
+// matched — its text is the tool call, which changes with every scenario.
+var permissionOptionPattern = regexp.MustCompile(`^(Allow|Deny)\b.*\s\d+$`)
+
+// permissionDialogOptions returns the dialog's choices, or nothing when no
+// dialog is on screen.
+func permissionDialogOptions(elements []helperElement) []helperElement {
+	var options []helperElement
+	for _, element := range elements {
+		if element.Role == "AXButton" && permissionOptionPattern.MatchString(element.Title) {
+			options = append(options, element)
+		}
+	}
+	return options
+}
+
+// permissionApproveOption returns the choice that lets the tool call proceed.
+//
+// Both cells that answer a dialog assert the turn RESUMES afterwards —
+// 2-26's `mutating_gate_answered: working`, 2-27's `dialog_answered: working`.
+// Denying ends the turn instead, so approval is the only answer that produces
+// what they assert. "Allow once" is preferred over any broader grant: it is the
+// narrowest choice that satisfies the scenario, and a recording rig must not
+// widen a permission on the operator's machine beyond the one call it needs.
+func permissionApproveOption(elements []helperElement) (helperElement, error) {
+	options := permissionDialogOptions(elements)
+	if len(options) == 0 {
+		return helperElement{}, errors.New("no Claude Desktop permission dialog is on screen")
+	}
+	var allow []helperElement
+	for _, option := range options {
+		if strings.HasPrefix(option.Title, "Allow") {
+			allow = append(allow, option)
+		}
+	}
+	if len(allow) == 0 {
+		return helperElement{}, fmt.Errorf(
+			"the Desktop permission dialog offers no Allow choice; options are %s", optionTitles(options))
+	}
+	for _, option := range allow {
+		if strings.HasPrefix(option.Title, "Allow once") {
+			return option, nil
+		}
+	}
+	if len(allow) > 1 {
+		return helperElement{}, fmt.Errorf(
+			"the Desktop permission dialog offers %d Allow choices and none is \"Allow once\"; "+
+				"refusing rather than guessing which grant to make: %s", len(allow), optionTitles(allow))
+	}
+	return allow[0], nil
+}
+
+func optionTitles(options []helperElement) string {
+	titles := make([]string, 0, len(options))
+	for _, option := range options {
+		titles = append(titles, strconv.Quote(option.Title))
+	}
+	return strings.Join(titles, ", ")
 }
 
 // Claude Desktop refuses to render a composer for a folder it has not seen

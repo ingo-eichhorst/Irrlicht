@@ -192,7 +192,8 @@ func interruptTurn(
 // postcondition is refused by Plan long before this runs; the check is repeated
 // here because this is the last place that can still refuse.
 func (runtime *LiveRuntime) PressKey(ctx context.Context, key string) error {
-	err := pressKey(ctx, key, runtime.workspace, runtime.front, runtime.helper.inspect, runtime.helper.keyboard)
+	err := pressKey(ctx, key, runtime.workspace, runtime.front,
+		runtime.helper.inspect, runtime.helper.keyboard, runtime.helper.click)
 	if err != nil {
 		return runtime.withFailureTree(ctx, keyFailureTreeFile, err)
 	}
@@ -206,6 +207,7 @@ func pressKey(
 	activate func(context.Context) error,
 	inspect func(context.Context) ([]helperElement, error),
 	keyboard func(context.Context, helperSelector, uint16, []string, helperPostcondition) error,
+	click func(context.Context, helperSelector, helperPostcondition) error,
 ) error {
 	definition, ok := desktopKeys[key]
 	if !ok {
@@ -214,6 +216,12 @@ func pressKey(
 	}
 	return retryTransientAX(ctx, fmt.Sprintf("press %s", key), func() error {
 		if err := activate(ctx); err != nil {
+			return err
+		}
+		// A blocking permission dialog takes precedence over every other
+		// meaning of a key. Answering it is what the recipe is asking for, and
+		// the composer behind it is not what the keystroke is aimed at.
+		if answered, err := answerPermissionDialog(ctx, key, inspect, click); answered || err != nil {
 			return err
 		}
 		target, after, err := resolveKeyPress(ctx, key, workspace, inspect)
@@ -225,6 +233,55 @@ func pressKey(
 		}
 		return nil
 	})
+}
+
+// answerPermissionDialog answers a blocking Claude Desktop permission dialog,
+// and reports whether it did.
+//
+// A recipe's `keys: Enter` at this point means what a person means by it: give
+// the dialog its default answer. On the CLI that IS a keystroke, because the
+// prompt owns the terminal. Claude Desktop renders the choices as buttons (see
+// permissionDialogOptions for the measurement), and the reliable primitive for
+// a button is a click, hit-tested and verified by the helper. The driver
+// translates between the two profiles; this is one of those translations.
+//
+// Escape is left alone deliberately: cancelling a dialog and cancelling a turn
+// are different acts, and no cell asks for the first.
+func answerPermissionDialog(
+	ctx context.Context,
+	key string,
+	inspect func(context.Context) ([]helperElement, error),
+	click func(context.Context, helperSelector, helperPostcondition) error,
+) (bool, error) {
+	if key != "Enter" || click == nil {
+		return false, nil
+	}
+	elements, err := inspect(ctx)
+	if err != nil {
+		return false, err
+	}
+	if len(permissionDialogOptions(elements)) == 0 {
+		return false, nil
+	}
+	approve, err := permissionApproveOption(elements)
+	if err != nil {
+		return false, err
+	}
+	selector := selectorFor(approve)
+	// The choice going away is the proof the dialog was answered. The turn
+	// resuming is what the scenario asserts, and the state wait after this step
+	// is what checks it.
+	if err := click(ctx, selector, helperPostcondition{
+		Selector: selector, Condition: "absent", TimeoutMilliseconds: popupCloseTimeout,
+	}); err != nil {
+		if isMissedPostcondition(err) {
+			// The click landed; only the choice's disappearance went unseen.
+			// Clicking again would answer a dialog that is no longer there.
+			return true, nil
+		}
+		return false, fmt.Errorf("answer the Desktop permission dialog with %q: %w", approve.Title, err)
+	}
+	return true, nil
 }
 
 func resolveKeyPress(
