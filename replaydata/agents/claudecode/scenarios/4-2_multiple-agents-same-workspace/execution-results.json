@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "results": [
+    {
+      "scenario_id": "multiple-agents-same-workspace",
+      "execution_profile": "desktop-local",
+      "outcome": "not-runnable",
+      "reason": "The cell needs two adapters driven concurrently against one shared workspace under a single daemon. run-cell-multi.sh is that harness and has no desktop-local awareness at all — `grep -c desktop-local` returns 0 — and run-cell.sh separately refuses --attach for this profile, which is the other way a Desktop session could join an existing daemon. The claudecode leg is drivable on its own; what is missing is the harness, not a control, which is why this cell does not appear in the recipe census. The cited note carries the commands.",
+      "missing_control": "concurrent multi-adapter harness for desktop-local (run-cell-multi.sh)",
+      "evidence_refs": [
+        "replaydata/agents/claudecode/desktop-evidence/harness-gaps.md",
+        "replaydata/agents/claudecode/scenarios/4-2_multiple-agents-same-workspace/metadata.json"
+      ]
+    }
+  ]
+}

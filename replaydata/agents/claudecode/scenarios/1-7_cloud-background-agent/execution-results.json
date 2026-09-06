@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "results": [
+    {
+      "scenario_id": "cloud-background-agent",
+      "execution_profile": "desktop-local",
+      "outcome": "not-applicable",
+      "reason": "The cell has no recipe at all: its metadata sets recipe.applicable=false with the note \"agent_supports=no per coverage matrix — claudecode is local-only. Translator stops here; no recipe.\" It is not-applicable for EVERY claudecode profile, cli-local included — this is not a Desktop gap. The only environment the Desktop control catalog measures is the one titled \"Local\"; there is no cloud control to express.",
+      "evidence_refs": [
+        "replaydata/agents/claudecode/desktop-evidence/harness-gaps.md",
+        "replaydata/agents/claudecode/scenarios/1-7_cloud-background-agent/metadata.json"
+      ]
+    }
+  ]
+}
