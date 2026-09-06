@@ -179,7 +179,7 @@ func (runtime *LiveRuntime) workingStateObserved(currentState string, recorded b
 		// recorded sequence working→ready for this session, by which time the
 		// daemon has flushed it. That is the evidence; this wait is only a gate
 		// on the way to it.
-		return true, nil
+		return true
 	}
 	return recorded
 }

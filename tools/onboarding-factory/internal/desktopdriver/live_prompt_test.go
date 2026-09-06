@@ -2,7 +2,6 @@ package desktopdriver
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,37 +13,18 @@ import (
 // the helper and failed its value_equals check. A prompt action must resolve
 // the prompt from the current tree before it changes the value.
 func TestSetPromptResolvesTheCurrentPromptAfterAComposerRerender(t *testing.T) {
+	runtime, requests := promptRerenderFixture(t)
+	if err := runtime.SetPrompt(context.Background(), OwnedSession{}, "hello"); err != nil {
+		t.Fatalf("SetPrompt() error = %v; the current prompt control was available", err)
+	}
+	assertPromptInspected(t, requests)
+}
+
+func promptRerenderFixture(t *testing.T) (*LiveRuntime, string) {
+	t.Helper()
 	root := t.TempDir()
 	requests := filepath.Join(root, "requests.jsonl")
-	fresh := controlsComposerElements("workspace")
-	for index := range fresh {
-		if fresh[index].Description == "Prompt" {
-			fresh[index].Hierarchy = append(fresh[index].Hierarchy, "AXGroup", "AXTextArea")
-		}
-	}
-	inspect, err := json.Marshal(helperResponse{OK: true, Elements: fresh})
-	if err != nil {
-		t.Fatal(err)
-	}
-	refused, err := json.Marshal(helperResponse{OK: false, Error: &struct {
-		Code    string `json:"code"`
-		Message string `json:"message"`
-	}{Code: "postcondition_failed", Message: "value_equals was not observed"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	helper := filepath.Join(root, "helper")
-	script := "#!/bin/sh\n" +
-		"req=$(cat)\n" +
-		"printf '%s\\n' \"$req\" >> '" + requests + "'\n" +
-		"case \"$req\" in\n" +
-		"  *'\"command\":\"inspect\"'*) printf '%s\\n' '" + string(inspect) + "' ;;\n" +
-		"  *'AXGroup'*) printf '%s\\n' '{\"ok\":true}' ;;\n" +
-		"  *) printf '%s\\n' '" + string(refused) + "'; exit 1 ;;\n" +
-		"esac\n"
-	if err := os.WriteFile(helper, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	helper := writePromptRerenderHelper(t, root, requests)
 	runtime, err := NewLiveRuntime(LiveOptions{
 		Home: root, HelperPath: helper, DaemonAddress: "127.0.0.1:1",
 		RecordingDirectory: filepath.Join(root, "recordings"),
@@ -54,10 +34,39 @@ func TestSetPromptResolvesTheCurrentPromptAfterAComposerRerender(t *testing.T) {
 	}
 	runtime.frontDesktop = func(context.Context) error { return nil }
 	runtime.workspace = "/repo/workspace"
+	return runtime, requests
+}
 
-	if err := runtime.SetPrompt(context.Background(), OwnedSession{}, "hello"); err != nil {
-		t.Fatalf("SetPrompt() error = %v; the current prompt control was available", err)
+func writePromptRerenderHelper(t *testing.T, root, requests string) string {
+	t.Helper()
+	fresh := controlsComposerElements("workspace")
+	for index := range fresh {
+		if fresh[index].Description == "Prompt" {
+			fresh[index].Hierarchy = append(fresh[index].Hierarchy, "AXGroup", "AXTextArea")
+		}
 	}
+	inspect := mustEncode(t, helperResponse{OK: true, Elements: fresh})
+	refused := mustEncode(t, helperResponse{OK: false, Error: &struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}{Code: "postcondition_failed", Message: "value_equals was not observed"}})
+	helper := filepath.Join(root, "helper")
+	script := "#!/bin/sh\n" +
+		"req=$(cat)\n" +
+		"printf '%s\\n' \"$req\" >> '" + requests + "'\n" +
+		"case \"$req\" in\n" +
+		"  *'\"command\":\"inspect\"'*) printf '%s\\n' '" + inspect + "' ;;\n" +
+		"  *'AXGroup'*) printf '%s\\n' '{\"ok\":true}' ;;\n" +
+		"  *) printf '%s\\n' '" + refused + "'; exit 1 ;;\n" +
+		"esac\n"
+	if err := os.WriteFile(helper, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return helper
+}
+
+func assertPromptInspected(t *testing.T, requests string) {
+	t.Helper()
 	raw, err := os.ReadFile(requests)
 	if err != nil {
 		t.Fatalf("read helper requests: %v", err)

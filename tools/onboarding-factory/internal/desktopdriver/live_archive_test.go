@@ -300,14 +300,54 @@ func TestArchiveWatchesForTheArchiveItemNotAnyMenu(t *testing.T) {
 // the first reading's hierarchy, and this failed on `every click reused the
 // first reading`.
 func TestArchiveReResolvesTheOwnedMenuOnEveryAttempt(t *testing.T) {
+	fixture := newMovingArchiveFixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	// Every click is refused, so this ends in failure. What it did on the way is
+	// the subject.
+	if err := fixture.runtime.ArchiveOwned(ctx, fixture.owned); err == nil {
+		t.Fatal("ArchiveOwned() returned nil; every click was refused")
+	}
+	fixture.assertReResolved(t)
+}
+
+type movingArchiveFixture struct {
+	runtime  *LiveRuntime
+	owned    OwnedSession
+	requests string
+	fronted  *int
+}
+
+func newMovingArchiveFixture(t *testing.T) movingArchiveFixture {
+	t.Helper()
 	root := t.TempDir()
 	workspace := "/repo/workspace"
+	session := RegistrySession{
+		SessionID: "local_owned", CLISessionID: "cli-owned", CWD: workspace, Title: "Owned title",
+	}
+	writeArchiveRegistryFixture(t, root, session)
+	helper, requests := writeMovingArchiveHelper(t, root)
+	runtime := newArchiveRuntime(t, root, helper)
+	fronted := new(int)
+	runtime.frontDesktop = func(context.Context) error {
+		*fronted++
+		return nil
+	}
+	return movingArchiveFixture{
+		runtime: runtime,
+		owned: OwnedSession{Registry: RegistrySession{
+			SessionID: "local_owned", CLISessionID: "cli-owned", CWD: workspace,
+		}},
+		requests: requests,
+		fronted:  fronted,
+	}
+}
+
+func writeArchiveRegistryFixture(t *testing.T, root string, session RegistrySession) {
+	t.Helper()
 	registryRoot := filepath.Join(root, "claude-code-sessions", "account", "profile")
 	if err := os.MkdirAll(registryRoot, 0o700); err != nil {
 		t.Fatal(err)
-	}
-	session := RegistrySession{
-		SessionID: "local_owned", CLISessionID: "cli-owned", CWD: workspace, Title: "Owned title",
 	}
 	data, err := json.Marshal(session)
 	if err != nil {
@@ -316,6 +356,10 @@ func TestArchiveReResolvesTheOwnedMenuOnEveryAttempt(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(registryRoot, "local_owned.json"), data, 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func writeMovingArchiveHelper(t *testing.T, root string) (string, string) {
+	t.Helper()
 	// The same menu, at two different depths: the renderer moved it between the
 	// first reading and the rest. Both are the open conversation, both name the
 	// owned session, and they differ only in the selector they produce.
@@ -349,6 +393,11 @@ func TestArchiveReResolvesTheOwnedMenuOnEveryAttempt(t *testing.T) {
 	if err := os.WriteFile(helper, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	return helper, requests
+}
+
+func newArchiveRuntime(t *testing.T, root, helper string) *LiveRuntime {
+	t.Helper()
 	runtime, err := NewLiveRuntime(LiveOptions{
 		Home: root, HelperPath: helper, DaemonAddress: "127.0.0.1:1",
 		RecordingDirectory: filepath.Join(root, "recordings"), DesktopSupportRoot: root,
@@ -356,23 +405,12 @@ func TestArchiveReResolvesTheOwnedMenuOnEveryAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fronted := 0
-	runtime.frontDesktop = func(context.Context) error {
-		fronted++
-		return nil
-	}
-	owned := OwnedSession{Registry: RegistrySession{
-		SessionID: "local_owned", CLISessionID: "cli-owned", CWD: workspace,
-	}}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	// Every click is refused, so this ends in failure. What it did on the way is
-	// the subject.
-	if err := runtime.ArchiveOwned(ctx, owned); err == nil {
-		t.Fatal("ArchiveOwned() returned nil; every click was refused")
-	}
+	return runtime
+}
 
-	depths := clickedMenuDepths(t, requests)
+func (fixture movingArchiveFixture) assertReResolved(t *testing.T) {
+	t.Helper()
+	depths := clickedMenuDepths(t, fixture.requests)
 	if len(depths) < 2 {
 		t.Fatalf("the driver clicked %d time(s); this check needs at least two attempts to compare", len(depths))
 	}
@@ -383,9 +421,9 @@ func TestArchiveReResolvesTheOwnedMenuOnEveryAttempt(t *testing.T) {
 	if last := depths[len(depths)-1]; last != 31 {
 		t.Fatalf("last click used hierarchy depth %d, want the moved menu's %d", last, 31)
 	}
-	if fronted < len(depths) {
+	if *fixture.fronted < len(depths) {
 		t.Fatalf("Desktop was brought forward %d time(s) for %d click attempts; a click point "+
-			"hit-tested against a backgrounded window does not land", fronted, len(depths))
+			"hit-tested against a backgrounded window does not land", *fixture.fronted, len(depths))
 	}
 }
 
