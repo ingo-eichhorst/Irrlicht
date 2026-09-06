@@ -634,6 +634,16 @@ if [[ "$ATTACH" != "1" ]]; then
   # evaluated yet. wait_for_unapplied_grants_clear trusts a refusal instantly
   # but polls a clean reading out to a deadline before believing it.
   wait_for_unapplied_grants_clear "$ONBOARD_BIND" "$ADAPTER" || exit 1
+  # BEGIN desktop_hook_install_gate
+  # Claude Desktop's engine is already running and reads hook config when it
+  # CREATES a session, so this profile cannot rely on the fresh-process
+  # ordering the CLI profile gets for free. Name the file explicitly so the
+  # wait is real; an operator who set the variable themselves keeps their value.
+  if [[ "$EXECUTION_PROFILE" == "desktop-local" && -z "${HOOK_INSTALL_WAIT_PATHS:-}" ]]; then
+    HOOK_INSTALL_WAIT_PATHS="$(desktop_default_hook_wait_paths "$HOME")"
+    export HOOK_INSTALL_WAIT_PATHS
+  fi
+  # END desktop_hook_install_gate
   wait_for_hook_install "$ADAPTER" "$STAGING" "$ONBOARD_BIND" || exit 1
   if [[ "$EXECUTION_PROFILE" == "desktop-local" ]]; then
     seal_managed_files || {
