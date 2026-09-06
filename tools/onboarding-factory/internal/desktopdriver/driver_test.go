@@ -3,6 +3,7 @@ package desktopdriver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -15,11 +16,22 @@ type fakeRuntime struct {
 	provisional    string
 	sessionCreated bool
 	submitted      bool
-	sessionActive  bool
 	configChanged  bool
 	removalID      string
 	steps          []string
+	// opened counts deep links, so each start_session mints a distinct Desktop
+	// identity the way a real second composer would.
+	opened int
+	// live holds every session that has been created and not yet archived,
+	// keyed by Desktop session ID. It is what "cleanup archived only what this
+	// run created" is measured against.
+	live map[string]bool
+	// transcriptOwner maps a Claude transcript ID back to its Desktop ID so the
+	// Irrlicht-removal wait can tell whether that session is still up.
+	transcriptOwner map[string]string
 }
+
+func (runtime *fakeRuntime) sessionActive() bool { return len(runtime.live) > 0 }
 
 func (runtime *fakeRuntime) step(name string) error {
 	runtime.steps = append(runtime.steps, name)
@@ -39,8 +51,12 @@ func (runtime *fakeRuntime) CaptureBaseline(context.Context) (Baseline, error) {
 
 func (runtime *fakeRuntime) OpenComposer(context.Context, string) error {
 	runtime.sessionCreated = true
-	runtime.sessionActive = true
+	runtime.opened++
 	runtime.configChanged = true
+	if runtime.live == nil {
+		runtime.live = map[string]bool{}
+	}
+	runtime.live[fakeSessionID(runtime.opened)] = true
 	return runtime.step("open")
 }
 
@@ -63,7 +79,12 @@ func (runtime *fakeRuntime) WaitOwnedSession(context.Context, Baseline, string) 
 	if !runtime.submitted {
 		return OwnedSession{}, errors.New("registry and transcript identity was not observed before its deadline")
 	}
-	return fakeOwnedSession(), nil
+	owned := fakeOwnedSessionN(runtime.opened)
+	if runtime.transcriptOwner == nil {
+		runtime.transcriptOwner = map[string]string{}
+	}
+	runtime.transcriptOwner[owned.Transcript.SessionID] = owned.Registry.SessionID
+	return owned, nil
 }
 
 func (runtime *fakeRuntime) RecoverOwnedSession(context.Context, Baseline, string) (OwnedSession, error) {
@@ -72,6 +93,10 @@ func (runtime *fakeRuntime) RecoverOwnedSession(context.Context, Baseline, strin
 		return OwnedSession{}, nil
 	}
 	owned := fakeOwnedSession()
+	if runtime.transcriptOwner == nil {
+		runtime.transcriptOwner = map[string]string{}
+	}
+	runtime.transcriptOwner[owned.Registry.CLISessionID] = owned.Registry.SessionID
 	if runtime.provisional != "" {
 		owned.Transcript = TranscriptIdentity{}
 	}
@@ -90,12 +115,30 @@ func (runtime *fakeRuntime) Submit(context.Context) error {
 	return runtime.step("submit")
 }
 
-func (runtime *fakeRuntime) WaitIrrlichtState(_ context.Context, _ OwnedSession, state string) (SessionObservation, error) {
+func (runtime *fakeRuntime) Interrupt(context.Context) error { return runtime.step("interrupt") }
+
+func (runtime *fakeRuntime) PressKey(_ context.Context, key string) error {
+	return runtime.step("key_" + key)
+}
+
+func (runtime *fakeRuntime) SelectMode(_ context.Context, value string) error {
+	return runtime.step("mode_" + value)
+}
+
+func (runtime *fakeRuntime) SelectModel(_ context.Context, value string) error {
+	return runtime.step("model_" + value)
+}
+
+func (runtime *fakeRuntime) Sleep(_ context.Context, duration time.Duration) error {
+	return runtime.step("sleep_" + duration.String())
+}
+
+func (runtime *fakeRuntime) WaitIrrlichtState(_ context.Context, owned OwnedSession, state string) (SessionObservation, error) {
 	if err := runtime.step("state_" + state); err != nil {
 		return SessionObservation{}, err
 	}
 	return SessionObservation{
-		SessionID: fakeOwnedSession().Transcript.SessionID,
+		SessionID: owned.Transcript.SessionID,
 		CWD:       "/repo/workspace",
 		PID:       4321,
 		State:     state,
@@ -119,13 +162,13 @@ func (runtime *fakeRuntime) ArchiveOwned(_ context.Context, owned OwnedSession) 
 		return err
 	}
 	if !runtime.omitArchive {
-		runtime.sessionActive = false
+		delete(runtime.live, owned.Registry.SessionID)
 	}
 	return nil
 }
 
-func (runtime *fakeRuntime) WaitProcessExit(context.Context, OwnedSession) error {
-	if runtime.sessionActive {
+func (runtime *fakeRuntime) WaitProcessExit(_ context.Context, owned OwnedSession) error {
+	if runtime.live[owned.Registry.SessionID] {
 		return errors.New("owned process is still live")
 	}
 	return runtime.step("process_gone")
@@ -136,13 +179,13 @@ func (runtime *fakeRuntime) WaitIrrlichtRemoved(_ context.Context, sessionID str
 		return errors.New("Irrlicht removal wait received a blank session ID")
 	}
 	runtime.removalID = sessionID
-	if runtime.sessionActive {
+	if runtime.live[runtime.transcriptOwner[sessionID]] {
 		return errors.New("owned Irrlicht session is still present")
 	}
 	return runtime.step("irrlicht_removed")
 }
 
-func (runtime *fakeRuntime) VerifyBaseline(context.Context, Baseline, OwnedSession) error {
+func (runtime *fakeRuntime) VerifyBaseline(_ context.Context, _ Baseline, owned []OwnedSession) error {
 	runtime.steps = append(runtime.steps, "verify_baseline")
 	if !runtime.omitRestore {
 		runtime.configChanged = false
@@ -150,16 +193,39 @@ func (runtime *fakeRuntime) VerifyBaseline(context.Context, Baseline, OwnedSessi
 	if runtime.configChanged {
 		return errors.New("configuration bytes differ from baseline")
 	}
-	if runtime.sessionActive {
-		return errors.New("owned session was not archived")
+	// The teardown's own claim, checked against what is still up: every session
+	// the run created must be gone, and nothing it did not create may be.
+	for _, session := range owned {
+		if runtime.live[session.Registry.SessionID] {
+			return errors.New("owned session was not archived")
+		}
+	}
+	if runtime.sessionActive() {
+		return errors.New("a session this run created was left live")
 	}
 	return nil
 }
 
 func (runtime *fakeRuntime) RecordStep(step string) { runtime.steps = append(runtime.steps, step) }
 
-func fakeOwnedSession() OwnedSession {
+func fakeSessionID(index int) string {
+	if index <= 1 {
+		return "local_new"
+	}
+	return fmt.Sprintf("local_new%d", index)
+}
+
+func fakeOwnedSession() OwnedSession { return fakeOwnedSessionN(1) }
+
+// fakeOwnedSessionN mints the Nth session's identities. Every field a
+// multi-session run must keep apart differs per slot.
+func fakeOwnedSessionN(index int) OwnedSession {
 	registry, transcript := validOwnedSession()
+	if index > 1 {
+		registry.SessionID = fakeSessionID(index)
+		registry.CLISessionID = fmt.Sprintf("cli-new%d", index)
+		transcript.SessionID = registry.CLISessionID
+	}
 	return OwnedSession{Registry: registry, Transcript: transcript}
 }
 
@@ -205,8 +271,8 @@ func TestRunRestoresAndArchivesAfterEveryExitClass(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), "injected "+failAt+" failure") {
 				t.Fatalf("Run() error = %v", err)
 			}
-			if runtime.sessionActive || runtime.configChanged {
-				t.Fatalf("cleanup state: active=%t configChanged=%t", runtime.sessionActive, runtime.configChanged)
+			if runtime.sessionActive() || runtime.configChanged {
+				t.Fatalf("cleanup state: active=%t configChanged=%t", runtime.sessionActive(), runtime.configChanged)
 			}
 			if !containsStep(runtime.steps, "archive_local_new") || !containsStep(runtime.steps, "verify_baseline") {
 				t.Fatalf("cleanup steps missing: %v", runtime.steps)
@@ -238,10 +304,10 @@ func TestRunRestoresAfterTimeoutAndInterruption(t *testing.T) {
 			if err == nil {
 				t.Fatal("Run() returned nil error")
 			}
-			if tests[index].state.sessionActive || tests[index].state.configChanged {
+			if tests[index].state.sessionActive() || tests[index].state.configChanged {
 				t.Fatalf(
 					"cleanup state: active=%t configChanged=%t",
-					tests[index].state.sessionActive,
+					tests[index].state.sessionActive(),
 					tests[index].state.configChanged,
 				)
 			}

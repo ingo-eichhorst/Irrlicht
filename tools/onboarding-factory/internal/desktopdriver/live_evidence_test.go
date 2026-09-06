@@ -225,6 +225,53 @@ func TestDesktopStateSequenceStartsAtWorking(t *testing.T) {
 	}
 }
 
+// A multi-turn recipe (#1888) sends more than one turn to the SAME session.
+// recordingHasStateSequence rescans the whole recording from the start on
+// every call — it has no cursor of its own — so without a per-turn
+// expectation, a second turn's wait for "working" would stale-match the
+// FIRST turn's own "working" transition and return immediately, before
+// Desktop had even started the second turn. The expectation must be
+// CUMULATIVE: turn N's wait requires N-1 complete working->ready cycles
+// before it, so a later turn can only be satisfied by matching strictly
+// further into the recording than any earlier turn's own transitions.
+func TestStateObservedRequiresEveryPriorTurnBeforeMatchingALaterOne(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "recording.jsonl")
+	working := `{"kind":"state_transition","session_id":"941db969","new_state":"working"}`
+	ready := `{"kind":"state_transition","session_id":"941db969","new_state":"ready"}`
+	write := func(lines ...string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Turn one's own complete cycle is recorded; turn two has sent nothing yet.
+	write(working, ready)
+	runtime := &LiveRuntime{options: LiveOptions{RecordingDirectory: dir}, turn: 2}
+
+	if seen, err := runtime.stateObserved("941db969", "working", "working"); err != nil || seen {
+		t.Fatalf(`turn two's wait for "working" matched turn one's own transition: seen=%t err=%v`, seen, err)
+	}
+
+	// Turn two's own working transition now appears.
+	write(working, ready, working)
+	if seen, err := runtime.stateObserved("941db969", "working", "working"); err != nil || !seen {
+		t.Fatalf(`stateObserved() did not match turn two's own "working" transition: seen=%t err=%v`, seen, err)
+	}
+
+	// Turn two's ready has not appeared yet.
+	if seen, err := runtime.stateObserved("941db969", "ready", "ready"); err != nil || seen {
+		t.Fatalf(`turn two's wait for "ready" matched before its own transition existed: seen=%t err=%v`, seen, err)
+	}
+
+	// Turn two completes.
+	write(working, ready, working, ready)
+	if seen, err := runtime.stateObserved("941db969", "ready", "ready"); err != nil || !seen {
+		t.Fatalf(`stateObserved() did not match turn two's own "ready" transition: seen=%t err=%v`, seen, err)
+	}
+}
+
 // The environment recorded beside a Desktop recording must be the one the turn
 // was SENT in, and it can only be read then. After a turn Claude Desktop shows
 // the session, not a composer, so a re-read at evidence time finds nothing.

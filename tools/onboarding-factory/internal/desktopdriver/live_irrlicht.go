@@ -80,16 +80,42 @@ func (runtime *LiveRuntime) WaitIrrlichtState(
 // working to ready in 2.7 seconds; a poll for the CURRENT state has no
 // guarantee of landing inside a window that short, while the transition it is
 // looking for is durably in the recording.
+//
+// The expectation it hands recordingHasStateSequence is CUMULATIVE across
+// turns, not just this turn's own working/ready pair. recordingHasStateSequence
+// rescans the whole recording from the start on every call and keeps no
+// cursor between calls, so a bare ["working"] expectation would stale-match
+// the FIRST turn's own "working" transition on every LATER turn's wait too —
+// a multi-turn recipe's second `waitState("working")` would return
+// immediately, before Desktop had even started the second turn. Prefixing the
+// expectation with one full working->ready cycle per PRIOR turn (runtime.turn,
+// incremented by Submit) forces the match to land strictly further into the
+// recording each turn, so it can only be satisfied by that turn's own
+// transitions.
 func (runtime *LiveRuntime) stateObserved(sessionID, currentState, wantedState string) (bool, error) {
-	expected := []string{"working"}
-	if wantedState == "ready" {
-		expected = append(expected, "ready")
-	}
+	expected := cumulativeExpectedStates(runtime.turn, wantedState)
 	recorded, err := recordingHasStateSequence(runtime.options.RecordingDirectory, sessionID, expected)
 	if wantedState == "ready" {
 		return currentState == "ready" && recorded, err
 	}
 	return recorded, err
+}
+
+// cumulativeExpectedStates returns the full state sequence a recording must
+// carry to prove `wantedState` has been reached on the CURRENT turn. Turn
+// numbers below 2 need no prefix — there is no prior turn to guard against —
+// so a caller that never increments `turn` (every existing single-turn path)
+// sees exactly the sequence it saw before this existed.
+func cumulativeExpectedStates(turn int, wantedState string) []string {
+	expected := make([]string, 0, 2*turn)
+	for i := 1; i < turn; i++ {
+		expected = append(expected, "working", "ready")
+	}
+	expected = append(expected, "working")
+	if wantedState == "ready" {
+		expected = append(expected, "ready")
+	}
+	return expected
 }
 
 func selectIrrlichtSession(sessions []SessionObservation, sessionID string) (SessionObservation, bool, error) {
