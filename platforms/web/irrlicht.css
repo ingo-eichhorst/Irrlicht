@@ -1844,15 +1844,22 @@
       text-transform: uppercase; color: var(--muted);
     }
     /* The per-bucket tooltip (#1905): the panel's bars carry a figure the
-       header can only state once, for the whole window. Positioned by JS
-       against the pointer and clamped to the panel, so it cannot hang off an
-       edge and read as a rendering fault. */
+       header can only state once, for the whole window.
+
+       IT STAYS INSIDE ITS OWN PANEL. It was pinned to the panel's top edge
+       (`bottom: 100%`), which put it OUTSIDE the panel and over the aggregate
+       chart above — hovering to read one chart hid the other, covering its
+       x-axis labels and its lowest data. Both offsets are set by JS now
+       (autonomyTipPlacement), which puts it below the pointer, flips it above
+       when that would overflow the panel's foot, and holds its right edge clear
+       of the gutter both y axes label themselves in. No `bottom` here, so the
+       panel's box can no longer be escaped upwards by a stale rule. */
     .history-autonomy-panel { position: relative; }
     .history-autonomy-tip {
-      position: absolute; bottom: 100%; transform: translateX(-50%);
+      position: absolute; top: 0; left: 0; transform: translateX(-50%);
       pointer-events: none; white-space: nowrap; z-index: 3;
       background: var(--surface); border: 1px solid var(--border);
-      border-radius: 4px; padding: 3px 6px; margin-bottom: 4px;
+      border-radius: 4px; padding: 3px 6px;
       font-family: var(--font-mono); font-size: 10px; color: var(--text-bright);
       box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
     }

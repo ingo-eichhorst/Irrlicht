@@ -1174,8 +1174,29 @@ export function autonomyPeakScale(panel) {
   return max;
 }
 
-// autonomyAxisLabel formats one of the section's x bounds, coarsening with
-// the window the way stateBucketLabel does for the activity matrix.
+// autonomyAxisLabel is THE Autonomy section's date formatter — the ONE both x
+// axes and the tooltip go through.
+//
+// ONE FORMATTER, and it is a correctness rule rather than tidiness. The two
+// charts are stacked, share one window and one x domain, and are read against
+// each other: a reader lines a spike in the aggregate chart up with a bar in the
+// panel below it. Labelled by two different functions they said the same instant
+// two ways — the aggregate axis went through histAxisLabel and read `8/7`
+// (US numeric, hardcoded), while the panel's bounds and the tooltip read
+// `7. Aug.` — so lining the two up meant translating between them.
+//
+// histAxisLabel stays where it is for every OTHER chart; what it must not do is
+// label one half of this section. `both autonomy axes are labelled by the same
+// function` pins that, by provenance and not only by output.
+//
+// MONTH-NAME BASED, matching what macOS reads (AutonomyFormat.axisBound /
+// .axisDate produce `Aug 24`) rather than inventing a third shape — the sibling
+// of `the two surfaces name the key the same way`. The locale stays the
+// reader's, so `Aug 24` and `24. Aug.` are the same label in two languages,
+// where `8/7` was a different thing entirely.
+//
+// It coarsens with the window, the way stateBucketLabel does for the activity
+// matrix: a time of day under 36h, a date under 60 days, a month beyond that.
 export function autonomyAxisLabel(ts, windowSeconds) {
   const d = new Date((Number(ts) || 0) * 1000);
   if (windowSeconds <= 36 * 3600) return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
@@ -1535,16 +1556,26 @@ function drawAutonomyChartGridlines(ctx, { domain, yAt, padL, padR, w, muted, gr
   }
 }
 
+// drawAutonomyXLabels labels the aggregate chart's x axis — through
+// autonomyAxisLabel, the section's one formatter, NOT through the shared
+// histAxisLabel every other chart uses. See autonomyAxisLabel for why: the panel
+// directly beneath this axis shares its window and its domain, and the two must
+// not name one instant two ways.
+//
+// The whole WINDOW is what coarsens the label, not this chart's bucket width —
+// so the aggregate axis and the panel's bounds coarsen together at the same
+// range rather than at two different thresholds.
 function drawAutonomyXLabels(ctx, { duration, xAt, muted, h, padB }) {
   ctx.fillStyle = muted;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
   const starts = duration?.bucket_starts || [];
   if (!starts.length) return;
+  const windowSeconds = (Number(duration.end) || 0) - (Number(duration.start) || 0);
   const labels = Math.min(5, starts.length);
   for (let i = 0; i < labels; i++) {
     const c = Math.round(i * (starts.length - 1) / Math.max(1, labels - 1));
-    ctx.fillText(histAxisLabel(starts[c], duration.bucket_seconds), xAt(c), h - padB + 5);
+    ctx.fillText(autonomyAxisLabel(starts[c], windowSeconds), xAt(c), h - padB + 5);
   }
 }
 
@@ -1706,7 +1737,7 @@ function buildAutonomyPanel(choice, data, opts) {
   tip.className = 'history-autonomy-tip';
   tip.hidden = true;
   el.appendChild(tip);
-  wireAutonomyPanelTooltip(canvas, tip, panel, opts);
+  wireAutonomyPanelTooltip(el, canvas, tip, panel, opts);
 
   // Painted on the next frame: the canvas has no layout width until it is in
   // the document, and a zero-width canvas would collapse every bucket into
@@ -1751,10 +1782,46 @@ export function autonomyPanelTooltip(point, ts, windowSeconds) {
   return parts.join(' · ');
 }
 
+// AUTONOMY_TIP_OFFSET is how far below the pointer the tooltip sits, in CSS
+// pixels — far enough that the cursor does not sit on its own label.
+export const AUTONOMY_TIP_OFFSET = 12;
+
+// autonomyTipPlacement is where the tooltip is drawn, as a value, relative to
+// the panel's own box.
+//
+// TWO RULES, and the first is what QA caught. The tip used to be pinned to the
+// panel's TOP edge (`bottom: 100%`), which put it OUTSIDE the panel and over the
+// aggregate chart above — hovering to read one chart hid the other, covering its
+// x-axis labels and its lowest data. It stays INSIDE its own panel now: below
+// the pointer by default, flipped above it when that would overflow the bottom,
+// and never at a negative top.
+//
+// The second rule is the right-hand gutter. Both y axes label themselves there
+// (autonomyBarAxisLabels, autonomyTickPlacement), so the tip's right edge is
+// held clear of `padR` — otherwise reading a bucket covers the figures the
+// gutter exists to show.
+export function autonomyTipPlacement(x, y, box, panel = AUTONOMY_PANEL) {
+  const width = Math.max(0, Number(box?.width) || 0);
+  const height = Math.max(0, Number(box?.height) || 0);
+  const tipW = Math.max(0, Number(box?.tipW) || 0);
+  const tipH = Math.max(0, Number(box?.tipH) || 0);
+  const half = tipW / 2;
+  // `left` is the tip's CENTRE (it is translated by -50%), so both bounds are
+  // half a tip in from the edge they protect.
+  const rightBound = Math.max(half, width - panel.padR - half);
+  const left = Math.min(rightBound, Math.max(half, Number(x) || 0));
+  const below = (Number(y) || 0) + AUTONOMY_TIP_OFFSET;
+  const above = (Number(y) || 0) - AUTONOMY_TIP_OFFSET - tipH;
+  // Below the pointer unless that runs past the panel's foot, in which case
+  // above it — either way inside the panel, never over the chart above it.
+  const top = below + tipH <= height ? below : above;
+  return { left, top: Math.max(0, Math.min(top, Math.max(0, height - tipH))) };
+}
+
 // wireAutonomyPanelTooltip makes the concurrency figure readable per bucket.
 // The header states the window's peak; without this the individual bars are the
 // one number on the panel a reader cannot get at.
-function wireAutonomyPanelTooltip(canvas, tip, panel, opts) {
+function wireAutonomyPanelTooltip(host, canvas, tip, panel, opts) {
   const points = autonomyPanelPoints(panel, opts.bucketStarts);
   const hide = () => { tip.hidden = true; };
   canvas.addEventListener('mouseleave', hide);
@@ -1768,10 +1835,17 @@ function wireAutonomyPanelTooltip(canvas, tip, panel, opts) {
     if (!text) { hide(); return; }
     tip.textContent = text;
     tip.hidden = false;
-    // Clamped to the panel so the tip cannot hang off either edge, where it
-    // would read as a rendering fault rather than as an annotation.
-    const half = (tip.offsetWidth || 0) / 2;
-    tip.style.left = Math.max(half, Math.min(w - half, ev.clientX - rect.left)) + 'px';
+    // Measured against the PANEL, not the canvas: the tip is the panel's child
+    // and has to stay inside it, header row included.
+    const box = host.getBoundingClientRect();
+    const at = autonomyTipPlacement(ev.clientX - box.left, ev.clientY - box.top, {
+      width: box.width || w,
+      height: box.height || 0,
+      tipW: tip.offsetWidth || 0,
+      tipH: tip.offsetHeight || 0,
+    });
+    tip.style.left = at.left + 'px';
+    tip.style.top = at.top + 'px';
   });
 }
 

@@ -20,6 +20,8 @@ import {
   autonomyPanelTooltip,
   autonomyBarAxisLabels,
   autonomyGutterLabels,
+  autonomyTipPlacement,
+  AUTONOMY_TIP_OFFSET,
   autonomyBaselineY,
   AUTONOMY_PANEL,
   AUTONOMY_PANEL_CANVAS_H,
@@ -37,6 +39,14 @@ import {
   autonomyPanelRows,
   buildAutonomyAxis,
 } from './historyTab.js'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { WEB_DIR } from './shippedFiles.testutil.js'
+
+// The shipped source, for the two provenance checks below — a drift that
+// reintroduces a second formatter is a change in SOURCE, not in output.
+const HISTORY_TAB_SRC = readFileSync(join(WEB_DIR, 'historyTab.js'), 'utf8')
+const CSS_SRC = readFileSync(join(WEB_DIR, 'irrlicht.css'), 'utf8')
 
 // The Autonomy section (#1905): an AGGREGATE percentile chart over every
 // project, and ONE per-project panel under it — a longest-run line over a
@@ -785,5 +795,157 @@ describe('the two y axes share one gutter without overprinting', () => {
     const labels = autonomyGutterLabels(domain, 0, width)
     expect(labels.every(l => l.axis === 'line')).toBe(true)
     expect(overlaps(labels)).toEqual([])
+  })
+})
+
+// --- QA-5: one date format for the whole section (#1905) --------------------
+
+describe('both autonomy axes are labelled by the same function', () => {
+  // THE DEFECT: the aggregate chart's x axis went through the SHARED
+  // histAxisLabel and read `8/7` — US numeric, hardcoded — while the panel
+  // directly beneath it and the tooltip went through autonomyAxisLabel and read
+  // `7. Aug.`. Two stacked charts over one window and one x domain, naming the
+  // same instant two ways, so lining a spike in the top chart up with a bar in
+  // the bottom one meant translating between them. macOS has never had this: it
+  // reads `Aug 24` on both.
+  const aug7 = Date.UTC(2026, 7, 7, 12) / 1000
+  const month = 30 * 86400
+
+  // The shipped aggregate formatter, reproduced here as the committed mutation
+  // — production must not agree with it, or this fixture proves nothing.
+  const usNumeric = (ts) => {
+    const d = new Date(ts * 1000)
+    return (d.getMonth() + 1) + '/' + d.getDate()
+  }
+
+  test('the two axes and the tooltip render one instant identically', () => {
+    // Compared against EACH OTHER, not each against a literal: a test that
+    // checked every label in isolation would pass happily while the two drifted
+    // apart, which is exactly how this shipped.
+    const axisLabel = autonomyAxisLabel(aug7, month)
+    const panelBound = [...buildAutonomyAxis({ start: aug7, end: aug7 + month })
+      .querySelectorAll('i')].map(i => i.textContent)[0]
+    const tooltipDate = autonomyPanelTooltip(bucket(aug7, 600, 2), aug7, month).split(' · ')[0]
+    expect(panelBound).toBe(axisLabel)
+    expect(tooltipDate).toBe(axisLabel)
+  })
+
+  test('…at every window the section offers, so they coarsen together', () => {
+    // The two used to coarsen on different inputs — the aggregate axis on its
+    // BUCKET width, the panel on the WINDOW — so a range change could move one
+    // and not the other.
+    for (const windowSeconds of [30 * 86400, 365 * 86400]) {
+      const axisLabel = autonomyAxisLabel(aug7, windowSeconds)
+      const tooltipDate = autonomyPanelTooltip(bucket(aug7, 600, 2), aug7, windowSeconds).split(' · ')[0]
+      expect(tooltipDate).toBe(axisLabel)
+    }
+    // …and the two windows really do read differently, or the loop above is
+    // comparing one label with itself.
+    expect(autonomyAxisLabel(aug7, 30 * 86400)).not.toBe(autonomyAxisLabel(aug7, 365 * 86400))
+  })
+
+  test('the label is month-name based, not the shared chart’s US numeric', () => {
+    expect(autonomyAxisLabel(aug7, month)).not.toBe(usNumeric(aug7))
+    expect(autonomyAxisLabel(aug7, month)).toMatch(/[A-Za-z]/)
+    expect(usNumeric(aug7)).toMatch(/^\d+\/\d+$/)
+  })
+
+  test('the aggregate painter routes through the section’s formatter, by PROVENANCE', () => {
+    // The output check above catches a drift that changes what is rendered;
+    // this catches one that reintroduces a second SOURCE, which is the shape
+    // the defect actually had. Both halves are needed: two formatters that
+    // happen to agree today would pass the first check and fail this one.
+    const painter = /function drawAutonomyXLabels\([\s\S]*?\n}/.exec(HISTORY_TAB_SRC)
+    expect(painter, 'fail-loud: drawAutonomyXLabels not found in historyTab.js').not.toBeNull()
+    expect(painter[0]).toContain('autonomyAxisLabel(')
+    expect(painter[0]).not.toContain('histAxisLabel')
+  })
+
+  test('no CODE in the Autonomy section calls histAxisLabel', () => {
+    // It keeps its place for every OTHER chart; what it must not do is label
+    // one half of this section.
+    //
+    // Comment lines are stripped first, deliberately: the section's prose NAMES
+    // histAxisLabel to say why it is not used here, and a check that could not
+    // tell a mention from a call would force that explanation out of the file.
+    const section = HISTORY_TAB_SRC.slice(
+      HISTORY_TAB_SRC.indexOf('// --- Autonomy (#1905) ---'),
+      HISTORY_TAB_SRC.indexOf('// --- Activity matrix'))
+    expect(section.length, 'fail-loud: the Autonomy section was not found').toBeGreaterThan(1000)
+    const code = section.split('\n').filter(l => !l.trim().startsWith('//')).join('\n')
+    expect(code.length, 'fail-loud: stripping comments left no code to check').toBeGreaterThan(1000)
+    expect(code).not.toContain('histAxisLabel')
+    // …and the stripping is not what makes this pass: the prose does mention it,
+    // so an over-eager strip would hide a real call just as well.
+    expect(section).toContain('histAxisLabel')
+    expect(code).toContain('autonomyAxisLabel(')
+  })
+})
+
+// --- QA-6: the tooltip never covers the chart above it (#1905) -------------
+
+describe('the tooltip stays inside its own panel', () => {
+  // THE DEFECT: the tip was pinned to the panel's TOP edge (`bottom: 100%`),
+  // which put it OUTSIDE the panel and over the aggregate chart — hovering to
+  // read one chart hid the other, covering its x-axis labels and its lowest
+  // data.
+  const box = { width: 860, height: 200, tipW: 220, tipH: 18 }
+
+  test('it sits BELOW the pointer, inside the panel', () => {
+    const at = autonomyTipPlacement(400, 60, box)
+    expect(at.top).toBe(60 + AUTONOMY_TIP_OFFSET)
+    expect(at.top + box.tipH).toBeLessThanOrEqual(box.height)
+  })
+
+  test('no pointer position can put it above the panel', () => {
+    // A LOCK, and said so rather than dressed up: the shipped defect lived in
+    // the STYLESHEET (`bottom: 100%`), never in a function — the old wiring set
+    // `left` alone and let CSS place the tip. Moving the decision into
+    // autonomyTipPlacement is what makes the bad placement inexpressible, and
+    // this pins that it stays inexpressible. The CSS half is checked below,
+    // which is where a red-first proof is actually available.
+    const shipped = -box.tipH - 4
+    expect(shipped, 'the shipped placement really was outside the panel').toBeLessThan(0)
+    for (const y of [-50, 0, 40, 120, 199, 5000]) {
+      expect(autonomyTipPlacement(400, y, box).top).toBeGreaterThanOrEqual(0)
+    }
+  })
+
+  test('the stylesheet no longer lets it escape the panel upwards', () => {
+    // THE COMMITTED MUTATION, and the shipped rule verbatim: `bottom: 100%`
+    // anchors the tip's foot to the panel's head, putting the whole tip outside
+    // the panel and over the chart above. Both offsets come from JS now, so the
+    // rule declares neither `bottom` nor a margin that could reintroduce it.
+    const shippedRule = 'position: absolute; bottom: 100%; transform: translateX(-50%);'
+    expect(shippedRule).toMatch(/bottom:\s*100%/)
+
+    const rule = /\.history-autonomy-tip\s*\{([^}]*)\}/.exec(CSS_SRC)
+    expect(rule, 'fail-loud: no .history-autonomy-tip rule found in irrlicht.css').not.toBeNull()
+    expect(rule[1]).not.toMatch(/bottom:/)
+    expect(rule[1]).not.toMatch(/margin-bottom:/)
+    expect(rule[1]).toMatch(/position:\s*absolute/)
+  })
+
+  test('near the foot it flips above the pointer rather than overflowing', () => {
+    const at = autonomyTipPlacement(400, box.height - 4, box)
+    expect(at.top + box.tipH).toBeLessThanOrEqual(box.height)
+    expect(at.top).toBeGreaterThanOrEqual(0)
+  })
+
+  test('its right edge never reaches the gutter the y axes label in', () => {
+    // Both axes write their figures into padR (autonomyBarAxisLabels,
+    // autonomyTickPlacement). A tip that covered them would hide the numbers
+    // the gutter exists to show.
+    for (const x of [0, 400, 800, 860, 2000]) {
+      const at = autonomyTipPlacement(x, 60, box)
+      expect(at.left + box.tipW / 2).toBeLessThanOrEqual(box.width - AUTONOMY_PANEL.padR)
+      expect(at.left - box.tipW / 2).toBeGreaterThanOrEqual(0)
+    }
+  })
+
+  test('a degenerate box cannot produce a placement outside itself', () => {
+    const at = autonomyTipPlacement(10, 10, { width: 0, height: 0, tipW: 0, tipH: 0 })
+    expect(at.top).toBe(0)
+    expect(at.left).toBe(0)
   })
 })
