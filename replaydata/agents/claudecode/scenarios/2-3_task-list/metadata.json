@@ -52,7 +52,7 @@
       "script": [
         {
           "type": "send",
-          "text": "Use your task-list tool to create exactly three todo items, in this order: 'read README', 'summarize README', 'reply done'. Then work them one at a time: mark each item in_progress and then completed via the task-list tool before moving to the next. Do NOT use the Task/Agent tool to spawn any subagent \u2014 keep everything in this one session. When all three items are completed, reply with exactly the word: done"
+          "text": "Use your task-list tool to create exactly three todo items, in this order: 'draft a greeting', 'refine the greeting', 'reply done'. Then work them one at a time: mark each item in_progress and then completed via the task-list tool before moving to the next. Each item is a short piece of writing you do in your own reply; do not read or write any files. Do NOT use the Task/Agent tool to spawn any subagent \u2014 keep everything in this one session. When all three items are completed, reply with exactly the word: done"
         },
         {
           "type": "wait_turn"

@@ -99,6 +99,10 @@ var stopHookCensus = map[string]stopRecording{
 	"claudecode/scenarios/2-13_turn-end-terminal-text/recordings/2026-09-06-04-31-05_irrlichd-0.6.2+e19d325/transcript.jsonl": {
 		Stops: 1, Reproduced: 1,
 	},
+	"claudecode/scenarios/2-17_user-blocking-question/recordings/2026-09-06-23-47-16_irrlichd-0.6.2+388aba0.dirty/transcript.jsonl": {
+		Stops: 1, Reproduced: 0,
+		Why: "every Stop names a session the replay does not drive",
+	},
 	"claudecode/scenarios/2-1_basic-turn/recordings/2026-09-06-03-09-52_irrlichd-0.6.2+e19d325/transcript.jsonl": {
 		Stops: 1, Reproduced: 1,
 	},
@@ -109,6 +113,13 @@ var stopHookCensus = map[string]stopRecording{
 		Stops: 1, Reproduced: 1,
 	},
 	"claudecode/scenarios/2-4_self-correction-iteration/recordings/2026-09-06-05-15-59_irrlichd-0.6.2+e19d325/transcript.jsonl": {
+		Stops: 1, Reproduced: 0,
+		Why: "every Stop names a session the replay does not drive",
+	},
+	"claudecode/scenarios/2-6_long-agentic-session-stress/recordings/2026-09-07-00-53-07_irrlichd-0.6.2+8e837de.dirty/transcript.jsonl": {
+		Stops: 4, Reproduced: 4,
+	},
+	"claudecode/scenarios/3-1_foreground-subagent/recordings/2026-09-06-23-53-54_irrlichd-0.6.2+388aba0.dirty/transcript.jsonl": {
 		Stops: 1, Reproduced: 0,
 		Why: "every Stop names a session the replay does not drive",
 	},
@@ -123,6 +134,9 @@ var stopHookCensus = map[string]stopRecording{
 	},
 	"claudecode/scenarios/5-6_subscription-detection/recordings/2026-09-06-05-10-46_irrlichd-0.6.2+e19d325/transcript.jsonl": {
 		Stops: 2, Reproduced: 2,
+	},
+	"claudecode/scenarios/5-8_task-estimate-marker/recordings/2026-09-06-16-28-18_irrlichd-0.6.2+7a9e813/transcript.jsonl": {
+		Stops: 4, Reproduced: 4,
 	},
 	"codex/scenarios/2-13_turn-end-terminal-text/recordings/2026-08-18-00-42-27_irrlichd-0.5.10+1869727/transcript.jsonl": {
 		Stops: 1, Reproduced: 1,

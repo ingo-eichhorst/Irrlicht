@@ -1,0 +1,454 @@
+{
+  "schema_version": 1,
+  "source_transcript": "",
+  "generated_at": "0001-01-01T00:00:00Z",
+  "settings": {
+    "adapter": "claude-code",
+    "debounce_window": 2000000000,
+    "flicker_max_duration": 10000000000
+  },
+  "summary": {
+    "total_events": 22,
+    "consumed_events": 22,
+    "total_transitions": 18,
+    "first_event_time": "2026-09-06T16:28:19.731118+02:00",
+    "last_event_time": "2026-09-06T16:30:59.796438+02:00",
+    "wall_clock_session_duration": 160065320000,
+    "state_durations": {
+      "ready": 74784694000,
+      "working": 85280626000
+    },
+    "flicker_count": 8,
+    "flickers_by_category": {
+      "ready_between_working": 6,
+      "working_between_ready": 2
+    },
+    "flickers_by_reason": {
+      "agent finished turn → ready": 6,
+      "force ready→working on first activity": 2
+    },
+    "cum_input_tokens": 10,
+    "cum_output_tokens": 8283,
+    "cum_cache_read_tokens": 390277,
+    "cum_cache_creation_tokens": 30391,
+    "model_name": "claude-sonnet-5"
+  },
+  "transitions": [
+    {
+      "index": 0,
+      "event_index": -1,
+      "virtual_time": "2026-09-06T16:28:19.731118+02:00",
+      "cause": "init",
+      "prev_state": "",
+      "new_state": "ready",
+      "reason": "initial state",
+      "last_event_type": "",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 1,
+      "event_index": 0,
+      "virtual_time": "2026-09-06T16:28:19.731118+02:00",
+      "cause": "event",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "user",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 2,
+      "event_index": 7,
+      "virtual_time": "2026-09-06T16:29:21.467385+02:00",
+      "cause": "event",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "assistant",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "…oint. It ends with one call to action: take a five-minute break every hour.\n\n…"
+    },
+    {
+      "index": 3,
+      "event_index": -1,
+      "virtual_time": "2026-09-06T16:29:22.563494+02:00",
+      "cause": "hook",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "assistant",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "…oint. It ends with one call to action: take a five-minute break every hour.\n\n…"
+    },
+    {
+      "index": 4,
+      "event_index": -1,
+      "virtual_time": "2026-09-06T16:29:22.563494+02:00",
+      "cause": "hook",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "assistant",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "…oint. It ends with one call to action: take a five-minute break every hour.\n\n…"
+    },
+    {
+      "index": 5,
+      "event_index": 9,
+      "virtual_time": "2026-09-06T16:29:37.943421+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "user",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 6,
+      "event_index": 10,
+      "virtual_time": "2026-09-06T16:29:47.117418+02:00",
+      "cause": "event",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "assistant",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "… work. This article gives the evidence for short breaks. It also gives practi…"
+    },
+    {
+      "index": 7,
+      "event_index": -1,
+      "virtual_time": "2026-09-06T16:29:48.332293+02:00",
+      "cause": "hook",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "assistant",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "… work. This article gives the evidence for short breaks. It also gives practi…"
+    },
+    {
+      "index": 8,
+      "event_index": -1,
+      "virtual_time": "2026-09-06T16:29:48.332293+02:00",
+      "cause": "hook",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "assistant",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "… work. This article gives the evidence for short breaks. It also gives practi…"
+    },
+    {
+      "index": 9,
+      "event_index": 12,
+      "virtual_time": "2026-09-06T16:29:52.63029+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "user",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 10,
+      "event_index": 13,
+      "virtual_time": "2026-09-06T16:30:05.086479+02:00",
+      "cause": "event",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "assistant",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "…ly a few minutes. The focus gain after the break outweighs this cost. Total o…"
+    },
+    {
+      "index": 11,
+      "event_index": -1,
+      "virtual_time": "2026-09-06T16:30:06.426694+02:00",
+      "cause": "hook",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "assistant",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "…ly a few minutes. The focus gain after the break outweighs this cost. Total o…"
+    },
+    {
+      "index": 12,
+      "event_index": -1,
+      "virtual_time": "2026-09-06T16:30:06.426694+02:00",
+      "cause": "hook",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "assistant",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "…ly a few minutes. The focus gain after the break outweighs this cost. Total o…"
+    },
+    {
+      "index": 13,
+      "event_index": 15,
+      "virtual_time": "2026-09-06T16:30:10.052102+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "user",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 14,
+      "event_index": 16,
+      "virtual_time": "2026-09-06T16:30:11.966275+02:00",
+      "cause": "event",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "assistant",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "…estore focus. They also protect total output over a full day. Start with one …"
+    },
+    {
+      "index": 15,
+      "event_index": -1,
+      "virtual_time": "2026-09-06T16:30:13.250582+02:00",
+      "cause": "hook",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "assistant",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "…estore focus. They also protect total output over a full day. Start with one …"
+    },
+    {
+      "index": 16,
+      "event_index": -1,
+      "virtual_time": "2026-09-06T16:30:13.250582+02:00",
+      "cause": "hook",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "assistant",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "…estore focus. They also protect total output over a full day. Start with one …"
+    },
+    {
+      "index": 17,
+      "event_index": 19,
+      "virtual_time": "2026-09-06T16:30:24.821678+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "user",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    }
+  ],
+  "sessions": [
+    {
+      "session_id": "proc-36474",
+      "adapter": "claude-code",
+      "first_seen": "2026-09-06T16:28:18.603259+02:00",
+      "last_seen": "2026-09-06T16:31:00.494879+02:00",
+      "duration_ms": 161891,
+      "event_count": 7,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 36474,
+      "pid_discovery_lag_ms": 98,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 161794
+      }
+    },
+    {
+      "session_id": "5dff0215-3cfc-4f4e-b600-2eb15fddf0de",
+      "adapter": "claude-code",
+      "first_seen": "2026-09-06T16:28:19.512896+02:00",
+      "last_seen": "2026-09-06T16:31:00.109479+02:00",
+      "duration_ms": 160596,
+      "event_count": 60,
+      "state_changes": 17,
+      "final_state": "working",
+      "pid": 36474,
+      "pid_discovery_lag_ms": 221,
+      "debounce_coalesced_events": 11,
+      "state_durations_ms": {
+        "ready": 39805,
+        "working": 120572
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 16,
+    "replayed_transition_count": 17,
+    "ordered_matches": 0,
+    "ordered_mismatches": [
+      {
+        "index": 0,
+        "kind": "state_differs",
+        "recorded": "working→ready",
+        "replayed": "ready→working"
+      },
+      {
+        "index": 1,
+        "kind": "state_differs",
+        "recorded": "ready→working",
+        "replayed": "working→ready"
+      },
+      {
+        "index": 2,
+        "kind": "state_differs",
+        "recorded": "working→ready",
+        "replayed": "ready→working"
+      },
+      {
+        "index": 3,
+        "kind": "state_differs",
+        "recorded": "ready→working",
+        "replayed": "working→ready"
+      },
+      {
+        "index": 4,
+        "kind": "state_differs",
+        "recorded": "working→ready",
+        "replayed": "ready→working"
+      },
+      {
+        "index": 5,
+        "kind": "state_differs",
+        "recorded": "ready→working",
+        "replayed": "working→ready"
+      },
+      {
+        "index": 6,
+        "kind": "state_differs",
+        "recorded": "working→ready",
+        "replayed": "ready→working"
+      },
+      {
+        "index": 7,
+        "kind": "state_differs",
+        "recorded": "ready→working",
+        "replayed": "working→ready"
+      },
+      {
+        "index": 8,
+        "kind": "state_differs",
+        "recorded": "working→ready",
+        "replayed": "ready→working"
+      },
+      {
+        "index": 9,
+        "kind": "state_differs",
+        "recorded": "ready→working",
+        "replayed": "working→ready"
+      },
+      {
+        "index": 10,
+        "kind": "state_differs",
+        "recorded": "working→ready",
+        "replayed": "ready→working"
+      },
+      {
+        "index": 11,
+        "kind": "state_differs",
+        "recorded": "ready→working",
+        "replayed": "working→ready"
+      },
+      {
+        "index": 12,
+        "kind": "state_differs",
+        "recorded": "working→ready",
+        "replayed": "ready→working"
+      },
+      {
+        "index": 13,
+        "kind": "state_differs",
+        "recorded": "ready→working",
+        "replayed": "working→ready"
+      },
+      {
+        "index": 14,
+        "kind": "state_differs",
+        "recorded": "working→ready",
+        "replayed": "ready→working"
+      },
+      {
+        "index": 15,
+        "kind": "state_differs",
+        "recorded": "ready→working",
+        "replayed": "working→ready"
+      },
+      {
+        "index": 16,
+        "kind": "extra_in_replay",
+        "replayed": "ready→working"
+      }
+    ],
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ]
+  }
+}
