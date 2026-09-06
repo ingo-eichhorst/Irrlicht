@@ -25,60 +25,74 @@ type SnapshotEntry struct {
 // Missing roots are recorded so unexpected creation is also detected.
 type TreeSnapshot map[string]SnapshotEntry
 
+type configPath string
+
+type treeSnapshotCapture struct {
+	snapshot TreeSnapshot
+}
+
 func CaptureTreeSnapshot(roots []string) (TreeSnapshot, error) {
 	snapshot := TreeSnapshot{}
 	for _, root := range roots {
 		if !filepath.IsAbs(root) {
 			return nil, fmt.Errorf("configuration baseline root is not absolute: %q", root)
 		}
-		if err := captureRoot(snapshot, filepath.Clean(root)); err != nil {
+		if err := captureRoot(snapshot, configPath(filepath.Clean(root))); err != nil {
 			return nil, err
 		}
 	}
 	return snapshot, nil
 }
 
-func captureRoot(snapshot TreeSnapshot, root string) error {
-	info, err := os.Lstat(root)
+func captureRoot(snapshot TreeSnapshot, root configPath) error {
+	info, err := os.Lstat(string(root))
 	if os.IsNotExist(err) {
-		snapshot[root] = SnapshotEntry{Kind: "absent"}
+		snapshot[string(root)] = SnapshotEntry{Kind: "absent"}
 		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("inspect configuration path %q: %w", root, err)
 	}
 	if !info.IsDir() {
-		entry, err := snapshotEntry(root, info)
-		if err != nil {
-			return err
-		}
-		snapshot[root] = entry
-		return nil
+		return captureSnapshotEntry(snapshot, root, info)
 	}
-	return filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return fmt.Errorf("walk configuration path %q: %w", path, walkErr)
-		}
-		if isDerivedConfigCache(path) {
-			if entry.IsDir() {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if len(snapshot) >= maxBaselineEntries {
-			return fmt.Errorf("configuration baseline exceeded %d entries", maxBaselineEntries)
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return fmt.Errorf("inspect configuration path %q: %w", path, err)
-		}
-		value, err := snapshotEntry(path, info)
-		if err != nil {
-			return err
-		}
-		snapshot[path] = value
-		return nil
+	capture := treeSnapshotCapture{snapshot: snapshot}
+	return filepath.WalkDir(string(root), func(path string, entry fs.DirEntry, walkErr error) error {
+		return capture.walk(configPath(path), entry, walkErr)
 	})
+}
+
+func (capture treeSnapshotCapture) walk(path configPath, entry fs.DirEntry, walkErr error) error {
+	if walkErr != nil {
+		return fmt.Errorf("walk configuration path %q: %w", path, walkErr)
+	}
+	if isDerivedConfigCache(path) {
+		return skipDerivedConfigCache(entry)
+	}
+	if len(capture.snapshot) >= maxBaselineEntries {
+		return fmt.Errorf("configuration baseline exceeded %d entries", maxBaselineEntries)
+	}
+	info, err := entry.Info()
+	if err != nil {
+		return fmt.Errorf("inspect configuration path %q: %w", path, err)
+	}
+	return captureSnapshotEntry(capture.snapshot, path, info)
+}
+
+func captureSnapshotEntry(snapshot TreeSnapshot, path configPath, info fs.FileInfo) error {
+	value, err := snapshotEntry(string(path), info)
+	if err != nil {
+		return err
+	}
+	snapshot[string(path)] = value
+	return nil
+}
+
+func skipDerivedConfigCache(entry fs.DirEntry) error {
+	if entry.IsDir() {
+		return fs.SkipDir
+	}
+	return nil
 }
 
 // derivedConfigCachePaths are the parts of a guarded configuration root that
@@ -111,8 +125,8 @@ var derivedConfigCachePaths = []string{
 // isDerivedConfigCache matches a full path SUFFIX, never a bare directory name:
 // "cache" alone would exempt any directory anywhere that happened to be called
 // that, which is how a narrow exemption turns into a hole.
-func isDerivedConfigCache(path string) bool {
-	clean := filepath.Clean(path)
+func isDerivedConfigCache(path configPath) bool {
+	clean := filepath.Clean(string(path))
 	for _, suffix := range derivedConfigCachePaths {
 		if strings.HasSuffix(clean, string(filepath.Separator)+suffix) {
 			return true

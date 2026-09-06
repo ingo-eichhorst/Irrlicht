@@ -80,7 +80,15 @@ func TestTurnWaitsUseTheTurnBudgetAndInterfaceWaitsUseTheStepBudget(t *testing.T
 	turnWaits := []string{"hook", "state:working", "turn-end"}
 	assertWaitsRan(t, probe, append(append([]string{}, interfaceWaits...), turnWaits...))
 	assertInterfaceWaitBudgets(t, probe, interfaceWaits, request.StepTimeout)
-	assertTurnWaitBudgets(t, probe, turnWaits, request.StepTimeout, request.TurnTimeout)
+	assertTurnWaitBudgets(t, probe, turnWaits, waitBudgetBounds{
+		step: request.StepTimeout,
+		turn: request.TurnTimeout,
+	})
+}
+
+type waitBudgetBounds struct {
+	step time.Duration
+	turn time.Duration
 }
 
 func assertWaitsRan(t *testing.T, probe *budgetProbe, names []string) {
@@ -111,18 +119,17 @@ func assertTurnWaitBudgets(
 	t *testing.T,
 	probe *budgetProbe,
 	names []string,
-	stepTimeout time.Duration,
-	turnTimeout time.Duration,
+	bounds waitBudgetBounds,
 ) {
 	t.Helper()
 	for _, name := range names {
 		budget := probe.budgets[name]
-		if budget <= stepTimeout {
+		if budget <= bounds.step {
 			t.Errorf("%q was given %s, which is the %s step budget; a turn takes as long as the agent takes",
-				name, budget, stepTimeout)
+				name, budget, bounds.step)
 		}
-		if budget > turnTimeout {
-			t.Errorf("%q was given %s, more than the %s turn budget", name, budget, turnTimeout)
+		if budget > bounds.turn {
+			t.Errorf("%q was given %s, more than the %s turn budget", name, budget, bounds.turn)
 		}
 	}
 }
