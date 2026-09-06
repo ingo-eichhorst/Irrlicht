@@ -40,6 +40,10 @@ type LiveRuntime struct {
 	// workspace is the composer WaitComposer verified. Submit re-resolves
 	// against it rather than against a caller-supplied value.
 	workspace string
+	// toolsExpected records that this run drives a RECIPE, whose steps are
+	// declared, rather than a bare prompt. It relaxes the no-tool evidence rule
+	// to the form that rule was written for. See validateTranscriptToolUse.
+	toolsExpected bool
 	// environment is what the composer showed when WaitComposer verified it.
 	// It is captured then because it cannot be read later: a Desktop turn
 	// replaces its own composer with the session it created.
@@ -573,4 +577,11 @@ func transientHelperError(err error) error {
 		return nil
 	}
 	return err
+}
+
+// ExpectTools tells the runtime that this run drives a declared recipe, so a
+// tool call in its transcript is what the cell asked for rather than something
+// the driver caused.
+func (runtime *LiveRuntime) ExpectTools(expected bool) {
+	runtime.toolsExpected = expected
 }

@@ -352,3 +352,34 @@ func TestWorkingIsAcceptedFromTheLiveStateOnTheFirstTurn(t *testing.T) {
 		t.Fatalf("turn two accepted a live working state with no recorded history: %t, %v", observed, err)
 	}
 }
+
+// The no-tool rule is the safety boundary of the ONE-TURN form: a bare prompt
+// the driver sends must not have caused tool execution in the user's workspace.
+//
+// A recipe is different. Its steps are declared, reviewed and refused up front
+// when they need a control the driver lacks, and many catalog cells exist
+// precisely to exercise tool use — task lists, subagents, background processes.
+// Applying the one-turn rule to them made every such cell impossible: cell 3-3
+// drove its whole recipe and then failed with `Desktop transcript … contains a
+// tool call or tool result`.
+func TestToolsAreRefusedForABarePromptAndAllowedForARecipe(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "transcript.jsonl")
+	withTool := `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash"}]}}` + "\n"
+	if err := os.WriteFile(path, []byte(withTool), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateTranscriptToolUse(path, false); err == nil {
+		t.Fatal("a bare prompt was allowed to have caused tool execution")
+	}
+	if err := validateTranscriptToolUse(path, true); err != nil {
+		t.Fatalf("a recipe was refused for using tools it declares: %v", err)
+	}
+
+	// An unreadable transcript fails either way: a check that cannot look must
+	// never report what a check that looked and found nothing reports.
+	missing := filepath.Join(dir, "absent.jsonl")
+	if err := validateTranscriptToolUse(missing, true); err == nil {
+		t.Fatal("a transcript that could not be read was accepted")
+	}
+}

@@ -12,6 +12,32 @@ import (
 	"sort"
 )
 
+// validateTranscriptToolUse enforces the no-tool rule only where it belongs.
+//
+// For the ONE-TURN form it is the safety boundary: a bare prompt the driver
+// sends must not have caused tool execution in the user's workspace, and a
+// transcript that shows otherwise means the run did something it was not asked
+// to do.
+//
+// A recipe is different. Its steps are declared, and refused up front when they
+// need a control the driver lacks, and many catalog cells exist precisely to
+// exercise tool use. Cell 3-3 drove its whole recipe and then failed with
+// `contains a tool call or tool result` for doing what it was written to do.
+//
+// The transcript is read either way. A file that cannot be read is an error in
+// both modes: a check that cannot look must never report what a check that
+// looked and found nothing reports.
+func validateTranscriptToolUse(path string, toolsExpected bool) error {
+	found, err := jsonlContains(path, containsToolRecord)
+	if err != nil {
+		return err
+	}
+	if found && !toolsExpected {
+		return fmt.Errorf("Desktop transcript %q contains a tool call or tool result", path)
+	}
+	return nil
+}
+
 func validateNoToolTranscript(path string) error {
 	found, err := jsonlContains(path, containsToolRecord)
 	if err != nil {
