@@ -152,6 +152,11 @@ func Run(ctx context.Context, runtime Runtime, request RunRequest) (result RunRe
 	if err := Plan(script); err != nil {
 		return result, err
 	}
+	// A recipe declares its own steps, so a tool call in its transcript is what
+	// the cell asked for. A bare prompt keeps the no-tool safety boundary.
+	if teller, ok := runtime.(interface{ ExpectTools(bool) }); ok {
+		teller.ExpectTools(len(request.Script) > 0)
+	}
 	ctx, cancel := context.WithTimeout(ctx, request.OverallTimeout)
 	defer cancel()
 

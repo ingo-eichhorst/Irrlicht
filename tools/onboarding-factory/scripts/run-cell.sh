@@ -634,7 +634,26 @@ if [[ "$ATTACH" != "1" ]]; then
   # evaluated yet. wait_for_unapplied_grants_clear trusts a refusal instantly
   # but polls a clean reading out to a deadline before believing it.
   wait_for_unapplied_grants_clear "$ONBOARD_BIND" "$ADAPTER" || exit 1
+  # BEGIN desktop_hook_install_gate
+  # Claude Desktop's engine is already running and reads hook config when it
+  # CREATES a session, so this profile cannot rely on the fresh-process
+  # ordering the CLI profile gets for free. Name the file explicitly so the
+  # wait is real; an operator who set the variable themselves keeps their value.
+  if [[ "$EXECUTION_PROFILE" == "desktop-local" && -z "${HOOK_INSTALL_WAIT_PATHS:-}" ]]; then
+    HOOK_INSTALL_WAIT_PATHS="$(desktop_default_hook_wait_paths "$HOME")"
+    export HOOK_INSTALL_WAIT_PATHS
+  fi
+  # END desktop_hook_install_gate
   wait_for_hook_install "$ADAPTER" "$STAGING" "$ONBOARD_BIND" || exit 1
+  # BEGIN desktop_hook_target_check
+  # Waiting proves the file exists, not that it names THIS daemon. The
+  # managed-file installer refuses to overwrite a file another process changed,
+  # and without this the run drove Desktop with a previous run's port and
+  # blamed Desktop 80 seconds later.
+  if [[ "$EXECUTION_PROFILE" == "desktop-local" ]]; then
+    desktop_require_hooks_point_here "$HOME/.claude/settings.json" "$ONBOARD_BIND" || exit 1
+  fi
+  # END desktop_hook_target_check
   if [[ "$EXECUTION_PROFILE" == "desktop-local" ]]; then
     seal_managed_files || {
       echo "desktop-local could not seal the expected daemon hook state" >&2

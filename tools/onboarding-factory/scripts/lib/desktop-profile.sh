@@ -388,3 +388,64 @@ desktop_write_execution_results() {
         }
       } + (if $reason == "" then {} else {reason: $reason} end)]}' > "$path"
 }
+
+# desktop_default_hook_wait_paths names the file a desktop-local run must wait
+# for before it drives Claude Desktop.
+#
+# The CLI profile can skip this: it spawns a fresh `claude` per run, so the
+# hook config is read after the install by construction. Claude Desktop cannot.
+# Its engine is already running and reads hook config when it CREATES a
+# session, so a run that starts driving before the install has landed sends its
+# hooks to whichever daemon the config named before — in practice the
+# production one on 7837, which this run is not reading.
+#
+# The symptom is not a hook error. It is `wait for Claude Code hook timed out`
+# against a turn that ran perfectly, because the observations went somewhere
+# else. Runs 40 and 44 of 2026-09-06 failed exactly that way, each with
+# `hook-install-wait: NOT waiting` in its own log.
+desktop_default_hook_wait_paths() {
+  local home="${1:-$HOME}"
+  printf '%s\n' "$home/.claude/settings.json"
+}
+
+# desktop_require_hooks_point_here refuses a run whose hook config does not name
+# THIS run's daemon.
+#
+# The managed-file installer refuses to overwrite a file that changed under it,
+# which is correct — but the run then carried on and drove Claude Desktop with
+# whatever hook configuration was already there. On 2026-09-06 that was a
+# previous run's port: the daemon bound 61198 while the hooks still named 61432,
+# so every observation went to a dead address and the run failed 80 seconds
+# later with `wait for Irrlicht state working timed out`, which says nothing
+# about the real cause.
+#
+# ~/.claude/settings.json is app-wide. This adapter has no isolated home wired,
+# so two claudecode recordings anywhere on the machine share this one file and
+# the second one silently loses.
+desktop_require_hooks_point_here() {
+  local settings="$1" bind="$2"
+  if [[ -z "$settings" || -z "$bind" ]]; then
+    echo "desktop-local: usage: desktop_require_hooks_point_here <settings> <bind>" >&2
+    return 1
+  fi
+  if [[ ! -f "$settings" ]]; then
+    echo "desktop-local: no hook configuration at $settings; nothing would be observed" >&2
+    return 1
+  fi
+  # Hook URLs are written as http://localhost:PORT (daemonaddr.LocalURL) while
+  # the bind address is 127.0.0.1:PORT, so match on the port. Matching the whole
+  # bind string silently never matches, which would refuse every run.
+  local port="${bind##*:}"
+  if [[ -z "$port" || "$port" == "$bind" ]]; then
+    echo "desktop-local: cannot read a port out of the daemon address '"'"'$bind'"'"'" >&2
+    return 1
+  fi
+  if ! grep -q ":$port" "$settings"; then
+    echo "desktop-local: the hook configuration at $settings does not name this run's daemon ($bind)." >&2
+    echo "desktop-local:   Observations would go somewhere else and the run would fail later, blaming Desktop." >&2
+    echo "desktop-local:   The usual cause is another claudecode recording on this machine: that file is" >&2
+    echo "desktop-local:   app-wide and this adapter has no isolated home, so two runs share it." >&2
+    return 1
+  fi
+  return 0
+}

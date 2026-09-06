@@ -40,6 +40,10 @@ type LiveRuntime struct {
 	// workspace is the composer WaitComposer verified. Submit re-resolves
 	// against it rather than against a caller-supplied value.
 	workspace string
+	// toolsExpected records that this run drives a RECIPE, whose steps are
+	// declared, rather than a bare prompt. It relaxes the no-tool evidence rule
+	// to the form that rule was written for. See validateTranscriptToolUse.
+	toolsExpected bool
 	// environment is what the composer showed when WaitComposer verified it.
 	// It is captured then because it cannot be read later: a Desktop turn
 	// replaces its own composer with the session it created.
@@ -395,6 +399,12 @@ func (runtime *LiveRuntime) SetPrompt(ctx context.Context, prompt string) error 
 	if err != nil {
 		return err
 	}
+	// Front Desktop first: the composer is not in the accessibility tree at all
+	// while the app is in the background, and focus can move between the wait
+	// that verified this selector and now.
+	if err := runtime.front(ctx); err != nil {
+		return err
+	}
 	return runtime.helper.setValue(ctx, selector, prompt)
 }
 
@@ -407,14 +417,27 @@ func (runtime *LiveRuntime) Submit(ctx context.Context) error {
 	// Resolve and click inside the retry. Desktop's renderer can swap the
 	// composer out between the two, and re-using a selector resolved before
 	// that is exactly what fails with a stale control.
-	if err := retryTransientAX(ctx, "submit the Desktop prompt", func() error {
+	if err := retryTransientAXFor(ctx, "submit the Desktop prompt", submitAttempts, func() error {
+		// Front on EVERY attempt. Looking again without doing so is what made
+		// live run 25 spend all its retries reading a backgrounded window that
+		// carried a sidebar and no composer.
+		if err := runtime.front(ctx); err != nil {
+			return err
+		}
 		send, stop, err := runtime.sendAndStop(ctx)
 		if err != nil {
 			return fmt.Errorf("resolve the Desktop send button after the prompt was typed: %w", err)
 		}
-		return runtime.helper.click(ctx, send, helperPostcondition{
+		err = runtime.helper.click(ctx, send, helperPostcondition{
 			Selector: stop, Condition: "exists", TimeoutMilliseconds: 10_000,
 		})
+		if err != nil && isMissedPostcondition(err) {
+			// The click landed; only the Stop button never showed, which a fast
+			// turn never renders. The Desktop registry row is the real proof,
+			// and waitForOwned is the very next step. Retrying would send twice.
+			return nil
+		}
+		return err
 	}); err != nil {
 		return err
 	}
@@ -512,8 +535,25 @@ func isPreClickAXFailure(err error) bool {
 // action must re-resolve from a fresh reading each time: the whole reason the
 // last attempt failed is that the tree moved.
 func retryTransientAX(ctx context.Context, what string, action func() error) error {
+	return retryTransientAXFor(ctx, what, transientAXAttempts, action)
+}
+
+// submitAttempts is deliberately far larger. Everything else here waits out a
+// re-render; submit waits out Claude Desktop taking the whole composer away and
+// bringing it back, which is measured in seconds.
+const submitAttempts = 40
+
+// isMissedPostcondition reports whether a click landed but the state it was told
+// to watch for never appeared. The helper posts the mouse event and only then
+// verifies, so this is strictly POST-click. It must never drive a retry: the
+// click already took effect.
+func isMissedPostcondition(err error) bool {
+	return strings.Contains(err.Error(), "postcondition_failed")
+}
+
+func retryTransientAXFor(ctx context.Context, what string, attempts int, action func() error) error {
 	var err error
-	for attempt := 1; attempt <= transientAXAttempts; attempt++ {
+	for attempt := 1; attempt <= attempts; attempt++ {
 		err = action()
 		if err == nil || !isPreClickAXFailure(err) {
 			return err
@@ -526,7 +566,7 @@ func retryTransientAX(ctx context.Context, what string, action func() error) err
 	}
 	return fmt.Errorf(
 		"%s: Claude Desktop's accessibility tree kept moving across %d attempts; last failure: %w",
-		what, transientAXAttempts, err)
+		what, attempts, err)
 }
 
 func transientHelperError(err error) error {
@@ -537,4 +577,11 @@ func transientHelperError(err error) error {
 		return nil
 	}
 	return err
+}
+
+// ExpectTools tells the runtime that this run drives a declared recipe, so a
+// tool call in its transcript is what the cell asked for rather than something
+// the driver caused.
+func (runtime *LiveRuntime) ExpectTools(expected bool) {
+	runtime.toolsExpected = expected
 }

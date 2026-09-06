@@ -74,7 +74,7 @@ func (runtime *LiveRuntime) verifiedTranscriptPath(sessionID string) (string, er
 	if err != nil {
 		return "", err
 	}
-	if err := validateNoToolTranscript(transcriptPath); err != nil {
+	if err := validateTranscriptToolUse(transcriptPath, runtime.toolsExpected); err != nil {
 		return "", err
 	}
 	return transcriptPath, nil

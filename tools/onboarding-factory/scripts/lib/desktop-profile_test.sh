@@ -332,7 +332,46 @@ else
 fi
 
 echo ""
+echo "== A desktop-local run refuses hooks that name another daemon =="
+# Measured 2026-09-06: run 55's daemon bound 61198 while ~/.claude/settings.json
+# still named 61432 from an earlier run, because the managed-file installer had
+# refused to overwrite a file another session changed. The run drove Claude
+# Desktop anyway and failed 80s later with `wait for Irrlicht state working
+# timed out`, which points at the wrong thing entirely.
+printf '%s' '{"hooks":{"Stop":[{"url":"http://localhost:61198/x"}]}}' > "$TMP/ok.json"
+desktop_require_hooks_point_here "$TMP/ok.json" "127.0.0.1:61198" 2>/dev/null
+assert_eq "hooks naming this daemon are accepted" 0 "$?"
+printf '%s' '{"hooks":{"Stop":[{"url":"http://localhost:61432/x"}]}}' > "$TMP/stale.json"
+if desktop_require_hooks_point_here "$TMP/stale.json" "127.0.0.1:61198" 2>/dev/null; then
+  fail "stale hook port is refused" "it was accepted"
+else
+  pass "stale hook port is refused"
+fi
+if desktop_require_hooks_point_here "$TMP/missing.json" "127.0.0.1:61198" 2>/dev/null; then
+  fail "absent hook config is refused" "it was accepted"
+else
+  pass "absent hook config is refused"
+fi
+
+
 if [[ "$fails" -eq 0 ]]; then
+echo "== A desktop-local run is gated on its hook config landing =="
+# Claude Desktop's engine is long-lived and reads hook config when it creates a
+# session, so a run that starts driving before the install has landed sends its
+# hooks to whichever daemon the config named BEFORE — the production one.
+#
+# Measured: runs 40 and 44 of 2026-09-06 failed with `wait for Claude Code hook
+# timed out after 1m20s`, while each run's own log said `hook-install-wait: NOT
+# waiting; if the CLI reads its hook config at startup, this run can race the
+# install`.
+assert_eq "hook wait path is defaulted for desktop-local" \
+  "/home/someone/.claude/settings.json" "$(desktop_default_hook_wait_paths /home/someone)"
+# hook-install-wait refuses a relative path outright, so this must be absolute.
+case "$(desktop_default_hook_wait_paths /home/someone)" in
+  /*) pass "the defaulted hook wait path is absolute" ;;
+  *) fail "the defaulted hook wait path is absolute" "it is relative" ;;
+esac
+
   echo "desktop-profile_test: ALL PASS"
 else
   echo "desktop-profile_test: $fails FAILURE(S)" >&2

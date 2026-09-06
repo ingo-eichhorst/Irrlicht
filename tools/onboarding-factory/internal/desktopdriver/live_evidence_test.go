@@ -311,3 +311,75 @@ func TestCapturedEnvironmentComesFromTheVerifiedComposer(t *testing.T) {
 		t.Fatal("captureEnvironment() accepted a foreign workspace")
 	}
 }
+
+// The recording is written by the daemon; the live state comes from its HTTP
+// API. The file can lag, and when it does the driver waits for a transition
+// that has already happened.
+//
+// Measured 2026-09-06 on cell 1-1: the run failed with `wait for Irrlicht state
+// working timed out after 1m30s`, and the recording read afterwards held
+// `ready (new session created)`, `working (force ready→working on first
+// activity)`, `ready (agent finished turn)` for that very session. Nothing was
+// missing; it simply was not on disk yet.
+//
+// For the FIRST turn the live state settles that: if the daemon says the
+// session is working, it is. For a later turn it cannot, because a live
+// "working" does not say WHICH turn it belongs to — only the cumulative
+// recorded sequence does. So the shortcut is confined to turn one.
+func TestWorkingIsAcceptedFromTheLiveStateOnTheFirstTurn(t *testing.T) {
+	empty := t.TempDir() // no recording flushed yet
+	runtime := &LiveRuntime{options: LiveOptions{RecordingDirectory: empty}}
+
+	observed, err := runtime.stateObserved("cli-1", "working", "working")
+	if err != nil || !observed {
+		t.Fatalf("a live working state was not accepted on turn one: %t, %v", observed, err)
+	}
+	// A short turn is already ready before any poll can see it working, and the
+	// recording that proves it worked has not been flushed. Moving on is right:
+	// waitForCompletion still demands the recorded working→ready sequence.
+	if observed, err := runtime.stateObserved("cli-1", "ready", "working"); err != nil || !observed {
+		t.Fatalf("a turn that finished before the first poll blocked the run: %t, %v", observed, err)
+	}
+	// A session that has not started at all must still wait.
+	if observed, err := runtime.stateObserved("cli-1", "error", "working"); err != nil || observed {
+		t.Fatalf("a session in error read as a turn that ran: %t, %v", observed, err)
+	}
+
+	// On a later turn the live state cannot say which turn it belongs to, so
+	// only the recorded sequence counts.
+	later := &LiveRuntime{options: LiveOptions{RecordingDirectory: empty}, turn: 2}
+	if observed, err := later.stateObserved("cli-1", "working", "working"); err != nil || observed {
+		t.Fatalf("turn two accepted a live working state with no recorded history: %t, %v", observed, err)
+	}
+}
+
+// The no-tool rule is the safety boundary of the ONE-TURN form: a bare prompt
+// the driver sends must not have caused tool execution in the user's workspace.
+//
+// A recipe is different. Its steps are declared, reviewed and refused up front
+// when they need a control the driver lacks, and many catalog cells exist
+// precisely to exercise tool use — task lists, subagents, background processes.
+// Applying the one-turn rule to them made every such cell impossible: cell 3-3
+// drove its whole recipe and then failed with `Desktop transcript … contains a
+// tool call or tool result`.
+func TestToolsAreRefusedForABarePromptAndAllowedForARecipe(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "transcript.jsonl")
+	withTool := `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash"}]}}` + "\n"
+	if err := os.WriteFile(path, []byte(withTool), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateTranscriptToolUse(path, false); err == nil {
+		t.Fatal("a bare prompt was allowed to have caused tool execution")
+	}
+	if err := validateTranscriptToolUse(path, true); err != nil {
+		t.Fatalf("a recipe was refused for using tools it declares: %v", err)
+	}
+
+	// An unreadable transcript fails either way: a check that cannot look must
+	// never report what a check that looked and found nothing reports.
+	missing := filepath.Join(dir, "absent.jsonl")
+	if err := validateTranscriptToolUse(missing, true); err == nil {
+		t.Fatal("a transcript that could not be read was accepted")
+	}
+}
