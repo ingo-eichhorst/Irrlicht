@@ -115,6 +115,9 @@ var stopHookCensus = map[string]stopRecording{
 	"claudecode/scenarios/3-3_background-process/recordings/2026-09-06-03-50-56_irrlichd-0.6.2+e19d325/transcript.jsonl": {
 		Stops: 1, Reproduced: 1,
 	},
+	"claudecode/scenarios/5-1_token-accounting/recordings/2026-09-06-16-27-05_irrlichd-0.6.2+6a19827/transcript.jsonl": {
+		Stops: 3, Reproduced: 3,
+	},
 	"claudecode/scenarios/5-2_model-identification/recordings/2026-09-06-04-31-52_irrlichd-0.6.2+e19d325/transcript.jsonl": {
 		Stops: 1, Reproduced: 1,
 	},

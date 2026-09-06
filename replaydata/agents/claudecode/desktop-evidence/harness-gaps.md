@@ -68,3 +68,23 @@ Desktop session could have joined an existing daemon.
 
 The claudecode leg is drivable on its own. What is missing is the harness, not
 a control — which is why this cell does not appear in the recipe census.
+
+## 2-14 turn-aborted-by-error — not-runnable
+
+```sh
+jq -c '.details.recipe | keys' \
+  replaydata/agents/claudecode/scenarios/2-14_turn-aborted-by-error/metadata.json
+tools/onboarding-factory/scripts/run-cell.sh --execution-profile desktop-local \
+  claudecode turn-aborted-by-error
+```
+
+```
+["applicable","driver","preconditions","settings","setup","timeout_seconds","verify"]
+cell has neither prompt nor script: scenario=turn-aborted-by-error adapter=claudecode
+```
+
+The same shape as 2-9: the recipe names a bespoke recorder
+(`record-turn-aborted-by-error.sh`) instead of a prompt or a script, so there
+is nothing for the shared driver to drive. The rig refuses it before any
+profile-specific check runs — this is not a Desktop control gap, and the cell
+is equally undrivable through the shared `cli-local` path.

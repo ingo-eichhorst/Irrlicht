@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "results": [
+    {
+      "scenario_id": "turn-aborted-by-error",
+      "execution_profile": "desktop-local",
+      "outcome": "not-runnable",
+      "reason": "The recipe names a bespoke recorder (record-turn-aborted-by-error.sh) instead of a prompt or a script, so there is nothing for the shared driver to drive: run-cell.sh refuses it with 'cell has neither prompt nor script' before any profile-specific check runs. This is not a Desktop control gap - the cell is equally undrivable through the shared cli-local path. The cited note carries the commands.",
+      "missing_control": "a prompt or script recipe the shared driver can drive (the cell has neither)",
+      "evidence_refs": [
+        "replaydata/agents/claudecode/desktop-evidence/harness-gaps.md",
+        "replaydata/agents/claudecode/scenarios/2-14_turn-aborted-by-error/metadata.json"
+      ]
+    }
+  ]
+}
