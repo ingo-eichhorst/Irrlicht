@@ -423,9 +423,17 @@ func (runtime *LiveRuntime) Submit(ctx context.Context) error {
 		}
 		send := controls["send"]
 		stop := helperSelector{Role: "AXButton", Description: "Stop", Hierarchy: send.Hierarchy}
-		return runtime.helper.click(ctx, send, helperPostcondition{
+		err = runtime.helper.click(ctx, send, helperPostcondition{
 			Selector: stop, Condition: "exists", TimeoutMilliseconds: 10_000,
 		})
+		if err != nil && isMissedPostcondition(err) {
+			// The click landed; only the Stop button never showed. The Desktop
+			// registry row is the real proof this prompt was sent, and
+			// waitForOwned is the very next step. Retrying here would send the
+			// same prompt twice.
+			return nil
+		}
+		return err
 	})
 }
 
@@ -544,6 +552,21 @@ func retryTransientAXFor(ctx context.Context, what string, attempts int, action 
 	return fmt.Errorf(
 		"%s: Claude Desktop's accessibility tree kept moving across %d attempts; last failure: %w",
 		what, attempts, err)
+}
+
+// isMissedPostcondition reports whether a click landed but the state it was
+// told to watch for never appeared.
+//
+// The helper posts the mouse event and only then verifies the postcondition, so
+// this failure is strictly POST-click: the click happened. For Submit that is
+// routine rather than exceptional — the postcondition is the Stop button, which
+// exists only while a turn is in flight, and a turn that finishes fast never
+// renders it.
+//
+// This must never be used to retry a click. It means the opposite: the click
+// already took effect, so trying again would send twice.
+func isMissedPostcondition(err error) bool {
+	return strings.Contains(err.Error(), "postcondition_failed")
 }
 
 func transientHelperError(err error) error {

@@ -141,3 +141,31 @@ func TestTypingAndSubmittingBringDesktopToTheFront(t *testing.T) {
 		}
 	}
 }
+
+// Submit's postcondition watches for the Stop button, which only exists while
+// a turn is in flight. A turn that finishes fast may never render it, and the
+// helper then reports `postcondition_failed: The required exists postcondition`
+// for a prompt that was sent perfectly well. Runs 46, 48 and 50 of 2026-09-06
+// failed that way.
+//
+// The authoritative evidence that a submit landed is the Desktop registry row,
+// which the very next step already waits for. So a failed postcondition here
+// must not fail the run: it is an optimisation, not the proof.
+//
+// Every OTHER helper failure still surfaces. A click the helper refused
+// outright is not a click.
+func TestSubmitTreatsAMissedStopButtonAsSent(t *testing.T) {
+	if !isMissedPostcondition(errors.New(
+		"helper postcondition_failed: The required exists postcondition was not met")) {
+		t.Fatal("a missed postcondition was not recognised")
+	}
+	for _, other := range []string{
+		"helper stale_control: The current click point does not hit the selected control.",
+		"helper permission_denied: accessibility is not trusted",
+		"helper control_ambiguous: The selector matched 2 visible controls.",
+	} {
+		if isMissedPostcondition(errors.New(other)) {
+			t.Fatalf("%q was wrongly treated as a landed click", other)
+		}
+	}
+}
