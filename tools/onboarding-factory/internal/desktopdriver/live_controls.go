@@ -142,16 +142,20 @@ func turnInFlight(elements []helperElement) bool {
 // waiting for Send to come back. A postcondition on Stop's own absence would
 // also pass if the whole composer went away.
 func (runtime *LiveRuntime) Interrupt(ctx context.Context) error {
-	return interruptTurn(ctx, runtime.workspace, runtime.helper.inspect, runtime.helper.click)
+	return interruptTurn(ctx, runtime.workspace, runtime.front, runtime.helper.inspect, runtime.helper.click)
 }
 
 func interruptTurn(
 	ctx context.Context,
 	workspace string,
+	activate func(context.Context) error,
 	inspect func(context.Context) ([]helperElement, error),
 	click func(context.Context, helperSelector, helperPostcondition) error,
 ) error {
 	return retryTransientAX(ctx, "interrupt the in-flight Desktop turn", func() error {
+		if err := activate(ctx); err != nil {
+			return err
+		}
 		stop, send, err := freshStopAndSend(ctx, workspace, inspect)
 		if err != nil {
 			return err
@@ -167,13 +171,14 @@ func interruptTurn(
 // postcondition is refused by Plan long before this runs; the check is repeated
 // here because this is the last place that can still refuse.
 func (runtime *LiveRuntime) PressKey(ctx context.Context, key string) error {
-	return pressKey(ctx, key, runtime.workspace, runtime.helper.inspect, runtime.helper.keyboard)
+	return pressKey(ctx, key, runtime.workspace, runtime.front, runtime.helper.inspect, runtime.helper.keyboard)
 }
 
 func pressKey(
 	ctx context.Context,
 	key string,
 	workspace string,
+	activate func(context.Context) error,
 	inspect func(context.Context) ([]helperElement, error),
 	keyboard func(context.Context, helperSelector, uint16, []string, helperPostcondition) error,
 ) error {
@@ -183,6 +188,9 @@ func pressKey(
 			key, strings.Join(SupportedKeys(), ", "))
 	}
 	return retryTransientAX(ctx, fmt.Sprintf("press %s", key), func() error {
+		if err := activate(ctx); err != nil {
+			return err
+		}
 		target, after, err := resolveKeyPress(ctx, key, workspace, inspect)
 		if err != nil {
 			return err
@@ -249,12 +257,12 @@ func resolveEnterKeyPress(
 // menu closed AND the popup now reports the requested entry.
 func (runtime *LiveRuntime) SelectMode(ctx context.Context, value string) error {
 	return selectFromPopup(ctx, runtime.workspace, controlMode, value, modeReportsEntry,
-		runtime.helper.inspect, runtime.helper.click)
+		runtime.front, runtime.helper.inspect, runtime.helper.click)
 }
 
 func (runtime *LiveRuntime) SelectModel(ctx context.Context, value string) error {
 	return selectFromPopup(ctx, runtime.workspace, controlModel, value, modelReportsEntry,
-		runtime.helper.inspect, runtime.helper.click)
+		runtime.front, runtime.helper.inspect, runtime.helper.click)
 }
 
 // modeReportsEntry and modelReportsEntry say how each popup announces its
@@ -281,6 +289,7 @@ func selectFromPopup(
 	control string,
 	value string,
 	reports func(helperElement, string) bool,
+	activate func(context.Context) error,
 	inspect func(context.Context) ([]helperElement, error),
 	click func(context.Context, helperSelector, helperPostcondition) error,
 ) error {
@@ -289,6 +298,9 @@ func selectFromPopup(
 	}
 	menuRole := helperSelector{Role: "AXMenu"}
 	if err := retryTransientAX(ctx, fmt.Sprintf("open Desktop %s popup", control), func() error {
+		if err := activate(ctx); err != nil {
+			return err
+		}
 		controls, err := freshControls(ctx, workspace, []string{control}, inspect)
 		if err != nil {
 			return err
@@ -303,6 +315,9 @@ func selectFromPopup(
 	// selector resolved before it settled is what refuses the click — the same
 	// shape ArchiveOwned already retries for its own menu item.
 	if err := retryTransientAX(ctx, fmt.Sprintf("select Desktop %s entry %q", control, value), func() error {
+		if err := activate(ctx); err != nil {
+			return err
+		}
 		elements, err := inspect(ctx)
 		if err != nil {
 			return err

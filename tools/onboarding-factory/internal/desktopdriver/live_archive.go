@@ -68,6 +68,10 @@ func (runtime *LiveRuntime) clickOwnedSessionArchiveItem(ctx context.Context) er
 	// Re-read the menu and click inside the retry: the item animates in, and a
 	// selector resolved before it settled is what refuses the click.
 	return retryTransientAX(ctx, "archive the owned Desktop session", func() error {
+		// nofront: the owned-session menu is already open, and the click that
+		// opened it required Desktop to be frontmost, so it still is. Running
+		// `open -a Claude` against an app showing a popup menu can dismiss the
+		// menu — which is the one control this step exists to click.
 		elements, err := runtime.helper.inspect(ctx)
 		if err != nil {
 			return err

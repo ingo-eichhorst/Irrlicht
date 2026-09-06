@@ -38,7 +38,7 @@ func TestInterruptClicksStopAndWaitsForSendToExist(t *testing.T) {
 		postcondition = condition
 		return nil
 	}
-	if err := interruptTurn(context.Background(), "/repo/workspace", inspect, click); err != nil {
+	if err := interruptTurn(context.Background(), "/repo/workspace", noFront, inspect, click); err != nil {
 		t.Fatalf("interruptTurn() error = %v", err)
 	}
 	if clicked.Role != "AXButton" || clicked.Description != "Stop" {
@@ -58,7 +58,7 @@ func TestInterruptFailsLoudlyWhenSendCannotBeResolved(t *testing.T) {
 		t.Fatal("no send control resolved; the wait must not click anything")
 		return nil
 	}
-	err := interruptTurn(context.Background(), "/repo/workspace", inspect, click)
+	err := interruptTurn(context.Background(), "/repo/workspace", noFront, inspect, click)
 	if err == nil || !strings.Contains(err.Error(), "found 0") {
 		t.Fatalf("interruptTurn() error = %v", err)
 	}
@@ -90,7 +90,7 @@ func TestPressKeyEscapeWaitsForSendAndEnterWaitsForStop(t *testing.T) {
 				postcondition = condition
 				return nil
 			}
-			if err := pressKey(context.Background(), test.key, "/repo/workspace", inspect, keyboard); err != nil {
+			if err := pressKey(context.Background(), test.key, "/repo/workspace", noFront, inspect, keyboard); err != nil {
 				t.Fatalf("pressKey(%q) error = %v", test.key, err)
 			}
 			if pressed.Description != "Prompt" {
@@ -117,7 +117,7 @@ func TestPressKeyRefusesAnUnsupportedKeyWithoutTouchingDesktop(t *testing.T) {
 		t.Fatal("an unsupported key must never reach the keyboard helper")
 		return nil
 	}
-	err := pressKey(context.Background(), "F13", "/repo/workspace", inspect, keyboard)
+	err := pressKey(context.Background(), "F13", "/repo/workspace", noFront, inspect, keyboard)
 	if err == nil || !strings.Contains(err.Error(), "no observable Desktop postcondition") {
 		t.Fatalf("pressKey() error = %v", err)
 	}
@@ -158,7 +158,7 @@ func TestSelectModeOpensTheMenuSelectsTheEntryAndConfirmsTheReport(t *testing.T)
 		clicks = append(clicks, selector)
 		return nil
 	}
-	if err := selectFromPopup(context.Background(), workspace, controlMode, "Plan", modeReportsEntry, inspect, click); err != nil {
+	if err := selectFromPopup(context.Background(), workspace, controlMode, "Plan", modeReportsEntry, noFront, inspect, click); err != nil {
 		t.Fatalf("selectFromPopup() error = %v", err)
 	}
 	if len(clicks) != 2 {
@@ -202,7 +202,7 @@ func TestSelectModelConfirmsFromDescriptionNotTitle(t *testing.T) {
 		}
 	}
 	click := func(context.Context, helperSelector, helperPostcondition) error { return nil }
-	if err := selectFromPopup(context.Background(), workspace, controlModel, "Sonnet 5", modelReportsEntry, inspect, click); err != nil {
+	if err := selectFromPopup(context.Background(), workspace, controlModel, "Sonnet 5", modelReportsEntry, noFront, inspect, click); err != nil {
 		t.Fatalf("selectFromPopup() error = %v", err)
 	}
 }
