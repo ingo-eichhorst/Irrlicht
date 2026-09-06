@@ -140,3 +140,62 @@ func TestSubmitRetriesAClickTheHelperRefusedBeforePosting(t *testing.T) {
 		t.Fatalf("Send was clicked %d times; the first was refused before it landed, so it owed a retry", clicks)
 	}
 }
+
+// openSessionComposerElements is what Claude Desktop exposes once a session is
+// OPEN and a turn is running: the prompt area and the send slot showing Stop,
+// with the new-session composer's environment and project popups gone.
+//
+// Measured on 1.46388.4 on 2026-09-07 from the tree cell 2-20 was refused
+// against: the only AXPopUpButtons on screen were "More navigation items",
+// "Filter", the account switcher and one "More options for <title>" per sidebar
+// row. Nothing titled "Local", and nothing titled after the workspace.
+func openSessionComposerElements() []helperElement {
+	return []helperElement{
+		fixtureElement("prompt", "AXTextArea", "", "Prompt"),
+		fixtureElement("stop", "AXButton", "", "Stop"),
+		fixtureElement("nav", "AXPopUpButton", "", "More navigation items"),
+		fixtureElement("filter", "AXPopUpButton", "", "Filter"),
+		fixtureElement("account", "AXPopUpButton", "Ingo Ingo Max", ""),
+		fixtureElement("row", "AXPopUpButton", "", "More options for Hello world Python file"),
+	}
+}
+
+// RED-FIRST. Cell 2-20 failed its interrupt twice on this — once before the app
+// was made to come forward first, and once after:
+//
+//	interrupt the in-flight Desktop turn: … Desktop environment control requires
+//	one AXPopUpButton titled "Local"; found 0
+//
+// The resolver asked for environment and project, which belong to the
+// NEW-SESSION composer and are gone once a session is open. Fronting cannot
+// restore a control that no longer exists.
+func TestInFlightControlsResolveOnceTheNewSessionComposerIsGone(t *testing.T) {
+	stop, send, prompt, err := inFlightKeyControls(openSessionComposerElements(), "/repo/workspace")
+	if err != nil {
+		t.Fatalf("inFlightKeyControls() error = %v; an in-flight turn shows neither environment nor project", err)
+	}
+	if stop.Description != stopButtonDescription {
+		t.Errorf("stop = %+v, want the Stop button", stop)
+	}
+	if send.Description != "Send" || len(send.Hierarchy) != len(stop.Hierarchy) {
+		t.Errorf("send = %+v, want Stop's slot with the Send label", send)
+	}
+	if prompt.Role != "AXTextArea" || prompt.Description != "Prompt" {
+		t.Errorf("prompt = %+v, want the prompt text area", prompt)
+	}
+}
+
+// It must still refuse when the thing it drives is missing. A turn that is not
+// running has no Stop button, and interrupting nothing is not a success.
+func TestInFlightControlsRefuseWithoutAStopButton(t *testing.T) {
+	err := func() error {
+		_, _, _, err := inFlightKeyControls(controlsComposerElements("workspace"), "/repo/workspace")
+		return err
+	}()
+	if err == nil {
+		t.Fatal("inFlightKeyControls() returned nil with no Stop button on screen")
+	}
+	if !strings.Contains(err.Error(), "stop control") {
+		t.Fatalf("error = %v, want it to name the missing stop control", err)
+	}
+}

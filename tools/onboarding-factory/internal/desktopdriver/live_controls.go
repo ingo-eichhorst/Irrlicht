@@ -88,11 +88,26 @@ func freshStopAndSend(
 	return stop, send, err
 }
 
+// inFlightKeyControls resolves what an in-flight action DRIVES, and nothing
+// else: the Stop button, the Send button that replaces it, and the prompt area
+// a keystroke is aimed at.
+//
+// It used to ask for basicTurnControls() — environment, project, prompt. Two of
+// those three belong to the NEW-SESSION composer and are gone once a session is
+// open; the catalog says as much where it explains why the environment has to
+// be read before the turn rather than after. So cell 2-20 failed its interrupt
+// with `Desktop environment control requires one AXPopUpButton titled "Local";
+// found 0` on 2026-09-06 and again on 2026-09-07, once before and once after
+// the app was made to come forward first. Fronting cannot restore a control
+// that is not there any more.
+//
+// A caller that asks for more than it drives couples itself to controls it does
+// not use — composerControls' own doc comment. This is that rule applied.
 func inFlightKeyControls(
 	elements []helperElement,
 	workspace string,
 ) (stop, send, prompt helperSelector, err error) {
-	controls, err := composerControls(elements, workspace, basicTurnControls())
+	controls, err := composerControls(elements, workspace, []string{controlPrompt})
 	if err != nil {
 		return helperSelector{}, helperSelector{}, helperSelector{}, err
 	}
@@ -142,7 +157,13 @@ func turnInFlight(elements []helperElement) bool {
 // waiting for Send to come back. A postcondition on Stop's own absence would
 // also pass if the whole composer went away.
 func (runtime *LiveRuntime) Interrupt(ctx context.Context) error {
-	return interruptTurn(ctx, runtime.workspace, runtime.front, runtime.helper.inspect, runtime.helper.click)
+	err := interruptTurn(ctx, runtime.workspace, runtime.front, runtime.helper.inspect, runtime.helper.click)
+	if err != nil {
+		// Same reason as a refused key press: the tree at the moment of refusal
+		// is the only thing that says what was on screen instead.
+		return runtime.withFailureTree(ctx, keyFailureTreeFile, err)
+	}
+	return nil
 }
 
 func interruptTurn(
