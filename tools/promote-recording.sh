@@ -360,9 +360,15 @@ populate_recording() {
 # 3. Validate the candidate against the cell's expected.jsonl. Echoes the pass
 #    rate; non-zero rejects. Run ONCE now, where it gates — the old flow ran
 #    expected-validate twice, once for the manifest field and once for the gate.
+#    --profile is NOT optional here. A phase may carry per-profile expectations
+#    (#1925), and grading a desktop-local candidate as cli-local applies the
+#    CLI's expectations to events the CLI never produced. That is what this call
+#    did before: every Desktop candidate was rejected at 1/2 phases on
+#    session_birth, which is why no Desktop recording was ever promoted.
 validate_recording() {
   local cell_dir="$1" rec_name="$2" out
-  if out="$(cd "$REPO_ROOT" && go run ./tools/onboarding-factory/cmd/expected-validate "$cell_dir" "$rec_name" 2>/dev/null)"; then
+  if out="$(cd "$REPO_ROOT" && go run ./tools/onboarding-factory/cmd/expected-validate \
+      --profile "$EXECUTION_PROFILE" "$cell_dir" "$rec_name" 2>/dev/null)"; then
     echo "$out" | jq -r '.summary' 2>/dev/null || echo ""
     return 0
   fi

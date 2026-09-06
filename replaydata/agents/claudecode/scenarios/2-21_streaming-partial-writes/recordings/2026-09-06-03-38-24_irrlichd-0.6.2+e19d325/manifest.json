@@ -1,0 +1,13 @@
+{
+  "promoted_at": "2026-09-06T13:07:09Z",
+  "daemon_version": "0.6.2+e19d325",
+  "agent_cli_version": "2.1.260",
+  "recipe_hash": "6a66952ba3bd7ba0f612c1a30a9ad32935919e348594cd926cfa6e57cc382edb",
+  "expected_pass_rate": "4/4 phases passed",
+  "recording_started_at": "2026-09-06T03:38:24.764763+02:00",
+  "git_head_start": "939d59e0",
+  "git_head_end": "939d59e0",
+  "execution_profile": "desktop-local",
+  "entrypoint": "claude-desktop",
+  "desktop_app_version": "1.46388.4"
+}
