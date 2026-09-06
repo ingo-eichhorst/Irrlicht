@@ -47,6 +47,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -151,7 +152,53 @@ type ExpectedPhase struct {
 	Invariants        []string `json:"invariants,omitempty"`
 	Trigger           string   `json:"trigger,omitempty"` // documentation-only this iteration
 	Text              string   `json:"text,omitempty"`
+
+	// Profiles refines this phase for one execution profile, keyed by the
+	// profile name ("cli-local", "desktop-local"). A profile with no entry
+	// uses the phase as written, so adding an override cannot change how any
+	// other profile is graded.
+	Profiles map[string]PhaseProfileOverride `json:"profiles,omitempty"`
+
+	// acceptStates is the resolved state set for the profile currently under
+	// validation, filled in by resolvePhasesForProfile. Unexported on purpose:
+	// the report serializes Definitions verbatim, and a resolved copy of the
+	// spec must not leak into it as though the author had written it.
+	acceptStates []string
 }
+
+// PhaseProfileOverride adjusts one phase for one execution profile.
+//
+// It exists because the same spec sentence can describe different observable
+// event shapes depending on how the profile launches the agent. The motivating
+// case is session birth: `claude` launches and idles, so a CLI session is born
+// `ready`; under Claude Desktop, submitting the prompt is the act that CREATES
+// the session, so the row appears already `working` and only reaches `ready`
+// when the first turn ends. One phase asserting `ready` within 1s therefore
+// measured birth latency under cli-local and first-turn DURATION under
+// desktop-local.
+//
+// An override narrows or widens the accepted STATES only. It cannot move an
+// anchor, relax a delay budget, or skip a phase — a spec that needs those is
+// describing a different assertion and should say so as its own phase.
+type PhaseProfileOverride struct {
+	// ExpectedStates lists every state that satisfies the phase under this
+	// profile. More than one entry is legitimate where the daemon's own
+	// bookkeeping decides which appears: under desktop-local a session is
+	// born `working` when transcript activity reaches the daemon first, and
+	// `ready` when PID discovery wins that race (measured: 10 of 11
+	// recordings the first way, 1 the second). Both are the same
+	// user-observable fact — the session exists.
+	ExpectedStates []string `json:"expected_states,omitempty"`
+}
+
+// expectedStateVocabulary mirrors core's session.CanonicalStates(). The
+// factory is a separate Go module and cannot import the daemon's domain
+// package, so this is the one place the vocabulary is restated; it names ALL
+// four states deliberately, both because a partial list is what
+// tools/state-vocabulary-lint.sh exists to catch and because a validator that
+// silently accepted an unknown state would report the author's typo as a
+// scenario failure.
+var expectedStateVocabulary = []string{"working", "waiting", "ready", "error"}
 
 // ExpectedResult is the per-phase verdict for an expected.jsonl file
 // validated against an events.jsonl recording.
@@ -336,7 +383,7 @@ func ValidateExpectedForProfile(scenarioDir string, profile matrix.ExecutionProf
 			}
 		}
 	}
-	return ValidateExpectedAgainst(expectedPath, eventsPath)
+	return ValidateExpectedAgainstForProfile(expectedPath, eventsPath, profile)
 }
 
 // ValidateExpectedAgainst runs the validator with explicitly named
@@ -347,6 +394,15 @@ func ValidateExpectedForProfile(scenarioDir string, profile matrix.ExecutionProf
 // FAILS the current spec means either the spec moved or the daemon
 // went backward (the maintainer disambiguates).
 func ValidateExpectedAgainst(expectedPath, eventsPath string) (*ExpectedReport, error) {
+	return ValidateExpectedAgainstForProfile(expectedPath, eventsPath, matrix.ProfileCLILocal)
+}
+
+// ValidateExpectedAgainstForProfile is ValidateExpectedAgainst scoped to one
+// execution profile, so a phase's per-profile overrides resolve against the
+// profile that actually produced the recording.
+func ValidateExpectedAgainstForProfile(
+	expectedPath, eventsPath string, profile matrix.ExecutionProfile,
+) (*ExpectedReport, error) {
 	if hasParentTraversal(expectedPath) || hasParentTraversal(eventsPath) {
 		return nil, nil
 	}
@@ -364,7 +420,7 @@ func ValidateExpectedAgainst(expectedPath, eventsPath string) (*ExpectedReport, 
 	if err != nil {
 		return nil, fmt.Errorf("load expected.jsonl: %w", err)
 	}
-	return ValidatePhases(meta, phases, eventsPath)
+	return ValidatePhasesForProfile(meta, phases, eventsPath, profile)
 }
 
 // ValidatePhases validates already-parsed spec phases against the recording at
@@ -375,6 +431,16 @@ func ValidateExpectedAgainst(expectedPath, eventsPath string) (*ExpectedReport, 
 // hasn't been captured yet (the half-recorded guard lives in ValidateExpected,
 // the cell path).
 func ValidatePhases(meta ExpectedMeta, phases []ExpectedPhase, eventsPath string) (*ExpectedReport, error) {
+	return ValidatePhasesForProfile(meta, phases, eventsPath, matrix.ProfileCLILocal)
+}
+
+// ValidatePhasesForProfile is ValidatePhases scoped to one execution profile.
+// Phases resolve their per-profile overrides against it before matching; the
+// report's Definitions still carry the spec AS AUTHORED, so a reader sees the
+// override rather than a pre-resolved copy that hides it.
+func ValidatePhasesForProfile(
+	meta ExpectedMeta, phases []ExpectedPhase, eventsPath string, profile matrix.ExecutionProfile,
+) (*ExpectedReport, error) {
 	if hasParentTraversal(eventsPath) {
 		return nil, nil
 	}
@@ -394,7 +460,7 @@ func ValidatePhases(meta ExpectedMeta, phases []ExpectedPhase, eventsPath string
 	results := make([]ExpectedResult, 0, len(phases))
 	allPass := true
 
-	for _, p := range phases {
+	for _, p := range resolvePhasesForProfile(phases, profile) {
 		r := matchPhase(p, events, anchorTs, matchedSid)
 		results = append(results, r)
 		if !r.Pass {
@@ -473,8 +539,76 @@ func phaseShapeViolation(p ExpectedPhase) string {
 		// binds — the same class of trap min_delay_ms exists to remove.
 		return "min_delay_ms must not exceed max_delay_ms (the window would be empty)"
 	default:
-		return ""
+		return profilesViolation(p)
 	}
+}
+
+// profilesViolation checks a phase's per-profile overrides. Every fault here
+// is an AUTHORING error that would otherwise be invisible: a misspelled
+// profile key, an unknown state, or an empty override all parse cleanly, apply
+// to nothing, and leave the cell failing for a reason that looks like a
+// scenario defect rather than a typo. Returns "" when the overrides are sound.
+func profilesViolation(p ExpectedPhase) string {
+	names := make([]string, 0, len(p.Profiles))
+	for name := range p.Profiles {
+		names = append(names, name)
+	}
+	slices.Sort(names) // deterministic message when several keys are wrong
+	for _, name := range names {
+		if _, err := matrix.ParseExecutionProfile(name); err != nil {
+			return fmt.Sprintf("profiles key %q is not a known execution profile: %v", name, err)
+		}
+		if msg := overrideViolation(p, name, p.Profiles[name]); msg != "" {
+			return msg
+		}
+	}
+	return ""
+}
+
+// overrideViolation checks one profile's override against the phase it refines.
+func overrideViolation(p ExpectedPhase, name string, override PhaseProfileOverride) string {
+	if len(override.ExpectedStates) == 0 {
+		return fmt.Sprintf("profiles[%q] declares no expected_states — an override that overrides nothing", name)
+	}
+	if p.ExpectedState == "" {
+		return fmt.Sprintf(
+			"profiles[%q] sets expected_states on a phase that matches by kind %q — a kind phase has no state to override",
+			name, p.Kind)
+	}
+	for _, state := range override.ExpectedStates {
+		if !slices.Contains(expectedStateVocabulary, state) {
+			return fmt.Sprintf(
+				"profiles[%q] expected_states contains %q, which is not a session state (%s)",
+				name, state, strings.Join(expectedStateVocabulary, ", "))
+		}
+	}
+	return ""
+}
+
+// resolvePhasesForProfile returns phases with each one's accepted state set
+// resolved against profile. A phase with no override for this profile keeps
+// exactly the single state it declares, so an override is inert everywhere it
+// is not named.
+func resolvePhasesForProfile(phases []ExpectedPhase, profile matrix.ExecutionProfile) []ExpectedPhase {
+	resolved := make([]ExpectedPhase, len(phases))
+	copy(resolved, phases)
+	for i := range resolved {
+		resolved[i].acceptStates = resolvedStatesFor(resolved[i], profile)
+	}
+	return resolved
+}
+
+// resolvedStatesFor picks the states that satisfy p under profile: the
+// profile's override when it names one, else the phase's own expected_state.
+// A kind-matching phase resolves to no states at all.
+func resolvedStatesFor(p ExpectedPhase, profile matrix.ExecutionProfile) []string {
+	if override, ok := p.Profiles[string(profile)]; ok && len(override.ExpectedStates) > 0 {
+		return override.ExpectedStates
+	}
+	if p.ExpectedState == "" {
+		return nil
+	}
+	return []string{p.ExpectedState}
 }
 
 func loadExpected(path string) (ExpectedMeta, []ExpectedPhase, error) {
@@ -643,10 +777,25 @@ func resolveSessionConstraint(p ExpectedPhase, matchedSid map[string]string) (sc
 // that state) or Kind (an event of that kind) is set on a well-formed
 // phase.
 func eventMatchesPhaseKind(p ExpectedPhase, ev *recordedEvent) bool {
-	if p.ExpectedState != "" {
-		return ev.Kind == "state_transition" && ev.NewState == p.ExpectedState
+	if states := phaseStates(p); len(states) > 0 {
+		return ev.Kind == "state_transition" && slices.Contains(states, ev.NewState)
 	}
 	return p.Kind != "" && ev.Kind == p.Kind
+}
+
+// phaseStates returns the states that satisfy p. It prefers the set resolved
+// for the profile under validation and falls back to the phase's own
+// expected_state, so a phase reaching the matcher WITHOUT having been resolved
+// (a directly-constructed phase in a test, a shard-parsed spec) still grades
+// exactly as it did before per-profile overrides existed.
+func phaseStates(p ExpectedPhase) []string {
+	if len(p.acceptStates) > 0 {
+		return p.acceptStates
+	}
+	if p.ExpectedState == "" {
+		return nil
+	}
+	return []string{p.ExpectedState}
 }
 
 // findMatchingEvent scans events in order for the first one at or after
@@ -696,7 +845,10 @@ func eventSatisfiesPhase(p ExpectedPhase, ev *recordedEvent, sc sessionConstrain
 // tailored to whichever session-id constraint (if any) narrowed the
 // search.
 func noMatchReason(p ExpectedPhase, anchorName, requireSID string) string {
-	want := p.ExpectedState
+	// Name every state the phase would have accepted. With a per-profile
+	// override the phase can accept more than one, and reporting only the
+	// first would send a reader looking for a constraint the spec never had.
+	want := strings.Join(phaseStates(p), "\" or \"")
 	if want == "" {
 		want = p.Kind
 	}

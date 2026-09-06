@@ -74,9 +74,10 @@ func validateExpectedRequest(request expectedValidationRequest) (*validate.Expec
 		return validate.ValidateExpectedForProfile(request.ScenarioDir, request.Profile)
 	}
 	recDir := filepath.Join(request.ScenarioDir, "recordings", request.RecordingName)
-	return validate.ValidateExpectedAgainst(
+	return validate.ValidateExpectedAgainstForProfile(
 		filepath.Join(request.ScenarioDir, "expected.jsonl"),
 		filepath.Join(recDir, "events.jsonl"),
+		request.Profile,
 	)
 }
 

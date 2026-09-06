@@ -90,7 +90,7 @@ func (s *Server) handleScenarioDetail(w http.ResponseWriter, r *http.Request) {
 	// Validate the same newest recording populated above — and only within this
 	// profile, so a Desktop status can never be computed from CLI events.
 	// Errors are swallowed so a malformed expected.jsonl doesn't 500 the response.
-	d.Expected = expectedReportForLatest(scenarioDir, d.LatestRecording)
+	d.Expected = expectedReportForLatest(scenarioDir, d.LatestRecording, profile)
 	d.Assessment = loadAssessment(scenarioDir)
 	d.DesktopResult = desktopResultView(scenarioDir)
 	d.Profiles = profileOptions(scenarioDir, d.DesktopResult)
@@ -115,22 +115,31 @@ func newestRecordingDirForProfile(scenarioDir string, profile matrix.ExecutionPr
 	return recording.Dir, true, nil
 }
 
-func expectedReportForLatest(scenarioDir, recordingName string) *validate.ExpectedReport {
+func expectedReportForLatest(
+	scenarioDir, recordingName string, profile matrix.ExecutionProfile,
+) *validate.ExpectedReport {
 	if recordingName == "" {
 		return nil
 	}
 	recDir := filepath.Join(scenarioDir, "recordings", recordingName)
-	report, err := validateExpectedRecording(scenarioDir, recDir)
+	report, err := validateExpectedRecording(scenarioDir, recDir, profile)
 	if err != nil {
 		return nil
 	}
 	return report
 }
 
-func validateExpectedRecording(scenarioDir, recordingDir string) (*validate.ExpectedReport, error) {
-	return validate.ValidateExpectedAgainst(
+// validateExpectedRecording grades one recording against the cell's spec
+// WITHIN its own execution profile. The profile is not decoration: a phase may
+// carry per-profile overrides, and grading a Desktop recording as cli-local
+// applies the CLI's expectations to events the CLI never produced.
+func validateExpectedRecording(
+	scenarioDir, recordingDir string, profile matrix.ExecutionProfile,
+) (*validate.ExpectedReport, error) {
+	return validate.ValidateExpectedAgainstForProfile(
 		filepath.Join(scenarioDir, "expected.jsonl"),
 		filepath.Join(recordingDir, eventsFileName),
+		profile,
 	)
 }
 

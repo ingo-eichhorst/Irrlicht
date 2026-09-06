@@ -190,9 +190,10 @@ func (v *validation) validateRecordingCompleteness(context recordingValidationCo
 }
 
 func (v *validation) validateObservedOutcome(context recordingValidationContext) {
-	report, err := expectedvalidate.ValidateExpectedAgainst(
+	report, err := expectedvalidate.ValidateExpectedAgainstForProfile(
 		filepath.Join(context.cellDir, "expected.jsonl"),
 		filepath.Join(context.recordingDir, "events.jsonl"),
+		matrix.ProfileDesktopLocal,
 	)
 	if err != nil {
 		v.add(context.target, "outcome", "cannot validate the exact recording: "+err.Error())

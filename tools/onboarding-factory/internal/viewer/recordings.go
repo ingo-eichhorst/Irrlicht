@@ -102,9 +102,10 @@ func (s *Server) handleArchivedRecording(w http.ResponseWriter, req archiveReque
 	// Re-evaluate the archive against the CURRENT top-level expected.jsonl.
 	// Drift signal: archive may have passed at promote-time but fail today
 	// because the spec moved.
-	if rep, err := validate.ValidateExpectedAgainst(
+	if rep, err := validate.ValidateExpectedAgainstForProfile(
 		filepath.Join(req.scenarioDir, "expected.jsonl"),
 		store.archiveFilePath(req.scenarioDir, name, "events.jsonl"),
+		req.profile,
 	); err == nil && rep != nil {
 		d.Expected = rep
 	}
