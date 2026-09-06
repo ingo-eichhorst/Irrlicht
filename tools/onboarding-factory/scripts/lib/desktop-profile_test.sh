@@ -18,12 +18,22 @@ desktop_profile_validate_cell desktop-local claudecode 0 '{"prompt":"ok","settin
 assert_eq "basic Claude Code cell passes" 0 "$?"
 desktop_profile_validate_cell desktop-local claudecode 0 '{"script":[{"type":"send","text":"ok"}],"settings":{}}'
 assert_eq "a recipe cell reaches the recipe lint (#1888)" 0 "$?"
+# Measured live 2026-09-06: Claude Desktop DOES honour a workspace-scoped
+# .claude/settings.json — a PreToolUse hook placed there fired, and
+# permissions.defaultMode "plan" held a turn back from writing a file it was
+# told to write. The driver now writes the blob into the run's own throwaway
+# workspace, so a settings cell is no longer one that would run WITHOUT its
+# settings and report a pass.
+desktop_profile_validate_cell desktop-local claudecode 0 '{"prompt":"ok","settings":{"permissions":{"defaultMode":"plan"}}}'
+assert_eq "a workspace-scoped settings cell is accepted" 0 "$?"
+desktop_profile_validate_cell desktop-local claudecode 0 '{"prompt":"ok","settings":{"hooks":{"PreToolUse":[]}}}'
+assert_eq "a workspace-scoped hooks cell is accepted" 0 "$?"
 for mutation in \
   'codex|0|{"prompt":"ok"}' \
   'claudecode|1|{"prompt":"ok"}' \
-  'claudecode|0|{"prompt":"ok","settings":{"model":"x"}}' \
   'claudecode|0|{"prompt":"ok","env":{"TOKEN":"x"}}' \
-  'claudecode|0|{"prompt":"ok","mock":{"package":"./x"}}'; do
+  'claudecode|0|{"prompt":"ok","mock":{"package":"./x"}}' \
+  'claudecode|0|{"prompt":"ok","bare_mode":true}'; do
   IFS='|' read -r adapter attach json <<<"$mutation"
   if desktop_profile_validate_cell desktop-local "$adapter" "$attach" "$json" 2>/dev/null; then
     fail "unsafe cell is refused" "$mutation passed"

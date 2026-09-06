@@ -24,6 +24,7 @@ type options struct {
 	repoRoot        string
 	staging         string
 	workspace       string
+	settingsFile    string
 	promptFile      string
 	scriptFile      string
 	helper          string
@@ -91,12 +92,17 @@ func run(ctx context.Context, args []string) error {
 // driveRequest reads whichever input form was given. Exactly one of them is
 // accepted, so a caller that passes both never silently gets one of them.
 func driveRequest(options options) (desktopdriver.RunRequest, error) {
+	settings, err := readWorkspaceSettings(options.settingsFile)
+	if err != nil {
+		return desktopdriver.RunRequest{}, err
+	}
 	request := desktopdriver.RunRequest{
-		Workspace:      options.workspace,
-		EvidenceDir:    filepath.Join(options.staging, "desktop-evidence"),
-		OverallTimeout: options.timeout,
-		StepTimeout:    min(options.timeout/3, 90*time.Second),
-		CleanupTimeout: 45 * time.Second,
+		Workspace:         options.workspace,
+		WorkspaceSettings: settings,
+		EvidenceDir:       filepath.Join(options.staging, "desktop-evidence"),
+		OverallTimeout:    options.timeout,
+		StepTimeout:       min(options.timeout/3, 90*time.Second),
+		CleanupTimeout:    45 * time.Second,
 	}
 	if options.scriptFile != "" {
 		steps, err := readRecipe(options.scriptFile)
@@ -176,6 +182,7 @@ func parseOptions(args []string) (options, error) {
 	flags.StringVar(&value.repoRoot, "repo-root", "", "absolute repository root")
 	flags.StringVar(&value.staging, "staging", "", "absolute staging directory")
 	flags.StringVar(&value.workspace, "workspace", "", "absolute staging workspace")
+	flags.StringVar(&value.settingsFile, "settings", "", "cell settings blob written into the workspace")
 	flags.StringVar(&value.promptFile, "prompt-file", "", "prompt file under staging")
 	flags.StringVar(&value.scriptFile, "script-file", "", "recipe script JSON file under staging")
 	flags.StringVar(&value.helper, "helper", "", "absolute helper executable")
@@ -352,4 +359,22 @@ func userHome() string {
 		return ""
 	}
 	return home
+}
+
+// readWorkspaceSettings reads the cell's settings blob. run-cell.sh writes this
+// file for EVERY cell — the four-byte literal `null` when the cell declares no
+// settings — so a missing path and an absent block are both ordinary, and only
+// an unreadable existing file is an error.
+func readWorkspaceSettings(path string) ([]byte, error) {
+	if path == "" {
+		return nil, nil
+	}
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read settings file: %w", err)
+	}
+	return data, nil
 }

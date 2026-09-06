@@ -84,11 +84,29 @@ desktop_profile_validate_cell() {
   # A `script` recipe is no longer refused outright (#1888) — which step types
   # the Desktop driver can drive is decided by desktop_recipe_gaps below, from
   # the driver's own declaration, rather than by a blanket "prompt only".
-  if [[ "$(jq -c '.settings // {}' <<<"$cell_json")" != "{}" ]] ||
-     [[ "$(jq -c '.env // {}' <<<"$cell_json")" != "{}" ]] ||
+  # `settings` is NOT in this list, and that is a measured decision rather than
+  # an oversight. A cell's settings blob reaches the CLI driver as `claude
+  # --settings <path>` — a launch FLAG that writes nothing. Desktop takes no
+  # such flag, so the blob is written into the run's own throwaway workspace as
+  # .claude/settings.json, which Claude Desktop was measured to honour on
+  # 2026-09-06 (a PreToolUse hook placed there fired; permissions.defaultMode
+  # "plan" held a turn back from writing). That write cannot reach anything
+  # outside the run.
+  #
+  # The refusal had to cover `settings` until the driver actually applied it:
+  # driver-desktop.sh accepted a <settings-path> argument and DROPPED it, so a
+  # settings cell would have run without its settings and reported a pass. The
+  # two changes belong together — do not relax this guard again without
+  # checking the driver still writes the file.
+  #
+  # `env`, `mock` and `bare_mode` stay refused. None of them is
+  # workspace-scoped: Desktop authenticates through its own OAuth and the
+  # driver has no env path, and bare mode is a CLI launch shape Desktop has no
+  # equivalent for.
+  if [[ "$(jq -c '.env // {}' <<<"$cell_json")" != "{}" ]] ||
      [[ "$(jq -c '.mock // empty' <<<"$cell_json")" != "" ]] ||
      [[ "$(jq -r '.bare_mode // false' <<<"$cell_json")" == "true" ]]; then
-    echo "desktop-local refuses settings, env, mock, and bare-mode changes" >&2
+    echo "desktop-local refuses env, mock, and bare-mode changes" >&2
     return 1
   fi
   return 0
