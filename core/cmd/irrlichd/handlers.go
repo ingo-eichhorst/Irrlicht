@@ -507,9 +507,10 @@ func historyChartKnown(w http.ResponseWriter, chart string) bool {
 	case "state":
 		// implemented (#981, the "Activity Matrix" — time-in-state, the
 		// optional second half of #751) — handled after range resolution below
-	case chartAutonomyProjects:
-		// implemented (#1905, the Autonomy section's per-project panels) — it
-		// brings its OWN ?window= vocabulary, resolved in resolveHistoryQuery
+	case chartAutonomyProjects, chartAutonomyDuration:
+		// implemented (#1905, the Autonomy section's two elements — the
+		// aggregate percentile chart and the per-project panels) — both bring
+		// the SAME ?window= vocabulary, resolved in resolveHistoryQuery
 	default:
 		http.Error(w, "unknown chart: "+chart, http.StatusBadRequest)
 		return false
@@ -717,7 +718,7 @@ func resolveHistoryWindow(w http.ResponseWriter, q url.Values, chart string) (ra
 		}
 		bs, s, e, known := resolveAutonomyWindow(window)
 		if !known {
-			http.Error(w, autonomyWindowError(), http.StatusBadRequest)
+			http.Error(w, autonomyWindowError(chart), http.StatusBadRequest)
 			return "", 0, 0, 0, false
 		}
 		return window, s, e, bs, true
@@ -829,6 +830,11 @@ func serveNonCostHistoryChart(w http.ResponseWriter, r *http.Request, hq history
 		// history_autonomy_concurrency.go for why the concurrency figure is
 		// derived from those same spans rather than from ConcurrencyReader.
 		serveHistoryAutonomyProjectsChart(w, deps.autonomy, hq.rangeKey, hq.seriesQuery.BucketSeconds, hq.start, hq.end)
+	case chartAutonomyDuration:
+		// The same section's aggregate element, over the same store and the
+		// same window (#1905) — see history_autonomy_duration.go for why a
+		// percentile over every project and a maximum over one are both needed.
+		serveHistoryAutonomyDurationChart(w, deps.autonomy, hq.rangeKey, hq.seriesQuery.BucketSeconds, hq.start, hq.end)
 	case "yield":
 		// A per-project aggregate over completed sessions, not a time series (#373).
 		writeHistoryJSON(w, buildYieldResponse(hq.rangeKey, hq.group, hq.start, hq.end, deps.sessions))

@@ -59,6 +59,13 @@
          It is the --working RGB triple; `the bars are the line hue, not a
          second colour` in irrlicht.history.autonomy.test.js pins that. */
       --autonomy-bar: rgba(139, 92, 246, 0.45);
+      /* The aggregate chart's p5–p95 band (#1905), back with the chart. Same
+         hue again, at three more weights: the plane, the fainter plane a
+         thin bucket gets, and the edges that bound it. `the marks are one hue,
+         not four colours` in irrlicht.history.autonomy.test.js pins that. */
+      --autonomy-band: rgba(139, 92, 246, 0.20);
+      --autonomy-band-thin: rgba(139, 92, 246, 0.08);
+      --autonomy-edge: rgba(139, 92, 246, 0.45);
       /* Pressure-bar colors — mirror overlay's ContextBarColor / pressure_level mapping:
          safe → low, caution → medium, warning → high, critical → critical. */
       --pressure-low: #34C759;
@@ -109,6 +116,11 @@
            #0f1628, so a bar that is a faint wash on the dark card reads as a
            solid lavender block here — louder than the line it sits under. */
         --autonomy-bar: rgba(101, 38, 243, 0.38);
+        /* …and the band's three, re-tuned the same way and for the same
+           reason (see the dark block above). */
+        --autonomy-band: rgba(101, 38, 243, 0.11);
+        --autonomy-band-thin: rgba(101, 38, 243, 0.05);
+        --autonomy-edge: rgba(101, 38, 243, 0.38);
         /* #1801, same rule as the three above and measured the same way. The
            dark --error (#FF3B30) reads 3.01:1 against its own 12% wash on
            --surface #ffffff — under the 4.5:1 minimum, and the worst possible
@@ -147,6 +159,9 @@
       --ready-dim: rgba(32, 121, 54, 0.12);
       /* See the matching comment in the media-query block above. */
       --autonomy-bar: rgba(101, 38, 243, 0.38);
+      --autonomy-band: rgba(101, 38, 243, 0.11);
+      --autonomy-band-thin: rgba(101, 38, 243, 0.05);
+      --autonomy-edge: rgba(101, 38, 243, 0.38);
       --error: #CC0C00;
       --error-dim: rgba(204, 12, 0, 0.12);
     }
@@ -1776,20 +1791,23 @@
     .history-co2-info:hover { color: var(--text-bright); background: var(--working); }
     .history-co2-info[hidden] { display: none; }
 
-    /* Autonomy per-project panels (#1905). Five stacked panels inside the
-       shared chart card, replacing the canvas the way the activity matrix does
-       (see syncHistoryMatrixVisibility). The run strip this replaced was a
-       full-width block BELOW the card, because it was a second element; there
-       is only one now.
+    /* Autonomy (#1905). TWO elements inside the shared chart card: the
+       aggregate percentile chart on the canvas, and one project panel under it.
+       Unlike chart=state, this does NOT replace the canvas — it adds to it.
 
-       THE CARD GROWS; THE STACK DOES NOT SCROLL (QA-2). Five panels at a
-       readable height do not fit a 360px card, and an inner scrollbar cut off
-       the x axis and the "+N more" line — the row that says what the view left
-       out — while a couple of hundred pixels of page sat empty below the card.
-       So .autonomy releases the fixed height and the stack flows at its natural
-       size. `min-height` keeps the empty state's overlay a sensible size; it is
-       a FLOOR, never a ceiling, so nothing can be clipped by it. */
+       THE CARD GROWS; NOTHING SCROLLS INSIDE IT (QA-2, #1919). A chart plus a
+       panel at readable heights do not fit a fixed 360px card, and the rows an
+       inner scrollbar cut off first were the x axis and the "+N more" line —
+       the row that says what the view left out — while a couple of hundred
+       pixels of page sat empty below the card. So .autonomy releases the fixed
+       height and both elements flow at their natural size. `min-height` keeps
+       the empty state's overlay a sensible size; it is a FLOOR, never a
+       ceiling, so nothing can be clipped by it. */
     .history-chart-wrap.autonomy { height: auto; min-height: 220px; }
+    /* …which is exactly why the canvas needs an explicit height here: its
+       `height: 100%` resolves against an auto-height parent, i.e. to nothing,
+       and the aggregate chart would collapse to a zero-pixel strip. */
+    .history-chart-wrap.autonomy #history-chart { height: 220px; }
     .history-autonomy-panels { position: static; overflow: visible; }
     .history-autonomy-panels[hidden] { display: none; }
     .history-autonomy-panel { margin-bottom: 7px; }
@@ -1804,10 +1822,48 @@
       display: flex; align-items: baseline; gap: 10px;
       font-size: 11px; line-height: 15px; padding-bottom: 1px;
     }
-    .history-autonomy-panel-name {
-      color: var(--text); overflow: hidden;
-      text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto;
+    /* The project picker, in the panel's OWN header row — beside the figures it
+       changes, not up in the tab's control row with Range. Range moves both
+       elements; this moves one of them, and a control's place is what says
+       which. It is allowed to shrink (min-width: 0) so a long project name
+       ellipsises rather than pushing the figures off the row. */
+    .history-autonomy-project {
+      font: inherit; font-size: 11px; color: var(--text);
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 4px; padding: 1px 4px; max-width: 55%; min-width: 0;
     }
+    .history-autonomy-project:hover { border-color: var(--working); }
+    /* The sentence a panel draws instead of an empty frame when the selected
+       project has no runs in this range. An empty plot with axes on it is the
+       same picture a broken request draws; this says which it is. Its height is
+       the canvas's, so switching to an empty project does not make the card
+       jump. */
+    .history-autonomy-panel-empty {
+      height: 179px; display: flex; align-items: center; justify-content: center;
+      font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.06em;
+      text-transform: uppercase; color: var(--muted);
+    }
+    /* The per-bucket tooltip (#1905): the panel's bars carry a figure the
+       header can only state once, for the whole window.
+
+       IT STAYS INSIDE ITS OWN PANEL. It was pinned to the panel's top edge
+       (`bottom: 100%`), which put it OUTSIDE the panel and over the aggregate
+       chart above — hovering to read one chart hid the other, covering its
+       x-axis labels and its lowest data. Both offsets are set by JS now
+       (autonomyTipPlacement), which puts it below the pointer, flips it above
+       when that would overflow the panel's foot, and holds its right edge clear
+       of the gutter both y axes label themselves in. No `bottom` here, so the
+       panel's box can no longer be escaped upwards by a stale rule. */
+    .history-autonomy-panel { position: relative; }
+    .history-autonomy-tip {
+      position: absolute; top: 0; left: 0; transform: translateX(-50%);
+      pointer-events: none; white-space: nowrap; z-index: 3;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 4px; padding: 3px 6px;
+      font-family: var(--font-mono); font-size: 10px; color: var(--text-bright);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+    }
+    .history-autonomy-tip[hidden] { display: none; }
     /* The two figures the maintainer asked for, on the panel that carries them
        — so the exact longest never depends on reading a shared log axis, and
        the concurrency split is legible rather than buried in a tooltip. */
@@ -1819,19 +1875,17 @@
        its backing store from the constant and lays out against it, so a
        stylesheet that disagreed would scale every panel. autonomyLayout.test.js
        reads both and fails on a mismatch. */
-    .history-autonomy-panel-canvas { width: 100%; height: 67px; display: block; }
-    /* "+N more projects" — what the five-panel view left out. Quieter than a
-       panel and clearly not one: it is a statement about the stack, not another
-       row of it. */
+    .history-autonomy-panel-canvas { width: 100%; height: 179px; display: block; }
+    /* "+N more projects" — what the daemon's payload cap left out, which is
+       nothing on any machine seen so far. Quieter than the panel and clearly
+       not one: it is a statement about the payload, not another row of it. */
     .history-autonomy-more {
       font-family: var(--font-mono); font-size: 10px; color: var(--muted);
       opacity: 0.85; padding: 4px 0 0;
     }
-    /* The window's bounds, once under the whole stack: the five panels share
-       one x domain, so five copies would be five statements of one fact. The
-       padding matches the plot's own inset (AUTONOMY_PANEL.padL / .padR), so
-       each bound sits under the end of the line it describes rather than under
-       the right-hand tick gutter. */
+    /* The window's bounds, once under the panel. The padding matches the plot's
+       own inset (AUTONOMY_PANEL.padL / .padR), so each bound sits under the end
+       of the line it describes rather than under the right-hand tick gutter. */
     .history-autonomy-axis {
       display: flex; justify-content: space-between;
       padding-left: 4px; padding-right: 46px;
@@ -1932,11 +1986,20 @@
     }
     .history-contrib li { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 12px; }
     .history-contrib .dot { width: 9px; height: 9px; border-radius: 2px; flex-shrink: 0; }
-    /* The Autonomy key's two swatches. A panel draws one line and one row of
-       bars in a single hue, so the key has to distinguish them by SHAPE — two
-       identically-coloured dots would be a key that says the same thing twice.
-       Both take their colour from `currentColor`, which the JS resolvers set
-       from the same tokens the canvas painter reads, never from here. */
+    /* The Autonomy key's four swatches. The section draws two lines, one plane
+       and a row of bars in a SINGLE hue, so the key has to distinguish them by
+       SHAPE — four identically-coloured dots would be a key that says the same
+       thing four times. Every colour comes from `currentColor` (or, for the
+       band's fill, an inline background), which the JS resolvers set from the
+       same tokens the canvas painters read, never from here. */
+    .history-contrib .dot.autonomy-p50 {
+      width: 16px; height: 0; border-radius: 0; background: none;
+      border-top: 2px solid currentColor;
+    }
+    .history-contrib .dot.autonomy-band {
+      width: 16px; height: 10px; border-radius: 1px;
+      border-top: 1px solid currentColor; border-bottom: 1px solid currentColor;
+    }
     .history-contrib .dot.autonomy-line {
       width: 16px; height: 0; border-radius: 0; background: none;
       border-top: 2px solid currentColor;

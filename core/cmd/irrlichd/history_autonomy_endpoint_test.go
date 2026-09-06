@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -168,13 +169,56 @@ func TestAutonomyWindows_AreNotHistoryGranularities(t *testing.T) {
 }
 
 func TestAutonomy_RejectsAnUnknownWindow(t *testing.T) {
-	// The section offers 30d|1y. The run strip's old 8h…12mo vocabulary went
-	// with the strip, so a client still sending one is told rather than
-	// silently served some other window.
-	for _, window := range []string{"8h", "24h", "12mo", "week"} {
-		rec := getAutonomy(t, &fakeAutonomyStore{}, "chart=autonomy_projects&window="+window)
-		if rec.Code != http.StatusBadRequest {
-			t.Errorf("window=%s → %d, want 400", window, rec.Code)
+	// The section offers 30d|1y — ONE vocabulary for BOTH elements, so the two
+	// charts drawn one above the other can never show different periods. The run
+	// strip's old 8h…12mo vocabulary went with the strip, so a client still
+	// sending one is told rather than silently served some other window.
+	for _, chart := range []string{chartAutonomyProjects, chartAutonomyDuration} {
+		for _, window := range []string{"8h", "24h", "12mo", "week"} {
+			rec := getAutonomy(t, &fakeAutonomyStore{}, "chart="+chart+"&window="+window)
+			if rec.Code != http.StatusBadRequest {
+				t.Errorf("chart=%s window=%s → %d, want 400", chart, window, rec.Code)
+			}
+			// The body names the chart that was asked for. A caller that sent
+			// the wrong window to the right chart otherwise cannot tell which
+			// of the section's two requests failed.
+			if body := rec.Body.String(); !strings.Contains(body, chart) {
+				t.Errorf("chart=%s window=%s 400 body %q does not name the chart", chart, window, body)
+			}
+		}
+	}
+}
+
+// TestAutonomy_BothElementsShareOneWindowVocabulary pins the property the
+// section's single Range control depends on: whatever window the aggregate
+// chart accepts, the project panels accept, and they resolve to the SAME
+// period.
+//
+// The committed mutation is splitVocabulary below — the shape the run strip
+// had, where each element owned its own window keys. Two windows under one
+// control is how a reader ends up comparing a month of one chart against a year
+// of the other with nothing on screen saying they disagree.
+func TestAutonomy_BothElementsShareOneWindowVocabulary(t *testing.T) {
+	// The MUTATION: a per-chart window table, the run strip's old shape.
+	splitVocabulary := map[string]map[string]bool{
+		chartAutonomyDuration: {"30d": true, "1y": true},
+		chartAutonomyProjects: {"8h": true, "24h": true, "7d": true},
+	}
+	if splitVocabulary[chartAutonomyDuration]["24h"] == splitVocabulary[chartAutonomyProjects]["24h"] {
+		t.Fatal("the split-vocabulary mutation no longer disagrees with itself, so this fixture cannot " +
+			"show that production shares one table")
+	}
+
+	for window := range autonomyWindowSpecs {
+		durationResp := decodeAutonomyDuration(t, &fakeAutonomyStore{}, "chart="+chartAutonomyDuration+"&window="+window)
+		panelsResp := decodeAutonomy(t, &fakeAutonomyStore{}, "chart="+chartAutonomyProjects+"&window="+window)
+		if durationResp.BucketSeconds != panelsResp.BucketSeconds {
+			t.Errorf("window=%s: aggregate buckets %ds, panels %ds — one Range control moving two "+
+				"different periods", window, durationResp.BucketSeconds, panelsResp.BucketSeconds)
+		}
+		if len(durationResp.BucketStarts) != len(panelsResp.BucketStarts) {
+			t.Errorf("window=%s: aggregate has %d buckets, panels %d",
+				window, len(durationResp.BucketStarts), len(panelsResp.BucketStarts))
 		}
 	}
 }
@@ -408,12 +452,17 @@ func TestAutonomyConcurrency_SplitOnlyWhereKindIsKnown(t *testing.T) {
 	}
 }
 
-// --- Five panels, ranked by total autonomous time ---------------------------
+// --- Every project, ranked by total autonomous time -------------------------
 
-// TestAutonomy_DrawsFivePanelsAndNamesTheRest pins the section's shape: exactly
-// autonomyPanelCount panels, and everything below them named as a count rather
-// than dropped in silence.
-func TestAutonomy_DrawsFivePanelsAndNamesTheRest(t *testing.T) {
+// TestAutonomy_SendsEveryProjectRankedNotJustTheTopFew pins what the dropdown
+// depends on: the payload carries a panel for EVERY project with a run in the
+// window, ranked, not a five-project slice of them.
+//
+// It went red against the shipped build (autonomyPanelCount = 5), which sent
+// five panels and reported the other three as `more_projects` — a picker built
+// on that payload could offer only five of the eight projects its own summary
+// counted, and the three it dropped were unreachable.
+func TestAutonomy_SendsEveryProjectRankedNotJustTheTopFew(t *testing.T) {
 	now := time.Now().Unix()
 	spans := []outbound.AutonomySpan{}
 	// Eight projects, each with a distinct total so the ranking is unambiguous.
@@ -422,27 +471,70 @@ func TestAutonomy_DrawsFivePanelsAndNamesTheRest(t *testing.T) {
 	}
 	resp := decodeAutonomy(t, &fakeAutonomyStore{spans: spans, total: len(spans), earliest: now - 10000},
 		"chart=autonomy_projects&window=30d")
-	if len(resp.Panels) != autonomyPanelCount {
-		t.Fatalf("drew %d panels, want %d", len(resp.Panels), autonomyPanelCount)
+	if len(resp.Panels) != 8 {
+		t.Fatalf("drew %d panels over 8 projects, want 8 — a project the payload omits is one the "+
+			"dropdown cannot offer", len(resp.Panels))
+	}
+	if resp.MoreProjects != 0 {
+		t.Errorf("more_projects = %d, want 0 — nothing was left out", resp.MoreProjects)
 	}
 	if resp.PanelLimit != autonomyPanelCount {
-		t.Errorf("panel_limit = %d, want %d — clients render what they are sent rather than re-deciding "+
-			"the number", resp.PanelLimit, autonomyPanelCount)
-	}
-	if resp.MoreProjects != 3 {
-		t.Errorf("more_projects = %d, want 3 — an omission nothing mentions is indistinguishable from a "+
-			"project that never ran", resp.MoreProjects)
+		t.Errorf("panel_limit = %d, want %d — the cap is on the wire so a client reports what it was "+
+			"sent rather than re-deciding the number", resp.PanelLimit, autonomyPanelCount)
 	}
 	if resp.Summary.Projects != 8 {
-		t.Errorf("summary projects = %d, want 8 (the summary counts every project, not the drawn five)",
-			resp.Summary.Projects)
+		t.Errorf("summary projects = %d, want 8", resp.Summary.Projects)
 	}
-	// p8 has the most seconds, p4 the fifth-most.
-	want := []string{"p8", "p7", "p6", "p5", "p4"}
+	// Ranked, most autonomous time first — the order the client's default
+	// selection (rank 1) and its dropdown both read.
+	want := []string{"p8", "p7", "p6", "p5", "p4", "p3", "p2", "p1"}
 	for i, p := range resp.Panels {
 		if p.Project != want[i] {
 			t.Fatalf("panel %d = %q, want %q (order is most autonomous time first)", i, p.Project, want[i])
 		}
+	}
+}
+
+// TestAutonomy_PanelCapStillBitesAndSaysSo pins the other half: the cap is a
+// SAFETY cap, not a design, and a machine that reaches it is told rather than
+// silently truncated.
+//
+// It runs the builder directly rather than through the handler because the
+// fixture needs autonomyPanelCount+5 projects, and building that many HTTP
+// requests would say nothing extra about the rule under test.
+//
+// The committed mutation is unboundedPanels below — the "just send them all"
+// build, which is what makes a pathological install's payload unbounded.
+func TestAutonomy_PanelCapStillBitesAndSaysSo(t *testing.T) {
+	now := time.Now().Unix()
+	const extra = 5
+	spans := []outbound.AutonomySpan{}
+	// Distinct totals so the rank is total order, and the cap's tail is exactly
+	// the `extra` smallest.
+	for i := 1; i <= autonomyPanelCount+extra; i++ {
+		spans = append(spans, spanEndingAt(now-int64(i), int64(i)*10, fmt.Sprintf("p%04d", i), "ready"))
+	}
+	res := &outbound.AutonomySpanResult{Spans: spans, TotalRecorded: len(spans), EarliestStart: now - 100000}
+	resp := buildAutonomyProjectsResponse("30d", 86400, now-30*86400, now, res)
+
+	if len(resp.Panels) != autonomyPanelCount {
+		t.Fatalf("sent %d panels over %d projects, want the cap of %d",
+			len(resp.Panels), autonomyPanelCount+extra, autonomyPanelCount)
+	}
+	if resp.MoreProjects != extra {
+		t.Errorf("more_projects = %d, want %d — a truncation nothing mentions is indistinguishable "+
+			"from a project that never ran", resp.MoreProjects, extra)
+	}
+	if resp.Summary.Projects != autonomyPanelCount+extra {
+		t.Errorf("summary projects = %d, want %d (the summary counts every project, including the "+
+			"ones past the cap)", resp.Summary.Projects, autonomyPanelCount+extra)
+	}
+
+	// The MUTATION: no cap at all.
+	unboundedPanels := len(spans)
+	if unboundedPanels == len(resp.Panels) {
+		t.Fatal("the uncapped mutation sends the same number of panels production does — this fixture " +
+			"cannot show that the cap bites")
 	}
 }
 
@@ -550,7 +642,7 @@ func TestAutonomy_NilStoreServesEmptyButValid(t *testing.T) {
 }
 
 func TestAutonomy_StoreErrorIs500(t *testing.T) {
-	store := &fakeAutonomyStore{err: fmt.Errorf("disk on fire")}
+	store := &fakeAutonomyStore{err: errAutonomyProbe}
 	rec := getAutonomy(t, store, "chart=autonomy_projects&window=30d")
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("store error → %d, want 500", rec.Code)
@@ -571,5 +663,64 @@ func TestAutonomy_ReadIsUnlimited(t *testing.T) {
 	if store.lastQuery.End-store.lastQuery.Start != 52*7*86400 {
 		t.Errorf("window=1y asked the store for %ds, want %d",
 			store.lastQuery.End-store.lastQuery.Start, 52*7*86400)
+	}
+}
+
+// --- A stated figure must be reachable on the axis that states it -----------
+
+// TestAutonomy_PanelLongestIsAlwaysOnItsOwnAxis pins the property whose absence
+// was the aggregate chart's Y-domain defect (#1905): a figure the header states
+// must be a value the plot beside it can actually reach.
+//
+// The panel's line domain is built from its BUCKET longests, and its header
+// states the WINDOW longest. Those are two different reductions of the same
+// spans, and they agree only because every returned span is bucketed: the store
+// selects on `End < q.Start || End >= q.End` (foldSpanRow), so every span it
+// returns has an end inside the window and therefore an index inside [0, n).
+// A span counted towards the header but dropped from every bucket would put the
+// header's figure above the top of its own plot.
+//
+// A LOCK: it passes by construction against the code as written, and it is
+// here so a later change to either reduction — a filter on one side, a clamp on
+// the other — cannot silently break the pair. The mutation below is what such a
+// change looks like.
+func TestAutonomy_PanelLongestIsAlwaysOnItsOwnAxis(t *testing.T) {
+	now := time.Now().Unix()
+	spans := []outbound.AutonomySpan{
+		spanEndingAt(now-100, 600, "irrlicht", "ready"),
+		spanEndingAt(now-20*86400, 41_940, "irrlicht", "ready"), // the long one, 20 days back
+		spanEndingAt(now-5*86400, 900, "irrlicht", "ready"),
+	}
+	resp := decodeAutonomy(t, &fakeAutonomyStore{spans: spans, total: len(spans), earliest: now - 30*86400},
+		"chart=autonomy_projects&window=30d")
+	panel := panelFor(t, resp, "irrlicht")
+
+	var acrossBuckets float64
+	for _, b := range panel.Buckets {
+		if b.Longest > acrossBuckets {
+			acrossBuckets = b.Longest
+		}
+	}
+	if acrossBuckets <= 0 {
+		t.Fatal("no bucket carries a longest run, so this check cannot observe the pair it guards")
+	}
+	if panel.Longest != acrossBuckets {
+		t.Errorf("header states longest %v but the highest bucket is %v — the header's figure is not "+
+			"reachable on the plot beside it, which is the aggregate chart's Y-domain defect in the "+
+			"other direction", panel.Longest, acrossBuckets)
+	}
+
+	// The MUTATION: a bucketing pass that drops what falls outside the window
+	// instead of clamping it, while the header keeps counting it. It has to
+	// differ from production here, or this fixture proves nothing.
+	dropped := 0.0
+	for _, s := range spans {
+		if s.End >= now-10*86400 && float64(s.Duration()) > dropped {
+			dropped = float64(s.Duration())
+		}
+	}
+	if dropped == panel.Longest {
+		t.Fatal("the dropping mutation agrees with production on this fixture — it cannot show that " +
+			"every counted run is also bucketed")
 	}
 }

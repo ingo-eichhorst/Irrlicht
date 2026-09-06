@@ -8,29 +8,31 @@ import (
 	"irrlicht/core/ports/outbound"
 )
 
-// Autonomy (#1905) — the History view's own top-level section: FIVE PER-PROJECT
-// PANELS, one per project, stacked, each carrying the same two things.
+// Autonomy (#1905) — the History view's own top-level section: TWO ELEMENTS
+// over one data source, sharing one window vocabulary and one Range control.
 //
-//	A LINE — the longest run in each time bucket. Only `working` matters here;
-//	how a run ended is recorded but no longer drawn.
-//	A HISTOGRAM under it — how many runs were working AT THE SAME TIME in that
-//	bucket, derived from the span log by overlap.
+//	THE AGGREGATE CHART (chart=autonomy_duration, history_autonomy_duration.go)
+//	— p95/p50/p5 of run duration over EVERY project, with the plane between
+//	p95 and p5 filled as a band. "Is autonomy getting better across the
+//	machine."
+//	THE PROJECT PANELS (chart=autonomy_projects, this file) — per project, a
+//	LINE of the longest run in each time bucket and a HISTOGRAM under it of how
+//	many runs were working at the same time. "What did THIS project do." Only
+//	one panel is drawn at a time; the client picks which.
 //
-// WHAT THIS REPLACED, and why the replacement is smaller rather than richer:
+// The two are not redundant, and the reason is the shape of the figure. A
+// maximum over one project is that project's own story, and a maximum charted
+// across every project is a chart of whoever ran longest that day. A percentile
+// over the whole population is the trend, and a percentile over one project's
+// four runs is not a percentile. Each element carries the figure the other
+// cannot.
 //
-//   - The p5–p95 band and the p50 line are gone. The section reports the
-//     LONGEST run now, so a percentile envelope has nothing left to describe.
-//   - The per-project run strip, its end-reason colours and its legend are
-//     gone with them: the strip's whole subject was how a run ENDED.
-//   - The sample floor and the thin-bucket marking went with the percentiles.
-//     They existed because a p95 over four samples is not a percentile — it is
-//     that bucket's maximum wearing a percentile's name. A MAXIMUM over one run
-//     is simply that run, so there is nothing left for a floor to protect, and
-//     carrying it over as decoration would mark buckets whose figure is exact.
-//
-// `Reason` stays on the wire and in the store. Nothing renders it today; it
-// costs one string per row and it is the one field that cannot be recovered
-// after the fact, so it keeps being recorded.
+// WHAT IS STILL GONE. chart=autonomy_spans — the per-project run strip, its
+// end-reason colours, glyphs, legend and pixel-collapse ladder — stays deleted:
+// the section's subject is how LONG a run was, not how it ended. `Reason` stays
+// on the wire and in the store all the same. Nothing renders it today; it costs
+// one string per row and it is the one field that cannot be recovered after the
+// fact, so it keeps being recorded.
 //
 // Everything is served from the always-on span log (outbound.AutonomySpanStore),
 // never from the opt-in lifecycle recordings that back chart=agents/state — the
@@ -40,21 +42,23 @@ import (
 // missing exactly where this one is not.
 const chartAutonomyProjects = "autonomy_projects"
 
-// autonomyPanelCount is how many project panels the section draws.
+// autonomyPanelCount is how many project panels the daemon puts on the wire.
 //
-// FIVE, and the number is the design rather than a cap bolted onto an unbounded
-// list: the section is a per-project view of the five most important projects,
-// so the daemon computes five panels and says how many projects it left out.
-// Both clients draw what they are sent, which is why they cannot disagree about
-// how many panels a stack has (the run strip they replaced shipped twelve rows
-// on the web against six on macOS).
+// A SAFETY CAP, NOT A DESIGN. It was 5 when the section drew five panels
+// stacked; the client draws ONE at a time now and picks it from a dropdown, so
+// the daemon has to send every project the dropdown can offer or the picker
+// would be a list of five with the rest invisible. 200 is high enough that no
+// real machine reaches it (the reference machine's 1-year window holds 93
+// projects) and low enough that a pathological install cannot make the payload
+// unbounded. MoreProjects keeps counting anything past it, honestly, so a
+// machine that DOES reach it says so rather than silently truncating.
 //
-// "MOST IMPORTANT" IS GREATEST TOTAL AUTONOMOUS TIME IN THE WINDOW, never
-// longest single run: one lucky overnight run would otherwise promote a project
-// nobody has touched in a month over the one that has been working all week.
-// The rank is stated on the wire (historyAutonomyPanel.TotalSeconds) so it can
-// be checked rather than trusted.
-const autonomyPanelCount = 5
+// The panels stay RANKED — greatest total autonomous time in the window first,
+// never longest single run: one lucky overnight run would otherwise promote a
+// project nobody has touched in a month over the one that has been working all
+// week. Rank 1 is what a client defaults to, and each panel states its own
+// TotalSeconds so the ranking can be checked rather than trusted.
+const autonomyPanelCount = 200
 
 // autonomyWindowSpec pairs one Range's bucket width with its bucket count.
 //
@@ -69,20 +73,29 @@ type autonomyWindowSpec struct {
 	buckets       int64
 }
 
-// autonomyWindowSpecs is the section's Range vocabulary. Two ranges — the
-// section's only control now that the run strip's Span has gone with the strip.
+// autonomyWindowSpecs is the section's Range vocabulary — ONE table for BOTH
+// elements, and shared on purpose (#1905).
+//
+// The two charts are drawn one above the other over the same instants, so a
+// reader compares them by eye; two windows would let the aggregate show a month
+// while the panel below it showed a year, with nothing on screen saying they
+// disagreed. The run strip's separate Span vocabulary was exactly that failure
+// and went with the strip. 30 days is the floor: anything shorter has too few
+// spans per bucket for a percentile to mean anything.
 var autonomyWindowSpecs = map[string]autonomyWindowSpec{
 	"30d": {86400, 30},     // 30 daily buckets
 	"1y":  {7 * 86400, 52}, // 52 weekly buckets
 }
 
-// isAutonomyChart reports whether a ?chart= value is the Autonomy section's,
-// which resolves its window from ?window= instead of the usual ?range=/?bucket=
-// pair.
-func isAutonomyChart(chart string) bool { return chart == chartAutonomyProjects }
+// isAutonomyChart reports whether a ?chart= value is one of the Autonomy
+// section's two elements — both of which resolve their window from ?window=
+// instead of the usual ?range=/?bucket= pair.
+func isAutonomyChart(chart string) bool {
+	return chart == chartAutonomyProjects || chart == chartAutonomyDuration
+}
 
 // autonomyDefaultWindow is the ?window= value assumed when the client sends
-// none.
+// none. One value, because there is one vocabulary.
 func autonomyDefaultWindow() string { return "30d" }
 
 // resolveAutonomyWindow resolves ?window= into a trailing [start, end) window
@@ -96,9 +109,11 @@ func resolveAutonomyWindow(window string) (bucketSeconds, start, end int64, ok b
 	return spec.bucketSeconds, end - spec.bucketSeconds*spec.buckets, end, true
 }
 
-// autonomyWindowError is the 400 body for an unrecognized ?window=.
-func autonomyWindowError() string {
-	return "invalid window for chart=autonomy_projects: use 30d|1y"
+// autonomyWindowError is the 400 body for an unrecognized ?window=. It names
+// the chart that was asked for rather than the section, so a caller that sent
+// the wrong window to the right chart is told which request failed.
+func autonomyWindowError(chart string) string {
+	return "invalid window for chart=" + chart + ": use 30d|1y"
 }
 
 // historyAutonomyPanelBucket is one time bucket of one project's panel.
@@ -184,7 +199,8 @@ type historyAutonomyPanel struct {
 }
 
 // historyAutonomySummary is the window-wide figure row: the section's two
-// headline numbers across EVERY project, not just the five drawn.
+// headline numbers across EVERY project in the window, including any beyond the
+// panel cap and every one the reader has not selected.
 type historyAutonomySummary struct {
 	// Longest is the longest run anywhere in the window, and LongestProject
 	// names where it happened.
@@ -212,13 +228,19 @@ type historyAutonomyProjectsResponse struct {
 	BucketSeconds int64   `json:"bucket_seconds"`
 	BucketStarts  []int64 `json:"bucket_starts"`
 
-	// Panels are the five most important projects, most autonomous time first.
+	// Panels is EVERY project with a run in the window, most autonomous time
+	// first, up to autonomyPanelCount.
+	//
+	// Every one of them, because the client draws ONE at a time and offers the
+	// rest in a dropdown: a payload that carried only the top five would leave
+	// the picker unable to show a project the summary above it counts.
 	Panels []historyAutonomyPanel `json:"panels"`
-	// PanelLimit is how many panels the daemon draws — on the wire so a client
-	// renders what it was sent rather than re-deciding the number itself.
+	// PanelLimit is the safety cap the daemon applied — on the wire so a client
+	// reports what it was sent rather than re-deciding the number itself.
 	PanelLimit int `json:"panel_limit"`
 	// MoreProjects is how many projects the window holds beyond the panels, all
-	// of them with less autonomous time than every panel above.
+	// of them with less autonomous time than every panel above. 0 on every
+	// machine that stays under the cap, which is every machine seen so far.
 	MoreProjects int `json:"more_projects"`
 
 	Summary historyAutonomySummary `json:"summary"`
@@ -436,10 +458,11 @@ func serveHistoryAutonomyProjectsChart(w http.ResponseWriter, store outbound.Aut
 // nil store and writing a 500 on error. ok is false once it has written a
 // response.
 //
-// DELIBERATELY UNLIMITED. The run strip capped its read at 20 000 rows because
-// it drew one column per run and could not draw more than its own pixel width;
-// the panels reduce every run to two per-bucket figures, and a concurrency peak
-// computed from a clipped span list is simply wrong — silently, and always
+// DELIBERATELY UNLIMITED, and shared by both elements. The run strip capped its
+// read at 20 000 rows because it drew one column per run and could not draw more
+// than its own pixel width; both surviving elements reduce every run to a
+// per-bucket figure. A percentile computed from a clipped span list is wrong,
+// and a concurrency peak computed from one is wrong silently and always
 // downwards. A cap here would be a number nobody could check.
 func readAutonomySpans(w http.ResponseWriter, store outbound.AutonomySpanStore, q outbound.AutonomySpanQuery) (*outbound.AutonomySpanResult, bool) {
 	if store == nil {
@@ -467,8 +490,8 @@ type autonomyProjectTotals struct {
 }
 
 // buildAutonomyProjectsResponse groups the window's spans by project, ranks the
-// projects by total autonomous time, and reduces the top autonomyPanelCount of
-// them to a panel each.
+// projects by total autonomous time, and reduces each of them — up to the
+// autonomyPanelCount safety cap — to a panel.
 func buildAutonomyProjectsResponse(window string, bucketSeconds, start, end int64, res *outbound.AutonomySpanResult) historyAutonomyProjectsResponse {
 	n := 0
 	if bucketSeconds > 0 && end > start {
@@ -628,8 +651,9 @@ func autonomyBucketLongest(spans []outbound.AutonomySpan, start, bucketSeconds i
 	return longest, running
 }
 
-// autonomySummaryFrom reduces every project in the window — not just the five
-// drawn — to the section's two headline figures.
+// autonomySummaryFrom reduces every project in the window — including any past
+// the panel cap, and every one the reader is not currently looking at — to the
+// section's two headline figures.
 func autonomySummaryFrom(ranked []string, byProject map[string]*autonomyProjectTotals, start, end int64) historyAutonomySummary {
 	out := historyAutonomySummary{Projects: len(ranked)}
 	for _, project := range ranked {
