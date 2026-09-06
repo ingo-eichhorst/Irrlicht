@@ -700,6 +700,24 @@ write_driver_env
 # Ctrl-C on the recording operator's terminal, to learn a pid the exec wrapper
 # hands over for free. The wrapper keeps the call in the foreground, in the same
 # process group, with the same stdin, argv and exit status as before.
+# Teardown timings (#1828 item 5). teardown.sh's require_tmux_session_gone
+# appends one row per exit_clean teardown when this path is set, so every
+# ordinary recording contributes a data point toward the per-adapter table
+# DRIVE_EXIT_CLEAN_CAP_S's own comment says it could not measure. Exported
+# rather than passed as an argument: nine drivers already call that poll, and
+# the environment reaches an adapter added tomorrow without touching this file.
+#
+# Pre-created empty, and that matters: teardown_timings_json reads an ABSENT
+# file as "the rig failed" and an EMPTY one as "this recipe tore nothing down".
+# Without the pre-creation those two collapse, and a staging dir nobody could
+# write to would report as a clean run with nothing to measure.
+DRIVE_TEARDOWN_TIMINGS="$STAGING/teardown-timings.tsv"
+export DRIVE_TEARDOWN_TIMINGS
+if ! : >"$DRIVE_TEARDOWN_TIMINGS" 2>/dev/null; then
+  echo "WARNING: could not create $DRIVE_TEARDOWN_TIMINGS — this run contributes" \
+       "no teardown timing (#1828). The recording itself is unaffected." >&2
+fi
+
 # BEGIN driver_pid_capture
 DRIVER_PID_FILE="$STAGING/driver.pid"
 set +e
@@ -1189,10 +1207,12 @@ jq -n \
   --arg driver_exit_reason "$DRIVER_REASON" \
   --arg daemon_shutdown "$(daemon_shutdown_state)" \
   --argjson timeout_seconds "$TIMEOUT_S" \
+  --argjson teardown_timings "$(teardown_timings_json "$DRIVE_TEARDOWN_TIMINGS")" \
   --arg execution_profile "$EXECUTION_PROFILE" \
   --arg desktop_versions "$STAGING/desktop.versions.json" \
   --arg execution_results "$STAGING/execution-results.json" \
   '{adapter: $adapter,
+    teardown_timings: $teardown_timings,
     scenario: $scenario,
     session_uuid: $session_uuid,
     verdict: "STAGED",
