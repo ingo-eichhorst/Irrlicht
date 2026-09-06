@@ -623,7 +623,7 @@ struct SessionListView: View {
             .foregroundColor(.secondary)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
-            .background(Color.secondary.opacity(0.15))
+            .background(IrrColors.chipFill)
             .cornerRadius(IrrRadius.sm)
             .tooltip(hidden.map { quotaOverflowSummary($0) }.joined(separator: "\n"))
     }
@@ -1230,6 +1230,20 @@ struct SessionListView: View {
     
     // MARK: - Error View
     
+    /// The connection/API error band, in the same panel slot as the two
+    /// banners and on the same `noticeGround` (#1814) — it had grown that
+    /// geometry independently, down to the padding, at its own third alpha.
+    ///
+    /// It is NOT a `BannerStrip`, and that is deliberate rather than
+    /// unfinished. The part the two genuinely shared — the ground — is now
+    /// shared. What is left is a different surface: no rows, no lead/reason
+    /// pairs, and native warning chrome rather than brand notice chrome. Its
+    /// copy is `.secondary` on purpose, because system orange on an orange
+    /// wash measures ~2:1 in light mode (#984, the finding behind
+    /// `waitingPillText`), and a banner paints its headline in the tint.
+    /// Absorbing a rows-less degenerate case would cost `BannerStrip` a second
+    /// generic parameter and an explicit accessibility label at both existing
+    /// banners, to save six lines here.
     private func errorView(_ error: String) -> some View {
         // System .orange (not IrrColors.waiting) — this is generic warning
         // chrome, not the agent-waiting surface.
@@ -1244,9 +1258,7 @@ struct SessionListView: View {
 
             Spacer()
         }
-        .padding(.horizontal, IrrSpacing.sp3)
-        .padding(.vertical, 6)
-        .background(Color.orange.opacity(0.1))
+        .noticeGround(hue: .orange)
     }
 }
 

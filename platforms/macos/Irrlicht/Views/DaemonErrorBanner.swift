@@ -26,7 +26,7 @@ import SwiftUI
 ///     headline are told apart only by their reason text.
 ///
 /// It differs from that precedent in two ways, both deliberate. It is RED
-/// rather than orange-on-`waitingDim`: orange is this app's "an agent is
+/// rather than orange-on-its-own-wash: orange is this app's "an agent is
 /// waiting on you" hue, and a daemon fault is not a question anyone can
 /// answer. And it carries no action button — the grants banner has a wizard to
 /// send you to, and a stalled daemon has no equivalent one-click route, so
@@ -47,7 +47,7 @@ struct DaemonErrorBanner: View {
         BannerStrip(
             icon: "exclamationmark.triangle.fill",
             tint: IrrColors.errorPillText,
-            wash: IrrColors.errorDim,
+            hue: IrrColors.error,
             headline: summary.text,
             rows: summary.items.map {
                 BannerRow(id: $0.id, lead: $0.title, reason: $0.reason)

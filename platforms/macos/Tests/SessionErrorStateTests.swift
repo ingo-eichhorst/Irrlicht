@@ -369,11 +369,8 @@ final class SessionErrorStateTests: XCTestCase {
 /// aqua, which is also where the figures in `Tokens.swift`'s comment come
 /// from.
 ///
-/// 0.12 is the worst case of the two washes the feature uses (the row's error
-/// line sits on 0.08, the banner on `errorDim` = 0.12): more wash moves the
-/// background TOWARD the text's luminance in BOTH appearances — a light
-/// window ground darkens toward the dark `#C1121C` text, a dark one lightens
-/// toward `#FF7A70` — so bounding 0.12 bounds both.
+/// The alpha is READ from `IrrColors.noticeWashAlpha`, never restated here
+/// (#1814) — see that token for what happened while it was restated.
 @MainActor
 final class TokenContrastTests: XCTestCase {
     private func srgb(_ color: Color, in appearance: NSAppearance.Name) -> (r: Double, g: Double, b: Double) {
@@ -412,7 +409,7 @@ final class TokenContrastTests: XCTestCase {
 
     private func measure(_ appearance: NSAppearance.Name) -> Double {
         let wash = composite(srgb(IrrColors.error, in: appearance),
-                             alpha: 0.12,
+                             alpha: IrrColors.noticeWashAlpha,
                              over: windowBackground(in: appearance))
         return contrast(srgb(IrrColors.errorPillText, in: appearance), wash)
     }
@@ -423,7 +420,7 @@ final class TokenContrastTests: XCTestCase {
             // Printed, not only asserted: the number is what the token comment
             // cites, and a passing test that prints nothing is an unread
             // measurement.
-            print("contrast(errorPillText on 12% error wash, \(appearance.rawValue)) = \(String(format: "%.2f", ratio)):1")
+            print("contrast(errorPillText on \(Int(IrrColors.noticeWashAlpha * 100))% error wash, \(appearance.rawValue)) = \(String(format: "%.2f", ratio)):1")
             XCTAssertGreaterThanOrEqual(
                 ratio, 4.5,
                 "IrrColors.errorPillText measures \(String(format: "%.2f", ratio)):1 in \(appearance.rawValue) — under WCAG AA's 4.5:1 for 9pt text")
@@ -438,9 +435,10 @@ final class TokenContrastTests: XCTestCase {
         var failedSomewhere = false
         for appearance in [NSAppearance.Name.aqua, .darkAqua] {
             let wash = composite(srgb(IrrColors.error, in: appearance),
-                                 alpha: 0.12, over: windowBackground(in: appearance))
+                                 alpha: IrrColors.noticeWashAlpha,
+                                 over: windowBackground(in: appearance))
             let raw = contrast(srgb(IrrColors.error, in: appearance), wash)
-            print("contrast(raw IrrColors.error on its own 12% wash, \(appearance.rawValue)) = \(String(format: "%.2f", raw)):1")
+            print("contrast(raw IrrColors.error on its own notice wash, \(appearance.rawValue)) = \(String(format: "%.2f", raw)):1")
             if raw < 4.5 { failedSomewhere = true }
         }
         XCTAssertTrue(failedSomewhere,

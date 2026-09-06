@@ -61,11 +61,37 @@ enum IrrColors {
     static let unknown   = Color(hex: IrrHex.unknown)
     static let error     = Color(hex: IrrHex.error)
 
-    // 12%-alpha soft backgrounds (--working-dim / --waiting-dim / --ready-dim).
-    static let workingDim = working.opacity(0.12)
-    static let waitingDim = waiting.opacity(0.12)
-    static let readyDim   = ready.opacity(0.12)
-    static let errorDim   = error.opacity(0.12)
+    /// The alpha of the tinted ground under EVERY notice surface — banner,
+    /// alert strip and pill alike (#1814). Spelled here and nowhere else.
+    ///
+    /// It is a single number because the surfaces are a single design, and
+    /// because the number is load-bearing rather than decorative:
+    /// `TokenContrastTests` proves the error text clears WCAG AA against this
+    /// ground, and while the row's error strip independently shipped 0.08 that
+    /// proof was bounding a wash nothing rendered (#1802). Five sites had
+    /// spelled it by hand and it had already drifted to three values;
+    /// `NoticeWashLintTests` now fails the build on a sixth spelling.
+    static let noticeWashAlpha: Double = 0.12
+
+    /// The ground a notice of the given hue sits on. The hue stays the plain
+    /// brand colour so dots and glows elsewhere remain visually consistent;
+    /// only the alpha is shared.
+    static func noticeWash(_ tint: Color) -> Color { tint.opacity(noticeWashAlpha) }
+
+    // A FINISHED ground: the alpha is already in it, so it goes to
+    // `.background(…)` directly and never to a `hue:` parameter on the notice
+    // family, which applies `noticeWash` itself and would composite the alpha
+    // twice (0.12 × 0.12 ≈ 1.4%, a wash you cannot see).
+    //
+    // Its `waitingDim`/`readyDim`/`errorDim` siblings went with #1814: the two
+    // banners that held their last call sites now pass the raw hue, and
+    // `readyDim` had been unused for longer than that. They read as twins of
+    // the web's `--waiting-dim`/`--ready-dim`, but only in alpha — those CSS
+    // variables retune their hue per appearance (irrlicht.css:20 vs :108),
+    // which is a thing `noticeWash` deliberately does not do. Keeping three
+    // unreferenced colours whose names read as the obvious argument for the
+    // `hue:` parameter beside them was the cost without the benefit.
+    static let workingDim = noticeWash(working)
 
     // Autonomy (#1905) — ONE hue, four weights, across both of the section's
     // elements. The lines are `working` at full strength; the concurrency
@@ -142,6 +168,10 @@ enum IrrColors {
     // hierarchy stays legible.
     static let surfaceHoverSubtle = Color.primary.opacity(0.04)
     static let trackFill          = Color.primary.opacity(0.08)
+    /// Ground for the neutral count chips (the header's "+N more" overflow).
+    /// Deliberately NOT a notice wash: it carries no state hue and reports a
+    /// count rather than a condition, so it does not follow `noticeWashAlpha`.
+    static let chipFill           = Color.secondary.opacity(0.15)
 
     /// State/status string → color, mirroring the web `stateColor` palette
     /// (working/waiting/ready/error, muted fallback). Used for Gas Town
