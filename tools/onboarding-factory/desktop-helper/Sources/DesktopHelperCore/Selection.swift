@@ -46,6 +46,9 @@ public enum ControlFinder {
 
 public struct ClickPlan: Equatable, Sendable {
     public let point: Point
+    /// Points to try, in order, all inside the control's own frame. The centre
+    /// is always first.
+    public let candidates: [Point]
 
     public init(freshFrame frame: Frame) throws {
         guard frame.x.isFinite, frame.y.isFinite, frame.width.isFinite, frame.height.isFinite,
@@ -54,6 +57,42 @@ public struct ClickPlan: Equatable, Sendable {
             throw HelperFailure(.staleControl, "The control has invalid current geometry.")
         }
         point = Point(x: frame.x + frame.width / 2, y: frame.y + frame.height / 2)
+        candidates = ClickPlan.candidatePoints(in: frame)
+    }
+
+    /// Candidate click points inside a control's frame.
+    ///
+    /// The centre is the right first choice and usually the only one needed. It
+    /// is not always hittable: measured on Claude Desktop 1.46388.4 on
+    /// 2026-09-07, the owned-session menu at (2161,-373,26x26) is overlapped by
+    /// the window's own drag region — an AXButton described "Move" at
+    /// (2165,-376,44x16) — whose lower edge falls exactly on the menu's centre
+    /// y. Cell 2-18 was refused there five times a run, three runs running,
+    /// with `The current click point does not hit the selected control`.
+    ///
+    /// So the plan offers a few more points INSIDE THE SAME FRAME, biased away
+    /// from the edges an overlay is most likely to cover. Every one of them is
+    /// still hit-tested against the target before anything is clicked — the
+    /// rule that nothing is clicked unless the point provably lands on the
+    /// control is unchanged, and is what makes trying a second point safe.
+    static func candidatePoints(in frame: Frame) -> [Point] {
+        let fractions: [(Double, Double)] = [
+            (0.5, 0.5),   // the centre
+            (0.5, 0.75),  // below it — clears an overlay hanging into the top
+            (0.5, 0.25),  // above it
+            (0.75, 0.5),  // right
+            (0.25, 0.5),  // left
+            (0.75, 0.75),
+            (0.25, 0.25),
+        ]
+        var seen: [Point] = []
+        for (fx, fy) in fractions {
+            let candidate = Point(x: frame.x + frame.width * fx, y: frame.y + frame.height * fy)
+            if !seen.contains(candidate) {
+                seen.append(candidate)
+            }
+        }
+        return seen
     }
 }
 

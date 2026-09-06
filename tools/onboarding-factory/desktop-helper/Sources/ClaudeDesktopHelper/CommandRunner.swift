@@ -297,9 +297,30 @@ enum CommandRunner {
                     )
                 }
                 let plan = try ClickPlan(freshFrame: frame)
-                try dependencies.requireHitTarget(target.element, plan.point)
+                // Click the first point that provably lands on the control.
+                // Nothing is clicked without that proof — the hit test is the
+                // guard, and trying a second point inside the same frame does
+                // not weaken it. See ClickPlan.candidatePoints for the overlay
+                // that made the centre alone insufficient.
+                var lastHitFailure: Error?
+                var clickedPoint: Point?
+                for candidate in plan.candidates {
+                    do {
+                        try dependencies.requireHitTarget(target.element, candidate)
+                        clickedPoint = candidate
+                        break
+                    } catch {
+                        lastHitFailure = error
+                    }
+                }
+                guard let point = clickedPoint else {
+                    throw lastHitFailure ?? HelperFailure(
+                        .staleControl,
+                        "No point inside the control could be clicked."
+                    )
+                }
                 try context.requireFrontmost()
-                try dependencies.physicalClick(plan.point)
+                try dependencies.physicalClick(point)
             }
         )
         return HelperResponse(
