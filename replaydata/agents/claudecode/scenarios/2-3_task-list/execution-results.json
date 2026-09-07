@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "results": [
+    {
+      "scenario_id": "task-list",
+      "execution_profile": "desktop-local",
+      "outcome": "not-runnable",
+      "reason": "Claude Desktop's agent has no task-list tool, so the loop this cell exists to observe cannot happen. Measured on 2026-09-07, the agent's own words after searching for one: \"TodoWrite, TaskCreate, checklist) and found no match. I cannot complete this instruction as written.\" It made eight ToolSearch calls looking, and the turn ended `waiting` on that question where the spec asserts `ready`. This is a capability gap in the front end, not a driver or recipe fault: the driver typed the prompt, the session was created and observed, and the recipe is the same three steps its six tool-using peers use. The cell stays valid for cli-local, where the tool exists.",
+      "missing_control": "a task-list tool in the Desktop agent's toolset",
+      "evidence_refs": [
+        "replaydata/agents/claudecode/desktop-evidence/frontend-gaps.md",
+        "replaydata/agents/claudecode/scenarios/2-3_task-list/metadata.json"
+      ]
+    }
+  ]
+}

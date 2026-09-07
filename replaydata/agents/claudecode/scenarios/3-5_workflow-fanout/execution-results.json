@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "results": [
+    {
+      "scenario_id": "workflow-fanout",
+      "execution_profile": "desktop-local",
+      "outcome": "not-runnable",
+      "reason": "The fan-out this cell exists to observe does not happen under this front end. Five attempts on 2026-09-06 and 2026-09-07. Three recordings carried no `transcript_new` for any child session at all. The last two bore children \u2014 one, then two \u2014 and neither produced the parent-child link the spec anchors every later phase on, so `parent_linked`, `fanout_working`, `parent_turn_end` and `children_swept` all fail together. The parent's own turn ended `waiting` within eleven seconds every time, which is the agent asking a question rather than launching agents. The driver drove the recipe correctly each time: the session was created, the prompt was typed, the turn ran and closed. Re-check with `jq -r 'select(.kind==\"transcript_new\")' on a staged run's events.jsonl.",
+      "missing_control": "no control is missing; the agent does not launch the child agents the cell observes",
+      "evidence_refs": [
+        "replaydata/agents/claudecode/desktop-evidence/frontend-gaps.md",
+        "replaydata/agents/claudecode/scenarios/3-5_workflow-fanout/metadata.json"
+      ]
+    }
+  ]
+}

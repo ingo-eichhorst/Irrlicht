@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "results": [
+    {
+      "scenario_id": "long-agentic-session-stress",
+      "execution_profile": "desktop-local",
+      "outcome": "observed-passing",
+      "recording": "2026-09-07-00-53-07_irrlichd-0.6.2+8e837de.dirty",
+      "evidence": {
+        "desktop_registry": "desktop-registry.json",
+        "transcript": "transcript.jsonl",
+        "hooks": "hooks.jsonl",
+        "process": "process.json",
+        "irrlicht_session": "irrlicht-session.json",
+        "environment": "desktop-environment.json"
+      }
+    }
+  ]
+}

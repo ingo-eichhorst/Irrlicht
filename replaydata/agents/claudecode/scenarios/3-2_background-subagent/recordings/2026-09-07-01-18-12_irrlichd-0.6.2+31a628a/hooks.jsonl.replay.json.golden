@@ -1,0 +1,170 @@
+{
+  "schema_version": 1,
+  "source_transcript": "",
+  "generated_at": "0001-01-01T00:00:00Z",
+  "settings": {
+    "adapter": "claude-code",
+    "debounce_window": 2000000000,
+    "flicker_max_duration": 10000000000
+  },
+  "summary": {
+    "total_events": 65,
+    "consumed_events": 65,
+    "total_transitions": 2,
+    "first_event_time": "2026-09-07T01:18:42.066127+02:00",
+    "last_event_time": "2026-09-07T01:21:11.576821+02:00",
+    "wall_clock_session_duration": 149510694000,
+    "state_durations": {
+      "ready": 2042615000,
+      "working": 147468079000
+    },
+    "flicker_count": 0,
+    "flickers_by_category": {},
+    "flickers_by_reason": {}
+  },
+  "transitions": [
+    {
+      "index": 0,
+      "event_index": -1,
+      "virtual_time": "2026-09-07T01:18:42.066127+02:00",
+      "cause": "init",
+      "prev_state": "",
+      "new_state": "ready",
+      "reason": "initial state",
+      "last_event_type": "",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 1,
+      "event_index": 1,
+      "virtual_time": "2026-09-07T01:18:44.108742+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "transcript activity (ready → working)",
+      "last_event_type": "",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    }
+  ],
+  "sessions": [
+    {
+      "session_id": "284bc018-a011-47d1-b977-647a5a4c717a",
+      "adapter": "claude-code",
+      "first_seen": "2026-09-07T01:18:12.132655+02:00",
+      "last_seen": "2026-09-07T01:21:53.810147+02:00",
+      "duration_ms": 221677,
+      "event_count": 110,
+      "state_changes": 7,
+      "final_state": "ready",
+      "pid": 72225,
+      "pid_discovery_lag_ms": 26192,
+      "debounce_coalesced_events": 15,
+      "state_durations_ms": {
+        "ready": 37481,
+        "working": 184149
+      }
+    },
+    {
+      "session_id": "proc-72225",
+      "adapter": "claude-code",
+      "first_seen": "2026-09-07T01:18:12.17941+02:00",
+      "last_seen": "2026-09-07T01:21:45.953721+02:00",
+      "duration_ms": 213774,
+      "event_count": 7,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 72225,
+      "pid_discovery_lag_ms": 43,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 213731
+      }
+    },
+    {
+      "session_id": "agent-a89eb8e68921c4d2b",
+      "adapter": "claude-code",
+      "parent_session_id": "284bc018-a011-47d1-b977-647a5a4c717a",
+      "first_seen": "2026-09-07T01:18:38.351995+02:00",
+      "last_seen": "2026-09-07T01:21:16.345385+02:00",
+      "duration_ms": 157993,
+      "event_count": 99,
+      "state_changes": 2,
+      "final_state": "ready",
+      "pid": 72225,
+      "pid_discovery_lag_ms": 3947,
+      "debounce_coalesced_events": 28,
+      "state_durations_ms": {
+        "ready": 18,
+        "working": 157939
+      }
+    },
+    {
+      "session_id": "agent-a6d3c2e2c745bf225",
+      "adapter": "claude-code",
+      "parent_session_id": "284bc018-a011-47d1-b977-647a5a4c717a",
+      "first_seen": "2026-09-07T01:18:42.025234+02:00",
+      "last_seen": "2026-09-07T01:19:53.808141+02:00",
+      "duration_ms": 71782,
+      "event_count": 69,
+      "state_changes": 2,
+      "final_state": "ready",
+      "pid": 72225,
+      "pid_discovery_lag_ms": 578,
+      "debounce_coalesced_events": 28,
+      "state_durations_ms": {
+        "ready": 3369,
+        "working": 68375
+      }
+    },
+    {
+      "session_id": "agent-aef26ac8550dbe4fa",
+      "adapter": "claude-code",
+      "parent_session_id": "284bc018-a011-47d1-b977-647a5a4c717a",
+      "first_seen": "2026-09-07T01:18:42.068171+02:00",
+      "last_seen": "2026-09-07T01:21:42.585415+02:00",
+      "duration_ms": 180517,
+      "event_count": 48,
+      "state_changes": 2,
+      "final_state": "ready",
+      "pid": 72225,
+      "pid_discovery_lag_ms": 2289,
+      "debounce_coalesced_events": 16,
+      "state_durations_ms": {
+        "ready": 138873,
+        "working": 41604
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 1,
+    "replayed_transition_count": 1,
+    "ordered_matches": 0,
+    "ordered_mismatches": [
+      {
+        "index": 0,
+        "kind": "state_differs",
+        "recorded": "working→ready",
+        "replayed": "ready→working"
+      }
+    ],
+    "recorded_unique_kinds": [
+      "working→ready"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working"
+    ],
+    "missing_kinds": [
+      "working→ready"
+    ],
+    "extra_kinds": [
+      "ready→working"
+    ]
+  }
+}

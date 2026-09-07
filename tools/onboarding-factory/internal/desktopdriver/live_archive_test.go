@@ -120,6 +120,9 @@ func TestArchiveOwnedRefusesAForeignOpenConversation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// ArchiveOwned brings Desktop forward before it clicks. Stub that seam: its
+	// default runs `open -a Claude`, and no unit test may touch the real app.
+	runtime.frontDesktop = func(context.Context) error { return nil }
 	owned := OwnedSession{Registry: RegistrySession{
 		SessionID: "local_owned", CLISessionID: "cli-owned", CWD: workspace,
 	}}
@@ -242,6 +245,7 @@ func TestArchiveWatchesForTheArchiveItemNotAnyMenu(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	runtime.frontDesktop = func(context.Context) error { return nil }
 	owned := OwnedSession{Registry: RegistrySession{
 		SessionID: "local_owned", CLISessionID: "cli-owned", CWD: workspace,
 	}}
@@ -280,4 +284,180 @@ func TestArchiveWatchesForTheArchiveItemNotAnyMenu(t *testing.T) {
 	if clicks == 0 {
 		t.Fatal("the driver issued no click; this check cannot run, which is a failure")
 	}
+}
+
+// The archive path used to resolve the owned-session menu ONCE, outside its
+// retry loop, and then click that one selector five times.
+//
+// Cell 2-18 failed all five attempts on 2026-09-06 with `helper stale_control:
+// The current click point does not hit the selected control`, and left the
+// session unarchived in the operator's Desktop. stale_control is the helper
+// hit-testing a click point the renderer has already moved; re-clicking a
+// selector resolved BEFORE that move cannot ever succeed. The retry existed and
+// could not help, because it re-ran the click without re-running the resolve.
+//
+// RED-FIRST: against the single-resolve version every recorded click carried
+// the first reading's hierarchy, and this failed on `every click reused the
+// first reading`.
+func TestArchiveReResolvesTheOwnedMenuOnEveryAttempt(t *testing.T) {
+	fixture := newMovingArchiveFixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	// Every click is refused, so this ends in failure. What it did on the way is
+	// the subject.
+	if err := fixture.runtime.ArchiveOwned(ctx, fixture.owned); err == nil {
+		t.Fatal("ArchiveOwned() returned nil; every click was refused")
+	}
+	fixture.assertReResolved(t)
+}
+
+type movingArchiveFixture struct {
+	runtime  *LiveRuntime
+	owned    OwnedSession
+	requests string
+	fronted  *int
+}
+
+func newMovingArchiveFixture(t *testing.T) movingArchiveFixture {
+	t.Helper()
+	root := t.TempDir()
+	workspace := "/repo/workspace"
+	session := RegistrySession{
+		SessionID: "local_owned", CLISessionID: "cli-owned", CWD: workspace, Title: "Owned title",
+	}
+	writeArchiveRegistryFixture(t, root, session)
+	helper, requests := writeMovingArchiveHelper(t, root)
+	runtime := newArchiveRuntime(t, root, helper)
+	fronted := new(int)
+	runtime.frontDesktop = func(context.Context) error {
+		*fronted++
+		return nil
+	}
+	return movingArchiveFixture{
+		runtime: runtime,
+		owned: OwnedSession{Registry: RegistrySession{
+			SessionID: "local_owned", CLISessionID: "cli-owned", CWD: workspace,
+		}},
+		requests: requests,
+		fronted:  fronted,
+	}
+}
+
+func writeArchiveRegistryFixture(t *testing.T, root string, session RegistrySession) {
+	t.Helper()
+	registryRoot := filepath.Join(root, "claude-code-sessions", "account", "profile")
+	if err := os.MkdirAll(registryRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(registryRoot, "local_owned.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeMovingArchiveHelper(t *testing.T, root string) (string, string) {
+	t.Helper()
+	// The same menu, at two different depths: the renderer moved it between the
+	// first reading and the rest. Both are the open conversation, both name the
+	// owned session, and they differ only in the selector they produce.
+	first := mustEncode(t, helperResponse{OK: true, Elements: []helperElement{
+		sessionMenuElement("Owned title", 29),
+	}})
+	moved := mustEncode(t, helperResponse{OK: true, Elements: []helperElement{
+		sessionMenuElement("Owned title", 31),
+	}})
+	refusal := mustEncode(t, helperResponse{OK: false, Error: &struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}{Code: "stale_control", Message: "The current click point does not hit the selected control."}})
+
+	requests := filepath.Join(root, "requests.jsonl")
+	counter := filepath.Join(root, "inspects")
+	helper := filepath.Join(root, "helper")
+	script := "#!/bin/sh\n" +
+		"req=$(cat)\n" +
+		"printf '%s\\n' \"$req\" >> '" + requests + "'\n" +
+		"case \"$req\" in\n" +
+		"  *'\"command\":\"inspect\"'*)\n" +
+		"    n=$(cat '" + counter + "' 2>/dev/null || echo 0)\n" +
+		"    n=$((n+1)); printf '%s' \"$n\" > '" + counter + "'\n" +
+		"    if [ \"$n\" -eq 1 ]; then printf '%s\\n' '" + first + "'\n" +
+		"    else printf '%s\\n' '" + moved + "'; fi ;;\n" +
+		"  *'\"command\":\"physical_click\"'*)\n" +
+		"    printf '%s\\n' '" + refusal + "'; exit 1 ;;\n" +
+		"  *) printf '%s\\n' '{\"ok\":true}' ;;\n" +
+		"esac\n"
+	if err := os.WriteFile(helper, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return helper, requests
+}
+
+func newArchiveRuntime(t *testing.T, root, helper string) *LiveRuntime {
+	t.Helper()
+	runtime, err := NewLiveRuntime(LiveOptions{
+		Home: root, HelperPath: helper, DaemonAddress: "127.0.0.1:1",
+		RecordingDirectory: filepath.Join(root, "recordings"), DesktopSupportRoot: root,
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return runtime
+}
+
+func (fixture movingArchiveFixture) assertReResolved(t *testing.T) {
+	t.Helper()
+	depths := clickedMenuDepths(t, fixture.requests)
+	if len(depths) < 2 {
+		t.Fatalf("the driver clicked %d time(s); this check needs at least two attempts to compare", len(depths))
+	}
+	if depths[0] == depths[len(depths)-1] {
+		t.Fatalf("every click reused the first reading (hierarchy depth %d); the menu had moved to %d",
+			depths[0], 31)
+	}
+	if last := depths[len(depths)-1]; last != 31 {
+		t.Fatalf("last click used hierarchy depth %d, want the moved menu's %d", last, 31)
+	}
+	if *fixture.fronted < len(depths) {
+		t.Fatalf("Desktop was brought forward %d time(s) for %d click attempts; a click point "+
+			"hit-tested against a backgrounded window does not land", *fixture.fronted, len(depths))
+	}
+}
+
+func mustEncode(t *testing.T, response helperResponse) string {
+	t.Helper()
+	data, err := json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+// clickedMenuDepths reads back the hierarchy depth of every owned-session menu
+// the driver actually clicked. It fails rather than returning nothing when the
+// recording is missing: inability to look must not read as "no clicks".
+func clickedMenuDepths(t *testing.T, requests string) []int {
+	t.Helper()
+	raw, err := os.ReadFile(requests)
+	if err != nil {
+		t.Fatalf("the driver sent the helper nothing; this check cannot run, which is a failure: %v", err)
+	}
+	var depths []int
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var request helperRequest
+		if err := json.Unmarshal([]byte(line), &request); err != nil {
+			continue
+		}
+		if request.Command != "physical_click" || request.Selector == nil {
+			continue
+		}
+		depths = append(depths, len(request.Selector.Hierarchy))
+	}
+	return depths
 }

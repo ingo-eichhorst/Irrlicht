@@ -1,0 +1,4 @@
+{"seq":313,"ts":"2026-09-06T23:54:03.955294+02:00","kind":"hook_received","session_id":"03bd5d45-4373-444a-8e27-009a91b5e24d","hook_name":"PostToolUseFailure"}
+{"seq":333,"ts":"2026-09-06T23:54:08.013827+02:00","kind":"hook_received","session_id":"03bd5d45-4373-444a-8e27-009a91b5e24d","hook_name":"PostToolUse"}
+{"seq":361,"ts":"2026-09-06T23:54:11.574684+02:00","kind":"hook_received","session_id":"03bd5d45-4373-444a-8e27-009a91b5e24d","hook_name":"PostToolUse"}
+{"seq":382,"ts":"2026-09-06T23:54:14.678259+02:00","kind":"hook_received","session_id":"03bd5d45-4373-444a-8e27-009a91b5e24d","hook_name":"Stop"}

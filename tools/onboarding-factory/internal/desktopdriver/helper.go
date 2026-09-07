@@ -25,6 +25,20 @@ type helperElement struct {
 	Description string   `json:"description"`
 	Hierarchy   []string `json:"hierarchy"`
 	Enabled     *bool    `json:"enabled"`
+	// Frame is carried for DIAGNOSTICS only — nothing resolves or clicks by
+	// geometry, and the helper hit-tests its own click point. It is here
+	// because a failure dump that drops it cannot answer the only question a
+	// `stale_control` refusal raises: where the control was, and what else was
+	// there. The first archive-failure tree written on 2026-09-07 had `frame:
+	// null` on every one of its 513 controls for exactly this reason.
+	Frame *helperFrame `json:"frame,omitempty"`
+}
+
+type helperFrame struct {
+	X      float64 `json:"x"`
+	Y      float64 `json:"y"`
+	Width  float64 `json:"width"`
+	Height float64 `json:"height"`
 }
 
 type helperSelector struct {

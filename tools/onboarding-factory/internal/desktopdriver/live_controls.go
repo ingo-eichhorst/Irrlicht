@@ -37,19 +37,8 @@ const (
 	popupCloseTimeout = 10_000
 )
 
-func (runtime *LiveRuntime) control(name string) (helperSelector, error) {
-	selector, ok := runtime.controls[name]
-	if !ok {
-		return helperSelector{}, fmt.Errorf("Desktop %s control was not verified", name)
-	}
-	return selector, nil
-}
-
 // freshControls re-inspects the live Desktop tree and resolves exactly the
-// named controls by identity. It exists because WaitComposer only ever caches
-// basicTurnControls (environment, project, prompt) into runtime.controls — see
-// its comment in catalog.go — so `send`, `mode`, and `model` are never in that
-// cache and must resolve themselves fresh on every use.
+// named controls by identity.
 func freshControls(
 	ctx context.Context,
 	workspace string,
@@ -80,29 +69,121 @@ func freshSendAndStop(
 		return helperSelector{}, helperSelector{}, err
 	}
 	send = controls[controlSend]
-	stop = helperSelector{Role: "AXButton", Description: "Stop", Hierarchy: send.Hierarchy}
+	stop = stopSelectorFor(send)
 	return send, stop, nil
 }
 
-func (runtime *LiveRuntime) sendAndStop(ctx context.Context) (send, stop helperSelector, err error) {
-	return freshSendAndStop(ctx, runtime.workspace, runtime.helper.inspect)
+// freshStopAndSend resolves the state that exists while a turn is running.
+// It cannot start from Send because Desktop removes Send when Stop appears.
+func freshStopAndSend(
+	ctx context.Context,
+	workspace string,
+	inspect func(context.Context) ([]helperElement, error),
+) (stop, send helperSelector, err error) {
+	elements, err := inspect(ctx)
+	if err != nil {
+		return helperSelector{}, helperSelector{}, err
+	}
+	stop, send, _, err = inFlightKeyControls(elements, workspace)
+	return stop, send, err
+}
+
+// inFlightKeyControls resolves what an in-flight action DRIVES, and nothing
+// else: the Stop button, the Send button that replaces it, and the prompt area
+// a keystroke is aimed at.
+//
+// It used to ask for basicTurnControls() — environment, project, prompt. Two of
+// those three belong to the NEW-SESSION composer and are gone once a session is
+// open; the catalog says as much where it explains why the environment has to
+// be read before the turn rather than after. So cell 2-20 failed its interrupt
+// with `Desktop environment control requires one AXPopUpButton titled "Local";
+// found 0` on 2026-09-06 and again on 2026-09-07, once before and once after
+// the app was made to come forward first. Fronting cannot restore a control
+// that is not there any more.
+//
+// A caller that asks for more than it drives couples itself to controls it does
+// not use — composerControls' own doc comment. This is that rule applied.
+func inFlightKeyControls(
+	elements []helperElement,
+	workspace string,
+) (stop, send, prompt helperSelector, err error) {
+	controls, err := composerControls(elements, workspace, []string{controlPrompt})
+	if err != nil {
+		return helperSelector{}, helperSelector{}, helperSelector{}, err
+	}
+	var stops []helperElement
+	for _, element := range elements {
+		if element.Role == "AXButton" && element.Description == stopButtonDescription {
+			stops = append(stops, element)
+		}
+	}
+	if len(stops) != 1 {
+		return helperSelector{}, helperSelector{}, helperSelector{}, fmt.Errorf(
+			"Desktop stop control requires one AXButton described %q; found %d",
+			stopButtonDescription, len(stops))
+	}
+	stop = selectorFor(stops[0])
+	send = helperSelector{Role: "AXButton", Description: "Send", Hierarchy: stop.Hierarchy}
+	prompt = controls[controlPrompt]
+	return stop, send, prompt, nil
+}
+
+// stopButtonDescription is the label Claude Desktop puts on the send slot while
+// a turn is in flight.
+const stopButtonDescription = "Stop"
+
+func stopSelectorFor(send helperSelector) helperSelector {
+	return helperSelector{Role: "AXButton", Description: stopButtonDescription, Hierarchy: send.Hierarchy}
+}
+
+// turnInFlight reports whether Claude Desktop is running a turn right now.
+//
+// CORRECTION, 2026-09-07. This was written believing Claude Desktop swaps Send
+// for a Stop button while a turn runs. It does not, on 1.46388.4: a tree
+// captured ten seconds into a streaming turn carried "Send" and no "Stop"
+// anywhere among 767 controls. So on this build turnInFlight can never be true,
+// and the guard below is dead — kept deliberately, because it costs one
+// comparison, it is correct if a later build brings Stop back, and removing it
+// would leave Submit's retry loop able to click Send twice again.
+//
+// What still holds is the measurement it was built on: no Stop button appears
+// anywhere, including with another session shown as "Running" in the sidebar.
+// So a Stop button, if one ever appears, is the composer's in-flight face and
+// nothing else's.
+func turnInFlight(elements []helperElement) bool {
+	for _, element := range elements {
+		if element.Role == "AXButton" && element.Description == stopButtonDescription {
+			return true
+		}
+	}
+	return false
 }
 
 // Interrupt clicks the composer's Stop button and proves the click landed by
 // waiting for Send to come back. A postcondition on Stop's own absence would
 // also pass if the whole composer went away.
 func (runtime *LiveRuntime) Interrupt(ctx context.Context) error {
-	return interruptTurn(ctx, runtime.workspace, runtime.helper.inspect, runtime.helper.click)
+	err := interruptTurn(ctx, runtime.workspace, runtime.front, runtime.helper.inspect, runtime.helper.click)
+	if err != nil {
+		// Same reason as a refused key press: the tree at the moment of refusal
+		// is the only thing that says what was on screen instead.
+		return runtime.withFailureTree(ctx, keyFailureTreeFile, err)
+	}
+	return nil
 }
 
 func interruptTurn(
 	ctx context.Context,
 	workspace string,
+	activate func(context.Context) error,
 	inspect func(context.Context) ([]helperElement, error),
 	click func(context.Context, helperSelector, helperPostcondition) error,
 ) error {
 	return retryTransientAX(ctx, "interrupt the in-flight Desktop turn", func() error {
-		send, stop, err := freshSendAndStop(ctx, workspace, inspect)
+		if err := activate(ctx); err != nil {
+			return err
+		}
+		stop, send, err := freshStopAndSend(ctx, workspace, inspect)
 		if err != nil {
 			return err
 		}
@@ -117,15 +198,22 @@ func interruptTurn(
 // postcondition is refused by Plan long before this runs; the check is repeated
 // here because this is the last place that can still refuse.
 func (runtime *LiveRuntime) PressKey(ctx context.Context, key string) error {
-	return pressKey(ctx, key, runtime.workspace, runtime.helper.inspect, runtime.helper.keyboard)
+	err := pressKey(ctx, key, runtime.workspace, runtime.front,
+		runtime.helper.inspect, runtime.helper.keyboard, runtime.helper.click)
+	if err != nil {
+		return runtime.withFailureTree(ctx, keyFailureTreeFile, err)
+	}
+	return nil
 }
 
 func pressKey(
 	ctx context.Context,
 	key string,
 	workspace string,
+	activate func(context.Context) error,
 	inspect func(context.Context) ([]helperElement, error),
 	keyboard func(context.Context, helperSelector, uint16, []string, helperPostcondition) error,
+	click func(context.Context, helperSelector, helperPostcondition) error,
 ) error {
 	definition, ok := desktopKeys[key]
 	if !ok {
@@ -133,28 +221,122 @@ func pressKey(
 			key, strings.Join(SupportedKeys(), ", "))
 	}
 	return retryTransientAX(ctx, fmt.Sprintf("press %s", key), func() error {
-		controls, err := freshControls(ctx, workspace, []string{controlSend, controlPrompt}, inspect)
+		if err := activate(ctx); err != nil {
+			return err
+		}
+		// A blocking permission dialog takes precedence over every other
+		// meaning of a key. Answering it is what the recipe is asking for, and
+		// the composer behind it is not what the keystroke is aimed at.
+		if answered, err := answerPermissionDialog(ctx, key, inspect, click); answered || err != nil {
+			return err
+		}
+		target, after, err := resolveKeyPress(ctx, key, workspace, inspect)
 		if err != nil {
 			return err
 		}
-		send := controls[controlSend]
-		stop := helperSelector{Role: "AXButton", Description: "Stop", Hierarchy: send.Hierarchy}
-		prompt := controls[controlPrompt]
-		// Escape cancels an in-flight turn: Stop must give way to Send.
-		// Enter submits: Send must give way to Stop.
-		after := helperPostcondition{
-			Selector: send, Condition: "exists", TimeoutMilliseconds: popupCloseTimeout,
-		}
-		if key == "Enter" {
-			after = helperPostcondition{
-				Selector: stop, Condition: "exists", TimeoutMilliseconds: popupCloseTimeout,
-			}
-		}
-		if err := keyboard(ctx, prompt, definition.code, nil, after); err != nil {
+		if err := keyboard(ctx, target, definition.code, nil, after); err != nil {
 			return fmt.Errorf("press %s (expected %s): %w", key, definition.effect, err)
 		}
 		return nil
 	})
+}
+
+// answerPermissionDialog answers a blocking Claude Desktop permission dialog,
+// and reports whether it did.
+//
+// A recipe's `keys: Enter` at this point means what a person means by it: give
+// the dialog its default answer. On the CLI that IS a keystroke, because the
+// prompt owns the terminal. Claude Desktop renders the choices as buttons (see
+// permissionDialogOptions for the measurement), and the reliable primitive for
+// a button is a click, hit-tested and verified by the helper. The driver
+// translates between the two profiles; this is one of those translations.
+//
+// Escape is left alone deliberately: cancelling a dialog and cancelling a turn
+// are different acts, and no cell asks for the first.
+func answerPermissionDialog(
+	ctx context.Context,
+	key string,
+	inspect func(context.Context) ([]helperElement, error),
+	click func(context.Context, helperSelector, helperPostcondition) error,
+) (bool, error) {
+	if key != "Enter" || click == nil {
+		return false, nil
+	}
+	elements, err := inspect(ctx)
+	if err != nil {
+		return false, err
+	}
+	if len(permissionDialogOptions(elements)) == 0 {
+		return false, nil
+	}
+	approve, err := permissionApproveOption(elements)
+	if err != nil {
+		return false, err
+	}
+	selector := selectorFor(approve)
+	// The choice going away is the proof the dialog was answered. The turn
+	// resuming is what the scenario asserts, and the state wait after this step
+	// is what checks it.
+	if err := click(ctx, selector, helperPostcondition{
+		Selector: selector, Condition: "absent", TimeoutMilliseconds: popupCloseTimeout,
+	}); err != nil {
+		if isMissedPostcondition(err) {
+			// The click landed; only the choice's disappearance went unseen.
+			// Clicking again would answer a dialog that is no longer there.
+			return true, nil
+		}
+		return false, fmt.Errorf("answer the Desktop permission dialog with %q: %w", approve.Title, err)
+	}
+	return true, nil
+}
+
+func resolveKeyPress(
+	ctx context.Context,
+	key string,
+	workspace string,
+	inspect func(context.Context) ([]helperElement, error),
+) (helperSelector, helperPostcondition, error) {
+	switch key {
+	case "Escape":
+		return resolveEscapeKeyPress(ctx, workspace, inspect)
+	case "Enter":
+		return resolveEnterKeyPress(ctx, workspace, inspect)
+	default:
+		return helperSelector{}, helperPostcondition{}, fmt.Errorf("unsupported Desktop key %q", key)
+	}
+}
+
+func resolveEscapeKeyPress(
+	ctx context.Context,
+	workspace string,
+	inspect func(context.Context) ([]helperElement, error),
+) (helperSelector, helperPostcondition, error) {
+	elements, err := inspect(ctx)
+	if err != nil {
+		return helperSelector{}, helperPostcondition{}, err
+	}
+	_, send, prompt, err := inFlightKeyControls(elements, workspace)
+	if err != nil {
+		return helperSelector{}, helperPostcondition{}, err
+	}
+	return prompt, helperPostcondition{
+		Selector: send, Condition: "exists", TimeoutMilliseconds: popupCloseTimeout,
+	}, nil
+}
+
+func resolveEnterKeyPress(
+	ctx context.Context,
+	workspace string,
+	inspect func(context.Context) ([]helperElement, error),
+) (helperSelector, helperPostcondition, error) {
+	controls, err := freshControls(ctx, workspace, []string{controlSend, controlPrompt}, inspect)
+	if err != nil {
+		return helperSelector{}, helperPostcondition{}, err
+	}
+	send := controls[controlSend]
+	return controls[controlPrompt], helperPostcondition{
+		Selector: stopSelectorFor(send), Condition: "exists", TimeoutMilliseconds: popupCloseTimeout,
+	}, nil
 }
 
 // SelectMode and SelectModel drive the two composer popup menus. Both use the
@@ -163,12 +345,12 @@ func pressKey(
 // menu closed AND the popup now reports the requested entry.
 func (runtime *LiveRuntime) SelectMode(ctx context.Context, value string) error {
 	return selectFromPopup(ctx, runtime.workspace, controlMode, value, modeReportsEntry,
-		runtime.helper.inspect, runtime.helper.click)
+		runtime.front, runtime.helper.inspect, runtime.helper.click)
 }
 
 func (runtime *LiveRuntime) SelectModel(ctx context.Context, value string) error {
 	return selectFromPopup(ctx, runtime.workspace, controlModel, value, modelReportsEntry,
-		runtime.helper.inspect, runtime.helper.click)
+		runtime.front, runtime.helper.inspect, runtime.helper.click)
 }
 
 // modeReportsEntry and modelReportsEntry say how each popup announces its
@@ -195,6 +377,7 @@ func selectFromPopup(
 	control string,
 	value string,
 	reports func(helperElement, string) bool,
+	activate func(context.Context) error,
 	inspect func(context.Context) ([]helperElement, error),
 	click func(context.Context, helperSelector, helperPostcondition) error,
 ) error {
@@ -203,6 +386,9 @@ func selectFromPopup(
 	}
 	menuRole := helperSelector{Role: "AXMenu"}
 	if err := retryTransientAX(ctx, fmt.Sprintf("open Desktop %s popup", control), func() error {
+		if err := activate(ctx); err != nil {
+			return err
+		}
 		controls, err := freshControls(ctx, workspace, []string{control}, inspect)
 		if err != nil {
 			return err
@@ -217,6 +403,9 @@ func selectFromPopup(
 	// selector resolved before it settled is what refuses the click — the same
 	// shape ArchiveOwned already retries for its own menu item.
 	if err := retryTransientAX(ctx, fmt.Sprintf("select Desktop %s entry %q", control, value), func() error {
+		if err := activate(ctx); err != nil {
+			return err
+		}
 		elements, err := inspect(ctx)
 		if err != nil {
 			return err

@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "results": [
+    {
+      "scenario_id": "permission-gate-non-mutating-tool",
+      "execution_profile": "desktop-local",
+      "outcome": "not-runnable",
+      "missing_control": "no control is missing; the Read tool is never gated, so the second waiting episode this cell asserts never occurs",
+      "reason": "The driver drove this cell successfully: it typed the prompt, the Write tool was gated, it found the permission dialog and answered it with `Allow once`, and the turn resumed. What the cell asserts did not happen. It requires TWO gate episodes \u2014 the Write tool gated (`mutating_gate_waiting`), then the Read tool gated in its OWN episode (`readonly_gate_waiting`, the assertion under test). Measured on 2026-09-07 the recording carries one: working -> waiting -> ready. The read was never gated, so the cell cannot reach the state it asserts under this profile. The spec's own note predicts this and says it fails on main too \u2014 PermissionRequest is installed with a nine-tool matcher that excludes Read, and no lower classifier rung re-derives the prompt (#1861) \u2014 so the Desktop profile reproduces a known defect rather than revealing a new one. Re-check by re-running the cell and counting `waiting` transitions in the staged events.jsonl.",
+      "evidence_refs": [
+        "replaydata/agents/claudecode/desktop-evidence/frontend-gaps.md",
+        "replaydata/agents/claudecode/scenarios/2-26_permission-gate-non-mutating-tool/metadata.json"
+      ]
+    }
+  ]
+}

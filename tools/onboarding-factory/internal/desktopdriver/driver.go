@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"irrlicht/core/domain/session"
 )
 
 const desktopBundleID = "com.anthropic.claudefordesktop"
@@ -85,7 +87,22 @@ type RunRequest struct {
 	Script         []Step
 	EvidenceDir    string
 	OverallTimeout time.Duration
-	StepTimeout    time.Duration
+	// StepTimeout bounds a wait for something the USER INTERFACE owes the
+	// driver now: a composer that should already be on screen, a registry row
+	// Desktop writes the moment a message is sent. It exists to fail fast.
+	StepTimeout time.Duration
+	// TurnTimeout bounds a wait whose length the AGENT sets, not the interface:
+	// the Irrlicht state a turn produces, and the Claude Code hook, which a Stop
+	// hook does not fire until that turn ends.
+	//
+	// It is separate because a third of the run budget is the wrong number for
+	// these, and capping it at 90 seconds is a statement about how long a turn
+	// may take that nothing measured. Cells 3-1 and 3-2 both died on `wait for
+	// Irrlicht state ready timed out after 1m30s` on 2026-09-06 while the
+	// subagent turn each was recording was still running correctly. A turn has
+	// no interface deadline to offer; the cell's own timeout is the operator's
+	// statement of how long it may take, so that is what bounds it.
+	TurnTimeout    time.Duration
 	CleanupTimeout time.Duration
 }
 
@@ -121,7 +138,7 @@ type Runtime interface {
 	WaitComposer(context.Context, string) error
 	WaitOwnedSession(context.Context, Baseline, string) (OwnedSession, error)
 	RecoverOwnedSession(context.Context, Baseline, string) (OwnedSession, error)
-	SetPrompt(context.Context, string) error
+	SetPrompt(context.Context, OwnedSession, string) error
 	Submit(context.Context) error
 	// Interrupt stops an in-flight turn through the composer's Stop control.
 	Interrupt(context.Context) error
@@ -134,6 +151,9 @@ type Runtime interface {
 	// waits in real time.
 	Sleep(context.Context, time.Duration) error
 	WaitIrrlichtState(context.Context, OwnedSession, string) (SessionObservation, error)
+	// WaitIrrlichtTurnEnd accepts the two completed-turn states. A normal turn
+	// ends ready. A blocking user question ends waiting.
+	WaitIrrlichtTurnEnd(context.Context, OwnedSession) (SessionObservation, error)
 	WaitHook(context.Context, OwnedSession) error
 	CaptureEvidence(context.Context, OwnedSession, SessionObservation, string) (CapturedEvidence, error)
 	ArchiveOwned(context.Context, OwnedSession) error
@@ -223,10 +243,15 @@ func validateRunRequest(request RunRequest) error {
 	if (request.Prompt == "") == (len(request.Script) == 0) {
 		return errors.New("exactly one of prompt and recipe script is required")
 	}
-	if request.OverallTimeout <= 0 || request.StepTimeout <= 0 || request.CleanupTimeout <= 0 {
+	if !hasPositiveDeadlines(request) {
 		return errors.New("all Desktop driver deadlines must be positive")
 	}
 	return nil
+}
+
+func hasPositiveDeadlines(request RunRequest) bool {
+	return request.OverallTimeout > 0 && request.StepTimeout > 0 &&
+		request.TurnTimeout > 0 && request.CleanupTimeout > 0
 }
 
 // ownedSlot is one live session the run created, plus the per-session facts the
@@ -397,16 +422,23 @@ func (runner *scriptRunner) send(ctx context.Context, text string) error {
 	if slot.owned.Registry.SessionID == "" {
 		return runner.sendFirst(ctx, slot, text)
 	}
-	if _, err := runner.waitState(ctx, "ready"); err != nil {
+	// Either completed-turn state, not `ready` alone. A turn that ended by
+	// asking the user something ends `waiting`, and the composer takes a new
+	// prompt in both — waiting IS the session waiting for this. Cell 2-27
+	// hung its whole 20-minute budget here on 2026-09-07: its first turn ended
+	// `waiting` at a blocking dialog, and its second send waited for a `ready`
+	// that was never coming. wait_turn already accepts both (WaitIrrlichtTurnEnd);
+	// this was the one place left that did not.
+	if _, err := runner.waitTurnEnd(ctx); err != nil {
 		return err
 	}
-	if err := runner.runtime.SetPrompt(ctx, text); err != nil {
+	if err := runner.runtime.SetPrompt(ctx, slot.owned, text); err != nil {
 		return fmt.Errorf("set Desktop prompt: %w", err)
 	}
 	if err := runner.runtime.Submit(ctx); err != nil {
 		return fmt.Errorf("submit Desktop prompt: %w", err)
 	}
-	_, err = runner.waitState(ctx, "working")
+	_, err = runner.waitState(ctx, session.StateWorking)
 	return err
 }
 
@@ -419,7 +451,7 @@ func (runner *scriptRunner) send(ctx context.Context, text string) error {
 // never sent has no session yet, so this is the one send that does not open
 // with a readiness wait.
 func (runner *scriptRunner) sendFirst(ctx context.Context, slot *ownedSlot, text string) error {
-	if err := runner.runtime.SetPrompt(ctx, text); err != nil {
+	if err := runner.runtime.SetPrompt(ctx, OwnedSession{}, text); err != nil {
 		return fmt.Errorf("set Desktop prompt: %w", err)
 	}
 	if err := runner.runtime.Submit(ctx); err != nil {
@@ -436,7 +468,7 @@ func (runner *scriptRunner) sendFirst(ctx context.Context, slot *ownedSlot, text
 	if err := runner.adopt(slot, owned); err != nil {
 		return err
 	}
-	_, err := runner.waitState(ctx, "working")
+	_, err := runner.waitState(ctx, session.StateWorking)
 	return err
 }
 
@@ -448,22 +480,48 @@ func (runner *scriptRunner) waitTurn(ctx context.Context) error {
 	// The hook proves Claude Code reached this daemon at all. It is a
 	// once-per-session fact, so a later turn does not re-wait for it.
 	if !slot.hookSeen {
-		if err := runStep(ctx, runner.request.StepTimeout, "Claude Code hook", func(step context.Context) error {
+		// The turn budget, not the step budget: the hook this waits for is a
+		// Stop hook, which Claude Code does not fire until the turn ends.
+		if err := runStep(ctx, runner.request.TurnTimeout, "Claude Code hook", func(step context.Context) error {
 			return runner.runtime.WaitHook(step, slot.owned)
 		}); err != nil {
 			return err
 		}
 		slot.hookSeen = true
 	}
-	_, err = runner.waitState(ctx, "ready")
+	_, err = runner.waitTurnEnd(ctx)
 	return err
+}
+
+// waitTurnEnd waits for the active slot to reach EITHER completed-turn state. A
+// normal turn ends ready; a turn that ends by asking the user something ends
+// waiting. Both mean the same thing to a caller: the turn is over and the
+// composer will take a new prompt.
+func (runner *scriptRunner) waitTurnEnd(ctx context.Context) (SessionObservation, error) {
+	slot, err := runner.current()
+	if err != nil {
+		return SessionObservation{}, err
+	}
+	var observation SessionObservation
+	if err := runStep(ctx, runner.request.TurnTimeout, "Irrlicht completed-turn state", func(step context.Context) error {
+		var err error
+		observation, err = runner.runtime.WaitIrrlichtTurnEnd(step, slot.owned)
+		return err
+	}); err != nil {
+		return SessionObservation{}, err
+	}
+	if observation.State != session.StateReady && observation.State != session.StateWaiting {
+		return SessionObservation{}, fmt.Errorf("Irrlicht turn ended in non-terminal state %q", observation.State)
+	}
+	slot.observation = observation
+	return observation, nil
 }
 
 func (runner *scriptRunner) interrupt(ctx context.Context) error {
 	if err := runner.runtime.Interrupt(ctx); err != nil {
 		return fmt.Errorf("interrupt the in-flight Desktop turn: %w", err)
 	}
-	_, err := runner.waitState(ctx, "ready")
+	_, err := runner.waitState(ctx, session.StateReady)
 	return err
 }
 
@@ -491,7 +549,7 @@ func (runner *scriptRunner) waitState(ctx context.Context, state string) (Sessio
 	if err != nil {
 		return SessionObservation{}, err
 	}
-	observation, err := waitForState(ctx, runner.runtime, runner.request.StepTimeout, slot.owned, state)
+	observation, err := waitForState(ctx, runner.runtime, runner.request.TurnTimeout, slot.owned, state)
 	if err == nil {
 		slot.observation = observation
 	}

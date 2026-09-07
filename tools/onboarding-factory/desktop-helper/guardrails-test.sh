@@ -50,15 +50,20 @@ assert_count() {
   expected=$3
   path=$4
 
-  if count=$(LC_ALL=C grep -c -F "$needle" "$path"); then
+  # OCCURRENCES, not lines. `grep -c` counts matching LINES, so two calls
+  # written on one line counted as one — which is how a second, unguarded click
+  # site would have slipped past this check. Verified 2026-09-07 by putting two
+  # physicalClick calls on a single line: the count assertion passed.
+  if count=$(LC_ALL=C grep -o -F "$needle" "$path" | wc -l | tr -d ' '); then
     :
   else
-    status=$?
-    if [ "$status" -ne 1 ]; then
-      echo "desktop-helper guardrails: could not count $needle in $path" >&2
-      exit 1
-    fi
+    echo "desktop-helper guardrails: could not count $needle in $path" >&2
+    exit 1
   fi
+  [ -n "$count" ] || {
+    echo "desktop-helper guardrails: counting $needle in $path produced nothing" >&2
+    exit 1
+  }
   if [ "$count" -ne "$expected" ]; then
     echo "desktop-helper guardrails: $label (expected $expected, found $count)" >&2
     exit 1
@@ -78,9 +83,31 @@ assert_present \
   "click geometry is not derived from the fresh frame" \
   'let plan = try ClickPlan(freshFrame: frame)' \
   "$RUNNER"
+# The invariant is that the clicked point comes from the ClickPlan and is proven
+# to hit the target — not that it is spelled one particular way. It used to be
+# checked as the single literal `dependencies.physicalClick(plan.point)`, which
+# stopped matching the moment the plan offered more than one point (#1887: the
+# owned-session menu's centre is covered by the window's drag region, so the
+# click has to try other points inside the SAME frame). These four assertions
+# pin the invariant itself, and together they are stricter than the literal was:
+# the points come from the plan, every one is hit-tested, only a hit-tested
+# candidate is ever clicked, and there is exactly one click site.
 assert_present \
+  "the click points are not taken from the dynamic click plan" \
+  'for candidate in plan.candidates' \
+  "$RUNNER"
+assert_present \
+  "a candidate click point is not hit-tested against the target" \
+  'try dependencies.requireHitTarget(target.element, candidate)' \
+  "$RUNNER"
+assert_present \
+  "the clicked point is not the candidate that passed the hit test" \
+  'clickedPoint = candidate' \
+  "$RUNNER"
+assert_count \
   "the physical click bypasses its dynamic click plan" \
-  'dependencies.physicalClick(plan.point)' \
+  'dependencies.physicalClick(' \
+  1 \
   "$RUNNER"
 assert_present \
   "the keyboard event bypasses its final focus and frontmost guard" \

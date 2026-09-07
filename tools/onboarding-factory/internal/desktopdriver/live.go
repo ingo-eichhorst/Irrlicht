@@ -31,15 +31,19 @@ type LiveOptions struct {
 	DesktopSupportRoot string
 	ClaudeProjectsRoot string
 	ConfigurationRoots []string
+	// EvidenceDir is where a failure may leave a diagnostic behind. It is the
+	// same directory RunRequest.EvidenceDir names; empty means "write nothing".
+	EvidenceDir string
 }
 
 type LiveRuntime struct {
-	options  LiveOptions
-	helper   helperClient
-	controls map[string]helperSelector
+	options LiveOptions
+	helper  helperClient
 	// workspace is the composer WaitComposer verified. Submit re-resolves
 	// against it rather than against a caller-supplied value.
 	workspace string
+	// evidenceDir is where a refused archive leaves the accessibility tree.
+	evidenceDir string
 	// toolsExpected records that this run drives a RECIPE, whose steps are
 	// declared, rather than a bare prompt. It relaxes the no-tool evidence rule
 	// to the form that rule was written for. See validateTranscriptToolUse.
@@ -94,7 +98,8 @@ func NewLiveRuntime(options LiveOptions, stepLog string) (*LiveRuntime, error) {
 	}
 	return &LiveRuntime{
 		options: options, helper: helperClient{path: options.HelperPath},
-		processes: map[string]int{}, processEvidence: map[string]ProcessEvidence{}, stepLog: stepLog,
+		evidenceDir: options.EvidenceDir,
+		processes:   map[string]int{}, processEvidence: map[string]ProcessEvidence{}, stepLog: stepLog,
 		httpClient:     &http.Client{Timeout: 2 * time.Second},
 		registryByID:   map[string]RegistrySession{},
 		openDeepLink:   openOfficialDesktopURL,
@@ -265,7 +270,6 @@ func (runtime *LiveRuntime) WaitComposer(ctx context.Context, workspace string) 
 		ctx, workspace, runtime.helper.inspect, runtime.helper.probe, runtime.helper.click,
 		runtime.RecordStep, runtime.front, runtime.foreignTrustPrompt)
 	if err == nil {
-		runtime.controls = controls
 		runtime.workspace = workspace
 		// Read the environment now. It is unreadable after the turn.
 		runtime.environment = EnvironmentEvidence{
@@ -394,18 +398,46 @@ func waitForComposerControls(
 	return controls, err
 }
 
-func (runtime *LiveRuntime) SetPrompt(ctx context.Context, prompt string) error {
-	selector, err := runtime.control(controlPrompt)
-	if err != nil {
-		return err
-	}
-	// Front Desktop first: the composer is not in the accessibility tree at all
-	// while the app is in the background, and focus can move between the wait
-	// that verified this selector and now.
-	if err := runtime.front(ctx); err != nil {
-		return err
-	}
-	return runtime.helper.setValue(ctx, selector, prompt)
+func (runtime *LiveRuntime) SetPrompt(ctx context.Context, owned OwnedSession, prompt string) error {
+	return setPrompt(ctx, runtime.workspace, owned, prompt, runtime.front,
+		runtime.helper.inspect, runtime.helper.setValue)
+}
+
+// setPrompt re-resolves the prompt on every attempt. Setting a text value is
+// idempotent, so a failed value_equals postcondition is safe to retry.
+// A later turn also proves that the conversation on screen belongs to the
+// session that the run owns before it changes any text.
+func setPrompt(
+	ctx context.Context,
+	workspace string,
+	owned OwnedSession,
+	prompt string,
+	activate func(context.Context) error,
+	inspect func(context.Context) ([]helperElement, error),
+	setValue func(context.Context, helperSelector, string) error,
+) error {
+	return retryIdempotentAXFor(ctx, "set the Desktop prompt", submitAttempts, func() error {
+		if err := activate(ctx); err != nil {
+			return err
+		}
+		elements, err := inspect(ctx)
+		if err != nil {
+			return err
+		}
+		if owned.Registry.SessionID != "" {
+			if strings.TrimSpace(owned.Registry.Title) == "" {
+				return errors.New("the owned Desktop session has no title for the open-conversation guard")
+			}
+			if _, err := selectedSessionMenu(elements, owned.Registry.Title); err != nil {
+				return fmt.Errorf("prove the owned Desktop conversation is open: %w", err)
+			}
+		}
+		controls, err := composerControls(elements, workspace, []string{controlPrompt})
+		if err != nil {
+			return err
+		}
+		return setValue(ctx, controls[controlPrompt], prompt)
+	})
 }
 
 // Submit resolves the send button from a FRESH reading rather than from the
@@ -414,31 +446,9 @@ func (runtime *LiveRuntime) SetPrompt(ctx context.Context, prompt string) error 
 // "Stop" or nothing at all. Resolving it up front made an empty composer look
 // like a missing composer.
 func (runtime *LiveRuntime) Submit(ctx context.Context) error {
-	// Resolve and click inside the retry. Desktop's renderer can swap the
-	// composer out between the two, and re-using a selector resolved before
-	// that is exactly what fails with a stale control.
-	if err := retryTransientAXFor(ctx, "submit the Desktop prompt", submitAttempts, func() error {
-		// Front on EVERY attempt. Looking again without doing so is what made
-		// live run 25 spend all its retries reading a backgrounded window that
-		// carried a sidebar and no composer.
-		if err := runtime.front(ctx); err != nil {
-			return err
-		}
-		send, stop, err := runtime.sendAndStop(ctx)
-		if err != nil {
-			return fmt.Errorf("resolve the Desktop send button after the prompt was typed: %w", err)
-		}
-		err = runtime.helper.click(ctx, send, helperPostcondition{
-			Selector: stop, Condition: "exists", TimeoutMilliseconds: 10_000,
-		})
-		if err != nil && isMissedPostcondition(err) {
-			// The click landed; only the Stop button never showed, which a fast
-			// turn never renders. The Desktop registry row is the real proof,
-			// and waitForOwned is the very next step. Retrying would send twice.
-			return nil
-		}
-		return err
-	}); err != nil {
+	if err := submitPrompt(
+		ctx, runtime.workspace, runtime.front, runtime.helper.inspect, runtime.helper.click,
+	); err != nil {
 		return err
 	}
 	// Counted here, where the turn is actually sent, so stateObserved's
@@ -447,6 +457,77 @@ func (runtime *LiveRuntime) Submit(ctx context.Context) error {
 	// Once per Submit call regardless of how many internal retries it took.
 	runtime.turn++
 	return nil
+}
+
+// submitPrompt clicks Send and then lets the session evidence decide.
+//
+// The retry loop here is not free the way the others are: every attempt posts a
+// real mouse click on Send, so an attempt that runs after an earlier click
+// LANDED sends the prompt a second time. Two rules keep that from happening,
+// and both come from live runs on 2026-09-06.
+//
+//  1. A turn already in flight ends the loop. Clicking Send replaces it with a
+//     Stop button, so once this function has clicked at all, seeing Stop means
+//     the click it made took effect. Without this, cells 2-19 and 2-26 spent
+//     every one of their 40 attempts hunting a Send button their own first
+//     click had legitimately replaced, and failed runs whose prompt had been
+//     sent and whose Claude session existed — the cleanup of both went on to
+//     name the session ID the run had supposedly failed to create.
+//
+//  2. Nothing post-click is retried. `postcondition_failed` already covered
+//     "the click landed, only the state it watched for never showed"; since the
+//     helper stopped letting a failed post-click tree READ escape as a bare
+//     accessibility error, that code also covers "the click landed and the
+//     helper could not look". Both mean the same thing here: stop clicking, and
+//     let waitForOwned and the Irrlicht state wait — the very next steps — say
+//     whether the turn is real.
+//
+// The first attempt never short-circuits. A Stop button seen before this
+// function has clicked anything belongs to something else, and treating it as
+// success would report a prompt as sent that was never typed.
+func submitPrompt(
+	ctx context.Context,
+	workspace string,
+	activate func(context.Context) error,
+	inspect func(context.Context) ([]helperElement, error),
+	click func(context.Context, helperSelector, helperPostcondition) error,
+) error {
+	clicked := false
+	return retryTransientAXFor(ctx, "submit the Desktop prompt", submitAttempts, func() error {
+		// Front on EVERY attempt. Looking again without doing so is what made
+		// live run 25 spend all its retries reading a backgrounded window that
+		// carried a sidebar and no composer.
+		if err := activate(ctx); err != nil {
+			return err
+		}
+		// Resolve and click inside the retry. Desktop's renderer can swap the
+		// composer out between the two, and re-using a selector resolved before
+		// that is exactly what fails with a stale control.
+		elements, err := inspect(ctx)
+		if err != nil {
+			return err
+		}
+		if clicked && turnInFlight(elements) {
+			return nil
+		}
+		controls, err := composerControls(elements, workspace, []string{controlSend})
+		if err != nil {
+			return fmt.Errorf("resolve the Desktop send button after the prompt was typed: %w", err)
+		}
+		send := controls[controlSend]
+		// Set before the click, not after. The helper refuses a click it cannot
+		// hit-test BEFORE posting anything, so counting a refusal as a click is
+		// the safe direction to be wrong in: a refused click starts no turn, so
+		// no Stop button can appear for rule 1 to misread.
+		clicked = true
+		err = click(ctx, send, helperPostcondition{
+			Selector: stopSelectorFor(send), Condition: "exists", TimeoutMilliseconds: 10_000,
+		})
+		if err != nil && isMissedPostcondition(err) {
+			return nil
+		}
+		return err
+	})
 }
 
 // validateArchiveTarget is the final pure ownership guard before any archive
@@ -567,6 +648,31 @@ func retryTransientAXFor(ctx context.Context, what string, attempts int, action 
 	return fmt.Errorf(
 		"%s: Claude Desktop's accessibility tree kept moving across %d attempts; last failure: %w",
 		what, attempts, err)
+}
+
+// retryIdempotentAXFor also retries a missed postcondition. This is valid only
+// for actions such as setting a text value, where repeating the same action
+// cannot duplicate a turn or approve a second dialog.
+func retryIdempotentAXFor(ctx context.Context, what string, attempts int, action func() error) error {
+	var err error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		err = action()
+		if err == nil || !isIdempotentAXFailure(err) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("%s: %w; last accessibility failure: %v", what, ctx.Err(), err)
+		case <-time.After(transientAXBackoff):
+		}
+	}
+	return fmt.Errorf(
+		"%s: Claude Desktop's accessibility tree did not settle across %d attempts; last failure: %w",
+		what, attempts, err)
+}
+
+func isIdempotentAXFailure(err error) bool {
+	return isPreClickAXFailure(err) || isMissedPostcondition(err)
 }
 
 func transientHelperError(err error) error {

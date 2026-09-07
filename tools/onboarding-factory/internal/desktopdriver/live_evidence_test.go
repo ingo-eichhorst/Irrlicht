@@ -204,11 +204,15 @@ func TestDesktopStateSequenceStartsAtWorking(t *testing.T) {
 
 	// The turn is already finished when the driver first looks. Both waits must
 	// still be satisfied, from the recording.
-	working, err := runtime.stateObserved("941db969", "ready", "working")
+	working, err := runtime.stateObserved(stateCheck{
+		sessionID: "941db969", currentState: "ready", wantedState: "working",
+	})
 	if err != nil || !working {
 		t.Fatalf("working not observed in a finished Desktop turn: %t, %v", working, err)
 	}
-	ready, err := runtime.stateObserved("941db969", "ready", "ready")
+	ready, err := runtime.stateObserved(stateCheck{
+		sessionID: "941db969", currentState: "ready", wantedState: "ready",
+	})
 	if err != nil || !ready {
 		t.Fatalf("ready not observed in a finished Desktop turn: %t, %v", ready, err)
 	}
@@ -220,7 +224,9 @@ func TestDesktopStateSequenceStartsAtWorking(t *testing.T) {
 		t.Fatal(err)
 	}
 	idle := &LiveRuntime{options: LiveOptions{RecordingDirectory: quiet}}
-	if observed, err := idle.stateObserved("941db969", "ready", "ready"); err != nil || observed {
+	if observed, err := idle.stateObserved(stateCheck{
+		sessionID: "941db969", currentState: "ready", wantedState: "ready",
+	}); err != nil || observed {
 		t.Fatalf("a session that never worked read as a finished turn: %t, %v", observed, err)
 	}
 }
@@ -250,24 +256,32 @@ func TestStateObservedRequiresEveryPriorTurnBeforeMatchingALaterOne(t *testing.T
 	write(working, ready)
 	runtime := &LiveRuntime{options: LiveOptions{RecordingDirectory: dir}, turn: 2}
 
-	if seen, err := runtime.stateObserved("941db969", "working", "working"); err != nil || seen {
+	if seen, err := runtime.stateObserved(stateCheck{
+		sessionID: "941db969", currentState: "working", wantedState: "working",
+	}); err != nil || seen {
 		t.Fatalf(`turn two's wait for "working" matched turn one's own transition: seen=%t err=%v`, seen, err)
 	}
 
 	// Turn two's own working transition now appears.
 	write(working, ready, working)
-	if seen, err := runtime.stateObserved("941db969", "working", "working"); err != nil || !seen {
+	if seen, err := runtime.stateObserved(stateCheck{
+		sessionID: "941db969", currentState: "working", wantedState: "working",
+	}); err != nil || !seen {
 		t.Fatalf(`stateObserved() did not match turn two's own "working" transition: seen=%t err=%v`, seen, err)
 	}
 
 	// Turn two's ready has not appeared yet.
-	if seen, err := runtime.stateObserved("941db969", "ready", "ready"); err != nil || seen {
+	if seen, err := runtime.stateObserved(stateCheck{
+		sessionID: "941db969", currentState: "ready", wantedState: "ready",
+	}); err != nil || seen {
 		t.Fatalf(`turn two's wait for "ready" matched before its own transition existed: seen=%t err=%v`, seen, err)
 	}
 
 	// Turn two completes.
 	write(working, ready, working, ready)
-	if seen, err := runtime.stateObserved("941db969", "ready", "ready"); err != nil || !seen {
+	if seen, err := runtime.stateObserved(stateCheck{
+		sessionID: "941db969", currentState: "ready", wantedState: "ready",
+	}); err != nil || !seen {
 		t.Fatalf(`stateObserved() did not match turn two's own "ready" transition: seen=%t err=%v`, seen, err)
 	}
 }
@@ -330,25 +344,33 @@ func TestWorkingIsAcceptedFromTheLiveStateOnTheFirstTurn(t *testing.T) {
 	empty := t.TempDir() // no recording flushed yet
 	runtime := &LiveRuntime{options: LiveOptions{RecordingDirectory: empty}}
 
-	observed, err := runtime.stateObserved("cli-1", "working", "working")
+	observed, err := runtime.stateObserved(stateCheck{
+		sessionID: "cli-1", currentState: "working", wantedState: "working",
+	})
 	if err != nil || !observed {
 		t.Fatalf("a live working state was not accepted on turn one: %t, %v", observed, err)
 	}
 	// A short turn is already ready before any poll can see it working, and the
 	// recording that proves it worked has not been flushed. Moving on is right:
 	// waitForCompletion still demands the recorded working→ready sequence.
-	if observed, err := runtime.stateObserved("cli-1", "ready", "working"); err != nil || !observed {
+	if observed, err := runtime.stateObserved(stateCheck{
+		sessionID: "cli-1", currentState: "ready", wantedState: "working",
+	}); err != nil || !observed {
 		t.Fatalf("a turn that finished before the first poll blocked the run: %t, %v", observed, err)
 	}
 	// A session that has not started at all must still wait.
-	if observed, err := runtime.stateObserved("cli-1", "error", "working"); err != nil || observed {
+	if observed, err := runtime.stateObserved(stateCheck{
+		sessionID: "cli-1", currentState: "error", wantedState: "working",
+	}); err != nil || observed {
 		t.Fatalf("a session in error read as a turn that ran: %t, %v", observed, err)
 	}
 
 	// On a later turn the live state cannot say which turn it belongs to, so
 	// only the recorded sequence counts.
 	later := &LiveRuntime{options: LiveOptions{RecordingDirectory: empty}, turn: 2}
-	if observed, err := later.stateObserved("cli-1", "working", "working"); err != nil || observed {
+	if observed, err := later.stateObserved(stateCheck{
+		sessionID: "cli-1", currentState: "working", wantedState: "working",
+	}); err != nil || observed {
 		t.Fatalf("turn two accepted a live working state with no recorded history: %t, %v", observed, err)
 	}
 }
@@ -402,19 +424,53 @@ func TestReadyIsSatisfiedByALiveIdleSessionThatHasWorked(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime := &LiveRuntime{options: LiveOptions{RecordingDirectory: dir}}
-	observed, err := runtime.stateObserved("cli-1", "ready", "ready")
+	observed, err := runtime.stateObserved(stateCheck{
+		sessionID: "cli-1", currentState: "ready", wantedState: "ready",
+	})
 	if err != nil || !observed {
 		t.Fatalf("a finished turn whose ready is not flushed yet blocked the run: %t, %v", observed, err)
 	}
 
 	// Still working: not finished, must wait.
-	if observed, err := runtime.stateObserved("cli-1", "working", "ready"); err != nil || observed {
+	if observed, err := runtime.stateObserved(stateCheck{
+		sessionID: "cli-1", currentState: "working", wantedState: "ready",
+	}); err != nil || observed {
 		t.Fatalf("a turn still in flight read as finished: %t, %v", observed, err)
 	}
 
 	// Never worked: there is no turn to be finished with.
 	empty := &LiveRuntime{options: LiveOptions{RecordingDirectory: t.TempDir()}}
-	if observed, err := empty.stateObserved("cli-1", "ready", "ready"); err != nil || observed {
+	if observed, err := empty.stateObserved(stateCheck{
+		sessionID: "cli-1", currentState: "ready", wantedState: "ready",
+	}); err != nil || observed {
 		t.Fatalf("a session that never worked read as a completed turn: %t, %v", observed, err)
+	}
+}
+
+// A blocking user question ends the agent turn in waiting, not ready. The
+// driver must require the recorded working->waiting transition. A live waiting
+// state with only working recorded is not enough, because the recording is the
+// evidence that the waiting transition belongs to this turn.
+func TestWaitingRequiresItsOwnRecordedTransition(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "recording.jsonl")
+	working := `{"kind":"state_transition","session_id":"cli-1","new_state":"working"}`
+	waiting := `{"kind":"state_transition","session_id":"cli-1","new_state":"waiting"}`
+	if err := os.WriteFile(path, []byte(working+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &LiveRuntime{options: LiveOptions{RecordingDirectory: dir}}
+	if observed, err := runtime.stateObserved(stateCheck{
+		sessionID: "cli-1", currentState: "waiting", wantedState: "waiting",
+	}); err != nil || observed {
+		t.Fatalf("waiting was accepted before its recorded transition: observed=%t err=%v", observed, err)
+	}
+	if err := os.WriteFile(path, []byte(strings.Join([]string{working, waiting}, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if observed, err := runtime.stateObserved(stateCheck{
+		sessionID: "cli-1", currentState: "waiting", wantedState: "waiting",
+	}); err != nil || !observed {
+		t.Fatalf("recorded waiting was not accepted: observed=%t err=%v", observed, err)
 	}
 }

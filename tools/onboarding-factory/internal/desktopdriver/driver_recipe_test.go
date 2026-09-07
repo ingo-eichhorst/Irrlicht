@@ -86,13 +86,17 @@ func TestRunDrivesEveryElicitedStepThroughItsControl(t *testing.T) {
 		// is sent, so a slot that has never sent has no session yet to be ready.
 		"preflight", "baseline", "cleanup_armed", "open", "composer",
 		"set_prompt", "submit", "owned", "state_working",
-		"hook", "state_ready",
+		"hook", "state_turn_end",
 		"sleep_2s",
-		"state_ready", "set_prompt", "submit", "state_working",
+		// A later send waits for EITHER completed-turn state, not `ready`
+		// alone: a turn that ended by asking the user something ends `waiting`,
+		// and the composer takes a new prompt in both. Cell 2-27 hung its whole
+		// 20-minute budget on the old `ready`-only wait.
+		"state_turn_end", "set_prompt", "submit", "state_working",
 		"interrupt", "state_ready",
 		"key_Escape",
 		"mode_Plan", "model_Opus 5",
-		"state_ready",
+		"state_turn_end",
 		"evidence",
 		"cleanup_started", "archive_local_new", "process_gone", "irrlicht_removed",
 		"verify_baseline", "cleanup_finished",
@@ -122,6 +126,21 @@ func TestWaitTurnWaitsForTheHookOncePerSession(t *testing.T) {
 	}
 	if hooks != 1 {
 		t.Fatalf("hook waits = %d, want 1: %v", hooks, runtime.steps)
+	}
+}
+
+func TestWaitTurnAcceptsAUserBlockingWaitingState(t *testing.T) {
+	runtime := &fakeRuntime{turnEndState: "waiting"}
+	request := recipeRunRequest([]Step{
+		{Type: StepSend, Text: "Ask me one blocking question."},
+		{Type: StepWaitTurn},
+	})
+	result, err := Run(context.Background(), runtime, request)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Evidence.IrrlichtSession.State != "waiting" {
+		t.Fatalf("captured state = %q, want waiting", result.Evidence.IrrlichtSession.State)
 	}
 }
 
@@ -326,15 +345,15 @@ func TestRunValidatesTheRequestShape(t *testing.T) {
 		{"both forms", RunRequest{
 			Workspace: "/w", Prompt: "hi", Script: []Step{{Type: StepWaitTurn}},
 			EvidenceDir: "/e", OverallTimeout: time.Second,
-			StepTimeout: time.Second, CleanupTimeout: time.Second,
+			StepTimeout: time.Second, TurnTimeout: time.Second, CleanupTimeout: time.Second,
 		}, "exactly one of prompt and recipe script"},
 		{"neither form", RunRequest{
 			Workspace: "/w", EvidenceDir: "/e", OverallTimeout: time.Second,
-			StepTimeout: time.Second, CleanupTimeout: time.Second,
+			StepTimeout: time.Second, TurnTimeout: time.Second, CleanupTimeout: time.Second,
 		}, "exactly one of prompt and recipe script"},
 		{"no workspace", RunRequest{
 			Prompt: "hi", EvidenceDir: "/e", OverallTimeout: time.Second,
-			StepTimeout: time.Second, CleanupTimeout: time.Second,
+			StepTimeout: time.Second, TurnTimeout: time.Second, CleanupTimeout: time.Second,
 		}, "workspace and evidence directory are required"},
 	}
 	for _, test := range tests {

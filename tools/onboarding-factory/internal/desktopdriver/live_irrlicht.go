@@ -10,6 +10,9 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
+	"strings"
+
+	"irrlicht/core/domain/session"
 )
 
 func (runtime *LiveRuntime) WaitIrrlichtState(
@@ -17,56 +20,123 @@ func (runtime *LiveRuntime) WaitIrrlichtState(
 	owned OwnedSession,
 	state string,
 ) (SessionObservation, error) {
+	return runtime.waitIrrlichtStates(ctx, owned, stateTargets{state})
+}
+
+func (runtime *LiveRuntime) WaitIrrlichtTurnEnd(
+	ctx context.Context,
+	owned OwnedSession,
+) (SessionObservation, error) {
+	return runtime.waitIrrlichtStates(ctx, owned, stateTargets{session.StateReady, session.StateWaiting})
+}
+
+type stateTargets []string
+
+func (runtime *LiveRuntime) waitIrrlichtStates(
+	ctx context.Context,
+	owned OwnedSession,
+	states stateTargets,
+) (SessionObservation, error) {
 	var observation SessionObservation
-	err := poll(ctx, "Irrlicht session state "+state, func() (bool, error) {
-		sessions, err := runtime.fetchIrrlichtSessions(ctx)
-		if err != nil {
-			return false, err
+	err := poll(ctx, "Irrlicht session state "+strings.Join(states, " or "), func() (bool, error) {
+		candidate, seen, err := runtime.observeIrrlichtStates(ctx, owned, states)
+		if seen {
+			observation = candidate
 		}
-		candidate, found, err := selectIrrlichtSession(sessions, owned.Transcript.SessionID)
-		if err != nil || !found {
-			return false, err
-		}
-		if !sameWorkspace(candidate.CWD, owned.Registry.CWD) {
-			return false, fmt.Errorf("Irrlicht workspace mismatch: registry %q, Irrlicht %q", owned.Registry.CWD, candidate.CWD)
-		}
-		if candidate.Launcher.HostBundleID != desktopBundleID {
-			return false, fmt.Errorf(
-				"Irrlicht host bundle ID is %q, want %q",
-				candidate.Launcher.HostBundleID,
-				desktopBundleID,
-			)
-		}
-		if err := validateOwnedProcessBaseline(runtime.processBaseline, candidate); err != nil {
-			return false, err
-		}
-		command, err := runtime.observeProcess(ctx, candidate.PID)
-		if err != nil {
-			return false, err
-		}
-		process := ProcessEvidence{PID: candidate.PID, Command: command}
-		if previous, ok := runtime.processEvidence[owned.Registry.SessionID]; ok && previous != process {
-			// Name both halves. The comparison is over the whole evidence
-			// struct, so a drifting command line with a stable PID is a real
-			// mismatch — and reporting only the PIDs printed the same number
-			// twice and sent the operator looking at the wrong field.
-			return false, fmt.Errorf(
-				"owned Claude process identity changed from PID %d (%s) to PID %d (%s)",
-				previous.PID, previous.Command, process.PID, process.Command)
-		}
-		runtime.processes[owned.Registry.SessionID] = candidate.PID
-		runtime.processEvidence[owned.Registry.SessionID] = process
-		stateSeen, err := runtime.stateObserved(owned.Transcript.SessionID, candidate.State, state)
-		if err != nil {
-			return false, err
-		}
-		if !stateSeen {
-			return false, nil
-		}
-		observation = candidate
-		return true, nil
+		return seen, err
 	})
 	return observation, err
+}
+
+func (runtime *LiveRuntime) observeIrrlichtStates(
+	ctx context.Context,
+	owned OwnedSession,
+	states stateTargets,
+) (SessionObservation, bool, error) {
+	candidate, found, err := runtime.findOwnedIrrlichtSession(ctx, owned)
+	if err != nil || !found {
+		return SessionObservation{}, false, err
+	}
+	if err := runtime.recordOwnedProcess(ctx, owned, candidate); err != nil {
+		return SessionObservation{}, false, err
+	}
+	seen, err := runtime.candidateHasTargetState(owned, candidate, states)
+	return candidate, seen, err
+}
+
+func (runtime *LiveRuntime) findOwnedIrrlichtSession(
+	ctx context.Context,
+	owned OwnedSession,
+) (SessionObservation, bool, error) {
+	sessions, err := runtime.fetchIrrlichtSessions(ctx)
+	if err != nil {
+		return SessionObservation{}, false, err
+	}
+	candidate, found, err := selectIrrlichtSession(sessions, owned.Transcript.SessionID)
+	if err != nil || !found {
+		return SessionObservation{}, found, err
+	}
+	if !sameWorkspace(candidate.CWD, owned.Registry.CWD) {
+		return SessionObservation{}, false, fmt.Errorf(
+			"Irrlicht workspace mismatch: registry %q, Irrlicht %q", owned.Registry.CWD, candidate.CWD)
+	}
+	// An EMPTY host bundle ID is not a wrong one. The daemon attributes a
+	// session's launcher after it first reports the session, so the first
+	// observation of a real Desktop session can legitimately carry no
+	// attribution yet — cell 2-3 died on `Irrlicht host bundle ID is "", want
+	// "com.anthropic.claudefordesktop"` on 2026-09-07, at step 1, against a
+	// session Desktop had just created. Absence of a finding and a contrary
+	// finding must not produce the same outcome: keep waiting for the first,
+	// fail loudly on the second.
+	if candidate.Launcher.HostBundleID == "" {
+		return SessionObservation{}, false, nil
+	}
+	if candidate.Launcher.HostBundleID != desktopBundleID {
+		return SessionObservation{}, false, fmt.Errorf(
+			"Irrlicht host bundle ID is %q, want %q", candidate.Launcher.HostBundleID, desktopBundleID)
+	}
+	if err := validateOwnedProcessBaseline(runtime.processBaseline, candidate); err != nil {
+		return SessionObservation{}, false, err
+	}
+	return candidate, true, nil
+}
+
+func (runtime *LiveRuntime) recordOwnedProcess(
+	ctx context.Context,
+	owned OwnedSession,
+	candidate SessionObservation,
+) error {
+	command, err := runtime.observeProcess(ctx, candidate.PID)
+	if err != nil {
+		return err
+	}
+	process := ProcessEvidence{PID: candidate.PID, Command: command}
+	if previous, ok := runtime.processEvidence[owned.Registry.SessionID]; ok && previous != process {
+		return fmt.Errorf(
+			"owned Claude process identity changed from PID %d (%s) to PID %d (%s)",
+			previous.PID, previous.Command, process.PID, process.Command)
+	}
+	runtime.processes[owned.Registry.SessionID] = candidate.PID
+	runtime.processEvidence[owned.Registry.SessionID] = process
+	return nil
+}
+
+func (runtime *LiveRuntime) candidateHasTargetState(
+	owned OwnedSession,
+	candidate SessionObservation,
+	states stateTargets,
+) (bool, error) {
+	for _, state := range states {
+		seen, err := runtime.stateObserved(stateCheck{
+			sessionID:    owned.Transcript.SessionID,
+			currentState: candidate.State,
+			wantedState:  state,
+		})
+		if err != nil || seen {
+			return seen, err
+		}
+	}
+	return false, nil
 }
 
 // stateObserved reads the run's own recording rather than the live state.
@@ -92,40 +162,65 @@ func (runtime *LiveRuntime) WaitIrrlichtState(
 // incremented by Submit) forces the match to land strictly further into the
 // recording each turn, so it can only be satisfied by that turn's own
 // transitions.
-func (runtime *LiveRuntime) stateObserved(sessionID, currentState, wantedState string) (bool, error) {
-	expected := cumulativeExpectedStates(runtime.turn, wantedState)
-	recorded, err := recordingHasStateSequence(runtime.options.RecordingDirectory, sessionID, expected)
+type stateCheck struct {
+	sessionID    string
+	currentState string
+	wantedState  string
+	recorded     bool
+	turn         int
+}
+
+func (runtime *LiveRuntime) stateObserved(check stateCheck) (bool, error) {
+	check.turn = runtime.turn
+	recorded, err := recordingHasStateSequence(
+		runtime.options.RecordingDirectory,
+		check.sessionID,
+		check.expectedStates(),
+	)
 	if err != nil {
 		return false, err
 	}
-	if wantedState == "ready" {
-		if currentState != "ready" {
-			return false, nil
-		}
-		if recorded {
-			return true, nil
-		}
-		// The recorded `ready` is the LAST event a turn writes and the one most
-		// likely still unflushed. On the FIRST turn, the recorded `working`
-		// plus a live idle state say everything this gate needs: the turn ran,
-		// and it is over. Cells 2-3, 3-1 and 2-16 lost runs to waiting for a
-		// `ready` that was on its way to disk.
-		//
-		// A later turn cannot use that. Turn two's `working` is in the
-		// recording as soon as turn two STARTS, so accepting it as proof of
-		// completion would let a turn report finished the moment it began —
-		// which is the multi-turn defect this file already fixed once.
-		//
-		// The recording is still validated in full at promotion, by
-		// expected-validate against expected.jsonl. This is not that check.
-		if runtime.turn > 1 {
-			return false, nil
-		}
-		worked, err := recordingHasStateSequence(
-			runtime.options.RecordingDirectory, sessionID,
-			cumulativeExpectedStates(runtime.turn, "working"))
-		return worked, err
+	check.recorded = recorded
+	if check.isCompletedTurnState() {
+		return runtime.completedTurnStateObserved(check)
 	}
+	return runtime.workingStateObserved(check), nil
+}
+
+func (check stateCheck) isCompletedTurnState() bool {
+	return check.wantedState == session.StateReady || check.wantedState == session.StateWaiting
+}
+
+func (runtime *LiveRuntime) completedTurnStateObserved(
+	check stateCheck,
+) (bool, error) {
+	if check.currentState != check.wantedState {
+		return false, nil
+	}
+	if check.recorded {
+		return true, nil
+	}
+	// Waiting must be durable before the driver continues. Unlike ready, it has
+	// no safe first-turn fallback. A live waiting state alone does not prove that
+	// this run recorded the working -> waiting transition.
+	if check.wantedState == session.StateWaiting {
+		return false, nil
+	}
+	// The recorded `ready` is the LAST event a turn writes and the one most
+	// likely still unflushed. On the FIRST turn, the recorded `working` plus a
+	// live idle state prove that the turn ran and ended. Later turns cannot use
+	// this fallback because their `working` event appears when they start.
+	if check.turn > 1 {
+		return false, nil
+	}
+	return recordingHasStateSequence(
+		runtime.options.RecordingDirectory,
+		check.sessionID,
+		stateCheck{turn: check.turn, wantedState: session.StateWorking}.expectedStates(),
+	)
+}
+
+func (runtime *LiveRuntime) workingStateObserved(check stateCheck) bool {
 	// The recording is written by the daemon and can lag its own HTTP API. Cell
 	// 1-1 timed out after 1m30s waiting for a `working` that the recording, read
 	// moments later, already held. On the FIRST turn the live state settles it:
@@ -134,7 +229,8 @@ func (runtime *LiveRuntime) stateObserved(sessionID, currentState, wantedState s
 	// A later turn cannot use that shortcut. A live "working" does not say which
 	// turn it belongs to, and the whole point of the cumulative sequence is that
 	// turn two must not be satisfied by turn one's transition.
-	if runtime.turn <= 1 && (currentState == "working" || currentState == "ready") {
+	if check.turn <= 1 &&
+		(check.currentState == session.StateWorking || check.currentState == session.StateReady) {
 		// "ready" counts here too, and deliberately. A short turn reaches ready
 		// before any poll can catch it working, and the recording that proves it
 		// worked has not been flushed yet — so neither source can show working,
@@ -144,24 +240,24 @@ func (runtime *LiveRuntime) stateObserved(sessionID, currentState, wantedState s
 		// recorded sequence working→ready for this session, by which time the
 		// daemon has flushed it. That is the evidence; this wait is only a gate
 		// on the way to it.
-		return true, nil
+		return true
 	}
-	return recorded, nil
+	return check.recorded
 }
 
-// cumulativeExpectedStates returns the full state sequence a recording must
-// carry to prove `wantedState` has been reached on the CURRENT turn. Turn
+// expectedStates returns the full state sequence a recording must carry to
+// prove `wantedState` has been reached on the CURRENT turn. Turn
 // numbers below 2 need no prefix — there is no prior turn to guard against —
 // so a caller that never increments `turn` (every existing single-turn path)
 // sees exactly the sequence it saw before this existed.
-func cumulativeExpectedStates(turn int, wantedState string) []string {
-	expected := make([]string, 0, 2*turn)
-	for i := 1; i < turn; i++ {
-		expected = append(expected, "working", "ready")
+func (check stateCheck) expectedStates() []string {
+	expected := make([]string, 0, 2*check.turn)
+	for i := 1; i < check.turn; i++ {
+		expected = append(expected, session.StateWorking, session.StateReady)
 	}
-	expected = append(expected, "working")
-	if wantedState == "ready" {
-		expected = append(expected, "ready")
+	expected = append(expected, session.StateWorking)
+	if check.wantedState == session.StateReady || check.wantedState == session.StateWaiting {
+		expected = append(expected, check.wantedState)
 	}
 	return expected
 }

@@ -171,6 +171,244 @@ final class CommandRunnerTests: XCTestCase {
         )
     }
 
+    // A read that fails AFTER the click is not the same as one that fails
+    // before it, and the two must never leave the helper looking alike.
+    //
+    // RED-FIRST: before awaitPostcondition retried its own reads, the first
+    // post-click read threw straight out of the command, and the Go driver —
+    // which classifies a bare `AX error -25202` as a PRE-click refusal — went
+    // on to click Send a second time. Measured live on 1.46388.4: clicking
+    // Send swaps the composer for the in-flight view, and that is precisely
+    // when a tree read fails this way.
+    func testClickPostconditionSurvivesATransientReadFailure() throws {
+        let application = AXUIElementCreateSystemWide()
+        let targetElement = AXUIElementCreateApplication(41_004)
+        let selector = ControlSelector(role: "AXButton", identifier: "send")
+        var clicks = 0
+        var readsAfterClick = 0
+        let dependencies = makeCommandDependencies(
+            application: application,
+            record: { _ in },
+            readTree: { _, _ in
+                guard clicks > 0 else {
+                    return LiveTree(elements: [LiveElement(
+                        snapshot: ElementSnapshot(
+                            path: [0],
+                            role: "AXButton",
+                            identifier: "send",
+                            frame: Frame(x: 0, y: 0, width: 10, height: 10)
+                        ),
+                        element: targetElement
+                    )])
+                }
+                readsAfterClick += 1
+                // The renderer is mid-swap on the first look, settled after.
+                if readsAfterClick == 1 {
+                    throw HelperFailure(.actionFailed, "AX error -25202")
+                }
+                return LiveTree(elements: [])
+            },
+            snapshot: { element, path, _ in
+                ElementSnapshot(
+                    path: path,
+                    role: "AXButton",
+                    identifier: "send",
+                    frame: Frame(x: 0, y: 0, width: 10, height: 10)
+                )
+                    .self
+            },
+            requireHitTarget: { _, _ in },
+            physicalClick: { _ in clicks += 1 }
+        )
+        let response = try CommandRunner.run(HelperRequest(
+            protocolVersion: desktopHelperProtocolVersion,
+            command: .physicalClick,
+            selector: selector,
+            postcondition: Postcondition(selector: selector, condition: .absent)
+        ), dependencies: dependencies)
+
+        XCTAssertTrue(response.ok)
+        XCTAssertEqual(clicks, 1, "the click must be posted exactly once")
+        XCTAssertGreaterThan(readsAfterClick, 1, "the failed read must be retried, not propagated")
+    }
+
+    // And when the tree can never be read, absence of a finding and inability
+    // to look must not produce the same message.
+    //
+    // RED-FIRST: this used to throw the injected accessibility error itself,
+    // which the driver reads as "nothing happened" and retries.
+    func testClickReportsAnUnverifiablePostconditionRatherThanTheReadFailure() {
+        let application = AXUIElementCreateSystemWide()
+        let targetElement = AXUIElementCreateApplication(41_005)
+        let selector = ControlSelector(role: "AXButton", identifier: "send")
+        var clicks = 0
+        let dependencies = makeCommandDependencies(
+            application: application,
+            record: { _ in },
+            readTree: { _, _ in
+                guard clicks > 0 else {
+                    return LiveTree(elements: [LiveElement(
+                        snapshot: ElementSnapshot(
+                            path: [0],
+                            role: "AXButton",
+                            identifier: "send",
+                            frame: Frame(x: 0, y: 0, width: 10, height: 10)
+                        ),
+                        element: targetElement
+                    )])
+                }
+                throw HelperFailure(.actionFailed, "AX error -25202")
+            },
+            snapshot: { element, path, _ in
+                ElementSnapshot(
+                    path: path,
+                    role: "AXButton",
+                    identifier: "send",
+                    frame: Frame(x: 0, y: 0, width: 10, height: 10)
+                )
+            },
+            requireHitTarget: { _, _ in },
+            physicalClick: { _ in clicks += 1 }
+        )
+        XCTAssertThrowsError(try CommandRunner.run(HelperRequest(
+            protocolVersion: desktopHelperProtocolVersion,
+            command: .physicalClick,
+            selector: selector,
+            postcondition: Postcondition(
+                selector: selector,
+                condition: .absent,
+                timeoutMilliseconds: 100
+            )
+        ), dependencies: dependencies)) { error in
+            guard let failure = error as? HelperFailure else {
+                return XCTFail("error = \(error), want a HelperFailure")
+            }
+            XCTAssertEqual(failure.code, .postconditionFailed)
+            XCTAssertTrue(
+                failure.message.contains("could not be verified"),
+                "message = \(failure.message)"
+            )
+            XCTAssertTrue(
+                failure.message.contains("-25202"),
+                "the message must name what stopped it: \(failure.message)"
+            )
+        }
+        XCTAssertEqual(clicks, 1, "the click must be posted exactly once")
+    }
+
+    // A control whose CENTRE is covered is still clickable everywhere else.
+    //
+    // RED-FIRST: with only the centre offered, this threw the hit-test failure
+    // and clicked nothing — which is cell 2-18 on 2026-09-07, refused five
+    // times a run for three runs with `The current click point does not hit the
+    // selected control`. Measured on 1.46388.4: the owned-session menu at
+    // (2161,-373,26x26) is overlapped by the window's own drag region, an
+    // AXButton described "Move" at (2165,-376,44x16), whose lower edge falls
+    // exactly on the menu's centre y.
+    func testClickFindsAPointThatHitsWhenTheCentreIsCovered() throws {
+        let application = AXUIElementCreateSystemWide()
+        let targetElement = AXUIElementCreateApplication(41_006)
+        let selector = ControlSelector(role: "AXPopUpButton", identifier: "session-menu")
+        // The measured geometry, verbatim.
+        let frame = Frame(x: 2161, y: -373, width: 26, height: 26)
+        let covered = Point(x: 2174, y: -360)
+        var visible = true
+        var refusals = 0
+        var clickedPoint: Point?
+        let dependencies = makeCommandDependencies(
+            application: application,
+            record: { _ in },
+            readTree: { _, _ in
+                LiveTree(elements: visible ? [LiveElement(
+                    snapshot: ElementSnapshot(
+                        path: [0], role: "AXPopUpButton",
+                        identifier: "session-menu", frame: frame
+                    ),
+                    element: targetElement
+                )] : [])
+            },
+            snapshot: { _, path, hierarchy in
+                ElementSnapshot(
+                    path: path, role: "AXPopUpButton",
+                    identifier: "session-menu", frame: frame
+                )
+            },
+            requireHitTarget: { _, point in
+                if point == covered {
+                    refusals += 1
+                    throw HelperFailure(
+                        .staleControl,
+                        "The current click point does not hit the selected control."
+                    )
+                }
+            },
+            physicalClick: { point in
+                clickedPoint = point
+                visible = false
+            }
+        )
+        let response = try CommandRunner.run(HelperRequest(
+            protocolVersion: desktopHelperProtocolVersion,
+            command: .physicalClick,
+            selector: selector,
+            postcondition: Postcondition(selector: selector, condition: .absent)
+        ), dependencies: dependencies)
+
+        XCTAssertTrue(response.ok)
+        XCTAssertEqual(refusals, 1, "the centre must be tried first")
+        guard let point = clickedPoint else {
+            return XCTFail("nothing was clicked")
+        }
+        XCTAssertNotEqual(point, covered)
+        XCTAssertTrue(
+            point.x >= frame.x && point.x <= frame.x + frame.width &&
+                point.y >= frame.y && point.y <= frame.y + frame.height,
+            "clicked \(point), which is outside the control's own frame \(frame)"
+        )
+    }
+
+    // The guard that makes trying a second point safe: a control NO point of
+    // which hits is still refused, and nothing is clicked.
+    func testClickRefusesWhenNoPointInTheControlHits() {
+        let application = AXUIElementCreateSystemWide()
+        let targetElement = AXUIElementCreateApplication(41_007)
+        let selector = ControlSelector(role: "AXPopUpButton", identifier: "session-menu")
+        let frame = Frame(x: 10, y: 10, width: 20, height: 20)
+        var clicked = false
+        let dependencies = makeCommandDependencies(
+            application: application,
+            record: { _ in },
+            readTree: { _, _ in
+                LiveTree(elements: [LiveElement(
+                    snapshot: ElementSnapshot(
+                        path: [0], role: "AXPopUpButton",
+                        identifier: "session-menu", frame: frame
+                    ),
+                    element: targetElement
+                )])
+            },
+            snapshot: { _, path, _ in
+                ElementSnapshot(
+                    path: path, role: "AXPopUpButton",
+                    identifier: "session-menu", frame: frame
+                )
+            },
+            requireHitTarget: { _, _ in
+                throw HelperFailure(.staleControl, "The current click point does not hit the selected control.")
+            },
+            physicalClick: { _ in clicked = true }
+        )
+        XCTAssertThrowsError(try CommandRunner.run(HelperRequest(
+            protocolVersion: desktopHelperProtocolVersion,
+            command: .physicalClick,
+            selector: selector,
+            postcondition: Postcondition(selector: selector, condition: .absent)
+        ), dependencies: dependencies)) { error in
+            XCTAssertEqual((error as? HelperFailure)?.code, .staleControl)
+        }
+        XCTAssertFalse(clicked, "nothing may be clicked when no point provably hits the control")
+    }
+
     func testCommandRunnerPropagatesTreeReadFailureBeforeAction() {
         let application = AXUIElementCreateSystemWide()
         let injected = HelperFailure(.actionFailed, "injected tree read failure")

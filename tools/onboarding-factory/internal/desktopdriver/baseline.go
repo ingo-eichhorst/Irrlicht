@@ -25,54 +25,114 @@ type SnapshotEntry struct {
 // Missing roots are recorded so unexpected creation is also detected.
 type TreeSnapshot map[string]SnapshotEntry
 
+type configPath string
+
+type treeSnapshotCapture struct {
+	snapshot TreeSnapshot
+}
+
 func CaptureTreeSnapshot(roots []string) (TreeSnapshot, error) {
 	snapshot := TreeSnapshot{}
 	for _, root := range roots {
 		if !filepath.IsAbs(root) {
 			return nil, fmt.Errorf("configuration baseline root is not absolute: %q", root)
 		}
-		if err := captureRoot(snapshot, filepath.Clean(root)); err != nil {
+		if err := captureRoot(snapshot, configPath(filepath.Clean(root))); err != nil {
 			return nil, err
 		}
 	}
 	return snapshot, nil
 }
 
-func captureRoot(snapshot TreeSnapshot, root string) error {
-	info, err := os.Lstat(root)
+func captureRoot(snapshot TreeSnapshot, root configPath) error {
+	info, err := os.Lstat(string(root))
 	if os.IsNotExist(err) {
-		snapshot[root] = SnapshotEntry{Kind: "absent"}
+		snapshot[string(root)] = SnapshotEntry{Kind: "absent"}
 		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("inspect configuration path %q: %w", root, err)
 	}
 	if !info.IsDir() {
-		entry, err := snapshotEntry(root, info)
-		if err != nil {
-			return err
-		}
-		snapshot[root] = entry
-		return nil
+		return captureSnapshotEntry(snapshot, root, info)
 	}
-	return filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return fmt.Errorf("walk configuration path %q: %w", path, walkErr)
-		}
-		if len(snapshot) >= maxBaselineEntries {
-			return fmt.Errorf("configuration baseline exceeded %d entries", maxBaselineEntries)
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return fmt.Errorf("inspect configuration path %q: %w", path, err)
-		}
-		value, err := snapshotEntry(path, info)
-		if err != nil {
-			return err
-		}
-		snapshot[path] = value
-		return nil
+	capture := treeSnapshotCapture{snapshot: snapshot}
+	return filepath.WalkDir(string(root), func(path string, entry fs.DirEntry, walkErr error) error {
+		return capture.walk(configPath(path), entry, walkErr)
 	})
+}
+
+func (capture treeSnapshotCapture) walk(path configPath, entry fs.DirEntry, walkErr error) error {
+	if walkErr != nil {
+		return fmt.Errorf("walk configuration path %q: %w", path, walkErr)
+	}
+	if isDerivedConfigCache(path) {
+		return skipDerivedConfigCache(entry)
+	}
+	if len(capture.snapshot) >= maxBaselineEntries {
+		return fmt.Errorf("configuration baseline exceeded %d entries", maxBaselineEntries)
+	}
+	info, err := entry.Info()
+	if err != nil {
+		return fmt.Errorf("inspect configuration path %q: %w", path, err)
+	}
+	return captureSnapshotEntry(capture.snapshot, path, info)
+}
+
+func captureSnapshotEntry(snapshot TreeSnapshot, path configPath, info fs.FileInfo) error {
+	value, err := snapshotEntry(string(path), info)
+	if err != nil {
+		return err
+	}
+	snapshot[string(path)] = value
+	return nil
+}
+
+func skipDerivedConfigCache(entry fs.DirEntry) error {
+	if entry.IsDir() {
+		return fs.SkipDir
+	}
+	return nil
+}
+
+// derivedConfigCachePaths are the parts of a guarded configuration root that
+// the Claude Code CLI rewrites on its own schedule, for reasons no Desktop run
+// causes. They are exempt from the digest for exactly the reason ~/.claude.json
+// is not a root at all (see defaultConfigurationRoots): a recording machine has
+// a Claude Code session running by definition, and a guard that fails on
+// somebody else's cache sweep reports a change the driver did not make.
+//
+// Measured on 2026-09-06: cell 2-17 drove its turn, captured a 400 KB
+// transcript and every piece of evidence, and was then failed by
+// `app-wide Desktop configuration changed: unexpected path
+// ".../.claude/plugins/cache/claude-plugins-official/frontend-design/
+// 85cce0381e78/.orphaned_at"` — a marker the CLI's own in-use sweep drops on a
+// cache entry it has orphaned. That subtree held 3984 entries at the time.
+//
+// The exemption is deliberately narrow: it names derived cache and nothing
+// else. The plugin SET — config.json, installed_plugins.json,
+// known_marketplaces.json, blocklist.json, marketplaces/, repos/, data/ — stays
+// guarded, and that is what a run installing or removing a plugin would move.
+var derivedConfigCachePaths = []string{
+	// The plugin content cache. Populated, swept and orphan-marked by the CLI.
+	filepath.Join(".claude", "plugins", "cache"),
+	// The timestamp of the last in-use sweep. Its whole content is a clock read.
+	filepath.Join(".claude", "plugins", ".last_inuse_sweep"),
+	// A cache of the marketplace catalog, refetched on the CLI's own schedule.
+	filepath.Join(".claude", "plugins", "plugin-catalog-cache.json"),
+}
+
+// isDerivedConfigCache matches a full path SUFFIX, never a bare directory name:
+// "cache" alone would exempt any directory anywhere that happened to be called
+// that, which is how a narrow exemption turns into a hole.
+func isDerivedConfigCache(path configPath) bool {
+	clean := filepath.Clean(string(path))
+	for _, suffix := range derivedConfigCachePaths {
+		if strings.HasSuffix(clean, string(filepath.Separator)+suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 func snapshotEntry(path string, info fs.FileInfo) (SnapshotEntry, error) {

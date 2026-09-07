@@ -29,6 +29,7 @@ type fakeRuntime struct {
 	// transcriptOwner maps a Claude transcript ID back to its Desktop ID so the
 	// Irrlicht-removal wait can tell whether that session is still up.
 	transcriptOwner map[string]string
+	turnEndState    string
 }
 
 func (runtime *fakeRuntime) sessionActive() bool { return len(runtime.live) > 0 }
@@ -106,7 +107,7 @@ func (runtime *fakeRuntime) RecoverOwnedSession(context.Context, Baseline, strin
 	return owned, nil
 }
 
-func (runtime *fakeRuntime) SetPrompt(context.Context, string) error {
+func (runtime *fakeRuntime) SetPrompt(context.Context, OwnedSession, string) error {
 	return runtime.step("set_prompt")
 }
 
@@ -136,6 +137,23 @@ func (runtime *fakeRuntime) Sleep(_ context.Context, duration time.Duration) err
 func (runtime *fakeRuntime) WaitIrrlichtState(_ context.Context, owned OwnedSession, state string) (SessionObservation, error) {
 	if err := runtime.step("state_" + state); err != nil {
 		return SessionObservation{}, err
+	}
+	return SessionObservation{
+		SessionID: owned.Transcript.SessionID,
+		CWD:       "/repo/workspace",
+		PID:       4321,
+		State:     state,
+		Launcher:  Launcher{HostBundleID: desktopBundleID},
+	}, nil
+}
+
+func (runtime *fakeRuntime) WaitIrrlichtTurnEnd(_ context.Context, owned OwnedSession) (SessionObservation, error) {
+	if err := runtime.step("state_turn_end"); err != nil {
+		return SessionObservation{}, err
+	}
+	state := runtime.turnEndState
+	if state == "" {
+		state = "ready"
 	}
 	return SessionObservation{
 		SessionID: owned.Transcript.SessionID,
@@ -236,6 +254,7 @@ func validRunRequest() RunRequest {
 		EvidenceDir:    "/repo/evidence",
 		OverallTimeout: time.Second,
 		StepTimeout:    100 * time.Millisecond,
+		TurnTimeout:    100 * time.Millisecond,
 		CleanupTimeout: 100 * time.Millisecond,
 	}
 }
@@ -255,7 +274,7 @@ func TestRunDrivesWorkingReadyAndCleansOwnedSession(t *testing.T) {
 	wantOrder := []string{
 		"preflight", "baseline", "cleanup_armed", "open", "composer",
 		"set_prompt", "submit", "owned", "state_working", "hook",
-		"state_ready", "evidence", "cleanup_started", "archive_local_new",
+		"state_turn_end", "evidence", "cleanup_started", "archive_local_new",
 		"process_gone", "irrlicht_removed", "verify_baseline", "cleanup_finished",
 	}
 	if strings.Join(runtime.steps, "\n") != strings.Join(wantOrder, "\n") {
@@ -300,6 +319,7 @@ func TestRunRestoresAfterTimeoutAndInterruption(t *testing.T) {
 		t.Run(tests[index].name, func(t *testing.T) {
 			request := validRunRequest()
 			request.StepTimeout = time.Millisecond
+			request.TurnTimeout = time.Millisecond
 			_, err := Run(context.Background(), tests[index].runtime, request)
 			if err == nil {
 				t.Fatal("Run() returned nil error")
