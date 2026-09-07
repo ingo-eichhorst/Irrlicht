@@ -122,6 +122,9 @@ var stopHookCensus = map[string]stopRecording{
 	"claudecode/scenarios/2-6_long-agentic-session-stress/recordings/2026-09-07-00-53-07_irrlichd-0.6.2+8e837de.dirty/transcript.jsonl": {
 		Stops: 4, Reproduced: 4,
 	},
+	"claudecode/scenarios/2-8_autonomous-loop-iteration-limit/recordings/2026-09-07-22-36-31_irrlichd-0.6.2+c858d61/transcript.jsonl": {
+		Stops: 1, Reproduced: 1,
+	},
 	"claudecode/scenarios/3-1_foreground-subagent/recordings/2026-09-06-23-53-54_irrlichd-0.6.2+388aba0.dirty/transcript.jsonl": {
 		Stops: 1, Reproduced: 0,
 		Why: "every Stop names a session the replay does not drive",

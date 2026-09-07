@@ -81,14 +81,29 @@ ps -p "$(pgrep -x Claude)" -Eo command= | tr ' ' '\n' \
   && echo "REFUSE TO RECORD: Claude Desktop carries the driving session's environment"
 ```
 
-To clear it, quit the app and let launchd start it, so it takes the login
-environment rather than a shell's:
+To clear it, quit the app and relaunch it with a SCRUBBED environment:
 
 ```sh
 osascript -e 'tell application "Claude" to quit'
 sleep 3
-open -a Claude          # LaunchServices, not the calling shell
+env -i HOME="$HOME" PATH=/usr/bin:/bin:/usr/sbin:/sbin USER="$USER" open -a Claude
 ```
+
+**Plain `open -a Claude` is not enough.** Measured 2026-09-07, in this order:
+
+| Relaunch | `TERM_PROGRAM` / `CLAUDECODE` afterwards |
+| --- | --- |
+| `open -a Claude` from the driving shell | still present — pid 61638 |
+| `env -i … open -a Claude` | gone — pid 62694 |
+
+`open` forwards the calling shell's environment, so going through
+LaunchServices is not by itself a clean launch.
+
+## The guard
+
+`LiveRuntime.Preflight` now refuses a run against a contaminated app, before it
+opens a session or spends a minute of its budget, and the refusal carries the
+scrubbed command above. See `live_contamination.go`.
 
 A run must never be the thing that starts Claude Desktop. Starting it is what
 decides the environment every session it spawns will carry, and a run that

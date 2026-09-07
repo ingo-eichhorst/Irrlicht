@@ -4,15 +4,16 @@
     {
       "scenario_id": "autonomous-loop-iteration-limit",
       "execution_profile": "desktop-local",
-      "outcome": "not-runnable",
-      "reason": "This cell is DRIVABLE. The driver now runs Claude Desktop's command popup, /goal is in it, and three runs on 2026-09-07 each typed the command, accepted it, typed the goal text and submitted it \u2014 the agent ran a turn every time. What blocked all three was the RIG, not the recipe: the run itself started Claude Desktop, so the app inherited the driving Claude Code session's environment (CLAUDECODE=1, CLAUDE_CODE_SSE_PORT, TERM_PROGRAM=vscode). Claude Code inherits it again from Desktop, and Irrlicht attributes the session to a terminal. Queried from the run's own daemon while it was in flight: launcher={\"term_program\":\"vscode\"}, host_bundle_id=null. The driver refuses a session it cannot attribute to Claude Desktop, which is the correct refusal \u2014 loosening it would let a run adopt a session it does not own. Sibling cell 2-12 recorded successfully the same evening against an earlier Claude Desktop process the rig had not started. Quit Claude Desktop, relaunch it through LaunchServices, and this cell is expected to record; the check and the commands are in desktop-evidence/launcher-attribution.md. The cell stays valid for cli-local, where it is recorded today.",
-      "missing_control": "desktop-launcher-attribution",
-      "evidence_refs": [
-        "replaydata/agents/claudecode/desktop-evidence/launcher-attribution.md",
-        "replaydata/agents/claudecode/desktop-evidence/slash-commands.md",
-        "replaydata/agents/claudecode/desktop-evidence/recipe-census.txt",
-        "replaydata/agents/claudecode/scenarios/2-8_autonomous-loop-iteration-limit/metadata.json"
-      ]
+      "outcome": "observed-passing",
+      "recording": "2026-09-07-22-36-31_irrlichd-0.6.2+c858d61",
+      "evidence": {
+        "desktop_registry": "desktop-registry.json",
+        "transcript": "transcript.jsonl",
+        "hooks": "hooks.jsonl",
+        "process": "process.json",
+        "irrlicht_session": "irrlicht-session.json",
+        "environment": "desktop-environment.json"
+      }
     }
   ]
 }

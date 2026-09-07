@@ -75,6 +75,10 @@ type LiveRuntime struct {
 	processExists      func(int) (bool, error)
 	listProcesses      func(context.Context) (map[int]struct{}, error)
 	observeProcess     func(context.Context, int) (string, error)
+	// desktopPID and readDesktopEnvironment are the seam for the
+	// contamination guard. See live_contamination.go.
+	desktopPID             func(context.Context) (int, error)
+	readDesktopEnvironment desktopEnvironmentReader
 }
 
 func NewLiveRuntime(options LiveOptions, stepLog string) (*LiveRuntime, error) {
@@ -100,14 +104,27 @@ func NewLiveRuntime(options LiveOptions, stepLog string) (*LiveRuntime, error) {
 		options: options, helper: helperClient{path: options.HelperPath},
 		evidenceDir: options.EvidenceDir,
 		processes:   map[string]int{}, processEvidence: map[string]ProcessEvidence{}, stepLog: stepLog,
-		httpClient:     &http.Client{Timeout: 2 * time.Second},
-		registryByID:   map[string]RegistrySession{},
-		openDeepLink:   openOfficialDesktopURL,
-		frontDesktop:   activateDesktop,
-		processExists:  liveProcessExists,
-		listProcesses:  readProcessCensus,
-		observeProcess: processCommand,
+		httpClient:             &http.Client{Timeout: 2 * time.Second},
+		registryByID:           map[string]RegistrySession{},
+		openDeepLink:           openOfficialDesktopURL,
+		frontDesktop:           activateDesktop,
+		processExists:          liveProcessExists,
+		listProcesses:          readProcessCensus,
+		observeProcess:         processCommand,
+		desktopPID:             desktopProcessID,
+		readDesktopEnvironment: readProcessEnvironment,
 	}, nil
+}
+
+// requireCleanDesktopEnvironment refuses a run against a Claude Desktop that
+// carries the driving session's environment. Placed in Preflight because the
+// whole point is to refuse BEFORE the run opens a session and spends its budget.
+func (runtime *LiveRuntime) requireCleanDesktopEnvironment(ctx context.Context) error {
+	pid, err := runtime.desktopPID(ctx)
+	if err != nil {
+		return fmt.Errorf("cannot check whether Claude Desktop carries this session's environment: %w", err)
+	}
+	return requireUncontaminatedDesktop(ctx, pid, runtime.readDesktopEnvironment)
 }
 
 func defaultConfigurationRoots(home, desktopRoot string) []string {
@@ -144,6 +161,11 @@ func (runtime *LiveRuntime) Preflight(ctx context.Context) (Versions, error) {
 	}
 	status, err := runtime.helper.preflight(ctx)
 	if err != nil {
+		return Versions{}, err
+	}
+	// Before anything else this run does: refuse a Claude Desktop that carries
+	// the driving session's environment. See live_contamination.go.
+	if err := runtime.requireCleanDesktopEnvironment(ctx); err != nil {
 		return Versions{}, err
 	}
 	return validateVersions(status, runtime.options.IrrlichtVersion)
