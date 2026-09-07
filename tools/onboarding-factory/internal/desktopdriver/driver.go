@@ -73,6 +73,10 @@ type Baseline struct {
 	// DesktopConfig is Claude Desktop's own config.json, kept whole for the
 	// same structural reason as UserConfig.
 	DesktopConfig []byte
+	// DesktopBlocklist is Claude Desktop's extensions denylist, kept whole for
+	// the same reason: what matters is that the run removed no entry from it,
+	// not that its refresh timestamp is unchanged. See verifyBlocklistEntries.
+	DesktopBlocklist []byte
 }
 
 type RunRequest struct {
@@ -139,6 +143,9 @@ type Runtime interface {
 	WaitOwnedSession(context.Context, Baseline, string) (OwnedSession, error)
 	RecoverOwnedSession(context.Context, Baseline, string) (OwnedSession, error)
 	SetPrompt(context.Context, OwnedSession, string) error
+	// ComposeSlashCommand types a recipe's "/name args" into the composer and
+	// accepts it from the Desktop command popup, leaving it ready to Submit.
+	ComposeSlashCommand(context.Context, OwnedSession, string) error
 	Submit(context.Context) error
 	// Interrupt stops an in-flight turn through the composer's Stop control.
 	Interrupt(context.Context) error
@@ -154,6 +161,9 @@ type Runtime interface {
 	// WaitIrrlichtTurnEnd accepts the two completed-turn states. A normal turn
 	// ends ready. A blocking user question ends waiting.
 	WaitIrrlichtTurnEnd(context.Context, OwnedSession) (SessionObservation, error)
+	// WaitIrrlichtTurnStart accepts either state a turn that has begun can be
+	// in: working, or waiting if it already stopped to ask something.
+	WaitIrrlichtTurnStart(context.Context, OwnedSession) (SessionObservation, error)
 	WaitHook(context.Context, OwnedSession) error
 	CaptureEvidence(context.Context, OwnedSession, SessionObservation, string) (CapturedEvidence, error)
 	ArchiveOwned(context.Context, OwnedSession) error
@@ -339,6 +349,8 @@ func (runner *scriptRunner) runOne(ctx context.Context, step Step) error {
 		return runner.interrupt(ctx)
 	case StepKeys:
 		return runner.pressKey(ctx, step.Keys)
+	case StepSlash:
+		return runner.slash(ctx, step.Text)
 	case StepMode:
 		return runner.runtime.SelectMode(ctx, step.Value)
 	case StepModel:
@@ -442,6 +454,36 @@ func (runner *scriptRunner) send(ctx context.Context, text string) error {
 	return err
 }
 
+// slash runs one slash command through the Desktop composer's command popup.
+//
+// It is `send` with a different way of filling the composer, and it keeps
+// send's two hard-won rules: wait for a completed turn before touching a
+// composer that is still working, and count the turn only where Submit runs.
+// A slash command is a turn like any other — Claude Desktop answers it, and
+// Irrlicht records the same working->ready cycle for it.
+func (runner *scriptRunner) slash(ctx context.Context, text string) error {
+	slot, err := runner.current()
+	if err != nil {
+		return err
+	}
+	if slot.owned.Registry.SessionID != "" {
+		if _, err := runner.waitTurnEnd(ctx); err != nil {
+			return err
+		}
+	}
+	if err := runner.runtime.ComposeSlashCommand(ctx, slot.owned, text); err != nil {
+		return fmt.Errorf("compose Desktop slash command: %w", err)
+	}
+	if err := runner.runtime.Submit(ctx); err != nil {
+		return fmt.Errorf("submit Desktop slash command: %w", err)
+	}
+	if slot.owned.Registry.SessionID == "" {
+		return runner.bindOwnership(ctx, slot)
+	}
+	_, err = runner.waitState(ctx, session.StateWorking)
+	return err
+}
+
 // sendFirst types and submits a slot's first turn, and binds ownership only
 // AFTER Submit runs. Claude Desktop writes no claude-code-sessions registry
 // row until the first message is sent — measured live on 1.46388.4 on
@@ -457,6 +499,14 @@ func (runner *scriptRunner) sendFirst(ctx context.Context, slot *ownedSlot, text
 	if err := runner.runtime.Submit(ctx); err != nil {
 		return fmt.Errorf("submit Desktop prompt: %w", err)
 	}
+	return runner.bindOwnership(ctx, slot)
+}
+
+// bindOwnership claims the registry row Claude Desktop writes once a slot's
+// first message is sent, and waits for the turn it started. Every path that
+// submits a slot's FIRST turn ends here, so ownership is claimed the same way
+// whether that turn was a typed prompt or a slash command.
+func (runner *scriptRunner) bindOwnership(ctx context.Context, slot *ownedSlot) error {
 	var owned OwnedSession
 	if err := runStep(ctx, runner.request.StepTimeout, "one owned Desktop session", func(step context.Context) error {
 		var err error
@@ -468,8 +518,37 @@ func (runner *scriptRunner) sendFirst(ctx context.Context, slot *ownedSlot, text
 	if err := runner.adopt(slot, owned); err != nil {
 		return err
 	}
-	_, err := runner.waitState(ctx, session.StateWorking)
+	// NOT waitState(working). A first turn can be over before this line runs.
+	// Measured 2026-09-07 on cell 2-8: its session was born ready at
+	// 20:23:43.339, reached working 3ms later, and was in `waiting` by
+	// 20:24:29 — while the driver, still resolving the Desktop registry row,
+	// began watching afterwards and spent its whole 12-minute budget waiting
+	// for a `working` that had already been and gone. `waiting` is proof the
+	// turn ran; `ready` is not, because a session is born in it.
+	_, err := runner.waitTurnStart(ctx)
 	return err
+}
+
+func (runner *scriptRunner) waitTurnStart(ctx context.Context) (SessionObservation, error) {
+	slot, err := runner.current()
+	if err != nil {
+		return SessionObservation{}, err
+	}
+	var observation SessionObservation
+	if err := runStep(ctx, runner.request.TurnTimeout, "the first Desktop turn to start",
+		func(step context.Context) error {
+			var waitErr error
+			observation, waitErr = runner.runtime.WaitIrrlichtTurnStart(step, slot.owned)
+			return waitErr
+		}); err != nil {
+		return SessionObservation{}, err
+	}
+	if observation.State != session.StateWorking && observation.State != session.StateWaiting {
+		return SessionObservation{}, fmt.Errorf(
+			"the first Desktop turn was reported in state %q, which is not proof it ran", observation.State)
+	}
+	slot.observation = observation
+	return observation, nil
 }
 
 func (runner *scriptRunner) waitTurn(ctx context.Context) error {

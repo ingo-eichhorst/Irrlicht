@@ -117,7 +117,16 @@ func defaultConfigurationRoots(home, desktopRoot string) []string {
 		// token caches, allowlist timestamps and window layout that Claude
 		// Desktop rewrites on its own schedule.
 		filepath.Join(desktopRoot, "cowork-enabled-cli-ops.json"),
-		filepath.Join(desktopRoot, "extensions-blocklist.json"),
+		// extensions-blocklist.json is guarded by verifyBlocklistEntries, not
+		// by digest. Its whole body is `{"entries":[...],"lastUpdated":...,
+		// "url":...}` — a fetch result plus a clock read that Claude Desktop
+		// refreshes on its own schedule. Measured 2026-09-07: cell 2-12 drove
+		// its turn, ran /compact and was failed at cleanup by
+		// `app-wide Desktop configuration changed: ... at
+		// ".../extensions-blocklist.json"` — the app had refetched it mid-run
+		// and stamped a new lastUpdated, with `entries` still empty. Digesting
+		// it fails on somebody else's refresh; the entries are what a run must
+		// never remove.
 		// ~/.claude.json is deliberately NOT here. It belongs to the Claude
 		// Code CLI, which rewrites caches, counters and per-project entries
 		// whenever any session on the machine acts — and a recording machine
@@ -186,6 +195,10 @@ func (runtime *LiveRuntime) CaptureBaseline(ctx context.Context) (Baseline, erro
 	if err != nil && !os.IsNotExist(err) {
 		return Baseline{}, fmt.Errorf("read the Desktop configuration baseline: %w", err)
 	}
+	desktopBlocklist, err := os.ReadFile(runtime.desktopBlocklistPath())
+	if err != nil && !os.IsNotExist(err) {
+		return Baseline{}, fmt.Errorf("read the Desktop extensions blocklist baseline: %w", err)
+	}
 	processes, err := runtime.listProcesses(ctx)
 	if err != nil {
 		return Baseline{}, fmt.Errorf("capture process baseline: %w", err)
@@ -208,8 +221,12 @@ func (runtime *LiveRuntime) CaptureBaseline(ctx context.Context) (Baseline, erro
 	return Baseline{
 		SessionIDs: ids, Files: files, Config: config, Processes: processes,
 		UserConfig: userConfig, UserConfigPath: userConfigPath,
-		DesktopConfig: desktopConfig,
+		DesktopConfig: desktopConfig, DesktopBlocklist: desktopBlocklist,
 	}, nil
+}
+
+func (runtime *LiveRuntime) desktopBlocklistPath() string {
+	return filepath.Join(runtime.options.DesktopSupportRoot, "extensions-blocklist.json")
 }
 
 func (runtime *LiveRuntime) OpenComposer(ctx context.Context, workspace string) error {
@@ -398,6 +415,15 @@ func waitForComposerControls(
 	return controls, err
 }
 
+// ComposeSlashCommand types a recipe's "/name args" and accepts it from the
+// Desktop command popup, leaving the composer ready for Submit.
+func (runtime *LiveRuntime) ComposeSlashCommand(
+	ctx context.Context, owned OwnedSession, text string,
+) error {
+	return composeSlashCommand(ctx, runtime.workspace, owned, text, runtime.front,
+		runtime.helper.inspect, runtime.helper.typeText, runtime.helper.keyboard)
+}
+
 func (runtime *LiveRuntime) SetPrompt(ctx context.Context, owned OwnedSession, prompt string) error {
 	return setPrompt(ctx, runtime.workspace, owned, prompt, runtime.front,
 		runtime.helper.inspect, runtime.helper.setValue)
@@ -424,13 +450,8 @@ func setPrompt(
 		if err != nil {
 			return err
 		}
-		if owned.Registry.SessionID != "" {
-			if strings.TrimSpace(owned.Registry.Title) == "" {
-				return errors.New("the owned Desktop session has no title for the open-conversation guard")
-			}
-			if _, err := selectedSessionMenu(elements, owned.Registry.Title); err != nil {
-				return fmt.Errorf("prove the owned Desktop conversation is open: %w", err)
-			}
+		if err := requireOwnedConversationOpen(elements, owned); err != nil {
+			return err
 		}
 		controls, err := composerControls(elements, workspace, []string{controlPrompt})
 		if err != nil {
@@ -438,6 +459,22 @@ func setPrompt(
 		}
 		return setValue(ctx, controls[controlPrompt], prompt)
 	})
+}
+
+// requireOwnedConversationOpen proves the conversation on screen is the one
+// this run owns, before anything types into its composer. A slot that has not
+// sent yet has no session to prove, which is the one case this passes.
+func requireOwnedConversationOpen(elements []helperElement, owned OwnedSession) error {
+	if owned.Registry.SessionID == "" {
+		return nil
+	}
+	if strings.TrimSpace(owned.Registry.Title) == "" {
+		return errors.New("the owned Desktop session has no title for the open-conversation guard")
+	}
+	if _, err := selectedSessionMenu(elements, owned.Registry.Title); err != nil {
+		return fmt.Errorf("prove the owned Desktop conversation is open: %w", err)
+	}
+	return nil
 }
 
 // Submit resolves the send button from a FRESH reading rather than from the
@@ -550,19 +587,40 @@ func (runtime *LiveRuntime) RecordStep(step string) {
 }
 
 func poll(ctx context.Context, name string, observe func() (bool, error)) error {
+	return pollWithReason(ctx, name, func() (bool, string, error) {
+		ready, err := observe()
+		return ready, "", err
+	})
+}
+
+// pollWithReason is poll for an observation that can be unmet for MORE THAN ONE
+// reason. The reason its last attempt gave is carried into the deadline error.
+//
+// Without it every unmet wait reads the same. Cell 2-8 spent 12 minutes on
+// `Irrlicht session state working or waiting was not observed before its
+// deadline` on 2026-09-07 — a message equally consistent with "no such session",
+// "the session exists but Irrlicht has not attributed its launcher yet" and
+// "it is in some other state", and the recording had to be read afterwards to
+// tell which. Absence of a finding and inability to look must not produce the
+// same output.
+func pollWithReason(ctx context.Context, name string, observe func() (bool, string, error)) error {
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
+	reason := "nothing was observed at all"
 	for {
-		ready, err := observe()
+		ready, why, err := observe()
 		if err != nil {
 			return fmt.Errorf("observe %s: %w", name, err)
 		}
 		if ready {
 			return nil
 		}
+		if why != "" {
+			reason = why
+		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("%s was not observed before its deadline: %w", name, ctx.Err())
+			return fmt.Errorf("%s was not observed before its deadline (%s): %w", name, reason, ctx.Err())
 		case <-ticker.C:
 		}
 	}

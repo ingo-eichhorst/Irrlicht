@@ -93,6 +93,9 @@ var stopHookCensus = map[string]stopRecording{
 	"claudecode/scenarios/1-8_model-context-display/recordings/2026-09-06-05-17-35_irrlichd-0.6.2+e19d325/transcript.jsonl": {
 		Stops: 1, Reproduced: 1,
 	},
+	"claudecode/scenarios/2-12_context-compaction/recordings/2026-09-07-19-58-09_irrlichd-0.6.2+e286fcf/transcript.jsonl": {
+		Stops: 2, Reproduced: 2,
+	},
 	"claudecode/scenarios/2-13_turn-end-terminal-text/recordings/2026-08-19-19-59-30_irrlichd-0.5.10+ae85182/transcript.jsonl": {
 		Stops: 1, Reproduced: 1,
 	},

@@ -3,35 +3,35 @@
 # Produced by: go test ./tools/onboarding-factory/internal/desktopdriver/ -run TestDesktopRecipeCensus
 # Regenerate with: UPDATE_DESKTOP_CENSUS=1 go test ./tools/onboarding-factory/internal/desktopdriver/ -run TestDesktopRecipeCensus -count=1
 #
-# A "not-runnable" line lists what the recipe would need and the driver cannot
-# elicit, deduplicated and sorted. It is never a statement about the scenario:
-# the cell stays valid for the cli-local profile, which is where it is recorded
-# today.
+# A "not-runnable" line lists the Desktop controls the recipe would need and the
+# driver cannot elicit, deduplicated and sorted. It is a statement about the
+# CONTROLS, not about the scenario: the cell stays valid for the cli-local
+# profile, which is where it is recorded today.
 #
-# Most entries name a CONTROL with no measured path in the accessibility dump.
-# One does not: "slash-command-step" names a gap in this DRIVER. Claude Desktop
-# runs slash commands — measured 2026-09-07, see
-# replaydata/agents/claudecode/desktop-evidence/slash-commands.md — and the
-# driver has no step that drives the popup.
+# Each named control has no measured path in the committed accessibility dump,
+# so writing one would be inventing it. "slash-command-step" used to be listed
+# here and is not any more: slash commands were measured working on 2026-09-07
+# and the driver now drives them. See
+# replaydata/agents/claudecode/desktop-evidence/slash-commands.md.
 agent-process-crash-midturn	not-runnable: agent-process-kill
 architect-editor-pair	not-runnable: keyboard-key:"1"
 auth-credentials-rejected	not-runnable: session-exit
 auto-classified-permission	not-runnable: keyboard-key:"S-Tab"
 auto-executed-tool-call	runnable
-autonomous-loop	not-runnable: slash-command-step
-autonomous-loop-iteration-limit	not-runnable: slash-command-step
+autonomous-loop	not-runnable: verbatim-typed-text
+autonomous-loop-iteration-limit	runnable
 background-process	runnable
 background-subagent	runnable
 blocking-dialog-without-tool-call	runnable
-checkpoint-rewind	not-runnable: keyboard-key:"Down", slash-command-step
-context-compaction	not-runnable: slash-command-step
+checkpoint-rewind	not-runnable: keyboard-key:"Down", slash-command-popup
+context-compaction	runnable
 foreground-subagent	runnable
 long-agentic-session-stress	runnable
 long-idle-live-session	runnable
 mid-turn-message-queued	not-runnable: keyboard-key:"f o l l o w u p Space q u e u e d Enter"
 model-context-display	runnable
 model-identification	runnable
-model-switch-midsession	not-runnable: keyboard-key:"1", slash-command-step
+model-switch-midsession	not-runnable: keyboard-key:"1"
 multiple-agents-same-workspace	runnable
 multiple-sessions-same-cwd	not-runnable: session-list-row
 oversized-transcript-line	runnable
@@ -58,4 +58,4 @@ user-blocking-question	runnable
 user-esc-interrupt	runnable
 workflow-fanout	runnable
 #
-# 25 of 44 scripted claudecode recipes are runnable through Claude Desktop.
+# 27 of 44 scripted claudecode recipes are runnable through Claude Desktop.

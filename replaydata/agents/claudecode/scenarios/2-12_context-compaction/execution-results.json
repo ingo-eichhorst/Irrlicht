@@ -4,14 +4,16 @@
     {
       "scenario_id": "context-compaction",
       "execution_profile": "desktop-local",
-      "outcome": "not-runnable",
-      "reason": "Measured on 2026-09-07 against Claude Desktop 1.46388.4: the composer DOES run slash commands. Typing \"/\" opens a filtering popup of AXMenuItem elements inside the web area, Return accepts an entry, and Send executes it \u2014 the app rendered the /context report and headed the message \"You said: /context\". This recipe needs /compact, and \"compact\" is the first entry the popup offers for that prefix. The gap is in the DRIVER, which has no step that drives that popup, not in Claude Desktop. Do not read this verdict as evidence that Desktop cannot run slash commands. The cell stays valid for cli-local, where it is recorded today.",
-      "missing_control": "slash-command-step",
-      "evidence_refs": [
-        "replaydata/agents/claudecode/desktop-evidence/slash-commands.md",
-        "replaydata/agents/claudecode/desktop-evidence/recipe-census.txt",
-        "replaydata/agents/claudecode/scenarios/2-12_context-compaction/metadata.json"
-      ]
+      "outcome": "observed-passing",
+      "recording": "2026-09-07-19-58-09_irrlichd-0.6.2+e286fcf",
+      "evidence": {
+        "desktop_registry": "desktop-registry.json",
+        "transcript": "transcript.jsonl",
+        "hooks": "hooks.jsonl",
+        "process": "process.json",
+        "irrlicht_session": "irrlicht-session.json",
+        "environment": "desktop-environment.json"
+      }
     }
   ]
 }

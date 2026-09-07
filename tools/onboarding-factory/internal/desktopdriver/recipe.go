@@ -18,8 +18,10 @@ package desktopdriver
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -60,6 +62,7 @@ const (
 	StepSleep        = "sleep"
 	StepInterrupt    = "interrupt"
 	StepKeys         = "keys"
+	StepSlash        = "slash"
 	StepMode         = "mode"
 	StepModel        = "model"
 	StepArchive      = "archive"
@@ -81,6 +84,11 @@ const (
 	controlSessionMenu      = "session-menu"
 	controlArchiveMenuItem  = "archive-menu-item"
 	controlKeyboard         = "keyboard"
+	controlSlashPopup       = "slash-command-popup"
+	// controlVerbatimTypedText is the ability to type a character sequence into
+	// the composer and have it arrive unchanged. The composer rewrites some of
+	// what it is typed; see requireTypableSlashArguments.
+	controlVerbatimTypedText = "verbatim-typed-text"
 )
 
 // desktopElicits maps each elicited step type to the controls it drives. A step
@@ -92,6 +100,7 @@ var desktopElicits = map[string][]string{
 	StepSleep:        nil,
 	StepInterrupt:    {controlStop, controlSend},
 	StepKeys:         {controlKeyboard},
+	StepSlash:        {controlPrompt, controlSlashPopup, controlKeyboard, controlSend},
 	StepMode:         {controlMode},
 	StepModel:        {controlModel},
 	StepArchive:      {controlSessionMenu, controlArchiveMenuItem},
@@ -127,7 +136,6 @@ var desktopElicits = map[string][]string{
 // that Claude Desktop cannot run slash commands. It can.
 var desktopMissingControls = map[string]string{
 	"session":       "session-list-row",
-	"slash":         "slash-command-step",
 	"restart":       "session-restart",
 	"resume":        "session-resume",
 	"reset_session": "session-reset",
@@ -360,6 +368,8 @@ func planElicitedStep(position int, step Step, sessions *int) []MissingControl {
 		return planSleepStep(position, step)
 	case StepKeys:
 		return planKeysStep(position, step)
+	case StepSlash:
+		return planSlashStep(position, step)
 	case StepMode, StepModel:
 		return planSelectionStep(position, step)
 	case StepWaitTurn, StepInterrupt, StepArchive:
@@ -373,6 +383,97 @@ func planElicitedStep(position int, step Step, sessions *int) []MissingControl {
 			Reason: "the Desktop planner has no arm for this elicited step type",
 		}}
 	}
+}
+
+// slashCommandPattern is the command NAME the popup filters on. Custom
+// commands carry a namespace ("ir:code-review") and skills carry hyphens, so
+// the name is deliberately wider than a bare word — but it stops at the first
+// space, which is where the arguments begin.
+var slashCommandPattern = regexp.MustCompile(`^/([A-Za-z0-9][A-Za-z0-9:_.-]*)( (.*))?$`)
+
+// splitSlashCommand splits a recipe's slash text into the command name the
+// popup must offer and the arguments typed after it is accepted.
+func splitSlashCommand(text string) (name string, args string, err error) {
+	match := slashCommandPattern.FindStringSubmatch(strings.TrimSpace(text))
+	if match == nil {
+		return "", "", fmt.Errorf(
+			"a slash step's text must read /<command> or /<command> <arguments>; this one is %q", text)
+	}
+	return match[1], match[3], nil
+}
+
+// desktopComposerLimits name properties of the Claude Desktop composer that
+// limit what a recipe may ask for, as opposed to controls that are absent.
+// They belong in a refusal for the same reason a missing control does — the
+// operator needs a name to look up — but they are a different kind of fact:
+// the control EXISTS and the driver CAN drive it. What it cannot do is have
+// the result come out unchanged.
+var desktopComposerLimits = map[string]string{
+	controlVerbatimTypedText: "the composer rewrites a typed backtick into an inline code node; " +
+		"see requireTypableSlashArguments for the measurement",
+}
+
+// ComposerLimits returns the composer-limit names, sorted. A refusal may name
+// one of these as well as a missing control.
+func ComposerLimits() []string {
+	names := make([]string, 0, len(desktopComposerLimits))
+	for name := range desktopComposerLimits {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// requireTypableSlashArguments refuses argument text the Desktop composer would
+// not take verbatim.
+//
+// The composer is a rich-text editor, and typing is not the same as setting a
+// value. Measured 2026-09-07 on 1.46388.4, typing each of these and reading the
+// composer back:
+//
+//	a `code` b   -> "a code\u200b b"   the backticks are consumed, an inline
+//	                                   code node is created, and a zero-width
+//	                                   space is left behind
+//	a *star* b   -> "a *star* b"       unchanged
+//	a _under_ b  -> "a _under_ b"       unchanged
+//	a **bold** b -> "a **bold** b"      unchanged
+//	a #hash b    -> "a #hash b"         unchanged
+//
+// So the rule is the backtick and only the backtick. The message that reaches
+// the agent loses it too: sending `/compact keep `+"`echo hi`"+` please` headed
+// the conversation "You said: /compact keep echo hi please".
+//
+// `send` steps are unaffected. They go through set_value, which writes the
+// accessibility value directly with no input events, and keeps a backtick
+// verbatim — measured the same day, same composer.
+func requireTypableSlashArguments(args string) error {
+	if !strings.Contains(args, "`") {
+		return nil
+	}
+	return errors.New(
+		"the arguments contain a backtick, and Claude Desktop's composer turns typed backticks " +
+			"into an inline code node — the agent would receive text the recipe did not write")
+}
+
+// planSlashStep refuses a slash step Desktop cannot reproduce, before any
+// Desktop session is opened. It cannot check that the command EXISTS — only the
+// running app knows which commands it offers, and the run proves that at the
+// popup.
+func planSlashStep(position int, step Step) []MissingControl {
+	name, args, err := splitSlashCommand(step.Text)
+	if err != nil {
+		return []MissingControl{{
+			Index: position, Step: step.Type, Control: controlSlashPopup,
+			Reason: err.Error(),
+		}}
+	}
+	if err := requireTypableSlashArguments(args); err != nil {
+		return []MissingControl{{
+			Index: position, Step: step.Type, Control: controlVerbatimTypedText,
+			Reason: fmt.Sprintf("/%s: %v", name, err),
+		}}
+	}
+	return nil
 }
 
 func planTextStep(position int, step Step, sessions *int) []MissingControl {
@@ -400,10 +501,16 @@ func planTextStep(position int, step Step, sessions *int) []MissingControl {
 			Reason: "the step carries no text to type into the composer",
 		})
 	}
+	// A slash command is not text. Claude Desktop runs one only through its
+	// command popup — type "/", let the list filter, accept an entry, then
+	// send — so a `send` step carrying "/..." would type the command into the
+	// composer and submit it as prose. The driver has a `slash` step for this,
+	// and driver-desktop.sh declares DRIVE_SLASH_REQUIRES_STEP_TYPE=true, so
+	// this refusal points at the recipe rather than at the application.
 	if strings.HasPrefix(strings.TrimSpace(step.Text), "/") {
 		missing = append(missing, MissingControl{
-			Index: position, Step: step.Type, Control: desktopMissingControls["slash"],
-			Reason: "the step's text is a slash command, and nothing measured shows the Desktop composer executing one",
+			Index: position, Step: step.Type, Control: controlSlashPopup,
+			Reason: "the step's text is a slash command; it needs a `slash` step, which drives the command popup",
 		})
 	}
 	return missing

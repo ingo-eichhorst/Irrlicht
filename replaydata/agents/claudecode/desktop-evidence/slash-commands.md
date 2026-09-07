@@ -84,6 +84,48 @@ its slash. A `value_equals` postcondition on the accepted command must expect
 `"<name> "`, never `"/<name>"`. The application's own placeholder — *Type / for
 commands* — is the app advertising the feature this note had to go and measure.
 
+## The composer rewrites a typed backtick
+
+The composer is a rich-text editor, and TYPING is not the same as setting a
+value. Typing each of these and reading the composer back:
+
+| Typed | Composer reads |
+| --- | --- |
+| ``a `code` b`` | `a code␀ b` — backticks consumed, an inline code node created, a zero-width space left behind |
+| `a *star* b` | `a *star* b` |
+| `a _under_ b` | `a _under_ b` |
+| `a **bold** b` | `a **bold** b` |
+| `a #hash b` | `a #hash b` |
+
+So the rule is the backtick, and only the backtick. It is not a display
+artefact: sending ``/compact keep `echo hi` please`` headed the conversation
+
+```
+You said: /compact keep echo hi please
+```
+
+The agent received text the recipe did not write. `slash` steps therefore refuse
+a backticked argument by name — the `verbatim-typed-text` limit — which is why
+cell 2-7 stays not-runnable while 2-8, whose goal text has no backticks, records.
+
+**`send` steps are unaffected.** They go through `set_value`, which writes the
+accessibility value directly with no input events. Measured the same day on the
+same composer: `set_value` of ``a `code` b`` reads back as ``a `code` b``, all
+ten characters.
+
+## The event source decides whether typing works at all
+
+`type_text` carries each character in the event itself
+(`keyboardSetUnicodeString`) rather than naming a key, so there is no layout to
+be wrong about. That only works with a **nil** event source:
+
+| Event | Result |
+| --- | --- |
+| `CGEvent(keyboardEventSource: CGEventSource(stateID: .hidSystemState), virtualKey: 0)` + unicode string | nothing reaches the app; the composer stays empty and no popup opens |
+| `CGEvent(keyboardEventSource: nil, virtualKey: 0)` + unicode string | the string is typed and the popup filters |
+
+Both were posted to `.cghidEventTap` from the same process, seconds apart.
+
 ## The key codes are US, the machine is not
 
 The first attempt at step 1 used `keyCode 44` (`kVK_ANSI_Slash`) and typed `-`

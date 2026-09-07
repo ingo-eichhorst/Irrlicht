@@ -457,3 +457,71 @@ func describeLabel(element helperElement) string {
 		return "unlabelled"
 	}
 }
+
+// --- the slash-command popup -------------------------------------------------
+//
+// Typing "/" into the composer opens a filtering list of commands. Measured
+// 2026-09-07 on 1.46388.4 and committed at
+// replaydata/agents/claudecode/desktop-evidence/slash-command-popup-1.46388.4.json:
+// the entries are AXMenuItem elements INSIDE the web area, and that "inside the
+// web area" is the whole selector. Claude Desktop's own macOS menus are also
+// AXMenuItem, and there are 226 of them on the same tree — matching by role and
+// title alone would have picked a menu-bar row with the same name.
+//
+// The macOS rows also carry a null description where every popup entry carries
+// an empty one, which is a second discriminator if the hierarchy ever moves.
+
+// slashPopupEntries returns the command list in the order the app renders it,
+// or nothing when the popup is closed.
+func slashPopupEntries(elements []helperElement) []helperElement {
+	var entries []helperElement
+	for _, element := range elements {
+		if element.Role != "AXMenuItem" || element.Title == "" {
+			continue
+		}
+		if slices.Contains(element.Hierarchy, "AXMenuBar") {
+			continue
+		}
+		entries = append(entries, element)
+	}
+	return entries
+}
+
+// requireSlashPopupOffers proves the popup is open AND that its first entry is
+// exactly the command the recipe named.
+//
+// Pressing Return accepts the HIGHLIGHTED entry, which is the first one. A
+// filter is fuzzy: "/help" returns "debug", "team-onboarding", "heapdump" and
+// "find-skills" and no help command at all, so a driver that pressed Return on
+// whatever came back would silently run "debug" and record it as "/help". The
+// exact-first check is the difference between running the recipe and running
+// something else under its name.
+func requireSlashPopupOffers(elements []helperElement, command string) error {
+	entries := slashPopupEntries(elements)
+	if len(entries) == 0 {
+		return fmt.Errorf(
+			"no Claude Desktop command popup is open after typing %q; the composer holds it as plain text",
+			"/"+command)
+	}
+	if entries[0].Title == command {
+		return nil
+	}
+	for _, entry := range entries {
+		if entry.Title == command {
+			return fmt.Errorf(
+				"the Desktop command popup offers %q but not first, so Return would accept %q instead; entries are %s",
+				command, entries[0].Title, slashEntryTitles(entries))
+		}
+	}
+	return fmt.Errorf(
+		"Claude Desktop has no %q command; the popup offers %s",
+		"/"+command, slashEntryTitles(entries))
+}
+
+func slashEntryTitles(entries []helperElement) string {
+	titles := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		titles = append(titles, strconv.Quote(entry.Title))
+	}
+	return strings.Join(titles, ", ")
+}

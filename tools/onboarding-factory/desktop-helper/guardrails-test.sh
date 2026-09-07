@@ -70,6 +70,40 @@ assert_count() {
   fi
 }
 
+# assert_next_line pins ORDER, which is the only thing that separates
+# "the boundary runs per character" from "the loop runs inside one boundary".
+# Both spellings contain the same two lines, so assert_present cannot tell them
+# apart: verified 2026-09-07 by hoisting the loop into the emit closure — every
+# other guardrail still passed while the two behavioural tests went red.
+assert_next_line() {
+  label=$1
+  first=$2
+  second=$3
+  path=$4
+
+  if line=$(LC_ALL=C grep -n -F -- "$first" "$path" | head -1 | cut -d: -f1); then
+    :
+  else
+    echo "desktop-helper guardrails: could not scan $path for $label" >&2
+    exit 1
+  fi
+  [ -n "$line" ] || {
+    echo "desktop-helper guardrails: $label (never found: $first)" >&2
+    exit 1
+  }
+  next=$(sed -n "$((line + 1))p" "$path")
+  case "$next" in
+    *"$second"*) return ;;
+    *)
+      echo "desktop-helper guardrails: $label" >&2
+      echo "  line $line:      $first" >&2
+      echo "  expected next:  $second" >&2
+      echo "  found instead:  $next" >&2
+      exit 1
+      ;;
+  esac
+}
+
 assert_absent \
   "forbidden indirect control or process execution found" \
   'AXUIElementPerformAction|kAXPressAction|NSAppleScript|osascript|Process[[:space:]]*\(' \
@@ -116,7 +150,21 @@ assert_present \
 assert_count \
   "not every action enforces a false-to-true postcondition transition" \
   'try performAction(' \
-  3 \
+  4 \
+  "$RUNNER"
+# Both event-posting commands must cross the boundary that re-checks frontmost
+# and focus. type_text crosses it PER CHARACTER: a long argument typed into a
+# window that stole focus halfway is the failure this prevents, and one check
+# before the first character cannot prevent it.
+assert_count \
+  "an event-posting command bypasses the focus and frontmost boundary" \
+  'try KeyboardEventBoundary.emit(' \
+  2 \
+  "$RUNNER"
+assert_next_line \
+  "typed text does not cross the boundary once per character" \
+  'for character in text {' \
+  'try KeyboardEventBoundary.emit(' \
   "$RUNNER"
 assert_present \
   "generated output left repository-root ./.build" \

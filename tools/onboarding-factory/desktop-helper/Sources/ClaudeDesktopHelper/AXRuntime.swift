@@ -221,10 +221,19 @@ enum AXRuntime {
             kAXFocusedAttribute as CFString,
             kCFBooleanTrue
         )
-        guard status == .success,
-              try boolAttribute(element, kAXFocusedAttribute) == true
-        else {
-            throw HelperFailure(.actionFailed, "Accessibility could not focus the selected control.")
+        // The SETTER's status is not the postcondition; "the element is focused"
+        // is. Measured on 2026-09-07 against Claude Desktop 1.46388.4: the
+        // composer refused the set while already focused, and a keyboard command
+        // that would have succeeded failed with "could not focus" instead. The
+        // status is still consulted — it is the only signal when the read below
+        // is also false — but a focused element is a focused element.
+        let focused = (try? boolAttribute(element, kAXFocusedAttribute)) == true
+        guard focused else {
+            throw HelperFailure(
+                .actionFailed,
+                "Accessibility could not focus the selected control "
+                + "(set status \(status.rawValue), and the control does not read as focused)."
+            )
         }
     }
 
@@ -247,6 +256,36 @@ enum AXRuntime {
         }
         down.flags = flags
         up.flags = flags
+        down.post(tap: .cghidEventTap)
+        up.post(tap: .cghidEventTap)
+    }
+
+    // postTextEvent types ONE character by carrying it in the event itself,
+    // not by naming a key on the keyboard.
+    //
+    // `postKeyboardEvent` posts a PHYSICAL key code, and macOS maps that through
+    // whatever layout is active. On 2026-09-07 that typed "-" for every "/" this
+    // driver asked for, three times, silently: the code tables are US ANSI and
+    // the machine was German. A character carried in `keyboardSetUnicodeString`
+    // has no layout to be wrong about.
+    //
+    // The event source MUST be nil. Measured the same day against Claude Desktop
+    // 1.46388.4: an event built on `CGEventSource(stateID: .hidSystemState)`
+    // carrying the same unicode string reached the app as NOTHING AT ALL — the
+    // composer stayed empty and no popup opened — while the identical event
+    // built with a nil source typed the string and filtered the popup.
+    static func postTextEvent(_ text: String) throws {
+        var utf16 = Array(text.utf16)
+        guard !utf16.isEmpty else {
+            throw HelperFailure(.invalidRequest, "A text event needs at least one character.")
+        }
+        guard let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
+              let up = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false)
+        else {
+            throw HelperFailure(.actionFailed, "Core Graphics could not create the text event.")
+        }
+        down.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: &utf16)
+        up.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: &utf16)
         down.post(tap: .cghidEventTap)
         up.post(tap: .cghidEventTap)
     }

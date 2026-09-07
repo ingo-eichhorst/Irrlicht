@@ -31,6 +31,9 @@ func makeCommandDependencies(
     postKeyboardEvent: @escaping (UInt16, [String]) throws -> Void = { _, _ in
         XCTFail("Unexpected postKeyboardEvent boundary call.")
     },
+    postTextEvent: @escaping (String) throws -> Void = { _ in
+        XCTFail("Unexpected postTextEvent boundary call.")
+    },
     physicalClick: @escaping (Point) throws -> Void = { _ in
         XCTFail("Unexpected physicalClick boundary call.")
     }
@@ -63,6 +66,7 @@ func makeCommandDependencies(
         snapshot: snapshot,
         requireHitTarget: requireHitTarget,
         postKeyboardEvent: postKeyboardEvent,
+        postTextEvent: postTextEvent,
         physicalClick: physicalClick
     )
 }

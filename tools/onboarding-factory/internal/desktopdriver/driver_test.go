@@ -111,6 +111,16 @@ func (runtime *fakeRuntime) SetPrompt(context.Context, OwnedSession, string) err
 	return runtime.step("set_prompt")
 }
 
+func (runtime *fakeRuntime) WaitIrrlichtTurnStart(
+	ctx context.Context, owned OwnedSession,
+) (SessionObservation, error) {
+	return runtime.WaitIrrlichtState(ctx, owned, "working")
+}
+
+func (runtime *fakeRuntime) ComposeSlashCommand(_ context.Context, _ OwnedSession, text string) error {
+	return runtime.step("slash_" + text)
+}
+
 func (runtime *fakeRuntime) Submit(context.Context) error {
 	runtime.submitted = true
 	return runtime.step("submit")

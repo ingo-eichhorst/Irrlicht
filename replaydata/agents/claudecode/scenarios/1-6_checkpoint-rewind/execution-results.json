@@ -5,8 +5,8 @@
       "scenario_id": "checkpoint-rewind",
       "execution_profile": "desktop-local",
       "outcome": "not-runnable",
-      "reason": "Measured on 2026-09-07 against Claude Desktop 1.46388.4: the composer DOES run slash commands. Typing \"/\" opens a filtering popup of AXMenuItem elements inside the web area, Return accepts an entry, and Send executes it \u2014 the app rendered the /context report and headed the message \"You said: /context\". This recipe's /rewind exists too: the prefix returns \"rewind\" and nothing else. The separate keyboard-key:\"Down\" gap is unmeasured and stands. The gap is in the DRIVER, which has no step that drives that popup, not in Claude Desktop. Do not read this verdict as evidence that Desktop cannot run slash commands. The cell stays valid for cli-local, where it is recorded today.",
-      "missing_control": "keyboard-key:\"Down\", slash-command-step",
+      "reason": "Two gaps, neither about slash commands existing. Claude Desktop runs them and the driver drives them (see slash-commands.md), and this recipe's /rewind is in the popup. But the recipe delivers it through a `send` step rather than a `slash` step, and a send would submit the command as prose \u2014 so the recipe would need changing, which would change what cli-local records. The separate keyboard-key:\"Down\" gap is unmeasured and stands on its own. The cell stays valid for cli-local, where it is recorded today.",
+      "missing_control": "keyboard-key:\"Down\", slash-command-popup",
       "evidence_refs": [
         "replaydata/agents/claudecode/desktop-evidence/slash-commands.md",
         "replaydata/agents/claudecode/desktop-evidence/recipe-census.txt",

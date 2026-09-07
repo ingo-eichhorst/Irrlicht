@@ -5,8 +5,8 @@
       "scenario_id": "model-switch-midsession",
       "execution_profile": "desktop-local",
       "outcome": "not-runnable",
-      "reason": "Measured on 2026-09-07 against Claude Desktop 1.46388.4: the composer DOES run slash commands. Typing \"/\" opens a filtering popup of AXMenuItem elements inside the web area, Return accepts an entry, and Send executes it \u2014 the app rendered the /context report and headed the message \"You said: /context\". This recipe's /model exists too: the prefix returns \"model\" first. Not measured: the arguments this recipe passes (\"/model sonnet\") or the keyboard-key:\"1\" selection that follows. The gap is in the DRIVER, which has no step that drives that popup, not in Claude Desktop. Do not read this verdict as evidence that Desktop cannot run slash commands. The cell stays valid for cli-local, where it is recorded today.",
-      "missing_control": "keyboard-key:\"1\", slash-command-step",
+      "reason": "The slash half of this recipe is runnable now: /model is in the Desktop command popup and the driver drives it, arguments included (see slash-commands.md). What is left is keyboard-key:\"1\", the model-picker selection the recipe presses after each /model call. The Desktop helper refuses a keystroke with no observable postcondition, and nothing measured shows what pressing \"1\" changes in the composer. The cell stays valid for cli-local, where it is recorded today.",
+      "missing_control": "keyboard-key:\"1\"",
       "evidence_refs": [
         "replaydata/agents/claudecode/desktop-evidence/slash-commands.md",
         "replaydata/agents/claudecode/desktop-evidence/recipe-census.txt",
