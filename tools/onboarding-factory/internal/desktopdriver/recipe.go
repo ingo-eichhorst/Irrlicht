@@ -99,24 +99,35 @@ var desktopElicits = map[string][]string{
 }
 
 // desktopMissingControls names, for every step type the shared recipe grammar
-// has and this driver cannot drive, the Desktop control that is missing.
+// has and this driver cannot drive, the gap that stops it.
 //
-// These are not "unimplemented". Each names a control that has no measured path
-// in the committed accessibility dump, so writing one would be inventing it:
+// All but one name a CONTROL with no measured path in the committed
+// accessibility dump, so writing one would be inventing it:
 //
 //   - session-list-row — the sidebar row for a session that is NOT selected.
 //     The dump carries only the SELECTED session's "More options for …" popup.
-//   - slash-command-entry — nothing measured shows the Desktop composer
-//     EXECUTING a slash command rather than storing it as prompt text.
 //   - session-restart / session-resume / session-reset / session-exit —
 //     Desktop owns the Claude Code process lifetime; no measured control
 //     restarts, resumes, rotates or ends a session in place.
 //   - agent-process-kill — signalling Desktop's child would leave Desktop's own
 //     registry and this driver's ownership bookkeeping disagreeing about what
 //     is alive, and no measured control does it through the app.
+//
+// slash-command-step is the exception, and it is named for what it is. This
+// entry used to read "slash-command-entry — nothing measured shows the Desktop
+// composer EXECUTING a slash command rather than storing it as prompt text".
+// That was MEASURED AND DISPROVED on 2026-09-07 against 1.46388.4: typing "/"
+// opens a filtering popup of AXMenuItem elements inside the web area, Return
+// accepts one, and Send runs it — the app rendered the /context report and
+// headed the message "You said: /context". Two trees and the full sequence are
+// at replaydata/agents/claudecode/desktop-evidence/slash-commands.md.
+//
+// The control exists. This driver has no step that drives it, which is why the
+// step is still refused — but a reader must not take the refusal as evidence
+// that Claude Desktop cannot run slash commands. It can.
 var desktopMissingControls = map[string]string{
 	"session":       "session-list-row",
-	"slash":         "slash-command-entry",
+	"slash":         "slash-command-step",
 	"restart":       "session-restart",
 	"resume":        "session-resume",
 	"reset_session": "session-reset",

@@ -33,10 +33,16 @@ const censusHeader = `# Every claudecode recipe, planned against the Claude Desk
 # Produced by: go test ./tools/onboarding-factory/internal/desktopdriver/ -run TestDesktopRecipeCensus
 # Regenerate with: UPDATE_DESKTOP_CENSUS=1 go test ./tools/onboarding-factory/internal/desktopdriver/ -run TestDesktopRecipeCensus -count=1
 #
-# A "not-runnable" line lists the Desktop controls the recipe would need and the
-# driver cannot elicit, deduplicated and sorted. It is a statement about the
-# CONTROLS, not about the scenario: the cell stays valid for the cli-local
-# profile, which is where it is recorded today.
+# A "not-runnable" line lists what the recipe would need and the driver cannot
+# elicit, deduplicated and sorted. It is never a statement about the scenario:
+# the cell stays valid for the cli-local profile, which is where it is recorded
+# today.
+#
+# Most entries name a CONTROL with no measured path in the accessibility dump.
+# One does not: "slash-command-step" names a gap in this DRIVER. Claude Desktop
+# runs slash commands — measured 2026-09-07, see
+# replaydata/agents/claudecode/desktop-evidence/slash-commands.md — and the
+# driver has no step that drives the popup.
 `
 
 type censusRow struct {

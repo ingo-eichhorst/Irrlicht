@@ -94,7 +94,7 @@ func TestPlanRefusesASessionRetarget(t *testing.T) {
 
 func TestPlanRefusesASlashCommandTypedAsSendText(t *testing.T) {
 	err := Plan([]Step{{Type: StepSend, Text: "/model sonnet"}})
-	if err == nil || !strings.Contains(err.Error(), "slash-command-entry") {
+	if err == nil || !strings.Contains(err.Error(), "slash-command-step") {
 		t.Fatalf("Plan() error = %v; want the slash control named", err)
 	}
 }
