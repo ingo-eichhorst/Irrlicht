@@ -39,7 +39,14 @@ var piOnCallRE = regexp.MustCompile(`pi\.on\(\s*([A-Za-z_][A-Za-z0-9_]*|"[^"]*")
 // jsPayloadKeyRE finds the keys of the object literal extension.js hands to
 // JSON.stringify — the wire contract between the shipped JavaScript and
 // piHookPayload's json tags.
-var jsPayloadKeyRE = regexp.MustCompile(`(?m)^\s*post\(\{ (.*) \}\);$`)
+//
+// It spans lines (`(?s)`, non-greedy up to the first `});`) because the
+// literal outgrew one line when #1936 added the two herdr fields. The property
+// checked is unchanged; only the shape the guard can read widened. It is still
+// anchored on `post({`, so it reads the literal that is actually sent rather
+// than any object elsewhere in the file, and it still fails loudly when it
+// matches nothing.
+var jsPayloadKeyRE = regexp.MustCompile(`(?s)post\(\{(.*?)\}\);`)
 
 // importRE finds every module specifier the extension imports.
 var importRE = regexp.MustCompile(`from "([^"]+)"`)

@@ -327,6 +327,26 @@ func (d *SessionDetector) HandleStopHook(sessionID, transcriptPath, lastAssistan
 	d.dispatchHookActivity(sessionID, transcriptPath, session.HookStop)
 }
 
+// HandleHerdrPaneHint records the herdr pane a session reported about itself
+// (#1936). Called by the pi hook receiver, which is the only adapter that can
+// report one: irrlicht runs code inside a pi session, and for a Node agent
+// that is the one vantage point from which $HERDR_PANE_ID is legible at all
+// (#1934).
+//
+// paneID and socketPath arrive validated and confined — the receiver rejects a
+// pane address that is not shaped like one and a socket outside herdr's own
+// tree, before this is called.
+//
+// A pure forward, deliberately: this method neither classifies nor pushes.
+// Everything about a launcher belongs to PIDManager, including the decision
+// that nothing needs doing, and duplicating any part of it here would give the
+// hook path its own opinion about a field the PID path owns.
+//
+// Safe to call from any goroutine (the HTTP handler), like HandleStopHook.
+func (d *SessionDetector) HandleHerdrPaneHint(sessionID, paneID, socketPath string) {
+	d.pidMgr.AdoptSelfReportedHerdrPane(sessionID, paneID, socketPath)
+}
+
 // HandlePermissionPromptHook records a notification-shaped "a prompt is open
 // right now, and the user is blocked on it" signal. Two adapters call it:
 // gemini-cli's Notification/ToolPermission (issue #1717, the original caller)

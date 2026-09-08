@@ -13,9 +13,21 @@
 // Everything in here is deliberate and narrow:
 //
 //   - It subscribes to exactly ONE event, agent_settled, and does exactly one
-//     thing with it: hand the session's transcript path to the beacon on
-//     stdin. It registers no tool, no command, no provider, no UI, and reads
-//     nothing.
+//     thing with it: hand the session's transcript path — and, when herdr set
+//     them, the two variables that name this pane — to the beacon on stdin. It
+//     registers no tool, no command, no provider and no UI.
+//
+//   - Those two variables are the ONLY thing it reads from the process it runs
+//     in, they are read by literal name, and it reads them for a reason no
+//     amount of work on the daemon side removes (#1936). The daemon reads a
+//     process's environment from outside, which on darwin means
+//     sysctl(kern.procargs2); a Node agent that sets process.title overwrites
+//     the argv+env region that call exposes, so for pi the daemon reads an
+//     empty environment and the session gets no pane (#1934). Inside the
+//     process the same values are still in process.env. This extension is
+//     therefore the one vantage point from which they can be seen at all.
+//     Nothing else about the process is read, and nothing is sent that the
+//     daemon would not have read for a non-Node agent.
 //
 //   - It never subscribes to `tool_call`. That is not a style preference:
 //     pi's own runner dispatches every OTHER event inside a try/catch and
@@ -65,8 +77,34 @@ export default function (pi) {
 			return;
 		}
 		if (!transcriptPath) return;
-		post({ hook_event_name: IRRLICHT_EVENT, transcript_path: transcriptPath });
+		post({
+			hook_event_name: IRRLICHT_EVENT,
+			transcript_path: transcriptPath,
+			herdr_pane_id: herdrVar("HERDR_PANE_ID"),
+			herdr_socket_path: herdrVar("HERDR_SOCKET_PATH"),
+		});
 	});
+}
+
+// herdrVar returns one herdr environment variable, or undefined when it is
+// unset, empty or not a string. JSON.stringify drops an undefined value, so a
+// session running outside herdr sends byte-for-byte the payload it sent
+// before this was added.
+//
+// The two names are literal arguments at the single call site above rather
+// than a prefix scan, so what this function can return is fixed at read time
+// and readable here: no other variable is reachable through it.
+//
+// Wrapped in try/catch for the same reason everything else here is — pi awaits
+// this handler, and a monitoring extension must not be able to fail the
+// agent's turn. `process` is a Node global, so this needs no import.
+function herdrVar(name) {
+	try {
+		const value = process.env[name];
+		return typeof value === "string" && value !== "" ? value : undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 // post hands one payload to the beacon on stdin and forgets about it. Every

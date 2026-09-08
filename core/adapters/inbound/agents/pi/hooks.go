@@ -104,14 +104,42 @@ type piHookPayload struct {
 	// TranscriptPath is confined and then overwritten with the confined
 	// spelling by DecodeConfined — see NewHookHandler.
 	TranscriptPath string `json:"transcript_path"`
+
+	// HerdrPaneID and HerdrSocketPath are the pane the extension read out of
+	// its OWN process environment (#1936) — the only place they are legible
+	// for a Node agent, see herdrhint.go. Both are omitempty because the
+	// extension omits them for a session that is not running under herdr,
+	// which is the common case and must keep sending today's body exactly.
+	//
+	// Neither is confined by DecodeConfined: that confiner is built for the
+	// transcript tree this adapter owns (ConfinerForSource), and a herdr
+	// socket is neither under it nor a .jsonl. herdrPaneHintFrom is their
+	// confinement, and serveHookRequest applies it before the values leave
+	// this package.
+	HerdrPaneID     string `json:"herdr_pane_id,omitempty"`
+	HerdrSocketPath string `json:"herdr_socket_path,omitempty"`
 }
 
 // HookTarget is the interface the handler calls into. Satisfied by
 // *services.SessionDetector without importing the services package — the
-// same agent-agnostic surface every other receiver uses, narrowed to the one
-// method this adapter's single installed event needs.
+// same agent-agnostic surface every other receiver uses, narrowed to the
+// methods this adapter's single installed event needs.
+//
+// It is the one receiver interface with a second method, and that asymmetry
+// is the point rather than drift: HandleStopHook is the lifecycle signal every
+// sibling receiver sends, while HandleHerdrPaneHint carries a fact about the
+// process that only pi can observe. Folding the pane into HandleStopHook's
+// signature would put two parameters no other adapter can ever fill onto the
+// shared surface, and lose the distinction that the daemon gates them on
+// different consents.
 type HookTarget interface {
 	HandleStopHook(sessionID, transcriptPath, lastAssistantText string, waitingCue bool)
+
+	// HandleHerdrPaneHint records the herdr pane the session reported for
+	// itself. Both arguments are already validated and confined; the target
+	// gates the capture on the launcher consent and decides whether the
+	// session still needs a pane.
+	HandleHerdrPaneHint(sessionID, paneID, socketPath string)
 }
 
 // ConsentGranter is the shared consent check every JSON-hook receiver gates
@@ -193,6 +221,12 @@ func serveHookRequest(target HookTarget, consent hookjson.Consent, log outbound.
 	switch payload.HookEventName {
 	case HookEventAgentSettled:
 		log.LogInfo(logComponentHookReceiver, sessionID, "received agent_settled")
+		// Before the lifecycle signal, so that the classify pass
+		// HandleStopHook kicks off already sees the repaired launcher and the
+		// push it produces carries it. Ordered rather than concurrent because
+		// both touch the same session, and the cost is one bounded
+		// load-modify-save that runs only for a session actually inside herdr.
+		dispatchHerdrPaneHint(target, sessionID, payload)
 		target.HandleStopHook(sessionID, transcriptPath, "", false)
 	default:
 		// Unrecognized hook event — accept but ignore, counted per name and
@@ -203,6 +237,23 @@ func serveHookRequest(target HookTarget, consent hookjson.Consent, log outbound.
 		hookjson.IgnoreUnknownEvent(log, logComponentHookReceiver, AdapterName, sessionID, payload.HookEventName)
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+// dispatchHerdrPaneHint forwards a validated pane to the target, and does
+// nothing at all when the payload carries none or carries one that does not
+// confine.
+//
+// Split out of serveHookRequest so that function keeps one line per step, and
+// so the "a bad hint is silently no hint" rule lives in one place: there is no
+// log line and no error either way, because the overwhelmingly common reason
+// both fields are empty is a pi session not running under herdr, and a
+// receiver that logged that would log it once per turn for every such session.
+func dispatchHerdrPaneHint(target HookTarget, sessionID string, payload piHookPayload) {
+	hint, ok := herdrPaneHintFrom(payload.HerdrPaneID, payload.HerdrSocketPath)
+	if !ok {
+		return
+	}
+	target.HandleHerdrPaneHint(sessionID, hint.paneID, hint.socketPath)
 }
 
 // sessionIDFromTranscriptPath derives the session ID the SAME way

@@ -43,7 +43,13 @@ func LauncherPermissionDeclaration() agent.Agent {
 				"overwrite their own environment as they start, so nothing above can be " +
 				"read from them at all; for those, irrlicht asks the local herdr server " +
 				"over its control socket which pane holds the process, and reads no " +
-				"other pane's contents (#1934). Focusing " +
+				"other pane's contents (#1934). One agent can answer for itself " +
+				"instead: a pi session runs an irrlicht extension, and that extension " +
+				"reads the two herdr variables from inside the process and sends them " +
+				"with its turn-end signal, so the pane is known without asking herdr " +
+				"to find it (#1936). Such a report is confirmed against herdr before " +
+				"it is used, and it is only stored while this permission is granted — " +
+				"turned off, it is discarded on arrival. Focusing " +
 				"itself only happens when you " +
 				"click a session (kitty remote control / AppleScript, additionally " +
 				"gated by macOS automation prompts). Toggling off stops the capture " +
