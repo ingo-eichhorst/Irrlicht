@@ -20,17 +20,46 @@ type stopCall struct {
 	waitingCue                                   bool
 }
 
+// paneCall records one HandleHerdrPaneHint dispatch (#1936).
+type paneCall struct {
+	sessionID, paneID, socketPath string
+}
+
 type mockTarget struct {
 	mu        sync.Mutex
 	stopCalls []stopCall
+	paneCalls []paneCall
+	// order names each dispatch as it happens. One request drives both
+	// methods, and which runs first is load-bearing rather than incidental —
+	// see serveHookRequest — so the sequence has to be observable.
+	order []string
 }
 
 func (m *mockTarget) HandleStopHook(sessionID, transcriptPath, lastAssistantText string, waitingCue bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.stopCalls = append(m.stopCalls, stopCall{sessionID, transcriptPath, lastAssistantText, waitingCue})
+	m.order = append(m.order, "stop")
 }
 
+func (m *mockTarget) HandleHerdrPaneHint(sessionID, paneID, socketPath string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.paneCalls = append(m.paneCalls, paneCall{sessionID, paneID, socketPath})
+	m.order = append(m.order, "pane")
+}
+
+func (m *mockTarget) dispatchOrder() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.order...)
+}
+
+// totalCalls counts the LIFECYCLE dispatches only. The pane report rides along
+// on the same request and is not one: every existing contract that asserts a
+// dispatch count is asserting how many turn-end signals a body produced, and
+// folding a second kind into that number would silently change what those
+// contracts test.
 func (m *mockTarget) totalCalls() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -41,6 +70,12 @@ func (m *mockTarget) stops() []stopCall {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return append([]stopCall(nil), m.stopCalls...)
+}
+
+func (m *mockTarget) panes() []paneCall {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]paneCall(nil), m.paneCalls...)
 }
 
 // keyedGate pins a fixed permission combination for a one-off test. For a

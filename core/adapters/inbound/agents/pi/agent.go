@@ -78,7 +78,8 @@ func Agent() agent.Agent {
 				// rather than leaving it to Detail — the wizard row is what
 				// most users read.
 				Touches: "Writes 1 hook entry to " + displayExtensionPath +
-					" — a small JavaScript file that pi loads and runs",
+					" — a small JavaScript file that pi loads and runs, which also " +
+					"reads the two variables naming the herdr pane it runs in",
 				Detail: "pi has no hooks section in its settings: the only way to observe " +
 					"its lifecycle is an extension, so this permission installs one. That " +
 					"is a single JavaScript file at " + displayExtensionPath + ", which pi " +
@@ -89,7 +90,15 @@ func Agent() agent.Agent {
 					"node:child_process, subscribes to exactly one pi event (agent_settled, " +
 					"which fires when pi will not continue running on its own) and does one " +
 					"thing with it: runs `irrlichd hook-post pi`, a tiny command irrlicht " +
-					"ships, handing it the session's transcript path. That command reads the " +
+					"ships, handing it the session's transcript path. Alongside that path it " +
+					"sends two values read from its own environment, HERDR_PANE_ID and " +
+					"HERDR_SOCKET_PATH — nothing else from the environment, and nothing at " +
+					"all unless you run pi inside herdr. They name the terminal pane the " +
+					"session sits in, which irrlicht cannot see from the outside for pi: pi " +
+					"is a Node program, and a Node program that sets its process title " +
+					"overwrites the region macOS lets other processes read. Storing them is " +
+					"gated separately by the \"Terminal focus\" permission, so with that " +
+					"turned off they are dropped on arrival. That command reads the " +
 					"daemon's own published address at the moment the hook fires, so nothing " +
 					"in the file names a host or a port and it cannot go stale; it also never " +
 					"blocks pi, even when the daemon is not running. The file deliberately " +
