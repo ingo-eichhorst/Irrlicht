@@ -149,23 +149,59 @@ func validHerdrPaneID(s string) bool {
 // an attacker's tree. Reaching that already requires write access inside
 // ~/.config/herdr, and an attacker with that access owns herdr's real socket
 // too, so the hint is no longer the weakest way in.
+// One predicate per property rather than one function with four guards: each
+// answers a question of a different kind — how the string is written, where it
+// points, and what is actually there — and they are worth naming separately
+// because only the last one touches the filesystem.
 func confinedHerdrSocketPath(p string) string {
-	if p == "" || !filepath.IsAbs(p) || filepath.Clean(p) != p {
+	if !herdrSocketNamed(p) {
 		return ""
 	}
-	if filepath.Base(p) != herdrSocketName {
+	if !underHerdrConfigRoot(p) {
 		return ""
 	}
-	root := herdrConfigDirFn()
-	if root == "" {
-		return ""
-	}
-	if !strings.HasPrefix(p, filepath.Clean(root)+string(filepath.Separator)) {
-		return ""
-	}
-	info, err := os.Lstat(p)
-	if err != nil || info.Mode()&os.ModeSocket == 0 {
+	if !isSocketFile(p) {
 		return ""
 	}
 	return p
+}
+
+// herdrSocketNamed reports whether p is written the way a captured
+// $HERDR_SOCKET_PATH is: absolute, already clean, and named herdr.sock.
+//
+// Sequential guards rather than one disjunction, because each names a distinct
+// way a path can be wrong and a reader looking for one of them should not have
+// to parse the other two first.
+func herdrSocketNamed(p string) bool {
+	if p == "" {
+		return false
+	}
+	if !filepath.IsAbs(p) {
+		return false
+	}
+	if filepath.Clean(p) != p {
+		return false
+	}
+	return filepath.Base(p) == herdrSocketName
+}
+
+// underHerdrConfigRoot reports whether p lies inside herdr's configuration
+// root. Tested against root + separator so a sibling directory that merely
+// shares the root's prefix does not pass.
+func underHerdrConfigRoot(p string) bool {
+	root := herdrConfigDirFn()
+	if root == "" {
+		return false
+	}
+	return strings.HasPrefix(p, filepath.Clean(root)+string(filepath.Separator))
+}
+
+// isSocketFile reports whether p is itself a socket. Lstat, so a symlink is
+// judged as the link it is rather than as whatever it points at.
+func isSocketFile(p string) bool {
+	info, err := os.Lstat(p)
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeSocket != 0
 }

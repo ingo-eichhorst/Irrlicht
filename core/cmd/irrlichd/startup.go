@@ -747,6 +747,27 @@ type setupPermissionServiceDeps struct {
 	StopGastown      func() error
 }
 
+// herdrPaneRecorder returns the seam that stores the herdr pane a pi session
+// reported about itself, for the launcher reader to use (#1936). A Node agent
+// that sets process.title hides its own environment from
+// sysctl(kern.procargs2), so this is the only route by which $HERDR_PANE_ID
+// reaches irrlicht for pi.
+//
+// Gated on the SAME consent as ReadLauncherEnv, and separately rather than by
+// reusing that closure: the report arrives through the pi hooks channel, which
+// is granted independently, so without this check a user who turned "Terminal
+// focus" off would still have their pane captured through a side channel.
+// Checked per call so a revoke takes effect immediately, and dropping the
+// report on arrival rather than storing it and declining to use it.
+func herdrPaneRecorder(permService *services.PermissionService) services.HerdrPaneRecorder {
+	return func(pid int, paneID, socketPath string) {
+		if !permService.Granted(processlifecycle.LauncherName, processlifecycle.PermissionKeyLauncherEnv) {
+			return
+		}
+		processlifecycle.RememberHerdrPane(pid, paneID, socketPath)
+	}
+}
+
 func setupPermissionService(mux *http.ServeMux, deps setupPermissionServiceDeps) *services.PermissionService {
 	detector := deps.Detector
 	logger := deps.Logger
@@ -818,21 +839,8 @@ func setupPermissionService(mux *http.ServeMux, deps setupPermissionServiceDeps)
 		return processlifecycle.ReadLauncherEnv(pid)
 	})
 	// Let a pi session tell us which herdr pane it is in, for the reader
-	// above to use (#1936). A Node agent that sets process.title hides its
-	// own environment from sysctl(kern.procargs2), so this is the only route
-	// by which $HERDR_PANE_ID reaches irrlicht for pi.
-	//
-	// Gated on the SAME consent as the reader, and separately rather than by
-	// reusing that closure: the report arrives through the pi hooks channel,
-	// which is granted independently, so without this check a user who turned
-	// "Terminal focus" off would still have their pane captured through a side
-	// channel. Checked per call so a revoke takes effect immediately.
-	detector.SetHerdrPaneRecorder(func(pid int, paneID, socketPath string) {
-		if !permService.Granted(processlifecycle.LauncherName, processlifecycle.PermissionKeyLauncherEnv) {
-			return
-		}
-		processlifecycle.RememberHerdrPane(pid, paneID, socketPath)
-	})
+	// above to use (#1936).
+	detector.SetHerdrPaneRecorder(herdrPaneRecorder(permService))
 	// Flag detached Claude Code background agents (Agent View bg agents that keep
 	// running in the daemon pool) so the UI can badge them instead of showing a
 	// phantom row (#744). Reads ~/.claude/sessions/<pid>.json, gated by the same

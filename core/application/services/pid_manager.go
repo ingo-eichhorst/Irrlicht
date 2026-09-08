@@ -1559,13 +1559,36 @@ func (pm *PIDManager) AdoptSelfReportedHerdrPane(sessionID, paneID, socketPath s
 func (pm *PIDManager) launcherPaneState(sessionID string) (pid int, paneMissing bool) {
 	pm.WithSessionStateLock(func() {
 		state, err := pm.repo.Load(sessionID)
-		if err != nil || state == nil {
+		if err != nil {
+			return
+		}
+		if state == nil {
 			return
 		}
 		pid = state.PID
-		paneMissing = state.Launcher != nil && state.Launcher.HerdrPaneID == ""
+		paneMissing = paneLessLauncher(state) != nil
 	})
 	return pid, paneMissing
+}
+
+// paneLessLauncher returns state's launcher when there is one and it carries no
+// herdr pane — the single condition both halves of the self-report path decide
+// on, so they cannot come to differ about what "needs a pane" means.
+//
+// Sequential guards rather than one disjunction: the three ways to answer nil
+// are unrelated facts (no session, no launcher, a pane already resolved) and
+// only the last of them is about this feature at all.
+func paneLessLauncher(state *session.SessionState) *session.Launcher {
+	if state == nil {
+		return nil
+	}
+	if state.Launcher == nil {
+		return nil
+	}
+	if state.Launcher.HerdrPaneID != "" {
+		return nil
+	}
+	return state.Launcher
 }
 
 // applySelfReportedHerdrPane merges a read that resolved a pane into
@@ -1584,14 +1607,15 @@ func (pm *PIDManager) applySelfReportedHerdrPane(sessionID string, fresh *sessio
 	var updated *session.SessionState
 	pm.WithSessionStateLock(func() {
 		state, err := pm.repo.Load(sessionID)
-		if err != nil || state == nil || state.Launcher == nil {
+		if err != nil {
 			return
 		}
-		if state.Launcher.HerdrPaneID != "" {
+		launcher := paneLessLauncher(state)
+		if launcher == nil {
 			return
 		}
-		state.Launcher.HerdrPaneID = fresh.HerdrPaneID
-		state.Launcher.HerdrSocketPath = fresh.HerdrSocketPath
+		launcher.HerdrPaneID = fresh.HerdrPaneID
+		launcher.HerdrSocketPath = fresh.HerdrSocketPath
 		// hostKnown gates only the host adoption, exactly as
 		// applyMultiplexerHostBackfill does: a client probe that did not run
 		// yields empty host fields that mean "not looked up", and adopting them
@@ -1599,7 +1623,7 @@ func (pm *PIDManager) applySelfReportedHerdrPane(sessionID string, fresh *sessio
 		// already has (#1485). The pane itself is unconditional — it came from
 		// the process, not from the probe.
 		if hostKnown {
-			state.Launcher.AdoptHostIdentity(fresh)
+			launcher.AdoptHostIdentity(fresh)
 		}
 		// The pane may have arrived with a tty the stored launcher lacked, and
 		// BackgroundAgent.Detached is derived from it (#744/#1546).

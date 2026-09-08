@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"irrlicht/core/application/services"
 	"irrlicht/core/domain/session"
 )
 
@@ -38,12 +39,18 @@ func (r *recorderSpy) record(pid int, paneID, socketPath string) {
 	r.sockets = append(r.sockets, socketPath)
 }
 
-// TestAdoptSelfReportedHerdrPane_RepairsAPaneLessLauncher is the defect test.
-// Without this path the session below keeps its ancestry-derived host forever:
-// launcherBackfillNeedsFor asks for nothing (it has a tty and no pane) and
-// refreshMultiplexerHosts skips it (hostedInAMultiplexerPane is false), so
-// nothing in a daemon's lifetime looks at it again.
-func TestAdoptSelfReportedHerdrPane_RepairsAPaneLessLauncher(t *testing.T) {
+// reportedSocket is the socket path the tests below report and expect back.
+const reportedSocket = "/cfg/herdr/sessions/f/herdr.sock"
+
+// repairSetup builds the #1936 defect scenario: a session whose launcher names
+// a terminal and no pane, with a reader that — once the report is recorded —
+// resolves both the pane and the client displaying it.
+//
+// Shared by the two tests below rather than inlined in each, because the two
+// halves of the repair (what is handed to the reader, and what lands on the
+// session) are one scenario asserted from two ends.
+func repairSetup(t *testing.T) (*mockRepo, *services.PIDManager, *recorderSpy) {
+	t.Helper()
 	repo := newMockRepo()
 	repo.states["s"] = paneLessSession(&session.Launcher{
 		TermProgram: "Apple_Terminal", // the herdr SERVER's terminal — #1348's misroute
@@ -53,29 +60,57 @@ func TestAdoptSelfReportedHerdrPane_RepairsAPaneLessLauncher(t *testing.T) {
 	pm := newPIDManagerForTest(repo)
 	spy := &recorderSpy{}
 	pm.SetHerdrPaneRecorder(spy.record)
-	// With the report recorded, the reader now resolves the pane — and, through
-	// it, the client actually displaying it.
 	pm.SetLauncherEnvReader(func(int) (*session.Launcher, bool) {
 		spy.reads++
 		return &session.Launcher{
 			HerdrPaneID:     "w1:p2",
-			HerdrSocketPath: "/cfg/herdr/sessions/f/herdr.sock",
+			HerdrSocketPath: reportedSocket,
 			TermProgram:     "ghostty",
 			TTY:             "/dev/ttys077",
 		}, true
 	})
+	return repo, pm, spy
+}
 
-	pm.AdoptSelfReportedHerdrPane("s", "w1:p2", "/cfg/herdr/sessions/f/herdr.sock")
+// TestAdoptSelfReportedHerdrPane_HandsTheReportToTheReader covers the first
+// half: the report reaches the seam the launcher read consults, keyed by this
+// session's own pid.
+func TestAdoptSelfReportedHerdrPane_HandsTheReportToTheReader(t *testing.T) {
+	_, pm, spy := repairSetup(t)
 
-	if len(spy.pids) != 1 || spy.pids[0] != os.Getpid() {
-		t.Fatalf("recorded pids %v, want exactly this session's", spy.pids)
+	pm.AdoptSelfReportedHerdrPane("s", "w1:p2", reportedSocket)
+
+	if len(spy.pids) != 1 {
+		t.Fatalf("recorded %d reports, want 1", len(spy.pids))
 	}
-	if spy.panes[0] != "w1:p2" || spy.sockets[0] != "/cfg/herdr/sessions/f/herdr.sock" {
-		t.Errorf("recorded %q on %q, want the report as received", spy.panes[0], spy.sockets[0])
+	if spy.pids[0] != os.Getpid() {
+		t.Errorf("recorded pid %d, want this session's %d", spy.pids[0], os.Getpid())
 	}
+	if spy.panes[0] != "w1:p2" {
+		t.Errorf("recorded pane %q, want w1:p2", spy.panes[0])
+	}
+	if spy.sockets[0] != reportedSocket {
+		t.Errorf("recorded socket %q, want %q", spy.sockets[0], reportedSocket)
+	}
+}
+
+// TestAdoptSelfReportedHerdrPane_RepairsAPaneLessLauncher is the defect test.
+// Without this path the session keeps its ancestry-derived host forever:
+// launcherBackfillNeedsFor asks for nothing (it has a tty and no pane) and
+// refreshMultiplexerHosts skips it (hostedInAMultiplexerPane is false), so
+// nothing in a daemon's lifetime looks at it again.
+func TestAdoptSelfReportedHerdrPane_RepairsAPaneLessLauncher(t *testing.T) {
+	repo, pm, _ := repairSetup(t)
+
+	pm.AdoptSelfReportedHerdrPane("s", "w1:p2", reportedSocket)
+
 	got := repo.states["s"].Launcher
-	if got.HerdrPaneID != "w1:p2" || got.HerdrSocketPath != "/cfg/herdr/sessions/f/herdr.sock" {
+	if got.HerdrPaneID != "w1:p2" {
 		t.Fatalf("pane not adopted: %+v", got)
+	}
+	if got.HerdrSocketPath != reportedSocket {
+		t.Errorf("socket = %q, want %q — the pane and its server are one fact",
+			got.HerdrSocketPath, reportedSocket)
 	}
 	if got.TermProgram != "ghostty" {
 		t.Errorf("TermProgram = %q, want the attached client's — the pane's window "+

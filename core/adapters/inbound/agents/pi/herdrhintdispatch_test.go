@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -70,10 +71,8 @@ func TestHerdrPaneIsDispatchedBeforeTheTurnEnd(t *testing.T) {
 
 	post(t, h, herdrPayload(tp, HookEventAgentSettled, "w1:p1", sock))
 
-	got := target.dispatchOrder()
-	want := []string{"pane", "stop"}
-	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
-		t.Errorf("dispatch order %v, want %v", got, want)
+	if got := strings.Join(target.dispatchOrder(), ","); got != "pane,stop" {
+		t.Errorf("dispatch order %q, want \"pane,stop\"", got)
 	}
 }
 

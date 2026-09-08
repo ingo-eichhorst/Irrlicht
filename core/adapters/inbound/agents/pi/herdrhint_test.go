@@ -174,8 +174,14 @@ func TestHerdrPaneHintFromNeedsBothHalves(t *testing.T) {
 		t.Error("accepted a socket with no pane")
 	}
 	hint, ok := herdrPaneHintFrom("w1:p1", sock)
-	if !ok || hint.paneID != "w1:p1" || hint.socketPath != sock {
-		t.Errorf("herdrPaneHintFrom = %+v, %v; want the pair accepted", hint, ok)
+	if !ok {
+		t.Fatal("refused a pane and a socket that are both valid")
+	}
+	if hint.paneID != "w1:p1" {
+		t.Errorf("paneID = %q, want w1:p1", hint.paneID)
+	}
+	if hint.socketPath != sock {
+		t.Errorf("socketPath = %q, want %q", hint.socketPath, sock)
 	}
 }
 

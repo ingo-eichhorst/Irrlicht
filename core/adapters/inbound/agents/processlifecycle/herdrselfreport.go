@@ -73,19 +73,43 @@ var rememberedHerdrPanes = struct {
 // Both fields are required and are stored as one: they are the pair
 // clientHostFor needs, and half of it addresses nothing.
 func RememberHerdrPane(pid int, paneID, socketPath string) {
-	if pid <= 0 || paneID == "" || socketPath == "" {
+	if !completeHerdrReport(pid, paneID, socketPath) {
 		return
 	}
 	rememberedHerdrPanes.mu.Lock()
 	defer rememberedHerdrPanes.mu.Unlock()
-	if _, known := rememberedHerdrPanes.entries[pid]; !known &&
-		len(rememberedHerdrPanes.entries) >= maxRememberedPanes {
-		dropDeadHerdrReportsLocked()
-		if len(rememberedHerdrPanes.entries) >= maxRememberedPanes {
-			return
-		}
+	if !roomForHerdrReportLocked(pid) {
+		return
 	}
 	rememberedHerdrPanes.entries[pid] = herdrSelfReport{paneID: paneID, socketPath: socketPath}
+}
+
+// completeHerdrReport reports whether a report names everything it needs to.
+func completeHerdrReport(pid int, paneID, socketPath string) bool {
+	if pid <= 0 {
+		return false
+	}
+	if paneID == "" {
+		return false
+	}
+	return socketPath != ""
+}
+
+// roomForHerdrReportLocked reports whether pid's entry can be written, evicting
+// dead processes first if the map is at its cap. Callers hold the mutex.
+//
+// A pid already in the map always has room — it is an update, not growth, and
+// the extension re-reports at every turn end, so the ordinary case must not
+// walk the map toward its cap on its own.
+func roomForHerdrReportLocked(pid int) bool {
+	if _, known := rememberedHerdrPanes.entries[pid]; known {
+		return true
+	}
+	if len(rememberedHerdrPanes.entries) < maxRememberedPanes {
+		return true
+	}
+	dropDeadHerdrReportsLocked()
+	return len(rememberedHerdrPanes.entries) < maxRememberedPanes
 }
 
 // dropDeadHerdrReportsLocked removes every entry whose process is gone. Called
