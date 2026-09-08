@@ -172,7 +172,7 @@ func herdrSocketPaths() []string {
 func candidatePanes(panes []herdrPane, cwd string) []herdrPane {
 	var out []herdrPane
 	for _, p := range panes {
-		if cwd != "" && p.CWD != cwd && p.ForegroundCWD != cwd {
+		if !paneMatchesCWD(p, cwd) {
 			continue
 		}
 		out = append(out, p)
@@ -181,6 +181,24 @@ func candidatePanes(panes []herdrPane, cwd string) []herdrPane {
 		}
 	}
 	return out
+}
+
+// paneMatchesCWD reports whether a pane is worth asking about for a session in
+// cwd.
+//
+// Both of the pane's directories count, because they answer different
+// questions and either can be the match: `cwd` is where the pane's shell sits,
+// `foreground_cwd` where its running process does. They agree for an agent
+// started in place and diverge when it was started after a cd.
+//
+// An unknown cwd matches everything rather than nothing. A session whose
+// directory irrlicht cannot read is exactly the case where a bounded scan is
+// still better than giving up, and the pid match downstream decides either way.
+func paneMatchesCWD(p herdrPane, cwd string) bool {
+	if cwd == "" {
+		return true
+	}
+	return p.CWD == cwd || p.ForegroundCWD == cwd
 }
 
 // processInfoNames reports whether pid is the pane's foreground process or its
