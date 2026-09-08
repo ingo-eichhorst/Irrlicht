@@ -1,0 +1,153 @@
+{
+  "schema_version": 1,
+  "source_transcript": "",
+  "generated_at": "0001-01-01T00:00:00Z",
+  "settings": {
+    "adapter": "claude-code",
+    "debounce_window": 2000000000,
+    "flicker_max_duration": 10000000000
+  },
+  "summary": {
+    "total_events": 10,
+    "consumed_events": 10,
+    "total_transitions": 4,
+    "first_event_time": "2026-09-07T22:36:33.192408+02:00",
+    "last_event_time": "2026-09-07T22:37:43.130701+02:00",
+    "wall_clock_session_duration": 69938293000,
+    "state_durations": {
+      "ready": 37538520000,
+      "working": 32399773000
+    },
+    "flicker_count": 1,
+    "flickers_by_category": {
+      "ready_between_working": 1
+    },
+    "flickers_by_reason": {
+      "agent finished turn → ready": 1
+    }
+  },
+  "transitions": [
+    {
+      "index": 0,
+      "event_index": -1,
+      "virtual_time": "2026-09-07T22:36:33.192408+02:00",
+      "cause": "init",
+      "prev_state": "",
+      "new_state": "ready",
+      "reason": "initial state",
+      "last_event_type": "",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 1,
+      "event_index": 3,
+      "virtual_time": "2026-09-07T22:36:35.682349+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "transcript activity (ready → working)",
+      "last_event_type": "",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 2,
+      "event_index": -1,
+      "virtual_time": "2026-09-07T22:37:08.082122+02:00",
+      "cause": "hook",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 3,
+      "event_index": 5,
+      "virtual_time": "2026-09-07T22:37:10.214154+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "transcript activity (ready → working)",
+      "last_event_type": "",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    }
+  ],
+  "sessions": [
+    {
+      "session_id": "proc-74997",
+      "adapter": "claude-code",
+      "first_seen": "2026-09-07T22:36:31.977119+02:00",
+      "last_seen": "2026-09-07T22:36:34.031518+02:00",
+      "duration_ms": 2054,
+      "event_count": 6,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 74997,
+      "pid_discovery_lag_ms": 87,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 1967
+      }
+    },
+    {
+      "session_id": "e22f2ea9-2327-4409-a4f0-b7e2fbd86f0f",
+      "adapter": "claude-code",
+      "first_seen": "2026-09-07T22:36:33.023017+02:00",
+      "last_seen": "2026-09-07T22:37:44.652767+02:00",
+      "duration_ms": 71629,
+      "event_count": 28,
+      "state_changes": 7,
+      "final_state": "ready",
+      "pid": 74997,
+      "pid_discovery_lag_ms": 176,
+      "debounce_coalesced_events": 5,
+      "state_durations_ms": {
+        "ready": 36527,
+        "working": 34932
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 6,
+    "replayed_transition_count": 3,
+    "ordered_matches": 3,
+    "ordered_mismatches": [
+      {
+        "index": 3,
+        "kind": "missing_in_replay",
+        "recorded": "working→ready"
+      },
+      {
+        "index": 4,
+        "kind": "missing_in_replay",
+        "recorded": "ready→working"
+      },
+      {
+        "index": 5,
+        "kind": "missing_in_replay",
+        "recorded": "working→ready"
+      }
+    ],
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ]
+  }
+}

@@ -37,6 +37,12 @@ const censusHeader = `# Every claudecode recipe, planned against the Claude Desk
 # driver cannot elicit, deduplicated and sorted. It is a statement about the
 # CONTROLS, not about the scenario: the cell stays valid for the cli-local
 # profile, which is where it is recorded today.
+#
+# Each named control has no measured path in the committed accessibility dump,
+# so writing one would be inventing it. "slash-command-step" used to be listed
+# here and is not any more: slash commands were measured working on 2026-09-07
+# and the driver now drives them. See
+# replaydata/agents/claudecode/desktop-evidence/slash-commands.md.
 `
 
 type censusRow struct {
@@ -171,6 +177,22 @@ func TestEveryDesktopRefusalNamesAKnownControl(t *testing.T) {
 	for _, pair := range MissingControls() {
 		_, control, _ := strings.Cut(pair, ":")
 		documented[control] = true
+	}
+	// A refusal may also name a control the driver DOES drive, when the recipe
+	// asks for it through the wrong step: a `send` carrying "/model sonnet" is
+	// refused with slash-command-popup, which points the operator at the
+	// `slash` step. That is actionable, so it counts as documented — while a
+	// control that exists in neither table still fails here.
+	for _, controls := range desktopElicits {
+		for _, control := range controls {
+			documented[control] = true
+		}
+	}
+	// A composer LIMIT is the third kind of name a refusal may carry: the
+	// control exists and the driver drives it, but the result does not come out
+	// unchanged. See desktopComposerLimits.
+	for _, limit := range ComposerLimits() {
+		documented[limit] = true
 	}
 	checked := 0
 	for scenario, script := range loadClaudecodeRecipes(t) {

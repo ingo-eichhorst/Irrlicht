@@ -235,6 +235,9 @@ func (runtime *LiveRuntime) VerifyBaseline(_ context.Context, baseline Baseline,
 	if err := runtime.verifyDesktopConfig(baseline); err != nil {
 		return err
 	}
+	if err := runtime.verifyDesktopBlocklist(baseline); err != nil {
+		return err
+	}
 	sessions, files, err := runtime.readRegistry()
 	if err != nil {
 		return err
@@ -284,6 +287,20 @@ func verifyPostBaselineSessions(
 		}
 	}
 	return nil
+}
+
+// verifyDesktopBlocklist proves the run removed nothing from Claude Desktop's
+// extensions denylist. The file's other two fields are a URL and a refresh
+// timestamp the app rewrites on its own schedule, so they are not compared.
+func (runtime *LiveRuntime) verifyDesktopBlocklist(baseline Baseline) error {
+	if len(baseline.DesktopBlocklist) == 0 {
+		return nil
+	}
+	current, err := os.ReadFile(runtime.desktopBlocklistPath())
+	if err != nil {
+		return fmt.Errorf("re-read the Desktop extensions blocklist: %w", err)
+	}
+	return verifyBlocklistEntries(baseline.DesktopBlocklist, current)
 }
 
 // verifyUserConfig checks ~/.claude.json for the losses the driver could cause,

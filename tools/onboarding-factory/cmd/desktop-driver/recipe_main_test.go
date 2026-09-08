@@ -109,7 +109,10 @@ func TestPlanSubcommandAnswersWithoutDrivingAnything(t *testing.T) {
 		[]byte(`[{"type":"send","text":"ok"},{"type":"wait_turn"}]`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(refused, []byte(`[{"type":"slash","text":"/model opus"}]`), 0o600); err != nil {
+	// `/model opus` used to be the refused example here. It is runnable now —
+	// the driver drives the Desktop command popup — so the refusal this test
+	// needs comes from a step type Desktop still has no control for.
+	if err := os.WriteFile(refused, []byte(`[{"type":"reset_session"}]`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := run(context.Background(), []string{"plan", "--script-file", runnable}); err != nil {

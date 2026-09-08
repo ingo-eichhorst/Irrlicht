@@ -331,3 +331,67 @@ func topLevelKeys(data []byte, which string) (map[string]json.RawMessage, error)
 	}
 	return document, nil
 }
+
+// blocklistEntry is one denied extension. Only the fields that identify it are
+// read: the rest of the record may carry a reason or a timestamp that the app
+// rewrites, and comparing those puts the clock back into the guard.
+type blocklistEntry struct {
+	Name    string `json:"name"`
+	ID      string `json:"id"`
+	Version string `json:"version"`
+}
+
+// blocklistDocument is the file's shape: a LIST of blocklists, each with its
+// own source URL and refresh time. Measured 2026-09-07 on Claude Desktop
+// 1.46388.4, where it held one blocklist with no entries.
+type blocklistDocument struct {
+	URL     string           `json:"url"`
+	Entries []blocklistEntry `json:"entries"`
+}
+
+// verifyBlocklistEntries proves the run removed no denied extension.
+//
+// It compares ENTRIES and nothing else. The file also carries `lastUpdated`,
+// which is a clock read, and a source `url`; digesting the whole file failed a
+// run on 2026-09-07 because Claude Desktop refetched the list mid-run. A guard
+// that fires on somebody else's refresh reports a change the driver did not
+// make, and one that fires often enough stops being read.
+//
+// Additions are allowed. A longer denylist is the app protecting the operator,
+// and refusing it would make the driver argue with a security update.
+func verifyBlocklistEntries(before, after []byte) error {
+	baseline, err := blocklistEntrySet(before, "baseline Desktop extensions blocklist")
+	if err != nil {
+		return err
+	}
+	current, err := blocklistEntrySet(after, "current Desktop extensions blocklist")
+	if err != nil {
+		return err
+	}
+	var lost []string
+	for entry := range baseline {
+		if _, kept := current[entry]; !kept {
+			lost = append(lost, entry)
+		}
+	}
+	if len(lost) == 0 {
+		return nil
+	}
+	sort.Strings(lost)
+	return fmt.Errorf("the run removed %d entr(ies) from the Desktop extensions blocklist: %s",
+		len(lost), strings.Join(lost, ", "))
+}
+
+func blocklistEntrySet(data []byte, which string) (map[string]struct{}, error) {
+	var lists []blocklistDocument
+	if err := json.Unmarshal(data, &lists); err != nil {
+		return nil, fmt.Errorf("read the %s: %w", which, err)
+	}
+	entries := map[string]struct{}{}
+	for _, list := range lists {
+		for _, entry := range list.Entries {
+			entries[list.URL+"|"+entry.ID+"|"+entry.Name+"|"+entry.Version] = struct{}{}
+		}
+	}
+	return entries, nil
+}

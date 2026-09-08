@@ -49,9 +49,12 @@ type helperSelector struct {
 }
 
 type helperPostcondition struct {
-	Selector            helperSelector `json:"selector"`
-	Condition           string         `json:"condition"`
-	TimeoutMilliseconds int            `json:"timeoutMilliseconds"`
+	Selector  helperSelector `json:"selector"`
+	Condition string         `json:"condition"`
+	// Value is what a value_equals postcondition compares against. It stays
+	// omitempty because every other condition refuses it.
+	Value               string `json:"value,omitempty"`
+	TimeoutMilliseconds int    `json:"timeoutMilliseconds"`
 }
 
 type helperRequest struct {
@@ -207,6 +210,30 @@ func (client helperClient) keyboard(
 		Selector:      &selector,
 		KeyCode:       &keyCode,
 		Modifiers:     modifiers,
+		Postcondition: &postcondition,
+		Limits:        map[string]int{"maxDepth": 64, "maxNodes": 5_000},
+	})
+	return err
+}
+
+// typeText types literal characters into a resolved control, one event per
+// character, each carrying the character itself.
+//
+// It is NOT `keyboard` with a nicer signature. `keyboard` names a PHYSICAL key,
+// which macOS maps through whatever layout is active — on a German layout the
+// driver's US table typed "-" for every "/" it asked for. A typed character
+// has no layout to be wrong about, which is why every step that names text
+// rather than a key must come through here.
+func (client helperClient) typeText(
+	ctx context.Context,
+	selector helperSelector,
+	text string,
+	postcondition helperPostcondition,
+) error {
+	_, err := client.call(ctx, helperRequest{
+		Command:       "type_text",
+		Selector:      &selector,
+		Value:         &text,
 		Postcondition: &postcondition,
 		Limits:        map[string]int{"maxDepth": 64, "maxNodes": 5_000},
 	})

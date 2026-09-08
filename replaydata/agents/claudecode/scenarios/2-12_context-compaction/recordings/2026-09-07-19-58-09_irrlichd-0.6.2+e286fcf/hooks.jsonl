@@ -1,0 +1,3 @@
+{"seq":271,"ts":"2026-09-07T19:58:13.388222+02:00","kind":"hook_received","session_id":"9cd16ec4-5e49-43f7-9415-5d2374e2d294","hook_name":"Stop"}
+{"seq":348,"ts":"2026-09-07T19:58:24.913886+02:00","kind":"hook_received","session_id":"9cd16ec4-5e49-43f7-9415-5d2374e2d294","hook_name":"PreCompact"}
+{"seq":416,"ts":"2026-09-07T20:03:40.013315+02:00","kind":"hook_received","session_id":"9cd16ec4-5e49-43f7-9415-5d2374e2d294","hook_name":"Stop"}

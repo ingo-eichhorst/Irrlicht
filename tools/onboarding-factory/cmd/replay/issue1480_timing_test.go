@@ -197,6 +197,7 @@ func TestTransitionTimeDeltas_Corpus(t *testing.T) {
 // is the measurement; what to do about the populations it reveals is argued in
 // each PR with this list in hand.
 var knownFirstTransitionDrift = map[string]string{
+	"claudecode/scenarios/2-8_autonomous-loop-iteration-limit/recordings/2026-09-07-22-36-31_irrlichd-0.6.2+c858d61/transcript.jsonl":     "the first Desktop recording driven by a `slash` step: +2.489s at pair 0 (ready→working). Claude Desktop creates the session only when the prompt is SUBMITTED, so the row is born and goes working within milliseconds, while the replay reconstructs the boundary from the transcript it can read. Same shape as every other desktop-local first pair.",
 	"antigravity/scenarios/1-1_session-start/recordings/2026-06-20-12-33-40_irrlichd-0.5.2+be45695/transcript.jsonl":                      "pre-dates #1476: -6.609s at pair 0 (ready→working)",
 	"antigravity/scenarios/1-2_session-end/recordings/2026-06-20-12-36-01_irrlichd-0.5.2+a00b826/transcript.jsonl":                        "pre-dates #1476: -4.304s at pair 0 (ready→working)",
 	"antigravity/scenarios/1-3_long-idle-live-session/recordings/2026-06-20-17-58-44_irrlichd-0.5.2+1fcae3a/transcript.jsonl":             "pre-dates #1476: -3.937s at pair 0 (ready→working)",
@@ -296,8 +297,8 @@ var knownFirstTransitionDrift = map[string]string{
 // it is one of the two facts #1699 was recorded to make visible, and a bound
 // that absorbed it would hide the next one.
 const (
-	maxRecordingsDriftingOverThreshold = 106
-	maxRecordingsDriftingOver5s        = 50
+	maxRecordingsDriftingOverThreshold = 107
+	maxRecordingsDriftingOver5s        = 51
 )
 
 // Lower bounds on HOW MUCH is measured. Every ratchet above is an upper bound,

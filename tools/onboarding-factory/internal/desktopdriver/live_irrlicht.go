@@ -23,6 +23,19 @@ func (runtime *LiveRuntime) WaitIrrlichtState(
 	return runtime.waitIrrlichtStates(ctx, owned, stateTargets{state})
 }
 
+// WaitIrrlichtTurnStart accepts either state a turn that has BEGUN can be in.
+//
+// `ready` is deliberately not among them: it is also the state a session is
+// born in, so accepting it would let a submit that never landed pass as a turn
+// that ran. `waiting` is safe for the opposite reason — nothing reaches it
+// without a turn having run and stopped to ask something.
+func (runtime *LiveRuntime) WaitIrrlichtTurnStart(
+	ctx context.Context,
+	owned OwnedSession,
+) (SessionObservation, error) {
+	return runtime.waitIrrlichtStates(ctx, owned, stateTargets{session.StateWorking, session.StateWaiting})
+}
+
 func (runtime *LiveRuntime) WaitIrrlichtTurnEnd(
 	ctx context.Context,
 	owned OwnedSession,
@@ -38,13 +51,14 @@ func (runtime *LiveRuntime) waitIrrlichtStates(
 	states stateTargets,
 ) (SessionObservation, error) {
 	var observation SessionObservation
-	err := poll(ctx, "Irrlicht session state "+strings.Join(states, " or "), func() (bool, error) {
-		candidate, seen, err := runtime.observeIrrlichtStates(ctx, owned, states)
-		if seen {
-			observation = candidate
-		}
-		return seen, err
-	})
+	err := pollWithReason(ctx, "Irrlicht session state "+strings.Join(states, " or "),
+		func() (bool, string, error) {
+			candidate, seen, why, err := runtime.observeIrrlichtStatesWhy(ctx, owned, states)
+			if seen {
+				observation = candidate
+			}
+			return seen, why, err
+		})
 	return observation, err
 }
 
@@ -53,31 +67,55 @@ func (runtime *LiveRuntime) observeIrrlichtStates(
 	owned OwnedSession,
 	states stateTargets,
 ) (SessionObservation, bool, error) {
-	candidate, found, err := runtime.findOwnedIrrlichtSession(ctx, owned)
+	candidate, seen, _, err := runtime.observeIrrlichtStatesWhy(ctx, owned, states)
+	return candidate, seen, err
+}
+
+// observeIrrlichtStatesWhy also returns, when the observation is NOT met, a
+// short phrase naming which of its several conditions was the one that failed.
+func (runtime *LiveRuntime) observeIrrlichtStatesWhy(
+	ctx context.Context,
+	owned OwnedSession,
+	states stateTargets,
+) (SessionObservation, bool, string, error) {
+	candidate, found, why, err := runtime.findOwnedIrrlichtSessionWhy(ctx, owned)
 	if err != nil || !found {
-		return SessionObservation{}, false, err
+		return SessionObservation{}, false, why, err
 	}
 	if err := runtime.recordOwnedProcess(ctx, owned, candidate); err != nil {
-		return SessionObservation{}, false, err
+		return SessionObservation{}, false, "", err
 	}
 	seen, err := runtime.candidateHasTargetState(owned, candidate, states)
-	return candidate, seen, err
+	if err != nil || seen {
+		return candidate, seen, "", err
+	}
+	return candidate, false, fmt.Sprintf("the session is in state %q", candidate.State), nil
 }
 
 func (runtime *LiveRuntime) findOwnedIrrlichtSession(
 	ctx context.Context,
 	owned OwnedSession,
 ) (SessionObservation, bool, error) {
+	candidate, found, _, err := runtime.findOwnedIrrlichtSessionWhy(ctx, owned)
+	return candidate, found, err
+}
+
+func (runtime *LiveRuntime) findOwnedIrrlichtSessionWhy(
+	ctx context.Context,
+	owned OwnedSession,
+) (SessionObservation, bool, string, error) {
 	sessions, err := runtime.fetchIrrlichtSessions(ctx)
 	if err != nil {
-		return SessionObservation{}, false, err
+		return SessionObservation{}, false, "", err
 	}
 	candidate, found, err := selectIrrlichtSession(sessions, owned.Transcript.SessionID)
 	if err != nil || !found {
-		return SessionObservation{}, found, err
+		return SessionObservation{}, found, fmt.Sprintf(
+			"Irrlicht reports %d session(s), none with transcript id %q",
+			len(sessions), owned.Transcript.SessionID), err
 	}
 	if !sameWorkspace(candidate.CWD, owned.Registry.CWD) {
-		return SessionObservation{}, false, fmt.Errorf(
+		return SessionObservation{}, false, "", fmt.Errorf(
 			"Irrlicht workspace mismatch: registry %q, Irrlicht %q", owned.Registry.CWD, candidate.CWD)
 	}
 	// An EMPTY host bundle ID is not a wrong one. The daemon attributes a
@@ -89,16 +127,17 @@ func (runtime *LiveRuntime) findOwnedIrrlichtSession(
 	// finding must not produce the same outcome: keep waiting for the first,
 	// fail loudly on the second.
 	if candidate.Launcher.HostBundleID == "" {
-		return SessionObservation{}, false, nil
+		return SessionObservation{}, false,
+			"Irrlicht has not attributed the session's launcher yet (host bundle ID is empty)", nil
 	}
 	if candidate.Launcher.HostBundleID != desktopBundleID {
-		return SessionObservation{}, false, fmt.Errorf(
+		return SessionObservation{}, false, "", fmt.Errorf(
 			"Irrlicht host bundle ID is %q, want %q", candidate.Launcher.HostBundleID, desktopBundleID)
 	}
 	if err := validateOwnedProcessBaseline(runtime.processBaseline, candidate); err != nil {
-		return SessionObservation{}, false, err
+		return SessionObservation{}, false, "", err
 	}
-	return candidate, true, nil
+	return candidate, true, "", nil
 }
 
 func (runtime *LiveRuntime) recordOwnedProcess(

@@ -5,9 +5,10 @@
       "scenario_id": "checkpoint-rewind",
       "execution_profile": "desktop-local",
       "outcome": "not-runnable",
-      "reason": "The recipe needs Desktop controls the driver cannot elicit: keyboard-key:\"Down\", slash-command-entry. Planned against the driver's own declared grammar by TestDesktopRecipeCensusCoversEveryClaudecodeRecipe, which pins the cited census row and fails on any drift. This is a statement about the CONTROLS, not about the scenario: the cell stays valid for cli-local, where it is recorded today.",
-      "missing_control": "keyboard-key:\"Down\", slash-command-entry",
+      "reason": "Two gaps, neither about slash commands existing. Claude Desktop runs them and the driver drives them (see slash-commands.md), and this recipe's /rewind is in the popup. But the recipe delivers it through a `send` step rather than a `slash` step, and a send would submit the command as prose \u2014 so the recipe would need changing, which would change what cli-local records. The separate keyboard-key:\"Down\" gap is unmeasured and stands on its own. The cell stays valid for cli-local, where it is recorded today.",
+      "missing_control": "keyboard-key:\"Down\", slash-command-popup",
       "evidence_refs": [
+        "replaydata/agents/claudecode/desktop-evidence/slash-commands.md",
         "replaydata/agents/claudecode/desktop-evidence/recipe-census.txt",
         "replaydata/agents/claudecode/scenarios/1-6_checkpoint-rewind/metadata.json"
       ]

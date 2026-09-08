@@ -19,6 +19,7 @@ struct CommandDependencies {
     let snapshot: (AXUIElement, [Int], [String]) throws -> ElementSnapshot
     let requireHitTarget: (AXUIElement, Point) throws -> Void
     let postKeyboardEvent: (UInt16, [String]) throws -> Void
+    let postTextEvent: (String) throws -> Void
     let physicalClick: (Point) throws -> Void
 
     static var live: CommandDependencies {
@@ -40,6 +41,7 @@ struct CommandDependencies {
             snapshot: { try AXRuntime.snapshot($0, path: $1, hierarchy: $2) },
             requireHitTarget: { try AXRuntime.requireHitTarget($0, at: $1) },
             postKeyboardEvent: AXRuntime.postKeyboardEvent,
+            postTextEvent: AXRuntime.postTextEvent,
             physicalClick: AXRuntime.physicalClick
         )
     }
@@ -162,6 +164,13 @@ enum CommandRunner {
                 limits: limits,
                 dependencies: dependencies
             )
+        case .typeText:
+            return try typeText(
+                request,
+                context: context,
+                limits: limits,
+                dependencies: dependencies
+            )
         case .keyboard:
             return try keyboard(
                 request,
@@ -214,6 +223,57 @@ enum CommandRunner {
                 targetPath: target.snapshot.path,
                 valueRedacted: true,
                 postcondition: .valueEquals
+            )
+        )
+    }
+
+    // typeText types a literal string one character at a time.
+    //
+    // Every character crosses KeyboardEventBoundary on its own. That costs one
+    // frontmost check and one focus read per character, and it buys the only
+    // property that matters here: if the app loses focus halfway through a long
+    // argument, the rest of that argument does NOT land in whatever window took
+    // its place. A single check before the first character cannot give that.
+    private static func typeText(
+        _ request: HelperRequest,
+        context: CommandContext,
+        limits: TraversalLimits,
+        dependencies: CommandDependencies
+    ) throws -> HelperResponse {
+        let selector = try requiredSelector(request.selector)
+        guard let text = request.value, !text.isEmpty else {
+            throw HelperFailure(.invalidRequest, "type_text requires a non-empty value.")
+        }
+        let postcondition = try requiredPostcondition(request.postcondition)
+        try context.requireFrontmost()
+        try dependencies.exposeAccessibility(context.application)
+        let tree = try dependencies.readTree(context.application, limits)
+        let target = try tree.unique(matching: selector)
+        try dependencies.focus(target.element)
+        try performAction(
+            postcondition,
+            context: context,
+            limits: limits,
+            dependencies: dependencies,
+            action: {
+                for character in text {
+                    try KeyboardEventBoundary.emit(
+                        requireFrontmost: context.requireFrontmost,
+                        isTargetFocused: { try dependencies.isFocused(target.element) },
+                        postEvent: { try dependencies.postTextEvent(String(character)) }
+                    )
+                }
+            }
+        )
+        return HelperResponse(
+            ok: true,
+            command: request.command,
+            status: context.status,
+            action: ActionResult(
+                kind: request.command.rawValue,
+                targetPath: target.snapshot.path,
+                valueRedacted: true,
+                postcondition: postcondition.condition
             )
         )
     }

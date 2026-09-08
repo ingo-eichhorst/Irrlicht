@@ -93,6 +93,9 @@ var stopHookCensus = map[string]stopRecording{
 	"claudecode/scenarios/1-8_model-context-display/recordings/2026-09-06-05-17-35_irrlichd-0.6.2+e19d325/transcript.jsonl": {
 		Stops: 1, Reproduced: 1,
 	},
+	"claudecode/scenarios/2-12_context-compaction/recordings/2026-09-07-19-58-09_irrlichd-0.6.2+e286fcf/transcript.jsonl": {
+		Stops: 2, Reproduced: 2,
+	},
 	"claudecode/scenarios/2-13_turn-end-terminal-text/recordings/2026-08-19-19-59-30_irrlichd-0.5.10+ae85182/transcript.jsonl": {
 		Stops: 1, Reproduced: 1,
 	},
@@ -118,6 +121,9 @@ var stopHookCensus = map[string]stopRecording{
 	},
 	"claudecode/scenarios/2-6_long-agentic-session-stress/recordings/2026-09-07-00-53-07_irrlichd-0.6.2+8e837de.dirty/transcript.jsonl": {
 		Stops: 4, Reproduced: 4,
+	},
+	"claudecode/scenarios/2-8_autonomous-loop-iteration-limit/recordings/2026-09-07-22-36-31_irrlichd-0.6.2+c858d61/transcript.jsonl": {
+		Stops: 1, Reproduced: 1,
 	},
 	"claudecode/scenarios/3-1_foreground-subagent/recordings/2026-09-06-23-53-54_irrlichd-0.6.2+388aba0.dirty/transcript.jsonl": {
 		Stops: 1, Reproduced: 0,

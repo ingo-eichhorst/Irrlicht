@@ -29,12 +29,15 @@ fi
 #   go run ./tools/onboarding-factory/cmd/desktop-driver primitives
 #
 # shellcheck disable=SC2034  # scraped from this file's SOURCE by tools/onboarding-factory/scripts/lib/recipe-lint.sh (sed), never expanded in shell
-DRIVE_ELICITS="archive interrupt keys mode model send sleep start_session wait_turn"
+DRIVE_ELICITS="archive interrupt keys mode model send slash sleep start_session wait_turn"
 # shellcheck disable=SC2034  # scraped from this file's SOURCE by tools/onboarding-factory/scripts/lib/desktop-profile.sh (sed), never expanded in shell
-DRIVE_MISSING_CONTROLS="exit_clean:session-exit reset_session:session-reset restart:session-restart resume:session-resume session:session-list-row sigkill:agent-process-kill slash:slash-command-entry"
-# The Desktop composer stores a typed "/command" as prompt text; nothing
-# measured shows it executing one. A recipe must therefore not smuggle a slash
-# command through a `send` step — recipe-lint refuses that shape on this value.
+DRIVE_MISSING_CONTROLS="exit_clean:session-exit reset_session:session-reset restart:session-restart resume:session-resume session:session-list-row sigkill:agent-process-kill"
+# A slash command is NOT a `send` step. Claude Desktop runs slash commands
+# (measured 2026-09-07 — desktop-evidence/slash-commands.md), but only through a
+# popup: "/" opens it, more keys filter it, Return accepts an entry, and Send
+# executes the accepted command. The driver has a `slash` step that drives
+# exactly that; a `send` step carrying "/..." would submit the command as prose
+# instead. recipe-lint refuses that shape on this value.
 # shellcheck disable=SC2034  # scraped from this file's SOURCE by tools/onboarding-factory/scripts/lib/recipe-lint.sh (sed), never expanded in shell
 DRIVE_SLASH_REQUIRES_STEP_TYPE=true
 

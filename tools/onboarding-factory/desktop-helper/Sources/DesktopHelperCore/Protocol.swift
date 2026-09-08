@@ -5,6 +5,7 @@ public enum HelperCommand: String, Codable, Sendable {
     case inspect
     case probe
     case setValue = "set_value"
+    case typeText = "type_text"
     case keyboard
     case physicalClick = "physical_click"
 }
@@ -145,6 +146,8 @@ private enum StrictJSONShape {
             return common.union(["probes", "limits"])
         case .setValue:
             return common.union(["selector", "value", "limits"])
+        case .typeText:
+            return common.union(["selector", "value", "postcondition", "limits"])
         case .keyboard:
             return common.union(["selector", "keyCode", "modifiers", "postcondition", "limits"])
         case .physicalClick:
@@ -246,6 +249,8 @@ public enum RequestValidator {
             try validateProbes(request.probes)
         case .setValue:
             try validateSetValue(request)
+        case .typeText:
+            try validateTypeText(request)
         case .keyboard:
             try validateKeyboard(request)
         case .physicalClick:
@@ -284,6 +289,25 @@ public enum RequestValidator {
         guard request.value != nil else {
             throw HelperFailure(.invalidRequest, "set_value requires value.")
         }
+    }
+
+    // type_text carries the literal characters to type. It refuses an empty
+    // string because an action with no effect cannot satisfy the false-to-true
+    // postcondition rule, and refuses a control character because the composer
+    // treats Return as "accept the highlighted command" — a newline smuggled
+    // through here would submit a turn the caller never asked for.
+    private static func validateTypeText(_ request: HelperRequest) throws {
+        try validateSelector(request.selector)
+        guard let text = request.value, !text.isEmpty else {
+            throw HelperFailure(.invalidRequest, "type_text requires a non-empty value.")
+        }
+        guard !text.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else {
+            throw HelperFailure(
+                .invalidRequest,
+                "type_text refuses control characters; use keyboard with an explicit keyCode."
+            )
+        }
+        try validatePostcondition(request.postcondition)
     }
 
     private static func validateKeyboard(_ request: HelperRequest) throws {
@@ -340,6 +364,7 @@ public enum RequestValidator {
         case .inspect: [.limits]
         case .probe: [.probes, .limits]
         case .setValue: [.selector, .value, .limits]
+        case .typeText: [.selector, .value, .postcondition, .limits]
         case .keyboard: [.selector, .keyCode, .modifiers, .postcondition, .limits]
         case .physicalClick: [.selector, .postcondition, .limits]
         }

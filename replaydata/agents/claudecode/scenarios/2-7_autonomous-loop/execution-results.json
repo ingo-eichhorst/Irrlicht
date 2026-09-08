@@ -5,9 +5,10 @@
       "scenario_id": "autonomous-loop",
       "execution_profile": "desktop-local",
       "outcome": "not-runnable",
-      "reason": "The recipe needs Desktop controls the driver cannot elicit: slash-command-entry. Planned against the driver's own declared grammar by TestDesktopRecipeCensusCoversEveryClaudecodeRecipe, which pins the cited census row and fails on any drift. This is a statement about the CONTROLS, not about the scenario: the cell stays valid for cli-local, where it is recorded today.",
-      "missing_control": "slash-command-entry",
+      "reason": "The driver now drives Claude Desktop's command popup, and this recipe's /goal exists there. It is still not runnable, for a narrower and newly measured reason: the composer rewrites a TYPED backtick into an inline code node, and this recipe's goal text names two shell commands in backticks. Measured 2026-09-07 on 1.46388.4 \u2014 typing \"a `code` b\" leaves the composer reading \"a code<zero-width space> b\", and sending such a message headed the conversation \"You said: /compact keep echo hi please\", so the agent receives text the recipe did not write. Only the backtick does this: *, _, ** and # all survive. `send` steps are unaffected \u2014 they use set_value, which writes the accessibility value directly and keeps a backtick verbatim. Sibling cell 2-8, whose goal text has no backticks, records through the same slash step. The cell stays valid for cli-local, where it is recorded today.",
+      "missing_control": "verbatim-typed-text",
       "evidence_refs": [
+        "replaydata/agents/claudecode/desktop-evidence/slash-commands.md",
         "replaydata/agents/claudecode/desktop-evidence/recipe-census.txt",
         "replaydata/agents/claudecode/scenarios/2-7_autonomous-loop/metadata.json"
       ]

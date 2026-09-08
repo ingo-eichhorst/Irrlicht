@@ -183,11 +183,11 @@ type catalogCensus struct {
 // the #1798/#1800 entries above, and it resolves the same way — a re-record on
 // a post-#1860 daemon. The cell is marked known_failing in the meantime.
 var censusOfTheCommittedCatalog = catalogCensus{
-	Recordings:                338,
+	Recordings:                340,
 	Zero:                      1,
 	Fabricated:                1,
-	Divergent:                 170,
-	DivergentByCountsAndKinds: 169,
+	Divergent:                 171,
+	DivergentByCountsAndKinds: 170,
 	UnpairedSidecars:          0,
 	PairedButUngraded:         88,
 }

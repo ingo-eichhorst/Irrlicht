@@ -5,9 +5,10 @@
       "scenario_id": "model-switch-midsession",
       "execution_profile": "desktop-local",
       "outcome": "not-runnable",
-      "reason": "The recipe needs Desktop controls the driver cannot elicit: keyboard-key:\"1\", slash-command-entry. Planned against the driver's own declared grammar by TestDesktopRecipeCensusCoversEveryClaudecodeRecipe, which pins the cited census row and fails on any drift. This is a statement about the CONTROLS, not about the scenario: the cell stays valid for cli-local, where it is recorded today.",
-      "missing_control": "keyboard-key:\"1\", slash-command-entry",
+      "reason": "The slash half of this recipe is runnable now: /model is in the Desktop command popup and the driver drives it, arguments included (see slash-commands.md). What is left is keyboard-key:\"1\", the model-picker selection the recipe presses after each /model call. The Desktop helper refuses a keystroke with no observable postcondition, and nothing measured shows what pressing \"1\" changes in the composer. The cell stays valid for cli-local, where it is recorded today.",
+      "missing_control": "keyboard-key:\"1\"",
       "evidence_refs": [
+        "replaydata/agents/claudecode/desktop-evidence/slash-commands.md",
         "replaydata/agents/claudecode/desktop-evidence/recipe-census.txt",
         "replaydata/agents/claudecode/scenarios/5-3_model-switch-midsession/metadata.json"
       ]

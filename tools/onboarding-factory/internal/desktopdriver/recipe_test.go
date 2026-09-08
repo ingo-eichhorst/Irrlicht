@@ -19,6 +19,7 @@ func TestPlanAcceptsEveryElicitedStepType(t *testing.T) {
 		{Type: StepModel, Value: "Opus 5"},
 		{Type: StepStartSession},
 		{Type: StepArchive},
+		{Type: StepSlash, Text: "/compact"},
 	}
 	if err := Plan(steps); err != nil {
 		t.Fatalf("Plan() error = %v", err)
@@ -59,8 +60,10 @@ func TestPlanNamesTheMissingControlForEveryUnsupportedStepType(t *testing.T) {
 }
 
 func TestPlanReportsEveryMissingControlNotJustTheFirst(t *testing.T) {
+	// A `send` carrying a slash command is refused because the recipe must use
+	// the `slash` step instead — the step itself is runnable now.
 	err := Plan([]Step{
-		{Type: "slash", Text: "/model sonnet"},
+		{Type: StepSend, Text: "/model sonnet"},
 		{Type: StepKeys, Keys: "1"},
 		{Type: "reset_session"},
 	})
@@ -92,10 +95,29 @@ func TestPlanRefusesASessionRetarget(t *testing.T) {
 	}
 }
 
+// A slash command still cannot ride in on a `send` step — but the refusal now
+// points at the recipe, because the driver HAS a slash step that drives the
+// Desktop command popup.
 func TestPlanRefusesASlashCommandTypedAsSendText(t *testing.T) {
 	err := Plan([]Step{{Type: StepSend, Text: "/model sonnet"}})
-	if err == nil || !strings.Contains(err.Error(), "slash-command-entry") {
-		t.Fatalf("Plan() error = %v; want the slash control named", err)
+	if err == nil || !strings.Contains(err.Error(), "slash-command-popup") {
+		t.Fatalf("Plan() error = %v; want the slash-command-popup control named", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "needs a `slash` step") {
+		t.Fatalf("Plan() error = %v; want it to point at the slash step", err)
+	}
+}
+
+func TestPlanAcceptsASlashStepAndRefusesAMalformedOne(t *testing.T) {
+	if err := Plan([]Step{{Type: StepSlash, Text: "/compact"}}); err != nil {
+		t.Fatalf("Plan() refused a well-formed slash step: %v", err)
+	}
+	if err := Plan([]Step{{Type: StepSlash, Text: "/goal Keep going."}}); err != nil {
+		t.Fatalf("Plan() refused a slash step with arguments: %v", err)
+	}
+	err := Plan([]Step{{Type: StepSlash, Text: "compact"}})
+	if err == nil || !strings.Contains(err.Error(), "must read /<command>") {
+		t.Fatalf("Plan() error = %v; want a refusal naming the required shape", err)
 	}
 }
 
@@ -166,6 +188,7 @@ func TestEveryElicitedPrimitiveNamesKnownControls(t *testing.T) {
 		controlComposerDeepLink: true, controlPrompt: true, controlSend: true,
 		controlStop: true, controlMode: true, controlModel: true,
 		controlSessionMenu: true, controlArchiveMenuItem: true, controlKeyboard: true,
+		controlSlashPopup: true,
 	}
 	for primitive, controls := range desktopElicits {
 		for _, control := range controls {
