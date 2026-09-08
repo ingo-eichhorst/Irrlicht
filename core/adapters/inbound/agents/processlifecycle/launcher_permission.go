@@ -30,7 +30,7 @@ func LauncherPermissionDeclaration() agent.Agent {
 			Kind:            permission.KindObserve,
 			Title:           "Capture terminal identity",
 			FeatureUnlocked: "Click-to-focus: jump from a session row or notification straight to the terminal window that runs it",
-			Touches:         "Reads a fixed whitelist of environment variables from detected agent processes (TERM_PROGRAM, KITTY_*, TMUX, HERDR_*, …), and for a herdr pane from the herdr client displaying it",
+			Touches:         "Reads a fixed whitelist of environment variables from detected agent processes (TERM_PROGRAM, KITTY_*, TMUX, HERDR_*, …), and for a herdr pane from the herdr client displaying it, or from herdr itself when the process hides its own environment",
 			Detail: "When a session is linked to its process, irrlicht reads only " +
 				"these variables from that process's environment: TERM_PROGRAM, " +
 				"ITERM_SESSION_ID, TERM_SESSION_ID, TMUX, TMUX_PANE, VSCODE_PID, " +
@@ -39,7 +39,11 @@ func LauncherPermissionDeclaration() agent.Agent {
 				"never the full environment. A session running in a herdr pane is " +
 				"displayed by a separate herdr client process, so for those the same " +
 				"whitelist is also read from that client (found via the session's own " +
-				"socket path) — without it there is no window to jump to. Focusing " +
+				"socket path) — without it there is no window to jump to. Some agents " +
+				"overwrite their own environment as they start, so nothing above can be " +
+				"read from them at all; for those, irrlicht asks the local herdr server " +
+				"over its control socket which pane holds the process, and reads no " +
+				"other pane's contents (#1934). Focusing " +
 				"itself only happens when you " +
 				"click a session (kitty remote control / AppleScript, additionally " +
 				"gated by macOS automation prompts). Toggling off stops the capture " +
