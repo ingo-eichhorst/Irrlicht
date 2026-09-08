@@ -213,6 +213,13 @@ func underHerdrConfigRoot(p string) bool {
 // isSocketFile reports whether p is itself a socket. Lstat, so a symlink is
 // judged as the link it is rather than as whatever it points at.
 func isSocketFile(p string) bool {
+	// herdrSocketNamed already rejects parent traversal because such a path is
+	// not clean. Keep this stricter check beside Lstat because CodeQL does not
+	// carry that validation through the helper calls above. No measured herdr
+	// path contains "..", so rejecting the wider spelling fails closed.
+	if strings.Contains(p, "..") {
+		return false
+	}
 	info, err := os.Lstat(p)
 	if err != nil {
 		return false

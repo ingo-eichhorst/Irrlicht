@@ -80,6 +80,11 @@ func TestConfinedHerdrSocketPathRejects(t *testing.T) {
 	// confinement written as a bare string prefix.
 	sibling := listenAt(t, filepath.Join(filepath.Dir(root), "herdrevil", "herdr.sock"))
 
+	// CodeQL recognizes an inline ".." check as the taint barrier for the
+	// Lstat sink. Pin that deliberately narrower accepted alphabet here so the
+	// static-analysis guard cannot disappear as an apparent no-op.
+	doubleDot := listenAt(t, filepath.Join(root, "sessions", "named..session", "herdr.sock"))
+
 	link := filepath.Join(root, "sessions", "linked", "herdr.sock")
 	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
@@ -105,6 +110,7 @@ func TestConfinedHerdrSocketPathRejects(t *testing.T) {
 			"an unclean path must be rejected rather than normalised into an acceptable one"},
 		{"outside the root", outside, "a real socket is not a herdr socket"},
 		{"sibling prefix", sibling, "…/herdrevil/ is not inside …/herdr/"},
+		{"double dot", doubleDot, "a sink-local traversal guard rejects every double-dot spelling"},
 		{"symlink out", link, "Lstat, not Stat: the link itself is not a socket"},
 		{"not a socket", plainFile, "a regular file named herdr.sock"},
 		{"wrong name", filepath.Join(root, "sessions", "f", "other.sock"), "one accepted file per directory"},
