@@ -148,10 +148,13 @@ func TestValidHerdrPaneID(t *testing.T) {
 		{"pane_1", true},
 		{"pane-1", true},
 		{"", false},
-		{"w1 p2", false},            // whitespace
-		{"w1;p2", false},            // shell metacharacter
-		{"../../etc/passwd", false}, // path-shaped
-		{"w1:p2\n", false},          // the JSON-RPC framing is newline-delimited
+		{"w1 p2", false},                    // whitespace
+		{"w1;p2", false},                    // shell metacharacter
+		{"../../etc/passwd", false},         // path-shaped
+		{"w1:p2\n", false},                  // the JSON-RPC framing is newline-delimited
+		{"w1:p2/../x", false},               // separators that mean something to a path
+		{"w1:pä", false},                    // a multi-byte rune is not in the alphabet
+		{string([]byte{0xff, 0xfe}), false}, // invalid UTF-8 decodes to RuneError
 		{string(make([]byte, maxHerdrPaneIDLen)), false}, // NULs, and at the ceiling
 		{"w" + string(bytesOf('1', maxHerdrPaneIDLen)), false},
 	} {

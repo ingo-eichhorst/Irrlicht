@@ -101,23 +101,37 @@ func herdrPaneHintFrom(paneID, socketPath string) (herdrPaneHint, bool) {
 	return herdrPaneHint{paneID: paneID, socketPath: confined}, true
 }
 
+// herdrPaneIDAlphabet is every character a herdr pane address may contain.
+// herdr's own is "w<n>:p<n>"; the letters and the two separators leave room for
+// a naming scheme without admitting anything structural.
+//
+// Spelled out rather than expressed as ranges, because this constant IS the
+// rule: an allowlist is only an improvement on a denylist if a reader can see
+// the whole of it at once.
+const herdrPaneIDAlphabet = "abcdefghijklmnopqrstuvwxyz" +
+	"ABCDEFGHIJKLMNOPQRSTUVWXYZ" +
+	"0123456789" +
+	":_-"
+
 // validHerdrPaneID reports whether s is shaped like a herdr pane address.
 //
-// An allowlist rather than a denylist, and byte-wise rather than a regexp,
-// because the value ends up in persisted session state that the macOS app
-// renders and that a future caller may put in a request: what may appear in it
-// should be readable in one line rather than inferred from what was thought of
-// to exclude.
+// An allowlist rather than a denylist, because the value ends up in persisted
+// session state that the macOS app renders and that a future caller may put in
+// a request: what may appear in it should be readable rather than inferred from
+// what somebody thought to exclude.
+//
+// Ranging over runes rather than bytes is what rejects a multi-byte character:
+// no rune outside the alphabet above is in it, and invalid UTF-8 decodes to
+// RuneError, which is not in it either.
 func validHerdrPaneID(s string) bool {
-	if s == "" || len(s) > maxHerdrPaneIDLen {
+	if s == "" {
 		return false
 	}
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		switch {
-		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
-		case c == ':', c == '_', c == '-':
-		default:
+	if len(s) > maxHerdrPaneIDLen {
+		return false
+	}
+	for _, r := range s {
+		if !strings.ContainsRune(herdrPaneIDAlphabet, r) {
 			return false
 		}
 	}
