@@ -329,11 +329,32 @@ func readResult(conn net.Conn, out any) bool {
 // The socket path is adopted alongside the pane id because they are one fact.
 // clientHostFor needs both to reach the herdr client, and a pane id without its
 // socket would name the pane while leaving #1350's focus path unable to use it.
+//
+// Two sources, tried in order of how directly each knows the answer (#1936):
+//
+//   - What the process reported about ITSELF, if it can. That is the pane
+//     rather than a pane whose process list matches, and confirming it is one
+//     request against a known socket and pane. See herdrselfreport.go.
+//   - Otherwise the scan, which asks every herdr server for its panes and
+//     narrows by working directory. It is what covers every agent that runs no
+//     irrlicht extension, which today is every Node agent except pi.
+//
+// Only pi can take the first branch, so the second is not a fallback in the
+// sense of a rare path — it stays the ordinary one. What the first removes is
+// the scan's two failure modes for the one agent that can avoid them: a
+// working directory that no longer matches the pane's, and more panes sharing
+// a directory than maxPaneCandidates admits.
 func adoptHerdrPane(l *session.Launcher, pid int) {
 	if l == nil || l.HerdrPaneID != "" {
 		return
 	}
-	pane, socketPath, probed := herdrPaneForPID(context.Background(), pid, cwdForPaneMatch(pid))
+	ctx := context.Background()
+	if pane, socketPath, ok := selfReportedPane(ctx, pid); ok {
+		l.HerdrPaneID = pane
+		l.HerdrSocketPath = socketPath
+		return
+	}
+	pane, socketPath, probed := herdrPaneForPID(ctx, pid, cwdForPaneMatch(pid))
 	if !probed || pane == "" {
 		return
 	}

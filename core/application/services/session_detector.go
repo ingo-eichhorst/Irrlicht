@@ -537,6 +537,14 @@ func (d *SessionDetector) SetLauncherEnvReader(fn LauncherEnvReader) {
 	d.pidMgr.SetLauncherEnvReader(fn)
 }
 
+// SetHerdrPaneRecorder installs the seam that hands a session's own report of
+// its herdr pane to the launcher reader (#1936). Production wires
+// processlifecycle.RememberHerdrPane behind the launcher consent; nil (the
+// default) disables the self-report path. Call before Run.
+func (d *SessionDetector) SetHerdrPaneRecorder(fn HerdrPaneRecorder) {
+	d.pidMgr.SetHerdrPaneRecorder(fn)
+}
+
 // SetBackgroundReader installs a reader that flags a session as a detached
 // background agent (e.g. a Claude Code Agent View bg agent) when its PID is
 // first assigned (#744).

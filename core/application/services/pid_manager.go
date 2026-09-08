@@ -53,6 +53,21 @@ type LauncherEnvReader func(pid int) (l *session.Launcher, hostKnown bool)
 // injected to preserve the hexagonal layering (#744).
 type BackgroundReader func(pid int) *session.BackgroundAgent
 
+// HerdrPaneRecorder hands the launcher reader the herdr pane a process
+// reported about ITSELF, keyed by pid (#1936).
+//
+// It is a one-way seam on purpose: this layer never reads the recorded value
+// back. The recorded pane's only consumer is the reader — the pane has to be
+// known BEFORE ReadLauncherEnv resolves the attached client, or the session
+// gets an address with no window — so recording and then re-reading through
+// LauncherEnvReader is what puts it in front of that resolution without this
+// package learning how a herdr pane is confirmed.
+//
+// Nil (tests, demo mode, a revoked launcher consent) disables the self-report
+// path entirely, and disabling it costs nothing that was not already absent:
+// the reader keeps resolving panes the way it does for every other agent.
+type HerdrPaneRecorder func(pid int, paneID, socketPath string)
+
 // PIDManager manages the process lifecycle for sessions. It discovers PIDs,
 // registers them with ProcessWatcher, handles exits, and sweeps dead processes.
 type PIDManager struct {
@@ -81,6 +96,11 @@ type PIDManager struct {
 
 	// launcherEnv reads launcher env from a PID. Optional — nil skips capture.
 	launcherEnv LauncherEnvReader
+
+	// herdrPaneRecorder forwards a session's own report of the herdr pane it
+	// runs in to the launcher reader. Optional — nil skips the self-report
+	// path (#1936).
+	herdrPaneRecorder HerdrPaneRecorder
 
 	// background reads background-agent metadata from a PID. Optional — nil
 	// skips capture (#744).
@@ -232,6 +252,13 @@ func (pm *PIDManager) SetSessionSupersededHandler(fn func(oldID, newID string)) 
 // Nil disables launcher capture.
 func (pm *PIDManager) SetLauncherEnvReader(fn LauncherEnvReader) {
 	pm.launcherEnv = fn
+}
+
+// SetHerdrPaneRecorder installs the seam that hands a session's own report of
+// its herdr pane to the launcher reader (#1936). Nil disables the self-report
+// path. Called once at startup.
+func (pm *PIDManager) SetHerdrPaneRecorder(fn HerdrPaneRecorder) {
+	pm.herdrPaneRecorder = fn
 }
 
 // SetBackgroundReader installs a reader that flags a session as a background
@@ -1447,6 +1474,140 @@ func (pm *PIDManager) backfillLauncher(state *session.SessionState) {
 func (pm *PIDManager) touchAndSave(state *session.SessionState) {
 	state.UpdatedAt = time.Now().Unix()
 	_ = pm.repo.Save(state)
+}
+
+// AdoptSelfReportedHerdrPane records the herdr pane sessionID reported for
+// itself and, when that session's launcher has none, repairs it on the spot
+// (#1936). paneID and socketPath are already validated and confined by the
+// receiver that decoded them.
+//
+// # Why the repair is here rather than on a sweep
+//
+// A pane-less launcher asks for nothing: launcherBackfillNeedsFor returns no
+// need for it, and refreshMultiplexerHosts skips it because
+// hostedInAMultiplexerPane is false. Both are deliberate — they are what keeps
+// a machine running no multiplexer from paying a read per session per sweep —
+// and neither should change for this. Adding a "the pane might be missing"
+// need would make needs.any() true for essentially every session on every
+// machine, which is a cost regression against exactly what that gate exists to
+// prevent (#1405, #1485, #1492).
+//
+// So the repair is driven by the event instead. A report arriving IS the cheap
+// evidence that this session is in a herdr pane, and it is the only moment at
+// which anything new can be learned, so one read is paid here and none
+// anywhere else. A machine with no herdr never reaches this function: no
+// report is ever sent.
+//
+// # Why it re-reads instead of writing the reported pane straight in
+//
+// Writing paneID onto the stored launcher would produce a session that
+// addresses a pane and has no window to raise. The host of a pane belongs to
+// the herdr CLIENT displaying it (#1350), which only ReadLauncherEnv resolves
+// — and it would stay unresolved forever after, because the periodic refresh
+// requires the fresh read to describe the same pane (SamePaneAs) and a read
+// that cannot see the pane never will. Recording first and re-reading second
+// is what puts the pane in front of that resolution.
+//
+// At most one read per report, and only for a session that is missing a pane:
+// a session that already has one records the report — so a later read, after a
+// daemon restart or a PID re-bind, is the cheap kind — and returns.
+func (pm *PIDManager) AdoptSelfReportedHerdrPane(sessionID, paneID, socketPath string) {
+	if pm.herdrPaneRecorder == nil {
+		return
+	}
+	pid, paneMissing := pm.launcherPaneState(sessionID)
+	if pid <= 0 {
+		// No PID bound yet: the hook beat process discovery. Nothing is
+		// stashed for later, because the extension re-sends the report at
+		// every turn end — the next one finds a bound session. A stash would
+		// buy one turn of latency in exchange for a map whose entries have no
+		// natural end.
+		return
+	}
+	pm.herdrPaneRecorder(pid, paneID, socketPath)
+	if !paneMissing || pm.launcherEnv == nil {
+		return
+	}
+	// Outside the lock, like every other launcher read: it can block on the
+	// herdr socket and on the client probe, and assignMu serializes PID
+	// discovery for every session.
+	fresh, hostKnown := pm.launcherEnv(pid)
+	if fresh == nil || fresh.HerdrPaneID == "" {
+		// The report did not survive confirmation against herdr — the pane no
+		// longer holds this pid, or no server answered. Either way the session
+		// keeps what it had.
+		return
+	}
+	state := pm.applySelfReportedHerdrPane(sessionID, fresh, hostKnown)
+	if state == nil {
+		return
+	}
+	pm.log.LogInfo(logComponentSessionDetector, sessionID,
+		fmt.Sprintf("herdr pane adopted from the session's own report: pane=%q host_bundle_id=%q tty=%q",
+			state.Launcher.HerdrPaneID, state.Launcher.HostBundleID, state.Launcher.TTY))
+	pm.broadcast(outbound.PushTypeUpdated, state)
+}
+
+// launcherPaneState reports sessionID's PID and whether its launcher exists
+// and is missing a herdr pane — the two facts AdoptSelfReportedHerdrPane
+// decides on, read together under the lock so they cannot disagree.
+//
+// A session with no Launcher at all reports paneMissing false rather than
+// true: there is nothing to repair yet, and captureLauncher will run the
+// ordinary read (which now consults the report just recorded) when the PID is
+// bound.
+func (pm *PIDManager) launcherPaneState(sessionID string) (pid int, paneMissing bool) {
+	pm.WithSessionStateLock(func() {
+		state, err := pm.repo.Load(sessionID)
+		if err != nil || state == nil {
+			return
+		}
+		pid = state.PID
+		paneMissing = state.Launcher != nil && state.Launcher.HerdrPaneID == ""
+	})
+	return pid, paneMissing
+}
+
+// applySelfReportedHerdrPane merges a read that resolved a pane into
+// sessionID's stored launcher, returning the updated state when something
+// changed and nil otherwise.
+//
+// Load-modify-save under WithSessionStateLock for the reason
+// applyMultiplexerHostRefresh gives: the caller's read happened outside the
+// lock, so the session may have been reaped or re-bound meanwhile, and the
+// lock is the one assignPIDLocked takes around its own load-modify-save.
+//
+// The pane guard is re-checked rather than trusted from before the read: a
+// concurrent capture may have resolved the same pane already, and overwriting
+// it here would race two sources for one field.
+func (pm *PIDManager) applySelfReportedHerdrPane(sessionID string, fresh *session.Launcher, hostKnown bool) *session.SessionState {
+	var updated *session.SessionState
+	pm.WithSessionStateLock(func() {
+		state, err := pm.repo.Load(sessionID)
+		if err != nil || state == nil || state.Launcher == nil {
+			return
+		}
+		if state.Launcher.HerdrPaneID != "" {
+			return
+		}
+		state.Launcher.HerdrPaneID = fresh.HerdrPaneID
+		state.Launcher.HerdrSocketPath = fresh.HerdrSocketPath
+		// hostKnown gates only the host adoption, exactly as
+		// applyMultiplexerHostBackfill does: a client probe that did not run
+		// yields empty host fields that mean "not looked up", and adopting them
+		// would write emptiness over the ancestry-derived host the session
+		// already has (#1485). The pane itself is unconditional — it came from
+		// the process, not from the probe.
+		if hostKnown {
+			state.Launcher.AdoptHostIdentity(fresh)
+		}
+		// The pane may have arrived with a tty the stored launcher lacked, and
+		// BackgroundAgent.Detached is derived from it (#744/#1546).
+		refreshBackgroundDetached(state)
+		pm.touchAndSave(state)
+		updated = state
+	})
+	return updated
 }
 
 // refreshMultiplexerHosts re-resolves the host window of every herdr-hosted session,
