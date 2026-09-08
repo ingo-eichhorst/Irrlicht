@@ -247,6 +247,17 @@ func ReadLauncherEnv(pid int) (l *session.Launcher, hostKnown bool) {
 	l, _ = hostIdentity(noAggregateBudget(), pid)
 	hostKnown = true
 
+	// #1934: an agent that sets process.title overwrites the contiguous
+	// argv+env region sysctl(kern.procargs2) exposes, so the read above found
+	// no HERDR_PANE_ID for it even though the session is in a herdr pane. Ask
+	// herdr, which certainly knows. See herdrpane.go for why the ancestry
+	// fallback cannot recover it and why this is a socket read.
+	//
+	// Placed before clientHostFor deliberately: it consumes HerdrPaneID and
+	// HerdrSocketPath, so recovering them here is also what makes #1350's
+	// click-to-focus reach these sessions rather than only their pane id.
+	adoptHerdrPane(l, pid)
+
 	// A multiplexer pane's window belongs to the attached client, so its host
 	// identity is resolved from that process instead — one indirection past
 	// the ancestry walk (#1350 for herdr, #1501 for tmux). Runs after the TTY
