@@ -99,24 +99,41 @@ func herdrPaneForPID(ctx context.Context, pid int, cwd string) (paneID, socketPa
 		return "", "", false
 	}
 	for _, sock := range herdrSocketPaths() {
-		panes, ok := herdrPanes(ctx, sock)
-		if !ok {
+		pane, answered := paneOnSocket(ctx, sock, pid, cwd)
+		if !answered {
 			// This socket did not answer. Others still might, so keep going
 			// rather than reporting a failed probe for the whole lookup.
 			continue
 		}
 		probed = true
-		for _, pane := range candidatePanes(panes, cwd) {
-			info, ok := herdrPaneProcessInfo(ctx, sock, pane.PaneID)
-			if !ok {
-				continue
-			}
-			if processInfoNames(info, pid) {
-				return pane.PaneID, sock, true
-			}
+		if pane != "" {
+			return pane, sock, true
 		}
 	}
 	return "", "", probed
+}
+
+// paneOnSocket asks one herdr server which of its panes holds pid, and reports
+// whether that server answered at all.
+//
+// The two returns are independent on purpose: ("", true) is a server that
+// answered and does not hold the process, which is evidence; ("", false) is a
+// server that could not be reached, which is not.
+func paneOnSocket(ctx context.Context, socketPath string, pid int, cwd string) (paneID string, answered bool) {
+	panes, ok := herdrPanes(ctx, socketPath)
+	if !ok {
+		return "", false
+	}
+	for _, pane := range candidatePanes(panes, cwd) {
+		info, ok := herdrPaneProcessInfo(ctx, socketPath, pane.PaneID)
+		if !ok {
+			continue
+		}
+		if processInfoNames(info, pid) {
+			return pane.PaneID, true
+		}
+	}
+	return "", true
 }
 
 // herdrSocketPaths lists the control sockets of every herdr server with state
@@ -190,7 +207,7 @@ func herdrPanes(ctx context.Context, socketPath string) ([]herdrPane, bool) {
 	var payload struct {
 		Panes []herdrPane `json:"panes"`
 	}
-	if !herdrRequest(ctx, socketPath, "pane.list", nil, &payload) {
+	if !herdrRequest(ctx, socketPath, herdrCall{method: "pane.list"}, &payload) {
 		return nil, false
 	}
 	return payload.Panes, true
@@ -200,51 +217,78 @@ func herdrPaneProcessInfo(ctx context.Context, socketPath, paneID string) (herdr
 	var payload struct {
 		ProcessInfo herdrProcessInfo `json:"process_info"`
 	}
-	params := map[string]any{"pane_id": paneID}
-	if !herdrRequest(ctx, socketPath, "pane.process_info", params, &payload) {
+	call := herdrCall{method: "pane.process_info", params: map[string]any{"pane_id": paneID}}
+	if !herdrRequest(ctx, socketPath, call, &payload) {
 		return herdrProcessInfo{}, false
 	}
 	return payload.ProcessInfo, true
 }
 
-// herdrRequest sends one JSON-RPC request and decodes the `result` member of
-// the single line that comes back.
+// herdrCall is one request's method and parameters, kept together so the
+// request path takes a subject rather than a list of loose arguments.
+type herdrCall struct {
+	method string
+	params map[string]any
+}
+
+// herdrRequest sends one JSON-RPC call and decodes the `result` member of the
+// single line that comes back.
 //
 // Returns false for every failure — no such socket, nothing listening, a
 // timeout, a protocol error, an error member instead of a result. The caller
 // distinguishes only "answered" from "did not", because none of those failures
 // is evidence about which pane a process is in.
-func herdrRequest(ctx context.Context, socketPath, method string, params map[string]any, out any) bool {
+func herdrRequest(ctx context.Context, socketPath string, call herdrCall, out any) bool {
+	conn, ok := dialHerdr(ctx, socketPath)
+	if !ok {
+		return false
+	}
+	defer func() { _ = conn.Close() }()
+
+	if !writeCall(conn, call) {
+		return false
+	}
+	return readResult(conn, out)
+}
+
+// dialHerdr opens the control socket with a deadline already applied to the
+// whole exchange, so neither the connect nor the read can outlive it.
+func dialHerdr(ctx context.Context, socketPath string) (net.Conn, bool) {
 	deadline := time.Now().Add(herdrDialTimeout)
 	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
 		deadline = ctxDeadline
 	}
-
 	dialer := net.Dialer{Deadline: deadline}
 	conn, err := dialer.DialContext(ctx, "unix", socketPath)
 	if err != nil {
-		return false
+		return nil, false
 	}
-	defer func() { _ = conn.Close() }()
 	if err := conn.SetDeadline(deadline); err != nil {
-		return false
+		_ = conn.Close()
+		return nil, false
 	}
+	return conn, true
+}
 
-	request := map[string]any{"id": "irrlicht:" + method, "method": method}
-	if params != nil {
-		request["params"] = params
+func writeCall(conn net.Conn, call herdrCall) bool {
+	request := map[string]any{"id": "irrlicht:" + call.method, "method": call.method}
+	if call.params != nil {
+		request["params"] = call.params
 	}
 	body, err := json.Marshal(request)
 	if err != nil {
 		return false
 	}
-	if _, err := conn.Write(append(body, '\n')); err != nil {
-		return false
-	}
+	_, err = conn.Write(append(body, '\n'))
+	return err == nil
+}
 
-	// One request, one response line. A streaming decoder rather than a
-	// read-to-EOF because the server keeps the connection open for further
-	// requests, so EOF would only arrive at the deadline.
+// readResult decodes one response envelope and unmarshals its result into out.
+//
+// A streaming decoder rather than a read-to-EOF because the server keeps the
+// connection open for further requests, so EOF would only arrive at the
+// deadline.
+func readResult(conn net.Conn, out any) bool {
 	var envelope struct {
 		Result json.RawMessage `json:"result"`
 	}
