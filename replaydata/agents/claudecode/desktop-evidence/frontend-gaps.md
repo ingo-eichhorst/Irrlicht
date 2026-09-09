@@ -26,8 +26,10 @@ jq 'length' replaydata/agents/claudecode/desktop-evidence/no-stop-control-1.4638
 ```
 0
 1
-767
+517
 ```
+
+The committed tree is a REDACTED copy. `tools/onboarding-factory/scripts/redact-ax-tree.py` drops every row under `AXMenuBar` — 250 of them, carrying the operator's Recent Items — and pseudonymises the conversation titles. The capture held 767 controls; the committed copy holds 517. No driver control lives under `AXMenuBar`, and neither `Send` nor `Stop` did, so the two counts above are what the full capture gave.
 
 That tree was captured ten seconds into a streaming turn, by the driver, at the
 moment its `interrupt` step was refused. `2-20_user-esc-interrupt` drives that
