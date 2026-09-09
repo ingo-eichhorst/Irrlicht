@@ -36,47 +36,73 @@ import sys
 SESSION_PREFIX = "More options for "
 PSEUDONYM = re.compile(r"^session-\d+$")
 HOME_PATH = re.compile(r"/Users/[^/\s\"]+")
-EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}")
 TEXT_FIELDS = ("title", "description", "value")
+ACCOUNT_PLACEHOLDER = "«account»"
+EMAIL_PLACEHOLDER = "«email»"
+REDACTED_HOME = "/Users/«operator»"
 
 
-def redact(elements, scrub):
-    kept = [e for e in elements if "AXMenuBar" not in (e.get("hierarchy") or [])]
-    dropped = len(elements) - len(kept)
+def tree_path(name):
+    """Resolve one command-line argument to a file inside the working tree.
 
-    # Pass one: learn every conversation title, in first-appearance order, so
-    # the numbering is stable and two rows that shared a title still do.
+    This script rewrites files in place. A path that escapes the directory
+    it was invoked from is refused rather than resolved, so a mistyped or
+    machine-generated argument cannot overwrite something outside it.
+    """
+    root = pathlib.Path.cwd().resolve()
+    path = pathlib.Path(name).resolve()
+    if path != root and root not in path.parents:
+        raise ValueError("%s lies outside %s" % (path, root))
+    if not path.is_file():
+        raise ValueError("%s is not a file" % path)
+    return path
+
+
+def session_pseudonyms(elements):
+    """Map every conversation title to session-N, in first-appearance order.
+
+    Equal titles must stay equal: several committed findings turn on Desktop
+    naming two sessions the same, because it names a session after its content.
+    An already-pseudonymised title is left alone, which is what makes a second
+    run of this script a no-op.
+    """
     names = {}
-    for element in kept:
+    for element in elements:
         description = element.get("description") or ""
         if not description.startswith(SESSION_PREFIX):
             continue
         title = description[len(SESSION_PREFIX):]
-        if PSEUDONYM.match(title) or title in names:
-            continue
-        names[title] = "session-%d" % (len(names) + 1)
+        if title and not PSEUDONYM.match(title) and title not in names:
+            names[title] = "session-%d" % (len(names) + 1)
+    return names
 
-    counts = {"menubar": dropped, "titles": 0, "paths": 0, "emails": 0, "scrubbed": 0}
 
-    def rewrite(text):
-        for real, alias in names.items():
-            if real and real in text:
-                text = text.replace(real, alias)
-                counts["titles"] += 1
-        for needle in scrub:
-            if needle and needle in text:
-                text = text.replace(needle, "«account»")
-                counts["scrubbed"] += 1
-        text, n = HOME_PATH.subn("/Users/«operator»", text)
-        counts["paths"] += n
-        text, n = EMAIL.subn("«email»", text)
-        counts["emails"] += n
-        return text
+def rewrite_text(text, names, scrub, counts):
+    for real, alias in names.items():
+        if real in text:
+            text = text.replace(real, alias)
+            counts["titles"] += 1
+    for needle in scrub:
+        if needle and needle in text:
+            text = text.replace(needle, ACCOUNT_PLACEHOLDER)
+            counts["scrubbed"] += 1
+    text, replaced = HOME_PATH.subn(REDACTED_HOME, text)
+    counts["paths"] += replaced
+    text, replaced = EMAIL.subn(EMAIL_PLACEHOLDER, text)
+    counts["emails"] += replaced
+    return text
 
+
+def redact(elements, scrub):
+    kept = [e for e in elements if "AXMenuBar" not in (e.get("hierarchy") or [])]
+    counts = {"menubar": len(elements) - len(kept),
+              "titles": 0, "paths": 0, "emails": 0, "scrubbed": 0}
+    names = session_pseudonyms(kept)
     for element in kept:
         for field in TEXT_FIELDS:
             if isinstance(element.get(field), str):
-                element[field] = rewrite(element[field])
+                element[field] = rewrite_text(element[field], names, scrub, counts)
     return kept, counts
 
 
@@ -89,17 +115,18 @@ def main():
 
     failed = False
     for name in args.files:
-        path = pathlib.Path(name)
         try:
+            path = tree_path(name)
             elements = json.loads(path.read_text())
         except (OSError, ValueError) as err:
             # An input this cannot read is the LAST place to fall silent: it is
             # the case where nothing gets redacted at all.
-            print("REFUSED %s: %s" % (path, err), file=sys.stderr)
+            print("REFUSED %s: %s" % (name, err), file=sys.stderr)
             failed = True
             continue
         if not isinstance(elements, list):
-            print("REFUSED %s: an accessibility tree must be a JSON array" % path, file=sys.stderr)
+            print("REFUSED %s: an accessibility tree must be a JSON array" % name,
+                  file=sys.stderr)
             failed = True
             continue
         before = len(elements)

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -28,57 +29,68 @@ const sessionTitlePrefix = "More options for "
 var (
 	pseudonymisedSession = regexp.MustCompile(`^session-\d+$`)
 	operatorHomePath     = regexp.MustCompile(`/Users/[^/\s"]+`)
-	emailAddress         = regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`)
+	emailAddress         = regexp.MustCompile(`[A-Za-z0-9._%+-]+@(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}`)
 	redactedHomePath     = "/Users/«operator»"
 )
+
+// evidenceElement is the part of a dumped control this audit reads.
+type evidenceElement struct {
+	Hierarchy   []string `json:"hierarchy"`
+	Role        string   `json:"role"`
+	Title       string   `json:"title"`
+	Description string   `json:"description"`
+}
 
 // auditEvidenceTree names every privacy defect it can see in one committed
 // tree. An input it cannot read is a finding, never a silent pass: that is the
 // one case where the audit would otherwise report "clean" precisely because it
 // looked at nothing.
 func auditEvidenceTree(name string, data []byte) []string {
-	var elements []struct {
-		Hierarchy   []string `json:"hierarchy"`
-		Role        string   `json:"role"`
-		Title       string   `json:"title"`
-		Description string   `json:"description"`
-	}
+	var elements []evidenceElement
 	if err := json.Unmarshal(data, &elements); err != nil {
 		return []string{fmt.Sprintf("%s cannot be read as an accessibility tree: %v", name, err)}
 	}
 	if len(elements) == 0 {
 		return []string{fmt.Sprintf("%s holds no elements, so this audit proved nothing", name)}
 	}
-
 	var findings []string
 	for index, element := range elements {
-		for _, ancestor := range element.Hierarchy {
-			if ancestor == "AXMenuBar" {
-				findings = append(findings, fmt.Sprintf(
-					"%s element %d (%s %q) sits under AXMenuBar, the subtree that carries Recent Items",
-					name, index, element.Role, element.Title))
-				break
-			}
+		findings = append(findings, auditEvidenceElement(name, index, element)...)
+	}
+	return findings
+}
+
+func auditEvidenceElement(name string, index int, element evidenceElement) []string {
+	var findings []string
+	if slices.Contains(element.Hierarchy, "AXMenuBar") {
+		findings = append(findings, fmt.Sprintf(
+			"%s element %d (%s %q) sits under AXMenuBar, the subtree that carries Recent Items",
+			name, index, element.Role, element.Title))
+	}
+	if title, found := strings.CutPrefix(element.Description, sessionTitlePrefix); found {
+		if !pseudonymisedSession.MatchString(title) {
+			findings = append(findings, fmt.Sprintf(
+				"%s element %d names a conversation %q; conversation titles must read session-N",
+				name, index, title))
 		}
-		if title, found := strings.CutPrefix(element.Description, sessionTitlePrefix); found {
-			if !pseudonymisedSession.MatchString(title) {
-				findings = append(findings, fmt.Sprintf(
-					"%s element %d names a conversation %q; conversation titles must read session-N",
-					name, index, title))
-			}
+	}
+	for _, text := range []string{element.Title, element.Description} {
+		findings = append(findings, auditEvidenceText(name, index, text)...)
+	}
+	return findings
+}
+
+func auditEvidenceText(name string, index int, text string) []string {
+	var findings []string
+	for _, path := range operatorHomePath.FindAllString(text, -1) {
+		if path != redactedHomePath {
+			findings = append(findings, fmt.Sprintf(
+				"%s element %d carries the home path %q", name, index, path))
 		}
-		for _, text := range []string{element.Title, element.Description} {
-			for _, path := range operatorHomePath.FindAllString(text, -1) {
-				if path != redactedHomePath {
-					findings = append(findings, fmt.Sprintf(
-						"%s element %d carries the home path %q", name, index, path))
-				}
-			}
-			if address := emailAddress.FindString(text); address != "" {
-				findings = append(findings, fmt.Sprintf(
-					"%s element %d carries the email address %q", name, index, address))
-			}
-		}
+	}
+	if address := emailAddress.FindString(text); address != "" {
+		findings = append(findings, fmt.Sprintf(
+			"%s element %d carries the email address %q", name, index, address))
 	}
 	return findings
 }
