@@ -86,7 +86,8 @@ var composerMatchers = map[string]composerMatcher{
 	},
 	// The send slot was believed to be state dependent — the same slot reading
 	// "Stop" while a turn runs. On 1.46388.4 it is NOT. Measured on 2026-09-07,
-	// ten seconds into a streaming turn, across all 767 controls on screen:
+	// ten seconds into a streaming turn, across all 767 controls on screen
+	// (the committed copy is redacted down to 517 — see frontend-gaps.md):
 	// the composer still showed "Send" and nothing anywhere was described or
 	// titled "Stop". The tree is kept at
 	// replaydata/agents/claudecode/desktop-evidence/, and it is why cell 2-20's

@@ -3422,7 +3422,7 @@
       0
     ],
     "role": "AXPopUpButton",
-    "title": "Ingo Ingo Max",
+    "title": "«account»",
     "valueRedacted": false
   },
   {
@@ -4486,7 +4486,7 @@
     "valueRedacted": false
   },
   {
-    "description": "Ingo",
+    "description": "«account»",
     "enabled": true,
     "focused": false,
     "frame": {
@@ -4878,7 +4878,7 @@
       0
     ],
     "role": "AXButton",
-    "title": "Idle Context",
+    "title": "Idle session-1",
     "valueRedacted": false
   },
   {
@@ -4994,7 +4994,7 @@
       0
     ],
     "role": "AXButton",
-    "title": "Running Issue 974 handover",
+    "title": "Running session-2",
     "valueRedacted": false
   },
   {
@@ -5110,7 +5110,7 @@
       0
     ],
     "role": "AXButton",
-    "title": "Idle Irrlicht talk preparation",
+    "title": "Idle session-3",
     "valueRedacted": false
   },
   {
@@ -5226,7 +5226,7 @@
       0
     ],
     "role": "AXButton",
-    "title": "Error Hello world Python file",
+    "title": "Error session-4",
     "valueRedacted": false
   },
   {
@@ -5342,7 +5342,7 @@
       0
     ],
     "role": "AXButton",
-    "title": "Error Hello world Python file",
+    "title": "Error session-4",
     "valueRedacted": false
   },
   {
@@ -5458,7 +5458,7 @@
       0
     ],
     "role": "AXButton",
-    "title": "Error Hello world Python file",
+    "title": "Error session-4",
     "valueRedacted": false
   },
   {
@@ -5574,7 +5574,7 @@
       0
     ],
     "role": "AXButton",
-    "title": "Error Hello world Python file",
+    "title": "Error session-4",
     "valueRedacted": false
   },
   {
@@ -5690,7 +5690,7 @@
       0
     ],
     "role": "AXButton",
-    "title": "Error Hello world Python file",
+    "title": "Error session-4",
     "valueRedacted": false
   },
   {
@@ -5806,7 +5806,7 @@
       0
     ],
     "role": "AXButton",
-    "title": "Error Create out.txt file",
+    "title": "Error session-5",
     "valueRedacted": false
   },
   {
@@ -5922,7 +5922,7 @@
       0
     ],
     "role": "AXButton",
-    "title": "Idle Confirmation response",
+    "title": "Idle session-6",
     "valueRedacted": false
   },
   {
@@ -6038,7 +6038,7 @@
       0
     ],
     "role": "AXButton",
-    "title": "Idle References page publication",
+    "title": "Idle session-7",
     "valueRedacted": false
   },
   {
@@ -6154,7 +6154,7 @@
       0
     ],
     "role": "AXButton",
-    "title": "Idle Echo hi",
+    "title": "Idle session-8",
     "valueRedacted": false
   },
   {
@@ -6270,7 +6270,7 @@
       0
     ],
     "role": "AXButton",
-    "title": "Idle Count 1 to 3000",
+    "title": "Idle session-9",
     "valueRedacted": false
   },
   {
@@ -6386,7 +6386,7 @@
       0
     ],
     "role": "AXButton",
-    "title": "Idle Count 1 to 3000",
+    "title": "Idle session-9",
     "valueRedacted": false
   },
   {
@@ -6502,7 +6502,7 @@
       0
     ],
     "role": "AXButton",
-    "title": "Idle Sleep 90",
+    "title": "Idle session-10",
     "valueRedacted": false
   },
   {
@@ -6862,7 +6862,7 @@
     "valueRedacted": false
   },
   {
-    "description": "More options for Context",
+    "description": "More options for session-1",
     "enabled": true,
     "focused": false,
     "frame": {
@@ -7045,7 +7045,7 @@
     "valueRedacted": false
   },
   {
-    "description": "More options for Issue 974 handover",
+    "description": "More options for session-2",
     "enabled": true,
     "focused": false,
     "frame": {
@@ -7228,7 +7228,7 @@
     "valueRedacted": false
   },
   {
-    "description": "More options for Irrlicht talk preparation",
+    "description": "More options for session-3",
     "enabled": true,
     "focused": false,
     "frame": {
@@ -7411,7 +7411,7 @@
     "valueRedacted": false
   },
   {
-    "description": "More options for Hello world Python file",
+    "description": "More options for session-4",
     "enabled": true,
     "focused": false,
     "frame": {
@@ -7594,7 +7594,7 @@
     "valueRedacted": false
   },
   {
-    "description": "More options for Hello world Python file",
+    "description": "More options for session-4",
     "enabled": true,
     "focused": false,
     "frame": {
@@ -7777,7 +7777,7 @@
     "valueRedacted": false
   },
   {
-    "description": "More options for Hello world Python file",
+    "description": "More options for session-4",
     "enabled": true,
     "focused": false,
     "frame": {
@@ -7960,7 +7960,7 @@
     "valueRedacted": false
   },
   {
-    "description": "More options for Hello world Python file",
+    "description": "More options for session-4",
     "enabled": true,
     "focused": false,
     "frame": {
@@ -8143,7 +8143,7 @@
     "valueRedacted": false
   },
   {
-    "description": "More options for Hello world Python file",
+    "description": "More options for session-4",
     "enabled": true,
     "focused": false,
     "frame": {
@@ -8326,7 +8326,7 @@
     "valueRedacted": false
   },
   {
-    "description": "More options for Create out.txt file",
+    "description": "More options for session-5",
     "enabled": true,
     "focused": false,
     "frame": {
@@ -8508,7 +8508,7 @@
     "valueRedacted": false
   },
   {
-    "description": "More options for Confirmation response",
+    "description": "More options for session-6",
     "enabled": true,
     "focused": false,
     "frame": {
@@ -8690,7 +8690,7 @@
     "valueRedacted": false
   },
   {
-    "description": "More options for References page publication",
+    "description": "More options for session-7",
     "enabled": true,
     "focused": false,
     "frame": {
@@ -8872,7 +8872,7 @@
     "valueRedacted": false
   },
   {
-    "description": "More options for Echo hi",
+    "description": "More options for session-8",
     "enabled": true,
     "focused": false,
     "frame": {
@@ -9054,7 +9054,7 @@
     "valueRedacted": false
   },
   {
-    "description": "More options for Count 1 to 3000",
+    "description": "More options for session-9",
     "enabled": true,
     "focused": false,
     "frame": {
@@ -9236,7 +9236,7 @@
     "valueRedacted": false
   },
   {
-    "description": "More options for Count 1 to 3000",
+    "description": "More options for session-9",
     "enabled": true,
     "focused": false,
     "frame": {
@@ -9418,7 +9418,7 @@
     "valueRedacted": false
   },
   {
-    "description": "More options for Sleep 90",
+    "description": "More options for session-10",
     "enabled": true,
     "focused": false,
     "frame": {
@@ -12193,7 +12193,7 @@
     "valueRedacted": false
   },
   {
-    "description": "Usage: Weekly · all models: 14%, Resets Sun 10:00 AM, Context 100.8k / 1M (10%)",
+    "description": "Usage: Weekly · all models: 14%, Resets Sun 10:00 AM, session-1 100.8k / 1M (10%)",
     "enabled": true,
     "focused": false,
     "frame": {
@@ -12496,7 +12496,7 @@
     "valueRedacted": false
   },
   {
-    "description": "Context, rename session",
+    "description": "session-1, rename session",
     "enabled": true,
     "focused": false,
     "frame": {
@@ -12884,7 +12884,7 @@
     "valueRedacted": false
   },
   {
-    "description": "More options for Context",
+    "description": "More options for session-1",
     "enabled": true,
     "focused": false,
     "frame": {
@@ -16464,11 +16464,11 @@
       0
     ],
     "role": "AXButton",
-    "title": "Context window 96.4k / 1M (10%)",
+    "title": "session-1 window 96.4k / 1M (10%)",
     "valueRedacted": false
   },
   {
-    "description": "Context window: System tools: 22.1k, 2,2 %; MCP tools: 12.8k, 1,3 %; System prompt: 10.3k, 1 %; Skills: 9k, 0,9 %; Other: 9.2k, 0,92 %; Autocompact buffer: 33k, 3,3 %",
+    "description": "session-1 window: System tools: 22.1k, 2,2 %; MCP tools: 12.8k, 1,3 %; System prompt: 10.3k, 1 %; Skills: 9k, 0,9 %; Other: 9.2k, 0,92 %; Autocompact buffer: 33k, 3,3 %",
     "enabled": true,
     "focused": false,
     "frame": {

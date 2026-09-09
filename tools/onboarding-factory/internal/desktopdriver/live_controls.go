@@ -141,7 +141,9 @@ func stopSelectorFor(send helperSelector) helperSelector {
 // CORRECTION, 2026-09-07. This was written believing Claude Desktop swaps Send
 // for a Stop button while a turn runs. It does not, on 1.46388.4: a tree
 // captured ten seconds into a streaming turn carried "Send" and no "Stop"
-// anywhere among 767 controls. So on this build turnInFlight can never be true,
+// anywhere among 767 controls (the committed copy of that tree is redacted
+// down to 517; see frontend-gaps.md). So on this build turnInFlight can
+// never be true,
 // and the guard below is dead — kept deliberately, because it costs one
 // comparison, it is correct if a later build brings Stop back, and removing it
 // would leave Submit's retry loop able to click Send twice again.
