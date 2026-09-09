@@ -91,15 +91,18 @@ def session_pseudonyms(elements):
     return names
 
 
-def rewrite_text(text, names, scrub, counts):
-    for real, alias in names.items():
-        if real in text:
-            text = text.replace(real, alias)
-            counts["titles"] += 1
-    for needle in scrub:
+def replace_each(text, pairs, counts, key):
+    """Apply every needle-to-alias pair, counting the ones that hit."""
+    for needle, alias in pairs:
         if needle and needle in text:
-            text = text.replace(needle, ACCOUNT_PLACEHOLDER)
-            counts["scrubbed"] += 1
+            text = text.replace(needle, alias)
+            counts[key] += 1
+    return text
+
+
+def rewrite_text(text, names, scrub, counts):
+    text = replace_each(text, names.items(), counts, "titles")
+    text = replace_each(text, ((s, ACCOUNT_PLACEHOLDER) for s in scrub), counts, "scrubbed")
     text, replaced = HOME_PATH.subn(REDACTED_HOME, text)
     counts["paths"] += replaced
     text, replaced = mask_emails(text)
