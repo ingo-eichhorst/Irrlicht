@@ -25,6 +25,9 @@ structural signature, so it is passed with --scrub and is not committed here.
 The script is idempotent: a redacted tree passes through unchanged.
 
     redact-ax-tree.py [--scrub STRING]... FILE...
+
+`TestCommittedEvidenceTreesCarryNoOperatorContent` is the audit that fails when
+a tree reaches the repository without this having been run over it.
 """
 
 import argparse
@@ -37,28 +40,36 @@ import sys
 SESSION_PREFIX = "More options for "
 PSEUDONYM = re.compile(r"^session-\d+$")
 HOME_PATH = re.compile(r"/Users/[^/\s\"]+")
-EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
 TEXT_FIELDS = ("title", "description", "value")
 ACCOUNT_PLACEHOLDER = "«account»"
 EMAIL_PLACEHOLDER = "«email»"
 REDACTED_HOME = "/Users/«operator»"
 
 
-def tree_path(name):
-    """Resolve one command-line argument to a file inside the working tree.
+def mask_emails(text):
+    """Replace every token shaped like an email address.
 
-    This script rewrites files in place. A path that escapes the directory
-    it was invoked from is refused rather than resolved, so a mistyped or
-    machine-generated argument cannot overwrite something outside it.
+    This is deliberately not a regular expression. The natural one repeats a
+    host label and then asks for a dotted tail, and the two can match the same
+    characters, so a long run without a dot is re-split at every start position.
+    Inspecting whitespace-separated tokens is linear and says the same thing.
+
+    The Go audit keeps a regular expression for this, because RE2 does not
+    backtrack and cannot have that behaviour.
     """
-    root = str(pathlib.Path.cwd().resolve())
-    candidate = str(pathlib.Path(name).resolve())
-    if not candidate.startswith(root + os.sep):
-        raise ValueError("%s lies outside %s" % (candidate, root))
-    path = pathlib.Path(candidate)
-    if not path.is_file():
-        raise ValueError("%s is not a file" % candidate)
-    return path
+    if "@" not in text:
+        return text, 0
+    replaced = 0
+    for token in sorted(set(text.split()), key=len, reverse=True):
+        local, at, host = token.partition("@")
+        if not at or not local:
+            continue
+        labels = host.split(".")
+        if len(labels) < 2 or not all(labels):
+            continue
+        text = text.replace(token, EMAIL_PLACEHOLDER)
+        replaced += 1
+    return text, replaced
 
 
 def session_pseudonyms(elements):
@@ -91,7 +102,7 @@ def rewrite_text(text, names, scrub, counts):
             counts["scrubbed"] += 1
     text, replaced = HOME_PATH.subn(REDACTED_HOME, text)
     counts["paths"] += replaced
-    text, replaced = EMAIL.subn(EMAIL_PLACEHOLDER, text)
+    text, replaced = mask_emails(text)
     counts["emails"] += replaced
     return text
 
@@ -115,11 +126,20 @@ def main():
     parser.add_argument("files", nargs="+")
     args = parser.parse_args()
 
+    # The containment check and the write it protects stay in one function on
+    # purpose. Expressed through a helper, the taint analysis stopped seeing
+    # that the path reaching the write is the path that was validated.
+    root = str(pathlib.Path.cwd().resolve())
     failed = False
     for name in args.files:
+        target = str(pathlib.Path(name).resolve())
+        if not target.startswith(root + os.sep) or not os.path.isfile(target):
+            print("REFUSED %s: not a file inside %s" % (name, root), file=sys.stderr)
+            failed = True
+            continue
         try:
-            path = tree_path(name)
-            elements = json.loads(path.read_text())
+            with open(target, "r", encoding="utf-8") as handle:
+                elements = json.load(handle)
         except (OSError, ValueError) as err:
             # An input this cannot read is the LAST place to fall silent: it is
             # the case where nothing gets redacted at all.
@@ -133,11 +153,12 @@ def main():
             continue
         before = len(elements)
         kept, counts = redact(elements, args.scrub)
-        path.write_text(json.dumps(kept, indent=2, ensure_ascii=False) + "\n")
+        with open(target, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(kept, indent=2, ensure_ascii=False) + "\n")
         print("%s: %d -> %d elements (menu-bar rows dropped %d, "
               "title replacements %d, paths %d, emails %d, scrubbed %d)"
-              % (path.name, before, len(kept), counts["menubar"], counts["titles"],
-                 counts["paths"], counts["emails"], counts["scrubbed"]))
+              % (os.path.basename(target), before, len(kept), counts["menubar"],
+                 counts["titles"], counts["paths"], counts["emails"], counts["scrubbed"]))
     return 1 if failed else 0
 
 
