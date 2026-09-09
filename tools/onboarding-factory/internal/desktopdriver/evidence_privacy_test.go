@@ -29,7 +29,7 @@ const sessionTitlePrefix = "More options for "
 var (
 	pseudonymisedSession = regexp.MustCompile(`^session-\d+$`)
 	operatorHomePath     = regexp.MustCompile(`/Users/[^/\s"]+`)
-	emailAddress         = regexp.MustCompile(`[A-Za-z0-9._%+-]+@(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}`)
+	emailAddress         = regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+`)
 	redactedHomePath     = "/Users/«operator»"
 )
 

@@ -29,6 +29,7 @@ The script is idempotent: a redacted tree passes through unchanged.
 
 import argparse
 import json
+import os
 import pathlib
 import re
 import sys
@@ -36,7 +37,7 @@ import sys
 SESSION_PREFIX = "More options for "
 PSEUDONYM = re.compile(r"^session-\d+$")
 HOME_PATH = re.compile(r"/Users/[^/\s\"]+")
-EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}")
+EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
 TEXT_FIELDS = ("title", "description", "value")
 ACCOUNT_PLACEHOLDER = "«account»"
 EMAIL_PLACEHOLDER = "«email»"
@@ -50,12 +51,13 @@ def tree_path(name):
     it was invoked from is refused rather than resolved, so a mistyped or
     machine-generated argument cannot overwrite something outside it.
     """
-    root = pathlib.Path.cwd().resolve()
-    path = pathlib.Path(name).resolve()
-    if path != root and root not in path.parents:
-        raise ValueError("%s lies outside %s" % (path, root))
+    root = str(pathlib.Path.cwd().resolve())
+    candidate = str(pathlib.Path(name).resolve())
+    if not candidate.startswith(root + os.sep):
+        raise ValueError("%s lies outside %s" % (candidate, root))
+    path = pathlib.Path(candidate)
     if not path.is_file():
-        raise ValueError("%s is not a file" % path)
+        raise ValueError("%s is not a file" % candidate)
     return path
 
 
