@@ -130,8 +130,14 @@ func TestPairingMintWithoutPublicURLKeepsManualCode(t *testing.T) {
 	if err := json.Unmarshal(body, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Code == "" || got.PairingURL != "" || got.PairingQR != "" {
-		t.Fatalf("manual fallback = %+v", got)
+	if got.Code == "" {
+		t.Fatal("manual fallback has no code")
+	}
+	if got.PairingURL != "" {
+		t.Fatalf("manual fallback has URL %q", got.PairingURL)
+	}
+	if got.PairingQR != "" {
+		t.Fatal("manual fallback has a QR image")
 	}
 	if !strings.Contains(got.PairingURLReason, "--public-url") {
 		t.Fatalf("fallback reason %q does not name --public-url", got.PairingURLReason)
