@@ -138,24 +138,39 @@ func TestPairingMintWithoutPublicURLKeepsManualCode(t *testing.T) {
 	}
 }
 
-func TestPairingHandoffPageAndManifest(t *testing.T) {
+func newPairingHandoffEnv(t *testing.T) *pushEnv {
+	t.Helper()
 	handoff := resolvePairingHandoff("https://relay.example.com")
-	env := newPushEnvWithHandoff(t, handoff, tokenSeed{label: "dashboard", workspace: "acme"})
-	status, body := doPush(t, http.MethodGet, env.srv.URL+"/pair/ABCD-EFGH/", "", nil)
-	if status != http.StatusOK {
-		t.Fatalf("handoff = %d: %s", status, body)
+	return newPushEnvWithHandoff(t, handoff, tokenSeed{label: "dashboard", workspace: "acme"})
+}
+
+func getPairingHandoff(t *testing.T, env *pushEnv, path string, wantStatus int) []byte {
+	t.Helper()
+	status, body := doPush(t, http.MethodGet, env.srv.URL+path, "", nil)
+	if status != wantStatus {
+		t.Fatalf("GET %s = %d: %s", path, status, body)
 	}
-	page := string(body)
-	for _, want := range []string{`href="manifest.webmanifest"`, `src="/pair-handoff.js"`, "ABCD-EFGH"} {
-		if !strings.Contains(page, want) {
-			t.Fatalf("handoff page does not contain %q", want)
+	return body
+}
+
+func assertContainsAll(t *testing.T, body string, values ...string) {
+	t.Helper()
+	for _, want := range values {
+		if !strings.Contains(body, want) {
+			t.Fatalf("response does not contain %q", want)
 		}
 	}
+}
 
-	status, body = doPush(t, http.MethodGet, env.srv.URL+"/pair/ABCD-EFGH/manifest.webmanifest", "", nil)
-	if status != http.StatusOK {
-		t.Fatalf("manifest = %d: %s", status, body)
-	}
+func TestPairingHandoffPage(t *testing.T) {
+	env := newPairingHandoffEnv(t)
+	page := string(getPairingHandoff(t, env, "/pair/ABCD-EFGH/", http.StatusOK))
+	assertContainsAll(t, page, `href="manifest.webmanifest"`, `src="/pair-handoff.js"`, "ABCD-EFGH")
+}
+
+func TestPairingHandoffManifest(t *testing.T) {
+	env := newPairingHandoffEnv(t)
+	body := getPairingHandoff(t, env, "/pair/ABCD-EFGH/manifest.webmanifest", http.StatusOK)
 	var manifest struct {
 		ID       string `json:"id"`
 		StartURL string `json:"start_url"`
@@ -164,14 +179,21 @@ func TestPairingHandoffPageAndManifest(t *testing.T) {
 	if err := json.Unmarshal(body, &manifest); err != nil {
 		t.Fatal(err)
 	}
-	if manifest.ID != "/" || manifest.Scope != "/" || manifest.StartURL != "/pair/ABCD-EFGH/" {
-		t.Fatalf("manifest identity = %+v", manifest)
+	fields := []struct{ name, got, want string }{
+		{name: "id", got: manifest.ID, want: "/"},
+		{name: "scope", got: manifest.Scope, want: "/"},
+		{name: "start_url", got: manifest.StartURL, want: "/pair/ABCD-EFGH/"},
 	}
+	for _, field := range fields {
+		if field.got != field.want {
+			t.Errorf("manifest %s = %q, want %q", field.name, field.got, field.want)
+		}
+	}
+}
 
-	status, _ = doPush(t, http.MethodGet, env.srv.URL+"/pair/not-a-code/", "", nil)
-	if status != http.StatusNotFound {
-		t.Fatalf("invalid handoff = %d, want 404", status)
-	}
+func TestPairingHandoffRejectsInvalidCode(t *testing.T) {
+	env := newPairingHandoffEnv(t)
+	getPairingHandoff(t, env, "/pair/not-a-code/", http.StatusNotFound)
 }
 
 func TestPushInfoReportsPairingAvailability(t *testing.T) {
