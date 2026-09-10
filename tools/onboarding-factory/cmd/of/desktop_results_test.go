@@ -563,3 +563,64 @@ func writeJSONFixture(t *testing.T, path string, value any) {
 	}
 	write(t, path, string(b)+"\n")
 }
+
+// makeFrontendVerdict turns a fixture cell's evidence reference into the shared
+// front-end file, which is what marks a verdict as a claim about what Claude
+// Desktop SHOWS rather than about the driver, the harness or a recording.
+func makeFrontendVerdict(t *testing.T, fixture desktopFixture, scenario string) string {
+	t.Helper()
+	cellDir := fixture.cellDirs[scenario]
+	evidencePath := filepath.Join(cellDir, "desktop-evidence", "frontend-gaps.md")
+	write(t, evidencePath, "Measured against Claude Desktop 9.9.9.\n")
+	ref := filepath.ToSlash(strings.TrimPrefix(evidencePath, fixture.root+string(filepath.Separator)))
+	path := filepath.Join(cellDir, desktopResultsFile)
+	mutateFirstResult(t, path, func(r map[string]any) { r["evidence_refs"] = []any{ref} })
+	return path
+}
+
+// TestValidateDesktopMeasuredVersionMutations is committed mutation evidence
+// for the front-end freshness rule.
+//
+// The rule has no state in which it ever ran red before it existed, so what
+// proves it works is breaking the thing it protects. A front-end verdict says
+// what the app SHOWS; Claude Desktop ships new builds on its own schedule; and
+// the desktopdriver package refuses every build but its pinned one. Without the
+// build recorded as a comparable field, a release turned six committed verdicts
+// stale in silence while `of validate` went on printing OK.
+func TestValidateDesktopMeasuredVersionMutations(t *testing.T) {
+	t.Run("front-end verdict without the build", func(t *testing.T) {
+		fixture := desktopResultsRepo(t, false)
+		makeFrontendVerdict(t, fixture, "not-runnable")
+		requireDesktopFinding(t, fixture.root, "not-runnable", "measured_desktop_version")
+	})
+	t.Run("front-end verdict with a blank build", func(t *testing.T) {
+		fixture := desktopResultsRepo(t, false)
+		path := makeFrontendVerdict(t, fixture, "unobservable")
+		mutateFirstResult(t, path, func(r map[string]any) { r["measured_desktop_version"] = "   " })
+		requireDesktopFinding(t, fixture.root, "unobservable", "measured_desktop_version")
+	})
+	t.Run("front-end verdict naming its build is accepted", func(t *testing.T) {
+		fixture := desktopResultsRepo(t, false)
+		path := makeFrontendVerdict(t, fixture, "not-runnable")
+		mutateFirstResult(t, path, func(r map[string]any) { r["measured_desktop_version"] = "9.9.9" })
+		if code, _, stderr := runOf("validate", "--repo-root", fixture.root); code != exitOK {
+			t.Fatalf("a front-end verdict naming its build must be valid: exit=%d stderr:\n%s", code, stderr)
+		}
+	})
+	t.Run("census verdict may not carry a build", func(t *testing.T) {
+		// A grammar gap is not a measurement. Demanding a build here would ask
+		// for a re-measurement on every pin bump for a cell nothing measured.
+		fixture := desktopResultsRepo(t, false)
+		path := filepath.Join(fixture.cellDirs["not-runnable"], desktopResultsFile)
+		mutateFirstResult(t, path, func(r map[string]any) { r["measured_desktop_version"] = "9.9.9" })
+		requireDesktopFinding(t, fixture.root, "not-runnable", "measured_desktop_version")
+	})
+	t.Run("observed result may not carry a build", func(t *testing.T) {
+		// The recording's own desktop-environment.json already carries it, and
+		// two copies of one fact are free to disagree.
+		fixture := desktopResultsRepo(t, false)
+		path := filepath.Join(fixture.cellDirs["observed-pass"], desktopResultsFile)
+		mutateFirstResult(t, path, func(r map[string]any) { r["measured_desktop_version"] = "9.9.9" })
+		requireDesktopFinding(t, fixture.root, "observed-pass", "measured_desktop_version")
+	})
+}

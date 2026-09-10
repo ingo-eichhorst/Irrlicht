@@ -122,18 +122,19 @@ var desktopElicits = map[string][]string{
 //     registry and this driver's ownership bookkeeping disagreeing about what
 //     is alive, and no measured control does it through the app.
 //
-// slash-command-step is the exception, and it is named for what it is. This
-// entry used to read "slash-command-entry — nothing measured shows the Desktop
-// composer EXECUTING a slash command rather than storing it as prompt text".
-// That was MEASURED AND DISPROVED on 2026-09-07 against 1.46388.4: typing "/"
-// opens a filtering popup of AXMenuItem elements inside the web area, Return
-// accepts one, and Send runs it — the app rendered the /context report and
-// headed the message "You said: /context". Two trees and the full sequence are
-// at replaydata/agents/claudecode/desktop-evidence/slash-commands.md.
+// A sixth entry, "slash-command-step", used to sit here and is gone. It read
+// "nothing measured shows the Desktop composer EXECUTING a slash command rather
+// than storing it as prompt text", and it was MEASURED AND DISPROVED on
+// 2026-09-07 against 1.46388.4: typing "/" opens a filtering popup of AXMenuItem
+// elements inside the web area, Return accepts one, and Send runs it — the app
+// rendered the /context report and headed the message "You said: /context". Two
+// trees and the full sequence are at
+// replaydata/agents/claudecode/desktop-evidence/slash-commands.md, and StepSlash
+// now drives them.
 //
-// The control exists. This driver has no step that drives it, which is why the
-// step is still refused — but a reader must not take the refusal as evidence
-// that Claude Desktop cannot run slash commands. It can.
+// It is recorded here because a refusal that turns out to be wrong is the one
+// entry a reader must not find silently deleted: the earlier wording is still
+// quoted in cells whose verdict cited it.
 var desktopMissingControls = map[string]string{
 	"session":       "session-list-row",
 	"restart":       "session-restart",

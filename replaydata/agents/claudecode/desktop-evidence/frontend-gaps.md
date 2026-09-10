@@ -10,6 +10,16 @@ Measured against Claude Desktop 1.46388.4 with bundled Claude Code 2.1.260, on
 2026-09-06 and 2026-09-07. Every figure below comes from a tree the driver
 saved at the moment of refusal.
 
+Every verdict that cites this file records that build in its own
+`measured_desktop_version`, and `of validate` refuses one that does not. These
+are the only Desktop verdicts that can expire without anybody touching the
+repository: they say what the app SHOWS, and Claude Desktop ships new builds on
+its own schedule. The driver refuses every build but the one its catalog is
+pinned to, so
+`desktopdriver.TestFrontendVerdictsNameTheSupportedDesktopVersion` fails the
+moment that pin and these verdicts disagree — moving the pin means re-measuring
+each claim below, and the failure names them.
+
 ## There is no Stop control, at any point in a turn — 2-20
 
 The catalog believed Desktop swapped the composer's Send button for a Stop
