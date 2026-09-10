@@ -43,6 +43,39 @@ type frontendVerdict struct {
 	measured string
 }
 
+// frontendVerdictsInCell returns one cell's front-end verdicts.
+//
+// A cell with no result file yields none and no error — cells predate the
+// Desktop contract. Anything else that stops the read IS an error: a file that
+// exists and cannot be parsed must never read as a cell with nothing to say.
+func frontendVerdictsInCell(cellDir, cell string) ([]frontendVerdict, error) {
+	path := filepath.Join(cellDir, desktopresults.FileName)
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return nil, nil
+	} else if err != nil {
+		return nil, fmt.Errorf("stat %s: %w", path, err)
+	}
+	doc, err := desktopresults.Load(path)
+	if err != nil {
+		return nil, fmt.Errorf("load %s: %w", path, err)
+	}
+	verdicts := make([]frontendVerdict, 0, len(doc.Results))
+	for _, result := range doc.Results {
+		if matrix.ExecutionProfile(result.ExecutionProfile) != matrix.ProfileDesktopLocal {
+			continue
+		}
+		if !result.CitesFrontendGaps() {
+			continue
+		}
+		verdicts = append(verdicts, frontendVerdict{
+			cell:     cell,
+			scenario: result.ScenarioID,
+			measured: result.MeasuredDesktopVersion,
+		})
+	}
+	return verdicts, nil
+}
+
 // loadFrontendVerdicts reads every committed cell and returns the desktop-local
 // results that rest on a front-end measurement.
 //
@@ -59,26 +92,11 @@ func loadFrontendVerdicts(scenariosDir string) ([]frontendVerdict, error) {
 		if !entry.IsDir() {
 			continue
 		}
-		path := filepath.Join(scenariosDir, entry.Name(), desktopresults.FileName)
-		if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
-			continue
-		} else if statErr != nil {
-			return nil, fmt.Errorf("stat %s: %w", path, statErr)
+		found, err := frontendVerdictsInCell(filepath.Join(scenariosDir, entry.Name()), entry.Name())
+		if err != nil {
+			return nil, err
 		}
-		doc, loadErr := desktopresults.Load(path)
-		if loadErr != nil {
-			return nil, fmt.Errorf("load %s: %w", path, loadErr)
-		}
-		for _, result := range doc.Results {
-			if matrix.ExecutionProfile(result.ExecutionProfile) != matrix.ProfileDesktopLocal || !result.CitesFrontendGaps() {
-				continue
-			}
-			verdicts = append(verdicts, frontendVerdict{
-				cell:     entry.Name(),
-				scenario: result.ScenarioID,
-				measured: result.MeasuredDesktopVersion,
-			})
-		}
+		verdicts = append(verdicts, found...)
 	}
 	sort.Slice(verdicts, func(i, j int) bool { return verdicts[i].cell < verdicts[j].cell })
 	return verdicts, nil
