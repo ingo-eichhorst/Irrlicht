@@ -16,6 +16,7 @@ func TestResolvePairingHandoffAcceptsOnlyHTTPSOrigin(t *testing.T) {
 		raw  string
 	}{
 		{name: "https origin", raw: "https://relay.example.com"},
+		{name: "case-insensitive scheme", raw: "HTTPS://relay.example.com"},
 		{name: "trim and slash", raw: "  https://relay.example.com/  "},
 	}
 	for _, tt := range tests {

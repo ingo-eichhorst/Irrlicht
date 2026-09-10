@@ -43,7 +43,8 @@ func resolvePairingHandoff(raw string) pairingHandoff {
 		return invalidPairingHandoff()
 	}
 	canonical := "https://" + u.Host
-	if raw != canonical && raw != canonical+"/" {
+	normalized := "https" + raw[len(u.Scheme):]
+	if normalized != canonical && normalized != canonical+"/" {
 		return invalidPairingHandoff()
 	}
 	return pairingHandoff{publicURL: canonical}
