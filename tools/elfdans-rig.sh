@@ -6,6 +6,7 @@
 #   tools/elfdans-rig.sh up [--serve]   build + start a relay on 127.0.0.1:7839
 #                                      with auth on, in its own state dir;
 #                                      --serve also publishes it over Tailscale
+#                                      and configures the pairing public URL
 #   tools/elfdans-rig.sh check          run the phone-free assertions (exit 1 on
 #                                      the first failure, with the reason)
 #   tools/elfdans-rig.sh drive <name>   drive one Phase 5 policy scenario through
@@ -29,6 +30,7 @@ DRIVE_STATE="$RIG_DIR/drive-state.json"
 PID_FILE="$RIG_DIR/relay.pid"
 LOG_FILE="$RIG_DIR/relay.log"
 TOKEN_FILE="$RIG_DIR/client-token"
+PUBLIC_URL_FILE="$RIG_DIR/public-url"
 PORT="${ELFDANS_RIG_PORT:-7839}"
 BASE="http://127.0.0.1:$PORT"
 
@@ -57,10 +59,17 @@ relay_env() {
 # `up` and `check`'s restart step use this. Without it, `check` leaves you with
 # a passing report and no running relay, exactly when you are about to move on
 # to the phases that need one.
+relay_command_args() {
+    RELAY_ARGS=(serve --addr "127.0.0.1:$PORT" --auth tokens-file)
+    if [[ -s "$PUBLIC_URL_FILE" ]]; then
+        RELAY_ARGS+=(--public-url "$(cat "$PUBLIC_URL_FILE")")
+    fi
+}
+
 start_relay() {
     port_free_or_die
-    nohup env IRRLICHT_HOME="$STATE_DIR" "$BIN" serve \
-        --addr "127.0.0.1:$PORT" --auth tokens-file >>"$LOG_FILE" 2>&1 &
+    relay_command_args
+    nohup env IRRLICHT_HOME="$STATE_DIR" "$BIN" "${RELAY_ARGS[@]}" >>"$LOG_FILE" 2>&1 &
     local pid=$!
     disown %% 2>/dev/null || true
     echo "$pid" > "$PID_FILE"
@@ -116,11 +125,28 @@ serve_over_tailscale() {
     tailscale serve status || true
 }
 
+tailscale_public_url() {
+    tailscale status --json | python3 -c '
+import json, sys
+name = json.load(sys.stdin).get("Self", {}).get("DNSName", "").rstrip(".")
+if not name:
+    raise SystemExit("tailscale status returned no Self.DNSName")
+print("https://" + name)
+'
+}
+
 # ── up ───────────────────────────────────────────────────────────────
 cmd_up() {
-    local serve=0
+    local serve=0 public_url="${ELFDANS_RIG_PUBLIC_URL:-}"
     [[ "${1:-}" = "--serve" ]] && serve=1
     require_tools go curl
+
+    if [[ "$serve" = "1" ]]; then
+        require_tools tailscale python3
+        if [[ -z "$public_url" ]]; then
+            public_url=$(tailscale_public_url) || die "could not determine the Tailscale HTTPS origin"
+        fi
+    fi
 
     relay_running && die "a rig relay is already running (pid $(cat "$PID_FILE")) — 'down' first"
 
@@ -137,12 +163,17 @@ cmd_up() {
         chmod 600 "$TOKEN_FILE"
     fi
 
+    if [[ -n "$public_url" ]]; then
+        printf '%s\n' "$public_url" > "$PUBLIC_URL_FILE"
+    else
+        rm -f "$PUBLIC_URL_FILE"
+    fi
+
     info "starting relay on $BASE (auth on, state in $STATE_DIR)"
     start_relay
     ok "relay up (pid $(cat "$PID_FILE"))"
 
     if [[ "$serve" = "1" ]]; then
-        require_tools tailscale
         info "publishing over Tailscale"
         serve_over_tailscale
     fi
@@ -151,6 +182,9 @@ cmd_up() {
 
 Client token (Settings → Sources, and what mints pairing codes):
   $(cat "$TOKEN_FILE")
+
+QR pairing origin:
+  $(cat "$PUBLIC_URL_FILE" 2>/dev/null || echo 'not configured — set ELFDANS_RIG_PUBLIC_URL or use up --serve')
 
 Point a daemon at it:
   IRRLICHT_RELAY_TOKEN=$(cat "$TOKEN_FILE") IRRLICHT_RELAY_URL=ws://127.0.0.1:$PORT core/bin/irrlichd
@@ -352,6 +386,7 @@ cmd_status() {
         echo "relay: not running"
     fi
     echo "state: $STATE_DIR"
+    echo "QR:    $(cat "$PUBLIC_URL_FILE" 2>/dev/null || echo 'not configured')"
     [[ -f "$STATE_DIR/push-subscriptions.json" ]] \
         && echo "paired: $(grep -c token_id "$STATE_DIR/push-subscriptions.json" || echo 0) subscription(s)"
     echo "log:   $LOG_FILE"

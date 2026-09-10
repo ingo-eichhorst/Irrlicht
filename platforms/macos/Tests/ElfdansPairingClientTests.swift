@@ -72,6 +72,17 @@ final class ElfdansPairingClientTests: XCTestCase {
             "The relay could not create a pairing code (HTTP 401)."
         )
     }
+
+    func testPairingRequestGateRejectsAnOlderResultAfterSettingsChange() {
+        var gate = ElfdansPairingRequestGate()
+        let oldRequest = gate.begin()
+
+        gate.invalidate()
+
+        XCTAssertFalse(gate.isCurrent(oldRequest))
+        let currentRequest = gate.begin()
+        XCTAssertTrue(gate.isCurrent(currentRequest))
+    }
 }
 
 @MainActor

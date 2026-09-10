@@ -37,6 +37,7 @@ RIG="$DIR/../elfdans-rig.sh"
 need() { command -v "$1" >/dev/null 2>&1 || { echo "FAIL: elfdans-rig-serve_test — $1 not found" >&2; exit 1; }; }
 need sed
 need sleep
+need python3
 [[ -r "$RIG" ]] || { echo "FAIL: cannot read $RIG" >&2; exit 1; }
 
 fails=0
@@ -159,6 +160,51 @@ if grep -q 'tailscale serve --https="\$SERVE_HTTPS_PORT" off' "$RIG"; then
     ok "down turns off the published HTTPS port, not the local one"
 else
     bad "down's teardown does not use SERVE_HTTPS_PORT — it will leave the tailnet publication up"
+fi
+
+# ── TEST 5 — the published origin reaches the relay process ─────────────────
+# Phase 3 needs a relay-generated QR. The rig must pass the Tailscale origin
+# to every relay start, including the restart performed by `check`.
+RELAY_ARGS_SRC="$(sed -n '/^relay_command_args() {/,/^}/p' "$RIG")"
+if [[ -z "$RELAY_ARGS_SRC" ]]; then
+    bad "the rig has no relay_command_args function — --serve cannot configure QR pairing"
+else
+    PUBLIC_URL_FILE="$WORK/public-url"
+    eval "$RELAY_ARGS_SRC"
+    printf '%s\n' 'https://stub.example.ts.net' > "$PUBLIC_URL_FILE"
+    relay_command_args
+    printf '%s\n' "${RELAY_ARGS[@]}" > "$WORK/relay-args"
+    grep -qx -- '--public-url' "$WORK/relay-args" \
+        && grep -qx 'https://stub.example.ts.net' "$WORK/relay-args" \
+        && ok "relay starts carry the persisted public URL" \
+        || bad "relay starts omit the persisted public URL"
+    grep -q 'relay_command_args' "$RIG" \
+        && grep -q '"${RELAY_ARGS\[@\]}"' "$RIG" \
+        && ok "start_relay uses the checked argument builder" \
+        || bad "start_relay bypasses the checked argument builder"
+fi
+
+# The Tailscale DNS name is stable before Serve is configured. `up --serve`
+# derives the HTTPS origin from that field and persists it for `check` restarts.
+TAILSCALE_URL_SRC="$(sed -n '/^tailscale_public_url() {/,/^}/p' "$RIG")"
+if [[ -z "$TAILSCALE_URL_SRC" ]]; then
+    bad "the rig has no Tailscale public-URL resolver"
+else
+    cat > "$WORK/tailscale" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' '{"Self":{"DNSName":"stub.example.ts.net."}}'
+EOF
+    chmod +x "$WORK/tailscale"
+    eval "$TAILSCALE_URL_SRC"
+    if [[ "$(tailscale_public_url)" = "https://stub.example.ts.net" ]]; then
+        ok "--serve derives the relay's HTTPS origin from Tailscale status"
+    else
+        bad "--serve did not derive the expected Tailscale HTTPS origin"
+    fi
+    grep -q 'public_url=$(tailscale_public_url)' "$RIG" \
+        && grep -q '"$public_url" > "$PUBLIC_URL_FILE"' "$RIG" \
+        && ok "up persists the derived origin before relay restarts" \
+        || bad "up does not persist the derived origin"
 fi
 
 if (( fails > 0 )); then

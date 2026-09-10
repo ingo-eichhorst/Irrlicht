@@ -1,5 +1,22 @@
 import SwiftUI
 
+struct ElfdansPairingRequestGate {
+    private var current = UUID()
+
+    mutating func begin() -> UUID {
+        current = UUID()
+        return current
+    }
+
+    mutating func invalidate() {
+        current = UUID()
+    }
+
+    func isCurrent(_ request: UUID) -> Bool {
+        request == current
+    }
+}
+
 struct ElfdansPairingView: View {
     let relayURL: String
     let relayToken: String
@@ -12,6 +29,8 @@ struct ElfdansPairingView: View {
     }
 
     @State private var phase: Phase = .idle
+    @State private var requestGate = ElfdansPairingRequestGate()
+    @State private var mintTask: Task<Void, Never>?
 
     var body: some View {
         VStack(alignment: .leading, spacing: IrrSpacing.sp2) {
@@ -47,8 +66,9 @@ struct ElfdansPairingView: View {
                     .foregroundColor(.red)
             }
         }
-        .onChange(of: relayURL) { _ in phase = .idle }
-        .onChange(of: relayToken) { _ in phase = .idle }
+        .onChange(of: relayURL) { _ in reset() }
+        .onChange(of: relayToken) { _ in reset() }
+        .onDisappear { reset() }
     }
 
     private var buttonTitle: String {
@@ -59,14 +79,33 @@ struct ElfdansPairingView: View {
     }
 
     private func mint() {
+        mintTask?.cancel()
+        let request = requestGate.begin()
+        let requestedRelayURL = relayURL
+        let requestedRelayToken = relayToken
         phase = .loading
-        Task {
+        mintTask = Task {
             do {
-                phase = .ready(try await ElfdansPairingClient.mint(relayURL: relayURL, token: relayToken))
+                let pairing = try await ElfdansPairingClient.mint(
+                    relayURL: requestedRelayURL,
+                    token: requestedRelayToken
+                )
+                guard requestGate.isCurrent(request) else { return }
+                phase = .ready(pairing)
+                mintTask = nil
             } catch {
+                guard requestGate.isCurrent(request) else { return }
                 phase = .failed(error.localizedDescription)
+                mintTask = nil
             }
         }
+    }
+
+    private func reset() {
+        requestGate.invalidate()
+        mintTask?.cancel()
+        mintTask = nil
+        phase = .idle
     }
 }
 

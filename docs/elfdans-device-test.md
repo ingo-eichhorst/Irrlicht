@@ -23,6 +23,10 @@ tools/elfdans-rig.sh check          # every assertion below that needs no phone
 tools/elfdans-rig.sh down [--wipe]
 ```
 
+`up --serve` reads the tailnet DNS name, configures Tailscale Serve, and starts
+the relay with the matching `--public-url`. Set `ELFDANS_RIG_PUBLIC_URL` when
+you use a different HTTPS proxy.
+
 State lives in `.build/elfdans-rig` — never your real `~/.local/share/irrlicht` — so nothing here
 can touch a production relay's tokens or a paired phone. `up` refuses rather than starting a
 second relay on a busy port, because `7839` is the production default and the thing already
