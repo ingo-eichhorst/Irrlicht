@@ -294,14 +294,26 @@ the network already gates access.
 
 **It also needs a stable HTTPS origin.** Browser push subscriptions and the installed web app are both
 bound to their origin (a `*.ts.net` name or your own domain, either is fine). Renaming it re-pairs every
-phone, so pick the name once.
+phone, so pick the name once. Pass that origin to the relay to enable QR pairing:
+
+```bash
+irrlichtrelay serve --auth tokens-file --public-url https://relay.example.com
+```
+
+`--public-url` accepts one HTTPS origin without a path. It does not change the listen address or send
+the bearer token to that origin. It tells the relay which phone-reachable address to put in the QR.
+If the flag is absent or invalid, the relay keeps manual code pairing and explains why no QR is shown.
 
 ### Pairing, from the operator's side
 
-Nothing to configure. In the dashboard the relay serves, **Settings → Irrlicht Elfdans** mints a one-time code; the
-phone opens the same URL, adds it to the home screen, and types the code inside the installed app (iOS
-keeps browser-tab storage and installed-app storage separate, which is why the last step happens there).
-The code is single-use, expires in 10 minutes, and repeated wrong guesses are rate-limited.
+In the dashboard the relay serves, or in the macOS app's relay settings, press **Pair a phone…**. With
+`--public-url` configured, the control shows a QR and the same selectable URL. Scan it, add the page to
+the Home Screen, open Elfdans, and press **Pair this phone**. The installed app receives the code from
+its start URL, but the final press stays manual because iOS permits the notification prompt only after
+direct user interaction. Without `--public-url`, type the displayed code in the installed app.
+
+The code is single-use, expires in 10 minutes, and repeated wrong guesses are rate-limited. The QR
+carries this code only. It never carries the client token or the device token.
 
 Redeeming a code issues an ordinary bearer token for that phone, so it shows up in `token list` and
 `token revoke <id>` is the whole un-pairing story — the relay drops the phone's delivery address within

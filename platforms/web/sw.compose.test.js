@@ -785,7 +785,7 @@ describe('notificationclick', () => {
     sw.listeners.notificationclick[0](ev)
     await ev.chain
     expect(ev.notification.close).toHaveBeenCalled()
-    expect(sw.clients.openWindow).toHaveBeenCalledWith('./')
+    expect(sw.clients.openWindow).toHaveBeenCalledWith('/')
   })
 
   test('focuses an existing window instead of opening a second one', async () => {
@@ -848,7 +848,7 @@ describe('the deep link a tap carries (R6)', () => {
     const ev = clickEvent({ session_id: 'proc 12/34' })
     sw.listeners.notificationclick[0](ev)
     await ev.chain
-    expect(sw.clients.openWindow).toHaveBeenCalledWith('./#elfdans-session=proc%2012%2F34')
+    expect(sw.clients.openWindow).toHaveBeenCalledWith('/#elfdans-session=proc%2012%2F34')
   })
 
   test('a window that refuses the message is still focused', async () => {
@@ -871,6 +871,6 @@ describe('the deep link a tap carries (R6)', () => {
     const ev = clickEvent(null)
     sw.listeners.notificationclick[0](ev)
     await ev.chain
-    expect(sw.clients.openWindow).toHaveBeenCalledWith('./')
+    expect(sw.clients.openWindow).toHaveBeenCalledWith('/')
   })
 })

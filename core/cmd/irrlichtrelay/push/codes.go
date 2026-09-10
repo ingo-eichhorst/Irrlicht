@@ -126,6 +126,24 @@ func normalizeCode(code string) string {
 	return strings.ReplaceAll(code, " ", "")
 }
 
+// IsPresentedCode reports whether code has the exact XXXX-XXXX form emitted
+// by MintCode. HTTP handoff routes use it before reflecting a path value into
+// an install manifest or page.
+func IsPresentedCode(code string) bool {
+	if len(code) != codeLen+1 || code[4] != '-' {
+		return false
+	}
+	for i, r := range code {
+		if i == 4 {
+			continue
+		}
+		if !strings.ContainsRune(codeAlphabet, r) {
+			return false
+		}
+	}
+	return true
+}
+
 // sweepExpiredLocked drops codes at or past their expiry. Caller holds mu.
 func (s *Service) sweepExpiredLocked(now time.Time) {
 	kept := s.codes[:0]

@@ -122,6 +122,7 @@ type serveConfig struct {
 	tlsCert         string
 	tlsKey          string
 	auth            string
+	publicURL       string
 	originAllowlist string
 	dataDirFlag     string
 	vapidSubject    string
@@ -139,6 +140,7 @@ func parseServeFlags(args []string) serveConfig {
 	tlsCert := fs.String("tls-cert", "", "PEM certificate file for native TLS (wss://); pair with --tls-key")
 	tlsKey := fs.String("tls-key", "", "PEM private-key file for native TLS (wss://); pair with --tls-cert")
 	auth := fs.String("auth", "off", "authentication: 'off' (trusted LAN, accept any hello) or 'tokens-file[:PATH]' (verify a hashed bearer token; PATH defaults to <data-dir>/tokens.json)")
+	publicURL := fs.String("public-url", "", "phone-reachable HTTPS origin used for Elfdans QR pairing (for example https://relay.example.com)")
 	originAllowlist := fs.String("origin-allowlist", "", "comma-separated Origin hosts allowed for browser WS clients (empty = allow all, loopback-safe)")
 	dataDirFlag := fs.String("data-dir", "", "state directory for the tokens file (default: $IRRLICHT_HOME or ~/.local/share/irrlicht)")
 	vapidSubject := fs.String("vapid-subject", os.Getenv(envVAPIDSubject), "contact `uri` signed into every push JWT as the VAPID sub claim: mailto: or https: (RFC 8292 §2.1); empty uses "+defaultVAPIDSubject)
@@ -155,6 +157,7 @@ func parseServeFlags(args []string) serveConfig {
 		tlsCert:         *tlsCert,
 		tlsKey:          *tlsKey,
 		auth:            *auth,
+		publicURL:       *publicURL,
 		originAllowlist: *originAllowlist,
 		dataDirFlag:     *dataDirFlag,
 		vapidSubject:    *vapidSubject,
@@ -223,6 +226,12 @@ func warnIfExposedWithoutAuth(addr string, store *authStore) {
 // 503 placeholder when it can't be found). notifier is the dispatcher the
 // test-notification endpoint sends through, non-nil exactly when pushSvc is.
 func buildMux(h *hub, store *authStore, pushSvc *push.Service, notifier testNotifier) *http.ServeMux {
+	return buildMuxWithPairing(h, store, pushSvc, notifier, unavailablePairingHandoff(missingPublicURLReason))
+}
+
+// buildMuxWithPairing adds the configured phone handoff to the ordinary relay
+// mux. buildMux keeps existing construction sites on the manual-pairing path.
+func buildMuxWithPairing(h *hub, store *authStore, pushSvc *push.Service, notifier testNotifier, handoff pairingHandoff) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/sessions/stream", h.ServeWS)
 	// The data endpoints carry the same session content as the WS stream, so
@@ -232,7 +241,8 @@ func buildMux(h *hub, store *authStore, pushSvc *push.Service, notifier testNoti
 	mux.HandleFunc("GET /api/v1/sessions", requireToken(store, handleSessions(h)))
 	mux.HandleFunc("GET /api/v1/agents", requireToken(store, handleAgents(h)))
 	mux.HandleFunc("GET /api/v1/version", handleVersion(Version))
-	registerPushRoutes(mux, store, pushSvc, notifier)
+	registerPushRoutes(mux, store, pushSvc, notifier, handoff)
+	registerPairingHandoffRoutes(mux, handoff)
 
 	if uiDir := resolveUIDir(); uiDir != "" {
 		log.Printf("serving dashboard from %s", uiDir)
@@ -326,6 +336,10 @@ func runServe(args []string) {
 	store := buildAuthStore(cfg.auth, ddir)
 	warnIfExposedWithoutAuth(cfg.addr, store)
 	pushSvc := buildPushService(store, ddir)
+	pairing := resolvePairingHandoff(cfg.publicURL)
+	if cfg.publicURL != "" && pairing.publicURL == "" {
+		log.Printf("WARNING: %s", pairing.unavailableReason)
+	}
 
 	// Serve web assets with correct Content-Type regardless of the host OS
 	// mime database (matches irrlichd).
@@ -343,7 +357,7 @@ func runServe(args []string) {
 	if pushSvc != nil {
 		obs = newPushObserver(pushSvc, store, newRelayPushSender(pushSvc, vapidSubject), notify.Config{}, nil)
 	}
-	mux := buildMux(h, store, pushSvc, obs)
+	mux := buildMuxWithPairing(h, store, pushSvc, obs, pairing)
 
 	stop := make(chan struct{})
 	if store != nil {

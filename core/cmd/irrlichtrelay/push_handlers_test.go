@@ -41,6 +41,10 @@ type tokenSeed struct {
 }
 
 func newPushEnv(t *testing.T, seeds ...tokenSeed) *pushEnv {
+	return newPushEnvWithHandoff(t, resolvePairingHandoff(""), seeds...)
+}
+
+func newPushEnvWithHandoff(t *testing.T, handoff pairingHandoff, seeds ...tokenSeed) *pushEnv {
 	t.Helper()
 	ddir := t.TempDir()
 	tokensPath := filepath.Join(ddir, tokensFilename)
@@ -63,7 +67,7 @@ func newPushEnv(t *testing.T, seeds ...tokenSeed) *pushEnv {
 	// nothing in this file asks for a delivery, and one that reached the
 	// network would be the loudest possible way to find out.
 	obs := newPushObserver(svc, store, &fakeSender{}, notify.Config{}, nil)
-	srv := httptest.NewServer(buildMux(h, store, svc, obs))
+	srv := httptest.NewServer(buildMuxWithPairing(h, store, svc, obs, handoff))
 	t.Cleanup(srv.Close)
 	return &pushEnv{srv: srv, store: store, svc: svc, ddir: ddir, tokensPath: tokensPath, tokens: tokens}
 }

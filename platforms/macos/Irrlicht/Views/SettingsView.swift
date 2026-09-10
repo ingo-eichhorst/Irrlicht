@@ -540,6 +540,13 @@ struct SettingsView: View {
                                     Text("Publish and subscribe must use tokens from the same account to see each other's sessions.")
                                         .font(.caption)
                                         .foregroundColor(.secondary)
+
+                                    Divider()
+
+                                    ElfdansPairingView(
+                                        relayURL: relayURLDraft.trimmingCharacters(in: .whitespacesAndNewlines),
+                                        relayToken: relayTokenDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                                    )
                                 }
                             }
                             .onAppear {

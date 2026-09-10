@@ -205,7 +205,7 @@ func TestRegisterPushRoutesRefusesServiceWithoutStore(t *testing.T) {
 			t.Fatal("registerPushRoutes accepted a push service without an auth store")
 		}
 	}()
-	registerPushRoutes(http.NewServeMux(), nil, svc, nil)
+	registerPushRoutes(http.NewServeMux(), nil, svc, nil, resolvePairingHandoff(""))
 }
 
 func TestRegisterPushRoutesRefusesServiceWithoutDispatcher(t *testing.T) {
@@ -228,7 +228,7 @@ func TestRegisterPushRoutesRefusesServiceWithoutDispatcher(t *testing.T) {
 			t.Fatal("registerPushRoutes accepted a push service with no dispatcher to send test notifications through")
 		}
 	}()
-	registerPushRoutes(http.NewServeMux(), store, svc, nil)
+	registerPushRoutes(http.NewServeMux(), store, svc, nil, resolvePairingHandoff(""))
 }
 
 func TestRegisterPushRoutesRefusesATypedNilDispatcher(t *testing.T) {
@@ -252,5 +252,5 @@ func TestRegisterPushRoutesRefusesATypedNilDispatcher(t *testing.T) {
 			t.Fatal("registerPushRoutes accepted a typed-nil dispatcher — it would nil-deref at request time instead of refusing at wiring time")
 		}
 	}()
-	registerPushRoutes(http.NewServeMux(), store, svc, (*pushObserver)(nil))
+	registerPushRoutes(http.NewServeMux(), store, svc, (*pushObserver)(nil), resolvePairingHandoff(""))
 }

@@ -5,7 +5,7 @@ import { initElfdans, ELFDANS_MESSAGES } from './elfdans.js'
 // R6, §8.5). Two routes, because the app may be open or cold:
 //   · open   — the worker postMessages the focused client, which arrives on
 //              navigator.serviceWorker's `message` event;
-//   · cold   — the worker opens `./#elfdans-session=<id>`, and initElfdans reads
+//   · cold   — the worker opens `/#elfdans-session=<id>`, and initElfdans reads
 //              the fragment as it wires up.
 //
 // This is a file of its own rather than a describe block in elfdans.test.js

@@ -74,7 +74,7 @@ flowchart LR
     end
     pushsvc["Apple / Google<br/>Web Push service"]
     phone["Irrlicht PWA on phone<br/>(new)"]
-    desktop["macOS app + web dashboard<br/>(unchanged)"]
+    desktop["macOS app + web dashboard<br/>relay clients + QR pairing"]
 
     daemon -- "outbound WS, existing link" --> relay
     relay -- "HTTPS POST, encrypted envelope" --> pushsvc
@@ -100,7 +100,7 @@ Every arrow into the relay is dialed **outbound** by a roaming endpoint (R5): th
 |---|---|---|
 | Push engine lives in the **relay**, daemon untouched | The relay already receives every `PushMessage` under an explicitly configured flow and caches prev/next state per session | ADR-1 |
 | **PWA + Web Push**, no native apps | Only mobile path with zero project infrastructure and no distributable secrets | ADR-2 |
-| Pairing completes **inside the installed app** with a one-time code | iOS partitions Safari-tab storage from installed-app storage | ADR-3 |
+| A QR handoff carries a one-time code into the installed app | iOS partitions Safari-tab storage from installed-app storage; redemption still needs a user action | ADR-3, ADR-8 |
 | **Zero wire-protocol changes** | Subscription registry, pairing, VAPID are relay-local; daemon frames unchanged | ADR-4 |
 | Transition semantics live in one **pure package** (`core/domain/notify`) | The one piece that must exist server-side; property-testable; reusable if a daemon-side sink is ever demanded | ADR-5 |
 | Relay composes payloads (readable to the relay) | The relay already holds full session state in its cache; the trust boundary is the user's own infra | ADR-6 |
@@ -140,7 +140,7 @@ flowchart TB
 | `core/pkg/webpush` | Encrypt payload to a subscription, sign VAPID JWT, POST with `TTL`/`Topic`/`Urgency` headers | `pkg/` leaf-layer rules apply (no adapters/application imports). Hand-written on the stdlib — nothing vendored, no new module dependency, which is what keeps it extractable. |
 | Relay: observer | Detect per-session state edges off the cache updates it already performs; seed silently on first sight/snapshot | Feeds `notify` engine; also feeds `daemon_status` disconnects (watchdog) |
 | Relay: dispatcher | Fan decided notifications out to every subscription in the same **workspace**; prune on `410`; record last-delivery status | Workspace scoping mirrors existing isolation |
-| Relay: pairing/REST | `GET /api/v1/push/info` (unauthenticated — §5.2's feature detection depends on it) · `POST /api/v1/push/pairings` (authed; mints one-time code) · `POST /api/v1/push/pair` (code → device token + VAPID pub) · `POST/DELETE/GET /api/v1/push/subscriptions` (device-token-authed; the GET is §8.3's health panel) · `POST /api/v1/push/test` (device-token-authed; §8.3's diagnostic — one push down the production path, answered synchronously) | Device tokens are ordinary `TokenRecord`s — `token list`/`revoke` and 4401 semantics apply unchanged |
+| Relay: pairing/REST | `GET /api/v1/push/info` (unauthenticated — §5.2's feature detection depends on it) · `POST /api/v1/push/pairings` (authed; mints one-time code and optional QR handoff) · `GET /pair/<code>/` (install handoff) · `POST /api/v1/push/pair` (code → device token + VAPID pub) · `POST/DELETE/GET /api/v1/push/subscriptions` (device-token-authed; the GET is §8.3's health panel) · `POST /api/v1/push/test` (device-token-authed; §8.3's diagnostic — one push down the production path, answered synchronously) | Device tokens are ordinary `TokenRecord`s — `token list`/`revoke` and 4401 semantics apply unchanged. The QR contains the short-lived public handoff URL. It never contains the bearer token. |
 | `platforms/web` PWA | Manifest, service worker (push → ledger fold → `showNotification` → badge; `notificationclick` → deep link; `message` → live fold + ledger reads), pairing flow (which also configures the live view, ADR-9), health panel, unpair, and the §8.3 test-notification button (slice 9), whose outcome it renders in place. **No** notification-settings UI: policy is server-side (§8.4) | No build step; plain files. Ships via `build-release.sh`'s single `WEB_FILES` list, kept complete by a tripwire that derives the required set (§8.7). The worker is a classic script and imports nothing, so the four message names it exchanges with `elfdans.js` are two copies — pinned together by `sw-contract.test.js` |
 
 **Source location.** All Go code stays in the existing `core` module — no new module. `notify` (under `domain/`) and `webpush` (under `pkg/`) fall under `core/architecture_test.go`'s layering rules automatically. The relay's push **state** lands in a `core/cmd/irrlichtrelay/push` subpackage (VAPID identity, pairing codes, subscription registry, roster, health); the observer, dispatcher and HTTP surface stayed in `package main` beside the hub they wire into. Both are composition-root code, free to import anything, and kept deliberately outside the daemon's hexagon: `core/adapters/outbound/relay` is the *daemon-side* forwarder and stays untouched. PWA assets join `platforms/web` — no third web tree (the #1225 dependency-drift lesson), and no build step to introduce.
@@ -149,7 +149,7 @@ flowchart TB
 
 ### 5.2 The additivity contract — what explicitly does not change
 
-`irrlichd` (all of it) · the macOS app · the relay wire protocol · the consent catalog · every default. **No existing surface starts relaying to an external server:** daemon, dashboard and macOS app connect to a relay only when the user configures one — exactly as today; with no relay configured there is zero relay traffic and the feature is simply absent.
+`irrlichd` (all of it) · the relay wire protocol · the consent catalog · every default. The macOS relay settings add a pairing control. **No existing surface starts relaying to an external server:** daemon, dashboard and macOS app connect to a relay only when the user configures one — exactly as today; with no relay configured there is zero relay traffic and the feature is simply absent.
 
 The one shared surface is `platforms/web` (served by the localhost daemon *and* by relays), so additivity there is a contract, not an intention:
 
@@ -175,10 +175,11 @@ sequenceDiagram
     participant OS as Phone OS
 
     D->>R: POST /push/pairings (client-token auth)
-    R-->>D: one-time code (10 min TTL, single use)
-    D-->>D: show the 8-char code as text (10 min countdown)
-    S->>R: open the relay URL, typed by hand
+    R-->>D: one-time code + public QR URL (10 min TTL, single use)
+    D-->>D: show QR and 8-char fallback code
+    S->>R: scan QR and open code-specific install page
     S-->>S: Add to Home Screen
+    A-->>A: carry code to root pairing UI
     A->>OS: request notification permission (inside the click)
     OS-->>A: granted
     A->>R: POST /push/pair {code}
@@ -188,8 +189,10 @@ sequenceDiagram
     A->>R: POST /push/subscriptions {subscription}
 ```
 
-The code crosses the Safari-tab → installed-app storage boundary **by hand** — nothing carries it in a
-URL (ADR-8) — and pairing *completes* in the installed app (ADR-3).
+The install manifest uses a stable root app identity and a code-specific start URL. The installed
+app carries the code to the root pairing UI. It does not redeem the code until the user presses the
+pair button. This keeps notification permission inside direct user interaction. The short-lived URL
+contains only the one-time code. Manual entry remains available when `--public-url` is not set.
 
 Two orderings here are load-bearing and were both settled by the implementation rather than by this
 diagram. Permission is asked **first**, inside the click's transient user activation: a network
@@ -596,8 +599,8 @@ each seam and watching it redden. Two traps are worth carrying to the next compo
 
 **ADR-3 — Pairing completes inside the installed app via one-time code.**
 *Context:* iOS partitions Safari-tab storage from installed-app storage; a token saved pre-install can vanish post-install; long-lived tokens in URLs leak into history.
-*Decision:* short-lived (10 min), single-use, possession-proving code, exchanged for a device token *by the installed app*. The code is typed — see ADR-8.
-*Consequence:* the code is typed once, by hand (ADR-8 settled the QR question against vendoring an encoder); codes are rate-limited relay-side, and a wrong one is indistinguishable from an expired one.
+*Decision:* short-lived (10 min), single-use, possession-proving code, exchanged for a device token *by the installed app*. A QR handoff can prefill the code. The user must still press the pair button in the installed app.
+*Consequence:* codes are rate-limited relay-side, and a wrong one is indistinguishable from an expired one. Manual entry remains available.
 
 **ADR-4 — Zero wire-protocol changes.**
 *Context:* protocol v0 is deliberately thin; daemons must not need lockstep upgrades.
@@ -619,10 +622,10 @@ each seam and watching it redden. Two traps are worth carrying to the next compo
 *Decision:* `--vapid-subject` (or `IRRLICHT_RELAY_VAPID_SUBJECT`) unset resolves to the project URL — a real `https:` URI that self-describes what is pushing. A value that is *set* but is neither `mailto:` nor `https:` is fatal at startup, and validated before push is known to be enabled.
 *Consequence:* refusing to boot over a missing contact address is a worse failure than identifying the software instead of the operator; but a wrong value surfaces as a 4xx per push on somebody's phone, where nobody is looking, so that one dies loudly and early. An operator who wants to be reachable sets it.
 
-**ADR-8 — Paste-only pairing; no QR encoder.**
-*Context:* §6.1 originally offered "QR or paste", which meant vendoring a QR encoder into a no-build tree (risk 7).
-*Decision:* type the code. It is eight characters from an ambiguity-free alphabet, entered once per phone in the phone's own keyboard.
-*Consequence:* a dependency avoided for a one-time act. QR remains addable later behind the same REST call if pairing friction turns out to matter.
+**ADR-8 — The relay generates a QR handoff from an explicit public origin.**
+*Context:* Manual entry made first-time setup error-prone. The browser still cannot transfer storage into the installed iOS app.
+*Decision:* `--public-url` accepts one HTTPS origin. The relay returns a PNG QR for `/pair/<code>/`. That page supplies a code-specific install start URL under the stable root app identity. The installed app then prefills the root pairing UI. The QR contains no bearer token.
+*Consequence:* the relay adds one small Go QR dependency. A missing or invalid public origin disables only QR generation. Manual code entry continues to work.
 
 **ADR-9 — Pairing also configures the phone's live view.**
 *Context:* the badge R6 implies cannot decay from push alone. §8.4 never pushes on `* → working`, and iOS's `userVisibleOnly` forbids a silent push, so a backgrounded phone only ever learns that sessions *need* attention; a count derived from push alone climbs and never falls. The alternative on the table was a ledger-only slice 8 — deep link and badge, no live fold — which would have shipped a badge that is wrong within minutes of being right.
@@ -659,7 +662,7 @@ green test can pin nothing. *Designed-for* means the code intends it and nobody 
 | 4 | Policy lives only in the relay; desktop/web keep their own client-side copies | Accepted for P1; convergence path = both clients eventually consuming server-decided notifications is *not* planned |
 | 5 | Relay was stateless-by-design (v0); push adds persisted files | Full inventory + restart matrix in §8.6; sessions stay in-memory, payloads are never stored |
 | 6 | New static files must reach installed relays | **Was worse than predicted, now guarded.** All three copy sites shipped 3 files while `irrlicht.js` imports ten siblings — so a tarball-served *and* a curl-installed dashboard both 404'd their own module graph, before Elfdans existed. One `WEB_FILES` list now feeds every site, the tripwire derives what belongs in it, and it covers the Dockerfile and installer too (slice 6) |
-| 7 | `platforms/web` gains a vendored QR encoder (no-build tree) | **Closed: no QR.** Paste-only shipped — typing eight ambiguity-free characters beat auditing vendored code for a one-time act |
+| 7 | QR generation adds code to a security-sensitive pairing path | **Changed:** the relay uses a Go QR encoder. The QR contains only the short-lived one-time code URL. The client bearer token never enters the URL or PNG. Manual entry remains available. |
 | 8 | Timing metadata to Apple/Google | Named and accepted, as in #1346 |
 | 9 | **Nothing has run on a device.** Every defect so far was found by reading, and two of them — a VAPID JWT with no `sub`, `subscribe()` before the worker activates — fail only on contact with a real push service and passed every mock | Slice D, ordered ahead of release. `tools/elfdans-rig.sh check` automates the phone-free half; the rest needs a phone. **Until it runs, §10 is designed-for, not demonstrated** |
 | 10 | **Losing `vapid-keys.json` costs a full re-pair of every phone**, and nothing detects it — `selfHeal` fires only when the browser has no subscription or the relay has no record (`elfdans.js:464`); after a key loss both still exist | Named in §8.6 and the runbook's backup list. No code mitigation; a relay whose data dir is not backed up is one file loss from silent, permanent non-delivery |
@@ -697,7 +700,8 @@ green test can pin nothing. *Designed-for* means the code intends it and nobody 
 | 2 | `core/pkg/webpush` — encrypt/sign/POST, fake-push-service tests | **done** `e7bad8de` |
 | 3 | Relay: VAPID identity, pairing endpoints, subscription registry + revocation coupling, push-requires-auth refusal | **done** `c13d8035` |
 | 4 | Relay: transition observer + dispatcher + watchdog incl. persisted daemon roster | **done** `527ea4b6` |
-| 5 | `platforms/web`: manifest, service worker, pairing + settings UI, paste-only code, release copy list + tripwires | **done** `ea674027` |
+| 5 | `platforms/web`: manifest, service worker, pairing + settings UI, manual code, release copy list + tripwires | **done** `ea674027` |
+| 10 | Relay-generated QR handoff, installed-app code prefill, and macOS pairing control | **implemented in #1901; device acceptance remains** |
 | — | *Remediation*: device-breaking defects and the coverage vacuity that hid them (§8.7) | **done** `d2643b36` |
 | 6 | Distribution: `irrlichtrelay` tarballs for `linux/arm64` + `linux/amd64`; two broken copy sites fixed | **done** `25281eb8` |
 | 7 | Docs: relay-protocol REST reference, operator runbook, site setup guide | **done** `1a2361f9`, `0dd395fa` |

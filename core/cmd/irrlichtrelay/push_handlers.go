@@ -103,7 +103,7 @@ func isNilNotifier(n testNotifier) bool {
 // push-requires-auth guard (docs/mobile-notifications-arc42.md §8.1): the
 // info endpoint answers enabled:false with the reason, and every other push
 // route is a 403 naming the fix.
-func registerPushRoutes(mux *http.ServeMux, store *authStore, svc *push.Service, notifier testNotifier) {
+func registerPushRoutes(mux *http.ServeMux, store *authStore, svc *push.Service, notifier testNotifier, handoff pairingHandoff) {
 	if svc != nil && store == nil {
 		// Held by construction in runServe (buildPushService returns nil
 		// exactly when store is nil), but the invariant spans two functions
@@ -120,7 +120,7 @@ func registerPushRoutes(mux *http.ServeMux, store *authStore, svc *push.Service,
 		// nothing about the path real notifications take (§8.3).
 		panic("push routes require the dispatcher that sends real notifications (docs/mobile-notifications-arc42.md §8.3)")
 	}
-	mux.HandleFunc("GET /api/v1/push/info", handlePushInfo(svc))
+	mux.HandleFunc("GET /api/v1/push/info", handlePushInfo(svc, handoff))
 	if svc == nil {
 		mux.HandleFunc("POST /api/v1/push/pairings", handlePushDisabled)
 		mux.HandleFunc("POST /api/v1/push/pair", handlePushDisabled)
@@ -130,7 +130,7 @@ func registerPushRoutes(mux *http.ServeMux, store *authStore, svc *push.Service,
 		mux.HandleFunc("POST /api/v1/push/test", handlePushDisabled)
 		return
 	}
-	mux.HandleFunc("POST /api/v1/push/pairings", requireToken(store, handleMintPairing(svc)))
+	mux.HandleFunc("POST /api/v1/push/pairings", requireToken(store, handleMintPairing(svc, handoff)))
 	mux.HandleFunc("POST /api/v1/push/pair", handlePair(svc, store))
 	mux.HandleFunc("POST /api/v1/push/subscriptions", requireToken(store, handlePutSubscription(svc)))
 	mux.HandleFunc("DELETE /api/v1/push/subscriptions", requireToken(store, handleDeleteSubscription(svc)))
@@ -164,18 +164,23 @@ func handlePushDisabled(w http.ResponseWriter, _ *http.Request) {
 // Deliberately unauthenticated on both arms — with auth off it must be able
 // to say WHY push is unavailable, and with auth on the VAPID public key is
 // public by construction (it rides in every subscribe() call).
-func handlePushInfo(svc *push.Service) http.HandlerFunc {
+func handlePushInfo(svc *push.Service, handoff pairingHandoff) http.HandlerFunc {
 	type infoResp struct {
-		Enabled        bool   `json:"enabled"`
-		Reason         string `json:"reason,omitempty"`
-		VAPIDPublicKey string `json:"vapid_public_key,omitempty"`
+		Enabled          bool   `json:"enabled"`
+		Reason           string `json:"reason,omitempty"`
+		VAPIDPublicKey   string `json:"vapid_public_key,omitempty"`
+		PublicURL        string `json:"public_url,omitempty"`
+		PairingURLReason string `json:"pairing_url_reason,omitempty"`
 	}
 	return func(w http.ResponseWriter, _ *http.Request) {
 		if svc == nil {
 			pushJSON(w, http.StatusOK, infoResp{Enabled: false, Reason: pushAuthRequired})
 			return
 		}
-		pushJSON(w, http.StatusOK, infoResp{Enabled: true, VAPIDPublicKey: svc.VAPIDPublicKey()})
+		pushJSON(w, http.StatusOK, infoResp{
+			Enabled: true, VAPIDPublicKey: svc.VAPIDPublicKey(), PublicURL: handoff.publicURL,
+			PairingURLReason: handoff.unavailableReason,
+		})
 	}
 }
 
@@ -184,10 +189,13 @@ func handlePushInfo(svc *push.Service) http.HandlerFunc {
 // rides from that token through the code into the device token issued at
 // redeem, which is what lets the code "inherit a workspace"
 // (docs/mobile-notifications-arc42.md §8.1).
-func handleMintPairing(svc *push.Service) http.HandlerFunc {
+func handleMintPairing(svc *push.Service, handoff pairingHandoff) http.HandlerFunc {
 	type mintResp struct {
-		Code      string `json:"code"`
-		ExpiresIn int    `json:"expires_in"`
+		Code             string `json:"code"`
+		ExpiresIn        int    `json:"expires_in"`
+		PairingURL       string `json:"pairing_url,omitempty"`
+		PairingQR        string `json:"pairing_qr,omitempty"`
+		PairingURLReason string `json:"pairing_url_reason,omitempty"`
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		code, ttl, err := svc.MintCode(workspaceOf(r))
@@ -199,7 +207,19 @@ func handleMintPairing(svc *push.Service) http.HandlerFunc {
 			pushError(w, http.StatusInternalServerError, "minting pairing code failed")
 			return
 		}
-		pushJSON(w, http.StatusCreated, mintResp{Code: code, ExpiresIn: int(ttl / time.Second)})
+		resp := mintResp{
+			Code: code, ExpiresIn: int(ttl / time.Second),
+			PairingURL: handoff.pairingURL(code), PairingURLReason: handoff.unavailableReason,
+		}
+		if resp.PairingURL != "" {
+			qr, qrErr := pairingQRDataURL(resp.PairingURL)
+			if qrErr != nil {
+				resp.PairingURLReason = "QR pairing is unavailable — the relay could not generate the QR image. Enter the code manually."
+			} else {
+				resp.PairingQR = qr
+			}
+		}
+		pushJSON(w, http.StatusCreated, resp)
 	}
 }
 
