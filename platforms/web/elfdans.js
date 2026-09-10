@@ -173,31 +173,44 @@ function renderMacSide(section, info) {
 
 async function mintPairingCode(out, clientToken) {
   out.textContent = 'Minting code…';
-  let r = null;
+  const r = await fetchPairing(clientToken);
+  if (!r) {
+    out.textContent = 'Could not mint a pairing code.';
+    return;
+  }
+  if (!r.ok) {
+    out.textContent = 'Could not mint a pairing code (relay answered ' + r.status + ').';
+    return;
+  }
+  const minted = await decodePairing(r);
+  if (!minted) {
+    out.textContent = 'Could not mint a pairing code — the relay answered something this page could not read.';
+    return;
+  }
+  renderMintedPairing(out, minted);
+}
+
+async function fetchPairing(clientToken) {
   try {
-    r = await fetch('/api/v1/push/pairings', {
+    return await fetch('/api/v1/push/pairings', {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + clientToken },
     });
   } catch (e) {
-    r = null;
+    return null;
   }
-  if (!r || !r.ok) {
-    out.textContent = 'Could not mint a pairing code' + (r ? ' (relay answered ' + r.status + ')' : '') + '.';
-    return;
-  }
-  let minted = null;
+}
+
+async function decodePairing(response) {
   try {
-    minted = await r.json();
+    const pairing = await response.json();
+    return pairing && pairing.code ? pairing : null;
   } catch (e) {
-    minted = null;
+    return null;
   }
-  if (!minted || !minted.code) {
-    // Anything in front of the relay can answer 200 with an HTML error page;
-    // a throw here would leave the row reading "Minting code…" for good.
-    out.textContent = 'Could not mint a pairing code — the relay answered something this page could not read.';
-    return;
-  }
+}
+
+function renderMintedPairing(out, minted) {
   out.innerHTML = '';
   const codeEl = el('div', 'elfdans-code');
   codeEl.id = 'elfdans-code';
@@ -206,26 +219,35 @@ async function mintPairingCode(out, clientToken) {
   expiry.id = 'elfdans-code-expiry';
   out.appendChild(codeEl);
   out.appendChild(expiry);
-  if (minted.pairing_qr) {
-    const qr = document.createElement('img');
-    qr.className = 'elfdans-pairing-qr';
-    qr.src = minted.pairing_qr;
-    qr.alt = 'QR code for ' + minted.pairing_url;
-    out.appendChild(qr);
-  }
-  if (minted.pairing_url) {
-    const link = document.createElement('a');
-    link.className = 'elfdans-code-url';
-    link.href = minted.pairing_url;
-    link.textContent = minted.pairing_url;
-    out.appendChild(link);
-  }
-  if (!minted.pairing_qr) {
-    const reason = el('div', 'elfdans-code-url');
-    reason.textContent = minted.pairing_url_reason || pairingHintText(location.origin, location.pathname);
-    out.appendChild(reason);
-  }
+  renderPairingQR(out, minted);
+  renderPairingURL(out, minted);
+  renderPairingFallback(out, minted);
   startCountdown(expiry, minted.expires_in);
+}
+
+function renderPairingQR(out, minted) {
+  if (!minted.pairing_qr) return;
+  const qr = document.createElement('img');
+  qr.className = 'elfdans-pairing-qr';
+  qr.src = minted.pairing_qr;
+  qr.alt = 'QR code for ' + minted.pairing_url;
+  out.appendChild(qr);
+}
+
+function renderPairingURL(out, minted) {
+  if (!minted.pairing_url) return;
+  const link = document.createElement('a');
+  link.className = 'elfdans-code-url';
+  link.href = minted.pairing_url;
+  link.textContent = minted.pairing_url;
+  out.appendChild(link);
+}
+
+function renderPairingFallback(out, minted) {
+  if (minted.pairing_qr) return;
+  const reason = el('div', 'elfdans-code-url');
+  reason.textContent = minted.pairing_url_reason || pairingHintText(location.origin, location.pathname);
+  out.appendChild(reason);
 }
 
 function startCountdown(expiryEl, expiresInSeconds) {

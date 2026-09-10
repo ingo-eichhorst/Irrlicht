@@ -220,29 +220,27 @@ func warnIfExposedWithoutAuth(addr string, store *authStore) {
 	}
 }
 
-// buildMux registers the relay's HTTP routes: the WS stream, the read-only
-// API mirrors (bearer-gated when auth is on), the push surface (pushSvc is
-// nil with --auth off — see registerPushRoutes), and the dashboard UI (or a
-// 503 placeholder when it can't be found). notifier is the dispatcher the
-// test-notification endpoint sends through, non-nil exactly when pushSvc is.
-func buildMux(h *hub, store *authStore, pushSvc *push.Service, notifier testNotifier) *http.ServeMux {
-	return buildMuxWithPairing(h, store, pushSvc, notifier, unavailablePairingHandoff(missingPublicURLReason))
+// relayServices groups the optional services used by the relay's HTTP surface.
+type relayServices struct {
+	store    *authStore
+	push     *push.Service
+	notifier testNotifier
+	pairing  pairingHandoff
 }
 
-// buildMuxWithPairing adds the configured phone handoff to the ordinary relay
-// mux. buildMux keeps existing construction sites on the manual-pairing path.
-func buildMuxWithPairing(h *hub, store *authStore, pushSvc *push.Service, notifier testNotifier, handoff pairingHandoff) *http.ServeMux {
+// buildMux wires the relay's WS, JSON, push, pairing, and dashboard routes.
+func buildMux(h *hub, services relayServices) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/sessions/stream", h.ServeWS)
 	// The data endpoints carry the same session content as the WS stream, so
 	// they get the same bearer-token gate when --auth is on; otherwise the WS
 	// would be authenticated while a plain `curl /api/v1/sessions` leaked
 	// everything. version stays open as an unauthenticated health check.
-	mux.HandleFunc("GET /api/v1/sessions", requireToken(store, handleSessions(h)))
-	mux.HandleFunc("GET /api/v1/agents", requireToken(store, handleAgents(h)))
+	mux.HandleFunc("GET /api/v1/sessions", requireToken(services.store, handleSessions(h)))
+	mux.HandleFunc("GET /api/v1/agents", requireToken(services.store, handleAgents(h)))
 	mux.HandleFunc("GET /api/v1/version", handleVersion(Version))
-	registerPushRoutes(mux, store, pushSvc, notifier, handoff)
-	registerPairingHandoffRoutes(mux, handoff)
+	registerPushRoutes(mux, services)
+	registerPairingHandoffRoutes(mux, services.pairing)
 
 	if uiDir := resolveUIDir(); uiDir != "" {
 		log.Printf("serving dashboard from %s", uiDir)
@@ -357,7 +355,7 @@ func runServe(args []string) {
 	if pushSvc != nil {
 		obs = newPushObserver(pushSvc, store, newRelayPushSender(pushSvc, vapidSubject), notify.Config{}, nil)
 	}
-	mux := buildMuxWithPairing(h, store, pushSvc, obs, pairing)
+	mux := buildMux(h, relayServices{store: store, push: pushSvc, notifier: obs, pairing: pairing})
 
 	stop := make(chan struct{})
 	if store != nil {

@@ -67,7 +67,7 @@ func newPushEnvWithHandoff(t *testing.T, handoff pairingHandoff, seeds ...tokenS
 	// nothing in this file asks for a delivery, and one that reached the
 	// network would be the loudest possible way to find out.
 	obs := newPushObserver(svc, store, &fakeSender{}, notify.Config{}, nil)
-	srv := httptest.NewServer(buildMuxWithPairing(h, store, svc, obs, handoff))
+	srv := httptest.NewServer(buildMux(h, relayServices{store: store, push: svc, notifier: obs, pairing: handoff}))
 	t.Cleanup(srv.Close)
 	return &pushEnv{srv: srv, store: store, svc: svc, ddir: ddir, tokensPath: tokensPath, tokens: tokens}
 }
@@ -164,7 +164,7 @@ func TestPushRequiresAuthGuard(t *testing.T) {
 	if svc != nil {
 		t.Fatal("buildPushService must return nil with auth off")
 	}
-	srv := httptest.NewServer(buildMux(newHub(defaultLimits()), nil, svc, nil))
+	srv := httptest.NewServer(buildMux(newHub(defaultLimits()), relayServices{push: svc}))
 	t.Cleanup(srv.Close)
 
 	status, body := doPush(t, "GET", srv.URL+"/api/v1/push/info", "", nil)
@@ -419,7 +419,10 @@ func TestPushInfoStableAcrossRebuild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv2 := httptest.NewServer(buildMux(newHubWithAuth(env.store, nil, defaultLimits()), env.store, svc2, newPushObserver(svc2, env.store, &fakeSender{}, notify.Config{}, nil)))
+	srv2 := httptest.NewServer(buildMux(newHubWithAuth(env.store, nil, defaultLimits()), relayServices{
+		store: env.store, push: svc2,
+		notifier: newPushObserver(svc2, env.store, &fakeSender{}, notify.Config{}, nil),
+	}))
 	t.Cleanup(srv2.Close)
 	status, body = doPush(t, "GET", srv2.URL+"/api/v1/push/info", "", nil)
 	if status != http.StatusOK {

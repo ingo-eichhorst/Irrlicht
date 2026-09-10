@@ -103,7 +103,11 @@ func isNilNotifier(n testNotifier) bool {
 // push-requires-auth guard (docs/mobile-notifications-arc42.md §8.1): the
 // info endpoint answers enabled:false with the reason, and every other push
 // route is a 403 naming the fix.
-func registerPushRoutes(mux *http.ServeMux, store *authStore, svc *push.Service, notifier testNotifier, handoff pairingHandoff) {
+func registerPushRoutes(mux *http.ServeMux, services relayServices) {
+	store := services.store
+	svc := services.push
+	notifier := services.notifier
+	handoff := services.pairing
 	if svc != nil && store == nil {
 		// Held by construction in runServe (buildPushService returns nil
 		// exactly when store is nil), but the invariant spans two functions

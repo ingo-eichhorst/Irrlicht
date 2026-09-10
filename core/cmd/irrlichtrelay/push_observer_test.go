@@ -638,7 +638,9 @@ func TestSubscriptionHealthEndpoint(t *testing.T) {
 		deviceSeed{label: "phone", workspace: "acme", endpoint: "https://push.example/v2/secret-path"},
 		deviceSeed{label: "bare", workspace: "acme"},
 	)
-	srv := httptest.NewServer(buildMux(newHubWithAuth(env.store, nil, defaultLimits()), env.store, env.svc, env.obs))
+	srv := httptest.NewServer(buildMux(newHubWithAuth(env.store, nil, defaultLimits()), relayServices{
+		store: env.store, push: env.svc, notifier: env.obs,
+	}))
 	t.Cleanup(srv.Close)
 
 	env.enterWaiting("acme", "sess-1")

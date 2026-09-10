@@ -36,13 +36,21 @@ func resolvePairingHandoff(raw string) pairingHandoff {
 		return unavailablePairingHandoff(missingPublicURLReason)
 	}
 	u, err := url.Parse(raw)
-	if err != nil || !u.IsAbs() || u.Scheme != "https" || u.Host == "" || u.User != nil ||
-		u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
-		return unavailablePairingHandoff("QR pairing is unavailable — --public-url must be one absolute HTTPS origin without a path, query, fragment, or credentials.")
+	if err != nil {
+		return invalidPairingHandoff()
 	}
-	u.Path = ""
-	u.RawPath = ""
-	return pairingHandoff{publicURL: u.String()}
+	if u.Scheme != "https" || u.Host == "" {
+		return invalidPairingHandoff()
+	}
+	canonical := "https://" + u.Host
+	if raw != canonical && raw != canonical+"/" {
+		return invalidPairingHandoff()
+	}
+	return pairingHandoff{publicURL: canonical}
+}
+
+func invalidPairingHandoff() pairingHandoff {
+	return unavailablePairingHandoff("QR pairing is unavailable — --public-url must be one absolute HTTPS origin without a path, query, fragment, or credentials.")
 }
 
 func (h pairingHandoff) pairingURL(code string) string {

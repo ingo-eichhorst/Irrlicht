@@ -14,10 +14,28 @@ func TestResolvePairingHandoffAcceptsOnlyHTTPSOrigin(t *testing.T) {
 	tests := []struct {
 		name string
 		raw  string
-		want string
 	}{
-		{name: "https origin", raw: "https://relay.example.com", want: "https://relay.example.com"},
-		{name: "trim and slash", raw: "  https://relay.example.com/  ", want: "https://relay.example.com"},
+		{name: "https origin", raw: "https://relay.example.com"},
+		{name: "trim and slash", raw: "  https://relay.example.com/  "},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolvePairingHandoff(tt.raw)
+			if got.publicURL != "https://relay.example.com" {
+				t.Fatalf("publicURL = %q", got.publicURL)
+			}
+			if got.unavailableReason != "" {
+				t.Fatalf("valid public URL has reason %q", got.unavailableReason)
+			}
+		})
+	}
+}
+
+func TestResolvePairingHandoffRejectsAnythingButHTTPSOrigin(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+	}{
 		{name: "missing"},
 		{name: "http", raw: "http://relay.example.com"},
 		{name: "path", raw: "https://relay.example.com/elfdans"},
@@ -29,35 +47,53 @@ func TestResolvePairingHandoffAcceptsOnlyHTTPSOrigin(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := resolvePairingHandoff(tt.raw)
-			if got.publicURL != tt.want {
-				t.Fatalf("publicURL = %q, want %q", got.publicURL, tt.want)
+			if got.publicURL != "" {
+				t.Fatalf("publicURL = %q, want empty", got.publicURL)
 			}
-			if tt.want == "" && got.unavailableReason == "" {
+			if got.unavailableReason == "" {
 				t.Fatal("invalid public URL has no user-facing reason")
-			}
-			if tt.want != "" && got.unavailableReason != "" {
-				t.Fatalf("valid public URL has reason %q", got.unavailableReason)
 			}
 		})
 	}
 }
 
-func TestPairingMintCarriesURLAndDecodablePNG(t *testing.T) {
-	handoff := resolvePairingHandoff("https://relay.example.com")
-	env := newPushEnvWithHandoff(t, handoff, tokenSeed{label: "dashboard", workspace: "acme"})
+type pairingMintResponse struct {
+	Code             string `json:"code"`
+	PairingURL       string `json:"pairing_url"`
+	PairingQR        string `json:"pairing_qr"`
+	PairingURLReason string `json:"pairing_url_reason"`
+}
+
+func mintPairing(t *testing.T, env *pushEnv) pairingMintResponse {
+	t.Helper()
 	status, body := doPush(t, http.MethodPost, env.srv.URL+"/api/v1/push/pairings", env.tokens["dashboard"], nil)
 	if status != http.StatusCreated {
 		t.Fatalf("mint = %d: %s", status, body)
 	}
-	var got struct {
-		Code             string `json:"code"`
-		PairingURL       string `json:"pairing_url"`
-		PairingQR        string `json:"pairing_qr"`
-		PairingURLReason string `json:"pairing_url_reason"`
-	}
+	var got pairingMintResponse
 	if err := json.Unmarshal(body, &got); err != nil {
 		t.Fatal(err)
 	}
+	return got
+}
+
+func decodePairingPNG(t *testing.T, dataURL string) []byte {
+	t.Helper()
+	const prefix = "data:image/png;base64,"
+	if !strings.HasPrefix(dataURL, prefix) {
+		t.Fatalf("pairing_qr does not carry a PNG data URL: %.40q", dataURL)
+	}
+	data, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(dataURL, prefix))
+	if err != nil {
+		t.Fatalf("decode QR: %v", err)
+	}
+	return data
+}
+
+func TestPairingMintCarriesURLAndDecodablePNG(t *testing.T) {
+	handoff := resolvePairingHandoff("https://relay.example.com")
+	env := newPushEnvWithHandoff(t, handoff, tokenSeed{label: "dashboard", workspace: "acme"})
+	got := mintPairing(t, env)
 	wantURL := "https://relay.example.com/pair/" + got.Code + "/"
 	if got.PairingURL != wantURL {
 		t.Fatalf("pairing_url = %q, want %q", got.PairingURL, wantURL)
@@ -65,14 +101,7 @@ func TestPairingMintCarriesURLAndDecodablePNG(t *testing.T) {
 	if got.PairingURLReason != "" {
 		t.Fatalf("configured mint has reason %q", got.PairingURLReason)
 	}
-	const prefix = "data:image/png;base64,"
-	if !strings.HasPrefix(got.PairingQR, prefix) {
-		t.Fatalf("pairing_qr does not carry a PNG data URL: %.40q", got.PairingQR)
-	}
-	data, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(got.PairingQR, prefix))
-	if err != nil {
-		t.Fatalf("decode QR: %v", err)
-	}
+	data := decodePairingPNG(t, got.PairingQR)
 	cfg, err := png.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
 		t.Fatalf("decode QR PNG: %v", err)
