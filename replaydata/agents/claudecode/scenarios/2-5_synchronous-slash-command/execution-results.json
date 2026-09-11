@@ -7,6 +7,7 @@
       "outcome": "not-runnable",
       "reason": "Measured on 2026-09-07 against Claude Desktop 1.46388.4: the composer DOES run slash commands. Typing \"/\" opens a filtering popup of AXMenuItem elements inside the web area, Return accepts an entry, and Send executes it \u2014 the app rendered the /context report and headed the message \"You said: /context\". This cell is the one slash case with a REAL Desktop gap. Its /cost exists as the alias \"usage (cost)\", but /help does not: the prefix returns \"debug\", \"team-onboarding\", \"heapdump\" and \"find-skills\" \u2014 fuzzy matches, no help command. The cell therefore stays not-runnable even after the driver grows a slash step. It stays valid for cli-local, where it is recorded today.",
       "missing_control": "the \"/help\" command in the Desktop command set",
+      "measured_desktop_version": "1.46388.4",
       "evidence_refs": [
         "replaydata/agents/claudecode/desktop-evidence/slash-commands.md",
         "replaydata/agents/claudecode/desktop-evidence/recipe-census.txt",

@@ -398,10 +398,16 @@ func (v *validation) validateObservedShape(context resultValidationContext) {
 		v.add(context.target, "missing_control", "is only valid for not-runnable")
 	}
 	if strings.TrimSpace(result.MeasuredDesktopVersion) != "" {
-		// The recording's own desktop-environment.json already carries the
-		// build. A second copy here would be free to disagree with it.
+		// The recording's own manifest.json already carries the build, in
+		// desktop_app_version — the field identity.go reads. A second copy here
+		// would be free to disagree with it.
+		//
+		// This message used to name desktop-environment.json, which carries
+		// selected_environment and requested_workspace and no version at all.
+		// A message that sends a reader to the wrong file is worse than none:
+		// it looks like evidence.
 		v.add(context.target, "measured_desktop_version",
-			"is only valid for a non-observed result; the recording's "+EnvironmentFile+" carries the build")
+			"is only valid for a non-observed result; the recording's manifest.json carries the build in desktop_app_version")
 	}
 	if result.Outcome == OutcomeObservedFailure && strings.TrimSpace(result.Reason) == "" {
 		v.add(context.target, "reason", "is required for observed-failure")
@@ -490,16 +496,16 @@ func (v *validation) allowedNonObservedEvidence(boundary evidenceBoundary) bool 
 // harness limitation — and changes only when the tree does.
 //
 // The rule is deliberately narrow. Requiring the field of an observed result
-// would duplicate the recording's own desktop-environment.json, and two copies
-// of one fact drift; requiring it of a census verdict would demand a
-// re-measurement for a gap that is not a measurement at all.
+// would duplicate the recording's own manifest.json, and two copies of one fact
+// drift; requiring it of a census verdict would demand a re-measurement for a
+// gap that is not a measurement at all.
 func (v *validation) validateMeasuredDesktopVersion(context resultValidationContext) {
 	result := context.result
 	measured := strings.TrimSpace(result.MeasuredDesktopVersion)
-	if !result.CitesFrontendGaps() {
+	if !result.CitesFrontendEvidence() {
 		if measured != "" {
 			v.add(context.target, "measured_desktop_version",
-				"is only valid for a result citing "+FrontendGapsFile)
+				"is only valid for a result citing one of "+strings.Join(FrontendEvidenceFiles(), ", "))
 		}
 		return
 	}

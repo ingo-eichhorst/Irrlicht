@@ -11,9 +11,12 @@ Measured against Claude Desktop 1.46388.4 with bundled Claude Code 2.1.260, on
 saved at the moment of refusal.
 
 Every verdict that cites this file records that build in its own
-`measured_desktop_version`, and `of validate` refuses one that does not. These
-are the only Desktop verdicts that can expire without anybody touching the
-repository: they say what the app SHOWS, and Claude Desktop ships new builds on
+`measured_desktop_version`, and `of validate` refuses one that does not. The
+same holds for `slash-commands.md`, the other note measured against a specific
+build; `desktopresults.FrontendEvidenceFiles()` is the list, and
+`desktopdriver.TestFrontendEvidenceSetCoversEveryNoteNamingABuild` fails if a
+note here names a build and is missing from it. These are the only Desktop
+verdicts that can expire without anybody touching the repository: they say what the app SHOWS, and Claude Desktop ships new builds on
 its own schedule. The driver refuses every build but the one its catalog is
 pinned to, so
 `desktopdriver.TestFrontendVerdictsNameTheSupportedDesktopVersion` fails the

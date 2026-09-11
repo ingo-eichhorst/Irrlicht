@@ -10,6 +10,21 @@ to it, both from Claude Desktop 1.46388.4 with bundled Claude Code 2.1.260, and
 both with the macOS menu-bar subtree removed (it carries the operator's Recent
 Items, and nothing about the composer).
 
+Everything below is therefore a claim about one build, exactly like
+`frontend-gaps.md`. Every verdict citing this file records that build in its own
+`measured_desktop_version`, and `of validate` refuses one that does not.
+`desktopdriver.TestFrontendVerdictsNameTheSupportedDesktopVersion` then fails the
+moment the driver's pin and those verdicts disagree, so moving the pin means
+re-measuring this note rather than assuming it held.
+
+It did not work that way at first. The rule shipped keyed on the single
+filename `frontend-gaps.md`, so the four verdicts citing this note — 1-6, 2-5,
+2-7 and 5-3 — named no build and the freshness guard walked past them.
+`desktopresults.FrontendEvidenceFiles()` now holds both notes, and
+`desktopdriver.TestFrontendEvidenceSetCoversEveryNoteNamingABuild` derives the
+same set from the notes themselves: a note that names a Claude Desktop build and
+is not declared fails the build.
+
 ## What was measured
 
 Every step below ran through `claude-desktop-helper` against the live app. Each
