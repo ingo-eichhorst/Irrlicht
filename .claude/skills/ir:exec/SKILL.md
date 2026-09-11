@@ -131,6 +131,7 @@ tools/preflight.sh --only web
 tools/preflight.sh --only arch
 tools/preflight.sh --only tools
 tools/preflight.sh --only skills
+tools/preflight.sh --only site
 tools/preflight.sh --only posix
 tools/preflight.sh --only bash
 tools/preflight.sh --only security

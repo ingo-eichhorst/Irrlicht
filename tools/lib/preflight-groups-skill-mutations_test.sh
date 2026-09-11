@@ -100,8 +100,8 @@ assert_mutation_is_red \
 assert_mutation_is_red \
   "lock test catches VALID_GROUPS gaining a group the skill omits" \
   "tools/preflight.sh" \
-  $'VALID_GROUPS=(go web arch tools skills posix bash security swift linux)' \
-  $'VALID_GROUPS=(go web arch tools skills posix bash security swift linux wasm)' \
+  $'VALID_GROUPS=(go web arch tools skills site posix bash security swift linux)' \
+  $'VALID_GROUPS=(go web arch tools skills site posix bash security swift linux wasm)' \
   'only in VALID_GROUPS: wasm'
 
 if [[ $fails -gt 0 ]]; then

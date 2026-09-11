@@ -66,6 +66,7 @@
 #   tools/preflight.sh --only security # just govulncheck + gosec + npm audit
 #   tools/preflight.sh --only tools    # just the tools/lib shell-lib unit tests
 #   tools/preflight.sh --only skills   # just the .claude/skills/**/*.md linter
+#   tools/preflight.sh --only site     # just the static-site link + markup lint
 #   tools/preflight.sh --only swift    # just the macOS Swift build + test suite
 #   tools/preflight.sh --only posix    # just the #!/bin/sh POSIX/bashism lint
 #   tools/preflight.sh --only bash     # just the shellcheck lint over bash scripts
@@ -136,7 +137,7 @@ done
 # Not `GROUPS` — that is a bash built-in holding the caller's supplementary
 # group IDs, and assigning to it silently does nothing, so the check would
 # compare against a list of numeric gids and reject every real group name.
-VALID_GROUPS=(go web arch tools skills posix bash security swift linux)
+VALID_GROUPS=(go web arch tools skills site posix bash security swift linux)
 if [[ -n "$ONLY" ]]; then
   known=0
   for g in "${VALID_GROUPS[@]}"; do [[ "$ONLY" == "$g" ]] && known=1; done
@@ -500,6 +501,21 @@ if want skills; then
   CURRENT_GROUP=skills
   run_gate_scoped '^\.claude/skills/.*\.md$|(^|/)SKILL\.md$|^tools/skill-lint\.sh$' \
                   "skill-file lint" tools/skill-lint.sh
+fi
+
+# ---- site group (#1894) ----
+# site/ is published to irrlicht.io and, until this gate, no check opened it: a
+# page could link to a file that is not there, leave a tag unclosed, or drop
+# out of sitemap.xml, and every CI check stayed green. The whole tree is linted
+# whenever the gate fires rather than just the changed pages — 25 files and a
+# fraction of a second — because a dead link is usually in the page that was
+# NOT edited, pointing at the one that was renamed.
+if want site; then
+  CURRENT_GROUP=site
+  run_gate_scoped '^site/|^tools/site-lint\.sh$|^tools/lib/site-lint_test\.sh$' \
+                  "static-site lint" tools/site-lint.sh
+  run_gate_scoped '^tools/site-lint\.sh$|^tools/lib/site-lint_test\.sh$|^tools/lib/testdata/site-lint/' \
+                  "static-site lint tests" bash tools/lib/site-lint_test.sh
 fi
 
 # ---- tools group (mirrors test.yml's "Test the shared shell libs" step) ----
