@@ -38,7 +38,7 @@ const (
 )
 
 const usage = `usage:
-  of status   [--agent a] [--scenario s] [--profile cli-local|desktop-local] [--runs] [--summary] [--json] [--repo-root .]
+  of status   [--agent a] [--scenario s] [--profile cli-local|desktop-local] [--runs] [--summary] [--verdicts] [--json] [--repo-root .]
   of validate [--json] [--repo-root .]
   of coverage [--hooks] [--json] [--repo-root .]
   of scenario add|update --name n [--id i] [--description d] [--process-file f] [--acceptance-file f]
@@ -187,6 +187,9 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	if request.Runs {
 		return runStatusRuns(request.RepoRoot, request.JSON, stdout, stderr)
 	}
+	if request.Verdicts {
+		return runStatusVerdicts(request, stdout, stderr)
+	}
 	return runMatrixStatus(request, stdout, stderr)
 }
 
@@ -194,6 +197,9 @@ type statusRequest struct {
 	Agent, Scenario, RepoRoot string
 	Profile                   matrix.ExecutionProfile
 	Runs, Summary, JSON       bool
+	// Verdicts reports the Desktop result contract instead of the profile
+	// view. See status_verdicts.go for why the two answer differently.
+	Verdicts bool
 }
 
 func parseStatusRequest(args []string) (statusRequest, error) {
@@ -203,6 +209,7 @@ func parseStatusRequest(args []string) (statusRequest, error) {
 		scenario = fs.String("scenario", "", "filter to one scenario (by name or id)")
 		runs     = fs.Bool("runs", false, "show the factory run-log instead of coverage")
 		summary  = fs.Bool("summary", false, "per-agent cell counts instead of the full cell dump")
+		verdicts = fs.Bool("verdicts", false, "Desktop Local verdicts from execution-results.json (requires --profile desktop-local and --agent)")
 		profile  = fs.String("profile", string(matrix.ProfileCLILocal), "execution profile (cli-local or desktop-local)")
 		asJSON   = fs.Bool("json", false, "emit JSON")
 		repoRoot = fs.String("repo-root", ".", "repository root")
@@ -219,6 +226,7 @@ func parseStatusRequest(args []string) (statusRequest, error) {
 	return statusRequest{
 		Agent: *agent, Scenario: *scenario, RepoRoot: *repoRoot,
 		Profile: executionProfile, Runs: *runs, Summary: *summary, JSON: *asJSON,
+		Verdicts: *verdicts,
 	}, nil
 }
 
