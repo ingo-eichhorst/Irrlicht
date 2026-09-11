@@ -35,7 +35,7 @@ usage: site-lint.sh [--strict] [--site DIR]
 USAGE
 }
 
-while [ $# -gt 0 ]; do
+while [[ $# -gt 0 ]]; do
   case "$1" in
     --strict) STRICT=1; shift ;;
     --site) SITE_DIR="$2"; shift 2 ;;
@@ -44,15 +44,20 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-err() { printf 'ERROR  %s: %s\n' "$1" "$2" >&2; FAILED=$((FAILED + 1)); }
+err() {
+  local where="$1" what="$2"
+  printf 'ERROR  %s: %s\n' "$where" "$what" >&2
+  FAILED=$((FAILED + 1))
+}
 warn() {
-  printf 'WARN   %s: %s\n' "$1" "$2" >&2
+  local where="$1" what="$2"
+  printf 'WARN   %s: %s\n' "$where" "$what" >&2
   WARNED=$((WARNED + 1))
-  [ "$STRICT" -eq 1 ] && FAILED=$((FAILED + 1))
+  [[ "$STRICT" -eq 1 ]] && FAILED=$((FAILED + 1))
   return 0
 }
 
-if [ ! -d "$SITE_DIR" ]; then
+if [[ ! -d "$SITE_DIR" ]]; then
   printf 'site-lint: %s is not a directory — this lint cannot run\n' "$SITE_DIR" >&2
   exit 2
 fi
@@ -61,6 +66,7 @@ fi
 # One pass per page. Every href/src that is not absolute, not a fragment and
 # not a mailto:/tel: must resolve to a file on disk.
 lint_page() {
+  local page dir tag opened closed target clean resolved
   page="$1"
   dir="$(dirname "$page")"
   CHECKED=$((CHECKED + 1))
@@ -78,15 +84,16 @@ lint_page() {
     | while IFS= read -r target; do
         case "$target" in
           http://*|https://*|//*|mailto:*|tel:*|data:*|'#'*) continue ;;
+          *) ;;  # a local path: checked below
         esac
         clean="${target%%\#*}"
         clean="${clean%%\?*}"
-        [ -z "$clean" ] && continue
+        [[ -z "$clean" ]] && continue
         case "$clean" in
           /*) resolved="$SITE_DIR$clean" ;;
           *)  resolved="$dir/$clean" ;;
         esac
-        if [ ! -e "$resolved" ]; then
+        if [[ ! -e "$resolved" ]]; then
           printf 'DEAD\t%s\t%s\n' "$page" "$target"
         fi
       done
@@ -96,7 +103,7 @@ lint_page() {
   for tag in html head body main nav table thead tbody tr td th ul ol li section article; do
     opened=$({ grep -oE "<$tag(>| )" "$page" || true; } | wc -l | tr -d ' ')
     closed=$({ grep -oE "</$tag>" "$page" || true; } | wc -l | tr -d ' ')
-    if [ "$opened" != "$closed" ]; then
+    if [[ "$opened" != "$closed" ]]; then
       printf 'UNBALANCED\t%s\t<%s> opened %s time(s), closed %s\n' "$page" "$tag" "$opened" "$closed"
     fi
   done
@@ -106,7 +113,7 @@ findings="$(mktemp)"
 trap 'rm -f "$findings"' EXIT
 
 pages=$(find "$SITE_DIR" -name '*.html' -type f | sort || true)
-if [ -z "$pages" ]; then
+if [[ -z "$pages" ]]; then
   printf 'site-lint: no HTML page found under %s — this lint cannot run\n' "$SITE_DIR" >&2
   exit 2
 fi
@@ -119,12 +126,15 @@ while IFS="$(printf '\t')" read -r kind page detail extra; do
   case "$kind" in
     DEAD) err "$page" "dead local link: $detail" ;;
     UNBALANCED) err "$page" "$detail $extra" ;;
+    # A line this loop cannot classify means lint_page emitted a kind nobody
+    # reads. Dropping it silently would lose a real finding.
+    *) err "$page" "unrecognised finding kind $kind: $detail $extra" ;;
   esac
 done <"$findings"
 
 # ---------------------------------------------------------------- 4, 5
 SITEMAP="$SITE_DIR/sitemap.xml"
-if [ -f "$SITEMAP" ]; then
+if [[ -f "$SITEMAP" ]]; then
   CHECKED=$((CHECKED + 1))
   # 5 — every sitemap URL must name a file that exists.
   { grep -oE '<loc>[^<]+</loc>' "$SITEMAP" || true; } \
@@ -135,17 +145,17 @@ if [ -f "$SITEMAP" ]; then
           */) candidate="$SITE_DIR${path}index.html" ;;
           *)  candidate="$SITE_DIR$path" ;;
         esac
-        [ -e "$candidate" ] || printf 'DANGLING\t%s\n' "$path"
+        [[ -e "$candidate" ]] || printf 'DANGLING\t%s\n' "$path"
       done >"$findings"
   while IFS="$(printf '\t')" read -r kind path; do
-    [ "$kind" = DANGLING ] && err "$SITEMAP" "names $path, which is not in $SITE_DIR"
+    [[ "$kind" = DANGLING ]] && err "$SITEMAP" "names $path, which is not in $SITE_DIR"
   done <"$findings"
 
   # 4 — every docs page should be listed.
   for page in $(find "$SITE_DIR/docs" -name '*.html' -type f 2>/dev/null | sort || true); do
     rel="${page#"$SITE_DIR"}"
     base="$(basename "$rel")"
-    if [ "$base" = index.html ]; then
+    if [[ "$base" = index.html ]]; then
       grep -q "docs/</loc>\|docs/index.html</loc>" "$SITEMAP" || warn "$SITEMAP" "does not list $rel"
       continue
     fi
@@ -157,12 +167,12 @@ fi
 
 # A run that opened nothing has not checked a site. Absence of a finding and
 # inability to look must never produce the same output.
-if [ "$CHECKED" -eq 0 ]; then
+if [[ "$CHECKED" -eq 0 ]]; then
   printf 'site-lint: opened no file under %s — this lint cannot run\n' "$SITE_DIR" >&2
   exit 2
 fi
 
-if [ "$FAILED" -gt 0 ]; then
+if [[ "$FAILED" -gt 0 ]]; then
   printf 'site-lint: %d failure(s), %d warning(s); read %d file(s) under %s\n' \
     "$FAILED" "$WARNED" "$CHECKED" "$SITE_DIR" >&2
   exit 1

@@ -30,34 +30,43 @@ cd "$REPO_ROOT" || { echo "FAIL: cannot cd to repo root $REPO_ROOT" >&2; exit 1;
 LINT=tools/site-lint.sh
 FIXTURES=tools/lib/testdata/site-lint
 rc=0
-fail() { echo "FAIL: $1" >&2; rc=1; }
+fail() {
+  local why="$1"
+  echo "FAIL: $why" >&2
+  rc=1
+  return 0
+}
 
 # run_lint <site-dir> [extra args...] -> sets OUT and GOT
 run_lint() {
   OUT=$("$LINT" --site "$@" 2>&1)
   GOT=$?
+  return 0
 }
 
 # --- clean corpus passes ------------------------------------------------
 run_lint "$FIXTURES/clean"
-[ "$GOT" -eq 0 ] || fail "the clean corpus must pass; exit=$GOT output:\n$OUT"
+[[ "$GOT" -eq 0 ]] || fail "the clean corpus must pass; exit=$GOT output:\n$OUT"
 case "$OUT" in
   *"read 3 file(s)"*) ;;
   *) fail "the clean run must say how many files it read; got:\n$OUT" ;;
 esac
 case "$OUT" in
   *ERROR*|*WARN*) fail "the clean corpus must produce no finding; got:\n$OUT" ;;
+  *) ;;  # clean, as required
 esac
 
 # --- broken corpus fails, once per check --------------------------------
 run_lint "$FIXTURES/broken"
-[ "$GOT" -eq 1 ] || fail "the broken corpus must fail with exit 1; exit=$GOT output:\n$OUT"
+[[ "$GOT" -eq 1 ]] || fail "the broken corpus must fail with exit 1; exit=$GOT output:\n$OUT"
 
 expect_finding() {
+  local needle="$1" label="$2"
   case "$OUT" in
-    *"$1"*) ;;
-    *) fail "the broken corpus must report $2; output:\n$OUT" ;;
+    *"$needle"*) ;;
+    *) fail "the broken corpus must report $label; output:\n$OUT" ;;
   esac
+  return 0
 }
 expect_finding 'dead local link: docs/absent.html' 'the dead local link'
 expect_finding '<main> opened 1 time(s), closed 0'  'the unclosed <main>'
@@ -68,7 +77,7 @@ expect_finding 'does not list /docs/unlisted.html'   'the unlisted docs page'
 
 # --strict promotes the warning; the failure count must rise by exactly one.
 run_lint "$FIXTURES/broken" --strict
-[ "$GOT" -eq 1 ] || fail "--strict must still fail; exit=$GOT"
+[[ "$GOT" -eq 1 ]] || fail "--strict must still fail; exit=$GOT"
 case "$OUT" in
   *"6 failure(s)"*) ;;
   *) fail "--strict must promote the warning to a 6th failure; output:\n$OUT" ;;
@@ -76,7 +85,7 @@ esac
 
 # --- refusals: cannot look must not read as found nothing ---------------
 run_lint "$FIXTURES/does-not-exist"
-[ "$GOT" -eq 2 ] || fail "a missing site directory must refuse with exit 2; exit=$GOT"
+[[ "$GOT" -eq 2 ]] || fail "a missing site directory must refuse with exit 2; exit=$GOT"
 case "$OUT" in
   *"cannot run"*) ;;
   *) fail "the refusal must say the lint could not run; output:\n$OUT" ;;
@@ -85,7 +94,7 @@ esac
 EMPTY=$(mktemp -d)
 trap 'rm -rf "$EMPTY"' EXIT
 run_lint "$EMPTY"
-[ "$GOT" -eq 2 ] || fail "a directory with no HTML page must refuse with exit 2; exit=$GOT"
+[[ "$GOT" -eq 2 ]] || fail "a directory with no HTML page must refuse with exit 2; exit=$GOT"
 case "$OUT" in
   *"no HTML page"*) ;;
   *) fail "the refusal must name what was missing; output:\n$OUT" ;;
@@ -95,17 +104,17 @@ esac
 # Without this every case above could be satisfied by a lint wired to fixtures
 # alone, never opening the tree it exists to protect.
 OUT=$("$LINT" 2>&1); GOT=$?
-[ "$GOT" -eq 0 ] || fail "the committed site/ must pass site-lint; exit=$GOT output:\n$OUT"
+[[ "$GOT" -eq 0 ]] || fail "the committed site/ must pass site-lint; exit=$GOT output:\n$OUT"
 # Read the count back rather than pattern-matching a prefix: "read 2" also
 # matches "read 24", which would pass this guard for the wrong reason.
 read_count=$(printf '%s\n' "$OUT" | sed -n 's/.*read \([0-9][0-9]*\) file(s).*/\1/p' | tail -1)
-if [ -z "$read_count" ]; then
+if [[ -z "$read_count" ]]; then
   fail "the real site run must report how many files it read; output:\n$OUT"
-elif [ "$read_count" -lt 10 ]; then
+elif [[ "$read_count" -lt 10 ]]; then
   fail "the real site run read only $read_count file(s) — the walk is broken"
 fi
 
-if [ "$rc" -eq 0 ]; then
+if [[ "$rc" -eq 0 ]]; then
   echo "site-lint_test: ALL PASS"
 fi
 exit "$rc"
