@@ -7,6 +7,7 @@
       "outcome": "not-runnable",
       "reason": "The slash half of this recipe is runnable now: /model is in the Desktop command popup and the driver drives it, arguments included (see slash-commands.md). What is left is keyboard-key:\"1\", the model-picker selection the recipe presses after each /model call. The Desktop helper refuses a keystroke with no observable postcondition, and nothing measured shows what pressing \"1\" changes in the composer. The cell stays valid for cli-local, where it is recorded today.",
       "missing_control": "keyboard-key:\"1\"",
+      "measured_desktop_version": "1.46388.4",
       "evidence_refs": [
         "replaydata/agents/claudecode/desktop-evidence/slash-commands.md",
         "replaydata/agents/claudecode/desktop-evidence/recipe-census.txt",

@@ -64,7 +64,7 @@ func frontendVerdictsInCell(cellDir, cell string) ([]frontendVerdict, error) {
 		if matrix.ExecutionProfile(result.ExecutionProfile) != matrix.ProfileDesktopLocal {
 			continue
 		}
-		if !result.CitesFrontendGaps() {
+		if !result.CitesFrontendEvidence() {
 			continue
 		}
 		verdicts = append(verdicts, frontendVerdict{

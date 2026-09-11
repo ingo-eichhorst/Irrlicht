@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"irrlicht/tools/onboarding-factory/internal/desktopresults"
 )
 
 const (
@@ -564,13 +566,22 @@ func writeJSONFixture(t *testing.T, path string, value any) {
 	write(t, path, string(b)+"\n")
 }
 
-// makeFrontendVerdict turns a fixture cell's evidence reference into the shared
-// front-end file, which is what marks a verdict as a claim about what Claude
-// Desktop SHOWS rather than about the driver, the harness or a recording.
+// makeFrontendVerdict turns a fixture cell's evidence reference into one of the
+// shared front-end notes, which is what marks a verdict as a claim about what
+// Claude Desktop SHOWS rather than about the driver, the harness or a recording.
 func makeFrontendVerdict(t *testing.T, fixture desktopFixture, scenario string) string {
 	t.Helper()
+	return makeVerdictCiting(t, fixture, scenario, desktopresults.FrontendGapsFile)
+}
+
+// makeVerdictCiting is makeFrontendVerdict for one named note. Every note in
+// desktopresults.FrontendEvidenceFiles() must carry the rule, not just the first
+// one: the rule shipped keyed on a single filename while a second note already
+// existed, and four verdicts citing it were exempt.
+func makeVerdictCiting(t *testing.T, fixture desktopFixture, scenario, note string) string {
+	t.Helper()
 	cellDir := fixture.cellDirs[scenario]
-	evidencePath := filepath.Join(cellDir, "desktop-evidence", "frontend-gaps.md")
+	evidencePath := filepath.Join(cellDir, "desktop-evidence", note)
 	write(t, evidencePath, "Measured against Claude Desktop 9.9.9.\n")
 	ref := filepath.ToSlash(strings.TrimPrefix(evidencePath, fixture.root+string(filepath.Separator)))
 	path := filepath.Join(cellDir, desktopResultsFile)
@@ -615,9 +626,25 @@ func TestValidateDesktopMeasuredVersionMutations(t *testing.T) {
 		mutateFirstResult(t, path, func(r map[string]any) { r["measured_desktop_version"] = "9.9.9" })
 		requireDesktopFinding(t, fixture.root, "not-runnable", "measured_desktop_version")
 	})
+	t.Run("every declared front-end note carries the rule", func(t *testing.T) {
+		// Keyed on one filename, the rule exempted every verdict citing the
+		// other note. Drive the whole declared set, so a note added later
+		// without the rule fails here instead of widening the blind spot.
+		notes := desktopresults.FrontendEvidenceFiles()
+		if len(notes) == 0 {
+			t.Fatal("the declared front-end note set is empty — this check cannot run")
+		}
+		for _, note := range notes {
+			t.Run(note, func(t *testing.T) {
+				fixture := desktopResultsRepo(t, false)
+				makeVerdictCiting(t, fixture, "not-runnable", note)
+				requireDesktopFinding(t, fixture.root, "not-runnable", "measured_desktop_version")
+			})
+		}
+	})
 	t.Run("observed result may not carry a build", func(t *testing.T) {
-		// The recording's own desktop-environment.json already carries it, and
-		// two copies of one fact are free to disagree.
+		// The recording's own manifest.json already carries it in
+		// desktop_app_version, and two copies of one fact are free to disagree.
 		fixture := desktopResultsRepo(t, false)
 		path := filepath.Join(fixture.cellDirs["observed-pass"], desktopResultsFile)
 		mutateFirstResult(t, path, func(r map[string]any) { r["measured_desktop_version"] = "9.9.9" })

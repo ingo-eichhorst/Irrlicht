@@ -54,11 +54,28 @@ type Evidence struct {
 	Environment     string `json:"environment"`
 }
 
-// FrontendGapsFile is the shared prose evidence a front-end verdict cites. A
-// result that names it is claiming something about what Claude Desktop SHOWS,
-// which is true of one build and unchecked on every other — see
-// MeasuredDesktopVersion.
-const FrontendGapsFile = "frontend-gaps.md"
+// The shared prose notes a FRONT-END verdict cites. A result that names one of
+// these is claiming something about what Claude Desktop SHOWS, which is true of
+// one build and unchecked on every other — see MeasuredDesktopVersion.
+//
+// The set is plural on purpose. It was a single file when the rule shipped, and
+// a second measurement note already existed: slash-commands.md carries its own
+// "both from Claude Desktop 1.46388.4" header, four verdicts rest on it, and
+// not one of them named a build, because the rule asked only about
+// frontend-gaps.md. A set keyed on one filename tests the filename rather than
+// the claim. desktopdriver's evidence-coverage test derives the same set from
+// the notes themselves and fails when a note declaring a build is missing here.
+const (
+	FrontendGapsFile  = "frontend-gaps.md"
+	SlashCommandsFile = "slash-commands.md"
+)
+
+// FrontendEvidenceFiles returns the front-end notes, in stable order. It
+// returns a fresh slice: a caller must not be able to shrink the set that
+// decides which verdicts carry a build.
+func FrontendEvidenceFiles() []string {
+	return []string{FrontendGapsFile, SlashCommandsFile}
+}
 
 // Result is one execution-profile answer for the cell named by ScenarioID.
 type Result struct {
@@ -71,8 +88,8 @@ type Result struct {
 	Evidence         *Evidence `json:"evidence,omitempty"`
 	EvidenceRefs     []string  `json:"evidence_refs,omitempty"`
 	// MeasuredDesktopVersion is the Claude Desktop build a FRONT-END verdict
-	// was measured against. It is required of a result citing FrontendGapsFile
-	// and refused everywhere else.
+	// was measured against. It is required of a result citing one of
+	// FrontendEvidenceFiles and refused everywhere else.
 	//
 	// Why it is a field and not a sentence in Reason. These verdicts read as
 	// present-tense facts — "Desktop exposes no Stop control at any point in a
@@ -85,12 +102,16 @@ type Result struct {
 	MeasuredDesktopVersion string `json:"measured_desktop_version,omitempty"`
 }
 
-// CitesFrontendGaps reports whether the result rests on a front-end
-// measurement, by the shared evidence file it names.
-func (result Result) CitesFrontendGaps() bool {
+// CitesFrontendEvidence reports whether the result rests on a front-end
+// measurement, by the shared evidence note it names.
+func (result Result) CitesFrontendEvidence() bool {
+	notes := FrontendEvidenceFiles()
 	for _, ref := range result.EvidenceRefs {
-		if path.Base(ref) == FrontendGapsFile {
-			return true
+		base := path.Base(ref)
+		for _, note := range notes {
+			if base == note {
+				return true
+			}
 		}
 	}
 	return false

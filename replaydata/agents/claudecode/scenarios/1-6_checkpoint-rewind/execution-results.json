@@ -7,6 +7,7 @@
       "outcome": "not-runnable",
       "reason": "Two gaps, neither about slash commands existing. Claude Desktop runs them and the driver drives them (see slash-commands.md), and this recipe's /rewind is in the popup. But the recipe delivers it through a `send` step rather than a `slash` step, and a send would submit the command as prose \u2014 so the recipe would need changing, which would change what cli-local records. The separate keyboard-key:\"Down\" gap is unmeasured and stands on its own. The cell stays valid for cli-local, where it is recorded today.",
       "missing_control": "keyboard-key:\"Down\", slash-command-popup",
+      "measured_desktop_version": "1.46388.4",
       "evidence_refs": [
         "replaydata/agents/claudecode/desktop-evidence/slash-commands.md",
         "replaydata/agents/claudecode/desktop-evidence/recipe-census.txt",
