@@ -12,17 +12,89 @@ beyond), see the [Roadmap](https://irrlicht.io/docs/roadmap.html).
 
 ## [Unreleased]
 
-### Added
+## [0.6.3] — 2026-09-11
 
+### Autonomy metrics, phone notifications, and a documented answer for every Claude surface
+
+### Highlights
+
+#### Autonomy — how long your sessions ran without needing you
+![The Irrlicht History tab with the Autonomy chart selected, showing a 30-day percentile band, a per-project longest-run panel, and a side panel reading 2m42s median run across 2240 runs and 12 projects](assets/releases/v0.6.3/autonomy.png)
+
+History gains an Autonomy section that measures one thing: how long a session kept working before it needed a human. It shows the typical run, the usual spread, the longest run in each bucket, and how many sessions were working at once. Pick one project to see its own longest-run line and its concurrency bars underneath.
+
+**Why it matters:** "my agent runs unattended" stops being a feeling and becomes a number you can watch move.
+
+(#1905, #1912, #1914, #1915, #1916, #1918, #1919, #1921, #1924)
+
+#### Your phone tells you when a session needs you
+![The Irrlicht settings panel showing the notification toggles and an Irrlicht Elfdans section with a Pair a phone button, a line reading push registered via fcm.googleapis.com with a successful last delivery, and Send a test notification and Unpair buttons](assets/releases/v0.6.3/phone-notifications.png)
+
+Irrlicht can now push a notification to your phone when a session finishes a turn, asks you a question, or approaches its context limit. Pairing mints a one-time code that expires in ten minutes and works once; from v0.6.3 you can also scan a QR code instead of typing it. The phone side is a small installable web app, so there is nothing to fetch from an app store.
+
+**Why it matters:** you can leave the desk and still be the thing your agent is waiting on for seconds rather than hours.
+
+(#1847, #1939)
+
+#### Every Claude surface, with the evidence behind each answer
+![The new Claude Surfaces and Support documentation page, explaining that a Claude product mode has two separate properties — the interface surface where you read and send messages, and the execution place where the agent loop and transcript actually run](assets/releases/v0.6.3/claude-surfaces.png)
+
+"Does Irrlicht support Claude Desktop?" was not answerable, because it mixes two separate questions: where you type, and where the agent loop actually runs. A new documentation page splits them and answers one row per product mode — Claude Code, Cowork and Chat, across desktop, web, mobile and cloud — with the evidence each answer rests on and the date it was last checked.
+
+**Why it matters:** you can tell before you install whether Irrlicht sees the way you actually work, instead of finding out afterwards.
+
+(#1894, #1943)
+
+### Also in this release
+
+**Added**
+
+- **Claude Desktop Local is now a driven, recorded execution profile** (#1887, #1908, #1911, #1927, #1933) — Irrlicht's onboarding rig drives a real Claude Desktop session, applies per-cell settings, and runs slash commands that were measured first rather than assumed.
 - **The per-session history strip shows errors in red.** The strip could not carry `error` at all: it packed each bucket into 2 bits whose four codes were already spent on ready/working/waiting/no-data. Since #1807 stopped an unencodable state painting green, an errored session instead blanked its whole strip within one ring while the row icon beside it stayed red. The wire format is now **one byte per bucket** (60 bytes, 80 base64 characters, replacing 60 x 2 bits = 15 bytes = 20 characters), `error` takes code 3 on top of the priority ladder — so one error paints the whole bucket — and the no-data sentinel moves to 255, leaving codes 4-254 free for a fifth state to extend the ladder in order. Errors already recorded in `history.json` paint red immediately after the upgrade rather than ageing in, because #1807 preserved their verbatim state names on disk; the file format itself is unchanged. Dropping the bit-packing also removes the hand-written packer outright and reduces each of the two client decoders to a single indexed lookup. (#1805)
+- **`of status --verdicts` reports the Desktop campaign's verdicts** (#1942) — the census counts what was decided, and names where that disagrees with the display state.
+- **Two permission-dialog scenario rows, assessed across all 12 agents** (#1881).
+- **A pi session reports its own herdr pane** (#1936, #1937).
+- **A Claude Desktop accessibility helper and per-profile execution evidence** (#1896, #1898, #1904).
 
-### Changed
+**Fixed**
+
+- **Waiting now surfaces for every permission prompt, not just nine named tools** (#1867) — a session paused on any tool gate reads `waiting` instead of looking busy.
+- **Claude Code background completions keep working** (#1902).
+- **The quota strip gets its own header row** (#1907) — it no longer overlaps the controls beside it.
+- **herdr resolves a pane for agents that hide their own environment** (#1934, #1935).
+- **A Desktop front-end verdict is tied to the build it was measured on** (#1940, #1941) — and the evidence set is the two notes that exist, not the one filename the first version keyed on.
+- **Operator content is redacted from the committed Desktop trees** (#1938).
+- **`session_birth` is graded per execution profile** (#1925), and the rig no longer waits on a recorded `ready` that is still being written (#1923).
+- **`state-vocabulary-lint` sees past an embedded NUL byte** (#1837, #1883).
+- **A workflow step's header read no longer races its writer** (#1909).
+- **The release copy-list tripwire reads upper-case tags** (CodeQL `js/bad-tag-filter`, alert 63) — `parseHtmlEntries` matched `<script>` and `<link>` case-sensitively while `attrValue` already used `/i`, so a `<SCRIPT SRC=…>` in `index.html` would have dropped its file out of the release requirement without tripping a guard. Test-only code; it never shipped to a user.
+
+**Changed**
 
 - **The three history WebSocket messages are renamed to `history_snapshot_v2`, `history_tick_v2` and `history_upgrade_v2`,** and the rename is the compatibility mechanism rather than cosmetic. Wire code 3 means *no-data* to a pre-#1805 daemon and *error* to this one, so a new client reading an old daemon would have painted a red bucket for a failure that never happened — and an old daemon emits 3 continuously for every unfilled bucket. Assigning `error` a different code only moves the breakage: an older dashboard masked incoming codes with `& 0x3`, so code 4 arrived as 0 = ready = green, the bug #1807 removed. Both clients ignore an unknown message type, so a mismatched pair now renders a blank strip instead of inventing a colour. **What this costs:** a dashboard tab left open across a daemon upgrade keeps its already-loaded script, reconnects, and shows a blank strip until you reload it. The blank otherwise self-heals within one ring — 60 seconds at 1s granularity, one hour at 60s. The live state badge, the menu bar dot and the row state are unaffected throughout. (#1805)
+- **Every macOS notice draws on one wash token** (#1814, #1931).
+- **Load-bearing comments now carry the evidence for what they assert** (#1822, #1930).
+- **`ir:triage` and `ir:exec` are simpler** (#1873), and the recording rig names its slot flag for ownership and refuses a double run (#1828, #1917).
 
-### Removed
+**Removed**
 
 - **The backchannel is gone — Irrlicht observes your agents and no longer types into them.** The write-back path that let the daemon send input, interrupts and event→action rules into a discovered session's terminal (tmux, kitty, herdr) is removed in full, along with its master toggle, the per-agent `control` permission, the relay's remote-control frames, the macOS Backchannel Rules editor, and the `POST /api/v1/sessions/{id}/input` and `/interrupt` endpoints. Two onboarding scenarios (`backchannel-control`, `backchannel-observe`) leave the fixture matrix with them: 13 cells are retired outright and mistral-vibe's two recorded cells move to `replaydata/agents/mistral-vibe/regressions/1846-retired-terminal-*`, where their three replay goldens keep exercising the transcript tailer with no live cell behind them. **What this gives up:** the folder-trust prompt at launch — Claude Code's "Do you trust the files in this folder?" — was visible only by reading the rendered terminal back, and it blocks before any hook event exists, so a session held at it now reads `ready` instead of `waiting`. The per-tool half of that signal is unaffected: `Notification/permission_prompt` became authoritative in #1861, and the lost path was already default-off and additionally gated on `control` consent plus a tmux or kitty backend. **What is unchanged:** click-to-focus and the whole Launcher stack, herdr host resolution, `irrlicht-focus`, relay telemetry and the relay token model, and every read-only observation Irrlicht makes. (#1846, phases #1874/#1875/#1876)
+
+**Docs / Distribution**
+
+- **`site/` finally has a CI gate** (#1894) — `tools/site-lint.sh` checks dead local links, unbalanced block tags, a missing `<title>` or canonical, and both directions of `sitemap.xml`.
+- **A release test asserts the routes serve the staged web tree**, not just the copy list (#1900, #1906).
+- **Dependency bump:** `modernc.org/sqlite` (#1913).
+
+### Technical appendix
+
+- **Autonomy data model.** A run is the span a session stayed productive without a human turn. #1916 separates a top-level run from a subagent's so a parent counts as working while its children run; #1918 records the runs that were being dropped and always counts subagents. #1914 back-fills history from existing records and marks every reconstructed point as reconstructed, so the panel states `1921 in view reconstructed` rather than presenting derived data as measured. The client fans `chart=autonomy` out into two requests — `autonomy_duration` for the aggregate percentile band and `autonomy_projects` for the per-project panels — and #1921 settled on exactly one project panel at a time after five at once proved unreadable (#1919).
+- **Sparse-bucket honesty.** Buckets holding fewer than 20 runs draw fainter, and the panel says so in words: at that size p95 and p5 are just the longest and shortest run, not percentiles. A still-running run is labelled "length so far".
+- **Phone push.** #1847 adds a relay-side push engine plus a Web Push PWA served by the relay, not by the daemon; pairing mints a single-use code with a ten-minute expiry, and #1939 adds a QR encoding of that same code. Push registration state and last-delivery outcome are shown in settings, so a silently dead subscription is visible rather than inferred.
+- **Permission-prompt waiting.** #1867 replaces a nine-tool allowlist with the `Notification/permission_prompt` path, which fires for every gate. The two dialog classes are documented in the scenario matrix by #1881; class 2 (sandbox, automode, MCP) never emits `PermissionRequest`, so the notification path is the only one that covers both.
+- **Desktop evidence classes.** A Desktop verdict is discriminated by the evidence note it cites. Only the front-end class can go stale while nobody touches the repository, so only it carries `measured_desktop_version`. #1940 shipped that rule keyed on a single filename, which exempted the four verdicts citing `slash-commands.md`; #1941 replaced the constant with `desktopresults.FrontendEvidenceFiles()` and added a coverage test that derives the set from the notes themselves, failing when a note declaring a build is not declared in the set. The recorded build lives in a recording's `manifest.json` as `desktop_app_version` — not in `desktop-environment.json`, which carries no version at all.
+- **Site gate.** `tools/site-lint.sh` refuses loudly rather than quietly: a missing or HTML-less directory exits 2, every optional `grep` is guarded so a no-match cannot kill the script under `set -euo pipefail`, and the success line states how many files it read so the test can assert the check actually looked. Its mutation corpus stages deliberately-broken fixtures from `.in` files, because a broken `.html` committed as `.html` is read by SonarCloud as a production page.
+- **Release staging test.** #1906 asserts the daemon's routes actually serve the staged web tree. The previous test checked the copy list, which passes even when the entry module's ten static imports are absent — the shape of the v0.4.4 defect where the dashboard shipped unreachable.
 
 ## [0.6.2] — 2026-09-03
 
@@ -1829,7 +1901,8 @@ Four distinct bugs caused long-running Claude Code sessions to bounce between
 - First bundled macOS installer `Irrlicht-0.2.0-mac-installer.pkg` containing
   the daemon, menu bar app, and auto-start LaunchAgent.
 
-[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.6.2...HEAD
+[Unreleased]: https://github.com/ingo-eichhorst/Irrlicht/compare/v0.6.3...HEAD
+[0.6.3]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.6.3
 [0.6.2]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.6.2
 [0.6.1]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.6.1
 [0.6.0]: https://github.com/ingo-eichhorst/Irrlicht/releases/tag/v0.6.0
