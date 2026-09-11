@@ -52,13 +52,21 @@ function attrValue(tag, name) {
 // the PWA manifest and the icons. Attribute order inside the tag is not
 // assumed, nor is quoting, and `rel` is matched as the TOKEN SET it is —
 // `rel="stylesheet alternate"` is a stylesheet.
+//
+// Both tag regexes carry /i because HTML tag names are case-insensitive.
+// attrValue already matched that way; these two did not, so `<SCRIPT SRC=…>`
+// dropped its file out of the release requirement without tripping a guard —
+// the same silent under-check the single-quote case above was written for.
+// CodeQL js/bad-tag-filter (alert 63) flagged it. The three upper/mixed-case
+// cases in release-files.test.js were run red against the /g-only version
+// before this line changed.
 export function parseHtmlEntries(html) {
   const entries = [];
-  for (const tag of html.matchAll(/<script\b[^>]*>/g)) {
+  for (const tag of html.matchAll(/<script\b[^>]*>/gi)) {
     const src = attrValue(tag[0], 'src');
     if (src) entries.push(src);
   }
-  for (const tag of html.matchAll(/<link\b[^>]*>/g)) {
+  for (const tag of html.matchAll(/<link\b[^>]*>/gi)) {
     const rel = attrValue(tag[0], 'rel');
     const href = attrValue(tag[0], 'href');
     if (!rel || !href) continue;

@@ -431,6 +431,14 @@ describe('shipped-set parsers', () => {
     ['unquoted attributes', '<script src=irrlicht.js></script>', ['irrlicht.js']],
     ['multi-token rel', '<link rel="stylesheet alternate" href="alt.css">', ['alt.css']],
     ['icon rel', '<link rel="apple-touch-icon" href="elfdans-icon.svg">', ['elfdans-icon.svg']],
+    // HTML tag names are case-insensitive, and attrValue already matched with
+    // /i while the two TAG regexes did not — so an upper-case tag dropped its
+    // file out of the release requirement silently, the same failure the
+    // single-quote case above was added for. CodeQL js/bad-tag-filter (alert
+    // 63) flagged exactly this on shippedFiles.testutil.js:57.
+    ['upper-case script tag', '<SCRIPT SRC="irrlicht.js"></SCRIPT>', ['irrlicht.js']],
+    ['upper-case link tag', '<LINK REL="stylesheet" HREF="irrlicht.css">', ['irrlicht.css']],
+    ['mixed-case script tag', '<Script src="elfdans.js"></Script>', ['elfdans.js']],
     // Must NOT be read as an entry.
     ['inline script', '<script>const x = 1;</script>', []],
     ['unrelated rel', '<link rel="dns-prefetch" href="https://example.test">', []],
