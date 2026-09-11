@@ -159,3 +159,80 @@ func TestInstructionsDisclosure_MatchesInstalledBlocks(t *testing.T) {
 		}
 	})
 }
+
+// agreeingPhrases are the count-dependent phrases the consent copy renders, as
+// (singular, plural) pairs. Issue #1944 took the installed set from two blocks
+// to one and turned three of them ungrammatical at once; only the first was
+// going through agreeing() before.
+var agreeingPhrases = [][2]string{
+	{"block", "blocks"},
+	{"a hidden marker", "hidden markers"},
+	{"this block", "these blocks"},
+}
+
+// retiredMarkerKeys are the in-band marker keys of blocks irrlicht no longer
+// installs. They are the vocabulary the over-promise arm above cannot see:
+// namePattern("task-question") compiles to `\btask[- ]question\b`, which never
+// matched the FeatureUnlocked line's "waiting-question headline from
+// agent-reported markers" — so the copy advertised a retired marker for the
+// whole of #1186's life and #1944 had to fix it by hand. Keyed on the marker
+// name rather than the block name because that is the word the copy reaches for
+// when it describes the feature rather than the file.
+var retiredMarkerKeys = []string{"irrlicht-question", "irrlicht-summary"}
+
+// TestInstructionsPermission_CopyNeverAdvertisesARetiredMarker closes that gap.
+// The consent copy — including the two hand-written lines, Title and
+// FeatureUnlocked — must not name a marker no installed block asks for.
+//
+// Confirmed by mutation, run: restoring the pre-#1944 FeatureUnlocked string
+// ("Task-completion ETA chip + waiting-question headline from agent-reported
+// markers") makes this test report `consent copy advertises "irrlicht-question"`.
+// That is the exact copy that shipped, and the existing over-promise arm above
+// stayed green on it.
+func TestInstructionsPermission_CopyNeverAdvertisesARetiredMarker(t *testing.T) {
+	perm := findPermission(t, Agent(), PermissionKeyInstructions)
+	copyText := strings.Join([]string{
+		perm.Title, perm.FeatureUnlocked, perm.Touches, perm.Detail,
+	}, "\n")
+	if strings.TrimSpace(copyText) == "" {
+		t.Fatal("no consent copy to inspect — an empty string is not a pass")
+	}
+	installed := strings.Join(installedBlockNames(t), " ")
+	for _, key := range retiredMarkerKeys {
+		// "irrlicht-question" -> "question": the copy says "waiting-question
+		// headline", never the raw marker key, so match on the distinguishing
+		// word with a boundary that tolerates the hyphenated compound.
+		word := strings.TrimPrefix(key, "irrlicht-")
+		if strings.Contains(installed, word) {
+			continue // a block by that name is installed after all
+		}
+		if regexp.MustCompile(`(?i)[-\s]` + regexp.QuoteMeta(word) + `\b`).MatchString(copyText) {
+			t.Errorf("consent copy advertises %q, but no installed block asks the agent for it — "+
+				"the permission promises a capability granting it does not deliver:\n%s", key, copyText)
+		}
+	}
+}
+
+// TestInstructionsDisclosure_NounsAgreeWithTheCount covers the half of the copy
+// the count arm above cannot see: its regexes tolerate "block" or "blocks", so
+// a sentence that hard-codes one or the other stays invisible to them.
+//
+// It reads the LIVE copy back rather than calling agreeing() and comparing —
+// a helper the format string does not call agrees with nothing. Confirmed by
+// mutation: replacing the "%s" that carries the hidden-marker phrase with a
+// hard-coded "hidden markers" makes this test report
+// `Detail copy does not use the agreed form "a hidden marker"`.
+func TestInstructionsDisclosure_NounsAgreeWithTheCount(t *testing.T) {
+	n := len(installedInstructionBlocks)
+	if n == 0 {
+		t.Fatal("no installed blocks to agree with — an empty inventory is not a pass")
+	}
+	rendered := instructionsTouched() + "\n" + instructionsDetail()
+	for _, pair := range agreeingPhrases {
+		want := agreeing(n, pair[0], pair[1])
+		if !strings.Contains(rendered, want) {
+			t.Errorf("consent copy does not use the agreed form %q for %d installed block(s):\n%s",
+				want, n, rendered)
+		}
+	}
+}

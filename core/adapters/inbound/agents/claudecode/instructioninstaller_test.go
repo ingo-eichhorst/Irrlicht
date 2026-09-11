@@ -395,53 +395,7 @@ func TestPatchManagedBlock_BeginWithoutEndAppendsFresh(t *testing.T) {
 	}
 }
 
-func TestEnsureTaskQuestionBlock_CreatesFileIfAbsent(t *testing.T) {
-	home := withTempHome(t)
-	modified, err := ensureTaskQuestionBlock()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !modified {
-		t.Fatal("expected modified=true on first install")
-	}
-	content := readFileString(t, memoryPathFor(home))
-	for _, want := range []string{taskQuestionBeginSentinel, taskQuestionEndSentinel, `"marker":"irrlicht-question"`} {
-		if !strings.Contains(content, want) {
-			t.Errorf("installed file missing %q", want)
-		}
-	}
-}
-
-// TestTaskQuestionBlock_DocumentsStructureAndExamples guards issue #1142: the
-// pending-question guidance must teach the context → state → ask structure and
-// carry good/bad examples, not just say "plain prose, ~70 chars". Assert on the
-// structural contract (the deliverable), tolerant of later wording tweaks to
-// the examples themselves.
-func TestTaskQuestionBlock_DocumentsStructureAndExamples(t *testing.T) {
-	for _, want := range []string{
-		"context",      // names the three-part structure...
-		"then the ask", // ...in order
-		"Bad ",         // carries labelled bad/good example pairs
-		"Good ",
-	} {
-		if !strings.Contains(managedTaskQuestionBlock, want) {
-			t.Errorf("task-question block missing %q — issue #1142 structure/examples regressed", want)
-		}
-	}
-	// The cap moved from a hard ~70 to a soft ~90; the old absolute rule must be gone.
-	if strings.Contains(managedTaskQuestionBlock, "under ~70 characters") {
-		t.Error("task-question block still carries the old hard ~70-char rule (issue #1142 relaxed it to ~90)")
-	}
-	// v3 (#1186): the block teaches the explicit "<topic>: <question>" shape.
-	if !strings.Contains(managedTaskQuestionBlock, `"<3–5 word topic>: <what happened — the choice>"`) {
-		t.Error("task-question block missing the v3 <topic>: <question> placeholder (issue #1186)")
-	}
-	if !strings.Contains(managedTaskQuestionBlock, `then ": ", then`) {
-		t.Error("task-question block must teach the colon join (issue #1186)")
-	}
-}
-
-func TestApplyInstructionBlocks_InstallsEtaAndQuestion_RetiresSummary(t *testing.T) {
+func TestApplyInstructionBlocks_InstallsEta_RetiresSummaryAndQuestion(t *testing.T) {
 	home := withTempHome(t)
 	if err := applyInstructionBlocks(); err != nil {
 		t.Fatal(err)
@@ -449,16 +403,19 @@ func TestApplyInstructionBlocks_InstallsEtaAndQuestion_RetiresSummary(t *testing
 	content := readFileString(t, memoryPathFor(home))
 	for _, want := range []string{
 		taskEtaBeginSentinel, taskEtaEndSentinel, `"marker":"irrlicht-eta"`,
-		taskQuestionBeginSentinel, taskQuestionEndSentinel, `"marker":"irrlicht-question"`,
 	} {
 		if !strings.Contains(content, want) {
 			t.Errorf("file missing %q after applyInstructionBlocks", want)
 		}
 	}
-	// The retired summary marker (#1186) is never installed.
-	for _, absent := range []string{taskSummaryBeginSentinel, `"marker":"irrlicht-summary"`} {
+	// Neither retired marker is ever installed: irrlicht-summary since #1186,
+	// irrlicht-question since #1944.
+	for _, absent := range []string{
+		taskSummaryBeginSentinel, `"marker":"irrlicht-summary"`,
+		taskQuestionBeginSentinel, taskQuestionEndSentinel, `"marker":"irrlicht-question"`,
+	} {
 		if strings.Contains(content, absent) {
-			t.Errorf("file unexpectedly contains retired summary marker %q", absent)
+			t.Errorf("file unexpectedly contains retired marker %q", absent)
 		}
 	}
 	// Idempotent: re-applying changes nothing.
@@ -497,10 +454,48 @@ func TestApplyInstructionBlocks_UninstallsLegacySummaryBlock(t *testing.T) {
 	if !strings.HasPrefix(content, "# My setup\n\nAlways use tabs.\n") {
 		t.Errorf("user content not preserved:\n%s", content)
 	}
-	for _, want := range []string{taskEtaBeginSentinel, taskQuestionBeginSentinel} {
-		if !strings.Contains(content, want) {
-			t.Errorf("expected block %q installed alongside the cleanup", want)
+	if !strings.Contains(content, taskEtaBeginSentinel) {
+		t.Errorf("expected block %q installed alongside the cleanup", taskEtaBeginSentinel)
+	}
+}
+
+// TestApplyInstructionBlocks_UninstallsLegacyQuestionBlock is the issue #1944
+// upgrade test, modelled on the #1186 one above: a CLAUDE.md written by any
+// irrlicht up to v0.6.3 still carries the task-question block, and the user
+// never sees a "remove it" prompt — the next granted apply has to take it out.
+// Seen red on the commit before the fix (1e5e38dd), where apply rewrote the
+// block instead of removing it.
+func TestApplyInstructionBlocks_UninstallsLegacyQuestionBlock(t *testing.T) {
+	home := withTempHome(t)
+	path := memoryPathFor(home)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacyQuestion := taskQuestionBeginSentinel + "\n## Pending-question marker (managed by Irrlicht)\n" +
+		"Emit it on its own line at the very end of your response.\n" +
+		`<!-- {"marker":"irrlicht-question","question":"old"} -->` + "\n" + taskQuestionEndSentinel
+	seeded := "# My setup\n\nAlways use tabs.\n\n" + legacyQuestion + "\n"
+	if err := os.WriteFile(path, []byte(seeded), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := applyInstructionBlocks(); err != nil {
+		t.Fatal(err)
+	}
+	content := readFileString(t, path)
+	for _, absent := range []string{
+		taskQuestionBeginSentinel, taskQuestionEndSentinel,
+		`"marker":"irrlicht-question"`, "at the very end of your response",
+	} {
+		if strings.Contains(content, absent) {
+			t.Errorf("legacy question block survived apply (%q):\n%s", absent, content)
 		}
+	}
+	if !strings.HasPrefix(content, "# My setup\n\nAlways use tabs.\n") {
+		t.Errorf("user content not preserved:\n%s", content)
+	}
+	if !strings.Contains(content, taskEtaBeginSentinel) {
+		t.Errorf("expected block %q installed alongside the cleanup", taskEtaBeginSentinel)
 	}
 }
 
