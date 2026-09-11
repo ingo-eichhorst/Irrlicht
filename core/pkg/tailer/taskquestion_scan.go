@@ -1,17 +1,30 @@
 // taskquestion_scan.go parses the agent-emitted task-question marker from
-// assistant text (issue #759). When the agent ends a turn by asking the user
-// something, it may author a terse one-line version of that question and emit
-// it in-band as a hidden HTML comment, e.g.
+// assistant text (issue #759). Irrlicht stopped ASKING for this marker in #1944
+// (see below); the scanner stays because sessions and recordings that predate
+// that still carry one. When an agent ends a turn by asking the user something,
+// it may author a terse one-line version of that question and emit it in-band
+// as a hidden HTML comment, e.g.
 //
 //	<!-- {"marker":"irrlicht-question","question":"Run the migration now?"} -->
 //
 // irrlicht only parses it (read-only). It is the question-state companion to
 // the irrlicht-summary marker (tasksummary_scan.go): the summary describes the
-// task, the question describes what the agent is currently blocked on. It is
-// the preferred source for the surfaced waiting-state headline; when absent the
-// daemon falls back to compacting the raw last-assistant text. Parsing is
-// tolerant by design — the model rewrites markers — so we accept key drift and
-// ignore anything malformed rather than erroring. Latest non-empty marker wins.
+// task, the question describes what the agent is currently blocked on.
+//
+// Since #1944 no adapter instructs an agent to emit it: the carrier was the
+// end-of-turn response text, which Claude Code renders verbatim, so the marker
+// was showing up in the user's chat. The scanner is deliberately unchanged —
+// a live session still running a pre-#1944 ~/.claude/CLAUDE.md keeps emitting
+// the marker, and recorded claudecode transcripts under replaydata/ contain
+// one (`git grep -l irrlicht-question -- replaydata/` lists them), so dropping
+// tolerance here would change how existing data parses. What the
+// surfaced waiting-state headline uses instead is what already shipped as the
+// no-marker path: the daemon compacts the raw last-assistant text and prefixes
+// the topic it derives from the first user prompt (#1186).
+//
+// Parsing is tolerant by design — the model rewrites markers — so we accept key
+// drift and ignore anything malformed rather than erroring. Latest non-empty
+// marker wins.
 package tailer
 
 import (

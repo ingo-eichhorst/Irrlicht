@@ -1,10 +1,16 @@
 // instructioninstaller.go manages the Irrlicht-managed emission rules in the
 // user-level Claude Code instruction file ~/.claude/CLAUDE.md: the task-eta
-// progress marker (issue #558) and the task-question marker (issue #759), each
-// in its own BEGIN/END-delimited block. The task-summary marker (issue #738)
-// was retired in #1186 — its block is now actively uninstalled, not written.
-// The blocks instruct the agent to emit in-band markers; with them in the
-// user-level file every project inherits the rules without per-repo opt-in.
+// progress marker (issue #558), in its own BEGIN/END-delimited block. Two
+// earlier blocks are retired and now actively uninstalled rather than written
+// — task-summary (issue #738, retired in #1186) and task-question (issue #759,
+// retired in #1944 because its carrier was the rendered response text, which
+// this surface shows to the user verbatim). The block instructs the agent to
+// emit an in-band marker; in the user-level file every project inherits the
+// rule without per-repo opt-in.
+//
+// The invariant #1944 installs: no irrlicht marker may be instructed into text
+// the user reads. The only carrier a block may name is a tool input the surface
+// does not render as prose — today the Bash `description` field.
 //
 // Like the hook/statusline installers, consent lives in the permission
 // wizard (issue #577): install/uninstall run as the claude-code/instructions
@@ -54,7 +60,9 @@ const (
 )
 
 // descriptionFieldLiteral is the backtick-quoted "`description`" carrier name
-// referenced by the managed instruction blocks below.
+// referenced by the managed instruction block below. Since #1944 it is the only
+// carrier a block may name: it is a tool input, not text the surface renders as
+// prose to the user.
 const descriptionFieldLiteral = "`description`"
 
 // managedTaskEtaBlock is the full block (sentinels inclusive) written
@@ -92,8 +100,21 @@ const descriptionFieldLiteral = "`description`"
 // "first marker in your first response, right before your first tool call"
 // rode the one path known to be lossy. v4 moves the first marker onto the
 // Bash `description` carrier too — tool inputs reach the daemon via the
-// PreToolUse hook (#604) regardless of text-block fate. End-of-turn text
-// survives upstream, so the no-Bash fallback stays response text.
+// PreToolUse hook (#604) regardless of text-block fate. Its remaining
+// no-Bash fallback was response text; v5 removes it.
+//
+// v5 (#1944): the fallback is deleted and the prohibition stated in its
+// place. v4 kept response text as a carrier on the premise that the surface
+// hides a bare HTML comment; that premise was probed in a real Claude Code
+// TUI (claude 2.1.263, driven under tmux on 2026-09-11, panes recorded on
+// issue #1944) and is false — the comment rendered verbatim both inline and
+// after a blank line. Whether the Bash `description` carrier is itself
+// hidden is NOT measured: the nested-`claude` probe that would settle it was
+// refused by the sandbox both at triage and at implementation time, so the
+// carrier v5 keeps is retained on the unverified assumption that the surface
+// does not print it. `instructionmarkercarrier_test.go`'s
+// TestInstalledInstructionBlocks_NeverInstructMarkerIntoRenderedText is the
+// tripwire that keeps a rendered-text carrier from coming back by hand.
 const managedTaskEtaBlock = taskEtaBeginSentinel + `
 ## Task progress markers (managed by Irrlicht)
 
@@ -109,8 +130,9 @@ and update it as you make progress:
 is how many you've finished. Emit the first marker by appending it to the
 ` + descriptionFieldLiteral + ` of your first Bash call (never to the command itself).
 After each phase you complete, emit the updated marker the same way:
-appended to the ` + descriptionFieldLiteral + ` of the next Bash call you make, or in your
-response text when no Bash call is coming.
+appended to the ` + descriptionFieldLiteral + ` of the next Bash call you make. That
+field is the only carrier — never put the marker in your response text,
+which the user reads.
 ` + taskEtaEndSentinel
 
 // Sentinels delimiting the (now-retired) task-summary managed block. The
@@ -126,72 +148,50 @@ const (
 	taskSummaryEndSentinel   = managedBlockEndPrefix + "task-summary" + sentinelSuffix
 )
 
-// Sentinels delimiting the task-question managed block (issue #759). Distinct
-// from the eta/summary pairs so all three blocks coexist and are patched or
-// removed independently.
+// Sentinels delimiting the (now-retired) task-question managed block (issue
+// #759), retired in #1944. The block asked the agent to put the marker "on its
+// own line at the very end of your response", on the premise — written into
+// this comment for three versions — that Claude Code hides a bare HTML comment
+// at render time the way it strips one from CLAUDE.md at injection time.
+//
+// That premise was measured and is false. Probing a real Claude Code TUI
+// (claude 2.1.263, driven under tmux on 2026-09-11; captured panes are on
+// issue #1944) asked for the marker two ways: on the line after an anchor
+// sentence, and after a blank line. Both rendered the comment verbatim in the
+// pane, so the block was showing every irrlicht user the raw marker text. The
+// blank-line probe is the one that matters: it rules out "the model glued the
+// comment to the paragraph" as the explanation. The binary does ship
+// HTML-comment-stripping regexes (visible in `strings` over the installed
+// claude version), so the drop presumably applies on some other path; that the
+// assistant-text path does not reach them is an inference from the probe, not
+// something read out of the code.
+//
+// Nothing replaces the block, and waiting detection NARROWS rather than
+// surviving intact. Behind PendingQuestionMarker in IsWaitingForUserInput sits
+// PendingWaitingCue (#1150), but it is computed from tailer.WaitingScanWindow —
+// the trailing MaxWaitingScanRunes (2 × 200 = 400) runes, not the whole message
+// (core/pkg/tailer/parser.go's MaxWaitingScanRunes doc explains why the window
+// is bounded at all). ScanTaskQuestion ran over the COMPLETE text. So the case
+// the marker closed and the window does not is the one #1138 introduced it for:
+// a question sitting further back than 400 runes in a long final message, with
+// no cue in the tail — that turn now classifies ready rather than waiting. The
+// Stop-hook path is no rescue; hooks.go uses the same window. What is lost is
+// therefore that residual band plus the agent-authored headline wording; the
+// headline itself still ships, composed daemon-side (#1186 topic prefix +
+// extracted question). Accepted deliberately: the marker's own carrier was
+// printing in every user's terminal on every question, which is a certain harm
+// against an occasional one.
+//
+// The sentinels stay so applyInstructionBlocks can UNINSTALL a block any prior
+// version installed, cleaning it out of ~/.claude/CLAUDE.md on the next granted
+// daemon start — the same path task-summary took in #1186. Every parser is left
+// tolerant (ScanTaskQuestion, scanValueForMarkers — which is the hook walk —
+// and the replay path) so a live session still running an older CLAUDE.md, and
+// every frozen replaydata transcript, keep parsing exactly as before.
 const (
 	taskQuestionBeginSentinel = ManagedBlockSentinelPrefix + "task-question" + sentinelSuffix
 	taskQuestionEndSentinel   = managedBlockEndPrefix + "task-question" + sentinelSuffix
 )
-
-// managedTaskQuestionBlock instructs the agent to emit a terse one-line version
-// of the question it is blocked on when it ends a turn waiting on the user
-// (issue #759) — the preferred source for the surfaced waiting-state headline.
-// Unlike the eta/summary markers, a pending question has no following Bash call
-// to carry it, so the marker rides the end-of-turn response text — the one shape
-// that survives the claude ≥2.1.162 transcript text-drop (end-of-turn text is
-// not dropped; only mid-task pre-tool-call prose is). The example marker MUST
-// sit inside a fenced code block for the same reason as the other blocks —
-// Claude Code strips bare HTML comments from CLAUDE.md at injection time. The
-// daemon always falls back to compacting the raw last-assistant text, so the
-// marker is a refinement, not a requirement.
-//
-// v2 (#1142): the v1 guidance ("plain prose, under ~70 chars") produced
-// context-free headlines — the raw question with no hint of what task it
-// belongs to, cryptic to anyone scanning sessions. v2 asks for a
-// context → state → ask structure with good/bad examples, and relaxes the
-// hard ~70 cap to a soft ~90. That fuller headline survives to the UI: the
-// daemon-side compaction caps at 200 runes (not 70) since #979, and
-// ExtractQuestionSnippet keeps a single such sentence whole — the em-dash,
-// semicolon and colon separators used in the examples are not sentence
-// terminators (verified against core/domain/session's splitter). Only the
-// example placeholder and prose change; the marker key and sentinels are
-// untouched, so patchManagedBlock upgrades installed v1 blocks in place on
-// the next daemon start.
-//
-// v3 (#1186): the headline shape is now the explicit "<3–5 word topic>:
-// <question>" — a chat-conversation-title topic, then a colon, then the ask.
-// This is the same shape the daemon composes for the no-marker fallback path
-// (a topic derived from the first user prompt + the extracted question), so
-// marker and heuristic paths surface one consistent form. The marker carries
-// the whole line to question_headline verbatim (issue #1186 routes an
-// agent-authored marker through the verbatim compaction kind — no
-// sentence-selection that would drop the topic off a two-sentence marker).
-// Only the placeholder and examples change; the marker key and sentinels stay
-// put, so patchManagedBlock upgrades installed v1/v2 blocks in place.
-const managedTaskQuestionBlock = taskQuestionBeginSentinel + `
-## Pending-question marker (managed by Irrlicht)
-
-When you end your turn by asking the user a question, also emit a hidden
-one-line version of that question so tools can show a terse headline:
-
-` + "```" + `
-<!-- {"marker":"irrlicht-question","question":"<3–5 word topic>: <what happened — the choice>"} -->
-` + "```" + `
-
-Emit it on its own line at the very end of your response, only when you are
-actually waiting on the user.
-
-Start with a 3–5 word topic (like a chat conversation title), then ": ", then
-the question. The topic is the context; what follows the colon is the state
-then the ask — context, then state, then the ask — so someone who never saw
-the session understands it at a glance. Keep it high-signal; aim for ~90
-characters, and when clarity and brevity conflict, choose clarity.
-
-- Bad "Should I proceed?" → Good "DB migration: drops users.legacy_id — run it or keep the column?"
-- Bad "Which approach?" → Good "Auth refactor: 2 endpoints still untested — ship now or add tests first?"
-- Bad "Yes or no?" → Good "PR #482 review: 1 blocking finding left — fix now or merge and follow up?"
-` + taskQuestionEndSentinel
 
 // claudeMemoryDisplayPath is the instruction file as the consent copy shows it
 // — tilde-form, not the resolved absolute path, because the wizard text is read
@@ -258,13 +258,6 @@ func uninstallTaskEtaBlock() (bool, error) {
 	return uninstallBlock(taskEtaBeginSentinel, taskEtaEndSentinel)
 }
 
-// ensureTaskQuestionBlock writes-or-patches the task-question managed block
-// (issue #759) — installed alongside the task-eta block under the same
-// instructions permission.
-func ensureTaskQuestionBlock() (bool, error) {
-	return ensureBlockInstalled(taskQuestionBeginSentinel, taskQuestionEndSentinel, managedTaskQuestionBlock)
-}
-
 // managedInstructionBlock is one irrlicht-managed block in ~/.claude/CLAUDE.md:
 // the sentinels that delimit it, the content written between them, and the
 // clause the consent copy uses to disclose it.
@@ -298,14 +291,6 @@ var installedInstructionBlocks = []managedInstructionBlock{
 		content:   managedTaskEtaBlock,
 		discloses: "a task-progress marker, which irrlicht reads to project a completion ETA",
 	},
-	{
-		name:    "task-question",
-		begin:   taskQuestionBeginSentinel,
-		end:     taskQuestionEndSentinel,
-		content: managedTaskQuestionBlock,
-		discloses: "a one-line version of the question it is waiting on, so a human can tell " +
-			"what a session is blocked on",
-	},
 }
 
 // retiredInstructionBlocks are blocks an earlier version installed that this one
@@ -315,6 +300,7 @@ var installedInstructionBlocks = []managedInstructionBlock{
 // irrlicht writes.
 var retiredInstructionBlocks = []managedInstructionBlock{
 	{name: "task-summary", begin: taskSummaryBeginSentinel, end: taskSummaryEndSentinel},
+	{name: "task-question", begin: taskQuestionBeginSentinel, end: taskQuestionEndSentinel},
 }
 
 // instructionsTouched renders the Touches line of the instructions permission —
@@ -330,7 +316,7 @@ func instructionsTouched() string {
 	// back out of the rendered text, so a second copy of this switch is a second
 	// place the punctuation can drift.
 	return fmt.Sprintf("Maintains %d managed %s (%s) in %s",
-		len(installedInstructionBlocks), blockNoun(len(installedInstructionBlocks)),
+		len(installedInstructionBlocks), agreeing(len(installedInstructionBlocks), "block", "blocks"),
 		hookjson.EventList(names), claudeMemoryDisplayPath)
 }
 
@@ -343,32 +329,37 @@ func instructionsDetail() string {
 	for _, b := range installedInstructionBlocks {
 		clauses = append(clauses, b.name+" — "+b.discloses)
 	}
+	n := len(installedInstructionBlocks)
 	return fmt.Sprintf(
-		"Writes %d irrlicht-managed %s (each between BEGIN/END sentinels) to %s, "+
-			"instructing the agent to emit hidden markers: %s. All surrounding file "+
+		"Writes %d irrlicht-managed %s (delimited by BEGIN/END sentinels) to %s, "+
+			"instructing the agent to emit %s: %s. All surrounding file "+
 			"content is preserved byte-for-byte, and a managed block an earlier "+
 			"irrlicht version wrote but this one no longer uses is removed on the same "+
-			"pass. Toggling off removes these blocks and any such retired block, and "+
+			"pass. Toggling off removes %s and any such retired block, and "+
 			"nothing else (also available via the macOS Settings toggle).",
-		len(installedInstructionBlocks), blockNoun(len(installedInstructionBlocks)),
-		claudeMemoryDisplayPath, strings.Join(clauses, "; "))
+		n, agreeing(n, "block", "blocks"), claudeMemoryDisplayPath,
+		agreeing(n, "a hidden marker", "hidden markers"),
+		strings.Join(clauses, "; "), agreeing(n, "this block", "these blocks"))
 }
 
-// blockNoun agrees the noun with the count so a future single-block install
-// does not ship broken grammar in the copy the user consents to.
-func blockNoun(n int) string {
+// agreeing picks the form that agrees with n, so a single-block install does not
+// ship broken grammar in the copy the user consents to. It used to be one
+// function covering one phrase ("block"/"blocks"); #1944 retired task-question,
+// took the installed set to one and made three phrases ungrammatical at once,
+// which is the point at which one parameterised helper beats three near-copies.
+func agreeing(n int, one, many string) string {
 	if n == 1 {
-		return "block"
+		return one
 	}
-	return "blocks"
+	return many
 }
 
 // applyInstructionBlocks installs the managed instruction blocks — the grant
 // effect of the instructions permission. All are governed by a single toggle
-// so it covers every irrlicht-managed instruction. Retired blocks (the
-// irrlicht-summary one, issue #1186) are actively uninstalled here rather than
-// installed, so a CLAUDE.md a prior version wrote is cleaned up on the next
-// granted daemon start. Returns on the first error.
+// so it covers every irrlicht-managed instruction. Retired blocks (irrlicht-
+// summary, issue #1186; irrlicht-question, issue #1944) are actively
+// uninstalled here rather than installed, so a CLAUDE.md a prior version wrote
+// is cleaned up on the next granted daemon start. Returns on the first error.
 func applyInstructionBlocks() error {
 	for _, b := range installedInstructionBlocks {
 		if _, err := ensureBlockInstalled(b.begin, b.end, b.content); err != nil {

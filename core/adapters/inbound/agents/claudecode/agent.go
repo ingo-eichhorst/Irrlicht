@@ -155,7 +155,15 @@ func Agent() agent.Agent {
 				// to disclose the task-summary block retired in #1186 while
 				// saying nothing about the task-question block (#759) it has
 				// been writing to the user's CLAUDE.md ever since (#1377).
-				FeatureUnlocked: "Task-completion ETA chip + waiting-question headline from agent-reported markers",
+				//
+				// FeatureUnlocked is the one line still written by hand, so it
+				// is the one that can over-promise: until #1944 it offered a
+				// "waiting-question headline from agent-reported markers", and
+				// #1944 retired the block that produced that marker. The
+				// headline itself still ships — the daemon composes it from the
+				// transcript (#1186) — so the claim dropped here is the marker,
+				// not the feature.
+				FeatureUnlocked: "Task-completion ETA chip from an agent-reported progress marker",
 				Touches:         instructionsTouched(),
 				Detail:          instructionsDetail(),
 				Apply:           applyInstructionBlocks,

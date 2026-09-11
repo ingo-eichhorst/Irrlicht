@@ -600,9 +600,12 @@ func handleTextBlock(block map[string]interface{}, ev *tailer.ParsedEvent) {
 	if s := tailer.ScanTaskSummary(text, ev.Timestamp); s != nil {
 		ev.TaskSummary = s
 	}
-	// The question marker rides end-of-turn prose (the agent's final line
-	// when it asks the user something), which survives the text-drop, so the
-	// text-block scan is its primary path (#759).
+	// The question marker rode end-of-turn prose (#759) until #1944 retired
+	// the instruction block that asked for it — that carrier is the text the
+	// user reads, and this surface renders it verbatim. Irrlicht no longer
+	// asks any agent to emit it, so this scan is now a tolerance path only:
+	// a live session still running a pre-#1944 ~/.claude/CLAUDE.md, and every
+	// frozen replaydata transcript, still parse exactly as before.
 	if q := tailer.ScanTaskQuestion(text, ev.Timestamp); q != nil {
 		ev.TaskQuestion = q
 	}
