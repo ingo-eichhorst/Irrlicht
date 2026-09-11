@@ -70,31 +70,29 @@ func notesDeclaringADesktopBuild(evidenceDir string) ([]string, error) {
 // the defect that happened; a declared name with no such note is a typo that
 // would silently exempt every verdict citing the real file.
 func auditFrontendEvidenceCoverage(declared, declaring []string) []string {
-	declaredSet := make(map[string]bool, len(declared))
-	for _, name := range declared {
-		declaredSet[name] = true
-	}
-	declaringSet := make(map[string]bool, len(declaring))
-	for _, name := range declaring {
-		declaringSet[name] = true
-	}
-
-	findings := make([]string, 0, len(declared)+len(declaring))
-	for _, name := range declaring {
-		if !declaredSet[name] {
-			findings = append(findings, fmt.Sprintf(
-				"%s names a Claude Desktop build but is not in desktopresults.FrontendEvidenceFiles(): "+
-					"every verdict citing it is exempt from the freshness guard", name))
-		}
-	}
-	for _, name := range declared {
-		if !declaringSet[name] {
-			findings = append(findings, fmt.Sprintf(
-				"desktopresults.FrontendEvidenceFiles() names %s, and no note by that name declares a "+
-					"Claude Desktop build", name))
-		}
-	}
+	findings := append(
+		namesMissingFrom(declaring, declared, "%s names a Claude Desktop build but is not in "+
+			"desktopresults.FrontendEvidenceFiles(): every verdict citing it is exempt from the "+
+			"freshness guard"),
+		namesMissingFrom(declared, declaring, "desktopresults.FrontendEvidenceFiles() names %s, and "+
+			"no note by that name declares a Claude Desktop build")...,
+	)
 	sort.Strings(findings)
+	return findings
+}
+
+// namesMissingFrom formats one finding per name absent from present.
+func namesMissingFrom(names, present []string, format string) []string {
+	known := make(map[string]bool, len(present))
+	for _, name := range present {
+		known[name] = true
+	}
+	findings := make([]string, 0, len(names))
+	for _, name := range names {
+		if !known[name] {
+			findings = append(findings, fmt.Sprintf(format, name))
+		}
+	}
 	return findings
 }
 
