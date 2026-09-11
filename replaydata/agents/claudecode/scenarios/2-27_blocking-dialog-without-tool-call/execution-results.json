@@ -7,6 +7,7 @@
       "outcome": "not-runnable",
       "reason": "The blocking dialog the scenario exists to observe does not occur under this front end. The recipe's second turn asks the agent to print 300 lines and then answers the expected dialog with Enter. Measured on 2026-09-07: at the moment of that keystroke the tree carried 854 controls and no dialog among them \u2014 no numbered choice buttons, and the composer showing `Send`, so the turn had already finished. The keystroke therefore landed on an empty composer and its postcondition could not become true. The driver CAN answer a Desktop dialog \u2014 cell 2-26 records exactly that \u2014 so this is an elicitation gap, not a control gap: nothing in the recipe makes Claude Desktop raise a non-tool blocking dialog. The tree is at desktop-evidence/ in the staged run the failure names.",
       "missing_control": "no control is missing; Desktop raises no blocking dialog that is not a tool permission prompt",
+      "measured_desktop_version": "1.46388.4",
       "evidence_refs": [
         "replaydata/agents/claudecode/desktop-evidence/frontend-gaps.md",
         "replaydata/agents/claudecode/scenarios/2-27_blocking-dialog-without-tool-call/metadata.json"

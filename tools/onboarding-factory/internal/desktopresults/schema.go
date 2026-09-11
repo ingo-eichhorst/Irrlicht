@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 
 	"irrlicht/tools/onboarding-factory/internal/matrix"
 )
@@ -53,6 +54,12 @@ type Evidence struct {
 	Environment     string `json:"environment"`
 }
 
+// FrontendGapsFile is the shared prose evidence a front-end verdict cites. A
+// result that names it is claiming something about what Claude Desktop SHOWS,
+// which is true of one build and unchecked on every other — see
+// MeasuredDesktopVersion.
+const FrontendGapsFile = "frontend-gaps.md"
+
 // Result is one execution-profile answer for the cell named by ScenarioID.
 type Result struct {
 	ScenarioID       string    `json:"scenario_id"`
@@ -63,6 +70,30 @@ type Result struct {
 	MissingControl   string    `json:"missing_control,omitempty"`
 	Evidence         *Evidence `json:"evidence,omitempty"`
 	EvidenceRefs     []string  `json:"evidence_refs,omitempty"`
+	// MeasuredDesktopVersion is the Claude Desktop build a FRONT-END verdict
+	// was measured against. It is required of a result citing FrontendGapsFile
+	// and refused everywhere else.
+	//
+	// Why it is a field and not a sentence in Reason. These verdicts read as
+	// present-tense facts — "Desktop exposes no Stop control at any point in a
+	// turn" — and each one was measured once, on one build. Held only in prose,
+	// the build they belong to cannot be compared to anything, so a Desktop
+	// release turned them stale in silence: the driver refused to run at all
+	// against the new build, and `of validate` still said OK. As a field it is
+	// comparable, and the desktopdriver package fails the moment the pin and
+	// these verdicts disagree.
+	MeasuredDesktopVersion string `json:"measured_desktop_version,omitempty"`
+}
+
+// CitesFrontendGaps reports whether the result rests on a front-end
+// measurement, by the shared evidence file it names.
+func (result Result) CitesFrontendGaps() bool {
+	for _, ref := range result.EvidenceRefs {
+		if path.Base(ref) == FrontendGapsFile {
+			return true
+		}
+	}
+	return false
 }
 
 // Document is one versioned per-cell execution-results.json artifact.

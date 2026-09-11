@@ -397,6 +397,12 @@ func (v *validation) validateObservedShape(context resultValidationContext) {
 	if strings.TrimSpace(result.MissingControl) != "" {
 		v.add(context.target, "missing_control", "is only valid for not-runnable")
 	}
+	if strings.TrimSpace(result.MeasuredDesktopVersion) != "" {
+		// The recording's own desktop-environment.json already carries the
+		// build. A second copy here would be free to disagree with it.
+		v.add(context.target, "measured_desktop_version",
+			"is only valid for a non-observed result; the recording's "+EnvironmentFile+" carries the build")
+	}
 	if result.Outcome == OutcomeObservedFailure && strings.TrimSpace(result.Reason) == "" {
 		v.add(context.target, "reason", "is required for observed-failure")
 	}
@@ -431,6 +437,7 @@ func (v *validation) validateCanonicalEvidenceNames(context resultValidationCont
 func (v *validation) validateNonObservedShape(context resultValidationContext) {
 	v.validateNonObservedEvidence(context)
 	v.validateNonObservedExclusions(context)
+	v.validateMeasuredDesktopVersion(context)
 }
 
 func (v *validation) validateNonObservedEvidence(context resultValidationContext) {
@@ -471,6 +478,35 @@ func (v *validation) allowedNonObservedEvidence(boundary evidenceBoundary) bool 
 		}
 	}
 	return false
+}
+
+// validateMeasuredDesktopVersion binds a front-end verdict to the build it was
+// measured on.
+//
+// A front-end verdict is the one class of Desktop result that can go stale
+// without anybody touching the repository: it describes what the app shows, and
+// the app ships a new build on its own schedule. Every other class is anchored
+// to something in-tree — a recording, the driver's own grammar census, a
+// harness limitation — and changes only when the tree does.
+//
+// The rule is deliberately narrow. Requiring the field of an observed result
+// would duplicate the recording's own desktop-environment.json, and two copies
+// of one fact drift; requiring it of a census verdict would demand a
+// re-measurement for a gap that is not a measurement at all.
+func (v *validation) validateMeasuredDesktopVersion(context resultValidationContext) {
+	result := context.result
+	measured := strings.TrimSpace(result.MeasuredDesktopVersion)
+	if !result.CitesFrontendGaps() {
+		if measured != "" {
+			v.add(context.target, "measured_desktop_version",
+				"is only valid for a result citing "+FrontendGapsFile)
+		}
+		return
+	}
+	if measured == "" {
+		v.add(context.target, "measured_desktop_version",
+			"is required for a front-end verdict: name the Claude Desktop build it was measured on")
+	}
 }
 
 func (v *validation) validateNonObservedExclusions(context resultValidationContext) {
