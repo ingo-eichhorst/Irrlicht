@@ -28,7 +28,7 @@ REPO_ROOT=$(git rev-parse --show-toplevel)
 cd "$REPO_ROOT" || { echo "FAIL: cannot cd to repo root $REPO_ROOT" >&2; exit 1; }
 
 LINT=tools/site-lint.sh
-FIXTURES=tools/lib/testdata/site-lint
+CORPUS=tools/lib/testdata/site-lint
 rc=0
 fail() {
   local why="$1"
@@ -36,6 +36,38 @@ fail() {
   rc=1
   return 0
 }
+
+STAGE=$(mktemp -d)
+trap 'rm -rf "$STAGE"' EXIT
+
+# stage <name> — copy one committed corpus into $STAGE/<name>, stripping the
+# .in suffix, and echo the path. It asserts the file count it wrote: a staging
+# bug that produced an empty tree would otherwise hand the linter nothing, and
+# "the site is clean" and "there was no site" must not read alike.
+stage() {
+  local name="$1" src dest src_count dest_count rel
+  src="$CORPUS/$name"
+  dest="$STAGE/$name"
+  src_count=$(find "$src" -type f -name '*.in' | wc -l | tr -d ' ')
+  if [[ "$src_count" -eq 0 ]]; then
+    echo "FAIL: no .in fixture under $src — the corpus is missing" >&2
+    exit 1
+  fi
+  while IFS= read -r file; do
+    rel="${file#"$src"/}"
+    mkdir -p "$dest/$(dirname "$rel")"
+    cp "$file" "$dest/${rel%.in}"
+  done < <(find "$src" -type f -name '*.in')
+  dest_count=$(find "$dest" -type f | wc -l | tr -d ' ')
+  if [[ "$dest_count" -ne "$src_count" ]]; then
+    echo "FAIL: staged $dest_count of $src_count fixture(s) from $src" >&2
+    exit 1
+  fi
+  printf '%s\n' "$dest"
+}
+
+CLEAN=$(stage clean)
+BROKEN=$(stage broken)
 
 # run_lint <site-dir> [extra args...] -> sets OUT and GOT
 run_lint() {
@@ -45,7 +77,7 @@ run_lint() {
 }
 
 # --- clean corpus passes ------------------------------------------------
-run_lint "$FIXTURES/clean"
+run_lint "$CLEAN"
 [[ "$GOT" -eq 0 ]] || fail "the clean corpus must pass; exit=$GOT output:\n$OUT"
 case "$OUT" in
   *"read 3 file(s)"*) ;;
@@ -57,7 +89,7 @@ case "$OUT" in
 esac
 
 # --- broken corpus fails, once per check --------------------------------
-run_lint "$FIXTURES/broken"
+run_lint "$BROKEN"
 [[ "$GOT" -eq 1 ]] || fail "the broken corpus must fail with exit 1; exit=$GOT output:\n$OUT"
 
 expect_finding() {
@@ -76,7 +108,7 @@ expect_finding 'names /docs/never-existed.html'      'the dangling sitemap entry
 expect_finding 'does not list /docs/unlisted.html'   'the unlisted docs page'
 
 # --strict promotes the warning; the failure count must rise by exactly one.
-run_lint "$FIXTURES/broken" --strict
+run_lint "$BROKEN" --strict
 [[ "$GOT" -eq 1 ]] || fail "--strict must still fail; exit=$GOT"
 case "$OUT" in
   *"6 failure(s)"*) ;;
@@ -84,15 +116,15 @@ case "$OUT" in
 esac
 
 # --- refusals: cannot look must not read as found nothing ---------------
-run_lint "$FIXTURES/does-not-exist"
+run_lint "$STAGE/does-not-exist"
 [[ "$GOT" -eq 2 ]] || fail "a missing site directory must refuse with exit 2; exit=$GOT"
 case "$OUT" in
   *"cannot run"*) ;;
   *) fail "the refusal must say the lint could not run; output:\n$OUT" ;;
 esac
 
-EMPTY=$(mktemp -d)
-trap 'rm -rf "$EMPTY"' EXIT
+EMPTY="$STAGE/empty"
+mkdir -p "$EMPTY"
 run_lint "$EMPTY"
 [[ "$GOT" -eq 2 ]] || fail "a directory with no HTML page must refuse with exit 2; exit=$GOT"
 case "$OUT" in
