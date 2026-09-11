@@ -135,6 +135,16 @@ jobs:
       - name: Lint the session-state vocabulary
         run: tools/state-vocabulary-lint.sh
 
+      # site/ is published to irrlicht.io, and until #1894 no CI check opened
+      # it. A dead link or an unclosed tag reached readers before anyone saw
+      # it. The lint's own mutation corpus runs beside it, so a gate that
+      # stopped checking would fail here rather than pass quietly.
+      - name: Lint the static site
+        run: tools/site-lint.sh
+
+      - name: Test the static-site lint
+        run: bash tools/lib/site-lint_test.sh
+
       - name: Set up Go
         uses: actions/setup-go@v7
         with:

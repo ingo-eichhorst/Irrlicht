@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Adapters — Irrlicht Docs</title>
+<meta name="description" content="Which Claude interfaces and execution places Irrlicht can monitor. One row per product mode, with the execution location, the evidence state, and the date it was last verified.">
+<link rel="canonical" href="https://irrlicht.io/docs/claude-support.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Adapters — Irrlicht Docs">
+<meta property="og:description" content="Which Claude interfaces and execution places Irrlicht can monitor. One row per product mode, with the execution location, the evidence state, and the date it was last verified.">
+<meta property="og:url" content="https://irrlicht.io/docs/claude-support.html">
+<meta property="og:site_name" content="Irrlicht">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Adapters — Irrlicht Docs">
+<meta name="twitter:description" content="Which Claude interfaces and execution places Irrlicht can monitor. One row per product mode, with the execution location, the evidence state, and the date it was last verified.">
+
+<link rel="icon" type="image/svg+xml" href="../assets/favicon.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="../assets/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="../assets/favicon-16x16.png">
+<link rel="apple-touch-icon" sizes="180x180" href="../assets/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdn.counter.dev">
+<link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Mono:wght@300;400;500&family=Outfit:wght@200;300;400;500;600&display=swap">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Mono:wght@300;400;500&family=Outfit:wght@200;300;400;500;600&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+<noscript><link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Mono:wght@300;400;500&family=Outfit:wght@200;300;400;500;600&display=swap" rel="stylesheet"></noscript>
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<div class="docs-layout">
+
+  <!-- Sidebar -->
+  <nav class="sidebar" aria-label="Documentation sections">
+    <a href="../index.html" class="sidebar-logo">
+      <span class="dot"></span>
+      <span>Irrlicht</span>
+      <small>docs</small>
+    </a>
+
+    <div class="sidebar-section">
+      <h4>Getting Started</h4>
+      <a href="index.html">Overview</a>
+      <a href="installation.html">Installation</a>
+      <a href="quickstart.html">Quick Start</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Core Concepts</h4>
+      <a href="story.html">The Story</a>
+      <a href="light-system.html">The Light System</a>
+      <a href="state-machine.html">State Machine</a>
+      <a href="session-detection.html">Session Detection</a>
+      <a href="co2-methodology.html">CO2 Methodology</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Usage</h4>
+      <a href="configuration.html">Configuration</a>
+      <a href="macos-setup.html">macOS Setup</a>
+      <a href="elfdans.html">Phone Notifications</a>
+      <a href="tips-and-tricks.html">Tips &amp; Tricks</a>
+      <a href="cli-tools.html">CLI Tools</a>
+      <a href="api-reference.html">API Reference</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Architecture</h4>
+      <a href="architecture.html">System Design</a>
+      <a href="adapters.html">Adapters</a>
+      <a href="claude-support.html" class="active">Claude Surfaces &amp; Support</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Project</h4>
+      <a href="roadmap.html">Roadmap</a>
+      <a href="changelog.html">Changelog</a>
+    </div>
+
+    <div class="sidebar-section">
+      <h4>Community</h4>
+      <a href="contributing.html">Contributing</a>
+      <a href="code-of-conduct.html">Code of Conduct</a>
+    </div>
+  </nav>
+
+  <!-- Main content -->
+  <main class="docs-main">
+    <div class="docs-content">
+
+      <h1>Claude Surfaces &amp; Support</h1>
+      <p class="page-subtitle">Which Claude interfaces and execution places Irrlicht can monitor, and what the claim rests on.</p>
+
+      <h2>Two questions, not one</h2>
+
+      <p>A Claude product mode has two separate properties, and mixing them is the usual source of a wrong support claim.</p>
+
+      <ul>
+        <li><strong>Interface surface</strong> &mdash; where you read and send messages. A desktop window, a browser tab, a phone.</li>
+        <li><strong>Execution place</strong> &mdash; where the agent loop, the tools, the process and the transcript actually run.</li>
+      </ul>
+
+      <p>Irrlicht watches the <em>execution place</em>. It reads a local agent process, its transcript file and its hooks. The interface surface matters only when it changes where execution happens.</p>
+
+      <p><strong>A local folder does not prove local execution.</strong> A session can show your file tree, name your branch and write to your repository while the agent loop runs on a machine you do not own. Every row below answers the execution question on its own evidence.</p>
+
+      <h2>How to read the support column</h2>
+
+      <table>
+        <thead>
+          <tr><th>Term</th><th>What it means here</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><strong>Supported and verified</strong></td><td>Recorded evidence exists in this repository for this exact mode, and the recordings replay.</td></tr>
+          <tr><td><strong>Expected through the same local runtime, not separately verified</strong></td><td>The mode runs the same local Claude Code process Irrlicht already monitors, but no recording campaign has been run against this surface.</td></tr>
+          <tr><td><strong>Under investigation</strong></td><td>A live adapter candidate with an open question. The linked issue names the blocker.</td></tr>
+          <tr><td><strong>Not supported</strong></td><td>Execution happens off this machine, so there is no local process, transcript or hook to observe.</td></tr>
+          <tr><td><strong>Not applicable</strong></td><td>The mode is not an agent coding session. Irrlicht has nothing to report about it.</td></tr>
+        </tbody>
+      </table>
+
+      <h2>Platform boundary</h2>
+
+      <p>Irrlicht ships a full application on <strong>macOS 13 or later</strong> and a <strong>daemon only</strong> on Linux. There is no Windows build. Every verified row below was measured on macOS. <strong>No macOS evidence on this page is a claim about Windows</strong>, including for Claude Code Desktop, which Anthropic ships for Windows as well.</p>
+
+      <h2>Claude Code</h2>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Mode</th><th>Interface</th><th>Execution place</th>
+            <th>Local process / transcript / hooks</th><th>Irrlicht support</th><th>Evidence</th><th>Last verified</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Local CLI</strong></td>
+            <td>Your terminal</td>
+            <td>Your machine</td>
+            <td>Yes &mdash; all three</td>
+            <td>Supported and verified</td>
+            <td>44 of 50 catalog scenarios recorded on the <code>cli-local</code> profile; 2 blocked by a known daemon bug, 4 unobservable in the fixture format</td>
+            <td>2026-09-11</td>
+          </tr>
+          <tr>
+            <td><strong>IDE session</strong> (VS Code, JetBrains)</td>
+            <td>Your editor</td>
+            <td>Your machine</td>
+            <td>Yes &mdash; all three</td>
+            <td>Expected through the same local runtime, not separately verified</td>
+            <td>The extension drives the same local <code>claude</code> process as the CLI. No separate recording campaign has been run against an editor surface.</td>
+            <td>2026-09-11</td>
+          </tr>
+          <tr>
+            <td><strong>Desktop Local</strong></td>
+            <td>Claude Code desktop app</td>
+            <td>Your machine &mdash; <em>&ldquo;runs on your machine with direct access to your files&rdquo;</em></td>
+            <td>Yes &mdash; all three</td>
+            <td>Supported and verified</td>
+            <td><strong>21 of 50 scenarios observed</strong>, 26 not runnable through the Desktop front end, 2 unobservable, 1 not applicable &mdash; every cell decided. Measured against Claude Desktop <strong>1.46388.4</strong> with bundled Claude Code <strong>2.1.260</strong>. <a href="#desktop-evidence">How to read this evidence</a></td>
+            <td>2026-09-11</td>
+          </tr>
+          <tr>
+            <td><strong>Desktop SSH</strong></td>
+            <td>Claude Code desktop app</td>
+            <td>The remote host &mdash; <em>&ldquo;Claude runs on the remote machine with access to its files and tools&rdquo;</em></td>
+            <td>No &mdash; all three live on the remote host</td>
+            <td>Not supported</td>
+            <td>Nothing to observe locally. The desktop app is an interface onto a process Irrlicht cannot see.</td>
+            <td>2026-09-11</td>
+          </tr>
+          <tr>
+            <td><strong>Desktop Cloud</strong><br><small>also called a Desktop <em>Remote</em> session</small></td>
+            <td>Claude Code desktop app</td>
+            <td>Anthropic-managed infrastructure, or your organisation&rsquo;s self-hosted environment</td>
+            <td>No</td>
+            <td>Not supported</td>
+            <td>Sessions <em>&ldquo;continue even if you close the app or shut down your computer&rdquo;</em>, which is the plainest statement that execution is not local. The desktop app ships <strong>four</strong> session types &mdash; Local, Cloud, SSH and WSL &mdash; and no fifth &ldquo;Remote&rdquo; type: remote Desktop work is this row or the SSH row above.</td>
+            <td>2026-09-11</td>
+          </tr>
+          <tr>
+            <td><strong>Desktop WSL</strong> (Windows)</td>
+            <td>Claude Code desktop app</td>
+            <td>A WSL 2 distribution on your machine</td>
+            <td>Yes, inside the WSL distribution</td>
+            <td>Not supported</td>
+            <td>Windows only, and Irrlicht has no Windows build. Not a statement about WSL &mdash; a statement about this platform boundary.</td>
+            <td>2026-09-11</td>
+          </tr>
+          <tr>
+            <td><strong>Claude Code on the web</strong></td>
+            <td>Browser at claude.ai/code</td>
+            <td>An isolated, Anthropic-managed VM</td>
+            <td>No</td>
+            <td>Not supported</td>
+            <td><em>&ldquo;each session runs in an isolated, Anthropic-managed VM&rdquo;</em>; git credentials stay outside the sandbox.</td>
+            <td>2026-09-11</td>
+          </tr>
+          <tr>
+            <td><strong>Claude Code on mobile</strong></td>
+            <td>Claude app for iOS and Android</td>
+            <td>The same cloud VM as the web</td>
+            <td>No</td>
+            <td>Not supported</td>
+            <td>The mobile app monitors and steers cloud sessions. It starts no local process.</td>
+            <td>2026-09-11</td>
+          </tr>
+          <tr>
+            <td><strong>Cloud session from the terminal</strong> (<code>--cloud</code>)</td>
+            <td>Your terminal starts it; the browser or phone continues it</td>
+            <td>An isolated, Anthropic-managed VM</td>
+            <td>No</td>
+            <td>Not supported</td>
+            <td>The cloud VM clones your GitHub remote, <em>not your local checkout</em>. <strong><code>--remote</code> is a deprecated alias for <code>--cloud</code></strong>, so the two name one mode, not two.</td>
+            <td>2026-09-11</td>
+          </tr>
+          <tr>
+            <td><strong>Remote Control of a local CLI</strong></td>
+            <td>claude.ai/code, or the Claude app for iOS and Android</td>
+            <td><strong>Your machine</strong> &mdash; <em>&ldquo;Claude keeps running locally the entire time, so your code execution and filesystem access stay on your machine&rdquo;</em></td>
+            <td>Yes &mdash; all three</td>
+            <td>Expected through the same local runtime, not separately verified</td>
+            <td>Started with <code>claude remote-control</code>, <code>claude --remote-control</code> or <code>/remote-control</code>. The local session is an ordinary CLI session with a second interface attached, so Irrlicht sees what it always sees. No recording campaign has driven this surface.</td>
+            <td>2026-09-11</td>
+          </tr>
+          <tr>
+            <td><strong>Teleported cloud session</strong> (<code>--teleport</code>)</td>
+            <td>Your terminal</td>
+            <td>Your machine, after the pull</td>
+            <td>Yes &mdash; all three</td>
+            <td>Expected through the same local runtime, not separately verified</td>
+            <td>Teleport gives the terminal <em>its own copy</em> of the session. From that point it is a local CLI session. Included because the same session is <strong>not</strong> observable before the pull.</td>
+            <td>2026-09-11</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Claude Cowork</h2>
+
+      <p>Cowork splits its two halves across two places, and the split is what decides observability. Anthropic describes local Cowork as running <em>&ldquo;the agent loop &hellip; natively on the device&rdquo;</em> while <em>&ldquo;code execution runs in an isolated virtual machine&rdquo;</em> &mdash; Apple Virtualization.framework on macOS, Hyper-V on Windows.</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Mode</th><th>Interface</th><th>Execution place</th>
+            <th>Local process / transcript / hooks</th><th>Irrlicht support</th><th>Evidence</th><th>Last verified</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Desktop, local execution</strong></td>
+            <td>Claude desktop app</td>
+            <td>Agent loop on your machine; shell commands in a local Linux VM</td>
+            <td>A process and a small JSON session registry, yes. Hooks, not established.</td>
+            <td>Under investigation</td>
+            <td>Host-direct sessions run a real bundled Claude Code CLI and leave a registry under <code>~/Library/Application Support/Claude/claude-code-sessions/</code>. Its <code>lastActivityAt</code> is <strong>not</strong> a live heartbeat, so it cannot drive state on its own. Open in <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/971" target="_blank" rel="noopener">#971</a>.</td>
+            <td>2026-09-11</td>
+          </tr>
+          <tr>
+            <td><strong>Desktop, cloud execution</strong></td>
+            <td>Claude desktop app</td>
+            <td>A temporary sandbox on Anthropic-managed infrastructure</td>
+            <td>No</td>
+            <td>Not supported</td>
+            <td><em>&ldquo;Each session gets its own sandbox, created when the session starts and destroyed when it ends.&rdquo;</em></td>
+            <td>2026-09-11</td>
+          </tr>
+          <tr>
+            <td><strong>Web</strong></td>
+            <td>Browser</td>
+            <td>Anthropic-managed infrastructure</td>
+            <td>No</td>
+            <td>Not supported</td>
+            <td>Sessions and files are saved to the Claude account, not to your disk.</td>
+            <td>2026-09-11</td>
+          </tr>
+          <tr>
+            <td><strong>Mobile</strong></td>
+            <td>Claude app for iOS and Android</td>
+            <td>Anthropic-managed infrastructure</td>
+            <td>No</td>
+            <td>Not supported</td>
+            <td>The phone is an interface onto the same cloud session.</td>
+            <td>2026-09-11</td>
+          </tr>
+          <tr>
+            <td><strong>Claude in Chrome</strong></td>
+            <td>Chrome extension</td>
+            <td>The browser, plus Anthropic-managed infrastructure</td>
+            <td>No</td>
+            <td>Not supported</td>
+            <td>Acts on browser tabs. It starts no local agent process and writes no transcript on disk.</td>
+            <td>2026-09-11</td>
+          </tr>
+          <tr>
+            <td><strong>Mobile Dispatch to Desktop</strong></td>
+            <td>Claude app for iOS and Android</td>
+            <td><strong>Your desktop computer</strong> &mdash; the machine must be awake with the Claude desktop app open</td>
+            <td>Same as Cowork local execution</td>
+            <td>Under investigation</td>
+            <td>Dispatch is a remote trigger for a local Cowork session, so it inherits the local-execution row above and its open question. Limited beta on Pro and Max. Open in <a href="https://github.com/ingo-eichhorst/Irrlicht/issues/971" target="_blank" rel="noopener">#971</a>.</td>
+            <td>2026-09-11</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>Claude Chat</h2>
+
+      <p>Claude Chat is a conversation product, not an agent coding session. It runs no agent loop on your machine and writes no transcript Irrlicht reads. The rows exist so the question is answered rather than left open.</p>
+
+      <table>
+        <thead>
+          <tr><th>Mode</th><th>Interface</th><th>Execution place</th><th>Local process / transcript / hooks</th><th>Irrlicht support</th><th>Last verified</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><strong>Desktop</strong></td><td>Claude desktop app</td><td>Anthropic-managed infrastructure</td><td>No</td><td>Not applicable</td><td>2026-09-11</td></tr>
+          <tr><td><strong>Web</strong></td><td>Browser at claude.ai</td><td>Anthropic-managed infrastructure</td><td>No</td><td>Not applicable</td><td>2026-09-11</td></tr>
+          <tr><td><strong>Mobile</strong></td><td>Claude app for iOS and Android</td><td>Anthropic-managed infrastructure</td><td>No</td><td>Not applicable</td><td>2026-09-11</td></tr>
+        </tbody>
+      </table>
+
+      <h2 id="desktop-evidence">Reading the Desktop Local evidence</h2>
+
+      <p>CLI evidence and Desktop evidence are kept apart. They are two execution profiles of one agent, and one profile&rsquo;s recording may never stand in for the other&rsquo;s. The onboarding viewer shows them separately:</p>
+
+      <pre><code>go run ./tools/onboarding-factory/cmd/viewer
+# then open http://127.0.0.1:8765/?profile=desktop-local</code></pre>
+
+      <p>The counts in the Desktop Local row come from one command, not from a hand tally:</p>
+
+      <pre><code>go run ./tools/onboarding-factory/cmd/of status \
+  --agent claudecode --profile desktop-local --verdicts</code></pre>
+
+      <p>Twenty-six scenarios are <strong>not runnable</strong> through the Desktop front end. That is a statement about the driver and the application, never about Irrlicht&rsquo;s monitoring: each of those cells is recorded and passing on the CLI profile. The reasons split into four kinds, and each verdict cites the evidence file for its kind &mdash; a driver-grammar census, a front-end measurement, a harness limitation, or a fixture-format limit. A front-end verdict additionally records the Claude Desktop build it was measured on, because a claim about what the application <em>shows</em> is true of one build and unchecked on every other.</p>
+
+      <h2>Sources</h2>
+
+      <p>Every product statement above rests on a current Anthropic source. These are the primary ones:</p>
+
+      <ul>
+        <li><a href="https://code.claude.com/docs/en/desktop" target="_blank" rel="noopener">Claude Code &mdash; Desktop application</a> &mdash; the Local, Cloud, SSH and WSL session types and where each executes</li>
+        <li><a href="https://code.claude.com/docs/en/remote-control" target="_blank" rel="noopener">Claude Code &mdash; Remote Control</a> &mdash; that code execution and filesystem access stay on your machine</li>
+        <li><a href="https://code.claude.com/docs/en/claude-code-on-the-web" target="_blank" rel="noopener">Claude Code &mdash; on the web</a> &mdash; cloud VM isolation, <code>--cloud</code>, <code>--teleport</code>, and <code>--remote</code> as a deprecated alias</li>
+        <li><a href="https://code.claude.com/docs/en/mobile" target="_blank" rel="noopener">Claude Code &mdash; on mobile</a></li>
+        <li><a href="https://support.claude.com/en/articles/14479288-claude-cowork-architecture-overview" target="_blank" rel="noopener">Claude Cowork architecture overview</a> &mdash; the agent-loop and code-execution split, local and cloud</li>
+        <li><a href="https://support.claude.com/en/articles/13947068-assign-tasks-from-anywhere-in-claude-cowork" target="_blank" rel="noopener">Assign tasks from anywhere in Claude Cowork</a> &mdash; Dispatch to Desktop and its requirements</li>
+        <li><a href="https://support.claude.com/en/articles/15520349-use-claude-cowork-on-web-desktop-and-mobile" target="_blank" rel="noopener">Use Claude Cowork on web, desktop, and mobile</a></li>
+      </ul>
+
+      <p>Anthropic ships these products quickly. Each row carries the date it was last checked; if a row is older than the release you are running, treat it as a question rather than an answer.</p>
+
+      <!-- Bottom nav -->
+      <nav class="docs-nav-bottom" aria-label="Previous and next page">
+        <a href="adapters.html">
+          <span class="label">Previous</span>
+          Adapters
+        </a>
+        <a href="contributing.html" style="text-align:right">
+          <span class="label">Next</span>
+          Contributing &rarr;
+        </a>
+      </nav>
+
+    </div>
+  </main>
+
+</div>
+
+<script async src="https://cdn.counter.dev/script.js" data-id="2d845c2a-ed61-4410-8850-e6339766176f" data-utcoffset="1"></script>
+</body>
+</html>

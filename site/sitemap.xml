@@ -85,4 +85,29 @@
     <lastmod>2026-04-04</lastmod>
     <priority>0.5</priority>
   </url>
+  <url>
+    <loc>https://irrlicht.io/docs/co2-methodology.html</loc>
+    <lastmod>2026-09-11</lastmod>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://irrlicht.io/docs/macos-setup.html</loc>
+    <lastmod>2026-09-11</lastmod>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://irrlicht.io/docs/roadmap.html</loc>
+    <lastmod>2026-09-11</lastmod>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://irrlicht.io/docs/story.html</loc>
+    <lastmod>2026-09-11</lastmod>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://irrlicht.io/docs/claude-support.html</loc>
+    <lastmod>2026-09-11</lastmod>
+    <priority>0.8</priority>
+  </url>
 </urlset>
