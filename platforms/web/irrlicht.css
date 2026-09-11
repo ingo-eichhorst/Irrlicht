@@ -1500,6 +1500,20 @@
       color: var(--muted);
       padding: 4px 4px 0;
     }
+    .settings-modal .elfdans-code-url {
+      display: block;
+      overflow-wrap: anywhere;
+      user-select: text;
+    }
+    .settings-modal .elfdans-pairing-qr {
+      display: block;
+      width: min(256px, calc(100% - 8px));
+      height: auto;
+      margin: 10px auto 4px;
+      border: 8px solid white;
+      border-radius: 4px;
+      image-rendering: pixelated;
+    }
     .settings-modal .elfdans-pair-row {
       display: flex;
       align-items: center;
@@ -1510,6 +1524,32 @@
       width: 130px;
       font-family: var(--font-mono);
       text-transform: uppercase;
+    }
+
+    .pairing-handoff-page {
+      min-height: 100vh;
+      margin: 0;
+      display: grid;
+      place-items: center;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font-sans);
+    }
+    .pairing-handoff-card {
+      width: min(360px, calc(100vw - 48px));
+      padding: 28px;
+      text-align: center;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+    }
+    .pairing-handoff-card h1 { color: var(--text-bright); font-size: 22px; }
+    .pairing-handoff-card p { line-height: 1.5; }
+    .pairing-handoff-code {
+      font-family: var(--font-mono);
+      font-size: 24px;
+      letter-spacing: 3px;
+      color: var(--waiting);
     }
 
     /* Permission wizard (issue #570) — shares the settings modal chrome. */

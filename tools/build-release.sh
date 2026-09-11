@@ -50,6 +50,7 @@ WEB_FILES=(
     formatters.js
     historyTab.js
     permissionsWizard.js
+    pair-handoff.js
     quotaChips.js
     sessionIdentity.js
     sw.js

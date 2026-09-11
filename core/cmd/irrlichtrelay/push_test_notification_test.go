@@ -56,7 +56,9 @@ type testNotifyEnv struct {
 func newTestNotifyEnv(t *testing.T, seeds ...deviceSeed) *testNotifyEnv {
 	t.Helper()
 	env := newObserverEnv(t, seeds...)
-	srv := httptest.NewServer(buildMux(newHubWithAuth(env.store, nil, defaultLimits()), env.store, env.svc, env.obs))
+	srv := httptest.NewServer(buildMux(newHubWithAuth(env.store, nil, defaultLimits()), relayServices{
+		store: env.store, push: env.svc, notifier: env.obs,
+	}))
 	t.Cleanup(srv.Close)
 	return &testNotifyEnv{observerEnv: env, srv: srv}
 }

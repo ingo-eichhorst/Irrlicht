@@ -120,7 +120,7 @@ describe('service worker contract (arc42 §5.2)', () => {
     // not — a section that renders is proof irrlicht.js reaches the module —
     // and it is the state most users' phones sit in before they ever pair.
     const { register, section } = await bootDashboard({
-      'api/v1/push/info': { enabled: true, vapid_public_key: 'AQID' },
+      '/api/v1/push/info': { enabled: true, vapid_public_key: 'AQID' },
     })
     expect(section.hidden).toBe(false)
     expect(section.querySelector('h2').textContent).toBe('Irrlicht Elfdans')

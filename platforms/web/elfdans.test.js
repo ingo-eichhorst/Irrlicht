@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, vi } from 'vitest'
 import {
   initElfdans, urlBase64ToUint8Array, formatPairingCode, normalizePairingCode, countdownText,
   healthLineText, testNotificationText, liveViewNoteText, publishLedgerSnapshot, ledgerEntry, sessionFromHash,
-  ELFDANS_MESSAGES,
+  pairingCodeFromSearch, ELFDANS_MESSAGES,
 } from './elfdans.js'
 
 // Elfdans pairing + settings UI (docs/mobile-notifications-arc42.md §6.1,
@@ -120,6 +120,7 @@ function mockServiceWorker(reg, { activates = true } = {}) {
 }
 
 beforeEach(() => {
+  history.replaceState(null, '', '/')
   localStorage.clear()
   const section = document.getElementById('elfdans-section')
   section.hidden = true
@@ -144,6 +145,13 @@ describe('pure helpers', () => {
     expect(countdownText(600)).toBe('10:00')
     expect(countdownText(59)).toBe('0:59')
   })
+
+  test('pairing handoff query accepts only the pairing alphabet and shape', () => {
+    expect(pairingCodeFromSearch('?pair=ABCD-EFGH')).toBe('ABCD-EFGH')
+    expect(pairingCodeFromSearch('?pair=abcd-efgh')).toBe('ABCD-EFGH')
+    expect(pairingCodeFromSearch('?pair=ABCI-EFGH')).toBe('')
+    expect(pairingCodeFromSearch('?pair=too-short')).toBe('')
+  })
 })
 
 describe('feature detection (arc42 §5.2)', () => {
@@ -157,7 +165,7 @@ describe('feature detection (arc42 §5.2)', () => {
   })
 
   test('enabled:false (e.g. an auth-off relay) renders nothing', async () => {
-    relayFetch({ 'GET api/v1/push/info': { body: { enabled: false, reason: 'auth is off' } } })
+    relayFetch({ 'GET /api/v1/push/info': { body: { enabled: false, reason: 'auth is off' } } })
     await initElfdans()
     await flush()
     const section = document.getElementById('elfdans-section')
@@ -166,7 +174,7 @@ describe('feature detection (arc42 §5.2)', () => {
   })
 
   test('enabled:true renders the section; without a relay token there is no mint button', async () => {
-    relayFetch({ 'GET api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } } })
+    relayFetch({ 'GET /api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } } })
     await initElfdans()
     await flush()
     const section = document.getElementById('elfdans-section')
@@ -178,15 +186,37 @@ describe('feature detection (arc42 §5.2)', () => {
 })
 
 describe('phone-side pairing (arc42 §6.1)', () => {
+  test('handoff prefills the code but waits for the Pair button', async () => {
+    history.replaceState(null, '', '/?pair=ABCD-EFGH')
+    const calls = relayFetch({
+      'GET /api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
+      'POST /api/v1/push/pair': { body: { token: 'dev-prefill', vapid_public_key: VAPID } },
+      'POST /api/v1/push/subscriptions': { status: 201, body: {} },
+      'GET /api/v1/push/subscriptions': { body: { registered: true, endpoint_host: 'web.push.apple.com', last_delivery: null } },
+    })
+    mockServiceWorker(activatingRegistration())
+
+    await initElfdans()
+    await flush()
+    expect(document.getElementById('elfdans-code-input').value).toBe('ABCD-EFGH')
+    expect(Notification.requestPermission).not.toHaveBeenCalled()
+    expect(calls.some((c) => c.method === 'POST')).toBe(false)
+
+    document.getElementById('elfdans-pair-submit').click()
+    await flush()
+    expect(Notification.requestPermission).toHaveBeenCalled()
+    expect(location.search).toBe('')
+  })
+
   test('happy path: code → pair → register → permission → subscribe → POST with the device token', async () => {
     const calls = relayFetch({
-      'GET api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
-      'POST api/v1/push/pair': { body: { token: 'dev-tok-1', token_id: 't1', vapid_public_key: VAPID } },
-      'POST api/v1/push/subscriptions': { status: 201, body: {} },
+      'GET /api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
+      'POST /api/v1/push/pair': { body: { token: 'dev-tok-1', token_id: 't1', vapid_public_key: VAPID } },
+      'POST /api/v1/push/subscriptions': { status: 201, body: {} },
       // Faithful to handleSubscriptionStatus in
       // core/cmd/irrlichtrelay/push_handlers.go: `created` is unix seconds and
       // `last_delivery` is an object, never a string.
-      'GET api/v1/push/subscriptions': {
+      'GET /api/v1/push/subscriptions': {
         body: {
           registered: true, created: 1755165000, endpoint_host: 'web.push.apple.com',
           last_delivery: { at: 1755165120, ok: true },
@@ -203,10 +233,10 @@ describe('phone-side pairing (arc42 §6.1)', () => {
     await flush()
 
     // Pair request carries the normalized code.
-    const pair = calls.find((c) => c.method === 'POST' && c.url === 'api/v1/push/pair')
+    const pair = calls.find((c) => c.method === 'POST' && c.url === '/api/v1/push/pair')
     expect(JSON.parse(pair.opts.body).code).toBe('AB12CD34')
     // Registration is lazy and happened from the pairing flow.
-    expect(sw.register).toHaveBeenCalledWith('./sw.js')
+    expect(sw.register).toHaveBeenCalledWith('/sw.js')
     expect(Notification.requestPermission).toHaveBeenCalled()
     // applicationServerKey is a Uint8Array decoding the VAPID key
     // byte-for-byte — the raw base64url string is the classic silent failure.
@@ -215,7 +245,7 @@ describe('phone-side pairing (arc42 §6.1)', () => {
     expect(subOpts.applicationServerKey).toBeInstanceOf(Uint8Array)
     expect([...subOpts.applicationServerKey]).toEqual(VAPID_BYTES)
     // The subscription is registered under the DEVICE token (arc42 §8.1).
-    const subPost = calls.find((c) => c.method === 'POST' && c.url === 'api/v1/push/subscriptions')
+    const subPost = calls.find((c) => c.method === 'POST' && c.url === '/api/v1/push/subscriptions')
     expect(subPost.opts.headers.Authorization).toBe('Bearer dev-tok-1')
     expect(JSON.parse(subPost.opts.body)).toEqual({
       endpoint: 'https://web.push.example/abc',
@@ -231,10 +261,10 @@ describe('phone-side pairing (arc42 §6.1)', () => {
 
   test('subscribe waits for the worker to activate — register() alone is not enough', async () => {
     const calls = relayFetch({
-      'GET api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
-      'POST api/v1/push/pair': { body: { token: 'dev-tok-a', vapid_public_key: VAPID } },
-      'POST api/v1/push/subscriptions': { status: 201, body: {} },
-      'GET api/v1/push/subscriptions': { body: { registered: true, endpoint_host: 'web.push.apple.com', last_delivery: null } },
+      'GET /api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
+      'POST /api/v1/push/pair': { body: { token: 'dev-tok-a', vapid_public_key: VAPID } },
+      'POST /api/v1/push/subscriptions': { status: 201, body: {} },
+      'GET /api/v1/push/subscriptions': { body: { registered: true, endpoint_host: 'web.push.apple.com', last_delivery: null } },
     })
     const reg = activatingRegistration()
     mockServiceWorker(reg)
@@ -249,13 +279,13 @@ describe('phone-side pairing (arc42 §6.1)', () => {
     // subscribing in the turn register() resolves rejects on a real device
     // (arc42 §6.1's "subscribe(VAPID pub)" step comes after the worker is up).
     expect(reg.active, 'subscribed before navigator.serviceWorker.ready resolved').not.toBeNull()
-    expect(calls.some((c) => c.method === 'POST' && c.url === 'api/v1/push/subscriptions')).toBe(true)
+    expect(calls.some((c) => c.method === 'POST' && c.url === '/api/v1/push/subscriptions')).toBe(true)
   })
 
   test('a subscribe that fails leaves a verdict naming the spent code, never a frozen "Pairing…"', async () => {
     relayFetch({
-      'GET api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
-      'POST api/v1/push/pair': { body: { token: 'dev-tok-b', vapid_public_key: VAPID } },
+      'GET /api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
+      'POST /api/v1/push/pair': { body: { token: 'dev-tok-b', vapid_public_key: VAPID } },
     })
     mockServiceWorker(activatingRegistration({ subscribeFails: true }))
 
@@ -285,10 +315,10 @@ describe('phone-side pairing (arc42 §6.1)', () => {
       })
     }
     relayFetch({
-      'GET api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
-      'POST api/v1/push/pair': { body: { token: 'dev-tok-c', vapid_public_key: VAPID } },
-      'POST api/v1/push/subscriptions': { status: 201, body: {} },
-      'GET api/v1/push/subscriptions': { body: { registered: true, endpoint_host: 'web.push.apple.com', last_delivery: null } },
+      'GET /api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
+      'POST /api/v1/push/pair': { body: { token: 'dev-tok-c', vapid_public_key: VAPID } },
+      'POST /api/v1/push/subscriptions': { status: 201, body: {} },
+      'GET /api/v1/push/subscriptions': { body: { registered: true, endpoint_host: 'web.push.apple.com', last_delivery: null } },
     })
     const reg = activatingRegistration()
     const sw = mockServiceWorker(reg)
@@ -317,8 +347,8 @@ describe('phone-side pairing (arc42 §6.1)', () => {
     vi.useFakeTimers()
     try {
       relayFetch({
-        'GET api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
-        'POST api/v1/push/pair': { body: { token: 'dev-tok-e', vapid_public_key: VAPID } },
+        'GET /api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
+        'POST /api/v1/push/pair': { body: { token: 'dev-tok-e', vapid_public_key: VAPID } },
       })
       // navigator.serviceWorker.ready never resolves — the phone whose worker
       // is stuck installing. Without a bound, "Pairing…" is the last thing the
@@ -345,8 +375,8 @@ describe('phone-side pairing (arc42 §6.1)', () => {
       static requestPermission = vi.fn(() => Promise.resolve('denied'))
     }
     const calls = relayFetch({
-      'GET api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
-      'POST api/v1/push/pair': { body: { token: 'dev-tok-d', vapid_public_key: VAPID } },
+      'GET /api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
+      'POST /api/v1/push/pair': { body: { token: 'dev-tok-d', vapid_public_key: VAPID } },
     })
     mockServiceWorker(activatingRegistration())
 
@@ -356,7 +386,7 @@ describe('phone-side pairing (arc42 §6.1)', () => {
     document.getElementById('elfdans-pair-submit').click()
     await flush()
 
-    expect(calls.some((c) => c.url === 'api/v1/push/pair')).toBe(false)
+    expect(calls.some((c) => c.url === '/api/v1/push/pair')).toBe(false)
     expect(localStorage.getItem('elfdansDeviceToken')).toBeNull()
     const status = document.getElementById('elfdans-pair-status').textContent
     expect(status).toMatch(/notification/i)
@@ -365,8 +395,8 @@ describe('phone-side pairing (arc42 §6.1)', () => {
 
   test('401 shows the uniform rejected-code message (wrong = expired = used)', async () => {
     relayFetch({
-      'GET api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
-      'POST api/v1/push/pair': { status: 401, body: {} },
+      'GET /api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
+      'POST /api/v1/push/pair': { status: 401, body: {} },
     })
     mockServiceWorker(activatingRegistration())
     await initElfdans()
@@ -380,8 +410,8 @@ describe('phone-side pairing (arc42 §6.1)', () => {
 
   test('429 is distinct: waiting helps, retyping does not', async () => {
     relayFetch({
-      'GET api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
-      'POST api/v1/push/pair': { status: 429, body: {} },
+      'GET /api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
+      'POST /api/v1/push/pair': { status: 429, body: {} },
     })
     mockServiceWorker(activatingRegistration())
     await initElfdans()
@@ -400,9 +430,9 @@ describe('self-heal on open (arc42 §8.3)', () => {
   test('stored device token + null getSubscription → re-subscribe + re-POST', async () => {
     localStorage.setItem('elfdansDeviceToken', 'dev-tok-2')
     const calls = relayFetch({
-      'GET api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
-      'POST api/v1/push/subscriptions': { status: 201, body: {} },
-      'GET api/v1/push/subscriptions': { body: { registered: true, endpoint_host: 'fcm.googleapis.com', last_delivery: null } },
+      'GET /api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
+      'POST /api/v1/push/subscriptions': { status: 201, body: {} },
+      'GET /api/v1/push/subscriptions': { body: { registered: true, endpoint_host: 'fcm.googleapis.com', last_delivery: null } },
     })
     const reg = activatingRegistration()
     mockServiceWorker(reg)
@@ -413,7 +443,7 @@ describe('self-heal on open (arc42 §8.3)', () => {
     const subOpts = reg.pushManager.subscribe.mock.calls[0][0]
     expect(subOpts.applicationServerKey).toBeInstanceOf(Uint8Array)
     expect([...subOpts.applicationServerKey]).toEqual(VAPID_BYTES)
-    const subPost = calls.find((c) => c.method === 'POST' && c.url === 'api/v1/push/subscriptions')
+    const subPost = calls.find((c) => c.method === 'POST' && c.url === '/api/v1/push/subscriptions')
     expect(subPost.opts.headers.Authorization).toBe('Bearer dev-tok-2')
   })
 
@@ -421,13 +451,13 @@ describe('self-heal on open (arc42 §8.3)', () => {
     localStorage.setItem('elfdansDeviceToken', 'dev-tok-4')
     const sub = fakeSubscription()
     const calls = relayFetch({
-      'GET api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
-      'POST api/v1/push/subscriptions': { status: 201, body: {} },
+      'GET /api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
+      'POST /api/v1/push/subscriptions': { status: 201, body: {} },
       // A relay whose registry lost this phone (restored backup, pruned entry,
       // registry deleted per arc42 §8.6) answers registered:false while the
       // browser's own subscription is intact — then registered:true once the
       // self-heal has re-POSTed it.
-      'GET api/v1/push/subscriptions': {
+      'GET /api/v1/push/subscriptions': {
         replies: [
           { body: { registered: false, last_delivery: null } },
           { body: { registered: true, endpoint_host: 'web.push.apple.com', last_delivery: null } },
@@ -440,7 +470,7 @@ describe('self-heal on open (arc42 §8.3)', () => {
     await initElfdans()
     await flush()
 
-    const subPost = calls.find((c) => c.method === 'POST' && c.url === 'api/v1/push/subscriptions')
+    const subPost = calls.find((c) => c.method === 'POST' && c.url === '/api/v1/push/subscriptions')
     expect(subPost, 'the relay reported the subscription gone and nothing re-registered it').toBeTruthy()
     expect(subPost.opts.headers.Authorization).toBe('Bearer dev-tok-4')
     // The address the browser already holds is what gets re-registered — no
@@ -457,8 +487,8 @@ describe('self-heal on open (arc42 §8.3)', () => {
   test('a revoked device token (401) is reported as un-paired, not as an outage', async () => {
     localStorage.setItem('elfdansDeviceToken', 'dev-tok-5')
     relayFetch({
-      'GET api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
-      'GET api/v1/push/subscriptions': { status: 401, body: null },
+      'GET /api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
+      'GET /api/v1/push/subscriptions': { status: 401, body: null },
     })
     mockServiceWorker(activatingRegistration({ subscription: fakeSubscription() }))
 
@@ -480,9 +510,9 @@ describe('self-heal on open (arc42 §8.3)', () => {
   test('a 401 on the self-heal re-POST is inspected, not swallowed', async () => {
     localStorage.setItem('elfdansDeviceToken', 'dev-tok-6')
     relayFetch({
-      'GET api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
-      'GET api/v1/push/subscriptions': { body: { registered: false, last_delivery: null } },
-      'POST api/v1/push/subscriptions': { status: 401, body: null },
+      'GET /api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
+      'GET /api/v1/push/subscriptions': { body: { registered: false, last_delivery: null } },
+      'POST /api/v1/push/subscriptions': { status: 401, body: null },
     })
     mockServiceWorker(activatingRegistration({ subscription: fakeSubscription() }))
 
@@ -495,8 +525,8 @@ describe('self-heal on open (arc42 §8.3)', () => {
   test('an unreachable relay stays a transient outage, distinct from a revocation', async () => {
     localStorage.setItem('elfdansDeviceToken', 'dev-tok-7')
     relayFetch({
-      'GET api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
-      'GET api/v1/push/subscriptions': { throws: true },
+      'GET /api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
+      'GET /api/v1/push/subscriptions': { throws: true },
     })
     mockServiceWorker(activatingRegistration({ subscription: fakeSubscription() }))
 
@@ -553,9 +583,9 @@ describe('unpair (arc42 §8.1 revocation)', () => {
     localStorage.setItem('elfdansDeviceToken', 'dev-tok-3')
     const sub = fakeSubscription()
     const calls = relayFetch({
-      'GET api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
-      'GET api/v1/push/subscriptions': { body: { registered: true, endpoint_host: 'web.push.apple.com', last_delivery: null } },
-      'DELETE api/v1/push/subscriptions': { status: 204 },
+      'GET /api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
+      'GET /api/v1/push/subscriptions': { body: { registered: true, endpoint_host: 'web.push.apple.com', last_delivery: null } },
+      'DELETE /api/v1/push/subscriptions': { status: 204 },
     })
     const reg = activatingRegistration({ subscription: sub })
     mockServiceWorker(reg)
@@ -568,7 +598,7 @@ describe('unpair (arc42 §8.1 revocation)', () => {
     document.getElementById('elfdans-unpair').click()
     await flush()
 
-    const del = calls.find((c) => c.method === 'DELETE' && c.url === 'api/v1/push/subscriptions')
+    const del = calls.find((c) => c.method === 'DELETE' && c.url === '/api/v1/push/subscriptions')
     expect(del.opts.headers.Authorization).toBe('Bearer dev-tok-3')
     expect(sub.unsubscribe).toHaveBeenCalled()
     expect(localStorage.getItem('elfdansDeviceToken')).toBeNull()
@@ -584,10 +614,10 @@ describe("pairing configures the phone's own live view (arc42 §6.2, ADR-9)", ()
   // the relay it paired with — possible because a device token is a full
   // client token (§8.1), and necessary because nothing else can lower a badge.
   const PAIR_ROUTES = () => ({
-    'GET api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
-    'POST api/v1/push/pair': { body: { token: 'dev-live-1', vapid_public_key: VAPID } },
-    'POST api/v1/push/subscriptions': { status: 201, body: {} },
-    'GET api/v1/push/subscriptions': {
+    'GET /api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
+    'POST /api/v1/push/pair': { body: { token: 'dev-live-1', vapid_public_key: VAPID } },
+    'POST /api/v1/push/subscriptions': { status: 201, body: {} },
+    'GET /api/v1/push/subscriptions': {
       body: { registered: true, endpoint_host: 'web.push.apple.com', last_delivery: null },
     },
   })
@@ -661,11 +691,11 @@ describe("pairing configures the phone's own live view (arc42 §6.2, ADR-9)", ()
       enableRelaySource: true, relayUrl: location.origin, relayToken: 'dev-live-2',
     })
     relayFetch({
-      'GET api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
-      'GET api/v1/push/subscriptions': {
+      'GET /api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
+      'GET /api/v1/push/subscriptions': {
         body: { registered: true, endpoint_host: 'web.push.apple.com', last_delivery: null },
       },
-      'DELETE api/v1/push/subscriptions': { status: 204 },
+      'DELETE /api/v1/push/subscriptions': { status: 204 },
     })
     mockServiceWorker(activatingRegistration({ subscription: fakeSubscription() }))
     await initElfdans({ liveView: seam })
@@ -685,11 +715,11 @@ describe("pairing configures the phone's own live view (arc42 §6.2, ADR-9)", ()
       enableRelaySource: true, relayUrl: 'https://relay.example', relayToken: 'user-tok',
     })
     relayFetch({
-      'GET api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
-      'GET api/v1/push/subscriptions': {
+      'GET /api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
+      'GET /api/v1/push/subscriptions': {
         body: { registered: true, endpoint_host: 'web.push.apple.com', last_delivery: null },
       },
-      'DELETE api/v1/push/subscriptions': { status: 204 },
+      'DELETE /api/v1/push/subscriptions': { status: 204 },
     })
     mockServiceWorker(activatingRegistration({ subscription: fakeSubscription() }))
     await initElfdans({ liveView: seam })
@@ -711,8 +741,8 @@ describe("pairing configures the phone's own live view (arc42 §6.2, ADR-9)", ()
       enableRelaySource: true, relayUrl: location.origin, relayToken: 'dev-live-4',
     })
     relayFetch({
-      'GET api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
-      'GET api/v1/push/subscriptions': { status: 401, body: null },
+      'GET /api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
+      'GET /api/v1/push/subscriptions': { status: 401, body: null },
     })
     mockServiceWorker(activatingRegistration({ subscription: fakeSubscription() }))
     await initElfdans({ liveView: seam })
@@ -889,8 +919,8 @@ describe('sessionFromHash (R6, the cold-open route)', () => {
 describe('mac-side minting (arc42 §6.1, §8.1)', () => {
   test('mint renders the formatted code, the countdown, and an address a phone can use', async () => {
     const calls = relayFetch({
-      'GET api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
-      'POST api/v1/push/pairings': { status: 201, body: { code: 'ab12cd34', expires_in: 600 } },
+      'GET /api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
+      'POST /api/v1/push/pairings': { status: 201, body: { code: 'ab12cd34', expires_in: 600 } },
     })
     await initElfdans({ relayToken: () => 'client-tok' })
     await flush()
@@ -901,7 +931,7 @@ describe('mac-side minting (arc42 §6.1, §8.1)', () => {
     await flush()
 
     // Minting is the authed-client door (§8.1): Bearer relay token.
-    const minted = calls.find((c) => c.method === 'POST' && c.url === 'api/v1/push/pairings')
+    const minted = calls.find((c) => c.method === 'POST' && c.url === '/api/v1/push/pairings')
     expect(minted.opts.headers.Authorization).toBe('Bearer client-tok')
     expect(document.getElementById('elfdans-code').textContent).toBe('AB12-CD34')
     expect(document.getElementById('elfdans-code-expiry').textContent).toMatch(/expires in 10:00/)
@@ -914,13 +944,35 @@ describe('mac-side minting (arc42 §6.1, §8.1)', () => {
     expect(document.querySelector('.elfdans-code-url').textContent).toMatch(/only this Mac/)
   })
 
+  test('mint renders the relay QR and selectable pairing URL', async () => {
+    const pairingURL = 'https://relay.example.com/pair/AB23-CD45/'
+    relayFetch({
+      'GET /api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID, public_url: 'https://relay.example.com' } },
+      'POST /api/v1/push/pairings': {
+        status: 201,
+        body: { code: 'AB23-CD45', expires_in: 600, pairing_url: pairingURL, pairing_qr: 'data:image/png;base64,iVBORw0KGgo=' },
+      },
+    })
+    await initElfdans({ relayToken: () => 'client-tok' })
+    await flush()
+    document.getElementById('elfdans-mint').click()
+    await flush()
+
+    const qr = document.querySelector('.elfdans-pairing-qr')
+    const link = document.querySelector('a.elfdans-code-url')
+    expect(qr.src).toContain('data:image/png;base64,iVBORw0KGgo=')
+    expect(qr.alt).toContain(pairingURL)
+    expect(link.href).toBe(pairingURL)
+    expect(link.textContent).toBe(pairingURL)
+  })
+
   test('a 200 that is not JSON leaves a verdict, not "Minting code…" forever', async () => {
     // Anything in front of the relay — a captive portal, a proxy error page —
     // can answer 200 with HTML. The same rule as the phone side: a throw on
     // this leg becomes a verdict the user can act on.
     relayFetch({
-      'GET api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
-      'POST api/v1/push/pairings': { status: 201, badJson: true },
+      'GET /api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
+      'POST /api/v1/push/pairings': { status: 201, badJson: true },
     })
     await initElfdans({ relayToken: () => 'client-tok' })
     await flush()
@@ -941,9 +993,9 @@ describe('the test-notification button (arc42 §8.3, risk 11)', () => {
   const paired = (testRoute) => {
     localStorage.setItem('elfdansDeviceToken', 'dev-tok-9')
     const calls = relayFetch({
-      'GET api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
-      'GET api/v1/push/subscriptions': { body: { registered: true, endpoint_host: 'web.push.apple.com', last_delivery: null } },
-      'POST api/v1/push/test': testRoute,
+      'GET /api/v1/push/info': { body: { enabled: true, vapid_public_key: VAPID } },
+      'GET /api/v1/push/subscriptions': { body: { registered: true, endpoint_host: 'web.push.apple.com', last_delivery: null } },
+      'POST /api/v1/push/test': testRoute,
     })
     mockServiceWorker(activatingRegistration({ subscription: fakeSubscription() }))
     return calls
@@ -959,7 +1011,7 @@ describe('the test-notification button (arc42 §8.3, risk 11)', () => {
     btn.click()
     await flush()
 
-    const post = calls.find((c) => c.method === 'POST' && c.url === 'api/v1/push/test')
+    const post = calls.find((c) => c.method === 'POST' && c.url === '/api/v1/push/test')
     expect(post, 'the button never reached the relay').toBeTruthy()
     expect(post.opts.headers.Authorization).toBe('Bearer dev-tok-9')
     const out = document.getElementById('elfdans-test-out').textContent
@@ -1002,8 +1054,8 @@ describe('the test-notification button (arc42 §8.3, risk 11)', () => {
     localStorage.setItem('elfdansDeviceToken', 'dev-tok-9')
     global.fetch = (url, opts = {}) => {
       const u = String(url)
-      if (u === 'api/v1/push/info') return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ enabled: true, vapid_public_key: VAPID }) })
-      if (u === 'api/v1/push/subscriptions') return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ registered: true, endpoint_host: 'web.push.apple.com', last_delivery: null }) })
+      if (u === '/api/v1/push/info') return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ enabled: true, vapid_public_key: VAPID }) })
+      if (u === '/api/v1/push/subscriptions') return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ registered: true, endpoint_host: 'web.push.apple.com', last_delivery: null }) })
       return new Promise((resolve) => { release = () => resolve({ ok: true, status: 200, json: () => Promise.resolve({ delivered: true, endpoint_host: 'web.push.apple.com', at: 1 }) }) })
     }
     mockServiceWorker(activatingRegistration({ subscription: fakeSubscription() }))

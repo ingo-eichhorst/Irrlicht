@@ -2,7 +2,7 @@
 
 Referenced from [AGENTS.md](../AGENTS.md)'s Testing section. Covers
 `swift build && swift test` for `platforms/macos/`, the `macos-swift.yml` CI
-job, the image-snapshot CI-scope decision (why six snapshot suites are
+job, the image-snapshot CI-scope decision (why seven snapshot suites are
 gated only on the reference host and never in CI), the pinned-scale /
 pinned-locale / pinned-timezone / pinned-`@AppStorage` / pinned-now
 environment seams that made snapshot tests host-independent, the
@@ -21,12 +21,12 @@ timeout/witness design.
   **Image snapshots are graded on the reference host only, permanently and by
   choice. This paragraph is the decision record for #1615; `macos-swift.yml`'s
   header, `ImageSnapshotCIScopeTests` and the issue threads point here rather
-  than restating it.** Six suites — `DaemonErrorBannerRenderTests`,
+  than restating it.** Seven suites — `DaemonErrorBannerRenderTests`,
   `GroupViewSnapshotTests`, `HistoryViewSnapshotTests`,
   `SessionListDaemonErrorWiringTests`, `SessionListUnappliedGrantsWiringTests`,
-  `SessionRowSnapshotTests` — are `--skip`ped in CI and run under
+  `SessionRowSnapshotTests` and `ElfdansPairingViewSnapshotTests` — are `--skip`ped in CI and run under
   `tools/preflight.sh --only swift` and the pre-push hook and nowhere else. A
-  seventh, `BackchannelRulesViewSnapshotTests`, was in this set until #1874
+  `BackchannelRulesViewSnapshotTests` was also in this set until #1874
   deleted its subject with the rest of the backchannel. This roster is not the
   source of truth — `ImageSnapshotCIScopeTests`' map is, and that map is
   cross-checked against `macos-swift.yml`'s own arguments. Every OTHER statement
@@ -45,10 +45,10 @@ timeout/witness design.
   blanket host difference.
   **How big the exclusion is, is DERIVED and asserted rather than typed.**
   `ImageSnapshotCIScopeTests.testTheUngatedPopulationIsExactlyTheSkippedSuites`
-  counts those six suites' tests off the live bundle through XCTest's own
+  counts those seven suites' tests off the live bundle through XCTest's own
   `XCTestSuite(forTestCaseClass:)` — so it agrees with a run's `Executed N
   tests` by construction rather than by a source scan agreeing with a test
-  runner by luck — pins the total at **55**, and prints the whole census on
+  runner by luck — pins the total at **56**, and prints the whole census on
   every run. It also fails if a skipped suite goes EMPTY, which is the rot this
   decision creates: a suite that runs on one machine and holds nothing runs
   nowhere, and reads exactly like one that passes everywhere. The gated
@@ -112,7 +112,7 @@ timeout/witness design.
   it any more; it is recorded because a prediction that quietly stops being
   checkable should not read as one that was checked.
   **What the decision costs, stated here rather than discovered later: a
-  contributor without a Mac cannot run these 55 tests at all, and CI will not
+  contributor without a Mac cannot run these 56 tests at all, and CI will not
   run them either.** An outside contributor's image-snapshot change is ungraded
   until the maintainer next runs `tools/preflight.sh --only swift` or pushes
   through the pre-push hook — and CI is not merely silent about it, it is
@@ -121,7 +121,7 @@ timeout/witness design.
   touching five files in `platforms/macos/`. It touched no image-snapshot suite,
   so it is the shape rather than an instance, and no cheap mitigation is built
   here — the honest statement is that the local gate and the pre-push hook are
-  the whole of the coverage for those 55, and that a fork PR's green `swift-test`
+  the whole of the coverage for those 56, and that a fork PR's green `swift-test`
   check says nothing about them.
   **The pixels can still be collected, on demand.** `swift-snapshot-evidence`
   ran on every PR while the policy question was open and now runs on

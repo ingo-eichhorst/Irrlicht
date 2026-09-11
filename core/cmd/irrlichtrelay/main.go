@@ -122,6 +122,7 @@ type serveConfig struct {
 	tlsCert         string
 	tlsKey          string
 	auth            string
+	publicURL       string
 	originAllowlist string
 	dataDirFlag     string
 	vapidSubject    string
@@ -139,6 +140,7 @@ func parseServeFlags(args []string) serveConfig {
 	tlsCert := fs.String("tls-cert", "", "PEM certificate file for native TLS (wss://); pair with --tls-key")
 	tlsKey := fs.String("tls-key", "", "PEM private-key file for native TLS (wss://); pair with --tls-cert")
 	auth := fs.String("auth", "off", "authentication: 'off' (trusted LAN, accept any hello) or 'tokens-file[:PATH]' (verify a hashed bearer token; PATH defaults to <data-dir>/tokens.json)")
+	publicURL := fs.String("public-url", "", "phone-reachable HTTPS origin used for Elfdans QR pairing (for example https://relay.example.com)")
 	originAllowlist := fs.String("origin-allowlist", "", "comma-separated Origin hosts allowed for browser WS clients (empty = allow all, loopback-safe)")
 	dataDirFlag := fs.String("data-dir", "", "state directory for the tokens file (default: $IRRLICHT_HOME or ~/.local/share/irrlicht)")
 	vapidSubject := fs.String("vapid-subject", os.Getenv(envVAPIDSubject), "contact `uri` signed into every push JWT as the VAPID sub claim: mailto: or https: (RFC 8292 §2.1); empty uses "+defaultVAPIDSubject)
@@ -155,6 +157,7 @@ func parseServeFlags(args []string) serveConfig {
 		tlsCert:         *tlsCert,
 		tlsKey:          *tlsKey,
 		auth:            *auth,
+		publicURL:       *publicURL,
 		originAllowlist: *originAllowlist,
 		dataDirFlag:     *dataDirFlag,
 		vapidSubject:    *vapidSubject,
@@ -217,22 +220,27 @@ func warnIfExposedWithoutAuth(addr string, store *authStore) {
 	}
 }
 
-// buildMux registers the relay's HTTP routes: the WS stream, the read-only
-// API mirrors (bearer-gated when auth is on), the push surface (pushSvc is
-// nil with --auth off — see registerPushRoutes), and the dashboard UI (or a
-// 503 placeholder when it can't be found). notifier is the dispatcher the
-// test-notification endpoint sends through, non-nil exactly when pushSvc is.
-func buildMux(h *hub, store *authStore, pushSvc *push.Service, notifier testNotifier) *http.ServeMux {
+// relayServices groups the optional services used by the relay's HTTP surface.
+type relayServices struct {
+	store    *authStore
+	push     *push.Service
+	notifier testNotifier
+	pairing  pairingHandoff
+}
+
+// buildMux wires the relay's WS, JSON, push, pairing, and dashboard routes.
+func buildMux(h *hub, services relayServices) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/sessions/stream", h.ServeWS)
 	// The data endpoints carry the same session content as the WS stream, so
 	// they get the same bearer-token gate when --auth is on; otherwise the WS
 	// would be authenticated while a plain `curl /api/v1/sessions` leaked
 	// everything. version stays open as an unauthenticated health check.
-	mux.HandleFunc("GET /api/v1/sessions", requireToken(store, handleSessions(h)))
-	mux.HandleFunc("GET /api/v1/agents", requireToken(store, handleAgents(h)))
+	mux.HandleFunc("GET /api/v1/sessions", requireToken(services.store, handleSessions(h)))
+	mux.HandleFunc("GET /api/v1/agents", requireToken(services.store, handleAgents(h)))
 	mux.HandleFunc("GET /api/v1/version", handleVersion(Version))
-	registerPushRoutes(mux, store, pushSvc, notifier)
+	registerPushRoutes(mux, services)
+	registerPairingHandoffRoutes(mux, services.pairing)
 
 	if uiDir := resolveUIDir(); uiDir != "" {
 		log.Printf("serving dashboard from %s", uiDir)
@@ -326,6 +334,10 @@ func runServe(args []string) {
 	store := buildAuthStore(cfg.auth, ddir)
 	warnIfExposedWithoutAuth(cfg.addr, store)
 	pushSvc := buildPushService(store, ddir)
+	pairing := resolvePairingHandoff(cfg.publicURL)
+	if cfg.publicURL != "" && pairing.publicURL == "" {
+		log.Printf("WARNING: %s", pairing.unavailableReason)
+	}
 
 	// Serve web assets with correct Content-Type regardless of the host OS
 	// mime database (matches irrlichd).
@@ -343,7 +355,7 @@ func runServe(args []string) {
 	if pushSvc != nil {
 		obs = newPushObserver(pushSvc, store, newRelayPushSender(pushSvc, vapidSubject), notify.Config{}, nil)
 	}
-	mux := buildMux(h, store, pushSvc, obs)
+	mux := buildMux(h, relayServices{store: store, push: pushSvc, notifier: obs, pairing: pairing})
 
 	stop := make(chan struct{})
 	if store != nil {

@@ -23,6 +23,10 @@ tools/elfdans-rig.sh check          # every assertion below that needs no phone
 tools/elfdans-rig.sh down [--wipe]
 ```
 
+`up --serve` reads the tailnet DNS name, configures Tailscale Serve, and starts
+the relay with the matching `--public-url`. Set `ELFDANS_RIG_PUBLIC_URL` when
+you use a different HTTPS proxy.
+
 State lives in `.build/elfdans-rig` — never your real `~/.local/share/irrlicht` — so nothing here
 can touch a production relay's tokens or a paired phone. `up` refuses rather than starting a
 second relay on a busy port, because `7839` is the production default and the thing already
@@ -105,10 +109,11 @@ problem, not a Elfdans one.
 
 The highest-risk phase, and the one the mocks cover worst.
 
-1. Open the origin in Safari on the phone. **The Elfdans section must appear** — that is feature
+1. Mint a code in the dashboard or macOS app. Scan the relay-generated QR, or open the origin in Safari on the phone for the manual fallback.
+   **The Elfdans section must appear** — that is feature
    detection working against a real origin (§5.2).
 2. Share → **Add to Home Screen**. Open it **from the home screen**, not from Safari.
-3. Mint a code in the dashboard on the Mac. Type it into the installed app.
+3. Confirm that the installed app prefills the code. For the manual fallback, type the code.
 4. Watch for, in order: the permission prompt appearing at all (if it does not, transient user
    activation expired — the known ordering bug); `subscribe()` resolving (if it rejects, the
    worker had not activated); `POST /push/subscriptions` → 204.
@@ -118,7 +123,8 @@ The highest-risk phase, and the one the mocks cover worst.
    phone (notification permission, Focus mode) rather than in the relay — the two used to be
    indistinguishable from here.
 
-**Verify the ADR-3 claim while you are here**: pairing must complete *inside the installed app*.
+**Verify the ADR-3 claim while you are here**: the QR must prefill the code, and pairing must
+complete only after a press *inside the installed app*.
 Pair from the Safari tab instead and confirm the installed app does **not** inherit it — that is
 the storage partition the whole one-time-code design exists for. If it turns out to be inherited,
 ADR-3 is over-engineered and should be simplified.

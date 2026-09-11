@@ -368,7 +368,7 @@ self.handlePush = function (event) {
       body: n.body,
       tag: n.tag,
       renotify: n.renotify,
-      icon: 'elfdans-icon.svg',
+      icon: '/elfdans-icon.svg',
       data: n.data || null,
     }),
     store.update(payload).then(function () { return self.refreshBadge(store); }),
@@ -398,7 +398,7 @@ self.focusOrOpenClient = function (sessionId) {
         }
         return wins[0].focus();
       }
-      const url = sessionId ? './#' + SESSION_HASH_KEY + '=' + encodeURIComponent(sessionId) : './';
+      const url = sessionId ? '/#' + SESSION_HASH_KEY + '=' + encodeURIComponent(sessionId) : '/';
       return self.clients.openWindow(url);
     });
 };

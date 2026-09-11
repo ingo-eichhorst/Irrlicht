@@ -111,7 +111,7 @@ async function fetchPushInfo() {
   // different host than the serving origin.
   let r = null;
   try {
-    r = await fetch('api/v1/push/info');
+    r = await fetch('/api/v1/push/info');
   } catch (e) {
     return null;
   }
@@ -173,46 +173,81 @@ function renderMacSide(section, info) {
 
 async function mintPairingCode(out, clientToken) {
   out.textContent = 'Minting code…';
-  let r = null;
+  const r = await fetchPairing(clientToken);
+  if (!r) {
+    out.textContent = 'Could not mint a pairing code.';
+    return;
+  }
+  if (!r.ok) {
+    out.textContent = 'Could not mint a pairing code (relay answered ' + r.status + ').';
+    return;
+  }
+  const minted = await decodePairing(r);
+  if (!minted) {
+    out.textContent = 'Could not mint a pairing code — the relay answered something this page could not read.';
+    return;
+  }
+  renderMintedPairing(out, minted);
+}
+
+async function fetchPairing(clientToken) {
   try {
-    r = await fetch('api/v1/push/pairings', {
+    return await fetch('/api/v1/push/pairings', {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + clientToken },
     });
   } catch (e) {
-    r = null;
+    return null;
   }
-  if (!r || !r.ok) {
-    out.textContent = 'Could not mint a pairing code' + (r ? ' (relay answered ' + r.status + ')' : '') + '.';
-    return;
-  }
-  let minted = null;
+}
+
+async function decodePairing(response) {
   try {
-    minted = await r.json();
+    const pairing = await response.json();
+    return pairing && pairing.code ? pairing : null;
   } catch (e) {
-    minted = null;
+    return null;
   }
-  if (!minted || !minted.code) {
-    // Anything in front of the relay can answer 200 with an HTML error page;
-    // a throw here would leave the row reading "Minting code…" for good.
-    out.textContent = 'Could not mint a pairing code — the relay answered something this page could not read.';
-    return;
-  }
+}
+
+function renderMintedPairing(out, minted) {
   out.innerHTML = '';
   const codeEl = el('div', 'elfdans-code');
   codeEl.id = 'elfdans-code';
   codeEl.textContent = formatPairingCode(minted.code);
   const expiry = el('div', 'elfdans-code-expiry');
   expiry.id = 'elfdans-code-expiry';
-  const url = el('div', 'elfdans-code-url');
-  // P1 is paste/type only — no QR, no vendored encoder (arc42 risk 7: an
-  // 8-char ambiguity-free code beats auditing vendored encoder code; QR is a
-  // follow-up). So the thing to carry to the phone is spelled out here.
-  url.textContent = pairingHintText(location.origin, location.pathname);
   out.appendChild(codeEl);
   out.appendChild(expiry);
-  out.appendChild(url);
+  renderPairingQR(out, minted);
+  renderPairingURL(out, minted);
+  renderPairingFallback(out, minted);
   startCountdown(expiry, minted.expires_in);
+}
+
+function renderPairingQR(out, minted) {
+  if (!minted.pairing_qr) return;
+  const qr = document.createElement('img');
+  qr.className = 'elfdans-pairing-qr';
+  qr.src = minted.pairing_qr;
+  qr.alt = 'QR code for ' + minted.pairing_url;
+  out.appendChild(qr);
+}
+
+function renderPairingURL(out, minted) {
+  if (!minted.pairing_url) return;
+  const link = document.createElement('a');
+  link.className = 'elfdans-code-url';
+  link.href = minted.pairing_url;
+  link.textContent = minted.pairing_url;
+  out.appendChild(link);
+}
+
+function renderPairingFallback(out, minted) {
+  if (minted.pairing_qr) return;
+  const reason = el('div', 'elfdans-code-url');
+  reason.textContent = minted.pairing_url_reason || pairingHintText(location.origin, location.pathname);
+  out.appendChild(reason);
 }
 
 function startCountdown(expiryEl, expiresInSeconds) {
@@ -253,6 +288,7 @@ function renderPairEntry(phone, info) {
   input.placeholder = 'XXXX-XXXX';
   input.autocomplete = 'off';
   input.spellcheck = false;
+  input.value = pairingCodeFromSearch(location.search);
   const btn = el('button', 'settings-action-btn');
   btn.type = 'button';
   btn.id = 'elfdans-pair-submit';
@@ -297,7 +333,7 @@ async function pairThisPhone(phone, info, enteredCode, status) {
   status.textContent = 'Pairing…';
   let r = null;
   try {
-    r = await fetch('api/v1/push/pair', {
+    r = await fetch('/api/v1/push/pair', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ code, label: deviceLabel() }),
@@ -335,6 +371,7 @@ async function pairThisPhone(phone, info, enteredCode, status) {
   // the subscription is only a delivery address). If anything below fails,
   // the §8.3 self-heal retries the subscription on next open.
   localStorage.setItem(DEVICE_TOKEN_KEY, paired.token);
+  clearPairingCodeFromLocation();
   // …and configure the live view from the same identity, before the
   // subscription is attempted: a phone whose subscribe fails still watches the
   // relay, which is what keeps its ledger and badge honest until the §8.3
@@ -395,6 +432,28 @@ export function pairingHintText(origin, pathname) {
   return 'On the phone, open ' + origin + pathname + ' and enter this code.';
 }
 
+// A code delivered by the install handoff is only prefilled. Redemption still
+// starts from the Pair button so Notification.requestPermission remains inside
+// direct user interaction on iOS.
+export function pairingCodeFromSearch(search) {
+  let value = '';
+  try {
+    value = new URLSearchParams(String(search || '').replace(/^\?/, '')).get('pair') || '';
+  } catch (e) {
+    return '';
+  }
+  const code = normalizePairingCode(value);
+  return /^[ABCDEFGHJKMNPQRSTVWXYZ23456789]{8}$/.test(code) ? formatPairingCode(code) : '';
+}
+
+function clearPairingCodeFromLocation() {
+  const params = new URLSearchParams(location.search);
+  if (!params.has('pair')) return;
+  params.delete('pair');
+  const query = params.toString();
+  history.replaceState(null, '', location.pathname + (query ? '?' + query : '') + location.hash);
+}
+
 // pairingBlockedReason names why pairing cannot start here, or '' when it can.
 // Two failures the previous single message conflated, and the ORDER is the
 // point: on a plain-http:// origin the service worker is absent *because* the
@@ -416,7 +475,7 @@ export function pairingBlockedReason() {
 // The ONLY registration call in the web tree (arc42 §5.2): lazy, reached from
 // the pairing flow and its §8.3 self-heal only.
 export function ensureServiceWorker() {
-  return navigator.serviceWorker.register('./sw.js');
+  return navigator.serviceWorker.register('/sw.js');
 }
 
 // How long to wait for the registered worker to reach `activated`: generous,
@@ -446,7 +505,7 @@ async function readyRegistration() {
 }
 
 function postSubscription(deviceToken, sub) {
-  return fetch('api/v1/push/subscriptions', {
+  return fetch('/api/v1/push/subscriptions', {
     method: 'POST',
     headers: {
       Authorization: 'Bearer ' + deviceToken,
@@ -715,7 +774,7 @@ function wireNotificationTargets() {
 async function fetchSubscriptionStatus(deviceToken) {
   let r = null;
   try {
-    r = await fetch('api/v1/push/subscriptions', {
+    r = await fetch('/api/v1/push/subscriptions', {
       headers: { Authorization: 'Bearer ' + deviceToken },
     });
   } catch (e) {
@@ -773,7 +832,7 @@ function timeText(atSeconds) {
 async function postTestNotification(deviceToken) {
   let r = null;
   try {
-    r = await fetch('api/v1/push/test', {
+    r = await fetch('/api/v1/push/test', {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + deviceToken },
     });
@@ -931,7 +990,7 @@ function renderRevoked(phone, info, deviceToken) {
 
 async function unpair(phone, info, deviceToken) {
   try {
-    await fetch('api/v1/push/subscriptions', {
+    await fetch('/api/v1/push/subscriptions', {
       method: 'DELETE',
       headers: { Authorization: 'Bearer ' + deviceToken },
     });
