@@ -61,9 +61,21 @@ final class GroupViewSnapshotTests: XCTestCase {
             width: 350, height: height, defaults: defaults)
     }
 
+    /// Installs the groups the way hydration does, through `localApiGroups`.
+    /// Assigning `apiGroups` directly leaves `projectGroupOrder` empty, and
+    /// since #1948 the chevrons read their index and bounds from that order —
+    /// so a direct assignment renders no chevrons and this suite would grade
+    /// references that no longer show what they were recorded for.
+    ///
+    /// Measured, not assumed: reverting both seeding calls to
+    /// `sessionManager.apiGroups = …` fails exactly THREE references —
+    /// `testFirstOfThreeUpChevronDisabled`, `testMiddleOfThreeBothChevronsEnabled`
+    /// and `testLastOfThreeDownChevronDisabled`. `testSingleGroupNoChevrons`
+    /// and `testSubGroupNoChevrons` pass either way; neither renders a chevron
+    /// to lose.
     private func seedThreeGroups() -> [SessionManager.AgentGroup] {
         let groups = [makeGroup(name: "alpha"), makeGroup(name: "beta"), makeGroup(name: "gamma")]
-        sessionManager.apiGroups = groups
+        sessionManager.seedLocalApiGroups(groups)
         return groups
     }
 
@@ -87,7 +99,7 @@ final class GroupViewSnapshotTests: XCTestCase {
 
     func testSingleGroupNoChevrons() {
         let solo = makeGroup(name: "solo")
-        sessionManager.apiGroups = [solo]
+        sessionManager.seedLocalApiGroups([solo])
         let view = host(GroupView(group: solo))
         assertSnapshot(of: view, as: .pinnedImage)
     }
