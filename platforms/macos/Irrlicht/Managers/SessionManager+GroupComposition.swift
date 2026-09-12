@@ -56,10 +56,20 @@ extension SessionManager {
     /// keys on project *name*, not session_id: the echoed/ghost relay rows carry
     /// drifted ids that escape `relayGroups()`'s id-only filter. Relay-only
     /// projects (no local group of that name) still appear.
+    ///
+    /// The ordering spans local AND relay rows (#1948): a project from a
+    /// second daemon is a row the user sees, so it is a row the user can move.
+    /// Ordering only the local half was what made a relay group's chevrons
+    /// inert — it was rendered but absent from `projectGroupOrder`, the list
+    /// `moveProjectGroupUp/Down` act on.
+    ///
+    /// `groupedSessionIds` stays local-only: it feeds `patchApiGroups`' guard,
+    /// which is about the LOCAL patch path, not about display.
     func recomposeApiGroups() {
         let localNames = Set(localApiGroups.map(\.name))
-        apiGroups = orderedGroups(localApiGroups)
+        let displayed = localApiGroups
             + relayGroups().filter { !localNames.contains($0.name) }
+        apiGroups = orderedGroups(displayed)
         groupedSessionIds = Set(localApiGroups.flatMap { collectSessionIds(from: $0) })
     }
 
@@ -223,8 +233,15 @@ extension SessionManager {
 
     // MARK: - Project Group Order Management
 
+    /// Deduped on the way in — this is the one point where persisted,
+    /// user-editable, migration-aged data becomes `projectGroupOrder`, so the
+    /// in-memory array holds the no-duplicates invariant from birth rather
+    /// than acquiring it at the first recompose. Between this call and that
+    /// recompose, `reorderMoves(for:)` answers from whatever is here.
     func loadProjectGroupOrder() {
-        projectGroupOrder = defaults.stringArray(forKey: projectGroupOrderKey) ?? []
+        var seen = Set<String>()
+        projectGroupOrder = (defaults.stringArray(forKey: projectGroupOrderKey) ?? [])
+            .filter { seen.insert($0).inserted }
         print("📋 Loaded project group order with \(projectGroupOrder.count) groups")
     }
 
@@ -238,23 +255,68 @@ extension SessionManager {
     func orderedGroups(_ groups: [AgentGroup]) -> [AgentGroup] {
         let incomingNames = groups.map(\.name)
         let currentNames = Set(incomingNames)
-        let known = Set(projectGroupOrder)
 
-        var updated = projectGroupOrder.filter { currentNames.contains($0) }
-        let newNames = incomingNames.filter { !known.contains($0) }
-        updated.append(contentsOf: newNames)
+        // Known names in their remembered order, then names this payload adds,
+        // each kept once. `seen` is what enforces "once": two incoming groups
+        // can share a name, and a duplicate here would inflate the count
+        // `reorderMoves(for:)` reports and would give the sort below two
+        // entries to choose between. Dropping the later copy also heals the
+        // stored array on the next save.
+        var seen = Set<String>()
+        let updated = (projectGroupOrder + incomingNames).filter {
+            currentNames.contains($0) && seen.insert($0).inserted
+        }
 
         if updated != projectGroupOrder {
             projectGroupOrder = updated
             saveProjectGroupOrder()
         }
 
-        let index = Dictionary(uniqueKeysWithValues: projectGroupOrder.enumerated().map { ($1, $0) })
+        // Built by hand rather than with `Dictionary(uniqueKeysWithValues:)`,
+        // which TRAPS on a repeated key — a crash, not a mis-sort. The filter
+        // above already rules that out, but this array is also written by
+        // `loadProjectGroupOrder` from a user-editable store, and a reader
+        // that crashes on bad input is the wrong response for a menu bar app.
+        // First occurrence wins, matching `reorderMoves`' `firstIndex(of:)`.
+        var index: [String: Int] = [:]
+        for (offset, name) in projectGroupOrder.enumerated() where index[name] == nil {
+            index[name] = offset
+        }
         return groups.sorted { (index[$0.name] ?? Int.max) < (index[$1.name] ?? Int.max) }
     }
 
+    /// Which way `name` can be moved, or `nil` when it is not reorderable at
+    /// all — the only question the reorder chevrons ask.
+    ///
+    /// Answers about `projectGroupOrder`, never `apiGroups`. #1948 is what
+    /// happens when the view measures against the other one: back then the
+    /// order covered only the LOCAL half of the rendered list, so a relay row
+    /// padded the count the view saw — the last local group's down-chevron
+    /// rendered enabled and did nothing, and the relay group got two chevrons
+    /// that could never fire. `recomposeApiGroups` now orders the whole
+    /// rendered list, so every top-level row is in this array; `nil` means a
+    /// name that is not a rendered top-level group at all.
+    ///
+    /// Booleans, not coordinates, so the offer and the effect evaluate the
+    /// same expression: `moveProjectGroupUp/Down` guard on these, and
+    /// `GroupView` renders from them. Index arithmetic lives here and nowhere
+    /// else. `SessionManagerGroupOrderTests` asserts the two agree for every
+    /// rendered group, and goes red when this answers from `apiGroups`.
+    func reorderMoves(for name: String) -> (up: Bool, down: Bool)? {
+        projectGroupOrder.firstIndex(of: name).map(reorderMoves(atIndex:))
+    }
+
+    /// The rule itself, written once. Each handler judges the same index it
+    /// then swaps — asking `reorderMoves(for:)` and looking the index up
+    /// separately would be two lookups again, and a disagreement between them
+    /// swaps out of bounds instead of declining.
+    private func reorderMoves(atIndex i: Int) -> (up: Bool, down: Bool) {
+        (up: i > 0, down: i < projectGroupOrder.count - 1)
+    }
+
     func moveProjectGroupUp(name: String) {
-        guard let i = projectGroupOrder.firstIndex(of: name), i > 0 else { return }
+        guard let i = projectGroupOrder.firstIndex(of: name),
+              reorderMoves(atIndex: i).up else { return }
         projectGroupOrder.swapAt(i, i - 1)
         saveProjectGroupOrder()
         recomposeApiGroups()
@@ -262,7 +324,7 @@ extension SessionManager {
 
     func moveProjectGroupDown(name: String) {
         guard let i = projectGroupOrder.firstIndex(of: name),
-              i < projectGroupOrder.count - 1 else { return }
+              reorderMoves(atIndex: i).down else { return }
         projectGroupOrder.swapAt(i, i + 1)
         saveProjectGroupOrder()
         recomposeApiGroups()

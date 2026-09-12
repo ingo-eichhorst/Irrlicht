@@ -480,14 +480,10 @@ final class SessionManagerApiGroupsTests: XCTestCase {
         """
     }
 
-    /// Builds a relay Push frame (envelope `source` + inner session_created)
-    /// as the hub would forward it.
+    /// Lifted to `RelayFixtures.push` so `SessionManagerGroupOrderTests` sends
+    /// the same frame rather than seeding `relaySessionMap` by hand.
     private func relayPush(source: String, sessionId: String, project: String, state: String = "working") -> String {
-        """
-        {"type":"push","source":"\(source)","msg":{"type":"session_created",\
-        "session":{"session_id":"\(sessionId)","state":"\(state)","model":"m",\
-        "cwd":"/tmp","project_name":"\(project)","first_seen":0,"updated_at":0}}}
-        """
+        RelayFixtures.push(source: source, sessionId: sessionId, project: project, state: state)
     }
 
     private func makeSession(

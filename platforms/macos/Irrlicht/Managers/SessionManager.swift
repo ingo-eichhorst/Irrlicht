@@ -120,7 +120,15 @@ class SessionManager: ObservableObject {
     let orderFilePath: URL
     var sessionOrder: [String] = []
 
-    // Project group ordering (persisted in UserDefaults)
+    // Project group ordering (persisted in UserDefaults).
+    //
+    // Membership in this array IS the reorderable set: `reorderMoves(for:)`
+    // returns nil for a name that is not here, and `GroupView` renders no
+    // chevrons for it. `orderedGroups` syncs it to every rendered top-level
+    // group — local and relay alike (#1948) — so the two sets stay equal.
+    // Narrowing what is synced here silently removes chevrons from the rows
+    // left out; widening what is rendered without syncing gives those rows
+    // chevrons the handlers cannot act on. Either half alone is the bug.
     @Published var projectGroupOrder: [String] = []
     let projectGroupOrderKey = "projectGroupOrder"
 
@@ -355,6 +363,16 @@ class SessionManager: ObservableObject {
                 rawValue: defaults.string(forKey: "summaryDisplayMode") ?? ""
             ) ?? .waiting)
 
+        // Read synchronously, BEFORE the observer below and before the
+        // deferred `Task`, so no hydration can meet an empty order:
+        // `orderedGroups` reads empty as "nothing persisted yet" and saves the
+        // daemon's order over it. Nobody has observed that window being hit —
+        // this removes it rather than proving it fires (#1948). The call only
+        // reads, so construction stays write-free; that is pinned by
+        // `PinnedAppStorageSnapshotTests.testBuildingASessionManagerWritesNoPreference`,
+        // run green with this line in place.
+        loadProjectGroupOrder()
+
         // Reconnect sources live when a Sources setting changes (no relaunch).
         // didChangeNotification fires for any default; sourcesSettingsChanged
         // diffs and only reconnects on an actual source-config change.
@@ -366,7 +384,6 @@ class SessionManager: ObservableObject {
 
         Task {
             loadSessionOrder()
-            loadProjectGroupOrder()
             setupNotificationDelegate()
             self.sourcesSettingsChanged()
             self.startProjectCostsPolling()
