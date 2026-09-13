@@ -154,8 +154,17 @@ func detectAdapter(path string) (string, error) {
 	case strings.Contains(abs, "/.hermes/state.db"),
 		strings.Contains(abs, "/replaydata/agents/hermes/"):
 		return hermes.AdapterName, nil
+	// Muse has no Go adapter yet (no core/adapters/inbound/agents/muse/
+	// package), so there is no muse.AdapterName to return — the literal
+	// becomes the const when the adapter lands. parserFactories has no muse
+	// entry either; parserFor falls back to claudecode until a muse parser
+	// exists. The live path is the XDG data-root default observed on disk
+	// (~/.local/share/muse/sessions/<YYYY>/<MM>/<DD>/<uuid>/session.jsonl).
+	case strings.Contains(abs, "/.local/share/muse/sessions/"),
+		strings.Contains(abs, "/replaydata/agents/muse/"):
+		return "muse", nil
 	}
-	return "", fmt.Errorf("cannot infer adapter from path %q — pass --adapter claude-code|codex|pi|aider|opencode|kiro-cli|gemini-cli|antigravity|mistral-vibe|copilot|hermes", abs)
+	return "", fmt.Errorf("cannot infer adapter from path %q — pass --adapter claude-code|codex|pi|aider|opencode|kiro-cli|gemini-cli|antigravity|mistral-vibe|copilot|hermes|muse", abs)
 }
 
 // eventsSidecarExt is the legacy lifecycle-events sidecar file extension,
