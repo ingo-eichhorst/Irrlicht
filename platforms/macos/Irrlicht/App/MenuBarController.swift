@@ -56,6 +56,43 @@ final class MenuBarController: NSObject {
 
     private static let escapeKeyCode: UInt16 = 53
 
+    /// What the status item is called when the icon itself has nothing more
+    /// specific to say — every icon except `location` grouping's, whose buckets
+    /// are named after the machines they stand for (#1955 phase 2).
+    static let defaultAccessibilityLabel = "Irrlicht"
+
+    /// Install a freshly built icon on the status item's button, label and all.
+    ///
+    /// **The label has to be re-applied with the image, and that is a fix, not
+    /// ceremony.** An explicit `setAccessibilityLabel` on the button OVERRIDES
+    /// the `accessibilityDescription` carried by its image — measured on a real
+    /// `NSStatusBarButton` driven exactly as `configureStatusItem` +
+    /// `rebuildStatusImage` drive it: with the override in place the button
+    /// reads `Optional("Irrlicht")`, and with it removed the same button reads
+    /// `Optional("Irrlicht — sessions on Local, alpha-box, beta-box")`. So the
+    /// static label set once at launch silently swallowed every description the
+    /// icon produced — including `OffFlameImage`'s two, which have been dead
+    /// since they were written (`OffFlameImage.swift:71` sets them on the
+    /// image, and nothing ever moved them onto the button).
+    ///
+    /// That matters most for `location` grouping, where the dot-groups carry no
+    /// text and the description is the ONLY surface naming which bucket is
+    /// which machine. Falling back to `defaultAccessibilityLabel` keeps every
+    /// other icon reading exactly as it did.
+    ///
+    /// Static and taking the button, rather than reaching for `statusItem`
+    /// inside: `NSStatusBarButton` is an `NSButton`, and this is the seam a
+    /// test can drive — `MenuBarAppearanceTests
+    /// .testTheStatusButtonAnnouncesTheIconsOwnDescription` runs it against a
+    /// real `NSButton` and reads `accessibilityLabel()` back off it, which is
+    /// the only thing that can see this override.
+    static func applyIcon(_ image: NSImage, to button: NSButton?) {
+        button?.image = image
+        button?.setAccessibilityLabel(
+            image.accessibilityDescription ?? defaultAccessibilityLabel
+        )
+    }
+
     init(
         daemonManager: DaemonManager,
         sessionManager: SessionManager,
@@ -154,7 +191,10 @@ final class MenuBarController: NSObject {
         button.target = self
         button.action = #selector(togglePanel)
         button.sendAction(on: [.leftMouseDown, .rightMouseDown])
-        button.setAccessibilityLabel("Irrlicht")
+        // The initial value only; `applyIcon` re-applies it on every repaint,
+        // because an explicit label here overrides whatever the icon says
+        // about itself. See that function's doc for the measurement.
+        button.setAccessibilityLabel(Self.defaultAccessibilityLabel)
         button.setAccessibilityRole(.menuButton)
     }
 
@@ -210,9 +250,12 @@ final class MenuBarController: NSObject {
     }
 
     private func rebuildStatusImage() {
-        statusItem.button?.image = MenuBarImageBuilder.build(
-            sessionManager: sessionManager,
-            gasTownProvider: gasTownProvider
+        Self.applyIcon(
+            MenuBarImageBuilder.build(
+                sessionManager: sessionManager,
+                gasTownProvider: gasTownProvider
+            ),
+            to: statusItem.button
         )
     }
 

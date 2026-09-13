@@ -287,8 +287,11 @@ struct SessionRowView: View {
                 // (relayOnly), so any row with a daemonID is genuinely remote.
                 // Tooltip = the daemon's hostname (from the relay's label map).
                 if let daemonID = session.daemonID {
-                    let host = sessionManager.relayDaemons[daemonID]
-                        ?? sessionManager.offlineDaemons[daemonID] ?? daemonID
+                    // Same map the menu bar icon's per-daemon buckets name
+                    // themselves from (#1955 phase 2) — see
+                    // `SessionManager.daemonLabels` for why the connected /
+                    // faded precedence is stated once rather than per site.
+                    let host = sessionManager.daemonLabel(for: daemonID)
                     let offline = sessionManager.isOffline(session)
                     Image(systemName: offline ? "cloud.slash" : "cloud")
                         .font(.system(size: 9))

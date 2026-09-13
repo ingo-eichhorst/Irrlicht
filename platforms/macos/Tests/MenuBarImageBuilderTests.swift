@@ -223,7 +223,7 @@ final class MenuBarImageBuilderTests: XCTestCase {
             "this fixture must render NO quota, or the fallback under test never runs"
         )
         let dots = try XCTUnwrap(MenuBarImageBuilder.dotsImage(
-            appearance: usage, sessions: sessions, projectGroupOrder: []
+            appearance: usage, sessions: sessions, projectGroupOrder: [], daemonLabels: [:]
         ))
         let composed = try XCTUnwrap(
             icon(usage, sessions: sessions),
@@ -294,6 +294,7 @@ final class MenuBarImageBuilderTests: XCTestCase {
     private func icon(_ appearance: MenuBarAppearance, sessions: [SessionState]) -> NSImage? {
         MenuBarImageBuilder.iconImage(
             appearance: appearance, sessions: sessions, projectGroupOrder: [],
+            daemonLabels: [:],
             providerKeys: [], now: fixedNow
         )
     }
@@ -333,6 +334,23 @@ final class MenuBarImageBuilderTests: XCTestCase {
             (.lights, .combined, aggregate),
             (.usage, .combined, narrow),
             (.combined, .combined, aggregate + gap + narrow),
+            // #1955 phase 2. This fixture is entirely LOCAL — no session
+            // carries a `daemonID` — so `location` finds exactly one bucket
+            // and its 7 sessions render through `aggregateRender`, the same
+            // arm `combined` uses. The widths therefore coincide HERE while
+            // the code paths do not, which is stated rather than left to be
+            // discovered: what separates the two is asserted where there is
+            // more than one daemon to separate them by
+            // (`MenuBarAppearanceTests.testDotsImageRoutesEachGroupingTo`
+            // `ItsOwnRenderer` and `...RendersOneBucketPerDaemon`), and at 3
+            // sessions or fewer, where a bucket goes to `renderCompactGroup`
+            // and the aggregate path does not.
+            (.lights, .location, aggregate),
+            // Not `narrow`: `usesNarrowQuotaBars` asks the DENSITY, and
+            // location is not the dense grouping — so `.usage` here shows the
+            // full-width bars its `.project` row shows.
+            (.usage, .location, full),
+            (.combined, .location, aggregate + gap + narrow),
         ]
         XCTAssertEqual(
             expected.count,
@@ -366,6 +384,14 @@ final class MenuBarImageBuilderTests: XCTestCase {
     func testUsageComposesDotsWhenNoQuotaIsRenderable() throws {
         // No rate-limit data anywhere, so the quota half cannot render.
         let sessions = MenuBarFixtures.acrossProjects(6)
+        // Per grouping, because since #1955 phase 2 there are three dot halves
+        // and `aggregatesSessionDots` is a two-way answer. All six sessions are
+        // LOCAL, so `location` buckets them into one and lands on the same
+        // 18.5 the dense grouping does — see the note on
+        // `testComposedIconForEveryStyleAndGrouping`.
+        let expectedFallbackWidth: [MenuBarGrouping: CGFloat] = [
+            .project: 90.0, .location: 18.5, .combined: 18.5,
+        ]
         for grouping in MenuBarGrouping.selectableCases {
             let subject = appearance(.usage, grouping: grouping)
             let quota = MenuBarImageBuilder.quotaImage(
@@ -377,11 +403,14 @@ final class MenuBarImageBuilderTests: XCTestCase {
                 icon(subject, sessions: sessions),
                 "usage/\(grouping) must fall back to the dots, not to nothing"
             )
-            XCTAssertEqual(
-                composed.size.width,
-                subject.aggregatesSessionDots ? 18.5 : 90.0, accuracy: 0.01,
-                "usage/\(grouping) fallback must be the dot half alone"
+            // Fails loudly rather than skipping: a grouping with no row here is
+            // a grouping this test silently stopped covering.
+            let expected = try XCTUnwrap(
+                expectedFallbackWidth[grouping],
+                "grouping \(grouping) has no expected fallback width — add its row"
             )
+            XCTAssertEqual(composed.size.width, expected, accuracy: 0.01,
+                           "usage/\(grouping) fallback must be the dot half alone")
         }
     }
 
@@ -398,7 +427,7 @@ final class MenuBarImageBuilderTests: XCTestCase {
         let sessions = MenuBarFixtures.acrossProjectsWithQuota(2)
         let subject = appearance(.combined)
         let dots = try XCTUnwrap(MenuBarImageBuilder.dotsImage(
-            appearance: subject, sessions: sessions, projectGroupOrder: []
+            appearance: subject, sessions: sessions, projectGroupOrder: [], daemonLabels: [:]
         ))
         let quota = try XCTUnwrap(MenuBarImageBuilder.quotaImage(
             appearance: subject, sessions: sessions, providerKeys: [], now: fixedNow
@@ -413,6 +442,95 @@ final class MenuBarImageBuilderTests: XCTestCase {
         let composed = try XCTUnwrap(icon(subject, sessions: sessions))
         XCTAssertEqual(composed.tiffRepresentation, dotsFirst.tiffRepresentation,
                        "the icon must compose dots first, quota bars second")
+    }
+
+    /// The per-daemon bucket NAMES survive composition (#1955 phase 2).
+    ///
+    /// The daemon labels have exactly one surface — the icon's
+    /// `accessibilityDescription`, since dot-groups carry no text — and
+    /// `composeSideBySide` builds a fresh `NSImage` for the both-halves case.
+    /// So on any style with quota bars, or with the Gas Town badge on, the
+    /// names reach VoiceOver only if the composition carries them.
+    ///
+    /// Mutation-proved (source), run rather than predicted: deleting
+    /// `combined.accessibilityDescription = l.accessibilityDescription ?? r.a…`
+    /// from `MenuBarImageBuilder.composeSideBySide` fails the composed row here
+    /// with `XCTAssertEqual failed: ("nil") is not equal to ("Optional("Irrlicht
+    /// — sessions on Local, alpha-box")")`.
+    func testTheDaemonBucketNamesSurviveComposition() throws {
+        // One local session and one on a labelled daemon, the local one also
+        // carrying quota — so BOTH halves render and the composition runs.
+        var remote = MenuBarFixtures.session(id: "r1", project: "remote-proj")
+        remote.daemonID = "d-alpha"
+        let sessions = [MenuBarFixtures.sessionWithQuota(), remote]
+        let labels = ["d-alpha": "alpha-box"]
+        let subject = MenuBarAppearance(style: .combined, grouping: .location)
+
+        let dots = try XCTUnwrap(MenuBarImageBuilder.dotsImage(
+            appearance: subject, sessions: sessions,
+            projectGroupOrder: [], daemonLabels: labels
+        ))
+        XCTAssertEqual(dots.accessibilityDescription,
+                       "Irrlicht — sessions on Local, alpha-box",
+                       "the dot half must name its buckets before anything composes it")
+        let quota = try XCTUnwrap(
+            MenuBarImageBuilder.quotaImage(
+                appearance: subject, sessions: sessions, providerKeys: [], now: fixedNow
+            ),
+            "this fixture must render a quota half, or the composition never runs"
+        )
+        XCTAssertNil(quota.accessibilityDescription,
+                     "the quota half describes nothing, so the dot half's description "
+                         + "is the only one there is to lose")
+
+        let composed = try XCTUnwrap(
+            MenuBarImageBuilder.iconImage(
+                appearance: subject, sessions: sessions, projectGroupOrder: [],
+                daemonLabels: labels, providerKeys: [], now: fixedNow
+            )
+        )
+        XCTAssertGreaterThan(composed.size.width, dots.size.width,
+                             "the icon must actually have composed two halves here")
+        XCTAssertEqual(composed.accessibilityDescription, dots.accessibilityDescription,
+                       "composing the quota bars dropped the daemon names")
+
+        // And the Gas Town badge composition, where the described half is on
+        // the RIGHT rather than the left.
+        let badged = try XCTUnwrap(
+            MenuBarImageBuilder.composeSideBySide(quota, composed)
+        )
+        XCTAssertEqual(badged.accessibilityDescription, dots.accessibilityDescription,
+                       "an undescribed left half must not erase the right half's name")
+
+        // LEFT wins when BOTH halves are described. Unreachable through the app
+        // today — only the dot half ever carries a description, so flipping the
+        // rule to `r ?? l` was RUN and left all 730 tests green — which is
+        // exactly why it is pinned here rather than left to the doc comment on
+        // `composeSideBySide`. The moment a second half gains a description the
+        // rule stops being a free choice, and this is what will say so.
+        let describedLeft = NSImage(size: NSSize(width: 4, height: 4))
+        describedLeft.accessibilityDescription = "left half"
+        let describedRight = NSImage(size: NSSize(width: 4, height: 4))
+        describedRight.accessibilityDescription = "right half"
+        XCTAssertEqual(
+            MenuBarImageBuilder.composeSideBySide(describedLeft, describedRight)?
+                .accessibilityDescription,
+            "left half",
+            "with both halves described the LEFT one names the composed icon"
+        )
+
+        // The other groupings still describe nothing — their buckets are named
+        // by the popover, and inventing a description for them would put a
+        // second, different sentence in front of VoiceOver.
+        for grouping in [MenuBarGrouping.project, .combined] {
+            XCTAssertNil(
+                MenuBarImageBuilder.dotsImage(
+                    appearance: MenuBarAppearance(style: .lights, grouping: grouping),
+                    sessions: sessions, projectGroupOrder: [], daemonLabels: labels
+                )?.accessibilityDescription,
+                "\(grouping) must keep describing nothing"
+            )
+        }
     }
 
     // MARK: - iconState priority order (untouched by #1862)

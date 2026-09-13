@@ -56,14 +56,18 @@ enum MenuBarStyle: String, CaseIterable, Identifiable {
 /// toggle a *point* in this space rather than a fourth control: combined
 /// grouping with a one-slot budget IS what compact rendered.
 ///
-/// **`location` is declared but not implemented in this build.** #1955's
-/// per-daemon buckets are phase 2 of that issue and land after #1954, which is
-/// what makes bucket truncation stable; until then `resolved` sends it to
-/// `project`. The case is declared now rather than added later so the stored
-/// format and the migration are final — a user who lands on this build from a
-/// later one still parses their choice instead of silently resetting.
-/// `selectableCases` is what Settings offers, so nothing unimplemented is
-/// reachable from the UI.
+/// **`location` is one bucket per daemon, labelled by daemon** — #1955's phase
+/// 2, landed after #1956 (issue #1954) made bucket truncation stable. Its
+/// buckets are `MenuBarStatusRenderer.buildLocationStatusSVG`'s: local first,
+/// then relay daemons by the label the user reads. That order is DERIVED on
+/// every render and persisted nowhere, and in particular no daemon name is
+/// ever written into `projectGroupOrder` — see that function's doc for why a
+/// phantom name in the popover's remembered superset would be #1948 again.
+///
+/// `isImplemented` and `selectableCases` remain, rather than collapsing now
+/// that every case is implemented: they are the seam a fourth grouping is
+/// added behind, and `resolved`'s fallback is what keeps a store written by a
+/// later build from rendering an undefined bucket after a downgrade.
 enum MenuBarGrouping: String, CaseIterable, Identifiable {
     case project
     case location
@@ -88,8 +92,7 @@ enum MenuBarGrouping: String, CaseIterable, Identifiable {
     /// whatever `resolved` happened to fall through to.
     var isImplemented: Bool {
         switch self {
-        case .project, .combined: return true
-        case .location: return false
+        case .project, .location, .combined: return true
         }
     }
 
@@ -98,8 +101,24 @@ enum MenuBarGrouping: String, CaseIterable, Identifiable {
     /// only fallback that cannot surprise anyone.
     var resolved: MenuBarGrouping { isImplemented ? self : .project }
 
-    /// The cases Settings offers. Derived, so implementing `location` in
-    /// phase 2 surfaces its segment without a second edit here.
+    /// What the slot-budget row is CALLED under this grouping — the budget
+    /// caps buckets, and the buckets are not always projects.
+    ///
+    /// `combined` has one bucket by construction, so Settings hides the row
+    /// entirely (`if !menuBarAppearance.aggregatesSessionDots`) and this string
+    /// is unreachable from the UI; it is written anyway rather than trapping,
+    /// because an exhaustive switch that answers for every case is the point
+    /// and a `fatalError` arm in a label is a crash waiting for a refactor.
+    var slotBudgetLabel: String {
+        switch self {
+        case .project: return "Max projects"
+        case .location: return "Max locations"
+        case .combined: return "Max groups"
+        }
+    }
+
+    /// The cases Settings offers. Derived, which is how #1955 phase 2's
+    /// `By location` segment appeared without an edit to `SettingsView`.
     static var selectableCases: [MenuBarGrouping] { allCases.filter(\.isImplemented) }
 
     static let storageKey = "menuBarGrouping"

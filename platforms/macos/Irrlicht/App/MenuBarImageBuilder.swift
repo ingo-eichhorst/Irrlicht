@@ -99,18 +99,49 @@ enum MenuBarImageBuilder {
     /// signal, not a property of what the icon shows. Since #1955 that signal
     /// is derived from `MenuBarGrouping` rather than stored, and the
     /// per-bucket path carries the user's slot budget.
+    ///
+    /// **An exhaustive `switch` on the grouping rather than #1955 phase 1's
+    /// `aggregatesSessionDots` ternary**, now that phase 2 gives `location` a
+    /// third destination: a two-way test cannot route three bucketings, and a
+    /// comparison would answer silently for a fourth grouping added later —
+    /// the reasoning `MenuBarAppearance`'s predicates and
+    /// `MenuBarStatusRenderer.segmentOrder` (#1797) already carry. The
+    /// predicate does not go away; it stays the density QUESTION the quota
+    /// layout and the Settings stepper ask, and
+    /// `MenuBarAppearanceTests.testDotsImageRoutesEachGroupingToItsOwnRenderer`
+    /// pins this switch and that predicate agreeing about `.combined`.
+    ///
+    /// `daemonLabels` and `projectGroupOrder` are BOTH required rather than
+    /// defaulted: each is used by exactly one arm, and a default is how a
+    /// forgotten wiring compiles into an icon that silently names its buckets
+    /// after uuids. Same reasoning `MenuBarAppearance` gives for moving its
+    /// four predicates off `MenuBarStyle` — in a refactor the risk sits at the
+    /// call sites, so the call sites are where the compiler should object.
     static func dotsImage(
         appearance: MenuBarAppearance,
         sessions: [SessionState],
-        projectGroupOrder: [String]
+        projectGroupOrder: [String],
+        daemonLabels: [String: String]
     ) -> NSImage? {
-        appearance.aggregatesSessionDots
-            ? MenuBarStatusRenderer.buildAggregateStatusImage(sessions: sessions)
-            : MenuBarStatusRenderer.buildStatusImage(
+        switch appearance.grouping.resolved {
+        case .project:
+            return MenuBarStatusRenderer.buildStatusImage(
                 sessions: sessions,
                 projectGroupOrder: projectGroupOrder,
                 maxGroups: appearance.maxProjects
             )
+        case .location:
+            // No `projectGroupOrder` reaches this arm, by signature: the
+            // per-daemon bucketing derives its own order and must never put a
+            // daemon name in the popover's remembered superset (#1948 / #1956).
+            return MenuBarStatusRenderer.buildLocationStatusImage(
+                sessions: sessions,
+                daemonLabels: daemonLabels,
+                maxGroups: appearance.maxProjects
+            )
+        case .combined:
+            return MenuBarStatusRenderer.buildAggregateStatusImage(sessions: sessions)
+        }
     }
 
     /// The quota half of the icon, for a given appearance — nil when the style
@@ -183,6 +214,7 @@ enum MenuBarImageBuilder {
         appearance: MenuBarAppearance,
         sessions: [SessionState],
         projectGroupOrder: [String],
+        daemonLabels: [String: String],
         providerKeys: [String],
         now: Date
     ) -> NSImage? {
@@ -198,7 +230,8 @@ enum MenuBarImageBuilder {
         let computedDotsImage = dotsImage(
             appearance: appearance,
             sessions: sessions,
-            projectGroupOrder: projectGroupOrder
+            projectGroupOrder: projectGroupOrder,
+            daemonLabels: daemonLabels
         )
         // Combined style shares its width budget with the dots, so the
         // quota bars render in a narrower, label-less layout there — see
@@ -272,6 +305,14 @@ enum MenuBarImageBuilder {
             appearance: MenuBarAppearance.current,
             sessions: nonGtSessions,
             projectGroupOrder: sessionManager.projectGroupOrder,
+            // Read, never written: the per-daemon buckets name themselves from
+            // this map and derive their own order. Nothing on this path puts a
+            // daemon name into `projectGroupOrder` — asserted end to end by
+            // `MenuBarAppearanceTests
+            // .testLocationGroupingNeverTouchesTheRememberedProjectOrder`,
+            // which drives a real relay ingest and compares the array before
+            // and after.
+            daemonLabels: sessionManager.daemonLabels,
             // Spelled `UserDefaults.standard` rather than `.standard`: this
             // is an app-target READ, which PersistentDefaultsLintTests leaves
             // legal, and the implicit-member form is invisible to that scan —
@@ -309,6 +350,18 @@ enum MenuBarImageBuilder {
     /// may be nil — the other renders alone with no artificial gap. Shared
     /// by the quota+dots composition and the Gas Town badge+base
     /// composition, which both used to hand-roll this same NSImage math.
+    ///
+    /// **The composed image inherits whichever half carries an
+    /// `accessibilityDescription`** (left first). Without that, #1955 phase 2's
+    /// per-daemon bucket names — the only place the daemon labels surface,
+    /// since dot-groups carry no text — survive only the single-sided cases and
+    /// vanish the moment a user has quota bars or the Gas Town badge on. The
+    /// one-sided arms above already inherit it by returning the image itself,
+    /// so this makes the both-sided arm agree with them rather than adding a
+    /// new rule. Left-first suits both real compositions: the dots are the left
+    /// half of the quota composition and the described half of it, and the Gas
+    /// Town badge (left) is undescribed, so the base image's description wins
+    /// there by falling through.
     static func composeSideBySide(_ left: NSImage?, _ right: NSImage?, gap: CGFloat = 4) -> NSImage? {
         switch (left, right) {
         case (nil, nil):
@@ -328,6 +381,8 @@ enum MenuBarImageBuilder {
                    from: .zero, operation: .sourceOver, fraction: 1)
             combined.unlockFocus()
             combined.isTemplate = false
+            combined.accessibilityDescription =
+                l.accessibilityDescription ?? r.accessibilityDescription
             return combined
         }
     }

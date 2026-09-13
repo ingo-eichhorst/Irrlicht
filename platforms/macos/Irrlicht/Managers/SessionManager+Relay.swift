@@ -419,6 +419,42 @@ extension SessionManager {
         return offlineDaemons[id] != nil
     }
 
+    /// Every daemon this Mac has a name for: daemon_id → label, connected and
+    /// faded alike.
+    ///
+    /// One map rather than two lookups, so the fallback chain is written once.
+    /// #1955's per-daemon menu bar buckets are the second site that needs it,
+    /// and a bucket named differently from the rows it stands for would be a
+    /// worse bug than no name at all.
+    ///
+    /// **The two maps are disjoint through the ingest, so the merge's
+    /// precedence is unobservable today — stated rather than relied on.** Read
+    /// at `handleRelayMessage`: the `daemon_status` disconnect arm takes the
+    /// label with `relayDaemons.removeValue(forKey: id)` BEFORE writing
+    /// `offlineDaemons[id]`, its connect arm calls `restoreDaemon`, and
+    /// `restoreDaemon` does `offlineDaemons.removeValue(forKey: id)` — so no
+    /// key is ever in both between calls. Connected-wins is chosen anyway
+    /// because it is exactly what `relayDaemons[id] ?? offlineDaemons[id] ?? id`
+    /// answered at every call site before this existed, which is what makes
+    /// routing those sites through here a refactor rather than a change.
+    var daemonLabels: [String: String] {
+        offlineDaemons.merging(relayDaemons) { _, connected in connected }
+    }
+
+    /// The name to show for one daemon, falling back to its bare id.
+    ///
+    /// Spelled as the chain rather than as `daemonLabels[id] ?? id`: the map
+    /// above is a COMPUTED merge, so going through it would allocate a
+    /// dictionary of every known daemon for a single lookup — once per remote
+    /// row per SwiftUI body evaluation, at `SessionRowView`'s cloud glyph. The
+    /// two must agree, and that is asserted rather than assumed:
+    /// `SessionManagerRelayReconnectTests
+    /// .testTheDaemonLabelLookupAgreesWithTheMapAcrossEveryCombination` drives
+    /// all four states (connected only, faded only, both, neither).
+    func daemonLabel(for id: String) -> String {
+        relayDaemons[id] ?? offlineDaemons[id] ?? id
+    }
+
     /// A faded daemon reconnected: drop its kept rows (any that ended while it
     /// was offline are gone for good; live ones re-arrive as fresh pushes) and
     /// clear the offline mark so its rows render solid again.

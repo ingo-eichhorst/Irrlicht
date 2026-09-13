@@ -111,48 +111,82 @@ final class MenuBarAppearanceTests: XCTestCase {
         XCTAssertFalse(fresh.aggregatesSessionDots, "the dense form must default to off")
     }
 
-    /// The grouping's parse/fallback contract, and the one case that is
-    /// declared without being implemented.
+    /// The grouping's parse/fallback contract, now that phase 2 has
+    /// implemented every case.
     ///
-    /// `location` is #1955's phase 2 and lands after #1954. It parses (so a
-    /// store written by a later build is not silently reset), it resolves to
-    /// `project` (so nothing renders an undefined bucket), and it is NOT in
-    /// `selectableCases` (so Settings cannot offer a control that lies).
+    /// Restates `testTheUnimplementedGroupingParsesResolvesAndIsNotOffered`
+    /// rather than deleting it: that test's job was to pin the shape of the
+    /// gate, and the gate is still there for the NEXT unimplemented grouping.
+    /// What flipped is which side of it `location` is on — so the assertions
+    /// flip with it instead of disappearing, which is what would make a
+    /// silently-unimplemented fourth case possible again.
     ///
-    /// Mutation-proved (source): make `MenuBarGrouping.location.isImplemented`
-    /// return true and the `selectableCases` assertion goes red; drop the
-    /// `resolved` fallback and the rendering assertion goes red.
-    func testTheUnimplementedGroupingParsesResolvesAndIsNotOffered() {
+    /// The test this replaces ran RED the moment `location.isImplemented`
+    /// flipped, which is the gate lifting rather than a defect surfacing:
+    /// `("location") is not equal to ("project") - an unimplemented grouping
+    /// must fall back to the pre-#1955 bucketing`, `XCTAssertFalse failed -
+    /// Settings must not offer a grouping this build cannot render`, and the
+    /// `selectableCases` equality. Its assertions are inverted here rather
+    /// than removed.
+    func testTheLocationGroupingIsImplementedParsesAndIsOffered() throws {
         XCTAssertEqual(MenuBarGrouping.allCases.map(\.rawValue),
                        ["project", "location", "combined"])
         XCTAssertEqual(MenuBarGrouping(rawValue: "location"), .location)
-        XCTAssertEqual(MenuBarGrouping.location.resolved, .project,
-                       "an unimplemented grouping must fall back to the pre-#1955 bucketing")
-        XCTAssertFalse(MenuBarGrouping.selectableCases.contains(.location),
-                       "Settings must not offer a grouping this build cannot render")
-        XCTAssertEqual(MenuBarGrouping.selectableCases, [.project, .combined])
-        // `selectableCases` is DERIVED, so implementing it in phase 2 surfaces
-        // the segment without a second edit. Asserted rather than described.
+        XCTAssertTrue(MenuBarGrouping.location.isImplemented,
+                      "phase 2 gives location a bucket rule of its own")
+        XCTAssertEqual(MenuBarGrouping.location.resolved, .location,
+                       "an implemented grouping must no longer fall back to project")
+        XCTAssertTrue(MenuBarGrouping.selectableCases.contains(.location),
+                      "Settings must now offer the grouping this build can render")
+        XCTAssertEqual(MenuBarGrouping.selectableCases, [.project, .location, .combined])
+        // `selectableCases` is DERIVED — the property that let phase 2 surface
+        // the Settings segment without editing `SettingsView`. Still asserted,
+        // because it is what a FOURTH grouping will rely on next.
         XCTAssertEqual(MenuBarGrouping.selectableCases,
                        MenuBarGrouping.allCases.filter(\.isImplemented))
+        XCTAssertEqual(MenuBarGrouping.location.label, "By location")
+        // The budget row's noun. `project` keeps the exact string it had
+        // before phase 2 — the default grouping's Settings row must not move.
+        XCTAssertEqual(MenuBarGrouping.project.slotBudgetLabel, "Max projects")
+        XCTAssertEqual(MenuBarGrouping.location.slotBudgetLabel, "Max locations")
+        XCTAssertEqual(Set(MenuBarGrouping.allCases.map(\.slotBudgetLabel)).count,
+                       MenuBarGrouping.allCases.count,
+                       "two groupings share a budget-row label, so the row cannot say "
+                           + "which one is in effect")
 
-        // And it renders as `project` does, end to end — not merely in the
-        // enum. Six one-session projects, where `project` and `combined`
-        // differ in width, so a fallback to the wrong one would be visible.
-        let sessions = sessionsAcrossProjects(6)
-        XCTAssertEqual(
-            MenuBarImageBuilder.dotsImage(
-                appearance: appearance(.lights, .location),
-                sessions: sessions, projectGroupOrder: []
-            )?.size.width ?? -1,
-            MenuBarImageBuilder.dotsImage(
-                appearance: appearance(.lights, .project),
-                sessions: sessions, projectGroupOrder: []
-            )?.size.width ?? -2,
-            accuracy: 0.01,
-            "location must render exactly as project does until phase 2 implements it"
-        )
+        // The gate still works, checked against a case that does not exist:
+        // `resolved` must be identity for everything implemented, so the only
+        // way to reach the `project` fallback is to be unimplemented.
+        for grouping in MenuBarGrouping.allCases {
+            XCTAssertEqual(grouping.resolved, grouping.isImplemented ? grouping : .project,
+                           "\(grouping): resolved must be identity iff implemented")
+        }
+
+        // And `location` no longer renders as `project` does, end to end.
+        // Two daemons' worth of sessions spread one-per-project: `project`
+        // buckets them by project and `location` by daemon, so the two widths
+        // must now DIFFER — the inverse of what this test asserted at phase 1.
+        // UNWRAPPED, not `?? -1` / `?? -2`. Those sentinels were safe under the
+        // pre-phase-2 `XCTAssertEqual` (two nils gave -1 != -2, so the row went
+        // red); inverting the assertion to `XCTAssertNotEqual` inverted the
+        // guard too, and two nils would then SATISFY it — review of #1955
+        // phase 2 caught that and measured it, with `if true { return nil }`
+        // at the top of `dotsImage` leaving the sentinel form green in 0.001s.
+        // Re-run against THIS form, that same mutation now fails with
+        // `XCTUnwrap failed: expected non-nil value of type "NSImage"`.
+        let sessions = MenuBarFixtures.acrossThreeLocations()
+        let byProject = try XCTUnwrap(MenuBarImageBuilder.dotsImage(
+            appearance: appearance(.lights, .project),
+            sessions: sessions, projectGroupOrder: [], daemonLabels: [:]
+        )).size.width
+        let byLocation = try XCTUnwrap(MenuBarImageBuilder.dotsImage(
+            appearance: appearance(.lights, .location),
+            sessions: sessions, projectGroupOrder: [], daemonLabels: [:]
+        )).size.width
+        XCTAssertNotEqual(byProject, byLocation,
+                          "location must no longer be an alias for project")
     }
+
 
     /// The slot budget's bounds are enforced by the TYPE, not only by the
     /// Settings stepper — a hand-edited plist reaches `MenuBarAppearance` too.
@@ -216,6 +250,17 @@ final class MenuBarAppearanceTests: XCTestCase {
             // combined style + combined grouping aggregates the dots and
             // leaves the quota half alone; it was already narrow.
             (.combined, .combined, true, true, true, false),
+            // ---- #1955 phase 2: location buckets per daemon ----
+            // Every predicate answers as the `.project` column does, because
+            // location changes the bucket KEY and nothing else — it draws one
+            // dot-group per bucket exactly as project does, so it is not the
+            // dense form and does not reach the narrow bars on `.usage`. Three
+            // rows that duplicate the project column is the point: a
+            // `location` that started answering differently would be a
+            // grouping quietly turning into a second style.
+            (.lights, .location, false, false, false, false),
+            (.usage, .location, true, false, false, true),
+            (.combined, .location, true, true, false, false),
         ]
         XCTAssertEqual(expected.count,
                        MenuBarStyle.allCases.count * MenuBarGrouping.selectableCases.count,
@@ -293,31 +338,370 @@ final class MenuBarAppearanceTests: XCTestCase {
     // exercise the extracted `dotsImage` / `quotaImage` seams, so the routing
     // is asserted rather than only the values it routes.
 
-    /// Mutation-proved (source): invert the condition in
-    /// `MenuBarImageBuilder.dotsImage` and this goes red.
+    /// Each grouping reaches its OWN renderer, and no two of them share one.
     ///
-    /// Since #1852 the loop crosses density as well as style — the aggregate
-    /// path is reachable from all three styles, not just the one that used to
-    /// hard-code it.
-    func testDotsImageRoutesTheGroupingToTheAggregateRendererAndNothingElse() {
-        let sessions = sessionsAcrossProjects(6)
+    /// Restates `testDotsImageRoutesTheGroupingToTheAggregateRendererAnd`
+    /// `NothingElse`, whose two-way `aggregatesSessionDots ? 18.5 : 90.0`
+    /// could not express three destinations. It ran red on this change
+    /// (`lights/location`, `usage/location`, `combined/location`: `18.5` is not
+    /// equal to `90.0`) precisely because `location` stopped being an alias for
+    /// `project` — the failure being the point rather than a problem, since the
+    /// old expectation was "location renders as project does".
+    ///
+    /// Mutation-proved (source), and written from the mutations as RUN rather
+    /// than as predicted — the first one failed somewhere other than where it
+    /// was expected to:
+    ///
+    /// - swapping the `.location` and `.combined` arms of
+    ///   `MenuBarImageBuilder.dotsImage` fails all SIX rows on the coupling
+    ///   assertion (`"the aggregate render and aggregatesSessionDots must
+    ///   agree"`), not on a width — the swap moves both destinations at once,
+    ///   so the per-grouping widths merely trade places and only the tie to
+    ///   the predicate notices;
+    /// - pointing the `.location` arm at `buildStatusImage` fails the
+    ///   distinctness guard: `("2") is not equal to ("3")`, with
+    ///   `[project: 90.0, location: 90.0, combined: 18.5]`.
+    ///
+    /// The fixture has three locations and six distinct projects, so all three
+    /// widths differ; the vacuity guard at the end says so rather than trusting
+    /// that they do.
+    func testDotsImageRoutesEachGroupingToItsOwnRenderer() {
+        let sessions = MenuBarFixtures.acrossThreeLocations()
+        let labels = ["d-alpha": "alpha-box", "d-beta": "beta-box"]
+        var widthsByGrouping: [MenuBarGrouping: CGFloat] = [:]
         for style in MenuBarStyle.allCases {
             for grouping in MenuBarGrouping.allCases {
                 let appearance = appearance(style, grouping)
                 let image = MenuBarImageBuilder.dotsImage(
-                    appearance: appearance, sessions: sessions, projectGroupOrder: []
+                    appearance: appearance, sessions: sessions,
+                    projectGroupOrder: [], daemonLabels: labels
                 )
                 XCTAssertNotNil(image, "\(style)/\(grouping) must still render dots")
                 let width = image?.size.width ?? -1
-                if appearance.aggregatesSessionDots {
-                    XCTAssertEqual(width, 18.5, accuracy: 0.01,
-                                   "\(style)/\(grouping) must use the aggregate dot")
+                // The dot half is a question about the grouping alone: the same
+                // grouping must measure the same on every style.
+                if let seen = widthsByGrouping[grouping] {
+                    XCTAssertEqual(width, seen, accuracy: 0.01,
+                                   "\(style)/\(grouping) must not depend on the style")
                 } else {
-                    XCTAssertEqual(width, 90.0, accuracy: 0.01,
-                                   "\(style)/\(grouping) must keep the per-project layout")
+                    widthsByGrouping[grouping] = width
                 }
+                // …and the aggregate path is still exactly the dense grouping,
+                // which is the coupling the switch in `dotsImage` could
+                // otherwise drift away from now that it no longer reads the
+                // predicate.
+                XCTAssertEqual(
+                    width == MenuBarStatusRenderer.buildAggregateStatusImage(
+                        sessions: sessions
+                    )?.size.width,
+                    appearance.aggregatesSessionDots,
+                    "\(style)/\(grouping): the aggregate render and "
+                        + "aggregatesSessionDots must agree"
+                )
             }
         }
+        XCTAssertEqual(widthsByGrouping.count, MenuBarGrouping.allCases.count,
+                       "a grouping went unmeasured — the loop above did not run")
+        XCTAssertEqual(Set(widthsByGrouping.values).count, MenuBarGrouping.allCases.count,
+                       "two groupings measured the same on this fixture, so the rows "
+                           + "above cannot tell their renderers apart: \(widthsByGrouping)")
+    }
+
+    // MARK: - Location grouping against the REAL relay ingest (#1955 phase 2)
+    //
+    // Everything above builds its sessions with `MenuBarFixtures.session` and
+    // stamps `daemonID` by hand. That cannot see the ingest: `daemonID` is
+    // stamped by `applyRelayInner` from the Push envelope's `source`, the
+    // labels come out of `snapshot`/`daemon_status` control frames, and
+    // `relaySessionMap` is keyed by `rowID` ("daemon/id") — a suite that seeds
+    // those by hand stays green when any of it moves. So the two claims that
+    // are actually about the app rather than about the renderer are driven
+    // through `RelayFixtures` and a real `SessionManager` here.
+
+    /// Two relay daemons and one un-daemoned session, ingested as frames: the
+    /// icon draws exactly one bucket per daemon plus one for local, named by
+    /// the labels the relay announced.
+    ///
+    /// New behaviour, so not red-first. What it adds over the unit-level tests
+    /// is that every input comes from the ingest — no `daemonID` is stamped by
+    /// the test, and no label is invented by it.
+    func testTheLocationGroupingRendersOneBucketPerDaemon() throws {
+        let sut = Self.managerWithTwoDaemonsAndOneLocalSession()
+
+        // Vacuity guard: the ingest must actually have produced what the
+        // assertions below are about. Without this, a frame shape that stopped
+        // parsing would leave every claim here vacuously true.
+        XCTAssertEqual(sut.sessions.count, 4, "the four ingested sessions must be live")
+        XCTAssertEqual(Set(sut.sessions.map { $0.daemonID }),
+                       [nil, "d-alpha", "d-beta"],
+                       "the ingest must have stamped the daemon ids the buckets key on")
+        XCTAssertEqual(sut.daemonLabels, ["d-alpha": "alpha-box", "d-beta": "beta-box"],
+                       "the snapshot frame must have populated the label map")
+
+        let render = try XCTUnwrap(MenuBarStatusRenderer.buildLocationStatusSVG(
+            sessions: sut.sessions, daemonLabels: sut.daemonLabels,
+            maxGroups: MenuBarMaxProjects.defaultValue
+        ))
+        // ONE bucket per daemon, plus one for local — three, not the four
+        // projects the same sessions occupy.
+        XCTAssertEqual(render.svg.components(separatedBy: "<g transform=").count - 1, 3,
+                       "one bucket per daemon plus one local, not one per project")
+        XCTAssertEqual(render.accessibilityDescription,
+                       "Irrlicht — sessions on Local, alpha-box, beta-box")
+        XCTAssertEqual(sut.apiGroups.count, 4,
+                       "the POPOVER must keep its four per-project rows — grouping is an "
+                           + "icon-only setting")
+
+        // A daemon that disconnects keeps its bucket and its NAME (fade, don't
+        // delete — #540), because `daemonLabels` spans both maps.
+        sut.handleRelayMessage(
+            RelayFixtures.daemonStatus(daemonID: "d-beta", status: "disconnected")
+        )
+        XCTAssertEqual(sut.offlineDaemons["d-beta"], "beta-box",
+                       "the disconnect frame must have moved the label, not dropped it")
+        let faded = try XCTUnwrap(MenuBarStatusRenderer.buildLocationStatusSVG(
+            sessions: sut.sessions, daemonLabels: sut.daemonLabels,
+            maxGroups: MenuBarMaxProjects.defaultValue
+        ))
+        XCTAssertEqual(faded.accessibilityDescription, render.accessibilityDescription,
+                       "a faded daemon's bucket must keep the name its rows keep, "
+                           + "not revert to its id")
+    }
+
+    /// **`projectGroupOrder` is byte-identical across a `.location` render** —
+    /// the load-bearing constraint, asserted rather than intended.
+    ///
+    /// That array is project-keyed and popover-owned, and #1956 made it a
+    /// remembered SUPERSET that is never pruned. A daemon name written into it
+    /// would survive forever and pad the `count - 1` bound
+    /// `SessionManager.reorderMoves(atIndex:in:)` measures against, giving the
+    /// last visible row a chevron aimed at a row nobody can see — #1948, which
+    /// #1949 fixed.
+    ///
+    /// Mutation-proved (committed): `testTheRememberedOrderRuleRejectsA`
+    /// `RendererThatWritesItsBuckets` runs three renderers that break it.
+    func testLocationGroupingNeverTouchesTheRememberedProjectOrder() {
+        XCTAssertEqual(Self.rememberedOrderViolations(Self.realIconRender), [])
+    }
+
+    /// Mutation-proved (committed): three renderers that remember their daemon
+    /// buckets the way `SessionManager.orderedGroups` remembers project names.
+    /// Each is the mistake the rule above forbids, re-run every suite run.
+    func testTheRememberedOrderRuleRejectsARendererThatWritesItsBuckets() {
+        let mutants: [(String, IconRender)] = [
+            ("appends every daemon LABEL, the way orderedGroups appends a project name",
+             { manager, appearance in
+                Self.realIconRender(manager, appearance)
+                manager.projectGroupOrder += manager.daemonLabels.values.sorted()
+                manager.saveProjectGroupOrder()
+            }),
+            ("appends the LOCAL bucket's name", { manager, appearance in
+                Self.realIconRender(manager, appearance)
+                manager.projectGroupOrder.append(MenuBarStatusRenderer.localBucketLabel)
+                manager.saveProjectGroupOrder()
+            }),
+            ("reorders the remembered names to match the icon's bucket order",
+             { manager, appearance in
+                Self.realIconRender(manager, appearance)
+                manager.projectGroupOrder.sort()
+                manager.saveProjectGroupOrder()
+            }),
+        ]
+        for (name, mutant) in mutants {
+            let violations = Self.rememberedOrderViolations(mutant)
+            XCTAssertFalse(violations.isEmpty,
+                           "the mutant '\(name)' passed the remembered-order rule "
+                               + "unchallenged — the check does not constrain what it claims")
+        }
+        // Vacuity guard: a checker that flagged everything would satisfy every
+        // row above while proving nothing about the shipped render path.
+        XCTAssertEqual(Self.rememberedOrderViolations(Self.realIconRender), [],
+                       "the shipped render path must not be flagged")
+    }
+
+    /// One pass of the icon's render, as the production path performs it.
+    typealias IconRender = (SessionManager, MenuBarAppearance) -> Void
+
+    /// Exactly what `MenuBarImageBuilder.combinedImage` hands `iconImage` off
+    /// the manager. `combinedImage` itself needs a `GasTownProvider` and is
+    /// private, so this mirrors its argument list; that the mirror stays
+    /// faithful is pinned separately, by
+    /// `testImageBuilderRoutesBothHalvesThroughTheExtractedSeams`' source
+    /// assertion on `daemonLabels: sessionManager.daemonLabels`.
+    static let realIconRender: IconRender = { manager, appearance in
+        _ = MenuBarImageBuilder.iconImage(
+            appearance: appearance,
+            sessions: manager.sessions,
+            projectGroupOrder: manager.projectGroupOrder,
+            daemonLabels: manager.daemonLabels,
+            providerKeys: [],
+            now: MenuBarFixtures.now
+        )
+    }
+
+    /// Renders the icon at every budget under `.location` and reports every way
+    /// the remembered project order moved — in memory AND in the store, since
+    /// `saveProjectGroupOrder` writes through to defaults and a mutation that
+    /// only reached the store would be invisible to the array.
+    static func rememberedOrderViolations(_ render: @escaping IconRender) -> [String] {
+        var found: [String] = []
+        func require(_ condition: Bool, _ message: @autoclosure () -> String) {
+            if !condition { found.append(message()) }
+        }
+        let defaults = InMemoryDefaults()
+        let sut = managerWithTwoDaemonsAndOneLocalSession(defaults: defaults)
+
+        let before = sut.projectGroupOrder
+        let beforeStored = defaults.stringArray(forKey: sut.projectGroupOrderKey) ?? []
+        // Vacuity guard, INSIDE the checker: comparing two empty arrays would
+        // satisfy every mutant below. The order must already hold the four
+        // ingested project names before anything renders.
+        require(Set(before) == ["local-one", "alpha-one", "alpha-two", "beta-one"],
+                "the ingest did not populate projectGroupOrder — every comparison "
+                    + "below would be vacuous. Got \(before)")
+
+        for budget in MenuBarMaxProjects.minimum...MenuBarMaxProjects.maximum {
+            render(sut, MenuBarAppearance(style: .lights, grouping: .location,
+                                          maxProjects: budget))
+            require(sut.projectGroupOrder == before,
+                    "budget \(budget): the remembered project order changed across a "
+                        + ".location render — \(before) became \(sut.projectGroupOrder)")
+            require((defaults.stringArray(forKey: sut.projectGroupOrderKey) ?? [])
+                        == beforeStored,
+                    "budget \(budget): the PERSISTED project order changed across a "
+                        + ".location render")
+        }
+        // And nothing that names a daemon is in it, however it got there —
+        // the equality above only says "unchanged", which a render that wrote
+        // a daemon name on the very first pass and then stopped would satisfy
+        // from the second pass onward.
+        for daemonName in ["d-alpha", "d-beta", "alpha-box", "beta-box",
+                           MenuBarStatusRenderer.localBucketLabel] {
+            require(!sut.projectGroupOrder.contains(daemonName),
+                    "\(daemonName) reached projectGroupOrder — a phantom name in the "
+                        + "popover's remembered superset is #1948 in a new costume")
+        }
+        return found
+    }
+
+    /// **The daemon names actually reach the status item's button.**
+    ///
+    /// Everything else in this file asserts the description on the `NSImage`.
+    /// That is the PRODUCER, and it cannot see the one thing that decides
+    /// whether a user ever hears the names: an explicit `setAccessibilityLabel`
+    /// on the button OVERRIDES its image's `accessibilityDescription`. Review
+    /// of this change measured that on a real `NSStatusBarButton` driven the
+    /// way `MenuBarController` drives it — the button read `Optional("Irrlicht")`
+    /// with the launch-time label in place, and the full bucket sentence
+    /// without it. So every description this PR plumbs was dead on arrival, as
+    /// `OffFlameImage`'s two already were.
+    ///
+    /// `MenuBarController.applyIcon` is the fix and this is its test. A plain
+    /// `NSButton` rather than a live `NSStatusItem`: `NSStatusBarButton` is an
+    /// `NSButton`, the override semantics are the button's, and this needs no
+    /// status bar to exist — which keeps it runnable on a headless CI machine.
+    ///
+    /// Mutation-proved (source), run rather than predicted: dropping the
+    /// `setAccessibilityLabel` call from `applyIcon` — i.e. restoring the
+    /// pre-fix behaviour, where only `configureStatusItem`'s launch-time label
+    /// is ever set — fails the first assertion below.
+    func testTheStatusButtonAnnouncesTheIconsOwnDescription() throws {
+        let button = NSButton()
+        // Exactly what `configureStatusItem` does at launch, once.
+        button.setAccessibilityLabel(MenuBarController.defaultAccessibilityLabel)
+
+        let sut = Self.managerWithTwoDaemonsAndOneLocalSession()
+        let located = try XCTUnwrap(MenuBarImageBuilder.iconImage(
+            appearance: appearance(.lights, .location),
+            sessions: sut.sessions, projectGroupOrder: sut.projectGroupOrder,
+            daemonLabels: sut.daemonLabels, providerKeys: [], now: now
+        ))
+        MenuBarController.applyIcon(located, to: button)
+        XCTAssertEqual(button.accessibilityLabel(),
+                       "Irrlicht — sessions on Local, alpha-box, beta-box",
+                       "the launch-time label must not outrank what the icon says "
+                           + "about itself — the daemon names have no other surface")
+        XCTAssertEqual(button.image, located, "the icon itself must still be applied")
+
+        // Vacuity guard: the label above is not simply whatever was already
+        // there. It differs from the default, and an icon that describes
+        // NOTHING must fall back to that default rather than keeping a stale
+        // sentence from the previous repaint.
+        XCTAssertNotEqual(button.accessibilityLabel(),
+                          MenuBarController.defaultAccessibilityLabel)
+        let perProject = try XCTUnwrap(MenuBarImageBuilder.iconImage(
+            appearance: appearance(.lights, .project),
+            sessions: sut.sessions, projectGroupOrder: sut.projectGroupOrder,
+            daemonLabels: sut.daemonLabels, providerKeys: [], now: now
+        ))
+        XCTAssertNil(perProject.accessibilityDescription,
+                     "this arm is only meaningful while the per-project icon describes nothing")
+        MenuBarController.applyIcon(perProject, to: button)
+        XCTAssertEqual(button.accessibilityLabel(),
+                       MenuBarController.defaultAccessibilityLabel,
+                       "switching back to a grouping that names nothing must not leave "
+                           + "the previous grouping's daemon names announced")
+
+        // And the flame states, whose descriptions have been set on the image
+        // since #593 and reached nobody until `applyIcon` existed.
+        MenuBarController.applyIcon(OffFlameImage.menuBar, to: button)
+        XCTAssertEqual(button.accessibilityLabel(), "Irrlicht — no active sessions")
+        MenuBarController.applyIcon(OffFlameImage.attention, to: button)
+        XCTAssertEqual(button.accessibilityLabel(),
+                       "Irrlicht — action required: permission pending")
+
+        // …and the repaint path actually GOES THROUGH `applyIcon`. Everything
+        // above drives that function directly, which is the only way a test can
+        // reach it — `rebuildStatusImage` is private and needs a live
+        // `SessionManager`, a `GasTownProvider` and a real status item. So the
+        // wiring itself is pinned by reading the source, the idiom
+        // `testMenuBarControllerAppliesTheStatusItemIdentity` already uses.
+        //
+        // Not belt-and-braces: reverting `rebuildStatusImage` to
+        // `statusItem.button?.image = MenuBarImageBuilder.build(…)` — the exact
+        // line this change replaced — was RUN, and left all 730 tests green
+        // while putting the daemon names back beyond VoiceOver's reach. The
+        // assertions above cannot see it; this one can.
+        let controllerSource = try Self.source(at: Self.menuBarControllerPath)
+        XCTAssertTrue(controllerSource.contains("Self.applyIcon("),
+                      "rebuildStatusImage must install the icon through applyIcon, or the "
+                          + "button keeps its launch-time label and the icon's own "
+                          + "description reaches nobody")
+        XCTAssertFalse(
+            try Self.codeLines(at: Self.menuBarControllerPath)
+                .contains("statusItem.button?.image ="),
+            "no repaint path may assign the button's image without also re-applying "
+                + "its accessibility label — that is the pre-fix shape"
+        )
+        // Applying them must not have MUTATED the shared statics.
+        XCTAssertEqual(OffFlameImage.menuBar.accessibilityDescription,
+                       "Irrlicht — no active sessions",
+                       "applyIcon must read the shared flame image, never write it")
+    }
+
+    /// Four sessions ingested as relay frames: two projects on `d-alpha`, one
+    /// on `d-beta`, and one raw daemon frame with no `source` at all — the
+    /// `daemonID == nil` shape the `Local` bucket is made of. Plus a `snapshot`
+    /// frame giving both daemons the labels the buckets are named by.
+    static func managerWithTwoDaemonsAndOneLocalSession(
+        defaults: InMemoryDefaults = InMemoryDefaults()
+    ) -> SessionManager {
+        let sut = SessionManager(defaults: defaults)
+        sut.handleRelayMessage(RelayFixtures.snapshot(daemons: [
+            (id: "d-alpha", label: "alpha-box"),
+            (id: "d-beta", label: "beta-box"),
+        ]))
+        sut.handleRelayMessage(RelayFixtures.localFrame(sessionId: "l1", project: "local-one"))
+        sut.handleRelayMessage(
+            RelayFixtures.push(source: "d-alpha", sessionId: "a1", project: "alpha-one")
+        )
+        sut.handleRelayMessage(
+            RelayFixtures.push(source: "d-alpha", sessionId: "a2", project: "alpha-two")
+        )
+        sut.handleRelayMessage(
+            RelayFixtures.push(source: "d-beta", sessionId: "b1", project: "beta-one")
+        )
+        return sut
     }
 
     /// **The slot budget actually reaches the renderer**, which nothing else
@@ -340,7 +724,7 @@ final class MenuBarAppearanceTests: XCTestCase {
             let image = try XCTUnwrap(
                 MenuBarImageBuilder.dotsImage(
                     appearance: appearance(.lights, .project, maxProjects: budget),
-                    sessions: sessions, projectGroupOrder: []
+                    sessions: sessions, projectGroupOrder: [], daemonLabels: [:]
                 ),
                 "budget \(budget) must render dots"
             )
@@ -446,7 +830,8 @@ final class MenuBarAppearanceTests: XCTestCase {
             )
             XCTAssertEqual(
                 MenuBarImageBuilder.dotsImage(
-                    appearance: subject, sessions: sessions, projectGroupOrder: []
+                    appearance: subject, sessions: sessions,
+                    projectGroupOrder: [], daemonLabels: [:]
                 )?.size.width ?? -1,
                 dots ?? -1, accuracy: 0.01, "\(style) dots"
             )
@@ -507,7 +892,8 @@ final class MenuBarAppearanceTests: XCTestCase {
                 let icon = try XCTUnwrap(
                     MenuBarImageBuilder.iconImage(
                         appearance: column.1, sessions: sessions,
-                        projectGroupOrder: [], providerKeys: [], now: now
+                        projectGroupOrder: [], daemonLabels: [:],
+                        providerKeys: [], now: now
                     ),
                     "\(column.0) at \(projects) projects rendered no icon"
                 )
@@ -1079,7 +1465,8 @@ final class MenuBarAppearanceTests: XCTestCase {
             )
             XCTAssertEqual(
                 MenuBarImageBuilder.dotsImage(
-                    appearance: migrated, sessions: sessions, projectGroupOrder: []
+                    appearance: migrated, sessions: sessions,
+                    projectGroupOrder: [], daemonLabels: [:]
                 )?.size.width ?? -1,
                 aggregate.width, accuracy: 0.01,
                 "\(sessionCount) sessions: the migrated appearance must draw the aggregate dot"
@@ -1094,7 +1481,7 @@ final class MenuBarAppearanceTests: XCTestCase {
             XCTAssertEqual(
                 MenuBarImageBuilder.iconImage(
                     appearance: migrated, sessions: sessions,
-                    projectGroupOrder: [], providerKeys: [], now: now
+                    projectGroupOrder: [], daemonLabels: [:], providerKeys: [], now: now
                 )?.size.width ?? -1,
                 aggregate.width, accuracy: 0.01,
                 "\(sessionCount) sessions: the migrated icon must be the aggregate dot alone"
@@ -1319,11 +1706,11 @@ final class MenuBarAppearanceTests: XCTestCase {
             "an all-unrenderable selection must answer nil so the dots come back"
         )
         let fellBack = try XCTUnwrap(MenuBarImageBuilder.iconImage(
-            appearance: usage, sessions: sessions, projectGroupOrder: [],
+            appearance: usage, sessions: sessions, projectGroupOrder: [], daemonLabels: [:],
             providerKeys: ["no-such-provider"], now: now
         ))
         let dots = try XCTUnwrap(MenuBarImageBuilder.dotsImage(
-            appearance: usage, sessions: sessions, projectGroupOrder: []
+            appearance: usage, sessions: sessions, projectGroupOrder: [], daemonLabels: [:]
         ))
         XCTAssertEqual(fellBack.size.width, dots.size.width, accuracy: 0.01,
                        "with no renderable slot, .usage must compose its dots")
@@ -1553,6 +1940,15 @@ final class MenuBarAppearanceTests: XCTestCase {
                       "and so must the slot budget")
         XCTAssertTrue(code.contains("@AppStorage(MenuBarQuotaProviders.storageKey)"),
                       "and so must the ordered provider list")
+        // #1955 phase 2: the budget row's NOUN follows the grouping, because
+        // under `By location` the budget caps machines. Pinned as the derived
+        // read rather than as any one string, so a fourth grouping cannot
+        // reach the UI with a label somebody forgot to write.
+        XCTAssertTrue(
+            code.contains("Text(menuBarAppearance.grouping.resolved.slotBudgetLabel)"),
+            "the slot-budget row must take its label from the grouping, not from a "
+                + "literal that says 'projects' under every one of them"
+        )
         XCTAssertTrue(code.contains("isOn: quotaProviderSelection(key)"),
                       "the provider list must be offered as a multi-select")
         // The styles keep their own control: three segments, not four.
@@ -1608,6 +2004,15 @@ final class MenuBarAppearanceTests: XCTestCase {
         // this file green (they all sit at that default).
         XCTAssertTrue(code.contains("maxGroups: appearance.maxProjects"),
                       "dotsImage must hand the user's slot budget to the renderer")
+        // #1955 phase 2: the daemon label map is the one thing `location`
+        // needs that only the manager has, and `rememberedOrderViolations`'
+        // `realIconRender` MIRRORS this call rather than being it. Pinned so
+        // the mirror cannot silently stop matching — and pinned as
+        // `sessionManager.daemonLabels`, the merged accessor, not as either
+        // raw map, because reaching past it is how the icon's bucket names and
+        // `SessionRowView`'s tooltips would start disagreeing.
+        XCTAssertTrue(code.contains("daemonLabels: sessionManager.daemonLabels"),
+                      "combinedImage must hand the merged daemon label map to iconImage")
 
         // Negative pins read the RAW source, never the comment-stripped form.
         // `codeLines` is a naive stripper — it also truncates a line at a `//`
