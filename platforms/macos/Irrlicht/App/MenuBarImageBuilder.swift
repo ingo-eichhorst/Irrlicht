@@ -95,8 +95,10 @@ enum MenuBarImageBuilder {
     /// green while collapsing every shipped style to a single dot.
     ///
     /// Since #1852 the aggregate path is reachable from every style, not just
-    /// the one that hard-coded it — `aggregatesSessionDots` is the modifier,
-    /// not a property of what the icon shows.
+    /// the one that hard-coded it — `aggregatesSessionDots` is the density
+    /// signal, not a property of what the icon shows. Since #1955 that signal
+    /// is derived from `MenuBarGrouping` rather than stored, and the
+    /// per-bucket path carries the user's slot budget.
     static func dotsImage(
         appearance: MenuBarAppearance,
         sessions: [SessionState],
@@ -106,7 +108,8 @@ enum MenuBarImageBuilder {
             ? MenuBarStatusRenderer.buildAggregateStatusImage(sessions: sessions)
             : MenuBarStatusRenderer.buildStatusImage(
                 sessions: sessions,
-                projectGroupOrder: projectGroupOrder
+                projectGroupOrder: projectGroupOrder,
+                maxGroups: appearance.maxProjects
             )
     }
 
@@ -115,19 +118,44 @@ enum MenuBarImageBuilder {
     /// `dotsImage`: swapping `usesNarrowQuotaBars` for `showsQuotaBars` in
     /// the `compact:` argument is a one-word slip that silently re-lays-out
     /// every `.usage` user's icon, and nothing could see it.
+    ///
+    /// **One slot per selected provider, in list order (#1955)**, composed
+    /// with the same `MenuBarStatusRenderer.groupGap` the dot half uses
+    /// between its own groups — so a two-provider quota half reads as two
+    /// groups rather than as one wider thing. An EMPTY list is #909's
+    /// behaviour and stays it: one slot, freshest snapshot across every
+    /// provider. A selected provider with no renderable snapshot contributes
+    /// no slot rather than a blank one, so the icon does not carry a gap
+    /// waiting for data that may never arrive.
     static func quotaImage(
         appearance: MenuBarAppearance,
         sessions: [SessionState],
-        providerKey: String?,
+        providerKeys: [String],
         now: Date
     ) -> NSImage? {
         guard appearance.showsQuotaBars else { return nil }
-        return QuotaMenuBarRenderer.imageForSelectedProvider(
-            sessions: sessions,
-            providerKey: providerKey,
-            compact: appearance.usesNarrowQuotaBars,
-            now: now
-        )
+        guard !providerKeys.isEmpty else {
+            return QuotaMenuBarRenderer.imageForSelectedProvider(
+                sessions: sessions,
+                providerKey: nil,
+                compact: appearance.usesNarrowQuotaBars,
+                now: now
+            )
+        }
+        var composed: NSImage?
+        for key in providerKeys {
+            let slot = QuotaMenuBarRenderer.imageForSelectedProvider(
+                sessions: sessions,
+                providerKey: key,
+                compact: appearance.usesNarrowQuotaBars,
+                now: now
+            )
+            guard let slot else { continue }
+            // composeSideBySide answers the right-hand image unchanged when
+            // the left is nil, so the first slot gets no leading gap.
+            composed = composeSideBySide(composed, slot, gap: MenuBarStatusRenderer.groupGap)
+        }
+        return composed
     }
 
     /// The whole icon for one appearance: both halves, the `.usage` dot
@@ -155,16 +183,18 @@ enum MenuBarImageBuilder {
         appearance: MenuBarAppearance,
         sessions: [SessionState],
         projectGroupOrder: [String],
-        providerKey: String?,
+        providerKeys: [String],
         now: Date
     ) -> NSImage? {
         // Computed once regardless of appearance so the .usage fallback below
         // can check its actual success/failure instead of re-deriving it from
         // a raw session count (see shouldShowDotsInUsageStyle's doc).
         //
-        // The compact modifier (#1845, reshaped by #1852) collapses every
-        // project into ONE aggregate dot, so the dot half's width stops
-        // growing with the project count — on whichever style is selected.
+        // `combined` grouping (#1845's compact style, reshaped by #1852 and
+        // again by #1955) collapses every project into ONE aggregate dot, so
+        // the dot half's width stops growing with the project count — on
+        // whichever style is selected. Every other grouping draws up to the
+        // user's slot budget and then one `…`.
         let computedDotsImage = dotsImage(
             appearance: appearance,
             sessions: sessions,
@@ -173,13 +203,14 @@ enum MenuBarImageBuilder {
         // Combined style shares its width budget with the dots, so the
         // quota bars render in a narrower, label-less layout there — see
         // QuotaMenuBarRenderer.buildSVG's `compact` handling. Since #1852 the
-        // Usage style reaches that same narrow layout via the compact
-        // modifier; Combined stays narrow either way, which is the
-        // compatibility bound (MenuBarAppearance.usesNarrowQuotaBars).
+        // Usage style reaches that same narrow layout via the density signal
+        // (`combined` grouping since #1955); Combined STYLE stays narrow
+        // either way, which is the compatibility bound
+        // (MenuBarAppearance.usesNarrowQuotaBars).
         let builtQuotaImage = quotaImage(
             appearance: appearance,
             sessions: sessions,
-            providerKey: providerKey,
+            providerKeys: providerKeys,
             now: now
         )
         // .usage style hides the dots by default, and brings them back only
@@ -241,7 +272,12 @@ enum MenuBarImageBuilder {
             appearance: MenuBarAppearance.current,
             sessions: nonGtSessions,
             projectGroupOrder: sessionManager.projectGroupOrder,
-            providerKey: MenuBarQuotaProvider.current,
+            // Spelled `UserDefaults.standard` rather than `.standard`: this
+            // is an app-target READ, which PersistentDefaultsLintTests leaves
+            // legal, and the implicit-member form is invisible to that scan —
+            // so the explicit spelling keeps the site countable by the rule
+            // that governs it rather than merely uncovered by it.
+            providerKeys: MenuBarQuotaProviders.current(in: UserDefaults.standard),
             // `now:` is the menu-bar icon's one wall-clock read (#1675). The
             // icon is rasterised into an `NSStatusItem`, not rendered by
             // SwiftUI, so `\.formatNow` cannot reach it — the clock has to be

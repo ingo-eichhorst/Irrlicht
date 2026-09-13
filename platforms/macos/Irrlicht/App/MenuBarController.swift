@@ -71,12 +71,16 @@ final class MenuBarController: NSObject {
         // assignment is what makes AppKit look the new key up, so the value
         // has to be there first. See MenuBarStatusItemIdentity (#1845).
         MenuBarStatusItemIdentity.migrateLegacyPreferredPosition(in: UserDefaults.standard)
-        // Carry a user off #1849's Compact *style* onto the equivalent style
-        // plus modifier, BEFORE anything reads either key: an unmigrated
-        // `menuBarStyle = "compact"` does not parse, so it would fall back to
-        // Lights with the modifier off and silently discard the choice.
-        // See MenuBarAppearance.migrateLegacyCompactStyle (#1852).
-        MenuBarAppearance.migrateLegacyCompactStyle(in: UserDefaults.standard)
+        // Carry a user off either shape of "compact" — #1849's fourth style or
+        // #1852's Bool — onto #1955's grouping-plus-budget pair, BEFORE
+        // anything reads those keys: an unmigrated `menuBarStyle = "compact"`
+        // does not parse, and an unmigrated `menuBarCompact = true` is no
+        // longer read by anything, so either would silently discard the
+        // choice. See MenuBarAppearance.migrateLegacyCompactSetting (#1955).
+        MenuBarAppearance.migrateLegacyCompactSetting(in: UserDefaults.standard)
+        // And carry #909's single quota provider into #1955's ordered list,
+        // for the same reason and before the same read.
+        MenuBarQuotaProviders.migrateLegacySingleProvider(in: UserDefaults.standard)
         // Only now is the store settled enough to snapshot as "last seen".
         self.lastIconSettings = MenuBarIconSettings.current(in: .standard)
 
