@@ -74,13 +74,14 @@ final class MenuBarImageBuilderTests: XCTestCase {
 
     // MARK: - shouldShowDotsInUsageStyle (issue #909 review fix)
 
-    /// The appearance these tests exercise. `isCompact` defaults to false so
-    /// every assertion below keeps meaning exactly what it meant before #1852
-    /// made the modifier a separate axis — the LOCKs stay locks.
+    /// The appearance these tests exercise. The grouping defaults to
+    /// `.project` — the pre-#1955 bucketing — so every assertion below keeps
+    /// meaning exactly what it meant before #1852 made density a separate axis
+    /// and #1955 turned that axis into a grouping. The LOCKs stay locks.
     private func appearance(
-        _ style: MenuBarStyle, compact: Bool = false
+        _ style: MenuBarStyle, grouping: MenuBarGrouping = .project
     ) -> MenuBarAppearance {
-        MenuBarAppearance(style: style, isCompact: compact)
+        MenuBarAppearance(style: style, grouping: grouping)
     }
 
     /// `.usage` style with a renderable dots image but no quota yet must
@@ -147,9 +148,9 @@ final class MenuBarImageBuilderTests: XCTestCase {
             MenuBarFixtures.session(id: "e1", state: .error, project: "alpha"),
             MenuBarFixtures.sessionWithQuota(),
         ]
-        let usage = MenuBarAppearance(style: .usage, isCompact: false)
+        let usage = appearance(.usage)
         let quota = try XCTUnwrap(MenuBarImageBuilder.quotaImage(
-            appearance: usage, sessions: sessions, providerKey: nil, now: fixedNow
+            appearance: usage, sessions: sessions, providerKeys: [], now: fixedNow
         ), "the fixture must have a renderable quota, or this test proves nothing")
         let composed = try XCTUnwrap(icon(usage, sessions: sessions))
         XCTAssertEqual(composed.size.width, quota.size.width, accuracy: 0.01,
@@ -157,14 +158,14 @@ final class MenuBarImageBuilderTests: XCTestCase {
     }
 
     /// #1862's guarantee has to hold at BOTH densities, and the LOCK above
-    /// pins only `isCompact: false`.
+    /// pins only the per-project grouping.
     ///
-    /// Compact is a modifier on HOW DENSELY the icon draws, never on WHAT it
-    /// draws — that separation is the whole point of #1852. An error arm
-    /// re-added under an `!isCompact` guard would therefore be a content
+    /// The grouping says HOW DENSELY the icon draws, never WHAT it draws —
+    /// that separation is the whole point of #1852. An error arm re-added
+    /// under an `!aggregatesSessionDots` guard would therefore be a content
     /// decision wearing a density costume, and it would slip past the
     /// single-density LOCK above without anything going red. Crossing the
-    /// modifier here closes that.
+    /// grouping here closes that.
     ///
     /// Two errored projects rather than one, so the aggregate (`compact`) and
     /// per-project (`!compact`) dot layouts differ in width from each other —
@@ -182,15 +183,15 @@ final class MenuBarImageBuilderTests: XCTestCase {
             MenuBarFixtures.session(id: "e2", state: .error, project: "beta"),
             MenuBarFixtures.sessionWithQuota(),
         ]
-        for compact in [false, true] {
-            let usage = MenuBarAppearance(style: .usage, isCompact: compact)
+        for grouping in MenuBarGrouping.selectableCases {
+            let usage = appearance(.usage, grouping: grouping)
             let quota = try XCTUnwrap(MenuBarImageBuilder.quotaImage(
-                appearance: usage, sessions: sessions, providerKey: nil, now: fixedNow
-            ), "compact=\(compact): the fixture must render a quota, or this proves nothing")
+                appearance: usage, sessions: sessions, providerKeys: [], now: fixedNow
+            ), "\(grouping): the fixture must render a quota, or this proves nothing")
             let composed = try XCTUnwrap(icon(usage, sessions: sessions))
             XCTAssertEqual(
                 composed.size.width, quota.size.width, accuracy: 0.01,
-                "compact=\(compact): errored sessions must not widen .usage past quota-only"
+                "\(grouping): errored sessions must not widen .usage past quota-only"
             )
         }
     }
@@ -214,10 +215,10 @@ final class MenuBarImageBuilderTests: XCTestCase {
         // render — see its doc, which names this as its intended use.
         var sessions = MenuBarFixtures.acrossProjects(2)
         sessions.append(MenuBarFixtures.session(id: "e1", state: .error, project: "gamma"))
-        let usage = MenuBarAppearance(style: .usage, isCompact: false)
+        let usage = appearance(.usage)
         XCTAssertNil(
             MenuBarImageBuilder.quotaImage(
-                appearance: usage, sessions: sessions, providerKey: nil, now: fixedNow
+                appearance: usage, sessions: sessions, providerKeys: [], now: fixedNow
             ),
             "this fixture must render NO quota, or the fallback under test never runs"
         )
@@ -258,25 +259,25 @@ final class MenuBarImageBuilderTests: XCTestCase {
         let quota = NSImage(size: NSSize(width: 20, height: 18))
         let dots = NSImage(size: NSSize(width: 10, height: 18))
         for style in MenuBarStyle.allCases {
-            for compact in [false, true] {
+            for grouping in MenuBarGrouping.allCases {
                 // Only `.usage` ever withholds its dots, and only while the
                 // quota is renderable. Density never enters into it.
                 let expected = style != .usage
                 XCTAssertEqual(
                     MenuBarImageBuilder.showsDots(
-                        appearance: appearance(style, compact: compact),
+                        appearance: appearance(style, grouping: grouping),
                         quotaImage: quota, dotsImage: dots
                     ),
                     expected,
-                    "\(style) compact=\(compact) with a renderable quota"
+                    "\(style)/\(grouping) with a renderable quota"
                 )
                 // With no quota to show, every style draws its dots.
                 XCTAssertTrue(
                     MenuBarImageBuilder.showsDots(
-                        appearance: appearance(style, compact: compact),
+                        appearance: appearance(style, grouping: grouping),
                         quotaImage: nil, dotsImage: dots
                     ),
-                    "\(style) compact=\(compact) with no renderable quota"
+                    "\(style)/\(grouping) with no renderable quota"
                 )
             }
         }
@@ -284,7 +285,7 @@ final class MenuBarImageBuilderTests: XCTestCase {
 
     // MARK: - The composed icon (#1852 review)
 
-    // Fixtures come from MenuBarFixtures, shared with MenuBarCompactStyleTests:
+    // Fixtures come from MenuBarFixtures, shared with MenuBarAppearanceTests:
     // both suites assert the same derived widths, so a private second copy is
     // how they would quietly stop testing the same thing (see that file).
 
@@ -293,7 +294,7 @@ final class MenuBarImageBuilderTests: XCTestCase {
     private func icon(_ appearance: MenuBarAppearance, sessions: [SessionState]) -> NSImage? {
         MenuBarImageBuilder.iconImage(
             appearance: appearance, sessions: sessions, projectGroupOrder: [],
-            providerKey: nil, now: fixedNow
+            providerKeys: [], now: fixedNow
         )
     }
 
@@ -306,41 +307,45 @@ final class MenuBarImageBuilderTests: XCTestCase {
     /// composed width closes three of the four; the ordering assertion below
     /// closes the fourth.
     ///
-    /// The `compact: false` column is a **LOCK** — those three widths are what
-    /// each style composed before #1852 existed.
+    /// The `.project` column is a **LOCK** — those three widths are what each
+    /// style composed before #1852 existed.
     ///
     /// Mutation-proved: invert `? computedDotsImage : nil`, or swap the
     /// `quotaImage:`/`dotsImage:` arguments to `showsDots`, in
     /// `MenuBarImageBuilder.iconImage` — either turns this red.
-    func testComposedIconForEveryStyleAndModifier() throws {
+    func testComposedIconForEveryStyleAndGrouping() throws {
         let sessions = MenuBarFixtures.acrossProjectsWithQuota(7)
         let full = QuotaMenuBarRenderer.labelWidth + QuotaMenuBarRenderer.gap
             + QuotaMenuBarRenderer.barWidth
         let narrow = QuotaMenuBarRenderer.barWidth * QuotaMenuBarRenderer.compactBarWidthFactor
         let gap = MenuBarStatusRenderer.groupGap
-        // 7 projects (6 + the quota carrier) exceeds maxVisibleGroups, so the
-        // per-project half is at its 90.00 plateau; the aggregate is constant.
+        // 7 projects (6 + the quota carrier) exceeds the default slot budget,
+        // so the per-project half is at its 90.00 plateau; the aggregate is
+        // constant.
         let dots: CGFloat = 90.0
         let aggregate: CGFloat = 18.5
 
-        // (style, isCompact, expected composed width)
-        let expected: [(MenuBarStyle, Bool, CGFloat)] = [
-            (.lights, false, dots),                    // LOCK: dots only
-            (.usage, false, full),                     // LOCK: quota only, dots hidden
-            (.combined, false, dots + gap + narrow),   // LOCK: dots + narrow quota
-            (.lights, true, aggregate),
-            (.usage, true, narrow),
-            (.combined, true, aggregate + gap + narrow),
+        // (style, grouping, expected composed width)
+        let expected: [(MenuBarStyle, MenuBarGrouping, CGFloat)] = [
+            (.lights, .project, dots),                    // LOCK: dots only
+            (.usage, .project, full),                     // LOCK: quota only, dots hidden
+            (.combined, .project, dots + gap + narrow),   // LOCK: dots + narrow quota
+            (.lights, .combined, aggregate),
+            (.usage, .combined, narrow),
+            (.combined, .combined, aggregate + gap + narrow),
         ]
-        XCTAssertEqual(expected.count, MenuBarStyle.allCases.count * 2,
-                       "every style × modifier combination must be composed here")
-        for (style, compact, width) in expected {
+        XCTAssertEqual(
+            expected.count,
+            MenuBarStyle.allCases.count * MenuBarGrouping.selectableCases.count,
+            "every style × selectable grouping must be composed here"
+        )
+        for (style, grouping, width) in expected {
             let composed = try XCTUnwrap(
-                icon(MenuBarAppearance(style: style, isCompact: compact), sessions: sessions),
-                "\(style) compact=\(compact) must compose an icon"
+                icon(appearance(style, grouping: grouping), sessions: sessions),
+                "\(style)/\(grouping) must compose an icon"
             )
             XCTAssertEqual(composed.size.width, width, accuracy: 0.01,
-                           "\(style) compact=\(compact) composed width")
+                           "\(style)/\(grouping) composed width")
         }
     }
 
@@ -361,19 +366,22 @@ final class MenuBarImageBuilderTests: XCTestCase {
     func testUsageComposesDotsWhenNoQuotaIsRenderable() throws {
         // No rate-limit data anywhere, so the quota half cannot render.
         let sessions = MenuBarFixtures.acrossProjects(6)
-        for compact in [false, true] {
-            let appearance = MenuBarAppearance(style: .usage, isCompact: compact)
+        for grouping in MenuBarGrouping.selectableCases {
+            let subject = appearance(.usage, grouping: grouping)
             let quota = MenuBarImageBuilder.quotaImage(
-                appearance: appearance, sessions: sessions, providerKey: nil, now: fixedNow
+                appearance: subject, sessions: sessions, providerKeys: [], now: fixedNow
             )
             XCTAssertNil(quota, "the fixture must have no renderable quota, "
                              + "or this test proves nothing about the fallback")
             let composed = try XCTUnwrap(
-                icon(appearance, sessions: sessions),
-                "usage compact=\(compact) must fall back to the dots, not to nothing"
+                icon(subject, sessions: sessions),
+                "usage/\(grouping) must fall back to the dots, not to nothing"
             )
-            XCTAssertEqual(composed.size.width, compact ? 18.5 : 90.0, accuracy: 0.01,
-                           "usage compact=\(compact) fallback must be the dot half alone")
+            XCTAssertEqual(
+                composed.size.width,
+                subject.aggregatesSessionDots ? 18.5 : 90.0, accuracy: 0.01,
+                "usage/\(grouping) fallback must be the dot half alone"
+            )
         }
     }
 
@@ -388,12 +396,12 @@ final class MenuBarImageBuilderTests: XCTestCase {
     /// `MenuBarImageBuilder.iconImage` and this goes red.
     func testComposedIconPutsTheDotsBeforeTheQuotaBars() throws {
         let sessions = MenuBarFixtures.acrossProjectsWithQuota(2)
-        let appearance = MenuBarAppearance(style: .combined, isCompact: false)
+        let subject = appearance(.combined)
         let dots = try XCTUnwrap(MenuBarImageBuilder.dotsImage(
-            appearance: appearance, sessions: sessions, projectGroupOrder: []
+            appearance: subject, sessions: sessions, projectGroupOrder: []
         ))
         let quota = try XCTUnwrap(MenuBarImageBuilder.quotaImage(
-            appearance: appearance, sessions: sessions, providerKey: nil, now: fixedNow
+            appearance: subject, sessions: sessions, providerKeys: [], now: fixedNow
         ))
         let gap = MenuBarStatusRenderer.groupGap
         let dotsFirst = try XCTUnwrap(MenuBarImageBuilder.composeSideBySide(dots, quota, gap: gap))
@@ -402,7 +410,7 @@ final class MenuBarImageBuilderTests: XCTestCase {
         XCTAssertNotEqual(dotsFirst.tiffRepresentation, quotaFirst.tiffRepresentation,
                           "the two orderings must render differently, or the check below "
                               + "cannot distinguish them")
-        let composed = try XCTUnwrap(icon(appearance, sessions: sessions))
+        let composed = try XCTUnwrap(icon(subject, sessions: sessions))
         XCTAssertEqual(composed.tiffRepresentation, dotsFirst.tiffRepresentation,
                        "the icon must compose dots first, quota bars second")
     }

@@ -182,7 +182,11 @@ final class PinnedAppStorageSnapshotTests: XCTestCase {
         @AppStorage(ContextPressureThreshold.unitKey) private var thresholdUnit: String = ContextPressureThreshold.defaultUnit.rawValue
         @AppStorage("advancedSettingsExpanded") private var advancedSettingsExpanded: Bool = false
         @AppStorage(MenuBarStyle.storageKey) private var menuBarStyle: String = MenuBarStyle.lights.rawValue
-        @AppStorage(MenuBarAppearance.compactStorageKey) private var menuBarCompact: Bool = false
+        @AppStorage(MenuBarGrouping.storageKey)
+        private var menuBarGrouping: String = MenuBarGrouping.project.rawValue
+        @AppStorage(MenuBarMaxProjects.storageKey)
+        private var menuBarMaxProjects: Int = MenuBarMaxProjects.defaultValue
+        @AppStorage(MenuBarQuotaProviders.storageKey) private var menuBarQuotaProviders: String = ""
         @AppStorage(NotificationSettings.masterEnabledKey) private var notificationsEnabled: Bool = false
         @AppStorage(NotificationEvent.contextPressure.enabledKey) private var notifyOnContextPressure: Bool = false
         @AppStorage(NotificationEvent.ready.enabledKey) private var notifyOnReady: Bool = false
@@ -202,7 +206,9 @@ final class PinnedAppStorageSnapshotTests: XCTestCase {
                 ContextPressureThreshold.unitKey: thresholdUnit,
                 "advancedSettingsExpanded": String(advancedSettingsExpanded),
                 MenuBarStyle.storageKey: menuBarStyle,
-                MenuBarAppearance.compactStorageKey: String(menuBarCompact),
+                MenuBarGrouping.storageKey: menuBarGrouping,
+                MenuBarMaxProjects.storageKey: String(menuBarMaxProjects),
+                MenuBarQuotaProviders.storageKey: menuBarQuotaProviders,
                 NotificationSettings.masterEnabledKey: String(notificationsEnabled),
                 NotificationEvent.contextPressure.enabledKey: String(notifyOnContextPressure),
                 NotificationEvent.ready.enabledKey: String(notifyOnReady),
@@ -228,7 +234,9 @@ final class PinnedAppStorageSnapshotTests: XCTestCase {
         ContextPressureThreshold.unitKey: ContextPressureThreshold.Unit.tokens.rawValue,
         "advancedSettingsExpanded": true,
         MenuBarStyle.storageKey: MenuBarStyle.combined.rawValue,
-        MenuBarAppearance.compactStorageKey: true,
+        MenuBarGrouping.storageKey: MenuBarGrouping.combined.rawValue,
+        MenuBarMaxProjects.storageKey: MenuBarMaxProjects.maximum,
+        MenuBarQuotaProviders.storageKey: "anthropic",
         NotificationSettings.masterEnabledKey: true,
         NotificationEvent.contextPressure.enabledKey: true,
         NotificationEvent.ready.enabledKey: true,

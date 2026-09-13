@@ -3,7 +3,7 @@ import Foundation
 
 /// The session fixtures the two menu-bar suites both build icons from.
 ///
-/// `MenuBarCompactStyleTests` and `MenuBarImageBuilderTests` assert the SAME
+/// `MenuBarAppearanceTests` and `MenuBarImageBuilderTests` assert the SAME
 /// derived widths — 18.50 for the aggregate dot, 90.00 for the per-project
 /// layout, and the quota half's own constants — one through the extracted
 /// seams and one through the composed icon. Two private copies of the fixture
@@ -13,10 +13,10 @@ import Foundation
 /// against a fixture the other no longer uses".
 ///
 /// That risk is not hypothetical here. `testShippedStylesRenderExactlyWhatThey`
-/// `DidBeforeWhenCompactIsOff` is #1852's named compatibility LOCK and
-/// `testComposedIconForEveryStyleAndModifier` is the composed-icon check that
-/// closed four surviving mutations; both pin the same numbers, and they must be
-/// pinning them against the same sessions.
+/// `DidBeforeAtTheDefaults` is the named compatibility LOCK inherited from
+/// #1852 and `testComposedIconForEveryStyleAndGrouping` is the composed-icon
+/// check that closed four surviving mutations; both pin the same numbers, and
+/// they must be pinning them against the same sessions.
 enum MenuBarFixtures {
 
     /// The instant every fixture here is built relative to.
@@ -58,7 +58,26 @@ enum MenuBarFixtures {
     /// A session carrying a renderable rate-limit snapshot, so the quota half
     /// of the icon has something to draw. Same shape `QuotaMenuBarRendererTests`
     /// uses.
-    static func sessionWithQuota() -> SessionState {
+    ///
+    /// `adapter` selects which provider the snapshot buckets under —
+    /// `RateLimitInfo.providerKey(adapter:)` maps `claude-code` to `anthropic`
+    /// and `codex` to `openai`. The parameters exist for #1955's ordered
+    /// provider slots, which need TWO providers that render DIFFERENTLY: with
+    /// identical fills the two slots produce identical pixels, and an
+    /// ordering assertion over them would pass whatever the order was. The
+    /// `claude-code` defaults reproduce the fixture exactly as it stood before
+    /// #1955, so every existing caller keeps its numbers.
+    static func sessionWithQuota(
+        adapter: String = "claude-code",
+        fiveHourPercent: Double = 20,
+        sevenDayPercent: Double = 40
+    ) -> SessionState {
+        // Derived from the adapter rather than taken as two more parameters:
+        // the id and the project only ever need to be DISTINCT per provider,
+        // and deriving them makes that true by construction instead of by the
+        // caller remembering to vary them.
+        let project = adapter == "claude-code" ? "quota" : "quota-\(adapter)"
+        let id = adapter == "claude-code" ? "sess_quota" : "sess_quota_\(adapter)"
         let metrics = SessionMetrics(
             elapsedSeconds: 0,
             totalTokens: 0,
@@ -73,11 +92,11 @@ enum MenuBarFixtures {
             rateLimit: RateLimitInfo(
                 windows: [
                     RateLimitWindowInfo(
-                        usedPercent: 20, windowMinutes: 300,
+                        usedPercent: fiveHourPercent, windowMinutes: 300,
                         resetsAt: now.addingTimeInterval(3600)
                     ),
                     RateLimitWindowInfo(
-                        usedPercent: 40, windowMinutes: 10080,
+                        usedPercent: sevenDayPercent, windowMinutes: 10080,
                         resetsAt: now.addingTimeInterval(3 * 86400)
                     ),
                 ],
@@ -85,15 +104,15 @@ enum MenuBarFixtures {
             )
         )
         return SessionState(
-            id: "sess_quota",
+            id: id,
             state: .working,
             model: "claude-sonnet",
-            cwd: "/Users/test/projects/quota",
-            projectName: "quota",
+            cwd: "/Users/test/projects/\(project)",
+            projectName: project,
             firstSeen: now,
             updatedAt: now,
             metrics: metrics,
-            adapter: "claude-code"
+            adapter: adapter
         )
     }
 

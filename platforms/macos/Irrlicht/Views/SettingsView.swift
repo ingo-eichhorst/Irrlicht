@@ -39,11 +39,17 @@ struct SettingsView: View {
     // Menu bar icon content (issue #909): dots / quota bars / both. Default
     // .lights keeps today's icon unchanged for existing users.
     @AppStorage(MenuBarStyle.storageKey) private var menuBarStyle: String = MenuBarStyle.lights.rawValue
-    // How densely that content is drawn (issue #1852) — orthogonal to the
-    // style above, so all six combinations are reachable. Defaults to false,
-    // which is byte-identical to what each style rendered before it existed.
-    @AppStorage(MenuBarAppearance.compactStorageKey) private var menuBarCompact: Bool = false
-    @AppStorage(MenuBarQuotaProvider.storageKey) private var menuBarQuotaProvider: String = ""
+    // How densely that content is drawn (issue #1852, reshaped by #1955) —
+    // orthogonal to the style above, so every combination is reachable. The
+    // defaults are byte-identical to what each style rendered before these
+    // keys existed: per-project buckets, five slots.
+    @AppStorage(MenuBarGrouping.storageKey)
+    private var menuBarGrouping: String = MenuBarGrouping.project.rawValue
+    @AppStorage(MenuBarMaxProjects.storageKey)
+    private var menuBarMaxProjects: Int = MenuBarMaxProjects.defaultValue
+    // The ordered subscription slots (#1955), delimited in one String because
+    // [String] is not an @AppStorage type — see MenuBarQuotaProviders.
+    @AppStorage(MenuBarQuotaProviders.storageKey) private var menuBarQuotaProviders: String = ""
     @AppStorage(QuotaVisualStyle.storageKey) private var menuBarQuotaVisual: String = QuotaVisualStyle.bars.rawValue
     // Master gate (issue #940): collapses the whole Notifications section
     // when off, instead of showing three always-visible event rows to users
@@ -166,15 +172,53 @@ struct SettingsView: View {
                         )
                         .frame(maxWidth: .infinity, minHeight: 22)
 
-                        // Compact is a modifier on whichever style is
+                        // Grouping is a modifier on whichever style is
                         // selected, not a style of its own (#1852) — that is
                         // what makes "quota bars AND a narrow icon" reachable,
                         // which #1845's fourth enum case could not express.
-                        LeadingToggle(
-                            isOn: $menuBarCompact,
-                            label: "Compact",
-                            info: "Collapses every project into one dot with a session count, so the icon's width stops growing with your project count. On Usage it also switches to the narrower, label-less quota bars. For a crowded menu bar."
+                        // #1955 turned the Compact Bool into this pair: the
+                        // old toggle IS `Combined` grouping with a one-slot
+                        // budget, so it is a point in this space rather than a
+                        // control beside it.
+                        //
+                        // Derived from `selectableCases`, not `allCases`: the
+                        // `location` grouping is declared but unimplemented in
+                        // this build (#1955 phase 2 lands after #1954), and a
+                        // segment that silently rendered as `By project` would
+                        // be a control that lies.
+                        HStack(spacing: 6) {
+                            Text("Grouping")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            InfoIcon(text: "By project draws one dot-group per project, up to the slot budget below. Combined collapses every project into one dot with a session count, so the icon's width stops growing with your project count — on Usage it also switches to the narrower, label-less quota bars.")
+                            Spacer()
+                        }
+                        EqualWidthSegmentedControl(
+                            labels: MenuBarGrouping.selectableCases.map(\.label),
+                            values: MenuBarGrouping.selectableCases.map(\.rawValue),
+                            selection: groupingSelection,
+                            tint: IrrColors.working
                         )
+                        .frame(maxWidth: .infinity, minHeight: 22)
+
+                        // Only the bucketing groupings have more than one
+                        // bucket to budget, so the stepper is gated the way
+                        // the quota sub-pickers below are — on the appearance's
+                        // own predicate rather than on `== .combined`.
+                        if !menuBarAppearance.aggregatesSessionDots {
+                            HStack(spacing: 6) {
+                                Text("Max projects")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                InfoIcon(text: "How many dot-groups the icon draws before the rest collapse into a single \u{2026}. Capped at \(MenuBarMaxProjects.maximum) so the setting cannot produce an icon the menu bar truncates.")
+                                Spacer()
+                                // Extracted, so the one thing here that can
+                                // silently render nothing is reachable from a
+                                // test — see MenuBarSlotBudgetStepper's doc
+                                // for the defect it had and the measurement.
+                                MenuBarSlotBudgetStepper(value: maxProjectsSelection)
+                            }
+                        }
 
                         // Ask the appearance whether it renders quota bars at
                         // all, rather than testing "is not Lights" — a `!=`
@@ -183,19 +227,30 @@ struct SettingsView: View {
                         // values, never from MenuBarAppearance.current, so
                         // this stays readable under a pinned store.
                         if menuBarAppearance.showsQuotaBars {
+                            // One quota slot per selected provider, in the
+                            // order they were selected (#1955). A multi-select
+                            // rather than #909's single Picker, so a user on
+                            // two subscriptions can see both; an empty
+                            // selection keeps #909's "Auto", where the
+                            // freshest snapshot across every provider wins.
                             HStack(spacing: 6) {
-                                Text("Quota provider")
+                                Text("Quota providers")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
+                                InfoIcon(text: "One quota slot per provider you pick, drawn left to right in the order you picked them. Pick none for Auto — a single slot showing whichever provider reported most recently.")
                                 Spacer()
-                                Picker("", selection: $menuBarQuotaProvider) {
-                                    Text("Auto").tag("")
-                                    ForEach(knownQuotaProviderKeys, id: \.self) { key in
-                                        Text(quotaProviderLabel(key)).tag(key)
-                                    }
+                            }
+                            if quotaProviderRows.isEmpty {
+                                Text("No subscription has reported a quota yet.")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            } else {
+                                ForEach(quotaProviderRows, id: \.self) { key in
+                                    LeadingToggle(
+                                        isOn: quotaProviderSelection(key),
+                                        label: quotaProviderRowLabel(key)
+                                    )
                                 }
-                                .labelsHidden()
-                                .frame(maxWidth: 140)
                             }
                             HStack(spacing: 6) {
                                 Text("Quota shape")
@@ -653,8 +708,82 @@ struct SettingsView: View {
     private var menuBarAppearance: MenuBarAppearance {
         MenuBarAppearance(
             style: MenuBarStyle(rawValue: menuBarStyle) ?? .lights,
-            isCompact: menuBarCompact
+            grouping: MenuBarGrouping(rawValue: menuBarGrouping) ?? .project,
+            maxProjects: menuBarMaxProjects
         )
+    }
+
+    /// The grouping segmented control's binding.
+    ///
+    /// It READS through `resolved` and WRITES the raw value, which is not an
+    /// oversight: a store carrying `location` — written by a later build, or
+    /// by hand — is not among `selectableCases`, so
+    /// `EqualWidthSegmentedControl` would find no index and leave every
+    /// segment unselected. Showing `By project` instead is honest, because
+    /// `MenuBarAppearance.aggregatesSessionDots` resolves that value to
+    /// exactly `By project` too — the control then reports what the icon
+    /// actually draws.
+    private var groupingSelection: Binding<String> {
+        Binding(
+            get: { (MenuBarGrouping(rawValue: menuBarGrouping) ?? .project).resolved.rawValue },
+            set: { menuBarGrouping = $0 }
+        )
+    }
+
+    /// The slot-budget stepper's binding, clamped on both sides so a stored
+    /// value outside `MenuBarMaxProjects`' bounds is displayed and rewritten
+    /// as the bound rather than shown raw.
+    private var maxProjectsSelection: Binding<Int> {
+        Binding(
+            get: { MenuBarMaxProjects.clamp(menuBarMaxProjects) },
+            set: { menuBarMaxProjects = MenuBarMaxProjects.clamp($0) }
+        )
+    }
+
+    /// The ordered slots the user picked, parsed once per render rather than
+    /// re-split by each of the three members below that needs it.
+    private var selectedQuotaProviders: [String] {
+        MenuBarQuotaProviders.decode(menuBarQuotaProviders)
+    }
+
+    /// The provider keys the multi-select offers: everything already selected,
+    /// in the user's own order, then every remaining live candidate.
+    ///
+    /// A selected key whose sessions have gone away stays listed — otherwise
+    /// the row that would let the user remove it disappears with it, and the
+    /// icon keeps a slot the user can no longer see or reach.
+    ///
+    /// The ids are unique, which `ForEach(id: \.self)` below requires:
+    /// `decode` collapses repeats (see its doc) and the second term filters
+    /// out anything already in the first.
+    private var quotaProviderRows: [String] {
+        let selected = selectedQuotaProviders
+        return selected + knownQuotaProviderKeys.filter { !selected.contains($0) }
+    }
+
+    /// Turning a row on APPENDS it, so the list's order is the order the user
+    /// picked in — which is the order the slots render in. Removing first
+    /// makes re-selecting an already-selected key a move-to-end rather than a
+    /// duplicate.
+    private func quotaProviderSelection(_ key: String) -> Binding<Bool> {
+        Binding(
+            get: { selectedQuotaProviders.contains(key) },
+            set: { isOn in
+                var keys = selectedQuotaProviders
+                keys.removeAll { $0 == key }
+                if isOn { keys.append(key) }
+                menuBarQuotaProviders = MenuBarQuotaProviders.encode(keys)
+            }
+        )
+    }
+
+    /// A selected provider carries its slot position, so the order the user
+    /// built is visible in the list rather than only in the icon.
+    private func quotaProviderRowLabel(_ key: String) -> String {
+        guard let position = selectedQuotaProviders.firstIndex(of: key) else {
+            return quotaProviderLabel(key)
+        }
+        return "\(position + 1). \(quotaProviderLabel(key))"
     }
 
     /// Provider keys with a rate_limit-carrying session right now, for the
@@ -1139,6 +1268,47 @@ struct NotificationEventRow: View {
 /// An optional `info` string adds a hover-reveal ⓘ next to the label so the
 /// explanation doesn't cost a permanent block of caption text below the row.
 /// Internal (not private): PermissionWizardView reuses it.
+/// The slot-budget stepper and the number it is setting (#1955).
+///
+/// **Extracted from `SettingsView.body` because the defect it carries is not
+/// visible from anywhere else** — the same reason `MenuBarImageBuilder`'s
+/// `dotsImage` / `quotaImage` / `showsDots` seams exist. `SettingsViewTests`
+/// renders the panel but samples only corner-pixel opacity, and there is no
+/// Settings snapshot suite, so a control that renders but shows nothing has no
+/// surface that could fail.
+///
+/// It had exactly that defect during #1955's own review. The value was written
+/// as the `Stepper`'s LABEL and the call site carried `.labelsHidden()`, which
+/// is precisely the modifier that removes a label — so the row shipped as
+/// `[− +]` with no number. Measured through `PinnedSnapshotHost`:
+/// `Stepper(value:in:){Text("7")}.labelsHidden().fixedSize()` reports a
+/// **20.0pt** fitting width against **35.0pt** without the modifier, and the
+/// missing 15pt is the number. The arrangement below — value in its own
+/// `Text`, empty label on the `Stepper` — is the `Picker("", …)` +
+/// `.labelsHidden()` idiom this file already uses for the two quota controls.
+///
+/// `MenuBarSlotBudgetStepperTests` pins it, and pins it without a magic
+/// constant or a pixel: a two-digit value must render WIDER than a one-digit
+/// one. A hidden number reports the same width for both.
+struct MenuBarSlotBudgetStepper: View {
+    @Binding var value: Int
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text("\(value)")
+                .font(.caption)
+                .monospacedDigit()
+            Stepper(
+                "",
+                value: $value,
+                in: MenuBarMaxProjects.minimum...MenuBarMaxProjects.maximum
+            )
+            .labelsHidden()
+            .fixedSize()
+        }
+    }
+}
+
 struct LeadingToggle: View {
     @Binding var isOn: Bool
     let label: String

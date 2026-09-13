@@ -13,8 +13,15 @@ struct MenuBarStatusRenderer {
         let width: CGFloat
     }
 
-    private static let radius: CGFloat = 5
-    private static let overlap: CGFloat = 4
+    // radius / overlap / groupGap / countDigitWidth / overflowWidth are
+    // non-private so a test can state the icon's measured width budget by
+    // READING them rather than restating their values, which drift silently —
+    // the idiom `QuotaMenuBarRenderer.labelWidth`/`barWidth`/`gap` already
+    // follows for the quota half (#1845), extended to the dot half by #1955's
+    // user-settable slot budget. `MenuBarAppearanceTests`'
+    // `testTheSlotBudgetStaysInsideTheIconsWidth` is the reader.
+    static let radius: CGFloat = 5
+    static let overlap: CGFloat = 4
     /// Gap between adjacent project dot-groups. Non-private so
     /// MenuBarImageBuilder can reuse the exact same value for the gap
     /// between the dots and the quota bars in Combined style — otherwise
@@ -23,10 +30,16 @@ struct MenuBarStatusRenderer {
     static let groupGap: CGFloat = 6
     private static let height: CGFloat = 18
     private static let fontSize: CGFloat = 10
-    private static let maxVisibleGroups = 5
+    /// The slot budget the icon used before #1955 made it a setting, and still
+    /// the default `MenuBarMaxProjects` hands out — so an install that never
+    /// opens Settings renders byte-identically.
+    static let defaultMaxVisibleGroups = MenuBarMaxProjects.defaultValue
     /// Advance width of one digit of the session count in the aggregate dot's
     /// Menlo label. Measured against the rendered glyph, not derived.
-    private static let countDigitWidth: CGFloat = 6.5
+    static let countDigitWidth: CGFloat = 6.5
+    /// Width of the single `…` that stands in for every bucket past the
+    /// budget.
+    static let overflowWidth: CGFloat = 10
     private static let overflowFillHex = IrrSVG.cancelled
     /// Slice order for the per-group pie dot — DERIVED from `allCases`, never
     /// hand-listed (#1797).
@@ -46,35 +59,65 @@ struct MenuBarStatusRenderer {
 
     static func buildStatusImage(
         sessions: [SessionState],
-        projectGroupOrder: [String]
+        projectGroupOrder: [String],
+        maxGroups: Int = defaultMaxVisibleGroups
     ) -> NSImage? {
-        image(from: buildStatusSVG(sessions: sessions, projectGroupOrder: projectGroupOrder))
+        image(from: buildStatusSVG(
+            sessions: sessions, projectGroupOrder: projectGroupOrder, maxGroups: maxGroups
+        ))
     }
 
+    /// `maxGroups` is the whole-icon slot budget (#1955) — the number that was
+    /// hardcoded at 5 before it became a setting. Everything past it collapses
+    /// into one `renderOverflow()`, whatever the budget is, which is the
+    /// mechanism that was already here rather than a new one.
+    ///
+    /// Clamped through `MenuBarMaxProjects` rather than trusted, and the two
+    /// failures that establishes were OBSERVED by removing the clamp and
+    /// running `MenuBarStatusRendererTests`
+    /// (`testAnOutOfRangeSlotBudgetIsClampedRatherThanHonoured`), not
+    /// predicted: a budget of `0` renders every project away and leaves a lone
+    /// `…` as the whole icon, and a NEGATIVE budget traps outright — `Fatal
+    /// error: Can't take a prefix of negative length from a collection`, in
+    /// `prefix(budget)` below. `MenuBarAppearance` clamps at construction too,
+    /// so the app cannot reach either; this is the seam a direct caller and a
+    /// hand-edited plist reach.
     static func buildStatusSVG(
         sessions: [SessionState],
-        projectGroupOrder: [String]
+        projectGroupOrder: [String],
+        maxGroups: Int = defaultMaxVisibleGroups
     ) -> (svg: String, width: CGFloat)? {
+        let budget = MenuBarMaxProjects.clamp(maxGroups)
         let groups = orderedProjectGroups(from: sessions, projectGroupOrder: projectGroupOrder)
-        var renders = groups.prefix(maxVisibleGroups).map { renderGroup($0.1) }
-        if groups.count > maxVisibleGroups {
+        var renders = groups.prefix(budget).map { renderGroup($0.1) }
+        if groups.count > budget {
             renders.append(renderOverflow())
         }
         return assemble(renders)
     }
 
-    // MARK: - Compact style (issue #1845)
+    // MARK: - Combined grouping (issue #1845's compact style, #1955's one bucket)
 
     /// Render EVERY top-level session as a single aggregate dot, ignoring
-    /// project boundaries entirely.
+    /// project boundaries entirely — `MenuBarGrouping.combined`.
     ///
-    /// This is the width fix. `buildStatusSVG` costs one render per project
+    /// This is the width fix. `buildStatusSVG` costs one render per bucket
     /// plus a `groupGap` between each, so its width grows with the number of
-    /// projects until `maxVisibleGroups` caps it — by which point the icon
+    /// projects until the slot budget caps it — by which point the icon
     /// can already be wide enough to sit behind the notch on a 13"/14" screen
     /// with a crowded menu bar. This function's width depends only on the
     /// number of DIGITS in the session count, so it is constant at 18.5pt for
     /// 1-9 sessions and 25pt for 10-99, no matter how many projects are open.
+    ///
+    /// **It stays its own entry point rather than becoming "one bucket through
+    /// `buildStatusSVG`", and that is load-bearing.** `renderGroup` sends a
+    /// bucket of 3 or fewer sessions to `renderCompactGroup` — overlapping
+    /// plain dots — while this routes every session through `aggregateRender`,
+    /// the pie plus count. Routing the combined bucket through the normal
+    /// group renderer would therefore change what a migrated compact user sees
+    /// at 3 sessions or fewer. Verified by reading both functions at
+    /// `a680d5ea`; `MenuBarAppearanceTests.testMigratedCompactUsersKeepTheir`
+    /// `Rendering` re-runs it at 2 sessions, where the two paths differ.
     static func buildAggregateStatusImage(sessions: [SessionState]) -> NSImage? {
         image(from: buildAggregateStatusSVG(sessions: sessions))
     }
@@ -201,9 +244,17 @@ struct MenuBarStatusRenderer {
     }
 
     /// One pie dot plus the session count. Used both for a single crowded
-    /// project (>3 sessions) and, by the Compact style, for every project at
+    /// project (>3 sessions) and, by `combined` grouping, for every project at
     /// once — so the two share this width arithmetic rather than repeating
     /// the digit-width constant.
+    ///
+    /// This is also the WIDEST a single slot can be, which is what makes the
+    /// slot budget's worst case computable: `radius * 2 + 2 + digits *
+    /// countDigitWidth`. `renderCompactGroup`, the other arm, is capped at 3
+    /// sessions and therefore at `3 * (radius * 2 - overlap) + overlap` = 22pt,
+    /// under this arm's 25pt for a two-digit count. Stays private — the width
+    /// test states that arithmetic from the constants above and then proves it
+    /// against a real render, rather than reaching in here for a private type.
     private static func aggregateRender(_ sessions: [SessionState]) -> GroupRender {
         let countWidth = CGFloat(String(sessions.count).count) * countDigitWidth
         let elements = aggregatedGroupSVG(for: sessions)
@@ -216,7 +267,7 @@ struct MenuBarStatusRenderer {
         let elements = """
         <text x="0" y="\(svgNumber(textY))" font-family="Menlo,monospace" font-size="\(Int(fontSize))" font-weight="bold" fill="#\(overflowFillHex)">…</text>
         """
-        return GroupRender(elements: elements, width: 10)
+        return GroupRender(elements: elements, width: overflowWidth)
     }
 
     private static func renderCompactGroup(_ sessions: [SessionState]) -> GroupRender {
