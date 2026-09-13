@@ -10,6 +10,7 @@ import SwiftUI
 //
 //   SessionManager+WebSocket.swift        — local daemon connection + inbound message pipeline
 //   SessionManager+Relay.swift            — Sources reconciliation + relay connection
+//   SessionManager+Liveness.swift         — keepalive tick + system-wake recovery
 //   SessionManager+GroupComposition.swift — apiGroups tree (patch/prune/order)
 //   SessionManager+History.swift          — history-bar wire decoding
 //   SessionManager+Hydration.swift        — REST hydration + permission consent
@@ -249,6 +250,63 @@ class SessionManager: ObservableObject {
     /// reconnects when a Sources setting actually changed.
     var lastSourceConfig: String = ""
 
+    // MARK: - Connection liveness + wake recovery (#1953)
+    // Neither link had any liveness check before this. A standby/wake cycle can
+    // leave a socket half-open — no FIN, no error — and both reconnect loops
+    // only run after `receive()` throws, so the relay link could sit
+    // `.connected` and empty until the user toggled the Sources setting. The
+    // behavior lives in SessionManager+Liveness.swift; this is its state.
+
+    /// When the local link last delivered a frame — a pushed message
+    /// (`handleWsMessage`) or a pong (`checkConnectionLiveness`). `nil` until
+    /// the first one arrives and whenever the link is torn down;
+    /// `ConnectionLiveness.isStale` reads `nil` as "not stale".
+    var lastLocalFrameAt: Date?
+    /// When the relay link last delivered a frame. Same contract as above, fed
+    /// by `handleRelayMessage` and the same pong handler.
+    var lastRelayFrameAt: Date?
+    /// The repeating liveness tick. Invalidated in `deinit`.
+    var livenessTimer: Timer?
+    /// How often the tick runs, and so how often each live link is pinged.
+    /// Injectable, mirroring `uiRefreshInterval`.
+    ///
+    /// 20s sits under `irrlichtrelay`'s own `pingInterval = 30 * time.Second`
+    /// (`core/cmd/irrlichtrelay/hub.go:22`, read at `a680d5ea`), so the client
+    /// is never the slower of the two to notice.
+    var livenessPingInterval: TimeInterval = 20.0
+    /// How long a link may stay silent before the tick tears it down.
+    ///
+    /// 60s sits above the relay's own `pongTimeout = 45 * time.Second`
+    /// (`core/cmd/irrlichtrelay/hub.go:23`, read at `a680d5ea`) so the client
+    /// never declares a link dead before the server would have reaped its own
+    /// half, and it is three ticks of `livenessPingInterval`, so a single
+    /// dropped pong is not fatal.
+    var livenessStaleDeadline: TimeInterval = 60.0
+    /// Every socket teardown the liveness machinery has performed, oldest
+    /// first, capped at `livenessTeardownHistoryLimit`.
+    ///
+    /// Test-facing state, in the same spirit as `uiRefreshFlushCount` below,
+    /// and the narrower claim than the one this comment first made: a
+    /// cancelled task IS observable, by polling it to `.completed` (which
+    /// `SessionManagerLivenessTests.assertCancelled` does). What is not
+    /// observable is a NEGATIVE — measured during #1953's review, `state` still
+    /// reads `.suspended` on the line after `cancel()` (10/10 runs), so
+    /// asserting "this link was left alone" against the task would pass under
+    /// the very mutation it guards. Nor is the REASON observable: `.stale` and
+    /// `.wake` cancel identically. This records both.
+    var livenessTeardowns: [LivenessTeardown] = []
+    /// How many teardowns to keep. Only the recent ones are ever interesting,
+    /// and an app that runs for weeks must not accumulate one entry per reap.
+    let livenessTeardownHistoryLimit = 8
+    /// The `NSWorkspace.didWakeNotification` observer, kept so `deinit` can
+    /// remove it. Non-nil from `init` onward — asserted by
+    /// `SessionManagerLivenessTests.testInitRegistersASystemWakeObserver`.
+    var systemWakeObserver: NSObjectProtocol?
+    /// The center that observer was registered on. Held rather than assumed so
+    /// `deinit` removes from the same one, and so `observeSystemWake(_:name:)`
+    /// can be pointed at a test center.
+    var systemWakeCenter: NotificationCenter?
+
     /// GasTownProvider reference for forwarding Gas Town availability.
     weak var gasTownProvider: GasTownProvider? {
         didSet {
@@ -382,6 +440,16 @@ class SessionManager: ObservableObject {
             Task { @MainActor in self?.sourcesSettingsChanged() }
         }
 
+        // Both registered synchronously, for the same reason
+        // `loadProjectGroupOrder()` above is: they must be in place before any
+        // connection exists, and a caller — including a test — can then assert
+        // the wiring on the object it just built instead of polling for a
+        // deferred `Task` to land. Neither touches the network: the tick only
+        // reads socket-task references that are still nil here, and the
+        // observer only fires on a real system wake.
+        observeSystemWake()
+        startConnectionLivenessPolling()
+
         Task {
             loadSessionOrder()
             setupNotificationDelegate()
@@ -401,6 +469,13 @@ class SessionManager: ObservableObject {
         relayWebSocketTask = nil
         projectCostsTimer?.invalidate()
         projectCostsTimer = nil
+        livenessTimer?.invalidate()
+        livenessTimer = nil
+        if let systemWakeObserver {
+            systemWakeCenter?.removeObserver(systemWakeObserver)
+        }
+        systemWakeObserver = nil
+        systemWakeCenter = nil
     }
 
     // MARK: - Computed Properties for UI

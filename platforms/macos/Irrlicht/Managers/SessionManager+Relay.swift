@@ -97,6 +97,9 @@ extension SessionManager {
         relayWebSocketTask = nil
         relayConnectionState = .disconnected
         relayConnectionStalled = false
+        // A torn-down link's stamp must not outlive it (#1953) — see
+        // `stopWebSocket()`.
+        lastRelayFrameAt = nil
         relayDaemons.removeAll()
         if !relaySessionMap.isEmpty {
             relaySessionMap.removeAll()
@@ -124,8 +127,29 @@ extension SessionManager {
         let task = relayURLSession.webSocketTask(with: url)
         relayWebSocketTask = task
         task.resume()
-        relayConnectionState = .connected
-        print("🔌 Relay connected to \(activeRelayURL)")
+        // `.connected` is NOT set here. `resume()` returns before the socket is
+        // known good, and a socket left half-open by a standby/wake cycle
+        // returns from it just as happily — so declaring the link connected on
+        // this line made `.connected` mean "we dialled", not "the relay
+        // answered". `aggregateConnectionState` then stayed `.connected`
+        // forever and `DaemonHealth.faults` returned `[]` at its `guard
+        // aggregate != .connected`: a green dot over an empty list, with no
+        // banner (#1953). The transition now lives in
+        // `recordConfirmedRelayConnect()`, which both confirmation paths below
+        // call — mirroring `recordConfirmedLocalConnect()`.
+
+        // The second confirmation path, and the reason the first one is not
+        // enough: `relayServerURL` is allowed to point at a bare `irrlichd`
+        // rather than an `irrlichtrelay` (see the hello comment below and
+        // `handleRelayMessage`'s raw-frame `default:` branch), and that daemon
+        // writes one snapshot per known session and then goes idle — nothing at
+        // all when it has none. Waiting on `receive()` alone would leave such a
+        // link `.connecting` forever on a perfectly healthy socket. Exactly the
+        // reasoning of `connect()`'s own confirmation ping (#843), and now
+        // literally the same code: `probe` is the liveness tick's pinger, and a
+        // connect-confirmation probe is the same thing asked once. Whichever
+        // signal wins the race calls the same idempotent method.
+        probe(task, .relay)
 
         // Announce as a client so the relay streams enveloped frames. Harmless
         // if the URL actually points at a daemon (it ignores the frame).
@@ -137,18 +161,17 @@ extension SessionManager {
             try? await task.send(.string(helloStr))
         }
 
-        var confirmed = false
         do {
             while !Task.isCancelled {
                 let message = try await task.receive()
-                // Reset the backoff only once the relay actually delivers a
-                // frame. resume() returns before the connection is known good,
-                // so resetting there would defeat the backoff and spin a ~1/s
-                // reconnect loop against an unreachable relay.
-                if !confirmed {
-                    confirmed = true
-                    recordConfirmedRelayConnect()
-                }
+                // Confirm only once the relay actually delivers something.
+                // resume() returns before the connection is known good, so
+                // confirming there would defeat the backoff and spin a ~1/s
+                // reconnect loop against an unreachable relay. The call is
+                // idempotent, so it needs no `confirmed` flag of its own —
+                // `relayConnectionState` already is that flag, which is what
+                // the failure-streak gate below now reads too.
+                recordConfirmedRelayConnect()
                 switch message {
                 case .string(let text):
                     handleRelayMessage(text)
@@ -162,14 +185,17 @@ extension SessionManager {
             print("🔌 Relay disconnected: \(error.localizedDescription)")
         }
 
-        // The cycle closed without ever confirming a frame — the same
+        // The cycle closed without the link ever being confirmed — the same
         // stuck-URLSession failure mode #843 fixed for the local daemon can
         // strand the relay link the same way if `irrlichtrelay` restarts on
         // the same host:port while a client is connected. Recycle
         // `relayURLSession` once failures pile up rather than waiting on an
         // app relaunch (#846). A 4401 (rejected token, handled below) isn't a
         // wedged connection, so it doesn't count toward the streak.
-        if !confirmed && task.closeCode.rawValue != 4401 && recordFailedRelayConnectAttempt() {
+        //
+        // The decision is `relayCycleCountsAsFailure(closeCode:)` so it can be
+        // unit-tested without a socket.
+        if relayCycleCountsAsFailure(closeCode: task.closeCode) && recordFailedRelayConnectAttempt() {
             print("🔌 Relay unreachable after repeated attempts — recreating URLSession")
         }
 
@@ -205,12 +231,40 @@ extension SessionManager {
 
     /// Applied once a relay reconnect attempt's WebSocket is confirmed alive
     /// by an arrived frame. Mirrors `recordConfirmedLocalConnect()` for the
-    /// relay path (#846). Unlike the local path, `relayConnectionState` is
-    /// already set eagerly in `relayConnect()` right after `resume()` — this
-    /// only needs to reset the backoff/failure bookkeeping, which is exactly
-    /// `resetRelayConnectBackoff()`'s job, so it delegates there.
+    /// relay path (#846), including the `.connected` transition itself, which
+    /// used to happen eagerly in `relayConnect()` one line after `resume()`
+    /// (#1953 — see the note there).
+    ///
+    /// Idempotent, gated on `relayConnectionState`, so a second confirmation in
+    /// the same cycle cannot re-arm the backoff counters.
     func recordConfirmedRelayConnect() {
+        guard relayConnectionState != .connected else { return }
         resetRelayConnectBackoff()
+        relayConnectionState = .connected
+        // The confirming signal was an arrived frame, so this is a liveness
+        // observation as much as a state transition (#1953).
+        lastRelayFrameAt = Date()
+        print("🔌 Relay connected to \(activeRelayURL)")
+    }
+
+    /// Whether a closed relay cycle counts against the failure streak.
+    ///
+    /// Split out of `relayConnect()`'s tail so the decision is testable without
+    /// a socket, the way `recordConfirmedRelayConnect()` and
+    /// `recordFailedRelayConnectAttempt()` already are.
+    ///
+    /// Reads `relayConnectionState`, mirroring `connect()`'s own
+    /// `connectionState != .connected` — deliberately NOT a cycle-local
+    /// "confirmed" flag, which is what this used to be. A liveness reap or a
+    /// wake (#1953) deliberately ends a CONFIRMED cycle by cancelling its
+    /// socket; a flag set only inside the receive loop would have scored that
+    /// teardown as a connection failure and walked a healthy link towards a
+    /// false "The relay server is not responding".
+    ///
+    /// A 4401 is a rejected token, not a wedged connection, so it never counts
+    /// — `relayConnect()` parks the link and stops reconnecting instead.
+    func relayCycleCountsAsFailure(closeCode: URLSessionWebSocketTask.CloseCode) -> Bool {
+        relayConnectionState != .connected && closeCode.rawValue != 4401
     }
 
     /// Applied once a relay reconnect attempt's cycle closes without ever
@@ -277,6 +331,10 @@ extension SessionManager {
     }
 
     func handleRelayMessage(_ text: String) {
+        // Stamped before the decode, not after: a frame this build cannot parse
+        // is still proof the socket carried bytes, and the liveness tick
+        // (#1953) is asking about the socket, not about the payload.
+        lastRelayFrameAt = Date()
         guard let data = text.data(using: .utf8),
               let kind = (try? JSONDecoder().decode(RelayFrameType.self, from: data))?.type else { return }
         switch kind {
