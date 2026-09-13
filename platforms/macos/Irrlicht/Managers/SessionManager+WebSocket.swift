@@ -37,6 +37,10 @@ extension SessionManager {
         rehydrationTask = nil
         connectionState = .disconnected
         localConnectionStalled = false
+        // A torn-down link's stamp must not outlive it, or the first tick after
+        // the next connect would judge the new socket by the old one's silence
+        // (#1953).
+        lastLocalFrameAt = nil
     }
 
     func scheduleConnect(after delay: TimeInterval) {
@@ -136,6 +140,9 @@ extension SessionManager {
         consecutiveLocalConnectFailures = 0
         localConnectionStalled = false
         connectionState = .connected
+        // The confirming signal was a pong or a frame either way, so this is a
+        // liveness observation as much as a state transition (#1953).
+        lastLocalFrameAt = Date()
         print("🔌 WebSocket connected to irrlichd")
     }
 
@@ -192,6 +199,10 @@ extension SessionManager {
     }
 
     func handleWsMessage(_ text: String) {
+        // Stamped before the decode, for the same reason `handleRelayMessage`
+        // is: an unparseable frame is still proof the socket carried bytes, and
+        // the liveness tick (#1953) is asking about the socket.
+        lastLocalFrameAt = Date()
         guard let data = text.data(using: .utf8) else { return }
         do {
             let envelope = try JSONDecoder().decode(WsEnvelope.self, from: data)
