@@ -118,13 +118,20 @@ struct GroupView: View {
                     .font(.caption2)
                     .foregroundColor(.secondary.opacity(isTopLevel ? 0.7 : 0.5))
 
-                if isTopLevel, sessionManager.apiGroups.count > 1,
-                   let idx = sessionManager.apiGroups.firstIndex(where: { $0.name == group.name }) {
+                // `reorderMoves` answers from the list the handlers mutate, and
+                // answers in the same booleans they guard on — the view does no
+                // index arithmetic of its own, which is what #1948 got wrong
+                // (it measured against `apiGroups`, whose relay rows were not
+                // in the order the handlers act on). Every rendered top-level
+                // group is now in that order, relay ones included, so the
+                // chevrons appear on all of them.
+                if isTopLevel, let moves = sessionManager.reorderMoves(for: group.name),
+                   moves.up || moves.down {
                     HStack(spacing: 0) {
-                        reorderButton(icon: "chevron.up", tooltip: "Move group up", disabled: idx == 0) {
+                        reorderButton(icon: "chevron.up", tooltip: "Move group up", disabled: !moves.up) {
                             sessionManager.moveProjectGroupUp(name: group.name)
                         }
-                        reorderButton(icon: "chevron.down", tooltip: "Move group down", disabled: idx == sessionManager.apiGroups.count - 1) {
+                        reorderButton(icon: "chevron.down", tooltip: "Move group down", disabled: !moves.down) {
                             sessionManager.moveProjectGroupDown(name: group.name)
                         }
                     }
