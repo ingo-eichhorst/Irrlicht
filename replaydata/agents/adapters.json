@@ -196,6 +196,9 @@
         "workflow_fanout": "absent"
       }
     },
+    "muse": {
+      "maturity": "planned"
+    },
     "opencode": {
       "maturity": "alpha",
       "capabilities": {
