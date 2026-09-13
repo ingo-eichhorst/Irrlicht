@@ -123,13 +123,19 @@ class SessionManager: ObservableObject {
 
     // Project group ordering (persisted in UserDefaults).
     //
-    // Membership in this array IS the reorderable set: `reorderMoves(for:)`
-    // returns nil for a name that is not here, and `GroupView` renders no
-    // chevrons for it. `orderedGroups` syncs it to every rendered top-level
-    // group — local and relay alike (#1948) — so the two sets stay equal.
-    // Narrowing what is synced here silently removes chevrons from the rows
-    // left out; widening what is rendered without syncing gives those rows
-    // chevrons the handlers cannot act on. Either half alone is the bug.
+    // REMEMBERED order, a superset (#1954): every top-level group name ever
+    // rendered — local and relay alike (#1948) — appended the first time it is
+    // seen and never removed because a payload lacked it. A name's absence is
+    // relay churn, not a user decision, and pruning on it is what discarded
+    // the user's choice and re-appended the name last.
+    //
+    // The REORDERABLE set is `renderedGroupOrder`, this array narrowed to the
+    // names `apiGroups` currently shows. `reorderMoves(for:)` returns nil for
+    // a name outside that projection and `GroupView` renders no chevrons for
+    // it; the handlers index the same projection, then swap the two names
+    // inside this array. Measuring the offer and the effect against different
+    // lists is #1948 — either half alone is the bug — and letting an absent
+    // name pad the bound is that same bug in a new costume.
     @Published var projectGroupOrder: [String] = []
     let projectGroupOrderKey = "projectGroupOrder"
 
@@ -243,8 +249,10 @@ class SessionManager: ObservableObject {
     }
     /// The relay URL currently connected, so a URL change forces a reconnect.
     var activeRelayURL: String = ""
-    /// Local groups before relay groups are appended. `apiGroups` (published)
-    /// is always `orderedGroups(localApiGroups) + relayGroups()`.
+    /// Local groups before relay groups are merged in. `apiGroups` (published)
+    /// is always `orderedGroups(localApiGroups + relayGroups()…)` — the
+    /// ordering spans BOTH halves since #1948; see `recomposeApiGroups`, which
+    /// this comment was left behind by and now quotes.
     var localApiGroups: [AgentGroup] = []
     /// Last-applied source configuration, so the UserDefaults observer only
     /// reconnects when a Sources setting actually changed.

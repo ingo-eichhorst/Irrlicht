@@ -165,6 +165,59 @@ final class MenuBarStatusRendererTests: XCTestCase {
         XCTAssertNil(result)
     }
 
+    /// The icon takes `SessionManager.projectGroupOrder` verbatim, and since
+    /// #1954 that array is a remembered SUPERSET: it holds every project name
+    /// ever rendered, including ones with no session right now. Before #1954
+    /// the two were kept equal, so no test ever passed a name the sessions do
+    /// not mention — checked with
+    /// `grep -rn "projectGroupOrder: \[" platforms/macos/Tests/`, whose only
+    /// non-empty arguments (`["alpha","beta"]`, `["p"]`) match their sessions
+    /// exactly. Reading `orderedProjectGroups` says the miss is skipped by
+    /// `remaining.removeValue(forKey:)`; this runs it.
+    ///
+    /// Both directions, because a superset breaks symmetrically: a remembered
+    /// name with no sessions must not draw an empty group, and a session whose
+    /// project is not remembered must still be drawn (appended, sorted).
+    ///
+    /// Mutation-checked, run through `tools/mutate.sh`: replacing
+    /// `orderedProjectGroups`' `if let sessions = remaining.removeValue(...)`
+    /// with `remaining.removeValue(...) ?? []` — i.e. drawing the misses —
+    /// fails this at 46pt against 26pt, the rendered SVG carrying two empty
+    /// `<g>` elements and shifting every real dot right.
+    func testARememberedNameWithNoSessionsDrawsNothingAndDoesNotDisplaceTheRest() throws {
+        let sessions = [
+            makeSession(id: "b1", state: .working, project: "beta"),
+            makeSession(id: "c1", state: .ready, project: "gamma"),
+        ]
+
+        // "alpha" and "delta" are remembered but absent; "gamma" is present
+        // but not remembered.
+        let superset = try XCTUnwrap(MenuBarStatusRenderer.buildStatusSVG(
+            sessions: sessions,
+            projectGroupOrder: ["alpha", "beta", "delta"]
+        ))
+        // The exact render the same sessions produce when the order names only
+        // what is on screen — so "identical" is measured, not asserted about
+        // an isolated feature of the string.
+        let exact = try XCTUnwrap(MenuBarStatusRenderer.buildStatusSVG(
+            sessions: sessions,
+            projectGroupOrder: ["beta"]
+        ))
+
+        XCTAssertEqual(superset.svg, exact.svg,
+                       "remembered-but-absent names changed the rendered icon")
+        XCTAssertEqual(superset.width, exact.width, accuracy: 0.01,
+                       "remembered-but-absent names reserved width for nothing")
+
+        // Vacuity guard. NOT `width > 0`: `assemble` already returns nil on a
+        // zero total width, so `XCTUnwrap` would have thrown first and the
+        // check could never fire — and a width-only check also waves through
+        // the mutation below, which draws two empty `<g>`s at 46pt. Counting
+        // the dots is what the equality above cannot already imply.
+        XCTAssertEqual(superset.svg.components(separatedBy: "<circle").count - 1, 2,
+                       "the icon drew no dots, so the equality above compared two empty renders")
+    }
+
     private func makeSession(
         id: String,
         state: SessionState.State,
