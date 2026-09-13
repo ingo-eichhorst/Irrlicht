@@ -19,10 +19,45 @@ enum RelayFixtures {
         project: String,
         state: String = "working"
     ) -> String {
+        frame(source: source, inner: "session_created",
+              session: sessionJSON(id: sessionId, project: project, state: state))
+    }
+
+    /// A relay Push frame carrying `session_deleted` — how a relay session
+    /// really leaves `relaySessionMap`, and therefore how a relay project
+    /// group really leaves the rendered payload (#1954).
+    ///
+    /// `applyRelayInner`'s delete arm removes by `s.rowID`, which is
+    /// `"\(daemonID)/\(id)"` — so `source` and `sessionId` must match the
+    /// `push(…)` that created the row or the removal is a silent no-op. Read
+    /// at `SessionManager+Relay.swift`'s `case "session_deleted"` and
+    /// `SessionState.rowID`; the suites that use this assert the row actually
+    /// left rather than trusting the frame.
+    static func delete(
+        source: String,
+        sessionId: String,
+        project: String,
+        state: String = "ready"
+    ) -> String {
+        frame(source: source, inner: "session_deleted",
+              session: sessionJSON(id: sessionId, project: project, state: state))
+    }
+
+    /// The envelope both frames share. One builder rather than two literals,
+    /// for the reason above: two copies drift, and the `source`/`session_id`
+    /// pairing is exactly what a `session_deleted` has to get right.
+    private static func frame(source: String, inner: String, session: String) -> String {
         """
-        {"type":"push","source":"\(source)","msg":{"type":"session_created",\
-        "session":{"session_id":"\(sessionId)","state":"\(state)","model":"m",\
-        "cwd":"/tmp","project_name":"\(project)","first_seen":0,"updated_at":0}}}
+        {"type":"push","source":"\(source)","msg":{"type":"\(inner)","session":\(session)}}
+        """
+    }
+
+    /// The session object the envelope carries. Split from `frame` so neither
+    /// builder takes the whole flattened parameter list.
+    private static func sessionJSON(id: String, project: String, state: String) -> String {
+        """
+        {"session_id":"\(id)","state":"\(state)","model":"m",\
+        "cwd":"/tmp","project_name":"\(project)","first_seen":0,"updated_at":0}
         """
     }
 }

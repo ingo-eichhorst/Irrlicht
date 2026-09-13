@@ -112,20 +112,58 @@ final class SessionManagerGroupOrderTests: XCTestCase {
     /// are the same names in the same sequence. While that holds, "which list
     /// did the view measure against" has no wrong answer.
     ///
-    /// Mutation-checked, run rather than assumed: restoring
-    /// `recomposeApiGroups` to the pre-fix `orderedGroups(localApiGroups) +
-    /// relayGroups()…` fails this with `["alpha", "beta", "gamma", "delta"]`
-    /// against `["alpha", "beta", "gamma"]` — and takes the two relay tests
-    /// above down with it.
+    /// RESTATED for #1954, not weakened. The reorderable order is now
+    /// `renderedGroupOrder` — the remembered superset narrowed to what is on
+    /// screen — because `projectGroupOrder` deliberately keeps names that have
+    /// left. Asserting against the raw array would have to be deleted for the
+    /// superset to ship, and deleting it is exactly how #1948 comes back: the
+    /// superset is what makes an absent name available to pad a bound. So the
+    /// invariant is re-stated against the projection and given the case that
+    /// only exists now — a remembered name that is NOT rendered — where the
+    /// two arrays genuinely differ and only one of them is the domain.
+    ///
+    /// Phase 1's mutation record is #1949's, run there and not re-run here:
+    /// restoring `recomposeApiGroups` to the pre-#1949 `orderedGroups(
+    /// localApiGroups) + relayGroups()…` failed it with
+    /// `["alpha", "beta", "gamma", "delta"]` against
+    /// `["alpha", "beta", "gamma"]`. Phase 2's is #1954's, run through
+    /// `tools/mutate.sh`: restoring the `currentNames.contains($0)` prune to
+    /// `orderedGroups` fails it at the precondition —
+    /// `XCTAssertTrue failed - precondition: the remembered order must still
+    /// hold delta, or the two arrays never diverge and this phase asserts
+    /// nothing` — which is the phase failing LOUDLY rather than passing
+    /// vacuously once the superset is gone.
     func testTheRenderedListAndTheReorderableOrderAreTheSameSequence() {
         let (sut, _) = makeSUT()
         seedLocalPlusRelay(sut)
 
+        // Phase 1 — everything remembered is rendered, so all three agree.
+        XCTAssertEqual(sut.apiGroups.map(\.name), sut.renderedGroupOrder)
         XCTAssertEqual(sut.apiGroups.map(\.name), sut.projectGroupOrder)
 
         sut.moveProjectGroupUp(name: "delta")
-        XCTAssertEqual(sut.apiGroups.map(\.name), sut.projectGroupOrder,
+        XCTAssertEqual(sut.apiGroups.map(\.name), sut.renderedGroupOrder,
                        "a move must leave the two lists in step")
+
+        // Phase 2 — delta leaves. The remembered array keeps it; the rendered
+        // list and the reorderable domain must still be the same sequence.
+        sut.handleRelayMessage(
+            RelayFixtures.delete(source: "daemonB", sessionId: "r1", project: "delta")
+        )
+        XCTAssertEqual(sut.apiGroups.map(\.name), ["alpha", "beta", "gamma"],
+                       "precondition: delta must really leave the rendered payload")
+        XCTAssertTrue(sut.projectGroupOrder.contains("delta"),
+                      "precondition: the remembered order must still hold delta, "
+                      + "or the two arrays never diverge and this phase asserts nothing")
+
+        XCTAssertEqual(sut.apiGroups.map(\.name), sut.renderedGroupOrder)
+        XCTAssertNotEqual(sut.apiGroups.map(\.name), sut.projectGroupOrder,
+                          "the raw remembered array is no longer the domain; if it "
+                          + "still matched, the projection would be untested")
+
+        sut.moveProjectGroupUp(name: "gamma")
+        XCTAssertEqual(sut.apiGroups.map(\.name), sut.renderedGroupOrder,
+                       "a move with an absent name remembered must leave them in step")
     }
 
     /// The contract the chevrons rest on, stated as an equivalence rather than
@@ -135,36 +173,61 @@ final class SessionManagerGroupOrderTests: XCTestCase {
     /// group was offered a move it could not perform, and the relay group was
     /// offered two.
     ///
-    /// Mutation-checked, run rather than assumed: giving
-    /// `moveProjectGroupDown` its own bound instead of
-    /// `reorderMoves(atIndex:)` fails this with "the down-chevron offer for
-    /// gamma disagrees with the handler".
+    /// Run twice, and the second arm is the #1954 half: once every remembered
+    /// name is rendered, the raw remembered array and the projection are the
+    /// same list, so an offer measured against the wrong one is
+    /// indistinguishable. With `delta` remembered but gone they differ.
     ///
-    /// What it deliberately does NOT catch any more: answering `reorderMoves`
-    /// from `apiGroups` instead of `projectGroupOrder`. That was the #1948
-    /// defect, and it was measured green under this test once the two lists
-    /// became the same sequence — reading either is now equivalent. The
-    /// invariant test above is what holds that in place; this one guards the
-    /// rule, that one guards the domain.
+    /// Mutation-checked, run rather than assumed — `tools/mutate.sh` against
+    /// `swift test --filter SessionManagerGroupOrderTests`. Both mutations
+    /// leave arm 1 green and take arm 2 down, which is the evidence that arm
+    /// 2 is load-bearing:
+    ///
+    /// - the bound in `reorderMoves(atIndex:in:)` taken from
+    ///   `projectGroupOrder` instead of `domain`:
+    ///   `Swift/ContiguousArrayBuffer.swift:692: Fatal error: Index out of
+    ///   range`, in this test, on the `delta`-absent arm;
+    /// - the same substitution in `reorderMoves(for:)` only, so the offer and
+    ///   the handler disagree rather than trapping:
+    ///   `XCTAssertEqual failed: ("true") is not equal to ("false") - the
+    ///   down-chevron offer for gamma disagrees with the handler`.
+    ///
+    /// What it deliberately does NOT catch: answering `reorderMoves` from
+    /// `apiGroups` rather than from the projection of the remembered order.
+    /// Those are the same sequence by construction, which is what the
+    /// invariant test above holds in place; this one guards the rule, that one
+    /// guards the domain.
     func testChevronOffersAgreeWithWhatTheHandlersDo() {
-        let (sut, _) = makeSUT()
-        seedLocalPlusRelay(sut)
+        for absentNameRemembered in [false, true] {
+            let (sut, _) = makeSUT()
+            seedLocalPlusRelay(sut)
+            if absentNameRemembered {
+                sut.handleRelayMessage(
+                    RelayFixtures.delete(source: "daemonB", sessionId: "r1", project: "delta")
+                )
+                XCTAssertEqual(sut.apiGroups.map(\.name), ["alpha", "beta", "gamma"],
+                               "precondition: delta must really leave the rendered payload")
+                XCTAssertTrue(sut.projectGroupOrder.contains("delta"),
+                              "precondition: delta must stay remembered, or this arm "
+                              + "repeats the first one")
+            }
 
-        for name in sut.apiGroups.map(\.name) {
-            let saved = sut.projectGroupOrder
-            let moves = sut.reorderMoves(for: name)
+            for name in sut.apiGroups.map(\.name) {
+                let saved = sut.projectGroupOrder
+                let moves = sut.reorderMoves(for: name)
 
-            sut.moveProjectGroupUp(name: name)
-            XCTAssertEqual(moves?.up ?? false, sut.projectGroupOrder != saved,
-                           "the up-chevron offer for \(name) disagrees with the handler")
-            sut.projectGroupOrder = saved
-            sut.recomposeApiGroups()
+                sut.moveProjectGroupUp(name: name)
+                XCTAssertEqual(moves?.up ?? false, sut.projectGroupOrder != saved,
+                               "the up-chevron offer for \(name) disagrees with the handler")
+                sut.projectGroupOrder = saved
+                sut.recomposeApiGroups()
 
-            sut.moveProjectGroupDown(name: name)
-            XCTAssertEqual(moves?.down ?? false, sut.projectGroupOrder != saved,
-                           "the down-chevron offer for \(name) disagrees with the handler")
-            sut.projectGroupOrder = saved
-            sut.recomposeApiGroups()
+                sut.moveProjectGroupDown(name: name)
+                XCTAssertEqual(moves?.down ?? false, sut.projectGroupOrder != saved,
+                               "the down-chevron offer for \(name) disagrees with the handler")
+                sut.projectGroupOrder = saved
+                sut.recomposeApiGroups()
+            }
         }
     }
 
@@ -175,10 +238,13 @@ final class SessionManagerGroupOrderTests: XCTestCase {
     /// `orderedGroups` two entries to choose between.
     ///
     /// The STORE is not rewritten at load — construction stays write-free, and
-    /// `orderedGroups` finds nothing to save because the deduped array already
-    /// matches the groups. The stored duplicate is harmless: every load drops
-    /// it again, and the next real save replaces it, which the move below
-    /// shows.
+    /// `orderedGroups` finds nothing to save because no incoming name is
+    /// first-seen, so its only write never fires. (Before #1954 the reason was
+    /// "the deduped array already matches the groups"; the conclusion is the
+    /// same, the mechanism is not — post-#1954 nothing would be saved even if
+    /// the array did NOT match.) The stored duplicate is harmless: every load
+    /// drops it again, and the next real save replaces it, which the move
+    /// below shows.
     ///
     /// Mutation-checked, run rather than assumed: dropping the dedupe from
     /// `loadProjectGroupOrder` fails the first assertion with
@@ -206,5 +272,98 @@ final class SessionManagerGroupOrderTests: XCTestCase {
         sut.seedLocalApiGroups([AgentGroup(name: "dup"), AgentGroup(name: "dup")])
 
         XCTAssertEqual(sut.projectGroupOrder, ["dup"])
+    }
+
+    // MARK: - A name that leaves the payload keeps its slot (#1954)
+
+    /// A relay group the user moved, that leaves the payload and comes back,
+    /// returns to the slot the user gave it.
+    ///
+    /// #1954: `orderedGroups` pruned `projectGroupOrder` down to the names in
+    /// each payload, so any recompose without `delta` — a `session_deleted`, a
+    /// relay disconnect, `restoreDaemon`, a hydration that has not landed yet
+    /// — dropped the name, and the next push re-appended it LAST. #1949 is
+    /// what made this reach relay rows: before it, relay names were never in
+    /// the array at all.
+    ///
+    /// `delta` leaves through the real ingest path — a `session_deleted`
+    /// frame through `handleRelayMessage` — not by editing `relaySessionMap`.
+    /// That map is keyed by `rowID`, so a hand-seeded removal is a shape
+    /// production never builds and would stay green if the delete arm changed
+    /// its key. `RelayFixtures` states the same rule for the create side.
+    ///
+    /// SEEN RED before the fix existed, at `a680d5ea`:
+    /// `XCTAssertEqual failed: ("["alpha", "beta", "gamma", "delta"]") is not
+    /// equal to ("["delta", "alpha", "beta", "gamma"]")`, and the persisted
+    /// array with it. Re-run red under `tools/mutate.sh` with the
+    /// `currentNames.contains($0)` prune restored.
+    func testARelayGroupThatLeavesAndReturnsKeepsItsSlot() {
+        let (sut, defaults) = makeSUT()
+        seedLocalPlusRelay(sut)
+
+        sut.moveProjectGroupUp(name: "delta")
+        sut.moveProjectGroupUp(name: "delta")
+        sut.moveProjectGroupUp(name: "delta")
+        XCTAssertEqual(sut.apiGroups.map(\.name), ["delta", "alpha", "beta", "gamma"],
+                       "precondition: the user moved delta to the top")
+
+        sut.handleRelayMessage(
+            RelayFixtures.delete(source: "daemonB", sessionId: "r1", project: "delta")
+        )
+        // Not a formality: if the delete frame missed, everything below would
+        // pass without the absence it is about ever happening.
+        XCTAssertEqual(sut.apiGroups.map(\.name), ["alpha", "beta", "gamma"],
+                       "precondition: delta must really leave the rendered payload")
+
+        sut.handleRelayMessage(
+            RelayFixtures.push(source: "daemonB", sessionId: "r1", project: "delta")
+        )
+
+        XCTAssertEqual(sut.apiGroups.map(\.name), ["delta", "alpha", "beta", "gamma"],
+                       "delta came back at the end instead of the slot the user gave it")
+        XCTAssertEqual(defaults.stringArray(forKey: "projectGroupOrder"),
+                       ["delta", "alpha", "beta", "gamma"],
+                       "the persisted order lost delta's slot while it was absent")
+    }
+
+    /// An empty payload writes nothing at all.
+    ///
+    /// The worst case of the same mechanism, and the one measured in #1954's
+    /// log as `💾 Saved project group order with 0 groups`: a recompose runs
+    /// before the first successful hydration, `localApiGroups` is still empty,
+    /// and the pruning `orderedGroups` saved `[]` over the user's whole order.
+    /// A payload without a name is not evidence the user stopped caring where
+    /// it sits, and an empty one is not evidence of anything.
+    ///
+    /// The write COUNT, not just the value: re-saving the identical array
+    /// satisfies every value assertion and is still the write this forbids.
+    /// `InMemoryDefaults.writeCount(forKey:)` is what separates them.
+    ///
+    /// SEEN RED before the fix existed, at `a680d5ea`, on all three:
+    /// `("2") is not equal to ("1")`, `("Optional([])") is not equal to
+    /// ("Optional(["alpha", "beta", "gamma"])")`, and `("[]") is not equal to
+    /// ("["alpha", "beta", "gamma"]")`. That run's own log printed the issue's
+    /// line, `Saved project group order with 0 groups`. Re-run red under
+    /// `tools/mutate.sh` with the `currentNames.contains($0)` prune restored.
+    func testAnEmptyPayloadWritesNothing() {
+        let (sut, defaults) = makeSUT(order: ["alpha", "beta", "gamma"])
+        sut.seedLocalApiGroups(["alpha", "beta", "gamma"].map { AgentGroup(name: $0) })
+        let storedBefore = defaults.stringArray(forKey: "projectGroupOrder")
+        let writesBefore = defaults.writeCount(forKey: "projectGroupOrder")
+        XCTAssertEqual(storedBefore, ["alpha", "beta", "gamma"],
+                       "precondition: the store holds the user's order")
+
+        sut.seedLocalApiGroups([])
+
+        // Vacuity guard: without it, a recompose that never ran and a
+        // recompose that ran and wrote nothing read identically.
+        XCTAssertTrue(sut.apiGroups.isEmpty,
+                      "precondition: the empty payload must reach the recompose")
+        XCTAssertEqual(defaults.writeCount(forKey: "projectGroupOrder"), writesBefore,
+                       "an empty payload wrote to the store")
+        XCTAssertEqual(defaults.stringArray(forKey: "projectGroupOrder"), storedBefore,
+                       "an empty payload changed the persisted order")
+        XCTAssertEqual(sut.projectGroupOrder, ["alpha", "beta", "gamma"],
+                       "an empty payload forgot the remembered order in memory")
     }
 }

@@ -127,6 +127,40 @@ final class InMemoryDefaultsTests: XCTestCase {
         XCTAssertNil(defaults.persistentDomain(forName: "com.apple.finder"), "the double must not read a real domain, nor claim to be one")
     }
 
+    /// `writeCount(forKey:)` must actually count, including the re-write of an
+    /// identical value that `writtenKeys` cannot see (#1954).
+    ///
+    /// Without this, the discriminating half of
+    /// `SessionManagerGroupOrderTests.testAnEmptyPayloadWritesNothing` rests on
+    /// an affordance nothing pins: a `writeCount` that always answered `0`, or
+    /// an increment dropped from `set(_:forKey:)` in a later edit, leaves that
+    /// test green while it has stopped asking its question. `writtenKeys` has
+    /// had such a self-test since #1672; this gives its sibling one.
+    ///
+    /// Mutation-checked, run through `tools/mutate.sh`: making
+    /// `writeCount(forKey:)` `return 0` fails this at `("0") is not equal to
+    /// ("1")`, `("0") is not equal to ("2")` and `("0") is not equal to ("3")`
+    /// — the exact silence it exists to make impossible.
+    func testWriteCountCountsEveryWriteIncludingARepeatOfTheSameValue() {
+        let defaults = InMemoryDefaults()
+
+        XCTAssertEqual(defaults.writeCount(forKey: "untouched"), 0)
+
+        defaults.set(["a"], forKey: "order")
+        XCTAssertEqual(defaults.writeCount(forKey: "order"), 1)
+
+        // The write `writtenKeys` and every value comparison are blind to.
+        defaults.set(["a"], forKey: "order")
+        XCTAssertEqual(defaults.writeCount(forKey: "order"), 2,
+                       "re-writing the value already stored must still count as a write")
+
+        defaults.removeObject(forKey: "order")
+        XCTAssertEqual(defaults.writeCount(forKey: "order"), 3, "a removal is a write")
+
+        XCTAssertEqual(defaults.writeCount(forKey: "untouched"), 0,
+                       "counts must be per key, not global")
+    }
+
     // MARK: - Arm 2: the #1661 guarantee
 
     /// The property the whole issue is about: a run of the double leaves nothing

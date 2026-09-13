@@ -71,6 +71,9 @@ final class InMemoryDefaults: UserDefaults {
     /// Every key this store has been ASKED for. See `readKeys`.
     private var reads: Set<String> = []
 
+    /// How many times each key has been WRITTEN. See `writeCount(forKey:)`.
+    private var writes: [String: Int] = [:]
+
     /// XCTest drives one test at a time here, but `SessionManager` and friends
     /// read defaults from other queues, and a double that flaked under that
     /// would be debugged as a product bug. `UserDefaults` itself is thread-safe.
@@ -106,6 +109,22 @@ final class InMemoryDefaults: UserDefaults {
         lock.lock()
         defer { lock.unlock() }
         return reads
+    }
+
+    /// How many times `defaultName` has been WRITTEN through this store.
+    ///
+    /// `writtenKeys` answers "did anything ever land under this key", and a
+    /// re-save of the value already there is invisible to it — as it is to
+    /// `object(forKey:)`, to `dictionaryRepresentation()`, and on a real
+    /// domain to every value comparison. #1954 needs the other question:
+    /// "did this recompose write **at all**". Its design says an empty payload
+    /// must not touch the store, and a store re-saved with an identical array
+    /// satisfies every value assertion while still being the write the issue
+    /// is about. Counting them is what separates the two.
+    func writeCount(forKey defaultName: String) -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return writes[defaultName, default: 0]
     }
 
     /// - Note: `super.init(suiteName: nil)` binds the process's *own*
@@ -147,6 +166,11 @@ final class InMemoryDefaults: UserDefaults {
     override func set(_ value: Any?, forKey defaultName: String) {
         lock.lock()
         defer { lock.unlock() }
+        // Counted here, next to the store mutation, for the same reason
+        // `reads` is counted in `object(forKey:)`: Foundation funnels every
+        // write through this primitive, and the typed setters below are
+        // written to route through it explicitly rather than rely on that.
+        writes[defaultName, default: 0] += 1
         if let value {
             store[defaultName] = value
         } else {
@@ -157,6 +181,7 @@ final class InMemoryDefaults: UserDefaults {
     override func removeObject(forKey defaultName: String) {
         lock.lock()
         defer { lock.unlock() }
+        writes[defaultName, default: 0] += 1
         store.removeValue(forKey: defaultName)
     }
 
