@@ -181,16 +181,18 @@ struct SettingsView: View {
                         // budget, so it is a point in this space rather than a
                         // control beside it.
                         //
-                        // Derived from `selectableCases`, not `allCases`: the
-                        // `location` grouping is declared but unimplemented in
-                        // this build (#1955 phase 2 lands after #1954), and a
-                        // segment that silently rendered as `By project` would
-                        // be a control that lies.
+                        // Derived from `selectableCases`, not `allCases`, and
+                        // still derived now that phase 2 has implemented every
+                        // case: a segment for a grouping this build cannot
+                        // render would silently draw as `By project`, and a
+                        // control that lies is worse than a missing one. That
+                        // derivation is why `By location` appeared here with no
+                        // edit to this file.
                         HStack(spacing: 6) {
                             Text("Grouping")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
-                            InfoIcon(text: "By project draws one dot-group per project, up to the slot budget below. Combined collapses every project into one dot with a session count, so the icon's width stops growing with your project count — on Usage it also switches to the narrower, label-less quota bars.")
+                            InfoIcon(text: "By project draws one dot-group per project. By location draws one per machine — this Mac plus each relay daemon, named in VoiceOver. Both are capped by the slot budget below. Combined collapses everything into one dot with a session count, so the icon's width stops growing at all — on Usage it also switches to the narrower, label-less quota bars.")
                             Spacer()
                         }
                         EqualWidthSegmentedControl(
@@ -207,10 +209,16 @@ struct SettingsView: View {
                         // own predicate rather than on `== .combined`.
                         if !menuBarAppearance.aggregatesSessionDots {
                             HStack(spacing: 6) {
-                                Text("Max projects")
+                                // The noun follows the grouping: under `By
+                                // location` the budget caps MACHINES, and a row
+                                // still reading "Max projects" would be naming
+                                // the wrong thing. Derived rather than
+                                // conditional here, so a fourth grouping has to
+                                // answer for itself (#1955 phase 2).
+                                Text(menuBarAppearance.grouping.resolved.slotBudgetLabel)
                                     .font(.caption)
                                     .foregroundColor(.secondary)
-                                InfoIcon(text: "How many dot-groups the icon draws before the rest collapse into a single \u{2026}. Capped at \(MenuBarMaxProjects.maximum) so the setting cannot produce an icon the menu bar truncates.")
+                                InfoIcon(text: "How many dot-groups the icon draws in total before the rest collapse into a single \u{2026} — one budget across the whole icon, not one per group. Capped at \(MenuBarMaxProjects.maximum) so the setting cannot produce an icon the menu bar truncates.")
                                 Spacer()
                                 // Extracted, so the one thing here that can
                                 // silently render nothing is reachable from a
@@ -716,13 +724,14 @@ struct SettingsView: View {
     /// The grouping segmented control's binding.
     ///
     /// It READS through `resolved` and WRITES the raw value, which is not an
-    /// oversight: a store carrying `location` — written by a later build, or
-    /// by hand — is not among `selectableCases`, so
-    /// `EqualWidthSegmentedControl` would find no index and leave every
-    /// segment unselected. Showing `By project` instead is honest, because
-    /// `MenuBarAppearance.aggregatesSessionDots` resolves that value to
-    /// exactly `By project` too — the control then reports what the icon
-    /// actually draws.
+    /// oversight: a store carrying a grouping this build cannot render — one
+    /// written by a LATER build, or by hand — is not among `selectableCases`,
+    /// so `EqualWidthSegmentedControl` would find no index and leave every
+    /// segment unselected. Showing `By project` instead is honest, because the
+    /// renderer resolves that value to exactly `By project` too — the control
+    /// then reports what the icon actually draws. `location` was that case at
+    /// phase 1 and is no longer; the read stays, because the next grouping
+    /// added will be.
     private var groupingSelection: Binding<String> {
         Binding(
             get: { (MenuBarGrouping(rawValue: menuBarGrouping) ?? .project).resolved.rawValue },

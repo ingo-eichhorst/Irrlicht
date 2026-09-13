@@ -22,6 +22,49 @@ final class SessionManagerRelayReconnectTests: XCTestCase {
         try await super.tearDown()
     }
 
+    /// `daemonLabel(for:)` and `daemonLabels` must answer the same thing in
+    /// every combination of the two maps (#1955 phase 2).
+    ///
+    /// They are deliberately spelled DIFFERENTLY — the map is a computed merge
+    /// with connected winning, the single lookup is the `relayDaemons ??
+    /// offlineDaemons ?? id` chain — because going through the map for one
+    /// lookup allocates a dictionary of every known daemon, once per remote row
+    /// per SwiftUI body evaluation. Two spellings of one rule is exactly the
+    /// drift this repo keeps finding, so the equivalence is asserted rather
+    /// than argued.
+    ///
+    /// The `both` row is unreachable through the ingest today — read at
+    /// `handleRelayMessage`, the disconnect arm `removeValue`s from
+    /// `relayDaemons` before writing `offlineDaemons`, and the connect arm's
+    /// `restoreDaemon` clears the offline entry — so it is driven by assigning
+    /// the maps here. That is the one place in these suites where reaching past
+    /// the ingest is the point: the row exists to pin which map WOULD win if a
+    /// future frame ever produced it.
+    ///
+    /// Mutation-proved (source), run rather than predicted: flipping the merge
+    /// to `relayDaemons.merging(offlineDaemons) { _, faded in faded }` fails
+    /// the `both` row with `("faded-name") is not equal to ("live-name")`.
+    func testTheDaemonLabelLookupAgreesWithTheMapAcrossEveryCombination() {
+        let cases: [(name: String, relay: [String: String], offline: [String: String],
+                     expected: String)] = [
+            ("neither map knows it", [:], [:], "d1"),
+            ("connected only", ["d1": "live-name"], [:], "live-name"),
+            ("faded only", [:], ["d1": "faded-name"], "faded-name"),
+            ("both — connected wins", ["d1": "live-name"], ["d1": "faded-name"], "live-name"),
+        ]
+        for row in cases {
+            sut.relayDaemons = row.relay
+            sut.offlineDaemons = row.offline
+            XCTAssertEqual(sut.daemonLabel(for: "d1"), row.expected, row.name)
+            XCTAssertEqual(sut.daemonLabels["d1"] ?? "d1", row.expected,
+                           "\(row.name): the map disagrees with the single lookup")
+        }
+        // Vacuity guard: the rows must not all expect the same string, or the
+        // loop would pass against a lookup that ignored both maps.
+        XCTAssertEqual(Set(cases.map(\.expected)).count, 3,
+                       "the table must exercise more than one answer")
+    }
+
     func testRecordConfirmedRelayConnectResetsBackoffAndFailureState() {
         sut.relayReconnectDelay = 16.0
         sut.consecutiveRelayConnectFailures = 2

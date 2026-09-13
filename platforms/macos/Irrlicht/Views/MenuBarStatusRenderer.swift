@@ -87,13 +87,224 @@ struct MenuBarStatusRenderer {
         projectGroupOrder: [String],
         maxGroups: Int = defaultMaxVisibleGroups
     ) -> (svg: String, width: CGFloat)? {
+        assemble(
+            budgeted(
+                orderedProjectGroups(from: sessions, projectGroupOrder: projectGroupOrder),
+                maxGroups: maxGroups
+            ).renders
+        )
+    }
+
+    /// Spend the whole-icon slot budget on a BUILT bucket list, and say what it
+    /// spent it on.
+    ///
+    /// **It takes the built groups and never a name array, and that is the
+    /// property, not an implementation detail.** #1956 made
+    /// `projectGroupOrder` a remembered SUPERSET that is never pruned, so its
+    /// LENGTH says nothing about how many buckets the icon draws; a budget or
+    /// an overflow test read off that array pads both with names nobody has a
+    /// session for. Extracted here by #1955 phase 2 so the two bucketings
+    /// cannot acquire two differently-wrong budget rules — `location` has no
+    /// name array to be tempted by in the first place, since
+    /// `buildLocationStatusSVG` never receives one.
+    ///
+    /// Re-run rather than asserted: `MenuBarStatusRendererTests
+    /// .testTheSupersetOrderMutantsAreAllRejected` drives three committed
+    /// mutants of exactly that mistake through the same contract the shipped
+    /// renderer satisfies, and `...testTheLocationBudgetIsSpentOnRendered`
+    /// `BucketsNotDaemonLabels` does the same for this path's daemon map.
+    ///
+    /// - Returns: the renders to lay out, the labels of the buckets actually
+    ///   drawn (in order), and how many buckets the single `…` stands for.
+    private static func budgeted(
+        _ groups: [(String, [SessionState])],
+        maxGroups: Int
+    ) -> (renders: [GroupRender], drawn: [String], hidden: Int) {
         let budget = MenuBarMaxProjects.clamp(maxGroups)
-        let groups = orderedProjectGroups(from: sessions, projectGroupOrder: projectGroupOrder)
-        var renders = groups.prefix(budget).map { renderGroup($0.1) }
-        if groups.count > budget {
+        let shown = Array(groups.prefix(budget))
+        let hidden = groups.count - shown.count
+        var renders = shown.map { renderGroup($0.1) }
+        if hidden > 0 {
             renders.append(renderOverflow())
         }
-        return assemble(renders)
+        return (renders, shown.map(\.0), hidden)
+    }
+
+    // MARK: - Location grouping (#1955 phase 2): one bucket per daemon
+
+    /// What the bucket for sessions with no `daemonID` is called — the ones
+    /// this Mac's own daemon reported, which `SessionState.daemonID`'s
+    /// declaration (`SessionState.swift:914`, `nil` for local) is the only
+    /// thing distinguishing them.
+    ///
+    /// `"Local"` rather than a hostname because that is the word the app
+    /// already uses for the same daemon in `SessionManager.connectionTooltip`
+    /// (`lines.append("Local — \(connectionState.shortLabel)…")`), and
+    /// because nothing under `platforms/macos/Irrlicht` reads a host name today
+    /// — checked with `git grep -n 'Host.current\|hostName\|ProcessInfo.*host'`,
+    /// which returns nothing. Inventing one here would put a second name for
+    /// this machine in front of the user.
+    static let localBucketLabel = "Local"
+
+    /// The whole icon for `MenuBarGrouping.location` — one bucket per daemon,
+    /// labelled by daemon.
+    ///
+    /// **It takes no `projectGroupOrder`, and that absence is the design.**
+    /// That array is project-keyed and popover-owned, and #1956 made it a
+    /// remembered superset that is never pruned: a daemon label written into it
+    /// would be a phantom name surviving forever, padding the `count - 1` bound
+    /// `SessionManager.reorderMoves(atIndex:in:)` measures against and handing
+    /// the last visible row a chevron aimed at nothing — #1948 in a new
+    /// costume, which is the regression #1949 fixed. Not receiving the array is
+    /// what makes "derives its order and writes nothing" a fact about the
+    /// signature rather than a promise about the body.
+    /// `MenuBarAppearanceTests.testLocationGroupingNeverTouchesTheRemembered`
+    /// `ProjectOrder` drives a real relay ingest through `RelayFixtures.push`
+    /// and pins the array byte-identical across the render.
+    ///
+    /// The bucket ORDER is derived on every render, never persisted: local
+    /// first, then daemons by the label the user reads, ascending. Persisting
+    /// it would churn on every relay reconnect — the failure class #1954 is
+    /// about.
+    ///
+    /// The names reach the user only while the DOTS are drawn. On the `.usage`
+    /// style with a renderable quota the dot half is hidden by design
+    /// (`MenuBarAppearance.hidesDotsWhenQuotaIsRenderable`), so there are no
+    /// buckets on screen and nothing to name — `MenuBarImageBuilderTests`'
+    /// `(.usage, .location, full)` row pins that composition. Noted because
+    /// "the daemon names vanished on Usage" reads like a bug and is the
+    /// grouping doing exactly what the style asks.
+    static func buildLocationStatusImage(
+        sessions: [SessionState],
+        daemonLabels: [String: String],
+        maxGroups: Int = defaultMaxVisibleGroups
+    ) -> NSImage? {
+        guard let render = buildLocationStatusSVG(
+            sessions: sessions, daemonLabels: daemonLabels, maxGroups: maxGroups
+        ) else { return nil }
+        let image = image(from: (render.svg, render.width))
+        // The daemon names have nowhere to go in the icon itself — dot-groups
+        // carry no text — so they surface here, the seam `OffFlameImage`
+        // already uses for the flame states (`OffFlameImage.swift:71`).
+        image?.accessibilityDescription = render.accessibilityDescription
+        return image
+    }
+
+    /// What `buildLocationStatusImage` rasterises, plus the name the buckets
+    /// have no room to carry visually.
+    ///
+    /// One value rather than two entry points because the description must name
+    /// the buckets the icon ACTUALLY DREW: computing "what was drawn" a second
+    /// time is the divergence `assemble`'s doc comment records from #1849's
+    /// review, where two loops over the same layout disagreed by 6pt with the
+    /// whole suite green.
+    struct LocationRender: Equatable {
+        let svg: String
+        let width: CGFloat
+        let accessibilityDescription: String
+    }
+
+    static func buildLocationStatusSVG(
+        sessions: [SessionState],
+        daemonLabels: [String: String],
+        maxGroups: Int = defaultMaxVisibleGroups
+    ) -> LocationRender? {
+        let spend = budgeted(
+            orderedLocationGroups(from: sessions, daemonLabels: daemonLabels),
+            maxGroups: maxGroups
+        )
+        guard let (svg, width) = assemble(spend.renders) else { return nil }
+        return LocationRender(
+            svg: svg,
+            width: width,
+            accessibilityDescription: locationAccessibilityDescription(
+                drawn: spend.drawn, hidden: spend.hidden
+            )
+        )
+    }
+
+    /// Names the buckets the icon drew, in the order it drew them, and folds
+    /// the ones it could not fit into the same single `…` the dots use.
+    ///
+    /// Non-private so a test can state the wording once; the property that
+    /// matters — that it tracks what was DRAWN rather than what exists — is
+    /// asserted against a real render, since only `budgeted` knows the
+    /// difference.
+    ///
+    /// Two limits, stated rather than left to be rediscovered. **Two daemons
+    /// reporting the same label read identically here** (`… on Local, laptop,
+    /// laptop`); the bucket ORDER is still deterministic — `orderedLocationGroups`
+    /// breaks the tie on the daemon id — but the spoken names do not
+    /// disambiguate, and the relay only defaults a label to the id when one is
+    /// absent, so nothing stops two hosts choosing the same one. **A relay
+    /// daemon labelled `Local` collides with `localBucketLabel`** in the same
+    /// way. Both are cosmetic and neither can mis-draw the icon.
+    static func locationAccessibilityDescription(drawn: [String], hidden: Int) -> String {
+        var parts = drawn
+        if hidden > 0 {
+            parts.append(hidden == 1 ? "1 more" : "\(hidden) more")
+        }
+        return "Irrlicht — sessions on \(parts.joined(separator: ", "))"
+    }
+
+    /// One bucket per daemon: local first, then relay daemons by label.
+    ///
+    /// Labels come in as one map, `SessionManager.daemonLabels`, which spans
+    /// the connected and the faded daemons alike — so a disconnected daemon
+    /// whose rows are still on screen (fade, don't delete — #540) keeps in its
+    /// bucket the name those rows show, instead of reverting to a uuid. That
+    /// accessor replaced the `relayDaemons[id] ?? offlineDaemons[id] ?? id`
+    /// idiom `SessionRowView`'s cloud-glyph tooltip spelled inline; both read
+    /// it now, which is what keeps the two from disagreeing.
+    ///
+    /// Mutation-proved (source), and written from the mutation as RUN: keying
+    /// this on `session.projectName ?? session.cwd` instead — the per-project
+    /// rule, which is the mistake that makes `location` a second name for
+    /// `project` — takes **17 assertions across 10 test cases** red in three
+    /// suites. Counted, not estimated, by applying the edit and running
+    /// `swift test --skip LauncherTestHarness --skip LauncherHarnessTests`,
+    /// then `grep -cE '^/.*error: -\['` over its output for the assertions and
+    /// `grep -E '^Test Case .* failed' | sort -u | wc -l` for the cases. (An
+    /// earlier draft of this comment said twelve, which was a stale count from
+    /// before `testDotsImageRoutesEachGroupingToItsOwnRenderer` gained its
+    /// vacuity guard — review caught it.) The sharpest two are the
+    /// relay-ingest one:
+    /// `("4") is not equal to ("3") - one bucket per daemon plus one local, not
+    /// one per project`, and `("Irrlicht — sessions on alpha-one, alpha-two,
+    /// beta-one, local-one") is not equal to ("Irrlicht — sessions on Local,
+    /// alpha-box, beta-box")`.
+    ///
+    /// Sorted by the label the user reads, with the daemon id as a tie-break:
+    /// two daemons may report the same label (the relay defaults it to the id
+    /// only when absent, so nothing stops two hosts both calling themselves
+    /// `laptop`), and without the tie-break their order would come out of
+    /// `Dictionary`'s unspecified iteration order and could differ between two
+    /// renders of the same state.
+    private static func orderedLocationGroups(
+        from sessions: [SessionState],
+        daemonLabels: [String: String]
+    ) -> [(String, [SessionState])] {
+        var byDaemon: [String: [SessionState]] = [:]
+        var local: [SessionState] = []
+        for session in topLevelSessions(sessions) {
+            if let id = session.daemonID {
+                byDaemon[id, default: []].append(session)
+            } else {
+                local.append(session)
+            }
+        }
+
+        var groups: [(String, [SessionState])] = []
+        if !local.isEmpty {
+            groups.append((localBucketLabel, local))
+        }
+        let relay = byDaemon.map {
+            (label: daemonLabels[$0.key] ?? $0.key, id: $0.key, sessions: $0.value)
+        }
+        for daemon in relay.sorted(by: { ($0.label, $0.id) < ($1.label, $1.id) }) {
+            groups.append((daemon.label, daemon.sessions))
+        }
+        return groups
     }
 
     // MARK: - Combined grouping (issue #1845's compact style, #1955's one bucket)

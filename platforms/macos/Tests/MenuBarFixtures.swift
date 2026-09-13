@@ -26,13 +26,25 @@ enum MenuBarFixtures {
     /// are derived from.
     static let now = PinnedNowSnapshot.referenceNow
 
+    /// `daemonID` is the relay daemon that reported the session — `nil` for one
+    /// this Mac's own daemon reported, which is what
+    /// `MenuBarStatusRenderer`'s `location` bucketing keys on (#1955 phase 2).
+    /// Stamped after construction because `SessionState.daemonID` is not an
+    /// `init` parameter (`SessionState.swift:914` declares it as a defaulted
+    /// `var`), which is also how `SessionRowSnapshotTests` sets it.
+    ///
+    /// It is a UNIT-level fixture: `location` behaviour that depends on the
+    /// relay INGEST — the `daemonID` stamping and the label maps — is driven
+    /// through `RelayFixtures` and a real `SessionManager` instead, because a
+    /// hand-stamped id cannot catch the ingest changing where it puts one.
     static func session(
         id: String,
         state: SessionState.State = .working,
         project: String,
-        parentSessionId: String? = nil
+        parentSessionId: String? = nil,
+        daemonID: String? = nil
     ) -> SessionState {
-        SessionState(
+        var session = SessionState(
             id: "sess_\(id)",
             state: state,
             model: "claude-3.7-sonnet",
@@ -42,7 +54,40 @@ enum MenuBarFixtures {
             updatedAt: now,
             parentSessionId: parentSessionId
         )
+        session.daemonID = daemonID
+        return session
     }
+
+    /// Six sessions in six DISTINCT projects across three locations — two on
+    /// this Mac, two on `d-alpha`, two on `d-beta` — plus the labels the relay
+    /// would have announced for those two daemons (#1955 phase 2).
+    ///
+    /// Distinct projects throughout is what makes it discriminating: `project`
+    /// bucketing yields six buckets and `location` yields three, so a test
+    /// built on it can tell the two apart. Shared rather than copied per suite
+    /// for the reason at the top of this file — `MenuBarAppearanceTests` and
+    /// `MenuBarStatusRendererTests` both assert bucket COUNTS and bucket ORDER
+    /// against it, and two copies is how one of them would quietly start
+    /// asserting against a different world.
+    ///
+    /// Unit-level: it stamps `daemonID` directly. The ingest-level version —
+    /// where the ids and the labels come from real relay frames — is
+    /// `MenuBarAppearanceTests.managerWithTwoDaemonsAndOneLocalSession`, and a
+    /// hand-stamped id cannot catch the ingest moving where it puts one.
+    static func acrossThreeLocations() -> [SessionState] {
+        [
+            session(id: "l1", project: "local-one"),
+            session(id: "l2", project: "local-two"),
+            session(id: "a1", project: "alpha-one", daemonID: "d-alpha"),
+            session(id: "a2", project: "alpha-two", daemonID: "d-alpha"),
+            session(id: "b1", project: "beta-one", daemonID: "d-beta"),
+            session(id: "b2", project: "beta-two", daemonID: "d-beta"),
+        ]
+    }
+
+    /// The labels a relay `snapshot` announces for `acrossThreeLocations`' two
+    /// daemons.
+    static let threeLocationLabels = ["d-alpha": "alpha-box", "d-beta": "beta-box"]
 
     /// `count` sessions spread one-per-project, which is the layout that makes
     /// the per-project renderer widest for a given session count.
