@@ -22,11 +22,10 @@
 // data), so it is not a reliable source for anything — see agent.go's
 // Source doc.
 //
-// This is stage 1 of the adapter (issue #1960): identity, discovery, and
-// process binding only. Parsing session.jsonl's own event vocabulary (turn
-// boundaries, tool calls, permission prompts, errors, token accounting) is
-// stage 2's scope — this package's Parser is a placeholder that skips every
-// line (see agent.go).
+// Stage 1 of the adapter (issue #1960) covered identity, discovery, and
+// process binding — this file, pid.go, agent.go, icons.go. Stage 2 added the
+// real session.jsonl event parser — turn boundaries, tool calls, permission
+// prompts, errors, and token accounting — see parser.go's package doc.
 package muse
 
 import (

@@ -1,0 +1,746 @@
+package muse
+
+import (
+	"encoding/json"
+	"strings"
+	"time"
+
+	"irrlicht/core/domain/session"
+	"irrlicht/core/pkg/tailer"
+)
+
+// Stage 2 of the adapter (issue #1960): the real session.jsonl parser.
+// Records are payload_type-discriminated envelopes; the interesting ones
+// wrap a "runtime.session" envelope whose own payload.kind ("run", "task",
+// "approval") further discriminates, and payload.event.kind discriminates a
+// third level for "run" and "approval". All shapes below are quoted from
+// live captures under ~/.local/share/muse/sessions/ on this machine
+// (muse-format-spec.md), cross-checked directly against the raw JSONL a
+// second time while writing this file — every payload_type/event.kind named
+// here was read off a real record, not inferred from the spec doc alone.
+//
+// # The retained_frame structural trap
+//
+// Most lines are one flat record. Some lines are instead an OUTER FRAME that
+// batches several inner records, each independently JSON-encoded a second
+// time as a "record_json" string:
+//
+//	{"retained_frame":"session_permission_transaction","frame_schema_version":1,
+//	 "outer_log_ordinal":1,"transaction_id":"...",
+//	 "children":[{"child_index":0,"record_json":"{...}"},{"child_index":1,"record_json":"{...}"}]}
+//
+// agent.LineParser is a ONE-EVENT-PER-LINE contract
+// (core/domain/agent/file_parser.go) and the tailer applies exactly one
+// ParsedEvent per parseTranscriptLine call (core/pkg/tailer/tailer.go), so a
+// multi-record line has to fold into a single verdict. ParseLine does this by
+// decoding each child and routing it through decodeAndRoute — the SAME
+// dispatcher an ordinary top-level line uses — then merging the per-child
+// results with mergeChildEvents. This means a retained_frame's children are
+// never silently dropped: whatever decodeAndRoute would do with a child's
+// record as a top-level line is exactly what happens to it here too.
+//
+// Verified against every retained_frame in a local 16-session corpus (43
+// occurrences, including nested subagent copies, via a recursive scan of
+// every session.jsonl under ~/.local/share/muse/sessions): the frame is
+// ALWAYS named "session_permission_transaction", ALWAYS carries exactly 2
+// children in the same order — runtime.session.permission_format_declared
+// then runtime.session.permission_profile_committed — and ALWAYS sits at
+// outer_log_ordinal 1 (the very first line of the stream). Both inner
+// payload types are permission-PROFILE bookkeeping (which filesystem/network
+// rules and approval mode apply to the session), carry no run/task/approval
+// content, and are unhandled by route() below (its default arm), so in
+// every observed case the merged result is Skip=true with zero deltas. The
+// code does not special-case that outcome, though — a future muse release
+// that ever nests something else inside a retained_frame (or uses a
+// different frame name this corpus never produced) still gets parsed.
+//
+// # Tool-call tracking: assistant_tool_calls_committed / tool_result_batch_committed
+//
+// The task/tool_batch.effect.* families (kind:"task" proposed/accepted/
+// started/side_effect_intent/status/output/completed/..., plus the top-level
+// tool_batch.effect.started/terminal payload_types) describe the SAME tool
+// calls as a lower-level "effect execution" view, correlated by the identical
+// call_id. Direct inspection of real captures found a materially SIMPLER,
+// equally authoritative pairing living directly under kind:"run":
+// assistant_tool_calls_committed (event.tool_calls[].call_id/name — opens)
+// and tool_result_batch_committed (event.results[].tool_call_id — closes).
+// This parser uses ONLY that pair for ToolUses/ToolResultIDs. Also wiring
+// task/tool_batch.effect.* would track the identical call_id twice from two
+// parallel views of one lifecycle — harmless in itself (the tailer's
+// openToolCalls is an idempotent id-keyed map) but pure duplication with no
+// additional signal, since tool_batch.effect.terminal's outcome.kind never
+// showed a genuine "failed" example in this corpus (489 "completed", 1
+// "cancelled" — see IsError below) and side_effect_intent's policy_decision
+// is not needed either: kind:"approval" already reports blocking directly.
+//
+// # Waiting: kind:"approval" only, not approval_wait.effect.*
+//
+// approval_wait.effect.started/terminal pair 1:1 with kind:"approval"
+// "requested"/"decision_applied" on the identical pending_action_id in every
+// example found (format-spec §5) — a second, lower-level view of the same
+// open/close, the same relationship as the tool-call pair above. Only the
+// "runtime.session"/"approval" family is used here, since "requested" alone
+// (unlike approval_wait.effect.started) also carries tool_name for context.
+//
+// A REAL, MEASURED LIMITATION of this whole waiting-detection path is worth
+// stating plainly here rather than only in the final report: every single
+// kind:"approval" record found in this corpus (all 11 occurrences, spanning
+// every top-level directory that carries one) lived in a file with ZERO
+// run/task content — i.e. exactly the "top-level approval-only shadow"
+// stage 1's adapter.go documents and sessionIDFromPath's
+// isShadowedBySubagentCopy deliberately suppresses whenever the shadowed
+// id's nested <parent>/subagent/<id>/session.jsonl copy exists, which it did
+// for all 11. So the approval mapping below is correctly implemented against
+// the real record shape, but in every sample available for this stage it
+// never actually reaches the daemon's watcher — see this package's stage-2
+// return notes for #1960 for the follow-up this raises.
+//
+// # Token accounting: model_completed only, not goal_usage_attribution
+//
+// kind:"run" carries token usage twice per LLM call: event.kind
+// "model_completed" (usage + the calling model) and "goal_usage_attribution"
+// (the SAME usage re-emitted with ownership/attribution metadata, e.g. main
+// vs. subagent). Direct comparison of paired real records (same run_id,
+// adjacent sequence numbers) confirmed the usage numbers are byte-identical
+// between the two events every time checked. goal_usage_attribution also
+// never carries a model id, so it can't stand alone as a pricing source
+// either way. This parser accumulates ONLY model_completed and marks
+// goal_usage_attribution Skip=true with no Contribution, so the two are never
+// both counted.
+type Parser struct {
+	// lastErrorClass is the error_class from the most recent
+	// run_fatal_error_classified event not yet consumed by a
+	// terminal:"failed" event in the SAME run. Verified live: a captured
+	// run_fatal_error_classified{"error_class":"config_error"} sits exactly
+	// one line before that run's own terminal{"terminal":"failed",
+	// "reason":"invalid run configuration: provider does not support base
+	// instructions"} in four separate subagent transcripts. Not every
+	// failure has one, though — the corpus's other real failure (terminal
+	// reason "model stream idle timeout after 30000ms") is preceded by
+	// task{"kind":"timed_out"}, no run_fatal_error_classified at all — so
+	// parseRunTerminal falls back to a generic class when this is empty.
+	// Reset on "started" too, so a stale class from an earlier run in the
+	// same multi-turn session file can never attach to a later run's
+	// failure.
+	lastErrorClass string
+}
+
+// payload_type values this parser reads directly (top-level line field, or
+// an inner record's own field once unwrapped from a retained_frame).
+const (
+	payloadTypeSession                   = "runtime.session"
+	payloadTypeMetadata                  = "runtime.session.metadata"
+	payloadTypeRouteFacts                = "runtime.session.route_facts"
+	payloadTypeRunModelConfigured        = "run.model.configured"
+	payloadTypeModelReconfigureCompleted = "runtime.model_reconfigure.completed"
+	payloadTypeSessionEnd                = "session.end"
+	payloadTypeCommandInvoked            = "command.invoked"
+)
+
+// payload.kind values carried under the "runtime.session" envelope.
+const (
+	sessionKindRun      = "run"
+	sessionKindApproval = "approval"
+)
+
+// payload.event.kind values under sessionKindRun.
+const (
+	runEventStarted              = "started"
+	runEventTerminal             = "terminal"
+	runEventModelCompleted       = "model_completed"
+	runEventGoalUsageAttribution = "goal_usage_attribution"
+	runEventAssistantMessage     = "assistant_message_committed"
+	runEventAssistantToolCalls   = "assistant_tool_calls_committed"
+	runEventToolResultBatch      = "tool_result_batch_committed"
+	runEventFatalErrorClassified = "run_fatal_error_classified"
+)
+
+// payload.event.terminal values (only meaningful on runEventTerminal).
+const (
+	terminalCompleted = "completed"
+	terminalFailed    = "failed"
+	terminalCancelled = "cancelled"
+)
+
+// payload.event.kind values under sessionKindApproval.
+const (
+	approvalRequested       = "requested"
+	approvalDecisionApplied = "decision_applied"
+)
+
+// ParseLine implements agent.LineParser.
+func (p *Parser) ParseLine(raw map[string]any) *tailer.ParsedEvent {
+	if _, ok := raw["retained_frame"]; ok {
+		return p.parseRetainedFrame(raw)
+	}
+	return p.decodeAndRoute(raw)
+}
+
+// decodeAndRoute is the single per-record dispatcher shared by ParseLine (for
+// an ordinary top-level line) and parseRetainedFrame (for each of a frame's
+// children), so a record nested inside a retained_frame is interpreted
+// identically to the same record appearing on its own line.
+func (p *Parser) decodeAndRoute(raw map[string]any) *tailer.ParsedEvent {
+	payloadType, _ := raw["payload_type"].(string)
+	if payloadType == "" {
+		return &tailer.ParsedEvent{Skip: true}
+	}
+	ev := &tailer.ParsedEvent{Timestamp: parseRecordedAt(raw)}
+	payload, _ := raw["payload"].(map[string]any)
+	p.route(payloadType, payload, ev)
+	return ev
+}
+
+// route dispatches on the record's top-level payload_type.
+func (p *Parser) route(payloadType string, payload map[string]any, ev *tailer.ParsedEvent) {
+	switch payloadType {
+	case payloadTypeSession:
+		p.parseSessionEnvelope(payload, ev)
+	case payloadTypeMetadata:
+		parseMetadata(payload, ev)
+	case payloadTypeRouteFacts:
+		parseRouteFacts(payload, ev)
+	case payloadTypeRunModelConfigured:
+		parseRunModelConfigured(payload, ev)
+	case payloadTypeModelReconfigureCompleted:
+		parseModelReconfigure(payload, ev)
+	case payloadTypeSessionEnd:
+		// session.end (format-spec §8): a clean /exit or a captured
+		// exit_reason, never written at all on SIGKILL. No transcript-state
+		// signal is derived from it — process liveness (DiscoverPID finding
+		// no running process) is what the daemon already uses to notice a
+		// session ended, and treating this as "activity" would be wrong for
+		// a session that has genuinely finished.
+		ev.Skip = true
+	case payloadTypeCommandInvoked:
+		// A slash command (/model, /usage, /exit — format-spec §10). /usage
+		// leaves no other durable record at all (verified: 8 consecutive
+		// invocations in one real session produced no other payload_type).
+		// Bookkeeping, not a turn boundary.
+		ev.Skip = true
+	default:
+		// subagent.control.*, tool_batch.effect.*, approval_wait.effect.*,
+		// runtime.session.task, runtime.retained_fact,
+		// runtime.command_intake.*, session.login.completed,
+		// session.opened.observed, session.startup_phases.observed,
+		// session.workspace_branch.observed, runtime.user_intent.*,
+		// session.name.changed, async.owner.attempt_admitted,
+		// reminder.cleanup_effect.*, and any payload_type a future muse
+		// release adds. See the package doc for why tool_batch.effect.* and
+		// approval_wait.effect.* are deliberately not used even though they
+		// exist.
+		ev.Skip = true
+	}
+}
+
+// parseSessionEnvelope dispatches on payload.kind for the "runtime.session"
+// envelope.
+func (p *Parser) parseSessionEnvelope(payload map[string]any, ev *tailer.ParsedEvent) {
+	switch str(payload, "kind") {
+	case sessionKindRun:
+		p.parseRunEvent(payload, ev)
+	case sessionKindApproval:
+		p.parseApprovalEvent(payload, ev)
+	default:
+		// kind:"task" (proposed/accepted/scheduled/started/side_effect_intent/
+		// status/output/completed/rejected/cancelled/timed_out/tool_delta/
+		// tool_output_ref) — see the package doc for why this parser reads
+		// tool calls off assistant_tool_calls_committed/
+		// tool_result_batch_committed instead. Also covers kind
+		// "agent_tree_initialized", any future kind.
+		ev.Skip = true
+	}
+}
+
+// parseRunEvent dispatches on payload.event.kind for kind:"run".
+func (p *Parser) parseRunEvent(payload map[string]any, ev *tailer.ParsedEvent) {
+	event, _ := payload["event"].(map[string]any)
+	switch str(event, "kind") {
+	case runEventStarted:
+		p.parseRunStarted(event, ev)
+	case runEventTerminal:
+		p.parseRunTerminal(event, ev)
+	case runEventModelCompleted:
+		parseModelCompleted(event, ev)
+	case runEventGoalUsageAttribution:
+		// Duplicate of model_completed's usage — see the package doc.
+		ev.Skip = true
+	case runEventAssistantMessage:
+		parseAssistantMessageCommitted(event, ev)
+	case runEventAssistantToolCalls:
+		parseAssistantToolCallsCommitted(event, ev)
+	case runEventToolResultBatch:
+		parseToolResultBatchCommitted(event, ev)
+	case runEventFatalErrorClassified:
+		p.parseRunFatalErrorClassified(event, ev)
+	default:
+		// context_block_diagnostic, provider_request_options_configured,
+		// model_input_trace_recorded, model_response_created,
+		// reasoning_committed, reasoning_summary_delta,
+		// reasoning_summary_committed, model_request_configured,
+		// memory_reminder_child_session_linked, resource_usage_sampled,
+		// reminder_proposal, reminder_reconciler_outcome,
+		// reminder_installed, task_stream_linked, todo_snapshot_updated,
+		// inbox_item_queued/drained, inbox_delivery_anomaly,
+		// skill_read_observed, skill_reminder_decision — high-volume
+		// internal bookkeeping this stage has no use for. Format-spec §11
+		// confirms context_block_diagnostic in particular is prompt-assembly
+		// bookkeeping (which context blocks loaded), never a real
+		// compaction/eviction event in this corpus.
+		ev.Skip = true
+	}
+}
+
+// parseRunStarted opens a turn: the literal user prompt that launched this
+// run (format-spec §3).
+func (p *Parser) parseRunStarted(event map[string]any, ev *tailer.ParsedEvent) {
+	p.lastErrorClass = ""
+	ev.EventType = "user_message"
+	ev.ClearToolNames = true
+	if prompt := str(event, "prompt"); prompt != "" {
+		ev.UserText = strings.TrimSpace(prompt)
+	}
+}
+
+// parseRunTerminal closes a turn. terminal discriminates the outcome
+// (format-spec §3, 37 samples across the corpus: 31 completed, 5 cancelled,
+// 1 failed). EventType is "turn_done" for all three: every one of them is
+// the run's own terminal record, so the turn objectively ended in every
+// case — the classifier's session_error rule (fed by SessionError below) is
+// what routes a failed run to `error` rather than `ready`, not a different
+// EventType.
+func (p *Parser) parseRunTerminal(event map[string]any, ev *tailer.ParsedEvent) {
+	ev.EventType = "turn_done"
+	switch str(event, "terminal") {
+	case terminalFailed:
+		class := p.lastErrorClass
+		if class == "" {
+			class = "terminal_failed"
+		}
+		ev.SessionError = &tailer.SessionError{
+			// PHASE UNKNOWN, deliberately (the junie/copilot precedent):
+			// muse's terminal record never says whether another attempt is
+			// coming — no attempt/max_attempts counters, no retry field —
+			// and unlike copilot's session.error this one IS itself the
+			// turn boundary, so ErrorPhaseRetrying's "clears on the next
+			// turn_done" exit would have nothing left to guard: the next
+			// run always opens with its own "started" (→ user_message,
+			// ClearToolNames=true), which clears any phase unconditionally
+			// via ParsedEvent.StartsNewUserTurn before a bare turn_done
+			// check is ever reached (core/pkg/tailer/tailer_metrics.go
+			// clearSessionErrorOnRecovery). UNVERIFIED whether muse ever
+			// auto-retries a failed run without a fresh "started" in
+			// between — no such example exists in the available corpus.
+			Phase:   tailer.ErrorPhaseUnknown,
+			Class:   class,
+			Message: strings.TrimSpace(str(event, "reason")),
+		}
+	case terminalCancelled:
+		// UNVERIFIED whether this represents a genuine user ESC keypress.
+		// Every terminal:"cancelled" example in the corpus (format-spec §3)
+		// came from a subagent's own run stream with internal-sounding
+		// reasons ("cancelled during model step", "...end-of-turn reminder
+		// wait", "...tool result reconciliation") that read like
+		// programmatic cancellation (e.g. a parent cancelling a child task)
+		// rather than an explicit interrupt tag — no live ESC keypress was
+		// driven to check. So IsUserInterrupt is deliberately left false
+		// here: the turn still correctly ends (EventType=turn_done above),
+		// it just isn't asserted to be a HUMAN cancellation this parser
+		// never confirmed.
+	case terminalCompleted:
+		p.lastErrorClass = ""
+	}
+}
+
+// parseModelCompleted is the token-accounting source for one LLM call
+// (format-spec §6). Skip=true: pure bookkeeping the tailer folds through
+// applySkippedEvent/applyMetadata regardless (#1798's routing, the same
+// pattern junie/copilot's own metrics events use).
+func parseModelCompleted(event map[string]any, ev *tailer.ParsedEvent) {
+	ev.Skip = true
+	usage, _ := event["usage"].(map[string]any)
+	if usage == nil {
+		return
+	}
+	// input_tokens is INCLUSIVE of the cached portion, the same OpenAI-
+	// Responses-API convention codex's parser documents and corrects for
+	// (core/adapters/inbound/agents/codex/parser.go's
+	// applyCodexCachedTokens). Verified directly against this corpus: across
+	// 476 real model_completed records with nonzero usage, input_tokens was
+	// never once smaller than cache_read_tokens/cached_tokens, and the gap
+	// tracked the small amount of genuinely fresh context each turn adds on
+	// top of an already-cached, growing prompt — the signature of an
+	// inclusive total, not two independent counters. cached_tokens and
+	// cache_read_tokens were byte-identical in every one of those 476
+	// records; cache_read_tokens is preferred since it is the field name
+	// muse itself uses whenever both are present, with cached_tokens as a
+	// fallback for the shape (seen live under --provider echo) that omits
+	// cache_read_tokens/cache_write_tokens entirely.
+	cacheRead := i64(usage, "cache_read_tokens")
+	if cacheRead == 0 {
+		cacheRead = i64(usage, "cached_tokens")
+	}
+	bd := tailer.UsageBreakdown{
+		Input:  nonNegative(i64(usage, "input_tokens") - cacheRead),
+		Output: i64(usage, "output_tokens"),
+		// Muse doesn't distinguish cache-write TTLs (no field resembling a
+		// 5m/1h split anywhere in this corpus); 5m is the default tier the
+		// price map falls back through for a provider that doesn't
+		// distinguish them, the same reasoning copilot's cacheWriteTokens
+		// comment gives for the identical gap.
+		CacheCreation5m: i64(usage, "cache_write_tokens"),
+		CacheRead:       cacheRead,
+	}
+	model := str(event, "model")
+	if model == "" && bd == (tailer.UsageBreakdown{}) {
+		return
+	}
+	if model != "" {
+		ev.ModelName = tailer.NormalizeModelName(model)
+	}
+	ev.Contribution = &tailer.PerTurnContribution{Model: tailer.NormalizeModelName(model), Usage: bd}
+	if bd.Input > 0 || bd.Output > 0 {
+		ev.Tokens = &tailer.TokenSnapshot{
+			Input:         bd.Input,
+			Output:        bd.Output,
+			CacheRead:     bd.CacheRead,
+			CacheCreation: bd.CacheCreation5m,
+		}
+	}
+}
+
+// parseAssistantMessageCommitted surfaces the assistant's reply text for
+// waiting-state display and the prose waiting-cue scan. Non-settling — the
+// run's own "terminal" event is the turn boundary (format-spec §3) — so a
+// reply followed by more tool calls correctly leaves the session working.
+func parseAssistantMessageCommitted(event map[string]any, ev *tailer.ParsedEvent) {
+	ev.EventType = "assistant_message"
+	text := str(event, "text")
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	ev.AssistantText = tailer.TruncateAssistantText(text)
+	// Scan the FULL text, not the truncated display tail — a question
+	// sitting before the trailing 200 runes would otherwise settle the turn
+	// (issue #1150), the same computation every other adapter performs.
+	ev.PendingWaitingCue = session.ProseIndicatesWaiting(tailer.WaitingScanWindow(text))
+}
+
+// parseAssistantToolCallsCommitted opens one or more tool calls (format-spec
+// §4's real capture: event.tool_calls[] carries call_id + name + args
+// directly — see the package doc for why this, not task/tool_batch.effect.*,
+// is the tracking source).
+func parseAssistantToolCallsCommitted(event map[string]any, ev *tailer.ParsedEvent) {
+	calls, _ := event["tool_calls"].([]any)
+	ev.EventType = "function_call"
+	for _, c := range calls {
+		call, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		id := str(call, "call_id")
+		name := str(call, "name")
+		if id == "" || name == "" {
+			continue
+		}
+		ev.ToolUses = append(ev.ToolUses, tailer.ToolUse{ID: id, Name: name})
+	}
+	if len(ev.ToolUses) == 0 {
+		ev.Skip = true
+	}
+}
+
+// parseToolResultBatchCommitted closes one or more tool calls, pairing on
+// tool_call_id (format-spec §4).
+func parseToolResultBatchCommitted(event map[string]any, ev *tailer.ParsedEvent) {
+	results, _ := event["results"].([]any)
+	ev.EventType = "function_call_output"
+	for _, r := range results {
+		result, ok := r.(map[string]any)
+		if !ok {
+			continue
+		}
+		id := str(result, "tool_call_id")
+		if id == "" {
+			continue
+		}
+		ev.ToolResultIDs = append(ev.ToolResultIDs, id)
+		if resultTextReportsNonZeroExit(str(result, "text")) {
+			ev.IsError = true
+		}
+	}
+	if len(ev.ToolResultIDs) == 0 {
+		ev.Skip = true
+	}
+}
+
+// resultTextReportsNonZeroExit best-effort-sniffs a tool result's text for an
+// embedded exit_code field. Verified live: a real bash tool_result_batch
+// entry's text is literally the same JSON chunk the underlying task's own
+// "output" event carries — {"chunk_id":...,"command":...,"exit_code":0,
+// "terminal_status":"completed","output":...} — confirmed by direct
+// byte-for-byte comparison of the two in a captured session. No sample
+// anywhere in the available corpus ever captured a NONZERO exit_code (every
+// observed command succeeded, and the one non-"completed" tool_batch.effect
+// outcome in the corpus was "cancelled", not a failure) — so whether a real
+// command failure reaches muse's tool result text in exactly this shape, and
+// whether every non-bash tool reports failure the same way at all, is
+// UNVERIFIED. Returns false for any text that doesn't parse as this exact
+// shape, which is the safe default: an unrecognized shape must never be read
+// as a failure.
+func resultTextReportsNonZeroExit(text string) bool {
+	if !strings.Contains(text, `"exit_code"`) {
+		return false
+	}
+	var chunk struct {
+		ExitCode *int `json:"exit_code"`
+	}
+	if err := json.Unmarshal([]byte(text), &chunk); err != nil {
+		return false
+	}
+	return chunk.ExitCode != nil && *chunk.ExitCode != 0
+}
+
+// parseRunFatalErrorClassified remembers the error_class a subsequent
+// terminal:"failed" event should carry (see lastErrorClass). Skip=true:
+// bookkeeping, not itself a turn boundary or activity signal beyond what the
+// terminal event that follows already provides.
+func (p *Parser) parseRunFatalErrorClassified(event map[string]any, ev *tailer.ParsedEvent) {
+	ev.Skip = true
+	p.lastErrorClass = str(event, "error_class")
+}
+
+// parseApprovalEvent dispatches on payload.event.kind for kind:"approval"
+// (format-spec §5).
+func (p *Parser) parseApprovalEvent(payload map[string]any, ev *tailer.ParsedEvent) {
+	event, _ := payload["event"].(map[string]any)
+	switch str(event, "kind") {
+	case approvalRequested:
+		parseApprovalRequested(event, ev)
+	case approvalDecisionApplied:
+		parseApprovalDecisionApplied(event, ev)
+	default:
+		// automated_review_started/automated_review_completed (the
+		// :auto-review LLM-judge's own review lifecycle) and
+		// stage_requirement_resolved (a per-requirement resolution notice
+		// distinct from the pending_action_id "requested" opened above,
+		// format-spec §5) — bookkeeping about HOW a decision is being
+		// reached, not a change in whether the agent is blocked on the
+		// user. "requested" and "decision_applied" alone open/close the
+		// wait.
+		ev.Skip = true
+	}
+}
+
+// parseApprovalRequested opens a permission prompt: the agent is blocked
+// awaiting an approval decision on one tool call, keyed by pending_action_id
+// (format-spec §5).
+func parseApprovalRequested(event map[string]any, ev *tailer.ParsedEvent) {
+	id := str(event, "pending_action_id")
+	if id == "" {
+		ev.Skip = true
+		return
+	}
+	ev.EventType = "permission_requested"
+	ev.PermissionRequestIDs = []string{id}
+}
+
+// parseApprovalDecisionApplied closes the prompt its pending_action_id
+// names, whatever the decision — an approval and a denial both mean the
+// agent is no longer blocked on this particular prompt.
+func parseApprovalDecisionApplied(event map[string]any, ev *tailer.ParsedEvent) {
+	id := str(event, "pending_action_id")
+	if id == "" {
+		ev.Skip = true
+		return
+	}
+	ev.EventType = "permission_completed"
+	ev.PermissionResolvedIDs = []string{id}
+}
+
+// parseMetadata reads the session-wide build version (format-spec §7).
+// Skip=true: session metadata is not activity.
+func parseMetadata(payload map[string]any, ev *tailer.ParsedEvent) {
+	ev.Skip = true
+	record, _ := payload["record"].(map[string]any)
+	build, _ := record["build"].(map[string]any)
+	if semver := str(build, "semver"); semver != "" {
+		ev.AgentVersion = semver
+	}
+}
+
+// parseRouteFacts reads the session's working directory (format-spec §2),
+// the only place a Muse transcript names it. Skip=true: bookkeeping, but
+// wanted as early as possible so PID binding and dashboard project grouping
+// don't wait for the first turn — the same reasoning copilot's
+// parseSessionStart gives for its own cwd stamp.
+func parseRouteFacts(payload map[string]any, ev *tailer.ParsedEvent) {
+	ev.Skip = true
+	record, _ := payload["record"].(map[string]any)
+	if cwd := str(record, "cwd"); cwd != "" {
+		ev.CWD = cwd
+	}
+}
+
+// parseRunModelConfigured reads the model a specific run is using
+// (format-spec §7) — fires per run, before that run's first model_completed,
+// so it lights up the model display as early as possible each turn.
+// Skip=true: bookkeeping.
+func parseRunModelConfigured(payload map[string]any, ev *tailer.ParsedEvent) {
+	ev.Skip = true
+	record, _ := payload["record"].(map[string]any)
+	if model := str(record, "model_id"); model != "" {
+		ev.ModelName = tailer.NormalizeModelName(model)
+	}
+}
+
+// parseModelReconfigure reads the session's effective model after a startup
+// resolution or a mid-session /model switch (format-spec §7). Skip=true:
+// bookkeeping.
+func parseModelReconfigure(payload map[string]any, ev *tailer.ParsedEvent) {
+	ev.Skip = true
+	record, _ := payload["record"].(map[string]any)
+	effective, _ := record["effective"].(map[string]any)
+	if model := str(effective, "model_id"); model != "" {
+		ev.ModelName = tailer.NormalizeModelName(model)
+	}
+}
+
+// parseRetainedFrame unwraps a retained_frame outer envelope — see the
+// package doc for the full structural explanation and the corpus evidence
+// behind it.
+func (p *Parser) parseRetainedFrame(raw map[string]any) *tailer.ParsedEvent {
+	children, _ := raw["children"].([]any)
+	if len(children) == 0 {
+		return &tailer.ParsedEvent{Skip: true}
+	}
+	events := make([]*tailer.ParsedEvent, 0, len(children))
+	for _, c := range children {
+		child, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		recordJSON, _ := child["record_json"].(string)
+		if recordJSON == "" {
+			continue
+		}
+		var inner map[string]any
+		if err := json.Unmarshal([]byte(recordJSON), &inner); err != nil {
+			continue
+		}
+		events = append(events, p.decodeAndRoute(inner))
+	}
+	return mergeChildEvents(events)
+}
+
+// mergeChildEvents folds N per-child ParsedEvents into the single event one
+// transcript line must produce. Id-keyed deltas (ToolUses, ToolResultIDs,
+// PermissionRequestIDs, PermissionResolvedIDs) are concatenated in child
+// order — safe because the tailer applies each through an idempotent,
+// id-keyed map (applyToolCallDeltas, applyPermissionDeltas in
+// core/pkg/tailer/tailer.go), so duplicate or out-of-order opens/closes
+// within one merged event are harmless. Single-value fields (EventType,
+// ModelName, CWD, AgentVersion, AssistantText, UserText, SessionError,
+// Contribution, Tokens) take the LAST non-empty child's value — the same
+// "latest wins" convention every adapter in this repo already uses for a
+// skipped-event metadata stamp. Boolean flags (IsError, ClearToolNames,
+// IsUserInterrupt, PendingWaitingCue) OR across children. The merged event
+// is Skip=true only when every child was Skip=true.
+func mergeChildEvents(events []*tailer.ParsedEvent) *tailer.ParsedEvent {
+	merged := &tailer.ParsedEvent{Skip: true}
+	for _, ev := range events {
+		if ev == nil {
+			continue
+		}
+		if !ev.Timestamp.IsZero() {
+			merged.Timestamp = ev.Timestamp
+		}
+		if !ev.Skip {
+			merged.Skip = false
+		}
+		if ev.EventType != "" {
+			merged.EventType = ev.EventType
+		}
+		merged.ToolUses = append(merged.ToolUses, ev.ToolUses...)
+		merged.ToolResultIDs = append(merged.ToolResultIDs, ev.ToolResultIDs...)
+		merged.PermissionRequestIDs = append(merged.PermissionRequestIDs, ev.PermissionRequestIDs...)
+		merged.PermissionResolvedIDs = append(merged.PermissionResolvedIDs, ev.PermissionResolvedIDs...)
+		if ev.IsError {
+			merged.IsError = true
+		}
+		if ev.ClearToolNames {
+			merged.ClearToolNames = true
+		}
+		if ev.IsUserInterrupt {
+			merged.IsUserInterrupt = true
+		}
+		if ev.PendingWaitingCue {
+			merged.PendingWaitingCue = true
+		}
+		if ev.ModelName != "" {
+			merged.ModelName = ev.ModelName
+		}
+		if ev.AgentVersion != "" {
+			merged.AgentVersion = ev.AgentVersion
+		}
+		if ev.CWD != "" {
+			merged.CWD = ev.CWD
+		}
+		if ev.AssistantText != "" {
+			merged.AssistantText = ev.AssistantText
+		}
+		if ev.UserText != "" {
+			merged.UserText = ev.UserText
+		}
+		if ev.SessionError != nil {
+			merged.SessionError = ev.SessionError
+		}
+		if ev.Contribution != nil {
+			merged.Contribution = ev.Contribution
+		}
+		if ev.Tokens != nil {
+			merged.Tokens = ev.Tokens
+		}
+	}
+	return merged
+}
+
+// parseRecordedAt reads a record's "recorded_at" stamp — Unix MICROSECONDS
+// (verified: a captured value of 1789327863265453 divided by 1e6 lands on
+// 2026-09-13, the day these sessions were recorded), falling back to the
+// shared ParseTimestamp heuristics for a record without one.
+func parseRecordedAt(raw map[string]any) time.Time {
+	if v, ok := raw["recorded_at"].(float64); ok && v > 0 {
+		return time.UnixMicro(int64(v))
+	}
+	return tailer.ParseTimestamp(raw)
+}
+
+// str reads a string field from a decoded JSON object, returning "" when the
+// map is nil, the key is absent, or the value is not a string.
+func str(m map[string]any, key string) string {
+	if m == nil {
+		return ""
+	}
+	s, _ := m[key].(string)
+	return s
+}
+
+// i64 reads a numeric field from a decoded JSON object as int64
+// (encoding/json decodes all JSON numbers to float64), returning 0 when
+// absent, nil-map, or non-numeric.
+func i64(m map[string]any, key string) int64 {
+	if m == nil {
+		return 0
+	}
+	v, _ := m[key].(float64)
+	return int64(v)
+}
+
+// nonNegative clamps a computed delta to zero.
+func nonNegative(v int64) int64 {
+	if v < 0 {
+		return 0
+	}
+	return v
+}

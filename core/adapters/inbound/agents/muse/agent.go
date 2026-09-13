@@ -3,7 +3,6 @@ package muse
 import (
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/permission"
-	"irrlicht/core/pkg/tailer"
 )
 
 // PermissionKeyTranscripts gates all Muse monitoring.
@@ -53,8 +52,7 @@ func Source() agent.Source {
 // mechanism is proven absent. So for now the adapter is observe-only, the
 // junie/aider shape: a single transcripts permission and no hooks. If a
 // native hook mechanism does turn out to exist, it belongs in a later
-// stage as a separate modify-kind permission — see this adapter's own
-// package-level TODOs and the stage-1 return notes for #1960.
+// stage as a separate modify-kind permission.
 func Agent() agent.Agent {
 	return agent.Agent{
 		Identity: agent.Identity{
@@ -90,20 +88,4 @@ func Agent() agent.Agent {
 			},
 		},
 	}
-}
-
-// Parser is a placeholder agent.LineParser: every transcript line is
-// skipped unconditionally.
-//
-// TODO(stage 2, #1960): replace with a real Muse event parser — turn
-// boundaries (kind:"run"/"started"/"terminal"), tool calls
-// (kind:"task"/tool_batch.effect.*), permission prompts
-// (kind:"approval"/approval_wait.effect.*), errors, and token accounting —
-// per format-spec §§3-8, 10-11. This stage (identity, discovery, process
-// binding) never constructs a real one.
-type Parser struct{}
-
-// ParseLine implements agent.LineParser.
-func (p *Parser) ParseLine(raw map[string]any) *tailer.ParsedEvent {
-	return &tailer.ParsedEvent{Skip: true}
 }
