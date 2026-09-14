@@ -639,6 +639,29 @@ done
 # the Go adapter defines muse's session_id — record revisits this with the
 # parser. drive_exit maps EXIT_REASON → the process exit code.
 emit_session_contract "${SES_UUID[1]}"
+
+# MULTI-SESSION FIX (#1960, this is "record revisits this" from the comment
+# above): emit_session_contract's shared session.uuids line is
+# `daemon_sid("${SES_TRANSCRIPT[$i]}")` — basename of the transcript path
+# minus ".jsonl" — which disambiguates codex/pi (a unique filename per
+# session) but NOT muse, whose transcript is always literally named
+# "session.jsonl" for every slot: EVERY line collapsed to the same useless
+# literal string "session", live-confirmed against a real 3-slot session-end
+# recording (session.uuids held three identical "session" lines). run-cell.sh
+# forwards those lines verbatim as IRRLICHT_EXTRA_SESSION_IDS, so curate
+# searched for a session_id literally equal to "session", found nothing, and
+# silently dropped slots 2 and 3 from events.jsonl entirely — the SAME
+# curation-drop shape the assess/record skill's own anti-pattern list already
+# names for a different adapter (1-5_session-reset), just reached a new way.
+# The fix: overwrite session.uuids with each slot's OWN muse-native UUID
+# (SES_UUID[i], the session directory's basename) — this genuinely IS the
+# daemon's session_id for muse (confirmed: the curated events.jsonl's
+# session_id for slot 1 is byte-identical to SES_UUID[1]), unlike the shared
+# helper's basename-of-filename computation.
+: > "$STAGING/session.uuids"
+for (( i = 1; i <= N_SLOTS; i++ )); do
+  echo "${SES_UUID[$i]}" >> "$STAGING/session.uuids"
+done
 echo "drive-muse-interactive: $EXIT_REASON (slots=${N_SLOTS}, primary=${SES_UUID[1]}, transcript=${SES_TRANSCRIPT[1]})"
 # The epilogue completed: EXIT_REASON is this run's real verdict, so cleanup()
 # must record it as-is rather than rewrite it as an abort.
