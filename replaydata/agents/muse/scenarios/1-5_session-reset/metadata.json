@@ -1,0 +1,126 @@
+{
+  "scenario_id": "session-reset",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "gap:reset_session",
+    "agent_cli_version": "1.2.1",
+    "daemon_version": "0.5.9+f4174a3",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes (/clear and /new both live-confirmed); daemon_capability: full via the generic same-PID cleanup path (#169-style, adapter-agnostic); driver_capability: gap:reset_session (muse's driver stubs the arm)"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "session-reset",
+      "agent": "muse",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "gap:reset_session",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:reset_session\nroute: driver-gap (record ports the reset_session arm, then drives)\n\n## The key question this assessment settles: does muse's reset ROTATE the session id or clear in place?\n\nIt rotates — confirmed by a live drive, not inferred. This is the discriminator the cell hinges on: muse's matrix has both shapes elsewhere (claudecode/codex/gemini-cli/copilot/pi/hermes/opencode/mistral-vibe all rotate; kiro-cli clears in place and is `frozen daemon=incapable`; antigravity has no reset command at all). muse belongs in the rotating group.\n\n## agent_supports: yes\n\n`muse --help` has no top-level reset flag (reset is REPL-only, so `--help` was expected to miss it per the assess skill's Step 2). Live-confirmed via the TUI `/` command picker (both prior research in muse-capabilities.md and re-confirmed in this session): typing `/clear` shows `/clear  Clear terminal and start a fresh session`, and `/new` shows the identical description. Prior research flagged this as 'strongly implies a new id, UNVERIFIED whether it truly mints a new id vs. clearing in place' — this assessment resolves that.\n\n**Live probe (this session, throwaway tmux dir, `muse --provider echo --approval-mode never`, 2026-09-14):**\n1. Launched muse; session `01a09f26-d5cb-7533-8940-c5d471a61074` (V1) born under `~/.local/share/muse/sessions/2026/09/14/`, bound to PID 29973 (`.session.lock` held via flock, confirmed with `lsof`).\n2. Sent a no-op turn (\"reply with exactly the word: ok\"), completed cleanly.\n3. Typed `/clear`, submitted. TUI printed `To continue this session, run muse resume 01a09f26-...` and the status bar read \"started a fresh session\".\n4. A NEW session directory appeared: `01a09f27-e033-76b3-8e28-4413f66e9920` (V2) — a genuinely different UUIDv7, not a rewrite of V1's file.\n5. `lsof` on V1's `.session.lock`: EMPTY (flock released). `lsof` on V2's `.session.lock`: held by PID 29973 — the SAME OS process, now serving V2 instead of V1. The `.session.lock` TEXT for both still reads `pid=29973` (per pid.go's doc comment, this text is stale-and-ignored; only the flock ownership, which DID move, is the liveness signal DiscoverPID reads).\n6. V1's session.jsonl tail: `command.invoked{command:\"/clear\"}` → `runtime.session_handoff.goal_safety{outgoing_session_id:\"session:01a09f26-...\", target_session_id:\"session:01a09f27-...\"}` → `session.end{exit_reason:\"clean\"}`.\n7. V2's session.jsonl head: `session.started{command_id:..., previous_session_stream:{kind:\"session\",id:\"01a09f26-d5cb-7533-8940-c5d471a61074\"}, background_tasks:\"kill\"}`, then the normal birth sequence (`session.opened.observed{resume:false}`, `runtime.session.metadata`, etc.) — the same shape muse's already-committed session-start cell exercises.\n\nSo muse's OWN transport carries an explicit, unambiguous predecessor→successor link (`previous_session_stream`) — a stronger native signal than claudecode's implicit same-cwd/same-PID inference. The daemon does not currently read it (see Daemon pillar), but it corroborates that this is a genuine rotation, not in-place clearing: a brand-new transcript, a real `session.end` on the old one, and an explicit cross-reference between the two.\n\n## daemon_capability: full\n\nThe load-bearing mechanism is NOT muse-specific parsing — it is the SAME generic, adapter-agnostic same-PID cleanup that makes claudecode's `1-5_session-reset` cell pass (issue #169), and it is architecturally wired for muse:\n\n1. **New session discovery.** V2's session.jsonl is a brand-new file under muse's `FilesUnderRoot` watch root; the daemon's fswatcher emits a birth for it exactly as proven by muse's already-committed, 100%-passing `1-1_session-start` and `2-1_basic-turn` cells (session born directly in `ready`, no presession split needed — muse's session.jsonl materializes in well under 1s).\n2. **PID (re)discovery for V2.** `core/adapters/inbound/agents/muse/agent.go:66` wires `PIDForSession: DiscoverPID`. `core/adapters/inbound/agents/muse/pid.go`'s `DiscoverPID` asks `lsof`-equivalent `processlifecycle.DiscoverPIDByTranscriptWriter` who holds V2's OWN `.session.lock` — which, per the live probe above, is unambiguously PID 29973 (no CWD-scan disambiguation needed; the lock path is scoped to V2's own session directory).\n3. **Same-PID cleanup.** `core/application/services/pid_manager.go`'s `HandlePIDAssigned` → `assignPIDLocked` finds PID 29973 ALREADY bound to V1 in the session repo (from V1's own earlier PID-bind, proven by the committed `2-1_basic-turn` cell's `pid_bind` phase) and returns V1 as `stale`. `cleanupStalePIDHolders` (pid_manager.go:~735) then deletes V1 and emits `KindTranscriptRemoved` — its doc comment names this exact case verbatim: \"deletes every session in stale — other sessions that held pid before sessionID claimed it (e.g. the /clear pattern, where the same process starts a new transcript under a new UUID)\". `TryDiscoverPID`'s own doc comment independently names the identical case: \"falls back to already-claimed PIDs when no unclaimed candidate exists (the /clear scenario...)\", and `claimAwareDisambiguate`'s doc comment names it a third time. This is not a muse-specific code path — it is the exact mechanism that already makes claudecode's `1-5_session-reset` cell pass (see `replaydata/agents/claudecode/scenarios/1-5_session-reset/metadata.json`, citing the same #169 fix), and it requires nothing beyond what's already wired: an adapter with a working `PIDForSession` that resolves the SAME PID for the new session that was bound to the old one.\n\nmuse's `session.end` and `session.started{previous_session_stream}` events are NOT read by the parser (both fall into `route()`'s default `Skip=true` arm — `session.end` explicitly, `session.started` implicitly since there is no case for it) — the daemon does not need them; the PID-identity mechanism above is sufficient and is the SAME mechanism already proven for the fleet's other rotating-reset agents.\n\n## driver_capability: gap:reset_session\n\n`replaydata/agents/muse/driver-interactive.sh:672`: `reset_session) not_implemented reset_session || break ;; # TODO(muse): in-REPL /clear|/new -> new id, SAME slot; re-resolve SES_TRANSCRIPT[$ACTIVE] (SEAM 3)`. `DRIVE_ELICITS=\"send slash wait_turn sleep exit_clean restart sigkill start_session session\"` does not list `reset_session`. `record` needs to port the arm: send `/clear` + Enter (a `slash` step's keystrokes), then re-discover the newest `session.jsonl` under the daemon's watch root newer than the pre-reset marker (excluding `subagent/` copies) — the identical discovery the driver's own `setup` already performs for the FIRST session (see the `2-1_basic-turn` recipe's setup notes), just re-run after `/clear` instead of at launch.\n\n## What this does NOT settle (left for `record`)\n\nThis assessment is grounded in code reading of the daemon's PID-cleanup machinery plus a live probe of muse's OWN transport — but NOT a live irrlichd-attached recording. Per the assess skill's Observation-vs-emission rule, `daemon=full` here is provisional on the SAME-PID mechanism actually firing end-to-end against a live daemon (it is generic, already proven for other adapters, and every precondition it depends on was directly observed in the live probe — but the full chain was not watched through an attached daemon in this assessment). `record` promotes this from provisional to settled.",
+      "caveats": [
+        "Not confirmed via a live irrlichd-attached recording — the daemon=full verdict rests on (a) a live probe of muse's own transport (confirmed: new UUID, released/re-held flock on the SAME PID, explicit previous_session_stream linkage) and (b) a code read of the generic, already-proven-for-claudecode same-PID cleanup path (pid_manager.go's HandlePIDAssigned/cleanupStalePIDHolders, which literally names 'the /clear pattern' in its doc comments) — not a live daemon watching this exact sequence. This is the Observation-vs-emission gap the assess skill flags; record settles it.",
+        "Only /clear was live-probed. /new shows the identical TUI picker description ('Clear terminal and start a fresh session') and is assumed functionally identical, matching the precedent set by claudecode's own 1-5_session-reset cell (which recorded /clear only and treated /new as equivalent) — not separately verified for muse.",
+        "driver=gap:reset_session: muse's driver-interactive.sh stubs the reset_session arm (not_implemented). record must port it before this cell can be driven; the spec and recipe are written now so record can proceed directly.",
+        "Vacuous-pass check: this cell would pass trivially if the daemon simply treated V2 as an unrelated fresh session while V1 silently lingered forever (no transcript_removed). The old_session_ended phase (kind:transcript_removed, pinned same_session_as the FIRST birth) is what forecloses that — if cleanupStalePIDHolders never fires for muse, this phase goes red rather than the cell passing on new-session-birth alone.",
+        "Known daemon bug #1962 (processlifecycle's watched map[int]string is last-write-wins per PID) concerns process_exited misattribution when two sessions' kqueue watches compete for the SAME pid's exit notification. This cell's spec does not assert a process_exited phase (matching claudecode's own session-reset spec, which also stops at the second turn's ready) so #1962 should not be load-bearing here, but a live recording that also drives exit_clean at the very end should watch for it if a stray process_exited surfaces on the wrong session id."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/application/services/pid_manager.go",
+          "note": "HandlePIDAssigned -> assignPIDLocked -> cleanupStalePIDHolders; TryDiscoverPID and claimAwareDisambiguate's doc comments each name 'the /clear pattern, where the same process starts a new transcript under a new UUID' verbatim. cleanupStalePIDHolders emits KindTranscriptRemoved for the stale (old) session — generic, adapter-agnostic."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/pid.go",
+          "note": "DiscoverPID resolves a session's PID via lsof-equivalent lookup on that session's OWN .session.lock flock holder; doc comment explains the lock TEXT is stale-and-unused, only flock ownership is read."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/agent.go",
+          "note": "Line 66: PIDForSession: DiscoverPID — confirms the PID-discovery path above is actually wired for the muse adapter, not just implemented."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/driver-interactive.sh",
+          "note": "Line 672: reset_session arm is not_implemented (TODO(muse)); DRIVE_ELICITS omits reset_session — confirms driver=gap:reset_session."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/1-5_session-reset/metadata.json",
+          "note": "Precedent: the SAME #169 same-PID cleanup mechanism is what makes claudecode's session-reset cell pass; this assessment cites it as the generic daemon mechanism muse also exercises."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/scenarios/2-1_basic-turn/expected.jsonl",
+          "note": "Establishes muse is a single-birth FilesUnderRoot adapter (session born directly in ready, PID bound via .session.lock) — the birth/pid-bind phases this spec's v1 half reuses verbatim."
+        },
+        {
+          "kind": "file",
+          "ref": "muse-capabilities.md",
+          "note": "Prior research (this branch's #1960 corpus): live TUI picker showed /new and /clear with the identical 'Clear terminal and start a fresh session' description, flagged UNVERIFIED whether it rotates vs clears in place — this assessment resolves that flag."
+        },
+        {
+          "kind": "live-probe",
+          "ref": "tmux session muse_reset_probe, 2026-09-14, throwaway dir under the assessment's own scratchpad",
+          "note": "Directly observed: new session UUID born on /clear; old session's .session.lock flock released (lsof empty) while the new session's lock is held by the SAME PID; V1 tail carries command.invoked{/clear} -> runtime.session_handoff.goal_safety{outgoing/target session ids} -> session.end{exit_reason:clean}; V2 head carries session.started{previous_session_stream:V1}."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "timeout_seconds": 120,
+      "settings": {},
+      "preconditions": [
+        "muse CLI installed and on PATH, v1.2.1 (muse --version >= 1.2.1 per replaydata/agents/muse/metadata.json)",
+        "muse auth complete: 'muse login' (Meta account, browser code approval) or META_API_KEY exported — auth is set up out-of-band",
+        "tmux available — the interactive driver runs muse in a tmux REPL so the same OS process survives the reset",
+        "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+      ],
+      "setup": [
+        "The interactive driver creates a fresh empty cwd, launches `muse --trust-workspace` in a tmux REPL there (per muse-driver-audit.md's startup-race finding), and resolves the FIRST session's newest session.jsonl under ~/.local/share/muse/sessions (excluding subagent/ copies) newer than a pre-launch marker.",
+        "record must port the reset_session arm (replaydata/agents/muse/driver-interactive.sh:672, currently not_implemented): send the keystrokes for `/clear` + Enter, then re-run the SAME newest-session.jsonl discovery used at launch — excluding subagent/ copies — to re-point SES_TRANSCRIPT[$ACTIVE] at the new UUID's file. The picker autocompletes on the first matching entry so a bare `/clear` + Enter is sufficient (live-confirmed in this assessment's probe — no arrow-key navigation needed)."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 2
+        },
+        {
+          "type": "reset_session"
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: fresh"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "exit_clean"
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the FIRST session (V1) appear in ready, then a working/ready cycle for the first no-op turn",
+        "after /clear, events.jsonl emits transcript_removed for V1 — the same-PID cleanup (pid_manager.go's cleanupStalePIDHolders) — within a few seconds of the new session's birth (bounded by DiscoverPIDWithRetry's 0/500ms/1s/2s retry schedule)",
+        "events.jsonl contains a DIFFERENT session id (V2) appearing in ready after /clear — a genuinely new UUIDv7, not V1's directory rewritten",
+        "the second turn's working/ready cycle is on V2, not V1 (same_session_as pinned)",
+        "final session state is ready",
+        "zero tool calls in either turn (both prompts are exact-word echoes)"
+      ]
+    }
+  }
+}
