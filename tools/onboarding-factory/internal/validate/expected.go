@@ -52,6 +52,8 @@ import (
 	"time"
 
 	"irrlicht/tools/onboarding-factory/internal/matrix"
+
+	"irrlicht/core/domain/lifecycle"
 )
 
 // ExpectedMeta is the first line of expected.jsonl — file-wide
@@ -918,7 +920,17 @@ func checkPhaseInvariants(p ExpectedPhase, events []recordedEvent, matched *reco
 		windowEnd = matched.Ts.Add(time.Duration(p.DurationAtLeastMs) * time.Millisecond)
 	}
 	for _, inv := range p.Invariants {
-		ok, why := checkInvariant(inv, events, matched, windowEnd)
+		ok, why, known := checkInvariant(inv, events, matched, windowEnd)
+		if !known {
+			// An invariant the DSL cannot parse is not evidence, so it must
+			// not read as a pass. It does not fail the phase either — see
+			// TestNoCellCarriesAnUnevaluableInvariant, which ratchets the
+			// repo-wide count instead, and the DSL doc block for why
+			// activating these strings today would be worse than skipping
+			// them.
+			r.Notes = append(r.Notes, fmt.Sprintf("invariant SKIPPED (not checked): %s — %s", inv, why))
+			continue
+		}
 		if !ok {
 			return fmt.Sprintf("invariant violated: %s — %s", inv, why), true
 		}
@@ -944,25 +956,56 @@ func passReason(p ExpectedPhase, deltaMs int64, anchorName string) string {
 	}
 }
 
-// Invariant DSL — two forms supported in iteration 10:
+// Invariant DSL — two forms:
 //
-//	"no <kind> for <session-noun>"          — e.g. "no transcript_removed for primary session"
-//	"no state_transition to <state>"        — e.g. "no state_transition to working"
+//	"no <kind> for <session-noun>"      — "no transcript_removed for primary session"
+//	"no state_transition to <state>"    — "no state_transition to working"
 //
-// session-noun is currently informational (no per-session scoping yet):
-// the check is "no event of <kind> appears in the window for the
-// matched phase's session_id". Future expansion can introduce real
-// session-set scoping; the DSL stays stable.
+// An invariant this DSL cannot parse is recorded as SKIPPED and is NOT counted
+// as satisfied. It previously was: checkInvariant returned ok=true for an
+// unparseable string and checkPhaseInvariants discarded the reason on the
+// success path, so a skip and a pass wrote the identical "invariant ok: …"
+// note. The comment here claimed a "skipped" note was recorded; none ever was.
+// Measured when that was found, by running these regexes over every committed
+// cell: 68 of 632 invariants (10%), across 10 of the 13 adapters, were never
+// checked and all of them reported as passing.
 //
-// Unknown invariants don't fail — they record a "skipped (unknown
-// invariant DSL form)" note. Lets the schema evolve without breaking
-// older expected.jsonl files.
+// # Why a skip does not (yet) fail the phase
+//
+// The obvious next step — parse more of them — was tried and reverted, because
+// it makes the report worse rather than better. Two DSL limitations sit under
+// these strings:
+//
+//   - The trailing session-noun is DECORATIVE. Both forms scope to
+//     matched.SessionID, i.e. whichever session the PHASE matched, not the
+//     session the noun names. Measured on claudecode's own
+//     3-1_foreground-subagent recording
+//     (2026-09-06-23-53-54_irrlichd-0.6.2+388aba0.dirty): its
+//     intermediate_working phase matches the CHILD's transition, so
+//     "no state_transition to ready for parent" would check the CHILD.
+//   - The window is UNBOUNDED when a phase sets no duration_at_least_ms. It
+//     runs to the end of the recording, so "no state_transition to ready"
+//     catches the session's own legitimate turn-end ready. All nine cells that
+//     lit up when the grammar was widened set no duration.
+//
+// Together those make a widened grammar assert something the check does not
+// measure. The same claudecode recording shows the daemon behaving correctly —
+// parent working 23:53:54.752, child linked 23:54:01.287, child ready
+// 23:54:13.469, parent ready 23:54:14.856, a full 1.4s AFTER the child
+// finished — so the nine failures were the assertions being wrong, not the
+// daemon. Activating them would have converted a silent no-op into a
+// misleading red.
+//
+// Closing this properly needs real session-set scoping and a phase-bounded
+// window, which is a DSL change, not a regex change. Until then the count is
+// ratcheted by TestNoCellCarriesAnUnevaluableInvariant so it cannot grow
+// quietly, and invariant_test.go pins that a skip never reads as a pass.
 var (
 	invariantNoKindRE  = regexp.MustCompile(`^no\s+([a-z_]+)\s+for\s+(.+)$`)
 	invariantNoStateRE = regexp.MustCompile(`^no\s+state_transition\s+to\s+([a-z]+)$`)
 )
 
-func checkInvariant(inv string, events []recordedEvent, matched *recordedEvent, windowEnd time.Time) (bool, string) {
+func checkInvariant(inv string, events []recordedEvent, matched *recordedEvent, windowEnd time.Time) (ok bool, why string, known bool) {
 	inv = strings.TrimSpace(inv)
 	if m := invariantNoStateRE.FindStringSubmatch(inv); m != nil {
 		forbiddenState := m[1]
@@ -970,23 +1013,32 @@ func checkInvariant(inv string, events []recordedEvent, matched *recordedEvent, 
 			return ev.Kind == "state_transition" && ev.NewState == forbiddenState && ev.SessionID == matched.SessionID
 		})
 		if found {
-			return false, fmt.Sprintf("found state_transition to %q at +%d ms", forbiddenState, offsetMs)
+			return false, fmt.Sprintf("found state_transition to %q at +%d ms", forbiddenState, offsetMs), true
 		}
-		return true, ""
+		return true, "", true
 	}
 	if m := invariantNoKindRE.FindStringSubmatch(inv); m != nil {
 		forbiddenKind := m[1]
+		// A kind the daemon never records makes this invariant trivially
+		// satisfied: nothing can match it, so it can never fail, so it reads
+		// as an assertion while asserting nothing. That is the same silent
+		// coverage an unparseable string produces, so it gets the same
+		// treatment. lifecycle.CanonicalKinds() is the vocabulary; deriving
+		// from it means this check cannot drift from what the daemon emits.
+		if !lifecycle.IsCanonicalKind(forbiddenKind) {
+			return false, fmt.Sprintf("%q is not a recordable lifecycle event kind, so this invariant can never fail", forbiddenKind), false
+		}
 		// session-noun in m[2] is informational for now.
 		offsetMs, found := scanWindowForViolation(events, matched, windowEnd, func(ev *recordedEvent) bool {
 			return ev.Kind == forbiddenKind && ev.SessionID == matched.SessionID
 		})
 		if found {
-			return false, fmt.Sprintf("found %s at +%d ms", forbiddenKind, offsetMs)
+			return false, fmt.Sprintf("found %s at +%d ms", forbiddenKind, offsetMs), true
 		}
-		return true, ""
+		return true, "", true
 	}
-	// Unknown DSL — don't fail, but flag.
-	return true, "skipped (unknown invariant DSL form)"
+	// Unknown DSL form. Not evidence, so not a pass.
+	return false, `unknown invariant DSL form; accepted forms are "no <kind> for <noun>" and "no state_transition to <state> [for <noun>]"`, false
 }
 
 // scanWindowForViolation walks events after matched.Ts up to windowEnd (or
