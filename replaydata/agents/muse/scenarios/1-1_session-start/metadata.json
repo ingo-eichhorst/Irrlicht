@@ -1,0 +1,109 @@
+{
+  "scenario_id": "session-start",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.2.1",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready. Muse's own session.jsonl (with route_facts.pid) materializes well under 1s after launch (live-measured), so both the generic proc-<PID> pre-session row and the real UUID session can satisfy the two spec bullets independently."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "session-start",
+      "agent": "muse",
+      "assessed_at": "2026-09-14T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe scenario's two load-bearing bullets are (1) the session appears in `ready` within 1s of agent launch and (2) the PID is bound within 1s (state topology ready→working→ready / final ready / ≤0 tool calls fall out of the recipe's single no-tool nudge turn, not a separate observable).\n\n**Bullet 1 (ready within 1s).** `muse` is a bash launcher that `exec`s a version-pinned `muse-bin-<ver>-R<build>` binary — process-image replacement, not a subshell — so the CommandPattern-matched process (`core/adapters/inbound/agents/muse/agent.go`'s `processCmdPattern = \"(^|/)muse-bin-[^/\\\\s]+(\\\\s|$)\"`) exists in the process table within milliseconds of `tmux new-session` returning. The daemon's generic process scanner (`core/adapters/inbound/agents/processlifecycle/scanner.go`, `defaultInterval = 1 * time.Second`) mints a `proc-<PID>` pre-session row in `ready` on its first tick — this mechanism is agent-agnostic (any `agent.ProcessMatcher`, exercised generically by `core/application/services/session_detector_presession_promotion_test.go`, part of the green `go test ./core/... -race -count=1` run) and needs nothing muse-specific to fire. Separately and redundantly, muse's OWN session directory (session.jsonl + .session.lock) also materializes well under 1s after launch — live-measured directly: '`the session directory + first valid line existed well under 1s after tmux new-session returned`' (driver-audit item #6, live-reproduced against real session directories on this machine) — unlike claudecode/codex's lazy transcript materialization, muse does not need a completed turn for its real, UUID-keyed session to appear on disk. Neither the metadata/route_facts/startup-observed records written before any user turn, nor the six housekeeping `runtime.session.task` records, drive an `EventType` in the parser (`core/adapters/inbound/agents/muse/parser.go`'s `route`/`parseSessionEnvelope` skip everything except `kind:\"run\"`/`kind:\"approval\"`), so a freshly-created session with no turn yet defaults to `ready`, never `working` — exactly the state the bullet asserts.\n\n**Bullet 2 (PID bound within 1s).** The pre-session row's very existence is keyed off a PID the scanner already found via the CommandPattern match, so PID binding is coincident with birth. Once the real session is tailed, `DiscoverPID` (`core/adapters/inbound/agents/muse/pid.go`) re-binds it by asking `lsof`/`processlifecycle.DiscoverPIDByTranscriptWriter` who holds `.session.lock` open — a file created in the same session-start burst as `session.jsonl` (format-spec §1: '`.session.lock` contents and liveness' — mtime written once at session start).\n\n**Recipe / driver.** The interactive driver (`replaydata/agents/muse/driver-interactive.sh`) now launches with `--trust-workspace` (skips the untrusted-workspace modal that previously ate the first keystrokes — #1960 driver-audit defect #1, fixed in commit 0239a1bd and live-verified: 'the composer (❯) is ready immediately with no modal, and a send submits normally'), a 1s post-launch settle delay (defect fixed; 3/3 trials with the delay submitted immediately vs. 3/3 dropped the prompt with none), a 0.3s gap between the literal-text send and Enter (defect #2, matches copilot/kiro-cli/mistral-vibe's identical TUI-timing fix), and excludes `subagent/` from transcript resolution (defect #3, so a reminder-agent subagent transcript can't be mistaken for the driven session's own). `DRIVE_ELICITS=\"send slash wait_turn sleep exit_clean\"` covers every primitive this scenario's recipe needs (send + wait_turn + sleep) — no driver gap.\n\n## What irrlicht does NOT see (and why that's OK)\n\nUnlike claudecode, irrlicht does not strictly need the generic `proc-<PID>` pre-session row to satisfy bullet 1 for muse — the real, UUID-keyed session materializes almost as fast on its own. Both routes land inside the 1s budget, so the spec phases are written unpinned (either row may satisfy them), matching the fleet-wide convention for this scenario (claudecode/pi/copilot's committed `1-1_session-start` cells all use the identical two-phase, unpinned-birth shape).",
+      "caveats": [
+        "Vacuous-pass check: because the two asserted phases (session_birth, pid_bind) are unpinned to either the generic proc-<PID> pre-session row OR the real UUID session, a completely broken muse-specific parser/Source (the FilesUnderRoot wiring in agent.go, or every case in parser.go) would NOT be caught by this scenario alone — the daemon-generic process scanner can satisfy both phases on its own. The recipe's send+wait_turn+sleep steps do exercise the real muse-specific parser end to end (proving session.jsonl tailing actually works), but this scenario's spec deliberately asserts nothing about that turn's own state arc — per the fleet-wide precedent, those transcript-level assertions belong with 2-x basic-turn, not 1-1 session-start.",
+        "Load-bearing environment property: both 1000ms budgets assume the daemon's process-scan tick stays at its current 1s default (`processlifecycle.defaultInterval`) and that recording doesn't run under system load heavy enough to delay that tick past 1s.",
+        "The claim that muse's real session.jsonl materializes under 1s (not lazily, unlike claudecode) rests on driver-audit item #6's live observation during defect testing, not a dedicated timing benchmark across many trials — flagged UNVERIFIED-at-scale there ('in every live test I ran... could not force the >30s-materialization condition') even though every observed case was near-instant.",
+        "Model identity (`muse-spark-1.3-contributor`) was observed live on this machine but is left unpinned in the spec per the 'don't hard-pin a doc-guessed model' rule — this scenario's spec doesn't assert tokens/cost/model at all, following the claudecode/pi precedent (those assertions live with basic-turn, not session-start)."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/agent.go",
+          "note": "processCmdPattern regex matches muse-bin-<ver>-R<build>; Source() is agent.FilesUnderRoot rooted at ~/.local/share/muse/sessions; observe-only transcripts permission."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/pid.go",
+          "note": "DiscoverPID binds via lsof on the session's own .session.lock sibling file (processlifecycle.DiscoverPIDByTranscriptWriter), falling back to the transcript file itself."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/parser.go",
+          "note": "route()/parseSessionEnvelope()/parseRunEvent(): run.started -> user_message (working), run.terminal -> turn_done (ready/error); every pre-turn startup record (metadata, route_facts, session.opened.observed, startup_phases.observed, task-kind events) is Skip=true, so a fresh session with no turn defaults to ready."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/processlifecycle/scanner.go",
+          "note": "defaultInterval = 1 * time.Second for the generic ProcessMatcher-driven scan that mints proc-<PID> pre-session rows; agent-agnostic, applies identically to muse's CommandPattern matcher."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector_presession_promotion_test.go",
+          "note": "Generic presession-promotion coverage (not muse-specific) exercised by the green go test ./core/... -race -count=1 run cited in the assignment context."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/driver-interactive.sh",
+          "note": "launch_repl() now passes --trust-workspace + a 1s settle sleep; step_send() has the 0.3s send/Enter gap; resolve_transcript() excludes subagent/; DRIVE_ELICITS=\"send slash wait_turn sleep exit_clean\" covers this recipe's primitives."
+        },
+        {
+          "kind": "file",
+          "ref": "/private/tmp/claude-501/-Users-ingo-projects-irrlicht/bb5f9f9d-9082-48be-a0eb-ab65bc647002/scratchpad/muse-format-spec.md",
+          "note": "Section 1 (session identity/discovery, .session.lock liveness), section 2 (process binding, exec launcher, one-pid-many-sessions under `muse serve`), section 3 (turn boundaries: started/terminal), section 7 (model identity) -- all live-measured on this machine against real session.jsonl files."
+        },
+        {
+          "kind": "file",
+          "ref": "/private/tmp/claude-501/-Users-ingo-projects-irrlicht/bb5f9f9d-9082-48be-a0eb-ab65bc647002/scratchpad/muse-driver-audit.md",
+          "note": "Defects 1-3 (trust modal, send/Enter race, subagent transcript resolution) live-reproduced and confirmed fixed in commit 0239a1bd; item #6 is the live observation that session directory + first valid line exist well under 1s after launch."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/1-1_session-start/expected.jsonl",
+          "note": "Template for the two-phase (session_birth + pid_bind), unpinned-birth spec shape this scenario uses fleet-wide (also mirrored by pi and copilot's committed 1-1_session-start cells)."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "timeout_seconds": 120,
+      "settings": {},
+      "preconditions": [
+        "muse CLI on PATH and authenticated (`muse login` or META_API_KEY, per replaydata/agents/muse/metadata.json prerequisites)",
+        "irrlichd is recording -- either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+      ],
+      "setup": [
+        "Create an empty cwd under <staging>/cwd/ (muse's workspace-trust modal would otherwise fire on every fresh cwd; the driver's launch_repl already passes --trust-workspace to skip it)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        }
+      ],
+      "verify": [
+        "events.jsonl shows a session (proc-<PID> pre-session or the real UUID session) reaching ready within 1000 ms of agent launch",
+        "events.jsonl contains a pid_discovered event within 1000 ms of agent launch",
+        "the real UUID-keyed session's state arc is ready -> working -> ready around the nudge turn",
+        "final session state is ready",
+        "no tool_call events for the nudge turn"
+      ]
+    }
+  }
+}
