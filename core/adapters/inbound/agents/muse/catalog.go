@@ -70,18 +70,33 @@ func contextWindowForModel(model string) (int64, bool) {
 		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(root, e.Name()))
-		if err != nil {
-			continue
+		if window, ok := contextWindowInCatalogFile(filepath.Join(root, e.Name()), model); ok {
+			return window, true
 		}
-		var catalog modelCatalogFile
-		if err := json.Unmarshal(data, &catalog); err != nil {
-			continue
-		}
-		for _, row := range catalog.Rows {
-			if row.ModelID == model && row.ContextLimit > 0 {
-				return row.ContextLimit, true
-			}
+	}
+	return 0, false
+}
+
+// contextWindowInCatalogFile reads one candidate catalog file and reports
+// whether it names model with a trustworthy (>0) context_limit — the same
+// "never fabricate" contract contextWindowForModel promises, scoped to a
+// single file so its caller's directory scan stays a flat enumeration. An
+// unreadable or unparseable file reports (0, false), same as a file with no
+// matching row: both mean "this file has no answer," which is exactly what
+// lets the caller's scan skip past one broken or unrelated file instead of
+// aborting the whole lookup.
+func contextWindowInCatalogFile(path, model string) (int64, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, false
+	}
+	var catalog modelCatalogFile
+	if err := json.Unmarshal(data, &catalog); err != nil {
+		return 0, false
+	}
+	for _, row := range catalog.Rows {
+		if row.ModelID == model && row.ContextLimit > 0 {
+			return row.ContextLimit, true
 		}
 	}
 	return 0, false

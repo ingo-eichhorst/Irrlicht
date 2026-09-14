@@ -698,66 +698,110 @@ func (p *Parser) parseRetainedFrame(raw map[string]any) *tailer.ParsedEvent {
 // skipped-event metadata stamp. Boolean flags (IsError, ClearToolNames,
 // IsUserInterrupt, PendingWaitingCue) OR across children. The merged event
 // is Skip=true only when every child was Skip=true.
+//
+// The per-child merge is split below by strategy (bookkeeping, additive
+// deltas, OR'd flags, last-wins scalars, last-non-nil pointers) rather than
+// left as one flat pass — each helper is independent of the others (none
+// reads a field another one writes), so the split changes nothing about
+// which value wins, only how the four strategies read on the page. This
+// keeps SonarCloud's go:S3776 cognitive-complexity threshold (15) honest:
+// the flat version was a single function nesting 17 independent ifs inside
+// one loop (complexity 35 — verified via SonarCloud PR #1961 analysis
+// before this split), which is exactly the "many unrelated cases in one
+// function" shape the metric exists to catch, not a case where splitting
+// would separate a check from what it guards.
 func mergeChildEvents(events []*tailer.ParsedEvent) *tailer.ParsedEvent {
 	merged := &tailer.ParsedEvent{Skip: true}
 	for _, ev := range events {
 		if ev == nil {
 			continue
 		}
-		if !ev.Timestamp.IsZero() {
-			merged.Timestamp = ev.Timestamp
-		}
-		if !ev.Skip {
-			merged.Skip = false
-		}
-		if ev.EventType != "" {
-			merged.EventType = ev.EventType
-		}
-		merged.ToolUses = append(merged.ToolUses, ev.ToolUses...)
-		merged.ToolResultIDs = append(merged.ToolResultIDs, ev.ToolResultIDs...)
-		merged.PermissionRequestIDs = append(merged.PermissionRequestIDs, ev.PermissionRequestIDs...)
-		merged.PermissionResolvedIDs = append(merged.PermissionResolvedIDs, ev.PermissionResolvedIDs...)
-		if ev.IsError {
-			merged.IsError = true
-		}
-		if ev.ClearToolNames {
-			merged.ClearToolNames = true
-		}
-		if ev.IsUserInterrupt {
-			merged.IsUserInterrupt = true
-		}
-		if ev.PendingWaitingCue {
-			merged.PendingWaitingCue = true
-		}
-		if ev.ModelName != "" {
-			merged.ModelName = ev.ModelName
-		}
-		if ev.ContextWindow > 0 {
-			merged.ContextWindow = ev.ContextWindow
-		}
-		if ev.AgentVersion != "" {
-			merged.AgentVersion = ev.AgentVersion
-		}
-		if ev.CWD != "" {
-			merged.CWD = ev.CWD
-		}
-		if ev.AssistantText != "" {
-			merged.AssistantText = ev.AssistantText
-		}
-		if ev.UserText != "" {
-			merged.UserText = ev.UserText
-		}
-		if ev.SessionError != nil {
-			merged.SessionError = ev.SessionError
-		}
-		if ev.Contribution != nil {
-			merged.Contribution = ev.Contribution
-		}
-		if ev.Tokens != nil {
-			merged.Tokens = ev.Tokens
-		}
+		mergeChildBookkeeping(merged, ev)
+		mergeChildDeltaSlices(merged, ev)
+		mergeChildBooleanFlags(merged, ev)
+		mergeChildScalarFields(merged, ev)
+		mergeChildPointerFields(merged, ev)
 	}
 	return merged
+}
+
+// mergeChildBookkeeping applies the two fields that don't fit a "value"
+// merge strategy: Timestamp takes the latest non-zero child value, and Skip
+// flips to false as soon as any child is non-Skip (it starts true).
+func mergeChildBookkeeping(merged, ev *tailer.ParsedEvent) {
+	if !ev.Timestamp.IsZero() {
+		merged.Timestamp = ev.Timestamp
+	}
+	if !ev.Skip {
+		merged.Skip = false
+	}
+}
+
+// mergeChildDeltaSlices concatenates the id-keyed delta slices in child
+// order — see mergeChildEvents' doc comment for why out-of-order or
+// duplicate ids across children are harmless downstream.
+func mergeChildDeltaSlices(merged, ev *tailer.ParsedEvent) {
+	merged.ToolUses = append(merged.ToolUses, ev.ToolUses...)
+	merged.ToolResultIDs = append(merged.ToolResultIDs, ev.ToolResultIDs...)
+	merged.PermissionRequestIDs = append(merged.PermissionRequestIDs, ev.PermissionRequestIDs...)
+	merged.PermissionResolvedIDs = append(merged.PermissionResolvedIDs, ev.PermissionResolvedIDs...)
+}
+
+// mergeChildBooleanFlags ORs each flag across children: once any child sets
+// one, the merged event keeps it set regardless of later children.
+func mergeChildBooleanFlags(merged, ev *tailer.ParsedEvent) {
+	if ev.IsError {
+		merged.IsError = true
+	}
+	if ev.ClearToolNames {
+		merged.ClearToolNames = true
+	}
+	if ev.IsUserInterrupt {
+		merged.IsUserInterrupt = true
+	}
+	if ev.PendingWaitingCue {
+		merged.PendingWaitingCue = true
+	}
+}
+
+// mergeChildScalarFields applies "last non-empty/non-zero child wins" to the
+// single-value fields that have an obvious empty/zero sentinel.
+func mergeChildScalarFields(merged, ev *tailer.ParsedEvent) {
+	if ev.EventType != "" {
+		merged.EventType = ev.EventType
+	}
+	if ev.ModelName != "" {
+		merged.ModelName = ev.ModelName
+	}
+	if ev.ContextWindow > 0 {
+		merged.ContextWindow = ev.ContextWindow
+	}
+	if ev.AgentVersion != "" {
+		merged.AgentVersion = ev.AgentVersion
+	}
+	if ev.CWD != "" {
+		merged.CWD = ev.CWD
+	}
+	if ev.AssistantText != "" {
+		merged.AssistantText = ev.AssistantText
+	}
+	if ev.UserText != "" {
+		merged.UserText = ev.UserText
+	}
+}
+
+// mergeChildPointerFields applies "last non-nil child wins" to the
+// pointer-typed fields, which have no zero-value sentinel of their own.
+func mergeChildPointerFields(merged, ev *tailer.ParsedEvent) {
+	if ev.SessionError != nil {
+		merged.SessionError = ev.SessionError
+	}
+	if ev.Contribution != nil {
+		merged.Contribution = ev.Contribution
+	}
+	if ev.Tokens != nil {
+		merged.Tokens = ev.Tokens
+	}
 }
 
 // parseRecordedAt reads a record's "recorded_at" stamp — Unix MICROSECONDS
