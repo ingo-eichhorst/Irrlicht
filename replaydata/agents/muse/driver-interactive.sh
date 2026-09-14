@@ -151,7 +151,7 @@ SES_OWNED=()
 # DRIVE_SLASH_REQUIRES_STEP_TYPE=true if muse is headless-first (a bare
 # send "/cmd" stores literal text instead of reaching the REPL).
 # shellcheck disable=SC2034  # scraped from this file's SOURCE by tools/onboarding-factory/scripts/lib/recipe-lint.sh:97 (sed), never expanded in shell
-DRIVE_ELICITS="send slash wait_turn sleep exit_clean restart sigkill"
+DRIVE_ELICITS="send slash wait_turn sleep exit_clean restart sigkill start_session session"
 # shellcheck disable=SC2034  # scraped from this file's SOURCE by tools/onboarding-factory/scripts/lib/recipe-lint.sh:113 (sed), never expanded in shell
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 RUN_CWD="${IRRLICHT_ONBOARD_CWD:-$STAGING/cwd}"
@@ -481,6 +481,35 @@ step_exit_clean() {
 # persisted, muse-driver-audit.md), so reusing a cwd is not known to break
 # anything, but a fresh directory is the already-proven-safe shape session-end's
 # own assessment caveat calls for.
+# step_start_session (ported from pi's step_start_session,
+# driver-interactive.sh:475-497 — pi is the closest architectural sibling
+# here: muse's driver already follows the "pi pattern" throughout, both
+# source the same shared _lib/drive/slots.sh slot model, and both defer
+# transcript discovery to wait_turn). Launches a NEW concurrent muse REPL
+# WITHOUT tearing down the active session — the multiple-sessions-same-cwd
+# scenario's whole point. Defaults to the SAME cwd as the caller's active
+# slot (the scenario's default shape); pass {"type":"start_session","cwd":
+# "…"} to launch elsewhere.
+#
+# resolve_transcript on the OUTGOING active slot BEFORE allocating the new
+# one is load-bearing, not decorative: muse-driver-audit.md documents a
+# live-reproduced hazard (item 3) where resolve_transcript's `find ...
+# -newer $MARKER | sort | tail -n1` can resolve to a concurrent, unrelated
+# session's transcript if called before the first is cached — pinning the
+# outgoing slot's transcript here keeps its resolution outside that race
+# window, mirroring pi's own comment on the identical seam.
+step_start_session() {
+  local req_cwd="$1"
+  resolve_transcript || true
+  save_active
+  local idx=$(( N_SLOTS + 1 ))
+  local new_cwd="${req_cwd:-$RUN_CWD}"
+  alloc_slot "musedrv-$$-$(date +%s)-${idx}" "$new_cwd"
+  mkdir -p "${SES_CWD[$ACTIVE]}"
+  echo "[driver] start_session: concurrent session slot #${ACTIVE} (cwd=${SES_CWD[$ACTIVE]})" >&2
+  spawn_muse_repl
+}
+
 step_restart() {
   save_active
   SES_OWNED[$ACTIVE]=0
@@ -601,6 +630,25 @@ launch_repl
 EXPECTED_TURNS=0
 while IFS= read -r step; do
   type="$(jq -r '.type' <<<"$step")"
+
+  # Optional inline session target (pi pattern, driver-interactive.sh:513-528):
+  # switch the active context to slot N before executing the step — e.g.
+  # {"type":"send","text":"…","session":1} sends to session 1 after
+  # start_session moved focus to a later slot. start_session is exempt (it
+  # allocates its own slot); a target slot must already exist.
+  tgt="$(jq -r '.session // empty' <<<"$step")"
+  if [[ -n "$tgt" && "$type" != "start_session" && "$tgt" != "$ACTIVE" ]]; then
+    if [[ "$tgt" =~ ^[0-9]+$ && "$tgt" -ge 1 && "$tgt" -le "$N_SLOTS" ]]; then
+      save_active
+      load_slot "$tgt"
+      echo "[driver] switch -> session slot $tgt (uuid=$UUID)" >&2
+    else
+      echo "[driver] switch: invalid session slot '$tgt' (have $N_SLOTS)" >&2
+      EXIT_REASON="nonzero(2)"
+      break
+    fi
+  fi
+
   case "$type" in
     send|slash)      step_send "$(jq -r '.text' <<<"$step")" ;;
     wait_turn)       step_wait_turn || break ;;
@@ -612,8 +660,8 @@ while IFS= read -r step; do
     resume)          not_implemented resume || break ;;          # TODO(muse): relaunch same id+cwd (1 session, 2 PIDs) — reuse the active slot
     sigkill)         step_sigkill || break ;;
     exit_clean)      step_exit_clean ;;
-    start_session)   not_implemented start_session || break ;;   # TODO(muse): save_active; alloc_slot; launch a CONCURRENT session, keep the first alive
-    session)         not_implemented session || break ;;         # TODO(muse): save_active; load_slot N — switch the active slot
+    start_session)   step_start_session "$(jq -r '.cwd // empty' <<<"$step")" || break ;;
+    session)         : ;;   # pure focus switch — already handled by the inline target block above
     *)               echo "[driver] unknown step type: $type" >&2; EXIT_REASON="nonzero(2)"; break ;;
   esac
   (( $(remaining_seconds) <= 0 )) && { EXIT_REASON="timeout"; break; }
