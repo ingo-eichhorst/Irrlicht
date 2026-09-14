@@ -98,6 +98,8 @@ DRIVE_MARKER_PREFIX="$STAGING/.muse-marker"
 source "$_DRIVE_LIB/slots.sh"
 # shellcheck source=/dev/null
 source "$_DRIVE_LIB/contracts.sh"
+# shellcheck source=/dev/null
+source "$_DRIVE_LIB/teardown.sh"
 
 # Slot state the lib reads/writes (the driver owns these globals). A run starts
 # with zero slots; launch_repl allocs slot 1, and restart/start_session alloc
@@ -119,7 +121,11 @@ SES_EXPECTED=()
 # shellcheck disable=SC2034  # driver-owned slot array; the sourced replaydata/_lib/drive/slots.sh reads it (save_active/load_slot/alloc_slot)
 SES_MARKER=()
 SES_CWD=()
-# shellcheck disable=SC2034  # driver-owned slot array written by the sourced replaydata/_lib/drive/slots.sh:66 (alloc_slot); kept current here for the shared slot model. Named for OWNERSHIP, not liveness (#1828): nothing re-derives it from `tmux has-session`, so teardown gates on session-name presence and never on this.
+# SES_OWNED[i]=1 while this driver still owns (has not retired) the slot's
+# tmux session — read by step_exit_clean's already-retired guard, same as
+# kiro-cli's. Named for OWNERSHIP, not liveness (#1828): nothing re-derives it
+# from `tmux has-session`, so the cleanup trap's teardown still gates on
+# session-name presence and never on this.
 SES_OWNED=()
 
 # recipe-lint contract (#508 #4): the step types this driver genuinely ELICITS,
@@ -130,7 +136,7 @@ SES_OWNED=()
 # DRIVE_SLASH_REQUIRES_STEP_TYPE=true if muse is headless-first (a bare
 # send "/cmd" stores literal text instead of reaching the REPL).
 # shellcheck disable=SC2034  # scraped from this file's SOURCE by tools/onboarding-factory/scripts/lib/recipe-lint.sh:97 (sed), never expanded in shell
-DRIVE_ELICITS="send slash wait_turn sleep"
+DRIVE_ELICITS="send slash wait_turn sleep exit_clean"
 # shellcheck disable=SC2034  # scraped from this file's SOURCE by tools/onboarding-factory/scripts/lib/recipe-lint.sh:113 (sed), never expanded in shell
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 RUN_CWD="${IRRLICHT_ONBOARD_CWD:-$STAGING/cwd}"
@@ -203,6 +209,20 @@ trap cleanup EXIT
 # disables the session.jsonl persistence the daemon tails.
 # (`muse exec` is a true headless-per-turn mode; a future hybrid shape like
 # drive-opencode-interactive.sh could use it, but the scaffold stays REPL-only.)
+#
+# --trust-workspace: every $RUN_CWD is a brand-new directory (`mkdir -p` under
+# $STAGING/cwd), so without this muse's "Do you trust this workspace?" modal
+# fires on EVERY run and silently eats the first prompt — live-reproduced
+# (#1960 driver audit): sending "hello" against a bare `muse` launch produced
+# zero run/terminal records; the keystrokes were consumed by the modal's
+# picker instead (Enter accepted its pre-selected "Trust and continue", the
+# letters did nothing). `--trust-workspace` ("Trust this workspace for this
+# run... does not save trust", per `muse --help`) is the same class of fix
+# mistral-vibe's `--trust` and kiro-cli's `--trust-all-tools` already carry.
+# Live-verified fix: launching with this flag, the composer (`❯`) is ready
+# immediately with no modal, and a `send` submits normally. Deliberately NOT
+# `--yolo`, which also disables approval/sandboxing — out of scope for just
+# skipping a dialog.
 launch_repl() {
   command -v tmux >/dev/null 2>&1 || { echo "[driver] tmux required" >&2; EXIT_REASON="nonzero(2)"; exit 1; }
   # alloc_slot mints a fresh slot, points SESSION at its tmux name and ACTIVE at
@@ -212,9 +232,29 @@ launch_repl() {
   tmux kill-session -t "$SESSION" 2>/dev/null || true
   # `|| { … exit … }` keeps a launch failure from aborting under set -e WITHOUT
   # an accurate exit-reason — the cleanup trap then records nonzero(2).
-  tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "${SES_CWD[$ACTIVE]}" "muse" \
+  tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "${SES_CWD[$ACTIVE]}" "muse" --trust-workspace \
     >>"$DRIVER_LOG.stdout.$ACTIVE" 2>>"$DRIVER_LOG.stderr" \
     || { echo "[driver] failed to launch muse under tmux" >&2; EXIT_REASON="nonzero(2)"; exit 1; }
+  # Startup settle delay — a TUI input-timing requirement, not a wait for an
+  # observable condition (same class as step_send's 0.3s, not a candidate for
+  # a poll): live-reproduced (#1960 driver audit follow-up) that the FIRST
+  # step_send after `launch_repl` returns is dropped just like a bare Enter
+  # is — but this is a DIFFERENT race than the trust-modal one --trust-workspace
+  # fixes above. `tmux new-session -d` returns as soon as the pane is forked,
+  # not once muse's own input handler is wired up, and a driver's step_send
+  # fires within milliseconds of that return with zero gap — 3/3 full
+  # end-to-end driver runs (60s/90s/120s timeouts) lost the first prompt this
+  # way and timed out with zero turns. The rendered pane is NOT a reliable
+  # readiness signal here (unlike copilot's footer-hint poll): capturing the
+  # pane seconds into one of these losing runs already showed the fully
+  # "ready-looking" banner + composer, because muse catches up and repaints
+  # within a couple of seconds regardless of whether the earlier keystrokes
+  # landed — so polling for that text would return "ready" on the very runs
+  # that just lost the prompt. A flat delay before the first send is the
+  # verified fix: 3/3 trials with zero delay dropped the prompt (no
+  # run/terminal record ever appeared); 3/3 trials with this 1s delay
+  # submitted immediately and got a real reply.
+  sleep 1
 }
 
 # muse persists sessions under $MUSE_DATA_ROOT/sessions/<YYYY>/<MM>/<DD>/<uuid>/
@@ -234,10 +274,31 @@ MUSE_DATA_ROOT="${MUSE_DATA_ROOT:-$HOME/.local/share/muse}"
 # of the transcript path is useless — the epilogue passes SES_UUID instead.
 resolve_transcript() {
   if [[ -n "$TRANSCRIPT" ]]; then return 0; fi
-  for _ in $(seq 1 60); do
+  local start_s; start_s=$(date +%s)
+  # Bounded by the run's real $DEADLINE, not a fixed local cap. The original
+  # `for _ in $(seq 1 60)` (~30s at 0.5s/iter) was disconnected from
+  # $TIMEOUT_S/$DEADLINE — flagged in the #1960 driver audit as a structural
+  # risk read from the code (not reproduced live: every launch on this
+  # machine materialized the session dir well under 1s). Fixed defensively
+  # here so a short overall timeout can't keep polling past its real budget,
+  # and a long timeout doesn't give up at a stale 30s with the deadline
+  # nowhere close.
+  while [[ $(date +%s) -lt $DEADLINE ]]; do
     local candidate=""
+    # `-not -path '*/subagent/*'` excludes subagent transcripts (#1960 driver
+    # audit, live-reproduced): muse spawns goal-reminder/verify-reminder
+    # subagents even for a single simple prompt, materializing
+    # subagent/<child>/session.jsonl under the SAME session directory. Without
+    # this exclusion, `find | sort | tail -n1` recurses into subagent/ and
+    # sorts LEXICALLY by full pathname — "session.jsonl" < "subagent/…" as
+    # strings, so once a subagent transcript exists it always wins `tail -n1`
+    # over the driven session's own transcript sitting right next to it.
+    # Live-reproduced on a real driven session with two reminder subagents:
+    # the buggy find (no exclusion) resolved to
+    # .../subagent/<child>/session.jsonl; this exclusion resolves to the
+    # session's own .../session.jsonl, scoped to that one session's family.
     candidate="$(find "$MUSE_DATA_ROOT/sessions" -type f -name 'session.jsonl' \
-                  -newer "$MARKER" 2>/dev/null | sort | tail -n1)"
+                  -not -path '*/subagent/*' -newer "$MARKER" 2>/dev/null | sort | tail -n1)"
     if [[ -n "$candidate" && -s "$candidate" ]]; then
       # Sanity: first line must be a JSON record with this session's stream id.
       local sid=""
@@ -250,31 +311,24 @@ resolve_transcript() {
         echo "[driver] resolve_transcript[s$ACTIVE]: $TRANSCRIPT (uuid=$UUID)" >&2
         return 0
       fi
-      sleep 0.5; continue
     fi
     sleep 0.5
   done
+  echo "[driver] resolve_transcript[s$ACTIVE]: FAILED after $(( $(date +%s) - start_s ))s" \
+       "— no session.jsonl (excluding subagent/) appeared under" \
+       "$MUSE_DATA_ROOT/sessions newer than $MARKER" >&2
   return 1
 }
 
 # --- AGENT-SPECIFIC SEAM 2: count completed turns -----------------------------
-# Canonical muse turn-done shape, read off live session.jsonl files on this
-# machine (4 sessions, 678 records, muse 1.2.1): one user prompt opens exactly
-# one run (payload_type=runtime.session, kind=run, event=started, with its own
-# run_id) and the run's last word is event=terminal (carries turn_duration_ms;
-# terminal=cancelled when the turn was interrupted). model_completed fires per
-# model call and task/completed per sub-task — both too granular to gate on.
-# The Go adapter's parser is canonical once it lands; until then this jq count
-# mirrors it. Kept inline (not a sibling turn-count.sh) until record proves it
-# live — extraction is record's call, per the sparsest-grammar rule.
-turn_count() {
-  if [[ -f "$TRANSCRIPT" ]]; then
-    jq -r 'select(.payload_type=="runtime.session" and ((.payload // {}).kind=="run") and ((((.payload // {}).event) // {}).kind=="terminal")) | "x"' \
-      "$TRANSCRIPT" 2>/dev/null | wc -l | tr -d ' '
-  else
-    echo 0
-  fi
-}
+# Extracted to a sibling turn-count.sh (matches every other adapter) so it can
+# be unit-tested without executing the driver, which walks its recipe at
+# source time (adapter-tables_test.sh B4 — an inline turn_count is invisible
+# to replaydata/_lib/drive/turn-count_test.sh: nothing fails, it is simply not
+# covered). See that file's header for the canonical-shape rationale and the
+# fail-loud fix (#1960 driver audit defect #5).
+# shellcheck source=./turn-count.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/turn-count.sh"
 
 # Track expected vs. actual completed turns (pi pattern): each `send` bumps
 # EXPECTED_TURNS by 1; wait_turn waits for actual >= expected. Without this a
@@ -284,6 +338,15 @@ turn_count() {
 step_send() { # <text>
   local text="$1"
   tmux send-keys -t "$SESSION" -l -- "$text"
+  # This is a TUI input-timing requirement, NOT a wait for an observable
+  # condition (contrast with the deadline-bounded polls elsewhere in this
+  # file): live-reproduced twice (#1960 driver audit) that muse's TUI drops a
+  # bare Enter sent back-to-back with the text — the input handler is still
+  # rendering the typed text when Enter arrives, so it lands mid-render and
+  # never submits (2/2 failed with no delay; 1/1 submitted immediately with
+  # this sleep). Ported verbatim from mistral-vibe/kiro-cli/copilot, which
+  # each independently discovered the identical race for their own TUIs.
+  sleep 0.3
   tmux send-keys -t "$SESSION" Enter
   EXPECTED_TURNS=$((EXPECTED_TURNS + 1))
   echo "[driver] send[s$ACTIVE]: ${text:0:60} (expecting turn $EXPECTED_TURNS)" >&2
@@ -295,17 +358,38 @@ step_wait_turn() {
     EXIT_REASON="readiness_timeout"
     return 1
   }
-  local now=0
+  local now=0 rc=0 stale_reads=0 total_reads=0
   while [[ $(date +%s) -lt $DEADLINE ]]; do
-    now=$(turn_count)
+    rc=0
+    now=$(turn_count) || rc=$?
+    total_reads=$((total_reads + 1))
+    if [[ $rc -ne 0 ]]; then
+      # turn_count's return code (not a global — see turn-count.sh's header
+      # for why) says jq could not read $TRANSCRIPT at all this poll, as
+      # opposed to genuinely finding zero completed turns (#1960 driver audit
+      # defect #5's fail-loud fix). Logged immediately rather than only
+      # inferred from the eventual timeout message below.
+      stale_reads=$((stale_reads + 1))
+      echo "[driver] wait_turn[s$ACTIVE]: turn_count could not read $TRANSCRIPT this poll (jq failed, zero matches) — not the same as zero turns" >&2
+    fi
     if [[ $now -ge $EXPECTED_TURNS ]]; then
       echo "[driver] wait_turn[s$ACTIVE]: count=$now (expected ≥ $EXPECTED_TURNS)" >&2
       return 0
     fi
     sleep 1
   done
-  echo "[driver] wait_turn[s$ACTIVE]: timeout (count=$now, expected ≥ $EXPECTED_TURNS)" >&2
-  EXIT_REASON="timeout"
+  if [[ $total_reads -gt 0 && $stale_reads -eq $total_reads ]]; then
+    # Every single poll failed to read the transcript — this is a read
+    # failure, not a slow model, and must not report as an ordinary timeout
+    # (the exact ambiguity #1960's audit flagged: "step_wait_turn just spins
+    # to $DEADLINE and reports a generic timeout ... indistinguishable from
+    # the model being slow").
+    echo "[driver] wait_turn[s$ACTIVE]: FAILED TO READ — every poll of $TRANSCRIPT errored with zero matches ($stale_reads/$total_reads polls)" >&2
+    EXIT_REASON="nonzero(4)"
+  else
+    echo "[driver] wait_turn[s$ACTIVE]: timeout (count=$now, expected ≥ $EXPECTED_TURNS)" >&2
+    EXIT_REASON="timeout"
+  fi
   return 1
 }
 
@@ -313,10 +397,46 @@ wait_turn() {
   step_wait_turn
 }
 
-# --- AGENT-SPECIFIC SEAM 3: send text -----------------------------------------
-send_text() { # <text>
-  tmux send-keys -t "$SESSION" -l "$1"
+# --- AGENT-SPECIFIC SEAM 4: graceful teardown ---------------------------------
+# `/exit` ("Quit when idle", confirmed live via muse's own `/` command menu)
+# is muse's clean-shutdown slash command. Wired up here in place of the
+# `not_implemented` stub (#1960 driver audit defect #4): the cleanup trap's
+# ONLY teardown path was always `tmux kill-session` — the SIGKILL/ghost-
+# session disk shape, live-confirmed to leave zero session.end records before
+# OR after the kill. `/exit` was live-verified instead to append a real
+# session.end record with exit_reason:"clean" to session.jsonl. This function
+# is what a recipe calls (exit_clean step) to get that clean-exit shape on
+# disk; a recipe with no exit_clean step still falls through to the trap's
+# tmux kill-session, same as every other adapter in this fleet (kiro-cli's
+# step_exit_clean is the identical shape, /quit in place of /exit).
+step_exit_clean() {
+  if [[ "${SES_OWNED[$ACTIVE]:-0}" != "1" ]]; then
+    echo "[driver] exit_clean[s$ACTIVE]: slot already retired -- refusing (its tmux/process may be owned by another live slot)" >&2
+    return 0
+  fi
+  resolve_transcript || true
+  tmux send-keys -t "$SESSION" -l -- "/exit"
+  # Same TUI input-timing requirement as step_send (#1960 driver audit
+  # defect #2) — not a wait for an observable condition.
+  sleep 0.3
   tmux send-keys -t "$SESSION" Enter
+  # STRICT poll (mirrors kiro-cli/copilot post-#1825): require_tmux_session_gone
+  # only returns 0 when the session was actually OBSERVED gone, never on a
+  # best-effort cap expiry — so an `/exit` that stopped working reads as a
+  # real failure instead of a silent exit-reason=ok. Cap: DRIVE_EXIT_CLEAN_CAP_S
+  # (_lib/drive/teardown.sh) — the fleet-uniform generous bound, not a
+  # muse-specific measurement.
+  if require_tmux_session_gone "$SESSION" "$DRIVE_EXIT_CLEAN_CAP_S"; then
+    SES_OWNED[$ACTIVE]=0
+    echo "[driver] exit_clean[s$ACTIVE]: sent /exit to $SESSION (uuid=$UUID, session gone)" >&2
+  else
+    echo "[driver] exit_clean[s$ACTIVE]: FAILED — $SESSION still alive ${DRIVE_EXIT_CLEAN_CAP_S}s after /exit;" \
+         "killing it explicitly. muse did NOT shut down gracefully, so this" \
+         "recording has no real clean-exit session.end." >&2
+    tmux kill-session -t "$SESSION" 2>/dev/null || true
+    SES_OWNED[$ACTIVE]=0
+    EXIT_REASON="nonzero(2)"
+  fi
 }
 
 # --- Step dispatch: ALL standard arms present; stubs fail loudly -------------
@@ -335,7 +455,7 @@ while IFS= read -r step; do
     restart)         not_implemented restart || break ;;         # TODO(muse): save_active; alloc_slot <name> <new-cwd>; launch — new slot carries the new id
     resume)          not_implemented resume || break ;;          # TODO(muse): relaunch same id+cwd (1 session, 2 PIDs) — reuse the active slot
     sigkill)         not_implemented sigkill || break ;;         # TODO(muse): kill -9 the active slot's PID
-    exit_clean)      not_implemented exit_clean || break ;;      # TODO(muse): Ctrl-D graceful shutdown
+    exit_clean)      step_exit_clean ;;
     start_session)   not_implemented start_session || break ;;   # TODO(muse): save_active; alloc_slot; launch a CONCURRENT session, keep the first alive
     session)         not_implemented session || break ;;         # TODO(muse): save_active; load_slot N — switch the active slot
     *)               echo "[driver] unknown step type: $type" >&2; EXIT_REASON="nonzero(2)"; break ;;
