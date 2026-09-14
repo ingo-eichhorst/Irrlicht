@@ -86,6 +86,21 @@ SCRIPT_JSON="$5"
 mkdir -p "$STAGING"
 DRIVER_LOG="$STAGING/driver.log"
 
+# MODEL pins `--model <m>` at launch when the cell's settings name one
+# (ported from kiro-cli's driver-interactive.sh:107-112 — the same
+# settings.model -> launch-argument pattern). `muse --help` documents a
+# top-level `--model <MODEL>` flag ("Model id for non-echo providers");
+# without this, `/model` opens an arrow-key picker that needs the still-
+# unimplemented `keys` step, and a bare `slash`/`send` of "/model <id>" is
+# live-confirmed (5.2 assessment) to open the SAME picker and silently
+# ignore the trailing argument. Without a pin, model-identification (5.2)
+# would silently launch the account default instead of a genuine
+# non-default model.
+MODEL=""
+if [[ -f "$SETTINGS_PATH" ]]; then
+  MODEL="$(jq -r '.model // empty' "$SETTINGS_PATH" 2>/dev/null)"
+fi
+
 # Shared multi-session slot bookkeeping + staging-contract emission (#508 #3).
 # The scaffolded driver lives at replaydata/agents/<agent>/driver-interactive.sh,
 # so the lib is two dirs up under replaydata/_lib/drive. Sourcing it means a new
@@ -230,9 +245,15 @@ launch_repl() {
   # to open another session; per-slot stdout (.stdout.$ACTIVE) feeds the contract.
   alloc_slot "musedrv-$$-$(date +%s)-$((N_SLOTS + 1))" "$RUN_CWD"
   tmux kill-session -t "$SESSION" 2>/dev/null || true
+  # MUSE_ARGS: the flags every launch of muse carries beyond --trust-workspace
+  # and -c <cwd> (fixed per tmux new-session call below). Built as an array,
+  # not string-concatenated, so a value containing whitespace stays one argv
+  # entry when it reaches tmux new-session's trailing-argv passthrough.
+  MUSE_ARGS=(--trust-workspace)
+  [[ -n "$MODEL" ]] && MUSE_ARGS+=(--model "$MODEL")
   # `|| { … exit … }` keeps a launch failure from aborting under set -e WITHOUT
   # an accurate exit-reason — the cleanup trap then records nonzero(2).
-  tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "${SES_CWD[$ACTIVE]}" "muse" --trust-workspace \
+  tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "${SES_CWD[$ACTIVE]}" "muse" "${MUSE_ARGS[@]}" \
     >>"$DRIVER_LOG.stdout.$ACTIVE" 2>>"$DRIVER_LOG.stderr" \
     || { echo "[driver] failed to launch muse under tmux" >&2; EXIT_REASON="nonzero(2)"; exit 1; }
   # Startup settle delay — a TUI input-timing requirement, not a wait for an
