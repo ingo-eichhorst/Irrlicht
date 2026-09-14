@@ -115,7 +115,8 @@
         "Same launch shape as muse/2-14_turn-aborted-by-error: a fresh empty cwd under <staging>/cwd/, `muse --trust-workspace --base-url http://127.0.0.1:18802` in a tmux session, 1s settle sleep before the first send.",
         "record does NOT need to start the mock by hand: the recipe's .mock block below (package/port/args/request_log_pattern) is read by run-cell.sh's start_recipe_mock, which builds tools/onboarding-factory/recording/mock-muse-overload, launches it on 127.0.0.1:18802 with --status 429 --succeed-after 0, waits for it to listen, and tears it down in the EXIT trap.",
         "The prompt content does not matter for cue-avoidance: the model call fails before any assistant text is ever generated, so there is no waiting-cue false-match risk. Keep it simple, e.g. \"Say hello.\"",
-        "wait_turn's turn_count() matches any event.kind==\"terminal\" record (turn-count.sh), so it correctly unblocks as soon as the failed run's own terminal event lands."
+        "wait_turn's turn_count() matches any event.kind==\"terminal\" record (turn-count.sh), so it correctly unblocks as soon as the failed run's own terminal event lands.",
+        "TIMING FINDING from a live drive attempt (timeout at the original 120s budget): against the mock's real HTTP 429 responses, muse's retry ladder backs off exponentially and NOT near-instantly like the dead-port baseline -- observed live, this machine, this recipe: retry_delay_ms 1000, 2000, 4000, 8000, 16000, 32000, then capping at 60000 for the remaining retries, across max_attempts=10. Summed, the 9 delays before the 10th (final, terminal) attempt total ~243s. timeout_seconds raised from 120 to 330 to give this the room it structurally needs; a dead port's ~2s terminal failure (2-14's own live numbers) does NOT carry over to a real-status-code mock, and this is the reason why."
       ],
       "script": [
         {
@@ -146,7 +147,7 @@
       "settings": {
         "base_url": "http://127.0.0.1:18802"
       },
-      "timeout_seconds": 120,
+      "timeout_seconds": 330,
       "mock": {
         "package": "./tools/onboarding-factory/recording/mock-muse-overload",
         "port": 18802,
