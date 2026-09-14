@@ -1,0 +1,113 @@
+{
+  "scenario_id": "multiple-agents-same-workspace",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.2.1",
+    "daemon_version": "0.5.x (worktree HEAD)",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes; daemon_capability: full; driver_capability: ready — muse's PID binding is CWD-independent by construction (session-lock-file lookup, not a name+cwd scan), which is a STRONGER guarantee against the exact cross-adapter mis-binding risk this scenario probes than a typical matcher."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "multiple-agents-same-workspace",
+      "agent": "muse",
+      "assessed_at": "2026-09-14T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n→ route: **record**\n\n## Scope\n\nThis scenario is DIFFERENT from `4.1 multiple-sessions-same-cwd` (already assessed for muse, driver-gap route): here a `muse` session coexists with a DIFFERENT agent CLI's session in the SAME cwd, not two muse sessions. Per the established convention for this scenario (every already-recorded cell — aider, copilot, gemini-cli, hermes, kiro-cli, mistral-vibe, opencode — pairs with `claudecode` as `partner_adapter`; only claudecode's own cell and antigravity pair with codex), the partner here is `claudecode`: it is installed on this machine (`/Users/ingo/.local/bin/claude`), already authenticated, and every sibling recipe elicits it with a single cheap \"reply with exactly the word: X\" turn.\n\n## agent_supports: yes\n\n`muse` is an ordinary CLI process (a bash wrapper that `exec`s a version-pinned `muse-bin-<ver>-R<build>` binary — core/adapters/inbound/agents/muse/adapter.go's package doc, format-spec §2). Nothing about muse's launch, its per-session `~/.local/share/muse/sessions/` transcript tree, or its `.session.lock` file touches or depends on what else is running in the same working directory. A second, unrelated CLI (claudecode) writing its own files into the same cwd does not interact with any of muse's on-disk state. So muse trivially \"supports\" coexistence — there is nothing in its own design for a second agent's presence to conflict with.\n\n## daemon_capability: full — and structurally stronger than the generic case\n\nThe scenario's actual question is whether the daemon's adapter wiring keeps two DIFFERENT agents' sessions labeled and tracked independently when both are live in one cwd. For muse this holds on every axis, and one of them is a STRICTLY STRONGER guarantee than the pattern other adapters rely on:\n\n1. **Disjoint process matcher.** muse registers `agent.Process{Match: agent.CommandPattern{Regex: processCmdRegex}}` where `processCmdRegex = (^|/)muse-bin-[^/\\s]+(\\s|$)` (agent.go, adapter.go). claudecode registers `agent.Process{Match: agent.ExactName{Name: \"claude\"}}` (claudecode/agent.go:54, adapter.go:12 `ProcessName = \"claude\"`). A claudecode process's command line never contains `muse-bin-`, and a muse-bin process is never named `claude` — the two matchers can never both fire on the same OS process. This is the same disjoint-matcher argument the codex/pi 4.2 assessments already made and this repo already proved correct for those pairs.\n\n2. **Disjoint transcript roots.** muse's `Source()` is `agent.FilesUnderRoot{Dir: \"~/.local/share/muse/sessions\", ...}` (agent.go); claudecode's is `agent.FilesUnderRoot{Dir: transcriptsDir()}` = `~/.claude/projects/` (claudecode/agent.go:202-203). The fswatcher roots are per-adapter, wired off the `allAgents` slice (core/adapters/inbound/agents/maps.go, cited by the codex/pi sibling assessments) — a muse transcript and a claudecode transcript can never land under the same watch root or be read by the wrong adapter's parser.\n\n3. **CWD-INDEPENDENT PID binding — stronger than the generic pattern.** This is the property the task brief specifically flags as the interesting risk (\"a cwd-based matcher in another adapter could plausibly mis-bind\"), and muse's own binding mechanism sidesteps it entirely rather than merely avoiding collision. `muse/pid.go`'s `DiscoverPID(cwd, transcriptPath string, disambiguate func([]int) int) (int, error)` takes a `cwd` parameter but never reads it in the function body — confirmed by reading the full function (lines 41-52): it derives `lockPath` as `transcriptPath`'s sibling `.session.lock` (via `sessionLockPath`, itself a pure function of `transcriptPath`, not `cwd`) and calls `processlifecycle.DiscoverPIDByTranscriptWriter(lockPath)`, an lsof-style \"who holds this exact file open\" lookup scoped to one absolute path. There is no cwd-based scan, no process-name-plus-cwd disambiguation, and no election among candidates anywhere in this path — the pid.go doc comment states this was a DELIBERATE design choice specifically because a single `muse serve` process can hold `.session.lock` fds open for many (11, measured) sessions at once, making \"one muse-bin pid ⇒ one session\" false and a name-scan approach (junie/vibe's shape) insufficient even for muse's OWN same-adapter case. Since the lookup never inspects the cwd or enumerates candidate processes by name, a coexisting claudecode process (which never opens muse's `.session.lock` file) cannot be mis-bound to a muse session, and a coexisting muse process cannot be mis-bound to a claudecode session either — the two discovery paths are not just correct today but structurally incapable of interfering, regardless of how many processes of either kind run in the shared cwd.\n\n4. **No shared parser state.** `Source()` wires `agent.JSONLineParser{NewParser: func() agent.LineParser { return &Parser{} }}` — a FRESH `Parser{}` per transcript file (agent.go), so a muse session's parser never shares state with claudecode's.\n\nThe one caveat this branch's own commit history surfaces: a recent fix (cited in shared context as \"FIXED in this branch\") addressed a `proc-*` presession placeholder that could evict a muse session's real row in `assignPIDLocked` (symptom: a spurious `transcript_removed` ~0.6-1.1s after birth). That bug was about ordering within a SINGLE muse session's own birth, not about cross-adapter interference — it does not change the cwd-independence argument above, but the spec anchors on `working` (not `ready`) for exactly the same reason the claudecode/codex/pi 4.2 specs already do, which also sidesteps this class of presession-row race.\n\n## driver_capability: ready\n\n`source tools/onboarding-factory/scripts/lib/recipe-lint.sh; driver_step_types_from_file replaydata/agents/muse/driver-interactive.sh` lists `exit_clean interrupt keys reset_session restart resume send session sigkill slash sleep start_session wait_turn` — `send`, `wait_turn`, and `sleep` (the only step types this simple single-turn recipe needs) are all present, identically to claudecode's driver. `RUN_CWD=\"${IRRLICHT_ONBOARD_CWD:-$STAGING/cwd}\"` (driver-interactive.sh:170) confirms the driver already honors the shared-cwd env var `run-cell-multi.sh` uses to point both adapters at one directory. No driver gap for this recipe.",
+      "caveats": [
+        "The daemon-side presession-eviction bug cited as FIXED in this branch (shared context, known bug #1) was about a single muse session's own birth ordering, not cross-adapter interference; the spec still anchors on `working` rather than `ready` to skip either adapter's proc-<PID> presession placeholder, matching the already-proven claudecode/codex/pi template for this scenario — belt-and-suspenders rather than reliance on the fix alone.",
+        "This assessment is doc+code research only (no live recording per this verb's contract). The `daemon_capability: full` verdict for the emission side (does muse's transcript actually reach the fswatcher promptly while a second CLI is also writing to disk in the same cwd) is PROVISIONAL until `record` runs it live — nothing in the architecture suggests filesystem contention, but this is exactly the class of claim the assess SKILL.md flags as needing a live recording to fully settle.",
+        "Vacuous-pass check: this cell would pass while proving nothing if the recipe accidentally matched a muse ambient reminder/goal-check SUBAGENT's own working->ready cycle (shared context: nearly every turn spawns one, sharing the ParentSessionID-linked directory shape of a real subagent) instead of the top-level session, or if claudecode's own session were mistaken for muse's. The spec's `new_session:true` + independent `working` anchors on both agentA/agentB (never `ready`, which both a real session AND a presession placeholder can reach) guards against the placeholder case; record must verify the matched session_id in each phase is the TOP-LEVEL muse/claudecode session, not a reminder-subagent's, by checking `ParentSessionID` is empty on the matched row."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/agent.go",
+          "note": "Process.Match=CommandPattern{Regex: processCmdRegex} (muse-bin- prefix); Source=FilesUnderRoot{Dir: ~/.local/share/muse/sessions}; fresh Parser{} per transcript"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/adapter.go",
+          "note": "processCmdPattern = `(^|/)muse-bin-[^/\\s]+(\\s|$)`; defaultRootDir = .local/share/muse/sessions"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/pid.go",
+          "note": "DiscoverPID(cwd, transcriptPath, disambiguate) never reads the cwd parameter in its body; lockPath is derived purely from transcriptPath and looked up via processlifecycle.DiscoverPIDByTranscriptWriter, an absolute-path lsof-writer lookup — no name+cwd scan, no candidate election"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/agent.go",
+          "note": "Process.Match=ExactName{Name:\"claude\"} at line 54; Source=FilesUnderRoot{Dir: transcriptsDir()} at lines 202-203 — disjoint from muse's matcher and root"
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/claudecode/adapter.go",
+          "note": "ProcessName = \"claude\" (line 12)"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/4-2_multiple-agents-same-workspace/metadata.json",
+          "note": "Sibling cell's already-proven daemon=full argument for a different adapter pair (codex+claudecode), templated here for muse+claudecode"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/pi/scenarios/4-2_multiple-agents-same-workspace/metadata.json",
+          "note": "Second sibling cell (pi+claudecode) confirming partner_adapter=claudecode is the established convention for this scenario"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/driver-interactive.sh",
+          "note": "DRIVE_ELICITS includes send/wait_turn/sleep; RUN_CWD honors IRRLICHT_ONBOARD_CWD (line 170) for the shared-cwd cross-adapter rig"
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/scripts/run-cell-multi.sh",
+          "note": "Cross-adapter recorder: reads partner_adapter off the primary adapter's recipe, launches both interactive drivers concurrently against one shared cwd under one isolated --record daemon"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "partner_adapter": "claudecode",
+      "preconditions": [
+        "muse AND claude CLIs on PATH and authenticated (muse: muse login or META_API_KEY; claude: existing auth)",
+        "irrlichd is recording — run-cell-multi.sh isolated coexist mode (spawns its own --record daemon on an alternate port with its own IRRLICHT_HOME, so production keeps running)",
+        "no `muse serve` host process is running that could attach the driven invocation to a shared multi-session pid instead of a dedicated one — UNVERIFIED whether this would even change the outcome (pid.go's lookup is per-.session.lock regardless), named as a precondition rather than assumed safe",
+        "no other muse/claudecode session is live in the run cwd"
+      ],
+      "setup": [
+        "run-cell-multi.sh creates ONE shared cwd and launches the muse and claudecode interactive drivers concurrently, both pointed at it via IRRLICHT_ONBOARD_CWD",
+        "muse registers Process.Match=CommandPattern{muse-bin-...} + Source=FilesUnderRoot{~/.local/share/muse/sessions}, disjoint from claudecode's ExactName{claude} matcher and ~/.claude/projects root, so the daemon keys the two sessions independently; muse's DiscoverPID additionally never reads the cwd argument at all, so no cross-adapter mis-binding is structurally possible",
+        "this cell stores the muse transcript for the replay golden; its events.jsonl and expected.jsonl span the whole workspace (both adapters)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: delta"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 10
+        }
+      ],
+      "verify": [
+        "events.jsonl contains TWO distinct session_ids from two different adapters, both keyed to the same cwd slug",
+        "each session has its own independent working->ready arc; no transition on one is attributed to the other",
+        "no cross-contamination: the daemon never merges or flaps the two adapters' rows",
+        "the matched muse session_id has an empty ParentSessionID (it is the top-level session, not an ambient reminder-subagent's own working->ready cycle)"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  }
+}
