@@ -82,18 +82,30 @@ import (
 // "runtime.session"/"approval" family is used here, since "requested" alone
 // (unlike approval_wait.effect.started) also carries tool_name for context.
 //
-// A REAL, MEASURED LIMITATION of this whole waiting-detection path is worth
-// stating plainly here rather than only in the final report: every single
-// kind:"approval" record found in this corpus (all 11 occurrences, spanning
-// every top-level directory that carries one) lived in a file with ZERO
-// run/task content — i.e. exactly the "top-level approval-only shadow"
-// stage 1's adapter.go documents and sessionIDFromPath's
-// isShadowedBySubagentCopy deliberately suppresses whenever the shadowed
-// id's nested <parent>/subagent/<id>/session.jsonl copy exists, which it did
-// for all 11. So the approval mapping below is correctly implemented against
-// the real record shape, but in every sample available for this stage it
-// never actually reaches the daemon's watcher — see this package's stage-2
-// return notes for #1960 for the follow-up this raises.
+// # Resolved (issue #1960 stage 3): stage 2's original worry here read
+//
+// This section used to state, correctly at the time, that every single
+// kind:"approval" record found in this corpus (all 11 occurrences) lived in
+// a file with ZERO run/task content — the "top-level approval-only shadow"
+// adapter.go documents — and that sessionIDFromPath's suppression of that
+// shadow (as it worked then) meant the approval mapping below, though
+// correctly implemented, never actually reached the daemon's watcher. That
+// was a real, measured gap, not a false alarm: direct comparison confirmed
+// the nested <parent>/subagent/<id>/session.jsonl copy carries none of those
+// 11 approval records either — the two files are disjoint, not duplicates.
+// sessionIDFromPath and parentSessionIDFromPath (adapter.go) were narrowed
+// to stop discarding the shadow and instead fold it into the SAME session
+// the nested copy already establishes, so the approval mapping below now
+// does reach the watcher — see adapter.go's doc for the fix and the ordering
+// evidence that makes it safe. Separately, a live-driven probe on this
+// machine confirmed a session's OWN top-level session.jsonl (never anyone's
+// subagent, so never shadowed) carries its approval events directly and
+// unconditionally — a real tool-approval prompt, triggered live, produced
+// requested/automated_review_started/automated_review_completed/
+// decision_applied inline in that session's own file, no shadow involved.
+// So this path was never broken for a plain top-level session; the gap was
+// specific to a SUBAGENT's own approval-wait, and only while the shadow was
+// suppressed.
 //
 // # Token accounting: model_completed only, not goal_usage_attribution
 //

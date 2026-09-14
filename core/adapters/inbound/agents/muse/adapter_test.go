@@ -190,13 +190,30 @@ func TestParentSessionIDFromPath(t *testing.T) {
 	}
 }
 
-// TestSessionIDFromPath_SuppressesTopLevelShadow reproduces format-spec
-// §1's anomaly on disk: a subagent's child UUID also surfacing as a
-// top-level dated directory holding a short, independent, approval-only
-// shadow stream. sessionIDFromPath must mint a session from the nested,
-// authoritative copy and refuse to mint a second one from the top-level
-// shadow sharing its id.
-func TestSessionIDFromPath_SuppressesTopLevelShadow(t *testing.T) {
+// TestSessionIDFromPath_TopLevelShadowJoinsNestedSession reproduces
+// format-spec §1's anomaly on disk: a subagent's child UUID also surfacing
+// as a top-level dated directory holding a short, independent,
+// approval-only shadow stream, alongside the nested
+// <parent>/subagent/<child-id>/ copy that carries that same session's
+// run/task/tool content.
+//
+// # Defect this guards (issue #1960 stage 3), seen red before the fix
+//
+// A prior version of this function (isShadowedBySubagentCopy, called from
+// sessionIDFromPath) suppressed the top-level shadow outright — returned ""
+// for it — on the assumption the nested copy duplicated whatever it carried.
+// Direct inspection of the real corpus disproved that (see adapter.go's
+// doc): the two files are disjoint, and the shadow is the ONLY copy of that
+// subagent's approval-wait signal. Suppressing it discarded that signal with
+// no fallback. This test was run against that prior version before the fix
+// landed and failed exactly as expected — sessionIDFromPath(shadowTranscript)
+// came back "" — confirming the defect it now guards actually reproduced,
+// not merely a theoretical worry. Both assertions below must hold for the
+// shadow to actually reach the daemon's watcher: matching sessionIDFromPath
+// AND a parentSessionIDFromPath that ties it to the same parent the nested
+// copy reports (else it would seed a spurious top-level session — see the
+// mutation test right below this one for that second half specifically).
+func TestSessionIDFromPath_TopLevelShadowJoinsNestedSession(t *testing.T) {
 	tmp := t.TempDir()
 	const parentID = "01a09c47-506a-7763-b82a-9ab89a9e195a"
 	const childID = "01a09c71-ab1c-7611-b0d4-6cb963f16317"
@@ -222,19 +239,63 @@ func TestSessionIDFromPath_SuppressesTopLevelShadow(t *testing.T) {
 	if got := sessionIDFromPath(nestedTranscript); got != childID {
 		t.Errorf("nested authoritative copy: sessionIDFromPath = %q, want %q", got, childID)
 	}
-	if got := sessionIDFromPath(shadowTranscript); got != "" {
-		t.Errorf("top-level shadow: sessionIDFromPath = %q, want \"\" (suppressed)", got)
+	if got := sessionIDFromPath(shadowTranscript); got != childID {
+		t.Errorf("top-level shadow: sessionIDFromPath = %q, want %q (joins the nested session, no longer suppressed)", got, childID)
 	}
 	if got := parentSessionIDFromPath(nestedTranscript); got != parentID {
 		t.Errorf("nested copy's parent: parentSessionIDFromPath = %q, want %q", got, parentID)
 	}
+	if got := parentSessionIDFromPath(shadowTranscript); got != parentID {
+		t.Errorf("shadow's parent: parentSessionIDFromPath = %q, want %q (same parent as the nested copy)", got, parentID)
+	}
+}
+
+// TestParentSessionIDFromPath_ShadowParentMutationGoesRed is the mutation
+// proof AGENTS.md's testing-philosophy asks for on new behavior with no
+// natural "before": subagentShadowParentID has no defect history to run
+// red, so its own guard is exercised by actually breaking it.
+//
+// Mutation actually run (not merely described): with parentSessionIDFromPath's
+// top-level branch changed from `return subagentShadowParentID(path, id)` to
+// `return ""` (i.e. the exact pre-fix behavior — a top-level path always
+// reports no parent), this test's assertion failed:
+// parentSessionIDFromPath(shadowTranscript) came back "" instead of
+// parentID. The mutation was then reverted to restore the fix. That failure
+// is what makes the assertion below load-bearing rather than a tautology.
+func TestParentSessionIDFromPath_ShadowParentMutationGoesRed(t *testing.T) {
+	tmp := t.TempDir()
+	const parentID = "01a09c47-506a-7763-b82a-9ab89a9e195a"
+	const childID = "01a09c71-ab1c-7611-b0d4-6cb963f16317"
+
+	dateDir := filepath.Join(tmp, "2026", "09", "13")
+	nestedDir := filepath.Join(dateDir, parentID, "subagent", childID)
+	shadowDir := filepath.Join(dateDir, childID)
+	if err := os.MkdirAll(nestedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(shadowDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// subagentShadowParentID's os.Stat checks for the nested transcript
+	// FILE, not just the directory — it must exist on disk for the shadow
+	// to be recognized at all.
+	nestedTranscript := filepath.Join(nestedDir, transcriptFilename)
+	if err := os.WriteFile(nestedTranscript, []byte(`{}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	shadowTranscript := filepath.Join(shadowDir, transcriptFilename)
+	if err := os.WriteFile(shadowTranscript, []byte(`{}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := parentSessionIDFromPath(shadowTranscript); got != parentID {
+		t.Errorf("parentSessionIDFromPath(shadow) = %q, want %q", got, parentID)
+	}
 }
 
 // TestSessionIDFromPath_OrdinaryTopLevelSessionIsUnaffected is the vacuity
-// guard for the shadow suppression above: a top-level session with no
-// colliding nested copy anywhere must mint normally, and an unreadable date
-// directory (no on-disk sibling scan possible) must fail open rather than
-// silently dropping a real session.
+// guard for the shadow handling above: a top-level session with no
+// colliding nested copy anywhere must still mint normally.
 func TestSessionIDFromPath_OrdinaryTopLevelSessionIsUnaffected(t *testing.T) {
 	tmp := t.TempDir()
 	const id = "01a09c85-58a1-7331-b094-597fec8ea335"
@@ -250,14 +311,24 @@ func TestSessionIDFromPath_OrdinaryTopLevelSessionIsUnaffected(t *testing.T) {
 	if got := sessionIDFromPath(transcript); got != id {
 		t.Errorf("sessionIDFromPath(%q) = %q, want %q", transcript, got, id)
 	}
+	// No sibling subagent tree claims this id anywhere, so it has no parent.
+	if got := parentSessionIDFromPath(transcript); got != "" {
+		t.Errorf("parentSessionIDFromPath(%q) = %q, want \"\" (ordinary top-level session)", transcript, got)
+	}
 
 	// A path whose date directory does not exist on disk at all (the common
 	// case in every other table-driven test above, which uses fabricated
 	// paths with nothing backing them on the test machine) must still mint
-	// normally — isShadowedBySubagentCopy's ReadDir failure fails open.
+	// normally: sessionIDFromPath no longer touches disk at all (the shadow
+	// scan moved to parentSessionIDFromPath/subagentShadowParentID), and
+	// that scan's own ReadDir failure fails open — "cannot tell" is not
+	// "is a shadow".
 	fabricated := "/Users/x/.local/share/muse/sessions/2026/09/13/" + id + "/session.jsonl"
 	if got := sessionIDFromPath(fabricated); got != id {
-		t.Errorf("sessionIDFromPath(%q) = %q, want %q (unreadable date dir must fail open)", fabricated, got, id)
+		t.Errorf("sessionIDFromPath(%q) = %q, want %q", fabricated, got, id)
+	}
+	if got := parentSessionIDFromPath(fabricated); got != "" {
+		t.Errorf("parentSessionIDFromPath(%q) = %q, want \"\" (unreadable date dir must fail open)", fabricated, got)
 	}
 }
 
