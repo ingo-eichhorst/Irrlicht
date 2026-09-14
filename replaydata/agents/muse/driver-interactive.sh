@@ -151,7 +151,7 @@ SES_OWNED=()
 # DRIVE_SLASH_REQUIRES_STEP_TYPE=true if muse is headless-first (a bare
 # send "/cmd" stores literal text instead of reaching the REPL).
 # shellcheck disable=SC2034  # scraped from this file's SOURCE by tools/onboarding-factory/scripts/lib/recipe-lint.sh:97 (sed), never expanded in shell
-DRIVE_ELICITS="send slash wait_turn sleep exit_clean"
+DRIVE_ELICITS="send slash wait_turn sleep exit_clean restart sigkill"
 # shellcheck disable=SC2034  # scraped from this file's SOURCE by tools/onboarding-factory/scripts/lib/recipe-lint.sh:113 (sed), never expanded in shell
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 RUN_CWD="${IRRLICHT_ONBOARD_CWD:-$STAGING/cwd}"
@@ -244,6 +244,16 @@ launch_repl() {
   # it, and clears the slot's TRANSCRIPT/UUID. restart/start_session call it again
   # to open another session; per-slot stdout (.stdout.$ACTIVE) feeds the contract.
   alloc_slot "musedrv-$$-$(date +%s)-$((N_SLOTS + 1))" "$RUN_CWD"
+  spawn_muse_repl
+}
+
+# spawn_muse_repl launches `muse` in tmux for the CURRENTLY ACTIVE slot (caller
+# already ran alloc_slot). Extracted from launch_repl (#1960 stage 3) so
+# step_restart reuses the identical launch shape — same MUSE_ARGS construction
+# (settings_model's --model pin, and any future launch-arg wiring like
+# base_url_override), same settle-delay rationale — instead of drifting a
+# second, hand-copied tmux new-session call out of sync with the first.
+spawn_muse_repl() {
   tmux kill-session -t "$SESSION" 2>/dev/null || true
   # MUSE_ARGS: the flags every launch of muse carries beyond --trust-workspace
   # and -c <cwd> (fixed per tmux new-session call below). Built as an array,
@@ -460,6 +470,71 @@ step_exit_clean() {
   fi
 }
 
+# step_restart (ported from claudecode's step_restart, driver-interactive.sh:
+# 497-516, adapted from claudecode's own CURRENT_TMUX/CURRENT_UUID slot scheme
+# onto muse's shared _lib/drive/slots.sh model): end the active session's
+# lifecycle and start a FRESH one in a NEW cwd. The old slot is preserved
+# (save_active) so the epilogue still flushes its uuid + transcript; only its
+# tmux is retired (SES_OWNED=0, kill-session) before alloc_slot opens the next
+# one. A fresh cwd matters here the same way it does for claudecode: every
+# muse launch already carries --trust-workspace (per-invocation, not
+# persisted, muse-driver-audit.md), so reusing a cwd is not known to break
+# anything, but a fresh directory is the already-proven-safe shape session-end's
+# own assessment caveat calls for.
+step_restart() {
+  save_active
+  SES_OWNED[$ACTIVE]=0
+  tmux kill-session -t "$SESSION" 2>/dev/null || true
+  sleep 1
+  local idx=$(( N_SLOTS + 1 ))
+  alloc_slot "musedrv-$$-$(date +%s)-${idx}" "$STAGING/cwd-${idx}"
+  mkdir -p "${SES_CWD[$ACTIVE]}"
+  echo "[driver] restart: new session slot #${ACTIVE} (cwd=${SES_CWD[$ACTIVE]})" >&2
+  spawn_muse_repl
+}
+
+# step_sigkill (ported from claudecode's step_sigkill, driver-interactive.sh:
+# 536-553, re-targeted at muse's OWN PID-discovery mechanism instead of a
+# `pgrep -f --session-id` argv match, which has no muse equivalent — muse
+# mints its own session id and never receives one on argv). Finds the real
+# muse-bin PID the SAME way the daemon does (core/adapters/inbound/agents/
+# muse/pid.go's DiscoverPID): lsof the session's own .session.lock file (a
+# sibling of session.jsonl), falling back to lsof on the transcript file
+# itself if the lock has no writer (pid.go's own fallback, for the same
+# reason). This observes the SUBJECT (the actual process bound to this
+# session, via the same signal irrlichd uses) rather than a side effect —
+# NOT tmux's pane_pid, which would be a proxy for "the process tmux spawned"
+# rather than "the process holding this session's lock". Fails loudly
+# (EXIT_REASON, return 1) when no writer is found, rather than silently
+# treating "found nothing" as "already dead": claudecode's own step_sigkill
+# only logs and continues on a miss, which is the "cannot look" case reading
+# identically to "looked and found nothing" this porting explicitly avoids.
+step_sigkill() {
+  resolve_transcript || true
+  local lockfile="" pid=""
+  command -v lsof >/dev/null 2>&1 || { echo "[driver] sigkill[s$ACTIVE]: FAILED — lsof not on PATH, cannot discover the muse PID to kill" >&2; EXIT_REASON="nonzero(2)"; return 1; }
+  if [[ -n "$TRANSCRIPT" ]]; then
+    lockfile="$(dirname "$TRANSCRIPT")/.session.lock"
+    pid="$(lsof -t -- "$lockfile" 2>/dev/null | head -1)"
+    if [[ -z "$pid" ]]; then
+      pid="$(lsof -t -- "$TRANSCRIPT" 2>/dev/null | head -1)"
+    fi
+  fi
+  if [[ -z "$pid" ]]; then
+    echo "[driver] sigkill[s$ACTIVE]: FAILED — lsof found no writer of $lockfile or $TRANSCRIPT; nothing killed (uuid=$UUID)" >&2
+    EXIT_REASON="nonzero(2)"
+    return 1
+  fi
+  kill -9 "$pid" 2>/dev/null || true
+  echo "[driver] sigkill[s$ACTIVE]: killed PID $pid (uuid=$UUID, lock=$lockfile)" >&2
+  SES_OWNED[$ACTIVE]=0
+  # Don't tmux kill-session — the dead-process pane stays so a later restart
+  # cleans it, matching claudecode's own step_sigkill. The kill alone is what
+  # produces process_exited; killing the pane too would not add a second
+  # signal, only remove the diagnostic value of the leftover pane.
+  sleep 1
+}
+
 # --- Step dispatch: ALL standard arms present; stubs fail loudly -------------
 launch_repl
 # shellcheck disable=SC2034  # read by the sourced replaydata/_lib/drive/slots.sh (save_active/load_slot)
@@ -473,9 +548,9 @@ while IFS= read -r step; do
     interrupt)       not_implemented interrupt || break ;;       # TODO(muse): Escape/Ctrl-C the in-flight turn
     keys)            not_implemented keys || break ;;            # TODO(muse): tmux send-keys raw sequence
     reset_session)   not_implemented reset_session || break ;;   # TODO(muse): in-REPL /clear|/new → new id, SAME slot; re-resolve SES_TRANSCRIPT[$ACTIVE] (SEAM 3)
-    restart)         not_implemented restart || break ;;         # TODO(muse): save_active; alloc_slot <name> <new-cwd>; launch — new slot carries the new id
+    restart)         step_restart || break ;;
     resume)          not_implemented resume || break ;;          # TODO(muse): relaunch same id+cwd (1 session, 2 PIDs) — reuse the active slot
-    sigkill)         not_implemented sigkill || break ;;         # TODO(muse): kill -9 the active slot's PID
+    sigkill)         step_sigkill || break ;;
     exit_clean)      step_exit_clean ;;
     start_session)   not_implemented start_session || break ;;   # TODO(muse): save_active; alloc_slot; launch a CONCURRENT session, keep the first alive
     session)         not_implemented session || break ;;         # TODO(muse): save_active; load_slot N — switch the active slot
