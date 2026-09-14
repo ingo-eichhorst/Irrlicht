@@ -1,0 +1,263 @@
+{
+  "schema_version": 1,
+  "source_transcript": "",
+  "generated_at": "0001-01-01T00:00:00Z",
+  "settings": {
+    "adapter": "muse",
+    "debounce_window": 2000000000,
+    "flicker_max_duration": 10000000000
+  },
+  "summary": {
+    "total_events": 273,
+    "consumed_events": 273,
+    "total_transitions": 5,
+    "first_event_time": "2026-09-15T00:24:34.273352+02:00",
+    "last_event_time": "2026-09-15T00:25:19.604114+02:00",
+    "wall_clock_session_duration": 45330762000,
+    "state_durations": {
+      "ready": 26350564000,
+      "working": 18980198000
+    },
+    "flicker_count": 1,
+    "flickers_by_category": {
+      "working_between_ready": 1
+    },
+    "flickers_by_reason": {
+      "force ready→working on first activity": 1
+    },
+    "cum_input_tokens": 45222,
+    "cum_output_tokens": 66,
+    "cum_cache_read_tokens": 20209,
+    "model_name": "muse-spark-1.2"
+  },
+  "transitions": [
+    {
+      "index": 0,
+      "event_index": -1,
+      "virtual_time": "2026-09-15T00:24:34.273352+02:00",
+      "cause": "init",
+      "prev_state": "",
+      "new_state": "ready",
+      "reason": "initial state",
+      "last_event_type": "",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 1,
+      "event_index": 72,
+      "virtual_time": "2026-09-15T00:24:37.563877+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "user_message",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 2,
+      "event_index": 138,
+      "virtual_time": "2026-09-15T00:24:42.771733+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "ok"
+    },
+    {
+      "index": 3,
+      "event_index": 205,
+      "virtual_time": "2026-09-15T00:25:05.831772+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "user_message",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 4,
+      "event_index": 272,
+      "virtual_time": "2026-09-15T00:25:19.604114+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "again"
+    }
+  ],
+  "sessions": [
+    {
+      "session_id": "01a0a205-a559-7fd2-99cd-6ff35525b691",
+      "adapter": "muse",
+      "first_seen": "2026-09-15T00:24:34.244101+02:00",
+      "last_seen": "2026-09-15T00:25:19.60508+02:00",
+      "duration_ms": 45360,
+      "event_count": 551,
+      "state_changes": 7,
+      "final_state": "ready",
+      "pid": 25643,
+      "pid_discovery_lag_ms": 29607,
+      "debounce_coalesced_events": 265,
+      "state_durations_ms": {
+        "ready": 26406,
+        "working": 18949
+      }
+    },
+    {
+      "session_id": "proc-24808",
+      "adapter": "muse",
+      "first_seen": "2026-09-15T00:24:34.739793+02:00",
+      "last_seen": "2026-09-15T00:24:44.952629+02:00",
+      "duration_ms": 10212,
+      "event_count": 6,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 24808,
+      "pid_discovery_lag_ms": 27,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 10185
+      }
+    },
+    {
+      "session_id": "b21b2aeb-d828-4bba-8bc5-98e6bbec4dc3",
+      "adapter": "muse",
+      "parent_session_id": "01a0a205-a559-7fd2-99cd-6ff35525b691",
+      "first_seen": "2026-09-15T00:24:38.485722+02:00",
+      "last_seen": "2026-09-15T00:24:42.790106+02:00",
+      "duration_ms": 4304,
+      "event_count": 108,
+      "state_changes": 2,
+      "final_state": "ready",
+      "pid": 24808,
+      "pid_discovery_lag_ms": 277,
+      "debounce_coalesced_events": 50,
+      "state_durations_ms": {
+        "ready": 701,
+        "working": 3593
+      }
+    },
+    {
+      "session_id": "d23ca9a3-aaf0-4d86-9ce5-8b0e8be6b2fb",
+      "adapter": "muse",
+      "parent_session_id": "01a0a205-a559-7fd2-99cd-6ff35525b691",
+      "first_seen": "2026-09-15T00:24:38.546229+02:00",
+      "last_seen": "2026-09-15T00:24:44.084554+02:00",
+      "duration_ms": 5538,
+      "event_count": 89,
+      "state_changes": 2,
+      "final_state": "ready",
+      "pid": 24808,
+      "pid_discovery_lag_ms": 299,
+      "debounce_coalesced_events": 40,
+      "state_durations_ms": {
+        "ready": 1366,
+        "working": 4163
+      }
+    },
+    {
+      "session_id": "proc-25643",
+      "adapter": "muse",
+      "first_seen": "2026-09-15T00:25:00.066407+02:00",
+      "last_seen": "2026-09-15T00:25:04.17581+02:00",
+      "duration_ms": 4109,
+      "event_count": 6,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 25643,
+      "pid_discovery_lag_ms": 28,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 4081
+      }
+    },
+    {
+      "session_id": "1c6b18e8-deae-487a-aa6c-d41f829fe441",
+      "adapter": "muse",
+      "parent_session_id": "01a0a205-a559-7fd2-99cd-6ff35525b691",
+      "first_seen": "2026-09-15T00:25:06.607515+02:00",
+      "last_seen": "2026-09-15T00:25:19.619615+02:00",
+      "duration_ms": 13012,
+      "event_count": 108,
+      "state_changes": 2,
+      "final_state": "ready",
+      "pid": 25643,
+      "pid_discovery_lag_ms": 272,
+      "debounce_coalesced_events": 50,
+      "state_durations_ms": {
+        "ready": 9726,
+        "working": 3276
+      }
+    },
+    {
+      "session_id": "17608e65-3480-48c5-8e2b-409e10f08383",
+      "adapter": "muse",
+      "parent_session_id": "01a0a205-a559-7fd2-99cd-6ff35525b691",
+      "first_seen": "2026-09-15T00:25:06.67128+02:00",
+      "last_seen": "2026-09-15T00:25:22.138445+02:00",
+      "duration_ms": 15467,
+      "event_count": 120,
+      "state_changes": 2,
+      "final_state": "ready",
+      "pid": 25643,
+      "pid_discovery_lag_ms": 259,
+      "debounce_coalesced_events": 54,
+      "state_durations_ms": {
+        "ready": 2620,
+        "working": 12838
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 5,
+    "replayed_transition_count": 4,
+    "ordered_matches": 2,
+    "ordered_mismatches": [
+      {
+        "index": 2,
+        "kind": "state_differs",
+        "recorded": "working→ready",
+        "replayed": "ready→working"
+      },
+      {
+        "index": 3,
+        "kind": "state_differs",
+        "recorded": "ready→working",
+        "replayed": "working→ready"
+      },
+      {
+        "index": 4,
+        "kind": "missing_in_replay",
+        "recorded": "working→ready"
+      }
+    ],
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ]
+  }
+}
