@@ -114,6 +114,23 @@ if [[ -f "$SETTINGS_PATH" ]]; then
   BASE_URL="$(jq -r '.base_url // empty' "$SETTINGS_PATH" 2>/dev/null)"
 fi
 
+# APPROVAL_JUDGE pins `--approval-judge <off|on>` at launch when the cell's
+# settings name one — the third settings-driven launch arg, mechanically
+# identical to MODEL/BASE_URL above (`muse --help`: "--approval-judge
+# <off|on> LLM approval judge for Prompt-bound calls (default: on)").
+# LOAD-BEARING for 2.19/2.26 (tool-gate-permission-prompt,
+# permission-gate-non-mutating-tool): under the default judge-ON profile the
+# SAME recipe still enters `waiting`, but an LLM judge resolves it in ~8-30s
+# (decision_source.kind:"llm_judge") — a different, already-well-represented
+# flavor of the scenario, not the genuinely human-decided one those cells
+# need. Without this wire, $SETTINGS_PATH's `approval_judge` key had nowhere
+# to land and every muse launch stayed on the judge-ON default regardless of
+# what a recipe asked for.
+APPROVAL_JUDGE=""
+if [[ -f "$SETTINGS_PATH" ]]; then
+  APPROVAL_JUDGE="$(jq -r '.approval_judge // empty' "$SETTINGS_PATH" 2>/dev/null)"
+fi
+
 # Shared multi-session slot bookkeeping + staging-contract emission (#508 #3).
 # The scaffolded driver lives at replaydata/agents/<agent>/driver-interactive.sh,
 # so the lib is two dirs up under replaydata/_lib/drive. Sourcing it means a new
@@ -275,6 +292,7 @@ spawn_muse_repl() {
   MUSE_ARGS=(--trust-workspace)
   [[ -n "$MODEL" ]] && MUSE_ARGS+=(--model "$MODEL")
   [[ -n "$BASE_URL" ]] && MUSE_ARGS+=(--base-url "$BASE_URL")
+  [[ -n "$APPROVAL_JUDGE" ]] && MUSE_ARGS+=(--approval-judge "$APPROVAL_JUDGE")
   # `|| { … exit … }` keeps a launch failure from aborting under set -e WITHOUT
   # an accurate exit-reason — the cleanup trap then records nonzero(2).
   tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "${SES_CWD[$ACTIVE]}" "muse" "${MUSE_ARGS[@]}" \
