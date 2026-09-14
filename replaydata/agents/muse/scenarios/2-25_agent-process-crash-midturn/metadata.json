@@ -1,0 +1,127 @@
+{
+  "scenario_id": "agent-process-crash-midturn",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.2.1",
+    "daemon_version": "0.6.3+7ddc8a3",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes (SIGKILL is an OS-level kill, not an agent capability question); daemon_capability: full via the adapter-agnostic #1860 mechanism (HandleProcessExit deletes the row on ANY process exit, whatever state it was in) -- the same mechanism muse's OWN sibling cell 1-2_session-end variant 3 already recorded live, today, on this branch; driver_capability: ready (sigkill is a real, tested driver-interactive.sh step, not a stub)"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "agent-process-crash-midturn",
+      "agent": "muse",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## The scenario's user-observable signal\n\n`of scenario show --name agent-process-crash-midturn` (id 2.25): SIGKILL the agent process while a turn is open; no turn-end signal is ever written; acceptance criteria are entirely process-exit-detection shape -- ready->working on the prompt, process_exited fires, the row disappears, state never enters error, state never sticks in working. The scenario's own description states its outcome is IDENTICAL to claudecode's `1-2_session-end` variant 3 (SIGKILL mid-turn) and that this cell is a regression lock on the removed #1800/#1815/#1817 crash-inference machinery (reverted by #1860), not a distinct observable.\n\n## Agent pillar (yes, confidence 0.95 on its own)\n\nKilling an arbitrary OS process is not an agent capability question. `muse-format-spec.md` §8 live-tested BOTH muse exit paths directly: a `/exit` slash command writes `session.end{exit_reason:\"clean\"}` as the transcript's last record before the process disappears, while `kill -9 <pid>` against a live muse session leaves `session.jsonl` frozen (70 lines, zero `session.end` records, confirmed by a programmatic scan) and the `.session.lock` file on disk with its stale `pid=<N>` text unchanged -- exactly the \"ghost session\" shape `core/adapters/inbound/agents/muse/pid.go`'s own doc comment describes. Producing a mid-turn variant of this (send a prompt, sleep briefly while the turn is still open, then SIGKILL) is a trivial composition of the same live-tested primitive with an ordinary send.\n\n## Daemon pillar (full, confidence 0.8)\n\n**The load-bearing fact, and it is adapter-agnostic: muse's own `session.end` record is never read for state derivation at all.** `core/adapters/inbound/agents/muse/parser.go`'s route for `payloadTypeSessionEnd` sets `Skip=true` (muse's own 1-2_session-end assessment quotes the doc comment: \"process liveness ... is what the daemon already uses to notice a session ended\"). So whether SIGKILL happens mid-idle or mid-turn is irrelevant to detection -- the daemon never looks at what muse wrote (or failed to write); it looks at whether the bound OS PID is still alive.\n\nThat liveness signal funnels into ONE handler regardless of the row's classified state: `core/application/services/pid_manager.go:467` `HandleProcessExit` -- its own doc comment (`pid_manager.go:451`) states explicitly it deletes the row \"WHATEVER STATE THE ROW WAS IN -- including mid-turn `working` (#1860)\", and names exactly why the OLDER #1800 behavior (retain the row as `error` when a turn was open) was reverted: irrlicht is not the agent's parent process, so no exit status is ever available on any platform -- a segfault, an OOM kill, a deliberate `kill -9` and a clean `exit(0)` are ONE observation, and #1800's guess from the session's shape was wrong often enough (an ESC interrupt, a denied tool prompt) to paint a false `error` more often than a true one. This is defect-tested and adapter-agnostic: `TestHandleProcessExit_MidTurnExitDeletesTheRow` (`core/application/services/session_detector_process_exit_test.go:67`) constructs a session in `working` with an open tool call and asserts the row is GONE after `HandleProcessExit`, citing exactly this scenario's shape; `TestHandleProcessExit_RecordsProcessExitedForAMidTurnDeath` (same file, line 94) pins that exactly one `process_exited` is recorded, not a suppressed/retained variant. Neither test is muse-specific -- they construct a bare `*session.SessionState`, so this mechanism applies identically to every adapter including muse.\n\n**Muse's own sibling cell already recorded exactly this, live, today.** `replaydata/agents/muse/scenarios/1-2_session-end/expected.jsonl` variant 3 (`v3_exit`, phase `relative_to: v3_turn_start`) is a SIGKILL-mid-turn on a real muse session, captured in `recordings/2026-09-14-05-59-39_irrlichd-0.6.3+e22b8c9/` on THIS branch, and its own meta notes state the final committed recording \"passed all 11 phases cleanly, including v2_exit and v3_exit landing on their correct own session id.\" That is direct, same-adapter, same-mechanism evidence this scenario's daemon-side outcome (process_exited fires for the correct session, row deleted, no error) is achievable for muse today -- not an inference from claudecode's behavior.\n\n**Caveat and the specific question this cell's brief asked me to resolve: does the redundant liveness sweep cover the #1962 shared-PID race for THIS single-session recipe, and which path does detection actually take?** #1962 (open, filed from this same onboarding pass) documents `processlifecycle`'s kqueue-backed `pidMonitor.watched map[int]string` (`monitor_darwin.go:18`, `Watch()` at line 38 doing `m.watched[pid] = sessionID`) as last-write-wins per PID: when two sessions register the SAME OS pid, only the most recently registered session id will ever be the target of the eventual `NOTE_EXIT` callback. This applies here even though this recipe drives a single top-level session with no deliberate subagent: 1-2_session-end's own live-recorded finding (its meta notes, quoted verbatim) is that \"every restarted muse session ALSO spawns a generic proc-<pid> presession watching the SAME OS pid (wiring.go's unconditional per-adapter scanner)\" -- so the real session and its own transient `proc-<pid>` presession shadow are themselves a shared-PID pair, independent of subagents, and race for the `watched` map slot exactly as #1962 describes. 1-2_session-end measured this race hit TWICE across three live recording attempts of the identical mid-turn-SIGKILL shape (v3_exit): the fast kqueue path fired for the WRONG (shadow) session id in the two discarded attempts. The redundant path that recovers the correct session either way is `PIDManager.CheckPIDLiveness` (`pid_manager.go:1095`) -> `reapDeadOrInfraPID` (`pid_manager.go:1186`), run unconditionally on `SweepDeadPIDs`'s periodic ticker (`pid_manager.go:963`, `session_detector.go:723` starts it unconditionally at daemon startup; 5s base interval, backs off to 15s after 3 consecutive clean sweeps). This does its OWN independent `syscall.Kill(snap.pid, 0) == ESRCH` probe per session, reading each row's OWN persisted `state.PID` field (written unconditionally for every session at PID-discovery time, `assignPIDLocked`) -- it never reads `pidMonitor.watched` at all, so it is immune to the last-write-wins collision by construction. In the one live-recorded instance where the fast path was lost, the correct session's own `process_exited` still arrived, ~1.3s after the misattributed shadow exit, via this slower ESRCH path (1-2_session-end's meta notes, ts 05:52:48.964). **So the answer is: detection takes EITHER path non-deterministically -- fast kqueue when this session's registration happens to be the one still occupying `watched[pid]` at kill time, or the periodic sweep (bounded by the 5-15s SweepDeadPIDs ticker) when it does not -- but the OUTCOME (this session's own `process_exited`, row deleted, no error) is reached either way, so daemon_capability stays `full` per the caveats-over-downgrades rule rather than `bug`.** The spec below widens `max_delay_ms` on the exit phase to accommodate the slow path rather than assuming the fast one.\n\n## Driver pillar (ready, confidence high)\n\n`driver_step_types_from_file replaydata/agents/muse/driver-interactive.sh` lists `sigkill` among the implemented arms (`DRIVE_ELICITS=\"send slash wait_turn sleep exit_clean restart sigkill start_session session\"`, line 167; dispatched at line 675). This is NOT a stub: `step_sigkill` (line 608) resolves the real muse-bin PID via `muse_writer_pid`, the SAME write-mode-filtered `lsof` lookup the daemon's own `DiscoverPID` uses (`core/adapters/inbound/agents/muse/pid.go`) -- filtering the FD-mode column to `w`/`u` only (line 573-581), with an inline comment documenting exactly why the naive `lsof -t` form is actively dangerous here: a coexisting recording daemon holds a READ fd on the same `.session.lock` while tailing it (muse has no isolated-home knob), so a plain `lsof -t | head -1` picked the DAEMON's own PID over the real muse-bin writer on the first live attempt and killed the recording daemon instead of the target session -- fixed by the mode filter, which is the state of the primitive today. A second belt-and-braces check (`comm` must contain \"muse\", line 624-630) refuses to kill an unverified PID rather than silently proceeding. Every step type this recipe needs (`send`, `sleep`, `sigkill`) is implemented; no port is required. driver_capability=ready.",
+      "caveats": [
+        "Vacuous-pass check: this cell would pass while proving nothing if the driven prompt finishes its turn (turn_done fires) BEFORE the sigkill lands -- that degenerates into an ordinary clean-idle teardown (already covered by 1-2_session-end variant 1/2), not a mid-turn crash. The recipe's pre-kill sleep is sized against a multi-line counting task's expected duration (mirroring claudecode's own proven 2-25 recipe) but the exact timing margin is UNVERIFIED for muse's own turn latency; record should confirm the turn is still `working` when sigkill fires and adjust the pre-kill sleep if not.",
+        "#1962 is real, open, and DOES apply to this cell even though it drives only one top-level session: muse's own transient proc-<pid> presession shadow (spawned for every session, per 1-2_session-end's live finding) shares the real session's OS PID and races it for the kqueue watched-map slot. It is cited, not re-drafted. It affects ONLY which path (fast kqueue vs. the periodic ~5-15s liveness sweep) delivers this session's own process_exited -- not whether it is eventually delivered -- so per the 'caveats over downgrades' rule this stays daemon_capability=full, but expected.jsonl's process_exit phase must NOT assume near-instant kqueue delivery and must be pinned (same_session_as) to the real session rather than accepting any process_exited event, or an unpinned phase would vacuously pass on the shadow's own (mistimed) exit instead of proving anything about the real session.",
+        "This cell is a regression lock on the removed #1800/#1815/#1817 crash-inference behavior, not a distinct observable from 1-2_session-end variant 3 (the scenario's own description says so verbatim) -- muse's own sibling cell already carries a real, passing, same-mechanism live recording of this exact shape. A dedicated recording of THIS cell is still worthwhile as a named lock (matching why claudecode also keeps 2-25 as its own cell despite the same duplication), but a low-cost re-record is expected to converge quickly given the sibling evidence.",
+        "cost_nonzero would be false and is therefore omitted from this spec's observations (no muse-spark-* pricing entry exists, per the shared onboarding context and 5-1_token-accounting's own finding) -- this cell asserts lifecycle/process-exit shape only, no token/cost metrics, matching claudecode's own 2-25 spec shape."
+      ],
+      "sources": [
+        {
+          "kind": "issue",
+          "ref": "ingo-eichhorst/Irrlicht#1962",
+          "note": "process_exited misattributed when sessions share one OS PID -- filed from this same onboarding pass; root-caused to pidMonitor.watched map[int]string being last-write-wins per PID (monitor_darwin.go/monitor_linux.go). Cited, not re-drafted, per the cell brief."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/pid_manager.go",
+          "note": "HandleProcessExit (line 467) + its doc comment (line 451, 'WHATEVER STATE THE ROW WAS IN -- including mid-turn working (#1860)') is the adapter-agnostic deletion mechanism. CheckPIDLiveness (line 1095) -> reapDeadOrInfraPID (line 1186) is the independent per-session syscall.Kill(state.PID,0)==ESRCH probe on the SweepDeadPIDs ticker (line 963) that never reads pidMonitor.watched -- the redundant path that recovers whichever session #1962's fast path starves."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector_process_exit_test.go",
+          "note": "TestHandleProcessExit_MidTurnExitDeletesTheRow (line 67) and TestHandleProcessExit_RecordsProcessExitedForAMidTurnDeath (line 94) are the defect tests for #1860, pinning exactly this scenario's shape (a working session with an open tool call) is deleted, not retained as error, on process exit. Adapter-agnostic (bare *session.SessionState fixture)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector.go",
+          "note": "line 723: `go d.pidMgr.SweepDeadPIDs(ctx)` starts the periodic sweep unconditionally as part of SessionDetector.Run, so it is always active during a --record session."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/scenarios/1-2_session-end/expected.jsonl",
+          "note": "Muse's own sibling cell, recorded live today (recordings/2026-09-14-05-59-39_irrlichd-0.6.3+e22b8c9/) on THIS branch: variant 3 (v3_exit) is a SIGKILL-mid-turn on a real muse session and its meta notes confirm the final committed recording passed all 11 phases cleanly including v2_exit/v3_exit landing on their correct own session id -- direct same-adapter evidence for this scenario's daemon-side outcome, and the source of the proc-<pid>-presession-shares-the-real-session's-PID finding this cell's caveats rely on."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/scenarios/2-14_turn-aborted-by-error/metadata.json",
+          "note": "Independent re-discovery of the same watched-map last-write-wins misattribution in a different muse recording (2026-09-14-06-40-20_irrlichd-0.6.3+9abf13d), confirming the race is a recurring, general shape across muse cells rather than a one-off in 1-2_session-end."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/parser.go",
+          "note": "payloadTypeSessionEnd route sets Skip=true -- muse's own session.end record is never read for state derivation; detection is 100% PID-liveness-based, matching every other FilesUnderRoot adapter."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/pid.go",
+          "note": "DiscoverPID resolves a session's PID via the WRITER of its .session.lock sibling (or the transcript file itself as fallback) -- the same mechanism the driver's step_sigkill below ports, and format-spec §1-§2's basis for why muse sessions can share one OS PID (muse serve measured 1 PID holding 11 session locks)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/driver-interactive.sh",
+          "note": "step_sigkill (line 608) + muse_writer_pid (line 558) confirm the sigkill primitive is real and write-mode-filtered (not the historical lsof -t bug that once killed the recording daemon instead of the target session, per the inline comment at line 545-557); driver_step_types_from_file confirms sigkill is listed in DRIVE_ELICITS (line 167) and dispatched (line 675)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/2-25_agent-process-crash-midturn/metadata.json",
+          "note": "Template for this cell's recipe shape (send a long counting prompt, sleep, sigkill, sleep) and expected.jsonl phase shape (session_birth/pid_bind/turn_start/process_exit with invariant 'no state_transition to error'); claudecode's own committed recording is stale/known_failing (predates #1860) so it is used only for STRUCTURE, not as evidence of a passing recording."
+        },
+        {
+          "kind": "file",
+          "ref": "muse-format-spec.md",
+          "note": "§8 live-tested both muse exit paths directly (tmux-driven /exit vs kill -9 against real throwaway sessions), establishing the agent-pillar ground truth that a SIGKILL leaves session.jsonl frozen mid-turn with zero session.end records and a stale .session.lock."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "timeout_seconds": 150,
+      "settings": {},
+      "preconditions": [
+        "muse CLI installed and on PATH, v1.2.1 (per replaydata/agents/muse/metadata.json)",
+        "muse auth complete: 'muse login' (Meta account, browser code approval) or META_API_KEY exported -- auth is set up out-of-band",
+        "tmux available -- the interactive driver runs muse in a tmux REPL so it stays alive across the turn",
+        "irrlichd is recording -- either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+        "the daemon's periodic SweepDeadPIDs sweep (5s base / 15s worst-case backoff) is running by default -- a load-bearing precondition per the vacuous-pass rule: #1962 makes the fast kqueue path unreliable for this session's own process_exited (it can lose the watched-map race to its own proc-<pid> presession shadow), so the recipe's generous post-kill sleep exists specifically to give the periodic sweep time to recover it"
+      ],
+      "setup": [
+        "The interactive driver creates a fresh empty cwd under <staging>/cwd/ and launches `muse --trust-workspace` in a tmux session there, then sleeps 1s before the first send (--trust-workspace is REQUIRED: every staging cwd is brand-new, so muse's workspace-trust modal fires on every run and silently eats the first prompt without it)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Count slowly from 1 to 40, one number per line, with a short sentence about each number."
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        },
+        {
+          "type": "sigkill"
+        },
+        {
+          "type": "sleep",
+          "seconds": 20
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the session appear in ready shortly after launch",
+        "events.jsonl shows a pid_discovered event for the session shortly after birth",
+        "events.jsonl shows a state_transition to working when the counting prompt is sent",
+        "events.jsonl shows a process_exited event for THIS session's own session_id (not a proc-<pid> presession shadow's) within the post-kill window, whether delivered via the fast kqueue path or the periodic liveness sweep",
+        "no state_transition to error appears for this session at any point",
+        "the session is removed from the live session list (row deleted) by the end of the recipe's 20s post-kill window"
+      ]
+    }
+  }
+}
