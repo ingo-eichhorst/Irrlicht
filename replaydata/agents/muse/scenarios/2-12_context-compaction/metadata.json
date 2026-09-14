@@ -1,0 +1,144 @@
+{
+  "scenario_id": "context-compaction",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.2.1 (1.2.1-R2847.1)",
+    "confidence": 0.55,
+    "notes": "agent_supports: yes (/compact is a live-confirmed, real slash command with dedicated CLI flags and a first-class wire-protocol RPC + item kind). daemon_capability: full, but LOW-CONFIDENCE/PROVISIONAL -- grounded in muse's existing generic, content-agnostic run-boundary mechanism (already daemon=full for 12/12 core scenarios), but with a NAMED, precedent-based risk (copilot's own /compact needed a dedicated parser arm because its compaction call emitted no ordinary turn-start marker) that muse's compaction may behave the same way and simply never enter `working` at all. driver_capability: ready (slash step already implemented and proven live in 2-5)."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "context-compaction",
+      "agent": "muse",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.55,
+      "body": "## Verdict\n\nagent_supports: yes (confidence high)\ndaemon_capability: full (confidence LOW -- provisional, unconfirmed by any live emission)\ndriver_capability: ready\n\n## Reasoning\n\n### agent_supports: yes\n\nmuse ships a real, user-invocable `/compact` slash command AND CLI-level compaction controls, confirmed directly from the installed binary (`strings ~/.local/bin/muse-bin-1.2.1-R2847.1`), not vendor docs:\n\n- The TUI's command table lists `/compact` with help text `\"Summarize the conversation to free up context [transcript|trajectory]\"`, alongside every other slash command (`/clear`, `/model`, `/resume`, etc.).\n- `muse exec --help` exposes top-level flags `--context-compaction-strategy <ID>`, `--context-compaction-soft-threshold <FRAC>`, and `--context-compaction-hard-threshold <FRAC>` -- compaction is a first-class, independently configurable CLI surface, not an undocumented side effect.\n- The wire protocol schema (`msp.schema.json`, recovered from a live install at `/private/tmp/claude-501/.../muse-schema/msp.schema.json`) defines a dedicated `session/compact` RPC (`SessionCompactParams`/`SessionCompactResult`) explicitly described as \"the `/compact` gesture\", plus `CompactionOutcome` (`compacted|noop|failed|cancelled`) and `CompactionTrigger` (`manual|auto`) enums.\n- `compaction` is one of the schema's 9 v1 `ItemKind` values (`userMessage`, `agentMessage`, `reasoning`, `toolCall`, `userShell`, `subagent`, `workflow`, `reminderChild`, `compaction`) -- a first-class transcript item type on par with tool calls and messages, carrying dedicated fields `outcome`, `trigger`, `tokensBefore`, `tokensAfter`, `strategyId`.\n\nThis is multi-source, live-surface evidence (binary strings + wire schema), not a doc guess -- confidence high.\n\n### daemon_capability: full, but provisional (confidence 0.55)\n\n**The optimistic case.** muse's `working`/`ready` state derivation is driven ENTIRELY by a generic, content-agnostic boundary: `payload_type:\"runtime.session\"` -> `payload.kind:\"run\"` -> `event.kind:\"started\"|\"terminal\"` (`core/adapters/inbound/agents/muse/parser.go:160-161`, `306-365`). `parseRunStarted`/`parseRunTerminal` have NO special-casing on what kind of work a run performs -- ANY run, including one that executes compaction's summarization call, would produce the visible `ready->working->ready` arc through the SAME mechanism already confirmed `daemon=full` for the adapter's 12/12 core scenarios. Any unrecognized compaction-specific sub-event (e.g. a future `context_compaction_installed`) falls to the parser's existing `default: ev.Skip=true` branch (parser.go:288-302) -- harmless bookkeeping, not a break in the state arc. This mirrors claudecode's own reference verdict for the identical scenario (`replaydata/agents/claudecode/scenarios/2-12_context-compaction/metadata.json`): `daemon=full` via the same generic long-working-turn mechanism, with the domain's compaction-labeling field being separately unused/dead code -- immaterial because the scenario's acceptance_criteria assert only the visible state arc, never a compaction-specific label.\n\n**The named risk (why confidence is 0.55, not 0.85).** This optimism rests on an UNCONFIRMED assumption: that muse's `/compact` execution actually routes through the same `kind:\"run\"`/`started` record every ordinary turn uses. There is a DIRECT, cited counter-precedent in this same codebase: Copilot's `/compact` needed its own dedicated parser arm (`core/adapters/inbound/agents/copilot/parser.go:165-177`, `evCompactionStart`/`evCompactionDone`) because \"a manual /compact emits NO user.message and no assistant.turn_start -- so without this arm the whole summarization call fell to the default Skip and the session sat in `ready` while Copilot's own TUI showed a compacting spinner.\" That is: for at least one other agent in this matrix, compaction does NOT reuse the normal turn-start signal, and the generic classifier silently failed to observe it at all (no flicker -- it just never left `ready`). muse's wire schema keeps `compaction` as a DISTINCT `ItemKind` from `userMessage`/`agentMessage` (not a variant of a normal turn), the same architectural shape Copilot has -- so the same failure mode is structurally plausible for muse too, and nothing in the corpus rules it out: no session in the available sample (14 pre-existing + 2 live-driven, muse-format-spec.md §11/§12) ever crossed the compaction threshold or triggered a real eviction; the only related signal ever observed, `context_block_diagnostic`, showed nothing but prompt-assembly admission bookkeeping (`action:\"observed\"`), never a real compaction/eviction record. This is a genuinely unobserved gap, not proof of absence -- and the recipe below is designed to resolve it empirically rather than leaving it a guess (`record`'s `wait_turn` step polls muse's OWN turn-counter after `/compact`; if the session's `kind:\"run\"` boundary never fires, the driver step times out LOUDLY instead of silently passing).\n\nIf `record` finds the session never enters `working` for the compaction call (the Copilot pattern), that is a `daemon=bug` correction (a parser-arm gap, exactly Copilot's precedent -- the underlying signal exists on the wire/in the schema, just unrecognized today), NOT `daemon=incapable`: the fix is porting a `compaction`-item-aware arm into `core/adapters/inbound/agents/muse/parser.go`, mirroring Copilot's `evCompactionStart`/`evCompactionDone` shape.\n\n**No hook backstop.** Unlike Claude Code (a hook-driven `SignalCompactInProgress` overlay via its `PreCompact` hook, `core/domain/session/signal_hold.go:35`) and Copilot (a parser-driven `SawManualCompactBoundary` fact), muse is observe-only with no hooks (per the adapter's `agent.go`) and its parser sets neither overlay. So muse has no redundant safety net against a transcript-timing race during compaction -- the entire burden rests on the raw run-boundary signal. This doesn't change the verdict (the baseline mechanism should suffice, matching claudecode's OWN daemon=full despite having the SAME dead compaction-labeling field) but is a real asymmetry worth recording.\n\n### driver_capability: ready\n\n`slash` is a fully implemented step type in muse's interactive driver: `DRIVE_ELICITS=\"send slash wait_turn sleep exit_clean restart sigkill start_session session\"` (`replaydata/agents/muse/driver-interactive.sh:167`), and the `send|slash)` case (line 667) sends `/compact` exactly like any other text. This exact primitive is already proven live in `2-5_synchronous-slash-command` (`/usage`, `/status`).\n\n## Recipe design note (vacuous-pass guard)\n\n`SessionCompactResult.reason` documents a `no_compactable_history` `noop` outcome for a session with nothing to compact -- if `/compact` is invoked before any real turn exists, muse could ack a `noop` without ever making a summarization call, and the cell would look \"compacted\" while proving nothing. The recipe therefore primes the session with one real turn before invoking `/compact`.",
+      "caveats": [
+        "PROVISIONAL emission: no session in the local muse corpus ever crossed the compaction threshold or triggered a real eviction; context_block_diagnostic only ever showed admission bookkeeping (action:\"observed\"), never an eviction. This is an unobserved gap (muse's context limit, ~1,007,997 tokens, is hard to reach organically) -- NOT evidence muse lacks the feature. The recipe uses the MANUAL /compact gesture (CompactionTrigger:\"manual\"), which does not require filling the context window.",
+        "Named risk: Copilot's own /compact required a dedicated parser arm because its compaction call emitted no ordinary turn-start marker and the session silently stayed `ready` throughout (core/adapters/inbound/agents/copilot/parser.go:165-177). muse's wire schema keeps `compaction` as a distinct ItemKind from userMessage/agentMessage, the same architectural shape -- so the identical failure mode is structurally plausible and UNRULED-OUT for muse. If record observes this, correct daemon_capability to `bug` (a parser-arm gap, not `incapable`) via observability_correction, citing the live recording's transcript.",
+        "Vacuous-pass guard: /compact on a session with no real turn history can noop (SessionCompactResult.reason:\"no_compactable_history\") without ever calling the summarizer model -- the recipe primes with one real turn first so a genuine (non-noop) compaction is what gets exercised.",
+        "muse has no hook-driven or parser-driven CompactInProgress/SawManualCompactBoundary overlay (unlike claudecode/copilot) to guard against a transcript-timing race during compaction -- the daemon=full verdict rests entirely on the raw run-boundary signal, with no redundant backstop.",
+        "irrlicht's compaction-labeling domain fields (CompactInProgress/SawManualCompactBoundary, core/domain/session/metrics.go:331-345) are driven only by claudecode's hook and copilot's parser today; even a fully-working muse recording would show the SAME state arc as an ordinary long turn on the dashboard, with no compaction-specific label -- immaterial to this scenario's spec (state arc only), but worth noting for anyone expecting a labeled UI."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.local/bin/muse-bin-1.2.1-R2847.1 (strings scan)",
+          "note": "TUI command table: '/compact Summarize the conversation to free up context [transcript|trajectory]'; muse exec --help flags --context-compaction-strategy <ID>, --context-compaction-soft-threshold/--context-compaction-hard-threshold <FRAC>."
+        },
+        {
+          "kind": "file",
+          "ref": "muse-schema/msp.schema.json ($defs: SessionCompactParams, SessionCompactResult, CompactionOutcome, CompactionTrigger, ItemKind, Item)",
+          "note": "Dedicated session/compact RPC ('the /compact gesture'); CompactionOutcome=compacted|noop|failed|cancelled; CompactionTrigger=manual|auto; 'compaction' is one of the 9 v1 ItemKind values with outcome/trigger/tokensBefore/tokensAfter/strategyId fields."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/parser.go:160-161,288-302,306-365",
+          "note": "Generic, content-agnostic kind:\"run\"->started/terminal boundary already grounds daemon=full for the adapter's 12/12 core scenarios; unrecognized sub-events fall to default Skip=true."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/copilot/parser.go:165-177",
+          "note": "Direct counter-precedent: Copilot's /compact emits no turn-start marker and needed a dedicated evCompactionStart/evCompactionDone arm, or the session silently stayed ready through the whole compaction -- the exact risk this assessment flags for muse."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/signal_hold.go:35, metrics.go:331-345, core/pkg/tailer/tailer.go:213-219",
+          "note": "SawManualCompactBoundary/CompactInProgress overlay exists for claudecode (hook-driven) and copilot (parser-driven); muse's observe-only, no-hooks adapter sets neither."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/2-12_context-compaction/metadata.json",
+          "note": "Reference cell for the identical scenario: daemon=full via the same generic long-working-turn mechanism; CompactionState domain field unused/dead code, immaterial to the spec."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/driver-interactive.sh:167,667",
+          "note": "DRIVE_ELICITS includes 'slash'; send|slash case already proven live in 2-5_synchronous-slash-command."
+        },
+        {
+          "kind": "file",
+          "ref": "/private/tmp/.../scratchpad/muse-format-spec.md §11-§12",
+          "note": "Corpus-wide absence of any observed real compaction/eviction event; context_block_diagnostic only ever action:\"observed\" (admission bookkeeping)."
+        },
+        {
+          "kind": "file",
+          "ref": "/private/tmp/.../scratchpad/muse-capabilities.md (context_compaction section)",
+          "note": "Prior researcher's independent read of the same wire-schema evidence, corroborating the ItemKind/CLI-flag findings."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "muse CLI installed and on PATH, v1.2.1 (muse --version >= 1.2.1 per replaydata/agents/muse/metadata.json)",
+        "muse auth complete: 'muse login' (Meta account, browser code approval) or META_API_KEY exported -- auth is set up out-of-band, the rig's precheck delegates it to the user",
+        "tmux available -- the interactive driver runs muse in a tmux REPL",
+        "irrlichd is recording -- either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+        "/compact must run AFTER at least one real turn -- SessionCompactResult documents a noop status with reason no_compactable_history for a session with nothing to compact; a noop compaction makes no summarization LLM call and would silently produce NO working episode (vacuous pass), so the recipe primes the session with one real turn before invoking /compact",
+        "record's verify step must grep the recording's raw transcript.jsonl for a command.invoked record naming /compact (Skip=true on the daemon side) as positive confirmation the slash command actually reached the REPL, independent of whether the state-arc assertion below passes",
+        "LOAD-BEARING: if wait_turn times out immediately after the /compact step (EXIT_REASON=timeout, turn_count never advances), that is a live positive finding that muse's compaction does NOT route through the ordinary kind:\"run\" boundary (the Copilot precedent) -- record must NOT treat this as an infra flake to retry past; it is the daemon=bug observability_correction case named in this assessment's caveats"
+      ],
+      "setup": [
+        "The interactive driver creates a fresh empty cwd under <staging>/cwd/ and launches `muse --trust-workspace` in a tmux session there, then sleeps 1s for muse's own input handler to wire up before the first send",
+        "--trust-workspace is REQUIRED: every staging cwd is brand-new, so muse's 'Do you trust this workspace?' modal fires on every run and would eat the first slash command without it"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: primed"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 2
+        },
+        {
+          "type": "slash",
+          "text": "/compact"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 2
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "exit_clean"
+        }
+      ],
+      "verify": [
+        "events.jsonl shows a session born ready (single-birth), then a full ready->working->ready cycle for the priming turn",
+        "events.jsonl shows a SECOND ready->working->ready cycle spanning the /compact invocation, with NO flicker to ready or waiting mid-compaction (acceptance_criteria: 'state stays working for the entire compaction duration')",
+        "no state_transition to waiting anywhere in the recording (no refusal-shaped or question-shaped assistant text is scripted)",
+        "no function_call/tool-call event anywhere in the recording (acceptance_criteria: tool calls <= 0)",
+        "events.jsonl shows a THIRD ready->working->ready cycle for the post-compaction proof turn, on the SAME session id as the priming turn (proves the session is still alive and responsive after compaction, and that compaction didn't fragment session identity)",
+        "the raw transcript.jsonl (muse's session.jsonl) contains a command.invoked record for /compact, confirming the slash step reached the REPL",
+        "IF the compaction cycle above does not appear (session stays ready through /compact, driver reports wait_turn timeout): this is the Copilot-precedent failure mode named in caveats -- file it as daemon=bug via observability_correction, do not silently mark the cell incapable or drop the assertion",
+        "final session state is ready before exit_clean tears the REPL down",
+        "observation vector: tokens_nonzero=true (three real turns), cost_nonzero=false (no muse model is priced in core/pkg/capacity yet), model left provisional (pin from the live recording, not guessed)"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  }
+}
