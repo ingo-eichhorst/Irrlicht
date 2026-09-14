@@ -1,0 +1,146 @@
+{
+  "scenario_id": "model-context-display",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "bug",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.2.1",
+    "daemon_version": "0.6.3+6cca5e2",
+    "confidence": 0.85,
+    "notes": "agent=yes daemon=bug (model half PASSES; context-window/utilization half FAILS -- muse-spark-1.3-contributor is absent from core/pkg/capacity's LiteLLM snapshot and the adapter reads no fallback source, even though one exists and is muse's own canonical source: the live ~/.local/share/muse/model-catalog/*.json sidecar's context_limit field, confirmed via the muse binary's own error strings) driver=ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "model-context-display",
+      "agent": "muse",
+      "agent_supports": "yes",
+      "daemon_capability": "bug",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: bug (model chip renders; context-window bar does not)\ndriver_capability: ready\nroute: record-known-failing\n\nThis is a FIRST assessment of this cell, not a re-freeze. A prior pass on this column froze every muse cell as \"frozen, no Go adapter\" -- circular, since the freeze existed only because no adapter had been built yet. A Go adapter now exists (`core/adapters/inbound/agents/muse/`, green: `go test ./core/... -race -count=1`). Model identity and token accounting are both durable and already wired; only the context-WINDOW half of this cell's two-part acceptance is a genuine, nameable code gap -- not an architecture-level incapability, so this does NOT get frozen either.\n\n## Why this cell exists\n\n1.8 is the first-contact visibility check (#599): after one trivial turn the dashboard must show WHICH model the session runs AND HOW FULL its context is. Acceptance (`of scenario show --name model-context-display`) requires ALL of: `metrics.model_name` non-empty/!=unknown, `metrics.context_window > 0`, `metrics.context_utilization_percentage > 0`, plus the `ready->working->ready` arc.\n\n## Agent (yes)\n\nMuse tracks model identity and context budget as first-class, live concepts:\n- Model: `run.model.configured` fires per run with `model_id`/`display_label`/`source` (`startup` or `model_reconfigure`); `runtime.model_reconfigure.completed` shows the before/after diff at session start and on any later `/model` switch (muse-format-spec.md §7, live-verified). `muse-spark-1.3-contributor` is the `is_current`/`is_default` model observed live.\n- Context budget: the live binary (`~/.local/bin/muse-bin-1.2.1-R2847.1`, resolved past the launcher shim at `~/.local/bin/muse`) embeds `soft_threshold`/`hard_threshold`/`provider_context_limit_tokens` config fields, a hard-limit error path (\"; increase the effective context limit or choose a model with a larger context window\"), and a literal in-band reminder template `<context-usage>current context: ~{N} tokens (~{pct}% remaining)</context-usage>` it injects into its own prompt assembly. It also logs, verbatim: \"[effective context limit from provider_context_limit_tokens or model catalog context limit (\" and \"tbh: model context-limit fetch failed (...); using the cached catalog with the default context budget\" -- proving muse itself resolves an effective context window from the SAME on-disk catalog file this assessment found (see Daemon section). This is muse computing and consuming context capacity as a real, live concept, not a doc claim.\n\n## Daemon (bug) -- model renders, context window/utilization do not\n\n**What's wired (PASSES today):**\n- `ev.ModelName = tailer.NormalizeModelName(model)` from `model_completed`'s `model` field (parser.go:406-411) -- durable, already covered by the 5-1 token-accounting cell.\n- `ev.Tokens`/`ev.Contribution` from the same event's `usage{input_tokens,output_tokens,cache_read_tokens,...}` (parser.go:391-421) -- durable, non-zero after one turn.\n\n**What's missing (FAILS today):** `grep -rn \"ContextWindow\" core/adapters/inbound/agents/muse/` returns ZERO matches -- no code path in this adapter ever sets `SessionMetrics.ContextWindow`, in `parseModelCompleted` or anywhere else (confirmed by reading the full parser.go and metrics_test.go; no scaffolding, no TODO). With `ContextWindow` never set, `tailer.ComputeContextUtilization` (core/pkg/tailer/tailer_metrics.go:731-748) falls through to its capacity-manager lookup (`capacityMgr.GetModelCapacity(modelName).ContextWindow`), which is an EXACT-STRING lookup with alias resolution only (`core/pkg/capacity/capacity.go:101-115`; `core/pkg/capacity/aliases.go`, grep for muse/spark: 0 hits) against the committed LiteLLM-derived snapshot (`tools/onboarding-factory/cmd/replay/testdata/model-capacity-cache.json`, 357 models -- python-verified 0 hits for \"muse\" or \"spark\" anywhere in the key set). `GetModelCapacity` on a miss returns a zero-value `ModelCapacity{}` (doc comment: \"no context window, no pricing\" -- this is the repo's documented no-embedded-default behavior the capacity tests pin). So BOTH `effectiveContextWindow<=0` branches are hit and `ComputeContextUtilization` returns `(0, 0, \"unknown\", true)`. This is the EXACT pre-fix shape the mistral-vibe 1-8 cell documents for its own model (`replaydata/agents/mistral-vibe/scenarios/1-8_model-context-display/metadata.json`: \"the cell was previously daemon=bug (model displayed but the context bar never rendered because mistral was absent from core/pkg/capacity's window map)\").\n\n**The signal genuinely exists and is derivable -- this is a code gap, not an incapability.** `~/.local/share/muse/model-catalog/6d657461__p746268.json` (filename = hex(provider_id)+\"__p\"+hex(profile_id)+\".json\" -- decoded live: 6d657461=\"meta\", 746268=\"tbh\", matching the session's own provider_id/profile_id) is a locally cached, machine-readable JSON catalog with one row per model: `{\"model_id\":\"muse-spark-1.3-contributor\",...,\"context_limit\":1007997,\"output_limit\":128000,\"is_current\":true,\"is_default\":true,...}`. This is NOT a guess at the field's meaning -- the live binary's own error strings (quoted above) name this exact file as muse's fallback source of truth for \"the effective context limit\" when no live provider-reported override is present. `session.jsonl` itself carries no such field: I independently re-ran the same key-scan format-spec §6/§11 describe, walking all 117 `*.jsonl` files under `~/.local/share/muse/sessions/` for any key matching `context.*limit` or `context.*window` -- 0 hits. So the fix is a sidecar read (mirrors vibe's `sidecar.go` auto-compact-threshold pattern and junie's `ContextWindowReportEvent` pattern per the adapter-contract doc §6): read the model-catalog JSON, match the row by `model_id` (from `run.model.configured`), set `ev.ContextWindow` from `context_limit` as an explicit per-session override (bypassing the capacity-map miss entirely, the same design vibe's fix used).\n\n**A second, orthogonal blocker for whoever picks this up:** `core/adapters/inbound/agents/muse/agent.go`'s sole `transcripts` permission already ADVERTISES this feature in its consent UI (`FeatureUnlocked: \"Session list, timeline, state, model & context-window usage\"`) but its `Touches`/`Detail` text scopes the actual declared reads to `~/.local/share/muse/sessions/` + each session's `.session.lock` + a process scan, and explicitly says `session-index.db is never read` -- `model-catalog/` is a THIRD on-disk location, outside the declared surface, and per this repo's permission-gating rule every read an adapter performs must be consent-gated behind a declared permission. The fix isn't a one-line parser change: it also needs the `Touches`/`Detail` text extended to disclose the new read, or the daemon is reading somewhere the user was never told about.\n\n## Driver (ready)\n\n`replaydata/agents/muse/driver-interactive.sh` implements `send`, `slash`, `wait_turn`, `sleep`, `exit_clean` (confirmed both by reading the dispatch table -- these arms are NOT in the `not_implemented` list, unlike `interrupt`/`keys`/`reset_session`/`restart`/`resume`/`sigkill`/`session`/`start_session` -- and by `recipe-lint.sh`'s `driver_elicits_from_file`, which returns exactly `send slash wait_turn sleep exit_clean`). The one-turn recipe below needs only `send`+`wait_turn`+`sleep`+`exit_clean`, all present.\n\n## Route: record-known-failing\n\ndaemon=bug + driver=ready -> record proceeds today (nothing blocks driving the recipe), the spec asserts the CORRECT behavior (model non-empty/!=unknown AND context_window>0 AND context_utilization_percentage>0, per acceptance_criteria), and the context-window half is marked `known_failing` rather than weakened -- mirroring the claudecode `2-26_permission-gate-non-mutating-tool` precedent for the same routing shape. `record` hands the dispatcher an `issue:` payload describing the two-part fix (sidecar read + permission disclosure) named above.",
+      "caveats": [
+        "Vacuous-pass check: under what condition would this cell pass while proving nothing? If a future capacity-cache refresh happens to add an entry keyed EXACTLY 'muse-spark-1.3-contributor' (unlikely -- it is not a published/priced LiteLLM model, it is Meta's internal id), context_window would resolve from the wrong source (irrlicht's generic capacity table, not muse's own live catalog) and the acceptance check would go green while the actual fix (reading model-catalog) was never built. Named here so a future re-assessment checks WHICH source produced the nonzero value, not just that it is nonzero.",
+        "context_limit in the model-catalog sidecar (1007997 tokens) is muse's own live-resolved value for muse-spark-1.3-contributor specifically -- it is NOT confirmed to generalize to every model row in the catalog, and the catalog itself can be stale relative to the provider (muse's own error path -- 'model context-limit fetch failed ... using the cached catalog with the default context budget' -- shows muse tolerates a stale/fallback read here too).",
+        "The model-catalog file's naming scheme (hex(provider_id)+'__p'+hex(profile_id)+'.json') was reverse-engineered from ONE observed file on this machine (single provider='meta', profile='tbh'). Not confirmed against a second provider/profile combination -- UNVERIFIED whether additional catalog files ever coexist (e.g. after switching providers) or whether the naming holds for a provider id containing characters that hex-encode differently.",
+        "This assessment did not attach to a running session's MSP control socket (`muse serve`) to check whether `session/contextUsage`'s live wire notification (schema-documented, per muse-format-spec.md §6/§11) ever reaches session.jsonl under some path not sampled in the 117-file corpus scan -- treated as absent based on the exhaustive key-scan of everything currently on disk, not as proven structurally impossible.",
+        "cost is NOT asserted by this cell's spec (scenario's acceptance_criteria does not require it) and remains unpriced for muse regardless of this cell's outcome -- a separate, already-documented gap (muse-format-spec.md §6; the 5-1_token-accounting cell's own caveat).",
+        "The fix has two parts, not one: (1) parser/sidecar code to read model-catalog's context_limit, and (2) extending agent.go's transcripts permission Touches/Detail text to disclose the new read surface (currently undeclared) -- both belong in the same filed issue so the fix isn't shipped read-before-disclosed."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/parser.go:391-421 (parseModelCompleted)",
+          "note": "Sets ev.ModelName and ev.Tokens/ev.Contribution from model_completed's usage; never touches ContextWindow. Full-file + metrics_test.go grep for \"ContextWindow\": 0 hits anywhere in the package."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_metrics.go:731-748 (ComputeContextUtilization)",
+          "note": "Falls back to capacityMgr.GetModelCapacity(modelName).ContextWindow when no override is set; returns (0,0,\"unknown\",true) when that lookup misses."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/capacity/capacity.go:98-115 (GetModelCapacity)",
+          "note": "Exact-string lookup + alias table only; doc comment: \"Returns a zero value when the model is not in the cache ... no context window, no pricing.\""
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/capacity/aliases.go",
+          "note": "grep -n \"muse\\|spark\" returns 0 matches -- no alias maps muse-spark-* to a priced/catalogued model."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/cmd/replay/testdata/model-capacity-cache.json",
+          "note": "Committed LiteLLM snapshot (the same one TestMain pins for hermetic tests per the repo's model-capacity precedent); parsed with python3 -- config.models has 357 keys, 0 containing \"muse\" or \"spark\" (case-insensitive)."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.local/share/muse/model-catalog/6d657461__p746268.json (live, this machine)",
+          "note": "rows[] entry: {model_id:\"muse-spark-1.3-contributor\", is_current:true, is_default:true, context_limit:1007997, output_limit:128000, release_date:\"2026-09-02\"}. Filename hex-decodes to provider_id=\"meta\", profile_id=\"tbh\" (python3 bytes.fromhex verified), matching the session's own provider/profile."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.local/bin/muse-bin-1.2.1-R2847.1 (live binary, strings -a)",
+          "note": "\"[effective context limit from provider_context_limit_tokens or model catalog context limit (\" and \"tbh: model context-limit fetch failed (...); using the cached catalog with the default context budget\" -- muse's own fallback source for the effective window is this same on-disk catalog file. Also: \"<context-usage>current context: ~\\ntokens (~\\n% remaining)</context-usage>\" (self-injected reminder template) and soft_threshold/hard_threshold/provider_context_limit_tokens config keys, confirming context-budget tracking is a real internal concept, not a doc claim."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.local/share/muse/sessions/**/*.jsonl (117 files, live corpus, this machine)",
+          "note": "Independent python re-scan (recursive dict-key match on any key containing both \"context\" and \"limit\"/\"window\") over every record in every session file: 0 hits. Corroborates muse-format-spec.md §6/§11's identical finding via a separately-run scan."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/agent.go:69-89 (Permissions)",
+          "note": "transcripts permission's FeatureUnlocked already promises \"model & context-window usage\"; its Touches/Detail text scopes reads to sessions/ + .session.lock + process scan only -- model-catalog/ is undeclared."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/mistral-vibe/scenarios/1-8_model-context-display/metadata.json",
+          "note": "Direct precedent for the identical routing shape: daemon=bug pre-fix (\"model displayed but the context bar never rendered because mistral was absent from core/pkg/capacity's window map\") -> daemon=full post-fix, via a sidecar-sourced ContextWindow override rather than adding the model to the capacity table."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/2-26_permission-gate-non-mutating-tool/expected.jsonl (meta line)",
+          "note": "Precedent for known_failing + \"asserts the CORRECT behaviour, NOT weakened to match the bug\" phrasing/pattern used for this cell's spec."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/driver-interactive.sh",
+          "note": "not_implemented arms: interrupt, keys, reset_session, restart, resume, sigkill, session, start_session. send/slash/wait_turn/sleep/exit_clean are implemented (recipe-lint.sh driver_elicits_from_file confirms: \"send slash wait_turn sleep exit_clean\")."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/scenarios/5-1_token-accounting/{metadata.json,expected.jsonl}",
+          "note": "Established single-birth session model for muse (session id = session directory basename = stream.id), the model/token wiring this cell reuses, and the recipe/precondition conventions (trust-workspace, PID via .session.lock, 0239a1bd driver fixes) this cell's recipe is templated from."
+        },
+        {
+          "kind": "url",
+          "ref": "of scenario show --name model-context-display",
+          "note": "Acceptance criteria text: metrics.model_name non-empty/!=unknown, metrics.context_utilization_percentage>0, metrics.context_window>0, ready->working->ready, final ready."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "muse CLI installed and on PATH, v1.2.1 (muse --version >= 1.2.1 per replaydata/agents/muse/metadata.json)",
+        "muse auth complete: 'muse login' (Meta account, browser code approval) or META_API_KEY exported -- auth is set up out-of-band, the rig's precheck delegates it to the user",
+        "tmux available -- the interactive driver runs muse in a tmux REPL so it stays alive across the turn (bare `muse` with no subcommand starts the interactive TUI)",
+        "irrlichd is recording (--attach against a daemon started with --record, or isolated/coexist mode -- muse has no compiled-in adapter on the production release yet)",
+        "PID binding is via the session's own .session.lock file (pid.go's DiscoverPID), not a CWD-based election",
+        "driver-interactive.sh's 0239a1bd fixes are in place: --trust-workspace at launch, the sleep 0.3 send/Enter gap, and resolve_transcript's subagent/ exclusion -- all confirmed present"
+      ],
+      "setup": [
+        "Driver launches muse in a fresh cwd under <staging>/cwd/ with --trust-workspace (skips the untrusted-workspace modal)",
+        "No special model or context flags -- default model (muse-spark-1.3-contributor, is_default:true in the live model-catalog) is what the acceptance criteria's 'the agent's own label' allowance expects"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "What is 6 times 7?"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "exit_clean"
+        }
+      ],
+      "verify": [
+        "events.jsonl shows one ready->working->ready cycle on the session directory / session id (single-birth: directory basename = stream.id)",
+        "PASSES: SessionMetrics.ModelName == \"muse-spark-1.3-contributor\" (non-empty, != unknown) after turn_done",
+        "PASSES: SessionMetrics.TotalTokens > 0 after turn_done (model_completed usage, already wired per 5-1_token-accounting)",
+        "KNOWN FAILING: SessionMetrics.ContextWindow > 0 -- currently 0 (no capacity-catalog entry for muse-spark-1.3-contributor, no adapter fallback read of the model-catalog sidecar)",
+        "KNOWN FAILING: SessionMetrics.ContextUtilization > 0 (and PressureLevel != \"unknown\") -- currently 0/\"unknown\", cascades from the ContextWindow miss via ComputeContextUtilization's effectiveContextWindow<=0 guard",
+        "FIX POINTER for the filed issue: wire ev.ContextWindow from ~/.local/share/muse/model-catalog/*.json's context_limit field, keyed by the model_id from run.model.configured (mirrors vibe's sidecar.go auto_compact_threshold override); ALSO extend agent.go's transcripts permission Touches/Detail text to disclose the new model-catalog/ read surface",
+        "final session state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 120
+    }
+  }
+}
