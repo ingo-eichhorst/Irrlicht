@@ -1,0 +1,172 @@
+{
+  "scenario_id": "checkpoint-rewind",
+  "metadata": {
+    "agent_supports": "partial",
+    "daemon_capability": "full",
+    "driver_capability": "gap:reset_session",
+    "agent_cli_version": "1.2.1 (1.2.1-R2847.1)",
+    "daemon_version": "0.6.3+69a8481",
+    "confidence": 0.87,
+    "notes": "agent_supports: partial (/rewind is real, REPL-only, conversation-only — files stay unchanged); daemon_capability: full (new linked session appears + clean arc, provenance label lost as a caveat); driver_capability: gap:reset_session (picker needs no arrow keys, but the driver never re-resolves TRANSCRIPT/UUID to the new forked session — same class of gap as /clear|/new's reset_session, live-traced against resolve_transcript()/emit_session_contract())"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "checkpoint-rewind",
+      "agent": "muse",
+      "agent_supports": "partial",
+      "daemon_capability": "full",
+      "driver_capability": "gap:reset_session",
+      "confidence": 0.87,
+      "body": "## Verdict\n\nagent_supports: partial\ndaemon_capability: full (two caveats)\ndriver_capability: gap:reset_session\n\nThis was live-driven TWICE on the installed muse 1.2.1 (1.2.1-R2847.1) in throwaway scratch directories (never inside the repo), via tmux send-keys/capture-pane, with the full raw session.jsonl inspected byte-for-byte before and after each run. This is not a doc-derived guess: every claim below cites a concrete record from one of the two live probes, or a concrete parser.go/driver-interactive.sh line.\n\n## What `/rewind` actually is\n\n`muse --help` does not mention rewind at all (checkpoint/rewind machinery is REPL-only, exactly the trap the assess SKILL warns about). The shipped binary (`~/.local/bin/muse-bin-1.2.1-R2847.1`, `strings`-scanned) carries the full slash-command roster and shows TWO distinct conversation-branching commands: `/fork [prompt]  Branch this session from the latest message` and `/rewind  Rewind conversation to an earlier input` — no bracketed inline-argument syntax on `/rewind`, unlike `/fork`. Live-confirmed: typing `/rewind` + Enter opens an interactive picker (`Rewind conversation`) listing prior user inputs newest-first, each tagged `Exact`, with the newest entry pre-selected by default. Accepting the default (bare Enter) opens a second confirmation screen whose body reads verbatim: **\"Creates a new conversation branch. Your files stay unchanged.\"** — direct, first-party, live-captured proof that muse's rewind is CONVERSATION-ONLY, architecturally a FORK, and explicitly does not restore files. A second bare Enter (default option \"Rewind conversation\") executes it.\n\n## agent_supports: partial\n\nSame shape and same reasoning as the codex sibling cell for this scenario (partial: conversation reverts, files don't). No separate file-checkpoint/restore command exists in muse's shipped slash-command roster (the full `strings` dump was searched for `rewind|checkpoint|undo|restore|revert` — only `/fork` and `/rewind` touch conversation branching; nothing touches files). Two independent live probes confirm the file-untouched claim is not just a UI string: the workspace root under both probes was never modified by the rewind (no side-effecting writes observed outside session.jsonl).\n\n## The mechanism, byte-for-byte (resolves the assigned question directly)\n\nTwo live probes, both in `/private/tmp/.../scratchpad/muse-rewind-probe{,2}`:\n\n**Probe 1** (`01a09f27-279e-7c52-9b44-9f645ac71f7f`, two turns ALPHA/BETA, rewound to the OLDEST turn via one Down-arrow + Enter + Enter) and **Probe 2** (`01a09f2e-b7f0-7d83-bbbb-f7f255a7940d`, two turns GAMMA/DELTA, rewound to the picker's DEFAULT/most-recent entry via bare Enter + Enter, zero navigation) produced the IDENTICAL mechanism:\n\n1. The ORIGINAL session.jsonl is **never truncated** — strictly append-only, confirmed by line count (145→152 in probe 1, monotonically growing, never shrinking) and by `mtime` only ever advancing. Seven new records land at the end: `command.invoked{/rewind}` → `runtime.command_intake.conversation_rewind.received` (carries `command.requested_child_session_id`, `command.cut_before`) → `runtime.command_intake.settled{accepted}` → `runtime.session_start.intake_v2` (carries `session_stream`=NEW id + `previous_session_stream`=OLD id) → `runtime.session_handoff.goal_safety` → `session.started` → **`session.end`** (`exit_reason:\"clean\"`). So the original transcript ends with a genuine close record, not silence and not a truncation — good news for a byte-offset tailer (it can never observe the file shrink).\n2. A BRAND NEW session directory materializes (`01a09f2a-fefb-…` / `01a09f30-86d3-…`), whose session.jsonl opens with `record_type:\"session.fork.created\"` (`payload_schema_version:4`): `{\"fork_session_id\":\"<new>\",\"source_session_id\":\"<old>\",\"source_cut_cursor\":\"session:<old>:turn:N\",\"source_cut_was_explicit\":true,\"fork\":{\"kind\":\"conversation_rewind\", …}}` — explicit, structured fork provenance, live-confirmed in BOTH probes. This is the SAME `session.fork.created` record the wire schema's `ForkProvenance` doc comment names (`muse schema generate-json-schema --experimental`; `session/fork` MSP method, `cutPoint.lastTurnId`, result carries `forkedFrom` provenance) — `/fork` and `/rewind` are two REPL entry points onto the same underlying fork primitive, discriminated by `fork.kind` (`\"conversation_rewind\"` for `/rewind`).\n3. When the cut point preserves an earlier completed turn (probe 2: rewinding past only the LATEST turn), that turn is copied into the new session as a lightweight **summary** (`session.fork.model_prefix` + `session.fork.turn{prompt,answer,source:{run_id,…}}`), NOT as duplicate `run`/`model_completed` events — the underlying live records are represented only as `{\"retained_marker\":\"omitted_live_only\", \"omitted_record\":{\"payload_type\":\"runtime.session\",\"payload_kind\":\"run\"}}` stub lines carrying no content. So the daemon can never double-count tokens between the two sessions from this replay.\n4. `.msp-view-v1/<uuid>/{HEAD.json,journal-00000000.bin,index-00000000.bin,snapshot-<uuid>.json}` — the cell-specific pointer's hypothesis — is **not** the rewind store. `strings` on the binary resolves the name fully: `msp-view-projection-v1` / `ProjectionHeadV1` / `JournalTailV1` / `HeadIndexTailV1`, implemented in `tbh_session_view::materialized::{durable,live}` (crate `session-view`), described inline as \"TUI materialized session view attachment\" — a read-side RENDERING CACHE of an existing session's own transcript (a projection with `source_through`/`source_record_sha256` tracking how much of session.jsonl it has materialized for fast TUI paint/resume), unrelated to fork/rewind. This corrects the pointer rather than confirming it — found from the binary's own string table, not by decoding the `.bin` files (never opened as data).\n\n## daemon_capability: full (two caveats, no `bug`)\n\n- The new forked session's directory is discovered by the SAME generic FilesUnderRoot birth mechanism as any ordinary new muse session (session.jsonl materializes at open, before any turn — established by the already-recorded 1-1/2-1 sibling cells) — no fork-specific wiring is needed for the new row to appear in `ready`.\n- The post-rewind turn is an ordinary `(\"run\",\"started\")`/`(\"run\",\"terminal\")` pair on the NEW session — the same mechanics every other muse cell already exercises — giving the clean `ready→working→ready` arc.\n- The ORIGINAL session's row correctly stays `ready` (its last real state before the rewind) because every one of the seven records `/rewind` appends to it is already Skip=true in `core/adapters/inbound/agents/muse/parser.go`: `payloadTypeCommandInvoked` (line 227), the generic default arm (line 233, whose own comment explicitly lists `runtime.command_intake.*` as a known member), and `payloadTypeSessionEnd` (line 219, whose comment states the daemon deliberately derives session-end from PROCESS LIVENESS, not this record). Live `lsof` on both `.session.lock` files post-rewind shows the SAME pid (31101) holding open FDs on BOTH the old and new lock simultaneously — confirming `pid.go`'s per-session, lock-scoped `DiscoverPIDByTranscriptWriter` (already built for muse's \"one PID serves many sessions\" `serve` shape, format-spec §2) resolves both sessions correctly without conflict, so the original is never spuriously marked `process_exited` by the rewind itself.\n- CAVEAT 1 (identical shape to the codex sibling cell's own caveat for this scenario): `session.fork.created`'s `source_session_id`/`source_cut_cursor` fields are NOT wired into the muse adapter at all (`git grep -niE \"fork\" core/adapters/inbound/agents/muse/` — zero hits). The daemon surfaces the new session as an independent row with no `ParentSessionID`-style link back to the source. Per the caveats-over-downgrades rule and the established codex precedent for this EXACT gap shape (\"the lost linkage LABEL is a narrow provenance gap the spec does not require\"), this stays `full` + caveat, not `bug` — the spec-required observable (a new linked session_id in ready, with a clean arc) is satisfied by the new row's own existence and behavior, not by the label.\n- CAVEAT 2 (vacuous-pass condition, per the SKILL's explicit rule): `events.jsonl` carries ZERO trace of the rewind — every relevant record routes through an already-Skip=true arm. \"A new session_id appeared\" is therefore only positively attributable to THIS cell's rewind by grepping the raw transcript for `session.fork.created.source_session_id == <original session id>`. This machine genuinely ran 5+ unrelated concurrent muse sessions during this assessment's own live probes (other onboarding-factory subagents active on the same account) — a naive \"any new muse session appeared nearby in time\" check would be a real vacuous pass here, not a hypothetical one. `record`'s verify step MUST grep the new session's raw session.jsonl for `session.fork.created` naming the correct `source_session_id` — named as a caveat and a recipe precondition below.\n\n## driver_capability: gap:reset_session\n\nThe KEYSTROKE side is clean: both probes confirm the entire `/rewind` interaction — open picker, accept a candidate, confirm the dialog — needs only literal-text-plus-Enter delivery (`slash`/`send` in `driver-interactive.sh`, already ported), never arrow-key navigation. The picker pre-selects the MOST RECENT prior input by default; accepting that default at both prompts (bare Enter, bare Enter) already satisfies \"rewind to an earlier point\" (it cuts before the latest turn while preserving everything earlier — probe 2's exact behavior) without needing the `keys` step (`not_implemented`, driver-interactive.sh line 671) at all. This is a materially better finding than the cell-specific pointer implied.\n\nThe real gap is in the driver's BOOKKEEPING, found by tracing `resolve_transcript()` (driver-interactive.sh, ~line 320) against what a rewind actually does: `resolve_transcript` short-circuits permanently once `$TRANSCRIPT` is set for a slot (`if [[ -n \"$TRANSCRIPT\" ]]; then return 0; fi`) and is never re-invoked after an in-REPL command mints a new session_id in the SAME slot. `/rewind` does exactly that (a NEW session directory, confirmed live). Two concrete downstream failures follow: (1) `wait_turn`'s `turn_count()` (turn-count.sh) would keep polling the STALE original session's transcript for the post-rewind turn, which can never show a new `(\"run\",\"terminal\")` record there — the poll would spin to `$DEADLINE` and report `EXIT_REASON=\"timeout\"`; (2) `emit_session_contract \"${SES_UUID[1]}\"` (driver-interactive.sh line 703) would report the ORIGINAL (pre-rewind) session_id as \"the\" driven session in the staging contract, misattributing provenance for the actually-interesting post-rewind arc.\n\nThis is the SAME class of gap the driver already names and tracks: its own `reset_session` step type exists precisely for \"in-REPL /clear|/new → new id, SAME slot; re-resolve SES_TRANSCRIPT[$ACTIVE]\" (line 672 TODO comment) and is currently `not_implemented`. `/rewind` is a third command in that identical family the driver has never accounted for. Cross-checked directly against the ONLY other fork-shaped adapter in this matrix: codex's own driver (`replaydata/agents/codex/driver-interactive.sh`) wires BOTH its `reset_session` (`/new`) and `fork` (`/fork`) step types to a shared `swap_after_slash` helper that resets `TRANSCRIPT=\"\"` and bumps `$MARKER` so the next `resolve_transcript` call picks up the newly-materialized rollout (lines ~896-902) — proving this is a real, addressable, already-solved-once-elsewhere gap, not an inherent limitation. muse's driver has not yet grown the equivalent for any in-REPL identity-changing command.\n\nPer the SKILL's explicit guidance (\"a driver gap is tooling work, NOT an observability limit\") this routes to `driver-gap`, not `incapable` — the cell keeps its full recipe below; `record` ports the `reset_session` re-resolution primitive (mirroring codex's `swap_after_slash`) before driving, then the recipe drives exactly as written.\n\n## Route\n\nagent=partial, daemon=full, driver=gap:reset_session → **driver-gap**.",
+      "caveats": [
+        "daemon: session.fork.created's source_session_id/cut_cursor (live-confirmed in both probes) is not wired into the muse adapter (zero 'fork' references in core/adapters/inbound/agents/muse/) -- the new session surfaces as an independent row, not a ParentSessionID-linked child. Same gap shape as the codex sibling cell for this scenario; stays daemon=full per caveats-over-downgrades, not bug, because the spec-required observable (a new linked session_id in ready with a clean arc) is satisfied by the row itself.",
+        "daemon/vacuous-pass: events.jsonl carries zero trace of the rewind (command.invoked, runtime.command_intake.*, session.started, session.end are all Skip=true in parser.go). record's verify step MUST grep the new session's raw session.jsonl for session.fork.created naming the correct source_session_id -- this machine ran 5+ unrelated concurrent muse sessions during this very assessment, so 'a new session appeared nearby in time' alone is a real, not hypothetical, vacuous-pass risk.",
+        "driver: resolve_transcript()/SES_UUID[1] never re-resolve to the new forked session after /rewind (same class of gap as the existing not_implemented reset_session step for /clear|/new) -- record must port a re-resolution primitive (mirroring codex driver-interactive.sh's swap_after_slash, wired to both its reset_session and fork step types) before this recipe can complete end to end.",
+        "the picker does NOT need arrow-key navigation -- accepting its default (most-recent-first) selection at both prompts already satisfies 'rewind to an earlier point,' live-verified in probe 2. This narrows the driver gap to bookkeeping only, not keystroke delivery.",
+        "muse's rewind is conversation-only: the live confirmation dialog states verbatim 'Your files stay unchanged.' agent_supports is partial for the same reason as codex's sibling cell, not because of any daemon/driver limitation.",
+        ".msp-view-v1 (the cell-specific pointer's hypothesis) is a TUI rendering/projection cache (msp-view-projection-v1, session-view crate materialized::{durable,live}), not the rewind/fork store -- corrected via the binary's own string table, not by decoding the .bin files."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "live probe 1: /Users/ingo/.local/share/muse/sessions/2026/09/14/01a09f27-279e-7c52-9b44-9f645ac71f7f/session.jsonl",
+          "note": "Original session, 145->152 lines after /rewind: command.invoked, runtime.command_intake.conversation_rewind.received (requested_child_session_id, cut_before), runtime.command_intake.settled, runtime.session_start.intake_v2 (previous_session_stream), runtime.session_handoff.goal_safety, session.started, session.end(exit_reason:clean) -- never truncated."
+        },
+        {
+          "kind": "file",
+          "ref": "live probe 1: /Users/ingo/.local/share/muse/sessions/2026/09/14/01a09f2a-fefb-7483-b37b-c5c5f125f4af/session.jsonl",
+          "note": "New forked session (0 prior turns replayed, cut_before turn:0): sequence 1 is session.fork.created{fork_session_id,source_session_id,source_cut_cursor,source_cut_was_explicit:true,fork.kind:conversation_rewind}, schema_version 4."
+        },
+        {
+          "kind": "file",
+          "ref": "live probe 2: /Users/ingo/.local/share/muse/sessions/2026/09/14/01a09f2e-b7f0-7d83-bbbb-f7f255a7940d/session.jsonl",
+          "note": "Original session for the default-selection (no arrow keys) probe, GAMMA/DELTA turns."
+        },
+        {
+          "kind": "file",
+          "ref": "live probe 2: /Users/ingo/.local/share/muse/sessions/2026/09/14/01a09f30-86d3-7e33-89e6-3b2262122b82/session.jsonl",
+          "note": "New forked session, one prior turn replayed as summary: session.fork.created, session.fork.model_prefix, session.fork.turn{prompt:'...GAMMA',answer:'GAMMA',source:{run_id,...}}, then 10 retained_marker:omitted_live_only stub lines (no content), then runtime.session.metadata, session.opened.observed."
+        },
+        {
+          "kind": "cmd",
+          "ref": "lsof on both .session.lock files post-rewind (probe 1)",
+          "note": "PID 31101 holds open FDs on BOTH the old and new session's .session.lock simultaneously -- confirms per-session lock-scoped PID discovery resolves both without conflict."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/parser.go",
+          "note": "Lines 219-225 (payloadTypeSessionEnd, Skip=true, deliberate -- daemon uses process liveness); 227-232 (payloadTypeCommandInvoked, Skip=true); 233-245 (default arm, Skip=true, explicitly lists runtime.command_intake.* as a known member). Zero 'fork' references anywhere in the package (git grep -niE fork)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/pid.go",
+          "note": "DiscoverPID: per-session .session.lock-scoped lsof lookup, already built for muse's one-PID-many-sessions shape (format-spec Sec2) -- the mechanism this cell's lsof evidence confirms still works for a rewound session pair."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/driver-interactive.sh",
+          "note": "resolve_transcript() ~line 320 short-circuits once $TRANSCRIPT is set for a slot, never re-invoked after an in-REPL identity change; reset_session (line 672) is not_implemented with a TODO naming exactly this re-resolution need; emit_session_contract \"${SES_UUID[1]}\" (line 703) reports only the first-resolved session_id."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/driver-interactive.sh",
+          "note": "resolve_transcript() lines ~565-585 (same short-circuit shape); reset_session and fork step types (lines ~892-902) both call swap_after_slash, which resets TRANSCRIPT and bumps $MARKER so the next resolve_transcript call picks up the new rollout -- the exact primitive muse's driver lacks."
+        },
+        {
+          "kind": "cmd",
+          "ref": "muse schema generate-json-schema --out <dir> --experimental",
+          "note": "MSP wire schema: session/fork method (SessionForkParams.cutPoint.lastTurnId, SessionForkResult.session.forkedFrom), ForkProvenance{commandId,cutCursor,cutExplicit,sessionId} folded from the durable session.fork.created record -- confirms /rewind's session.fork.created shares the same underlying primitive as /fork, discriminated by payload.fork.kind."
+        },
+        {
+          "kind": "cmd",
+          "ref": "strings ~/.local/bin/muse-bin-1.2.1-R2847.1",
+          "note": "Full slash-command roster incl. '/rewind  Rewind conversation to an earlier input' (no bracketed inline-arg syntax, unlike '[prompt]/fork'); rewind-specific error strings (Cannot rewind this conversation, The rewind point is invalid, Conversations with Goal history cannot be rewound yet, ...); msp-view-projection-v1/ProjectionHeadV1/tbh_session_view::materialized::{durable,live} naming .msp-view-v1 as a TUI rendering cache, not a rewind store."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/1-6_checkpoint-rewind/metadata.json",
+          "note": "Sibling cell for the same scenario (codex, also a forking adapter): agent_supports=partial for the identical files-unchanged reason; daemon_capability=full+caveat for the identical lost-provenance-label shape -- both patterns templated from here rather than re-derived independently."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "timeout_seconds": 180,
+      "settings": {},
+      "preconditions": [
+        "muse CLI installed and on PATH, v1.2.1 (muse --version >= 1.2.1 per replaydata/agents/muse/metadata.json)",
+        "muse auth complete: 'muse login' (Meta account, browser code approval) or META_API_KEY exported -- auth is set up out-of-band, the rig's precheck delegates it to the user",
+        "tmux available -- the interactive driver runs muse in a tmux REPL",
+        "irrlichd is recording -- either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+        "DRIVER GAP (blocks a clean end-to-end run today): driver-interactive.sh's resolve_transcript() never re-resolves TRANSCRIPT/UUID/SES_UUID[ACTIVE] to the newly-forked session after /rewind (same class as the not_implemented reset_session step for /clear|/new). record must port a re-resolution primitive before this recipe's wait_turn (for the post-rewind turn) and staging-contract session id will be correct -- mirror codex driver-interactive.sh's swap_after_slash, which both its reset_session and fork step types already call.",
+        "The /rewind picker needs NO arrow-key navigation: accepting its default (most-recent-first) selection at both the candidate prompt and the confirm dialog already satisfies 'rewind to an earlier point' -- live-verified. Do not add a keys step for this.",
+        "record's verify step must grep BOTH session.jsonl files for the fork linkage the daemon's own events.jsonl cannot show: the new session's session.jsonl must open with session.fork.created whose source_session_id equals the pre-rewind session's id -- the only positive confirmation this cell's specific rewind (not some other concurrent muse session on a shared machine) actually produced the new row."
+      ],
+      "setup": [
+        "The interactive driver creates a fresh empty cwd under <staging>/cwd/ and launches `muse --trust-workspace` in a tmux session there, then sleeps 1s for muse's own input handler to wire up before the first send.",
+        "Two ordinary turns establish the checkpoints to rewind from (mirrors probe 2: 'Reply with exactly the single word: <TOKEN1>' then '<TOKEN2>', each followed by wait_turn + a short settle sleep -- muse fires ambient goal/verify-reminder subagents after real turns; give them a few extra seconds to settle before the next input).",
+        "The rewind itself is /rewind + Enter (opens the picker, most-recent input pre-selected) + Enter (accepts that default, opens the 'Rewind conversation / Never mind' confirm dialog) + Enter (confirms the default 'Rewind conversation' option). All three keystrokes are plain text/Enter delivery -- the gap is in the driver's post-rewind bookkeeping (see preconditions), not in sending these keystrokes.",
+        "After the rewind, muse pre-fills the NEW session's composer with TOKEN2's original prompt text (unsubmitted). The recipe simply presses Enter to resubmit it as-is, giving the post-rewind 'third turn' the scenario asks for from the exact rewound point.",
+        "muse mints its own session UUID on both the initial launch and the rewind; the driver resolves the newest (post-fix) session.jsonl under ~/.local/share/muse/sessions (excluding subagent/ copies) newer than the relevant marker."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the single word: GAMMA"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the single word: DELTA"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        },
+        {
+          "type": "reset_session",
+          "text": "/rewind"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "send",
+          "text": ""
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        },
+        {
+          "type": "exit_clean"
+        }
+      ],
+      "verify": [
+        "events.jsonl mints the ORIGINAL session in ready shortly after muse's TUI finishes launching (single-birth; session id from the session directory basename == stream.id)",
+        "events.jsonl shows the ORIGINAL session running two working->ready turns (GAMMA, DELTA) -- the checkpoints to rewind from",
+        "after /rewind, events.jsonl shows the ORIGINAL session's row staying ready (no further state_transition on it) -- the rewind itself is not a turn",
+        "a DIFFERENT session_id appears in ready shortly after the rewind (new linked session row) -- the 'a linked new session_id if the adapter forks' signal from the scenario's acceptance criteria",
+        "the raw session.jsonl of the NEW session opens with session.fork.created whose source_session_id equals the ORIGINAL session's id -- the positive fork-linkage confirmation events.jsonl cannot provide (see caveats)",
+        "the post-rewind turn's working->ready cycle is on the NEW session, not the original -- a clean ready->working->ready arc from the rewound point",
+        "final live state is ready",
+        "no function_call/tool-call event occurs anywhere in the recording (tool_calls_max: 0 per the scenario's acceptance criteria)",
+        "observation vector: tokens_nonzero=true (GAMMA, DELTA, and the post-rewind turn all produce real model usage), cost_nonzero=false (muse-spark-* is unpriced in the litellm catalog), model unpinned"
+      ]
+    }
+  }
+}
