@@ -1,0 +1,150 @@
+{
+  "scenario_id": "provider-overloaded-retry",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "bug",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.2.1 (1.2.1-R2847.1)",
+    "daemon_version": "0.6.3+821e99f",
+    "confidence": 0.75,
+    "notes": "agent_supports: yes (a REAL 429-then-recover retry cycle is directly captured in this machine's own local muse session history, not merely inferred); daemon_capability: bug -- a durable, structured retry-in-progress record (kind:\"task\", event.kind:\"status\", details.phase:\"retry_scheduled\", carrying attempt/max_attempts/retry_delay_ms/error_kind/http_status) is written to session.jsonl on every retried model call, directly confirmed on-disk, but parser.go's parseSessionEnvelope default arm blanket Skip=true's EVERY kind:\"task\" event (tested/locked by TestParseLine_TaskKindEvents_Skipped) so none of it reaches the daemon. The daemon already owns the exact consuming mechanism for this shape (tailer.SessionError.Phase=ErrorPhaseRetrying + Attempt/MaxAttempts/RetryIn, built for claudecode, session/session_error.go's ErrorPhaseRetrying doc literally names \"#1803's provider-overloaded-retry\" as the reason the type exists) -- it is unwired for muse, not absent from the architecture. driver_capability: ready (base_url_override already ported into driver-interactive.sh's spawn_muse_repl per the 2-14/2-23 siblings; send/wait_turn/sleep/exit_clean all present), but NO existing mock in this repo is wire-compatible with muse's own POST /responses Meta-protocol client, and unlike 2-14/2-23 (which only need permanent failure and can reuse a dead port), this cell needs a mock that SUCCEEDS after N failures -- a dead port structurally cannot produce that, so record must build a new mock before this cell can be recorded (see recipe preconditions)."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "provider-overloaded-retry",
+      "agent": "muse",
+      "agent_supports": "yes",
+      "daemon_capability": "bug",
+      "driver_capability": "ready",
+      "confidence": 0.75,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: bug (a trace exists; the daemon discards it -- see below)\ndriver_capability: ready (but no existing mock is wire-compatible; record must build one -- see recipe)\nroute: record-known-failing\n\n## Reasoning\n\n### agent = yes -- not inferred, directly captured\n\nMuse's Meta-provider client retries a failed model call with backoff and, when a retry succeeds, the turn completes normally. This is not a doc guess or a synthetic elicitation: scanning every session.jsonl under ~/.local/share/muse/sessions on this machine (`find ~/.local/share/muse/sessions -name session.jsonl`, this assessment) surfaced a REAL, naturally-occurring example inside session `01a09c47-506a-7763-b82a-9ab89a9e195a` (task_id `01a09c50-27eb-7e83-ac0e-d19d69bdade4`, run_id `a16767b1-dd74-401e-99e4-570b613dc6aa`), a complete, ordered task lifecycle:\n\n```\nproposed -> accepted -> scheduled -> side_effect_intent -> started\nstatus{phase:\"opening_stream\", facets:[{kind:\"external_attempt\",attempt:1,max_attempts:10}]}\nstatus{phase:\"retry_scheduled\", facets:[{kind:\"external_attempt\",attempt:1,next_attempt:2,max_attempts:10,retry_delay_ms:5000,error_kind:\"rate_limited\",http_status:429}]}\nstatus{phase:\"opening_stream\", facets:[{kind:\"external_attempt\",attempt:2,max_attempts:10}]}\nstatus{phase:\"stream_succeeded\", facets:[{kind:\"external_attempt\",attempt:2,max_attempts:10,error_kind:\"stream_succeeded\"}]}\ncompleted\n```\n\nA sibling example in the same session (task_id `01a09c52-0c50-7fa1-ae9f-f3da7bc7a75a`) shows the identical shape, and a third (task_id `01a09c58-...`) shows the same mechanism triggered by `http_status:504`/`error_kind:\"server\"` instead of 429 -- confirming the retry mechanism is general to \"the provider call failed transiently\" (rate limiting AND 5xx), matching scenario 2.22's own \"HTTP 529 overloaded_error OR any transient overload\" framing rather than being 429-specific. A full scan of every local session.jsonl found 1881 `kind:\"task\"`,`event.kind:\"status\"` records total and at least 5 genuine `phase:\"retry_scheduled\"` examples (`python3` scan, this assessment, command available in caveats). The owning RUN's own `started`/`terminal` events for this run_id carry ZERO trace of any of this (checked directly: `terminal:\"cancelled\"` for unrelated reasons much later, no attempt/retry field anywhere) -- the retry signal lives ONLY in the task-level status trail, confirming this is a genuinely separate channel from what the parser currently reads.\n\n### daemon = bug -- a trace exists, and the daemon already has the exact consumer built for it\n\n**The trace.** `core/adapters/inbound/agents/muse/parser.go`'s `parseSessionEnvelope` (~line 250-264) dispatches `kind:\"run\"` and `kind:\"approval\"` explicitly and Skip=true's every other `kind` in its `default` arm, whose own comment enumerates `kind:\"task\"`'s full `event.kind` vocabulary including `\"status\"` by name. The package doc (lines 57-74) justifies discarding `kind:\"task\"` ENTIRELY as tool-call deduplication (`assistant_tool_calls_committed`/`tool_result_batch_committed` already cover tool calls without needing the lower-level `task`/`tool_batch.effect.*` view) -- a sound rationale for TOOL calls, but the retry-scheduled status records above are `task_kind:\"model.meta.response\"` MODEL-call bookkeeping, a different semantic class the package doc never addresses. `parser_test.go`'s `TestParseLine_TaskKindEvents_Skipped` (~line 508) locks the blanket Skip=true, but its fixture is a `side_effect_intent` tool-call example -- the lock was never exercised against a `status`/`retry_scheduled` record, so nothing here contradicts today's tests; it simply shows the blanket rule's net is wider than its stated justification. `muse schema generate-json-schema --out <dir>` (run live on this machine, muse-bin 1.2.1-R2847.1) independently corroborates from the wire side: `turn/retryScheduled`'s `TurnRetryScheduledParams` (`msp.schema.json`) is described as \"observable mid-turn, non-terminal\", carries `attempt`/`maxAttempts`/`nextAttempt`/`retryDelayMs`/`reason`, and its `sourceRange` field is documented as \"the durable record this event folded from (the session stream's mirror of the retry-scheduled task status)\" -- i.e. muse's own protocol documentation says the wire notification is projected FROM the exact on-disk record this assessment captured directly.\n\n**The consumer already exists, built for a different adapter.** `core/pkg/tailer/parser.go`'s `SessionError` struct already carries `Attempt *int`, `MaxAttempts *int`, `RetryIn *time.Duration`, `HTTPStatus *int` (~line 371-379) and `ErrorPhase` (`ErrorPhaseUnknown`/`ErrorPhaseRetrying`/`ErrorPhaseTerminal`, ~line 343-349) -- fields that map almost 1:1 onto the captured record's `attempt`/`max_attempts`/`retry_delay_ms`/`http_status`. `core/domain/session/session_error.go`'s doc for `ErrorPhaseRetrying` (~line 44-46) states plainly: \"The session is failing but not yet lost, and the informative behaviour is to sit red for the whole retry window rather than flicker per attempt\" and the type's top comment explicitly names \"#1803's provider-overloaded-retry and provider-overloaded-terminal scenarios\" as the reason it exists. `SessionError.ClearedByTurnBoundary()` (`core/pkg/tailer/parser.go` ~line 412-414) fires ONLY when `Phase == ErrorPhaseRetrying`, with the doc explaining: \"A retrying error is the one shape where a turn boundary genuinely means recovery... That is what makes provider-overloaded-retry end green rather than staying red forever.\" `core/application/services/state_classifier.go`'s `session_error` rule paints the session `error` the instant `SessionError != nil` (muse declares no hooks, so this rule -- and `classifyAgentDone`'s independent, converging check -- both fire unconditionally). So the daemon-side machinery for EXACTLY this scenario is already built, tested (for claudecode), and sitting idle for muse -- what's missing is a ~10-line addition to `parser.go`'s task-kind handling: when `event.kind==\"status\"` AND `task_kind==\"model.meta.response\"` (or simply any task) AND `details.phase==\"retry_scheduled\"`, set `ev.SessionError = &tailer.SessionError{Phase: ErrorPhaseRetrying, Class: facet.error_kind, HTTPStatus: facet.http_status, Attempt: facet.attempt, MaxAttempts: facet.max_attempts, RetryIn: facet.retry_delay_ms}`. I did not make this change -- assess is doc+code research, not a fix -- but the fix is precisely scoped and low-risk, which is why I judge `bug` (a mishandled, spec-required observable) rather than `incapable`.\n\n**Why this is `bug` and not `incapable`.** The evidence rule requires a concrete citation for either verdict. `incapable` means no trace exists / the 3-state model can't represent it -- neither is true here: the trace is captured verbatim above, and the daemon's own domain model (`ErrorPhaseRetrying`) was purpose-built to represent exactly this shape. `bug` means a trace exists that the daemon mishandles, which is what the parser's blanket `default: Skip=true` does to it.\n\n### Contrast with claudecode's 2-22 (frozen, `daemon=incapable`) -- a genuinely different root cause, not a copy-paste mismatch\n\n`replaydata/agents/claudecode/scenarios/2-22_provider-overloaded-retry/metadata.json` is `daemon_capability:\"incapable\"`, LIVE-MEASURED across four real recordings against `mock-anthropic-error`: on claude-code 2.1.243/2.1.245 the retry ladder is rendered to the TUI only and genuinely NEVER written to the transcript at all (a version regression from 2.1.143, which DID persist it -- see that cell's `2-9_token-quota-exhausted` citation). That is a true `untraced`/`incapable` case: the agent has the feature, but exercising it leaves zero trace in any Source the adapter reads, on the CURRENT binary. Muse's situation is structurally different: the trace is not merely theorized to exist -- it is sitting in this machine's real session.jsonl files right now, in exactly the shape needed. The two cells reaching different pillar verdicts under superficially similar scenario names is not an inconsistency; it reflects two different agents' actual on-disk behavior, each independently measured.\n\n### driver = ready, but no existing mock is wire-compatible -- a genuine, named prerequisite\n\n`replaydata/agents/muse/driver-interactive.sh` already reads `base_url` out of `$SETTINGS_PATH` (`jq -r '.base_url // empty'`, ~line 113-114) and `spawn_muse_repl` appends `--base-url \"$BASE_URL\"` (~line 277) -- ported while landing the 2-14 sibling, confirmed by direct read (not assumed). `DRIVE_ELICITS` already covers `send`/`wait_turn`/`sleep`/`exit_clean`, everything this recipe's script needs. So the driver SCRIPT primitive set is complete: `driver_capability: ready`.\n\nWhat is missing is a MOCK, not a driver step type. Muse's `--provider` flag only accepts `echo|meta` (`muse --help`, run live on this machine) -- `--base-url` redirects the SAME Meta-protocol client to a different host, it does not change what wire protocol muse speaks. Muse's Meta client POSTs to `/responses` (confirmed directly: the 2-14 sibling's live dead-port failure text reads `\"...url (http://127.0.0.1:18799/responses)...\"`, and this assessment's live captures show `producer.detail.stream.last_wire_event_type:\"response.completed\"`, an OpenAI-Responses-API-shaped SSE event name). Grepping every existing mock's registered routes (`tools/onboarding-factory/recording/mock-{anthropic-429,anthropic-5xx,anthropic-error,openai-429,gemini-429,gemini-5xx}/main.go`): `mock-anthropic-*` serve `/v1/messages`; `mock-openai-429` serves `/v1/chat/completions` + `/v1/models`; `mock-gemini-*` serve Gemini's path shapes. None serves `/responses`. Pointing muse's `--base-url` at any of them would 404 against that mock's own catch-all handler -- untested, and not obviously representative of an overload (muse might classify a 404 as non-retryable and give up early, which would misrepresent the scenario). CRUCIALLY, unlike the 2-14/2-23 siblings (which only need the provider call to fail PERMANENTLY, so a dead port -- pure connection refusal, always fails -- is a perfectly good elicitation), this scenario needs the provider call to fail N times and then SUCCEED. A dead port cannot structurally produce that: nothing is listening, so it never succeeds. `record` must build a new, stateful mock (a `/responses` handler returning HTTP 429/5xx for the first N requests, then a valid streamed completion) before this cell is recordable -- named precisely as a recipe precondition below, not folded into the driver-pillar verdict, per the assess skill's own framing (\"a mock\" is explicitly one of the prereq categories, distinct from a driver step-type gap).",
+      "caveats": [
+        "UNVERIFIED (emission via a MOCK, as opposed to the real Meta API): every retry_scheduled example cited above occurred against muse's REAL production endpoint (naturally-occurring rate limiting during heavy concurrent onboarding-factory use on this machine), not against a local --base-url mock. The daemon-bug verdict rests on the on-disk RECORD SHAPE being identical regardless of which endpoint muse's client is pointed at (plausible -- it is the same HTTP client code path, gated only by response status/timing, not by hostname) but this has not been directly confirmed with a live mock-driven recording. record should treat daemon_capability as provisional until a live attempt (even one hitting a placeholder mock that 404s or refuses, just to check whether ANY status/retry_scheduled record appears) confirms the shape survives a --base-url redirect, and use observability_correction if it differs.",
+        "UNVERIFIED: backoff schedule beyond attempt 2. Captured examples show attempt 1->2 retry_delay_ms of 5000 (rate_limited/429) and 1000 (server/504); no example of attempt 2->3 or later exists in the local corpus, so whether the ladder is constant-delay, linear, or exponential beyond the second attempt is unconfirmed. This matters for sizing the recipe's timeout_seconds and the retry_window phase's max_delay_ms once a real recording is attempted with succeed-after > 1.",
+        "The mock server this recipe needs does not exist in this repo yet (see driver reasoning above) -- naming it precisely rather than leaving it implicit: a new `POST /responses` handler (suggested path: tools/onboarding-factory/recording/mock-meta-responses-error/main.go, parameterised --status/--succeed-after like mock-anthropic-error) that fails the first N requests then serves a valid Responses-API-shaped SSE completion. The exact SSE event vocabulary muse's client expects on success is only partially characterized from this assessment (bytes_read/wire_events_seen/last_wire_event_type:\"response.completed\" observed; the full event sequence -- e.g. whether response.created/response.output_text.delta events are required before response.completed -- is not). record may need to capture a real successful /responses exchange (e.g. via a debug proxy in front of the real Meta endpoint) to build a faithful mock, rather than guessing the SSE shape from field names alone.",
+        "Vacuous-pass check: this cell would pass while proving nothing if `record` reused the 2-14/2-23 siblings' dead-port mechanism verbatim -- a dead port ALWAYS fails (nothing is listening), so it can only ever produce scenario 2.23's shape (permanent failure), never this scenario's \"eventually recovers\" arc. A recipe that pointed at a dead port and asserted `ready->working->error->ready` would either time out waiting for a `ready` that never comes, or (if written loosely) vacuously match some unrelated `ready` state. record must use a genuinely stateful, succeed-after-N mock.",
+        "cost_nonzero asserted false: no dollar cost is persisted anywhere for muse (established machine-wide fact, muse-spark-* absent from the pricing catalog -- not re-derived here). tokens_nonzero asserted TRUE (unlike the 2-14/2-23 siblings): this scenario's turn DOES eventually succeed, so a real `model_completed` event with non-zero usage will exist for the successful attempt -- confirmed structurally by the captured `stream_succeeded` status records always being followed by the task's own `completed` event in every local example.",
+        "model provisionally pinned to \"muse-spark-1.3-contributor\": directly observed in this machine's own `model_completed` records (`{\"kind\":\"model_completed\",...,\"model\":\"muse-spark-1.3-contributor\"}`) and in the captured status records' `producer.detail.model` field -- not a doc guess -- but this is a live catalog value that may be account/deployment-specific; record should confirm against its own recording rather than trust this verbatim.",
+        "known_failing is TRUE at the cell level: with today's parser, the daemon shows NO error excursion at all during a genuine retry window -- state stays ready->working->ready the entire time, indistinguishable from a turn with zero failures, because every kind:\"task\" record (including the retry_scheduled ones) is discarded before the classifier ever sees them. The `retry_window` and `recovered` phases below assert the CORRECT/intended arc per the caveats-over-downgrades and never-weaken-the-spec-to-match-the-bug rules, not what today's daemon actually produces."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/parser.go",
+          "note": "parseSessionEnvelope (~line 250-264): dispatches kind:\"run\"/kind:\"approval\" only; default arm Skip=true's kind:\"task\" including \"status\" by name, justified (package doc lines 57-74) solely for tool-call deduplication -- a rationale that does not address model-call retry telemetry."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/parser_test.go",
+          "note": "TestParseLine_TaskKindEvents_Skipped (~line 508): locks Skip=true for kind:\"task\", fixture is a side_effect_intent (tool-call) example -- never exercised against a status/retry_scheduled record, so the blanket rule's wider net on retry telemetry was untested, not deliberately accepted."
+        },
+        {
+          "kind": "cmd",
+          "ref": "live disk scan, this assessment: python3 scan of every ~/.local/share/muse/sessions/**/session.jsonl on this machine for payload.kind==\"task\" and event.kind==\"status\"",
+          "note": "1881 total status records found; phases observed: {opening_stream, retry_scheduled, retrying, stream_succeeded, stream_failed, stream_cancelled}. At least 5 genuine retry_scheduled examples found, e.g. session 01a09c47-506a-7763-b82a-9ab89a9e195a, task_id 01a09c50-27eb-7e83-ac0e-d19d69bdade4: opening_stream(attempt1/10) -> retry_scheduled(attempt1,next_attempt2,max_attempts10,retry_delay_ms5000,error_kind:rate_limited,http_status:429) -> opening_stream(attempt2/10) -> stream_succeeded(attempt2/10) -> task completed. A second example in the same session used http_status:504/error_kind:server. The owning run's own started/terminal events (run_id a16767b1-dd74-401e-99e4-570b613dc6aa) carry zero trace of either retry, confirmed by direct inspection."
+        },
+        {
+          "kind": "cmd",
+          "ref": "muse schema generate-json-schema --out <dir> (run live on this machine, muse-bin 1.2.1-R2847.1)",
+          "note": "msp.schema.json's turn/retryScheduled method + TurnRetryScheduledParams: \"observable mid-turn, non-terminal\"; fields attempt/maxAttempts/nextAttempt/retryDelayMs/reason; sourceRange documented as \"the durable record this event folded from (the session stream's mirror of the retry-scheduled task status)\" -- corroborates the live disk-scan finding from the wire-protocol side."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/parser.go",
+          "note": "SessionError struct (~line 371-379): Phase/Class/Message/HTTPStatus/Attempt/MaxAttempts/RetryIn fields, an almost 1:1 match to the captured record's attempt/max_attempts/retry_delay_ms/http_status/error_kind. ClearedByTurnBoundary (~line 412-414): fires only when Phase==ErrorPhaseRetrying, doc explicitly: \"That is what makes provider-overloaded-retry end green rather than staying red forever.\""
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/session_error.go",
+          "note": "ErrorPhase type doc (~line 8-21) names \"#1803's provider-overloaded-retry and provider-overloaded-terminal scenarios\" explicitly as the reason ErrorPhaseRetrying/ErrorPhaseTerminal exist. ErrorPhaseRetrying doc (~line 44-46): \"the informative behaviour is to sit red for the whole retry window rather than flicker per attempt.\""
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "session_error rule (~line 283, 433): routes SessionError!=nil to StateError unconditionally when !HookTurnDone; muse declares no hooks so this always applies the instant SessionError is set."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/scenarios/2-14_turn-aborted-by-error/metadata.json",
+          "note": "Confirms base_url_override is already ported into driver-interactive.sh (record-phase correction on that cell), and confirms muse's provider endpoint is <base_url>/responses (the live dead-port failure text)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/scenarios/2-23_provider-overloaded-terminal/metadata.json",
+          "note": "Concurrently-assessed sibling cell (this branch): independently confirms no existing mock (mock-openai-429/mock-gemini-429/mock-gemini-5xx/mock-anthropic-*) is wire-compatible with muse's /responses path, and explicitly notes that a dead port -- sufficient for 2.23's permanent-failure shape -- cannot serve 2.22's conditional-recovery need. Corroborates this cell's driver-pillar reasoning from an independent read."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/2-22_provider-overloaded-retry/metadata.json",
+          "note": "Contrast precedent: claudecode's 2-22 is daemon_capability=incapable, LIVE-MEASURED (four recordings) showing the retry ladder is TUI-only on claude-code 2.1.243/2.1.245 -- a genuinely untraced case, unlike muse's here."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/driver-interactive.sh",
+          "note": "Lines ~104-114: BASE_URL read from $SETTINGS_PATH via jq. Line ~277: spawn_muse_repl appends --base-url \"$BASE_URL\". DRIVE_ELICITS already covers send/wait_turn/sleep/exit_clean."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/recording/mock-openai-429/main.go",
+          "note": "Serves /v1/chat/completions + /v1/models only, not /responses."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/recording/mock-anthropic-error/main.go",
+          "note": "Serves /v1/messages; the closest STRUCTURAL precedent (parameterised --status/--error-type/--succeed-after) a new muse-protocol mock should mirror, not a usable endpoint itself."
+        },
+        {
+          "kind": "cmd",
+          "ref": "muse --help (run live on this machine, muse-bin 1.2.1-R2847.1)",
+          "note": "--provider <MODE>: \"Startup provider: echo or meta (default: meta)\" -- no openai/anthropic/gemini mode exists, so none of the existing provider-shaped mocks can be wire-compatible regardless of --base-url."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "muse CLI installed and on PATH, v1.2.1 (muse --version >= 1.2.1)",
+        "muse auth complete (muse login, or META_API_KEY exported) -- same out-of-band precondition as muse/2-1_basic-turn and muse/2-14_turn-aborted-by-error",
+        "tmux available -- the interactive driver runs muse in a tmux REPL",
+        "irrlichd is recording (run-cell.sh isolated mode, or --attach against a running daemon started with --record)",
+        "DAEMON-SIDE FIX NEEDED for the cell's own defining assertion to ever pass (not needed merely to RECORD it): core/adapters/inbound/agents/muse/parser.go must parse kind:\"task\",event.kind:\"status\" records, and on details.phase==\"retry_scheduled\" set ev.SessionError={Phase:ErrorPhaseRetrying, Class:facet.error_kind, HTTPStatus:facet.http_status, Attempt:facet.attempt, MaxAttempts:facet.max_attempts, RetryIn:facet.retry_delay_ms}. Until this lands, recording will show ready->working->ready with no error excursion (known_failing) -- the recipe is still runnable and useful for capturing the CURRENT (buggy) behavior plus, once fixed, for re-verifying without rebuilding the rig.",
+        "MOCK SERVER NEEDED (does not exist in this repo yet): a new POST /responses handler speaking muse's Meta-protocol wire shape (suggested: tools/onboarding-factory/recording/mock-meta-responses-error/main.go, parameterised --status <429|500|502|503> --succeed-after N like mock-anthropic-error) that fails the first N requests then serves a valid streamed completion (Responses-API-style SSE, terminal event response.completed per this assessment's live captures). None of the 6 existing mocks are wire-compatible (see assessment body) and 2-14/2-23's dead-port mechanism structurally cannot recover, so it cannot be reused here. Pick N=2 (well within muse's observed max_attempts=10 ceiling) to keep the recording fast and deterministic.",
+        "a free local TCP port for the new mock to bind (suggested 18801, distinct from 2-14's 18799 and 2-23's 18800)"
+      ],
+      "setup": [
+        "Same launch shape as muse/2-14 and muse/2-23: a fresh empty cwd under <staging>/cwd/, `muse --trust-workspace --base-url http://127.0.0.1:18801` in a tmux session, 1s settle sleep before the first send.",
+        "Prompt content matters here (unlike 2-14/2-23): the turn DOES eventually produce real assistant text once the retry succeeds, so pick text with no risk of matching a waiting-cue near the end -- a literal, non-question completion, e.g. \"Reply with exactly the word: ok\" (mirrors claudecode's 2-22 recipe).",
+        "wait_turn's turn_count() matches any event.kind==\"terminal\" record (turn-count.sh) -- correctly unblocks once the (eventually successful) run's own terminal:\"completed\" lands, however long the retry window took."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "exit_clean"
+        }
+      ],
+      "verify": [
+        "events.jsonl mints the real session in ready shortly after muse's TUI finishes launching, and binds its PID (pid_discovered)",
+        "events.jsonl contains a state_transition to working when the user prompt lands",
+        "TODAY (known_failing, daemon=bug): no state_transition to error is expected at all -- the retry_scheduled task-status records are discarded before the classifier runs, so the arc observed will be ready->working->ready with no visible retry",
+        "ONCE THE PARSER FIX LANDS (what the phases below assert): a state_transition to error shortly after the retry_scheduled record lands (working->error via the session_error classifier rule), error held for the whole retry window as ONE entry (not one per attempt), and error->ready when the eventually-successful turn's own terminal:\"completed\" clears it via ClearedByTurnBoundary (Phase==ErrorPhaseRetrying)",
+        "state never enters waiting at any point",
+        "observation vector: tokens_nonzero=true (the turn succeeds, so a real model_completed/usage exists), cost_nonzero=false, model=\"muse-spark-1.3-contributor\" (provisional, confirm live)"
+      ],
+      "settings": {
+        "base_url": "http://127.0.0.1:18801"
+      },
+      "timeout_seconds": 180
+    }
+  }
+}
