@@ -131,6 +131,35 @@ if [[ -f "$SETTINGS_PATH" ]]; then
   APPROVAL_JUDGE="$(jq -r '.approval_judge // empty' "$SETTINGS_PATH" 2>/dev/null)"
 fi
 
+# META_API_KEY overrides the credential muse launches with, injected as an
+# ENVIRONMENT VARIABLE (not a CLI flag — `muse --help`/`muse exec --help`
+# scanned in full, no `--api-key` flag exists anywhere) when the cell's
+# settings name one (#1960 auth-credentials-rejected). muse's own binary
+# strings (`AccountStateKind` enum loggedOut|envKey|apiKey|accountLogin, and
+# the literal "META_API_KEY always takes priority over the account login.")
+# confirm the env var is a genuine separate credential LANE that wins over
+# whatever the real account's login state is — this is what lets a recipe
+# supply a deliberately-invalid throwaway value without ever touching the
+# real account's own credential. spawn_muse_repl wraps the launch in `env
+# META_API_KEY=...` only when this is non-empty; every other launch (the
+# overwhelming majority of cells) is byte-identical to before this wire.
+#
+# SAFETY, LIVE-VERIFIED BOTH DIRECTIONS (#1960 driver port): the assessment's
+# own probe confirmed a bogus META_API_KEY never touches ~/.config/muse/
+# auth.json (size/mtime unchanged). A SEPARATE live probe for this same port
+# tried the opposite route — pointing --base-url at a local mock returning
+# HTTP 401 while leaving the real account login active (no META_API_KEY set)
+# — and that DID rewrite auth.json: muse's client attempted a real OAuth
+# token refresh against Meta's real endpoint on the 401 and persisted the
+# refreshed token to disk (mtime moved, ~26s after the probe). That is why
+# this cell's recipe must always set meta_api_key rather than relying on
+# --base-url alone: with the env-key lane active, muse authenticates via the
+# env var directly and never enters the account-login refresh path at all.
+META_API_KEY=""
+if [[ -f "$SETTINGS_PATH" ]]; then
+  META_API_KEY="$(jq -r '.meta_api_key // empty' "$SETTINGS_PATH" 2>/dev/null)"
+fi
+
 # Shared multi-session slot bookkeeping + staging-contract emission (#508 #3).
 # The scaffolded driver lives at replaydata/agents/<agent>/driver-interactive.sh,
 # so the lib is two dirs up under replaydata/_lib/drive. Sourcing it means a new
@@ -303,9 +332,17 @@ spawn_muse_repl() { # [subcommand-args...]
   [[ -n "$MODEL" ]] && MUSE_ARGS+=(--model "$MODEL")
   [[ -n "$BASE_URL" ]] && MUSE_ARGS+=(--base-url "$BASE_URL")
   [[ -n "$APPROVAL_JUDGE" ]] && MUSE_ARGS+=(--approval-judge "$APPROVAL_JUDGE")
+  # LAUNCH_CMD: the executable (+ optional `env VAR=value` wrapper) muse
+  # itself runs under. Always at least one element ("muse") so this is safe
+  # to expand under this file's `set -u` on bash 3.2 (the stock macOS
+  # /bin/bash) — an empty array's "${arr[@]}" is a hard "unbound variable"
+  # error on that bash, unlike modern bash/zsh, so this is built as a
+  # never-empty array rather than a separately-expanded optional prefix.
+  LAUNCH_CMD=(muse)
+  [[ -n "$META_API_KEY" ]] && LAUNCH_CMD=(env "META_API_KEY=$META_API_KEY" muse)
   # `|| { … exit … }` keeps a launch failure from aborting under set -e WITHOUT
   # an accurate exit-reason — the cleanup trap then records nonzero(2).
-  tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "${SES_CWD[$ACTIVE]}" "muse" "$@" "${MUSE_ARGS[@]}" \
+  tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "${SES_CWD[$ACTIVE]}" "${LAUNCH_CMD[@]}" "$@" "${MUSE_ARGS[@]}" \
     >>"$DRIVER_LOG.stdout.$ACTIVE" 2>>"$DRIVER_LOG.stderr" \
     || { echo "[driver] failed to launch muse under tmux" >&2; EXIT_REASON="nonzero(2)"; exit 1; }
   # Startup settle delay — a TUI input-timing requirement, not a wait for an
