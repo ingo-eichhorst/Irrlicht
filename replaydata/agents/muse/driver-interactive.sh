@@ -210,7 +210,7 @@ SES_OWNED=()
 # DRIVE_SLASH_REQUIRES_STEP_TYPE=true if muse is headless-first (a bare
 # send "/cmd" stores literal text instead of reaching the REPL).
 # shellcheck disable=SC2034  # scraped from this file's SOURCE by tools/onboarding-factory/scripts/lib/recipe-lint.sh:97 (sed), never expanded in shell
-DRIVE_ELICITS="send slash wait_turn sleep exit_clean restart sigkill start_session session keys reset_session resume interrupt"
+DRIVE_ELICITS="send slash wait_turn sleep exit_clean restart sigkill start_session session keys reset_session resume interrupt seed_instruction"
 # shellcheck disable=SC2034  # scraped from this file's SOURCE by tools/onboarding-factory/scripts/lib/recipe-lint.sh:113 (sed), never expanded in shell
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 RUN_CWD="${IRRLICHT_ONBOARD_CWD:-$STAGING/cwd}"
@@ -883,7 +883,40 @@ step_sigkill() {
   sleep 1
 }
 
+# step_seed_instruction writes a persistent project-rules file into the run's
+# cwd (e.g. AGENTS.md) before the agent ever launches, so it loads the text as
+# a standing instruction the same way CLAUDE.md/AGENTS.md does for
+# claudecode/codex (#1960 record pass — designed once for task-estimate-marker,
+# ported into the shared template too so the other four waiting columns get it
+# from the same source). Pure filesystem I/O — agent-agnostic by construction,
+# unlike every tmux-keystroke arm above: `printf '%s' "$text" >
+# "$RUN_CWD/$path"`. muse's own binary confirms AGENTS.md is its native
+# per-project rules file (`muse init`'s template: "Muse Code reads this file
+# as project rules when it runs in this directory").
+step_seed_instruction() { # <path> <text>
+  local path="$1" text="$2"
+  printf '%s' "$text" > "$RUN_CWD/$path"
+  echo "[driver] seed_instruction: wrote $(printf '%s' "$text" | wc -c | tr -d ' ') bytes to $RUN_CWD/$path" >&2
+}
+
 # --- Step dispatch: ALL standard arms present; stubs fail loudly -------------
+# PRE-LAUNCH PASS (#1960): a persistent-rules file must exist BEFORE the
+# agent's own process starts, or it is never loaded into the system-reminder
+# the client injects at session open — but launch_repl below fires
+# UNCONDITIONALLY, before this loop ever reads SCRIPT_JSON. Every 5-8
+# task-estimate-marker recipe (the primitive's only consumer today) puts
+# seed_instruction FIRST in its script for exactly this reason, so a bare
+# in-loop case arm alone would run it too late — muse would already be
+# running without the file. This eagerly executes any seed_instruction
+# step(s) at the FRONT of SCRIPT_JSON before launch_repl runs; the in-loop
+# case arm below calls the identical function so the primitive also works
+# correctly (not just harmlessly-redundant) if a future recipe ever needs a
+# mid-script instruction-file update instead of a leading one.
+while IFS= read -r _leading_step; do
+  [[ "$(jq -r '.type' <<<"$_leading_step")" == "seed_instruction" ]] || break
+  step_seed_instruction "$(jq -r '.path' <<<"$_leading_step")" "$(jq -r '.text' <<<"$_leading_step")"
+done < <(jq -c '.[]' <<<"$SCRIPT_JSON")
+
 launch_repl
 # shellcheck disable=SC2034  # read by the sourced replaydata/_lib/drive/slots.sh (save_active/load_slot)
 EXPECTED_TURNS=0
@@ -921,6 +954,7 @@ while IFS= read -r step; do
     exit_clean)      step_exit_clean ;;
     start_session)   step_start_session "$(jq -r '.cwd // empty' <<<"$step")" || break ;;
     session)         : ;;   # pure focus switch — already handled by the inline target block above
+    seed_instruction) step_seed_instruction "$(jq -r '.path' <<<"$step")" "$(jq -r '.text' <<<"$step")" ;;
     *)               echo "[driver] unknown step type: $type" >&2; EXIT_REASON="nonzero(2)"; break ;;
   esac
   (( $(remaining_seconds) <= 0 )) && { EXIT_REASON="timeout"; break; }

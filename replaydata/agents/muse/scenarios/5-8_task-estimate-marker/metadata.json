@@ -120,16 +120,14 @@
       ],
       "setup": [
         "record ports a seed_instruction driver step: write the fenced marker rule (below) to $RUN_CWD/AGENTS.md BEFORE start_session, mirroring the codex/copilot/opencode/pi sibling recipes",
-        "Driver already mints a fresh per-run cwd under $STAGING/cwd and launches with --trust-workspace (driver-interactive.sh), so the seeded AGENTS.md loads without the untrusted-workspace modal blocking it"
+        "Driver already mints a fresh per-run cwd under $STAGING/cwd and launches with --trust-workspace (driver-interactive.sh), so the seeded AGENTS.md loads without the untrusted-workspace modal blocking it",
+        "RECIPE CORRECTION (record, pre-live-run, 2026-09-15): dropped a stray {\"type\":\"start_session\"} step that followed seed_instruction in the originally-assessed script. Cross-checked against all four sibling recipes for this scenario (codex/copilot/opencode/pi) -- none of them has an explicit session-launch step between seed_instruction and the first send; codex/copilot/pi go straight to send, opencode uses its own headless-to-live \"live\" step. The assessment setup note (\"write ... to $RUN_CWD/AGENTS.md BEFORE start_session, mirroring the codex/copilot/opencode/pi sibling recipes\") used \"start_session\" as prose for \"the agent launching\", not the literal start_session STEP TYPE -- driver-interactive.sh already launches slot 1 unconditionally via launch_repl before the step loop runs, so a literal start_session step here would allocate a SPURIOUS second concurrent session and switch $ACTIVE onto it (step_start_session, no explicit cwd, defaults new_cwd to $RUN_CWD -- so it would not even fail loudly, just add an untracked idle session and move all subsequent sends onto a second session_id, breaking the scenario single-session arc the spec asserts). Removed for parity with the sibling recipes; the new pre-launch seed_instruction pass in driver-interactive.sh (#1960) writes AGENTS.md into $RUN_CWD before launch_repl fires, which is the only launch this scenario needs."
       ],
       "script": [
         {
           "type": "seed_instruction",
           "path": "AGENTS.md",
           "text": "# AGENTS.md\n\n## Task progress marker (irrlicht)\n\nWhile working a multi-phase task, emit a hidden progress marker in your own reply text on EVERY turn, exactly in this form (keep it as an HTML comment so it stays out of the rendered answer):\n\n```\n<!-- {\"marker\":\"irrlicht-eta\",\"total_rounds\":N,\"completed_rounds\":M} -->\n```\n\nSet total_rounds to the number of phases you plan. Emit it with completed_rounds=0 on your first reply, then increase completed_rounds by 1 each turn as you finish a phase, until completed_rounds == total_rounds on the final turn."
-        },
-        {
-          "type": "start_session"
         },
         {
           "type": "send",
