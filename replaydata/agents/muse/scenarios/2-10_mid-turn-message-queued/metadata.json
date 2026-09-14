@@ -1,0 +1,99 @@
+{
+  "scenario_id": "mid-turn-message-queued",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.2.1",
+    "daemon_version": "unknown",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "mid-turn-message-queued",
+      "agent": "muse",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nLive-probed (tmux, `muse --yolo` in a throwaway cwd outside the repo): sent a slow multi-step count-to-10 prompt, waited until the TUI showed an in-flight tool call (`Running command · Sleep after N`), then typed a second message and pressed Enter. The TUI immediately showed `• Queued input ↳ followup queued message alpha` and the status bar read `steering the running turn`; the idle-composer hint independently confirms the feature name: `Alt+Enter queues or steers while a run is active`. So `agent_supports: yes` is directly observed, not inferred from docs.\n\nThe on-disk transcript (`session.jsonl`) resolves the open question this cell was flagged for: `runtime.user_intent.accepted` / `runtime.user_intent.materialized` are NOT a general \"typed → later picked up\" queue pair. For the FIRST (idle-state) message they fire back-to-back (~9ms apart) with `outcome.kind:\"top_level_turn_started\"` and `wake_policy:\"start_once\"` — i.e. they are the ordinary new-turn-start mechanism, confirmed across 73/73 `materialized` records in the local 235-session corpus (all `top_level_turn_started`; corpus never previously captured a genuine mid-turn send). The mid-turn probe produced the corpus's first `outcome.kind:\"active_run_delivery\"`: `accepted` → a NEW `runtime.session`/`kind:\"run\"`/`event.kind:\"inbox_item_queued\"` (`disposition:\"steer\"`, `source:\"user_steer\"`) → `materialized` all land together (~12ms span) roughly 8s after the keystroke, and — critically — the second message never opens a new run. `grep`ing every `(\"run\",\"started\")`/`(\"run\",\"terminal\")` record for the probe session shows exactly ONE `started` (the original count-to-10 prompt) and exactly ONE `terminal` (`completed`, `turn_duration_ms:63444`, matching the TUI's \"Worked for 1m 03s\") for the entire run_id, spanning both messages. The queued message is folded into the SAME active run via `active_run_delivery`, not deferred to a next-turn boundary.\n\nirrlicht's parser already routes both signals to `Skip=true`: `runtime.user_intent.*` falls through `route()`'s default arm (parser.go, comment lists `runtime.user_intent.*` explicitly), and `inbox_item_queued`/`drained` falls through `parseRunEvent()`'s default arm (parser.go, comment explicitly names `inbox_item_queued/drained` as \"high-volume internal bookkeeping this stage has no use for\"). The daemon's ONLY turn-boundary signals are `(\"run\",\"started\")→user_message` and `(\"run\",\"terminal\")→turn_done`. Since the probe's queued message produced neither a new `started` nor a premature `terminal`, the daemon sees exactly what the scenario requires: one continuous `working` span from the first prompt's `started` to the eventual `terminal`, no `→ready` flicker, no `→waiting` flicker, ending at `ready`. This is the canonical case of daemon=full met by transcript-driven state classification — not a parser change, a structural consequence of muse's own run-lifecycle shape.\n\n## Driver\n\n`replaydata/agents/muse/driver-interactive.sh`'s `DRIVE_ELICITS` already lists `send`, `wait_turn`, `sleep` — exactly the primitives this recipe needs (type the first prompt, wait for a mid-turn moment, type the follow-up, wait for the turn to finish). No `keys` primitive is required: a plain `send` (type text + Enter) reproduced the TUI's \"steer\" behavior in the probe. `driver_capability: ready`, confirmed via `recipe-lint.sh`'s `driver_step_types_from_file`.",
+      "caveats": [
+        "The queued message's TEXT is invisible to the daemon (both `runtime.user_intent.*` and `inbox_item_queued` are Skip=true), unlike claudecode where the follow-up sometimes appears as a second transcript user-line. The scenario's acceptance criteria assert only the state arc (working → no flicker → ready), which does not require the message content to surface, so this stays daemon=full — noted here so a future re-assessment does not treat the missing text as a gap.",
+        "Live-probed the launch flag choice too: `muse --trust-workspace` (no `--yolo`) with a `sleep 3` shell-command prompt ran the command with zero approval friction (`Ran command · Run sleep 3 first time · ✓ · 3.2s`, no `waiting`), matching the precedent already established by the recorded `2-2_auto-executed-tool-call` cell. This keeps this cell's launch flags consistent with the rest of the muse column rather than requiring `--yolo` (which the driver does not currently expose via `settings` anyway — `spawn_muse_repl` only wires `--model`/`--base-url` from settings). Vacuous-pass condition: this relies on THIS machine's permission profile auto-allowing a bare `sleep` shell command under `on-request` — re-probe at record time per the same convention 2-2 already documents.",
+        "Only one live sample of the mid-turn delivery exists (this probe). The TUI's own idle hint (`Alt+Enter queues or steers while a run is active`) implies a distinct explicit-queue affordance separate from the plain-Enter \"steer\" path exercised here; the plain-Enter path already satisfies every acceptance-criteria bullet, so the recipe does not need Alt+Enter, but a genuinely different `disposition` value (e.g. a true deferred \"queue\", as opposed to \"steer\") was not observed and is left UNVERIFIED.",
+        "The 8-second gap between the keystroke and the accepted/inbox_item_queued/materialized cluster reflects this probe's own tool-call round-trip latency (send text, sleep 1, send Enter, sleep 1, capture-pane were serial Bash-tool invocations), not a property of muse's internal processing speed — not asserted as a timing fact."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/parser.go",
+          "note": "route() default arm explicitly lists runtime.user_intent.* as Skip=true (lines ~233-244); parseRunEvent() default arm explicitly lists inbox_item_queued/drained as Skip=true, high-volume internal bookkeeping (lines ~288-302). Confirms the daemon derives turn boundaries ONLY from (\"run\",\"started\")/(\"run\",\"terminal\")."
+        },
+        {
+          "kind": "file",
+          "ref": "live probe session.jsonl (~/.local/share/muse/sessions/2026/09/14/01a09f4d-9869-7be0-bbfd-75aaa281a693/session.jsonl, throwaway cwd, muse --yolo)",
+          "note": "seq 21 (\"run\",\"started\",prompt:\"Count from 1 to 10...\"); seq 202-204 (user_intent.accepted → inbox_item_queued disposition:\"steer\" → user_intent.materialized outcome.kind:\"active_run_delivery\") all sharing run_id 72629217-1fc8-483d-8f3b-92d71f5cb63e; seq 587 (\"run\",\"terminal\",terminal:\"completed\",turn_duration_ms:63444) — exactly one started and one terminal for the whole run spanning both messages."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash wait_turn sleep exit_clean restart sigkill start_session session\" (no keys needed); spawn_muse_repl only wires --model/--base-url from settings, confirming --yolo is not settings-injectable today."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/scenarios/2-2_auto-executed-tool-call/metadata.json",
+          "note": "Precedent: a benign shell command (ls -la) auto-allows under --trust-workspace/on-request on this machine with zero waiting transitions — this cell's sleep-based probe reproduced the same result live."
+        },
+        {
+          "kind": "file",
+          "ref": "TUI transcript (tmux capture-pane, live probe)",
+          "note": "• Queued input / followup queued message alpha; status bar 'steering the running turn'; idle hint 'Alt+Enter queues or steers while a run is active'."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "muse CLI on PATH and authenticated (muse login or META_API_KEY) — confirmed installed at 1.2.1 on this machine",
+        "irrlichd is recording (--attach or isolated coexist mode)",
+        "This machine's muse permission profile classifies a plain 'sleep N' bash command as auto-allow (no approval flow), matching the 2-2_auto-executed-tool-call precedent — re-probe at record time; if a live run instead shows a kind:'approval' record for this call, swap the tool-call step for a different auto-allowed command before recording"
+      ],
+      "setup": [
+        "Driver generates a fresh lowercased session UUID and a fresh cwd under <staging>/cwd/ (launch_repl, driver-interactive.sh); launch already carries --trust-workspace so the untrusted-workspace modal never eats the first prompt",
+        "The first prompt must keep muse busy across multiple tool calls long enough to send a follow-up mid-run — a slow count-to-10 with a 'sleep 2' shell command after each number is sufficient (same shape as claudecode's sibling recipe)",
+        "The mid-turn follow-up is delivered via a second `send` step (type text + Enter) while the first turn is still working — no special key sequence is needed; muse's TUI buffers/steers it into the active run without the driver having to detect a 'safe point' itself"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Count from 1 to 10, one number per line. After each number, run the shell command sleep 2. Then on the last line reply with exactly the word: donecounting"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "send",
+          "text": "followup queued message alpha"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the session entering ready, then a ready→working transition for the first prompt (event.kind:\"started\" → user_message)",
+        "events.jsonl contains NO state_transition to ready and NO state_transition to waiting between that first working transition and the eventual turn_done — the working span must be contiguous through the queued-message arrival",
+        "events.jsonl contains exactly one working→ready transition (event.kind:\"terminal\",terminal:\"completed\" → turn_done); final session state is ready",
+        "transcript shows the literal final reply token 'donecounting'; the queued follow-up's text is NOT expected to surface anywhere in events.jsonl (both runtime.user_intent.* and inbox_item_queued/drained are Skip=true) — its absence is expected, not a failure"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}
