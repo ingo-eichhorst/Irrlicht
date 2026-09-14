@@ -197,7 +197,12 @@
       }
     },
     "muse": {
-      "maturity": "alpha"
+      "maturity": "alpha",
+      "capabilities": {
+        "architect_editor": "absent",
+        "cloud_agent": "absent",
+        "provider_failover": "absent"
+      }
     },
     "opencode": {
       "maturity": "alpha",
