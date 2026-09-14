@@ -1,0 +1,119 @@
+{
+  "scenario_id": "long-idle-live-session",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.2.1",
+    "daemon_version": "0.6.3+0239a1b",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes; daemon_capability: full (generic readyTTL sweep + muse's lock-based PID binding); driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "long-idle-live-session",
+      "agent": "muse",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe scenario asserts three user-observable things: (1) the session row does NOT disappear once idle exceeds readyTTL, (2) state remains `ready` throughout the idle window, (3) the next user prompt resumes `ready → working` normally.\n\n**Agent (yes).** Muse's interactive CLI is a single long-lived native process — `muse` is a bash launcher that `exec`s a version-pinned binary (`muse-bin-1.2.1-R2847.1`), so a plain interactive invocation stays up in its REPL indefinitely until the user exits; nothing in the CLI or its docs auto-terminates an idle session (format-spec §1/§2, `muse --help`). It sits in `ready` after a turn and accepts the next prompt normally, live-tested for both a clean `/exit` and mid-session prompting (format-spec §8).\n\n**Daemon (full).** This is two things working together, both confirmed by reading the code (not inferred):\n1. The readyTTL liveness sweep itself is generic, adapter-agnostic infrastructure: `PIDManager.sweepStaleSnapshot` → `reapsIdleTopLevel` (core/application/services/pid_manager.go:1224-1237) only reaps a `ready` session once `isStaleUpdatedAt(snap.updatedAt, pm.readyTTL)` is true AND the bound PID is confirmed dead (`syscall.Kill(snap.pid, 0) != nil`); a session whose PID is still alive is explicitly skipped regardless of adapter. I ran `go test ./core/application/services/... -race -count=1 -run 'TestCheckPIDLiveness'` myself and every case (including `TestCheckPIDLiveness_FreshTranscript_NotDeleted`, `_LiveSessionRealArgv_NotReaped`) passed. The whole sweep is gated on `pm.readyTTL > 0` (pid_manager.go:1092) — see the vacuous-pass caveat below.\n2. Muse's own contribution is getting the PID bound correctly in the first place. `core/adapters/inbound/agents/muse/pid.go`'s `DiscoverPID` deliberately does NOT use the process-name+cwd scan every other file-transcript adapter uses, because format-spec §2 live-caught a single `muse-bin` PID holding open flock fds on 11 different sessions' `.session.lock` files simultaneously (`muse serve` host mode) — a 1-PID:1-session assumption is provably wrong for muse. Instead it asks `processlifecycle.DiscoverPIDByTranscriptWriter` \"who holds THIS session's own `.session.lock` open\" (an lsof-style check), which is correct however the process is launched. format-spec §1 live-tested this exact signal twice: a live session's lock file shows an open fd via `lsof`; a dead one (process exited, `pid=<N>` text stale) shows none — for BOTH a clean `/exit` and a SIGKILL. `go test ./core/adapters/inbound/agents/muse/... -race -count=1` passes (I ran it).\n3. `PIDManager.TryDiscoverPID` (pid_manager.go:849-853) short-circuits once a PID is bound (`state.PID > 0 → return true`), so `DiscoverPID`'s lock-fd check runs once at binding time, not on every sweep tick; the readyTTL sweep's own re-checks are plain OS-level `syscall.Kill(pid,0)` against the already-persisted PID. This is fine for the scenario: the process itself doesn't die during idle, only the transcript goes quiet.\n4. The turn-boundary events the arc depends on are wired correctly: `parser.go` sets `EventType=\"user_message\"` + `ClearToolNames=true` on a run's `started` event (parser.go:310-311) and `EventType=\"turn_done\"` on ALL THREE of a run's `terminal` outcomes — `completed`/`cancelled`/`failed` (parser.go:325-326) — which is exactly what `SessionMetrics.IsAgentDone()` needs to classify `ready` after a turn (format-spec §3 confirms `terminal` is muse's sole, unambiguous turn-boundary event).\n\n**Driver (ready).** `replaydata/agents/muse/driver-interactive.sh`'s `DRIVE_ELICITS=\"send slash wait_turn sleep exit_clean\"` (grepped directly from the file) already covers every primitive this recipe needs (send, wait_turn, sleep) — no `driver_gap`. The driver needed a real fix first (commit 0239a1bd, same branch): the untrusted-workspace modal ate the first prompt, `Enter` was dropped mid-render, `resolve_transcript` could pick a spawned subagent's transcript over the driven session's own, and `turn_count()` masked read failures as zero turns — all five defects were live-reproduced (muse-driver-audit.md) and are now fixed and covered by this run's own `go test ./core/... -race -count=1` (headless daemon smoke test) plus the driver's own live-verified comments (each fix documents the before/after tmux repro in-line).",
+      "caveats": [
+        "Vacuous-pass condition: sweepStaleSnapshot only runs when pm.readyTTL > 0 (pid_manager.go:1092). Recording with the daemon's PRODUCTION default (30 min) would either force a 32+ minute recording or, worse, record something that LOOKS like a pass for the wrong reason if the idle window is shorter than the real TTL (the session simply never becomes a sweep candidate, so nothing exercises the PID-liveness branch at all). IRRLICHT_READY_SESSION_TTL=15s on the daemon is therefore a load-bearing precondition of this recipe, not an optional speed-up — it is named in the recipe's preconditions and mirrored in the spec's duration_at_least_ms.",
+        "The daemon's per-tick liveness re-check is a plain syscall.Kill(pid,0) against the PID already bound at session-start time (see Reasoning point 3) — it is NOT muse re-verifying its own .session.lock flock on every tick. The lock-fd check only runs once, at PID-binding time. This is still a correct and sufficient mechanism for the scenario (the OS process itself is what's alive or dead during an idle window), but a future reader should not describe this cell as proving muse's lock file is polled continuously.",
+        "UNVERIFIED (named in the task brief, not independently resolved here): whether a nested subagent session directory (<parent>/subagent/<child-id>/) has its own .session.lock. pid.go's DiscoverPID falls back to treating the transcript file itself as the writer-check target when the lock file has no writer, so a missing subagent lock degrades gracefully rather than failing — but this doesn't affect THIS cell's verdict: the scenario's acceptance criteria is about the PRIMARY session only, and child-session staleness is handled by a structurally different code path (reapStaleChild, gated on parentSessionID != \"\", pid_manager.go:1239+) that this scenario never exercises.",
+        "Muse spawns reminder-agent subagents (goal-reminder / verify-reminder) as part of processing a turn (format-spec §9) — this happens WHILE a turn runs, not during idle, so the idle window itself should show zero transcript writes for the primary session, matching the spec's 'no transcript_removed' / 'no spurious state_transition' invariants. Flagging only so a future reader isn't surprised by extra subagent/ directories appearing in the recording's session tree from the two turns themselves."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/application/services/pid_manager.go:1092,1224-1237",
+          "note": "readyTTL sweep gate (pm.readyTTL > 0) and reapsIdleTopLevel's PID-alive skip — generic, adapter-agnostic."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/pid_manager.go:849-853",
+          "note": "TryDiscoverPID short-circuits once state.PID > 0 — DiscoverPID runs once at binding time, not every sweep tick."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/pid.go",
+          "note": "DiscoverPID keys off the session's own .session.lock via DiscoverPIDByTranscriptWriter (lsof-style), not a process-name+cwd scan, because one muse-bin PID can serve many sessions (muse serve)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/parser.go:310-311,325-326",
+          "note": "EventType=user_message/ClearToolNames on run.started; EventType=turn_done on all 3 run.terminal outcomes."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash wait_turn sleep exit_clean\" covers every primitive this recipe needs; commit 0239a1bd fixed 5 live-reproduced defects."
+        },
+        {
+          "kind": "file",
+          "ref": "/private/tmp/claude-501/-Users-ingo-projects-irrlicht/bb5f9f9d-9082-48be-a0eb-ab65bc647002/scratchpad/muse-format-spec.md §1-§2,§7-§8",
+          "note": "live lsof/tmux evidence for lock-fd liveness, one-PID-many-sessions, live-observed model_id, and both exit-path behaviors."
+        },
+        {
+          "kind": "test",
+          "ref": "go test ./core/application/services/... -race -count=1 -run TestCheckPIDLiveness",
+          "note": "run directly by me; all cases pass, including FreshTranscript_NotDeleted and LiveSessionRealArgv_NotReaped."
+        },
+        {
+          "kind": "test",
+          "ref": "go test ./core/adapters/inbound/agents/muse/... -race -count=1",
+          "note": "run directly by me; passes."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "muse CLI on PATH and authenticated (muse --version >= 1.2.1; muse login / META_API_KEY per replaydata/agents/muse/metadata.json)",
+        "irrlichd is running with IRRLICHT_READY_SESSION_TTL=15s in its environment — load-bearing: the daemon's default 30 min readyTTL would either force a 32+ minute recording or make the cell's core assertion (survival PAST readyTTL) untestable in a reasonable window, and the entire liveness sweep is gated on pm.readyTTL > 0 (pid_manager.go:1092)",
+        "irrlichd is in --record mode",
+        "no other muse session shares the recipe's fresh $RUN_CWD"
+      ],
+      "setup": [
+        "Driver launches a fresh `muse --trust-workspace` in a brand-new cwd (driver-interactive.sh's launch_repl) — muse mints its own session UUID, resolved post-launch via resolve_transcript",
+        "Daemon's effective readyTTL must be < 30s so the 20s idle sleep clearly exceeds it, mirroring claudecode's sibling recipe for this same scenario"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 20
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: alive"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the muse session entering ready after turn 1 completes (state_transition to ready)",
+        "no transcript_removed event fires for the primary session during the 20s idle window (the session must not be swept while the muse process is alive)",
+        "no state_transition to working or waiting fires during the 20s idle window (state stays ready while idle)",
+        "after the second send, events.jsonl shows ready → working → ready for the same session",
+        "final session state is ready",
+        "transcript.jsonl / session.jsonl contains exactly 2 user turns and 2 assistant turns for the primary session (subagent transcripts from reminder-agents, if any, are separate files and not counted here)"
+      ],
+      "settings": {},
+      "timeout_seconds": 120
+    }
+  }
+}
