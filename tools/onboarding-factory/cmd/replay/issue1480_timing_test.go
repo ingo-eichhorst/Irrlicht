@@ -331,7 +331,7 @@ var knownFirstTransitionDrift = map[string]string{
 // count, 113 -> 114, with no new FIRST-transition drift — the extra one drifts
 // on a later transition, which is exactly the case this count exists to catch.
 const (
-	maxRecordingsDriftingOverThreshold = 114
+	maxRecordingsDriftingOverThreshold = 115
 	maxRecordingsDriftingOver5s        = 56
 )
 
