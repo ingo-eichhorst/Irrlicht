@@ -91,7 +91,8 @@
         "irrlichd is recording -- either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
         "DRIVER WORK REQUIRED before this cell can record: replaydata/agents/muse/driver-interactive.sh's step-dispatch loop must implement the `keys` step (currently `not_implemented keys || break` at line 671) as a raw `tmux send-keys -t $SESSION <keys>` passthrough -- live-verified this session that `Down` and `Enter` sent this way correctly navigate and confirm the /model picker.",
         "LOAD-BEARING ENVIRONMENT PRECONDITION (Vacuous-pass rule): the recipe assumes the account's CURRENT default model is muse-spark-1.3-contributor (live-confirmed 2026-09-14) and that the /model picker's row order is [muse-spark-1.3, muse-spark-1.3-contributor, muse-spark-1.2, muse-spark-1.2-contributor] with the cursor starting on the currently-active row. If either has changed, `record` must capture the picker pane (a `slash \"/model\"` followed by a pane-capture, before committing to a fixed `keys Down` count) rather than trust this cell's exact sequence blindly.",
-        "the model-catalog cache at ~/.local/share/muse/model-catalog/*.json must already carry rows for both models in the switch pair, or ContextWindow will legitimately degrade to unknown for whichever model lacks one -- all four muse-spark-* variants had rows as of this assessment (read directly, not inferred)."
+        "the model-catalog cache at ~/.local/share/muse/model-catalog/*.json must already carry rows for both models in the switch pair, or ContextWindow will legitimately degrade to unknown for whichever model lacks one -- all four muse-spark-* variants had rows as of this assessment (read directly, not inferred).",
+        "RECORD-TIME ADDITION (2026-09-14, first live attempt): the recipe now appends a 20s sleep AFTER exit_clean. The first live recording (session 01a0a1d6-08e3-7213-8675-8ccdc01ec27a) passed 6/7 phases -- the model switch itself was clean (ready throughout, no working/waiting flicker) -- but teardown's process_exited landed on a reminder-child session (dbd15b68-...) instead of the primary, the known #1962 shared-PID watched-map last-write-wins shape (cite ingo-eichhorst/Irrlicht#1962; do not re-file). Per that bug's own documented recovery, PIDManager.SweepDeadPIDs ticks every 5s and independently re-checks each session's own PID liveness, so it can emit the CORRECT session's process_exited on its own within roughly 5-15s -- but run-cell.sh's isolated-daemon path SIGINTs the daemon immediately once the driver script returns, with no built-in post-teardown wait, so the first attempt's driver returned (and the daemon was killed) before any sweep tick had a chance to fire. The appended sleep buys ~4 sweep ticks of extra daemon lifetime before the driver (and therefore run-cell.sh) returns."
       ],
       "setup": [
         "Driver launches `muse --trust-workspace` (NO --model override -- turn 1 deliberately runs on the account's current default, muse-spark-1.3-contributor, live-confirmed as model A) in a fresh per-run cwd under a tmux session, same launch shape as the other muse interactive cells.",
@@ -146,6 +147,10 @@
         },
         {
           "type": "exit_clean"
+        },
+        {
+          "type": "sleep",
+          "seconds": 20
         }
       ],
       "verify": [
@@ -158,7 +163,7 @@
         "final session state is ready before exit_clean tears the REPL down."
       ],
       "settings": {},
-      "timeout_seconds": 180
+      "timeout_seconds": 220
     }
   }
 }
