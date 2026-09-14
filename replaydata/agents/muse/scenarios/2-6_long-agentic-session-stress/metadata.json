@@ -1,0 +1,147 @@
+{
+  "scenario_id": "long-agentic-session-stress",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.2.1",
+    "daemon_version": "0.6.3+bd52983.dirty (worktree, pre-release; core/ unmodified)",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes (muse is a standard multi-turn REPL, already proven by recorded siblings 2-1/2-2); daemon_capability: full for the turn-arc mechanism, load-tested directly against the corpus's largest real session (2629 lines, one 2,877,101ms/48-minute turn, 13 live subagents) rather than asserted from code alone; driver_capability: ready, reusing 2-1/2-2's proven send/wait_turn/sleep/exit_clean steps 4x with no new primitive."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "long-agentic-session-stress",
+      "agent": "muse",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes (confidence very high) -- daemon_capability: full for the turn-arc mechanism this scenario actually asserts -- driver_capability: ready -- route: record\n\nThis assessment does not reason about a long session in the abstract: it loads and directly re-derives the parser's own computation against the largest real session.jsonl on this machine, `~/.local/share/muse/sessions/2026/09/13/01a09c47-506a-7763-b82a-9ab89a9e195a/session.jsonl` (2629 lines, 3 turns, one of them the corpus's longest recorded `turn_duration_ms:2877101` with 13 concurrently-admitted subagents -- confirmed the SAME session the task's shared context refers to by matching its `run_id` `a16767b1-dd74-401e-99e4-570b613dc6aa` against `parent_run_id` in that session's own `subagent.control.spawn_accepted` records). Every figure below states the command/script that produced it; all scripts were run against this exact file in this session, not against the broader 198-session corpus.\n\n## agent_supports = yes\n\nMuse is an ordinary multi-turn REPL; sibling cells `2-1_basic-turn` and `2-2_auto-executed-tool-call` (both already live-recorded, `daemon_capability:full`) already prove a single ready->working->ready round trip end to end. This scenario is the SAME mechanism repeated across more turns with heavier internal activity -- nothing in muse's transport model imposes a turn-count ceiling (format-spec's corpus includes sessions well past 4 turns; the 2629-line session itself ran 45 separate `model_completed` LLM calls across just 3 turns).\n\n## daemon_capability = full -- three separate claims, each independently measured against the real long session\n\n### 1. Token accumulation stays correct across many `model_completed` records\n\n`core/adapters/inbound/agents/muse/parser.go`'s `parseModelCompleted` (lines 371-441) nets `cache_read_tokens` (falling back to `cached_tokens`) out of `input_tokens` per call, and the tailer's generic `CumInputTokens`/`CumOutputTokens` accumulate the resulting `UsageBreakdown` across the session (`core/pkg/tailer/tailer_metrics.go`). The parser's own doc comment already validates the FIELD-SHAPE claim (\"input_tokens is inclusive of the cache\") against 476 real records; this assessment validates the ACCUMULATION claim -- that summing stays correct over many sequential calls in one long session, which is what this scenario specifically probes. I re-implemented the identical netting formula in a standalone script and ran it against all 45 real `model_completed` events in the 2629-line session, in document order:\n```\npython3 -c \"...\" (walks session.jsonl, decoding retained_frame children the same way parser.go's ParseLine does, nets cache_read_tokens from input_tokens per call, accumulates)\n```\nResult: 45/45 contributions processed, 0 negative net-input deltas, a monotonically non-decreasing cumulative total start to finish (33,539 -> 322,830 net input tokens; 127 -> 17,934 output tokens; 2,060,471 cache-read tokens folded back in for the `Total` field), and every one of the 45 events carried a non-empty `model` (`muse-spark-1.3-contributor`) so none was silently dropped by the `model==\"\" && bd==zero` early-return at parser.go:417. No drift, no double-count, no loss across the full run.\n\n### 2. The open-tool-call set drains correctly under load\n\n`parser.go`'s package doc (lines 57-74) documents that this adapter feeds the tailer's generic id-keyed `openToolCalls` map (`core/pkg/tailer/tailer.go`) purely from `assistant_tool_calls_committed` (opens, by `call_id`) / `tool_result_batch_committed` (closes, by `tool_call_id`) -- an idempotent map with a structural backstop, `sweepOpenToolCallsOnTurnDone` (tailer.go:1193), that drops any entry surviving to a turn's own `turn_done` (tested: `idle_flush_test.go`, `rotation_reset_test.go`, both already green). I walked the real session's 35 `assistant_tool_calls_committed` / 35 `tool_result_batch_committed` events (60 lower-level `tool_batch.effect.*` pairs corroborate the same call_ids) and computed open/close set differences PER RUN (per turn), not just session-wide: turn 1 (`4cd97665-...`, cancelled after 62047ms) opened 1/closed 1; turn 2 (`01a09c48-...`, cancelled after 1505ms) opened 0/closed 0; turn 3 (`a16767b1-...`, cancelled after 2,877,101ms, the 48-minute turn) opened 63/closed 63. Zero unclosed call_ids at the end of any of the 3 turns, despite all 3 ending in `terminal:\"cancelled\"` rather than `\"completed\"` -- i.e. even an aborted/interrupted turn in this real corpus left no orphaned open tool call, and `parseRunTerminal` sets `EventType:\"turn_done\"` unconditionally for every terminal flavor (parser.go:317-324, `completed`/`cancelled`/`failed` all hit the same code path), so the generic sweep would catch a straggler even if one occurred.\n\n### 3. Subagent count is real but becomes MOSTLY NOISE as a session runs longer\n\nThis is the one place a plain \"daemon=full\" would be dishonest without a caveat, so it is called out explicitly (not part of scenario 2.6's own acceptance criteria, which asserts turn-level state only -- see \"Scope\" below). Cross-referencing the real session's own event stream: `subagent.control.child_session_bound` (genuine `subagent_spawn`-tool-driven children) fired 13 times, all 13 materializing on disk. `memory_reminder_child_session_linked` (the built-in skill-reminder/goal-reminder/verify-reminder/todo-reminder ambient micro-agents) fired 70 times with 70 DISTINCT `child_session_id`s, of which 19 materialized a `subagent/<id>/session.jsonl` directory (the rest never produced output, per format-spec's own observation). That is a 70:13 (5.4x) ratio of reminder-linked to real children referenced by ONE session, and 19:13 among only the ones that actually appear on disk. Critically, 65 of those 70 reminders (93%) fired inside the SINGLE 48-minute turn alone (1 in turn 1, 65 in turn 3) -- confirming the shared context's claim that reminder volume scales with a turn's internal length/step count, not just turn count, so the noise ratio gets WORSE as a session runs longer, not proportionally stable. `core/adapters/inbound/agents/muse/adapter.go`'s `sessionIDFromPath`/`parentSessionIDFromPath` (read directly) derive parent-child linkage PURELY from directory nesting (`<parent>/subagent/<child-id>/session.jsonl`) -- they never read event content, so there is no code-level mechanism available today to tell a reminder micro-agent's directory apart from a real subagent's directory; both nest identically. **This already caused a real, fixed vacuous pass in this exact column**: `2-2_auto-executed-tool-call`'s committed metadata documents that its ORIGINAL (unpinned) spec passed 3/3 by matching a `goal-reminder` subagent's own internal ready->working->ready arc instead of the parent session's `ls -la` turn, because a reminder subagent skips the `ready` birth state and its own read-only arc alone satisfies an unpinned 3-phase shape. So: a subagent count is real and load-bearing at the SPEC-CORRECTNESS level (every phase below must pin `same_session_as` to the root session or it can silently validate the wrong session), but is NOT a meaningful \"how many subagents did this session run\" figure once a session has run long -- it becomes dominated by ambient reminder noise that the daemon has no way to filter, and the imbalance compounds with turn length.\n\n## Scope: what 2.6's own acceptance criteria actually assert (and what they don't)\n\nScenario `2.6`'s `acceptance_criteria` (read via `of scenario show --name long-agentic-session-stress`) assert ONLY the turn-level state arc: no flicker within a turn, clean `working<->ready` transitions between turns, no stuck state, final state `ready`, at least one tool call. It does NOT assert a subagent count, a session count, or any metric derived from `memory_reminder_child_session_linked`/`subagent.control.*`. So the subagent-noise finding above is a CAVEAT informing how the spec must be written (every phase pinned to `same_session_as:session_birth`, following 2-2's already-fixed precedent) and a fact worth recording for any FUTURE cell that would assert a subagent count for muse -- it does not downgrade `daemon_capability` for THIS scenario, whose actual assertions (turn arcs, token accumulation, tool-call draining) are all independently confirmed full above.\n\n## driver_capability = ready\n\n`replaydata/agents/muse/driver-interactive.sh` already implements every step type this recipe needs (`send`/`wait_turn`/`sleep`/`exit_clean`), proven end-to-end by both `2-1_basic-turn` (text-only turn) and `2-2_auto-executed-tool-call` (a `bash`/`ls -la` tool-call turn, confirmed `policy_decision:\"allow:policy\"` -- no approval flow). This recipe is exactly those two turn shapes run 4x in one session (3 text-only + 1 tool-call turn) -- no new primitive, no gap.",
+      "caveats": [
+        "Subagent/child-session count is real (measured: 13 genuine subagent_spawn children vs 70 reminder-linked children referenced by the one real long session inspected, a 5.4x ratio, 93% of the reminders concentrated in the session's single longest turn) but becomes dominated by ambient reminder noise as a session runs longer -- see body section 3. `adapter.go`'s parent-child linkage is directory-nesting-only and cannot discriminate the two at the code level. This is informative for any future cell asserting a subagent count for muse, not an assertion this cell (2.6) itself makes.",
+        "Every phase in the spec below is pinned with `same_session_as:session_birth`, reusing the fix already proven necessary and committed in this same column's `2-2_auto-executed-tool-call` metadata: an unpinned turn_start/turn_end phase can silently match a reminder subagent's own internal arc instead of the parent session's real turn, because reminder subagents skip the `ready` birth state and their own short read-only arc alone satisfies an unpinned 3-phase shape. Do not remove the pinning when `record` runs this cell.",
+        "cost_nonzero is asserted false: `muse-spark-1.3-contributor` has no litellm pricing/alias entry (confirmed by 2-2's record pass and re-confirmed here by the same absence in core/pkg/capacity), so every muse recording prices at $0 regardless of turn count.",
+        "The only available real example of a LONG-DURATION session (the 2629-line/2,877,101ms one this assessment is grounded in) happened to end all 3 of its turns in `terminal:\"cancelled\"` rather than `\"completed\"` -- plausibly an artifact of however that session was being driven (a concurrent onboarding-factory research process), not a muse defect; parser.go treats every terminal flavor identically for turn-boundary purposes (EventType:\"turn_done\" unconditionally), and this cell's own recipe reuses 2-1/2-2's already-proven clean-completion turn shapes rather than the exotic 48-minute agentic-loop shape, so a `cancelled` outcome is not expected for THIS recipe's simple turns.",
+        "Turn timing bounds (max_delay_ms) below are estimates carried from 2-1/2-2's proven single-turn timings extended to a 4-turn recipe, not yet confirmed by a live recording of THIS multi-turn script -- record should tighten them from the actual recording the way 2-2's record pass did."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "~/.local/share/muse/sessions/2026/09/13/01a09c47-506a-7763-b82a-9ab89a9e195a/session.jsonl (this machine, live corpus)",
+          "note": "The corpus's largest real session (2629 lines / 2630 decoded records including retained_frame children). Directly walked with a standalone python script (documented inline in the body) to: (1) recompute token accumulation the same way parser.go's parseModelCompleted does, across all 45 real model_completed events; (2) compute per-run open/close tool-call set differences across all 3 real turns (1/1, 0/0, 63/63 opened/closed, 0 unclosed in every turn); (3) enumerate subagent.control.child_session_bound (13) vs memory_reminder_child_session_linked (70 distinct child ids, 19 materialized on disk) and confirm which fired inside which of the 3 turns via run_id grouping."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/parser.go",
+          "note": "parseModelCompleted (371-441): cache_read netting formula re-implemented and validated against the real session above. parseRunTerminal (317-365): EventType=\"turn_done\" fires unconditionally for completed/cancelled/failed. Package doc (57-74): assistant_tool_calls_committed/tool_result_batch_committed feed the tailer's generic openToolCalls map."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer.go, core/pkg/tailer/tailer_metrics.go",
+          "note": "Generic (adapter-independent) openToolCalls id-keyed map (tailer.go:321-338, 1009-1028) and sweepOpenToolCallsOnTurnDone (tailer.go:1193-1210+) as the structural backstop for a call that doesn't close on its own before turn_done; CumInputTokens/CumOutputTokens accumulation (tailer_metrics.go:462,484)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/adapter.go",
+          "note": "sessionIDFromPath/parentSessionIDFromPath (read in full): parent-child session linkage is derived purely from directory nesting (<parent>/subagent/<child-id>/session.jsonl), never from event content -- confirms no code-level mechanism exists to distinguish a reminder micro-agent's child directory from a real subagent_spawn child's directory."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/scenarios/2-2_auto-executed-tool-call/metadata.json (this repo, already committed)",
+          "note": "Direct precedent for the vacuous-pass mechanism this cell's spec guards against: this sibling cell's ORIGINAL spec passed 3/3 while validating a goal-reminder subagent's own arc instead of the parent session's turn, fixed by pinning same_session_as:session_birth on every phase. Also the source of the cost_nonzero:false / muse-spark unpriced finding, re-confirmed here."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/scenarios/2-1_basic-turn/metadata.json and 2-2_auto-executed-tool-call/metadata.json (this repo, already committed, both live-recorded)",
+          "note": "Proven driver mechanics (send/wait_turn/sleep/exit_clean, --trust-workspace, tmux REPL) and proven auto-approved bash-tool-call prompt shape ('List the files in the current directory using ls -la, then reply ...') this cell's recipe reuses verbatim for its one tool-call turn."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/2-6_long-agentic-session-stress/expected.jsonl and metadata.json",
+          "note": "Structural template for this scenario's 9-phase (birth + 4x start/end) shape and its plain-word-reply turn design (avoids refusal/cue-shaped-phrasing hazards the assess skill documents)."
+        },
+        {
+          "kind": "file",
+          "ref": "muse-format-spec.md section 9 (this task's shared research context, this machine)",
+          "note": "Documents the two distinct child-session mechanisms (subagent.control.* for real spawns vs memory_reminder_child_session_linked for reminders) and that only children that 'produced output' materialize a directory -- both independently re-confirmed against the real session above, not taken on faith."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "muse CLI on PATH and authenticated (muse login or META_API_KEY) -- confirmed installed at 1.2.1 on this machine",
+        "irrlichd is recording (--attach against a daemon started with --record, or isolated coexist mode)",
+        "tmux available -- the interactive driver runs muse in a tmux REPL so it stays alive across all 4 turns",
+        "This machine's muse permission profile classifies a plain 'ls -la' read-only bash command as policy_decision:'allow:policy' (no approval flow) -- proven live by sibling cell 2-2; re-probe at record time per that cell's own precondition"
+      ],
+      "setup": [
+        "Driver generates a fresh lowercased session UUID and a fresh cwd under <staging>/cwd/ (launch_repl, driver-interactive.sh)",
+        "Driver launches `muse --trust-workspace` in a tmux session so the untrusted-workspace modal never silently eats the first prompt (defect #1 fix, commit 0239a1bd), then sleeps 1s for muse's input handler to wire up before the first send",
+        "muse mints its own session UUID on launch; the driver resolves the newest session.jsonl under ~/.local/share/muse/sessions (excluding subagent/ copies) newer than a pre-launch marker"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: alpha"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "send",
+          "text": "List the files in the current directory using ls -la, then reply with exactly the word: beta"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: gamma"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: delta"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "exit_clean"
+        }
+      ],
+      "verify": [
+        "events.jsonl mints the session in ready shortly after muse's TUI finishes launching (single-birth; session id from the session directory basename == stream.id)",
+        "for EACH of the 4 turns, on the SAME root session: exactly one ready->working transition (run.started->user_message) and one working->ready transition (run.terminal:completed->turn_done)",
+        "turn 2's working span contains at least one bash tool-call open/close pair (ls -la), with no state_transition to waiting anywhere in the session (the call is policy-fast-tracked, no approval flow)",
+        "across the entire session, no state_transition to ready or waiting fires INSIDE any turn's working span (no flicker between model_completed/reasoning/tool-call events within one turn)",
+        "final session state is ready before exit_clean tears the REPL down",
+        "transcript contains the 4 literal final-reply tokens (alpha/beta/gamma/delta) in order",
+        "observation vector: tokens_nonzero=true (cumulative across all 4 turns' model_completed events), cost_nonzero=false (muse-spark is unpriced), model unpinned"
+      ],
+      "settings": {},
+      "timeout_seconds": 600
+    }
+  }
+}
