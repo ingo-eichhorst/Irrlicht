@@ -493,40 +493,100 @@ step_restart() {
   spawn_muse_repl
 }
 
+# muse_writer_pid <path> -> the PID holding <path> open for WRITING (FD access
+# mode 'w' or 'u'), or empty. Mirrors core/adapters/inbound/agents/
+# processlifecycle/process_darwin.go's writerPIDFromLsof exactly: reads the
+# FD column's access-mode letter (the first non-digit byte, tolerating a
+# trailing lock character like "14uW") from lsof's default columnar table.
+#
+# THIS IS NOT COSMETIC. `lsof -t <path>` (terse mode) drops the FD column
+# entirely and returns every PID with the file open in ANY mode, write or
+# read — live-reproduced (#1960 session-end driver-port incident): the
+# coexisting recording daemon holds a READ fd on a muse session's own
+# .session.lock while tailing it (muse has no isolated-home knob, so the
+# daemon watches the SAME real $HOME tree the CLI writes into), and a plain
+# `lsof -t "$lockfile" | head -1` picked the DAEMON's PID over the real
+# muse-bin writer's on the very first live attempt — sigkill then killed the
+# recording daemon itself mid-run instead of the target session. Filtering
+# to 'w'/'u' only, exactly as the daemon's own DiscoverPID does, is what
+# distinguishes "the process holding this session's lock" (the subject) from
+# "some other process that merely has the file open" (a side effect of
+# having a watcher running at all).
+muse_writer_pid() {
+  # NEVER name this local "path" — zsh ties a special `path` array to $PATH
+  # (case-insensitively), so `local path=...` inside a zsh-invoked function
+  # silently clobbers $PATH for the rest of the call and every subsequent
+  # subprocess lookup (awk included) starts failing with a bare "command not
+  # found" that has nothing to do with awk itself (live-reproduced while
+  # verifying this very function interactively). Bash has no such tie, so
+  # this would never break the driver's own #!/usr/bin/env bash execution —
+  # but it is exactly the kind of landmine that makes interactive
+  # verification of a sigkill primitive lie to you, so it's named
+  # target_path everywhere in this function on principle.
+  local target_path="$1"
+  # `c < "0" || c > "9"` rather than a `!~ /[0-9]/` regex negation — the
+  # latter is byte-identical awk but a live `!~` landmine in an interactive
+  # zsh (histexpand can swallow `!` mid-token); this form has no `!` at all.
+  lsof -- "$target_path" 2>/dev/null | awk 'NR>1 {
+    fd = $4
+    mode = ""
+    for (i = 1; i <= length(fd); i++) {
+      c = substr(fd, i, 1)
+      if (c < "0" || c > "9") { mode = c; break }
+    }
+    if (mode == "w" || mode == "u") { print $2; exit }
+  }'
+}
+
 # step_sigkill (ported from claudecode's step_sigkill, driver-interactive.sh:
 # 536-553, re-targeted at muse's OWN PID-discovery mechanism instead of a
 # `pgrep -f --session-id` argv match, which has no muse equivalent — muse
 # mints its own session id and never receives one on argv). Finds the real
 # muse-bin PID the SAME way the daemon does (core/adapters/inbound/agents/
-# muse/pid.go's DiscoverPID): lsof the session's own .session.lock file (a
-# sibling of session.jsonl), falling back to lsof on the transcript file
-# itself if the lock has no writer (pid.go's own fallback, for the same
-# reason). This observes the SUBJECT (the actual process bound to this
-# session, via the same signal irrlichd uses) rather than a side effect —
-# NOT tmux's pane_pid, which would be a proxy for "the process tmux spawned"
-# rather than "the process holding this session's lock". Fails loudly
-# (EXIT_REASON, return 1) when no writer is found, rather than silently
-# treating "found nothing" as "already dead": claudecode's own step_sigkill
-# only logs and continues on a miss, which is the "cannot look" case reading
-# identically to "looked and found nothing" this porting explicitly avoids.
+# muse/pid.go's DiscoverPID): the WRITER of the session's own .session.lock
+# file (a sibling of session.jsonl, via muse_writer_pid above), falling back
+# to the transcript file itself if the lock has no writer (pid.go's own
+# fallback, for the same reason). This observes the SUBJECT (the actual
+# process bound to this session, via the same signal irrlichd uses) rather
+# than a side effect — NOT tmux's pane_pid, which would be a proxy for "the
+# process tmux spawned" rather than "the process holding this session's
+# lock", and NOT a bare `lsof -t` (see muse_writer_pid's comment for why that
+# form is actively dangerous here, not just imprecise).
+#
+# A second, independent safety net on top of the mode filter: before killing
+# anything, confirm the candidate PID's own command name actually names
+# muse. This is deliberately redundant with the mode filter above -- belt
+# and braces after a real incident where the wrong PID reached `kill -9` --
+# and it fails loudly (EXIT_REASON, return 1) rather than ever killing an
+# unverified PID. Likewise for "no writer found": claudecode's own
+# step_sigkill only logs and continues on a miss, which is the "cannot look"
+# case reading identically to "looked and found nothing" this porting
+# explicitly avoids.
 step_sigkill() {
   resolve_transcript || true
   local lockfile="" pid=""
   command -v lsof >/dev/null 2>&1 || { echo "[driver] sigkill[s$ACTIVE]: FAILED — lsof not on PATH, cannot discover the muse PID to kill" >&2; EXIT_REASON="nonzero(2)"; return 1; }
   if [[ -n "$TRANSCRIPT" ]]; then
     lockfile="$(dirname "$TRANSCRIPT")/.session.lock"
-    pid="$(lsof -t -- "$lockfile" 2>/dev/null | head -1)"
+    pid="$(muse_writer_pid "$lockfile")"
     if [[ -z "$pid" ]]; then
-      pid="$(lsof -t -- "$TRANSCRIPT" 2>/dev/null | head -1)"
+      pid="$(muse_writer_pid "$TRANSCRIPT")"
     fi
   fi
   if [[ -z "$pid" ]]; then
-    echo "[driver] sigkill[s$ACTIVE]: FAILED — lsof found no writer of $lockfile or $TRANSCRIPT; nothing killed (uuid=$UUID)" >&2
+    echo "[driver] sigkill[s$ACTIVE]: FAILED — no WRITER found for $lockfile or $TRANSCRIPT; nothing killed (uuid=$UUID)" >&2
+    EXIT_REASON="nonzero(2)"
+    return 1
+  fi
+  local comm=""
+  comm="$(ps -p "$pid" -o comm= 2>/dev/null | tr '[:upper:]' '[:lower:]')"
+  if [[ "$comm" != *muse* ]]; then
+    echo "[driver] sigkill[s$ACTIVE]: FAILED — refusing to kill PID $pid: its command ('$comm') does not name muse (lock=$lockfile, uuid=$UUID)" >&2
     EXIT_REASON="nonzero(2)"
     return 1
   fi
   kill -9 "$pid" 2>/dev/null || true
-  echo "[driver] sigkill[s$ACTIVE]: killed PID $pid (uuid=$UUID, lock=$lockfile)" >&2
+  echo "[driver] sigkill[s$ACTIVE]: killed PID $pid (comm=$comm, uuid=$UUID, lock=$lockfile)" >&2
   SES_OWNED[$ACTIVE]=0
   # Don't tmux kill-session — the dead-process pane stays so a later restart
   # cleans it, matching claudecode's own step_sigkill. The kill alone is what
