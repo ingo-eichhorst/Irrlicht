@@ -1,0 +1,97 @@
+{
+  "scenario_id": "streaming-partial-writes",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.2.1",
+    "daemon_version": "n/a (assess-only, no recording yet)",
+    "confidence": 0.85,
+    "notes": "daemon=full: state derives only from run started/terminal, and a live probe confirms session.jsonl never rewrites a line and commits the assistant reply whole."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "streaming-partial-writes",
+      "agent": "muse",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe capability research (`scratchpad/muse-capabilities.md`) flagged this cell as its least certain call and deliberately left the `partial_flush` trait undeclared: the wire schema shows `item/delta` documented as ephemeral (no `sourceRange`) but its sibling `item/updated` requires `sourceRange` and is therefore durable, so \"some partial-update path is real,\" and schema-reading alone could not settle whether a partial update reaches `session.jsonl` before a turn's final commit. This assessment settles it empirically with a live tmux probe (never inside the repo, `/tmp/muse-streaming-probe`), driving `muse --trust-workspace` and sending two long-output prompts into the same live session (`~/.local/share/muse/sessions/2026/09/14/01a09f51-15f8-7453-9d84-d30952fec401/session.jsonl`, 469 lines at the end) while sampling the file every 0.25-0.5s during generation (120 samples total across both turns, saved under the probe dir).\n\n**Finding 1 — session.jsonl is strictly append-only; it never rewrites a line.** Every one of the 120 mid-generation samples is byte-identical to the corresponding prefix of the final file (`head -c <sample_bytes> final.jsonl | cmp - sample.jsonl` passed for all 120). A tailer tracking byte offsets and re-reading incrementally is safe: bytes already read never change under it.\n\n**Finding 2 — the assistant's visible reply lands in ONE complete `assistant_message_committed` record, never a growing fragment.** Asked for exactly 400 repeats of `banana` and separately 3000 repeats of `watermelon`, each full, correct text (2799 and 33000 chars respectively, correct counts verified) appeared as a single event with no smaller/earlier partial version ever observed on disk. `core/adapters/inbound/agents/muse/parser.go`'s `parseAssistantMessageCommitted` (~line 448) is explicitly documented as **non-settling**: state only ever flips on the run's own `started` (opens `working`, `parseRunStarted` ~line 308) and `terminal` (closes to `ready`/`error`, `parseRunTerminal` ~line 324). Every other run-scoped event kind — including `reasoning_summary_delta`, `reasoning_summary_committed`, `model_response_created`, `reasoning_committed` — is explicitly `Skip=true`'d in `parseRunEvent`'s default case (parser.go ~line 288-302) as \"high-volume internal bookkeeping this stage has no use for.\" So the acceptance criterion (`working` throughout, no flicker to `ready` before turn-end) holds **by construction**, independent of whatever partial-write behavior exists deeper in the format: the state machine never inspects those records at all.\n\n**Finding 3 — the delta/commit pair does genuinely drop content, but only in a family the daemon ignores.** Directly examining the `reasoning_summary_delta`/`reasoning_summary_committed` pair the prior research named as worth checking: within one run, 3 `reasoning_summary_delta` events shared one `message_id` with `summary_index` 0, 1, 2 (three discrete sentences, not byte-level growth of one), and the following `reasoning_summary_committed` folded together only index 0+1 — index 2's sentence (\"Checking opaque deployment references before selecting the rollback boundary.\") was silently **dropped from the commit**, though its own delta record remains on disk untouched (append-only per Finding 1). This is real evidence of a durable-looking record whose content is later superseded/ignored by a subsequent commit — exactly the shape the capability research worried about — but it happens in the `reasoning_summary_*` family, which the daemon `Skip=true`'s unconditionally, so it has zero effect on this scenario's observable state topology.\n\n**Finding 4 (caveat, not a daemon defect) — muse's own self-correction pass can re-commit stale content as \"the\" final assistant reply.** In the second (watermelon) turn, TWO complete `assistant_message_committed` records landed under the SAME `run_id`: first the correct 3000-watermelon reply, then — after an internal \"double-check\"/verification subagent step that (per `tmux capture-pane`) visibly re-ran a check against the PRIOR turn's banana task — a second, complete 400-banana reply that duplicated the FIRST turn's answer. The muse TUI itself displayed this stale banana text as the turn's final rendered output (confirmed via `tmux capture-pane -S -200`), so this is a muse-side self-correction/context-bleed quirk, not a daemon-observability gap: irrlicht's `AssistantText` field (used only for the waiting-cue scan and a text preview, never for state) faithfully mirrors whatever muse itself last committed. Flagging for whoever assesses `self-correction-iteration` (2.4, no trait yet) since it looks like the same mechanism; out of scope here since it never touches state.\n\n**Agent side**: muse genuinely streams progressively to the TUI — `tmux capture-pane` during generation showed the growing word-count collapse hint (\"… N more lines\") climbing in real time, and the `reasoning_summary_delta`→`committed` and `model_response_created`/`model_completed` event pairs in the format-spec's run-event census (§3) corroborate an intermediate-chunk model. `eot_gate_ms` (33696ms / 25482ms observed) is muse's own measured gap between the model finishing and the turn's `terminal` event — consistent with post-reply verification work, not raw token streaming.\n\n**Driver**: a vanilla `send` + `wait_turn` + `sleep` + `exit_clean` script (all already implemented in `replaydata/agents/muse/driver-interactive.sh`, `DRIVE_ELICITS`) is sufficient and was exactly what this probe used live.",
+      "caveats": [
+        "The 3000-repeat probe surfaced a muse self-correction/context-bleed quirk (Finding 4): a turn can commit more than one complete assistant_message_committed record, and the chronologically last one is not guaranteed to be the correct answer to the CURRENT prompt if a same-session prior turn exists. This never affects session state (parseAssistantMessageCommitted is non-settling) so it does not change this cell's daemon=full verdict, but a future assessor of self-correction-iteration (2.4) should know it reproduces live in the same-session multi-turn shape, not just single-turn.",
+        "reasoning_summary_delta/committed genuinely drops content between the delta and the commit (Finding 3) — real evidence of a durable-looking record later superseded by a coarser commit — but this family is Skip=true'd by the daemon today, so it is cited as evidence for the general item/delta-vs-item/updated question, not as a gap in this scenario's coverage.",
+        "This assessment is doc+code+live-probe research only; no recording exists yet for this cell (daemon_version: n/a above). The recipe's exact prompt (400x banana) is the one live-verified to produce a clean single-turn response without triggering the self-correction cross-turn confusion seen in the fresh-session/no-prior-turn case."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/parser.go",
+          "note": "parseAssistantMessageCommitted (~L448, explicitly 'Non-settling'); parseRunStarted (~L308) and parseRunTerminal (~L324) are the only two state-affecting events; parseRunEvent's default case (~L288-302) Skip=true's reasoning_summary_delta/committed, model_response_created, reasoning_committed as unused bookkeeping"
+        },
+        {
+          "kind": "file",
+          "ref": "scratchpad/muse-capabilities.md",
+          "note": "the prior capability research's exact reasoning for leaving partial_flush undeclared on this cell (item/delta ephemeral vs item/updated durable, sibling analysis)"
+        },
+        {
+          "kind": "file",
+          "ref": "/tmp/muse-streaming-probe (live tmux probe, 2026-09-14)",
+          "note": "session ~/.local/share/muse/sessions/2026/09/14/01a09f51-15f8-7453-9d84-d30952fec401/session.jsonl (469 lines); 120 timed samples (0.25-0.5s cadence) verified byte-identical-prefix against the final file; assistant_message_committed payloads for both the 400-banana (len=2799) and 3000-watermelon (len=33000) turns confirmed whole/correct on first appearance; reasoning_summary_delta summary_index 0/1/2 vs the following reasoning_summary_committed's dropped index-2 content directly inspected"
+        },
+        {
+          "kind": "file",
+          "ref": "scratchpad/muse-format-spec.md",
+          "note": "§3 run-event census lists reasoning_summary_delta/reasoning_summary_committed and the full started/terminal turn-boundary contract this assessment relies on"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/driver-interactive.sh",
+          "note": "DRIVE_ELICITS already lists send/slash/wait_turn/sleep/exit_clean/restart/sigkill/start_session/session — no new primitive needed for this recipe"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "muse CLI installed and on PATH, v1.2.1 (muse --version >= 1.2.1 per replaydata/agents/muse/metadata.json)",
+        "muse auth complete: 'muse login' (Meta account, browser code approval) or META_API_KEY exported — auth is set up out-of-band, the rig's precheck delegates it to the user",
+        "tmux available — the interactive driver runs muse in a tmux REPL so it stays alive across the turn",
+        "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+      ],
+      "setup": [
+        "The interactive driver creates a fresh empty cwd under <staging>/cwd/ and launches `muse --trust-workspace` in a tmux session there, then sleeps 1s before the first send (startup-race precondition, per muse-driver-audit.md and 2-1_basic-turn's precedent)",
+        "The send asks for a mechanically repeatable, long output (400 repeats of one word) rather than free prose — live-verified to reliably produce several seconds of in-flight `working` state with multiple intermediate run-scoped events (reasoning_summary_delta/committed, model_response_created, model_completed) landing before the run's own terminal event, without risking a refusal or a waiting-cue false-positive from essay-style prose",
+        "This is a FRESH session (single turn) — the live probe's cross-turn self-correction confusion (assessment caveats, Finding 4) was only seen on a SECOND prompt sent into an already-used session; a single-turn recipe avoids that noise"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Print the word banana exactly 400 times, one per line, and nothing else. No explanation, no code block, just 400 lines each containing the single word banana."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "exit_clean"
+        }
+      ],
+      "verify": [
+        "events.jsonl mints the session in ready shortly after muse's TUI finishes launching (single-birth adapter)",
+        "events.jsonl contains a state_transition to working when the user prompt lands (event.kind:\"started\" -> user_message)",
+        "across the streaming window — multiple reasoning_summary_delta/model_response_created/assistant_message_committed-family events landing mid-turn — NO state_transition to ready and NO state_transition to waiting fires before the run's own terminal event",
+        "events.jsonl contains exactly one state_transition to ready, from event.kind:\"terminal\",terminal:\"completed\" -> turn_done",
+        "final session state is ready before exit_clean tears the REPL down",
+        "the turn's cumulative TotalTokens > 0 (from model_completed's usage object)",
+        "observation vector: tokens_nonzero=true, cost_nonzero=false (muse-spark-* is unpriced in the litellm catalog), model unpinned"
+      ],
+      "settings": {},
+      "timeout_seconds": 120
+    }
+  }
+}
