@@ -1,0 +1,170 @@
+{
+  "scenario_id": "session-end",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "gap:sigkill",
+    "agent_cli_version": "1.2.1",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes (a clean /exit and an OS-level kill are both trivially available). daemon_capability: full — muse's own session.end record is deliberately unused for state derivation (parser.go Skip=true); the daemon detects both a clean exit and a SIGKILL identically via generic PID-liveness (kqueue EVFILT_PROC NOTE_EXIT on the bound PID), live-confirmed on this machine for both exit paths (format-spec §8). driver_capability: gap:sigkill — the interactive driver's sigkill AND restart arms are both still `not_implemented` stubs; record must port both (claudecode is the reference) before driving. Route: driver-gap."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "session-end",
+      "agent": "muse",
+      "assessed_at": "2026-09-14T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "gap:sigkill",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:sigkill (also gap:restart — see Driver pillar)\n→ route: **driver-gap** — record ports both missing primitives (from the claudecode driver, the reference implementation for this exact scenario) before driving; the cell keeps a full recipe + spec.\n\n## The scenario's user-observable signal\n\n`of scenario show --name session-end` (id 1.2): three claude-lifetime variants back to back — (1) clean exit after a no-op turn, (2) SIGKILL while idle in `ready`, (3) SIGKILL mid-turn while still `working`. Acceptance criteria (verbatim): session row disappears within readyTTL; state immediately before disappearing is `ready` (or moves there first if `working`); disappears within 1s; never re-enters `working` post-exit; reaches `ready` within the sweep interval; does not stick in `working`; topology `ready → working → ready`; final state `ready`; tool calls ≤ 0. All of it is process-exit detection plus the daemon's standard readyTTL reap — nothing here is a transcript-content assertion.\n\n## Agent pillar (yes, confidence 0.9 on its own)\n\nBoth halves of every variant are things the `muse` CLI/OS trivially performs:\n\n- **Clean exit**: `/exit` is a real, live-tested slash command. `muse-format-spec.md` §8 drove it directly (`tmux send-keys ... \"/exit\" Enter`) against a throwaway session and captured the exact on-disk result: `command.invoked{\"command\":\"/exit\"}` immediately followed by `session.end{\"record\":{\"exit_reason\":\"clean\", ...}}` as the transcript's last two records, the OS process gone (`ps -p <pid>` empty) right after.\n- **SIGKILL**: killing an arbitrary OS process is not an agent capability question at all — `muse-format-spec.md` §8's second live test (`kill -9 <pid>`) confirms the process disappears and `session.jsonl` simply stops (70 lines, zero `session.end` records, confirmed by a programmatic scan) — exactly the \"ghost session\" shape `pid.go`'s doc describes.\n\n## Daemon pillar (full, confidence 0.8)\n\nThe load-bearing fact: **muse's own `session.end` record is never read for state derivation.** `core/adapters/inbound/agents/muse/parser.go`'s `route()` case for `payloadTypeSessionEnd` is `ev.Skip = true`, with the comment explaining exactly why: \"process liveness (DiscoverPID finding no running process) is what the daemon already uses to notice a session ended, and treating this as 'activity' would be wrong for a session that has genuinely finished.\" This means the daemon's session-end detection for muse does NOT depend on which of the two exit paths actually ran — it depends entirely on the SAME generic PID-liveness machinery every `FilesUnderRoot`/`ProcessMatcher` adapter shares:\n\n1. **Binding** (once, early in the session): `core/adapters/inbound/agents/muse/pid.go`'s `DiscoverPID` asks who holds `.session.lock` open (`processlifecycle.DiscoverPIDByTranscriptWriter`, an `lsof`-equivalent `WriterOf` probe), falling back to the transcript file itself. `core/application/services/pid_manager.go`'s `TryDiscoverPID` only calls this ONCE per session (`if state != nil && state.PID > 0 { return true }` short-circuits every subsequent call) — so this lsof-based check is irrelevant to teardown detection; it only decides which PID gets bound at the start.\n2. **Ongoing liveness** (what actually detects the exit): once bound, `pid_manager.go` registers the PID with the daemon's `ProcessWatcher` (`pm.pw.Watch(pid, sessionID)`, `core/ports/outbound/ports.go`'s doc: \"monitors process PIDs via kqueue EVFILT_PROC NOTE_EXIT and invokes a callback when a watched process exits\"). This is a kernel-level exit notification on the bound PID directly — it fires on ANY process death, clean or SIGKILLed, with no dependency on `.session.lock`'s fd state or muse's own `session.end` record. `HandleProcessExit`/`pm.record(lifecycle.Event{Kind: lifecycle.KindProcessExited, ...})` (`pid_manager.go:449-468`) is the generic sink, and `core/application/services/session_detector_process_exit_test.go`'s `TestHandleProcessExit_RecordsProcessExitedForAMidTurnDeath` pins EXACTLY variant 3's shape (a mid-turn process death must still record exactly one `process_exited`) — agent-agnostic, already green in the cited `go test ./core/... -race -count=1` run.\n\n`muse-format-spec.md` §8 independently corroborates that BOTH exit paths release the lock's flock fd identically (`lsof` empty in both cases) — consistent with there being no muse-specific asymmetry between the clean and SIGKILL paths once a PID is bound: the daemon's generic kqueue watch on the bound PID is what fires either way, not anything muse-specific writes or fails to write.\n\nThe readyTTL reap-and-remove behind \"session disappears within readyTTL\" (`pid_manager.go`'s `readyTTL`-gated sweep) and the working→ready-on-exit resolution are likewise generic, shared code — every already-recorded agent in this scenario (aider, antigravity, claudecode, codex, copilot, gemini-cli, kiro-cli, mistral-vibe, opencode, pi) shows `daemon_capability: full` for this exact cell (`of status --scenario session-end --json`), and nothing in muse's transport changes that shared mechanism.\n\n## Driver pillar (gap:sigkill, also gap:restart)\n\nThe canonical 3-variant recipe (claudecode's committed `1-2_session-end` cell, used here as the direct template) needs `send`, `wait_turn`, `sleep`, `exit_clean`, `restart`, and `sigkill`. `replaydata/agents/muse/driver-interactive.sh`'s `DRIVE_ELICITS=\"send slash wait_turn sleep exit_clean\"` covers the first four (confirmed working: `exit_clean`/`step_exit_clean` was wired up in commit 0239a1bd and live-verified in `muse-driver-audit.md` defect #4's fix — `/exit` reliably produces `session.end{exit_reason:\"clean\"}`). `restart` and `sigkill` are NOT in `DRIVE_ELICITS`; their dispatch-loop arms are present (so the grammar-only check would wrongly call this `ready`) but route to `not_implemented` (driver-interactive.sh's own header comment documents exactly this trap: \"every standard arm is PRESENT ... the real backstop is the SEMANTIC lint\"). Both are needed: `restart` gives each of variants 2 and 3 a fresh session id/cwd/PID without tearing down the recording itself (the same role it plays in claudecode's recipe); `sigkill` is the mechanism variants 2 and 3 exist to test in the first place. This is tooling work, not an observability limit — `record` ports `step_sigkill` (`kill -9` on the slot's bound PID) and `step_restart` (`save_active; alloc_slot <fresh-cwd>; launch` — already sketched in the driver's own TODO(muse) comments) from the claudecode driver before driving.\n\n## What irrlicht does NOT see (and why that's OK)\n\nThe same caveat claudecode's own cell documents applies here too: variant 3's post-SIGKILL sweep-to-`ready` transition may or may not land inside the recording's tail window: the live dashboard always gets it right (the sweep keeps running after the recording stops), but the fixture's own tail is time-bounded. Spec phases anchor variant 3's exit to its turn-start with a generous delay budget rather than requiring a trailing `ready` phase, mirroring claudecode's spec.",
+      "caveats": [
+        "Vacuous-pass check: what would make this cell pass while proving nothing? If the spec only asserted 'a session eventually disappears', a daemon-generic sweep bug affecting every adapter equally could still pass. The spec instead pins each variant's OWN state arc (ready→working→ready→process_exited, or the mid-idle/mid-turn invariants) to that variant's OWN session_id, so a muse-specific PID-binding or session-identity regression (e.g. the restart step's fresh session id not being discovered, or process_exited firing for the wrong session) would be caught.",
+        "Reminder-agent subagents (format-spec §9: goal-reminder/verify-reminder/skill-reminder) materialize as SEPARATE nested session.jsonl files for ordinary turns, each potentially becoming its own tracked child session with its own state arc and its own eventual process_exited. Unlike claudecode's spec (which asserts 'exactly 3 distinct UUID session_ids'), muse's verify step must NOT assert an exact total session count — it should assert on the 3 TOP-LEVEL (unparented) session ids specifically. This is a real, evidence-backed difference from the claudecode template, not a guess.",
+        "driver=gap:sigkill / gap:restart: both are confirmed from reading replaydata/agents/muse/driver-interactive.sh's dispatch loop directly (not inferred) — both case arms exist and both call `not_implemented`. `record` must port BOTH before this cell can run; porting only one still hits the loud `not_implemented` stub on the other.",
+        "Each `restart` step should mint a fresh cwd (mirroring claudecode's cwd/cwd-2/cwd-3 pattern, already noted in that cell's own caveats) because muse's `--trust-workspace` flag is per-invocation, not persisted — reusing a cwd is not known to break anything, but a fresh cwd is the already-proven-safe shape and avoids a class of bug nobody has tested for muse specifically.",
+        "Confidence held at 0.8, not higher: the daemon pillar's evidence is strong and code-read end-to-end, but no live muse recording of THIS scenario exists yet (driver-gap blocks it) — record is what promotes this from provisional to settled, per the assess SKILL's 'observation vs emission' rule."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/parser.go",
+          "note": "payloadTypeSessionEnd case: ev.Skip = true, with the comment explaining process liveness (not the session.end record) is the daemon's actual exit signal for muse — the load-bearing fact behind daemon=full regardless of exit path."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/pid.go",
+          "note": "DiscoverPID binds via lsof on .session.lock (processlifecycle.DiscoverPIDByTranscriptWriter), falling back to the transcript file's own writer — the one-time binding step, distinct from ongoing liveness."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/pid_manager.go",
+          "note": "TryDiscoverPID (line ~848) short-circuits on state.PID > 0 — binding happens once. pm.pw.Watch(pid, sessionID) (line ~715/1405) registers the bound PID with the generic ProcessWatcher. HandleProcessExit (~449-468) records lifecycle.KindProcessExited — all agent-agnostic."
+        },
+        {
+          "kind": "file",
+          "ref": "core/ports/outbound/ports.go",
+          "note": "ProcessWatcher interface doc (~line 745): 'monitors process PIDs via kqueue EVFILT_PROC NOTE_EXIT and invokes a callback when a watched process exits' — the actual generic exit-detection mechanism, independent of any adapter-specific transcript record."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/processlifecycle/liveness_unix.go",
+          "note": "IsAlive(pid): syscall.Kill(pid, 0) — the generic direct-PID liveness probe used alongside the kqueue watch."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector_process_exit_test.go",
+          "note": "TestHandleProcessExit_RecordsProcessExitedForAMidTurnDeath pins the exact variant-3 shape (mid-turn process death -> exactly one process_exited) generically, not per-adapter."
+        },
+        {
+          "kind": "file",
+          "ref": "/private/tmp/claude-501/-Users-ingo-projects-irrlicht/bb5f9f9d-9082-48be-a0eb-ab65bc647002/scratchpad/muse-format-spec.md",
+          "note": "§8 (Session end): live-tested BOTH exit paths on this machine. Clean /exit -> command.invoked{/exit} then session.end{exit_reason:clean} as the last 2 records, process gone, lock fd released. kill -9 -> process gone, lock fd released identically, but session.jsonl never gets a session.end record (0 of 70 lines) -- the 'ghost session' shape. §1 covers .session.lock liveness semantics; §9 covers reminder-agent subagent materialization (the basis for the exact-session-count caveat above)."
+        },
+        {
+          "kind": "file",
+          "ref": "/private/tmp/claude-501/-Users-ingo-projects-irrlicht/bb5f9f9d-9082-48be-a0eb-ab65bc647002/scratchpad/muse-driver-audit.md",
+          "note": "Defect #4 (teardown always SIGKILL/ghost-session shape, never clean /exit) -- live-reproduced pre-fix, and the fix (wiring exit_clean to send /exit) is what commit 0239a1bd shipped. The audit's header note on DRIVE_ELICITS vs. case-arm presence is why the driver's grammar check alone would miss this cell's sigkill/restart gaps."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash wait_turn sleep exit_clean\" (sigkill, restart absent). Dispatch loop: `sigkill) not_implemented sigkill || break` and `restart) not_implemented restart || break`, both with TODO(muse) comments sketching the port (kill -9 the active slot's PID; save_active + alloc_slot + launch for restart)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/1-2_session-end/metadata.json",
+          "note": "Direct template: the 3-variant recipe shape (send/wait_turn/sleep/exit_clean/restart/sigkill), the acceptance-criteria-to-phase mapping, and the variant-3 sweep-to-ready tail-window caveat, all reused here with muse-specific step content and sourcing."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/scenarios/3-4_subagent-orphan-cleanup/metadata.json",
+          "note": "Sibling precedent for the gap:sigkill label and for citing a driver's own not_implemented dispatch arm as the evidence for a driver gap."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "timeout_seconds": 180,
+      "settings": {},
+      "preconditions": [
+        "muse CLI on PATH and authenticated (`muse login` or META_API_KEY, per replaydata/agents/muse/metadata.json prerequisites)",
+        "irrlichd is recording -- either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+        "DRIVER GAP: replaydata/agents/muse/driver-interactive.sh's sigkill AND restart arms are both not_implemented stubs today; record ports step_sigkill (kill -9 the active slot's bound PID) and step_restart (save_active; alloc_slot a fresh cwd; launch with --trust-workspace) from the claudecode driver before this recipe can run",
+        "each restart step gets a fresh cwd under <staging>/cwd/ so muse's --trust-workspace-gated workspace-trust modal cannot interfere (mirrors claudecode's proven cwd/cwd-2/cwd-3 pattern for the same reason)"
+      ],
+      "setup": [
+        "Driver launches the first muse REPL with --trust-workspace in a fresh cwd (already the case since commit 0239a1bd)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 2
+        },
+        {
+          "type": "exit_clean"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "restart"
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "sigkill"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "restart"
+        },
+        {
+          "type": "send",
+          "text": "Write a 200 word essay about the history of coffee."
+        },
+        {
+          "type": "sleep",
+          "seconds": 2
+        },
+        {
+          "type": "sigkill"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ],
+      "verify": [
+        "events.jsonl contains 3 distinct TOP-LEVEL (unparented) session_ids, one per variant -- do not assert an exact TOTAL session count: ordinary turns can materialize additional nested reminder-agent subagent sessions (format-spec §9) that are not part of this scenario's assertion",
+        "events.jsonl contains a process_exited event for each of the 3 top-level session_ids",
+        "variant 1: the first session has a state_transition to ready right after its turn completes, immediately preceding its process_exited (proves 'state is ready at exit')",
+        "variant 2: the second session ends in ready (idle) when sigkill fires; no state_transition to working or waiting appears between its turn_done and its process_exited",
+        "variant 3: the third session is in working when sigkill fires; the sweep-promotes-to-ready transition may or may not land inside the recording's tail window -- accept either shape (same caveat as claudecode's cell)",
+        "the viewer's state band shows three colored arcs separated by grey gaps where no top-level session is alive between variants",
+        "each of the 3 top-level sessions shows 0 tool_call events (the nudge/essay prompts are pure text generation)"
+      ]
+    }
+  }
+}
