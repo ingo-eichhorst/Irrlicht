@@ -1,0 +1,159 @@
+{
+  "scenario_id": "task-estimate-marker",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "bug",
+    "driver_capability": "gap:seed_instruction",
+    "agent_cli_version": "1.2.1",
+    "daemon_version": "0.6.3+7eaeb60",
+    "confidence": 0.75,
+    "notes": "agent=yes (provisional on emission) / daemon=bug (parser never calls ScanTaskEstimate) / driver=gap:seed_instruction -> route driver-gap."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "task-estimate-marker",
+      "agent": "muse",
+      "agent_supports": "yes",
+      "daemon_capability": "bug",
+      "driver_capability": "gap:seed_instruction",
+      "confidence": 0.75,
+      "body": "## Verdict\n\nagent_supports: yes (provisional on emission, confidence 0.75) - daemon_capability: bug (confidence 0.85) - driver_capability: gap:seed_instruction (confidence 0.9) -> route **driver-gap**.\n\n## agent_supports: yes\n\nThe scenario is not a muse feature flag; it tests whether muse (1) loads a persistent instruction file the way CLAUDE.md/AGENTS.md does for claudecode/codex, and (2) will follow a rule in that file to emit ordinary transcript-visible text (a fenced HTML comment). Both hold for muse:\n\n1. **Muse loads a persistent AGENTS.md project-rules file.** `strings` on the installed CLI binary (`/Users/ingo/.local/bin/muse-bin-1.2.1-R2847.1`, Muse Code 1.2.1-R2847.1) contains the literal `muse init`-generated template: `# AGENTS.md\\nMuse Code reads this file as project rules when it runs in this directory.` -- confirming AGENTS.md is muse's own native persistent-instruction convention (the binary also documents CLAUDE.md as a *lower-priority* fallback and a one-time `/rules import` source from `~/.claude/CLAUDE.md`/`$CODEX_HOME/AGENTS.md`, distinct from the native per-project AGENTS.md this recipe targets). The binary also carries the literal runtime injection shape: `<system-reminder source=\"rules-file\"><rules-file scope=\"\" written-for=\"Muse Code ...\"> ... loaded standing rules at session open. Follow higher-priority instructions first. If user and project rules conflict, project rules win. If project rules files conflict, the deeper file wins over the shallower one.</rules-file>` -- so the file is injected as a labelled system-reminder block muse is instructed to obey, structurally the same shape as codex's `<INSTRUCTIONS>` wrapper. This is independently corroborated by the LIVE corpus: muse-format-spec.md section 11 documents a real `context_block_diagnostic{block_id:\"rules_file\",source:\"rules_file\",lifecycle:\"session_start\",action:\"observed\",text_bytes:1227}` record from an actual captured session -- muse really does load and account for a rules file at session start on this machine, not just in the binary's static strings. And `--trust-workspace` (already passed by `replaydata/agents/muse/driver-interactive.sh`, line ~241-242) is required for the rules file to load at all: the binary's own string is explicit -- \"exists, but the workspace is untrusted, so it is skipped for this session; restart with --trust-workspace to load project rules\" -- so the existing driver clears that precondition for free.\n2. **The marker itself is ordinary text.** The daemon parser does not care how the marker text reaches the transcript, only that it lands there; muse is an unrestricted LLM chat/tool-use agent with no observed output filter on assistant prose (parser.go's `parseAssistantMessageCommitted` surfaces the full, unfiltered `event.text`).\n\nWhat stays PROVISIONAL (hence 0.75, not higher, matching the sibling band): whether muse's configured model (muse-spark-1.3-contributor in the live corpus) reliably RE-EMITS the marker turn-over-turn with climbing completed_rounds is a model-behaviour question the 2026-05-31 experiment (claudecode/sonnet only) does not answer, and only a live recording can settle -- the same caveat every sibling cell (codex/aider/hermes/opencode/pi/copilot) carries. Whether muse's rules-file injection strips or otherwise mangles a bare HTML comment before the model sees it (the concern the scenario's process step 1 exists to guard against) is UNRESOLVED from the binary strings alone -- no evidence of stripping was found, but none of verbatim pass-through either (contrast codex, where the literal `<INSTRUCTIONS>...</INSTRUCTIONS>` wrapper template proves verbatim byte pass-through). The recipe follows the scenario's own mandatory mitigation (wrap the marker example in a fenced code block) regardless, so this does not block agent=yes, but it is named as a caveat / vacuous-pass guard.\n\n## daemon_capability: bug\n\nA trace WOULD exist and today's daemon still cannot surface it -- this is a wiring gap, not an architectural one.\n\n**The full text is already extracted, and immediately discarded.** `core/adapters/inbound/agents/muse/parser.go:448-459` (`parseAssistantMessageCommitted`) reads the complete, un-truncated assistant reply into a local `text` variable (line 450), uses it in full for the waiting-cue scan (`tailer.WaitingScanWindow(text)`, line 458), and separately truncates it to 200 runes via `tailer.TruncateAssistantText(text)` for `ev.AssistantText` (line 454) -- but never passes `text` to `tailer.ScanTaskEstimate`. `ev.TaskEstimate` is set nowhere in the package: `grep -rn \"ScanTaskEstimate\\|TaskEstimate\" core/adapters/inbound/agents/muse/` returns zero hits. This directly violates the documented contract on the truncation helper itself -- `core/pkg/tailer/parser.go:1119-1127`: \"TruncateAssistantText ... Adapters MUST scan the full text for markers (ScanTaskEstimate) BEFORE calling this -- the dropped head can carry a task-estimate marker.\" Muse's parser calls the truncation without the mandated prior scan.\n\nThis is the identical shape the shared context flags as already fixed elsewhere: commit 1ae457d9 (\"feat(adapters): port task-estimate marker scan to codex, pi, aider, opencode (#558)\") promoted the scan out of the claudecode adapter into the shared, adapter-agnostic `core/pkg/tailer/taskestimate_scan.go` (`tailer.ScanTaskEstimate`) precisely so every adapter that already extracts full assistant text could wire it in with one call. Every adapter with a cell for this scenario (aider/antigravity/claudecode/codex/copilot/gemini-cli/hermes/kirocli/opencode/pi/vibe) does call `tailer.ScanTaskEstimate` from its own parser (verified: `git grep -n ScanTaskEstimate -- '*.go' | grep -v _test` lists a call site in every one of those adapters' parser.go, and none in muse's). Muse's own `muse-adapter-contract.md` (section 6, written for this same onboarding effort) already flagged this as optional-but-not-yet-done: \"TaskEstimate/TaskSummary/TaskQuestion ... vibe and copilot both wire them ... wire them the same way if useful, but they are not required for a minimally-correct adapter.\" Per this repo's rule (never freeze a cell for a gap irrlicht itself could close), this is squarely `daemon=bug`: the trace exists (the full text is a local variable one line away from the fix), and the daemon mishandles it by never looking.\n\n## driver_capability: gap:seed_instruction\n\nScenario process step 1 requires the marker rule to be installed as a PERSISTENT INSTRUCTION FILE before the recipe's first prompt (not folded into the first `send`, which some sibling cells did as a workaround but which collapses the very thing this scenario is meant to exercise -- see caveats). Muse's persistent instruction file is a project-root `AGENTS.md`, read \"as project rules when it runs in this directory\" (confirmed above). `replaydata/agents/muse/driver-interactive.sh`'s step-type set (via `tools/onboarding-factory/scripts/lib/recipe-lint.sh`'s `driver_step_types_from_file`) is `exit_clean, interrupt, keys, reset_session, restart, resume, send, session, sigkill, slash, sleep, start_session, wait_turn` -- no `seed_instruction`/`file`/`write` step. The driver already mints a brand-new per-run `$RUN_CWD` under `$STAGING/cwd` (`RUN_CWD=\"${IRRLICHT_ONBOARD_CWD:-$STAGING/cwd}\"`, driver-interactive.sh:170-172) and already passes `--trust-workspace` (so a seeded AGENTS.md there would load without the untrusted-workspace modal blocking it), but nothing writes AGENTS.md into that directory before muse launches. This is the identical gap the codex/copilot/opencode/pi sibling cells for this same scenario carry (`driver_capability: gap:seed_instruction`), and the fix is the same: `record` ports a `seed_instruction` step (write the fenced marker rule to `$RUN_CWD/AGENTS.md` before `start_session`), the same primitive four other adapters are already waiting on.\n\n## Route\n\nagent=yes + (daemon=bug, driver=gap:*) -> **driver-gap** per the routing table (driver gap takes precedence over the daemon full/bug distinction). The recipe + known_failing spec are both authored now so `record` can proceed once it ports `seed_instruction` -- and per this scenario's convention, ports the daemon fix too (a one-line `tailer.ScanTaskEstimate(text, ev.Timestamp)` call plus setting `ev.TaskEstimate`, mirroring the codex/aider/opencode/pi wiring) if the push-through pass chooses to unlock it, at which point this cell re-assesses to daemon=full the same way aider/opencode/pi did after 1ae457d9 landed.",
+      "caveats": [
+        "agent=yes is PROVISIONAL on emission: no live recording has ever driven muse to emit or advance this marker. The 2026-05-31 marker experiment that established 0% exact-format compliance (motivating the parser's tolerant key-drift acceptance) was claudecode/sonnet only.",
+        "Whether muse's <rules-file> injection passes a bare HTML comment through verbatim (vs. stripping/rendering it, the way some agents' Markdown pipelines strip bare HTML comments) is UNRESOLVED from binary strings alone -- no stripping behavior was found, but none confirming verbatim byte pass-through either (contrast codex's literal <INSTRUCTIONS>...</INSTRUCTIONS> template, which settled the question directly for that adapter). The recipe follows the scenario's own mandated mitigation (fence the marker example in a code block) regardless, so this is a defensive default, not a resolved fact.",
+        "Vacuous-pass guard: the phase DSL alone (ready->working->ready) would still pass if muse never emitted a valid marker at all -- an ordinary multi-turn session produces the same state arc with or without the marker mechanism working. The real assertions (task_estimate values, non-decreasing completed_rounds, burning-down eta, suppressed-at-ready) are NOT expressible in the phase DSL and must be checked by hand against the recording's session-metrics API by whoever runs `record`, per the recipe's verify[] list -- exactly as codex/hermes/aider/opencode do for their own sibling cells.",
+        "daemon=bug is a code-reading verdict, not yet confirmed against a live muse recording of this scenario (there is no recording to confirm against -- this is a brand-new cell). The fix (wiring tailer.ScanTaskEstimate into parseAssistantMessageCommitted) is well-precedented and low-risk, but until it lands and a recording is taken, task_estimate/task_completion_eta are asserted never to appear for muse regardless of what the model emits.",
+        "cost_nonzero is pinned false per the muse-wide, corpus-verified fact that no dollar cost is ever persisted in a muse transcript (muse-format-spec.md's recursive JSON-key scan) -- this is a muse-wide constant, not specific to this cell, and must not be read as a defect of the marker mechanism.",
+        "model is pinned to muse-spark-1.3-contributor from live corpus evidence used consistently across the other already-assessed muse cells (e.g. token-accounting), not from vendor docs -- re-verify at record time in case a different model is the session default when this actually records."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/parser.go:444-459",
+          "note": "parseAssistantMessageCommitted: extracts the full un-truncated assistant text into `text`, uses it for the waiting-cue scan, but never calls tailer.ScanTaskEstimate before truncating it into ev.AssistantText. Zero TaskEstimate/ScanTaskEstimate references anywhere in the package (git grep confirmed)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/parser.go:1119-1127",
+          "note": "TruncateAssistantText's own doc comment: \"Adapters MUST scan the full text for markers (ScanTaskEstimate) BEFORE calling this\" -- the contract muse's parser violates."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/taskestimate_scan.go:37-61",
+          "note": "ScanTaskEstimate -- the shared, adapter-agnostic marker scan every sibling cell's adapter wires in; muse does not call it (confirmed by git grep across all adapter parser.go files)."
+        },
+        {
+          "kind": "git",
+          "ref": "1ae457d9 feat(adapters): port task-estimate marker scan to codex, pi, aider, opencode (#558)",
+          "note": "The precedent commit that closed the identical daemon=bug gap for four sibling adapters by wiring the same shared scan function into their existing text-extraction call sites."
+        },
+        {
+          "kind": "binary",
+          "ref": "/Users/ingo/.local/bin/muse-bin-1.2.1-R2847.1 (Muse Code 1.2.1-R2847.1), strings",
+          "note": "Contains the muse-init AGENTS.md template ('# AGENTS.md\\nMuse Code reads this file as project rules when it runs in this directory.'), the runtime injection wrapper ('<system-reminder source=\"rules-file\"><rules-file scope=\"\" written-for=\"Muse Code ...\">...loaded standing rules at session open...</rules-file>'), and the untrusted-workspace gate string ('exists, but the workspace is untrusted, so it is skipped for this session; restart with --trust-workspace to load project rules') -- together establishing that AGENTS.md is muse's native persistent project-rules file and that --trust-workspace (already passed by the driver) is required to load it."
+        },
+        {
+          "kind": "file",
+          "ref": "muse-format-spec.md section 11 (this effort's evidence doc)",
+          "note": "Live corpus record: context_block_diagnostic{block_id:\"rules_file\",source:\"rules_file\",lifecycle:\"session_start\",action:\"observed\",text_bytes:1227} -- confirms the rules-file loading path is actually exercised on this machine, not just present in the binary."
+        },
+        {
+          "kind": "file",
+          "ref": "muse-adapter-contract.md section 6 (this effort's evidence doc)",
+          "note": "Already flagged TaskEstimate/TaskSummary/TaskQuestion as optional-but-unwired for muse: 'vibe and copilot both wire them... wire them the same way if useful, but they are not required for a minimally-correct adapter.'"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/driver-interactive.sh:170-172,241-242",
+          "note": "RUN_CWD is minted fresh per run under $STAGING/cwd; --trust-workspace is already passed. Re-checked driver step-type set via recipe-lint.sh's driver_step_types_from_file: no seed_instruction/file/write step."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/codex/scenarios/5-8_task-estimate-marker/metadata.json",
+          "note": "Sibling precedent for both the daemon=bug->full fix shape and the driver=gap:seed_instruction verdict; this assessment's structure and recipe are adapted from it."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/scenarios/2-1_basic-turn/expected.jsonl",
+          "note": "Committed precedent for muse's single-birth phase model (no ProcessMatcher/presession split), reused for this cell's phase DSL."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "muse CLI on PATH and authenticated (muse login or META_API_KEY) -- confirmed installed at 1.2.1 on this machine",
+        "irrlichd is recording (--attach or isolated coexist mode)",
+        "the default muse model/preset is muse-spark-1.3-contributor or another model that reliably follows a project-rules instruction -- re-probe at record time if a different preset is pinned"
+      ],
+      "setup": [
+        "record ports a seed_instruction driver step: write the fenced marker rule (below) to $RUN_CWD/AGENTS.md BEFORE start_session, mirroring the codex/copilot/opencode/pi sibling recipes",
+        "Driver already mints a fresh per-run cwd under $STAGING/cwd and launches with --trust-workspace (driver-interactive.sh), so the seeded AGENTS.md loads without the untrusted-workspace modal blocking it"
+      ],
+      "script": [
+        {
+          "type": "seed_instruction",
+          "path": "AGENTS.md",
+          "text": "# AGENTS.md\n\n## Task progress marker (irrlicht)\n\nWhile working a multi-phase task, emit a hidden progress marker in your own reply text on EVERY turn, exactly in this form (keep it as an HTML comment so it stays out of the rendered answer):\n\n```\n<!-- {\"marker\":\"irrlicht-eta\",\"total_rounds\":N,\"completed_rounds\":M} -->\n```\n\nSet total_rounds to the number of phases you plan. Emit it with completed_rounds=0 on your first reply, then increase completed_rounds by 1 each turn as you finish a phase, until completed_rounds == total_rounds on the final turn."
+        },
+        {
+          "type": "start_session"
+        },
+        {
+          "type": "send",
+          "text": "Plan a 4-phase refactor of a small Python module: (1) read and summarize the file, (2) propose the change, (3) apply it, (4) verify. Treat each phase as one round. As instructed in AGENTS.md, emit the irrlicht-eta progress marker in your reply on every turn, starting now with completed_rounds=0 and total_rounds=4. Begin phase 1 and stop; I will say 'next' to advance."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "send",
+          "text": "next"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "send",
+          "text": "next"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "send",
+          "text": "next"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "send",
+          "text": "next -- this is the final phase; report the task done and emit the marker with completed_rounds=4."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        },
+        {
+          "type": "exit_clean"
+        }
+      ],
+      "verify": [
+        "While the session is working, session metrics carry task_estimate {total_rounds:4, completed_rounds:M} matching the values muse reported in its marker (completed_rounds <= total_rounds).",
+        "task_estimate.updated_at advances each time a fresher marker is observed.",
+        "task_estimate.completed_rounds is non-decreasing across turns and reaches 4 on the final working turn.",
+        "task_completion_eta is present once completed_rounds >= 1 and a later projection is <= an earlier one (burns down).",
+        "task_estimate / task_completion_eta are present only while working; absent at ready.",
+        "State topology ready -> working -> ready; final state ready.",
+        "EXPECTED TO FAIL until the daemon fix lands: muse's parseAssistantMessageCommitted never calls tailer.ScanTaskEstimate (core/adapters/inbound/agents/muse/parser.go:448-459), so task_estimate/task_completion_eta will not appear regardless of what the model emits -- confirm the marker itself DID reach session.jsonl in the assistant text (proving agent=yes/emission) even though the daemon fields stay absent (proving daemon=bug), then file the wiring gap or port the fix per the push-through unlock pass."
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  }
+}
