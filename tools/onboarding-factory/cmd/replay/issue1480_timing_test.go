@@ -246,6 +246,7 @@ var knownFirstTransitionDrift = map[string]string{
 	"mistral-vibe/scenarios/2-12_context-compaction/recordings/2026-07-07-17-22-57_irrlichd-0.5.5+bc77a37.dirty/transcript.jsonl":         "#1476 accepted: -30.976s at pair 0 (ready→working)",
 	"mistral-vibe/scenarios/2-15_shell-escape-command/recordings/2026-07-07-17-41-58_irrlichd-0.5.5+22a01d2.dirty/transcript.jsonl":       "#1476 accepted: -8.599s at pair 0 (ready→working)",
 	"mistral-vibe/regressions/1846-retired-terminal-control/recordings/2026-07-08-09-15-24_irrlichd-0.5.5+35c4012.dirty/transcript.jsonl": "#1476 accepted: -27.522s at pair 0 (ready→working)",
+	"muse/scenarios/4-1_multiple-sessions-same-cwd/recordings/2026-09-14-06-04-09_irrlichd-0.6.3+0b3e2ad/transcript.jsonl":                "#1960: -32.388s at pair 0 (ready→working). Pre-fix capture (predates fix commit 9abf13d1) hitting the SAME assignPIDLocked PID-eviction bug that blocked 2-14/2-17: session 01a09e16 born ready at seq152, evicted by a late-arriving proc-53461 pre-session claim at seq170, re-discovered only via a LATER, different session's own birth at seq456. 4-1's own cell assertions don't key on this transition (stayed a clean 5/5 pass), so it was not re-recorded as part of #1960's fix.",
 }
 
 // aggregate ratchets. The named list above keys on the FIRST kind-matched pair,
@@ -296,9 +297,24 @@ var knownFirstTransitionDrift = map[string]string{
 // its own Stop. Not re-tightened away and not a defect the recording carries:
 // it is one of the two facts #1699 was recorded to make visible, and a bound
 // that absorbed it would hide the next one.
+// #1960 moves both bounds 107 -> 108 and 51 -> 52 for the same new recording:
+// muse/4-1_multiple-sessions-same-cwd's pre-fix capture
+// (2026-09-14-06-04-09_irrlichd-0.6.3+0b3e2ad), newly committed alongside the
+// #1960 daemon fix (commit 9abf13d1) and its own two re-recorded cells. Its
+// raw events.jsonl (seq 151-170) shows the SAME root cause as those two cells:
+// session 01a09e16 is born ready at seq152, a proc-53461 pre-session claims
+// its already-bound PID at seq168, and assignPIDLocked's pre-fix stale-scan
+// deletes 01a09e16 at seq170 (transcript_removed, no re-discovery until a
+// LATER, different session's own birth at seq456). The replay sidecar
+// reconstructs the swallowed first transition from the transcript bytes,
+// -32.388s from where the (pre-fix) daemon's own log next picks the scenario
+// up. This did not need a spec correction — 4-1's own assertions do not key
+// on that specific transition, so its cell stayed a clean 5/5 pass — so it is
+// not one of #1960's two re-recorded cells and is left as committed evidence
+// of the pre-fix behavior rather than re-recorded here.
 const (
-	maxRecordingsDriftingOverThreshold = 107
-	maxRecordingsDriftingOver5s        = 51
+	maxRecordingsDriftingOverThreshold = 108
+	maxRecordingsDriftingOver5s        = 52
 )
 
 // Lower bounds on HOW MUCH is measured. Every ratchet above is an upper bound,
