@@ -94,13 +94,16 @@
         "muse auth complete (muse login, or META_API_KEY exported) -- same out-of-band precondition as muse/2-1_basic-turn and muse/2-14_turn-aborted-by-error",
         "tmux available -- the interactive driver runs muse in a tmux REPL",
         "irrlichd is recording (either run-cell.sh isolated mode, or --attach against a running daemon started with --record)",
-        "a local TCP port with nothing listening on it at record time (e.g. 18801, distinct from 2-14's 18799 to avoid a collision if both run in the same window)",
-        "RECOMMENDED before relying on the baseline recipe: record should spend a short, safe, zero-cost check on whether ANTHROPIC_API_KEY/ANTHROPIC_BASE_URL (or OPENAI_*/OPENROUTER_*) actually reroute muse's live model traffic (see caveats) -- if so, prefer a stateful mock (succeed once, 429 the second call) over the dead-port baseline below for a materially stronger, quota-flavored recording"
+        "go on PATH -- run-cell.sh's start_recipe_mock builds .mock.package with `go build` before launching it",
+        "port 18803 free on 127.0.0.1 at record time -- distinct from 2-14's dead port 18799, 2-23's mock port 18802, and 2-22's mock port 18801, so no two sibling cells can ever collide"
       ],
       "setup": [
-        "BASELINE (proven-safe, but daemon-trace-identical to 2-14 -- see caveats): same launch shape as muse/2-14_turn-aborted-by-error -- a fresh empty cwd, `muse --trust-workspace --base-url http://127.0.0.1:<dead-port>` in a tmux session, 1s settle sleep before the first send.",
-        "PREFERRED IF FEASIBLE: a minimal local HTTP stub at the /responses path (matching 2-14's captured URL fragment) that returns a bare 429 status on request 2 (200-with-something-parseable on request 1, if achievable, otherwise 429 from the first request); record whatever reason/error_class text results and note in the recording's own metadata whether it differs from the dead-port connection-refused case.",
-        "The prompt content does not matter for cue-avoidance: the model call fails before any assistant text is generated. Keep it simple, e.g. \"Say hello.\""
+        "RECORD-TIME CHANGE from the assessed baseline: the assessment's own 'PREFERRED IF FEASIBLE' option (a minimal local HTTP stub at /responses returning 429, over the dead-port baseline that is daemon-trace-identical to 2-14) is what record used, per the batch brief (#1960 record pass): tools/onboarding-factory/recording/mock-muse-overload with --status 429 --succeed-after 0 (never succeed) -- the same mock 2-22/2-23 use, sharing infrastructure rather than inventing a quota-specific stub (no wire vocabulary for quota exists to build one authentically -- see metadata.json's 'central open question').",
+        "Same launch shape as muse/2-14_turn-aborted-by-error: a fresh empty cwd, `muse --trust-workspace --base-url http://127.0.0.1:18803` in a tmux session, 1s settle sleep before the first send.",
+        "record does NOT need to start the mock by hand: the recipe's .mock block below is read by run-cell.sh's start_recipe_mock, which builds, launches on 127.0.0.1:18803, waits for LISTEN, and tears it down in the EXIT trap.",
+        "The prompt content does not matter for cue-avoidance: the model call fails before any assistant text is generated. Keep it simple, e.g. \"Say hello.\"",
+        "record MUST record, in this cell's own notes, whether the resulting reason/error_class text carries any quota/rate-limit-flavored content or is generic -- this is the cell's own stated acceptance question, not optional.",
+        "TIMING, carried forward from the 2-23 sibling's live drive (same mock mechanism, --status 429 --succeed-after 0): against a real HTTP 429, muse's retry ladder backs off exponentially (1s,2s,4s,8s,16s,32s, capped at 60s, across max_attempts=10) rather than near-instantly like a dead port -- ~243s of cumulative backoff before the terminal give-up. timeout_seconds set to 330 from the start to avoid re-running into the same timeout 2-23's first attempt hit."
       ],
       "script": [
         {
@@ -119,18 +122,30 @@
         }
       ],
       "verify": [
-        "events.jsonl mints a session in ready shortly after muse's TUI finishes launching",
+        "events.jsonl mints a session in ready shortly after muse's TUI finishing launching",
         "events.jsonl contains a pid_discovered event binding the muse-bin PID to the real session",
         "events.jsonl contains a state_transition to working when the user prompt lands",
         "events.jsonl contains a state_transition to error after the model call fails (session_error classifier rule)",
         "the session does NOT stick in working, and does NOT re-enter ready or waiting after the failure (error is sticky)",
         "observation vector: tokens_nonzero=false, cost_nonzero=false (no model_completed event before the failure), model unpinned",
-        "record must record, in the cell's own notes, whether the induced failure's reason/error_class text carries ANY quota/rate-limit-flavored content, or is generic -- this determines whether the recording meaningfully tests THIS scenario or is a documented near-duplicate of 2-14"
+        "the mock's own request log (mock.log) contains at least 1 line matching the recipe's request_log_pattern, proving muse actually reached it rather than the recording having silently fallen through to the real Meta endpoint",
+        "record must record, in the cell's own notes, whether the induced failure's reason/error_class text carries ANY quota/rate-limit-flavored content, or is generic -- this determines whether the recording meaningfully tests THIS scenario or is a documented near-duplicate of 2-23/2-14"
       ],
       "settings": {
-        "base_url": "http://127.0.0.1:18801"
+        "base_url": "http://127.0.0.1:18803"
       },
-      "timeout_seconds": 120
+      "timeout_seconds": 330,
+      "mock": {
+        "package": "./tools/onboarding-factory/recording/mock-muse-overload",
+        "port": 18803,
+        "args": [
+          "--status",
+          "429",
+          "--succeed-after",
+          "0"
+        ],
+        "request_log_pattern": "POST /responses #[0-9]+"
+      }
     }
   }
 }
