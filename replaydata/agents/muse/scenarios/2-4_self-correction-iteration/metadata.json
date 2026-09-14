@@ -1,0 +1,102 @@
+{
+  "scenario_id": "self-correction-iteration",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.2.1",
+    "daemon_version": "0.6.3+0239a1b",
+    "confidence": 0.88,
+    "notes": "agent_supports: yes; daemon_capability: full; driver_capability: ready. LIVE-CONFIRMED (2026-09-14, throwaway tmux probe, session 01a09f4d-ae31-7af2-b416-1c6773cd7ed2): a genuine nonzero exit_code (false -> exit_code:1, terminal_status:'failed') and its recovery (echo recovered -> exit_code:0) both landed inside a SINGLE run.started/run.terminal bracket -- no flicker, IsError stays disjoint from SessionError. This also settles the standing UNVERIFIED item (every prior sample was exit_code:0) with a real nonzero capture."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "self-correction-iteration",
+      "agent": "muse",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.88,
+      "body": "## Verdict\n\nagent_supports: yes; daemon_capability: full; driver_capability: ready.\n\n## Reasoning\n\n**Agent.** Muse genuinely self-corrects a failing tool call within one turn. LIVE-VERIFIED this session (2026-09-14, throwaway tmux probe against a bare `muse --trust-workspace` in a scratch cwd OUTSIDE the repo, session `01a09f4d-ae31-7af2-b416-1c6773cd7ed2`): prompted with \"Run the shell command false ...; retry with echo recovered ...; reply done\", the transcript shows `assistant_tool_calls_committed` (bash `false`) -> `tool_result_batch_committed` with text `{\"chunk_id\":\"exec-1-1\",\"command\":\"false\",...,\"exit_code\":1,\"terminal_status\":\"failed\",\"terminal_reason\":\"process exited with status 1\",\"output\":\"\",...}` -> a SECOND `assistant_tool_calls_committed` (bash `echo recovered`) -> `tool_result_batch_committed` with `\"exit_code\":0,\"terminal_status\":\"completed\",\"output\":\"recovered\\n\"` -> a final `assistant_message_committed` reading literally `done`. This is the exact retry-after-failure arc the scenario's `process`/`acceptance_criteria` describe (source: `of scenario show --name self-correction-iteration`).\n\n**Daemon.** `core/adapters/inbound/agents/muse/parser.go` tracks tool calls exclusively off `assistant_tool_calls_committed`/`tool_result_batch_committed` (package doc, lines 57-74), never the `kind:\"task\"`/`tool_batch.effect.*` family, which `parseSessionEnvelope`'s default arm (`kind:\"task\"`, lines ~256-260) and `route()`'s default arm (`tool_batch.effect.*`, lines ~230-243) both `Skip=true` unconditionally -- LIVE-CONFIRMED in this probe: the failing `false` call produced its own `runtime.session`/`task`/`failed` record AND a `tool_batch.effect.terminal` record whose `outcome.kind` stayed `\"completed\"` (the failure only shows up one level deeper, at `outcome.task_completion.terminal.kind:\"failed\"`) -- exactly the parallel, lower-fidelity view the package doc predicted, and neither one feeds the parser. The single authoritative signal is `tool_result_batch_committed`'s `resultTextReportsNonZeroExit` (parser.go:509-534), which greps for `\"exit_code\"` then unmarshals `{ExitCode *int}`. That function's own doc comment flagged this path as UNVERIFIED (\"no sample anywhere in the available corpus ever captured a NONZERO exit_code\") and its pinning unit test (`TestParseLine_ToolResult_NonZeroExitCode_SetsIsError`, parser_test.go:308) is explicitly marked SYNTHETIC. This probe closes that gap: the real failing-command text is `{\"chunk_id\":\"exec-1-1\",\"command\":\"false\",\"description\":\"...\",\"exit_code\":1,\"terminal_status\":\"failed\",\"terminal_reason\":\"process exited with status 1\",\"output\":\"\",\"original_output_bytes\":0,\"original_output_tokens\":0,\"truncated\":false}` -- valid top-level JSON containing `\"exit_code\":1` exactly as `resultTextReportsNonZeroExit` expects, so `IsError` fires correctly on the FIRST live nonzero sample ever captured; the synthetic test's assumed shape is now a confirmed production shape, not a guess.\n\n**No flicker, one turn boundary.** `parseRunStarted`/`parseRunTerminal` (parser.go:306-365) are the ONLY EventType=user_message/turn_done source; `kind:\"run\"` `started`/`terminal` are 1:1 with the whole exchange. LIVE-CONFIRMED: this probe's session.jsonl carries exactly ONE `(\"run\",\"started\")` and exactly ONE `(\"run\",\"terminal\")` for the single `run_id` covering BOTH tool calls -- the failing `false` attempt and the `echo recovered` recovery sit inside the same open turn, with no run boundary in between. `terminal` read `\"completed\"` (turn_duration_ms 17306), so the whole retry arc stayed a single contiguous span.\n\n**IsError vs SessionError -- live-confirmed disjoint.** `session_error.go`'s doc comment states `IsError` (a tool_result failure -- \"a command that exited non-zero ... is the agent working normally\") is DISTINCT FROM `SessionError` (\"one session-level failure ... EVERY PRODUCER READS A TRANSCRIPT\") and must never turn a session red on its own; nothing in the daemon reads `IsError` for state classification (`core/pkg/tailer/tailer.go:1219`, `core/domain/session/session_error.go:73-79`: \"Eight adapters set IsError today and nothing reads it\"). `parseRunTerminal` sets `SessionError` ONLY on `terminal==\"failed\"` (parser.go:326-349); our probe's terminal was `\"completed\"`, so `SessionError` was never populated despite the tool-level `IsError:true` on the `false` result -- live proof the two channels stayed exactly as disjoint as the static code and doc comment claim, not merely a plausible reading.\n\n**Driver.** `replaydata/agents/muse/driver-interactive.sh`'s `DRIVE_ELICITS` lists `send`, `wait_turn`, `sleep` as genuinely implemented (also verified operationally: this probe manually replicated the driver's own documented timing -- `--trust-workspace` launch, 1s post-launch settle, 0.3s pre-Enter delay on `send` -- via raw `tmux send-keys`/`capture-pane` and it drove the exact same arc the recipe below encodes). No new step type is needed.\n\n## Vacuous-pass condition (load-bearing environment property)\n\nUnder what condition would this cell pass while proving nothing? Two ways: (1) if EITHER `false` or `echo recovered` routed through the `kind:\"approval\"` review flow instead of the policy fast-track, a transcript-tier permission-pending window would open and the daemon could show a transient `waiting` -- breaking the no-flicker assertion for a reason unrelated to tool failure. LIVE-CONFIRMED both calls in this probe carried `policy_decision:\"allow:policy\"` with zero `kind:\"approval\"` records (same machine precondition already load-bearing for the `auto-executed-tool-call` sibling cell). (2) if the model ever skips the induced failure and jumps straight to the successful command, the recording would show a normal single-tool-call turn and silently degrade into a duplicate of `auto-executed-tool-call` with an unchanged 4/4 -- the recipe's explicit \"run X (it will fail); observe; retry with Y\" phrasing is what made this probe reliably elicit both calls, but that is model behavior, not a code guarantee, and is named here as a re-check item for `record`.",
+      "caveats": [
+        "Not yet recorded end-to-end via the factory's `record` verb -- this verdict is grounded in a real, live, throwaway tmux probe of muse itself (outside the repo, outside any daemon recording) plus the built adapter's code/tests, not a daemon-attached recording of THIS cell. `record` is what promotes it from provisional to settled against the daemon's own websocket observations.",
+        "Load-bearing environment property (vacuous-pass rule): this machine's muse `:auto-review` permission profile fast-tracks plain bash commands (both `false` and `echo recovered`) via `policy_decision:\"allow:policy\"`, the same precondition already load-bearing for `auto-executed-tool-call`. Re-probe at record time.",
+        "Model-behavior risk (soft, not code): the recipe's prompt explicitly instructs the fail-then-retry sequence and this probe confirmed it works, but nothing GUARANTEES the model always attempts the failing command first; if a future run skips straight to `echo recovered`, the recording tests nothing beyond `auto-executed-tool-call` and needs re-driving.",
+        "The standing UNVERIFIED item 'nonzero tool exit_code shape has never been captured' (muse-format-spec.md, task context) is RESOLVED by this probe for the bash-tool case specifically: `{\"chunk_id\":...,\"command\":...,\"exit_code\":1,\"terminal_status\":\"failed\",\"terminal_reason\":\"process exited with status 1\",\"output\":\"\",...}`. Still UNVERIFIED: whether every non-bash tool reports failure in this same JSON shape (parser.go:509-522's own caveat) -- out of scope for this scenario, which only needs the bash case.",
+        "`terminal:\"cancelled\"` semantics remain a separate, already-resolved-elsewhere item (owner.requester_kind discriminator, #1960 shared context) and are not load-bearing here since this scenario's happy path always ends `terminal:\"completed\"`."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "shell: live tmux probe, 2026-09-14, session /Users/ingo/.local/share/muse/sessions/2026/09/14/01a09f4d-ae31-7af2-b416-1c6773cd7ed2/session.jsonl (driven in a scratch cwd outside the repo, via tmux send-keys + capture-pane, muse 1.2.1 --trust-workspace)",
+          "note": "Ground truth for the nonzero exit_code shape, the single run.started/run.terminal bracket around both tool calls, the tool_batch.effect.terminal outcome.kind:'completed' vs nested terminal.kind:'failed' split, and SessionError staying unset."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/parser.go:57-74,230-260,306-365,485-534",
+          "note": "Tool-call pairing source, kind:task/tool_batch.effect.* deliberately Skip=true, run.started/run.terminal turn boundary, resultTextReportsNonZeroExit (the function this probe validates against a real sample)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/parser_test.go:282-321",
+          "note": "TestParseLine_ToolCall_OpenAndClose_PairByCallID and TestParseLine_ToolResult_NonZeroExitCode_SetsIsError (marked SYNTHETIC prior to this probe) pin the exact behavior this live sample now confirms."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/session_error.go:62-79",
+          "note": "IsError vs SessionError documented as permanently distinct channels; this probe is the first live confirmation neither leaks into the other for a real tool failure."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/driver-interactive.sh:230-398",
+          "note": "launch_repl/spawn_muse_repl/step_send timing this probe manually replicated (--trust-workspace, 1s settle, 0.3s pre-Enter delay)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/2-4_self-correction-iteration/metadata.json + expected.jsonl",
+          "note": "Sibling cell for the same scenario, templated for phase structure."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/scenarios/2-2_auto-executed-tool-call/metadata.json + expected.jsonl",
+          "note": "Sibling muse cell: same allow:policy precondition, same same_session_as:session_birth pinning fix for the reminder-subagent vacuous-pass bug, applied here from the start rather than rediscovered at record time."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "muse CLI on PATH and authenticated (muse login or META_API_KEY) -- confirmed installed at 1.2.1 on this machine",
+        "irrlichd is recording (--attach or isolated coexist mode)",
+        "This machine's muse permission profile classifies plain bash commands like 'false' and 'echo ...' as policy_decision:'allow:policy' (no approval flow) -- LIVE-CONFIRMED for both commands in the 2026-09-14 probe. Re-probe at record time; if either call instead shows a kind:'approval' record, the recipe drifts toward the permission-gated scenario instead of self-correction."
+      ],
+      "setup": [
+        "Driver generates a fresh lowercased session UUID and a fresh cwd under <staging>/cwd/ (launch_repl, driver-interactive.sh)",
+        "Driver launches with --trust-workspace so the untrusted-workspace modal never swallows the first message"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Run the shell command false (it will exit non-zero). Observe that it fails, then run the shell command echo recovered as a retry. After that succeeds, reply with the single word: done"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the session entering ready, then exactly one ready→working transition and one working→ready transition on that SAME session (not a reminder subagent)",
+        "events.jsonl contains at least 2 tool-call open/close pairs (bash) inside the working span: one with exit_code 1 / IsError, one with exit_code 0",
+        "events.jsonl contains NO state_transition to ready or waiting between the failing tool_result and the recovery tool_use",
+        "final session state is ready",
+        "transcript shows the literal final reply token 'done'"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}
