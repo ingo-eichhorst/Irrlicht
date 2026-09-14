@@ -7,7 +7,7 @@
     "agent_cli_version": "1.2.1",
     "daemon_version": "0.6.3+c4ef786",
     "confidence": 0.72,
-    "notes": "agent_supports: yes (a real, durably-named resource ceiling on the /goal loop itself: goal_revisions.token_budget/tokens_used with confirmed status values usage_limited/budget_limited and display strings 'usage limited'/'limited by budget'); daemon_capability: full (state arc reuses the SAME agent-generic turn-boundary parsing as the 2-7 sibling, no goal-specific parsing needed); driver_capability: ready (slash+wait_turn+sleep already implemented). The recipe uses '/goal clear' as a practical stand-in for hitting the cap (same methodology the claudecode sibling uses for this scenario) because no CLI/slash syntax was found to deliberately shrink token_budget. Not yet recorded."
+    "notes": "agent_supports: yes (a real, durably-named resource ceiling on the /goal loop itself: goal_revisions.token_budget/tokens_used with confirmed status values usage_limited/budget_limited and display strings 'usage limited'/'limited by budget'); daemon_capability: full (state arc reuses the SAME agent-generic turn-boundary parsing as the 2-7 sibling, no goal-specific parsing needed); driver_capability: ready (slash+wait_turn+sleep already implemented). The recipe uses '/goal clear' as a practical stand-in for hitting the cap (same methodology the claudecode sibling uses for this scenario) because no CLI/slash syntax was found to deliberately shrink token_budget. Not yet recorded.\n\nRECORD-TIME RECIPE CORRECTION (2026-09-14, first attempt, session 01a0a17e-ffd9-7831-8557-87e003ea1080): the original script's two wait_turn steps before /goal clear are a recipe bug, not a daemon/agent gap. wait_turn blocks until turn_count() reaches EXPECTED_TURNS (a completed run.terminal), and driver-interactive.sh's step dispatcher does `wait_turn) step_wait_turn || break` -- a timed-out wait_turn ABORTS THE REST OF THE SCRIPT, so /goal clear was never even sent. This objective is deliberately open-ended (\"never mark this goal complete\"), and live data confirms muse runs it as ONE continuous working span with no completed turn at all: working held unbroken for 278s (21:57:33 to 22:02:12) -- the loop fired a bash tool call roughly every 2.3s the whole time -- until a permission_requested record finally put the session into waiting (transcript permission prompt on a bash call), never completing a turn. wait_turn therefore cannot gate progress on an objective designed never to converge. Fixed by replacing both wait_turn+sleep pairs with a single fixed sleep(15s) dwell before /goal clear: at ~2.3s/iteration this yields 6+ internal iterations, comfortably clearing the \"at least 2\" bar, and 15s stays far inside the 278s window before the permission-prompt complication appears."
   },
   "details": {
     "assessment": {
@@ -28,7 +28,8 @@
         "cost_nonzero asserted false: muse-spark-* is absent from the pricing catalog and no dollar cost is persisted anywhere in the corpus (strict JSON-key scan, per the shared assess context). model is left unpinned in observations for the same reason 2-7 leaves it unpinned.",
         "command.invoked and goal_usage_attribution remain Skip=true in parser.go today, so the goal's own structured fields (objective text, percent_complete, token_budget/tokens_used, the status enum this assessment found) are NOT surfaced as SessionMetrics -- the daemon proves the state ARC, not that the termination was caused by budget/clear specifically. Narrow gap against a nice-to-have observable, not a bug against this scenario's acceptance criteria (state arc only, per the scenario's own acceptance_criteria text).",
         "Session-birth shape (single birth vs. a transient proc-<PID> pre-session) follows the SAME defensive pi-pattern as every other muse cell (session_birth unpinned to start, later phases pinned via same_session_as) -- the underlying proc-* eviction bug this defends against was fixed in commit 9abf13d1 and live-reconfirmed via the 2-14 sibling's third recording, but the phase is still written defensively for consistency with the rest of the muse suite.",
-        "Turn-boundary timing between the two required iterations (the 'at least 2 turns' acceptance bullet) is not asserted as a FIXED count beyond the two explicit wait_turn steps the recipe itself performs -- per the shared assess context's own defect-class warning ('assert the arc and its invariants, never a cycle count'), the loop_active phase is written as a sustained-duration hold, not an enumerated per-iteration phase list, so it will not flake if muse coalesces or discretizes the two internal iterations differently than expected."
+        "Turn-boundary timing between the two required iterations (the 'at least 2 turns' acceptance bullet) is not asserted as a FIXED count beyond the two explicit wait_turn steps the recipe itself performs -- per the shared assess context's own defect-class warning ('assert the arc and its invariants, never a cycle count'), the loop_active phase is written as a sustained-duration hold, not an enumerated per-iteration phase list, so it will not flake if muse coalesces or discretizes the two internal iterations differently than expected.",
+        "RECORD-TIME RECIPE CORRECTION (2026-09-14, first attempt, session 01a0a17e-ffd9-7831-8557-87e003ea1080): the original script's two wait_turn steps before /goal clear are a recipe bug, not a daemon/agent gap. wait_turn blocks until turn_count() reaches EXPECTED_TURNS (a completed run.terminal), and driver-interactive.sh's step dispatcher does `wait_turn) step_wait_turn || break` -- a timed-out wait_turn ABORTS THE REST OF THE SCRIPT, so /goal clear was never even sent. This objective is deliberately open-ended (\"never mark this goal complete\"), and live data confirms muse runs it as ONE continuous working span with no completed turn at all: working held unbroken for 278s (21:57:33 to 22:02:12) -- the loop fired a bash tool call roughly every 2.3s the whole time -- until a permission_requested record finally put the session into waiting (transcript permission prompt on a bash call), never completing a turn. wait_turn therefore cannot gate progress on an objective designed never to converge. Fixed by replacing both wait_turn+sleep pairs with a single fixed sleep(15s) dwell before /goal clear: at ~2.3s/iteration this yields 6+ internal iterations, comfortably clearing the \"at least 2\" bar, and 15s stays far inside the 278s window before the permission-prompt complication appears."
       ],
       "sources": [
         {
@@ -86,7 +87,8 @@
         "muse CLI on PATH and authenticated (muse login or META_API_KEY) -- same out-of-band precondition as every other muse cell",
         "irrlichd is recording (--attach or isolated coexist mode)",
         "Fresh session with no prior goal -- /goal <objective> fails with 'cannot create a new goal because this session already has one' if a goal is already active, so this must be the session's first /goal call (same precondition 2-7 carries)",
-        "This machine's muse permission profile classifies plain 'echo' bash calls as policy_decision:'allow:policy' (no approval flow) -- re-probe at record time; if a call instead produces a kind:'approval' record, either add an approval-decision step or switch the objective's tool calls to ones already confirmed auto-approved"
+        "This machine's muse permission profile classifies plain 'echo' bash calls as policy_decision:'allow:policy' (no approval flow) -- re-probe at record time; if a call instead produces a kind:'approval' record, either add an approval-decision step or switch the objective's tool calls to ones already confirmed auto-approved",
+        "RECIPE BUG (fixed, see notes): wait_turn cannot gate progress toward /goal clear on this deliberately-never-completing objective -- driver-interactive.sh aborts the whole script (`wait_turn) step_wait_turn || break`) on the first wait_turn timeout, so /goal clear never sends. Use fixed sleep() dwells instead of wait_turn between /goal <objective> and /goal clear."
       ],
       "setup": [
         "Driver generates a fresh session UUID + fresh cwd under <staging>/cwd/ (launch_repl, driver-interactive.sh)",
@@ -99,18 +101,8 @@
           "text": "/goal Work through an endless counting task with no completion condition: run `echo count-1` as your first internal iteration, then on your next internal iteration run `echo count-2`, then `echo count-3`, and so on without any upper bound. Never call report_progress with percent_complete at 100 and never mark this goal complete -- it has no finishing condition."
         },
         {
-          "type": "wait_turn"
-        },
-        {
           "type": "sleep",
-          "seconds": 5
-        },
-        {
-          "type": "wait_turn"
-        },
-        {
-          "type": "sleep",
-          "seconds": 5
+          "seconds": 15
         },
         {
           "type": "slash",
