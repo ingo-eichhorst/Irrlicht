@@ -181,7 +181,7 @@ SES_OWNED=()
 # DRIVE_SLASH_REQUIRES_STEP_TYPE=true if muse is headless-first (a bare
 # send "/cmd" stores literal text instead of reaching the REPL).
 # shellcheck disable=SC2034  # scraped from this file's SOURCE by tools/onboarding-factory/scripts/lib/recipe-lint.sh:97 (sed), never expanded in shell
-DRIVE_ELICITS="send slash wait_turn sleep exit_clean restart sigkill start_session session keys reset_session"
+DRIVE_ELICITS="send slash wait_turn sleep exit_clean restart sigkill start_session session keys reset_session resume"
 # shellcheck disable=SC2034  # scraped from this file's SOURCE by tools/onboarding-factory/scripts/lib/recipe-lint.sh:113 (sed), never expanded in shell
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 RUN_CWD="${IRRLICHT_ONBOARD_CWD:-$STAGING/cwd}"
@@ -278,12 +278,22 @@ launch_repl() {
 }
 
 # spawn_muse_repl launches `muse` in tmux for the CURRENTLY ACTIVE slot (caller
-# already ran alloc_slot). Extracted from launch_repl (#1960 stage 3) so
-# step_restart reuses the identical launch shape — same MUSE_ARGS construction
-# (settings_model's --model pin, and any future launch-arg wiring like
-# base_url_override), same settle-delay rationale — instead of drifting a
-# second, hand-copied tmux new-session call out of sync with the first.
-spawn_muse_repl() {
+# already ran alloc_slot, or — for step_resume, #1960 SEAM 3 — repointed
+# $SESSION at a rotated tmux name on the SAME slot). Extracted from
+# launch_repl (#1960 stage 3) so step_restart reuses the identical launch
+# shape — same MUSE_ARGS construction (settings_model's --model pin, and any
+# future launch-arg wiring like base_url_override), same settle-delay
+# rationale — instead of drifting a second, hand-copied tmux new-session call
+# out of sync with the first.
+#
+# Optional leading argv ($@, e.g. `resume <uuid>`) is inserted BEFORE
+# MUSE_ARGS: `muse --help` documents root options (--trust-workspace,
+# --model, …) as valid on either side of a subcommand, and every launch site
+# this driver has (bare TUI, `resume <uuid>`) puts the subcommand first —
+# `muse resume <uuid> --trust-workspace`, not `muse --trust-workspace resume
+# <uuid>` — so callers pass the subcommand tokens as positional args rather
+# than folding them into MUSE_ARGS.
+spawn_muse_repl() { # [subcommand-args...]
   tmux kill-session -t "$SESSION" 2>/dev/null || true
   # MUSE_ARGS: the flags every launch of muse carries beyond --trust-workspace
   # and -c <cwd> (fixed per tmux new-session call below). Built as an array,
@@ -295,7 +305,7 @@ spawn_muse_repl() {
   [[ -n "$APPROVAL_JUDGE" ]] && MUSE_ARGS+=(--approval-judge "$APPROVAL_JUDGE")
   # `|| { … exit … }` keeps a launch failure from aborting under set -e WITHOUT
   # an accurate exit-reason — the cleanup trap then records nonzero(2).
-  tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "${SES_CWD[$ACTIVE]}" "muse" "${MUSE_ARGS[@]}" \
+  tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "${SES_CWD[$ACTIVE]}" "muse" "$@" "${MUSE_ARGS[@]}" \
     >>"$DRIVER_LOG.stdout.$ACTIVE" 2>>"$DRIVER_LOG.stderr" \
     || { echo "[driver] failed to launch muse under tmux" >&2; EXIT_REASON="nonzero(2)"; exit 1; }
   # Startup settle delay — a TUI input-timing requirement, not a wait for an
@@ -662,6 +672,46 @@ step_reset_session() { # [slash-text, default "/clear"]
   sleep 1
 }
 
+# step_resume (#1960 SEAM 3 — ported from codex's step_resume,
+# driver-interactive.sh:713-746, same "already on the slot-model" reasoning
+# as step_reset_session above). Empirically confirmed BEFORE writing this
+# (throwaway tmux dir, muse 1.2.1, 2026-09-15): clean-exit then `muse resume
+# <uuid>` in the SAME cwd REOPENS AND APPENDS TO THE SAME session.jsonl file
+# under a NEW PID — the session directory never changes, the file only grows
+# (70 -> 76 -> 132 lines across two prompts and the resume, in this probe).
+# So this is the SAME slot with a new process lifetime, not a new one:
+# TRANSCRIPT/UUID/MARKER/EXPECTED_TURNS are left exactly as they are — no
+# alloc_slot, no resolve_transcript reset — because turn_count() (turn-
+# count.sh) counts ("run","terminal") records cumulatively over the WHOLE
+# file; resetting EXPECTED_TURNS here would make wait_turn's post-resume
+# `now -ge $EXPECTED_TURNS` check pass on the file's FIRST (pre-exit) turn
+# instead of waiting for the genuinely new one.
+#
+# Only $SESSION (the tmux target) rotates, mirroring codex's own step_resume
+# comment ("Only the tmux session name rotates"). Relaunches via the SAME
+# spawn_muse_repl every other launch site uses (`muse resume <uuid>` as
+# leading argv, then the identical --trust-workspace/--model/--base-url/
+# --approval-judge MUSE_ARGS as the original launch and the same 1s settle
+# sleep) rather than hand-copying a second tmux new-session call out of sync
+# with it — the precedent the fleet has already paid for once
+# (spawn_muse_repl's own header comment) and should not pay for twice.
+step_resume() {
+  resolve_transcript || true
+  if [[ -z "$UUID" ]]; then
+    echo "[driver] resume[s$ACTIVE]: FAILED — no session uuid resolved yet for the active slot; nothing to resume" >&2
+    EXIT_REASON="nonzero(2)"
+    return 1
+  fi
+  local resume_uuid="$UUID" old_tmux="$SESSION"
+  # Defensive, not the primary teardown: every recipe using `resume` sends it
+  # after exit_clean (or sigkill), which already confirmed-or-force-killed
+  # the old pane. Idempotent no-op on the expected path.
+  tmux kill-session -t "$old_tmux" 2>/dev/null || true
+  SESSION="musedrv-$$-$(date +%s)-r${ACTIVE}"
+  echo "[driver] resume[s$ACTIVE]: relaunch muse resume $resume_uuid (same transcript=$TRANSCRIPT, new tmux=$SESSION)" >&2
+  spawn_muse_repl resume "$resume_uuid"
+}
+
 # muse_writer_pid <path> -> the PID holding <path> open for WRITING (FD access
 # mode 'w' or 'u'), or empty. Mirrors core/adapters/inbound/agents/
 # processlifecycle/process_darwin.go's writerPIDFromLsof exactly: reads the
@@ -797,7 +847,7 @@ while IFS= read -r step; do
     keys)            step_keys "$(jq -r '.keys' <<<"$step")" ;;
     reset_session)   step_reset_session "$(jq -r '.text // empty' <<<"$step")" || break ;;
     restart)         step_restart || break ;;
-    resume)          not_implemented resume || break ;;          # TODO(muse): relaunch same id+cwd (1 session, 2 PIDs) — reuse the active slot
+    resume)          step_resume || break ;;
     sigkill)         step_sigkill || break ;;
     exit_clean)      step_exit_clean ;;
     start_session)   step_start_session "$(jq -r '.cwd // empty' <<<"$step")" || break ;;
