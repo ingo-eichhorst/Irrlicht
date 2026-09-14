@@ -52,6 +52,11 @@ func TestIsUserBlockingToolName(t *testing.T) {
 		// this fell through, so the collapsed working→waiting transition was
 		// never synthesised for vibe's structured-question path.
 		{"ask_user_question", true},
+		// Muse's dedicated ask-tool (issue #1960 stage 3): its system prompt
+		// tells the model to "Prefer `request_user_input` when available"
+		// (verified via `strings` on the live muse-bin-1.2.1-R2847.1 binary —
+		// see isUserBlockingToolName's doc comment).
+		{"request_user_input", true},
 		// Auto-executing tools must not be flagged.
 		{"Bash", false},
 		{"Write", false},

@@ -71,6 +71,10 @@ func TestNeedsUserAttention_UserBlockingToolNames(t *testing.T) {
 		// to the trailing-'?' text heuristic instead of forcing waiting (#1087).
 		{"open ask_user_question (vibe)", &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"ask_user_question"}}, true},
 		{"mixed: Bash + ask_user_question", &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"Bash", "ask_user_question"}}, true},
+		// Muse's dedicated ask-tool (issue #1960 stage 3, live-confirmed
+		// against the shipped binary's own system-prompt string — see
+		// isUserBlockingTool's doc comment).
+		{"open request_user_input (muse)", &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"request_user_input"}}, true},
 		// Auto-executing tools must not trigger waiting.
 		{"open Bash", &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"Bash"}}, false},
 		{"open Write", &SessionMetrics{HasOpenToolCall: true, LastOpenToolNames: []string{"Write"}}, false},
