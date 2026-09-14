@@ -1,0 +1,135 @@
+{
+  "scenario_id": "turn-end-terminal-text",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.2.1",
+    "daemon_version": "0.5.x (worktree, pre-release)",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes\ndaemon_capability: full; driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "turn-end-terminal-text",
+      "agent": "muse",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe scenario asserts the smallest tool-less round trip: `ready → working → ready`, final state `ready`, zero tool calls, regardless of which adapter-specific signal closes the turn.\n\n**Muse's end signal is its `terminal` event on the run stream.** Every prompt Muse handles opens with `payload_type:\"runtime.session\", payload.kind:\"run\", event.kind:\"started\"` (carries the literal prompt) and closes with `event.kind:\"terminal\"` (a `terminal` field discriminating `completed`/`failed`/`cancelled`, format-spec §3, 37 real samples: 31 completed, 5 cancelled, 1 failed). `parser.go`'s `parseRunTerminal` (parser.go:324-365) sets `EventType=\"turn_done\"` for ALL THREE outcomes — the run objectively ended in every case, the SessionError-vs-ready branch is what the classifier does with that, not a different EventType. This is directly unit-tested: `TestParseLine_RunTerminal_Completed_TurnDone` (parser_test.go:100-111) asserts `EventType==\"turn_done\"` and `SessionError==nil` on a `terminal:\"completed\"` record, and `TestParseLine_TurnCompleted_RealFixture` (parser_test.go:596-610) replays a real, redacted captured turn (testdata/real-turn-completed.jsonl) end-to-end through `tailer.NewTranscriptTailer(...).TailAndProcess()` and asserts `LastEventType==\"turn_done\"`, `HasOpenToolCall==false`, `SessionError==nil`, nonzero cumulative tokens — i.e. the exact mechanism this scenario needs is already green under `go test ./core/adapters/inbound/agents/muse/... -race -count=1` (ran it: all tests pass).\n\n**Tool-less is structural, not incidental.** `ToolUses`/`HasOpenToolCall` are populated ONLY by `parseAssistantToolCallsCommitted` reacting to an `assistant_tool_calls_committed` record (parser.go:445-463); a turn whose assistant reply never calls a tool never touches that path, so `HasOpenToolCall` stays false by construction and can never veto `IsAgentDone()`.\n\n**Classifier mechanism (shared, adapter-agnostic — already covered by its own tests, cited not re-verified here).** `SessionMetrics.IsAgentDone()` (core/domain/session/metrics.go:569-599): `HasOpenToolCall`/`HasLiveBackgroundProcess` veto false; else `HookTurnDone` (muse declares no hooks — agent.go's doc — so this is always false for muse) `|| LastEventType==\"turn_done\"` (metrics.go:599, the path muse's transcript tier feeds). `state_classifier.go`'s `classifyAgentDone` (state_classifier.go:399-452): a `SessionError` routes to `error`; `metrics.IsWaitingForUserInput()` (line 436) routes to `waiting`; otherwise `transitionTo(..., session.StateReady, \"agent finished turn → ready\")` (line 452) — rule 2b, working→ready.\n\n**The waiting branch is fed correctly too**, which matters for the scenario's negative invariant (a tool-less reply must not accidentally divert to `waiting`). `parseAssistantMessageCommitted` (parser.go:428-439) sets `ev.PendingWaitingCue = session.ProseIndicatesWaiting(tailer.WaitingScanWindow(text))` over the FULL assistant text (not the truncated display tail, matching every other adapter's #1150 fix) on every `assistant_message_committed` record — confirmed unit-tested by `TestParseLine_AssistantMessageCommitted_WaitingCue`/`_EmptyTextNoWaitingCue` (parser_test.go:245-264). A recipe whose final reply is a plain declarative sentence (no trailing question, no imperative \"let me know\"/\"verify and reply\" cue — `session.ProseIndicatesWaiting`, waiting_cue.go:29-33) never sets this flag, so `classifyAgentDone` falls through past the waiting branch straight to `ready`.\n\n**Session identity / birth shape — the one genuinely uncertain part, flagged honestly.** Muse is `FilesUnderRoot` with a static `Dir` and `SessionIDFromPath` deriving the id from the session directory's basename (adapter.go:145-159) — a stable UUID once the directory exists. BUT the interactive driver's own launch-seam comment (replaydata/agents/muse/driver-interactive.sh:207-212) states plainly that \"the session dir may only materialize after the first prompt lands\" — i.e. at `muse --trust-workspace` launch there is no `session.jsonl` yet, only the running `muse-bin-*` process. Read against `core/cmd/irrlichd/wiring.go:103-114` (`buildAgentWatchers`), which unconditionally wires a `processlifecycle.Scanner` for EVERY adapter (muse's `Process.Match` is a `CommandPattern` on `muse-bin-[^/\\s]+`, agent.go:65) independent of the `FilesUnderRoot` fswatcher: the scanner will very likely find the running process and mint a `proc-<PID>` pre-session (scanner.go's `HasRealSessionForPID`/`sessionChecker`) before the fswatcher can discover a session.jsonl that doesn't exist yet — the same presession shape codex/gemini-cli/mistral-vibe/pi already exhibit for an analogous reason. This is NOT live-confirmed (no muse recording exists yet), so the spec below is written the same defensively-robust way `pi`'s own `turn-end-terminal-text` cell is (replaydata/agents/pi/scenarios/2-13_turn-end-terminal-text/expected.jsonl): `session_birth` is left UNPINNED to a particular session (matches whichever — presession or real — appears first, born ready), while the turn arc (`turn_start`/`turn_end_terminal`/`pid_bind`/`teardown`) anchors via `same_session_as: turn_start`, and `turn_start` itself is unpinned so the matcher picks the FIRST session to go `working` anywhere in the recording — which structurally must be the real session, since a `proc-<PID>` pre-session never processes a turn and so never goes `working`. This makes the spec correct under EITHER outcome (single real-session birth, or a transient presession that gets superseded), rather than gambling on an unverified guess and risking the exact \"collapsed single birth\" miss the assess playbook warns produces a PARTIAL. `record` should confirm which shape actually occurs and backflow-correct this note if presession fires.\n\n**Driver.** `replaydata/agents/muse/driver-interactive.sh`'s `DRIVE_ELICITS=\"send slash wait_turn sleep exit_clean\"` (line 139) covers every primitive this recipe needs (`send`, `wait_turn`, `sleep`) — no `driver=gap`. The three critical defects a prior live audit found (untrusted-workspace modal swallowing the first prompt, a dropped Enter with no inter-keystroke delay, and `resolve_transcript` recursing into a subagent's own transcript) are all fixed in the driver file as it stands on this branch (commit 0239a1bd, \"fix(muse): repair the recording driver so it can't record a corrupted pass\") — confirmed by reading the current file: `--trust-workspace` is passed at launch (line 235), `step_send` has the `sleep 0.3` between the literal text and Enter (line 349), and `resolve_transcript`'s `find` carries `-not -path '*/subagent/*'` (line 301).",
+      "caveats": [
+        "Vacuous-pass check: this cell would pass while proving nothing if the driven prompt is phrased loosely enough that Muse decides to call a tool anyway (e.g. to \"verify\" the answer) — the recipe below pins a literal, declarative, tool-free instruction (\"Do not use any tools. Reply with exactly this sentence...\") for exactly this reason, matching the pattern copilot's and codex's sibling cells already use for the same risk.",
+        "Session-birth shape (presession vs. single birth) is inferred from code (wiring.go's unconditional per-adapter process scanner + the driver's own \"session dir may only materialize after the first prompt lands\" comment) but has NOT been live-confirmed by an actual recording — the spec is deliberately written to be correct either way (pi-pattern), and `record` should backflow-correct this note once it observes the real shape.",
+        "cost_nonzero is asserted false, not true: `core/pkg/capacity` has no alias/pricing entry for any `muse-spark-*` model (grepped `core/pkg/capacity/*.go` for \"muse\" — zero hits), so `EstimatedCostUSD` will very likely compute to $0 even though tokens are genuinely nonzero and durably persisted (format-spec §6: `model_completed.usage`, 476 real records with nonzero usage in the corpus). This is a pricing-catalog gap, not a daemon defect — asserting cost_nonzero:true here would be testing the catalog, not this scenario.",
+        "terminal:\"cancelled\" (the third outcome parseRunTerminal handles) is UNVERIFIED as a human-ESC signal vs. programmatic cancellation (format-spec §3) — irrelevant to this cell, which only exercises terminal:\"completed\", but noted since parseRunTerminal's cancelled branch is adjacent code this cell's own test coverage does not exercise.",
+        "Muse spawns goal-reminder/verify-reminder subagents even for a single simple prompt (format-spec §9) — these are separate ParentSessionID-linked child sessions (confirmed structurally: sessionIDFromPath/parentSessionIDFromPath, adapter.go, mint a distinct id for every subagent's own directory) and do not feed events into the parent session's own state, so they should not perturb this cell's parent-session arc; not live-confirmed for lack of a recording."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/parser.go",
+          "note": "Lines 324-365 (parseRunTerminal): EventType=\"turn_done\" on every terminal outcome. Lines 428-439 (parseAssistantMessageCommitted): PendingWaitingCue via session.ProseIndicatesWaiting over the full text. Lines 445-463 (parseAssistantToolCallsCommitted): the only path that ever populates ToolUses."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/parser_test.go",
+          "note": "Lines 100-111 TestParseLine_RunTerminal_Completed_TurnDone; lines 245-264 TestParseLine_AssistantMessageCommitted_WaitingCue/_EmptyTextNoWaitingCue; lines 596-610 TestParseLine_TurnCompleted_RealFixture (real captured fixture, end-to-end through the tailer). Ran `go test ./core/adapters/inbound/agents/muse/... -race -count=1`: all green."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/metrics.go",
+          "note": "Lines 569-599, IsAgentDone(): HasOpenToolCall/HasLiveBackgroundProcess veto; else HookTurnDone || LastEventType==\"turn_done\"."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "Lines 399-452, classifyAgentDone: SessionError→error; IsWaitingForUserInput()→waiting; else transitionTo(ready, \"agent finished turn → ready\") — rule 2b."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/waiting_cue.go",
+          "note": "Lines 15-33, ProseIndicatesWaiting: OR of a trailing-question detector and an imperative-cue detector; a plain declarative final sentence trips neither."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/adapter.go",
+          "note": "Lines 28-37 (Source: FilesUnderRoot, static Dir, SessionIDFromPath from the session directory basename)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/agent.go",
+          "note": "Lines 39-55: CommandPattern process match (muse-bin-[^/\\s]+), observe-only (no hooks)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/cmd/irrlichd/wiring.go",
+          "note": "Lines 60-116 (buildAgentWatchers): the fswatcher is built from the FilesUnderRoot Dir, and a processlifecycle.Scanner (line 103) is wired unconditionally for every adapter regardless of Source variant — the mechanism a proc-<PID> presession would come from."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/processlifecycle/scanner.go",
+          "note": "Lines 147-174, HasRealSessionForPID: the predicate the scanner uses to decide whether a running, process-matched PID already has a real transcript-backed session, i.e. whether to mint a proc-<PID> placeholder."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/driver-interactive.sh",
+          "note": "Line 139: DRIVE_ELICITS=\"send slash wait_turn sleep exit_clean\". Lines 207-212: launch-seam comment stating the session dir may only materialize after the first prompt lands. Line 235 (--trust-workspace), line 349 (sleep 0.3 before Enter), line 301 (-not -path '*/subagent/*') confirm the three previously-audited driver defects are fixed on this branch (commit 0239a1bd)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/testdata/real-turn-completed.jsonl",
+          "note": "Real, redacted captured transcript slice: started → model_completed → tool call open/close → assistant_message_committed → terminal:completed — the exact end-signal shape this scenario exercises (minus the tool call, which this cell's recipe avoids)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/pi/scenarios/2-13_turn-end-terminal-text/expected.jsonl",
+          "note": "Template for the birth-ambiguity-robust spec shape (session_birth unpinned, turn arc pinned via same_session_as turn_start) reused here for the same structural reason (a possible transient proc-<PID> presession)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/capacity",
+          "note": "Grepped all *.go files under core/pkg/capacity for \"muse\": zero hits — no pricing/alias entry for any muse-spark-* model, hence cost_nonzero asserted false."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "muse CLI installed and on PATH (muse --version >= 1.2.1)",
+        "auth: complete 'muse login' (Meta account, browser code approval) or export META_API_KEY",
+        "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+      ],
+      "setup": [
+        "The interactive driver launches `muse --trust-workspace` in a fresh per-run cwd under <staging>/cwd/ via tmux, waits 1s for the TUI's input handler to finish wiring up (a live-reproduced timing requirement, not a readiness poll), then sends the prompt",
+        "Each send bumps the expected-turn counter; wait_turn resolves the driven session's own session.jsonl (excluding any subagent/ shadow) and blocks until its terminal-event count reaches the expected count"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Do not use any tools. Reply with exactly this sentence and nothing else: The terminal text closes the turn."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a session appearing in ready within ~2s of launch (either a proc-<PID> pre-session or the real session directly — birth shape not live-confirmed, see caveats)",
+        "events.jsonl contains a state_transition→working on the real (transcript-backed) session when the prompt is sent",
+        "events.jsonl contains a state_transition→ready on the SAME session once the terminal:completed turn closes",
+        "events.jsonl contains NO tool_use / function_call events for that session (deliberately tool-less prompt)",
+        "no state_transition→waiting appears for that session at any point (the declarative reply has no trailing question mark or imperative cue)",
+        "events.jsonl contains a pid_discovered bound to the real session",
+        "events.jsonl contains a process_exited on the real session once the driver tears the tmux session down",
+        "final session state is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 120
+    }
+  }
+}
