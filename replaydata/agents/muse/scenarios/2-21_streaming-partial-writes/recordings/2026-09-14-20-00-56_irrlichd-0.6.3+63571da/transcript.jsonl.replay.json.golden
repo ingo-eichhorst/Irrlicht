@@ -1,0 +1,195 @@
+{
+  "schema_version": 1,
+  "source_transcript": "",
+  "generated_at": "0001-01-01T00:00:00Z",
+  "settings": {
+    "adapter": "muse",
+    "debounce_window": 2000000000,
+    "flicker_max_duration": 10000000000
+  },
+  "summary": {
+    "total_events": 445,
+    "consumed_events": 445,
+    "total_transitions": 3,
+    "first_event_time": "2026-09-14T20:00:56.407191+02:00",
+    "last_event_time": "2026-09-14T20:01:54.227336+02:00",
+    "wall_clock_session_duration": 57820145000,
+    "state_durations": {
+      "ready": 6913500000,
+      "working": 50906645000
+    },
+    "flicker_count": 0,
+    "flickers_by_category": {},
+    "flickers_by_reason": {},
+    "cum_input_tokens": 37669,
+    "cum_output_tokens": 4476,
+    "cum_cache_read_tokens": 102995,
+    "model_name": "muse-spark-1.2"
+  },
+  "transitions": [
+    {
+      "index": 0,
+      "event_index": -1,
+      "virtual_time": "2026-09-14T20:00:56.407191+02:00",
+      "cause": "init",
+      "prev_state": "",
+      "new_state": "ready",
+      "reason": "initial state",
+      "last_event_type": "",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 1,
+      "event_index": 74,
+      "virtual_time": "2026-09-14T20:00:59.662971+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "user_message",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 2,
+      "event_index": 440,
+      "virtual_time": "2026-09-14T20:01:50.569616+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "…nana\nbanana\nbanana\nbanana\nbanana\nbanana\nbanana\nbanana\nbanana\nbanana\nbanana\nba…"
+    }
+  ],
+  "sessions": [
+    {
+      "session_id": "01a0a114-48c8-7753-9a58-2a4a6e293a7a",
+      "adapter": "muse",
+      "first_seen": "2026-09-14T20:00:56.379227+02:00",
+      "last_seen": "2026-09-14T20:01:54.227382+02:00",
+      "duration_ms": 57848,
+      "event_count": 888,
+      "state_changes": 3,
+      "final_state": "ready",
+      "pid": 28985,
+      "pid_discovery_lag_ms": 209,
+      "debounce_coalesced_events": 437,
+      "state_durations_ms": {
+        "ready": 6965,
+        "working": 50878
+      }
+    },
+    {
+      "session_id": "proc-28985",
+      "adapter": "muse",
+      "first_seen": "2026-09-14T20:00:57.036477+02:00",
+      "last_seen": "2026-09-14T20:01:00.167518+02:00",
+      "duration_ms": 3131,
+      "event_count": 5,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 28985,
+      "pid_discovery_lag_ms": 35,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 3096
+      }
+    },
+    {
+      "session_id": "e98075d0-9d4a-40bd-9e31-cb6e272d3c8a",
+      "adapter": "muse",
+      "parent_session_id": "01a0a114-48c8-7753-9a58-2a4a6e293a7a",
+      "first_seen": "2026-09-14T20:01:05.957258+02:00",
+      "last_seen": "2026-09-14T20:01:15.883567+02:00",
+      "duration_ms": 9926,
+      "event_count": 99,
+      "state_changes": 2,
+      "final_state": "ready",
+      "pid": 28985,
+      "pid_discovery_lag_ms": 239,
+      "debounce_coalesced_events": 45,
+      "state_durations_ms": {
+        "ready": 3067,
+        "working": 6850
+      }
+    },
+    {
+      "session_id": "43066b08-f2c8-490a-ace9-4599f9f2bf9d",
+      "adapter": "muse",
+      "parent_session_id": "01a0a114-48c8-7753-9a58-2a4a6e293a7a",
+      "first_seen": "2026-09-14T20:01:06.019357+02:00",
+      "last_seen": "2026-09-14T20:01:45.883262+02:00",
+      "duration_ms": 39863,
+      "event_count": 124,
+      "state_changes": 2,
+      "final_state": "ready",
+      "pid": 28985,
+      "pid_discovery_lag_ms": 242,
+      "debounce_coalesced_events": 57,
+      "state_durations_ms": {
+        "ready": 13690,
+        "working": 26166
+      }
+    },
+    {
+      "session_id": "0d7faeea-2cd8-4d4f-8500-681c0ec31e5e",
+      "adapter": "muse",
+      "parent_session_id": "01a0a114-48c8-7753-9a58-2a4a6e293a7a",
+      "first_seen": "2026-09-14T20:01:44.43296+02:00",
+      "last_seen": "2026-09-14T20:01:50.609206+02:00",
+      "duration_ms": 6176,
+      "event_count": 99,
+      "state_changes": 2,
+      "final_state": "ready",
+      "pid": 28985,
+      "pid_discovery_lag_ms": 219,
+      "debounce_coalesced_events": 45,
+      "state_durations_ms": {
+        "ready": 1378,
+        "working": 4788
+      }
+    },
+    {
+      "session_id": "0d03c586-afdf-414c-b2be-762984328c00",
+      "adapter": "muse",
+      "parent_session_id": "01a0a114-48c8-7753-9a58-2a4a6e293a7a",
+      "first_seen": "2026-09-14T20:01:44.495936+02:00",
+      "last_seen": "2026-09-14T20:01:54.407823+02:00",
+      "duration_ms": 9911,
+      "event_count": 116,
+      "state_changes": 2,
+      "final_state": "ready",
+      "pid": 28985,
+      "pid_discovery_lag_ms": 254,
+      "debounce_coalesced_events": 53,
+      "state_durations_ms": {
+        "ready": 3931,
+        "working": 5973
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 2,
+    "replayed_transition_count": 2,
+    "ordered_matches": 2,
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ]
+  }
+}
