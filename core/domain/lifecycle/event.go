@@ -4,7 +4,10 @@
 // behavior, and parent-child linking.
 package lifecycle
 
-import "time"
+import (
+	"slices"
+	"time"
+)
 
 // Kind enumerates all recordable lifecycle signals.
 type Kind string
@@ -99,6 +102,53 @@ const (
 	// adapter. Same visible outcome, opposite investigation.
 	KindHookHoldReleased Kind = "hook_hold_released"
 )
+
+// canonicalKinds is every Kind declared above, in declaration order.
+//
+// Written once, next to the constants, for the same reason
+// session.CanonicalStates() exists: a hand-retyped vocabulary is complete when
+// written and silently stale one constant later. Derive from it rather than
+// spelling the values out again.
+//
+// Keep in sync by construction: TestCanonicalKindsCoversEveryDeclaredKind
+// parses this file's own const block and fails when a Kind is declared but
+// missing here.
+var canonicalKinds = []Kind{
+	KindTranscriptNew,
+	KindTranscriptActivity,
+	KindTranscriptRemoved,
+	KindPIDDiscovered,
+	KindProcessSpawned,
+	KindProcessExited,
+	KindFileEvent,
+	KindStateTransition,
+	KindParentLinked,
+	KindDebounceCoalesced,
+	KindDebounceTerminal,
+	KindHookReceived,
+	KindPreSessionCreated,
+	KindPreSessionRemoved,
+	KindTaskDelta,
+	KindUIDetected,
+	KindCacheBloatDetected,
+	KindHoldExpired,
+	KindHookChannelSilent,
+	KindHookChannelRecovered,
+	KindHookHoldReleased,
+}
+
+// CanonicalKinds returns every recordable lifecycle event kind.
+func CanonicalKinds() []Kind { return slices.Clone(canonicalKinds) }
+
+// IsCanonicalKind reports whether k is a kind the daemon can actually record.
+//
+// Its first caller is the onboarding factory's invariant DSL, where
+// "no <kind> for <noun>" naming a kind that does not exist is trivially
+// satisfied and therefore silent coverage: it can never fail, so it reads as
+// an assertion while asserting nothing. One such string was found committed
+// (aider/2-13_turn-end-terminal-text, "no tool_use for …"; tool_use is a
+// parser-internal EventType, never an events.jsonl kind).
+func IsCanonicalKind(k string) bool { return slices.Contains(canonicalKinds, Kind(k)) }
 
 // Event is a single recorded lifecycle signal. The Kind field discriminates
 // which optional fields are populated. All events carry a monotonic sequence
