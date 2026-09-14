@@ -200,6 +200,7 @@
       "maturity": "alpha",
       "capabilities": {
         "architect_editor": "absent",
+        "burndown_progression": "untraced",
         "cloud_agent": "absent",
         "provider_failover": "absent"
       }
