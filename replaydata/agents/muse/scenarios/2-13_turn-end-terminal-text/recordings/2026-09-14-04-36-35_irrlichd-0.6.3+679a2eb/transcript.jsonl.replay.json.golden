@@ -10,13 +10,13 @@
   "summary": {
     "total_events": 129,
     "consumed_events": 129,
-    "total_transitions": 3,
+    "total_transitions": 4,
     "first_event_time": "2026-09-14T04:36:35.766616+02:00",
     "last_event_time": "2026-09-14T04:36:55.072538+02:00",
     "wall_clock_session_duration": 19305922000,
     "state_durations": {
-      "ready": 4447494000,
-      "working": 14858428000
+      "error": 14858428000,
+      "ready": 4447494000
     },
     "flicker_count": 0,
     "flickers_by_category": {},
@@ -56,10 +56,24 @@
     },
     {
       "index": 2,
+      "event_index": 65,
+      "virtual_time": "2026-09-14T04:36:40.21411+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "error",
+      "reason": "session error → error",
+      "last_event_type": "user_message",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 3,
       "event_index": 128,
       "virtual_time": "2026-09-14T04:36:55.072538+02:00",
       "cause": "debounce_coalesce",
-      "prev_state": "working",
+      "prev_state": "error",
       "new_state": "ready",
       "reason": "agent finished turn → ready",
       "last_event_type": "turn_done",
@@ -144,7 +158,7 @@
   "extended_check": {
     "sidecar_path": "",
     "recorded_transition_count": 1,
-    "replayed_transition_count": 2,
+    "replayed_transition_count": 3,
     "ordered_matches": 0,
     "ordered_mismatches": [
       {
@@ -156,18 +170,29 @@
       {
         "index": 1,
         "kind": "extra_in_replay",
-        "replayed": "working→ready"
+        "replayed": "working→error"
+      },
+      {
+        "index": 2,
+        "kind": "extra_in_replay",
+        "replayed": "error→ready"
       }
     ],
     "recorded_unique_kinds": [
       "working→ready"
     ],
     "replayed_unique_kinds": [
+      "error→ready",
       "ready→working",
+      "working→error"
+    ],
+    "missing_kinds": [
       "working→ready"
     ],
     "extra_kinds": [
-      "ready→working"
+      "error→ready",
+      "ready→working",
+      "working→error"
     ]
   }
 }

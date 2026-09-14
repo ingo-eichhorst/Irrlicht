@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"irrlicht/core/pkg/tailer"
 )
@@ -171,6 +172,93 @@ func TestParseLine_RunTerminal_Cancelled_NoErrorNoInterruptFlag(t *testing.T) {
 	}
 }
 
+// --- kind:"task" / event.kind:"status" / details.phase:"retry_scheduled" ---
+
+// retryScheduledLine builds a kind:"task" retry_scheduled record in the shape
+// a real muse provider retry emits (live-confirmed:
+// ~/.local/share/muse/sessions/2026/09/13/01a09c47-506a-7763-b82a-9ab89a9e195a/session.jsonl,
+// task_id 01a09c50-27eb-7e83-ac0e-d19d69bdade4, and 86 similar records across
+// the corpus).
+func retryScheduledLine(t *testing.T, extraFacetFields string) map[string]any {
+	t.Helper()
+	return line(t, `{"payload_type":"runtime.session","payload":{"kind":"task",
+		"run_id":"r1","task_id":"task_1","event":{"kind":"status","task_id":"task_1",
+		"message":"retrying meta model stream in 5000ms (attempt 2/10)",
+		"details":{"phase":"retry_scheduled","facets":[
+		{"kind":"external_attempt","system":"meta","operation":"model.response",
+		"attempt":1,"next_attempt":2,"max_attempts":10,"retry_delay_ms":5000,
+		"error_kind":"rate_limited","http_status":429`+extraFacetFields+`},
+		{"kind":"producer","detail":{"kind":"provider","provider":"meta"}}
+		]}}}}`)
+}
+
+func TestParseLine_TaskStatus_RetryScheduled_SetsSessionErrorRetrying(t *testing.T) {
+	ev := (&Parser{}).ParseLine(retryScheduledLine(t, ""))
+	if !ev.Skip {
+		t.Error("expected Skip=true (bookkeeping, folded via applySkippedEvent)")
+	}
+	if ev.SessionError == nil {
+		t.Fatal("expected SessionError")
+	}
+	se := ev.SessionError
+	if se.Phase != tailer.ErrorPhaseRetrying {
+		t.Errorf("Phase = %q, want retrying", se.Phase)
+	}
+	if se.Class != "rate_limited" {
+		t.Errorf("Class = %q, want rate_limited", se.Class)
+	}
+	if se.HTTPStatus == nil || *se.HTTPStatus != 429 {
+		t.Errorf("HTTPStatus = %v, want 429", se.HTTPStatus)
+	}
+	if se.Attempt == nil || *se.Attempt != 1 {
+		t.Errorf("Attempt = %v, want 1", se.Attempt)
+	}
+	if se.MaxAttempts == nil || *se.MaxAttempts != 10 {
+		t.Errorf("MaxAttempts = %v, want 10", se.MaxAttempts)
+	}
+	if se.RetryIn == nil || *se.RetryIn != 5*time.Second {
+		t.Errorf("RetryIn = %v, want 5s", se.RetryIn)
+	}
+	if !se.ClearedByTurnBoundary() {
+		t.Error("ErrorPhaseRetrying must clear on the next turn boundary")
+	}
+}
+
+func TestParseLine_TaskStatus_RetryScheduled_NoHTTPStatus_NilNotZero(t *testing.T) {
+	// A "transport"/"decode" error_kind genuinely carries no http_status in
+	// the real corpus — OptInt must read that as nil, not a fabricated 0.
+	ev := (&Parser{}).ParseLine(line(t, `{"payload_type":"runtime.session","payload":{"kind":"task",
+		"run_id":"r1","task_id":"task_1","event":{"kind":"status","task_id":"task_1",
+		"message":"retrying meta model stream in 5000ms (attempt 2/10)",
+		"details":{"phase":"retry_scheduled","facets":[
+		{"kind":"external_attempt","system":"meta","operation":"model.response",
+		"attempt":1,"next_attempt":2,"max_attempts":10,"retry_delay_ms":5000,
+		"error_kind":"transport"}
+		]}}}}`))
+	if ev.SessionError == nil {
+		t.Fatal("expected SessionError")
+	}
+	if ev.SessionError.HTTPStatus != nil {
+		t.Errorf("HTTPStatus = %v, want nil for a transport error_kind", ev.SessionError.HTTPStatus)
+	}
+}
+
+func TestParseLine_TaskStatus_OtherPhases_Skipped(t *testing.T) {
+	for _, phase := range []string{"opening_stream", "stream_succeeded"} {
+		t.Run(phase, func(t *testing.T) {
+			ev := (&Parser{}).ParseLine(line(t, `{"payload_type":"runtime.session","payload":{"kind":"task",
+				"run_id":"r1","task_id":"task_1","event":{"kind":"status","task_id":"task_1",
+				"details":{"phase":"`+phase+`","facets":[{"kind":"external_attempt","attempt":1,"max_attempts":10}]}}}}`))
+			if !ev.Skip {
+				t.Error("expected Skip=true")
+			}
+			if ev.SessionError != nil {
+				t.Errorf("SessionError = %+v, want nil", ev.SessionError)
+			}
+		})
+	}
+}
+
 // --- kind:"run" / event.kind:"model_completed" (token accounting) ---
 
 func TestParseLine_ModelCompleted_NetsCacheReadFromInput(t *testing.T) {
@@ -279,6 +367,137 @@ func TestParseLine_AssistantMessageCommitted_EmptyTextNoWaitingCue(t *testing.T)
 	}
 }
 
+// Marker early in a long message must survive — AssistantText keeps only the
+// last 200 runes (issue #558 contract, mirrored from codex/aider/opencode/pi).
+func TestParseLine_AssistantMessageCommitted_TaskEstimate_SurvivesTruncation(t *testing.T) {
+	long := `<!-- {"marker":"irrlicht-eta","total_rounds":6,"completed_rounds":2} --> `
+	for i := 0; i < 50; i++ {
+		long += "filler prose "
+	}
+	raw, err := json.Marshal(map[string]any{
+		"payload_type": "runtime.session",
+		"payload": map[string]any{
+			"kind":   "run",
+			"run_id": "r1",
+			"event": map[string]any{
+				"kind": "assistant_message_committed",
+				"text": long,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := (&Parser{}).ParseLine(line(t, string(raw)))
+	if ev.TaskEstimate == nil {
+		t.Fatal("expected TaskEstimate from full-text scan")
+	}
+	if ev.TaskEstimate.TotalRounds != 6 || ev.TaskEstimate.CompletedRounds != 2 {
+		t.Errorf("rounds = %d/%d, want 2/6", ev.TaskEstimate.CompletedRounds, ev.TaskEstimate.TotalRounds)
+	}
+}
+
+// --- kind:"run" / event.kind:"todo_snapshot_updated" ---
+
+// todoSnapshotLine builds a todo_snapshot_updated record in the shape a real
+// muse write_todos call emits (live-confirmed:
+// ~/.local/share/muse/sessions/2026/09/13/01a09c47-506a-7763-b82a-9ab89a9e195a/session.jsonl,
+// revisions 1-4).
+func todoSnapshotLine(t *testing.T, revision int, items []map[string]any) map[string]any {
+	t.Helper()
+	its := make([]any, 0, len(items))
+	for _, it := range items {
+		its = append(its, it)
+	}
+	raw, err := json.Marshal(map[string]any{
+		"payload_type": "runtime.session",
+		"payload": map[string]any{
+			"kind":   "run",
+			"run_id": "r1",
+			"event": map[string]any{
+				"kind":        "todo_snapshot_updated",
+				"revision":    revision,
+				"source_tool": "write_todos",
+				"items":       its,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return line(t, string(raw))
+}
+
+func TestParseLine_TodoSnapshotUpdated_FirstRevisionCreates(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(todoSnapshotLine(t, 1, []map[string]any{
+		{"text": "Task A", "status": "in_progress"},
+		{"text": "Task B", "status": "pending"},
+		{"text": "Task C", "status": "pending"},
+	}))
+	if ev == nil || ev.Skip {
+		t.Fatal("expected non-skipped event")
+	}
+	if len(ev.TaskDeltas) != 4 {
+		t.Fatalf("TaskDeltas len = %d, want 4 (3 creates + 1 update for Task A's in_progress)", len(ev.TaskDeltas))
+	}
+	if ev.TaskDeltas[0] != (tailer.TaskDelta{Op: tailer.TaskOpCreate, Subject: "Task A"}) {
+		t.Errorf("deltas[0] = %+v, want create Task A", ev.TaskDeltas[0])
+	}
+	if ev.TaskDeltas[1] != (tailer.TaskDelta{Op: tailer.TaskOpUpdate, ID: "1", Status: "in_progress"}) {
+		t.Errorf("deltas[1] = %+v, want update id=1 status=in_progress", ev.TaskDeltas[1])
+	}
+	if ev.TaskDeltas[2] != (tailer.TaskDelta{Op: tailer.TaskOpCreate, Subject: "Task B"}) {
+		t.Errorf("deltas[2] = %+v, want create Task B", ev.TaskDeltas[2])
+	}
+	if ev.TaskDeltas[3] != (tailer.TaskDelta{Op: tailer.TaskOpCreate, Subject: "Task C"}) {
+		t.Errorf("deltas[3] = %+v, want create Task C", ev.TaskDeltas[3])
+	}
+	if ev.TaskSnapshot == nil || len(*ev.TaskSnapshot) != 3 {
+		t.Fatalf("TaskSnapshot = %+v, want 3 entries", ev.TaskSnapshot)
+	}
+}
+
+func TestParseLine_TodoSnapshotUpdated_SecondRevisionWalksStatuses(t *testing.T) {
+	p := &Parser{}
+	p.ParseLine(todoSnapshotLine(t, 1, []map[string]any{
+		{"text": "Task A", "status": "in_progress"},
+		{"text": "Task B", "status": "pending"},
+	}))
+	ev := p.ParseLine(todoSnapshotLine(t, 2, []map[string]any{
+		{"text": "Task A", "status": "completed"},
+		{"text": "Task B", "status": "in_progress"},
+	}))
+	if ev == nil || ev.Skip {
+		t.Fatal("expected non-skipped event")
+	}
+	if len(ev.TaskDeltas) != 2 {
+		t.Fatalf("TaskDeltas len = %d, want 2 (Task A completed, Task B in_progress)", len(ev.TaskDeltas))
+	}
+	if ev.TaskDeltas[0] != (tailer.TaskDelta{Op: tailer.TaskOpUpdate, ID: "1", Status: "completed"}) {
+		t.Errorf("deltas[0] = %+v, want update id=1 status=completed", ev.TaskDeltas[0])
+	}
+	if ev.TaskDeltas[1] != (tailer.TaskDelta{Op: tailer.TaskOpUpdate, ID: "2", Status: "in_progress"}) {
+		t.Errorf("deltas[1] = %+v, want update id=2 status=in_progress", ev.TaskDeltas[1])
+	}
+}
+
+func TestParseLine_TodoSnapshotUpdated_EmptyItems_Skipped(t *testing.T) {
+	ev := (&Parser{}).ParseLine(todoSnapshotLine(t, 1, nil))
+	if !ev.Skip {
+		t.Error("expected Skip=true for an empty items list")
+	}
+}
+
+func TestParseLine_TodoSnapshotUpdated_NeverLooksLikeTurnDone(t *testing.T) {
+	ev := (&Parser{}).ParseLine(todoSnapshotLine(t, 1, []map[string]any{
+		{"text": "Task A", "status": "pending"},
+	}))
+	if ev.EventType == "turn_done" || ev.EventType == "assistant" || ev.EventType == "assistant_output" {
+		t.Errorf("EventType = %q must not match any session.SessionMetrics.IsAgentDone string", ev.EventType)
+	}
+}
+
 // --- kind:"run" / assistant_tool_calls_committed + tool_result_batch_committed ---
 
 func TestParseLine_ToolCall_OpenAndClose_PairByCallID(t *testing.T) {
@@ -329,6 +548,99 @@ func TestParseLine_ToolResult_UnrecognizedTextShape_NoErrorGuessed(t *testing.T)
 		"results":[{"tool_call_index":0,"tool_call_id":"call_1","text":"reminder decision recorded"}]}}}`))
 	if ev.IsError {
 		t.Error("plain, non-JSON result text must never be read as a failure")
+	}
+}
+
+// --- tool_batch.effect.terminal (task_completion.kind) / inbox_item_queued ---
+
+func TestParseLine_ToolBatchEffectTerminal_PendingCompletion_OpensBackgroundSpawn(t *testing.T) {
+	ev := (&Parser{}).ParseLine(line(t, `{"payload_type":"tool_batch.effect.terminal",
+		"payload":{"kind":"tool_batch_effect","run_id":"r1","record":{"kind":"terminal",
+		"effect_id":"e1","task_id":"task_1","call_id":"call_1",
+		"outcome":{"kind":"completed","task_completion":{"kind":"pending"},"output_ref_count":0}}}}`))
+	if ev.Skip {
+		t.Fatal("expected non-skipped event for a pending task_completion")
+	}
+	if len(ev.BackgroundSpawns) != 1 || ev.BackgroundSpawns[0].BashID != "task_1" {
+		t.Errorf("BackgroundSpawns = %+v, want one spawn for task_1", ev.BackgroundSpawns)
+	}
+	if ev.EventType == "turn_done" || ev.EventType == "assistant" || ev.EventType == "assistant_output" {
+		t.Errorf("EventType = %q must not match any IsAgentDone string", ev.EventType)
+	}
+}
+
+func TestParseLine_ToolBatchEffectTerminal_OrdinaryClose_Skipped(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{"terminal", `"outcome":{"kind":"completed","task_completion":{"kind":"terminal","terminal":{"kind":"completed"}},"output_ref_count":0}`},
+		{"complete", `"outcome":{"kind":"completed","task_completion":{"kind":"complete"},"output_ref_count":0}`},
+		{"cancelled_no_task_completion", `"outcome":{"kind":"cancelled"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ev := (&Parser{}).ParseLine(line(t, `{"payload_type":"tool_batch.effect.terminal",
+				"payload":{"kind":"tool_batch_effect","run_id":"r1","record":{"kind":"terminal",
+				"effect_id":"e1","task_id":"task_1","call_id":"call_1",`+tc.body+`}}}`))
+			if !ev.Skip {
+				t.Error("expected Skip=true for a non-pending task_completion")
+			}
+			if len(ev.BackgroundSpawns) != 0 {
+				t.Errorf("BackgroundSpawns = %+v, want none", ev.BackgroundSpawns)
+			}
+		})
+	}
+}
+
+func TestParseLine_InboxItemQueued_BackgroundTaskTerminal_ClosesSpawn(t *testing.T) {
+	ev := (&Parser{}).ParseLine(line(t, `{"payload_type":"runtime.session","payload":{"kind":"run",
+		"run_id":"r1","event":{"kind":"inbox_item_queued","item_id":"i1",
+		"source":{"source":"background_task_terminal","task_id":"task_1",
+		"terminal_kind":"completed"}}}}`))
+	if !ev.Skip {
+		t.Error("expected Skip=true (bookkeeping, folded via applySkippedEvent)")
+	}
+	if !ev.OriginTaskNotification {
+		t.Error("expected OriginTaskNotification=true")
+	}
+	if len(ev.TerminatedBackgroundTaskIDs) != 1 || ev.TerminatedBackgroundTaskIDs[0] != "task_1" {
+		t.Errorf("TerminatedBackgroundTaskIDs = %v, want [task_1]", ev.TerminatedBackgroundTaskIDs)
+	}
+}
+
+func TestParseLine_InboxItemQueued_OtherSources_NoTermination(t *testing.T) {
+	for _, source := range []string{"subagent_result", "user_steer"} {
+		t.Run(source, func(t *testing.T) {
+			ev := (&Parser{}).ParseLine(line(t, `{"payload_type":"runtime.session","payload":{"kind":"run",
+				"run_id":"r1","event":{"kind":"inbox_item_queued","item_id":"i1",
+				"source":{"source":"`+source+`","task_id":"task_1"}}}}`))
+			if !ev.Skip {
+				t.Error("expected Skip=true")
+			}
+			if len(ev.TerminatedBackgroundTaskIDs) != 0 {
+				t.Errorf("TerminatedBackgroundTaskIDs = %v, want none", ev.TerminatedBackgroundTaskIDs)
+			}
+		})
+	}
+}
+
+// End-to-end: BackgroundProcessCount reaches SessionMetrics and clears on the
+// real corpus's own spawn/terminate pair (issue #1960's 3-3_background-process).
+func TestBackgroundProcess_SpawnThenTerminate_CountsThenClears(t *testing.T) {
+	// tailFixture writes each slice element as one physical JSONL line, so
+	// (unlike the line() helper used elsewhere in this file, which parses a
+	// single string as a whole document) these must be single-line JSON.
+	spawn := `{"payload_type":"tool_batch.effect.terminal","payload":{"kind":"tool_batch_effect","run_id":"r1","record":{"kind":"terminal","effect_id":"e1","task_id":"task_1","call_id":"call_1","outcome":{"kind":"completed","task_completion":{"kind":"pending"},"output_ref_count":0}}}}`
+	terminate := `{"payload_type":"runtime.session","payload":{"kind":"run","run_id":"r1","event":{"kind":"inbox_item_queued","item_id":"i1","source":{"source":"background_task_terminal","task_id":"task_1","terminal_kind":"completed"}}}}`
+
+	m := tailFixture(t, []string{spawn})
+	if m.BackgroundProcessCount != 1 {
+		t.Fatalf("BackgroundProcessCount after spawn = %d, want 1", m.BackgroundProcessCount)
+	}
+
+	m = tailFixture(t, []string{spawn, terminate})
+	if m.BackgroundProcessCount != 0 {
+		t.Fatalf("BackgroundProcessCount after terminate = %d, want 0", m.BackgroundProcessCount)
 	}
 }
 

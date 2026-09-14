@@ -73,6 +73,23 @@ import (
 // "cancelled" — see IsError below) and side_effect_intent's policy_decision
 // is not needed either: kind:"approval" already reports blocking directly.
 //
+// FOLLOW-UP (issue #1960's 3-3_background-process fix): the "pure
+// duplication, no additional signal" conclusion above was reached by scanning
+// the OUTER outcome.kind field only ("completed"/"cancelled") and is correct
+// for THAT field. It does not extend to outcome.task_completion.kind, a
+// DIFFERENT field nested one level deeper inside tool_batch.effect.terminal's
+// same record, which the scan above never examined. A corpus-wide scan (527
+// tool_batch.effect.terminal records under ~/.local/share/muse/sessions on
+// this machine) found task_completion.kind is "terminal" (399, ordinary
+// synchronous close) or "complete" (126, a simpler synchronous-close shape
+// some tool kinds use) in every case but one, where it is "pending" — the
+// tool call returned but its task_id keeps running as a detached background
+// process, muse's own equivalent of Claude Code's Bash tool_result "Command
+// running in background with ID: …" text. parseToolBatchEffectTerminal reads
+// ONLY this one nested field for exactly that "pending" signal — a narrow,
+// additive carve-out, not a re-wiring of the family this doc still argues
+// against above.
+//
 // # Waiting: kind:"approval" only, not approval_wait.effect.*
 //
 // approval_wait.effect.started/terminal pair 1:1 with kind:"approval"
@@ -120,6 +137,11 @@ import (
 // goal_usage_attribution Skip=true with no Contribution, so the two are never
 // both counted.
 type Parser struct {
+	// todos reconciles muse's write_todos snapshots (event.kind
+	// "todo_snapshot_updated") into task-progress deltas — the same
+	// full-snapshot-replace shape and reconciler opencode's todowrite and
+	// gemini-cli's write_todos already use. See parseTodoSnapshotUpdated.
+	todos tailer.TodoReconciler
 	// lastErrorClass is the error_class from the most recent
 	// run_fatal_error_classified event not yet consumed by a
 	// terminal:"failed" event in the SAME run. Verified live: a captured
@@ -147,12 +169,26 @@ const (
 	payloadTypeModelReconfigureCompleted = "runtime.model_reconfigure.completed"
 	payloadTypeSessionEnd                = "session.end"
 	payloadTypeCommandInvoked            = "command.invoked"
+	// payloadTypeToolBatchEffectTerminal is the ONLY tool_batch.effect.*
+	// family member this parser reads, and only for one nested field — see
+	// the package doc's FOLLOW-UP note and parseToolBatchEffectTerminal.
+	payloadTypeToolBatchEffectTerminal = "tool_batch.effect.terminal"
 )
 
 // payload.kind values carried under the "runtime.session" envelope.
 const (
 	sessionKindRun      = "run"
 	sessionKindApproval = "approval"
+	sessionKindTask     = "task"
+)
+
+// payload.event.kind / event.details.phase / facet.kind values read under
+// sessionKindTask — narrowly, for the provider-retry shape only. See
+// parseTaskEvent and parseTaskStatus.
+const (
+	taskEventStatus                = "status"
+	taskStatusPhaseRetryScheduled  = "retry_scheduled"
+	taskStatusFacetExternalAttempt = "external_attempt"
 )
 
 // payload.event.kind values under sessionKindRun.
@@ -165,7 +201,21 @@ const (
 	runEventAssistantToolCalls   = "assistant_tool_calls_committed"
 	runEventToolResultBatch      = "tool_result_batch_committed"
 	runEventFatalErrorClassified = "run_fatal_error_classified"
+	runEventTodoSnapshotUpdated  = "todo_snapshot_updated"
+	runEventInboxItemQueued      = "inbox_item_queued"
 )
+
+// task_completion.kind values nested inside
+// tool_batch.effect.terminal's payload.record.outcome (see
+// payloadTypeToolBatchEffectTerminal and parseToolBatchEffectTerminal).
+const taskCompletionPending = "pending"
+
+// event.source.source values on a kind:"run" event.kind:"inbox_item_queued"
+// record (see parseInboxItemQueued). Live-confirmed
+// (~/.local/share/muse/sessions, this machine): "subagent_result" and
+// "user_steer" also occur and are deliberately left unhandled — only a
+// background-task termination notice changes BackgroundProcessCount.
+const inboxSourceBackgroundTaskTerminal = "background_task_terminal"
 
 // payload.event.terminal values (only meaningful on runEventTerminal).
 const (
@@ -230,8 +280,10 @@ func (p *Parser) route(payloadType string, payload map[string]any, ev *tailer.Pa
 		// invocations in one real session produced no other payload_type).
 		// Bookkeeping, not a turn boundary.
 		ev.Skip = true
+	case payloadTypeToolBatchEffectTerminal:
+		parseToolBatchEffectTerminal(payload, ev)
 	default:
-		// subagent.control.*, tool_batch.effect.*, approval_wait.effect.*,
+		// subagent.control.*, tool_batch.effect.started, approval_wait.effect.*,
 		// runtime.session.task, runtime.retained_fact,
 		// runtime.command_intake.*, session.login.completed,
 		// session.opened.observed, session.startup_phases.observed,
@@ -239,10 +291,84 @@ func (p *Parser) route(payloadType string, payload map[string]any, ev *tailer.Pa
 		// session.name.changed, async.owner.attempt_admitted,
 		// reminder.cleanup_effect.*, and any payload_type a future muse
 		// release adds. See the package doc for why tool_batch.effect.* and
-		// approval_wait.effect.* are deliberately not used even though they
-		// exist.
+		// approval_wait.effect.* are deliberately not (otherwise) used even
+		// though they exist — payloadTypeToolBatchEffectTerminal above is the
+		// one narrow, documented exception.
 		ev.Skip = true
 	}
+}
+
+// parseToolBatchEffectTerminal reads ONLY
+// payload.record.outcome.task_completion.kind — see the package doc's
+// FOLLOW-UP note for why this single nested field is a narrow exception to
+// "tool_batch.effect.* is deliberately not used". A "pending" completion
+// means the tool call itself returned but payload.record.task_id keeps
+// running as a detached background process (muse's own equivalent of Claude
+// Code's Bash tool_result "Command running in background with ID: …" text);
+// every other value ("terminal", "complete", or absent on a cancelled
+// outcome — all three live-confirmed) is an ordinary synchronous close with
+// nothing more to extract here, since ToolUses/ToolResultIDs already come
+// from assistant_tool_calls_committed/tool_result_batch_committed.
+//
+// No output-file path exists in this shape, so the recorded BackgroundSpawn
+// carries only the task_id (BashID) — that's sufficient for
+// BackgroundProcessCount; see parseInboxItemQueued for why no lsof/PID
+// liveness probe is needed on top of it.
+//
+// EventType is set to a value distinct from every string
+// session.SessionMetrics.IsAgentDone treats as a turn boundary ("turn_done",
+// "assistant", "assistant_output") — this is mid-turn bookkeeping about a
+// tool call, never the turn itself ending, even when it happens to be the
+// last line a scan pass reads.
+func parseToolBatchEffectTerminal(payload map[string]any, ev *tailer.ParsedEvent) {
+	record, _ := payload["record"].(map[string]any)
+	outcome, _ := record["outcome"].(map[string]any)
+	taskCompletion, _ := outcome["task_completion"].(map[string]any)
+	if str(taskCompletion, "kind") != taskCompletionPending {
+		ev.Skip = true
+		return
+	}
+	taskID := str(record, "task_id")
+	if taskID == "" {
+		ev.Skip = true
+		return
+	}
+	ev.EventType = "background_task_pending"
+	ev.BackgroundSpawns = append(ev.BackgroundSpawns, tailer.BackgroundSpawn{BashID: taskID})
+}
+
+// parseInboxItemQueued reads ONLY event.source.source=="background_task_terminal"
+// notifications (see inboxSourceBackgroundTaskTerminal) — muse's own
+// definitive termination signal for a background bash task begun via
+// parseToolBatchEffectTerminal's "pending" case. Every other source
+// (live-confirmed in this corpus: "subagent_result", "user_steer") is
+// unrelated inbox bookkeeping and stays Skip=true, same as
+// inbox_item_drained/inbox_delivery_anomaly in the default arm above.
+//
+// Skip=true + OriginTaskNotification mirrors Claude Code's own
+// handleTaskNotification (claudecode/parser.go): the tailer's
+// applyBackgroundProcessTerminations (the Skip=true path) is what actually
+// drops the id from the open set, and OriginTaskNotification tells it that
+// this notification's arrival also starts the model's next inference turn —
+// matching muse's own on-disk ordering, where this inbox drain is what wakes
+// the run to process the completed background task (verified directly:
+// session 01a09c47-506a-7763-b82a-9ab89a9e195a/subagent/
+// 01a09c6d-9715-7113-b7f7-733681139140/session.jsonl, this inbox_item_queued
+// record precedes that run's next model_completed).
+func parseInboxItemQueued(event map[string]any, ev *tailer.ParsedEvent) {
+	source, _ := event["source"].(map[string]any)
+	if str(source, "source") != inboxSourceBackgroundTaskTerminal {
+		ev.Skip = true
+		return
+	}
+	taskID := str(source, "task_id")
+	if taskID == "" {
+		ev.Skip = true
+		return
+	}
+	ev.Skip = true
+	ev.OriginTaskNotification = true
+	ev.TerminatedBackgroundTaskIDs = append(ev.TerminatedBackgroundTaskIDs, taskID)
 }
 
 // parseSessionEnvelope dispatches on payload.kind for the "runtime.session"
@@ -253,14 +379,111 @@ func (p *Parser) parseSessionEnvelope(payload map[string]any, ev *tailer.ParsedE
 		p.parseRunEvent(payload, ev)
 	case sessionKindApproval:
 		p.parseApprovalEvent(payload, ev)
+	case sessionKindTask:
+		parseTaskEvent(payload, ev)
 	default:
-		// kind:"task" (proposed/accepted/scheduled/started/side_effect_intent/
-		// status/output/completed/rejected/cancelled/timed_out/tool_delta/
-		// tool_output_ref) — see the package doc for why this parser reads
-		// tool calls off assistant_tool_calls_committed/
-		// tool_result_batch_committed instead. Also covers kind
-		// "agent_tree_initialized", any future kind.
+		// kind "agent_tree_initialized", any future kind.
 		ev.Skip = true
+	}
+}
+
+// parseTaskEvent dispatches on payload.event.kind for kind:"task" —
+// narrowly, for exactly one shape: a provider-retry status (see
+// parseTaskStatus). Every other kind:"task" event (proposed/accepted/
+// scheduled/started/side_effect_intent/output/completed/rejected/cancelled/
+// timed_out/tool_delta/tool_output_ref, and any "status" event whose phase
+// isn't retry_scheduled) stays Skip=true — see the package doc for why this
+// parser otherwise reads tool calls off assistant_tool_calls_committed/
+// tool_result_batch_committed instead of kind:"task".
+// TestParseLine_TaskKindEvents_Skipped locks this for a side_effect_intent
+// example; that lock is unaffected, since its fixture's event.kind is
+// "side_effect_intent", never "status".
+func parseTaskEvent(payload map[string]any, ev *tailer.ParsedEvent) {
+	event, _ := payload["event"].(map[string]any)
+	if str(event, "kind") != taskEventStatus {
+		ev.Skip = true
+		return
+	}
+	parseTaskStatus(event, ev)
+}
+
+// parseTaskStatus reads ONLY details.phase=="retry_scheduled" — muse's
+// provider-retry bookkeeping (issue #1960's 2-22_provider-overloaded-retry
+// fix). Every other status phase (live-confirmed: "opening_stream",
+// "stream_succeeded") stays Skip=true.
+//
+// Live-confirmed (~/.local/share/muse/sessions, this machine: 86
+// retry_scheduled status events across the corpus — rate_limited/429 (68),
+// transport (9, no http_status), server/503 (5), decode (4, no http_status),
+// server/504 (2) — every one carrying a details.facets[] entry with
+// kind:"external_attempt"), so this generalizes across transient-failure
+// kinds, not just 429. That facet's fields map onto tailer.SessionError:
+//
+//	attempt        -> Attempt
+//	max_attempts   -> MaxAttempts
+//	retry_delay_ms -> RetryIn (OptDurationFromMillis)
+//	http_status    -> HTTPStatus (OptInt — absent for transport/decode kinds)
+//	error_kind     -> Class
+//
+// tailer.OptInt/OptDurationFromMillis (not a bare int/time.Duration read) is
+// the same choice claudecode's apiErrorFromSystemEvent makes for the
+// identical shape: absence and zero are different facts here (a
+// "transport"/"decode" error_kind genuinely carries no http_status).
+//
+// Phase is ErrorPhaseRetrying, deliberately — NOT ErrorPhaseUnknown, the
+// choice parseRunTerminal's terminal:"failed" case makes for muse's OTHER
+// error shape. The two are genuinely different: terminal:"failed" IS the run
+// ending with no further attempt promised, so there is nothing left for
+// ErrorPhaseRetrying's "clears on the next turn_done" exit to guard.
+// retry_scheduled is the opposite — explicitly non-terminal, with the SAME
+// task's own next status going on to "opening_stream" for the next attempt,
+// then either "stream_succeeded" or another "retry_scheduled" (verified
+// directly against the real task lifecycle this comment cites below) — so
+// tailer.SessionError.ClearedByTurnBoundary() is correct: the run's own
+// eventual terminal event, once the retries resolve, is a genuine recovery
+// signal. See core/domain/session/session_error.go's ErrorPhaseRetrying doc
+// for why that specific phase is what makes this scenario end green rather
+// than sitting red forever. Example lifecycle (session
+// 01a09c47-506a-7763-b82a-9ab89a9e195a, task_id
+// 01a09c50-27eb-7e83-ac0e-d19d69bdade4): proposed(task_kind:
+// "model.meta.response") -> ... -> started -> status(opening_stream,
+// attempt 1) -> status(retry_scheduled, attempt 1->2, rate_limited/429) ->
+// status(opening_stream, attempt 2) -> status(stream_succeeded) ->
+// completed.
+func parseTaskStatus(event map[string]any, ev *tailer.ParsedEvent) {
+	details, _ := event["details"].(map[string]any)
+	if str(details, "phase") != taskStatusPhaseRetryScheduled {
+		ev.Skip = true
+		return
+	}
+	facets, _ := details["facets"].([]any)
+	var attempt map[string]any
+	for _, f := range facets {
+		if facet, ok := f.(map[string]any); ok && str(facet, "kind") == taskStatusFacetExternalAttempt {
+			attempt = facet
+			break
+		}
+	}
+	if attempt == nil {
+		ev.Skip = true
+		return
+	}
+	// Skip=true: bookkeeping the tailer folds through applySkippedEvent
+	// (applyMetadata -> applySessionError) regardless — the same routing
+	// claudecode's api_error retry ladder uses (sessionerror.go's own doc:
+	// "It is Skip=true ... so it reaches the tailer through applySkippedEvent
+	// rather than processParsedEvent"). applySkippedEvent's own explicit
+	// `if parsed.SessionError != nil { substantive = true }` check is what
+	// keeps this pass from reading as NoSubstantiveActivity.
+	ev.Skip = true
+	ev.SessionError = &tailer.SessionError{
+		Phase:       tailer.ErrorPhaseRetrying,
+		Class:       str(attempt, "error_kind"),
+		Message:     strings.TrimSpace(str(event, "message")),
+		HTTPStatus:  tailer.OptInt(attempt, "http_status"),
+		Attempt:     tailer.OptInt(attempt, "attempt"),
+		MaxAttempts: tailer.OptInt(attempt, "max_attempts"),
+		RetryIn:     tailer.OptDurationFromMillis(attempt, "retry_delay_ms"),
 	}
 }
 
@@ -285,6 +508,10 @@ func (p *Parser) parseRunEvent(payload map[string]any, ev *tailer.ParsedEvent) {
 		parseToolResultBatchCommitted(event, ev)
 	case runEventFatalErrorClassified:
 		p.parseRunFatalErrorClassified(event, ev)
+	case runEventTodoSnapshotUpdated:
+		p.parseTodoSnapshotUpdated(event, ev)
+	case runEventInboxItemQueued:
+		parseInboxItemQueued(event, ev)
 	default:
 		// context_block_diagnostic, provider_request_options_configured,
 		// model_input_trace_recorded, model_response_created,
@@ -292,8 +519,8 @@ func (p *Parser) parseRunEvent(payload map[string]any, ev *tailer.ParsedEvent) {
 		// reasoning_summary_committed, model_request_configured,
 		// memory_reminder_child_session_linked, resource_usage_sampled,
 		// reminder_proposal, reminder_reconciler_outcome,
-		// reminder_installed, task_stream_linked, todo_snapshot_updated,
-		// inbox_item_queued/drained, inbox_delivery_anomaly,
+		// reminder_installed, task_stream_linked,
+		// inbox_item_drained, inbox_delivery_anomaly,
 		// skill_read_observed, skill_reminder_decision — high-volume
 		// internal bookkeeping this stage has no use for. Format-spec §11
 		// confirms context_block_diagnostic in particular is prompt-assembly
@@ -451,6 +678,12 @@ func parseAssistantMessageCommitted(event map[string]any, ev *tailer.ParsedEvent
 	if strings.TrimSpace(text) == "" {
 		return
 	}
+	// Scan the FULL text for the task-estimate marker (issue #558) before the
+	// truncation below drops all but the last 200 runes — the same ordering
+	// every other adapter's parser uses (aider/codex/opencode/pi).
+	if est := tailer.ScanTaskEstimate(text, ev.Timestamp); est != nil {
+		ev.TaskEstimate = est
+	}
 	ev.AssistantText = tailer.TruncateAssistantText(text)
 	// Scan the FULL text, not the truncated display tail — a question
 	// sitting before the trailing 200 runes would otherwise settle the turn
@@ -540,6 +773,49 @@ func resultTextReportsNonZeroExit(text string) bool {
 func (p *Parser) parseRunFatalErrorClassified(event map[string]any, ev *tailer.ParsedEvent) {
 	ev.Skip = true
 	p.lastErrorClass = str(event, "error_class")
+}
+
+// parseTodoSnapshotUpdated folds muse's write_todos tool into
+// TaskCreate/TaskUpdate deltas via the shared tailer.TodoReconciler — the
+// same mechanism opencode's appendTodowriteDeltas and gemini-cli's
+// appendWriteTodosDeltas use for their own full-snapshot-replace todo tools
+// (todo_reconciler.go's own doc names all three as the intended callers).
+//
+// event.items[] is the whole current list re-sent every call — verified live
+// (~/.local/share/muse/sessions, session
+// 01a09c47-506a-7763-b82a-9ab89a9e195a/session.jsonl, 4 revisions): each item
+// is {"text":..., "status":...} with no stable id, so items are keyed by
+// their literal text, same as opencode's `content` key. status is spelled
+// "pending"/"in_progress"/"completed" in every one of those revisions —
+// exactly tailer.TaskStatusPending/InProgress/Completed's own vocabulary —
+// so it is passed straight through with no remapping.
+//
+// EventType is deliberately a value that matches none of the strings
+// session.SessionMetrics.IsAgentDone treats as a turn boundary ("turn_done",
+// "assistant", "assistant_output"): muse's own turn boundary is exclusively
+// kind:"run" event.kind:"terminal" (parseRunTerminal), and this is pure
+// mid-turn task-list bookkeeping that must never itself look like the turn
+// ending, even when it happens to be the last line a scan pass reads.
+func (p *Parser) parseTodoSnapshotUpdated(event map[string]any, ev *tailer.ParsedEvent) {
+	rawItems, _ := event["items"].([]any)
+	todos := make([]tailer.Todo, 0, len(rawItems))
+	for _, ri := range rawItems {
+		item, ok := ri.(map[string]any)
+		if !ok {
+			continue
+		}
+		text := str(item, "text")
+		if text == "" {
+			continue
+		}
+		todos = append(todos, tailer.Todo{Key: text, Status: str(item, "status")})
+	}
+	if len(todos) == 0 {
+		ev.Skip = true
+		return
+	}
+	ev.EventType = "task_snapshot"
+	p.todos.Reconcile(todos, ev)
 }
 
 // parseApprovalEvent dispatches on payload.event.kind for kind:"approval"
