@@ -181,7 +181,7 @@ SES_OWNED=()
 # DRIVE_SLASH_REQUIRES_STEP_TYPE=true if muse is headless-first (a bare
 # send "/cmd" stores literal text instead of reaching the REPL).
 # shellcheck disable=SC2034  # scraped from this file's SOURCE by tools/onboarding-factory/scripts/lib/recipe-lint.sh:97 (sed), never expanded in shell
-DRIVE_ELICITS="send slash wait_turn sleep exit_clean restart sigkill start_session session keys"
+DRIVE_ELICITS="send slash wait_turn sleep exit_clean restart sigkill start_session session keys reset_session"
 # shellcheck disable=SC2034  # scraped from this file's SOURCE by tools/onboarding-factory/scripts/lib/recipe-lint.sh:113 (sed), never expanded in shell
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 RUN_CWD="${IRRLICHT_ONBOARD_CWD:-$STAGING/cwd}"
@@ -595,6 +595,73 @@ step_restart() {
   spawn_muse_repl
 }
 
+# step_reset_session (#1960 SEAM 3 — ported from codex's swap_after_slash,
+# driver-interactive.sh:658-683, NOT claudecode's step_reset_session: muse
+# already sources the same shared _lib/drive/slots.sh slot model codex does
+# — the template's own header names codex/gemini-cli as the reference for
+# every slot-model multi-session arm — so codex's "retire the old slot,
+# allocate a NEW one reusing the same tmux/process" shape ports directly,
+# where claudecode's hand-rolled slug-dir rescan does not).
+#
+# Empirically confirmed BEFORE writing this (throwaway tmux dir, muse 1.2.1,
+# 2026-09-15 — not inferred from the assessment's own probe): `/clear` mints
+# a genuinely new session DIRECTORY (new UUIDv7) under the SAME muse-bin PID,
+# and the old directory's session.jsonl gets a real session.end{exit_reason:
+# clean} appended — never rewritten in place, never truncated. So unlike
+# codex's `/new` (LAZY — new rollout materializes only on the next user
+# message), muse's rotation is EAGER, the same shape as codex's own `/fork`:
+# the new session.jsonl exists within ~1-2s of the keystroke, before this
+# function even returns. That still doesn't need an inline poll here —
+# resolve_transcript's marker-based rediscovery (deferred to the NEXT
+# wait_turn, exactly as it is for a first launch) finds it regardless of
+# exactly when it appeared, because the recipe's very next step is always
+# another send + wait_turn, which forces at least one more write to the new
+# file (refreshing its mtime well past the new slot's marker) before
+# resolve_transcript's `find -newer $MARKER` is ever evaluated.
+#
+# $1 is the in-REPL command to send, default "/clear" (1-5_session-reset's
+# recipe omits `text` entirely; 1-6_checkpoint-rewind's passes "/rewind").
+# "/rewind" is a three-Enter flow (submit -> accept the picker's pre-selected
+# most-recent candidate -> confirm the "Rewind conversation" dialog) that
+# needs NO arrow-key navigation — live-confirmed by 1-6's own assessment
+# probes (both cited in its metadata.json) and not re-litigated here; "/clear"
+# and "/new" are a single submit with no follow-on picker, and sending two
+# extra bare Enters into "/clear"'s freshly-emptied composer would submit a
+# spurious blank user turn — so the extra Enters are gated strictly to
+# "/rewind", never sent unconditionally.
+step_reset_session() { # [slash-text, default "/clear"]
+  local slash="${1:-/clear}"
+  resolve_transcript || true
+  local old_tmux="$SESSION"
+  local old_cwd="${SES_CWD[$ACTIVE]}"
+  save_active
+  echo "[driver] reset_session ($slash): recorded old session uuid=$UUID" >&2
+  # shellcheck disable=SC2034  # SES_OWNED write-only since #1825 (teardown gates on session-name PRESENCE, not this flag) — set for parity with restart/start_session's own retiring-slot convention
+  SES_OWNED[$ACTIVE]=0
+
+  tmux send-keys -t "$old_tmux" -l -- "$slash"
+  sleep 0.3
+  tmux send-keys -t "$old_tmux" Enter
+
+  if [[ "$slash" == "/rewind" ]]; then
+    sleep 0.5
+    tmux send-keys -t "$old_tmux" Enter   # accept the picker's default (most-recent) candidate
+    sleep 0.5
+    tmux send-keys -t "$old_tmux" Enter   # confirm the "Rewind conversation" dialog's default option
+    echo "[driver] reset_session ($slash): accepted picker default + confirm dialog" >&2
+  fi
+  echo "[driver] reset_session ($slash): sent to $old_tmux" >&2
+
+  # Settle before minting the new slot's marker (same-second mtime hazard as
+  # codex's swap_after_slash — sleep first so the marker sorts strictly after
+  # whatever the OLD session's own /clear|/rewind bookkeeping just wrote).
+  sleep 2
+  alloc_slot "$old_tmux" "$old_cwd"
+  SES_OWNED[$ACTIVE]=1
+  echo "[driver] reset_session ($slash): new slot #${ACTIVE}, marker bumped, awaiting new session" >&2
+  sleep 1
+}
+
 # muse_writer_pid <path> -> the PID holding <path> open for WRITING (FD access
 # mode 'w' or 'u'), or empty. Mirrors core/adapters/inbound/agents/
 # processlifecycle/process_darwin.go's writerPIDFromLsof exactly: reads the
@@ -728,7 +795,7 @@ while IFS= read -r step; do
     sleep)           sleep "$(jq -r '.seconds // 1' <<<"$step")" ;;
     interrupt)       not_implemented interrupt || break ;;       # TODO(muse): Escape/Ctrl-C the in-flight turn
     keys)            step_keys "$(jq -r '.keys' <<<"$step")" ;;
-    reset_session)   not_implemented reset_session || break ;;   # TODO(muse): in-REPL /clear|/new → new id, SAME slot; re-resolve SES_TRANSCRIPT[$ACTIVE] (SEAM 3)
+    reset_session)   step_reset_session "$(jq -r '.text // empty' <<<"$step")" || break ;;
     restart)         step_restart || break ;;
     resume)          not_implemented resume || break ;;          # TODO(muse): relaunch same id+cwd (1 session, 2 PIDs) — reuse the active slot
     sigkill)         step_sigkill || break ;;
