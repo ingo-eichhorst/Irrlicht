@@ -1,0 +1,163 @@
+{
+  "scenario_id": "model-switch-midsession",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "gap:keys",
+    "agent_cli_version": "1.2.1-R2847.1",
+    "daemon_version": "0.6.3+2ae04cb.dirty",
+    "confidence": 0.9,
+    "notes": "agent_supports: yes (live-confirmed end-to-end this session, real meta provider). daemon_capability: full -- live-recorded a genuine mid-session /model switch (muse-spark-1.3-contributor -> muse-spark-1.2) and independently re-ran the production TranscriptTailer against both the full transcript and a turn-1-only prefix: ModelName correctly flips to the switched-to model (latest wins) and TotalTokens grows (28597 -> 28631) across the switch, exactly matching the scenario's acceptance criteria. driver_capability: gap:keys -- reusing the sibling model-identification (5.2) cell's live-confirmed finding that /model always opens an arrow-key picker (inline arguments are silently ignored) and the driver's keys step is not_implemented; unlike 5.2, this cell cannot route around the picker because the whole point of 5.3 is driving it."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "model-switch-midsession",
+      "agent": "muse",
+      "assessed_at": "2026-09-14T09:33:01Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "gap:keys",
+      "confidence": 0.9,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full (LIVE-VERIFIED this session, not inferred from docs alone)\ndriver_capability: gap:keys\n\n## agent_supports -- yes\n\n`muse --help` documents no dedicated mid-session model-switch subcommand, but the in-REPL `/model` slash command does the job: it is already an observed `command.invoked` in the local corpus (format-spec Sec.10), and I live-drove it myself this session (see below) -- muse genuinely supports changing the active model without minting a new session.\n\n## daemon_capability -- full, LIVE-VERIFIED end-to-end (not just read from the parser)\n\nI drove a real two-turn session against the live `meta` provider (tmux, `muse --trust-workspace` in a fresh scratchpad cwd, no `--model` override so turn 1 ran on the account's current default): sent \"Reply with exactly the word: probeone\", waited for completion, invoked `/model`, navigated the picker (Down once, Enter) to a DIFFERENT model, sent \"Reply with exactly the word: probetwo\", waited for completion, then `/exit`. The resulting session.jsonl (`~/.local/share/muse/sessions/2026/09/14/01a09f3d-fd6e-7c63-85d2-b6548ea4336b/session.jsonl`, 147 lines) shows exactly the mechanism format-spec Sec.7 predicted but had only ever observed at session-startup before:\n\n- Line 15: `run.model.configured` (turn 1) -- `model_id:\"muse-spark-1.3-contributor\", source:\"startup\"`.\n- Line 78: `runtime.session`/`terminal:\"completed\"` -- turn 1 ends.\n- Line 79: `command.invoked` `/model` (Skip=true bookkeeping).\n- Line 80: `runtime.model_reconfigure.completed` -- `previous.model_id:\"muse-spark-1.3-contributor\" (source:startup)` -> `effective.model_id:\"muse-spark-1.2\" (source:\"model_reconfigure\")`. THIS IS THE FIRST DIRECTLY-OBSERVED MID-SESSION RECONFIGURE ANYWHERE (the format-spec's own corpus scan, and my own re-scan of the full local corpus of 81 sessions before this probe, found ZERO examples of a second, non-startup `runtime.model_reconfigure.completed` -- every prior corpus hit of `/model` either had no follow-up reconfigure at all, or was the one startup-time occurrence already documented).\n- Line 81: `run.model.configured` (turn 2) -- `model_id:\"muse-spark-1.2\", source:\"model_reconfigure\"`.\n- Line 84 onward: turn 2's `runtime.session`/`started`...`terminal:\"completed\"` sequence, `model_completed.model:\"muse-spark-1.2\"`.\n\nAll three of these events (`command.invoked`, `runtime.model_reconfigure.completed`, `run.model.configured`) are Skip=true bookkeeping in the muse parser (parser.go's `payloadTypeCommandInvoked` case; `parseModelReconfigure`/`parseRunModelConfigured`, both routed unconditionally on every occurrence with no \"first time only\" guard) -- so between turn 1's `terminal` (line 78) and turn 2's `started` (line 84) the session state stays `ready` throughout; no working/waiting flicker from the switch itself, confirmed directly in this transcript (lines 79-83 contain no `runtime.session`/`started` record).\n\n**Independently re-ran the production adapter code against this exact recording** (a throwaway `go run` using `tailer.NewTranscriptTailer` + `muse.Parser{}`, mirroring the pattern the sibling 5.2 cell used, removed afterward -- not committed):\n- Against the full 147-line transcript: `ModelName=\"muse-spark-1.2\" TotalTokens=28631 ContextWindow=1007997 ContextWindowUnknown=false CumInputTokens=57190 CumOutputTokens=38`.\n- Against a truncated 79-line prefix (through turn 1's `terminal` only): `ModelName=\"muse-spark-1.3-contributor\" TotalTokens=28597 ContextWindow=1007997 ContextWindowUnknown=false CumInputTokens=28578 CumOutputTokens=19`.\n\nThis directly satisfies every acceptance-criteria bullet against the REAL daemon code, not a guess: ModelName=A after turn 1, ModelName=B (latest wins, via the generic \"last non-empty ModelName wins\" merge in `applyModelMetadata`, tailer_metrics.go:278-283, and session-level `MergeMetrics`, core/domain/session/metrics.go:770-771) after turn 2, and TotalTokens after turn 2 (28631) > TotalTokens after turn 1 (28597) -- the per-turn context-usage snapshot naturally grows because turn 2's prompt includes turn 1's exchange, EVEN ACROSS the model switch (this generalizes a same-model observation already present in the pre-existing corpus, e.g. session `01a09c40`: turn0 usage 29356in/99out -> turn1 usage 35023in/378out/29297cache_read, i.e. Total 29455->64698, but the probe above is the first time this growth was confirmed ACROSS a genuine model switch specifically).\n\n**ContextWindow resolves for BOTH models.** I read `~/.local/share/muse/model-catalog/6d657461__p746268.json` directly (not from a doc comment's secondhand claim) and it carries FOUR rows, all with `context_limit:1007997`: `muse-spark-1.3`, `muse-spark-1.3-contributor` (`is_default`/`is_current`=true), `muse-spark-1.2`, `muse-spark-1.2-contributor`. This CORRECTS the sibling 5.2 cell's caveat that \"only muse-spark-1.3 and -contributor\" had confirmed rows -- on this machine, as of this session, all four do, so ANY pair of these four models is safe to pick for the switch without risking a ContextWindowUnknown degrade.\n\n**cost_nonzero: false.** The live probe's own stderr log confirms it directly (not just the pre-existing `aliases.go` grep): `irrlicht/capacity: no pricing for model \"muse-spark-1.3-contributor\"` and the same for `\"muse-spark-1.2\"` -- both printed by the real capacity manager during the TranscriptTailer probe above.\n\n**Caveat carried from the sibling 5.2 cell, applies identically here (verify-pipeline gap, not a daemon defect):** `of record verify`'s `context_window_nonzero` observation reads ONLY the offline replay golden's `summary.context_window` field, which `tools/onboarding-factory/cmd/replay/metrics.go`'s `finalizeSummary` populates ONLY for `adapter==antigravity.AdapterName` -- muse is an ordinary cum-token adapter like every other non-antigravity column, so this field is structurally always 0/absent through that pipeline regardless of what the live daemon computes (which is correct, per the direct TranscriptTailer probe above). `context_window_nonzero` is therefore asserted `false` in this cell's spec, matching 5.2's precedent, not a regression or new finding.\n\n## driver_capability -- gap:keys\n\nReusing the sibling 5.2 cell's live-confirmed finding (assignment brief; re-confirmed in my own probe this session): `/model` always opens the arrow-key picker; an inline argument on the same line (`/model <id>`) is silently ignored. `replaydata/agents/muse/driver-interactive.sh`'s step-dispatch loop still has `keys) not_implemented keys || break` (line 671) and `DRIVE_ELICITS=\"send slash wait_turn sleep exit_clean restart sigkill start_session session\"` (line 167) does not list `keys`. Unlike 5.2 -- which sidestepped the picker entirely by pinning the model at LAUNCH via the (separately, already-closed) `settings.model` -> `--model` knob -- 5.3's entire premise is a MID-SESSION switch, so there is no way to avoid the picker: `driver=gap:keys` is the load-bearing, undodgeable gap for this cell specifically.\n\nI live-verified the exact mechanism `record` needs to port: `tmux send-keys -t $SESSION Down` moves the picker's cursor (rendered as a `⟩` marker) down one row; a subsequent `tmux send-keys -t $SESSION Enter` confirms the selection and prints `Model set to <id>` in the transcript pane. The picker's row order matches the local model-catalog file's row order (`muse-spark-1.3`, `muse-spark-1.3-contributor`, `muse-spark-1.2`, `muse-spark-1.2-contributor`) and the cursor starts on the session's CURRENTLY ACTIVE model, not a fixed first row -- in my probe (launched with no `--model`, so active = the account default `muse-spark-1.3-contributor`, row 2 of 4), one `Down` landed on `muse-spark-1.2` (row 3). `record` should capture the pane after opening `/model` to confirm the cursor's starting row before committing to a fixed `Down` count, per the caveats below.\n\n## What irrlicht does NOT see (and why that's fine)\n\nSame shape as claudecode's sibling assessment for this scenario: the `/model` command itself, and the reconfigure/run-model-configured bookkeeping it produces, are explicitly Skip=true in the parser -- correct, since none of it is a state-machine-relevant event; the OBSERVABLE signal is purely the next run's `model_id`.",
+      "caveats": [
+        "The recipe does NOT pin model A via settings.model (unlike sibling 5.2) -- it deliberately relies on the account's CURRENT default (muse-spark-1.3-contributor, live-confirmed today, 2026-09-14) as model A, because that is exactly what this assessment's live probe verified end-to-end. This is a load-bearing environment precondition (Vacuous-pass rule): if the account default ever changes, or if a future model is added to ~/.local/share/muse/model-catalog/*.json ahead of the currently-observed four rows, the picker's cursor starting row and/or the fixed 'Down x1' keystroke this recipe assumes may land on a DIFFERENT model than muse-spark-1.2 -- record must capture the picker pane before trusting a hardcoded Down-count, and should re-derive it live rather than assume this probe's exact sequence still applies.",
+        "Only four models have been directly observed with a model-catalog row on this machine (muse-spark-1.3, muse-spark-1.3-contributor, muse-spark-1.2, muse-spark-1.2-contributor, all context_limit=1007997, read directly from ~/.local/share/muse/model-catalog/6d657461__p746268.json this session) -- account/tier-scoped, unverified on a different account or after a catalog refresh.",
+        "context_window_nonzero is asserted false in the spec despite the live daemon correctly resolving ContextWindow=1007997 for both models (independently re-verified via a direct TranscriptTailer probe against this session's real recording) -- the offline replay-golden verify pipeline (tools/onboarding-factory/cmd/replay/metrics.go's finalizeSummary) only ever populates summary.context_window for adapter==antigravity, so of record verify structurally cannot see it for muse. This is the SAME pre-existing, apparently-deliberate scoping gap the sibling 5.2 cell already surfaced for the maintainer -- not re-raised as a new finding, just carried forward so this cell's spec does not silently regress if the pipeline gap is ever closed.",
+        "Using `slash` (step_send) to submit `/model` increments the driver's EXPECTED_TURNS counter exactly like a real `send`, but `/model` never produces a matching assistant turn -- the SAME off-by-one compromise claudecode's sibling recipe for this scenario documents. The recipe therefore does NOT use `wait_turn` after the model-switch block; turn 2's completion is awaited with a bounded `sleep` instead. record should size that sleep from its own live timing (my probe's two turns each completed within roughly 20-30s, including muse's automatic 'double checking' reflection pass visible in the TUI) rather than trusting a number typed here as exact.",
+        "cost_nonzero is asserted false -- no LiteLLM/capacity pricing entry exists for any muse-spark-* model (confirmed both via the pre-existing core/pkg/capacity/aliases.go grep and directly in this session's own probe log: 'no pricing for model \"muse-spark-1.3-contributor\"' / '...\"muse-spark-1.2\"'). Not a defect, not part of this scenario's acceptance criteria (ModelName + TotalTokens only).",
+        "The exact TotalTokens figures (28597 -> 28631) are THIS probe's numbers, not a value to hard-pin in the spec -- the spec asserts growth (t2 > t1), never an exact figure, per the assess convention."
+      ],
+      "sources": [
+        {
+          "kind": "live",
+          "ref": "tmux-driven live session this session: muse --trust-workspace in a fresh scratchpad cwd, real meta provider, no --model override; session 01a09f3d-fd6e-7c63-85d2-b6548ea4336b (~/.local/share/muse/sessions/2026/09/14/01a09f3d-fd6e-7c63-85d2-b6548ea4336b/session.jsonl, 147 lines)",
+          "note": "Two turns separated by an in-REPL /model switch (Down, Enter) from muse-spark-1.3-contributor to muse-spark-1.2. First directly-observed example anywhere in the local corpus (81 pre-existing sessions + this probe) of a NON-STARTUP runtime.model_reconfigure.completed / run.model.configured pair."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/parser.go lines 145-149 (payload type constants), 215-234 (decodeAndRoute switch incl. payloadTypeCommandInvoked), 617-659 (parseRunModelConfigured, parseModelReconfigure, applyModelIdentity) -- re-read at HEAD 2ae04cb1",
+          "note": "Both model-identity event handlers are unconditional (no 'first occurrence only' guard) and both funnel through applyModelIdentity, which also resolves ContextWindow via the local model-catalog cache."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_metrics.go lines 278-293 (applyModelMetadata), 295-309 (applyTokenSnapshot); core/domain/session/metrics.go lines 767-771 (MergeMetrics ModelName/TotalTokens fallback rule)",
+          "note": "Generic 'last non-empty ModelName wins' + 'per-turn TotalTokens snapshot, not lifetime-cumulative' semantics shared by every adapter in this repo, not muse-specific code."
+        },
+        {
+          "kind": "live",
+          "ref": "go run probe (this session, removed afterward, not committed) against the live recording above, using tailer.NewTranscriptTailer + muse.Parser{} (production code) -- run twice, once against the full 147-line transcript and once against a 79-line prefix ending at turn 1's terminal",
+          "note": "Full: ModelName=muse-spark-1.2 TotalTokens=28631 ContextWindow=1007997 ContextWindowUnknown=false. Prefix: ModelName=muse-spark-1.3-contributor TotalTokens=28597 ContextWindow=1007997 ContextWindowUnknown=false. Directly proves every acceptance-criteria bullet against the real daemon code."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.local/share/muse/model-catalog/6d657461__p746268.json (read directly this session)",
+          "note": "Four rows (muse-spark-1.3, muse-spark-1.3-contributor [is_default/is_current], muse-spark-1.2, muse-spark-1.2-contributor), all context_limit=1007997 -- corrects the sibling 5.2 cell's narrower 'only two rows confirmed' caveat."
+        },
+        {
+          "kind": "cli",
+          "ref": "git grep -in muse core/pkg/capacity/aliases.go (this session); live probe stderr log 'irrlicht/capacity: no pricing for model ...' for both muse-spark-1.3-contributor and muse-spark-1.2",
+          "note": "No muse model has ever had a pricing entry -- cost_nonzero=false, doubly confirmed for both models in this specific switch pair."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/driver-interactive.sh lines 89-102 (settings.model -> --model launch pin, ALREADY closed per commit 51c1942e), 167 (DRIVE_ELICITS, no keys), 383-398 (step_send / EXPECTED_TURNS bump), 667-672 (step dispatch: keys still not_implemented) -- re-read at HEAD 2ae04cb1",
+          "note": "Confirms the settings_model knob the sibling 5.2 cell needed is already ready and does not need re-flagging; keys remains the one real gap for THIS cell."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/5-3_model-switch-midsession/metadata.json and expected.jsonl",
+          "note": "Cross-adapter precedent for this exact scenario's phase shape (session_birth/t1_start/t1_end/model_switch_window/t2_start/t2_end) and for the slash-bumps-EXPECTED_TURNS compromise (sleep instead of wait_turn after the switch)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/kiro-cli/scenarios/5-3_model-switch-midsession/metadata.json",
+          "note": "Calibration contrast: kiro-cli is agent=yes/daemon=incapable/driver=gap:keys for the SAME scenario because its tailed JSONL carries no model field at all. muse is the structural opposite on the daemon axis -- the model signal is fully present and durable; only the driving mechanism (the picker) is missing, exactly the tooling-not-architecture distinction the assess skill's routing table draws."
+        },
+        {
+          "kind": "file",
+          "ref": "muse-format-spec.md Sec.7 (Model identity), muse-capabilities.md 'model_switch (5.3 model-switch-midsession)' entry",
+          "note": "Pre-existing column research anticipating this mechanism (source field distinguishing startup vs model_reconfigure); this assessment converts that 'near-certain' research note into a live-verified full daemon verdict."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "muse CLI installed and on PATH, v1.2.1-R2847.1 (muse --version >= per replaydata/agents/muse/metadata.json)",
+        "muse auth complete (meta provider) -- auth is set up out-of-band, the rig's precheck delegates it to the user",
+        "tmux available -- the interactive driver runs muse in a tmux REPL",
+        "irrlichd is recording -- either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+        "DRIVER WORK REQUIRED before this cell can record: replaydata/agents/muse/driver-interactive.sh's step-dispatch loop must implement the `keys` step (currently `not_implemented keys || break` at line 671) as a raw `tmux send-keys -t $SESSION <keys>` passthrough -- live-verified this session that `Down` and `Enter` sent this way correctly navigate and confirm the /model picker.",
+        "LOAD-BEARING ENVIRONMENT PRECONDITION (Vacuous-pass rule): the recipe assumes the account's CURRENT default model is muse-spark-1.3-contributor (live-confirmed 2026-09-14) and that the /model picker's row order is [muse-spark-1.3, muse-spark-1.3-contributor, muse-spark-1.2, muse-spark-1.2-contributor] with the cursor starting on the currently-active row. If either has changed, `record` must capture the picker pane (a `slash \"/model\"` followed by a pane-capture, before committing to a fixed `keys Down` count) rather than trust this cell's exact sequence blindly.",
+        "the model-catalog cache at ~/.local/share/muse/model-catalog/*.json must already carry rows for both models in the switch pair, or ContextWindow will legitimately degrade to unknown for whichever model lacks one -- all four muse-spark-* variants had rows as of this assessment (read directly, not inferred)."
+      ],
+      "setup": [
+        "Driver launches `muse --trust-workspace` (NO --model override -- turn 1 deliberately runs on the account's current default, muse-spark-1.3-contributor, live-confirmed as model A) in a fresh per-run cwd under a tmux session, same launch shape as the other muse interactive cells.",
+        "After turn 1 completes, the recipe opens `/model` via a `slash` step (submits like any other step_send: types the text, 0.3s settle, Enter -- the existing mechanism, no new primitive needed for the OPEN), then uses the NEW `keys` step to send `Down` (moves the picker cursor off the current model onto muse-spark-1.2, per this assessment's live-confirmed row order) and `Enter` (confirms; the transcript pane prints `Model set to muse-spark-1.2`).",
+        "The /model slash step bumps the driver's EXPECTED_TURNS counter even though /model produces no assistant turn (the same compromise claudecode's sibling recipe documents) -- so turn 2 is awaited with a bounded `sleep`, NOT `wait_turn`, to avoid blocking on a turn count that can never be reached.",
+        "One no-tool turn on each side of the switch is enough to elicit run.model.configured + model_completed under each model; ModelName/TotalTokens assertions are checked after each turn_end.",
+        "context_window_nonzero is asserted false in the spec (verify-pipeline gap, see caveats) even though the live daemon resolves it correctly -- do not flip this to true without first confirming the replay-golden pipeline gap (tools/onboarding-factory/cmd/replay/metrics.go's finalizeSummary) has actually been extended to cover muse."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: turnone"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "slash",
+          "text": "/model"
+        },
+        {
+          "type": "sleep",
+          "seconds": 2
+        },
+        {
+          "type": "keys",
+          "keys": "Down"
+        },
+        {
+          "type": "sleep",
+          "seconds": 1
+        },
+        {
+          "type": "keys",
+          "keys": "Enter"
+        },
+        {
+          "type": "sleep",
+          "seconds": 2
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: turntwo"
+        },
+        {
+          "type": "sleep",
+          "seconds": 35
+        },
+        {
+          "type": "exit_clean"
+        }
+      ],
+      "verify": [
+        "events.jsonl shows two ready->working->ready cycles on the SAME session id (single-birth adapter, no presession split), separated by a window where state stays ready (no working/waiting flicker) while /model runs.",
+        "after t1_end, SessionMetrics.ModelName = the account's current default at record time (this assessment observed muse-spark-1.3-contributor) -- NOT 'unknown'.",
+        "after t2_end, SessionMetrics.ModelName = the switched-to model (this assessment observed muse-spark-1.2) -- latest wins, must DIFFER from t1_end's value.",
+        "SessionMetrics.TotalTokens (CumInputTokens+CumOutputTokens, or the per-turn snapshot depending on which field of record's verify reads) after t2_end > after t1_end.",
+        "cost stays 0 throughout (no litellm pricing entry for either muse-spark-* model) -- expected, not a defect.",
+        "context_window_nonzero verify observation is false (offline replay-golden pipeline gap, not a live daemon defect -- see caveats); do not treat a false reading here as a regression.",
+        "final session state is ready before exit_clean tears the REPL down."
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}
