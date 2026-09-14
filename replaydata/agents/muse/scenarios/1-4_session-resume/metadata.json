@@ -97,7 +97,8 @@
         "muse CLI on PATH and authenticated (muse login or META_API_KEY) — confirmed installed at 1.2.1 on this machine",
         "irrlichd is recording (--attach or isolated coexist mode)",
         "drive-muse-interactive.sh must expose the `resume` step type (currently not_implemented at line 674, absent from DRIVE_ELICITS at line 167): port from step_restart (line 527), reusing the ACTIVE slot's existing SES_UUID/SES_CWD instead of allocating a new one, and relaunching `muse resume \"${SES_UUID[$ACTIVE]}\" --trust-workspace` (plus the same --model/--base-url MUSE_ARGS as the original launch) with `-c \"${SES_CWD[$ACTIVE]}\"` under a rotated tmux session name",
-        "LOAD-BEARING: the resume step's sleep before its relaunch settles/the resumed turn's first write must clear the daemon's 10s deletedSessions cooldown (session_detector_activity.go's processActivity) with margin, or the resumed activity is silently dropped by the daemon even though muse itself resumed correctly — the script below uses 12s"
+        "LOAD-BEARING: the resume step's sleep before its relaunch settles/the resumed turn's first write must clear the daemon's 10s deletedSessions cooldown (session_detector_activity.go's processActivity) with margin, or the resumed activity is silently dropped by the daemon even though muse itself resumed correctly — the script below uses 12s",
+        "RECIPE CORRECTION (record, live-evidenced, 2026-09-15): the original script sent the post-resume turn immediately after `resume` with no intervening sleep -- unlike every other adapter's own committed session-resume recipe for this scenario (pi: resume,sleep 4,send; hermes: resume,sleep 6,send; codex: resume,sleep 4,send). A live recording with no gap showed the ENTIRE second turn complete and land on disk while the daemon's 10s deletedSessions cooldown (session_detector_activity.go) was still active; by the time the cooldown cleared and the row was re-admitted, the transcript already held a COMPLETE terminal record, so buildNewSessionState's unconditional State=ready meant the daemon never observed an intermediate working state -- v2_turn_start/v2_turn_end failed (6/8 phases). Confirmed directly against pi's own committed recording (replaydata/agents/pi/scenarios/1-4_session-resume), whose events.jsonl shows the SAME two-step shape working when a post-resume sleep is present: session reborn ready, then (after the sleep) a SEPARATE force-ready-to-working transition ~3-4s later from the actual send. A 6s sleep is inserted between resume and the post-resume send to match this established pattern."
       ],
       "setup": [
         "Driver captures SES_UUID/SES_CWD during turn 1's wait_turn via the existing resolve_transcript seam (driver-interactive.sh:319-355, the newest session.jsonl newer than the slot's marker) — muse assigns its own uuid at first-turn time and offers no --session-id flag to pre-select one, so the UUID is discovered, not generated.",
@@ -125,6 +126,10 @@
         },
         {
           "type": "resume"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
         },
         {
           "type": "send",
