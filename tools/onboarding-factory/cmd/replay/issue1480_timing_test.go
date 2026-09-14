@@ -248,6 +248,7 @@ var knownFirstTransitionDrift = map[string]string{
 	"mistral-vibe/regressions/1846-retired-terminal-control/recordings/2026-07-08-09-15-24_irrlichd-0.5.5+35c4012.dirty/transcript.jsonl": "#1476 accepted: -27.522s at pair 0 (ready→working)",
 	"muse/scenarios/4-1_multiple-sessions-same-cwd/recordings/2026-09-14-06-04-09_irrlichd-0.6.3+0b3e2ad/transcript.jsonl":                "#1960: -32.388s at pair 0 (ready→working). Pre-fix capture (predates fix commit 9abf13d1) hitting the SAME assignPIDLocked PID-eviction bug that blocked 2-14/2-17: session 01a09e16 born ready at seq152, evicted by a late-arriving proc-53461 pre-session claim at seq170, re-discovered only via a LATER, different session's own birth at seq456. 4-1's own cell assertions don't key on this transition (stayed a clean 5/5 pass), so it was not re-recorded as part of #1960's fix.",
 	"muse/scenarios/2-15_shell-escape-command/recordings/2026-09-14-20-47-26_irrlichd-0.6.3+d2dc680/transcript.jsonl":                     "#1960: -2.242s at pair 0 (ready\u2192working). The 2s debounce window, same mechanism this file already documents for claudecode's Stop above \u2014 not a muse defect and not a classifier change. Measured in this recording's own events.jsonl: a burst of transcript_activity at 20:47:33.659-33.667 (seq 521-528) is coalesced on every write (debounce_coalesced at each), each one re-opening the window, and the daemon's state_transition lands at 20:47:35.708 (seq 529) \u2014 2.041s after the last coalesced write, i.e. at the next debounce boundary. The replay sidecar flips at the transcript bytes themselves, which is where the 2.242s comes from. A bound that absorbed it would hide the next one.",
+	"muse/scenarios/2-5_synchronous-slash-command/recordings/2026-09-14-21-41-15_irrlichd-0.6.3+3b16079/transcript.jsonl":                 "#1960: -5.623s at pair 0 (ready\u2192working). NOT a debounce boundary alone \u2014 the two sides pick DIFFERENT writes as the turn start, which is worth stating because it is the one entry here that is a genuine classification divergence rather than a timer. Measured in this recording's own events.jsonl: the sidecar flips at the first transcript_activity, 21:41:20.031, which is the LOCAL slash command's own write (/usage and /status resolve in-process, emitting command.invoked and no turn). The daemon does not treat that write as a turn start, correctly; it flips at 21:41:25.654 (seq 526), 2.233s after the real prompt's coalesced burst at 21:41:23.407-23.421, i.e. at that burst's own debounce boundary. 25.654 - 20.031 = 5.623 exactly. Left as committed evidence that the replay sidecar starts a turn on a local-command write where the daemon does not.",
 }
 
 // aggregate ratchets. The named list above keys on the FIRST kind-matched pair,
@@ -322,9 +323,13 @@ var knownFirstTransitionDrift = map[string]string{
 // prompt spawns internal reminder micro-agents that write to their own
 // transcripts under the same process, so a parent's window is re-opened by
 // writes that are not the parent's own turn.
+// #1960's final nine recordings move them once more, 111 -> 113 and 54 -> 56.
+// One new first-transition drift (2-5_synchronous-slash-command, entry above),
+// and it is the interesting kind: the sidecar starts the turn on a local slash
+// command's write, the daemon does not.
 const (
-	maxRecordingsDriftingOverThreshold = 111
-	maxRecordingsDriftingOver5s        = 54
+	maxRecordingsDriftingOverThreshold = 113
+	maxRecordingsDriftingOver5s        = 56
 )
 
 // Lower bounds on HOW MUCH is measured. Every ratchet above is an upper bound,
