@@ -1,0 +1,112 @@
+{
+  "scenario_id": "workflow-fanout",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.2.1-R2847.1",
+    "daemon_version": "0.6.3+365ac99",
+    "confidence": 0.55,
+    "notes": "agent_supports: yes (dedicated Workflow API v2 substrate in the binary, distinct from subagent_spawn); daemon_capability: full, LOW confidence (path-based parent-linking is spawn-source-agnostic and file-name-gated to literal 'session.jsonl', but zero live corpus evidence the dedicated tool has ever fired); driver_capability: ready (send/wait_turn/sleep, no new step type)"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "workflow-fanout",
+      "agent": "muse",
+      "assessed_at": "2026-09-14T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.55,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full (LOW confidence, provisional)\ndriver_capability: ready\nroute: record\n\n## Reasoning\n\n### agent (yes, confidence high)\n\nMuse ships a dedicated multi-agent orchestration substrate that is architecturally distinct from the plain `subagent_spawn` tool covered by 3.1/3.2/3.4. `strings ~/.local/bin/muse-bin-1.2.1-R2847.1` surfaces an extensive, purpose-built vocabulary that exists nowhere near the plain-subagent tool strings: `WorkflowRunLaunchedFact` (23 fields), `WorkflowChildControlCommand`/`WorkflowChildControlReconciliation`, `WorkflowChildCompletionContract`/`WorkflowChildCompletionOwner` (an internally-tagged enum with exactly two variants, `Native` and `Workflow` — doc comment: \"A Native subagent for a direct child, Workflow for scripted fanout, joins, cache, or recovery\"), `WorkflowScriptFactRecord`, `DynamicWorkflowProductChildRow` (carries `subagent_id`, `task_id`, `status`, `result_ref`, `retry`/`max_attempts`), a `WorkflowApiV2Receiver::ParallelGroup` variant, and launch parameters `workflowRunId`/`maxParallelAgents`/`tokenBudget`/`childLimit`. A per-workflow concurrency cap is enforced and independently configurable from the root subagent-capacity cap already documented for 3.1/3.2 (\"invalid Workflow runtime local concurrency cap: expected 1 through 16\").\n\nThe system prompt contains the exact opt-in gate this scenario's process requires: \"Workflows run only on the user's explicit request (run.workflow_trigger_mode is explicit). Call the workflow tool only when a USER turn in this conversation asks for it in the user's own words e.g. \\\"use a workflow\\\", \\\"run parallel agents\\\", \\\"fan out subagents\\\" ... If the user has not asked: do not call the workflow tool.\" A live session on this machine (`01a09c47-506a-7763-b82a-9ab89a9e195a`, `inbox_item_queued` records) shows the actual per-turn `workflow_trigger_mode` default is `\"auto\"` (not `\"off\"`), so the feature is enabled by default; `run.workflow_trigger_mode:\"off\"` durably disables it (\"Workflows are disabled for this run (run.workflow_trigger_mode is off); no child work started\") — a genuine environment precondition, not a code path this adapter can influence.\n\n### daemon (full, confidence LOW — provisional, not confirmed)\n\n**What is proven.** The daemon's parent-linking is purely path-based and spawn-source-agnostic: `parentSessionIDFromPath` (adapter.go) requires only the literal shape `<parent-session-dir>/subagent/<child-id>/session.jsonl`; it reads no event content and does not care whether a child was spawned via the plain `subagent_spawn` tool or the dedicated Workflow tool. `DynamicWorkflowProductChildRow`'s own schema carries a `subagent_id` field, strong circumstantial evidence that Workflow-tool children are issued through the SAME `subagent.control.spawn_accepted`/`child_session_bound` control plane already verified (3.1/3.2 cells) to materialize at exactly that flat shape — which would mean the daemon's EXISTING, already-proven mechanism handles workflow-fanout children with zero new code, unlike claude-code's pre-#565 bug where workflow agents landed one directory level deeper than the linker expected.\n\n**Structural reason the claude-code #565 failure mode (a 'journal' session in project 'unknown') is less likely here.** `sessionIDFromPath` gates strictly on the literal basename `session.jsonl` (adapter.go), never on the `.jsonl` extension the way claude-code's fswatcher does (`watcher.go:214` there fires `EventNewSession` for ANY `.jsonl`). Muse's own adapter doc already lists several non-`session.jsonl` sibling files this stage ignores (`.session.lock`, `cron.db`, `session.peer-history.sqlite3`, `cli-<uuid>.log`), consistent with muse's own naming convention keeping bookkeeping files off the `session.jsonl` name. For a workflow journal (the binary strings do reference a `WorkflowJournalCanonicalCallKind` / \"workflow.v2.journal\" / \"parallel calls have journal identities\" concept) to become a phantom session here, it would have to be written under the exact literal filename `session.jsonl` — a much narrower failure surface than claude-code's any-`.jsonl` match.\n\n**What is NOT proven — the reason confidence stays low.** Across every real `session.jsonl` on this machine (198 files, full corpus), the dedicated Workflow API v2 substrate has ZERO live occurrences: `workflow_run_launched`, `WorkflowRunLaunched`, `workflow_child_control`, `workflow_script_fact`, `workflow_child_result`, `ParallelGroup`, `maxParallelAgents`, `childLimit` all return 0 hits. The evidence this task was specifically pointed at — a real `subagent.control.spawn_rejected` (`root_capacity_exhausted`, occupied 8/limit 8) plus `async.owner.attempt_admitted` and `subagent.control.wait_parked` records, all in session `01a09c47-506a-7763-b82a-9ab89a9e195a` — is confirmed, on inspection, to be the PLAIN native-subagent admission path, not the dedicated Workflow tool: every `attempt_admitted`/`wait_parked` record inspected carries `owner:{owner_kind:\"native.subagent\"}` (the enum's OTHER variant is literally `\"workflow\"`, per `WorkflowChildCompletionOwner::{Native, Workflow}`), and the 13 `task_kind:\"workflow.agent.native\"` task-proposal records in that same session are individually-named, independently-purposed spawns (`command_id`s `assess-muse-aborted-001`, `assess-muse-multi-session-001`, `assess-muse-model-id-001`, `assess-muse-token-acct-001`, `assess-muse-model-ctx-001` — five DIFFERENT onboarding-factory assess subagents dispatched concurrently by whatever orchestrated that session, not three identical children from one workflow launch). Scenario 3.1's own prior assessment for this same adapter already established, independently, that `task_kind:\"workflow.agent.native\"` fires for EVERY native subagent's own execution unconditionally, regardless of fan-out — so this task_kind is NOT a workflow-fanout discriminator at all, and the capacity/rejection/parking machinery this task's brief highlighted, while genuinely rich, is evidence for 3.1/3.2's mechanism, not for 3.5's dedicated tool.\n\nNet: `daemon=full` is the architecturally honest call (the linking mechanism that would need to work is generic and already proven; the file-name gate structurally closes off the specific failure mode that bit claude-code), but it is PROVISIONAL per the assess skill's observation-vs-emission rule — nobody has ever exercised the dedicated Workflow tool on this machine, so whether it in fact reuses the flat `subagent/<child-id>/` shape (rather than nesting deeper, or writing its journal under a colliding `session.jsonl` name) is unconfirmed. `record` is what promotes this from provisional to settled.\n\n### driver (ready)\n\n`driver_step_types_from_file replaydata/agents/muse/driver-interactive.sh` returns `send`, `wait_turn`, `sleep` (plus `start_session`, `slash`, `keys`, `reset_session`, `restart`, `sigkill`, `resume`, `interrupt`, `exit_clean`, `session`) — every step type this recipe needs is already implemented; no driver-gap.\n\n## Vacuous-pass check\n\nThis cell could pass while proving nothing under two conditions, both named as caveats/preconditions: (1) if the recording machine's muse install has `run.workflow_trigger_mode` set to `\"off\"` (a settings override, not the observed default), the model's workflow-tool call is durably rejected before any child work starts and the model would fall back to plain `subagent_spawn` calls or a refusal — recording would then silently validate the SAME shape 3.1/3.2 already cover, never exercising the code path this cell exists to test; (2) if the model satisfies the opt-in prompt by calling `subagent_spawn` several times instead of the dedicated Workflow tool, the daemon-observable shape is (per the reasoning above) probably identical either way, so the RECORDING would still pass — but the assessment's `daemon=full` verdict for the DEDICATED tool's on-disk shape would remain unconfirmed. `record` must check which path the model actually took (an `owner_kind:\"workflow\"` value on the resulting `async.owner.attempt_admitted`/`wait_parked` records, or the presence of any `Workflow*` payload_type, distinguishes them) and set `observability_correction` if the dedicated tool's shape differs from the plain-subagent shape assumed here.",
+      "caveats": [
+        "PROVISIONAL: daemon=full is inferred from (a) the path-based, spawn-source-agnostic parent-linker and (b) DynamicWorkflowProductChildRow's own subagent_id field, not from any live example of the dedicated Workflow tool firing — zero hits for WorkflowRunLaunched/workflow_child_control/ParallelGroup/maxParallelAgents/childLimit across all 198 real session.jsonl files on this machine. Confidence held at 0.55 for this reason; record must promote or correct it.",
+        "The capacity/rejection/parking evidence this cell's brief pointed at (subagent.control.spawn_rejected root_capacity_exhausted 8/8, async.owner.attempt_admitted, subagent.control.wait_parked, all in session 01a09c47-506a-7763-b82a-9ab89a9e195a) is confirmed on inspection to belong to the PLAIN native-subagent path (owner_kind:\"native.subagent\" on every record checked), not the dedicated Workflow tool — it is 3.1/3.2's evidence, not 3.5's. task_kind:\"workflow.agent.native\" is NOT a fan-out discriminator: scenario 3.1's own assessment already established it fires for every native subagent's execution unconditionally.",
+        "This admission-control detail (spawn_rejected/wait_parked/attempt_admitted) is additionally invisible to the daemon today regardless: parser.go's route() default case Skip=true's every subagent.control.* and async.owner.* payload_type. The scenario's acceptance criteria (parent-link, SubagentCount, working/ready arc, no phantom session) do not require the daemon to observe rejection/parking at all, so this is noted for completeness, not asserted in the spec.",
+        "Reminder-microagent contamination applies here exactly as it does to every other muse subagent scenario: skill-reminder/goal-reminder/verify-reminder children also materialize under <parent>/subagent/<child-id>/ and would inflate a raw child count. The spec's child-count assertions must exclude any child whose task_kind is reminder.agent.* (mirroring 3.1's own established discriminator), not merely assume a positive child count proves the workflow ran.",
+        "Environment precondition (Vacuous-pass rule): run.workflow_trigger_mode must not be \"off\" on the recording machine. The observed live default on this machine is \"auto\" (a real inbox_item_queued record carries workflow_trigger_mode:\"auto\"); no CLI flag for this was found in `muse --help` (it is a settings.run.* key, not a startup flag), so record should confirm the default has not been overridden rather than assume it.",
+        "Whether the model satisfies the opt-in prompt via the dedicated Workflow tool or via several ordinary subagent_spawn calls cannot be forced from the recipe alone (run.workflow_trigger_mode:\"auto\" leaves the model discretion). record should check which path fired (an owner_kind:\"workflow\" value, or any Workflow*-named payload_type, on the resulting records) and record an observability_correction if the on-disk shape for a genuine Workflow-tool run differs from the plain-subagent shape this assessment assumes.",
+        "No dollar cost is persisted anywhere for muse (per the shared onboarding-factory context); cost_nonzero must stay false in observations, matching every other muse cell.",
+        "Muse's own workflow-journal concept (WorkflowJournalCanonicalCallKind / \"workflow.v2.journal\" strings) has never been observed on disk. The adapter's sessionIDFromPath gates strictly on the literal basename \"session.jsonl\" (not on the .jsonl extension the way claude-code's fswatcher does), which structurally closes off claude-code's exact #565 failure mode (any non-session.jsonl-named file is never a session candidate) — but this has not been directly confirmed against a real workflow journal file."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.local/bin/muse-bin-1.2.1-R2847.1",
+          "note": "strings scan: WorkflowRunLaunchedFact, WorkflowChildControlCommand/Reconciliation, WorkflowChildCompletionContract/Owner (Native|Workflow variants, doc comment \"A Native subagent for a direct child, Workflow for scripted fanout, joins, cache, or recovery\"), WorkflowScriptFactRecord, DynamicWorkflowProductChildRow(subagent_id,...), WorkflowApiV2Receiver::ParallelGroup, workflowRunId/maxParallelAgents/tokenBudget/childLimit, \"invalid Workflow runtime local concurrency cap: expected 1 through 16\", system-prompt opt-in gate text (\"use a workflow\"/\"run parallel agents\"/\"fan out subagents\"; \"Workflows are disabled for this run (run.workflow_trigger_mode is off)\")."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/adapter.go",
+          "note": "sessionIDFromPath gates strictly on filepath.Base(path)==\"session.jsonl\"; parentSessionIDFromPath requires the exact flat shape <parent>/subagent/<child-id>/session.jsonl, reads no event content, and is agnostic to spawn source."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/parser.go",
+          "note": "route()'s default case sets Skip=true for every subagent.control.* and async.owner.* payload_type (lines ~207-244) — the daemon observes subagent lifecycle purely via file-path discovery, never via this event content."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.local/share/muse/sessions/2026/09/13/01a09c47-506a-7763-b82a-9ab89a9e195a/session.jsonl",
+          "note": "Live corpus session: 33 children under a flat <parent>/subagent/<child-id>/ tree; 13 task_kind:\"workflow.agent.native\" proposals with individually-purposed command_ids (assess-muse-aborted-001 etc, not a coordinated N-identical-children batch); 5 subagent.control.spawn_rejected records (reason:root_capacity_exhausted, capacity 8/8); async.owner.attempt_admitted and subagent.control.wait_parked records all carrying owner:{owner_kind:\"native.subagent\"}; one inbox_item_queued record showing the live default workflow_trigger_mode:\"auto\". Zero occurrences anywhere in the 198-file corpus of WorkflowRunLaunched/workflow_child_control/workflow_script_fact/ParallelGroup/maxParallelAgents/childLimit."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/scenarios/3-1_foreground-subagent/metadata.json",
+          "note": "Prior cell's own assessment already established task_kind:\"workflow.agent.native\" fires for EVERY native subagent's own execution, foreground or background, unconditionally — not a fan-out-specific signal."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/3-5_workflow-fanout/metadata.json",
+          "note": "Template/precedent: the claude-code cell for this same scenario, including the #565 journal-phantom-session bug shape this assessment argues is structurally less likely for muse's filename-gated adapter."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/scripts/lib/recipe-lint.sh",
+          "note": "driver_step_types_from_file replaydata/agents/muse/driver-interactive.sh confirms send/wait_turn/sleep/start_session are implemented — driver=ready, no gap."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "muse CLI on PATH and authenticated (muse --trust-workspace can start a session)",
+        "irrlichd is recording (--attach against a daemon with --record, or isolated/coexist mode)",
+        "run.workflow_trigger_mode is not \"off\" on the recording machine (the observed live default is \"auto\"; no CLI flag controls this — it is a settings.run.* key). Verify with a quick live probe before recording if the install's settings have ever been touched.",
+        "the default model has the workflow tool exposed in addition to subagent_spawn (both present in 1.2.1-R2847.1's tool table per strings scan)"
+      ],
+      "setup": [
+        "Driver starts a fresh muse REPL session in a fresh cwd under <staging>/cwd/ (driver-interactive.sh's start_session step)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Use a workflow to fan out 3 parallel agents. Each agent should do one trivial task and then run `sleep 20` via bash so the work takes about 20 seconds. Wait for ALL 3 agents to finish before replying -- do not end your turn or reply until every agent has completed. Once all 3 are done, reply with the single word DONE and nothing else."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 40
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the parent session enter ready, then a ready→working transition driven by the user prompt",
+        "the parent's raw session.jsonl shows >= 3 distinct child_session_bound records (or equivalent) whose task_kind is workflow.agent.native or, if the dedicated Workflow tool fired, its own owner_kind:\"workflow\" marker -- with NO display.role:reminder / reminder.agent.* task_kind mixed in (disambiguates real fan-out children from ambient skill-reminder/goal-reminder/verify-reminder microagents); the SPEC itself hard-asserts only >=2 (child_a_linked/child_b_linked, both new_session:true anchored to the same parent_turn_start) since the phase-matching schema has no native 'count N' primitive",
+        "record checks which mechanism actually fired (owner_kind:\"workflow\" vs owner_kind:\"native.subagent\" on the resulting async.owner.attempt_admitted/wait_parked records, or any Workflow*-named payload_type) and sets observability_correction if the dedicated-tool shape diverges from the plain-subagent shape this assessment assumes",
+        "at least 2 parent_linked events point at the parent UUID within a tight window of the same triggering turn (child_a_linked/child_b_linked both new_session:true) -- proof of concurrent fan-out rather than purely sequential one-at-a-time spawning",
+        "SubagentCount(parent) tracks the live child count while children run",
+        "no session is named after any workflow bookkeeping/journal file, and no session is attributed to an unknown project",
+        "no state_transition to ready or waiting fires on the parent UUID between the first parent_linked event and the final working→ready (parent stays working until every child reports back)",
+        "each child's own session.jsonl exists under <parent>/subagent/<child-id>/session.jsonl and transitions working→ready as it finishes",
+        "events.jsonl shows exactly one working→ready transition for the parent UUID at turn end, after the last child ends",
+        "SubagentCount(parent) returns to 0 once the parent reaches its final ready (cleanupParentChildrenOnReady, the SAME mechanism 3-2 background-subagent's drained_ready phase exercises) -- muse never deletes a completed child's session.jsonl from disk, so there is no separate file-removal/sweep event the way claude-code's journal.jsonl bug shape had",
+        "final session state for the parent is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  }
+}
