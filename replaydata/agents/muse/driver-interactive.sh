@@ -181,7 +181,7 @@ SES_OWNED=()
 # DRIVE_SLASH_REQUIRES_STEP_TYPE=true if muse is headless-first (a bare
 # send "/cmd" stores literal text instead of reaching the REPL).
 # shellcheck disable=SC2034  # scraped from this file's SOURCE by tools/onboarding-factory/scripts/lib/recipe-lint.sh:97 (sed), never expanded in shell
-DRIVE_ELICITS="send slash wait_turn sleep exit_clean restart sigkill start_session session keys reset_session resume"
+DRIVE_ELICITS="send slash wait_turn sleep exit_clean restart sigkill start_session session keys reset_session resume interrupt"
 # shellcheck disable=SC2034  # scraped from this file's SOURCE by tools/onboarding-factory/scripts/lib/recipe-lint.sh:113 (sed), never expanded in shell
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 RUN_CWD="${IRRLICHT_ONBOARD_CWD:-$STAGING/cwd}"
@@ -468,6 +468,38 @@ step_wait_turn() {
 
 wait_turn() {
   step_wait_turn
+}
+
+# step_interrupt cancels the in-flight turn (#1960 driver port). Ported from
+# claudecode's step_interrupt (driver-interactive.sh:469-477): `tmux send-keys
+# -t "$SESSION" Escape` is the exact primitive the 2-20 assessment
+# live-confirmed against muse 1.2.1's TUI (probe: Escape sent mid-"esc to
+# interrupt" produced an immediate "cancelled" run terminal on disk), retargeted
+# from claudecode's $CURRENT_TMUX onto this driver's own active-slot mirror var
+# $SESSION (matching step_send/step_keys's existing idiom).
+#
+# DELIBERATELY DOES NOT decrement EXPECTED_TURNS, unlike claudecode's port
+# target. claudecode's turn_count() (turn-count.sh) counts ONLY
+# `stop_reason=="end_turn"` records, so an interrupted turn (stop_reason=
+# "stop_sequence") is invisible to it and the counter must be walked back or
+# a later wait_turn spins to timeout waiting for a completion that can never
+# land. muse's turn_count() (turn-count.sh) counts ANY ("run","terminal")
+# record regardless of its terminal value — verified by reading the jq
+# predicate, which matches on `event.kind=="terminal"` alone, with no
+# `terminal=="completed"` filter — so an interrupted run's own
+# terminal:"cancelled" record DOES increment the count, the same as a normal
+# completion would. Decrementing here would desync the two: EXPECTED_TURNS
+# would drop to 0, then the next `send` would bump it back to 1, and the
+# following `wait_turn` would return immediately on the ALREADY-present
+# cancelled-turn count instead of waiting for that next turn's own
+# completion — silently truncating the very recording this primitive exists
+# to capture. Leaving EXPECTED_TURNS untouched keeps it counting one unit per
+# `send` regardless of how that turn ends, which is exactly what muse's
+# terminal-value-agnostic turn_count() also does.
+step_interrupt() {
+  tmux send-keys -t "$SESSION" Escape
+  echo "[driver] interrupt[s$ACTIVE] (Escape, EXPECTED_TURNS left at $EXPECTED_TURNS — muse's turn_count() counts a cancelled terminal too)" >&2
+  sleep 1
 }
 
 # step_keys sends a raw tmux key sequence (NOT literal text) to the active
@@ -843,7 +875,7 @@ while IFS= read -r step; do
     send|slash)      step_send "$(jq -r '.text' <<<"$step")" ;;
     wait_turn)       step_wait_turn || break ;;
     sleep)           sleep "$(jq -r '.seconds // 1' <<<"$step")" ;;
-    interrupt)       not_implemented interrupt || break ;;       # TODO(muse): Escape/Ctrl-C the in-flight turn
+    interrupt)       step_interrupt ;;
     keys)            step_keys "$(jq -r '.keys' <<<"$step")" ;;
     reset_session)   step_reset_session "$(jq -r '.text // empty' <<<"$step")" || break ;;
     restart)         step_restart || break ;;
