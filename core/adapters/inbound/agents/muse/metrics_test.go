@@ -29,8 +29,15 @@ func compactJSONLines(lines []string) string {
 // shape) and asserts the per-call model_completed contributions accumulate
 // into the session's cumulative token totals, that the goal_usage_attribution
 // duplicate of the SAME usage does NOT inflate the total a second time, and
-// that model identity survives across turns.
+// that model identity survives across turns. It also pins issue #1960 stage
+// 3's defects 1+2 together end to end: TotalTokens (TokenSnapshot.Total,
+// defect 1) and ContextWindow (the model-catalog read, defect 2) both land
+// on SessionMetrics from the same two-turn transcript, the combination the
+// model-context-display cell's acceptance criteria actually require.
 func TestTokenAccounting_EndToEnd(t *testing.T) {
+	home := setHome(t)
+	writeCatalog(t, home, "catalog.json", modelCatalogRow{ModelID: "muse-spark-1.3-contributor", ContextLimit: 1007997})
+
 	dir := t.TempDir()
 	sessionDir := filepath.Join(dir, "2026", "09", "13", "01a09c40-6dd8-7732-8c3f-5a7618ffaee4")
 	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
@@ -94,6 +101,21 @@ func TestTokenAccounting_EndToEnd(t *testing.T) {
 	}
 	if m.CumCacheReadTokens != wantCacheRead {
 		t.Errorf("CumCacheReadTokens = %d, want %d", m.CumCacheReadTokens, wantCacheRead)
+	}
+	// Defect 1: TotalTokens is the LATEST turn's snapshot (not cumulative —
+	// see applyTokenSnapshot), so it reflects only turn 2's own usage: 1000
+	// fresh input + 50 output + 0 cache (turn 2 has no cache_read_tokens).
+	wantTotalTokens := int64(1000 + 50)
+	if m.TotalTokens != wantTotalTokens {
+		t.Errorf("TotalTokens = %d, want %d (defect 1: TokenSnapshot.Total was never set)", m.TotalTokens, wantTotalTokens)
+	}
+	// Defect 2: resolved from the fixture model-catalog written above, keyed
+	// by muse-spark-1.3-contributor.
+	if m.ContextWindow != 1007997 {
+		t.Errorf("ContextWindow = %d, want 1007997 (defect 2: no model-catalog read)", m.ContextWindow)
+	}
+	if m.ContextUtilization <= 0 {
+		t.Errorf("ContextUtilization = %v, want > 0 with both TotalTokens and ContextWindow set", m.ContextUtilization)
 	}
 	if m.LastEventType != "turn_done" {
 		t.Errorf("LastEventType = %q, want turn_done", m.LastEventType)

@@ -374,6 +374,16 @@ func parseModelCompleted(event map[string]any, ev *tailer.ParsedEvent) {
 	if usage == nil {
 		return
 	}
+	// tailer.ExtractUsage (parser.go's shared helper) is deliberately NOT used
+	// here: it reads Claude/Codex-style field names (input_tokens,
+	// cache_read_input_tokens, ...) or Pi's (input, cacheRead, ...) and sums
+	// them assuming input_tokens is ALREADY the fresh (non-cached) count — the
+	// opposite of muse's convention below, where input_tokens is INCLUSIVE of
+	// the cache. Calling it unmodified on muse's raw usage map would count
+	// cache_read_tokens twice: once inside its unmodified input_tokens read,
+	// once again in its own CacheRead field. The netting immediately below is
+	// muse-specific and has to happen before any total is summed.
+	//
 	// input_tokens is INCLUSIVE of the cached portion, the same OpenAI-
 	// Responses-API convention codex's parser documents and corrects for
 	// (core/adapters/inbound/agents/codex/parser.go's
@@ -408,15 +418,25 @@ func parseModelCompleted(event map[string]any, ev *tailer.ParsedEvent) {
 		return
 	}
 	if model != "" {
-		ev.ModelName = tailer.NormalizeModelName(model)
+		applyModelIdentity(model, ev)
 	}
 	ev.Contribution = &tailer.PerTurnContribution{Model: tailer.NormalizeModelName(model), Usage: bd}
 	if bd.Input > 0 || bd.Output > 0 {
+		// Total is the sum of the four buckets above, NOT a second read of
+		// some raw "total_tokens" field (muse's usage object has none — see
+		// the real fixture: input_tokens/output_tokens/cached_tokens/
+		// cache_write_tokens/cache_read_tokens/reasoning_tokens only). bd.Input
+		// is already netted (input_tokens minus cache_read_tokens, per the
+		// doc comment above), so summing it with CacheRead here reconstructs
+		// the ORIGINAL inclusive input rather than double-counting the cached
+		// portion — the same hand-summed idiom aider's closeModelCall and
+		// geminicli's applyTokens use for their own TokenSnapshot.Total.
 		ev.Tokens = &tailer.TokenSnapshot{
 			Input:         bd.Input,
 			Output:        bd.Output,
 			CacheRead:     bd.CacheRead,
 			CacheCreation: bd.CacheCreation5m,
+			Total:         bd.Input + bd.Output + bd.CacheRead + bd.CacheCreation5m,
 		}
 	}
 }
@@ -596,13 +616,14 @@ func parseRouteFacts(payload map[string]any, ev *tailer.ParsedEvent) {
 
 // parseRunModelConfigured reads the model a specific run is using
 // (format-spec §7) — fires per run, before that run's first model_completed,
-// so it lights up the model display as early as possible each turn.
-// Skip=true: bookkeeping.
+// so it lights up the model display (and, via applyModelIdentity, the
+// context-window budget) as early as possible each turn. Skip=true:
+// bookkeeping.
 func parseRunModelConfigured(payload map[string]any, ev *tailer.ParsedEvent) {
 	ev.Skip = true
 	record, _ := payload["record"].(map[string]any)
 	if model := str(record, "model_id"); model != "" {
-		ev.ModelName = tailer.NormalizeModelName(model)
+		applyModelIdentity(model, ev)
 	}
 }
 
@@ -614,7 +635,26 @@ func parseModelReconfigure(payload map[string]any, ev *tailer.ParsedEvent) {
 	record, _ := payload["record"].(map[string]any)
 	effective, _ := record["effective"].(map[string]any)
 	if model := str(effective, "model_id"); model != "" {
-		ev.ModelName = tailer.NormalizeModelName(model)
+		applyModelIdentity(model, ev)
+	}
+}
+
+// applyModelIdentity sets ev.ModelName from model — the raw id muse reports
+// (run.model.configured's model_id, runtime.model_reconfigure.completed's
+// effective.model_id, or model_completed's own model field; all three name
+// the same session-scoped concept, format-spec §7) — and, when the local
+// model-catalog cache has a matching row (issue #1960 stage 3;
+// contextWindowForModel, catalog.go), ev.ContextWindow alongside it. The raw
+// (pre-normalize) id is what's looked up: NormalizeModelName only rewrites a
+// handful of Claude short aliases and strips a "[1m]" suffix (parser.go's
+// own NormalizeModelName), neither of which ever appears on a muse model id,
+// so the catalog's model_id column (muse-spark-1.3-contributor, verified
+// live on this machine) matches the raw string unchanged. Shared by every
+// call site that learns a model id so the lookup isn't triplicated.
+func applyModelIdentity(model string, ev *tailer.ParsedEvent) {
+	ev.ModelName = tailer.NormalizeModelName(model)
+	if window, ok := contextWindowForModel(model); ok {
+		ev.ContextWindow = window
 	}
 }
 
@@ -652,9 +692,9 @@ func (p *Parser) parseRetainedFrame(raw map[string]any) *tailer.ParsedEvent {
 // id-keyed map (applyToolCallDeltas, applyPermissionDeltas in
 // core/pkg/tailer/tailer.go), so duplicate or out-of-order opens/closes
 // within one merged event are harmless. Single-value fields (EventType,
-// ModelName, CWD, AgentVersion, AssistantText, UserText, SessionError,
-// Contribution, Tokens) take the LAST non-empty child's value — the same
-// "latest wins" convention every adapter in this repo already uses for a
+// ModelName, ContextWindow, CWD, AgentVersion, AssistantText, UserText,
+// SessionError, Contribution, Tokens) take the LAST non-empty child's value
+// — the same "latest wins" convention every adapter in this repo already uses for a
 // skipped-event metadata stamp. Boolean flags (IsError, ClearToolNames,
 // IsUserInterrupt, PendingWaitingCue) OR across children. The merged event
 // is Skip=true only when every child was Skip=true.
@@ -691,6 +731,9 @@ func mergeChildEvents(events []*tailer.ParsedEvent) *tailer.ParsedEvent {
 		}
 		if ev.ModelName != "" {
 			merged.ModelName = ev.ModelName
+		}
+		if ev.ContextWindow > 0 {
+			merged.ContextWindow = ev.ContextWindow
 		}
 		if ev.AgentVersion != "" {
 			merged.AgentVersion = ev.AgentVersion

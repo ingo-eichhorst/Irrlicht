@@ -174,6 +174,7 @@ func TestParseLine_RunTerminal_Cancelled_NoErrorNoInterruptFlag(t *testing.T) {
 // --- kind:"run" / event.kind:"model_completed" (token accounting) ---
 
 func TestParseLine_ModelCompleted_NetsCacheReadFromInput(t *testing.T) {
+	setHome(t) // no catalog fixture — isolates this test from the real machine's model-catalog
 	// Verified live against 476 real model_completed records: input_tokens
 	// is inclusive of cache_read_tokens (never smaller), the OpenAI-
 	// Responses-API convention codex's parser also corrects for.
@@ -198,9 +199,19 @@ func TestParseLine_ModelCompleted_NetsCacheReadFromInput(t *testing.T) {
 	if ev.Tokens == nil || ev.Tokens.Input != want.Input || ev.Tokens.Output != want.Output {
 		t.Errorf("Tokens = %+v, want Input=%d Output=%d", ev.Tokens, want.Input, want.Output)
 	}
+	// Defect 1 (issue #1960 stage 3): Total was never set at all, so
+	// SessionMetrics.TotalTokens (and the context-utilization percentage
+	// derived from it) stayed 0 forever. want.Total sums the same four
+	// buckets the fix now sums — CacheCreation5m is 0 here (no
+	// cache_write_tokens in this fixture).
+	wantTotal := want.Input + want.Output + want.CacheRead + want.CacheCreation5m
+	if ev.Tokens == nil || ev.Tokens.Total != wantTotal {
+		t.Errorf("Tokens.Total = %v, want %d", ev.Tokens, wantTotal)
+	}
 }
 
 func TestParseLine_ModelCompleted_FallsBackToCachedTokens(t *testing.T) {
+	setHome(t) // "m" isn't a real model, but isolate anyway for hermeticity
 	// The --provider echo shape observed live omits cache_read_tokens
 	// entirely and carries only cached_tokens.
 	ev := (&Parser{}).ParseLine(line(t, `{"payload_type":"runtime.session","payload":{"kind":"run",
@@ -211,6 +222,9 @@ func TestParseLine_ModelCompleted_FallsBackToCachedTokens(t *testing.T) {
 	}
 	if ev.Contribution.Usage.Input != 60 {
 		t.Errorf("Input = %d, want 60 (100-40)", ev.Contribution.Usage.Input)
+	}
+	if ev.Tokens == nil || ev.Tokens.Total != 110 {
+		t.Errorf("Tokens.Total = %v, want 110 (60 fresh input + 10 output + 40 cache-read)", ev.Tokens)
 	}
 }
 
@@ -393,6 +407,7 @@ func TestParseLine_RouteFacts_CWD(t *testing.T) {
 }
 
 func TestParseLine_RunModelConfigured_SetsModelName(t *testing.T) {
+	setHome(t) // no catalog present — ContextWindow must stay 0, not guessed
 	ev := (&Parser{}).ParseLine(line(t, `{"payload_type":"run.model.configured",
 		"payload":{"kind":"run_model","record":{"provider_id":"meta","model_id":"muse-spark-1.3-contributor",
 		"source":"startup"}}}`))
@@ -402,9 +417,30 @@ func TestParseLine_RunModelConfigured_SetsModelName(t *testing.T) {
 	if ev.ModelName != "muse-spark-1.3-contributor" {
 		t.Errorf("ModelName = %q", ev.ModelName)
 	}
+	if ev.ContextWindow != 0 {
+		t.Errorf("ContextWindow = %d, want 0 (no model-catalog fixture in this test's isolated $HOME)", ev.ContextWindow)
+	}
+}
+
+// TestParseLine_RunModelConfigured_SetsContextWindowFromCatalog is the
+// positive twin of the test above: with a model-catalog fixture present
+// under an isolated $HOME, run.model.configured must resolve ContextWindow
+// alongside ModelName — the exact wiring the model-context-display cell
+// (replaydata/agents/muse/scenarios/1-8_model-context-display/metadata.json)
+// named as missing.
+func TestParseLine_RunModelConfigured_SetsContextWindowFromCatalog(t *testing.T) {
+	home := setHome(t)
+	writeCatalog(t, home, "catalog.json", modelCatalogRow{ModelID: "muse-spark-1.3-contributor", ContextLimit: 1007997})
+	ev := (&Parser{}).ParseLine(line(t, `{"payload_type":"run.model.configured",
+		"payload":{"kind":"run_model","record":{"provider_id":"meta","model_id":"muse-spark-1.3-contributor",
+		"source":"startup"}}}`))
+	if ev.ContextWindow != 1007997 {
+		t.Errorf("ContextWindow = %d, want 1007997", ev.ContextWindow)
+	}
 }
 
 func TestParseLine_ModelReconfigure_UsesEffectiveModel(t *testing.T) {
+	setHome(t)
 	ev := (&Parser{}).ParseLine(line(t, `{"payload_type":"runtime.model_reconfigure.completed",
 		"payload":{"kind":"model_reconfigure","record":{"previous":{"model_id":""},
 		"effective":{"model_id":"muse-spark-1.3-contributor"}}}}`))
@@ -574,6 +610,7 @@ func TestParseLine_RetainedFrame_MergesMultipleChildDeltas(t *testing.T) {
 // LastEventType below pins that "started" — not the header — is what
 // produced the session's only activity.
 func TestParseLine_SessionHeader_RealFixture(t *testing.T) {
+	setHome(t) // isolate from the real machine's model-catalog
 	m := tailFixture(t, fixtureLines(t, "real-session-header.jsonl"))
 	if m.LastCWD == "" {
 		t.Error("expected CWD to surface from route_facts")
@@ -593,7 +630,22 @@ func TestParseLine_SessionHeader_RealFixture(t *testing.T) {
 // (started -> model_completed -> tool call open/close -> assistant message
 // -> terminal:completed) and asserts the turn settles with tokens counted
 // and no open tool call left behind.
+//
+// This is the exact fixture (and, via the isolated $HOME + fixture catalog
+// below, the exact model-context-display shape) a throwaway probe used
+// while diagnosing issue #1960 stage 3's defects 1+2: before either fix,
+// tl := tailer.NewTranscriptTailer(path, &Parser{}, AdapterName);
+// m, _ := tl.TailAndProcess() reported TotalTokens=0, ContextWindow=0,
+// ModelName="muse-spark-1.3-contributor" — model identity worked, both
+// token-derived metrics were dead. The two assertions below pin the fix.
 func TestParseLine_TurnCompleted_RealFixture(t *testing.T) {
+	home := setHome(t)
+	// The fixture's own model, muse-spark-1.3-contributor (grep -o
+	// '"model"[^,}]*' testdata/real-turn-completed.jsonl), with the
+	// context_limit live-confirmed on this machine
+	// (~/.local/share/muse/model-catalog/*.json, 2026-09-14).
+	writeCatalog(t, home, "catalog.json", modelCatalogRow{ModelID: "muse-spark-1.3-contributor", ContextLimit: 1007997})
+
 	m := tailFixture(t, fixtureLines(t, "real-turn-completed.jsonl"))
 	if m.LastEventType != "turn_done" {
 		t.Errorf("LastEventType = %q, want turn_done", m.LastEventType)
@@ -606,6 +658,20 @@ func TestParseLine_TurnCompleted_RealFixture(t *testing.T) {
 	}
 	if m.SessionError != nil {
 		t.Errorf("SessionError = %+v, want nil for a clean completion", m.SessionError)
+	}
+	// Defect 1: TokenSnapshot.Total was never set, so SessionMetrics.TotalTokens
+	// (the context-utilization numerator) stayed 0 no matter how much usage
+	// model_completed reported.
+	if m.TotalTokens == 0 {
+		t.Error("TotalTokens = 0, want nonzero (defect 1: TokenSnapshot.Total was never set)")
+	}
+	// Defect 2: nothing in this package ever set ContextWindow, so the
+	// denominator was always 0 too — even with a catalog fixture present.
+	if m.ContextWindow != 1007997 {
+		t.Errorf("ContextWindow = %d, want 1007997 (defect 2: no model-catalog read)", m.ContextWindow)
+	}
+	if m.ContextUtilization <= 0 {
+		t.Errorf("ContextUtilization = %v, want > 0 now that both TotalTokens and ContextWindow are set", m.ContextUtilization)
 	}
 }
 

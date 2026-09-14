@@ -73,15 +73,20 @@ func Agent() agent.Agent {
 				Title:           "Read session transcripts",
 				FeatureUnlocked: "Session list, timeline, state, model & context-window usage",
 				Touches: "Reads session transcripts under ~/.local/share/muse/sessions/, " +
-					"the small .session.lock file next to each transcript, and the " +
-					"working directory of running muse processes",
+					"the small .session.lock file next to each transcript, the " +
+					"cached model-catalog files under ~/.local/share/muse/model-catalog/, " +
+					"and the working directory of running muse processes",
 				Detail: "Tails session.jsonl files under " +
 					"~/.local/share/muse/sessions/<YYYY>/<MM>/<DD>/<session-id>/ to " +
 					"derive session state, activity, and timeline, including nested " +
 					"subagent session.jsonl files under each session's subagent/ " +
 					"directory. Reads each session's small .session.lock file — an " +
 					"advisory lock, not conversation content — to bind a live " +
-					"session to its process ID. Also scans for running muse " +
+					"session to its process ID. Reads the small JSON files under " +
+					"~/.local/share/muse/model-catalog/ — muse's own locally cached " +
+					"per-model context-window limits, not conversation content — to " +
+					"show how full a session's context window is; this is the same " +
+					"cache muse itself falls back to. Also scans for running muse " +
 					"processes. Read-only — no file is ever modified, and " +
 					"session-index.db is never read. Toggling off stops all " +
 					"reading immediately.",
