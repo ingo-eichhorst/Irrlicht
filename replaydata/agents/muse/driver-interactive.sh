@@ -164,7 +164,7 @@ SES_OWNED=()
 # DRIVE_SLASH_REQUIRES_STEP_TYPE=true if muse is headless-first (a bare
 # send "/cmd" stores literal text instead of reaching the REPL).
 # shellcheck disable=SC2034  # scraped from this file's SOURCE by tools/onboarding-factory/scripts/lib/recipe-lint.sh:97 (sed), never expanded in shell
-DRIVE_ELICITS="send slash wait_turn sleep exit_clean restart sigkill start_session session"
+DRIVE_ELICITS="send slash wait_turn sleep exit_clean restart sigkill start_session session keys"
 # shellcheck disable=SC2034  # scraped from this file's SOURCE by tools/onboarding-factory/scripts/lib/recipe-lint.sh:113 (sed), never expanded in shell
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 RUN_CWD="${IRRLICHT_ONBOARD_CWD:-$STAGING/cwd}"
@@ -442,6 +442,47 @@ wait_turn() {
   step_wait_turn
 }
 
+# step_keys sends a raw tmux key sequence (NOT literal text) to the active
+# slot's pane — arrow-key pickers (e.g. /model's picker, 5.3), a bare
+# non-Enter keypress that a menu applies on keydown (e.g. the approval
+# dialog's "1", 2.19/2.26), Escape, etc. Ported from claudecode's
+# step_keys/codex's inline `keys)` arm (both five lines, both send raw and
+# both do NOT append an Enter — unlike step_send, the caller decides exactly
+# which keys go, including whether Enter is one of them), re-targeted from
+# claudecode's $CURRENT_TMUX onto muse's own active-slot mirror var $SESSION
+# (slots.sh) to match this driver's existing idiom (step_send, spawn_muse_repl
+# all address $SESSION, never a second tmux-target variable).
+#
+# Deliberately does NOT bump EXPECTED_TURNS. turn_count() (turn-count.sh)
+# only counts a completed ("run","terminal") record — a genuine LLM turn —
+# and a raw key sequence (menu navigation, a keydown-applied approval choice)
+# never produces one of those on its own; the model reconfigure/approval
+# bookkeeping it triggers is Skip=true in the daemon parser (5.3's own
+# assessment). Live-confirmed this matters, not just symmetry with the
+# reference drivers: 5.3's assessment independently hit the SAME failure this
+# port must not reintroduce — submitting "/model" via `slash` (=step_send)
+# already bumps EXPECTED_TURNS even though /model never completes a matching
+# turn, so its recipe deliberately awaits turn 2 with a bounded `sleep`
+# instead of `wait_turn` to avoid blocking on a count that can never be
+# reached. Had `keys` also bumped the counter (e.g. for the Down/Enter picker
+# steps), the counter would run further ahead of what any `wait_turn` in a
+# keys-using recipe could ever observe, guaranteeing a timeout on shapes that
+# use `keys` inside a normal wait_turn-gated turn (2.19/2.26's approval
+# keypress, sent mid-turn while the SAME send's `wait_turn` still needs to
+# observe that turn's own eventual terminal record).
+#
+# Recipe step shape:
+#   {"type": "keys", "keys": "1"}
+#   {"type": "keys", "keys": "Down"}
+#   {"type": "keys", "keys": "Down Down Enter"}
+step_keys() { # <keys>
+  local keys="$1"
+  # shellcheck disable=SC2086  # intentional word-splitting of the key list
+  tmux send-keys -t "$SESSION" $keys
+  echo "[driver] keys[s$ACTIVE]: $keys" >&2
+  sleep 0.3
+}
+
 # --- AGENT-SPECIFIC SEAM 4: graceful teardown ---------------------------------
 # `/exit` ("Quit when idle", confirmed live via muse's own `/` command menu)
 # is muse's clean-shutdown slash command. Wired up here in place of the
@@ -668,7 +709,7 @@ while IFS= read -r step; do
     wait_turn)       step_wait_turn || break ;;
     sleep)           sleep "$(jq -r '.seconds // 1' <<<"$step")" ;;
     interrupt)       not_implemented interrupt || break ;;       # TODO(muse): Escape/Ctrl-C the in-flight turn
-    keys)            not_implemented keys || break ;;            # TODO(muse): tmux send-keys raw sequence
+    keys)            step_keys "$(jq -r '.keys' <<<"$step")" ;;
     reset_session)   not_implemented reset_session || break ;;   # TODO(muse): in-REPL /clear|/new → new id, SAME slot; re-resolve SES_TRANSCRIPT[$ACTIVE] (SEAM 3)
     restart)         step_restart || break ;;
     resume)          not_implemented resume || break ;;          # TODO(muse): relaunch same id+cwd (1 session, 2 PIDs) — reuse the active slot
