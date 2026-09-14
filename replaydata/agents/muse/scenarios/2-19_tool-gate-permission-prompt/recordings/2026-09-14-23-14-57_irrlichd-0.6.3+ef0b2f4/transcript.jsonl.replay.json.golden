@@ -1,0 +1,215 @@
+{
+  "schema_version": 1,
+  "source_transcript": "",
+  "generated_at": "0001-01-01T00:00:00Z",
+  "settings": {
+    "adapter": "muse",
+    "debounce_window": 2000000000,
+    "flicker_max_duration": 10000000000
+  },
+  "summary": {
+    "total_events": 254,
+    "consumed_events": 254,
+    "total_transitions": 5,
+    "first_event_time": "2026-09-14T23:14:57.719334+02:00",
+    "last_event_time": "2026-09-14T23:15:33.331099+02:00",
+    "wall_clock_session_duration": 35611765000,
+    "state_durations": {
+      "ready": 3428419000,
+      "waiting": 18982102000,
+      "working": 13201244000
+    },
+    "flicker_count": 0,
+    "flickers_by_category": {},
+    "flickers_by_reason": {},
+    "cum_input_tokens": 33795,
+    "cum_output_tokens": 869,
+    "cum_cache_read_tokens": 32625,
+    "model_name": "muse-spark-1.2"
+  },
+  "transitions": [
+    {
+      "index": 0,
+      "event_index": -1,
+      "virtual_time": "2026-09-14T23:14:57.719334+02:00",
+      "cause": "init",
+      "prev_state": "",
+      "new_state": "ready",
+      "reason": "initial state",
+      "last_event_type": "",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 1,
+      "event_index": 81,
+      "virtual_time": "2026-09-14T23:15:01.147753+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "user_message",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 2,
+      "event_index": 106,
+      "virtual_time": "2026-09-14T23:15:07.278387+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "waiting",
+      "reason": "transcript permission prompt open → waiting",
+      "last_event_type": "permission_requested",
+      "has_open_tool": true,
+      "open_tool_names": [
+        "bash"
+      ],
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 3,
+      "event_index": 190,
+      "virtual_time": "2026-09-14T23:15:26.260489+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "waiting",
+      "new_state": "working",
+      "reason": "transcript activity (waiting → working)",
+      "last_event_type": "function_call_output",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 4,
+      "event_index": 253,
+      "virtual_time": "2026-09-14T23:15:33.331099+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "PERMISSION_GATE_OK"
+    }
+  ],
+  "sessions": [
+    {
+      "session_id": "01a0a1c5-eaf6-7623-bb97-44ccc2351fc4",
+      "adapter": "muse",
+      "first_seen": "2026-09-14T23:14:57.693391+02:00",
+      "last_seen": "2026-09-14T23:15:33.333313+02:00",
+      "duration_ms": 35639,
+      "event_count": 510,
+      "state_changes": 4,
+      "final_state": "ready",
+      "pid": 60695,
+      "pid_discovery_lag_ms": 212,
+      "debounce_coalesced_events": 249,
+      "state_durations_ms": {
+        "ready": 3477,
+        "waiting": 26050,
+        "working": 6107
+      }
+    },
+    {
+      "session_id": "proc-60695",
+      "adapter": "muse",
+      "first_seen": "2026-09-14T23:14:57.988101+02:00",
+      "last_seen": "2026-09-14T23:15:02.386301+02:00",
+      "duration_ms": 4398,
+      "event_count": 5,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 60695,
+      "pid_discovery_lag_ms": 28,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 4369
+      }
+    },
+    {
+      "session_id": "f340b786-2cbd-4ddc-af89-4c97f7b17320",
+      "adapter": "muse",
+      "parent_session_id": "01a0a1c5-eaf6-7623-bb97-44ccc2351fc4",
+      "first_seen": "2026-09-14T23:15:27.720753+02:00",
+      "last_seen": "2026-09-14T23:15:33.35264+02:00",
+      "duration_ms": 5631,
+      "event_count": 115,
+      "state_changes": 2,
+      "final_state": "ready",
+      "pid": 60695,
+      "pid_discovery_lag_ms": 252,
+      "debounce_coalesced_events": 53,
+      "state_durations_ms": {
+        "ready": 1084,
+        "working": 4539
+      }
+    },
+    {
+      "session_id": "dc71dd2e-caf2-41a6-a160-5905520e36ff",
+      "adapter": "muse",
+      "parent_session_id": "01a0a1c5-eaf6-7623-bb97-44ccc2351fc4",
+      "first_seen": "2026-09-14T23:15:27.780515+02:00",
+      "last_seen": "2026-09-14T23:15:41.598129+02:00",
+      "duration_ms": 13817,
+      "event_count": 128,
+      "state_changes": 2,
+      "final_state": "ready",
+      "pid": 60695,
+      "pid_discovery_lag_ms": 242,
+      "debounce_coalesced_events": 59,
+      "state_durations_ms": {
+        "ready": 8333,
+        "working": 5476
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 3,
+    "replayed_transition_count": 4,
+    "ordered_matches": 2,
+    "ordered_mismatches": [
+      {
+        "index": 2,
+        "kind": "state_differs",
+        "recorded": "waiting→ready",
+        "replayed": "waiting→working"
+      },
+      {
+        "index": 3,
+        "kind": "extra_in_replay",
+        "replayed": "working→ready"
+      }
+    ],
+    "recorded_unique_kinds": [
+      "ready→working",
+      "waiting→ready",
+      "working→waiting"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "waiting→working",
+      "working→ready",
+      "working→waiting"
+    ],
+    "missing_kinds": [
+      "waiting→ready"
+    ],
+    "extra_kinds": [
+      "waiting→working",
+      "working→ready"
+    ]
+  }
+}
