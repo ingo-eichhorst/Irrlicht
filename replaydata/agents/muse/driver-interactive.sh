@@ -101,6 +101,19 @@ if [[ -f "$SETTINGS_PATH" ]]; then
   MODEL="$(jq -r '.model // empty' "$SETTINGS_PATH" 2>/dev/null)"
 fi
 
+# BASE_URL overrides the Meta provider endpoint at launch when the cell's
+# settings name one (`muse --help`: "--base-url <URL> Override the Meta
+# provider base URL"). turn-aborted-by-error (2.14) points this at a dead
+# local port so every model call fails deterministically and with zero API
+# spend, mirroring copilot's COPILOT_PROVIDER_BASE_URL-at-a-dead-port
+# precedent for the same scenario. Without this, launch_repl/spawn_muse_repl
+# ignored $SETTINGS_PATH entirely and the --base-url flag (confirmed present
+# in `muse --help`) had nowhere to land.
+BASE_URL=""
+if [[ -f "$SETTINGS_PATH" ]]; then
+  BASE_URL="$(jq -r '.base_url // empty' "$SETTINGS_PATH" 2>/dev/null)"
+fi
+
 # Shared multi-session slot bookkeeping + staging-contract emission (#508 #3).
 # The scaffolded driver lives at replaydata/agents/<agent>/driver-interactive.sh,
 # so the lib is two dirs up under replaydata/_lib/drive. Sourcing it means a new
@@ -261,6 +274,7 @@ spawn_muse_repl() {
   # entry when it reaches tmux new-session's trailing-argv passthrough.
   MUSE_ARGS=(--trust-workspace)
   [[ -n "$MODEL" ]] && MUSE_ARGS+=(--model "$MODEL")
+  [[ -n "$BASE_URL" ]] && MUSE_ARGS+=(--base-url "$BASE_URL")
   # `|| { … exit … }` keeps a launch failure from aborting under set -e WITHOUT
   # an accurate exit-reason — the cleanup trap then records nonzero(2).
   tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "${SES_CWD[$ACTIVE]}" "muse" "${MUSE_ARGS[@]}" \
