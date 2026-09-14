@@ -247,6 +247,7 @@ var knownFirstTransitionDrift = map[string]string{
 	"mistral-vibe/scenarios/2-15_shell-escape-command/recordings/2026-07-07-17-41-58_irrlichd-0.5.5+22a01d2.dirty/transcript.jsonl":       "#1476 accepted: -8.599s at pair 0 (ready→working)",
 	"mistral-vibe/regressions/1846-retired-terminal-control/recordings/2026-07-08-09-15-24_irrlichd-0.5.5+35c4012.dirty/transcript.jsonl": "#1476 accepted: -27.522s at pair 0 (ready→working)",
 	"muse/scenarios/4-1_multiple-sessions-same-cwd/recordings/2026-09-14-06-04-09_irrlichd-0.6.3+0b3e2ad/transcript.jsonl":                "#1960: -32.388s at pair 0 (ready→working). Pre-fix capture (predates fix commit 9abf13d1) hitting the SAME assignPIDLocked PID-eviction bug that blocked 2-14/2-17: session 01a09e16 born ready at seq152, evicted by a late-arriving proc-53461 pre-session claim at seq170, re-discovered only via a LATER, different session's own birth at seq456. 4-1's own cell assertions don't key on this transition (stayed a clean 5/5 pass), so it was not re-recorded as part of #1960's fix.",
+	"muse/scenarios/2-15_shell-escape-command/recordings/2026-09-14-20-47-26_irrlichd-0.6.3+d2dc680/transcript.jsonl":                     "#1960: -2.242s at pair 0 (ready\u2192working). The 2s debounce window, same mechanism this file already documents for claudecode's Stop above \u2014 not a muse defect and not a classifier change. Measured in this recording's own events.jsonl: a burst of transcript_activity at 20:47:33.659-33.667 (seq 521-528) is coalesced on every write (debounce_coalesced at each), each one re-opening the window, and the daemon's state_transition lands at 20:47:35.708 (seq 529) \u2014 2.041s after the last coalesced write, i.e. at the next debounce boundary. The replay sidecar flips at the transcript bytes themselves, which is where the 2.242s comes from. A bound that absorbed it would hide the next one.",
 }
 
 // aggregate ratchets. The named list above keys on the FIRST kind-matched pair,
@@ -312,9 +313,18 @@ var knownFirstTransitionDrift = map[string]string{
 // on that specific transition, so its cell stayed a clean 5/5 pass — so it is
 // not one of #1960's two re-recorded cells and is left as committed evidence
 // of the pre-fix behavior rather than re-recorded here.
+// #1960's recording pass then moves both bounds again, 108 -> 111 and
+// 52 -> 54, for its twelve new muse recordings. Only one of them is a NEW
+// first-transition drift (2-15_shell-escape-command, entry above, the 2s
+// debounce boundary); the rest drift on a LATER transition, which is the case
+// the named list cannot see and these two counts exist to catch. Muse drifts
+// more than most adapters for a structural reason worth stating: every muse
+// prompt spawns internal reminder micro-agents that write to their own
+// transcripts under the same process, so a parent's window is re-opened by
+// writes that are not the parent's own turn.
 const (
-	maxRecordingsDriftingOverThreshold = 108
-	maxRecordingsDriftingOver5s        = 52
+	maxRecordingsDriftingOverThreshold = 111
+	maxRecordingsDriftingOver5s        = 54
 )
 
 // Lower bounds on HOW MUCH is measured. Every ratchet above is an upper bound,

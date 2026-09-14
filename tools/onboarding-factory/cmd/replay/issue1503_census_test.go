@@ -246,11 +246,11 @@ type catalogCensus struct {
 // `name[:4] == "muse"`, printing each recording's Fabricates()/Diverges()/
 // divergesByCountsAndKinds() (not committed — this paragraph is the record).
 var censusOfTheCommittedCatalog = catalogCensus{
-	Recordings:                354,
+	Recordings:                366,
 	Zero:                      1,
 	Fabricated:                3,
-	Divergent:                 183,
-	DivergentByCountsAndKinds: 182,
+	Divergent:                 185,
+	DivergentByCountsAndKinds: 184,
 	UnpairedSidecars:          0,
 	PairedButUngraded:         88,
 }

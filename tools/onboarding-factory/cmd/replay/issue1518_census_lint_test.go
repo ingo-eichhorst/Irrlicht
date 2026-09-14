@@ -146,6 +146,18 @@ var coincidentalCensusFigures = []censusFigureExemption{
 			"the comparison the sentence exists to make. It coincides with " +
 			"PairedButUngraded.",
 	},
+	{
+		File:   "issue1480_timing_test.go",
+		Marker: "97ms after the POST (seq 184)",
+		Reason: "a sidecar SEQUENCE NUMBER, not a census figure. The same " +
+			"comment names seq 187 two lines above it, which is what makes " +
+			"the reading checkable rather than a matter of taste: both are " +
+			"positions in one recording's sidecar stream. It began colliding " +
+			"when #1960's twelve muse recordings moved " +
+			"DivergentByCountsAndKinds 182 -> 184; the seq did not move, the " +
+			"figure arrived on top of it. The #1480 ratchet deletes this " +
+			"entry on its own the next time that figure moves off 184.",
+	},
 }
 
 // WHICH rows collide is itself evidence, and #1388 is the run that showed it.
