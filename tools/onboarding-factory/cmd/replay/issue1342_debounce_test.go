@@ -185,6 +185,7 @@ var knownZeroTransition = map[string]string{
 // precisely how this counter grows.
 var knownFabricated = map[string]string{
 	"copilot/scenarios/2-19_tool-gate-permission-prompt/recordings/2026-08-03-18-02-54_irrlichd-0.5.9+c55d3a0/transcript.jsonl": "pre-existing on main, unrelated to #1342",
+	"muse/scenarios/2-17_user-blocking-question/recordings/2026-09-14-04-58-34_irrlichd-0.6.3+360308f/transcript.jsonl":         "the live daemon capture itself swallows the working transition for this recording (ready->waiting direct, no working) -- a real daemon bug (#1960 record run; issue payload prepared, not yet filed), corrected into the cell's own known_failing spec. The offline replay sidecar re-derives working from the same transcript bytes without the live fswatcher's debounce/timing, so its golden legitimately disagrees with what the daemon actually logged live.",
 }
 
 // forEachSidecarRecording replays every sidecar-driven recording in the catalog

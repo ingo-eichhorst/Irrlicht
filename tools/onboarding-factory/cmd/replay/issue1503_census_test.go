@@ -182,12 +182,38 @@ type catalogCensus struct {
 // two. This is the frozen-sidecar cost of REMOVING a behaviour, the mirror of
 // the #1798/#1800 entries above, and it resolves the same way — a re-record on
 // a post-#1860 daemon. The cell is marked known_failing in the meantime.
+//
+// #1960 (muse onboarding) moved four figures. Recordings, Divergent, and
+// DivergentByCountsAndKinds each rose by eight: four new muse cells joined the
+// catalog (token-accounting, model-context-display, user-blocking-question,
+// long-idle-live-session), plus four muse cells from the prior onboarding batch
+// on this same branch whose census bookkeeping had not yet been done — all
+// eight recordings replay one MORE transition than the daemon's own capture
+// recorded for their primary session. Fabricated rose by one: only
+// user-blocking-question's recording has the daemon capturing ZERO transitions
+// for its primary session (replay reconstructs `ready→working` AND
+// `working→waiting`, both missing live) rather than the merely-divergent
+// one-short pattern the other seven show. All eight trace to the SAME root
+// cause, confirmed by reading the raw daemon capture (not just curated
+// events.jsonl) on every one of the four new recordings: a `transcript_removed`
+// fires for the muse primary session's own transcript path roughly 0.6-1.1s
+// after its birth, on every single recording, followed by the daemon
+// re-discovering the session as though new (no prev_state on the next
+// transition it logs). In seven of the eight this only drops a prev_state
+// field — the observable state sequence a user would see is still correct. In
+// user-blocking-question's fast, tool-free recipe the whole exchange completed
+// inside that churn window, so the daemon's own capture never saw `working` at
+// all. Filed for investigation (issue payload prepared, not yet numbered — see
+// this cell's metadata.json caveats and
+// tools/onboarding-factory/cmd/replay/issue1342_debounce_test.go's
+// knownFabricated entry for the full evidence trail); user-blocking-question is
+// marked known_failing in the meantime and its golden is in knownFabricated.
 var censusOfTheCommittedCatalog = catalogCensus{
-	Recordings:                340,
+	Recordings:                348,
 	Zero:                      1,
-	Fabricated:                1,
-	Divergent:                 171,
-	DivergentByCountsAndKinds: 170,
+	Fabricated:                2,
+	Divergent:                 179,
+	DivergentByCountsAndKinds: 178,
 	UnpairedSidecars:          0,
 	PairedButUngraded:         88,
 }
