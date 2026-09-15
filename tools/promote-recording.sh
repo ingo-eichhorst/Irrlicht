@@ -379,6 +379,7 @@ populate_recording() {
 #    CLI's expectations to events the CLI never produced. That is what this call
 #    did before: every Desktop candidate was rejected at 1/2 phases on
 #    session_birth, which is why no Desktop recording was ever promoted.
+# BEGIN validate_recording
 validate_recording() {
   local cell_dir="$1" rec_name="$2" out
   if out="$(cd "$REPO_ROOT" && go run ./tools/onboarding-factory/cmd/expected-validate \
@@ -386,9 +387,29 @@ validate_recording() {
     echo "$out" | jq -r '.summary' 2>/dev/null || echo ""
     return 0
   fi
+  # jq exits 0 on EMPTY stdin — zero JSON inputs is not an error to jq
+  # (measured: `printf '' | jq -r '.summary'` prints nothing and exits 0,
+  # while genuinely malformed non-empty input like "not json" DOES exit
+  # non-zero and DOES reach the `||` below) — so the `|| echo
+  # "validate-failed"` fallback two lines down can never fire when $out is
+  # empty. And $out IS empty exactly when expected-validate's own
+  # internal-error path fires (exit 2 — e.g. a malformed expected.jsonl meta
+  # line, such as a non-boolean known_failing) and writes nothing to stdout.
+  # Before this guard that silently stamped an EMPTY expected_pass_rate into
+  # manifest.json instead of the "validate-failed" sentinel — on a
+  # known_failing:true candidate (which does not require $summary to be
+  # non-empty to promote, only the validator's exit status), indistinguishable
+  # from "the validator ran and legitimately found nothing to say" (#1967 QA
+  # finding). Check $out's emptiness FIRST, so the sentinel path is reachable
+  # regardless of what jq does with an empty pipe.
+  if [[ -z "$out" ]]; then
+    echo "validate-failed"
+    return 1
+  fi
   echo "$out" | jq -r '.summary' 2>/dev/null || echo "validate-failed"
   return 1
 }
+# END validate_recording
 
 echo "validating candidate recording against expected.jsonl..." >&2
 # An assignment inside an AND-OR list is not errexit-fatal, and `$?` in the ||
