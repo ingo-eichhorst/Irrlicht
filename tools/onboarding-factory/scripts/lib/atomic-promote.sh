@@ -27,7 +27,12 @@
 #
 # atomic_promote <cell_dir> <rec_name> <populate_fn> [<validate_fn>]
 #   populate_fn <dir>             fills the candidate recording dir; non-zero aborts
-#   validate_fn <cell_dir> <name> echoes a summary; non-zero rejects the candidate
+#   validate_fn <cell_dir> <name> echoes a summary; non-zero rejects the
+#                                  candidate. A summary of EXACTLY
+#                                  $VALIDATE_FAILED_SENTINEL additionally means
+#                                  "never reached a single phase" — see the
+#                                  known_failing exception below, which
+#                                  refuses on that value unconditionally.
 #
 # Echoes the validator's summary on stdout (the caller stamps it into
 # manifest.json) for EVERY outcome that reaches the validator — a rejected or
@@ -44,14 +49,42 @@
 # promoting, then restoring the full spec — the same detour the pre-existing
 # aider/2-15_shell-escape-command cell shows signs of. The flag is read
 # straight from <cell_dir>/expected.jsonl — never a caller-supplied bypass
-# flag, which could disagree with what is actually committed. A cell NOT
-# marked known_failing keeps the original blanket refusal: see
-# atomic-promote_test.sh's "validation fails" case (the lock) and
-# atomic-promote-mutations_test.sh, which breaks this exact discrimination
-# and confirms that lock catches it.
+# flag, which could disagree with what is actually committed.
 #
-# The check below MUST be a type-strict boolean equality (`jq -e '.known_failing
-# == true'`), never a raw-string comparison against `"true"`. QA on the first
+# What this ACTUALLY guarantees (both must hold, checked in this order):
+#   1. the validator ran to completion and reported a real graded summary —
+#      never the $VALIDATE_FAILED_SENTINEL literal, which means it never
+#      reached a single phase. Checked FIRST, before known_failing is even
+#      consulted (see "why validate-failed comes first" below).
+#   2. AND <cell_dir>/expected.jsonl's own meta line declares known_failing
+#      to the JSON BOOLEAN true — never a same-looking non-boolean (see "type-
+#      strict boolean" below).
+# A cell NOT marked known_failing, or whose validator could not grade it at
+# all, keeps the original blanket refusal: see atomic-promote_test.sh's
+# "validation fails" case (the lock) and its "must not override an
+# UNGRADEABLE file" case, plus atomic-promote-mutations_test.sh, which breaks
+# both discriminations in turn and confirms each is actually caught.
+#
+# Why validate-failed comes first (#1967 QA, second finding). This gate's own
+# known_failing read is `head -n1 <cell_dir>/expected.jsonl` — a CHEAP
+# meta-line lookup, deliberately not a second full parse of the file. The
+# REAL validator reads the WHOLE file. A cell can carry a perfectly valid
+# known_failing:true on line 1 and a syntactically broken phase on line 2 —
+# head -n1 never sees line 2. QA's live repro on that exact shape:
+# expected-validate prints `error: load expected.jsonl: line 2: phase:
+# invalid character 't' after object key:value pair`, exits 2, and grades
+# nothing; without this ordering the gate promoted the ENTIRELY UNGRADED
+# candidate anyway (rc=2, committed, expected_pass_rate stamped with the
+# sentinel text itself rather than a real rate) — reproduced end to end.
+# known_failing licenses "graded, and some phases failed", never "could not
+# be graded at all", so a validate_fn reporting exactly
+# $VALIDATE_FAILED_SENTINEL refuses UNCONDITIONALLY before head -n1 is even
+# consulted (AGENTS.md: a validator that cannot parse its input checks MORE,
+# never less).
+#
+# Type-strict boolean (#1967 QA, first finding). The known_failing check
+# itself MUST be a type-strict boolean equality (`jq -e '.known_failing ==
+# true'`), never a raw-string comparison against `"true"`. QA on the first
 # version of this fix found that `jq -r '.known_failing // false' == "true"`
 # strips JSON quoting, so a JSON STRING "true" reads identically to the JSON
 # BOOLEAN true — while the Go validator's ExpectedMeta.KnownFailing is a
@@ -59,20 +92,25 @@
 # string into Go struct field ExpectedMeta.known_failing of type bool) before
 # grading a single phase. Under the string-comparison version, that exact
 # document reproduced the #1333 hole this whole file exists to close: rc=2,
-# candidate committed, expected_pass_rate stamped EMPTY — a completely
-# ungraded recording landing in the tree. jq's `==` is type-strict (a JSON
-# string is never `==` a JSON boolean), so the fixed check fails safe on a
-# string, a number, null, or an object — see atomic-promote_test.sh's
-# "non-boolean known_failing" cases, seen red against the unfixed
-# raw-string check before this comment was written.
+# candidate committed, expected_pass_rate stamped EMPTY. jq's `==` is
+# type-strict (a JSON string is never `==` a JSON boolean), so the fixed
+# check fails safe on a string, a number, null, or an object — see
+# atomic-promote_test.sh's "non-boolean known_failing" cases.
 #
 # Returns: 0 promoted · 1 populate/move failed · 2 promoted despite failing
-# validation (expected.jsonl declares known_failing:true) · 3 rejected by the
-# validator. On a 1 or 3 return nothing is added to <cell_dir> and no scratch
-# remains. A 2 return promotes exactly like 0 (the caller still gets the
-# failing summary as the pass rate to stamp into manifest.json) — callers MUST
-# print something distinct for 2 so a deliberate known-failing promote never
-# reads the same as a clean pass.
+# validation (expected.jsonl declares known_failing:true AND the validator
+# actually graded it) · 3 rejected by the validator. On a 1 or 3 return
+# nothing is added to <cell_dir> and no scratch remains. A 2 return promotes
+# exactly like 0 (the caller still gets the failing summary as the pass rate
+# to stamp into manifest.json) — callers MUST print something distinct for 2
+# so a deliberate known-failing promote never reads the same as a clean pass.
+
+# The literal a validate_fn returns to mean "never reached a single phase" —
+# promote-recording.sh's validate_recording() is the one real producer of
+# this value today; atomic_promote is the one consumer, below. Named once so
+# both sides read the same constant instead of two independently-typed
+# copies of the same string silently drifting apart.
+readonly VALIDATE_FAILED_SENTINEL="validate-failed"
 
 atomic_promote() {
   local cell_dir="$1" rec_name="$2" populate_fn="$3" validate_fn="${4:-}"
@@ -113,6 +151,18 @@ atomic_promote() {
       if [[ -n "$summary" ]]; then echo "$summary"; fi
     else
       if [[ -n "$summary" ]]; then echo "$summary"; fi
+      # #1967 QA (second finding): a validate_fn reporting EXACTLY the
+      # $VALIDATE_FAILED_SENTINEL never reached a single phase — see the
+      # header comment's "why validate-failed comes first". This MUST be
+      # checked BEFORE head -n1, not folded into it: head -n1 only ever sees
+      # the meta line and would happily read a valid known_failing:true off
+      # line 1 while line 2 is what actually made the validator refuse to
+      # grade anything. known_failing licenses "graded, and some phases
+      # failed" — never "could not be graded at all" — so this refuses
+      # UNCONDITIONALLY, regardless of what the meta line says.
+      if [[ "$summary" == "$VALIDATE_FAILED_SENTINEL" ]]; then
+        return 3
+      fi
       # #1967: known_failing:true is a deliberate, narrow exception to B2 —
       # see the header comment, in particular the paragraph on why this MUST
       # be `jq -e '... == true'` (type-strict equality on jq's exit status),

@@ -391,22 +391,30 @@ validate_recording() {
   # (measured: `printf '' | jq -r '.summary'` prints nothing and exits 0,
   # while genuinely malformed non-empty input like "not json" DOES exit
   # non-zero and DOES reach the `||` below) — so the `|| echo
-  # "validate-failed"` fallback two lines down can never fire when $out is
-  # empty. And $out IS empty exactly when expected-validate's own
-  # internal-error path fires (exit 2 — e.g. a malformed expected.jsonl meta
-  # line, such as a non-boolean known_failing) and writes nothing to stdout.
-  # Before this guard that silently stamped an EMPTY expected_pass_rate into
-  # manifest.json instead of the "validate-failed" sentinel — on a
-  # known_failing:true candidate (which does not require $summary to be
-  # non-empty to promote, only the validator's exit status), indistinguishable
-  # from "the validator ran and legitimately found nothing to say" (#1967 QA
-  # finding). Check $out's emptiness FIRST, so the sentinel path is reachable
-  # regardless of what jq does with an empty pipe.
+  # "$VALIDATE_FAILED_SENTINEL"` fallback two lines down can never fire when
+  # $out is empty. And $out IS empty exactly when expected-validate's own
+  # internal-error path fires (exit 2 — e.g. a malformed expected.jsonl,
+  # anywhere in the file, not only its meta line) and writes nothing to
+  # stdout. Before this guard that silently stamped an EMPTY
+  # expected_pass_rate into manifest.json instead of the sentinel —
+  # indistinguishable from "the validator ran and legitimately found nothing
+  # to say" (#1967 QA finding). Check $out's emptiness FIRST, so the sentinel
+  # path is reachable regardless of what jq does with an empty pipe.
+  #
+  # $VALIDATE_FAILED_SENTINEL (declared once, in atomic-promote.sh, sourced
+  # above) is not merely cosmetic here: atomic_promote's known_failing
+  # exception refuses UNCONDITIONALLY whenever the summary it receives is
+  # EXACTLY this value — it means "never reached a single phase", which
+  # known_failing does not license (#1967 QA, second finding: a valid
+  # known_failing:true on line 1 with a broken phase on line 2 used to
+  # promote anyway, because the gate's own known_failing read is a cheap
+  # head -n1 of line 1 alone). Echoing anything other than this exact string
+  # here would silently defeat that gate.
   if [[ -z "$out" ]]; then
-    echo "validate-failed"
+    echo "$VALIDATE_FAILED_SENTINEL"
     return 1
   fi
-  echo "$out" | jq -r '.summary' 2>/dev/null || echo "validate-failed"
+  echo "$out" | jq -r '.summary' 2>/dev/null || echo "$VALIDATE_FAILED_SENTINEL"
   return 1
 }
 # END validate_recording

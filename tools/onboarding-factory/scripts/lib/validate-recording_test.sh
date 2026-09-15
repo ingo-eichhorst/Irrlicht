@@ -11,24 +11,34 @@
 #
 #   echo "$out" | jq -r '.summary' 2>/dev/null || echo "validate-failed"
 #
-# which looks like it falls back to the "validate-failed" sentinel whenever
-# jq can't produce a summary. It doesn't: jq exits 0 on EMPTY stdin (zero
-# JSON inputs is not an error to jq — measured: `printf '' | jq -r
+# which looks like it falls back to the $VALIDATE_FAILED_SENTINEL sentinel
+# whenever jq can't produce a summary. It doesn't: jq exits 0 on EMPTY stdin
+# (zero JSON inputs is not an error to jq — measured: `printf '' | jq -r
 # '.summary'` prints nothing and exits 0), so the `||` arm never fires when
 # $out is empty. expected-validate's own internal-error path (exit 2 — e.g. a
-# malformed expected.jsonl meta line) writes NOTHING to stdout, which is
-# exactly that empty-$out shape. A verification mechanism must fail loudly
-# when it cannot run (AGENTS.md); before the fix this stamped the SAME empty
-# value for "the validator ran and said nothing" as for "the validator
-# exploded before grading anything" — worst on a known_failing:true candidate
-# (#1967), where atomic_promote's rc=2 path promotes on the validator's exit
-# status alone and doesn't require a non-empty summary to do it.
+# malformed expected.jsonl anywhere in the file) writes NOTHING to stdout,
+# which is exactly that empty-$out shape. A verification mechanism must fail
+# loudly when it cannot run (AGENTS.md); before the fix this stamped the SAME
+# empty value for "the validator ran and said nothing" as for "the validator
+# exploded before grading anything". This sentinel is not cosmetic:
+# atomic_promote's known_failing exception (atomic-promote.sh) refuses
+# UNCONDITIONALLY whenever the summary it receives is EXACTLY this value, so
+# an internal error that got mis-reported as empty (rather than the sentinel)
+# would have let a known_failing:true candidate promote completely ungraded.
 
 set -uo pipefail
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$DIR/../../../.." && pwd)"
 PROMOTE="$ROOT/tools/promote-recording.sh"
+
+# validate_recording() now references $VALIDATE_FAILED_SENTINEL, declared
+# once in atomic-promote.sh (sourced by the real promote-recording.sh before
+# validate_recording is even defined). Source the REAL file here too, rather
+# than hand-typing a second copy of the literal — same rationale as
+# recording-profile-manifest_test.sh's recording_literals extraction.
+# shellcheck source=atomic-promote.sh
+source "$DIR/atomic-promote.sh"
 
 fails=0
 pass() { echo "  PASS: $1"; }
@@ -89,8 +99,8 @@ run_validate() (
 
 echo "== the validator's internal-error case: empty stdout must reach the sentinel, not the empty string =="
 out="$(run_validate internal-error)"; rc=$?
-[[ "$out" == "validate-failed" ]] && pass "internal error -> 'validate-failed' sentinel" \
-  || fail "internal error -> 'validate-failed' sentinel" "got [$out]"
+[[ "$out" == "$VALIDATE_FAILED_SENTINEL" ]] && pass "internal error -> '$VALIDATE_FAILED_SENTINEL' sentinel" \
+  || fail "internal error -> '$VALIDATE_FAILED_SENTINEL' sentinel" "got [$out]"
 [[ "$rc" -eq 1 ]] && pass "internal error -> exit 1" || fail "internal error -> exit 1" "got [$rc]"
 
 echo "== a genuine validation failure still reports the real summary, not the sentinel =="

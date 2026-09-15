@@ -40,6 +40,11 @@ populate_ok()   { printf 'events\n' > "$1/events.jsonl"; printf 'transcript\n' >
 populate_fails() { return 1; }
 validate_pass() { echo "4/4 phases"; return 0; }
 validate_fail() { echo "3/4 phases"; return 1; }
+# $VALIDATE_FAILED_SENTINEL (declared in atomic-promote.sh, sourced above) is
+# validate_recording()'s own sentinel (promote-recording.sh) for "never
+# reached a single phase" — see the "must not override an UNGRADEABLE file"
+# test block below.
+validate_ungradeable() { echo "$VALIDATE_FAILED_SENTINEL"; return 1; }
 
 # Count leftover scratch dirs so a "cleaned up on failure" claim is checked, not
 # assumed — a stranded .promote-tmp would be the same class of bug.
@@ -57,6 +62,14 @@ new_cell() {
     with-known-failing-string) printf '{"schema_version":1,"known_failing":"true"}\n' > "$d/expected.jsonl" ;;
     with-known-failing-number) printf '{"schema_version":1,"known_failing":1}\n' > "$d/expected.jsonl" ;;
     with-known-failing-null)   printf '{"schema_version":1,"known_failing":null}\n' > "$d/expected.jsonl" ;;
+    # A VALID known_failing:true meta line (line 1) with a syntactically
+    # broken phase (line 2) — #1967 QA's second finding. atomic_promote's own
+    # head -n1 read only ever sees line 1, which is perfectly valid here; the
+    # REAL validator (expected-validate) reads the WHOLE file and would
+    # hard-error on line 2 before grading a single phase. See the test block
+    # below, which fakes exactly that outcome via validate_ungradeable.
+    with-known-failing-corrupt-phase)
+      printf '{"schema_version":1,"known_failing":true}\n{"phase":"foo" bad}\n' > "$d/expected.jsonl" ;;
   esac
   echo "$d"
 }
@@ -117,6 +130,27 @@ for variant in with-known-failing-string with-known-failing-number with-known-fa
     || pass "$variant: no recording left behind"
   assert_eq "$variant: no scratch dir left" "0" "$(scratch_count "$cell")"
 done
+
+echo "== known_failing must not override an UNGRADEABLE file — 'validate-failed' means the validator never reached a phase (#1967 QA) =="
+# The gate's own head -n1 read only ever sees the META line. A cell can carry
+# a perfectly valid known_failing:true on line 1 and a syntactically broken
+# phase on line 2 — QA's live repro: expected-validate on that shape prints
+# `error: load expected.jsonl: line 2: phase: invalid character 't' after
+# object key:value pair`, exits 2, and never grades a single phase.
+# validate_recording() (promote-recording.sh) turns that into the
+# "validate-failed" sentinel. known_failing licenses "graded, and some
+# phases failed" — never "could not be graded at all" — so a validate_fn
+# reporting exactly that sentinel must refuse (rc=3, nothing written)
+# regardless of what head -n1 sees on line 1, exactly like an absent spec.
+cell="$(new_cell knownfailing-corrupt with-known-failing-corrupt-phase)"
+out="$(atomic_promote "$cell" "2026-01-01-00-00-00_irrlichd-x" populate_ok validate_ungradeable)"
+rc=$?
+assert_eq "ungradeable file: returns 3 (known_failing must not override the sentinel)" "3" "$rc"
+assert_eq "ungradeable file: still echoes the sentinel" "$VALIDATE_FAILED_SENTINEL" "$out"
+[[ -e "$cell/recordings/2026-01-01-00-00-00_irrlichd-x" ]] \
+  && fail "ungradeable file: no recording left behind" "absent" "present" \
+  || pass "ungradeable file: no recording left behind"
+assert_eq "ungradeable file: no scratch dir left" "0" "$(scratch_count "$cell")"
 
 echo "== a failed promote must not damage the PREVIOUS good recording =="
 cell="$(new_cell keepold with-spec)"
