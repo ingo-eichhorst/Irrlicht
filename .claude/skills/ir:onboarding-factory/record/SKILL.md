@@ -282,10 +282,25 @@ This runs the go-test-style verify engine: the state-phase validation AND the
 observation vector — exact-match `model`, non-zero + tolerance
 `cost`/`tokens`, with a soft-diff of the full vector against the prior committed
 recording (flagged, not failed, on live jitter). Report the per-field result in
-`observations`. Hard spec-phase failures are real: a sub-100% pass that is NOT
-`known_failing` still commits (the recording is real captured data and
-`replay-fixtures.sh` should surface the drift) but the `notes` MUST say
-"VALIDATION DRIFT — needs editorial review."
+`observations`.
+
+Hard spec-phase failures split on the cell's own `known_failing` flag
+(`promote-recording.sh`'s atomic-promote gate reads it straight off
+`expected.jsonl`'s meta line — #1967):
+
+- **`known_failing: true`** — a sub-100% pass still commits: the recording is
+  real captured data, not a broken run. `promote-recording.sh` prints an
+  explicit NOTICE that it promoted a known-failing recording (never a silent
+  success) and stamps the real, failing pass rate into `manifest.json`. Write
+  the cause into `expected.jsonl`'s meta `notes` — "VALIDATION DRIFT — needs
+  editorial review" plus what actually fails and why, same shape as
+  `aider/2-15_shell-escape-command`.
+- **not `known_failing`** — a sub-100% pass is refused outright:
+  `promote-recording.sh` exits 3 and writes NOTHING (#1333/B2 — no
+  half-promoted directory to `rm -rf` before re-promoting). Either tighten the
+  recipe, or — if the gap is real and durable, not a recipe bug — mark the
+  cell `known_failing: true` with a cited cause and re-promote as-is; no
+  trim/promote/restore detour needed any more.
 
 **Editing `expected.jsonl` splits into two cases — one required, one forbidden.**
 Decide which you are in *before* you touch the file:

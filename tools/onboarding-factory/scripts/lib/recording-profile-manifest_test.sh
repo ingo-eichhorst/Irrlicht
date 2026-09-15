@@ -26,12 +26,30 @@ identity_block="$(extract_block recording_identity)"
 identity_rc=$?
 population_block="$(extract_block recording_manifest_population)"
 population_rc=$?
-if [[ "$identity_rc" -ne 0 || "$population_rc" -ne 0 || -z "$identity_block" || -z "$population_block" ]]; then
+# recording_literals (#1970): the identity/version-chain/crosscheck blocks
+# below all now compare $EXECUTION_PROFILE against UNKNOWN_VALUE /
+# PROFILE_DESKTOP_LOCAL instead of a repeated literal. Extract the SAME
+# declaration promote-recording.sh uses — never a hand-typed copy of
+# "unknown"/"desktop-local" here, which could silently drift from the real
+# values — so every isolated eval below sees the real constants.
+literals_block="$(extract_block recording_literals)"
+literals_rc=$?
+if [[ "$identity_rc" -ne 0 || "$population_rc" -ne 0 || "$literals_rc" -ne 0 \
+      || -z "$identity_block" || -z "$population_block" || -z "$literals_block" ]]; then
   fail "manifest test extracted its subjects" "marker count changed or a block was empty"
   echo "recording-profile-manifest_test: $fails FAILED" >&2
   exit 1
 fi
 pass "manifest test extracted its subjects"
+
+# Define once in THIS shell, then export: check_manifest/check_version run the
+# extracted blocks in a `( … )` subshell of this same process (which inherits
+# any shell variable), but check_version/check_profile ALSO run two of them
+# through a genuinely fresh `bash -c` — a separate process that sees only
+# exported environment, not this shell's plain variables. Exporting covers
+# both call shapes with one definition.
+eval "$literals_block"
+export UNKNOWN_VALUE PROFILE_DESKTOP_LOCAL
 
 check_manifest() (
   local profile="$1" transcript_entrypoint="$2" desktop_version="$3"
