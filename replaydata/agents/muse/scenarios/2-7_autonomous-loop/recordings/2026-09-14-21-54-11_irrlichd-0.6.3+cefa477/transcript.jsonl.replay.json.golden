@@ -1,0 +1,127 @@
+{
+  "schema_version": 1,
+  "source_transcript": "",
+  "generated_at": "0001-01-01T00:00:00Z",
+  "settings": {
+    "adapter": "muse",
+    "debounce_window": 2000000000,
+    "flicker_max_duration": 10000000000
+  },
+  "summary": {
+    "total_events": 319,
+    "consumed_events": 319,
+    "total_transitions": 3,
+    "first_event_time": "2026-09-14T21:54:11.119303+02:00",
+    "last_event_time": "2026-09-14T21:54:24.06466+02:00",
+    "wall_clock_session_duration": 12945357000,
+    "state_durations": {
+      "ready": 3280956000,
+      "working": 9664401000
+    },
+    "flicker_count": 1,
+    "flickers_by_category": {
+      "working_between_ready": 1
+    },
+    "flickers_by_reason": {
+      "force ready→working on first activity": 1
+    },
+    "cum_input_tokens": 34141,
+    "cum_output_tokens": 635,
+    "cum_cache_read_tokens": 99795,
+    "model_name": "muse-spark-1.2"
+  },
+  "transitions": [
+    {
+      "index": 0,
+      "event_index": -1,
+      "virtual_time": "2026-09-14T21:54:11.119303+02:00",
+      "cause": "init",
+      "prev_state": "",
+      "new_state": "ready",
+      "reason": "initial state",
+      "last_event_type": "",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 1,
+      "event_index": 79,
+      "virtual_time": "2026-09-14T21:54:14.400259+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "user_message",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 2,
+      "event_index": 318,
+      "virtual_time": "2026-09-14T21:54:24.06466+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "Both required commands executed in order: `echo iter1` and `echo iter2`. Goal ma…"
+    }
+  ],
+  "sessions": [
+    {
+      "session_id": "01a0a17b-f689-7240-9b8d-ba154fc3081d",
+      "adapter": "muse",
+      "first_seen": "2026-09-14T21:54:11.07686+02:00",
+      "last_seen": "2026-09-14T21:54:24.073248+02:00",
+      "duration_ms": 12996,
+      "event_count": 641,
+      "state_changes": 3,
+      "final_state": "ready",
+      "pid": 69563,
+      "pid_discovery_lag_ms": 227,
+      "debounce_coalesced_events": 316,
+      "state_durations_ms": {
+        "ready": 3364,
+        "working": 9624
+      }
+    },
+    {
+      "session_id": "proc-69563",
+      "adapter": "muse",
+      "first_seen": "2026-09-14T21:54:11.790686+02:00",
+      "last_seen": "2026-09-14T21:54:37.595507+02:00",
+      "duration_ms": 25804,
+      "event_count": 6,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 69563,
+      "pid_discovery_lag_ms": 36,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 25768
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 2,
+    "replayed_transition_count": 2,
+    "ordered_matches": 2,
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ]
+  }
+}

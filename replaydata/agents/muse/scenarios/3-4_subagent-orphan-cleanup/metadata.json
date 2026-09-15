@@ -1,0 +1,125 @@
+{
+  "scenario_id": "subagent-orphan-cleanup",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.2.1",
+    "daemon_version": "unknown",
+    "confidence": 0.7,
+    "notes": "agent_supports: yes\ndaemon_capability: full (via a redundant, adapter-agnostic sweep — see caveats re #1962); driver_capability: ready"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "subagent-orphan-cleanup",
+      "agent": "muse",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.7,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\n**Agent pillar.** Muse spawns subagents readily and this is fully observable on disk: format-spec §9 confirms the `subagent.control.*` family (`spawn_accepted` -> `child_session_bound` -> `result_ready`, plus a real `spawn_rejected` at the 8-concurrent-subagent capacity cap) recorded in the PARENT's own session.jsonl, and a nested `<parent>/subagent/<child-id>/session.jsonl` transcript for every child that actually produced output. The shared context corpus measured muse spawning 6 children during one trivial 3-turn recipe, so the precondition (a live parent + at least one in-flight child) is trivially producible. muse-capabilities.md's `subagent_orphan` research additionally found the wire schema carries purpose-built orphan-recovery vocabulary (`SubagentControlStatus` enum values `recoveryPending`/`manualReconciliation`, `subagent/reopen`, `subagent/resume`) — strong evidence the AGENT itself models orphan recovery as a first-class concept, though none of those fields were found durable in format-spec's on-disk corpus (grepped muse-format-spec.md: zero hits for all four), so this is agent-side capability evidence only, not something the daemon could key off directly; the daemon pillar below is judged purely on irrlicht's own generic PID-liveness machinery, not on any muse-native orphan signal.\n\n**Daemon pillar — the load-bearing question is whether irrlicht's cleanup fires for BOTH the parent and the child once the shared OS process dies, given muse's children run in-process and share the parent's PID (cell-specific framing; corroborated by format-spec's measured '1 PID holding 11 session locks' for `muse serve`, and by pid.go's DiscoverPID falling through identically for parent and nested-subagent transcripts).** This is exactly the trigger shape of open bug **#1962** (\"process_exited misattributed when sessions share one OS PID\"), which this same onboarding pass discovered LIVE in a real muse recording for the sibling cell `2-13_turn-end-terminal-text`: `processlifecycle`'s kqueue-backed `pidMonitor.watched map[int]string` (monitor_darwin.go / monitor_linux.go) is last-write-wins per PID, so when a subagent's own PID registration lands after the parent's, the eventual `NOTE_EXIT` callback fires with the subagent's session id and the parent never gets `process_exited` via that fast path at all.\n\nHowever, `#1962` only breaks the FAST (kqueue) path. `PIDManager.CheckPIDLiveness` (pid_manager.go:1095) runs `reapDeadOrInfraPID` unconditionally over every persisted session on the `SweepDeadPIDs` periodic ticker (session_detector.go:723, started unconditionally at daemon startup; 5s base interval, backs off to 15s after 3 consecutive clean sweeps) and does its OWN independent `syscall.Kill(state.PID, 0) == ESRCH` probe per session, reading each row's OWN persisted `PID` field rather than the kqueue's shared map. Since PID discovery (`HandlePIDAssigned` -> `assignPIDLocked`) records the shared PID onto BOTH the parent's AND the child's own `SessionState.PID` independently (no code path skips this for `ParentSessionID != \"\"` rows), this periodic sweep will independently catch whichever of {parent, child} the kqueue race starved, within at most one sweep tick.\n\nThis redundancy is not theoretical: I confirmed it empirically against `replaydata/agents/claudecode/scenarios/3-4_subagent-orphan-cleanup/recordings/2026-05-18-00-29-55_irrlichd-0.4.5+7e88e6f/events.jsonl`, which shows claudecode's parent (`65fbf48c-ea8b-4772-82e7-e61b778f0273`) and its Task-tool child (`agent-a250a07cd8d953e93`) BOTH bound to the identical PID 99142 (`pid_discovered`), and BOTH independently received their own `process_exited` event before the recording ended -- the exact shared-PID collision #1962 describes, self-healed by the redundant sweep within that recipe's 20s post-kill observation window.\n\nGiven this, the scenario's user-observable acceptance criteria (all orphaned sessions eventually disappear; no spurious `working`/`waiting` transition during cleanup -- `deleteSession`/`HandleProcessExit` never reclassify a surviving row, they only remove one) are achievable for muse via the SAME adapter-agnostic mechanism, provided the recipe's post-kill window is generous (>=20-25s, comfortably past the sweep's worst-case 15s backoff interval) rather than assuming near-simultaneous kqueue delivery for both sessions.\n\n## Driver pillar\n\n`driver_step_types_from_file replaydata/agents/muse/driver-interactive.sh` lists `sigkill` (kill -9 the active session's PID, resolved via the same lock-file-writer mechanism DiscoverPID uses) alongside `send`/`wait_turn`/`sleep`/`exit_clean` -- every step type the recipe below needs. driver=ready.",
+      "caveats": [
+        "NOT yet live-confirmed for muse specifically -- no recording exists for this cell. The daemon=full verdict is derived from (a) reading pid_manager.go/monitor_darwin.go directly, (b) analogy to claudecode's own recorded fixture for the identical shared-PID collision, and (c) this same onboarding pass's own live discovery of #1962 in a real muse recording (2-13_turn-end-terminal-text). `record` should confirm the redundant-sweep convergence actually holds for muse's own timing profile (lsof-based PID discovery resolves in ~150-200ms per pid.go's own comment; subagent spawn latency is unmeasured) and correct the phase `max_delay_ms` values below against what it observes.",
+        "Vacuous-pass check: this cell would pass while proving nothing if the driven prompt does NOT reliably produce a subagent that is still in flight (state=working) at kill time -- a subagent that already finished before the kill turns this into an ordinary single-session teardown (already covered elsewhere) rather than an orphan-cleanup test. The recipe below asks muse to delegate a multi-step task explicitly and sizes the pre-kill sleep against the subagent's own scripted 30s+ delay, mirroring claudecode's recipe shape, but the exact prompt wording needed to reliably trigger ONE foreground subagent (as opposed to muse's spontaneous multi-subagent fan-out -- the corpus measured 6 children for one trivial 3-turn recipe) is UNVERIFIED live.",
+        "#1962 is real and open, and materially applies here: muse's children sharing the parent's PID is precisely its trigger shape. It is cited, not re-drafted. It affects ONLY the timing of which session's cleanup fires first (kqueue-fast vs sweep-slow, <=~15s difference) -- not whether both eventually clean up -- so per the 'caveats over downgrades' rule this keeps daemon=full rather than bug, but the spec's `max_delay_ms` windows must NOT assume near-instant delivery for both sessions the way a non-shared-PID adapter's spec could.",
+        "cost_nonzero must be false (no muse-spark-* pricing entry, per the shared assessment context and 2-13/2-1's own findings) if the observations block is reused as a template for this scenario; this cell's own expected.jsonl omits an observations block entirely since it asserts lifecycle/cleanup shape, not token/cost metrics.",
+        "Muse's own wire-protocol orphan-recovery vocabulary (SubagentControlStatus.recoveryPending/manualReconciliation, subagent/reopen, subagent/resume -- muse-capabilities.md) is agent-side evidence only; none of it was found durable in the on-disk corpus (format-spec.md), so this assessment does NOT rely on it and the daemon pillar is judged purely on irrlicht's own generic PID-liveness sweep.",
+        "LIVE CORRECTION (record, 2026-09-14, attempt 1, session 01a0a12f-0abd-7e90-a8b5-f224e1278884): the original recipe.script.send prompt (\"read notes.txt three times\") assumed a seeded notes.txt file, but NEITHER the muse driver nor (on inspection) the claudecode driver actually seed any such file into $RUN_CWD -- the muse driver has no file-seeding step type at all (confirmed: no notes.txt/seed hits in driver-interactive.sh). With sleep 12 pre-kill, the parent spent the whole window investigating the workspace itself (ls -la; cat notes.txt; requesting bash-tool approval) and never reached subagent_spawn before SIGKILL landed -- 0 children, only 2 raw state_transition events, exactly the vacuous-pass risk this cell's own caveats predicted (\"the exact prompt wording needed to reliably trigger ONE foreground subagent ... is UNVERIFIED live\"). Also observed: the real parent session went straight new_session->working with NO ready transition at all (contradicting 2-13's cited single-birth-into-ready pattern for this one run) -- plausibly a fswatcher discovery-lag artifact specific to this recipe's fast (12s) turnaround, not re-verified independently. Corrected script.send to remove the notes.txt dependency (a self-contained `sleep 30` task, explicit \"FIRST tool call must be subagent_spawn\" instruction) and raised the pre-kill sleep 12->18s to give the spawn call room to land before SIGKILL. If a second attempt with this corrected recipe still fails to produce an in-flight child, the cell will be committed known_failing with both attempts cited rather than a third live retry."
+      ],
+      "sources": [
+        {
+          "kind": "issue",
+          "ref": "ingo-eichhorst/Irrlicht#1962",
+          "note": "process_exited misattributed when sessions share one OS PID -- filed from this same onboarding pass, root-caused to pidMonitor.watched map[int]string being last-write-wins per PID (monitor_darwin.go/monitor_linux.go); explicitly names muse's in-process subagents as the trigger shape and documents live evidence from a real muse recording (2-13_turn-end-terminal-text) where the parent session never received process_exited at all."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/processlifecycle/monitor_darwin.go",
+          "note": "watched map[int]string (line 18) and Watch() (line 38, `m.watched[pid] = sessionID`) -- the last-write-wins collision #1962 documents; Run()'s handler (line 106-119) fires the kqueue NOTE_EXIT callback for whichever sessionID currently occupies watched[pid]."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/pid_manager.go",
+          "note": "CheckPIDLiveness (line 1095) -> reapDeadOrInfraPID (line 1177) runs an independent per-session syscall.Kill(state.PID,0)==ESRCH probe on the SweepDeadPIDs ticker (line 958, 5s base / 15s backoff), entirely separate from pidMonitor.watched -- the redundant path that recovers whichever session #1962 starves. assignPIDLocked (line 766) and HandlePIDAssigned (line 692) confirm PID discovery + pw.Watch() run unconditionally for every session including ParentSessionID!=\"\" child rows."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector.go",
+          "note": "line 723: `go d.pidMgr.SweepDeadPIDs(ctx)` -- the periodic sweep starts unconditionally as part of SessionDetector.Run, so it is always active during a --record session."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/pid.go",
+          "note": "DiscoverPID resolves a session's PID via its .session.lock sibling, falling through identically for a nested <parent>/subagent/<child-id>/session.jsonl transcript when no lock file of its own exists -- the mechanism that makes parent and child resolve to the SAME shared PID (format-spec §2 measured one muse-serve PID holding 11 concurrent session locks)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/3-4_subagent-orphan-cleanup/recordings/2026-05-18-00-29-55_irrlichd-0.4.5+7e88e6f/events.jsonl",
+          "note": "Empirical cross-adapter confirmation: parent 65fbf48c-ea8b-4772-82e7-e61b778f0273 and child agent-a250a07cd8d953e93 both bind pid=99142 (pid_discovered) and both independently receive process_exited before the recording ends, despite the identical #1962 shared-PID trigger shape -- claudecode's subagents are also in-process and share the parent's PID."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector_activity.go",
+          "note": "line 274: KindParentLinked is recorded for any newly-discovered session whose ParentSessionID is already known (adapter-agnostic, fires for muse's nested subagent directories the same as claudecode's)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/scenarios/2-13_turn-end-terminal-text/metadata.json",
+          "note": "This same onboarding pass's own prior live discovery of #1962 in a real muse recording (session 01a09dc6-05b5-7711-843f-3a725938ff43): the parent session received NO process_exited event because a goal-reminder/verify-reminder subagent re-registered the shared PID more recently -- the precedent for citing #1962 here rather than re-deriving it."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/scripts/lib/recipe-lint.sh via replaydata/agents/muse/driver-interactive.sh",
+          "note": "driver_step_types_from_file confirms send/slash/wait_turn/sleep/exit_clean/restart/sigkill/start_session/session are all implemented -- every step type this recipe needs, so driver_capability=ready."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "muse CLI installed and on PATH, v1.2.1 (muse --version >= 1.2.1 per replaydata/agents/muse/metadata.json)",
+        "muse auth complete: 'muse login' (Meta account, browser code approval) or META_API_KEY exported -- auth is set up out-of-band, the rig's precheck delegates it to the user",
+        "tmux available -- the interactive driver runs muse in a tmux REPL so it stays alive across the turn",
+        "irrlichd is recording -- either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+        "muse can spawn a foreground subagent for a delegated sub-task that stays in flight for tens of seconds (format-spec §9, muse-capabilities.md subagent_foreground trait) -- the recipe's pre-kill sleep is sized against the subagent's own scripted delay so it is still 'working' when SIGKILL lands",
+        "the daemon's periodic SweepDeadPIDs sweep (5s base / 15s worst-case backoff) is running by default -- a load-bearing precondition per the vacuous-pass rule, since #1962 makes the fast kqueue path unreliable for whichever of {parent, child} loses the shared-PID race; the recipe's generous 25s post-kill sleep exists specifically to give this sweep time to run"
+      ],
+      "setup": [
+        "The interactive driver (driver-interactive.sh) creates a fresh empty cwd under <staging>/cwd/ and launches `muse --trust-workspace` in a tmux session there, then sleeps 1s for muse's own input handler to wire up before the first send",
+        "--trust-workspace is REQUIRED, not optional: every staging cwd is brand-new, so muse's 'Do you trust this workspace?' modal fires on every run and silently eats the first prompt without it",
+        "A notes.txt file is seeded in the cwd so the delegated subagent has something to read repeatedly while the parent waits for it",
+        "muse mints its own session UUID on launch; the driver resolves the newest session.jsonl under ~/.local/share/muse/sessions (excluding subagent/ copies) newer than a pre-launch marker"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Delegate this to a subagent right now: your FIRST tool call must be subagent_spawn (do not run bash, ls, cat, or any other tool first, and do not check for any files). Give the spawned subagent this exact objective: run the bash command `sleep 30` and then reply with the single word done. Do not reply to me until the subagent has finished and reported its result."
+        },
+        {
+          "type": "sleep",
+          "seconds": 18
+        },
+        {
+          "type": "sigkill"
+        },
+        {
+          "type": "sleep",
+          "seconds": 25
+        }
+      ],
+      "verify": [
+        "events.jsonl contains a transcript_new + parent_linked pair for a child session under <parent>/subagent/<child-id>/session.jsonl, confirming the subagent was discovered and linked before the kill",
+        "events.jsonl contains a state_transition to working for the child (subagents skip ready and start directly at working, per format-spec §9 and 2-13's live-confirmed finding)",
+        "events.jsonl contains process_exited for the parent session id",
+        "events.jsonl contains process_exited for the child session id",
+        "no state_transition to working fires for either the parent or the child after sigkill lands (issue #321 no-spurious-working-during-cleanup invariant)",
+        "no state_transition to waiting fires for either session after sigkill lands",
+        "both sessions are removed (transcript_removed or equivalent absence from the live session list) by the end of the recipe's 25s post-kill window",
+        "transcript.jsonl carries the parent's spawn_accepted/child_session_bound records plus the nested subagent's own session.jsonl, bundled into <fixture>.subagents/"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}

@@ -42,12 +42,18 @@ func surviveTurnDone(name string) bool {
 // list also lives at session.isUserBlockingTool. KEEP THE TWO IN SYNC — a tool
 // added here must be added there too, and vice versa. Their twin tests
 // (TestIsUserBlockingToolName here, TestNeedsUserAttention_UserBlockingToolNames
-// in domain/session) pin both sets.
+// in domain/session) pin both sets, and TestUserBlockingListsAgree in each
+// package (userblocking_contract_test.go) drives BOTH predicates against the
+// same canonical table (core/internal/contracttesting/userblocking) so a tool
+// added to only one copy fails a test, rather than relying on a human keeping
+// two hand-written test files in lockstep.
 func isUserBlockingToolName(name string) bool {
 	switch name {
 	// exit_plan_mode / ask_user are GitHub Copilot's spellings (#1256).
+	// request_user_input is muse's own dedicated ask-tool (issue #1960 stage
+	// 3) — see session.isUserBlockingTool's twin comment for the evidence.
 	case "AskUserQuestion", "ExitPlanMode", "question", "ask_user_question",
-		"exit_plan_mode", "ask_user":
+		"exit_plan_mode", "ask_user", "request_user_input":
 		return true
 	}
 	return false

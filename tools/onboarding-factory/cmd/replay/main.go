@@ -62,6 +62,7 @@ import (
 	"irrlicht/core/adapters/inbound/agents/geminicli"
 	"irrlicht/core/adapters/inbound/agents/hermes"
 	"irrlicht/core/adapters/inbound/agents/kirocli"
+	"irrlicht/core/adapters/inbound/agents/muse"
 	"irrlicht/core/adapters/inbound/agents/opencode"
 	"irrlicht/core/adapters/inbound/agents/pi"
 	"irrlicht/core/adapters/inbound/agents/vibe"
@@ -83,6 +84,7 @@ var allAgents = []agent.Agent{
 	antigravity.Agent(),
 	vibe.Agent(),
 	copilot.Agent(),
+	muse.Agent(),
 }
 
 // parserFactories is the per-adapter parser map consumed by parserFor()
@@ -154,8 +156,13 @@ func detectAdapter(path string) (string, error) {
 	case strings.Contains(abs, "/.hermes/state.db"),
 		strings.Contains(abs, "/replaydata/agents/hermes/"):
 		return hermes.AdapterName, nil
+	// The live path is the XDG data-root default observed on disk
+	// (~/.local/share/muse/sessions/<YYYY>/<MM>/<DD>/<uuid>/session.jsonl).
+	case strings.Contains(abs, "/.local/share/muse/sessions/"),
+		strings.Contains(abs, "/replaydata/agents/muse/"):
+		return muse.AdapterName, nil
 	}
-	return "", fmt.Errorf("cannot infer adapter from path %q — pass --adapter claude-code|codex|pi|aider|opencode|kiro-cli|gemini-cli|antigravity|mistral-vibe|copilot|hermes", abs)
+	return "", fmt.Errorf("cannot infer adapter from path %q — pass --adapter claude-code|codex|pi|aider|opencode|kiro-cli|gemini-cli|antigravity|mistral-vibe|copilot|hermes|muse", abs)
 }
 
 // eventsSidecarExt is the legacy lifecycle-events sidecar file extension,

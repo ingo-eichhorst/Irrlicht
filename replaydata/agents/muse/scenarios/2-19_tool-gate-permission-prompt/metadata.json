@@ -1,0 +1,129 @@
+{
+  "scenario_id": "tool-gate-permission-prompt",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.2.1",
+    "daemon_version": "unknown (assess pass, no recording yet)",
+    "confidence": 0.85,
+    "notes": "agent=yes, daemon=full, driver=ready (keys ported #1960 record pass: raw tmux send-keys, no trailing Enter) — a genuine human-decided permission gate is live-confirmed (decision_source.kind:\"human_approval\") but only with --approval-judge off; the default :auto-review profile auto-resolves via an LLM judge and never blocks on a person. Recorded known_failing (4/6): the daemon's live 2s activity-debounce missed an intermediate working state a debounce=0 replay of the raw transcript proves genuinely exists — see assessment caveats."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "tool-gate-permission-prompt",
+      "agent": "muse",
+      "assessed_at": "2026-09-14T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes; daemon_capability: full; driver_capability: ready (keys ported, #1960 record pass)\n\n## Reasoning\n\n**The corpus-wide unknown is now resolved.** Every prior `decision_applied` record found across the 14-session muse corpus (muse-format-spec.md \u00a75) had `decision_source.kind:\"llm_judge\"` \u2014 this environment's default `:auto-review` permission profile resolves every tool-approval request automatically via an LLM judge (`automated_review_started`/`automated_review_completed`), typically in 8-30s (real corpus example: `duration_ms:26096`). No human-decided example had ever been captured, so it was UNVERIFIED whether a genuinely human-blocking gate exists for muse at all.\n\nI live-drove muse in a throwaway directory (`/private/tmp/.../scratchpad/muse-tgpp-live`, never inside the repo) with `muse --approval-judge off --approval-mode on-request` (both are real, documented top-level flags \u2014 `muse --help`: `--approval-judge <off|on> LLM approval judge for Prompt-bound calls (default: on)`) and asked it to run `rm -rf ./victim.txt`. The session (`01a09eea-4f5b-7933-b99a-8ae0ff158112`, this machine's `~/.local/share/muse/sessions/2026/09/14/`) opened a `kind:\"approval\"` `requested` record with `presentation_phase:\"human_pending\"` (NOT `\"automated_reviewing\"`, the value every llm_judge-path record carries) and `approval_wait.effect.started`, then sat genuinely idle for ~51s (sequence 103 at recorded_at 1789372585501461 -> sequence 106 at 1789372636449758) until I manually selected \"Allow this stage once\" in the TUI. The resulting `decision_applied` record carries **`decision_source:{\"kind\":\"human_approval\",\"action_digest\":\"sha256:f70db5d4...\"}`** \u2014 a decision_source.kind literally never seen before in this column's research, confirming muse DOES support a genuine human-blocking permission gate, just not under its default profile. A new intermediate event kind, `stage_requirement_resolved`, also appeared per-stage before `decision_applied` (bookkeeping about a single requirement of a multi-stage command, not a second open/close pair).\n\n**Daemon**: muse's adapter parser (`core/adapters/inbound/agents/muse/parser.go`, `parseApprovalEvent`/`parseApprovalRequested`/`parseApprovalDecisionApplied`) maps `kind:\"approval\"` `\"requested\"`/`\"decision_applied\"` to `ev.EventType = \"permission_requested\"`/`\"permission_completed\"` + `PermissionRequestIDs`/`PermissionResolvedIDs` UNCONDITIONALLY of `decision_source` \u2014 the parser never inspects who decided, only that a decision arrived. `core/pkg/tailer/tailer_metrics.go:656` folds these into `TranscriptPermissionPending = len(openPermissions) > 0`, and `core/application/services/state_classifier.go`'s `\"transcript_permission_prompt\"` rule (already proven live for GitHub Copilot, #1256) maps `TranscriptPermissionPending` to `StateWaiting`, ranked directly below the hook-tier permission rule and above every other transcript-tier rule \u2014 an open permission prompt always outranks `agent_done`. Because the mapping is decision_source-agnostic, the llm_judge path and the newly-confirmed human path are observed identically by the daemon: `daemon_capability=full` for both, no daemon work needed.\n\n**Driver**: resolving the prompt in the TUI needs a bare, single, non-Enter keypress \u2014 I confirmed live that `tmux send-keys -t <session> \"1\"` (no trailing Enter) selects \"Allow this stage once\" immediately; the widget applies on keydown, unlike muse's OTHER first-run \"trust this workspace\" dialog, which explicitly needs `1` THEN `Enter` to confirm (\"Use Up/Down or 1/2, then Enter.\") and which the driver already dismisses cleanly via `--trust-workspace` at launch (no interactive step needed there at all). Sending a `send`-shaped \"1\"+Enter at the approval menu would submit a stray empty prompt once the Enter lands on the now-revealed, now-empty composer. `replaydata/agents/muse/driver-interactive.sh` DOES have a `keys)` case arm (line 671) but it is `not_implemented` and `keys` is absent from the `DRIVE_ELICITS` constant (line 167: `\"send slash wait_turn sleep exit_clean restart sigkill start_session session\"`) \u2014 confirmed via `tools/onboarding-factory/scripts/lib/recipe-lint.sh`'s semantic lint, which would flag this recipe's `keys` step as `not-elicited:keys` (a real `driver=ready (keys ported, #1960 record pass)`, not an observability limit). Separately, the driver also has no settings-driven wiring for `--approval-judge` yet (`MUSE_ARGS` currently only reads `.model`/`.base_url` from the settings blob per the existing `MODEL`/`BASE_URL` pattern at driver-interactive.sh:91-113) \u2014 `record` needs to add a third `.approval_judge -> --approval-judge <value>` arm, mechanically identical to the existing two.\n\n## Why the recipe deliberately deviates from the default profile\n\nVacuous-pass check: under the DEFAULT profile (`--approval-judge on`, this environment's recorded default), the exact same recipe would ALSO produce a `waiting` episode \u2014 but resolved by an LLM judge in a bounded ~8-30s, never by a human. A cell recorded that way would pass while proving nothing about the scenario's actual claim (\"user approves or denies\") \u2014 it would be indistinguishable from re-recording the llm_judge path the corpus already has 11 examples of. `--approval-judge off` is therefore a LOAD-BEARING recipe precondition, not an incidental setting; see caveats.",
+      "caveats": [
+        "LOAD-BEARING PRECONDITION: the recipe's `settings.approval_judge:\"off\"` is required for the wait to be genuinely human-decided. Under muse's default profile (--approval-judge on, this environment's recorded default for every other muse cell), the identical recipe would still enter `waiting` but resolve via the LLM judge in ~8-30s (decision_source.kind:\"llm_judge\") \u2014 a real but DIFFERENT flavor of this scenario, already well-represented in the corpus (muse-format-spec.md \u00a75, testdata/real-approval-flow.jsonl). Re-probe this at record time: if the recorded decision_applied ever shows decision_source.kind other than \"human_approval\", the --approval-judge wiring did not reach the launched process and the cell is silently testing the wrong (llm_judge) path.",
+        "driver=gap:keys AND the driver has no settings-driven --approval-judge launch-arg wiring yet \u2014 both are real, small, mechanical driver additions record must port before this cell can run (see body). Neither is a daemon/architecture limit.",
+        "The scenario's claudecode-authored acceptance criteria include a 'late PostToolUse hook arriving after -> ready does NOT change state' variant. Muse is observe-only with no hook channel at all (muse-adapter-contract.md), so there is no out-of-band redelivery path to test; the closest analog is that the daemon's approval-request/resolve pairing is idempotent per pending_action_id (one requested/decision_applied pair per prompt in every corpus example, including this live probe), so a stale resolution cannot reopen `waiting`. This is architectural, not tested live \u2014 noted as a caveat rather than asserted as a spec phase.",
+        "muse spawns companion child sessions freely during any turn (muse-assess-context.md; also observed live here: two additional session ids, one nested under .../subagent/, one materializing as its own fully top-level session directory, likely a memory/goal-reminder agent). Every phase in the spec is pinned with same_session_as:session_birth to rule out the vacuous-pass mechanism the sibling cells 2-2 and 2-17 both hit and had to fix live (a subagent's own ready-adjacent arc silently satisfying an unpinned phase).",
+        "The model may add a self-directed 'double checking' pass after the tool call completes and before its final reply (observed live: a ~1m+ 'Double checking' span after the approval was granted) \u2014 timeout_seconds is set generously (240s) and the prompt explicitly discourages re-verification, but the exact working-span length before the final ready is not tightly pinned in the spec.",
+        "Not independently re-verified whether every stage of a multi-stage bash chain (rm/touch/echo in this recipe) gets the SAME per-stage safe/needs-approval classification as the live-tested rm/echo/ls chain \u2014 touch was not itself observed requiring or skipping approval. Low risk (all are common, harmless commands) but flagged as unconfirmed.",
+        "cost_nonzero must stay false: muse-spark-1.3-contributor has no pricing/alias entry (core/pkg/capacity), confirmed for every other muse cell in this onboarding pass \u2014 copied here rather than re-derived per-cell, per the established muse-wide fact.",
+        "RECORD-TIME FINDING (2026-09-14 recording, daemon 0.3.13+... branch build): the live daemon's events.jsonl for the primary session shows only ready->working->waiting->ready (seq 197/367/545/1291) -- the turn_resumed (waiting->working) phase never emits, so this cell committed known_failing (4/6 phases) rather than the full 5-transition arc the spec expects. This is NOT a fabricated permission resolution or a scenario mismatch: decision_source.kind==\"human_approval\" is confirmed for this run's decision_applied record (the load-bearing precondition held), and PERMISSION_GATE_OK landed as the final reply. Root-caused, not just observed: re-running the RAW recorded transcript through `go run ./tools/onboarding-factory/cmd/replay --adapter muse --debounce 0s <session.jsonl>` (event-by-event, no live debounce simulation) produces the FULL expected 5-transition arc -- ready->working(idx11 user_message)->waiting(idx66 permission_requested)->working(idx69 permission_completed)->ready(idx149 turn_done) -- proving the underlying transcript DOES carry a genuine, ~7.3s-wide working window between permission resolution and turn completion (muse-side recorded_at: decision_applied 2026-09-14T21:15:23.989754Z, run/terminal 2026-09-14T21:15:31.316483Z). The LIVE daemon simply never observed it: session_detector_activity.go's onActivity/processActivity re-reads the transcript's CURRENT state at each debounce-gated read (2s activityDebounceWindow, session_detector.go:33), and in this run's post-approval burst the daemon-side lifecycle log (147 transcript_activity/debounce_coalesced rows between seq 545 and 1291) never landed a read strictly between permission-resolved and turn-done -- so the classify pass that finally ran already saw both facts at once and jumped straight from waiting to ready. This is a genuine live-observability timing gap distinct from #1962 (shared-PID watched-map last-write-wins) and from the presession-identity-rekey shape in KNOWN_SEAMS.md -- both session ids and PIDs are correct throughout, only the intermediate STATE is missed. daemon_capability stays \"full\" (the underlying metrics computation is correct, per the debounce=0 replay) -- this is an observability-cadence caveat, not a capability downgrade, matching the precedent set by 2-21_streaming-partial-writes' known_failing verdict for a different last-write-wins race. Not filed as a GitHub issue per this pass's instructions; flagged here for the maintainer. A re-recording with a slower/chattier post-approval turn (more natural quiet gaps for the debounce to settle mid-turn) might reliably show the missing phase -- this was not re-attempted, so whether the gap is deterministic for this exact recipe shape or run-dependent is UNVERIFIED from a single recording."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/parser.go",
+          "note": "parseApprovalEvent/parseApprovalRequested/parseApprovalDecisionApplied (lines ~545-588): maps kind:\"approval\" requested/decision_applied to permission_requested/permission_completed, decision_source-agnostic."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_metrics.go",
+          "note": "line 656: TranscriptPermissionPending = len(t.openPermissions) > 0, fed by PermissionRequestIDs/PermissionResolvedIDs."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "\"transcript_permission_prompt\" rule (~line 150-155): TranscriptPermissionPending -> StateWaiting, ranked above every other transcript-tier rule; same mechanism already proven live for copilot (#1256)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/driver-interactive.sh",
+          "note": "line 167 DRIVE_ELICITS (no \"keys\"); line 671 `keys) not_implemented keys`; lines 91-125 MODEL/BASE_URL settings-wiring pattern that --approval-judge would need to copy."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.local/share/muse/sessions/2026/09/14/01a09eea-4f5b-7933-b99a-8ae0ff158112/session.jsonl",
+          "note": "Live probe, this machine, 2026-09-14: sequence 103 (approval requested, presentation_phase:human_pending), 104 (approval_wait.effect.started), 105 (stage_requirement_resolved), 106 (decision_applied, decision_source.kind:human_approval), 107 (approval_wait.effect.terminal). Muse launched with `muse --approval-judge off --approval-mode on-request` in a throwaway directory outside the repo."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/testdata/real-approval-flow.jsonl",
+          "note": "Contrast fixture: the pre-existing llm_judge path (presentation_phase:automated_reviewing, decision_source.kind:llm_judge, duration_ms:26096) from an earlier corpus session \u2014 the only decision_source shape previously on record."
+        },
+        {
+          "kind": "url",
+          "ref": "muse --help (v1.2.1, this machine)",
+          "note": "--approval-judge <off|on> (default: on); --approval-mode <untrusted|on-request|never> (default: on-request); --trust-workspace."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/scenarios/2-17_user-blocking-question/expected.jsonl",
+          "note": "Sibling waiting-scenario spec: pinning convention (same_session_as:session_birth on every phase) and the freely-spawned-subagent vacuous-pass hazard this spec copies the mitigation from."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/2-19_tool-gate-permission-prompt/metadata.json",
+          "note": "Sibling agent's recipe/spec for the same scenario, templated from per assess Step 4; claudecode's own recorded cell stops at `waiting` and never resolves the prompt \u2014 this muse cell deliberately goes further to capture the never-before-seen human_approval decision_source."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "muse CLI on PATH and authenticated (muse login or META_API_KEY) \u2014 confirmed installed at 1.2.1 on this machine",
+        "irrlichd is recording (--attach or isolated coexist mode)",
+        "LOAD-BEARING: settings.approval_judge must reach the launched process as --approval-judge off, or the wait resolves via the LLM judge instead of a human \u2014 re-probe the recorded decision_applied's decision_source.kind at record time"
+      ],
+      "setup": [
+        "Driver generates a fresh lowercased session UUID and a fresh cwd under <staging>/cwd/ (launch_repl, driver-interactive.sh)",
+        "Driver dismisses the untrusted-workspace trust prompt via --trust-workspace at launch (no interactive step needed for this dialog)",
+        "record must add a third settings-driven launch arg to driver-interactive.sh: settings.approval_judge -> --approval-judge <value>, mechanically identical to the existing .model -> --model and .base_url -> --base-url arms (lines ~91-125)",
+        "record must port the `keys` step type in driver-interactive.sh (currently `not_implemented` at line 671, absent from DRIVE_ELICITS at line 167): a raw, literal tmux send-keys with NO trailing Enter, since the approval menu applies on keydown and a trailing Enter would submit an empty prompt into the now-revealed composer"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Using the bash tool, run exactly this one command: touch ./gate-marker.txt && rm -rf ./gate-marker.txt && echo done. Do not run any other commands and do not re-verify afterward. When it finishes, reply with exactly this single line and nothing else: PERMISSION_GATE_OK"
+        },
+        {
+          "type": "sleep",
+          "seconds": 25
+        },
+        {
+          "type": "keys",
+          "keys": "1"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 10
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the session entering ready, then working, then waiting, then working again, then ready (the full ready->working->waiting->working->ready arc), all on the SAME session_id born at start",
+        "events.jsonl contains a state_transition to waiting for the primary session before any resolution",
+        "events.jsonl contains no state_transition to waiting for the primary session AFTER the final ready is reached",
+        "final session state is ready",
+        "transcript shows the literal final reply token 'PERMISSION_GATE_OK'",
+        "the underlying session.jsonl's decision_applied record for this run has decision_source.kind == \"human_approval\" (re-probed at record time, not assumed)"
+      ],
+      "settings": {
+        "approval_judge": "off"
+      },
+      "timeout_seconds": 240
+    }
+  }
+}

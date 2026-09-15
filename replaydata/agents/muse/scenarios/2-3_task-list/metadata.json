@@ -1,0 +1,148 @@
+{
+  "scenario_id": "task-list",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "bug",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.2.1",
+    "daemon_version": "0.6.3+10e0c65",
+    "confidence": 0.82,
+    "notes": "agent_supports: yes; daemon_capability: bug (gap 1 — todo_snapshot_updated unwired — FIXED by commit 10e0c6554, verified; gap 2 — reminder children pollute SubagentCount — still open); driver_capability: ready. Not yet recorded."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "task-list",
+      "agent": "muse",
+      "agent_supports": "yes",
+      "daemon_capability": "bug",
+      "driver_capability": "ready",
+      "confidence": 0.82,
+      "body": "## Verdict\n\nagent_supports: yes; daemon_capability: bug (ONE remaining cited gap \u2014 gap 1 below is now FIXED); driver_capability: ready.\n\n## Re-assessment (2026-09-14): gap 1 closed, gap 2 confirmed still open\n\nThis cell was previously assessed with TWO daemon-side gaps. Commit `10e0c6554` (\"feat(muse): close four parser gaps \u2014 task estimate, todos, background, retry\") closes gap 1. This re-assessment verifies that fix directly rather than taking the commit message's word for it, and separately re-confirms gap 2 is untouched by it.\n\n**Gap 1 verification (now FIXED).** `git show 10e0c6554 -- core/adapters/inbound/agents/muse/parser.go` shows `parseRunEvent`'s `default` arm no longer lists `todo_snapshot_updated`; a new case `runEventTodoSnapshotUpdated` routes to `(p *Parser) parseTodoSnapshotUpdated`, which reads `event.items[]` (`{text,status}`), builds `[]tailer.Todo{Key: text, Status: status}` and calls `p.todos.Reconcile(todos, ev)` \u2014 the same `tailer.TodoReconciler` the assessment's fix-shape proposal named, added as a new stateful `Parser.todos` field. `p.ParseLine` no longer sets `Skip=true` for this event when items are non-empty, so `applyTaskDeltas` (which only runs on the non-skip path, per the fix commit's own description) now fires. Confirmed by running the new tests myself, not just reading them: `go test ./core/adapters/inbound/agents/muse/... -run TestParseLine_TodoSnapshotUpdated -v` \u2014 all 4 pass (`TestParseLine_TodoSnapshotUpdated_FirstRevisionCreates`, `..._SecondRevisionWalksStatuses`, `..._EmptyItems_Skipped`, `..._NeverLooksLikeTurnDone`). The first-revision test asserts `ev.TaskDeltas` contains 3 `TaskOpCreate` + 1 `TaskOpUpdate` (matching a `pending/pending/pending` + one `in_progress` snapshot) and `ev.TaskSnapshot` has 3 entries; the second-revision test walks `in_progress\u2192completed` / `pending\u2192in_progress` and asserts exactly the update deltas expected. `go test ./core/adapters/inbound/agents/muse/...` (whole package) passes clean. This is genuinely wired now: `SessionMetrics.Tasks` (`core/domain/session/metrics.go:359-363`) WILL populate for muse's `write_todos` calls, matching this scenario's 1st and 2nd acceptance criteria. Gap 1's caveat is retired below; the recipe's `verify` step and the caveats list are updated to say tasks are now expected to populate correctly, not stay empty.\n\n**Gap 2 verification (still OPEN, confirmed unchanged by the fix commit).** `git show 10e0c6554 --stat` touches only `parser.go`, `parser_test.go`, and one muse-scoped replay golden \u2014 `adapter.go` (where `parentSessionIDFromPath` lives) is untouched. Re-reading current `parser.go`'s default arm (the comment block just above line ~520) still lists `memory_reminder_child_session_linked` among the high-volume bookkeeping kinds this stage Skip=true's; `core/adapters/inbound/agents/muse/adapter.go`'s `parentSessionIDFromPath` (lines 161-191, re-read fresh) is unchanged \u2014 still pure directory-shape linkage with no correlation to transcript content. So the ORIGINAL gap 2 finding stands undiminished: every muse prompt spawns goal-reminder/verify-reminder (and sometimes skill-reminder) children that materialize as real `<parent>/subagent/<child-id>/session.jsonl` sessions, linked as subagents by directory shape alone, and irrlicht's `SubagentCount` (`platforms/web/formatters.js:312`) counts any such linked child regardless of role. This scenario's 3rd acceptance criterion ('SubagentCount stays 0') is still expected to be violated by the current daemon.\n\n## agent_supports: yes\n\nMuse has a first-class `write_todos` tool that rewrites the whole todo list on every call, durably logged via `todo_snapshot_updated`, exactly matching this scenario's shape (create 3 items, walk each pending\u2192in_progress\u2192completed). The live corpus sample shows this exact arc happening organically (a real onboarding-factory work session tracking its own multi-step task list). Unchanged from the prior assessment.\n\n## daemon_capability: bug \u2014 ONE remaining gap, load-bearing for this scenario's 3rd acceptance criterion\n\nWith gap 1 fixed, the ONLY reason this cell is not `daemon=full` is gap 2: muse's per-prompt reminder-agent children still pollute `SubagentCount` for this scenario's own acceptance criterion ('SubagentCount stays 0 (no child sessions spawned)') \u2014 the whole point of task-list is to prove a todo-list update is NOT a subagent spawn, and today it cannot prove that, because reminder-agent children are alive and counted for the same duration.\n\nPer the assess skill's own rule ('reserve bug for a spec-required observable the daemon mis-handles'; 'don't reach for bug/incapable for a narrow gap... spec met \u2192 daemon stays full'), this is NOT a narrow gap eligible for a caveat-only downgrade: the scenario's acceptance_criteria explicitly names SubagentCount==0 as one of five required assertions, and the daemon will demonstrably violate it on every real recording of this cell (muse fires reminder children on EVERY prompt, not just task-list prompts \u2014 this is not scenario-specific noise). So `daemon_capability` stays `bug`, not `full`.\n\n## What would close gap 2 \u2014 evidence for feasibility, judged honestly\n\nA fresh, direct live-corpus scan for this re-assessment (`~/.local/share/muse/sessions/**/session.jsonl`, `memory_reminder_child_session_linked` records, read-only) found the PARENT's own event carries an explicit, unambiguous mapping \u2014 stronger evidence than the prior assessment cited (which only asserted the `reminder_agent_id` field exists, not what it correlates to):\n\n```\n{\"event\":{\"kind\":\"memory_reminder_child_session_linked\",\n  \"parent_session_id\":\"01a09c86-...\",\"reminder_agent_id\":\"skill-reminder\",\n  \"child_session_id\":\"b926ee33-7a64-47a6-afaf-f28285cc3acd\"}}\n```\n(goal-reminder and verify-reminder samples additionally carry `child_session_log_path`, e.g. `\"subagent/ffe7f6cb-.../session.jsonl\"`; `child_session_id` alone is present in all 3 sampled kinds and is the reliable key.)\n\nSo the distinguishing trace is real and precise: the parent's transcript names the EXACT child_session_id that is a reminder agent, before or as that child directory appears. This is NOT unsurmountable \u2014 but it is also NOT a narrow parser fix like gap 1 was, and the brief's framing (naming `agent.Source.ParentSessionIDFromPath func(path string) string` as path-only with no content access) is accurate and IS the real obstacle for the layer that currently does the linking:\n\n- `core/domain/agent/source.go:86`'s `ParentSessionIDFromPath` is a pure `func(path string) string` \u2014 no parser state, no cross-file correlation, called by the generic `FilesUnderRoot` watcher purely off the path being discovered. It cannot know about an event that lives in a DIFFERENT file's content (the parent's transcript), and structurally can't be extended to without changing the `Source` port itself.\n- The muse `Parser` (`parser.go`) IS stateful per-transcript (see the existing `Parser.todos`, `Parser.lastErrorClass` fields) and DOES see `memory_reminder_child_session_linked` when parsing the PARENT's own stream \u2014 but a Parser instance is scoped to the one file it tails; the CHILD session's own Parser instance (tailing `<parent>/subagent/<child-id>/session.jsonl`) is a different instance with no visibility into what the parent's instance saw.\n- So closing gap 2 needs a NEW correlation mechanism, not a reused one: a small keyed registry (e.g. child_session_id \u2192 role, package-scoped in the muse adapter or a shared service) that the parent's parser populates when it sees `memory_reminder_child_session_linked`, consulted when the child session is created/tracked. `session.Session`/`SessionMetrics` has no existing `Role`/`IsInternalAgent`-shaped field to carry the result (checked: no hit for `SubagentType|IsInternal|InternalAgent|AgentRole|SessionRole|IsReminder` in `core/domain/session/*.go` or `core/domain/agent/*.go`), so this is a new domain concept, not a rewiring of an existing one. Downstream, `platforms/web/formatters.js:312`'s `activeSubagentCount` (and any other subagent-counting call site) would need to filter on it.\n- This also has a real ordering hazard to design around: the parent's link event and the child directory's own file-creation are two independent async observations (fswatcher discovery vs parser event processing), so the registry write and the registry read can race either direction \u2014 structurally the same class of hazard as the presession-eviction bug this same branch just fixed (`assignPIDLocked`, see shared muse context), which argues for care, not for treating this as trivial.\n\n**Verdict on feasibility: yes, buildable, but it is a real cross-cutting feature (parser + a new domain field + wiring in session/subagent tracking + a web-side filter), not a one-line unwire like gap 1.** The blocker is squarely 'a daemon capability irrlicht doesn't have yet,' not an architectural impossibility or an agent limitation \u2014 the trace is precise and reliable (verified: `child_session_id` present in all 3 sampled record kinds). Per this onboarding pass's own standing rule ('never freeze a cell because irrlicht lacks something irrlicht could build'), this does NOT downgrade to `incapable`; it stays `bug`, and this body documents the concrete fix shape for whoever picks it up.\n\n## Machine-checkability note (does not change the verdict, explains the mechanics)\n\nNeither gap is asserted directly in `expected.jsonl`'s phase/invariant DSL \u2014 `ObservationSpec` (`tools/onboarding-factory/internal/validate/expected.go:87-91`) has no `tasks` or `subagent_count` field, and the invariant DSL's `no <kind> for <session>` form (`expected.go:961-990`) only scans events already scoped to the matched phase's own `session_id`, so it cannot detect an UNRELATED session (a reminder child) appearing at all. The actual mechanical check for both gaps is the REPLAY GOLDEN, a separate mechanism from `of cell spec`/`of verify`: `tools/onboarding-factory/cmd/replay/types.go`'s `reportSummary.Tasks []session.Task` (added specifically for this scenario family, per its own doc comment) is what claudecode's and opencode's sibling `2-3_task-list` cells cite as their tasks-assertion mechanism (`\"isn't expressible in the phase DSL and is pinned by the replay byte-identity golden's summary.tasks instead\"` \u2014 verbatim from claudecode's committed expected.jsonl notes), and `replayReport.Sessions []sessionTimeline` (each carrying its own `ParentSessionID`) is what would make an extra reminder-child session visible as an unexpected extra entry in a committed golden diff. So once this cell is recorded, a committed golden with only one session entry would concretely fail the moment a reminder child's `Sessions[]` entry appears \u2014 this is real, byte-diff-enforced verification, just not the phase-DSL kind. This is unchanged from the prior assessment (the recipe's own `verify` list already named this) but is now spelled out with its exact code citations rather than left implicit.\n\n## driver_capability: ready\n\nUnchanged. The recipe needs only `send` + `wait_turn` + `sleep`, all three genuinely implemented in `replaydata/agents/muse/driver-interactive.sh`'s `DRIVE_ELICITS` (line 167). No new primitive required.\n\n## Vacuous-pass condition\n\nUnchanged from the prior assessment. If `turn_start`/`turn_end` were left unpinned (no `same_session_as`), a reminder child's own working\u2192ready arc could satisfy the phase match instead of the parent's \u2014 the exact mechanism that silently passed the sibling `2-2` cell before it was caught and fixed. This spec keeps every post-birth phase pinned `same_session_as:session_birth`, which no reminder child can ever satisfy (reminder children skip the `ready` birth state entirely, per the shared muse context).",
+      "caveats": [
+        "RESOLVED by this re-assessment (was: KNOWN FAILING): the session API's `tasks` field is now expected to populate correctly for muse \u2014 commit 10e0c6554 wires todo_snapshot_updated through tailer.TodoReconciler, verified by running go test ./core/adapters/inbound/agents/muse/... -run TestParseLine_TodoSnapshotUpdated (4/4 pass) and the whole package test suite (clean). record should confirm this live and correct the caveat if reality disagrees.",
+        "STILL KNOWN FAILING (unchanged by the gap-1 fix): SubagentCount is expected to be nonzero for part of the recording \u2014 muse's own goal-reminder/verify-reminder children, not the write_todos calls, are the cause (gap 2, confirmed still present: memory_reminder_child_session_linked remains Skip=true in parser.go's default arm, parentSessionIDFromPath in adapter.go is unchanged and remains purely path-based). This is a muse-wide per-prompt side effect, not specific to task-list, but task-list is the first muse scenario whose acceptance criteria assert SubagentCount==0, so it is the first cell this gap is load-bearing for.",
+        "Neither gap is asserted in expected.jsonl's phase/invariant DSL (ObservationSpec has no tasks/subagent_count field; the invariant DSL only scopes to the matched phase's own session_id). Both are actually checked via the replay golden mechanism (cmd/replay/types.go's reportSummary.Tasks and Sessions[]), a separate pass from of verify's phase matching \u2014 see the assessment body's Machine-checkability note.",
+        "write_todos's own approval/policy path has never been directly observed in the corpus \u2014 no kind:\"task\" task_kind value resembling 'todo'/'write_todos' appears anywhere in the sampled sessions, consistent with write_todos being a pure bookkeeping tool that bypasses the side-effect/approval apparatus entirely (unlike tool.bash), matching claudecode/opencode's identical un-gated tools. Inference from absence, not a positive observation \u2014 UNVERIFIED, flagged for record to settle live.",
+        "Not yet recorded end-to-end for muse \u2014 0 prior recordings of this cell. This re-assessment is grounded in the fix commit's own diff + newly-run tests, a fresh live corpus scan of memory_reminder_child_session_linked (this session), the adapter source, and the sibling 2-2 cell's own live-recorded caveats \u2014 not a live run of THIS scenario's own recipe.",
+        "Session-birth timing (max_delay_ms:1000) is carried over from the sibling 2-2 cell's own live-recorded, empirically-validated bound (same single-birth launch mechanism, content-independent), not re-measured for this specific recipe."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "git show 10e0c6554 -- core/adapters/inbound/agents/muse/parser.go",
+          "note": "The fix commit's diff: removes todo_snapshot_updated from parseRunEvent's default Skip=true arm, adds runEventTodoSnapshotUpdated case routing to (p *Parser) parseTodoSnapshotUpdated, which builds []tailer.Todo and calls the new stateful Parser.todos (tailer.TodoReconciler) field's Reconcile."
+        },
+        {
+          "kind": "file",
+          "ref": "go test ./core/adapters/inbound/agents/muse/... -run TestParseLine_TodoSnapshotUpdated -v (run fresh for this re-assessment)",
+          "note": "All 4 tests pass: FirstRevisionCreates, SecondRevisionWalksStatuses, EmptyItems_Skipped, NeverLooksLikeTurnDone. Also ran the whole package (go test ./core/adapters/inbound/agents/muse/...) clean."
+        },
+        {
+          "kind": "file",
+          "ref": "shell: python3 corpus scan of ~/.local/share/muse/sessions/**/session.jsonl for memory_reminder_child_session_linked (this re-assessment, read-only)",
+          "note": "Found 3 live examples (skill-reminder, goal-reminder, verify-reminder) each carrying an explicit child_session_id (goal-reminder and verify-reminder also carry child_session_log_path); confirms the distinguishing trace for gap 2 is precise and reliable, strengthening (not just repeating) the prior assessment's citation."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/agent/source.go:79-86 (ParentSessionIDFromPath field doc)",
+          "note": "Confirms the type signature: func(path string) string \u2014 no parser state, no cross-file correlation. This is the structural reason gap 2 needs a new mechanism rather than reading the field directly at this layer."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/adapter.go:161-191 (parentSessionIDFromPath), re-read fresh for this re-assessment",
+          "note": "Unchanged by the fix commit (git show 10e0c6554 --stat touches only parser.go/parser_test.go/one golden) \u2014 still pure directory-shape linkage."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/parser.go (current, post-fix default arm comment)",
+          "note": "memory_reminder_child_session_linked still listed among Skip=true bookkeeping kinds \u2014 gap 2 confirmed untouched by the fix."
+        },
+        {
+          "kind": "file",
+          "ref": "grep for SubagentType|IsInternal|InternalAgent|AgentRole|SessionRole|IsReminder across core/domain/session/*.go and core/domain/agent/*.go (this re-assessment)",
+          "note": "No hits \u2014 no existing role/internal-agent classification concept exists on session.Session/SessionMetrics today; closing gap 2 needs a new domain field, not a rewiring of an existing one."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/internal/validate/expected.go:87-91 (ObservationSpec) and :947-990 (invariant DSL)",
+          "note": "Confirms neither tasks nor subagent_count is an assertable field in expected.jsonl's machine-checkable schema; the invariant DSL only scans events already scoped to the matched phase's session_id."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/cmd/replay/types.go:153-190 (reportSummary.Tasks, Sessions[]/sessionTimeline.ParentSessionID)",
+          "note": "The actual mechanism that verifies tasks (and would surface an extra reminder-child session) \u2014 a byte-identity replay golden, not the phase-DSL verify."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/2-3_task-list/expected.jsonl (notes field)",
+          "note": "Verbatim: the task-list assertion 'isn't expressible in the phase DSL and is pinned by the replay byte-identity golden's summary.tasks instead' \u2014 corroborates the machine-checkability note above from a sibling adapter's own committed spec."
+        },
+        {
+          "kind": "file",
+          "ref": "platforms/web/irrlicht.js:496,571 (children construction) + formatters.js:312 (activeSubagentCount)",
+          "note": "Confirms parent_session_id (session.go:487, json:\"parent_session_id\") reaches the API and the web client builds children[] from it before counting \u2014 the concrete downstream site a role filter would need to reach."
+        },
+        {
+          "kind": "file",
+          "ref": "shared muse context (this session): the FIXED presession-eviction bug (assignPIDLocked) on this same branch",
+          "note": "Cited as the closest precedent for the ordering-hazard class a parent-link-event vs child-directory-discovery race would fall into \u2014 argues gap 2's fix needs care, not that it's infeasible."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/todo_reconciler.go + core/adapters/inbound/agents/opencode/parser.go:261-333",
+          "note": "The reusable reconciliation mechanism gap 1's fix wired muse into \u2014 unchanged citation from the prior assessment, now confirmed live via the fix commit + tests rather than inferred."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/metrics.go:359-363",
+          "note": "SessionMetrics.Tasks []Task \u2014 the API surface this scenario's acceptance criteria assert on; now populated for muse."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/driver-interactive.sh:167 (DRIVE_ELICITS)",
+          "note": "send/slash/wait_turn/sleep/exit_clean/restart/sigkill/start_session/session genuinely implemented; this recipe needs only send/wait_turn/sleep. Unchanged."
+        },
+        {
+          "kind": "file",
+          "ref": "muse-format-spec.md \u00a74 (task_kind enumeration) and \u00a79 (subagent/child-session mechanisms)",
+          "note": "Evidence doc, unchanged citation from the prior assessment."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "muse CLI on PATH and authenticated (muse login or META_API_KEY) \u2014 confirmed installed at 1.2.1 on this machine",
+        "irrlichd is recording (--attach or isolated coexist mode), built from a daemon version at or after commit 10e0c6554 (gap 1's fix) so the tasks field actually populates",
+        "the default muse model/preset exposes the write_todos tool (observed live on this machine's default meta provider/preset \u2014 re-probe at record time if a different preset is pinned)"
+      ],
+      "setup": [
+        "Driver generates a fresh lowercased session UUID and a fresh cwd under <staging>/cwd/ (launch_repl, driver-interactive.sh)",
+        "Driver launches with --trust-workspace so the untrusted-workspace modal does not swallow the first message (defect #1 fix, commit 0239a1bd)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Use your todo list to track three short work items called item-one, item-two, and item-three. Walk each one from pending to in_progress to completed, one at a time, before moving to the next. Do this directly in this session -- do not spawn a subagent or delegate to another agent. When all three items are completed, reply with exactly the single word: done"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the session entering ready, then exactly one ready\u2192working transition and one working\u2192ready transition, both pinned to the SAME session that was born ready (same_session_as:session_birth) so a reminder-agent child's own arc cannot satisfy the match",
+        "events.jsonl contains NO state_transition to waiting for this session during the entire run (write_todos is expected to be auto-executed, like TaskCreate/TaskUpdate/todowrite on the sibling adapters)",
+        "final session state is ready; transcript shows the literal final reply token 'done'",
+        "NOW EXPECTED TO PASS (gap 1 fixed, commit 10e0c6554): the session API's tasks field should list the three items with subjects matching item-one/item-two/item-three and status progressing pending\u2192in_progress\u2192completed. Confirm live and correct this cell's metadata if reality disagrees.",
+        "STILL KNOWN FAILING, documented target: SubagentCount should stay 0 for the whole run \u2014 expected to be nonzero while muse's own goal-reminder/verify-reminder children are alive (daemon=bug gap 2, reminder children indistinguishable from real subagents by the path-based linkage)"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  }
+}

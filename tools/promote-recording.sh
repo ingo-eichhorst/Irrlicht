@@ -220,6 +220,7 @@ if [[ -z "$AGENT_VER" ]]; then
     mistral-vibe) CLI_BIN="vibe";     VER_FIELD=2 ;;
     copilot)      CLI_BIN="copilot";  VER_FIELD=4 ;;
     hermes)       CLI_BIN="hermes";   VER_FIELD=3 ;;
+    muse)         CLI_BIN="muse";     VER_FIELD=3 ;;
     *)            CLI_BIN=""; VER_FIELD=1 ;;
   esac
   AGENT_VER="unknown"

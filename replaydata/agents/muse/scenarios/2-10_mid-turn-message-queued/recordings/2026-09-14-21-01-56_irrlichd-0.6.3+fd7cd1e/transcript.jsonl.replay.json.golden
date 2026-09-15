@@ -1,0 +1,211 @@
+{
+  "schema_version": 1,
+  "source_transcript": "",
+  "generated_at": "0001-01-01T00:00:00Z",
+  "settings": {
+    "adapter": "muse",
+    "debounce_window": 2000000000,
+    "flicker_max_duration": 10000000000
+  },
+  "summary": {
+    "total_events": 1407,
+    "consumed_events": 1407,
+    "total_transitions": 3,
+    "first_event_time": "2026-09-14T21:01:56.993675+02:00",
+    "last_event_time": "2026-09-14T21:03:14.116635+02:00",
+    "wall_clock_session_duration": 77122960000,
+    "state_durations": {
+      "ready": 3293464000,
+      "working": 73829496000
+    },
+    "flicker_count": 0,
+    "flickers_by_category": {},
+    "flickers_by_reason": {},
+    "cum_input_tokens": 18171,
+    "cum_output_tokens": 3282,
+    "cum_cache_read_tokens": 547472,
+    "model_name": "muse-spark-1.2",
+    "tasks": [
+      {
+        "id": "1",
+        "subject": "Output 1 and run sleep 2",
+        "status": "completed"
+      },
+      {
+        "id": "2",
+        "subject": "Output 2 and run sleep 2",
+        "status": "completed"
+      },
+      {
+        "id": "3",
+        "subject": "Output 3 and run sleep 2",
+        "status": "completed"
+      },
+      {
+        "id": "4",
+        "subject": "Output 4 and run sleep 2",
+        "status": "completed"
+      },
+      {
+        "id": "5",
+        "subject": "Output 5 and run sleep 2",
+        "status": "completed"
+      },
+      {
+        "id": "6",
+        "subject": "Output 6 and run sleep 2",
+        "status": "completed"
+      },
+      {
+        "id": "7",
+        "subject": "Output 7 and run sleep 2",
+        "status": "completed"
+      },
+      {
+        "id": "8",
+        "subject": "Output 8 and run sleep 2",
+        "status": "completed"
+      },
+      {
+        "id": "9",
+        "subject": "Output 9 and run sleep 2",
+        "status": "completed"
+      },
+      {
+        "id": "10",
+        "subject": "Output 10 and run sleep 2, then reply exactly 'donecounting'",
+        "status": "completed"
+      }
+    ]
+  },
+  "transitions": [
+    {
+      "index": 0,
+      "event_index": -1,
+      "virtual_time": "2026-09-14T21:01:56.993675+02:00",
+      "cause": "init",
+      "prev_state": "",
+      "new_state": "ready",
+      "reason": "initial state",
+      "last_event_type": "",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 1,
+      "event_index": 74,
+      "virtual_time": "2026-09-14T21:02:00.287139+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "user_message",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 2,
+      "event_index": 1406,
+      "virtual_time": "2026-09-14T21:03:14.116635+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "ready",
+      "reason": "agent finished turn → ready",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\ndonecounting"
+    }
+  ],
+  "sessions": [
+    {
+      "session_id": "01a0a14c-23eb-7ba3-89a5-1ecde508fa0d",
+      "adapter": "muse",
+      "first_seen": "2026-09-14T21:01:56.962607+02:00",
+      "last_seen": "2026-09-14T21:03:14.123043+02:00",
+      "duration_ms": 77160,
+      "event_count": 2853,
+      "state_changes": 3,
+      "final_state": "ready",
+      "pid": 14633,
+      "pid_discovery_lag_ms": 212,
+      "debounce_coalesced_events": 1386,
+      "state_durations_ms": {
+        "ready": 3381,
+        "working": 73773
+      }
+    },
+    {
+      "session_id": "proc-14633",
+      "adapter": "muse",
+      "first_seen": "2026-09-14T21:01:57.576096+02:00",
+      "last_seen": "2026-09-14T21:02:00.686132+02:00",
+      "duration_ms": 3110,
+      "event_count": 5,
+      "state_changes": 1,
+      "final_state": "ready",
+      "pid": 14633,
+      "pid_discovery_lag_ms": 27,
+      "debounce_coalesced_events": 0,
+      "state_durations_ms": {
+        "ready": 3082
+      }
+    },
+    {
+      "session_id": "e196b08f-ea93-4d5d-899e-d73eed92d544",
+      "adapter": "muse",
+      "parent_session_id": "01a0a14c-23eb-7ba3-89a5-1ecde508fa0d",
+      "first_seen": "2026-09-14T21:03:00.785522+02:00",
+      "last_seen": "2026-09-14T21:03:14.162501+02:00",
+      "duration_ms": 13376,
+      "event_count": 99,
+      "state_changes": 2,
+      "final_state": "ready",
+      "pid": 14633,
+      "pid_discovery_lag_ms": 242,
+      "debounce_coalesced_events": 45,
+      "state_durations_ms": {
+        "ready": 7678,
+        "working": 5690
+      }
+    },
+    {
+      "session_id": "993e4e7e-e438-4c48-a084-054225f90a93",
+      "adapter": "muse",
+      "parent_session_id": "01a0a14c-23eb-7ba3-89a5-1ecde508fa0d",
+      "first_seen": "2026-09-14T21:03:00.845515+02:00",
+      "last_seen": "2026-09-14T21:04:56.150097+02:00",
+      "duration_ms": 115304,
+      "event_count": 119,
+      "state_changes": 2,
+      "final_state": "ready",
+      "pid": 14633,
+      "pid_discovery_lag_ms": 245,
+      "debounce_coalesced_events": 53,
+      "state_durations_ms": {
+        "ready": 102106,
+        "working": 13190
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 2,
+    "replayed_transition_count": 2,
+    "ordered_matches": 2,
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→ready"
+    ]
+  }
+}

@@ -786,9 +786,30 @@ func (pm *PIDManager) assignPIDLocked(pid int, sessionID string) (*session.Sessi
 	if err != nil {
 		return state, nil
 	}
+	// A proc-* pre-session must never evict a real, transcript-backed session
+	// that already holds this PID — only the reverse direction is ever valid
+	// (findSupersedingSession/sweepSupersededPreSessions both explicitly skip
+	// proc-* candidates as "the real session" for the same reason). Without
+	// this guard, a scanner poll that discovers an already-claimed PID later
+	// than the adapter's own (often much faster) discovery — muse's lsof-based
+	// lookup resolves in ~150-200ms against the scanner's fixed 1s interval —
+	// calls HandlePIDAssigned for its own proc-<pid> id, and this stale-scan
+	// used to delete the real session outright, with no re-creation path other
+	// than the daemon re-discovering it from scratch on the next transcript
+	// event (losing prev_state on the resulting transition). Confirmed via
+	// live muse recordings and reproduced in
+	// TestHandlePIDAssigned_PresessionNeverEvictsRealSession (issue #1960).
+	// A leftover proc-* row from the skipped eviction is not orphaned: it is
+	// still cleanly retired, in the correct direction, by
+	// sweepSupersededPreSessionsPeriodic's PID-match branch on the next
+	// SweepDeadPIDs tick (matchPID: "always safe, no grace period").
+	newIsPresession := strings.HasPrefix(sessionID, "proc-")
 	var stale []*session.SessionState
 	for _, old := range states {
 		if old.SessionID == sessionID || old.PID != pid || old.ParentSessionID != "" {
+			continue
+		}
+		if newIsPresession && !strings.HasPrefix(old.SessionID, "proc-") {
 			continue
 		}
 		stale = append(stale, old)

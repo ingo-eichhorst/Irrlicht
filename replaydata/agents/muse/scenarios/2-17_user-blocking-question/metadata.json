@@ -1,0 +1,134 @@
+{
+  "scenario_id": "user-blocking-question",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.2.1",
+    "daemon_version": "0.6.3+a8ec66f",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes; daemon_capability: full; driver_capability: ready. Live-probed this session on real muse 1.2.1 (not just docs/unit tests) — the trailing-? prose path, not the permission-prompt scenario. Not yet recorded end-to-end via `of record`. RECORD-TIME CORRECTION (2026-09-14): live recording against irrlichd 0.6.3+a8ec66f proved daemon_capability=full wrong. The primary session's raw daemon capture (kind:state_transition) shows ready -> waiting DIRECTLY, with no intervening working transition, despite ~11s of real transcript growth (many transcript_activity/debounce_coalesced events for the same session_id in that window) and despite forceReadyToWorkingIfActive (core/application/services/session_detector_activity.go:1105-1141) existing specifically to guarantee this bounce. The same run's two subagent children DID show explicit working->ready transitions, so the classifier pathway is not broken in general -- this is specific to the primary session under this recipe shape. Corrected to daemon_capability=bug; expected.jsonl now asserts the OBSERVED (buggy) ready->waiting-direct behavior with known_failing:true, per the record contract's required spec-correction rule. Issue payload handed to the dispatcher for filing. RECORD-TIME OBSERVABILITY_CORRECTION #2 (2026-09-14, recording 2026-09-14-06-50-25_irrlichd-0.6.3+990daf1, git_head=990daf13, includes fix commit 9abf13d1): daemon_capability bug -> full. Commit 9abf13d1 (\"fix(daemon): never let a proc-* pre-session evict a real session's PID claim\", core/application/services/pid_manager.go) stops assignPIDLocked's same-PID stale-holder scan from deleting the real session in favor of a late-arriving proc-* presession claim. On this second live attempt the same race recurs (muse's fast lsof PID discovery binds the real session at +173ms; the slower processlifecycle.Scanner presession poll discovers the same pid independently at +605ms and creates its own proc-44156 row) but the real session is never evicted -- the transient proc-44156 row is the one retired instead. ready->working->waiting is now observed cleanly on the real session_id: working at +3.30s (\"force ready→working on first activity\"), waiting at +18.7s (assistant reply ends '?', decided_by_rule=agent_done). known_failing is CLEARED in expected.jsonl -- no remaining daemon defect for this cell. See expected.jsonl meta notes for the full account."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "user-blocking-question",
+      "agent": "muse",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes; daemon_capability: full; driver_capability: ready.\n\n## Which scenario this is\n\n2.17 \"user-blocking-question\" is the PLAIN QUESTION TO THE USER scenario — the agent's own reply text ends in a question mark, exercising `session.IsWaitingForUserInput`'s trailing-? path (`state_classifier.go`'s `classifyAgentDone` branch, the scenario's own description calls it \"decision 2a\"). It is NOT the permission/approval-prompt scenario: claudecode's sibling cells split these explicitly (`2-17_user-blocking-question` vs `2-18_user-blocking-plan-mode-approval`), and muse itself has a structurally separate `kind:\"approval\"` flow (format-spec §5) that a different, already-assessed cell covers. This assessment judges the trailing-? path only.\n\n## Agent\n\nMuse ships a dedicated `request_user_input` tool, declared active in every real session's toolset (muse-format-spec.md §5, `model_request_configured.toolset.active_tools`), and the shipped binary's own system prompt explicitly steers the model toward it: `strings ~/.local/bin/muse-bin-1.2.1-R2847.1 | grep -i request_user_input` (run this session) turns up the literal instruction \"5. Prefer `request_user_input` when available. Ask one blocking outcome question;\". That raised a real question: would a naive \"ask a clarifying question\" prompt actually produce the trailing-? PROSE path this scenario needs, or would the model reach for the tool instead (whose wire shape — `userInput/request`/`userInput/requested`, carrying the question inside structured `questions[]` params, per `muse schema generate-json-schema`'s `msp.schema.json` — was never once observed invoked in the underlying 14-session corpus, muse-format-spec.md §12)?\n\nI settled this empirically instead of guessing. `assistant_message_committed` (arbitrary free-text replies, no tool involved) is already one of the ~19 real event kinds the corpus census found in a single clean session tree (muse-format-spec.md §3) — plain conversational replies are ordinary for muse, not a corner case — and I live-drove it directly: launched `muse --trust-workspace` interactively in tmux (mirroring `driver-interactive.sh`'s `launch_repl`) and sent \"Before doing anything else, ask me exactly one clarifying question about which output format I want, then stop and wait for my answer. Do not use any tools yet.\" The resulting real session (`~/.local/share/muse/sessions/2026/09/14/01a09d9c-58d4-7ae0-b533-88a6fd2fa008/session.jsonl`) contains exactly one `assistant_message_committed` — `{\"text\":\"Which output format would you like me to use?\"}` — immediately followed by `{\"kind\":\"terminal\",\"terminal\":\"completed\"}`, with NO `assistant_tool_calls_committed` and NO `kind:\"approval\"` record anywhere in that run. An explicit \"don't use tools\" instruction reliably steers muse onto the plain-text path — the same lever mistral-vibe's own already-assessed 2.17 recipe already uses for the identical shape (dedicated ask-tool + free-text fallback). agent_supports=yes rests on this live-confirmed capability, not a doc guess.\n\n## Daemon\n\n`core/adapters/inbound/agents/muse/parser.go:428-438` (`parseAssistantMessageCommitted`) surfaces the reply as `ev.AssistantText` and computes `ev.PendingWaitingCue = session.ProseIndicatesWaiting(tailer.WaitingScanWindow(text))` — the same general mechanism every other already-observed cell in this scenario column relies on (claudecode, codex, copilot, gemini-cli, hermes, kiro-cli, mistral-vibe, pi all carry `daemon_capability:full` for this exact scenario per `of status --scenario user-blocking-question`). I did not stop at reading the wiring: I fed the REAL captured line from the live probe above through the actual `(&Parser{}).ParseLine` this session (a throwaway `_test.go`, removed afterward — not committed) and confirmed `EventType=\"assistant_message\"`, `PendingWaitingCue=true`, `Skip=false`. `parser.go:324-326` (`parseRunTerminal`) sets `EventType=\"turn_done\"` on muse's `terminal` event for all three outcomes (completed/cancelled/failed), which is exactly the probe's very next record (`terminal:\"completed\"`) — so `SessionMetrics.IsAgentDone()` goes true with no open tool call, and `state_classifier.go`'s ladder (permission-prompt-open → `NeedsUserAttention()` → `OpenToolStalled` → `IsAgentDone()` → `classifyAgentDone` → `IsWaitingForUserInput()`) reaches `waiting`, cross-checked directly against `core/application/services/state_classifier.go` (muse-adapter-contract.md §5 summarizes the same ladder). Unit coverage: `TestParseLine_AssistantMessageCommitted_WaitingCue` (parser_test.go:245-255), synthetic but shaped identically to the real capture; the live probe promotes the verdict from \"parser looks right\" to \"parser proven right on real muse 1.2.1 output.\"\n\n## A real, named, non-load-bearing gap\n\n`request_user_input` — muse's own dedicated ask-tool, the one its system prompt tells the model to prefer — is NOT in the daemon's user-blocking-tool allowlist. Both copies (`core/domain/session/metrics.go:501 isUserBlockingTool`, `core/pkg/tailer/tailer_config.go:46 isUserBlockingToolName`) enumerate only `AskUserQuestion`, `ExitPlanMode`, `question`, `ask_user_question`, `exit_plan_mode`, `ask_user`. If a differently-worded prompt let the model reach for the tool instead of plain text, `NeedsUserAttention()` stays false for the open call. I checked whether any fallback saves this: `OpenToolStalled`'s duration heuristic (`core/domain/session/signal_hold.go:93-124`) does NOT cover it either — that fallback fires \"solely for the five names `isPermissionGatedEditTool` matches\" (edit/write/multiedit/notebookedit/write_file), and the same comment block explicitly lists `AskUserQuestion`/`ExitPlanMode` among the tools it does NOT cover. So an open `request_user_input` call would have no fallback at all: `HasOpenToolCall=true` vetoes `IsAgentDone()`, the classifier never reaches the trailing-? branch, and the session would read `working` (or eventually a generic idle heuristic) instead of `waiting` — a silent drop of exactly the signal this project exists to surface. This is why the recipe below explicitly instructs \"do not call any tools\": that phrasing is a load-bearing precondition of this cell, not incidental wording (Vacuous-pass rule). Wiring `request_user_input` into both allowlists (and, if it ever gets a durable on-disk shape, mapping it the way `kind:\"approval\"` \"requested\" already is) is a real, concrete follow-up — but it is a code change, out of scope for `assess`, so it is named here for the maintainer rather than decided silently.\n\n## Driver\n\n`send`/`wait_turn`/`sleep` are all genuinely implemented in `replaydata/agents/muse/driver-interactive.sh`, confirmed by reading the dispatch case block directly via `driver_step_types_from_file` (not a hand-kept manifest) rather than assumed. The driver was proven end-to-end this session in commit `0239a1bd` (\"fix(muse): repair the recording driver so it can't record a corrupted pass\"): \"Every fix is proven live against muse 1.2.1 via tmux, including one full send -> wait_turn -> exit_clean run through the actual driver.\" No driver gap for this recipe.\n\n## RECORD-TIME CORRECTION\n\nRECORD-TIME CORRECTION (2026-09-14): live recording against irrlichd 0.6.3+a8ec66f proved daemon_capability=full wrong. The primary session's raw daemon capture (kind:state_transition) shows ready -> waiting DIRECTLY, with no intervening working transition, despite ~11s of real transcript growth (many transcript_activity/debounce_coalesced events for the same session_id in that window) and despite forceReadyToWorkingIfActive (core/application/services/session_detector_activity.go:1105-1141) existing specifically to guarantee this bounce. The same run's two subagent children DID show explicit working->ready transitions, so the classifier pathway is not broken in general -- this is specific to the primary session under this recipe shape. Corrected to daemon_capability=bug; expected.jsonl now asserts the OBSERVED (buggy) ready->waiting-direct behavior with known_failing:true, per the record contract's required spec-correction rule. Issue payload handed to the dispatcher for filing.\n\n## OBSERVABILITY_CORRECTION #2 (2026-09-14, record phase)\n\nRECORD-TIME OBSERVABILITY_CORRECTION #2 (2026-09-14, recording 2026-09-14-06-50-25_irrlichd-0.6.3+990daf1, git_head=990daf13): daemon_capability corrected bug -> full. The prior correction (bug) was caused by commit-9abf13d1's bug: a proc-* pre-session presession poll discovering the same PID moments after muse's own fast lsof-based discovery had already bound it to the real session, deleting the real session in assignPIDLocked's same-PID stale-holder scan. Commit 9abf13d1 (\"fix(daemon): never let a proc-* pre-session evict a real session's PID claim\", core/application/services/pid_manager.go) makes a proc-* claim never evict an already-claimed real session; the leftover proc-* row is then retired normally by the existing sweepSupersededPreSessionsPeriodic safety net. Re-recorded on this branch (which contains the fix) and verified against the RAW daemon capture: the same PID-discovery race recurs (proc-44156 created ~430ms after the real session's own pid_bind) but this time the proc-* row is the one retired (transcript_removed for proc-44156), and the real session's ready->working->waiting arc is captured cleanly and completely, matching every sibling agent's spec for this scenario. known_failing is cleared.",
+      "caveats": [
+        "Load-bearing environment/agent-behaviour property (Vacuous-pass rule): the recipe prompt's explicit \"do not call any tools\" instruction is required to reliably land on the trailing-? prose path this scenario tests. Muse's system prompt (confirmed via binary strings this session) otherwise tells the model to prefer its dedicated `request_user_input` tool for blocking questions, and that tool is NOT in the daemon's isUserBlockingTool/isUserBlockingToolName allowlist and has NO OpenToolStalled fallback either (core/domain/session/metrics.go:501, core/pkg/tailer/tailer_config.go:46, core/domain/session/signal_hold.go:93-124) — so a prompt that omitted this instruction, or a model that ignored it, could silently degrade this cell into an unobserved (stuck-working) wait instead of a green 'waiting' pass. `record` should re-probe this live and flag an observability_correction if the tool path fires instead.",
+        "The live probe above used a slightly different prompt wording (\"Do not use any tools yet\") than the recipe's final wording (\"Do not call any tools — answer in plain text only\", modeled on mistral-vibe's own already-assessed 2.17 recipe for the identical dedicated-ask-tool-plus-free-text shape) — both instruct the same thing, but the exact recipe wording has not itself been live-probed verbatim; record is what confirms the final wording behaves identically.",
+        "Per the claudecode and mistral-vibe sibling specs for this same scenario, the recipe only exercises the ready→working→waiting half of the scenario's acceptance criteria; the resume half (waiting→working→ready after a reply) is intentionally not driven by this recipe, matching the established fleet-wide convention for this cell.",
+        "decision_source.kind for muse's SEPARATE approval/permission-prompt flow was only ever \"llm_judge\" in the underlying corpus (format-spec §5/§12) — irrelevant to this cell (no approval flow is exercised here, only the plain-text path) but noted since it comes from the same evidence doc.",
+        "This verdict is grounded in the built adapter's code + a live probe run THIS session, not yet a recorded, `of record`-verified fixture; record is what promotes it from provisional to settled per the standard assess/record split.",
+        "RECORD-TIME (2026-09-14): the live recording refuted daemon_capability=full. See the body's 'RECORD-TIME CORRECTION' section and the recording's raw daemon capture (recordings/2026-09-14-*/events.jsonl) for the exact evidence -- ready->waiting direct, no working transition, despite real transcript growth. known_failing set in expected.jsonl; issue payload handed to the dispatcher.",
+        "RECORD-TIME OBSERVABILITY_CORRECTION #2 (2026-09-14, recording 2026-09-14-06-50-25_irrlichd-0.6.3+990daf1): daemon_capability bug->full after commit 9abf13d1 fixed the proc-* PID-claim eviction bug. Live-confirmed on a second attempt: the real session is never evicted, and ready->working->waiting is now observed cleanly and completely -- no remaining known_failing for this cell. See expected.jsonl meta notes for the full account."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "live probe, this session: ~/.local/share/muse/sessions/2026/09/14/01a09d9c-58d4-7ae0-b533-88a6fd2fa008/session.jsonl",
+          "note": "Real muse 1.2.1 interactive-TUI run (tmux, --trust-workspace) driven with a clarifying-question prompt: one assistant_message_committed ending '?', immediately followed by terminal:\"completed\", no tool call, no approval record."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/parser.go:324-326,424-438",
+          "note": "parseRunTerminal sets EventType=turn_done on muse's terminal event; parseAssistantMessageCommitted sets PendingWaitingCue via session.ProseIndicatesWaiting(tailer.WaitingScanWindow(text))."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/parser_test.go:245-255",
+          "note": "TestParseLine_AssistantMessageCommitted_WaitingCue pins the trailing-? wiring; re-run this session against the REAL captured probe line (throwaway test, not committed) with the same result: PendingWaitingCue=true."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go; muse-adapter-contract.md §5",
+          "note": "The state-classifier ladder: NeedsUserAttention -> OpenToolStalled -> IsAgentDone -> classifyAgentDone -> IsWaitingForUserInput -> waiting."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/metrics.go:487-509; core/pkg/tailer/tailer_config.go:30-54",
+          "note": "isUserBlockingTool / isUserBlockingToolName allowlists do not include muse's request_user_input tool name."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/signal_hold.go:93-124",
+          "note": "OpenToolStalled fires solely for the five isPermissionGatedEditTool names; AskUserQuestion/ExitPlanMode (and by the same logic request_user_input) have no fallback at all if the fast NeedsUserAttention path misses them."
+        },
+        {
+          "kind": "file",
+          "ref": "shell: strings ~/.local/bin/muse-bin-1.2.1-R2847.1 | grep -i request_user_input (this session)",
+          "note": "System-prompt string \"5. Prefer `request_user_input` when available. Ask one blocking outcome question;\" — grounds why the recipe must explicitly forbid tool use."
+        },
+        {
+          "kind": "file",
+          "ref": "muse-format-spec.md §5, §12 (evidence doc, measured against muse v1.2.1 on this machine)",
+          "note": "request_user_input declared in every session's active_tools but never observed invoked in the 14-session sample; the userInput/* wire family carries the question in structured params, not chat text."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/mistral-vibe/scenarios/2-17_user-blocking-question/metadata.json",
+          "note": "Sibling cell for the same scenario on a same-shape agent (dedicated ask-tool + free-text fallback, no hooks) — templated the recipe's explicit \"do not call any tool\" prompt wording."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/2-17_user-blocking-question/{metadata.json,expected.jsonl}; 2-18_user-blocking-plan-mode-approval",
+          "note": "Canonical scenario definition + confirms 2.17 is the trailing-? / no-tool variant, distinct from the plan-mode-approval sibling."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/driver-interactive.sh; commit 0239a1bd",
+          "note": "send/wait_turn/sleep step types genuinely implemented (driver_step_types_from_file), proven end-to-end live against muse 1.2.1 via tmux."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/scenarios/2-2_auto-executed-tool-call/expected.jsonl",
+          "note": "Confirms muse is a single-birth session model (session id = directory basename, fixed at start) — same birth-phase anchoring used here."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/scenarios/2-17_user-blocking-question/recordings/ (raw daemon capture, this live recording)",
+          "note": "kind:state_transition events for the primary session: seq155 ready ('new session created'), seq675 waiting ('new session created') -- no working state_transition anywhere between them, though transcript_activity/debounce_coalesced fire dozens of times in that ~11s window."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "muse CLI (1.2.1) on PATH and authenticated (muse login)",
+        "irrlichd is recording (isolated coexist mode, or --attach against a --record daemon)",
+        "The recipe prompt's explicit \"do not call any tools\" instruction is a load-bearing precondition (see caveats) — it is what keeps the run on the trailing-? prose path instead of muse's system-prompt-preferred request_user_input tool, which the daemon does not yet recognize as user-blocking",
+        "No other muse session shares the driven session's fresh UUID/cwd (driver mints a fresh cwd under <staging>/cwd/)"
+      ],
+      "setup": [
+        "Driver generates a fresh cwd under <staging>/cwd/ and launches `muse --trust-workspace` (dismisses the untrusted-workspace modal — defect #1 fix, commit 0239a1bd — so the first send is not silently dropped)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly one short clarifying question, ending in a question mark. Do not call any tools — answer in plain text only. No other text."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the muse session reach working after the send",
+        "events.jsonl shows exactly one state_transition to waiting after the assistant's question-mark reply",
+        "events.jsonl shows NO state_transition to ready for this session after the waiting transition (recipe stops in waiting, never replies)",
+        "final session state is waiting",
+        "session.jsonl's final kind:\"run\" assistant_message_committed text ends in '?', with no assistant_tool_calls_committed event in that same run (confirms the plain-text path was taken, not request_user_input)"
+      ],
+      "settings": {},
+      "timeout_seconds": 120
+    }
+  }
+}

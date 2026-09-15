@@ -1,0 +1,123 @@
+{
+  "scenario_id": "user-blocking-plan-mode-approval",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.2.1",
+    "daemon_version": "0.6.3+a8ec66f",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes; daemon_capability: full; driver_capability: ready. Muse's bundled `plan` skill has an explicit Approval Gate (prose-only, no tool call) that live-drove to a real waiting-shaped turn end; the daemon's existing PendingWaitingCue prose heuristic caught the real captured closing line when run through the actual parser this session."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "user-blocking-plan-mode-approval",
+      "agent": "muse",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes; daemon_capability: full; driver_capability: ready.\n\n## Does muse have a plan mode at all\n\nYes, and it is a genuinely distinct feature from both 2.17 (plain trailing-? question) and 2.19/wave-1's tool-permission approval flow (`kind:\"approval\"`, `decision_source.kind`). `muse skills inspect plan --json` (run live this session against the installed `muse-bin-1.2.1-R2847.1`) shows a **bundled** (ships by default, `enabledDefault: true`) skill `bundled:plan`: \"Create a grounded, decision-complete plan, then stop for approval... invoked via `/skill plan` or an explicit plan request.\" Extracting the full skill body from the live binary (`strings ~/.local/bin/muse`) surfaces its `## Approval Gate` section verbatim:\n- \"Present the complete reviewable Markdown plan exactly once in a normal user-visible assistant reply before asking for approval.\"\n- \"Do not call `request_user_input` for final plan approval. That tool remains reserved for necessary pre-draft user-owned choices.\"\n- \"After the canonical plan and any saved path, ask the user in prose to reply `Approve`, `Request changes`, or `Cancel`.\"\n- \"Stop after asking; do not start implementation until the user explicitly approves.\"\n\nThis is a real, deliberately-engineered stop-and-wait gate matching the scenario's process (agent emits a plan, pauses, user approves, work resumes) — not a repurposing of 2.17's or 2.19's mechanism. It differs from Claude Code's ExitPlanMode in one load-bearing way the skill text states explicitly: \"Treat this as planning guidance, not a host-enforced mode. Do not claim that the host is blocking write tools, commands, edits, or approvals for you.\" There is no protocol-level tool (no `exit_plan_mode`-shaped call; `muse schema generate-json-schema`'s method index and a full-binary `strings` scan for `exit_plan`/`ExitPlan`/`plan_approval` all come up empty) and no `kind:\"approval\"` record — the gate is enforced purely by the model choosing to stop, per the skill's instructions, exactly as its own text says.\n\n## Live probe (this session)\n\nRan `muse exec --trust-workspace \"Plan how to add a one-line README.md file (just the word hello) to this empty directory. Use the plan skill.\"` against a fresh empty workspace. The skill fired for real (2 research subagents spawned and closed, `skill_read_observed`/`skill_reminder_decision` events present), the model produced a full canonical Markdown plan, and the turn's only top-level `assistant_message_committed` (the primary session made ZERO tool calls itself — all discovery was delegated) ends: \"No plan file was created; this plan is inline only. Please reply `Approve`, `Request changes`, or `Cancel` — I will not implement until you explicitly approve.\" Immediately followed by `{\"kind\":\"terminal\",\"terminal\":\"completed\"}` with no open tool call. Muse's OWN internal reminder agents independently characterize this as a stop-for-approval outcome (`goal-reminder`'s `reminder_proposal.decision_reason`: \"Plan deliverable present and agent handed control to user for approval (Approve/Request changes/Cancel) with no later user message; task done per plan-skill stop-for-approval\"; `verify-reminder` similarly: \"agent produced inline plan and correctly stopped for approval\"). Captured transcript: `~/.local/share/muse/sessions/2026/09/14/95bcac9d-baf7-46bb-8811-fb0e2412dfbc/session.jsonl`.\n\n## Daemon\n\nNo tool call is open at turn end, so `NeedsUserAttention()`/`isUserBlockingTool` never applies here (this is NOT the request_user_input path muse's 2.17 cell uses) — the only candidate signal is the prose-cue heuristic already used by every other agent's plain-question cells: `core/adapters/inbound/agents/muse/parser.go`'s `parseAssistantMessageCommitted` sets `ev.PendingWaitingCue = session.ProseIndicatesWaiting(tailer.WaitingScanWindow(text))`. I did not stop at reading the wiring: I fed the REAL captured closing line from the live probe above through the actual `(&Parser{}).ParseLine` this session (a throwaway `_test.go`, removed afterward, not committed) and confirmed `EventType=\"assistant_message\"`, `PendingWaitingCue=true`, `Skip=false`. The match comes from `waiting_cue.go`'s bucket-D curated-imperative pattern `\\b(?:please|kindly)\\s+\\w+\\b` on \"Please reply\" — a broad, high-recall pattern, not a narrow coincidence. `parser.go`'s `parseRunTerminal` sets `EventType=\"turn_done\"` on the immediately-following `terminal:\"completed\"` record, so `SessionMetrics.IsAgentDone()` goes true with no open tool call and the classifier ladder (`NeedsUserAttention` → `OpenToolStalled` → `IsAgentDone` → `classifyAgentDone` → `IsWaitingForUserInput`) reaches `waiting` via `PendingWaitingCue`, exactly as it does for 2.17. No `kind:\"approval\"` record appears anywhere in the probe transcript (confirmed via a full payload-kind census of the session), so this is genuinely the prose path, not 2.19's tool-permission path — the two remain distinct even though both ultimately resolve to `waiting`.\n\nThe waiting→working→ready resume leg after an \"Approve\" reply was not separately live-probed: it is the ordinary same-session-id turn-resume mechanism every other multi-turn muse cell (2-1 basic-turn, 2-17, 2-19) already exercises, and the scenario's own canonical description explicitly scopes the recipe to entry only: \"Recipe captures only entry into waiting; the approve/reject continuation is structurally identical to other waiting-resume paths\" (also the exact convention claudecode's own already-recorded 2-18 cell follows: 3 phases, session_birth/turn_start/plan_mode_waiting, no resume phase).\n\n## Driver\n\n`send`/`wait_turn`/`sleep` are already implemented in `replaydata/agents/muse/driver-interactive.sh` (`DRIVE_ELICITS=\"send slash wait_turn sleep exit_clean restart sigkill start_session session\"`), proven end-to-end for muse in the 2.17 cell's own record pass. No new primitive is needed for this recipe. No driver gap.\n\n## Why this is not 2.17 or 2.19/wave-1's human_approval flow reused\n\n- 2.17 (`user-blocking-question`) is a bare clarifying question with no plan artifact and an explicit \"do not call any tools\" instruction; its own metadata.json states it is \"NOT the permission/approval-prompt scenario\" and cites this cell (2.18) as the sibling that covers plan-mode. This assessment exercises the actual bundled `plan` skill and its dedicated Approval Gate section — a different, independently-triggered agent feature — not a copy of 2.17's recipe with different wording.\n- Wave-1's `human_approval` finding (`--approval-judge off --approval-mode on-request` → `decision_source.kind:\"human_approval\"`) is muse's TOOL-permission gate (`kind:\"approval\"`) — it fires when a MUTATING tool call needs a human decision. The plan skill's Approval Gate is a distinct, earlier checkpoint that exists specifically to avoid ever reaching that tool-permission gate (the skill forbids mutating tool calls until the plan is approved). Neither the live probe's transcript nor the skill body reference `kind:\"approval\"` or the approval-judge/approval-mode settings at all — this cell's recipe does not depend on those settings, unlike 2.19.",
+      "caveats": [
+        "Vacuous-pass rule: the exact closing sentence is model-generated free text, not a fixed template — the skill only mandates the CONTENT (ask to reply Approve/Request changes/Cancel) not the wording. This probe's phrasing (\"Please reply...\") hit waiting_cue.go's broad bucket-D `please + word` pattern, but a differently-worded run (e.g. a bare imperative list with no question mark and no cue word) could in principle land on neither ExtractQuestionSnippet nor ExtractWaitingCue and silently read as a stuck-working/ready session instead of waiting. This is a load-bearing agent-behaviour property, not a daemon defect — record should re-probe live and file an observability_correction if a differently-phrased run misses the cue.",
+        "The waiting→working→ready resume leg (after an \"Approve\" reply) was not live-probed in this assessment — only entry into waiting was driven, matching the scenario's own canonical scope (\"Recipe captures only entry into waiting\") and claudecode's already-recorded sibling cell for the same scenario.",
+        "This cell's recipe does NOT depend on --approval-mode/--approval-judge (unlike 2.19/tool-gate-permission-prompt and the wave-1 human_approval finding) — the plan skill's Approval Gate is a prose-only checkpoint that never reaches muse's tool-permission machinery. Re-probing on a host with different approval defaults should not change this cell's behaviour, but is untested.",
+        "Muse spawns ambient research/reminder subagents even for a pure planning request (2 children in this probe: a research child and the goal/verify reminder machinery) — the recipe's spec must pin every phase to the PRIMARY session (same_session_as) so a subagent's own ready/working transition can't silently satisfy an assertion, per the fleet-wide known contamination pattern for this adapter.",
+        "Grounded in a live probe run THIS session plus a throwaway parser unit-test run against the real captured text, but not yet a recorded, `of record`-verified fixture; record is what promotes it from provisional to settled."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "shell: muse skills inspect plan --json (this session, live muse-bin-1.2.1-R2847.1)",
+          "note": "bundled:plan skill declaration: scope=bundled, enabledDefault=true, description confirms 'stop for approval' behaviour."
+        },
+        {
+          "kind": "file",
+          "ref": "shell: strings ~/.local/bin/muse (this session)",
+          "note": "Full plan skill body, including the '## Approval Gate' section quoted in the verdict body: prose-only ask, explicit prohibition on calling request_user_input, explicit 'not a host-enforced mode' framing."
+        },
+        {
+          "kind": "file",
+          "ref": "shell: muse schema generate-json-schema/--experimental --out <dir> (this session); full binary strings scan for exit_plan/ExitPlan/plan_approval/PlanApproval",
+          "note": "No protocol-level plan-approval tool or wire type exists; confirms the gate is prompt-level, not host-enforced."
+        },
+        {
+          "kind": "file",
+          "ref": "live probe transcript, this session: ~/.local/share/muse/sessions/2026/09/14/95bcac9d-baf7-46bb-8811-fb0e2412dfbc/session.jsonl",
+          "note": "muse exec --trust-workspace run against a fresh empty workspace; one assistant_message_committed (the full plan + prose approval ask) immediately followed by terminal:completed, no open tool call, no kind:approval record anywhere in the transcript."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/parser.go (parseAssistantMessageCommitted, parseRunTerminal)",
+          "note": "PendingWaitingCue = session.ProseIndicatesWaiting(tailer.WaitingScanWindow(text)); terminal record sets EventType=turn_done."
+        },
+        {
+          "kind": "file",
+          "ref": "throwaway _test.go run this session (not committed), feeding the live-captured closing line through (&Parser{}).ParseLine",
+          "note": "Confirmed EventType=assistant_message, PendingWaitingCue=true, Skip=false on the real captured text."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/waiting_cue.go (waitingCuePatterns bucket D)",
+          "note": "`\\\\b(?:please|kindly)\\\\s+\\\\w+\\\\b` matches the probe's closing \"Please reply...\" sentence."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go; muse-adapter-contract.md §5",
+          "note": "Classifier ladder reaching IsWaitingForUserInput when no tool is open and IsAgentDone is true — same ladder 2.17 already proves live for muse."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/driver-interactive.sh (DRIVE_ELICITS)",
+          "note": "send/wait_turn/sleep already implemented and proven live for muse (2.17's own record pass)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/2-18_user-blocking-plan-mode-approval/{metadata.json,expected.jsonl}",
+          "note": "Canonical scenario definition + confirms the fleet convention of scoping this cell's recipe to entry-into-waiting only (3 phases, no resume leg)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/scenarios/2-17_user-blocking-question/metadata.json",
+          "note": "Sibling cell; explicitly states it is NOT the plan-mode scenario and names this cell as the one that covers it; also the source of the model/cost/tokens observation convention (muse-spark-1.3-contributor, cost_nonzero:false, tokens_nonzero:true) reused here since the live probe's own runtime.session.metadata record showed the same model_id."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "muse CLI (1.2.1) on PATH and authenticated (muse login)",
+        "irrlichd is recording (isolated coexist mode, or --attach against a --record daemon)",
+        "The recipe prompt's explicit \"Use the plan skill\" instruction is a load-bearing precondition — it is what reliably triggers the bundled plan skill's Approval Gate instead of an ordinary unstructured reply",
+        "No other muse session shares the driven session's fresh UUID/cwd (driver mints a fresh cwd under <staging>/cwd/)",
+        "Independent of --approval-mode/--approval-judge settings (no mutating tool call is ever attempted before the gate)"
+      ],
+      "setup": [
+        "Driver generates a fresh cwd under <staging>/cwd/ and launches `muse --trust-workspace` (dismisses the untrusted-workspace modal so the first send is not silently dropped)"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Plan how to add a one-line README.md file (just the word hello) to this empty directory. Use the plan skill."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 10
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the muse session reach working after the send",
+        "events.jsonl shows a state_transition to waiting for the PRIMARY session after the plan is presented and the agent asks for approval (pinned via same_session_as so a spawned research/reminder subagent's own transition cannot satisfy this)",
+        "events.jsonl shows NO state_transition to ready for the primary session after the waiting transition (recipe stops in waiting, never replies)",
+        "final session state is waiting",
+        "session.jsonl's final top-level assistant_message_committed contains a full Markdown plan body and an explicit ask to reply Approve/Request changes/Cancel, with no assistant_tool_calls_committed in the primary session's own run (confirms discovery was delegated, not performed inline, and no mutating tool call preceded the gate)"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}

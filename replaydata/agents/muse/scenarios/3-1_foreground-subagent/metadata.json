@@ -1,0 +1,103 @@
+{
+  "scenario_id": "foreground-subagent",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.2.1",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes (subagent_spawn/subagent_wait/subagent_read_result directly observed firing in real local muse sessions on this machine); daemon_capability: full (ParentSessionID linkage + hasActiveChildren held-working are agent-agnostic and independently proven against real corpus timing); driver_capability: ready."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "foreground-subagent",
+      "agent": "muse",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\n**agent_supports.** muse exposes a native subagent toolset — `subagent_spawn`, `subagent_status`, `subagent_send_message`, `subagent_wait`, `subagent_read_result`, `subagent_cancel` (confirmed present in the shipped binary's tool-name table, `~/.local/bin/muse-bin-1.2.1-R2847.1` strings scan) — and this is not merely advertised: a grep across the 177 real `session.jsonl` files already on this machine (`~/.local/share/muse/sessions/**/session.jsonl`) finds `task_kind:\"tool.subagent_spawn\"` fired 30 times, `tool.subagent_wait` 9 times, and `tool.subagent_read_result` 3 times in actual live sessions. One binary string (\"do NOT `subagent_spawn` the task ... that retired substrate is gone\") could be misread as a deprecation notice, but wider context shows it is scoped to an unrelated 'conversation coordinator/connector' persona instructing IT not to use its own subagent tools for whole-conversation delegation — not a general deprecation; the corpus proves the general toolset is very much live today.\n\nThe wire protocol (embedded RPC method docstrings in the binary, SS3.16) draws exactly the distinction this scenario needs: `subagent/readResult` is documented \"Consume a ready child result (state-changing; the content is already the subagent item's result field)\" — a parent-turn-blocking consume-when-ready pattern — versus `subagent/followupTask`/`subagent/sendMessage`, documented \"admission-only ack ... settles on the child session's view stream\" — fire-and-forget. `subagent_wait` (the model-facing tool) is the practical way a turn blocks on this.\n\n**Is a foreground (blocking) child distinguishable from a background one on disk? Yes — but NOT via a static tag on the spawn record.** `subagent.control.spawn_accepted`/`child_session_bound` (format-spec §9(a)) are IDENTICAL regardless of whether the parent later waits. The real discriminator is a *sequence*, directly observed in the corpus:\n\n1. The `subagent_spawn` TOOL CALL is always its own `task_stream_linked` entry with `execution_mode:\"foreground\"` (session 01a09c47-506a-..., line 423) — but its `tool_batch.effect` completes almost immediately (line 428→440, admission only: `{\"status\":\"accepted\",\"subagent_id\":...}`).\n2. The SUBAGENT'S OWN execution is a *separate* `task_stream_linked` entry, `task_kind:\"workflow.agent.native\"`, ALWAYS tagged `execution_mode:\"background\"` (line 431) — this is true unconditionally, whether or not the parent later waits on it. `execution_mode` on this entry is therefore NOT the fore/background-SCENARIO discriminator (a plausible-looking trap: the field name matches the scenario names but classifies something else — task-stream dispatch lane, not scenario shape).\n3. The REAL discriminator: does the parent's turn additionally invoke `tool.subagent_wait` / `tool.subagent_read_result` (these ARE tagged `execution_mode:\"foreground\"` on their own `task_stream_linked`, e.g. line 516) BEFORE ending its own reply? Directly observed both ways in the SAME session: (a) a `tool.subagent_wait` call whose `tool_batch.effect` stayed `started`→`terminal` for exactly 300,017 ms (line 521→523, matching the run's own `terminal_duration_ms:2877101` for that whole multi-wait run) while `subagent.control.wait_parked` (line 522) recorded the durable block, timing out with `{\"status\":\"timeout\",...}`; (b) a genuine SUCCESS case elsewhere in the same corpus: a `subagent_wait`/`subagent_read_result` call returning `{\"status\":\"ready\",\"subagent_id\":...,\"summary\":\"verdict: agent=yes...\"}` — the real child result folded into the parent's own tool output once ready. For a background/fire-and-forget dispatch, the run's tool-call loop simply never issues `subagent_wait`/`subagent_read_result`, and the run's own `(\"run\",\"terminal\")` fires immediately after `subagent_spawn`'s admission-only completion (observed directly, lines 440-444), while the child (`workflow.agent.native`) is left `running`.\n\n**daemon_capability.** Parent linkage is generic and already built: `parentSessionIDFromPath` (core/adapters/inbound/agents/muse/adapter.go:173-191) derives ParentSessionID purely from the `<parent>/subagent/<child>/` path shape — this fires identically for EVERY child regardless of dispatch mode, satisfying 'Child session appears with ParentSessionID = parent.session_id' unconditionally. The 'parent stays working until child ends' behavior is NOT adapter-specific: `hasActiveChildren`/`holdIfChildrenActive`/`reevaluateParent` (core/application/services/session_detector_subagent.go:230-421) key purely on `session.ParentSessionID == parentID && s.HasWorkInFlight()` — no adapter branching anywhere in that file — so the SAME generic mechanism that already holds a claudecode parent working also holds a muse parent working, PROVIDED the child session's own run/terminal boundary is correctly derived (it is: children are ordinary muse sessions with their own `(\"run\",\"started\")`/`(\"run\",\"terminal\")` pair, parsed identically to a top-level session, format-spec §3, already daemon=full for basic-turn/2-1). muse's turn boundary is an EXPLICIT terminal marker (unlike claudecode's heuristic open-tool-call inference), so the parent's own run genuinely does not reach turn_done while a `subagent_wait` tool_batch.effect is open — directly proven by the 2,877,101 ms `turn_duration_ms` spanning exactly the observed 300,017 ms block. This is real recorded corpus evidence, not a plausible parser reading.\n\n**driver_capability.** `replaydata/agents/muse/driver-interactive.sh` already implements every step type this recipe needs (`send`, `wait_turn`, `sleep`, `start_session`, `exit_clean`) — same shape as the already-recorded basic-turn/auto-executed-tool-call cells.",
+      "caveats": [
+        "VACUOUS-PASS RISK (load-bearing, name it as a recipe precondition, not just a footnote): muse fires ambient reminder micro-agents (skill-reminder/goal-reminder/verify-reminder) on nearly every turn, and per format-spec §9(b) ANY reminder that emits output also gets its own ParentSessionID-linked `<parent>/subagent/<child>/session.jsonl` directory + a parent_linked-equivalent daemon event — structurally indistinguishable from a real subagent at the generic-daemon-event level (kind:transcript_new + parent_linked). A phase that generically matches 'any child born + parent_linked' risks silently matching a reminder child's own fast working→ready arc instead of the recipe's intentionally-dispatched general-purpose subagent. This exact contamination class already bit the sibling cell 4-1 multiple-sessions-same-cwd (documented in its own expected.jsonl notes: a first attempt vacuously matched a reminder subagent's session_id). `record` MUST cross-reference the raw parent transcript's `task_stream_linked` records and confirm the matched child corresponds to `task_kind:\"workflow.agent.native\"` with NO `display.role:\"reminder\"` tag (reminders always carry `display:{role:\"reminder\",...}`; the intended general-purpose subagent's own task_stream_linked carries no `display` field at all) before trusting a bare new_session/parent_linked match.",
+        "Whether the model reliably calls `subagent_wait`/`subagent_read_result` (making the dispatch genuinely foreground/blocking, matching THIS scenario) versus replying immediately after `subagent_spawn`'s admission (silently producing 3.2 background-subagent's shape instead) is a model-CHOICE property, not a mechanical guarantee — the corpus's own dominant pattern (30 spawns vs only 9 waits system-wide) shows the model does not wait by default. The recipe prompt below explicitly names `subagent_wait`/`subagent_read_result` and instructs the model not to end its turn early specifically to force this; this is PROVISIONAL (Observation vs emission) until a live recording confirms compliance.",
+        "`subagent_wait`'s own hard timeout is 300,000 ms exactly (confirmed identically across 3 independent corpus samples) — the demo task (read one small file) should complete well inside that, but `timeout_seconds` is set generously above muse's own observed multi-minute model-response variance to avoid a driver-side timeout racing the tool's own 300s ceiling.",
+        "No dollar cost is ever persisted for muse (shared #1960 context, independently re-confirmed by the strict JSON-key scan already on file for 5-1 token-accounting) — `cost_nonzero` is asserted false, not left as a template-inherited `true` (the #1960 context's documented defect class)."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/adapter.go:173-191",
+          "note": "parentSessionIDFromPath — generic, path-based ParentSessionID derivation for every <parent>/subagent/<child>/session.jsonl, unconditional on dispatch mode."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector_subagent.go:230-421",
+          "note": "hasActiveChildren/holdIfChildrenActive/reevaluateParent — keys purely on session.ParentSessionID + HasWorkInFlight(), no adapter-specific branching; the same generic mechanism claudecode's 3.1/3.2 cells already rely on."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.local/share/muse/sessions/2026/09/13/01a09c47-506a-7763-b82a-9ab89a9e195a/session.jsonl:423-524",
+          "note": "Real recorded corpus evidence on this machine: subagent_spawn admission (execution_mode:foreground, completes fast) at line 423-442; the spawned subagent's own workflow.agent.native task (execution_mode:background) at line 431; a subsequent tool.subagent_wait call (execution_mode:foreground) whose tool_batch.effect stays open from line 521 to line 523, a 300,017 ms block ending in status:timeout, matching the enclosing run's own terminal_duration_ms:2877101 (format-spec §3)."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.local/share/muse/sessions/2026/09/13/01a09c47-506a-7763-b82a-9ab89a9e195a/session.jsonl (task_id 01a09c6d-c393-7db1-96af-0d5e3d747ce9)",
+          "note": "A genuine (non-timeout) success case: subagent_wait/read_result returns {\"status\":\"ready\",...,\"summary\":\"verdict: agent=yes...\"} — the child's real completed result folded into the parent's own tool output once ready, confirming the blocking-consume actually resolves, not just times out."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/scenarios/4-1_multiple-sessions-same-cwd/expected.jsonl",
+          "note": "Precedent for the reminder-subagent vacuous-pass contamination class this cell's caveats warn about — a first live attempt on a sibling muse cell matched a reminder subagent's session_id instead of the intended target."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.local/bin/muse-bin-1.2.1-R2847.1",
+          "note": "strings scan: subagent/readResult, subagent/followupTask, subagent/sendMessage RPC method docstrings (SS3.16) describing the blocking-consume vs admission-only-ack distinction; subagent_spawn/subagent_wait/subagent_read_result present in the model-facing tool name table; the 'retired substrate' string is scoped to an unrelated conversation-coordinator persona (verified via wider context, not a general deprecation)."
+        },
+        {
+          "kind": "file",
+          "ref": "muse-format-spec.md §9 (Subagents / child sessions)",
+          "note": "subagent.control.* family (spawn_accepted/child_session_bound/result_ready/spawn_rejected), the 8-concurrent-subagent capacity ceiling, and the memory_reminder_child_session_linked mechanism that also materializes an on-disk <parent>/subagent/<child>/ directory for reminders."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "muse CLI on PATH and authenticated (muse --trust-workspace can start a session)",
+        "irrlichd is recording (--attach against a daemon with --record, or isolated/coexist mode)",
+        "the default model has the subagent_spawn/subagent_wait/subagent_read_result tools exposed (confirmed present in 1.2.1-R2847.1's tool table)"
+      ],
+      "setup": [
+        "Driver starts a fresh muse REPL session in a fresh cwd under <staging>/cwd/ (driver-interactive.sh's start_session step)",
+        "A README.md with a single H1 heading is seeded into the cwd so the subagent has a deterministic file to read"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Use your subagent_spawn tool to launch exactly one general-purpose subagent with this instruction: read the file README.md in the current directory and report the first heading. After spawning, call subagent_wait (or subagent_read_result once it reports ready) to block until the subagent's result is available -- do not end your turn or reply until you have that result in hand. Once you have it, reply with the single word CONFIRMED and nothing else."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the parent UUID entering ready, then a single ready→working transition driven by the user prompt",
+        "the parent's raw session.jsonl shows a subagent.control.spawn_accepted / child_session_bound pair, and a task_stream_linked entry for a workflow.agent.native task_kind with NO display.role:reminder tag (disambiguates the intended subagent from an ambient skill-reminder/goal-reminder/verify-reminder child)",
+        "events.jsonl contains at least 1 parent_linked event pointing at the parent UUID, corresponding to that same non-reminder child (cross-check the child's session_id against the raw child_session_bound record, not a bare new_session match)",
+        "the child's own session.jsonl exists under <parent>/subagent/<child-id>/session.jsonl",
+        "no state_transition to ready or waiting fires on the parent UUID between parent_linked and the final working→ready (parent stays working until the child reports back)",
+        "the parent's raw session.jsonl shows a tool.subagent_wait or tool.subagent_read_result task_stream_linked entry (execution_mode:foreground) whose tool_batch.effect opens before and closes at/after the child's own subagent.control.result_ready or status_updated:closed record",
+        "events.jsonl shows exactly one working→ready transition for the parent UUID at turn end",
+        "final session state for the parent is ready"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}

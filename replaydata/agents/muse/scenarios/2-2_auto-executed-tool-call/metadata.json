@@ -1,0 +1,103 @@
+{
+  "scenario_id": "auto-executed-tool-call",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.2.1",
+    "daemon_version": "0.6.3+0239a1b",
+    "confidence": 0.82,
+    "notes": "agent_supports: yes; daemon_capability: full; driver_capability: ready. Not yet recorded — record is next. | RECORDED 2026-09-14: allow:policy precondition reconfirmed live; found+fixed a vacuous-pass bug (turn_start/turn_end matched a subagent, not the parent) via same_session_as:session_birth; corrected cost_nonzero true->false (no pricing catalog entry for muse) -- see caveats for the full account."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "auto-executed-tool-call",
+      "agent": "muse",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.82,
+      "body": "## Verdict\n\nagent_supports: yes; daemon_capability: full; driver_capability: ready.\n\n## Reasoning\n\n**Agent.** Muse's runtime executes shell tool calls autonomously and reports both a low-level 'effect' view (kind:\"task\"/tool_batch.effect.*) and a higher-level pairing directly under kind:\"run\": assistant_tool_calls_committed (opens, carrying tool_calls[].call_id/name) and tool_result_batch_committed (closes, carrying results[].tool_call_id) — muse-format-spec.md §4, cross-checked against real captures. Critically, format-spec §4 also documents the discriminator this scenario hinges on: a tool call's side_effect_intent.policy_decision is \"allow:policy\" for a policy-fast-tracked, read-only command (the exact observed example is `bash \"ls -la\"`, executed \"with no wait\") — that call never enters the kind:\"approval\" flow at all. A tool call that instead needs review goes through a SEPARATE, structurally distinct requested → automated_review_started → automated_review_completed → decision_applied record family before its tool_batch.effect.started fires (format-spec §4-5). So muse genuinely performs BOTH the auto-executed happy path and a review-gated path, and the transcript tells them apart.\n\n**Daemon.** The now-built Go adapter (core/adapters/inbound/agents/muse/parser.go) implements exactly this distinction: parseRunStarted (parser.go:308-315) sets EventType=\"user_message\" on kind:\"run\" event.kind:\"started\" (ready→working); parseRunTerminal (parser.go:324-365) sets EventType=\"turn_done\" on event.kind:\"terminal\" (working→ready), independent of the completed/cancelled/failed outcome. parseAssistantToolCallsCommitted (parser.go:445-) and parseToolResultBatchCommitted (parser.go:467-) populate ToolUses/ToolResultIDs paired by call_id — this is the ONLY tool-call source the parser wires (a deliberate choice documented at parser.go:57-74: the task/tool_batch.effect.* family carries the identical call_id but would be pure duplication). Waiting is sourced exclusively from kind:\"approval\" requested/decision_applied (parser.go:76-83, parseApprovalRequested/parseApprovalDecisionApplied at parser.go:550,563), which set PermissionRequestIDs/PermissionResolvedIDs — the transcript-tier TranscriptPermissionPending signal the daemon's state_classifier reads to enter `waiting`. A policy-fast-tracked call (\"allow:policy\") produces NO kind:\"approval\" record at all, so PermissionRequestIDs is never opened and `waiting` is structurally unreachable for that call — this is a real, code-grounded guarantee, not an inference. Unit coverage exists for both halves: TestParseLine_ToolCall_OpenAndClose_PairByCallID (parser_test.go:270) and TestParseLine_ApprovalRequested_OpensPermission / TestParseLine_ApprovalDecisionApplied_ClosesPermission (parser_test.go:323,335). `go test ./core/adapters/inbound/agents/muse/... -race -count=1` passes (verified by exit code, this session).\n\n**Driver.** replaydata/agents/muse/driver-interactive.sh's DRIVE_ELICITS (line 139) lists send, slash, wait_turn, sleep, exit_clean as genuinely implemented (verified by reading the dispatch case block directly: send|slash → step_send, wait_turn → step_wait_turn, sleep → sleep N, exit_clean → step_exit_clean; every other step type is an explicit not_implemented stub). This scenario's recipe needs only send + wait_turn + sleep — all present. The three critical defects the #1960 driver audit found (untrusted-workspace modal swallowing the first message; no inter-keystroke delay dropping Enter; resolve_transcript landing on a subagent's shadow transcript) were fixed in commit 0239a1bd (\"fix(muse): repair the recording driver so it can't record a corrupted pass\"), which is the current HEAD of this branch.\n\n## Vacuous-pass condition (load-bearing environment property)\n\nUnder what condition would this cell pass while proving nothing? If the recipe's prompt happened to route through the kind:\"approval\" review flow instead of the policy fast-track — even though this machine's :auto-review profile resolves that flow automatically via an LLM judge (decision_source.kind:\"llm_judge\", format-spec §5) rather than blocking on a human — the daemon would still open/close a transcript-tier PermissionPending window (PermissionRequestIDs/PermissionResolvedIDs), which the state_classifier could read as a transient `waiting`. That would make this recording indistinguishable from the *different* scenario (a permission-gated tool call), not the auto-executed one this cell claims to test — and a human reviewer would not detect the substitution just from a green 3/3, exactly the copilot 2-11 shape this rule exists to catch. The recipe therefore deliberately mirrors the ONE command shape format-spec §4 actually observed getting `policy_decision:\"allow:policy\"` (`bash \"ls -la\"`) rather than an unverified analogy — no sample in the corpus confirms how a differently-worded command (e.g. `echo hello`) classifies. This machine's specific :auto-review permission-profile behavior for read-only listing commands is therefore a load-bearing precondition of this recipe, named in `caveats` and `recipe.preconditions` below.",
+      "caveats": [
+        "Not yet recorded end-to-end for muse — no prior recording exists for this cell (0 cells recorded for muse across the whole matrix at assessment time). This verdict is grounded in the built adapter's code + tests + the muse-format-spec.md live corpus, not a live run of THIS scenario; record is what promotes it from provisional to settled.",
+        "Load-bearing environment property (vacuous-pass rule): this machine's muse install runs a ':auto-review' permission profile that fast-tracks certain read-only bash commands via policy_decision:'allow:policy' (no approval flow, no wait) while routing others through an automated kind:'approval' review (auto-resolved by an LLM judge, but still opens a transcript-tier permission-pending window). The recipe deliberately uses the ONE command shape (`ls -la`) directly evidenced as policy-fast-tracked in muse-format-spec.md §4. If a different muse version, account, or permission-profile configuration routes plain read-only listing commands through review instead, this recipe would silently start exercising the OTHER scenario (permission-gated tool call) and the cell needs re-verification at record time.",
+        "terminal:'cancelled' semantics are UNVERIFIED (muse-format-spec.md §3/§12: no sample confirms whether it represents a genuine human ESC or purely programmatic cancellation) — not load-bearing for this scenario since the happy path asserts terminal:'completed', but noted for completeness.",
+        "A nonzero tool exit_code's on-disk shape has never been captured live (muse-format-spec.md, task context) — irrelevant here since this scenario's tool call is expected to succeed, but the parser's IsError-from-exit_code path (parser_test.go:298, marked SYNTHETIC in that test's own comment) is unverified against a live failing call.",
+        "The muse-format-spec.md corpus was gathered partly while ANOTHER live recording session (for different scenarios: 2-14/4-1/5-1) was concurrently running on this machine — noted by that doc's own author as a concurrency caveat; it does not affect the specific event shapes cited here (turn boundaries, tool-call pairing, approval family), which were also cross-checked directly against the parser's own doc comments written while reading the second time.",
+        "LIVE-CONFIRMED (record pass, #1960, recording 2026-09-14-04-47-31, session 01a09dd0-0803-7961-bdd0-3fb88305d5ef): this machine's :auto-review profile STILL classifies 'ls -la' as policy_decision:'allow:policy' (single occurrence in the raw transcript, zero kind:'approval' records) -- the load-bearing precondition held. BUT the recording exposed a genuine vacuous-pass bug in the ORIGINAL expected.jsonl: turn_start/turn_end were left unpinned (no same_session_as), and muse's goal-reminder/verify-reminder subagents (spawned for every prompt, format-spec §9) go straight to working (skipping ready) before the parent session's own turn starts. One subagent's own read-only arc (working at +9.5s after birth, back to ready 4.9s later, no waiting in between) fully satisfied the unpinned ready->working->ready-with-no-waiting shape on its own, so the original spec PASSED 3/3 while validating a SUBAGENT's reminder turn instead of the parent session's actual ls -la tool call -- confirmed via expected-validate's phase report (turn_start/turn_end both matched session 35c6c413-5c09-4c10-9b66-daee87a1d0d1, not the parent). This is the identical vacuous-pass mechanism independently found and fixed in the sibling turn-end-terminal-text cell during the same record pass. Fixed by pinning turn_start and turn_end to same_session_as:session_birth. Also corrected cost_nonzero from true to false: muse-spark-1.3-contributor has no litellm pricing/alias entry (confirmed live -- daemon logs 'no pricing for model ... cost will be 0' on every recording of this onboarding pass); the original value was copied from the claudecode sibling template without re-deriving it for muse's own unpriced model, matching the same defect already documented for the basic-turn and turn-end-terminal-text sibling cells."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "muse-format-spec.md §3-5 (evidence doc, measured against muse v1.2.1 on this machine)",
+          "note": "Live-captured muse 1.2.1 corpus on this machine: turn boundaries (started/terminal), tool-call pairing (assistant_tool_calls_committed/tool_result_batch_committed), and the policy_decision:'allow:policy' vs kind:'approval' distinction (bash 'ls -la' cited as the concrete allow:policy example)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/parser.go:57-108,306-365,445-484,525-575",
+          "note": "The built adapter's own doc comments + implementation: tool-call pairing source, approval-only waiting source, turn-boundary EventType wiring."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/parser_test.go:270-358",
+          "note": "Unit tests pinning the auto-executed tool-call arc (open/close by call_id, IsError only on nonzero exit_code) and the separate approval open/close arc."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/driver-interactive.sh:139,441-461",
+          "note": "DRIVE_ELICITS + the step dispatch case block: send/slash/wait_turn/sleep/exit_clean are genuinely implemented; every other step type is an explicit not_implemented stub."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/2-2_auto-executed-tool-call/metadata.json + expected.jsonl",
+          "note": "Sibling cell for the same scenario, templated for the recipe shape and phase structure."
+        },
+        {
+          "kind": "file",
+          "ref": "shell: go test ./core/adapters/inbound/agents/muse/... -race -count=1",
+          "note": "Verified green by exit code this session (2026-09-14)."
+        },
+        {
+          "kind": "file",
+          "ref": "shell: git log -1 --oneline (HEAD=0239a1bd)",
+          "note": "Confirms the driver-audit fixes are present at the commit this assessment is read against."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "muse CLI on PATH and authenticated (muse login or META_API_KEY) — confirmed installed at 1.2.1 on this machine",
+        "irrlichd is recording (--attach or isolated coexist mode)",
+        "This machine's muse permission profile classifies a plain 'ls -la' read-only bash command as policy_decision:'allow:policy' (no approval flow) — re-probe this at record time; if the live run instead shows a kind:'approval' record for this call, the recipe is exercising the WRONG scenario and needs a different command or a policy-profile check first"
+      ],
+      "setup": [
+        "Driver generates a fresh lowercased session UUID and a fresh cwd under <staging>/cwd/ (launch_repl, driver-interactive.sh)",
+        "Driver dismisses the untrusted-workspace trust prompt via --trust-workspace at launch (defect #1 fix, commit 0239a1bd) so the first message is not silently dropped"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "List the files in the current directory using ls -la, then reply 'done'."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the session entering ready, then exactly one ready→working transition and one working→ready transition",
+        "events.jsonl contains at least one tool-call open/close pair (bash) inside the working span",
+        "events.jsonl contains NO state_transition to waiting for this session during the entire run",
+        "final session state is ready",
+        "transcript shows the literal final reply token 'done'"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}

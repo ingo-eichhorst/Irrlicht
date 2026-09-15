@@ -1,0 +1,146 @@
+{
+  "scenario_id": "auth-credentials-rejected",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.2.1",
+    "daemon_version": "0.6.3+3d46c56",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes, LIVE-CONFIRMED (assess probe + record pass agree): a bogus META_API_KEY (env-var only, real ~/.config/muse/auth.json never touched, shasum-verified byte-identical before/after) produces run_fatal_error_classified{error_class:\"auth_required\"} -> terminal{failed, reason:\"your API key from META_API_KEY was rejected — update or unset it\"} within 1s. daemon_capability: full via the IDENTICAL generic code path already recorded for sibling cell 2-14/turn-aborted-by-error. driver_capability: ready (meta_api_key_override ported #1960 record pass: env META_API_KEY=... wraps the tmux muse launch in spawn_muse_repl(), read from settings.meta_api_key — a launch-arg wire, not a new step type, same shape as base_url_override). A safer mock-based alternative (pointing --base-url at mock-muse-overload with --status 401) was evaluated and DOES reproduce the same error_class:\"auth_required\" classification, but is NOT safe by construction as assumed: with real account login active it triggered a genuine OAuth token refresh that wrote to auth.json (live-confirmed, mtime moved) — so the env-var override is used instead, since the env-key lane never falls through to that refresh path. Recorded 2026-09-15, known_failing 4/5: teardown/process_exited reproduces the OPEN daemon bug #1962 (processlifecycle per-PID watched map, last-write-wins), cited not new, exactly as pre-emptively predicted."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "auth-credentials-rejected",
+      "agent": "muse",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes (live-confirmed, not inferred)\ndaemon_capability: full\ndriver_capability: gap:meta_api_key_override\nroute: driver-gap\n\n## agent = yes — live-confirmed this session\n\nA throwaway, deliberately-invalid `META_API_KEY` was exported in an isolated subshell (`env META_API_KEY='bogus-invalid-key-1960-probe-xyz' muse --trust-workspace`, launched via tmux in `/tmp/muse-auth-probe-1960`, a scratch cwd outside the repo, never touching or reading `~/.config/muse/auth.json`). The TUI launched normally (\"Model set to muse-spark-1.3-contributor\", an interactive `❯` prompt) — muse does NOT synchronously validate credentials at startup. Submitting a prompt (\"Say hello.\") triggered the rejection within ~1s: the TUI rendered `◆ your API key from META_API_KEY was rejected — update or unset it`, and the on-disk `session.jsonl` (`~/.local/share/muse/sessions/2026/09/14/01a09f3d-1773-7bd0-b158-011f92e9cd59/session.jsonl`, sequence 52-54) recorded:\n\n```\nkind:\"run\", event.kind:\"resource_usage_sampled\"\nkind:\"run\", event.kind:\"run_fatal_error_classified\", error_class:\"auth_required\"\nkind:\"run\", event.kind:\"terminal\", terminal:\"failed\", reason:\"your API key from META_API_KEY was rejected — update or unset it\", turn_duration_ms:667, failure_retryable:false\n```\n\nCorroborating wire-schema evidence (`muse schema generate-json-schema`, offline, exact for this binary — dumped to scratchpad/muse-schema-out/msp.schema.json): the `TurnErrorKind` enum explicitly lists `authRequired` (camelCase; the transcript's snake_case `auth_required` is the same value) as one of 9 turn failure classes, part of the durable `TurnError{kind, message, retryable}` object (\"tdd §4.5.1\"). `strings -a` on the native binary (`/Users/ingo/.local/bin/muse-bin-1.2.1-R2847.1`) contains the exact literal `\"your API key from META_API_KEY was rejected \"` plus a documented \"credential lane\" concept: `AccountStateKind` enum `loggedOut|envKey|apiKey|accountLogin` (queried via `account/read`, spec 28091 FR-001), and the literal `\"META_API_KEY always takes priority over the account login.\"` — directly matching this cell's assignment pointer.\n\n**Checked, not assumed**: the corpus's pre-existing `testdata/real-turn-failed.jsonl` fixture (`error_class:\"config_error\"`, reason \"invalid run configuration: provider does not support base instructions\") is a DIFFERENT, unrelated request-validation failure with no credential involvement — confirmed by reading the fixture and the reason text; not cited as auth evidence here, per this cell's own instruction to check rather than assume.\n\n**`session.login.completed`-shaped records** (the `account/loginCompleted` MSP method; `AccountLoginOutcome` enum `granted|denied|expired|cancelled|failed`, spec 28091 FR-29535-4) reflect the EXPLICIT interactive `muse login`/`/login` device-code-or-API-key-entry flow — a DIFFERENT mechanism from this scenario. 2.24's process/acceptance_criteria describe a mid-TURN provider rejection of an already-configured credential (matching claudecode's 401-on-`/v1/messages` sibling), not a failed interactive sign-in — this cell intentionally exercises the turn-level `authRequired` path, not the login-flow path. The parser has no handling at all for `account/loginCompleted`/`session.login.completed` records (not investigated further here — out of scope for this cell; noted so a future login-flow scenario does not assume this cell covers it).\n\n## daemon = full — same generic, already-proven code path as the recorded sibling cell 2-14\n\n`core/adapters/inbound/agents/muse/parser.go`'s `parseRunFatalErrorClassified` (~line 540-543) does `p.lastErrorClass = str(event, \"error_class\")` unconditionally — no whitelist, no special-casing of the class value. `parseRunTerminal`'s `terminalFailed` branch (~line 324-349) sets `ev.EventType=\"turn_done\"` and `ev.SessionError = &tailer.SessionError{Phase: ErrorPhaseUnknown, Class: class, Message: strings.TrimSpace(reason)}` unconditionally on ANY terminal:\"failed\" record — this live probe's exact captured reason (\"your API key from META_API_KEY was rejected — update or unset it\") would populate `Message` verbatim, and `Class` would be `\"auth_required\"`. This is the IDENTICAL mechanism `replaydata/agents/muse/scenarios/2-14_turn-aborted-by-error/` already exercises and has RECORDED (not just assessed): its committed `expected.jsonl` documents a third, successful live attempt (recording `2026-09-14-06-40-20_irrlichd-0.6.3+9abf13d`, commit `9abf13d1`) where `turn_start`/`turn_failed` both passed cleanly — `ready->working->error` via `state_classifier.go`'s `session_error` rule (`~line 283-288`, `SignalSessionError`, fires when `SessionError != nil && !HookTurnDone`; muse declares no hooks so `HookTurnDone` is always false), independently converged-to by `classifyAgentDone` (`~line 396-452`, checks `metrics.SessionError != nil` directly). `SessionError` is sticky (`core/pkg/tailer/tailer_metrics.go`'s `clearSessionErrorOnRecovery`) — it clears only when the user starts a fresh turn, not on the failing turn's own epilogue — matching this scenario's own acceptance criterion \"State never entered `ready` after the refusal.\"\n\nNo `model_completed` event precedes the failure anywhere in the live-captured 53-line session.jsonl (checked directly, line by line) — the rejection happens before any model call is attempted, so `tokens_nonzero=false`/`cost_nonzero=false`/`model` unpinned, consistent with the shared column context's \"no dollar cost is persisted anywhere for muse\" finding and with 2-14's own asserted observation vector.\n\nBecause this scenario's own `acceptance_criteria` already state `ready -> working -> error` / `Final state: error` (unlike 2-14, whose LITERAL scenario wording says `ready`, requiring an explicit documented departure), this cell needs no such deviation write-up: muse's observed behavior matches the scenario's stated topology exactly, and matches claudecode's own 2.24 sibling shape (`ready->working->error`, cited directly below).\n\n**Known daemon bug, cited not re-derived**: 2-14's third (successful) live attempt on THIS branch still hit a SEPARATE, unrelated, still-open bug at teardown — `process_exited` for the real session was misattributed to its transient `proc-<PID>` presession instead (`processlifecycle`'s `watched map[int]string` is last-write-wins per PID, filed as **#1962**). This is architecturally generic to any muse launch (a `processlifecycle.Scanner` is constructed unconditionally for every adapter regardless of `Source` variant — `core/cmd/irrlichd/wiring.go`'s `buildAgentWatchers`, ~line 40-103), not specific to 2-14's recipe, so this cell's teardown phase is expected to hit it too and is pre-emptively marked `known_failing` in `expected.jsonl` rather than left silently wrong for `record` to rediscover. The OTHER previously-open bug in this family — a `proc-*` presession evicting the real session's PID claim (the bug 2-14's FIRST two attempts hit) — is already FIXED by commit `9abf13d1` on this branch and is not expected to recur.\n\n## driver = gap:meta_api_key_override\n\n`replaydata/agents/muse/driver-interactive.sh`'s `spawn_muse_repl()` (~line 269-286) already reads `settings.model` -> `--model` and `settings.base_url` -> `--base-url` (the latter wired for 2-14) out of `$SETTINGS_PATH`, but has no code path for injecting an ENVIRONMENT VARIABLE at launch — `META_API_KEY` has no CLI-flag equivalent (`muse --help`/`muse exec --help` scanned in full; no `--api-key` flag exists at the top level or on `exec`). This live probe manually launched with `env META_API_KEY=\"$value\" muse --trust-workspace` and it worked exactly as expected — `record` needs only to port that same shape into `spawn_muse_repl()`'s `tmux new-session ... \"muse\" ...` invocation, reading a new `meta_api_key` key from `$SETTINGS_PATH` the same way `MODEL`/`BASE_URL` already are (`jq -r '.meta_api_key // empty' \"$SETTINGS_PATH\"`), and prefixing the launch command with `env META_API_KEY=\"$value\"` (or exporting it before the `tmux new-session` call). No STEP TYPE is missing — `send`/`wait_turn`/`sleep`/`exit_clean` are all already in `DRIVE_ELICITS` and this scenario's script needs nothing else — so this is a launch-arg wiring gap (tooling), not `daemon=incapable` (architecture), matching the exact shape and naming precedent of 2-14's original (now-resolved) `gap:base_url_override`.",
+      "caveats": [
+        "Vacuous-pass check: this cell would pass while proving nothing if the recipe's META_API_KEY somehow did NOT win over the real account login at record time (e.g. a future muse release changes credential-lane priority, or the driver wiring exports the variable somewhere the binary process doesn't inherit it) — the induced failure would then silently become a genuine SUCCESSFUL turn instead of a rejection, and the cell would fail CLOSED (a real assistant reply, no terminal:\"failed\") rather than passing vacuously, so this is a fail-safe rather than a fail-silent risk — but `record` should still re-confirm the captured terminal reason names the API key specifically (matching this probe's exact wording) before trusting the recording, and MUST confirm the real ~/.config/muse/auth.json was never read, written, or modified by the run.",
+        "The corpus's pre-existing config_error example (core/adapters/inbound/agents/muse/testdata/real-turn-failed.jsonl, reason: \"invalid run configuration: provider does not support base instructions\") is checked and confirmed NOT the auth-rejection shape — an unrelated request-validation error, not cited as evidence for this cell.",
+        "session.login.completed-shaped records (MSP account/loginCompleted, AccountLoginOutcome granted|denied|expired|cancelled|failed) are a DIFFERENT mechanism (the explicit muse login/`/login` sign-in flow) from this scenario's mid-turn authRequired turn-error path; the parser has no handling for account/loginCompleted at all, which is out of scope for this cell but noted so a future login-flow scenario isn't assumed already covered.",
+        "Session-birth shape (single birth vs. a transient proc-<PID> pre-session minted by the daemon's unconditional per-adapter process scanner) follows the identical pi-pattern anchoring already used by the sibling cells 2-13/2-14 (session_birth unpinned to \"start\", every later phase pinned via same_session_as) for the same reason and consistency — not independently re-derived here.",
+        "known_failing is pre-emptively scoped to the teardown/process_exited phase only, citing OPEN bug #1962 (processlifecycle's watched map[int]string, last-write-wins per PID) which is generic to any muse launch and already hit 2-14's own third, otherwise-clean live attempt on this same branch; the state-arc phases (session_birth/pid_bind/turn_start/turn_failed) are asserted as the CORRECT, cleanly-observable behavior per the caveats-over-downgrades rule, matching 2-14's own established full+known_failing pattern.",
+        "This scenario's own acceptance_criteria (ready->working->error, Final state: error) already match muse's real, live-observed behavior with NO departure to document — unlike 2-14, which required an explicit write-up because its literal scenario wording (Final state: ready) did not fit muse's architecture. Noted for the record, not a caveat about missing evidence.",
+        "failure_retryable:false is present in the live-captured terminal record (a TurnError.retryable-equivalent field) but is not a currently-modeled expected.jsonl observation (only model/cost_nonzero/tokens_nonzero are) — noted for completeness, not asserted as a spec observation."
+      ],
+      "sources": [
+        {
+          "kind": "cmd",
+          "ref": "live probe, this session: env META_API_KEY='bogus-invalid-key-1960-probe-xyz' muse --trust-workspace, tmux send-keys/capture-pane, throwaway cwd /tmp/muse-auth-probe-1960 (outside the repo, cleaned up after), real ~/.config/muse/auth.json never touched",
+          "note": "Produced ~/.local/share/muse/sessions/2026/09/14/01a09f3d-1773-7bd0-b158-011f92e9cd59/session.jsonl sequence 52-54: resource_usage_sampled -> run_fatal_error_classified{error_class:\"auth_required\"} -> terminal{failed, reason:\"your API key from META_API_KEY was rejected — update or unset it\", turn_duration_ms:667, failure_retryable:false}. TUI showed the same message via a ◆ error indicator ~1s after the prompt was submitted; the TUI itself launched and reached an interactive prompt normally before the rejection, i.e. credential validation is NOT synchronous at startup."
+        },
+        {
+          "kind": "cmd",
+          "ref": "strings -a /Users/ingo/.local/bin/muse-bin-1.2.1-R2847.1",
+          "note": "Literal \"your API key from META_API_KEY was rejected \"; \"META_API_KEY always takes priority over the account login.\"; credential-lane strings envKey/apiKey/accountLogin/loggedOut/\"No usable credential in any lane.\"/\"The `META_API_KEY` environment lane won.\""
+        },
+        {
+          "kind": "file",
+          "ref": "scratchpad/muse-schema-out/msp.schema.json (muse schema generate-json-schema, offline, exact for this binary)",
+          "note": "TurnErrorKind enum includes authRequired (9 values total: stepLimit, configError, projectionError, logError, workflowLaunchError, environmentError, modelError, launchError, authRequired), part of the durable TurnError{kind,message,retryable} object. AccountStateKind enum (loggedOut|envKey|apiKey|accountLogin) and AccountState/AccountLogin* defs describe the separate account/loginCompleted sign-in-flow mechanism."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/parser.go",
+          "note": "parseRunFatalErrorClassified (~540-543): p.lastErrorClass = str(event,\"error_class\") unconditionally, no whitelist. parseRunTerminal (~324-365): terminalFailed sets EventType=turn_done + SessionError{Phase:ErrorPhaseUnknown, Class:lastErrorClass-or-fallback, Message:reason} unconditionally on any terminal:\"failed\"."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "session_error rule (~283-288, SignalSessionError, fires when SessionError!=nil && !HookTurnDone) decides StateError directly; classifyAgentDone (~396-452) independently also routes SessionError!=nil to StateError as a converging second path."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_metrics.go",
+          "note": "applySessionError/clearSessionErrorOnRecovery: SessionError is sticky, clears only on the user's next turn."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/scenarios/2-14_turn-aborted-by-error/metadata.json and expected.jsonl",
+          "note": "Sibling cell, IDENTICAL parseRunTerminal/terminalFailed/SessionError/session_error-rule code path, already RECORDED (not just assessed) — third live attempt (recording 2026-09-14-06-40-20_irrlichd-0.6.3+9abf13d, commit 9abf13d1) confirmed daemon_capability=full for the state arc, with only the teardown/process_exited phase left known_failing (bug #1962). Direct precedent for both the daemon verdict and the known_failing scoping used here."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/2-24_auth-credentials-rejected/expected.jsonl",
+          "note": "Sibling scenario (same scenario_id, different agent): ready->working->error, Final state: error — confirms this topology is the intended, recognized shape for 2.24 across the matrix, not muse-specific."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/testdata/real-turn-failed.jsonl",
+          "note": "The corpus's only other terminal:\"failed\" example: error_class:\"config_error\", reason \"invalid run configuration: provider does not support base instructions\" — checked directly and confirmed NOT the auth-rejection shape (a request-validation error, not a credential problem)."
+        },
+        {
+          "kind": "cmd",
+          "ref": "muse --help / muse exec --help (run live on this machine, muse-bin 1.2.1-R2847.1)",
+          "note": "No --api-key/--meta-api-key flag exists at the top level or on exec; --model and --base-url are the only two provider-related launch flags, confirming META_API_KEY must be injected as an environment variable, not a CLI argument."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.local/bin/muse (launcher script)",
+          "note": "credential_path=\"${MUSE_AUTH_PATH:-$HOME/.config/muse/auth.json}\" confirms this cell's pointer (auth.json path + MUSE_AUTH_PATH override) — this launcher-side logic is read-only and scoped to authenticating CLI *download/update* requests to lookaside.facebook.com, a completely separate concern from the native binary's own META_API_KEY/account-login provider-auth lanes exercised by this cell."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/driver-interactive.sh",
+          "note": "spawn_muse_repl() (~269-286) wires settings.model -> --model and settings.base_url -> --base-url but has no env-var injection path yet; DRIVE_ELICITS already covers every step type (send/slash/wait_turn/sleep/exit_clean) this recipe's script needs."
+        },
+        {
+          "kind": "file",
+          "ref": "core/cmd/irrlichd/wiring.go",
+          "note": "buildAgentWatchers (~40-103): a processlifecycle.Scanner is constructed unconditionally for every adapter, confirming the teardown/process_exited misattribution bug (#1962) is architecturally generic and not specific to any one scenario's recipe."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "muse CLI installed and on PATH, v1.2.1 (muse --version >= 1.2.1)",
+        "tmux available -- the interactive driver runs muse in a tmux REPL",
+        "irrlichd is recording (either run-cell.sh isolated mode, or --attach against a running daemon started with --record)",
+        "DRIVER GAP (record must close before this cell can run): replaydata/agents/muse/driver-interactive.sh's spawn_muse_repl() must be extended to read a meta_api_key key out of $SETTINGS_PATH and launch via `env META_API_KEY=\"$value\" muse ...` -- today only model/base_url are wired (see driver_capability: gap:meta_api_key_override)",
+        "NO real muse credential requirement -- this cell is the deliberate OPPOSITE of most cells' preconditions: the recipe supplies its OWN throwaway, deliberately-invalid META_API_KEY at launch, which live-confirmed lane priority (\"META_API_KEY always takes priority over the account login\") guarantees wins over whatever the account's real login state is. This cell must NEVER read, write, or modify the real ~/.config/muse/auth.json -- confirmed safe: this live probe never touched it (verified: the file's size/mtime were unchanged after the probe)."
+      ],
+      "setup": [
+        "Same launch shape as muse/2-1_basic-turn and 2-14: a fresh empty cwd under <staging>/cwd/, `env META_API_KEY=\"<bogus-value>\" muse --trust-workspace` in a tmux session, 1s settle sleep before the first send.",
+        "The bogus key value does not matter beyond being non-empty and invalid -- live-confirmed with 'bogus-invalid-key-1960-probe-xyz'; record may reuse it or mint a fresh throwaway string, clearly labeled recording-only (same convention as claudecode's 2-24 'sk-mock-key-for-recording-only').",
+        "Prompt content does not matter for cue-avoidance: the model call fails before any assistant text is ever generated (confirmed live: turn_duration_ms=667, no model_completed event). Keep it simple, e.g. \"Say hello.\"",
+        "wait_turn's turn_count() matches any event.kind==\"terminal\" record (turn-count.sh, same mechanism 2-14 already uses) -- correctly unblocks on the failed run's own terminal event, no special-casing needed."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Say hello."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "exit_clean"
+        }
+      ],
+      "verify": [
+        "events.jsonl mints a session in ready shortly after muse's TUI finishes launching",
+        "events.jsonl contains a pid_discovered event binding the muse-bin PID to the real session",
+        "events.jsonl contains a state_transition to working when the user prompt lands (event.kind:\"started\" -> user_message)",
+        "events.jsonl contains a state_transition to error after the credential refusal (event.kind:\"run_fatal_error_classified\"{error_class:\"auth_required\"} -> event.kind:\"terminal\"{failed} -> SessionError -> session_error classifier rule)",
+        "the session does NOT stick in working, and does NOT re-enter ready or waiting after the refusal",
+        "final session state is error before exit_clean tears the REPL down (error is sticky -- it clears only on the user's next turn, which this recipe never sends)",
+        "observation vector: tokens_nonzero=false, cost_nonzero=false (no model_completed event before the failure), model unpinned",
+        "the real ~/.config/muse/auth.json is byte-for-byte unchanged after the recording run"
+      ],
+      "settings": {
+        "meta_api_key": "bogus-invalid-key-1960-probe-xyz"
+      },
+      "timeout_seconds": 120
+    }
+  }
+}

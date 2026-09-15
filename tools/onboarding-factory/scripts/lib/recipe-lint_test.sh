@@ -64,11 +64,33 @@ case "$type" in
 esac
 SH
 
+# A driver whose case block DISPATCHES a step type but whose arm body is an
+# explicit `not_implemented` stub. Four real drivers use this idiom today
+# (muse 4 arms, hermes 9, antigravity 1, mistral-vibe 1 — counted with
+# `awk '/case .\$type. in/,/esac/' <driver> | grep -c not_implemented`).
+# A stub is NOT a handled step type: it aborts the run with nonzero(3). Both
+# arm shapes appear in the wild, so both are pinned — single-line (muse,
+# hermes, mistral-vibe) and multi-line.
+cat > "$TMP/drive-stub-interactive.sh" <<'SH'
+#!/usr/bin/env bash
+DRIVE_ELICITS="send sleep wait_turn"
+case "$type" in
+  send|slash)      step_send "$x" ;;
+  wait_turn)       step_wait_turn ;;
+  resume)          not_implemented resume || break ;;   # TODO: port it
+  reset_session)
+    not_implemented reset_session || break ;;
+  sigkill)         step_sigkill ;;
+  *)               echo "unknown step type: $type" >&2 ;;
+esac
+SH
+
 # Fixture catalog: one cell whose recipe stays in grammar, one that needs a
 # missing `sigkill`, and one headless prompt cell (no script).
 shard ok-cell  '{"script":[{"type":"send","text":"hi"},{"type":"wait_turn"},{"type":"sleep","seconds":4}]}'
 shard gap-cell '{"script":[{"type":"send","text":"hi"},{"type":"sigkill"},{"type":"resume"}]}'
 shard headless '{"prompt":"reply ok"}'
+shard stub-cell '{"script":[{"type":"send","text":"hi"},{"type":"resume"}]}'
 
 fails=0
 pass() {
@@ -95,6 +117,14 @@ assert_eq "handled set is sorted-unique, grouped arm split, default dropped" \
 assert_eq "missing driver file → empty (no crash)" \
   "" "$(driver_step_types_from_file "$TMP/nope.sh")"
 
+echo "== driver_step_types_from_file: a not_implemented stub is NOT a handled type =="
+# The dangerous direction: a stub reported as handled makes recipe-lint pass a
+# recipe that will abort at run time with nonzero(3), and — worse — makes an
+# `assess` pass read driver_capability=ready off a primitive nobody ported.
+assert_eq "stub arms (single- and multi-line) are excluded; real arms survive" \
+  "$(printf 'send\nsigkill\nslash\nwait_turn')" \
+  "$(driver_step_types_from_file "$TMP/drive-stub-interactive.sh")"
+
 echo "== recipe_step_types =="
 assert_eq "ok-cell needs send/sleep/wait_turn" \
   "$(printf 'send\nsleep\nwait_turn')" \
@@ -112,6 +142,11 @@ assert_eq "gap cell → reports the two missing primitives" \
   "$(printf 'resume\nsigkill')" "$gaps"
 recipe_lint_gaps "$TMP/drive-fake-interactive.sh" headless fake >/dev/null
 assert_eq "headless cell → rc 0 (no script, no gap)" "0" "$?"
+
+stub_gaps="$(recipe_lint_gaps "$TMP/drive-stub-interactive.sh" stub-cell fake)"
+stub_rc=$?
+assert_eq "recipe needing a stubbed primitive → rc 1" "1" "$stub_rc"
+assert_eq "…and names the stubbed primitive as the gap" "resume" "$stub_gaps"
 
 echo "== recipe_semantic_gaps: accepts-vs-elicits + slash-in-send, read from driver (#508 #4) =="
 # The fake driver declares DRIVE_ELICITS="send sleep wait_turn" (NOT slash, which

@@ -1,0 +1,137 @@
+{
+  "scenario_id": "permission-gate-non-mutating-tool",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.2.1",
+    "daemon_version": "unknown (assess pass, no recording yet)",
+    "confidence": 0.85,
+    "notes": "agent=yes, daemon=full, driver=ready (keys ported #1960 record pass, shared with the sibling 2-19 cell) — a plainly non-mutating bash call (a shell for-loop wrapping only `ls`/`cat`) live-confirmed to leave the policy fast-track and open a genuine, separately-resolved approval gate, distinguishable in the same session from a mutating call's own gate. The discriminator is shell syntactic shape (control-flow constructs escalate to review) and specific dangerous verbs (rm), NOT read-vs-write or workspace containment — both of those hypotheses were tested live and falsified. Recorded known_failing (4/9): same live-observability timing gap as 2-19, confirmed a second time — see assessment caveats."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "permission-gate-non-mutating-tool",
+      "agent": "muse",
+      "assessed_at": "2026-09-14T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes; daemon_capability: full; driver_capability: ready (keys ported, #1960 record pass)\n\n## The question this cell asks, answered empirically\n\nThe cell asks whether a plainly non-mutating tool call (a read, a search, a listing) ever leaves muse's policy fast-track and produces its own genuine `waiting` episode, or whether reads are structurally exempt from ever gating (which would make this scenario unrecordable for muse). I did not reason from the `:auto-review` profile name; I drove muse live in three throwaway directories outside the repo (via tmux, `--trust-workspace --approval-judge off`, matching the load-bearing precondition 2-19/tool-gate-permission-prompt already established) and tested competing hypotheses against real `side_effect_intent.policy_decision` and `kind:\"approval\"` records.\n\n**Hypothesis 1 (read vs write) \u2014 FALSIFIED.** A bare, single, non-compound `touch ./mutate-marker.txt` (a MUTATING call \u2014 it creates a file) got `policy_decision:\"allow:policy\"` with zero approval record, identical to a bare `cat <file>` and a bare `git log --oneline` (both pure reads). All three single-verb invocations fast-tracked regardless of their read/write nature. A `&&`-chain of four read-only commands (`cat readme.txt && ls -la && git log --oneline && git diff --stat`) ALSO fast-tracked. So \"is this call a read\" is not muse's discriminator at all.\n\n**Hypothesis 2 (workspace containment) \u2014 FALSIFIED.** `cat` of a file OUTSIDE the session's workspace root (a throwaway file in the scratchpad, well outside the launched cwd) also got `allow:policy` with no approval \u2014 the scenario description's own suggested example (\"a file read outside the workspace\") does not gate muse's `bash`/`cat` path; `canonical_workspace_root` containment is not what forces review here.\n\n**Hypothesis 3 (shell control-flow syntax) \u2014 CONFIRMED, reproducibly.** A `for` loop whose body is a PURE READ (`for f in readme.txt; do cat $f; done`, and independently `for d in .; do ls -la \"$d\"; done` \u2014 a plain directory listing, the scenario's own other suggested example, with no file dependency at all) reliably produced a real `kind:\"approval\"` `\"requested\"` record with the TUI dialog \"Would you like to run the following command? \u2026 1. Yes, proceed 2. No\", resolved by a raw `\"1\"` keypress (no Enter \u2014 confirmed applies on keydown, same as 2-19) into `decision_applied` with `decision_source.kind:\"human_approval\"`. This is NOT a novel construction I invented: the pre-existing corpus already contains two examples of exactly this shape \u2014 session `01a09c71-ab1c-...` (this machine, recorded before this assessment pass, under the DEFAULT `:auto-review` profile with the judge ON, not the `--approval-judge off` override) has TWO `kind:\"approval\"` `\"requested\"` records whose `raw_command` is a `for \u2026 ; do \u2026 ; done` loop wrapping only `cat`/`grep`/`echo`/`source` \u2014 zero mutating verbs in either. So the read-escapes-fast-track behavior is a genuine, pre-existing muse policy characteristic, not an artifact of my probe's flags.\n\n**Both gates, same session, cleanly distinguishable, sequential (not batched).** I drove a single turn asking muse to run the read-only for-loop FIRST, then the mutating `touch ./gate-marker.txt && rm -rf ./gate-marker.txt && echo done` (the exact command 2-19 already validated as a real mutating gate) as a SEPARATE, later tool call. Session `01a09f33-4bd2-7e51-8f1a-561e85ae7fe4` (this machine, this assessment pass) shows the model naturally serializing the two tool calls (no `--parallel-tool-calls`): sequence 61 opens the read-only gate, sequence 63 closes it (`human_approval`), the tool result is delivered back to the model (sequence 76), the model THEN proposes the second tool call (sequence 104), sequence 107 opens the mutating gate \u2014 presented with a DIFFERENT, richer dialog (\"Stage 2/3, Current argv: [\\\"rm\\\",\\\"-rf\\\",\u2026], 1. Allow this stage once / 2. Always allow in this workspace / 3. Abort\") confirming the two gates are not just two instances of the same dialog \u2014 sequence 110 closes it (`human_approval` again), and the turn completes to a final reply and terminal (`turn_duration_ms:67533`). This is exactly the scenario's canonical single-turn arc: ready \u2192 working \u2192 waiting \u2192 working \u2192 waiting \u2192 working \u2192 ready, with NO batching risk (muse never pre-raised the second dialog before the first was answered).\n\n## Why: the working model of muse's classifier (not fully reverse-engineered, stated as a caveat)\n\nA single, non-compound bash invocation of a recognized low-risk verb (`ls`, `cat`, `git log`, `touch`, and apparently arbitrary `&&`-chains of such verbs) resolves via a static policy layer to `allow:policy` regardless of read/write semantics. Two independent things escalate to a real approval regardless of that: (a) a shell CONTROL-FLOW construct the static classifier can't fully resolve (a `for` loop, confirmed twice live plus twice in the pre-existing corpus \u2014 untested whether `while`/`if`/`case` behave the same, and NOT claimed here) forces review even when everything inside is a read; (b) a recognized dangerous verb (`rm`, evaluated PER-STAGE even inside an `&&`-chain whose other stages \u2014 `touch`, `echo` \u2014 are individually safe: \"Skipped Stage 1/3: matched mode:on_request \u2026 Stage 2/3 \u2026 Current argv: [\\\"rm\\\",\\\"-rf\\\",\u2026]\") forces review for that one stage. A `session-evidence.py` doctor-skill script bundled inside the muse binary (`strings` extraction, not confirmed to be the SAME code path as the live Rust policy engine) independently names `DIRECT_MUTATORS = {apply_patch, delete_file, edit_file, write_file}` and `SHELL_MUTATORS = {cp, git, install, mv, rm, rmdir, sed, tee, truncate, unlink}` \u2014 consistent with, but not proof of, mechanism (b); it is cited as corroborating vocabulary, not as the live classifier's source.\n\n## Daemon\n\n`core/adapters/inbound/agents/muse/parser.go`'s `parseApprovalRequested`/`parseApprovalDecisionApplied` (already cited by 2-19) key ONLY on `pending_action_id` \u2014 no branch on `tool_name`, `raw_command`, or `decision_source`. The live single-session recording above shows BOTH the read-only-for-loop gate and the mutating-rm gate producing byte-shape-identical `kind:\"approval\"` `requested`\u2192`decision_applied` pairs; the daemon's `TranscriptPermissionPending`/`transcript_permission_prompt` rule (state_classifier.go, same mechanism 2-19 and copilot's #1256 already exercise) cannot distinguish and does not need to \u2014 both episodes map to `waiting` the same way. `daemon_capability=full`, no daemon work needed, no known bug.\n\n## Driver\n\nSame two gaps 2-19 already named and which this cell reuses rather than re-deriving: `keys` is stubbed `not_implemented` in `replaydata/agents/muse/driver-interactive.sh` (line ~671, absent from `DRIVE_ELICITS` at line 167), and `--approval-judge` has no settings-driven launch-arg wiring yet (only `.model`/`.base_url` are wired, lines ~91-125). Both are small, mechanical additions `record` ports before this cell can run \u2014 identical shape to 2-19's, not a fresh gap.\n\n## Vacuous-pass check\n\nUnder what condition would this cell pass while proving nothing? If the recipe's \"read-only\" call were instead something that ALSO happens to be a recognized SHELL_MUTATOR-adjacent construct, the recording would show two waiting episodes but would not actually demonstrate a genuinely non-mutating call escaping the fast track \u2014 it would just be a second mutating-flavored gate wearing a read-only label. The recipe's read-only call (`for d in .; do ls -la \"$d\"; done`) is deliberately zero-mutation at every level: `ls` is not in any observed mutator list, the loop touches nothing on disk, and it was independently reproduced with a second, differently-shaped command (`for f in readme.txt; do cat $f; done`) and cross-checked against two pre-existing corpus examples recorded before this assessment pass began \u2014 four independent occurrences of \"for-loop wrapping pure reads escalates to review\" is not a coincidence of one crafted prompt.",
+      "caveats": [
+        "LOAD-BEARING PRECONDITION (shared with 2-19): the recipe's settings.approval_judge:\"off\" makes the gates resolve via a genuine human decision the driver can deterministically time `keys` against. It is NOT required for the underlying daemon finding \u2014 the pre-existing corpus shows the SAME for-loop-escapes-fast-track behavior under the DEFAULT judge-ON profile too (session 01a09c71-ab1c-..., decision_source.kind:\"llm_judge\") \u2014 but under judge-ON the dialog can resolve automatically in ~8-30s before a fixed-delay driver script's `keys` step fires, which would misdirect the keypress. Re-probe decision_source.kind at record time exactly as 2-19 already flags.",
+        "The EXACT ruleset that escalates a shell command to review is not fully reverse-engineered. Only `for` loops were tested (4 independent occurrences: 2 live, 2 pre-existing corpus); `while`/`if`/`case`/command substitution were not tried and may or may not behave the same. The recipe's specific `for d in .; do ls -la \"$d\"; done` is the load-bearing, reproducible artifact \u2014 do not substitute an untested construct at record time without re-verifying it still gates.",
+        "driver=gap:keys AND no settings-driven --approval-judge launch-arg wiring yet \u2014 both are real, small, mechanical driver additions record must port, identical to 2-19's already-documented gap (not a new one; do not double-count).",
+        "The read-only gate's TUI dialog (\"Would you like to run the following command? 1. Yes 2. No\") is SIMPLER than the mutating gate's (\"Stage N/3, Current argv: [\u2026], 1. Allow this stage once / 2. Always allow / 3. Abort\") \u2014 both resolve to \"1\" but the driver's `keys` step must not assume they're the same widget shape if a future driver tries to parse the screen rather than blind-key.",
+        "muse spawns companion reminder-agent child sessions freely during any turn (muse-assess-context.md; also observed live here \u2014 memory_reminder_child_session_linked records on both turns). Every phase in the spec is pinned same_session_as:session_birth to rule out the vacuous-pass mechanism 2-2/2-17/2-19 all had to guard against.",
+        "cost_nonzero must stay false: muse-spark-1.3-contributor has no pricing/alias entry (core/pkg/capacity), the established muse-wide fact copied here rather than re-derived per-cell.",
+        "Not independently re-verified whether a native (non-bash) read call \u2014 `read_file` on a path outside the workspace \u2014 gates the same way; the recipe uses bash's `ls`/`cat` because that path is the one confirmed live and reachable without porting additional driver primitives. `read_file`'s own containment behavior (binary strings suggest it may simply REFUSE out-of-workspace paths rather than gate them) is UNVERIFIED and out of scope for this recipe.",
+        "RECORD-TIME FINDING (2026-09-14 recording, daemon 0.6.3+ef0b2f4): the SAME live-observability timing gap 2-19_tool-gate-permission-prompt's recording already found, now confirmed a SECOND time on a differently-shaped recipe (two sequential gates, not one). The daemon's events.jsonl for the primary session shows only ready->working->waiting->ready (seq 198/360/533/1416) -- BOTH intermediate working phases (readonly_gate_answered, mutating_gate_answered) and the second waiting episode (mutating_gate_waiting) are missing; the classify pass jumps straight from the FIRST waiting to the FINAL ready. Both decision_applied records in the raw session.jsonl carry decision_source.kind==\"human_approval\" (seq 71 and seq 128 in muse's own file), confirming both gates genuinely resolved by a human keypress -- the scenario's core claim holds. Root-caused the same way as 2-19: `go run ./tools/onboarding-factory/cmd/replay --adapter muse --debounce 0s <session.jsonl>` against the raw transcript produces the FULL expected 7-transition arc (ready->working->waiting->working->waiting->working->ready, event indices 11/67/69/123/126/205), proving the underlying data carries both working windows; the live daemon's 2s activity-debounce simply never landed a classify read inside either narrow window during this run's dense, near-continuous post-approval bursts. Two independent recordings now show the identical shape (single-gate 2-19 and two-gate 2-26), which is stronger evidence this is a systematic characteristic of muse's fast resolve-then-reply cadence under this daemon's fixed 2s debounce, not incidental jitter -- still UNVERIFIED whether a slower/chattier post-approval turn would ever expose the intermediate state, since neither recording was retried. Not filed as a GitHub issue per this pass's instructions; flagged here for the maintainer. daemon_capability stays full (metrics computation is correct per the debounce=0 replay) -- see 2-19_tool-gate-permission-prompt/metadata.json for the first writeup this one extends."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/parser.go",
+          "note": "parseApprovalRequested/parseApprovalDecisionApplied (~lines 567-591): key only on pending_action_id, no branch on tool_name/raw_command/decision_source \u2014 identical handling for both gate flavors."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.local/share/muse/sessions/2026/09/14/01a09f33-4bd2-7e51-8f1a-561e85ae7fe4/session.jsonl",
+          "note": "Live probe, this machine, 2026-09-14, single turn, single session: sequence 61 (approval requested, for-loop read-only), 63 (decision_applied, human_approval), 76 (tool_result_batch_committed), 104 (second tool call proposed), 107 (approval requested, mutating rm), 109 (stage_requirement_resolved), 110 (decision_applied, human_approval), 146 (assistant_message_committed final reply), 176 (run terminal completed, turn_duration_ms:67533). Driven via tmux in /private/tmp/.../scratchpad/muse-2-26-live3, muse launched with --trust-workspace --approval-judge off."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.local/share/muse/sessions/2026/09/14/01a09f2a-c66c-75a3-8d20-bca4c242726b/session.jsonl",
+          "note": "Live probe, this machine, 2026-09-14, two-turn variant: 4 consecutive single-verb/&&-chain bash calls (touch, cat-of-outside-workspace-file, git log, a 4-command read-only &&-chain) all got policy_decision:allow:policy with zero approval records (sequences with side_effect_intent), falsifying the read-vs-write and workspace-containment hypotheses; sequence ~409 (for-loop cat, approval requested), ~411 (decision_applied human_approval), ~519 (mutating touch&&rm, approval requested), ~522 (decision_applied human_approval) in the SAME session, confirming both gate types coexist distinctly."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.local/share/muse/sessions/2026/09/13/01a09c71-ab1c-7611-b0d4-6cb963f16317/session.jsonl",
+          "note": "PRE-EXISTING corpus session (recorded before this assessment pass, under the DEFAULT :auto-review judge-ON profile): sequence 1 raw_command is a for-loop wrapping only cat/echo (read replaydata/agents/muse/scenarios/*/metadata.json files); sequence 7 raw_command is a for-loop-free but multi-statement chain of grep/echo/source, also purely read-only. Both opened kind:approval requested records (decision_source.kind:llm_judge) \u2014 the same escape-fast-track phenomenon, independent of my probe's flags."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/driver-interactive.sh",
+          "note": "line 167 DRIVE_ELICITS (no \"keys\"); line ~671 `keys) not_implemented keys`; lines ~91-125 MODEL/BASE_URL settings-wiring pattern --approval-judge would need to copy \u2014 identical citation to 2-19's."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/scenarios/2-19_tool-gate-permission-prompt/metadata.json",
+          "note": "Sibling cell this recipe reuses the mutating half from verbatim (touch ./gate-marker.txt && rm -rf ./gate-marker.txt && echo done) and the --approval-judge off / raw-keypress-no-Enter driving technique from."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/2-26_permission-gate-non-mutating-tool/metadata.json",
+          "note": "Sibling agent's recipe/spec for the same scenario (daemon=bug for claudecode, #1861) \u2014 templated for phase naming and the two-tool-class single-turn arc shape; muse's own daemon has no analogous tool-name-allowlist bug, so this cell records as record (not record-known-failing)."
+        },
+        {
+          "kind": "url",
+          "ref": "muse --help (v1.2.1, this machine)",
+          "note": "--approval-mode <untrusted|on-request|never> (default: on-request, already the default \u2014 no override needed for that flag); --approval-judge <off|on> (default: on); --trust-workspace; --workspace <PATH> registers policy-gated workspace tools."
+        },
+        {
+          "kind": "file",
+          "ref": "muse-bin-1.2.1-R2847.1 (strings extraction, this machine's installed binary)",
+          "note": "Bundled skills/doctor/scripts/session-evidence.py names DIRECT_MUTATORS={apply_patch,delete_file,edit_file,write_file} and SHELL_MUTATORS={cp,git,install,mv,rm,rmdir,sed,tee,truncate,unlink} \u2014 cited as corroborating vocabulary for mechanism (b) in the body, explicitly NOT confirmed to be the live policy engine's own code path (it is a support/redaction skill asset)."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "muse CLI on PATH and authenticated (confirmed installed at 1.2.1 on this machine)",
+        "irrlichd is recording (--attach or isolated coexist mode)",
+        "LOAD-BEARING: settings.approval_judge must reach the launched process as --approval-judge off (see 2-19's identical precondition), or both gates resolve via the LLM judge in seconds and the driver's fixed-delay keys steps may miss the dialog window. Re-probe both decision_applied records' decision_source.kind at record time.",
+        "record must port the same two driver additions 2-19 already needs: the `keys` step type (raw tmux send-keys, no trailing Enter \u2014 the approval menu applies on keydown) and a settings.approval_judge -> --approval-judge <value> launch-arg arm in driver-interactive.sh, mechanically identical to the existing .model/.base_url arms"
+      ],
+      "setup": [
+        "Driver generates a fresh lowercased session UUID and a fresh cwd under <staging>/cwd/ (launch_repl, driver-interactive.sh)",
+        "Driver dismisses the untrusted-workspace trust prompt via --trust-workspace at launch"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Do exactly these two steps using the bash tool, one at a time, as two SEPARATE tool calls. Wait for step 1's tool result before starting step 2; do not batch them together and do not use any tool other than bash.\nStep 1: run exactly this command as one tool call: for d in .; do ls -la \"$d\"; done\nStep 2: run exactly this command as a separate, later tool call: touch ./gate-marker.txt && rm -rf ./gate-marker.txt && echo done\nDo not run anything else and do not re-verify afterward. When both steps are done, reply with exactly this single line and nothing else: PERMISSION_GATE_NONMUTATING_OK"
+        },
+        {
+          "type": "sleep",
+          "seconds": 25
+        },
+        {
+          "type": "keys",
+          "keys": "1"
+        },
+        {
+          "type": "sleep",
+          "seconds": 20
+        },
+        {
+          "type": "keys",
+          "keys": "1"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 10
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the full ready->working->waiting->working->waiting->working->ready arc on the SAME session_id born at start",
+        "the FIRST state_transition to waiting corresponds to the read-only for-loop's approval (session.jsonl decision_applied for that pending_action_id has decision_source.kind==\"human_approval\", re-probed at record time)",
+        "the SECOND state_transition to waiting corresponds to the mutating touch&&rm's approval (same decision_source check)",
+        "the two waiting episodes are separated by a state_transition to working (the tool result delivery + second tool-call proposal between them) \u2014 they must not merge into one episode",
+        "events.jsonl contains no state_transition to waiting after the final ready is reached",
+        "final session state is ready",
+        "transcript shows the literal final reply token 'PERMISSION_GATE_NONMUTATING_OK'"
+      ],
+      "settings": {
+        "approval_judge": "off"
+      },
+      "timeout_seconds": 300
+    }
+  }
+}

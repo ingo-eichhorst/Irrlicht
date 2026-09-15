@@ -1253,6 +1253,75 @@ func newPIDManagerForTestWithSupersededSpy(repo *mockRepo, superseded *[]superse
 	return pm
 }
 
+// TestHandlePIDAssigned_PresessionNeverEvictsRealSession reproduces issue
+// #1960's muse root cause: cleanupStalePIDHolders treats whichever session
+// claims a PID SECOND as authoritative, with no regard for WHICH side is a
+// proc-* placeholder. That is safe for the /clear pattern (a real session
+// replacing another real session) and for the ordinary presession→real
+// reconciliation direction (findSupersedingSession, sweepSupersededPreSessions
+// — both explicitly refuse to treat a proc-* row as "the real session"), but
+// it is backwards-unsafe: nothing stops a LATE-arriving proc-* claim from
+// evicting a real, transcript-backed session that already legitimately holds
+// the same PID.
+//
+// This is exactly what live muse recordings hit (#1960 onboarding brief):
+// muse's own PID discovery (lsof on .session.lock) resolves in ~150-200ms,
+// while processlifecycle.Scanner's presession poll runs on a fixed 1s
+// interval — so the scanner's delayed proc-<pid> claim can arrive AFTER the
+// real session already owns that PID. TryDiscoverPID's proc- bypass
+// (pid_manager.go) then calls HandlePIDAssigned directly, with no
+// hasActiveSession/HasRealSessionForPID check at all, straight into
+// assignPIDLocked's symmetric stale-scan.
+//
+// Confirmed RED against pre-fix code: this test failed with "a proc-*
+// pre-session ... deleted the real session" before the guard below was
+// added to assignPIDLocked.
+func TestHandlePIDAssigned_PresessionNeverEvictsRealSession(t *testing.T) {
+	repo := newMockRepo()
+	now := time.Now().Unix()
+	// The real session claims PID 68780 first — muse's fast lsof-based
+	// discovery, well inside the scanner's 1s poll interval.
+	repo.states["01a09e21-real"] = &session.SessionState{
+		SessionID:      "01a09e21-real",
+		Adapter:        "muse",
+		State:          session.StateReady,
+		TranscriptPath: "/Users/x/.local/share/muse/sessions/2026/09/14/01a09e21-real/session.jsonl",
+		CWD:            "/Users/x/project",
+		FirstSeen:      now,
+		UpdatedAt:      now,
+	}
+	pm := newPIDManagerForTest(repo)
+	pm.HandlePIDAssigned(68780, "01a09e21-real")
+	if got := repo.states["01a09e21-real"]; got == nil || got.PID != 68780 {
+		t.Fatalf("setup: real session should hold pid 68780, got %+v", got)
+	}
+
+	// The presession scanner's own later poll (its 1s interval outraced by
+	// muse's ~150-200ms lsof-based discovery above) admits proc-68780 as a
+	// brand-new session — mirroring what Scanner.maybeTrackNewPID's
+	// EventNewSession → SessionDetector.onNewSession already saved to the
+	// repo in production before PID discovery ever runs for it.
+	repo.states["proc-68780"] = &session.SessionState{
+		SessionID: "proc-68780",
+		Adapter:   "muse",
+		State:     session.StateReady,
+		FirstSeen: now,
+		UpdatedAt: now,
+	}
+
+	// TryDiscoverPID's proc- bypass then calls HandlePIDAssigned directly for
+	// the proc-<pid> placeholder — exactly as processlifecycle.Scanner's real
+	// production path does.
+	pm.HandlePIDAssigned(68780, "proc-68780")
+
+	if repo.states["01a09e21-real"] == nil {
+		t.Fatal("a proc-* pre-session claiming a PID a real session already holds " +
+			"deleted the real session (issue #1960) — a pre-session must never evict " +
+			"a real, transcript-backed session; only the reverse " +
+			"(findSupersedingSession / sweepSupersededPreSessions) is a valid direction")
+	}
+}
+
 // TestHandlePIDAssigned_FiresSupersededHook: cleanupStalePIDHolders (the
 // same-PID reconciliation path — the one that actually fired in the #997
 // mistral-vibe recording) must fire the re-key hook with (old, new) before

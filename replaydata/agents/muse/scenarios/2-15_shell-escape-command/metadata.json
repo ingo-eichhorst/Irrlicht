@@ -1,0 +1,121 @@
+{
+  "scenario_id": "shell-escape-command",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.2.1",
+    "daemon_version": "0.3.13+dev",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes (live-verified `!` bang shell escape); daemon_capability: full (every escape-related event is Skip=true at every parser level, including a run_id that is minted but never gets started/terminal); driver_capability: ready (plain `send` types the bang line)"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "shell-escape-command",
+      "agent": "muse",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\n### muse HAS a `!` bang shell-escape\n\n`muse --help` does not list it (top-level flags only), but the bar for `agent=no` is a binary scan, not a `--help` miss (assess SKILL.md step 2). `strings` on the real installed binary (`~/.local/bin/muse-bin-1.2.1-R2847.1`, a Mach-O arm64, not the `muse` wrapper script) turns up an embedded telemetry-schema doc string that names it directly: *\"task kind `tool.{name}`; hosted record name; the literal `user_shell` for the bang escape\"* immediately followed by the four tool-execution sources `builtin|mcp|hosted|user_shell`, plus a second string *\"user-shell command/result records (the `!` escape)\"* and a changelog-style tag *\"user_shell_command bang shell command (#3344)\"*. The event-kind vocabulary embedded nearby lists `user_shell.command` / `user_shell.result` / `user_shell.rejected` / `user_shell_finish` / `user_shell_session` / `queued_user_shell_command` as first-class payload/event kinds.\n\n**Live-confirmed** (see Live probe below): typing `!echo hello_shell_escape_probe` in the interactive TUI ran the command locally in 66ms (shown inline as `◆ ! echo ... · exit 0 · 66ms`) with no visible model call, and the session's own `session.jsonl` grew a `user_shell.command` / `user_shell.result` pair around it.\n\n### daemon_capability: full — every escape-related record is Skip=true, at every level, and the live probe proves the run_id it mints never closes\n\nThe scenario's acceptance criteria (`ready → working → ready`; state must not stick in `working`) is, per the same intent reading adopted for claudecode/aider/antigravity/codex/kiro-cli/pi/mistral-vibe on this identical scenario (all `daemon_capability: full` after fixes — see `sources[]`), satisfied by the session staying `ready` throughout the escape (never even entering `working`, so it can never get stuck there) and then genuinely cycling `ready → working → ready` for a real follow-up prompt that proves the session is still alive.\n\nmuse's parser (`core/adapters/inbound/agents/muse/parser.go`) only derives state from a closed, explicit set of `payload_type`/`kind`/`event.kind` triples; everything else is `ev.Skip = true` at the nearest `default:` arm. Walking the shape the live probe actually produced (see below) through the parser:\n\n1. `user_shell.command` / `user_shell.result` are top-level `payload_type` values not in `route()`'s recognized set (`runtime.session`, `runtime.session.metadata`, `runtime.session.route_facts`, `run.model.configured`, `runtime.model_reconfigure.completed`, `session.end`, `command.invoked`) → hit `route()`'s own `default:` arm → `Skip=true` (parser.go:233-244).\n2. The escape ALSO mints a `runtime.session` envelope with `payload.kind==\"run\"` and a real `run_id`, but `payload.event.kind==\"task_stream_linked\"` — not `\"started\"` or `\"terminal\"`, the only two event kinds `parseRunEvent` acts on. `task_stream_linked` falls into `parseRunEvent`'s own `default:` arm (explicitly named in that arm's comment) → `Skip=true` (parser.go:288-302).\n3. The escape's tool-execution lifecycle rides `runtime.session` envelopes with `payload.kind==\"task\"` (`task_kind:\"tool.shell\"`, proposed/accepted/scheduled/side_effect_intent/started/output/completed) — `kind:\"task\"` is exactly the shape `parseSessionEnvelope`'s `default:` arm documents as intentionally unhandled (parser.go:256-263, same arm that skips ordinary tool-call task lifecycles generally, per the package doc's \"Tool-call tracking\" section).\n\nSo nothing about the escape reaches a state-mutating code path — not the top-level events, not the run-linkage event, not the task lifecycle. Critically, the run_id the escape mints is a genuine `kind:\"run\"` record, so the theoretical risk (unlike claudecode, which has NO run linkage at all for its wrapper events) is that this run_id could later receive its own `\"started\"`/`\"terminal\"` pair and flip state out of band. The live probe specifically checked for this and found **zero** occurrences of `started`/`terminal` anywhere against the escape's run_id across the full session — only `task_stream_linked`, `context_block_diagnostic`, and `model_request_configured` (all separately in the explicit Skip lists), confirming the daemon never enters `working` for the escape.\n\nThe follow-up real prompt in the SAME session used a DIFFERENT run_id, which did receive `started` then `terminal:\"completed\"` in the expected `run` shape — proving a genuine `ready → working → ready` arc fires normally right after the escape, i.e. the session is not wedged and a real turn still works.\n\n### driver_capability: ready\n\nThe interactive driver's `send` step (`replaydata/agents/muse/driver-interactive.sh:384-397`, already in `DRIVE_ELICITS`) types literal text via `tmux send-keys -l` followed by `Enter` — sufficient to submit `!echo hello`, no `keys`/arrow-picker primitive needed (confirmed live: the exact same `tmux send-keys -l -- '!echo ...'` + `Enter` sequence the driver uses is what the probe below ran).\n\n## Live probe (throwaway tmux session, never inside the repo)\n\n`tmux new-session ... \"muse --trust-workspace\"` in `/private/tmp/muse-shellescape-probe/cwd`, then `tmux send-keys -l -- '!echo hello_shell_escape_probe'` + `Enter`. Resulting session `01a09f3d-419f-75a3-a5cc-34cfe97ddbe3`:\n\n- `user_shell.command{command_text:\"echo hello_shell_escape_probe\"}` (sequence 17)\n- `runtime.session{kind:\"run\", run_id:\"01a09f3d-5377-7243-b774-4c9c35bf3070\", event:{kind:\"task_stream_linked\"}}` (sequence 18) — the ONLY run-level event for this run_id in the entire transcript; grepping every occurrence of that run_id across the file (10 hits) shows nothing but `task_stream_linked`, a `task`/`tool.shell` lifecycle, `context_block_diagnostic`, `model_request_configured` — never `started` or `terminal`.\n- `user_shell.result{terminal_state:\"completed\", exit_code:0, duration_ms:66, ...}` (sequence 27)\n- A subsequent `Reply with exactly the word: alive` prompt opened a NEW run_id (`ec080b9c-a846-4845-adfb-feb4b8eb6eca`) that DID get `event.kind:\"started\"` then `event.kind:\"terminal\", terminal:\"completed\"`, and the TUI settled back to an idle prompt (after muse's own ambient \"Double checking\" verify-reminder micro-agent finished) — confirming the session is genuinely alive and a real turn still drives `ready → working → ready` right after the escape.\n- `/exit` produced a clean shutdown (tmux session gone), matching `exit_clean`'s contract.\n\n## Caveats\n\n- The escape mints a real `run_id` that is structurally capable of carrying a `started`/`terminal` pair (unlike claudecode's wrapper events, which have zero run linkage) — this cell's `shell_escape_window` phase's `duration_at_least_ms` + `invariants:[\"no state_transition to working\"]` is exactly the safety net that would catch a future muse release that starts closing that run_id. Not observed today, but worth the explicit spec assertion rather than a bare absence-of-mention.\n- Cost: no dollar cost is ever persisted in muse's transcript and no muse model has a pricing-catalog entry (format-spec §6 / #1960 shared context) — `cost_nonzero: false`, matching every other muse cell.\n- Model left unpinned in observations (matches the `2-1_basic-turn` / `2-5_synchronous-slash-command` sibling template) even though the live probe confirmed `muse-spark-1.3-contributor` — the account default is an environment property, not a scenario-load-bearing one.\n\n## Sources\n\n- `core/adapters/inbound/agents/muse/parser.go:207-302` (route/parseSessionEnvelope/parseRunEvent default arms; live-checked in this repo's worktree at HEAD)\n- Binary scan: `strings ~/.local/bin/muse-bin-1.2.1-R2847.1` — \"the literal `user_shell` for the bang escape\", \"user-shell command/result records (the `!` escape)\", \"user_shell_command bang shell command (#3344)\" (saved locally during this assessment)\n- Live probe transcript: `~/.local/share/muse/sessions/2026/09/14/01a09f3d-419f-75a3-a5cc-34cfe97ddbe3/session.jsonl`, driven via a throwaway tmux session outside the repo (`/private/tmp/muse-shellescape-probe/`)\n- `replaydata/agents/claudecode/scenarios/2-15_shell-escape-command/metadata.json` (canonical scenario description + the adopted intent-reading precedent)\n- `replaydata/agents/copilot/scenarios/2-15_shell-escape-command/metadata.json` and `replaydata/agents/gemini-cli/scenarios/2-15_shell-escape-command/metadata.json` (the precedent this scenario has BURNED before: both were briefly `daemon=bug` because their parsers let a shell-escape's tool-completion record stick the session in `working`; both later fixed and reverified live)\n- `replaydata/agents/muse/scenarios/2-5_synchronous-slash-command/{metadata.json,expected.jsonl}` (closest sibling cell — same \"prove liveness after a no-op window\" shape, phase-DSL template for `duration_at_least_ms` + `invariants`)\n- `replaydata/agents/muse/scenarios/2-1_basic-turn/{metadata.json,expected.jsonl}` (single-birth session pattern, turn-boundary phase template)\n- `replaydata/agents/muse/driver-interactive.sh:384-397` (`step_send`), `:167` (`DRIVE_ELICITS`)",
+      "caveats": [
+        "The escape mints a genuine run_id (unlike claudecode's zero-run-linkage wrapper events) that is structurally capable of one day carrying started/terminal; not observed today (live-checked: zero such events against that run_id), but the spec's duration_at_least_ms + no-working invariant is the safety net if a future muse release changes this.",
+        "No dollar cost is ever persisted for muse sessions (no pricing-catalog entry for muse-spark models) -- cost_nonzero: false.",
+        "Model left unpinned in observations, matching the 2-1/2-5 sibling template, even though the live probe confirmed muse-spark-1.3-contributor as the account default."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/parser.go:207-302",
+          "note": "route()/parseSessionEnvelope()/parseRunEvent() default arms all Skip=true for the escape's payload_type/kind/event.kind shapes"
+        },
+        {
+          "kind": "file",
+          "ref": "~/.local/bin/muse-bin-1.2.1-R2847.1 (strings scan)",
+          "note": "\"the literal `user_shell` for the bang escape\"; \"user-shell command/result records (the `!` escape)\"; \"user_shell_command bang shell command (#3344)\""
+        },
+        {
+          "kind": "file",
+          "ref": "~/.local/share/muse/sessions/2026/09/14/01a09f3d-419f-75a3-a5cc-34cfe97ddbe3/session.jsonl",
+          "note": "live probe: !echo escape produces user_shell.command/result + a run_id that only ever gets task_stream_linked, never started/terminal; a follow-up real prompt opens a different run_id that gets started then terminal:completed"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/2-15_shell-escape-command/metadata.json",
+          "note": "canonical scenario description + the adopted intent-reading verdict this cell follows"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/copilot/scenarios/2-15_shell-escape-command/metadata.json",
+          "note": "precedent: copilot's shell-escape briefly stuck the session in working (daemon=bug), fixed and reverified live 2026-08-05 -- the exact failure mode this cell's live probe checked for and did not find in muse"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/scenarios/2-15_shell-escape-command/metadata.json",
+          "note": "second precedent of the same failure mode (shell-escape persisted as a plain user message, stuck working), fixed in #660/#679"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/scenarios/2-5_synchronous-slash-command/expected.jsonl",
+          "note": "phase-DSL template (duration_at_least_ms + invariants forbidding working/waiting, followed by a proof-of-life real turn)"
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/driver-interactive.sh:167,384-397",
+          "note": "DRIVE_ELICITS includes send; step_send types literal text + Enter via tmux send-keys, sufficient for the bang syntax"
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "muse CLI installed and on PATH, v1.2.1 (muse --version >= 1.2.1 per replaydata/agents/muse/metadata.json)",
+        "muse auth complete: 'muse login' (Meta account, browser code approval) or META_API_KEY exported -- auth is set up out-of-band, the rig's precheck delegates it to the user",
+        "tmux available -- the interactive driver runs muse in a tmux REPL",
+        "irrlichd is recording -- either run-cell.sh in isolated mode, or --attach against a running daemon started with --record"
+      ],
+      "setup": [
+        "The interactive driver creates a fresh empty cwd under <staging>/cwd/ and launches `muse --trust-workspace` in a tmux session there, then sleeps 1s for muse's own input handler to wire up before the first send",
+        "--trust-workspace is REQUIRED: every staging cwd is brand-new, so muse's 'Do you trust this workspace?' modal fires on every run and would eat the first send without it",
+        "muse mints its own session UUID on launch; the driver resolves the newest session.jsonl under ~/.local/share/muse/sessions (excluding subagent/ copies) newer than a pre-launch marker"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "!echo hello_shell_escape"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: alive"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "exit_clean"
+        }
+      ],
+      "verify": [
+        "events.jsonl mints the session in ready shortly after muse's TUI finishes launching (single-birth; session id from the session directory basename == stream.id)",
+        "events.jsonl contains NO state_transition to working or waiting for at least 4s after session birth -- the !echo shell-escape window",
+        "the recording's raw transcript.jsonl (muse's session.jsonl) contains a user_shell.command record with command_text=\"echo hello_shell_escape\" and a matching user_shell.result with exit_code:0 -- positive confirmation the escape actually reached the REPL",
+        "the escape's own run_id (from the linked runtime.session/kind:run/task_stream_linked record) never appears with event.kind started or terminal anywhere in the recording",
+        "events.jsonl contains a state_transition to working when the final 'Reply with exactly the word: alive' prompt lands (a DIFFERENT run_id, started), then back to ready when it completes (terminal:completed) -- proving the session is still alive after the escape",
+        "no function_call/tool-call event occurs anywhere in the recording (tool_calls_max: 0 per the scenario's acceptance criteria)",
+        "final session state is ready before exit_clean tears the REPL down",
+        "observation vector: tokens_nonzero=true (the final real turn), cost_nonzero=false (model unpriced in the litellm catalog), model unpinned"
+      ],
+      "settings": {},
+      "timeout_seconds": 120
+    }
+  }
+}

@@ -34,7 +34,7 @@ fail() {
 
 # 1. Adapter is supported by a driver.
 case "$ADAPTER" in
-  claudecode|codex|pi|aider|opencode|kiro-cli|gemini-cli|antigravity|mistral-vibe|copilot|hermes) ;;
+  claudecode|codex|pi|aider|opencode|kiro-cli|gemini-cli|antigravity|mistral-vibe|copilot|hermes|muse) ;;
   *)
     fail "unknown adapter: $ADAPTER"
     ;;
@@ -123,6 +123,8 @@ MIN_VERSION="$(jq -r --arg a "$ADAPTER" '.meta.min_versions[$a] // empty' "$CATA
 # copilot --version → "GitHub Copilot CLI 1.0.77." (verified against 1.0.77 —
 # the version is the 4th field, and it carries a trailing period plus a
 # second "Run 'copilot update'..." line, so the caller takes the head line).
+# muse --version → "Muse Code 1.2.1 (1.2.1-R2847.1)" (verified against 1.2.1 —
+# the version is the 3rd field).
 case "$ADAPTER" in
   claudecode)  CLI_BIN="claude";   VER_FIELD=1 ;;
   codex)       CLI_BIN="codex";    VER_FIELD=2 ;;
@@ -135,6 +137,7 @@ case "$ADAPTER" in
   mistral-vibe) CLI_BIN="vibe";    VER_FIELD=2 ;;
   copilot)     CLI_BIN="copilot";  VER_FIELD=4 ;;
   hermes)      CLI_BIN="hermes";  VER_FIELD=3 ;;
+  muse)        CLI_BIN="muse";    VER_FIELD=3 ;;
   *) fail "unknown adapter: $ADAPTER" ;;
 esac
 

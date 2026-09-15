@@ -27,19 +27,45 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/shard-lib.sh"
 #     from the `case "$type" in … esac` block. Splits grouped arms like
 #     `send|slash)` into both tokens and drops the `*)` default. Empty when
 #     the file has no such block (e.g. a headless-only driver).
+#
+#   An arm whose body calls `not_implemented` is a DECLARED STUB, not a
+#   handled type: it aborts the run with nonzero(3). Such arms are excluded,
+#   so this function answers "can the driver drive it?" rather than "does the
+#   case block mention it?". Before this exclusion the two were the same
+#   output, which is the failure mode AGENTS.md forbids — the lint passed a
+#   recipe that was certain to abort, and an `assess` pass reading this
+#   function saw driver_capability=ready for a primitive nobody had ported.
+#   Four shipped drivers use the idiom today (counted with
+#   `awk '/case "\$type" in/,/esac/' <driver> | grep -c not_implemented`):
+#   hermes 9 arms, muse 4, antigravity 1, mistral-vibe 1.
 driver_step_types_from_file() {
   local file="$1"
   [[ -f "$file" ]] || return 0
   # Drivers dispatch on $type (most) or $TYPE (opencode) — match either.
+  # An arm runs from its label line to the `;;` that closes it (or to `esac`,
+  # for a last arm that omits `;;`), so the body is accumulated before the
+  # label is emitted.
   awk '
+    function flush(  n, parts, i) {
+      if (label == "") return
+      if (body !~ /not_implemented/) {
+        n = split(label, parts, "|")
+        for (i = 1; i <= n; i++) if (parts[i] != "" && parts[i] != "*") print parts[i]
+      }
+      label = ""; body = ""
+    }
     /case[[:space:]]+"\$[Tt][Yy][Pp][Ee]"[[:space:]]+in/ { inblk=1; next }
-    inblk && /(^|[[:space:]])esac([[:space:]]|$)/ { inblk=0 }
-    inblk && /^[[:space:]]*[a-z_][a-z_|]*\)/ {
-      line=$0
-      sub(/\).*/, "", line)            # keep the arm label, drop ) and body
-      gsub(/[[:space:]]/, "", line)
-      n=split(line, parts, "|")
-      for (i=1; i<=n; i++) if (parts[i] != "" && parts[i] != "*") print parts[i]
+    inblk && /(^|[[:space:]])esac([[:space:]]|$)/ { flush(); inblk=0 }
+    inblk {
+      if (label == "" && $0 ~ /^[[:space:]]*[a-z_][a-z_|]*\)/) {
+        label = $0
+        sub(/\).*/, "", label)         # keep the arm label, drop ) and body
+        gsub(/[[:space:]]/, "", label)
+      }
+      if (label != "") {
+        body = body " " $0
+        if ($0 ~ /;;/) flush()
+      }
     }
   ' "$file" | sort -u
 }

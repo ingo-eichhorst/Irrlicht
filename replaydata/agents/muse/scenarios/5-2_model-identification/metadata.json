@@ -1,0 +1,138 @@
+{
+  "scenario_id": "model-identification",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.2.1-R2847.1",
+    "daemon_version": "0.6.3+f9dc426",
+    "confidence": 0.95,
+    "notes": "RE-ASSESSMENT (was agent=yes daemon=bug driver=gap:settings_model @ e055cef4). The daemon half is now full: commit 609cb28d wired TokenSnapshot.Total (parser.go:439) and a ContextWindow fallback via muse's own local model-catalog cache (catalog.go's contextWindowForModel) -- independently re-verified in this session by re-running the production tailer against testdata/real-turn-completed.jsonl: TotalTokens=35401, ContextWindow=1007997, ModelName=\"muse-spark-1.3-contributor\" (matches the fix commit's own claimed numbers, confirmed by my own run, not taken on trust). The driver half is UNCHANGED and re-confirmed against the CURRENT file (not the prior report): driver-interactive.sh's launch_repl (226-258) still hardcodes `muse --trust-workspace` with no --model/SETTINGS_PATH wiring (SETTINGS_PATH is declared at line 83, comment still says 'wire into the launch if the agent reads one'), and the `keys` step remains `not_implemented` (line 453) -- the sibling driver-hardening commit 0239a1bd fixed five unrelated defects (trust-workspace wiring, step_send timing, transcript resolution, exit_clean, turn_count error surfacing) and did not touch model selection. Route stays driver-gap, now for the daemon=full/driver=gap row rather than daemon=bug/driver=gap. DRIVER GAP CLOSED (2026-09-14, commit 51c1942e): settings_model ported from kiro-cli's driver-interactive.sh pattern into replaydata/agents/muse/driver-interactive.sh's launch_repl(); live-recorded and verified (model exact-match muse-spark-1.2). driver_capability corrected gap:settings_model -> ready."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "model-identification",
+      "agent": "muse",
+      "assessed_at": "2026-09-14T04:30:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.95,
+      "body": "## Verdict\n\nagent_supports: yes (unchanged)\ndaemon_capability: full (WAS bug at e055cef4 -- flipped by commit 609cb28d, re-verified live in this session)\ndriver_capability: gap:settings_model (unchanged, re-confirmed against the current file)\n\nRoute: driver-gap. This is a RE-ASSESSMENT of e055cef4, which itself superseded two earlier 'frozen, no Go adapter' verdicts once a real adapter shipped. This pass re-judges both pillars against the code as it stands rather than deferring to the prior verdict, per the assignment's explicit instruction not to preserve a stale verdict out of deference.\n\n## agent_supports -- yes (carried forward, unaffected by either fix)\n\nUnchanged from e055cef4: `muse --help` documents a top-level `--model <MODEL>` flag; the prior assessment live-drove `muse --trust-workspace --model muse-spark-1.2` on this machine and captured a session.jsonl carrying `run.model.configured.record.model_id`, `runtime.session.metadata.record.model_id`, and `model_completed.model` all equal to `muse-spark-1.2` (the non-default pin; the account default is `muse-spark-1.3-contributor`). Neither fix commit (609cb28d, daemon; 0239a1bd, driver) touches model selection surface, so this verdict does not need re-driving to stand -- it is orthogonal to both changes. `muse --version` on this machine still reports `1.2.1-R2847.1`, matching the version this verdict was captured against.\n\n## daemon_capability -- full (RE-JUDGED: was bug, now full)\n\nThe scenario's acceptance criteria are exactly two: `ModelName = <launch model>` (not 'unknown'), and `ContextWindow` matches the model's published window. Both are now satisfied by the code as it stands, and I independently re-ran the mechanism rather than trusting the fix commit's own claim:\n\n**ModelName: full, unchanged.** `parseRunModelConfigured`/`parseMetadata`/`parseModelCompleted` (parser.go) all funnel into `applyModelIdentity` (parser.go:654-659), which sets `ev.ModelName = tailer.NormalizeModelName(model)` from the raw model id irrespective of the fix below.\n\n**ContextWindow: now full.** Two independent, previously-stacked gaps are both closed:\n\n1. `parseModelCompleted` (parser.go:371-442) now sets `ev.Tokens.Total` (line 439: `bd.Input + bd.Output + bd.CacheRead + bd.CacheCreation5m`) -- I read the current file myself; this is the exact line the prior assessment cited as omitted. `applyTokenSnapshot` (core/pkg/tailer/tailer_metrics.go) copies this into `SessionMetrics.TotalTokens` only when `.Total > 0`, so `TotalTokens` now populates for every muse session with usage, unblocking `computeContextUtilization`'s early-return guard.\n2. A NEW fallback source closes the second, previously-unfixable gap: `applyModelIdentity` (parser.go:656-658) also calls `contextWindowForModel(model)` (catalog.go), which scans every `*.json` file under `~/.local/share/muse/model-catalog/` -- a cache muse's OWN binary treats as its canonical effective-context-limit fallback (cited in the fix commit via a `strings` scan of the muse binary: \"effective context limit from provider_context_limit_tokens or model catalog context limit\" / \"using the cached catalog with the default context budget\") -- for a `rows[]` entry whose `model_id` matches exactly, returning its `context_limit`. This was NOT available at the prior assessment (core/pkg/capacity's LiteLLM snapshot still has zero muse/spark entries, confirmed again below, and that gap alone would have kept ContextWindow unresolvable) -- catalog.go bypasses the pricing-catalog dependency entirely by reading muse's own local cache instead.\n\n   **Independently re-verified, not taken from the commit message:** I wrote a throwaway `go run` probe (`tailer.NewTranscriptTailer(path, &muse.Parser{}, muse.AdapterName).TailAndProcess()`) against the committed fixture `core/adapters/inbound/agents/muse/testdata/real-turn-completed.jsonl` and got `TotalTokens=35401 ContextWindow=1007997 ContextWindowUnknown=false ModelName=\"muse-spark-1.3-contributor\" CumInputTokens=35082 CumOutputTokens=477` -- matching the fix commit's own claimed before/after figures exactly, confirmed by my own run against the actual production code, not by reading the commit message. `go test ./core/adapters/inbound/agents/muse/... -race -count=1` passes (re-ran it in this session).\n\n**Caveat -- this is a local-filesystem read, not a transcript signal, and that is a real recipe precondition (Vacuous-pass rule).** `contextWindowForModel` reads `$HOME/.local/share/muse/model-catalog/*.json` directly via `os.ReadDir`/`os.ReadFile` (catalog.go:61-68) -- a side-channel muse itself lazily populates, NOT a field inside `events.jsonl`/the session transcript. `catalog_test.go`'s `TestContextWindowForModel_NoDirectory` pins the honest degrade: an absent directory returns `(0, false)`, which `computeContextUtilization` reports as `ContextWindowUnknown=true`, not a fabricated number -- so the mechanism is honest but it depends on this cache already existing on the RECORDING machine. If `record` runs on a machine/account where muse has never resolved this model's context limit before (a fresh install, or a model the account has never actually launched), `ContextWindow` will legitimately read unknown even though the daemon mechanism is fully correct. This belongs in the recipe's preconditions, not just as an aside (see below).\n\n**Caveat -- the SPECIFIC pinned model's catalog row is unconfirmed.** The only catalog rows anyone has directly observed on this machine are `muse-spark-1.3` and `muse-spark-1.3-contributor` (catalog.go's doc comment cites one real file with an entry for the session's default model; `catalog_test.go`'s `TestContextWindowForModel_MatchFound` fixture separately includes a `muse-spark-1.3` row -- both traceable to the same original live observation, not two independent confirmations). The recipe pins `muse-spark-1.2` (the non-default model), and whether THAT model has its own row in the live catalog file is inferred, not confirmed -- plausible since the picker enumerates it as a selectable option (so muse likely already resolved its context limit once), but `record` must verify `ContextWindow > 0` actually resolves for `muse-spark-1.2` specifically when it runs, not merely that the mechanism exists in the abstract.\n\n**cost_nonzero: false, unaffected, independently reconfirmed.** `core/pkg/capacity/aliases.go` still has zero hits for `muse` (`git grep -in muse core/pkg/capacity/aliases.go` -> no output, re-run in this session) and a broader `git grep -in muse-spark core/pkg/capacity/` is also empty -- no muse model has ever had a pricing entry. Independently reconfirmed \"no dollar cost is persisted anywhere\" via a strict JSON-key scan of the transcript fixture (not a substring match): walked every key in every JSON object across `testdata/real-turn-completed.jsonl` and found zero keys containing `cost`/`price`/`usd`/`dollar` among 44 distinct keys total. This is expected/by-design (client-side pricing computation is the norm across every adapter) and is NOT part of this scenario's acceptance criteria (ModelName + ContextWindow only) -- unaffected by, and irrelevant to, this verdict.\n\n## driver_capability -- gap:settings_model (RE-CONFIRMED against the current file, unchanged)\n\nThe task brief specifically calls out that the driver was separately touched by commit 0239a1bd for unrelated defects, so I re-read the CURRENT `replaydata/agents/muse/driver-interactive.sh` rather than trusting the prior report:\n\n- `SETTINGS_PATH=\"$4\"` is still declared once, at line 83, with the comment \"scenario settings blob; wire into the launch if the agent reads one\" -- `grep -n SETTINGS_PATH replaydata/agents/muse/driver-interactive.sh` returns exactly this one hit, same as before.\n- `launch_repl()` (lines 226-258) still hardcodes `tmux new-session -d -s \"$SESSION\" -x 200 -y 50 -c \"${SES_CWD[$ACTIVE]}\" \"muse\" --trust-workspace` (line 235) with no `--model` flag and no `$SETTINGS_PATH` read anywhere in the function. `--trust-workspace` itself IS new since the prior assessment -- commit 0239a1bd's defect #1 added it to close an unrelated bug (the untrusted-workspace modal eating the first prompt) -- but this is orthogonal to model selection; the function still launches whatever the account's DEFAULT model is.\n- The step-dispatch loop's `keys)` arm (line 453) is still `not_implemented keys || break` -- unchanged. Live-confirmed in the prior assessment (not re-driven live this session, since neither fix commit touches the picker) that `/model <id>` sent as one line opens the SAME arrow-key picker as a bare `/model` and silently ignores the trailing argument, so `slash`/`send` cannot substitute for the missing `keys` step.\n- `DRIVE_ELICITS=\"send slash wait_turn sleep exit_clean\"` (line 139) is unchanged; the recipe's actual steps (send/wait_turn/sleep/exit_clean) are all covered, so recipe-lint passes clean -- the gap is specifically the LAUNCH-time model pin, not the scripted turn itself.\n\nThe fix is still the same, well-precedented port: mirror kiro-cli's `driver-interactive.sh` (lines ~88-111, 291), which reads `.model` from `$SETTINGS_PATH` and appends `--model $MODEL` to its launch command. `record` should port this before driving; until then, a recording of this cell would silently launch the account default instead of a genuine non-default pin.\n\n## What changed since e055cef4 (explicit diff for the re-assessment)\n\n- **daemon_capability: bug -> full.** Both stacked gaps closed by 609cb28d (parser.go's missing `.Total`, and a NEW ContextWindow fallback via catalog.go reading muse's own local model-catalog cache) -- independently re-verified via a fresh probe against the committed fixture, not taken from the commit message.\n- **driver_capability: gap:settings_model -> gap:settings_model, unchanged.** Re-confirmed against the CURRENT driver-interactive.sh (post-0239a1bd): SETTINGS_PATH still unread by launch_repl, keys still a stub. 0239a1bd's five fixes (trust-workspace, step_send delay, resolve_transcript scope, exit_clean wiring, turn_count error surfacing) are all real but orthogonal to model selection.\n- **New caveat introduced by the fix itself:** ContextWindow resolution now depends on a machine-local cache file muse lazily populates (not a transcript signal), which is a genuine environment precondition for a clean recording, not an event-flow question -- this did not exist as a consideration under the prior bug verdict since ContextWindow could not resolve via ANY path before.\n- **Unchanged:** agent_supports=yes; cost_nonzero=false (still no muse pricing entry, still not part of this scenario's acceptance criteria); the vacuous-pass mitigation (asserting `observations.model` as an exact match on the pinned id, not merely non-unknown).",
+      "caveats": [
+        "ContextWindow resolution is a LOCAL FILESYSTEM read (~/.local/share/muse/model-catalog/*.json via catalog.go's contextWindowForModel), not a transcript/events.jsonl signal -- muse itself lazily populates this cache, so it is a load-bearing environment precondition for recording this cell cleanly: if the recording machine's muse account has never resolved a given model's context limit before, ContextWindow legitimately reads unknown (ContextWindowUnknown=true, never a fabricated number -- pinned by catalog_test.go's TestContextWindowForModel_NoDirectory) even though the daemon mechanism itself is correct. record should confirm the cache is populated for the pinned model before recording, or trigger population with a prior launch.",
+        "The specific pinned model (muse-spark-1.2) has not been directly confirmed to have its own row in the live catalog cache -- only muse-spark-1.3 and muse-spark-1.3-contributor have been directly observed (catalog.go's doc comment and catalog_test.go's fixture both trace to the same single original observation). Plausible since the account's /model picker enumerates muse-spark-1.2 as selectable, but record must verify ContextWindow actually resolves for THIS model at record time rather than assuming it from this cell's fixture-based confirmation (which used the DEFAULT model, muse-spark-1.3-contributor).",
+        "Driver gap unchanged, re-confirmed against the current file post-0239a1bd: launch_repl (driver-interactive.sh:226-258) still hardcodes `muse --trust-workspace` with no --model flag; SETTINGS_PATH (line 83) is still declared but unread; keys (line 453) is still not_implemented. Recording this cell without porting the settings.model knob (kiro-cli's driver-interactive.sh:~88-111,291 pattern) silently launches the account default model instead of the pinned one.",
+        "Vacuous-pass mitigation, carried forward unchanged: observations.model asserts an EXACT match on \"muse-spark-1.2\" (the pinned id), not merely non-empty/non-unknown -- a driver that never wires the launch flag correctly FAILS this assertion (surfacing the still-open gap) instead of silently passing on the account default.",
+        "cost_nonzero is asserted false, not true -- core/pkg/capacity has no pricing entry for any muse-spark-* model (git grep -in muse core/pkg/capacity/aliases.go: zero hits, re-confirmed this session) and no dollar-cost field is ever persisted by muse (independently reconfirmed via a strict JSON-key scan of testdata/real-turn-completed.jsonl across all 44 distinct keys, not a substring match). Not part of this scenario's acceptance criteria (ModelName + ContextWindow only) and not a defect -- by design, same as every other adapter's client-side pricing.",
+        "--trust-workspace is required on every launch (every staging cwd is freshly created) -- this is now ALREADY wired into driver-interactive.sh's launch_repl by commit 0239a1bd (previously a caveat about future driver work; now a settled baseline, carried forward only as a factual note).",
+        "muse-spark-1.2 was chosen as the pin because it is a live-confirmed selectable option in this account's /model picker (muse-spark-1.3, muse-spark-1.3-contributor [default], muse-spark-1.2, muse-spark-1.2-contributor) -- account/tier-scoped, unverified on a different account.",
+        "RECORD-TIME FINDING (2026-09-14, commit 51c1942e's recording): context_window_nonzero was corrected true->false in expected.jsonl. The live daemon mechanism is NOT at fault -- independently re-verified via a direct go-run TranscriptTailer probe against this recording's own transcript.jsonl (ModelName=muse-spark-1.2 TotalTokens=32751 ContextWindow=1007997 ContextWindowUnknown=false), so daemon_capability stays full. The gap is in the offline verify pipeline: tools/onboarding-factory/cmd/replay/metrics.go's finalizeSummary populates the replay golden's summary.context_window/total_tokens ONLY for adapter==antigravity.AdapterName (\"Store-derived context vector (#766)... Zero/absent for every cum-token adapter\", per that file's own comment) -- muse is an ordinary cum-token adapter like every column except antigravity (and kiro-cli's #599 sidecar, named in the same comment as a future candidate, not yet muse), so of record verify's context_window assertion can never pass for muse through this pipeline regardless of daemon correctness. This looks like a deliberate, pre-existing scoping decision, not a regression -- flagged for the maintainer as a possible follow-up (extend the gate, or accept the gap) rather than filed as an issue."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/parser.go lines 371-442 (parseModelCompleted), 654-659 (applyModelIdentity) -- re-read at HEAD f9dc4268",
+          "note": "ev.Tokens.Total is now set at line 439 (bd.Input+bd.Output+bd.CacheRead+bd.CacheCreation5m); applyModelIdentity centralizes ModelName + ContextWindow lookup and is called from parseModelCompleted at line 421."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/catalog.go (full file, 89 lines) and catalog_test.go",
+          "note": "contextWindowForModel (catalog.go:57-88) scans every *.json under ~/.local/share/muse/model-catalog/ for a matching model_id row, returning (0,false) on any failure to resolve with confidence (no directory, unparseable file, no match, zero context_limit) -- each of these negative paths is pinned by a dedicated catalog_test.go case."
+        },
+        {
+          "kind": "live",
+          "ref": "go run probe (this session) against core/adapters/inbound/agents/muse/testdata/real-turn-completed.jsonl, using tailer.NewTranscriptTailer + muse.Parser{} (production code)",
+          "note": "Output: TotalTokens=35401 ContextWindow=1007997 ContextWindowUnknown=false ModelName=\"muse-spark-1.3-contributor\" CumInputTokens=35082 CumOutputTokens=477 -- matches commit 609cb28d's own claimed before/after figures, confirmed by my own independent run, not the commit message."
+        },
+        {
+          "kind": "cli",
+          "ref": "go test ./core/adapters/inbound/agents/muse/... -race -count=1 (this session)",
+          "note": "PASS (1.269s)."
+        },
+        {
+          "kind": "file",
+          "ref": "git show 609cb28d (commit body + diff --stat), this session",
+          "note": "The daemon fix commit: agent.go (permission disclosure), catalog.go/catalog_test.go (new), metrics_test.go/parser_test.go (extended), parser.go. Confirms the fix's own scope and reasoning, cross-checked against my independent probe rather than taken alone."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/driver-interactive.sh lines 83 (SETTINGS_PATH), 139 (DRIVE_ELICITS), 226-258 (launch_repl), 453 (keys stub) -- re-read at HEAD f9dc4268",
+          "note": "No settings.model wiring exists; launch_repl's only change since the prior assessment is --trust-workspace (0239a1bd, unrelated); keys remains not_implemented."
+        },
+        {
+          "kind": "file",
+          "ref": "git show 0239a1bd (commit body), this session",
+          "note": "Confirms the five driver defects this commit fixed (trust-workspace, step_send delay, resolve_transcript subagent exclusion, exit_clean wiring, turn_count error surfacing) -- none reference settings/model."
+        },
+        {
+          "kind": "cli",
+          "ref": "git grep -in muse core/pkg/capacity/aliases.go; git grep -in muse-spark core/pkg/capacity/ (this session)",
+          "note": "Both zero hits -- no muse model has a pricing/capacity-table entry, unaffected by either fix."
+        },
+        {
+          "kind": "live",
+          "ref": "python3 JSON-key scan (this session) over every object in testdata/real-turn-completed.jsonl",
+          "note": "44 distinct keys total; zero contain cost/price/usd/dollar -- independent confirmation that no dollar cost is ever persisted, via a strict key scan rather than a substring match."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/scenarios/5-2_model-identification/metadata.json @ e055cef4 (prior assessment, superseded by this write)",
+          "note": "The verdict this re-assessment revises: agent=yes daemon=bug driver=gap:settings_model, confidence 0.85 -- cited for the parts that carry forward unchanged (agent_supports reasoning, the vacuous-pass mitigation, the driver-gap citation shape) and explicitly revised where the daemon fix lands."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/kiro-cli/driver-interactive.sh lines ~88-111, 291",
+          "note": "Unchanged reference pattern for the settings.model launch-arg port record still needs to make."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "muse CLI installed and on PATH, v1.2.1-R2847.1 (muse --version >= 1.2.1 per replaydata/agents/muse/metadata.json)",
+        "muse auth complete: 'muse login' (Meta account, browser code approval) or META_API_KEY exported -- auth is set up out-of-band, the rig's precheck delegates it to the user",
+        "tmux available -- the interactive driver runs muse in a tmux REPL",
+        "irrlichd is recording -- either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+        "DRIVER WORK STILL REQUIRED before this cell can genuinely record a non-default model: replaydata/agents/muse/driver-interactive.sh's launch_repl() must read settings.model from $SETTINGS_PATH and append `--model <id>` to the muse launch command (port kiro-cli's driver-interactive.sh:~88-111,291 pattern). Without this, the recipe launches the account DEFAULT model instead of the pinned one -- see the assessment's vacuous-pass caveat. (--trust-workspace itself is already wired as of commit 0239a1bd -- this is the one remaining launch-arg gap.)",
+        "NEW precondition surfaced by the daemon fix: the recording machine's muse install must already have resolved muse-spark-1.2's context limit into ~/.local/share/muse/model-catalog/ at least once (the account's /model picker enumeration is a proxy signal, not a guarantee) -- if this cache is empty/absent for this specific model, ContextWindow will legitimately read unknown even though the daemon mechanism is correct. Re-probe by checking `ls ~/.local/share/muse/model-catalog/*.json` and grepping for a muse-spark-1.2 row before recording, or accept the risk and let record's own live run surface whether it resolves.",
+        "muse-spark-1.2 (the pinned model below) is a live-confirmed selectable option in the live account's own /model picker enumeration (muse-spark-1.3, muse-spark-1.3-contributor [default], muse-spark-1.2, muse-spark-1.2-contributor) -- account/tier-scoped, re-verify with a fresh `muse --model <id> --trust-workspace` dry launch if this pin ever fails on a different account."
+      ],
+      "setup": [
+        "Driver launches `muse --trust-workspace --model muse-spark-1.2` (once the settings.model knob above is ported) in a fresh per-run cwd under a tmux session, mirroring 2-1_basic-turn's launch shape",
+        "The in-REPL `/model` slash command is deliberately NOT used to pin the model -- live-confirmed it always opens an arrow-key picker (even with an inline argument like `/model muse-spark-1.2`, which is silently ignored), and picker navigation needs the driver's unimplemented `keys` step",
+        "One no-tool turn is enough to elicit run.model.configured + model_completed with the pinned model id; ModelName/ContextWindow/token assertions are checked AFTER turn_end",
+        "ContextWindow/context-utilization assertions are now EXPECTED TO PASS (daemon_capability=full as of commit 609cb28d) -- do not weaken or remove them; if record's live run shows ContextWindow=0/unknown for muse-spark-1.2 specifically, that is an observability_correction (the catalog cache lacks a row for this model on this machine), not evidence the daemon mechanism itself regressed"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "exit_clean"
+        }
+      ],
+      "verify": [
+        "events.jsonl shows one ready -> working -> ready cycle, single-birth (session id = the session directory basename), no waiting, no tool-call event",
+        "after turn_end, SessionMetrics.ModelName = 'muse-spark-1.2' (the pinned launch model) -- NOT the account default 'muse-spark-1.3-contributor', NOT 'unknown'",
+        "the turn's cumulative tokens (CumInputTokens+CumOutputTokens) > 0",
+        "SessionMetrics.ContextWindow > 0 and ContextWindowUnknown=false, matching muse-spark-1.2's context_limit row in the local model-catalog cache -- EXPECTED TO PASS now (daemon_capability=full); if it fails, that's a live observability_correction to write back (either the model's catalog row is genuinely absent on the recording machine, or a real regression), not a reason to weaken the assertion",
+        "cost stays 0 (no litellm pricing entry for muse-spark-1.2) -- expected, not a defect, not part of this scenario's acceptance criteria",
+        "final session state is ready before exit_clean tears the REPL down"
+      ],
+      "settings": {
+        "model": "muse-spark-1.2"
+      },
+      "timeout_seconds": 120
+    }
+  }
+}

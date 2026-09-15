@@ -1,0 +1,147 @@
+{
+  "scenario_id": "oversized-transcript-line",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.2.1",
+    "daemon_version": "0.6.3+7eaeb60",
+    "confidence": 0.8,
+    "notes": "agent_supports: yes (nothing to 'support' — muse writes whatever a tool returns into one JSONL line); daemon_capability: full (muse's Source runs over the SAME shared core/pkg/tailer readLineCapped/64MB-cap machinery as every other JSONLineParser adapter; oversized lines are logged-and-skipped, never a stall); driver_capability: ready (send/wait_turn/exit_clean already live-proven for muse in the basic-turn cell)."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "oversized-transcript-line",
+      "agent": "muse",
+      "assessed_at": "2026-09-14T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.8,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## The tailer's actual cap (read from code, not assumed)\n\n`core/pkg/tailer/line_reader.go:12`: `const maxTranscriptLineSize = 64 * 1024 * 1024` (64 MB). `readLineCapped` (same file) reads via `bufio.Reader.ReadSlice('\\n')` in a loop, NOT `bufio.Scanner` — issue #270's fix. Below the cap a line is buffered whole and returned as `(line, consumed, nil)`. At/above the cap, `accumulateChunk` (line_reader.go:86-97) drops the accumulated buffer (`buf = nil`) the moment `consumed > max` and flips to `skipping` mode: it keeps reading forward (bounded memory — it never retains more than ~64 MB) until the eventual `\\n`, then reports `errLineTooLong`. `TranscriptTailer.classifyLineReadError` (tailer.go:698-716) turns that into `lineReadSkip`: it logs `\"irrlicht/tailer: skipping oversized line at offset %d (%d bytes) in %s\"`, advances `res.endOffset` past the whole line, and `scanNewLines`' loop (tailer.go:653-676) continues to the NEXT line. So the three severities the task asked me to distinguish are NOT the same thing here: an oversized line is **skipped** (the record's content is lost, cleanly, with an operator-visible log line and the offset correctly advanced) — it is neither **truncated** (no partial/corrupt JSON object is ever handed to a parser) nor does it **kill the whole session's parsing** (every line after the skipped one, in the same file, in the same `TailAndProcess` pass, keeps parsing normally). This is the SAME shared, adapter-agnostic mechanism claudecode/gemini-cli/aider/pi/kiro-cli's oversized-transcript-line cells already cite — muse's `Source()` (`core/adapters/inbound/agents/muse/agent.go`) is `agent.FilesUnderRoot{..., Parser: agent.JSONLineParser{...}}`, which runs over this exact tailer.\n\n## Muse-specific wrinkle: the retained_frame double decode\n\n`parser.go`'s `ParseLine` routes a `retained_frame` line to `parseRetainedFrame` (parser.go:661-684), which decodes the OUTER line once (via the tailer's shared `parseTranscriptLine`, a plain `json.Unmarshal` on the whole capped line, tailer.go:774) and then `json.Unmarshal`s each child's `record_json` STRING a SECOND time (parser.go:680). Read carefully, this does not create a second, independent size boundary a frame could exceed on its own: the inner `record_json` string is necessarily a SUBSTRING of the already-`readLineCapped`-bounded outer line, so the worst case is roughly double the CPU/allocation cost of a flat line of the same byte size — not an unbounded or uncapped decode. What it DOES change is the failure granularity: because `readLineCapped` decides skip-vs-keep at the raw-byte level, before any JSON structure is understood, a retained_frame line that crossed 64 MB would be skipped WHOLESALE — dropping every one of its children's records in one shot, not just one flat record's worth of signal. I could not find this documented anywhere as a distinct case; it follows directly from reading `readLineCapped` + `parseRetainedFrame` together.\n\nThat wrinkle is real in mechanism but negligible in practice today: a recursive corpus scan (`python3` — command below) of every `retained_frame` line across all 237 local `session.jsonl` files found 228 such lines, max 3,036 bytes, min 2,527 — consistent with the parser package doc's own corpus finding that a retained_frame is ALWAYS exactly 2 tiny permission-bookkeeping children (`permission_format_declared` + `permission_profile_committed`) at `outer_log_ordinal 1`. Nowhere close to a size where the double-decode cost, or the wholesale-skip granularity, would matter.\n\n## Measured largest line in the local corpus\n\n```\npython3 -c \"\nimport glob, os\nfiles = glob.glob(os.path.expanduser('~/.local/share/muse/sessions/**/session.jsonl'), recursive=True)\nmax_len = 0; max_file = None\nfor f in files:\n    with open(f, 'rb') as fh:\n        for line in fh:\n            if len(line) > max_len:\n                max_len = len(line); max_file = f\nprint(len(files), max_len, max_file)\n\"\n```\nResult: 237 `session.jsonl` files (including nested `subagent/` copies), 27,231 total lines scanned, largest single line = **123,761 bytes (~121 KB)**, at `~/.local/share/muse/sessions/2026/09/14/01a09df1-f280-7e53-bff9-cab4845fd288/session.jsonl:23` — a `runtime.session`/`run`/`model_request_configured` record, NOT a retained_frame. Distribution: p50=698 B, p90=2,155 B, p99=11,712 B, p99.9=118,187 B. So the largest line ever organically produced on this machine is ~530× under the 64 MB cap and still ~17× under the OLD `bufio.Scanner` ~2 MB limit — muse has never come close to stressing either boundary in normal use.\n\n## Can muse plausibly exceed the cap? The real candidate is a large tool result, not the retained_frame\n\nThe scenario's own `process` names \"very large tool output (e.g. a base64 artifact or a long diff)\" as the trigger. I confirmed this is the genuinely load-bearing vector for muse, by reading and then verifying against a live transcript line: `parseToolResultBatchCommitted` (parser.go:485-505) reads `results[].text` directly off the record with NO truncation logic anywhere in this parser. I pulled a real `tool_result_batch_committed` line for an `ls -la` call off this machine's corpus and confirmed the embedded `output` field is the FULL, untruncated 12,729-byte directory listing (no length-marker, no elision) — muse does not itself cap or summarize tool stdout before writing it to `session.jsonl`. So a large file read, a long diff, or a big command's stdout is the realistic way an oversized line would arise for muse — not an oversized assistant reply (bounded by conversational norms) and not a retained_frame (fixed, tiny, 2-child bookkeeping in every observed case).\n\n## Severity verdict against the 'checks MORE never less' standard\n\nBelow 64 MB: the line parses exactly as any other line would (no content loss, no stall) — same code path regardless of size. At/above 64 MB: the line is SKIPPED, not silently absorbed — `classifyLineReadError` logs the byte offset and size, and the file offset genuinely advances (verified by reading the code path, not inferred), so a corrupted or half-decoded event is never handed downstream and no subsequent line is starved. That is the conservative failure mode the house style asks for: an input the tailer can't safely parse is dropped with an audit trail, not smuggled through as a false pass. The one gap — shared with every other JSONLineParser adapter, not new here — is that the skip is log-only: `SessionMetrics` carries no field surfacing \"a line was skipped this pass\" to the daemon's own state machine or the UI, so an operator who isn't tailing daemon logs has no in-product signal that a record's content was dropped.\n\n## Driver\n\n`replaydata/agents/muse/driver-interactive.sh`'s `DRIVE_ELICITS` includes `send slash wait_turn sleep exit_clean restart sigkill start_session session` — every step type this recipe needs (`send`, `wait_turn`, `sleep`, `exit_clean`) is present and already live-proven end-to-end for muse in the `basic-turn` cell (commit 0239a1bd). driver=ready.\n\n## Why a tool-result recipe, not a plain long-sentence reply\n\nclaudecode/gemini-cli/aider/pi all elicit the oversized line via \"write one very long sentence\" (an assistant-text-only turn); kiro-cli instead has the agent create-and-read-back a file so the oversized line is a genuine tool result, matching the scenario's own \"large tool output\" framing. Given §4's finding above (muse embeds full, untruncated tool text inline with no distinct truncation path of its own), the tool-result shape is the more muse-specific, load-bearing exercise of §4's mechanism, so this recipe follows kiro-cli's precedent rather than the long-sentence sibling group. The scenario's own `acceptance_criteria` lists \"Tool calls: ≤ 0\", but that line is NOT a machine-checked phase-DSL field — confirmed by `git grep -n \"tool_calls_max\" tools/onboarding-factory/` returning zero hits — and kiro-cli's own shipped spec (`replaydata/agents/kiro-cli/scenarios/2-16_oversized-transcript-line/expected.jsonl`) asserts only the state arc, with no tool-call-count assertion, despite using a tool call. I follow that precedent rather than the unenforced acceptance-criteria line.\n\n## Vacuous-pass condition (per the assess skill's rule)\n\nUnder what condition would this cell pass while proving nothing? If the recipe's bash call were routed through muse's `kind:\"approval\"` review flow instead of the policy fast-track, the session would take a ready→working→waiting→...→ready detour through an unrelated code path (the same one `2-17_user-blocking-question` exercises) instead of cleanly exercising the oversized-line path, and — per the corrected `2-2_auto-executed-tool-call` cell's live finding — an UNPINNED `turn_start`/`turn_end` could even bind to one of muse's own goal-reminder/verify-reminder subagents (which skip `ready` and go straight to `working` on every prompt, format-spec §9) instead of the parent session, passing vacuously without ever touching the oversized line at all. Both risks are addressed the same way `2-2`/`2-13` were corrected: `turn_start`/`turn_end` are pinned `same_session_as: session_birth` so a subagent's own arc can never satisfy them (subagents never pass through a `ready` birth). The approval-routing risk is NOT eliminated by construction — `2-2`'s own live corpus shows a plain `ls -la` is fast-tracked (`policy_decision:\"allow:policy\"`) while chained `&&`/`for` shell commands recorded elsewhere on this machine DID get routed to the LLM-judge review — so this recipe deliberately uses a SINGLE, unchained command (`python3 -c \"print('x'*200000)\"`, no `&&`, no `for`, structurally closer to `ls -la` than to the chained commands that triggered review) to maximize the odds of the fast-track, but this is UNVERIFIED for this exact command shape until a live recording confirms no approval detour occurred.\n\n## Sources\n\n- core/pkg/tailer/line_reader.go (maxTranscriptLineSize=64MB; readLineCapped; accumulateChunk's bounded-memory skip)\n- core/pkg/tailer/tailer.go (scanNewLines/classifyLineReadError — skip-and-log, offset advances, next line still parses; parseTranscriptLine's plain json.Unmarshal)\n- core/pkg/tailer/large_line_test.go (adapter-agnostic regression pinning readLineCapped's three outcomes)\n- core/adapters/inbound/agents/muse/agent.go (Source() = FilesUnderRoot + JSONLineParser — confirms muse runs over the shared tailer)\n- core/adapters/inbound/agents/muse/parser.go (ParseLine/decodeAndRoute/parseRetainedFrame/mergeChildEvents; parseToolResultBatchCommitted reads results[].text with no truncation)\n- live corpus measurement via python3 (this machine, ~/.local/share/muse/sessions/, 237 files / 27,231 lines — command quoted above; largest line 123,761 bytes)\n- a real tool_result_batch_committed line off this machine's corpus (ls -la, 12,729-byte untruncated output field, confirmed no elision marker)\n- replaydata/agents/muse/scenarios/2-1_basic-turn/metadata.json and .../2-2_auto-executed-tool-call/expected.jsonl (same_session_as pinning correction; ls -la fast-track policy_decision evidence; live-proven send/wait_turn/exit_clean)\n- replaydata/agents/muse/driver-interactive.sh (DRIVE_ELICITS)\n- replaydata/agents/kiro-cli/scenarios/2-16_oversized-transcript-line/{metadata.json,expected.jsonl} (tool-result recipe precedent; acceptance_criteria's tool-call line not enforced as a phase field)\n- issue ingo-eichhorst/Irrlicht#270 (the shared tailer hardening this whole cell rests on)\n- issue ingo-eichhorst/Irrlicht#1962 (OPEN: processlifecycle's watched map is last-write-wins per PID — cited only to explain why this cell's spec omits a teardown/process_exited phase, mirroring 2-13's precedent, not as a defect this cell tests)",
+      "caveats": [
+        "The 64 MB skip is muse-agnostic and log-only: SessionMetrics carries no field surfacing 'a line was skipped this pass', so an operator not tailing daemon logs has no in-product signal a record was dropped. Shared with every JSONLineParser adapter, not new here.",
+        "A retained_frame line that crossed 64 MB would be skipped WHOLESALE at the raw-byte level (readLineCapped decides before any JSON structure is understood) — dropping every one of its children's records in one shot, not just one flat record's. This is a real mechanism read directly from parseRetainedFrame + readLineCapped, but hypothetical today: every retained_frame observed in the local corpus (228 lines) is 2,527-3,036 bytes, always exactly 2 permission-bookkeeping children.",
+        "The largest line ever organically observed on this machine is 123,761 bytes — well under even the OLD 2 MB bufio.Scanner limit, let alone the 64 MB cap. This cell is therefore a sanity-check of the parser-resilience arc, not a true cap-stress, matching every sibling agent's own framing for this scenario; genuine >64 MB behavior is pinned agent-agnostically by core/pkg/tailer/large_line_test.go, not by any live recording.",
+        "Approval-routing risk is UNVERIFIED for this exact recipe: the LLM-judge review boundary is muse-server-side and not something I could read code for: 2-2's OWN corpus shows a plain ls -la is fast-tracked while chained &&/for commands elsewhere on this machine were routed to review. The recipe deliberately picks a single unchained command to maximize fast-track odds, but if record shows an approval detour, the recording drifts into testing 2-17_user-blocking-question's path instead — that would need re-diagnosis at record time, not a silent pass.",
+        "The scenario's own acceptance_criteria line 'Tool calls: ≤ 0' is not honored by this recipe (it uses one bash tool call) — deliberately, following kiro-cli's precedent, because that line is not a machine-checked phase-DSL field (git grep tool_calls_max under tools/onboarding-factory/ = 0 hits) and a genuine tool result is the more muse-specific exercise of the oversized-line mechanism (§4 of the reasoning above).",
+        "No teardown/process_exited phase is asserted, mirroring 2-13_turn-end-terminal-text's precedent: the OPEN #1962 processlifecycle race (watched map[int]string is last-write-wins per PID) can attribute process_exited to a reminder-subagent's PID re-registration instead of the parent session when reminders fire late, so asserting it here would gate this cell's own (unrelated) purpose on a tracked, separate bug.",
+        "RECORD-TIME CORRECTION: the assessment's claim 'muse does not itself cap or summarize tool stdout before writing it to session.jsonl' is FALSE for large outputs. The successful re-recording's tool_result_batch_committed record carries original_output_bytes:200001, output truncated to 99,758 bytes, and an explicit truncated:true flag -- muse's OWN agent runtime truncates large tool stdout around ~100,000 bytes before it ever reaches the transcript. parser.go's parseToolResultBatchCommitted still has no truncation logic of its own (that half of the claim holds), but it is no longer the operative ceiling for muse: a tool-result line organically reaching anywhere near the 64MB tailer cap is far harder than assessed, since a single command's output no longer scales the transcript line past ~100KB regardless of how much stdout the command itself produces.",
+        "RECORD-TIME CORRECTION: the first live attempt with the original prompt wording ('Run the shell command ... and then tell me only the exact character count') did NOT produce an oversized line -- the model chose to pipe the command through wc -c / od / a subprocess wrapper and reported only a 196-byte summary (original_output_bytes:196) instead of ever emitting the raw 200,000-byte blob into its own tool_result_batch_committed record. The largest line in that attempt's transcript (123,437 bytes) came from an unrelated model_request_configured/run_context_messages record (ordinary system-reminder context), not from the recipe's own tool call. The script was tightened to explicitly forbid wc/od/summarizing and require verbatim raw stdout before re-recording."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/line_reader.go",
+          "note": "maxTranscriptLineSize=64MB (line 12); readLineCapped's three outcomes; accumulateChunk releases buf and switches to skipping mode once consumed>max, bounding memory on a runaway line."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer.go",
+          "note": "scanNewLines/classifyLineReadError: errLineTooLong is logged ('skipping oversized line at offset...') and the offset advances past it (lineReadSkip), so the NEXT line still parses; parseTranscriptLine does a plain json.Unmarshal on the already-capped line."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/large_line_test.go",
+          "note": "Adapter-agnostic regression test for #270 pinning readLineCapped's success/errLineTooLong/errPartialAtEOF outcomes."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/agent.go",
+          "note": "Source() = agent.FilesUnderRoot{..., Parser: agent.JSONLineParser{...}} — muse runs over the shared tailer identically to claudecode/gemini-cli/aider/pi/kiro-cli."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/parser.go",
+          "note": "ParseLine/decodeAndRoute/parseRetainedFrame(661-684)/mergeChildEvents(713+); parseToolResultBatchCommitted(485-505) reads results[].text with no truncation logic anywhere in this file."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/scenarios/2-1_basic-turn/metadata.json",
+          "note": "send/wait_turn/exit_clean live-proven end-to-end for muse (commit 0239a1bd); single-birth session model."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/scenarios/2-2_auto-executed-tool-call/expected.jsonl",
+          "note": "LIVE-CORRECTED evidence: unpinned turn_start/turn_end can vacuously bind to a goal-reminder/verify-reminder subagent's own working->ready arc instead of the parent's; fixed via same_session_as:session_birth; also the source for ls -la's policy_decision:'allow:policy' fast-track evidence."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/scenarios/2-13_turn-end-terminal-text/expected.jsonl",
+          "note": "Precedent for omitting a teardown/process_exited phase when the recipe risks the #1962 PID-attribution race."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash wait_turn sleep exit_clean restart sigkill start_session session\" — every step this recipe needs is present."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/kiro-cli/scenarios/2-16_oversized-transcript-line/expected.jsonl",
+          "note": "Precedent for a tool-result-based (not long-sentence) recipe for this scenario, and for not encoding the unenforced 'Tool calls: ≤ 0' acceptance-criteria line as a phase assertion."
+        },
+        {
+          "kind": "command",
+          "ref": "python3 corpus scan over ~/.local/share/muse/sessions/**/session.jsonl (this machine)",
+          "note": "237 session.jsonl files, 27,231 lines; largest single line = 123,761 bytes; retained_frame lines: 228, max 3,036 bytes."
+        },
+        {
+          "kind": "issue",
+          "ref": "ingo-eichhorst/Irrlicht#270",
+          "note": "The shared tailer hardening (bufio.Reader + readLineCapped replacing bufio.Scanner) this entire cell's daemon=full verdict rests on."
+        },
+        {
+          "kind": "issue",
+          "ref": "ingo-eichhorst/Irrlicht#1962",
+          "note": "OPEN, cited only to justify omitting a teardown phase from this cell's spec (same precedent as 2-13), not as a defect under test here."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "muse CLI installed and on PATH, v1.2.1 (muse --version >= 1.2.1 per replaydata/agents/muse/metadata.json)",
+        "muse auth complete: 'muse login' (Meta account, browser code approval) or META_API_KEY exported — auth is set up out-of-band, the rig's precheck delegates it to the user",
+        "tmux available — the interactive driver runs muse in a tmux REPL so it stays alive across the turn",
+        "irrlichd is recording — either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+        "python3 available in the recorded cwd's PATH (the recipe's bash tool call shells out to it to generate the oversized blob deterministically, avoiding a separate file write + read-back step)"
+      ],
+      "setup": [
+        "The interactive driver (driver-interactive.sh) creates a fresh empty cwd under <staging>/cwd/ and launches `muse --trust-workspace` in a tmux session there, then sleeps 1s before the first send",
+        "--trust-workspace is REQUIRED: every staging cwd is brand-new, so muse's 'Do you trust this workspace?' modal fires on every run",
+        "muse mints its own session UUID on launch; the driver resolves the newest session.jsonl under ~/.local/share/muse/sessions (excluding subagent/ copies) newer than a pre-launch marker once the turn completes",
+        "No external staging: the oversized content is generated INSIDE the recorded turn by a single bash tool call (python3 -c \"print('x'*200000)\"), not pre-staged — run-cell.sh does not execute recipe setup steps, so the blob must be produced by the agent's own tool call",
+        "The single, unchained command is deliberate (see the assessment's vacuous-pass caveat): a plain ls -la is confirmed fast-tracked (policy_decision:'allow:policy') in this corpus, while chained &&/for commands were routed to the LLM-judge review elsewhere on this machine; this command has no shell chaining operators, only a python3 -c invocation, to maximize the odds it stays on the fast-track and the session never detours through kind:'approval'"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Run exactly this one shell command, unmodified, with no pipes and no wrapping: python3 -c \"print('x'*200000)\" . Your tool call's captured stdout must be the complete raw output verbatim -- do not pipe it through wc, od, head, tail, or any other summarizing command, and do not write your own condensed description of it. After the tool call, on its own line, state only the exact character count of that raw output as a single number."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        },
+        {
+          "type": "exit_clean"
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the session (session-directory-UUID) born ready shortly after muse's TUI finishes launching (single-birth adapter)",
+        "events.jsonl shows exactly one ready→working transition on that SAME session_id for the user prompt (pinned same_session_as:session_birth, so a goal-reminder/verify-reminder subagent's own working arc cannot satisfy this — format-spec §9, and the live-corrected 2-2 cell's finding)",
+        "events.jsonl shows exactly one working→ready transition on that same session at turn end — completion of this arc is the parser-resilience proof; if the tailer had wedged on the oversized tool_result_batch_committed line, this transition would never fire",
+        "irrlichd logs do NOT contain a 'skipping oversized line' warning for this session's transcript (a ~200 KB tool-result line is far under the 64 MB cap)",
+        "no state_transition to waiting occurs on this session at any point (the command is a single unchained bash invocation, expected to be policy-fast-tracked like ls -la, not routed through kind:'approval' — UNVERIFIED for this exact command shape until this recording confirms it; if waiting DOES appear, re-diagnose as an approval-routing detour rather than a parser failure)",
+        "final session state is ready before exit_clean tears the REPL down",
+        "transcript session.jsonl contains a tool_result_batch_committed record whose results[].text embeds the python3 output inline on one line; RECORD-TIME CORRECTION: muse itself truncates large tool stdout to ~100,000 bytes before writing it (confirmed live: original_output_bytes:200001, output len 99758, truncated:true) — the line is NOT the full untruncated ~200,000 characters as originally assessed, but the explicit truncated:true/original_output_bytes marker IS the elision marker this line item was checking for",
+        "observation vector: tokens_nonzero=true (model_completed usage), cost_nonzero=false (muse-spark-1.3-contributor is unpriced in the litellm catalog), model unpinned"
+      ],
+      "settings": {},
+      "timeout_seconds": 300
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "id": "muse",
+  "name": "Muse",
+  "provider": "meta",
+  "prerequisites": [
+    "muse CLI installed and on PATH (muse --version >= 1.2.1)",
+    "auth: complete 'muse login' (Meta account, browser code approval) or export META_API_KEY (takes priority over the account login); 'muse auth set --api-key-stdin' stores provider API credentials"
+  ]
+}

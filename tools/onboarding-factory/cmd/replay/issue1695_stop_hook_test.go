@@ -166,6 +166,10 @@ var stopHookCensus = map[string]stopRecording{
 		Stops: 1, Reproduced: 0,
 		Why: "the sidecar could not drive this replay: sidecar cannot drive a replay: no transcript_activity events with file_size for primary session session_20260822_015033_156d37d3",
 	},
+	"muse/scenarios/4-2_multiple-agents-same-workspace/recordings/2026-09-14-20-38-11_irrlichd-0.6.3+276a199/transcript.jsonl": {
+		Stops: 1, Reproduced: 0,
+		Why: "every Stop names a session the replay does not drive",
+	},
 	"opencode/scenarios/2-5_synchronous-slash-command/recordings/2026-08-22-14-10-01_irrlichd-0.5.10+ae8b836/transcript.jsonl": {
 		Stops: 1, Reproduced: 0,
 		Why: "the sidecar could not drive this replay: sidecar cannot drive a replay: no transcript_activity events with file_size for primary session ses_fd69f27acffePoG9lVtPjn9640",

@@ -25,7 +25,21 @@ import "testing"
 
 // Canonical is the exact set of tools that always block the agent until the
 // user responds. Both predicates must return true for every entry.
-var Canonical = []string{"AskUserQuestion", "ExitPlanMode", "question"}
+//
+// ask_user_question is vibe's snake_case spelling of the same concept as
+// AskUserQuestion (#1087); exit_plan_mode/ask_user are GitHub Copilot's
+// (#1256); request_user_input is muse's own dedicated ask-tool (issue #1960
+// stage 3 — its system prompt tells the model to "Prefer `request_user_input`
+// when available", verified via `strings` on the live muse-bin-1.2.1-R2847.1
+// binary; see session.isUserBlockingTool's doc comment for the full
+// evidence). This list was missing all four of these until #1960 — it had
+// only the first three PascalCase/lowercase entries, so a tool using one of
+// the missing spellings could be added to only one predicate's switch/||
+// chain and this contract would never have noticed the other was untouched.
+var Canonical = []string{
+	"AskUserQuestion", "ExitPlanMode", "question",
+	"ask_user_question", "exit_plan_mode", "ask_user", "request_user_input",
+}
 
 // NonBlocking are tools both predicates must reject. "Agent" and
 // "SendMessage" are the load-bearing entries: tailer.surviveTurnDone (a

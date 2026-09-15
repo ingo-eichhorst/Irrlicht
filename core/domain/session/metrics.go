@@ -497,7 +497,11 @@ func (m *SessionMetrics) NeedsUserAttention() bool {
 // to that package to avoid a domain-package import. KEEP THE TWO IN SYNC — a
 // tool added here must be added there too, and vice versa. Their twin tests
 // (TestNeedsUserAttention_UserBlockingToolNames here, TestIsUserBlockingToolName
-// in pkg/tailer) pin both sets.
+// in pkg/tailer) pin both sets, and TestUserBlockingListsAgree in each package
+// (userblocking_contract_test.go) drives BOTH predicates against the same
+// canonical table (core/internal/contracttesting/userblocking) so a tool added
+// to only one copy fails a test, rather than relying on a human keeping two
+// hand-written test files in lockstep.
 func isUserBlockingTool(name string) bool {
 	return name == "AskUserQuestion" || name == "ExitPlanMode" ||
 		name == "question" || name == "ask_user_question" ||
@@ -505,7 +509,18 @@ func isUserBlockingTool(name string) bool {
 		// gate — the same concept as ExitPlanMode above, in snake_case — and
 		// ask_user is its clarifying-question tool. Both hold a persisted
 		// tool.execution_start open while the user decides.
-		name == "exit_plan_mode" || name == "ask_user"
+		name == "exit_plan_mode" || name == "ask_user" ||
+		// Muse's own dedicated ask-tool (issue #1960 stage 3): its system
+		// prompt tells the model to "Prefer `request_user_input` when
+		// available. Ask one blocking outcome question" (verified via
+		// `strings` on the live muse-bin-1.2.1-R2847.1 binary — see
+		// replaydata/agents/muse/scenarios/2-17_user-blocking-question/
+		// metadata.json). Without this, an open request_user_input call had
+		// no fallback at all: signal_hold.go's OpenToolStalled duration
+		// heuristic covers only the five isPermissionGatedEditTool names, not
+		// this one, so the session would read working (or eventually a
+		// generic idle heuristic) instead of waiting.
+		name == "request_user_input"
 }
 
 // HasOpenEditPermissionTool reports whether an open tool call is a

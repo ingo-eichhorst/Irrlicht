@@ -1,0 +1,121 @@
+{
+  "scenario_id": "user-esc-interrupt",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.2.1",
+    "confidence": 0.9,
+    "notes": "agent_supports: yes (live ESC drive, TUI + on-disk confirmed); daemon_capability: full (the canonical ready→working→ready arc is produced by the SAME code path as normal completion, independently of IsUserInterrupt — confirmed both by reading parser.go/state_classifier.go and by a live ESC drive today); driver_capability: ready (interrupt ported #1960 record pass: tmux send-keys Escape, EXPECTED_TURNS deliberately left untouched since muse turn_count() counts a cancelled terminal too). Recorded 2026-09-15, 6/6 phases pass; teardown/process_exited dropped from the spec (OPEN daemon bug #1962, cited not new)."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "user-esc-interrupt",
+      "agent": "muse",
+      "assessed_at": "2026-09-14T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.9,
+      "body": "## Verdict\n\nagent_supports: yes; daemon_capability: full; driver_capability: gap:interrupt.\n\n## This settles the column's most load-bearing UNVERIFIED item\n\nThe format-spec's own corpus research (`muse-format-spec.md` §12, `muse-capabilities.md`) found `terminal:\"cancelled\"` only inside SUBAGENT run streams, with internal-sounding reasons (\"cancelled during model step\", \"...end-of-turn reminder wait\", \"...tool result reconciliation\") that read as programmatic cancellation, not a confirmed human ESC. `core/adapters/inbound/agents/muse/parser.go:342-360` (parseRunTerminal) therefore deliberately leaves `ev.IsUserInterrupt` false for every `cancelled` terminal, with a comment saying so and citing the same caveat.\n\nI live-drove this today (never inside the repo): `tmux new-session -d -s museescprobe -c <scratch>/cwd \"muse --trust-workspace\"`, waited for `ready`, sent \"Use your bash/execute tool to run the shell command: sleep 60 ; echo DONE_SLEEPING . Then reply with the word FINISHED.\", waited ~5s until the pane showed `◈ Thinking (5s · esc to interrupt)` mid-tool-dispatch, then `tmux send-keys Escape`. The pane immediately showed `◆ Ran command · ... · ⋘ · cancelled · 0.3s` and `◆ Interrupted · Report issues with /feedback`.\n\nOn disk, the newly-minted TOP-LEVEL session `~/.local/share/muse/sessions/2026/09/14/01a09eeb-5ee1-76c1-baf2-1db7316588d3/session.jsonl` (NOT a `subagent/` file — confirmed by the run's own `owner`: `{\"requester_kind\":\"main\",\"owner_type\":\"main_root\"}` on the `goal_usage_attribution` event for this same run_id) recorded:\n```\nrun.started  run_id=5252a27d prompt=\"Use your bash/execute tool to run the shell command: sleep 60 ; echo DONE_SLEEPING ...\"\n...task cancelled: {\"kind\":\"cancelled\",\"reason\":\"cancelled by tool cancellation\"}\n...reminder.cleanup_effect.started: {\"mode\":\"main_run_cancelled\", ...}\nrun.terminal run_id=5252a27d {\"terminal\":\"cancelled\",\"reason\":\"cancelled after tool result reconciliation\",\"turn_duration_ms\":9738,\"time_to_first_token_ms\":8246}\nrun.started  run_id=102813a8 prompt=\"Reply with exactly the word: RECOVERED\"\nrun.terminal run_id=102813a8 {\"terminal\":\"completed\",\"reason\":null,...}\n```\nA second, clean prompt right after (\"Reply with exactly the word: RECOVERED\") produced a normal `started→...→terminal:completed` arc with a NEW run_id — no stuck state, no leftover flag.\n\nThree things this proves:\n1. **A genuine human ESC keypress on the TOP-LEVEL (main-root) session DOES produce `terminal:\"cancelled\"`**, using the exact same `reason` vocabulary the corpus had previously only seen on subagent streams (`\"cancelled after tool result reconciliation\"` verbatim). This settles the format-spec's §12 UNVERIFIED item for the main-session case: it is real, and it is what a human ESC produces.\n2. The `reason` string describes the PIPELINE STAGE the cancellation landed in (model step / eot-wait / tool-result reconciliation), not the actor — muse's own `TurnInterruptParams`/`TurnInterruptResult` wire schema (`scratchpad/muse-schema/msp.schema.json`, dumped offline via `muse schema generate-json-schema`) confirms this structurally: `turn/interrupt` is documented as \"the '**user pressed stop**' gesture, on the runtime's priority lane\", and its result folds into `turn/completed` with terminal `'cancelled'` — i.e. `cancelled` is BY PROTOCOL DESIGN the client-stop-gesture terminal state for a top-level run. There is no separate `retract`/`actor` field surfaced into `session.jsonl` distinguishing WHO issued the client gesture — confirmed by a full-text scan of the transcript for `interrupt`/`commandId`/`retract` (0 protocol-level hits; the 6 literal \"interrupt\" substring hits are all inside reminder-subagent SYSTEM PROMPT boilerplate, e.g. \"uninterrupted verification phase\").\n3. **The canonical scenario arc does not need `IsUserInterrupt` at all for muse.** `parseRunTerminal` sets `ev.EventType=\"turn_done\"` uniformly for `completed` AND `cancelled` (\"every one of them is the run's own terminal record, so the turn objectively ended\", parser.go:316-320). `state_classifier.go`'s `agent_done` rule (`tierAgentDone`, fires on `IsAgentDone()`) is checked BEFORE the `user_interrupt` rule in the ordered ladder (`ClassifyStateTiered` returns on first match, ~line 366) and its `classifyAgentDone` decide-fn routes turn_done → ready (or waiting/error) with zero dependency on `LastWasUserInterrupt`. So muse's `ready→working→ready` arc, no-stuck-in-working, and clean-reset-on-next-prompt (the scenario's 4 acceptance bullets) are ALL already produced by shipped code — confirmed by architecture read AND by the live probe above (both turns landed exactly as classified). Nothing about `IsUserInterrupt` changes this arc; claudecode needs that flag because it has NO OTHER completion signal on interrupt, muse does not share that architecture.\n\n**Caveat, not a bug** (per the assess rubric — canonical arc met, narrow detail gappy): none of the machine-checked spec phases in ANY agent's `user-esc-interrupt` cell (including claudecode's own, the reference for this scenario) assert the classifier's internal REASON string — only the STATE. Since the state arc is fully and correctly produced, `daemon_capability=full` is honest. But `IsUserInterrupt`/`LastWasUserInterrupt` staying permanently false for muse means the daemon can never LABEL a transition as interrupt-caused (vs. ordinary completion) for anything that reads the reason/tier metadata (logs, future UI surfacing, `decided_by_rule` in richer diagnostics). Given finding #1 above, that caution is now empirically outdated for the main-session case and is worth revisiting — see caveats. This is exactly the kind of adapter change the dispatcher, not this assess pass, should schedule.\n\n## Driver pillar\n\n`replaydata/agents/muse/driver-interactive.sh:670` stubs `interrupt) not_implemented interrupt ;;` and `DRIVE_ELICITS` (line 167) does not list `interrupt`. This IS live-portable, trivially: my manual probe's interrupt step was exactly `tmux send-keys -t \"$SESSION\" Escape` (verified working, twice — once mid-probe, once implicitly via the settle wait), the same primitive claudecode's own `step_interrupt()` (`replaydata/agents/claudecode/driver-interactive.sh:469-477`) already uses. `record` ports this before driving, per the standard driver-gap flow.",
+      "caveats": [
+        "RECOMMENDED ADAPTER FOLLOW-UP (not implemented here, per task scope): core/adapters/inbound/agents/muse/parser.go's parseRunTerminal (terminalCancelled case, ~line 342-360) could now set ev.IsUserInterrupt=true for a cancelled terminal on the session's OWN top-level run (not a subagent's), citing this cell's live evidence. The discriminator should NOT be 'any cancelled terminal' indiscriminately: the corpus's subagent-stream cancelled examples remain unconfirmed as human-vs-parent-cancelled, and a subagent's own run cancellation may be orchestrator-initiated rather than a literal ESC. Scoping the flag to main-root runs (the adapter already threads subagent-vs-main context structurally, since subagent transcripts live under a distinguishable subagent/<child>/ path and become separate irrlicht sessions) avoids a false positive on that ambiguous case. This is a real, live-evidenced fix opportunity, not a blocking defect — flagging for the dispatcher to schedule, not implementing it in this assess pass.",
+        "The interrupted run in my probe still showed a completed model call (reasoning_committed + model_completed) BEFORE the tool cancellation landed — the interrupt fired mid-tool-execution, not mid-model-stream. I did not separately test an ESC during the 'Thinking' phase before any tool call was proposed; the scenario's acceptance criteria ('before the agent emits a turn-done marker') is satisfied either way (turn_duration_ms=9738 for a `sleep 60` command that cannot have completed naturally), but a spec asserting a SPECIFIC interrupt-timing shape (e.g. no tool call at all) would need a different recipe.",
+        "Vacuous-pass guard: the recipe's interrupted turn MUST run an operation that provably cannot complete naturally within the phase's max_delay_ms bound (here: a `sleep 45` shell command via the bash tool, bounded well under its own floor) — NOT a 'long essay' prompt as claudecode's sibling recipe uses. Because muse's agent_done classifier tier treats cancelled and natural completion identically, a long-essay-style recipe would let this cell pass even if the interrupt driver step were a silent no-op and the model simply finished on its own. This is a genuine adapter-specific deviation from the claudecode template, made necessary by muse's different (more robust) turn-boundary architecture.",
+        "Live-verified today on muse 1.2.1 with the `meta` provider (model muse-spark-1.3-contributor); not yet run through an actual irrlichd + websocket pipeline (that is record's job) — this assessment is grounded in the raw muse transcript plus a code read of the daemon's parser/classifier, both matched line-for-line against the corpus, not a live daemon observation."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "~/.local/share/muse/sessions/2026/09/14/01a09eeb-5ee1-76c1-baf2-1db7316588d3/session.jsonl",
+          "note": "Live ESC-probe transcript (today, this assess pass): run_id 5252a27d started with prompt 'sleep 60 ...', tmux Escape sent at ~+6s while pane showed 'Thinking (5s . esc to interrupt)', run.terminal landed {\"terminal\":\"cancelled\",\"reason\":\"cancelled after tool result reconciliation\",\"turn_duration_ms\":9738}; owner.requester_kind=\"main\"/owner_type=\"main_root\" on the same run_id's goal_usage_attribution event confirms this is the TOP-LEVEL session's own run, not a subagent. A second prompt (run_id 102813a8) completed cleanly right after: {\"terminal\":\"completed\",\"reason\":null}."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/parser.go",
+          "note": "Lines ~316-360 (parseRunTerminal): EventType=\"turn_done\" set uniformly for completed/cancelled/failed; IsUserInterrupt deliberately left false for `cancelled`, with the pre-existing UNVERIFIED comment this assess pass resolves for the main-session case."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "stateRules is an ordered ladder (ClassifyStateTiered, ~line 366, returns on first `when` match). The agent_done rule (tierAgentDone, ~line 290-303, fires on IsAgentDone()) precedes the user_interrupt rule (~line 305-323) in that list, so classifyAgentDone (turn_done -> ready, absent SessionError/waiting-cue) decides muse's cancelled-terminal case without ever consulting LastWasUserInterrupt."
+        },
+        {
+          "kind": "file",
+          "ref": "scratchpad/muse-schema/msp.schema.json",
+          "note": "TurnInterruptParams/TurnInterruptResult (dumped via `muse schema generate-json-schema`, offline, exact for this binary): `turn/interrupt` is documented as the \"'user pressed stop' gesture, on the runtime's priority lane\"; its result folds into `turn/completed` with terminal 'cancelled' -- protocol-level confirmation that `cancelled` on a top-level run is the client-stop-gesture terminal state."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/driver-interactive.sh",
+          "note": "Line 167 (DRIVE_ELICITS, does not list 'interrupt') and line 670 (`interrupt) not_implemented interrupt ;;`) -- the driver-pillar gap; record ports the Escape-key primitive before driving."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/2-20_user-esc-interrupt/{metadata.json,expected.jsonl}",
+          "note": "Template/precedent read per the assess SKILL.md's instruction; muse's spec deliberately diverges from claudecode's 'long essay' recipe shape for the vacuous-pass reason cited in caveats."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "muse CLI installed and on PATH, v1.2.1 (muse --version >= 1.2.1 per replaydata/agents/muse/metadata.json)",
+        "muse auth complete: 'muse login' (Meta account) or META_API_KEY exported -- auth is set up out-of-band, the rig's precheck delegates it to the user",
+        "tmux available -- the interactive driver runs muse in a tmux REPL so it stays alive across the turn (bare `muse` with no subcommand starts the interactive TUI)",
+        "irrlichd is recording -- either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+        "the interrupt step must be ported into driver-interactive.sh before this cell can record (driver_capability=gap:interrupt); port target is `tmux send-keys -t \"$SESSION\" Escape`, live-confirmed working against muse 1.2.1's TUI"
+      ],
+      "setup": [
+        "The interactive driver (driver-interactive.sh) creates a fresh empty cwd under <staging>/cwd/ and launches `muse --trust-workspace` in a tmux session there, then sleeps 1s before the first send",
+        "--trust-workspace is REQUIRED: every staging cwd is brand-new, so muse's 'Do you trust this workspace?' modal fires on every run and silently eats the first prompt without it",
+        "The first turn asks muse to run a real `sleep 45` shell command via its bash/execute tool -- deliberately un-completable within the phase's timing bound, so the recording cannot pass vacuously even if the interrupt step silently no-ops (see caveats)",
+        "The driver sleeps 6s after sending the first prompt (matching the live probe's observed timing: the tool call is dispatched and 'esc to interrupt' is showing by ~5s) before sending Escape",
+        "A second, short prompt right after the interrupt settles proves the parser resets cleanly (process step 6 of the scenario: 'the next user prompt drives a clean ready -> working -> ready arc')"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Use your bash/execute tool to run the shell command: sleep 45 ; echo DONE_SLEEPING . Then reply with the word FINISHED."
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        },
+        {
+          "type": "interrupt"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: RECOVERED"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "exit_clean"
+        }
+      ],
+      "verify": [
+        "events.jsonl mints the session in ready shortly after muse's TUI finishes launching (single-birth; session id from the session directory basename == stream.id)",
+        "events.jsonl contains a pid_discovered event binding the muse-bin PID to the session",
+        "events.jsonl contains a state_transition to working when the first (sleep 45) prompt lands",
+        "events.jsonl contains a state_transition to ready WELL BEFORE 45s have elapsed since that working transition -- the only way this can happen is a genuine interrupt, since the shell command physically cannot finish that fast",
+        "no state_transition to error or waiting occurs for the interrupted turn",
+        "events.jsonl contains a second state_transition to working for the follow-up prompt, then back to ready on normal completion -- proving the parser did not stick in any interrupt-related state",
+        "final session state is ready before exit_clean tears the REPL down"
+      ],
+      "settings": {},
+      "timeout_seconds": 180
+    }
+  }
+}

@@ -1,0 +1,164 @@
+{
+  "scenario_id": "provider-overloaded-terminal",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.2.1 (1.2.1-R2847.1)",
+    "daemon_version": "0.6.3+7ddc8a3",
+    "confidence": 0.82,
+    "notes": "agent_supports: yes; daemon_capability: full (ready→working→error, sticky — same session_error mechanism as the committed, now LIVE-RECORDED sibling 2-14_turn-aborted-by-error, whose fix (pid_manager eviction bug, commit e34b96387/9abf13d1) is already landed on this branch); driver_capability: ready (base_url_override already ported into driver-interactive.sh's spawn_muse_repl, confirmed by direct read, not re-derived). Reuses 2-14's proven dead-port base_url_override mechanism rather than any of the existing mock-openai-429/mock-gemini-429/mock-gemini-5xx/mock-anthropic-* servers: none of them implement muse's own wire path (POST /responses, muse's proprietary Meta-protocol body shape) — muse's --provider flag only accepts echo|meta (confirmed live via `muse --help` on this machine), so --base-url must still point at something speaking the Meta protocol. A dead port is the best available deterministic, zero-cost, already-live-verified elicitation for 'provider call fails repeatedly until retries exhausted, terminal'."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "provider-overloaded-terminal",
+      "agent": "muse",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.82,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\nroute: record\n\n## Reasoning\n\n### agent = yes\n\nMuse's Meta-provider client retries a failed provider call a bounded number of times and then abandons the turn with a terminal, self-classified failure \u2014 exactly the \"exhausts its retry ladder and abandons the turn\" shape this scenario asserts. This is not inferred from docs: it is LIVE-CONFIRMED, three times, on this exact mechanism in the sibling cell `2-14_turn-aborted-by-error` (`replaydata/agents/muse/scenarios/2-14_turn-aborted-by-error/expected.jsonl`, meta line), which elicits a provider-call failure the identical way this cell's recipe does (muse launched with `--base-url` pointed at a local port with nothing listening). All three live attempts captured `terminal:\"failed\"`, `reason:\"transport error: error sending request for url (http://127.0.0.1:18799/responses) (after 4 provider attempts)\"`, `turn_duration_ms~2015` \u2014 a bounded retry ladder (4 attempts) followed by a terminal give-up, deterministically, at zero API cost.\n\nWhether muse's retry ladder behaves identically against an explicit HTTP 529 `overloaded_error` body (this scenario's literal premise) as it does against a bare connection refusal (what the dead-port mechanism actually produces) is not directly confirmed \u2014 flagged as a caveat below \u2014 but the daemon-observable SHAPE is confirmed agnostic to the specific failure reason (see daemon=full below), and muse's own `run_fatal_error_classified\u2192terminal:\"failed\"` mechanism is already established (2-14's assessment) as a general catch-all spanning at least two structurally unrelated failure classes (a pure network stall and a config-validation error), which is why I judge `agent=yes` here at the same confidence band rather than downgrading to `unknown`.\n\n### daemon = full\n\nThe daemon mechanism is identical to 2-14's, already fully proven end-to-end on this branch: `parser.go`'s `parseRunTerminal` sets `EventType=\"turn_done\"` and, on `terminalFailed`, sets `ev.SessionError`. `core/application/services/state_classifier.go`'s `session_error` rule fires unconditionally the instant `SessionError` is set (muse declares no hooks, so `HookTurnDone` is always false), painting the session `error` directly; `classifyAgentDone` independently converges on the same `StateError` outcome as a second path. `SessionError` is sticky \u2014 cleared only by the user's next turn (`tailer_metrics.go`'s `clearSessionErrorOnRecovery`), never by the failing turn's own epilogue \u2014 which is exactly this scenario's defining assertion (\"the failing turn's own epilogue does not clear the error\").\n\nThis is not a fresh read of the parser: it is the SAME mechanism 2-14 already live-recorded (three attempts) on this branch, with the daemon-side blocker (a `proc-*` pre-session evicting the real session's PID claim, `assignPIDLocked` in `core/application/services/pid_manager.go`) FIXED by commit `e34b96387` (\"fix(daemon): never let a proc-* pre-session evict a real session's PID claim\"), confirmed present in this branch's history (`git log --oneline | grep e34b96387`). On 2-14's third, post-fix live attempt the real session was never evicted, cleanly transitioned `ready\u2192working\u2192error` via the `session_error` classifier rule, and stayed in `error` for the rest of its life with no reversion to `ready`/`waiting` \u2014 precisely the arc this scenario's acceptance criteria describe. Because this cell's recipe is mechanically the SAME elicitation (dead-port `base_url_override`), I carry that live-confirmed result forward rather than treating it as an unconfirmed doc-guess, while still keeping `confidence` in the honest 0.7\u20130.85 band (not \u22650.9) because THIS specific cell has not itself been recorded yet.\n\nA separate, PRE-EXISTING, already-filed daemon bug remains open and applies here exactly as it does on 2-14: `process_exited` for the real session is misattributed to its transient `proc-<PID>` presession shadow (`processlifecycle`'s `watched map[int]string`, last-write-wins \u2014 filed as **#1962**, cited not re-derived). This affects only the teardown phase, not the scenario's own defining assertion (session reaches `error` and stays there), so per the caveats-over-downgrades rule I keep `daemon=full` at the cell level and scope `known_failing` to the teardown phase only, matching 2-14's precedent exactly.\n\n### Why the recipe reuses 2-14's mechanism rather than a purpose-built overload mock\n\nThe dispatcher asked me to check whether muse can be pointed at one of the repo's existing overload mocks (`mock-openai-429`, `mock-gemini-429`, `mock-gemini-5xx`) via `--base-url`. I read all of them plus `mock-anthropic-429`/`mock-anthropic-5xx`/`mock-anthropic-error` (the one claudecode's own sibling `2-23` cell uses). None is wire-compatible with muse:\n\n- `muse --help` (run live on this machine, muse-bin 1.2.1-R2847.1) documents `--provider <MODE>`: \"Startup provider: echo or meta (default: meta)\" \u2014 there is no openai/anthropic/gemini provider mode. `--base-url` \"Override[s] the Meta provider base URL\", i.e. it redirects the SAME Meta-protocol client to a different host; it does not change what protocol muse speaks.\n- Muse's Meta client POSTs to `/responses` \u2014 confirmed directly from 2-14's captured live failure text, `\"...url (http://127.0.0.1:18799/responses)...\"`.\n- `mock-openai-429` (`tools/onboarding-factory/recording/mock-openai-429/main.go`) serves `/v1/chat/completions` and `/v1/models` only.\n- `mock-gemini-429`/`mock-gemini-5xx` (`tools/onboarding-factory/recording/mock-gemini-{429,5xx}/main.go`) serve Gemini's `:generateContent`/`:streamGenerateContent` path shapes.\n- `mock-anthropic-429`/`mock-anthropic-5xx`/`mock-anthropic-error` serve `/v1/messages`.\n\nNone serves `/responses`, so pointing muse at any of them would hit that mock's own catch-all `http.NotFound` `/` handler \u2014 a 404 with a body none of them designed to look like a Meta-protocol overload response, and a shape that has never been live-verified for muse (unlike the dead-port mechanism, proven three times). A 404 is also not obviously MORE representative of \"provider overloaded\" than a clean connection refusal; if anything it risks muse treating it as a non-retryable client error and giving up in fewer than the 4 attempts the dead-port mechanism reliably produces, which would be a WEAKER match to \"exhausts its retry ladder\" than what's already proven. I did not choose that path. Building a muse-protocol-speaking overload mock (mirroring `mock-anthropic-error`'s parameterised `--status`/`--succeed-after` shape) would be needed for a genuinely faithful `2.22`\u2194`2.23` pair on muse \u2014 2.22 (`provider-overloaded-retry`) specifically needs a mock that can succeed after N failures, which a dead port structurally cannot do \u2014 but that is out of this cell's scope (2.22 is not part of this assessment) and is noted as a caveat, not a blocker, since 2.23 alone only needs \"never succeeds,\" which the dead port already delivers.\n\n### driver = ready\n\n`replaydata/agents/muse/driver-interactive.sh` already carries the `base_url_override` primitive this recipe needs (read directly, not assumed from the sibling's notes): `BASE_URL` is read from `$SETTINGS_PATH` via `jq -r '.base_url // empty'` (lines ~112\u2013115) and `spawn_muse_repl` appends `--base-url \"$BASE_URL\"` to `MUSE_ARGS` when set (line 277) \u2014 this was ported while landing 2-14 (the code's own comment at line ~267 says so: \"same launch-arg wiring ... like base_url_override\"). `DRIVE_ELICITS` (line 167) already lists every step type this recipe's script needs (`send`, `wait_turn`, `sleep`, `exit_clean`). No driver work remains.",
+      "caveats": [
+        "UNVERIFIED: whether muse's retry ladder behaves identically against an explicit HTTP 529 overloaded_error response body as it does against a bare TCP connection refusal (what the dead-port mechanism actually produces). Both are live-confirmed to fail after the same '4 provider attempts' in the sibling 2-14 cell, and both are handled by the identical daemon-side terminal:\"failed\"\u2192SessionError\u2192error path regardless of the specific failure reason/class (2-14's own two corpus samples \u2014 an idle-timeout stall and a config_error \u2014 already established this daemon-side agnosticism). But no muse-protocol-compatible mock exists in this repo to produce a genuine 529-shaped response, so the retry-COUNT/backoff-TIMING specifically for an overload response (as opposed to a connection failure) remains unconfirmed for muse. This does not threaten daemon_capability (the classifier doesn't look at the reason), only the fidelity of 'overloaded' as the specific elicited failure MODE.",
+        "Vacuous-pass check: this cell would pass while proving nothing distinct from 2-14 if record simply re-runs 2-14's exact recipe verbatim and nobody notices the two cells now assert an identical arc for a coincidental (non-overload-specific) reason. That is not a defect in EITHER cell \u2014 2-14's own assessment already established that 2.22/2.23/2.24 are the scenarios that natively describe the shape muse actually exhibits (ready\u2192working\u2192error, sticky), and this cell's body says so explicitly \u2014 but a future re-assessment should not mistake the mechanism-level overlap for evidence that muse's failure handling is overload-specific; it is a general terminal-failure mechanism, and 2.23 is one of several scenario framings that happen to match it exactly.",
+        "None of the repo's existing overload mocks (mock-openai-429, mock-gemini-429, mock-gemini-5xx, mock-anthropic-429/5xx/error) are wire-compatible with muse (muse only speaks its own Meta protocol at POST /responses; --provider only accepts echo|meta) \u2014 confirmed by reading all five plus a live `muse --help`. A muse-protocol-speaking parameterised mock (mirroring mock-anthropic-error's --status/--succeed-after shape) does not exist yet and would be needed to record a genuinely faithful sibling 2.22 (provider-overloaded-retry, which needs conditional recovery a dead port cannot produce) \u2014 not a blocker for this cell, which only needs 'never succeeds.'",
+        "known_failing is scoped to the teardown phase only (process_exited misattributed to the transient proc-<PID> presession instead of the real session) \u2014 the SAME pre-existing, already-filed daemon bug (#1962, processlifecycle's watched map[int]string last-write-wins) that hits 2-14 and session-end identically. Not new, not re-derived here beyond citation.",
+        "cost_nonzero/tokens_nonzero asserted false and model left unpinned: no model_completed event precedes the failure in any of 2-14's three live samples (the failure is a transport-level connection failure, before any response body could be parsed), so the same should hold here \u2014 record should confirm and use observability_correction if a live 2.23 attempt differs.",
+        "Confidence held at 0.82 rather than \u22650.9: although the underlying mechanism is live-confirmed three times, that confirmation is on the SIBLING cell (2-14), not this one. record should promote or correct this the moment a live 2.23 recording exists, per the observability_correction protocol."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/scenarios/2-14_turn-aborted-by-error/expected.jsonl",
+          "note": "Sibling cell, already LIVE-RECORDED (not just assessed) on this branch: three attempts, meta line documents terminal:\"failed\", reason=\"transport error...(after 4 provider attempts)\", and the third (post-fix) attempt's clean ready\u2192working\u2192error(sticky) arc via the identical dead-port base_url_override mechanism this cell's recipe reuses."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/scenarios/2-14_turn-aborted-by-error/metadata.json",
+          "note": "Full reasoning for agent=yes/daemon=full/driver=ready on the identical mechanism, plus the two RECORD-TIME observability_correction entries documenting the pid_manager eviction bug and its fix (commit e34b96387/9abf13d1)."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/pid_manager.go",
+          "note": "assignPIDLocked: the proc-* pre-session eviction bug that blocked 2-14's first two live attempts, fixed by commit e34b96387 (confirmed present on this branch via git log)."
+        },
+        {
+          "kind": "cmd",
+          "ref": "git log --oneline --all | grep e34b96387 (run live on this branch)",
+          "note": "Confirms the pid_manager fix commit is present in this branch's history, so a fresh muse recording today should not hit the pre-fix eviction bug 2-14's first two attempts hit."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/parser.go",
+          "note": "parseRunTerminal (terminalFailed sets EventType=turn_done + SessionError) \u2014 same code path cited in 2-14's assessment, not re-derived."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "session_error rule fires unconditionally once SessionError is set (muse has no hooks, HookTurnDone always false); classifyAgentDone independently converges on the same StateError."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_metrics.go",
+          "note": "applySessionError/clearSessionErrorOnRecovery: SessionError is sticky, clears only on the user's next turn \u2014 matches this scenario's 'the failing turn's own epilogue does not clear the error' assertion."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/driver-interactive.sh",
+          "note": "Lines ~108-116: BASE_URL read from $SETTINGS_PATH via jq. Line 167: DRIVE_ELICITS already lists send/slash/wait_turn/sleep/exit_clean/restart/sigkill/start_session/session. Line 277: spawn_muse_repl appends --base-url \"$BASE_URL\" to MUSE_ARGS when set. Read directly for this cell, not assumed from the sibling's citation."
+        },
+        {
+          "kind": "cmd",
+          "ref": "muse --help (run live on this machine, muse-bin 1.2.1-R2847.1)",
+          "note": "--provider <MODE>: \"Startup provider: echo or meta (default: meta)\" \u2014 no openai/anthropic/gemini provider mode exists, confirming none of the repo's existing provider-shaped mocks can be wire-compatible with muse regardless of --base-url."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/recording/mock-openai-429/main.go",
+          "note": "Serves /v1/chat/completions and /v1/models only \u2014 not muse's /responses path."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/recording/mock-gemini-429/main.go",
+          "note": "Serves Gemini's :generateContent/:streamGenerateContent path shapes \u2014 not muse's /responses path."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/recording/mock-gemini-5xx/main.go",
+          "note": "Serves Gemini's :generateContent/:streamGenerateContent path shapes \u2014 not muse's /responses path."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/recording/mock-anthropic-error/main.go",
+          "note": "Serves /v1/messages, the mock claudecode's own 2-23/2-24 siblings use (--status/--succeed-after parameterisation) \u2014 not muse's /responses path; cited as the pattern a future muse-protocol mock should mirror for 2.22's conditional-recovery need."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/2-23_provider-overloaded-terminal/expected.jsonl",
+          "note": "Precedent: claudecode's already-recorded 2-23 cell shows the same ready\u2192working\u2192error(terminal, not cleared by the failing turn's own epilogue) shape this cell asserts for muse, and coincidentally also gives up after 4 provider attempts \u2014 not treated as load-bearing evidence, just a cross-agent parallel."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "muse CLI installed and on PATH, v1.2.1 (muse --version >= 1.2.1)",
+        "muse auth complete (muse login, or META_API_KEY exported) -- same out-of-band precondition as muse/2-1_basic-turn and muse/2-14_turn-aborted-by-error. Not exercised by this recipe (the mock never checks credentials), but muse's own startup probes (GET /muse-code/models, /muse-code/config) run before the REPL is usable regardless of --base-url.",
+        "tmux available -- the interactive driver runs muse in a tmux REPL so the process survives the aborted turn and can still receive /exit",
+        "irrlichd is recording (either run-cell.sh isolated mode, or --attach against a running daemon started with --record)",
+        "go on PATH -- run-cell.sh's start_recipe_mock builds .mock.package with `go build` before launching it",
+        "port 18802 free on 127.0.0.1 at record time -- run-cell.sh refuses to start if something is already listening there (stale mock from an earlier run); distinct from 2-14's dead port 18799, this cell's OWN prior dead-port baseline 18800 (retired), 2-22's mock port 18801, and 2-9's mock port 18803, so no two sibling cells can ever collide"
+      ],
+      "setup": [
+        "RECORD-TIME CHANGE from the assessed baseline: this cell was assessed against a dead port (18800), which the batch brief (#1960 record pass) directed record to replace with tools/onboarding-factory/recording/mock-muse-overload's POST /responses stub for a materially stronger signal -- a real HTTP 429 response muse's client can classify, rather than a bare connection refusal. --succeed-after 0 (never succeed) matches this scenario's terminal-failure shape exactly, per the mock's own file-header contract.",
+        "Same launch shape as muse/2-14_turn-aborted-by-error: a fresh empty cwd under <staging>/cwd/, `muse --trust-workspace --base-url http://127.0.0.1:18802` in a tmux session, 1s settle sleep before the first send.",
+        "record does NOT need to start the mock by hand: the recipe's .mock block below (package/port/args/request_log_pattern) is read by run-cell.sh's start_recipe_mock, which builds tools/onboarding-factory/recording/mock-muse-overload, launches it on 127.0.0.1:18802 with --status 429 --succeed-after 0, waits for it to listen, and tears it down in the EXIT trap.",
+        "The prompt content does not matter for cue-avoidance: the model call fails before any assistant text is ever generated, so there is no waiting-cue false-match risk. Keep it simple, e.g. \"Say hello.\"",
+        "wait_turn's turn_count() matches any event.kind==\"terminal\" record (turn-count.sh), so it correctly unblocks as soon as the failed run's own terminal event lands.",
+        "TIMING FINDING from a live drive attempt (timeout at the original 120s budget): against the mock's real HTTP 429 responses, muse's retry ladder backs off exponentially and NOT near-instantly like the dead-port baseline -- observed live, this machine, this recipe: retry_delay_ms 1000, 2000, 4000, 8000, 16000, 32000, then capping at 60000 for the remaining retries, across max_attempts=10. Summed, the 9 delays before the 10th (final, terminal) attempt total ~243s. timeout_seconds raised from 120 to 330 to give this the room it structurally needs; a dead port's ~2s terminal failure (2-14's own live numbers) does NOT carry over to a real-status-code mock, and this is the reason why."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Say hello."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "exit_clean"
+        }
+      ],
+      "verify": [
+        "events.jsonl mints the real session in ready shortly after muse's TUI finishing launching",
+        "events.jsonl contains a pid_discovered event binding the muse-bin PID to the real session, and no transcript_removed against the real session_id (post-e34b96387 fix)",
+        "events.jsonl contains a state_transition to working when the user prompt lands",
+        "events.jsonl contains a state_transition to error after the model call fails, via the session_error classifier rule",
+        "the session does NOT stick in working, and does NOT re-enter ready or waiting after the failure -- error is sticky for the rest of the recording",
+        "observation vector: tokens_nonzero=false, cost_nonzero=false (no model_completed event before the failure), model unpinned",
+        "the mock's own request log (mock.log) contains at least 1 line matching the recipe's request_log_pattern, proving muse actually reached it rather than the recording having silently fallen through to the real Meta endpoint",
+        "KNOWN caveat: process_exited for the real session will likely still misattribute to its transient proc-<PID> presession (bug #1962, unrelated to this scenario's own assertion) -- scope known_failing to the teardown phase only if reproduced, matching 2-14's precedent"
+      ],
+      "settings": {
+        "base_url": "http://127.0.0.1:18802"
+      },
+      "timeout_seconds": 330,
+      "mock": {
+        "package": "./tools/onboarding-factory/recording/mock-muse-overload",
+        "port": 18802,
+        "args": [
+          "--status",
+          "429",
+          "--succeed-after",
+          "0"
+        ],
+        "request_log_pattern": "POST /responses #[0-9]+"
+      }
+    }
+  }
+}

@@ -1,0 +1,135 @@
+{
+  "scenario_id": "background-subagent",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.2.1",
+    "daemon_version": "0.6.3+3a843b2",
+    "confidence": 0.82,
+    "notes": "agent_supports: yes -- subagent_spawn is admission-only/async by construction (no blocking param exists at all; consuming a result is the SEPARATE subagent_read_result tool call), so fire-and-forget dispatch is muse's default subagent shape, not an opt-in flag. daemon=full: the hold/count mechanism (session_detector_subagent.go) is adapter-agnostic and already regression-tested against a synthetic ParentSessionID-linked child with no claudecode dependency; muse's own adapter populates ParentSessionID identically for every nested subagent/<id>/session.jsonl child regardless of dispatch mode, and a live corpus session shows a child's own run.terminal independently observable ~15ms before the parent's subagent.control.result_ready. driver=ready: send/wait_turn/sleep/exit_clean all present in driver-interactive.sh."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "background-subagent",
+      "agent": "muse",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.82,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n-> route: **record**\n\n## The spec (unified rule, same as claudecode's sibling cell)\n\nPer `of scenario show --name background-subagent`, the scenario's own `description` field states the current, corrected shape: the parent dispatches a fire-and-forget child, finishes its own reply, but the SESSION stays `working` -- it does not go `ready` when the parent's reply ends -- because the generic parent-hold mechanism holds it on `hasActiveChildren`; `SubagentCount(parent)` INCLUDES the live child; the parent transitions `working->ready` only after the last background child drains. This is deliberately the SAME daemon mechanism as `foreground-subagent` -- the only difference is TIMING (parent `end_turn` lands before vs. after child drain), not a distinguishing structural flag.\n\n**Scenario-doc discrepancy (flagged, not silently resolved):** the scenario's separate `process`/`acceptance_criteria` bullet list (also returned by `of scenario show`) contradicts the `description` field -- it says 'Parent: working -> ready at turn end (not held)' and 'SubagentCount(parent) EXCLUDES the background child', the opposite of the held-working unified rule. I judged this cell against the `description`'s unified rule and the actual application code (below), which agree with each other and with claudecode's already-`observed` cell for this same scenario_id -- not against the stale acceptance_criteria bullets, which read as pre-correction text nobody updated after the unified rule landed. Source: `of scenario show --name background-subagent` output, captured verbatim in caveats.\n\n## agent_supports: yes\n\nMuse's subagent dispatch primitive is asynchronous by construction, not by an opt-in flag. The live corpus (`~/.local/share/muse/sessions/2026/09/13/01a09c47-.../session.jsonl`) shows the actual tool call: `assistant_tool_calls_committed` -> `name:\"subagent_spawn\", args:{\"command_id\":...,\"objective\":...,\"role\":\"general-purpose\",\"task_name\":...}` -- there is no wait/blocking/background parameter on this call at all. Consuming a finished child's output is a SEPARATE, later, explicit tool call: `subagent_read_result` (`args:{\"subagent_id\":...}`), confirmed in the same corpus. The MSP wire schema (`muse schema generate-json-schema`, dumped to `scratchpad/muse-schema/msp.schema.json`, 204 `$defs`) independently confirms the same shape at the protocol level: `SubagentInputParams` (backing `subagent/sendMessage` and `subagent/followupTask`) is described as \"admission-only ack; ... settles on the child session's view stream\", and `SubagentTargetParams` (backing `subagent/readResult`) is described as a separate \"consume a ready child result (state-changing)\" action. So a muse subagent dispatch is fire-and-forget UNLESS the calling agent chooses to loop-poll `subagent_read_result` before ending its own turn -- background is the structural default, foreground is the layered behavior, which if anything is a STRONGER case for `agent_supports:yes` than an agent that needs an explicit `run_in_background:true` flag.\n\nThe full subagent.control.* event family is durable and rich, confirmed directly in the live corpus (13 real subagents in one session): `spawn_accepted`, `resume_context_recorded`, `attempt_admitted`, `child_session_bound`, `start_attested`, `status_updated` (control_status in accepted/starting/running/resultReady/closing/closed/recoveryPending/manualReconciliation, per the wire schema's `SubagentControlStatus` enum), `wait_parked` (fires only when the parent explicitly blocks on `wait_for:\"result_ready\"` -- the FOREGROUND consume-loop's own signature), `runtime_observed`, `result_ready`, and a real, enforced concurrency cap (`spawn_rejected`, `reason:\"root_capacity_exhausted\"` at occupied=8/limit=8). None of this needs trusting docs -- it is measured directly against 175 real session.jsonl files on this machine.\n\n## daemon_capability: full\n\nThe muse adapter's PARSER never reads subagent.control.* at all (`core/adapters/inbound/agents/muse/parser.go`'s default `route()` arm explicitly lists `subagent.control.*` among payload types it Skips) -- daemon observability for this scenario does NOT depend on decoding that event family. Instead it rests entirely on the SAME generic, adapter-agnostic mechanism already proven `full` for claudecode's already-`observed` `background-subagent` cell:\n\n1. **Discovery + linkage is file-based and dispatch-mode-agnostic.** `core/adapters/inbound/agents/muse/agent.go`'s `Source()` is `agent.FilesUnderRoot{..., ParentSessionIDFromPath: parentSessionIDFromPath}`. Every child -- whether the calling turn ends up 'foreground' (loops `subagent_read_result` before its own turn ends) or 'background' (does not) -- lands at the identical `<parent>/subagent/<child-id>/session.jsonl` path (format-spec Sec.9, `storage_layout:\"nested_session_v1\"`) and gets the identical `ParentSessionID` derivation. There is no separate code path for background dispatch to fall into or out of.\n2. **Parent held working is generic application code, not claudecode-specific.** `core/application/services/session_detector_subagent.go`'s `hasActiveChildren` walks `d.repo.ListAll()` for any `ParentSessionID`-matching session with `HasWorkInFlight()==true`; `reevaluateParent`/`holdParentForActiveChildren` refuse to let the parent's own turn-done classify to `ready` while that's true. Only claudecode's `Metrics.PendingBackgroundAgentCount` fast path is adapter-specific -- the fallback (the file-based `ParentSessionID` walk) is the one muse relies on, and it is unconditional.\n3. **`SubagentCount(parent)` includes the live child.** `core/domain/session/grouped.go`'s `ComputeSubagentSummary` sums every `ParentSessionID`-linked child by state (`Total = inProcess + len(fileChildren)`), with no fg/bg distinction anywhere in the function.\n4. **A genuinely adapter-agnostic regression test already exercises this exact shape.** `core/application/services/session_detector_subagent_test.go`'s `TestSessionDetector_BackgroundSubagentsNotFastForwarded` constructs a raw `session.SessionState{ParentSessionID:\"parent-bg\", ...}` by hand (no claudecode adapter involved) with a fresh-mtime child and asserts BOTH parent and child stay `working`. This is a direct proof the mechanism generalizes to any adapter that populates `ParentSessionID`, muse included.\n5. **Live corpus proof the child's own completion is independently observable.** In `01a09c47-506a-7763-b82a-9ab89a9e195a/subagent/01a09c4b-2a8d-70f1-a8f6-7868d4053349/session.jsonl` I read the child's OWN `run.started`/`run.terminal` boundary directly (recorded_at 1789328566989345 -> 1789330610421112) -- an independent turn-boundary arc on the child's own transcript, not inferred from the parent. It precedes the parent's own `subagent.control.runtime_observed`/`result_ready` records by only ~15ms, i.e. the parent's control-plane bookkeeping is itself downstream of the child's own transcript closing, not the other way around -- exactly the shape `HasWorkInFlight()` needs to work correctly and independently of the parent's own turn.\n\n**Is a background child distinguishable from a foreground one on disk?** Not via a structural flag on the spawn call (confirmed absent above) -- but yes, via the same TIMING signature claudecode's sibling cell already established as the unified rule's distinguishing observable: a foreground consume produces a `subagent.control.wait_parked` (`wait_for:\"result_ready\"`) record on the PARENT's own transcript, issued from within the SAME run/turn that is still open, followed by a `subagent_read_result` tool call and its result -- all of that happens BEFORE the parent's own `run.terminal`. A background dispatch never emits `wait_parked` for that subagent_id at all (or only much later, from a subsequent unrelated turn), and the parent's `run.terminal` lands while the child's last known `subagent.control.status_updated.control_status` is still `starting`/`running`, not `resultReady`/`closed`. This is directly checkable against the raw transcript (not the daemon's events.jsonl, which never reads this family) as the recipe's faithfulness gate -- see the recipe's `verify` list.\n\n## driver_capability: ready\n\n`replaydata/agents/muse/driver-interactive.sh` declares `DRIVE_ELICITS=\"send slash wait_turn sleep exit_clean restart sigkill start_session session\"`. The recipe needs only `send` (one prompt instructing muse to spawn a background subagent and NOT wait for it), `wait_turn` (captures the parent's own reply/turn_done, which completes with the fire-and-forget dispatch acknowledged), `sleep` (holds across the child's own runtime so the recording captures the held-working span and the eventual drain), and `exit_clean`. All four are implemented in the current driver (`step_send`/`step_wait_turn`/`sleep` builtin/`step_exit_clean`), confirmed by reading the case-dispatch block, not just the DRIVE_ELICITS string. No new step type is needed -> `ready`, not `gap:*`.\n\n## Route\n\nagent=yes + daemon=full + driver=ready -> **record**.",
+      "caveats": [
+        "VACUOUS-PASS RISK (the load-bearing one): this cell would pass while proving nothing background-specific if the recipe's prompt is ambiguous enough that muse's own model loops subagent_read_result before ending its turn (turning the recording into a foreground clone), OR if the deliberate subagent never actually gets spawned but an INCIDENTAL child (a memory-reminder micro-agent -- format-spec Sec.9's goal-reminder/verify-reminder mechanism, which is ALSO ParentSessionID-linked via the same nested subagent/<id>/ path) happens to hold the parent briefly anyway, producing a superficially-correct held-working span for the wrong reason. record's verify step MUST inspect the raw muse transcript directly (not just events.jsonl, which the parser never populates for subagent.control.*) to confirm: (a) a subagent_spawn tool call for the deliberate task exists, (b) no wait_parked/subagent_read_result for that subagent_id precedes the parent's own run.terminal, and (c) the parent's run.terminal timestamp precedes the child's own run.terminal timestamp -- the actual background-vs-foreground discriminator.",
+        "Exact timing (min_delay_ms/duration_at_least_ms in the phase DSL, and the recipe's sleep length) is an ESTIMATE, not a measured value: no live sample of a short, deliberately-bounded muse subagent task exists yet in the corpus (observed real subagent durations range from a few seconds for reminder agents up to 34 minutes for substantial research tasks; the only directly-timed no-tool single turn took ~2s working->ready). record should tighten or loosen these bounds against the actual observed spawn-to-drain timing rather than trust them as given.",
+        "SCENARIO-DOC DISCREPANCY: `of scenario show --name background-subagent` returns a `description` field stating the held-working unified rule (parent stays working, SubagentCount includes the live child, ready only after drain) but a separate `process`/`acceptance_criteria` block that says the opposite ('Parent: working -> ready at turn end (not held)', 'SubagentCount(parent) excludes the background child'). This assessment follows the `description` field and the actual application code (session_detector_subagent.go, grouped.go), which agree with each other and with claudecode's own already-observed cell for this scenario_id. The acceptance_criteria bullets read as stale pre-unification text; flagging rather than silently editing since scenario authoring is outside this verb's scope.",
+        "agent_supports rests on ONE live corpus session's tool-call shape (subagent_spawn/subagent_read_result args) plus the offline-dumped MSP wire schema for the same muse 1.2.1 binary on this machine -- both agree, but neither is a vendor changelog; an older/newer muse build could in principle change the tool surface.",
+        "No dollar cost is persisted anywhere in muse's transcript (established corpus-wide, format-spec Sec.6) and no muse model has a pricing entry yet in core/pkg/capacity, so cost_nonzero is asserted false, matching every other committed muse cell -- not a bug, a caveat.",
+        "daemon_capability:full for the muse-specific half (child transcript closing independently, ParentSessionID linkage) is grounded in reading one live corpus session directly (not a synthetic test); the generic hold mechanism itself is grounded in a real, already-passing regression test. A live recording of THIS recipe is what promotes the combination from code-plus-corpus-confirmed to fixture-confirmed."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "~/.local/share/muse/sessions/2026/09/13/01a09c47-506a-7763-b82a-9ab89a9e195a/session.jsonl",
+          "note": "Live corpus, read directly on this machine: subagent_spawn tool call args ({command_id,objective,role,task_name}, no wait/blocking field); separate subagent_read_result tool call (args:{subagent_id}) issued later; full subagent.control.* event family (spawn_accepted, resume_context_recorded, attempt_admitted, child_session_bound, start_attested, status_updated, wait_parked, runtime_observed, result_ready, spawn_rejected with reason root_capacity_exhausted at occupied=8/limit=8, owner_command_recorded, owner_state_changed) -- 13 real subagents in one session."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.local/share/muse/sessions/2026/09/13/01a09c47-.../subagent/01a09c4b-2a8d-70f1-a8f6-7868d4053349/session.jsonl",
+          "note": "Read directly: the child's OWN independent run.started (1789328566989345) / run.terminal (1789330610421112) boundary, ~15ms before the parent's subagent.control.runtime_observed/result_ready records for the same subagent_id -- proves the child's completion is observable off its own transcript, not inferred from the parent."
+        },
+        {
+          "kind": "file",
+          "ref": "scratchpad/muse-schema/msp.schema.json",
+          "note": "Offline `muse schema generate-json-schema` dump for the installed muse 1.2.1 binary (204 $defs). SubagentInputParams (subagent/sendMessage, subagent/followupTask): 'admission-only ack; ... settles on the child session's view stream'. SubagentTargetParams (subagent/readResult): 'Consume a ready child result (state-changing)'. SubagentControlStatus enum: accepted/starting/running/resultReady/closing/closed/recoveryPending/manualReconciliation."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/parser.go",
+          "note": "route()'s default arm explicitly lists subagent.control.* among payload types the parser Skips entirely -- daemon observability for this scenario does not depend on decoding this family."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/agent.go",
+          "note": "Source() = agent.FilesUnderRoot{..., ParentSessionIDFromPath: parentSessionIDFromPath} -- every nested subagent/<id>/session.jsonl child gets identical parent linkage regardless of dispatch mode; doc comment confirms this covers 'nested subagent session.jsonl files under each session's subagent/ directory'."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector_subagent.go",
+          "note": "hasActiveChildren (walks ListAll() for ParentSessionID-matching + HasWorkInFlight()==true, generic/adapter-agnostic fallback); reevaluateParent/holdParentForActiveChildren hold the parent working while true. Only the PendingBackgroundAgentCount fast path is claudecode-specific; the file-based walk muse relies on is unconditional."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/grouped.go",
+          "note": "ComputeSubagentSummary: Total = inProcess + len(fileChildren), summed by state with no fg/bg distinction -- SubagentCount(parent) includes a live background child."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector_subagent_test.go",
+          "note": "TestSessionDetector_BackgroundSubagentsNotFastForwarded constructs a raw session.SessionState{ParentSessionID:...} by hand, no claudecode adapter involved, and asserts both parent and a fresh-mtime child stay working -- proves the mechanism generalizes to any ParentSessionID-populating adapter."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/driver-interactive.sh",
+          "note": "DRIVE_ELICITS=\"send slash wait_turn sleep exit_clean restart sigkill start_session session\"; send/wait_turn/sleep/exit_clean all implemented in the case-dispatch block (step_send, step_wait_turn, builtin sleep, step_exit_clean)."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/3-2_background-subagent/metadata.json",
+          "note": "Sibling cell (already observed for claudecode): established the unified-rule shape, the held-working/count-inclusion mechanism as adapter-agnostic application code, and the recipe/verify template this assessment adapts for muse's own subagent_spawn/subagent_read_result tool surface."
+        },
+        {
+          "kind": "cmd",
+          "ref": "of scenario show --name background-subagent",
+          "note": "Captured the scenario's description field (unified rule, matches the code) and the separate process/acceptance_criteria bullets (stale, pre-unification, contradicts description) -- see the scenario-doc-discrepancy caveat."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "muse CLI installed and on PATH, v1.2.1 (muse --version >= 1.2.1 per replaydata/agents/muse/metadata.json)",
+        "muse auth complete: 'muse login' (Meta account, browser code approval) or META_API_KEY exported -- auth is set up out-of-band, the rig's precheck delegates it to the user",
+        "tmux available -- the interactive driver runs muse in a tmux REPL so it stays alive across the turn and the background child's own lifetime",
+        "irrlichd is recording -- either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+        "the muse session's default role grant includes subagent_spawn/subagent_read_result (confirmed present in the live corpus under the default 'general-purpose' role; re-probe at record time per the assess skill's live-capability rule rather than trusting this cached observation)"
+      ],
+      "setup": [
+        "The interactive driver (driver-interactive.sh) creates a fresh empty cwd under <staging>/cwd/ and launches `muse --trust-workspace` in a tmux session there, then sleeps 1s before the first send (muse-driver-audit.md defects #1 and the startup-race follow-up)",
+        "--trust-workspace is REQUIRED: every staging cwd is brand-new, so muse's 'Do you trust this workspace?' modal fires on every run and silently eats the first prompt without it",
+        "muse mints its own session UUID on launch; the driver resolves the newest session.jsonl under ~/.local/share/muse/sessions (excluding subagent/ copies) newer than a pre-launch marker once the turn completes",
+        "The single send is a tool-calling turn (subagent_spawn + a short text acknowledgment), so EXPECTED_TURNS is 1 and a single wait_turn captures the parent's OWN reply completing -- the background child's own turn lives on a DIFFERENT transcript file and is never counted by the driver's turn_count() against the parent",
+        "The subagent's objective is deliberately small and bounded (list + re-verify .go files under one small package directory) so a single generous sleep window plausibly covers its full lifetime without an unbounded live LLM task; record should shorten/lengthen the sleep once the actual spawn-to-drain duration is measured"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Use the subagent_spawn tool to launch exactly ONE background subagent with role general-purpose. Give it this objective: 'List every .go file directly under core/domain/session/ (not subdirectories), then re-list that same directory a second time to double-check your count, then reply with exactly one sentence stating the total number of .go files you found.' CRITICAL INSTRUCTION: this must be a FIRE-AND-FORGET dispatch. After calling subagent_spawn, do NOT call subagent_read_result, do NOT wait for the subagent to finish, and do NOT mention its result. Immediately reply with exactly the text: 'Background agent launched.' and end your turn right after that reply."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 60
+        },
+        {
+          "type": "exit_clean"
+        }
+      ],
+      "verify": [
+        "FAITHFULNESS GATE (background, not foreground): in the raw muse transcript, no subagent.control.wait_parked or subagent_read_result tool call for the spawned subagent_id appears before the parent's own run.terminal -- and the parent's own run.terminal timestamp precedes the spawned child's own run.terminal timestamp (read off the child's nested subagent/<id>/session.jsonl). A recording that fails either check produced a foreground clone, not a background fixture, and must be re-driven with a more explicit prompt.",
+        "events.jsonl mints the parent session in ready shortly after the muse TUI finishes launching (single-birth; session id = the session directory basename)",
+        "events.jsonl contains a pid_discovered event binding the muse-bin PID to the parent session",
+        "events.jsonl contains a state_transition to working on the parent when the send lands (event.kind:\"started\" -> user_message)",
+        "the parent session's state_transition history shows NO transition to ready immediately after the parent's own reply ('Background agent launched.') completes -- the session is HELD in working past that point, evidenced by the working span's duration clearing the min_delay_ms/duration_at_least_ms floor in expected.jsonl's held_working phase",
+        "exactly one state_transition to ready fires on the parent session, and it happens AFTER the spawned child's own session reaches its terminal state (readable independently off the child's nested session.jsonl) -- the parent drains only once the background child is done, not before",
+        "the child's own nested session gets a real session_id, its own working->ready arc (independent of the parent's state), and a ParentSessionID pointing at the parent -- confirming file-based discovery + linkage works for a genuinely background-dispatched child, not just a foreground one",
+        "final session state for the parent is ready before exit_clean tears the REPL down",
+        "observation vector: tokens_nonzero=true (the parent's own model_completed usage), cost_nonzero=false (no muse model has a pricing entry), model pinned muse-spark-1.3-contributor per corpus-wide confirmation across every already-recorded muse cell on this machine"
+      ],
+      "settings": {},
+      "timeout_seconds": 240
+    }
+  }
+}

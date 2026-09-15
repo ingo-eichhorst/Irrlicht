@@ -1,0 +1,135 @@
+{
+  "scenario_id": "synchronous-slash-command",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "1.2.1 (1.2.1-R2847.1)",
+    "confidence": 0.85,
+    "notes": "agent_supports: yes (/usage and /status are real, synchronous, no-model local commands)\ndaemon_capability: full (command.invoked is deliberately Skip=true bookkeeping, never a turn boundary)\ndriver_capability: ready (slash/send/wait_turn are all implemented; /model's arrow-key picker is avoided entirely)"
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "synchronous-slash-command",
+      "agent": "muse",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Which commands are synchronous and leave a trace\n\nmuse's registered slash-command roster (dumped from the shipped binary `~/.local/bin/muse-bin-1.2.1-R2847.1` via `strings`) includes `/usage` (aliased `/cost`, `/context` — \"Show session usage\") and `/status` (\"Show current session status\"), both plainly local-display commands with no model-invocation semantics in their descriptions — mirroring the claudecode/antigravity sibling cells' `/cost` and `/help` picks. Both are LIVE-CONFIRMED synchronous and DO leave a durable trace, just not the one that reaches the daemon's events.jsonl (see below):\n\n- `/usage`: session `~/.local/share/muse/sessions/2026/09/13/01a09c49-8dbd-7150-b70d-15f527a633d3/session.jsonl` (25 lines) contains NINE consecutive `command.invoked{command:\"/usage\"}` records (lines 16-24) as the session's last activity — no other `payload_type` follows the first invocation. Confirms `/usage` is purely local: no model call, no other side-effecting record.\n- `/status`: session `~/.local/share/muse/sessions/2026/09/14/01a09ed0-752c-75e1-b223-c5bd24e17876/session.jsonl` (18 lines, recorded live today) invokes `/upgrade` then `/status` back to back (lines 15 and 17) with a `session.subscription_entrypoint.impression` between them (a durable side-effect specific to `/upgrade`, not `/status`) — `/status`'s own invocation is the LAST line of the file: nothing follows it. Confirms `/status` too is purely local with no model call.\n\n`/model` is DELIBERATELY EXCLUDED from this recipe: it opens an arrow-key picker and silently ignores an inline argument (live-confirmed by the 5.2 model-identification assessment, cited in `replaydata/agents/muse/driver-interactive.sh`'s MODEL-pin comment), and the interactive driver's `keys` step type is `not_implemented` (`driver-interactive.sh` line ~671: `keys) not_implemented keys …`). Picking `/usage`+`/status` sidesteps that gap entirely rather than freezing on it.\n\n## The daemon pillar: full, on a NEGATIVE claim\n\nThe scenario's four acceptance bullets (state stays ready throughout; no -> working transition for the slash command; final state ready; tool calls <= 0) are all claims about the ABSENCE of a transition, not about surfacing the slash command's own content. `core/adapters/inbound/agents/muse/parser.go`'s `route()` switch (lines 227-232) handles `payloadTypeCommandInvoked` by setting `ev.Skip = true` with the comment \"A slash command (/model, /usage, /exit -- format-spec S10) ... Bookkeeping, not a turn boundary.\" `parser_test.go`'s `TestParseLine_CommandInvoked_Skipped` (lines 465-471) pins this as a regression test. Per the adapter contract, turn boundaries ONLY fire on `(\"run\",\"started\")`/`(\"run\",\"terminal\")` events; `command.invoked` is neither, so no `state_transition` is ever derived from it -- the session simply stays in whatever state it was already in (ready).\n\nThis is exactly the shape claudecode's sibling cell established for `/cost`+`/help` (its parser's `isLocalCommandContent` filter) and antigravity's sibling cell established for `/help` (recorded in a sibling `history.jsonl` the Source never tails) -- muse's own version of the same architectural fact, evidenced by ITS OWN parser code and ITS OWN live corpus rather than assumed from the template.\n\n## Observation-vs-emission caveat (the vacuous-pass condition)\n\n`command.invoked` is Skip=true, so it NEVER reaches `events.jsonl` -- the daemon's own event stream carries no positive trace that a slash command was invoked at all. The scenario's phase assertions (session stays `ready`, no `working` transition) would ALSO pass if the recipe's `slash` driver step silently failed to send anything to the muse REPL -- \"nothing happened\" and \"a no-op slash command happened\" are indistinguishable from events.jsonl alone. This is the Vacuous-pass rule's textbook case. Mitigation: `record`'s verify step MUST additionally grep the recording's raw transcript (muse's `session.jsonl`, archived as this cell's `transcript.jsonl`) for two `command.invoked` records naming `/usage` and `/status` -- confirming the driver's `slash` steps actually reached the REPL -- since expected.jsonl's phase DSL has no vocabulary to assert content inside a Skip=true record. This is named explicitly as a caveat and as a recipe precondition below, not left implicit.\n\n## Why no warm-up turn is needed (unlike claudecode/antigravity)\n\nclaudecode and antigravity's sibling cells both open with a real \"warm\" turn before the slash window, because their transcript file only materializes after the first genuine LLM turn. muse does not share that constraint: `route_facts`/`metadata`/the permission-profile `retained_frame` are all written to `session.jsonl` at session OPEN, before any prompt (muse-format-spec.md S2; independently confirmed live in both cited sessions above, neither of which contains a single `run`/turn event yet both have a fully-formed `session.jsonl` from `session.opened.observed` onward). The already-recorded sibling cell `1-1_session-start` and `2-1_basic-turn` (both `observed`/recorded in this same replaydata tree) assert `session_birth: ready, relative_to: start` with NO warm-up phase, and both pass live -- so this recipe issues the two slash commands directly after session birth, matching the scenario's own process description (\"1. Agent is in ready. 2. User invokes a no-LLM slash command...\") instead of claudecode/antigravity's transcript-materialization workaround.\n\n## Driver pillar\n\n`replaydata/agents/muse/driver-interactive.sh`'s `DRIVE_ELICITS=\"send slash wait_turn sleep exit_clean restart sigkill start_session session\"` (line 167) lists `slash` and `send` as genuinely ported step types (not stubbed) -- `case ... send|slash) step_send ...` (line 667) treats a slash command exactly like ordinary text+Enter, which is all `/usage` and `/status` need (no picker, no follow-up keystrokes). No driver gap.",
+      "caveats": [
+        "command.invoked never reaches events.jsonl (Skip=true, per parser.go) -- the phase system can only assert the ABSENCE of a state transition, not the PRESENCE of the slash invocation itself. A silently-failed driver `slash` step would pass the same phases. record's verify step must additionally grep the recording's raw transcript.jsonl for two command.invoked records (/usage, /status) as a positive check the phase DSL cannot express -- named as a recipe precondition below.",
+        "/model is excluded on purpose: it opens an arrow-key picker (silently ignores an inline argument) and the interactive driver's `keys` step is not_implemented -- using it here would manufacture a driver-gap route for a scenario that doesn't need one.",
+        "/exit is excluded on purpose: format-spec S10 confirms it's real and synchronous, but it tears the session down -- incompatible with 'a tiny normal prompt to prove the session is still alive' afterward.",
+        "Neither cited live session actually reached a real model turn (both are pure slash-command probes), so the 'daemon stays full while a REAL turn later returns ready->working->ready' half of this cell's claim rests on the already-recorded 2-1_basic-turn sibling cell's turn mechanics, not on these two sessions directly -- the two are cited only for the slash-command-is-inert half."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/parser.go",
+          "note": "route() lines 227-232: payloadTypeCommandInvoked -> ev.Skip = true, \"Bookkeeping, not a turn boundary.\""
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/parser_test.go",
+          "note": "TestParseLine_CommandInvoked_Skipped (lines 465-471) pins command.invoked -> Skip=true as a regression test."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.local/share/muse/sessions/2026/09/13/01a09c49-8dbd-7150-b70d-15f527a633d3/session.jsonl",
+          "note": "Live corpus, 25 lines: nine consecutive command.invoked{command:/usage} records (lines 16-24), the session's last activity -- zero other payload_type follows the first invocation."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.local/share/muse/sessions/2026/09/14/01a09ed0-752c-75e1-b223-c5bd24e17876/session.jsonl",
+          "note": "Live corpus recorded today, 18 lines: command.invoked{/upgrade} then command.invoked{/status} (lines 15, 17); /status is the file's last line -- nothing follows it."
+        },
+        {
+          "kind": "file",
+          "ref": "~/.local/bin/muse-bin-1.2.1-R2847.1",
+          "note": "strings dump of the shipped binary: full slash-command roster with descriptions, incl. /usage (aliases /cost, /context) \"Show session usage\" and /status \"Show current session status\" -- both purely local-display, no model semantics."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/driver-interactive.sh",
+          "note": "Line 167 DRIVE_ELICITS lists slash+send as ported (not stubbed); line ~671 keys) not_implemented; the /model MODEL-pin comment documents the picker + silently-ignored-inline-argument finding from the 5.2 assessment."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/scenarios/2-1_basic-turn/expected.jsonl",
+          "note": "Sibling committed+recorded (observed) cell: session_birth asserted ready at relative_to:start with no warm-up phase -- establishes muse materializes session.jsonl at session-open, unlike claudecode/antigravity."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/2-5_synchronous-slash-command/expected.jsonl",
+          "note": "Sibling cell for the same scenario -- slash_window phase shape (duration_at_least_ms + invariants forbidding working/waiting) templated from here."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/antigravity/scenarios/2-5_synchronous-slash-command/expected.jsonl",
+          "note": "Second sibling cell for the same scenario -- confirms the slash_window + trailing real-turn pattern generalizes across adapters whose parser discards the slash command's own trace."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "muse CLI installed and on PATH, v1.2.1 (muse --version >= 1.2.1 per replaydata/agents/muse/metadata.json)",
+        "muse auth complete: 'muse login' (Meta account, browser code approval) or META_API_KEY exported -- auth is set up out-of-band, the rig's precheck delegates it to the user",
+        "tmux available -- the interactive driver runs muse in a tmux REPL",
+        "irrlichd is recording -- either run-cell.sh in isolated mode, or --attach against a running daemon started with --record",
+        "record's verify step must grep the recording's transcript.jsonl (muse's raw session.jsonl) for two command.invoked records naming /usage and /status -- the daemon's own events.jsonl carries no trace of either (Skip=true), so this is the only positive confirmation that the slash steps actually reached the REPL rather than silently no-opping"
+      ],
+      "setup": [
+        "The interactive driver creates a fresh empty cwd under <staging>/cwd/ and launches `muse --trust-workspace` in a tmux session there, then sleeps 1s for muse's own input handler to wire up before the first send",
+        "--trust-workspace is REQUIRED: every staging cwd is brand-new, so muse's 'Do you trust this workspace?' modal fires on every run and would eat the first slash command without it",
+        "Avoid /model (opens an arrow-key picker; keys step not_implemented) and /exit (tears the session down, incompatible with the trailing 'still alive' prompt) -- use /usage and /status only",
+        "muse mints its own session UUID on launch; the driver resolves the newest session.jsonl under ~/.local/share/muse/sessions (excluding subagent/ copies) newer than a pre-launch marker"
+      ],
+      "script": [
+        {
+          "type": "slash",
+          "text": "/usage"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "slash",
+          "text": "/status"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "exit_clean"
+        }
+      ],
+      "verify": [
+        "events.jsonl mints the session in ready shortly after muse's TUI finishes launching (single-birth; session id from the session directory basename == stream.id)",
+        "events.jsonl contains NO state_transition to working or waiting for at least 5s after session birth -- the /usage + /status window",
+        "the recording's raw transcript.jsonl (muse's session.jsonl) contains two command.invoked records, command=/usage and command=/status, confirming the slash steps actually reached the REPL (this is the positive check events.jsonl cannot provide -- see the assessment's caveats)",
+        "events.jsonl contains a state_transition to working when the final 'Reply with exactly the word: ok' prompt lands, then back to ready when it completes -- proving the session is still alive after the slash window",
+        "no function_call/tool-call event occurs anywhere in the recording (tool_calls_max: 0 per the scenario's acceptance criteria)",
+        "final session state is ready before exit_clean tears the REPL down",
+        "observation vector: tokens_nonzero=true (the final real turn), cost_nonzero=false (model unpriced in the litellm catalog), model unpinned"
+      ],
+      "settings": {},
+      "timeout_seconds": 120
+    }
+  }
+}

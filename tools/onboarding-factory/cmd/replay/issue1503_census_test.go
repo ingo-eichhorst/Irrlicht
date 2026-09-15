@@ -182,12 +182,75 @@ type catalogCensus struct {
 // two. This is the frozen-sidecar cost of REMOVING a behaviour, the mirror of
 // the #1798/#1800 entries above, and it resolves the same way — a re-record on
 // a post-#1860 daemon. The cell is marked known_failing in the meantime.
+//
+// #1960 (muse onboarding) moved four figures. Recordings, Divergent, and
+// DivergentByCountsAndKinds each rose by eight: four new muse cells joined the
+// catalog (token-accounting, model-context-display, user-blocking-question,
+// long-idle-live-session), plus four muse cells from the prior onboarding batch
+// on this same branch whose census bookkeeping had not yet been done — all
+// eight recordings replay one MORE transition than the daemon's own capture
+// recorded for their primary session. Fabricated rose by one: only
+// user-blocking-question's recording has the daemon capturing ZERO transitions
+// for its primary session (replay reconstructs `ready→working` AND
+// `working→waiting`, both missing live) rather than the merely-divergent
+// one-short pattern the other seven show. All eight trace to the SAME root
+// cause, confirmed by reading the raw daemon capture (not just curated
+// events.jsonl) on every one of the four new recordings: a `transcript_removed`
+// fires for the muse primary session's own transcript path roughly 0.6-1.1s
+// after its birth, on every single recording, followed by the daemon
+// re-discovering the session as though new (no prev_state on the next
+// transition it logs). In seven of the eight this only drops a prev_state
+// field — the observable state sequence a user would see is still correct. In
+// user-blocking-question's fast, tool-free recipe the whole exchange completed
+// inside that churn window, so the daemon's own capture never saw `working` at
+// all. Filed for investigation (issue payload prepared, not yet numbered — see
+// this cell's metadata.json caveats and
+// tools/onboarding-factory/cmd/replay/issue1342_debounce_test.go's
+// knownFabricated entry for the full evidence trail); user-blocking-question is
+// marked known_failing in the meantime and its golden is in knownFabricated.
+//
+// #1960 (root-cause fix + re-record) moves Recordings by six, Fabricated by
+// one, Divergent and DivergentByCountsAndKinds by four each. Six recordings
+// newly joined the catalog since the paragraph above's baseline — measured by
+// walking forEachSidecarRecording filtered to the muse cells whose adding
+// commit (`git log --diff-filter=A`) is NOT an ancestor of 19f68ce3, the
+// commit that set that baseline:
+//
+//	1-2_session-end        (6da94206, e22b8c9 build)      diverges, not fabricated
+//	2-14_turn-aborted-by-error, PRE-fix (5f97f7e8, a46599a build)  fabricated AND diverges
+//	2-14_turn-aborted-by-error, POST-fix (990daf13, 9abf13d build) neither
+//	2-17_user-blocking-question, POST-fix (c024a5eb, 990daf1 build) neither
+//	4-1_multiple-sessions-same-cwd (f63f85d1, 0b3e2ad build) diverges, not fabricated
+//	5-2_model-identification (cdef5d12, 51c1942 build)       diverges, not fabricated
+//
+// The one Fabricated is the pre-fix 2-14 recording: this is the SAME root
+// cause as the already-committed 2-17 pre-fix entry in knownFabricated
+// (assignPIDLocked deleting the real session for a late proc-* PID claim,
+// core/application/services/pid_manager.go, fixed in commit 9abf13d1) —
+// deterministic here rather than merely racy, so the daemon's own log shows
+// literally 0 transitions for the primary session's ~8s remaining life. See
+// that file's knownFabricated entry for the raw-event citation.
+//
+// The four Divergent (all also DivergentByCountsAndKinds, one-recorded-short
+// of what replay reconstructs): session-end, 4-1, and model-identification
+// pre-date the fix build entirely (e22b8c9/0b3e2ad/51c1942, all ancestors of
+// 9abf13d1) and are unrelated pre-existing muse onboarding recordings whose
+// census bookkeeping had not been done yet, same shape as the prior
+// paragraph's four unnamed ones. The fourth, the pre-fix 2-14 recording, is
+// counted here too (Fabricates and Diverges are not mutually exclusive
+// categories — extended_check.go's Diverges() is satisfied by the same
+// recorded<replayed gap Fabricates() reports on). Neither of the two POST-fix
+// re-recordings (2-14, 2-17) diverges at all: both now replay byte-identical
+// to what the daemon logged live, which is the fix actually working, measured
+// with a throwaway `t.Logf` walk over forEachSidecarRecording filtered to
+// `name[:4] == "muse"`, printing each recording's Fabricates()/Diverges()/
+// divergesByCountsAndKinds() (not committed — this paragraph is the record).
 var censusOfTheCommittedCatalog = catalogCensus{
-	Recordings:                340,
+	Recordings:                384,
 	Zero:                      1,
-	Fabricated:                1,
-	Divergent:                 171,
-	DivergentByCountsAndKinds: 170,
+	Fabricated:                3,
+	Divergent:                 188,
+	DivergentByCountsAndKinds: 187,
 	UnpairedSidecars:          0,
 	PairedButUngraded:         88,
 }
@@ -603,9 +666,17 @@ func TestCensusDiffNamesEveryStaleShape(t *testing.T) {
 			want:      []string{moved("Zero", 4)},
 		},
 		{
+			// #1960 bumped the live Fabricated to 3, which is what this row's
+			// prior hardcoded literal (3) had been using to mean "one more than
+			// current" — the two collided and the row silently stopped testing
+			// anything (diff() = [] instead of a reported staleness), caught
+			// only because this table's own vacuity guard forced a real
+			// measurement rather than a repeated literal. Derived from current
+			// like the Divergent rows above, so a future legitimate Fabricated
+			// move can't repeat the collision.
 			name:      "fabricated stale — the count that must never rise unnoticed",
-			committed: with(func(c *catalogCensus) { c.Fabricated = 3 }),
-			want:      []string{moved("Fabricated", 3)},
+			committed: with(func(c *catalogCensus) { c.Fabricated = current.Fabricated + 1 }),
+			want:      []string{moved("Fabricated", current.Fabricated+1)},
 		},
 		{
 			// This population is what the Go walk cannot pair at all. It is 0,
