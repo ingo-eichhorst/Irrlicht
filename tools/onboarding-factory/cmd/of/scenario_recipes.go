@@ -7,7 +7,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -280,10 +279,11 @@ func loadAdapterRecipeView(repoRoot, adapter string, sh shard.Shard) (adapterRec
 
 // landmarkStrictness is how strictly one landmark type's flagged() check
 // reads. strictAfterOnly is the zero value — an unmapped type falls back to
-// it — so a landmark type that slips past the completeness guard below
-// OVER-reports rather than under-reports (house rule: check MORE when
-// uncertain), matching how #1969 QA's second round found the dead-detector
-// default should run.
+// it — so a landmark type that somehow bypassed landmarkTypeStrictness
+// (e.g. a caller consulting it via a literal string rather than
+// isTimingLandmark/requiresAfterSleep) OVER-reports rather than
+// under-reports (house rule: check MORE when uncertain), matching how
+// #1969 QA's second round found the dead-detector default should run.
 type landmarkStrictness int
 
 const (
@@ -294,15 +294,26 @@ const (
 	lenientEitherSide
 )
 
-// landmarkTypes is the single declaration of every step type this command
-// checks for an adjoining settle sleep: resume, exit_clean, and sigkill —
-// the only three step types that can produce the daemon's process_exited
-// event for a session id the daemon may RE-ADMIT. resume explicitly
-// relaunches the SAME session id (the re-admission event itself);
-// exit_clean and sigkill are the two ways the prior process can end before
-// it. That pairing is precisely the #1960 mechanism (the 10s
-// deletedSessions cooldown) this command exists to surface — and the only
-// one its "MISSING" marker claims to detect.
+// landmarkTypeStrictness is the SINGLE declaration of every step type this
+// command checks for an adjoining settle sleep, and how strict each one's
+// flagged() rule is. isTimingLandmark (key presence) and requiresAfterSleep
+// (the value) both read from this one map — #1969 QA round 3 folded what
+// was briefly two separately maintained declarations (a landmark-type list
+// plus a strictness map) into one, specifically because Go cannot write a
+// map key without a value: adding a landmark type here FORCES a strictness
+// decision at the point of writing it, which a compile error enforces far
+// more reliably than a test ever could. (The two-declaration shape existed
+// for exactly one commit, to make that gap a demonstrable red test — see
+// this commit's message for why that reasoning was backwards: a check that
+// can never fail should be deleted, not preserved as a home for a test.)
+//
+// resume, exit_clean, and sigkill are the only three step types that can
+// produce the daemon's process_exited event for a session id the daemon may
+// RE-ADMIT. resume explicitly relaunches the SAME session id (the
+// re-admission event itself); exit_clean and sigkill are the two ways the
+// prior process can end before it. That pairing is precisely the #1960
+// mechanism (the 10s deletedSessions cooldown) this command exists to
+// surface — and the only one its "MISSING" marker claims to detect.
 //
 // Deliberately excludes — confirmed against the driver source, not assumed:
 //   - restart / start_session: step_restart mints a BRAND NEW session id
@@ -320,25 +331,16 @@ const (
 // A first cut treating every non-send/wait_turn/sleep step as a landmark
 // flagged 109 of 280 occurrences (39%) corpus-wide, including 100% of keys,
 // slash, start_session, seed_instruction and restart — none of which relate
-// to the #1960 cooldown. This narrower list brings the same scan to 79
-// occurrences worth checking at all — see landmarkTypeStrictness for how
-// many of those are actually flagged and why the answer differs by type,
-// and TestScenarioRecipesCorpusFlagRateStaysLow, which measures the number
-// on every run rather than asserting it by hand.
-var landmarkTypes = []string{"resume", "exit_clean", "sigkill"}
-
-// landmarkTypeStrictness gives each type in landmarkTypes an EXPLICIT
-// strictness, including the lenient ones — isTimingLandmark and
-// requiresAfterSleep both read from it rather than each maintaining their
-// own switch.
+// to the #1960 cooldown. This narrower map brings the same scan to 79
+// occurrences worth checking at all.
 //
-// #1969 QA caught a real regression from two independently maintained
-// switches: an earlier "either side counts" rule applied to EVERY landmark
-// type made a reconstruction of muse's actual pre-fix recipe
-// (`exit_clean -> SLEEP 12s -> resume -> send`, no sleep after resume — the
-// exact shape #1969 exists to catch) render unflagged, because the 12s
-// sleep sits before resume. That is wrong specifically for resume: the
-// daemon's #1960 mechanism has TWO distinct windows, and a sleep before
+// Why resume is strict and exit_clean/sigkill are lenient: #1969 QA caught
+// a real regression from an earlier "either side counts" rule applied to
+// EVERY landmark type — it made a reconstruction of muse's actual pre-fix
+// recipe (`exit_clean -> SLEEP 12s -> resume -> send`, no sleep after
+// resume — the exact shape #1969 exists to catch) render unflagged, because
+// the 12s sleep sits before resume. That is wrong specifically for resume:
+// the daemon's #1960 mechanism has TWO distinct windows, and a sleep before
 // resume only covers the first —
 //
 //   - before exit_clean/resume (or between them): lets the deletedSessions
@@ -362,14 +364,9 @@ var landmarkTypes = []string{"resume", "exit_clean", "sigkill"}
 //     flagged siblings' lack of an after-sleep is a live, not theoretical,
 //     risk.
 //
-// A separate declaration (rather than folding strictness into landmarkTypes
-// itself, e.g. as map values there) is deliberate: it is what makes "a
-// landmark type added without deciding its strictness" an expressible,
-// testable gap — TestLandmarkTypeStrictnessCoversEveryLandmarkType — instead
-// of a compile error that can never be demonstrated as a red test. Confirmed
-// against a fixture reconstructing muse's pre-fix recipe
-// (TestScenarioRecipesFlagsTheReconstructedMusePreFixRecipe) and against the
-// real corpus (TestScenarioRecipesCorpusFlagRateStaysLow).
+// Confirmed against a fixture reconstructing muse's pre-fix recipe
+// (TestScenarioRecipesFlagsTheReconstructedMusePreFixRecipe) and against
+// the real corpus (TestScenarioRecipesCorpusFlagRateStaysLow).
 var landmarkTypeStrictness = map[string]landmarkStrictness{
 	"resume":     strictAfterOnly,
 	"exit_clean": lenientEitherSide,
@@ -377,7 +374,8 @@ var landmarkTypeStrictness = map[string]landmarkStrictness{
 }
 
 func isTimingLandmark(stepType string) bool {
-	return slices.Contains(landmarkTypes, stepType)
+	_, ok := landmarkTypeStrictness[stepType]
+	return ok
 }
 
 // requiresAfterSleep reports whether flagging this landmark type considers
@@ -385,24 +383,6 @@ func isTimingLandmark(stepType string) bool {
 // landmarkTypeStrictness for the reasoning behind each type's entry.
 func requiresAfterSleep(landmarkType string) bool {
 	return landmarkTypeStrictness[landmarkType] == strictAfterOnly
-}
-
-// landmarkTypesMissingStrictness returns, in types order, every entry
-// present in types but absent from strictness — the gap
-// TestLandmarkTypeStrictnessCoversEveryLandmarkType exists to catch. A
-// separate function (rather than the assertion living inline in the test)
-// so the same logic backs both the real guard (landmarkTypes vs
-// landmarkTypeStrictness) and a permanent synthetic fixture proving the
-// logic itself can detect a gap
-// (TestLandmarkTypesMissingStrictnessNamesTheGap).
-func landmarkTypesMissingStrictness(types []string, strictness map[string]landmarkStrictness) []string {
-	var missing []string
-	for _, t := range types {
-		if _, ok := strictness[t]; !ok {
-			missing = append(missing, t)
-		}
-	}
-	return missing
 }
 
 // landmarkSleepPair is the sleep (seconds) immediately before and
