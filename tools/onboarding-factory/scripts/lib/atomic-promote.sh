@@ -35,20 +35,36 @@
 #
 # known_failing exception (#1967). A candidate that fails validation is
 # normally refused outright (see B2 above). But a cell whose OWN committed
-# expected.jsonl meta line already declares `known_failing:true` is meant to
-# end at a sub-100% pass rate — record/SKILL.md Step 3 documents this: the
-# recording is real captured data, not a broken run, so it still commits.
-# Before this exception, agents hit the gate's blanket refusal here 6+ times
-# (muse onboarding alone: 5 separate cells) and worked around it by trimming
-# expected.jsonl to only the passing phases, promoting, then restoring the
-# full spec — the same detour the pre-existing aider/2-15_shell-escape-command
-# cell shows signs of. The flag is read straight from <cell_dir>/expected.jsonl
-# — never a caller-supplied bypass flag, which could disagree with what is
-# actually committed — so the decision always tracks the exact bytes the
-# validator just graded. A cell NOT marked known_failing keeps the original
-# blanket refusal: see atomic-promote_test.sh's "validation fails" case (the
-# lock) and atomic-promote-mutations_test.sh, which breaks this exact
-# discrimination and confirms that lock catches it.
+# expected.jsonl meta line already declares known_failing to the JSON
+# BOOLEAN `true` is meant to end at a sub-100% pass rate — record/SKILL.md
+# Step 3 documents this: the recording is real captured data, not a broken
+# run, so it still commits. Before this exception, agents hit the gate's
+# blanket refusal here 6+ times (muse onboarding alone: 5 separate cells) and
+# worked around it by trimming expected.jsonl to only the passing phases,
+# promoting, then restoring the full spec — the same detour the pre-existing
+# aider/2-15_shell-escape-command cell shows signs of. The flag is read
+# straight from <cell_dir>/expected.jsonl — never a caller-supplied bypass
+# flag, which could disagree with what is actually committed. A cell NOT
+# marked known_failing keeps the original blanket refusal: see
+# atomic-promote_test.sh's "validation fails" case (the lock) and
+# atomic-promote-mutations_test.sh, which breaks this exact discrimination
+# and confirms that lock catches it.
+#
+# The check below MUST be a type-strict boolean equality (`jq -e '.known_failing
+# == true'`), never a raw-string comparison against `"true"`. QA on the first
+# version of this fix found that `jq -r '.known_failing // false' == "true"`
+# strips JSON quoting, so a JSON STRING "true" reads identically to the JSON
+# BOOLEAN true — while the Go validator's ExpectedMeta.KnownFailing is a
+# `bool` and hard-errors on a string in that field (json: cannot unmarshal
+# string into Go struct field ExpectedMeta.known_failing of type bool) before
+# grading a single phase. Under the string-comparison version, that exact
+# document reproduced the #1333 hole this whole file exists to close: rc=2,
+# candidate committed, expected_pass_rate stamped EMPTY — a completely
+# ungraded recording landing in the tree. jq's `==` is type-strict (a JSON
+# string is never `==` a JSON boolean), so the fixed check fails safe on a
+# string, a number, null, or an object — see atomic-promote_test.sh's
+# "non-boolean known_failing" cases, seen red against the unfixed
+# raw-string check before this comment was written.
 #
 # Returns: 0 promoted · 1 populate/move failed · 2 promoted despite failing
 # validation (expected.jsonl declares known_failing:true) · 3 rejected by the
@@ -98,15 +114,20 @@ atomic_promote() {
     else
       if [[ -n "$summary" ]]; then echo "$summary"; fi
       # #1967: known_failing:true is a deliberate, narrow exception to B2 —
-      # see the header comment. Same idiom tools/replay-fixtures.sh already
-      # uses for this exact field (`head -n1 <expected.jsonl> | jq -r
-      # '.known_failing // false'`); an unreadable/missing jq falls through
-      # to the empty string, which compares false, so "cannot look" defaults
-      # to the STRICT refusal below, never to the lenient bypass. Falls
-      # through to the SAME mv logic a clean pass uses (setting promote_rc
-      # rather than returning) — a non-known_failing candidate still hits the
-      # unconditional `return 3` and never reaches the mv at all.
-      if [[ "$(head -n1 "$cell_dir/expected.jsonl" | jq -r '.known_failing // false' 2>/dev/null || echo false)" == "true" ]]; then
+      # see the header comment, in particular the paragraph on why this MUST
+      # be `jq -e '... == true'` (type-strict equality on jq's exit status),
+      # never `jq -r` compared against the bash string "true" (which a JSON
+      # STRING "true" satisfies just as well as the JSON boolean, and only
+      # the boolean is what the Go validator's ExpectedMeta.KnownFailing
+      # bool field accepts). An unreadable/missing jq, malformed
+      # expected.jsonl, or any non-boolean value all make `-e` exit non-zero,
+      # so "cannot look" (or "looked and it wasn't a real boolean") both
+      # default to the STRICT refusal below, never to the lenient bypass.
+      # Falls through to the SAME mv logic a clean pass uses (setting
+      # promote_rc rather than returning) — a non-known_failing candidate
+      # still hits the unconditional `return 3` and never reaches the mv at
+      # all.
+      if head -n1 "$cell_dir/expected.jsonl" | jq -e '.known_failing == true' >/dev/null 2>&1; then
         promote_rc=2
       else
         return 3

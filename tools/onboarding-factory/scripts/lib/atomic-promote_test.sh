@@ -49,8 +49,14 @@ new_cell() {
   local d="$TMP/$1"
   mkdir -p "$d/recordings"
   case "${2:-}" in
-    with-spec)         printf '{"schema_version":1}\n' > "$d/expected.jsonl" ;;
-    with-known-failing) printf '{"schema_version":1,"known_failing":true}\n' > "$d/expected.jsonl" ;;
+    with-spec)                 printf '{"schema_version":1}\n' > "$d/expected.jsonl" ;;
+    with-known-failing)        printf '{"schema_version":1,"known_failing":true}\n' > "$d/expected.jsonl" ;;
+    # Non-boolean known_failing (#1967 QA finding): a JSON STRING/number/null
+    # that LOOKS like a boolean must never satisfy the bypass check — see the
+    # test block below.
+    with-known-failing-string) printf '{"schema_version":1,"known_failing":"true"}\n' > "$d/expected.jsonl" ;;
+    with-known-failing-number) printf '{"schema_version":1,"known_failing":1}\n' > "$d/expected.jsonl" ;;
+    with-known-failing-null)   printf '{"schema_version":1,"known_failing":null}\n' > "$d/expected.jsonl" ;;
   esac
   echo "$d"
 }
@@ -89,6 +95,28 @@ assert_eq "still echoes the real (failing) pass rate" "3/4 phases" "$out"
   && pass "recording IS in place (deliberate known_failing exception)" \
   || fail "recording IS in place" "events.jsonl" "missing"
 assert_eq "no scratch dir left" "0" "$(scratch_count "$cell")"
+
+echo "== known_failing must be an actual JSON boolean — a same-shaped string/number/null still refuses (#1967 QA) =="
+# `jq -r '.known_failing // false'` compared against the bash string "true"
+# strips JSON quoting, so a JSON STRING "true" reads identically to the JSON
+# BOOLEAN true. The Go validator's ExpectedMeta.KnownFailing is a real `bool`
+# and hard-errors on a string/number/null in that field BEFORE grading a
+# single phase — so a bash-side check that accepted any of these would
+# promote a completely UNGRADED recording (rc=2, candidate committed,
+# expected_pass_rate stamped EMPTY): the exact #1333 hole this file exists to
+# close, reopened one type away. Each variant here must refuse exactly like
+# an absent/false flag — same assertions as the "validation fails: NOTHING is
+# written" B2 case above, just for a value that LOOKS true and isn't one.
+for variant in with-known-failing-string with-known-failing-number with-known-failing-null; do
+  cell="$(new_cell "nonbool-$variant" "$variant")"
+  out="$(atomic_promote "$cell" "2026-01-01-00-00-00_irrlichd-x" populate_ok validate_fail)"
+  rc=$?
+  assert_eq "$variant: returns 3 (non-boolean known_failing must not bypass)" "3" "$rc"
+  [[ -e "$cell/recordings/2026-01-01-00-00-00_irrlichd-x" ]] \
+    && fail "$variant: no recording left behind" "absent" "present" \
+    || pass "$variant: no recording left behind"
+  assert_eq "$variant: no scratch dir left" "0" "$(scratch_count "$cell")"
+done
 
 echo "== a failed promote must not damage the PREVIOUS good recording =="
 cell="$(new_cell keepold with-spec)"
