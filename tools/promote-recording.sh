@@ -379,7 +379,8 @@ validate_recording() {
 
 echo "validating candidate recording against expected.jsonl..." >&2
 # An assignment inside an AND-OR list is not errexit-fatal, and `$?` in the ||
-# arm is the function's return code — so this captures rc 0/1/3 without turning
+# arm is the function's return code — so this captures rc 0/1/2/3 (#1967 added
+# 2: promoted despite failing validation, known_failing:true) without turning
 # errexit off for a span of script.
 NEW_PASS_RATE="$(atomic_promote "$TARGET_DIR" "$REC_NAME" populate_recording validate_recording)" \
   && PROMOTE_RC=0 || PROMOTE_RC=$?
@@ -392,7 +393,18 @@ if [[ "$PROMOTE_RC" == "3" ]]; then
   echo "         re-run with the staged capture to see the full report." >&2
   exit 3
 fi
-if [[ "$PROMOTE_RC" != "0" ]]; then
+if [[ "$PROMOTE_RC" == "2" ]]; then
+  # #1967: expected.jsonl declares known_failing:true, so atomic_promote let a
+  # sub-100% candidate through on purpose (record/SKILL.md Step 3). This is a
+  # deliberate exception, not a silent success — print something that cannot
+  # be mistaken for either the rc=0 clean-pass path below or the rc=3
+  # rejection above; an agent scanning this script's stdout must be able to
+  # tell "promoted because it truly passed" from "promoted anyway because the
+  # cell says it's allowed to fail" without reading manifest.json first.
+  echo "NOTICE: promoting a KNOWN-FAILING recording ($NEW_PASS_RATE) — expected.jsonl" >&2
+  echo "        declares known_failing:true, so a sub-100% candidate is committed" >&2
+  echo "        deliberately, with its real (failing) pass rate stamped into manifest.json." >&2
+elif [[ "$PROMOTE_RC" != "0" ]]; then
   echo "promote: failed to stage the recording into $REC_DIR" >&2
   exit 1
 fi

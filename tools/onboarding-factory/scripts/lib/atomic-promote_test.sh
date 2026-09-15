@@ -48,7 +48,10 @@ scratch_count() { find "$1" -maxdepth 1 -name '.promote-tmp*' | wc -l | tr -d ' 
 new_cell() {
   local d="$TMP/$1"
   mkdir -p "$d/recordings"
-  [[ "${2:-}" == "with-spec" ]] && printf '{"schema_version":1}\n' > "$d/expected.jsonl"
+  case "${2:-}" in
+    with-spec)         printf '{"schema_version":1}\n' > "$d/expected.jsonl" ;;
+    with-known-failing) printf '{"schema_version":1,"known_failing":true}\n' > "$d/expected.jsonl" ;;
+  esac
   echo "$d"
 }
 
@@ -70,6 +73,21 @@ assert_eq "returns 3" "3" "$rc"
 assert_eq "still reports the pass rate" "3/4 phases" "$out"
 [[ -e "$cell/recordings/2026-01-01-00-00-00_irrlichd-x" ]] \
   && fail "no recording left behind" "absent" "present" || pass "no recording left behind"
+assert_eq "no scratch dir left" "0" "$(scratch_count "$cell")"
+
+echo "== validation fails but the cell declares known_failing:true: promoted anyway (#1967) =="
+# The skill's own Step 3 documents this: a sub-100% pass for a cell MEANT to
+# end known_failing still commits (real captured data, not a broken run).
+# Before #1967 the gate refused this unconditionally, forcing a
+# trim/promote/restore workaround — hit 6+ times across the muse onboarding.
+cell="$(new_cell knownfailing with-known-failing)"
+out="$(atomic_promote "$cell" "2026-01-01-00-00-00_irrlichd-x" populate_ok validate_fail)"
+rc=$?
+assert_eq "returns 2 (promoted despite failing validation)" "2" "$rc"
+assert_eq "still echoes the real (failing) pass rate" "3/4 phases" "$out"
+[[ -f "$cell/recordings/2026-01-01-00-00-00_irrlichd-x/events.jsonl" ]] \
+  && pass "recording IS in place (deliberate known_failing exception)" \
+  || fail "recording IS in place" "events.jsonl" "missing"
 assert_eq "no scratch dir left" "0" "$(scratch_count "$cell")"
 
 echo "== a failed promote must not damage the PREVIOUS good recording =="
