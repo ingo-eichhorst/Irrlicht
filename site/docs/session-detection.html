@@ -241,6 +241,19 @@
         <li><strong>Adapter name:</strong> <code>hermes</code></li>
       </ul>
 
+      <h3>Muse</h3>
+
+      <ul>
+        <li><strong>Transcript location:</strong> <code>session.jsonl</code> under <code>~/.local/share/muse/sessions/&lt;YYYY&gt;/&lt;MM&gt;/&lt;DD&gt;/&lt;session-id&gt;/</code>. The filename is a constant, so the session ID comes from the parent directory</li>
+        <li>Subagents write their own <code>session.jsonl</code> under the parent session&rsquo;s <code>subagent/&lt;child-id&gt;/</code> directory, so the parent link comes from directory nesting alone</li>
+        <li>A <code>.session.lock</code> file beside each transcript carries the owning PID. Discovery matches the <code>muse-bin-</code> command-line prefix, because the process name embeds the version and build and the <code>muse</code> launcher <code>exec</code>s the pinned binary before a session starts</li>
+        <li>A <code>kind:"run"</code> terminal event is the explicit turn boundary, so no quiet-tail heuristic is needed to close a turn</li>
+        <li>A <code>kind:"approval"</code> request routes the session to <code>waiting</code>, and its decision releases it</li>
+        <li>Token usage is read from <code>model_completed</code> events only. Muse re-emits the same usage a second time as <code>goal_usage_attribution</code>, which the parser ignores so no call is counted twice</li>
+        <li>The context-window limit comes from muse&rsquo;s cached <code>~/.local/share/muse/model-catalog/</code> files; the transcript never carries it</li>
+        <li><strong>Adapter name:</strong> <code>muse</code></li>
+      </ul>
+
       <h3>Junie</h3>
 
       <ul>

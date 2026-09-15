@@ -242,6 +242,21 @@
         <li>Stage: <strong>alpha</strong></li>
       </ul>
 
+      <h3>Muse Adapter</h3>
+
+      <ul>
+        <li><strong>Package:</strong> <code>core/adapters/inbound/agents/muse/</code></li>
+        <li><strong>Watches:</strong> <code>session.jsonl</code> under <code>~/.local/share/muse/sessions/&lt;YYYY&gt;/&lt;MM&gt;/&lt;DD&gt;/&lt;session-id&gt;/</code>; the filename is a constant, so the session ID comes from the parent directory rather than the file</li>
+        <li>Subagents are nested child copies at <code>&lt;parent-session-dir&gt;/subagent/&lt;child-id&gt;/session.jsonl</code>, so the parent link falls out of directory nesting with no file read</li>
+        <li>Binds the PID from each session&rsquo;s own <code>.session.lock</code> stamp. Process discovery matches the <code>muse-bin-</code> prefix on the command line, because the OS process name embeds the version and build (<code>muse-bin-1.2.1-R2847.1</code>) and the <code>muse</code> launcher <code>exec</code>s that pinned binary before a session starts &mdash; the wrapper is never observed running</li>
+        <li>Records are <code>payload_type</code>-discriminated envelopes. Some lines are instead a <code>retained_frame</code> that batches several independently re-encoded inner records; each child is routed through the same dispatcher a top-level line uses, then merged into the single verdict the one-event-per-line parser contract requires</li>
+        <li>The context-window limit comes from muse&rsquo;s own locally cached <code>~/.local/share/muse/model-catalog/</code> files, not from the transcript, which never carries it</li>
+        <li>The <code>session-index.db</code> sidecar is deliberately never read &mdash; it was measured out of sync with the live session set, so it is not a reliable source for anything</li>
+        <li>The adapter is observe-only, gated behind a single <code>transcripts</code> permission. Muse offers no hook or control path</li>
+        <li><strong>Adapter name:</strong> <code>"muse"</code></li>
+        <li>Stage: <strong>alpha</strong></li>
+      </ul>
+
       <h3>Junie Adapter</h3>
 
       <ul>
