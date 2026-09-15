@@ -593,3 +593,72 @@ func TestScenarioRecipesCorpusFlagRateStaysLow(t *testing.T) {
 			len(flagged), total, corpusLandmarkFlagRatchet, len(flagged))
 	}
 }
+
+// --- QA finding (#1969 round 3): landmarkTypes and landmarkTypeStrictness
+// were two independently maintained declarations with no exhaustiveness
+// link — adding a fourth landmark type to landmarkTypes would silently
+// inherit requiresAfterSleep's default with no compiler error and no test.
+// Mirrors internal/lifecycle's TestCanonicalKindsCoversEveryDeclaredKind:
+// declare the vocabulary once, derive both call sites from it, and guard
+// completeness with a test that names what's missing.
+
+// TestLandmarkTypeStrictnessCoversEveryLandmarkType is the real guard: every
+// type in landmarkTypes must have an EXPLICIT entry in
+// landmarkTypeStrictness, not just fall through to the zero value.
+//
+// Mutation, run and reverted (not committed — landmarkTypesMissingStrictness
+// is the same check exercised permanently against a synthetic gap by
+// TestLandmarkTypesMissingStrictnessNamesTheGap below): appending a fourth
+// type to landmarkTypes without adding it to landmarkTypeStrictness took
+// this red with
+//
+//	landmark type(s) with no explicit strictness entry (silently defaulting to strictAfterOnly): [mystery_type]
+//
+// naming exactly the added type.
+func TestLandmarkTypeStrictnessCoversEveryLandmarkType(t *testing.T) {
+	if len(landmarkTypes) == 0 {
+		t.Fatal("landmarkTypes is empty — this test cannot run, which is not the same as finding nothing")
+	}
+	if missing := landmarkTypesMissingStrictness(landmarkTypes, landmarkTypeStrictness); len(missing) > 0 {
+		t.Errorf("landmark type(s) with no explicit strictness entry (silently defaulting to strictAfterOnly): %v", missing)
+	}
+}
+
+// TestLandmarkTypesMissingStrictnessNamesTheGap is the PERMANENT mutation
+// fixture for the guard above, per AGENTS.md's rule that a check with no
+// natural "before" earns its place by mutation rather than only being
+// described in a PR body nothing re-runs. It exercises
+// landmarkTypesMissingStrictness — the same function
+// TestLandmarkTypeStrictnessCoversEveryLandmarkType calls against the real
+// vocabulary — against a synthetic, deliberately incomplete one, so the
+// fixture is permanent and re-runnable rather than a one-time edit-run-revert
+// cycle on the package's real declarations.
+func TestLandmarkTypesMissingStrictnessNamesTheGap(t *testing.T) {
+	types := []string{"resume", "exit_clean", "mystery_type"}
+	strictness := map[string]landmarkStrictness{
+		"resume":     strictAfterOnly,
+		"exit_clean": lenientEitherSide,
+		// "mystery_type" deliberately has NO entry — the mutation this
+		// fixture pins: a landmark type added without an explicit
+		// strictness decision.
+	}
+	got := landmarkTypesMissingStrictness(types, strictness)
+	if len(got) != 1 || got[0] != "mystery_type" {
+		t.Fatalf("landmarkTypesMissingStrictness(...) = %v; want exactly [mystery_type]", got)
+	}
+}
+
+// TestLandmarkTypesMissingStrictnessCoversAFullyExplicitVocabulary is the
+// counterpart lock: a vocabulary where every type IS explicitly mapped
+// reports no gap, regardless of which strictness each one carries.
+func TestLandmarkTypesMissingStrictnessCoversAFullyExplicitVocabulary(t *testing.T) {
+	types := []string{"resume", "exit_clean", "sigkill"}
+	strictness := map[string]landmarkStrictness{
+		"resume":     strictAfterOnly,
+		"exit_clean": lenientEitherSide,
+		"sigkill":    lenientEitherSide,
+	}
+	if got := landmarkTypesMissingStrictness(types, strictness); len(got) != 0 {
+		t.Fatalf("landmarkTypesMissingStrictness(...) = %v; want none — every type has an explicit entry", got)
+	}
+}
