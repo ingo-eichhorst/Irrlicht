@@ -269,15 +269,45 @@ assert_gate "a content line beginning with the marker bytes is a REFUSAL, not a 
 # This locks the outcome rather than the implementation: swap the narrowing
 # back to a libc-heuristic grep and this fails on Linux, which is where it
 # matters. It is a LOCK — it passes on macOS by construction either way.
+#
+# Membership below is tested WITHOUT a pipe, and that is not a style choice.
+# `printf … | grep -q` exits at the first match and SIGPIPEs the writer, and
+# this file runs under `set -o pipefail` (line 71), so the pipeline's status
+# goes non-zero *because the assertion succeeded* — the lock failing on its own
+# success. It is not theoretical: PR #1951's go-test printed
+# "line 276: printf: write error: Broken pipe" immediately before this FAIL,
+# and a broken pipe here is itself proof that grep DID find the file, since
+# `grep -q` only exits early on a match. Measured on this tree: the corpus is
+# 64057 bytes against a 64 KiB pipe buffer — 1479 bytes of headroom — which is
+# why a CI runner with a few untracked build artefacts saw it and a laptop did
+# not. The guard below pins the no-pipe form.
+corpus_has() { grep -qxF -- "$2" <<<"$1"; }
+
 (
   # shellcheck source=../state-vocabulary-lint.sh
   . "$GATE"
   corpus=$(state_vocab_files "working waiting ready error" 2>/dev/null)
-  if ! printf '%s\n' "$corpus" | grep -qxF 'platforms/web/irrlicht.js'; then
+  if ! corpus_has "$corpus" 'platforms/web/irrlicht.js'; then
     echo "FAIL: platforms/web/irrlicht.js is missing from the scanned corpus — a NUL-containing TEXT file is being rejected as binary (see the narrowing step's comment)." >&2
     exit 1
   fi
   echo "  PASS: a NUL-containing text file stays in the corpus (lock)"
+) || rc=1
+
+# The lock above must not be able to fail on its OWN SUCCESS. Mutate
+# `corpus_has` back to `printf … | grep -q` and this case goes red
+# deterministically — measured 50 false failures in 50 trials with a match on
+# line 1 of a 1.1 MB stream, against 0 in 50 for the here-string form. The
+# stream is built larger than any pipe buffer on purpose: at the corpus's real
+# size the pipe form is a coin flip, and a coin flip is what shipped.
+(
+  big=$(printf 'platforms/web/irrlicht.js\n'
+        seq 1 40000 | sed 's|^|some/other/path/file-|; s|$|.go|')
+  if ! corpus_has "$big" 'platforms/web/irrlicht.js'; then
+    echo "FAIL: membership reported ABSENT for a path on line 1 of a $(printf '%s\n' "$big" | wc -c | tr -d ' ')-byte stream — the reader exited early and the writer was cut off, so the check failed because it succeeded." >&2
+    exit 1
+  fi
+  echo "  PASS: membership survives an early match in a stream larger than the pipe buffer"
 ) || rc=1
 
 # --- vacuity guards: the gate must be looking at the real repo ---------------
