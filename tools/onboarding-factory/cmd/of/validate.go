@@ -267,36 +267,59 @@ func validateCell(loc cellLoc, names map[string]bool, add func(path, msg string)
 		add(rel+metadataJSONSuffix, msg)
 	}
 	validateCellVocabulary(cell, rel, add)
-	// recorded here uses the same disk signal validateCellRecording checks
-	// completeness against (validate.RecordingDirs), computed once and reused
-	// so the two checks can never disagree about whether the cell is recorded.
+	// recorded uses the same disk signal validateCellRecording checks
+	// completeness against (validate.RecordingDirs): "at least one
+	// recordings/<name> dir exists". validateCellRecording below calls
+	// validate.RecordingDirs(cellDir) again on its own — this is a second,
+	// independent disk read, not a shared/cached value — but both calls read
+	// the same deterministic directory listing, so they cannot disagree about
+	// whether the cell is recorded.
 	recorded := len(validate.RecordingDirs(cellDir)) > 0
 	validateCellDriverConsistency(cell, rel, recorded, add)
 	validateCellRecording(loc, add)
 }
 
 // validateCellDriverConsistency is the #1968 gate: a cell that is recorded
-// must not carry a gap:<primitive> driver pillar on either tier — see
-// matrix.ValidateDriverRecordedConsistency for the argument and the
-// deliberate daemon_capability exemption it does NOT apply here.
+// must not carry a gap:<primitive> driver pillar on either tier, and — since
+// the QA finding on the first cut of this check — a RECORDED cell may not
+// leave its driver pillar unreadable (absent key or explicit JSON null)
+// either. See matrix.ValidateDriverRecordedConsistency for the full
+// argument, the daemon_capability exemption it deliberately does NOT apply
+// here, and how it distinguishes "missing" from "present".
 //
 // Like validateCellVocabulary, it checks both tiers a cell stores
 // (write.go's mirrorAssessmentPillars keeps them in sync, so checking only
-// one would let the other half drift silently). A details.assessment blob
-// that cannot be parsed is reported as its own finding rather than skipped —
+// one would let the other half drift silently) — but the two tiers are NOT
+// symmetric here. details.assessment.driver_capability is decoded through a
+// *string (json.RawMessage → a narrow struct), which preserves the
+// "absent/null vs present" distinction ValidateDriverRecordedConsistency
+// needs. metadata.driver_capability cannot offer that distinction: by the
+// time this function runs, shard.ShardAgent has already decoded the
+// "metadata" block into a plain shard.ShardMetadata struct whose
+// DriverCapability field is a bare string — an absent key, an explicit
+// null, and a genuinely empty string all collapsed to "" before this
+// function ever saw the value, and there is no raw bytes left here to
+// re-read. That loss is harmless for THIS tier specifically: metadata is the
+// overview mirror write.go's mirrorAssessmentPillars populates FROM
+// details.assessment, so an empty overview is the ordinary shape for a cell
+// nobody has round-tripped through the sanctioned writer yet, not evidence
+// of a missing verdict the way an empty details.assessment is.
+//
+// A details.assessment blob that cannot even be decoded (a wrong-typed
+// sibling field) is reported as its own finding rather than skipped —
 // AGENTS.md's rule for a validator that cannot read its input: check MORE,
 // never less, so an unreadable tier fails loudly instead of reading as "no
 // violation".
 func validateCellDriverConsistency(cell shard.ShardAgent, rel string, recorded bool, add func(path, msg string)) {
 	path := rel + metadataJSONSuffix
-	for _, msg := range matrix.ValidateDriverRecordedConsistency("metadata", cell.Metadata.DriverCapability, recorded) {
+	for _, msg := range matrix.ValidateDriverRecordedConsistency("metadata", &cell.Metadata.DriverCapability, recorded) {
 		add(path, msg)
 	}
 	if len(cell.Details.Assessment) == 0 {
 		return
 	}
 	var a struct {
-		DriverCapability string `json:"driver_capability"`
+		DriverCapability *string `json:"driver_capability"`
 	}
 	if err := json.Unmarshal(cell.Details.Assessment, &a); err != nil {
 		add(path, fmt.Sprintf(

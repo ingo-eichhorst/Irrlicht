@@ -172,6 +172,19 @@ func ValidateAxes(tier, supports, daemon, driver string) []string {
 // from, exactly as ValidateAxes does, so the finding points at the field to
 // edit.
 //
+// driver is a pointer so the caller can report "the key was absent, or
+// present as explicit JSON null" as ITS OWN finding rather than silently
+// collapsing it to the empty string. This closes a real gap found in review
+// of the first cut of this check: json.Unmarshal leaves the Go zero value
+// "" for BOTH an absent key and an explicit null, and "" is not
+// gap:-prefixed, so a recorded cell whose driver pillar was never written at
+// all (or was nulled out) passed `of validate` with no finding — the exact
+// inversion of "a validator that cannot parse its input checks MORE, never
+// less" this check exists to uphold elsewhere. Reproduced red, before the
+// fix, in TestValidateDriverConsistencyFailsLoudlyOnAbsentDriverCapability
+// and its …OnNullDriverCapability sibling (tools/onboarding-factory/cmd/of):
+// both asserted exitFail and got exit 0 / "OK" against the unfixed code.
+//
 // The argument: a committed recording is direct evidence the driver already
 // drove the cell through this scenario, so a surviving gap:<primitive> pillar
 // on a RECORDED cell is provably stale — no legitimate cell can hold both.
@@ -199,16 +212,26 @@ func ValidateAxes(tier, supports, daemon, driver string) []string {
 // recorded+blocked-daemon the whole time this check existed to flag only
 // their driver pillar — daemon is a different axis with a different, valid
 // reason to disagree with "recorded", and this function does not read it.
-func ValidateDriverRecordedConsistency(tier, driver string, recorded bool) []string {
-	if !recorded || !strings.HasPrefix(driver, DriverGapPrefix) {
+func ValidateDriverRecordedConsistency(tier string, driver *string, recorded bool) []string {
+	if !recorded {
 		return nil
 	}
 	field := tier + ".driver_capability"
+	if driver == nil {
+		return []string{fmt.Sprintf(
+			"%s is missing (the key is absent, or set to JSON null) but the cell is recorded (#1968) — a "+
+				"recorded cell's driver pillar must say something readable; an unreadable pillar is not "+
+				"evidence that no gap: survived, so this fails loudly instead of passing silently",
+			field)}
+	}
+	if !strings.HasPrefix(*driver, DriverGapPrefix) {
+		return nil
+	}
 	return []string{fmt.Sprintf(
 		"%s is %q but the cell is recorded (#1968) — a committed recording is proof the driver already "+
 			"drove it, so the pillar is stale; clear it to %q (or whatever value the driver actually implements) "+
 			"on both this tier and its mirror",
-		field, driver, "ready")}
+		field, *driver, "ready")}
 }
 
 // ---------------------------------------------------------------------------
