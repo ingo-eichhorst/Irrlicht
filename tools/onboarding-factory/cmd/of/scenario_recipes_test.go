@@ -3,9 +3,13 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
+
+	"irrlicht/tools/onboarding-factory/internal/shard"
 )
 
 // recipesRepo writes a minimal catalog with one scenario ("resume-like",
@@ -116,14 +120,87 @@ func TestScenarioRecipesUnknownVsEmptyAreDistinguishable(t *testing.T) {
 	}
 }
 
+// --- QA finding A (#1969): checkCatalogReadable must check what
+// shard.LoadAll actually needs to succeed, not a looser shape. shard.LoadAll
+// unmarshals scenarios[] into typed []shard.Shard — a SINGLE type-mismatched
+// field anywhere in the array (e.g. a numeric "id" where a string is
+// expected) makes that whole json.Unmarshal call return a non-nil error, so
+// shard's internal loadCatalog discards the ENTIRE catalog and LoadAll
+// returns nil for EVERY id, not just the malformed entry. A probe that
+// tolerates any per-element shape (e.g. unmarshaling scenarios as
+// []json.RawMessage) would pass on exactly that file and then misreport the
+// wholesale parse failure as "that id isn't in the catalog" once
+// resolveScenario's shard.LoadAll call comes up empty.
+
+// scenariosWithTypeMismatch writes a scenarios.json whose SECOND entry has a
+// numeric "id" where shard.Shard expects a string — syntactically valid
+// JSON, but a type shard.LoadAll's typed unmarshal rejects wholesale. The
+// FIRST entry is otherwise well-formed, so a probe that only checks "is this
+// syntactically valid JSON" would wrongly call the catalog readable.
+func scenariosWithTypeMismatch(t *testing.T, root string) {
+	t.Helper()
+	write(t, filepath.Join(root, "replaydata", "agents", "scenarios.json"), `{
+  "meta": {"min_versions": {"a": "1.0.0"}},
+  "scenarios": [
+    {"id": "9.1", "name": "resume-like", "description": "d", "process": "p", "acceptance_criteria": "a"},
+    {"id": 123, "name": "other-scenario", "description": "d", "process": "p", "acceptance_criteria": "a"}
+  ]
+}`)
+}
+
+func TestCheckCatalogReadableRejectsATypeMismatchLoadAllAlsoRejects(t *testing.T) {
+	root := t.TempDir()
+	scenariosWithTypeMismatch(t, root)
+
+	// Ground truth: shard.LoadAll (what resolveScenario actually calls)
+	// really does choke on this file.
+	if got := len(shard.LoadAll(root)); got != 0 {
+		t.Fatalf("test fixture is not reproducing the bug: shard.LoadAll returned %d scenarios, want 0 (wholesale parse failure)", got)
+	}
+
+	if err := checkCatalogReadable(root); err == nil {
+		t.Fatalf("checkCatalogReadable(%q) = nil; want an error — shard.LoadAll cannot parse this file at all", root)
+	}
+}
+
+func TestScenarioRecipesReportsCatalogParseFailureNotUnknownScenario(t *testing.T) {
+	root := t.TempDir()
+	scenariosWithTypeMismatch(t, root)
+
+	// "resume-like" is a perfectly well-formed entry in the SAME file — the
+	// only thing wrong is a sibling entry's "id" field.
+	code, out, errb := runOf("scenario", "recipes", "--name", "resume-like", "--repo-root", root)
+	if code != exitFail {
+		t.Fatalf("exit=%d want %d; stdout=%q stderr=%q", code, exitFail, out, errb)
+	}
+	if out != "" {
+		t.Fatalf("a catalog parse failure must not also print a report; got stdout=%q", out)
+	}
+	if strings.Contains(errb, "is not a scenario") {
+		t.Fatalf("must NOT misreport a catalog-wide parse failure as this id being unknown; stderr=%q", errb)
+	}
+	if !strings.Contains(errb, "catalog") {
+		t.Fatalf("stderr=%q; want it to name the catalog as the problem", errb)
+	}
+}
+
 // --- the core comparison: an omitted sleep must be visible, and "before"
 // vs "after" must not be conflated (see landmarkSleepPair's doc comment —
 // this is what running the helper against the real replaydata corpus for
 // #1969 actually found: most siblings sleep BEFORE resume, not after). ---
 
-func TestScenarioRecipesFlagsSleepMissingAfterLandmarkButNotBefore(t *testing.T) {
+// --- QA finding B (#1969): "<-- MISSING" must not fire just because a
+// sibling's sleep sits on the OTHER side of the landmark. The corpus's
+// dominant real shape (`exit_clean -> sleep -> resume -> send`, no sleep
+// directly after resume) is not a bug — six committed adapters agree on it —
+// so it must render unflagged. Only a landmark with NO settle sleep on
+// EITHER side, with a step actually following it to race, is worth a flag.
+
+func TestScenarioRecipesDoesNotFlagWhenEitherSideHasASleep(t *testing.T) {
 	root := recipesRepo(t, []string{"before-style", "after-style"})
-	// before-style: settles with a sleep BEFORE resume, sends immediately after.
+	// before-style: settles with a sleep BEFORE resume (the corpus's
+	// dominant real shape — exit_clean, sleep, resume), sends immediately
+	// after. This must NOT be flagged.
 	recipeCell(t, root, "before-style", resumeScript(`{"type":"sleep","seconds":5}`, ""))
 	// after-style: resumes immediately, settles with a sleep AFTER resume.
 	recipeCell(t, root, "after-style", resumeScript("", `{"type":"sleep","seconds":6}`))
@@ -133,20 +210,73 @@ func TestScenarioRecipesFlagsSleepMissingAfterLandmarkButNotBefore(t *testing.T)
 		t.Fatalf("exit=%d want %d; stderr=%q", code, exitOK, errb)
 	}
 
-	if !strings.Contains(out, "before-style=NONE <-- MISSING") {
-		t.Fatalf("before-style has no sleep AFTER resume — must be flagged MISSING on the after row; got:\n%s", out)
+	if strings.Contains(out, "<-- MISSING") {
+		t.Fatalf("neither adapter should be flagged — each has a settle sleep on SOME side of resume; got:\n%s", out)
 	}
-	if !strings.Contains(out, "after-style=6s") {
-		t.Fatalf("after-style DOES have a 6s sleep after resume — must show it, unflagged; got:\n%s", out)
-	}
-	if strings.Contains(out, "after-style=NONE <-- MISSING") {
-		t.Fatalf("after-style must NOT be flagged on the after row — it has a post-resume sleep; got:\n%s", out)
-	}
-	// The point of tracking "before" separately: before-style's OWN settle
-	// sleep must still be visible, so a reader doesn't read its "after:
-	// NONE" as proof it has no settle time at all.
 	if !strings.Contains(out, "before-style=5s") {
 		t.Fatalf("before-style's pre-resume sleep must appear on the before row; got:\n%s", out)
+	}
+	if !strings.Contains(out, "after-style=6s") {
+		t.Fatalf("after-style's post-resume sleep must appear on the after row; got:\n%s", out)
+	}
+	if !strings.Contains(out, "before-style=NONE") {
+		t.Fatalf("before-style's after row must still show NONE (factual — it really has none), just not flagged; got:\n%s", out)
+	}
+	if !strings.Contains(out, "after-style=NONE") {
+		t.Fatalf("after-style's before row must still show NONE (factual), just not flagged; got:\n%s", out)
+	}
+}
+
+func TestScenarioRecipesFlagsWhenNeitherSideHasASleep(t *testing.T) {
+	root := recipesRepo(t, []string{"unsafe"})
+	// No sleep on either side of resume, and a send follows it — the actual
+	// shape #1960 shipped with.
+	recipeCell(t, root, "unsafe", resumeScript("", ""))
+
+	code, out, errb := runOf("scenario", "recipes", "--name", "resume-like", "--repo-root", root)
+	if code != exitOK {
+		t.Fatalf("exit=%d want %d; stderr=%q", code, exitOK, errb)
+	}
+	if !strings.Contains(out, "unsafe=NONE <-- MISSING") {
+		t.Fatalf("unsafe has no settle sleep on either side of resume, and a send follows — must be flagged; got:\n%s", out)
+	}
+}
+
+func TestScenarioRecipesDoesNotFlagATerminalLandmarkWithNoFollowingStep(t *testing.T) {
+	root := recipesRepo(t, []string{"terminal"})
+	// A script that ENDS at resume: no sleep on either side, but nothing
+	// follows it either, so there is nothing to race.
+	recipeCell(t, root, "terminal", `{"applicable": true, "timeout_seconds": 120, "settings": {}, "script": [`+
+		`{"type":"send","text":"x"},{"type":"wait_turn"},{"type":"resume"}]}`)
+
+	_, out, errb := runOf("scenario", "recipes", "--name", "resume-like", "--repo-root", root)
+	if errb != "" {
+		t.Fatalf("unexpected stderr: %q", errb)
+	}
+	if strings.Contains(out, "<-- MISSING") {
+		t.Fatalf("resume is the LAST step — nothing follows it to race, so it must not be flagged; got:\n%s", out)
+	}
+}
+
+func TestScenarioRecipesExcludesNonProcessLifecycleStepsFromTheComparison(t *testing.T) {
+	root := recipesRepo(t, []string{"solo"})
+	recipeCell(t, root, "solo", `{"applicable": true, "timeout_seconds": 120, "settings": {}, "script": [`+
+		`{"type":"start_session"},{"type":"seed_instruction","path":"x","text":"y"},`+
+		`{"type":"send","text":"x"},{"type":"wait_turn"}]}`)
+
+	_, out, errb := runOf("scenario", "recipes", "--name", "resume-like", "--repo-root", root)
+	if errb != "" {
+		t.Fatalf("unexpected stderr: %q", errb)
+	}
+	if strings.Contains(out, "start_session") && strings.Contains(out, "sleep adjoining") {
+		t.Fatalf("start_session mints a NEW session id (never re-admitted) — it must not appear in the landmark comparison; got:\n%s", out)
+	}
+	if strings.Contains(out, "seed_instruction") && strings.Contains(out, "sleep adjoining") {
+		t.Fatalf("seed_instruction never ends the process — it must not appear in the landmark comparison; got:\n%s", out)
+	}
+	// No landmark type present at all -> the whole section is omitted.
+	if strings.Contains(out, "sleep adjoining each landmark") {
+		t.Fatalf("neither remaining step type is a process-lifecycle landmark — the comparison section should not print at all; got:\n%s", out)
 	}
 }
 
@@ -263,5 +393,113 @@ func TestScenarioRecipesMarksRecordedCells(t *testing.T) {
 	}
 	if !strings.Contains(out, "solo         [recorded    ]") {
 		t.Fatalf("stdout=%q; want solo marked [recorded    ]", out)
+	}
+}
+
+// --- QA finding B (#1969): a ratchet over the REAL corpus, so the
+// false-positive rate cannot silently regress as new scenarios land. Follows
+// the same shape as internal/validate's
+// TestNoCellCarriesAnUnevaluableInvariant (unevaluableInvariantRatchet):
+// fail loud if the scan itself can't run, fail if the count goes UP (a
+// regression), fail if it goes DOWN too (force the constant to be lowered so
+// a real improvement gets locked in rather than silently re-drifting).
+
+// corpusLandmarkFlagRatchet is how many landmark occurrences across every
+// committed, driven recipe in replaydata/agents get flagged "<-- MISSING" by
+// `of scenario recipes`.
+//
+// Produced by this test — run it and read the failure, do not count by hand:
+//
+//	go test ./tools/onboarding-factory/cmd/of/ \
+//	    -run TestScenarioRecipesCorpusFlagRateStaysLow -count=1 -v
+//
+// Before narrowing isTimingLandmark (every non-send/wait_turn/sleep step
+// counted as a landmark) and adding the any-side/has-next gate to
+// landmarkSleepPair, this same scan measured 109 of 280 occurrences flagged
+// (39%) — including 100% of keys, slash, start_session, seed_instruction and
+// restart, none of which relate to the #1960 daemon cooldown this command
+// exists to surface. Narrowing to {resume, exit_clean, sigkill} — the three
+// step types that can produce the process_exited event for a session id the
+// daemon may re-admit — and flagging only an occurrence with NO sleep on
+// EITHER side AND a step following it to race brought this to 0 of 79.
+const corpusLandmarkFlagRatchet = 0
+
+func TestScenarioRecipesCorpusFlagRateStaysLow(t *testing.T) {
+	root := filepath.Join("..", "..", "..", "..", "replaydata", "agents")
+	matches, err := filepath.Glob(filepath.Join(root, "*", "scenarios", "*", "metadata.json"))
+	if err != nil {
+		t.Fatalf("glob: %v", err)
+	}
+	if len(matches) == 0 {
+		t.Fatalf("no metadata.json files found under %s — the corpus scan cannot run, which is not the same as finding nothing", root)
+	}
+
+	type occurrence struct{ cell, landmarkType string }
+	var flagged []occurrence
+	total := 0
+
+	for _, path := range matches {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		var cellDoc struct {
+			Details struct {
+				Recipe json.RawMessage `json:"recipe"`
+			} `json:"details"`
+		}
+		if json.Unmarshal(raw, &cellDoc) != nil || len(cellDoc.Details.Recipe) == 0 {
+			continue
+		}
+		// Ask the evaluator itself (recipeDoc / landmarkSleeps) rather than
+		// re-implementing the parse here — a second copy would drift from
+		// the one the command actually runs.
+		var doc recipeDoc
+		if json.Unmarshal(cellDoc.Details.Recipe, &doc) != nil {
+			continue
+		}
+		if doc.Applicable != nil && !*doc.Applicable {
+			continue
+		}
+		if len(doc.Script) == 0 {
+			continue
+		}
+		steps := make([]recipeStepView, len(doc.Script))
+		for i, s := range doc.Script {
+			steps[i] = recipeStepView{Index: i + 1, Type: s.Type, Seconds: s.Seconds}
+		}
+		rel := strings.TrimPrefix(filepath.ToSlash(path), filepath.ToSlash(root)+"/")
+		cell := strings.TrimSuffix(rel, "/metadata.json")
+		for landmarkType, pairs := range landmarkSleeps(steps) {
+			for _, p := range pairs {
+				total++
+				if p.flagged() {
+					flagged = append(flagged, occurrence{cell, landmarkType})
+				}
+			}
+		}
+	}
+
+	if total == 0 {
+		t.Fatalf("parsed %d metadata.json files but found no landmark occurrences at all — the scan cannot run", len(matches))
+	}
+
+	if len(flagged) > corpusLandmarkFlagRatchet {
+		sort.Slice(flagged, func(i, j int) bool {
+			if flagged[i].cell != flagged[j].cell {
+				return flagged[i].cell < flagged[j].cell
+			}
+			return flagged[i].landmarkType < flagged[j].landmarkType
+		})
+		var b strings.Builder
+		fmt.Fprintf(&b, "%d of %d landmark occurrences flagged MISSING (ratchet: %d).\n\n", len(flagged), total, corpusLandmarkFlagRatchet)
+		for _, o := range flagged {
+			fmt.Fprintf(&b, "  %s: %s\n", o.cell, o.landmarkType)
+		}
+		t.Error(b.String())
+	}
+	if len(flagged) < corpusLandmarkFlagRatchet {
+		t.Errorf("only %d of %d landmark occurrences flagged, below the ratchet of %d — lower corpusLandmarkFlagRatchet to %d so the gain is locked in",
+			len(flagged), total, corpusLandmarkFlagRatchet, len(flagged))
 	}
 }

@@ -154,6 +154,22 @@ func runScenarioRecipes(args []string, stdout, stderr io.Writer) int {
 // missing or malformed catalog makes EVERY id lookup fail the same way
 // (shard.LoadAll returns nil), which would otherwise be indistinguishable
 // from "that id genuinely isn't in an intact catalog".
+//
+// #1969 QA finding A: this MUST probe with the same typed shape
+// shard.LoadAll's internal loadCatalog unmarshals into (Scenarios []Shard —
+// Shard and Meta are both exported, so the shape is reproducible here), not
+// a looser one. A probe that accepts any per-element shape (e.g. Scenarios
+// []json.RawMessage, which never fails on a nested type mismatch) passes on
+// a file where ONE scenario entry has a type-mismatched field — a numeric
+// "id" where shard.Shard expects a string, say — while shard.LoadAll's own
+// typed json.Unmarshal call returns a non-nil error for that SAME call and
+// so discards the WHOLE catalog, not just the bad entry. QA reproduced this
+// live: such a file made a lookup of an unrelated, well-formed
+// "session-resume" entry fail with "is not a scenario", which is the exact
+// misdiagnosis this function exists to prevent. Confirmed with
+// TestCheckCatalogReadableRejectsATypeMismatchLoadAllAlsoRejects and
+// TestScenarioRecipesReportsCatalogParseFailureNotUnknownScenario, both red
+// against the looser probe.
 func checkCatalogReadable(repoRoot string) error {
 	path := shard.File(repoRoot)
 	b, err := os.ReadFile(path)
@@ -161,10 +177,11 @@ func checkCatalogReadable(repoRoot string) error {
 		return fmt.Errorf("cannot read catalog %s: %w", path, err)
 	}
 	var probe struct {
-		Scenarios []json.RawMessage `json:"scenarios"`
+		Meta      shard.Meta    `json:"meta"`
+		Scenarios []shard.Shard `json:"scenarios"`
 	}
 	if err := json.Unmarshal(b, &probe); err != nil {
-		return fmt.Errorf("catalog %s is not valid JSON: %w", path, err)
+		return fmt.Errorf("catalog %s does not parse into the shape shard.LoadAll expects: %w", path, err)
 	}
 	return nil
 }
@@ -260,19 +277,40 @@ func loadAdapterRecipeView(repoRoot, adapter string, sh shard.Shard) (adapterRec
 
 // --- text rendering ---
 
-// isTimingLandmark reports whether a step type is worth checking for an
-// adjoining sleep: everything except send/wait_turn/sleep itself. These are
-// the process-lifecycle actions (resume, exit_clean, restart, interrupt,
-// sigkill, reset_session, ...) where what's being waited out is irrlicht's
-// OWN daemon-side cooldown or debounce window, not the agent's behavior —
-// which is exactly why a sibling's sleep value nearby is near-authoritative
-// (#1969's own framing).
+// isTimingLandmark reports whether a step type is one this command checks
+// for an adjoining settle sleep: resume, exit_clean, and sigkill — the only
+// three step types that can produce the daemon's process_exited event for a
+// session id the daemon may RE-ADMIT. resume explicitly relaunches the SAME
+// session id (the re-admission event itself); exit_clean and sigkill are the
+// two ways the prior process can end before it. That pairing is precisely
+// the #1960 mechanism (the 10s deletedSessions cooldown) this command exists
+// to surface — and the only one its "MISSING" marker claims to detect.
+//
+// Deliberately excludes:
+//   - restart / start_session: both mint a BRAND NEW session id, never
+//     re-admitted, so the deletedSessions cooldown does not apply to them at
+//     all — and empirically every restart/start_session occurrence in the
+//     corpus carries no adjoining sleep on either side, so there is no
+//     sibling precedent to enforce even if it did apply.
+//   - reset_session / interrupt: neither ends the underlying process — no
+//     process_exited, no re-admission window.
+//   - send / wait_turn / sleep / keys / slash / seed_instruction / fork /
+//     rewind_fork / mid_turn_send / session / live: not process-lifecycle
+//     events at all.
+//
+// A first cut treating every non-send/wait_turn/sleep step as a landmark
+// flagged 109 of 280 occurrences (39%) corpus-wide, including 100% of keys,
+// slash, start_session, seed_instruction and restart — none of which relate
+// to the #1960 cooldown. This narrower list, combined with
+// landmarkSleepPair.flagged's any-side/has-next gate, brings the SAME scan
+// to 0 of 79 — see TestScenarioRecipesCorpusFlagRateStaysLow, which measures
+// this on every run rather than asserting the number by hand.
 func isTimingLandmark(stepType string) bool {
 	switch stepType {
-	case "", "send", "wait_turn", "sleep":
-		return false
-	default:
+	case "resume", "exit_clean", "sigkill":
 		return true
+	default:
+		return false
 	}
 }
 
@@ -293,6 +331,26 @@ func isTimingLandmark(stepType string) bool {
 type landmarkSleepPair struct {
 	Before *float64
 	After  *float64
+	// HasNext is true when a step actually follows this landmark in the
+	// script. A landmark with no settle sleep on either side but ALSO
+	// nothing after it (the recipe simply ends there) has nothing to race,
+	// so it is never flagged regardless of Before/After.
+	HasNext bool
+}
+
+// flagged reports whether this occurrence should render "<-- MISSING": no
+// settle sleep on EITHER side, AND a step actually follows to race it.
+//
+// Only "no sleep at all nearby" is flagged — not "no sleep on this
+// particular side" — because the corpus's dominant real shape for `resume`
+// is `exit_clean -> sleep -> resume -> send` (the sleep sits BEFORE resume,
+// clearing the daemon's deletedSessions cooldown ahead of the relaunch), and
+// that is not a bug: six committed sibling adapters agree on it. Flagging on
+// "after" alone made those six indistinguishable from muse's actual #1960
+// bug. See TestScenarioRecipesCorpusFlagRateStaysLow for the measured
+// before/after corpus-wide rate this predicate change produced.
+func (p landmarkSleepPair) flagged() bool {
+	return p.Before == nil && p.After == nil && p.HasNext
 }
 
 // landmarkSleeps maps each landmark step type occurring in steps to one
@@ -308,7 +366,8 @@ func landmarkSleeps(steps []recipeStepView) map[string][]landmarkSleepPair {
 			v := steps[i-1].Seconds
 			pair.Before = &v
 		}
-		if i+1 < len(steps) && steps[i+1].Type == "sleep" {
+		pair.HasNext = i+1 < len(steps)
+		if pair.HasNext && steps[i+1].Type == "sleep" {
 			v := steps[i+1].Seconds
 			pair.After = &v
 		}
@@ -372,14 +431,16 @@ func printAdapterStepLine(stdout io.Writer, a adapterRecipeView) {
 
 // printLandmarkSleeps is the distilled comparison the issue asks for: for
 // every landmark step type any has_script adapter carries, two lines — the
-// sleep immediately BEFORE and immediately AFTER it — per adapter. This is
-// the muse/1-4_session-resume shape (#1960): pi/codex/hermes/muse all show a
-// value on the "after" row for "resume"; an adapter with NONE there carries
-// the same gap muse shipped with before its fix. Only "after" is flagged —
-// that's the specific position #1960's failure hinged on (the gap between a
-// landmark completing and the next observable send) — "before" is shown
-// alongside it unflagged so a reader can judge whether a sibling's settle
-// sleep just sits on the other side of the landmark instead of being absent.
+// sleep immediately BEFORE and immediately AFTER it — per adapter, both
+// shown unflagged as plain facts. "<-- MISSING" is reserved (via
+// landmarkSleepPair.flagged, rendered on the after row) for an occurrence
+// with NO settle sleep on EITHER side and a step following it to race — see
+// that method's doc comment for why "after empty" alone is not enough:
+// the corpus's dominant real shape for `resume` puts the settle sleep
+// BEFORE it (`exit_clean -> sleep -> resume -> send`), which six committed
+// sibling adapters agree on and is not the #1960 bug. Both rows are printed
+// regardless of whether the flag fires, so a reader can always see WHERE a
+// sibling's settle time actually sits, not just whether the marker lit up.
 func printLandmarkSleeps(stdout io.Writer, adapters []adapterRecipeView) {
 	perAdapter := map[string]map[string][]landmarkSleepPair{}
 	typesSeen := map[string]bool{}
@@ -404,7 +465,7 @@ func printLandmarkSleeps(stdout io.Writer, adapters []adapterRecipeView) {
 	}
 	sort.Strings(types)
 
-	fmt.Fprintln(stdout, "sleep adjoining each landmark step (before -> after; a MISSING \"after\" is the #1960/#1969 failure mode):")
+	fmt.Fprintln(stdout, "sleep adjoining each landmark step (before -> after; MISSING = no settle sleep on EITHER side, with a step following to race it — the #1960 failure mode):")
 	for _, t := range types {
 		fmt.Fprintf(stdout, "  %-14s before:", t)
 		for _, adapter := range order {
@@ -422,28 +483,32 @@ func printLandmarkSleeps(stdout io.Writer, adapters []adapterRecipeView) {
 // formatLandmarkSide renders one side (before/after) of every occurrence of
 // one landmark type for one adapter. flagMissing is true only for the
 // "after" side — see printLandmarkSleeps.
-func formatLandmarkSide(pairs []landmarkSleepPair, flagMissing bool) string {
+func formatLandmarkSide(pairs []landmarkSleepPair, isAfterRow bool) string {
 	if len(pairs) == 0 {
 		return "n/a"
 	}
 	parts := make([]string, len(pairs))
-	flagged := false
+	anyFlagged := false
 	for i, p := range pairs {
 		v := p.Before
-		if flagMissing {
+		if isAfterRow {
 			v = p.After
 		}
 		if v == nil {
 			parts[i] = "NONE"
-			if flagMissing {
-				flagged = true
-			}
 		} else {
 			parts[i] = formatSeconds(*v)
 		}
+		// The marker is rendered on the after row only (that's where a
+		// reader's eye lands to ask "is there settle time here"), but the
+		// underlying flagged() verdict considers BOTH sides — see its doc
+		// comment for why "after empty" alone is not enough to flag.
+		if isAfterRow && p.flagged() {
+			anyFlagged = true
+		}
 	}
 	joined := strings.Join(parts, "+")
-	if flagged {
+	if anyFlagged {
 		return joined + " <-- MISSING"
 	}
 	return joined

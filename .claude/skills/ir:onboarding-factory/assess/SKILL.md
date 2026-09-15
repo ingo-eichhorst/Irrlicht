@@ -159,14 +159,18 @@ makes sibling recipes comparable at all. `muse/1-4_session-resume` (#1960)
 shipped without the sleep every sibling recipe already carried between
 `resume` and the post-resume `send`, and failed 6/8 phases because the whole
 second turn landed inside the daemon's 10s `deletedSessions` cooldown — a
-sibling diff would have caught it before the first recording. Read the
-helper's `before`/`after` columns separately rather than assuming they're
-interchangeable: a sleep can settle the SAME wait either just before a
-relaunch-style step or just after it, and only reading both sides tells the
-two apart. A typo'd scenario id fails loudly (non-zero exit, to stderr); a
-real scenario nobody has recorded a sibling recipe for yet exits clean and
-says so explicitly — the two print different things on purpose, so check
-which one you got rather than reading either as "nothing to account for."
+sibling diff would have caught it before the first recording.
+
+- Read the helper's `before`/`after` columns separately rather than assuming
+  they're interchangeable: a sleep can settle the SAME wait either just
+  before a relaunch-style step or just after it, and only reading both sides
+  tells the two apart. Its `<-- MISSING` marker only fires when a sibling
+  has NEITHER side filled, so a clean run is not permission to skip reading
+  the columns yourself — match every sleep a sibling carries, marker or not.
+- A typo'd scenario id fails loudly (non-zero exit, to stderr); a real
+  scenario nobody has recorded a sibling recipe for yet exits clean and says
+  so explicitly — the two print different things on purpose, so check which
+  one you got rather than reading either as "nothing to account for."
 
 **The recipe's PROMPT is part of the fixture — write it for a machine, not a
 reader.** Three cells failed on model wording alone, not plumbing:
