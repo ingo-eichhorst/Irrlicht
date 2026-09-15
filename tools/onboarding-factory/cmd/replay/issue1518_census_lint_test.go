@@ -228,7 +228,7 @@ func (s censusFigureSite) String() string {
 		s.File, s.Line, s.Value, strings.Join(s.Fields, "/"), s.Text)
 }
 
-// figureSet decides which integer values a scan reports, and under which
+// figureFielder decides which integer values a scan reports, and under which
 // census field names.
 //
 // It is an interface for one reason: the density measurement in
@@ -238,7 +238,7 @@ func (s censusFigureSite) String() string {
 // that is not under test would then be the one reporting the false-positive
 // rate — the failure #1480 removed by making compareOrdered return its matched
 // pairs instead of a count beside them.
-type figureSet interface {
+type figureFielder interface {
 	fields(value int) ([]string, bool)
 }
 
@@ -374,7 +374,7 @@ func isASCIILetter(b byte) bool { return (b|0x20) >= 'a' && (b|0x20) <= 'z' }
 // Comments only, via go/parser rather than a grep, because a digit in a string
 // literal or an identifier is code and is not a claim about the catalog —
 // testdata/censuslint/code-not-comment.go.txt pins that.
-func scanCommentsForFigures(filename string, src []byte, wanted figureSet) ([]censusFigureSite, error) {
+func scanCommentsForFigures(filename string, src []byte, wanted figureFielder) ([]censusFigureSite, error) {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, filename, src, parser.ParseComments)
 	if err != nil {
@@ -448,7 +448,7 @@ func packageGoFiles(t *testing.T) map[string][]byte {
 }
 
 // scanPackage returns every flagged site in this package, in file:line order.
-func scanPackage(t *testing.T, wanted figureSet) []censusFigureSite {
+func scanPackage(t *testing.T, wanted figureFielder) []censusFigureSite {
 	t.Helper()
 	var sites []censusFigureSite
 	for name, src := range packageGoFiles(t) {
@@ -548,6 +548,30 @@ var corpusCensus = catalogCensus{
 	PairedButUngraded:         4242,                  // shares Recordings' value
 }
 
+// censusFigureLintWant is one finding a TestCensusFigureLintCorpus case pins
+// for a bare integer in its fixture: the value, the line it sits on, and the
+// census field name(s) it is checked against.
+type censusFigureLintWant struct {
+	value  int
+	line   int
+	fields []string
+}
+
+// censusFigureLintCase is one TestCensusFigureLintCorpus fixture: the file to
+// scan under testdata/censuslint, the fragments it must still contain
+// (plants — a corpus that quietly stops carrying its own test cases reads as
+// a pass), and the findings scanCommentsForFigures must return for it.
+//
+// Named rather than anonymous so runCensusFigureLintCase below has a real
+// parameter type to declare, instead of leaning on Go's structural typing of
+// anonymous structs to make an inline literal match an inline parameter type
+// by accident of having the same fields.
+type censusFigureLintCase struct {
+	file   string
+	plants []string
+	want   []censusFigureLintWant
+}
+
 // TestCensusFigureLintCorpus is the committed mutation evidence: one fixture per
 // spelling, pinned to the verdict the detector must return.
 //
@@ -556,23 +580,17 @@ var corpusCensus = catalogCensus{
 // flagged row and read as excellent coverage — #1450's lesson, and the specific
 // failure the ticket predicted ("the natural implementation flags every 0, 1
 // and 2 in the package").
+//
+// The per-case body is runCensusFigureLintCase: it takes this fixture's own
+// case struct and checks THIS fixture's own file against THIS fixture's own
+// want rows, so the split carries no data across the function boundary that
+// is not that one case's.
 func TestCensusFigureLintCorpus(t *testing.T) {
-	type want struct {
-		value  int
-		line   int
-		fields []string
-	}
-	cases := []struct {
-		file string
-		// plants are fragments the fixture must still contain. A corpus that
-		// quietly stops carrying its own test cases reads as a pass.
-		plants []string
-		want   []want
-	}{
+	cases := []censusFigureLintCase{
 		{
 			file:   "stale-figure.go.txt",
 			plants: []string{"reached 4242 recordings"},
-			want:   []want{{4242, 3, []string{"Recordings", "PairedButUngraded"}}},
+			want:   []censusFigureLintWant{{4242, 3, []string{"Recordings", "PairedButUngraded"}}},
 		},
 		{
 			file: "not-a-figure.go.txt",
@@ -590,12 +608,12 @@ func TestCensusFigureLintCorpus(t *testing.T) {
 		{
 			file:   "at-floor.go.txt",
 			plants: []string{"at 50,"},
-			want:   []want{{50, 3, []string{"Zero"}}},
+			want:   []censusFigureLintWant{{50, 3, []string{"Zero"}}},
 		},
 		{
 			file:   "table-row.go.txt",
 			plants: []string{"as shipped", "3       7373"},
-			want:   []want{{7373, 10, []string{"Divergent"}}},
+			want:   []censusFigureLintWant{{7373, 10, []string{"Divergent"}}},
 		},
 		{
 			file:   "code-not-comment.go.txt",
@@ -605,7 +623,7 @@ func TestCensusFigureLintCorpus(t *testing.T) {
 		{
 			file:   "two-on-one-line.go.txt",
 			plants: []string{"4242 recordings of which 7373 diverge"},
-			want: []want{
+			want: []censusFigureLintWant{
 				{4242, 3, []string{"Recordings", "PairedButUngraded"}},
 				{7373, 3, []string{"Divergent"}},
 			},
@@ -613,12 +631,12 @@ func TestCensusFigureLintCorpus(t *testing.T) {
 		{
 			file:   "block-comment.go.txt",
 			plants: []string{"4242 sits here"},
-			want:   []want{{4242, 5, []string{"Recordings", "PairedButUngraded"}}},
+			want:   []censusFigureLintWant{{4242, 5, []string{"Recordings", "PairedButUngraded"}}},
 		},
 		{
 			file:   "shared-value.go.txt",
 			plants: []string{"4242 is both Recordings and PairedButUngraded"},
-			want:   []want{{4242, 3, []string{"Recordings", "PairedButUngraded"}}},
+			want:   []censusFigureLintWant{{4242, 3, []string{"Recordings", "PairedButUngraded"}}},
 		},
 	}
 
@@ -631,35 +649,7 @@ func TestCensusFigureLintCorpus(t *testing.T) {
 	flagged := 0
 	for _, tc := range cases {
 		t.Run(tc.file, func(t *testing.T) {
-			path := filepath.Join("testdata", "censuslint", tc.file)
-			src, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatalf("reading the fixture: %v", err)
-			}
-			for _, plant := range tc.plants {
-				if !strings.Contains(string(src), plant) {
-					t.Fatalf("the fixture no longer contains %q, so whatever it now asserts "+
-						"is not the case it was written for", plant)
-				}
-			}
-			got, err := scanCommentsForFigures(path, src, wanted)
-			if err != nil {
-				t.Fatalf("parsing the fixture: %v", err)
-			}
-			if len(got) != len(tc.want) {
-				t.Fatalf("want %d finding(s), got %d: %v", len(tc.want), len(got), got)
-			}
-			for i, w := range tc.want {
-				if got[i].Value != w.value {
-					t.Errorf("finding %d: want value %d, got %d", i, w.value, got[i].Value)
-				}
-				if got[i].Line != w.line {
-					t.Errorf("finding %d: want line %d, got %d", i, w.line, got[i].Line)
-				}
-				if strings.Join(got[i].Fields, ",") != strings.Join(w.fields, ",") {
-					t.Errorf("finding %d: want fields %v, got %v", i, w.fields, got[i].Fields)
-				}
-			}
+			runCensusFigureLintCase(t, wanted, tc)
 		})
 		flagged += len(tc.want)
 	}
@@ -673,6 +663,41 @@ func TestCensusFigureLintCorpus(t *testing.T) {
 	if flagged == len(cases) {
 		t.Fatal("every corpus case expects a finding, so a detector that reports " +
 			"everything passes the whole corpus — the want:none rows are the evidence")
+	}
+}
+
+// runCensusFigureLintCase runs one TestCensusFigureLintCorpus fixture: checks
+// tc's plants are still present in its file, scans the file for the figures
+// wanted names, and holds every returned finding to tc's own want rows.
+func runCensusFigureLintCase(t *testing.T, wanted figureFielder, tc censusFigureLintCase) {
+	path := filepath.Join("testdata", "censuslint", tc.file)
+	src, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading the fixture: %v", err)
+	}
+	for _, plant := range tc.plants {
+		if !strings.Contains(string(src), plant) {
+			t.Fatalf("the fixture no longer contains %q, so whatever it now asserts "+
+				"is not the case it was written for", plant)
+		}
+	}
+	got, err := scanCommentsForFigures(path, src, wanted)
+	if err != nil {
+		t.Fatalf("parsing the fixture: %v", err)
+	}
+	if len(got) != len(tc.want) {
+		t.Fatalf("want %d finding(s), got %d: %v", len(tc.want), len(got), got)
+	}
+	for i, w := range tc.want {
+		if got[i].Value != w.value {
+			t.Errorf("finding %d: want value %d, got %d", i, w.value, got[i].Value)
+		}
+		if got[i].Line != w.line {
+			t.Errorf("finding %d: want line %d, got %d", i, w.line, got[i].Line)
+		}
+		if strings.Join(got[i].Fields, ",") != strings.Join(w.fields, ",") {
+			t.Errorf("finding %d: want fields %v, got %v", i, w.fields, got[i].Fields)
+		}
 	}
 }
 
