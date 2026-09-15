@@ -12,7 +12,7 @@
 #
 # Used both by CI and by tools/replay-in-docker.sh so a macOS dev can run the
 # exact Linux gate locally (incl. arm64 via buildx/QEMU).
-ARG GO_VERSION=1.25
+ARG GO_VERSION=1.26
 FROM golang:${GO_VERSION}-bookworm
 
 # replay-fixtures.sh shells out to python3 (report rendering) and jq (the
