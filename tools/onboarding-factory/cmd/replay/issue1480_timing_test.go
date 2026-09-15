@@ -55,6 +55,10 @@ type timingCase struct {
 // everything and one that flags correctly are indistinguishable without the
 // second kind, which is why the balance is asserted below rather than left to
 // whoever adds the next case.
+//
+// The per-file body is runTimingCorpusCase: it takes this fixture's own name
+// and returns THIS fixture's own drift/clean classification, so the split
+// carries no data across the function boundary that is not that one case's.
 func TestTransitionTimeDeltas_Corpus(t *testing.T) {
 	dir := filepath.Join("testdata", "timing")
 	entries, err := os.ReadDir(dir)
@@ -69,66 +73,7 @@ func TestTransitionTimeDeltas_Corpus(t *testing.T) {
 		}
 		name := e.Name()
 		t.Run(strings.TrimSuffix(name, ".json"), func(t *testing.T) {
-			raw, err := os.ReadFile(filepath.Join(dir, name))
-			if err != nil {
-				t.Fatalf("read %s: %v", name, err)
-			}
-			var tc timingCase
-			if err := json.Unmarshal(raw, &tc); err != nil {
-				t.Fatalf("parse %s: %v", name, err)
-			}
-			if tc.Description == "" {
-				t.Fatalf("%s has no description — a corpus row states what it pins", name)
-			}
-			// A case that supplies no transitions asserts nothing; the corpus
-			// would still look populated. Refuse rather than skip.
-			if len(tc.Recorded) == 0 || len(tc.Replayed) == 0 {
-				t.Fatalf("%s supplies %d recorded / %d replayed — an empty side pins nothing",
-					name, len(tc.Recorded), len(tc.Replayed))
-			}
-			// And a case that expects no pairs asserts nothing either, while
-			// still passing and still counting toward the drift/clean balance
-			// guard below. A probe with kind-mismatched sides and no want_*
-			// fields at all passed and incremented sawClean before this check
-			// existed, which would have satisfied that guard on its own.
-			if len(tc.Want) == 0 {
-				t.Fatalf("%s expects no measured pairs — a corpus row must pin at least one "+
-					"pair, or it passes without asserting anything", name)
-			}
-
-			// compareOrdered is the production pairing, and since #1480 it is
-			// the only one — the corpus therefore exercises the function the
-			// daemon-comparison actually runs, not a parallel copy of it.
-			got, _ := compareOrdered(tc.Recorded, tc.Replayed)
-
-			want := make([]timeDelta, 0, len(tc.Want))
-			for _, w := range tc.Want {
-				want = append(want, timeDelta{Index: w.Index, Kind: w.Kind, Delta: time.Duration(w.DeltaNs)})
-			}
-			// Index is the INPUT pair position, not the output slot, and the
-			// two differ exactly where a pair was excluded — which is what
-			// kind-mismatch-excluded.json pins. Every "at pair N" in the
-			// enumeration below is that number, so a regression writing the
-			// output slot there would leave the deltas right and every
-			// reported position wrong.
-			if !reflect.DeepEqual(got, want) {
-				t.Fatalf("%s:\n  got  %v\n  want %v", tc.Description, got, want)
-			}
-
-			first, ok := firstDrift(got)
-			switch {
-			case tc.WantFirstNs == nil && ok:
-				t.Errorf("%s: reported first drift %v, want none (threshold %v)",
-					tc.Description, first.Delta, driftThreshold)
-			case tc.WantFirstNs != nil && !ok:
-				t.Errorf("%s: reported NO first drift, want %v — the measurement stopped measuring",
-					tc.Description, time.Duration(*tc.WantFirstNs))
-			case tc.WantFirstNs != nil && int64(first.Delta) != *tc.WantFirstNs:
-				t.Errorf("%s: first drift = %v, want %v",
-					tc.Description, first.Delta, time.Duration(*tc.WantFirstNs))
-			}
-
-			if tc.WantFirstNs != nil {
+			if runTimingCorpusCase(t, dir, name) {
 				sawDrift++
 			} else {
 				sawClean++
@@ -147,6 +92,76 @@ func TestTransitionTimeDeltas_Corpus(t *testing.T) {
 		t.Error("no corpus case expects a clean result — nothing here proves the measurement can stay silent")
 	}
 	t.Logf("corpus: %d cases (%d expect drift, %d expect clean)", ran, sawDrift, sawClean)
+}
+
+// runTimingCorpusCase loads and asserts one #1480 corpus fixture (dir/name):
+// its shape, compareOrdered's classification of it against what the fixture
+// pins, and firstDrift's verdict. It reports whether the fixture is a "drift"
+// case (want_first_drift set) or a "clean" one, which is the one piece of
+// information TestTransitionTimeDeltas_Corpus's drift/clean balance guard
+// needs back — everything else about the case stays local to this function,
+// the same case data it was constructed from.
+func runTimingCorpusCase(t *testing.T, dir, name string) bool {
+	raw, err := os.ReadFile(filepath.Join(dir, name))
+	if err != nil {
+		t.Fatalf("read %s: %v", name, err)
+	}
+	var tc timingCase
+	if err := json.Unmarshal(raw, &tc); err != nil {
+		t.Fatalf("parse %s: %v", name, err)
+	}
+	if tc.Description == "" {
+		t.Fatalf("%s has no description — a corpus row states what it pins", name)
+	}
+	// A case that supplies no transitions asserts nothing; the corpus
+	// would still look populated. Refuse rather than skip.
+	if len(tc.Recorded) == 0 || len(tc.Replayed) == 0 {
+		t.Fatalf("%s supplies %d recorded / %d replayed — an empty side pins nothing",
+			name, len(tc.Recorded), len(tc.Replayed))
+	}
+	// And a case that expects no pairs asserts nothing either, while
+	// still passing and still counting toward the drift/clean balance
+	// guard below. A probe with kind-mismatched sides and no want_*
+	// fields at all passed and incremented sawClean before this check
+	// existed, which would have satisfied that guard on its own.
+	if len(tc.Want) == 0 {
+		t.Fatalf("%s expects no measured pairs — a corpus row must pin at least one "+
+			"pair, or it passes without asserting anything", name)
+	}
+
+	// compareOrdered is the production pairing, and since #1480 it is
+	// the only one — the corpus therefore exercises the function the
+	// daemon-comparison actually runs, not a parallel copy of it.
+	got, _ := compareOrdered(tc.Recorded, tc.Replayed)
+
+	want := make([]timeDelta, 0, len(tc.Want))
+	for _, w := range tc.Want {
+		want = append(want, timeDelta{Index: w.Index, Kind: w.Kind, Delta: time.Duration(w.DeltaNs)})
+	}
+	// Index is the INPUT pair position, not the output slot, and the
+	// two differ exactly where a pair was excluded — which is what
+	// kind-mismatch-excluded.json pins. Every "at pair N" in the
+	// enumeration below is that number, so a regression writing the
+	// output slot there would leave the deltas right and every
+	// reported position wrong.
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("%s:\n  got  %v\n  want %v", tc.Description, got, want)
+	}
+
+	first, ok := firstDrift(got)
+	switch {
+	case tc.WantFirstNs == nil && ok:
+		t.Errorf("%s: reported first drift %v, want none (threshold %v)",
+			tc.Description, first.Delta, driftThreshold)
+	case tc.WantFirstNs != nil && !ok:
+		t.Errorf("%s: reported NO first drift, want %v — the measurement stopped measuring",
+			tc.Description, time.Duration(*tc.WantFirstNs))
+	case tc.WantFirstNs != nil && int64(first.Delta) != *tc.WantFirstNs:
+		t.Errorf("%s: first drift = %v, want %v",
+			tc.Description, first.Delta, time.Duration(*tc.WantFirstNs))
+	}
+
+	return tc.WantFirstNs != nil
 }
 
 // ---------------------------------------------------------------------------
