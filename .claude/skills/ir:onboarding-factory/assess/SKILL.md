@@ -147,6 +147,37 @@ validate` REJECTS a script recipe missing `timeout_seconds` — its absence once
 reached a driver as the literal `null` and crashed it. Headless (`prompt`) and
 `applicable:false` recipes don't need them.
 
+**Before finalizing timing, diff against sibling recipes for the same
+scenario.** Run `of scenario recipes --name <scenario>` and read every sleep
+or delay a sibling adapter's committed recipe carries that yours doesn't —
+either match it or write down in the recipe's `scope_note` why it doesn't
+apply. A daemon cooldown, a debounce window, a settle interval are properties
+of *irrlicht*, not of the agent under test, so a sibling's value is
+near-authoritative — scenarios are agent-agnostic by design (`requires:
+[capability]`, per the canonical-scenario-matrix convention), which is what
+makes sibling recipes comparable at all. `muse/1-4_session-resume` (#1960)
+shipped without the sleep every sibling recipe already carried between
+`resume` and the post-resume `send`, and failed 6/8 phases because the whole
+second turn landed inside the daemon's 10s `deletedSessions` cooldown — a
+sibling diff would have caught it before the first recording.
+
+- Read the helper's `before`/`after` columns separately rather than assuming
+  they're interchangeable: a sleep before `resume` clears the daemon's
+  cooldown ahead of the relaunch, but only a sleep AFTER `resume` covers the
+  separate window the daemon needs to observe an intermediate state before
+  the next turn completes — a 12s sleep before `resume` and nothing after it
+  is what muse's actual pre-fix recipe looked like, and it does not count as
+  settled. The `<-- MISSING` marker knows this distinction for `resume`
+  specifically (flags on an absent `after` alone) but treats `exit_clean`/
+  `sigkill` more leniently (either side counts, since nothing observable
+  races them directly) — so a clean run is not permission to skip reading
+  the columns yourself for those two; match every sleep a sibling carries,
+  marker or not.
+- A typo'd scenario id fails loudly (non-zero exit, to stderr); a real
+  scenario nobody has recorded a sibling recipe for yet exits clean and says
+  so explicitly — the two print different things on purpose, so check which
+  one you got rather than reading either as "nothing to account for."
+
 **The recipe's PROMPT is part of the fixture — write it for a machine, not a
 reader.** Three cells failed on model wording alone, not plumbing:
 

@@ -166,12 +166,15 @@ func runScenarioShow(args []string, stdout, stderr io.Writer) int {
 
 func runScenario(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: of scenario add|update|show ...")
+		fmt.Fprintln(stderr, "usage: of scenario add|update|show|recipes ...")
 		return exitUsage
 	}
 	verb := args[0]
 	if verb == "show" {
 		return runScenarioShow(args[1:], stdout, stderr)
+	}
+	if verb == "recipes" {
+		return runScenarioRecipes(args[1:], stdout, stderr)
 	}
 	fs := newFlagSet("of scenario " + verb)
 	var (
@@ -220,7 +223,7 @@ func runScenario(args []string, stdout, stderr io.Writer) int {
 	case "update":
 		rc = applyScenarioUpdate(cat, idx, edit, stderr)
 	default:
-		fmt.Fprintln(stderr, "of scenario: verb must be add, update, or show")
+		fmt.Fprintln(stderr, "of scenario: verb must be add, update, show, or recipes")
 		return exitUsage
 	}
 	if rc != exitOK {
