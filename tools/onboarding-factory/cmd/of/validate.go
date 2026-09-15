@@ -267,7 +267,46 @@ func validateCell(loc cellLoc, names map[string]bool, add func(path, msg string)
 		add(rel+metadataJSONSuffix, msg)
 	}
 	validateCellVocabulary(cell, rel, add)
+	// recorded here uses the same disk signal validateCellRecording checks
+	// completeness against (validate.RecordingDirs), computed once and reused
+	// so the two checks can never disagree about whether the cell is recorded.
+	recorded := len(validate.RecordingDirs(cellDir)) > 0
+	validateCellDriverConsistency(cell, rel, recorded, add)
 	validateCellRecording(loc, add)
+}
+
+// validateCellDriverConsistency is the #1968 gate: a cell that is recorded
+// must not carry a gap:<primitive> driver pillar on either tier — see
+// matrix.ValidateDriverRecordedConsistency for the argument and the
+// deliberate daemon_capability exemption it does NOT apply here.
+//
+// Like validateCellVocabulary, it checks both tiers a cell stores
+// (write.go's mirrorAssessmentPillars keeps them in sync, so checking only
+// one would let the other half drift silently). A details.assessment blob
+// that cannot be parsed is reported as its own finding rather than skipped —
+// AGENTS.md's rule for a validator that cannot read its input: check MORE,
+// never less, so an unreadable tier fails loudly instead of reading as "no
+// violation".
+func validateCellDriverConsistency(cell shard.ShardAgent, rel string, recorded bool, add func(path, msg string)) {
+	path := rel + metadataJSONSuffix
+	for _, msg := range matrix.ValidateDriverRecordedConsistency("metadata", cell.Metadata.DriverCapability, recorded) {
+		add(path, msg)
+	}
+	if len(cell.Details.Assessment) == 0 {
+		return
+	}
+	var a struct {
+		DriverCapability string `json:"driver_capability"`
+	}
+	if err := json.Unmarshal(cell.Details.Assessment, &a); err != nil {
+		add(path, fmt.Sprintf(
+			"details.assessment is not a well-formed assessment object, so the #1968 driver/recorded "+
+				"consistency check cannot read its driver_capability: %v", err))
+		return
+	}
+	for _, msg := range matrix.ValidateDriverRecordedConsistency("details.assessment", a.DriverCapability, recorded) {
+		add(path, msg)
+	}
 }
 
 // validateCellVocabulary enforces the assessment-axis vocabulary defined in
