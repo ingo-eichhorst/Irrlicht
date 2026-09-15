@@ -301,10 +301,11 @@ func loadAdapterRecipeView(repoRoot, adapter string, sh shard.Shard) (adapterRec
 // A first cut treating every non-send/wait_turn/sleep step as a landmark
 // flagged 109 of 280 occurrences (39%) corpus-wide, including 100% of keys,
 // slash, start_session, seed_instruction and restart — none of which relate
-// to the #1960 cooldown. This narrower list, combined with
-// landmarkSleepPair.flagged's any-side/has-next gate, brings the SAME scan
-// to 0 of 79 — see TestScenarioRecipesCorpusFlagRateStaysLow, which measures
-// this on every run rather than asserting the number by hand.
+// to the #1960 cooldown. This narrower list brings the same scan to 79
+// occurrences worth checking at all — see requiresAfterSleep for how many of
+// those are actually flagged and why the answer differs by type, and
+// TestScenarioRecipesCorpusFlagRateStaysLow, which measures the number on
+// every run rather than asserting it by hand.
 func isTimingLandmark(stepType string) bool {
 	switch stepType {
 	case "resume", "exit_clean", "sigkill":
@@ -314,21 +315,47 @@ func isTimingLandmark(stepType string) bool {
 	}
 }
 
-// landmarkSleepPair is the sleep (seconds) immediately before and
-// immediately after one landmark step occurrence. Either is nil when that
-// occurrence has no sleep step adjoining it on that side.
+// requiresAfterSleep reports whether flagging this landmark type considers
+// ONLY the after side (ignoring before), vs either side.
 //
-// Both sides matter, not just "after": running this against the real
-// replaydata corpus (see #1969's report) showed most siblings for
-// 1-4_session-resume split `resume` into two script steps — `exit_clean`,
-// then a sleep, then `resume` — and put their settle sleep BEFORE resume,
-// not after. Reporting "after" alone flagged those as looking identical to
-// muse's actual pre-fix bug (a genuinely absent sleep on EITHER side of an
-// atomic resume). They are not the same shape, and only showing "before" and
-// "after" side by side — rather than picking one or silently merging them —
-// lets a reader tell the two apart instead of this command asserting which
-// one is correct.
+// #1969 QA caught a real regression here: an earlier "either side counts"
+// rule for EVERY landmark type made a reconstruction of muse's actual
+// pre-fix recipe (`exit_clean -> SLEEP 12s -> resume -> send`, no sleep
+// after resume — the exact shape #1969 exists to catch) render unflagged,
+// because the 12s sleep sits before resume. That is wrong specifically for
+// resume: the daemon's #1960 mechanism has TWO distinct windows, and a
+// sleep before resume only covers the first —
+//
+//   - before exit_clean/resume (or between them): lets the deletedSessions
+//     cooldown clear before the SAME session id is re-admitted. A sleep
+//     anywhere in this window works; nothing observable ever races
+//     exit_clean or sigkill directly in this corpus (the next step after
+//     either is always another landmark or a sleep, never a send), so
+//     EITHER side is fine for those two types.
+//   - after resume, before the next send: resume IS the re-admission event
+//     — the new process just bound to the session id. This is the window
+//     the daemon needs to observe an intermediate working state before the
+//     whole turn completes and lands on disk, and it is what muse's actual
+//     fix added. A sleep sitting BEFORE resume, however large, has already
+//     elapsed by the time this window opens and does not cover it — the
+//     two are not interchangeable even though they occupy the same "sleep
+//     adjoining a landmark" shape in the raw step list.
+//
+// So resume is flagged on an absent AFTER sleep alone; exit_clean/sigkill
+// are flagged only when NEITHER side has one. Confirmed against a fixture
+// reconstructing muse's pre-fix recipe
+// (TestScenarioRecipesFlagsTheReconstructedMusePreFixRecipe) and against the
+// real corpus (TestScenarioRecipesCorpusFlagRateStaysLow).
+func requiresAfterSleep(landmarkType string) bool {
+	return landmarkType == "resume"
+}
+
+// landmarkSleepPair is the sleep (seconds) immediately before and
+// immediately after one landmark step occurrence, plus the step type itself
+// (flagged's rule differs by type — see requiresAfterSleep). Before/After
+// are nil when that occurrence has no sleep step adjoining it on that side.
 type landmarkSleepPair struct {
+	Type   string
 	Before *float64
 	After  *float64
 	// HasNext is true when a step actually follows this landmark in the
@@ -338,19 +365,18 @@ type landmarkSleepPair struct {
 	HasNext bool
 }
 
-// flagged reports whether this occurrence should render "<-- MISSING": no
-// settle sleep on EITHER side, AND a step actually follows to race it.
-//
-// Only "no sleep at all nearby" is flagged — not "no sleep on this
-// particular side" — because the corpus's dominant real shape for `resume`
-// is `exit_clean -> sleep -> resume -> send` (the sleep sits BEFORE resume,
-// clearing the daemon's deletedSessions cooldown ahead of the relaunch), and
-// that is not a bug: six committed sibling adapters agree on it. Flagging on
-// "after" alone made those six indistinguishable from muse's actual #1960
-// bug. See TestScenarioRecipesCorpusFlagRateStaysLow for the measured
-// before/after corpus-wide rate this predicate change produced.
+// flagged reports whether this occurrence should render "<-- MISSING". See
+// requiresAfterSleep for why the rule differs between resume and
+// exit_clean/sigkill. A landmark with nothing following it is never
+// flagged — there is nothing to race.
 func (p landmarkSleepPair) flagged() bool {
-	return p.Before == nil && p.After == nil && p.HasNext
+	if !p.HasNext {
+		return false
+	}
+	if requiresAfterSleep(p.Type) {
+		return p.After == nil
+	}
+	return p.Before == nil && p.After == nil
 }
 
 // landmarkSleeps maps each landmark step type occurring in steps to one
@@ -361,7 +387,7 @@ func landmarkSleeps(steps []recipeStepView) map[string][]landmarkSleepPair {
 		if !isTimingLandmark(s.Type) {
 			continue
 		}
-		var pair landmarkSleepPair
+		pair := landmarkSleepPair{Type: s.Type}
 		if i > 0 && steps[i-1].Type == "sleep" {
 			v := steps[i-1].Seconds
 			pair.Before = &v
@@ -432,15 +458,13 @@ func printAdapterStepLine(stdout io.Writer, a adapterRecipeView) {
 // printLandmarkSleeps is the distilled comparison the issue asks for: for
 // every landmark step type any has_script adapter carries, two lines — the
 // sleep immediately BEFORE and immediately AFTER it — per adapter, both
-// shown unflagged as plain facts. "<-- MISSING" is reserved (via
-// landmarkSleepPair.flagged, rendered on the after row) for an occurrence
-// with NO settle sleep on EITHER side and a step following it to race — see
-// that method's doc comment for why "after empty" alone is not enough:
-// the corpus's dominant real shape for `resume` puts the settle sleep
-// BEFORE it (`exit_clean -> sleep -> resume -> send`), which six committed
-// sibling adapters agree on and is not the #1960 bug. Both rows are printed
-// regardless of whether the flag fires, so a reader can always see WHERE a
-// sibling's settle time actually sits, not just whether the marker lit up.
+// shown as plain facts regardless of whether the "<-- MISSING" marker fires.
+// The marker's rule (landmarkSleepPair.flagged / requiresAfterSleep) is NOT
+// uniform across types: resume is flagged on an absent AFTER sleep alone
+// (before doesn't cover the window that matters — see requiresAfterSleep),
+// while exit_clean/sigkill accept either side. Both rows are still printed
+// for every type either way, so a reader can always see WHERE a sibling's
+// settle time actually sits, not just whether the marker lit up.
 func printLandmarkSleeps(stdout io.Writer, adapters []adapterRecipeView) {
 	perAdapter := map[string]map[string][]landmarkSleepPair{}
 	typesSeen := map[string]bool{}
@@ -465,7 +489,7 @@ func printLandmarkSleeps(stdout io.Writer, adapters []adapterRecipeView) {
 	}
 	sort.Strings(types)
 
-	fmt.Fprintln(stdout, "sleep adjoining each landmark step (before -> after; MISSING = no settle sleep on EITHER side, with a step following to race it — the #1960 failure mode):")
+	fmt.Fprintln(stdout, "sleep adjoining each landmark step (before -> after; MISSING = resume with no sleep AFTER it, or exit_clean/sigkill with no sleep on either side — always with a step following to race it):")
 	for _, t := range types {
 		fmt.Fprintf(stdout, "  %-14s before:", t)
 		for _, adapter := range order {

@@ -196,34 +196,106 @@ func TestScenarioRecipesReportsCatalogParseFailureNotUnknownScenario(t *testing.
 // so it must render unflagged. Only a landmark with NO settle sleep on
 // EITHER side, with a step actually following it to race, is worth a flag.
 
-func TestScenarioRecipesDoesNotFlagWhenEitherSideHasASleep(t *testing.T) {
-	root := recipesRepo(t, []string{"before-style", "after-style"})
-	// before-style: settles with a sleep BEFORE resume (the corpus's
-	// dominant real shape — exit_clean, sleep, resume), sends immediately
-	// after. This must NOT be flagged.
-	recipeCell(t, root, "before-style", resumeScript(`{"type":"sleep","seconds":5}`, ""))
-	// after-style: resumes immediately, settles with a sleep AFTER resume.
-	recipeCell(t, root, "after-style", resumeScript("", `{"type":"sleep","seconds":6}`))
+// #1969 QA caught a real regression in a first cut of this fix: an
+// "either side counts" rule for EVERY landmark made a reconstruction of
+// muse's actual pre-fix recipe render unflagged, because its 12s sleep sits
+// before resume. Measured live: `of scenario recipes` on that reconstruction
+// printed "resume after: muse=NONE" with NO "<-- MISSING" suffix — the exact
+// defect #1969 exists to catch, silently passed. The corrected rule is
+// TYPE-SPECIFIC (requiresAfterSleep): resume is flagged on an absent AFTER
+// sleep alone, because that is the specific window the #1960 daemon
+// mechanism needs covered (re-admission to next observable send) and a
+// sleep sitting BEFORE resume — however large — has already elapsed by the
+// time that window opens. exit_clean/sigkill still accept either side,
+// because nothing observable ever races them directly in this corpus.
+
+func TestScenarioRecipesResumeRequiresAnAfterSleepSpecifically(t *testing.T) {
+	root := recipesRepo(t, []string{"before-only", "after-only"})
+	// before-only: exactly the six real siblings' shape for `resume` —
+	// settles with a sleep BEFORE it, sends immediately after. This IS
+	// flagged: the sleep does not cover the post-resume race window.
+	recipeCell(t, root, "before-only", resumeScript(`{"type":"sleep","seconds":5}`, ""))
+	// after-only: settles with a sleep AFTER resume — covers the window,
+	// not flagged.
+	recipeCell(t, root, "after-only", resumeScript("", `{"type":"sleep","seconds":6}`))
 
 	code, out, errb := runOf("scenario", "recipes", "--name", "resume-like", "--repo-root", root)
 	if code != exitOK {
 		t.Fatalf("exit=%d want %d; stderr=%q", code, exitOK, errb)
 	}
 
-	if strings.Contains(out, "<-- MISSING") {
-		t.Fatalf("neither adapter should be flagged — each has a settle sleep on SOME side of resume; got:\n%s", out)
+	if !strings.Contains(out, "before-only=NONE <-- MISSING") {
+		t.Fatalf("before-only has a sleep BEFORE resume but none after — must still be flagged (before doesn't cover the post-resume window); got:\n%s", out)
 	}
-	if !strings.Contains(out, "before-style=5s") {
-		t.Fatalf("before-style's pre-resume sleep must appear on the before row; got:\n%s", out)
+	if !strings.Contains(out, "after-only=6s") {
+		t.Fatalf("after-only's post-resume sleep must appear on the after row, unflagged; got:\n%s", out)
 	}
-	if !strings.Contains(out, "after-style=6s") {
-		t.Fatalf("after-style's post-resume sleep must appear on the after row; got:\n%s", out)
+	if strings.Contains(out, "after-only=6s <-- MISSING") {
+		t.Fatalf("after-only must not be flagged — it covers the window; got:\n%s", out)
 	}
-	if !strings.Contains(out, "before-style=NONE") {
-		t.Fatalf("before-style's after row must still show NONE (factual — it really has none), just not flagged; got:\n%s", out)
+	if !strings.Contains(out, "before-only=5s") {
+		t.Fatalf("before-only's pre-resume sleep must still be shown on the before row (factual, even though it doesn't clear the flag); got:\n%s", out)
 	}
-	if !strings.Contains(out, "after-style=NONE") {
-		t.Fatalf("after-style's before row must still show NONE (factual), just not flagged; got:\n%s", out)
+}
+
+func TestScenarioRecipesExitCleanAcceptsASleepOnEitherSide(t *testing.T) {
+	root := recipesRepo(t, []string{"solo"})
+	// A sleep BEFORE exit_clean, none after (exit_clean is immediately
+	// followed by resume, not a sleep) — unlike resume, this must NOT be
+	// flagged: nothing observable races exit_clean directly.
+	recipeCell(t, root, "solo", `{"applicable": true, "timeout_seconds": 120, "settings": {}, "script": [`+
+		`{"type":"send","text":"x"},{"type":"wait_turn"},{"type":"sleep","seconds":5},`+
+		`{"type":"exit_clean"},{"type":"resume"},{"type":"sleep","seconds":6},`+
+		`{"type":"send","text":"y"},{"type":"wait_turn"}]}`)
+
+	_, out, errb := runOf("scenario", "recipes", "--name", "resume-like", "--repo-root", root)
+	if errb != "" {
+		t.Fatalf("unexpected stderr: %q", errb)
+	}
+	if strings.Contains(out, "exit_clean") && strings.Contains(out, "MISSING") {
+		// Only fail if the MISSING marker is actually on an exit_clean line.
+		for _, line := range strings.Split(out, "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "exit_clean") && strings.Contains(line, "MISSING") {
+				t.Fatalf("exit_clean has a sleep BEFORE it — must not be flagged; got line:\n%s", line)
+			}
+		}
+	}
+	if !strings.Contains(out, "before:  solo=5s") {
+		t.Fatalf("exit_clean's before-sleep must render; got:\n%s", out)
+	}
+}
+
+// TestScenarioRecipesFlagsTheReconstructedMusePreFixRecipe is a PERMANENT
+// regression fixture: muse's actual committed script MINUS the 6s sleep
+// that fixed #1960 (replaydata/agents/muse/scenarios/1-4_session-resume's
+// own scope_note documents the before/after shapes). This is the ONE case
+// #1969 exists to catch, and nothing else in this suite pins the literal
+// historical defect.
+func TestScenarioRecipesFlagsTheReconstructedMusePreFixRecipe(t *testing.T) {
+	root := recipesRepo(t, []string{"muse"})
+	recipeCell(t, root, "muse", `{"applicable": true, "timeout_seconds": 240, "settings": {}, "script": [`+
+		`{"type":"send","text":"Reply with exactly the word: ok"},`+
+		`{"type":"wait_turn"},`+
+		`{"type":"sleep","seconds":2},`+
+		`{"type":"exit_clean"},`+
+		`{"type":"sleep","seconds":12},`+
+		`{"type":"resume"},`+
+		`{"type":"send","text":"Reply with exactly the word: again"},`+
+		`{"type":"wait_turn"},`+
+		`{"type":"sleep","seconds":4}]}`)
+
+	code, out, errb := runOf("scenario", "recipes", "--name", "resume-like", "--repo-root", root)
+	if code != exitOK {
+		t.Fatalf("exit=%d want %d; stderr=%q", code, exitOK, errb)
+	}
+	if !strings.Contains(out, "resume         after:   muse=NONE <-- MISSING") {
+		t.Fatalf("pre-fix muse's recipe (12s BEFORE resume, nothing after) must flag resume's after row; got:\n%s", out)
+	}
+	// The 12s sleep is real and load-bearing for a DIFFERENT purpose (it
+	// clears the deletedSessions cooldown before relaunch) — it must still
+	// render, just not clear the flag.
+	if !strings.Contains(out, "resume         before:  muse=12s") {
+		t.Fatalf("the pre-resume 12s sleep must still be shown; got:\n%s", out)
 	}
 }
 
@@ -413,16 +485,34 @@ func TestScenarioRecipesMarksRecordedCells(t *testing.T) {
 //	go test ./tools/onboarding-factory/cmd/of/ \
 //	    -run TestScenarioRecipesCorpusFlagRateStaysLow -count=1 -v
 //
-// Before narrowing isTimingLandmark (every non-send/wait_turn/sleep step
-// counted as a landmark) and adding the any-side/has-next gate to
-// landmarkSleepPair, this same scan measured 109 of 280 occurrences flagged
-// (39%) — including 100% of keys, slash, start_session, seed_instruction and
-// restart, none of which relate to the #1960 daemon cooldown this command
-// exists to surface. Narrowing to {resume, exit_clean, sigkill} — the three
-// step types that can produce the process_exited event for a session id the
-// daemon may re-admit — and flagging only an occurrence with NO sleep on
-// EITHER side AND a step following it to race brought this to 0 of 79.
-const corpusLandmarkFlagRatchet = 0
+// This number has moved twice, for two different reasons — both measured by
+// this same test, never asserted by hand:
+//
+//  1. A first cut treating every non-send/wait_turn/sleep step as a landmark
+//     (isTimingLandmark) and flagging on an absent sleep on EITHER side
+//     measured 109 of 280 occurrences (39%) — including 100% of keys, slash,
+//     start_session, seed_instruction and restart, none of which relate to
+//     the #1960 daemon cooldown this command exists to surface. Narrowing to
+//     {resume, exit_clean, sigkill} brought this to 0 of 79.
+//  2. That 0 was WRONG in a different way: it also silenced the one true
+//     defect #1969 exists to catch. A reconstruction of muse's actual
+//     pre-fix recipe (`exit_clean -> SLEEP 12s -> resume -> send`, no sleep
+//     after resume) rendered unflagged, because the "either side" rule let
+//     the 12s sleep BEFORE resume stand in for one after it — but that 12s
+//     only clears the deletedSessions cooldown before relaunch; it does not
+//     cover the separate window between resume completing and the next
+//     send, which is what actually failed. requiresAfterSleep makes resume
+//     flag on an absent AFTER sleep specifically (exit_clean/sigkill still
+//     accept either side, since nothing observable races them directly in
+//     this corpus), which both flags that reconstruction
+//     (TestScenarioRecipesFlagsTheReconstructedMusePreFixRecipe) and settles
+//     the corpus scan at 6 of 79 — precisely the six adapters whose
+//     committed 1-4_session-resume recipe places its settle sleep before
+//     resume rather than after (a real, previously-invisible open question,
+//     not noise: nothing here claims those six are unsafe, only that they
+//     depart from the four siblings' proven shape and deserve a
+//     confirm-or-write-it-down against #1969's own SKILL.md instruction).
+const corpusLandmarkFlagRatchet = 6
 
 func TestScenarioRecipesCorpusFlagRateStaysLow(t *testing.T) {
 	root := filepath.Join("..", "..", "..", "..", "replaydata", "agents")

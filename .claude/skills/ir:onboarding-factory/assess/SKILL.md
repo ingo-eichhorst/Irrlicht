@@ -162,11 +162,17 @@ second turn landed inside the daemon's 10s `deletedSessions` cooldown — a
 sibling diff would have caught it before the first recording.
 
 - Read the helper's `before`/`after` columns separately rather than assuming
-  they're interchangeable: a sleep can settle the SAME wait either just
-  before a relaunch-style step or just after it, and only reading both sides
-  tells the two apart. Its `<-- MISSING` marker only fires when a sibling
-  has NEITHER side filled, so a clean run is not permission to skip reading
-  the columns yourself — match every sleep a sibling carries, marker or not.
+  they're interchangeable: a sleep before `resume` clears the daemon's
+  cooldown ahead of the relaunch, but only a sleep AFTER `resume` covers the
+  separate window the daemon needs to observe an intermediate state before
+  the next turn completes — a 12s sleep before `resume` and nothing after it
+  is what muse's actual pre-fix recipe looked like, and it does not count as
+  settled. The `<-- MISSING` marker knows this distinction for `resume`
+  specifically (flags on an absent `after` alone) but treats `exit_clean`/
+  `sigkill` more leniently (either side counts, since nothing observable
+  races them directly) — so a clean run is not permission to skip reading
+  the columns yourself for those two; match every sleep a sibling carries,
+  marker or not.
 - A typo'd scenario id fails loudly (non-zero exit, to stderr); a real
   scenario nobody has recorded a sibling recipe for yet exits clean and says
   so explicitly — the two print different things on purpose, so check which
