@@ -150,6 +150,36 @@ git commit -m "feat(onboard): teach <agent> driver the <primitive> step type"
 If the primitive has no claudecode/codex reference, it's a NEW grammar element —
 STOP and return `status: needs_design`. Don't invent one.
 
+**Then, update the driver pillar the port just made stale — an explicit step,
+not an afterthought.** Porting the primitive does not by itself change the
+cell's own verdict: the assessment that routed this cell to `driver-gap`
+still says `driver_capability: gap:<primitive>` on BOTH tiers it stores —
+
+- `.details.assessment.driver_capability`
+- its mirrored `.metadata.driver_capability` copy
+
+— and nothing updates them for you. Edit both fields in the cell's
+`metadata.json` (`replaydata/agents/<agent>/scenarios/<folder>/metadata.json`)
+to `ready` (or whatever the driver's real capability turns out to be), then
+re-submit the SAME file through the sanctioned writer so it re-mirrors and
+atomically rewrites it rather than trusting your two hand-edits to agree:
+
+```bash
+of cell write --agent <agent> --scenario <scenario> \
+  --file replaydata/agents/<agent>/scenarios/<folder>/metadata.json
+```
+
+Skipping this is not cosmetic. #1968 found it happen for real: two batches in
+the same onboarding sweep each ported a primitive and recorded a passing
+cell; one also flipped the pillar, the other didn't — leaving `recorded:
+true` sitting next to a `gap:<primitive>` driver pillar on three cells, which
+silently under-counted `of status --summary` until someone noticed by hand.
+`of validate` now catches this the moment you forget it: a cell that is
+`recorded: true` while either tier's `driver_capability` still starts with
+`gap:` is a hard validation failure — `matrix.ValidateDriverRecordedConsistency`
+(#1968) — so a missed pillar update fails loudly at your next `of validate`
+run instead of shipping a silent under-count.
+
 ### 2. Record (live capture)
 
 ```bash
