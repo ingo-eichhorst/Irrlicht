@@ -41,9 +41,15 @@ set -euo pipefail
 # Named once (SonarQube shelldre:S1192 — each was a repeated literal: "unknown"
 # 5x, "desktop-local" 9x) so every fallback/comparison site reads the same
 # constant instead of retyping a string that a future edit could misspell in
-# exactly one of the copies.
+# exactly one of the copies. Marked (like recording_identity and the other
+# BEGIN/END blocks below) because recording-profile-manifest_test.sh extracts
+# and evals several of the blocks that now reference these names in ISOLATION
+# — a fresh `bash -c`, in two of its four cases — so the constants have to be
+# independently extractable too, not just defined here.
+# BEGIN recording_literals
 readonly UNKNOWN_VALUE="unknown"
 readonly PROFILE_DESKTOP_LOCAL="desktop-local"
+# END recording_literals
 
 EXECUTION_PROFILE="cli-local"
 DESKTOP_APP_VERSION=""
