@@ -43,7 +43,7 @@ and `/ir:exec` is the starting point for it:
 
 ## Development setup
 
-Prerequisites: macOS 13+, Go 1.25+, Swift 5.9+, Xcode Command Line Tools.
+Prerequisites: macOS 13+, Go 1.26+, Swift 5.9+, Xcode Command Line Tools.
 
 ```bash
 git clone https://github.com/ingo-eichhorst/Irrlicht.git
