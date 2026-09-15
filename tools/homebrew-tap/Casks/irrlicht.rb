@@ -2,8 +2,7 @@ cask "irrlicht" do
   version "0.6.3"
   sha256 "eb1518f24b4086a37e71989b3b2650da9653ef1f5e3c792e5b15b2641e496d34"
 
-  url "https://github.com/ingo-eichhorst/Irrlicht/releases/download/v#{version}/Irrlicht-#{version}.dmg",
-      verified: "github.com/ingo-eichhorst/Irrlicht/"
+  url "https://github.com/ingo-eichhorst/Irrlicht/releases/download/v#{version}/Irrlicht-#{version}.dmg"
   name "Irrlicht"
   desc "Menu-bar telemetry for AI coding agents"
   homepage "https://irrlicht.io/"
