@@ -166,6 +166,74 @@ func ValidateAxes(tier, supports, daemon, driver string) []string {
 	return findings
 }
 
+// ValidateDriverRecordedConsistency checks ONE tier's driver_capability
+// against whether the cell has a captured recording, and returns a finding
+// when the two disagree (#1968). tier names the JSON block the value came
+// from, exactly as ValidateAxes does, so the finding points at the field to
+// edit.
+//
+// driver is a pointer so the caller can report "the key was absent, or
+// present as explicit JSON null" as ITS OWN finding rather than silently
+// collapsing it to the empty string. This closes a real gap found in review
+// of the first cut of this check: json.Unmarshal leaves the Go zero value
+// "" for BOTH an absent key and an explicit null, and "" is not
+// gap:-prefixed, so a recorded cell whose driver pillar was never written at
+// all (or was nulled out) passed `of validate` with no finding — the exact
+// inversion of "a validator that cannot parse its input checks MORE, never
+// less" this check exists to uphold elsewhere. Reproduced red, before the
+// fix, in TestValidateDriverConsistencyFailsLoudlyOnAbsentDriverCapability
+// and its …OnNullDriverCapability sibling (tools/onboarding-factory/cmd/of):
+// both asserted exitFail and got exit 0 / "OK" against the unfixed code.
+//
+// The argument: a committed recording is direct evidence the driver already
+// drove the cell through this scenario, so a surviving gap:<primitive> pillar
+// on a RECORDED cell is provably stale — no legitimate cell can hold both.
+// #1968 confirmed this against the two real cases in the tree at the time
+// this check was added (gemini-cli 3-4_subagent-orphan-cleanup and
+// 4-1_multiple-sessions-same-cwd, both recorded:true with
+// driver_capability=gap:sigkill / gap:start_session on both tiers): the
+// primitives the pillars claimed were missing (sigkill, start_session) were
+// in fact implemented in replaydata/agents/gemini-cli/driver-interactive.sh
+// as of the SAME commit (6b6642b38) that recorded the cells —
+// `driver_step_types_from_file` (tools/onboarding-factory/scripts/lib/
+// recipe-lint.sh, hardened in #1961 to exclude `not_implemented` stub arms)
+// listed both, and `grep -n not_implemented driver-interactive.sh` found zero
+// stub arms — so the pillars were stale on arrival, not a legitimate state
+// this check should have tolerated. Both cells were corrected in the commit
+// that precedes this one before this check was wired in, so it starts clean.
+//
+// DELIBERATELY SCOPED TO DRIVER ONLY — never extend this to
+// daemon_capability. A known_failing cell can legitimately be recorded:true
+// while daemon_capability is "bug" or "incapable": the recording is real
+// captured data of a daemon that got the scenario wrong, which is exactly
+// what known_failing records. The two #1968 cells above are both
+// daemon_capability=bug (confirmed via `of status --json`, filtering
+// `.scenarios[].cells["gemini-cli"]` for those two scenario names) and stayed
+// recorded+blocked-daemon the whole time this check existed to flag only
+// their driver pillar — daemon is a different axis with a different, valid
+// reason to disagree with "recorded", and this function does not read it.
+func ValidateDriverRecordedConsistency(tier string, driver *string, recorded bool) []string {
+	if !recorded {
+		return nil
+	}
+	field := tier + ".driver_capability"
+	if driver == nil {
+		return []string{fmt.Sprintf(
+			"%s is missing (the key is absent, or set to JSON null) but the cell is recorded (#1968) — a "+
+				"recorded cell's driver pillar must say something readable; an unreadable pillar is not "+
+				"evidence that no gap: survived, so this fails loudly instead of passing silently",
+			field)}
+	}
+	if !strings.HasPrefix(*driver, DriverGapPrefix) {
+		return nil
+	}
+	return []string{fmt.Sprintf(
+		"%s is %q but the cell is recorded (#1968) — a committed recording is proof the driver already "+
+			"drove it, so the pillar is stale; clear it to %q (or whatever value the driver actually implements) "+
+			"on both this tier and its mirror",
+		field, *driver, "ready")}
+}
+
 // ---------------------------------------------------------------------------
 // Maturity ladder (#1369)
 // ---------------------------------------------------------------------------
