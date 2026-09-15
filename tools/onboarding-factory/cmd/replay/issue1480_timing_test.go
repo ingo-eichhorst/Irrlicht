@@ -579,103 +579,122 @@ func TestSidecarReplayTransitionTimesMatchTheDaemonsOwnLog(t *testing.T) {
 // 3. The reporting helpers.
 // ---------------------------------------------------------------------------
 
+// mkBucketTestDeltas builds synthetic timeDelta values at the given
+// magnitudes, all under the same kind, for the bucket/percentile subtests
+// below. Package-level rather than a closure so each subtest can be its own
+// named top-level function (see TestDriftDistribution_BucketsAndPercentiles) —
+// it carries no assertion of its own, only fixture construction.
+func mkBucketTestDeltas(ds ...time.Duration) []timeDelta {
+	out := make([]timeDelta, 0, len(ds))
+	for i, d := range ds {
+		out = append(out, timeDelta{Index: i, Kind: "ready→working", Delta: d})
+	}
+	return out
+}
+
 // TestDriftDistribution_BucketsAndPercentiles pins the code that produces the
 // histogram, because that histogram IS the stated justification for
 // driftThreshold — it is pasted verbatim into that constant's doc comment and
 // into AGENTS.md. Untested, a bucketing or interpolation bug would silently
 // rewrite the rationale for the constant rather than fail anything.
+//
+// Each case below is its own named top-level function rather than an inline
+// t.Run closure: cognitive-complexity scoring (go:S3776) counts control flow
+// inside a closure literal toward the ENCLOSING function, so five independent,
+// already-self-contained subtests summed into one number that says nothing
+// about any of them individually. Naming them does not move any assertion
+// away from the data it checks — every case still builds its own input and
+// checks it in the same place it always did.
 func TestDriftDistribution_BucketsAndPercentiles(t *testing.T) {
-	mk := func(ds ...time.Duration) []timeDelta {
-		out := make([]timeDelta, 0, len(ds))
-		for i, d := range ds {
-			out = append(out, timeDelta{Index: i, Kind: "ready→working", Delta: d})
-		}
-		return out
+	t.Run("one delta per bucket lands in its own bucket", testDriftBucket_OnePerBucket)
+	t.Run("bucket edges are upper-exclusive", testDriftBucket_EdgesAreUpperExclusive)
+	t.Run("sign is ignored — buckets are taken over magnitude", testDriftBucket_SignIsIgnored)
+	t.Run("percentiles", testDriftBucket_Percentiles)
+	t.Run("degenerate inputs do not panic", testDriftBucket_DegenerateInputsDoNotPanic)
+}
+
+func testDriftBucket_OnePerBucket(t *testing.T) {
+	// Deliberately one value strictly inside each of the nine buckets,
+	// plus the two edge values that decide the open/closed question.
+	dist := newDriftDistribution(mkBucketTestDeltas(
+		500*time.Microsecond, // <1ms
+		5*time.Millisecond,   // 1-10ms
+		50*time.Millisecond,  // 10-100ms
+		500*time.Millisecond, // 0.1-1s
+		2*time.Second,        // 1-5s
+		7*time.Second,        // 5-10s
+		20*time.Second,       // 10-30s
+		45*time.Second,       // 30-60s
+		2*time.Minute,        // >60s
+	))
+	if dist.N != 9 {
+		t.Fatalf("N = %d, want 9", dist.N)
 	}
+	for i, label := range driftBucketLabels {
+		if dist.BucketCount[i] != 1 {
+			t.Errorf("bucket %q = %d, want 1 (buckets: %v)", label, dist.BucketCount[i], dist.BucketCount)
+		}
+	}
+}
 
-	t.Run("one delta per bucket lands in its own bucket", func(t *testing.T) {
-		// Deliberately one value strictly inside each of the nine buckets,
-		// plus the two edge values that decide the open/closed question.
-		dist := newDriftDistribution(mk(
-			500*time.Microsecond, // <1ms
-			5*time.Millisecond,   // 1-10ms
-			50*time.Millisecond,  // 10-100ms
-			500*time.Millisecond, // 0.1-1s
-			2*time.Second,        // 1-5s
-			7*time.Second,        // 5-10s
-			20*time.Second,       // 10-30s
-			45*time.Second,       // 30-60s
-			2*time.Minute,        // >60s
-		))
-		if dist.N != 9 {
-			t.Fatalf("N = %d, want 9", dist.N)
-		}
-		for i, label := range driftBucketLabels {
-			if dist.BucketCount[i] != 1 {
-				t.Errorf("bucket %q = %d, want 1 (buckets: %v)", label, dist.BucketCount[i], dist.BucketCount)
-			}
-		}
-	})
+func testDriftBucket_EdgesAreUpperExclusive(t *testing.T) {
+	// Exactly 1s belongs to "1-5s", not "0.1-1s". This is the one place
+	// the histogram and driftThreshold deliberately disagree — a delta of
+	// exactly 1s is counted above the line here but is NOT drifted by
+	// firstDrift, which compares with >. The disagreement is one
+	// nanosecond wide and is pinned so it stays deliberate.
+	dist := newDriftDistribution(mkBucketTestDeltas(time.Second))
+	if got := dist.BucketCount[bucketIndex(time.Second)]; got != 1 {
+		t.Fatalf("bucket count for exactly 1s = %d, want 1", got)
+	}
+	if driftBucketLabels[bucketIndex(time.Second)] != "1-5s" {
+		t.Errorf("exactly 1s bucketed as %q, want \"1-5s\"", driftBucketLabels[bucketIndex(time.Second)])
+	}
+	if _, drifted := firstDrift(mkBucketTestDeltas(time.Second)); drifted {
+		t.Error("exactly 1s reported as drifted; firstDrift must compare with >, not >=")
+	}
+}
 
-	t.Run("bucket edges are upper-exclusive", func(t *testing.T) {
-		// Exactly 1s belongs to "1-5s", not "0.1-1s". This is the one place
-		// the histogram and driftThreshold deliberately disagree — a delta of
-		// exactly 1s is counted above the line here but is NOT drifted by
-		// firstDrift, which compares with >. The disagreement is one
-		// nanosecond wide and is pinned so it stays deliberate.
-		dist := newDriftDistribution(mk(time.Second))
-		if got := dist.BucketCount[bucketIndex(time.Second)]; got != 1 {
-			t.Fatalf("bucket count for exactly 1s = %d, want 1", got)
-		}
-		if driftBucketLabels[bucketIndex(time.Second)] != "1-5s" {
-			t.Errorf("exactly 1s bucketed as %q, want \"1-5s\"", driftBucketLabels[bucketIndex(time.Second)])
-		}
-		if _, drifted := firstDrift(mk(time.Second)); drifted {
-			t.Error("exactly 1s reported as drifted; firstDrift must compare with >, not >=")
-		}
-	})
+func testDriftBucket_SignIsIgnored(t *testing.T) {
+	neg := newDriftDistribution(mkBucketTestDeltas(-30 * time.Second))
+	pos := newDriftDistribution(mkBucketTestDeltas(30 * time.Second))
+	if !reflect.DeepEqual(neg.BucketCount, pos.BucketCount) {
+		t.Errorf("negative and positive deltas of equal magnitude bucketed differently: %v vs %v",
+			neg.BucketCount, pos.BucketCount)
+	}
+}
 
-	t.Run("sign is ignored — buckets are taken over magnitude", func(t *testing.T) {
-		neg := newDriftDistribution(mk(-30 * time.Second))
-		pos := newDriftDistribution(mk(30 * time.Second))
-		if !reflect.DeepEqual(neg.BucketCount, pos.BucketCount) {
-			t.Errorf("negative and positive deltas of equal magnitude bucketed differently: %v vs %v",
-				neg.BucketCount, pos.BucketCount)
+func testDriftBucket_Percentiles(t *testing.T) {
+	// 1..10 seconds: p50 interpolates between the 5th and 6th value.
+	var ds []time.Duration
+	for i := 1; i <= 10; i++ {
+		ds = append(ds, time.Duration(i)*time.Second)
+	}
+	dist := newDriftDistribution(mkBucketTestDeltas(ds...))
+	for _, tc := range []struct {
+		p    int
+		want time.Duration
+	}{
+		{50, 5500 * time.Millisecond},
+		{100, 10 * time.Second},
+	} {
+		if got := dist.Percentiles[tc.p]; got != tc.want {
+			t.Errorf("p%d = %v, want %v", tc.p, got, tc.want)
 		}
-	})
+	}
+}
 
-	t.Run("percentiles", func(t *testing.T) {
-		// 1..10 seconds: p50 interpolates between the 5th and 6th value.
-		var ds []time.Duration
-		for i := 1; i <= 10; i++ {
-			ds = append(ds, time.Duration(i)*time.Second)
-		}
-		dist := newDriftDistribution(mk(ds...))
-		for _, tc := range []struct {
-			p    int
-			want time.Duration
-		}{
-			{50, 5500 * time.Millisecond},
-			{100, 10 * time.Second},
-		} {
-			if got := dist.Percentiles[tc.p]; got != tc.want {
-				t.Errorf("p%d = %v, want %v", tc.p, got, tc.want)
-			}
-		}
-	})
-
-	t.Run("degenerate inputs do not panic", func(t *testing.T) {
-		if got := newDriftDistribution(nil); got.N != 0 {
-			t.Errorf("empty input: N = %d, want 0", got.N)
-		}
-		if got := newDriftDistribution(nil).String(); !strings.Contains(got, "vacuous") {
-			t.Errorf("empty distribution must say so, got %q", got)
-		}
-		single := newDriftDistribution(mk(7 * time.Second))
-		if single.Percentiles[50] != 7*time.Second || single.Percentiles[100] != 7*time.Second {
-			t.Errorf("single-element percentiles = %v", single.Percentiles)
-		}
-	})
+func testDriftBucket_DegenerateInputsDoNotPanic(t *testing.T) {
+	if got := newDriftDistribution(nil); got.N != 0 {
+		t.Errorf("empty input: N = %d, want 0", got.N)
+	}
+	if got := newDriftDistribution(nil).String(); !strings.Contains(got, "vacuous") {
+		t.Errorf("empty distribution must say so, got %q", got)
+	}
+	single := newDriftDistribution(mkBucketTestDeltas(7 * time.Second))
+	if single.Percentiles[50] != 7*time.Second || single.Percentiles[100] != 7*time.Second {
+		t.Errorf("single-element percentiles = %v", single.Percentiles)
+	}
 }
 
 // TestDriftSummary_FormatIsTheShellContract pins the exact string
