@@ -38,6 +38,13 @@
 
 set -euo pipefail
 
+# Named once (SonarQube shelldre:S1192 — each was a repeated literal: "unknown"
+# 5x, "desktop-local" 9x) so every fallback/comparison site reads the same
+# constant instead of retyping a string that a future edit could misspell in
+# exactly one of the copies.
+readonly UNKNOWN_VALUE="unknown"
+readonly PROFILE_DESKTOP_LOCAL="desktop-local"
+
 EXECUTION_PROFILE="cli-local"
 DESKTOP_APP_VERSION=""
 while [[ $# -gt 0 ]]; do
@@ -77,7 +84,7 @@ case "$EXECUTION_PROFILE" in
   cli-local | desktop-local) ;;
   *) echo "promote: unknown execution profile $EXECUTION_PROFILE" >&2; exit 2 ;;
 esac
-if [[ "$EXECUTION_PROFILE" == "desktop-local" && "$AGENT" != "claudecode" ]]; then
+if [[ "$EXECUTION_PROFILE" == "$PROFILE_DESKTOP_LOCAL" && "$AGENT" != "claudecode" ]]; then
   echo "promote: desktop-local is only supported for claudecode" >&2
   exit 2
 fi
@@ -126,11 +133,11 @@ fi
 STAGED_EVIDENCE_PROFILE=""
 for evidence_probe in desktop-registry.json desktop-environment.json irrlicht-session.json; do
   if [[ -e "$STAGED_DIR/$evidence_probe" ]]; then
-    STAGED_EVIDENCE_PROFILE="desktop-local"
+    STAGED_EVIDENCE_PROFILE="$PROFILE_DESKTOP_LOCAL"
     break
   fi
 done
-if [[ "$STAGED_EVIDENCE_PROFILE" == "desktop-local" && "$EXECUTION_PROFILE" != "desktop-local" ]]; then
+if [[ "$STAGED_EVIDENCE_PROFILE" == "$PROFILE_DESKTOP_LOCAL" && "$EXECUTION_PROFILE" != "$PROFILE_DESKTOP_LOCAL" ]]; then
   echo "promote: $STAGED_DIR carries Claude Desktop evidence ($evidence_probe) but the run" >&2
   echo "  is being promoted as $EXECUTION_PROFILE, which skips every Desktop gate." >&2
   echo "  Pass --execution-profile desktop-local." >&2
@@ -142,7 +149,7 @@ if [[ ! -f "$STAGED_DIR/events.jsonl" ]]; then
   echo "promote: no staged events.jsonl at $STAGED_DIR" >&2
   exit 1
 fi
-if [[ "$EXECUTION_PROFILE" == "desktop-local" ]]; then
+if [[ "$EXECUTION_PROFILE" == "$PROFILE_DESKTOP_LOCAL" ]]; then
   DESKTOP_SESSION_ID="$(jq -r '.cliSessionId // empty' "$STAGED_DIR/desktop-registry.json" 2>/dev/null || true)"
   DESKTOP_WORKSPACE="$(jq -r '.cwd // empty' "$STAGED_DIR/desktop-registry.json" 2>/dev/null || true)"
   if [[ -z "$DESKTOP_SESSION_ID" || -z "$DESKTOP_WORKSPACE" ]] ||
@@ -161,7 +168,7 @@ promote_hookcheck "$AGENT" "$STAGED_DIR/events.jsonl" \
   default_hookfree_check default_hookfree_confirm || exit 1
 
 # Daemon + agent CLI versions + recipe hash for the manifest.
-DAEMON_VER="unknown"
+DAEMON_VER="$UNKNOWN_VALUE"
 for irrlichd_bin in "$REPO_ROOT/.build/refresh/bin/irrlichd" "$REPO_ROOT/.build/irrlichd" "$REPO_ROOT/core/bin/irrlichd"; do
   if [[ -x "$irrlichd_bin" ]]; then
     DAEMON_VER="$("$irrlichd_bin" --version 2>&1 | head -n1 | awk '{print $NF}' || echo unknown)"
@@ -178,7 +185,7 @@ done
 # a multi run can't pick up a sibling adapter's version.
 # BEGIN recording_version_chain
 AGENT_VER=""
-if [[ "$EXECUTION_PROFILE" == "desktop-local" ]]; then
+if [[ "$EXECUTION_PROFILE" == "$PROFILE_DESKTOP_LOCAL" ]]; then
   AGENT_VER="$(jq -r '.claude_code // empty' "$STAGING/desktop.versions.json" 2>/dev/null || true)"
 fi
 [[ -n "$AGENT_VER" ]] || AGENT_VER="$(jq -r '.cli_version // empty' "$STAGING/$AGENT/precheck.json" 2>/dev/null || true)"
@@ -223,14 +230,14 @@ if [[ -z "$AGENT_VER" ]]; then
     muse)         CLI_BIN="muse";     VER_FIELD=3 ;;
     *)            CLI_BIN=""; VER_FIELD=1 ;;
   esac
-  AGENT_VER="unknown"
+  AGENT_VER="$UNKNOWN_VALUE"
   if [[ -n "$CLI_BIN" ]] && command -v "$CLI_BIN" >/dev/null 2>&1; then
     # Same trailing-punctuation strip as precheck.sh: `copilot --version` prints
     # "GitHub Copilot CLI 1.0.77." and the period would ride into the manifest.
     AGENT_VER="$("$CLI_BIN" --version 2>&1 | awk -v f="$VER_FIELD" '{print $f}' | head -n1 | sed 's/[.,]$//')"
     # ...and the same leading-"v" strip: hermes prints "Hermes Agent v0.19.0".
     AGENT_VER="${AGENT_VER#v}"
-    [[ -n "$AGENT_VER" ]] || AGENT_VER="unknown"
+    [[ -n "$AGENT_VER" ]] || AGENT_VER="$UNKNOWN_VALUE"
   fi
 fi
 
@@ -242,13 +249,13 @@ ENTRYPOINT=""
 if [[ "$AGENT" == "claudecode" && -f "$STAGED_DIR/transcript.jsonl" ]]; then
   ENTRYPOINT="$(jq -r 'select((.entrypoint? | type) == "string" and .entrypoint != "") | .entrypoint' \
     "$STAGED_DIR/transcript.jsonl" 2>/dev/null | head -n1 || true)"
-  [[ -n "$ENTRYPOINT" ]] || ENTRYPOINT="unknown"
+  [[ -n "$ENTRYPOINT" ]] || ENTRYPOINT="$UNKNOWN_VALUE"
 fi
-if [[ "$EXECUTION_PROFILE" == "desktop-local" && -z "$DESKTOP_APP_VERSION" ]]; then
+if [[ "$EXECUTION_PROFILE" == "$PROFILE_DESKTOP_LOCAL" && -z "$DESKTOP_APP_VERSION" ]]; then
   DESKTOP_APP_VERSION="$(jq -r '.desktop_app // empty' "$STAGING/desktop.versions.json" 2>/dev/null || true)"
-  [[ -n "$DESKTOP_APP_VERSION" ]] || DESKTOP_APP_VERSION="unknown"
+  [[ -n "$DESKTOP_APP_VERSION" ]] || DESKTOP_APP_VERSION="$UNKNOWN_VALUE"
 fi
-if [[ "$EXECUTION_PROFILE" == "desktop-local" && "$ENTRYPOINT" != "claude-desktop" ]]; then
+if [[ "$EXECUTION_PROFILE" == "$PROFILE_DESKTOP_LOCAL" && "$ENTRYPOINT" != "claude-desktop" ]]; then
   echo "promote: desktop-local transcript entrypoint is '$ENTRYPOINT', want 'claude-desktop'" >&2
   exit 1
 fi
@@ -425,7 +432,7 @@ fi
 echo "wrote recording $REC_DIR" >&2
 echo "wrote $REC_DIR/manifest.json ($NEW_PASS_RATE)" >&2
 
-if [[ "$EXECUTION_PROFILE" == "desktop-local" ]]; then
+if [[ "$EXECUTION_PROFILE" == "$PROFILE_DESKTOP_LOCAL" ]]; then
   EXECUTION_RESULTS_TMP="$(mktemp -t irr-desktop-results.XXXXXX)"
   RESULT_SCENARIO="$(shard_coverage_for_dir "$SCENARIO" "$AGENT")"
   if desktop_write_execution_results "$EXECUTION_RESULTS_TMP" "$RESULT_SCENARIO" "$REC_NAME" observed-passing; then
