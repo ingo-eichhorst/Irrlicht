@@ -228,7 +228,7 @@ func (s censusFigureSite) String() string {
 		s.File, s.Line, s.Value, strings.Join(s.Fields, "/"), s.Text)
 }
 
-// figureSet decides which integer values a scan reports, and under which
+// figureFielder decides which integer values a scan reports, and under which
 // census field names.
 //
 // It is an interface for one reason: the density measurement in
@@ -238,7 +238,7 @@ func (s censusFigureSite) String() string {
 // that is not under test would then be the one reporting the false-positive
 // rate — the failure #1480 removed by making compareOrdered return its matched
 // pairs instead of a count beside them.
-type figureSet interface {
+type figureFielder interface {
 	fields(value int) ([]string, bool)
 }
 
@@ -374,7 +374,7 @@ func isASCIILetter(b byte) bool { return (b|0x20) >= 'a' && (b|0x20) <= 'z' }
 // Comments only, via go/parser rather than a grep, because a digit in a string
 // literal or an identifier is code and is not a claim about the catalog —
 // testdata/censuslint/code-not-comment.go.txt pins that.
-func scanCommentsForFigures(filename string, src []byte, wanted figureSet) ([]censusFigureSite, error) {
+func scanCommentsForFigures(filename string, src []byte, wanted figureFielder) ([]censusFigureSite, error) {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, filename, src, parser.ParseComments)
 	if err != nil {
@@ -448,7 +448,7 @@ func packageGoFiles(t *testing.T) map[string][]byte {
 }
 
 // scanPackage returns every flagged site in this package, in file:line order.
-func scanPackage(t *testing.T, wanted figureSet) []censusFigureSite {
+func scanPackage(t *testing.T, wanted figureFielder) []censusFigureSite {
 	t.Helper()
 	var sites []censusFigureSite
 	for name, src := range packageGoFiles(t) {
