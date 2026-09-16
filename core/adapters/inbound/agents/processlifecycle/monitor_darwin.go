@@ -13,9 +13,19 @@ import (
 // pidMonitor monitors process PIDs via kqueue EVFILT_PROC NOTE_EXIT.
 // It implements outbound.ProcessWatcher.
 type pidMonitor struct {
-	kqfd    int
-	mu      sync.Mutex
-	watched map[int]string // pid → sessionID
+	kqfd int
+	mu   sync.Mutex
+	// watched maps pid -> sessionID: the id whose Watch() call most recently
+	// claimed pid. This is a TRIGGER HINT for the exit callback, not an
+	// attribution — Watch below does `m.watched[pid] = sessionID`
+	// unconditionally (last-write-wins, no merge), and Run's exit path looks
+	// up and deletes exactly one entry per pid, so at most one session can
+	// ever be named here even when several share the PID (a muse parent plus
+	// its ParentSessionID-linked subagents, which run in-process and report
+	// the same PID — issue #1962). Which session(s) actually hold pid right
+	// now is resolved from the session repository, by
+	// PIDManager.HandleWatcherExit, after this callback fires.
+	watched map[int]string
 	handler exitHandler
 }
 

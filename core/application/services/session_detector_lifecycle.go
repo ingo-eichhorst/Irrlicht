@@ -208,10 +208,20 @@ func (d *SessionDetector) onRemovedLocked(state *session.SessionState, ev agent.
 	d.enricher.PruneMetrics(state.TranscriptPath)
 }
 
-// HandleProcessExit deletes a session when its process exits. reason describes
-// the triggering edge for the recorded lifecycle trace (issue #757).
+// HandleProcessExit is the watcher-edge callback core/cmd/irrlichd/startup.go
+// wires to the process watcher (kqueue NOTE_EXIT / pidfd). It routes through
+// PIDManager.HandleWatcherExit rather than the single-session
+// HandleProcessExit primitive: the watcher can only ever name ONE session
+// per PID, so when several sessions share a PID (a muse parent plus its
+// ParentSessionID-linked subagents — issue #1962), the fan-out resolves
+// every session actually bound to pid from the repository and delivers
+// process_exited to each of them. A PID held by exactly one session (the
+// common case, and every case this method's own tests cover) fans out to
+// that one session, so this is a drop-in for the watcher edge — reason
+// still describes the triggering edge for the recorded lifecycle trace
+// (issue #757).
 func (d *SessionDetector) HandleProcessExit(pid int, sessionID, reason string) {
-	d.pidMgr.HandleProcessExit(pid, sessionID, reason)
+	d.pidMgr.HandleWatcherExit(pid, sessionID, reason)
 }
 
 // HandlePIDAssigned records a newly-discovered PID for a session.

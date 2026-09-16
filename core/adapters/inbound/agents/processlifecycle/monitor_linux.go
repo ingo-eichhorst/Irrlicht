@@ -28,8 +28,19 @@ type watchedPID struct {
 // timeout. It implements outbound.ProcessWatcher. pidfd_open requires Linux
 // 5.3+ (2019) and needs no elevated privileges.
 type pidMonitor struct {
-	mu      sync.Mutex
-	watched map[int]watchedPID // pid → {pidfd, sessionID}
+	mu sync.Mutex
+	// watched maps pid -> {pidfd, sessionID}: sessionID is the id whose
+	// Watch() call most recently claimed pid. This is a TRIGGER HINT for the
+	// exit callback, not an attribution — Watch below does
+	// `m.watched[pid] = watchedPID{...}` unconditionally (replacing any
+	// stale entry, last-write-wins), and retireWatch looks up and deletes
+	// exactly one entry per pid, so at most one session can ever be named
+	// here even when several share the PID (a muse parent plus its
+	// ParentSessionID-linked subagents, which run in-process and report the
+	// same PID — issue #1962). Which session(s) actually hold pid right now
+	// is resolved from the session repository, by
+	// PIDManager.HandleWatcherExit, after this callback fires.
+	watched map[int]watchedPID
 	handler exitHandler
 }
 
