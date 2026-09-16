@@ -125,16 +125,23 @@ func TestSessionDetector_HandleProcessExit_FanOutIsSynchronous(t *testing.T) {
 	}
 }
 
-// TestSessionDetector_HandleProcessExit_NoEventForAlreadyGoneSession is a
-// LOCK, not red-first proof — it passes by construction both before and
-// after the fix, because the fan-out re-queries the session repository at
-// call time: a session that is no longer there (superseded by
-// cleanupStalePIDHolders' /clear handling, or deleted by any other path
-// first) can never be found as a current holder of the PID and so can never
-// receive process_exited. "old-superseded" is deliberately absent from the
-// repo below — exactly the shape of a real superseded session by the time
-// the exit edge fires.
-func TestSessionDetector_HandleProcessExit_NoEventForAlreadyGoneSession(t *testing.T) {
+// TestSessionDetector_HandleProcessExit_StaleWatcherHintIsNotAttributed is
+// red-first evidence C (QA finding #2 during #1962 review — the original
+// version of this test named "old-superseded" only in its own comment and
+// assertion, never in the setup, so it passed against ANY implementation,
+// including a no-op HandleWatcherExit).
+//
+// This version actually exercises the stale-hint branch: the repo holds
+// only "current" bound to pid, but the watcher edge fires carrying
+// "old-superseded" — the id of a session that once held pid before
+// "current" claimed it (the /clear pattern) and was already deleted by
+// cleanupStalePIDHolders, exactly the shape a monitor's last-write-wins
+// `watched` map can still be holding as its trigger hint. RED on
+// origin/main: the unfixed SessionDetector.HandleProcessExit calls straight
+// through to the single-session primitive with whatever id it's handed, so
+// it records process_exited for "old-superseded" (not "current") and never
+// touches "current" at all — see red.txt.
+func TestSessionDetector_HandleProcessExit_StaleWatcherHintIsNotAttributed(t *testing.T) {
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
 	repo := newMockRepo()
@@ -146,16 +153,84 @@ func TestSessionDetector_HandleProcessExit_NoEventForAlreadyGoneSession(t *testi
 		State:     session.StateReady,
 		PID:       pid,
 	}
+	// "old-superseded" is deliberately absent from the repo.
 
 	det := newDetector(tw, pw, repo)
 	rec := &mockRecorder{}
 	det.SetRecorder(rec)
 
-	det.HandleProcessExit(pid, "current", "test: pid exited")
+	// The watcher edge fires carrying the STALE hint, not "current".
+	det.HandleProcessExit(pid, "old-superseded", "test: pid exited")
 
+	var currentExited, oldExited int
 	for _, ev := range rec.snapshot() {
-		if ev.Kind == lifecycle.KindProcessExited && ev.SessionID == "old-superseded" {
-			t.Fatalf("a superseded/deleted session must never receive process_exited, got: %+v", ev)
+		if ev.Kind != lifecycle.KindProcessExited {
+			continue
 		}
+		switch ev.SessionID {
+		case "current":
+			currentExited++
+		case "old-superseded":
+			oldExited++
+		}
+	}
+	if currentExited != 1 {
+		t.Errorf("expected exactly one KindProcessExited for the current PID holder, got %d (events: %+v)", currentExited, rec.snapshot())
+	}
+	if oldExited != 0 {
+		t.Errorf("the stale watcher hint must never receive process_exited, got %d event(s) for old-superseded", oldExited)
+	}
+	if state, _ := repo.Load("current"); state != nil {
+		t.Errorf("current session should be deleted on pid exit, but still exists (state=%s)", state.State)
+	}
+}
+
+// TestSessionDetector_HandleProcessExit_DeletesSession (in
+// session_detector_lifecycle_test.go) is the LOCK for the ordinary,
+// single-session-per-PID case: it binds exactly one session to a PID and
+// asserts that session is deleted on exit. The fan-out reduces to the same
+// single call in that shape, and that test's continued green (unchanged by
+// this fix) is what pins it.
+
+// TestSessionDetector_HandleProcessExit_PIDZeroDoesNotMassDelete is red-first
+// evidence D (QA finding #1 during #1962 review): HandleWatcherExit's
+// pidHolders(pid) scan had no `pid <= 0` guard, unlike essentially every
+// sibling PID check in pid_manager.go. pidHolders(0) matches every session
+// whose PID is still 0 — the PID=0 ghosts the readyTTL sweep (not the
+// watcher) is supposed to own — and fans process_exited out to all of them.
+//
+// This is defence in depth, not a reachable production bug: both monitors'
+// Watch() reject pid <= 0 outright (see monitor_darwin.go / monitor_linux.go),
+// and Run's exit path only ever derives pid from a live kevent/pidfd, so the
+// watcher callback itself can never carry pid <= 0. The guard exists so a
+// hypothetical or future caller of HandleWatcherExit can't turn "watcher
+// fired with an invalid pid" into "delete every unbound session".
+func TestSessionDetector_HandleProcessExit_PIDZeroDoesNotMassDelete(t *testing.T) {
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+
+	repo.states["unbound-a"] = &session.SessionState{
+		SessionID: "unbound-a",
+		Adapter:   "claude-code",
+		State:     session.StateWorking,
+		PID:       0,
+	}
+	repo.states["unbound-b"] = &session.SessionState{
+		SessionID: "unbound-b",
+		Adapter:   "claude-code",
+		State:     session.StateWorking,
+		PID:       0,
+	}
+
+	det := newDetector(tw, pw, repo)
+
+	det.HandleProcessExit(0, "whatever", "qa probe: pid<=0 guard")
+
+	if state, _ := repo.Load("unbound-a"); state == nil {
+		t.Error("unbound session unbound-a should NOT be deleted by a pid=0 watcher exit")
+	}
+	if state, _ := repo.Load("unbound-b"); state == nil {
+		t.Error("unbound session unbound-b should NOT be deleted by a pid=0 watcher exit")
 	}
 }

@@ -506,11 +506,9 @@ func (pm *PIDManager) HandleProcessExit(pid int, sessionID, reason string) {
 // then, AFTER releasing the lock, calls the single-session primitive
 // HandleProcessExit once per holder. Children (ParentSessionID != "") are
 // delivered before parents, so each child is removed by its own edge and the
-// parent's deleteWithChildren then finds nothing left to do; within each
-// group, holders are sorted by session id so the fan-out order is
-// deterministic and doesn't depend on the repository's own iteration order
-// (map order, for every SessionRepository implementation this package
-// exercises in tests and production).
+// parent's deleteWithChildren then finds nothing left to do; see pidHolders'
+// own doc comment for why the ordering is sorted rather than left to
+// repo.ListAll.
 //
 // When no session currently holds pid — the watcher's hint was already
 // accurate, or something else already cleaned the session up — this still
@@ -518,10 +516,26 @@ func (pm *PIDManager) HandleProcessExit(pid int, sessionID, reason string) {
 // today's "pid exited but session not found (already cleaned up)" log line
 // and its recorded event are unchanged.
 //
+// pid <= 0 skips the repository scan entirely and falls through to the
+// single-session primitive, matching the guard on essentially every other
+// PID check in this file (e.g. reapDeadOrInfraPID). This is defence in
+// depth, not a reachable production path: both monitors' Watch rejects
+// pid <= 0 outright (see monitor_darwin.go / monitor_linux.go), and each
+// Run loop only ever derives pid from a live kevent/pidfd, so the watcher
+// callback itself can never carry pid <= 0. Without the guard,
+// pidHolders(0) would match every session still waiting on PID discovery —
+// state.PID's zero value — and fan process_exited out to all of them
+// (TestSessionDetector_HandleProcessExit_PIDZeroDoesNotMassDelete pins
+// this).
+//
 // The periodic sweep never calls this: reapDeadOrInfraPID already iterates
 // every session's own liveness snapshot and calls HandleProcessExit
 // directly, so routing it through here too would fan out a second time.
 func (pm *PIDManager) HandleWatcherExit(pid int, sessionID, reason string) {
+	if pid <= 0 {
+		pm.HandleProcessExit(pid, sessionID, reason)
+		return
+	}
 	holders := pm.pidHolders(pid)
 	if len(holders) == 0 {
 		pm.HandleProcessExit(pid, sessionID, reason)
@@ -534,11 +548,18 @@ func (pm *PIDManager) HandleWatcherExit(pid int, sessionID, reason string) {
 
 // pidHolders returns the ids of every session currently bound to pid
 // (state.PID == pid), children (ParentSessionID != "") first, each group
-// sorted by session id — see HandleWatcherExit's doc comment for why the
-// order matters and why it must not depend on repo.ListAll's own iteration
-// order. Reads under assignMu, the same lock assignPIDLocked and
-// snapshotLivenessStates take, so the scan can't race a concurrent
-// PID-discovery write.
+// sorted by session id. The production repository never needs this for
+// determinism on its own: filesystem.SessionRepository.ListAll builds its
+// slice from os.ReadDir (core/adapters/outbound/filesystem/repository.go),
+// which returns entries already sorted by filename, and
+// cachedSessionRepository.ListAll's deepCopySessions preserves that order
+// (both read to confirm this). The sort exists for two things ListAll's
+// order does NOT give: a fixed children-before-parents grouping regardless
+// of id ordering, and determinism for the mockRepo test double used
+// throughout this package's tests, which ranges over a Go map
+// (testhelpers_test.go) and so has no stable order of its own. Reads under
+// assignMu, the same lock assignPIDLocked and snapshotLivenessStates take,
+// so the scan can't race a concurrent PID-discovery write.
 func (pm *PIDManager) pidHolders(pid int) []string {
 	pm.assignMu.Lock()
 	defer pm.assignMu.Unlock()
