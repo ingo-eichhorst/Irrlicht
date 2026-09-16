@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -461,9 +462,13 @@ func (pm *PIDManager) record(ev lifecycle.Event) {
 // them. A wrong red is worse than no red, so the whole producer is gone; a
 // genuine mid-turn crash now disappears silently, which is the accepted cost.
 //
-// Both entry points funnel here — the kqueue/pidfd watcher via
-// SessionDetector.HandleProcessExit and the periodic sweep via
-// reapDeadOrInfraPID.
+// This is the single-session primitive: it acts on exactly the sessionID it
+// is given, once. Two entry points funnel here — the periodic sweep
+// (reapDeadOrInfraPID) calls it directly, once per session in its own
+// snapshot, and the kqueue/pidfd watcher edge calls it indirectly, once per
+// PID holder, via HandleWatcherExit (see that method's doc comment for why a
+// single watcher callback needs to fan out here rather than call straight
+// through).
 func (pm *PIDManager) HandleProcessExit(pid int, sessionID, reason string) {
 	pm.record(lifecycle.Event{Kind: lifecycle.KindProcessExited, SessionID: sessionID, PID: pid, Reason: reason})
 
@@ -482,6 +487,100 @@ func (pm *PIDManager) HandleProcessExit(pid int, sessionID, reason string) {
 		fmt.Sprintf("pid %d exited, deleting session (was %s)", pid, state.State))
 
 	pm.deleteWithChildren(state, reason)
+}
+
+// HandleWatcherExit is the fan-out entry point for the process-watcher exit
+// edge (kqueue EVFILT_PROC NOTE_EXIT on darwin, pidfd/poll on linux — see
+// monitor_darwin.go / monitor_linux.go). The watcher can only ever deliver
+// its callback for ONE session per PID: its internal `watched` map is keyed
+// by pid alone and last-write-wins, so when N sessions share a PID — a muse
+// parent session plus its ParentSessionID-linked goal-reminder /
+// verify-reminder subagents, which run in-process and report the same PID —
+// only the session that most recently called Watch() for that PID is ever
+// named, and N-1 of the others never see process_exited at this edge
+// (issue #1962).
+//
+// This resolves attribution from the session repository instead: it
+// snapshots every session currently bound to pid (state.PID == pid) under
+// assignMu — the same lock assignPIDLocked and snapshotLivenessStates take —
+// then, AFTER releasing the lock, calls the single-session primitive
+// HandleProcessExit once per holder. Children (ParentSessionID != "") are
+// delivered before parents, so each child is removed by its own edge and the
+// parent's deleteWithChildren then finds nothing left to do; see pidHolders'
+// own doc comment for why the ordering is sorted rather than left to
+// repo.ListAll.
+//
+// When no session currently holds pid — the watcher's hint was already
+// accurate, or something else already cleaned the session up — this still
+// calls HandleProcessExit exactly once, with the passed sessionID, so
+// today's "pid exited but session not found (already cleaned up)" log line
+// and its recorded event are unchanged.
+//
+// pid <= 0 skips the repository scan entirely and falls through to the
+// single-session primitive, matching the guard on essentially every other
+// PID check in this file (e.g. reapDeadOrInfraPID). This is defence in
+// depth, not a reachable production path: both monitors' Watch rejects
+// pid <= 0 outright (see monitor_darwin.go / monitor_linux.go), and each
+// Run loop only ever derives pid from a live kevent/pidfd, so the watcher
+// callback itself can never carry pid <= 0. Without the guard,
+// pidHolders(0) would match every session still waiting on PID discovery —
+// state.PID's zero value — and fan process_exited out to all of them
+// (TestSessionDetector_HandleProcessExit_PIDZeroDoesNotMassDelete pins
+// this).
+//
+// The periodic sweep never calls this: reapDeadOrInfraPID already iterates
+// every session's own liveness snapshot and calls HandleProcessExit
+// directly, so routing it through here too would fan out a second time.
+func (pm *PIDManager) HandleWatcherExit(pid int, sessionID, reason string) {
+	if pid <= 0 {
+		pm.HandleProcessExit(pid, sessionID, reason)
+		return
+	}
+	holders := pm.pidHolders(pid)
+	if len(holders) == 0 {
+		pm.HandleProcessExit(pid, sessionID, reason)
+		return
+	}
+	for _, id := range holders {
+		pm.HandleProcessExit(pid, id, reason)
+	}
+}
+
+// pidHolders returns the ids of every session currently bound to pid
+// (state.PID == pid), children (ParentSessionID != "") first, each group
+// sorted by session id. The production repository never needs this for
+// determinism on its own: filesystem.SessionRepository.ListAll builds its
+// slice from os.ReadDir (core/adapters/outbound/filesystem/repository.go),
+// which returns entries already sorted by filename, and
+// cachedSessionRepository.ListAll's deepCopySessions preserves that order
+// (both read to confirm this). The sort exists for two things ListAll's
+// order does NOT give: a fixed children-before-parents grouping regardless
+// of id ordering, and determinism for the mockRepo test double used
+// throughout this package's tests, which ranges over a Go map
+// (testhelpers_test.go) and so has no stable order of its own. Reads under
+// assignMu, the same lock assignPIDLocked and snapshotLivenessStates take,
+// so the scan can't race a concurrent PID-discovery write.
+func (pm *PIDManager) pidHolders(pid int) []string {
+	pm.assignMu.Lock()
+	defer pm.assignMu.Unlock()
+	states, err := pm.repo.ListAll()
+	if err != nil {
+		return nil
+	}
+	var children, parents []string
+	for _, s := range states {
+		if s.PID != pid {
+			continue
+		}
+		if s.ParentSessionID != "" {
+			children = append(children, s.SessionID)
+		} else {
+			parents = append(parents, s.SessionID)
+		}
+	}
+	sort.Strings(children)
+	sort.Strings(parents)
+	return append(children, parents...)
 }
 
 // CleanupZombies is a one-shot synchronous startup sweep that deletes any
