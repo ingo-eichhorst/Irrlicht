@@ -55,32 +55,53 @@ func TestParserRefusesUnknownVersion(t *testing.T) {
 	}
 }
 
-func TestParserMapsMeasuredLifecycleRecords(t *testing.T) {
-	parser := &Parser{}
-
-	header := parseRecord(t, parser, `{"type":"session","version":3,"id":"session-600e7941-bf4f-4da4-9ef6-489168e13724","createdAt":1789676506637,"cwd":"/Users/ingo/work"}`)
-	if !header.Skip || header.CWD != "/Users/ingo/work" || header.Timestamp.UnixMilli() != 1789676506637 {
-		t.Errorf("header = %+v", header)
+func TestParserMapsMeasuredSessionHeader(t *testing.T) {
+	header := parseRecord(t, &Parser{}, `{"type":"session","version":3,"id":"session-600e7941-bf4f-4da4-9ef6-489168e13724","createdAt":1789676506637,"cwd":"/Users/ingo/work"}`)
+	if !header.Skip {
+		t.Error("session header is not skipped")
 	}
+	if header.CWD != "/Users/ingo/work" {
+		t.Errorf("CWD = %q, want /Users/ingo/work", header.CWD)
+	}
+	if header.Timestamp.UnixMilli() != 1789676506637 {
+		t.Errorf("timestamp = %d, want 1789676506637", header.Timestamp.UnixMilli())
+	}
+}
 
-	start := parseRecord(t, parser, `{"type":"turn/start","seq":4,"time":1789676506647,"data":{"turn":1}}`)
+func TestParserMapsMeasuredTurnStart(t *testing.T) {
+	start := parseRecord(t, &Parser{}, `{"type":"turn/start","seq":4,"time":1789676506647,"data":{"turn":1}}`)
 	if start.EventType != "turn_start" {
 		t.Errorf("turn/start = %+v", start)
 	}
+}
 
-	asked := parseRecord(t, parser, `{"type":"approval/asked","seq":35,"time":1789677803101,"data":{"id":"approval-1","toolName":"bash","callId":"757004337","reason":"write outside workspace"}}`)
-	if asked.EventType != "permission_requested" || !reflect.DeepEqual(asked.PermissionRequestIDs, []string{"approval-1"}) {
-		t.Errorf("approval/asked = %+v", asked)
+func TestParserMapsMeasuredApprovalAsked(t *testing.T) {
+	asked := parseRecord(t, &Parser{}, `{"type":"approval/asked","seq":35,"time":1789677803101,"data":{"id":"approval-1","toolName":"bash","callId":"757004337","reason":"write outside workspace"}}`)
+	if asked.EventType != "permission_requested" {
+		t.Errorf("event type = %q, want permission_requested", asked.EventType)
 	}
-
-	decided := parseRecord(t, parser, `{"type":"approval/decided","seq":36,"time":1789677812727,"data":{"id":"approval-1","outcome":"rejected"}}`)
-	if decided.EventType != "permission_completed" || !reflect.DeepEqual(decided.PermissionResolvedIDs, []string{"approval-1"}) {
-		t.Errorf("approval/decided = %+v", decided)
+	if !reflect.DeepEqual(asked.PermissionRequestIDs, []string{"approval-1"}) {
+		t.Errorf("request IDs = %v, want approval-1", asked.PermissionRequestIDs)
 	}
+}
 
-	end := parseRecord(t, parser, `{"type":"turn/end","seq":21,"time":1789678181870,"data":{"turn":1,"reason":{"kind":"completed"}}}`)
-	if end.EventType != "turn_done" || end.SessionError != nil {
-		t.Errorf("completed turn/end = %+v", end)
+func TestParserMapsMeasuredApprovalDecided(t *testing.T) {
+	decided := parseRecord(t, &Parser{}, `{"type":"approval/decided","seq":36,"time":1789677812727,"data":{"id":"approval-1","outcome":"rejected"}}`)
+	if decided.EventType != "permission_completed" {
+		t.Errorf("event type = %q, want permission_completed", decided.EventType)
+	}
+	if !reflect.DeepEqual(decided.PermissionResolvedIDs, []string{"approval-1"}) {
+		t.Errorf("resolved IDs = %v, want approval-1", decided.PermissionResolvedIDs)
+	}
+}
+
+func TestParserMapsMeasuredTurnEnd(t *testing.T) {
+	end := parseRecord(t, &Parser{}, `{"type":"turn/end","seq":21,"time":1789678181870,"data":{"turn":1,"reason":{"kind":"completed"}}}`)
+	if end.EventType != "turn_done" {
+		t.Errorf("event type = %q, want turn_done", end.EventType)
+	}
+	if end.SessionError != nil {
+		t.Errorf("SessionError = %+v, want nil", end.SessionError)
 	}
 }
 
