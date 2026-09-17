@@ -130,8 +130,14 @@ func TestParserMapsMeasuredTurnEnd(t *testing.T) {
 func TestParserMapsMeasuredRequestContext(t *testing.T) {
 	parser := &Parser{}
 	context := parseRecord(t, parser, `{"type":"request/context","seq":14,"time":1789678150150,"data":{"provider":"lmstudio","model":"qwen/qwen3.5-9b","contextWindow":262144}}`)
-	if !context.Skip || context.ModelName != "qwen/qwen3.5-9b" || context.ContextWindow != 262144 {
-		t.Errorf("request/context = %+v", context)
+	if !context.Skip {
+		t.Error("request/context is not skipped")
+	}
+	if context.ModelName != "qwen/qwen3.5-9b" {
+		t.Errorf("model = %q, want qwen/qwen3.5-9b", context.ModelName)
+	}
+	if context.ContextWindow != 262144 {
+		t.Errorf("context window = %d, want 262144", context.ContextWindow)
 	}
 }
 
@@ -146,7 +152,10 @@ func TestParserRefusalSurvivesTailerRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first TailAndProcess: %v", err)
 	}
-	if metrics.SessionError == nil || metrics.SessionError.Class != "unsupported_transcript_version" {
+	if metrics.SessionError == nil {
+		t.Fatalf("first SessionError = %+v", metrics.SessionError)
+	}
+	if metrics.SessionError.Class != "unsupported_transcript_version" {
 		t.Fatalf("first SessionError = %+v", metrics.SessionError)
 	}
 	ledger := roundTripLedger(t, before.GetLedgerState())
@@ -161,7 +170,9 @@ func TestParserRefusalSurvivesTailerRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second TailAndProcess: %v", err)
 	}
-	if metrics.SessionError == nil || metrics.SessionError.Class != "unsupported_transcript_version" {
+	if metrics.SessionError == nil {
+		t.Errorf("restored SessionError = %+v", metrics.SessionError)
+	} else if metrics.SessionError.Class != "unsupported_transcript_version" {
 		t.Errorf("restored SessionError = %+v", metrics.SessionError)
 	}
 	if metrics.LastEventType == "user_message" {
@@ -251,18 +262,32 @@ func TestParserMapsToolLifecycle(t *testing.T) {
 	}
 }
 
-func TestParserMapsUserAndTerminalError(t *testing.T) {
-	parser := &Parser{}
-	user := parseRecord(t, parser, `{"type":"user/message","time":1789676506725,"data":{"role":"user","content":[{"type":"text","text":"Read note.txt"}],"source":{"kind":"user"}}}`)
-	if user.EventType != "user_message" || !user.ClearToolNames || user.UserText != "Read note.txt" {
-		t.Errorf("user message = %+v", user)
+func TestParserMapsUserMessage(t *testing.T) {
+	user := parseRecord(t, &Parser{}, `{"type":"user/message","time":1789676506725,"data":{"role":"user","content":[{"type":"text","text":"Read note.txt"}],"source":{"kind":"user"}}}`)
+	if user.EventType != "user_message" {
+		t.Errorf("event type = %q, want user_message", user.EventType)
 	}
-	plugin := parseRecord(t, parser, `{"type":"user/message","time":1789676506726,"data":{"role":"user","content":[{"type":"text","text":"runtime context"}],"source":{"kind":"plugin"}}}`)
+	if !user.ClearToolNames {
+		t.Error("user message does not clear tool names")
+	}
+	if user.UserText != "Read note.txt" {
+		t.Errorf("user text = %q, want Read note.txt", user.UserText)
+	}
+}
+
+func TestParserSkipsPluginUserMessage(t *testing.T) {
+	plugin := parseRecord(t, &Parser{}, `{"type":"user/message","time":1789676506726,"data":{"role":"user","content":[{"type":"text","text":"runtime context"}],"source":{"kind":"plugin"}}}`)
 	if !plugin.Skip {
 		t.Errorf("plugin user message was not skipped: %+v", plugin)
 	}
-	errorEnd := parseRecord(t, parser, `{"type":"turn/end","time":1789676444761,"data":{"reason":{"kind":"error","error":{"message":"No API key","code":"MISSING_CREDENTIAL"}}}}`)
-	if errorEnd.SessionError == nil || errorEnd.SessionError.Class != "missing_credential" {
+}
+
+func TestParserMapsTerminalError(t *testing.T) {
+	errorEnd := parseRecord(t, &Parser{}, `{"type":"turn/end","time":1789676444761,"data":{"reason":{"kind":"error","error":{"message":"No API key","code":"MISSING_CREDENTIAL"}}}}`)
+	if errorEnd.SessionError == nil {
+		t.Fatalf("error turn/end = %+v", errorEnd)
+	}
+	if errorEnd.SessionError.Class != "missing_credential" {
 		t.Errorf("error turn/end = %+v", errorEnd)
 	}
 }
@@ -293,25 +318,42 @@ func TestZstdTranscriptEndToEnd(t *testing.T) {
 
 func assertLifecycleMetrics(t *testing.T, metrics *tailer.SessionMetrics) {
 	t.Helper()
-	if metrics.LastCWD != "/Users/ingo/work" || metrics.LastEventType != "turn_done" {
-		t.Errorf("lifecycle metrics = %+v", metrics)
+	if metrics.LastCWD != "/Users/ingo/work" {
+		t.Errorf("last CWD = %q, want /Users/ingo/work", metrics.LastCWD)
+	}
+	if metrics.LastEventType != "turn_done" {
+		t.Errorf("last event type = %q, want turn_done", metrics.LastEventType)
 	}
 }
 
 func assertUsageMetrics(t *testing.T, metrics *tailer.SessionMetrics) {
 	t.Helper()
-	wantTokens := metrics.TotalTokens == 12 && metrics.InputTokens == 10 && metrics.OutputTokens == 2
-	if metrics.ModelName != "qwen/qwen3.5-9b" || !wantTokens {
-		t.Errorf("usage metrics = %+v", metrics)
+	if metrics.ModelName != "qwen/qwen3.5-9b" {
+		t.Errorf("model = %q, want qwen/qwen3.5-9b", metrics.ModelName)
 	}
-	if metrics.ContextWindow != 262144 || metrics.ContextWindowUnknown {
-		t.Errorf("context metrics = %+v", metrics)
+	if metrics.TotalTokens != 12 {
+		t.Errorf("total tokens = %d, want 12", metrics.TotalTokens)
+	}
+	if metrics.InputTokens != 10 {
+		t.Errorf("input tokens = %d, want 10", metrics.InputTokens)
+	}
+	if metrics.OutputTokens != 2 {
+		t.Errorf("output tokens = %d, want 2", metrics.OutputTokens)
+	}
+	if metrics.ContextWindow != 262144 {
+		t.Errorf("context window = %d, want 262144", metrics.ContextWindow)
+	}
+	if metrics.ContextWindowUnknown {
+		t.Error("context window is unknown")
 	}
 }
 
 func assertClosedState(t *testing.T, metrics *tailer.SessionMetrics) {
 	t.Helper()
-	if metrics.HasOpenToolCall || metrics.TranscriptPermissionPending {
-		t.Errorf("closed transcript retained open state: %+v", metrics)
+	if metrics.HasOpenToolCall {
+		t.Error("closed transcript has an open tool call")
+	}
+	if metrics.TranscriptPermissionPending {
+		t.Error("closed transcript has a pending transcript permission")
 	}
 }
