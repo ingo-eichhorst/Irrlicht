@@ -110,8 +110,9 @@ import (
 // found presentation_phase takes exactly two values: "automated_reviewing"
 // (68 occurrences) — muse's own ":auto-review" LLM judge decides first, no
 // user involved yet — and "human_pending" (9 occurrences) — the user must
-// decide right now, the case this parser always assumed. A live-driven
-// probe on the reporter's own session confirmed the practical cost:
+// decide right now, the case this parser always assumed. Reading the
+// reporter's own already-on-disk session (no live drive) measured the
+// practical cost from its recorded_at stamps:
 // requested{automated_reviewing} at seq 1157, automated_review_started one
 // line later, then 18.73s before automated_review_completed{status:
 // escalated} — 18.73s the LLM judge was still deciding, wrongly reported as
@@ -125,13 +126,41 @@ import (
 // automated_review_completed carries the judge's own verdict and is no
 // longer unconditional bookkeeping either: parseApprovalReviewCompleted
 // re-opens the prompt when the review did NOT cleanly auto-approve — any of
-// status != "approved" (the only escalation value seen in this corpus is
-// "escalated"), timed_out true, or a present, non-null failure. A clean
-// auto-approval (status "approved", timed_out false, failure absent/null)
-// stays Skip=true, exactly as every automated_review_completed record was
-// treated before this fix. automated_review_started and
+// status != "approved", timed_out true, or a present, non-null failure. A
+// clean auto-approval (status "approved", timed_out false, failure
+// absent/null) stays Skip=true, exactly as every automated_review_completed
+// record was treated before this fix. automated_review_started and
 // stage_requirement_resolved remain pure bookkeeping either way — see
 // parseApprovalEvent's default branch.
+//
+// # Why presentation_phase is an identity, not a heuristic
+//
+// The same corpus scan pairs each "requested" with its own
+// decision_applied.decision_source.kind — muse's own record of WHO decided.
+// The two agree:
+//
+//	requested.presentation_phase   decision_source.kind    n
+//	automated_reviewing            llm_judge               62
+//	human_pending                  human_approval           9
+//	automated_reviewing            human_approval           4
+//	automated_reviewing            (never closed in-file)   2
+//
+// "human_pending" resolved to a human in 9 of 9 and never once to the judge,
+// so opening on it is right in every observed case. The 4 rows where an
+// "automated_reviewing" request did reach a human are the ones the re-open
+// branch above exists for — and it covers all 4: each emits an
+// automated_review_completed whose outcome is not a clean auto-approval
+// (three status "escalated", one status "timed_out" carrying timed_out true
+// AND a non-null failure). So status is not always "escalated" when a human
+// is needed, which is why the check is status != "approved" rather than an
+// equality test against "escalated", and why timed_out and failure are
+// checked at all rather than assumed redundant.
+//
+// Net effect measured over the same 148 files: 67 windows totalling 865.3s
+// (median 8.19s, max 90.01s) stop being reported as waiting, every one of
+// them longer than services.activityDebounceWindow (2s) and therefore
+// certainly visible before this fix; the 9 genuine human waits are
+// untouched; no observed user prompt is hidden.
 //
 // # Resolved (issue #1960 stage 3): stage 2's original worry here read
 //

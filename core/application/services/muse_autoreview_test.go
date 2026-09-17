@@ -32,8 +32,8 @@ func museAutoReviewFixtureLines(t *testing.T) []string {
 			lines = append(lines, l)
 		}
 	}
-	if len(lines) != 4 {
-		t.Fatalf("real-approval-flow-escalated.jsonl has %d lines, want 4 (requested/automated_review_started/automated_review_completed/decision_applied) — fixture shape changed underneath this test", len(lines))
+	if len(lines) != 5 {
+		t.Fatalf("real-approval-flow-escalated.jsonl has %d lines, want 5 (requested/automated_review_started/automated_review_completed/policy_persistence_succeeded/decision_applied) — fixture shape changed underneath this test", len(lines))
 	}
 	return lines
 }

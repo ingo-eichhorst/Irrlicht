@@ -677,8 +677,9 @@ func approvalLine(t *testing.T, eventKind, pendingActionID string, extra map[str
 
 // TestParseLine_ApprovalRequested_PresentationPhase is table-driven over
 // requested's presentation_phase — issue #1978's actual discriminator.
-// Corpus-scanned across all 150 muse sessions under
-// ~/.local/share/muse/sessions/: "automated_reviewing" (68 occurrences) means
+// Corpus-scanned across all 148 top-level muse sessions under
+// ~/.local/share/muse/sessions/ (nested subagent copies excluded — they fold
+// into the parent session): "automated_reviewing" (68 occurrences) means
 // muse's own :auto-review LLM judge decides first, no user involved yet;
 // "human_pending" (9 occurrences) means the user must decide right now. Every
 // other row here (missing/unrecognized value) is a fail-safe case, not one
@@ -851,8 +852,12 @@ func TestParseLine_ApprovalFlow_RealFixture(t *testing.T) {
 }
 
 // TestParseLine_ApprovalFlow_Escalated_ReviewWindow_NotWaiting is RED-FIRST,
-// user-observable evidence: real-approval-flow-escalated.jsonl's requested
-// record also carries presentation_phase="automated_reviewing", so the same
+// user-observable evidence. real-approval-flow-escalated.jsonl is a captured,
+// redacted copy of the reporter's OWN escalated approval — the five records
+// at seq 1157/1158/1217/1268/1269 of session 01a0ab28-…, renumbered 1..5 with
+// workspace paths scrubbed and nothing else altered, so its recorded_at gaps
+// are the real 18.73s and 40.89s cited below. Its requested record carries
+// presentation_phase="automated_reviewing", so the same
 // review-window claim as the approved flow above applies — no wait should be
 // visible while the judge is still deciding. Fails today for the same
 // reason. Measured on the reporter's own transcript (issue #1978 triage):
