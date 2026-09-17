@@ -17,7 +17,8 @@ import (
 // testdata/real-approval-flow-escalated.jsonl (owned by core/adapters/
 // inbound/agents/muse) — requested{presentation_phase:"automated_reviewing"}
 // -> automated_review_started -> automated_review_completed{status:
-// "escalated"} -> decision_applied, read here across the package boundary.
+// "escalated"} -> policy_persistence_succeeded -> decision_applied, read
+// here across the package boundary.
 // See TestClassifyState_MuseAutoReview_JudgeReviewWindowNotWaiting's doc
 // comment for why that direction is allowed.
 func museAutoReviewFixtureLines(t *testing.T) []string {
