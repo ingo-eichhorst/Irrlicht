@@ -690,6 +690,9 @@ type ParserLedger struct {
 	// CumCursor is the last committed total_token_usage seen by the Codex parser.
 	// Restored so per-turn deltas after a restart are computed correctly.
 	CumCursor *UsageBreakdown `json:"cum_cursor,omitempty"`
+	// UnsupportedFormatVersion keeps a parser's terminal format refusal active
+	// when the tailer resumes after the rejected header.
+	UnsupportedFormatVersion string `json:"unsupported_format_version,omitempty"`
 }
 
 // ParserStateProvider is an optional interface for stateful parsers that can

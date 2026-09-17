@@ -12,48 +12,65 @@ type dshFixtureParser struct {
 }
 
 func TestTranscriptTailer_ZstdTornFrameWaitsAtPriorBoundary(t *testing.T) {
+	fixture := readZstdFixture(t)
+	path := filepath.Join(t.TempDir(), "session.v3.jsonl.zstd")
+	writeTestFile(t, path, fixture[:len(fixture)-1])
+
+	parser := &dshFixtureParser{}
+	tailer := NewTranscriptTailer(path, parser, "dsh")
+	tailZstdWithoutError(t, tailer, "torn-frame pass")
+	assertZstdTailState(t, tailer, parser, 190, []string{"session"})
+
+	appendTestFile(t, path, fixture[len(fixture)-1:])
+	tailZstdWithoutError(t, tailer, "completed-frame pass")
+	assertZstdTailState(t, tailer, parser, int64(len(fixture)), []string{"session", "permission/preset", "sandbox/mode", "approval/policy"})
+}
+
+func readZstdFixture(t *testing.T) []byte {
+	t.Helper()
 	fixture, err := os.ReadFile(filepath.Join("testdata", "dsh-session.v3.jsonl.zstd"))
 	if err != nil {
 		t.Fatalf("read fixture: %v", err)
 	}
-	path := filepath.Join(t.TempDir(), "session.v3.jsonl.zstd")
-	if err := os.WriteFile(path, fixture[:len(fixture)-1], 0o600); err != nil {
-		t.Fatalf("write torn fixture: %v", err)
-	}
+	return fixture
+}
 
-	parser := &dshFixtureParser{}
-	tailer := NewTranscriptTailer(path, parser, "dsh")
-	if _, err := tailer.TailAndProcess(); err != nil {
-		t.Fatalf("torn-frame pass: %v", err)
+func writeTestFile(t *testing.T, path string, content []byte) {
+	t.Helper()
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
 	}
-	if want := []string{"session"}; !reflect.DeepEqual(parser.types, want) {
-		t.Fatalf("torn-frame parsed types = %v, want %v", parser.types, want)
-	}
-	if tailer.lastOffset != 190 {
-		t.Fatalf("torn-frame lastOffset = %d, want first complete frame boundary 190", tailer.lastOffset)
-	}
+}
 
+func appendTestFile(t *testing.T, path string, content []byte) {
+	t.Helper()
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
-		t.Fatalf("open torn fixture for append: %v", err)
+		t.Fatalf("open fixture for append: %v", err)
 	}
-	if _, err := f.Write(fixture[len(fixture)-1:]); err != nil {
-		f.Close()
-		t.Fatalf("complete final frame: %v", err)
+	if _, err := f.Write(content); err != nil {
+		_ = f.Close()
+		t.Fatalf("append fixture: %v", err)
 	}
 	if err := f.Close(); err != nil {
-		t.Fatalf("close completed fixture: %v", err)
+		t.Fatalf("close fixture: %v", err)
 	}
+}
 
+func tailZstdWithoutError(t *testing.T, tailer *TranscriptTailer, pass string) {
+	t.Helper()
 	if _, err := tailer.TailAndProcess(); err != nil {
-		t.Fatalf("completed-frame pass: %v", err)
+		t.Fatalf("%s: %v", pass, err)
 	}
-	want := []string{"session", "permission/preset", "sandbox/mode", "approval/policy"}
-	if !reflect.DeepEqual(parser.types, want) {
-		t.Errorf("completed-frame parsed types = %v, want %v", parser.types, want)
+}
+
+func assertZstdTailState(t *testing.T, tailer *TranscriptTailer, parser *dshFixtureParser, offset int64, types []string) {
+	t.Helper()
+	if !reflect.DeepEqual(parser.types, types) {
+		t.Errorf("parsed types = %v, want %v", parser.types, types)
 	}
-	if tailer.lastOffset != int64(len(fixture)) {
-		t.Errorf("completed-frame lastOffset = %d, want %d", tailer.lastOffset, len(fixture))
+	if tailer.lastOffset != offset {
+		t.Errorf("lastOffset = %d, want %d", tailer.lastOffset, offset)
 	}
 }
 

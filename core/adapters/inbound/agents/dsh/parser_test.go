@@ -84,6 +84,82 @@ func TestParserMapsMeasuredLifecycleRecords(t *testing.T) {
 	}
 }
 
+func TestParserMapsMeasuredRequestContext(t *testing.T) {
+	parser := &Parser{}
+	context := parseRecord(t, parser, `{"type":"request/context","seq":14,"time":1789678150150,"data":{"provider":"lmstudio","model":"qwen/qwen3.5-9b","contextWindow":262144}}`)
+	if !context.Skip || context.ModelName != "qwen/qwen3.5-9b" || context.ContextWindow != 262144 {
+		t.Errorf("request/context = %+v", context)
+	}
+}
+
+func TestParserRefusalSurvivesTailerRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.v99.jsonl.zstd")
+	writeZstdFrame(t, path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC,
+		`{"type":"session","version":99,"id":"session-600e7941-bf4f-4da4-9ef6-489168e13724","createdAt":1789676506637,"cwd":"/Users/ingo/work"}`+"\n")
+
+	before := tailer.NewTranscriptTailer(path, &Parser{}, AdapterName)
+	before.DisableModelConfigFallback()
+	metrics, err := before.TailAndProcess()
+	if err != nil {
+		t.Fatalf("first TailAndProcess: %v", err)
+	}
+	if metrics.SessionError == nil || metrics.SessionError.Class != "unsupported_transcript_version" {
+		t.Fatalf("first SessionError = %+v", metrics.SessionError)
+	}
+	ledger := roundTripLedger(t, before.GetLedgerState())
+
+	writeZstdFrame(t, path, os.O_WRONLY|os.O_APPEND,
+		`{"type":"user/message","time":1789676506725,"data":{"role":"user","content":[{"type":"text","text":"Continue"}],"source":{"kind":"user"}}}`+"\n")
+
+	after := tailer.NewTranscriptTailer(path, &Parser{}, AdapterName)
+	after.DisableModelConfigFallback()
+	after.SetLedgerState(ledger)
+	metrics, err = after.TailAndProcess()
+	if err != nil {
+		t.Fatalf("second TailAndProcess: %v", err)
+	}
+	if metrics.SessionError == nil || metrics.SessionError.Class != "unsupported_transcript_version" {
+		t.Errorf("restored SessionError = %+v", metrics.SessionError)
+	}
+	if metrics.LastEventType == "user_message" {
+		t.Error("unknown-version parser accepted a user message after restart")
+	}
+}
+
+func roundTripLedger(t *testing.T, ledger tailer.LedgerState) tailer.LedgerState {
+	t.Helper()
+	encoded, err := json.Marshal(ledger)
+	if err != nil {
+		t.Fatalf("marshal ledger: %v", err)
+	}
+	var restored tailer.LedgerState
+	if err := json.Unmarshal(encoded, &restored); err != nil {
+		t.Fatalf("unmarshal ledger: %v", err)
+	}
+	return restored
+}
+
+func writeZstdFrame(t *testing.T, path string, flags int, lines string) {
+	t.Helper()
+	encoder, err := zstd.NewWriter(nil, zstd.WithEncoderCRC(true))
+	if err != nil {
+		t.Fatalf("create encoder: %v", err)
+	}
+	compressed := encoder.EncodeAll([]byte(lines), nil)
+	encoder.Close()
+	file, err := os.OpenFile(path, flags, 0o600)
+	if err != nil {
+		t.Fatalf("open transcript: %v", err)
+	}
+	if _, err := file.Write(compressed); err != nil {
+		_ = file.Close()
+		t.Fatalf("write transcript: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close transcript: %v", err)
+	}
+}
+
 func TestParserMapsAssistantUsageAndTools(t *testing.T) {
 	parser := &Parser{}
 	assistant := parseRecord(t, parser, `{"type":"assistant/message","seq":17,"time":1789678181815,"data":{"message":{"role":"assistant","content":[{"type":"reasoning","text":"hidden"},{"type":"text","text":"Done."}],"source":{"kind":"model","provider":"lmstudio","model":"qwen/qwen3.5-9b"}},"usage":{"inputTokens":7899,"outputTokens":24,"totalTokens":7923}}}`)
@@ -127,35 +203,46 @@ func TestZstdTranscriptEndToEnd(t *testing.T) {
 	lines := strings.Join([]string{
 		`{"type":"session","version":3,"id":"session-600e7941-bf4f-4da4-9ef6-489168e13724","createdAt":1789676506637,"cwd":"/Users/ingo/work"}`,
 		`{"type":"request/header","seq":1,"time":1789676506640,"data":{"header":{"config":{"provider":"lmstudio","model":"qwen/qwen3.5-9b"}}}}`,
+		`{"type":"request/context","seq":2,"time":1789676506641,"data":{"provider":"lmstudio","model":"qwen/qwen3.5-9b","contextWindow":262144}}`,
 		`{"type":"turn/start","seq":4,"time":1789676506647,"data":{"turn":1}}`,
 		`{"type":"assistant/message","seq":17,"time":1789678181815,"data":{"message":{"role":"assistant","content":[{"type":"text","text":"Done."}],"source":{"kind":"model","model":"qwen/qwen3.5-9b"}},"usage":{"inputTokens":10,"outputTokens":2,"totalTokens":12}}}`,
 		`{"type":"tool/call","seq":18,"time":1789678181816,"data":{"callId":"call-1","name":"read"}}`,
 		`{"type":"tool/result","seq":19,"time":1789678181817,"data":{"message":{"source":{"kind":"tool","callId":"call-1"},"content":[{"type":"tool-result","toolCallId":"call-1","isError":false}]}}}`,
 		`{"type":"turn/end","seq":20,"time":1789678181818,"data":{"reason":{"kind":"completed"}}}`,
 	}, "\n") + "\n"
-	encoder, err := zstd.NewWriter(nil, zstd.WithEncoderCRC(true))
-	if err != nil {
-		t.Fatalf("create encoder: %v", err)
-	}
-	compressed := encoder.EncodeAll([]byte(lines), nil)
-	encoder.Close()
-
 	path := filepath.Join(t.TempDir(), "session.v3.jsonl.zstd")
-	if err := os.WriteFile(path, compressed, 0o600); err != nil {
-		t.Fatalf("write transcript: %v", err)
-	}
+	writeZstdFrame(t, path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, lines)
 	transcriptTailer := tailer.NewTranscriptTailer(path, &Parser{}, AdapterName)
 	transcriptTailer.DisableModelConfigFallback()
 	metrics, err := transcriptTailer.TailAndProcess()
 	if err != nil {
 		t.Fatalf("TailAndProcess: %v", err)
 	}
+	assertLifecycleMetrics(t, metrics)
+	assertUsageMetrics(t, metrics)
+	assertClosedState(t, metrics)
+}
+
+func assertLifecycleMetrics(t *testing.T, metrics *tailer.SessionMetrics) {
+	t.Helper()
 	if metrics.LastCWD != "/Users/ingo/work" || metrics.LastEventType != "turn_done" {
 		t.Errorf("lifecycle metrics = %+v", metrics)
 	}
-	if metrics.ModelName != "qwen/qwen3.5-9b" || metrics.TotalTokens != 12 || metrics.InputTokens != 10 || metrics.OutputTokens != 2 {
+}
+
+func assertUsageMetrics(t *testing.T, metrics *tailer.SessionMetrics) {
+	t.Helper()
+	wantTokens := metrics.TotalTokens == 12 && metrics.InputTokens == 10 && metrics.OutputTokens == 2
+	if metrics.ModelName != "qwen/qwen3.5-9b" || !wantTokens {
 		t.Errorf("usage metrics = %+v", metrics)
 	}
+	if metrics.ContextWindow != 262144 || metrics.ContextWindowUnknown {
+		t.Errorf("context metrics = %+v", metrics)
+	}
+}
+
+func assertClosedState(t *testing.T, metrics *tailer.SessionMetrics) {
+	t.Helper()
 	if metrics.HasOpenToolCall || metrics.TranscriptPermissionPending {
 		t.Errorf("closed transcript retained open state: %+v", metrics)
 	}

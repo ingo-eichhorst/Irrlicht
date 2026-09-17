@@ -9,7 +9,7 @@ import (
 	"irrlicht/core/domain/permission"
 )
 
-func TestAgentDeclaration(t *testing.T) {
+func TestAgentIdentity(t *testing.T) {
 	a := Agent()
 	if a.Identity.Name != AdapterName || a.Identity.DisplayName != "DeepSeek Harness" {
 		t.Errorf("identity = %+v", a.Identity)
@@ -17,13 +17,20 @@ func TestAgentDeclaration(t *testing.T) {
 	if a.Identity.IconSVGLight == "" || a.Identity.IconSVGDark == "" {
 		t.Error("both icon variants must be present")
 	}
+}
+
+func TestAgentProcessDeclaration(t *testing.T) {
+	a := Agent()
 	if _, ok := a.Process.Match.(agent.CommandPattern); !ok {
 		t.Errorf("process match = %T, want CommandPattern", a.Process.Match)
 	}
 	if a.Process.PIDForSession == nil {
 		t.Error("PIDForSession is nil")
 	}
+}
 
+func TestAgentSourceDeclaration(t *testing.T) {
+	a := Agent()
 	source, ok := a.Source.(agent.FilesUnderRoot)
 	if !ok {
 		t.Fatalf("source = %T, want FilesUnderRoot", a.Source)
@@ -34,7 +41,10 @@ func TestAgentDeclaration(t *testing.T) {
 	if _, ok := source.Parser.(agent.JSONLineParser); !ok {
 		t.Errorf("parser = %T, want JSONLineParser", source.Parser)
 	}
+}
 
+func TestAgentPermissionDeclaration(t *testing.T) {
+	a := Agent()
 	if len(a.Permissions) != 1 {
 		t.Fatalf("permission count = %d, want 1", len(a.Permissions))
 	}
@@ -87,6 +97,27 @@ func TestSessionIDFromPathSelectsHighestGeneration(t *testing.T) {
 	}
 	if got := sessionIDFromPath(filepath.Join(filepath.Dir(dir), "not-a-session", "session.v3.jsonl.zstd")); got != "" {
 		t.Errorf("invalid session directory minted session %q", got)
+	}
+}
+
+func TestSessionIDFromPathIdentifiesRemovedHighestGeneration(t *testing.T) {
+	const id = "session-600e7941-bf4f-4da4-9ef6-489168e13724"
+	dir := filepath.Join(t.TempDir(), id)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	older := filepath.Join(dir, "session.v2.jsonl.zstd")
+	removed := filepath.Join(dir, "session.v3.jsonl.zstd")
+	for _, path := range []string{older, removed} {
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Remove(removed); err != nil {
+		t.Fatal(err)
+	}
+	if got := sessionIDFromPath(removed); got != id {
+		t.Errorf("removed highest generation ID = %q, want %q", got, id)
 	}
 }
 

@@ -20,6 +20,7 @@ const (
 	recordToolCall         = "tool/call"
 	recordToolResult       = "tool/result"
 	recordRequestHeader    = "request/header"
+	recordRequestContext   = "request/context"
 )
 
 // Parser normalizes DeepSeek Harness v3 durable records. Once a session
@@ -30,6 +31,36 @@ type Parser struct {
 	unsupportedVersion string
 }
 
+type recordHandler func(*Parser, map[string]any, *tailer.ParsedEvent)
+
+func statelessHandler(handler func(map[string]any, *tailer.ParsedEvent)) recordHandler {
+	return func(_ *Parser, raw map[string]any, event *tailer.ParsedEvent) {
+		handler(raw, event)
+	}
+}
+
+var recordHandlers = map[string]recordHandler{
+	recordSession:          (*Parser).parseSession,
+	recordTurnStart:        statelessHandler(parseTurnStart),
+	recordTurnEnd:          statelessHandler(parseTurnEnd),
+	recordApprovalAsked:    statelessHandler(parseApprovalAsked),
+	recordApprovalDecided:  statelessHandler(parseApprovalDecided),
+	recordAssistantMessage: statelessHandler(parseAssistantMessage),
+	recordUserMessage:      statelessHandler(parseUserMessage),
+	recordToolCall:         statelessHandler(parseToolCall),
+	recordToolResult:       statelessHandler(parseToolResult),
+	recordRequestHeader:    statelessHandler(parseRequestHeader),
+	recordRequestContext:   statelessHandler(parseRequestContext),
+}
+
+func (p *Parser) GetParserLedger() tailer.ParserLedger {
+	return tailer.ParserLedger{UnsupportedFormatVersion: p.unsupportedVersion}
+}
+
+func (p *Parser) SetParserLedger(ledger tailer.ParserLedger) {
+	p.unsupportedVersion = ledger.UnsupportedFormatVersion
+}
+
 func (p *Parser) ParseLine(raw map[string]any) *tailer.ParsedEvent {
 	ev := &tailer.ParsedEvent{Timestamp: recordTimestamp(raw)}
 	if p.unsupportedVersion != "" {
@@ -38,31 +69,17 @@ func (p *Parser) ParseLine(raw map[string]any) *tailer.ParsedEvent {
 	}
 
 	recordType, _ := raw["type"].(string)
-	switch recordType {
-	case recordSession:
-		p.parseSession(raw, ev)
-	case recordTurnStart:
-		ev.EventType = "turn_start"
-	case recordTurnEnd:
-		parseTurnEnd(raw, ev)
-	case recordApprovalAsked:
-		parseApprovalAsked(raw, ev)
-	case recordApprovalDecided:
-		parseApprovalDecided(raw, ev)
-	case recordAssistantMessage:
-		parseAssistantMessage(raw, ev)
-	case recordUserMessage:
-		parseUserMessage(raw, ev)
-	case recordToolCall:
-		parseToolCall(raw, ev)
-	case recordToolResult:
-		parseToolResult(raw, ev)
-	case recordRequestHeader:
-		parseRequestHeader(raw, ev)
-	default:
+	handler, ok := recordHandlers[recordType]
+	if !ok {
 		ev.Skip = true
+		return ev
 	}
+	handler(p, raw, ev)
 	return ev
+}
+
+func parseTurnStart(_ map[string]any, ev *tailer.ParsedEvent) {
+	ev.EventType = "turn_start"
 }
 
 func (p *Parser) parseSession(raw map[string]any, ev *tailer.ParsedEvent) {
@@ -220,6 +237,13 @@ func parseRequestHeader(raw map[string]any, ev *tailer.ParsedEvent) {
 	header := object(object(raw, "data"), "header")
 	config := object(header, "config")
 	ev.ModelName = tailer.NormalizeModelName(text(config, "model"))
+}
+
+func parseRequestContext(raw map[string]any, ev *tailer.ParsedEvent) {
+	ev.Skip = true
+	data := object(raw, "data")
+	ev.ModelName = tailer.NormalizeModelName(text(data, "model"))
+	ev.ContextWindow = integer(data, "contextWindow")
 }
 
 func recordTimestamp(raw map[string]any) time.Time {

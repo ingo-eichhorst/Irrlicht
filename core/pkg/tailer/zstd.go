@@ -36,6 +36,9 @@ func isZstdTranscript(path string) bool {
 // next pass. A complete but invalid frame is returned as an error.
 func (t *TranscriptTailer) scanZstdFrames(file *os.File, startPos, fileSize int64) transcriptScanResult {
 	res := transcriptScanResult{endOffset: startPos}
+	if startPos >= fileSize {
+		return res
+	}
 	decoder, err := zstd.NewReader(nil,
 		zstd.WithDecoderConcurrency(1),
 		zstd.WithDecoderMaxMemory(uint64(maxDecodedZstdFrameSize)),
@@ -113,6 +116,20 @@ func mergeZstdFrameScan(dst *transcriptScanResult, src transcriptScanResult) {
 // zstdFrameSize reads one frame envelope without decoding its blocks. It
 // returns the compressed byte length of a standard or skippable frame.
 func zstdFrameSize(r io.Reader) (int64, error) {
+	magic, err := readZstdFrameMagic(r)
+	if err != nil {
+		return 0, err
+	}
+	if magic&zstdSkippableMagicMask == zstdSkippableMagicValue {
+		return zstdSkippableFrameSize(r)
+	}
+	if magic != zstdFrameMagic {
+		return 0, fmt.Errorf("invalid zstd frame magic %#x", magic)
+	}
+	return zstdStandardFrameSize(r)
+}
+
+func readZstdFrameMagic(r io.Reader) (uint32, error) {
 	var magicBytes [4]byte
 	n, err := io.ReadFull(r, magicBytes[:])
 	if err != nil {
@@ -121,65 +138,64 @@ func zstdFrameSize(r io.Reader) (int64, error) {
 		}
 		return 0, errPartialZstdFrame
 	}
-	size := int64(len(magicBytes))
-	magic := binary.LittleEndian.Uint32(magicBytes[:])
+	return binary.LittleEndian.Uint32(magicBytes[:]), nil
+}
 
-	if magic&zstdSkippableMagicMask == zstdSkippableMagicValue {
-		var payloadSizeBytes [4]byte
-		if err := readZstdFrameBytes(r, payloadSizeBytes[:]); err != nil {
-			return 0, err
-		}
-		payloadSize := int64(binary.LittleEndian.Uint32(payloadSizeBytes[:]))
-		if err := skipZstdFrameBytes(r, payloadSize); err != nil {
-			return 0, err
-		}
-		return size + 4 + payloadSize, nil
+func zstdSkippableFrameSize(r io.Reader) (int64, error) {
+	var payloadSizeBytes [4]byte
+	if err := readZstdFrameBytes(r, payloadSizeBytes[:]); err != nil {
+		return 0, err
 	}
-	if magic != zstdFrameMagic {
-		return 0, fmt.Errorf("invalid zstd frame magic %#x", magic)
+	payloadSize := int64(binary.LittleEndian.Uint32(payloadSizeBytes[:]))
+	if err := skipZstdFrameBytes(r, payloadSize); err != nil {
+		return 0, err
 	}
+	return 8 + payloadSize, nil
+}
 
+func zstdStandardFrameSize(r io.Reader) (int64, error) {
 	var descriptor [1]byte
 	if err := readZstdFrameBytes(r, descriptor[:]); err != nil {
 		return 0, err
 	}
-	size++
 	fhd := descriptor[0]
 	if fhd&(1<<3) != 0 {
 		return 0, errors.New("zstd frame header has reserved bit set")
 	}
-	singleSegment := fhd&(1<<5) != 0
-	checksum := fhd&(1<<2) != 0
-
-	headerRemainder := 0
-	if !singleSegment {
-		headerRemainder++
-	}
-	switch fhd & 3 {
-	case 1:
-		headerRemainder++
-	case 2:
-		headerRemainder += 2
-	case 3:
-		headerRemainder += 4
-	}
-	switch fhd >> 6 {
-	case 0:
-		if singleSegment {
-			headerRemainder++
-		}
-	case 1:
-		headerRemainder += 2
-	case 2:
-		headerRemainder += 4
-	case 3:
-		headerRemainder += 8
-	}
-	if err := skipZstdFrameBytes(r, int64(headerRemainder)); err != nil {
+	headerRemainder := zstdHeaderRemainderSize(fhd)
+	if err := skipZstdFrameBytes(r, headerRemainder); err != nil {
 		return 0, err
 	}
-	size += int64(headerRemainder)
+	blocksSize, err := zstdBlocksSize(r)
+	if err != nil {
+		return 0, err
+	}
+	size := int64(5) + headerRemainder + blocksSize
+	if fhd&(1<<2) != 0 {
+		if err := skipZstdFrameBytes(r, 4); err != nil {
+			return 0, err
+		}
+		size += 4
+	}
+	return size, nil
+}
 
+func zstdHeaderRemainderSize(fhd byte) int64 {
+	singleSegment := fhd&(1<<5) != 0
+	size := int64(0)
+	if !singleSegment {
+		size++
+	}
+	size += []int64{0, 1, 2, 4}[fhd&3]
+	contentSizeBytes := []int64{0, 2, 4, 8}[fhd>>6]
+	if singleSegment && fhd>>6 == 0 {
+		contentSizeBytes = 1
+	}
+	return size + contentSizeBytes
+}
+
+func zstdBlocksSize(r io.Reader) (int64, error) {
+	size := int64(0)
 	for {
 		var blockHeader [3]byte
 		if err := readZstdFrameBytes(r, blockHeader[:]); err != nil {
@@ -202,16 +218,9 @@ func zstdFrameSize(r io.Reader) (int64, error) {
 		}
 		size += payloadSize
 		if lastBlock {
-			break
+			return size, nil
 		}
 	}
-	if checksum {
-		if err := skipZstdFrameBytes(r, 4); err != nil {
-			return 0, err
-		}
-		size += 4
-	}
-	return size, nil
 }
 
 func readZstdFrameBytes(r io.Reader, dst []byte) error {

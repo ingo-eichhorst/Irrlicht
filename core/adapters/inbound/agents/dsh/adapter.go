@@ -50,7 +50,15 @@ func sessionIDFromPath(path string) string {
 	}
 
 	highest, ok := highestTranscriptGeneration(filepath.Dir(path))
-	if !ok || compareGenerations(generation, highest) != 0 {
+	if ok && compareGenerations(generation, highest) == 0 {
+		return id
+	}
+	// fsnotify reports removal after the path is gone. Accept the removed path
+	// only when no higher generation remains in the session directory.
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		return ""
+	}
+	if ok && compareGenerations(generation, highest) < 0 {
 		return ""
 	}
 	return id

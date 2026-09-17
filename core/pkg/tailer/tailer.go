@@ -569,19 +569,9 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	// this pass. See rotation_detect.go.
 	startPos := t.resolveStartPos(file, fileSize)
 
-	var scan transcriptScanResult
-	if isZstdTranscript(t.path) {
-		scan = t.scanZstdFrames(file, startPos, fileSize)
-	} else {
-		if _, err := file.Seek(startPos, io.SeekStart); err != nil {
-			return nil, fmt.Errorf("failed to seek transcript: %w", err)
-		}
-
-		// bufio.Reader (not Scanner) so a single oversized JSONL line can't wedge
-		// the tailer. Lines above maxTranscriptLineSize are skipped: the offset is
-		// advanced past them and processing continues. See issue #270.
-		reader := bufio.NewReaderSize(file, 64*1024)
-		scan = t.scanNewLines(reader, startPos)
+	scan, err := t.scanTranscript(file, startPos, fileSize)
+	if err != nil {
+		return nil, err
 	}
 	t.lastOffset = scan.endOffset
 	// Re-anchor the rewrite detector at the new resume point. Safe to read
@@ -634,6 +624,20 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	t.computeContextUtilization()
 
 	return t.metrics, scan.err
+}
+
+func (t *TranscriptTailer) scanTranscript(file *os.File, startPos, fileSize int64) (transcriptScanResult, error) {
+	if isZstdTranscript(t.path) {
+		return t.scanZstdFrames(file, startPos, fileSize), nil
+	}
+	if _, err := file.Seek(startPos, io.SeekStart); err != nil {
+		return transcriptScanResult{}, fmt.Errorf("failed to seek transcript: %w", err)
+	}
+
+	// bufio.Reader (not Scanner) lets the tailer skip an oversized JSONL line
+	// and continue after it. See issue #270.
+	reader := bufio.NewReaderSize(file, 64*1024)
+	return t.scanNewLines(reader, startPos), nil
 }
 
 // transcriptScanResult carries the outcomes of one scanNewLines pass: how far
