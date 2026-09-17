@@ -160,26 +160,51 @@ func writeZstdFrame(t *testing.T, path string, flags int, lines string) {
 	}
 }
 
-func TestParserMapsAssistantUsageAndTools(t *testing.T) {
+func TestParserMapsAssistantUsage(t *testing.T) {
 	parser := &Parser{}
 	assistant := parseRecord(t, parser, `{"type":"assistant/message","seq":17,"time":1789678181815,"data":{"message":{"role":"assistant","content":[{"type":"reasoning","text":"hidden"},{"type":"text","text":"Done."}],"source":{"kind":"model","provider":"lmstudio","model":"qwen/qwen3.5-9b"}},"usage":{"inputTokens":7899,"outputTokens":24,"totalTokens":7923}}}`)
-	if assistant.EventType != "assistant_message" || assistant.ModelName != "qwen/qwen3.5-9b" || assistant.AssistantText != "Done." {
-		t.Errorf("assistant message = %+v", assistant)
+	if assistant.EventType != "assistant_message" {
+		t.Errorf("event type = %q, want assistant_message", assistant.EventType)
 	}
-	if assistant.Tokens == nil || *assistant.Tokens != (tailer.TokenSnapshot{Input: 7899, Output: 24, Total: 7923}) {
-		t.Errorf("tokens = %+v", assistant.Tokens)
+	if assistant.ModelName != "qwen/qwen3.5-9b" {
+		t.Errorf("model = %q, want qwen/qwen3.5-9b", assistant.ModelName)
 	}
-	if assistant.Contribution == nil || assistant.Contribution.Usage != (tailer.UsageBreakdown{Input: 7899, Output: 24}) {
-		t.Errorf("contribution = %+v", assistant.Contribution)
+	if assistant.AssistantText != "Done." {
+		t.Errorf("assistant text = %q, want Done.", assistant.AssistantText)
 	}
+	assertAssistantTokens(t, assistant)
+}
 
+func assertAssistantTokens(t *testing.T, assistant *tailer.ParsedEvent) {
+	t.Helper()
+	if assistant.Tokens == nil {
+		t.Fatal("tokens are nil")
+	}
+	wantTokens := tailer.TokenSnapshot{Input: 7899, Output: 24, Total: 7923}
+	if *assistant.Tokens != wantTokens {
+		t.Errorf("tokens = %+v, want %+v", *assistant.Tokens, wantTokens)
+	}
+	if assistant.Contribution == nil {
+		t.Fatal("contribution is nil")
+	}
+	wantUsage := tailer.UsageBreakdown{Input: 7899, Output: 24}
+	if assistant.Contribution.Usage != wantUsage {
+		t.Errorf("contribution = %+v, want %+v", assistant.Contribution.Usage, wantUsage)
+	}
+}
+
+func TestParserMapsToolLifecycle(t *testing.T) {
+	parser := &Parser{}
 	call := parseRecord(t, parser, `{"type":"tool/call","seq":18,"time":1789678034523,"data":{"callId":"496248271","name":"read","arguments":"{}"}}`)
 	if !reflect.DeepEqual(call.ToolUses, []tailer.ToolUse{{ID: "496248271", Name: "read"}}) {
 		t.Errorf("tool/call = %+v", call)
 	}
 	result := parseRecord(t, parser, `{"type":"tool/result","seq":21,"time":1789678034628,"data":{"message":{"source":{"kind":"tool","callId":"496248271"},"content":[{"type":"tool-result","toolCallId":"496248271","isError":false}]}}}`)
-	if !reflect.DeepEqual(result.ToolResultIDs, []string{"496248271"}) || result.IsError {
+	if !reflect.DeepEqual(result.ToolResultIDs, []string{"496248271"}) {
 		t.Errorf("tool/result = %+v", result)
+	}
+	if result.IsError {
+		t.Error("tool/result is marked as an error")
 	}
 }
 

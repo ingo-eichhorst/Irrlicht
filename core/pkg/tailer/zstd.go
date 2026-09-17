@@ -50,13 +50,12 @@ func (t *TranscriptTailer) scanZstdFrames(file *os.File, startPos, fileSize int6
 	defer decoder.Close()
 
 	for res.endOffset < fileSize {
-		remaining := fileSize - res.endOffset
-		frameSize, frameErr := zstdFrameSize(io.NewSectionReader(file, res.endOffset, remaining))
-		switch {
-		case errors.Is(frameErr, io.EOF), errors.Is(frameErr, errPartialZstdFrame):
+		frameSize, complete, frameErr := completeZstdFrameSize(file, res.endOffset, fileSize)
+		if frameErr != nil {
+			res.err = frameErr
 			return res
-		case frameErr != nil:
-			res.err = fmt.Errorf("read zstd frame at compressed offset %d: %w", res.endOffset, frameErr)
+		}
+		if !complete {
 			return res
 		}
 
@@ -65,22 +64,9 @@ func (t *TranscriptTailer) scanZstdFrames(file *os.File, startPos, fileSize int6
 			res.err = fmt.Errorf("decode zstd frame at compressed offset %d: %w", res.endOffset, decodeErr)
 			return res
 		}
-		if len(decoded) > 0 && decoded[len(decoded)-1] != '\n' {
-			res.err = fmt.Errorf("decode zstd frame at compressed offset %d: complete frame ends mid-line", res.endOffset)
-			return res
-		}
-
-		frameScan := t.scanNewLinesAfter(
-			bufio.NewReaderSize(bytes.NewReader(decoded), 64*1024),
-			0,
-			res.turnDoneSeen,
-		)
-		if frameScan.err != nil {
-			res.err = frameScan.err
-			return res
-		}
-		if frameScan.endOffset != int64(len(decoded)) {
-			res.err = fmt.Errorf("decode zstd frame at compressed offset %d: processed %d of %d decoded bytes", res.endOffset, frameScan.endOffset, len(decoded))
+		frameScan, scanErr := t.scanDecodedZstdFrame(decoded, res.turnDoneSeen, res.endOffset)
+		if scanErr != nil {
+			res.err = scanErr
 			return res
 		}
 
@@ -88,6 +74,36 @@ func (t *TranscriptTailer) scanZstdFrames(file *os.File, startPos, fileSize int6
 		res.endOffset += frameSize
 	}
 	return res
+}
+
+func completeZstdFrameSize(file *os.File, offset, fileSize int64) (int64, bool, error) {
+	remaining := fileSize - offset
+	frameSize, err := zstdFrameSize(io.NewSectionReader(file, offset, remaining))
+	if errors.Is(err, io.EOF) || errors.Is(err, errPartialZstdFrame) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("read zstd frame at compressed offset %d: %w", offset, err)
+	}
+	return frameSize, true, nil
+}
+
+func (t *TranscriptTailer) scanDecodedZstdFrame(decoded []byte, turnDoneSeen bool, compressedOffset int64) (transcriptScanResult, error) {
+	if len(decoded) > 0 && decoded[len(decoded)-1] != '\n' {
+		return transcriptScanResult{}, fmt.Errorf("decode zstd frame at compressed offset %d: complete frame ends mid-line", compressedOffset)
+	}
+	frameScan := t.scanNewLinesAfter(
+		bufio.NewReaderSize(bytes.NewReader(decoded), 64*1024),
+		0,
+		turnDoneSeen,
+	)
+	if frameScan.err != nil {
+		return transcriptScanResult{}, frameScan.err
+	}
+	if frameScan.endOffset != int64(len(decoded)) {
+		return transcriptScanResult{}, fmt.Errorf("decode zstd frame at compressed offset %d: processed %d of %d decoded bytes", compressedOffset, frameScan.endOffset, len(decoded))
+	}
+	return frameScan, nil
 }
 
 func decodeZstdFrame(decoder *zstd.Decoder, frame io.Reader) ([]byte, error) {

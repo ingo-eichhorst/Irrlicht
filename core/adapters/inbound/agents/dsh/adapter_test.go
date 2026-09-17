@@ -49,11 +49,20 @@ func TestAgentPermissionDeclaration(t *testing.T) {
 		t.Fatalf("permission count = %d, want 1", len(a.Permissions))
 	}
 	p := a.Permissions[0]
-	if p.Key != PermissionKeyTranscripts || p.Kind != permission.KindObserve {
-		t.Errorf("permission = %+v, want observe %q", p, PermissionKeyTranscripts)
+	if p.Key != PermissionKeyTranscripts {
+		t.Errorf("permission key = %q, want %q", p.Key, PermissionKeyTranscripts)
 	}
-	if p.Apply != nil || p.Remove != nil || p.Writes != nil {
-		t.Error("observe permission must not modify user files")
+	if p.Kind != permission.KindObserve {
+		t.Errorf("permission kind = %q, want observe", p.Kind)
+	}
+	if p.Apply != nil {
+		t.Error("observe permission Apply is not nil")
+	}
+	if p.Remove != nil {
+		t.Error("observe permission Remove is not nil")
+	}
+	if p.Writes != nil {
+		t.Error("observe permission Writes is not nil")
 	}
 }
 

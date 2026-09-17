@@ -11,6 +11,11 @@ type dshFixtureParser struct {
 	types []string
 }
 
+type expectedZstdTailState struct {
+	offset int64
+	types  []string
+}
+
 func TestTranscriptTailer_ZstdTornFrameWaitsAtPriorBoundary(t *testing.T) {
 	fixture := readZstdFixture(t)
 	path := filepath.Join(t.TempDir(), "session.v3.jsonl.zstd")
@@ -19,11 +24,14 @@ func TestTranscriptTailer_ZstdTornFrameWaitsAtPriorBoundary(t *testing.T) {
 	parser := &dshFixtureParser{}
 	tailer := NewTranscriptTailer(path, parser, "dsh")
 	tailZstdWithoutError(t, tailer, "torn-frame pass")
-	assertZstdTailState(t, tailer, parser, 190, []string{"session"})
+	assertZstdTailState(t, tailer, parser, expectedZstdTailState{offset: 190, types: []string{"session"}})
 
 	appendTestFile(t, path, fixture[len(fixture)-1:])
 	tailZstdWithoutError(t, tailer, "completed-frame pass")
-	assertZstdTailState(t, tailer, parser, int64(len(fixture)), []string{"session", "permission/preset", "sandbox/mode", "approval/policy"})
+	assertZstdTailState(t, tailer, parser, expectedZstdTailState{
+		offset: int64(len(fixture)),
+		types:  []string{"session", "permission/preset", "sandbox/mode", "approval/policy"},
+	})
 }
 
 func readZstdFixture(t *testing.T) []byte {
@@ -64,13 +72,13 @@ func tailZstdWithoutError(t *testing.T, tailer *TranscriptTailer, pass string) {
 	}
 }
 
-func assertZstdTailState(t *testing.T, tailer *TranscriptTailer, parser *dshFixtureParser, offset int64, types []string) {
+func assertZstdTailState(t *testing.T, tailer *TranscriptTailer, parser *dshFixtureParser, want expectedZstdTailState) {
 	t.Helper()
-	if !reflect.DeepEqual(parser.types, types) {
-		t.Errorf("parsed types = %v, want %v", parser.types, types)
+	if !reflect.DeepEqual(parser.types, want.types) {
+		t.Errorf("parsed types = %v, want %v", parser.types, want.types)
 	}
-	if tailer.lastOffset != offset {
-		t.Errorf("lastOffset = %d, want %d", tailer.lastOffset, offset)
+	if tailer.lastOffset != want.offset {
+		t.Errorf("lastOffset = %d, want %d", tailer.lastOffset, want.offset)
 	}
 }
 
@@ -111,34 +119,23 @@ func (p *dshFixtureParser) ParseLine(raw map[string]any) *ParsedEvent {
 // zero records instead of four.
 func TestTranscriptTailer_DecodesRealZstdFrames(t *testing.T) {
 	path := filepath.Join("testdata", "dsh-session.v3.jsonl.zstd")
+	stat := statTestFile(t, path)
+
+	parser := &dshFixtureParser{}
+	tailer := NewTranscriptTailer(path, parser, "dsh")
+	tailZstdWithoutError(t, tailer, "first pass")
+	wantTypes := []string{"session", "permission/preset", "sandbox/mode", "approval/policy"}
+	want := expectedZstdTailState{offset: stat.Size(), types: wantTypes}
+	assertZstdTailState(t, tailer, parser, want)
+	tailZstdWithoutError(t, tailer, "second pass")
+	assertZstdTailState(t, tailer, parser, want)
+}
+
+func statTestFile(t *testing.T, path string) os.FileInfo {
+	t.Helper()
 	stat, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("stat fixture: %v", err)
 	}
-
-	parser := &dshFixtureParser{}
-	tailer := NewTranscriptTailer(path, parser, "dsh")
-	if _, err := tailer.TailAndProcess(); err != nil {
-		t.Fatalf("TailAndProcess: %v", err)
-	}
-
-	wantTypes := []string{"session", "permission/preset", "sandbox/mode", "approval/policy"}
-	if len(parser.types) != len(wantTypes) {
-		t.Fatalf("parsed types = %v, want %v", parser.types, wantTypes)
-	}
-	for i := range wantTypes {
-		if parser.types[i] != wantTypes[i] {
-			t.Errorf("parsed type %d = %q, want %q", i, parser.types[i], wantTypes[i])
-		}
-	}
-	if tailer.lastOffset != stat.Size() {
-		t.Errorf("lastOffset = %d, want compressed size %d", tailer.lastOffset, stat.Size())
-	}
-
-	if _, err := tailer.TailAndProcess(); err != nil {
-		t.Fatalf("second TailAndProcess: %v", err)
-	}
-	if len(parser.types) != len(wantTypes) {
-		t.Errorf("second pass parsed duplicate records: %v", parser.types)
-	}
+	return stat
 }

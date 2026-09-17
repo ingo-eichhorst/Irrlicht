@@ -159,23 +159,25 @@ func parseAssistantMessage(raw map[string]any, ev *tailer.ParsedEvent) {
 	ev.EventType = "assistant_message"
 	data := object(raw, "data")
 	message := object(data, "message")
-	fullText := messageText(message)
-	if fullText != "" {
-		if estimate := tailer.ScanTaskEstimate(fullText, ev.Timestamp); estimate != nil {
-			ev.TaskEstimate = estimate
-		}
-		if summary := tailer.ScanTaskSummary(fullText, ev.Timestamp); summary != nil {
-			ev.TaskSummary = summary
-		}
-		ev.AssistantText = tailer.TruncateAssistantText(fullText)
-		ev.PendingWaitingCue = session.ProseIndicatesWaiting(tailer.WaitingScanWindow(fullText))
-	}
+	parseAssistantText(message, ev)
 
-	source := object(message, "source")
-	model := tailer.NormalizeModelName(text(source, "model"))
-	if model != "" {
-		ev.ModelName = model
+	model := tailer.NormalizeModelName(text(object(message, "source"), "model"))
+	ev.ModelName = model
+	parseAssistantUsage(data, model, ev)
+}
+
+func parseAssistantText(message map[string]any, ev *tailer.ParsedEvent) {
+	fullText := messageText(message)
+	if fullText == "" {
+		return
 	}
+	ev.TaskEstimate = tailer.ScanTaskEstimate(fullText, ev.Timestamp)
+	ev.TaskSummary = tailer.ScanTaskSummary(fullText, ev.Timestamp)
+	ev.AssistantText = tailer.TruncateAssistantText(fullText)
+	ev.PendingWaitingCue = session.ProseIndicatesWaiting(tailer.WaitingScanWindow(fullText))
+}
+
+func parseAssistantUsage(data map[string]any, model string, ev *tailer.ParsedEvent) {
 	usage := object(data, "usage")
 	input := integer(usage, "inputTokens")
 	output := integer(usage, "outputTokens")
@@ -183,12 +185,14 @@ func parseAssistantMessage(raw map[string]any, ev *tailer.ParsedEvent) {
 	if total == 0 {
 		total = input + output
 	}
-	if input != 0 || output != 0 || total != 0 {
-		ev.Tokens = &tailer.TokenSnapshot{Input: input, Output: output, Total: total}
-		ev.Contribution = &tailer.PerTurnContribution{
-			Model: model,
-			Usage: tailer.UsageBreakdown{Input: input, Output: output},
-		}
+	snapshot := tailer.TokenSnapshot{Input: input, Output: output, Total: total}
+	if snapshot == (tailer.TokenSnapshot{}) {
+		return
+	}
+	ev.Tokens = &snapshot
+	ev.Contribution = &tailer.PerTurnContribution{
+		Model: model,
+		Usage: tailer.UsageBreakdown{Input: input, Output: output},
 	}
 }
 
