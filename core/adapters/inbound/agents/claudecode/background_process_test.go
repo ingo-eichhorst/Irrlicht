@@ -445,18 +445,24 @@ func TestTailer_MonitorTask_ReleasedByTaskNotification(t *testing.T) {
 		t.Fatalf("BackgroundProcessCount after spawn = %d, want 1 (hold not placed)", m.BackgroundProcessCount)
 	}
 
-	if err := appendLines(t, path, []map[string]interface{}{
-		{"type": "system", "subtype": "turn_duration"},
-		taskNotifOriginEvent("bhqmawaqk", "completed"),
-	}); err != nil {
-		t.Fatalf("append: %v", err)
-	}
+	appendTranscriptLine(t, path, map[string]interface{}{"type": "system", "subtype": "turn_duration"})
+	appendTranscriptLine(t, path, taskNotifOriginEvent("bhqmawaqk", "completed"))
 	m, err = tl.TailAndProcess()
 	if err != nil {
 		t.Fatalf("TailAndProcess (release): %v", err)
 	}
 	if m.BackgroundProcessCount != 0 {
 		t.Fatalf("BackgroundProcessCount after terminal notification = %d, want 0 (hold not released)", m.BackgroundProcessCount)
+	}
+	// A real task-notification line is Skip=true, so this release actually
+	// runs through applySkippedEvent -> applyBackgroundProcessTerminations,
+	// NOT applyBackgroundProcessDeltas's own TerminatedBackgroundTaskIDs loop
+	// (that loop is dead for this exact path — see its comment). Asserting
+	// BackgroundProcessClockBound here, not just BackgroundProcessCount, is
+	// what catches openBackgroundDeadlines being cleared on the wrong side of
+	// that split — exactly the gap PR #1984's code review found.
+	if m.BackgroundProcessClockBound {
+		t.Error("BackgroundProcessClockBound after terminal notification = true, want false (the deadline entry leaked)")
 	}
 	if m.LastEventType != "agent_continuation" {
 		t.Errorf("LastEventType = %q, want agent_continuation (terminal notification for a tracked id starts the next inference turn)", m.LastEventType)
@@ -572,25 +578,6 @@ func TestTailer_MonitorTask_SurvivesLedgerRoundTrip(t *testing.T) {
 		t.Errorf("deadline after restart = %d, want the original %d (restart must not reset the clock)",
 			ledger2.BackgroundDeadlines["bhqmawaqk"], ledger.BackgroundDeadlines["bhqmawaqk"])
 	}
-}
-
-// appendLines appends lines to an existing transcript file, for a test that
-// needs to drive TailAndProcess across two separate passes over the same
-// tailer (spawn, then release) rather than one pass over a fixed fixture.
-func appendLines(t *testing.T, path string, lines []map[string]interface{}) error {
-	t.Helper()
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	enc := json.NewEncoder(f)
-	for _, ln := range lines {
-		if err := enc.Encode(ln); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func TestTailer_UnmatchedTaskNotification_RemainsPassive(t *testing.T) {

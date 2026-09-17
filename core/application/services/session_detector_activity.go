@@ -1386,33 +1386,39 @@ func (d *SessionDetector) applyBackgroundLiveness(state *session.SessionState) {
 	// A clock-bound entry (Claude Code's Monitor task, issue #1982) needs no
 	// probe: computeBackgroundProcessMetrics already purges it the pass its
 	// deadline passes, so surviving into this function means it is alive by
-	// definition — the deadline check IS the liveness answer. clockAlive is
-	// read before hasBackgroundProbe below decides whether there is ALSO a
-	// probeable (output/PID) entry on this session.
+	// definition — the deadline check IS the liveness answer. Both reads
+	// below are independent, side-effect-free field lookups; neither must
+	// precede the other.
 	clockAlive := m.BackgroundProcessClockBound
+	hasProbe := d.hasBackgroundProbe(m)
 
-	if !d.hasBackgroundProbe(m) {
-		// No output path and no PID — either every open entry is clock-bound
-		// (the common Monitor-only case) or none is probeable at all. Routing
-		// the former through beginBackgroundProbe/runBackgroundLivenessProbe
-		// would be worse than a no-op: probeBackgroundLiveness treats an empty
-		// outputs/pids list as a CONCLUSIVE "nothing to probe" (not unknown),
-		// which reads as dead and would purge the very entry this branch
-		// exists to hold. Assert liveness directly instead.
-		if clockAlive {
-			d.clearBackgroundProbeCache(sid)
-			m.HasLiveBackgroundProcess = true
-			return
-		}
+	if !hasProbe && !clockAlive {
+		// No output path, no PID, and no live clock-bound entry either —
+		// nothing here can hold the session working.
 		d.clearBackgroundTracking(sid, m)
 		return
 	}
 
-	// The session ALSO carries a probeable (output/PID) entry. A clock-bound
-	// entry can only ADD to the aggregate liveness verdict, never remove from
-	// it — even a dead probe verdict for the OTHER entry must not flip
-	// HasLiveBackgroundProcess false while the Monitor task is still within
-	// its own deadline.
+	if !hasProbe {
+		// Every open entry is clock-bound (the common Monitor-only case).
+		// Routing it through beginBackgroundProbe/runBackgroundLivenessProbe
+		// would be worse than a no-op: probeBackgroundLiveness treats an empty
+		// outputs/pids list as a CONCLUSIVE "nothing to probe" (not unknown),
+		// which reads as dead and would purge the very entry this branch
+		// exists to hold. Assert liveness directly instead, and drop any
+		// stale probe-cache verdict so a probe that reappears later (the
+		// session regains an output/PID entry) starts fresh rather than
+		// resuming a stale answer from before this session went clock-bound.
+		d.clearBackgroundProbeCache(sid)
+		m.HasLiveBackgroundProcess = true
+		return
+	}
+
+	// The session carries a probeable (output/PID) entry, possibly alongside
+	// a clock-bound one. A clock-bound entry can only ADD to the aggregate
+	// liveness verdict, never remove from it — even a dead probe verdict for
+	// the OTHER entry must not flip HasLiveBackgroundProcess false while a
+	// Monitor task is still within its own deadline.
 	alive, startProbe := d.beginBackgroundProbe(sid)
 	m.HasLiveBackgroundProcess = alive || clockAlive
 	if !startProbe {

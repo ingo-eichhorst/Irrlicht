@@ -826,39 +826,24 @@ type LedgerState struct {
 	// `working` for a Monitor task whose deadline hasn't passed yet, the same
 	// way BackgroundProcs does for a still-alive Bash process.
 	//
-	// Added WITHOUT a schema bump — a deliberate trade-off, not the #1104/#1150/
-	// #1076 "purely additive, no re-scan needed" case those rows are. Per
-	// TestLedgerState_FieldSetChangeRequiresASchemaDecision's own question — would
-	// the current parser read ALREADY-CONSUMED bytes differently than the parser
-	// that wrote them — the honest answer is yes: an already-consumed Monitor
-	// launch line the pre-#1982 parser skipped would register a spawn under a
-	// full re-scan. loadLedger (core/adapters/outbound/metrics/ledger.go) forces
-	// exactly that re-scan on ANY schema mismatch by discarding the whole ledger
-	// (LastOffset included), which is the #1815 case, and bumping would get it.
-	// Not bumping accepts a bounded, self-healing gap instead: a session with a
-	// Monitor task already in flight at the moment of the daemon upgrade never
-	// gets that ONE task's launch line re-parsed — the daemon resumes tailing
-	// from the persisted LastOffset, not from byte 0 — so it keeps the
-	// pre-#1982 flip behaviour for as long as that specific task keeps running.
-	// monitorPersistentHoldCeiling does NOT bound this case: the ceiling only
-	// ever applies to an entry this code actually registered, and an in-flight
-	// task at upgrade time was never registered at all. For an observed
-	// non-persistent launch that bounds it to its own timeoutMs (20-45 min in
-	// the triage census); for a persistent one there is no such bound —
-	// 0 of 5 sampled persistent launches had an observable end in-transcript,
-	// so this could run longer than monitorPersistentHoldCeiling. Every NEW
-	// Monitor launch — on that same session once its in-flight task ends, or on
-	// any other session's ledger, unaffected either way — registers and is
-	// ceiling-bounded correctly. The alternative (bumping) would force a full
-	// transcript re-scan for EVERY live session on the machine, not just ones
-	// with a Monitor open, to fix a gap that heals itself within one Monitor
-	// task's own lifetime regardless. See issue #1982; stated in the PR body as
-	// the trade-off it is, not asserted safe by analogy.
+	// Added WITHOUT a schema bump — a DELIBERATE TRADE-OFF, not the #1104/
+	// #1150/#1076 "purely additive, no re-scan needed" case those rows are:
+	// loadLedger (core/adapters/outbound/metrics/ledger.go) discards the whole
+	// ledger and forces a full re-scan on ANY schema mismatch, and an
+	// already-consumed Monitor launch line WOULD register differently under
+	// that re-scan (the #1815 case, which bumped). Not bumping accepts a
+	// bounded, self-healing gap instead: a session with a Monitor already in
+	// flight at daemon-upgrade time never gets that one task's launch line
+	// re-parsed, so it keeps the pre-#1982 flip behaviour until that task
+	// ends — every Monitor launch on any session after that point registers
+	// and is deadline-bounded correctly. Full census and the "bumping would
+	// force a re-scan of every live session, not just ones with a Monitor
+	// open" reasoning: PR for issue #1982.
 	//
-	// A ledger written before this field existed (or after the bump decision
-	// above, going forward) simply lacks it — SetLedgerState's
-	// restoreBackgroundDeadlines seeds a fresh deadline for any clock-bound entry
-	// that needs one rather than reading the zero value as "already expired".
+	// A ledger written before this field existed simply lacks it —
+	// SetLedgerState's restoreBackgroundDeadlines seeds a fresh deadline for
+	// any clock-bound entry that needs one rather than reading the zero value
+	// as "already expired".
 	BackgroundDeadlines map[string]int64 `json:"background_deadlines,omitempty"`
 	// PendingBashPolls persists in-flight BashOutput polls (poll tool_use id →
 	// background id) so a restart between a poll's tool_use and its terminated

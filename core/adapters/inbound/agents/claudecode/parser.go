@@ -549,7 +549,7 @@ func scanMessageContent(raw map[string]interface{}, ev *tailer.ParsedEvent) stri
 	// See issue #445.
 	bgTaskID := backgroundTaskIDOf(raw)
 	createdTaskID := createdTaskIDOf(raw)
-	monitorID, monitorTimeoutMs, monitorPersistent := monitorLaunchOf(raw)
+	monitor := monitorLaunchOf(raw)
 	var askUserQuestion string
 	for _, item := range contentArr {
 		block, ok := item.(map[string]interface{})
@@ -562,7 +562,7 @@ func scanMessageContent(raw map[string]interface{}, ev *tailer.ParsedEvent) stri
 				askUserQuestion = q
 			}
 		case "tool_result":
-			collectToolResult(block, ev, bgTaskID, createdTaskID, monitorID, monitorTimeoutMs, monitorPersistent)
+			collectToolResult(block, ev, bgTaskID, createdTaskID, monitor)
 		case "text":
 			handleTextBlock(block, ev)
 		}
@@ -739,11 +739,11 @@ func backgroundID(input map[string]interface{}) string {
 // createdTaskID is the event's structured `toolUseResult.task.id` ("" when
 // absent) — the authoritative ID of a task created by the matching TaskCreate
 // tool_use; forwarded to the tailer as an assign_id delta. See issue #615.
-// monitorID/monitorTimeoutMs/monitorPersistent are monitorLaunchOf's reading
-// of the event's structured `toolUseResult.taskId`/`timeoutMs`/`persistent`
-// ("", 0, false when absent) — gates Monitor-task registration the same way
-// bgTaskID gates a Bash spawn. See issue #1982.
-func collectToolResult(block map[string]interface{}, ev *tailer.ParsedEvent, bgTaskID, createdTaskID, monitorID string, monitorTimeoutMs int64, monitorPersistent bool) {
+// monitor is monitorLaunchOf's reading of the event's structured
+// `toolUseResult.taskId`/`timeoutMs`/`persistent` (the zero value when
+// absent) — gates Monitor-task registration the same way bgTaskID gates a
+// Bash spawn. See issue #1982.
+func collectToolResult(block map[string]interface{}, ev *tailer.ParsedEvent, bgTaskID, createdTaskID string, monitor monitorLaunch) {
 	toolUseID, _ := block["tool_use_id"].(string)
 	if toolUseID != "" {
 		ev.ToolResultIDs = append(ev.ToolResultIDs, toolUseID)
@@ -783,12 +783,12 @@ func collectToolResult(block map[string]interface{}, ev *tailer.ParsedEvent, bgT
 	// ledger with no OutputPath — a Monitor task carries no output file or PID
 	// for the daemon's probe to check, so the tailer bounds it by
 	// MonitorTimeoutMs/MonitorPersistent instead. See issue #1982.
-	if monitorID != "" && strings.HasPrefix(text, monitorLaunchPrefix) {
+	if monitor.ID != "" && strings.HasPrefix(text, monitorLaunchPrefix) {
 		ev.BackgroundSpawns = append(ev.BackgroundSpawns, tailer.BackgroundSpawn{
-			BashID:            monitorID,
+			BashID:            monitor.ID,
 			IsMonitor:         true,
-			MonitorTimeoutMs:  monitorTimeoutMs,
-			MonitorPersistent: monitorPersistent,
+			MonitorTimeoutMs:  monitor.TimeoutMs,
+			MonitorPersistent: monitor.Persistent,
 		})
 	}
 	// A BashOutput poll reports the process status. Any status other than
@@ -814,30 +814,41 @@ func backgroundTaskIDOf(raw map[string]interface{}) string {
 	return id
 }
 
+// monitorLaunch is monitorLaunchOf's reading of a Monitor tool_result's
+// structured `toolUseResult` fields, bundled into one value rather than
+// threaded through collectToolResult as three separate parameters. ID == ""
+// is the zero value's "absent" reading, matching monitorLaunchOf's contract.
+type monitorLaunch struct {
+	ID         string
+	TimeoutMs  int64
+	Persistent bool
+}
+
 // monitorLaunchOf returns the structured `toolUseResult.taskId`,
 // `toolUseResult.timeoutMs` and `toolUseResult.persistent` from a Claude Code
-// event, or ("", 0, false) when toolUseResult is absent or carries no taskId.
+// event, or the zero value when toolUseResult is absent or carries no taskId.
 // Claude Code's Monitor tool reports these as siblings of `message`, the same
 // shape backgroundTaskIDOf reads for a Bash run_in_background launch — but
 // under a different field name (`taskId`, not `backgroundTaskId`), which is
 // why it needs its own reader rather than widening backgroundTaskIDOf and
 // risking a TaskCreate/TaskUpdate `taskId` (an unrelated field, issue #615's
 // task list) being misread as a background spawn. See issue #1982.
-func monitorLaunchOf(raw map[string]interface{}) (id string, timeoutMs int64, persistent bool) {
+func monitorLaunchOf(raw map[string]interface{}) monitorLaunch {
 	tur, ok := raw["toolUseResult"].(map[string]interface{})
 	if !ok {
-		return "", 0, false
+		return monitorLaunch{}
 	}
-	id, _ = tur["taskId"].(string)
+	id, _ := tur["taskId"].(string)
 	if id == "" {
-		return "", 0, false
+		return monitorLaunch{}
 	}
+	var timeoutMs int64
 	// JSON numbers decode to float64 in a map[string]interface{}.
 	if v, ok := tur["timeoutMs"].(float64); ok {
 		timeoutMs = int64(v)
 	}
-	persistent, _ = tur["persistent"].(bool)
-	return id, timeoutMs, persistent
+	persistent, _ := tur["persistent"].(bool)
+	return monitorLaunch{ID: id, TimeoutMs: timeoutMs, Persistent: persistent}
 }
 
 // createdTaskIDOf returns the structured `toolUseResult.task.id` from a Claude

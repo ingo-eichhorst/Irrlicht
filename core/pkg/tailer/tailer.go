@@ -889,7 +889,7 @@ func (t *TranscriptTailer) applyBackgroundProcessTerminations(parsed *ParsedEven
 		if _, tracked := t.openBackgroundProcs[id]; tracked && parsed.OriginTaskNotification {
 			t.metrics.LastEventType = eventTypeAgentContinuation
 		}
-		delete(t.openBackgroundProcs, id)
+		t.deleteBackgroundProc(id)
 	}
 	return len(parsed.TerminatedBackgroundTaskIDs) > 0
 }
@@ -1234,8 +1234,7 @@ func (t *TranscriptTailer) applyBackgroundProcessDeltas(parsed *ParsedEvent) {
 	}
 	for _, id := range parsed.TerminatedBashOutputIDs {
 		if bashID, ok := t.pendingBashPolls[id]; ok {
-			delete(t.openBackgroundProcs, bashID)
-			delete(t.openBackgroundDeadlines, bashID)
+			t.deleteBackgroundProc(bashID)
 		}
 	}
 	// A poll is resolved once its tool_result arrives (terminated OR still
@@ -1245,17 +1244,41 @@ func (t *TranscriptTailer) applyBackgroundProcessDeltas(parsed *ParsedEvent) {
 		delete(t.pendingBashPolls, id)
 	}
 	for _, bashID := range parsed.KilledShellIDs {
-		delete(t.openBackgroundProcs, bashID)
-		delete(t.openBackgroundDeadlines, bashID)
+		t.deleteBackgroundProc(bashID)
 	}
 	// Terminal task-notification completion (orchestrated/SDK path): the
 	// <task-id> is the backgroundTaskId, or — since #1982 — a Monitor task id
 	// registered the same way. A non-matching id is a harmless no-op. See
 	// issue #445.
+	//
+	// This loop is redundant with applyBackgroundProcessTerminations for a
+	// real task-notification line (Skip=true, so applySkippedEvent's call to
+	// that function is the one that actually runs — see its own doc comment).
+	// Kept here too because a future ParsedEvent producer is not obliged to
+	// set Skip for a termination signal, and because it is the doc-comment
+	// contract of TerminatedBackgroundTaskIDs itself: "the tailer folds these
+	// into its open-background-process set", not "the tailer folds these in
+	// only on the non-skip path". deleteBackgroundProc's delete-on-absent-key
+	// is a no-op, so running it from both call sites for the same event costs
+	// nothing beyond the redundant call.
 	for _, id := range parsed.TerminatedBackgroundTaskIDs {
-		delete(t.openBackgroundProcs, id)
-		delete(t.openBackgroundDeadlines, id)
+		t.deleteBackgroundProc(id)
 	}
+}
+
+// deleteBackgroundProc removes id from BOTH openBackgroundProcs and its
+// clock-bound counterpart openBackgroundDeadlines — every removal site for
+// the background-process ledger must clear both, since a Bash/PID entry is
+// simply absent from openBackgroundDeadlines (delete is a harmless no-op) and
+// a Monitor entry needs both cleared to actually stop being clock-bound. One
+// helper here, rather than a delete pair copy-pasted at each of the ledger's
+// six removal sites, so the invariant can't drift the way it already had at
+// one of them before this refactor (applyBackgroundProcessTerminations, the
+// terminal-notification path a real Skip=true task-notification event
+// actually takes — see issue #1982 PR review). See also issue #445.
+func (t *TranscriptTailer) deleteBackgroundProc(id string) {
+	delete(t.openBackgroundProcs, id)
+	delete(t.openBackgroundDeadlines, id)
 }
 
 // monitorDeadline computes when a Monitor spawn's clock-bound hold expires:
@@ -1476,8 +1499,7 @@ func (t *TranscriptTailer) PurgeBackgroundProcs(outputs []string) {
 	}
 	for id, path := range t.openBackgroundProcs {
 		if dead[path] {
-			delete(t.openBackgroundProcs, id)
-			delete(t.openBackgroundDeadlines, id)
+			t.deleteBackgroundProc(id)
 		}
 	}
 }
@@ -1489,7 +1511,6 @@ func (t *TranscriptTailer) PurgeBackgroundProcs(outputs []string) {
 // See issue #661.
 func (t *TranscriptTailer) PurgeBackgroundProcsByID(ids []string) {
 	for _, id := range ids {
-		delete(t.openBackgroundProcs, id)
-		delete(t.openBackgroundDeadlines, id)
+		t.deleteBackgroundProc(id)
 	}
 }
