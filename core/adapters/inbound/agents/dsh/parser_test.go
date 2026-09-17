@@ -27,7 +27,19 @@ func parseRecord(t *testing.T, parser *Parser, line string) *tailer.ParsedEvent 
 // Removing parseSession's version comparison makes this test accept the v99
 // header and process its turn/start record.
 func TestParserRefusesUnknownVersion(t *testing.T) {
-	f, err := os.Open(filepath.Join("testdata", "unknown-version.jsonl"))
+	events := parseFixture(t, filepath.Join("testdata", "unknown-version.jsonl"))
+	if len(events) != 2 {
+		t.Fatalf("event count = %d, want 2", len(events))
+	}
+	assertUnsupportedVersionError(t, events[0])
+	assertRefusedEvent(t, events[0])
+	assertUnsupportedVersionError(t, events[1])
+	assertRefusedEvent(t, events[1])
+}
+
+func parseFixture(t *testing.T, path string) []*tailer.ParsedEvent {
+	t.Helper()
+	f, err := os.Open(path)
 	if err != nil {
 		t.Fatalf("open fixture: %v", err)
 	}
@@ -42,16 +54,26 @@ func TestParserRefusesUnknownVersion(t *testing.T) {
 	if err := scanner.Err(); err != nil {
 		t.Fatalf("scan fixture: %v", err)
 	}
-	if len(events) != 2 {
-		t.Fatalf("event count = %d, want 2", len(events))
+	return events
+}
+
+func assertUnsupportedVersionError(t *testing.T, event *tailer.ParsedEvent) {
+	t.Helper()
+	if event.SessionError == nil {
+		t.Fatal("SessionError is nil")
 	}
-	for i, event := range events {
-		if event.SessionError == nil || event.SessionError.Class != "unsupported_transcript_version" {
-			t.Errorf("event %d SessionError = %+v", i, event.SessionError)
-		}
-		if !event.Skip || event.EventType != "" {
-			t.Errorf("event %d was not refused: %+v", i, event)
-		}
+	if event.SessionError.Class != "unsupported_transcript_version" {
+		t.Errorf("SessionError = %+v", event.SessionError)
+	}
+}
+
+func assertRefusedEvent(t *testing.T, event *tailer.ParsedEvent) {
+	t.Helper()
+	if !event.Skip {
+		t.Errorf("event was not skipped: %+v", event)
+	}
+	if event.EventType != "" {
+		t.Errorf("event type = %q, want empty", event.EventType)
 	}
 }
 
