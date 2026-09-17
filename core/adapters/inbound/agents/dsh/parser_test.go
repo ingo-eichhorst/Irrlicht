@@ -146,37 +146,45 @@ func TestParserRefusalSurvivesTailerRestart(t *testing.T) {
 	writeZstdFrame(t, path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC,
 		`{"type":"session","version":99,"id":"session-600e7941-bf4f-4da4-9ef6-489168e13724","createdAt":1789676506637,"cwd":"/Users/ingo/work"}`+"\n")
 
-	before := tailer.NewTranscriptTailer(path, &Parser{}, AdapterName)
-	before.DisableModelConfigFallback()
-	metrics, err := before.TailAndProcess()
-	if err != nil {
-		t.Fatalf("first TailAndProcess: %v", err)
-	}
-	if metrics.SessionError == nil {
-		t.Fatalf("first SessionError = %+v", metrics.SessionError)
-	}
-	if metrics.SessionError.Class != "unsupported_transcript_version" {
-		t.Fatalf("first SessionError = %+v", metrics.SessionError)
-	}
+	before := newTestTranscriptTailer(path)
+	metrics := tailTranscript(t, before)
+	assertUnsupportedSessionError(t, metrics)
 	ledger := roundTripLedger(t, before.GetLedgerState())
 
 	writeZstdFrame(t, path, os.O_WRONLY|os.O_APPEND,
 		`{"type":"user/message","time":1789676506725,"data":{"role":"user","content":[{"type":"text","text":"Continue"}],"source":{"kind":"user"}}}`+"\n")
 
-	after := tailer.NewTranscriptTailer(path, &Parser{}, AdapterName)
-	after.DisableModelConfigFallback()
+	after := newTestTranscriptTailer(path)
 	after.SetLedgerState(ledger)
-	metrics, err = after.TailAndProcess()
-	if err != nil {
-		t.Fatalf("second TailAndProcess: %v", err)
-	}
-	if metrics.SessionError == nil {
-		t.Errorf("restored SessionError = %+v", metrics.SessionError)
-	} else if metrics.SessionError.Class != "unsupported_transcript_version" {
-		t.Errorf("restored SessionError = %+v", metrics.SessionError)
-	}
+	metrics = tailTranscript(t, after)
+	assertUnsupportedSessionError(t, metrics)
 	if metrics.LastEventType == "user_message" {
 		t.Error("unknown-version parser accepted a user message after restart")
+	}
+}
+
+func newTestTranscriptTailer(path string) *tailer.TranscriptTailer {
+	transcriptTailer := tailer.NewTranscriptTailer(path, &Parser{}, AdapterName)
+	transcriptTailer.DisableModelConfigFallback()
+	return transcriptTailer
+}
+
+func tailTranscript(t *testing.T, transcriptTailer *tailer.TranscriptTailer) *tailer.SessionMetrics {
+	t.Helper()
+	metrics, err := transcriptTailer.TailAndProcess()
+	if err != nil {
+		t.Fatalf("TailAndProcess: %v", err)
+	}
+	return metrics
+}
+
+func assertUnsupportedSessionError(t *testing.T, metrics *tailer.SessionMetrics) {
+	t.Helper()
+	if metrics.SessionError == nil {
+		t.Fatal("SessionError is nil")
+	}
+	if metrics.SessionError.Class != "unsupported_transcript_version" {
+		t.Errorf("SessionError = %+v", metrics.SessionError)
 	}
 }
 
