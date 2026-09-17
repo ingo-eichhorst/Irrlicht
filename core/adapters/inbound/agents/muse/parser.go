@@ -99,6 +99,69 @@ import (
 // "runtime.session"/"approval" family is used here, since "requested" alone
 // (unlike approval_wait.effect.started) also carries tool_name for context.
 //
+// # requested's presentation_phase: not every "requested" is the user's wait (issue #1978)
+//
+// "requested" carries a presentation_phase field this parser used to ignore
+// entirely, opening a user-visible permission prompt unconditionally. A
+// corpus scan of every top-level session.jsonl under
+// ~/.local/share/muse/sessions on this machine (148 files, subagent nested
+// copies excluded — those are the SAME approval records folded into the
+// parent session, see the "Resolved (issue #1960 stage 3)" section below)
+// found presentation_phase takes exactly two values: "automated_reviewing"
+// (68 occurrences) — muse's own ":auto-review" LLM judge decides first, no
+// user involved yet — and "human_pending" (9 occurrences) — the user must
+// decide right now, the case this parser always assumed. Reading the
+// reporter's own already-on-disk session (no live drive) measured the
+// practical cost from its recorded_at stamps:
+// requested{automated_reviewing} at seq 1157, automated_review_started one
+// line later, then 18.73s before automated_review_completed{status:
+// escalated} — 18.73s the LLM judge was still deciding, wrongly reported as
+// waiting, followed by a genuine 22.16s of the user's own wait before
+// decision_applied at seq 1269. parseApprovalRequested now reads
+// presentation_phase: "automated_reviewing" opens nothing (the judge is
+// deciding, not the user); "human_pending" opens exactly as before; a
+// missing or any future unrecognized value also opens, fail-safe — a wait
+// this parser cannot classify is shown as waiting rather than hidden.
+//
+// automated_review_completed carries the judge's own verdict and is no
+// longer unconditional bookkeeping either: parseApprovalReviewCompleted
+// re-opens the prompt when the review did NOT cleanly auto-approve — any of
+// status != "approved", timed_out true, or a present, non-null failure. A
+// clean auto-approval (status "approved", timed_out false, failure
+// absent/null) stays Skip=true, exactly as every automated_review_completed
+// record was treated before this fix. automated_review_started and
+// stage_requirement_resolved remain pure bookkeeping either way — see
+// parseApprovalEvent's default branch.
+//
+// # Why presentation_phase is an identity, not a heuristic
+//
+// The same corpus scan pairs each "requested" with its own
+// decision_applied.decision_source.kind — muse's own record of WHO decided.
+// The two agree:
+//
+//	requested.presentation_phase   decision_source.kind    n
+//	automated_reviewing            llm_judge               62
+//	human_pending                  human_approval           9
+//	automated_reviewing            human_approval           4
+//	automated_reviewing            (never closed in-file)   2
+//
+// "human_pending" resolved to a human in 9 of 9 and never once to the judge,
+// so opening on it is right in every observed case. The 4 rows where an
+// "automated_reviewing" request did reach a human are the ones the re-open
+// branch above exists for — and it covers all 4: each emits an
+// automated_review_completed whose outcome is not a clean auto-approval
+// (three status "escalated", one status "timed_out" carrying timed_out true
+// AND a non-null failure). So status is not always "escalated" when a human
+// is needed, which is why the check is status != "approved" rather than an
+// equality test against "escalated", and why timed_out and failure are
+// checked at all rather than assumed redundant.
+//
+// Net effect measured over the same 148 files: 67 windows totalling 865.3s
+// (median 8.19s, max 90.01s) stop being reported as waiting, every one of
+// them longer than services.activityDebounceWindow (2s) and therefore
+// certainly visible before this fix; the 9 genuine human waits are
+// untouched; no observed user prompt is hidden.
+//
 // # Resolved (issue #1960 stage 3): stage 2's original worry here read
 //
 // This section used to state, correctly at the time, that every single
@@ -228,7 +291,18 @@ const (
 const (
 	approvalRequested       = "requested"
 	approvalDecisionApplied = "decision_applied"
+	approvalReviewCompleted = "automated_review_completed"
 )
+
+// requested's presentation_phase values (issue #1978) — see the "requested's
+// presentation_phase" doc section above.
+const (
+	presentationPhaseAutomatedReviewing = "automated_reviewing"
+)
+
+// automated_review_completed's own clean-approval status value (issue
+// #1978) — see the same doc section.
+const approvalReviewStatusApproved = "approved"
 
 // ParseLine implements agent.LineParser.
 func (p *Parser) ParseLine(raw map[string]any) *tailer.ParsedEvent {
@@ -827,25 +901,73 @@ func (p *Parser) parseApprovalEvent(payload map[string]any, ev *tailer.ParsedEve
 		parseApprovalRequested(event, ev)
 	case approvalDecisionApplied:
 		parseApprovalDecisionApplied(event, ev)
+	case approvalReviewCompleted:
+		parseApprovalReviewCompleted(event, ev)
 	default:
-		// automated_review_started/automated_review_completed (the
-		// :auto-review LLM-judge's own review lifecycle) and
-		// stage_requirement_resolved (a per-requirement resolution notice
-		// distinct from the pending_action_id "requested" opened above,
-		// format-spec §5) — bookkeeping about HOW a decision is being
-		// reached, not a change in whether the agent is blocked on the
-		// user. "requested" and "decision_applied" alone open/close the
-		// wait.
+		// automated_review_started (the :auto-review LLM-judge's own
+		// review-start notice) and stage_requirement_resolved (a
+		// per-requirement resolution notice distinct from the
+		// pending_action_id "requested" opened above, format-spec §5) stay
+		// pure bookkeeping about HOW a decision is being reached: whether
+		// the wait opens at all is decided by requested's own
+		// presentation_phase (parseApprovalRequested), and re-opened, if
+		// the judge doesn't cleanly auto-approve, by
+		// automated_review_completed's own outcome
+		// (parseApprovalReviewCompleted, case above) — issue #1978.
+		// Neither of these two intermediate notices itself changes
+		// whether the agent is blocked on the user.
 		ev.Skip = true
 	}
 }
 
 // parseApprovalRequested opens a permission prompt: the agent is blocked
 // awaiting an approval decision on one tool call, keyed by pending_action_id
-// (format-spec §5).
+// (format-spec §5) — UNLESS presentation_phase says muse's own :auto-review
+// LLM judge is deciding first, not the user. See this file's "requested's
+// presentation_phase" doc section for the measured corpus split and timing
+// (issue #1978).
 func parseApprovalRequested(event map[string]any, ev *tailer.ParsedEvent) {
 	id := str(event, "pending_action_id")
 	if id == "" {
+		ev.Skip = true
+		return
+	}
+	if str(event, "presentation_phase") == presentationPhaseAutomatedReviewing {
+		// Open nothing: the judge is deciding, not the user, so there is
+		// no user-visible wait yet. Deliberately Skip=true rather than
+		// some other EventType such as "function_call" — that would
+		// fabricate an open tool call this record does not represent.
+		// It is safe to skip because the session is already "working",
+		// not "ready": the tool call this approval covers was already
+		// opened by the preceding assistant_tool_calls_committed record
+		// (EventType "function_call"), so this event has nothing left to
+		// contribute to session state — it is pure bookkeeping about HOW
+		// the pending decision will be reached, the same category as
+		// automated_review_started/stage_requirement_resolved in
+		// parseApprovalEvent's default branch.
+		ev.Skip = true
+		return
+	}
+	ev.EventType = "permission_requested"
+	ev.PermissionRequestIDs = []string{id}
+}
+
+// parseApprovalReviewCompleted closes the :auto-review judge's own review
+// lifecycle and, when the review did NOT cleanly auto-approve, re-opens the
+// permission prompt this pending_action_id names — the wait has genuinely
+// become the user's (issue #1978). Re-opens when ANY of: status is not
+// "approved" (the only escalation value observed in this corpus is
+// "escalated"), timed_out is true, or failure is present and non-null. On a
+// clean auto-approval (status "approved", timed_out false, failure
+// absent/null) this stays Skip=true — the same outcome every
+// automated_review_completed record had before this fix, since it fell into
+// parseApprovalEvent's default branch.
+func parseApprovalReviewCompleted(event map[string]any, ev *tailer.ParsedEvent) {
+	id := str(event, "pending_action_id")
+	cleanApproval := str(event, "status") == approvalReviewStatusApproved &&
+		!boolField(event, "timed_out") &&
+		!hasNonNilField(event, "failure")
+	if id == "" || cleanApproval {
 		ev.Skip = true
 		return
 	}
@@ -1099,6 +1221,28 @@ func str(m map[string]any, key string) string {
 	}
 	s, _ := m[key].(string)
 	return s
+}
+
+// boolField reads a bool field from a decoded JSON object, returning false
+// when the map is nil, the key is absent, or the value is not a bool.
+func boolField(m map[string]any, key string) bool {
+	if m == nil {
+		return false
+	}
+	b, _ := m[key].(bool)
+	return b
+}
+
+// hasNonNilField reports whether key is present in m with a non-null JSON
+// value. A missing key and an explicit JSON null are indistinguishable once
+// decoded (both give the map lookup's zero value, nil), so this also covers
+// "absent" — exactly the "present and non-null" check automated_review_
+// completed's failure field needs (issue #1978).
+func hasNonNilField(m map[string]any, key string) bool {
+	if m == nil {
+		return false
+	}
+	return m[key] != nil
 }
 
 // i64 reads a numeric field from a decoded JSON object as int64

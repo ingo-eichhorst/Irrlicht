@@ -646,6 +646,140 @@ func TestBackgroundProcess_SpawnThenTerminate_CountsThenClears(t *testing.T) {
 
 // --- kind:"approval" ---
 
+// approvalLine builds a kind:"approval" record in the shape a real Muse
+// approval-lifecycle event emits (format-spec §5; field shapes cross-checked
+// against testdata/real-approval-flow.jsonl, a real redacted capture). extra
+// is merged into event on top of kind/pending_action_id, so each call only
+// has to supply the fields it cares about discriminating on
+// (presentation_phase, status, timed_out, failure, ...).
+func approvalLine(t *testing.T, eventKind, pendingActionID string, extra map[string]any) map[string]any {
+	t.Helper()
+	event := map[string]any{
+		"kind":              eventKind,
+		"pending_action_id": pendingActionID,
+	}
+	for k, v := range extra {
+		event[k] = v
+	}
+	raw, err := json.Marshal(map[string]any{
+		"payload_type": "runtime.session",
+		"payload": map[string]any{
+			"kind":   "approval",
+			"run_id": "r1",
+			"event":  event,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return line(t, string(raw))
+}
+
+// TestParseLine_ApprovalRequested_PresentationPhase is table-driven over
+// requested's presentation_phase — issue #1978's actual discriminator.
+// Corpus-scanned across all 148 top-level muse sessions under
+// ~/.local/share/muse/sessions/ (nested subagent copies excluded — they fold
+// into the parent session): "automated_reviewing" (68 occurrences) means
+// muse's own :auto-review LLM judge decides first, no user involved yet;
+// "human_pending" (9 occurrences) means the user must decide right now. Every
+// other row here (missing/unrecognized value) is a fail-safe case, not one
+// observed in the corpus.
+//
+// automated_reviewing must NOT open a wait for that pending_action_id — RED
+// today, because parseApprovalRequested opens unconditionally on every
+// "requested" event regardless of presentation_phase. Every other case must
+// open, including a missing or unrecognized value: a wait this parser cannot
+// classify is shown as waiting rather than hidden, and that also preserves
+// today's behavior (which never reads presentation_phase at all) for any
+// future value muse adds.
+func TestParseLine_ApprovalRequested_PresentationPhase(t *testing.T) {
+	tests := []struct {
+		name      string
+		extra     map[string]any
+		wantOpens bool
+	}{
+		{"human_pending_lock", map[string]any{"presentation_phase": "human_pending"}, true},
+		{"automated_reviewing_red", map[string]any{"presentation_phase": "automated_reviewing"}, false},
+		{"missing_failsafe_lock", map[string]any{}, true},
+		{"unknown_value_failsafe_lock", map[string]any{"presentation_phase": "some_future_phase"}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			extra := map[string]any{"tool_call_id": "call_1", "tool_name": "bash"}
+			for k, v := range tt.extra {
+				extra[k] = v
+			}
+			ev := (&Parser{}).ParseLine(approvalLine(t, "requested", "pa1", extra))
+			opened := len(ev.PermissionRequestIDs) == 1 && ev.PermissionRequestIDs[0] == "pa1"
+			if opened != tt.wantOpens {
+				t.Errorf("opened = %v (PermissionRequestIDs=%v), want opens=%v", opened, ev.PermissionRequestIDs, tt.wantOpens)
+			}
+		})
+	}
+}
+
+// TestParseLine_ApprovalReviewCompleted_OutcomeDiscriminator is table-driven
+// over automated_review_completed's outcome. A clean automated approval
+// (status=approved, timed_out=false, failure=null) must stay resolved and
+// open nothing — that row is a LOCK: today's unconditional Skip=true in
+// parseApprovalEvent's default branch already leaves nothing open for it.
+// Every other row must RE-OPEN the prompt for the same pending_action_id,
+// because the wait has genuinely become the user's — those rows are RED
+// today, since automated_review_completed is skipped regardless of its
+// outcome right now.
+func TestParseLine_ApprovalReviewCompleted_OutcomeDiscriminator(t *testing.T) {
+	tests := []struct {
+		name      string
+		extra     map[string]any
+		wantOpens bool
+	}{
+		{"clean_approval_lock", map[string]any{"status": "approved", "timed_out": false, "failure": nil}, false},
+		{"escalated_red", map[string]any{"status": "escalated", "timed_out": false, "failure": nil}, true},
+		{"timed_out_red", map[string]any{"status": "approved", "timed_out": true, "failure": nil}, true},
+		{"failure_red", map[string]any{"status": "approved", "timed_out": false, "failure": map[string]any{"kind": "provider_error"}}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ev := (&Parser{}).ParseLine(approvalLine(t, "automated_review_completed", "pa1", tt.extra))
+			opened := len(ev.PermissionRequestIDs) == 1 && ev.PermissionRequestIDs[0] == "pa1"
+			if opened != tt.wantOpens {
+				t.Errorf("opened = %v (PermissionRequestIDs=%v, Skip=%v), want opens=%v",
+					opened, ev.PermissionRequestIDs, ev.Skip, tt.wantOpens)
+			}
+		})
+	}
+}
+
+// TestParseLine_ApprovalFlow_HumanPending_NoAutoReview_OpensThenCloses is a
+// LOCK: a muse profile without auto-review still genuinely asks the user —
+// requested carries presentation_phase="human_pending" and there is no
+// automated_review_* pair at all, just requested -> decision_applied. Passes
+// before and after the fix.
+func TestParseLine_ApprovalFlow_HumanPending_NoAutoReview_OpensThenCloses(t *testing.T) {
+	p := &Parser{}
+	req := p.ParseLine(approvalLine(t, "requested", "pa-human", map[string]any{
+		"presentation_phase": "human_pending",
+		"tool_call_id":       "call_1",
+		"tool_name":          "bash",
+	}))
+	if len(req.PermissionRequestIDs) != 1 || req.PermissionRequestIDs[0] != "pa-human" {
+		t.Fatalf("PermissionRequestIDs = %v, want [pa-human]", req.PermissionRequestIDs)
+	}
+
+	done := p.ParseLine(approvalLine(t, "decision_applied", "pa-human", map[string]any{
+		"decision":      "approved",
+		"policy_result": "allow",
+	}))
+	if len(done.PermissionResolvedIDs) != 1 || done.PermissionResolvedIDs[0] != "pa-human" {
+		t.Fatalf("PermissionResolvedIDs = %v, want [pa-human]", done.PermissionResolvedIDs)
+	}
+}
+
+// TestParseLine_ApprovalRequested_OpensPermission carries no
+// presentation_phase at all, so it also doubles as the
+// missing-field-fail-safe lock alongside
+// TestParseLine_ApprovalRequested_PresentationPhase's missing_failsafe_lock
+// row above.
 func TestParseLine_ApprovalRequested_OpensPermission(t *testing.T) {
 	ev := (&Parser{}).ParseLine(line(t, `{"payload_type":"runtime.session","payload":{"kind":"approval",
 		"run_id":"r1","event":{"kind":"requested","pending_action_id":"pa1",
@@ -670,8 +804,17 @@ func TestParseLine_ApprovalDecisionApplied_ClosesPermission(t *testing.T) {
 	}
 }
 
+// TestParseLine_ApprovalBookkeeping_Skipped covers only the two approval
+// event kinds that stay pure bookkeeping under issue #1978's fix:
+// automated_review_started never became a close signal (the corrected design
+// keys off requested's own presentation_phase instead), and
+// stage_requirement_resolved is unrelated per-requirement noise. It
+// deliberately no longer covers automated_review_completed —
+// TestParseLine_ApprovalReviewCompleted_OutcomeDiscriminator above tests that
+// one in full, because its outcome (status/timed_out/failure) now decides
+// whether it re-opens the prompt.
 func TestParseLine_ApprovalBookkeeping_Skipped(t *testing.T) {
-	for _, kind := range []string{"automated_review_started", "automated_review_completed", "stage_requirement_resolved"} {
+	for _, kind := range []string{"automated_review_started", "stage_requirement_resolved"} {
 		ev := (&Parser{}).ParseLine(line(t, `{"payload_type":"runtime.session","payload":{"kind":"approval",
 			"event":{"kind":"`+kind+`","pending_action_id":"pa1"}}}`))
 		if !ev.Skip {
@@ -685,9 +828,67 @@ func TestParseLine_ApprovalBookkeeping_Skipped(t *testing.T) {
 
 // TestParseLine_ApprovalFlow_RealFixture replays a real, redacted approval
 // flow (requested -> automated_review_started -> automated_review_completed
-// -> decision_applied) end to end and asserts the wait opens then closes.
+// -> decision_applied) end to end. real-approval-flow.jsonl's own requested
+// record carries presentation_phase="automated_reviewing", so this is
+// user-observable, RED-FIRST evidence for issue #1978: for the whole review
+// window (before the judge's automated_review_completed verdict lands), no
+// wait should be visible, because the judge is deciding, not the user. That
+// assertion fails today — parseApprovalRequested opens on every "requested"
+// event regardless of presentation_phase, and automated_review_started
+// (Skip=true) never closes it. The end-state assertion below is unchanged
+// and already passes: decision_applied closes the wait unconditionally.
 func TestParseLine_ApprovalFlow_RealFixture(t *testing.T) {
-	m := tailFixture(t, fixtureLines(t, "real-approval-flow.jsonl"))
+	lines := fixtureLines(t, "real-approval-flow.jsonl")
+
+	reviewing := tailFixture(t, lines[:2]) // requested -> automated_review_started
+	if reviewing.TranscriptPermissionPending {
+		t.Error("TranscriptPermissionPending = true during the judge's own automated review window, want false (issue #1978)")
+	}
+
+	m := tailFixture(t, lines)
+	if m.TranscriptPermissionPending {
+		t.Error("TranscriptPermissionPending should be false once decision_applied closes it")
+	}
+}
+
+// TestParseLine_ApprovalFlow_Escalated_ReviewWindow_NotWaiting is RED-FIRST,
+// user-observable evidence. real-approval-flow-escalated.jsonl is a captured,
+// redacted copy of the reporter's OWN escalated approval — the five records
+// at seq 1157/1158/1217/1268/1269 of session 01a0ab28-…, renumbered 1..5 with
+// workspace paths scrubbed and nothing else altered, so its recorded_at gaps
+// are the real 18.73s and 40.89s cited below. Its requested record carries
+// presentation_phase="automated_reviewing", so the same
+// review-window claim as the approved flow above applies — no wait should be
+// visible while the judge is still deciding. Fails today for the same
+// reason. Measured on the reporter's own transcript (issue #1978 triage):
+// this review window ran 18.73s wrongly reported as waiting.
+func TestParseLine_ApprovalFlow_Escalated_ReviewWindow_NotWaiting(t *testing.T) {
+	lines := fixtureLines(t, "real-approval-flow-escalated.jsonl")
+	m := tailFixture(t, lines[:2]) // requested -> automated_review_started
+	if m.TranscriptPermissionPending {
+		t.Error("TranscriptPermissionPending = true during the judge's review window, want false (issue #1978)")
+	}
+}
+
+// TestParseLine_ApprovalFlow_Escalated_JudgeEscalates_ThenResolved is a LOCK,
+// two-step: once the judge escalates (status=escalated, outcome=escalate),
+// the wait genuinely becomes the user's and must be open — true both today
+// (requested already opened it, unconditionally) and after the fix
+// (automated_review_completed's outcome discriminator re-opens it). Then
+// decision_applied still closes it unconditionally, exactly as in the
+// approved flow. Neither assertion in this test changes behavior across the
+// fix; it pins the arc the fix must not break. Measured on the reporter's own
+// transcript: escalation-to-resolution ran a genuine 22.16s (40.89s total
+// minus the 18.73s review window above) — this really was the user's wait.
+func TestParseLine_ApprovalFlow_Escalated_JudgeEscalates_ThenResolved(t *testing.T) {
+	lines := fixtureLines(t, "real-approval-flow-escalated.jsonl")
+
+	escalated := tailFixture(t, lines[:3]) // + automated_review_completed{status:escalated}
+	if !escalated.TranscriptPermissionPending {
+		t.Error("TranscriptPermissionPending = false after an escalated review, want true — the user genuinely must decide now")
+	}
+
+	m := tailFixture(t, lines) // + decision_applied
 	if m.TranscriptPermissionPending {
 		t.Error("TranscriptPermissionPending should be false once decision_applied closes it")
 	}
