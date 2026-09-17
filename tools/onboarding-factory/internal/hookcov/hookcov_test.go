@@ -31,13 +31,14 @@ func repoRoot(t *testing.T) string {
 func TestDeclaredMatchesRegistry(t *testing.T) {
 	got := Declared()
 
-	// Exhaustive as of this commit: every registry adapter EXCEPT aider,
-	// junie, and muse declares a hooks permission (junie's and muse's
-	// upstream research both found no native hook/callback system, so both
-	// adapters are observe-only — muse's research is documented in
-	// core/adapters/inbound/agents/muse/agent.go's Agent doc comment). If any
-	// of the three gains one, this fails and the map is updated — that is
-	// the intended workflow, not an obstacle.
+	// Exhaustive as of this commit: every registry adapter EXCEPT aider, dsh,
+	// junie, and muse declares a hooks permission. The dsh adapter is
+	// observe-only in this bounded #1980 change; dsh hook support remains
+	// unresolved in the issue. Junie's and muse's upstream research both found
+	// no native hook/callback system, so both adapters are observe-only — muse's
+	// research is documented in core/adapters/inbound/agents/muse/agent.go's
+	// Agent doc comment. If any of the four gains one, this fails and the map
+	// is updated — that is the intended workflow, not an obstacle.
 	//
 	// copilot joined in #1378, gemini-cli in #1717, kiro-cli in #1716,
 	// mistral-vibe in #1718, pi in #1721, opencode in #1719, hermes in #1722
@@ -56,7 +57,7 @@ func TestDeclaredMatchesRegistry(t *testing.T) {
 	// keyed off $HOME). A GAP here is the honest reading of that, not a defect.
 	want := map[string]bool{
 		"aider": false, "antigravity": true, "claudecode": true, "codex": true,
-		"copilot": true, "gemini-cli": true, "hermes": true, "junie": false,
+		"copilot": true, "dsh": false, "gemini-cli": true, "hermes": true, "junie": false,
 		"kiro-cli": true, "mistral-vibe": true, "muse": false, "opencode": true, "pi": true,
 	}
 	if !reflect.DeepEqual(got, want) {

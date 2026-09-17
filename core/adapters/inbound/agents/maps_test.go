@@ -12,6 +12,7 @@ import (
 	"irrlicht/core/adapters/inbound/agents/claudecode"
 	"irrlicht/core/adapters/inbound/agents/codex"
 	"irrlicht/core/adapters/inbound/agents/copilot"
+	"irrlicht/core/adapters/inbound/agents/dsh"
 	"irrlicht/core/adapters/inbound/agents/geminicli"
 	"irrlicht/core/adapters/inbound/agents/hermes"
 	"irrlicht/core/adapters/inbound/agents/junie"
@@ -134,6 +135,7 @@ func TestSourceCensus(t *testing.T) {
 			kirocli.AdapterName, geminicli.AdapterName,
 			antigravity.AdapterName, vibe.AdapterName,
 			copilot.AdapterName, junie.AdapterName, muse.AdapterName,
+			dsh.AdapterName,
 		},
 		"FilesUnderCWD":     {aider.AdapterName},
 		"ProcessOwnedStore": {opencode.AdapterName, hermes.AdapterName},
