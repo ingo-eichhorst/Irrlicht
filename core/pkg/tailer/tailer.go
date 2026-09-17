@@ -98,9 +98,12 @@ type SessionMetrics struct {
 	OpenSubagents int `json:"open_subagents,omitempty"`
 
 	// BackgroundProcessCount is the number of agent-spawned background
-	// processes the transcript shows as still open (Bash run_in_background
-	// launches not yet observed terminating). Derived from the
-	// openBackgroundProcs set. See issue #445.
+	// processes the transcript shows as still open: a Bash run_in_background
+	// launch not yet observed terminating, or — since #1982 — a Monitor task
+	// not yet released by its terminal notification, timeoutMs deadline, or
+	// persistent hold ceiling. Derived from the openBackgroundProcs set (with
+	// an expired Monitor entry purged first — see purgeExpiredBackgroundDeadlines).
+	// See issues #445 and #1982.
 	BackgroundProcessCount int `json:"background_process_count,omitempty"`
 
 	// BackgroundProcessOutputs holds the output-file paths of those open
@@ -114,6 +117,17 @@ type SessionMetrics struct {
 	// liveness probe signals these directly. Sorted for determinism, not
 	// serialized — recomputed each pass. See issue #661.
 	BackgroundProcessPIDs []string `json:"-"`
+
+	// BackgroundProcessClockBound is true when the open background-process set
+	// includes at least one entry with no output file and no PID (Claude
+	// Code's Monitor tool) whose recorded deadline has not yet elapsed.
+	// Neither BackgroundProcessOutputs nor BackgroundProcessPIDs ever includes
+	// such an entry — there is nothing for the daemon's lsof/PID probe to
+	// check — so this is the signal that tells applyBackgroundLiveness the
+	// entry is alive anyway, bounded by the clock instead of a probe. Not
+	// serialized — recomputed from the transcript (plus the ledger-restored
+	// deadline) each pass. See issue #1982.
+	BackgroundProcessClockBound bool `json:"-"`
 
 	// SubagentCompletions surfaces parent-side "subagent done" signals
 	// discovered during the most recent TailAndProcess() pass. Cleared at
@@ -470,6 +484,16 @@ type TranscriptTailer struct {
 	// BashOutput poll or a KillShell removes. BackgroundProcessCount and
 	// BackgroundProcessOutputs are derived from it. See issue #445.
 	openBackgroundProcs map[string]string
+	// openBackgroundDeadlines holds the deadline for the clock-bound subset of
+	// openBackgroundProcs — Claude Code Monitor tasks, which report no output
+	// file or PID for the daemon's lsof/PID probe to check, so their liveness
+	// is bounded by a deadline instead: MonitorTimeoutMs past the launch, or
+	// monitorPersistentHoldCeiling for a persistent Monitor. Every key here is
+	// also a key in openBackgroundProcs (with an empty OutputPath); not every
+	// key in openBackgroundProcs has a deadline — a Bash/PID entry never does.
+	// computeBackgroundProcessMetrics purges an elapsed deadline from both maps
+	// each pass. See issue #1982.
+	openBackgroundDeadlines map[string]time.Time
 	// pendingBashPolls maps a BashOutput poll's tool_use id to the background
 	// id it targets, so a later tool_result reporting a terminated status can
 	// be attributed to the right background process. See issue #445.
@@ -518,17 +542,18 @@ func NewTranscriptTailer(path string, parser TranscriptParser, adapter string) *
 		pa.SetTranscriptPath(path)
 	}
 	return &TranscriptTailer{
-		path:                path,
-		lastOffset:          0,
-		capacityMgr:         capacity.DefaultCapacityManager(),
-		parser:              parser,
-		adapter:             adapter,
-		openToolCalls:       make(map[string]string),
-		openPermissions:     make(map[string]struct{}),
-		openBackgroundProcs: make(map[string]string),
-		pendingBashPolls:    make(map[string]string),
-		pendingTaskCreates:  make(map[string]string),
-		cumByModel:          make(map[string]*UsageBreakdown),
+		path:                    path,
+		lastOffset:              0,
+		capacityMgr:             capacity.DefaultCapacityManager(),
+		parser:                  parser,
+		adapter:                 adapter,
+		openToolCalls:           make(map[string]string),
+		openPermissions:         make(map[string]struct{}),
+		openBackgroundProcs:     make(map[string]string),
+		openBackgroundDeadlines: make(map[string]time.Time),
+		pendingBashPolls:        make(map[string]string),
+		pendingTaskCreates:      make(map[string]string),
+		cumByModel:              make(map[string]*UsageBreakdown),
 		metrics: &SessionMetrics{
 			MessageHistory: make([]MessageEvent, 0),
 			SessionStartAt: time.Time{},
@@ -1152,15 +1177,54 @@ func (t *TranscriptTailer) applyTaskUpdateDelta(d TaskDelta, parsed *ParsedEvent
 	}
 }
 
+// monitorPersistentHoldCeiling bounds the clock-bound hold for a persistent
+// Claude Code Monitor task (launched with `persistent: true`, `timeoutMs: 0`
+// — "runs until TaskStop or session end", so it carries no deadline of its
+// own). Without a ceiling here, a persistent Monitor whose terminal
+// <task-notification> the tailer never observes (TaskStop's own notification
+// shape is unverified — #1982's triage comment) would hold the session
+// `working` for the life of the ledger entry, which the ledger's own restart
+// survival (#445) would then make indefinite.
+//
+// The maintainer's settled spec for #1982 is to err long: "We should keep
+// working for the time monitor runs. That can be very long. but we should
+// not switch to ready or waiting as long as monitor is active." Evidence for
+// how long "very long" runs in practice: of 115 Monitor launches across 32
+// transcripts under ~/.claude/projects/-Users-ingo-projects-irrlicht/
+// (triage's own census), 11 non-persistent launches carried timeoutMs
+// ranging 20-45 minutes (avg 30) —
+//
+//	python3 -c "import json,glob,os; ts=[json.loads(l)['toolUseResult']['timeoutMs'] for p in glob.glob(os.path.expanduser('~/.claude/projects/-Users-ingo-projects-irrlicht/*.jsonl')) for l in open(p,errors='replace') if '\"taskId\"' in l and 'Monitor started' in l for d in [json.loads(l)] if not d['toolUseResult'].get('persistent') and d['toolUseResult'].get('timeoutMs')]; print(min(ts)/60000, max(ts)/60000)"
+//
+// -> 20.0 45.0
+//
+// and none of the 5 sampled persistent launches had a terminal notification
+// anywhere in the same transcript (still open when the session ended) — so
+// there is no measured upper bound for a persistent Monitor to calibrate
+// against, only the instruction to not cut a real one short. This takes the
+// same 12-hour value as permissionPromptHoldTimeout, idlePromptHoldTimeout
+// and sessionErrorHoldTimeout in core/domain/session/signal_hold.go, and for
+// the same governing reason stated there: an agent left running overnight
+// must still read the right state when its user looks in the morning. A
+// too-short ceiling here would silently reinstate #1982's bug for exactly
+// the long-running Monitor tasks (a slow CI pipeline, a long build) the
+// tool exists for.
+const monitorPersistentHoldCeiling = 12 * time.Hour
+
 // applyBackgroundProcessDeltas tracks agent-spawned background processes
-// (Bash run_in_background) in openBackgroundProcs, the source of truth for
-// BackgroundProcessCount. A spawn adds the background id; a matched
-// terminated BashOutput poll, a KillShell, or a terminal task-notification
-// removes it. See issues #445 and #661.
+// (Bash run_in_background, and — since #1982 — Claude Code Monitor tasks) in
+// openBackgroundProcs, the source of truth for BackgroundProcessCount. A
+// spawn adds the background id; a matched terminated BashOutput poll, a
+// KillShell, or a terminal task-notification removes it. See issues #445 and
+// #661.
 func (t *TranscriptTailer) applyBackgroundProcessDeltas(parsed *ParsedEvent) {
 	for _, sp := range parsed.BackgroundSpawns {
-		if sp.BashID != "" {
-			t.openBackgroundProcs[sp.BashID] = sp.OutputPath
+		if sp.BashID == "" {
+			continue
+		}
+		t.openBackgroundProcs[sp.BashID] = sp.OutputPath
+		if sp.IsMonitor {
+			t.openBackgroundDeadlines[sp.BashID] = monitorDeadline(sp, parsed.Timestamp)
 		}
 	}
 	for _, poll := range parsed.BashOutputPolls {
@@ -1171,6 +1235,7 @@ func (t *TranscriptTailer) applyBackgroundProcessDeltas(parsed *ParsedEvent) {
 	for _, id := range parsed.TerminatedBashOutputIDs {
 		if bashID, ok := t.pendingBashPolls[id]; ok {
 			delete(t.openBackgroundProcs, bashID)
+			delete(t.openBackgroundDeadlines, bashID)
 		}
 	}
 	// A poll is resolved once its tool_result arrives (terminated OR still
@@ -1181,13 +1246,34 @@ func (t *TranscriptTailer) applyBackgroundProcessDeltas(parsed *ParsedEvent) {
 	}
 	for _, bashID := range parsed.KilledShellIDs {
 		delete(t.openBackgroundProcs, bashID)
+		delete(t.openBackgroundDeadlines, bashID)
 	}
 	// Terminal task-notification completion (orchestrated/SDK path): the
-	// <task-id> is the backgroundTaskId. A non-matching id is a harmless no-op.
-	// See issue #445.
+	// <task-id> is the backgroundTaskId, or — since #1982 — a Monitor task id
+	// registered the same way. A non-matching id is a harmless no-op. See
+	// issue #445.
 	for _, id := range parsed.TerminatedBackgroundTaskIDs {
 		delete(t.openBackgroundProcs, id)
+		delete(t.openBackgroundDeadlines, id)
 	}
+}
+
+// monitorDeadline computes when a Monitor spawn's clock-bound hold expires:
+// launchedAt + MonitorTimeoutMs for an ordinary Monitor, or
+// launchedAt + monitorPersistentHoldCeiling for a persistent one (which
+// reports MonitorTimeoutMs as 0). launchedAt is the spawn event's own
+// transcript timestamp; a zero timestamp (a synthesized event, or a parser
+// that doesn't set one) falls back to wall-clock now rather than computing
+// against the zero time, which would read as already-expired. See issue
+// #1982.
+func monitorDeadline(sp BackgroundSpawn, launchedAt time.Time) time.Time {
+	if launchedAt.IsZero() {
+		launchedAt = time.Now()
+	}
+	if sp.MonitorPersistent {
+		return launchedAt.Add(monitorPersistentHoldCeiling)
+	}
+	return launchedAt.Add(time.Duration(sp.MonitorTimeoutMs) * time.Millisecond)
 }
 
 // sweepOpenToolCallsOnTurnDone drops stale entries from openToolCalls when
@@ -1391,6 +1477,7 @@ func (t *TranscriptTailer) PurgeBackgroundProcs(outputs []string) {
 	for id, path := range t.openBackgroundProcs {
 		if dead[path] {
 			delete(t.openBackgroundProcs, id)
+			delete(t.openBackgroundDeadlines, id)
 		}
 	}
 }
@@ -1403,5 +1490,6 @@ func (t *TranscriptTailer) PurgeBackgroundProcs(outputs []string) {
 func (t *TranscriptTailer) PurgeBackgroundProcsByID(ids []string) {
 	for _, id := range ids {
 		delete(t.openBackgroundProcs, id)
+		delete(t.openBackgroundDeadlines, id)
 	}
 }

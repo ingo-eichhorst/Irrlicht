@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"irrlicht/core/pkg/tailer"
 )
@@ -355,6 +356,243 @@ func TestTailer_BackgroundProcessCount_ClearedByTaskNotification(t *testing.T) {
 // event, so treating origin.kind alone as a continuation leaves it working
 // forever. This is a lock for the structural ledger-match discriminator in
 // issue #1899.
+// --- Monitor task registration (issue #1982) ---
+// A Claude Code `Monitor` task is a background task that wakes the agent on
+// each event, the same way a Bash `run_in_background` process does — but it
+// reports its id via `toolUseResult.taskId` (not `backgroundTaskId`) and its
+// launch text is "Monitor started (task <id>, timeout <n>ms)." rather than
+// the Bash "running in background with ID: <id>" shape. Registering it into
+// the same #445 ledger is what lets IsAgentDone() hold the session `working`
+// past the Stop hook that closes each Monitor-driven turn.
+
+// monitorSpawnResult builds the user event Claude Code writes for a Monitor
+// launch: a tool_result with the launch text plus the authoritative top-level
+// toolUseResult.taskId/timeoutMs/persistent fields.
+func monitorSpawnResult(toolUseID, taskID, content string, timeoutMs int64, persistent bool) map[string]interface{} {
+	ev := toolResult(toolUseID, content)
+	ev["toolUseResult"] = map[string]interface{}{
+		"taskId":     taskID,
+		"timeoutMs":  timeoutMs,
+		"persistent": persistent,
+	}
+	return ev
+}
+
+// monitorSpawnResultAt is monitorSpawnResult plus an explicit top-level
+// "timestamp", for a test that needs to control the transcript-derived
+// launch time the tailer computes the Monitor deadline from (tailer.
+// ParseTimestamp reads this field; a line without it falls back to
+// time.Now(), which a deadline-expiry test cannot hold fixed).
+func monitorSpawnResultAt(toolUseID, taskID, content string, timeoutMs int64, persistent bool, timestamp string) map[string]interface{} {
+	ev := monitorSpawnResult(toolUseID, taskID, content, timeoutMs, persistent)
+	ev["timestamp"] = timestamp
+	return ev
+}
+
+// TestParser_NoPhantomMonitorSpawnFromArbitraryText is monitorLaunchOf's
+// counterpart to TestParser_NoPhantomSpawnFromArbitraryText: the Monitor
+// launch phrase alone (echoed by some other tool's output, e.g. a Read over
+// a log) must not fabricate a Monitor entry without the structured
+// toolUseResult.taskId gate. Mutation fixture — dropping collectToolResult's
+// `monitorID != ""` gate, or monitorLaunchOf's own `if id == ""` early
+// return, turns this red; verified by hand during development.
+func TestParser_NoPhantomMonitorSpawnFromArbitraryText(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(toolResult("toolu_x",
+		"Monitor started (task bhqmawaqk, timeout 1500000ms). You will be notified on each event."))
+	if len(ev.BackgroundSpawns) != 0 {
+		t.Errorf("phantom Monitor spawn from un-gated text: %+v", ev.BackgroundSpawns)
+	}
+}
+
+func TestTailer_BackgroundProcessCount_MonitorSpawn(t *testing.T) {
+	content := "Monitor started (task bhqmawaqk, timeout 1500000ms). You will be notified on each event. " +
+		"Keep working — do not poll or sleep. Events may arrive while you are waiting for the user — an event is not their reply."
+
+	m := runBgTailer(t, []map[string]interface{}{
+		bashToolUse("toolu_1", "Monitor", map[string]interface{}{"description": "PR #1981 CI checks completing"}),
+		monitorSpawnResult("toolu_1", "bhqmawaqk", content, 1500000, false),
+	})
+	if m.BackgroundProcessCount != 1 {
+		t.Fatalf("BackgroundProcessCount = %d, want 1 after a Monitor launch", m.BackgroundProcessCount)
+	}
+}
+
+// TestTailer_MonitorTask_ReleasedByTaskNotification is the mutation fixture
+// for the release path bullet 1 of #1982's design: "a terminal
+// <task-notification> with a <status> (already parsed)". The triage comment
+// verified this path already works for a TRACKED id — handleTaskNotification
+// (parser.go) has turned a terminal <status> into TerminatedBackgroundTaskIDs
+// since #445, and applyBackgroundProcessTerminations deletes any tracked id
+// from openBackgroundProcs regardless of how it got there. What #1982 adds is
+// registration; this test asserts the hold is placed FIRST (so a reverted
+// registration is caught, not just a reverted release) and then confirms the
+// existing release path actually retires it. A test that only checked the
+// post-release count of 0 would also pass with registration never having
+// happened at all.
+func TestTailer_MonitorTask_ReleasedByTaskNotification(t *testing.T) {
+	content := "Monitor started (task bhqmawaqk, timeout 1500000ms). You will be notified on each event."
+	path := writeBgTranscript(t, []map[string]interface{}{
+		bashToolUse("toolu_1", "Monitor", map[string]interface{}{"description": "PR #1981 CI checks completing"}),
+		monitorSpawnResult("toolu_1", "bhqmawaqk", content, 1500000, false),
+	})
+	tl := tailer.NewTranscriptTailer(path, &Parser{}, "claude-code")
+	m, err := tl.TailAndProcess()
+	if err != nil {
+		t.Fatalf("TailAndProcess (spawn): %v", err)
+	}
+	if m.BackgroundProcessCount != 1 {
+		t.Fatalf("BackgroundProcessCount after spawn = %d, want 1 (hold not placed)", m.BackgroundProcessCount)
+	}
+
+	if err := appendLines(t, path, []map[string]interface{}{
+		{"type": "system", "subtype": "turn_duration"},
+		taskNotifOriginEvent("bhqmawaqk", "completed"),
+	}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	m, err = tl.TailAndProcess()
+	if err != nil {
+		t.Fatalf("TailAndProcess (release): %v", err)
+	}
+	if m.BackgroundProcessCount != 0 {
+		t.Fatalf("BackgroundProcessCount after terminal notification = %d, want 0 (hold not released)", m.BackgroundProcessCount)
+	}
+	if m.LastEventType != "agent_continuation" {
+		t.Errorf("LastEventType = %q, want agent_continuation (terminal notification for a tracked id starts the next inference turn)", m.LastEventType)
+	}
+}
+
+// TestTailer_MonitorTask_DeadlineExpiry is the mutation fixture for #1982's
+// second and third release conditions: "the timeoutMs deadline for a
+// non-persistent Monitor" and "a hold ceiling for a persistent Monitor".
+// Neither has a pre-fix "red" to run — there was no deadline concept on
+// main — so this instead pins both a live and an expired case for each kind,
+// which is what catches a broken/inverted expiry check: commenting out
+// purgeExpiredBackgroundDeadlines's delete calls, or its `!now.Before`
+// comparison, turns the two "elapsed" subtests red (BackgroundProcessCount
+// stays 1) while leaving the two "not yet elapsed" subtests green — verified
+// by hand during development (see the PR body for the captured output), and
+// permanently pinned here as the regression fixture.
+func TestTailer_MonitorTask_DeadlineExpiry(t *testing.T) {
+	const content = "Monitor started (task bhqmawaqk, timeout 1500000ms)."
+	longAgo := time.Now().Add(-24 * time.Hour).Format(time.RFC3339)
+	past13h := time.Now().Add(-13 * time.Hour).Format(time.RFC3339)
+	recent := time.Now().Format(time.RFC3339)
+
+	tests := []struct {
+		name       string
+		timestamp  string
+		timeoutMs  int64
+		persistent bool
+		wantCount  int
+	}{
+		{
+			name:      "non-persistent, timeoutMs not yet elapsed, stays open",
+			timestamp: recent,
+			timeoutMs: 1_000_000_000, // ~11.5 days — nowhere near elapsed
+			wantCount: 1,
+		},
+		{
+			name:      "non-persistent, timeoutMs elapsed, purged",
+			timestamp: longAgo,
+			timeoutMs: 1000, // 1s past a launch 24h ago — long elapsed
+			wantCount: 0,
+		},
+		{
+			name:       "persistent, within the hold ceiling, stays open",
+			timestamp:  recent,
+			persistent: true,
+			wantCount:  1,
+		},
+		{
+			name:       "persistent, past the hold ceiling, purged",
+			timestamp:  past13h,
+			persistent: true, // ceiling is 12h (monitorPersistentHoldCeiling)
+			wantCount:  0,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			m := runBgTailer(t, []map[string]interface{}{
+				bashToolUse("toolu_1", "Monitor", map[string]interface{}{"description": "long-running check"}),
+				monitorSpawnResultAt("toolu_1", "bhqmawaqk", content, tc.timeoutMs, tc.persistent, tc.timestamp),
+			})
+			if m.BackgroundProcessCount != tc.wantCount {
+				t.Errorf("BackgroundProcessCount = %d, want %d", m.BackgroundProcessCount, tc.wantCount)
+			}
+		})
+	}
+}
+
+// TestTailer_MonitorTask_SurvivesLedgerRoundTrip mirrors
+// TestTailer_BackgroundProcessCount_SpawnAndTerminate's "open set survives a
+// ledger round-trip (daemon restart)" subtest for the clock-bound path: a
+// daemon restart must not drop a still-live Monitor hold, and a persisted
+// deadline must round-trip rather than being silently reset. See issue #1982.
+func TestTailer_MonitorTask_SurvivesLedgerRoundTrip(t *testing.T) {
+	content := "Monitor started (task bhqmawaqk, timeout 1500000ms)."
+	path := writeBgTranscript(t, []map[string]interface{}{
+		bashToolUse("toolu_1", "Monitor", map[string]interface{}{"description": "PR #1981 CI checks completing"}),
+		// timeoutMs is 25 minutes, launched "now" — nowhere near its deadline,
+		// so it must still read open both before and after the restart.
+		monitorSpawnResultAt("toolu_1", "bhqmawaqk", content, 1_500_000, false, time.Now().Format(time.RFC3339)),
+	})
+
+	tl1 := tailer.NewTranscriptTailer(path, &Parser{}, "claude-code")
+	if _, err := tl1.TailAndProcess(); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	ledger := tl1.GetLedgerState()
+	if len(ledger.BackgroundProcs) != 1 {
+		t.Fatalf("ledger BackgroundProcs = %v, want one entry", ledger.BackgroundProcs)
+	}
+	if len(ledger.BackgroundDeadlines) != 1 {
+		t.Fatalf("ledger BackgroundDeadlines = %v, want one entry (the Monitor task's persisted deadline)", ledger.BackgroundDeadlines)
+	}
+
+	// Restart: a fresh tailer rehydrated from the ledger reports the Monitor
+	// task still open even though it reads no new transcript lines, and keeps
+	// the SAME deadline rather than resetting the clock.
+	tl2 := tailer.NewTranscriptTailer(path, &Parser{}, "claude-code")
+	tl2.SetLedgerState(ledger)
+	m, err := tl2.TailAndProcess()
+	if err != nil {
+		t.Fatalf("post-restart pass: %v", err)
+	}
+	if m.BackgroundProcessCount != 1 {
+		t.Fatalf("BackgroundProcessCount after restart = %d, want 1", m.BackgroundProcessCount)
+	}
+	if !m.BackgroundProcessClockBound {
+		t.Error("BackgroundProcessClockBound after restart = false, want true")
+	}
+
+	ledger2 := tl2.GetLedgerState()
+	if ledger2.BackgroundDeadlines["bhqmawaqk"] != ledger.BackgroundDeadlines["bhqmawaqk"] {
+		t.Errorf("deadline after restart = %d, want the original %d (restart must not reset the clock)",
+			ledger2.BackgroundDeadlines["bhqmawaqk"], ledger.BackgroundDeadlines["bhqmawaqk"])
+	}
+}
+
+// appendLines appends lines to an existing transcript file, for a test that
+// needs to drive TailAndProcess across two separate passes over the same
+// tailer (spawn, then release) rather than one pass over a fixed fixture.
+func appendLines(t *testing.T, path string, lines []map[string]interface{}) error {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	enc := json.NewEncoder(f)
+	for _, ln := range lines {
+		if err := enc.Encode(ln); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func TestTailer_UnmatchedTaskNotification_RemainsPassive(t *testing.T) {
 	path := writeBgTranscript(t, []map[string]interface{}{
 		{"type": "system", "subtype": "turn_duration"},

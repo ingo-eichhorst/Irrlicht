@@ -591,13 +591,51 @@ func (t *TranscriptTailer) surfaceSporadicMetrics() {
 	t.metrics.SessionError = t.sessionError
 }
 
+// purgeExpiredBackgroundDeadlines drops every clock-bound entry (a Claude
+// Code Monitor task) whose deadline has passed from both openBackgroundProcs
+// and openBackgroundDeadlines — the timeoutMs/ceiling release path from
+// #1982's design ("release on the first of three events"), the other two
+// being the terminal <task-notification> and an explicit
+// KillShell/BashOutput termination, both handled unchanged in
+// applyBackgroundProcessDeltas since #445. Runs every pass, including an
+// empty one, for the same reason computeBackgroundProcessMetrics itself does:
+// a restart must not resurrect an entry whose deadline elapsed while the
+// daemon was down.
+//
+// time.Now() is consistent with the rest of this file's wall-clock
+// convention (see computeMetrics' currentTime, a few lines below this
+// function's caller). This path is live-only, like the lsof probe it stands
+// beside: no fixture in replaydata carries a Monitor launch (triage's own
+// `git grep -l "Monitor started" -- replaydata` returned nothing), so
+// BackgroundProcessClockBound — and the HasLiveBackgroundProcess it feeds via
+// applyBackgroundLiveness — is never exercised under replay, matching
+// HasLiveBackgroundProcess's existing live-only contract.
+func (t *TranscriptTailer) purgeExpiredBackgroundDeadlines() {
+	if len(t.openBackgroundDeadlines) == 0 {
+		return
+	}
+	now := time.Now()
+	for id, deadline := range t.openBackgroundDeadlines {
+		if !now.Before(deadline) {
+			delete(t.openBackgroundDeadlines, id)
+			delete(t.openBackgroundProcs, id)
+		}
+	}
+}
+
 // computeBackgroundProcessMetrics surfaces background-process bookkeeping.
 // Runs even on an empty pass: the open set can be rehydrated from the ledger
 // after a daemon restart and must surface before any new transcript line
 // arrives, so a still-running background process keeps holding the session
 // `working`. See issue #445.
 func (t *TranscriptTailer) computeBackgroundProcessMetrics() {
+	t.purgeExpiredBackgroundDeadlines()
 	t.metrics.BackgroundProcessCount = len(t.openBackgroundProcs)
+	// BackgroundProcessClockBound is true while at least one open entry has
+	// no probe path (a live Monitor task) — the daemon's applyBackgroundLiveness
+	// reads this to assert liveness synchronously instead of spawning an
+	// lsof/PID probe goroutine that has nothing to check. See issue #1982.
+	t.metrics.BackgroundProcessClockBound = len(t.openBackgroundDeadlines) > 0
 	if len(t.openBackgroundProcs) == 0 {
 		t.metrics.BackgroundProcessOutputs = nil
 		t.metrics.BackgroundProcessPIDs = nil

@@ -158,6 +158,7 @@ func (t *TranscriptTailer) resetAccumulatorsForRotation() {
 	// rotated/truncated transcript doesn't keep a stale session `working`.
 	// See issue #445.
 	t.openBackgroundProcs = make(map[string]string)
+	t.openBackgroundDeadlines = make(map[string]time.Time)
 	t.pendingBashPolls = make(map[string]string)
 	// Drop the pre-rotation idle anchor so the post-scan idleFlusher
 	// hook doesn't synthesize a phantom turn_done against stale time.

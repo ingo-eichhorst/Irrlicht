@@ -1,6 +1,9 @@
 package tailer
 
-import "maps"
+import (
+	"maps"
+	"time"
+)
 
 // GetLedgerState returns the durable accumulation state of the tailer so it
 // can be persisted to disk and rehydrated after a daemon restart.
@@ -40,6 +43,13 @@ func (t *TranscriptTailer) GetLedgerState() LedgerState {
 		bp := make(map[string]string, len(t.openBackgroundProcs))
 		maps.Copy(bp, t.openBackgroundProcs)
 		s.BackgroundProcs = bp
+	}
+	if len(t.openBackgroundDeadlines) > 0 {
+		bd := make(map[string]int64, len(t.openBackgroundDeadlines))
+		for id, deadline := range t.openBackgroundDeadlines {
+			bd[id] = deadline.Unix()
+		}
+		s.BackgroundDeadlines = bd
 	}
 	if len(t.pendingBashPolls) > 0 {
 		pp := make(map[string]string, len(t.pendingBashPolls))
@@ -126,6 +136,7 @@ func (t *TranscriptTailer) SetLedgerState(s LedgerState) {
 	t.taskSeq = max(s.TaskSeq, len(t.tasks))
 	restoreStringMap(&t.pendingTaskCreates, s.PendingTaskCreates)
 	restoreStringMap(&t.openBackgroundProcs, s.BackgroundProcs)
+	t.restoreBackgroundDeadlines(s.BackgroundDeadlines)
 	restoreStringMap(&t.pendingBashPolls, s.PendingBashPolls)
 	t.lastTaskEstimate = s.LastTaskEstimate
 	t.firstTaskEstimate = s.FirstTaskEstimate
@@ -168,6 +179,40 @@ func (t *TranscriptTailer) restoreParserState(ps *ParserLedger) {
 	}
 	if pp, ok := t.parser.(ParserStateProvider); ok {
 		pp.SetParserLedger(*ps)
+	}
+}
+
+// restoreBackgroundDeadlines rehydrates the clock-bound subset of
+// openBackgroundProcs — Claude Code Monitor tasks — after restoreStringMap has
+// already restored the process set itself; must be called after that
+// restoration. Persisted deadlines round-trip as Unix seconds.
+//
+// A clock-bound entry from a ledger written before #1982, or from a restart
+// that raced the deadline write, has no persisted deadline. Reading that
+// absence as "already expired" would purge the entry on the very next
+// restart and silently reinstate #1982's bug for a Monitor task that was
+// still genuinely running — so it is instead seeded a fresh
+// monitorPersistentHoldCeiling window from restore time, the same
+// generous-by-default choice #1982's own persistent-Monitor ceiling makes.
+//
+// A restored entry is identified as clock-bound the same way
+// computeBackgroundProcessMetrics's per-pass switch does: an empty output
+// path AND a non-numeric id (an empty path with a numeric id is Gemini CLI's
+// PID-only shape, never clock-bound). See issue #1982.
+func (t *TranscriptTailer) restoreBackgroundDeadlines(persisted map[string]int64) {
+	if len(t.openBackgroundProcs) == 0 {
+		return
+	}
+	now := time.Now()
+	for id, path := range t.openBackgroundProcs {
+		if path != "" || isAllDigits(id) {
+			continue
+		}
+		if sec, ok := persisted[id]; ok {
+			t.openBackgroundDeadlines[id] = time.Unix(sec, 0)
+			continue
+		}
+		t.openBackgroundDeadlines[id] = now.Add(monitorPersistentHoldCeiling)
 	}
 }
 

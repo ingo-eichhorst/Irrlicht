@@ -1350,14 +1350,18 @@ func (d *SessionDetector) cleanupFinishedParent(state *session.SessionState) {
 }
 
 // applyBackgroundLiveness sets HasLiveBackgroundProcess on the session's
-// metrics from the last-known liveness of its background processes — Claude
-// Code's Bash run_in_background launches (probed via lsof on their output
-// files) and Gemini CLI's backgrounded shell commands (probed by signalling
-// their reported PID, issue #661) — and kicks off an off-loop refresh of that
-// knowledge. When true, IsAgentDone returns false and the classifier holds the
-// session `working` past end_turn until the process exits.
+// metrics from the last-known liveness of its background processes — three
+// kinds as of #1982: Claude Code's Bash run_in_background launches (probed
+// via lsof on their output files), Gemini CLI's backgrounded shell commands
+// (probed by signalling their reported PID, issue #661), and Claude Code's
+// Monitor tasks, which report neither an output file nor a PID and so are
+// asserted alive directly from BackgroundProcessClockBound instead of probed
+// — and, for the first two, kicks off an off-loop refresh of that knowledge.
+// When true, IsAgentDone returns false and the classifier holds the session
+// `working` past end_turn until the process/task ends.
 //
-// Two deliberate choices (issue #445 review):
+// Two deliberate choices (issue #445 review), both still true of the
+// Monitor path added by #1982:
 //   - Gated on state == working. The feature only ever needs to PREVENT a
 //     working→ready transition; it must never RESURRECT a session the user
 //     already cancelled (ESC → ready) just because a detached process is still
@@ -1367,19 +1371,50 @@ func (d *SessionDetector) cleanupFinishedParent(state *session.SessionState) {
 //     session). processActivity uses the last-known value — optimistically
 //     "alive" on first sight so a not-yet-probed process is never prematurely
 //     declared dead — and a completed probe whose verdict changed nudges the
-//     event loop (via debouncedEvents) to re-classify promptly.
+//     event loop (via debouncedEvents) to re-classify promptly. A clock-bound
+//     Monitor entry needs none of this: its liveness is already known
+//     synchronously, with no filesystem or process call involved.
 func (d *SessionDetector) applyBackgroundLiveness(state *session.SessionState) {
 	sid := state.SessionID
 	m := state.Metrics
 
-	if m == nil || state.State != session.StateWorking ||
-		m.BackgroundProcessCount == 0 || !d.hasBackgroundProbe(m) {
+	if m == nil || state.State != session.StateWorking || m.BackgroundProcessCount == 0 {
 		d.clearBackgroundTracking(sid, m)
 		return
 	}
 
+	// A clock-bound entry (Claude Code's Monitor task, issue #1982) needs no
+	// probe: computeBackgroundProcessMetrics already purges it the pass its
+	// deadline passes, so surviving into this function means it is alive by
+	// definition — the deadline check IS the liveness answer. clockAlive is
+	// read before hasBackgroundProbe below decides whether there is ALSO a
+	// probeable (output/PID) entry on this session.
+	clockAlive := m.BackgroundProcessClockBound
+
+	if !d.hasBackgroundProbe(m) {
+		// No output path and no PID — either every open entry is clock-bound
+		// (the common Monitor-only case) or none is probeable at all. Routing
+		// the former through beginBackgroundProbe/runBackgroundLivenessProbe
+		// would be worse than a no-op: probeBackgroundLiveness treats an empty
+		// outputs/pids list as a CONCLUSIVE "nothing to probe" (not unknown),
+		// which reads as dead and would purge the very entry this branch
+		// exists to hold. Assert liveness directly instead.
+		if clockAlive {
+			d.clearBackgroundProbeCache(sid)
+			m.HasLiveBackgroundProcess = true
+			return
+		}
+		d.clearBackgroundTracking(sid, m)
+		return
+	}
+
+	// The session ALSO carries a probeable (output/PID) entry. A clock-bound
+	// entry can only ADD to the aggregate liveness verdict, never remove from
+	// it — even a dead probe verdict for the OTHER entry must not flip
+	// HasLiveBackgroundProcess false while the Monitor task is still within
+	// its own deadline.
 	alive, startProbe := d.beginBackgroundProbe(sid)
-	m.HasLiveBackgroundProcess = alive
+	m.HasLiveBackgroundProcess = alive || clockAlive
 	if !startProbe {
 		return
 	}
@@ -1405,14 +1440,24 @@ func (d *SessionDetector) hasBackgroundProbe(m *session.SessionMetrics) bool {
 // background process worth tracking (it finished, left working, or lost its
 // last probeable process).
 func (d *SessionDetector) clearBackgroundTracking(sid string, m *session.SessionMetrics) {
+	d.clearBackgroundProbeCache(sid)
+	if m != nil {
+		m.HasLiveBackgroundProcess = false
+	}
+}
+
+// clearBackgroundProbeCache drops sid's liveness/in-flight-probe bookkeeping
+// without touching m.HasLiveBackgroundProcess — the half of
+// clearBackgroundTracking a caller that is about to assert liveness by some
+// OTHER means (applyBackgroundLiveness's clock-bound branch, issue #1982)
+// still needs: a stale cached probe verdict must not resurface once the
+// session regains a probeable entry later.
+func (d *SessionDetector) clearBackgroundProbeCache(sid string) {
 	d.bgMu.Lock()
 	delete(d.bgLive, sid)
 	delete(d.bgProbing, sid)
 	delete(d.bgInconclusive, sid)
 	d.bgMu.Unlock()
-	if m != nil {
-		m.HasLiveBackgroundProcess = false
-	}
 }
 
 // maxInconclusiveBackgroundProbes bounds how many consecutive inconclusive

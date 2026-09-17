@@ -158,6 +158,7 @@ func (mc *MetricsConverter) Convert(m *tailer.SessionMetrics) *session.SessionMe
 		BackgroundProcessCount:            m.BackgroundProcessCount,
 		BackgroundProcessOutputs:          m.BackgroundProcessOutputs,
 		BackgroundProcessPIDs:             m.BackgroundProcessPIDs,
+		BackgroundProcessClockBound:       m.BackgroundProcessClockBound,
 		PendingBackgroundAgentCount:       m.PendingBackgroundAgentCount,
 		LastEventType:                     m.LastEventType,
 		LastOpenToolNames:                 copyStrings(m.LastOpenToolNames),

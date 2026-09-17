@@ -64,19 +64,27 @@ type SessionMetrics struct {
 	// BackgroundProcessCount is the number of agent-spawned background
 	// processes the transcript shows as still open — for Claude Code, a
 	// `Bash` tool call with `run_in_background: true` that has not yet been
-	// observed terminating (via a `BashOutput` status or a `KillShell`).
-	// Deterministic from the transcript, so it is stable across replay. It
-	// is the agent's *claimed* open count; HasLiveBackgroundProcess is the
-	// daemon's authoritative liveness verdict. See issue #445.
+	// observed terminating (via a `BashOutput` status or a `KillShell`), or —
+	// since #1982 — a `Monitor` task not yet terminated by its own terminal
+	// notification, timeoutMs deadline, or persistent hold ceiling. The Bash
+	// subset is deterministic from the transcript alone, so it is stable
+	// across replay; the Monitor subset also depends on wall-clock time (see
+	// BackgroundProcessClockBound), so it is not. It is the agent's *claimed*
+	// open count; HasLiveBackgroundProcess is the daemon's authoritative
+	// liveness verdict. See issue #445.
 	BackgroundProcessCount int `json:"background_process_count,omitempty"`
 
 	// HasLiveBackgroundProcess is the daemon's authoritative answer to "does
-	// this session still have a running background process?", set by the
-	// liveness probe in processActivity (lsof on each background process's
-	// output file). It gates IsAgentDone so a session stays `working` past
-	// end_turn while a background process is alive. Transient — set by the
-	// detector, never derived from the transcript, so it is absent under
-	// replay (where there is no live process to probe). See issue #445.
+	// this session still have a running background process?". Set by the
+	// liveness probe in processActivity (lsof on a Bash process's output file,
+	// or a signalled PID) for a probeable entry, and — since #1982 — asserted
+	// directly from BackgroundProcessClockBound for a Claude Code Monitor task,
+	// which has neither an output file nor a PID to probe. It gates IsAgentDone
+	// so a session stays `working` past end_turn while a background process is
+	// alive. Transient — set by the detector, so it is absent under replay
+	// (where there is no live process to probe, and no Monitor fixture exists
+	// in replaydata as of #1982 to exercise the clock-bound path either). See
+	// issues #445 and #1982.
 	HasLiveBackgroundProcess bool `json:"-"`
 
 	// BackgroundProcessOutputs holds the output-file paths of the currently
@@ -92,6 +100,14 @@ type SessionMetrics struct {
 	// session is still working. Transient — recomputed from the transcript each
 	// pass, not persisted in session JSON. See issue #661.
 	BackgroundProcessPIDs []string `json:"-"`
+
+	// BackgroundProcessClockBound is true when the open background-process set
+	// includes at least one entry with no probe path (Claude Code's Monitor
+	// tool) whose deadline hasn't elapsed. applyBackgroundLiveness reads it to
+	// assert HasLiveBackgroundProcess without a probe. Transcript-derived like
+	// BackgroundProcessOutputs/PIDs, but wall-clock dependent like ElapsedSeconds
+	// — recomputed each tailer pass, not persisted. See issue #1982.
+	BackgroundProcessClockBound bool `json:"-"`
 
 	// LastEventType is the type of the most recent transcript event
 	// (e.g. "assistant", "user", "tool_use", "tool_result").
@@ -591,10 +607,13 @@ func (m *SessionMetrics) IsAgentDone() bool {
 	if m.HasOpenToolCall {
 		return false
 	}
-	// A live background process (Bash run_in_background) outlives the turn
-	// that spawned it: Claude Code writes end_turn the instant the Bash tool
-	// returns, but the process keeps running. The daemon's liveness probe
-	// confirms it is still alive, so the session is NOT idle. See issue #445.
+	// A live background process outlives the turn that spawned it: Claude
+	// Code writes end_turn the instant the launching tool call returns, but
+	// the process/task keeps running. For a Bash run_in_background process
+	// the daemon's liveness probe confirms it is still alive; for a Monitor
+	// task (#1982) there is nothing to probe, so HasLiveBackgroundProcess is
+	// asserted directly from its transcript-derived deadline instead. Either
+	// way the session is NOT idle. See issues #445 and #1982.
 	if m.HasLiveBackgroundProcess {
 		return false
 	}
@@ -674,23 +693,24 @@ func newMergedMetrics(newM *SessionMetrics) *SessionMetrics {
 		// pass (count + output paths + PIDs) — copy the new values verbatim.
 		// HasLiveBackgroundProcess is set by the detector's probe *after* this
 		// merge, so newM always carries its zero value here.
-		BackgroundProcessCount:   newM.BackgroundProcessCount,
-		BackgroundProcessOutputs: newM.BackgroundProcessOutputs,
-		BackgroundProcessPIDs:    newM.BackgroundProcessPIDs,
-		HasLiveBackgroundProcess: newM.HasLiveBackgroundProcess,
-		LastEventType:            newM.LastEventType,
-		LastOpenToolNames:        newM.LastOpenToolNames,
-		LastWasUserInterrupt:     newM.LastWasUserInterrupt,
-		LastWasToolDenial:        newM.LastWasToolDenial,
-		EstimatedCostUSD:         newM.EstimatedCostUSD,
-		EstimatedCO2Grams:        newM.EstimatedCO2Grams,
-		CO2Tier:                  newM.CO2Tier,
-		LastAssistantText:        newM.LastAssistantText,
-		TaskSummary:              newM.TaskSummary,
-		IntentHeadline:           newM.IntentHeadline,
-		QuestionHeadline:         newM.QuestionHeadline,
-		PendingQuestionMarker:    newM.PendingQuestionMarker,
-		PendingWaitingCue:        newM.PendingWaitingCue,
+		BackgroundProcessCount:      newM.BackgroundProcessCount,
+		BackgroundProcessOutputs:    newM.BackgroundProcessOutputs,
+		BackgroundProcessPIDs:       newM.BackgroundProcessPIDs,
+		BackgroundProcessClockBound: newM.BackgroundProcessClockBound,
+		HasLiveBackgroundProcess:    newM.HasLiveBackgroundProcess,
+		LastEventType:               newM.LastEventType,
+		LastOpenToolNames:           newM.LastOpenToolNames,
+		LastWasUserInterrupt:        newM.LastWasUserInterrupt,
+		LastWasToolDenial:           newM.LastWasToolDenial,
+		EstimatedCostUSD:            newM.EstimatedCostUSD,
+		EstimatedCO2Grams:           newM.EstimatedCO2Grams,
+		CO2Tier:                     newM.CO2Tier,
+		LastAssistantText:           newM.LastAssistantText,
+		TaskSummary:                 newM.TaskSummary,
+		IntentHeadline:              newM.IntentHeadline,
+		QuestionHeadline:            newM.QuestionHeadline,
+		PendingQuestionMarker:       newM.PendingQuestionMarker,
+		PendingWaitingCue:           newM.PendingWaitingCue,
 		// Recomputed from the transcript every pass (the tailer derives it
 		// from unmatched permission request ids), so it is copied verbatim —
 		// and MUST be copied at all: this allowlist silently drops any field

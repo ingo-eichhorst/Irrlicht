@@ -17,6 +17,7 @@ const pinnedLedgerSchemaVersion = 6
 // json name. Regenerate by running the test and copying the "got" block; it is
 // meant to be updated, just never silently.
 const pinnedLedgerFieldSignature = `agent_version:string
+background_deadlines:map[string]int64
 background_procs:map[string]string
 cum_by_model:map[string]*tailer.UsageBreakdown
 cum_provider_cost_usd:float64
