@@ -836,15 +836,24 @@ type LedgerState struct {
 	// exactly that re-scan on ANY schema mismatch by discarding the whole ledger
 	// (LastOffset included), which is the #1815 case, and bumping would get it.
 	// Not bumping accepts a bounded, self-healing gap instead: a session with a
-	// Monitor task already in flight at the moment of the daemon upgrade keeps
-	// the pre-#1982 flip behaviour until THAT ONE task ends (observed non-persistent
-	// timeoutMs: 20-45 min; a persistent one: up to monitorPersistentHoldCeiling),
-	// after which every new Monitor launch on that session — and every other
-	// session's ledger, unaffected either way — registers correctly. The
-	// alternative (bumping) would force a full transcript re-scan for EVERY live
-	// session on the machine, not just ones with a Monitor open, to fix a defect
-	// that heals itself within one Monitor lifetime regardless. See issue #1982;
-	// stated in the PR body as the trade-off it is, not asserted safe by analogy.
+	// Monitor task already in flight at the moment of the daemon upgrade never
+	// gets that ONE task's launch line re-parsed — the daemon resumes tailing
+	// from the persisted LastOffset, not from byte 0 — so it keeps the
+	// pre-#1982 flip behaviour for as long as that specific task keeps running.
+	// monitorPersistentHoldCeiling does NOT bound this case: the ceiling only
+	// ever applies to an entry this code actually registered, and an in-flight
+	// task at upgrade time was never registered at all. For an observed
+	// non-persistent launch that bounds it to its own timeoutMs (20-45 min in
+	// the triage census); for a persistent one there is no such bound —
+	// 0 of 5 sampled persistent launches had an observable end in-transcript,
+	// so this could run longer than monitorPersistentHoldCeiling. Every NEW
+	// Monitor launch — on that same session once its in-flight task ends, or on
+	// any other session's ledger, unaffected either way — registers and is
+	// ceiling-bounded correctly. The alternative (bumping) would force a full
+	// transcript re-scan for EVERY live session on the machine, not just ones
+	// with a Monitor open, to fix a gap that heals itself within one Monitor
+	// task's own lifetime regardless. See issue #1982; stated in the PR body as
+	// the trade-off it is, not asserted safe by analogy.
 	//
 	// A ledger written before this field existed (or after the bump decision
 	// above, going forward) simply lacks it — SetLedgerState's
