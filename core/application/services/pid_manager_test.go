@@ -1473,3 +1473,88 @@ func TestCheckPIDLiveness_FiresSupersededHookForPreSessionSweep(t *testing.T) {
 		t.Fatal("PID-matched pre-session should be swept immediately (no grace)")
 	}
 }
+
+// TestCheckPIDLiveness_PeriodicDedup_PresessionNeverEvictsRealSession is the
+// periodic-sweep companion to TestHandlePIDAssigned_PresessionNeverEvictsRealSession:
+// a proc-* row can never win newestByPID (trackNewestByPID excludes proc-*
+// unconditionally, issue #1961), so even a proc-* row with a later FirstSeen
+// than the real session sharing its PID must not evict that real session
+// through dedupeByPIDPeriodic. Only the real session's survival is asserted
+// (matching the assignment-time companion test exactly) — CheckPIDLiveness
+// also runs sweepSupersededPreSessionsPeriodic in the same pass, which
+// legitimately retires the leftover proc-* row itself via its own PID-match
+// branch, a correct and unrelated outcome this test does not assert on
+// either way. This passes by construction under the fixed predicate (a lock,
+// not red-first evidence) — it guards the extraction in isDedupDeleteCandidate
+// from ever regressing #1960 by a different route than the assignment-time
+// path.
+func TestCheckPIDLiveness_PeriodicDedup_PresessionNeverEvictsRealSession(t *testing.T) {
+	pid := os.Getpid() // alive
+	repo := newMockRepo()
+	now := time.Now().Unix()
+	repo.states["01a09e21-real"] = &session.SessionState{
+		SessionID:      "01a09e21-real",
+		Adapter:        "muse",
+		State:          session.StateReady,
+		PID:            pid,
+		TranscriptPath: "/tmp/01a09e21-real.jsonl",
+		FirstSeen:      now - 100, // older than the proc-* row below
+		UpdatedAt:      now,
+	}
+	repo.states["proc-live"] = &session.SessionState{
+		SessionID: "proc-live",
+		Adapter:   "muse",
+		State:     session.StateReady,
+		PID:       pid,
+		FirstSeen: now, // later FirstSeen — would "win" if proc-* were eligible
+		UpdatedAt: now,
+	}
+
+	newPIDManagerForTest(repo).CheckPIDLiveness()
+
+	if repo.states["01a09e21-real"] == nil {
+		t.Fatal("a proc-* row must never evict a real session sharing its PID through the " +
+			"periodic dedup sweep, regardless of FirstSeen ordering (issue #1960/#1992)")
+	}
+}
+
+// TestCheckPIDLiveness_PeriodicDedup_SubagentSurvivesSweep: a subagent sharing
+// its parent's PID must never be treated as a stale duplicate by
+// dedupeByPIDPeriodic, however its FirstSeen compares to the parent's —
+// trackNewestByPID already excludes ParentSessionID != "" from winning, and
+// isDedupDeleteCandidate excludes it from being a victim too. This passes by
+// construction (a lock, not red-first evidence).
+func TestCheckPIDLiveness_PeriodicDedup_SubagentSurvivesSweep(t *testing.T) {
+	pid := os.Getpid() // alive
+	repo := newMockRepo()
+	now := time.Now().Unix()
+	repo.states["parent"] = &session.SessionState{
+		SessionID:      "parent",
+		Adapter:        "claude-code",
+		State:          session.StateWorking,
+		PID:            pid,
+		TranscriptPath: "/tmp/parent.jsonl",
+		FirstSeen:      now - 100,
+		UpdatedAt:      now,
+	}
+	repo.states["child"] = &session.SessionState{
+		SessionID:       "child",
+		Adapter:         "claude-code",
+		State:           session.StateWorking,
+		PID:             pid, // subagents share the parent's PID
+		ParentSessionID: "parent",
+		TranscriptPath:  "/tmp/child.jsonl",
+		FirstSeen:       now, // later than the parent — would "win" if eligible
+		UpdatedAt:       now,
+	}
+
+	newPIDManagerForTest(repo).CheckPIDLiveness()
+
+	if repo.states["parent"] == nil {
+		t.Fatal("parent session should survive the periodic dedup sweep")
+	}
+	if repo.states["child"] == nil {
+		t.Fatal("a subagent sharing its parent's PID must survive the periodic dedup sweep — " +
+			"it is never a stale-duplicate victim (issue #1992)")
+	}
+}
