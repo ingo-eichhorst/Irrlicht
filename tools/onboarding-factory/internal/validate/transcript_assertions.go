@@ -18,6 +18,7 @@ import (
 // MaxCount is a pointer so a configured zero remains distinct from no maximum.
 type RecordAssertion struct {
 	Name          string                   `json:"name"`
+	KnownFailing  bool                     `json:"known_failing,omitempty"`
 	Where         map[string]any           `json:"where"`
 	Contains      map[string]string        `json:"contains,omitempty"`
 	MinCount      int                      `json:"min_count,omitempty"`
@@ -45,15 +46,30 @@ type FieldContainsAssertion struct {
 }
 
 type RecordAssertResult struct {
-	Name     string `json:"name"`
-	Expected string `json:"expected"`
-	Actual   string `json:"actual"`
-	OK       bool   `json:"ok"`
+	Name         string `json:"name"`
+	Expected     string `json:"expected"`
+	Actual       string `json:"actual"`
+	OK           bool   `json:"ok"`
+	KnownFailing bool   `json:"known_failing,omitempty"`
 }
 
 type RecordReport struct {
 	Pass    bool                 `json:"pass"`
 	Asserts []RecordAssertResult `json:"asserts"`
+}
+
+// ExpectedPass reports whether every failure is explicitly expected on its
+// own assertion. One known defect cannot waive a different assertion.
+func (r *RecordReport) ExpectedPass() bool {
+	if r == nil {
+		return true
+	}
+	for _, assertion := range r.Asserts {
+		if !assertion.OK && !assertion.KnownFailing {
+			return false
+		}
+	}
+	return true
 }
 
 // ValidateTranscriptForProfile checks the newest recording's durable
@@ -231,7 +247,10 @@ func evaluateRecordAssertion(assertion RecordAssertion, records []map[string]any
 	if name == "" {
 		name = "records"
 	}
-	return RecordAssertResult{Name: name, Expected: expected, Actual: details, OK: ok}
+	return RecordAssertResult{
+		Name: name, Expected: expected, Actual: details, OK: ok,
+		KnownFailing: assertion.KnownFailing,
+	}
 }
 
 func selectRecords(records []map[string]any, where map[string]any, contains map[string]string) []map[string]any {

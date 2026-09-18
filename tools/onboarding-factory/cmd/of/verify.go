@@ -103,9 +103,9 @@ func verifyCell(request verifyRequest, cellDir string, stdout, stderr io.Writer)
 	stateOK := state == nil || state.Pass || state.Meta.KnownFailing
 	obsOK := obs == nil || obs.Pass
 	transcriptOK := transcript == nil || transcript.Pass
-	// Event assertions can describe the same known daemon defect as a failing
-	// lifecycle phase. Transcript evidence remains independent and must pass.
-	eventsOK := events == nil || events.Pass || state != nil && state.Meta.KnownFailing
+	// An event assertion can waive only its own known defect. Other event and
+	// transcript regressions must still fail a known-failing lifecycle cell.
+	eventsOK := events.ExpectedPass()
 
 	if request.JSON {
 		_ = writeJSON(stdout, map[string]any{
@@ -162,16 +162,15 @@ func printVerifyText(stdout io.Writer, agent, scenario string, state *validate.E
 		printRecordReport(stdout, "transcript", transcript, false)
 	}
 	if events != nil {
-		knownFailing := state != nil && state.Meta.KnownFailing
-		printRecordReport(stdout, "events", events, knownFailing)
+		printRecordReport(stdout, "events", events, events.ExpectedPass())
 	}
 }
 
-func printRecordReport(stdout io.Writer, label string, report *validate.RecordReport, knownFailing bool) {
+func printRecordReport(stdout io.Writer, label string, report *validate.RecordReport, expectedPass bool) {
 	verdict := "PASS"
 	if !report.Pass {
 		verdict = "FAIL"
-		if knownFailing {
+		if expectedPass {
 			verdict = "known_failing"
 		}
 	}
@@ -180,6 +179,9 @@ func printRecordReport(stdout io.Writer, label string, report *validate.RecordRe
 		mark := "✓"
 		if !assertion.OK {
 			mark = "✗"
+			if assertion.KnownFailing {
+				mark = "~"
+			}
 		}
 		fmt.Fprintf(stdout, "    %s %s: want %s; got %s\n", mark, assertion.Name, assertion.Expected, assertion.Actual)
 	}

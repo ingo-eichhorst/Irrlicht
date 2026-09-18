@@ -197,10 +197,13 @@ func TestEventAssertionsRequireOwnedPaths(t *testing.T) {
 	name := "2026-09-18-00-00-00_x"
 	mkGoldenRec(t, dir, name, `{}`)
 	writeExpected(t, dir, `{"schema_version":1,"scenario_id":"s","event_assertions":[`+
-		`{"name":"transcript paths belong to their sessions","where":{"kind":"transcript_removed"},"min_count":2,`+
+		`{"name":"distinct PID bindings","where":{"kind":"pid_discovered"},"min_count":2,"min_distinct":{"pid":2}},`+
+		`{"name":"transcript paths belong to their sessions","known_failing":true,"where":{"kind":"transcript_removed"},"min_count":2,`+
 		`"field_contains":[{"value_path":"session_id","container_path":"transcript_path"}]}]}`)
 	recDir := filepath.Join(dir, "recordings", name)
 	good := "" +
+		`{"kind":"pid_discovered","session_id":"session-1","pid":101}` + "\n" +
+		`{"kind":"pid_discovered","session_id":"session-2","pid":202}` + "\n" +
 		`{"kind":"transcript_removed","session_id":"session-1","transcript_path":"/sessions/session-1/transcript.jsonl"}` + "\n" +
 		`{"kind":"transcript_removed","session_id":"session-2","transcript_path":"/sessions/session-2/transcript.jsonl"}` + "\n"
 	if err := os.WriteFile(filepath.Join(recDir, "events.jsonl"), []byte(good), 0o644); err != nil {
@@ -216,8 +219,17 @@ func TestEventAssertionsRequireOwnedPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	report, err = ValidateEventsForProfile(dir, matrix.ProfileCLILocal)
-	if err != nil || report == nil || report.Pass {
+	if err != nil || report == nil || report.Pass || !report.ExpectedPass() {
 		t.Fatalf("crossed event path must fail: report=%+v err=%v", report, err)
+	}
+
+	badPID := strings.Replace(bad, `"pid":202`, `"pid":101`, 1)
+	if err := os.WriteFile(filepath.Join(recDir, "events.jsonl"), []byte(badPID), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report, err = ValidateEventsForProfile(dir, matrix.ProfileCLILocal)
+	if err != nil || report == nil || report.ExpectedPass() {
+		t.Fatalf("unrelated PID regression must not inherit the path waiver: report=%+v err=%v", report, err)
 	}
 }
 
@@ -253,7 +265,7 @@ func TestCommittedRecordAssertions(t *testing.T) {
 			report, err := ValidateEventsForProfile(scenarioDir, matrix.ProfileCLILocal)
 			if err != nil {
 				t.Errorf("%s: %v", expectedPath, err)
-			} else if report == nil || !report.Pass && !meta.KnownFailing {
+			} else if report == nil || !report.ExpectedPass() {
 				t.Errorf("%s: event assertions failed: %+v", expectedPath, report)
 			}
 		}

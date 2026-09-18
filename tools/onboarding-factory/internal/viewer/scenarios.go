@@ -414,7 +414,20 @@ func extractToolCalls(transcriptPath string) []ToolCall {
 	}); err != nil {
 		return nil
 	}
+	sort.SliceStable(out, func(i, j int) bool {
+		left, leftOK := parseToolCallTime(out[i].Ts)
+		right, rightOK := parseToolCallTime(out[j].Ts)
+		if leftOK != rightOK {
+			return leftOK
+		}
+		return leftOK && left.Before(right)
+	})
 	return out
+}
+
+func parseToolCallTime(value string) (time.Time, bool) {
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	return parsed, err == nil
 }
 
 // toolCallsInLine extracts the tool_use blocks from one transcript.jsonl

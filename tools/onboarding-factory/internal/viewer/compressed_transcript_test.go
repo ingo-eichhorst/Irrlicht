@@ -37,6 +37,25 @@ func TestExtractToolCalls_readsCompressedDSHRecords(t *testing.T) {
 	}
 }
 
+func TestExtractToolCalls_sortsConcatenatedSessionsByTime(t *testing.T) {
+	path := writeCompressedTranscript(t, t.TempDir(), ""+
+		`{"type":"session","id":"session-1","createdAt":1000}`+"\n"+
+		`{"type":"tool/call","time":5000,"data":{"callId":"late","name":"bash"}}`+"\n"+
+		`{"type":"session","id":"session-2","createdAt":2000}`+"\n"+
+		`{"type":"tool/call","time":3000,"data":{"callId":"early","name":"read"}}`+"\n")
+
+	got := extractToolCalls(path)
+	if len(got) != 2 {
+		t.Fatalf("extractToolCalls() returned %d calls, want 2: %#v", len(got), got)
+	}
+	if got[0].ID != "early" || got[0].SessionID != "session-2" {
+		t.Errorf("first tool call = %#v; want the earlier session-2 call", got[0])
+	}
+	if got[1].ID != "late" || got[1].SessionID != "session-1" {
+		t.Errorf("second tool call = %#v; want the later session-1 call", got[1])
+	}
+}
+
 func TestNewMetricsEnricher_usesCompressedTranscript(t *testing.T) {
 	dir := t.TempDir()
 	path := writeCompressedTranscript(t, dir, "{}\n")
