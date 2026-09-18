@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 
+	internalreplay "irrlicht/tools/onboarding-factory/internal/replay"
 	"irrlicht/tools/onboarding-factory/internal/shard"
 	"irrlicht/tools/onboarding-factory/internal/validate"
 )
@@ -447,7 +448,7 @@ func runAgentUpdate(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "of agent update: --id is required")
 		return exitUsage
 	}
-	if flagPassed(fs, "transcript-extension") && !validTranscriptExtension(*transcriptExt) {
+	if flagPassed(fs, "transcript-extension") && (*transcriptExt == "" || !validTranscriptExtension(*transcriptExt)) {
 		fmt.Fprintf(stderr, "of agent update: transcript extension %q is invalid\n", *transcriptExt)
 		return exitFail
 	}
@@ -599,12 +600,12 @@ func validTranscriptExtension(ext string) bool {
 	if ext == "" {
 		return true
 	}
-	for _, part := range strings.Split(ext, ".") {
-		if part == "" || !nameRe.MatchString(part) {
-			return false
+	for _, name := range internalreplay.TranscriptNames {
+		if strings.TrimPrefix(name, "transcript.") == ext {
+			return true
 		}
 	}
-	return true
+	return false
 }
 
 // --- of cell write|spec ---

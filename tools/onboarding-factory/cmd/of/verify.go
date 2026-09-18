@@ -159,25 +159,29 @@ func printVerifyText(stdout io.Writer, agent, scenario string, state *validate.E
 		}
 	}
 	if transcript != nil {
-		printRecordReport(stdout, "transcript", transcript, false)
+		printRecordReport(stdout, "transcript", transcript, transcript.Pass)
 	}
 	if events != nil {
 		printRecordReport(stdout, "events", events, events.ExpectedPass())
 	}
 }
 
-func printRecordReport(stdout io.Writer, label string, report *validate.RecordReport, expectedPass bool) {
+func printRecordReport(stdout io.Writer, label string, report *validate.RecordReport, accepted bool) {
 	verdict := "PASS"
-	if !report.Pass {
+	if report.Pass && !accepted {
+		verdict = "UNEXPECTED PASS"
+	} else if !report.Pass {
 		verdict = "FAIL"
-		if expectedPass {
+		if accepted {
 			verdict = "known_failing"
 		}
 	}
 	fmt.Fprintf(stdout, "  %-12s %s — %d assert(s)\n", label+":", verdict, len(report.Asserts))
 	for _, assertion := range report.Asserts {
 		mark := "✓"
-		if !assertion.OK {
+		if assertion.OK && assertion.KnownFailing {
+			mark = "!"
+		} else if !assertion.OK {
 			mark = "✗"
 			if assertion.KnownFailing {
 				mark = "~"

@@ -210,8 +210,8 @@ func TestEventAssertionsRequireOwnedPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	report, err := ValidateEventsForProfile(dir, matrix.ProfileCLILocal)
-	if err != nil || report == nil || !report.Pass {
-		t.Fatalf("owned event paths must pass: report=%+v err=%v", report, err)
+	if err != nil || report == nil || !report.Pass || report.ExpectedPass() {
+		t.Fatalf("an unexpectedly passing known failure must fail verification: report=%+v err=%v", report, err)
 	}
 
 	bad := strings.Replace(good, `/sessions/session-2/transcript.jsonl`, `/sessions/session-1/transcript.jsonl`, 1)

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"irrlicht/tools/onboarding-factory/internal/validate"
 )
 
 func TestScenarioAddThenValidate(t *testing.T) {
@@ -116,6 +118,33 @@ func TestAgentAddRejectsUnsafeTranscriptExtension(t *testing.T) {
 	}
 	if strings.Contains(string(b), `"unsafe"`) {
 		t.Fatal("rejected transcript extension mutated the catalog")
+	}
+}
+
+func TestAgentTranscriptExtensionMustBeSupported(t *testing.T) {
+	root := validRepo(t)
+	if code, _, errs := runOf("agent", "add", "--id", "typo", "--name", "Typo", "--provider", "acme",
+		"--transcript-extension", "jsonl.zst", "--repo-root", root); code != exitFail {
+		t.Fatalf("unsupported transcript extension must fail: code=%d stderr=%s", code, errs)
+	}
+
+	if code, _, errs := runOf("agent", "update", "--id", "claudecode",
+		"--transcript-extension", "", "--repo-root", root); code != exitFail {
+		t.Fatalf("empty transcript extension update must fail: code=%d stderr=%s", code, errs)
+	}
+}
+
+func TestPrintRecordReportShowsUnexpectedKnownFailurePass(t *testing.T) {
+	report := &validate.RecordReport{
+		Pass: true,
+		Asserts: []validate.RecordAssertResult{{
+			Name: "known defect", OK: true, KnownFailing: true,
+		}},
+	}
+	var out strings.Builder
+	printRecordReport(&out, "events", report, report.ExpectedPass())
+	if got := out.String(); !strings.Contains(got, "UNEXPECTED PASS") || !strings.Contains(got, "! known defect") {
+		t.Fatalf("unexpected pass must be distinct in text output:\n%s", got)
 	}
 }
 

@@ -58,14 +58,15 @@ type RecordReport struct {
 	Asserts []RecordAssertResult `json:"asserts"`
 }
 
-// ExpectedPass reports whether every failure is explicitly expected on its
-// own assertion. One known defect cannot waive a different assertion.
+// ExpectedPass reports whether each assertion has its declared result.
+// A known failure must fail. This makes a stale waiver visible when its defect
+// closes, and one known defect cannot waive a different assertion.
 func (r *RecordReport) ExpectedPass() bool {
 	if r == nil {
 		return true
 	}
 	for _, assertion := range r.Asserts {
-		if !assertion.OK && !assertion.KnownFailing {
+		if assertion.OK == assertion.KnownFailing {
 			return false
 		}
 	}
