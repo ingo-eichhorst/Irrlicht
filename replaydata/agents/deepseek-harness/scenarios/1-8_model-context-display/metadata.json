@@ -1,0 +1,119 @@
+{
+  "scenario_id": "model-context-display",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+acee6e8",
+    "confidence": 0.85,
+    "notes": "A real DSH v3 turn produces model, token, and direct context-window fields; the live tailer computes a non-zero 3.01% context utilization."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "model-context-display",
+      "agent": "deepseek-harness",
+      "assessed_at": "2026-09-18T12:46:47Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## What this cell asserts\n\nAfter one trivial DSH turn, the dashboard must show a non-unknown model, a positive context window, and positive context utilization. The session must follow `ready -> working -> ready` and finish ready.\n\n## Agent support\n\nDeepSeek Harness 0.1.5-rc.2 persists every input required by this scenario. A real successful v3 transcript contains `request/context.data.model = qwen/qwen3.5-9b` and `request/context.data.contextWindow = 262144`. Its first assistant record repeats model `qwen/qwen3.5-9b` and reports 7872 input tokens, 26 output tokens, and 7898 total tokens. The turn then ends with `reason.kind = completed`. The local Qwen model config independently declares `text_config.max_position_embeddings = 262144`. DSH therefore records an agent model label, a positive model window, and a positive token numerator after the first turn.\n\nThe interactive driver supplies these values through a per-run DSH patch. It selects provider `lmstudio`, model `qwen/qwen3.5-9b`, and `contextWindow = 262144`, then launches `dsh --profile tui --patch <patch>`. The measured durable record proves that DSH applied the patch.\n\n## Daemon capability\n\nThe DSH adapter tails `session.vN.jsonl.zstd` through `FilesUnderRoot`. `parseRequestContext` maps the durable model directly into `ParsedEvent.ModelName` and the durable `contextWindow` integer into `ParsedEvent.ContextWindow`. `parseAssistantMessage` independently maps the assistant source model and its usage snapshot. `TranscriptTailer.applyModelMetadata` keeps the positive context value as its override. `ComputeContextUtilization` gives that direct override precedence over the capacity table and computes `totalTokens / contextWindow * 100`.\n\nA one-shot tailer probe over the real transcript produced `model=\"qwen/qwen3.5-9b\" total=7898 window=262144 utilization=3.012847900 unknown=false last=\"turn_done\"`. This directly proves all three live metric assertions. The existing compressed-transcript end-to-end test also asserts model `qwen/qwen3.5-9b`, total tokens, context window `262144`, `ContextWindowUnknown == false`, and terminal `turn_done`. The daemon can therefore show the complete live model/context vector without a capacity-table lookup.\n\n## Offline replay assertion limit\n\nThe live daemon is complete, but the factory's replay-golden summary is narrower. `finalizeSummary` always exports model and cumulative tokens. It exports `TotalTokens`, `ContextWindow`, and `ContextUtilization` only when the adapter is antigravity. Replaying the measured DSH transcript confirms the split: the golden-style summary contains model `qwen/qwen3.5-9b` and cumulative tokens 7872/26, but omits context window and utilization even though the underlying tailer metrics contain both. `of verify` reads only that summary for observation assertions.\n\nThis cell must therefore omit `context_window_nonzero` and `context_utilization_nonzero`. Setting either would report a false failure against a correct live daemon. The recipe instead requires a live post-turn check for window `262144`, utilization greater than zero, and `ContextWindowUnknown == false`. This limitation belongs to the offline factory export. It does not change the daemon verdict.\n\n## Driver capability\n\nThe recipe needs `send`, `wait_turn`, and `sleep`. The DSH driver declares and implements each step. It uses a fresh cwd and a pre-launch marker to select the new transcript. `wait_turn` polls the durable transcript for a completed `turn/end`. The recipe uses a 20-second trailing sleep, matching the longest sibling recipe for this scenario. It uses a 300-second timeout because the measured local qwen turn took 157.8 seconds from request header to assistant message.\n\n## Result\n\nThe cell is recordable. The recorder must re-probe the LM Studio endpoint and loaded model, then inspect the live metric vector because the replay golden cannot carry the context fields for DSH today.",
+      "caveats": [
+        "Vacuous-pass check: expected.jsonl would still pass if DSH context-window propagation alone regressed, because the replay summary omits context_window and context_utilization for transcript adapters. The live post-turn metric check and the compressed-transcript end-to-end parser test are load-bearing. Do not add context_window_nonzero or context_utilization_nonzero until replay exports these fields for DSH.",
+        "Load-bearing environment precondition: LM Studio must answer at http://127.0.0.1:1234/v1 and expose qwen/qwen3.5-9b. Re-probe this at record time. A different model would invalidate the exact model assertion and could change the declared context window.",
+        "The dashboard reflects DSH's transcript-declared model capacity of 262144. At assessment time, LM Studio reported the model's maxContextLength as 262144 but its current local allocation as contextLength 4096. This does not violate the scenario's non-zero acceptance criteria, but the two values must not be described as the same runtime limit.",
+        "Load-bearing isolation precondition: the driver must retain its fresh per-run cwd and pre-launch marker. Otherwise an unrelated DSH transcript could satisfy the lifecycle and model observations.",
+        "The measured local turn took 157.8 seconds. This recipe uses 300 seconds because a 120-180 second budget does not provide safe headroom."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/sessions/--private-tmp-irr-dsh-driver.h1tx6P-cwd--/session-a5902de2-44ac-4a40-8554-fdab37534705/session.v3.jsonl.zstd",
+          "note": "Real DSH 0.1.5-rc.2 v3 transcript: request/context carries qwen/qwen3.5-9b and contextWindow 262144; assistant/message carries 7898 total tokens; turn/end is completed."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.lmstudio/models/lmstudio-community/Qwen3.5-9B-MLX-4bit/config.json",
+          "note": "Local model metadata identifies model_type qwen3_5 and text_config.max_position_embeddings 262144."
+        },
+        {
+          "kind": "command",
+          "ref": "one-shot tailer.NewTranscriptTailer probe over the measured DSH transcript",
+          "note": "Produced model=qwen/qwen3.5-9b, TotalTokens=7898, ContextWindow=262144, ContextUtilization=3.012847900, ContextWindowUnknown=false, LastEventType=turn_done."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser.go",
+          "note": "parseRequestContext maps data.model and data.contextWindow directly; parseAssistantMessage maps source.model and the usage snapshot; completed turn/end maps to turn_done."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser_test.go",
+          "note": "TestParserMapsMeasuredRequestContext and TestZstdTranscriptEndToEnd assert the direct model/window fields, token totals, ContextWindowUnknown false, and terminal lifecycle through compressed input."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_metrics.go",
+          "note": "applyModelMetadata retains the adapter context-window override. ComputeContextUtilization gives the override precedence and computes positive utilization from TotalTokens."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/cmd/replay/metrics.go and tools/onboarding-factory/internal/validate/observations.go",
+          "note": "The replay summary and observation verifier export context fields only for antigravity. DSH golden replay therefore exposes model and cumulative tokens but not its correct live context vector."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "Creates the per-run model/context patch, isolates transcript discovery by marker and cwd, and implements send, wait_turn, and sleep."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "dsh >=0.1.5-rc.2 is installed and on PATH",
+        "the community TUI profile is installed under ~/.dsh/profiles/tui",
+        "re-probe at record time that LM Studio answers at http://127.0.0.1:1234/v1 and exposes qwen/qwen3.5-9b",
+        "tmux and zstd are installed",
+        "irrlichd is recording the deepseek-harness adapter"
+      ],
+      "setup": [
+        "The interactive driver creates a fresh cwd and a pre-launch transcript marker.",
+        "The driver applies a temporary patch for LM Studio, qwen/qwen3.5-9b, and context window 262144 without modifying the installed profile.",
+        "The recorder must inspect the live post-turn metrics because the DSH replay golden omits context window and utilization."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the number: 42"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 20
+        }
+      ],
+      "verify": [
+        "the same DSH session follows ready -> working -> ready and ends ready",
+        "after turn_done, live metrics.model_name is qwen/qwen3.5-9b and is not unknown",
+        "after turn_done, live metrics.context_window is 262144 and ContextWindowUnknown is false",
+        "after turn_done, live metrics.context_utilization_percentage is greater than zero",
+        "the replay golden reports model qwen/qwen3.5-9b and non-zero cumulative tokens",
+        "the durable transcript contains no tool/call record for the exact-number prompt"
+      ],
+      "settings": {
+        "model": "qwen/qwen3.5-9b",
+        "base_url": "http://127.0.0.1:1234/v1",
+        "context_window": 262144,
+        "permission_mode": "danger-full-access",
+        "api_key": "irrlicht-local-recording"
+      },
+      "timeout_seconds": 300,
+      "scope_note": "Uses the scenario's longest sibling settle delay, 20 seconds. Uses a 300-second timeout because the measured local qwen turn took 157.8 seconds."
+    }
+  }
+}
