@@ -1,0 +1,136 @@
+{
+  "scenario_id": "turn-aborted-by-error",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+83c3052",
+    "confidence": 0.85,
+    "notes": "DeepSeek Harness writes a durable error turn boundary for failed model calls, and the DSH adapter maps that boundary to a sticky terminal session error."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "turn-aborted-by-error",
+      "agent": "deepseek-harness",
+      "assessed_at": "2026-09-18T13:15:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\nDeepSeek Harness 0.1.5-rc.2 has an explicit failed-turn outcome. The installed `dsh-agent-loop` catches every non-cancellation error from a model step, converts an `LlmError` to its structured failure, and appends `turn/end` from a `finally` block with `reason.kind=error`. This is the agent's durable failure boundary, not an inference from a completed turn. A measured local v3 transcript confirms the emitted shape for a real failed LM Studio request: `turn/start`, `request/context` naming `qwen/qwen3.5-9b`, an assistant attempt ending with `PI_AI_ERROR`, then `turn/end` with `reason.kind=error`, the same code, and the error message. A second measured failure carries `MISSING_CREDENTIAL`. The TUI renderer also has a dedicated red error branch for this record.\n\nThe DSH adapter handles that exact durable record. `parseTurnEnd` always emits `turn_done`; when `reason.kind` is `error`, it also creates a terminal `SessionError`, lowercases the agent error code, and preserves the message. `TestParserMapsTerminalError` uses the timestamp and shape from the measured `MISSING_CREDENTIAL` record. The tailer records an error after applying any turn-boundary clear, so an event that contains both the failed boundary and the error remains failed. Terminal errors are not cleared by their own turn boundary. The classifier's `session_error` rule routes the session to `error`, and `classifyAgentDone` independently returns `error` if a turn boundary and error reach the same classification path. The daemon therefore resolves the failed turn immediately and does not leave it in `working`.\n\nThis DSH-specific final state differs from the scenario's older generic `ready -> working -> ready` wording. Returning this session to `ready` would hide a structured terminal failure that DSH explicitly persisted. The current four-state daemon contract uses `error` for that signal and clears it only when the user starts a later turn. The expected spec therefore asserts `ready -> working -> error` and a 10-second error hold. The committed muse cell for this scenario uses the same evidence-based deviation for an agent that also emits a structured terminal failure.\n\nThe driver implements `send`, `wait_turn`, and `sleep`. Its `wait_turn` counts every durable `turn/end`, including an error boundary. Its temporary provider patch already exposes `base_url` and `api_key`, so the recipe can point the validly-authenticated OpenAI-compatible route at an unused loopback port. That produces a provider connection failure without changing the installed profile or consuming model tokens. The 300-second budget follows the other DSH model-turn cells and exceeds the measured 2m38s local Qwen turn if the trigger is accidentally bypassed. The 15-second post-boundary hold matches the longest ordinary sibling settle window; Hermes' 120-second sleep is specific to its four-continuation trigger and does not transfer because DSH's configured route has no retry policy.\n\nThe model is pinned because `request/context` is written before the failure and the recipe selects `qwen/qwen3.5-9b`. Cost and tokens are expected to remain zero because the connection fails before an assistant completion or usage record is produced.",
+      "caveats": [
+        "Vacuous-pass check: the lifecycle spec could pass on a different terminal failure before DSH reaches the dead endpoint, such as a missing credential or malformed provider profile. The recipe therefore supplies a non-empty mock API key, requires the selected loopback port to have no listener, and requires recording review to confirm the durable error message names a connection or transport failure.",
+        "Load-bearing environment precondition: no process may listen on 127.0.0.1:18804 during the recording. Re-probe the port immediately before record; do not trust this assessment-time state.",
+        "The exact measured DSH failure records are credential failures, not connection refusals. The installed agent-loop source proves that all non-cancellation model errors use the same `turn/end` error boundary, but the connection-refused wording and code remain provisional until record confirms them.",
+        "The scenario text says no normal turn-end signal is emitted. DSH emits an abnormal `turn/end` whose reason is explicitly `error`; the adapter must not collapse this into a successful ready state.",
+        "A very fast connection refusal can place `turn/start` and `turn/end` close together. The DSH writer appends the start before making the request, and the daemon's first activity edge is immediate, but the live recording must confirm that the user-visible working phase is not coalesced away.",
+        "The model observation is expected from `request/context`, which precedes both measured failures. Tokens and cost are asserted zero for the failed turn. If the installed TUI issues an unrelated title-model request that produces usage, record must correct only those observation fields and keep the failure arc unchanged.",
+        "The driver uses a fresh per-run cwd and pre-launch marker. Without that isolation, another DSH transcript could satisfy the state phases and the cell would prove nothing about the driven session."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/sessions/--Users-ingo-.claude-jobs-d11ee86d-tmp-dsh-probe--/session-58f848ac-46e5-4e5e-ac60-a5ad6fa34933/session.v3.jsonl.zstd",
+          "note": "Measured failed LM Studio turn: turn/start; request/context for qwen/qwen3.5-9b; assistant attempt finish.kind=error with PI_AI_ERROR; step/end; then turn/end reason.kind=error with the same failure. No normal assistant completion exists."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/sessions/--Users-ingo-.claude-jobs-d11ee86d-tmp-dsh-probe--/session-34bbac88-ecbc-486c-a729-6bfad9130ddf/session.v3.jsonl.zstd",
+          "note": "Second measured failed turn with MISSING_CREDENTIAL. Its turn/end timestamp and payload are the source shape pinned by the adapter test."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/profiles/node_modules/@deepseek-ai/dsh-agent-loop/lib/index.js",
+          "note": "Installed 0.1.5-rc.2 runtime: the turn loop catches every non-aborted error, records an LlmError failure as reason.kind=error, and appends turn/end in finally."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/profiles/node_modules/@tomowang/dsh-tui/lib/render.js",
+          "note": "The installed TUI has a dedicated turn/end reason.kind=error rendering branch, confirming this is a first-class failed-turn outcome."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser.go",
+          "note": "parseTurnEnd maps error boundaries to turn_done plus a terminal SessionError whose class and message come from the durable DSH failure."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser_test.go",
+          "note": "TestParserMapsTerminalError pins the measured MISSING_CREDENTIAL shape; compressed end-to-end coverage exercises the v3 source."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_metrics.go",
+          "note": "applySessionError clears before recording a same-event failure, so turn_done plus terminal error remains sticky; only a later recovery turn clears it."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/parser.go",
+          "note": "SessionError.ClearedByTurnBoundary excludes terminal failures because the boundary is the failed turn's own epilogue."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "The session_error rule and classifyAgentDone both route a standing SessionError to the canonical error state."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "Implements send, wait_turn, and sleep; applies base_url/api_key through a temporary patch; wait_turn delegates to the durable turn counter."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/turn-count.sh",
+          "note": "Counts all durable turn/end records, so an error boundary releases wait_turn without confusing it with a successful completion."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "dsh >=0.1.5-rc.2 is installed and on PATH",
+        "the community TUI profile is installed under ~/.dsh/profiles/tui",
+        "127.0.0.1:18804 has no listener immediately before recording; re-probe it at record time",
+        "tmux and zstd are installed",
+        "irrlichd is recording the deepseek-harness adapter"
+      ],
+      "setup": [
+        "The interactive driver creates a fresh cwd under the staging directory and launches `dsh --profile tui` in tmux.",
+        "The driver applies a temporary patch that selects the OpenAI-compatible LM Studio route and qwen/qwen3.5-9b without modifying the installed TUI profile.",
+        "The patch supplies a non-empty recording-only API key but points base_url at the deliberately unused loopback port 18804, so the model request fails at transport time.",
+        "The driver resolves the post-marker compressed transcript by header cwd and waits for the durable error turn/end count."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 15
+        }
+      ],
+      "verify": [
+        "the post-marker DSH session is born in ready and binds its session.lock writer PID",
+        "the user prompt moves the same session to working",
+        "the durable transcript contains turn/end with reason.kind=error and a connection or transport failure message after the real user message",
+        "the same session transitions from working to error and remains there for at least 10 seconds without entering waiting or returning to ready",
+        "the replay summary reports model qwen/qwen3.5-9b with zero cumulative tokens and cost for the failed request"
+      ],
+      "settings": {
+        "model": "qwen/qwen3.5-9b",
+        "base_url": "http://127.0.0.1:18804/v1",
+        "context_window": 262144,
+        "permission_mode": "danger-full-access",
+        "api_key": "irrlicht-local-recording"
+      },
+      "timeout_seconds": 300,
+      "scope_note": "Uses a 15-second post-error window, matching the longest ordinary sibling settle delay. Hermes' 120-second sleep covers its agent-specific continuation ladder and does not apply because this DSH provider profile has no retry policy."
+    }
+  }
+}
