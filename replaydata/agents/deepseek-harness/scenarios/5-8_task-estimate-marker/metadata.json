@@ -1,0 +1,177 @@
+{
+  "scenario_id": "task-estimate-marker",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "gap:seed_instruction",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+bf97ac6",
+    "confidence": 0.84,
+    "notes": "DeepSeek Harness loads project AGENTS.md instructions and stores full assistant text; the DSH parser scans that text for task estimates, but the driver lacks the required pre-launch seed_instruction step."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "task-estimate-marker",
+      "agent": "deepseek-harness",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "gap:seed_instruction",
+      "confidence": 0.84,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: gap:seed_instruction\n\n## Reasoning\n\nDeepSeek Harness 0.1.5-rc.2 explicitly supports the required persistent instruction surface. Its installed `@deepseek-ai/dsh-agent-instructions` package states that `dsh-base` enables workspace instructions by default, loads project `AGENTS.md` and `CLAUDE.md` candidates on the first request, and injects each message into the model verbatim. The active TUI profile composes `dsh-base` and includes the `agent-instructions` plugin with a 65,536-byte budget. This is direct evidence that a fenced marker rule in the run cwd's `AGENTS.md` reaches the model. Actual repeated marker emission remains model-discretion and must be settled by the recording.\n\nThe DSH adapter has the complete daemon path. `parseAssistantMessage` joins every assistant text block into full text and calls `tailer.ScanTaskEstimate` before display truncation. The shared scanner selects the most recent valid `irrlicht-eta` HTML comment and stamps it with the durable event time. The tailer retains the first and latest estimates. The metrics adapter converts the estimate to the domain form and calls `ForecastTaskCompletion`; the web client suppresses the ETA presentation outside `working`. DSH `turn/start` and completed `turn/end` records also produce the required single-session ready-to-working-to-ready lifecycle. No spec-required signal lacks a producing path, so daemon capability is full.\n\nThe recipe requires a `seed_instruction` step because the scenario requires a persistent instruction-file rule. The current DeepSeek Harness driver declares and dispatches send, slash, wait_turn, sleep, interrupt, keys, reset_session, restart, resume, sigkill, exit_clean, start_session, and session, but not `seed_instruction`. It also boots the first TUI slot before entering its script loop. Record must therefore port a pre-launch seed pass that writes the recipe's `AGENTS.md` under `$RUN_CWD` before `boot_slot`. This is a driver tooling gap, not an observability limit.\n\nThe recipe uses five driven turns. The seeded rule is the only place that contains the marker format. Turn zero reports 0/4 without doing a phase. Four later turns complete one phase each and reach 4/4. A 12-second delay follows each intermediate turn and a 30-second final delay matches the conservative sibling timing for this scenario. The model and endpoint are pinned by the existing driver settings, and the live `/v1/models` probe on 2026-09-19 confirmed `qwen/qwen3.5-9b` is available.",
+      "caveats": [
+        "Vacuous-pass condition: the cell would not prove that the seeded project rule loaded if another applicable $DSH_HOME/AGENTS.md, ancestor AGENTS.md/CLAUDE.md, or a prompt already supplied the marker format. At record time, confirm that the seeded $RUN_CWD/AGENTS.md is the only applicable instruction file containing irrlicht-eta. The recipe prompts intentionally omit the marker syntax, and transcript assertions require exact 0/4 through 4/4 comments.",
+        "Repeated emission is model-discretion. The package contract proves that the instruction reaches the model and the durable transcript preserves assistant messages, but only a live recording can confirm that qwen/qwen3.5-9b emits the exact marker on every driven turn.",
+        "The driver gap must be implemented as a pre-launch pass. Handling seed_instruction only inside the current dispatch loop is too late because boot_slot runs before that loop and the instruction plugin loads the baseline on the first request.",
+        "LM Studio at http://127.0.0.1:1234/v1 with qwen/qwen3.5-9b loaded is load-bearing. The exact model and non-zero token observations depend on this endpoint. The local route has no required non-zero cost.",
+        "State-only phases would prove only lifecycle. The transcript assertions are load-bearing because they require each exact parseable marker from completed_rounds 0 through 4. The recipe verify checks the derived estimate and ETA semantics that the lifecycle phase DSL cannot express."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-agent-instructions/README.md",
+          "note": "Official installed 0.1.5-rc.2 package reference: dsh-base enables the plugin, the first request loads the project AGENTS.md/CLAUDE.md chain, and injected messages reach the model verbatim."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-agent-instructions/package.json",
+          "note": "Identifies version 0.1.5-rc.2 and the official deepseek-ai/deepseek-harness source directory packages/context/agent-instructions."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser.go",
+          "note": "parseAssistantText scans the full joined assistant text with tailer.ScanTaskEstimate before TruncateAssistantText and maps turn boundaries, model, and token usage."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/taskestimate_scan.go",
+          "note": "Parses the latest valid irrlicht-eta HTML comment from full assistant text and stamps it with the event time."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/outbound/metrics/adapter.go",
+          "note": "Converts tailer task estimates to session metrics and computes task_completion_eta with ForecastTaskCompletion."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/task_estimate.go",
+          "note": "Defines TaskEstimate and the production completion forecast from observed progress."
+        },
+        {
+          "kind": "file",
+          "ref": "platforms/web/irrlicht.js",
+          "note": "The task ETA presentation gate suppresses the task estimate outside the working state."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "DRIVE_ELICITS and the dispatch switch omit seed_instruction; boot_slot executes before the script loop, so seeding must occur in a new pre-launch pass."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/scenarios/2-1_basic-turn/metadata.json",
+          "note": "Established DSH single-birth lifecycle, exact qwen/qwen3.5-9b driver setting, non-zero assistant usage, and local zero-cost observation precedent."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/5-8_task-estimate-marker/metadata.json",
+          "note": "Sibling recipe supplies the 12-second inter-turn and 30-second final settle timing for the same daemon observation windows."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "timeout_seconds": 600,
+      "settings": {
+        "model": "qwen/qwen3.5-9b",
+        "base_url": "http://127.0.0.1:1234/v1",
+        "context_window": 262144,
+        "permission_mode": "danger-full-access",
+        "api_key": "irrlicht-local-recording"
+      },
+      "preconditions": [
+        "dsh >=0.1.5-rc.2 is on PATH and the active TUI profile composes dsh-base with @deepseek-ai/dsh-agent-instructions enabled",
+        "LM Studio is serving qwen/qwen3.5-9b through http://127.0.0.1:1234/v1",
+        "tmux and zstd are installed, and irrlichd is recording the deepseek-harness adapter with transcript permission granted",
+        "Re-probe the applicable instruction chain at record time and confirm no $DSH_HOME/AGENTS.md, ancestor AGENTS.md/CLAUDE.md, or local overlay other than the seeded $RUN_CWD/AGENTS.md contains irrlicht-eta"
+      ],
+      "setup": [
+        "Port seed_instruction as a pre-launch driver pass: write the recipe text to $RUN_CWD/AGENTS.md before the initial boot_slot call, then remove that step from the normal dispatch stream.",
+        "Let the existing driver create a fresh cwd, apply its temporary LM Studio model patch, and resolve the new durable DSH transcript by marker and exact header cwd.",
+        "Do not add the marker format to any send prompt. The seeded project instruction must remain the only source of the format."
+      ],
+      "script": [
+        {
+          "type": "seed_instruction",
+          "path": "AGENTS.md",
+          "text": "# Project instructions\n\n## Task progress marker\n\nWhile you work on a multi-phase task, emit exactly one hidden progress marker in your own assistant reply text on every turn. Use this exact compact HTML-comment form:\n\n```\n<!-- {\"marker\":\"irrlicht-eta\",\"total_rounds\":N,\"completed_rounds\":M} -->\n```\n\nSet total_rounds to the planned number of phases. Before work starts, emit completed_rounds=0. Increase completed_rounds by exactly one after each phase. Keep total_rounds fixed. Emit completed_rounds=total_rounds after the final phase. Put the marker immediately before the final literal status token requested by the user."
+        },
+        {
+          "type": "send",
+          "text": "Plan a four-phase technical note about deterministic replay: outline, introduction, body, and conclusion. Do not perform any phase yet. Follow all project instructions. End with the literal token PHASE0."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        },
+        {
+          "type": "send",
+          "text": "Complete phase 1 only: write a short outline. Follow all project instructions. End with the literal token PHASE1."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        },
+        {
+          "type": "send",
+          "text": "Complete phase 2 only: write a short introduction. Follow all project instructions. End with the literal token PHASE2."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        },
+        {
+          "type": "send",
+          "text": "Complete phase 3 only: write the short body. Follow all project instructions. End with the literal token PHASE3."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        },
+        {
+          "type": "send",
+          "text": "Complete phase 4 only: write the short conclusion and finish the task. Follow all project instructions. End with the literal token DONE."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 30
+        }
+      ],
+      "verify": [
+        "The durable transcript has exactly one parseable irrlicht-eta marker for each progress value 0/4, 1/4, 2/4, 3/4, and 4/4; the marker format comes only from the seeded AGENTS.md.",
+        "While each marker turn is working, task_estimate.total_rounds is 4 and completed_rounds matches the latest marker; completed_rounds is non-decreasing and reaches 4.",
+        "task_estimate.updated_at advances for every fresher marker.",
+        "task_completion_eta is present after progress is measurable and a later projection is not later than an earlier projection.",
+        "The user-visible task estimate and ETA are present only while working and are suppressed after the final ready state.",
+        "The one DSH session follows ready -> working -> ready and finishes ready without a waiting transition.",
+        "The recording reports agent deepseek-harness, model qwen/qwen3.5-9b, non-zero tokens, and no required non-zero cost."
+      ],
+      "scope_note": "The 12-second inter-turn sleeps and 30-second final sleep match the conservative claudecode, gemini-cli, and mistral-vibe siblings. DSH has no resume, exit, or teardown landmark in this recipe."
+    }
+  }
+}
