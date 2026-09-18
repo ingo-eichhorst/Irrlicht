@@ -1,0 +1,1 @@
+{"notes":"FROZEN: DeepSeek Harness 0.1.5-rc.2 has no first-party cloud background-agent dispatch surface. No lifecycle phases are asserted because no remote PID-less session exists to drive or observe.","observations":{"agent":"deepseek-harness","model":"unknown","cost_nonzero":false,"tokens_nonzero":false},"scenario_id":"cloud-background-agent","schema_version":1}
