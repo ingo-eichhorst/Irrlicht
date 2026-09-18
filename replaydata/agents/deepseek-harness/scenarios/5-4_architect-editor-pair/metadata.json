@@ -1,0 +1,154 @@
+{
+  "scenario_id": "architect-editor-pair",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+3ba8bf4",
+    "confidence": 0.86,
+    "notes": "DeepSeek Harness plan mode provides the plan-review gate and approved same-turn continuation; the DSH transcript and parser can expose the complete mode-pair arc and cumulative model usage."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "architect-editor-pair",
+      "agent": "deepseek-harness",
+      "assessed_at": "2026-09-19T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.86,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\nThis cell uses instantiation (b): one model moves from a planning mode to an implementation mode across a user-approved gate. The required observable is one session with the full ready -> working -> waiting -> working -> ready arc, at least one implementation tool call, one consistent model, and token contributions from the planning and implementation model steps.\n\n## Agent support\n\nDeepSeek Harness 0.1.5-rc.2 ships first-party plan mode. `/plan` activates the mode, and the next normal user message starts a step under plan guidance. The `exit_plan_mode` tool presents the plan through the interactive user-question channel. The first review option is `Approve`. Approval returns `{approved:true}`, schedules plan mode to become inactive at the next accepted step, and tells the model to carry out the plan from that next step. The installed TUI profile composes both `@deepseek-ai/dsh-plan-mode` and `@deepseek-ai/dsh-user-questions`, and its question overlay starts on the first option. Thus the same open turn has an architect contribution before review and an editor contribution after approval.\n\n## Daemon capability\n\nThe DSH agent loop appends a durable `tool/call` before it dispatches a tool. While `exit_plan_mode` waits for the TUI answer, no matching `tool/result` exists. The DSH parser maps that open call to `ToolUses`, and irrlicht's canonical user-blocking table includes the exact `exit_plan_mode` spelling. The classifier therefore maps the session from working to waiting. Approval lets DSH append the successful tool result. The next assistant step and implementation tool call clear the blocking condition and provide new transcript activity, so the same session can return to working. The final completed `turn/end` maps to `turn_done` and lets the session settle in ready.\n\nEach DSH `assistant/message` carries its producing model and, when the provider reports it, its usage. `parseAssistantUsage` emits one `PerTurnContribution` per message. The shared tailer adds every contribution to the per-model accumulator. The plan response and the post-approval implementation response can therefore contribute to one cumulative token total while `ModelName` remains `qwen/qwen3.5-9b`. The local LM Studio route has zero estimated provider cost, so the observation vector asserts tokens but not non-zero cost.\n\n## Driver capability\n\nThe recipe needs `slash`, `send`, `sleep`, `keys`, and `wait_turn`. The DeepSeek Harness interactive driver implements all five. It enters plan mode with bare `/plan`, uses `send` for the task so the driver's transcript turn counter expects one completion, holds long enough for the local model to open the review, presses Enter to select the default first option (`Approve`), waits for the durable completed turn boundary, and leaves a 20-second settle window before teardown.\n\n## Non-vacuous proof\n\nThe state arc alone could pass if an unrelated blocking tool caused waiting and an ordinary tool turn later completed. The transcript assertions prevent that hollow pass. They require plan mode to activate and then deactivate, exactly one successful `exit_plan_mode` call, exactly one successful `bash` editor call for `architect-editor.txt`, no permission-approval record, at least two model-attributed assistant contributions, and one completed turn boundary.",
+      "caveats": [
+        "Vacuous-pass condition: an unrelated blocking tool could create the same lifecycle arc without a plan review or editor phase. The spec requires the exact plan-mode records, the successful exit_plan_mode call, and the successful marker-writing bash call.",
+        "The active TUI profile must compose @deepseek-ai/dsh-plan-mode and @deepseek-ai/dsh-user-questions. Re-run `dsh --profile tui --dump-config` at record time because either missing service makes the review unavailable.",
+        "LM Studio at http://127.0.0.1:1234/v1 with the tool-capable qwen/qwen3.5-9b model is a load-bearing recipe input. Re-probe the model list at record time.",
+        "The daemon verdict is provisional on emission timing. Source proves that DSH appends tool/call before dispatch and assistant/message records carry model and usage, but no measured local transcript yet contains an approved exit_plan_mode continuation. Recording must confirm that the compressed writer flushes the open call before approval and that both model steps carry usage.",
+        "Plan mode is guidance, not a hard tool filter. The prompt and transcript assertions forbid pre-approval mutation, and danger-full-access avoids a second permission gate during the editor step.",
+        "The local LM Studio route is expected to report zero estimated provider cost. Token usage must be non-zero."
+      ],
+      "sources": [
+        {
+          "kind": "url",
+          "ref": "https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/plan/plan-mode/README.md",
+          "note": "Official package reference: /plan enters plan mode; exit_plan_mode presents the plan for Approve or Keep planning; approval continues into execution."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-plan-mode/lib/index.js",
+          "note": "Installed 0.1.5-rc.2 implementation registers exit_plan_mode, orders Approve first, returns approved:true, and schedules mode exit for the next accepted step."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/profiles/tui/node_modules/@tomowang/dsh-tui/lib/tui/interaction/QuestionOverlay.js",
+          "note": "The installed TUI plan-review overlay starts with cursor 0 and submits the selected option on Enter."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-agent-loop/lib/index.js",
+          "note": "appendToolCall writes tool/call before prepare and dispatch; appendToolResult runs only after execution completes."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/agent.go",
+          "note": "The DSH source tails compressed v3 transcripts through FilesUnderRoot."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser.go",
+          "note": "The parser maps tool call/result records, turn boundaries, model identity, token snapshots, and per-message contributions."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_config.go",
+          "note": "The canonical user-blocking matcher includes the exact DSH tool spelling exit_plan_mode."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "An open user-blocking tool maps working to waiting; later activity and agent completion recover working and ready."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_metrics.go",
+          "note": "Each PerTurnContribution is added to the per-model cumulative token accumulator."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/scenarios/2-18_user-blocking-plan-mode-approval/metadata.json",
+          "note": "The assessed sibling establishes the same DSH plan-review entry path; this cell continues past approval into implementation."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "The driver implements slash, sleep, keys, and transcript-backed wait_turn and pins the local qwen recording surface."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "timeout_seconds": 720,
+      "settings": {
+        "model": "qwen/qwen3.5-9b",
+        "base_url": "http://127.0.0.1:1234/v1",
+        "context_window": 262144,
+        "permission_mode": "danger-full-access",
+        "api_key": "irrlicht-local-recording"
+      },
+      "preconditions": [
+        "dsh 0.1.5-rc.2 or newer is on PATH and the community TUI profile is installed under the active DSH home",
+        "the active TUI profile composes @deepseek-ai/dsh-plan-mode and @deepseek-ai/dsh-user-questions; re-probe with `dsh --profile tui --dump-config` at record time",
+        "LM Studio is serving the tool-capable qwen/qwen3.5-9b model through http://127.0.0.1:1234/v1; re-probe the live model list at record time",
+        "DSH_PERMISSION_MODE=danger-full-access maps to sandbox danger-full-access and approval policy never in the active profile",
+        "irrlichd is recording with DeepSeek Harness transcript permission granted"
+      ],
+      "setup": [
+        "Create an empty cwd under the recording staging directory.",
+        "Let the driver apply the LM Studio endpoint, model, and danger-full-access policy through its per-run environment and temporary patch.",
+        "Enter plan mode while the session is idle, then send the task as a normal driver turn so wait_turn expects and observes one completed durable boundary.",
+        "Confirm that the TUI plan review still lists Approve first. The keys step relies on the installed overlay's default cursor at option 0."
+      ],
+      "script": [
+        {
+          "type": "slash",
+          "text": "/plan"
+        },
+        {
+          "type": "sleep",
+          "seconds": 2
+        },
+        {
+          "type": "send",
+          "text": "Do not read files, search, write, or call any tool except exit_plan_mode before approval. Immediately call exit_plan_mode as your first and only pre-approval tool call. Use this exact Markdown as the plan argument: # Architect editor fixture\n\nAfter approval, call bash exactly once with command `printf %s approved-editor > architect-editor.txt` and description `Create approved editor fixture`. Then reply with exactly `done`. Do not send prose before the exit_plan_mode call."
+        },
+        {
+          "type": "sleep",
+          "seconds": 240
+        },
+        {
+          "type": "keys",
+          "keys": "Enter"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 20
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the real session-UUID row born ready, then ready -> working when the /plan message starts",
+        "events.jsonl shows the same session move working -> waiting while the exit_plan_mode review is open",
+        "events.jsonl shows the same session move waiting -> working after Enter approves the plan and the implementation step starts",
+        "events.jsonl shows the same session move working -> ready after the completed turn/end, with final state ready",
+        "the compressed transcript contains one active plan/mode record, one successful exit_plan_mode call/result pair, one inactive plan/mode record, and then one successful bash call/result pair whose arguments target architect-editor.txt",
+        "the cwd contains architect-editor.txt with exact content approved-editor after the turn",
+        "at least two assistant/message records in the same turn carry model qwen/qwen3.5-9b and non-zero usage, and the daemon's cumulative TotalTokens includes both contributions",
+        "the transcript contains no approval/asked record and no tool call other than exit_plan_mode and bash"
+      ],
+      "scope_note": "The initial 2-second delay matches the recorded Claude Code sibling and lets bare /plan commit before the normal send. The separate send is load-bearing because the DSH driver increments its expected durable turn count only for send, not slash; this makes wait_turn observe the completed implementation boundary instead of returning immediately at 0/0. The 240-second pre-approval hold exceeds the committed sibling waits of 30-75 seconds because measured local DSH qwen turns can take about 90-158 seconds; it matches the assessed DSH 2.18 plan-review recipe. The 20-second trailing settle matches the recorded Claude Code sibling and exceeds the DSH basic-turn 8-second settle. Codex and Copilot need longer fixed post-input sleeps because their recipes do not use DSH's transcript-backed wait_turn for the completed implement turn."
+    }
+  }
+}
