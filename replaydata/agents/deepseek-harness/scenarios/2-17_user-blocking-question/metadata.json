@@ -1,0 +1,123 @@
+{
+  "scenario_id": "user-blocking-question",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+83c3052",
+    "confidence": 0.88,
+    "notes": "DeepSeek Harness persists a terminal assistant question in the v3 transcript, and the DSH parser converts the full text into a waiting cue."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "user-blocking-question",
+      "agent": "deepseek-harness",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.88,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nDeepSeek Harness can complete a turn with a prose question. A measured DSH 0.1.5-rc.2 v3 transcript from qwen/qwen3.5-9b contains an `assistant/message` whose final visible sentence ends in `?`, followed by `turn/end {reason.kind: completed}`. The question is therefore present in the durable session log. This verdict does not infer the signal from the TUI question overlay.\n\nThe DSH parser maps the durable assistant record to `assistant_message`. It reads every text content block, stores the display text in `AssistantText`, and evaluates the full text tail with `session.ProseIndicatesWaiting`. The measured trailing question therefore sets `PendingWaitingCue=true`. When the following completed `turn/end` maps to `turn_done`, `IsWaitingForUserInput` and the agent-done classifier route the session from `working` to `waiting`. The dashboard can show the same durable assistant text.\n\nDSH also has a structured `ask_user_question` tool. Its live TUI overlay listens on the in-memory `user-questions/request` event, but that overlay is not the daemon source. The durable evidence for that path is a normal `tool/call`: the DSH agent loop appends `tool/call` before dispatching the tool, the tool's registered name is exactly `ask_user_question`, the DSH parser maps the record to `ToolUses`, and irrlicht's canonical user-blocking set recognizes that exact spelling. Thus the structured path also has a durable waiting cue even while the tool waits for an answer. This cell uses the canonical prose path because scenario 2.17 explicitly validates the trailing-question classifier path and committed sibling recipes use the same shape.\n\nThe recipe asks for one exact tool-free question, waits for the durable completed turn, and then holds the session for 10 seconds. Its 420-second timeout covers the measured 2 minute 38 second local qwen turn with margin. The driver implements `send`, transcript-backed `wait_turn`, and `sleep`. The spec selects the real `session-<uuid>` row and pins every later phase to it, so a generic process pre-session or another session cannot satisfy the arc.",
+      "caveats": [
+        "Vacuous-pass check: the state arc alone could pass if qwen emitted a different cue-shaped reply or opened a user-blocking tool. Recording verification must require the durable final assistant text to be exactly `Which output format should I use?` and must reject tool/call and approval/asked records for the turn.",
+        "The recipe deliberately tests durable prose classification, not the TUI-only rendering event. The installed TUI listens for `user-questions/request`, but irrlicht does not parse that in-memory event and this assessment does not cite the overlay as daemon evidence.",
+        "The structured `ask_user_question` route is supported by source-level durable ordering: the agent loop appends its ordinary tool/call before dispatch blocks. No measured local transcript currently contains that exact tool name, so this cell does not depend on that provisional emission path.",
+        "The local qwen/qwen3.5-9b model must follow the exact-text instruction without using a tool. If it does not, the transcript-content verification must fail rather than treating any waiting transition as proof of the trailing-question path.",
+        "This exact cell has not yet been recorded through irrlichd. The daemon verdict is grounded in a measured durable DSH question record and the parser and classifier source; record must settle the end-to-end timing."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/sessions/--Users-ingo-.claude-jobs-d11ee86d-tmp-dsh-probe--/session-a68f8780-b24f-49d6-89c4-f2e215f95782/session.v3.jsonl.zstd",
+          "note": "Measured qwen/qwen3.5-9b v3 transcript: seq 40 is a durable assistant/message ending in a question mark and seq 42 is completed turn/end."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser.go",
+          "note": "parseAssistantText maps full durable text to AssistantText and PendingWaitingCue; parseTurnEnd maps the completed boundary to turn_done; parseToolCall maps durable tool names into ToolUses."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/waiting_cue.go",
+          "note": "ProseIndicatesWaiting and IsWaitingForUserInput treat a durable trailing question as a waiting cue."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "The classifier routes an agent-done turn with IsWaitingForUserInput to waiting and separately recognizes an open user-blocking tool."
+        },
+        {
+          "kind": "file",
+          "ref": "core/internal/contracttesting/userblocking/userblocking.go",
+          "note": "The canonical user-blocking tool table includes the exact DSH spelling ask_user_question."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-agent-loop/lib/index.js",
+          "note": "runGroup appends the ordinary durable tool/call before it prepares and dispatches a tool, so a blocking ask call is visible before the user answers."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-tool-ask-user/lib/index.js",
+          "note": "The installed DSH package registers the structured tool with the exact name ask_user_question and waits on ctx.userQuestions.ask."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/profiles/tui/node_modules/@tomowang/dsh-tui/lib/index.js",
+          "note": "The TUI question overlay consumes the live user-questions/request event; this confirms why the overlay itself must not be treated as the daemon's durable source."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "Implements send, durable-transcript wait_turn, and sleep and pins qwen/qwen3.5-9b through the recording settings."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/2-17_user-blocking-question/metadata.json",
+          "note": "Canonical sibling uses an exact short prose question, wait_turn, and a trailing settle rather than requiring a structured question overlay."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "timeout_seconds": 420,
+      "settings": {
+        "model": "qwen/qwen3.5-9b",
+        "base_url": "http://127.0.0.1:1234/v1",
+        "context_window": 262144,
+        "permission_mode": "danger-full-access"
+      },
+      "preconditions": [
+        "dsh 0.1.5-rc.2 or newer is on PATH and the community tui profile is installed under the active DSH home",
+        "LM Studio is serving qwen/qwen3.5-9b through http://127.0.0.1:1234/v1",
+        "qwen/qwen3.5-9b follows the exact-text prompt without invoking a tool; re-probe this from the durable transcript at record time",
+        "irrlichd is recording with DeepSeek Harness transcript permission granted"
+      ],
+      "setup": [
+        "Create an empty cwd under the recording staging directory",
+        "Let the driver apply the LM Studio endpoint and danger-full-access policy through its per-run environment and temporary patch"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Do not use tools. Reply with exactly this text and nothing else: Which output format should I use?"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 10
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the real session-UUID row entering ready, then working, then waiting",
+        "the compressed transcript's final assistant/message text is exactly `Which output format should I use?` and the following turn/end has reason kind completed",
+        "the turn contains no tool/call and no approval/asked record, which proves the trailing-question prose path caused waiting",
+        "events.jsonl contains no state transition to ready after the waiting transition and the final session state is waiting",
+        "the recording reports model qwen/qwen3.5-9b and non-zero tokens"
+      ]
+    }
+  }
+}
