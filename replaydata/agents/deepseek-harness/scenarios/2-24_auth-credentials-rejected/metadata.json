@@ -1,0 +1,166 @@
+{
+  "scenario_id": "auth-credentials-rejected",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+e380c18",
+    "confidence": 0.85,
+    "notes": "DeepSeek Harness persists a non-retryable HTTP 401 as a terminal AUTH turn boundary, and the DSH adapter maps that boundary to a sticky error state."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "auth-credentials-rejected",
+      "agent": "deepseek-harness",
+      "assessed_at": "2026-09-18T21:34:34Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Scenario signal\n\nThe cell must show one stable session moving from ready to working to error after an HTTP 401 credential rejection. The failed turn must not return to ready or remain in working.\n\n## Agent support\n\nDeepSeek Harness 0.1.5-rc.2 has an explicit non-retryable credential-refusal path. The installed pi-ai adapter classifies an error message containing HTTP 401 or 403 as `AUTH`. The installed default retry policy permits only `EMPTY_RESPONSE`, `RATE_LIMIT`, `SERVER`, `TIMEOUT`, and `TRANSPORT`; `AUTH` is absent. The retry executor delegates a normal-mode failure whose code is outside that set. The agent loop then throws the structured failure and appends `turn/end` from its `finally` block with `reason.kind=error`, preserving the `AUTH` code and provider message. The official source describes the same request-error waterfall: a listener must return `retry`; the default result leaves the failure terminal.\n\nThe installed binary scan found no separate auth command or flag. That is expected because this behavior is a provider response path inside the TUI. The installed TUI composition mounts both `dsh-llm-pi-ai` and `dsh-llm-retry`, so the cited classifier and retry policy are the active surface.\n\n## Daemon capability\n\nThe DSH adapter tails the durable compressed session transcript through `FilesUnderRoot`. `parseTurnStart` emits `turn_start`. `parseTurnEnd` always emits `turn_done`; for `reason.kind=error` it also creates a terminal `SessionError`, lowercases the error code, and preserves the message. `TestParserMapsTerminalError` pins this mapping with a measured structured failure. The tailer records a same-event terminal error after it applies any boundary clearing, so the failed turn cannot clear its own error. The state classifier's `session_error` rule then selects the canonical `error` state. A later genuine user turn is required to clear the terminal error.\n\nThe emission verdict is source-grounded but still provisional until record. The installed agent loop proves that a non-retried `AUTH` failure writes the required error boundary, but the current corpus has no live 401 DSH transcript. The recording must confirm that the fast failure still exposes the working edge before the terminal error.\n\n## Driver capability and recipe\n\nThe recipe needs `send`, `wait_turn`, `sleep`, and `exit_clean`. The DeepSeek Harness interactive driver declares and implements every step. It accepts `base_url` and `api_key` settings and writes them into a per-run OpenAI-compatible provider patch. The driver also creates a fresh cwd and marker, resolves only a post-marker transcript whose header has that cwd, and counts every durable `turn/end`, including an error boundary.\n\nThe repository does not contain a faithful OpenAI Chat Completions authentication mock. `mock-openai-429` serves the correct endpoint but always succeeds on its first request and uses an `insufficient_quota` body for later failures. Reusing it would not reproduce this scenario's authentication-shaped 401 response. The recipe therefore names the required `mock-openai-error` contract as a recording prerequisite: every counted POST must return HTTP 401 with an authentication error body and log that exact decision. This prerequisite is tooling setup, not a driver primitive gap.\n\nThe five-second terminal hold matches the muse sibling. The claudecode sibling's 200-second delay covers its measured ten-attempt retry ladder and does not apply because DSH excludes `AUTH` from its retry set. The 120-second timeout is the interactive floor and gives the TUI ample startup margin.",
+      "caveats": [
+        "Vacuous-pass condition: an old DSH transcript with a matching terminal error could satisfy the lifecycle without this run reaching the 401 mock. The fresh per-run cwd, pre-launch marker, exact header-cwd match, exact prompt assertion, and run-cell mock-log assertion are load-bearing preconditions.",
+        "The required tools/onboarding-factory/recording/mock-openai-error package does not exist yet. It must serve POST /v1/chat/completions, return HTTP 401 with an authentication-shaped OpenAI error body on every counted request, and log `POST /v1/chat/completions #N — failing 401 authentication_error` so the runtime can prove the agent reached the intended failure.",
+        "Port 18806 must be free on loopback when recording starts. It was free at assessment time, but record must re-probe it and rely on run-cell.sh's occupied-port refusal.",
+        "No live 401 DSH transcript exists in the current corpus. The agent-support verdict follows the installed rc.2 source exactly, but the recording must confirm the emitted message and that the fast error does not hide the working edge.",
+        "The model is pinned to qwen/qwen3.5-9b because request/context is written before dispatch and the driver selects that exact model. Tokens and cost are expected to remain zero because no successful assistant message is produced.",
+        "The binary strings scan found only top-level CLI error text for the auth-related keywords. The provider behavior lives in the installed dsh-llm-pi-ai, dsh-llm, dsh-llm-retry, and dsh-agent-loop packages, which are cited directly."
+      ],
+      "sources": [
+        {
+          "kind": "url",
+          "ref": "https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/core/agent-loop/src/agent.ts",
+          "note": "Official agent-loop source: an unhandled failed model request becomes a structured error turn/end written from the finally block."
+        },
+        {
+          "kind": "url",
+          "ref": "https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/llm/llm/src/retry-policy.ts",
+          "note": "Official retry-policy source: normal defaults retry EMPTY_RESPONSE, RATE_LIMIT, SERVER, TIMEOUT, and TRANSPORT, but not AUTH."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-llm-pi-ai/lib/index.js",
+          "note": "Installed 0.1.5-rc.2 classifier maps error text containing HTTP 401 or 403 to AUTH, and maps that terminal pi-ai error to a structured finish failure."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-llm/lib/types/retry-policy.js",
+          "note": "Installed retry defaults exclude AUTH and use bounded normal mode."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-llm-retry/lib/index.js",
+          "note": "Installed retry executor delegates normal-mode failures outside retryableCodes, so AUTH receives no scheduled retry."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-agent-loop/lib/index.js",
+          "note": "Installed agent loop turns an unhandled structured request failure into turn/end reason.kind=error with the original failure code and message."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/agent.go",
+          "note": "Declares the compressed FilesUnderRoot source and session.lock-based process binding."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser.go",
+          "note": "parseTurnStart emits turn_start; parseTurnEnd emits turn_done and a terminal SessionError for every structured error boundary."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser_test.go",
+          "note": "TestParserMapsTerminalError pins the measured structured-error mapping, while the compressed end-to-end test covers the v3 transcript source."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_metrics.go",
+          "note": "The tailer applies boundary clearing before recording a same-event terminal error, so the failed turn does not clear itself; only a later user turn recovers it."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "The session_error rule routes a standing SessionError to the canonical error state."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "Implements send, wait_turn, sleep, and exit_clean; applies model/base_url/api_key through a temporary patch and isolates transcript discovery by marker and cwd."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/recording/mock-openai-429/main.go",
+          "note": "The only existing OpenAI Chat Completions error mock succeeds first and then returns an insufficient_quota body. It is not a faithful one-turn authentication-refusal fixture."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "dsh >=0.1.5-rc.2 is installed and on PATH",
+        "the community TUI profile is installed under ~/.dsh/profiles/tui",
+        "tools/onboarding-factory/recording/mock-openai-error exists and implements the 401 authentication contract in this assessment",
+        "port 18806 is free on 127.0.0.1 at record time",
+        "tmux and zstd are installed",
+        "irrlichd is recording the deepseek-harness adapter"
+      ],
+      "setup": [
+        "run-cell.sh builds and launches mock-openai-error on 127.0.0.1:18806 before the driver starts",
+        "the mock returns HTTP 401 with an OpenAI authentication_error body for every POST /v1/chat/completions request and logs the exact status and type",
+        "the interactive driver creates a fresh cwd and pre-launch marker, applies a temporary OpenAI-compatible provider patch for the mock, and launches dsh --profile tui in tmux",
+        "the driver resolves only the post-marker compressed transcript whose session header has the fresh cwd"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: AUTH-SHOULD-NOT-SUCCEED"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "exit_clean"
+        }
+      ],
+      "verify": [
+        "the post-marker DSH session is born ready and binds its session.lock writer PID",
+        "the exact user prompt moves the same session to working",
+        "the durable transcript contains exactly one turn/end with reason.kind=error and error.code=AUTH",
+        "the transcript contains no llm/retry record and no successful assistant message",
+        "the session moves from working to error, stays error for at least three seconds, and never enters waiting or returns to ready before exit",
+        "the mock log proves that the agent received an HTTP 401 authentication_error response",
+        "the replay summary reports model qwen/qwen3.5-9b with zero tokens and cost"
+      ],
+      "settings": {
+        "model": "qwen/qwen3.5-9b",
+        "base_url": "http://127.0.0.1:18806/v1",
+        "context_window": 262144,
+        "permission_mode": "danger-full-access",
+        "api_key": "irrlicht-invalid-recording-key"
+      },
+      "timeout_seconds": 120,
+      "scope_note": "The five-second post-error hold matches the muse sibling. The claudecode sibling's 200-second delay is specific to its measured ten-attempt 401 retry ladder; DSH excludes AUTH from its retry set. wait_turn observes the durable terminal boundary before the hold.",
+      "mock": {
+        "package": "./tools/onboarding-factory/recording/mock-openai-error",
+        "port": 18806,
+        "args": [
+          "--status",
+          "401",
+          "--error-type",
+          "authentication_error",
+          "--error-message",
+          "invalid api key",
+          "--succeed-after",
+          "0"
+        ],
+        "request_log_pattern": "POST /v1/chat/completions #[0-9]+ .* failing 401 authentication_error"
+      }
+    }
+  }
+}
