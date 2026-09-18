@@ -1,0 +1,107 @@
+{
+  "scenario_id": "basic-turn",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+a644e9c",
+    "confidence": 0.85,
+    "notes": "DeepSeek Harness emits explicit turn boundaries, assistant usage, and a stable session header; the DSH adapter maps all basic-turn observables."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "basic-turn",
+      "agent": "deepseek-harness",
+      "assessed_at": "2026-09-18T12:19:33Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\nDeepSeek Harness 0.1.5-rc.2 supports a normal persisted turn in its TUI profile. The installed CLI documentation defines `dsh --profile <name>` and identifies the current directory as the workspace root. A measured local v3 transcript from the installed binary contains the full text-only sequence: `turn/start`, a user message, `request/context` with model `qwen/qwen3.5-9b`, an `assistant/message` with non-zero `inputTokens`, `outputTokens`, and `totalTokens`, then `turn/end` with `reason.kind=completed`. This is direct evidence for the agent behavior and durable emission.\n\nThe DSH adapter watches `session.vN.jsonl.zstd` under the DSH sessions root. It derives one stable session ID from the parent `session-<uuid>` directory. The parser maps `turn/start` to `turn_start`, the real user record to `user_message`, and completed `turn/end` to `turn_done`. These records produce the required `ready -> working -> ready` arc. The parser maps assistant usage to a token snapshot and a per-turn contribution. It also maps `request/context.model`, so offline replay can verify the exact model and non-zero token count. The compressed-transcript end-to-end parser test covers this combined lifecycle and usage path. The daemon verdict is provisional only for live watcher timing; the measured transcript and parser code cover every required observable.\n\nThe interactive driver implements `send`, `wait_turn`, and `sleep`. It launches the installed TUI profile with a per-run LM Studio patch, resolves the new durable transcript by marker and cwd, and waits for the expected count of completed `turn/end` records. The recipe matches the sibling settle delay with an 8-second sleep because that delay covers the daemon observation window. The 180-second turn budget covers the measured local model latency.\n\nThe model is pinned because the recipe itself sets `qwen/qwen3.5-9b`, and the measured transcript confirms that exact value. Token usage is pinned non-zero. Cost is not pinned non-zero because the recording uses a local LM Studio endpoint and the current irrlicht LiteLLM cache has no exact pricing entry for `qwen/qwen3.5-9b`.",
+      "caveats": [
+        "Vacuous-pass check: the lifecycle and token assertions could pass if the model unexpectedly made an auto-approved tool call and still completed, because the phase invariant language does not reject function-call events. The exact-word prompt minimizes this risk, and recording review must confirm that the curated events contain no tool call.",
+        "Load-bearing environment precondition: LM Studio must be listening at http://127.0.0.1:1234/v1 with qwen/qwen3.5-9b loaded. The driver pins this endpoint and model through its temporary patch; another model would invalidate the exact model assertion.",
+        "Load-bearing isolation precondition: the driver must use its fresh per-run cwd and pre-launch marker. This prevents an unrelated DSH transcript from satisfying the single-session phase chain.",
+        "The single-birth ready shape and timing bound are inferred from the session header being persisted at TUI launch before the first turn and from FilesUnderRoot session identity. A live irrlichd recording must settle the timing."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/README.md",
+          "note": "Installed 0.1.5-rc.2 CLI documentation: named profiles, TUI resume example, persisted headless sessions, and cwd as the workspace root."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/sessions/--Users-ingo-.claude-jobs-d11ee86d-tmp-dsh-probe--/session-b9e68a30-5982-4cb3-8192-070dfaad6365/session.v3.jsonl.zstd",
+          "note": "Measured v3 transcript: stable session header, one turn/start, text-only assistant reply from qwen/qwen3.5-9b with 7913 input and 25 output tokens, and completed turn/end."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/agent.go",
+          "note": "FilesUnderRoot source over compressed DSH transcripts and session.lock-based PID binding."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser.go",
+          "note": "Maps turn/start, user/message, assistant/message usage and model, request/context, and turn/end to the lifecycle and metric fields required by this cell."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser_test.go",
+          "note": "TestParserMapsMeasuredTurnStart, TestParserMapsAssistantUsage, TestParserMapsTurnEnd, and TestZstdTranscriptEndToEnd pin the relevant measured v3 records."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "Declares and implements send, wait_turn, and sleep; resolves only readable post-marker transcripts for the run cwd and waits on completed turn/end records."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "dsh >=0.1.5-rc.2 is installed and on PATH",
+        "the community TUI profile is installed under ~/.dsh/profiles/tui",
+        "LM Studio is listening at http://127.0.0.1:1234/v1 with qwen/qwen3.5-9b loaded",
+        "tmux and zstd are installed",
+        "irrlichd is recording the deepseek-harness adapter"
+      ],
+      "setup": [
+        "The interactive driver creates a fresh cwd under the staging directory and launches `dsh --profile tui` in tmux.",
+        "The driver applies a temporary patch that selects LM Studio and qwen/qwen3.5-9b without modifying the installed TUI profile.",
+        "The driver resolves the new session.v3.jsonl.zstd by pre-launch marker, header cwd, and parent session ID, then waits for the expected completed turn/end count."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ],
+      "verify": [
+        "events.jsonl contains one DSH session born in ready from the post-marker transcript",
+        "the same session enters working after the real user message",
+        "completed turn/end returns the same session to ready without a waiting transition",
+        "the replay summary reports model qwen/qwen3.5-9b and non-zero cumulative tokens",
+        "the curated event stream contains no function call for the exact-word prompt"
+      ],
+      "settings": {
+        "model": "qwen/qwen3.5-9b",
+        "base_url": "http://127.0.0.1:1234/v1",
+        "context_window": 262144,
+        "permission_mode": "danger-full-access",
+        "api_key": "irrlicht-local-recording"
+      },
+      "timeout_seconds": 180,
+      "scope_note": "Uses the sibling 8-second post-turn settle delay. DSH emits an explicit completed turn/end, but the daemon still needs an observation window before driver teardown."
+    }
+  }
+}
