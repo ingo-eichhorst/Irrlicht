@@ -94,6 +94,7 @@ assert_count "antigravity  1-1"  antigravity  "$(find_transcript antigravity 1-1
 assert_count "claudecode   1-1"  claudecode   "$(find_transcript claudecode 1-1_session-start)"   1
 assert_count "codex        1-1"  codex        "$(find_transcript codex 1-1_session-start)"        1
 assert_count "copilot      1-1"  copilot      "$(find_transcript copilot 1-1_session-start)"      1
+assert_count "deepseek-harness 1-1" deepseek-harness "$(find_transcript deepseek-harness 1-1_session-start jsonl.zstd)" 1
 assert_count "gemini-cli   1-1"  gemini-cli   "$(find_transcript gemini-cli 1-1_session-start)"   1
 assert_count "kiro-cli     1-1"  kiro-cli     "$(find_transcript kiro-cli 1-1_session-start)"     1
 assert_count "mistral-vibe 1-1"  mistral-vibe "$(find_transcript mistral-vibe 1-1_session-start)" 1
@@ -162,7 +163,9 @@ fi
 
 echo "== counts are numeric single lines (guards the 0\\n0 class outright) =="
 for a in aider antigravity claudecode codex copilot deepseek-harness gemini-cli kiro-cli mistral-vibe muse pi; do
-  ext=jsonl; [[ "$a" == aider ]] && ext=md
+  ext=jsonl
+  [[ "$a" == aider ]] && ext=md
+  [[ "$a" == deepseek-harness ]] && ext=jsonl.zstd
   t="$(find_transcript "$a" 1-1_session-start "$ext")"
   [[ -f "$t" ]] || continue
   lines="$(count "$a" "$t" | wc -l | tr -d ' ')"
