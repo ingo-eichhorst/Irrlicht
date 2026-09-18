@@ -19,11 +19,14 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 
 	"irrlicht/core/application/services"
 	"irrlicht/core/domain/session"
@@ -347,8 +350,17 @@ func loadEvents(path string) ([]rawEvent, error) {
 		return nil, err
 	}
 	defer f.Close()
+	var input io.Reader = f
+	if strings.HasSuffix(path, ".zstd") {
+		decoder, decodeErr := zstd.NewReader(f, zstd.WithDecoderConcurrency(1))
+		if decodeErr != nil {
+			return nil, fmt.Errorf("open zstd transcript: %w", decodeErr)
+		}
+		defer decoder.Close()
+		input = decoder
+	}
 
-	scanner := bufio.NewScanner(f)
+	scanner := bufio.NewScanner(input)
 	scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
 
 	var out []rawEvent
@@ -401,6 +413,11 @@ func parseEventTimestamp(lineBytes []byte) time.Time {
 		// Antigravity steps carry an RFC3339 created_at.
 		if parsed, err := time.Parse(time.RFC3339, v); err == nil {
 			return parsed
+		}
+	}
+	for _, key := range []string{"time", "createdAt"} {
+		if v, ok := raw[key].(float64); ok && v > 0 {
+			return time.UnixMilli(int64(v)).UTC()
 		}
 	}
 	return time.Time{}

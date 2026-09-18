@@ -63,7 +63,7 @@ func TestScenarioUpdate(t *testing.T) {
 func TestAgentAdd(t *testing.T) {
 	root := validRepo(t)
 	code, _, errs := runOf("agent", "add", "--id", "newcli", "--name", "New CLI", "--provider", "acme",
-		"--prereq", "set ACME_API_KEY", "--prereq", "install acme", "--repo-root", root)
+		"--transcript-extension", "jsonl.zstd", "--prereq", "set ACME_API_KEY", "--prereq", "install acme", "--repo-root", root)
 	if code != exitOK {
 		t.Fatalf("agent add failed: %d %s", code, errs)
 	}
@@ -85,9 +85,37 @@ func TestAgentAdd(t *testing.T) {
 	if !found {
 		t.Fatalf("newcli not registered as column: %v", v.Agents)
 	}
+	var catalog struct {
+		Meta struct {
+			TranscriptExtensions map[string]string `json:"transcript_extensions"`
+		} `json:"meta"`
+	}
+	b, _ = os.ReadFile(filepath.Join(root, "replaydata", "agents", "scenarios.json"))
+	if json.Unmarshal(b, &catalog) != nil || catalog.Meta.TranscriptExtensions["newcli"] != "jsonl.zstd" {
+		t.Fatalf("transcript extension was not registered: %s", b)
+	}
 	// idempotency guard
 	if code, _, _ := runOf("agent", "add", "--id", "newcli", "--name", "x", "--provider", "y", "--repo-root", root); code != exitFail {
 		t.Fatal("duplicate agent add must fail")
+	}
+}
+
+func TestAgentAddRejectsUnsafeTranscriptExtension(t *testing.T) {
+	root := validRepo(t)
+	code, _, errs := runOf("agent", "add", "--id", "unsafe", "--name", "Unsafe", "--provider", "acme",
+		"--transcript-extension", "jsonl/../../outside", "--repo-root", root)
+	if code != exitFail {
+		t.Fatalf("unsafe transcript extension must fail: code=%d stderr=%s", code, errs)
+	}
+	if fileExists(filepath.Join(root, "replaydata", "agents", "unsafe", "metadata.json")) {
+		t.Fatal("rejected transcript extension created agent metadata")
+	}
+	b, err := os.ReadFile(filepath.Join(root, "replaydata", "agents", "scenarios.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), `"unsafe"`) {
+		t.Fatal("rejected transcript extension mutated the catalog")
 	}
 }
 

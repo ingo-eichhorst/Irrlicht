@@ -574,18 +574,22 @@ func TestValidateExpectedAgainst_rejectsPathTraversal(t *testing.T) {
 // the transcript is jsonl (markdown adapters like aider have none).
 func TestRecordingComplete(t *testing.T) {
 	const golden = "transcript.jsonl.replay.json.golden"
+	const zstdGolden = "transcript.jsonl.zstd.replay.json.golden"
 	cases := []struct {
 		name  string
 		files []string
 		want  []string // substrings expected in the findings (nil = complete)
 	}{
 		{"complete jsonl", []string{"events.jsonl", "manifest.json", "transcript.jsonl", golden}, nil},
+		{"complete jsonl.zstd", []string{"events.jsonl", "manifest.json", "transcript.jsonl.zstd", zstdGolden}, nil},
 		{"complete md (aider, no golden)", []string{"events.jsonl", "manifest.json", "transcript.md"}, nil},
 		{"jsonl missing golden", []string{"events.jsonl", "manifest.json", "transcript.jsonl"}, []string{"golden"}},
+		{"jsonl.zstd missing golden", []string{"events.jsonl", "manifest.json", "transcript.jsonl.zstd"}, []string{"golden"}},
 		{"missing events", []string{"manifest.json", "transcript.jsonl", golden}, []string{"events.jsonl"}},
 		{"missing manifest", []string{"events.jsonl", "transcript.jsonl", golden}, []string{"manifest.json"}},
 		{"no transcript", []string{"events.jsonl", "manifest.json"}, []string{"missing transcript"}},
 		{"both transcripts ambiguous", []string{"events.jsonl", "manifest.json", "transcript.jsonl", "transcript.md", golden}, []string{"ambiguous"}},
+		{"compressed and plain transcripts ambiguous", []string{"events.jsonl", "manifest.json", "transcript.jsonl", "transcript.jsonl.zstd", golden, zstdGolden}, []string{"ambiguous"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

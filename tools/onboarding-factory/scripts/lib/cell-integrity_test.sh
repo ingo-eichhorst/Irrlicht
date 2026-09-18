@@ -50,6 +50,12 @@ cell_meta 5-2_md md
 touchf "$S/5-2_md/expected.jsonl"
 recf 5-2_md events.jsonl
 recf 5-2_md transcript.md
+# 5-2_zstd — compressed JSONL transcript with its compressed-name golden.
+cell_meta 5-2_zstd zstd
+touchf "$S/5-2_zstd/expected.jsonl"
+recf 5-2_zstd events.jsonl
+recf 5-2_zstd transcript.jsonl.zstd
+recf 5-2_zstd transcript.jsonl.zstd.replay.json.golden
 # 5-3_half — recorded (transcript) but NO events.jsonl (the task-list defect).
 cell_meta 5-3_half half
 touchf "$S/5-3_half/expected.jsonl"
@@ -80,7 +86,7 @@ assert_eq() { [[ "$2" == "$3" ]] && pass "$1" || fail "$1" "$2" "$3"; }
 
 echo "== ci_recipe_dir_names: folders that hold a metadata.json =="
 assert_eq "fake recipe dirs (orphan excluded — no metadata.json)" \
-  "$(printf '5-1_cov\n5-2_md\n5-3_half\n5-5_mixed')" \
+  "$(printf '5-1_cov\n5-2_md\n5-2_zstd\n5-3_half\n5-5_mixed')" \
   "$(ci_recipe_dir_names fake)"
 
 echo "== ci_coverage_id_for_dir =="
@@ -98,6 +104,8 @@ ci_missing_artifacts fake 5-1_cov "$S/5-1_cov" "$S" >/dev/null
 assert_eq "complete variant → rc 0" 0 "$?"
 ci_missing_artifacts fake 5-2_md "$S/5-2_md" "$S" >/dev/null
 assert_eq "complete md cell (no golden needed) → rc 0" 0 "$?"
+ci_missing_artifacts fake 5-2_zstd "$S/5-2_zstd" "$S" >/dev/null
+assert_eq "complete compressed JSONL cell → rc 0" 0 "$?"
 probs="$(ci_missing_artifacts fake 5-3_half "$S/5-3_half" "$S")"; rc=$?
 assert_eq "half cell → rc 1" 1 "$rc"
 assert_eq "half cell → flags the recording's events.jsonl" "recordings/$REC/events.jsonl" "$probs"

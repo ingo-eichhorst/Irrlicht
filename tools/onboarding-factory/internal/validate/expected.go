@@ -307,17 +307,27 @@ func RecordingComplete(recDir string) []string {
 		findings = append(findings, "missing manifest.json")
 	}
 	hasJSONL := exists("transcript.jsonl")
+	hasZstd := exists("transcript.jsonl.zstd")
 	hasMD := exists("transcript.md")
+	transcriptCount := 0
+	for _, present := range []bool{hasJSONL, hasZstd, hasMD} {
+		if present {
+			transcriptCount++
+		}
+	}
 	switch {
-	case hasJSONL && hasMD:
-		findings = append(findings, "ambiguous transcript: both transcript.jsonl and transcript.md present")
-	case !hasJSONL && !hasMD:
-		findings = append(findings, "missing transcript (need transcript.jsonl or transcript.md)")
+	case transcriptCount > 1:
+		findings = append(findings, "ambiguous transcript: multiple transcript formats present")
+	case transcriptCount == 0:
+		findings = append(findings, "missing transcript (need transcript.jsonl, transcript.jsonl.zstd, or transcript.md)")
 	}
 	// The replay byte-identity golden is required for jsonl transcripts (the
 	// replay test pins them); markdown-transcript adapters (aider) have none.
 	if hasJSONL && !exists("transcript.jsonl.replay.json.golden") {
 		findings = append(findings, "missing transcript.jsonl.replay.json.golden (required for a jsonl transcript)")
+	}
+	if hasZstd && !exists("transcript.jsonl.zstd.replay.json.golden") {
+		findings = append(findings, "missing transcript.jsonl.zstd.replay.json.golden (required for a jsonl.zstd transcript)")
 	}
 	findings = append(findings, desktopEvidenceCompleteness(recDir, exists)...)
 	return findings
@@ -374,7 +384,7 @@ func ValidateExpectedForProfile(scenarioDir string, profile matrix.ExecutionProf
 	// (nil,nil) made replay-fixtures report a vacuous PASS (opencode/task-list).
 	if _, err := os.Stat(expectedPath); err == nil {
 		if _, err := os.Stat(eventsPath); err != nil {
-			for _, t := range []string{"transcript.jsonl", "transcript.md"} {
+			for _, t := range []string{"transcript.jsonl", "transcript.jsonl.zstd", "transcript.md"} {
 				if _, terr := os.Stat(filepath.Join(recDir, t)); terr == nil {
 					return nil, fmt.Errorf(
 						"incomplete recording: %s present but events.jsonl missing in %s — "+

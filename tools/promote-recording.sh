@@ -234,6 +234,7 @@ if [[ -z "$AGENT_VER" ]]; then
     copilot)      CLI_BIN="copilot";  VER_FIELD=4 ;;
     hermes)       CLI_BIN="hermes";   VER_FIELD=3 ;;
     muse)         CLI_BIN="muse";     VER_FIELD=3 ;;
+    deepseek-harness) CLI_BIN="dsh";  VER_FIELD=1 ;;
     *)            CLI_BIN=""; VER_FIELD=1 ;;
   esac
   AGENT_VER="$UNKNOWN_VALUE"
@@ -320,7 +321,7 @@ populate_recording() {
   # Desktop Local recordings preserve the raw identity chain that
   # `of validate` reads. CLI staging does not create these files, so the same
   # allow-list remains a no-op for every existing recording profile.
-  for f in events.jsonl transcript.jsonl transcript.md transcript.json \
+  for f in events.jsonl transcript.jsonl transcript.jsonl.zstd transcript.md transcript.json \
     desktop-registry.json desktop-environment.json hooks.jsonl process.json \
     irrlicht-session.json; do
     if [[ -f "$STAGED_DIR/$f" ]]; then

@@ -11,6 +11,7 @@ import (
 	"irrlicht/core/adapters/inbound/agents"
 	"irrlicht/core/adapters/inbound/agents/agentwiring"
 	"irrlicht/core/adapters/inbound/agents/claudecode"
+	"irrlicht/core/adapters/inbound/agents/dsh"
 	"irrlicht/core/application/replayengine"
 	"irrlicht/core/domain/lifecycle"
 	"irrlicht/core/pkg/tailer"
@@ -45,7 +46,7 @@ import (
 // hand-kept copies of the list is what #1517 was: the Go gates' copy said
 // transcript.jsonl alone, so every aider recording was graded by the sweep and
 // by no gate.
-var TranscriptNames = []string{"transcript.jsonl", "transcript.md"}
+var TranscriptNames = []string{"transcript.jsonl", "transcript.jsonl.zstd", "transcript.md"}
 
 // Returns nil if no transcript is present at any expected name.
 func SynthesizeEventsFromTranscript(scenarioDir, adapter string) []lifecycle.Event {
@@ -57,10 +58,10 @@ func SynthesizeEventsFromTranscript(scenarioDir, adapter string) []lifecycle.Eve
 		if _, err := os.Stat(path); err != nil {
 			continue
 		}
-		if strings.HasSuffix(name, ".jsonl") {
-			return synthesizeViaEngine(path, adapter)
+		if name == "transcript.md" {
+			return synthesizeFromMarkdown(path)
 		}
-		return synthesizeFromMarkdown(path)
+		return synthesizeViaEngine(path, adapter)
 	}
 	return nil
 }
@@ -120,6 +121,8 @@ func resolveParser(adapter string) (string, tailer.TranscriptParser) {
 	switch adapter {
 	case "", "claudecode":
 		canonical = claudecode.AdapterName
+	case "deepseek-harness":
+		canonical = dsh.AdapterName
 	}
 	if f, ok := agentwiring.ParserFactories(agents.All())[canonical]; ok {
 		return canonical, f()
@@ -441,8 +444,8 @@ func truncateForTooltip(s string, max int) string {
 // surfaces this so a reconstructed arc is never mistaken for a recorded
 // one. adapter is the scenario's agent dir-slug (selects the parser).
 //
-// scenarioDir is the directory containing events.jsonl / transcript.jsonl
-// / transcript.md. Returns (nil, false, nil) if none exists.
+// scenarioDir is the directory containing events.jsonl / transcript.jsonl,
+// transcript.jsonl.zstd, or transcript.md. Returns (nil, false, nil) if none exists.
 func LoadEventsOrSynthesize(scenarioDir, adapter string) (events []lifecycle.Event, degraded bool, err error) {
 	if hasParentTraversal(scenarioDir) {
 		return nil, false, nil

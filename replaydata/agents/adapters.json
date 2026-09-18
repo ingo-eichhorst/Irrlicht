@@ -89,6 +89,9 @@
         "subscription_signal": "untraced"
       }
     },
+    "deepseek-harness": {
+      "maturity": "planned"
+    },
     "gemini-cli": {
       "maturity": "alpha",
       "capabilities": {

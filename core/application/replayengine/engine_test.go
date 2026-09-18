@@ -7,7 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
+
 	"irrlicht/core/adapters/inbound/agents/claudecode"
+	"irrlicht/core/adapters/inbound/agents/dsh"
 	"irrlicht/core/adapters/inbound/agents/vibe"
 	"irrlicht/core/application/replayengine"
 	"irrlicht/core/application/services"
@@ -221,5 +224,40 @@ func TestReplayTranscript_queuedTurnBoundary_doesNotSynthesizeSplit(t *testing.T
 		if tr.Reason == services.SyntheticTurnSettleReason || tr.Reason == services.SyntheticQueuedTurnStartReason {
 			t.Errorf("replay must not synthesize a collapsed-turn-boundary split: %+v", tr)
 		}
+	}
+}
+
+func TestReplayTranscript_DecodesConcatenatedZstdFramesWithDshTimes(t *testing.T) {
+	encoder, err := zstd.NewWriter(nil, zstd.WithEncoderCRC(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer encoder.Close()
+
+	frames := [][]byte{
+		encoder.EncodeAll([]byte("{\"type\":\"session\",\"version\":3,\"id\":\"session-00000000-0000-0000-0000-000000000001\",\"createdAt\":1000,\"cwd\":\"/tmp/dsh\"}\n"), nil),
+		encoder.EncodeAll([]byte("{\"type\":\"turn/start\",\"time\":2000,\"data\":{\"turn\":1}}\n{\"type\":\"user/message\",\"time\":2100,\"data\":{\"source\":{\"kind\":\"user\"},\"content\":[{\"type\":\"text\",\"text\":\"hi\"}]}}\n"), nil),
+		encoder.EncodeAll([]byte("{\"type\":\"turn/end\",\"time\":3000,\"data\":{\"turn\":1,\"reason\":{\"kind\":\"completed\"}}}\n"), nil),
+	}
+	path := filepath.Join(t.TempDir(), "transcript.jsonl.zstd")
+	if err := os.WriteFile(path, append(append(frames[0], frames[1]...), frames[2]...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := replayengine.ReplayTranscript(path, replayengine.Options{
+		Adapter: dsh.AdapterName,
+		Parser:  &dsh.Parser{},
+	})
+	if err != nil {
+		t.Fatalf("ReplayTranscript: %v", err)
+	}
+	if res == nil || res.TotalEvents != 4 {
+		t.Fatalf("TotalEvents = %v; want 4", res)
+	}
+	if got, want := res.FirstEventTime, time.UnixMilli(1000).UTC(); !got.Equal(want) {
+		t.Errorf("FirstEventTime = %v; want %v", got, want)
+	}
+	if got, want := res.LastEventTime, time.UnixMilli(3000).UTC(); !got.Equal(want) {
+		t.Errorf("LastEventTime = %v; want %v", got, want)
 	}
 }

@@ -59,6 +59,8 @@ assert_eq() { local label="$1" expected="$2" actual="$3"; [[ "$expected" == "$ac
 
 echo "== daemon_sid: basename minus .jsonl =="
 assert_eq "rollout path → stem" "2026-05-28T10_abc" "$(daemon_sid /x/y/2026-05-28T10_abc.jsonl)"
+assert_eq "DSH generation → parent session id" "session-00000000-0000-0000-0000-000000000001" \
+  "$(daemon_sid /x/session-00000000-0000-0000-0000-000000000001/session.v3.jsonl.zstd)"
 assert_eq "empty → empty" "" "$(daemon_sid "")"
 
 echo "== alloc_slot / save_active / load_slot round-trip across 2 slots =="
