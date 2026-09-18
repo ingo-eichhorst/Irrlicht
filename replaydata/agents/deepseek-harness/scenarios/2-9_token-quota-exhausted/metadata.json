@@ -1,0 +1,72 @@
+{
+  "scenario_id": "token-quota-exhausted",
+  "metadata": {
+    "agent_supports": "no",
+    "daemon_capability": "n/a",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+73afca7",
+    "confidence": 0.93,
+    "notes": "DeepSeek Harness 0.1.5-rc.2 turns quota exhaustion into a terminal model error and immediately permits a later prompt; it has no quota-reset hold that satisfies this scenario."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "token-quota-exhausted",
+      "agent": "deepseek-harness",
+      "agent_supports": "no",
+      "daemon_capability": "n/a",
+      "driver_capability": "ready",
+      "record_blocked": "upstream",
+      "confidence": 0.93,
+      "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a\ndriver_capability: ready\n\n## Reasoning\n\nThe scenario requires a quota or cost cap to end the active turn, leave the session in `ready`, and prevent later prompts from starting a new turn until the budget resets. DeepSeek Harness 0.1.5-rc.2 does not implement that behavior. Its provider layer distinguishes permanent `QUOTA` failures from transient `RATE_LIMIT` failures. The default retry policy retries `RATE_LIMIT` five times, but does not include `QUOTA` in its retryable codes. When recovery is absent or exhausted, the agent loop throws the model failure and appends a durable `turn/end` with `reason.kind=error`.\n\nThe error does not install a quota-reset hold. The agent loop catches the failed driver boundary, returns the agent to its internal idle phase, and `followup()` always inserts the later user message into the next-turn inbox and calls `wakeDriver()`. `wakeDriver()` immediately starts a new running phase and the next `turn()` appends another `turn/start`. A later prompt therefore starts a new turn and another provider request. The Harness can report a quota error, but it cannot keep later prompts idle until reset. That missing gate is fundamental to the scenario, so the agent verdict is `no`, not `partial`.\n\nThe required installed-binary scan supports the same result. `strings $(which dsh) | grep -iE 'quota|budget|rate.?limit|429|max.?tokens|cost.?limit'` returned no matches in the 0.1.5-rc.2 launcher. The installed official package documentation and implementation contain provider retry and per-request output-limit surfaces, but no session token/cost budget or quota-reset gate.\n\nDaemon capability is not applicable because the agent does not perform the required lifecycle. For context only, the current DSH parser would map the emitted error `turn/end` to `turn_done` plus a terminal `SessionError`, which classifies as `error`, not the required `ready` hold. That is correct handling of the trace that DSH writes and is not a daemon bug.\n\nThe driver is ready by the frozen-no-feature convention. Static inspection reports support for `send`, `wait_turn`, `sleep`, and every other current interactive primitive. No recipe can elicit the missing quota-reset hold, so the recipe is `applicable:false`.\n\n## What would change the verdict\n\nDeepSeek Harness must add a session-level token or cost cap, or a provider-quota latch, that refuses later prompts until a reset condition and persists an observable non-error turn boundary. A later assessment can then judge the daemon and author a driven lifecycle spec.",
+      "caveats": [
+        "Vacuous-pass condition: a meta-only spec passes without producing a quota event. This cell is frozen and makes no behavioral pass claim; adding ordinary working/ready phases would only prove a normal turn.",
+        "The Harness does detect provider QUOTA and RATE_LIMIT failures. Detection alone does not satisfy the scenario because the agent records a terminal error and lets the next prompt start another turn immediately.",
+        "No live 429 recording was run during assessment. The verdict rests on the installed 0.1.5-rc.2 provider, retry, and agent-loop implementations. Re-probe those sources after an upgrade.",
+        "If the agent later adds a persistent quota gate, re-assess daemon capability. The current parser maps error turn boundaries to the canonical error state and does not model a ready quota hold."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/bin/dsh",
+          "note": "Installed 0.1.5-rc.2 launcher. The required strings scan for quota, budget, rate limit, 429, max tokens, and cost limit returned no matches."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/profiles/node_modules/@deepseek-ai/dsh-llm-deepseek/lib/index.js",
+          "note": "httpErrorCode classifies provider quota details as QUOTA and other HTTP 429 responses as RATE_LIMIT; non-2xx failures become LlmError values with the normalized code."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/profiles/node_modules/@deepseek-ai/dsh-llm/lib/index.js",
+          "note": "The default normal retry policy permits five retries for EMPTY_RESPONSE, RATE_LIMIT, SERVER, TIMEOUT, and TRANSPORT. QUOTA is not retryable."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/profiles/node_modules/@deepseek-ai/dsh-llm-retry/README.md",
+          "note": "Official installed package reference: rate limits use bounded normal-mode recovery; an unhandled or exhausted failure leaves retry recovery and remains a model-request failure."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/profiles/node_modules/@deepseek-ai/dsh-agent-loop/lib/index.js",
+          "note": "Unhandled model failure is written as turn/end reason.kind=error. The driver then becomes idle; followup inserts a next-turn message and wakeDriver immediately opens another running phase and turn/start. There is no quota-reset latch."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser.go",
+          "note": "parseTurnEnd maps reason.kind=error to turn_done plus a terminal SessionError. This correctly yields error rather than the scenario's required ready hold."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "The static driver scan reports send, wait_turn, sleep, and all other current interactive primitives; no driver primitive can create the missing agent behavior."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "Frozen on agent_supports=no. DeepSeek Harness maps provider quota to an error turn/end and immediately accepts a later prompt as a new turn. It has no persistent quota-reset gate, so no executable recipe can satisfy the required ready hold."
+    }
+  }
+}
