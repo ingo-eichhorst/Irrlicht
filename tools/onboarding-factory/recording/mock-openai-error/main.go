@@ -1,0 +1,178 @@
+// mock-openai-error is a stateful OpenAI-compatible chat-completions stub for
+// deterministic provider-error recordings.
+//
+// The first --succeed-after counted requests fail. The next request and all
+// later requests stream a normal completion. A value of zero fails forever.
+// This supports retry recovery, terminal overload, and rejected-credential
+// scenarios through one binary and different recipe arguments.
+//
+// DeepSeek Harness also sends an auxiliary session-title request to the same
+// route. The title request is not part of the user turn. The default
+// --ignore-substring matches the stable system prompt in
+// @deepseek-ai/dsh-session-title-llm 0.1.5-rc.2. Matching requests get a happy
+// response and do not consume a failure slot.
+package main
+
+import (
+	"encoding/json"
+	"flag"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"os"
+	"regexp"
+	"strings"
+	"sync/atomic"
+	"time"
+)
+
+const (
+	contentTypeHeader = "Content-Type"
+	modelID           = "mock-openai-error-model"
+	maxRequestBytes   = 1 << 20
+)
+
+func main() {
+	addr := flag.String("addr", "127.0.0.1:18806", "bind address")
+	status := flag.Int("status", http.StatusServiceUnavailable, "HTTP status to fail with")
+	errType := flag.String("error-type", "server_error", "OpenAI error.type")
+	errCode := flag.String("error-code", "overloaded", "OpenAI error.code")
+	errMsg := flag.String("error-message", "Provider overloaded (mock).", "OpenAI error.message")
+	succeedAfter := flag.Int("succeed-after", 0, "number of counted requests that fail before success; 0 = never succeed")
+	ignoreSubstring := flag.String("ignore-substring", "create a concise title", "case-insensitive request-body substring to answer successfully without counting; empty disables filtering")
+	flag.Parse()
+
+	if *succeedAfter < 0 {
+		log.Fatalf("--succeed-after must be >= 0, got %d", *succeedAfter)
+	}
+	if *status < 400 || *status > 599 {
+		log.Fatalf("--status must be a 4xx/5xx failure code, got %d", *status)
+	}
+
+	cfg := failureConfig{
+		status:          *status,
+		errType:         *errType,
+		errCode:         *errCode,
+		errMsg:          *errMsg,
+		succeedAfter:    *succeedAfter,
+		ignoreSubstring: strings.ToLower(*ignoreSubstring),
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/chat/completions", cfg.handleChatCompletions)
+	mux.HandleFunc("/v1/models", handleModels)
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("unhandled %s %s", r.Method, r.URL.Path)
+		http.NotFound(w, r)
+	})
+
+	srv := &http.Server{Addr: *addr, Handler: mux, ReadTimeout: 30 * time.Second}
+	log.Printf("mock-openai-error listening on %s (status=%d type=%s succeed-after=%d)",
+		*addr, *status, *errType, *succeedAfter)
+	if err := srv.ListenAndServe(); err != nil {
+		log.Printf("server exited: %v", err)
+		os.Exit(1)
+	}
+}
+
+type failureConfig struct {
+	status          int
+	errType         string
+	errCode         string
+	errMsg          string
+	succeedAfter    int
+	ignoreSubstring string
+
+	requests atomic.Int64
+}
+
+func (c *failureConfig) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRequestBytes))
+	if err != nil {
+		http.Error(w, "request body exceeds mock limit", http.StatusRequestEntityTooLarge)
+		return
+	}
+	model := modelOf(body)
+
+	if c.ignoreSubstring != "" && strings.Contains(strings.ToLower(string(body)), c.ignoreSubstring) {
+		log.Printf("POST /v1/chat/completions #0 model=%s — ignored title side channel", model)
+		streamHappyPath(w)
+		return
+	}
+
+	n := c.requests.Add(1)
+	if c.succeedAfter > 0 && n > int64(c.succeedAfter) {
+		log.Printf("POST /v1/chat/completions #%d model=%s — succeeding (--succeed-after %d)", n, model, c.succeedAfter)
+		streamHappyPath(w)
+		return
+	}
+	log.Printf("POST /v1/chat/completions #%d model=%s — failing %d %s", n, model, c.status, c.errType)
+	c.writeFailure(w)
+}
+
+func (c *failureConfig) writeFailure(w http.ResponseWriter) {
+	w.Header().Set(contentTypeHeader, "application/json")
+	w.WriteHeader(c.status)
+	payload, err := json.Marshal(map[string]any{
+		"error": map[string]any{
+			"message": c.errMsg,
+			"type":    c.errType,
+			"param":   nil,
+			"code":    c.errCode,
+		},
+	})
+	if err != nil {
+		log.Printf("marshal failure body: %v", err)
+		return
+	}
+	_, _ = w.Write(append(payload, '\n'))
+}
+
+func handleModels(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set(contentTypeHeader, "application/json")
+	_, _ = fmt.Fprintf(w, `{"object":"list","data":[{"id":%q,"object":"model","created":0,"owned_by":"mock"}]}`, modelID)
+}
+
+func modelOf(body []byte) string {
+	var request struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(body, &request); err != nil || request.Model == "" {
+		return "?"
+	}
+	if !safeModelName.MatchString(request.Model) {
+		return "<unprintable>"
+	}
+	return request.Model
+}
+
+var safeModelName = regexp.MustCompile(`^[A-Za-z0-9._/-]{1,128}$`)
+
+func streamHappyPath(w http.ResponseWriter) {
+	w.Header().Set(contentTypeHeader, "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		log.Printf("response writer is not a Flusher — cannot stream")
+		return
+	}
+
+	write := func(data string) {
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
+	}
+	write(fmt.Sprintf(`{"id":"chatcmpl-mock-001","object":"chat.completion.chunk","created":0,"model":%q,"choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}`, modelID))
+	write(fmt.Sprintf(`{"id":"chatcmpl-mock-001","object":"chat.completion.chunk","created":0,"model":%q,"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":null}]}`, modelID))
+	write(fmt.Sprintf(`{"id":"chatcmpl-mock-001","object":"chat.completion.chunk","created":0,"model":%q,"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":1,"total_tokens":13}}`, modelID))
+	write("[DONE]")
+}
