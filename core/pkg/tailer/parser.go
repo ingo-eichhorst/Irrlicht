@@ -784,8 +784,14 @@ type ReplayStoreStager interface {
 // under a pre-#1796 parser, which had NO session-error concept at all — v0.6.0's
 // parser.go contains no SessionError whatsoever — since the re-scan re-derives
 // the failure from lines that parser read as ordinary and settles them `error`
-// instead of leaving them permanently `ready`).
-const LedgerSchemaVersion = 6
+// instead of leaving them permanently `ready`);
+// 7 — #1982 (BackgroundDeadlines persisted; the bump also heals sessions with a
+// Monitor task already in flight at upgrade time, whose launch line a pre-#1982
+// parser consumed without registering — without the re-scan that line is never
+// re-read, so a `persistent` Monitor, which carries timeoutMs 0 and therefore no
+// deadline of its own, would keep flipping the session to `ready` for the whole
+// remaining life of the task).
+const LedgerSchemaVersion = 7
 
 // LedgerState is the durable portion of a tailer's accumulation state, written
 // to disk after every TailAndProcess pass so that daemon restarts don't reset
