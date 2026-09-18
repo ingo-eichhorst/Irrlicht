@@ -569,15 +569,10 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	// this pass. See rotation_detect.go.
 	startPos := t.resolveStartPos(file, fileSize)
 
-	if _, err := file.Seek(startPos, io.SeekStart); err != nil {
-		return nil, fmt.Errorf("failed to seek transcript: %w", err)
+	scan, err := t.scanTranscript(file, startPos, fileSize)
+	if err != nil {
+		return nil, err
 	}
-
-	// bufio.Reader (not Scanner) so a single oversized JSONL line can't wedge
-	// the tailer. Lines above maxTranscriptLineSize are skipped: the offset is
-	// advanced past them and processing continues. See issue #270.
-	reader := bufio.NewReaderSize(file, 64*1024)
-	scan := t.scanNewLines(reader, startPos)
 	t.lastOffset = scan.endOffset
 	// Re-anchor the rewrite detector at the new resume point. Safe to read
 	// after the scan even against a live writer: an append only adds bytes at
@@ -631,6 +626,20 @@ func (t *TranscriptTailer) TailAndProcess() (*SessionMetrics, error) {
 	return t.metrics, scan.err
 }
 
+func (t *TranscriptTailer) scanTranscript(file *os.File, startPos, fileSize int64) (transcriptScanResult, error) {
+	if isZstdTranscript(t.path) {
+		return t.scanZstdFrames(file, startPos, fileSize), nil
+	}
+	if _, err := file.Seek(startPos, io.SeekStart); err != nil {
+		return transcriptScanResult{}, fmt.Errorf("failed to seek transcript: %w", err)
+	}
+
+	// bufio.Reader (not Scanner) lets the tailer skip an oversized JSONL line
+	// and continue after it. See issue #270.
+	reader := bufio.NewReaderSize(file, 64*1024)
+	return t.scanNewLines(reader, startPos), nil
+}
+
 // transcriptScanResult carries the outcomes of one scanNewLines pass: how far
 // the offset advanced and the per-pass signals TailAndProcess folds into the
 // returned SessionMetrics.
@@ -656,7 +665,13 @@ type transcriptScanResult struct {
 // to applySkippedEvent (Skip=true or unparseable) or processParsedEvent
 // (a real event) — the same split TailAndProcess used to perform inline.
 func (t *TranscriptTailer) scanNewLines(reader *bufio.Reader, startPos int64) transcriptScanResult {
-	res := transcriptScanResult{endOffset: startPos}
+	return t.scanNewLinesAfter(reader, startPos, false)
+}
+
+// scanNewLinesAfter is scanNewLines with the prior frame's turn-boundary
+// state. Framed transcripts call it once per independently validated frame.
+func (t *TranscriptTailer) scanNewLinesAfter(reader *bufio.Reader, startPos int64, turnDoneSeen bool) transcriptScanResult {
+	res := transcriptScanResult{endOffset: startPos, turnDoneSeen: turnDoneSeen}
 	rawLineParser, isRawLine := t.parser.(RawLineParser)
 
 	for {

@@ -29,7 +29,7 @@ An adapter's `Source` variant determines how sessions are found at all. This is 
 
 | Variant | Adapters | How sessions are discovered |
 |---|---|---|
-| `agent.FilesUnderRoot` | claude-code, codex, pi, gemini-cli, mistral-vibe, kiro-cli, antigravity, copilot, junie, muse | fswatcher over a `$HOME`-relative root |
+| `agent.FilesUnderRoot` | claude-code, codex, pi, gemini-cli, mistral-vibe, kiro-cli, antigravity, copilot, junie, muse, dsh | fswatcher over a `$HOME`-relative root |
 | `agent.FilesUnderCWD` | aider | **No watcher at all** — the process scanner stat-polls `<pid's CWD>/<filename>` |
 | `agent.ProcessOwnedStore` | opencode, hermes | Dedicated SQLite watcher; full tailer bypass |
 

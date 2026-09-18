@@ -56,7 +56,9 @@ const defaultReconcileInterval = 15 * time.Second
 // this reporting exists to leave (#1255).
 const maxLoggedWatchFailures = 10
 
-// Watcher watches a directory tree for .jsonl transcript file events.
+// Watcher watches a directory tree for transcript file events. The default
+// path rule accepts .jsonl files. A custom session-ID callback owns the rule
+// for adapters that use another suffix.
 // It implements inbound.Watcher.
 type Watcher struct {
 	root     string          // resolved absolute path to the watched directory
@@ -257,6 +259,12 @@ func (w *Watcher) idFor(path string) string {
 		return w.sessionID(path)
 	}
 	return extractSessionID(path)
+}
+
+// rejectsDefaultSuffix rejects non-.jsonl files only when no adapter-specific
+// session-ID callback owns transcript selection.
+func (w *Watcher) rejectsDefaultSuffix(path string) bool {
+	return w.sessionID == nil && !strings.HasSuffix(path, transcriptExt)
 }
 
 func (w *Watcher) parentIDFor(path string) string {
@@ -513,8 +521,7 @@ func (w *Watcher) handleEvent(watcher *fsnotify.Watcher, ev fsnotify.Event) {
 		delete(w.watchFailed, name)
 	}
 
-	// Only process .jsonl files (transcript files).
-	if !strings.HasSuffix(name, transcriptExt) {
+	if w.rejectsDefaultSuffix(name) {
 		return
 	}
 
@@ -933,7 +940,7 @@ func newestFirst(root string, entries []os.DirEntry) []string {
 
 // addSubtree recursively adds fsnotify watches for dir and every
 // subdirectory already beneath it, and emits EventNewSession for every
-// existing .jsonl file it finds. Used from handleEvent when a new
+// existing transcript file it finds. Used from handleEvent when a new
 // directory appears at runtime; covers the case where the new dir was
 // created together with nested subdirs and files that already exist by
 // the time our handler processes the fsnotify Create event.
@@ -950,8 +957,8 @@ func (w *Watcher) addSubtree(watcher *fsnotify.Watcher, dir string) {
 	})
 }
 
-// emitExistingFiles scans a newly-watched directory for .jsonl files that were
-// created before the watch was added and emits EventNewSession for each.
+// emitExistingFiles scans a newly-watched directory for transcript files that
+// were created before the watch was added and emits EventNewSession for each.
 func (w *Watcher) emitExistingFiles(dir string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -959,7 +966,7 @@ func (w *Watcher) emitExistingFiles(dir string) {
 	}
 	projectDir := filepath.Base(dir)
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), transcriptExt) {
+		if e.IsDir() || w.rejectsDefaultSuffix(e.Name()) {
 			continue
 		}
 		fullPath := filepath.Join(dir, e.Name())
@@ -1044,7 +1051,7 @@ func (w *Watcher) reconcile(ctx context.Context, watcher *fsnotify.Watcher) {
 // up. Only files with a valid session ID are ever recorded in emitted, so
 // consulting it before idFor cannot mask a file idFor would have skipped.
 func (w *Watcher) reconcileFile(path string) {
-	if !strings.HasSuffix(path, transcriptExt) {
+	if w.rejectsDefaultSuffix(path) {
 		return
 	}
 	size, mtime := fileSizeAndMtime(path)

@@ -12,6 +12,7 @@ import (
 	"irrlicht/core/adapters/inbound/agents/claudecode"
 	"irrlicht/core/adapters/inbound/agents/codex"
 	"irrlicht/core/adapters/inbound/agents/copilot"
+	"irrlicht/core/adapters/inbound/agents/dsh"
 	"irrlicht/core/adapters/inbound/agents/geminicli"
 	"irrlicht/core/adapters/inbound/agents/hermes"
 	"irrlicht/core/adapters/inbound/agents/junie"
@@ -134,6 +135,7 @@ func TestSourceCensus(t *testing.T) {
 			kirocli.AdapterName, geminicli.AdapterName,
 			antigravity.AdapterName, vibe.AdapterName,
 			copilot.AdapterName, junie.AdapterName, muse.AdapterName,
+			dsh.AdapterName,
 		},
 		"FilesUnderCWD":     {aider.AdapterName},
 		"ProcessOwnedStore": {opencode.AdapterName, hermes.AdapterName},
@@ -204,7 +206,7 @@ func TestParserSeamCensus(t *testing.T) {
 		{"pendingContributor", func(p any) bool { _, ok := p.(agent.PendingContributor); return ok },
 			[]string{claudecode.AdapterName}},
 		{"ParserStateProvider", func(p any) bool { _, ok := p.(tailer.ParserStateProvider); return ok },
-			[]string{claudecode.AdapterName, codex.AdapterName}},
+			[]string{claudecode.AdapterName, codex.AdapterName, dsh.AdapterName}},
 		{"TranscriptPathAware", func(p any) bool { _, ok := p.(tailer.TranscriptPathAware); return ok },
 			[]string{kirocli.AdapterName, vibe.AdapterName, antigravity.AdapterName}},
 		{"ReplayStoreStager", func(p any) bool { _, ok := p.(tailer.ReplayStoreStager); return ok },

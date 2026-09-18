@@ -6,6 +6,7 @@ import (
 	"irrlicht/core/adapters/inbound/agents/claudecode"
 	"irrlicht/core/adapters/inbound/agents/codex"
 	"irrlicht/core/adapters/inbound/agents/copilot"
+	"irrlicht/core/adapters/inbound/agents/dsh"
 	"irrlicht/core/adapters/inbound/agents/geminicli"
 	"irrlicht/core/adapters/inbound/agents/hermes"
 	"irrlicht/core/adapters/inbound/agents/junie"
@@ -37,5 +38,6 @@ func All() []agent.Agent {
 		hermes.Agent(),
 		junie.Agent(),
 		muse.Agent(),
+		dsh.Agent(),
 	}
 }

@@ -301,6 +301,47 @@ func TestReconcile_SkipsFileWithoutSessionID(t *testing.T) {
 	expectNoEvent(t, ch, 100*time.Millisecond)
 }
 
+// A custom session-ID extractor owns transcript selection. This permits
+// adapters whose upstream transcript suffix is not the default .jsonl suffix.
+func TestCustomSessionIDSupportsNonJSONLSuffix(t *testing.T) {
+	const sessionID = "session-600e7941-bf4f-4da4-9ef6-489168e13724"
+	newWatcher := func(t *testing.T) (*Watcher, <-chan agent.Event, string) {
+		t.Helper()
+		root := t.TempDir()
+		dir := mkdir(t, filepath.Join(root, sessionID))
+		path := filepath.Join(dir, "session.v3.jsonl.zstd")
+		writeTranscript(t, path, "compressed transcript")
+		writeTranscript(t, filepath.Join(dir, "session.lock"), "123")
+		w := NewWithRoot(root, testAdapter, 0).WithSessionID(func(candidate string) string {
+			if strings.HasSuffix(candidate, ".jsonl.zstd") {
+				return sessionID
+			}
+			return ""
+		})
+		return w, w.Subscribe(), path
+	}
+
+	t.Run("live write", func(t *testing.T) {
+		w, ch, path := newWatcher(t)
+		w.handleEvent(nil, fsnotify.Event{Name: path, Op: fsnotify.Write})
+		expectEvent(t, ch, agent.EventActivity, sessionID)
+	})
+
+	t.Run("startup scan", func(t *testing.T) {
+		w, ch, path := newWatcher(t)
+		w.emitExistingFiles(filepath.Dir(path))
+		expectEvent(t, ch, agent.EventNewSession, sessionID)
+		expectNoEvent(t, ch, 100*time.Millisecond)
+	})
+
+	t.Run("reconcile sweep", func(t *testing.T) {
+		w, ch, _ := newWatcher(t)
+		w.reconcile(context.Background(), newFsnotify(t))
+		expectEvent(t, ch, agent.EventNewSession, sessionID)
+		expectNoEvent(t, ch, 100*time.Millisecond)
+	})
+}
+
 // Adapters with a flat layout keep transcripts directly under the root with no
 // project directory at all (kiro-cli: sessions/cli/<uuid>.jsonl). Walking only
 // the subdirectories would make the sweep inert for them — the fix would ship
