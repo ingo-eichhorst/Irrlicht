@@ -81,6 +81,14 @@ func ValidateTranscriptForProfile(scenarioDir string, profile matrix.ExecutionPr
 	if err != nil || meta == nil || len(meta.TranscriptAssertions) == 0 {
 		return nil, err
 	}
+	records, err := transcriptRecordsForProfile(scenarioDir, profile)
+	if err != nil {
+		return nil, err
+	}
+	return evaluateRecordAssertions("transcript", meta.TranscriptAssertions, records)
+}
+
+func transcriptRecordsForProfile(scenarioDir string, profile matrix.ExecutionProfile) ([]map[string]any, error) {
 	recordings, err := matrix.RecordingsForProfile(scenarioDir, profile)
 	if err != nil {
 		return nil, err
@@ -92,11 +100,7 @@ func ValidateTranscriptForProfile(scenarioDir string, profile matrix.ExecutionPr
 	if path == "" || strings.HasSuffix(path, ".md") {
 		return nil, fmt.Errorf("transcript assertions configured but newest recording has no JSONL transcript")
 	}
-	records, err := readJSONLRecords(path, "transcript")
-	if err != nil {
-		return nil, err
-	}
-	return evaluateRecordAssertions("transcript", meta.TranscriptAssertions, records)
+	return readJSONLRecords(path, "transcript")
 }
 
 // ValidateEventsForProfile checks the newest recording's events against the
@@ -343,13 +347,21 @@ func allFieldsContain(records []map[string]any, valuePath, containerPath string)
 }
 
 func recordMatches(record map[string]any, where map[string]any, contains map[string]string) bool {
-	for path, expected := range where {
+	return recordValuesEqual(record, where) && recordValuesContain(record, contains)
+}
+
+func recordValuesEqual(record map[string]any, expectedValues map[string]any) bool {
+	for path, expected := range expectedValues {
 		actual, ok := valueAtPath(record, path)
 		if !ok || !reflect.DeepEqual(actual, expected) {
 			return false
 		}
 	}
-	for path, expected := range contains {
+	return true
+}
+
+func recordValuesContain(record map[string]any, expectedValues map[string]string) bool {
+	for path, expected := range expectedValues {
 		actual, ok := valueAtPath(record, path)
 		text, isString := actual.(string)
 		if !ok || !isString || !strings.Contains(text, expected) {

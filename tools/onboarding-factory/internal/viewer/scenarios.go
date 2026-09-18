@@ -410,18 +410,29 @@ func toolCallsAndSession(line []byte, currentSessionID string) ([]ToolCall, stri
 	if err := json.Unmarshal(line, &raw); err != nil {
 		return nil, currentSessionID
 	}
-	if recordType, _ := raw["type"].(string); recordType == "session" {
-		if id, _ := raw["id"].(string); id != "" {
-			currentSessionID = id
-		}
+	if sessionID := sessionIDInRecord(raw); sessionID != "" {
+		currentSessionID = sessionID
 	}
 	calls := toolCallsInRecord(raw)
+	attachSessionID(calls, currentSessionID)
+	return calls, currentSessionID
+}
+
+func sessionIDInRecord(raw map[string]any) string {
+	recordType, _ := raw["type"].(string)
+	if recordType != "session" {
+		return ""
+	}
+	sessionID, _ := raw["id"].(string)
+	return sessionID
+}
+
+func attachSessionID(calls []ToolCall, sessionID string) {
 	for i := range calls {
 		if calls[i].SessionID == "" {
-			calls[i].SessionID = currentSessionID
+			calls[i].SessionID = sessionID
 		}
 	}
-	return calls, currentSessionID
 }
 
 func sortToolCalls(calls []ToolCall) {
