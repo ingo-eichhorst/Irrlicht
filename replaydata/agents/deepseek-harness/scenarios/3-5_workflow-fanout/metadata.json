@@ -1,0 +1,137 @@
+{
+  "scenario_id": "workflow-fanout",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "bug",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+968624b",
+    "confidence": 0.89,
+    "notes": "DeepSeek Harness ships workflow fan-out, but the DSH adapter skips bare-UUID child transcripts and ignores their durable parentSession field."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "workflow-fanout",
+      "agent": "deepseek-harness",
+      "agent_supports": "yes",
+      "daemon_capability": "bug",
+      "driver_capability": "ready",
+      "confidence": 0.89,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: bug\ndriver_capability: ready\n\n## Agent capability\n\nDeepSeek Harness 0.1.5-rc.2 ships a first-class `workflow` tool. The installed official tool reference states that a model-authored JavaScript workflow can delegate to many subagents, that `parallel()` starts zero-argument thunks concurrently, and that the parent tool call waits until every child settles. The installed base profile mounts `@deepseek-ai/dsh-workflow-worker-thread` with provider `spawn` and mounts `@deepseek-ai/dsh-tool-workflow`. The active TUI composition contains both rows.\n\nThe workflow engine sends every `agent()` call through `ctx.subagents.start` with the workflow's calling Agent as `parent`. The shipped in-process spawn driver creates a separate child session with a bare `randomUUID()` id. `childSessionMeta` writes `parentSession` equal to the durable parent id and `origin: subagent` into each child header. The workflow tool also writes one `tool-workflow/agent-start` parent record for each published child, including its distinct `childId`, and returns `agentsStarted` in its result. These sources explicitly support a three-child parallel fan-out and a non-vacuous transcript assertion.\n\n## Daemon capability\n\nThe DSH adapter cannot currently observe the required child topology. `sessionIDFromPath` accepts only directory names matching `session-<uuid>`, but the official in-process driver persists workflow children under bare UUID ids. The source therefore returns an empty session id for every valid workflow child transcript. `FilesUnderRoot` skips those transcripts before the parser can emit a child lifecycle.\n\nThe adapter also declares no `ParentSessionIDFromPath` function. Its session-header parser reads only `version` and `cwd`, then skips the header. It therefore ignores the durable `parentSession` field. Even if the child-id filter were widened alone, the daemon would not emit `parent_linked`, would not set `ParentSessionID`, and would not derive `SubagentCount(parent)`. This is `daemon=bug`, not `incapable`, because the exact child transcripts and parent ids are durable under the root that the adapter already monitors. The correct spec stays known-failing until both defects are fixed.\n\nDeepSeek Harness does not create a Claude-style per-run journal file. Its workflow bookkeeping is stored as typed records inside the parent transcript. The scenario's no-phantom-journal condition is therefore vacuous for this adapter and does not reduce the daemon verdict.\n\n## Driver capability and recipe\n\nThe interactive driver implements `send`, `wait_turn`, and `sleep`, which are the only recipe steps. The prompt requires one `workflow` tool call. It gives an exact script shape: one `parallel()` call with exactly three thunks, one `agent()` call per thunk, distinct labels, and deterministic child outputs after a 20-second shell delay. The workflow runs in the foreground, so `wait_turn` covers parent selection, concurrent child work, the tool result, and the final parent reply. The 900-second budget covers the measured slow local-model class. The 120-second trailing sleep exceeds the largest committed sibling settle delay of 90 seconds because this route writes concatenated zstd frames after four local-model continuations.\n\nThe spec requires exactly one workflow call, exactly three distinct `tool-workflow/agent-start` child ids, three completed member endings, and a successful tool result that says three agents completed. Thus a plain parent turn, three plain subagent calls, or a one-child workflow cannot satisfy the fixture. Lifecycle phases assert three distinct child sessions, three parent links, child completion, and the parent held in working until the foreground workflow completes.",
+      "caveats": [
+        "Known daemon bug: core/adapters/inbound/agents/dsh/adapter.go accepts only session-<uuid> directory names, but @deepseek-ai/dsh-subagent-in-process-driver creates workflow child ids as bare UUIDs. The source skips every durable workflow child transcript.",
+        "Known daemon bug: the child header carries parentSession, but core/adapters/inbound/agents/dsh/agent.go declares no ParentSessionIDFromPath extractor and parser.go discards that header field. No parent_linked event or SubagentCount can be produced.",
+        "Emission is source-confirmed but not live-recorded for this cell. Recording must confirm that the active TUI composition persists all three workflow children and that their headers carry the calling parent id.",
+        "Vacuous-pass condition: the parent ready-to-working-to-ready arc could pass after an ordinary turn, or unrelated children could satisfy positive lifecycle checks. The transcript assertions therefore require one workflow call, three distinct tool-workflow child ids, three completed member endings, and the exact successful three-agent result.",
+        "The no-phantom-journal condition is vacuous for DeepSeek Harness. This workflow stores run bookkeeping as typed events in the parent transcript and creates no separate journal JSONL that could become a session.",
+        "Load-bearing environment preconditions: the active TUI profile must still expose the workflow tool with the spawn provider, the host must allow at least three concurrent workflow agents, and LM Studio must expose qwen/qwen3.5-9b. Record must re-probe all three instead of trusting this assessment.",
+        "The three workflow children share the parent dsh process. Do not require distinct child PIDs; require distinct child SessionState rows and ParentSessionID links."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-base/cordis.patch.yml",
+          "note": "Official installed base profile mounts workflow-worker-thread with provider spawn and mounts tool-workflow."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-tool-workflow/README.md",
+          "note": "Official installed package reference: workflow delegates to many subagents, the parent waits for all children, and success reports agentsStarted."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-tool-workflow/lib/index.js",
+          "note": "Shipped tool schema documents parallel() concurrency and records run-start, one agent-start with childId per member, member endings, and run-end in the parent session."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-workflow-worker-thread/README.md",
+          "note": "Official engine reference: every agent() starts a host-side subagent with the run's parent as the parent of every child; parallel() runs thunks concurrently subject to the configured cap."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-workflow-worker-thread/lib/index.js",
+          "note": "Installed implementation calls subagents.start(provider, {parent: this.parent, ...}) for every workflow child."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-subagent-in-process-driver/lib/index.js",
+          "note": "Official installed spawn driver creates each child with a bare randomUUID and childSessionMeta."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-subagent/lib/index.js",
+          "note": "childSessionMeta writes parentSession equal to the parent header id and origin subagent into each durable child header."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/adapter.go",
+          "note": "sessionIDPattern requires session-<uuid>; sessionIDFromPath returns empty for the official bare-UUID child directories."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/agent.go",
+          "note": "FilesUnderRoot declares SessionIDFromPath but no ParentSessionIDFromPath extractor."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser.go",
+          "note": "parseSession validates the header version and reads cwd, then skips the header without reading parentSession."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "The driver implements send, wait_turn, and sleep and applies the local LM Studio model through a per-run patch."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "timeout_seconds": 900,
+      "settings": {
+        "model": "qwen/qwen3.5-9b",
+        "base_url": "http://127.0.0.1:1234/v1",
+        "context_window": 262144,
+        "permission_mode": "danger-full-access",
+        "api_key": "irrlicht-local-recording"
+      },
+      "preconditions": [
+        "dsh 0.1.5-rc.2 or newer is on PATH and the active TUI profile exposes the workflow tool with the spawn provider; re-probe the live tool surface at record time",
+        "the workflow engine's effective maxConcurrentAgents is at least 3; the assessed host reports 10 available processors and the default cap resolves above 3, but record must re-probe it",
+        "LM Studio is serving qwen/qwen3.5-9b through http://127.0.0.1:1234/v1; re-probe the live model roster at record time",
+        "tmux and zstd are installed",
+        "irrlichd is recording with DeepSeek Harness transcript permission granted"
+      ],
+      "setup": [
+        "Create a fresh per-run cwd and launch the DSH TUI through the interactive driver",
+        "Apply the temporary LM Studio and qwen model patch without modifying the installed TUI profile",
+        "Resolve the post-marker parent session.v3.jsonl.zstd before sending input"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Use the workflow tool exactly once. Set meta.name to irrlicht-fanout and meta.description to Three parallel marker tasks. The plain JavaScript script must call parallel exactly once with exactly three zero-argument functions. Each function must call agent exactly once, with distinct labels child-a, child-b, and child-c. Give each child this task, changing A to B or C for its label: Use the bash tool to run exactly `sleep 20 && printf CHILD_A_DONE`. After it succeeds, reply with exactly CHILD_A_DONE and no other text. After parallel returns, return {done:true,results}. Do not use the plain subagent or subagent_fork tools. Wait for the workflow result. Then reply with exactly DONE and no other text."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 120
+        }
+      ],
+      "verify": [
+        "the raw parent transcript contains exactly one workflow tool call whose arguments name irrlicht-fanout and use parallel",
+        "the parent transcript contains exactly three tool-workflow/agent-start records with three distinct childId values and exactly three completed tool-workflow/agent-end records",
+        "the workflow call has a matching successful result containing workflow irrlicht-fanout completed (3 agents), and the run ends completed",
+        "each raw child transcript header carries origin subagent and parentSession equal to the top-level parent session id",
+        "events.jsonl shows three distinct child sessions and parent_linked for each child",
+        "the parent stays working throughout the foreground workflow and reaches ready only after all three children reach ready; SubagentCount returns to zero",
+        "no session arises from workflow bookkeeping and no session is attributed to an unknown project",
+        "the recording reports agent deepseek-harness, model qwen/qwen3.5-9b, and non-zero tokens"
+      ],
+      "scope_note": "The 120-second trailing delay exceeds the largest committed workflow-fanout sibling delay of 90 seconds. The local LM Studio route writes concatenated zstd frames after the parent tool decision, three concurrent child turns, the workflow result, and the final parent continuation. The 900-second turn budget covers this measured slow local-model class."
+    }
+  }
+}
