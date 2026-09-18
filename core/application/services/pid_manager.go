@@ -885,33 +885,24 @@ func (pm *PIDManager) assignPIDLocked(pid int, sessionID string) (*session.Sessi
 	if err != nil {
 		return state, nil
 	}
-	// A proc-* pre-session must never evict a real, transcript-backed session
-	// that already holds this PID — only the reverse direction is ever valid
-	// (findSupersedingSession/sweepSupersededPreSessions both explicitly skip
-	// proc-* candidates as "the real session" for the same reason). Without
-	// this guard, a scanner poll that discovers an already-claimed PID later
-	// than the adapter's own (often much faster) discovery — muse's lsof-based
-	// lookup resolves in ~150-200ms against the scanner's fixed 1s interval —
-	// calls HandlePIDAssigned for its own proc-<pid> id, and this stale-scan
-	// used to delete the real session outright, with no re-creation path other
-	// than the daemon re-discovering it from scratch on the next transcript
-	// event (losing prev_state on the resulting transition). Confirmed via
-	// live muse recordings and reproduced in
-	// TestHandlePIDAssigned_PresessionNeverEvictsRealSession (issue #1960).
-	// A leftover proc-* row from the skipped eviction is not orphaned: it is
+	// isDedupDeleteCandidate carries the #1960 proc-*-never-evicts-real guard
+	// (a scanner poll's later proc-<pid> claim must never delete a real,
+	// transcript-backed session already holding the PID — confirmed via live
+	// muse recordings and reproduced in
+	// TestHandlePIDAssigned_PresessionNeverEvictsRealSession, which stays
+	// green under this extraction) alongside the general same-pid duplicate
+	// policy this loop used to spell out inline. Both now live in that one
+	// predicate, shared with the seed-time (dedupeByPID) and periodic
+	// (dedupeByPIDPeriodic) reconciliation paths (issue #1992). A leftover
+	// proc-* row this predicate declines to evict here is not orphaned: it is
 	// still cleanly retired, in the correct direction, by
 	// sweepSupersededPreSessionsPeriodic's PID-match branch on the next
 	// SweepDeadPIDs tick (matchPID: "always safe, no grace period").
-	newIsPresession := strings.HasPrefix(sessionID, "proc-")
 	var stale []*session.SessionState
 	for _, old := range states {
-		if old.SessionID == sessionID || old.PID != pid || old.ParentSessionID != "" {
-			continue
+		if isDedupDeleteCandidate(old, pid, state) {
+			stale = append(stale, old)
 		}
-		if newIsPresession && !strings.HasPrefix(old.SessionID, "proc-") {
-			continue
-		}
-		stale = append(stale, old)
 	}
 	return state, stale
 }
@@ -1195,6 +1186,10 @@ func (pm *PIDManager) CheckPIDLiveness() bool {
 	// Retire proc-* ghosts whose real session was PID-bound to a sibling
 	// process — the seed-time sweep can't reach them (issue #645).
 	pm.sweepSupersededPreSessionsPeriodic()
+	// Retire real-UUID duplicate root sessions sharing a live PID with a
+	// newer sibling, minted after startup — dedupeByPID only runs once, at
+	// seed time (issue #1992).
+	pm.dedupeByPIDPeriodic()
 
 	snaps := pm.snapshotLivenessStates()
 	foundDead := false
@@ -2130,13 +2125,32 @@ func (pm *PIDManager) removeSessionUntracked(tag string, s *session.SessionState
 	pm.broadcast(outbound.PushTypeDeleted, s)
 }
 
-// isDedupDeleteCandidate returns true when state is a non-subagent,
-// non-proc session sharing pid with newest but is not newest itself.
-func isDedupDeleteCandidate(state *session.SessionState, pid int, newest *session.SessionState) bool {
-	if state.PID != pid || state.SessionID == newest.SessionID {
+// isDedupDeleteCandidate returns true when victim is a stale duplicate PID
+// holder that should be deleted in favor of winner — the single "same pid,
+// keep winner, drop victim" policy shared by all three same-PID
+// reconciliation paths (issue #1992 unified these from two independent
+// spellings): assignment-time cleanup (assignPIDLocked's same-PID scan, acted
+// on by cleanupStalePIDHolders), seed-time dedup (dedupeByPID, via SeedPIDs),
+// and the periodic sweep (dedupeByPIDPeriodic, via CheckPIDLiveness).
+//
+//   - A subagent (ParentSessionID != "") is never a victim: it shares its
+//     parent's PID by design, never its own.
+//   - A proc-* victim is never evicted by this policy either — proc-*
+//     retirement is the presession-sweep family's job alone
+//     (findSupersedingSession / sweepSupersededPreSessions[Periodic]).
+//   - A proc-* winner never evicts anything here (issue #1960): only a real
+//     session superseding a proc-* placeholder is ever a valid direction, and
+//     that direction is, again, the presession-sweep family's — confirmed via
+//     TestHandlePIDAssigned_PresessionNeverEvictsRealSession, which stays
+//     green under this extraction.
+func isDedupDeleteCandidate(victim *session.SessionState, pid int, winner *session.SessionState) bool {
+	if victim.PID != pid || victim.SessionID == winner.SessionID {
 		return false
 	}
-	return state.ParentSessionID == "" && !strings.HasPrefix(state.SessionID, "proc-")
+	if victim.ParentSessionID != "" || strings.HasPrefix(victim.SessionID, "proc-") {
+		return false
+	}
+	return !strings.HasPrefix(winner.SessionID, "proc-")
 }
 
 // preSessionSweepGrace is how long a proc-* pre-session must exist before the
@@ -2236,6 +2250,73 @@ func (pm *PIDManager) sweepSupersededPreSessionsPeriodic() {
 		}
 		pm.removeSessionUntracked(logComponentSessionDetector, v.state,
 			fmt.Sprintf("pre-session superseded by %s (PID-bound to a sibling) — deleting", v.candidate), v.candidate)
+	}
+}
+
+// dedupeByPIDPeriodic retires a real-UUID duplicate root session sharing a
+// live PID with a newer sibling, minted after startup (issue #1992 — the
+// real-UUID sibling of #645's proc-* gap). dedupeByPID only ever runs once,
+// synchronously, inside SeedPIDs, before the event loop begins and before
+// this sweep's own goroutine is spawned — see SeedPIDs' thread-safety doc
+// comment. A duplicate that comes into existence after that point (the
+// observed production shape: a Save racing a same-PID Delete re-creates the
+// row cleanupStalePIDHolders just deleted — a separate, deliberately
+// unfiled defect; see cleanupStalePIDHolders/removeSessionUntracked) is
+// invisible to every other reaper and would otherwise survive until the next
+// daemon restart.
+//
+// It reuses trackNewestByPID (the single "who wins" policy — already
+// excluding subagents and proc-* placeholders from winning, issue #1961) and
+// isDedupDeleteCandidate (the single "same pid, keep winner, drop victim"
+// policy, issue #1992) so this path can never disagree with SeedPIDs'
+// dedupeByPID or assignPIDLocked's assignment-time cleanup about what counts
+// as a stale duplicate.
+//
+// Runs off the event loop (CheckPIDLiveness, on the SweepDeadPIDs ticker).
+// Mirrors sweepSupersededPreSessionsPeriodic's shape exactly: it snapshots
+// the session list and computes the victim list under assignMu — the same
+// lock assignPIDLocked and snapshotLivenessStates take, so its reads never
+// race a concurrent discovery goroutine's write of state.PID (issue #628) —
+// then releases the lock before acting. Never holding assignMu across a
+// delete callback is the invariant documented on assignMu itself. Deletion
+// routes through removeSessionUntracked, which fires onSessionDeleted and so
+// tombstones the id via SessionDetector.removeFromProjectSessions the same
+// way every other reconciliation delete does — the tombstone is what keeps
+// admitNewSession's recentlyDeleted check (which runs before
+// admitStaleTranscript in the admission gate; confirmed by reading
+// admitNewSession) from letting a late event for the deleted duplicate's
+// frozen transcript re-mint it.
+func (pm *PIDManager) dedupeByPIDPeriodic() {
+	pm.assignMu.Lock()
+	states, err := pm.repo.ListAll()
+	if err != nil {
+		pm.assignMu.Unlock()
+		return
+	}
+	newestByPID := make(map[int]*session.SessionState)
+	for _, state := range states {
+		pm.trackNewestByPID(state, newestByPID)
+	}
+	type victim struct {
+		state  *session.SessionState
+		winner string
+	}
+	var victims []victim
+	for pid, winner := range newestByPID {
+		for _, state := range states {
+			if isDedupDeleteCandidate(state, pid, winner) {
+				victims = append(victims, victim{state: state, winner: winner.SessionID})
+			}
+		}
+	}
+	pm.assignMu.Unlock()
+
+	for _, v := range victims {
+		if s, _ := pm.repo.Load(v.state.SessionID); s == nil {
+			continue
+		}
+		pm.removeSessionUntracked(logComponentSessionDetector, v.state,
+			fmt.Sprintf("duplicate pid %d (keeping %s) — deleting", v.state.PID, v.winner), "")
 	}
 }
 
