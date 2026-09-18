@@ -90,7 +90,7 @@
       }
     },
     "deepseek-harness": {
-      "maturity": "planned",
+      "maturity": "alpha",
       "capabilities": {
         "token_usage": "untraced"
       }
