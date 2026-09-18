@@ -1,0 +1,147 @@
+{
+  "scenario_id": "token-accounting",
+  "metadata": {
+    "agent_supports": "partial",
+    "daemon_capability": "incapable",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+acee6e8",
+    "confidence": 0.88,
+    "notes": "The current DSH LM Studio trace proves per-turn input/output totals, but it contains no cache fields and the daemon parser does not map DSH cache fields; the full token-accounting scenario is blocked."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "token-accounting",
+      "agent": "deepseek-harness",
+      "assessed_at": "2026-09-18T00:00:00Z",
+      "agent_supports": "partial",
+      "daemon_capability": "incapable",
+      "driver_capability": "ready",
+      "record_blocked": "cache_usage_unobservable",
+      "confidence": 0.88,
+      "body": "## Verdict\n\nagent_supports: partial\ndaemon_capability: incapable\ndriver_capability: ready\n\n## What this cell asserts\n\nThe scenario sends three no-op turns in one live session. It requires non-zero token usage after turn 1, monotonic accumulated usage after turns 2 and 3, and a cache-accounting case in which cache-read tokens are non-zero and fresh input is zero. The lifecycle carrier is three ready -> working -> ready arcs on one session.\n\n## Agent support\n\nDeepSeek Harness 0.1.5-rc.2 supports the basic half. A scan of all 13 real `assistant/message.data.usage` records currently present under `~/.dsh/sessions` found `inputTokens`, `outputTokens`, and `totalTokens` on every record. A measured two-turn session reports 7902/78/7980 and then 8054/49/8103. A measured five-response session reports five further positive usage vectors. The installed persistence schema also accepts optional `cacheReadTokens` and `cacheWriteTokens`, and both installed LLM adapters can populate those fields when their provider reports them.\n\nThe configured recording surface does not prove the cache half. None of the 13 measured qwen/qwen3.5-9b records contains `cacheReadTokens` or `cacheWriteTokens`. The recording driver uses the `llm-pi-ai` LM Studio provider, so a three-turn run can prove per-turn totals but cannot prove a cache hit. The agent verdict is therefore partial, not yes.\n\n## Daemon capability\n\nThe DSH parser correctly maps each measured basic usage record into a latest-turn `TokenSnapshot` and a `PerTurnContribution` with input and output. The tailer adds each contribution to its per-model accumulator. Thus the measured three-turn recipe would make cumulative input/output totals positive and monotonic.\n\nThe parser does not read `cacheReadTokens` or `cacheWriteTokens`. `parseAssistantUsage` reads only `inputTokens`, `outputTokens`, and `totalTokens`, and it leaves both cache fields at zero in the snapshot and contribution. The current LM Studio trace contains no cache field at all, so this assessment does not call the omission a daemon bug: there is no measured cache trace that the daemon mishandled. For the current recipe, the cache observable has no trace and is therefore incapable. If a future provider emits a real cache field, the parser omission becomes a concrete product defect and must be reassessed as `bug` until fixed.\n\n## Driver capability\n\nThe recipe needs only `send`, `wait_turn`, and `sleep`. The DSH interactive driver implements all three. `wait_turn` polls the Zstandard durable transcript for completed `turn/end` records. The three measured local qwen turns take about 158 seconds each, so the recipe uses a 900-second whole-cell timeout and the maximum sibling settle spacing of 8 seconds after each turn.\n\n## Routing\n\npartial + incapable + ready routes to frozen. A partial live recording could prove the multi-turn accumulator, but it could pass without proving the required cache distinction. The cell must remain blocked until the configured agent/provider emits cache usage and the daemon maps it.",
+      "caveats": [
+        "Vacuous-pass condition: a recording with three positive input/output totals and no cache fields would satisfy the available `tokens_nonzero` observation and lifecycle phases while proving nothing about cache reads or zero fresh input. The missing cache assertion is the load-bearing blocker.",
+        "The measured qwen/qwen3.5-9b LM Studio surface emitted only inputTokens, outputTokens, and totalTokens in all 13 assistant usage records. Do not infer cache support from the optional DSH schema fields alone.",
+        "The daemon parser currently drops optional DSH cacheReadTokens/cacheWriteTokens. This is not classified as a bug because the measured recording surface emitted no such field. Reclassify it if a real provider trace carries cache usage.",
+        "DSH usage records are per model response. The tailer adds each PerTurnContribution, so the observable input/output accumulator is monotonic across the three no-tool turns.",
+        "The recipe timeout is 900 seconds because three local qwen turns take about 474 seconds before settle delays. A 600-second limit leaves little margin for model variance."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/sessions/--Users-ingo-.claude-jobs-d11ee86d-tmp-dsh-probe--/session-5f31220c-499b-44f0-bca3-a6a574a6eafa/session.v3.jsonl.zstd",
+          "note": "Real two-turn DSH v3 transcript. Its assistant usage records contain only inputTokens/outputTokens/totalTokens: 7902/78/7980 and 8054/49/8103. No cache field is present."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/sessions/--Users-ingo-.claude-jobs-d11ee86d-tmp-dsh-probe--/session-a68f8780-b24f-49d6-89c4-f2e215f95782/session.v3.jsonl.zstd",
+          "note": "Real five-response DSH v3 transcript. Every assistant usage record has positive input/output/total and no cacheReadTokens/cacheWriteTokens; it confirms the configured local surface repeatedly emits only basic usage."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/worker.cjs",
+          "note": "The installed DSH v3 persistence validator accepts optional cacheReadTokens, cacheWriteTokens, and reasoningTokens in TokenUsage, in addition to required inputTokens/outputTokens."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-llm-pi-ai/lib/index.js",
+          "note": "mapTokenUsage writes cacheReadTokens/cacheWriteTokens only when the provider usage has positive cacheRead/cacheWrite values. The current LM Studio/qwen records have neither field."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-llm-deepseek/lib/index.js",
+          "note": "The alternate installed DeepSeek LLM adapter maps provider cached-token fields into disjoint inputTokens plus cacheReadTokens. This proves format capability, not emission by the current LM Studio profile."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser.go",
+          "note": "parseAssistantUsage reads inputTokens/outputTokens/totalTokens and emits TokenSnapshot plus PerTurnContribution, but never reads cacheReadTokens/cacheWriteTokens. This grounds the missing daemon cache observable."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser_test.go",
+          "note": "TestParserMapsAssistantUsage and TestZstdTranscriptEndToEnd prove the measured basic usage reaches SessionMetrics. No test or fixture contains a DSH cache usage field."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_metrics.go",
+          "note": "applyContribution adds every per-turn UsageBreakdown into cumByModel and computeCumulativeTokensPriced exposes cumulative input/output/cache buckets. The DSH parser supplies only input/output."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "The driver configures the LM Studio qwen model and implements send, wait_turn, and sleep. wait_turn polls completed durable turn/end records."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "preconditions": [
+        "dsh >=0.1.5-rc.2 is installed and on PATH",
+        "the community TUI profile is installed under ~/.dsh/profiles/tui",
+        "LM Studio is listening at http://127.0.0.1:1234/v1 with qwen/qwen3.5-9b loaded",
+        "tmux and zstd are installed",
+        "irrlichd is recording the deepseek-harness adapter",
+        "FROZEN scope: the current LM Studio/qwen usage records do not expose cache-read or cache-write fields, and the daemon parser does not map those optional DSH fields"
+      ],
+      "setup": [
+        "The interactive driver creates a fresh cwd and a pre-launch transcript marker.",
+        "The driver applies a temporary LM Studio patch and keeps one DSH session alive for all three turns.",
+        "Each wait_turn polls the durable transcript until the expected completed turn/end count is present."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ],
+      "verify": [
+        "three assistant usage records on one DSH session carry positive input/output/total values",
+        "the daemon cumulative input/output total is positive after turn 1 and non-decreasing after turns 2 and 3",
+        "the same session completes three ready -> working -> ready arcs and ends ready",
+        "the transcript contains zero tool/call records for the exact-word prompts",
+        "BLOCKER: the current trace cannot prove CacheReadTokens > 0 or zero fresh input on a fully cached turn"
+      ],
+      "settings": {
+        "model": "qwen/qwen3.5-9b",
+        "base_url": "http://127.0.0.1:1234/v1",
+        "context_window": 262144,
+        "permission_mode": "danger-full-access",
+        "api_key": "irrlicht-local-recording"
+      },
+      "timeout_seconds": 900,
+      "scope_note": "Uses 8-second settle intervals, matching the longest sibling token-accounting recipe. Uses a 900-second timeout because three local qwen turns take about 474 seconds before settle time. The recipe documents the observable half but remains frozen until cache usage is emitted and parsed."
+    }
+  }
+}
