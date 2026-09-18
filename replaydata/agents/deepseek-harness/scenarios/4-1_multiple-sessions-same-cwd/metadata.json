@@ -1,0 +1,153 @@
+{
+  "scenario_id": "multiple-sessions-same-cwd",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+373342c",
+    "confidence": 0.85,
+    "notes": "Two DSH TUI instances in one cwd mint distinct durable session UUIDs, and each session owns a separate lock for exact PID binding."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "multiple-sessions-same-cwd",
+      "agent": "deepseek-harness",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nDeepSeek Harness supports concurrent sessions in one working directory. A live two-slot driver dry-run launched two DSH TUI processes in `/private/tmp/irr-dsh-multislot.4Kgaqg/cwd`. DSH created `session-998c74df-7ca3-4ec6-a29d-74e5656855d8` and `session-efd56727-f26c-4298-8a96-efe77742c0f0`. Both v3 transcript headers persist the identical absolute `cwd`, while their session IDs and session directories are distinct. The driver exited successfully and emitted aligned two-entry `session.uuids` and `transcript.paths` contracts.\n\nThe DSH persistence layout preserves both identity axes. It groups logs by a cwd-derived project directory, then places each session in a child directory keyed by the session ID. Each live writer holds a separate `session.lock` inside that session directory. The installed persistence package documents that this POSIX lock is held for the full life of the write handle and released when its process closes.\n\nThe irrlicht adapter reads the whole DSH session root. `sessionIDFromPath` derives the daemon row ID from the `session-<uuid>` parent directory, not from the shared cwd key. `DiscoverPID` resolves the writer of the sibling `session.lock`, so two same-cwd sessions do not use ambiguous cwd-based PID selection. The parser maps each transcript's `turn/start` and completed `turn/end` into independent working and ready signals. The daemon's PID-manager regression guards also preserve a fresh second same-cwd pre-session and prevent a late process pre-session from evicting an already bound real session.\n\nThe interactive driver implements the canonical three-turn recipe. `start_session` saves slot 1, launches slot 2 in the unchanged `RUN_CWD`, and resolves a new transcript behind a per-slot marker. Steps with `session: 1` restore slot 1 while slot 2 remains live. The shared contract writer emits every resolved DSH session ID and transcript path. The dry-run exercised this two-slot identity path without model turns.\n\nThe recipe follows the fleet pattern: complete one exact-word turn in session 1, start session 2 in the same cwd and complete its turn, then drive session 1 again while session 2 remains alive. Four-, four-, and six-second settle windows match the longest direct siblings. The 900-second budget covers three local qwen turns even at the measured 2 minute 38 second duration with substantial launch and variance margin.",
+      "caveats": [
+        "Vacuous-pass check: the lifecycle phases do not carry cwd values or compare PID numbers. They could pass for two sessions in different directories or two rows bound to one PID. Recording verification must compare both durable header cwd values for equality and require two distinct positive PID values in the pid_discovered events.",
+        "Load-bearing driver property: start_session must keep the default RUN_CWD and must resolve a second transcript created after slot 2's marker. The live no-turn dry-run confirmed both properties and the two-entry staging contract; record must re-check them with turns present.",
+        "The spec pins every turn and PID event to one of the two real session-UUID rows. This prevents proc-<PID> pre-sessions from satisfying the independent arcs, but expected.jsonl cannot express a numeric distinct-PID comparison.",
+        "The two-slot dry-run did not include model turns or irrlichd. Independent DSH turns and adapter parsing are already measured elsewhere, but this exact concurrent end-to-end timing remains provisional until record.",
+        "The local qwen/qwen3.5-9b model must produce the requested terminal literal without a question or waiting cue. Recording verification must reject a waiting transition or non-literal reply rather than accepting a different state path."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/private/tmp/irr-dsh-multislot.4Kgaqg/{driver.exit-reason,session.uuids,transcript.paths}",
+          "note": "Live two-slot no-turn driver dry-run: exit reason ok and two aligned, distinct DSH session IDs and transcript paths."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/sessions/--private-tmp-irr-dsh-multislot.4Kgaqg-cwd--/session-998c74df-7ca3-4ec6-a29d-74e5656855d8/session.v3.jsonl.zstd",
+          "note": "First measured v3 header persists session 998c74df... and cwd /private/tmp/irr-dsh-multislot.4Kgaqg/cwd."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/sessions/--private-tmp-irr-dsh-multislot.4Kgaqg-cwd--/session-efd56727-f26c-4298-8a96-efe77742c0f0/session.v3.jsonl.zstd",
+          "note": "Second measured v3 header persists a distinct session efd56727... with the identical cwd."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js",
+          "note": "projectDir groups by cwd, sessionDir adds the encoded session ID, and SessionWriteLease holds the per-session session.lock."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/README.md",
+          "note": "Installed package documentation states that each live session writer owns a kernel lock on its own session.lock for the write-handle lifetime."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/{agent.go,adapter.go,pid.go,parser.go}",
+          "note": "FilesUnderRoot derives each row from the session directory, DiscoverPID reads the sibling lock writer, and the parser supplies independent turn boundaries."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/pid_manager_test.go",
+          "note": "Regression tests protect two same-cwd process pre-sessions, prevent sibling PID misattribution, and ensure a late proc row cannot evict a real bound session."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "Implements start_session, per-step session selection, per-slot transcript discovery, and the three send/wait_turn/sleep primitives."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/_lib/drive/{slots.sh,contracts.sh}",
+          "note": "Shared slot state preserves each session identity and emits the complete multi-session session.uuids and transcript.paths staging contract."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/4-1_multiple-sessions-same-cwd/{metadata.json,expected.jsonl}",
+          "note": "Canonical sibling establishes the session-1 turn, session-2 turn, session-1 re-drive sequence and the 3/3/4-second minimum settle shape."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "timeout_seconds": 900,
+      "settings": {
+        "model": "qwen/qwen3.5-9b",
+        "base_url": "http://127.0.0.1:1234/v1",
+        "context_window": 262144,
+        "permission_mode": "danger-full-access"
+      },
+      "preconditions": [
+        "dsh 0.1.5-rc.2 or newer is on PATH and the community tui profile is installed under the active DSH home",
+        "LM Studio is serving qwen/qwen3.5-9b through http://127.0.0.1:1234/v1",
+        "start_session uses the default RUN_CWD for slot 2; record must confirm both durable session headers persist the same absolute cwd",
+        "irrlichd is recording with DeepSeek Harness transcript permission granted"
+      ],
+      "setup": [
+        "Driver starts session 1 in the staging RUN_CWD and resolves its real session-UUID transcript",
+        "The start_session step launches session 2 in the same RUN_CWD and resolves a different post-marker session-UUID transcript",
+        "Steps carrying session 1 restore the first slot while the second DSH TUI remains alive"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Do not use tools. Reply with exactly this word and nothing else: alpha"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "start_session"
+        },
+        {
+          "type": "send",
+          "text": "Do not use tools. Reply with exactly this word and nothing else: bravo"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "send",
+          "text": "Do not use tools. Reply with exactly this word and nothing else: alpha2",
+          "session": 1
+        },
+        {
+          "type": "wait_turn",
+          "session": 1
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        }
+      ],
+      "verify": [
+        "session.uuids and transcript.paths contain two aligned, distinct session-UUID entries",
+        "both compressed transcript headers contain the same absolute cwd and distinct session IDs",
+        "events.jsonl contains pid_discovered for both real session IDs with two distinct positive PID values",
+        "session 1 has two independent working-to-ready arcs and session 2 has one while both processes remain live",
+        "no state or PID binding crosses between the two rows and neither row enters waiting",
+        "the three durable assistant replies are exactly alpha, bravo, and alpha2 in their targeted transcripts",
+        "the recording reports model qwen/qwen3.5-9b and non-zero tokens"
+      ]
+    }
+  }
+}
