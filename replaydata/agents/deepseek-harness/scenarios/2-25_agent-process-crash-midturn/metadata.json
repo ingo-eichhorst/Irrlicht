@@ -1,0 +1,127 @@
+{
+  "scenario_id": "agent-process-crash-midturn",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+e380c18",
+    "confidence": 0.95,
+    "notes": "DeepSeek Harness supports a mid-turn SIGKILL. A committed same-agent recording proves that irrlichd records process_exited for the bound session and removes the row without an error transition."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "agent-process-crash-midturn",
+      "agent": "deepseek-harness",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.95,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\nThe scenario requires one real DeepSeek Harness session to enter `working`, lose its process before any durable `turn/end`, emit `process_exited`, and disappear without entering `error`. A SIGKILL is an operating-system action, so it does not depend on a DeepSeek Harness command. DeepSeek Harness writes `turn/start` before model completion, and the existing interactive driver can kill the live tmux pane process while that turn remains open.\n\nThe daemon result is settled by direct same-agent evidence, not only by parser inspection. The committed `session-end` recording runs this exact shape as variant 3. Its `events.jsonl` records the real session-UUID row as `ready` at seq 823, `working` at seq 827, PID 4796 at seq 846, and `process_exited` at seq 860. No later `ready`, `waiting`, or `error` transition occurs, and `transcript_removed` follows at seq 861. The archived transcript contains the third `turn/start` and no third `turn/end`. The manifest reports 14/14 phases passed on daemon 0.6.4+dff7bcc. `git diff dff7bcc82..HEAD` is empty for the DSH adapter, PID manager, process-exit tests, driver, and teardown helper.\n\nThe transport matches that evidence. `core/adapters/inbound/agents/dsh/parser.go` maps durable `turn/start` to working and only `turn/end` to turn completion. `core/adapters/inbound/agents/dsh/pid.go` binds the real session through its sibling `session.lock`. `PIDManager.HandleWatcherExit` fans a watcher edge to every row bound to the PID, and `HandleProcessExit` records `process_exited` and deletes the row in every state, including `working`. The regression tests pin both deletion and exactly one exit event for a mid-turn death.\n\nThe driver declares and implements every recipe primitive. Its `sigkill` step kills the stored pane PID and uses the shared bounded death poll. The recipe copies both committed scenario-sibling timings: six seconds before SIGKILL and twenty seconds after it. It uses a 1000-token repeated-token prompt so the local model remains active through the kill window. The spec selects a real `session-` UUID, pins PID discovery and exit to that row, and rejects any durable `turn/end` or transition to ready, waiting, or error before exit.",
+      "caveats": [
+        "Vacuous-pass check: without the session-UUID selector, same-session pins, and the zero-turn/end assertion, a proc-<PID> pre-session or an already-completed idle turn could satisfy the exit phase while proving no mid-turn crash. The spec includes all three guards.",
+        "The prompt length and six-second pre-kill delay are load-bearing environment inputs. Re-probe LM Studio at record time and confirm that qwen/qwen3.5-9b is still serving and that the 1000-token response has not written turn/end before SIGKILL. The spec must fail if the model completes early.",
+        "Metric observations are omitted because SIGKILL can occur before an assistant usage record becomes durable. This cell asserts lifecycle and process-exit behavior. A token or model assertion would make the result depend on how much generation was flushed before the kill.",
+        "This cell duplicates the mid-turn SIGKILL variant in DeepSeek Harness session-end. Its separate value is a named regression lock for the removed crash inference described by scenario 2.25."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/scenarios/1-2_session-end/recordings/2026-09-18-15-35-07_irrlichd-0.6.4+dff7bcc/events.jsonl",
+          "note": "Direct same-agent evidence: seq 823 ready, seq 827 working, seq 846 PID binding, seq 860 process_exited, and seq 861 transcript_removed for the third real session. No ready, waiting, or error transition follows turn start."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/scenarios/1-2_session-end/recordings/2026-09-18-15-35-07_irrlichd-0.6.4+dff7bcc/manifest.json",
+          "note": "Reports DeepSeek Harness 0.1.5-rc.2, daemon 0.6.4+dff7bcc, and 14/14 passing phases for the three teardown variants."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/scenarios/1-2_session-end/recordings/2026-09-18-15-35-07_irrlichd-0.6.4+dff7bcc/transcript.jsonl.zstd",
+          "note": "The concatenated three-session archive contains three turn/start records but only two turn/end records. The SIGKILL variant is the final session, so its durable turn remains open."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser.go",
+          "note": "Maps turn/start to working and turn/end to turn_done; a transcript frozen after turn/start therefore remains working until process exit."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/agent.go",
+          "note": "Declares the compressed FilesUnderRoot source, process matcher, and lock-based PID discovery for DeepSeek Harness."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/pid.go",
+          "note": "Discovers the live session PID from the writer of the sibling session.lock file."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/pid_manager.go",
+          "note": "HandleWatcherExit fans an exit edge to all PID holders. HandleProcessExit records process_exited and deletes the session regardless of state, including mid-turn working."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/session_detector_process_exit_test.go",
+          "note": "TestHandleProcessExit_MidTurnExitDeletesTheRow and TestHandleProcessExit_RecordsProcessExitedForAMidTurnDeath pin the required deletion and event behavior."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "Declares and implements send, sleep, and sigkill. The sigkill step targets the stored pane PID and waits for death through the shared teardown helper."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/2-25_agent-process-crash-midturn/metadata.json",
+          "note": "Provides the committed six-second pre-kill and twenty-second post-kill scenario timing. Muse uses the same timing."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "timeout_seconds": 180,
+      "settings": {
+        "model": "qwen/qwen3.5-9b",
+        "base_url": "http://127.0.0.1:1234/v1",
+        "context_window": 262144,
+        "permission_mode": "danger-full-access"
+      },
+      "preconditions": [
+        "dsh 0.1.5-rc.2 or newer is on PATH and the community tui profile is installed under the active DSH home",
+        "LM Studio is serving qwen/qwen3.5-9b through http://127.0.0.1:1234/v1",
+        "irrlichd is recording with DeepSeek Harness transcript permission granted",
+        "the local model remains slow enough that the 1000-token response is still open six seconds after turn/start; verify this from turn/end absence, not from timing alone"
+      ],
+      "setup": [
+        "Let the driver create one fresh cwd and one fresh DSH session under the recording staging directory",
+        "Let the driver apply the LM Studio endpoint and model through its per-run temporary patch"
+      ],
+      "scope_note": "Matches both committed scenario siblings: six seconds before sigkill and twenty seconds after sigkill. The repeated-token prompt is longer than the existing DSH session-end variant so the model remains inside the turn across the longer sibling delay.",
+      "script": [
+        {
+          "type": "send",
+          "text": "Output the token COFFEE separated by one space exactly 1000 times. Do not use tools and do not add other text."
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        },
+        {
+          "type": "sigkill"
+        },
+        {
+          "type": "sleep",
+          "seconds": 20
+        }
+      ],
+      "verify": [
+        "events.jsonl contains one real session-UUID row that enters working and binds a PID",
+        "the same real session emits process_exited after SIGKILL and then disappears",
+        "no ready, waiting, or error transition occurs between turn start and process exit",
+        "the DSH transcript contains turn/start and no turn/end",
+        "the transcript contains no tool/call record"
+      ]
+    }
+  }
+}
