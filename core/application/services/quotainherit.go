@@ -1,20 +1,29 @@
 // Package services — quotainherit.go implements cross-account rate-limit
 // inheritance. Subscriptions are OAuth-account-scoped, not CLI-scoped:
 // once any first-party CLI surfaces a quota snapshot for an account, every
-// wrapper session (Pi, OpenCode) backed by the same account can read it.
+// wrapper session (Pi, OpenCode) backed by the same confirmed account can
+// read it.
 //
-// See issue #309 for the design context and supported matrix:
+// See issue #309 for the original design context, and issue #1994 / epic
+// #1977 §3.2 for a correction to it: sharing a snapshot requires a
+// CONFIRMED account match on both sides, never an assumed one.
 //
-//   - Anthropic (Claude.ai Pro/Max): Claude Code's statusline hook is the
-//     only source. Account anchor lives in macOS keychain — irrlicht treats
-//     the snapshot as a global singleton, donating from any Claude Code
-//     session with rate_limit data to any Pi(anthropic) or
-//     OpenCode(anthropic-oauth) wrapper session that doesn't have one.
 //   - OpenAI (ChatGPT Plus/Pro): Codex CLI emits rate_limits directly in
 //     its transcripts. Both Codex's ~/.codex/auth.json (snake_case
 //     `account_id`) and Pi's ~/.pi/agent/auth.json (camelCase `accountId`
 //     under the `openai-codex` provider) expose the same identifier in
-//     plaintext, letting us key the donor map exactly.
+//     plaintext, letting us key the donor map exactly. OpenCode's
+//     `openai-oauth` entry exposes the same identity via its JWT payload
+//     (openCodeJWTAccountID).
+//   - Anthropic (Claude.ai Pro/Max): Claude Code's statusline hook is the
+//     only source, and its OAuth account lives in the macOS keychain, not
+//     in a plaintext file this package can read. #1994 removed the
+//     "global singleton" behavior that used to donate any Claude Code
+//     session's snapshot to any Pi(anthropic) or OpenCode(anthropic-oauth)
+//     wrapper regardless of account — with no anchor to confirm, a Claude
+//     Code snapshot is retained for its own session only, and an Anthropic
+//     wrapper session gets no inherited quota chip until a real anchor
+//     exists (a separate, not-yet-scheduled ticket).
 //
 // Wrappers without a matching first-party donor session keep their
 // existing (usually empty) rate_limit. The inheritance pass is a one-way
@@ -122,29 +131,18 @@ const (
 	authFileName = "auth.json"
 )
 
-// AccountKey identifies a subscription bucket: the provider name plus
-// an account anchor. An empty `AccountID` is a sentinel meaning
-// "singleton donor for this provider, no account-level disambiguation"
-// — currently only Anthropic uses this because Claude Code stores its
-// OAuth tokens in the macOS keychain rather than in a plaintext file
-// we can read.
-//
-// Footgun warning: a future provider whose anchor isn't reachable in
-// plaintext would, if added with `AccountID == ""`, silently start
-// inheriting from / donating to every other empty-AccountID provider
-// of the same name. Always either populate `AccountID` from the
-// account anchor, or document the singleton intent explicitly (and
-// gate it via IsSingleton below). See issue #309.
+// AccountKey identifies a subscription bucket: the provider name plus a
+// confirmed account anchor. There is no empty-AccountID sentinel — issue
+// #1994 / epic #1977 §3.2 removed the "singleton donor" behavior that used
+// to let an empty AccountID match any same-provider wrapper regardless of
+// its own account. A key with an empty AccountID is simply unconfirmed and
+// must never be treated as matching another unconfirmed key of the same
+// provider: donorKey and recipientKey both return `ok=false` instead of an
+// empty-AccountID key when no account anchor is available, so buildDonorMap
+// and applyDonors never see one.
 type AccountKey struct {
 	Provider  string // one of the Provider* constants above
-	AccountID string // empty only for the documented singleton case (currently Anthropic)
-}
-
-// IsSingleton reports whether this key is the no-account-anchor
-// sentinel — used by the donor map to match any wrapper recipient of
-// the same provider regardless of the wrapper's own account hint.
-func (k AccountKey) IsSingleton() bool {
-	return k.AccountID == ""
+	AccountID string // a confirmed provider account identifier; never empty when ok==true
 }
 
 // InheritRateLimits walks the given sessions, builds a donor map of
@@ -190,12 +188,24 @@ func hasOwnRateLimit(s *session.SessionState) bool {
 	return s != nil && s.Metrics != nil && s.Metrics.RateLimit != nil
 }
 
-// buildDonorMap collects the freshest rate_limit snapshot per AccountKey
-// across sessions that have one and map to a donor key. Prefer the freshest
-// snapshot per key when more than one session can donate (multiple Claude
-// Code sessions all share the anthropic singleton, for example).
-func buildDonorMap(sessions []*session.SessionState, home string) map[AccountKey]*session.RateLimitSnapshot {
-	donors := map[AccountKey]*session.RateLimitSnapshot{}
+// donorEntry pairs one account's rate_limit snapshot with the account
+// identifier it was actually confirmed against. donors groups these by
+// provider so applyDonors can check account equality as an explicit
+// comparison (see below) rather than relying solely on map-key equality —
+// deleting that comparison is this ticket's committed mutation fixture:
+// tools/lib/quotainherit-account-equality-mutations_test.sh confirms
+// TestInheritRateLimits_PiNotInheritsOnAccountMismatch goes red without it.
+type donorEntry struct {
+	accountID string
+	snapshot  *session.RateLimitSnapshot
+}
+
+// buildDonorMap collects the freshest rate_limit snapshot per (provider,
+// account) pair across sessions that have one, grouped by provider. Prefer
+// the freshest snapshot per account when more than one session can donate
+// for it (multiple Codex sessions on the same account, for example).
+func buildDonorMap(sessions []*session.SessionState, home string) map[string][]donorEntry {
+	freshest := map[AccountKey]*session.RateLimitSnapshot{}
 	for _, s := range sessions {
 		if !hasOwnRateLimit(s) {
 			continue
@@ -204,18 +214,27 @@ func buildDonorMap(sessions []*session.SessionState, home string) map[AccountKey
 		if !ok {
 			continue
 		}
-		current, exists := donors[key]
+		current, exists := freshest[key]
 		if !exists || s.Metrics.RateLimit.SampledAt > current.SampledAt {
-			donors[key] = s.Metrics.RateLimit
+			freshest[key] = s.Metrics.RateLimit
 		}
 	}
-	return donors
+	if len(freshest) == 0 {
+		return nil
+	}
+	grouped := make(map[string][]donorEntry, len(freshest))
+	for key, snap := range freshest {
+		grouped[key.Provider] = append(grouped[key.Provider], donorEntry{accountID: key.AccountID, snapshot: snap})
+	}
+	return grouped
 }
 
 // applyDonors copies each matching donor snapshot into recipient sessions
 // that don't already have their own snapshot — its own data is more
-// authoritative than inherited data.
-func applyDonors(sessions []*session.SessionState, home string, donors map[AccountKey]*session.RateLimitSnapshot) {
+// authoritative than inherited data. A recipient only ever receives a
+// snapshot whose donor account matches its own confirmed account exactly;
+// see the account-equality comparison below.
+func applyDonors(sessions []*session.SessionState, home string, donors map[string][]donorEntry) {
 	for _, s := range sessions {
 		if s == nil || hasOwnRateLimit(s) {
 			continue
@@ -224,28 +243,33 @@ func applyDonors(sessions []*session.SessionState, home string, donors map[Accou
 		if !ok {
 			continue
 		}
-		donor, found := donors[key]
-		if !found {
-			continue
+		for _, d := range donors[key.Provider] {
+			if d.accountID != key.AccountID {
+				continue
+			}
+			if s.Metrics == nil {
+				s.Metrics = &session.SessionMetrics{}
+			}
+			s.Metrics.RateLimit = d.snapshot
+			break
 		}
-		if s.Metrics == nil {
-			s.Metrics = &session.SessionMetrics{}
-		}
-		s.Metrics.RateLimit = donor
 	}
 }
 
-// donorKey returns the AccountKey under which this session's snapshot
-// can be donated to wrappers. Returns (_, false) when the adapter has
-// no usable donor mapping (e.g. aider, bedrock, vertex paths).
+// donorKey returns the AccountKey under which this session's snapshot can be
+// donated to wrappers. Returns (_, false) when the adapter has no usable
+// donor mapping (e.g. aider, bedrock, vertex paths) OR when the adapter's
+// account anchor isn't confirmable.
 func donorKey(s *session.SessionState, home string) (AccountKey, bool) {
 	switch s.Adapter {
 	case "claude-code":
-		// Anthropic singleton: account anchor isn't on disk for Claude
-		// Code (lives in keychain), so we deliberately leave AccountID
-		// empty. Wrappers' recipientKey returns the matching singleton
-		// shape, so the lookup still hits.
-		return AccountKey{Provider: ProviderAnthropic}, true
+		// No confirmed account anchor is readable for Claude Code — its
+		// OAuth tokens live in the macOS keychain, not in a plaintext file
+		// this package can read. Issue #1994 / epic #1977 §3.2 removed the
+		// empty-AccountID "singleton" that used to stand in for one: without
+		// a real anchor to confirm, this snapshot is retained for its own
+		// session only and never donated.
+		return AccountKey{}, false
 	case "codex":
 		if id := readCodexAccountID(home); id != "" {
 			return AccountKey{Provider: ProviderOpenAI, AccountID: id}, true
@@ -254,17 +278,18 @@ func donorKey(s *session.SessionState, home string) (AccountKey, bool) {
 	return AccountKey{}, false
 }
 
-// recipientKey returns the AccountKey this session needs a snapshot
-// for, by reading the wrapper's own auth.json to determine which
-// subscription it's authenticated to. Returns (_, false) when no
-// inheritable provider is configured.
+// recipientKey returns the AccountKey this session needs a snapshot for, by
+// reading the wrapper's own auth.json to determine which subscription it's
+// authenticated to. Returns (_, false) when no inheritable provider is
+// configured or confirmable.
 //
-// Pi and OpenCode both let a user configure several providers at once.
-// We pick OpenAI over Anthropic when both are present — empirically,
-// users who run both first-party CLIs tend to use the wrappers for
-// OpenAI overflow rather than Anthropic. Either choice is defensible
-// for a v1; the user-visible behaviour is identical for the common
-// single-provider case.
+// This is used only by the rate-limit inheritance path (InheritRateLimits),
+// where a match still requires an exact account-id equality against a real
+// donor (applyDonors) — configuration alone never grants a snapshot. It is
+// deliberately NOT used to resolve a wrapper's own billing provider for cost
+// attribution (see ProviderForSession): a configured credential list
+// establishes what a wrapper *could* be authenticated to, not which provider
+// a specific session's spend actually belongs to.
 func recipientKey(s *session.SessionState, home string) (AccountKey, bool) {
 	switch s.Adapter {
 	case "pi":
@@ -276,32 +301,35 @@ func recipientKey(s *session.SessionState, home string) (AccountKey, bool) {
 }
 
 // ProviderForSession resolves the billing provider ("anthropic"/"openai", or
-// "" when unknown) a session's cost should be attributed to. First-party CLIs
-// map directly by adapter; wrapper agents (pi, opencode) resolve via the same
-// auth.json inspection used for rate-limit inheritance (recipientKey), so
-// their spend lands on the subscription they're actually billed against —
-// and on the same provider key the dashboard's quota chip uses for that
-// wrapper. `userHome` "" uses the real home (mirrors InheritRateLimits).
+// "" when unknown) a session's cost should be attributed to.
+//
+// Evidence precedence (issue #1994): a native quota snapshot the agent
+// itself emitted is confirmed evidence for that provider. An adapter name
+// alone is not evidence — claude-code can also run against Bedrock or
+// Vertex, which never emit the Anthropic consumer statusline snapshot, so
+// the adapter string can't be trusted by itself. A configured credential
+// list (auth.json) is not evidence either — it says what a session *could*
+// be authenticated to, not what it actually used. No third evidence source
+// exists yet, so every session without its own snapshot — including every
+// pi/opencode wrapper session, which never emits one itself — resolves to
+// an explicit unknown ("").
+//
+// `userHome` is accepted for signature stability with InheritRateLimits and
+// existing callers; it is unused now that this function no longer reads any
+// auth file.
 func ProviderForSession(s *session.SessionState, userHome string) string {
+	_ = userHome
 	if s == nil {
 		return ""
 	}
 	switch s.Adapter {
 	case "claude-code":
-		return ProviderAnthropic
-	case "codex":
-		return ProviderOpenAI
-	case "pi", "opencode":
-		home := userHome
-		if home == "" {
-			h, err := os.UserHomeDir()
-			if err != nil {
-				return ""
-			}
-			home = h
+		if hasOwnRateLimit(s) {
+			return ProviderAnthropic
 		}
-		if key, ok := recipientKey(s, home); ok {
-			return key.Provider
+	case "codex":
+		if hasOwnRateLimit(s) {
+			return ProviderOpenAI
 		}
 	}
 	return ""
@@ -338,11 +366,13 @@ func parseCodexAuth(data []byte) (authCacheEntry, bool) {
 	return authCacheEntry{codexAccountID: doc.Tokens.AccountID}, true
 }
 
-// readPiInheritKey parses ~/.pi/agent/auth.json. Pi keys each provider
-// block by name (e.g. "openai-codex", "anthropic") and tags OAuth
-// entries with `type: "oauth"` plus an `accountId` (camelCase). We
-// prefer OpenAI over Anthropic when both are configured; either choice
-// is defensible for a single-provider Pi user.
+// readPiInheritKey parses ~/.pi/agent/auth.json. Pi keys each provider block
+// by name (e.g. "openai-codex", "anthropic") and tags OAuth entries with
+// `type: "oauth"` plus an `accountId` (camelCase).
+//
+// Only "openai-codex" is checked: an "anthropic" block has no account id to
+// confirm against (see donorKey's claude-code case — #1994 / epic #1977
+// §3.2), so it could never match a donor and is not read here.
 func readPiInheritKey(home string) (AccountKey, bool) {
 	entry, ok := readAuthCache(filepath.Join(home, ".pi", "agent", authFileName), parsePiAuth)
 	if !ok {
@@ -350,11 +380,6 @@ func readPiInheritKey(home string) (AccountKey, bool) {
 	}
 	if v, ok := entry.piDoc["openai-codex"]; ok && v.Type == "oauth" && v.AccountID != "" {
 		return AccountKey{Provider: ProviderOpenAI, AccountID: v.AccountID}, true
-	}
-	if v, ok := entry.piDoc["anthropic"]; ok && v.Type == "oauth" {
-		// Anthropic singleton — AccountID intentionally empty so the
-		// key matches Claude Code's donor entry.
-		return AccountKey{Provider: ProviderAnthropic}, true
 	}
 	return AccountKey{}, false
 }
@@ -367,12 +392,14 @@ func parsePiAuth(data []byte) (authCacheEntry, bool) {
 	return authCacheEntry{piDoc: doc}, true
 }
 
-// readOpenCodeInheritKey parses ~/.local/share/opencode/auth.json.
-// OpenCode names OAuth providers `anthropic-oauth` and `openai-oauth`
-// per its upstream docs; we map them onto irrlicht's canonical
-// "anthropic" / "openai" provider keys. Anthropic uses a singleton key
-// (no account anchor). OpenAI account_id is recovered from the JWT
-// access_token's payload via openCodeJWTAccountID.
+// readOpenCodeInheritKey parses ~/.local/share/opencode/auth.json. OpenCode
+// names its OpenAI OAuth provider block `openai-oauth` per its upstream
+// docs; the account_id is recovered from the JWT access_token's payload via
+// openCodeJWTAccountID.
+//
+// OpenCode's `anthropic-oauth` block is not read: it carries no account id
+// to confirm against (see donorKey's claude-code case — #1994 / epic #1977
+// §3.2), so it could never match a donor.
 func readOpenCodeInheritKey(home string) (AccountKey, bool) {
 	entry, ok := readAuthCache(filepath.Join(home, ".local", "share", "opencode", authFileName), parseOpenCodeAuth)
 	if !ok {
@@ -382,9 +409,6 @@ func readOpenCodeInheritKey(home string) (AccountKey, bool) {
 		if entry.openCodeOpenAIAccount != "" {
 			return AccountKey{Provider: ProviderOpenAI, AccountID: entry.openCodeOpenAIAccount}, true
 		}
-	}
-	if v, ok := entry.openCodeDoc["anthropic-oauth"]; ok && v.Type == "oauth" {
-		return AccountKey{Provider: ProviderAnthropic}, true
 	}
 	return AccountKey{}, false
 }
