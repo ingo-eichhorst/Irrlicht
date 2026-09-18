@@ -1,0 +1,124 @@
+{
+  "scenario_id": "autonomous-loop",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+1c6a6b0",
+    "confidence": 0.84,
+    "notes": "DeepSeek Harness ships an armed /goal loop that queues durable same-session goal rounds; the DSH parser exposes each round through turn boundaries, and transcript assertions prove that the loop ran without driver prompts."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "autonomous-loop",
+      "agent": "deepseek-harness",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.84,
+      "body": "## Verdict\n\nagent_supports: yes; daemon_capability: full; driver_capability: ready.\n\n## Agent capability\n\nDeepSeek Harness 0.1.5-rc.2 has a native same-session autonomous loop. The active TUI composition mounts `dsh-goal`, `dsh-command-goal`, `dsh-goal-round-driver`, and `dsh-tool-goal`. The official command reference states that `/goal <objective>` creates and arms a goal. The round-driver reference states that an active armed goal queues another goal-sourced user message whenever the exact live agent becomes idle. Each admitted message starts a distinct request series and increments the durable round number. The model can end the loop with `get_goal` plus `update_goal` action `complete`. This directly satisfies the no-new-human-prompt requirement.\n\nThe recipe makes the behavior mechanical. The slash command creates one goal whose text requires exactly two numbered autonomous rounds. Round 1 must emit `ROUND_ONE` and leave the goal active. Round 2 must read the exact goal, mark it complete, and end its closing text with `DONE`. The expected transcript requires one create mutation, exactly two goal-sourced user messages with distinct round numbers, one complete mutation, exactly two completed turn boundaries, and no approval request.\n\n## Daemon capability\n\nThe DSH adapter tails the durable v3 compressed transcript through `FilesUnderRoot`. `parseTurnStart` maps every `turn/start` to `turn_start`, and `parseTurnEnd` maps a completed `turn/end` to `turn_done`. These signals expose the required ready-to-working start and the final working-to-ready settle on the stable `session-<uuid>` row. Assistant usage supplies the configured model and non-zero token observations.\n\nThe parser does not expose the goal domain itself. Unknown `goal/change` records are skipped, and `parseUserMessage` skips goal-sourced messages because it accepts only `source.kind == user`. This is a narrow semantic-display gap, not a failure of the scenario state arc. The machine-checkable transcript assertions verify the goal mutations and autonomous message source directly. Live recording must still settle whether the short ready interval between the two durable turn boundaries is coalesced or appears as a ready-to-working flicker. Existing autonomous-loop cells treat both turn-delimited shapes as observable.\n\n## Driver capability\n\nThe interactive driver implements both required recipe primitives: `slash` and `sleep`. The recipe intentionally does not use `wait_turn`: this driver's counter advances only for `send`, while `/goal` starts goal-sourced turns without incrementing that counter. A 480-second observation sleep fits the 600-second cell budget. Existing DSH recordings measured two local-model turns in 194 seconds, so the delay provides more than a two-times margin and also leaves time for the final ready state to settle.\n\n## Vacuous-pass check\n\nThis cell could pass the lifecycle phases while proving nothing if `/goal` were treated as ordinary text or if only one normal model turn ran. The transcript assertions prevent that pass. They require a durable `goal/change` create, exactly two `user/message` records whose source is the same goal mechanism and whose round values are distinct, a durable complete mutation, and exactly two completed turn boundaries. The active TUI composition and the LM Studio model route are load-bearing environment properties and must be re-probed at record time.",
+      "caveats": [
+        "Vacuous-pass condition: a plain ready -> working -> ready turn would look like the outer lifecycle even if /goal never activated. The transcript spec therefore requires one goal create, exactly two goal-sourced rounds with two distinct round numbers, one goal completion, and exactly two completed turn boundaries.",
+        "PROVISIONAL emission shape: the official driver creates a distinct request series per goal round, and the DSH parser maps every durable turn/end to ready and the next turn/start to working. A live recording must determine whether Irrlicht coalesces the short inter-round gap or reports a ready/working flicker. This does not change daemon=full because both boundaries are observable and the spec does not pin a debounce-dependent cycle count.",
+        "The daemon does not surface goal objective, phase, round number, or completion as SessionMetrics: the DSH parser skips unknown goal/change records and skips user/message records whose source.kind is goal. Raw-transcript assertions verify these semantic facts for this cell.",
+        "Load-bearing environment property: the active `dsh --profile tui --dump-config` composition must still mount goal, command-goal, goal-round-driver, tool-goal, and agent-loop. Re-probe the composition at record time.",
+        "Load-bearing environment property: LM Studio must serve the tool-capable qwen/qwen3.5-9b model at http://127.0.0.1:1234/v1. The exact model observation and the required get_goal/update_goal calls depend on this route.",
+        "The driver cannot wait on goal-sourced turns with wait_turn because EXPECTED_TURNS increments only in step_send. The recipe uses a conservative fixed observation delay. Record must fail if the transcript has not reached the complete goal mutation before teardown."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-command-goal/README.md",
+          "note": "Official 0.1.5-rc.2 package reference: /goal <objective> creates and arms a persisted same-session goal; /goal exposes create, edit, pause, resume, clear, and status control."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-goal-round-driver/README.md",
+          "note": "Official 0.1.5-rc.2 package reference: an active armed goal automatically queues same-session goal rounds at whole-agent idle, each round is a distinct request series, and no human prompt is required between rounds."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-goal-round-driver/lib/index.js",
+          "note": "Installed implementation writes user messages with source.kind=goal and positive sequential round numbers, then calls Agent.followup while the live agent is idle."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-goal/README.md",
+          "note": "Official goal-domain reference: accepted mutations persist as goal/change, goal rounds advance on admitted goal-sourced user messages, and the default round cap is 256."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-tool-goal/lib/index.js",
+          "note": "Installed model tools expose get_goal and update_goal; a matching current goal round has authority to mark its goal complete and receives a terminal wrap-up instruction."
+        },
+        {
+          "kind": "file",
+          "ref": "shell: DSH_PERMISSION_MODE=danger-full-access dsh --profile tui --dump-config",
+          "note": "Live composition includes goal, goal-round-driver, command-goal, tool-goal, and agent-loop, and maps danger-full-access to approval policy never."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser.go",
+          "note": "Maps turn/start to turn_start, completed turn/end to turn_done, assistant usage to model/tokens, and accepts only source.kind=user for user_message; goal/change remains an unknown skipped record."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser_test.go",
+          "note": "Pins the measured v3 turn/start and completed turn/end mappings used for the state arc."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "Implements slash and sleep, pins LM Studio/qwen through a temporary patch, and shows that only step_send increments the wait_turn target."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/scenarios/*/recordings/*/transcript.jsonl.zstd (measured with zstd+jq)",
+          "note": "Recorded DSH corpus shows single local-model turns of about 84-107 seconds and two-turn sessions of 130-194 seconds, grounding the 480-second observation delay."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "timeout_seconds": 600,
+      "settings": {
+        "model": "qwen/qwen3.5-9b",
+        "base_url": "http://127.0.0.1:1234/v1",
+        "context_window": 262144,
+        "permission_mode": "danger-full-access",
+        "api_key": "irrlicht-local-recording"
+      },
+      "preconditions": [
+        "dsh 0.1.5-rc.2 or newer is on PATH, and the community tui profile is installed under the active DSH home",
+        "LM Studio is serving the tool-capable qwen/qwen3.5-9b model through http://127.0.0.1:1234/v1; re-probe the live model roster at record time",
+        "the active TUI composition mounts goal, goal-round-driver, command-goal, tool-goal, and agent-loop; re-probe with dsh --profile tui --dump-config at record time",
+        "DSH_PERMISSION_MODE=danger-full-access maps to approval policy never in the active composition",
+        "irrlichd is recording with DeepSeek Harness transcript permission granted"
+      ],
+      "setup": [
+        "Create a fresh empty cwd and a fresh DSH session",
+        "Let the driver apply the LM Studio endpoint, qwen model, context window, and danger-full-access policy through its per-run environment and temporary patch"
+      ],
+      "script": [
+        {
+          "type": "slash",
+          "text": "/goal Complete this goal in exactly two autonomous goal rounds. In Round 1, do not call goal tools and reply with exactly ROUND_ONE; leave the goal active. In Round 2, call get_goal, then call update_goal with action complete for the exact returned goal. After completion succeeds, write a declarative closing message whose final token is DONE. Do not ask questions."
+        },
+        {
+          "type": "sleep",
+          "seconds": 480
+        }
+      ],
+      "verify": [
+        "the compressed transcript contains one goal/change create, exactly two goal-sourced user/message records with two distinct positive round values, and one goal/change complete",
+        "the compressed transcript contains exactly two completed turn/end records and no approval/asked record",
+        "events.jsonl shows the real session-UUID row entering working after the goal is created and ending in ready, with no waiting transition",
+        "the final ready state holds for at least 10 seconds before teardown",
+        "the recording reports model qwen/qwen3.5-9b and non-zero tokens"
+      ],
+      "scope_note": "Sibling autonomous-loop recipes retain a 6-20 second terminal settle, while the Copilot sibling waits 150+20 seconds for its native loop. DSH local-model recordings measured two turns in up to 194 seconds. This recipe uses one 480-second observation delay because the DSH wait_turn counter advances only for driver send steps, not for the autonomous goal turns started by a slash command."
+    }
+  }
+}
