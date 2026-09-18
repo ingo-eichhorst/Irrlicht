@@ -14,17 +14,17 @@
       "schema_version": 1,
       "scenario_id": "provider-overloaded-terminal",
       "agent": "deepseek-harness",
-      "assessed_at": "2026-09-18T21:32:17Z",
+      "assessed_at": "2026-09-18T22:25:28Z",
       "agent_supports": "yes",
       "daemon_capability": "full",
       "driver_capability": "ready",
       "confidence": 0.88,
-      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Scenario signal\n\nThe same live DSH session must follow ready -> working -> error. It must stay in error after the provider overload exhausts the retry budget. The failed turn's own boundary must not return the session to ready.\n\n## Agent support\n\nThe installed DeepSeek Harness 0.1.5-rc.2 TUI profile mounts `@deepseek-ai/dsh-llm-retry`. Its documented default normal policy retries `SERVER` failures five times, then delegates the exhausted failure. The installed pi-ai adapter classifies an error message containing any 5xx status as `SERVER`; this includes HTTP 529. The installed retry executor stops scheduling after `previousRetry >= maxRetries`. The agent loop then throws the structured LLM failure, catches it at the turn level, and appends `turn/end` with `reason.kind=error`.\n\nThe committed DSH 2-14 recording proves the same finite ladder and terminal boundary on the installed TUI profile. Its transcript contains five durable `llm/retry` and five `llm/retry-started` records, followed by `turn/end` with `reason.kind=error`. That measured failure is `TRANSPORT`, not HTTP 529, so the new overload mock remains a record-time prerequisite.\n\n## Daemon capability\n\nThe DSH adapter handles the terminal boundary required by this scenario. `parseTurnEnd` emits `turn_done` for every `turn/end`. When `reason.kind` is `error`, it also emits an `ErrorPhaseTerminal` `SessionError` with the lowercased failure code and message. The tailer clears only a retrying error on a turn boundary; it records a terminal error from that same boundary after the clearing check, so the failed turn's epilogue cannot erase it. The classifier routes the standing error to the canonical `error` state.\n\nThe committed DSH 2-14 recording supplies end-to-end evidence for this exact terminal path. Its events enter working at sequence 255 and enter error at sequence 420 with `last_event_type=turn_done`, `session_error_phase=terminal`, and classifier rule `session_error`. No ready or waiting transition follows before process exit. The specific provider failure class does not change this parser path, so HTTP 529 exhaustion is fully observable once the mock elicits it.\n\n## Driver capability\n\nThe recipe uses send, wait_turn, sleep, and exit_clean. The DeepSeek Harness interactive driver declares and implements every step. It also accepts model, base_url, context_window, permission_mode, and api_key settings through its temporary provider patch. `wait_turn` counts the durable error `turn/end`, so the process stays alive for the post-error hold.\n\nRecording requires the stateful OpenAI-compatible overload mock already specified by the paired 2.22 cell. For this terminal half it must run with `--succeed-after 0`, return HTTP 529 for every counted primary request, ignore the concurrent session-title request, and log every counted request. This missing mock is a recording prerequisite, not a driver primitive gap.",
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Scenario signal\n\nThe same live DSH session must follow ready -> working -> error. It must stay in error after the provider overload exhausts the retry budget. The failed turn's own boundary must not return the session to ready.\n\n## Agent support\n\nThe installed DeepSeek Harness 0.1.5-rc.2 TUI profile mounts `@deepseek-ai/dsh-llm-retry`. Its documented default normal policy retries `SERVER` failures five times, then delegates the exhausted failure. The installed pi-ai adapter classifies an error message containing any 5xx status as `SERVER`; this includes HTTP 529. The installed retry executor stops scheduling after `previousRetry >= maxRetries`. The agent loop then throws the structured LLM failure, catches it at the turn level, and appends `turn/end` with `reason.kind=error`.\n\nThe committed DSH 2-14 recording proves the same finite ladder and terminal boundary on the installed TUI profile. Its transcript contains five durable `llm/retry` and five `llm/retry-started` records, followed by `turn/end` with `reason.kind=error`. That measured failure is `TRANSPORT`, not HTTP 529. The committed `mock-openai-error` fixture now supplies the overload input, while the live recording must confirm the complete HTTP 529 path.\n\n## Daemon capability\n\nThe DSH adapter handles the terminal boundary required by this scenario. `parseTurnEnd` emits `turn_done` for every `turn/end`. When `reason.kind` is `error`, it also emits an `ErrorPhaseTerminal` `SessionError` with the lowercased failure code and message. The tailer clears only a retrying error on a turn boundary; it records a terminal error from that same boundary after the clearing check, so the failed turn's epilogue cannot erase it. The classifier routes the standing error to the canonical `error` state.\n\nThe committed DSH 2-14 recording supplies end-to-end evidence for this exact terminal path. Its events enter working at sequence 255 and enter error at sequence 420 with `last_event_type=turn_done`, `session_error_phase=terminal`, and classifier rule `session_error`. No ready or waiting transition follows before process exit. The specific provider failure class does not change this parser path, so HTTP 529 exhaustion remains fully observable when the committed mock elicits it.\n\n## Driver capability\n\nThe recipe uses send, wait_turn, sleep, and exit_clean. The DeepSeek Harness interactive driver declares and implements every step. It also accepts model, base_url, context_window, permission_mode, and api_key settings through its temporary provider patch. `wait_turn` counts the durable error `turn/end`, so the process stays alive for the post-error hold.\n\nThe committed OpenAI-compatible fixture was checked with the terminal arguments declared by this recipe. It returned HTTP 529 `server_error` with code `overloaded` for every counted primary request under `--succeed-after 0`. It returned HTTP 200 for the DSH title request without consuming a count. Its log records counted requests as `POST /v1/chat/completions #N model=...`, which the recipe pattern matches while excluding the title request at `#0`.",
       "caveats": [
         "Vacuous-pass condition: the lifecycle could pass on an unrelated terminal failure or an old DSH transcript without proving persistent HTTP 529 overload. The recipe therefore requires a fresh per-run cwd and pre-launch marker, exactly five durable SERVER retry records, one SERVER error turn/end, and a mock log proving six counted primary requests.",
-        "Load-bearing prerequisite: add tools/onboarding-factory/recording/mock-openai-overload. It must serve /v1/chat/completions, return HTTP 529 for every counted primary request when --succeed-after 0, answer but not count the concurrent title-generation request, and log each counted primary request.",
-        "The installed source explicitly maps 5xx text to SERVER, and the retry policy includes SERVER. A live recording must still confirm the exact HTTP 529 error text emitted by the OpenAI-compatible client; the spec avoids guessing that message.",
-        "The committed measured retry ladder uses TRANSPORT failures, not HTTP 529. It proves the five-retry exhaustion and terminal turn boundary on this installed profile, while the new mock must prove the overload-specific input.",
+        "Load-bearing fixture: tools/onboarding-factory/recording/mock-openai-error must keep serving /v1/chat/completions, returning HTTP 529 for every counted primary request under --succeed-after 0, answering the DSH title side channel without counting it, and logging each counted request.",
+        "The installed source explicitly maps 5xx text to SERVER, and the retry policy includes SERVER. The exact mock endpoint and DSH-shaped title and primary requests were checked locally. A live recording must still confirm that the OpenAI-compatible client preserves HTTP 529 in the durable DSH failure.",
+        "The committed measured retry ladder uses TRANSPORT failures, not HTTP 529. It proves the five-retry exhaustion and terminal turn boundary on this installed profile, while the live recording must prove the overload-specific input end to end.",
         "The model is pinned from the driver-selected request/context value qwen/qwen3.5-9b. Tokens and cost are expected to stay zero because every provider attempt fails before an assistant completion or usage record.",
         "The five-second post-turn sleep matches the muse sibling's post-wait hold. Claude Code sleeps for 30 seconds without wait_turn, so that delay also covers its retry ladder and is not a post-boundary settle requirement for DSH.",
         "Load-bearing isolation precondition: the driver must keep its fresh per-run cwd and pre-launch marker, and run-cell.sh must verify the mock request log. Otherwise another DSH transcript or the real provider could satisfy the lifecycle phases."
@@ -87,8 +87,13 @@
         },
         {
           "kind": "file",
-          "ref": "tools/onboarding-factory/recording/mock-openai-429/main.go",
-          "note": "The existing OpenAI mock succeeds on the first request and only then fails. It cannot produce a persistent-overload turn and cannot replace the required stateful overload mock."
+          "ref": "tools/onboarding-factory/recording/mock-openai-error/main.go",
+          "note": "The committed OpenAI-compatible fixture serves /v1/chat/completions, supports permanent failure with --succeed-after 0, ignores the stable DSH title prompt without consuming the counter, and logs each counted request."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/recording/mock-openai-error/main_test.go",
+          "note": "Package tests pin the OpenAI failure body, stateful success threshold, and the uncounted DSH title side channel; go test passed during reassessment."
         }
       ]
     },
@@ -97,14 +102,14 @@
       "preconditions": [
         "dsh >=0.1.5-rc.2 is installed and on PATH",
         "the community TUI profile is installed under ~/.dsh/profiles/tui",
-        "tools/onboarding-factory/recording/mock-openai-overload exists and implements the mock contract in this assessment",
+        "tools/onboarding-factory/recording/mock-openai-error is present",
         "port 18806 is free on 127.0.0.1 at record time",
         "tmux and zstd are installed",
         "irrlichd is recording the deepseek-harness adapter"
       ],
       "setup": [
-        "run-cell.sh builds and launches mock-openai-overload on 127.0.0.1:18806 before the driver starts",
-        "the mock ignores the DSH title-generation request for counting, returns HTTP 529 for every counted primary POST /v1/chat/completions request, and logs each counted request",
+        "run-cell.sh builds and launches mock-openai-error on 127.0.0.1:18806 before the driver starts",
+        "the mock runs with the declared HTTP 529 terminal-failure arguments, ignores the DSH title request for counting, fails every counted primary POST /v1/chat/completions request, and logs each counted request",
         "the interactive driver creates a fresh cwd and pre-launch marker, applies a temporary OpenAI-compatible provider patch for the mock, and launches dsh --profile tui in tmux",
         "the driver resolves only the post-marker compressed transcript whose session header has the fresh cwd"
       ],
@@ -142,17 +147,23 @@
       "timeout_seconds": 180,
       "scope_note": "The five-second sleep follows wait_turn and matches the muse sibling's post-boundary settle delay. Claude Code's 30-second sleep occurs without wait_turn and also covers its retry ladder, so it does not transfer as a DSH post-boundary delay. The 180-second timeout matches the paired DSH 2.22 recipe and exceeds the measured five-retry DSH ladder by a wide margin.",
       "mock": {
-        "package": "./tools/onboarding-factory/recording/mock-openai-overload",
+        "package": "./tools/onboarding-factory/recording/mock-openai-error",
         "port": 18806,
         "args": [
           "--status",
           "529",
+          "--error-type",
+          "server_error",
+          "--error-code",
+          "overloaded",
+          "--error-message",
+          "Provider overloaded (mock).",
           "--succeed-after",
           "0",
           "--ignore-substring",
-          "Generate the session title"
+          "create a concise title"
         ],
-        "request_log_pattern": "PRIMARY POST /v1/chat/completions #[0-9]+"
+        "request_log_pattern": "POST /v1/chat/completions #[1-9][0-9]* model="
       }
     }
   }
