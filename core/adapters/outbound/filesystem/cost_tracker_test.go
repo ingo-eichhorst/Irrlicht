@@ -587,6 +587,31 @@ func TestRecordSnapshot_StampsProvider(t *testing.T) {
 	}
 }
 
+// TestRecordSnapshot_ClaudeCodeWithoutQuotaEvidenceIsUnknownProvider is
+// #1994's red-first proof for the cost tracker's own default provider
+// resolver: a claude-code session with no rate-limit snapshot (no native
+// statusline evidence was ever observed for it) must not be attributed to
+// "anthropic" — claude-code can also run against Bedrock/Vertex, which never
+// emits that snapshot and is not Anthropic's own consumer subscription. The
+// adapter name alone is not evidence; only the session's own quota snapshot
+// is.
+func TestRecordSnapshot_ClaudeCodeWithoutQuotaEvidenceIsUnknownProvider(t *testing.T) {
+	tr := newTestTracker(t)
+	state := &session.SessionState{
+		SessionID:   "s1",
+		ProjectName: "proj-a",
+		Adapter:     "claude-code",
+		Metrics:     &session.SessionMetrics{EstimatedCostUSD: 0.10}, // no RateLimit: no quota evidence observed
+	}
+	if err := tr.RecordSnapshot(state); err != nil {
+		t.Fatal(err)
+	}
+	rows := readRows(t, tr.filePath("proj-a"))
+	if len(rows) != 1 || rows[0].Provider != "" {
+		t.Fatalf("want provider unknown (empty) absent quota evidence, got %+v", rows)
+	}
+}
+
 func TestRecordSnapshot_UsesInjectedProviderResolver(t *testing.T) {
 	tr := newTestTracker(t)
 	// pi resolves to "" under the default resolver; the injected one

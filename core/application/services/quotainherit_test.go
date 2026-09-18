@@ -121,7 +121,17 @@ func TestInheritRateLimits_PiNotInheritsOnAccountMismatch(t *testing.T) {
 	}
 }
 
-func TestInheritRateLimits_PiAnthropicInheritsFromClaudeCode(t *testing.T) {
+// TestInheritRateLimits_PiDoesNotInheritFromClaudeCode is #1994's red-first
+// proof for the Anthropic-singleton removal (epic #1977 §3.2). This is
+// TestInheritRateLimits_PiAnthropicInheritsFromClaudeCode, inverted: it used
+// to assert that a pi(anthropic) session inherits a Claude Code snapshot with
+// no account anchor at all. That inheritance is exactly what the singleton
+// removal forbids — Claude Code's OAuth account lives in the macOS keychain,
+// never on disk, so no evidence can confirm the two sessions share an
+// account, and IsSingleton() used to let an empty AccountID match any
+// same-provider wrapper regardless. Sharing without a confirmed account is
+// the defect; this snapshot must now stay put on its own session.
+func TestInheritRateLimits_PiDoesNotInheritFromClaudeCode(t *testing.T) {
 	home := stageAuth(t, map[string]any{
 		".pi/agent/auth.json": map[string]any{
 			"anthropic": map[string]any{"type": "oauth"},
@@ -132,11 +142,8 @@ func TestInheritRateLimits_PiAnthropicInheritsFromClaudeCode(t *testing.T) {
 	pi := emptyWrapper("pi", "pi-1")
 	InheritRateLimits([]*session.SessionState{cc, pi}, home)
 
-	if pi.Metrics.RateLimit == nil {
-		t.Fatal("expected pi(anthropic) to inherit from claude code")
-	}
-	if pi.Metrics.RateLimit.SampledAt != 2000 {
-		t.Errorf("expected donor snapshot, got SampledAt=%d", pi.Metrics.RateLimit.SampledAt)
+	if pi.Metrics.RateLimit != nil {
+		t.Fatalf("expected pi(anthropic) NOT to inherit from claude code (no confirmed account anchor exists for Anthropic), got %+v", pi.Metrics.RateLimit)
 	}
 }
 
