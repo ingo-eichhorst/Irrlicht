@@ -1,0 +1,79 @@
+{
+  "scenario_id": "provider-failover-midturn",
+  "metadata": {
+    "agent_supports": "no",
+    "daemon_capability": "n/a",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+3ba8bf4",
+    "confidence": 0.94,
+    "notes": "DeepSeek Harness 0.1.5-rc.2 retries the same provider and model inside the open turn; it does not ship an automatic secondary-provider or secondary-model failover chain."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "provider-failover-midturn",
+      "agent": "deepseek-harness",
+      "assessed_at": "2026-09-18T22:06:58Z",
+      "agent_supports": "no",
+      "daemon_capability": "n/a",
+      "driver_capability": "ready",
+      "record_blocked": "upstream",
+      "confidence": 0.94,
+      "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a\ndriver_capability: ready\n\n## Scenario signal\n\nThe scenario requires one open turn to survive a primary provider error. The agent must change to a secondary model without user action. ModelName must change while the session stays working. The same turn must then complete and settle to ready with the fallback model visible.\n\n## Agent capability\n\nDeepSeek Harness 0.1.5-rc.2 does not ship this behavior. The active TUI profile mounts `@deepseek-ai/dsh-llm-retry`. That plugin handles rate limits, server errors, timeouts, and transport errors at the open agent-step boundary. It writes `llm/retry` and `llm/retry-started`, waits, and returns `{ kind: 'retry' }`. It does not change the request route. The official package contract states that the retried step reconstructs the same explicit provider and model request unless another recovery policy changes the durable surface.\n\nNo such failover policy is present in the installed product. A source scan of the installed DeepSeek Harness packages found only two `agent/request-error` listeners: `dsh-llm-retry` and context-overflow compaction. The compaction listener changes context, not provider or model. The active profile dump contains the retry plugin and provider adapters, but no failover plugin or fallback chain. The required binary string scan for failover, fallback, secondary, provider chain, rate-limit, and `/model` produced no match in the `dsh` launcher. The top-level and TUI help expose no failover option.\n\nDeepSeek Harness has a provider registry and a recovery extension point. Those extension points do not satisfy this scenario. A custom plugin could implement a route change, but the installed CLI and active TUI profile do not include one. The shipped behavior is same-route retry followed by a terminal turn error when the retry policy stops. The defining automatic secondary-route operation is absent, so the agent verdict is no rather than partial.\n\n## Daemon capability\n\nThis axis is n/a because the installed agent cannot produce the required failover. The DSH adapter was still checked. It tails the local v3 transcript. Its parser reads ModelName from `request/header`, `request/context`, and `assistant/message`. It maps `turn/start` to working and completed `turn/end` to ready. A future recovery plugin that writes a changed request header or fallback assistant model could therefore be assessed against this parser, but that hypothetical path does not make the current cell recordable.\n\n## Driver capability\n\nThe driver is ready for the ordinary interaction steps. The factory helper reports `send`, `wait_turn`, `sleep`, and the other supported interactive primitives. No recipe is authored because the route freezes at the agent pillar.\n\n## Vacuous-pass check\n\nA cell would pass while proving nothing if it asserted only one working-to-ready arc and the final model. A successful primary request or a same-route retry would satisfy those assertions without failover. A future recordable spec must require a primary failure, two distinct model observations in one session, and no ready boundary between the model observations.\n\n## Unblock condition\n\nReassess when DeepSeek Harness ships or the supported TUI profile mounts an automatic recovery policy that changes to a configured secondary provider or model inside the same open turn and records the changed route.",
+      "caveats": [
+        "Vacuous-pass condition: a working-to-ready arc plus one final model can pass after a normal primary success or a same-route retry. A future spec must require a primary failure and two distinct model observations in one uninterrupted working turn.",
+        "This verdict is version-specific. Re-probe `agent/request-error` listeners and the active TUI composition after a DeepSeek Harness upgrade.",
+        "DeepSeek Harness exposes an extension point that a custom plugin could use for failover. No such plugin is shipped or mounted in the assessed 0.1.5-rc.2 TUI profile.",
+        "An external gateway can hide backend failover behind one configured DeepSeek Harness route. That does not prove the scenario unless the durable session surface also records a changed fallback model during the open turn."
+      ],
+      "sources": [
+        {
+          "kind": "url",
+          "ref": "https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.1.5-rc.2/packages/llm/llm-retry/README.md",
+          "note": "Official tagged package contract: retries re-run the failed step in the same open turn and reconstruct the same explicit provider/model request unless another recovery policy changes the surface."
+        },
+        {
+          "kind": "url",
+          "ref": "https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.1.5-rc.2/packages/llm/llm-retry/src/index.ts",
+          "note": "Official tagged implementation: the request-error listener applies provider-owned retry policy and returns a retry decision without changing provider or model."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-llm-retry/README.md",
+          "note": "Installed 0.1.5-rc.2 retry contract for same-route reconstruction, durable retry events, and retryable error classes."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-llm-retry/lib/index.js",
+          "note": "Installed retry implementation appends llm/retry records and returns `{kind: retry}`; it does not mutate the request provider or model."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-base/cordis.patch.yml",
+          "note": "The shipped base composition mounts dsh-llm-retry. The active TUI dump confirms this row and contains no failover recovery plugin."
+        },
+        {
+          "kind": "command",
+          "ref": "rg --no-ignore -n -F 'ctx.on(\"agent/request-error\"' <installed-dsh> <active-tui-profile>",
+          "note": "The installed product scan found only dsh-llm-retry and context-overflow compaction listeners; neither changes to a secondary provider or model."
+        },
+        {
+          "kind": "command",
+          "ref": "strings $(command -v dsh) | grep -iE 'failover|fall.?back|secondary|retry|overload|rate.limit|provider|/model'",
+          "note": "The required binary scan produced no matching failover surface. The executable is a Node launcher, so installed package source supplies the decisive evidence."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser.go",
+          "note": "The daemon parser reads model metadata from request/header, request/context, and assistant/message, and maps turn boundaries to working and ready."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "The interactive driver implements send, wait_turn, sleep, and the other ordinary interaction primitives."
+        }
+      ]
+    }
+  }
+}
