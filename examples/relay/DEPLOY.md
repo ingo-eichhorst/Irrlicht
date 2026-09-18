@@ -14,14 +14,41 @@ production — auth, TLS, systemd, and the cloned-replica gotcha. For the wire p
 Daemons dial **out** to the relay, so only the relay needs a reachable port; the daemon side works
 through NAT with no inbound port.
 
+## One-command Linux install
+
+On a Linux host with systemd, install the relay behind Caddy with one command:
+
+```bash
+curl -fsSL https://irrlicht.io/relay.sh | sh -s -- --domain relay.example.com
+```
+
+The installer selects the `amd64` or `arm64` release asset, verifies its SHA-256
+checksum, preserves the dashboard layout, creates the service user and state
+directory, installs the systemd unit, and issues the first bearer token. It
+installs Caddy from the host package manager when that package is available.
+It does not add a third-party package repository.
+
+Use `--tailscale` instead to configure `tailscale serve --bg 7839`. Use neither
+flag to install a loopback-only relay. The loopback-only mode cannot pair a
+phone because it has no stable HTTPS origin. Remove the installation and its
+state with:
+
+```bash
+curl -fsSL https://irrlicht.io/relay.sh | sh -s -- --uninstall
+```
+
+The installer does not change DNS or firewall rules. Under `--domain`, Caddy
+requests and renews the TLS certificate. The installer prints the host firewall
+command that applies but does not run the command. You must also permit TCP
+port 443 in the cloud network firewall.
+
 ## Get the binary
 
 ### From a release (Linux, amd64 + arm64)
 
-`irrlichtrelay-linux-<arch>.tar.gz` is built by every release **from the next
-one onward** — no published release carries it yet, so check the releases page
-and use the from-source path below if it is not there. It carries the
-dashboard alongside the binary. Extract it somewhere and keep the two
+Release v0.6.3 and later publish `irrlichtrelay-linux-amd64.tar.gz` and
+`irrlichtrelay-linux-arm64.tar.gz`. Each archive carries the dashboard
+alongside the binary. Extract it somewhere and keep the two
 directories together — the relay finds its UI at `../Resources/web` relative to
 the binary, so moving `bin/irrlichtrelay` out on its own leaves the dashboard
 answering 503:
@@ -46,9 +73,10 @@ irrlichtrelay --version
 ```
 
 A from-source build installs no dashboard, and the binary at `/usr/local/bin`
-has no `../Resources/web` to find — so either copy `platforms/web/` somewhere
-and point `IRRLICHT_UI_DIR` at it, or accept a relay that serves the API and a
-503 on `/`. The service files in this directory do the former.
+has no `../Resources/web` to find. Copy `platforms/web/` and set
+`IRRLICHT_UI_DIR`, or accept a relay that serves the API and a 503 on `/`.
+The sample systemd unit uses the release layout under `/opt/irrlichtrelay`.
+Edit its paths if you use a source build.
 
 Or run it in a container — see [`README.md`](./README.md) / [`Dockerfile`](./Dockerfile).
 
@@ -151,13 +179,13 @@ A ready-to-edit unit ships at [`irrlichtrelay.service`](./irrlichtrelay.service)
 front it with one of the TLS proxies above). Install:
 
 ```bash
-# binary at /usr/local/bin/irrlichtrelay (see "Get the binary")
+# release archive extracted under /opt/irrlichtrelay (see "Get the binary")
 useradd --system --no-create-home --home /var/lib/irrlichtrelay irrlichtrelay
 cp examples/relay/irrlichtrelay.service /etc/systemd/system/
 
 install -d -o irrlichtrelay -g irrlichtrelay /var/lib/irrlichtrelay
 sudo -u irrlichtrelay IRRLICHT_HOME=/var/lib/irrlichtrelay \
-  irrlichtrelay token issue --label "first-daemon"
+  /opt/irrlichtrelay/bin/irrlichtrelay token issue --label "first-daemon"
 
 systemctl daemon-reload
 systemctl enable --now irrlichtrelay

@@ -5,6 +5,12 @@ build/
 
 # Go build artifacts (use `go build -o /tmp/...` or `.build/` instead)
 bin/
+# Exception: relay-install_test.sh's committed archive fixtures. The installer
+# rejects an archive that lacks `bin/irrlichtrelay`, so the fixture that proves
+# the rejection has to carry that path. `bin/` above silently swallowed both
+# fixtures on the first `git add`; the directory is negated, not just the file,
+# because git cannot re-include a file under an excluded directory.
+!tools/lib/testdata/relay-install/*/bin/
 core/bin/
 core/irrlicht-ls
 /irrlichtrelay
