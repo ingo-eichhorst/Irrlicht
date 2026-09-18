@@ -90,7 +90,7 @@
     },
     "recipe": {
       "applicable": true,
-      "timeout_seconds": 180,
+      "timeout_seconds": 300,
       "settings": {
         "model": "qwen/qwen3.5-9b",
         "base_url": "http://127.0.0.1:1234/v1",

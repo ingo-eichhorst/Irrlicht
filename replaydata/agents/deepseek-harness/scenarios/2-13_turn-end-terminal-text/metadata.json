@@ -101,7 +101,7 @@
         "permission_mode": "danger-full-access",
         "api_key": "irrlicht-local-recording"
       },
-      "timeout_seconds": 180,
+      "timeout_seconds": 300,
       "scope_note": "Uses 11 seconds after wait_turn to match the longest sibling settle delay. Aider needs that delay for idle-flush; DSH has an explicit boundary, but matching the longer daemon observation window is cheap and removes timing risk."
     }
   }

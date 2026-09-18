@@ -100,7 +100,7 @@
         "permission_mode": "danger-full-access",
         "api_key": "irrlicht-local-recording"
       },
-      "timeout_seconds": 180,
+      "timeout_seconds": 300,
       "scope_note": "Uses the sibling 8-second post-turn settle delay. DSH emits an explicit completed turn/end, but the daemon still needs an observation window before driver teardown."
     }
   }
