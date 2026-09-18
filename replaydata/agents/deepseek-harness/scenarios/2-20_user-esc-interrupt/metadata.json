@@ -1,0 +1,141 @@
+{
+  "scenario_id": "user-esc-interrupt",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+e51e15b",
+    "confidence": 0.9,
+    "notes": "DeepSeek Harness cancels a running turn with Ctrl+C and persists a user-caused aborted turn/end, which the DSH adapter maps to ready before a clean recovery turn."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "user-esc-interrupt",
+      "agent": "deepseek-harness",
+      "assessed_at": "2026-09-18T21:25:08Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.9,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Agent support\n\nDeepSeek Harness 0.1.5-rc.2 supports a user interrupt in its installed terminal interface. The installed @tomowang/dsh-tui 0.8.1 documentation states that Ctrl+C cancels a running turn. CustomEditor handles Ctrl+C while the agent status is running by calling actions.cancel(), and that action calls agent.cancel({kind: \"user\"}). This agent uses Ctrl+C rather than ESC for the scenario's interrupt step, like the recorded aider specialization.\n\nThe installed official @deepseek-ai/dsh-agent-loop source defines the durable result. cancel() aborts the active turn with the supplied user cause. The turn loop catches the aborted signal and sets reason.kind to aborted with the abort cause. Its finally block always appends turn/end with that reason. The interrupted turn therefore has a structural local trace: turn/end with data.reason.kind=aborted and data.reason.reason.kind=user. A later follow-up starts a new turn on the same session.\n\n## Daemon capability\n\nThe DSH adapter tails the compressed v3 session transcript through FilesUnderRoot. parseTurnStart emits turn_start. parseTurnEnd emits turn_done for every turn/end whose reason is not an error, including the aborted boundary. The tailer clears ordinary open tool state at the turn boundary. The classifier's agent_done rule then maps the same session from working to ready. The next turn/start maps it back to working, and its completed turn/end returns it to ready. This supplies the required ready to working to ready interrupt arc and the clean recovery arc.\n\nThe parser does not preserve the aborted reason as IsUserInterrupt. The daemon therefore cannot label the ready transition as the classifier's Claude-specific user_interrupt rule. This is a narrow attribution caveat. It is not a daemon defect for this cell because the canonical state arc is correct and the machine spec separately requires the exact durable user-caused aborted boundary.\n\n## Driver capability and recipe\n\nThe DeepSeek Harness interactive driver implements send, sleep, interrupt, and wait_turn. Its interrupt step sends Ctrl+C to the tmux pane, matching the installed TUI binding. wait_turn counts all durable turn/end records, so it counts the aborted first turn and the completed recovery turn. The recipe asks for a mechanically long stream of 4000 repeated words, waits 8 seconds, interrupts, waits 8 seconds for the boundary, sends a short recovery prompt, waits for both turn boundaries, and gives the daemon a final 10-second observation window. These delays are within the committed sibling range: 2 to 12 seconds before interrupt, 3 to 10 seconds after interrupt, and 5 to 20 seconds after recovery.\n\nThe model is pinned because the driver settings select qwen/qwen3.5-9b, and the live LM Studio model list exposed that exact ID during assessment. The recovery turn supplies non-zero token usage. Cost remains allowed to be zero because this is a local LM Studio route.\n\n## Vacuous-pass check\n\nThe lifecycle phases alone could pass without proving cancellation if the first response completed naturally before Ctrl+C. The spec therefore requires exactly one user-caused aborted turn/end, exactly one completed recovery turn/end, and the exact two direct user prompts. The fresh per-run cwd, pre-launch marker, header-cwd match, and stable session ID are also load-bearing; without them, an older transcript could satisfy the assertions.",
+      "caveats": [
+        "The DSH parser maps an aborted turn/end to the correct turn_done boundary but does not set IsUserInterrupt. Irrlicht observes the correct state arc but cannot attribute the ready transition specifically to a user interrupt. The exact transcript assertion preserves that identity for this cell.",
+        "Emission is grounded in the installed official agent-loop source, which appends turn/end from finally with reason.kind=aborted after a user cancellation. No existing local DSH transcript contained an aborted turn, so the live record must confirm the exact persisted payload and timing.",
+        "Vacuous-pass condition: the state arc could pass after natural completion if the interrupt were a no-op. The exact user-caused aborted turn/end assertion prevents that. The mechanically long 4000-word output request makes natural completion before the 8-second interrupt unlikely but is not the proof by itself.",
+        "Load-bearing isolation precondition: the driver must keep its fresh per-run cwd, pre-launch marker, header-cwd match, and stable session ID selection. Without this isolation, a prior transcript could satisfy the phase and transcript assertions.",
+        "Load-bearing environment precondition: LM Studio must expose qwen/qwen3.5-9b at http://127.0.0.1:1234/v1 at record time. The endpoint exposed the model during assessment, but record must re-probe it."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/profiles/tui/node_modules/@tomowang/dsh-tui/README.md",
+          "note": "Installed TUI 0.8.1 documentation: Ctrl+C cancels a running turn and leaves the terminal session active."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/profiles/tui/node_modules/@tomowang/dsh-tui/lib/tui/CustomEditor.js",
+          "note": "Running-turn Ctrl+C branch calls actions.cancel(); other Ctrl+C behavior is limited to clearing input or the idle double-press exit gesture."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/profiles/tui/node_modules/@tomowang/dsh-tui/lib/index.js",
+          "note": "actions.cancel calls agent.cancel({kind:'user'}), establishing the structural user cause supplied to the official agent loop."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-agent-loop/lib/index.js",
+          "note": "Installed official 0.1.5-rc.2 loop: cancel aborts the active phase; turn() records reason.kind=aborted on that signal and appends turn/end from finally."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/agent.go",
+          "note": "FilesUnderRoot source tails DSH session transcripts and binds the live PID from session.lock."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser.go",
+          "note": "parseTurnStart emits turn_start; parseTurnEnd emits turn_done for completed, blocked, max-token, and aborted boundaries, while only error boundaries add SessionError."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "The agent_done rule maps a turn_done without a standing error or waiting cue to ready."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "Declares and implements send, sleep, interrupt, and wait_turn; interrupt sends Ctrl+C and wait_turn counts durable turn/end records."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/scenarios/2-20_user-esc-interrupt/metadata.json",
+          "note": "Sibling precedent: a structural cancelled terminal that maps to generic turn_done fully satisfies the lifecycle while loss of interrupt attribution remains a caveat."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "dsh >=0.1.5-rc.2 is installed and on PATH",
+        "the community TUI profile @tomowang/dsh-tui 0.8.1 is installed under ~/.dsh/profiles/tui",
+        "LM Studio is listening at http://127.0.0.1:1234/v1 with qwen/qwen3.5-9b loaded; re-probe the model list at record time",
+        "tmux and zstd are installed",
+        "irrlichd is recording the deepseek-harness adapter with transcript permission granted",
+        "the driver uses its fresh per-run cwd and pre-launch transcript marker"
+      ],
+      "setup": [
+        "The interactive driver creates a fresh cwd under the staging directory and launches dsh --profile tui in tmux.",
+        "The driver applies a temporary patch that selects LM Studio, qwen/qwen3.5-9b, and danger-full-access without changing the installed TUI profile.",
+        "The driver resolves only a readable post-marker v3 transcript whose session header cwd matches the fresh run cwd.",
+        "The first prompt requests a mechanically long tool-free stream so the turn remains active until Ctrl+C. The transcript assertion, not prompt length alone, proves that cancellation occurred."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Output the word banana repeated 4000 times on one single line, separated by single spaces. Do not use newlines. Do not use any tools. Do not add commentary, a preamble, or a question. Output only the repeated word."
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        },
+        {
+          "type": "interrupt"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: RECOVERED"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 10
+        }
+      ],
+      "verify": [
+        "the post-marker DSH session is born in ready and binds its session.lock writer PID",
+        "the long direct-user prompt drives the same session to working",
+        "the durable transcript contains exactly one turn/end with reason.kind=aborted and nested user cause before the recovery prompt",
+        "the aborted turn/end maps to turn_done and returns the same session to ready without entering waiting or error",
+        "the exact recovery prompt drives the same session back to working and exactly one completed turn/end returns it to ready",
+        "the replay reports qwen/qwen3.5-9b and non-zero cumulative tokens; local-route cost may remain zero"
+      ],
+      "settings": {
+        "model": "qwen/qwen3.5-9b",
+        "base_url": "http://127.0.0.1:1234/v1",
+        "context_window": 262144,
+        "permission_mode": "danger-full-access",
+        "api_key": "irrlicht-local-recording"
+      },
+      "timeout_seconds": 300,
+      "scope_note": "Uses an 8-second pre-interrupt window and 8-second post-interrupt settle, both within committed sibling ranges, plus the 10-second trailing settle used by the longest ordinary sibling and existing DSH command recipes."
+    }
+  }
+}
