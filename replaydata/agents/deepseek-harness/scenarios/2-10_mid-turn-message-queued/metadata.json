@@ -1,0 +1,150 @@
+{
+  "scenario_id": "mid-turn-message-queued",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+73afca7",
+    "confidence": 0.88,
+    "notes": "DeepSeek Harness TUI maps input during a running turn to durable next-step steering, and the DSH parser keeps the session working until the single final turn/end."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "mid-turn-message-queued",
+      "agent": "deepseek-harness",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.88,
+      "body": "## Verdict\n\nagent_supports: yes; daemon_capability: full; driver_capability: ready.\n\n## Agent capability\n\nDeepSeek Harness 0.1.5-rc.2 with `@tomowang/dsh-tui` 0.8.1 explicitly supports input during a running turn. The TUI reference states that line input calls `agent.followup()` while idle and `agent.steer()` while a turn runs. The installed TUI implementation checks `agent.status`; it calls `agent.steer(message)` when the status is `running`. The official `dsh-agent` reference defines `steer()` as next-step input. It also defines a durable inbox with separate `next-turn` and `next-step` lists.\n\nThe installed `dsh-agent-loop` implementation makes the boundary exact. `steer()` appends the message to `next-step`. The active turn claims all next-step input at the next step boundary. The turn loop writes `turn/end` only after the next-step inbox is empty. Thus, a message submitted while the first request runs is consumed inside the same durable turn. The recipe sends one long, mechanical repeated-token prompt. It waits eight seconds, types the follow-up without increasing the driver's expected-turn counter, and submits Enter after a one-second render delay.\n\n## Daemon capability\n\nThe DSH adapter tails the durable v3 compressed transcript under one stable `session-<uuid>` identity. `parseTurnStart` maps `turn/start` to `turn_start`. `parseUserMessage` maps each direct human message to `user_message`. It does not report a terminal signal. `parseTurnEnd` maps the one final completed `turn/end` to `turn_done`. `SessionMetrics.IsAgentDone` treats `turn_done` as the authoritative completion signal. Therefore, the queued message cannot cause a ready transition by itself. The session stays working until the single final boundary, then becomes ready. The parser also reads the configured model and non-zero usage from assistant messages.\n\nThe raw-transcript assertions make the emission claim testable. They require one insertion into the durable `next-step` inbox with the exact follow-up text, two direct user messages, exactly one `turn/start`, exactly one completed `turn/end`, no tool call, and no approval request. A live recording must still confirm the timing and durable record order.\n\n## Driver capability\n\nThe interactive driver implements `send`, `keys`, `sleep`, and `wait_turn`. The initial `send` sets the expected durable turn count to one. The raw `keys` steps submit the steering message without increasing that count. One `wait_turn` then waits for the final `turn/end`. The driver settings pin LM Studio and `qwen/qwen3.5-9b`. A measured basic-turn recording on the same route took 84.283 seconds, so the eight-second injection point is inside the active turn. The 360-second budget covers the initial request, the steered request, and final settlement.\n\n## Vacuous-pass check\n\nThe lifecycle arc alone could pass if the raw key input were dropped and only the first prompt completed. The transcript assertions prevent that hollow pass. They require the exact next-step inbox insertion and its later direct user message inside one and only one durable turn.",
+      "caveats": [
+        "Vacuous-pass condition: ready -> working -> ready alone proves only that the first prompt completed. The transcript spec also requires the exact next-step inbox insertion, its consumed direct user message, exactly two direct user messages, and exactly one durable turn.",
+        "PROVISIONAL emission timing: installed TUI and agent-loop source define next-step steering and one same-turn boundary, but this cell has no live queue recording yet. Record must confirm the durable splice and user/message order.",
+        "Load-bearing environment property: `@tomowang/dsh-tui` 0.8.1 and the active profile must still map normal submitted input to `agent.steer()` while `agent.status` is running. Re-probe the package version and profile composition at record time.",
+        "Load-bearing environment property: LM Studio must serve `qwen/qwen3.5-9b` at http://127.0.0.1:1234/v1. The model must still be running at the eight-second injection point. The repeated-token prompt and the measured 84.283-second sibling turn provide the timing margin.",
+        "The DSH parser intentionally skips `agent/inbox/spliced`. The daemon proves the user-visible state arc through `turn_start`, the non-terminal direct user message, and the final `turn_done`; the raw-transcript assertion proves that the follow-up used the queue.",
+        "The recipe uses one `wait_turn`, not two. DSH steering stays inside the current turn and emits one final `turn/end`; a second wait would wait for a boundary that the defined behavior does not produce."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/profiles/tui/node_modules/@tomowang/dsh-tui/README.md",
+          "note": "Official installed TUI 0.8.1 reference: line input maps to agent.followup while idle and agent.steer while a turn runs; the status bar exposes the queued-message count."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/profiles/tui/node_modules/@tomowang/dsh-tui/lib/index.js",
+          "note": "Installed TUI implementation calls agent.steer(message) when agent.status is running and agent.followup(message) otherwise."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-agent/README.md",
+          "note": "Official 0.1.5-rc.2 agent reference defines steer as next-step input and documents the durable next-turn/next-step inbox and later-boundary claiming."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-agent-loop/lib/index.js",
+          "note": "Installed loop implementation appends steer input to next-step, claims it at the next step boundary, and writes turn/end only after next-step input drains."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/agent.go",
+          "note": "Declares the FilesUnderRoot source for DSH compressed transcripts and the session-lock PID binding."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser.go",
+          "note": "Maps turn/start, direct user/message, completed turn/end, model, and token usage into the signals required by this cell."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser_test.go",
+          "note": "Pins measured v3 turn-start, direct user-message, turn-end, assistant usage, and compressed-transcript parsing."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/metrics.go",
+          "note": "IsAgentDone treats turn_done as authoritative and does not treat user_message or assistant_message as terminal."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "Implements send, keys, sleep, and wait_turn; only send increments the expected durable turn count."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/scenarios/2-1_basic-turn/recordings/2026-09-18-15-00-42_irrlichd-0.6.4+83ff4b8/transcript.jsonl.zstd",
+          "note": "Measured current-route evidence: one qwen/qwen3.5-9b turn lasted 84.283 seconds and emitted one stable turn/start-to-turn/end span with non-zero usage."
+        },
+        {
+          "kind": "file",
+          "ref": "shell: dsh --version; jq -r .version ~/.dsh/profiles/tui/node_modules/@tomowang/dsh-tui/package.json; curl http://127.0.0.1:1234/v1/models",
+          "note": "Live re-probe found DSH 0.1.5-rc.2, TUI 0.8.1, and qwen/qwen3.5-9b in the active LM Studio roster."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "timeout_seconds": 360,
+      "settings": {
+        "model": "qwen/qwen3.5-9b",
+        "base_url": "http://127.0.0.1:1234/v1",
+        "context_window": 262144,
+        "permission_mode": "danger-full-access",
+        "api_key": "irrlicht-local-recording"
+      },
+      "preconditions": [
+        "dsh 0.1.5-rc.2 or newer is on PATH, and the active profile uses @tomowang/dsh-tui 0.8.1 or a compatible release",
+        "the active TUI composition mounts dsh-agent-loop and maps submitted input during running status to agent.steer; re-probe at record time",
+        "LM Studio is serving qwen/qwen3.5-9b through http://127.0.0.1:1234/v1; re-probe the live model roster at record time",
+        "tmux and zstd are installed",
+        "irrlichd is recording with DeepSeek Harness transcript permission granted"
+      ],
+      "setup": [
+        "Create a fresh per-run cwd and launch the DSH TUI through the interactive driver",
+        "Apply the temporary LM Studio and qwen model patch without modifying the installed TUI profile",
+        "Resolve the post-marker session.v3.jsonl.zstd for the fresh cwd before sending input"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Do not use tools. Output the token PING exactly 200 times, separated by single spaces. Then output the final token DONE. Do not ask a question."
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        },
+        {
+          "type": "keys",
+          "keys": "r e p l y Space w i t h Space e x a c t l y Space q u e u e d o k"
+        },
+        {
+          "type": "sleep",
+          "seconds": 1
+        },
+        {
+          "type": "keys",
+          "keys": "Enter"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 11
+        }
+      ],
+      "verify": [
+        "the raw DSH transcript contains one exact next-step inbox insertion for the queuedok follow-up and later contains that exact direct user message",
+        "the raw DSH transcript contains exactly two direct user messages but exactly one turn/start and one completed turn/end",
+        "events.jsonl shows the stable DSH session enter working for the initial prompt and stay working for at least 15 seconds across the eight-second queue injection",
+        "events.jsonl contains no state transition to ready or waiting during the queue window",
+        "the same session eventually enters ready after the one final turn/end",
+        "the recording reports qwen/qwen3.5-9b and non-zero tokens"
+      ],
+      "scope_note": "The eight-second pre-injection delay matches the longest ordinary sibling injection delay and is far below the measured 84.283-second DSH basic turn. The one-second split between text and Enter matches TUI render-race precautions in the codex and copilot siblings. One wait_turn is correct because DSH steer creates a next step inside the current turn, not a second turn. The eleven-second trailing settle matches the longest ordinary explicit-boundary sibling delay and covers irrlichd's debounce; Copilot's 25-second delay is specific to its separate follow-up turn."
+    }
+  }
+}
