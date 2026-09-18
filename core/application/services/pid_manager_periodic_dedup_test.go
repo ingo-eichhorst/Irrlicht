@@ -7,9 +7,40 @@ import (
 	"testing"
 	"time"
 
+	"irrlicht/core/application/services"
 	"irrlicht/core/domain/agent"
 	"irrlicht/core/domain/session"
+	"irrlicht/core/ports/inbound"
 )
+
+// seedFromDiskStartedMsg is the exact LogInfo message session_detector.go's
+// Run logs immediately after seedFromDisk() returns and before entering the
+// event loop's select (see the "started — listening for transcript events"
+// call right after the seedFromDisk() call in Run). Polling for it is a
+// precise, race-free signal that the once-only seed-time dedup has already
+// run — replacing a fixed sleep that could otherwise let the test's
+// duplicate rows land BEFORE seedFromDisk, which would let SeedPIDs'
+// dedupeByPID silently do the job dedupeByPIDPeriodic exists to do and pass
+// green even with dedupeByPIDPeriodic deleted outright.
+const seedFromDiskStartedMsg = "started — listening for transcript events"
+
+// waitForLogMessage polls log's captured LogInfo messages for want until it
+// appears or timeout elapses, then reports whether it was actually seen.
+// waitForCondition itself returns silently on timeout, so callers MUST check
+// this return value — an unchecked call would let "never observed" and
+// "arrived instantly" look identical.
+func waitForLogMessage(log *mockLogger, want string, timeout time.Duration) bool {
+	seen := func() bool {
+		for _, msg := range log.infoSnapshot() {
+			if msg == want {
+				return true
+			}
+		}
+		return false
+	}
+	waitForCondition(seen, timeout)
+	return seen()
+}
 
 // TestSessionDetector_PeriodicDedup_RetiresDuplicateMintedAfterSeed is issue
 // #1992's acceptance evidence.
@@ -44,8 +75,24 @@ func TestSessionDetector_PeriodicDedup_RetiresDuplicateMintedAfterSeed(t *testin
 	tw := newMockAgentWatcher()
 	pw := newMockProcessWatcher()
 	repo := newMockRepo()
+	log := &mockLogger{} // caller-owned (not newDetector's internal one) so we can poll its messages below
 
-	det := newDetector(tw, pw, repo)
+	// Same construction as newDetector (testhelpers_test.go), but with our
+	// own Log so seedFromDisk's completion can be observed instead of guessed
+	// at with a sleep.
+	det := services.NewSessionDetector([]inbound.Watcher{tw}, services.SessionDetectorDeps{
+		PW:           pw,
+		Repo:         repo,
+		Log:          log,
+		Git:          &mockGit{},
+		Metrics:      &mockMetrics{},
+		Broadcaster:  nil,
+		Version:      "test",
+		ReadyTTL:     0,
+		PIDDiscovers: nil,
+		ProcessNames: nil,
+		LiveCWDs:     nil,
+	})
 	det.SetDeletedCooldown(0) // isolate staleness-based suppression (part 2 below) from cooldown-based suppression
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -53,7 +100,16 @@ func TestSessionDetector_PeriodicDedup_RetiresDuplicateMintedAfterSeed(t *testin
 	go func() { done <- det.Run(ctx) }()
 	defer func() { cancel(); <-done }()
 
-	time.Sleep(20 * time.Millisecond) // let seedFromDisk finish against the empty repo
+	// Observe seedFromDisk's completion instead of guessing at it with a fixed
+	// sleep: if the duplicate rows below were saved before seedFromDisk runs,
+	// SeedPIDs' own once-only dedupeByPID would delete "ghost-old" itself,
+	// and this test would pass even with dedupeByPIDPeriodic deleted outright
+	// — exactly the trap this test exists to avoid.
+	seedWaitStart := time.Now()
+	if !waitForLogMessage(log, seedFromDiskStartedMsg, 2*time.Second) {
+		t.Fatalf("detector never logged %q within %v — seedFromDisk may not have completed",
+			seedFromDiskStartedMsg, time.Since(seedWaitStart))
+	}
 
 	pid := os.Getpid() // alive — the shared PID both duplicate rows claim
 	now := time.Now()
@@ -119,7 +175,33 @@ func TestSessionDetector_PeriodicDedup_RetiresDuplicateMintedAfterSeed(t *testin
 		TranscriptPath: oldTranscript, // same file, still frozen
 	}
 
-	time.Sleep(50 * time.Millisecond)
+	// Sequencing barrier: the detector processes events from tw.ch in order,
+	// on a single event-loop goroutine (session_detector.go's Run: one
+	// `case idEv := <-d.merged` per iteration). Sending a second event for a
+	// brand-new, freshly-transcripted session and waiting for ITS effect
+	// (the row appearing in the repo) proves the first (ghost-old) event has
+	// already been fully processed — a fixed sleep here would instead make
+	// the absence assertion below vacuously true on a slow runner, passing
+	// before the ghost-old event was ever handled.
+	sentinelID := "sentinel-after-ghost"
+	sentinelTranscript := filepath.Join(tmpDir, "sentinel-after-ghost.jsonl")
+	writeTranscript(t, sentinelTranscript, time.Now()) // fresh — must be admitted as a new session
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      sentinelID,
+		ProjectDir:     "-Users-test-project",
+		TranscriptPath: sentinelTranscript,
+	}
+
+	barrierWaitStart := time.Now()
+	waitForCondition(func() bool {
+		state, _ := repo.Load(sentinelID)
+		return state != nil
+	}, 2*time.Second)
+	if state, _ := repo.Load(sentinelID); state == nil {
+		t.Fatalf("sequencing-barrier session %q was never admitted within %v — cannot conclude "+
+			"the earlier ghost-old event was processed", sentinelID, time.Since(barrierWaitStart))
+	}
 
 	if state, _ := repo.Load("ghost-old"); state != nil {
 		t.Fatal("a late transcript event for the deleted duplicate's frozen transcript " +
