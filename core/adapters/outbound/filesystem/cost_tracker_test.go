@@ -570,13 +570,27 @@ func TestCostSeries_EmptyAndInvalid(t *testing.T) {
 	}
 }
 
+// TestRecordSnapshot_StampsProvider verifies attribution when the session
+// carries the session-specific evidence #1994 requires: its own rate_limit
+// snapshot. Before #1994 codex resolved to "openai" from the adapter name
+// alone with no evidence needed; this fixture was widened rather than left
+// as-is so it still proves something under the new rule instead of quietly
+// starting to assert "" (see TestRecordSnapshot_ClaudeCodeWithoutQuotaEvidenceIsUnknownProvider
+// for the no-evidence case, and TestInheritRateLimits_CodexAPIKeyDoesNotDonate's
+// package for why adapter name alone was never trustworthy for claude-code).
 func TestRecordSnapshot_StampsProvider(t *testing.T) {
 	tr := newTestTracker(t)
 	state := &session.SessionState{
 		SessionID:   "s1",
 		ProjectName: "proj-a",
 		Adapter:     "codex",
-		Metrics:     &session.SessionMetrics{EstimatedCostUSD: 0.10},
+		Metrics: &session.SessionMetrics{
+			EstimatedCostUSD: 0.10,
+			RateLimit: &session.RateLimitSnapshot{
+				SampledAt: 1000,
+				Windows:   []session.RateLimitWindow{{UsedPercent: 10, WindowMinutes: 300, ResetsAt: 9999}},
+			},
+		},
 	}
 	if err := tr.RecordSnapshot(state); err != nil {
 		t.Fatal(err)
