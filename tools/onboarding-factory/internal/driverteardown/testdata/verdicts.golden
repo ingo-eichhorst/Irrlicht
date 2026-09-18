@@ -181,6 +181,9 @@ CLEAN
 === driver/copilot ===
 CLEAN
 
+=== driver/deepseek-harness ===
+CLEAN
+
 === driver/gemini-cli ===
 CLEAN
 
