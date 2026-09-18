@@ -27,9 +27,9 @@ type replaySummary struct {
 	CumCacheCreationTokens int64   `json:"cum_cache_creation_tokens"`
 	ModelName              string  `json:"model_name"`
 
-	// Store-derived context vector (#766): present only for sessions whose tokens
-	// come from an out-of-band store (antigravity #719), so they're distinct from
-	// the cum_* usage above. Zero/absent for every cum-token adapter.
+	// Direct context vector: present for adapters whose parser provides a
+	// verified total-token and context source. It remains distinct from the
+	// cumulative input and output values above.
 	TotalTokens        int64   `json:"total_tokens"`
 	ContextWindow      int64   `json:"context_window"`
 	ContextUtilization float64 `json:"context_utilization_percentage"`
@@ -104,21 +104,11 @@ func readGoldenSummary(recDir string) (replaySummary, bool) {
 // loadObservationSpec reads the optional observations block from a cell's
 // expected.jsonl meta line. Absent file/block → nil (soft-diff only).
 func loadObservationSpec(scenarioDir string) *ObservationSpec {
-	b, err := os.ReadFile(filepath.Join(scenarioDir, "expected.jsonl"))
-	if err != nil {
+	meta, err := loadExpectedMeta(scenarioDir)
+	if err != nil || meta == nil {
 		return nil
 	}
-	for _, line := range splitLines(b) {
-		if len(line) == 0 {
-			continue
-		}
-		var m ExpectedMeta
-		if json.Unmarshal(line, &m) == nil && m.SchemaVersion != 0 {
-			return m.Observations
-		}
-		break // first non-empty line is the meta line
-	}
-	return nil
+	return meta.Observations
 }
 
 // ValidateObservations runs the go-test-style metric verify for a cell: it

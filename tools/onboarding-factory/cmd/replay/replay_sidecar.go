@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"irrlicht/core/adapters/inbound/agents/claudecode"
@@ -361,7 +362,11 @@ func newSidecarReplayer(transcriptPath string, srcBytes []byte, cfg reportSettin
 	if err != nil {
 		return nil, nil, err
 	}
-	tmpPath := filepath.Join(tmpDir, "transcript.jsonl")
+	tmpName := "transcript.jsonl"
+	if strings.HasSuffix(transcriptPath, ".zstd") {
+		tmpName += ".zstd"
+	}
+	tmpPath := filepath.Join(tmpDir, tmpName)
 	tmp, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		os.RemoveAll(tmpDir)

@@ -11,15 +11,15 @@
 #     any recipe, so it can never be --re-recorded.
 #
 # A cell is "recorded" (and thus checked) when its dir holds ANY of
-# transcript.jsonl / transcript.md / events.jsonl. Recordings live under the
+# transcript.jsonl / transcript.jsonl.zstd / transcript.md / events.jsonl. Recordings live under the
 # recipe NAME dir (e.g. interrupted-turn), while assessment.json may live under
 # the COVERAGE_ID dir (e.g. user-esc-interrupt) — the artifact set is per
 # coverage_id, distributed across both. A complete recorded cell has:
 #   recipe row  — the dir name is a by_adapter.<agent> recipe `name` OR a
 #                 coverage_id whose recipes include one (else: orphan)
 #   assessment.json — in the recording dir OR the coverage_id sibling dir
-#   expected.jsonl, a transcript (.jsonl or .md), events.jsonl — in the dir
-#   golden      — transcript.jsonl.replay.json.golden, REQUIRED for .jsonl cells
+#   expected.jsonl, a transcript (.jsonl, .jsonl.zstd, or .md), events.jsonl
+#   golden      — <transcript>.replay.json.golden, REQUIRED for JSONL cells
 #                 (TestFixtureReplayByteIdentity pins it); .md cells have none.
 #
 # Sourced as a library (functions only; see cell-integrity_test.sh) AND runnable
@@ -62,7 +62,7 @@ ci_is_recorded() {
   d="$1"
   for r in "$d"/recordings/*/; do
     [[ -d "$r" ]] || continue
-    [[ -f "$r/transcript.jsonl" || -f "$r/transcript.md" || -f "$r/events.jsonl" ]] && return 0
+    [[ -f "$r/transcript.jsonl" || -f "$r/transcript.jsonl.zstd" || -f "$r/transcript.md" || -f "$r/events.jsonl" ]] && return 0
   done
   return 1
 }
@@ -103,8 +103,11 @@ ci_missing_artifacts() {
     if [[ -f "$newest/transcript.jsonl" ]]; then
       [[ -f "$newest/transcript.jsonl.replay.json.golden" ]] \
         || problems+=("recordings/$recname/transcript.jsonl.replay.json.golden")
+    elif [[ -f "$newest/transcript.jsonl.zstd" ]]; then
+      [[ -f "$newest/transcript.jsonl.zstd.replay.json.golden" ]] \
+        || problems+=("recordings/$recname/transcript.jsonl.zstd.replay.json.golden")
     elif [[ ! -f "$newest/transcript.md" ]]; then
-      problems+=("recordings/$recname/transcript.jsonl|transcript.md")
+      problems+=("recordings/$recname/transcript.jsonl|transcript.jsonl.zstd|transcript.md")
     fi
   fi
 

@@ -109,7 +109,7 @@ func (s *Server) handleArchivedRecording(w http.ResponseWriter, req archiveReque
 	); err == nil && rep != nil {
 		d.Expected = rep
 	}
-	d.Tools = extractToolCalls(store.archiveFilePath(req.scenarioDir, name, "transcript.jsonl"))
+	d.Tools = extractToolCalls(recordingTranscriptPath(store, store.archiveFilePath(req.scenarioDir, name, "")))
 	writeJSON(w, d)
 }
 

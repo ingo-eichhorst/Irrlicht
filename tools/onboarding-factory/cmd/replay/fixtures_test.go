@@ -77,7 +77,7 @@ func discoverReplayFixtures(t *testing.T, root string) []string {
 		if d.IsDir() {
 			return nil
 		}
-		if !strings.HasSuffix(path, ".jsonl") {
+		if !strings.HasSuffix(path, ".jsonl") && !strings.HasSuffix(path, ".jsonl.zstd") {
 			return nil
 		}
 		// Skip lifecycle-event sidecars: legacy <scenario>.events.jsonl naming
@@ -102,6 +102,22 @@ func discoverReplayFixtures(t *testing.T, root string) []string {
 		t.Fatalf("walk fixtures: %v", err)
 	}
 	return out
+}
+
+func TestDiscoverReplayFixturesIncludesCompressedJSONL(t *testing.T) {
+	root := t.TempDir()
+	recording := filepath.Join(root, "recordings", "one")
+	if err := os.MkdirAll(recording, 0o755); err != nil {
+		t.Fatalf("mkdir recording: %v", err)
+	}
+	compressed := filepath.Join(recording, "transcript.jsonl.zstd")
+	writeFile(t, compressed, "compressed bytes are sufficient for discovery")
+	writeFile(t, filepath.Join(recording, "events.jsonl"), "{}\n")
+
+	got := discoverReplayFixtures(t, root)
+	if len(got) != 1 || got[0] != compressed {
+		t.Fatalf("discoverReplayFixtures() = %v, want [%s]", got, compressed)
+	}
 }
 
 // runFixtureReplay dispatches through the same runReplay() path as main(),

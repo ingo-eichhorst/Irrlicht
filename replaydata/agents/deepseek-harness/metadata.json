@@ -1,0 +1,11 @@
+{
+  "id": "deepseek-harness",
+  "name": "DeepSeek Harness",
+  "provider": "deepseek-ai",
+  "prerequisites": [
+    "dsh >=0.1.5-rc.2 installed and on PATH",
+    "the community TUI profile installed under ~/.dsh/profiles/tui and runnable with 'dsh --profile tui'",
+    "LM Studio running at http://127.0.0.1:1234/v1 with qwen/qwen3.5-9b loaded; the driver applies this model configuration through a temporary --patch",
+    "use the existing DSH home that contains the tui profile; the observe-only driver does not modify the profile"
+  ]
+}

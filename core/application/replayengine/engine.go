@@ -19,11 +19,14 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 
 	"irrlicht/core/application/services"
 	"irrlicht/core/domain/session"
@@ -342,25 +345,17 @@ func (r *replayer) emit(eventIdx int, virtTime time.Time, cause Cause, prev, nex
 }
 
 func loadEvents(path string) ([]rawEvent, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
-
 	var out []rawEvent
 	idx := 0
-	for scanner.Scan() {
-		line := append([]byte(nil), scanner.Bytes()...)
+	err := ScanTranscriptLines(path, func(lineBytes []byte) error {
+		line := append([]byte(nil), lineBytes...)
 		line = append(line, '\n')
 
-		out = append(out, rawEvent{Index: idx, Bytes: line, Time: parseEventTimestamp(scanner.Bytes())})
+		out = append(out, rawEvent{Index: idx, Bytes: line, Time: parseEventTimestamp(lineBytes)})
 		idx++
-	}
-	if err := scanner.Err(); err != nil {
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
 
@@ -371,6 +366,37 @@ func loadEvents(path string) ([]rawEvent, error) {
 		out[i].Index = i
 	}
 	return out, nil
+}
+
+// ScanTranscriptLines visits every JSONL record in a plain or Zstandard-
+// compressed transcript. The byte slice is valid only until visit returns.
+func ScanTranscriptLines(path string, visit func([]byte) error) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if !strings.HasSuffix(path, ".zstd") {
+		return scanTranscriptReader(f, visit)
+	}
+	decoder, err := zstd.NewReader(f, zstd.WithDecoderConcurrency(1))
+	if err != nil {
+		return fmt.Errorf("open zstd transcript: %w", err)
+	}
+	defer decoder.Close()
+	return scanTranscriptReader(decoder, visit)
+}
+
+func scanTranscriptReader(input io.Reader, visit func([]byte) error) error {
+	scanner := bufio.NewScanner(input)
+	scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
+
+	for scanner.Scan() {
+		if err := visit(scanner.Bytes()); err != nil {
+			return err
+		}
+	}
+	return scanner.Err()
 }
 
 // parseEventTimestamp extracts one transcript line's explicit timestamp from
@@ -401,6 +427,11 @@ func parseEventTimestamp(lineBytes []byte) time.Time {
 		// Antigravity steps carry an RFC3339 created_at.
 		if parsed, err := time.Parse(time.RFC3339, v); err == nil {
 			return parsed
+		}
+	}
+	for _, key := range []string{"time", "createdAt"} {
+		if v, ok := raw[key].(float64); ok && v > 0 {
+			return time.UnixMilli(int64(v)).UTC()
 		}
 	}
 	return time.Time{}

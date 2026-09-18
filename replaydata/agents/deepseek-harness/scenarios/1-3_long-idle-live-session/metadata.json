@@ -1,0 +1,123 @@
+{
+  "scenario_id": "long-idle-live-session",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+07f8ccc",
+    "confidence": 0.83,
+    "notes": "DSH keeps one session write handle and kernel lock for its lifetime; the adapter binds that lock holder so the daemon can preserve the ready session past readyTTL."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "long-idle-live-session",
+      "agent": "deepseek-harness",
+      "assessed_at": "2026-09-18T12:45:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.83,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\nThe scenario requires one live session to finish a turn, remain visible in ready beyond readyTTL, and accept a second prompt on the same session. DeepSeek Harness supports this session shape. The installed persistence code holds a kernel lock on `session.lock` for the whole life of a session write handle. A measured v3 transcript contains two completed turns on one stable session ID, with 216 seconds between the first completed boundary and the second turn start. The gap contains no model or tool activity. This is direct evidence that a DSH session can stay idle and accept another prompt.\n\nThe DSH adapter derives the stable session ID from the transcript directory and discovers the PID by asking which process holds that session's `session.lock` open for writing. The installed DSH code states that this lock remains held for the whole write-handle lifetime and is released when the descriptor closes or the process dies. This gives irrlicht a real live PID for the idle session. The daemon's `reapsIdleTopLevel` path explicitly does not delete a stale ready session when `kill(pid, 0)` reports that PID alive. The two normal turn boundaries map through the DSH parser to user activity and authoritative turn completion, so the second prompt produces the required ready-to-working-to-ready continuation on the same session. The relevant application-service liveness tests pass under the race detector.\n\nThe driver launches one persistent DSH TUI in tmux. It implements `send`, `wait_turn`, and `sleep`, and its second wait requires a second durable completed turn. The recipe uses a 25-second idle sleep and requires the recording daemon to run with `IRRLICHT_READY_SESSION_TTL=15s`. The factory's daemon launcher forwards that environment variable when the caller sets it. The spec requires at least 20 seconds held in ready, which gives a five-second margin beyond the configured TTL. The final 12-second settle matches the longest sibling tail delay.\n\nThe exact model is pinned because the recipe selects `qwen/qwen3.5-9b` and measured transcripts confirm it. Tokens are pinned non-zero. Cost is not pinned non-zero because the local LM Studio model has no exact entry in the current irrlicht pricing cache.",
+      "caveats": [
+        "Vacuous-pass condition: if the recording daemon does not receive IRRLICHT_READY_SESSION_TTL=15s, the 25-second idle window stays far below the production 30-minute TTL and the cell proves only ordinary continuity, not PID-liveness past the reap cutoff. This environment variable is a load-bearing recording prerequisite.",
+        "The cell requires a successful pid_discovered phase before the idle window. Without that assertion, an unrelated transcript refresh could mask a broken DSH lock-holder binding.",
+        "The measured 216-second same-session gap came from the shared DSH session substrate through another interactive client. The TUI-specific live recording must confirm that its session write handle and lock remain held across the 25-second idle window.",
+        "The single-birth ready shape and timing are provisional. The recording must backflow-correct the birth phases if the process scanner creates a distinct proc-PID presession first."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/sessions/--Users-ingo-.claude-jobs-d11ee86d-tmp-dsh-probe--/session-a68f8780-b24f-49d6-89c4-f2e215f95782/session.v3.jsonl.zstd",
+          "note": "Measured stable session with two completed turns and a 216-second idle gap before the second turn."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js",
+          "note": "SessionWriteLease documentation and implementation: session.lock is held for the whole write-handle lifetime and released when the descriptor closes or the process dies."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/pid.go",
+          "note": "DiscoverPID resolves the process that holds the sibling session.lock open for writing."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/pid_manager.go",
+          "note": "reapsIdleTopLevel skips deletion for an idle session whose bound PID is still alive."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/scripts/lib/spawn-record-daemon.sh",
+          "note": "record_daemon_env forwards IRRLICHT_READY_SESSION_TTL into the isolated recording daemon when set."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "Runs one persistent TUI and implements send, wait_turn, and sleep with cumulative completed-turn counting."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/pid_manager_test.go",
+          "note": "The liveness and stale-session tests exercised by the targeted race test cover live-session preservation and stale-session reaping."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "dsh >=0.1.5-rc.2 is installed and on PATH",
+        "the community TUI profile is installed under ~/.dsh/profiles/tui",
+        "LM Studio is listening at http://127.0.0.1:1234/v1 with qwen/qwen3.5-9b loaded",
+        "tmux and zstd are installed",
+        "irrlichd is recording and its environment contains IRRLICHT_READY_SESSION_TTL=15s"
+      ],
+      "setup": [
+        "Export IRRLICHT_READY_SESSION_TTL=15s before the isolated recording daemon starts; spawn-record-daemon.sh forwards the override.",
+        "The driver creates a fresh cwd and launches one DSH TUI in tmux. That process stays alive across both sends and the idle sleep.",
+        "The driver applies a temporary LM Studio patch and resolves the session by marker, cwd, and stable session directory ID."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Do not use any tools. Reply with exactly this text and nothing else: IDLE-ONE"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 25
+        },
+        {
+          "type": "send",
+          "text": "Do not use any tools. Reply with exactly this text and nothing else: IDLE-TWO"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 12
+        }
+      ],
+      "verify": [
+        "the DSH session has a bound PID before it enters the idle window",
+        "the first text-only turn settles in ready",
+        "the same session stays visible and ready for at least 20 seconds with no transcript activity or removal",
+        "the second prompt moves the same session from ready to working and back to ready",
+        "the final state is ready and the transcript contains two completed turns"
+      ],
+      "settings": {
+        "model": "qwen/qwen3.5-9b",
+        "base_url": "http://127.0.0.1:1234/v1",
+        "context_window": 262144,
+        "permission_mode": "danger-full-access",
+        "api_key": "irrlicht-local-recording"
+      },
+      "timeout_seconds": 600,
+      "scope_note": "Uses a 25-second idle sleep against a required 15-second readyTTL and asserts a 20-second clean ready dwell. The 12-second final settle matches the longest sibling tail delay. DSH has explicit turn boundaries, so no adapter-specific idle-flush buffer is needed."
+    }
+  }
+}

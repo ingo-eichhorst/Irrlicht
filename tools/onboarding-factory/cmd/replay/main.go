@@ -59,6 +59,7 @@ import (
 	"irrlicht/core/adapters/inbound/agents/claudecode"
 	"irrlicht/core/adapters/inbound/agents/codex"
 	"irrlicht/core/adapters/inbound/agents/copilot"
+	"irrlicht/core/adapters/inbound/agents/dsh"
 	"irrlicht/core/adapters/inbound/agents/geminicli"
 	"irrlicht/core/adapters/inbound/agents/hermes"
 	"irrlicht/core/adapters/inbound/agents/kirocli"
@@ -85,6 +86,7 @@ var allAgents = []agent.Agent{
 	vibe.Agent(),
 	copilot.Agent(),
 	muse.Agent(),
+	dsh.Agent(),
 }
 
 // parserFactories is the per-adapter parser map consumed by parserFor()
@@ -161,8 +163,11 @@ func detectAdapter(path string) (string, error) {
 	case strings.Contains(abs, "/.local/share/muse/sessions/"),
 		strings.Contains(abs, "/replaydata/agents/muse/"):
 		return muse.AdapterName, nil
+	case strings.Contains(abs, "/.dsh/sessions/"),
+		strings.Contains(abs, "/replaydata/agents/deepseek-harness/"):
+		return dsh.AdapterName, nil
 	}
-	return "", fmt.Errorf("cannot infer adapter from path %q — pass --adapter claude-code|codex|pi|aider|opencode|kiro-cli|gemini-cli|antigravity|mistral-vibe|copilot|hermes|muse", abs)
+	return "", fmt.Errorf("cannot infer adapter from path %q — pass --adapter claude-code|codex|pi|aider|opencode|kiro-cli|gemini-cli|antigravity|mistral-vibe|copilot|hermes|muse|dsh", abs)
 }
 
 // eventsSidecarExt is the legacy lifecycle-events sidecar file extension,

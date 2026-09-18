@@ -1,0 +1,108 @@
+{
+  "scenario_id": "turn-end-terminal-text",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+8fb1ec0",
+    "confidence": 0.85,
+    "notes": "DeepSeek Harness emits a durable completed turn boundary after terminal text, and the DSH adapter maps it to the daemon's authoritative turn-done signal."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "turn-end-terminal-text",
+      "agent": "deepseek-harness",
+      "assessed_at": "2026-09-18T12:30:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\nDeepSeek Harness 0.1.5-rc.2 supports a terminal text-only turn. A measured local v3 transcript records one `turn/start`, one real user message, one assistant text message containing `TUI-OK`, no `tool/call`, and one `turn/end` whose reason is `completed`. The assistant record also contains non-zero usage and the configured `qwen/qwen3.5-9b` model. This is direct evidence that the agent emits the behavior and the durable boundary.\n\nThe DSH adapter watches compressed v3 transcripts through FilesUnderRoot. `parseTurnStart` emits `turn_start`, `parseUserMessage` emits `user_message`, and `parseTurnEnd` maps every non-error terminal boundary to `turn_done`. The shared `SessionMetrics.IsAgentDone` logic recognizes `turn_done` as authoritative. A plain `assistant_message` does not satisfy that method, so the final ready state specifically depends on the DSH terminal boundary rather than the preceding text record. The completed boundary has no session error, and the deliberately declarative reply has no waiting cue, so the classifier settles working to ready. Parser tests pin the measured completed record and the compressed end-to-end path.\n\nThe driver implements `send`, `wait_turn`, and `sleep`. Its turn wait counts durable `turn/end` records, so it does not advance on terminal text alone. The recipe uses an 11-second settle delay, matching the longest sibling delay. This is conservative for DSH's explicit boundary and covers the daemon observation window.\n\nThe exact model is pinned because the recipe selects it and a measured transcript confirms it. Token usage is pinned non-zero. Cost is not pinned non-zero because this is a local LM Studio run and the current irrlicht pricing cache has no exact `qwen/qwen3.5-9b` entry.",
+      "caveats": [
+        "Transcript assertions require the exact terminal reply, a completed boundary, and zero tool/call records.",
+        "Load-bearing environment precondition: LM Studio must be listening at http://127.0.0.1:1234/v1 with qwen/qwen3.5-9b loaded. The driver pins this endpoint and model through its temporary patch.",
+        "Load-bearing isolation precondition: the driver must use its fresh per-run cwd and pre-launch marker so another DSH session cannot satisfy the state arc.",
+        "The single-birth ready shape and its timing are inferred from the session header that exists before the turn. The live recording must settle the exact birth timing."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/sessions/--Users-ingo-.claude-jobs-d11ee86d-tmp-dsh-probe--/session-b9e68a30-5982-4cb3-8192-070dfaad6365/session.v3.jsonl.zstd",
+          "note": "Measured terminal-text turn: one assistant text message, no tool/call records, non-zero usage, then turn/end with reason.kind=completed."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/agent.go",
+          "note": "Declares the FilesUnderRoot compressed-transcript source and session-lock PID binding."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser.go",
+          "note": "parseTurnEnd maps the adapter-specific terminal boundary to turn_done; parseAssistantMessage keeps the preceding text as assistant_message."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser_test.go",
+          "note": "TestParserMapsMeasuredTurnEnd and TestZstdTranscriptEndToEnd pin completed boundary handling over compressed input."
+        },
+        {
+          "kind": "file",
+          "ref": "core/domain/session/metrics.go",
+          "note": "SessionMetrics.IsAgentDone recognizes turn_done as authoritative and does not treat assistant_message as terminal."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "Implements send, wait_turn, and sleep; wait_turn counts completed durable turn/end records."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "dsh >=0.1.5-rc.2 is installed and on PATH",
+        "the community TUI profile is installed under ~/.dsh/profiles/tui",
+        "LM Studio is listening at http://127.0.0.1:1234/v1 with qwen/qwen3.5-9b loaded",
+        "tmux and zstd are installed",
+        "irrlichd is recording the deepseek-harness adapter"
+      ],
+      "setup": [
+        "The driver creates a fresh per-run cwd and launches the DSH TUI in tmux.",
+        "A temporary patch selects LM Studio and qwen/qwen3.5-9b without modifying the installed profile.",
+        "The driver resolves the post-marker transcript for the run cwd and advances only after the expected durable turn/end count."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Do not use any tools. Reply with exactly this text and nothing else: TERMINAL-TEXT-OK"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 11
+        }
+      ],
+      "verify": [
+        "the DSH session is in ready before the prompt",
+        "the prompt moves the same session to working",
+        "terminal assistant text is followed by the DSH completed boundary and the same session returns to ready",
+        "the session never enters waiting",
+        "the curated event stream contains no function call",
+        "the replay summary reports qwen/qwen3.5-9b and non-zero cumulative tokens"
+      ],
+      "settings": {
+        "model": "qwen/qwen3.5-9b",
+        "base_url": "http://127.0.0.1:1234/v1",
+        "context_window": 262144,
+        "permission_mode": "danger-full-access",
+        "api_key": "irrlicht-local-recording"
+      },
+      "timeout_seconds": 300,
+      "scope_note": "Uses 11 seconds after wait_turn to match the longest sibling settle delay. Aider needs that delay for idle-flush; DSH has an explicit boundary, but matching the longer daemon observation window is cheap and removes timing risk."
+    }
+  }
+}

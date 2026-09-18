@@ -10,12 +10,11 @@ import (
 )
 
 // runVerify is the go-test-style verify for one (agent, scenario) cell: replay
-// the newest recording and check BOTH the lifecycle-state phases (expected.jsonl
-// definitions) AND the metric vector (model/cost/tokens — hard asserts from the
-// spec's observations block + a soft-diff vs the prior recording). Exit 1 when a
-// state phase fails (unless known_failing) or a hard metric assertion fails;
-// metric drifts are reported but never fail. (`of record verify` in P6 calls the
-// same engine after capturing a fresh recording.)
+// the newest recording and check the lifecycle-state phases, metric vector,
+// and declarative transcript and event assertions from expected.jsonl. Exit 1
+// when a state phase fails (unless known_failing), a hard metric assertion
+// fails, or asserted content does not match. Metric drifts remain advisory.
+// (`of record verify` in P6 calls the same engine after capture.)
 func runVerify(args []string, stdout, stderr io.Writer) int {
 	request, err := parseVerifyRequest(args)
 	if err != nil {
@@ -90,26 +89,40 @@ func verifyCell(request verifyRequest, cellDir string, stdout, stderr io.Writer)
 		fmt.Fprintf(stderr, "of verify: observation validation: %v\n", err)
 		return exitUsage
 	}
+	transcript, err := validate.ValidateTranscriptForProfile(cellDir, request.Profile)
+	if err != nil {
+		fmt.Fprintf(stderr, "of verify: transcript validation: %v\n", err)
+		return exitUsage
+	}
+	events, err := validate.ValidateEventsForProfile(cellDir, request.Profile)
+	if err != nil {
+		fmt.Fprintf(stderr, "of verify: event validation: %v\n", err)
+		return exitUsage
+	}
 
 	stateOK := state == nil || state.Pass || state.Meta.KnownFailing
 	obsOK := obs == nil || obs.Pass
+	transcriptOK := transcript == nil || transcript.Pass
+	// An event assertion can waive only its own known defect. Other event and
+	// transcript regressions must still fail a known-failing lifecycle cell.
+	eventsOK := events.ExpectedPass()
 
 	if request.JSON {
 		_ = writeJSON(stdout, map[string]any{
 			"agent": request.Agent, "scenario": request.Scenario,
-			"state_pass": stateOK, "observations_pass": obsOK,
-			"state": state, "observations": obs,
+			"state_pass": stateOK, "observations_pass": obsOK, "transcript_pass": transcriptOK, "events_pass": eventsOK,
+			"state": state, "observations": obs, "transcript": transcript, "events": events,
 		})
 	} else {
-		printVerifyText(stdout, request.Agent, request.Scenario, state, obs)
+		printVerifyText(stdout, request.Agent, request.Scenario, state, obs, transcript, events)
 	}
-	if !stateOK || !obsOK {
+	if !stateOK || !obsOK || !transcriptOK || !eventsOK {
 		return exitFail
 	}
 	return exitOK
 }
 
-func printVerifyText(stdout io.Writer, agent, scenario string, state *validate.ExpectedReport, obs *validate.ObservationReport) {
+func printVerifyText(stdout io.Writer, agent, scenario string, state *validate.ExpectedReport, obs *validate.ObservationReport, transcript, events *validate.RecordReport) {
 	fmt.Fprintf(stdout, "verify %s / %s\n", agent, scenario)
 	switch {
 	case state == nil:
@@ -145,4 +158,44 @@ func printVerifyText(stdout io.Writer, agent, scenario string, state *validate.E
 			fmt.Fprintf(stdout, "    ~ %s: %s → %s (drift vs prior)\n", d.Field, d.Prior, d.Current)
 		}
 	}
+	if transcript != nil {
+		printRecordReport(stdout, "transcript", transcript, transcript.Pass)
+	}
+	if events != nil {
+		printRecordReport(stdout, "events", events, events.ExpectedPass())
+	}
+}
+
+func printRecordReport(stdout io.Writer, label string, report *validate.RecordReport, accepted bool) {
+	fmt.Fprintf(stdout, "  %-12s %s — %d assert(s)\n", label+":", recordVerdict(report, accepted), len(report.Asserts))
+	for _, assertion := range report.Asserts {
+		fmt.Fprintf(stdout, "    %s %s: want %s; got %s\n", assertionMark(assertion), assertion.Name, assertion.Expected, assertion.Actual)
+	}
+}
+
+func recordVerdict(report *validate.RecordReport, accepted bool) string {
+	verdict := "PASS"
+	if report.Pass && !accepted {
+		return "UNEXPECTED PASS"
+	}
+	if report.Pass {
+		return verdict
+	}
+	if accepted {
+		return "known_failing"
+	}
+	return "FAIL"
+}
+
+func assertionMark(assertion validate.RecordAssertResult) string {
+	if assertion.OK && assertion.KnownFailing {
+		return "!"
+	}
+	if assertion.OK {
+		return "✓"
+	}
+	if assertion.KnownFailing {
+		return "~"
+	}
+	return "✗"
 }

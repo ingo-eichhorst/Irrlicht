@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 
+	internalreplay "irrlicht/tools/onboarding-factory/internal/replay"
 	"irrlicht/tools/onboarding-factory/internal/shard"
 	"irrlicht/tools/onboarding-factory/internal/validate"
 )
@@ -336,8 +337,8 @@ type prereqFlag []string
 func (p *prereqFlag) String() string     { return strings.Join(*p, ",") }
 func (p *prereqFlag) Set(v string) error { *p = append(*p, v); return nil }
 
-const agentUsage = `usage: of agent add    --id i --name n --provider p [--min-version v] [--prereq p]...
-       of agent update --id i [--name n] [--provider p] [--min-version v] [--prereq p]... [--add-prereq p]...
+const agentUsage = `usage: of agent add    --id i --name n --provider p [--min-version v] [--transcript-extension ext] [--prereq p]...
+       of agent update --id i [--name n] [--provider p] [--min-version v] [--transcript-extension ext] [--prereq p]... [--add-prereq p]...
                        [--maturity planned|alpha|beta|stable] [--capability trait=absent|untraced|traced]...`
 
 func runAgent(args []string, stdout, stderr io.Writer) int {
@@ -360,11 +361,12 @@ func runAgentAdd(args []string, stdout, stderr io.Writer) int {
 	fs := newFlagSet("of agent add")
 	var prereqs prereqFlag
 	var (
-		id       = fs.String("id", "", "agent id (kebab slug)")
-		name     = fs.String("name", "", "display name")
-		provider = fs.String("provider", "", "provider (e.g. anthropic, openai)")
-		minVer   = fs.String("min-version", "0.0.0", "minimum supported agent version (column registration)")
-		repoRoot = fs.String(repoRootFlagName, ".", repoRootFlagUsage)
+		id            = fs.String("id", "", "agent id (kebab slug)")
+		name          = fs.String("name", "", "display name")
+		provider      = fs.String("provider", "", "provider (e.g. anthropic, openai)")
+		minVer        = fs.String("min-version", "0.0.0", "minimum supported agent version (column registration)")
+		transcriptExt = fs.String("transcript-extension", "", "native transcript extension (for example jsonl.zstd)")
+		repoRoot      = fs.String(repoRootFlagName, ".", repoRootFlagUsage)
 	)
 	fs.Var(&prereqs, "prereq", "a recording prerequisite (repeatable)")
 	if err := fs.Parse(args[1:]); err != nil {
@@ -378,6 +380,10 @@ func runAgentAdd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "of agent add: id %q is not a kebab slug\n", *id)
 		return exitFail
 	}
+	if !validTranscriptExtension(*transcriptExt) {
+		fmt.Fprintf(stderr, "of agent add: transcript extension %q is invalid\n", *transcriptExt)
+		return exitFail
+	}
 	metaPath := filepath.Join(*repoRoot, "replaydata", "agents", *id, "metadata.json")
 	if fileExists(metaPath) {
 		fmt.Fprintf(stderr, "of agent add: agent %q already exists\n", *id)
@@ -385,7 +391,7 @@ func runAgentAdd(args []string, stdout, stderr io.Writer) int {
 	}
 	// Register the column in scenarios.json meta.min_versions so the viewer
 	// shows it and the matrix treats it as onboarded.
-	if rc := registerAgentColumn(*repoRoot, *id, *minVer, stderr); rc != exitOK {
+	if rc := registerAgentColumn(*repoRoot, *id, *minVer, *transcriptExt, stderr); rc != exitOK {
 		return rc
 	}
 	// Give the new column an entry in the capability model too. Without it
@@ -418,19 +424,20 @@ func runAgentAdd(args []string, stdout, stderr io.Writer) int {
 // --add-prereq cannot silently reset a name or provider. --prereq REPLACES the
 // whole list; --add-prereq APPENDS (skipping exact duplicates, so re-running a
 // promotion is idempotent). scenarios.json is touched only when --min-version
-// is passed, for the same reason.
+// or --transcript-extension is passed, for the same reason.
 func runAgentUpdate(args []string, stdout, stderr io.Writer) int {
 	fs := newFlagSet("of agent update")
 	var prereqs, addPrereqs prereqFlag
 	caps := capabilityFlag{}
 	fs.Var(caps, "capability", "trait=state (absent|untraced|traced); traced removes the declaration")
 	var (
-		id       = fs.String("id", "", "agent id (kebab slug)")
-		name     = fs.String("name", "", "display name")
-		provider = fs.String("provider", "", "provider (e.g. anthropic, openai)")
-		minVer   = fs.String("min-version", "", "minimum supported agent version (rewrites the column registration)")
-		maturity = fs.String("maturity", "", "claimed maturity: planned|alpha|beta|stable (#1369)")
-		repoRoot = fs.String(repoRootFlagName, ".", repoRootFlagUsage)
+		id            = fs.String("id", "", "agent id (kebab slug)")
+		name          = fs.String("name", "", "display name")
+		provider      = fs.String("provider", "", "provider (e.g. anthropic, openai)")
+		minVer        = fs.String("min-version", "", "minimum supported agent version (rewrites the column registration)")
+		transcriptExt = fs.String("transcript-extension", "", "native transcript extension (for example jsonl.zstd)")
+		maturity      = fs.String("maturity", "", "claimed maturity: planned|alpha|beta|stable (#1369)")
+		repoRoot      = fs.String(repoRootFlagName, ".", repoRootFlagUsage)
 	)
 	fs.Var(&prereqs, "prereq", "replace the recording prerequisites with these (repeatable)")
 	fs.Var(&addPrereqs, "add-prereq", "append a recording prerequisite, skipping exact duplicates (repeatable)")
@@ -440,6 +447,10 @@ func runAgentUpdate(args []string, stdout, stderr io.Writer) int {
 	if *id == "" {
 		fmt.Fprintln(stderr, "of agent update: --id is required")
 		return exitUsage
+	}
+	if flagPassed(fs, "transcript-extension") && (*transcriptExt == "" || !validTranscriptExtension(*transcriptExt)) {
+		fmt.Fprintf(stderr, "of agent update: transcript extension %q is invalid\n", *transcriptExt)
+		return exitFail
 	}
 	// An update that changes nothing must not report success. With no mutating
 	// flag this printed `of agent update: <id> ok (...)` and returned 0 having
@@ -451,7 +462,7 @@ func runAgentUpdate(args []string, stdout, stderr io.Writer) int {
 	// is.
 	if !agentUpdateHasMutation(fs, addPrereqs, caps) {
 		fmt.Fprintf(stderr, "of agent update: %s — nothing to do; pass at least one of "+
-			"--name, --provider, --prereq, --add-prereq, --min-version, --maturity, --capability\n", *id)
+			"--name, --provider, --prereq, --add-prereq, --min-version, --transcript-extension, --maturity, --capability\n", *id)
 		return exitUsage
 	}
 	// TWO FILES, TWO REGISTRIES — and this verb writes to both (#1803).
@@ -496,8 +507,8 @@ func runAgentUpdate(args []string, stdout, stderr io.Writer) int {
 			am.Prerequisites = append(am.Prerequisites, p)
 		}
 	}
-	if flagPassed(fs, "min-version") {
-		if rc := registerAgentColumn(*repoRoot, *id, *minVer, stderr); rc != exitOK {
+	if flagPassed(fs, "min-version") || flagPassed(fs, "transcript-extension") {
+		if rc := registerAgentColumn(*repoRoot, *id, *minVer, *transcriptExt, stderr); rc != exitOK {
 			return rc
 		}
 	}
@@ -547,7 +558,7 @@ func agentColumnRegistered(repoRoot, id string) bool {
 
 // registerAgentColumn adds id→minVer to scenarios.json meta.min_versions,
 // preserving the rest of meta (transcript_extensions).
-func registerAgentColumn(repoRoot, id, minVer string, stderr io.Writer) int {
+func registerAgentColumn(repoRoot, id, minVer, transcriptExt string, stderr io.Writer) int {
 	cat, err := loadWriteCatalog(repoRoot)
 	if err != nil {
 		fmt.Fprintf(stderr, "of agent add: %v\n", err)
@@ -562,9 +573,20 @@ func registerAgentColumn(repoRoot, id, minVer string, stderr io.Writer) int {
 	if raw, ok := meta["min_versions"]; ok {
 		_ = json.Unmarshal(raw, &mv)
 	}
-	mv[id] = minVer
+	if minVer != "" {
+		mv[id] = minVer
+	}
 	b, _ := json.Marshal(mv)
 	meta["min_versions"] = b
+	if transcriptExt != "" {
+		extensions := map[string]string{}
+		if raw, ok := meta["transcript_extensions"]; ok {
+			_ = json.Unmarshal(raw, &extensions)
+		}
+		extensions[id] = transcriptExt
+		b, _ = json.Marshal(extensions)
+		meta["transcript_extensions"] = b
+	}
 	mb, _ := json.Marshal(meta)
 	cat.Meta = mb
 	if err := writeJSONFileAtomic(shard.File(repoRoot), cat); err != nil {
@@ -572,6 +594,18 @@ func registerAgentColumn(repoRoot, id, minVer string, stderr io.Writer) int {
 		return exitUsage
 	}
 	return exitOK
+}
+
+func validTranscriptExtension(ext string) bool {
+	if ext == "" {
+		return true
+	}
+	for _, name := range internalreplay.TranscriptNames {
+		if strings.TrimPrefix(name, "transcript.") == ext {
+			return true
+		}
+	}
+	return false
 }
 
 // --- of cell write|spec ---
@@ -803,7 +837,7 @@ func marshalNoEscape(v any) ([]byte, error) {
 // — and flagPassed would report true for a `--capability` that failed to
 // parse into an entry.
 func agentUpdateHasMutation(fs *flag.FlagSet, addPrereqs prereqFlag, caps capabilityFlag) bool {
-	for _, name := range []string{"name", "provider", "prereq", "min-version", "maturity"} {
+	for _, name := range []string{"name", "provider", "prereq", "min-version", "transcript-extension", "maturity"} {
 		if flagPassed(fs, name) {
 			return true
 		}

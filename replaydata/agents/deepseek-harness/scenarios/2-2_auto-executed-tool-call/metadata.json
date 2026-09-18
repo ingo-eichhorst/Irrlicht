@@ -1,0 +1,112 @@
+{
+  "scenario_id": "auto-executed-tool-call",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+a644e9c",
+    "confidence": 0.88,
+    "notes": "DeepSeek Harness executes a bash tool without approval under the recording driver's danger-full-access policy, and the DSH adapter preserves the uninterrupted working arc."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "auto-executed-tool-call",
+      "agent": "deepseek-harness",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.88,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nDeepSeek Harness supports autonomous tool calls. The installed TUI profile mounts the bash and filesystem tool packages. A measured DSH 0.1.5-rc.2 v3 transcript from qwen/qwen3.5-9b contains one `tool/call` for `read`, a matching successful `tool/result`, and no `approval/asked` record between `turn/start` and terminal `turn/end {kind:completed}`. This proves that DSH and the configured local model can perform the scenario's ungated tool round trip.\n\nThe recording driver makes the ungated condition explicit. It launches DSH with `DSH_PERMISSION_MODE=danger-full-access`. The installed TUI composition reads that variable into the sandbox policy and maps `danger-full-access` to approval policy `never`. The recipe asks for one `bash` call that runs `pwd`, so no user answer is required. This setting is load-bearing: a different approval policy could turn the same tool request into the permission-gate scenario.\n\nThe daemon observes all required signals. The DSH parser maps `turn/start` to `turn_start`, `tool/call` to a function call with a stable call ID and tool name, the matching `tool/result` to function-call output, and completed `turn/end` to `turn_done`. It maps `approval/asked` and `approval/decided` separately to permission requested and completed. Under approval policy `never`, those permission records are absent, so the state remains `working` across the tool round trip and returns to `ready` only at turn end.\n\nThe spec pins the turn to the real `session-<uuid>` row with `session_id_prefix`, so a generic `proc-<PID>` pre-session cannot satisfy the arc. The phase language has no positive tool-call matcher. Declarative transcript assertions require one `tool/call`, its matching successful `tool/result`, and zero approval records. The driver implements every required primitive: `send`, `wait_turn`, and `sleep`. Its wait reads the durable compressed transcript and does not return until the expected `turn/end` exists. The 5-second trailing settle matches the Muse sibling and is at least as long as the common 4-second direct-transcript recipes.",
+      "caveats": [
+        "Vacuous-pass check: the ready-to-working-to-ready phases would pass if the model ignored the tool instruction and replied directly. The verify step must require a durable tool/call plus the matching successful tool/result and must reject any approval/asked record for that turn.",
+        "Load-bearing environment property: the driver must export DSH_PERMISSION_MODE=danger-full-access and the active TUI profile must preserve its current mapping to approval policy never. Re-probe this configuration at record time.",
+        "The local qwen/qwen3.5-9b model must retain function-calling support. A prior measured turn proves that it emitted a valid DSH tool round trip, but model output remains nondeterministic.",
+        "This exact cell has not yet been recorded through irrlichd. The parser verdict is grounded in measured durable records and parser code, while record must settle the end-to-end state timing."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/profiles/tui/cordis.yml",
+          "note": "The installed profile composes its runtime from the TUI bundle and patch layers."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/profiles/tui/node_modules/@tomowang/dsh-tui/README.md",
+          "note": "Official installed TUI package documentation states that tools, sandbox, and approval policy come from dsh-base and that approvals are presented only for ask decisions."
+        },
+        {
+          "kind": "file",
+          "ref": "shell: DSH_PERMISSION_MODE=danger-full-access dsh --profile tui --patch /Users/ingo/.claude/jobs/d11ee86d/tmp/lm.yml --dump-config",
+          "note": "The active profile config reads DSH_PERMISSION_MODE into sandbox-policy, maps danger-full-access to approval policy never, and mounts tool-bash."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/sessions/--Users-ingo-.claude-jobs-d11ee86d-tmp-dsh-probe--/session-5f31220c-499b-44f0-bca3-a6a574a6eafa/session.v3.jsonl.zstd",
+          "note": "Measured qwen/qwen3.5-9b turn: one read tool/call, one matching successful tool/result, zero approval/asked records, and completed turn/end."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser.go",
+          "note": "Maps turn boundaries, tool call/result pairs, and approval open/close records into distinct daemon signals."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser_test.go",
+          "note": "Tests the measured tool lifecycle, turn completion, approval lifecycle, and qwen usage record shapes."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "Exports danger-full-access, applies the fixed LM Studio model, and implements send, wait_turn, and sleep against the durable zstd transcript."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/scenarios/2-2_auto-executed-tool-call/metadata.json",
+          "note": "Sibling recipe establishes the send, wait_turn, and 5-second settle shape and documents the permission-policy vacuous-pass risk."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "timeout_seconds": 240,
+      "settings": {
+        "model": "qwen/qwen3.5-9b",
+        "base_url": "http://127.0.0.1:1234/v1",
+        "context_window": 262144,
+        "permission_mode": "danger-full-access"
+      },
+      "preconditions": [
+        "dsh 0.1.5-rc.2 or newer is on PATH and the community tui profile is installed under the active DSH home",
+        "LM Studio is serving the tool-capable qwen/qwen3.5-9b model through http://127.0.0.1:1234/v1",
+        "DSH_PERMISSION_MODE=danger-full-access maps to approval policy never in the active TUI profile; re-probe this at record time",
+        "irrlichd is recording with DeepSeek Harness transcript permission granted"
+      ],
+      "setup": [
+        "Create an empty cwd under the recording staging directory",
+        "Let the driver apply the LM Studio endpoint and danger-full-access policy through its per-run environment and temporary patch"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Use the bash tool exactly once to run pwd. Then reply with exactly: done"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the real session-UUID row entering ready, then working, then ready",
+        "the compressed transcript contains at least one tool/call for bash and a matching successful tool/result inside the turn",
+        "the transcript contains no approval/asked record for the tool call and events.jsonl contains no state transition to waiting",
+        "turn/end has reason kind completed and the final session state is ready",
+        "the recording reports model qwen/qwen3.5-9b and non-zero tokens"
+      ]
+    }
+  }
+}

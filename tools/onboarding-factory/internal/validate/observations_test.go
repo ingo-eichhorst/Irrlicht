@@ -3,7 +3,10 @@ package validate
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"irrlicht/tools/onboarding-factory/internal/matrix"
 )
 
 // writeRec writes a recording dir with a replay golden carrying the given
@@ -72,11 +75,10 @@ func TestObservationsCostNonzeroFails(t *testing.T) {
 	}
 }
 
-// TestObservationsStoreDerivedContextPass covers the #766 store-derived vector:
-// a golden carrying total_tokens/context_window/context_utilization_percentage
-// (antigravity's out-of-band store) satisfies the new nonzero assertions, which
-// are distinct from cost/cum-token (both zero here).
-func TestObservationsStoreDerivedContextPass(t *testing.T) {
+// TestObservationsDirectContextPass covers the direct context vector. A golden
+// with total tokens, context window, and utilization satisfies the nonzero
+// assertions. These fields are distinct from cost and cumulative tokens.
+func TestObservationsDirectContextPass(t *testing.T) {
 	dir := t.TempDir()
 	mkGoldenRec(t, dir, "2026-06-28-00-00-00_x", `{"model_name":"gemini-3.5-flash","total_tokens":16353,"context_window":1048576,"context_utilization_percentage":1.56}`)
 	writeExpected(t, dir, `{"schema_version":1,"scenario_id":"s","observations":{"model":"gemini-3.5-flash","total_tokens_nonzero":true,"context_window_nonzero":true,"context_utilization_nonzero":true}}`)
@@ -94,8 +96,8 @@ func TestObservationsStoreDerivedContextPass(t *testing.T) {
 	}
 }
 
-// TestObservationsContextNonzeroFails: a storeless golden (no context vector)
-// must fail the #766 nonzero assertions — proving capture+serve is load-bearing.
+// TestObservationsContextNonzeroFails checks that a missing context vector
+// fails each direct nonzero assertion.
 func TestObservationsContextNonzeroFails(t *testing.T) {
 	dir := t.TempDir()
 	mkGoldenRec(t, dir, "2026-06-28-00-00-00_x", `{"model_name":"gemini-3.5-flash"}`)
@@ -145,5 +147,157 @@ func TestObservationsModelDrift(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("want model drift, got %+v", rep.Drifts)
+	}
+}
+
+func TestTranscriptAssertionsRequireMatchingToolResult(t *testing.T) {
+	dir := t.TempDir()
+	name := "2026-09-18-00-00-00_x"
+	mkGoldenRec(t, dir, name, `{}`)
+	writeExpected(t, dir, `{"schema_version":1,"scenario_id":"s","transcript_assertions":[`+
+		`{"name":"one successful bash round trip","where":{"type":"tool/call","data.name":"bash"},"min_count":1,"max_count":1,`+
+		`"related":{"where":{"type":"tool/result","data.message.content.0.isError":false},"source_path":"data.callId","target_path":"data.message.source.callId"}},`+
+		`{"name":"no approval request","where":{"type":"approval/asked"},"max_count":0}]}`)
+	recDir := filepath.Join(dir, "recordings", name)
+	good := "" +
+		`{"type":"tool/call","data":{"callId":"call-1","name":"bash"}}` + "\n" +
+		`{"type":"tool/result","data":{"message":{"source":{"callId":"call-1"},"content":[{"isError":false}]}}}` + "\n"
+	if err := os.WriteFile(filepath.Join(recDir, "transcript.jsonl"), []byte(good), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report, err := ValidateTranscriptForProfile(dir, matrix.ProfileCLILocal)
+	if err != nil || report == nil || !report.Pass {
+		t.Fatalf("matching tool round must pass: report=%+v err=%v", report, err)
+	}
+
+	bad := strings.Replace(good, `"callId":"call-1"},"content"`, `"callId":"other"},"content"`, 1)
+	if err := os.WriteFile(filepath.Join(recDir, "transcript.jsonl"), []byte(bad), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report, err = ValidateTranscriptForProfile(dir, matrix.ProfileCLILocal)
+	if err != nil || report == nil || report.Pass {
+		t.Fatalf("mismatched tool result must fail: report=%+v err=%v", report, err)
+	}
+}
+
+func TestRecordAssertionsSkipMissingSpec(t *testing.T) {
+	dir := t.TempDir()
+	transcript, err := ValidateTranscriptForProfile(dir, matrix.ProfileCLILocal)
+	if err != nil || transcript != nil {
+		t.Fatalf("missing spec must skip transcript assertions: report=%+v err=%v", transcript, err)
+	}
+	events, err := ValidateEventsForProfile(dir, matrix.ProfileCLILocal)
+	if err != nil || events != nil {
+		t.Fatalf("missing spec must skip event assertions: report=%+v err=%v", events, err)
+	}
+}
+
+func TestEventAssertionsRequireOwnedPaths(t *testing.T) {
+	dir := t.TempDir()
+	name := "2026-09-18-00-00-00_x"
+	mkGoldenRec(t, dir, name, `{}`)
+	writeExpected(t, dir, `{"schema_version":1,"scenario_id":"s","event_assertions":[`+
+		`{"name":"distinct PID bindings","where":{"kind":"pid_discovered"},"min_count":2,"min_distinct":{"pid":2}},`+
+		`{"name":"transcript paths belong to their sessions","known_failing":true,"where":{"kind":"transcript_removed"},"min_count":2,`+
+		`"field_contains":[{"value_path":"session_id","container_path":"transcript_path"}]}]}`)
+	recDir := filepath.Join(dir, "recordings", name)
+	good := "" +
+		`{"kind":"pid_discovered","session_id":"session-1","pid":101}` + "\n" +
+		`{"kind":"pid_discovered","session_id":"session-2","pid":202}` + "\n" +
+		`{"kind":"transcript_removed","session_id":"session-1","transcript_path":"/sessions/session-1/transcript.jsonl"}` + "\n" +
+		`{"kind":"transcript_removed","session_id":"session-2","transcript_path":"/sessions/session-2/transcript.jsonl"}` + "\n"
+	if err := os.WriteFile(filepath.Join(recDir, "events.jsonl"), []byte(good), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report, err := ValidateEventsForProfile(dir, matrix.ProfileCLILocal)
+	if err != nil || report == nil || !report.Pass || report.ExpectedPass() {
+		t.Fatalf("an unexpectedly passing known failure must fail verification: report=%+v err=%v", report, err)
+	}
+
+	bad := strings.Replace(good, `/sessions/session-2/transcript.jsonl`, `/sessions/session-1/transcript.jsonl`, 1)
+	if err := os.WriteFile(filepath.Join(recDir, "events.jsonl"), []byte(bad), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report, err = ValidateEventsForProfile(dir, matrix.ProfileCLILocal)
+	if err != nil || report == nil || report.Pass || !report.ExpectedPass() {
+		t.Fatalf("crossed event path must fail: report=%+v err=%v", report, err)
+	}
+
+	badPID := strings.Replace(bad, `"pid":202`, `"pid":101`, 1)
+	if err := os.WriteFile(filepath.Join(recDir, "events.jsonl"), []byte(badPID), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report, err = ValidateEventsForProfile(dir, matrix.ProfileCLILocal)
+	if err != nil || report == nil || report.ExpectedPass() {
+		t.Fatalf("unrelated PID regression must not inherit the path waiver: report=%+v err=%v", report, err)
+	}
+}
+
+func TestCommittedRecordAssertions(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", "..", "..", "..", "replaydata", "agents"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	matches, err := filepath.Glob(filepath.Join(root, "*", "scenarios", "*", "expected.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	checked := 0
+	for _, expectedPath := range matches {
+		scenarioDir := filepath.Dir(expectedPath)
+		meta, err := loadExpectedMeta(scenarioDir)
+		if err != nil {
+			t.Fatalf("%s: %v", expectedPath, err)
+		}
+		if meta == nil || len(meta.TranscriptAssertions) == 0 && len(meta.EventAssertions) == 0 {
+			continue
+		}
+		checked++
+		checkCommittedTranscriptAssertions(t, expectedPath, scenarioDir, meta.TranscriptAssertions)
+		checkCommittedEventAssertions(t, expectedPath, scenarioDir, meta.EventAssertions)
+	}
+	if checked == 0 {
+		t.Fatal("no committed transcript or event assertions were discovered; the catalog gate checked nothing")
+	}
+	t.Logf("checked record assertions in %d committed cells", checked)
+}
+
+func checkCommittedTranscriptAssertions(
+	t *testing.T,
+	expectedPath string,
+	scenarioDir string,
+	assertions []RecordAssertion,
+) {
+	t.Helper()
+	if len(assertions) == 0 {
+		return
+	}
+	report, err := ValidateTranscriptForProfile(scenarioDir, matrix.ProfileCLILocal)
+	if err != nil {
+		t.Errorf("%s: %v", expectedPath, err)
+		return
+	}
+	if report == nil || !report.Pass {
+		t.Errorf("%s: transcript assertions failed: %+v", expectedPath, report)
+	}
+}
+
+func checkCommittedEventAssertions(
+	t *testing.T,
+	expectedPath string,
+	scenarioDir string,
+	assertions []RecordAssertion,
+) {
+	t.Helper()
+	if len(assertions) == 0 {
+		return
+	}
+	report, err := ValidateEventsForProfile(scenarioDir, matrix.ProfileCLILocal)
+	if err != nil {
+		t.Errorf("%s: %v", expectedPath, err)
+		return
+	}
+	if report == nil || !report.ExpectedPass() {
+		t.Errorf("%s: event assertions failed: %+v", expectedPath, report)
 	}
 }

@@ -9,8 +9,8 @@
 # same find; reports are named `<adapter>-<id>.{json,md}` regardless of
 # subtree (the markdown title carries the subtree label for clarity).
 #
-# Aider fixtures use transcript.md (markdown source); other adapters use
-# transcript.jsonl.
+# Aider fixtures use transcript.md. DeepSeek Harness uses compressed
+# transcript.jsonl.zstd. Other adapters use transcript.jsonl.
 #
 # Usage:
 #   tools/replay-fixtures.sh                         # default settings
@@ -323,7 +323,7 @@ with open(md_path, "w") as out:
 PY
 
   echo "   wrote $json + $md" >&2
-done < <(find "$FIXTURES_ROOT" \( -name 'transcript.jsonl' -o -name 'transcript.md' \) -not -path '*/_reports/*' | sort)
+done < <(find "$FIXTURES_ROOT" \( -name 'transcript.jsonl' -o -name 'transcript.jsonl.zstd' -o -name 'transcript.md' \) -not -path '*/_reports/*' | sort)
 
 if [[ "$found_any" -eq 0 ]]; then
   echo "no transcript fixtures found under $FIXTURES_ROOT/*/" >&2

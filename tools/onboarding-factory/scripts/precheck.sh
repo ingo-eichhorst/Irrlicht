@@ -34,7 +34,7 @@ fail() {
 
 # 1. Adapter is supported by a driver.
 case "$ADAPTER" in
-  claudecode|codex|pi|aider|opencode|kiro-cli|gemini-cli|antigravity|mistral-vibe|copilot|hermes|muse) ;;
+  claudecode|codex|pi|aider|opencode|kiro-cli|gemini-cli|antigravity|mistral-vibe|copilot|hermes|muse|deepseek-harness) ;;
   *)
     fail "unknown adapter: $ADAPTER"
     ;;
@@ -138,6 +138,7 @@ case "$ADAPTER" in
   copilot)     CLI_BIN="copilot";  VER_FIELD=4 ;;
   hermes)      CLI_BIN="hermes";  VER_FIELD=3 ;;
   muse)        CLI_BIN="muse";    VER_FIELD=3 ;;
+  deepseek-harness) CLI_BIN="dsh"; VER_FIELD=1 ;;
   *) fail "unknown adapter: $ADAPTER" ;;
 esac
 

@@ -245,8 +245,11 @@ type catalogCensus struct {
 // with a throwaway `t.Logf` walk over forEachSidecarRecording filtered to
 // `name[:4] == "muse"`, printing each recording's Fabricates()/Diverges()/
 // divergesByCountsAndKinds() (not committed — this paragraph is the record).
+// The DeepSeek Harness sidecars added by #1985 account for the Recordings
+// change. `go test ./tools/onboarding-factory/cmd/replay -run
+// TestCatalogCensusMatchesTheCommittedFigures -count=1` measured the value.
 var censusOfTheCommittedCatalog = catalogCensus{
-	Recordings:                384,
+	Recordings:                395,
 	Zero:                      1,
 	Fabricated:                3,
 	Divergent:                 188,

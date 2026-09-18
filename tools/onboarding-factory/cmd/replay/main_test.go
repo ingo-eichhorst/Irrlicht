@@ -684,6 +684,8 @@ func TestDetectAdapter(t *testing.T) {
 		{"pi agent sessions", "/Users/u/.pi/agent/sessions/s.jsonl", "pi"},
 		{"pi sessions", "/Users/u/.pi/sessions/s.jsonl", "pi"},
 		{"pi replaydata", "replaydata/agents/pi/scenarios/01/transcript.jsonl", "pi"},
+		{"dsh session root", "/Users/u/.dsh/sessions/--tmp--/session-00000000-0000-0000-0000-000000000001/session.v3.jsonl.zstd", "dsh"},
+		{"dsh replaydata", "replaydata/agents/deepseek-harness/scenarios/01/transcript.jsonl.zstd", "dsh"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

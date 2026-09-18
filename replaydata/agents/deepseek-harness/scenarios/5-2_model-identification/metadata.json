@@ -1,0 +1,108 @@
+{
+  "scenario_id": "model-identification",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+373342c",
+    "confidence": 0.85,
+    "notes": "A measured DSH v3 request/context record reports the selected model and its 262144-token window; the adapter maps both fields directly."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "model-identification",
+      "agent": "deepseek-harness",
+      "assessed_at": "2026-09-18T12:41:59Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.85,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## What this cell asserts\n\nThis cell launches DeepSeek Harness with the recipe model `qwen/qwen3.5-9b`, completes one text-only turn, and requires the dashboard to report that exact model with a 262144-token context window. The lifecycle is `ready -> working -> ready`, with final state `ready` and no tool call.\n\n## Agent support\n\nDeepSeek Harness 0.1.5-rc.2 records the resolved provider, model, and context window in its durable v3 transcript. A measured successful local turn contains `request/header.data.header.config.model = qwen/qwen3.5-9b`, followed by `request/context.data.model = qwen/qwen3.5-9b` and `request/context.data.contextWindow = 262144`. Its assistant record repeats the same source model and carries 7872 input tokens plus 26 output tokens. The completed `turn/end` follows that assistant record. This is direct evidence from the agent-owned durable record, not a value inferred from a daemon capacity table.\n\nThe model selection is also an active recipe input. The interactive driver writes a per-run DSH patch that selects provider `lmstudio`, model `qwen/qwen3.5-9b`, and context window `262144`, then launches `dsh --profile tui --patch <patch>`. The patch does not modify the installed profile. The measured record proves that DSH applied these values during a real turn.\n\n## Daemon capability\n\nThe DSH adapter uses `FilesUnderRoot` over `session.vN.jsonl.zstd`. `parseRequestHeader` reads `data.header.config.model`. More importantly for this scenario, `parseRequestContext` reads `data.model` into `ModelName` and the direct `data.contextWindow` integer into `ContextWindow`. `parseAssistantMessage` independently reads `data.message.source.model` and usage. A completed `turn/end` maps to `turn_done`. Therefore the daemon does not need a model alias or capacity-table fallback for either acceptance metric.\n\nThe parser tests use the measured values. `TestParserMapsMeasuredRequestContext` asserts model `qwen/qwen3.5-9b` and context window `262144`. `TestZstdTranscriptEndToEnd` tails a compressed transcript and asserts the same final model and context window, `ContextWindowUnknown == false`, non-zero tokens, and terminal `turn_done`. This covers the parser-to-tailer metric path.\n\nThe replay summary exports DSH's direct total-token, context-window, and utilization vector. The observation spec requires the exact model and positive values. Transcript assertions independently pin both request model fields and the exact 262144-token context window.\n\n## Driver capability\n\nThe recipe needs `send`, `wait_turn`, and `sleep`. The DSH driver declares and implements all three. It resolves only a readable transcript created after its marker and with the fresh run cwd. `wait_turn` polls the durable transcript for the expected count of completed `turn/end` records. The post-turn sleep is 10 seconds, which matches the longest sibling settle delay. The timeout is 300 seconds because the measured local qwen turn took 157.8 seconds from `request/header` to `assistant/message`; the usual 120-180 second budgets do not give safe headroom here.\n\n## Result\n\nThe recorded cell verifies the exact model, 262144-token window, zero tool calls, and lifecycle arc through declarative checks.",
+      "caveats": [
+        "The observation spec requires positive context-window and utilization values. Transcript assertions independently require the exact 262144-token context window.",
+        "Transcript assertions require zero tool/call records, so the lifecycle and metric checks cannot pass after an unexpected tool call.",
+        "Load-bearing environment precondition: LM Studio must be listening at http://127.0.0.1:1234/v1 with qwen/qwen3.5-9b loaded. Re-probe this at record time. A different loaded model or endpoint behavior can invalidate the exact model assertion.",
+        "Load-bearing isolation precondition: the driver must retain its fresh per-run cwd and pre-launch marker. Otherwise an unrelated DSH transcript could satisfy the lifecycle phases.",
+        "The measured local turn took 157.8 seconds. A 120-180 second timeout can fail before the assistant record appears, so this recipe uses 300 seconds."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/sessions/--private-tmp-irr-dsh-driver.h1tx6P-cwd--/session-a5902de2-44ac-4a40-8554-fdab37534705/session.v3.jsonl.zstd",
+          "note": "Real DSH 0.1.5-rc.2 durable transcript. request/header and request/context report qwen/qwen3.5-9b; request/context reports contextWindow 262144; assistant/message repeats the model with 7872 input and 26 output tokens; turn/end reports completed. The measured model request took 157.8 seconds."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser.go",
+          "note": "parseRequestHeader, parseRequestContext, and parseAssistantMessage map the three durable model carriers. parseRequestContext maps the direct contextWindow integer, and completed turn/end maps to turn_done."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser_test.go",
+          "note": "TestParserMapsMeasuredRequestContext and TestZstdTranscriptEndToEnd assert qwen/qwen3.5-9b, ContextWindow 262144, ContextWindowUnknown false, usage, and terminal lifecycle through the compressed-transcript tailer."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/agent.go",
+          "note": "Declares the compressed transcript FilesUnderRoot source, session identity, session.lock PID binding, and the model/context usage feature surface."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "Creates the per-run LM Studio patch, launches DSH with it, isolates transcript discovery by marker and cwd, and implements send, wait_turn, and sleep."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/cmd/replay/metrics.go and tools/onboarding-factory/internal/validate/observations.go",
+          "note": "The replay summary exports ModelName and cumulative tokens for every adapter but gates ContextWindow export to antigravity, which explains why the DSH spec must not set context_window_nonzero."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "dsh >=0.1.5-rc.2 is installed and on PATH",
+        "the community TUI profile is installed under ~/.dsh/profiles/tui",
+        "re-probe at record time that LM Studio is listening at http://127.0.0.1:1234/v1 with qwen/qwen3.5-9b loaded",
+        "tmux and zstd are installed",
+        "irrlichd is recording the deepseek-harness adapter"
+      ],
+      "setup": [
+        "The interactive driver creates a fresh cwd under the staging directory and sets a pre-launch transcript marker.",
+        "The driver applies a temporary patch that selects LM Studio, qwen/qwen3.5-9b, and context window 262144 without modifying the installed profile.",
+        "The driver resolves the new session.v3.jsonl.zstd by marker, header cwd, and parent session ID, then waits for a completed turn/end."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 10
+        }
+      ],
+      "verify": [
+        "the same DSH session follows ready -> working -> ready and ends ready",
+        "the post-turn live dashboard reports ModelName qwen/qwen3.5-9b rather than unknown",
+        "the post-turn live dashboard reports ContextWindow 262144 and ContextWindowUnknown false",
+        "the replay golden reports model qwen/qwen3.5-9b, a 262144-token context window, and positive token use and context utilization",
+        "the curated event stream and durable transcript contain no function call for the exact-word prompt"
+      ],
+      "settings": {
+        "model": "qwen/qwen3.5-9b",
+        "base_url": "http://127.0.0.1:1234/v1",
+        "context_window": 262144,
+        "permission_mode": "danger-full-access",
+        "api_key": "irrlicht-local-recording"
+      },
+      "timeout_seconds": 300,
+      "scope_note": "Uses a 10-second post-turn settle delay, which matches the longest sibling recipe. Uses a 300-second timeout because the measured local qwen turn took 157.8 seconds."
+    }
+  }
+}

@@ -94,6 +94,7 @@ assert_count "antigravity  1-1"  antigravity  "$(find_transcript antigravity 1-1
 assert_count "claudecode   1-1"  claudecode   "$(find_transcript claudecode 1-1_session-start)"   1
 assert_count "codex        1-1"  codex        "$(find_transcript codex 1-1_session-start)"        1
 assert_count "copilot      1-1"  copilot      "$(find_transcript copilot 1-1_session-start)"      1
+assert_count "deepseek-harness 1-1" deepseek-harness "$(find_transcript deepseek-harness 1-1_session-start jsonl.zstd)" 1
 assert_count "gemini-cli   1-1"  gemini-cli   "$(find_transcript gemini-cli 1-1_session-start)"   1
 assert_count "kiro-cli     1-1"  kiro-cli     "$(find_transcript kiro-cli 1-1_session-start)"     1
 assert_count "mistral-vibe 1-1"  mistral-vibe "$(find_transcript mistral-vibe 1-1_session-start)" 1
@@ -108,13 +109,11 @@ echo "== a session that never completed a turn counts 0, not 1 =="
 assert_count "aider 1-1 (auth prompt only) -> 0" aider "$(find_transcript aider 1-1_session-start md)" 0
 
 echo "== every counter returns 0 for a missing or empty transcript =="
-# muse (#1960) has no committed recording yet, so it has no baseline
-# assert_count above — this generic loop plus the numeric-single-line loop
-# below are its ONLY coverage today. Add a "muse 1-1" assert_count once a
-# real recording lands (adapter-tables_test.sh only requires the name appear
-# here, not a real-transcript assertion).
+# New columns have no committed recording before their first recording pass,
+# so they have no baseline assert_count above. This generic loop is their
+# initial coverage. Add a 1-1 assert_count when each first recording lands.
 : > "$TMP/empty.jsonl"
-for a in aider antigravity claudecode codex copilot gemini-cli kiro-cli mistral-vibe muse pi; do
+for a in aider antigravity claudecode codex copilot deepseek-harness gemini-cli kiro-cli mistral-vibe muse pi; do
   got="$(count "$a" "$TMP/empty.jsonl")"
   [[ "$got" == "0" ]] && pass "$a: empty -> 0" || fail "$a: empty -> 0" "0" "$got"
   got="$(count "$a" "$TMP/does-not-exist.jsonl")"
@@ -163,8 +162,10 @@ if [[ -f "$T26" ]]; then
 fi
 
 echo "== counts are numeric single lines (guards the 0\\n0 class outright) =="
-for a in aider antigravity claudecode codex copilot gemini-cli kiro-cli mistral-vibe muse pi; do
-  ext=jsonl; [[ "$a" == aider ]] && ext=md
+for a in aider antigravity claudecode codex copilot deepseek-harness gemini-cli kiro-cli mistral-vibe muse pi; do
+  ext=jsonl
+  [[ "$a" == aider ]] && ext=md
+  [[ "$a" == deepseek-harness ]] && ext=jsonl.zstd
   t="$(find_transcript "$a" 1-1_session-start "$ext")"
   [[ -f "$t" ]] || continue
   lines="$(count "$a" "$t" | wc -l | tr -d ' ')"

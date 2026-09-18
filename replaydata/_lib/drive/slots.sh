@@ -15,14 +15,17 @@
 #
 # Sourced as a library; MUST NOT call `set` at top level.
 
-# daemon_sid maps an absolute transcript path to the daemon's session_id
-# (basename minus ".jsonl") — the filename-stem form the fswatcher keys on
-# (see extractSessionID) and curate-lifecycle-fixture.sh filters by
-# `.session_id`, so fixture lists MUST hold this form, not the bare payload id.
+# daemon_sid maps an absolute transcript path to the daemon's session_id.
+# Most file adapters use the basename minus ".jsonl". DeepSeek Harness stores
+# every generation as session.vN.jsonl.zstd under a session-<uuid> directory,
+# and its daemon id is that parent directory name.
 daemon_sid() {
   local p="$1"
   [[ -z "$p" ]] && { echo ""; return; }
   local b; b="$(basename "$p")"
+  case "$b" in
+    session.v*.jsonl.zstd) basename "$(dirname "$p")"; return ;;
+  esac
   echo "${b%.jsonl}"
 }
 

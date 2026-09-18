@@ -1,0 +1,109 @@
+{
+  "schema_version": 1,
+  "source_transcript": "",
+  "generated_at": "0001-01-01T00:00:00Z",
+  "settings": {
+    "adapter": "dsh",
+    "debounce_window": 2000000000,
+    "flicker_max_duration": 10000000000
+  },
+  "summary": {
+    "total_events": 4,
+    "consumed_events": 4,
+    "total_transitions": 3,
+    "first_event_time": "2026-09-18T15:18:08.176212+02:00",
+    "last_event_time": "2026-09-18T15:19:38.400576+02:00",
+    "wall_clock_session_duration": 90224364000,
+    "state_durations": {
+      "working": 90224364000
+    },
+    "flicker_count": 0,
+    "flickers_by_category": {},
+    "flickers_by_reason": {},
+    "cum_input_tokens": 12185,
+    "cum_output_tokens": 46,
+    "model_name": "qwen/qwen3.5-9b",
+    "total_tokens": 12231,
+    "context_window": 262144,
+    "context_utilization_percentage": 4.6657562255859375
+  },
+  "transitions": [
+    {
+      "index": 0,
+      "event_index": -1,
+      "virtual_time": "2026-09-18T15:18:08.176212+02:00",
+      "cause": "init",
+      "prev_state": "",
+      "new_state": "ready",
+      "reason": "initial state",
+      "last_event_type": "",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 1,
+      "event_index": 0,
+      "virtual_time": "2026-09-18T15:18:08.176212+02:00",
+      "cause": "event",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "turn_start",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 2,
+      "event_index": 3,
+      "virtual_time": "2026-09-18T15:19:38.400576+02:00",
+      "cause": "event",
+      "prev_state": "working",
+      "new_state": "waiting",
+      "reason": "turn ended with question or cue → waiting",
+      "last_event_type": "turn_done",
+      "has_open_tool": false,
+      "is_agent_done": true,
+      "needs_user_attention": false,
+      "waiting_for_user_input": true,
+      "last_assistant_text_head": "Which output format should I use?"
+    }
+  ],
+  "sessions": [
+    {
+      "session_id": "session-55efcf06-d765-4d07-8aaa-10f0a21d6edf",
+      "adapter": "dsh",
+      "first_seen": "2026-09-18T15:18:07.710572+02:00",
+      "last_seen": "2026-09-18T15:19:48.62514+02:00",
+      "duration_ms": 100914,
+      "event_count": 17,
+      "state_changes": 3,
+      "final_state": "waiting",
+      "pid": 51550,
+      "pid_discovery_lag_ms": 1277,
+      "debounce_coalesced_events": 2,
+      "state_durations_ms": {
+        "ready": 649,
+        "waiting": 10210,
+        "working": 90050
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 2,
+    "replayed_transition_count": 2,
+    "ordered_matches": 2,
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→waiting"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→waiting"
+    ]
+  }
+}

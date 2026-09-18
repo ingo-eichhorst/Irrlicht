@@ -1,0 +1,131 @@
+{
+  "scenario_id": "session-start",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+a644e9c",
+    "confidence": 0.84,
+    "notes": "DeepSeek Harness creates a durable v3 session at TUI launch. The DSH adapter can show it as ready and bind its PID through session.lock."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "session-start",
+      "agent": "deepseek-harness",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.84,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe load-bearing signals are a session row in `ready` within 1 second of launch and a PID bound within the same budget. DeepSeek Harness 0.1.5-rc.2 explicitly supports a fresh interactive session through `dsh --profile tui`. A launch-only probe on this host created `session.v3.jsonl.zstd` before any prompt. Its first durable record was a version-3 `session` header with the exact launch cwd. The same session directory contained `session.lock`. No model request was sent by that probe.\n\nThe daemon has two paths that can satisfy the birth signal. The DSH `FilesUnderRoot` source watches `~/.dsh/sessions`, accepts the highest `session.vN.jsonl.zstd` generation, and maps the session directory UUID. New daemon sessions start in `ready`. Independently, the generic process scanner uses the DSH `CommandPattern` with `pgrep -f`. A live launch showed the real command line as `node /Users/ingo/.nvm/versions/node/v22.18.0/bin/dsh --profile tui ...`, which matches the adapter regex `(^|/)dsh(\\s|$)`. The scanner runs immediately and then at a 1-second default interval, and it creates a `proc-<PID>` ready pre-session when the transcript-backed session has not won the race.\n\nPID binding is observable for either birth route. A pre-session carries its PID in `proc-<PID>`, and `PIDManager.TryDiscoverPID` binds it directly. For the real UUID session, `dsh.DiscoverPID` asks which process owns the sibling `session.lock`. The installed DSH JSONL persistence implementation documents and implements a POSIX `flock` on that file for the life of the write handle. The adapter therefore has a concrete live-process binding source.\n\nThe nudge recipe also exercises the real transcript path. A measured DSH v3 transcript contains `turn/start`, assistant messages with model `qwen/qwen3.5-9b` and non-zero usage, and terminal `turn/end {kind:completed}`. The DSH parser maps those records to `turn_start`, `assistant_message`, and `turn_done`, which produces the expected ready-to-working-to-ready arc. The interactive driver implements `send`, `wait_turn`, and `sleep`, and its temporary patch fixes the model to `qwen/qwen3.5-9b`. The 5-second trailing sleep matches the sibling session-start recipes and gives the daemon time to observe the final ready state.",
+      "caveats": [
+        "Vacuous-pass check: the two timing phases can pass through the generic proc-<PID> pre-session even if the DSH file watcher or parser is broken. The recipe exercises the real compressed transcript and its ready-to-working-to-ready arc, but this session-start spec follows the fleet convention and leaves transcript-level arc assertions to basic-turn.",
+        "The 1-second acceptance budget depends on the daemon process scanner keeping its current 1-second default interval and on host load not delaying process or filesystem observation past the budget.",
+        "The daemon=full verdict is provisional until a recording measures birth and PID event timing. The source and launch probe prove the inputs exist, but this assessment did not run irrlichd.",
+        "The local model setting is load-bearing for the nudge turn: LM Studio must expose qwen/qwen3.5-9b at http://127.0.0.1:1234/v1. Otherwise the timing-only birth phases could pass while the transcript turn fails."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/agent.go",
+          "note": "Declares the FilesUnderRoot transcript source, CommandPattern process matcher, and PIDForSession binding for DeepSeek Harness."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/adapter.go",
+          "note": "Accepts the highest session.vN.jsonl.zstd generation under a session-UUID directory and defines the dsh command-line regex."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser.go",
+          "note": "Maps v3 session, turn/start, assistant/message usage, and turn/end records into daemon lifecycle and metric signals."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/pid.go",
+          "note": "Binds the real session PID through the sibling session.lock writer."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/processlifecycle/scanner.go",
+          "note": "Runs an immediate process scan and then uses the 1-second default interval; a matched process creates a proc-<PID> pre-session."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/pid_manager.go",
+          "note": "TryDiscoverPID binds proc-<PID> sessions directly and uses the adapter PID discoverer for transcript-backed sessions."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-session-persistence/README.md",
+          "note": "Official installed package reference states that create takes write ownership, the JSONL backend writes one compressed log per session, and the write handle owns live persistence."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js",
+          "note": "Installed implementation documents and implements the session.lock flock held for the write handle lifetime."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/sessions/--private-tmp-dsh-session-start-assess.MGGZ33--/session-3d89a6f2-ad61-4bb4-a0d9-aa520c349f5c/session.v3.jsonl.zstd",
+          "note": "Launch-only probe: the transcript materialized before any prompt with a v3 session header and exact launch cwd; the sibling session.lock also existed."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/sessions/--Users-ingo-.claude-jobs-d11ee86d-tmp-dsh-probe--/session-5f31220c-499b-44f0-bca3-a6a574a6eafa/session.v3.jsonl.zstd",
+          "note": "Measured complete turn contains turn/start, qwen/qwen3.5-9b assistant usage with non-zero tokens, and turn/end completed."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/scenarios/1-1_session-start/metadata.json",
+          "note": "Sibling recipe establishes the send, wait_turn, and 5-second settle sequence and the two-phase session-start scope."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "Declares and implements send, wait_turn, and sleep, applies the fixed LM Studio model through a temporary patch, and fails when the durable transcript cannot be read."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "timeout_seconds": 300,
+      "settings": {
+        "model": "qwen/qwen3.5-9b",
+        "base_url": "http://127.0.0.1:1234/v1",
+        "context_window": 262144,
+        "permission_mode": "danger-full-access"
+      },
+      "preconditions": [
+        "dsh 0.1.5-rc.2 or newer is on PATH and the community tui profile is installed under the active DSH home",
+        "LM Studio is serving qwen/qwen3.5-9b through http://127.0.0.1:1234/v1",
+        "irrlichd is recording with DeepSeek Harness transcript permission granted and uses the default 1-second process-scan interval"
+      ],
+      "setup": [
+        "Create an empty cwd under the recording staging directory",
+        "Let the driver apply the LM Studio endpoint and model through its per-run temporary patch"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        }
+      ],
+      "verify": [
+        "events.jsonl shows a session in ready within 1000 ms of agent launch",
+        "events.jsonl shows pid_discovered for that session within 1000 ms of agent launch",
+        "the real DSH UUID session completes one ready to working to ready turn",
+        "the nudge turn has no tool calls and ends in ready",
+        "the recording reports model qwen/qwen3.5-9b and non-zero tokens"
+      ]
+    }
+  }
+}

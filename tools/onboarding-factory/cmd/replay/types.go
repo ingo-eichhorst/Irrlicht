@@ -170,12 +170,9 @@ type reportSummary struct {
 	CumCacheCreationTokens int64   `json:"cum_cache_creation_tokens,omitempty"`
 	ModelName              string  `json:"model_name,omitempty"`
 
-	// Context vector for store-derived sessions (#766). Antigravity keeps token
-	// usage in an out-of-band SQLite store (#719), so its turn snapshots set
-	// TotalTokens (and the derived ContextWindow/ContextUtilization) without any
-	// in-transcript per-turn usage. finalizeSummary surfaces these ONLY for that
-	// store-derived signature, so they verify the matrix's context/token half for
-	// antigravity while leaving every cum-token adapter's golden byte-identical.
+	// Direct context vector for adapters that expose total tokens, context
+	// window, and utilization as one verified source. This stays separate from
+	// CumInput/Output, which preserve the cumulative replay summary.
 	TotalTokens        int64   `json:"total_tokens,omitempty"`
 	ContextWindow      int64   `json:"context_window,omitempty"`
 	ContextUtilization float64 `json:"context_utilization_percentage,omitempty"`

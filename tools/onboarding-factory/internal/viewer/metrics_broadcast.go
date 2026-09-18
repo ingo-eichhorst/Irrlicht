@@ -60,7 +60,10 @@ type timelinePoint struct {
 }
 
 func newMetricsEnricher(inner outbound.PushBroadcaster, collector outbound.MetricsCollector, eventsDir string) *metricsEnricher {
-	transcriptPath := filepath.Join(eventsDir, "transcript.jsonl")
+	transcriptPath := replay.TranscriptPath(eventsDir)
+	if transcriptPath == "" {
+		transcriptPath = filepath.Join(eventsDir, "transcript.jsonl")
+	}
 	// Invalidate any persisted ledger for this transcript. The metrics
 	// collector caches per-transcript LastOffset to disk so a daemon
 	// restart resumes mid-stream — exactly the wrong behaviour for

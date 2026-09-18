@@ -153,8 +153,8 @@ fi
 
 # Transcript: single-session is a straight copy. Multi-session
 # (IRRLICHT_EXTRA_TRANSCRIPTS set by run-cell.sh) concatenates all
-# transcripts in the order the driver chained the sessions. Each
-# line is a self-contained JSON record so concat is safe.
+# transcripts in the order the driver chained the sessions. Plain JSONL
+# records and concatenated zstd frames are both valid replay inputs.
 if [[ -n "${IRRLICHT_EXTRA_TRANSCRIPTS:-}" ]]; then
   : > "$OUT_TRANSCRIPT"
   while IFS= read -r tpath; do
