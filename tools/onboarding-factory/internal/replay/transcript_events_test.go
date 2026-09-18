@@ -192,6 +192,34 @@ func TestLoadTurnMarkers_readsCompressedDSHMessages(t *testing.T) {
 	}
 }
 
+func TestLoadTurnMarkers_sortsConcatenatedSessionsByTime(t *testing.T) {
+	lines := "" +
+		`{"type":"session","id":"session-1","createdAt":1000}` + "\n" +
+		`{"type":"user/message","time":5000,"data":{"source":{"kind":"user"},"content":[{"type":"text","text":"late"}]}}` + "\n" +
+		`{"type":"session","id":"session-2","createdAt":2000}` + "\n" +
+		`{"type":"user/message","time":3000,"data":{"source":{"kind":"user"},"content":[{"type":"text","text":"early"}]}}` + "\n"
+	encoder, err := zstd.NewWriter(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer encoder.Close()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "transcript.jsonl.zstd"), encoder.EncodeAll([]byte(lines), nil), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got := LoadTurnMarkers(dir, time.UnixMilli(1000).UTC())
+	if len(got) != 2 {
+		t.Fatalf("LoadTurnMarkers() returned %d markers, want 2: %#v", len(got), got)
+	}
+	if got[0].Text != "early" || got[0].OffsetMs != 2000 || got[0].SessionID != "session-2" {
+		t.Errorf("first marker = %#v; want the earlier session-2 turn", got[0])
+	}
+	if got[1].Text != "late" || got[1].OffsetMs != 4000 || got[1].SessionID != "session-1" {
+		t.Errorf("second marker = %#v; want the later session-1 turn", got[1])
+	}
+}
+
 // TestSynthesizeEventsFromTranscript_rejectsPathTraversal mirrors the above
 // for the transcript synthesizer's entry point.
 func TestSynthesizeEventsFromTranscript_rejectsPathTraversal(t *testing.T) {

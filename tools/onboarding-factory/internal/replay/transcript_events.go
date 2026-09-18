@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -470,6 +471,7 @@ func loadTurnsFromJSONL(path string, anchor time.Time) []TurnMarker {
 	if err != nil {
 		return nil
 	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].OffsetMs < out[j].OffsetMs })
 	return out
 }
 
