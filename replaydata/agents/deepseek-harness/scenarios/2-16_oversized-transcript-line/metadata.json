@@ -1,0 +1,140 @@
+{
+  "scenario_id": "oversized-transcript-line",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+0aa740b",
+    "confidence": 0.83,
+    "notes": "DeepSeek Harness stores one complete assistant message per JSONL row, and the DSH adapter processes the 5000-word row through the shared bounded tailer without losing the ready-to-working-to-ready arc."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "oversized-transcript-line",
+      "agent": "deepseek-harness",
+      "assessed_at": "2026-09-18T00:00:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.83,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Agent support\n\nDeepSeek Harness 0.1.5-rc.2 can emit the required large single record. The installed llm-pi-ai route defaults maxTokens to 32768, which is above the 5000 output tokens requested by this recipe. The agent loop collects the streamed blocks without a text-size truncation step and appends the settled content as one assistant/message event. The official installed JSONL persistence backend serializes each current event through JSON.stringify and gives every event one physical row. Its default Zstandard mode compresses that row inside a checksummed frame but does not split the logical event. The fixed qwen/qwen3.5-9b model has emitted reasoning plus text in all 28 assistant/message records in the current local corpus, so the recipe targets data.message.content.1.text.\n\nThe recipe requests the token large exactly 5000 times with one space between tokens. This produces a 29999-character text payload before JSON framing. It is a deterministic output request and does not ask for prose. The expected transcript assertion requires that complete generated string in one assistant/message record and rejects any tool call. A short reply, refusal, partial generation, or tool-based substitute therefore fails.\n\n## Daemon capability\n\nThe DSH adapter watches the highest session.vN.jsonl.zstd generation through FilesUnderRoot and JSONLineParser. The shared tailer validates and decodes each complete Zstandard frame, then passes its decoded bytes through readLineCapped. The per-line cap is 64 MB and the decoded-frame cap is 256 MB. The expected row is about 30 KB plus JSON fields, so it stays far below both limits. The DSH parser maps assistant/message usage and text, then maps the following completed turn/end to turn_done. Those events preserve the required ready to working to ready arc. The generic large-line regression test also proves that a large line does not block later turn-boundary rows.\n\nThis live cell is a parser-resilience sanity check, not a cap-stress test. Its approximately 30 KB row is below the former Scanner limit and far below the current 64 MB cap. The unit fixture owns the true multi-megabyte regression.\n\n## Driver capability and timing\n\nThe recipe needs send, wait_turn, and sleep. The DeepSeek Harness interactive driver implements all three. It creates a fresh cwd, applies the fixed LM Studio model patch, resolves only a post-marker transcript with the same cwd, and waits for a durable turn/end record. The final 8-second sleep matches the longest sibling delay for this scenario. The 900-second timeout allows for the measured local model prefill latency and 5000 generated tokens.\n\n## Vacuous-pass check\n\nThe lifecycle phases alone could pass after a short answer and would then prove nothing about a large row. The full 5000-token transcript substring and no-tool assertions are load-bearing. The fresh cwd and marker are also load-bearing because they stop an older DSH session from satisfying the phase chain. LM Studio must expose qwen/qwen3.5-9b and permit at least 5000 output tokens; otherwise the cell fails before it exercises the intended row size.",
+      "caveats": [
+        "Emission is provisional until record drives the exact 5000-token request. Source code proves the 32768-token route capacity and lossless one-row persistence, but the live LM Studio server or model can still stop early. The exact transcript assertion makes that failure loud.",
+        "Vacuous-pass condition: lifecycle-only matching would pass on a short answer. The spec therefore requires the complete 29999-character repeated-token payload in one assistant/message record and requires zero tool/call records.",
+        "Load-bearing environment precondition: LM Studio must serve qwen/qwen3.5-9b at http://127.0.0.1:1234/v1 and must allow at least 5000 output tokens. The model roster was re-probed during assessment and contained qwen/qwen3.5-9b, but record must re-probe it.",
+        "This is a roughly 30 KB sanity check. It does not exercise the 64 MB line cap or the 256 MB decoded-frame cap. core/pkg/tailer/large_line_test.go owns the true large-line regression.",
+        "A line above 64 MB is skipped with an operator log and its content is lost, although later rows continue. This recipe stays below that limit and expects normal parsing.",
+        "The fixed qwen model currently emits reasoning at content index 0 and text at index 1. The assertion deliberately pins index 1 because all 28 measured local assistant/message records use that shape; a provider-shape change must fail loudly and be reassessed."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-llm-pi-ai/lib/index.js",
+          "note": "Installed official runtime sets DEFAULT_MAX_TOKENS to 32768 and uses that default for a hand-declared provider model when no smaller model limit is configured."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-agent-loop/lib/index.js",
+          "note": "The loop collects live.blocks and appends the settled result as assistant/message with the original content and usage."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/README.md",
+          "note": "Official installed package reference states that the current format stores one physical row per durable event and uses checksummed Zstandard frames by default."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js",
+          "note": "eventLine calls JSON.stringify on one current event; eventLines joins events with newline separators; encodeEventBatch compresses the complete JSONL batch without content truncation."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/sessions/--Users-ingo-.claude-jobs-d11ee86d-tmp-dsh-probe--/session-a68f8780-b24f-49d6-89c4-f2e215f95782/session.v3.jsonl.zstd",
+          "note": "Measured qwen/qwen3.5-9b v3 transcript. Assistant records use reasoning at content index 0, text at index 1, non-zero usage, and a following completed turn/end."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/agent.go",
+          "note": "Declares the compressed FilesUnderRoot source with JSONLineParser for DeepSeek Harness."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser.go",
+          "note": "Maps turn/start to working, assistant/message text and usage, and completed turn/end to the ready boundary."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/zstd.go",
+          "note": "Validates complete Zstandard frames, caps decoded frames at four times the 64 MB line limit, and scans decoded bytes through the shared line reader."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/line_reader.go",
+          "note": "Defines the 64 MB JSONL line cap and skip-past behavior that prevents an oversized row from wedging later records."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/large_line_test.go",
+          "note": "Regression fixture proves a multi-megabyte JSONL row does not block a later turn_done event and pins over-cap skip behavior."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "Implements send, wait_turn, and sleep; applies the fixed LM Studio patch and resolves a readable post-marker transcript for the fresh run cwd."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/2-16_oversized-transcript-line/metadata.json",
+          "note": "Sibling scenario precedent uses a 5000-word single-line response and treats the live cell as a parser-resilience sanity check."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "dsh >=0.1.5-rc.2 is installed and on PATH",
+        "the community TUI profile is installed under ~/.dsh/profiles/tui",
+        "LM Studio is listening at http://127.0.0.1:1234/v1 with qwen/qwen3.5-9b loaded and permits at least 5000 output tokens; re-probe the model at record time",
+        "tmux and zstd are installed",
+        "irrlichd is recording the deepseek-harness adapter with transcript permission granted"
+      ],
+      "setup": [
+        "The interactive driver creates a fresh cwd under the staging directory and launches dsh --profile tui in tmux.",
+        "The driver applies a temporary patch that selects LM Studio and qwen/qwen3.5-9b without modifying the installed TUI profile.",
+        "The driver resolves the new session.v3.jsonl.zstd by pre-launch marker, header cwd, and parent session ID, then waits for the expected completed turn/end count.",
+        "DSH persists the complete assistant/message event as one JSONL row inside a checksummed Zstandard frame."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Output the token large exactly 5000 times, separated by one ASCII space. Output no other text. Do not use tools. Do not use line breaks."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ],
+      "verify": [
+        "events.jsonl contains one post-marker DSH UUID session born ready and bound to the session.lock writer PID",
+        "the same session enters working after the real user message and returns to ready after completed turn/end without entering waiting",
+        "transcript.jsonl contains exactly one assistant/message whose text block contains the full 5000-word repeated-token payload on that single durable record",
+        "transcript.jsonl contains no tool/call record and exactly one completed turn/end",
+        "the replay summary reports qwen/qwen3.5-9b and non-zero tokens; cost remains zero for the local LM Studio route"
+      ],
+      "settings": {
+        "model": "qwen/qwen3.5-9b",
+        "base_url": "http://127.0.0.1:1234/v1",
+        "context_window": 262144,
+        "permission_mode": "danger-full-access",
+        "api_key": "irrlicht-local-recording"
+      },
+      "timeout_seconds": 900,
+      "scope_note": "Uses the longest sibling post-turn settle delay of 8 seconds. The 900-second turn budget is agent-specific: the local qwen model has measured high prefill latency and must generate 5000 tokens."
+    }
+  }
+}
