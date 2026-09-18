@@ -32,7 +32,7 @@ source "$_DRIVE_LIB/teardown.sh"
 # The factory reads this value directly from the source. List only primitives
 # that the dispatch loop below implements.
 # shellcheck disable=SC2034
-DRIVE_ELICITS="send slash wait_turn sleep interrupt keys reset_session restart resume sigkill exit_clean start_session session"
+DRIVE_ELICITS="send slash wait_turn sleep interrupt keys reset_session restart resume fork sigkill exit_clean start_session session"
 # shellcheck disable=SC2034
 DRIVE_SLASH_REQUIRES_STEP_TYPE=false
 
@@ -46,6 +46,7 @@ DRIVE_MARKER_PREFIX="$STAGING/.dsh-marker"
 DEADLINE=$(( $(date +%s) + TIMEOUT_S ))
 EXIT_REASON="ok"
 REACHED_EPILOGUE=0
+FORK_WEB_PID=""
 
 N_SLOTS=0
 ACTIVE=0
@@ -108,9 +109,35 @@ printf '%s\n' \
   '    provider: lmstudio' \
   "    model: $MODEL" > "$PATCH_PATH"
 
+stop_fork_web() {
+  local pid="${FORK_WEB_PID:-}" signal ticks i
+  [[ -n "$pid" ]] || return 0
+  for signal in INT TERM KILL; do
+    kill -0 "$pid" 2>/dev/null || break
+    kill -"$signal" "$pid" 2>/dev/null || true
+    case "$signal" in
+      INT)  ticks=40 ;;
+      TERM) ticks=20 ;;
+      *)    ticks=8 ;;
+    esac
+    for (( i = 0; i < ticks; i++ )); do
+      kill -0 "$pid" 2>/dev/null || break 2
+      sleep 0.25
+    done
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    echo "[driver] fork web process $pid survived shutdown" >&2
+    return 1
+  fi
+  wait "$pid" 2>/dev/null || true
+  FORK_WEB_PID=""
+  return 0
+}
+
 # BEGIN cleanup
 cleanup() {
   local i
+  stop_fork_web || true
   for (( i = 1; i <= N_SLOTS; i++ )); do
     [[ -n "${SES_SESSION[$i]:-}" ]] && tmux kill-session -t "${SES_SESSION[$i]}" 2>/dev/null || true
   done
@@ -314,6 +341,117 @@ step_resume() {
   boot_slot "$resume_id"
 }
 
+step_fork() {
+  resolve_transcript || return 1
+  command -v curl >/dev/null 2>&1 || { echo "[driver] curl required for the DSH web fork API" >&2; EXIT_REASON="nonzero(2)"; return 1; }
+
+  local parent_id="$UUID" parent_transcript="$TRANSCRIPT" parent_cwd="${SES_CWD[$ACTIVE]}"
+  local web_log="$STAGING/dsh-web-fork.log" cookie_jar="$STAGING/dsh-web-fork.cookies"
+  local web_url="" web_base rpc_id payload response child_id child_dir child_transcript="" decoded header baseline
+
+  # The supported fork surface is the official web controller. Stop the TUI so
+  # its session lock is released, then let a short-lived web profile create the
+  # seeded child through session/fork.
+  step_exit_clean || return 1
+  save_active
+  : > "$web_log"
+  env "LMSTUDIO_API_KEY=$LMSTUDIO_API_KEY_VALUE" "DSH_PERMISSION_MODE=$PERMISSION_MODE" \
+    dsh --profile web --patch "$PATCH_PATH" --no-open --host 127.0.0.1 --port 0 \
+    >"$web_log" 2>&1 &
+  FORK_WEB_PID=$!
+
+  while (( $(remaining_seconds) > 0 )); do
+    web_url="$(sed -n 's/^dsh web: \(http[^ ]*\).*$/\1/p' "$web_log" | tail -n1)"
+    [[ -n "$web_url" ]] && break
+    if ! kill -0 "$FORK_WEB_PID" 2>/dev/null; then
+      echo "[driver] DSH web fork process exited before announcing its URL" >&2
+      tail -20 "$web_log" >&2 || true
+      EXIT_REASON="nonzero(2)"
+      stop_fork_web || true
+      return 1
+    fi
+    sleep 0.25
+  done
+  if [[ -z "$web_url" ]]; then
+    echo "[driver] DSH web fork API did not become ready" >&2
+    EXIT_REASON="readiness_timeout"
+    stop_fork_web || true
+    return 1
+  fi
+
+  web_base="${web_url%%\?*}"
+  web_base="${web_base%/}"
+  if ! curl -fsSL --max-time 30 -c "$cookie_jar" -o /dev/null "$web_url"; then
+    echo "[driver] DSH web fork API authentication failed" >&2
+    EXIT_REASON="nonzero(2)"
+    stop_fork_web || true
+    return 1
+  fi
+
+  rpc_id="fork-$$-$(date +%s)"
+  payload="$(jq -nc --arg rpc_id "$rpc_id" --arg session_id "$parent_id" \
+    '{type:"client-request",rpcId:$rpc_id,method:"session/fork",payload:{args:{request:{sessionId:$session_id}}}}')"
+  if ! response="$(curl -fsS --max-time 30 -b "$cookie_jar" \
+      -H 'content-type: application/json' -H "origin: $web_base" \
+      --data-binary "$payload" "$web_base/api/session/fork")"; then
+    echo "[driver] DSH web fork API request failed" >&2
+    EXIT_REASON="nonzero(2)"
+    stop_fork_web || true
+    return 1
+  fi
+  if ! jq -e --arg rpc_id "$rpc_id" \
+      '.type == "server-response" and .rpcId == $rpc_id and .result.ok == true' \
+      >/dev/null <<<"$response"; then
+    echo "[driver] DSH web fork API rejected the request: $(jq -c '.result.error // .' <<<"$response" 2>/dev/null || printf '%s' "$response")" >&2
+    EXIT_REASON="nonzero(2)"
+    stop_fork_web || true
+    return 1
+  fi
+  child_id="$(jq -r '.result.value.sessionId // empty' <<<"$response")"
+  if [[ ! "$child_id" =~ ^session-[0-9a-f-]{36}$ ]]; then
+    echo "[driver] DSH web fork API returned an invalid child id: $child_id" >&2
+    EXIT_REASON="nonzero(2)"
+    stop_fork_web || true
+    return 1
+  fi
+  if ! stop_fork_web; then
+    EXIT_REASON="nonzero(2)"
+    return 1
+  fi
+
+  alloc_slot "dshdrv-$$-$(date +%s)-$((N_SLOTS + 1))" "$parent_cwd"
+  UUID="$child_id"
+  child_dir="$(dirname "$(dirname "$parent_transcript")")/$child_id"
+  decoded="$STAGING/decoded-fork.$ACTIVE.jsonl"
+  while (( $(remaining_seconds) > 0 )); do
+    child_transcript=""
+    while IFS= read -r candidate; do
+      [[ -f "$candidate" ]] || continue
+      decode_transcript "$candidate" "$decoded" || continue
+      header="$(sed -n '1p' "$decoded")"
+      if [[ "$(jq -r '.id // empty' <<<"$header")" == "$child_id" \
+          && "$(jq -r '.parentSession // empty' <<<"$header")" == "$parent_id" \
+          && "$(jq -r '.isSeeded // false' <<<"$header")" == "true" ]]; then
+        child_transcript="$candidate"
+      fi
+    done < <(find "$child_dir" -maxdepth 1 -type f -name 'session.v*.jsonl.zstd' 2>/dev/null)
+    [[ -n "$child_transcript" ]] && break
+    sleep 0.25
+  done
+  if [[ -z "$child_transcript" ]]; then
+    echo "[driver] forked DSH child transcript did not become readable: $child_id" >&2
+    EXIT_REASON="transcript_missing"
+    return 1
+  fi
+
+  TRANSCRIPT="$child_transcript"
+  baseline="$(turn_count)" || { EXIT_REASON="unreadable_transcript"; return 1; }
+  [[ "$baseline" =~ ^[0-9]+$ ]] || { echo "[driver] invalid fork turn baseline: $baseline" >&2; EXIT_REASON="nonzero(2)"; return 1; }
+  EXPECTED_TURNS="$baseline"
+  boot_slot "$child_id" || return 1
+  echo "[driver] fork: parent=$parent_id child=$child_id inherited_turns=$baseline" >&2
+}
+
 # Allocate the first slot before applying the script.
 alloc_slot "dshdrv-$$-$(date +%s)-1" "$RUN_CWD"
 boot_slot
@@ -344,6 +482,7 @@ while IFS= read -r step; do
     reset_session) step_reset_session || STEP_OK=false ;;
     restart)       step_restart || STEP_OK=false ;;
     resume)        step_resume || STEP_OK=false ;;
+    fork)          step_fork || STEP_OK=false ;;
     sigkill)       step_sigkill ;;
     exit_clean)    step_exit_clean || STEP_OK=false ;;
     start_session) step_start_session "$(jq -r '.cwd // empty' <<<"$step")" || STEP_OK=false ;;
