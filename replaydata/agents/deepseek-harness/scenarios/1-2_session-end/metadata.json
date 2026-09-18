@@ -1,0 +1,170 @@
+{
+  "scenario_id": "session-end",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+a644e9c",
+    "confidence": 0.86,
+    "notes": "DeepSeek Harness supports clean exit and forced process death. The daemon observes all three teardown variants through the PID bound from session.lock."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "session-end",
+      "agent": "deepseek-harness",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.86,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full; driver_capability: ready\n\n## Reasoning\n\nThe scenario requires three independent DSH lifetimes: a clean exit after a completed turn, SIGKILL while idle in ready, and SIGKILL while a turn is still working. DeepSeek Harness supports the clean path through the documented `/exit` command. The installed TUI documentation states that `/exit` cancels, waits for idle, flushes the session, and exits. Forced death is an OS operation and does not require agent support.\n\nEach fresh DSH launch creates a durable `session-<uuid>` directory with `session.v3.jsonl.zstd` and a sibling `session.lock`. The DSH adapter reads the compressed transcript and binds the real session PID by asking which process owns that lock. Once bound, the daemon registers the PID with its process watcher. `HandleWatcherExit` resolves every current session bound to the exited PID and calls `HandleProcessExit`, which records `process_exited` and removes the session regardless of whether the last state was ready or working. This covers clean exit and both SIGKILL variants without depending on a DSH transcript end record.\n\nThe completed-turn portions are directly observable. The parser maps `turn/start` to working and completed `turn/end` to ready. A measured DSH transcript confirms both records and the expected terminal reason. For the mid-turn variant, `turn/start` is durably appended before model generation. The recipe uses a mechanically long 400-token response and waits 4 seconds before SIGKILL. This delay is twice the daemon activity debounce and matches the corrected Muse sibling. The local qwen/qwen3.5-9b generation rate makes completion inside that window unlikely, and the spec rejects a ready transition before the exit.\n\nThe driver implements all required primitives. `/exit` is followed by a strict tmux-session disappearance poll with a shared 15-second cap. `sigkill` sends SIGKILL to the recorded tmux pane PID and polls for death. `restart` saves the completed slot, creates a fresh cwd, allocates a new slot, launches a new DSH process, and resolves a new transcript created after that slot's marker. The recipe copies the fleet's 2-second pre-clean-exit settle, 5-second inter-session settle, 3-second pre-idle-kill settle, 5-second second inter-session settle, 4-second mid-turn window, and 8-second final tail.\n\nThe spec selects real DSH UUID rows with `session_id_prefix: session-` and pins every later phase to its variant's birth. This excludes generic `proc-<PID>` pre-sessions from satisfying teardown assertions. The current PID manager also fans a watcher exit to all repository sessions that hold the PID, which closes the older last-write-wins attribution gap documented in issue 1962.",
+      "caveats": [
+        "Vacuous-pass check: unpinned phases could match a generic proc-<PID> pre-session or another variant's exit. The spec selects session-UUID rows, requires a new session for variants 2 and 3, and pins each turn and exit to its own birth.",
+        "The variant-3 prompt length and 4-second delay are load-bearing. If the configured model completes before SIGKILL, the cell would test an idle kill twice. The spec rejects any ready transition between variant 3 turn_start and process_exited.",
+        "A real process_exited event requires PID discovery before teardown. The recipe includes an explicit pid_discovered phase for each variant, and recording must fail rather than infer success if lock-based binding does not occur.",
+        "This exact three-variant DSH cell has not yet run through irrlichd. The verdict is grounded in the installed TUI contract, measured durable turn records, and daemon process-lifecycle code; recording must confirm timing."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/profiles/tui/node_modules/@tomowang/dsh-tui/README.md",
+          "note": "Documents /exit and /quit as cancel, wait for idle, flush, and exit."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/profiles/tui/node_modules/@tomowang/dsh-tui/lib/tui/commands.js",
+          "note": "Routes /exit and /quit to the TUI shutdown action."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/sessions/--Users-ingo-.claude-jobs-d11ee86d-tmp-dsh-probe--/session-5f31220c-499b-44f0-bca3-a6a574a6eafa/session.v3.jsonl.zstd",
+          "note": "Measured DSH v3 transcript contains turn/start and a completed turn/end for qwen/qwen3.5-9b."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/agent.go",
+          "note": "Declares the compressed FilesUnderRoot source, process matcher, and lock-based PID discoverer."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/pid.go",
+          "note": "Discovers the real session PID through the sibling session.lock writer."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser.go",
+          "note": "Maps DSH turn/start and completed turn/end into working and ready lifecycle signals."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/pid_manager.go",
+          "note": "HandleWatcherExit fans the process-watcher edge to every current PID holder; HandleProcessExit records the exit and removes the session in any state."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "Implements exit_clean, restart, and sigkill in addition to send, wait_turn, and sleep, with per-slot transcript and PID state."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/_lib/drive/teardown.sh",
+          "note": "Provides the strict clean-exit observation and bounded SIGKILL death polls used by the DSH driver."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/scenarios/1-2_session-end/metadata.json",
+          "note": "Sibling recipe supplies the corrected 4-second mid-turn delay and the three-variant timing shape."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "timeout_seconds": 600,
+      "settings": {
+        "model": "qwen/qwen3.5-9b",
+        "base_url": "http://127.0.0.1:1234/v1",
+        "context_window": 262144,
+        "permission_mode": "danger-full-access"
+      },
+      "preconditions": [
+        "dsh 0.1.5-rc.2 or newer is on PATH and the community tui profile is installed under the active DSH home",
+        "LM Studio is serving qwen/qwen3.5-9b through http://127.0.0.1:1234/v1",
+        "irrlichd is recording with DeepSeek Harness transcript permission granted",
+        "the local model remains slow enough that the 400-token variant-3 response is still running 4 seconds after turn/start; verify this from the recording, not from timing alone"
+      ],
+      "setup": [
+        "Let the driver create three fresh cwds and three fresh DSH sessions under one recording staging directory",
+        "Let the driver apply the LM Studio endpoint and model through its per-run temporary patch"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok. Do not use tools."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 2
+        },
+        {
+          "type": "exit_clean"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "restart"
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok. Do not use tools."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 3
+        },
+        {
+          "type": "sigkill"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "restart"
+        },
+        {
+          "type": "send",
+          "text": "Output the token COFFEE separated by one space exactly 400 times. Do not use tools and do not add other text."
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "sigkill"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ],
+      "verify": [
+        "events.jsonl contains three distinct top-level session-UUID rows and a pid_discovered event for each",
+        "variant 1 completes ready to working to ready, then /exit produces process_exited on that same real session",
+        "variant 2 completes ready to working to ready, stays out of working and waiting during the idle window, then SIGKILL produces process_exited on that same real session",
+        "variant 3 enters working and produces no ready or waiting transition before SIGKILL; process_exited belongs to that same real session",
+        "each variant transcript contains zero tool/call records",
+        "the viewer shows three separate top-level lifetimes with no cross-variant phase matching",
+        "the first two transcripts contain completed turns and the third contains turn/start without turn/end"
+      ]
+    }
+  }
+}
