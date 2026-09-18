@@ -90,7 +90,10 @@
       }
     },
     "deepseek-harness": {
-      "maturity": "planned"
+      "maturity": "planned",
+      "capabilities": {
+        "token_usage": "untraced"
+      }
     },
     "gemini-cli": {
       "maturity": "alpha",
