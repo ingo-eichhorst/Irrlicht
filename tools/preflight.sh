@@ -439,9 +439,9 @@ shell_lib_tests() {
 # ===========================================================================
 
 # ---- posix group (mirrors linux.yml's "Lint POSIX sh scripts" step) --------
-# The #!/bin/sh corpus is three files today (site/install.sh,
-# tools/linux-replay-entrypoint.sh and tools/git-hooks/shim) and the gate
-# re-lints all of them whenever it fires — it is a fraction of a second, and
+# The #!/bin/sh corpus includes site/install.sh, site/relay.sh,
+# tools/linux-replay-entrypoint.sh and tools/git-hooks/shim. The gate
+# re-lints the full corpus whenever it fires — it is a fraction of a second, and
 # the trigger cannot enumerate them anyway, because a NEW POSIX script is
 # exactly the file the gate most needs to see on the push that adds it. So the
 # regex is deliberately loose:
@@ -528,9 +528,9 @@ if want tools; then
   # asserts they agree — and a commit touching only one of those two is exactly
   # the commit that breaks the invariant, so leaving them out would skip the
   # test precisely when it matters (#1291).
-  # site/install.sh is in the trigger set because tools/lib/install-uninstall_test.sh
-  # tests it (#1416). Without it a push touching only the installer would SKIP
-  # the one gate that covers the installer.
+  # site/install.sh and site/relay.sh are in the trigger set because their
+  # tools/lib/*_test.sh harnesses execute them. Without these paths, a push
+  # touching only an installer would SKIP the tests that cover it.
   # tools/git-hooks/ is in it for the same reason (#1591): git-hooks_test.sh
   # covers the shim and the hook scripts, and neither matches `^tools/[^/]*\.sh$`
   # — they are extensionless files one directory down.
@@ -591,7 +591,7 @@ if want tools; then
   # backup that was never refreshed, a bundle overwritten while its process was
   # still alive). Same story, eighth entry: a commit editing only that script,
   # or only restore-prod.sh beside it, is exactly the one that breaks them.
-  run_gate_scoped '^tools/lib/|^tools/[^/]*\.sh$|^tools/git-hooks/|^go\.work$|^\.github/dependabot\.yml$|^site/install\.sh$|^AGENTS\.md$|^\.claude/skills/ir:test-mac/|^\.github/workflows/(ars|codescene-badge|coverage|macos-swift|replaydata-deletion-guard|test)\.yml$' \
+  run_gate_scoped '^tools/lib/|^tools/[^/]*\.sh$|^tools/git-hooks/|^go\.work$|^\.github/dependabot\.yml$|^site/(install|relay)\.sh$|^AGENTS\.md$|^\.claude/skills/ir:test-mac/|^\.github/workflows/(ars|codescene-badge|coverage|macos-swift|replaydata-deletion-guard|test)\.yml$' \
                   "tools/lib shell-lib tests" shell_lib_tests
 
   # UNSCOPED, deliberately, and the only gate in this group that is (#1804).
