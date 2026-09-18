@@ -1,0 +1,122 @@
+{
+  "scenario_id": "auto-classified-permission",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+66497e7",
+    "confidence": 0.84,
+    "notes": "DeepSeek Harness runs a safe bash call under workspace-write plus approval policy ask without opening an approval, and the DSH adapter preserves the uninterrupted ready-to-working-to-ready arc."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "auto-classified-permission",
+      "agent": "deepseek-harness",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.84,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Agent support\n\nDeepSeek Harness 0.1.5-rc.2 ships a per-session permission preset that combines sandbox mode with approval policy. The installed `workspace-write` preset uses the confined workspace-write sandbox and policy `ask`. Its ordinary bash path executes a command inside that sandbox. A denied command is not retried silently. The model can retry the exact command with a strictly wider `sandbox_permissions` value and a justification, and that wider retry opens the approval seam before execution. Thus a safe command such as `pwd` runs with no prompt while a wider retry is approval-gated. This supplies the scenario's safe and risky classifications. The recipe records only the safe branch, consistent with the committed claudecode sibling; `tool-gate-permission-prompt` owns the risky branch.\n\nThe recipe selects `permission_mode: workspace-write`, not the driver's `danger-full-access` default. The active base profile maps this mode to approval policy `ask`. The spec requires the durable initialization facts `permission/preset=workspace-write`, `sandbox/mode=workspace-write`, and `approval/policy=ask`. It then requires exactly one successful bash `pwd` round trip and no `approval/asked` or `approval/decided` record. These assertions distinguish the classification path from the unconditional `danger-full-access` behavior already covered by `auto-executed-tool-call`.\n\n## Daemon capability\n\nThe DSH adapter tails the local compressed v3 transcript. `parseTurnStart` emits the working boundary. `parseToolCall` and `parseToolResult` preserve the bash round trip. `parseApprovalAsked` emits `permission_requested`, and `parseApprovalDecided` emits `permission_completed`. A safe call produces no approval pair, so the session remains working until the completed `turn/end`, which `parseTurnEnd` maps to the ready boundary. The parser therefore represents every user-observable signal required by this safe-path cell: ready to working to ready, a real successful tool call, and no waiting transition.\n\nThe session is a single-birth adapter. The v3 transcript and stable `session-<uuid>` ID exist at TUI launch before the first turn. The phases therefore anchor the real session directly to start and pin later phases to it. Observations use the model and token signal already measured in the existing DeepSeek Harness tool-call recording. Cost stays false because the configured LM Studio model has no priced provider mapping.\n\n## Driver capability and timing\n\nThe recipe needs only `send`, `wait_turn`, and `sleep`. The interactive driver implements all three. It reads `permission_mode` from recipe settings and exports it as `DSH_PERMISSION_MODE` for the launched TUI. The 240-second budget covers the measured local qwen tool turn. The final 10-second sleep matches the longest committed sibling delay for this scenario and lets irrlichd observe the terminal ready state.\n\n## Vacuous-pass check\n\nThis cell would pass while proving nothing about classification if the TUI launched in `danger-full-access`, because that preset changes approval policy to `never` and pre-approves every call. The workspace-write recipe setting and the three exact durable policy assertions are therefore load-bearing. The successful bash assertion also prevents a direct model reply from satisfying only the lifecycle phases.",
+      "caveats": [
+        "Vacuous-pass condition: if the active TUI launches with danger-full-access and approval policy never, a no-waiting result proves only blanket pre-approval. The recipe pins workspace-write, and the spec requires the durable workspace-write plus ask initialization facts.",
+        "Load-bearing environment property: re-probe at record time that the installed TUI composition still maps DSH_PERMISSION_MODE=workspace-write to sandbox mode workspace-write and approval policy ask.",
+        "The local qwen/qwen3.5-9b model must remain available and tool-capable. The model is available now and has emitted a valid bash round trip in the existing 2.2 recording, but model output is nondeterministic.",
+        "Emission under workspace-write remains provisional until record. The official installed packages define the safe sandbox path and the gated wider-retry path, while the live recording must confirm that this exact prompt emits one confined successful call without an approval pair.",
+        "This cell captures only the safe branch. The separate tool-gate-permission-prompt scenario owns the risky waiting and approval branch, matching the claudecode sibling split."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-base/cordis.patch.yml",
+          "note": "The shipped base composition reads DSH_PERMISSION_MODE into sandbox-policy, maps workspace-write to approval policy ask, maps danger-full-access to never, and mounts the sandboxed bash tool plus permission presets."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-permission-presets/README.md",
+          "note": "Official installed package documentation defines workspace-write as sandbox workspace-write plus approval ask and danger-full-access as sandbox danger-full-access plus approval never."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-tool-bash/README.md",
+          "note": "Official installed tool documentation states that ordinary commands run under the active sandbox and that only a strictly wider retry with sandbox_permissions and justification asks for approval before execution."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-user-approval/lib/index.js",
+          "note": "The shipped approval implementation appends approval/asked before dispatch and approval/decided after the result; policy never rejects before interactive dispatch, while ask delegates to the TUI answerer."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser.go",
+          "note": "Maps turn/start, completed turn/end, tool call/result, and approval asked/decided records into the daemon lifecycle and permission signals."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser_test.go",
+          "note": "Exercises the DSH tool lifecycle, approval lifecycle, completed turn boundary, and qwen usage shapes."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "Reads recipe permission_mode, exports DSH_PERMISSION_MODE, applies the fixed LM Studio model, and implements send, wait_turn, and sleep against the durable compressed transcript."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/scenarios/2-2_auto-executed-tool-call/recordings/2026-09-18-15-25-34_irrlichd-0.6.4+a129cca/transcript.jsonl.zstd",
+          "note": "Measured qwen/qwen3.5-9b recording with one bash pwd call, its successful result, a completed turn boundary, model usage, and the durable permission initialization records."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/2-11_auto-classified-permission/expected.jsonl",
+          "note": "The reference sibling scopes this cell to the safe no-waiting branch and assigns the risky branch to tool-gate-permission-prompt."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "timeout_seconds": 240,
+      "settings": {
+        "model": "qwen/qwen3.5-9b",
+        "base_url": "http://127.0.0.1:1234/v1",
+        "context_window": 262144,
+        "permission_mode": "workspace-write",
+        "api_key": "irrlicht-local-recording"
+      },
+      "preconditions": [
+        "dsh >=0.1.5-rc.2 is installed and on PATH, and the community TUI profile is installed under the active DSH home",
+        "re-probe at record time that LM Studio serves the tool-capable qwen/qwen3.5-9b model through http://127.0.0.1:1234/v1",
+        "re-probe at record time that DSH_PERMISSION_MODE=workspace-write maps to sandbox mode workspace-write and approval policy ask in the active TUI composition",
+        "tmux and zstd are installed",
+        "irrlichd is recording the deepseek-harness adapter with transcript permission granted"
+      ],
+      "setup": [
+        "The interactive driver creates a fresh empty cwd and a pre-launch transcript marker.",
+        "The driver applies a temporary LM Studio patch for qwen/qwen3.5-9b and exports DSH_PERMISSION_MODE=workspace-write without modifying the installed profile.",
+        "The driver resolves the new session.v3.jsonl.zstd by marker, session header cwd, and session ID, then keeps the TUI alive through the settle window."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Use the bash tool exactly once to run pwd with the normal confined permissions. Do not request sandbox escalation. Then reply with exactly: done"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 10
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the real session-UUID row entering ready, then working, then ready, with no transition to waiting",
+        "the compressed transcript starts with permission/preset workspace-write, sandbox/mode workspace-write, and approval/policy ask",
+        "the turn contains exactly one bash call for pwd and its matching successful tool result",
+        "the transcript contains no approval/asked or approval/decided record, which proves the safe call did not open a permission prompt while ask policy was active",
+        "turn/end has reason kind completed, final state is ready, model is qwen/qwen3.5-9b, and tokens are non-zero"
+      ],
+      "scope_note": "Uses a 10-second trailing settle, matching the longest committed sibling delay for this scenario. DSH has an explicit completed turn/end boundary, but the shared delay lets irrlichd publish the terminal ready state before teardown."
+    }
+  }
+}
