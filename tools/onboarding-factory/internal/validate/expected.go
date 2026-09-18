@@ -80,6 +80,12 @@ type ExpectedMeta struct {
 	// Absent → no hard metric assertions (the soft-diff vs the prior recording
 	// still runs in ValidateObservations).
 	Observations *ObservationSpec `json:"observations,omitempty"`
+	// TranscriptAssertions verify durable record content that lifecycle phases
+	// and replay-summary metrics cannot express, such as exact tool rounds.
+	TranscriptAssertions []RecordAssertion `json:"transcript_assertions,omitempty"`
+	// EventAssertions verify relationships between captured daemon events that
+	// lifecycle phases cannot express, such as distinct PIDs and path ownership.
+	EventAssertions []RecordAssertion `json:"event_assertions,omitempty"`
 }
 
 // ObservationSpec is the optional metric-assertion block of an expected.jsonl
@@ -92,10 +98,9 @@ type ObservationSpec struct {
 	TokensNonzero bool    `json:"tokens_nonzero,omitempty"` // cum_input+output > 0
 	TolerancePct  float64 `json:"tolerance_pct,omitempty"`  // soft-diff band vs prior (default 50)
 
-	// Store-derived context/token assertions (#766) for adapters whose usage
-	// lives in an out-of-band store rather than the transcript (antigravity's
-	// conversations/<conv>.db, #719). These read the golden's store-derived
-	// vector, which is distinct from the cum_input+output TokensNonzero covers.
+	// Direct context/token assertions (#766) for adapters whose parser exposes a
+	// complete context vector. This vector is distinct from the cumulative input
+	// and output token fields that TokensNonzero covers.
 	TotalTokensNonzero        bool `json:"total_tokens_nonzero,omitempty"`        // summary.total_tokens > 0
 	ContextWindowNonzero      bool `json:"context_window_nonzero,omitempty"`      // summary.context_window > 0
 	ContextUtilizationNonzero bool `json:"context_utilization_nonzero,omitempty"` // summary.context_utilization_percentage > 0

@@ -14,7 +14,9 @@ import (
 	"strings"
 	"time"
 
+	"irrlicht/core/application/replayengine"
 	"irrlicht/tools/onboarding-factory/internal/matrix"
+	internalreplay "irrlicht/tools/onboarding-factory/internal/replay"
 	"irrlicht/tools/onboarding-factory/internal/shard"
 	"irrlicht/tools/onboarding-factory/internal/validate"
 )
@@ -227,7 +229,7 @@ func populateLatestRecordingFields(d *ScenarioDetail, store RecordingStore, scen
 			d.Meta = synth
 		}
 	}
-	d.Tools = extractToolCalls(filepath.Join(recDir, "transcript.jsonl"))
+	d.Tools = extractToolCalls(recordingTranscriptPath(store, recDir))
 	d.LatestManifest = buildLatestManifest(recDir, d, store)
 }
 
@@ -370,20 +372,47 @@ func recipeHashOf(raw json.RawMessage) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// extractToolCalls walks transcript.jsonl for Anthropic-style tool_use
-// blocks inside message.content[], in chronological order. Empty when the
-// transcript has no tool calls or isn't JSONL (e.g. aider's .md).
+// recordingTranscriptPath selects the same preferred transcript format as the
+// replay gates while keeping existence checks behind the recording store.
+func recordingTranscriptPath(store RecordingStore, dir string) string {
+	for _, name := range internalreplay.TranscriptNames {
+		path := filepath.Join(dir, name)
+		if store.exists(path) {
+			return path
+		}
+	}
+	return ""
+}
+
+// extractToolCalls walks a plain or compressed JSONL transcript in
+// chronological order. Empty when the transcript has no tool calls or is not
+// JSONL (for example, aider's Markdown transcript).
 func extractToolCalls(transcriptPath string) []ToolCall {
-	f, err := os.Open(transcriptPath)
-	if err != nil {
+	if transcriptPath == "" || strings.HasSuffix(transcriptPath, ".md") {
 		return nil
 	}
-	defer f.Close()
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	var out []ToolCall
-	for scanner.Scan() {
-		out = append(out, toolCallsInLine(scanner.Bytes())...)
+	var currentSessionID string
+	if err := replayengine.ScanTranscriptLines(transcriptPath, func(line []byte) error {
+		var raw map[string]any
+		if err := json.Unmarshal(line, &raw); err != nil {
+			return nil
+		}
+		if recordType, _ := raw["type"].(string); recordType == "session" {
+			if id, _ := raw["id"].(string); id != "" {
+				currentSessionID = id
+			}
+		}
+		calls := toolCallsInRecord(raw)
+		for i := range calls {
+			if calls[i].SessionID == "" {
+				calls[i].SessionID = currentSessionID
+			}
+		}
+		out = append(out, calls...)
+		return nil
+	}); err != nil {
+		return nil
 	}
 	return out
 }
@@ -395,6 +424,19 @@ func toolCallsInLine(line []byte) []ToolCall {
 	var raw map[string]any
 	if err := json.Unmarshal(line, &raw); err != nil {
 		return nil
+	}
+	return toolCallsInRecord(raw)
+}
+
+func toolCallsInRecord(raw map[string]any) []ToolCall {
+	if recordType, _ := raw["type"].(string); recordType == "tool/call" {
+		data, _ := raw["data"].(map[string]any)
+		name, _ := data["name"].(string)
+		id, _ := data["callId"].(string)
+		if name == "" || id == "" {
+			return nil
+		}
+		return []ToolCall{{Ts: transcriptTimestamp(raw), Name: name, ID: id}}
 	}
 	msg, _ := raw["message"].(map[string]any)
 	if msg == nil {
@@ -420,6 +462,18 @@ func toolCallsInLine(line []byte) []ToolCall {
 		out = append(out, ToolCall{Ts: ts, SessionID: sid, Name: name, ID: id})
 	}
 	return out
+}
+
+func transcriptTimestamp(raw map[string]any) string {
+	if ts, _ := raw["timestamp"].(string); ts != "" {
+		return ts
+	}
+	for _, key := range []string{"time", "createdAt"} {
+		if millis, ok := raw[key].(float64); ok && millis > 0 {
+			return time.UnixMilli(int64(millis)).UTC().Format(time.RFC3339Nano)
+		}
+	}
+	return ""
 }
 
 // synthesizeMetaFromEvents builds a recording-meta.json-compatible summary

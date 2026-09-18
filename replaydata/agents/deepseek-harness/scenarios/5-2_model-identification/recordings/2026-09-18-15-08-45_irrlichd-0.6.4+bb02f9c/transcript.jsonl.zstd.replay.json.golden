@@ -22,7 +22,10 @@
     "flickers_by_reason": {},
     "cum_input_tokens": 12170,
     "cum_output_tokens": 27,
-    "model_name": "qwen/qwen3.5-9b"
+    "model_name": "qwen/qwen3.5-9b",
+    "total_tokens": 12197,
+    "context_window": 262144,
+    "context_utilization_percentage": 4.6527862548828125
   },
   "transitions": [
     {

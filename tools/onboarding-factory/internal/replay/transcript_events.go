@@ -1,7 +1,6 @@
 package replay
 
 import (
-	"bufio"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -18,7 +17,8 @@ import (
 )
 
 // SynthesizeEventsFromTranscript builds a lifecycle event stream from a
-// recording's transcript file (transcript.jsonl or transcript.md). Used
+// recording's transcript file (transcript.jsonl, transcript.jsonl.zstd, or
+// transcript.md). Used
 // by LoadEventsOrSynthesize when the recording predates the events.jsonl
 // recorder — i.e. there is no daemon-produced sidecar to replay.
 //
@@ -35,9 +35,8 @@ import (
 // approximation because aider transcripts carry no per-line timestamps.
 //
 // TranscriptNames are the transcript filenames a recording may carry, in
-// PREFERENCE order: a recording carrying both is read as the jsonl one, because
-// internal/validate/expected.go treats that shape as ambiguous and the choice
-// must not fall to directory iteration order.
+// PREFERENCE order. A recording with more than one format uses this order for
+// deterministic diagnostics; internal/validate rejects that ambiguous shape.
 //
 // Exported because it is the catalog's rule rather than this function's: the
 // replay gates' catalog walk pairs a sidecar with a transcript by exactly this
@@ -47,6 +46,21 @@ import (
 // transcript.jsonl alone, so every aider recording was graded by the sweep and
 // by no gate.
 var TranscriptNames = []string{"transcript.jsonl", "transcript.jsonl.zstd", "transcript.md"}
+
+// TranscriptPath returns the preferred transcript in dir, or an empty string
+// when the directory is unsafe or contains no supported transcript format.
+func TranscriptPath(dir string) string {
+	if hasParentTraversal(dir) {
+		return ""
+	}
+	for _, name := range TranscriptNames {
+		path := filepath.Join(dir, name)
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	return ""
+}
 
 // Returns nil if no transcript is present at any expected name.
 func SynthesizeEventsFromTranscript(scenarioDir, adapter string) []lifecycle.Event {
@@ -133,23 +147,31 @@ func resolveParser(adapter string) (string, tailer.TranscriptParser) {
 // firstSessionID scans a JSONL transcript for the first session id it can
 // find across the adapter-specific field names. Returns "" if none.
 func firstSessionID(path string) string {
-	f, ok := openTaintGuarded(path)
-	if !ok {
+	if hasParentTraversal(path) {
 		return ""
 	}
-	defer f.Close()
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
-	for scanner.Scan() {
+	var found string
+	err := replayengine.ScanTranscriptLines(path, func(line []byte) error {
+		if found != "" {
+			return nil
+		}
 		var raw map[string]any
-		if err := json.Unmarshal(scanner.Bytes(), &raw); err != nil {
-			continue
+		if err := json.Unmarshal(line, &raw); err != nil {
+			return nil
 		}
 		if sid := extractLineSession(raw); sid != "" {
-			return sid
+			found = sid
+			return nil
 		}
+		if recordType, _ := raw["type"].(string); recordType == "session" {
+			found, _ = raw["id"].(string)
+		}
+		return nil
+	})
+	if err != nil {
+		return ""
 	}
-	return ""
+	return found
 }
 
 // extractLineTime tries the two timestamp conventions we've seen:
@@ -166,6 +188,11 @@ func extractLineTime(raw map[string]any) (time.Time, bool) {
 	if v, ok := raw["ts"].(string); ok && v != "" {
 		if t, err := time.Parse(time.RFC3339Nano, v); err == nil {
 			return t, true
+		}
+	}
+	for _, key := range []string{"time", "createdAt"} {
+		if v, ok := raw[key].(float64); ok && v > 0 {
+			return time.UnixMilli(int64(v)).UTC(), true
 		}
 	}
 	return time.Time{}, false
@@ -189,6 +216,14 @@ func extractLineRole(raw map[string]any) string {
 		case "user":
 			return "user"
 		case "assistant":
+			return "assistant"
+		case "user/message":
+			data, _ := raw["data"].(map[string]any)
+			source, _ := data["source"].(map[string]any)
+			if kind, _ := source["kind"].(string); kind == "user" {
+				return "user"
+			}
+		case "assistant/message":
 			return "assistant"
 		}
 	}
@@ -218,6 +253,16 @@ func extractLineRole(raw map[string]any) string {
 func extractLineText(raw map[string]any) string {
 	if v, ok := raw["text"].(string); ok && v != "" {
 		return v
+	}
+	if data, ok := raw["data"].(map[string]any); ok {
+		if message, ok := data["message"].(map[string]any); ok {
+			if content, ok := message["content"].([]any); ok {
+				return extractTextFromBlocks(content)
+			}
+		}
+		if content, ok := data["content"].([]any); ok {
+			return extractTextFromBlocks(content)
+		}
 	}
 	msg, ok := raw["message"].(map[string]any)
 	if !ok {
@@ -369,55 +414,61 @@ func LoadTurnMarkers(scenarioDir string, anchor time.Time) []TurnMarker {
 	if hasParentTraversal(scenarioDir) {
 		return nil
 	}
-	for _, name := range []string{"transcript.jsonl"} {
-		path := filepath.Join(scenarioDir, name)
-		if _, err := os.Stat(path); err != nil {
-			continue
-		}
-		return loadTurnsFromJSONL(path, anchor)
+	path := TranscriptPath(scenarioDir)
+	if path == "" || strings.HasSuffix(path, ".md") {
+		return nil
 	}
-	return nil
+	return loadTurnsFromJSONL(path, anchor)
 }
 
 const turnTextMax = 240
 
 func loadTurnsFromJSONL(path string, anchor time.Time) []TurnMarker {
-	f, ok := openTaintGuarded(path)
-	if !ok {
+	if hasParentTraversal(path) {
 		return nil
 	}
-	defer f.Close()
-
 	var out []TurnMarker
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
-	for scanner.Scan() {
+	var currentSessionID string
+	err := replayengine.ScanTranscriptLines(path, func(line []byte) error {
 		var raw map[string]any
-		if err := json.Unmarshal(scanner.Bytes(), &raw); err != nil {
-			continue
+		if err := json.Unmarshal(line, &raw); err != nil {
+			return nil
+		}
+		if recordType, _ := raw["type"].(string); recordType == "session" {
+			if id, _ := raw["id"].(string); id != "" {
+				currentSessionID = id
+			}
 		}
 		role := extractLineRole(raw)
 		if role != "user" && role != "assistant" {
-			continue
+			return nil
 		}
 		ts, ok := extractLineTime(raw)
 		if !ok {
-			continue
+			return nil
 		}
 		text := extractLineText(raw)
 		if text == "" {
-			continue
+			return nil
 		}
 		offset := ts.Sub(anchor).Milliseconds()
 		if offset < 0 {
 			offset = 0
 		}
+		sessionID := extractLineSession(raw)
+		if sessionID == "" {
+			sessionID = currentSessionID
+		}
 		out = append(out, TurnMarker{
 			OffsetMs:  offset,
 			Role:      role,
 			Text:      truncateForTooltip(text, turnTextMax),
-			SessionID: extractLineSession(raw),
+			SessionID: sessionID,
 		})
+		return nil
+	})
+	if err != nil {
+		return nil
 	}
 	return out
 }

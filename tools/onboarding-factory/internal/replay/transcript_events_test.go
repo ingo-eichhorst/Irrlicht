@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
+
 	"irrlicht/core/domain/lifecycle"
 )
 
@@ -153,6 +155,40 @@ func TestLoadEventsOrSynthesize_rejectsPathTraversal(t *testing.T) {
 func TestLoadTurnMarkers_rejectsPathTraversal(t *testing.T) {
 	if got := LoadTurnMarkers("../../etc", time.Now()); got != nil {
 		t.Errorf("LoadTurnMarkers(traversal) = %v; want nil", got)
+	}
+}
+
+func TestLoadTurnMarkers_readsCompressedDSHMessages(t *testing.T) {
+	const sessionID = "session-00000000-0000-0000-0000-000000000001"
+	lines := "" +
+		`{"type":"session","id":"` + sessionID + `","createdAt":1000}` + "\n" +
+		`{"type":"user/message","time":2000,"data":{"source":{"kind":"user"},"content":[{"type":"text","text":"hello"}]}}` + "\n" +
+		`{"type":"user/message","time":2100,"data":{"source":{"kind":"plugin"},"content":[{"type":"text","text":"hidden context"}]}}` + "\n" +
+		`{"type":"assistant/message","time":3000,"data":{"message":{"role":"assistant","content":[{"type":"text","text":"world"}]}}}` + "\n"
+
+	encoder, err := zstd.NewWriter(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer encoder.Close()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "transcript.jsonl.zstd")
+	if err := os.WriteFile(path, encoder.EncodeAll([]byte(lines), nil), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := firstSessionID(path); got != sessionID {
+		t.Fatalf("firstSessionID() = %q, want %q", got, sessionID)
+	}
+
+	got := LoadTurnMarkers(dir, time.UnixMilli(1000).UTC())
+	if len(got) != 2 {
+		t.Fatalf("LoadTurnMarkers() returned %d markers, want 2: %#v", len(got), got)
+	}
+	if got[0].Role != "user" || got[0].Text != "hello" || got[0].OffsetMs != 1000 || got[0].SessionID != sessionID {
+		t.Errorf("user marker = %#v", got[0])
+	}
+	if got[1].Role != "assistant" || got[1].Text != "world" || got[1].OffsetMs != 2000 || got[1].SessionID != sessionID {
+		t.Errorf("assistant marker = %#v", got[1])
 	}
 }
 

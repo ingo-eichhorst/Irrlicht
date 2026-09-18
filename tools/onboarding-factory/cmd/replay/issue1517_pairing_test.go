@@ -37,10 +37,9 @@ import (
 // The ORDER is part of the rule rather than an accident of iteration:
 // internal/validate/expected.go treats a recording carrying both names as
 // ambiguous, so the walk must not let directory order decide. No committed
-// recording has both today — measured over the whole catalog: 396 sidecars,
-// 365 beside a transcript.jsonl, 31 beside a transcript.md, none with both and
-// none with neither — and TestPairedTranscriptPrefersJSONL pins the tie-break
-// so it stays decided if one ever does.
+// recording has multiple transcript formats today. The machine-generated
+// census below owns the live totals; TestPairedTranscriptPrefersJSONL pins the
+// tie-break so it stays decided if one ever does.
 var transcriptNames = internalreplay.TranscriptNames
 
 // pairedTranscript returns the transcript sitting beside a sidecar in dir, and
@@ -86,6 +85,13 @@ func TestPairedTranscriptPrefersJSONL(t *testing.T) {
 			"#1517 itself: every aider recording is this shape, and a rule that answers false "+
 			"here hides all 31 from every Go gate while tools/replay-fixtures.sh grades them",
 			filepath.Base(got), ok)
+	}
+
+	zstdOnly := t.TempDir()
+	writeFile(t, filepath.Join(zstdOnly, "transcript.jsonl.zstd"), "compressed fixture bytes\n")
+	if got, ok := pairedTranscript(zstdOnly); !ok || filepath.Base(got) != "transcript.jsonl.zstd" {
+		t.Errorf("a compressed-JSONL-only recording paired with (%q, %v), want transcript.jsonl.zstd — "+
+			"DeepSeek Harness recordings use only that native format", filepath.Base(got), ok)
 	}
 
 	if got, ok := pairedTranscript(t.TempDir()); ok {

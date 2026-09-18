@@ -345,34 +345,17 @@ func (r *replayer) emit(eventIdx int, virtTime time.Time, cause Cause, prev, nex
 }
 
 func loadEvents(path string) ([]rawEvent, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	var input io.Reader = f
-	if strings.HasSuffix(path, ".zstd") {
-		decoder, decodeErr := zstd.NewReader(f, zstd.WithDecoderConcurrency(1))
-		if decodeErr != nil {
-			return nil, fmt.Errorf("open zstd transcript: %w", decodeErr)
-		}
-		defer decoder.Close()
-		input = decoder
-	}
-
-	scanner := bufio.NewScanner(input)
-	scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
-
 	var out []rawEvent
 	idx := 0
-	for scanner.Scan() {
-		line := append([]byte(nil), scanner.Bytes()...)
+	err := ScanTranscriptLines(path, func(lineBytes []byte) error {
+		line := append([]byte(nil), lineBytes...)
 		line = append(line, '\n')
 
-		out = append(out, rawEvent{Index: idx, Bytes: line, Time: parseEventTimestamp(scanner.Bytes())})
+		out = append(out, rawEvent{Index: idx, Bytes: line, Time: parseEventTimestamp(lineBytes)})
 		idx++
-	}
-	if err := scanner.Err(); err != nil {
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
 
@@ -383,6 +366,38 @@ func loadEvents(path string) ([]rawEvent, error) {
 		out[i].Index = i
 	}
 	return out, nil
+}
+
+// ScanTranscriptLines visits every JSONL record in a plain or Zstandard-
+// compressed transcript. The byte slice is valid only until visit returns.
+func ScanTranscriptLines(path string, visit func([]byte) error) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	var input io.Reader = f
+	if strings.HasSuffix(path, ".zstd") {
+		decoder, decodeErr := zstd.NewReader(f, zstd.WithDecoderConcurrency(1))
+		if decodeErr != nil {
+			return fmt.Errorf("open zstd transcript: %w", decodeErr)
+		}
+		defer decoder.Close()
+		input = decoder
+	}
+
+	scanner := bufio.NewScanner(input)
+	scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
+
+	for scanner.Scan() {
+		if err := visit(scanner.Bytes()); err != nil {
+			return err
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // parseEventTimestamp extracts one transcript line's explicit timestamp from

@@ -423,7 +423,7 @@ func runAgentAdd(args []string, stdout, stderr io.Writer) int {
 // --add-prereq cannot silently reset a name or provider. --prereq REPLACES the
 // whole list; --add-prereq APPENDS (skipping exact duplicates, so re-running a
 // promotion is idempotent). scenarios.json is touched only when --min-version
-// is passed, for the same reason.
+// or --transcript-extension is passed, for the same reason.
 func runAgentUpdate(args []string, stdout, stderr io.Writer) int {
 	fs := newFlagSet("of agent update")
 	var prereqs, addPrereqs prereqFlag

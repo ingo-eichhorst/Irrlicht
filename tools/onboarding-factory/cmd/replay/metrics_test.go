@@ -59,13 +59,10 @@ func TestFinalizeSummaryTasks(t *testing.T) {
 	}
 }
 
-// TestFinalizeSummaryStoreDerivedContext pins the #766 store-derived context
-// surfacing: antigravity keeps token usage in an out-of-band SQLite store
-// (#719), so finalizeSummary lifts TotalTokens/ContextWindow/ContextUtilization
-// into the golden summary ONLY for that adapter — keeping every cum-token
-// adapter's golden byte-identical. The end-to-end resolution from a captured
-// store is proven by the antigravity replaystore test; this guards the gate.
-func TestFinalizeSummaryStoreDerivedContext(t *testing.T) {
+// TestFinalizeSummaryDirectContext pins the adapters whose parsers provide a
+// complete context vector. Antigravity reads it from SQLite. DSH reads it from
+// its durable transcript. Other cumulative-token adapters remain unchanged.
+func TestFinalizeSummaryDirectContext(t *testing.T) {
 	storeMetrics := &tailer.SessionMetrics{
 		TotalTokens:        16353,
 		ContextWindow:      1048576,
@@ -81,6 +78,7 @@ func TestFinalizeSummaryStoreDerivedContext(t *testing.T) {
 		wantCtxUtilPos bool
 	}{
 		{name: "antigravity surfaces the store vector", adapter: "antigravity", metrics: storeMetrics, wantTotalToks: 16353, wantCtxWindow: 1048576, wantCtxUtilPos: true},
+		{name: "dsh surfaces the durable context vector", adapter: "dsh", metrics: storeMetrics, wantTotalToks: 16353, wantCtxWindow: 1048576, wantCtxUtilPos: true},
 		{name: "other adapter leaves it zero", adapter: "claudecode", metrics: storeMetrics, wantTotalToks: 0, wantCtxWindow: 0, wantCtxUtilPos: false},
 		{name: "antigravity with no store stays zero", adapter: "antigravity", metrics: &tailer.SessionMetrics{ModelName: "gemini-3.5-flash"}, wantTotalToks: 0, wantCtxWindow: 0, wantCtxUtilPos: false},
 	}

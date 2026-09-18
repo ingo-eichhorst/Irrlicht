@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"irrlicht/core/adapters/inbound/agents/antigravity"
+	"irrlicht/core/adapters/inbound/agents/dsh"
 	"irrlicht/core/domain/session"
 	"irrlicht/core/pkg/tailer"
 )
@@ -49,14 +50,11 @@ func finalizeSummary(report *replayReport, consumed int, stateDurations map[stri
 		report.Summary.CumCacheReadTokens = lastMetrics.CumCacheReadTokens
 		report.Summary.CumCacheCreationTokens = lastMetrics.CumCacheCreationTokens
 		report.Summary.ModelName = lastMetrics.ModelName
-		// Store-derived context vector (#766): antigravity keeps token usage in an
-		// out-of-band SQLite store (conversations/<conv>.db, #719), so its turn
-		// snapshots set TotalTokens (and the derived ContextWindow/ContextUtilization)
-		// with no in-transcript per-turn usage. Surface them so `of verify` can
-		// assert the context+token half the matrix was blind to. Scoped to this
-		// adapter so every other golden stays byte-identical — kiro-cli's #599
-		// sidecar shares the signature and could opt in the same way later.
-		if adapter == antigravity.AdapterName && lastMetrics.TotalTokens > 0 {
+		// Surface context vectors only for adapters with direct, verified sources:
+		// antigravity's captured SQLite store (#719/#766), and DSH's durable
+		// request/context record. Keeping this allowlist prevents a capacity-table
+		// fallback from silently becoming fixture evidence for other adapters.
+		if (adapter == antigravity.AdapterName || adapter == dsh.AdapterName) && lastMetrics.TotalTokens > 0 {
 			report.Summary.TotalTokens = lastMetrics.TotalTokens
 			report.Summary.ContextWindow = lastMetrics.ContextWindow
 			report.Summary.ContextUtilization = lastMetrics.ContextUtilization
