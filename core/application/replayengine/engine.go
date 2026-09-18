@@ -376,16 +376,18 @@ func ScanTranscriptLines(path string, visit func([]byte) error) error {
 		return err
 	}
 	defer f.Close()
-	var input io.Reader = f
-	if strings.HasSuffix(path, ".zstd") {
-		decoder, decodeErr := zstd.NewReader(f, zstd.WithDecoderConcurrency(1))
-		if decodeErr != nil {
-			return fmt.Errorf("open zstd transcript: %w", decodeErr)
-		}
-		defer decoder.Close()
-		input = decoder
+	if !strings.HasSuffix(path, ".zstd") {
+		return scanTranscriptReader(f, visit)
 	}
+	decoder, err := zstd.NewReader(f, zstd.WithDecoderConcurrency(1))
+	if err != nil {
+		return fmt.Errorf("open zstd transcript: %w", err)
+	}
+	defer decoder.Close()
+	return scanTranscriptReader(decoder, visit)
+}
 
+func scanTranscriptReader(input io.Reader, visit func([]byte) error) error {
 	scanner := bufio.NewScanner(input)
 	scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
 
@@ -394,10 +396,7 @@ func ScanTranscriptLines(path string, visit func([]byte) error) error {
 			return err
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		return err
-	}
-	return nil
+	return scanner.Err()
 }
 
 // parseEventTimestamp extracts one transcript line's explicit timestamp from

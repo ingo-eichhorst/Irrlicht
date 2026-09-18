@@ -146,29 +146,56 @@ func validateRecordAssertionSpec(kind string, assertion RecordAssertion) error {
 	if assertion.Name == "" {
 		return fmt.Errorf("%s assertion has no name", kind)
 	}
-	if len(assertion.Where) == 0 && len(assertion.Contains) == 0 {
+	if !hasSelector(assertion.Where, assertion.Contains) {
 		return fmt.Errorf("%s assertion %q has no selector", kind, assertion.Name)
 	}
-	if assertion.MinCount < 0 || assertion.MaxCount != nil && *assertion.MaxCount < assertion.MinCount {
+	if !validCountRange(assertion.MinCount, assertion.MaxCount) {
 		return fmt.Errorf("%s assertion %q has an invalid count range", kind, assertion.Name)
 	}
-	if assertion.Related != nil {
-		if assertion.Related.SourcePath == "" || assertion.Related.TargetPath == "" ||
-			len(assertion.Related.Where) == 0 && len(assertion.Related.Contains) == 0 {
-			return fmt.Errorf("%s assertion %q has an incomplete related-record selector", kind, assertion.Name)
-		}
+	if !validRelatedAssertion(assertion.Related) {
+		return fmt.Errorf("%s assertion %q has an incomplete related-record selector", kind, assertion.Name)
 	}
-	for path, minimum := range assertion.MinDistinct {
-		if path == "" || minimum < 1 {
-			return fmt.Errorf("%s assertion %q has an invalid distinct-value requirement", kind, assertion.Name)
-		}
+	if !validDistinctRequirements(assertion.MinDistinct) {
+		return fmt.Errorf("%s assertion %q has an invalid distinct-value requirement", kind, assertion.Name)
 	}
-	for _, relation := range assertion.FieldContains {
-		if relation.ValuePath == "" || relation.ContainerPath == "" {
-			return fmt.Errorf("%s assertion %q has an incomplete field-contains requirement", kind, assertion.Name)
-		}
+	if !validFieldContainsRequirements(assertion.FieldContains) {
+		return fmt.Errorf("%s assertion %q has an incomplete field-contains requirement", kind, assertion.Name)
 	}
 	return nil
+}
+
+func hasSelector(where map[string]any, contains map[string]string) bool {
+	return len(where) > 0 || len(contains) > 0
+}
+
+func validCountRange(minimum int, maximum *int) bool {
+	return minimum >= 0 && (maximum == nil || *maximum >= minimum)
+}
+
+func validRelatedAssertion(assertion *RelatedRecordAssertion) bool {
+	if assertion == nil {
+		return true
+	}
+	return assertion.SourcePath != "" && assertion.TargetPath != "" &&
+		hasSelector(assertion.Where, assertion.Contains)
+}
+
+func validDistinctRequirements(requirements map[string]int) bool {
+	for path, minimum := range requirements {
+		if path == "" || minimum < 1 {
+			return false
+		}
+	}
+	return true
+}
+
+func validFieldContainsRequirements(requirements []FieldContainsAssertion) bool {
+	for _, requirement := range requirements {
+		if requirement.ValuePath == "" || requirement.ContainerPath == "" {
+			return false
+		}
+	}
+	return true
 }
 
 func readJSONLRecords(path, kind string) ([]map[string]any, error) {
@@ -205,52 +232,87 @@ func evaluateRecordAssertions(kind string, assertions []RecordAssertion, records
 
 func evaluateRecordAssertion(assertion RecordAssertion, records []map[string]any) RecordAssertResult {
 	matched := selectRecords(records, assertion.Where, assertion.Contains)
-	ok := len(matched) >= assertion.MinCount
-	expected := fmt.Sprintf("count >= %d", assertion.MinCount)
-	if assertion.MaxCount != nil {
-		ok = ok && len(matched) <= *assertion.MaxCount
-		expected += fmt.Sprintf(" and <= %d", *assertion.MaxCount)
-	}
-	details := fmt.Sprintf("count = %d", len(matched))
-
-	if assertion.Related != nil {
-		related := selectRecords(records, assertion.Related.Where, assertion.Related.Contains)
-		for _, record := range matched {
-			value, exists := valueAtPath(record, assertion.Related.SourcePath)
-			if !exists || !recordsContainValue(related, assertion.Related.TargetPath, value) {
-				ok = false
-			}
-		}
-		expected += ", each with a related record"
-	}
-	for _, path := range assertion.EqualPaths {
-		if !allPathValuesEqual(matched, path) {
-			ok = false
-		}
-		expected += ", equal " + path
-	}
-	for path, minimum := range assertion.MinDistinct {
-		count := distinctPathValues(matched, path)
-		if count < minimum {
-			ok = false
-		}
-		details += fmt.Sprintf(", distinct %s = %d", path, count)
-		expected += fmt.Sprintf(", distinct %s >= %d", path, minimum)
-	}
-	for _, relation := range assertion.FieldContains {
-		if !allFieldsContain(matched, relation.ValuePath, relation.ContainerPath) {
-			ok = false
-		}
-		expected += fmt.Sprintf(", each %s contains %s", relation.ContainerPath, relation.ValuePath)
-	}
-
+	evaluation := newRecordEvaluation(assertion, len(matched))
+	evaluation.checkRelated(assertion.Related, matched, records)
+	evaluation.checkEqualPaths(assertion.EqualPaths, matched)
+	evaluation.checkDistinct(assertion.MinDistinct, matched)
+	evaluation.checkFieldContains(assertion.FieldContains, matched)
 	name := assertion.Name
 	if name == "" {
 		name = "records"
 	}
 	return RecordAssertResult{
-		Name: name, Expected: expected, Actual: details, OK: ok,
+		Name: name, Expected: evaluation.expected, Actual: evaluation.actual, OK: evaluation.ok,
 		KnownFailing: assertion.KnownFailing,
+	}
+}
+
+type recordEvaluation struct {
+	ok       bool
+	expected string
+	actual   string
+}
+
+func newRecordEvaluation(assertion RecordAssertion, count int) *recordEvaluation {
+	evaluation := &recordEvaluation{
+		ok:       count >= assertion.MinCount,
+		expected: fmt.Sprintf("count >= %d", assertion.MinCount),
+		actual:   fmt.Sprintf("count = %d", count),
+	}
+	if assertion.MaxCount != nil {
+		evaluation.ok = evaluation.ok && count <= *assertion.MaxCount
+		evaluation.expected += fmt.Sprintf(" and <= %d", *assertion.MaxCount)
+	}
+	return evaluation
+}
+
+func (evaluation *recordEvaluation) checkRelated(
+	requirement *RelatedRecordAssertion,
+	matched []map[string]any,
+	records []map[string]any,
+) {
+	if requirement == nil {
+		return
+	}
+	related := selectRecords(records, requirement.Where, requirement.Contains)
+	for _, record := range matched {
+		value, exists := valueAtPath(record, requirement.SourcePath)
+		if !exists || !recordsContainValue(related, requirement.TargetPath, value) {
+			evaluation.ok = false
+		}
+	}
+	evaluation.expected += ", each with a related record"
+}
+
+func (evaluation *recordEvaluation) checkEqualPaths(paths []string, records []map[string]any) {
+	for _, path := range paths {
+		if !allPathValuesEqual(records, path) {
+			evaluation.ok = false
+		}
+		evaluation.expected += ", equal " + path
+	}
+}
+
+func (evaluation *recordEvaluation) checkDistinct(requirements map[string]int, records []map[string]any) {
+	for path, minimum := range requirements {
+		count := distinctPathValues(records, path)
+		if count < minimum {
+			evaluation.ok = false
+		}
+		evaluation.actual += fmt.Sprintf(", distinct %s = %d", path, count)
+		evaluation.expected += fmt.Sprintf(", distinct %s >= %d", path, minimum)
+	}
+}
+
+func (evaluation *recordEvaluation) checkFieldContains(
+	requirements []FieldContainsAssertion,
+	records []map[string]any,
+) {
+	for _, requirement := range requirements {
+		if !allFieldsContain(records, requirement.ValuePath, requirement.ContainerPath) {
+			evaluation.ok = false
+		}
+		evaluation.expected += fmt.Sprintf(", each %s contains %s", requirement.ContainerPath, requirement.ValuePath)
 	}
 }
 

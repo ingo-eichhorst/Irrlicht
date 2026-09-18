@@ -394,35 +394,45 @@ func extractToolCalls(transcriptPath string) []ToolCall {
 	var out []ToolCall
 	var currentSessionID string
 	if err := replayengine.ScanTranscriptLines(transcriptPath, func(line []byte) error {
-		var raw map[string]any
-		if err := json.Unmarshal(line, &raw); err != nil {
-			return nil
-		}
-		if recordType, _ := raw["type"].(string); recordType == "session" {
-			if id, _ := raw["id"].(string); id != "" {
-				currentSessionID = id
-			}
-		}
-		calls := toolCallsInRecord(raw)
-		for i := range calls {
-			if calls[i].SessionID == "" {
-				calls[i].SessionID = currentSessionID
-			}
-		}
+		calls, sessionID := toolCallsAndSession(line, currentSessionID)
+		currentSessionID = sessionID
 		out = append(out, calls...)
 		return nil
 	}); err != nil {
 		return nil
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		left, leftOK := parseToolCallTime(out[i].Ts)
-		right, rightOK := parseToolCallTime(out[j].Ts)
+	sortToolCalls(out)
+	return out
+}
+
+func toolCallsAndSession(line []byte, currentSessionID string) ([]ToolCall, string) {
+	var raw map[string]any
+	if err := json.Unmarshal(line, &raw); err != nil {
+		return nil, currentSessionID
+	}
+	if recordType, _ := raw["type"].(string); recordType == "session" {
+		if id, _ := raw["id"].(string); id != "" {
+			currentSessionID = id
+		}
+	}
+	calls := toolCallsInRecord(raw)
+	for i := range calls {
+		if calls[i].SessionID == "" {
+			calls[i].SessionID = currentSessionID
+		}
+	}
+	return calls, currentSessionID
+}
+
+func sortToolCalls(calls []ToolCall) {
+	sort.SliceStable(calls, func(i, j int) bool {
+		left, leftOK := parseToolCallTime(calls[i].Ts)
+		right, rightOK := parseToolCallTime(calls[j].Ts)
 		if leftOK != rightOK {
 			return leftOK
 		}
 		return leftOK && left.Before(right)
 	})
-	return out
 }
 
 func parseToolCallTime(value string) (time.Time, bool) {

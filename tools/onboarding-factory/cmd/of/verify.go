@@ -167,26 +167,35 @@ func printVerifyText(stdout io.Writer, agent, scenario string, state *validate.E
 }
 
 func printRecordReport(stdout io.Writer, label string, report *validate.RecordReport, accepted bool) {
+	fmt.Fprintf(stdout, "  %-12s %s — %d assert(s)\n", label+":", recordVerdict(report, accepted), len(report.Asserts))
+	for _, assertion := range report.Asserts {
+		fmt.Fprintf(stdout, "    %s %s: want %s; got %s\n", assertionMark(assertion), assertion.Name, assertion.Expected, assertion.Actual)
+	}
+}
+
+func recordVerdict(report *validate.RecordReport, accepted bool) string {
 	verdict := "PASS"
 	if report.Pass && !accepted {
-		verdict = "UNEXPECTED PASS"
-	} else if !report.Pass {
-		verdict = "FAIL"
-		if accepted {
-			verdict = "known_failing"
-		}
+		return "UNEXPECTED PASS"
 	}
-	fmt.Fprintf(stdout, "  %-12s %s — %d assert(s)\n", label+":", verdict, len(report.Asserts))
-	for _, assertion := range report.Asserts {
-		mark := "✓"
-		if assertion.OK && assertion.KnownFailing {
-			mark = "!"
-		} else if !assertion.OK {
-			mark = "✗"
-			if assertion.KnownFailing {
-				mark = "~"
-			}
-		}
-		fmt.Fprintf(stdout, "    %s %s: want %s; got %s\n", mark, assertion.Name, assertion.Expected, assertion.Actual)
+	if report.Pass {
+		return verdict
 	}
+	if accepted {
+		return "known_failing"
+	}
+	return "FAIL"
+}
+
+func assertionMark(assertion validate.RecordAssertResult) string {
+	if assertion.OK && assertion.KnownFailing {
+		return "!"
+	}
+	if assertion.OK {
+		return "✓"
+	}
+	if assertion.KnownFailing {
+		return "~"
+	}
+	return "✗"
 }

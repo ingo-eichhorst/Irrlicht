@@ -253,25 +253,51 @@ func TestCommittedRecordAssertions(t *testing.T) {
 			continue
 		}
 		checked++
-		if len(meta.TranscriptAssertions) > 0 {
-			report, err := ValidateTranscriptForProfile(scenarioDir, matrix.ProfileCLILocal)
-			if err != nil {
-				t.Errorf("%s: %v", expectedPath, err)
-			} else if report == nil || !report.Pass {
-				t.Errorf("%s: transcript assertions failed: %+v", expectedPath, report)
-			}
-		}
-		if len(meta.EventAssertions) > 0 {
-			report, err := ValidateEventsForProfile(scenarioDir, matrix.ProfileCLILocal)
-			if err != nil {
-				t.Errorf("%s: %v", expectedPath, err)
-			} else if report == nil || !report.ExpectedPass() {
-				t.Errorf("%s: event assertions failed: %+v", expectedPath, report)
-			}
-		}
+		checkCommittedTranscriptAssertions(t, expectedPath, scenarioDir, meta.TranscriptAssertions)
+		checkCommittedEventAssertions(t, expectedPath, scenarioDir, meta.EventAssertions)
 	}
 	if checked == 0 {
 		t.Fatal("no committed transcript or event assertions were discovered; the catalog gate checked nothing")
 	}
 	t.Logf("checked record assertions in %d committed cells", checked)
+}
+
+func checkCommittedTranscriptAssertions(
+	t *testing.T,
+	expectedPath string,
+	scenarioDir string,
+	assertions []RecordAssertion,
+) {
+	t.Helper()
+	if len(assertions) == 0 {
+		return
+	}
+	report, err := ValidateTranscriptForProfile(scenarioDir, matrix.ProfileCLILocal)
+	if err != nil {
+		t.Errorf("%s: %v", expectedPath, err)
+		return
+	}
+	if report == nil || !report.Pass {
+		t.Errorf("%s: transcript assertions failed: %+v", expectedPath, report)
+	}
+}
+
+func checkCommittedEventAssertions(
+	t *testing.T,
+	expectedPath string,
+	scenarioDir string,
+	assertions []RecordAssertion,
+) {
+	t.Helper()
+	if len(assertions) == 0 {
+		return
+	}
+	report, err := ValidateEventsForProfile(scenarioDir, matrix.ProfileCLILocal)
+	if err != nil {
+		t.Errorf("%s: %v", expectedPath, err)
+		return
+	}
+	if report == nil || !report.ExpectedPass() {
+		t.Errorf("%s: event assertions failed: %+v", expectedPath, report)
+	}
 }
