@@ -196,10 +196,29 @@ var stateRules = []stateRule{
 		// clear the failure, so idle_prompt must not mask it in the meantime.
 		// Retrying and unknown-phase errors keep the prior hook precedence: they
 		// do not carry that terminal verdict.
+		//
+		// Nor may it mask a live background process (#1982) — a Bash
+		// run_in_background command or a Claude Code Monitor task wakes the
+		// agent by itself, so "idle at the prompt" does not mean "needs a
+		// human" while one is still open. This is a deliberate behaviour
+		// change from #1173's plain rule: previously ANY idle_prompt hook
+		// promoted to waiting regardless of a live background process, which
+		// is how issue #445's own Bash processes could still read waiting
+		// once the hook armed (the same defect #1982 reports for Monitor,
+		// just without the registration gap). In the live daemon this term is
+		// belt-and-braces rather than the primary fix — applyBackgroundLiveness
+		// runs before SignalHolds.Overlay every pass, so HasLiveBackgroundProcess
+		// is already current when the idle_prompt hold's own staleness rule
+		// (`!IsAgentDone()`, session/signal_hold.go) re-evaluates it, and a
+		// live background process makes IsAgentDone() false — so the hold is
+		// usually dropped as stale before it is ever applied. This term is
+		// what makes the rule true in a context that skips the hold/Overlay
+		// machinery entirely, such as a raw ClassifyState fixture or a future
+		// caller that folds IdlePromptPending onto metrics some other way.
 		id:     string(session.SignalIdlePrompt),
 		signal: session.SignalIdlePrompt,
 		when: func(_ string, m *session.SessionMetrics) bool {
-			return m.IdlePromptPending && !hasTerminalSessionError(m)
+			return m.IdlePromptPending && !hasTerminalSessionError(m) && !m.HasLiveBackgroundProcess
 		},
 		decide: toState(session.StateWaiting, "idle prompt hook → waiting"),
 	},

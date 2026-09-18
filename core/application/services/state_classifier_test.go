@@ -216,6 +216,23 @@ func TestClassifyState(t *testing.T) {
 			wantState: session.StateWaiting,
 		},
 		{
+			// Issue #1982: a live background process (Bash run_in_background,
+			// or Claude Code's Monitor tool once registered in the same
+			// ledger) wakes the agent by itself, so an idle_prompt hook that
+			// arrives while it is still open must not promote the session to
+			// waiting — the session must keep reading working for as long as
+			// the process/task is alive. This is a deliberate behaviour
+			// change from #1173's plain idle_prompt -> waiting rule, stated
+			// in the PR body.
+			name:    "working stays working (idle prompt hook suppressed by live background process)",
+			current: session.StateWorking,
+			metrics: &session.SessionMetrics{
+				IdlePromptPending:        true,
+				HasLiveBackgroundProcess: true,
+			},
+			wantState: session.StateWorking,
+		},
+		{
 			// The core correction: a turn that ended on a plain statement (no
 			// question/cue) would route to ready via the agent_done rule, but the idle-prompt
 			// hook overrides it to waiting — the false-negative gap #1173 closes.

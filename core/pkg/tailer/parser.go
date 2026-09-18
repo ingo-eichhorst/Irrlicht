@@ -87,9 +87,29 @@ type TaskSnapshotEntry struct {
 // being written to: <path>"), so the parser reads it off the result rather
 // than the tool_use input (which carries only the run_in_background flag).
 // The tailer folds these into its open-background-process set. See issue #445.
+//
+// Claude Code's `Monitor` tool is a second launch shape folded into the same
+// struct (issue #1982): it also wakes the agent on its own schedule, so it
+// belongs in the same open-background-process ledger, but it reports no
+// output file and no PID for the daemon's lsof/PID liveness probe to check —
+// IsMonitor plus the two Monitor* fields carry what the tailer needs to bound
+// it by a deadline instead. OutputPath is always "" for a Monitor entry.
 type BackgroundSpawn struct {
-	BashID     string // the background shell id (e.g. "bc1h56v8v")
-	OutputPath string // tasks/<bash_id>.output — where stdout/stderr is written
+	BashID     string // the background shell id, or a Monitor task id (e.g. "bhqmawaqk")
+	OutputPath string // tasks/<bash_id>.output — where stdout/stderr is written; "" for a Monitor entry
+
+	// IsMonitor is true when this spawn is a Claude Code `Monitor` task
+	// rather than a Bash run_in_background launch. See issue #1982.
+	IsMonitor bool
+	// MonitorTimeoutMs is the launch's own `toolUseResult.timeoutMs` — the
+	// Monitor tool's stated upper bound on how long it runs before ending
+	// itself, absent a terminal task-notification first. Meaningless when
+	// MonitorPersistent is true (Claude Code reports 0 for those launches).
+	MonitorTimeoutMs int64
+	// MonitorPersistent is the launch's own `toolUseResult.persistent` — true
+	// for a Monitor with no timeout ("runs until TaskStop or session end"),
+	// which needs the tailer's own hold ceiling rather than MonitorTimeoutMs.
+	MonitorPersistent bool
 }
 
 // BashOutputPoll records a `BashOutput` tool_use: the agent polling a
@@ -767,8 +787,14 @@ type ReplayStoreStager interface {
 // under a pre-#1796 parser, which had NO session-error concept at all — v0.6.0's
 // parser.go contains no SessionError whatsoever — since the re-scan re-derives
 // the failure from lines that parser read as ordinary and settles them `error`
-// instead of leaving them permanently `ready`).
-const LedgerSchemaVersion = 6
+// instead of leaving them permanently `ready`);
+// 7 — #1982 (BackgroundDeadlines persisted; the bump also heals sessions with a
+// Monitor task already in flight at upgrade time, whose launch line a pre-#1982
+// parser consumed without registering — without the re-scan that line is never
+// re-read, so a `persistent` Monitor, which carries timeoutMs 0 and therefore no
+// deadline of its own, would keep flipping the session to `ready` for the whole
+// remaining life of the task).
+const LedgerSchemaVersion = 7
 
 // LedgerState is the durable portion of a tailer's accumulation state, written
 // to disk after every TailAndProcess pass so that daemon restarts don't reset
@@ -803,6 +829,31 @@ type LedgerState struct {
 	// → output path) so a daemon restart keeps holding the session `working`
 	// for processes still alive. See issue #445.
 	BackgroundProcs map[string]string `json:"background_procs,omitempty"`
+	// BackgroundDeadlines persists the clock-bound subset of BackgroundProcs —
+	// Claude Code Monitor tasks, keyed the same way, valued by the entry's
+	// deadline as Unix seconds — so a daemon restart keeps holding the session
+	// `working` for a Monitor task whose deadline hasn't passed yet, the same
+	// way BackgroundProcs does for a still-alive Bash process.
+	//
+	// Added WITHOUT a schema bump — a DELIBERATE TRADE-OFF, not the #1104/
+	// #1150/#1076 "purely additive, no re-scan needed" case those rows are:
+	// loadLedger (core/adapters/outbound/metrics/ledger.go) discards the whole
+	// ledger and forces a full re-scan on ANY schema mismatch, and an
+	// already-consumed Monitor launch line WOULD register differently under
+	// that re-scan (the #1815 case, which bumped). Not bumping accepts a
+	// bounded, self-healing gap instead: a session with a Monitor already in
+	// flight at daemon-upgrade time never gets that one task's launch line
+	// re-parsed, so it keeps the pre-#1982 flip behaviour until that task
+	// ends — every Monitor launch on any session after that point registers
+	// and is deadline-bounded correctly. Full census and the "bumping would
+	// force a re-scan of every live session, not just ones with a Monitor
+	// open" reasoning: PR for issue #1982.
+	//
+	// A ledger written before this field existed simply lacks it —
+	// SetLedgerState's restoreBackgroundDeadlines seeds a fresh deadline for
+	// any clock-bound entry that needs one rather than reading the zero value
+	// as "already expired".
+	BackgroundDeadlines map[string]int64 `json:"background_deadlines,omitempty"`
 	// PendingBashPolls persists in-flight BashOutput polls (poll tool_use id →
 	// background id) so a restart between a poll's tool_use and its terminated
 	// tool_result can still attribute the termination and clear the process.

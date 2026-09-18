@@ -410,6 +410,138 @@ func TestSessionDetector_BackgroundPID_DeadVerdictPurgesLedger(t *testing.T) {
 	t.Fatal("dead PID verdict did not trigger PurgeDeadBackgroundPIDs within deadline")
 }
 
+// End-to-end through the detector, clock-bound path (Claude Code Monitor
+// task, issue #1982): a working session whose transcript shows an open
+// Monitor task — BackgroundProcessClockBound, no output path, no PID —
+// stays working with NO probe wired up at all (neither
+// SetBackgroundProbeForTest nor SetBackgroundPIDProbeForTest is called here).
+// This is a mutation fixture: there is no pre-#1982 "red" to run (the field
+// didn't exist on main), so it instead pins the short-circuit in
+// applyBackgroundLiveness added by this issue. Commenting out that
+// short-circuit's `m.HasLiveBackgroundProcess = true` (falling through to
+// hasBackgroundProbe, which is false for an all-Monitor session) turns this
+// test red — verified by hand during development; the captured output is in
+// the PR body.
+func TestSessionDetector_MonitorClockBound_HoldsWorkingNoProbe(t *testing.T) {
+	const sid = "monitor1"
+	const path = "/home/.claude/projects/-Users-test/monitor1.jsonl"
+
+	metrics := &funcMetrics{fn: func(_, _ string) (*session.SessionMetrics, error) {
+		return &session.SessionMetrics{
+			LastEventType:               "turn_done",
+			BackgroundProcessCount:      1,
+			BackgroundProcessClockBound: true,
+			// Deliberately no BackgroundProcessOutputs / BackgroundProcessPIDs:
+			// a Monitor task has neither, which is exactly the "no probe path"
+			// case this test exercises.
+		}, nil
+	}}
+
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+	repo.states[sid] = &session.SessionState{
+		SessionID:      sid,
+		State:          session.StateWorking,
+		TranscriptPath: path,
+		FirstSeen:      time.Now().Unix(),
+		UpdatedAt:      time.Now().Unix(),
+	}
+
+	det := newDetectorWithMetrics(tw, pw, repo, metrics)
+	rec := &mockRecorder{}
+	det.SetRecorder(rec)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+	defer func() { cancel(); <-done }()
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      sid,
+		ProjectDir:     "-Users-test",
+		TranscriptPath: path,
+	}
+
+	time.Sleep(250 * time.Millisecond) // fixed settle window, matching this file's other negative assertions
+	assertNoReadyTransition(t, rec, sid, "a clock-bound Monitor task is open, with no probe wired up at all")
+}
+
+// TestSessionDetector_MonitorClockBound_OutranksDeadBashProbe covers the one
+// genuinely new INTERACTION #1982 introduces: a session carrying BOTH a
+// clock-bound Monitor entry and a probeable Bash/PID entry at once. The PR
+// discussion for #1982 asserted, without a test, that "a dead probe verdict
+// [for the other kind] can no longer flip HasLiveBackgroundProcess false
+// while the Monitor clock is still running (OR semantics)" — this is that
+// test. Both probes report dead here; the session must still stay `working`
+// (the clock-bound Monitor is the aggregate tie-breaker), and the dead
+// output/PID entries must still be purged independently — purging and the
+// liveness verdict are separate concerns, mirroring
+// TestSessionDetector_BackgroundMixed_IndependentLivenessAndPurge's "both
+// dead" case except that here the AGGREGATE verdict does not follow the
+// probes, because a third, clock-bound entry is also open.
+func TestSessionDetector_MonitorClockBound_OutranksDeadBashProbe(t *testing.T) {
+	const (
+		sid     = "monitormix"
+		path    = "/home/.claude/projects/-Users-test/monitormix.jsonl"
+		outPath = "/tmp/x/tasks/monitormix.output"
+		pid     = "33701"
+	)
+
+	metrics := &funcMetrics{fn: func(_, _ string) (*session.SessionMetrics, error) {
+		return &session.SessionMetrics{
+			LastEventType:               "turn_done",
+			BackgroundProcessCount:      3, // the Monitor entry + the output entry + the PID entry
+			BackgroundProcessClockBound: true,
+			BackgroundProcessOutputs:    []string{outPath},
+			BackgroundProcessPIDs:       []string{pid},
+		}, nil
+	}}
+
+	tw := newMockAgentWatcher()
+	pw := newMockProcessWatcher()
+	repo := newMockRepo()
+	repo.states[sid] = &session.SessionState{
+		SessionID:      sid,
+		State:          session.StateWorking,
+		TranscriptPath: path,
+		FirstSeen:      time.Now().Unix(),
+		UpdatedAt:      time.Now().Unix(),
+	}
+
+	det := newDetectorWithMetrics(tw, pw, repo, metrics)
+	rec := &mockRecorder{}
+	det.SetRecorder(rec)
+	// Both probes report DEAD — if HasLiveBackgroundProcess followed the probe
+	// verdict alone, this would settle the session ready. The clock-bound
+	// Monitor entry must keep it working regardless.
+	det.SetBackgroundProbeForTest(func([]string) (bool, bool) { return false, true })
+	det.SetBackgroundPIDProbeForTest(func([]string) bool { return false })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- det.Run(ctx) }()
+	defer func() { cancel(); <-done }()
+
+	tw.ch <- agent.Event{
+		Type:           agent.EventActivity,
+		SessionID:      sid,
+		ProjectDir:     "-Users-test",
+		TranscriptPath: path,
+		Terminal:       true, // bypass debounce so the probe fires promptly
+	}
+
+	// Wait for both dead verdicts to purge, exactly as the pre-existing mixed
+	// test does — a purge call is logged on every dead verdict.
+	waitForCondition(func() bool { return len(metrics.purgedSnapshot()) > 0 }, 2*time.Second)
+	time.Sleep(150 * time.Millisecond) // let any self-trigger re-classify settle
+
+	assertNoReadyTransition(t, rec, sid, "a clock-bound Monitor task is still open, even though both the output and PID probes reported dead")
+	assertPurgedExactly(t, metrics.purgedProcsFor, purgeExpectation{Path: path, SingularNoun: "output process", PluralNoun: "outputs", Want: outPath})
+	assertPurgedExactly(t, metrics.purgedPIDsFor, purgeExpectation{Path: path, SingularNoun: "PID", PluralNoun: "PIDs", Want: pid})
+}
+
 // A session can carry BOTH an output-file background process (Claude-Code
 // shape) AND a PID background process (Gemini shape) at once. The probe holds
 // the session `working` while EITHER is alive (`live = outputProbe || pidProbe`)

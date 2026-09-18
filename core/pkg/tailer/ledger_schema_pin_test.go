@@ -10,13 +10,14 @@ import (
 // pinnedLedgerSchemaVersion is the schema version the field set below belongs
 // to. A LITERAL, not the constant — a pin that reads the value it pins cannot
 // notice it moving.
-const pinnedLedgerSchemaVersion = 6
+const pinnedLedgerSchemaVersion = 7
 
 // pinnedLedgerFieldSignature is the wire shape of LedgerState at
 // pinnedLedgerSchemaVersion: one `jsonName:goType` line per field, sorted by
 // json name. Regenerate by running the test and copying the "got" block; it is
 // meant to be updated, just never silently.
 const pinnedLedgerFieldSignature = `agent_version:string
+background_deadlines:map[string]int64
 background_procs:map[string]string
 cum_by_model:map[string]*tailer.UsageBreakdown
 cum_provider_cost_usd:float64
