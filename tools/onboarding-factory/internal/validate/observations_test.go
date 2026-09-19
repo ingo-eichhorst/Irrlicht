@@ -1,11 +1,14 @@
 package validate
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"irrlicht/core/application/replayengine"
 	"irrlicht/tools/onboarding-factory/internal/matrix"
 )
 
@@ -233,7 +236,7 @@ func TestEventAssertionsRequireOwnedPaths(t *testing.T) {
 	}
 }
 
-func TestDeepseekTaskListNoWaitingAssertionDetectsMutation(t *testing.T) {
+func TestDeepseekTaskListAssertionsDetectMutations(t *testing.T) {
 	source, err := filepath.Abs(filepath.Join("..", "..", "..", "..", "replaydata", "agents", "deepseek-harness", "scenarios", "2-3_task-list"))
 	if err != nil {
 		t.Fatal(err)
@@ -274,15 +277,66 @@ func TestDeepseekTaskListNoWaitingAssertionDetectsMutation(t *testing.T) {
 	if err != nil || result == nil || result.ExpectedPass() {
 		t.Fatalf("injected waiting transition must fail: report=%+v err=%v", result, err)
 	}
+	foundWaiting := false
 	for _, assertion := range result.Asserts {
 		if assertion.Name == "no waiting state" {
 			if assertion.OK {
 				t.Fatal("no waiting state assertion ignored the injected transition")
 			}
+			foundWaiting = true
+		}
+	}
+	if !foundWaiting {
+		t.Fatal("task-list spec has no no waiting state assertion")
+	}
+
+	var lines [][]byte
+	finalTurnEnd := -1
+	turnEnds := 0
+	transcriptPath := filepath.Join(recording.Dir, "transcript.jsonl.zstd")
+	err = replayengine.ScanTranscriptLines(transcriptPath, func(line []byte) error {
+		var record struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(line, &record); err != nil {
+			return err
+		}
+		if record.Type == "turn/end" {
+			turnEnds++
+			finalTurnEnd = len(lines)
+		}
+		lines = append(lines, append([]byte(nil), line...))
+		return nil
+	})
+	if err != nil || turnEnds != 7 || finalTurnEnd < 0 {
+		t.Fatalf("source transcript must contain seven completed turns: count=%d err=%v", turnEnds, err)
+	}
+	copyPath := filepath.Join(dir, "recordings", name, "transcript.jsonl")
+	if err := os.WriteFile(copyPath, append(bytes.Join(lines, []byte("\n")), '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	baselineTranscript, err := ValidateTranscriptForProfile(dir, matrix.ProfileCLILocal)
+	if err != nil || baselineTranscript == nil || !baselineTranscript.ExpectedPass() {
+		t.Fatalf("unmutated transcript must pass assertions: report=%+v err=%v", baselineTranscript, err)
+	}
+	withoutFinalEnd := append([][]byte{}, lines[:finalTurnEnd]...)
+	withoutFinalEnd = append(withoutFinalEnd, lines[finalTurnEnd+1:]...)
+	if err := os.WriteFile(copyPath, append(bytes.Join(withoutFinalEnd, []byte("\n")), '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mutatedTranscript, err := ValidateTranscriptForProfile(dir, matrix.ProfileCLILocal)
+	if err != nil || mutatedTranscript == nil || mutatedTranscript.ExpectedPass() {
+		t.Fatalf("missing final turn/end must fail: report=%+v err=%v", mutatedTranscript, err)
+	}
+	for _, assertion := range mutatedTranscript.Asserts {
+		if assertion.Name == "all seven turns complete" {
+			if assertion.OK {
+				t.Fatal("turn completion assertion ignored missing final turn/end")
+			}
 			return
 		}
 	}
-	t.Fatal("task-list spec has no no waiting state assertion")
+	t.Fatal("task-list spec has no all seven turns complete assertion")
 }
 
 func TestCommittedRecordAssertions(t *testing.T) {
