@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"html/template"
 	"net/http"
 	"net/url"
@@ -10,7 +11,7 @@ import (
 
 	"github.com/skip2/go-qrcode"
 
-	"irrlicht/core/cmd/irrlichtrelay/push"
+	"irrlicht/core/pkg/onetimecode"
 )
 
 const missingPublicURLReason = "QR pairing is unavailable — start the relay with --public-url https://relay.example.com."
@@ -55,10 +56,22 @@ func invalidPairingHandoff() pairingHandoff {
 }
 
 func (h pairingHandoff) pairingURL(code string) string {
-	if h.publicURL == "" || !push.IsPresentedCode(code) {
+	if h.publicURL == "" || !onetimecode.IsPresentedCode(code) {
 		return ""
 	}
 	return h.publicURL + "/pair/" + code + "/"
+}
+
+// enrollURL mirrors pairingURL for desktop enrollment (#1963): same origin,
+// same guard (empty when --public-url is absent or code is not the exact
+// presented XXXX-XXXX form Mint emits), but no trailing slash — the issue's
+// own example is ".../enroll/K7QM-3PXA" — and no QR/handoff page: a desktop
+// pastes this URL, it does not scan it.
+func (h pairingHandoff) enrollURL(code string) string {
+	if h.publicURL == "" || !onetimecode.IsPresentedCode(code) {
+		return ""
+	}
+	return h.publicURL + "/enroll/" + code
 }
 
 // pairingQRDataURL returns a self-contained PNG. The authenticated mint
@@ -129,5 +142,29 @@ func registerPairingHandoffRoutes(mux *http.ServeMux, handoff pairingHandoff) {
 		}
 		w.Header().Set("Content-Type", "application/manifest+json")
 		_ = json.NewEncoder(w).Encode(manifest)
+	})
+}
+
+// registerEnrollHandoffRoute wires the desktop enrollment URL form (#1963):
+// unlike /pair/{code}/, this is not a PWA install page — no manifest, no
+// icon, no script — just enough body that a person who follows the link by
+// hand (instead of pasting it into the desktop app, which never issues a
+// GET here) can read the code and what to do with it. Registered
+// unconditionally, like registerPairingHandoffRoutes: it touches no store,
+// so it carries no auth gate of its own — the --auth off 403 lives on
+// registerEnrollRoutes' API routes instead, where the enrollment store is
+// actually read.
+func registerEnrollHandoffRoute(mux *http.ServeMux, handoff pairingHandoff) {
+	mux.HandleFunc("GET /enroll/{code}", func(w http.ResponseWriter, r *http.Request) {
+		code := r.PathValue("code")
+		// enrollURL guards with onetimecode.IsPresentedCode before this
+		// handler ever writes code into the response body below — garbage
+		// path input 404s here, before any reflection.
+		if handoff.enrollURL(code) == "" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		fmt.Fprintf(w, "Irrlicht enrollment code: %s\n\nPaste this URL into the desktop app's enrollment field to finish joining this relay. The code expires 10 minutes after it was minted and can be used once.\n", code)
 	})
 }
