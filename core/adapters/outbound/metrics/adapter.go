@@ -372,6 +372,16 @@ func domainRateLimitToTailer(src *session.RateLimitSnapshot) *tailer.RateLimitSn
 		PlanType:    src.PlanType,
 		ReachedType: src.ReachedType,
 		SampledAt:   src.SampledAt,
+
+		// The issue #1994 identity stamp — carried through this boundary so
+		// a snapshot claudecode/statusline.go stamps (already domain-typed
+		// when it reaches IngestRateLimit) survives its round trip through
+		// the tailer's own in-memory cache and back out via
+		// tailerRateLimitToDomain above.
+		Provider:            src.Provider,
+		ObservationSource:   src.ObservationSource,
+		AttributionEvidence: src.AttributionEvidence,
+		AttributionQuality:  src.AttributionQuality,
 	}
 	if len(src.Windows) > 0 {
 		dst.Windows = make([]tailer.RateLimitWindow, len(src.Windows))
@@ -423,6 +433,14 @@ func tailerRateLimitToDomain(src *tailer.RateLimitSnapshot) *session.RateLimitSn
 		PlanType:    src.PlanType,
 		ReachedType: src.ReachedType,
 		SampledAt:   src.SampledAt,
+
+		// The issue #1994 identity stamp — carried through this boundary so
+		// a snapshot codex/parser.go stamps still carries it once it reaches
+		// the domain type ProviderForSession reads.
+		Provider:            src.Provider,
+		ObservationSource:   src.ObservationSource,
+		AttributionEvidence: src.AttributionEvidence,
+		AttributionQuality:  src.AttributionQuality,
 	}
 	if len(src.Windows) > 0 {
 		dst.Windows = make([]session.RateLimitWindow, len(src.Windows))

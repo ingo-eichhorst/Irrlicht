@@ -75,6 +75,53 @@ func TestStatuslineHandler_IngestsRateLimits(t *testing.T) {
 	}
 }
 
+// TestStatuslineHandler_StampsProviderIdentity is #1994's red-first proof
+// for the identity stamp: reaching this handler with a real rate_limits
+// block is session-specific evidence that this session's quota is
+// Anthropic's own consumer subscription (a Bedrock/Vertex or API-key
+// session never sends this block at all — see statuslineToSnapshot's doc
+// comment). The snapshot must carry that evidence ITSELF — a provider, an
+// observation source, and a confirmed attribution quality — rather than
+// leaving ProviderForSession to infer it from the "claude-code" adapter
+// name, which cannot distinguish an Anthropic-direct session from a
+// Bedrock/Vertex one.
+func TestStatuslineHandler_StampsProviderIdentity(t *testing.T) {
+	target := &fakeRateLimitIngester{}
+	h := NewStatuslineHandler(target, nil, silentLogger{})
+	transcript := inTreeTranscript(t, "abc")
+
+	body := `{
+		"session_id": "abc",
+		"transcript_path": "` + transcript + `",
+		"rate_limits": {
+			"five_hour": {"used_percentage": 47, "resets_at": 1778761800}
+		}
+	}`
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/hooks/claudecode/statusline", bytes.NewBufferString(body))
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", rr.Code, rr.Body.String())
+	}
+	if len(target.calls) != 1 {
+		t.Fatalf("expected one IngestRateLimit call, got %d", len(target.calls))
+	}
+	snap := target.calls[0].snap
+	if snap.Provider != session.ProviderAnthropic {
+		t.Errorf("Provider: got %q, want %q", snap.Provider, session.ProviderAnthropic)
+	}
+	if snap.ObservationSource == "" {
+		t.Error("ObservationSource: got empty, want a named source (e.g. \"hook\")")
+	}
+	if snap.AttributionEvidence == "" {
+		t.Error("AttributionEvidence: got empty, want a named evidence descriptor")
+	}
+	if snap.AttributionQuality != session.AttributionQualityConfirmed {
+		t.Errorf("AttributionQuality: got %q, want %q", snap.AttributionQuality, session.AttributionQualityConfirmed)
+	}
+}
+
 func TestStatuslineHandler_NoRateLimitsBlockIsOk(t *testing.T) {
 	target := &fakeRateLimitIngester{}
 	h := NewStatuslineHandler(target, nil, silentLogger{})

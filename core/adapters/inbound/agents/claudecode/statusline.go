@@ -143,7 +143,9 @@ func serveStatuslineRequest(target RateLimitIngester, consent hookjson.Consent, 
 
 // statuslineToSnapshot converts Claude Code's two-window statusline payload
 // into the domain RateLimitSnapshot shape. Returns nil when both windows
-// are absent — the API-key / no-subscription case.
+// are absent — the API-key / no-subscription case, and also Claude Code
+// running against Bedrock or Vertex, neither of which ever sends a
+// rate_limits block here.
 //
 // Mapping:
 //   - five_hour → WindowMinutes=300
@@ -152,12 +154,24 @@ func serveStatuslineRequest(target RateLimitIngester, consent hookjson.Consent, 
 // SampledAt is derived from statuslineNow() rather than any payload
 // timestamp: Claude Code's statusline JSON doesn't carry one, and the
 // request landed within the last few hundred milliseconds.
+//
+// This is one of the two places (codex/parser.go is the other) that stamps
+// a RateLimitSnapshot's issue #1994 identity fields: reaching this line at
+// all means Claude Code's own statusline hook reported a rate_limits block,
+// which is only ever the Anthropic consumer subscription's own reporting —
+// session-specific, confirmed evidence, not a guess from the "claude-code"
+// adapter name (which core/application/services/quotainherit.go's
+// ProviderForSession no longer reads).
 func statuslineToSnapshot(rl *statuslineRateLimits) *session.RateLimitSnapshot {
 	if rl == nil || (rl.FiveHour == nil && rl.SevenDay == nil) {
 		return nil
 	}
 	snap := &session.RateLimitSnapshot{
-		SampledAt: statuslineNow().Unix(),
+		SampledAt:           statuslineNow().Unix(),
+		Provider:            session.ProviderAnthropic,
+		ObservationSource:   "hook",
+		AttributionEvidence: "claude_code_statusline",
+		AttributionQuality:  session.AttributionQualityConfirmed,
 	}
 	if rl.FiveHour != nil {
 		snap.Windows = append(snap.Windows, session.RateLimitWindow{

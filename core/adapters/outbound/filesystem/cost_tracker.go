@@ -58,22 +58,31 @@ type snapshotRow struct {
 	CumCreate int64   `json:"cum_create,omitempty"`
 }
 
-// providerForSession maps a session's source adapter to the billing provider
-// whose subscription/usage its cost draws from. Only first-party CLIs are
-// mapped today: wrapper agents (pi, opencode) resolve their provider
-// dynamically via rate-limit inheritance at request time, which isn't
-// available here at write time, so they record "" (unknown). Rows written
-// before this field existed also read back as "". Such rows are excluded from
-// the per-provider rollup but still counted in the per-project totals.
+// providerForSession resolves the billing provider whose subscription/usage
+// a session's cost draws from, using the same evidence rule as
+// services.ProviderForSession (issue #1994; duplicated here rather than
+// imported because an outbound adapter may not depend on application/
+// services — see architecture_test.go): there is no adapter-name switch.
+// This reads the session's own rate_limit snapshot's Provider and
+// AttributionQuality — stamped at the moment an adapter observed native
+// evidence for it (claudecode/statusline.go, codex/parser.go) — rather than
+// guessing from the adapter string, which cannot distinguish a claude-code
+// session running against Bedrock/Vertex (a different billing relationship
+// that never populates this stamp) from one running directly against
+// Anthropic. A session with no snapshot, or one whose AttributionQuality
+// isn't "confirmed" (including every row written before this field
+// existed, which reads back as "" — the zero value), records "" (unknown).
+// Such rows are excluded from the per-provider rollup but still counted in
+// the per-project totals.
 func providerForSession(state *session.SessionState) string {
-	switch state.Adapter {
-	case "claude-code":
-		return "anthropic"
-	case "codex":
-		return "openai"
-	default:
+	if state == nil || state.Metrics == nil || state.Metrics.RateLimit == nil {
 		return ""
 	}
+	rl := state.Metrics.RateLimit
+	if rl.AttributionQuality != session.AttributionQualityConfirmed {
+		return ""
+	}
+	return rl.Provider
 }
 
 // CostTracker persists per-session cost snapshots in append-only JSONL files,
@@ -119,9 +128,13 @@ func (t *CostTracker) Dir() string { return t.dir }
 
 // SetProviderResolver overrides how snapshot rows are attributed to a billing
 // provider. The daemon injects a resolver backed by services.ProviderForSession
-// so wrapper agents (pi, opencode) attribute to the subscription they inherit;
-// the built-in default handles only first-party adapters. Call once at wiring
-// time — not safe to call concurrently with RecordSnapshot.
+// so both copies of the evidence rule stay in one place; as of #1994 that
+// resolver and this file's own default apply the identical rule (an adapter
+// name alone is not evidence — see providerForSession above), so the
+// injection is a no-op today but keeps a single call site ready for a future
+// evidence source (e.g. a real account anchor) without touching this file.
+// Call once at wiring time — not safe to call concurrently with
+// RecordSnapshot.
 func (t *CostTracker) SetProviderResolver(fn func(*session.SessionState) string) {
 	if fn != nil {
 		t.providerOf = fn
