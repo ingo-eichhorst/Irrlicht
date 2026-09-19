@@ -687,8 +687,18 @@ func TestRecordSnapshot_UsesInjectedProviderResolver(t *testing.T) {
 
 // TestProviderCostsInWindows_BucketsByProvider verifies that a single project
 // file mixing providers attributes each session to its own provider (the
-// reason the rollup can't be derived from the per-project map), and that
-// sessions with no known provider are excluded.
+// reason the rollup can't be derived from the per-project map), and that a
+// session with no confirmed provider still contributes — under the ""
+// key — instead of being dropped (issue #1996; the handler, not the
+// tracker, is what relabels "" into the client-facing "unattributed"
+// bucket — see core/cmd/irrlichd/handlers.go's providerCostsByProvider).
+//
+// This test previously asserted the OPPOSITE — that the empty-provider
+// bucket "must be excluded" — which was #1996's actual defect at the
+// tracker level: providerCostsByProvider's drop (handlers.go) is dead code
+// in production, because foldSessionWindows never even handed it an empty
+// key to drop. Confirmed red against the pre-#1996 foldSessionWindows (its
+// `if s.provider != ""` guard), green after removing that guard.
 func TestProviderCostsInWindows_BucketsByProvider(t *testing.T) {
 	tr := newTestTracker(t)
 	now := time.Now().Unix()
@@ -698,7 +708,9 @@ func TestProviderCostsInWindows_BucketsByProvider(t *testing.T) {
 	writeRow(t, tr, "proj-a", snapshotRow{TS: now - 1*3600, Provider: "anthropic", Session: "a1", Cost: 1.25})
 	writeRow(t, tr, "proj-a", snapshotRow{TS: now - 10*3600, Provider: "openai", Session: "o1", Cost: 2.00})
 	writeRow(t, tr, "proj-a", snapshotRow{TS: now - 1*3600, Provider: "openai", Session: "o1", Cost: 2.50})
-	// Unknown-provider session (pre-schema row / wrapper agent) — excluded.
+	// Unattributed session (pre-schema row / wrapper agent) — must still
+	// contribute, under "", so the per-provider total agrees with the
+	// per-project total (which counts this session regardless of provider).
 	writeRow(t, tr, "proj-a", snapshotRow{TS: now - 10*3600, Session: "u1", Cost: 5.00})
 	writeRow(t, tr, "proj-a", snapshotRow{TS: now - 1*3600, Session: "u1", Cost: 9.00})
 
@@ -713,9 +725,58 @@ func TestProviderCostsInWindows_BucketsByProvider(t *testing.T) {
 		if v := got[tf]["openai"]; abs(v-0.50) > 0.01 {
 			t.Errorf("%s openai: want ≈0.50, got %v", tf, v)
 		}
-		if v, ok := got[tf][""]; ok {
-			t.Errorf("%s: empty-provider bucket must be excluded, got %v", tf, v)
+		if v := got[tf][""]; abs(v-4.00) > 0.01 {
+			t.Errorf(`%s "" (unattributed): want ≈4.00 (u1's 9.00-5.00), got %v — must not be dropped (#1996)`, tf, v)
 		}
+	}
+}
+
+// TestRowAttributionQuality_LegacyRowReadsAsGuessed is #1996's red-first
+// proof for the row-level attribution quality: a legacy row — written
+// before AttributionQuality existed, holding whatever Provider the
+// pre-#1994 adapter-name guess produced — must read back as guessed, never
+// as confirmed. Decoded from a raw JSON line with no attribution_quality
+// key at all, rather than built as a snapshotRow literal, so the
+// omitted-field case is exercised exactly as it appears on disk.
+func TestRowAttributionQuality_LegacyRowReadsAsGuessed(t *testing.T) {
+	var legacy snapshotRow
+	raw := `{"ts":1000,"project":"proj-a","provider":"anthropic","session":"s1","cost":1.50}`
+	if err := json.Unmarshal([]byte(raw), &legacy); err != nil {
+		t.Fatalf("unmarshal legacy row: %v", err)
+	}
+	if legacy.AttributionQuality != "" {
+		t.Fatalf("fixture is wrong: legacy row must decode with no AttributionQuality, got %q", legacy.AttributionQuality)
+	}
+	if legacy.Provider == "" {
+		t.Fatalf("fixture is wrong: legacy row must decode with a non-empty Provider (the old adapter-name guess), got %q", legacy.Provider)
+	}
+	if got := rowAttributionQuality(legacy); got != attributionQualityGuessed {
+		t.Errorf("legacy row must read back as guessed, got %q", got)
+	}
+	if got := rowAttributionQuality(legacy); got == session.AttributionQualityConfirmed {
+		t.Errorf("legacy row must never read back as confirmed")
+	}
+}
+
+// TestRowAttributionQuality_ConfirmedAndUnattributedRowsStayDistinct pins the
+// other two outcomes rowAttributionQuality can report, alongside the guessed
+// case above (issue #1996's fixture table: "a legacy row plus a new row for
+// one session — both are readable, and their qualities stay distinct"): a
+// row with an explicit confirmed stamp reads back as confirmed, and a row
+// with no provider at all (nothing to grade) reads back as "", never as
+// guessed — a session_A confirmed row and an unattributed session_B row must
+// not collapse into the same answer.
+func TestRowAttributionQuality_ConfirmedAndUnattributedRowsStayDistinct(t *testing.T) {
+	confirmed := snapshotRow{Provider: "anthropic", AttributionQuality: session.AttributionQualityConfirmed}
+	if got := rowAttributionQuality(confirmed); got != session.AttributionQualityConfirmed {
+		t.Errorf("confirmed row: want %q, got %q", session.AttributionQualityConfirmed, got)
+	}
+	unattributed := snapshotRow{Provider: ""}
+	if got := rowAttributionQuality(unattributed); got != "" {
+		t.Errorf("unattributed row (no Provider at all): want \"\" (nothing to grade), got %q", got)
+	}
+	if got := rowAttributionQuality(unattributed); got == attributionQualityGuessed {
+		t.Errorf("unattributed row must not read as guessed — there is no provider to have guessed")
 	}
 }
 
