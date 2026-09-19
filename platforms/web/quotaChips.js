@@ -4,11 +4,17 @@ import {
 } from './irrlicht.js';
 
 // --- Provider quota chips ---
-// Port of the macOS overlay's quotaChipView (SessionListView.swift:378-900)
-// and ProviderModePreference (SessionState.swift:190-262). Bucketing,
-// mode resolution, bar coloring, and tooltip text mirror the Swift
-// sources so opening the popover and the dashboard side-by-side shows
-// identical state for the same `/api/v1/sessions` response.
+// Port of the macOS overlay's SessionListView.quotaChipView and
+// ProviderModePreference (SessionState.swift). Bucketing, mode resolution,
+// bar coloring, and tooltip text are meant to mirror the Swift sources so
+// opening the popover and the dashboard side-by-side shows identical state
+// for the same `/api/v1/sessions` response — but this is a design INTENT,
+// not a static guarantee: nothing here or in Swift asserts the two agree,
+// so a change to one side's rule (chipModeFor's auto-detection here,
+// resolveChipMode's there) can silently diverge from the other, as #1995
+// did briefly before both sides were re-aligned on the same windows/credits
+// rule. Treat a change to either as a change to both, and grep the other
+// side before assuming a rule here has no Swift counterpart.
 
 // localStorage keys are unprefixed to match macOS @AppStorage names —
 // not because the storages are shared (UserDefaults and localStorage
@@ -39,18 +45,26 @@ const PROVIDER_ICON_SVG = {
 };
 function providerIconHTML(key) { return PROVIDER_ICON_SVG[key] || ''; }
 
-function providerKeyFor(snap, adapter) {
+// The only value attribution_quality treats as resolvable evidence —
+// mirrors session.AttributionQualityConfirmed
+// (core/domain/session/rate_limit.go:26).
+const ATTRIBUTION_QUALITY_CONFIRMED = 'confirmed';
+
+// `adapter` is accepted but unused: kept so the one call site (bucketChips)
+// and any external caller (this is exported for testing) don't need to
+// change shape. Only the daemon's confirmed identity brands a chip — no
+// inference from plan_type or the adapter name (#1977 §9 / #1995).
+// `pro`/`max`/`plus` are generic tier names several providers reuse (a
+// GitHub Copilot Pro session used to brand as Anthropic because of this),
+// and one adapter can run against more than one billing relationship
+// (Bedrock/Vertex vs. a Claude Pro OAuth account) that only the daemon can
+// tell apart.
+export function providerKeyFor(snap, adapter) {
   if (!snap) return null;
-  switch (snap.plan_type) {
-    case 'max':
-    case 'pro':  return 'anthropic';
-    case 'plus': return 'openai';
+  if (snap.attribution_quality === ATTRIBUTION_QUALITY_CONFIRMED && snap.provider) {
+    return snap.provider;
   }
-  switch (adapter) {
-    case 'claude-code': return 'anthropic';
-    case 'codex':       return 'openai';
-    default:            return null;
-  }
+  return null;
 }
 
 function planTypeLabel(planType) {
@@ -87,10 +101,13 @@ function chipModeFor(snap, providerKey) {
   const pref = providerModePreference(providerKey);
   if (pref === 'subscription') return 'subscription';
   if (pref === 'usage')        return 'usage';
-  // Auto: a credits balance without a plan tier means the API-key /
-  // usage path; everything else (plan_type set or no credits) renders
-  // bars. Same rule as Swift's resolveChipMode.
-  if (snap?.credits && !snap.plan_type) return 'usage';
+  // Auto: windowed quota data means subscription; a credits balance with
+  // no windows means the API-key / usage path. Previously keyed off
+  // plan_type — a generic tier-name field with no bearing on which shape
+  // a snapshot actually carries — dropped for the same reason
+  // providerKeyFor no longer reads it (#1995).
+  if (Array.isArray(snap?.windows) && snap.windows.length > 0) return 'subscription';
+  if (snap?.credits) return 'usage';
   return 'subscription';
 }
 
@@ -208,9 +225,15 @@ function bucketChips(sessions, nowMs) {
     const stale = Array.isArray(snap.windows) && snap.windows.some(w => w && w.resets_at * 1000 <= nowMs);
     const key = providerKeyFor(snap, s.adapter) || ('unknown:' + (s.adapter || ''));
     const mode = chipModeFor(snap, key);
-    // Subscription chips with no window data would render as an empty body
-    // (icon only, no bars) while hiding the app title. Skip them entirely.
-    if (mode === 'subscription' && !Array.isArray(snap.windows)) continue;
+    const hasWindows = Array.isArray(snap.windows) && snap.windows.length > 0;
+    // A subscription-mode snapshot with nothing to show — no windows, no
+    // credits, and no retrieval failure to report — would render as an
+    // empty body (icon only, no bars) while hiding the app title. Skip
+    // only that case (#1995): a retrieval failure or a credits balance
+    // still has something worth saying even with no windows, and hiding
+    // either would render the observation-quality signal as one blank
+    // chip instead of a distinguishable result (issue #1995 §1.3).
+    if (mode === 'subscription' && !hasWindows && !snap.credits && !snap.retrieval_failure) continue;
     const imm = imminentWindow(snap);
     const cost = s.metrics?.estimated_cost_usd || 0;
     const existing = buckets.get(key);
@@ -264,19 +287,62 @@ function subscriptionForecastLine(chip) {
 
 // usageCreditsLine returns the credits sub-line for usage-mode chips, or
 // null when there's nothing worth reporting.
-function usageCreditsLine(c) {
+export function usageCreditsLine(c) {
   if (!c) return null;
   if (c.unlimited === true) return 'Credits: unlimited';
-  if (typeof c.balance === 'number') return 'Credits balance: $' + c.balance.toFixed(2);
+  // balance's own `omitempty` on the wire drops a genuine zero exactly
+  // like an absent value (core/domain/session/rate_limit.go) —
+  // balance_observed is the only field that survives the round trip to
+  // tell "observed zero" from "never observed" (#1995), so a real zero
+  // balance still renders instead of falling through to has_credits/null.
+  const hasBalance = typeof c.balance === 'number' || c.balance_observed === true;
+  if (hasBalance) {
+    const amount = (typeof c.balance === 'number' ? c.balance : 0).toFixed(2);
+    // Render the snapshot's own currency/credit-unit rather than assuming
+    // USD (#1995) — DeepSeek's balance API reports CNY, for example.
+    // Unlabeled/legacy balances (no currency) keep today's "$" rendering.
+    return (c.currency && c.currency !== 'USD')
+      ? 'Credits balance: ' + amount + ' ' + c.currency
+      : 'Credits balance: $' + amount;
+  }
   if (c.has_credits) return 'Credits: available';
   return null;
+}
+
+// Classifies a provider-defined retrieval_failure string into the three
+// failure-shaped observation-quality results (issue #1995 §1.3): a
+// provider auth problem reads as "denied", a provider that has nothing to
+// report at all reads as "unsupported", and everything else (network
+// blips, a rate-limited retrieval call, etc.) reads as "failed". The
+// field is a provider-defined string, not an enum
+// (core/domain/session/rate_limit.go), so this is pattern matching rather
+// than an exhaustive switch — an unrecognized value still renders as
+// "failed" rather than being silently dropped.
+function retrievalFailureLine(failure) {
+  if (!failure) return null;
+  if (/unsupported|not_supported|no_quota/i.test(failure)) {
+    return "⚠️ this provider doesn't expose a quota irrlicht can read";
+  }
+  if (/auth|denied|permission|expired/i.test(failure)) {
+    return '⚠️ permission denied (' + failure + ') — reconnect this provider account';
+  }
+  return '⚠️ retrieval failed (' + failure + ') — showing the last known reading';
 }
 
 function quotaTooltip(chip, nowMs) {
   const lines = [];
   const plan = planTypeLabel(chip.snapshot.plan_type);
   if (plan) lines.push(plan);
+  // Same idiom as the stale line below (a one-line ⚠️ note rather than a
+  // new visual language, per #1995's "extend the one idiom" design): an
+  // unconfirmed identity is shown explicitly instead of silently branding
+  // or silently going blank.
+  if (chip.key.startsWith('unknown:')) {
+    lines.push('⚠️ billing identity not confirmed for this session');
+  }
   if (chip.isStale) lines.push('⚠️ snapshot pre-dates current window — waiting for next statusline tick');
+  const failureLine = retrievalFailureLine(chip.snapshot.retrieval_failure);
+  if (failureLine) lines.push(failureLine);
   if (chip.mode === 'subscription') {
     for (const w of (chip.snapshot.windows || [])) {
       lines.push(subscriptionWindowLine(w, nowMs));
@@ -290,6 +356,15 @@ function quotaTooltip(chip, nowMs) {
   }
   if (chip.snapshot.reached_type) lines.push('⚠️ rate limit reached: ' + chip.snapshot.reached_type);
   return lines.join('\n');
+}
+
+// True when a chip carries anything worth calling out visually beyond its
+// ordinary bars/spend — an unconfirmed identity or a retrieval failure.
+// Reuses the exact dimming treatment `.quota-stale` already applies
+// (irrlicht.css), rather than inventing a second visual language for the
+// four additional observation-quality results (#1995 §1.3).
+function needsAttention(chip) {
+  return chip.key.startsWith('unknown:') || !!chip.snapshot.retrieval_failure;
 }
 
 const MAX_VISIBLE_QUOTA_CHIPS = 2;
@@ -354,16 +429,27 @@ function buildQuotaRowDOM(w, compact, nowMs) {
   return row;
 }
 
+// Generic fallback glyph for a provider with no bundled icon and an
+// adapter with no icon of its own (issue #1995 §1.4) — a plain circle
+// rather than leaving the chip's icon slot empty.
+const GENERIC_PROVIDER_ICON_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24">'
+  + '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/>'
+  + '</svg>';
+
 function buildQuotaChipDOM(chip, compact, nowMs) {
   const root = document.createElement('div');
-  root.className = 'quota-chip' + (chip.isStale ? ' quota-stale' : '');
+  root.className = 'quota-chip'
+    + (chip.isStale ? ' quota-stale' : '')
+    + (needsAttention(chip) ? ' quota-chip--attention' : '');
   root.title = quotaTooltip(chip, nowMs);
 
   const icon = document.createElement('span');
   icon.className = 'quota-chip-icon';
   const svg = providerIconHTML(chip.key)
-            || adapterIconHTML(chip.session?.adapter);
-  if (svg) icon.innerHTML = svg;
+            || adapterIconHTML(chip.session?.adapter)
+            || GENERIC_PROVIDER_ICON_SVG;
+  icon.innerHTML = svg;
   root.appendChild(icon);
 
   const body = document.createElement('span');
@@ -468,12 +554,10 @@ export function refreshProviderSettings() {
 
     const name = document.createElement('span');
     name.className = 'provider-name';
-    const iconSvg = providerIconHTML(c.key) || adapterIconHTML(c.session?.adapter);
-    if (iconSvg) {
-      const iconSpan = document.createElement('span');
-      iconSpan.innerHTML = iconSvg;
-      name.appendChild(iconSpan);
-    }
+    const iconSvg = providerIconHTML(c.key) || adapterIconHTML(c.session?.adapter) || GENERIC_PROVIDER_ICON_SVG;
+    const iconSpan = document.createElement('span');
+    iconSpan.innerHTML = iconSvg;
+    name.appendChild(iconSpan);
     const labelText = document.createElement('span');
     labelText.textContent = planTypeLabel(c.snapshot.plan_type)
                          || (c.key.charAt(0).toUpperCase() + c.key.slice(1));

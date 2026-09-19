@@ -328,6 +328,19 @@ final class QuotaMenuBarRendererTests: XCTestCase {
         }
     }
 
+    // MARK: - providerKey (issue #1995: confirmed identity only, no plan_type/adapter inference)
+
+    /// Red-first for #1995: `pro`/`max`/`plus` are generic tier names several
+    /// providers reuse (e.g. GitHub Copilot Pro), so branding off `planType`
+    /// alone misattributes a non-Anthropic session to Anthropic. The fix
+    /// reads the daemon's confirmed `provider`/`attributionQuality` fields
+    /// instead — see `core/domain/session/rate_limit.go`.
+    func testDoesNotBrandANonAnthropicProTierSnapshotAsAnthropic() {
+        let info = RateLimitInfo(windows: [], planType: "pro", sampledAt: now)
+        XCTAssertNotEqual(info.providerKey(adapter: "copilot"), "anthropic",
+                          "a copilot session with plan_type \"pro\" must not brand as Anthropic")
+    }
+
     // MARK: - selectedSnapshot
 
     func testSelectedSnapshotPicksFreshestAcrossSessions() {
@@ -410,15 +423,24 @@ final class QuotaMenuBarRendererTests: XCTestCase {
     /// RateLimitInfo directly and go through `sessionState` instead, so
     /// this stays at 4 arguments rather than growing a resetsInPast flag
     /// nobody but one test needed (CodeScene: excess function arguments).
+    ///
+    /// Stamps a confirmed `provider` matching what `claudecode/statusline.go`
+    /// / `codex/parser.go` actually stamp for these two adapters (#1995) —
+    /// `providerKey(adapter:)` no longer infers identity from the adapter
+    /// name, so a test that filters by provider key needs the fixture to
+    /// carry it explicitly.
     private func makeSession(
         id: String,
         adapter: String,
         usedPercent: Double,
         sampledSecondsAgo: TimeInterval
     ) -> SessionState {
+        let provider = adapter == "codex" ? "openai" : "anthropic"
         let rateLimit = RateLimitInfo(
             windows: [RateLimitWindowInfo(usedPercent: usedPercent, windowMinutes: 300, resetsAt: now.addingTimeInterval(3600))],
-            sampledAt: now.addingTimeInterval(-sampledSecondsAgo)
+            sampledAt: now.addingTimeInterval(-sampledSecondsAgo),
+            provider: provider,
+            attributionQuality: RateLimitInfo.attributionQualityConfirmed
         )
         return sessionState(id: id, adapter: adapter, rateLimit: rateLimit)
     }

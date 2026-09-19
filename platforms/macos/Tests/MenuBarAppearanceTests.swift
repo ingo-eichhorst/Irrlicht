@@ -1575,6 +1575,83 @@ final class MenuBarAppearanceTests: XCTestCase {
         }
     }
 
+    /// New for #1995: the migration itself carries no new logic (it moves a
+    /// raw string between two keys, agnostic to what the string means), but
+    /// #1995 changed what a stored key like "anthropic" is CHECKED AGAINST —
+    /// `providerKey(adapter:)` now requires a confirmed `provider` field
+    /// rather than inferring one from `planType`/`adapter`. This connects the
+    /// two: a migrated key must still resolve a REAL, confirmed session's
+    /// snapshot through `QuotaMenuBarRenderer.selectedSnapshot`, not just
+    /// decode back out of `UserDefaults`.
+    ///
+    /// Mutation-proved: stamping the fixture session with
+    /// `attributionQuality: nil` instead of `.confirmed` — simulating an
+    /// unconfirmed identity — reddened this test (`selected` came back nil)
+    /// while leaving `testTheProviderMigrationSatisfiesItsContract` green,
+    /// since that contract never looks past `UserDefaults`. Reverted after
+    /// confirming red; the permanent form of that same perturbation is
+    /// committed below as
+    /// `testAMigratedProviderKeyDoesNotSelectAnUnconfirmedSnapshot`.
+    func testAMigratedProviderKeyStillSelectsAConfirmedSnapshot() throws {
+        let defaults = InMemoryDefaults()
+        defaults.set("anthropic", forKey: MenuBarQuotaProvider.storageKey)
+        XCTAssertTrue(MenuBarQuotaProviders.migrateLegacySingleProvider(in: defaults),
+                      "the legacy single provider must be carried over")
+        let migratedKey = try XCTUnwrap(MenuBarQuotaProviders.current(in: defaults).first,
+                                        "the migration produced no provider key")
+        XCTAssertEqual(migratedKey, "anthropic")
+
+        let confirmedSession = MenuBarFixtures.sessionWithQuota()
+        let selected = QuotaMenuBarRenderer.selectedSnapshot(
+            sessions: [confirmedSession], providerKey: migratedKey
+        )
+        XCTAssertEqual(selected?.windows.first?.usedPercent,
+                       confirmedSession.metrics?.rateLimit?.windows.first?.usedPercent,
+                       "the migrated key \"\(migratedKey)\" did not select the confirmed Anthropic "
+                       + "session's own snapshot")
+    }
+
+    /// The must-not-match twin of the test above, committed as a permanent
+    /// fixture rather than only described (AGENTS.md's testing-philosophy:
+    /// "prefer committing that mutation to describing it") — this is the
+    /// same perturbation the commit's mutation ran by hand against
+    /// `MenuBarFixtures` (stamping `attributionQuality: nil` instead of
+    /// `.confirmed`, observing red, then reverting), now encoded as its own
+    /// permanent case so a future regression here is caught on every run
+    /// rather than only once. Without the confirmed-identity requirement
+    /// this session would still resolve under the migrated "anthropic" key
+    /// (its `provider` field alone matches) — an unconfirmed identity must
+    /// not select as if it were confirmed.
+    func testAMigratedProviderKeyDoesNotSelectAnUnconfirmedSnapshot() throws {
+        let defaults = InMemoryDefaults()
+        defaults.set("anthropic", forKey: MenuBarQuotaProvider.storageKey)
+        XCTAssertTrue(MenuBarQuotaProviders.migrateLegacySingleProvider(in: defaults))
+        let migratedKey = try XCTUnwrap(MenuBarQuotaProviders.current(in: defaults).first)
+
+        let unconfirmedRateLimit = RateLimitInfo(
+            windows: [RateLimitWindowInfo(usedPercent: 20, windowMinutes: 300,
+                                          resetsAt: now.addingTimeInterval(3600))],
+            sampledAt: now,
+            provider: "anthropic",
+            attributionQuality: nil // the defect this test catches: unconfirmed
+        )
+        let unconfirmedSession = SessionState(
+            id: "sess_unconfirmed", state: .working, model: "claude-sonnet", cwd: "/tmp",  // NOSONAR (swift:S1075) — test fixture value, not a real endpoint
+            firstSeen: now, updatedAt: now,
+            metrics: SessionMetrics(
+                elapsedSeconds: 0, totalTokens: 0, modelName: "claude-sonnet",
+                contextWindow: nil, contextUtilization: 0, pressureLevel: "safe",
+                contextWindowUnknown: nil, estimatedCostUSD: nil, lastAssistantText: nil,
+                tasks: nil, rateLimit: unconfirmedRateLimit
+            ),
+            adapter: "claude-code"
+        )
+        XCTAssertNil(
+            QuotaMenuBarRenderer.selectedSnapshot(sessions: [unconfirmedSession], providerKey: migratedKey),
+            "a session with an unconfirmed provider must not be selected as though it were confirmed"
+        )
+    }
+
     /// The delimited-`String` encoding is a serializer, so AGENTS.md asks for a
     /// property test over generated input rather than only hand-written cases.
     ///
