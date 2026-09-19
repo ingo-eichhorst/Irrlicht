@@ -44,12 +44,22 @@
 #                                           but it was not a required field,
 #                                           so a source missing it crashed
 #                                           that jq call silently (exit 0).
-#                                           Red-first against the actual
-#                                           pre-fix commit (6b7a89f51, read
-#                                           via `git show`, not hand-
-#                                           reimplemented), then green
-#                                           against the fix: exit 3, naming
-#                                           the source and the field.
+#                                           Reproduced by hand against the
+#                                           actual pre-fix commit
+#                                           (6b7a89f51) before this test was
+#                                           committed — see the red-before-
+#                                           green record at case 5 below for
+#                                           why that reproduction is
+#                                           documented rather than re-run
+#                                           live (a CI checkout's fetch
+#                                           depth, not the code, decides
+#                                           whether `git show <old-sha>`
+#                                           succeeds). The permanent,
+#                                           always-run assertion is the
+#                                           fixture-based green case: the
+#                                           CURRENT script must refuse the
+#                                           same fixture loudly (exit 3,
+#                                           naming the source and field).
 #
 # Plus two vacuity guards: the real six-source docs/providers/sources/ must
 # itself validate (exit 0, offline), and the count docs/providers/catalog.md
@@ -150,25 +160,27 @@ fi
 # provider-list source missing that field passed schema validation and then
 # crashed the per-file jq call inside the markdown loop — silently, because
 # nothing checked that jq call's exit status, so the run still printed a
-# (truncated) table and exited 0. Red-first evidence: the PRE-FIX script,
-# read directly from that commit rather than re-implemented by hand, is
-# shown here to actually reproduce the bug against this fixture, before
-# proving the current script refuses it loudly instead.
-PRE_FIX_SHA=6b7a89f51
-PRE_FIX_SCRIPT=$(mktemp -t irrlicht-provider-census-prefix) || PRE_FIX_SCRIPT=""
-if [[ -n "$PRE_FIX_SCRIPT" ]] && git show "$PRE_FIX_SHA:tools/provider-census.sh" > "$PRE_FIX_SCRIPT" 2>/dev/null; then
-  pre_out=$(bash "$PRE_FIX_SCRIPT" --offline --markdown --dir "$FIXTURES/missing-inspected-paths" 2>&1)
-  pre_rc=$?
-  if [[ "$pre_rc" -ne 0 || "$pre_out" != *"jq: error"* ]]; then
-    fail "red-first check: expected the PRE-FIX script ($PRE_FIX_SHA) to reproduce the bug (exit 0 with a swallowed jq error) against the missing-inspected_paths fixture, got exit $pre_rc — output: $pre_out — if this no longer reproduces, the fixture or the pre-fix reference no longer demonstrates what this test claims"
-  else
-    pass "red-first: the PRE-FIX script ($PRE_FIX_SHA) really does crash silently (jq error swallowed, exit 0) on a provider-list source missing inspected_paths"
-  fi
-  rm -f "$PRE_FIX_SCRIPT"
-else
-  fail "could not read tools/provider-census.sh from $PRE_FIX_SHA to run the red-first check"
-fi
-
+# (truncated) table and exited 0.
+#
+# Red-before-green record (not re-run live here, deliberately — see
+# tools/lib/agents-md-lint_test.sh's own "red-before-green record" section
+# for the same reasoning): a CI checkout is commonly shallow (GitHub
+# Actions' default `actions/checkout` fetch depth), so `git show
+# 6b7a89f51:tools/provider-census.sh` can fail there with "could not read"
+# even though the object exists in a full clone — measured directly: this
+# case failed exactly that way on this PR's own go-test run before this
+# comment replaced the live `git show`. Pinning an automated, permanently-
+# running check to one historical commit's reachability would make the
+# gate's outcome depend on checkout depth rather than on the code, which is
+# the same trap that comment already names. Reproduce by hand instead:
+#   git show 6b7a89f51:tools/provider-census.sh > /tmp/prefix.sh
+#   bash /tmp/prefix.sh --offline --markdown \
+#     --dir tools/lib/testdata/provider-census/missing-inspected-paths
+# — exits 0 with a swallowed `jq: error (... Cannot iterate over null ...)`
+# on the pre-fix script; confirmed exactly this output before this test was
+# committed. The fixture-based check below is the permanent, generic proof
+# that fires regardless of git history: the CURRENT script must refuse the
+# same fixture loudly.
 out=$(bash "$CENSUS" --offline --markdown --dir "$FIXTURES/missing-inspected-paths" 2>&1)
 got=$?
 if [[ "$got" -ne 3 ]]; then
