@@ -356,19 +356,22 @@ func TestCapModelGateCatchesAnAssessedOpenClaimRelyingOnDefault(t *testing.T) {
 		t.Fatalf("pinning the trait explicitly must silence the guard, got:\n  %s", strings.Join(msgs, "\n  "))
 	}
 
-	// Mutation fixture: reintroduce the contradiction — through the same `of`
-	// CLI surface a careless future edit would use, never a hand-edit of
-	// replaydata/ — and confirm `of validate` goes red again, at both paths.
-	cf, err := loadCapabilityFile(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := cf.Adapters["codex"].Capabilities["subscription_signal"]; !ok {
+	// Mutation fixture: reintroduce the contradiction through the SAME `of`
+	// CLI surface a careless future edit would use — `--capability
+	// trait=traced`, which setAdapterModel deletes the declaration for
+	// (traced is the default) — never a hand-edit of replaydata/. The anchor
+	// assertion first confirms the pin is actually there to remove, so a
+	// moved/renamed site fails loudly instead of this step silently
+	// mutating nothing.
+	if _, ok := m2004CapabilityFile(t, root).Adapters["codex"].Capabilities["subscription_signal"]; !ok {
 		t.Fatal("mutation target missing before mutation: adapters.codex.capabilities.subscription_signal — anchor moved")
 	}
-	delete(cf.Adapters["codex"].Capabilities, "subscription_signal")
-	if err := writeJSONFileAtomic(matrix.CapabilityFile(root), cf); err != nil {
-		t.Fatal(err)
+	if code, _, errs := runOf("agent", "update", "--repo-root", root,
+		"--id", "codex", "--capability", "subscription_signal=traced"); code != exitOK {
+		t.Fatalf("of agent update --capability subscription_signal=traced exit=%d stderr=%s", code, errs)
+	}
+	if _, ok := m2004CapabilityFile(t, root).Adapters["codex"].Capabilities["subscription_signal"]; ok {
+		t.Fatal("--capability trait=traced must delete the declaration, not merely change its value")
 	}
 	msgs = validateFindings(t, root)
 	assertFindingContains(t, msgs, "adapters.json: adapters.codex has no subscription_signal entry")
@@ -385,6 +388,19 @@ func m2004CapabilityState(t *testing.T, root, agent, trait string) string {
 		t.Fatal(err)
 	}
 	return m.Capabilities().CapabilityState(agent, trait)
+}
+
+// m2004CapabilityFile reads adapters.json's raw capabilityFile shape — used
+// only to assert the mutation anchor (a key's PRESENCE in the map), which
+// CapabilityState's default-substituting read cannot distinguish from
+// omission.
+func m2004CapabilityFile(t *testing.T, root string) *capabilityFile {
+	t.Helper()
+	cf, err := loadCapabilityFile(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cf
 }
 
 func TestCapModelGateRejectsOffVocabularyDeclarations(t *testing.T) {
