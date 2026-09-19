@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "source_transcript": "",
+  "generated_at": "0001-01-01T00:00:00Z",
+  "settings": {
+    "adapter": "dsh",
+    "debounce_window": 2000000000,
+    "flicker_max_duration": 10000000000
+  },
+  "summary": {
+    "total_events": 3,
+    "consumed_events": 3,
+    "total_transitions": 2,
+    "first_event_time": "2026-09-19T03:33:58.750263+02:00",
+    "last_event_time": "2026-09-19T03:33:58.810908+02:00",
+    "wall_clock_session_duration": 60645000,
+    "state_durations": {
+      "ready": 60645000
+    },
+    "flicker_count": 0,
+    "flickers_by_category": {},
+    "flickers_by_reason": {},
+    "model_name": "qwen/qwen3.5-9b"
+  },
+  "transitions": [
+    {
+      "index": 0,
+      "event_index": -1,
+      "virtual_time": "2026-09-19T03:33:58.750263+02:00",
+      "cause": "init",
+      "prev_state": "",
+      "new_state": "ready",
+      "reason": "initial state",
+      "last_event_type": "",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 1,
+      "event_index": 0,
+      "virtual_time": "2026-09-19T03:33:58.750263+02:00",
+      "cause": "event",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "turn_start",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    }
+  ],
+  "sessions": [
+    {
+      "session_id": "session-93264195-38a2-4a9f-b306-4bffc3a284b1",
+      "adapter": "dsh",
+      "first_seen": "2026-09-19T03:33:58.616469+02:00",
+      "last_seen": "2026-09-19T03:34:04.804726+02:00",
+      "duration_ms": 6188,
+      "event_count": 15,
+      "state_changes": 2,
+      "final_state": "working",
+      "pid": 33494,
+      "pid_discovery_lag_ms": 384,
+      "debounce_coalesced_events": 2,
+      "state_durations_ms": {
+        "ready": 166,
+        "working": 6016
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 1,
+    "replayed_transition_count": 1,
+    "ordered_matches": 1,
+    "recorded_unique_kinds": [
+      "ready→working"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working"
+    ]
+  }
+}
