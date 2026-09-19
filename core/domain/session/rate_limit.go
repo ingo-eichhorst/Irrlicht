@@ -4,6 +4,29 @@ import (
 	"time"
 )
 
+// Canonical billing-provider keys for RateLimitSnapshot.Provider. Centralised
+// here (the domain layer both adapters and application/services already
+// depend on) so a typo at any stamping or reading site fails the build
+// instead of silently creating a phantom provider bucket — the same failure
+// mode core/application/services/quotainherit.go's own provider constants
+// guard against for the account-key map.
+const (
+	ProviderAnthropic = "anthropic"
+	ProviderOpenAI    = "openai"
+)
+
+// AttributionQualityConfirmed is the only AttributionQuality value that
+// ProviderForSession (core/application/services/quotainherit.go) treats as
+// resolvable evidence. AttributionQualityEstimated exists for a future
+// heuristic source; nothing sets it yet, and until something does, the only
+// two states a snapshot's AttributionQuality is ever seen in are "confirmed"
+// (stamped by an adapter that observed native evidence) and "" (unstamped —
+// unpopulated fields, or a legacy row).
+const (
+	AttributionQualityConfirmed = "confirmed"
+	AttributionQualityEstimated = "estimated"
+)
+
 // RateLimitSnapshot is one provider-emitted reading of subscription quota.
 // Codex's schema is the superset; Claude Code's statusline JSON is a strict
 // subset that maps to a five-hour and/or seven-day snapshot with no credits
@@ -39,12 +62,17 @@ type RateLimitSnapshot struct {
 
 	// --- Additive billing-identity fields (issue #1994 / epic #1977 §7). ---
 	//
-	// None of these are populated by any adapter yet — no observation
-	// source exists for them until the route ticket and the account-API
-	// ticket land (epic #1977 §10's later work packages). They are added now
-	// as additive, omitempty fields so a legacy row (or one written by
-	// today's adapters) decodes cleanly with every one at its zero value —
-	// which means "no confirmed billing identity was recorded", never
+	// Provider, ObservationSource, AttributionEvidence, and AttributionQuality
+	// are stamped at creation by the two adapters that observe native quota
+	// evidence today: claudecode/statusline.go (Claude Code's statusline
+	// hook) and codex/parser.go (Codex's transcript rate_limits). Product,
+	// ConfirmedAccountRef, QuotaScope, QuotaID, LastSuccessAt, LastAttemptAt,
+	// and RetrievalFailure are NOT populated by any adapter yet — no
+	// observation source exists for them until the route ticket and the
+	// account-API ticket land (epic #1977 §10's later work packages). Every
+	// field here is additive and omitempty, so a legacy row (or one written
+	// before the corresponding stamp existed) decodes with the unpopulated
+	// ones at their zero value — which means "not recorded", never
 	// "confirmed empty" or "confirmed unknown". No stored row is rewritten
 	// and no migration runs.
 	//
@@ -54,10 +82,21 @@ type RateLimitSnapshot struct {
 	// reported value can still go stale) and conflating them would lose
 	// that distinction — see docs/testing-philosophy.md.
 
+	// Provider is the confirmed billing provider this snapshot is evidence
+	// for ("anthropic"/"openai" — the Provider* constants above — or ""
+	// when unstamped). This is what makes the snapshot self-describing:
+	// core/application/services/quotainherit.go's ProviderForSession reads
+	// this field directly instead of switching on the session's adapter
+	// name, which is what let a claude-code session running against
+	// Bedrock/Vertex (a different billing relationship entirely, and one
+	// that never populates this field) get misattributed to Anthropic
+	// before #1994.
+	Provider string `json:"provider,omitempty"`
+
 	// Product identifies the specific commercial product this quota belongs
 	// to (e.g. "claude_pro_max", "chatgpt_plus"), distinct from the coarser
-	// Provider string used elsewhere in this package — one provider can
-	// offer several products with independently-scoped quotas.
+	// Provider field above — one provider can offer several products with
+	// independently-scoped quotas.
 	Product string `json:"product,omitempty"`
 
 	// ConfirmedAccountRef is the provider account identifier this snapshot
@@ -76,11 +115,11 @@ type RateLimitSnapshot struct {
 	// observed.
 	QuotaScope string `json:"quota_scope,omitempty"`
 
-	// AttributionEvidence names what established Provider and
-	// ConfirmedAccountRef for this snapshot (e.g. "native_statusline",
-	// "native_transcript"). An adapter name alone is never valid evidence —
-	// see ProviderForSession's doc comment in
-	// core/application/services/quotainherit.go.
+	// AttributionEvidence names what established Provider (and
+	// ConfirmedAccountRef, once something populates it) for this snapshot —
+	// today "claude_code_statusline" or "codex_transcript_rate_limits". An
+	// adapter name alone is never valid evidence — see ProviderForSession's
+	// doc comment in core/application/services/quotainherit.go.
 	AttributionEvidence string `json:"attribution_evidence,omitempty"`
 
 	// QuotaID is a stable provider-issued identifier for the specific quota
@@ -96,9 +135,13 @@ type RateLimitSnapshot struct {
 	// (derived rather than observed).
 	ObservationSource string `json:"observation_source,omitempty"`
 
-	// AttributionQuality is the confidence in the attribution above:
-	// "confirmed" (session-specific evidence established the account and
-	// provider) or "estimated" (a heuristic, not evidence).
+	// AttributionQuality is the confidence in the attribution above: one of
+	// the AttributionQuality* constants — AttributionQualityConfirmed
+	// (session-specific evidence established the provider) or
+	// AttributionQualityEstimated (a heuristic, not evidence; nothing sets
+	// this yet). ProviderForSession treats anything other than
+	// AttributionQualityConfirmed — including "", the zero value — as no
+	// resolvable evidence.
 	AttributionQuality string `json:"attribution_quality,omitempty"`
 
 	// LastSuccessAt and LastAttemptAt are Unix seconds for the most recent

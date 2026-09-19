@@ -496,13 +496,39 @@ func (e *ParsedEvent) StartsNewUserTurn() bool {
 // package so parsers can emit snapshots without importing the domain. The
 // adapter glue (core/adapters/outbound/metrics) converts to the domain type
 // at the same boundary it converts Task and SubagentCompletion.
+//
+// Only the identity-stamp subset of session.RateLimitSnapshot's issue #1994
+// additive fields is mirrored here — Provider, ObservationSource,
+// AttributionEvidence, and AttributionQuality — because those are the only
+// ones a parser in this package stamps today (codex/parser.go). The rest
+// (Product, ConfirmedAccountRef, QuotaScope, QuotaID, LastSuccessAt,
+// LastAttemptAt, RetrievalFailure) have no producer on this side of the
+// boundary yet; add them here when one exists rather than mirroring unused
+// fields speculatively.
 type RateLimitSnapshot struct {
 	Windows     []RateLimitWindow
 	PlanType    string
 	Credits     *CreditsSnapshot
 	ReachedType string
 	SampledAt   int64
+
+	Provider            string
+	ObservationSource   string
+	AttributionEvidence string
+	AttributionQuality  string
 }
+
+// ProviderAnthropic and ProviderOpenAI mirror session.ProviderAnthropic and
+// session.ProviderOpenAI (core/domain/session/rate_limit.go) — duplicated
+// rather than imported, for the same reason RateLimitSnapshot above mirrors
+// the domain type instead of embedding it.
+const (
+	ProviderAnthropic = "anthropic"
+	ProviderOpenAI    = "openai"
+)
+
+// AttributionQualityConfirmed mirrors session.AttributionQualityConfirmed.
+const AttributionQualityConfirmed = "confirmed"
 
 // RateLimitWindow mirrors session.RateLimitWindow.
 type RateLimitWindow struct {
