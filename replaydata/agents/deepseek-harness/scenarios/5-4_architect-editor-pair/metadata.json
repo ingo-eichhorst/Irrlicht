@@ -106,21 +106,13 @@
       "setup": [
         "Create an empty cwd under the recording staging directory.",
         "Let the driver apply the LM Studio endpoint, model, and danger-full-access policy through its per-run environment and temporary patch.",
-        "Enter plan mode while the session is idle, then send the task as a normal driver turn so wait_turn expects and observes one completed durable boundary.",
+        "Send the full /plan task as one driver turn so wait_turn expects and observes one completed durable boundary.",
         "Confirm that the TUI plan review still lists Approve first. The keys step relies on the installed overlay's default cursor at option 0."
       ],
       "script": [
         {
-          "type": "slash",
-          "text": "/plan"
-        },
-        {
-          "type": "sleep",
-          "seconds": 2
-        },
-        {
           "type": "send",
-          "text": "Do not read files, search, write, or call any tool except exit_plan_mode before approval. Immediately call exit_plan_mode as your first and only pre-approval tool call. Use this exact Markdown as the plan argument: # Architect editor fixture\n\nAfter approval, call bash exactly once with command `printf %s approved-editor > architect-editor.txt` and description `Create approved editor fixture`. Then reply with exactly `done`. Do not send prose before the exit_plan_mode call."
+          "text": "/plan Do not read files, search, write, or call any tool except exit_plan_mode before approval. Immediately call exit_plan_mode as your first and only pre-approval tool call. Use this exact Markdown as the plan argument: # Architect editor fixture\n\nAfter approval, call bash exactly once with command `printf %s approved-editor > architect-editor.txt` and description `Create approved editor fixture`. Then reply with exactly `done`. Do not send prose before the exit_plan_mode call."
         },
         {
           "type": "sleep",
@@ -148,7 +140,7 @@
         "at least two assistant/message records in the same turn carry model qwen/qwen3.5-9b and non-zero usage, and the daemon's cumulative TotalTokens includes both contributions",
         "the transcript contains no approval/asked record and no tool call other than exit_plan_mode and bash"
       ],
-      "scope_note": "The initial 2-second delay matches the recorded Claude Code sibling and lets bare /plan commit before the normal send. The separate send is load-bearing because the DSH driver increments its expected durable turn count only for send, not slash; this makes wait_turn observe the completed implementation boundary instead of returning immediately at 0/0. The 240-second pre-approval hold exceeds the committed sibling waits of 30-75 seconds because measured local DSH qwen turns can take about 90-158 seconds; it matches the assessed DSH 2.18 plan-review recipe. The 20-second trailing settle matches the recorded Claude Code sibling and exceeds the DSH basic-turn 8-second settle. Codex and Copilot need longer fixed post-input sleeps because their recipes do not use DSH's transcript-backed wait_turn for the completed implement turn."
+      "scope_note": "The first staged run sent bare /plan before a separate task message. Its complete transcript contained plan/mode active and one prose answer, but no exit_plan_mode call. The recorded DeepSeek Harness 2.18 sibling sent /plan with its task in one command and produced the tool call. This recipe now sends that same command shape through send, which increments the expected durable turn count so wait_turn observes the completed implementation boundary. The 240-second pre-approval hold matches the recorded 2.18 recipe. The 20-second trailing settle matches the recorded Claude Code sibling."
     }
   }
 }
