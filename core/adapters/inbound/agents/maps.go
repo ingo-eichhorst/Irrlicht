@@ -65,6 +65,18 @@ func PIDDiscoverers(agents []agent.Agent) map[string]agent.PIDDiscoverFunc {
 	return m
 }
 
+// SharedPIDOwners projects opt-in per-session ownership probes. Other adapters
+// keep the exclusive-root PID policy.
+func SharedPIDOwners(agents []agent.Agent) map[string]agent.SharedPIDOwnerFunc {
+	m := make(map[string]agent.SharedPIDOwnerFunc)
+	for _, a := range agents {
+		if a.Process.SharedPIDOwner != nil {
+			m[a.Identity.Name] = a.Process.SharedPIDOwner
+		}
+	}
+	return m
+}
+
 // ProcessNames produces the adapter-name → OS-process-name map used by
 // the startup zombie sweep. For ExactName matchers the OS process name
 // IS the matcher name. For CommandPattern matchers no reliable OS

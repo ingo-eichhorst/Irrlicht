@@ -42,7 +42,7 @@ func (d *SessionDetector) handleTranscriptEvent(id agent.Identity, ev agent.Even
 		d.onActivity(id, ev)
 	case agent.EventRemoved:
 		d.record(lifecycle.Event{Kind: lifecycle.KindTranscriptRemoved, SessionID: ev.SessionID, Adapter: id.Name, TranscriptPath: ev.TranscriptPath})
-		d.onRemoved(ev)
+		d.onRemoved(id, ev)
 	}
 }
 

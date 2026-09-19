@@ -32,8 +32,9 @@ func Agent() agent.Agent {
 			IconSVGDark:  iconSVGDark,
 		},
 		Process: agent.Process{
-			Match:         agent.CommandPattern{Regex: processCmdRegex},
-			PIDForSession: DiscoverPID,
+			Match:          agent.CommandPattern{Regex: processCmdRegex},
+			PIDForSession:  DiscoverPID,
+			SharedPIDOwner: OwnsSharedPID,
 		},
 		Source: Source(),
 		Permissions: []agent.Permission{

@@ -286,17 +286,18 @@ type SessionDetector struct {
 // SessionDetectorDeps bundles NewSessionDetector's dependencies beyond the
 // watcher list. PW and Broadcaster may be nil (optional).
 type SessionDetectorDeps struct {
-	PW           outbound.ProcessWatcher
-	Repo         outbound.SessionRepository
-	Log          outbound.Logger
-	Git          outbound.GitResolver
-	Metrics      outbound.MetricsCollector
-	Broadcaster  outbound.PushBroadcaster
-	Version      string
-	ReadyTTL     time.Duration
-	PIDDiscovers map[string]agent.PIDDiscoverFunc
-	ProcessNames map[string]string
-	LiveCWDs     LiveCWDsFunc
+	PW              outbound.ProcessWatcher
+	Repo            outbound.SessionRepository
+	Log             outbound.Logger
+	Git             outbound.GitResolver
+	Metrics         outbound.MetricsCollector
+	Broadcaster     outbound.PushBroadcaster
+	Version         string
+	ReadyTTL        time.Duration
+	PIDDiscovers    map[string]agent.PIDDiscoverFunc
+	SharedPIDOwners map[string]agent.SharedPIDOwnerFunc
+	ProcessNames    map[string]string
+	LiveCWDs        LiveCWDsFunc
 }
 
 // newSessionDetector is the one function in this package allowed to write a
@@ -373,6 +374,7 @@ func NewSessionDetector(watchers []inbound.Watcher, deps SessionDetectorDeps) *S
 		Broadcaster:      deps.Broadcaster,
 		ReadyTTL:         deps.ReadyTTL,
 		PIDDiscovers:     deps.PIDDiscovers,
+		SharedPIDOwners:  deps.SharedPIDOwners,
 		ProcessNames:     deps.ProcessNames,
 		LiveCWDs:         deps.LiveCWDs,
 		OnSessionDeleted: det.removeFromProjectSessions,
@@ -577,6 +579,7 @@ func (d *SessionDetector) SetHostGate(requireKnownHost map[string]bool, isKnownH
 // (the default) allows everything.
 func (d *SessionDetector) SetConsentGate(fn func(adapter string) bool) {
 	d.consentGate = fn
+	d.pidMgr.SetConsentGate(fn)
 }
 
 // observeAllowed reports whether the adapter's transcripts may be read.

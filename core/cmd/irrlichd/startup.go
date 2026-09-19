@@ -691,20 +691,22 @@ func buildDetector(deps buildDetectorDeps) (*services.SessionDetector, map[strin
 	}
 
 	pidDiscovers := agents.PIDDiscoverers(deps.AllAgents)
+	sharedPIDOwners := agents.SharedPIDOwners(deps.AllAgents)
 	processNames := agents.ProcessNames(deps.AllAgents)
 
 	detector := services.NewSessionDetector(nil, services.SessionDetectorDeps{
-		PW:           deps.PWPort,
-		Repo:         deps.CachedRepo,
-		Log:          deps.Logger,
-		Git:          deps.GitResolver,
-		Metrics:      deps.MetricsCollector,
-		Broadcaster:  deps.Push,
-		Version:      deps.Version,
-		ReadyTTL:     deps.Cfg.ReadySessionTTL,
-		PIDDiscovers: pidDiscovers,
-		ProcessNames: processNames,
-		LiveCWDs:     processlifecycle.LiveCWDs,
+		PW:              deps.PWPort,
+		Repo:            deps.CachedRepo,
+		Log:             deps.Logger,
+		Git:             deps.GitResolver,
+		Metrics:         deps.MetricsCollector,
+		Broadcaster:     deps.Push,
+		Version:         deps.Version,
+		ReadyTTL:        deps.Cfg.ReadySessionTTL,
+		PIDDiscovers:    pidDiscovers,
+		SharedPIDOwners: sharedPIDOwners,
+		ProcessNames:    processNames,
+		LiveCWDs:        processlifecycle.LiveCWDs,
 	})
 	if deps.CostTracker != nil {
 		detector.SetCostTracker(deps.CostTracker)

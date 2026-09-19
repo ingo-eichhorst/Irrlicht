@@ -1322,6 +1322,157 @@ func TestHandlePIDAssigned_PresessionNeverEvictsRealSession(t *testing.T) {
 	}
 }
 
+func newSharedPIDManagerForTest(repo *mockRepo, owns agent.SharedPIDOwnerFunc) *services.PIDManager {
+	return services.NewPIDManager(services.PIDManagerDeps{
+		Repo: repo, Log: &mockLogger{}, ReadyTTL: 10 * time.Minute,
+		SharedPIDOwners:  map[string]agent.SharedPIDOwnerFunc{"dsh": owns},
+		OnSessionDeleted: func(string) {},
+	})
+}
+
+func TestHandlePIDAssigned_ConcurrentDSHRootsKeepSharedPID(t *testing.T) {
+	repo := newMockRepo()
+	pid := os.Getpid()
+	now := time.Now().Unix()
+	repo.states["dsh-first"] = &session.SessionState{
+		SessionID: "dsh-first", Adapter: "dsh", State: session.StateReady,
+		PID: pid, TranscriptPath: "/sessions/first/session.v3.jsonl.zstd", UpdatedAt: now,
+	}
+	repo.states["dsh-second"] = &session.SessionState{
+		SessionID: "dsh-second", Adapter: "dsh", State: session.StateReady,
+		TranscriptPath: "/sessions/second/session.v3.jsonl.zstd", UpdatedAt: now,
+	}
+
+	pm := newSharedPIDManagerForTest(repo, func(_, path string, owner int) bool {
+		return owner == pid && path == "/sessions/first/session.v3.jsonl.zstd"
+	})
+	pm.HandlePIDAssigned(pid, "dsh-second")
+
+	if repo.states["dsh-first"] == nil {
+		t.Fatal("assigning a second DSH web session deleted the first active root")
+	}
+}
+
+func TestCheckPIDLiveness_ConcurrentDSHRootsKeepSharedPID(t *testing.T) {
+	repo := newMockRepo()
+	pid := os.Getpid()
+	now := time.Now().Unix()
+	for _, id := range []string{"dsh-first", "dsh-second"} {
+		firstSeen := now
+		if id == "dsh-first" {
+			firstSeen--
+		}
+		repo.states[id] = &session.SessionState{
+			SessionID: id, Adapter: "dsh", State: session.StateReady,
+			PID: pid, TranscriptPath: "/sessions/" + id + "/session.v3.jsonl.zstd",
+			FirstSeen: firstSeen, UpdatedAt: now,
+		}
+	}
+
+	pm := newSharedPIDManagerForTest(repo, func(_, path string, owner int) bool {
+		return owner == pid && path == "/sessions/dsh-first/session.v3.jsonl.zstd"
+	})
+	pm.CheckPIDLiveness()
+
+	if repo.states["dsh-first"] == nil || repo.states["dsh-second"] == nil {
+		t.Fatalf("periodic same-PID cleanup removed an active DSH root: remaining=%v", repo.states)
+	}
+}
+
+func TestHandlePIDAssigned_SharedPIDRequiresCurrentProof(t *testing.T) {
+	for _, tc := range []struct {
+		name, oldAdapter string
+		ownerConfirms    bool
+		consentGranted   bool
+		wantProbeCalls   int
+	}{
+		{name: "released old lock", oldAdapter: "dsh", consentGranted: true, wantProbeCalls: 1},
+		{name: "different adapter", oldAdapter: "claude-code", ownerConfirms: true, consentGranted: true},
+		{name: "consent denied", oldAdapter: "dsh", ownerConfirms: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := newMockRepo()
+			pid := os.Getpid()
+			now := time.Now().Unix()
+			repo.states["old"] = &session.SessionState{
+				SessionID: "old", Adapter: tc.oldAdapter, State: session.StateReady,
+				PID: pid, TranscriptPath: "/sessions/old/session.v3.jsonl.zstd", UpdatedAt: now,
+			}
+			repo.states["new"] = &session.SessionState{
+				SessionID: "new", Adapter: "dsh", State: session.StateReady,
+				TranscriptPath: "/sessions/new/session.v3.jsonl.zstd", UpdatedAt: now,
+			}
+			probeCalls := 0
+			pm := newSharedPIDManagerForTest(repo, func(_, _ string, _ int) bool {
+				probeCalls++
+				return tc.ownerConfirms
+			})
+			pm.SetConsentGate(func(string) bool { return tc.consentGranted })
+			pm.HandlePIDAssigned(pid, "new")
+			if repo.states["old"] != nil {
+				t.Fatal("old root survived without same-adapter, consented ownership proof")
+			}
+			if probeCalls != tc.wantProbeCalls {
+				t.Fatalf("ownership probes = %d, want %d", probeCalls, tc.wantProbeCalls)
+			}
+		})
+	}
+}
+
+func TestSeedPIDs_ConcurrentDSHRootsKeepSharedPID(t *testing.T) {
+	repo := newMockRepo()
+	pid := os.Getpid()
+	now := time.Now().Unix()
+	first := &session.SessionState{
+		SessionID: "dsh-first", Adapter: "dsh", State: session.StateReady,
+		PID: pid, TranscriptPath: "/sessions/first/session.v3.jsonl.zstd",
+		FirstSeen: now - 1, UpdatedAt: now,
+	}
+	second := &session.SessionState{
+		SessionID: "dsh-second", Adapter: "dsh", State: session.StateReady,
+		PID: pid, TranscriptPath: "/sessions/second/session.v3.jsonl.zstd",
+		FirstSeen: now, UpdatedAt: now,
+	}
+	repo.states[first.SessionID] = first
+	repo.states[second.SessionID] = second
+	pm := newSharedPIDManagerForTest(repo, func(_, path string, owner int) bool {
+		return owner == pid && path == first.TranscriptPath
+	})
+	pm.SeedPIDs([]*session.SessionState{first, second})
+	if repo.states[first.SessionID] == nil || repo.states[second.SessionID] == nil {
+		t.Fatalf("startup dedup removed an active DSH root: remaining=%v", repo.states)
+	}
+}
+
+func TestSharedPIDOwnerProbeMutation(t *testing.T) {
+	checkBothRoots := func(probeConfirms bool) error {
+		repo := newMockRepo()
+		pid := os.Getpid()
+		repo.states["first"] = &session.SessionState{
+			SessionID: "first", Adapter: "dsh", State: session.StateReady,
+			PID: pid, TranscriptPath: "/sessions/first/session.v3.jsonl.zstd",
+		}
+		repo.states["second"] = &session.SessionState{
+			SessionID: "second", Adapter: "dsh", State: session.StateReady,
+			TranscriptPath: "/sessions/second/session.v3.jsonl.zstd",
+		}
+		pm := newSharedPIDManagerForTest(repo, func(_, _ string, _ int) bool {
+			return probeConfirms
+		})
+		pm.HandlePIDAssigned(pid, "second")
+		if repo.states["first"] == nil {
+			return errors.New("first root was deleted")
+		}
+		return nil
+	}
+	if err := checkBothRoots(true); err != nil {
+		t.Fatalf("valid ownership proof failed: %v", err)
+	}
+	if err := checkBothRoots(false); err == nil {
+		t.Fatal("rejecting the first root's ownership did not make the retention check fail")
+	}
+}
+
 // TestHandlePIDAssigned_FiresSupersededHook: cleanupStalePIDHolders (the
 // same-PID reconciliation path — the one that actually fired in the #997
 // mistral-vibe recording) must fire the re-key hook with (old, new) before

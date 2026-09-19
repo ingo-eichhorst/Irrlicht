@@ -81,6 +81,9 @@ type PIDManager struct {
 	// pidDiscovers maps adapter name → PID discovery function.
 	// Nil or missing entry means no PID discovery for that adapter.
 	pidDiscovers map[string]agent.PIDDiscoverFunc
+	// sharedPIDOwners is opt-in. The consent gate applies before each probe.
+	sharedPIDOwners map[string]agent.SharedPIDOwnerFunc
+	consentGate     func(adapter string) bool
 
 	// processNames maps adapter name → OS process name (the binary `pgrep -x`
 	// would match). Used by the startup zombie sweep to detect orphaned
@@ -182,6 +185,9 @@ type PIDManager struct {
 	// run after assignPIDLocked releases it) so it can't invert with any
 	// SessionDetector lock.
 	assignMu sync.Mutex
+	// assignmentMu serializes competing PID claims while ownership probes run
+	// outside assignMu. It is released before watcher and deletion callbacks.
+	assignmentMu sync.Mutex
 
 	// recorder captures lifecycle events for offline replay (optional).
 	// Set by SessionDetector.SetRecorder.
@@ -199,6 +205,7 @@ type PIDManagerDeps struct {
 	Broadcaster      outbound.PushBroadcaster
 	ReadyTTL         time.Duration
 	PIDDiscovers     map[string]agent.PIDDiscoverFunc
+	SharedPIDOwners  map[string]agent.SharedPIDOwnerFunc
 	ProcessNames     map[string]string
 	LiveCWDs         LiveCWDsFunc
 	OnSessionDeleted func(sessionID string)
@@ -214,12 +221,19 @@ func NewPIDManager(deps PIDManagerDeps) *PIDManager {
 		broadcaster:      deps.Broadcaster,
 		readyTTL:         deps.ReadyTTL,
 		pidDiscovers:     deps.PIDDiscovers,
+		sharedPIDOwners:  deps.SharedPIDOwners,
 		processNames:     deps.ProcessNames,
 		liveCWDs:         deps.LiveCWDs,
 		onSessionDeleted: deps.OnSessionDeleted,
 		onSessionRemoved: deps.OnSessionRemoved,
 		pendingPIDs:      make(map[string]int),
 	}
+}
+
+// SetConsentGate keeps shared-PID lock reads behind the adapter's observe grant.
+// Nil keeps direct tests and replay tooling unrestricted.
+func (pm *PIDManager) SetConsentGate(fn func(adapter string) bool) {
+	pm.consentGate = fn
 }
 
 // SetRecorder enables lifecycle event recording on this PIDManager.
@@ -804,7 +818,11 @@ func (pm *PIDManager) HandlePIDAssigned(pid int, sessionID string) {
 	// Assign the PID and collect stale same-PID sessions under assignMu so
 	// concurrent assignments don't race on the shared SessionState pointers.
 	// Callbacks (Watch, delete) run after the lock is released.
-	state, stale := pm.assignPIDLocked(pid, sessionID)
+	pm.assignmentMu.Lock()
+	claims := pm.snapshotSharedPIDClaims(pid, sessionID)
+	confirmed := pm.confirmSharedPIDClaims(pid, claims)
+	state, stale := pm.assignPIDLocked(pid, sessionID, confirmed)
+	pm.assignmentMu.Unlock()
 	if state == nil {
 		return
 	}
@@ -820,12 +838,75 @@ func (pm *PIDManager) HandlePIDAssigned(pid int, sessionID string) {
 	pm.cleanupStalePIDHolders(stale, sessionID, pid)
 }
 
-// cleanupStalePIDHolders deletes every session in stale — other sessions that
-// held pid before sessionID claimed it (e.g. the /clear pattern, where the
-// same process starts a new transcript under a new UUID). A non-subagent PID
-// can only belong to one session at a time, so a session claiming a PID makes
-// any other non-subagent holder of that PID stale. Each deletion emits
-// transcript_removed so the pattern is recoverable from the offline replay
+type sharedPIDClaim struct {
+	sessionID, adapter, cwd, transcriptPath string
+}
+
+func (pm *PIDManager) snapshotSharedPIDClaims(pid int, sessionID string) []sharedPIDClaim {
+	pm.assignMu.Lock()
+	defer pm.assignMu.Unlock()
+	winner, err := pm.repo.Load(sessionID)
+	if err != nil || winner == nil || winner.ParentSessionID != "" {
+		return nil
+	}
+	if pm.sharedPIDOwners[winner.Adapter] == nil {
+		return nil
+	}
+	states, err := pm.repo.ListAll()
+	if err != nil {
+		return nil
+	}
+	var claims []sharedPIDClaim
+	for _, old := range states {
+		if old.Adapter == winner.Adapter && isDedupDeleteCandidate(old, pid, winner) {
+			claims = append(claims, sharedPIDClaimOf(old))
+		}
+	}
+	return claims
+}
+
+func (pm *PIDManager) confirmSharedPIDClaims(pid int, claims []sharedPIDClaim) map[string]sharedPIDClaim {
+	confirmed := make(map[string]sharedPIDClaim)
+	for _, claim := range claims {
+		if pm.confirmsSharedPID(claim, claim.adapter, pid) {
+			confirmed[claim.sessionID] = claim
+		}
+	}
+	return confirmed
+}
+
+func (pm *PIDManager) confirmsSharedPID(claim sharedPIDClaim, winnerAdapter string, pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	if claim.adapter != winnerAdapter {
+		return false
+	}
+	probe := pm.sharedPIDOwners[claim.adapter]
+	if probe == nil {
+		return false
+	}
+	if pm.consentGate != nil && !pm.consentGate(claim.adapter) {
+		return false
+	}
+	return probe(claim.cwd, claim.transcriptPath, pid)
+}
+
+func sharedPIDClaimOf(state *session.SessionState) sharedPIDClaim {
+	return sharedPIDClaim{
+		sessionID: state.SessionID, adapter: state.Adapter,
+		cwd: state.CWD, transcriptPath: state.TranscriptPath,
+	}
+}
+
+func sharedPIDClaimStillMatches(old *session.SessionState, claim sharedPIDClaim) bool {
+	return old.Adapter == claim.adapter && old.CWD == claim.cwd && old.TranscriptPath == claim.transcriptPath
+}
+
+// cleanupStalePIDHolders deletes every unproven same-PID root in stale. The
+// default is exclusive ownership (e.g. /clear replacing a transcript UUID).
+// An adapter that proves both roots still own the PID keeps both rows. Each
+// deletion emits transcript_removed so the pattern is recoverable from the offline replay
 // stream — without it, replay-based analysis sees the old UUID's
 // session_created and state transitions but never a corresponding removal,
 // and the session looks "leaked" in the recording (issue #169).
@@ -856,13 +937,13 @@ func (pm *PIDManager) cleanupStalePIDHolders(stale []*session.SessionState, sess
 }
 
 // assignPIDLocked persists pid onto sessionID's state and returns it along with
-// the other non-subagent sessions currently holding the same PID (the stale
+// the unproven non-subagent sessions currently holding the same PID (the stale
 // ones the caller should delete). It holds assignMu across the load-modify-save
 // and the same-PID scan so concurrent assignments can't race on the repo's
 // shared SessionState pointers. Returns (nil, nil) when there is nothing to do
 // (session gone, or PID already assigned). Subagent sessions share the parent's
 // PID, so no cleanup is reported for them.
-func (pm *PIDManager) assignPIDLocked(pid int, sessionID string) (*session.SessionState, []*session.SessionState) {
+func (pm *PIDManager) assignPIDLocked(pid int, sessionID string, confirmed map[string]sharedPIDClaim) (*session.SessionState, []*session.SessionState) {
 	pm.assignMu.Lock()
 	defer pm.assignMu.Unlock()
 
@@ -901,6 +982,9 @@ func (pm *PIDManager) assignPIDLocked(pid int, sessionID string) (*session.Sessi
 	var stale []*session.SessionState
 	for _, old := range states {
 		if isDedupDeleteCandidate(old, pid, state) {
+			if claim, ok := confirmed[old.SessionID]; ok && old.Adapter == state.Adapter && sharedPIDClaimStillMatches(old, claim) {
+				continue
+			}
 			stale = append(stale, old)
 		}
 	}
@@ -2093,6 +2177,9 @@ func (pm *PIDManager) dedupeByPID(states []*session.SessionState, newestByPID ma
 			if !isDedupDeleteCandidate(state, pid, newest) {
 				continue
 			}
+			if pm.confirmsSharedPID(sharedPIDClaimOf(state), newest.Adapter, pid) {
+				continue
+			}
 			if s, _ := pm.repo.Load(state.SessionID); s == nil {
 				continue
 			}
@@ -2125,9 +2212,9 @@ func (pm *PIDManager) removeSessionUntracked(tag string, s *session.SessionState
 	pm.broadcast(outbound.PushTypeDeleted, s)
 }
 
-// isDedupDeleteCandidate returns true when victim is a stale duplicate PID
-// holder that should be deleted in favor of winner — the single "same pid,
-// keep winner, drop victim" policy shared by all three same-PID
+// isDedupDeleteCandidate returns true when victim is a duplicate PID
+// candidate. The caller still checks opt-in shared-PID ownership before
+// deletion. This candidate policy is shared by all three same-PID
 // reconciliation paths (issue #1992 unified these from two independent
 // spellings): assignment-time cleanup (assignPIDLocked's same-PID scan, acted
 // on by cleanupStalePIDHolders), seed-time dedup (dedupeByPID, via SeedPIDs),
@@ -2298,20 +2385,29 @@ func (pm *PIDManager) dedupeByPIDPeriodic() {
 		pm.trackNewestByPID(state, newestByPID)
 	}
 	type victim struct {
-		state  *session.SessionState
-		winner string
+		state         *session.SessionState
+		winner        string
+		winnerAdapter string
+		claim         sharedPIDClaim
+		pid           int
 	}
 	var victims []victim
 	for pid, winner := range newestByPID {
 		for _, state := range states {
 			if isDedupDeleteCandidate(state, pid, winner) {
-				victims = append(victims, victim{state: state, winner: winner.SessionID})
+				victims = append(victims, victim{
+					state: state, winner: winner.SessionID,
+					winnerAdapter: winner.Adapter, claim: sharedPIDClaimOf(state), pid: pid,
+				})
 			}
 		}
 	}
 	pm.assignMu.Unlock()
 
 	for _, v := range victims {
+		if pm.confirmsSharedPID(v.claim, v.winnerAdapter, v.pid) {
+			continue
+		}
 		if s, _ := pm.repo.Load(v.state.SessionID); s == nil {
 			continue
 		}

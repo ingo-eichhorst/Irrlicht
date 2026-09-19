@@ -357,6 +357,9 @@ type Identity struct {
 type Process struct {
 	Match         ProcessMatcher
 	PIDForSession PIDDiscoverFunc
+	// SharedPIDOwner is optional. It keeps an existing same-adapter root only
+	// when that root independently proves it still owns the shared PID.
+	SharedPIDOwner SharedPIDOwnerFunc
 
 	// ExcludeArgv, when non-nil, lets an adapter reject a matched process by
 	// inspecting its argv. The process scanner consults it after a PID

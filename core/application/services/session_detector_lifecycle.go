@@ -11,7 +11,7 @@ import (
 	"irrlicht/core/ports/outbound"
 )
 
-func (d *SessionDetector) onRemoved(ev agent.Event) {
+func (d *SessionDetector) onRemoved(id agent.Identity, ev agent.Event) {
 	// A .jsonl "removal" is often a *relocation*, not a deletion. Claude Code
 	// derives a session's project-dir slug from its cwd, so when a session cd's
 	// into a git worktree it moves its transcript to a new slug (same session
@@ -19,9 +19,14 @@ func (d *SessionDetector) onRemoved(ev agent.Event) {
 	// (fswatcher collapses Rename→Removed), but the session is alive and still
 	// working. Re-point tracking at the surviving copy instead of forcing the
 	// session to ready (issue #877).
-	if newPath := relocatedTranscript(ev.TranscriptPath); newPath != "" {
-		d.onRelocated(ev, newPath)
-		return
+	// Only Claude Code has the measured project-slug relocation behavior.
+	// DSH sessions each name their transcript session.vN.jsonl.zstd, so a
+	// sibling filename is another session, not proof of a move (#1989).
+	if id.Name == "claude-code" {
+		if newPath := relocatedTranscript(ev.TranscriptPath); newPath != "" {
+			d.onRelocated(ev, newPath)
+			return
+		}
 	}
 
 	d.log.LogInfo(logComponentSessionDetector, ev.SessionID, "session removed")
@@ -110,9 +115,9 @@ func (d *SessionDetector) onRelocated(ev agent.Event, newPath string) {
 // removal.
 //
 // The scan is scoped to the sibling project dirs of the removed path
-// (<projectsRoot>/*/<file>), so it stays adapter-agnostic: layouts that don't
-// place transcripts exactly one level under a shared root simply find no match
-// and fall through to the normal removal path. filepath.Glob only returns paths
+// (<projectsRoot>/*/<file>). onRemoved calls it only for Claude Code: DSH
+// sessions use the same transcript filename in distinct sibling directories.
+// filepath.Glob only returns paths
 // that exist, and the removed path no longer does, so any other match is a live
 // relocated copy.
 //
