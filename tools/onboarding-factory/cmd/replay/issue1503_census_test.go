@@ -248,8 +248,11 @@ type catalogCensus struct {
 // The DeepSeek Harness sidecars added by #1985 account for the Recordings
 // change. `go test ./tools/onboarding-factory/cmd/replay -run
 // TestCatalogCensusMatchesTheCommittedFigures -count=1` measured the value.
+// #1986 adds graded non-core DeepSeek Harness sidecars and a second task-list
+// recording. The same census command measured only the Recordings field moving;
+// the replay discrepancy populations and ungraded population held constant.
 var censusOfTheCommittedCatalog = catalogCensus{
-	Recordings:                395,
+	Recordings:                425,
 	Zero:                      1,
 	Fabricated:                3,
 	Divergent:                 188,
