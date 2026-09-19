@@ -88,6 +88,7 @@ func handleNonMessageEvent(ev *tailer.ParsedEvent, eventType string, raw map[str
 		if model, ok := raw["modelId"].(string); ok && model != "" {
 			ev.ModelName = tailer.NormalizeModelName(model)
 		}
+		applyPiModelChangeProvider(ev, raw)
 		ev.Skip = true
 		return true
 
@@ -104,6 +105,85 @@ func handleNonMessageEvent(ev *tailer.ParsedEvent, eventType string, raw map[str
 	}
 
 	return false
+}
+
+// piProviderRouteState classifies raw["provider"] on a model_change event
+// into one of five distinct outcomes (issue #2005 §6's fixture table). Only
+// piProviderRouteMapped ever stamps ev.RateLimit; the other four all leave it
+// nil — but the distinct return value gives "malformed" and "unmapped" a
+// witness separate from "absent", instead of collapsing all non-mapped cases
+// into one indistinguishable no-op.
+type piProviderRouteState string
+
+const (
+	piProviderRouteAbsent    piProviderRouteState = "absent"    // key missing entirely
+	piProviderRouteEmpty     piProviderRouteState = "empty"     // present, empty string
+	piProviderRouteMalformed piProviderRouteState = "malformed" // present, non-string
+	piProviderRouteUnmapped  piProviderRouteState = "unmapped"  // string, no entry in piProviderRoutes
+	piProviderRouteMapped    piProviderRouteState = "mapped"    // string, resolves to a canonical provider
+)
+
+// piProviderRoutes maps Pi's own route names — as recorded verbatim in
+// model_change's "provider" field — to Irrlicht's canonical billing-provider
+// IDs (issue #2005 §9 question 2: the route name is not itself an Irrlicht
+// provider ID, so the mapping is an explicit literal table, never a string
+// match). "openai-codex" is the only route name verified in a Pi transcript —
+// committed at replaydata/agents/pi/regressions/model-switch — so the table
+// has exactly one entry rather than a guessed set.
+var piProviderRoutes = map[string]string{
+	"openai-codex": tailer.ProviderOpenAI,
+}
+
+// classifyPiProviderRoute reads raw["provider"] and reports which of
+// piProviderRouteState's five outcomes it falls into, resolving the mapped
+// provider ID when the outcome is piProviderRouteMapped.
+func classifyPiProviderRoute(raw map[string]interface{}) (piProviderRouteState, string) {
+	v, present := raw["provider"]
+	if !present {
+		return piProviderRouteAbsent, ""
+	}
+	s, ok := v.(string)
+	if !ok {
+		return piProviderRouteMalformed, ""
+	}
+	if s == "" {
+		return piProviderRouteEmpty, ""
+	}
+	provider, ok := piProviderRoutes[s]
+	if !ok {
+		return piProviderRouteUnmapped, ""
+	}
+	return piProviderRouteMapped, provider
+}
+
+// applyPiModelChangeProvider stamps ev.RateLimit with the route Pi's own
+// model_change event named, when — and only when — that route resolves to a
+// known provider (see classifyPiProviderRoute). This is identity evidence
+// only, not a quota snapshot: it carries no Windows, no Credits and no
+// ConfirmedAccountRef, because Pi's transcript names the route it selected,
+// not a confirmed billing account (issue #2005 §1.3 / §9 question 1). The
+// tailer folds this into the session's Metrics.RateLimit
+// (tailer_metrics.go's ingestRateLimit) exactly as codex/parser.go's own
+// rate_limits stamp does, so quotainherit.go's ProviderForSession resolves
+// it identically regardless of which adapter observed the evidence.
+//
+// A later model_change naming a different route replaces this stamp for
+// SUBSEQUENT attribution only: cost_tracker.go's RecordSnapshot appends one
+// row per write rather than rewriting a stored row, so a row already written
+// under an earlier provider keeps that provider even after this stamp
+// changes (issue #2005 §6 row 5 — see TestParser_ModelChange_LaterProviderDoesNotRelabelEarlierUsage).
+func applyPiModelChangeProvider(ev *tailer.ParsedEvent, raw map[string]interface{}) {
+	state, provider := classifyPiProviderRoute(raw)
+	if state != piProviderRouteMapped {
+		return
+	}
+	ev.RateLimit = &tailer.RateLimitSnapshot{
+		SampledAt:           ev.Timestamp.Unix(),
+		Provider:            provider,
+		ObservationSource:   "transcript",
+		AttributionEvidence: "pi_transcript_model_change",
+		AttributionQuality:  tailer.AttributionQualityConfirmed,
+	}
 }
 
 // handleSessionEvent fills ev from a Pi "session" header event:

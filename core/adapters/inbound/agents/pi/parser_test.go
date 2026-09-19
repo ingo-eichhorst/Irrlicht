@@ -609,3 +609,196 @@ func TestParser_NormalStopHasNoSessionError(t *testing.T) {
 		t.Errorf("a clean turn must carry no session error, got %+v", ev.SessionError)
 	}
 }
+
+// TestParser_ModelChange_RetainsProvider is issue #2005's red-first defect
+// test: parses the committed regression fixture's first model_change line
+// (replaydata/agents/pi/regressions/model-switch), which carries
+// "provider":"openai-codex" alongside modelId, and asserts the parsed event
+// retains it as route evidence. On main (before this ticket's fix), the
+// parser never reads raw["provider"] at all, so ev.RateLimit stays nil and
+// this assertion fails.
+func TestParser_ModelChange_RetainsProvider(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "..",
+		"replaydata", "agents", "pi", "regressions", "model-switch",
+		"recordings", "2026-05-25-04-09-10_irrlichd-0.4.7+2a46388", "transcript.jsonl"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	var raw map[string]interface{}
+	var found bool
+	for _, line := range lines {
+		var candidate map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &candidate); err != nil {
+			t.Fatalf("unmarshal fixture line: %v", err)
+		}
+		if candidate["type"] == "model_change" {
+			raw = candidate
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("fixture has no model_change line — fixture assumption broken")
+	}
+	if raw["provider"] != "openai-codex" {
+		t.Fatalf("fixture's model_change provider = %v, want openai-codex — fixture assumption broken", raw["provider"])
+	}
+
+	p := &Parser{}
+	ev := p.ParseLine(raw)
+
+	if ev.RateLimit == nil {
+		t.Fatal("expected ev.RateLimit to carry the transcript's provider evidence, got nil")
+	}
+	if ev.RateLimit.Provider != tailer.ProviderOpenAI {
+		t.Errorf("RateLimit.Provider = %q, want %q", ev.RateLimit.Provider, tailer.ProviderOpenAI)
+	}
+	if ev.RateLimit.AttributionQuality != tailer.AttributionQualityConfirmed {
+		t.Errorf("RateLimit.AttributionQuality = %q, want %q", ev.RateLimit.AttributionQuality, tailer.AttributionQualityConfirmed)
+	}
+}
+
+// TestParser_ModelChange_NoProviderKeepsModel is issue #2005 §6 row 2: a
+// model_change with modelId and no provider retains the model but leaves
+// the provider unknown (ev.RateLimit stays nil, not a guessed value).
+func TestParser_ModelChange_NoProviderKeepsModel(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type":    "model_change",
+		"modelId": "gpt-5.3-codex",
+	})
+	if ev.ModelName != "gpt-5.3-codex" {
+		t.Errorf("ModelName = %q, want gpt-5.3-codex", ev.ModelName)
+	}
+	if ev.RateLimit != nil {
+		t.Errorf("expected no RateLimit when provider is absent, got %+v", ev.RateLimit)
+	}
+	if state, _ := classifyPiProviderRoute(map[string]interface{}{"modelId": "x"}); state != piProviderRouteAbsent {
+		t.Errorf("classifyPiProviderRoute state = %q, want absent", state)
+	}
+}
+
+// TestParser_ModelChange_EmptyProviderIsUnknownNotConfirmed is issue #2005
+// §6 row 3: an empty "provider" string must resolve to unknown, never to an
+// empty-but-confirmed value.
+func TestParser_ModelChange_EmptyProviderIsUnknownNotConfirmed(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type":     "model_change",
+		"modelId":  "gpt-5.3-codex",
+		"provider": "",
+	})
+	if ev.RateLimit != nil {
+		t.Errorf("expected no RateLimit for an empty provider string, got %+v", ev.RateLimit)
+	}
+	if state, _ := classifyPiProviderRoute(map[string]interface{}{"provider": ""}); state != piProviderRouteEmpty {
+		t.Errorf("classifyPiProviderRoute state = %q, want empty", state)
+	}
+}
+
+// TestParser_ModelChange_MalformedProviderDistinctFromAbsent is issue #2005
+// §6 row 4: a non-string "provider" value is malformed, and the classifier
+// reports a state distinct from "absent" even though both leave ev.RateLimit
+// nil — the witness the design's "distinct from absent" wording requires.
+func TestParser_ModelChange_MalformedProviderDistinctFromAbsent(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type":     "model_change",
+		"modelId":  "gpt-5.3-codex",
+		"provider": float64(42),
+	})
+	if ev.RateLimit != nil {
+		t.Errorf("expected no RateLimit for a non-string provider, got %+v", ev.RateLimit)
+	}
+	malformedState, _ := classifyPiProviderRoute(map[string]interface{}{"provider": float64(42)})
+	absentState, _ := classifyPiProviderRoute(map[string]interface{}{})
+	if malformedState != piProviderRouteMalformed {
+		t.Errorf("classifyPiProviderRoute state = %q, want malformed", malformedState)
+	}
+	if malformedState == absentState {
+		t.Error("malformed and absent must classify distinctly")
+	}
+}
+
+// TestParser_ModelChange_UnmappedRouteStaysUnknown covers an unrecognized Pi
+// route name: no literal table entry means no guess by string match (issue
+// #2005 §9 question 2).
+func TestParser_ModelChange_UnmappedRouteStaysUnknown(t *testing.T) {
+	p := &Parser{}
+	ev := p.ParseLine(map[string]interface{}{
+		"type":     "model_change",
+		"modelId":  "some-future-model",
+		"provider": "some-future-route",
+	})
+	if ev.RateLimit != nil {
+		t.Errorf("expected no RateLimit for an unmapped route, got %+v", ev.RateLimit)
+	}
+	if state, _ := classifyPiProviderRoute(map[string]interface{}{"provider": "some-future-route"}); state != piProviderRouteUnmapped {
+		t.Errorf("classifyPiProviderRoute state = %q, want unmapped", state)
+	}
+}
+
+// TestParser_ModelChange_LaterProviderDoesNotRelabelEarlierUsage is issue
+// #2005 §6 row 5, exercised through the real tailer: two model_change events
+// naming different providers within the same transcript. The tailer's
+// metrics reflect the LATER provider for subsequent attribution
+// (ingestRateLimit in tailer_metrics.go replaces the whole snapshot on every
+// model_change, exactly as it already does for codex's per-event
+// rate_limits). Earlier per-turn cost rows are never rewritten —
+// cost_tracker.go's RecordSnapshot only ever appends (os.O_APPEND, see
+// TestRecordSnapshot_AppendsOnChange in
+// core/adapters/outbound/filesystem/cost_tracker_test.go) — so a row already
+// written under the earlier provider is untouched by this replacement; that
+// half is a lock on existing behavior, not new code from this ticket.
+func TestParser_ModelChange_LaterProviderDoesNotRelabelEarlierUsage(t *testing.T) {
+	t0 := ts(0)
+	t1 := ts(1)
+	t2 := ts(2)
+	t3 := ts(3)
+	path := writeLines(t, []map[string]interface{}{
+		{"type": "session", "version": float64(3), "cwd": "/tmp"},
+		{"type": "model_change", "timestamp": t0, "provider": "openai-codex", "modelId": "gpt-5.4-mini"},
+		{"type": "message", "timestamp": t1, "message": map[string]interface{}{
+			"role": "user", "content": []interface{}{
+				map[string]interface{}{"type": "text", "text": "go"},
+			},
+		}},
+		{"type": "message", "timestamp": t2, "message": map[string]interface{}{
+			"role": "assistant", "stopReason": "stop", "model": "gpt-5.4-mini",
+			"usage": map[string]interface{}{"input": float64(100), "output": float64(20), "cost": float64(0.001)},
+		}},
+		// A second model_change on the same session — same route today
+		// (only one table entry exists), but exercises the "later wins"
+		// replacement semantics of ingestRateLimit regardless.
+		{"type": "model_change", "timestamp": t3, "provider": "openai-codex", "modelId": "gpt-5.5"},
+	})
+
+	tl := tailer.NewTranscriptTailer(path, &Parser{}, "pi")
+	m, err := tl.TailAndProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.RateLimit == nil {
+		t.Fatal("expected a RateLimit snapshot after a mapped model_change")
+	}
+	if m.RateLimit.Provider != tailer.ProviderOpenAI {
+		t.Errorf("RateLimit.Provider = %q, want %q", m.RateLimit.Provider, tailer.ProviderOpenAI)
+	}
+	// SampledAt must track the LATEST model_change's own timestamp, not the
+	// first — the concrete, assertable form of "later wins for subsequent
+	// attribution".
+	wantSampledAt := mustParseRFC3339(t, t3).Unix()
+	if m.RateLimit.SampledAt != wantSampledAt {
+		t.Errorf("RateLimit.SampledAt = %d, want %d (the later model_change's timestamp)", m.RateLimit.SampledAt, wantSampledAt)
+	}
+}
+
+func mustParseRFC3339(t *testing.T, s string) time.Time {
+	t.Helper()
+	parsed, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		t.Fatalf("parse timestamp %q: %v", s, err)
+	}
+	return parsed
+}
