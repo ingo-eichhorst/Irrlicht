@@ -475,6 +475,89 @@ func TestHandleGetSessions_AttachesProviderCosts(t *testing.T) {
 	}
 }
 
+// TestHandleGetSessions_ProviderCostsIncludesUnattributedBucket is #1996's
+// full-round-trip proof: a session whose cost rows carry no provider (no
+// confirmed billing attribution) contributes to the project total AND
+// surfaces in provider_costs, under the reserved "unattributed" key, so the
+// sum of every provider_costs group equals the project total — the
+// completion criterion stated in the issue. Exercises the real pipeline
+// (CostTracker.CostsInWindows → foldSessionWindows → providerCostsByProvider
+// via the actual HTTP handler), complementing
+// TestProviderCostsByProvider_UnattributedBucketPreservesTotal's narrower
+// unit-level check in handlers_cost_test.go.
+func TestHandleGetSessions_ProviderCostsIncludesUnattributedBucket(t *testing.T) {
+	repoDir := t.TempDir()
+	costDir := filepath.Join(t.TempDir(), "cost")
+	if err := os.MkdirAll(costDir, 0o700); err != nil {
+		t.Fatalf("mkdir cost dir: %v", err)
+	}
+
+	now := time.Now().Unix()
+	// Unattributed session: $5.00 baseline (10h ago) → $9.00 now ⇒ $4.00 in
+	// every trailing window. No provider — the shape this ticket protects.
+	writeCostRow(t, costDir, "proj-a", now-10*3600, "sess-u", 5.00)
+	writeCostRow(t, costDir, "proj-a", now-1*3600, "sess-u", 9.00)
+
+	repo := filesystem.NewWithDir(repoDir)
+	tracker := filesystem.NewCostTrackerWithDir(costDir)
+	if err := repo.Save(&session.SessionState{
+		SessionID:   "sess-u",
+		State:       session.StateReady,
+		ProjectName: "proj-a",
+		FirstSeen:   now - 10*3600,
+		UpdatedAt:   now,
+	}); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+
+	push := services.NewPushService()
+	orchMonitor := services.NewOrchestratorMonitor(nil, push, nil)
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/sessions", handleGetSessions(repo, orchMonitor, tracker, nil))
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/v1/sessions")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: got %d, want 200", resp.StatusCode)
+	}
+
+	var payload sessionsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	projA := findAgentGroup(payload.Groups, "proj-a")
+	if projA == nil || projA.Costs == nil {
+		t.Fatalf("proj-a group/costs missing: %+v", payload.Groups)
+	}
+	projectDay := projA.Costs["day"]
+	if projectDay < 3.99 || projectDay > 4.01 {
+		t.Fatalf("proj-a.Costs[day]: want ≈4.00, got %v", projectDay)
+	}
+
+	unattributed := payload.ProviderCosts["unattributed"]
+	if unattributed == nil {
+		t.Fatalf(`provider_costs missing "unattributed" key: %+v`, payload.ProviderCosts)
+	}
+	if v := unattributed["day"]; v < 3.99 || v > 4.01 {
+		t.Errorf(`provider_costs["unattributed"]["day"]: want ≈4.00, got %v`, v)
+	}
+	// The completion criterion: sum of every provider_costs group equals the
+	// project total, for this timeframe.
+	var providerTotalDay float64
+	for _, byTf := range payload.ProviderCosts {
+		providerTotalDay += byTf["day"]
+	}
+	if diff := providerTotalDay - projectDay; diff > 0.01 || diff < -0.01 {
+		t.Errorf("provider_costs day total (%v) must equal project total (%v)", providerTotalDay, projectDay)
+	}
+}
+
 // TestHandleGetSessions_OmitsCostsWhenTrackerNil keeps the no-tracker path
 // honest: the response must parse cleanly and groups must not carry a
 // costs field.

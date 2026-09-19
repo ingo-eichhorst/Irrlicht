@@ -11,6 +11,18 @@ extension SessionManager {
     /// Top-level /api/v1/sessions payload: the dashboard hierarchy plus
     /// per-provider trailing-window spend. `provider_costs` is keyed
     /// providerKey → timeframe ("day"/"week"/"month"/"year") → USD.
+    ///
+    /// `providerKey` can now be the reserved `"unattributed"` bucket (issue
+    /// #1996), for cost rows with no confirmed billing attribution,
+    /// alongside real provider keys ("anthropic"/"openai"). This dictionary
+    /// decode is already key-agnostic — Codable does not filter or
+    /// whitelist keys — so no change was needed here to avoid dropping it.
+    /// What is NOT true: `SessionListView.quotaUsageBody` (the one reader of
+    /// `SessionManager.providerCosts`, populated from this field — see
+    /// `SessionManager+Hydration.swift`) looks up a SPECIFIC provider key
+    /// per quota chip, never enumerates this dictionary's keys generically,
+    /// so nothing today renders an "Unattributed" chip from it. See #1996's
+    /// report for the full audit.
     struct SessionsResponse: Decodable {
         let groups: [AgentGroup]
         let providerCosts: [String: [String: Double]]?
