@@ -16,6 +16,13 @@ import (
 
 const missingPublicURLReason = "QR pairing is unavailable — start the relay with --public-url https://relay.example.com."
 
+// missingPublicURLEnrollReason is missingPublicURLReason's enrollment
+// counterpart (#1963): there is no QR anywhere on the enrollment path, so
+// the one line explaining why no enrollment URL was built must name
+// enrollment, not phone pairing, and say the code itself is not degraded —
+// only the URL form is unavailable.
+const missingPublicURLEnrollReason = "the enrollment URL is unavailable — start the relay with --public-url https://relay.example.com. The code itself still works when typed or pasted into the desktop app by hand."
+
 // pairingHandoff is the relay-owned public origin for phone installation.
 // The reason remains available when the origin is absent or invalid so both
 // user interfaces can keep manual pairing and explain why no QR is present.
@@ -72,6 +79,22 @@ func (h pairingHandoff) enrollURL(code string) string {
 		return ""
 	}
 	return h.publicURL + "/enroll/" + code
+}
+
+// enrollUnavailableReason maps handoff's pairing-flavored unavailableReason
+// to enrollment's own wording for the common case a default `serve`/
+// `enroll new` hits — --public-url missing entirely (resolvePairingHandoff
+// returns missingPublicURLReason for that, and only that, case; verified by
+// reading resolvePairingHandoff above). The rarer case — a --public-url
+// that was given but fails the format checks — is left as invalidPairingHandoff
+// wrote it: "--public-url must be one absolute HTTPS origin..." already
+// names the concrete fix independent of which feature is asking, so it is
+// not misleading the way the QR-specific missing-URL text is.
+func enrollUnavailableReason(h pairingHandoff) string {
+	if h.unavailableReason == missingPublicURLReason {
+		return missingPublicURLEnrollReason
+	}
+	return h.unavailableReason
 }
 
 // pairingQRDataURL returns a self-contained PNG. The authenticated mint

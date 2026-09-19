@@ -8,12 +8,52 @@ package main
 // enrollment's specific wiring — the file-backed Store, and the HTTP route
 // on top of it — actually delivers those properties end to end, including
 // across two independent processes.
+//
+// Mutation evidence (AGENTS.md: anything a change adds owes a mutation seen
+// red, not just a green test — the shape push_hardening_test.go's header
+// uses). Every row below was a real source edit, run against this suite,
+// captured, then reverted with `git show <checkpoint>:<path> > <path>`; this
+// table transcribes what was actually seen, not what was planned.
+//
+//	Source edit                                                          | Test(s) that went red                                          | What the red looked like
+//	----------------------------------------------------------------------|------------------------------------------------------------------|--------------------------------------------------------------
+//	registerEnrollRoutes: removed the `mgr == nil || store == nil`        | TestEnrollRequiresAuthGuard                                      | nil-pointer panic inside Manager.Redeem; the request came
+//	early-return arm                                                     |                                                                   | back as a connection EOF instead of 403
+//	registerEnrollHandoffRoute: removed the `handoff.enrollURL(code)      | TestEnrollHandoffRejectsInvalidCode,                             | GET /enroll/not-a-code = 200 (echoing "not-a-code" into the
+//	== ""` guard before writing the response body                        | TestEnrollHandoffWithoutPublicURLIs404                           | body) instead of 404; same for a well-shaped code with no
+//	                                                                      |                                                                   | --public-url configured
+//	handleEnrollRedeem: echoed req.Code into the failure message          | TestEnrollRedeemUniformFailure                                   | expired-code body carried the expired code's own text and
+//	instead of the uniform enrollCodeInvalidMsg constant                 |                                                                   | differed from the unknown-code body — no longer uniform
+//	fileEnrollStore.Save: stubbed to `return nil` before doing            | TestEnrollMintCapAt32ThroughFileStore                            | mint #33 succeeded (err == nil) instead of ErrTooManyCodes —
+//	anything (persistence disabled)                                      |                                                                   | nothing was ever actually written, so nothing ever counted
+//	handleEnrollRedeem: removed the                                       | TestEnrollRedeemFailureWindowAnswers429ThroughRoute              | redeem(correct) while the window was saturated answered 401
+//	`errors.Is(err, onetimecode.ErrRateLimited)` -> 429 branch            |                                                                   | instead of 429
+//	Cross-process test itself: pointed both managers at independent       | TestEnrollCrossProcessMintRedeem                                 | redeem in process B of a code minted in process A answered
+//	onetimecode.NewMemoryStore()s instead of the shared file (proves      |                                                                   | 401 instead of 200 — this is the storage-decision proof,
+//	the storage decision, not a source defect)                           |                                                                   | so the "mutation" here is the test's own store wiring
+//	registerEnrollRoutes: commented out the                               | TestEnrollMintRequiresToken, TestEnrollMintEndToEnd,             | all three got 503 "dashboard UI not found" (the mux's
+//	`POST /api/v1/enroll/requests` registration                          | TestEnrollMintCapAnswers429ThroughRoute                          | catch-all "/" route) instead of the enroll route's own
+//	                                                                      |                                                                   | answer — proves the route did not exist before Phase 2
+//	handleEnrollRedeem: label fallback stubbed to ignore req.Label        | TestEnrollRedeemLabelPreference                                  | stored label was the mint-time label ("mint-label") instead
+//	(used only mintLabel, the pre-fix behavior)                          |                                                                   | of the redeem-time override ("redeem-label")
+//	fileEnrollStore.Load: dropped the mtime-changed check                | TestEnrollCrossProcessMintRedeem (its third, warm-cache          | redeem of a code A minted AFTER B's cache had already
+//	(`!f.loaded || !mtime.Equal(f.mtime)` -> `!f.loaded`)                 | round)                                                           | loaded once answered 401 instead of 200 — the warm cache
+//	                                                                      |                                                                   | never noticed the file changed
+//	main.go/enroll_handlers.go: both enrollUnavailableReason call sites   | TestEnrollNewWithoutPublicURLNamesEnrollment,                    | both outputs contained the literal string "QR pairing is
+//	(runEnrollNew, mintResp.EnrollURLReason) reverted to                 | TestEnrollMintResponseReasonNamesEnrollment                      | unavailable..." — the wrong feature's reason text, on a
+//	`handoff.unavailableReason` directly (the pre-fix behavior)          |                                                                   | path with no QR anywhere
+//
+// core/pkg/onetimecode/onetimecode_test.go carries the two mutations run
+// against the shared leaf itself (Store.Key's normalization argument, and
+// sweepExpired's allocation) — see that file's own header table.
 
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -464,5 +504,83 @@ func TestEnrollHandoffWithoutPublicURLIs404(t *testing.T) {
 	status, _ := doPush(t, http.MethodGet, srv.URL+"/enroll/ABCD-EFGH", "", nil)
 	if status != http.StatusNotFound {
 		t.Fatalf("GET /enroll/ABCD-EFGH with no --public-url = %d, want 404", status)
+	}
+}
+
+// TestEnrollUnavailableReasonNamesEnrollmentNotPairing pins the fix for a
+// QA finding: the missing-public-URL reason enrollment surfaces must name
+// enrollment and say the code still works by hand, not reuse pairing's
+// QR-specific wording. Seen red before the fix (see this file's mutation
+// table): with enrollUnavailableReason's substitution removed, both
+// assertions below failed against handoff.unavailableReason's literal QR
+// text.
+func TestEnrollUnavailableReasonNamesEnrollmentNotPairing(t *testing.T) {
+	reason := enrollUnavailableReason(resolvePairingHandoff(""))
+	if strings.Contains(reason, "QR") {
+		t.Fatalf("enrollment's missing-URL reason mentions QR: %q", reason)
+	}
+	if !strings.Contains(reason, "--public-url") {
+		t.Fatalf("enrollment's missing-URL reason does not name the fix (--public-url): %q", reason)
+	}
+	if !strings.Contains(reason, "by hand") {
+		t.Fatalf("enrollment's missing-URL reason does not say the code still works by hand: %q", reason)
+	}
+}
+
+// TestEnrollUnavailableReasonPassesThroughInvalidURLCase leaves the rarer
+// invalid-(not missing)-URL message alone: it already names its fix
+// independent of which feature is asking, so enrollUnavailableReason must
+// not rewrite it.
+func TestEnrollUnavailableReasonPassesThroughInvalidURLCase(t *testing.T) {
+	handoff := resolvePairingHandoff("not a valid url")
+	if got, want := enrollUnavailableReason(handoff), handoff.unavailableReason; got != want {
+		t.Fatalf("enrollUnavailableReason(invalid) = %q, want the unchanged pairing reason %q", got, want)
+	}
+}
+
+// TestEnrollNewWithoutPublicURLNamesEnrollment drives runEnrollNew's own
+// stdout — the CLI counterpart to TestEnrollMintResponseReasonNamesEnrollment,
+// the other of the two call sites enrollUnavailableReason fixes.
+func TestEnrollNewWithoutPublicURLNamesEnrollment(t *testing.T) {
+	ddir := t.TempDir()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := os.Stdout
+	os.Stdout = w
+	runEnrollNew(ddir, "laptop", "acme", "")
+	w.Close()
+	os.Stdout = orig
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "QR") {
+		t.Fatalf("enroll new output mentions QR: %s", out)
+	}
+	if !strings.Contains(string(out), "enrollment URL") {
+		t.Fatalf("enroll new output does not name the enrollment URL: %s", out)
+	}
+}
+
+// TestEnrollMintResponseReasonNamesEnrollment drives the same property
+// through the live Phase 2 mint route's JSON response — env's pairing is
+// resolvePairingHandoff("") (newEnrollEnv), the missing-URL case.
+func TestEnrollMintResponseReasonNamesEnrollment(t *testing.T) {
+	env := newEnrollEnv(t, nil, tokenSeed{label: "dashboard", workspace: "acme"})
+
+	status, body := doPush(t, http.MethodPost, env.srv.URL+"/api/v1/enroll/requests", env.tokens["dashboard"], nil)
+	if status != http.StatusCreated {
+		t.Fatalf("mint = %d: %s", status, body)
+	}
+	var resp struct {
+		EnrollURLReason string `json:"enroll_url_reason"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(resp.EnrollURLReason, "QR") {
+		t.Fatalf("mint response's enroll_url_reason mentions QR: %q", resp.EnrollURLReason)
 	}
 }

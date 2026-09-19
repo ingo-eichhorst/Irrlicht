@@ -9,14 +9,15 @@ package main
 // is a file, not RAM. Per the onetimecode.Store contract, each record holds
 // the SHA-256 hash of the normalized code, never the plaintext, exactly as
 // TokenRecord hashes bearer tokens (tokens.go). The serving relay re-reads
-// the file by mtime on the redeem path, in the shape of
-// authStore.reloadIfChanged (tokens.go:237): stat before read, so a write
-// landing between the two calls cannot stamp stale content with a fresh
-// mtime (see that function's comment for the race this ordering avoids).
+// the file by mtime on the redeem path, checking whether it changed the way
+// authStore.reloadIfChanged does (tokens.go:237) and stating before reading
+// the way authStore.reload does (tokens.go:205-211): stat before read, so a
+// write landing between the two calls cannot stamp stale content with a
+// fresh mtime — see reload's own comment for the race that ordering avoids.
 // Mint races between the CLI and a serving relay inherit exactly the
-// cross-process race authStore.writeMu's comment (tokens.go:157) already
-// accepts for tokens; this store deliberately adds no cross-process locking
-// either.
+// cross-process race authStore.writeMu's comment (tokens.go:160-166)
+// already accepts for tokens; this store deliberately adds no cross-process
+// locking either.
 
 import (
 	"crypto/sha256"

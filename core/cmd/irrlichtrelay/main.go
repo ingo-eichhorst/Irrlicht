@@ -524,8 +524,9 @@ func runEnroll(args []string) {
 
 // runEnrollNew mints an enrollment code with no relay running and prints
 // the URL a desktop pastes into its enrollment field. With no --public-url
-// it prints the bare code plus the same reason QR pairing gives — it does
-// not fail: the code is minted and usable by hand either way.
+// it prints the bare code plus enrollment's own reason (not pairing's QR
+// text — there is no QR anywhere on this path) — it does not fail: the
+// code is minted and usable by hand either way.
 func runEnrollNew(dataDir, label, workspace, publicURL string) {
 	mgr := newEnrollManager(dataDir, nil)
 	code, ttl, err := mgr.Mint(workspace, label)
@@ -537,7 +538,7 @@ func runEnrollNew(dataDir, label, workspace, publicURL string) {
 		fmt.Println(url)
 	} else {
 		fmt.Println(code)
-		fmt.Println(handoff.unavailableReason)
+		fmt.Println(enrollUnavailableReason(handoff))
 	}
 	fmt.Printf("Expires in %s. Paste it into the desktop app's enrollment field — it works once.\n", ttl)
 }

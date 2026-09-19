@@ -80,7 +80,7 @@ func handleMintEnroll(mgr *onetimecode.Manager, handoff pairingHandoff) http.Han
 		}
 		pushJSON(w, http.StatusCreated, mintResp{
 			Code: code, ExpiresIn: int(ttl / time.Second),
-			EnrollURL: handoff.enrollURL(code), EnrollURLReason: handoff.unavailableReason,
+			EnrollURL: handoff.enrollURL(code), EnrollURLReason: enrollUnavailableReason(handoff),
 		})
 	}
 }

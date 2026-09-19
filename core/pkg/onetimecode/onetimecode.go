@@ -18,9 +18,14 @@
 // once, so the security property is implemented once for both callers
 // rather than twice (docs/mobile-notifications-arc42.md §8.1, §8.6).
 //
-// Stdlib imports only: core/architecture_test.go forbids core/pkg/ from
-// reaching into adapters or application, and this leaf sits under cmd/,
-// which has no layering constraint of its own but must not need one either.
+// This package sits under core/pkg/, the layer core/architecture_test.go's
+// "pkg must not import adapters or application" rule constrains — it stays
+// clear of that rule trivially, importing stdlib only (crypto/rand,
+// crypto/subtle, errors, math/big, strings, sync, time; verified by reading
+// this file's own import block, not by assertion). Both consumers —
+// core/cmd/irrlichtrelay/push and core/cmd/irrlichtrelay's enroll_*.go
+// files — live under core/cmd/irrlichtrelay, which carries no import
+// restriction of its own in that test.
 package onetimecode
 
 import (
