@@ -139,12 +139,15 @@ fi
 # ---- pass 1: schema + content validation (no network) ---------------------
 declare -a IDS=() KINDS=() COUNTS=() REVISIONS=() CHECK_URLS=() NAMES=()
 rc=0
+REQUIRED_FIELDS='["id","name","repo","revision","kind","check_url","license","evidence_date","entries"]'
 for f in "${FILES[@]}"; do
-  bad_field=""
-  for field in id name repo revision kind check_url license evidence_date entries; do
-    has=$(jq -r --arg f "$field" 'has($f)' "$f" 2>/dev/null) || { bad_field="<unreadable JSON>"; break; }
-    if [[ "$has" != "true" ]]; then bad_field="$field"; break; fi
-  done
+  # One jq call finds the first missing required field (in declared order),
+  # rather than the nine separate `has($f)` calls this replaced — same
+  # result, called once per source file instead of up to nine times.
+  bad_field=$(jq -r --argjson required "$REQUIRED_FIELDS" '
+    ($required - keys) as $missing
+    | if ($missing | length) > 0 then $missing[0] else empty end
+  ' "$f" 2>/dev/null) || bad_field="<unreadable JSON>"
   if [[ -n "$bad_field" ]]; then
     echo "provider-census: SCHEMA FAILURE in $(basename "$f") — missing or unreadable field '$bad_field'" >&2
     rc=3
@@ -202,8 +205,13 @@ if [[ "$MARKDOWN" -eq 1 ]]; then
   echo "| product | source | kind | revision | evidence date | state | next research action |"
   echo "|---|---|---|---|---|---|---|"
   for i in "${!IDS[@]}"; do
-    f=""
-    for cf in "${FILES[@]}"; do [[ "$(basename "$cf" .json)" == "${IDS[$i]}" ]] && f="$cf"; done
+    # FILES and IDS are index-aligned here: the validation loop above only
+    # ever reaches this point (rc==0) when every file in FILES was appended
+    # to IDS in the same order — any file that failed validation would have
+    # `continue`d past the append and left rc nonzero, which exits before
+    # this output section runs at all. So FILES[i] is simply the file IDS[i]
+    # came from; no re-lookup by basename is needed.
+    f="${FILES[$i]}"
     jq -r --arg src "${IDS[$i]}" --arg kind "${KINDS[$i]}" --arg rev "${REVISIONS[$i]}" '
       .evidence_date as $date
       | (.inspected_paths | join("; ")) as $paths
