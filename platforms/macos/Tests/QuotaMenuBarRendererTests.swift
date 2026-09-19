@@ -328,6 +328,19 @@ final class QuotaMenuBarRendererTests: XCTestCase {
         }
     }
 
+    // MARK: - providerKey (issue #1995: confirmed identity only, no plan_type/adapter inference)
+
+    /// Red-first for #1995: `pro`/`max`/`plus` are generic tier names several
+    /// providers reuse (e.g. GitHub Copilot Pro), so branding off `planType`
+    /// alone misattributes a non-Anthropic session to Anthropic. The fix
+    /// reads the daemon's confirmed `provider`/`attributionQuality` fields
+    /// instead — see `core/domain/session/rate_limit.go`.
+    func testDoesNotBrandANonAnthropicProTierSnapshotAsAnthropic() {
+        let info = RateLimitInfo(windows: [], planType: "pro", sampledAt: now)
+        XCTAssertNotEqual(info.providerKey(adapter: "copilot"), "anthropic",
+                          "a copilot session with plan_type \"pro\" must not brand as Anthropic")
+    }
+
     // MARK: - selectedSnapshot
 
     func testSelectedSnapshotPicksFreshestAcrossSessions() {
