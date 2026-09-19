@@ -8,11 +8,12 @@ import (
 )
 
 // consentCatalog returns every declaration the permission wizard offers: the
-// agent adapters in agents.All() plus three daemon-wide entries with no
+// agent adapters in agents.All() plus four daemon-wide entries with no
 // Source/Process axes — the Gas Town orchestrator (reads ~/gt), launcher-identity
 // capture (reads whitelisted env vars from agent processes for click-to-focus),
-// and the kitty remote-control config patch (writes kitty.conf for tab-precise
-// click-to-focus, #425).
+// the kitty remote-control config patch (writes kitty.conf for tab-precise
+// click-to-focus, #425), and endpoint-route observation (reads a base-URL
+// override env var for #1994's resolver, #2002).
 //
 // It exists so the composition lives in ONE place (#1383). This list is what
 // IRRLICHT_PERMISSION_MODE=grant-all grants, so it is also the set whose Apply
@@ -33,7 +34,8 @@ func consentCatalog(all []agent.Agent, startGastown, stopGastown func() error) [
 	return append(append([]agent.Agent{}, all...),
 		gastownadapter.PermissionDeclaration(startGastown, stopGastown),
 		processlifecycle.LauncherPermissionDeclaration(),
-		processlifecycle.KittyPermissionDeclaration())
+		processlifecycle.KittyPermissionDeclaration(),
+		processlifecycle.EndpointPermissionDeclaration())
 }
 
 // declaredConsentCatalog is consentCatalog for the flag paths, which read the

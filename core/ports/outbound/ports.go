@@ -787,7 +787,10 @@ type ProcessObserver interface {
 	// ArgvOf returns the argument vector of pid (argv[0] is the executable
 	// as invoked). Returns nil, nil when the argv is unreadable (e.g. a
 	// hardened-runtime process that strips it) — an empty argv is not an
-	// error, the same way EnvOf treats an unreadable env.
+	// error. WriterOf draws the same can't-look-vs-found-nothing line
+	// (#1537); EnvOf below draws it too, but as an actual error rather than
+	// a nil/empty collapse, because a caller filtering on a small key set
+	// needs to tell "unreadable" from "readable, key absent" apart (#2002).
 	ArgvOf(pid int) ([]string, error)
 	// CWDOf returns the working directory of pid.
 	CWDOf(pid int) (string, error)
@@ -797,7 +800,23 @@ type ProcessObserver interface {
 	// the implementation looked and found nobody, never that it could not
 	// look (#1537).
 	WriterOf(path string) (int, error)
-	// EnvOf returns the whitelisted launcher env vars of pid. Returns an
-	// empty/nil map (not an error) when the env is unreadable.
-	EnvOf(pid int) (map[string]string, error)
+	// EnvOf returns pid's environment values for keys, and only for keys —
+	// there is no unscoped read. keys is a permission's own extraction set
+	// (e.g. processlifecycle's launcherEnvKeys or endpointEnvKeys); every
+	// caller passes the set its own consent covers, so a caller holding one
+	// permission cannot receive another permission's values (#2002 — before
+	// this, the single package-level launcherEnvKeys whitelist filtered
+	// every caller alike, with no way for a second permission to declare a
+	// narrower or different set). A nil or empty keys returns an empty map.
+	//
+	// Returns a non-nil error when the environment itself could not be
+	// read (process gone, permission denied, or — on darwin — a
+	// hardened-runtime binary that hides its env from the kernel query
+	// entirely). That is "unreadable", distinct from a successful read that
+	// simply found none of keys present ("absent", reported as an empty,
+	// non-nil map with a nil error). Collapsing the two was exactly the
+	// defect: an EnvOf that swallows the read error can't tell an operator
+	// who denied every reader from one who is running a session with no
+	// matching key set at all.
+	EnvOf(pid int, keys map[string]struct{}) (map[string]string, error)
 }

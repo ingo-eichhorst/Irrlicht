@@ -1068,7 +1068,9 @@ type envObserver struct {
 	env map[string]string
 }
 
-func (o envObserver) EnvOf(int) (map[string]string, error) { return o.env, nil }
+func (o envObserver) EnvOf(int, map[string]struct{}) (map[string]string, error) {
+	return o.env, nil
+}
 
 // TestHostIdentity_KittyBackfillWalkCountsTowardCompleteness pins the one
 // ancestry walk that applyAncestryFallbacks used to run and then ignore.
@@ -1206,7 +1208,7 @@ func waitForLauncherEnv(t *testing.T, pid int, env []string) {
 			"pass without reading anything: %v", pid, env)
 	}
 	awaitOrFail(t, func() (bool, string) {
-		got, _ := osProc.EnvOf(pid)
+		got, _ := osProc.EnvOf(pid, launcherEnvKeys)
 		for k, v := range want {
 			if got[k] != v {
 				return false, fmt.Sprintf("pid %d: %s is %q, want %q (read %v)", pid, k, got[k], v, got)

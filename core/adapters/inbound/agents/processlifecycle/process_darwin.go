@@ -214,12 +214,14 @@ func parseLsofFDs(out string, self int) []lsofFD {
 	return entries
 }
 
-// EnvOf returns the whitelisted launcher env of pid via KERN_PROCARGS2 sysctl
-// (readProcessEnv, defined in osutil_darwin.go). Per the port contract an
-// unreadable env is an empty map, not an error.
-func (darwinObserver) EnvOf(pid int) (map[string]string, error) {
-	m, _ := readProcessEnv(pid)
-	return m, nil
+// EnvOf returns the values of keys retained from pid's env, via KERN_PROCARGS2
+// sysctl (readProcessEnv, defined in osutil_darwin.go) — selective RETENTION,
+// not selective reading: the kernel call returns the whole procargs2 buffer,
+// and readProcessEnv keeps only the entries whose key is in keys (#2002 §1.2).
+// Per the port contract, an unreadable env is a non-nil error, distinct from
+// a readable env holding none of keys (empty map, nil error).
+func (darwinObserver) EnvOf(pid int, keys map[string]struct{}) (map[string]string, error) {
+	return readProcessEnv(pid, keys)
 }
 
 // pgrepNoMatch is pgrep's "no process matched" exit status — an answer, not a

@@ -115,7 +115,7 @@ func TestParseProcargs2(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := parseProcargs2(tc.buf)
+			got, _ := parseProcargs2(tc.buf, launcherEnvKeys)
 			if len(got) != len(tc.want) {
 				t.Fatalf("parseProcargs2: want %v, got %v", tc.want, got)
 			}

@@ -846,7 +846,7 @@ func setupPermissionService(mux *http.ServeMux, deps setupPermissionServiceDeps)
 		hasLive = processlifecycle.HasLiveProcess
 	}
 	// consentCatalog (consentcatalog.go) composes the agent adapters with the
-	// three daemon-wide entries. It is shared with the --print-managed-files
+	// four daemon-wide entries. It is shared with the --print-managed-files
 	// and --uninstall-hooks flag paths on purpose: what the wizard offers is
 	// what grant-all grants, so it has to be the same list the recorder's
 	// protected file set is projected from (#1383).
@@ -871,18 +871,22 @@ func setupPermissionService(mux *http.ServeMux, deps setupPermissionServiceDeps)
 	// Gas Town is detected by root-directory presence (stat-only), not by
 	// a live process matcher.
 	permService.SetDetectionProbe(gastownadapter.Name, gastownadapter.RootDetected)
-	// Launcher capture is relevant whenever ANY agent runs, so its wizard
-	// row appears alongside the first detected agent's. Short-circuits on
-	// the first live match, and the detection poller only runs while
-	// something is pending, so the extra scans are bounded.
-	permService.SetDetectionProbe(processlifecycle.LauncherName, func() bool {
+	// Launcher and endpoint-route capture are both relevant whenever ANY
+	// agent runs, so each wizard row appears alongside the first detected
+	// agent's. Short-circuits on the first live match, and the detection
+	// poller only runs while something is pending, so the extra scans are
+	// bounded. Shared rather than duplicated per #2002's new entry — one
+	// scan, two probes reading the same verdict.
+	anyAgentLive := func() bool {
 		for _, a := range allAgents {
 			if processlifecycle.HasLiveProcess(a.Process.Match) {
 				return true
 			}
 		}
 		return false
-	})
+	}
+	permService.SetDetectionProbe(processlifecycle.LauncherName, anyAgentLive)
+	permService.SetDetectionProbe(processlifecycle.EndpointName, anyAgentLive)
 	// kitty is a host integration, not an agent: detected by a live kitty
 	// process or an existing kitty config directory.
 	permService.SetDetectionProbe(processlifecycle.KittyName, processlifecycle.KittyDetected)
@@ -900,6 +904,15 @@ func setupPermissionService(mux *http.ServeMux, deps setupPermissionServiceDeps)
 			return nil, false
 		}
 		return processlifecycle.ReadLauncherEnv(pid)
+	})
+	// Observe a session's provider endpoint at the same first-PID-assignment
+	// point as launcher capture, gated on its OWN permission (#2002) — never
+	// the launcher grant above, and never read at all while denied.
+	// ObserveRoute itself distinguishes denied from every other outcome, so
+	// the closure only has to forward the current grant state.
+	detector.SetRouteReader(func(pid int) *session.RouteObservation {
+		granted := permService.Granted(processlifecycle.EndpointName, processlifecycle.PermissionKeyEndpointEnv)
+		return processlifecycle.ObserveRoute(pid, granted)
 	})
 	// Let a pi session tell us which herdr pane it is in, for the reader
 	// above to use (#1936).

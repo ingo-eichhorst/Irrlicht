@@ -573,8 +573,8 @@ below.
   single-sided narrowing check cannot see the one failure that matters most —
   two commands revoking each other's capability.
   All three project the **full consent catalog** (`consentCatalog` in
-  `core/cmd/irrlichd`), not `agents.All()`: three daemon-wide declarations —
-  gastown, launcher, kitty — are appended outside the adapter registry, and
+  `core/cmd/irrlichd`), not `agents.All()`: four daemon-wide declarations —
+  gastown, launcher, kitty, endpoint — are appended outside the adapter registry, and
   projecting only the registry is exactly how the kitty config patch was
   offered by the wizard while being invisible to every one of them (#1383). The
   catalog-wide tripwire is

@@ -786,6 +786,69 @@ func TestHandlePIDAssigned_LauncherCaptureIsIdempotent(t *testing.T) {
 	}
 }
 
+// TestHandlePIDAssigned_RouteCaptureIsIdempotent mirrors
+// TestHandlePIDAssigned_LauncherCaptureIsIdempotent for #2002's route
+// reader: captured once at first PID assignment, never re-invoked once
+// state.Route is set — matching captureLauncher's set-once shape, minus its
+// repair path (an env-based route read has nothing new to learn on a second
+// look, so there is no equivalent of backfillLauncher for it).
+func TestHandlePIDAssigned_RouteCaptureIsIdempotent(t *testing.T) {
+	repo := newMockRepo()
+	repo.states["s"] = &session.SessionState{
+		SessionID: "s",
+		State:     session.StateWorking,
+		UpdatedAt: time.Now().Unix(),
+	}
+
+	pm := newPIDManagerForTest(repo)
+	var calls int
+	pm.SetRouteReader(func(pid int) *session.RouteObservation {
+		calls++
+		return &session.RouteObservation{Status: session.RouteObserved, Endpoint: "https://api.example.com"}
+	})
+
+	pm.HandlePIDAssigned(42, "s")
+	if calls != 1 {
+		t.Fatalf("first assign: reader calls = %d, want 1", calls)
+	}
+	if repo.states["s"].Route == nil || repo.states["s"].Route.Status != session.RouteObserved {
+		t.Fatalf("first assign: route not captured, got %+v", repo.states["s"].Route)
+	}
+
+	pm.HandlePIDAssigned(42, "s")
+	if calls != 1 {
+		t.Errorf("repeat same PID: reader re-invoked (%d calls)", calls)
+	}
+
+	pm.HandlePIDAssigned(99, "s")
+	if calls != 1 {
+		t.Errorf("new PID with existing route: reader re-invoked (%d calls)", calls)
+	}
+	if repo.states["s"].Route.Endpoint != "https://api.example.com" {
+		t.Errorf("route clobbered by later PID assignment: %+v", repo.states["s"].Route)
+	}
+}
+
+// TestHandlePIDAssigned_NilRouteReaderLeavesRouteNil confirms a nil
+// RouteReader (the default when SetRouteReader is never called) disables
+// capture entirely rather than panicking — matching captureLauncher's own
+// nil-reader guard.
+func TestHandlePIDAssigned_NilRouteReaderLeavesRouteNil(t *testing.T) {
+	repo := newMockRepo()
+	repo.states["s"] = &session.SessionState{
+		SessionID: "s",
+		State:     session.StateWorking,
+		UpdatedAt: time.Now().Unix(),
+	}
+	pm := newPIDManagerForTest(repo)
+
+	pm.HandlePIDAssigned(42, "s")
+
+	if repo.states["s"].Route != nil {
+		t.Errorf("no reader installed: want Route nil, got %+v", repo.states["s"].Route)
+	}
+}
+
 // TestBackfillLauncher_KittyFieldsMergedFromFreshEnv exercises the
 // SeedPIDs → handleAlivePIDState → backfillLauncher path for issue #326:
 // pre-existing kitty sessions that shipped with KittyPID == 0 (because

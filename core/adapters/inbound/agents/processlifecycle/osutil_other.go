@@ -5,14 +5,18 @@ package processlifecycle
 import (
 	"context"
 	"fmt"
+	"runtime"
 
 	"irrlicht/core/domain/session"
 )
 
 // readProcessEnv is not implemented on this platform — launcher capture
-// is disabled and the menu-bar app falls back to Finder-reveal of cwd.
-func readProcessEnv(pid int) (map[string]string, error) {
-	return nil, nil
+// is disabled and the menu-bar app falls back to Finder-reveal of cwd. It
+// now reports that as an error (like CWDOf's stub does) rather than a
+// silent empty map: "cannot look" and "looked, found none of keys" must stay
+// distinct results (#2002), and this platform can only ever mean the first.
+func readProcessEnv(pid int, keys map[string]struct{}) (map[string]string, error) {
+	return nil, fmt.Errorf("process env observation unsupported on %s", runtime.GOOS)
 }
 
 // processTTY is darwin-only host enrichment; other platforms degrade to "".

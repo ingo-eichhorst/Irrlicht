@@ -38,11 +38,13 @@ func (f *diagFakeObserver) FindByName(n string) ([]int, error) { return f.byName
 func (f *diagFakeObserver) ParentPIDOf(context.Context, int) (int, error) {
 	return 0, fmt.Errorf("parent not configured")
 }
-func (f *diagFakeObserver) FindByCmdline(string) ([]int, error)  { return nil, nil }
-func (f *diagFakeObserver) ArgvOf(pid int) ([]string, error)     { return f.argv[pid], nil }
-func (f *diagFakeObserver) CWDOf(pid int) (string, error)        { return f.cwd[pid], nil }
-func (f *diagFakeObserver) WriterOf(string) (int, error)         { return 0, nil }
-func (f *diagFakeObserver) EnvOf(int) (map[string]string, error) { return nil, nil }
+func (f *diagFakeObserver) FindByCmdline(string) ([]int, error) { return nil, nil }
+func (f *diagFakeObserver) ArgvOf(pid int) ([]string, error)    { return f.argv[pid], nil }
+func (f *diagFakeObserver) CWDOf(pid int) (string, error)       { return f.cwd[pid], nil }
+func (f *diagFakeObserver) WriterOf(string) (int, error)        { return 0, nil }
+func (f *diagFakeObserver) EnvOf(int, map[string]struct{}) (map[string]string, error) {
+	return nil, nil
+}
 
 // excludeBgSpare mimics claudecode.IsInfraArgv: a "--bg-spare" element marks an
 // infra process that must never be bound as a session.

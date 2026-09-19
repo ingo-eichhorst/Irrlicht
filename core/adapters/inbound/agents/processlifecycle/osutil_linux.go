@@ -11,9 +11,16 @@ import (
 	"irrlicht/core/domain/session"
 )
 
-// readProcessEnv reads /proc/<pid>/environ and returns the whitelisted
-// entries. The file contains NUL-delimited KEY=VALUE entries.
-func readProcessEnv(pid int) (map[string]string, error) {
+// readProcessEnv reads /proc/<pid>/environ and returns the entries named in
+// keys — selective retention, not selective reading: the kernel exposes the
+// whole environ file to a process with permission to read it, and the
+// filtering happens here. The file contains NUL-delimited KEY=VALUE entries.
+// A read failure (process exited, root-owned) is a non-nil error; a
+// successful read that simply names none of keys is an empty map with a nil
+// error — Linux draws that line for free, since /proc either serves the
+// whole file or refuses it outright, unlike darwin's hardened-runtime
+// partial-hide case (osutil_darwin.go's errEnvHidden).
+func readProcessEnv(pid int, keys map[string]struct{}) (map[string]string, error) {
 	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/environ", pid))
 	if err != nil {
 		return nil, fmt.Errorf("read /proc/%d/environ: %w", pid, err)
@@ -25,7 +32,7 @@ func readProcessEnv(pid int) (map[string]string, error) {
 			continue
 		}
 		key := entry[:eq]
-		if _, ok := launcherEnvKeys[key]; !ok {
+		if _, ok := keys[key]; !ok {
 			continue
 		}
 		out[key] = entry[eq+1:]

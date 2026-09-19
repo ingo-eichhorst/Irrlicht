@@ -47,6 +47,18 @@ type LiveCWDsFunc func(processName string) (map[string]struct{}, error)
 // a revoked consent — returns false rather than true.
 type LauncherEnvReader func(pid int) (l *session.Launcher, hostKnown bool)
 
+// RouteReader observes a session's provider-endpoint route from pid's
+// process env (issue #2002). Unlike LauncherEnvReader it carries no
+// hostKnown-style completeness flag: an env-based read has no later signal
+// that would change its answer (no herdr-style external indirection), so it
+// is captured once at first PID assignment (captureRoute) and never
+// re-evaluated. Always returns a non-nil observation — the reader itself
+// distinguishes denied/unreadable/absent/malformed/observed
+// (processlifecycle.ObserveRoute) rather than collapsing any of them to nil.
+// The real implementation lives in the processlifecycle adapter and is
+// injected to preserve the hexagonal layering.
+type RouteReader func(pid int) *session.RouteObservation
+
 // BackgroundReader reports adapter-specific background-agent metadata for a PID
 // (e.g. Claude Code's kind:"bg" registry entry for an Agent-View background
 // agent). Returns nil for ordinary interactive sessions or PIDs the adapter
@@ -100,6 +112,10 @@ type PIDManager struct {
 
 	// launcherEnv reads launcher env from a PID. Optional — nil skips capture.
 	launcherEnv LauncherEnvReader
+
+	// routeEnv observes a session's provider-endpoint route from a PID
+	// (#2002). Optional — nil skips capture.
+	routeEnv RouteReader
 
 	// herdrPaneRecorder forwards a session's own report of the herdr pane it
 	// runs in to the launcher reader. Optional — nil skips the self-report
@@ -269,6 +285,14 @@ func (pm *PIDManager) SetLauncherEnvReader(fn LauncherEnvReader) {
 	pm.launcherEnv = fn
 }
 
+// SetRouteReader installs a reader that observes a session's provider
+// endpoint from its PID (#2002). Called once at startup. Nil disables route
+// capture — captureRoute then leaves state.Route nil, same as a session that
+// predates this field.
+func (pm *PIDManager) SetRouteReader(fn RouteReader) {
+	pm.routeEnv = fn
+}
+
 // SetHerdrPaneRecorder installs the seam that hands a session's own report of
 // its herdr pane to the launcher reader (#1936). Nil disables the self-report
 // path. Called once at startup.
@@ -368,6 +392,26 @@ func (pm *PIDManager) captureLauncher(state *session.SessionState, pid int) {
 	if l, _ := pm.launcherEnv(pid); l != nil {
 		state.Launcher = l
 	}
+}
+
+// captureRoute invokes the route reader if one is installed and the session
+// does not yet have a route recorded. Safe to call multiple times; only
+// populates on the first call that finds one unset.
+//
+// Set-once, with no repair path — unlike captureLauncher's Launcher (whose
+// herdr-pane address can be confirmed by a later, separate signal), an
+// env-based route read has nothing left to learn on a second look: the
+// process's env at exec time already answered denied/unreadable/absent/
+// malformed/observed, and processlifecycle.ObserveRoute encodes all five
+// distinctly. A permission revoked after this capture does not retroactively
+// clear the stored observation, matching Launcher's own precedent for
+// already-captured host fields (#1485: a revoke must not clear what was
+// captured while the grant was live).
+func (pm *PIDManager) captureRoute(state *session.SessionState, pid int) {
+	if pm.routeEnv == nil || state == nil || state.Route != nil || pid <= 0 {
+		return
+	}
+	state.Route = pm.routeEnv(pid)
 }
 
 // captureBackground flags state as a background agent when the reader recognizes
@@ -977,6 +1021,7 @@ func (pm *PIDManager) assignPIDLocked(pid int, sessionID string, confirmed map[s
 	state.PID = pid
 	pm.captureLauncher(state, pid)
 	pm.captureBackground(state, pid) // after captureLauncher: needs the TTY (#744)
+	pm.captureRoute(state, pid)      // independent of the two above (#2002)
 	state.UpdatedAt = time.Now().Unix()
 	_ = pm.repo.Save(state)
 

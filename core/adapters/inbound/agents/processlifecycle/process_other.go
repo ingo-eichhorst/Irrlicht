@@ -13,8 +13,10 @@ import (
 // stubObserver is the placeholder process observer for platforms without a
 // native mechanism yet (e.g. Windows, until process_windows.go lands).
 // Discovery returns nothing, so no sessions are observed via the process
-// scanner — but the package compiles and the daemon boots. Env reading still
-// works wherever readProcessEnv is implemented, so EnvOf is wired through.
+// scanner — but the package compiles and the daemon boots. Env reading has
+// no implementation here either (readProcessEnv, osutil_other.go, always
+// refuses), so EnvOf reports the same "unsupported" error CWDOf does rather
+// than a silent empty map.
 type stubObserver struct{}
 
 func newObserver() outbound.ProcessObserver { return stubObserver{} }
@@ -33,7 +35,6 @@ func (stubObserver) CWDOf(pid int) (string, error) {
 
 func (stubObserver) WriterOf(string) (int, error) { return 0, nil }
 
-func (stubObserver) EnvOf(pid int) (map[string]string, error) {
-	m, _ := readProcessEnv(pid) // empty map, never an error (port contract)
-	return m, nil
+func (stubObserver) EnvOf(pid int, keys map[string]struct{}) (map[string]string, error) {
+	return readProcessEnv(pid, keys)
 }
