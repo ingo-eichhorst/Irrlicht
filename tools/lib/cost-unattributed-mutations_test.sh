@@ -40,7 +40,11 @@ MUTATE_SH="$REPO_ROOT/tools/mutate.sh"
 # asserted nothing.
 need() {
   local tool="$1"
-  command -v "$tool" >/dev/null 2>&1 || { echo "FAIL: cost-unattributed-mutations — $tool not found" >&2; exit 1; }
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    echo "FAIL: cost-unattributed-mutations — $tool not found" >&2
+    exit 1
+  fi
+  return 0
 }
 
 # Indents captured output so it reads as a quoted block under its FAIL line.
