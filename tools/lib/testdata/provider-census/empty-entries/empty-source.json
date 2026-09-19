@@ -1,0 +1,14 @@
+{
+  "id": "empty-source",
+  "name": "Fixture Empty-List Source",
+  "repo": "example/empty-source",
+  "repo_url": "https://github.com/example/empty-source",
+  "revision": "0000000000000000000000000000000000000d",
+  "check_url": "https://api.github.com/repos/example/empty-source/commits/0000000000000000000000000000000000000d",
+  "kind": "provider-list",
+  "inspected_paths": ["providers/"],
+  "license": {"spdx": "MIT", "url": "https://raw.githubusercontent.com/example/empty-source/0000000000000000000000000000000000000d/LICENSE", "notice_required": true},
+  "evidence_date": "2026-09-20",
+  "notes": "Fixture for tools/lib/provider-census_test.sh's empty-entries mutation: a provider-list source whose entries array is empty must be a refused CONTENT failure, never a silent 'this source contributed 0 providers'.",
+  "entries": []
+}

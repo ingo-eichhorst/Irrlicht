@@ -1,0 +1,166 @@
+{
+  "id": "openusage",
+  "name": "OpenUsage",
+  "repo": "janekbaraniewski/openusage",
+  "repo_url": "https://github.com/janekbaraniewski/openusage",
+  "revision": "4f042bcbd286832a00993012f379507f66b8ea8c",
+  "check_url": "https://api.github.com/repos/janekbaraniewski/openusage/commits/4f042bcbd286832a00993012f379507f66b8ea8c",
+  "kind": "provider-list",
+  "inspected_paths": [
+    "internal/providers/",
+    "docs/site/docs/providers/"
+  ],
+  "license": {
+    "spdx": "MIT",
+    "url": "https://raw.githubusercontent.com/janekbaraniewski/openusage/4f042bcbd286832a00993012f379507f66b8ea8c/LICENSE",
+    "notice_required": true
+  },
+  "evidence_date": "2026-09-20",
+  "notes": "One package directory per provider under internal/providers/, GitHub tree API (recursive) at the pinned revision, excluding providerbase/ and shared/ (helper packages, not providers).",
+  "entries": [
+    {
+      "id": "alibabacloud",
+      "name": "alibaba_cloud"
+    },
+    {
+      "id": "amp",
+      "name": "amp"
+    },
+    {
+      "id": "anthropic",
+      "name": "anthropic"
+    },
+    {
+      "id": "antigravity",
+      "name": "antigravity"
+    },
+    {
+      "id": "azureopenai",
+      "name": "azure_openai"
+    },
+    {
+      "id": "claudecode",
+      "name": "claude_code"
+    },
+    {
+      "id": "codebuff",
+      "name": "codebuff"
+    },
+    {
+      "id": "codex",
+      "name": "codex"
+    },
+    {
+      "id": "copilot",
+      "name": "copilot"
+    },
+    {
+      "id": "crush",
+      "name": "crush"
+    },
+    {
+      "id": "cursor",
+      "name": "cursor"
+    },
+    {
+      "id": "deepseek",
+      "name": "deepseek"
+    },
+    {
+      "id": "droid",
+      "name": "droid"
+    },
+    {
+      "id": "geminiapi",
+      "name": "gemini_api"
+    },
+    {
+      "id": "geminicli",
+      "name": "gemini_cli"
+    },
+    {
+      "id": "goose",
+      "name": "goose"
+    },
+    {
+      "id": "groq",
+      "name": "groq"
+    },
+    {
+      "id": "hermes",
+      "name": "hermes"
+    },
+    {
+      "id": "kilocode",
+      "name": "kilocode"
+    },
+    {
+      "id": "kimicli",
+      "name": "kimi_cli"
+    },
+    {
+      "id": "kiro",
+      "name": "kiro"
+    },
+    {
+      "id": "mistral",
+      "name": "mistral"
+    },
+    {
+      "id": "moonshot",
+      "name": "moonshot"
+    },
+    {
+      "id": "mux",
+      "name": "mux"
+    },
+    {
+      "id": "ollama",
+      "name": "ollama"
+    },
+    {
+      "id": "openai",
+      "name": "openai"
+    },
+    {
+      "id": "openclaw",
+      "name": "openclaw"
+    },
+    {
+      "id": "opencode",
+      "name": "opencode"
+    },
+    {
+      "id": "openrouter",
+      "name": "openrouter"
+    },
+    {
+      "id": "perplexity",
+      "name": "perplexity"
+    },
+    {
+      "id": "pi",
+      "name": "pi"
+    },
+    {
+      "id": "qwencli",
+      "name": "qwen_cli"
+    },
+    {
+      "id": "roocode",
+      "name": "roocode"
+    },
+    {
+      "id": "xai",
+      "name": "xai"
+    },
+    {
+      "id": "zai",
+      "name": "zai"
+    },
+    {
+      "id": "zed",
+      "name": "zed"
+    }
+  ]
+}

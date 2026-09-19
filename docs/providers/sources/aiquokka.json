@@ -1,0 +1,58 @@
+{
+  "id": "aiquokka",
+  "name": "aiquokka",
+  "repo": "McKean/aiquokka",
+  "repo_url": "https://github.com/McKean/aiquokka",
+  "revision": "def6ca814d8da68aa36394a189c1bd2d918d3357",
+  "check_url": "https://api.github.com/repos/McKean/aiquokka/commits/def6ca814d8da68aa36394a189c1bd2d918d3357",
+  "kind": "provider-list",
+  "inspected_paths": [
+    "internal/",
+    "cmd/"
+  ],
+  "license": {
+    "spdx": "MIT",
+    "url": "https://raw.githubusercontent.com/McKean/aiquokka/def6ca814d8da68aa36394a189c1bd2d918d3357/LICENSE",
+    "notice_required": true
+  },
+  "evidence_date": "2026-09-20",
+  "notes": "One Go package directory per provider under internal/, cross-checked against one cmd/<name>.go subcommand file each, GitHub tree API at the pinned revision; excludes internal/httpx and internal/usage (shared helpers, not providers).",
+  "entries": [
+    {
+      "id": "antigravity",
+      "name": "antigravity"
+    },
+    {
+      "id": "claude",
+      "name": "claude"
+    },
+    {
+      "id": "codex",
+      "name": "codex"
+    },
+    {
+      "id": "copilot",
+      "name": "copilot"
+    },
+    {
+      "id": "deepseek",
+      "name": "deepseek"
+    },
+    {
+      "id": "grok",
+      "name": "grok"
+    },
+    {
+      "id": "kimi",
+      "name": "kimi"
+    },
+    {
+      "id": "kiro",
+      "name": "kiro"
+    },
+    {
+      "id": "zai",
+      "name": "zai"
+    }
+  ]
+}

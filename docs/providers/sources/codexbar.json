@@ -1,0 +1,294 @@
+{
+  "id": "codexbar",
+  "name": "CodexBar",
+  "repo": "steipete/CodexBar",
+  "repo_url": "https://github.com/steipete/CodexBar",
+  "revision": "b6e65a83dc471817b7ff7678e68e0204c9dd604f",
+  "check_url": "https://api.github.com/repos/steipete/CodexBar/commits/b6e65a83dc471817b7ff7678e68e0204c9dd604f",
+  "kind": "provider-list",
+  "inspected_paths": [
+    "Sources/CodexBar/Providers/",
+    "docs/provider.md"
+  ],
+  "license": {
+    "spdx": "MIT",
+    "url": "https://raw.githubusercontent.com/steipete/CodexBar/b6e65a83dc471817b7ff7678e68e0204c9dd604f/LICENSE",
+    "notice_required": true
+  },
+  "evidence_date": "2026-09-20",
+  "notes": "One directory per provider under Sources/CodexBar/Providers/, GitHub tree API (recursive) at the pinned revision, excluding the shared Shared/ helper folder (not a provider).",
+  "entries": [
+    {
+      "id": "abacus",
+      "name": "Abacus"
+    },
+    {
+      "id": "aiand",
+      "name": "AiAnd"
+    },
+    {
+      "id": "alibaba",
+      "name": "Alibaba"
+    },
+    {
+      "id": "amp",
+      "name": "Amp"
+    },
+    {
+      "id": "antigravity",
+      "name": "Antigravity"
+    },
+    {
+      "id": "augment",
+      "name": "Augment"
+    },
+    {
+      "id": "azureopenai",
+      "name": "AzureOpenAI"
+    },
+    {
+      "id": "bedrock",
+      "name": "Bedrock"
+    },
+    {
+      "id": "chutes",
+      "name": "Chutes"
+    },
+    {
+      "id": "claude",
+      "name": "Claude"
+    },
+    {
+      "id": "clawrouter",
+      "name": "ClawRouter"
+    },
+    {
+      "id": "clinepass",
+      "name": "ClinePass"
+    },
+    {
+      "id": "codebuff",
+      "name": "Codebuff"
+    },
+    {
+      "id": "codex",
+      "name": "Codex"
+    },
+    {
+      "id": "commandcode",
+      "name": "CommandCode"
+    },
+    {
+      "id": "copilot",
+      "name": "Copilot"
+    },
+    {
+      "id": "crof",
+      "name": "Crof"
+    },
+    {
+      "id": "cursor",
+      "name": "Cursor"
+    },
+    {
+      "id": "deepgram",
+      "name": "Deepgram"
+    },
+    {
+      "id": "deepinfra",
+      "name": "DeepInfra"
+    },
+    {
+      "id": "deepseek",
+      "name": "DeepSeek"
+    },
+    {
+      "id": "devin",
+      "name": "Devin"
+    },
+    {
+      "id": "doubao",
+      "name": "Doubao"
+    },
+    {
+      "id": "elevenlabs",
+      "name": "ElevenLabs"
+    },
+    {
+      "id": "factory",
+      "name": "Factory"
+    },
+    {
+      "id": "fireworks",
+      "name": "Fireworks"
+    },
+    {
+      "id": "gemini",
+      "name": "Gemini"
+    },
+    {
+      "id": "grok",
+      "name": "Grok"
+    },
+    {
+      "id": "groq",
+      "name": "Groq"
+    },
+    {
+      "id": "ibmbob",
+      "name": "IBMBob"
+    },
+    {
+      "id": "jetbrains",
+      "name": "JetBrains"
+    },
+    {
+      "id": "kilo",
+      "name": "Kilo"
+    },
+    {
+      "id": "kimi",
+      "name": "Kimi"
+    },
+    {
+      "id": "kiro",
+      "name": "Kiro"
+    },
+    {
+      "id": "litellm",
+      "name": "LiteLLM"
+    },
+    {
+      "id": "llmproxy",
+      "name": "LLMProxy"
+    },
+    {
+      "id": "longcat",
+      "name": "LongCat"
+    },
+    {
+      "id": "manus",
+      "name": "Manus"
+    },
+    {
+      "id": "mimo",
+      "name": "MiMo"
+    },
+    {
+      "id": "minimax",
+      "name": "MiniMax"
+    },
+    {
+      "id": "mistral",
+      "name": "Mistral"
+    },
+    {
+      "id": "moonshot",
+      "name": "Moonshot"
+    },
+    {
+      "id": "neuralwatt",
+      "name": "NeuralWatt"
+    },
+    {
+      "id": "notion",
+      "name": "Notion"
+    },
+    {
+      "id": "ollama",
+      "name": "Ollama"
+    },
+    {
+      "id": "openai",
+      "name": "OpenAI"
+    },
+    {
+      "id": "opencode",
+      "name": "OpenCode"
+    },
+    {
+      "id": "opencodego",
+      "name": "OpenCodeGo"
+    },
+    {
+      "id": "openrouter",
+      "name": "OpenRouter"
+    },
+    {
+      "id": "perplexity",
+      "name": "Perplexity"
+    },
+    {
+      "id": "poe",
+      "name": "Poe"
+    },
+    {
+      "id": "qoder",
+      "name": "Qoder"
+    },
+    {
+      "id": "qwencloud",
+      "name": "QwenCloud"
+    },
+    {
+      "id": "sakana",
+      "name": "Sakana"
+    },
+    {
+      "id": "stepfun",
+      "name": "StepFun"
+    },
+    {
+      "id": "sub2api",
+      "name": "Sub2API"
+    },
+    {
+      "id": "synthetic",
+      "name": "Synthetic"
+    },
+    {
+      "id": "t3chat",
+      "name": "T3Chat"
+    },
+    {
+      "id": "venice",
+      "name": "Venice"
+    },
+    {
+      "id": "vertexai",
+      "name": "VertexAI"
+    },
+    {
+      "id": "warp",
+      "name": "Warp"
+    },
+    {
+      "id": "wayfinder",
+      "name": "Wayfinder"
+    },
+    {
+      "id": "windsurf",
+      "name": "Windsurf"
+    },
+    {
+      "id": "xai",
+      "name": "XAI"
+    },
+    {
+      "id": "zai",
+      "name": "Zai"
+    },
+    {
+      "id": "zed",
+      "name": "Zed"
+    },
+    {
+      "id": "zenmux",
+      "name": "ZenMux"
+    },
+    {
+      "id": "zoommate",
+      "name": "ZoomMate"
+    }
+  ]
+}
