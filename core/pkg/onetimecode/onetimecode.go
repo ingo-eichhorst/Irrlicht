@@ -276,15 +276,14 @@ func sweepExpired(recs []Record, now time.Time) []Record {
 	return kept
 }
 
-// pruneFailures returns the subset of failures still inside FailureWindow.
-// Always allocates a fresh slice, mirroring sweepExpired's defensive shape
-// for consistency — even though failures never comes from a Store at all
-// (it is Manager's own m.failures field, never something Load returns), so
-// the aliasing risk sweepExpired guards against does not apply here; this
-// is uniformity between the two filters, not a fact about this slice's
-// origin.
+// pruneFailures returns the subset of failures still inside FailureWindow,
+// filtering in place: failures is always Manager's own m.failures field,
+// never a value a Store's Load returned, so sweepExpired's aliasing worry —
+// a Store is free to return a slice it still holds a reference to — does
+// not apply here. Pre-#1963's pruneFailuresLocked filtered in place for the
+// same reason; this restores that shape.
 func pruneFailures(failures []time.Time, now time.Time) []time.Time {
-	kept := make([]time.Time, 0, len(failures))
+	kept := failures[:0]
 	for _, f := range failures {
 		if now.Sub(f) < FailureWindow {
 			kept = append(kept, f)
@@ -296,8 +295,11 @@ func pruneFailures(failures []time.Time, now time.Time) []time.Time {
 // MemoryStore is the in-process Store: records live only in RAM, keyed by
 // their own plaintext normalized form — safe because that value never
 // leaves this process (docs/mobile-notifications-arc42.md §8.6: "Pairing
-// codes | RAM | no"). Safe for concurrent use, though in practice only ever
-// called through a Manager, whose lock already serializes access.
+// codes | RAM | no"). Its own mutex makes it safe for concurrent use on its
+// own terms, independent of a Manager's serialization guarantee (the Store
+// doc's "need not itself be safe for concurrent use" names a minimum, not a
+// ceiling): it is exported from this core/pkg leaf, so a future caller may
+// construct one and call Load/Save directly, with no Manager in between.
 type MemoryStore struct {
 	mu   sync.Mutex
 	recs []Record

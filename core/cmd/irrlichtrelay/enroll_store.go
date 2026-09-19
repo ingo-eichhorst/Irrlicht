@@ -6,28 +6,21 @@ package main
 // relay), an enrollment code must be mintable by a separate, short-lived
 // `irrlichtrelay enroll new` CLI process with no relay running at all, and
 // visible to a serving relay's redeem route afterward — so its record set
-// is a file, not RAM. Per the onetimecode.Store contract, each record holds
-// the SHA-256 hash of the normalized code, never the plaintext, exactly as
-// TokenRecord hashes bearer tokens (tokens.go). The serving relay re-reads
-// the file by mtime on the redeem path, checking whether it changed the way
-// authStore.reloadIfChanged does (tokens.go:237) and stat-ing before reading
-// the way authStore.reload does (tokens.go:205-211): stat before read, so a
-// write landing between the two calls cannot stamp stale content with a
-// fresh mtime — see reload's own comment for the race that ordering avoids.
-// Mint races between the CLI and a serving relay inherit exactly the
-// cross-process race authStore.writeMu's comment (tokens.go:160-166)
-// already accepts for tokens; this store deliberately adds no cross-process
-// locking either.
+// is a file, not RAM, always read fresh from disk (no cache: see
+// fileEnrollStore's own doc for why one was not worth carrying). Per the
+// onetimecode.Store contract, each record holds the SHA-256 hash of the
+// normalized code, never the plaintext, exactly as TokenRecord hashes
+// bearer tokens (tokens.go). Mint races between the CLI and a serving relay
+// inherit exactly the cross-process race authStore.writeMu's comment
+// (tokens.go:160-166) already accepts for tokens; this store deliberately
+// adds no cross-process locking either.
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
 	"irrlicht/core/pkg/onetimecode"
@@ -52,29 +45,11 @@ type enrollCodeRecord struct {
 }
 
 // hashEnrollCode returns the hex SHA-256 of a normalized code — the only
-// form stored at rest, exactly as hashToken does for bearer tokens
-// (tokens.go).
+// form stored at rest. Same scheme as hashToken (tokens.go), same package:
+// calls it directly rather than reimplementing sha256+hex, so the hashing
+// scheme has one definition.
 func hashEnrollCode(normalized string) string {
-	sum := sha256.Sum256([]byte(normalized))
-	return hex.EncodeToString(sum[:])
-}
-
-// loadEnrollRecords reads the on-disk record set. A missing file is not an
-// error — no code has been minted yet, matching loadTokens' treatment of a
-// missing tokens.json.
-func loadEnrollRecords(path string) ([]enrollCodeRecord, error) {
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var recs []enrollCodeRecord
-	if err := json.Unmarshal(data, &recs); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
-	}
-	return recs, nil
+	return hashToken(normalized)
 }
 
 // saveEnrollRecords writes the record set at mode 0600 (it holds code
@@ -109,17 +84,19 @@ func saveEnrollRecords(path string, recs []enrollCodeRecord) error {
 }
 
 // fileEnrollStore is the onetimecode.Store backing enrollment: the file
-// seam described in this file's header comment. It caches its last parse
-// and re-reads only when the file's mtime has advanced, so a long-running
-// relay does not re-parse the JSON on every redeem when nothing minted a
-// new code since the last one.
+// seam described in this file's header comment. It carries no cache: Load
+// always reads fresh from disk. A cache was not worth what it would cost to
+// keep coherent — Manager already calls Load exactly once per Mint/Redeem,
+// and Redeem checks the rolling failure window *before* ever calling Load,
+// so the ceiling is FailureLimit (10) reads per FailureWindow (a minute)
+// over a file holding at most MaxOutstanding (32) small records. An earlier
+// version of this store cached its last parse keyed by the file's mtime,
+// and needed its own invalidate-on-Save logic plus a dedicated race test to
+// defend against a cross-process staleness hazard that existed only
+// because the cache existed (#1963 review) — removing the cache removes
+// that hazard, it does not trade it for a smaller one.
 type fileEnrollStore struct {
 	path string
-
-	mu     sync.Mutex
-	cached []enrollCodeRecord
-	mtime  time.Time
-	loaded bool
 }
 
 // newFileEnrollStore builds a Store bound to path. Nothing is read until
@@ -133,56 +110,34 @@ func (f *fileEnrollStore) Key(normalized string) string {
 	return hashEnrollCode(normalized)
 }
 
+// Load reads the on-disk record set. A missing file is not an error — no
+// code has been minted yet, matching loadTokens' treatment of a missing
+// tokens.json.
 func (f *fileEnrollStore) Load() ([]onetimecode.Record, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	// Stat before read, matching authStore.reload's ordering: with
-	// read-then-stat, a write landing between the two stamps old content
-	// with the new mtime, and the cache below would then treat that stale
-	// content as current until the file next changes.
-	var mtime time.Time
-	if fi, err := os.Stat(f.path); err == nil {
-		mtime = fi.ModTime()
+	data, err := os.ReadFile(f.path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
 	}
-	if !f.loaded || !mtime.Equal(f.mtime) {
-		recs, err := loadEnrollRecords(f.path)
-		if err != nil {
-			return nil, err
-		}
-		f.cached = recs
-		f.mtime = mtime
-		f.loaded = true
+	if err != nil {
+		return nil, err
 	}
-	out := make([]onetimecode.Record, len(f.cached))
-	for i, r := range f.cached {
+	var recs []enrollCodeRecord
+	if err := json.Unmarshal(data, &recs); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", f.path, err)
+	}
+	out := make([]onetimecode.Record, len(recs))
+	for i, r := range recs {
 		out[i] = onetimecode.Record{Key: r.Hash, Workspace: r.Workspace, Label: r.Label, ExpiresAt: r.ExpiresAt}
 	}
 	return out, nil
 }
 
 func (f *fileEnrollStore) Save(records []onetimecode.Record) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
 	recs := make([]enrollCodeRecord, len(records))
 	for i, r := range records {
 		recs[i] = enrollCodeRecord{Hash: r.Key, Workspace: r.Workspace, Label: r.Label, ExpiresAt: r.ExpiresAt}
 	}
-	if err := saveEnrollRecords(f.path, recs); err != nil {
-		return err
-	}
-	// Force the next Load to re-read from disk rather than trust a cached
-	// mtime snapshot taken here. saveEnrollRecords renames a temp file into
-	// place; if another process's OWN rename into this same path lands in
-	// the window between that rename and any stat we took here, caching
-	// "this mtime is ours" would be wrong — and would never self-correct,
-	// because the next Load compares the file's still-current mtime against
-	// that wrong stamp, finds them equal, and keeps serving our stale
-	// content forever, not just until the next external change. Dropping
-	// the cache here costs one extra read+parse on the very next Load, in
-	// exchange for never trusting a guess about whose write a given mtime
-	// belongs to.
-	f.loaded = false
-	return nil
+	return saveEnrollRecords(f.path, recs)
 }
 
 // resolveEnrollCodesPath returns <data-dir>/enroll-codes.json.

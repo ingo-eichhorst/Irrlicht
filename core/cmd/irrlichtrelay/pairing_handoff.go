@@ -16,12 +16,27 @@ import (
 
 const missingPublicURLReason = "QR pairing is unavailable — start the relay with --public-url https://relay.example.com."
 
-// missingPublicURLEnrollReason is missingPublicURLReason's enrollment
-// counterpart (#1963): there is no QR anywhere on the enrollment path, so
-// the one line explaining why no enrollment URL was built must name
-// enrollment, not phone pairing, and say the code itself is not degraded —
-// only the URL form is unavailable.
+// missingPublicURLEnrollReason and invalidPublicURLEnrollReason are
+// enrollment's own counterparts to pairing's missingPublicURLReason and
+// invalidPairingHandoff's inline text (#1963): there is no QR anywhere on
+// the enrollment path, so the reason explaining why no enrollment URL was
+// built must name enrollment, not phone pairing, in EITHER failure case.
 const missingPublicURLEnrollReason = "the enrollment URL is unavailable — start the relay with --public-url https://relay.example.com. The code itself still works when typed or pasted into the desktop app by hand."
+const invalidPublicURLEnrollReason = "the enrollment URL is unavailable — --public-url must be one absolute HTTPS origin without a path, query, fragment, or credentials."
+
+// publicURLProblem classifies why publicURL is empty, if it is — set once,
+// in resolvePairingHandoff and invalidPairingHandoff, so a renderer (either
+// pairing's own unavailableReason, or enrollment's via
+// enrollUnavailableReason) can pick reason text suited to its own feature
+// instead of one comparing against, or falling through, another feature's
+// already-rendered string.
+type publicURLProblem int
+
+const (
+	publicURLOK publicURLProblem = iota
+	publicURLMissing
+	publicURLInvalid
+)
 
 // pairingHandoff is the relay-owned public origin for phone installation.
 // The reason remains available when the origin is absent or invalid so both
@@ -29,10 +44,11 @@ const missingPublicURLEnrollReason = "the enrollment URL is unavailable — star
 type pairingHandoff struct {
 	publicURL         string
 	unavailableReason string
+	problem           publicURLProblem
 }
 
-func unavailablePairingHandoff(reason string) pairingHandoff {
-	return pairingHandoff{unavailableReason: reason}
+func unavailablePairingHandoff(reason string, problem publicURLProblem) pairingHandoff {
+	return pairingHandoff{unavailableReason: reason, problem: problem}
 }
 
 // resolvePairingHandoff accepts an HTTPS origin only. A path would make the
@@ -41,7 +57,7 @@ func unavailablePairingHandoff(reason string) pairingHandoff {
 func resolvePairingHandoff(raw string) pairingHandoff {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return unavailablePairingHandoff(missingPublicURLReason)
+		return unavailablePairingHandoff(missingPublicURLReason, publicURLMissing)
 	}
 	u, err := url.Parse(raw)
 	if err != nil {
@@ -59,7 +75,7 @@ func resolvePairingHandoff(raw string) pairingHandoff {
 }
 
 func invalidPairingHandoff() pairingHandoff {
-	return unavailablePairingHandoff("QR pairing is unavailable — --public-url must be one absolute HTTPS origin without a path, query, fragment, or credentials.")
+	return unavailablePairingHandoff("QR pairing is unavailable — --public-url must be one absolute HTTPS origin without a path, query, fragment, or credentials.", publicURLInvalid)
 }
 
 func (h pairingHandoff) pairingURL(code string) string {
@@ -81,20 +97,21 @@ func (h pairingHandoff) enrollURL(code string) string {
 	return h.publicURL + "/enroll/" + code
 }
 
-// enrollUnavailableReason maps handoff's pairing-flavored unavailableReason
-// to enrollment's own wording for the common case a default `serve`/
-// `enroll new` hits — --public-url missing entirely (resolvePairingHandoff
-// returns missingPublicURLReason for that, and only that, case; verified by
-// reading resolvePairingHandoff above). The rarer case — a --public-url
-// that was given but fails the format checks — is left as invalidPairingHandoff
-// wrote it: "--public-url must be one absolute HTTPS origin..." already
-// names the concrete fix independent of which feature is asking, so it is
-// not misleading the way the QR-specific missing-URL text is.
+// enrollUnavailableReason renders enrollment's own reason text from
+// handoff.problem, the classification resolvePairingHandoff/
+// invalidPairingHandoff set once — never by reading or comparing against
+// pairing's own rendered unavailableReason string, so enrollment's text
+// cannot inherit pairing-specific wording (its "QR" included) merely
+// because nothing rewrote it for a case nobody had looked at yet.
 func enrollUnavailableReason(h pairingHandoff) string {
-	if h.unavailableReason == missingPublicURLReason {
+	switch h.problem {
+	case publicURLMissing:
 		return missingPublicURLEnrollReason
+	case publicURLInvalid:
+		return invalidPublicURLEnrollReason
+	default:
+		return ""
 	}
-	return h.unavailableReason
 }
 
 // pairingQRDataURL returns a self-contained PNG. The authenticated mint

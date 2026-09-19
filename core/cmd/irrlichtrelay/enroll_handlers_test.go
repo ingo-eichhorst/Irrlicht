@@ -36,9 +36,6 @@ package main
 //	                                                                      |                                                                   | answer — proves the route did not exist before Phase 2
 //	handleEnrollRedeem: label fallback stubbed to ignore req.Label        | TestEnrollRedeemLabelPreference                                  | stored label was the mint-time label ("mint-label") instead
 //	(used only mintLabel, the pre-fix behavior)                          |                                                                   | of the redeem-time override ("redeem-label")
-//	fileEnrollStore.Load: dropped the mtime-changed check                | TestEnrollCrossProcessMintRedeem (its third, warm-cache          | redeem of a code A minted AFTER B's cache had already
-//	(`!f.loaded || !mtime.Equal(f.mtime)` -> `!f.loaded`)                 | round)                                                           | loaded once answered 401 instead of 200 — the warm cache
-//	                                                                      |                                                                   | never noticed the file changed
 //	main.go/enroll_handlers.go: both enrollUnavailableReason call sites   | TestEnrollNewWithoutPublicURLNamesEnrollment,                    | both outputs contained the literal string "QR pairing is
 //	(runEnrollNew, mintResp.EnrollURLReason) reverted to                 | TestEnrollMintResponseReasonNamesEnrollment                      | unavailable..." — the wrong feature's reason text, on a
 //	`handoff.unavailableReason` directly (the pre-fix behavior)          |                                                                   | path with no QR anywhere
@@ -98,17 +95,21 @@ func (c *enrollClock) advance(d time.Duration) {
 // time).
 type enrollEnv struct {
 	srv    *httptest.Server
-	store  *authStore
 	ddir   string
 	mgr    *onetimecode.Manager
 	tokens map[string]string // label -> plaintext, for seeded client tokens
 }
 
-func newEnrollEnv(t *testing.T, now func() time.Time, seeds ...tokenSeed) *enrollEnv {
+// newEnrollAuthStore builds a temp data dir, seeds it with the given tokens
+// via mustIssueToken, and returns the resulting authStore alongside the
+// data dir and each seed's plaintext (keyed by label) — the "temp dir, seed
+// a token, newAuthStore" shape both newEnrollEnv and brokenEnrollStoreEnv
+// repeat.
+func newEnrollAuthStore(t *testing.T, seeds ...tokenSeed) (store *authStore, ddir string, tokens map[string]string) {
 	t.Helper()
-	ddir := t.TempDir()
+	ddir = t.TempDir()
 	tokensPath := filepath.Join(ddir, tokensFilename)
-	tokens := make(map[string]string, len(seeds))
+	tokens = make(map[string]string, len(seeds))
 	for _, s := range seeds {
 		_, plaintext := mustIssueToken(t, tokensPath, s.label, s.workspace)
 		tokens[s.label] = plaintext
@@ -117,11 +118,17 @@ func newEnrollEnv(t *testing.T, now func() time.Time, seeds ...tokenSeed) *enrol
 	if err != nil {
 		t.Fatalf("newAuthStore: %v", err)
 	}
+	return store, ddir, tokens
+}
+
+func newEnrollEnv(t *testing.T, now func() time.Time, seeds ...tokenSeed) *enrollEnv {
+	t.Helper()
+	store, ddir, tokens := newEnrollAuthStore(t, seeds...)
 	mgr := newEnrollManager(ddir, now)
 	h := newHubWithAuth(store, nil, defaultLimits())
 	srv := httptest.NewServer(buildMux(h, relayServices{store: store, pairing: resolvePairingHandoff(""), enroll: mgr}))
 	t.Cleanup(srv.Close)
-	return &enrollEnv{srv: srv, store: store, ddir: ddir, mgr: mgr, tokens: tokens}
+	return &enrollEnv{srv: srv, ddir: ddir, mgr: mgr, tokens: tokens}
 }
 
 // enrollRedeemResp is the wire shape of a successful POST /api/v1/enroll/redeem.
@@ -160,10 +167,14 @@ func TestEnrollRequiresAuthGuard(t *testing.T) {
 // exact same status and body from all three — the no-oracle property
 // unknown/expired/used codes must share (mirrors push's
 // TestRedeemFailureIsUniform, now proven at the HTTP surface enrollment adds
-// on top of the shared Manager).
+// on top of the shared Manager). Also captures the log for the duration:
+// none of the three is a code-store error (all are onetimecode.ErrCodeInvalid),
+// so none of them should log anything — see TestEnrollRedeemLogsStoreErrorAndStaysUniform
+// below for the case that does.
 func TestEnrollRedeemUniformFailure(t *testing.T) {
 	clk := newEnrollClock()
 	env := newEnrollEnv(t, clk.now, tokenSeed{label: "cli"})
+	logBuf := captureLog(t)
 
 	unknownStatus, unknownBody := doPush(t, http.MethodPost, env.srv.URL+"/api/v1/enroll/redeem", "", map[string]string{"code": "ABCD-EFGH"})
 
@@ -199,6 +210,76 @@ func TestEnrollRedeemUniformFailure(t *testing.T) {
 		if string(c.body) != string(unknownBody) {
 			t.Fatalf("%s code body %q differs from the unknown-code body %q — redeem is not a uniform failure", c.name, c.body, unknownBody)
 		}
+	}
+	if logBuf.String() != "" {
+		t.Fatalf("a genuinely wrong/expired/used code logged something; none of them is a code-store error: log = %q", logBuf.String())
+	}
+}
+
+// brokenEnrollStoreEnv builds an auth-enabled relay whose enrollment code
+// store path is a directory, not a file, so every Load/Save through mgr
+// fails with a real I/O error — the deterministic, cross-platform way to
+// force a store failure (a chmod is unreliable for a non-root test process
+// and meaningless on Windows).
+func brokenEnrollStoreEnv(t *testing.T) (srv *httptest.Server, mintToken string) {
+	t.Helper()
+	store, ddir, tokens := newEnrollAuthStore(t, tokenSeed{label: "cli", workspace: "acme"})
+	if err := os.MkdirAll(resolveEnrollCodesPath(ddir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mgr := newEnrollManager(ddir, nil)
+	s := httptest.NewServer(buildMux(newHubWithAuth(store, nil, defaultLimits()), relayServices{store: store, pairing: resolvePairingHandoff(""), enroll: mgr}))
+	t.Cleanup(s.Close)
+	return s, tokens["cli"]
+}
+
+// TestEnrollRedeemLogsStoreErrorAndStaysUniform is AGENTS.md's "a
+// verification mechanism must fail loudly when it cannot run": before this
+// fix, a broken enrollment code store (root-owned after a `sudo
+// irrlichtrelay enroll new`, corrupt JSON, or anything else that makes
+// fileEnrollStore.Load return a real I/O error) was indistinguishable from
+// a wrong code, with zero bytes logged — an operator watching only the
+// relay's log had no way to tell "someone tried a wrong code" from "the
+// code store cannot be read at all". This is the redeem-side proof: a
+// broken code store answers the exact same uniform failure a genuinely
+// wrong code gets (the no-oracle property is not negotiable — an anonymous
+// caller must not be able to distinguish "wrong code" from "storage
+// broken" from the response alone), but logs the failure server-side so an
+// operator can.
+func TestEnrollRedeemLogsStoreErrorAndStaysUniform(t *testing.T) {
+	// The canonical uniform-failure response, from a normal (working-store)
+	// unknown code — TestEnrollRedeemUniformFailure already proves this is
+	// what unknown/expired/used codes all share.
+	workingEnv := newEnrollEnv(t, nil, tokenSeed{label: "cli"})
+	wantStatus, wantBody := doPush(t, http.MethodPost, workingEnv.srv.URL+"/api/v1/enroll/redeem", "", map[string]string{"code": "ABCD-EFGH"})
+
+	srv, _ := brokenEnrollStoreEnv(t)
+	logBuf := captureLog(t)
+
+	gotStatus, gotBody := doPush(t, http.MethodPost, srv.URL+"/api/v1/enroll/redeem", "", map[string]string{"code": "ABCD-EFGH"})
+
+	if gotStatus != wantStatus || string(gotBody) != string(wantBody) {
+		t.Fatalf("redeem against a broken code store = %d %q, want the byte-identical uniform failure %d %q", gotStatus, gotBody, wantStatus, wantBody)
+	}
+	if !strings.Contains(logBuf.String(), "enroll") {
+		t.Fatalf("redeem against a broken code store logged nothing naming enrollment; log = %q", logBuf.String())
+	}
+}
+
+// TestEnrollMintLogsStoreError is the mint-side proof: an authenticated
+// mint against a broken code store still answers its existing 500 (that
+// status already correctly signals failure — no wire-shape change needed
+// here, unlike redeem's uniform-401 case), but now logs it.
+func TestEnrollMintLogsStoreError(t *testing.T) {
+	srv, mintToken := brokenEnrollStoreEnv(t)
+	logBuf := captureLog(t)
+
+	status, body := doPush(t, http.MethodPost, srv.URL+"/api/v1/enroll/requests", mintToken, nil)
+	if status != http.StatusInternalServerError {
+		t.Fatalf("mint against a broken code store = %d, want 500: %s", status, body)
+	}
+	if !strings.Contains(logBuf.String(), "enroll") {
+		t.Fatalf("mint against a broken code store logged nothing naming enrollment; log = %q", logBuf.String())
 	}
 }
 
@@ -255,13 +336,7 @@ func TestEnrollRedeemFailureWindowAnswers429ThroughRoute(t *testing.T) {
 // relay involved), process B redeems through a live relay's HTTP route. A
 // RAM store cannot pass this; the file store is why the design picked one.
 func TestEnrollCrossProcessMintRedeem(t *testing.T) {
-	ddir := t.TempDir()
-	tokensPath := filepath.Join(ddir, tokensFilename)
-	mustIssueToken(t, tokensPath, "cli", "")
-	store, err := newAuthStore(tokensPath)
-	if err != nil {
-		t.Fatalf("newAuthStore: %v", err)
-	}
+	store, ddir, _ := newEnrollAuthStore(t, tokenSeed{label: "cli"})
 
 	mgrA := newEnrollManager(ddir, nil) // stands in for `enroll new`
 	mgrB := newEnrollManager(ddir, nil) // stands in for the serving relay
@@ -290,20 +365,6 @@ func TestEnrollCrossProcessMintRedeem(t *testing.T) {
 	status, body = doPush(t, http.MethodPost, srv.URL+"/api/v1/enroll/redeem", "", map[string]string{"code": code})
 	if status != http.StatusUnauthorized {
 		t.Fatalf("second redeem of the same code (process B) = %d, want 401: %s", status, body)
-	}
-
-	// The operational case #1964 actually drives: B's fileEnrollStore is
-	// already warm (loaded=true from the two redeems above) when A mints a
-	// SECOND, independent code — an `enroll new` run against an already-
-	// running relay's data dir. B must notice the file's mtime advanced and
-	// re-read it, not keep serving its first snapshot.
-	code2, _, err := mgrA.Mint("acme", "laptop-2")
-	if err != nil {
-		t.Fatalf("second mint in process A: %v", err)
-	}
-	status, body = doPush(t, http.MethodPost, srv.URL+"/api/v1/enroll/redeem", "", map[string]string{"code": code2})
-	if status != http.StatusOK {
-		t.Fatalf("redeem in process B (warm cache) of a code minted afterward in process A: %d: %s", status, body)
 	}
 }
 
@@ -552,14 +613,32 @@ func TestEnrollUnavailableReasonNamesEnrollmentNotPairing(t *testing.T) {
 	}
 }
 
-// TestEnrollUnavailableReasonPassesThroughInvalidURLCase leaves the rarer
-// invalid-(not missing)-URL message alone: it already names its fix
-// independent of which feature is asking, so enrollUnavailableReason must
-// not rewrite it.
-func TestEnrollUnavailableReasonPassesThroughInvalidURLCase(t *testing.T) {
-	handoff := resolvePairingHandoff("not a valid url")
-	if got, want := enrollUnavailableReason(handoff), handoff.unavailableReason; got != want {
-		t.Fatalf("enrollUnavailableReason(invalid) = %q, want the unchanged pairing reason %q", got, want)
+// TestEnrollUnavailableReasonNamesEnrollmentInBothFailureCases pins the fix
+// for a QA finding: enrollment's own reason text must carry no "QR" wording
+// in EITHER --public-url failure case, missing or invalid. Before the fix,
+// the invalid case fell through unchanged to pairing's own
+// invalidPairingHandoff text ("QR pairing is unavailable — --public-url
+// must be..."), and a now-corrected test comment on this test wrongly
+// dismissed that as already flow-agnostic — it names phone pairing's own
+// feature, on a path with no QR anywhere.
+func TestEnrollUnavailableReasonNamesEnrollmentInBothFailureCases(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+	}{
+		{"missing", ""},
+		{"invalid", "not a valid url"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reason := enrollUnavailableReason(resolvePairingHandoff(tt.raw))
+			if strings.Contains(reason, "QR") {
+				t.Fatalf("enrollment's %s-URL reason mentions QR: %q", tt.name, reason)
+			}
+			if !strings.Contains(reason, "--public-url") {
+				t.Fatalf("enrollment's %s-URL reason does not name the fix (--public-url): %q", tt.name, reason)
+			}
+		})
 	}
 }
 
