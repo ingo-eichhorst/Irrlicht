@@ -834,6 +834,23 @@ struct SessionListView: View {
         }
     }
 
+    /// The credits sub-line for a usage-mode chip's tooltip, or nil when
+    /// there's nothing worth reporting. Extracted from `quotaTooltip`
+    /// (#1995) so it's independently testable — this is the instrument;
+    /// behavior is unchanged from the inline block it replaces (hardcoded
+    /// "$", no currency, no `balanceObserved` zero handling) until the
+    /// red-first test below is committed and this is fixed to match
+    /// `usageCreditsLine` in `quotaChips.js`.
+    static func usageCreditsLine(_ credits: CreditsInfo?) -> String? {
+        guard let credits else { return nil }
+        if credits.unlimited == true { return "Credits: unlimited" }
+        if let balance = credits.balance {
+            return String(format: "Credits balance: $%.2f", balance)
+        }
+        if credits.hasCredits { return "Credits: available" }
+        return nil
+    }
+
     /// The chip-style header widget. Dispatches on mode:
     ///   - subscription → provider icon + its reported quota bars (mockup 1/2)
     ///   - usage        → provider icon + windowed spend, click-to-cycle (mockup 2)
@@ -1032,14 +1049,8 @@ struct SessionListView: View {
             }
         case .usage:
             lines.append("\(formatUsageCost(d.totalCostUSD)) · cumulative spend across active sessions")
-            if let credits = d.snapshot.credits {
-                if credits.unlimited == true {
-                    lines.append("Credits: unlimited")
-                } else if let balance = credits.balance {
-                    lines.append(String(format: "Credits balance: $%.2f", balance))
-                } else if credits.hasCredits {
-                    lines.append("Credits: available")
-                }
+            if let creditsLine = Self.usageCreditsLine(d.snapshot.credits) {
+                lines.append(creditsLine)
             }
         }
         if let reached = d.snapshot.reachedType, !reached.isEmpty {
