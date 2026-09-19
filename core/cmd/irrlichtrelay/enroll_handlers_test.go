@@ -42,6 +42,11 @@ package main
 //	main.go/enroll_handlers.go: both enrollUnavailableReason call sites   | TestEnrollNewWithoutPublicURLNamesEnrollment,                    | both outputs contained the literal string "QR pairing is
 //	(runEnrollNew, mintResp.EnrollURLReason) reverted to                 | TestEnrollMintResponseReasonNamesEnrollment                      | unavailable..." — the wrong feature's reason text, on a
 //	`handoff.unavailableReason` directly (the pre-fix behavior)          |                                                                   | path with no QR anywhere
+//	enrollUnavailableReason (pairing_handoff.go): the                    | TestEnrollUnavailableReasonNamesEnrollmentNotPairing             | failed on its first assertion only (t.Fatalf aborts there):
+//	`if h.unavailableReason == missingPublicURLReason { return          |                                                                   | "enrollment's missing-URL reason mentions QR:
+//	missingPublicURLEnrollReason }` branch deleted, leaving a bare       |                                                                   | \"QR pairing is unavailable...\"". A DIFFERENT mutation from
+//	`return h.unavailableReason`                                        |                                                                   | the call-site revert above — this one is internal to the
+//	                                                                      |                                                                   | helper itself and leaves both call sites untouched
 //
 // core/pkg/onetimecode/onetimecode_test.go carries the two mutations run
 // against the shared leaf itself (Store.Key's normalization argument, and
@@ -333,6 +338,23 @@ func TestEnrollHandoffReflectsValidCode(t *testing.T) {
 	}
 }
 
+// TestRegisterEnrollRoutesRefusesManagerWithoutStore mirrors
+// TestRegisterPushRoutesRefusesServiceWithoutStore (push_hardening_test.go):
+// a manager wired with no auth store would serve POST /api/v1/enroll/requests
+// through requireToken's documented nil-store pass-through (main.go) —
+// unauthenticated — and nil-deref inside store.issue on the first
+// successful redeem. The both-nil case (no manager, no store) must still
+// answer its ordinary 403, unchanged — see TestEnrollRequiresAuthGuard.
+func TestRegisterEnrollRoutesRefusesManagerWithoutStore(t *testing.T) {
+	mgr := onetimecode.NewManager(nil, onetimecode.NewMemoryStore())
+	defer func() {
+		if recover() == nil {
+			t.Fatal("registerEnrollRoutes accepted an enroll manager without an auth store")
+		}
+	}()
+	registerEnrollRoutes(http.NewServeMux(), mgr, nil, resolvePairingHandoff(""))
+}
+
 // TestEnrollMintRequiresToken is the Phase 2 counterpart of
 // TestPushMintRequiresToken: POST /api/v1/enroll/requests sits behind
 // requireToken, so no bearer or an invalid one is 401.
@@ -510,10 +532,13 @@ func TestEnrollHandoffWithoutPublicURLIs404(t *testing.T) {
 // TestEnrollUnavailableReasonNamesEnrollmentNotPairing pins the fix for a
 // QA finding: the missing-public-URL reason enrollment surfaces must name
 // enrollment and say the code still works by hand, not reuse pairing's
-// QR-specific wording. Seen red before the fix (see this file's mutation
-// table): with enrollUnavailableReason's substitution removed, both
-// assertions below failed against handoff.unavailableReason's literal QR
-// text.
+// QR-specific wording. Seen red (see this file's mutation table) against
+// enrollUnavailableReason's own substitution branch deleted — not the
+// call-site revert, which is a different mutation and reddens
+// TestEnrollNewWithoutPublicURLNamesEnrollment /
+// TestEnrollMintResponseReasonNamesEnrollment instead. Only the first
+// assertion below actually failed (t.Fatalf aborts there); the other two
+// never ran.
 func TestEnrollUnavailableReasonNamesEnrollmentNotPairing(t *testing.T) {
 	reason := enrollUnavailableReason(resolvePairingHandoff(""))
 	if strings.Contains(reason, "QR") {
@@ -547,11 +572,15 @@ func TestEnrollNewWithoutPublicURLNamesEnrollment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer r.Close()
 	orig := os.Stdout
 	os.Stdout = w
+	defer func() { os.Stdout = orig }()
+
 	runEnrollNew(ddir, "laptop", "acme", "")
-	w.Close()
-	os.Stdout = orig
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
 	out, err := io.ReadAll(r)
 	if err != nil {
 		t.Fatal(err)

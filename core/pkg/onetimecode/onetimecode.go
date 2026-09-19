@@ -256,9 +256,16 @@ func randomCode() (string, error) {
 }
 
 // sweepExpired returns the subset of recs not yet at their expiry. Always
-// allocates a fresh slice — recs may be a Store's own backing array (a
-// MemoryStore.Load result, for one), and filtering in place would corrupt
-// that Store's view for any caller that does not go on to Save the result.
+// allocates a fresh slice rather than filtering in place: Store's own
+// contract only promises Manager may "mutate the returned slice in memory"
+// before Save (see the Store doc), not that Manager may alias a Store's
+// internal state afterward — a Store implementation is free to return a
+// slice it still holds a reference to. Filtering in place would risk
+// corrupting such a Store's view for a caller that never reaches Save.
+// Today's two concrete Stores (MemoryStore and enrollment's
+// fileEnrollStore) both already return a fresh copy from Load — verified by
+// reading each — so this allocation is not load-bearing against either of
+// them specifically; it is margin for whatever Store comes next.
 func sweepExpired(recs []Record, now time.Time) []Record {
 	kept := make([]Record, 0, len(recs))
 	for _, r := range recs {
@@ -270,7 +277,12 @@ func sweepExpired(recs []Record, now time.Time) []Record {
 }
 
 // pruneFailures returns the subset of failures still inside FailureWindow.
-// Always allocates a fresh slice, for the same reason as sweepExpired.
+// Always allocates a fresh slice, mirroring sweepExpired's defensive shape
+// for consistency — even though failures never comes from a Store at all
+// (it is Manager's own m.failures field, never something Load returns), so
+// the aliasing risk sweepExpired guards against does not apply here; this
+// is uniformity between the two filters, not a fact about this slice's
+// origin.
 func pruneFailures(failures []time.Time, now time.Time) []time.Time {
 	kept := make([]time.Time, 0, len(failures))
 	for _, f := range failures {

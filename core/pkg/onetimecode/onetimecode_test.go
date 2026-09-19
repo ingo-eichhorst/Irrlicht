@@ -154,7 +154,14 @@ func TestIsPresentedCodeBoundaries(t *testing.T) {
 		{"no dash at all", "ABCD23456", false},
 		{"character outside Alphabet (O, excluded)", "ABCD-234O", false},
 		{"character outside Alphabet (lowercase)", "abcd-2345", false},
-		{"multi-byte rune", "ABCD-234€", false},
+		// "ABCD-23é" is exactly CodeLen+1 (9) bytes — 7 single-byte runes
+		// plus é's 2 bytes — so it passes the length and dash-position
+		// checks and is rejected by the alphabet-membership check the rune
+		// loop performs, not by length (a longer multi-byte input, e.g.
+		// "ABCD-234€", is 11 bytes and would be rejected on length alone,
+		// duplicating the "too long" case above without ever reaching the
+		// rune loop).
+		{"multi-byte rune", "ABCD-23é", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -10,7 +10,7 @@ package main
 // the SHA-256 hash of the normalized code, never the plaintext, exactly as
 // TokenRecord hashes bearer tokens (tokens.go). The serving relay re-reads
 // the file by mtime on the redeem path, checking whether it changed the way
-// authStore.reloadIfChanged does (tokens.go:237) and stating before reading
+// authStore.reloadIfChanged does (tokens.go:237) and stat-ing before reading
 // the way authStore.reload does (tokens.go:205-211): stat before read, so a
 // write landing between the two calls cannot stamp stale content with a
 // fresh mtime — see reload's own comment for the race that ordering avoids.
@@ -170,11 +170,18 @@ func (f *fileEnrollStore) Save(records []onetimecode.Record) error {
 	if err := saveEnrollRecords(f.path, recs); err != nil {
 		return err
 	}
-	f.cached = recs
-	f.loaded = true
-	if fi, err := os.Stat(f.path); err == nil {
-		f.mtime = fi.ModTime()
-	}
+	// Force the next Load to re-read from disk rather than trust a cached
+	// mtime snapshot taken here. saveEnrollRecords renames a temp file into
+	// place; if another process's OWN rename into this same path lands in
+	// the window between that rename and any stat we took here, caching
+	// "this mtime is ours" would be wrong — and would never self-correct,
+	// because the next Load compares the file's still-current mtime against
+	// that wrong stamp, finds them equal, and keeps serving our stale
+	// content forever, not just until the next external change. Dropping
+	// the cache here costs one extra read+parse on the very next Load, in
+	// exchange for never trusting a guess about whose write a given mtime
+	// belongs to.
+	f.loaded = false
 	return nil
 }
 

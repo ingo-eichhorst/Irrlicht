@@ -13,6 +13,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"time"
 
@@ -33,6 +34,16 @@ const enrollBodyLimit = 1 << 10
 // endpoint is no oracle for which codes exist. Mirrors pairCodeInvalidMsg.
 const enrollCodeInvalidMsg = "invalid or expired enrollment code"
 
+// enrollTooManyCodesMsg and enrollRateLimitedMsg are enrollment's own 429
+// wire text, in the shape of enrollCodeInvalidMsg above. Without these, a
+// bare `err.Error()` forward exposes onetimecode.ErrTooManyCodes/
+// ErrRateLimited's generic, flow-agnostic text ("onetimecode: too many
+// outstanding codes") verbatim — an internal package name, shared with
+// pairing, that names neither flow. See pairTooManyCodesMsg/
+// pairRateLimitedMsg (push_handlers.go) for pairing's own restored text.
+const enrollTooManyCodesMsg = "too many outstanding enrollment codes"
+const enrollRateLimitedMsg = "too many failed enrollment attempts, retry later"
+
 // enrollDefaultLabel names an enrolled desktop's token when neither the
 // redeeming desktop nor the code it redeemed carried a label.
 const enrollDefaultLabel = "desktop"
@@ -43,6 +54,18 @@ const enrollDefaultLabel = "desktop"
 // shape registerPushRoutes uses for push, but gated on the token store
 // alone: enrollment does not depend on push being enabled.
 func registerEnrollRoutes(mux *http.ServeMux, mgr *onetimecode.Manager, store *authStore, handoff pairingHandoff) {
+	if mgr != nil && store == nil {
+		// Mirrors registerPushRoutes' identical guard (push_handlers.go):
+		// buildEnrollManager returns non-nil only when store is non-nil
+		// (main.go), but that invariant spans two functions in two files. A
+		// second construction site wiring a manager without a store would
+		// serve POST /api/v1/enroll/requests through requireToken's
+		// documented nil-store pass-through — unauthenticated — and then
+		// nil-deref inside store.issue on the first successful redeem.
+		// Refuse loudly instead. The both-nil case below is unaffected and
+		// still answers its ordinary 403.
+		panic("enroll routes require an auth store (docs/mobile-notifications-arc42.md §8.1)")
+	}
 	if mgr == nil || store == nil {
 		mux.HandleFunc("POST /api/v1/enroll/redeem", handleEnrollDisabled)
 		mux.HandleFunc("POST /api/v1/enroll/requests", handleEnrollDisabled)
@@ -71,10 +94,16 @@ func handleMintEnroll(mgr *onetimecode.Manager, handoff pairingHandoff) http.Han
 	return func(w http.ResponseWriter, r *http.Request) {
 		code, ttl, err := mgr.Mint(workspaceOf(r), "")
 		if errors.Is(err, onetimecode.ErrTooManyCodes) {
-			pushError(w, http.StatusTooManyRequests, err.Error())
+			pushError(w, http.StatusTooManyRequests, enrollTooManyCodesMsg)
 			return
 		}
 		if err != nil {
+			// Anything reaching here is the code store itself failing —
+			// Load/Save on enroll-codes.json (root-owned after a `sudo
+			// enroll new`, corrupt JSON, a directory where the file should
+			// be) — not a rejected mint. The 500 already tells the caller
+			// something is wrong; this is what tells the operator what.
+			log.Printf("enroll: mint: code store error: %v", err)
 			pushError(w, http.StatusInternalServerError, "minting enrollment code failed")
 			return
 		}
@@ -123,8 +152,21 @@ func handleEnrollRedeem(mgr *onetimecode.Manager, store *authStore) http.Handler
 		}
 		workspace, mintLabel, err := mgr.Redeem(req.Code)
 		if errors.Is(err, onetimecode.ErrRateLimited) {
-			pushError(w, http.StatusTooManyRequests, err.Error())
+			pushError(w, http.StatusTooManyRequests, enrollRateLimitedMsg)
 			return
+		}
+		if err != nil && !errors.Is(err, onetimecode.ErrCodeInvalid) {
+			// A Load/Save I/O failure inside the enrollment code store
+			// (root-owned after a `sudo enroll new`, corrupt JSON, a
+			// directory where the file should be) is NOT the same as a
+			// wrong code — but the wire response below must be identical
+			// either way: a redeem endpoint that answered differently for
+			// "storage broken" than for "wrong code" would be exactly the
+			// oracle the uniform failure exists to prevent. Logged here,
+			// server-side only, so an operator can tell the two apart
+			// without giving an anonymous caller anything to distinguish
+			// them by.
+			log.Printf("enroll: redeem: code store error: %v", err)
 		}
 		if err != nil {
 			pushError(w, http.StatusUnauthorized, enrollCodeInvalidMsg)
