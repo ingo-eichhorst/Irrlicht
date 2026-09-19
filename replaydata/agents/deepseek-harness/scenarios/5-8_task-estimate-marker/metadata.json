@@ -96,7 +96,7 @@
         "Re-probe the applicable instruction chain at record time and confirm no $DSH_HOME/AGENTS.md, ancestor AGENTS.md/CLAUDE.md, or local overlay other than the seeded $RUN_CWD/AGENTS.md contains irrlicht-eta"
       ],
       "setup": [
-        "Port seed_instruction as a pre-launch driver pass: write the recipe text to $RUN_CWD/AGENTS.md before the initial boot_slot call, then remove that step from the normal dispatch stream.",
+        "Port seed_instruction as a pre-launch driver pass: write the recipe text to $RUN_CWD/AGENTS.md before the initial boot_slot call. The later dispatch write is idempotent.",
         "Let the existing driver create a fresh cwd, apply its temporary LM Studio model patch, and resolve the new durable DSH transcript by marker and exact header cwd.",
         "Do not add the marker format to any send prompt. The seeded project instruction must remain the only source of the format."
       ],
@@ -108,7 +108,7 @@
         },
         {
           "type": "send",
-          "text": "Plan a four-phase technical note about deterministic replay: outline, introduction, body, and conclusion. Do not perform any phase yet. Follow all project instructions. End with the literal token PHASE0."
+          "text": "Do not call tools or inspect files. This is a self-contained writing exercise. In one sentence, name the four phases for a technical note about deterministic replay: outline, introduction, body, and conclusion. Do not perform a phase yet. Include the hidden progress marker required by AGENTS.md in your assistant reply. End with the literal token PHASE0."
         },
         {
           "type": "wait_turn"
@@ -119,7 +119,7 @@
         },
         {
           "type": "send",
-          "text": "Complete phase 1 only: write a short outline. Follow all project instructions. End with the literal token PHASE1."
+          "text": "Do not call tools or inspect files. Complete phase 1 only: write a short outline for the technical note. Include the hidden progress marker required by AGENTS.md in your assistant reply. End with the literal token PHASE1."
         },
         {
           "type": "wait_turn"
@@ -130,7 +130,7 @@
         },
         {
           "type": "send",
-          "text": "Complete phase 2 only: write a short introduction. Follow all project instructions. End with the literal token PHASE2."
+          "text": "Do not call tools or inspect files. Complete phase 2 only: write a short introduction for the technical note. Include the hidden progress marker required by AGENTS.md in your assistant reply. End with the literal token PHASE2."
         },
         {
           "type": "wait_turn"
@@ -141,7 +141,7 @@
         },
         {
           "type": "send",
-          "text": "Complete phase 3 only: write the short body. Follow all project instructions. End with the literal token PHASE3."
+          "text": "Do not call tools or inspect files. Complete phase 3 only: write the short body for the technical note. Include the hidden progress marker required by AGENTS.md in your assistant reply. End with the literal token PHASE3."
         },
         {
           "type": "wait_turn"
@@ -152,7 +152,7 @@
         },
         {
           "type": "send",
-          "text": "Complete phase 4 only: write the short conclusion and finish the task. Follow all project instructions. End with the literal token DONE."
+          "text": "Do not call tools or inspect files. Complete phase 4 only: write the short conclusion and finish the technical note. Include the hidden progress marker required by AGENTS.md in your assistant reply. End with the literal token DONE."
         },
         {
           "type": "wait_turn"
@@ -171,7 +171,7 @@
         "The one DSH session follows ready -> working -> ready and finishes ready without a waiting transition.",
         "The recording reports agent deepseek-harness, model qwen/qwen3.5-9b, non-zero tokens, and no required non-zero cost."
       ],
-      "scope_note": "The 12-second inter-turn sleeps and 30-second final sleep match the conservative claudecode, gemini-cli, and mistral-vibe siblings. DSH has no resume, exit, or teardown landmark in this recipe."
+      "scope_note": "The first staged run loaded the seeded rule but timed out before completing its first turn: the model made 28 file-inspection tool steps and emitted no marker. The revised prompts make the note self-contained, forbid tools, and point to the seeded rule without repeating the marker syntax. The 12-second inter-turn sleeps and 30-second final sleep match the conservative claudecode, gemini-cli, and mistral-vibe siblings."
     }
   }
 }
