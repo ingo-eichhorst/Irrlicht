@@ -1843,6 +1843,21 @@ import { createElfdansDashboard } from './elfdansDashboard.js';
       return list;
     }
 
+    // provider_costs can now carry a reserved "unattributed" key (issue
+    // #1996) for cost rows with no confirmed billing attribution, alongside
+    // real provider keys ("anthropic"/"openai"). The line below is
+    // key-agnostic already — it stores the whole map verbatim rather than
+    // filtering to a known set — so no change was needed here to avoid
+    // dropping it; confirmed by reading every other reader of
+    // dashboardProviderCosts (usageSpendForChip, ~line 696, and the two
+    // rehydrate call sites below) and finding none that enumerate or
+    // whitelist its keys either. What is NOT true: nothing today renders an
+    // "Unattributed" row or chip from this map — every consumer looks up a
+    // SPECIFIC provider key (chip.key, driven by quotaChips.js's own
+    // session-derived provider detection, #1995's territory), never
+    // iterates dashboardProviderCosts' keys generically. So the spend is
+    // stored and recoverable, but not currently surfaced in this client's
+    // UI. See #1996's report for the full audit.
     function ingestInitialSessions(resp) {
       if (!resp) return;
       elfdansDash.noteLiveData();
