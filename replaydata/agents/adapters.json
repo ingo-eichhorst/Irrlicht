@@ -92,6 +92,8 @@
     "deepseek-harness": {
       "maturity": "alpha",
       "capabilities": {
+        "cloud_agent": "absent",
+        "partial_flush": "untraced",
         "token_usage": "untraced"
       }
     },

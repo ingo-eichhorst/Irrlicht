@@ -1,0 +1,77 @@
+{
+  "scenario_id": "cloud-background-agent",
+  "metadata": {
+    "agent_supports": "no",
+    "daemon_capability": "n/a",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+b408e3c",
+    "confidence": 0.86,
+    "notes": "DeepSeek Harness 0.1.5-rc.2 has no first-party cloud background-agent dispatch surface; its Web and automation profiles run in a local dsh process."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "cloud-background-agent",
+      "agent": "deepseek-harness",
+      "assessed_at": "2026-09-18T20:48:38Z",
+      "agent_supports": "no",
+      "daemon_capability": "n/a",
+      "driver_capability": "ready",
+      "confidence": 0.86,
+      "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a\ndriver_capability: ready\n\n## Reasoning\n\nThe scenario requires a user to dispatch a coding-agent run to remote infrastructure. The run must continue without a local agent process. DeepSeek Harness 0.1.5-rc.2 does not ship that product surface. The official launcher exposes profile boot, Web, headless, SDK, SDK-minimal, ACP, and plugin-management modes. Each mode boots a local Node process. The official root README says `dsh web` starts a server at `http://127.0.0.1:3080`; an SSH launch prints the host URL for port forwarding. This is a self-hosted local process on the execution host, not a first-party cloud task service.\n\nThe required binary scan confirms the same boundary. `strings $(which dsh) | grep -iE 'cloud|remote|background|webhook|sidecar|hosted|server|web'` found only the local `web` profile alias. It found no cloud, remote, background-agent, hosted-run, webhook, or sidecar launch surface. A source scan of upstream commit `ddefc45fbc7f8e46dd73185e68295696d1297887` found zero occurrences of `cloud agent`, `cloud session`, `cloud run`, `hosted agent`, or `hosted session`. The `background agent` occurrences describe in-process child subagents. The `remote session` occurrences describe ACP protocol children that the harness starts through its subprocess seam. Neither is a top-level task dispatched to vendor-hosted infrastructure.\n\nBecause DeepSeek Harness cannot perform the scenario, daemon capability is not applicable. For completeness, the current irrlicht adapter could not observe such a future remote run. `core/adapters/inbound/agents/dsh/agent.go` declares `FilesUnderRoot` for `$DSH_HOME/sessions`, and it binds sessions to a local process through the writer of `session.lock`. A run with no local transcript and no local process would leave no input for this adapter.\n\nThe driver is ready by the frozen-no-feature convention. The interactive driver implements every current primitive, but no recipe can elicit a cloud run that the agent does not provide. The recipe is therefore `applicable:false`.\n\n## What would change the verdict\n\nDeepSeek would need to ship a hosted task service or a remote-run command that dispatches a session to provider-managed infrastructure. A later irrlicht change would then need a remote API, webhook, or stream source to observe the PID-less lifecycle.",
+      "caveats": [
+        "Vacuous-pass condition: a no-phase spec would pass without any remote run. This cell is frozen, and its meta-only spec makes no behavioral pass claim.",
+        "The Web profile can listen beyond loopback when a user deliberately exposes a self-hosted server. The dsh process still runs on that host and owns the session, so this is not the provider-hosted PID-less task required by the scenario.",
+        "DeepSeek Harness is a developer preview and changes rapidly. Re-run the launcher, binary, and upstream source scans before changing this verdict in a later release.",
+        "If DeepSeek Harness later ships a hosted run, the current FilesUnderRoot plus session.lock adapter would become daemon=incapable until irrlicht adds a remote-feed source."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/bin/dsh",
+          "note": "Installed 0.1.5-rc.2 launcher; strings scan for cloud, remote, background, webhook, sidecar, hosted, server, and web found only the local Web-profile alias and no remote-run surface."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/README.md",
+          "note": "Installed official CLI reference lists the complete entry modes: local profile boot, Web, headless, SDK, SDK-minimal, ACP, and plugin management."
+        },
+        {
+          "kind": "url",
+          "ref": "https://github.com/deepseek-ai/deepseek-harness/blob/ddefc45fbc7f8e46dd73185e68295696d1297887/README.md",
+          "note": "Official README: dsh web starts at 127.0.0.1:3080 and an SSH launch uses the host URL; this documents a self-hosted process, not a managed cloud task service."
+        },
+        {
+          "kind": "url",
+          "ref": "https://github.com/deepseek-ai/deepseek-harness/blob/ddefc45fbc7f8e46dd73185e68295696d1297887/apps/cli/README.md",
+          "note": "Official launcher source reference enumerates every supported entry mode; none dispatches a task to remote infrastructure."
+        },
+        {
+          "kind": "url",
+          "ref": "https://github.com/deepseek-ai/deepseek-harness/tree/ddefc45fbc7f8e46dd73185e68295696d1297887",
+          "note": "Upstream source scan found no cloud-agent, cloud-session, cloud-run, hosted-agent, or hosted-session surface; background-agent matches are child-subagent controls, and remote-session matches are subprocess-backed ACP children."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/agent.go",
+          "note": "The irrlicht adapter reads local transcript files under $DSH_HOME/sessions and discovers a local PID from session.lock; it has no remote-feed source."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/adapter.go",
+          "note": "The adapter accepts local session.vN.jsonl.zstd paths under session-UUID directories and defines the local dsh process matcher."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/internal/matrix/capability.go",
+          "note": "The cloud_agent trait means dispatching a run to remote infrastructure with no local PID; local Web hosting and in-process subagents do not meet it."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": false,
+      "notes": "agent_supports=no: DeepSeek Harness 0.1.5-rc.2 has no first-party cloud or remote background-run dispatch surface. No executable recipe exists; the cell is frozen."
+    }
+  }
+}

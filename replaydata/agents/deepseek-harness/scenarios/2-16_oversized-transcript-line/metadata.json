@@ -1,0 +1,231 @@
+{
+  "scenario_id": "oversized-transcript-line",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+5784051",
+    "confidence": 0.9,
+    "notes": "The shared OpenAI mock now streams a deterministic 10199-byte assistant message; four real-model attempts timed out before assistant/message, so the recipe uses the verified mock path."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "oversized-transcript-line",
+      "agent": "deepseek-harness",
+      "assessed_at": "2026-09-19T01:18:00Z",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.9,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Scenario signal\n\nOne DeepSeek Harness session must move from ready to working to ready. The durable transcript must contain exactly one assistant/message with a 10199-byte text block, no tool/call record, and one completed turn/end. The 10199-byte target exceeds the 9817-byte maximum in the committed gemini-cli sibling and keeps this cell a parser-resilience sanity check.\n\n## Agent support\n\nDeepSeek Harness 0.1.5-rc.2 collects streamed text and persists the settled content as one assistant/message event. Its JSONL backend serializes each durable event as one physical row inside a checksummed Zstandard frame. Two earlier 900-second real-model attempts and two later 300-second attempts all reached working but timed out without assistant/message or turn/end. These runs disprove the real-model recipe budget. They do not show that the agent lacks the behavior.\n\nCommit 57840512a extends the shared OpenAI-compatible mock with --always-succeed and --success-bytes. The handler returns one streamed text delta made from strings.Repeat(\"x\", successBytes), reports non-zero usage, and logs the counted request. The package test pins a 10199-byte success. A direct local probe with the recipe flags returned exactly 10199 text bytes, one DONE marker, total_tokens 13, and the matching #1 request log.\n\n## Daemon capability\n\nThe DSH adapter tails the highest session.vN.jsonl.zstd generation through FilesUnderRoot and JSONLineParser. The shared tailer validates complete Zstandard frames, caps decoded frames at 256 MB, and applies the 64 MB line reader. A prior failed staging transcript already carried a 27557-byte request/header row followed by later rows without a parser stall. The mock response remains well below both caps and becomes one assistant/message row followed by completed turn/end. The daemon can therefore observe the complete required arc.\n\n## Driver and mock path\n\nThe recipe needs send, wait_turn, and sleep. The DeepSeek Harness interactive driver implements all three. The driver reads settings.base_url and settings.api_key, writes the base URL into its temporary OpenAI-compatible provider patch, and exports the API key as LMSTUDIO_API_KEY. run-cell.sh builds and starts the declared mock before the driver and checks mock.log with the recipe request_log_pattern after the run. The pattern excludes the ignored title request at #0 and proves that the visible turn reached the mock.\n\nThe installed OpenAI-completions adapter creates its first text block at content index 0 when the response has no reasoning delta. It stores the requested model in the durable assistant source and keeps a different response model only as replay metadata. The spec therefore asserts data.message.content.0.text and keeps the observed model qwen/qwen3.5-9b.\n\n## Vacuous-pass check\n\nThe lifecycle arc alone could pass after a short answer. The exact 10199-character x substring, the one-message count, the zero-tool count, and the counted mock request are load-bearing. If the mock is not reached, if the provider returns a short value, or if the agent substitutes a tool call, validation fails loudly.\n\n## Timing\n\nThe final eight-second sleep matches the longest committed sibling delay. The local mock answers immediately, so the 120-second floor is sufficient and removes the unstable real-model generation dependency.",
+      "caveats": [
+        "Emission through the complete DSH TUI and persistence path remains provisional until record runs this mock-backed recipe. The direct probe verified the mock response and log, while the exact transcript assertion makes any DSH mapping drift fail loudly.",
+        "Vacuous-pass condition: lifecycle-only matching could pass on a short response. The spec therefore requires one assistant/message whose first text block contains all 10199 x characters, zero tool/call records, one completed turn/end, and a counted mock request.",
+        "Load-bearing environment precondition: port 18807 must be free and commit 57840512a or later must provide mock-openai-error with --always-succeed and --success-bytes. No external model server is required.",
+        "Two 900-second attempts with the old 5000-repeat prompt and two 300-second attempts with the tokenizer-efficient 300-repeat prompt timed out in working. All four transcripts lack assistant/message and turn/end. This is evidence against the real-model recipes, not evidence of agent incapability.",
+        "This is a roughly 10 KB sanity check. It does not exercise the 64 MB line cap or the 256 MB decoded-frame cap. core/pkg/tailer/large_line_test.go owns the true large-line regression.",
+        "The mock emits no reasoning delta, so the OpenAI-completions adapter creates the assistant text at content index 0. A future provider-shape change must fail the exact assertion and be reassessed.",
+        "The durable assistant source keeps the requested model qwen/qwen3.5-9b even though the mock reports mock-openai-error-model as response metadata."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-llm-pi-ai/lib/index.js",
+          "note": "Installed official runtime sets DEFAULT_MAX_TOKENS to 32768 and uses that default for a hand-declared provider model when no smaller model limit is configured."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-agent-loop/lib/index.js",
+          "note": "The loop collects live.blocks and appends the settled result as assistant/message with the original content and usage."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/README.md",
+          "note": "Official installed package reference states that the current format stores one physical row per durable event and uses checksummed Zstandard frames by default."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js",
+          "note": "eventLine calls JSON.stringify on one current event; eventLines joins events with newline separators; encodeEventBatch compresses the complete JSONL batch without content truncation."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/sessions/--Users-ingo-.claude-jobs-d11ee86d-tmp-dsh-probe--/session-a68f8780-b24f-49d6-89c4-f2e215f95782/session.v3.jsonl.zstd",
+          "note": "Measured qwen/qwen3.5-9b v3 transcript. Assistant records use reasoning at content index 0, text at index 1, non-zero usage, and a following completed turn/end."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/agent.go",
+          "note": "Declares the compressed FilesUnderRoot source with JSONLineParser for DeepSeek Harness."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser.go",
+          "note": "Maps turn/start to working, assistant/message text and usage, and completed turn/end to the ready boundary."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/zstd.go",
+          "note": "Validates complete Zstandard frames, caps decoded frames at four times the 64 MB line limit, and scans decoded bytes through the shared line reader."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/line_reader.go",
+          "note": "Defines the 64 MB JSONL line cap and skip-past behavior that prevents an oversized row from wedging later records."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/large_line_test.go",
+          "note": "Regression fixture proves a multi-megabyte JSONL row does not block a later turn_done event and pins over-cap skip behavior."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "Implements send, wait_turn, and sleep; reads model, base_url, context_window, permission_mode, and api_key from settings; writes the OpenAI-compatible patch and exports the API key."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/2-16_oversized-transcript-line/metadata.json",
+          "note": "Sibling scenario precedent uses a 5000-word single-line response and treats the live cell as a parser-resilience sanity check."
+        },
+        {
+          "kind": "file",
+          "ref": ".build/refresh/deepseek-harness/2-16_oversized-transcript-line-20260919T001516/run-manifest.json",
+          "note": "First live attempt records driver_exit_reason timeout after the 900-second 5000-repeat recipe."
+        },
+        {
+          "kind": "file",
+          "ref": ".build/refresh/deepseek-harness/2-16_oversized-transcript-line-20260919T003049/run-manifest.json",
+          "note": "Second live attempt records driver_exit_reason timeout after the same 900-second recipe."
+        },
+        {
+          "kind": "file",
+          "ref": ".build/refresh/deepseek-harness/2-16_oversized-transcript-line-20260919T003049/replaydata/agents/deepseek-harness/scenarios/2-16_oversized-transcript-line/events.jsonl",
+          "note": "Second attempt has 15 events, ready to working, 898583 ms in working, then process exit without ready return."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/antigravity/scenarios/2-16_oversized-transcript-line/recordings/2026-06-20-13-18-38_irrlichd-0.5.2+76d805a/transcript.jsonl",
+          "note": "Committed observed sibling has an 8477-byte maximum transcript line."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/gemini-cli/scenarios/2-16_oversized-transcript-line/recordings/2026-06-11-23-10-18_irrlichd-0.5.1+1274e11/transcript.jsonl",
+          "note": "Committed observed sibling has a 9817-byte maximum transcript line."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/pi/scenarios/2-16_oversized-transcript-line/recordings/2026-05-25-02-36-28_irrlichd-0.4.7+6ab9f88/transcript.jsonl",
+          "note": "Committed observed sibling has a 3851-byte maximum transcript line."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/recording/mock-openai-error/main.go",
+          "note": "Commit 57840512a adds --always-succeed and --success-bytes; the counted request path streams strings.Repeat(x, successBytes), reports usage, and logs the byte count."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/recording/mock-openai-error/main_test.go",
+          "note": "TestHandleChatCompletionsCanStreamDeterministicOversizedContent pins a successful 10199-byte response and one counted request."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/scripts/lib/recipe-runtime.sh",
+          "note": "Validates the package, port, argument array, and required request_log_pattern; the post-drive check fails if no mock request matches."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/scripts/run-cell.sh",
+          "note": "start_recipe_mock builds and starts the declared package before the driver and stops it during teardown."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@earendil-works/pi-ai/dist/api/openai-completions.js",
+          "note": "A content-only OpenAI stream creates the first text block at index 0; the requested model remains message.model while a different response model is retained separately."
+        },
+        {
+          "kind": "file",
+          "ref": ".build/refresh/deepseek-harness/2-16_oversized-transcript-line-20260919T005928/run-manifest.json",
+          "note": "First bounded reassessment attempt records timeout_seconds 300, driver_exit_reason timeout, and an unsettled working session."
+        },
+        {
+          "kind": "file",
+          "ref": ".build/refresh/deepseek-harness/2-16_oversized-transcript-line-20260919T005928/replaydata/agents/deepseek-harness/scenarios/2-16_oversized-transcript-line/transcript.jsonl.zstd",
+          "note": "The 15-record transcript has turn/start but no assistant/message or turn/end."
+        },
+        {
+          "kind": "file",
+          "ref": ".build/refresh/deepseek-harness/2-16_oversized-transcript-line-20260919T010516/run-manifest.json",
+          "note": "Second bounded reassessment attempt records timeout_seconds 300, driver_exit_reason timeout, and an unsettled working session."
+        },
+        {
+          "kind": "file",
+          "ref": ".build/refresh/deepseek-harness/2-16_oversized-transcript-line-20260919T010516/replaydata/agents/deepseek-harness/scenarios/2-16_oversized-transcript-line/transcript.jsonl.zstd",
+          "note": "The independent 15-record transcript also has turn/start but no assistant/message or turn/end."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "dsh >=0.1.5-rc.2 is installed and on PATH",
+        "the community TUI profile is installed under ~/.dsh/profiles/tui",
+        "commit 57840512a or later provides tools/onboarding-factory/recording/mock-openai-error with --always-succeed and --success-bytes",
+        "port 18807 is free on 127.0.0.1 at record time",
+        "tmux and zstd are installed",
+        "irrlichd is recording the deepseek-harness adapter with transcript permission granted"
+      ],
+      "setup": [
+        "run-cell.sh builds and launches tools/onboarding-factory/recording/mock-openai-error on 127.0.0.1:18807 before the driver starts",
+        "the mock runs with --always-succeed --success-bytes 10199, answers the DSH title side channel without counting it, and returns 10199 x bytes with non-zero usage for the counted visible turn",
+        "the interactive driver creates a fresh cwd and pre-launch marker, applies a temporary OpenAI-compatible provider patch with base URL http://127.0.0.1:18807/v1, exports the configured non-empty API key, and launches dsh --profile tui in tmux",
+        "the driver resolves the new session.v3.jsonl.zstd by pre-launch marker and header cwd, then waits for the completed turn/end count",
+        "DSH persists the complete content-only assistant/message event as one JSONL row inside a checksummed Zstandard frame"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Return one assistant message. Do not use tools."
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 8
+        }
+      ],
+      "verify": [
+        "events.jsonl contains one post-marker DSH UUID session born ready and bound to the session.lock writer PID",
+        "the same session enters working after the real user message and returns to ready after completed turn/end without entering waiting",
+        "transcript.jsonl contains exactly one assistant/message whose content index 0 text block contains all 10199 x characters on that single durable record",
+        "transcript.jsonl contains no tool/call record and exactly one completed turn/end",
+        "mock.log contains a counted successful POST /v1/chat/completions line with --always-succeed and 10199 bytes; title traffic at #0 does not satisfy the pattern",
+        "the replay summary reports qwen/qwen3.5-9b and non-zero tokens; cost remains zero for the local mock route"
+      ],
+      "settings": {
+        "model": "qwen/qwen3.5-9b",
+        "base_url": "http://127.0.0.1:18807/v1",
+        "context_window": 262144,
+        "permission_mode": "danger-full-access",
+        "api_key": "irrlicht-mock-recording"
+      },
+      "timeout_seconds": 120,
+      "scope_note": "Uses the longest sibling post-turn settle delay of 8 seconds. The 120-second floor is sufficient because the local mock emits the deterministic 10199-byte text in one streamed delta and removes external model latency.",
+      "mock": {
+        "package": "./tools/onboarding-factory/recording/mock-openai-error",
+        "port": 18807,
+        "args": [
+          "--always-succeed",
+          "--success-bytes",
+          "10199",
+          "--ignore-substring",
+          "create a concise title"
+        ],
+        "request_log_pattern": "POST /v1/chat/completions #[1-9][0-9]* model=.*always-succeed, 10199 bytes"
+      }
+    }
+  }
+}

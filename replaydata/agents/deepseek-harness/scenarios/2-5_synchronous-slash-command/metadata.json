@@ -1,0 +1,139 @@
+{
+  "scenario_id": "synchronous-slash-command",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+1c6a6b0",
+    "confidence": 0.88,
+    "notes": "DeepSeek Harness TUI explicit /rename writes durable log-only session/title records without opening a model turn; the DSH parser skips those records and maps only the final normal turn to working then ready."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "synchronous-slash-command",
+      "agent": "deepseek-harness",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.88,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\nDeepSeek Harness 0.1.5-rc.2 supports a no-model human command surface, and the installed @tomowang/dsh-tui 0.8.1 profile exposes explicit `/rename <title>`. The TUI parser intercepts `/rename` before ordinary text reaches `actions.send`. With a non-empty explicit title, the handler calls `sessionTitle.rename()` directly. It does not call the model. The mounted @deepseek-ai/dsh-session-title service appends a durable, log-only `session/title` record whose source is `user`. The service documentation states that this record never enters derived model messages, the system prompt, tool schemas, or the request prefix. The recipe uses the explicit-argument form twice. It does not use bare `/rename`, because the TUI documents that the bare form makes an auxiliary model call.\n\nThe two exact title records make the negative assertion non-vacuous. If the TUI stopped recognizing `/rename`, either the exact `session/title` records would be absent or the slash text would become real user input and create extra turns. The transcript assertions reject both outcomes. A final exact-word prompt produces the only real `user/message`, `turn/start`, and completed `turn/end`, which proves that the session remains usable after the command window.\n\nThe DSH adapter watches the v3 compressed session log under the DSH sessions root. Its parser maps `turn/start` to working, a real `user/message` to working, and a completed `turn/end` to ready. `session/title` is not a state-driving record in `recordHandlers`; the parser skips unknown record types. The two slash commands therefore leave the session ready. The final normal prompt supplies the only ready -> working -> ready arc. The spec also rejects waiting transitions and tool calls. This satisfies every scenario observable.\n\nThe driver declares and implements `slash`, `send`, `wait_turn`, and `sleep`. The recipe needs no missing primitive. Its 4-second command intervals match the common sibling slash delays. Its 10-second final settle matches the longest committed sibling delay for this scenario. The 300-second timeout matches the existing local DeepSeek Harness model recipes.\n\n## Vacuous-pass check\n\nThis cell could pass from stale data if the driver selected a prior transcript containing the same two title records and one normal turn. The driver's fresh per-run cwd, pre-launch marker, header-cwd match, and session-ID contract are load-bearing preconditions. The exact two title records prevent the more direct vacuous case in which the slash steps do nothing.",
+      "caveats": [
+        "Vacuous-pass condition: a stale transcript with the same two exact user-sourced titles and one completed normal turn could satisfy the cell. The fresh cwd, pre-launch marker, header-cwd match, and session-ID contract are load-bearing recipe preconditions.",
+        "Load-bearing environment precondition: the active `tui` profile must contain @tomowang/dsh-tui 0.8.1 or later and mount @deepseek-ai/dsh-session-title. Re-probe the TUI package version and `dsh --profile tui --dump-config` at record time.",
+        "Use only explicit `/rename <title>`. Bare `/rename` makes an auxiliary title-generation model call and would invalidate the no-LLM premise.",
+        "The daemon verdict is provisional for live compressed-log flush timing. Installed source proves the log-only append and parser behavior, but the recording must confirm both title records reach the harvested transcript before teardown.",
+        "This recipe uses a title mutation as the durable proof that each synchronous command executed. The mutation remains outside model history and does not open a turn."
+      ],
+      "sources": [
+        {
+          "kind": "url",
+          "ref": "https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/interaction/commands/README.md",
+          "note": "Official DeepSeek Harness command documentation: human slash commands run without becoming model messages; direct command output stays outside model history."
+        },
+        {
+          "kind": "url",
+          "ref": "https://github.com/tomowang/dsh-tui",
+          "note": "Primary TUI documentation lists `/help` and `/rename [title]`, and distinguishes explicit rename from the bare form that generates a title with a model call."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/profiles/tui/node_modules/@tomowang/dsh-tui/lib/tui/commands.js",
+          "note": "Installed 0.8.1 command parser recognizes `/rename` before ordinary prompt submission."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/profiles/tui/node_modules/@tomowang/dsh-tui/lib/index.js",
+          "note": "Installed explicit-title handler calls sessionTitle.rename directly; only the bare form calls generateSessionTitle."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-session-title/lib/index.js",
+          "note": "rename() appends `session/title` with the normalized title, empty messageSeqs, and source.kind=user."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-session-title/README.md",
+          "note": "Official installed package documentation states that session/title is durable log-only state and never enters model requests or their derived inputs."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/agent.go",
+          "note": "Declares the FilesUnderRoot source over compressed DSH transcripts and session.lock-based PID binding."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser.go",
+          "note": "Maps real turn/start, user/message, assistant usage, and completed turn/end records; skips unrecognized session/title records so they cannot drive state."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "Declares and implements slash, send, wait_turn, and sleep; isolates transcript selection by fresh marker and exact cwd."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "dsh >=0.1.5-rc.2 is installed and on PATH",
+        "the active tui profile contains @tomowang/dsh-tui 0.8.1 or later and mounts @deepseek-ai/dsh-session-title; re-probe the package version and `dsh --profile tui --dump-config` at record time",
+        "LM Studio is listening at http://127.0.0.1:1234/v1 with qwen/qwen3.5-9b loaded",
+        "tmux and zstd are installed",
+        "irrlichd is recording the deepseek-harness adapter"
+      ],
+      "setup": [
+        "The driver creates a fresh per-run cwd and a pre-launch transcript marker, then launches `dsh --profile tui` in tmux.",
+        "A temporary patch selects LM Studio and qwen/qwen3.5-9b without modifying the installed profile.",
+        "The driver resolves only a readable post-marker transcript whose session header cwd matches the run cwd."
+      ],
+      "script": [
+        {
+          "type": "slash",
+          "text": "/rename irrlicht-slash-proof-one"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "slash",
+          "text": "/rename irrlicht-slash-proof-two"
+        },
+        {
+          "type": "sleep",
+          "seconds": 4
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 10
+        }
+      ],
+      "verify": [
+        "the post-marker DSH session is born ready and remains ready during both explicit rename commands",
+        "the harvested transcript contains exactly two user-sourced session/title records with the two recipe titles",
+        "the transcript contains exactly one real human user/message, one turn/start, and one completed turn/end",
+        "the final normal prompt drives the only ready -> working -> ready arc and the session never enters waiting",
+        "the transcript and curated event stream contain no tool call",
+        "the replay summary reports qwen/qwen3.5-9b and non-zero cumulative tokens"
+      ],
+      "settings": {
+        "model": "qwen/qwen3.5-9b",
+        "base_url": "http://127.0.0.1:1234/v1",
+        "context_window": 262144,
+        "permission_mode": "danger-full-access",
+        "api_key": "irrlicht-local-recording"
+      },
+      "timeout_seconds": 300,
+      "scope_note": "Uses 4-second holds after each synchronous command, matching the common sibling slash delays, and a 10-second final settle, matching the longest committed sibling delay for this scenario."
+    }
+  }
+}

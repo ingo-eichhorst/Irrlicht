@@ -1,0 +1,119 @@
+{
+  "scenario_id": "self-correction-iteration",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+b408e3c",
+    "confidence": 0.88,
+    "notes": "DeepSeek Harness exposes an explicit model-tool loop and durable tool records, so Irrlicht can verify one failed bash call and one recovery call inside one continuous turn."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "self-correction-iteration",
+      "agent": "deepseek-harness",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.88,
+      "body": "## Verdict\n\nagent_supports: yes; daemon_capability: full; driver_capability: ready.\n\n## Agent capability\n\nDeepSeek Harness 0.1.5-rc.2 explicitly implements the standard `call model, run tools, repeat` lifecycle. Its agent-loop documentation states that each accepted tool fact is appended before the next step derives from it. The bash-tool documentation states that a non-zero exit is returned to the model as `[exit code: N]`, and its system guidance tells the model to inspect that marker and investigate failures before it continues. This is the required self-correction surface.\n\nThe installed TUI profile mounts `@deepseek-ai/dsh-agent-loop` and `@deepseek-ai/dsh-tool-bash`. The current qwen/qwen3.5-9b recording for the sibling auto-executed-tool-call cell contains a real `tool/call`, its matching `tool/result`, a second model step, and one completed `turn/end`. This proves that the configured local model and TUI can execute the same mechanism. The exact two-call fail-then-recover prompt remains provisional until this cell is recorded.\n\n## Daemon capability\n\nThe DSH adapter reads the stable `session-<uuid>` v3 compressed transcript. `parseTurnStart` emits `turn_start`. `parseToolCall` emits `function_call` with the durable call ID. `parseToolResult` emits `function_call_output` with the same call ID. `parseTurnEnd` emits `turn_done` only at the durable turn boundary. Tool-call and tool-result records do not emit a turn boundary, so multiple model-tool steps stay inside one `working` span.\n\nA normal bash non-zero exit is not a DSH tool error. The bash plugin reports it in result text as `[exit code: 1]` with `isError:false`. The spec therefore checks the failure marker in the durable result text instead of incorrectly requiring `isError:true`. The sibling DSH tool recording already shows one continuous ready-to-working-to-ready arc around a tool round trip. The new transcript assertions require the failed marker, the successful recovery output, matching call IDs, and no approval record.\n\n## Driver capability\n\nThe interactive driver implements `send`, `wait_turn`, and `sleep`. `wait_turn` reads the compressed transcript until the expected durable `turn/end` exists. The recipe uses a 300-second turn budget because the measured local model can take about 100 seconds for one tool turn. Its 5-second settle matches the committed DSH tool-call sibling and falls within the 4-to-25-second sibling range for this scenario.\n\n## Vacuous-pass condition\n\nThe lifecycle phases alone would pass if the model ignored the failure, ran only the recovery command, or replied without a tool call. The transcript assertions prevent this. They require exactly two bash calls, tie the first command to a result that contains `[exit code: 1]`, tie the marker-dependent recovery command to a result that contains `recovered`, and reject approval records. The fresh empty cwd is load-bearing because the recovery command tests for a marker that only the failing command creates.",
+      "caveats": [
+        "Vacuous-pass check: ready -> working -> ready alone proves only a completed turn. The transcript assertions must require exactly two bash calls, matching results, the `[exit code: 1]` failure marker, the `recovered` success output, and zero approval/asked records.",
+        "Load-bearing environment property: the recording cwd must be fresh and must not contain `.self-correction-marker`. The successful recovery command depends on the failing command creating this marker first.",
+        "Load-bearing environment property: LM Studio must serve the tool-capable qwen/qwen3.5-9b model, and the active TUI composition must still mount agent-loop and tool-bash. Re-probe both at record time.",
+        "Load-bearing environment property: the driver must export DSH_PERMISSION_MODE=danger-full-access, and the active profile must still map that mode to approval policy `never`. Otherwise an approval gate can create a waiting transition.",
+        "The exact fail-then-recover sequence has not yet been recorded for this cell. The agent and daemon verdicts use official installed package documentation, adapter code, and a measured one-tool sibling recording. Record must confirm the two-step emission and timing."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-agent-loop/README.md",
+          "note": "Official installed 0.1.5-rc.2 package reference defines the standard call-model, run-tools, repeat lifecycle and states that accepted tool facts are durable before the next step."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-tool-bash/README.md",
+          "note": "Official installed 0.1.5-rc.2 package reference states that non-zero exits are reported as `[exit code: N]` for the agent to interpret and instructs the model to investigate failures."
+        },
+        {
+          "kind": "file",
+          "ref": "shell: DSH_PERMISSION_MODE=danger-full-access dsh --profile tui --dump-config",
+          "note": "The active composition mounts agent-loop and tool-bash and maps danger-full-access to approval policy never."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/scenarios/2-2_auto-executed-tool-call/recordings/2026-09-18-15-25-34_irrlichd-0.6.4+a129cca/transcript.jsonl.zstd",
+          "note": "Measured qwen/qwen3.5-9b DSH turn contains one bash tool call, its matching result, a follow-up model step, and a completed turn boundary."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/scenarios/2-2_auto-executed-tool-call/recordings/2026-09-18-15-25-34_irrlichd-0.6.4+a129cca/events.jsonl",
+          "note": "Measured daemon events show one ready -> working -> ready span across the DSH tool round trip and no waiting transition."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser.go",
+          "note": "Maps DSH turn boundaries, tool call/result pairs, approvals, model, and usage into daemon signals."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser_test.go",
+          "note": "Pins the measured v3 turn boundary and tool call/result shapes."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "Implements send, wait_turn, and sleep, applies the fixed LM Studio route, and exports the permission mode."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/muse/scenarios/2-4_self-correction-iteration/metadata.json",
+          "note": "Sibling recipe establishes the explicit fail-then-recover prompt shape and a 5-second settle for an interactive direct-transcript adapter."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "timeout_seconds": 300,
+      "settings": {
+        "model": "qwen/qwen3.5-9b",
+        "base_url": "http://127.0.0.1:1234/v1",
+        "context_window": 262144,
+        "permission_mode": "danger-full-access"
+      },
+      "preconditions": [
+        "dsh 0.1.5-rc.2 or newer is on PATH, and the community tui profile is installed under the active DSH home",
+        "LM Studio is serving the tool-capable qwen/qwen3.5-9b model through http://127.0.0.1:1234/v1; re-probe the live model roster at record time",
+        "the active TUI composition mounts agent-loop and tool-bash, and DSH_PERMISSION_MODE=danger-full-access maps to approval policy never; re-probe the composed profile at record time",
+        "the recording cwd is fresh and does not contain `.self-correction-marker`",
+        "irrlichd is recording with DeepSeek Harness transcript permission granted"
+      ],
+      "setup": [
+        "Create a fresh empty cwd under the recording staging directory",
+        "Let the driver apply the LM Studio endpoint and danger-full-access policy through its per-run environment and temporary patch"
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Do this in ONE turn. First use the bash tool with command `printf failed > .self-correction-marker; false`. Inspect its `[exit code: 1]` result. Then use the bash tool again with command `test -f .self-correction-marker && echo recovered`. Do not combine the two commands. After the second command succeeds, reply with exactly: done"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the real session-UUID row entering ready, then working, then ready",
+        "the compressed transcript contains exactly two bash tool calls with matching results",
+        "the first command creates the marker and returns `[exit code: 1]`; the later marker-dependent command returns `recovered`",
+        "the transcript contains no approval/asked record, and events.jsonl contains no transition to waiting or intermediate transition to ready",
+        "turn/end has reason kind completed, the final session state is ready, and observations report qwen/qwen3.5-9b with non-zero tokens"
+      ]
+    }
+  }
+}

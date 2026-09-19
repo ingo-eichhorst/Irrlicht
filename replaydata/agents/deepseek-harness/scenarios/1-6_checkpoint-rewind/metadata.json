@@ -1,0 +1,143 @@
+{
+  "scenario_id": "checkpoint-rewind",
+  "metadata": {
+    "agent_supports": "partial",
+    "daemon_capability": "bug",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+f8a1099",
+    "confidence": 0.98,
+    "notes": "The live fork recording proves that DeepSeek Harness creates the seeded child and completes the post-fork turn, but Irrlicht misses the child working transition during the web-to-TUI session handoff."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "checkpoint-rewind",
+      "agent": "deepseek-harness",
+      "assessed_at": "2026-09-18T00:00:00Z",
+      "agent_supports": "partial",
+      "daemon_capability": "bug",
+      "driver_capability": "ready",
+      "confidence": 0.98,
+      "body": "## Verdict\n\nagent_supports: partial\ndaemon_capability: bug\ndriver_capability: gap:fork\n\n## Reasoning\n\nDeepSeek Harness 0.1.5-rc.2 supports the scenario's fork variant in its official web profile. The session controller's `fork()` selects a completed `turn/end`, copies the source prefix into a new `session-<uuid>`, and writes `parentSession` plus `isSeeded: true`. The official web chat passes the selected completed-turn sequence to that API. This is a conversation rewind into a new session. It does not restore prior workspace file changes, so support is partial, like the codex fork variant.\n\nThe installed community TUI is a different surface. Its shipped command table contains `/resume` and `/clear`, but no `/fork`, `/branch`, `/rewind`, or rollback command. The official session checkpoint policy is also not a rewind feature. It only flushes durable work before model and tool boundaries. The web fork is therefore the supported product surface; `/resume`, `/clear`, and durability checkpoints do not satisfy this scenario.\n\nThe DSH adapter watches every highest-generation `session.vN.jsonl.zstd` file under the sessions root and derives the session ID from its `session-<uuid>` directory. A web fork writes a second watched transcript. The parser maps the copied and later `turn/start`, user, assistant, and `turn/end` records into the same ready/working/ready lifecycle used by recorded core cells. The live recording confirms child publication, but it refutes the expected post-fork lifecycle. The raw daemon capture emits the seeded child in ready and never emits working for its third turn, although the durable child transcript contains turn/start, the exact REWIND-THREE reply, and turn/end.\n\nThe child header also carries `parentSession`, but `dsh.Source()` has no `ParentSessionIDFromPath` callback and `parseSession` skips the header after reading only cwd. Irrlicht will show the fork as a distinct top-level session, not a parent-linked child. This stays a caveat, not a daemon bug, because the canonical checkpoint-rewind contract and sibling fork specs use the distinct new row plus its clean post-fork arc as the machine-checkable signal. Treating ordinary forks as subagents through `ParentSessionID` would also change parent activity semantics.\n\nThe current interactive driver launches the TUI profile and declares `send`, `slash`, `wait_turn`, `sleep`, `interrupt`, `keys`, `reset_session`, `restart`, `resume`, `sigkill`, `exit_clean`, `start_session`, and `session`. It does not declare or implement `fork`. The recipe needs one `fork` step that invokes the official web session-fork API at the last completed turn, captures the child ID, and resumes the TUI on that child. This is a driver gap, not an agent or daemon limit.\n\nThe recipe matches sibling timing: 5-second settles after the two parent turns, 6 seconds after fork for child discovery, and 6 seconds after the child turn. Transcript assertions require two distinct headers, a seeded child whose `parentSession` equals the original ID, an inherited end-seed marker, the exact post-fork reply, and no tool call. An ordinary `/clear` or unrelated new session cannot pass those assertions.",
+      "caveats": [
+        "The adapter drops the fork header's parentSession field. The dashboard will show a distinct top-level child row instead of a lineage label. The canonical fork specs treat this as provenance loss because the distinct child row and clean post-fork arc remain observable.",
+        "The official web profile owns the fork surface. The installed community TUI has no fork command, and the current driver does not mount the web session controller.",
+        "Vacuous-pass condition: a reset or unrelated second session could mimic a new row and clean turn. The spec prevents this by requiring an isSeeded child header linked to the original through parentSession and an inherited session/end-seed marker.",
+        "Load-bearing recording condition: the ported fork step must invoke the official session fork API at the completed parent turn, capture its returned child ID, and resume the TUI on that child. It must not implement the step as /clear or /resume of an unrelated session.",
+        "Live correction from .build/refresh/deepseek-harness/1-6_checkpoint-rewind-20260918T225600: the raw daemon capture and curated events both contain the child ready state but no child working transition, while the child transcript contains turn 3 and the exact REWIND-THREE reply. The correct lifecycle therefore verifies at 8/10 and daemon_capability is bug, not full."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-api-session-controller/lib/index.js:660",
+          "note": "Installed official 0.1.5-rc.2 source: fork selects a completed turn boundary, creates a fresh session UUID, seeds the copied prefix, and records parentSession plus isSeeded."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-client-ui-chat/lib/client.js:3664",
+          "note": "Installed official web UI exposes the branch action on a completed turn and calls the fork API with that turn's sequence."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/profiles/tui/node_modules/@tomowang/dsh-tui/lib/tui/commands.js",
+          "note": "Complete installed TUI slash-command table has /resume and /clear but no /fork, /branch, /rewind, or rollback command; the empty strings scan confirmed the absence."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-session-checkpoint-policy/README.md",
+          "note": "Official checkpoint-policy docs define durability flush barriers, not a user-visible rewind or restore operation."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/agent.go",
+          "note": "FilesUnderRoot watches compressed session generations and identifies sessions by directory; no ParentSessionIDFromPath callback is configured."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser.go",
+          "note": "Maps turn boundaries and messages into the required lifecycle, but parseSession skips the header after reading only cwd and therefore drops parentSession provenance."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "The declared and implemented step list lacks fork; the driver launches the TUI profile, which does not compose the web session controller."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "dsh >=0.1.5-rc.2 is installed and on PATH",
+        "the official web profile composes @deepseek-ai/dsh-api-session-controller and the web fork UI",
+        "the community TUI profile is installed under ~/.dsh/profiles/tui",
+        "LM Studio is listening at http://127.0.0.1:1234/v1 with qwen/qwen3.5-9b loaded",
+        "tmux and zstd are installed",
+        "the driver's fork primitive invokes the official web fork API, captures the child ID, and resumes the TUI on that child"
+      ],
+      "setup": [
+        "Launch the normal DeepSeek Harness TUI in a fresh recording cwd with the temporary LM Studio patch.",
+        "Complete two exact text turns on the original session.",
+        "For the fork step, invoke the official web session-controller fork at the last completed turn, capture the returned child session ID, and attach the TUI to that child before the third prompt."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Reply with exactly the token: REWIND-ONE"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the token: REWIND-TWO"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 5
+        },
+        {
+          "type": "fork"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the token: REWIND-THREE"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        }
+      ],
+      "verify": [
+        "the original DSH session runs two clean ready to working to ready turns",
+        "fork creates a distinct seeded DSH session whose header parentSession equals the original session ID",
+        "the child transcript contains the inherited end-seed marker and appears ready before the next prompt",
+        "the post-fork prompt runs on the child and completes ready to working to ready",
+        "the final reply is exactly REWIND-THREE and no tool call occurs"
+      ],
+      "settings": {
+        "model": "qwen/qwen3.5-9b",
+        "base_url": "http://127.0.0.1:1234/v1",
+        "context_window": 262144,
+        "permission_mode": "danger-full-access",
+        "api_key": "irrlicht-local-recording"
+      },
+      "timeout_seconds": 300,
+      "scope_note": "Sibling recipes settle 3-6 seconds around normal turns and forks. This recipe uses 5 seconds after each parent turn, 6 seconds after fork, and 6 seconds after the child turn. The current DSH TUI driver lacks fork; record must port a fork step that uses the official web session controller and then resumes the TUI on the returned child."
+    }
+  }
+}

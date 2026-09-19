@@ -1,11 +1,14 @@
 package validate
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"irrlicht/core/application/replayengine"
 	"irrlicht/tools/onboarding-factory/internal/matrix"
 )
 
@@ -231,6 +234,194 @@ func TestEventAssertionsRequireOwnedPaths(t *testing.T) {
 	if err != nil || report == nil || report.ExpectedPass() {
 		t.Fatalf("unrelated PID regression must not inherit the path waiver: report=%+v err=%v", report, err)
 	}
+}
+
+func TestDeepseekTaskListAssertionsDetectMutations(t *testing.T) {
+	fixture := stageTaskListMutationFixture(t)
+	assertTaskListNoWaitingMutation(t, fixture)
+	assertTaskListCompletedTurnMutations(t, fixture)
+}
+
+type taskListMutationFixture struct {
+	dir, name, recordingDir string
+	events                  []byte
+}
+
+func stageTaskListMutationFixture(t *testing.T) taskListMutationFixture {
+	t.Helper()
+	source, err := filepath.Abs(filepath.Join("..", "..", "..", "..", "replaydata", "agents", "deepseek-harness", "scenarios", "2-3_task-list"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected, err := os.ReadFile(filepath.Join(source, "expected.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	recording, ok, err := matrix.NewestRecording(source, matrix.ProfileCLILocal)
+	if err != nil {
+		t.Fatalf("find task-list recording: %v", err)
+	}
+	if !ok {
+		t.Fatal("no task-list recording found")
+	}
+	events, err := os.ReadFile(filepath.Join(recording.Dir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "expected.jsonl"), expected, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	name := "2026-09-19-00-00-00_mutation"
+	mkGoldenRec(t, dir, name, `{}`)
+	return taskListMutationFixture{dir: dir, name: name, recordingDir: recording.Dir, events: events}
+}
+
+func assertTaskListNoWaitingMutation(t *testing.T, fixture taskListMutationFixture) {
+	t.Helper()
+	eventPath := filepath.Join(fixture.dir, "recordings", fixture.name, "events.jsonl")
+	writeTaskListEvents(t, eventPath, fixture.events)
+	if baseline := mustTaskListEventReport(t, fixture.dir); !baseline.ExpectedPass() {
+		t.Fatalf("unmutated recording must pass event assertions: %+v", baseline)
+	}
+
+	mutated := append(append([]byte{}, fixture.events...), []byte(`{"kind":"state_transition","new_state":"waiting"}`+"\n")...)
+	writeTaskListEvents(t, eventPath, mutated)
+	assertTaskListAssertionFails(t, mustTaskListEventReport(t, fixture.dir), "no waiting state", "injected waiting transition")
+}
+
+func writeTaskListEvents(t *testing.T, path string, events []byte) {
+	t.Helper()
+	if err := os.WriteFile(path, events, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func mustTaskListEventReport(t *testing.T, dir string) *RecordReport {
+	t.Helper()
+	report, err := ValidateEventsForProfile(dir, matrix.ProfileCLILocal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report == nil {
+		t.Fatal("task-list event assertions did not run")
+	}
+	return report
+}
+
+func taskListTranscriptLines(t *testing.T, recordingDir string) ([][]byte, int) {
+	t.Helper()
+	var lines [][]byte
+	finalTurnEnd, turnEnds := -1, 0
+	path := filepath.Join(recordingDir, "transcript.jsonl.zstd")
+	err := replayengine.ScanTranscriptLines(path, func(line []byte) error {
+		var record struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(line, &record); err != nil {
+			return err
+		}
+		if record.Type == "turn/end" {
+			turnEnds++
+			finalTurnEnd = len(lines)
+		}
+		lines = append(lines, append([]byte(nil), line...))
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("scan source transcript: %v", err)
+	}
+	if turnEnds != 7 {
+		t.Fatalf("source transcript must contain seven completed turns: count=%d", turnEnds)
+	}
+	return lines, finalTurnEnd
+}
+
+func assertTaskListCompletedTurnMutations(t *testing.T, fixture taskListMutationFixture) {
+	t.Helper()
+	lines, finalTurnEnd := taskListTranscriptLines(t, fixture.recordingDir)
+	copyPath := filepath.Join(fixture.dir, "recordings", fixture.name, "transcript.jsonl")
+	writeTaskListTranscript(t, copyPath, lines)
+	if baseline := mustTaskListTranscriptReport(t, fixture.dir); !baseline.ExpectedPass() {
+		t.Fatalf("unmutated transcript must pass assertions: report=%+v", baseline)
+	}
+
+	withoutFinalEnd := append(append([][]byte{}, lines[:finalTurnEnd]...), lines[finalTurnEnd+1:]...)
+	writeTaskListTranscript(t, copyPath, withoutFinalEnd)
+	assertTaskListCompletionFails(t, fixture.dir, "missing final turn/end")
+
+	withAbortedFinalTurn := append([][]byte{}, lines...)
+	withAbortedFinalTurn[finalTurnEnd] = abortedTaskListTurn(t, lines[finalTurnEnd])
+	writeTaskListTranscript(t, copyPath, withAbortedFinalTurn)
+	assertTaskListCompletionFails(t, fixture.dir, "aborted final turn/end")
+}
+
+func writeTaskListTranscript(t *testing.T, path string, lines [][]byte) {
+	t.Helper()
+	if err := os.WriteFile(path, append(bytes.Join(lines, []byte("\n")), '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertTaskListCompletionFails(t *testing.T, dir, mutation string) {
+	t.Helper()
+	assertTaskListAssertionFails(t, mustTaskListTranscriptReport(t, dir), "all seven turns complete", mutation)
+}
+
+func mustTaskListTranscriptReport(t *testing.T, dir string) *RecordReport {
+	t.Helper()
+	report, err := ValidateTranscriptForProfile(dir, matrix.ProfileCLILocal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report == nil {
+		t.Fatal("task-list transcript assertions did not run")
+	}
+	return report
+}
+
+func assertTaskListAssertionFails(t *testing.T, report *RecordReport, name, mutation string) {
+	t.Helper()
+	if report == nil {
+		t.Fatalf("%s did not run assertions", mutation)
+	}
+	if report.ExpectedPass() {
+		t.Fatalf("%s must fail: report=%+v", mutation, report)
+	}
+	for _, assertion := range report.Asserts {
+		if assertion.Name == name {
+			if assertion.OK {
+				t.Fatalf("%s assertion ignored %s", name, mutation)
+			}
+			return
+		}
+	}
+	t.Fatalf("task-list spec has no %s assertion", name)
+}
+
+func abortedTaskListTurn(t *testing.T, line []byte) []byte {
+	t.Helper()
+	var record map[string]any
+	if err := json.Unmarshal(line, &record); err != nil {
+		t.Fatal(err)
+	}
+	data, ok := record["data"].(map[string]any)
+	if !ok {
+		t.Fatal("final turn/end has no data object")
+	}
+	reason, ok := data["reason"].(map[string]any)
+	if !ok {
+		t.Fatal("final turn/end has no reason object")
+	}
+	if reason["kind"] != "completed" {
+		t.Fatalf("final turn/end has no completed reason: %v", data["reason"])
+	}
+	reason["kind"] = "aborted"
+	abortedLine, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return abortedLine
 }
 
 func TestCommittedRecordAssertions(t *testing.T) {

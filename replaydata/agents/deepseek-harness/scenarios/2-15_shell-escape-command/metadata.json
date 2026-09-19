@@ -1,0 +1,122 @@
+{
+  "scenario_id": "shell-escape-command",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+66497e7",
+    "confidence": 0.88,
+    "notes": "DeepSeek Harness TUI shell mode runs a leading-! command outside the agent loop and durable log, so the session stays ready; one final normal prompt proves the ready-to-working-to-ready path."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "shell-escape-command",
+      "agent": "deepseek-harness",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.88,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Reasoning\n\nDeepSeek Harness 0.1.5-rc.2 can load the installed @tomowang/dsh-tui 0.8.1 profile. That TUI documents shell mode. A leading `!` on an empty prompt changes the next Enter action from a model message to a local shell command. The installed source confirms the full path. `CustomEditor` consumes `!`, routes the entered text to `actions.runShell`, and does not call `actions.send`. `runShell` launches `$SHELL -c <command>` in the session cwd. It stores stdout, stderr, and the exit code only in the TUI's display store. It explicitly does not append the command or output to the durable DSH session log. This is direct support for the behavior.\n\nThe DSH adapter watches only the durable compressed `session.vN.jsonl.zstd` log. Because shell mode does not write that log, the daemon receives no shell-escape transcript activity and the session stays ready during the shell window. The final normal prompt writes one real `turn/start`, one user-sourced `user/message`, one assistant reply with usage, and one completed `turn/end`. The parser maps these records to working, model and token metrics, and ready. The transcript assertions require exactly one real user message and one model turn. They therefore fail if the `echo irrlichtshellproof` text leaks through as an ordinary model prompt. This matches the established scenario intent: the local command cannot leave the session stuck in working, and a later normal prompt still produces the real ready -> working -> ready arc.\n\nThe interactive driver implements `keys`, `sleep`, `send`, and `wait_turn`. The raw-key step enters shell mode without increasing the driver's expected model-turn count. This avoids the `send` primitive's model-turn accounting for a command that deliberately creates no DSH turn. The 6-second shell hold is within the committed sibling range for this scenario. The 10-second final settle matches the existing DeepSeek Harness synchronous-command recipe and gives the daemon an observation window. The 300-second timeout matches the local DeepSeek Harness model recipes.\n\nThe model is pinned because the driver settings select `qwen/qwen3.5-9b`, and the loaded LM Studio surface currently exposes that exact model. Token usage is non-zero for the final real turn. Cost is not required to be non-zero because the endpoint is local and the current pricing catalog has no exact entry.\n\n## Vacuous-pass check\n\nThis cell could pass while proving no shell execution if the entire raw-key step were silently dropped. The durable DSH log is intentionally unable to prove shell execution. The recorded pane log must contain `irrlichtshellproof` and a completed shell result. Delivery to a focused, empty @tomowang/dsh-tui 0.8.1 prompt and inspection of `driver.log.stdout.1` are load-bearing recording preconditions. The machine-checkable transcript counts still reject the more likely failure in which the shell text is sent to the model.",
+      "caveats": [
+        "Vacuous-pass condition: if the complete raw-key step is silently dropped, the session stays ready and the final normal turn can still satisfy expected.jsonl. The recorder must confirm `irrlichtshellproof` and the completed shell result in driver.log.stdout.1; the current verifier cannot assert the pane log.",
+        "Load-bearing environment precondition: the focused prompt must be empty and the active tui profile must contain @tomowang/dsh-tui 0.8.1 or later. Re-probe the installed package version and `dsh --profile tui --dump-config` at record time.",
+        "Load-bearing model precondition: LM Studio must listen at http://127.0.0.1:1234/v1 with qwen/qwen3.5-9b loaded. The driver applies that exact endpoint and model through a temporary patch.",
+        "The shell escape intentionally leaves no durable DSH record. daemon=full means that irrlichd correctly keeps the session ready during the escape window and observes the later real turn; it does not mean that irrlichd directly observes the shell command.",
+        "The daemon verdict is provisional for live compressed-log watcher timing. Installed source proves no shell-log emission and the parser covers the final turn, but the recording must settle the phase timing."
+      ],
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/profiles/tui/node_modules/@tomowang/dsh-tui/README.md",
+          "note": "Installed 0.8.1 primary documentation: a leading ! enters shell mode, runs a local command, streams output to the display transcript, and does not touch the session log."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/profiles/tui/node_modules/@tomowang/dsh-tui/lib/tui/CustomEditor.js",
+          "note": "Installed source consumes ! on an empty prompt and routes the next submitted text to runShell instead of the agent send action."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/profiles/tui/node_modules/@tomowang/dsh-tui/lib/index.js",
+          "note": "Installed runShell implementation launches the local shell outside the agent loop and keeps command output out of the durable session log."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/profiles/tui/node_modules/@tomowang/dsh-tui/lib/tui/store.js",
+          "note": "Installed display-store implementation keeps shell command, output, and exit code only in in-memory shellHistory."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/agent.go",
+          "note": "Defines the FilesUnderRoot source over durable compressed DSH session logs and session.lock PID binding."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser.go",
+          "note": "Maps the final normal turn's turn/start, real user/message, assistant usage, model context, and completed turn/end records; no shell-display record exists in this source."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "Declares and implements keys, sleep, send, and wait_turn. The keys primitive does not increment expected model turns."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "preconditions": [
+        "dsh >=0.1.5-rc.2 is installed and on PATH",
+        "the active tui profile contains @tomowang/dsh-tui 0.8.1 or later; re-probe the package version and `dsh --profile tui --dump-config` at record time",
+        "the driver starts with focus on an empty TUI prompt and the recorder confirms `irrlichtshellproof` plus a completed shell result in driver.log.stdout.1",
+        "LM Studio is listening at http://127.0.0.1:1234/v1 with qwen/qwen3.5-9b loaded",
+        "tmux and zstd are installed",
+        "irrlichd is recording the deepseek-harness adapter"
+      ],
+      "setup": [
+        "The driver creates a fresh per-run cwd and a pre-launch transcript marker, then launches `dsh --profile tui` in tmux.",
+        "A temporary patch selects LM Studio and qwen/qwen3.5-9b without modifying the installed profile.",
+        "The driver resolves only a readable post-marker transcript whose session header cwd matches the run cwd."
+      ],
+      "script": [
+        {
+          "type": "keys",
+          "keys": "! e c h o Space i r r l i c h t s h e l l p r o o f Enter"
+        },
+        {
+          "type": "sleep",
+          "seconds": 6
+        },
+        {
+          "type": "send",
+          "text": "Reply with exactly the word: ok"
+        },
+        {
+          "type": "wait_turn"
+        },
+        {
+          "type": "sleep",
+          "seconds": 10
+        }
+      ],
+      "verify": [
+        "driver.log.stdout.1 contains the shell output marker irrlichtshellproof and shows the local command completed",
+        "the post-marker DSH session is born ready and remains ready throughout the shell-escape window",
+        "the durable transcript contains exactly one real human user/message, one turn/start, and one completed turn/end, so the shell text did not become a model prompt",
+        "the final normal prompt drives the only ready -> working -> ready arc and the session never enters waiting",
+        "the transcript contains no tool call",
+        "the replay summary reports qwen/qwen3.5-9b and non-zero cumulative tokens"
+      ],
+      "settings": {
+        "model": "qwen/qwen3.5-9b",
+        "base_url": "http://127.0.0.1:1234/v1",
+        "context_window": 262144,
+        "permission_mode": "danger-full-access",
+        "api_key": "irrlicht-local-recording"
+      },
+      "timeout_seconds": 300,
+      "scope_note": "Uses a 6-second shell window, within the 5-10 second sibling range, and the established 10-second DeepSeek Harness post-turn settle. Longer sibling settles are adapter-specific; DSH has an explicit completed turn/end and its existing command recipe uses 10 seconds."
+    }
+  }
+}

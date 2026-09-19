@@ -1,0 +1,112 @@
+{
+  "schema_version": 1,
+  "source_transcript": "",
+  "generated_at": "0001-01-01T00:00:00Z",
+  "settings": {
+    "adapter": "dsh",
+    "debounce_window": 2000000000,
+    "flicker_max_duration": 10000000000
+  },
+  "summary": {
+    "total_events": 8,
+    "consumed_events": 8,
+    "total_transitions": 3,
+    "first_event_time": "2026-09-19T03:23:00.315973+02:00",
+    "last_event_time": "2026-09-19T03:24:04.164064+02:00",
+    "wall_clock_session_duration": 63848091000,
+    "state_durations": {
+      "working": 63848091000
+    },
+    "flicker_count": 0,
+    "flickers_by_category": {},
+    "flickers_by_reason": {},
+    "cum_input_tokens": 24892,
+    "cum_output_tokens": 306,
+    "model_name": "qwen/qwen3.5-9b",
+    "total_tokens": 12740,
+    "context_window": 262144,
+    "context_utilization_percentage": 4.85992431640625
+  },
+  "transitions": [
+    {
+      "index": 0,
+      "event_index": -1,
+      "virtual_time": "2026-09-19T03:23:00.315973+02:00",
+      "cause": "init",
+      "prev_state": "",
+      "new_state": "ready",
+      "reason": "initial state",
+      "last_event_type": "",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 1,
+      "event_index": 0,
+      "virtual_time": "2026-09-19T03:23:00.315973+02:00",
+      "cause": "event",
+      "prev_state": "ready",
+      "new_state": "working",
+      "reason": "force ready→working on first activity",
+      "last_event_type": "turn_start",
+      "has_open_tool": false,
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false
+    },
+    {
+      "index": 2,
+      "event_index": 7,
+      "virtual_time": "2026-09-19T03:24:04.164064+02:00",
+      "cause": "debounce_coalesce",
+      "prev_state": "working",
+      "new_state": "waiting",
+      "reason": "transcript permission prompt open → waiting",
+      "last_event_type": "permission_requested",
+      "has_open_tool": true,
+      "open_tool_names": [
+        "bash"
+      ],
+      "is_agent_done": false,
+      "needs_user_attention": false,
+      "waiting_for_user_input": false,
+      "last_assistant_text_head": "escalate sandbox to danger-full-access: Escalating to write a single probe file …"
+    }
+  ],
+  "sessions": [
+    {
+      "session_id": "session-602adc66-07c8-4a08-bf97-1ca21259856a",
+      "adapter": "dsh",
+      "first_seen": "2026-09-19T03:23:00.118641+02:00",
+      "last_seen": "2026-09-19T03:24:30.346261+02:00",
+      "duration_ms": 90227,
+      "event_count": 24,
+      "state_changes": 3,
+      "final_state": "waiting",
+      "pid": 8549,
+      "pid_discovery_lag_ms": 442,
+      "debounce_coalesced_events": 5,
+      "state_durations_ms": {
+        "ready": 227,
+        "waiting": 26178,
+        "working": 63814
+      }
+    }
+  ],
+  "extended_check": {
+    "sidecar_path": "",
+    "recorded_transition_count": 2,
+    "replayed_transition_count": 2,
+    "ordered_matches": 2,
+    "recorded_unique_kinds": [
+      "ready→working",
+      "working→waiting"
+    ],
+    "replayed_unique_kinds": [
+      "ready→working",
+      "working→waiting"
+    ]
+  }
+}

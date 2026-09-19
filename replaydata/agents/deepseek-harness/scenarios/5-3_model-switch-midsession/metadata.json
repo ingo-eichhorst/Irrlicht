@@ -1,0 +1,74 @@
+{
+  "scenario_id": "model-switch-midsession",
+  "metadata": {
+    "agent_supports": "no",
+    "daemon_capability": "n/a",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+968624b",
+    "confidence": 0.9,
+    "notes": "DeepSeek Harness TUI 0.8.1 advertises /model, but its handler saves only the default for later agents and does not change the current session model."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "model-switch-midsession",
+      "agent": "deepseek-harness",
+      "assessed_at": "2026-09-18T21:57:54Z",
+      "agent_supports": "no",
+      "daemon_capability": "n/a",
+      "driver_capability": "ready",
+      "record_blocked": "upstream",
+      "confidence": 0.9,
+      "body": "## Verdict\n\nagent_supports: no\ndaemon_capability: n/a\ndriver_capability: ready\n\n## Scenario signal\n\nThe scenario requires two completed turns in one live session. Turn 1 must use model A. A user action must change the same session to model B. Turn 2 must use model B. The final model must be B, and cumulative tokens must include both turns.\n\n## Agent capability\n\nThe installed DeepSeek Harness launcher is 0.1.5-rc.2 and the installed community TUI is 0.8.1. The TUI documentation advertises `/model` as an active-model switch. The shipped implementation does not complete that behavior for the current session. `attachSession` reads `defaultModel.currentSelection()` once and installs a local `ModelSelectionRef` with `current: selection`. The `/model` action later calls only `defaultModel.saveSelection({ provider, model })`. No code path assigns the new value to the installed `selected.current` reference.\n\nThe DeepSeek Harness default-model contract confirms the consequence. `currentSelection()` returns a detached object. `saveSelection()` stores the default for later agents. The contract states that an existing session keeps its selected route and that per-session selection belongs to the entry point. Therefore `/model` in TUI 0.8.1 changes the default used by a later session, but turn 2 in the current session remains on model A. This misses the load-bearing same-session model switch.\n\nThe binary string scan did not expose another model-switch surface. `dsh --profile tui --help` exposes only resume and agent-preset flags. A source search found `/model` only in the TUI overlay described above. A scan of the existing local DSH v3 transcripts found no `request/header` record with reason `change` and no model-selection notice. The transcript result is supporting evidence only; the source path is the decisive evidence.\n\n## Daemon capability\n\nThis axis is n/a because the installed agent surface cannot produce the required same-session switch. For context, the DSH adapter can parse model fields from request/header, request/context, and assistant/message records. That hypothetical parser path does not make an absent agent behavior recordable.\n\n## Driver capability\n\nThe driver is ready. The factory helper reports support for `send`, `slash`, `keys`, `wait_turn`, and `sleep`, which cover the TUI overlay and both turns. No driver primitive blocks the scenario. The pipeline freezes at the agent pillar.\n\n## Unblock condition\n\nReassess after the TUI changes `/model` to mutate the current Agent's installed `ModelSelectionRef`, or after another shipped DeepSeek Harness CLI entry point exposes a same-session model switch.",
+      "caveats": [
+        "Vacuous-pass condition: a future cell could pass while proving nothing if it checked only a saved default or the final model, because both turns could still use model A. A recordable replacement must require two distinct request-context models on one session and cumulative tokens after turn 2.",
+        "The TUI 0.8.1 README says `/model` can switch the active model, but the tagged 0.8.1 source and installed JavaScript disagree. This assessment follows the executed source path.",
+        "This verdict is version-specific. Re-probe the TUI source after an upgrade because DeepSeek Harness core already provides the mutable ModelSelectionRef mechanism that an entry point can use.",
+        "record_blocked=upstream documents the mismatch with the adapter capability catalog: DeepSeek Harness core has a traced model-selection mechanism, but the installed TUI entry point does not connect `/model` to the current session's mutable selection."
+      ],
+      "sources": [
+        {
+          "kind": "url",
+          "ref": "https://github.com/tomowang/dsh-tui/blob/v0.8.1/src/index.ts",
+          "note": "Tagged TUI source: attachSession snapshots defaultModel.currentSelection into a local ModelSelectionRef; setActiveModel only calls defaultModel.saveSelection and never updates that local current selection."
+        },
+        {
+          "kind": "url",
+          "ref": "https://github.com/tomowang/dsh-tui/blob/v0.8.1/README.md",
+          "note": "Tagged TUI documentation advertises `/model` as an active-model switch, establishing the documentation/source mismatch."
+        },
+        {
+          "kind": "url",
+          "ref": "https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/core/agent-default-model/README.md",
+          "note": "Official DeepSeek Harness contract: currentSelection returns a detached object, saveSelection stores a default for later agents, and existing sessions keep their selection."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/profiles/tui/node_modules/@tomowang/dsh-tui/lib/index.js",
+          "note": "Installed TUI 0.8.1 implementation. Lines around attachSession install a fixed local selection; setActiveModel calls only saveSelection."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.nvm/versions/node/v22.18.0/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-agent-default-model/README.md",
+          "note": "Installed 0.1.5-rc.2 package contract for detached currentSelection and future-agent saveSelection semantics."
+        },
+        {
+          "kind": "command",
+          "ref": "strings $(command -v dsh) | grep -iE '(/model|model switch|model select|set model|active model|provider)'",
+          "note": "Required binary scan produced no matching model-switch surface. The executable is the launcher script, so the installed TUI source scan supplies the decisive evidence."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser.go",
+          "note": "The daemon parser maps model metadata from request/header, request/context, and assistant/message records; this path is moot while the agent cannot emit a same-session switch."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "The interactive driver implements send, slash, keys, wait_turn, and sleep."
+        }
+      ]
+    }
+  }
+}

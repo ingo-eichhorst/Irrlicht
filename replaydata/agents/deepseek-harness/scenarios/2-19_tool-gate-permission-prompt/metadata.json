@@ -1,0 +1,137 @@
+{
+  "scenario_id": "tool-gate-permission-prompt",
+  "metadata": {
+    "agent_supports": "yes",
+    "daemon_capability": "full",
+    "driver_capability": "ready",
+    "agent_cli_version": "0.1.5-rc.2",
+    "daemon_version": "0.6.4+0aa740b",
+    "confidence": 0.9,
+    "notes": "DeepSeek Harness persists an open approval request during a sandbox-escalation retry, and the DSH adapter maps that transcript signal to a user-visible waiting state."
+  },
+  "details": {
+    "assessment": {
+      "schema_version": 1,
+      "scenario_id": "tool-gate-permission-prompt",
+      "agent": "deepseek-harness",
+      "agent_supports": "yes",
+      "daemon_capability": "full",
+      "driver_capability": "ready",
+      "confidence": 0.90,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\n## Agent support\n\nDeepSeek Harness 0.1.5-rc.2 supports a blocking permission prompt for a sandbox escalation. The shipped base composition maps `DSH_PERMISSION_MODE=workspace-write` to sandbox mode `workspace-write` and approval policy `ask`. The bash tool runs an ordinary command under that sandbox. After a real denial, the model can retry the same command with a strictly wider `sandbox_permissions` value and a justification. The approval service appends `approval/asked` before it waits for the TUI answerer. The installed TUI renders that pending request as an approval overlay with Allow once and Reject choices.\n\nThis behavior is not inferred only from documentation. An existing local DSH v3 transcript from the configured `qwen/qwen3.5-9b` model records the complete pre-prompt path: a bash write outside the workspace, a result containing the workspace-write denial and escalation hint, a second bash call with `sandbox_permissions` set to `danger-full-access`, and `approval/asked` for that second call. The measured operator later rejected it, which produced the matching `approval/decided`. The recipe stops before a decision, so the request remains open and user-visible.\n\n## Daemon capability\n\nThe DSH adapter tails the compressed v3 transcript under `$DSH_HOME/sessions` and uses the stable `session-<uuid>` identity from launch. `parseTurnStart` emits the working boundary. `parseApprovalAsked` maps the durable request id to `permission_requested`. `parseApprovalDecided` maps the same id to `permission_completed`. The shared tailer derives `TranscriptPermissionPending` from the unmatched request-id set. The state classifier places that transcript permission rule above ordinary transcript activity and returns `waiting`. Every required signal for the scoped cell is therefore present and parsed.\n\nThe adapter tests contain the measured `approval/asked` and `approval/decided` shapes. The full end-to-end waiting transition remains for `record` to confirm, but the agent emission, parser mapping, open-request fold, and classifier rule are each concrete. This supports `daemon=full` rather than a bug or architecture limit.\n\n## Driver and fixture\n\nThe recipe needs only `send` and `sleep`. The DeepSeek Harness interactive driver implements both. It reads `permission_mode` from recipe settings and exports it as `DSH_PERMISSION_MODE`. The recipe pins `workspace-write`, asks for the measured denial-then-escalation sequence, and leaves the approval overlay unanswered. The 90-second sleep is longer than the longest committed sibling delay because this local DSH path needs two model inference steps before the approval opens; the measured path took about 52 seconds.\n\nThis cell follows the committed Claude Code scope for scenario 2.19: it proves `ready -> working -> waiting` and holds the open prompt. It does not resolve the prompt or test a late post-tool signal. That narrower scope preserves the scenario's load-bearing permission-waiting signal and final waiting state.\n\n## Vacuous-pass check\n\nThe lifecycle could enter `waiting` because of a terminal prose question or another blocking interaction and still prove nothing about the permission gate. The spec therefore requires the exact workspace-write plus ask policy records, the denied bash call, the correlated escalation call, one unmatched `approval/asked`, and no `approval/decided`. A fresh per-run cwd, pre-launch marker, header-cwd match, and real session-id contract prevent reuse of the measured prior transcript.",
+      "caveats": [
+        "Vacuous-pass condition: a waiting state caused by final prose or another blocking interaction would not prove the permission gate. The transcript assertions require the exact denied bash escalation and one unmatched approval/asked record.",
+        "Load-bearing environment property: the active TUI profile must still map DSH_PERMISSION_MODE=workspace-write to sandbox mode workspace-write and approval policy ask, and it must compose the interactive approval/request answerer. Re-probe the composed config and TUI package at record time.",
+        "Load-bearing environment property: LM Studio must serve the tool-capable qwen/qwen3.5-9b model at http://127.0.0.1:1234/v1. Re-probe model availability at record time.",
+        "The model must perform the two-step denial and escalation sequence. This exact local model produced that sequence in the cited measured transcript, but model output remains nondeterministic.",
+        "The cell scopes scenario 2.19 to the committed Claude Code behavior: it stops with the approval prompt open. It does not exercise the scenario description's optional resolution and late-post-tool continuation.",
+        "The end-to-end daemon transition for this exact DSH cell is provisional until record, although agent emission, parser mapping, tailer pairing, and classifier behavior are each directly evidenced."
+      ],
+      "sources": [
+        {
+          "kind": "url",
+          "ref": "https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/bundle/base/cordis.patch.yml",
+          "note": "Official base composition maps workspace-write to approval ask, maps danger-full-access to approval never, and mounts the sandboxed bash and approval services."
+        },
+        {
+          "kind": "url",
+          "ref": "https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/sandbox/sandbox/README.md",
+          "note": "Official sandbox documentation defines the denied-call marker and the same-command escalation with sandbox_permissions plus justification before a user prompt."
+        },
+        {
+          "kind": "url",
+          "ref": "https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/interaction/user-approval/README.md",
+          "note": "Official approval documentation states that ask dispatches to an answerer and that the service writes approval/asked before the decision and approval/decided after it."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/profiles/tui/node_modules/@tomowang/dsh-tui/lib/tui/interaction/ApprovalOverlay.js",
+          "note": "Installed TUI 0.8.1 source renders the blocking approval overlay and handles Allow once or Reject input."
+        },
+        {
+          "kind": "file",
+          "ref": "shell: dsh --profile tui --dump-config (dsh 0.1.5-rc.2, 2026-09-18)",
+          "note": "Active composed config confirms sandbox-policy workspace-write, approval policy ask, permission presets, and tool-bash are mounted."
+        },
+        {
+          "kind": "file",
+          "ref": "/Users/ingo/.dsh/sessions/--Users-ingo-.claude-jobs-d11ee86d-tmp-dsh-probe--/session-a68f8780-b24f-49d6-89c4-f2e215f95782/session.v3.jsonl.zstd",
+          "note": "Measured qwen/qwen3.5-9b transcript contains the outside-workspace denial, the danger-full-access retry, approval/asked, and the later correlated rejected decision."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser.go",
+          "note": "Maps turn/start, approval/asked, and approval/decided into the daemon's turn and permission signals."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/dsh/parser_test.go",
+          "note": "Pins the measured DSH approval request and decision record shapes and their stable request ids."
+        },
+        {
+          "kind": "file",
+          "ref": "core/pkg/tailer/tailer_metrics.go",
+          "note": "Derives TranscriptPermissionPending from the set of unmatched permission request ids."
+        },
+        {
+          "kind": "file",
+          "ref": "core/application/services/state_classifier.go",
+          "note": "The transcript_permission_prompt rule maps TranscriptPermissionPending to waiting above ordinary transcript-tier rules."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
+          "note": "Exports the recipe permission_mode, applies the pinned LM Studio model, resolves a fresh DSH transcript, and implements send and sleep."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/claudecode/scenarios/2-19_tool-gate-permission-prompt/expected.jsonl",
+          "note": "Reference sibling scopes this scenario to ready-to-working-to-waiting and ends with the permission prompt held open."
+        }
+      ]
+    },
+    "recipe": {
+      "applicable": true,
+      "timeout_seconds": 240,
+      "settings": {
+        "model": "qwen/qwen3.5-9b",
+        "base_url": "http://127.0.0.1:1234/v1",
+        "context_window": 262144,
+        "permission_mode": "workspace-write",
+        "api_key": "irrlicht-local-recording"
+      },
+      "preconditions": [
+        "dsh >=0.1.5-rc.2 is installed and on PATH, and the community TUI profile is installed under the active DSH home",
+        "re-probe at record time that LM Studio serves the tool-capable qwen/qwen3.5-9b model through http://127.0.0.1:1234/v1",
+        "re-probe at record time that DSH_PERMISSION_MODE=workspace-write maps to sandbox mode workspace-write and approval policy ask",
+        "re-probe at record time that the active TUI package composes an approval/request answerer and renders pending approvals",
+        "tmux and zstd are installed",
+        "irrlichd is recording the deepseek-harness adapter with transcript permission granted"
+      ],
+      "setup": [
+        "The interactive driver creates a fresh empty cwd and a pre-launch transcript marker.",
+        "The driver applies a temporary LM Studio patch for qwen/qwen3.5-9b and exports DSH_PERMISSION_MODE=workspace-write without modifying the installed profile.",
+        "The driver resolves the new session.v3.jsonl.zstd by marker, session header cwd, and session ID, then keeps the TUI alive while the approval remains unanswered."
+      ],
+      "script": [
+        {
+          "type": "send",
+          "text": "Use the bash tool to run exactly this command: printf probe > \"$HOME/.irrlicht-dsh-permission-probe-2-19.txt\". First run it with normal workspace-write permissions. After the sandbox denies it, retry the exact same command once with sandbox_permissions set to danger-full-access and a one-sentence justification. Do not use another tool, do not change the command, and do not reply while the approval request is pending."
+        },
+        {
+          "type": "sleep",
+          "seconds": 90
+        }
+      ],
+      "verify": [
+        "events.jsonl shows the real session-UUID row entering ready, then working, then waiting on the same session id",
+        "the compressed transcript starts with permission/preset workspace-write, sandbox/mode workspace-write, and approval/policy ask",
+        "the first bash call targets .irrlicht-dsh-permission-probe-2-19.txt and its result contains the workspace-write file-access denial marker",
+        "the second bash call retries the same target with sandbox_permissions danger-full-access and is correlated to exactly one approval/asked record",
+        "no approval/decided or turn/end record appears while the prompt is held, and the final observed session state is waiting",
+        "the waiting state persists for at least five seconds and the recording reports model qwen/qwen3.5-9b with non-zero tokens"
+      ],
+      "scope_note": "Uses a 90-second hold, longer than the longest committed sibling delay of 75 seconds. DeepSeek Harness needs two local model inference steps before the gate opens; the cited measured path took about 52 seconds, so the added time preserves a user-visible waiting dwell. The recipe deliberately does not resolve the prompt, matching the committed Claude Code scope and final waiting state."
+    }
+  }
+}
