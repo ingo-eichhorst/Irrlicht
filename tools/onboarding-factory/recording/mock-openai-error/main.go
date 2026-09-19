@@ -9,8 +9,9 @@
 // DeepSeek Harness also sends an auxiliary session-title request to the same
 // route. The title request is not part of the user turn. The default
 // --ignore-substring matches the stable system prompt in
-// @deepseek-ai/dsh-session-title-llm 0.1.5-rc.2. Matching requests get a happy
-// response and do not consume a failure slot.
+// @deepseek-ai/dsh-session-title-llm 0.1.5-rc.2. The plugin also sends a
+// distinct framed user message. Both roles must match, so normal user text
+// cannot consume the title exception.
 package main
 
 import (
@@ -40,7 +41,7 @@ func main() {
 	errCode := flag.String("error-code", "overloaded", "OpenAI error.code")
 	errMsg := flag.String("error-message", "Provider overloaded (mock).", "OpenAI error.message")
 	succeedAfter := flag.Int("succeed-after", 0, "number of counted requests that fail before success; 0 = never succeed")
-	ignoreSubstring := flag.String("ignore-substring", "create a concise title", "case-insensitive request-body substring to answer successfully without counting; empty disables filtering")
+	ignoreSubstring := flag.String("ignore-substring", "create a concise title", "case-insensitive title system-message substring to answer successfully without counting; empty disables filtering")
 	alwaysSucceed := flag.Bool("always-succeed", false, "stream a successful response for every counted request")
 	successBytes := flag.Int("success-bytes", 2, "number of ASCII content bytes in a successful response")
 	flag.Parse()
@@ -111,7 +112,7 @@ func (c *failureConfig) handleChatCompletions(w http.ResponseWriter, r *http.Req
 	}
 	model := modelOf(body)
 
-	if c.ignoreSubstring != "" && strings.Contains(strings.ToLower(string(body)), c.ignoreSubstring) {
+	if c.ignoreSubstring != "" && isTitleRequest(body, c.ignoreSubstring) {
 		log.Printf("POST /v1/chat/completions #0 model=%s — ignored title side channel", model)
 		streamHappyPath(w, "ok")
 		return
@@ -130,6 +131,51 @@ func (c *failureConfig) handleChatCompletions(w http.ResponseWriter, r *http.Req
 	}
 	log.Printf("POST /v1/chat/completions #%d model=%s — failing %d %s", n, model, c.status, c.errType)
 	c.writeFailure(w)
+}
+
+// isTitleRequest matches the two-message shape read from
+// @deepseek-ai/dsh-session-title-llm 0.1.5-rc.2 lib/index.js: systemPrompt and
+// frameMessages. A parse failure is a counted request, not a title exemption.
+func isTitleRequest(body []byte, systemNeedle string) bool {
+	var request struct {
+		Messages []struct {
+			Role    string          `json:"role"`
+			Content json.RawMessage `json:"content"`
+		} `json:"messages"`
+	}
+	if json.Unmarshal(body, &request) != nil || len(request.Messages) != 2 {
+		return false
+	}
+	system, systemOK := messageText(request.Messages[0].Content)
+	user, userOK := messageText(request.Messages[1].Content)
+	if !systemOK || !userOK {
+		return false
+	}
+	return request.Messages[0].Role == "system" && request.Messages[1].Role == "user" &&
+		strings.Contains(strings.ToLower(system), systemNeedle) &&
+		strings.HasPrefix(user, "Generate the session title from this JSON array of human messages:")
+}
+
+func messageText(content json.RawMessage) (string, bool) {
+	var plain string
+	if json.Unmarshal(content, &plain) == nil {
+		return plain, true
+	}
+	var parts []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(content, &parts) != nil || len(parts) == 0 {
+		return "", false
+	}
+	var text strings.Builder
+	for _, part := range parts {
+		if part.Type != "text" {
+			return "", false
+		}
+		text.WriteString(part.Text)
+	}
+	return text.String(), true
 }
 
 func (c *failureConfig) writeFailure(w http.ResponseWriter) {

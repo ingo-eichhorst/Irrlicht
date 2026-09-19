@@ -64,7 +64,7 @@ func TestHandleChatCompletionsIgnoresTitleSideChannel(t *testing.T) {
 	}
 
 	for i := 0; i < 3; i++ {
-		rec := post(`{"model":"mock-model","messages":[{"role":"system","content":"Create a concise title for an AI coding-assistant session."}],"stream":true}`)
+		rec := post(`{"model":"mock-model","messages":[{"role":"system","content":"Create a concise title for an AI coding-assistant session from the supplied human messages."},{"role":"user","content":"Generate the session title from this JSON array of human messages:\n[]"}],"stream":true}`)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("ignored title request #%d: got status %d, want 200", i+1, rec.Code)
 		}
@@ -78,6 +78,34 @@ func TestHandleChatCompletionsIgnoresTitleSideChannel(t *testing.T) {
 	}
 	if rec := post(`{"model":"mock-model","messages":[{"role":"user","content":"work"}],"stream":true}`); rec.Code != http.StatusOK {
 		t.Fatalf("second counted request: got status %d, want 200", rec.Code)
+	}
+}
+
+func TestHandleChatCompletionsCountsUserTextThatMentionsTitle(t *testing.T) {
+	cfg := &failureConfig{
+		status:          http.StatusUnauthorized,
+		errType:         "authentication_error",
+		errCode:         "invalid_api_key",
+		succeedAfter:    1,
+		ignoreSubstring: "create a concise title",
+	}
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(
+		`{"model":"mock-model","messages":[{"role":"user","content":"Please create a concise title for my note."}],"stream":true}`,
+	))
+	response := httptest.NewRecorder()
+	cfg.handleChatCompletions(response, request)
+	if response.Code != cfg.status || cfg.requests.Load() != 1 {
+		t.Fatalf("user request bypassed configured failure: status=%d requests=%d, want %d and 1", response.Code, cfg.requests.Load(), cfg.status)
+	}
+}
+
+func TestTitleRequestRecognizesTextPartContent(t *testing.T) {
+	body := []byte(`{"messages":[{"role":"system","content":"Create a concise title for an AI coding-assistant session from the supplied human messages."},{"role":"user","content":[{"type":"text","text":"Generate the session title from this JSON array of human messages:\n[]"}]}]}`)
+	if !isTitleRequest(body, "create a concise title") {
+		t.Fatal("title request with a text content part was counted as primary traffic")
+	}
+	if isTitleRequest([]byte(`{"messages":[{"role":"user","content":"Create a concise title"}]}`), "create a concise title") {
+		t.Fatal("normal user text was classified as a title request")
 	}
 }
 
