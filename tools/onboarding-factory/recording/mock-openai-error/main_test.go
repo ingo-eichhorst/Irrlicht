@@ -90,3 +90,25 @@ func TestHandleChatCompletionsRejectsNonPost(t *testing.T) {
 		t.Fatalf("GET: got status %d, want %d", rec.Code, http.StatusMethodNotAllowed)
 	}
 }
+
+func TestHandleChatCompletionsCanStreamDeterministicOversizedContent(t *testing.T) {
+	cfg := &failureConfig{
+		alwaysSucceed: true,
+		successBytes:  10_199,
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(
+		`{"model":"mock-model","messages":[{"role":"user","content":"work"}],"stream":true}`,
+	))
+	rec := httptest.NewRecorder()
+	cfg.handleChatCompletions(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got status %d, want 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), strings.Repeat("x", cfg.successBytes)) {
+		t.Fatalf("streamed content does not contain the requested %d-byte payload", cfg.successBytes)
+	}
+	if got := cfg.requests.Load(); got != 1 {
+		t.Fatalf("counted requests = %d, want 1", got)
+	}
+}

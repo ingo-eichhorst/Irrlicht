@@ -41,6 +41,8 @@ func main() {
 	errMsg := flag.String("error-message", "Provider overloaded (mock).", "OpenAI error.message")
 	succeedAfter := flag.Int("succeed-after", 0, "number of counted requests that fail before success; 0 = never succeed")
 	ignoreSubstring := flag.String("ignore-substring", "create a concise title", "case-insensitive request-body substring to answer successfully without counting; empty disables filtering")
+	alwaysSucceed := flag.Bool("always-succeed", false, "stream a successful response for every counted request")
+	successBytes := flag.Int("success-bytes", 2, "number of ASCII content bytes in a successful response")
 	flag.Parse()
 
 	if *succeedAfter < 0 {
@@ -48,6 +50,9 @@ func main() {
 	}
 	if *status < 400 || *status > 599 {
 		log.Fatalf("--status must be a 4xx/5xx failure code, got %d", *status)
+	}
+	if *successBytes < 1 || *successBytes > maxRequestBytes {
+		log.Fatalf("--success-bytes must be in 1..%d, got %d", maxRequestBytes, *successBytes)
 	}
 
 	cfg := failureConfig{
@@ -57,6 +62,8 @@ func main() {
 		errMsg:          *errMsg,
 		succeedAfter:    *succeedAfter,
 		ignoreSubstring: strings.ToLower(*ignoreSubstring),
+		alwaysSucceed:   *alwaysSucceed,
+		successBytes:    *successBytes,
 	}
 
 	mux := http.NewServeMux()
@@ -86,6 +93,8 @@ type failureConfig struct {
 	errMsg          string
 	succeedAfter    int
 	ignoreSubstring string
+	alwaysSucceed   bool
+	successBytes    int
 
 	requests atomic.Int64
 }
@@ -104,14 +113,19 @@ func (c *failureConfig) handleChatCompletions(w http.ResponseWriter, r *http.Req
 
 	if c.ignoreSubstring != "" && strings.Contains(strings.ToLower(string(body)), c.ignoreSubstring) {
 		log.Printf("POST /v1/chat/completions #0 model=%s — ignored title side channel", model)
-		streamHappyPath(w)
+		streamHappyPath(w, "ok")
 		return
 	}
 
 	n := c.requests.Add(1)
+	if c.alwaysSucceed {
+		log.Printf("POST /v1/chat/completions #%d model=%s — succeeding (--always-succeed, %d bytes)", n, model, c.successBytes)
+		streamHappyPath(w, strings.Repeat("x", c.successBytes))
+		return
+	}
 	if c.succeedAfter > 0 && n > int64(c.succeedAfter) {
 		log.Printf("POST /v1/chat/completions #%d model=%s — succeeding (--succeed-after %d)", n, model, c.succeedAfter)
-		streamHappyPath(w)
+		streamHappyPath(w, "ok")
 		return
 	}
 	log.Printf("POST /v1/chat/completions #%d model=%s — failing %d %s", n, model, c.status, c.errType)
@@ -156,7 +170,7 @@ func modelOf(body []byte) string {
 
 var safeModelName = regexp.MustCompile(`^[A-Za-z0-9._/-]{1,128}$`)
 
-func streamHappyPath(w http.ResponseWriter) {
+func streamHappyPath(w http.ResponseWriter, content string) {
 	w.Header().Set(contentTypeHeader, "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -171,8 +185,13 @@ func streamHappyPath(w http.ResponseWriter) {
 		_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
 		flusher.Flush()
 	}
+	encodedContent, err := json.Marshal(content)
+	if err != nil {
+		log.Printf("marshal success content: %v", err)
+		return
+	}
 	write(fmt.Sprintf(`{"id":"chatcmpl-mock-001","object":"chat.completion.chunk","created":0,"model":%q,"choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}`, modelID))
-	write(fmt.Sprintf(`{"id":"chatcmpl-mock-001","object":"chat.completion.chunk","created":0,"model":%q,"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":null}]}`, modelID))
+	write(fmt.Sprintf(`{"id":"chatcmpl-mock-001","object":"chat.completion.chunk","created":0,"model":%q,"choices":[{"index":0,"delta":{"content":%s},"finish_reason":null}]}`, modelID, encodedContent))
 	write(fmt.Sprintf(`{"id":"chatcmpl-mock-001","object":"chat.completion.chunk","created":0,"model":%q,"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":1,"total_tokens":13}}`, modelID))
 	write("[DONE]")
 }
