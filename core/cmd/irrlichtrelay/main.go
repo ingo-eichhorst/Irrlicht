@@ -257,7 +257,7 @@ func buildMux(h *hub, services relayServices) *http.ServeMux {
 	mux.HandleFunc("GET /api/v1/version", handleVersion(Version))
 	registerPushRoutes(mux, services)
 	registerPairingHandoffRoutes(mux, services.pairing)
-	registerEnrollRoutes(mux, services.enroll, services.store)
+	registerEnrollRoutes(mux, services.enroll, services.store, services.pairing)
 	registerEnrollHandoffRoute(mux, services.pairing)
 
 	if uiDir := resolveUIDir(); uiDir != "" {

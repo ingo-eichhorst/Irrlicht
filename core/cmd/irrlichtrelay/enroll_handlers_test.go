@@ -95,12 +95,18 @@ func TestEnrollRequiresAuthGuard(t *testing.T) {
 	srv := httptest.NewServer(buildMux(newHub(defaultLimits()), relayServices{pairing: resolvePairingHandoff("")}))
 	t.Cleanup(srv.Close)
 
-	status, body := doPush(t, http.MethodPost, srv.URL+"/api/v1/enroll/redeem", "", map[string]string{"code": "ABCD-EFGH"})
-	if status != http.StatusForbidden {
-		t.Fatalf("redeem with auth off = %d, want 403: %s", status, body)
+	routes := []struct{ method, path string }{
+		{http.MethodPost, "/api/v1/enroll/redeem"},
+		{http.MethodPost, "/api/v1/enroll/requests"},
 	}
-	if !strings.Contains(string(body), "--auth tokens-file") {
-		t.Fatalf("refusal %q does not name the fix (--auth tokens-file)", body)
+	for _, rt := range routes {
+		status, body := doPush(t, rt.method, srv.URL+rt.path, "", map[string]string{"code": "ABCD-EFGH"})
+		if status != http.StatusForbidden {
+			t.Fatalf("%s %s with auth off = %d, want 403: %s", rt.method, rt.path, status, body)
+		}
+		if !strings.Contains(string(body), "--auth tokens-file") {
+			t.Fatalf("%s %s refusal %q does not name the fix (--auth tokens-file)", rt.method, rt.path, body)
+		}
 	}
 }
 
@@ -284,6 +290,87 @@ func TestEnrollHandoffReflectsValidCode(t *testing.T) {
 	}
 	if !strings.Contains(string(body), "ABCD-EFGH") {
 		t.Fatalf("response does not contain the enrollment code: %s", body)
+	}
+}
+
+// TestEnrollMintRequiresToken is the Phase 2 counterpart of
+// TestPushMintRequiresToken: POST /api/v1/enroll/requests sits behind
+// requireToken, so no bearer or an invalid one is 401.
+func TestEnrollMintRequiresToken(t *testing.T) {
+	env := newEnrollEnv(t, nil, tokenSeed{label: "client", workspace: ""})
+	if status, body := doPush(t, http.MethodPost, env.srv.URL+"/api/v1/enroll/requests", "", nil); status != http.StatusUnauthorized {
+		t.Fatalf("mint without token = %d, want 401: %s", status, body)
+	}
+	if status, body := doPush(t, http.MethodPost, env.srv.URL+"/api/v1/enroll/requests", "not-a-token", nil); status != http.StatusUnauthorized {
+		t.Fatalf("mint with invalid token = %d, want 401: %s", status, body)
+	}
+}
+
+// TestEnrollMintEndToEnd drives the full Phase 2 flow in workspace acme:
+// client token -> authenticated mint -> unauthenticated redeem -> device
+// token, and confirms the device token inherits the minter's workspace —
+// mirroring TestPairingInheritsMinterWorkspace for push.
+func TestEnrollMintEndToEnd(t *testing.T) {
+	env := newEnrollEnv(t, nil, tokenSeed{label: "dashboard", workspace: "acme"})
+
+	status, body := doPush(t, http.MethodPost, env.srv.URL+"/api/v1/enroll/requests", env.tokens["dashboard"], nil)
+	if status != http.StatusCreated {
+		t.Fatalf("mint = %d: %s", status, body)
+	}
+	var mint struct {
+		Code      string `json:"code"`
+		ExpiresIn int    `json:"expires_in"`
+	}
+	if err := json.Unmarshal(body, &mint); err != nil {
+		t.Fatal(err)
+	}
+	if mint.Code == "" || mint.ExpiresIn != 600 {
+		t.Fatalf("mint response = %+v", mint)
+	}
+
+	status, body = doPush(t, http.MethodPost, env.srv.URL+"/api/v1/enroll/redeem", "", map[string]string{"code": mint.Code})
+	if status != http.StatusOK {
+		t.Fatalf("redeem = %d: %s", status, body)
+	}
+	var resp enrollRedeemResp
+	if err := json.Unmarshal(body, &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Token == "" || resp.TokenID == "" {
+		t.Fatalf("redeem response incomplete: %+v", resp)
+	}
+
+	recs, err := sortedRecords(filepath.Join(env.ddir, tokensFilename))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var device *TokenRecord
+	for i := range recs {
+		if recs[i].ID == resp.TokenID {
+			device = &recs[i]
+		}
+	}
+	if device == nil {
+		t.Fatalf("device token %q not in the tokens file", resp.TokenID)
+	}
+	if device.Workspace != "acme" {
+		t.Fatalf("device token workspace = %q, want %q (inherited from the minter)", device.Workspace, "acme")
+	}
+}
+
+// TestEnrollMintCapAnswers429ThroughRoute mirrors push_hardening_test.go's
+// TestMintCapAnswers429: 32 authenticated mints succeed, the 33rd is a 429.
+func TestEnrollMintCapAnswers429ThroughRoute(t *testing.T) {
+	env := newEnrollEnv(t, nil, tokenSeed{label: "cli"})
+	for i := range 32 {
+		status, body := doPush(t, http.MethodPost, env.srv.URL+"/api/v1/enroll/requests", env.tokens["cli"], nil)
+		if status != http.StatusCreated {
+			t.Fatalf("mint %d: status %d, want 201: %s", i, status, body)
+		}
+	}
+	status, _ := doPush(t, http.MethodPost, env.srv.URL+"/api/v1/enroll/requests", env.tokens["cli"], nil)
+	if status != http.StatusTooManyRequests {
+		t.Fatalf("mint past the outstanding-code cap: status %d, want 429", status)
 	}
 }
 

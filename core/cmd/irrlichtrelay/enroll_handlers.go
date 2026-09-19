@@ -6,13 +6,15 @@ package main
 // and the auth-off guard — enrollment mints an ordinary token, so it
 // presupposes a token store exactly as push does (docs/mobile-notifications-arc42.md
 // §8.1), but independently of push: a relay with push disabled must still
-// be able to enroll a desktop. Phase 2 adds the authenticated mint route,
-// POST /api/v1/enroll/requests.
+// be able to enroll a desktop. Phase 2 (below): the authenticated mint
+// route, POST /api/v1/enroll/requests, for an operator who already holds a
+// token — the counterpart to the unauthenticated `enroll new` CLI path.
 
 import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"time"
 
 	"irrlicht/core/pkg/onetimecode"
 )
@@ -40,12 +42,47 @@ const enrollDefaultLabel = "desktop"
 // buildPushService) — every enroll route is a 403 naming the fix, the same
 // shape registerPushRoutes uses for push, but gated on the token store
 // alone: enrollment does not depend on push being enabled.
-func registerEnrollRoutes(mux *http.ServeMux, mgr *onetimecode.Manager, store *authStore) {
+func registerEnrollRoutes(mux *http.ServeMux, mgr *onetimecode.Manager, store *authStore, handoff pairingHandoff) {
 	if mgr == nil || store == nil {
 		mux.HandleFunc("POST /api/v1/enroll/redeem", handleEnrollDisabled)
+		mux.HandleFunc("POST /api/v1/enroll/requests", handleEnrollDisabled)
 		return
 	}
 	mux.HandleFunc("POST /api/v1/enroll/redeem", handleEnrollRedeem(mgr, store))
+	mux.HandleFunc("POST /api/v1/enroll/requests", requireToken(store, handleMintEnroll(mgr, handoff)))
+}
+
+// handleMintEnroll mints an enrollment code in the caller's workspace — the
+// authenticated counterpart to `enroll new`, for an operator who already
+// holds a token (Phase 2, #1963). Mirrors handleMintPairing
+// (push_handlers.go): the bearer gate has already validated the client
+// token via requireToken, no request body, workspace read from the token's
+// identity. This route mints with no label; handleEnrollRedeem lets the
+// desktop that redeems the code name itself instead (the label a phone
+// supplies at pairing time, via pairRequest.Label, is the same shape) —
+// see that function for the fallback order.
+func handleMintEnroll(mgr *onetimecode.Manager, handoff pairingHandoff) http.HandlerFunc {
+	type mintResp struct {
+		Code            string `json:"code"`
+		ExpiresIn       int    `json:"expires_in"`
+		EnrollURL       string `json:"enroll_url,omitempty"`
+		EnrollURLReason string `json:"enroll_url_reason,omitempty"`
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		code, ttl, err := mgr.Mint(workspaceOf(r), "")
+		if errors.Is(err, onetimecode.ErrTooManyCodes) {
+			pushError(w, http.StatusTooManyRequests, err.Error())
+			return
+		}
+		if err != nil {
+			pushError(w, http.StatusInternalServerError, "minting enrollment code failed")
+			return
+		}
+		pushJSON(w, http.StatusCreated, mintResp{
+			Code: code, ExpiresIn: int(ttl / time.Second),
+			EnrollURL: handoff.enrollURL(code), EnrollURLReason: handoff.unavailableReason,
+		})
+	}
 }
 
 // handleEnrollDisabled refuses an enroll route on an anonymous relay,
@@ -68,7 +105,7 @@ type enrollRedeemRequest struct {
 // shows it and `token revoke` is the full revocation story, exactly as
 // handlePair does for a paired phone (push_handlers.go). The label prefers,
 // in order: what the redeeming desktop names itself in the request body,
-// then whatever the code was minted with (`enroll new --label`; Phase 2's
+// then whatever the code was minted with (`enroll new --label`; the
 // authenticated mint route sets none), then enrollDefaultLabel. The auth
 // store is reloaded synchronously after issuing, so the desktop can use the
 // token on its very next request. Every redemption failure is one uniform
