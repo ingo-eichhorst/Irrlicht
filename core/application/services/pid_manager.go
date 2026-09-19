@@ -846,7 +846,13 @@ func (pm *PIDManager) snapshotSharedPIDClaims(pid int, sessionID string) []share
 	pm.assignMu.Lock()
 	defer pm.assignMu.Unlock()
 	winner, err := pm.repo.Load(sessionID)
-	if err != nil || winner == nil || winner.ParentSessionID != "" {
+	if err != nil {
+		return nil
+	}
+	if winner == nil {
+		return nil
+	}
+	if winner.ParentSessionID != "" {
 		return nil
 	}
 	if pm.sharedPIDOwners[winner.Adapter] == nil {
@@ -858,9 +864,13 @@ func (pm *PIDManager) snapshotSharedPIDClaims(pid int, sessionID string) []share
 	}
 	var claims []sharedPIDClaim
 	for _, old := range states {
-		if old.Adapter == winner.Adapter && isDedupDeleteCandidate(old, pid, winner) {
-			claims = append(claims, sharedPIDClaimOf(old))
+		if old.Adapter != winner.Adapter {
+			continue
 		}
+		if !isDedupDeleteCandidate(old, pid, winner) {
+			continue
+		}
+		claims = append(claims, sharedPIDClaimOf(old))
 	}
 	return claims
 }

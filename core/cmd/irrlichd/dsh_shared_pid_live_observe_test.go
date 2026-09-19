@@ -74,13 +74,23 @@ func (observer dshLiveObserver) waitRow(t *testing.T, sessionID, state string, t
 	for time.Now().Before(deadline) {
 		lastRows = observer.rows(t)
 		row, ok := lastRows[sessionID]
-		if ok && row.State == state && row.PID > 0 && row.TranscriptPath != "" {
+		if ok && dshLiveRowReached(row, state) {
 			return row
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Fatalf("session %s did not reach %s with PID and transcript within %s: rows=%v", sessionID, state, timeout, lastRows)
 	return dshLiveRow{}
+}
+
+func dshLiveRowReached(row dshLiveRow, state string) bool {
+	if row.State != state {
+		return false
+	}
+	if row.PID <= 0 {
+		return false
+	}
+	return row.TranscriptPath != ""
 }
 
 func assertDSHLiveRow(t *testing.T, row dshLiveRow, pid int) {
