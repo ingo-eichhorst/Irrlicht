@@ -319,24 +319,59 @@ func TestDeepseekTaskListAssertionsDetectMutations(t *testing.T) {
 	if err != nil || baselineTranscript == nil || !baselineTranscript.ExpectedPass() {
 		t.Fatalf("unmutated transcript must pass assertions: report=%+v err=%v", baselineTranscript, err)
 	}
+	assertTurnCompletionFails := func(report *RecordReport, mutation string) {
+		t.Helper()
+		if report == nil || report.ExpectedPass() {
+			t.Fatalf("%s must fail: report=%+v", mutation, report)
+		}
+		for _, assertion := range report.Asserts {
+			if assertion.Name == "all seven turns complete" {
+				if assertion.OK {
+					t.Fatalf("turn completion assertion ignored %s", mutation)
+				}
+				return
+			}
+		}
+		t.Fatal("task-list spec has no all seven turns complete assertion")
+	}
 	withoutFinalEnd := append([][]byte{}, lines[:finalTurnEnd]...)
 	withoutFinalEnd = append(withoutFinalEnd, lines[finalTurnEnd+1:]...)
 	if err := os.WriteFile(copyPath, append(bytes.Join(withoutFinalEnd, []byte("\n")), '\n'), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	mutatedTranscript, err := ValidateTranscriptForProfile(dir, matrix.ProfileCLILocal)
-	if err != nil || mutatedTranscript == nil || mutatedTranscript.ExpectedPass() {
-		t.Fatalf("missing final turn/end must fail: report=%+v err=%v", mutatedTranscript, err)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, assertion := range mutatedTranscript.Asserts {
-		if assertion.Name == "all seven turns complete" {
-			if assertion.OK {
-				t.Fatal("turn completion assertion ignored missing final turn/end")
-			}
-			return
-		}
+	assertTurnCompletionFails(mutatedTranscript, "missing final turn/end")
+
+	var finalRecord map[string]any
+	if err := json.Unmarshal(lines[finalTurnEnd], &finalRecord); err != nil {
+		t.Fatal(err)
 	}
-	t.Fatal("task-list spec has no all seven turns complete assertion")
+	data, ok := finalRecord["data"].(map[string]any)
+	if !ok {
+		t.Fatal("final turn/end has no data object")
+	}
+	reason, ok := data["reason"].(map[string]any)
+	if !ok || reason["kind"] != "completed" {
+		t.Fatalf("final turn/end has no completed reason: %v", data["reason"])
+	}
+	reason["kind"] = "aborted"
+	abortedLine, err := json.Marshal(finalRecord)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withAbortedFinalTurn := append([][]byte{}, lines...)
+	withAbortedFinalTurn[finalTurnEnd] = abortedLine
+	if err := os.WriteFile(copyPath, append(bytes.Join(withAbortedFinalTurn, []byte("\n")), '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	abortedTranscript, err := ValidateTranscriptForProfile(dir, matrix.ProfileCLILocal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertTurnCompletionFails(abortedTranscript, "aborted final turn/end")
 }
 
 func TestCommittedRecordAssertions(t *testing.T) {

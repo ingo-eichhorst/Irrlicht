@@ -2,12 +2,12 @@
   "scenario_id": "architect-editor-pair",
   "metadata": {
     "agent_supports": "yes",
-    "daemon_capability": "full",
+    "daemon_capability": "bug",
     "driver_capability": "ready",
     "agent_cli_version": "0.1.5-rc.2",
     "daemon_version": "0.6.4+3ba8bf4",
-    "confidence": 0.86,
-    "notes": "DeepSeek Harness plan mode provides the plan-review gate and approved same-turn continuation; the DSH transcript and parser can expose the complete mode-pair arc and cumulative model usage."
+    "confidence": 0.99,
+    "notes": "Recorded plan gate and editor arc pass 5/5, but TotalTokens=12743 is the final model snapshot, not the required sum of both phase contributions (38436)."
   },
   "details": {
     "assessment": {
@@ -16,17 +16,17 @@
       "agent": "deepseek-harness",
       "assessed_at": "2026-09-19T00:00:00Z",
       "agent_supports": "yes",
-      "daemon_capability": "full",
+      "daemon_capability": "bug",
       "driver_capability": "ready",
-      "confidence": 0.86,
-      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: full\ndriver_capability: ready\n\nThis cell uses instantiation (b): one model moves from a planning mode to an implementation mode across a user-approved gate. The required observable is one session with the full ready -> working -> waiting -> working -> ready arc, at least one implementation tool call, one consistent model, and token contributions from the planning and implementation model steps.\n\n## Agent support\n\nDeepSeek Harness 0.1.5-rc.2 ships first-party plan mode. `/plan` activates the mode, and the next normal user message starts a step under plan guidance. The `exit_plan_mode` tool presents the plan through the interactive user-question channel. The first review option is `Approve`. Approval returns `{approved:true}`, schedules plan mode to become inactive at the next accepted step, and tells the model to carry out the plan from that next step. The installed TUI profile composes both `@deepseek-ai/dsh-plan-mode` and `@deepseek-ai/dsh-user-questions`, and its question overlay starts on the first option. Thus the same open turn has an architect contribution before review and an editor contribution after approval.\n\n## Daemon capability\n\nThe DSH agent loop appends a durable `tool/call` before it dispatches a tool. While `exit_plan_mode` waits for the TUI answer, no matching `tool/result` exists. The DSH parser maps that open call to `ToolUses`, and irrlicht's canonical user-blocking table includes the exact `exit_plan_mode` spelling. The classifier therefore maps the session from working to waiting. Approval lets DSH append the successful tool result. The next assistant step and implementation tool call clear the blocking condition and provide new transcript activity, so the same session can return to working. The final completed `turn/end` maps to `turn_done` and lets the session settle in ready.\n\nEach DSH `assistant/message` carries its producing model and, when the provider reports it, its usage. `parseAssistantUsage` emits one `PerTurnContribution` per message. The shared tailer adds every contribution to the per-model accumulator. The plan response and the post-approval implementation response can therefore contribute to one cumulative token total while `ModelName` remains `qwen/qwen3.5-9b`. The local LM Studio route has zero estimated provider cost, so the observation vector asserts tokens but not non-zero cost.\n\n## Driver capability\n\nThe recipe needs `slash`, `send`, `sleep`, `keys`, and `wait_turn`. The DeepSeek Harness interactive driver implements all five. It enters plan mode with bare `/plan`, uses `send` for the task so the driver's transcript turn counter expects one completion, holds long enough for the local model to open the review, presses Enter to select the default first option (`Approve`), waits for the durable completed turn boundary, and leaves a 20-second settle window before teardown.\n\n## Non-vacuous proof\n\nThe state arc alone could pass if an unrelated blocking tool caused waiting and an ordinary tool turn later completed. The transcript assertions prevent that hollow pass. They require plan mode to activate and then deactivate, exactly one successful `exit_plan_mode` call, exactly one successful `bash` editor call for `architect-editor.txt`, no permission-approval record, at least two model-attributed assistant contributions, and one completed turn boundary.",
+      "confidence": 0.99,
+      "body": "## Verdict\n\nagent_supports: yes\ndaemon_capability: bug\ndriver_capability: ready\n\nThe live DeepSeek Harness recording proves the one-model plan-to-implement pair. The real session follows ready -> working -> waiting -> working -> ready, with no flicker. The transcript has one successful exit_plan_mode call, one successful bash edit after approval, and three model-attributed assistant messages. `of verify --agent deepseek-harness --scenario architect-editor-pair --json` reports 5/5 lifecycle phases and 8/8 transcript assertions passing.\n\nThe catalog acceptance also requires `TotalTokens` to accumulate both model contributions within the turn. The three assistant messages report input/output pairs 12706/302, 12596/89, and 12703/40. Their per-message totals are 13008, 12685, and 12743. The replay golden reports cumulative input=38005 and output=431, a sum of 38436. Its `total_tokens` is only 12743, the last message's snapshot, not 38436. `core/adapters/inbound/agents/dsh/parser.go:parseAssistantUsage` emits both a `TokenSnapshot` and a `PerTurnContribution` per message. `core/pkg/tailer/tailer_metrics.go:applyTokenSnapshot` assigns `TotalTokens` from the latest snapshot, while `applyContribution` and `computeCumulativeTokensByModel` add the contributions into `CumInputTokens` and `CumOutputTokens`. The Muse metrics test documents this latest-snapshot meaning as product behavior. Therefore the literal scenario requirement fails; this is a product/catalog contract mismatch, not a missing DSH trace or driver step.\n\nThe factory observation verifier checks `tokens_nonzero` as cumulative input+output > 0 and `total_tokens_nonzero` as `TotalTokens` > 0. It has no cross-field or sum assertion. Thus `of verify` can report a pass for this recording while the literal accumulation criterion fails. Keep the existing live recording and passing lifecycle/transcript evidence. Do not mark the lifecycle as known-failing, since those phases pass. A product decision must either change the catalog's `TotalTokens` requirement or change the metric contract and its implementation across adapters; this cell must not silently choose either global change.",
       "caveats": [
-        "Vacuous-pass condition: an unrelated blocking tool could create the same lifecycle arc without a plan review or editor phase. The spec requires the exact plan-mode records, the successful exit_plan_mode call, and the successful marker-writing bash call.",
-        "The active TUI profile must compose @deepseek-ai/dsh-plan-mode and @deepseek-ai/dsh-user-questions. Re-run `dsh --profile tui --dump-config` at record time because either missing service makes the review unavailable.",
-        "LM Studio at http://127.0.0.1:1234/v1 with the tool-capable qwen/qwen3.5-9b model is a load-bearing recipe input. Re-probe the model list at record time.",
-        "The daemon verdict is provisional on emission timing. Source proves that DSH appends tool/call before dispatch and assistant/message records carry model and usage, but no measured local transcript yet contains an approved exit_plan_mode continuation. Recording must confirm that the compressed writer flushes the open call before approval and that both model steps carry usage.",
-        "Plan mode is guidance, not a hard tool filter. The prompt and transcript assertions forbid pre-approval mutation, and danger-full-access avoids a second permission gate during the editor step.",
-        "The local LM Studio route is expected to report zero estimated provider cost. Token usage must be non-zero."
+        "Vacuous-pass condition: the state arc could pass with an unrelated blocker and no plan/editor pair. The transcript assertions require plan activation, successful exit_plan_mode, successful bash editor call, and model-attributed messages.",
+        "The live recording proves the plan/editor lifecycle and tool calls. It does not meet the literal TotalTokens accumulation criterion: 13008 + 12685 + 12743 = 38436, but replay summary total_tokens=12743.",
+        "The replay summary's cumulative input=38005 and output=431 sum to 38436. These fields do accumulate all three contributions, but the catalog names TotalTokens specifically.",
+        "The factory's tokens_nonzero and total_tokens_nonzero checks test only nonzero values. They cannot verify TotalTokens equals the sum of model contributions; of verify reports 5/5 phases and passing observations despite this gap.",
+        "The same product metrics semantics are documented in core/adapters/inbound/agents/muse/metrics_test.go. Do not alter global TotalTokens behavior as part of this fixture-only change.",
+        "The active TUI profile must compose @deepseek-ai/dsh-plan-mode and @deepseek-ai/dsh-user-questions; the LM Studio qwen/qwen3.5-9b model and danger-full-access policy are recipe preconditions."
       ],
       "sources": [
         {
@@ -83,6 +83,31 @@
           "kind": "file",
           "ref": "replaydata/agents/deepseek-harness/driver-interactive.sh",
           "note": "The driver implements slash, sleep, keys, and transcript-backed wait_turn and pins the local qwen recording surface."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/scenarios/5-4_architect-editor-pair/recordings/2026-09-19-04-19-39_irrlichd-0.6.4+ac1f208/transcript.jsonl.zstd",
+          "note": "Three assistant/message usage pairs are 12706/302, 12596/89, and 12703/40, all model qwen/qwen3.5-9b."
+        },
+        {
+          "kind": "file",
+          "ref": "replaydata/agents/deepseek-harness/scenarios/5-4_architect-editor-pair/recordings/2026-09-19-04-19-39_irrlichd-0.6.4+ac1f208/transcript.jsonl.zstd.replay.json.golden",
+          "note": "Summary reports cum_input_tokens=38005, cum_output_tokens=431, total_tokens=12743, and flicker_count=0."
+        },
+        {
+          "kind": "file",
+          "ref": "core/adapters/inbound/agents/muse/metrics_test.go",
+          "note": "Test explicitly asserts TotalTokens means the latest turn's token snapshot, not cumulative usage."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/internal/validate/observations.go",
+          "note": "Verifier checks only nonzero cumulative tokens or nonzero TotalTokens; it cannot assert sum equality."
+        },
+        {
+          "kind": "file",
+          "ref": "tools/onboarding-factory/internal/validate/expected.go",
+          "note": "ObservationSpec has nonzero token assertions but no cumulative TotalTokens equality assertion."
         }
       ]
     },
@@ -137,10 +162,10 @@
         "events.jsonl shows the same session move working -> ready after the completed turn/end, with final state ready",
         "the compressed transcript contains one active plan/mode record, one successful exit_plan_mode call/result pair, one inactive plan/mode record, and then one successful bash call/result pair whose arguments target architect-editor.txt",
         "the cwd contains architect-editor.txt with exact content approved-editor after the turn",
-        "at least two assistant/message records in the same turn carry model qwen/qwen3.5-9b and non-zero usage, and the daemon's cumulative TotalTokens includes both contributions",
+        "at least two assistant/message records in the same turn carry model qwen/qwen3.5-9b and non-zero usage; known product mismatch: replay TotalTokens remains the latest snapshot (12743) rather than the three-message contribution sum (38436)",
         "the transcript contains no approval/asked record and no tool call other than exit_plan_mode and bash"
       ],
-      "scope_note": "The first staged run sent bare /plan before a separate task message. Its complete transcript contained plan/mode active and one prose answer, but no exit_plan_mode call. The recorded DeepSeek Harness 2.18 sibling sent /plan with its task in one command and produced the tool call. This recipe now sends that same command shape through send, which increments the expected durable turn count so wait_turn observes the completed implementation boundary. The 240-second pre-approval hold matches the recorded 2.18 recipe. The 20-second trailing settle matches the recorded Claude Code sibling."
+      "scope_note": "The first staged run sent bare /plan before a separate task message. Its complete transcript contained plan/mode active and one prose answer, but no exit_plan_mode call. The recorded DeepSeek Harness 2.18 sibling sent /plan with its task in one command and produced the tool call. This recipe now sends that same command shape through send, which increments the expected durable turn count so wait_turn observes the completed implementation boundary. The 240-second pre-approval hold matches the recorded 2.18 recipe. The 20-second trailing settle matches the recorded Claude Code sibling. Backflow after live recording: lifecycle and transcript checks pass, but the literal catalog TotalTokens accumulation criterion fails. Replay has cumulative input+output 38436 and TotalTokens 12743. The factory verifier lacks a sum-equality assertion, so its green result does not settle this criterion."
     }
   }
 }
