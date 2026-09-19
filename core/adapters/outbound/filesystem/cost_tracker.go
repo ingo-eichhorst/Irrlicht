@@ -62,27 +62,27 @@ type snapshotRow struct {
 // a session's cost draws from, using the same evidence rule as
 // services.ProviderForSession (issue #1994; duplicated here rather than
 // imported because an outbound adapter may not depend on application/
-// services — see architecture_test.go): an adapter name alone is not
-// evidence (claude-code can also run against Bedrock/Vertex, which never
-// emit the native rate-limit snapshot this checks for), so claude-code and
-// codex resolve to their provider only when the session carries its own
-// rate_limit snapshot. Every other session — including pi/opencode, which
-// never emit one themselves — records "" (unknown). Rows written before
-// this field existed also read back as "". Such rows are excluded from the
-// per-provider rollup but still counted in the per-project totals.
+// services — see architecture_test.go): there is no adapter-name switch.
+// This reads the session's own rate_limit snapshot's Provider and
+// AttributionQuality — stamped at the moment an adapter observed native
+// evidence for it (claudecode/statusline.go, codex/parser.go) — rather than
+// guessing from the adapter string, which cannot distinguish a claude-code
+// session running against Bedrock/Vertex (a different billing relationship
+// that never populates this stamp) from one running directly against
+// Anthropic. A session with no snapshot, or one whose AttributionQuality
+// isn't "confirmed" (including every row written before this field
+// existed, which reads back as "" — the zero value), records "" (unknown).
+// Such rows are excluded from the per-provider rollup but still counted in
+// the per-project totals.
 func providerForSession(state *session.SessionState) string {
-	hasQuotaEvidence := state.Metrics != nil && state.Metrics.RateLimit != nil
-	switch state.Adapter {
-	case "claude-code":
-		if hasQuotaEvidence {
-			return "anthropic"
-		}
-	case "codex":
-		if hasQuotaEvidence {
-			return "openai"
-		}
+	if state == nil || state.Metrics == nil || state.Metrics.RateLimit == nil {
+		return ""
 	}
-	return ""
+	rl := state.Metrics.RateLimit
+	if rl.AttributionQuality != session.AttributionQualityConfirmed {
+		return ""
+	}
+	return rl.Provider
 }
 
 // CostTracker persists per-session cost snapshots in append-only JSONL files,

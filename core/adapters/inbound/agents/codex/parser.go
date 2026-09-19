@@ -608,12 +608,30 @@ func (p *Parser) SetParserLedger(l tailer.ParserLedger) {
 // sampledAt is the event's wall-clock time; used as the snapshot timestamp
 // and as the anchor when converting v1's relative resets_in_seconds to
 // absolute epoch seconds.
+//
+// This is one of the two places (claudecode/statusline.go is the other)
+// that stamps a RateLimitSnapshot's issue #1994 identity fields: reaching
+// this line at all means Codex's own transcript reported a rate_limits
+// block, which only Codex's OpenAI API ever emits — session-specific,
+// confirmed evidence, not a guess from the "codex" adapter name (which
+// core/application/services/quotainherit.go's ProviderForSession no longer
+// reads). This holds regardless of ChatGPT-subscription vs. API-key auth:
+// both talk to the same OpenAI API, so both are confirmed OpenAI evidence
+// for THIS session's own cost attribution — auth mode only gates whether a
+// session may DONATE its snapshot to a wrapper (donorKey's readCodexAccountID
+// check), a separate concern.
 func extractCodexRateLimits(payload map[string]interface{}, sampledAt time.Time) *tailer.RateLimitSnapshot {
 	rl, ok := payload["rate_limits"].(map[string]interface{})
 	if !ok {
 		return nil
 	}
-	snap := &tailer.RateLimitSnapshot{SampledAt: sampledAt.Unix()}
+	snap := &tailer.RateLimitSnapshot{
+		SampledAt:           sampledAt.Unix(),
+		Provider:            tailer.ProviderOpenAI,
+		ObservationSource:   "transcript",
+		AttributionEvidence: "codex_transcript_rate_limits",
+		AttributionQuality:  tailer.AttributionQualityConfirmed,
+	}
 
 	if v, ok := rl["plan_type"].(string); ok {
 		snap.PlanType = v

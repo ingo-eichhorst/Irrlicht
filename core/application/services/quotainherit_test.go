@@ -32,6 +32,11 @@ func stageAuth(t *testing.T, files map[string]any) string {
 	return home
 }
 
+// donorClaudeCode builds a claude-code session carrying a rate_limit
+// snapshot stamped exactly as claudecode/statusline.go's statuslineToSnapshot
+// stamps a real one, so this fixture exercises ProviderForSession's stamp
+// read (and InheritRateLimits' donor path) the same way production data
+// does — not a synthetic shape that happens to have the right SampledAt.
 func donorClaudeCode(sampledAt int64, percent float64) *session.SessionState {
 	return &session.SessionState{
 		SessionID: "claudecode-donor",
@@ -43,11 +48,18 @@ func donorClaudeCode(sampledAt int64, percent float64) *session.SessionState {
 				Windows: []session.RateLimitWindow{
 					{UsedPercent: percent, WindowMinutes: 300, ResetsAt: 99999999},
 				},
+				Provider:            ProviderAnthropic,
+				ObservationSource:   "hook",
+				AttributionEvidence: "claude_code_statusline",
+				AttributionQuality:  session.AttributionQualityConfirmed,
 			},
 		},
 	}
 }
 
+// donorCodex builds a codex session carrying a rate_limit snapshot stamped
+// exactly as codex/parser.go's extractCodexRateLimits stamps a real one —
+// same rationale as donorClaudeCode above.
 func donorCodex(sampledAt int64, percent float64) *session.SessionState {
 	return &session.SessionState{
 		SessionID: "codex-donor",
@@ -59,6 +71,10 @@ func donorCodex(sampledAt int64, percent float64) *session.SessionState {
 				Windows: []session.RateLimitWindow{
 					{UsedPercent: percent, WindowMinutes: 300, ResetsAt: 99999999},
 				},
+				Provider:            ProviderOpenAI,
+				ObservationSource:   "transcript",
+				AttributionEvidence: "codex_transcript_rate_limits",
+				AttributionQuality:  session.AttributionQualityConfirmed,
 			},
 		},
 	}
@@ -459,18 +475,19 @@ func TestInheritRateLimits_CodexAPIKeyDoesNotDonate(t *testing.T) {
 
 // TestProviderForSession pins the adapter map before #1994: claude-code and
 // codex resolved unconditionally by adapter name, and pi/opencode resolved
-// via configured auth.json credentials. #1994's evidence rule ("a native
-// quota snapshot the agent itself emitted is confirmed evidence; a
-// configured credential list is NOT evidence; every other session resolves
-// to an explicit unknown") replaces both: claude-code/codex now require
-// their OWN rate_limit snapshot, and pi/opencode — which never emit one
-// themselves — always resolve to "" regardless of what's configured in
-// auth.json.
+// via configured auth.json credentials (this function used to take a
+// userHome parameter to read it). #1994's evidence rule ("a native quota
+// snapshot the agent itself emitted is confirmed evidence; a configured
+// credential list is NOT evidence; every other session resolves to an
+// explicit unknown") replaces both: claude-code/codex now require their OWN
+// rate_limit snapshot, and pi/opencode — which never emit one themselves,
+// and whose auth.json this function no longer reads at all — always
+// resolve to "".
 func TestProviderForSession(t *testing.T) {
-	if got := ProviderForSession(nil, ""); got != "" {
+	if got := ProviderForSession(nil); got != "" {
 		t.Errorf("nil: got %q, want \"\"", got)
 	}
-	if got := ProviderForSession(&session.SessionState{Adapter: "aider"}, ""); got != "" {
+	if got := ProviderForSession(&session.SessionState{Adapter: "aider"}); got != "" {
 		t.Errorf("aider (unmapped): got %q, want \"\"", got)
 	}
 
@@ -478,53 +495,38 @@ func TestProviderForSession(t *testing.T) {
 	// session-specific evidence, so unknown — NOT the adapter's usual
 	// provider. This also covers claude-code sessions running against
 	// Bedrock/Vertex, which never emit the Anthropic consumer snapshot.
-	if got := ProviderForSession(&session.SessionState{Adapter: "claude-code", Metrics: &session.SessionMetrics{}}, ""); got != "" {
+	if got := ProviderForSession(&session.SessionState{Adapter: "claude-code", Metrics: &session.SessionMetrics{}}); got != "" {
 		t.Errorf("claude-code (no quota evidence): got %q, want \"\"", got)
 	}
-	if got := ProviderForSession(&session.SessionState{Adapter: "codex", Metrics: &session.SessionMetrics{}}, ""); got != "" {
+	if got := ProviderForSession(&session.SessionState{Adapter: "codex", Metrics: &session.SessionMetrics{}}); got != "" {
 		t.Errorf("codex (no quota evidence): got %q, want \"\"", got)
 	}
 	// ...and nil Metrics must not panic either.
-	if got := ProviderForSession(&session.SessionState{Adapter: "claude-code"}, ""); got != "" {
+	if got := ProviderForSession(&session.SessionState{Adapter: "claude-code"}); got != "" {
 		t.Errorf("claude-code (nil Metrics): got %q, want \"\"", got)
 	}
 
 	// claude-code/codex WITH their own rate_limit snapshot: confirmed.
 	ccWithSnapshot := donorClaudeCode(1000, 10)
-	if got := ProviderForSession(ccWithSnapshot, ""); got != ProviderAnthropic {
+	if got := ProviderForSession(ccWithSnapshot); got != ProviderAnthropic {
 		t.Errorf("claude-code (has quota evidence): got %q, want %q", got, ProviderAnthropic)
 	}
 	codexWithSnapshot := donorCodex(1000, 10)
-	if got := ProviderForSession(codexWithSnapshot, ""); got != ProviderOpenAI {
+	if got := ProviderForSession(codexWithSnapshot); got != ProviderOpenAI {
 		t.Errorf("codex (has quota evidence): got %q, want %q", got, ProviderOpenAI)
 	}
 
 	// pi/opencode never emit their own rate_limit snapshot, so they always
 	// resolve to unknown for COST ATTRIBUTION — even when auth.json names a
-	// provider unambiguously. That configured credential list is real
-	// evidence for INHERITANCE (recipientKey, checked elsewhere against a
-	// matching donor's actual snapshot) but not for billing identity here.
-	piHome := stageAuth(t, map[string]any{
-		".pi/agent/auth.json": map[string]any{
-			"openai-codex": map[string]any{"type": "oauth", "accountId": "acct-x"},
-		},
-	})
-	if got := ProviderForSession(emptyWrapper("pi", "pi-1"), piHome); got != "" {
-		t.Errorf("pi (configured, no own evidence): got %q, want \"\"", got)
+	// provider unambiguously (this function no longer reads auth.json at
+	// all, so there is nothing left to stage). That configured credential
+	// list is real evidence for INHERITANCE (recipientKey, checked
+	// elsewhere against a matching donor's actual snapshot) but not for
+	// billing identity here.
+	if got := ProviderForSession(emptyWrapper("pi", "pi-1")); got != "" {
+		t.Errorf("pi (no own evidence): got %q, want \"\"", got)
 	}
-
-	jwt := makeJWT(fmt.Sprintf(`{%q:%q}`, "https://api.openai.com/auth.chatgpt_account_id", "acct-jwt"))
-	ocHome := stageAuth(t, map[string]any{
-		".local/share/opencode/auth.json": map[string]any{
-			"openai-oauth": map[string]any{"type": "oauth", "access_token": jwt},
-		},
-	})
-	if got := ProviderForSession(emptyWrapper("opencode", "oc-1"), ocHome); got != "" {
-		t.Errorf("opencode (configured, no own evidence): got %q, want \"\"", got)
-	}
-
-	// Wrapper with no resolvable auth also resolves to "".
-	if got := ProviderForSession(emptyWrapper("pi", "pi-2"), t.TempDir()); got != "" {
-		t.Errorf("pi (no auth): got %q, want \"\"", got)
+	if got := ProviderForSession(emptyWrapper("opencode", "oc-1")); got != "" {
+		t.Errorf("opencode (no own evidence): got %q, want \"\"", got)
 	}
 }

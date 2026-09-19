@@ -192,7 +192,7 @@ func initCostTracker(logger outbound.Logger, fsRepo *filesystem.SessionRepositor
 	// was credential-based, not session evidence — but centralizing it keeps
 	// a single call site ready for whatever evidence source lands next.
 	costTracker.SetProviderResolver(func(s *session.SessionState) string {
-		return services.ProviderForSession(s, "")
+		return services.ProviderForSession(s)
 	})
 	if err := costTracker.Prune(costRetentionDays); err != nil {
 		logger.LogError("startup", "", fmt.Sprintf("cost tracker prune failed: %v", err))

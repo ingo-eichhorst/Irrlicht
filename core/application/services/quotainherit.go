@@ -119,11 +119,15 @@ func readAuthCache(path string, parse func([]byte) (authCacheEntry, bool)) (auth
 	return entry, true
 }
 
-// Canonical provider keys. Centralised so a typo at any inheritance
-// site fails the build instead of silently creating a phantom bucket.
+// Canonical provider keys, aliased from the domain layer (issue #1994) so
+// this package, the adapters that stamp RateLimitSnapshot.Provider
+// (claudecode/statusline.go, codex/parser.go), and the tailer-side mirror
+// (core/pkg/tailer) all trace back to ONE literal per provider — a typo at
+// any of those sites fails the build instead of silently creating a
+// phantom bucket.
 const (
-	ProviderAnthropic = "anthropic"
-	ProviderOpenAI    = "openai"
+	ProviderAnthropic = session.ProviderAnthropic
+	ProviderOpenAI    = session.ProviderOpenAI
 
 	// authFileName is the credential file name shared by Codex, Pi, and
 	// OpenCode's on-disk auth stores (each under a different parent
@@ -314,25 +318,32 @@ func recipientKey(s *session.SessionState, home string) (AccountKey, bool) {
 // pi/opencode wrapper session, which never emits one itself — resolves to
 // an explicit unknown ("").
 //
-// `userHome` is accepted for signature stability with InheritRateLimits and
-// existing callers; it is unused now that this function no longer reads any
-// auth file.
-func ProviderForSession(s *session.SessionState, userHome string) string {
-	_ = userHome
-	if s == nil {
+// There is no adapter-name switch here at all: this reads the snapshot's
+// own Provider and AttributionQuality, stamped at the moment an adapter
+// observed native evidence for it (claudecode/statusline.go for Claude
+// Code's statusline hook, codex/parser.go for Codex's transcript
+// rate_limits — see RateLimitSnapshot's doc comment,
+// core/domain/session/rate_limit.go). The session's adapter string is
+// never consulted, so a claude-code session running against Bedrock or
+// Vertex — whose snapshot, if it had one, would carry no Provider stamp —
+// cannot be misattributed to Anthropic by adapter name alone.
+//
+// A pi/opencode session that inherited a donor's snapshot via
+// InheritRateLimits (applyDonors) carries that donor's stamp verbatim, so
+// it resolves too. This is expected, not a regression: applyDonors only
+// ever shares a snapshot after confirming the two sessions' accounts match
+// (issue #1994 / epic #1977 §3.2), so a wrapper resolving here is reading
+// back the SAME evidence the sharing path already required — on the
+// snapshot's own stamp, not on a configured credential list.
+func ProviderForSession(s *session.SessionState) string {
+	if !hasOwnRateLimit(s) {
 		return ""
 	}
-	switch s.Adapter {
-	case "claude-code":
-		if hasOwnRateLimit(s) {
-			return ProviderAnthropic
-		}
-	case "codex":
-		if hasOwnRateLimit(s) {
-			return ProviderOpenAI
-		}
+	rl := s.Metrics.RateLimit
+	if rl.AttributionQuality != session.AttributionQualityConfirmed {
+		return ""
 	}
-	return ""
+	return rl.Provider
 }
 
 // readCodexAccountID parses ~/.codex/auth.json and returns
