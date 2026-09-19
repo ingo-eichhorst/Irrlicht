@@ -753,7 +753,7 @@ func TestRowAttributionQuality_LegacyRowReadsAsGuessed(t *testing.T) {
 	if got := rowAttributionQuality(legacy); got != attributionQualityGuessed {
 		t.Errorf("legacy row must read back as guessed, got %q", got)
 	}
-	if got := rowAttributionQuality(legacy); got == session.AttributionQualityConfirmed {
+	if rowAttributionQuality(legacy) == session.AttributionQualityConfirmed {
 		t.Errorf("legacy row must never read back as confirmed")
 	}
 }
@@ -775,7 +775,7 @@ func TestRowAttributionQuality_ConfirmedAndUnattributedRowsStayDistinct(t *testi
 	if got := rowAttributionQuality(unattributed); got != "" {
 		t.Errorf("unattributed row (no Provider at all): want \"\" (nothing to grade), got %q", got)
 	}
-	if got := rowAttributionQuality(unattributed); got == attributionQualityGuessed {
+	if rowAttributionQuality(unattributed) == attributionQualityGuessed {
 		t.Errorf("unattributed row must not read as guessed — there is no provider to have guessed")
 	}
 }

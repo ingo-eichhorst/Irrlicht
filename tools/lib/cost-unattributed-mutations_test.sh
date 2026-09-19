@@ -38,7 +38,13 @@ MUTATE_SH="$REPO_ROOT/tools/mutate.sh"
 # A missing tool is a hard failure, not a skip — exiting 0 here would read as
 # a PASS to preflight's shell_lib_tests, so the gate would go green having
 # asserted nothing.
-need() { command -v "$1" >/dev/null 2>&1 || { echo "FAIL: cost-unattributed-mutations — $1 not found" >&2; exit 1; }; }
+need() {
+  local tool="$1"
+  command -v "$tool" >/dev/null 2>&1 || { echo "FAIL: cost-unattributed-mutations — $tool not found" >&2; exit 1; }
+}
+
+# Indents captured output so it reads as a quoted block under its FAIL line.
+quote_output() { sed 's/^/      | /'; }
 need go
 need git
 
@@ -92,28 +98,28 @@ assert_go_test_goes_red() {
   if [[ $rc -ne 0 ]]; then
     echo "FAIL: $label — mutate.sh refused (exit $rc). A STALE anchor means the surrounding text"
     echo "      moved and this fixture needs its anchor updated; it does NOT mean the guard is fine."
-    echo "$out" | sed 's/^/      | /'
+    echo "$out" | quote_output
     fails=$((fails + 1))
     return
   fi
   if grep -q 'GO_TEST_RC=0' <<<"$out"; then
     echo "FAIL: $label — the test stayed GREEN under the mutation, so the guard does not reach"
     echo "      what it claims to protect."
-    echo "$out" | sed 's/^/      | /'
+    echo "$out" | quote_output
     fails=$((fails + 1))
     return
   fi
   if grep -qE '^# |build failed|cannot use|undefined:' <<<"$out"; then
     echo "FAIL: $label — the mutation broke the BUILD rather than the guard. A fixture that"
     echo "      cannot compile proves nothing about the behavior it is meant to exercise."
-    echo "$out" | sed 's/^/      | /'
+    echo "$out" | quote_output
     fails=$((fails + 1))
     return
   fi
   if ! grep -qF "$want" <<<"$out"; then
     echo "FAIL: $label — the test failed, but not with the expected message."
     echo "      wanted to find: $want"
-    echo "$out" | sed 's/^/      | /'
+    echo "$out" | quote_output
     fails=$((fails + 1))
     return
   fi
