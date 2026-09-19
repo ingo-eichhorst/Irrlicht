@@ -521,13 +521,20 @@ type RateLimitSnapshot struct {
 // ProviderAnthropic and ProviderOpenAI mirror session.ProviderAnthropic and
 // session.ProviderOpenAI (core/domain/session/rate_limit.go) — duplicated
 // rather than imported, for the same reason RateLimitSnapshot above mirrors
-// the domain type instead of embedding it.
+// the domain type instead of embedding it. Pinned against the domain
+// originals by TestRateLimitProviderConstantsAgree
+// (rate_limit_provider_contract_test.go), the same pattern
+// TestUserBlockingListsAgree uses for this package's other deliberately
+// duplicated constant — an unpinned copy is exactly the kind of drift a
+// later rename or retype on one side would leave silently unnoticed on the
+// other.
 const (
 	ProviderAnthropic = "anthropic"
 	ProviderOpenAI    = "openai"
 )
 
-// AttributionQualityConfirmed mirrors session.AttributionQualityConfirmed.
+// AttributionQualityConfirmed mirrors session.AttributionQualityConfirmed —
+// see the pinning note above.
 const AttributionQualityConfirmed = "confirmed"
 
 // RateLimitWindow mirrors session.RateLimitWindow.
