@@ -12,29 +12,47 @@ func TestStreamHappyPathEscapesContentInEveryChunk(t *testing.T) {
 	content := "quoted \"text\"\n\ndata: injected"
 	rec := httptest.NewRecorder()
 	streamHappyPath(rec, content)
-	frames := strings.Split(strings.TrimSpace(rec.Body.String()), "\n\n")
-	if len(frames) != 4 || frames[3] != "data: [DONE]" {
-		t.Fatalf("unexpected stream frames: %q", frames)
+	chunks := decodeSuccessStream(t, rec.Body.String())
+	if got := chunks[1].Choices[0].Delta["content"]; got != content {
+		t.Fatalf("content was changed: %q", got)
 	}
-	for i, frame := range frames[:3] {
-		var chunk struct {
-			Choices []struct {
-				Delta map[string]string `json:"delta"`
-			} `json:"choices"`
-		}
-		if !strings.HasPrefix(frame, "data: ") {
-			t.Fatalf("frame %d is not an SSE data frame: %q", i, frame)
-		}
-		if err := json.Unmarshal([]byte(strings.TrimPrefix(frame, "data: ")), &chunk); err != nil {
-			t.Fatalf("frame %d is not JSON: %v", i, err)
-		}
-		if len(chunk.Choices) != 1 {
-			t.Fatalf("frame %d has %d choices, want one", i, len(chunk.Choices))
-		}
-		if i == 1 && chunk.Choices[0].Delta["content"] != content {
-			t.Fatalf("content was changed: %q", chunk.Choices[0].Delta["content"])
-		}
+}
+
+type successChunk struct {
+	Choices []struct {
+		Delta map[string]string `json:"delta"`
+	} `json:"choices"`
+}
+
+func decodeSuccessStream(t *testing.T, body string) []successChunk {
+	t.Helper()
+	frames := strings.Split(strings.TrimSpace(body), "\n\n")
+	if len(frames) != 4 {
+		t.Fatalf("got %d stream frames, want four", len(frames))
 	}
+	if frames[3] != "data: [DONE]" {
+		t.Fatalf("missing final stream marker: %q", frames[3])
+	}
+	var chunks []successChunk
+	for _, frame := range frames[:3] {
+		chunks = append(chunks, decodeSuccessChunk(t, frame))
+	}
+	return chunks
+}
+
+func decodeSuccessChunk(t *testing.T, frame string) successChunk {
+	t.Helper()
+	if !strings.HasPrefix(frame, "data: ") {
+		t.Fatalf("not an SSE data frame: %q", frame)
+	}
+	var chunk successChunk
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(frame, "data: ")), &chunk); err != nil {
+		t.Fatalf("stream frame is not JSON: %v", err)
+	}
+	if len(chunk.Choices) != 1 {
+		t.Fatalf("stream frame has %d choices, want one", len(chunk.Choices))
+	}
+	return chunk
 }
 
 func TestHandleChatCompletionsFailsFirstNThenSucceeds(t *testing.T) {

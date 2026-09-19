@@ -258,8 +258,11 @@ func stageTaskListMutationFixture(t *testing.T) taskListMutationFixture {
 		t.Fatal(err)
 	}
 	recording, ok, err := matrix.NewestRecording(source, matrix.ProfileCLILocal)
-	if err != nil || !ok {
-		t.Fatalf("find task-list recording: ok=%v err=%v", ok, err)
+	if err != nil {
+		t.Fatalf("find task-list recording: %v", err)
+	}
+	if !ok {
+		t.Fatal("no task-list recording found")
 	}
 	events, err := os.ReadFile(filepath.Join(recording.Dir, "events.jsonl"))
 	if err != nil {
@@ -339,9 +342,8 @@ func assertTaskListCompletedTurnMutations(t *testing.T, fixture taskListMutation
 	lines, finalTurnEnd := taskListTranscriptLines(t, fixture.recordingDir)
 	copyPath := filepath.Join(fixture.dir, "recordings", fixture.name, "transcript.jsonl")
 	writeTaskListTranscript(t, copyPath, lines)
-	baseline, err := ValidateTranscriptForProfile(fixture.dir, matrix.ProfileCLILocal)
-	if err != nil || baseline == nil || !baseline.ExpectedPass() {
-		t.Fatalf("unmutated transcript must pass assertions: report=%+v err=%v", baseline, err)
+	if baseline := mustTaskListTranscriptReport(t, fixture.dir); !baseline.ExpectedPass() {
+		t.Fatalf("unmutated transcript must pass assertions: report=%+v", baseline)
 	}
 
 	withoutFinalEnd := append(append([][]byte{}, lines[:finalTurnEnd]...), lines[finalTurnEnd+1:]...)
@@ -363,16 +365,27 @@ func writeTaskListTranscript(t *testing.T, path string, lines [][]byte) {
 
 func assertTaskListCompletionFails(t *testing.T, dir, mutation string) {
 	t.Helper()
+	assertTaskListAssertionFails(t, mustTaskListTranscriptReport(t, dir), "all seven turns complete", mutation)
+}
+
+func mustTaskListTranscriptReport(t *testing.T, dir string) *RecordReport {
+	t.Helper()
 	report, err := ValidateTranscriptForProfile(dir, matrix.ProfileCLILocal)
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertTaskListAssertionFails(t, report, "all seven turns complete", mutation)
+	if report == nil {
+		t.Fatal("task-list transcript assertions did not run")
+	}
+	return report
 }
 
 func assertTaskListAssertionFails(t *testing.T, report *RecordReport, name, mutation string) {
 	t.Helper()
-	if report == nil || report.ExpectedPass() {
+	if report == nil {
+		t.Fatalf("%s did not run assertions", mutation)
+	}
+	if report.ExpectedPass() {
 		t.Fatalf("%s must fail: report=%+v", mutation, report)
 	}
 	for _, assertion := range report.Asserts {
@@ -397,7 +410,10 @@ func abortedTaskListTurn(t *testing.T, line []byte) []byte {
 		t.Fatal("final turn/end has no data object")
 	}
 	reason, ok := data["reason"].(map[string]any)
-	if !ok || reason["kind"] != "completed" {
+	if !ok {
+		t.Fatal("final turn/end has no reason object")
+	}
+	if reason["kind"] != "completed" {
 		t.Fatalf("final turn/end has no completed reason: %v", data["reason"])
 	}
 	reason["kind"] = "aborted"
