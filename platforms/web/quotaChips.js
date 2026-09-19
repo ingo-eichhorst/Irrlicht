@@ -4,11 +4,17 @@ import {
 } from './irrlicht.js';
 
 // --- Provider quota chips ---
-// Port of the macOS overlay's quotaChipView (SessionListView.swift:378-900)
-// and ProviderModePreference (SessionState.swift:190-262). Bucketing,
-// mode resolution, bar coloring, and tooltip text mirror the Swift
-// sources so opening the popover and the dashboard side-by-side shows
-// identical state for the same `/api/v1/sessions` response.
+// Port of the macOS overlay's SessionListView.quotaChipView and
+// ProviderModePreference (SessionState.swift). Bucketing, mode resolution,
+// bar coloring, and tooltip text are meant to mirror the Swift sources so
+// opening the popover and the dashboard side-by-side shows identical state
+// for the same `/api/v1/sessions` response — but this is a design INTENT,
+// not a static guarantee: nothing here or in Swift asserts the two agree,
+// so a change to one side's rule (chipModeFor's auto-detection here,
+// resolveChipMode's there) can silently diverge from the other, as #1995
+// did briefly before both sides were re-aligned on the same windows/credits
+// rule. Treat a change to either as a change to both, and grep the other
+// side before assuming a rule here has no Swift counterpart.
 
 // localStorage keys are unprefixed to match macOS @AppStorage names —
 // not because the storages are shared (UserDefaults and localStorage

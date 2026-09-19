@@ -822,33 +822,61 @@ struct SessionListView: View {
     /// Resolve which chip variant to render for a snapshot, honouring
     /// the user's per-provider preference (Settings → Providers) and
     /// falling back to auto-detection from snapshot shape.
+    ///
+    /// Auto rule (issue #1995): windowed quota data means subscription; a
+    /// credits balance with no windows means the API-key / usage path.
+    /// Previously keyed off `planType` being empty — a generic tier-name
+    /// field with no bearing on which shape a snapshot actually carries,
+    /// same reasoning `RateLimitInfo.providerKey(adapter:)` no longer reads
+    /// it — which also brings this back in step with `quotaChips.js`'s
+    /// `chipModeFor` (see that file's header comment: the two clients are
+    /// meant to agree on this verdict for the same snapshot, and briefly
+    /// didn't).
     static func resolveChipMode(snap: RateLimitInfo, providerKey: String) -> QuotaMode {
         let preference = ProviderModePreference.current(for: providerKey)
         switch preference {
         case .subscription: return .subscription
         case .usage: return .usage
         case .auto:
-            return (snap.credits != nil && (snap.planType ?? "").isEmpty)
-                ? .usage
-                : .subscription
+            if !snap.windows.isEmpty { return .subscription }
+            if snap.credits != nil { return .usage }
+            return .subscription
         }
     }
 
     /// The credits sub-line for a usage-mode chip's tooltip, or nil when
     /// there's nothing worth reporting. Extracted from `quotaTooltip`
-    /// (#1995) so it's independently testable — this is the instrument;
-    /// behavior is unchanged from the inline block it replaces (hardcoded
-    /// "$", no currency, no `balanceObserved` zero handling) until the
-    /// red-first test below is committed and this is fixed to match
-    /// `usageCreditsLine` in `quotaChips.js`.
+    /// (#1995) so it's independently testable — mirrors `usageCreditsLine`
+    /// in `quotaChips.js` exactly, including the currency and zero-balance
+    /// handling.
     static func usageCreditsLine(_ credits: CreditsInfo?) -> String? {
         guard let credits else { return nil }
         if credits.unlimited == true { return "Credits: unlimited" }
+        // `balance`'s own `omitempty` on the wire (core/domain/session/
+        // rate_limit.go) drops a genuine zero exactly like an absent value;
+        // `balanceObserved` is the only field that survives the round trip
+        // to tell "observed zero" from "never observed", so a real zero
+        // balance still renders instead of falling through to
+        // hasCredits/nil.
         if let balance = credits.balance {
-            return String(format: "Credits balance: $%.2f", balance)
+            return Self.creditsBalanceLine(balance, currency: credits.currency)
+        }
+        if credits.balanceObserved == true {
+            return Self.creditsBalanceLine(0, currency: credits.currency)
         }
         if credits.hasCredits { return "Credits: available" }
         return nil
+    }
+
+    /// Renders the snapshot's own currency/credit-unit rather than assuming
+    /// USD (#1995) — DeepSeek's balance API reports CNY, for example.
+    /// Unlabeled/legacy balances (no currency, or "USD" itself) keep
+    /// today's "$" rendering.
+    private static func creditsBalanceLine(_ balance: Double, currency: String?) -> String {
+        if let currency, !currency.isEmpty, currency != "USD" {
+            return String(format: "Credits balance: %.2f %@", balance, currency)
+        }
+        return String(format: "Credits balance: $%.2f", balance)
     }
 
     /// The chip-style header widget. Dispatches on mode:
