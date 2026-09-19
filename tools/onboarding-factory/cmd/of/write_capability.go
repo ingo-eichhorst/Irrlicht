@@ -99,8 +99,8 @@ func setAdapterModel(repoRoot, id, maturity string, caps map[string]string, pinT
 		entry.Maturity = maturity
 	}
 	for trait, state := range caps {
-		if _, known := matrix.TraitByID(trait); !known {
-			return fmt.Errorf("%q is not a known trait (see internal/matrix/capability.go)", trait)
+		if err := requireKnownTrait(trait); err != nil {
+			return err
 		}
 		if !matrix.IsValidCapabilityState(state) {
 			return fmt.Errorf("capability state %q is not one of: %s", state, strings.Join(matrix.CapabilityStates, ", "))
@@ -115,8 +115,8 @@ func setAdapterModel(repoRoot, id, maturity string, caps map[string]string, pinT
 		entry.Capabilities[trait] = state
 	}
 	for _, trait := range pinTraced {
-		if _, known := matrix.TraitByID(trait); !known {
-			return fmt.Errorf("%q is not a known trait (see internal/matrix/capability.go)", trait)
+		if err := requireKnownTrait(trait); err != nil {
+			return err
 		}
 		if entry.Capabilities == nil {
 			entry.Capabilities = map[string]string{}
@@ -128,6 +128,16 @@ func setAdapterModel(repoRoot, id, maturity string, caps map[string]string, pinT
 	}
 	f.Adapters[id] = entry
 	return writeJSONFileAtomic(matrix.CapabilityFile(repoRoot), f)
+}
+
+// requireKnownTrait rejects a trait id outside the closed set, shared by
+// setAdapterModel's --capability and --pin-traced loops so the two verbs
+// cannot drift into refusing different sets of invented trait names.
+func requireKnownTrait(trait string) error {
+	if _, known := matrix.TraitByID(trait); !known {
+		return fmt.Errorf("%q is not a known trait (see internal/matrix/capability.go)", trait)
+	}
+	return nil
 }
 
 // capabilityFlag parses repeatable --capability trait=state pairs.
