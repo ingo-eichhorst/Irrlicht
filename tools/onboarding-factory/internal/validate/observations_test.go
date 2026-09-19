@@ -237,6 +237,13 @@ func TestEventAssertionsRequireOwnedPaths(t *testing.T) {
 }
 
 func TestDeepseekTaskListAssertionsDetectMutations(t *testing.T) {
+	dir, name, recordingDir, events := stageTaskListMutationFixture(t)
+	assertTaskListNoWaitingMutation(t, dir, name, events)
+	assertTaskListCompletedTurnMutations(t, dir, name, recordingDir)
+}
+
+func stageTaskListMutationFixture(t *testing.T) (string, string, string, []byte) {
+	t.Helper()
 	source, err := filepath.Abs(filepath.Join("..", "..", "..", "..", "replaydata", "agents", "deepseek-harness", "scenarios", "2-3_task-list"))
 	if err != nil {
 		t.Fatal(err)
@@ -253,13 +260,17 @@ func TestDeepseekTaskListAssertionsDetectMutations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "expected.jsonl"), expected, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	name := "2026-09-19-00-00-00_mutation"
 	mkGoldenRec(t, dir, name, `{}`)
+	return dir, name, recording.Dir, events
+}
+
+func assertTaskListNoWaitingMutation(t *testing.T, dir, name string, events []byte) {
+	t.Helper()
 	eventPath := filepath.Join(dir, "recordings", name, "events.jsonl")
 	if err := os.WriteFile(eventPath, events, 0o644); err != nil {
 		t.Fatal(err)
@@ -277,24 +288,23 @@ func TestDeepseekTaskListAssertionsDetectMutations(t *testing.T) {
 	if err != nil || result == nil || result.ExpectedPass() {
 		t.Fatalf("injected waiting transition must fail: report=%+v err=%v", result, err)
 	}
-	foundWaiting := false
 	for _, assertion := range result.Asserts {
 		if assertion.Name == "no waiting state" {
 			if assertion.OK {
 				t.Fatal("no waiting state assertion ignored the injected transition")
 			}
-			foundWaiting = true
+			return
 		}
 	}
-	if !foundWaiting {
-		t.Fatal("task-list spec has no no waiting state assertion")
-	}
+	t.Fatal("task-list spec has no no waiting state assertion")
+}
 
+func taskListTranscriptLines(t *testing.T, recordingDir string) ([][]byte, int) {
+	t.Helper()
 	var lines [][]byte
-	finalTurnEnd := -1
-	turnEnds := 0
-	transcriptPath := filepath.Join(recording.Dir, "transcript.jsonl.zstd")
-	err = replayengine.ScanTranscriptLines(transcriptPath, func(line []byte) error {
+	finalTurnEnd, turnEnds := -1, 0
+	path := filepath.Join(recordingDir, "transcript.jsonl.zstd")
+	err := replayengine.ScanTranscriptLines(path, func(line []byte) error {
 		var record struct {
 			Type string `json:"type"`
 		}
@@ -311,45 +321,60 @@ func TestDeepseekTaskListAssertionsDetectMutations(t *testing.T) {
 	if err != nil || turnEnds != 7 || finalTurnEnd < 0 {
 		t.Fatalf("source transcript must contain seven completed turns: count=%d err=%v", turnEnds, err)
 	}
-	copyPath := filepath.Join(dir, "recordings", name, "transcript.jsonl")
-	if err := os.WriteFile(copyPath, append(bytes.Join(lines, []byte("\n")), '\n'), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	baselineTranscript, err := ValidateTranscriptForProfile(dir, matrix.ProfileCLILocal)
-	if err != nil || baselineTranscript == nil || !baselineTranscript.ExpectedPass() {
-		t.Fatalf("unmutated transcript must pass assertions: report=%+v err=%v", baselineTranscript, err)
-	}
-	assertTurnCompletionFails := func(report *RecordReport, mutation string) {
-		t.Helper()
-		if report == nil || report.ExpectedPass() {
-			t.Fatalf("%s must fail: report=%+v", mutation, report)
-		}
-		for _, assertion := range report.Asserts {
-			if assertion.Name == "all seven turns complete" {
-				if assertion.OK {
-					t.Fatalf("turn completion assertion ignored %s", mutation)
-				}
-				return
-			}
-		}
-		t.Fatal("task-list spec has no all seven turns complete assertion")
-	}
-	withoutFinalEnd := append([][]byte{}, lines[:finalTurnEnd]...)
-	withoutFinalEnd = append(withoutFinalEnd, lines[finalTurnEnd+1:]...)
-	if err := os.WriteFile(copyPath, append(bytes.Join(withoutFinalEnd, []byte("\n")), '\n'), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	mutatedTranscript, err := ValidateTranscriptForProfile(dir, matrix.ProfileCLILocal)
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertTurnCompletionFails(mutatedTranscript, "missing final turn/end")
+	return lines, finalTurnEnd
+}
 
-	var finalRecord map[string]any
-	if err := json.Unmarshal(lines[finalTurnEnd], &finalRecord); err != nil {
+func assertTaskListCompletedTurnMutations(t *testing.T, dir, name, recordingDir string) {
+	t.Helper()
+	lines, finalTurnEnd := taskListTranscriptLines(t, recordingDir)
+	copyPath := filepath.Join(dir, "recordings", name, "transcript.jsonl")
+	writeTaskListTranscript(t, copyPath, lines)
+	baseline, err := ValidateTranscriptForProfile(dir, matrix.ProfileCLILocal)
+	if err != nil || baseline == nil || !baseline.ExpectedPass() {
+		t.Fatalf("unmutated transcript must pass assertions: report=%+v err=%v", baseline, err)
+	}
+
+	withoutFinalEnd := append(append([][]byte{}, lines[:finalTurnEnd]...), lines[finalTurnEnd+1:]...)
+	writeTaskListTranscript(t, copyPath, withoutFinalEnd)
+	assertTaskListCompletionFails(t, dir, "missing final turn/end")
+
+	withAbortedFinalTurn := append([][]byte{}, lines...)
+	withAbortedFinalTurn[finalTurnEnd] = abortedTaskListTurn(t, lines[finalTurnEnd])
+	writeTaskListTranscript(t, copyPath, withAbortedFinalTurn)
+	assertTaskListCompletionFails(t, dir, "aborted final turn/end")
+}
+
+func writeTaskListTranscript(t *testing.T, path string, lines [][]byte) {
+	t.Helper()
+	if err := os.WriteFile(path, append(bytes.Join(lines, []byte("\n")), '\n'), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	data, ok := finalRecord["data"].(map[string]any)
+}
+
+func assertTaskListCompletionFails(t *testing.T, dir, mutation string) {
+	t.Helper()
+	report, err := ValidateTranscriptForProfile(dir, matrix.ProfileCLILocal)
+	if err != nil || report == nil || report.ExpectedPass() {
+		t.Fatalf("%s must fail: report=%+v err=%v", mutation, report, err)
+	}
+	for _, assertion := range report.Asserts {
+		if assertion.Name == "all seven turns complete" {
+			if assertion.OK {
+				t.Fatalf("turn completion assertion ignored %s", mutation)
+			}
+			return
+		}
+	}
+	t.Fatal("task-list spec has no all seven turns complete assertion")
+}
+
+func abortedTaskListTurn(t *testing.T, line []byte) []byte {
+	t.Helper()
+	var record map[string]any
+	if err := json.Unmarshal(line, &record); err != nil {
+		t.Fatal(err)
+	}
+	data, ok := record["data"].(map[string]any)
 	if !ok {
 		t.Fatal("final turn/end has no data object")
 	}
@@ -358,20 +383,11 @@ func TestDeepseekTaskListAssertionsDetectMutations(t *testing.T) {
 		t.Fatalf("final turn/end has no completed reason: %v", data["reason"])
 	}
 	reason["kind"] = "aborted"
-	abortedLine, err := json.Marshal(finalRecord)
+	abortedLine, err := json.Marshal(record)
 	if err != nil {
 		t.Fatal(err)
 	}
-	withAbortedFinalTurn := append([][]byte{}, lines...)
-	withAbortedFinalTurn[finalTurnEnd] = abortedLine
-	if err := os.WriteFile(copyPath, append(bytes.Join(withAbortedFinalTurn, []byte("\n")), '\n'), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	abortedTranscript, err := ValidateTranscriptForProfile(dir, matrix.ProfileCLILocal)
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertTurnCompletionFails(abortedTranscript, "aborted final turn/end")
+	return abortedLine
 }
 
 func TestCommittedRecordAssertions(t *testing.T) {
